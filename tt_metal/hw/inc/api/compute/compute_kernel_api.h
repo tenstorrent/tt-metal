@@ -226,8 +226,8 @@ ALWI void log_tile(uint32_t idst) {
         calculate_log,
         (APPROX, fast_and_approx, false /* HAS_BASE_SCALING */, DST_ACCUM_MODE),
         idst,
-        0,
-        VectorMode::RC));
+        VectorMode::RC,
+        0));
 }
 
 /**
@@ -262,8 +262,8 @@ ALWI void log_with_base_tile(uint32_t idst, uint32_t base_scale) {
         calculate_log,
         (APPROX, fast_and_approx, true /* HAS_BASE_SCALING */, DST_ACCUM_MODE),
         idst,
-        base_scale,
-        VectorMode::RC));
+        VectorMode::RC,
+        base_scale));
 }
 
 // TODO: Move to trigonometry.h
@@ -435,7 +435,7 @@ ALWI void abs_tile_int32(uint32_t idst) {
 // clang-format on
 ALWI void sign_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sign, (APPROX), idst, 1 /* exponent_size_8 */, VectorMode::RC));
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sign, (APPROX), idst, VectorMode::RC, 1 /* exponent_size_8 */));
 }
 
 /**
@@ -512,8 +512,8 @@ ALWI void power_tile(uint32_t idst, uint32_t param0) {
         calculate_unary_power,
         (APPROX, DST_ACCUM_MODE, 8 /* ITERATIONS */),
         idst,
-        param0,
-        VectorMode::RC));
+        VectorMode::RC,
+        param0));
 }
 
 /**
@@ -548,8 +548,8 @@ ALWI void power_iterative_tile(uint32_t idst, uint32_t param0) {
         calculate_unary_power_iterative,
         (APPROX, 8 /* ITERATIONS */),
         idst,
-        param0,
-        VectorMode::RC));
+        VectorMode::RC,
+        param0));
 }
 
 /**
@@ -599,7 +599,7 @@ ALWI void exp2_tile_init() { MATH(SFPU_UNARY_INIT_FN(exp2, sfpu::exp2_init, (tru
  */
 // clang-format on
 ALWI void heaviside_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_heaviside, (APPROX), idst, param0, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_heaviside, (APPROX), idst, VectorMode::RC, param0));
 }
 
 /**
@@ -696,12 +696,12 @@ ALWI void topk_local_sort(
         calculate_bitonic_topk_phases_steps,
         (true /* APPROXIMATE */, DST_ACCUM_MODE, stable_sort),
         idst,
+        VectorMode::RC_custom,
         idir,
         i_end_phase,
         i_start_phase,
         i_end_step,
-        i_start_step,
-        VectorMode::RC_custom));
+        i_start_step));
 }
 
 // topK merge
@@ -743,9 +743,9 @@ ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
         calculate_bitonic_topk_merge,
         (true /* APPROXIMATE */, DST_ACCUM_MODE, idir, stable_sort),
         idst,
+        VectorMode::RC_custom,
         m_iter,
-        k,
-        VectorMode::RC_custom));
+        k));
 }
 
 // topK rebuild
@@ -789,12 +789,12 @@ ALWI void topk_rebuild(uint32_t idst, bool idir, int m_iter, int k, int logk, in
         calculate_bitonic_topk_rebuild,
         (true /* APPROXIMATE */, DST_ACCUM_MODE, stable_sort),
         idst,
+        VectorMode::RC_custom,
         idir,
         m_iter,
         k,
         logk,
-        skip_second,
-        VectorMode::RC_custom));
+        skip_second));
 }
 
 /**
@@ -893,9 +893,9 @@ ALWI void sfpu_reduce(uint32_t idst, uint32_t ct_dim = 1, uint32_t rt_dim = 1) {
         calculate_reduce,
         (pool_type, reduce_dim, format),
         idst,
+        VectorMode::RC_custom,
         ct_dim,
-        rt_dim,
-        VectorMode::RC_custom));
+        rt_dim));
 }
 
 /**
@@ -1021,8 +1021,8 @@ ALWI void unary_max_int32_tile(uint32_t idst, uint32_t param0) {
         calculate_unary_max_min_int32,
         (true /* IS_MAX */, false /* IS_UINT */, APPROX),
         idst,
-        param0,
-        VectorMode::RC));
+        VectorMode::RC,
+        param0));
 }
 
 /**
@@ -1055,8 +1055,8 @@ ALWI void unary_max_uint32_tile(uint32_t idst, uint32_t param0) {
         calculate_unary_max_min_int32,
         (true /* IS_MAX */, true /* IS_UINT */, APPROX),
         idst,
-        param0,
-        VectorMode::RC));
+        VectorMode::RC,
+        param0));
 }
 
 /**
@@ -1089,8 +1089,8 @@ ALWI void unary_max_tile(uint32_t idst, uint32_t param0) {
         calculate_unary_max_min,
         (true /* IS_MAX */, APPROX),
         idst,
-        param0,
-        VectorMode::RC));
+        VectorMode::RC,
+        param0));
 }
 
 /**
@@ -1146,8 +1146,8 @@ ALWI void unary_min_int32_tile(uint32_t idst, uint32_t param0) {
         calculate_unary_max_min_int32,
         (false /* IS_MAX */, false /* IS_UINT */, APPROX),
         idst,
-        param0,
-        VectorMode::RC));
+        VectorMode::RC,
+        param0));
 }
 
 /**
@@ -1181,8 +1181,8 @@ ALWI void unary_min_uint32_tile(uint32_t idst, uint32_t param0) {
         calculate_unary_max_min_int32,
         (false /* IS_MAX */, true /* IS_UINT */, APPROX),
         idst,
-        param0,
-        VectorMode::RC));
+        VectorMode::RC,
+        param0));
 }
 
 /**
@@ -1216,8 +1216,8 @@ ALWI void unary_min_tile(uint32_t idst, uint32_t param0) {
         calculate_unary_max_min,
         (false /* IS_MAX */, APPROX),
         idst,
-        param0,
-        VectorMode::RC));
+        VectorMode::RC,
+        param0));
 }
 
 /**

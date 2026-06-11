@@ -101,9 +101,9 @@ ALWI void celu_tile(uint32_t idst, uint32_t alpha, uint32_t alpha_recip) {
         calculate_celu,
         (APPROX, DST_ACCUM_MODE, 8 /* ITERATIONS */),
         idst,
+        VectorMode::RC,
         alpha,
-        alpha_recip,
-        VectorMode::RC));
+        alpha_recip));
 }
 
 /**
@@ -132,8 +132,8 @@ ALWI void celu_tile_init() { MATH(SFPU_UNARY_INIT(celu)); }
          calculate_softshrink,
          (APPROX, 8 /* ITERATIONS */),
          idst,
-         param0,
-         VectorMode::RC));
+         VectorMode::RC,
+         param0));
 }
 
 /**
@@ -165,8 +165,8 @@ ALWI void hardshrink_tile(uint32_t idst, uint32_t param0) {
         calculate_hardshrink,
         (APPROX, 8 /* ITERATIONS */),
         idst,
-        param0,
-        VectorMode::RC));
+        VectorMode::RC,
+        param0));
 }
 
 /**

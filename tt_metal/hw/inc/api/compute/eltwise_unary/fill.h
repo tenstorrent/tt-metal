@@ -28,7 +28,7 @@ namespace ckernel {
 // clang-format on
 ALWI void fill_tile(uint32_t idst, float param0) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_fill_, (APPROX, 8 /*ITERATIONS*/), idst, param0, VectorMode::RC));
+        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_fill_, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC, param0));
 }
 
 // clang-format off
@@ -60,8 +60,8 @@ ALWI void fill_tile_int(uint32_t idst, uint32_t param0) {
         _calculate_fill_int_,
         (APPROX, INSTRUCTION_MODE, 8 /*ITERATIONS*/),
         idst,
-        param0,
-        VectorMode::RC));
+        VectorMode::RC,
+        param0));
 }
 
 // clang-format off
@@ -85,8 +85,8 @@ ALWI void fill_tile_bitcast(uint32_t idst, uint32_t param0) {
         _calculate_fill_bitcast_,
         (APPROX, 8 /*ITERATIONS*/),
         idst,
-        param0,
-        VectorMode::RC));
+        VectorMode::RC,
+        param0));
 }
 /**
  * Please refer to documentation for any_init.

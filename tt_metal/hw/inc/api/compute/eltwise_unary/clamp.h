@@ -34,9 +34,9 @@ ALWI void clamp_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
         calculate_clamp,
         (APPROX, 8 /* ITERATIONS */),
         idst,
+        VectorMode::RC,
         param0,
-        param1,
-        VectorMode::RC));
+        param1));
 }
 
 // clang-format off
@@ -61,9 +61,9 @@ ALWI void clamp_tile_int32(uint32_t idst, uint32_t param0, uint32_t param1) {
         calculate_clamp_int32,
         (APPROX, 8 /* ITERATIONS */),
         idst,
+        VectorMode::RC,
         param0,
-        param1,
-        VectorMode::RC));
+        param1));
 }
 
 /**

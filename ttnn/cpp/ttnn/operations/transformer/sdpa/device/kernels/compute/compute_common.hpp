@@ -1129,8 +1129,8 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
             calculate_binop_with_scalar,
             (APPROX, ADD_UNARY, 8 /* ITERATIONS */),
             0 /*dst_index*/,
-            0x3F800000 /*scalar*/,
-            VectorMode::C));
+            VectorMode::C,
+            0x3F800000 /*scalar*/));
         // recip_tile<false>(0, (int)VectorMode::C);
         MATH((recip_tile_first_column<false>(0 /*dst_index*/)));
         tile_regs_commit();

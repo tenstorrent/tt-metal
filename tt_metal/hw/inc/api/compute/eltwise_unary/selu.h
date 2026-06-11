@@ -35,9 +35,9 @@ ALWI void selu_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
         calculate_selu,
         (APPROX, DST_ACCUM_MODE, 8 /* ITERATIONS */),
         idst,
+        VectorMode::RC,
         param0,
-        param1,
-        VectorMode::RC));
+        param1));
 }
 
 ALWI void selu_tile_pack(uint32_t idst, uint32_t param0, uint32_t param1) {
@@ -47,9 +47,9 @@ ALWI void selu_tile_pack(uint32_t idst, uint32_t param0, uint32_t param1) {
         calculate_selu,
         (APPROX, DST_ACCUM_MODE, 8 /* ITERATIONS */),
         idst,
+        VectorMode::RC,
         param0,
-        param1,
-        VectorMode::RC));
+        param1));
 }
 
 /**

@@ -219,8 +219,8 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             calculate_exponential,
             (APPROX_MODE, is_fp32_dest_acc_en, false /* scale_en */, 8, CLAMP_NEGATIVE),
             dst_index,
-            p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor */,
-            VectorMode::RC);
+            VectorMode::RC,
+            p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor */);
     }
     // Single call (else branch): calculate_exponential handles 8 or 32 iterations internally.
     else if constexpr (OPERATION == SfpuType::exponential)

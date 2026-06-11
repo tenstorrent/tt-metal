@@ -193,10 +193,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             calculate_binary_max_min,
             (DataFormat::Int32 /*FMT*/, IS_MAX_OP, 8 /*ITERATIONS*/),
             params.DST_INDEX,
+            VectorMode::RC,
             0U /*dst_index_in0*/,
             1U /*dst_index_in1*/,
-            2U /*dst_index_out*/,
-            VectorMode::RC);
+            2U /*dst_index_out*/);
     }
     else
     {
@@ -206,10 +206,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             calculate_binary_max_min,
             (DataFormat::Float32 /*FMT*/, IS_MAX_OP, 8 /*ITERATIONS*/),
             params.DST_INDEX,
+            VectorMode::RC,
             0U /*dst_index_in0*/,
             1U /*dst_index_in1*/,
-            2U /*dst_index_out*/,
-            VectorMode::RC);
+            2U /*dst_index_out*/);
     }
 
     // Hand Dest off to PACK.

@@ -37,8 +37,8 @@ ALWI void rsub_tile(uint32_t idst, uint32_t scalar) {
         calculate_binop_with_scalar,
         (APPROX, RSUB_UNARY, 8 /* ITERATIONS */),
         idst,
-        scalar,
-        VectorMode::RC));
+        VectorMode::RC,
+        scalar));
 }
 
 /**
@@ -68,8 +68,8 @@ ALWI void rsub_unary_int32_tile(uint32_t idst, uint32_t scalar) {
         calculate_rsub_scalar_int32,
         (APPROX, 8 /* ITERATIONS */),
         idst,
-        scalar,
-        VectorMode::RC));
+        VectorMode::RC,
+        scalar));
 }
 
 /**

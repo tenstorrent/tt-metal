@@ -35,9 +35,9 @@ ALWI void xielu_tile(uint32_t idst, uint32_t alpha_p, uint32_t alpha_n) {
         calculate_xielu,
         (APPROX, DST_ACCUM_MODE),
         idst,
+        VectorMode::RC,
         alpha_p,
-        alpha_n,
-        VectorMode::RC));
+        alpha_n));
 }
 
 ALWI void xielu_tile_init() { MATH(SFPU_UNARY_INIT_FN(xielu, sfpu::xielu_init, (APPROX))); }

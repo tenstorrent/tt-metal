@@ -36,10 +36,10 @@ ALWI void softplus_tile(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, 
         calculate_softplus,
         (APPROX, DST_ACCUM_MODE),
         idst,
+        VectorMode::RC,
         beta,
         beta_reciprocal,
-        threshold,
-        VectorMode::RC));
+        threshold));
 }
 
 ALWI void softplus_tile_pack(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, uint32_t threshold) {
@@ -49,10 +49,10 @@ ALWI void softplus_tile_pack(uint32_t idst, uint32_t beta, uint32_t beta_recipro
         calculate_softplus,
         (APPROX, DST_ACCUM_MODE),
         idst,
+        VectorMode::RC,
         beta,
         beta_reciprocal,
-        threshold,
-        VectorMode::RC));
+        threshold));
 }
 
 /**

@@ -44,9 +44,9 @@ ALWI void polygamma_tile(uint32_t idst, uint32_t n_packed, uint32_t scale_packed
         calculate_polygamma,
         (APPROX, DST_ACCUM_MODE),
         idst,
+        VectorMode::RC,
         n_packed,
-        scale_packed,
-        VectorMode::RC));
+        scale_packed));
 }
 
 /**

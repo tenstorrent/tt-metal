@@ -38,8 +38,8 @@ ALWI void cumsum_tile(uint32_t idst, bool first = true) {
         calculate_cumsum,
         (false /* APPROXIMATE */),
         idst,
-        first,
-        VectorMode::RC_custom));
+        VectorMode::RC_custom,
+        first));
 }
 
 /**
