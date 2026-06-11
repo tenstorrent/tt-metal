@@ -251,13 +251,6 @@ extern "C" uint8_t* __emule_noc_resolve(uint32_t x, uint32_t y, uint64_t addr) {
         if (it != __emule_core_map->end()) {
             return it->second->l1_ptr(static_cast<uint32_t>(addr));
         }
-        if (tt::tt_metal::emule::emule_asan_enabled()) {
-            __emule_asan_panic(
-                "[ASAN ERROR] Fabric Access Violation: Attempted to access unallocated Core at NOC coordinates (%u, "
-                "%u)\n",
-                x,
-                y);
-        }
     }
     return nullptr;
 }
@@ -291,13 +284,6 @@ extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
                                   ? (static_cast<uint32_t>(local_addr) & L1_SLOT_MASK)
                                   : static_cast<uint32_t>(local_addr);
             return it->second->l1_ptr(offset);
-        }
-        if (tt::tt_metal::emule::emule_asan_enabled()) {
-            __emule_asan_panic(
-                "[ASAN ERROR] Fabric Access Violation: Attempted to access unallocated Core at NOC coordinates (%u, "
-                "%u)\n",
-                noc_x,
-                noc_y);
         }
     }
     return nullptr;

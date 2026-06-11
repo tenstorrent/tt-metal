@@ -76,7 +76,6 @@ the offending kernel line.
 | NOC Transfer Alignment | kernel | `[emule] include/jit_hw/api/dataflow/dataflow_api.h` | a NoC endpoint isn't aligned to its own memory-type alignment |
 | Dirty CB Detected | runner | `[metal] emulated_program_runner.cpp` (counters in `[emule] api/cb_api.h`) | a kernel left a `cb_reserve_back` un-pushed or a `cb_wait_front` un-popped |
 | Object Intent Violation | runner | `[metal] emulated_program_runner.cpp` | a kernel changed a buffer it never resolved a pointer into |
-| Fabric Access Violation | runner | `[metal] emulated_program_runner.cpp` (`__emule_resolve_noc_addr`) | a NoC access targets an unallocated core coordinate |
 
 ---
 
@@ -298,17 +297,6 @@ offset (same address space, no normalization), so the match is exact.
 *Diagnostic:* `Object Intent Violation: Attempted to modify memory belonging to an adjacent object context — L1 buffer [start, end) … changed but no pointer was resolved into it`.
 *Exercised by:* `test_valid_mem_wrong_alloc.cpp` (adjacent + non-adjacent violations + a control).
 
-### 13. Fabric Access Violation
-**Lives in:** `__emule_resolve_noc_addr` in
-`[metal] tt_metal/impl/emulation/emulated_program_runner.cpp`.
-**What it catches:** a NoC transfer whose target NOC X/Y doesn't map to any
-allocated core (an off-grid / unallocated-coordinate access).
-**How it works:** `__emule_resolve_noc_addr` decodes the NOC X/Y from the address
-and looks it up in the core map. No core registered at those coordinates → abort,
-instead of dereferencing a null/garbage backing pointer.
-*Diagnostic:* `Fabric Access Violation: Attempted to access unallocated Core at NOC coordinates (x, y)`.
-*Exercised by:* `test_fabric_allocation.cpp`.
-
 ---
 
 ## Each check's core mechanism + home, in one line
@@ -327,4 +315,3 @@ instead of dereferencing a null/garbage backing pointer.
 | NOC Transfer Alignment | `[emule] api/dataflow/dataflow_api.h` | each endpoint vs its own absolute alignment (16 / 32 / 64 B) |
 | Dirty CB | `[metal] emulated_program_runner.cpp` (+ `[emule] api/cb_api.h`) | `reserved_pages > 0 \|\| waited_pages > 0` at kernel exit |
 | Object Intent | `[metal] emulated_program_runner.cpp` | post-launch `memcmp` of buffers never resolved into |
-| Fabric Access | `[metal] emulated_program_runner.cpp` | NOC X/Y not in the core map |
