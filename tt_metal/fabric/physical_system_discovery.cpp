@@ -226,15 +226,19 @@ void validate_fw_bundle_versions(
     const std::optional<tt::umd::FirmwareBundleVersion>& peer_firmware_bundle_version,
     const std::string& my_host_name,
     const std::string& peer_host_name) {
-    // In multi-host cluster validation, firmware bundle version must be available on all nodes
-    TT_FATAL(
-        psd.get_firmware_bundle_version().has_value() && peer_firmware_bundle_version.has_value(),
-        "Cannot validate firmware bundle versions: missing data. Host {} has version: {}, Host {} has version: {}. "
-        "This may indicate an older UMD version that doesn't report firmware bundle versions.",
-        my_host_name,
-        psd.get_firmware_bundle_version().has_value() ? "yes" : "no",
-        peer_host_name,
-        peer_firmware_bundle_version.has_value() ? "yes" : "no");
+    // Skip validation if firmware bundle versions are not available (e.g., CPU-only tests, older UMD)
+    if (!psd.get_firmware_bundle_version().has_value() || !peer_firmware_bundle_version.has_value()) {
+        log_warning(
+            tt::LogMetal,
+            "Skipping firmware bundle version validation between {} and {}: firmware bundle versions not available "
+            "(local: {}, peer: {}). This may occur in CPU-only mode or with older UMD versions.",
+            my_host_name,
+            peer_host_name,
+            psd.get_firmware_bundle_version().has_value() ? "available" : "unavailable",
+            peer_firmware_bundle_version.has_value() ? "available" : "unavailable");
+        return;
+    }
+
     log_debug(
         tt::LogMetal,
         "Validating firmware bundle versions: {} has {} vs {} has {}",
