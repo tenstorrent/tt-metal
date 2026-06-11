@@ -37,9 +37,9 @@ uint32_t get_num_rows(const ttnn::Tensor& tensor) {
 }
 
 // ProgramDescriptor-flavored helper.  Pushes a CBDescriptor onto the desc
-// instead of calling CreateCircularBuffer.  Mirrors the legacy data_format
-// rewrite for the FP8 dispatch path (UINT8 dispatch buffers reinterpret as
-// Fp8_e4m3 in the CB until FP8 gets a dedicated dtype).
+// instead of calling CreateCircularBuffer.  The FP8 dispatch path allocates its
+// buffer as DataType::FP8_E4M3, which datatype_to_dataformat_converter maps
+// straight to tt::DataFormat::Fp8_e4m3 — no special-casing needed here.
 void create_tensor_cb(
     tt::tt_metal::ProgramDescriptor& desc,
     const CoreRangeSet& core_range_set,
@@ -51,11 +51,6 @@ void create_tensor_cb(
     auto num_pages = detail::get_num_pages(tensor);
     auto aligned_page_size = get_aligned_page_size(tensor);
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
-    if (data_format == tt::DataFormat::UInt8) {
-        // TODO: remove once FP8 has a dedicated dtype. In this op, UINT8 tensors only appear
-        // on the FP8 dispatch path (DRAM is allocated as UINT8 but content is Fp8_e4m3).
-        data_format = tt::DataFormat::Fp8_e4m3;
-    }
 
     uint32_t cb_size = buffering_factor * aligned_page_size;
 
@@ -707,8 +702,8 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         untilize_compute_kd.config = tt::tt_metal::ComputeConfigDescriptor{
             .math_fidelity = MathFidelity::HiFi4,
             // Blackhole requires the DEST register in 32-bit mode whenever any CB on the core uses
-            // an 8-bit float format (Fp8_e4m3). The FP8 dispatch path reinterprets UINT8 CBs as
-            // Fp8_e4m3, so fp32_dest_acc_en must be enabled there.
+            // an 8-bit float format (Fp8_e4m3). The FP8 dispatch path emits Fp8_e4m3 output, so
+            // fp32_dest_acc_en must be enabled there.
             .fp32_dest_acc_en = operation_attributes.use_fp8_dispatch,
             // 32-bit DEST halves pack_untilize block capacity: half-sync 32-bit allows only 4
             // tiles, but pack_untilize_block uses block_ct_dim=8. Full-sync 32-bit restores the
@@ -1369,12 +1364,6 @@ tt::tt_metal::WorkloadDescriptor DispatchProgramFactory::create_workload_descrip
 
     const bool is_tile_layout = tensor_args.input_tensor.layout() == tt::tt_metal::Layout::TILE;
     log_info(tt::LogOp, "Prefill dispatch: input tensor is {} layout", is_tile_layout ? "TILE" : "ROW_MAJOR");
-    if (operation_attributes.use_fp8_dispatch) {
-        log_warning(
-            tt::LogOp,
-            "Prefill dispatch: FP8 path — output buffer is allocated as UINT8 but content is Fp8_e4m3. "
-            "CBs reinterpret UINT8 tensors as Fp8_e4m3 (temporary, until FP8 has a dedicated dtype).");
-    }
 
     // Dispatch is mesh-coord-dependent (fabric routing + linearized mesh
     // coordinate are baked into kernel compile-time args), so we cannot
