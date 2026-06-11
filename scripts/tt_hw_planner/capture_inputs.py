@@ -577,6 +577,14 @@ def capture_real_inputs(
                 continue
             if not kw:
                 continue
+            try:
+                _sub_dtype = next(sub.parameters()).dtype
+                kw = {
+                    k: (v.to(_sub_dtype) if isinstance(v, torch.Tensor) and v.is_floating_point() else v)
+                    for k, v in kw.items()
+                }
+            except StopIteration:
+                pass
             _try(f"submodule[{path}](**{list(kw.keys())})", lambda _sub=sub, _kw=kw: _sub(**_kw))
 
         try:
