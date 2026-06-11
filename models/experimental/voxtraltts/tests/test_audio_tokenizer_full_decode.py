@@ -15,9 +15,6 @@ from models.experimental.voxtraltts.tests.common import (
     create_voxtral_audio_tokenizer_or_skip,
     resolve_voxtral_model_name_or_skip,
 )
-from models.experimental.voxtraltts.utils.audio_tokenizer_optimizations import (
-    voxtral_audio_tokenizer_dense_mask_sdpa_optimizations,
-)
 from models.experimental.voxtraltts.tt.audio_tokenizer.model import extract_audio_tokenizer_state_dict
 from models.experimental.voxtraltts.tt.voxtral_tt_args import _load_safetensors_state_dict
 
@@ -57,12 +54,7 @@ def test_audio_tokenizer_full_decode_pcc(device, reset_seeds, time_len, pcc):
     cfg = load_voxtral_config(model_name).audio_tokenizer_args
     sd = extract_audio_tokenizer_state_dict(full)
     try:
-        tok = create_voxtral_audio_tokenizer_or_skip(
-            device,
-            state_dict=sd,
-            tokenizer_cfg=cfg,
-            optimizations=voxtral_audio_tokenizer_dense_mask_sdpa_optimizations(),
-        )
+        tok = create_voxtral_audio_tokenizer_or_skip(device, state_dict=sd, tokenizer_cfg=cfg)
     except Exception as exc:
         pytest.skip(str(exc))
 
