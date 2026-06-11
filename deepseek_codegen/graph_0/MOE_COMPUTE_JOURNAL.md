@@ -847,3 +847,16 @@ Journey: 1059 (orig sparse) -> 256 (MoE round) -> 205 (attn TM round) -> 178 (Mo
 SAFE device-busy levers now exhausted: attn TM done, CCL latency-bound (closed), MoE tail done. MoECompute
 is bf4 (min precision) + fused = compute floor; its only graph knobs (output_height_shard_dim/topology) are
 the #46208-sensitive combine config. Next attempts target those (bounded risk: hang -> glx_reset_auto recovers).
+
+### moe_compute config knobs — no headroom (2026-06-11)
+- **MOE_OHSD=8**: TT_THROW core_coord.cpp:407 "core ranges [0-49 - 0-49] overlap" — invalid core grid.
+  OHSD=4 is the working default; 8 breaks; 2 would use fewer combine cores (slower). No headroom.
+- **MOE_NUM_LINKS**: no-op (CCL latency-bound, established). **MOE_TOPOLOGY**: Ring works, Linear known-risky.
+=> moe_compute is a config dead-end. The 712us MoECompute (bf4 weights = min precision, fused) is at its
+compute floor. **TRACTABLE DEVICE-BUSY FLOOR REACHED at 177.8 ms (5.96x).**
+
+Remaining levers all blocked/out-of-scope for safe device-busy iteration:
+- moe_compute internals (the 712us / 23% op): upstream C++ change, not graph-level.
+- attention reshapes/matmul-fidelity: any attn L1/precision change risks #46208 (iter7) or PCC floor.
+- wall-clock (the real decode latency, ~99.8% dispatch-idle): needs metal-trace, which HANGS on CCL replay
+  — a different metric + a known blocker.
