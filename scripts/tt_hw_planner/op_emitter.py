@@ -562,7 +562,10 @@ def emit_partial_stub(
     parts.append(f"def {mod_name}(*args, **kwargs):\n")
     parts.append("    global _instance\n")
     parts.append("    if _instance is None:\n")
-    parts.append("        model = transformers.AutoModel.from_pretrained(HF_MODEL_ID, trust_remote_code=True)\n")
+    parts.append(
+        "        model = transformers.AutoModel.from_pretrained("
+        'HF_MODEL_ID, trust_remote_code=True, torch_dtype="bfloat16", low_cpu_mem_usage=True)\n'
+    )
     parts.append("        model.eval()\n")
     parts.append("        torch_sub = None\n")
     parts.append("        for path in _CANDIDATE_SUBMODULE_PATHS:\n")

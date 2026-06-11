@@ -340,7 +340,7 @@ def capture_real_inputs(
     model = None
     best_loader = None
     best_count = -1
-    for _cand_model, _cand_loader in iter_hf_model_variants(model_id, torch_dtype="float32", verbose=verbose):
+    for _cand_model, _cand_loader in iter_hf_model_variants(model_id, torch_dtype="bfloat16", verbose=verbose):
         _cnt = sum(1 for _c in components if _resolve_submodule(_cand_model, _c, demo_dir=demo_dir) is not None)
         if _cnt > best_count:
             if model is not None:

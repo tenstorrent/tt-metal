@@ -7960,12 +7960,12 @@ def _quiet_framework_logging() -> None:
     the stale-device recovery greps subprocess output for device-log markers,
     so silencing it could mask the very lines that trigger a tt-smi reset.
 
-    DEFAULT IS NOW FULL TERMINAL: unless TT_HW_PLANNER_VERBOSE is explicitly set
-    to 0/false, the screen shows everything (the original pre-cleanup behavior),
-    so a single `... > run.log 2>&1` redirect captures the whole run in one file.
-    Opt into the clean/quiet screen with TT_HW_PLANNER_VERBOSE=0.
+    DEFAULT IS QUIET: unless TT_HW_PLANNER_VERBOSE is explicitly set to 1/true,
+    the screen stays clean (agent/framework chatter suppressed); full detail
+    always lands in the per-agent and pytest stream logs regardless.
+    Opt into the full/verbose terminal with TT_HW_PLANNER_VERBOSE=1.
     """
-    os.environ.setdefault("TT_HW_PLANNER_VERBOSE", "1")
+    os.environ.setdefault("TT_HW_PLANNER_VERBOSE", "0")
     if os.environ.get("TT_HW_PLANNER_VERBOSE", "") not in ("", "0", "false", "False"):
         return
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")

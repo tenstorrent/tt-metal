@@ -482,7 +482,7 @@ def _build_torch_reference():
         except AttributeError:
             continue
         try:
-            model = _cls.from_pretrained(HF_MODEL_ID, trust_remote_code=True)
+            model = _cls.from_pretrained(HF_MODEL_ID, trust_remote_code=True, torch_dtype="bfloat16", low_cpu_mem_usage=True)
             break
         except Exception as _e:
             _last_err = _e
@@ -1524,7 +1524,7 @@ def _get_torch_submodule():
         except AttributeError:
             continue
         try:
-            model = _cls.from_pretrained(HF_MODEL_ID, trust_remote_code=True)
+            model = _cls.from_pretrained(HF_MODEL_ID, trust_remote_code=True, torch_dtype="bfloat16", low_cpu_mem_usage=True)
             break
         except Exception as _e:
             _last_err = _e
@@ -1905,7 +1905,9 @@ def autofill_stubs(
         _last_exc: Optional[BaseException] = None
         for _cls_name, _cls in _hf_load_classes:
             try:
-                hf_model = _cls.from_pretrained(model_id, trust_remote_code=True)
+                hf_model = _cls.from_pretrained(
+                    model_id, trust_remote_code=True, torch_dtype="bfloat16", low_cpu_mem_usage=True
+                )
                 hf_model.eval()
                 _last_exc = None
                 break
@@ -2300,7 +2302,7 @@ def _build_hf_model():
         except AttributeError:
             continue
         try:
-            model = _cls.from_pretrained(HF_MODEL_ID, trust_remote_code=True)
+            model = _cls.from_pretrained(HF_MODEL_ID, trust_remote_code=True, torch_dtype="bfloat16", low_cpu_mem_usage=True)
             break
         except Exception as _e:
             _last_err = _e

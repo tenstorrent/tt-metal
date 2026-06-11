@@ -250,7 +250,7 @@ def iter_hf_model_variants(
         if cls is None:
             continue
         try:
-            model = cls.from_pretrained(model_id, torch_dtype=dtype, trust_remote_code=True)
+            model = cls.from_pretrained(model_id, torch_dtype=dtype, trust_remote_code=True, low_cpu_mem_usage=True)
         except Exception as exc:
             if verbose:
                 print(f"  [hf-variants] {loader} failed: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
