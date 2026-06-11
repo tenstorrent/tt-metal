@@ -268,6 +268,51 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     uint32_t M_tiles_per_core = padded_M_tiles / in0_parallel_axis_cores;
     uint32_t N_tiles_per_core = padded_N_tiles / in1_parallel_axis_cores;
 
+    // Divisibility-aware default subblock selection (only when the caller did not pin a config).
+    // 8-tile (2x4 / 4x2) subblocks are a large win, but only when the subblock dimension evenly
+    // divides the per-core tile count — otherwise the partial last subblock (e.g. a 6-tile/core N
+    // dim split as 4+2 by subblock_w=4) is less efficient than a clean 2x2 and regresses perf.
+    // So pick each subblock dim as the largest of {4,2,1} that divides the per-core tile count,
+    // giving the wider budget to the larger output dimension and keeping the product within the
+    // HALF-SYNC DST depth (4 fp32 / 8 bf16 tiles). The kernel always runs half-sync (the factory
+    // never wires dst_full_sync_en to ComputeConfig), so exceeding these overflows DST and silently
+    // corrupts the output — fp32 is therefore effectively capped at 2x2.
+    if (!config.has_value()) {
+        const uint32_t max_dst = fp32_dest_acc_en ? 4u : 8u;
+        auto largest_divisor = [](uint32_t v, uint32_t cap) -> uint32_t {
+            for (uint32_t d : {4u, 2u, 1u}) {
+                if (d <= cap && v != 0 && (v % d) == 0) {
+                    return d;
+                }
+            }
+            return 1u;
+        };
+        if (N_tiles >= M_tiles) {  // wider subblock along N
+            subblock_h = largest_divisor(M_tiles_per_core, 2u);
+            subblock_w = largest_divisor(N_tiles_per_core, max_dst / subblock_h);
+        } else {  // wider subblock along M
+            subblock_w = largest_divisor(N_tiles_per_core, 2u);
+            subblock_h = largest_divisor(M_tiles_per_core, max_dst / subblock_w);
+        }
+    }
+
+    // Auto-gate (productization): mcast+prefetch beats the unicast baseline when the skinny output
+    // dimension is delivery-bound, i.e. has a small per-core tile count. Measured win for
+    // min(M,N) tiles-per-core <= 2 (+1.6% to +30%, larger for smaller shapes); a loss above that. When
+    // it fires we ALSO clamp the compile-time block to the per-core tiles — the win requires
+    // M_block == M_tiles_per_core; leaving the default 8 makes the kernel reserve/pipeline 8x-too-large
+    // CB blocks (~+50% slower even though runtime byte counts are clamped). Fires only when the caller
+    // didn't pin a config and there are no fused ops (mcast prototype). Disable via TT_MM_NO_AUTO_PREFETCH;
+    // TT_MM_MCAST_PREFETCH forces the dataflow on regardless (handled at the mcast-flags block below).
+    const uint32_t min_tiles_per_core = std::min(M_tiles_per_core, N_tiles_per_core);
+    const char* no_auto_prefetch = std::getenv("TT_MM_NO_AUTO_PREFETCH");
+    const bool prefetch_gate = !config.has_value() && !fuse_op && !fuse_srs && min_tiles_per_core <= 2 &&
+                               !(no_auto_prefetch != nullptr && std::string(no_auto_prefetch) != "0");
+    if (prefetch_gate) {
+        M_block_tiles = std::min(M_block_tiles, M_tiles_per_core);
+        N_block_tiles = std::min(N_block_tiles, N_tiles_per_core);
+    }
+
     uint32_t K_blocks = padded_K_tiles / K_block_tiles;
 
     uint32_t M_blocks_per_core = tt::div_up(M_tiles_per_core, M_block_tiles);
@@ -440,7 +485,34 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         }
     }
 
+    // Large-shape DRAM-contention levers. These were validated to help only at large sizes
+    // (neutral-to-negative on small shapes), so gate on the largest dimension. When any dimension
+    // is >= 4096 elements:
+    //   - IN0_READ_BARRIER_THRESHOLD: cap outstanding in0 (activation) DRAM reads. in0 reads are
+    //     un-staggered bursts that share NOC_1 with output writes; capping in-flight requests
+    //     relieves NOC_1 contention (~+1.7% at 4096^3).
+    //   - OUTPUT_WRITE_NOC0_PCT: route ~40% of output writes onto the otherwise-idle NOC_0, which
+    //     requires DM_DYNAMIC_NOC on all DM kernels (dynamic-NOC mode is performance-neutral here).
     auto dm_noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC;
+    constexpr uint32_t LARGE_SHAPE_DIM = 4096;
+    // The in0-read barrier and prefetch are fundamentally opposed: the barrier caps outstanding in0
+    // reads (every IN0_READ_BARRIER_THRESHOLD tiles), while prefetch's whole purpose is to keep the
+    // next block's read in flight. Applying both negates prefetch (~+14% slowdown, worst on the
+    // transpose orientation where in0 is the large input). So skip the in0 barrier whenever prefetch
+    // is active. The split-NOC output write is independent (minor effect) and kept.
+    const char* force_prefetch = std::getenv("TT_MM_MCAST_PREFETCH");
+    const bool prefetch_active = prefetch_gate || (force_prefetch != nullptr && std::string(force_prefetch) != "0");
+    // TT_MM_NO_LARGE_LEVERS: ablation toggle to isolate the large-shape DRAM-contention levers
+    // (in0-read barrier + split-NOC output write) from the rest of the dataflow.
+    if (std::max({M, K, N}) >= LARGE_SHAPE_DIM && std::getenv("TT_MM_NO_LARGE_LEVERS") == nullptr) {
+        if (std::getenv("TT_MM_NO_IN0_BARRIER") == nullptr && !prefetch_active) {
+            defines["IN0_READ_BARRIER_THRESHOLD"] = "10";
+        }
+        if (std::getenv("TT_MM_NO_OUTPUT_NOC_SPLIT") == nullptr) {
+            defines["OUTPUT_WRITE_NOC0_PCT"] = "40";
+        }
+        dm_noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC;
+    }
 
     // DRAM ablation hooks (perf analysis only; inert unless the env var is set). Each compiles out
     // one DRAM NoC stream while preserving CB/compute control flow, to measure the compute floor.
@@ -469,7 +541,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     // Prefetch: software-pipeline the injector k-loop so block k+1's DRAM read is issued before block
     // k's multicast, overlapping read latency with mcast transit on the single injector DM RISC. Built
     // on the non-pipelined broadcast path (the +8% winner); incompatible with the credit/pipelined mcast.
-    const bool mcast_prefetch = env_flag_set("TT_MM_MCAST_PREFETCH");
+    // The auto-gate (prefetch_gate) was computed earlier with the block sizes (it also clamps the
+    // compile-time block). TT_MM_MCAST_PREFETCH forces the dataflow on regardless of the gate.
+    const bool mcast_prefetch = env_flag_set("TT_MM_MCAST_PREFETCH") || prefetch_gate;
     // Stagger: place the in0 injector for row r at logical col (r % grid.x) (diagonal) instead of all
     // at col 0, so in0 DRAM-read destinations fan across NoC columns (like in1 already does) and stop
     // concentrating the col-5 DRAM egress onto one set of links. Non-transpose only for the prototype.
