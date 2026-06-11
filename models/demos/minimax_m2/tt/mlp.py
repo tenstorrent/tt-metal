@@ -5,7 +5,7 @@
 MoE MLP: Router + Experts with minimal abstraction
 """
 import ttnn
-from models.demos.minimax_m2.tt.expert_configs import GPTOSSProgramConfig
+from models.demos.minimax_m2.tt.expert_configs import MiniMaxM2ExpertProgramConfig
 from models.demos.minimax_m2.utils.general_utils import get_cache_file_name
 from models.demos.minimax_m2.utils.substate import substate
 
@@ -142,8 +142,8 @@ class MLP:
                 num_experts_per_tok=hf_config.num_experts_per_tok,
             )
 
-            # Use GPT-OSS specific program config
-            program_config = GPTOSSProgramConfig()
+            # Use MiniMax-M2 specific program config
+            program_config = MiniMaxM2ExpertProgramConfig()
 
             # Create experts with new modular implementation
             self.experts = Experts(

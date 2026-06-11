@@ -22,7 +22,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.minimax_m2.config import MeshConfig, ModeConfig
 from models.demos.minimax_m2.tt.ccl import CCLManager
-from models.demos.minimax_m2.tt.expert_configs import GPTOSSProgramConfig
+from models.demos.minimax_m2.tt.expert_configs import MiniMaxM2ExpertProgramConfig
 from models.demos.minimax_m2.tt.experts import ExpertConfig, Experts
 from models.demos.minimax_m2.utils.general_utils import get_default_num_links
 
@@ -76,7 +76,7 @@ def test_experts_prefill_vs_hf(mesh_device, device_params, seq_len, reset_seeds)
         state_dict=state,
         ccl_manager=ccl_manager,
         mesh_config=mesh_config,
-        program_config=GPTOSSProgramConfig(),
+        program_config=MiniMaxM2ExpertProgramConfig(),
         weight_dtype=ttnn.bfloat8_b,  # isolate logic from bfp4 quantization
     )
 

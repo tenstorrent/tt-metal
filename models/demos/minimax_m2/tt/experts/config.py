@@ -55,7 +55,7 @@ class ProgramConfig:
     The boilerplate MatmulProgramConfig generation is handled automatically.
 
     Example:
-        # GPT-OSS config
+        # MiniMax-M2 config
         config = ProgramConfig(
             decode_gate_up_cores=(3, 4),
             decode_down_cores=(5, 6),

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-GPT-OSS ModelArgs class that's compatible with tt_transformers interface
+MiniMax-M2 ModelArgs class that's compatible with tt_transformers interface
 """
 
 import os
@@ -25,7 +25,7 @@ from models.tt_transformers.tt.common import (
 
 
 class ModelArgs:
-    """GPT-OSS ModelArgs compatible with tt_transformers create_tt_model interface"""
+    """MiniMax-M2 ModelArgs compatible with tt_transformers create_tt_model interface"""
 
     def __init__(
         self,
@@ -48,7 +48,7 @@ class ModelArgs:
             self.max_local_batch_size = self.max_batch_size
         self.max_seq_len = max_seq_len
         if optimizations is not None:
-            logger.warning("GPT-OSS doesn't support any performance optimizations - ignoring optimizations argument")
+            logger.warning("MiniMax-M2 doesn't support any performance optimizations - ignoring optimizations argument")
         self.optimizations = None
         self.cache_hf = cache_hf
 
@@ -111,7 +111,7 @@ class ModelArgs:
         else:
             # Load tokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(self.weights_path, trust_remote_code=True)
-            self.processor = None  # GPT-OSS doesn't use vision processor
+            self.processor = None  # MiniMax-M2 doesn't use vision processor
 
         self.disable_batched_prefill = True
         self.capped_warmup_seq_len = 2048
@@ -202,7 +202,7 @@ class ModelArgs:
         Encode prompts using HuggingFace tokenizer with chat template
         Compatible with tt_transformers interface
         """
-        assert not instruct, "GPT-OSS does not support instruct mode"
+        assert not instruct, "MiniMax-M2 does not support instruct mode"
         chat = []
         if isinstance(prompt_text, str):
             if system_prompt_text:
@@ -228,7 +228,7 @@ class ModelArgs:
             # Return dummy state dict for testing
             return {}
         else:
-            # Load actual GPT-OSS weights directly from safetensors files
+            # Load actual MiniMax-M2 weights directly from safetensors files
             # Check if we have a cached torch_state_dict.pt file
             model = AutoModelForCausalLM.from_pretrained(
                 weights_path,

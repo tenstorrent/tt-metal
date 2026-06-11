@@ -6,7 +6,7 @@ from models.demos.minimax_m2.utils.general_utils import get_cache_file_name
 from models.demos.minimax_m2.utils.substate import substate
 
 from .attention import Attention, AttentionConfig
-from .attention_configs import GPTOSSAttentionProgramConfig
+from .attention_configs import MiniMaxM2AttentionProgramConfig
 from .mlp import MLP
 from .rms_norm import RMSNorm
 
@@ -81,7 +81,7 @@ class DecoderLayer:
         )
 
         # Create attention program config
-        attention_program_config = GPTOSSAttentionProgramConfig()
+        attention_program_config = MiniMaxM2AttentionProgramConfig()
 
         self.self_attn = Attention(
             mesh_device=mesh_device,

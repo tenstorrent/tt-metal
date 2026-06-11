@@ -58,7 +58,7 @@ def _apply_swiglu(
 ) -> ttnn.Tensor:
     """Apply SwiGLU activation: (up + 1) * (gate * sigmoid(gate * alpha)).
 
-    This implements the GPT-OSS SwiGLU variant with clamping:
+    This implements the MiniMax-M2 SwiGLU variant with clamping:
     1. Clamp gate (min=None, max=limit) and up (min=-limit, max=limit)
     2. glu = gate * sigmoid(gate * alpha)
     3. result = (up + 1) * glu

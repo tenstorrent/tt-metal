@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-GPT-OSS specific implementation of create_tt_model that's compatible with tt_transformers
+MiniMax-M2 specific implementation of create_tt_model that's compatible with tt_transformers
 """
 
 import ttnn
@@ -25,7 +25,7 @@ def create_tt_model(
     use_throughput_experts=False,
 ):
     """
-    GPT-OSS version of create_tt_model that matches tt_transformers interface
+    MiniMax-M2 version of create_tt_model that matches tt_transformers interface
     Uses clean MeshConfig abstraction for optimal device parallelization
     """
     from models.demos.minimax_m2.config import MeshConfig
@@ -38,8 +38,8 @@ def create_tt_model(
 
         mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1], ep=mesh_device.shape[0]))
 
-    # Create GPT-OSS ModelArgs
-    gpt_oss_model_args = ModelArgs(
+    # Create MiniMax-M2 ModelArgs
+    model_args = ModelArgs(
         mesh_device,
         max_batch_size=max_batch_size,
         optimizations=optimizations,
@@ -47,25 +47,25 @@ def create_tt_model(
     )
     # Override num_layers if provided (useful for quick testing with fewer layers)
     if num_layers is not None:
-        gpt_oss_model_args.hf_config.num_hidden_layers = num_layers
-        gpt_oss_model_args.n_layers = num_layers
+        model_args.hf_config.num_hidden_layers = num_layers
+        model_args.n_layers = num_layers
 
     # Avoid loading state_dict for every DP model. An empty dict is intentional
     # when --skip-model-load is used.
     if state_dict is None:
-        state_dict = gpt_oss_model_args.load_state_dict(
-            weights_path=gpt_oss_model_args.model_path,
-            dummy_weights=gpt_oss_model_args.dummy_weights,
+        state_dict = model_args.load_state_dict(
+            weights_path=model_args.model_path,
+            dummy_weights=model_args.dummy_weights,
             convert_to_meta_format=True,
         )
 
-    # Create GPT-OSS model using transformer-compatible constructor
+    # Create MiniMax-M2 model using transformer-compatible constructor
     model = Model.create_transformer_compatible(
-        args=gpt_oss_model_args,
+        args=model_args,
         mesh_device=mesh_device,
         dtype=dtype,
         state_dict=state_dict,
-        tensor_cache_path=str(gpt_oss_model_args.weight_cache_path(dtype)),
+        tensor_cache_path=str(model_args.weight_cache_path(dtype)),
         paged_attention_config=paged_attention_config,
         mesh_config=mesh_config,  # Pass explicit MeshConfig
         create_kv_cache=create_kv_cache,
@@ -77,7 +77,7 @@ def create_tt_model(
     tt_kv_cache = []
     if create_kv_cache:
         for layer in model.layers:
-            # GPT-OSS uses self_attn instead of attention
+            # MiniMax-M2 uses self_attn instead of attention
             tt_kv_cache.append(layer.self_attn.layer_past)
 
-    return gpt_oss_model_args, model, tt_kv_cache, state_dict
+    return model_args, model, tt_kv_cache, state_dict

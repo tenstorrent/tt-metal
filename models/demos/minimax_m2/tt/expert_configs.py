@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""GPT-OSS expert program configurations."""
+"""MiniMax-M2 expert program configurations."""
 
 from dataclasses import dataclass
 
@@ -9,9 +9,9 @@ from models.demos.minimax_m2.tt.experts.config import ProgramConfig
 
 
 @dataclass
-class GPTOSSProgramConfig(ProgramConfig):
+class MiniMaxM2ExpertProgramConfig(ProgramConfig):
     """
-    GPT-OSS expert configuration.
+    MiniMax-M2 expert configuration.
 
     Optimized for: hidden=2088, intermediate=360
     """

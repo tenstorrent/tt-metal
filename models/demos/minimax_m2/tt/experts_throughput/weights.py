@@ -19,7 +19,7 @@ from models.demos.minimax_m2.utils.general_utils import get_cache_file_name
 from .config import ThroughputExpertConfig
 
 # ---------------------------------------------------------------------------
-# Fused MoE kernel constants (GPT-OSS: K=N=2880, 12 DRAM banks)
+# Fused MoE kernel constants (MiniMax-M2: K=N=2880, 12 DRAM banks)
 # ---------------------------------------------------------------------------
 _FUSED_FULL_CORES = {0, 1, 4, 5, 8, 9}  # 8 tiles per core
 _FUSED_PAD_CORES = {2, 3, 6, 7, 10, 11}  # 7 tiles per core

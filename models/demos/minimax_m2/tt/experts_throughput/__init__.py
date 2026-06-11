@@ -468,7 +468,7 @@ class ThroughputExperts:
         # Try to find expert weights
         import torch
 
-        # Check for fused gate_up_proj format (GPT-OSS style)
+        # Check for fused gate_up_proj format (MiniMax-M2 style)
         fused_key = f"{prefix}experts.gate_up_proj"
         if fused_key in hf_state_dict:
             expert_weights["gate_up_proj"] = hf_state_dict[fused_key]
