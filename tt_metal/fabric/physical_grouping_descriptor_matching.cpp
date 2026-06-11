@@ -827,6 +827,46 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
         // Required nodes from MGD adjacency graph (this represents the topology pattern to match)
         size_t required_nodes = mgd_grouping_info.adjacency_graph.get_nodes().size();
 
+        // Cheap necessary-condition prefilter for the (expensive) topology solve. solve_topology_mapping
+        // looks for an injective edge-preserving map of the MGD graph (target) into a PGD variant (global),
+        // so every MGD edge must land on a distinct PGD edge -> |E(PGD)| >= |E(MGD)| is required. A RING/RING
+        // MGD is a full torus (degree 4 everywhere, ~2*N edges) while the MESH/TORUSX/TORUSY variants of the
+        // same grid drop wrap edges, so they have strictly fewer edges and can never contain it. Counting
+        // edges is O(V); the SAT solve it skips is many orders of magnitude slower (seconds per 128-node
+        // candidate), so this eliminates the provably-impossible variants up front instead of solving them.
+        auto count_undirected_edges = [](const AdjacencyGraph<uint32_t>& g) -> size_t {
+            size_t directed = 0;
+            for (uint32_t node : g.get_nodes()) {
+                directed += g.get_neighbors(node).size();
+            }
+            return directed / 2;  // each undirected edge is stored from both endpoints
+        };
+        const size_t required_edges = count_undirected_edges(mgd_grouping_info.adjacency_graph);
+
+        // When node and edge counts both match, the embedding would be a bijection (an isomorphism), so a
+        // second cheap count must also agree: the summed size of every node's 2-hop neighborhood. This
+        // separates same-size, same-edge-count tori of different shapes -- e.g. an [8,16] torus (8 nodes at
+        // distance 2 per node) from a [4,32] torus (the size-4 axis wraps, so fewer) -- which node and edge
+        // counts alone cannot, and which otherwise cost the SAT solver ~30s each to disprove. It is just
+        // neighbors-of-neighbors over the adjacency graph (O(V*deg^2)), negligible next to the solve.
+        auto two_hop_reach_sum = [](const AdjacencyGraph<uint32_t>& g) -> size_t {
+            size_t total = 0;
+            std::unordered_set<uint32_t> ball;
+            for (uint32_t u : g.get_nodes()) {
+                ball.clear();
+                ball.insert(u);
+                for (uint32_t v : g.get_neighbors(u)) {
+                    ball.insert(v);
+                    for (uint32_t w : g.get_neighbors(v)) {
+                        ball.insert(w);
+                    }
+                }
+                total += ball.size();
+            }
+            return total;
+        };
+        const size_t required_two_hop = two_hop_reach_sum(mgd_grouping_info.adjacency_graph);
+
         // MGD device topology. Matching uses LINE-only MGD graphs and the PGD supplies the topology via its
         // MESH/TORUSX/TORUSY/TORUSXY variants (committed directly). device_topo is only used for the fallback
         // grouping below when no PGD variant places on the PSD.
@@ -859,6 +899,35 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
 
             for (const auto& [name, idx] : name_idx_pairs) {
                 const auto& grouping_info = mesh_flat_groupings.at(name)[idx];
+
+                // Necessary-condition prefilter: a variant with fewer edges than the MGD cannot contain it
+                // (every MGD edge needs a distinct variant edge). Skip without paying for the SAT solve.
+                const size_t variant_edges = count_undirected_edges(grouping_info.adjacency_graph);
+                if (variant_edges < required_edges) {
+                    log_debug(
+                        tt::LogFabric,
+                        "Skipping {} for {}: {} edges < {} MGD edges (cannot contain the topology)",
+                        name,
+                        mgd_grouping_info.name,
+                        variant_edges,
+                        required_edges);
+                    continue;
+                }
+
+                // Node and edge counts equal => any embedding is a bijection, so the 2-hop neighborhood sum
+                // must match too. If it differs the topologies are not isomorphic (e.g. [4,32] vs the [8,16]
+                // MGD): skip the ~30s SAT that would only disprove it.
+                if (node_diff == 0 && variant_edges == required_edges &&
+                    two_hop_reach_sum(grouping_info.adjacency_graph) != required_two_hop) {
+                    log_debug(
+                        tt::LogFabric,
+                        "Skipping {} for {}: same node/edge count but 2-hop neighborhood differs "
+                        "(non-isomorphic topology)",
+                        name,
+                        mgd_grouping_info.name);
+                    continue;
+                }
+
                 MappingConstraints<uint32_t, uint32_t> constraints;
                 constraints.add_required_constraint(0, 0);
                 auto mapping_result = solve_topology_mapping<uint32_t, uint32_t>(
@@ -1282,6 +1351,8 @@ struct PackingCandidate {
     size_t grouping_idx;             // index into the input groupings vector
     std::vector<size_t> asic_slots;  // dense ASIC indices (0..universe_size-1) used by this placement
     MappingResult<uint32_t, AsicID> result;
+    size_t pool_order = 0;  // insertion order into the candidate pool (matches solver enumeration order)
+    size_t host_count = 1;  // distinct hosts spanned by this placement
 };
 
 struct PackingResult {
@@ -1302,12 +1373,15 @@ PackingResult solve_set_packing(
         return best;
     }
 
-    // Sort by weight desc; deterministic tiebreak via asic_slots content.
+    // Prefer heavier placements, then single-host, then earlier solver enumeration (preferred constraints).
     std::sort(candidates.begin(), candidates.end(), [](const PackingCandidate& a, const PackingCandidate& b) {
         if (a.asic_slots.size() != b.asic_slots.size()) {
             return a.asic_slots.size() > b.asic_slots.size();
         }
-        return a.asic_slots < b.asic_slots;
+        if (a.host_count != b.host_count) {
+            return a.host_count < b.host_count;
+        }
+        return a.pool_order < b.pool_order;
     });
 
     const size_t n = candidates.size();
@@ -1470,6 +1544,7 @@ solve_for_many_groupings_to_psd_heterogeneous(
     // Phase A: enumerate candidates per grouping, de-duplicating identical ASIC sets across groupings.
     std::vector<PackingCandidate> candidates;
     std::unordered_set<std::string> seen_sets;  // key = sorted slot indices serialized as bytes
+    size_t pool_order = 0;
     for (size_t gi = 0; gi < groupings.size(); ++gi) {
         const auto& grouping = groupings[gi];
         if (grouping.adjacency_graph.get_nodes().empty()) {
@@ -1516,7 +1591,14 @@ solve_for_many_groupings_to_psd_heterogeneous(
             if (!seen_sets.insert(std::move(key)).second) {
                 continue;
             }
-            candidates.push_back({gi, std::move(slots), std::move(placement)});
+            std::set<std::string> hosts;
+            for (const auto& [_, asic_id] : placement.target_to_global) {
+                hosts.insert(physical_system_descriptor.get_host_name_for_asic(asic_id));
+            }
+            PackingCandidate candidate{gi, std::move(slots), std::move(placement)};
+            candidate.pool_order = pool_order++;
+            candidate.host_count = hosts.size();
+            candidates.push_back(std::move(candidate));
         }
     }
 

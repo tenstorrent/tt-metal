@@ -310,20 +310,6 @@ groupings {
 }
 
 groupings {
-  name: "4x4_Mesh_split"
-  preset_type: MESH
-  instances: [
-    { id: 0 grouping_ref { custom_type: "HALFTRAY_2" } },
-    { id: 1 grouping_ref { custom_type: "HALFTRAY_2" } },
-    { id: 2 grouping_ref { custom_type: "HALFTRAY_1" } },
-    { id: 3 grouping_ref { custom_type: "HALFTRAY_1" } }
-  ]
-  row_major_mesh {
-    dims: [2, 2]
-  }
-}
-
-groupings {
   name: "4x4_Mesh"
   preset_type: MESH
   instances: [
