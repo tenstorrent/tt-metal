@@ -6,6 +6,8 @@
 TTNN implementation of Gated Attention.
 """
 
+import os as _os
+
 import ttnn
 
 
@@ -118,14 +120,20 @@ def _get_sdpa_program_config(device, seq_len, q_seq_len=None, chunk_start_idx=No
 
 def _get_flexible_sdpa_program_config(device):
     """Fixed SDPAProgramConfig for the FLEXIBLE chunked SDPA (chunk_start_idx supplied as a
-    runtime device tensor). q/k_chunk=64 divides every chunk_start that is a multiple of the
-    2048-token GDN chunk, so ONE program serves all chunk positions — required so a single
+    runtime device tensor). The chunk size must divide every chunk_start (all multiples of the
+    2048-token GDN chunk) so ONE program serves all chunk positions — required so a single
     captured trace can be replayed per chunk in chunk-outer prefill.
+
+    Default 128 (not 64): 128 still divides 2048, and a microbench showed q/k=128 is ~2x faster
+    than 64 on the prefill SDPA shape (16 q-heads / 4 kv-heads, d=256, KV~32k) — numerically exact
+    (only tiling granularity changes). Opt back to 64 with QWEN9B_SDPA_QK64=1 if 128 ever clashes
+    with L1 in the paged chunked-SDPA path on a given prompt length.
     """
+    qk = 64 if _os.environ.get("QWEN9B_SDPA_QK64") == "1" else 128
     return ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-        q_chunk_size=64,
-        k_chunk_size=64,
+        q_chunk_size=qk,
+        k_chunk_size=qk,
         exp_approx_mode=False,
     )
 
