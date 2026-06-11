@@ -62,28 +62,6 @@ def _make_mixed_binary_tensors(device, dtype_a, dtype_b, shape=TENSOR_SHAPE):
     return tensor_a, tensor_b
 
 
-# High-value rejection cases
-@pytest.mark.parametrize(
-    "op, dtype",
-    [
-        pytest.param(ttnn.add, ttnn.uint8, id="add_uint8"),
-        pytest.param(ttnn.remainder, ttnn.uint16, id="remainder_uint16"),
-        pytest.param(ttnn.bitwise_and, ttnn.bfloat16, id="bitwise_and_bfloat16"),
-        pytest.param(ttnn.logical_right_shift, ttnn.uint16, id="logical_right_shift_uint16"),
-        pytest.param(ttnn.gcd, ttnn.uint8, id="gcd_uint8"),
-        pytest.param(ttnn.gcd, ttnn.bfloat16, id="gcd_bfloat16"),
-        pytest.param(ttnn.gcd, ttnn.uint16, id="gcd_uint16"),
-        pytest.param(ttnn.logaddexp, ttnn.int32, id="logaddexp_int32"),
-        pytest.param(ttnn.hypot, ttnn.int32, id="hypot_int32"),
-    ],
-)
-def test_binary_dtype_validation_high_value_rejections(device, op, dtype):
-    """Smoke negatives aligned with binary_op_dtype_policy groups."""
-    tensor_a, tensor_b = _make_binary_tensors(device, dtype)
-    with pytest.raises(RuntimeError, match=UNSUPPORTED_DTYPE_ERROR):
-        op(tensor_a, tensor_b)
-
-
 # Parametric matrix: representative ops per dtype_sets bucket in binary_op_dtype_policy.cpp.
 @pytest.mark.parametrize(
     "op, dtype",
@@ -95,6 +73,7 @@ def test_binary_dtype_validation_high_value_rejections(device, op, dtype):
         # int32_only (GCD, LCM, DIV_FLOOR, DIV_TRUNC)
         pytest.param(ttnn.gcd, ttnn.uint8, id="int32_only_gcd_uint8"),
         pytest.param(ttnn.gcd, ttnn.uint16, id="int32_only_gcd_uint16"),
+        pytest.param(ttnn.gcd, ttnn.bfloat16, id="int32_only_gcd_bfloat16"),
         pytest.param(ttnn.lcm, ttnn.bfloat16, id="int32_only_lcm_bfloat16"),
         # exp_dependent
         pytest.param(ttnn.logaddexp, ttnn.int32, id="exp_dependent_logaddexp_int32"),
@@ -107,6 +86,7 @@ def test_binary_dtype_validation_high_value_rejections(device, op, dtype):
         pytest.param(ttnn.xlogy, ttnn.uint32, id="float_only_xlogy_uint32"),
         pytest.param(ttnn.atan2, ttnn.int32, id="float_only_atan2_int32"),
         pytest.param(ttnn.hypot, ttnn.uint16, id="float_only_hypot_uint16"),
+        pytest.param(ttnn.hypot, ttnn.int32, id="float_only_hypot_int32"),
         # div_remainder_fmod
         pytest.param(ttnn.div, ttnn.uint16, id="div_remainder_div_uint16"),
         pytest.param(ttnn.remainder, ttnn.uint16, id="div_remainder_remainder_uint16"),
