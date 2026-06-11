@@ -131,6 +131,23 @@ same transform as sampling. Variant count drives effort (each `program_factory_t
    unused accessor token — that escape hatch is unavailable to compute-only factories.
    Fix idea: allow a TensorParameter to be satisfied by a borrowed-DFB reference, or permit a
    binding-only (address-supplying, no-accessor-codegen) TensorBinding on compute kernels.
+4. **chained / variadic / runtime-indexed tensor accessors have no Metal 2.0 form** — `ta::name` is a
+   per-binding compile-time symbol; there is no array/runtime-indexed accessor, no chained
+   `TensorAccessorArgs::next_*_offset()` equivalent, and no per-binding base-address / page-size override.
+   Hits: binary_ng (chained accessors on the PLAIN interleaved path — fatal), concat (variadic N inputs),
+   reshard (runtime page-stride maps), interleaved_to_sharded (compile-time-vararg shard addrgen),
+   slice RM (runtime base+page-size override). Fix idea: an indexed/runtime `ta::` form + accessor overrides.
+6. **varargs have no per-vararg `enqueue_invariant` flag** — variable-length / per-core-count runtime args
+   must use positional varargs (`num_runtime_varargs`), but `enqueue_invariant_runtime_args` is a list of
+   NAMES only, so varargs are always re-applied wholesale. Tree-reduction / mcast ops (sdpa_decode, sdpa)
+   therefore cannot get the "++" enqueue-invariant fast path even though their dynamic value (cur_pos) could
+   leave the key via immutable_info. Fix idea: per-vararg invariance, or a named variable-length arg form.
+7. **the no-custom-hash static_assert is per-DEVICE-OP, not per-factory** — a multi-variant op with a SHARED
+   custom `compute_program_hash` (needed by its still-legacy variants) cannot have ANY single variant
+   migrated to Metal 2.0: the `static_assert` (device_operation.hpp:264) fires for the whole device op, and
+   removing the hash switches ALL legacy variants to the default key too. Hits: matmul (1 hash serves all 6
+   factories). Fix idea: make the prohibition per-migrated-factory, or provide a sanctioned "default-hash is a
+   superset of this custom hash" opt-out. (The sibling matmul port simply deleted the hash — a behavior call.)
 
 ## Blocked / needs-metal-change (filled at the end)
 
