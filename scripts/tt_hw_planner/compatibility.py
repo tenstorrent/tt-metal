@@ -514,6 +514,8 @@ BUILDING_BLOCKS: List[BuildingBlock] = [
             "Adapting to other top-k or device counts needs a small refactor. "
             "Larger-scale MoE (DeepSeek/GPT-OSS) has standalone demos."
         ),
+        class_name_pattern=r".*M[Oo][Ee]$",
+        tt_class="TtMoeLayer",
     ),
     BuildingBlock(
         name="DeepSeek-style MoE (routed + shared)",
@@ -532,6 +534,9 @@ BUILDING_BLOCKS: List[BuildingBlock] = [
         status_when_needed=Status.PARTIAL,
         effort_when_needed=Effort.HEAVY,
         notes="Separate stack from tt_transformers; covers state-spaces/mamba-2.8b-slimpj. Other Mamba variants would need adaptation.",
+        class_name_pattern=r".*Mamba\d*Mixer$",
+        tt_class="TtMambaSSM",
+        registry_tt_path="models/demos/wormhole/mamba/tt/mamba_ssm.py",
     ),
     BuildingBlock(
         name="LM head",
