@@ -289,4 +289,56 @@ TEST(TableMiscTest, IntKeyStringValue) {
     EXPECT_FALSE(t.get(3));
 }
 
+// ---- contains ----------------------------------------------------------------
+
+TEST(TableTest, ContainsReturnsTrueForPresentKey) {
+    StrIntTable t{{"a", 1}, {"b", 2}};
+    EXPECT_TRUE(t.contains("a"));
+    EXPECT_TRUE(t.contains("b"));
+}
+
+TEST(TableTest, ContainsReturnsFalseForAbsentKey) {
+    StrIntTable t{{"a", 1}};
+    EXPECT_FALSE(t.contains("missing"));
+    EXPECT_FALSE(t.contains(""));
+}
+
+TEST(TableTest, ContainsOnEmptyTable) {
+    StrIntTable t;
+    EXPECT_FALSE(t.contains("anything"));
+}
+
+TEST(TableTest, ContainsReflectsInsertAndErase) {
+    StrIntTable t;
+    EXPECT_FALSE(t.contains("a"));
+    t.insert({"a", 1});
+    EXPECT_TRUE(t.contains("a"));
+    t.erase("a");
+    EXPECT_FALSE(t.contains("a"));
+}
+
+TEST(TableTest, ContainsWorksOnConstTable) {
+    const StrIntTable t{{"a", 1}, {"b", 2}};
+    EXPECT_TRUE(t.contains("a"));
+    EXPECT_FALSE(t.contains("z"));
+}
+
+TEST(TableTest, ContainsDoesNotMutateTable) {
+    StrIntTable t{{"a", 1}, {"b", 2}};
+    const auto size_before = t.size();
+    t.contains("a");
+    t.contains("missing");
+    EXPECT_EQ(t.size(), size_before);
+}
+
+TEST(TableMiscTest, ContainsWithIntKey) {
+    m2::Table<int, std::string> t;
+    t[1] = "one";
+    t.emplace(2, "two");
+    EXPECT_TRUE(t.contains(1));
+    EXPECT_TRUE(t.contains(2));
+    EXPECT_FALSE(t.contains(3));
+    EXPECT_FALSE(t.contains(0));
+}
+
 }  // namespace
