@@ -398,7 +398,6 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DS
     last_slot_id = int(os.environ.get("PREFILL_STANDALONE_CHUNKED_SLOT", "0")) % NUM_USERS
     i = 0
     while not _shutdown:
-        logger.info(f"Waiting for request to arrive...")
         if expected_chunks is not None and i >= expected_chunks:
             logger.info(f"[request] received all {expected_chunks} expected chunks; exiting loop for PCC check")
             break
