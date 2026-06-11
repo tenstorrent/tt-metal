@@ -3108,13 +3108,15 @@ def _main(activations, weights):
     ttnn_typecast_38 = ttnn.typecast(
         ttnn_sum_2,
         ttnn.DataType.FLOAT32,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1, None),
     )
     ttnn.deallocate(ttnn_sum_2, False)
+    # E_attn iter13: L1-resident indexer-K norm retile — reshape_22 pads [32,128]->[32,1,128]
+    # (the costliest single reshape, 52.9us in DRAM); run it + its input in L1.
     ttnn_reshape_22 = ttnn.reshape(
         ttnn_typecast_38,
         [32, 1, 128],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1, None),
     )
     ttnn.deallocate(ttnn_typecast_38, False)
     ttnn_layer_norm_0 = ttnn.layer_norm(
