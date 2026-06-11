@@ -328,10 +328,10 @@ jobs:
       platform-data: ${{ needs.preflight.outputs.platform-2404-data }}
     secrets: inherit
 
-  # Prewarm Harbor cache after Ubuntu image-producing jobs complete
+  # Prewarm Harbor cache after image-producing jobs complete
   prewarm-cache:
     name: "Prewarm cache from GHCR via HARBOR"
-    needs: [preflight, build-2204, build-2404]
+    needs: [preflight, build-2204, build-2404, build-llk]
     if: always() && !failure() && !cancelled() && inputs.prewarm-harbor && needs.preflight.outputs.harbor-prefix != ''
     runs-on: tt-ubuntu-2204-medium-stable
     steps:
@@ -354,6 +354,23 @@ jobs:
           registry: harbor.ci.tenstorrent.net
           username: ${{ secrets.HARBOR_PUSH_USER }}
           password: ${{ secrets.HARBOR_PUSH_PASSWORD }}
+
+      - name: Build LLK CI image list
+        id: images-llk
+        run: |
+          IMAGES=$(jq -n --arg llk '${{ needs.preflight.outputs.llk-ci-tag }}' '[ $llk ] | map(select(. != ""))')
+          {
+            echo "list<<EOF"
+            echo "$IMAGES"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Prewarm LLK CI image
+        uses: ./.github/actions/prewarm-images
+        with:
+          harbor-prefix: ${{ needs.preflight.outputs.harbor-prefix }}
+          images: ${{ steps.images-llk.outputs.list }}
+          title: "LLK CI image"
 
       - name: Build Ubuntu 22.04 image list
         id: images-2204
