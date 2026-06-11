@@ -160,3 +160,121 @@ def test_prefill_stage_pcc():
     pcc = _compute_pcc(ref_out, out)
     print(f"\n✅ Prefill stage PCC vs torch: {pcc:.6f}  (shape {tuple(out.shape)})")
     assert pcc >= 0.99, f"PCC {pcc:.6f} < 0.99"
+
+
+@pytest.mark.skipif(
+    not (CHECKPOINT_DIR / "model.safetensors").exists(),
+    reason=f"checkpoint not found at {CHECKPOINT_DIR}",
+)
+def test_denoise_expert_chain_pcc():
+    """6-chip 18-layer AdaRMS expert chain (one denoise step) vs torch
+    Pi0_5PaliGemmaBackbone.forward_expert.
+
+    The synthetic prefix KV is uploaded as bf8_b to match the expert's
+    internal k_rope dtype — see kv_migration.py for the MeshDevice
+    strict-concat rationale. That conversion costs ~3 PCC points vs the
+    fp32 torch reference; threshold set to 0.95 (the project's e2e bar).
+    """
+    from models.experimental.pi0_5.common.checkpoint_meta import action_horizon_from_checkpoint
+    from models.experimental.pi0_5.common.configs import Pi0_5ModelConfig
+    from models.experimental.pi0_5.common.weight_loader import Pi0_5WeightLoader
+    from models.experimental.pi0_5.reference.torch_paligemma import Pi0_5PaliGemmaBackbone as TorchBackbone
+    from models.experimental.pi0_5.tt.tt_bh_glx.stage_denoise import StageDenoise
+
+    cfg = Pi0_5ModelConfig(action_horizon=action_horizon_from_checkpoint(CHECKPOINT_DIR), num_denoising_steps=5)
+    loader = Pi0_5WeightLoader(str(CHECKPOINT_DIR))
+    weights = loader.categorized_weights
+
+    B = 1
+    expert_w = cfg.expert_config.width  # 1024
+    head_dim = cfg.expert_config.head_dim  # 256
+    num_kv_heads = cfg.expert_config.num_kv_heads  # 1 (MQA)
+    # Suffix shape per pi0.5: action_horizon padded to 64.
+    suffix_len = ((cfg.action_horizon + 31) // 32) * 32
+    prefix_len = 128
+
+    torch.manual_seed(SEED)
+    suffix_hidden = torch.randn(B, suffix_len, expert_w) * 0.5
+    adarms_cond = torch.randn(B, expert_w) * 0.5
+    # Synthetic prefix KV (matches what forward_expert's past_key_values expects).
+    prefix_kv_torch = [
+        (
+            torch.randn(B, num_kv_heads, prefix_len, head_dim) * 0.5,
+            torch.randn(B, num_kv_heads, prefix_len, head_dim) * 0.5,
+        )
+        for _ in range(cfg.expert_config.depth)
+    ]
+
+    # Torch reference: full 18-block expert chain (no final norm, no out_proj —
+    # those live downstream in the suffix slice).
+    ref = TorchBackbone(cfg, weights)
+    with torch.no_grad():
+        ref_out, _ = ref.forward_expert(
+            suffix_hidden,
+            adarms_cond=adarms_cond,
+            past_key_values=prefix_kv_torch,
+            use_cache=False,
+        )
+
+    # TTNN sliced pipeline: 6 chips × 3 expert layers each.
+    with open_galaxy_mesh(l1_small_size=24576) as h:
+        stage = StageDenoise(cfg, weights, h)
+
+        # Upload suffix_hidden onto chip 0 (interleaved DRAM).
+        hidden_on_chip0 = ttnn.from_torch(
+            suffix_hidden,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=h.denoise_per_chip[0],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        # Replicate adarms_cond on each denoise chip (one per chip).
+        adarms_per_chip = [
+            ttnn.from_torch(
+                adarms_cond,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=h.denoise_per_chip[i],
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            for i in range(6)
+        ]
+        # Upload synthetic prefix KV layer-paired to its destination chip.
+        n_per = 3
+        prefix_kv_per_chip = []
+        for c in range(6):
+            chip_kv = []
+            for j in range(n_per):
+                kt, vt = prefix_kv_torch[c * n_per + j]
+                # bf8_b prefix KV matches the expert's internal k_rope dtype —
+                # see kv_migration.py for the MeshDevice strict-concat rationale.
+                k_dst = ttnn.from_torch(
+                    kt,
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=h.denoise_per_chip[c],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                v_dst = ttnn.from_torch(
+                    vt,
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=h.denoise_per_chip[c],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                chip_kv.append((k_dst, v_dst))
+            prefix_kv_per_chip.append(chip_kv)
+
+        out_ttnn = stage.run_expert_chain(
+            hidden_on_chip0,
+            adarms_per_chip,
+            prefix_kv_per_chip,
+            attention_mask=None,
+            position_ids=None,
+        )
+        out = ttnn.to_torch(out_ttnn)
+
+    assert out.shape == ref_out.shape, f"shape mismatch: {tuple(out.shape)} vs {tuple(ref_out.shape)}"
+    pcc = _compute_pcc(ref_out, out)
+    print(f"\n✅ Denoise expert-chain PCC vs torch: {pcc:.6f}  (shape {tuple(out.shape)})")
+    assert pcc >= 0.95, f"PCC {pcc:.6f} < 0.95"
