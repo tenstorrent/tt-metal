@@ -61,6 +61,7 @@ Both API versions run the same test cases but use different underlying implement
 | NOC Estimator               | 800-817                         | Comprehensive bandwidth sweeps for NOC estimation across all patterns and mechanisms.    |
 | Quasar Addrgen              | 900-909                         | Quasar-only: example kernels exercising the hardware address generator (1D/2D/face/interleaved). Requires Quasar simulator. |
 | Quasar IDMA                 | 910-911                         | Quasar-only: example kernels exercising the IDMA engine (basic linear copy and 1D strided). Requires Quasar simulator. |
+| Quasar Core Shift           | 920-921                         | Quasar-only: L1-to-L1 write bandwidth vs one-hop receiver shift (baseline + left/right/up/down). In-kernel wall-clock timing; self-reported CSV. Requires Quasar simulator. |
 
 
 ## Running Tests

@@ -856,6 +856,18 @@ tests:
   911:
     name: "Quasar IDMA - 1D Strided"
 
+  920:
+    name: "Quasar Core Shift Bandwidth Corner 0"
+    comment: |
+      Sender (0,0) to baseline receiver (2,6) plus one-hop L/R/U/D neighbors.
+      Bandwidth from in-kernel wall clock; results in generated/quasar_core_shift/test_920.csv.
+
+  921:
+    name: "Quasar Core Shift Bandwidth Corner 1"
+    comment: |
+      Sender (3,6) to baseline receiver (1,1) plus one-hop L/R/U/D neighbors.
+      Bandwidth from in-kernel wall clock; results in generated/quasar_core_shift/test_921.csv.
+
   1012:
     name: "1D Matmul Test 1012 - 2x2 K=2 Subblock K Sweep"
     bandwidth_mode: "combined"
