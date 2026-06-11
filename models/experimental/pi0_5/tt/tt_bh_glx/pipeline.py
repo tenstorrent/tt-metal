@@ -182,6 +182,35 @@ class Pi0_5GLXPipeline:
         self._timesteps = [1.0 - i / self.num_denoising_steps for i in range(self.num_denoising_steps + 1)]
         self._dts = [self._timesteps[i + 1] - self._timesteps[i] for i in range(self.num_denoising_steps)]
 
+        # Pre-compute adarms_cond per (step, chip). Since timesteps are
+        # deterministic, the conditioning tensors are constant across calls;
+        # mirrors single-chip _precompute_bs1_adarms_cond. Each step gets its
+        # own copy on each denoise chip so the denoise loop body indexes a
+        # plain list — no per-step ttnn.from_torch + embed_adarms_cond chain
+        # (which would block trace capture).
+        self._adarms_per_step_per_chip: List[List["ttnn.Tensor"]] = []
+        for i in range(self.num_denoising_steps):
+            ts_now = self._timesteps[i]
+            per_chip: List["ttnn.Tensor"] = []
+            for chip, sl in zip(self.h.denoise_per_chip, self.suffix_slices):
+                t_ttnn = ttnn.from_torch(
+                    torch.tensor([ts_now], dtype=torch.float32),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=chip,
+                )
+                cond = sl.embed_adarms_cond(t_ttnn)
+                ttnn.deallocate(t_ttnn)
+                per_chip.append(cond)
+            self._adarms_per_step_per_chip.append(per_chip)
+
+        # Persistent host-side buffers for trace mode (Phase B.3). Stay as
+        # torch tensors until first sample_actions call materializes the
+        # ttnn versions on the right chips (via copy_host_to_device_tensor
+        # under trace mode, or fresh from_torch in eager mode).
+        self.pixel_values_buf = None  # on vision[0], (N_cams, 3, 224, 224) bf16
+        self.lang_tokens_buf = None  # on prefill[0], (1, lang_len) uint32
+
         # Cached upstream-openpi compat artifacts (mask + position-aware RoPE).
         # Keyed by (img_present_tuple, lang_real_count, prefix_len). Same idea
         # as the single-chip Pi0_5ModelTTNN._cached_upstream_artifacts (see
@@ -456,8 +485,10 @@ class Pi0_5GLXPipeline:
             suffix_hidden = self.suffix_slices[0].embed_actions(x_t_bf16)
             ttnn.deallocate(x_t_bf16)
 
-            # adarms_cond replicated on each denoise chip.
-            adarms_per_chip = self._embed_adarms_per_chip(torch.tensor([ts_now], dtype=torch.float32))
+            # adarms_cond: pre-computed at __init__ (deterministic timesteps),
+            # one persistent ttnn.Tensor per (step, chip). No per-step
+            # ttnn.from_torch — required for trace-capture compatibility.
+            adarms_per_chip = self._adarms_per_step_per_chip[i]
 
             # 18-layer expert chain across 6 chips.
             expert_out = self.stage_denoise.run_expert_chain(
@@ -486,9 +517,8 @@ class Pi0_5GLXPipeline:
             ttnn.deallocate(velocity_scaled)
             ttnn.deallocate(self.x_t_fp32)
             self.x_t_fp32 = x_t_new
-
-            for a in adarms_per_chip:
-                ttnn.deallocate(a)
+            # NOTE: do NOT deallocate adarms_per_chip — they're persistent
+            # _adarms_per_step_per_chip[i] entries built once at __init__.
 
             t.denoise_step_ms.append((time.perf_counter() - step_start) * 1000.0)
 
