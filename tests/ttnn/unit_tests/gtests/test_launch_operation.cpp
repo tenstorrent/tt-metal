@@ -9,7 +9,9 @@
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/mesh_device_operation_adapter.hpp"
 #include "ttnn/mesh_device_operation_utils.hpp"
+#include "ttnn/metal2_artifacts.hpp"
 #include "ttnn/operation_concepts.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/examples/example/device/example_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
@@ -104,6 +106,63 @@ struct NewInfraWorkloadFactory {
 
 static_assert(ttnn::device_operation::MeshWorkloadFactoryConcept<NewInfraWorkloadFactory>);
 static_assert(ttnn::device_operation::ProgramFactoryConcept<NewInfraProgramFactory>);
+
+// --- Metal 2.0 spec-factory concept contracts (compile-time) ---
+
+// ProgramDescriptor factory (the prior framework), used here for mixed-variant checks.
+struct DescriptorFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(const OperationAttributes&, const Tensor&, Tensor&) {
+        return {};
+    }
+};
+
+// Spec-keyed factory: cache key is the generated ProgramSpec; create_program_artifacts only.
+struct SpecKeyedFactory {
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        const OperationAttributes&, const Tensor&, Tensor&) {
+        return {};
+    }
+};
+
+// ImmutableInfo-keyed factory with the per-enqueue split.
+struct ImmutableInfoFactory {
+    struct immutable_info_t {};
+    static immutable_info_t extract_immutable_info(const OperationAttributes&, const Tensor&) { return {}; }
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(const immutable_info_t&) { return {}; }
+    static tt::tt_metal::experimental::ProgramRunArgs create_per_enqueue_args(
+        const OperationAttributes&, const Tensor&, Tensor&, const std::optional<ttnn::MeshCoordinate>&) {
+        return {};
+    }
+};
+
+namespace concepts = ttnn::device_operation;
+
+// Each factory satisfies exactly one spec-factory concept, distinguished by the cache key.
+static_assert(concepts::ProgramSpecFactoryConcept<SpecKeyedFactory>);
+static_assert(!concepts::AdvancedProgramSpecFactoryConcept<SpecKeyedFactory>);
+static_assert(!concepts::HasPerEnqueueArgs<SpecKeyedFactory>);
+static_assert(concepts::AdvancedProgramSpecFactoryConcept<ImmutableInfoFactory>);
+static_assert(!concepts::ProgramSpecFactoryConcept<ImmutableInfoFactory>);
+static_assert(concepts::HasImmutableInfoExtraction<ImmutableInfoFactory>);
+static_assert(concepts::HasPerEnqueueArgs<ImmutableInfoFactory>);
+static_assert(concepts::Metal2SpecFactoryConcept<SpecKeyedFactory>);
+static_assert(concepts::Metal2SpecFactoryConcept<ImmutableInfoFactory>);
+
+// A spec factory is none of the prior factory shapes (and vice versa).
+static_assert(!concepts::ProgramFactoryConcept<SpecKeyedFactory>);
+static_assert(!concepts::ProgramDescriptorFactoryConcept<ImmutableInfoFactory>);
+static_assert(concepts::ProgramDescriptorFactoryConcept<DescriptorFactory>);
+static_assert(!concepts::Metal2SpecFactoryConcept<DescriptorFactory>);
+
+// An op migrates to Metal 2.0 all-or-nothing: a program_factory_t is all Metal 2.0 spec factories, or all
+// prior-framework factories — never mixed.
+static_assert(concepts::AllFactoriesValid<std::variant<SpecKeyedFactory, ImmutableInfoFactory>>);     // all Metal 2.0
+static_assert(concepts::AllFactoriesValid<std::variant<DescriptorFactory>>);                          // all prior
+static_assert(!concepts::AllFactoriesValid<std::variant<DescriptorFactory, ImmutableInfoFactory>>);   // mixed: rejected
+static_assert(!concepts::AllFactoriesValid<std::variant<NewInfraProgramFactory, SpecKeyedFactory>>);  // mixed: rejected
+
+// ProgramArtifacts can carry op-allocated tensors the framework keeps alive across cache hits.
+static_assert(requires(concepts::ProgramArtifacts a) { a.owned_tensors; });
 
 TEST(LaunchOperationTest, MeshDeviceOperationAdapterGetName) {
     using ::ttnn::operations::examples::ExampleDeviceOperation;

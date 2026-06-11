@@ -245,7 +245,20 @@ void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, co
                 using AdaptedMeshWorkloadFactory = mesh_device_operation_t::template DescriptorMeshWorkloadAdapter<T>;
                 fn.template operator()<AdaptedMeshWorkloadFactory>();
             },
-            [&]<ProgramSpecFactoryConcept T>(const T&) {
+            [&]<Metal2SpecFactoryConcept T>(const T&) {
+                // Metal 2.0 ops must not define a custom compute_program_hash: the cache key is the
+                // ProgramSpec (spec-keyed) or the ImmutableInfo (Advanced). Exclude a value from the key via
+                // immutable_info_t, never a hand-rolled hash. Check the underlying op, not the adapter
+                // (which always synthesizes a hash).
+                using metal2_device_operation_t = typename mesh_device_operation_t::device_operation_t;
+                static_assert(
+                    !requires(
+                        const typename metal2_device_operation_t::operation_attributes_t& a,
+                        const typename metal2_device_operation_t::tensor_args_t& t) {
+                        metal2_device_operation_t::compute_program_hash(a, t);
+                    },
+                    "Metal 2.0 spec-factory ops must not define a custom compute_program_hash; exclude the "
+                    "value from the key via AdvancedProgramSpecFactoryConcept's immutable_info_t instead.");
                 using AdaptedMeshWorkloadFactory =
                     mesh_device_operation_t::template ProgramSpecMeshWorkloadFactoryAdapter<T>;
                 fn.template operator()<AdaptedMeshWorkloadFactory>();
