@@ -1555,6 +1555,10 @@ class LTXPipeline:
         # prep_run=False so capture and every replay share the post-mel-VAE free-list. Gated by the
         # test_audio_decode_girl conv1d-vs-torch oracle, which now runs under trace.)
         self.tt_vocoder_with_bwe.use_trace = self._traced
+        # The BWE generator is a second full Vocoder run eager today — its forward is ~90% host-bound
+        # like the main vocoder, so tracing it removes the bulk of the remaining decode dispatch. Same
+        # self-warming forward_traced path, so the warmup decode covers both generators identically.
+        self.tt_vocoder_with_bwe.use_trace_bwe = self._traced
         if isinstance(audio_parallel_config, AudioTCParallelConfig):
             cfg_desc = f"T-shard={t_factor} axis{t_axis} + channel-TP={c_factor} axis{c_axis}"
         elif audio_parallel_config is not None:
