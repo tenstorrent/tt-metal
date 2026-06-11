@@ -90,11 +90,15 @@ MLA layer.
 
 **The only thing 2x2 adds is SP communication on the key axis**, and v3 solves it with `ring_joint_sdpa`/`ring_mla` — which v3.2 can't use (no additive-mask hook for DSA, §3.3). So v3.2 substitutes **host SP-gathers** (functional, per "no ttnn op → CPU fallback"); device ring_sparse_attention is the documented follow-up (backlog 8/12).
 
+**DECISION (2026-06-11, confirmed): replicate the indexer key cache, keep the MLA KVPE SP-sharded (v3).** Index key is tiny (single head, 128-wide) so full-T replication is cheap (~T·128·2B) and turns the read-time SP gather into a one-shot gather-at-write into the (host) cache — removes distributed-topk entirely. The big MLA KVPE latent stays SP-sharded per v3; sparse_mla gathers selected latents. Deviation from §3.6.1 (which SP-shards the index cache), justified for a functional port; documented per agreement 12.
+
+**Key implementation note — global positions.** Under SP each chip's local tokens map to *non-contiguous* global positions (contiguous sharding: chip sp_i holds global [sp_i·S/sp, …)). So per SP shard the host RoPE freqs offset and the causal-mask triu offset must use the **global** query start (sp_i·local + start_pos), not the local/chunk offset. q and out stay SP-sharded; only keys/latents are gathered full-T.
+
 **Slices (test-first):**
-- [ ] 5.1 lift `sp_factor==1` assert behind an sp-aware path; add 2x2 to test param (mesh (2,2)); keep 1x4 green (regression guard).
-- [ ] 5.2 indexer: SP-gather index keys (full-T per chip) → score local-Q × full-T → topk. Start host gather (K-cache already host); device `all_gather_async` later.
-- [ ] 5.3 sparse_mla: SP-gather full-T KVPE (ConcatMesh over sp_axis → host) before the existing host attn; out stays [1, H/tp, S/sp, 512].
-- [ ] 5.4 e2e PCC vs CPU reference on 2x2 (CPU truth is single-device, distribution-agnostic — same cached truth as 1x4).
+- [ ] 5.1 lift `sp_factor==1` assert behind an sp-aware path; add 2x2 (mesh (2,2)) to single-shot test param; keep 1x4 green (regression guard).
+- [ ] 5.2 indexer: gather index keys across SP at write → replicated host cache (full-T); per-SP-shard score local-Q × full-T with global-position rope+mask → topk; reassemble SP-sharded indices.
+- [ ] 5.3 sparse_mla: SP-gather full-T KVPE (tp-replica per sp shard, concat seq); per (sp,tp) shard attend local queries → reassemble [1, H/tp, S/sp, 512] via ShardTensor2dMesh (heads on tp, seq on sp).
+- [ ] 5.4 e2e PCC vs CPU reference on 2x2 single-shot (truth is single-device, distribution-agnostic — same cached truth as 1x4); chunked 2x2 follows.
 
 ### CPU fallbacks (multichip) — running list
 | id | fallback | where | status / SP behavior |
