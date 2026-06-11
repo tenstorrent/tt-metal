@@ -12,6 +12,7 @@
 #include "ckernel_template.h"
 #include "cmath_common.h"
 #include "llk_assert.h"
+#include "llk_defs.h"
 #include "llk_math_common.h"
 #include "tensor_shape.h"
 
@@ -28,37 +29,59 @@ inline void reduce_row_perform_transpose()
 {
     if (enforce_fp32_accumulation)
     {
-        // needs to be disabled for MOVD2B/B2D on BH (Issue ##449)
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
-        // move back to B and transpose in 2 parts, first hi16 bits then lo16 bits
+        TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 1);
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Tf32));
 
-        // move hi16 bits D2B
-        // we avoid clobbering weights in src B by moving to rows 16 - 31
-        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-        // note: transpose on src B on works on rows 16 - 31
+        TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
         TTI_TRNSPSRCB;
-        // move row D2B again for cases of reducing across multiple tiles
+        TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 16);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 20);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 24);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 28);
+
+        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+        TTI_TRNSPSRCB;
         TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
 
-        // move hi16 bits B2D
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
 
-        // move lo16 bits D2B
-        TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-        // transpose face
-        TTI_TRNSPSRCB;
-        // move row again for cases of reducing multiple tiles
-        TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+        TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 0);
 
-        // move lo16 bits B2D
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
+        //////////////////////////////////////////////////
+
+        TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_0, 0);
+        TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_0, 4);
+        TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_0, 8);
+        TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::DEFAULT, ADDR_MOD_0, 12);
+
+        TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::DEFAULT, ADDR_MOD_0, 16);
+        TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::DEFAULT, ADDR_MOD_0, 20);
+        TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::DEFAULT, ADDR_MOD_0, 24);
+        TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::DEFAULT, ADDR_MOD_0, 28);
+
+        TTI_SFPSHFT((-16) & 0xFFF, p_sfpu::LREG4, p_sfpu::LREG4, 1);
+        TTI_SFPSHFT((-16) & 0xFFF, p_sfpu::LREG5, p_sfpu::LREG5, 1);
+        TTI_SFPSHFT((-16) & 0xFFF, p_sfpu::LREG6, p_sfpu::LREG6, 1);
+        TTI_SFPSHFT((-16) & 0xFFF, p_sfpu::LREG7, p_sfpu::LREG7, 1);
+
+        TTI_SFPOR(0, p_sfpu::LREG4, p_sfpu::LREG0, InstrModLoadStore::DEFAULT);
+        TTI_SFPOR(0, p_sfpu::LREG5, p_sfpu::LREG1, InstrModLoadStore::DEFAULT);
+        TTI_SFPOR(0, p_sfpu::LREG6, p_sfpu::LREG2, InstrModLoadStore::DEFAULT);
+        TTI_SFPOR(0, p_sfpu::LREG7, p_sfpu::LREG3, InstrModLoadStore::DEFAULT);
+
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_0, 0);
+        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_0, 4);
+        TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::FP32, ADDR_MOD_0, 8);
+        TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::FP32, ADDR_MOD_0, 12);
+
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
     }
     else
     {
@@ -180,6 +203,18 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
         }
 
         TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_BD);
+
+        if constexpr (enforce_fp32_accumulation)
+        {
+            if (tensor_shape.num_faces_c_dim > 1)
+            {
+                TT_ZEROACC(p_zeroacc::CLR_16, 1, 0, ADDR_MOD_0, get_dest_index_in_faces(dst_index, 1));
+                if (tensor_shape.num_faces_r_dim > 1)
+                {
+                    TT_ZEROACC(p_zeroacc::CLR_16, 1, 0, ADDR_MOD_0, get_dest_index_in_faces(dst_index, 3));
+                }
+            }
+        }
     }
     else if constexpr (dim == ReduceDim::REDUCE_COL)
     {
@@ -309,7 +344,7 @@ inline void _llk_math_reduce_init_()
     if constexpr (enforce_fp32_accumulation)
     {
         static_assert(is_fp32_dest_acc_en, "FP32 Dest must be enabled for FP32 accumulation");
-        _llk_math_dbg_feature_disable_();
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
     }
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 
@@ -321,9 +356,6 @@ inline void _llk_math_reduce_uninit_()
 {
     if constexpr (enforce_fp32_accumulation)
     {
-        // Clear bit 11 (restore from workaround for budabackend#1372)
-        // Uses helper from llk_math_common.h which includes tensix_sync()
-        _llk_math_dbg_feature_enable_();
-        // Note: BH doesn't need format restoration (init doesn't change it)
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
     }
 }

@@ -74,7 +74,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-    _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, false>();
+    _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, enforce_fp32_accumulation>();
 
     if (params.IS_REDUCE_TO_ONE)
     {
@@ -100,6 +100,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             remaining_tiles -= tiles_to_dest;
         }
     }
+    _llk_math_reduce_uninit_<enforce_fp32_accumulation>();
 }
 
 #endif
