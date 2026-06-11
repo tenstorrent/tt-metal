@@ -264,6 +264,9 @@ inline __attribute__((always_inline)) void flush_l2_cache_range(uintptr_t start_
 // Invalidate a range of addresses from L2 to TL1.
 // Invalidates all cache lines covering [start_addr, start_addr + size).
 inline __attribute__((always_inline)) void invalidate_l2_cache_range(uintptr_t start_addr, size_t size) {
+    if (size == 0) {
+        return;
+    }
     uintptr_t aligned_start = start_addr & ~(uintptr_t)63;  // align to 64B
     uintptr_t end_addr = start_addr + size;
 
