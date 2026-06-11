@@ -20,6 +20,12 @@ namespace tt::tt_metal {
 // Returns true if the configuration is valid, false otherwise.
 bool can_shard_align(const MemoryConfig& memory_config, const Layout& layout, const Tile& tile = Tile{});
 
+// Computes the alignment to use when constructing a TensorLayout for a target memory config, given a source
+// alignment. For sharded targets the alignment is derived from the shard spec so that the physical shape divides
+// evenly into shards and the width alignment matches the shard/page width (the source tensor's interleaved width
+// alignment must not be carried over to a sharded layout). For interleaved targets the source alignment is preserved.
+Alignment compute_alignment_for_memory_config(const Alignment& source_alignment, const MemoryConfig& memory_config);
+
 class IDevice;
 
 using Strides = std::vector<size_t>;

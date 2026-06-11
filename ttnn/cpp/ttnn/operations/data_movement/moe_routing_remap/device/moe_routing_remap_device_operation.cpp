@@ -55,10 +55,9 @@ MoeRoutingRemapDeviceOperation::spec_return_value_t MoeRoutingRemapDeviceOperati
 
     const auto mem_config = operation_attributes.output_mem_config.value_or(routing_weights.memory_config());
     const auto& old_spec = routing_weights.tensor_spec();
+    const auto alignment = compute_alignment_for_memory_config(old_spec.tensor_layout().get_alignment(), mem_config);
     return TensorSpec(
-        old_spec.logical_shape(),
-        TensorLayout(
-            old_spec.data_type(), old_spec.page_config(), mem_config, old_spec.tensor_layout().get_alignment()));
+        old_spec.logical_shape(), TensorLayout(old_spec.data_type(), old_spec.page_config(), mem_config, alignment));
 }
 
 MoeRoutingRemapDeviceOperation::tensor_return_value_t MoeRoutingRemapDeviceOperation::create_output_tensors(

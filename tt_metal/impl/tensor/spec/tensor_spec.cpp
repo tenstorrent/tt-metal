@@ -239,18 +239,17 @@ TensorSpec TensorSpec::sharded(
 void TensorSpec::populate_sharding_specs() {
     if (memory_config().created_with_nd_shard_spec()) {
         if (auto upd_mem_config = populate_legacy_shard_spec_from_nd()) {
+            const auto alignment = compute_alignment_for_memory_config(tensor_layout_.get_alignment(), *upd_mem_config);
             tensor_layout_ = TensorLayout(
-                tensor_layout_.get_data_type(),
-                tensor_layout_.get_page_config(),
-                *upd_mem_config,
-                tensor_layout_.get_alignment());
+                tensor_layout_.get_data_type(), tensor_layout_.get_page_config(), *upd_mem_config, alignment);
         }
     } else if (memory_config().shard_spec()) {
+        const auto alignment = compute_alignment_for_memory_config(tensor_layout_.get_alignment(), memory_config());
         tensor_layout_ = TensorLayout(
             tensor_layout_.get_data_type(),
             tensor_layout_.get_page_config(),
             populate_nd_shard_spec_from_legacy(),
-            tensor_layout_.get_alignment());
+            alignment);
     }
 }
 
