@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import torch
 import pytest
 from loguru import logger
@@ -47,7 +48,10 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
     dtype = ttnn.bfloat8_b
     mode = "decode" if seq_len <= 32 else "prefill"
 
-    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, dummy_weights=False, max_seq_len=128)
+    # Set LLAMA_DUMMY_WEIGHTS=1 to run against generated weights (e.g. in the simulator, with no
+    # checkpoint staged). Defaults to real weights so on-silicon behavior is unchanged.
+    dummy_weights = os.getenv("LLAMA_DUMMY_WEIGHTS", "0") == "1"
+    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, dummy_weights=dummy_weights, max_seq_len=128)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
