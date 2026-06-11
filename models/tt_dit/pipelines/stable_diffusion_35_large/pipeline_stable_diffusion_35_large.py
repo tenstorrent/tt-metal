@@ -329,6 +329,7 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
                         timestep=timestep,
                         N=latents_sequence_length,
                         traced=traced,
+                        tracer_blocking_execution=False,
                     )
                 )
 

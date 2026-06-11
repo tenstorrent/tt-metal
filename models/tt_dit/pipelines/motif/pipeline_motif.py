@@ -303,6 +303,7 @@ class MotifPipeline(PipelineAPIMixin):
                         pooled=pooled[idx],
                         timestep=timestep,
                         traced=traced,
+                        tracer_blocking_execution=False,
                     )
                 )
 

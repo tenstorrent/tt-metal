@@ -506,6 +506,7 @@ class QwenImagePipeline(PipelineAPIMixin):
                         spatial_sequence_length=latents_sequence_length,
                         prompt_sequence_length=prompt_sequence_length,
                         traced=traced,
+                        tracer_blocking_execution=False,
                     )
                 )
 
