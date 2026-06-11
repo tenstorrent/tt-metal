@@ -71,6 +71,39 @@ MLA layer.
   - [x] MLACPU dense branch out-of-bounds for chunked truth (start_pos>0 → decode branch + chunk mask)
   - [x] bf8 cache quantization ruled out (mirror test); KVPE prefix 0.9999 isolated the fault to selection
 
+### 🔨 Step 5 — 2x2 SP×TP (backlog 4, in progress 2026-06-11)
+
+**Premise:** the 1x4 code already uses v3's **hidden-sharded** residual + TP-per-head stems (RS/AG via `_tp_rs_ag`), i.e. spec-multichip §3.6.1's end-state TP layout — *not* the "replicated sequence" Phase-0. So at sp=1 the TP scheme already matches v3 exactly. 2x2 only **adds the SP (sequence) axis**; authority for the layout is spec-multichip §3.6.1. Mesh stays parametrized (agreement 11/13).
+
+**Distribution vs v3** (per-block; `=` follows v3 exactly, `Δ` v3.2-specific):
+
+| Block | v3 | v32 1x4 (done) | v32 2x2 plan |
+|---|---|---|---|
+| Stems wq_a/wkv_a + norms | input-sharded TP, RS/AG | = | = (SP just means fewer tokens/chip; TP RS/AG unchanged) |
+| wq_b/wkv_b heads | TP per-head, H/tp local | = | = |
+| MLA kvpe cache | SP-sharded seq, TP-replicated | sp=1 (no shard) | **= v3**: reuse init_kvpe_cache/fill/update, SP-shards at sp=2 |
+| Attention core | `ring_joint_sdpa` (ring over SP) | `ops.sparse_mla` (host) — Δ DSA needs index mask, no ring-SDPA mask hook (§3.3) | Δ host gather of full-T KVPE across SP, then local sparse attn |
+| Indexer stems | n/a (no indexer in v3) | device, TP input-sharded + AG-reduce (backlog 6) | = TP; + SP |
+| Indexer K cache | n/a | host `_index_k_cache` flat | Δ keys are SP-local; gather across SP for scoring |
+| indexer_score+topk | n/a | device, full seq (sp=1) | Δ local-Q × full-T keys (after SP gather) → topk |
+| o_proj | row-parallel + RS | = | = |
+
+**The only thing 2x2 adds is SP communication on the key axis**, and v3 solves it with `ring_joint_sdpa`/`ring_mla` — which v3.2 can't use (no additive-mask hook for DSA, §3.3). So v3.2 substitutes **host SP-gathers** (functional, per "no ttnn op → CPU fallback"); device ring_sparse_attention is the documented follow-up (backlog 8/12).
+
+**Slices (test-first):**
+- [ ] 5.1 lift `sp_factor==1` assert behind an sp-aware path; add 2x2 to test param (mesh (2,2)); keep 1x4 green (regression guard).
+- [ ] 5.2 indexer: SP-gather index keys (full-T per chip) → score local-Q × full-T → topk. Start host gather (K-cache already host); device `all_gather_async` later.
+- [ ] 5.3 sparse_mla: SP-gather full-T KVPE (ConcatMesh over sp_axis → host) before the existing host attn; out stays [1, H/tp, S/sp, 512].
+- [ ] 5.4 e2e PCC vs CPU reference on 2x2 (CPU truth is single-device, distribution-agnostic — same cached truth as 1x4).
+
+### CPU fallbacks (multichip) — running list
+| id | fallback | where | status / SP behavior |
+|---|---|---|---|
+| F-rope | non-interleaved RoPE on host (issue #4) | indexer pe slices | host; SP-agnostic (per-token) |
+| F-sparse | sparse_mla gather+SDPA on host (backlog 8) | `ops.sparse_mla` | host; **5.3 makes it SP-gather full-T KVPE** |
+| F-mla-prefix | MLA cache-slot prefix readback (backlog 9) | chunked `_dsa_forward` | host; reads slot — **5.3 gathers across SP** |
+| F-idx-key | indexer key SP-gather (new, 2x2) | `_indexer_topk` | **5.2**: host AG of index keys across SP for full-T scoring |
+
 ### ⏭️ Next
 Open work tracked in the Backlog section below.
 
@@ -84,17 +117,17 @@ Legend: `[x]` done · `[ ]` open · ⏸️ postponed · 📌 resolved as decisio
 
 | # | Item | Why here |
 |---|---|---|
-| 18 | determinism tests | cheap, no deps — guards every change below |
-| 14 | v32 tests in CI | small after 18; locks regressions (long CPU-truths gated) |
-| 13 | upstream injection → v3, delete copies | independent hygiene; kills drift from copied files |
 | **4** | **2x2 SP×TP** | top production blocker; **rewrites the sparse/cache read paths** → do before the perf-debt items below (else 1x4 rework). Folds in **(17)** mask dedup |
 | 9 | MLA cache-slot readback → device | done inside (4)'s SP-aware read path |
 | 8 | sparse_mla gather+SDPA → device | biggest perf debt; SP-aware after (4); stand-in for fused (12) |
 | 19 | indexer key cache → device | couples with (4); prereq = device non-interleaved RoPE (**issue #4**) |
-| 16 | multi-layer / multi-user cache | broadens to the full model |
 | 3 ⏸️ | 50k scale gate | hardware-time gated; cheaper once 8/9 speed the path |
+| 16 | multi-layer / multi-user cache | broadens to the full model |
+| 18 | determinism tests | cheap, no deps — guards every change below |
+| 14 | v32 tests in CI | small after 18; locks regressions (long CPU-truths gated) |
+| 13 | upstream injection → v3, delete copies | independent hygiene; kills drift from copied files |
+| 11/12 | fused C++ ops | out-of-scope follow-ups (Approach §4) |
 | 15 | decode path | beyond current prefill-only scope; largest expansion |
-| 11/12 | fused C++ ops | out-of-scope follow-ups (Approach §4), last |
 
 **Step 4 — chunked prefill**
 - [x] **(1)** MLACPU decode branch accepts intra-chunk causal mask (was mask=None → no within-chunk causality)
