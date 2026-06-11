@@ -21,12 +21,8 @@ sfpi_inline void calculate_fmod_int32_body(
     constexpr uint dst_tile_size_sfpi = 32;
 
     // Load signed inputs
-    // Equivalent to: sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi] = a_signed;
-    sfpi::vInt a_signed = __builtin_rvtt_sfpload(
-        sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].get(), 4, sfpi::SFPLOAD_ADDR_MODE_NOINC);
-    // Equivalent to: sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi] = b_signed;
-    sfpi::vInt b_signed = __builtin_rvtt_sfpload(
-        sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].get(), 4, sfpi::SFPLOAD_ADDR_MODE_NOINC);
+    sfpi::vInt a_signed = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
+    sfpi::vInt b_signed = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
 
     // Compute unsigned remainder
     sfpi::vInt r = compute_unsigned_remainder_int32(a_signed, b_signed);
@@ -35,9 +31,7 @@ sfpi_inline void calculate_fmod_int32_body(
     v_if(a_signed < 0) { r = -r; }
     v_endif;
 
-    // Equivalent to: sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
-    __builtin_rvtt_sfpstore(
-        r.get(), sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].get(), 4, sfpi::SFPLOAD_ADDR_MODE_NOINC);
+    sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>() = r;
 }
 
 template <bool is_fp32_dest_acc_en = false>
