@@ -37,38 +37,17 @@
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
+#include "stream_service_common.hpp"
+
 namespace tt::tt_metal {
 
 namespace CMAKE_UNIQUE_NAMESPACE {
 
-// Build a single-shard host tensor with zero-initialised data of size `spec`.
-// Used purely to feed the mapper at construction time so we can extract a
-// TensorTopology + per-shard spec before any user data exists. The bytes are
-// never read. Mirrors the helper in socket_services.cpp (H2D).
-// TODO: replace with a direct "topology from MeshMapperConfig + global shape"
-Tensor make_zero_host_tensor(const TensorSpec& spec) {
-    const size_t bytes = spec.compute_packed_buffer_size_bytes();
-    switch (spec.data_type()) {
-        case DataType::BFLOAT16:
-            return Tensor::from_vector<bfloat16>(std::vector<bfloat16>(bytes / sizeof(bfloat16)), spec);
-        case DataType::FLOAT32: return Tensor::from_vector<float>(std::vector<float>(bytes / sizeof(float)), spec);
-        case DataType::INT32: return Tensor::from_vector<int32_t>(std::vector<int32_t>(bytes / sizeof(int32_t)), spec);
-        case DataType::UINT8: return Tensor::from_vector<uint8_t>(std::vector<uint8_t>(bytes / sizeof(uint8_t)), spec);
-        case DataType::UINT16:
-            return Tensor::from_vector<uint16_t>(std::vector<uint16_t>(bytes / sizeof(uint16_t)), spec);
-        case DataType::BFLOAT4_B:
-        case DataType::BFLOAT8_B:
-            // Block-float formats pack a shared exponent per group of datums, so the
-            // packed byte count is NOT element_count * sizeof. from_vector requires a
-            // buffer of exactly logical-volume elements and (per its contract) `float`
-            // for block formats; it tilizes + quantizes internally.
-            return Tensor::from_vector<float>(std::vector<float>(spec.logical_shape().volume()), spec);
-        case DataType::UINT32:
-            return Tensor::from_vector<uint32_t>(std::vector<uint32_t>(bytes / sizeof(uint32_t)), spec);
-        case DataType::INVALID: TT_THROW("D2DStreamService: invalid global_spec data type");
-    }
-    TT_THROW("Unreachable");
-}
+// make_zero_host_tensor / ChunkPlan / derive_chunk_plan / core_range_size are
+// shared verbatim with the H2D service (socket_services.cpp); they live in
+// stream_service_common.hpp so the two services can't drift on the socket
+// wire-format or accepted dtypes.
+using namespace stream_service_common;
 
 // Claim one service core per participating coord on `mesh`, recording the
 // choice per coord. Mirrors the service-core claim in socket_services.cpp (H2D).
@@ -107,50 +86,6 @@ std::map<distributed::MeshCoordinate, CoreCoord> claim_service_cores(
         service_cores.emplace(coord, *chosen);
     }
     return service_cores;
-}
-
-// Chunking plan shared by both sides. Identical to the H2D derivation in
-// socket_services.cpp: pack as many whole tensor pages into a socket page as
-// the scratch CB budget allows, reduced to a divisor of the page count so a
-// transfer is an integer number of socket pages.
-struct ChunkPlan {
-    uint32_t socket_page_size;  // bytes per socket page (== pages_per_chunk * tensor_page_size)
-    uint32_t num_socket_pages;  // socket pages per full transfer (== tensor_num_pages / pages_per_chunk)
-    uint32_t pages_per_chunk;   // tensor pages drained per socket page
-};
-
-ChunkPlan derive_chunk_plan(uint32_t tensor_page_size, uint32_t tensor_num_pages, uint32_t scratch_cb_size_bytes) {
-    TT_FATAL(tensor_page_size > 0, "D2DStreamService: tensor page size must be > 0");
-    TT_FATAL(tensor_num_pages > 0, "D2DStreamService: backing tensor must have at least one page");
-    TT_FATAL(
-        scratch_cb_size_bytes >= tensor_page_size,
-        "D2DStreamService: scratch_cb_size_bytes ({} B) must be >= tensor page size ({} B)",
-        scratch_cb_size_bytes,
-        tensor_page_size);
-
-    const uint32_t max_pages_per_chunk_by_cb = scratch_cb_size_bytes / tensor_page_size;
-    uint32_t pages_per_chunk = std::min(tensor_num_pages, max_pages_per_chunk_by_cb);
-    while (pages_per_chunk > 1 && (tensor_num_pages % pages_per_chunk) != 0) {
-        --pages_per_chunk;
-    }
-    TT_FATAL(
-        pages_per_chunk > 0,
-        "D2DStreamService: derived pages_per_chunk == 0 (tensor_page_size={}, tensor_num_pages={}, "
-        "scratch_cb_size_bytes={}); the socket FIFO must hold at least one tensor page",
-        tensor_page_size,
-        tensor_num_pages,
-        scratch_cb_size_bytes);
-    return ChunkPlan{
-        .socket_page_size = pages_per_chunk * tensor_page_size,
-        .num_socket_pages = tensor_num_pages / pages_per_chunk,
-        .pages_per_chunk = pages_per_chunk,
-    };
-}
-
-// Number of cores in an inclusive CoreRange (worker-grid mcast destination count
-// + sync-arithmetic target).
-uint32_t core_range_size(const CoreRange& range) {
-    return (range.end_coord.x - range.start_coord.x + 1) * (range.end_coord.y - range.start_coord.y + 1);
 }
 
 // Allocate one zero-initialised uint32 L1 word on a service core, recording the
@@ -972,7 +907,17 @@ SenderSideResources build_sender_side(
 
     std::map<distributed::MeshCoordinate, DeviceAddr> metadata_addrs;
     if (common.metadata_enabled) {
-        const uint32_t aligned_md = tt::align(common.metadata_size_bytes, common.l1_alignment);
+        // Size the metadata L1 buffer to a full socket page, not just
+        // metadata_size_bytes. The sender kernel ships the metadata as one
+        // trailing socket page and fabric_write_socket_page() always reads
+        // socket_page_size bytes from this address; a buffer sized only to the
+        // metadata would make it over-read adjacent service-core L1 (counters /
+        // reserved socket region) and ship those bytes over fabric. The worker
+        // writes metadata_size_bytes into the front; the zero-init keeps the
+        // padding tail clean. socket_page_size is already L1-aligned (it is a
+        // multiple of the L1-aligned tensor page), so the align() is a no-op
+        // guard.
+        const uint32_t aligned_md = tt::align(common.plan.socket_page_size, common.l1_alignment);
         std::vector<uint32_t> zero(aligned_md / sizeof(uint32_t), 0u);
         for (const auto& coord : coords) {
             auto* d = mesh->get_device(coord);

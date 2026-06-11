@@ -35,40 +35,16 @@
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/global_semaphore.hpp"
 
+#include "stream_service_common.hpp"
+
 namespace tt::tt_metal {
 
 namespace {
 
-// Build a single-shard host tensor with zero-initialised data of size `spec`.
-// Used purely to feed the mapper at construction time so we can extract a
-// TensorTopology before any user data exists. The bytes are never read.
-//
-// TODO: replace with a direct "topology from MeshMapperConfig + global shape"
-// helper once one exists upstream, so we can skip allocating `spec`-many bytes
-// just to throw them away.
-Tensor make_zero_host_tensor(const TensorSpec& spec) {
-    const size_t bytes = spec.compute_packed_buffer_size_bytes();
-    switch (spec.data_type()) {
-        case DataType::BFLOAT16:
-            return Tensor::from_vector<bfloat16>(std::vector<bfloat16>(bytes / sizeof(bfloat16)), spec);
-        case DataType::FLOAT32: return Tensor::from_vector<float>(std::vector<float>(bytes / sizeof(float)), spec);
-        case DataType::INT32: return Tensor::from_vector<int32_t>(std::vector<int32_t>(bytes / sizeof(int32_t)), spec);
-        case DataType::UINT8: return Tensor::from_vector<uint8_t>(std::vector<uint8_t>(bytes / sizeof(uint8_t)), spec);
-        case DataType::UINT16:
-            return Tensor::from_vector<uint16_t>(std::vector<uint16_t>(bytes / sizeof(uint16_t)), spec);
-        case DataType::BFLOAT4_B:
-        case DataType::BFLOAT8_B:
-            // Block-float formats pack a shared exponent per group of datums, so the
-            // packed byte count is NOT element_count * sizeof. from_vector requires a
-            // buffer of exactly logical-volume elements and (per its contract) `float`
-            // for block formats; it tilizes + quantizes internally.
-            return Tensor::from_vector<float>(std::vector<float>(spec.logical_shape().volume()), spec);
-        case DataType::UINT32:
-            return Tensor::from_vector<uint32_t>(std::vector<uint32_t>(bytes / sizeof(uint32_t)), spec);
-        case DataType::INVALID: TT_THROW("H2DStreamService: invalid global_spec data type");
-    }
-    TT_THROW("Unreachable");
-}
+// make_zero_host_tensor / ChunkPlan / derive_chunk_plan / core_range_size are
+// shared verbatim with the D2D service (d2d_stream_service.cpp) via
+// stream_service_common.hpp.
+using namespace stream_service_common;
 
 // Zero-copy wrap of caller-provided raw bytes into a host Tensor whose spec
 // matches `spec` exactly (ROW_MAJOR + default MemoryConfig only — see caller).
@@ -116,43 +92,6 @@ Tensor make_borrowed_host_tensor(ttsl::Span<const std::byte> bytes, const Tensor
         case DataType::INVALID: TT_THROW("H2DStreamService: invalid global_spec data type");
     }
     TT_THROW("Unreachable");
-}
-
-// Picks the largest `pages_per_chunk` (and therefore largest `socket_page_size`)
-// that:
-//   * fits in `scratch_cb_size_bytes` (pages_per_chunk * tensor_page_size),
-//   * divides `tensor_num_pages` evenly (no ragged last chunk),
-// falling back to 1 in the worst case (e.g. `tensor_num_pages` is prime).
-//
-// Mirrors the logic in copy_tensor_over_socket (tensor_ops.cpp). Pulled into a
-// helper so the persistent service can reuse the exact same chunking strategy
-// without depending on copy_tensor_over_socket's anonymous namespace.
-struct ChunkPlan {
-    uint32_t socket_page_size;  // bytes per socket page (== pages_per_chunk * tensor_page_size)
-    uint32_t num_socket_pages;  // socket pages per full transfer (== tensor_num_pages / pages_per_chunk)
-    uint32_t pages_per_chunk;   // tensor pages drained per socket page
-};
-
-ChunkPlan derive_chunk_plan(uint32_t tensor_page_size, uint32_t tensor_num_pages, uint32_t scratch_cb_size_bytes) {
-    TT_FATAL(tensor_page_size > 0, "device_tensor page size must be > 0");
-    TT_FATAL(tensor_num_pages > 0, "device_tensor must have at least one page");
-    TT_FATAL(
-        scratch_cb_size_bytes >= tensor_page_size,
-        "scratch_cb_size_bytes ({} B) must be >= tensor page size ({} B); "
-        "consider a layout with smaller pages or a larger CB budget",
-        scratch_cb_size_bytes,
-        tensor_page_size);
-
-    const uint32_t max_pages_per_chunk_by_cb = scratch_cb_size_bytes / tensor_page_size;
-    uint32_t pages_per_chunk = std::min(tensor_num_pages, max_pages_per_chunk_by_cb);
-    while (pages_per_chunk > 1 && (tensor_num_pages % pages_per_chunk) != 0) {
-        --pages_per_chunk;
-    }
-    return ChunkPlan{
-        .socket_page_size = pages_per_chunk * tensor_page_size,
-        .num_socket_pages = tensor_num_pages / pages_per_chunk,
-        .pages_per_chunk = pages_per_chunk,
-    };
 }
 
 // Worker-sync CT-arg block. Populated when Config::worker_cores is set; all
@@ -401,8 +340,7 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
     // stable so future getters can expose them to user worker kernels.
     if (cfg_.worker_cores.has_value()) {
         const auto& worker_range = cfg_.worker_cores.value();
-        num_workers_ = (worker_range.end_coord.x - worker_range.start_coord.x + 1) *
-                       (worker_range.end_coord.y - worker_range.start_coord.y + 1);
+        num_workers_ = core_range_size(worker_range);
         TT_FATAL(num_workers_ > 0, "H2DStreamService: cfg.worker_cores must contain at least one core");
 
         // Data-ready semaphore: mesh-wide, worker-grid L1, same address on every
