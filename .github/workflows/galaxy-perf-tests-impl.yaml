@@ -118,6 +118,7 @@ jobs:
             -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -v ${{ contains(matrix.test-group.sku, 'perf') && '/mnt/MLPerf:/mnt/MLPerf:ro' || '/donotmount:/donotmount:ro' }}
+            -v /tmp/TT_DIT_CACHE:/tmp/TT_DIT_CACHE
           install_wheel: true
           run_args: |
             ${{ matrix.test-group.cmd }}
