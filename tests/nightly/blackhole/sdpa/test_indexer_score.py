@@ -15,8 +15,11 @@ queries/device).  SP enters only via ``chunk_start``, so this is single-chip
 with ``sp_rank`` selecting the ring position.
 """
 
+import time
+
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -103,20 +106,59 @@ def test_indexer_score_glx_chunked(device, heads, dim, sq, t, chunk_start):
     assert_indexer_match(out, ref, sq, t, check_neg=True)
 
 
-@pytest.mark.parametrize("sp_rank", [0, 7], ids=["rank0", "rank7"])
-def test_indexer_score_production(device, sp_rank):
-    """GLX chunked prefill with the production knobs."""
-    # q_chunk=64 with all heads resident doubles q/w/acc CBs to ~2 MB > L1
-    cfg = ttnn.IndexerScoreProgramConfig(
+def production_config():
+    """Production (GLX chunked-prefill) knobs, shared by the accuracy and perf tests."""
+    # q_chunk=64 with all heads resident doubles q/w/acc CBs to ~2 MB > L1, so QC stays 1.
+    return ttnn.IndexerScoreProgramConfig(
         q_chunk_size=32,
         k_chunk_size=512,
         head_group_size=0,  # all 64 heads resident
     )
+
+
+@pytest.mark.parametrize("sp_rank", [0, 7], ids=["rank0", "rank7"])
+def test_indexer_score_production(device, sp_rank):
+    """GLX chunked prefill with the production knobs."""
     chunk_start = GLX_HISTORY + sp_rank * GLX_SQ
     q, k, w = make_inputs(GLX_HEADS, GLX_DIM, GLX_SQ, GLX_T)
-    out = run_indexer(q, k, w, chunk_start, device, program_config=cfg)
+    out = run_indexer(q, k, w, chunk_start, device, program_config=production_config())
     ref = indexer_score_ref(q, k, w, chunk_start)
     assert_indexer_match(out, ref, GLX_SQ, GLX_T)
+
+
+@pytest.mark.parametrize("sp_rank", [0, 7], ids=["rank0", "rank7"])
+def test_indexer_score_production_perf(device, sp_rank):
+    """Absolute wall-clock latency per op for the production GLX shape (boundary SP ranks).
+
+    Inputs are placed on device once (host transfer excluded) and the op is run program-
+    cache-warm with a device sync around a fixed iteration count. This is host-dispatched
+    single-op latency: it includes enqueue overhead, not pure device-kernel time (use the
+    tracy device profiler for that). The logged ms is the signal; the assert is only a
+    coarse hang / gross-regression guard (absolute wall-clock thresholds are board-dependent).
+    """
+    warmup_iters, measured_iters = 3, 20
+    chunk_start = GLX_HISTORY + sp_rank * GLX_SQ
+    cfg = production_config()
+    q, k, w = make_inputs(GLX_HEADS, GLX_DIM, GLX_SQ, GLX_T)
+    q_dev, k_dev, w_dev = to_device(q, device), to_device(k, device), to_device(w, device)
+
+    def run_once():
+        return ttnn.experimental.deepseek.indexer_score(
+            q_dev, k_dev, w_dev, chunk_start_idx=chunk_start, program_config=cfg
+        )
+
+    for _ in range(warmup_iters):  # compile + program-cache warm
+        run_once().deallocate()
+    ttnn.synchronize_device(device)
+
+    start = time.perf_counter()
+    for _ in range(measured_iters):
+        run_once().deallocate()
+    ttnn.synchronize_device(device)
+    ms_per_op = (time.perf_counter() - start) / measured_iters * 1e3
+
+    logger.info(f"indexer_score production rank{sp_rank}: {ms_per_op:.3f} ms/op (mean of {measured_iters} iters)")
+    assert ms_per_op < 50.0, f"rank{sp_rank}: {ms_per_op:.3f} ms/op exceeds 50 ms guard (regression or hang)"
 
 
 @pytest.mark.parametrize(
