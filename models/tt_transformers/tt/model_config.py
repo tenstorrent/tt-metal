@@ -1298,7 +1298,9 @@ class ModelArgs:
             )
 
     @lru_cache(maxsize=None)
-    def get_mlp_ff2_prg_config(self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None, batched: bool = False):
+    def get_mlp_ff2_prg_config(
+        self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None, batched: bool = False
+    ):
         if mode == Mode.DECODE:
             if self.dim >= 4096 and self.is_galaxy:
                 return self.matmul_1d_config_from_tensor_shapes(
