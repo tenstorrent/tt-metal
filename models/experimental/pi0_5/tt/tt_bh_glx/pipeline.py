@@ -228,6 +228,12 @@ class Pi0_5GLXPipeline:
         # the appropriate stage's per-chip submeshes.
         self._upstream_cache_key = None
         self._upstream_per_chip = None  # dict with prefix_* (18-list) and expert_* (6-list)
+
+        # Trace state (Phase B.3). _trace_id is set after capture_trace(). The
+        # output tensor _captured_actions is what the trace's final ops write
+        # to; sample_actions_traced reads from it after execute_trace.
+        self._trace_id = None
+        self._captured_actions = None
         self._rope_l1 = os.environ.get("PI0_ROPE_TABLES_L1", "").lower() in ("1", "true", "yes", "on")
 
     # ---- upstream-openpi compat artifacts -------------------------------
@@ -396,6 +402,123 @@ class Pi0_5GLXPipeline:
         )
         return self.suffix_slices[-1].project_output(normed)
 
+    # ---- persistent input buffers + trace (Phase B.3) -------------------
+
+    def _ensure_persistent_input_buffers(self, images: List[torch.Tensor], lang_tokens: torch.Tensor) -> None:
+        """Lazily allocate self.pixel_values_buf + self.lang_tokens_buf the first
+        time we see input of these shapes. Subsequent calls only need to refresh
+        their contents via copy_host_to_device_tensor (no reallocation)."""
+        pixel_values = torch.cat(images, dim=0)
+        if self.pixel_values_buf is None:
+            self.pixel_values_buf = ttnn.from_torch(
+                pixel_values,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.h.vision_per_chip[0],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            host_t = ttnn.from_torch(pixel_values, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            ttnn.copy_host_to_device_tensor(host_t, self.pixel_values_buf)
+
+        if self.lang_tokens_buf is None:
+            self.lang_tokens_buf = ttnn.from_torch(
+                lang_tokens.to(torch.uint32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.h.prefill_per_chip[0],
+            )
+        else:
+            host_t = ttnn.from_torch(lang_tokens.to(torch.uint32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.copy_host_to_device_tensor(host_t, self.lang_tokens_buf)
+
+    def _refresh_noise_buffer(self) -> None:
+        """Re-fill self.x_t_fp32 in-place with fresh N(0,1) noise (logical [:ah], zero-padded)."""
+        ah = self.action_horizon
+        ah_padded = self._action_horizon_padded
+        noise_pad = torch.zeros(1, ah_padded, self.action_dim, dtype=torch.float32)
+        noise_pad[:, :ah, :] = torch.randn(1, ah, self.action_dim)
+        host_t = ttnn.from_torch(noise_pad, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+        ttnn.copy_host_to_device_tensor(host_t, self.x_t_fp32)
+
+    def _sample_actions_device(self, upstream):
+        """Pure-device sample_actions body. Reads from persistent input buffers
+        (self.pixel_values_buf, self.lang_tokens_buf, self.x_t_fp32) and writes
+        the final actions into self.x_t_fp32 in-place. No host I/O — suitable
+        for trace capture.
+
+        Returns the final actions tensor (= self.x_t_fp32 by reference) so the
+        caller can either ttnn.to_torch it (eager) or remember it as the trace
+        output handle (trace mode)."""
+        vision_out = self.stage_vision.run(self.pixel_values_buf)
+        vision_out_p0 = self.transport.send(vision_out, self.h.prefill_per_chip[0], tag="v2p")
+        prefix_embs = self._build_prefix(vision_out_p0, self.lang_tokens_buf)
+        _final_hidden, per_layer_kv = self.stage_prefill.run(
+            prefix_embs,
+            attention_mask=None,
+            position_ids=None,
+            per_chip_attn_mask=(upstream["prefix_attn_mask"] if upstream is not None else None),
+            per_chip_cos=(upstream["prefix_cos"] if upstream is not None else None),
+            per_chip_sin=(upstream["prefix_sin"] if upstream is not None else None),
+        )
+        prefix_kv_per_chip = migrate_layer_paired(per_layer_kv, self.h.denoise_per_chip, transport=self.transport)
+        self._run_denoise_loop_device(prefix_kv_per_chip, upstream)
+        return self.x_t_fp32
+
+    def capture_trace(
+        self,
+        images: List[torch.Tensor],
+        img_masks: Optional[List[torch.Tensor]],
+        lang_tokens: torch.Tensor,
+        lang_masks: Optional[torch.Tensor],
+    ) -> None:
+        """One-time setup: stage all persistent buffers + upstream artifacts,
+        then capture the entire device-side compute as a TTNN trace on the
+        parent mesh's CQ 0. After this completes, sample_actions_traced() can
+        be called repeatedly with new inputs and will replay the trace.
+        """
+        # 1) Stage the persistent inputs.
+        self._ensure_persistent_input_buffers(images, lang_tokens)
+        self._refresh_noise_buffer()
+
+        # 2) Build / cache upstream artifacts (depends on img_masks + lang_masks + prefix_len).
+        upstream = None
+        if use_upstream_masks() and img_masks is not None and lang_masks is not None:
+            num_image_tokens = self.config.siglip_config.num_patches
+            prefix_len = num_image_tokens * len(images) + int(lang_tokens.shape[-1])
+            key = self._upstream_key(img_masks, lang_masks, prefix_len)
+            if self._upstream_per_chip is None or self._upstream_cache_key != key:
+                self._build_and_upload_upstream_artifacts(img_masks, lang_masks, prefix_len)
+                self._upstream_cache_key = key
+            upstream = self._upstream_per_chip
+
+        # 3) Warm up once so JIT compiles all kernels before begin_trace_capture.
+        # The trace allocator can't tolerate JIT compilation inside the trace body.
+        _ = self._sample_actions_device(upstream)
+
+        # 4) Refresh noise (warmup mutated x_t_fp32) and capture.
+        self._refresh_noise_buffer()
+        self._trace_id = ttnn.begin_trace_capture(self.h.parent, cq_id=0)
+        self._captured_actions = self._sample_actions_device(upstream)
+        ttnn.end_trace_capture(self.h.parent, self._trace_id, cq_id=0)
+
+    def sample_actions_traced(
+        self,
+        images: List[torch.Tensor],
+        lang_tokens: torch.Tensor,
+    ) -> torch.Tensor:
+        """Replay the captured trace on new inputs. Must be preceded by
+        capture_trace(). Refreshes pixel_values_buf, lang_tokens_buf, x_t_fp32
+        via copy_host_to_device_tensor, executes the trace, reads the output.
+        """
+        if self._trace_id is None:
+            raise RuntimeError("capture_trace() must be called before sample_actions_traced()")
+        self._ensure_persistent_input_buffers(images, lang_tokens)
+        self._refresh_noise_buffer()
+        ttnn.execute_trace(self.h.parent, self._trace_id, cq_id=0, blocking=True)
+        ah = self.action_horizon
+        return ttnn.to_torch(self._captured_actions)[:, :ah, :]
+
     # ---- public entry ----------------------------------------------------
 
     def sample_actions(
@@ -469,37 +592,41 @@ class Pi0_5GLXPipeline:
         ah_padded = self._action_horizon_padded
 
         # Initial noise: padded to ah_padded, only [:ah] is real (rest zero).
-        # Re-upload into the persistent x_t_fp32 buffer on denoise[0].
-        # ttnn.deallocate the old buffer's content first to free the slot.
+        # Refresh the persistent x_t_fp32 buffer in-place via copy_host_to_device_tensor
+        # so the buffer ID stays stable (required for trace-replay compatibility).
         noise_pad = torch.zeros(1, ah_padded, self.action_dim, dtype=torch.float32)
         noise_pad[:, :ah, :] = torch.randn(1, ah, self.action_dim)
-        ttnn.deallocate(self.x_t_fp32)
-        self.x_t_fp32 = ttnn.from_torch(
-            noise_pad,
-            dtype=ttnn.float32,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.h.denoise_per_chip[0],
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+        host_noise = ttnn.from_torch(noise_pad, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+        ttnn.copy_host_to_device_tensor(host_noise, self.x_t_fp32)
 
-        t.denoise_step_ms = []
+        # Run the device-side denoise loop. Same code path used by capture_trace.
+        self._run_denoise_loop_device(prefix_kv_per_chip, upstream, timings=t)
+
+        # ---- Final readback: pull x_t_fp32 to host and slice to logical action_horizon ----
+        x_t_final = ttnn.to_torch(self.x_t_fp32)
+        actions = x_t_final[:, :ah, :]
+
+        t.total_ms = (time.perf_counter() - wall_start) * 1000.0
+        return actions, t
+
+    def _run_denoise_loop_device(self, prefix_kv_per_chip, upstream, timings=None):
+        """Pure-device denoise loop. self.x_t_fp32 is read+written in-place each step
+        so its Tensor ID stays stable across the loop (trace-replay-safe).
+
+        No ttnn.from_torch, no ttnn.to_torch — every input is a persistent
+        ttnn.Tensor on the right chip. Suitable for begin_trace_capture.
+        """
         for i in range(self.num_denoising_steps):
-            ts_now = self._timesteps[i]
             dt = self._dts[i]
-
-            step_start = time.perf_counter()
+            step_start = time.perf_counter() if timings is not None else 0.0
 
             # Cast persistent fp32 x_t → bf16 for the embed_actions matmul.
             x_t_bf16 = ttnn.typecast(self.x_t_fp32, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
             suffix_hidden = self.suffix_slices[0].embed_actions(x_t_bf16)
             ttnn.deallocate(x_t_bf16)
 
-            # adarms_cond: pre-computed at __init__ (deterministic timesteps),
-            # one persistent ttnn.Tensor per (step, chip). No per-step
-            # ttnn.from_torch — required for trace-capture compatibility.
             adarms_per_chip = self._adarms_per_step_per_chip[i]
 
-            # 18-layer expert chain across 6 chips.
             expert_out = self.stage_denoise.run_expert_chain(
                 suffix_hidden,
                 adarms_per_chip,
@@ -511,29 +638,22 @@ class Pi0_5GLXPipeline:
                 per_chip_sin=(upstream["suffix_sin"] if upstream is not None else None),
             )
 
-            # Final adaRMS norm + action_out_proj on last denoise chip → velocity bf16.
             velocity_bf16 = self._apply_final_norm_and_project(expert_out, adarms_per_chip[-1])
 
-            # On-device Euler: x_t_fp32 ← x_t_fp32 + dt · velocity_fp32, all on denoise[0].
-            # velocity_bf16 lives on denoise[-1]; ship it to denoise[0] via socket
-            # (the "wrap-back" hop), then typecast → mul → add on chip 0.
+            # On-device Euler: x_t_fp32 ← x_t_fp32 + dt·velocity_fp32, IN-PLACE.
+            # Ship velocity from denoise[-1] to denoise[0] via socket, then
+            # typecast→mul→add. The final add writes back into self.x_t_fp32
+            # via output_tensor= so the buffer's Tensor ID survives the loop.
             velocity_on_chip0 = self.transport.send(velocity_bf16, self.h.denoise_per_chip[0], tag="velocity_wrap")
             ttnn.deallocate(velocity_bf16)
             velocity_fp32 = ttnn.typecast(velocity_on_chip0, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
             velocity_scaled = ttnn.mul(velocity_fp32, dt, memory_config=ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(velocity_fp32)
-            x_t_new = ttnn.add(self.x_t_fp32, velocity_scaled, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.add(self.x_t_fp32, velocity_scaled, output_tensor=self.x_t_fp32)
             ttnn.deallocate(velocity_scaled)
-            ttnn.deallocate(self.x_t_fp32)
-            self.x_t_fp32 = x_t_new
-            # NOTE: do NOT deallocate adarms_per_chip — they're persistent
-            # _adarms_per_step_per_chip[i] entries built once at __init__.
 
-            t.denoise_step_ms.append((time.perf_counter() - step_start) * 1000.0)
-
-        # ---- Final readback: pull x_t_fp32 to host and slice to logical action_horizon ----
-        x_t_final = ttnn.to_torch(self.x_t_fp32)
-        actions = x_t_final[:, :ah, :]
-
-        t.total_ms = (time.perf_counter() - wall_start) * 1000.0
-        return actions, t
+            if timings is not None:
+                timings.denoise_step_ms.append((time.perf_counter() - step_start) * 1000.0)
+        if timings is not None and not timings.denoise_step_ms:
+            # Placeholder for trace-capture path which doesn't time per step.
+            timings.denoise_step_ms = [0.0] * self.num_denoising_steps
