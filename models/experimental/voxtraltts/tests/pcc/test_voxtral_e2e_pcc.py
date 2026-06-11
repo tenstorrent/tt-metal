@@ -15,32 +15,22 @@ from models.common.utility_functions import comp_pcc
 from models.experimental.voxtraltts.reference.audio_tokenizer_ops import audio_tokenizer_decode_reference
 from models.experimental.voxtraltts.reference.cpu_reference import VoxtralCPUReference
 from models.experimental.voxtraltts.reference.voxtral_config import DEFAULT_VOXTRAL_TT_TEXT_MAX_SEQ_LEN
-from models.experimental.voxtraltts.tests.common import log_per_step_code_match, resolve_voxtral_model_name_or_skip
+from models.experimental.voxtraltts.tests.common import (
+    VOXTRAL_STANDARD_CHAR_TEXT,
+    log_per_step_code_match,
+    resolve_voxtral_model_name_or_skip,
+)
 from models.experimental.voxtraltts.tt.voxtral_tt_args import voxtral_text_hf_aligned_optimizations
 from models.experimental.voxtraltts.tt.voxtral_tts import VoxtralTTSPipeline
 
 WAVEFORM_PCC_TARGET = 0.99
 
-# Free-run correctness is gated by Whisper ASR intelligibility, NOT sample-wise waveform PCC
-# (the discrete FSQ feedback makes the latter structurally unreachable). We follow the
-# ``ssinghal/voxtral_tts`` Phase-4 metric exactly: Whisper WER on a standard prompt, target
-# WER < 0.30 (word overlap is still logged for continuity with Qwen3-TTS).
 ASR_WER_TARGET = 0.30
 ASR_SAMPLE_RATE = 16000
 WHISPER_MODEL = "openai/whisper-small"
 
-_DEMO_TEXT = (
-    "Voxtral is a four billion parameter open weight text to speech model "
-    "released by Mistral AI in two thousand twenty six, designed for low "
-    "latency multilingual voice generation across English, Spanish, French, "
-    "Portuguese, Hindi, German, Dutch, and Italian. It builds on the "
-    "Ministral three billion language backbone with a flow matching acoustic "
-    "decoder and produces audio at twelve point five hertz with high quality, "
-    "suitable for streaming voice applications and real time agent deployments."
-)
-# Standard common-word prompt for the WER gate (avoids coined brand words that Whisper
-# systematically misspells and that would inflate WER without reflecting intelligibility).
-_ASR_TEXT = "Voxtral is a four billion parameter open weight text to speech model "
+_DEMO_TEXT = VOXTRAL_STANDARD_CHAR_TEXT
+_ASR_TEXT = VOXTRAL_STANDARD_CHAR_TEXT
 _DEMO_VOICE = "casual_male"
 _OUTPUT_SAMPLE_RATE = 24000
 
@@ -79,8 +69,11 @@ def _transcribe_waveform(waveform: torch.Tensor, src_sr: int) -> str:
             seg = audio[start : start + chunk]
             if seg.size == 0:
                 continue
-            feats = processor(seg, sampling_rate=ASR_SAMPLE_RATE, return_tensors="pt").input_features
-            ids = whisper.generate(feats, language="en", task="transcribe")
+            inputs = processor(seg, sampling_rate=ASR_SAMPLE_RATE, return_tensors="pt", return_attention_mask=True)
+            generate_kwargs = {"input_features": inputs.input_features, "language": "en", "task": "transcribe"}
+            if getattr(inputs, "attention_mask", None) is not None:
+                generate_kwargs["attention_mask"] = inputs.attention_mask
+            ids = whisper.generate(**generate_kwargs)
             segments.append(processor.batch_decode(ids, skip_special_tokens=True)[0].strip())
     return " ".join(s for s in segments if s).strip()
 
@@ -227,15 +220,13 @@ def test_ttnn_voxtral_tts_staged_pcc(device, reset_seeds, request):
 
 
 @torch.no_grad()
-@pytest.mark.timeout(3600)
+@pytest.mark.timeout(900)
 @pytest.mark.parametrize("device_params", [{}], indirect=True)
 def test_ttnn_voxtral_tts_free_run_asr(device, reset_seeds, request):
-    """Free-run E2E correctness via Whisper ASR WER (the meaningful free-run gate).
+    """Free-run E2E correctness via ASR WER.
 
     Sample-wise free-run waveform PCC is structurally unreachable for a discrete-FSQ AR
-    model, so — exactly like the ``ssinghal/voxtral_tts`` Phase-4 Whisper verification — we
-    generate audio free-run on the device, transcribe it with Whisper, and assert the
-    word error rate is below ``ASR_WER_TARGET`` (their target was WER < 0.30).
+    model. This local no-API test uses Whisper as the available in-repo ASR backend.
     """
     name = resolve_voxtral_model_name_or_skip()
     try:
@@ -248,7 +239,7 @@ def test_ttnn_voxtral_tts_free_run_asr(device, reset_seeds, request):
         pipe = VoxtralTTSPipeline.from_model_name(
             device,
             model_name_or_path=name,
-            text_max_seq_len=2048,  # full _DEMO_TEXT paragraph needs ~575 frames + ~280 prompt positions
+            text_max_seq_len=2048,
             text_optimizations=voxtral_text_hf_aligned_optimizations,
         )
     except Exception as exc:
@@ -265,17 +256,17 @@ def test_ttnn_voxtral_tts_free_run_asr(device, reset_seeds, request):
     logger.info("=" * 70)
     logger.info("FREE-RUN ASR GATE (TT generates audio; Whisper transcribes; WER)")
     logger.info("=" * 70)
-    out = pipe.generate_with_codes(text=_DEMO_TEXT, voice=_DEMO_VOICE, max_tokens=1500, seed=0)
+    out = pipe.generate_with_codes(text=_ASR_TEXT, voice=_DEMO_VOICE, max_tokens=1500, seed=0)
     ttnn.synchronize_device(device)
 
     assert out.codes_b37t.shape[2] > 0, "free-run generation produced no acoustic frames"
     assert torch.isfinite(out.waveform).all(), "free-run waveform has non-finite samples"
 
     transcription = _transcribe_waveform(out.waveform, _OUTPUT_SAMPLE_RATE)
-    wer = _word_error_rate(_DEMO_TEXT, transcription)
-    overlap = _word_overlap(transcription, _DEMO_TEXT)
+    wer = _word_error_rate(_ASR_TEXT, transcription)
+    overlap = _word_overlap(transcription, _ASR_TEXT)
     duration_s = float(out.waveform.reshape(-1).numel()) / _OUTPUT_SAMPLE_RATE
-    logger.info(f"  target       : {_DEMO_TEXT!r}")
+    logger.info(f"  target       : {_ASR_TEXT!r}")
     logger.info(f"  transcription: {transcription!r}")
     logger.info(
         f"  WER          : {wer:.2%}  target<{ASR_WER_TARGET:.0%}  "
@@ -284,7 +275,7 @@ def test_ttnn_voxtral_tts_free_run_asr(device, reset_seeds, request):
     )
 
     assert wer < ASR_WER_TARGET, (
-        f"free-run ASR WER {wer:.2%} >= {ASR_WER_TARGET:.0%}; " f"transcription={transcription!r} target={_DEMO_TEXT!r}"
+        f"free-run ASR WER {wer:.2%} >= {ASR_WER_TARGET:.0%}; " f"transcription={transcription!r} target={_ASR_TEXT!r}"
     )
 
     ttnn.synchronize_device(device)
@@ -298,7 +289,7 @@ def test_ttnn_voxtral_tts_free_run_asr(device, reset_seeds, request):
 @torch.no_grad()
 @pytest.mark.timeout(3600)
 def test_cpu_reference_free_run_asr_diagnostic(reset_seeds):
-    """DIAGNOSTIC (not gated): torch CPU-reference free-run on the SAME _DEMO_TEXT/seed.
+    """DIAGNOSTIC (not gated): torch CPU-reference free-run on the SAME _ASR_TEXT/seed.
 
     Establishes the reference's frame count / duration / WER so we can tell whether the
     TT free-run (``test_ttnn_voxtral_tts_free_run_asr``) stops *earlier* than the reference
@@ -321,7 +312,7 @@ def test_cpu_reference_free_run_asr_diagnostic(reset_seeds):
     logger.info("CPU-REFERENCE FREE-RUN ASR DIAGNOSTIC (torch generates audio; Whisper transcribes)")
     logger.info("=" * 70)
     ref_wav, ref_codes = cpu.generate(
-        text=_DEMO_TEXT,
+        text=_ASR_TEXT,
         voice=_DEMO_VOICE,
         max_tokens=1500,
         seed=0,
@@ -332,10 +323,10 @@ def test_cpu_reference_free_run_asr_diagnostic(reset_seeds):
     n_frames = int(ref_codes.shape[2])
     hit_end = n_frames < 1500
     transcription = _transcribe_waveform(ref_wav, _OUTPUT_SAMPLE_RATE)
-    wer = _word_error_rate(_DEMO_TEXT, transcription)
-    overlap = _word_overlap(transcription, _DEMO_TEXT)
+    wer = _word_error_rate(_ASR_TEXT, transcription)
+    overlap = _word_overlap(transcription, _ASR_TEXT)
     duration_s = float(ref_wav.reshape(-1).numel()) / _OUTPUT_SAMPLE_RATE
-    logger.info(f"  target       : {_DEMO_TEXT!r}")
+    logger.info(f"  target       : {_ASR_TEXT!r}")
     logger.info(f"  transcription: {transcription!r}")
     logger.info(
         f"  WER          : {wer:.2%}  (word overlap={overlap:.2%}, "
