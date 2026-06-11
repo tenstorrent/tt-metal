@@ -26,73 +26,85 @@ MLA layer.
 14. Scale bring-up order: small single-shot first (~4-8k tokens, cheap CPU reference); 50k cache + 5k chunk later as gating milestone with cached CPU outputs.
 15. Chunk size is a configurable test parameter, 1k for the dev loop (CPU truth fast enough for iteration); 5k once proper kernels (fused sparse attention) land. Same code path either way.
 
-## Status (2026-06-10)
-1. **Done:** CPU reference (reference_cpu) — MLA + Indexer, matches DeepSeek reference.
-2. **Done:** single-chip ttnn port (reference_tt_single_chip) — MLA + Indexer with CPU fallbacks; decisions/fallbacks documented in spec.md, multichip plan in spec-multichip.md.
-3. **Done:** multichip scaffold (tt/ + tests/) reusing deepseek_v3_d_p as a library:
-   - tt/mla/mla.py — ttMLA subclass of v3 ttMLA, passthrough for now; all DSA changes go here.
-   - tt/tt_prefill_block.py, tt/tt_prefill_transformer.py — copies of v3, only the MLA/block import changed. Future work: add mla_class/block_class injection params to v3 so the copies can be deleted (see tt/README.md).
-   - tests/test_mla.py — e2e MLA test reusing the v3 harness (monkeypatched MLA class); collects. Currently compares against the v3 reference — to be replaced, see Next.
-4. **Done (step 1, test rewire to CPU reference):** Decisions taken:
-   - Weight mapping MLACPU→v3 dict is a pure rename (wq_a→q_a_proj, q_norm→q_a_layernorm, wq_b→q_b_proj, wkv_a→kv_a_proj_with_mqa, kv_norm→kv_a_layernorm, wkv_b→kv_b_proj, wo→o_proj); same [out,in] layout, bf16.
-   - Bring-up seq_len = 2048 = index_topk: there the DSA index mask is 0 over the causal region, so MLACPU is dense-equivalent and the passthrough must match (output PCC 0.98, KVPE 0.99 — v3 thresholds). seq>2048 diverges by design until indexer+sparse SDPA land.
-   - MLACPU run with simulate_fp8=False (device KVPE stores bf16; same as single-chip port).
-   - CPU outputs cached at $DEEPSEEK_V32_MLA_REF_CACHE (default /tmp/deepseek_v32_mla_ref_cache), keyed by tag+seq+seed.
-   - Device side keeps the HF config (shape-asserted vs ModelArgs); RoPE equivalence interleaved↔reference proven in single-chip spec D5.
-   - First hardware runs (1x4, passthrough): pipeline runs e2e clean on QuietBox; seq2k output PCC 0.785, seq256 0.889 — diagnosed, not an MLA bug: ModelArgs.max_seq_len was set to seq_len, which disables YaRN (max_seq_len ≤ original 4096) in the CPU reference while v3's device tables (HF DeepseekV3YarnRotaryEmbedding) always apply YaRN; freqs and softmax mscale² (1.87x) diverge. Host check confirmed. Fix: keep max_seq_len=16384, refs re-cached (cache tag includes max_seq_len).
-   - **After fix, step 1 DONE — both pass on 1x4 QuietBox: seq256 output PCC 0.9991, seq2k 0.9986, KVPE ~0.9999** — weight mapping, RoPE convention, sp=1 harness all confirmed. seq2k cold run 431s (cached ref cuts CPU part on reruns).
-5. **Done (step 2 shape contracts):** tt/ops.py + tests/test_ops_shapes.py — all 5 shape tests pass on 1x4 QuietBox (8.5s): indexer_logits composed from ttnn matmul/relu/permute (on device); topk via ttnn.topk — works on device at k=2048, TILE input, host fallback never triggered; sparse_mla CPU fallback.
-6. **Done (step 2 numerics):** tests/test_ops_numerics.py vs reference_cpu functional path — indexer_logits PCC ≥0.99 (incl. ReLU + weighted head-sum), sparse_mla 0.999, ttnn.topk index-set overlap vs torch ≥1−max(2/k, 1%) per row (bf16 ties swap a boundary band that grows with k — ~0.5% on random logits, 11/2048 measured; not a bug; effect should shrink on real data with larger score spread). Next: step 3 — wire indexer ops into v32 ttMLA forward, integrate at seq>2048 vs CPU reference (sparse path now differs from v3 by design).
-7. **MILESTONE (step 3 done, 2026-06-10): full v32 suite green on 1x4 QuietBox (12 tests, 8m17s)** — e2e vs functional-parity CPU reference: seq256 0.9991 / seq2k 0.9986 (dense passthrough), seq4k 0.9975 with DSA active (sparse rows 0.9948), KVPE 0.9999; ops shape+numerics all pass. Band PCC diagnostics kept permanently in test_mla.py (caught the head-sharding bug).
-8. **✅ Step 3 done (2026-06-10): single-shot DSA wired into v32 ttMLA, suite 12/12.**
-   - 🧩 Design: `seq ≤ index_topk` → `super().forward` (dense == sparse); `seq > index_topk` → `_dsa_forward` = v3 single-shot forward with ring SDPA replaced by `ops.sparse_mla` over top-k latents, `wkv_b2` after attention.
-   - 🖥️ Indexer stems on host (qr from MLA q_a host copy; F1 non-interleaved rope); logits+topk on device. Limit: sp=1 single-shot only (asserted).
-   - 🧪 e2e seq4k case added; indexer weights flow via WEIGHT_NAME_MAP (popped before v3 sees them).
-   - 🐞 Bugs found & fixed:
-     - [x] hidden is TP-sharded → indexer host stems concat shards
-     - [x] epilogue is RS-only (RS+AG gave replicated 28672 output)
-     - [x] sparse_mla must re-impose causality for rows with <k causal keys (0.20→0.38; future indices from topk's −inf band) — now op contract
-     - [x] CPU truth ran fp8/Hadamard indexer (selection-divergent) → `use_fp8_path=False` per spec §104
-     - [x] q head-sharded but sparse_mla read shard 0 + replicated → 3/4 chips wrong heads; now per-shard (q/out TP-sharded, kvpe+indices replicated)
-   - ⚠️ Gotcha: don't pipe pytest through `tail` — swallows exit code; log to file, check `$?`.
-9. **✅ Step 4 done (2026-06-11): chunked DSA prefill green on 1x4 — 4k cache + 1k chunks, output PCC 0.9982 (per-chunk ≥0.996), KVPE prefix 0.9999; suite 15/15.**
-   - Slices:
-     - [x] (1) `sparse_mla(start_pos)` causal offset
-     - [x] (2) host indexer K-cache + chunked `_indexer_topk`
-     - [x] (3) chunked `_dsa_forward` (v3 `update_padded_kv_cache` write, rope offset, sparse_mla over populated prefix)
-     - [x] (4) chunked e2e harness (chunk loop + `get_rope_tensors_indexed`; MLACPU decode-branch truth w/ chunk mask, cached per (seq,chunk,seed))
-   - 📐 Chunk size is a test param (agreement 15): 1k dev; 50k gate postponed (backlog 3); 5k deferred to fused kernels.
-   - 🐞 Bugs found & fixed:
-     - [x] dense-passthrough chunks skipped indexer K-cache write → DSA chunks scored against zeros (0.855/0.725 → ≥0.996). **Lesson (3rd occurrence): write EVERY per-chunk cache on every chunk, dense or sparse.**
-     - [x] ring buffer sized from constructor seq_len = full cache, not chunk
-     - [x] MLACPU dense branch out-of-bounds for chunked truth (start_pos>0 → decode branch + chunk mask)
-     - [x] bf8 cache quantization ruled out (mirror test); KVPE prefix 0.9999 isolated the fault to selection
-10. See "Backlog" section below for full ordered list of open tasks.
+## Status (updated 2026-06-11)
 
-## Backlog (execution order, 2026-06-10)
+### ✅ Foundations (pre-port)
+- [x] CPU reference (reference_cpu) — MLA + Indexer, matches DeepSeek reference
+- [x] Single-chip ttnn port (reference_tt_single_chip) — MLA + Indexer w/ CPU fallbacks; decisions in spec.md, multichip plan in spec-multichip.md
+- [x] Multichip scaffold (tt/ + tests/) reusing deepseek_v3_d_p as a library
+  - 🧩 tt/mla/mla.py — ttMLA subclass of v3 ttMLA; all DSA changes live here
+  - 🧩 tt_prefill_block.py / tt_prefill_transformer.py — v3 copies, only MLA/block import changed (→ backlog 13: upstream injection params, delete copies)
 
-**Step 4 — chunked prefill (in flight)**
-1. Extend MLACPU decode branch to accept an intra-chunk causal mask (mask=None today → no within-chunk causality; blocks chunk-loop truth).
-2. Chunked e2e harness: chunk loop, get_rope_tensors_indexed, chunked ttMLA construction; tests slice-3 wiring at 4k cache + 1k chunks (cold truth ~1h, cache once).
-3. POSTPONED (2026-06-10): scale gate 50k cache + 1k chunks overnight (cached truth); 5k chunks once fused kernels land (agreement 15).
+### ✅ Step 1 — test rewire to CPU reference (2026-06-10, 1x4: seq256 0.9991 / seq2k 0.9986, KVPE 0.9999)
+- 🧩 Weight map MLACPU→v3 dict is a pure rename (wq_a→q_a_proj, …, wo→o_proj); same [out,in] layout, bf16
+- 🧩 Bring-up seq = index_topk(2048): DSA mask is 0 over causal region → MLACPU dense-equivalent, passthrough must match; seq>2048 diverges by design
+- 🧩 MLACPU simulate_fp8=False (device KVPE bf16); HF config shape-asserted vs ModelArgs; rope interleaved↔reference proven (spec D5)
+- 💾 CPU outputs cached at $DEEPSEEK_V32_MLA_REF_CACHE, keyed tag+seq+seed; seq2k cold 431s
+- 🐞 Fixed: ModelArgs.max_seq_len=seq_len disabled YaRN in the CPU ref (mscale² 1.87x drift, PCC 0.78) → keep max_seq_len=16384
+
+### ✅ Step 2 — missing-op APIs (tt/ops.py), shapes + numerics on 1x4
+- [x] Shape contracts (test_ops_shapes.py, 5 tests, 8.5s): indexer_logits composed on device; ttnn.topk on device at k=2048 (TILE in); sparse_mla CPU fallback
+- [x] Numerics (test_ops_numerics.py vs functional CPU path): indexer_logits PCC ≥0.99, sparse_mla 0.999
+- [x] topk index-set overlap vs torch ≥1−max(2/k,1%) per row — bf16 ties swap a small boundary band (11/2048 measured; not a bug)
+
+### ✅ Step 3 — single-shot DSA in v32 ttMLA (2026-06-10, suite 12/12; seq4k 0.9975, sparse rows 0.9948)
+- 🧩 `seq ≤ index_topk` → `super().forward` (dense == sparse); `seq > index_topk` → `_dsa_forward` = v3 forward with ring SDPA replaced by `ops.sparse_mla` over top-k latents, `wkv_b2` after attention
+- 🖥️ Indexer stems on host (qr from MLA q_a host copy; F1 non-interleaved rope); logits+topk on device. Limit: sp=1 single-shot only (asserted)
+- 🧪 e2e seq4k case; indexer weights flow via WEIGHT_NAME_MAP (popped before v3 sees them); band PCC diagnostics kept in test_mla.py
+- 🐞 Bugs found & fixed:
+  - [x] hidden is TP-sharded → indexer host stems concat shards
+  - [x] epilogue is RS-only (RS+AG gave replicated 28672 output)
+  - [x] sparse_mla must re-impose causality for rows with <k causal keys (future indices from topk's −inf band) — now op contract
+  - [x] CPU truth ran fp8/Hadamard indexer (selection-divergent) → `use_fp8_path=False` per spec §104
+  - [x] q head-sharded but sparse_mla read shard 0 + replicated → 3/4 chips wrong heads; now per-shard (q/out TP-sharded, kvpe+indices replicated)
+- ⚠️ Gotcha: don't pipe pytest through `tail` — swallows exit code; log to file, check `$?`
+
+### ✅ Step 4 — chunked DSA prefill (2026-06-11, 1x4: 4k cache + 1k chunks, PCC 0.9982, per-chunk ≥0.996; suite 15/15)
+- [x] (1) `sparse_mla(start_pos)` causal offset
+- [x] (2) host indexer K-cache + chunked `_indexer_topk`
+- [x] (3) chunked `_dsa_forward` (v3 `update_padded_kv_cache` write, rope offset, sparse_mla over populated prefix)
+- [x] (4) chunked e2e harness (chunk loop + `get_rope_tensors_indexed`; MLACPU decode-branch truth w/ chunk mask, cached per (seq,chunk,seed))
+- 📐 Chunk size is a test param (agreement 15): 1k dev; 50k gate postponed (backlog 3); 5k deferred to fused kernels
+- 🐞 Bugs found & fixed:
+  - [x] dense-passthrough chunks skipped indexer K-cache write → DSA chunks scored against zeros (0.855/0.725 → ≥0.996). **Lesson (3rd occurrence): write EVERY per-chunk cache on every chunk, dense or sparse**
+  - [x] ring buffer sized from constructor seq_len = full cache, not chunk
+  - [x] MLACPU dense branch out-of-bounds for chunked truth (start_pos>0 → decode branch + chunk mask)
+  - [x] bf8 cache quantization ruled out (mirror test); KVPE prefix 0.9999 isolated the fault to selection
+
+### ⏭️ Next
+Open work tracked in the Backlog section below.
+
+## Backlog (execution order; numbers are stable cross-refs)
+
+Legend: `[x]` done · `[ ]` open · ⏸️ postponed · 📌 resolved as decision (no code).
+
+**Step 4 — chunked prefill**
+- [x] **(1)** MLACPU decode branch accepts intra-chunk causal mask (was mask=None → no within-chunk causality)
+- [x] **(2)** chunked e2e harness (chunk loop, get_rope_tensors_indexed, chunked ttMLA); slice-3 wiring tested at 4k+1k
+- [ ] ⏸️ **(3)** scale gate 50k cache + 1k chunks overnight (cached truth); 5k once fused kernels land (agreement 15)
 
 **Functional gaps (blocking production)**
-4. 2x2 SP×TP mesh — indexer needs full sequence per chip (seq AG or distributed topk); sparse_mla prefix read needs SP-aware gathering.
-5. Pretrained weights — V3.2 checkpoint (indexer weights) into conftest; reuse reference_cpu loading + v3 conversion/sharding.
-6. Device-side indexer stems — q/k/weights projections on device; non-interleaved RoPE op (F1 still host).
-7. RESOLVED as decision (2026-06-10): fp8/Hadamard parity — follow v3 cache format (kvpe bfloat8_b); ttnn has no fp8 matching DeepSeek's official implementation, so the functional path is the contract; truth stays use_fp8_path=False/simulate_fp8=False.
+- [ ] **(4)** 2x2 SP×TP mesh — indexer needs full sequence per chip (seq AG or distributed topk); sparse_mla prefix read needs SP-aware gathering
+- [ ] **(5)** pretrained weights — V3.2 checkpoint (indexer weights) into conftest; reuse reference_cpu loading + v3 conversion/sharding
+- [ ] **(6)** device-side indexer stems — q/k/weights projections on device; non-interleaved RoPE op (F1 still host)
+- [x] 📌 **(7)** fp8/Hadamard parity — follow v3 cache format (kvpe bfloat8_b); ttnn has no matching fp8, so the functional path is the contract; truth stays use_fp8_path=False/simulate_fp8=False
 
 **Host fallbacks → device ops (perf debt; contracts in tt/ops.py + Missing op APIs)**
-8. sparse_mla gather+SDPA — full host fallback per layer (biggest copy/compute hit); needs sparse gather + SDPA-with-indices, per-row valid length + start_pos.
-9. Cache-slot host readback in chunked _dsa_forward (whole prefix read every chunk).
-10. Indexer host stems readback (full hidden concat per chunk).
+- [ ] **(8)** sparse_mla gather+SDPA — full host fallback per layer (biggest copy/compute hit); needs sparse gather + SDPA-with-indices, per-row valid length + start_pos
+- [ ] **(9)** cache-slot host readback in chunked _dsa_forward (whole prefix read every chunk)
+- [ ] **(10)** indexer host stems readback (full hidden concat per chunk)
 
 **Fused C++ ops (out of scope per Approach §4, documented follow-ups)**
-11. indexer_logits (DeepGEMM fp8_mqa_logits-style), causal windows, fp8.
-12. Sparse FlashMLA-style attention, per-row topk_length.
+- [ ] **(11)** indexer_logits (DeepGEMM fp8_mqa_logits-style), causal windows, fp8
+- [ ] **(12)** sparse FlashMLA-style attention, per-row topk_length
 
 **Hygiene**
-13. Upstream mla_class/block_class injection to v3 → delete the two copied files; v32 tests in CI; decode path; multi-layer/multi-user cache; replicated-vs-sharded mask dedup; determinism tests (Testing section).
+- [ ] **(13)** upstream mla_class/block_class injection to v3 → delete the two copied files
+- [ ] **(14)** v32 tests in CI
+- [ ] **(15)** decode path
+- [ ] **(16)** multi-layer / multi-user cache
+- [ ] **(17)** replicated-vs-sharded mask dedup
+- [ ] **(18)** determinism tests (Testing section)
 
 ## References
 1. models/demos/deepseek_v32/reference_cpu - deepseek's reference implementation running on CPU w/o fused ops and sparse attention
