@@ -557,64 +557,43 @@ void kernel_main() {
                 reconfig_data_format_srca(cb_inb, cb_ex2pe);
             }
 
-            // Multiply by 1/(√(Var(X) + ε)).
+            // Multiply by 1/(√(Var(X) + ε)) via binary_dest_reuse_tiles<ELWMUL, DEST_TO_SRCB>.
             //
-            // WORKAROUND (root cause NOT understood). Empirically, the
-            // binary_dest_reuse_tiles<ELWMUL, DEST_TO_SRCB> multiply below produces wrong output
-            // whenever an UnpackToDestFp32 alias was used earlier in this kernel:
+            // #46523 (Blackhole) / #45216 (Wormhole): when a UnpackToDestFp32 alias was used in
+            // the welford section, the SrcB hand-off into this DEST_TO_SRCB multiply races between
+            // the unpack and math threads. The aliases are:
             //   * non-fuse welford (welford_fp32_alias): transpose_wh_tile reads cb_x_welford
             //     (c_29, UnpackToDestFp32 alias of cb_x).
             //   * fuse_pre_add welford state (welford_state_fp32_alias): copy_tile reads
-            //     cb_ex_welford / cb_ex2_welford (c_30 / c_31, UnpackToDestFp32 aliases of
-            //     cb_ex / cb_ex2).
-            // Wormhole (#45216): deterministic and large. Blackhole (#46523): intermittent
-            // (nondeterministic back-to-back, disappears under watcher) and small in magnitude.
-            // Staging (x - mean) through cb_xmm and multiplying via the SrcA mul_tiles_bcast_cols
-            // path (instead of reusing DEST) avoids it. Use the DEST_TO_SRCB reuse path otherwise
-            // to skip an extra pack/unpack round-trip (the workaround costs ~3% on the FP32
-            // large-tensor Welford path, measured on a 32x4096 Blackhole case).
+            //     cb_ex_welford / cb_ex2_welford (c_30 / c_31, UnpackToDestFp32 aliases).
+            // The DEST_TO_SRCB reuse is move_d2b (MOVD2B, ex_resource MATH), which per the LLK does
+            // NOT auto-wait on SrcB ownership -- it relies only on a level STALLWAIT(SRCB_VLD) plus
+            // the unpacker posting a fresh SrcB data-valid. The preceding sub_tiles_bcast_cols is
+            // also an FPU/MATH op and runs in program order on the same engine, so the sub->move_d2b
+            // ordering is NOT the hazard. The hazard is purely cross-thread: the Unpacker (T0)
+            // asynchronously drives SrcB's data-valid / bank pointer (it loaded the mean into SrcB
+            // for the sub, and posts the dummy SrcB data-valid for this reuse), and there is a
+            // cycle-timing window where move_d2b's level SRCB_VLD check is satisfied by a residual
+            // valid so it consumes SrcB before T0's fresh post lands. Intermittent on Blackhole
+            // (masked by watcher), deterministic on Wormhole. The functional simulator (ttsim) runs
+            // this path correctly, confirming the kernel logic is right and the failure is HW timing.
             //
-            // The mechanism is unconfirmed and the leaked-state framing above may be wrong: an
-            // attempt to "reset and keep the fast path" did not work. Clearing DBG_FEATURE_DISABLE
-            // bit 11 (set by the to-DEST unpack with no unpack-side re-enable) on the math thread,
-            // on both threads, and a full binary_op_init_common re-init before the eltwise pass
-            // all left the output still nondeterministic -- so whatever causes this is not reset
-            // by any pipeline reprogram we found from the kernel. Avoiding the path is the only
-            // remedy known to work; identifying the real cause needs deeper HW/LLK investigation.
-            constexpr bool dest_reuse_workaround_needed = (welford_fp32_alias || welford_state_fp32_alias);
-            if constexpr (dest_reuse_workaround_needed) {
-                tile_regs_commit();
-
-                const uint32_t cb_xmm_intermediate = get_named_compile_time_arg_val("cb_xmm");
-                CircularBuffer cb_xmm_intermediate_obj(cb_xmm_intermediate);
-                pack_reconfig_data_format(cb_xmm_intermediate);
-                cb_xmm_intermediate_obj.reserve_back(block.full_block_size());
-                tile_regs_wait();
-                for (auto i : block.local()) {
-                    pack_tile(i, cb_xmm_intermediate);
-                }
-                cb_xmm_intermediate_obj.push_back(block.full_block_size());
-                tile_regs_release();
-
-                reconfig_data_format(cb_xmm_intermediate, cb_ex2pe);
-                mul_bcast_cols_init_short(cb_xmm_intermediate, cb_ex2pe);
-                cb_xmm_intermediate_obj.wait_front(block.full_block_size());
-                tile_regs_acquire();
-                for (auto i : block.local()) {
-                    mul_tiles_bcast_cols(cb_xmm_intermediate, cb_ex2pe, i, 0, i);
-                }
-                cb_xmm_intermediate_obj.pop_front(block.full_block_size());
-                tile_regs_commit();
-            } else {
-                reconfig_data_format_srca(fuse_pre_add ? cb_inb : cb_in, cb_ex2pe);
-                binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                    cb_ex2pe);
-                for (auto i : block.local()) {
-                    binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                        cb_ex2pe, 0, i);
-                }
-                tile_regs_commit();
+            // Fix: drain the Unpacker (T0) before the move_d2b so its SrcB data-valid/bank state is
+            // fully committed ahead of the consumer. Draining only the math thread is NOT enough
+            // (math is already in program order); draining the unpacker is what closes the race
+            // (verified: 0 nondeterministic over 5 shapes x 40 iters). Keeps the fast DEST_TO_SRCB
+            // path (no cb_xmm pack/reload) and is ~3% faster than staging through cb_xmm. Gated on
+            // the alias case; the non-alias path is unaffected.
+            reconfig_data_format_srca(fuse_pre_add ? cb_inb : cb_in, cb_ex2pe);
+            binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex2pe);
+            if constexpr (welford_fp32_alias || welford_state_fp32_alias) {
+                UNPACK((tensix_sync()));
             }
+            for (auto i : block.local()) {
+                binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                    cb_ex2pe, 0, i);
+            }
+            tile_regs_commit();
 
             if constexpr (!(do_gamma == 1 or do_beta == 1)) {
                 cb_xmm = cb_out;
