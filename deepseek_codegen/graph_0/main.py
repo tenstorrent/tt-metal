@@ -2995,7 +2995,7 @@ def _main(activations, weights):
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
+        num_links=2,
         topology=ttnn.Topology.Ring,
     )
     ttnn.deallocate(ttnn_reshape_20, False)
@@ -3091,7 +3091,7 @@ def _main(activations, weights):
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
+        num_links=2,
         topology=ttnn.Topology.Ring,
     )
     ttnn.deallocate(ttnn_reshape_21, False)
@@ -3354,7 +3354,7 @@ def _main(activations, weights):
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
+        num_links=2,
         topology=ttnn.Topology.Ring,
         compute_kernel_config=ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -3376,7 +3376,7 @@ def _main(activations, weights):
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
+        num_links=2,
         topology=ttnn.Topology.Ring,
     )
     ttnn.deallocate(ttnn_reshape_30, False)
@@ -3471,7 +3471,7 @@ def _main(activations, weights):
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
+        num_links=2,
         topology=ttnn.Topology.Ring,
     )
     ttnn.deallocate(ttnn_reshape_45, False)
@@ -3776,7 +3776,7 @@ def _main(activations, weights):
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
+        num_links=2,
         topology=ttnn.Topology.Ring,
         compute_kernel_config=ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -3841,7 +3841,7 @@ def _main(activations, weights):
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
+        num_links=2,
         topology=ttnn.Topology.Ring,
     )
     ttnn.deallocate(ttnn_reshape_66, False)
@@ -3895,7 +3895,7 @@ def _main(activations, weights):
         cluster_axis=0,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
+        num_links=2,
         topology=ttnn.Topology.Ring,
     )
     ttnn.deallocate(ttnn_typecast_58, False)
@@ -3924,7 +3924,7 @@ def _main(activations, weights):
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
+        num_links=2,
         topology=ttnn.Topology.Ring,
         compute_kernel_config=ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -3946,7 +3946,7 @@ def _main(activations, weights):
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
+        num_links=2,
         topology=ttnn.Topology.Ring,
     )
     ttnn.deallocate(ttnn_reshape_68, False)
@@ -3982,7 +3982,7 @@ def _main(activations, weights):
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
+        num_links=2,
         topology=ttnn.Topology.Ring,
         compute_kernel_config=ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -4004,7 +4004,7 @@ def _main(activations, weights):
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
+        num_links=2,
         topology=ttnn.Topology.Ring,
     )
     ttnn.deallocate(ttnn_reshape_70, False)
@@ -4049,7 +4049,7 @@ def _main(activations, weights):
         cluster_axis=0,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
+        num_links=2,
         topology=ttnn.Topology.Ring,
         compute_kernel_config=ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -4114,7 +4114,7 @@ def _main(activations, weights):
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
+        num_links=2,
         topology=ttnn.Topology.Ring,
     )
     ttnn.deallocate(ttnn_reshape_73, False)
@@ -4210,7 +4210,7 @@ def _main(activations, weights):
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
+        num_links=2,
         topology=ttnn.Topology.Ring,
     )
     ttnn.deallocate(ttnn_reshape_74, False)
@@ -4391,7 +4391,7 @@ def _main(activations, weights):
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
+        num_links=2,
         topology=ttnn.Topology.Ring,
         compute_kernel_config=ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -4413,7 +4413,7 @@ def _main(activations, weights):
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
+        num_links=2,
         topology=ttnn.Topology.Ring,
     )
     ttnn.deallocate(ttnn_reshape_82, False)
@@ -4508,7 +4508,7 @@ def _main(activations, weights):
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
+        num_links=2,
         topology=ttnn.Topology.Ring,
     )
     ttnn.deallocate(ttnn_reshape_96, False)
@@ -4810,7 +4810,7 @@ def _main(activations, weights):
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
+        num_links=2,
         topology=ttnn.Topology.Ring,
         compute_kernel_config=ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -4880,7 +4880,7 @@ def _main(activations, weights):
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
+        num_links=2,
         topology=ttnn.Topology.Ring,
     )
     ttnn.deallocate(ttnn_reshape_118, False)
@@ -4971,7 +4971,7 @@ def _main(activations, weights):
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
+        num_links=2,
         topology=ttnn.Topology.Ring,
         compute_kernel_config=ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -4993,7 +4993,7 @@ def _main(activations, weights):
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
+        num_links=2,
         topology=ttnn.Topology.Ring,
     )
     ttnn.deallocate(ttnn_reshape_122, False)
@@ -5098,7 +5098,7 @@ def _main(activations, weights):
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
+        num_links=2,
         topology=ttnn.Topology.Ring,
         compute_kernel_config=ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -5120,7 +5120,7 @@ def _main(activations, weights):
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
+        num_links=2,
         topology=ttnn.Topology.Ring,
     )
     ttnn.deallocate(ttnn_reshape_155, False)
@@ -5156,7 +5156,7 @@ def _main(activations, weights):
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
+        num_links=2,
         topology=ttnn.Topology.Ring,
         compute_kernel_config=ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -5178,7 +5178,7 @@ def _main(activations, weights):
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
+        num_links=2,
         topology=ttnn.Topology.Ring,
     )
     ttnn.deallocate(ttnn_reshape_157, False)
@@ -5269,7 +5269,7 @@ def _main(activations, weights):
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
+        num_links=2,
         topology=ttnn.Topology.Ring,
     )
     ttnn.deallocate(ttnn_reshape_159, False)
@@ -5350,7 +5350,7 @@ def _main(activations, weights):
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
+        num_links=2,
         topology=ttnn.Topology.Ring,
         compute_kernel_config=ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -5372,7 +5372,7 @@ def _main(activations, weights):
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
+        num_links=2,
         topology=ttnn.Topology.Ring,
     )
     ttnn.deallocate(ttnn_reshape_162, False)
@@ -5401,7 +5401,7 @@ def _main(activations, weights):
         cluster_axis=0,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
+        num_links=2,
         topology=ttnn.Topology.Ring,
     )
     ttnn_add_29 = ttnn.add(
