@@ -115,3 +115,48 @@ def test_vision_stage_pcc():
     pcc = _compute_pcc(ref_out, out)
     print(f"\n✅ Vision stage PCC vs torch: {pcc:.6f}  (shape {tuple(out.shape)})")
     assert pcc >= 0.997, f"PCC {pcc:.6f} < 0.997"
+
+
+@pytest.mark.skipif(
+    not (CHECKPOINT_DIR / "model.safetensors").exists(),
+    reason=f"checkpoint not found at {CHECKPOINT_DIR}",
+)
+def test_prefill_stage_pcc():
+    """18-chip VLM prefill chain vs torch PaliGemmaBackbone.forward_vlm. Target PCC ≥ 0.99."""
+    from models.experimental.pi0_5.common.checkpoint_meta import action_horizon_from_checkpoint
+    from models.experimental.pi0_5.common.configs import Pi0_5ModelConfig
+    from models.experimental.pi0_5.common.weight_loader import Pi0_5WeightLoader
+    from models.experimental.pi0_5.reference.torch_paligemma import Pi0_5PaliGemmaBackbone as TorchBackbone
+    from models.experimental.pi0_5.tt.tt_bh_glx.stage_prefill import StagePrefill
+
+    cfg = Pi0_5ModelConfig(action_horizon=action_horizon_from_checkpoint(CHECKPOINT_DIR), num_denoising_steps=5)
+    loader = Pi0_5WeightLoader(str(CHECKPOINT_DIR))
+    weights = loader.categorized_weights
+
+    # Modest tile-aligned prefix length keeps the 18-chip chain fast.
+    B = 1
+    seq_len = 128
+    torch.manual_seed(SEED)
+    prefix_embs = torch.randn(B, seq_len, cfg.vlm_config.width) * 0.5
+
+    # Torch reference (full 18-block chain + final RMS norm).
+    ref = TorchBackbone(cfg, weights)
+    with torch.no_grad():
+        ref_out, _ = ref.forward_vlm(prefix_embs, attention_mask=None, position_ids=None, use_cache=False)
+
+    with open_galaxy_mesh(l1_small_size=24576) as h:
+        stage = StagePrefill(cfg, weights, h)
+        prefix_ttnn = ttnn.from_torch(
+            prefix_embs,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=h.prefill_per_chip[0],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        out_ttnn, _ = stage.run(prefix_ttnn, attention_mask=None, position_ids=None)
+        out = ttnn.to_torch(out_ttnn)
+
+    assert out.shape == ref_out.shape, f"shape mismatch: {tuple(out.shape)} vs {tuple(ref_out.shape)}"
+    pcc = _compute_pcc(ref_out, out)
+    print(f"\n✅ Prefill stage PCC vs torch: {pcc:.6f}  (shape {tuple(out.shape)})")
+    assert pcc >= 0.99, f"PCC {pcc:.6f} < 0.99"
