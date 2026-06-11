@@ -680,8 +680,8 @@ def run_decoder_layer_prefill_update_cache_tt(
                 memory_config=memory_config,
             )
         if mlp_compute_kernel_config is None:
-            return ttnn.linear(a, b)
-        return ttnn.linear(a, b, compute_kernel_config=mlp_compute_kernel_config)
+            return ttnn.linear(a, b, memory_config=memory_config)
+        return ttnn.linear(a, b, compute_kernel_config=mlp_compute_kernel_config, memory_config=memory_config)
 
     _interleaved_cache: dict[int, ttnn.Tensor] = {}
 

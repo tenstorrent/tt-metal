@@ -76,15 +76,30 @@ def _env_experts_dtype() -> ttnn.DataType:
     raise ValueError(f"Invalid GLM4_MOE_LITE_EXPERTS_TT_DTYPE={override!r}")
 
 
-def _env_dense_dtype() -> ttnn.DataType:
-    """Return TT dtype for dense/non-router projection weights.
+def _dtype_cache_tag(dtype: ttnn.DataType) -> str:
+    if dtype == ttnn.bfloat4_b:
+        return "bf4"
+    if dtype == ttnn.bfloat8_b:
+        return "bf8"
+    if dtype == ttnn.bfloat16:
+        return "bf16"
+    return str(dtype).split(".")[-1]
 
-    Default is BF16 for correctness. BF8 is exposed as an opt-in experiment
-    for throughput tuning.
-    """
+
+# Mixed matmul weight dtypes (profiler-tuned):
+# - BFP8: medium/small/latency-bound (attention linears, per-head kv_b, router gate)
+# - BFP4: large DRAM-bandwidth-bound (shared/dense MLP gate/up/down, LM head, routed experts)
+_ATTN_PROJ_DTYPE = ttnn.bfloat8_b
+_KVB_DTYPE = ttnn.bfloat8_b
+_MLP_LARGE_DTYPE = ttnn.bfloat4_b
+_ROUTER_GATE_DTYPE = ttnn.bfloat8_b
+
+
+def _env_dense_dtype() -> ttnn.DataType:
+    """Return TT dtype for fused-KV and other dense helpers (default BFP8)."""
     override = os.environ.get("GLM4_MOE_LITE_DENSE_TT_DTYPE", "").strip().lower()
     if not override:
-        return ttnn.bfloat16
+        return _ATTN_PROJ_DTYPE
     if override in {"bf8", "bfloat8_b"}:
         return ttnn.bfloat8_b
     if override in {"bf16", "bfloat16"}:
@@ -123,14 +138,16 @@ def _env_dram_sharded_attn() -> bool:
 def _env_lm_head_weight_dtype() -> ttnn.DataType:
     """Weight dtype for the LM head (hidden → vocab logits projection).
 
-    Defaults to BFP8 — halves DRAM bandwidth vs BF16 (635MB → 317MB for
-    K=2048, N=154880).  Override via GLM4_MOE_LITE_LM_HEAD_DTYPE=bf16 if
-    quality regression is observed.
+    Defaults to BFP4 for DRAM bandwidth. Override via GLM4_MOE_LITE_LM_HEAD_DTYPE.
     """
     override = os.environ.get("GLM4_MOE_LITE_LM_HEAD_DTYPE", "").strip().lower()
     if override in {"bf16", "bfloat16"}:
         return ttnn.bfloat16
-    return ttnn.bfloat8_b  # default: BFP8
+    if override in {"bf8", "bfloat8_b"}:
+        return ttnn.bfloat8_b
+    if override in {"bf4", "bfloat4_b"}:
+        return ttnn.bfloat4_b
+    return ttnn.bfloat4_b  # default: BFP4
 
 
 def _env_dram_sharded_lm_head() -> bool:
@@ -646,27 +663,28 @@ def convert_decoder_layer_weights(
     attn_proj_mapper = None if attn_dp else attn_row_mapper
     attn_proj_variant = f"{attn_variant}_attndp" if attn_dp and attn_variant else attn_variant
 
-    # All MLA projection weights use BFP8 (DRAM-bandwidth-bound; halves weight-side DRAM traffic).
-    attn_proj_dtype = ttnn.bfloat8_b
+    # MLA linears (w_q_a/b, w_kv_a, w_o): BFP8 — medium matmuls; BFP4 unpack hurts latency.
+    attn_proj_dtype = _ATTN_PROJ_DTYPE
+    attn_proj_tag = _dtype_cache_tag(attn_proj_dtype)
 
     w_q_a = _linear_weight_tt(
         device=device,
         torch_weight_out_in=state[f"model.layers.{layer_idx}.self_attn.q_a_proj.weight"],
-        cache_file=c("w_q_a", attn_proj_variant),
+        cache_file=c("w_q_a", f"{attn_proj_variant}_{attn_proj_tag}" if attn_proj_variant else attn_proj_tag),
         dtype=attn_proj_dtype,
         mesh_mapper=attn_proj_mapper,
     )
     w_q_b = _linear_weight_tt(
         device=device,
         torch_weight_out_in=state[f"model.layers.{layer_idx}.self_attn.q_b_proj.weight"],
-        cache_file=c("w_q_b", attn_proj_variant),
+        cache_file=c("w_q_b", f"{attn_proj_variant}_{attn_proj_tag}" if attn_proj_variant else attn_proj_tag),
         dtype=attn_proj_dtype,
         mesh_mapper=attn_proj_mapper,
     )
     w_kv_a = _linear_weight_tt(
         device=device,
         torch_weight_out_in=state[f"model.layers.{layer_idx}.self_attn.kv_a_proj_with_mqa.weight"],
-        cache_file=c("w_kv_a", attn_proj_variant),
+        cache_file=c("w_kv_a", f"{attn_proj_variant}_{attn_proj_tag}" if attn_proj_variant else attn_proj_tag),
         dtype=attn_proj_dtype,
         mesh_mapper=attn_proj_mapper,
     )
@@ -685,7 +703,7 @@ def convert_decoder_layer_weights(
         w_q_kv_a = _linear_weight_tt(
             device=device,
             torch_weight_out_in=fused_out_in,
-            cache_file=c("w_q_kv_a", fused_base),
+            cache_file=c("w_q_kv_a", f"{fused_base}_{attn_proj_tag}"),
             dtype=attn_proj_dtype,
             mesh_mapper=attn_proj_mapper,
         )
@@ -710,9 +728,9 @@ def convert_decoder_layer_weights(
             w_kv_b1_mapper = None  # replicate
             w_kv_b1_variant = f"{attn_variant}_rep"
 
-    # Per-head kv_b weights use BFP8 (DRAM-bandwidth-bound); variant suffix kept for cache explicitness.
-    kvb_dtype = ttnn.bfloat8_b
-    kvb_tag = "bf8"
+    # Per-head kv_b weights: BFP8 — small per-head matmuls are latency-bound.
+    kvb_dtype = _KVB_DTYPE
+    kvb_tag = _dtype_cache_tag(kvb_dtype)
     w_kv_b1 = _per_head_weight_tt(
         device=device,
         torch_weight=w_kv_b1_torch,
@@ -747,7 +765,7 @@ def convert_decoder_layer_weights(
     w_o = _linear_weight_tt(
         device=device,
         torch_weight_out_in=state[f"model.layers.{layer_idx}.self_attn.o_proj.weight"],
-        cache_file=c("w_o", attn_variant),
+        cache_file=c("w_o", f"{attn_variant}_{attn_proj_tag}" if attn_variant else attn_proj_tag),
         dtype=attn_proj_dtype,
         mesh_mapper=attn_row_mapper,
     )
@@ -786,26 +804,27 @@ def convert_decoder_layer_weights(
         mlp_gate_mapper = _tp_mesh_mapper(device, shard_dim=3)
         mlp_down_mapper = _tp_mesh_mapper(device, shard_dim=2)
 
-    # Shared/dense MLP weights use BFP8 (DRAM-bandwidth-saturated; halves weight DRAM traffic).
-    mlp_dtype = ttnn.bfloat8_b
+    # Shared/dense MLP gate/up/down: BFP4 — large projections are DRAM-bandwidth-bound.
+    mlp_dtype = _MLP_LARGE_DTYPE
+    mlp_tag = _dtype_cache_tag(mlp_dtype)
     w_mlp_gate = _linear_weight_tt(
         device=device,
         torch_weight_out_in=state[f"{mlp_prefix}gate_proj.weight"],
-        cache_file=c("w_mlp_gate", mlp_variant),
+        cache_file=c("w_mlp_gate", f"{mlp_variant}_{mlp_tag}" if mlp_variant else mlp_tag),
         dtype=mlp_dtype,
         mesh_mapper=mlp_gate_mapper,
     )
     w_mlp_up = _linear_weight_tt(
         device=device,
         torch_weight_out_in=state[f"{mlp_prefix}up_proj.weight"],
-        cache_file=c("w_mlp_up", mlp_variant),
+        cache_file=c("w_mlp_up", f"{mlp_variant}_{mlp_tag}" if mlp_variant else mlp_tag),
         dtype=mlp_dtype,
         mesh_mapper=mlp_gate_mapper,
     )
     w_mlp_down = _linear_weight_tt(
         device=device,
         torch_weight_out_in=state[f"{mlp_prefix}down_proj.weight"],
-        cache_file=c("w_mlp_down", mlp_variant),
+        cache_file=c("w_mlp_down", f"{mlp_variant}_{mlp_tag}" if mlp_variant else mlp_tag),
         dtype=mlp_dtype,
         mesh_mapper=mlp_down_mapper,
     )
@@ -829,7 +848,7 @@ def convert_decoder_layer_weights(
             w_mlp_gate_up = _linear_weight_tt(
                 device=device,
                 torch_weight_out_in=gate_up_torch,
-                cache_file=c("w_mlp_gate_up", mlp_variant),
+                cache_file=c("w_mlp_gate_up", f"{mlp_variant}_{mlp_tag}" if mlp_variant else mlp_tag),
                 dtype=mlp_dtype,
                 mesh_mapper=mlp_gate_mapper,
             )
@@ -838,11 +857,12 @@ def convert_decoder_layer_weights(
     moe: Optional[MoELayerTTWeights] = None
     if enable_moe and not dense_layer:
         # Gate: hidden -> n_routed_experts
+        router_tag = _dtype_cache_tag(_ROUTER_GATE_DTYPE)
         w_gate = _linear_weight_tt(
             device=device,
             torch_weight_out_in=state[f"model.layers.{layer_idx}.mlp.gate.weight"],
-            cache_file=c("w_moe_gate"),
-            dtype=ttnn.bfloat16,
+            cache_file=c("w_moe_gate", f"{router_tag}_v2"),
+            dtype=_ROUTER_GATE_DTYPE,
         )
         # IMPORTANT: `e_score_correction_bias` is float32 in the checkpoint and has very small
         # expert-to-expert deltas (~1e-3) around a large constant offset (~9). The TT `topk`

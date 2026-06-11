@@ -54,12 +54,9 @@ LM_HEAD_MATMUL_OVERRIDES = Matmul1dProgOverrides(
 )
 
 
-# Default compute kernel config for prefill 1D+ws matmuls.
-# Without an explicit CKC, TTNN defaults to LoFi when a program_config is given,
-# which degrades accuracy.  HiFi2 matches what ttnn.linear auto-selects for
-# BFP8 weights without an explicit program config.
+# Default compute kernel config for prefill 1D+ws matmuls (LoFi + BFP4 weights).
 _PREFILL_CKC = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.HiFi2,
+    math_fidelity=ttnn.MathFidelity.LoFi,
     math_approx_mode=False,
     fp32_dest_acc_en=False,
     packer_l1_acc=True,
@@ -78,6 +75,37 @@ ROUTER_FUSED_SIGMOID = ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)
 
 def prefill_matmul_tuned_enabled() -> bool:
     return os.environ.get("GLM4_MOE_LITE_PREFILL_MATMUL_TUNED", "").strip() == "1"
+
+
+def prepare_sparse_moe_matmul_in0(
+    a: ttnn.Tensor,
+    *,
+    memory_config: ttnn.MemoryConfig | None = None,
+    consume_input: bool = False,
+) -> tuple[ttnn.Tensor, bool]:
+    """Cast sparse MoE matmul activations to BFP8 (sparse expert path only).
+
+    Returns (tensor, deallocate_after_use).
+    """
+    if a.dtype == ttnn.bfloat8_b:
+        return a, False
+    a_mc = a.memory_config()
+    if a_mc.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        return a, False
+    mc = memory_config if memory_config is not None else a_mc
+    if mc.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        mc = ttnn.L1_MEMORY_CONFIG
+    a_work = a
+    gathered = False
+    if not _is_l1_interleaved(a_mc) and a_mc.buffer_type == ttnn.BufferType.L1:
+        a_work = ttnn.to_memory_config(a, ttnn.L1_MEMORY_CONFIG)
+        gathered = True
+    out = ttnn.typecast(a_work, dtype=ttnn.bfloat8_b, memory_config=mc)
+    if gathered:
+        ttnn.deallocate(a_work, force=False)
+    elif consume_input:
+        ttnn.deallocate(a, force=False)
+    return out, True
 
 
 def _weight_tile_shape(b: ttnn.Tensor) -> tuple[int, int]:
@@ -397,10 +425,6 @@ def lm_head_linear(
 ) -> ttnn.Tensor:
     """LM head: interleaved activations + weights with tuned 1D multicast program config.
 
-    Setting ``program_config`` flips ttnn.linear's implicit fidelity default from HiFi2 to LoFi
-    (matmul_device_operation.cpp::create_matmul_attributes). We pin HiFi2 explicitly to match
-    the implicit default and avoid LoFi quality loss on the logit reduction.
-
     When the weight ``b`` is DRAM WIDTH_SHARDED (set via GLM4_MOE_LITE_DRAM_SHARDED_LM_HEAD=1),
     routes to ``_lm_head_dram_sharded`` which uses parallel direct-DRAM reads instead of the
     NOC weight multicast, achieving higher bandwidth for the large M=32×K=2048×N=vocab matmul.
@@ -430,7 +454,7 @@ def lm_head_linear(
 
 def _lm_head_compute_kernel_config() -> ttnn.WormholeComputeKernelConfig:
     return ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=False,
         fp32_dest_acc_en=False,
         packer_l1_acc=True,

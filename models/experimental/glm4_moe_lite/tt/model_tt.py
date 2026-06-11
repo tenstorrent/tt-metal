@@ -309,7 +309,12 @@ class Glm4MoeLiteDenseOnlyTT:
             lm_head_tp_size = int(num_devices)
             lm_head_vocab_per_shard = vocab // int(num_devices)
         lm_head_dtype = _env_lm_head_weight_dtype()
-        lm_head_dtype_tag = "bf8" if lm_head_dtype == ttnn.bfloat8_b else "bf16"
+        if lm_head_dtype == ttnn.bfloat4_b:
+            lm_head_dtype_tag = "bf4"
+        elif lm_head_dtype == ttnn.bfloat8_b:
+            lm_head_dtype_tag = "bf8"
+        else:
+            lm_head_dtype_tag = "bf16"
         _lm_head_cache_key = (
             f"lm_head_w_{lm_head_variant}_{lm_head_dtype_tag}" if lm_head_variant else f"lm_head_w_{lm_head_dtype_tag}"
         )
