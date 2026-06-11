@@ -18,6 +18,7 @@ TEST_PADDING_VALUE = -42
 @pytest.mark.parametrize(
     "batch_size, h, w, dim",
     [
+        (1, 128, 128000, -1),
         (1, 32, 128000, -1),
         (1, 2048, 32000, -1),
         (1, 512, 32000, -1),
