@@ -17,6 +17,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 
 
 class GateComputeMode(Enum):
@@ -24,11 +25,15 @@ class GateComputeMode(Enum):
 
     The gate has two stages: matmul (x @ W_gate) and grouped_gate (topk routing).
     Each can independently run on device (TTNN) or host (torch).
-    The device grouped-gate has two variants: bf16 (default) and fp32.
+    The device gate has two precision variants: bf16 (default) and fp32.
+
+    The device gate routing rule is selected from the model config: with a single
+    expert group (n_expert_groups == 1, e.g. Kimi) grouped routing collapses to a
+    plain ttnn.topk; otherwise the grouped-gate kernel is used.
     """
 
-    DEVICE = "device"  # matmul device, grouped gate device (bf16)
-    DEVICE_FP32 = "device_fp32"  # matmul device, grouped gate device (fp32)
+    DEVICE = "device"  # matmul device, gate device (bf16)
+    DEVICE_FP32 = "device_fp32"  # matmul device, gate device (fp32)
     HOST_GROUPED_GATE = "host_grouped_gate"  # matmul device, grouped gate host
     HOST_MATMUL = "host_matmul"  # matmul host, grouped gate device (bf16)
     HOST_ALL = "host_all"  # matmul host, grouped gate host
@@ -41,19 +46,35 @@ class TtMoEGateConfig:
     ccl_config: dict = field(default_factory=lambda: {"DISPATCH_AXIS": 0, "TP_AXIS": 1, "NUM_LINKS": 2})
     mm_configs: dict = field(
         default_factory=lambda: {
-            # Keyed by (sp_dim, per_device_emb_dim); forward() looks up the tuple.
-            # Missing key → TTNN auto-picks program config.
-            (4096, DeepSeekV3Config.EMB_SIZE // 4): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
-                in0_block_w=56,
-                out_subblock_h=2,
-                out_subblock_w=4,
-                out_block_h=2,
-                out_block_w=4,
-                per_core_M=2,
-                per_core_N=8,
-                fuse_batch=True,
-                mcast_in0=False,
+            # Keyed by (sp_dim, per_device_emb_dim, n_routed_experts); forward() looks up the tuple.
+            # per_core_N = n_routed_experts / 32 (tile width). Missing key → TTNN auto-picks.
+            (4096, DeepSeekV3Config.EMB_SIZE // 4, DeepSeekV3Config.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
+                    in0_block_w=56,
+                    out_subblock_h=2,
+                    out_subblock_w=4,
+                    out_block_h=2,
+                    out_block_w=4,
+                    per_core_M=2,
+                    per_core_N=8,
+                    fuse_batch=True,
+                    mcast_in0=False,
+                )
+            ),
+            (4096, KimiK26Config.EMB_SIZE // 4, KimiK26Config.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
+                    in0_block_w=56,
+                    out_subblock_h=2,
+                    out_subblock_w=4,
+                    out_block_h=2,
+                    out_block_w=4,
+                    per_core_M=2,
+                    per_core_N=12,
+                    fuse_batch=True,
+                    mcast_in0=False,
+                )
             ),
             "COMPUTE_CONFIG": ttnn.types.BlackholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -390,7 +411,7 @@ class TtMoEGatePrefill(LightweightModule):
         assert (
             per_device_dim * n_tp_devices == self.config.dim
         ), f"Expected per-device dim {self.config.dim // n_tp_devices}, got {per_device_dim}"
-        config_key = (self.config.sp_dim, per_device_dim)
+        config_key = (self.config.sp_dim, per_device_dim, self.config.n_routed_experts)
         program_config = self.config.mm_configs.get(config_key)
         if program_config is None:
             logger.warning(f"[MoeGate] No matmul program config for {config_key}, using TTNN default")
@@ -452,6 +473,64 @@ class TtMoEGatePrefill(LightweightModule):
         ttnn.deallocate(bias_f32)
         return ttnn_scores, ttnn_top_k_experts_indices
 
+    def _device_topk_gate(self, logits: ttnn.Tensor, fp32: bool = False) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Plain top-k routing for single-group models (n_expert_groups == 1).
+
+        With one expert group the grouped routing in ``grouped_gate_golden`` is a
+        no-op (the only group is always selected), so it collapses to:
+            scores  = sigmoid(logits)
+            biased  = scores + bias                 # bias used for selection only
+            indices = topk(biased, n_activated_experts)
+            weights = gather(scores, indices)       # weights from UNBIASED scores
+            weights = weights / (sum(weights) + eps) * route_scale
+
+        When ``fp32`` is True, sigmoid/bias/gather/normalize run in float32 for
+        tighter PCC; only the ``ttnn.topk`` selection runs in bf16 (the op does
+        not accept fp32 input). Output weights are returned in bf16 to match the
+        grouped-gate device path.
+
+        Returns (scores, indices) matching the grouped-gate device path.
+        """
+        n_activated = self.config.n_activated_experts
+        epsilon = 1e-20
+
+        if fp32:
+            logits_f32 = ttnn.typecast(logits, ttnn.float32)
+            bias = ttnn.typecast(self.bias, ttnn.float32)
+            scores = ttnn.sigmoid(logits_f32)
+            ttnn.deallocate(logits_f32)
+        else:
+            bias = self.bias
+            scores = ttnn.sigmoid(logits)
+
+        biased = ttnn.add(scores, bias)
+        if fp32:
+            ttnn.deallocate(bias)
+
+        # ttnn.topk requires bf16 input; the values are discarded since the final
+        # weights come from the unbiased sigmoid scores.
+        biased_bf16 = ttnn.typecast(biased, ttnn.bfloat16) if fp32 else biased
+        _, indices = ttnn.topk(biased_bf16, k=n_activated, dim=-1, largest=True, sorted=True)
+        ttnn.deallocate(biased)
+        if fp32:
+            ttnn.deallocate(biased_bf16)
+
+        # Gather unbiased scores at the selected expert indices: (tokens, k).
+        chosen = ttnn.gather(scores, dim=-1, index=indices)
+        ttnn.deallocate(scores)
+
+        # Normalize so the top-k weights sum to 1 per token, then apply route scale.
+        denom = ttnn.sum(chosen, dim=-1, keepdim=True)
+        denom = ttnn.add(denom, epsilon)
+        weights = ttnn.div(chosen, denom)
+        ttnn.deallocate(chosen)
+        ttnn.deallocate(denom)
+        weights = ttnn.mul(weights, self.config.route_scale)
+        if fp32:
+            weights = ttnn.typecast(weights, ttnn.bfloat16)
+
+        return weights, indices
+
     def _host_grouped_gate(self, host_logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Run grouped_gate_golden on host. Returns (indices, scores)."""
         return self.reference_model.grouped_gate_golden(
@@ -483,11 +562,17 @@ class TtMoEGatePrefill(LightweightModule):
 
         # ---- Phase 2: Grouped gate ----
         signpost(header="moe_gate_grouped_gate")
+        # Single expert group (e.g. Kimi) collapses grouped routing to a plain top-k.
+        single_group = self.config.n_expert_groups == 1
         if mode == GateComputeMode.DEVICE:
-            ttnn_scores, ttnn_top_k_experts_indices = self._device_grouped_gate(logits)
+            ttnn_scores, ttnn_top_k_experts_indices = (
+                self._device_topk_gate(logits) if single_group else self._device_grouped_gate(logits)
+            )
 
         elif mode == GateComputeMode.DEVICE_FP32:
-            ttnn_scores, ttnn_top_k_experts_indices = self._device_grouped_gate_fp32(logits)
+            ttnn_scores, ttnn_top_k_experts_indices = (
+                self._device_topk_gate(logits, fp32=True) if single_group else self._device_grouped_gate_fp32(logits)
+            )
 
         elif mode == GateComputeMode.HOST_GROUPED_GATE:
             host_logits = self._compose_logits_to_host(logits)
