@@ -52,6 +52,18 @@ void kernel_main() {
     const uint32_t out_m_tile_offset = get_arg_val<uint32_t>(argidx++);
     const uint32_t out_M_tiles_total = get_arg_val<uint32_t>(argidx++);
 
+#ifdef REDUCE_K
+    // Split-K plan B: vertical running-sum reduction (see dm_in0_sender.cpp for the full description).
+    const uint32_t reduce_up_noc_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t reduce_up_noc_y = get_arg_val<uint32_t>(argidx++);
+    const uint32_t reduce_down_noc_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t reduce_down_noc_y = get_arg_val<uint32_t>(argidx++);
+    const uint32_t is_reduce_top = get_arg_val<uint32_t>(argidx++);
+    const uint32_t is_reduce_bottom = get_arg_val<uint32_t>(argidx++);
+    const uint32_t reduce_ready_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
+    const uint32_t reduce_recv_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
+#endif
+
 #ifdef FUSE_TERNARY
     // Fuse addcmul - read runtime addresses before setting out_addr_rt_arg_idx
     const uint32_t ternary_a_addr = get_arg_val<uint32_t>(argidx++);
@@ -113,6 +125,17 @@ void kernel_main() {
     constexpr uint32_t cb_id_out = tt::CBIndex::c_2;
 #ifdef FUSE_BIAS
     constexpr uint32_t cb_id_in2 = tt::CBIndex::c_4;
+#endif
+#ifdef REDUCE_K
+    constexpr uint32_t cb_reduce = tt::CBIndex::c_7;  // running sum forwarded up from the band below
+    constexpr uint32_t reduce_block_bytes = out_block_num_tiles * out_tile_size;
+    volatile tt_l1_ptr uint32_t* reduce_ready_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_ready_semaphore_addr);
+    volatile tt_l1_ptr uint32_t* reduce_recv_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_recv_semaphore_addr);
+    const uint64_t reduce_down_ready_noc_addr =
+        get_noc_addr(reduce_down_noc_x, reduce_down_noc_y, reduce_ready_semaphore_addr);
+    const uint64_t reduce_up_recv_noc_addr = get_noc_addr(reduce_up_noc_x, reduce_up_noc_y, reduce_recv_semaphore_addr);
 #endif
 
 #ifdef FUSE_AG
@@ -442,6 +465,42 @@ void kernel_main() {
             defer_write = !is_last_block;
             defer_write = defer_write && !is_injector_core;
 
+#ifdef REDUCE_K
+            // Split-K plan B: fused L1 column reduction (see dm_in0_sender.cpp for the full description).
+            // Replaces the output write with a per-block running-sum handshake UP the K-band column.
+            defer_write = false;
+            if constexpr (is_output_writer) {
+                if (!is_reduce_bottom) {
+                    cb_reserve_back(cb_reduce, out_block_num_tiles);
+                    noc_semaphore_set(reduce_recv_semaphore_addr_ptr, INVALID);
+                    noc_semaphore_inc(reduce_down_ready_noc_addr, 1);
+                    noc_semaphore_wait(reduce_recv_semaphore_addr_ptr, VALID);
+                    cb_push_back(cb_reduce, out_block_num_tiles);
+                }
+                if (is_reduce_top) {
+                    write_block_sync_granular<M_block_tiles, N_block_tiles>(
+                        std::get<0>(outputs_tuple),
+                        out_shape,
+                        cb_id_out,
+                        out_tile_size,
+                        m_tile,  // out_m_tile_offset == 0 for plan B (single [M, N] target)
+                        m_tile_end,
+                        n_tile,
+                        n_tile_end);
+                } else {
+                    cb_wait_front(cb_id_out, out_block_num_tiles);
+                    uint32_t out_read_ptr = get_read_ptr(cb_id_out);
+                    noc_semaphore_wait(reduce_ready_semaphore_addr_ptr, 1);
+                    noc_semaphore_set(reduce_ready_semaphore_addr_ptr, 0);
+                    uint64_t reduce_dst_noc_addr =
+                        get_noc_addr(reduce_up_noc_x, reduce_up_noc_y, get_write_ptr(cb_reduce));
+                    noc_async_write(out_read_ptr, reduce_dst_noc_addr, reduce_block_bytes);
+                    noc_async_writes_flushed();
+                    noc_semaphore_set_remote(in1_valid_semaphore_addr, reduce_up_recv_noc_addr);
+                    cb_pop_front(cb_id_out, out_block_num_tiles);
+                }
+            }
+#else
             if (!defer_write) {
                 if constexpr (is_output_writer) {
                     // write_block_sync_granular_split is more generic (support multiple output tensors)
@@ -475,6 +534,7 @@ void kernel_main() {
 #endif
                 }
             }
+#endif  // REDUCE_K
         }
     }
     noc_async_write_barrier();

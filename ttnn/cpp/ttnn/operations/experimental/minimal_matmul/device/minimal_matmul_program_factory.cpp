@@ -319,10 +319,12 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     const char* k_fused_env = std::getenv("TT_MM_K_FUSED");
     const bool num_k_fused =
         (k_fused_env != nullptr && std::atoi(k_fused_env) != 0) && !config.has_value() && !fuse_op && !fuse_srs;
+    // Plan B (fused on-device column reduction) is incompatible with the mcast prototypes (they own the
+    // same store-and-forward semaphore protocol the reduction reuses the pattern of) and with N-chunk
+    // split outputs. Keep B on the plain unicast path for now.
     TT_FATAL(
-        !(num_k_fused && num_k_slices > 1),
-        "TT_MM_K_FUSED (plan B, fused on-device K reduction) is not yet wired; use the A2 path "
-        "(TT_MM_K_SLICES without TT_MM_K_FUSED) for now.");
+        !(num_k_fused && num_k_slices == 1),
+        "TT_MM_K_FUSED (plan B) requires TT_MM_K_SLICES > 1 (the fused reduction needs >1 K-band).");
     // Sub-grid K_block refinement: a sliced sub-grid has small per-core M/N, so the default K_block=8
     // makes the per-k-block work too coarse — finer K (4) pipelines read/forward/compute better.
     // Measured ~+8%/+6%/+3.6% on sliced 4864x4096x512 / 4864x4096x32 / 32x2048x2048. Only on the auto
@@ -555,6 +557,15 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     auto in1_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     auto in1_valid_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, VALID);
 
+    // Split-K plan B (fused L1 column reduction): two semaphores for the vertical running-sum handshake.
+    //  - reduce_ready: lives on the band-BELOW (sender); the band-above increments it to signal "my
+    //    cb_reduce slot is free, you may write" (mirror of in0/in1 sender_semaphore).
+    //  - reduce_recv:  lives on the band-ABOVE (receiver); the band-below sets it VALID after writing the
+    //    partial into the receiver's cb_reduce (mirror of in0/in1 receiver_semaphore). The VALID source
+    //    reuses the writer's existing in{0,1}_valid_semaphore (a constant VALID cell).
+    auto reduce_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
+    auto reduce_recv_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
+
     uint32_t in0_cb_id = tt::CBIndex::c_0;
     tt::tt_metal::create_cb(in0_cb_id, program, core_grid, in0_tile_size, in0_cb_num_tiles, in0_data_format);
 
@@ -567,6 +578,16 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     uint32_t intermediate_cb_id = tt::CBIndex::c_3;
     tt::tt_metal::create_cb(
         intermediate_cb_id, program, core_grid, intermediate_tile_size, interm_cb_num_tiles, intermediate_data_format);
+
+    // Split-K plan B: cb_reduce (c_7) holds the running sum forwarded UP the column from the band below.
+    // The band-below's output writer NoC-writes its out_cb (output_data_format) here, then compute adds it
+    // to this band's own partial. Single block (1 slot) => its L1 write pointer is constant on every core,
+    // so the remote writer can target it with its own local write pointer (no cross-core ptr tracking).
+    if (num_k_fused) {
+        uint32_t reduce_cb_id = tt::CBIndex::c_7;
+        tt::tt_metal::create_cb(
+            reduce_cb_id, program, core_grid, out_tile_size, out_block_num_tiles, output_data_format);
+    }
 
     if (use_bias) {
         uint32_t in2_cb_id = tt::CBIndex::c_4;
@@ -748,6 +769,15 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     bool in0_is_output_writer = !transpose_core_grid;
     bool in1_is_output_writer = transpose_core_grid;
 
+    // Split-K plan B: REDUCE_K is defined only on the OUTPUT-WRITER DM kernel (the one that owns out_cb)
+    // and on compute. The non-writer DM keeps the plain defines. The reduction dataflow lives in the
+    // writer; compute emits the running sum (copy on the bottom band, add on the rest).
+    std::map<std::string, std::string> in0_defines = defines;
+    std::map<std::string, std::string> in1_defines = defines;
+    if (num_k_fused) {
+        (in0_is_output_writer ? in0_defines : in1_defines)["REDUCE_K"] = "1";
+    }
+
     std::vector<uint32_t> in0_sender_compile_time_args = {
         M_tiles,
         padded_M_tiles,
@@ -789,7 +819,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             .noc = in0_noc,
             .noc_mode = dm_noc_mode,
             .compile_args = in0_sender_compile_time_args,
-            .defines = (fuse_op && fused_op_signaler->read_local_slice_from_input) ? in0_injector_defines : defines});
+            .defines =
+                (fuse_op && fused_op_signaler->read_local_slice_from_input) ? in0_injector_defines : in0_defines});
 
     std::vector<uint32_t> in0_receiver_compile_time_args = {
         M_tiles,
@@ -833,7 +864,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             .noc = in0_noc,
             .noc_mode = dm_noc_mode,
             .compile_args = in0_receiver_compile_time_args,
-            .defines = defines});
+            .defines = in0_defines});
 
     std::vector<uint32_t> in1_sender_compile_time_args = {
         M_tiles,
@@ -876,7 +907,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             .noc = in1_noc,
             .noc_mode = dm_noc_mode,
             .compile_args = in1_sender_compile_time_args,
-            .defines = defines});
+            .defines = in1_defines});
 
     std::vector<uint32_t> in1_receiver_compile_time_args = {
         M_tiles,
@@ -919,7 +950,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             .noc = in1_noc,
             .noc_mode = dm_noc_mode,
             .compile_args = in1_receiver_compile_time_args,
-            .defines = defines});
+            .defines = in1_defines});
 
     std::vector<uint32_t> compute_compile_time_args = {
         K_blocks,
@@ -932,6 +963,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         subblock_w};
 
     auto compute_defines = defines;
+    if (num_k_fused) {
+        compute_defines["REDUCE_K"] = "1";
+    }
     std::map<std::string, std::string> compute_activation_defines;
     if (fused_activation.has_value()) {
         compute_activation_defines = ttnn::operations::unary::utils::get_defines(
@@ -992,12 +1026,24 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         uint32_t in1_idx = transpose_core_grid ? y_idx : x_idx;
         // Split-K per-core: which K-block this band starts at, and where its partial lands in the
         // [num_k_slices * M, N] output (offset down by kband full-M stripes). num_k_slices=1 => all 0.
+        // Plan B (num_k_fused) instead reduces in L1 to a single [M, N], so every band targets the same
+        // output (offset 0, total M_tiles) and only the top band actually writes it.
         const uint32_t k_block_start = kband * (padded_K_tiles / K_block_tiles);
-        const uint32_t out_m_tile_offset = kband * M_tiles;
-        const uint32_t out_M_tiles_total = num_k_slices * M_tiles;
+        const uint32_t out_m_tile_offset = num_k_fused ? 0u : kband * M_tiles;
+        const uint32_t out_M_tiles_total = num_k_fused ? M_tiles : num_k_slices * M_tiles;
         // Split-K plan B: bottom K-band has no incoming running sum (emits its own partial). Consumed by
         // the compute kernel only under REDUCE_K; harmless otherwise.
         const uint32_t is_reduce_bottom = (kband == num_k_slices - 1) ? 1u : 0u;
+        const uint32_t is_reduce_top = (kband == 0) ? 1u : 0u;
+        // Plan B vertical reduction neighbors: the band ABOVE (kband-1, where this band forwards its
+        // running sum) and the band BELOW (kband+1, which forwards into this band's cb_reduce). Same
+        // grid.x, +/- one K-band of rows. Clamped to self at the ends (unused there: top never sends,
+        // bottom never receives). Physical NoC coords are what the kernel writes to.
+        const uint32_t band_rows = num_slices * rows_per_group;  // rows spanning one K-band
+        CoreCoord reduce_up_l = {(std::size_t)core.x, (std::size_t)(is_reduce_top ? core.y : core.y - band_rows)};
+        CoreCoord reduce_down_l = {(std::size_t)core.x, (std::size_t)(is_reduce_bottom ? core.y : core.y + band_rows)};
+        auto reduce_up_p = device->worker_core_from_logical_core(reduce_up_l);
+        auto reduce_down_p = device->worker_core_from_logical_core(reduce_down_l);
 
         // Injector identification by PHYSICAL position (not the sliced idx): the across-cols (small)
         // injector is at col 0 of every row; the down-rows (big) injector is at each group's top row.
@@ -1124,6 +1170,18 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             out_m_tile_offset,  // split-K: M-stripe offset of this band's partial in [Pk*M, N]
             out_M_tiles_total,  // split-K: total M tiles of the [Pk*M, N] output (= num_k_slices * M)
         };
+        // Split-K plan B reduction args (read by the writer kernel under REDUCE_K, right after the
+        // split-K args and before any ternary/output args — must match the kernel's read order).
+        if (num_k_fused && in0_is_output_writer) {
+            in0_args.push_back((std::uint32_t)reduce_up_p.x);
+            in0_args.push_back((std::uint32_t)reduce_up_p.y);
+            in0_args.push_back((std::uint32_t)reduce_down_p.x);
+            in0_args.push_back((std::uint32_t)reduce_down_p.y);
+            in0_args.push_back(is_reduce_top);
+            in0_args.push_back(is_reduce_bottom);
+            in0_args.push_back(reduce_ready_semaphore_id);
+            in0_args.push_back(reduce_recv_semaphore_id);
+        }
         // Add ternary addresses if present (after defer_write_k_block, before output addresses)
         if (use_fused_ternary) {
             in0_args.push_back(fused_ternary_input_a.value().buffer()->address());
@@ -1192,6 +1250,18 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             out_m_tile_offset,  // split-K: M-stripe offset of this band's partial in [Pk*M, N]
             out_M_tiles_total,  // split-K: total M tiles of the [Pk*M, N] output (= num_k_slices * M)
         };
+        // Split-K plan B reduction args (read by the writer kernel under REDUCE_K, right after the
+        // split-K args and before any ternary/output args — must match the kernel's read order).
+        if (num_k_fused && in1_is_output_writer) {
+            in1_args.push_back((std::uint32_t)reduce_up_p.x);
+            in1_args.push_back((std::uint32_t)reduce_up_p.y);
+            in1_args.push_back((std::uint32_t)reduce_down_p.x);
+            in1_args.push_back((std::uint32_t)reduce_down_p.y);
+            in1_args.push_back(is_reduce_top);
+            in1_args.push_back(is_reduce_bottom);
+            in1_args.push_back(reduce_ready_semaphore_id);
+            in1_args.push_back(reduce_recv_semaphore_id);
+        }
         // Add ternary addresses if present (after defer_write_k_block, before output addresses)
         if (use_fused_ternary) {
             in1_args.push_back(fused_ternary_input_a.value().buffer()->address());
