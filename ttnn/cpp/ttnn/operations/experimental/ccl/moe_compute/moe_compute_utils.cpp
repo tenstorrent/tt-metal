@@ -98,6 +98,10 @@ ttnn::Tensor front_pack_per_core(
     const int ax = axis < 0 ? rank + axis : axis;
     const uint32_t num_cores = static_cast<uint32_t>(full_map.size());
 
+    ttsl::SmallVector<int32_t> begins(rank, 0);
+    ttsl::SmallVector<int32_t> ends(rank, 0);
+    ttsl::SmallVector<uint32_t> zshape(rank, 0);
+
     std::vector<ttnn::Tensor> pieces;
     uint32_t cursor = 0;  // real tiles consumed so far (along `ax`)
     for (uint32_t c = 0; c < num_cores; ++c) {
@@ -105,24 +109,26 @@ ttnn::Tensor front_pack_per_core(
         const uint32_t s = full_map[c];
         TT_FATAL(r <= s, "TpNt shard ({}) exceeds full-Nt shard ({}) at core {}", r, s, c);
         if (r > 0) {
-            ttsl::SmallVector<int32_t> begins(rank, 0);
-            ttsl::SmallVector<int32_t> ends;
-            ends.reserve(rank);
             for (int d = 0; d < rank; ++d) {
-                ends.push_back(static_cast<int32_t>(shape[d]));
+                if (d == ax) {
+                    begins[d] = cursor * TILE_SIZE;
+                    ends[d] = (cursor + r) * TILE_SIZE;
+                } else {
+                    ends[d] = shape[d];
+                    begins[d] = 0;
+                }
             }
-            begins[ax] = static_cast<int32_t>(cursor * TILE_SIZE);
-            ends[ax] = static_cast<int32_t>((cursor + r) * TILE_SIZE);
             pieces.push_back(slice_basic(real, begins, ends));
             cursor += r;
         }
         if (s > r) {
-            std::vector<uint32_t> zshape;
-            zshape.reserve(rank);
             for (int d = 0; d < rank; ++d) {
-                zshape.push_back(static_cast<uint32_t>(shape[d]));
+                if (d == ax) {
+                    zshape[d] = (s - r) * TILE_SIZE;
+                } else {
+                    zshape[d] = shape[d];
+                }
             }
-            zshape[ax] = (s - r) * TILE_SIZE;
             pieces.push_back(
                 ttnn::zeros(ttnn::Shape(zshape), real.dtype(), real.layout(), *real.device(), real.memory_config()));
         }
