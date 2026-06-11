@@ -9,7 +9,12 @@ import ttnn
 from models.common.rmsnorm import RMSNorm
 from models.experimental.voxtraltts.reference.voxtral_config import VoxtralAudioTokenizerConfig
 from models.experimental.voxtraltts.utils.audio_tokenizer_optimizations import AudioTokenizerOptimizations
-from models.experimental.voxtraltts.utils.config_helpers import voxtral_matmul_activation_mem_config
+from models.experimental.voxtraltts.utils.config_helpers import (
+    voxtral_audio_tokenizer_matmul_program_configs,
+    voxtral_audio_tokenizer_sdpa_program_config,
+    voxtral_audio_tokenizer_ttnn_sliding_window_size,
+    voxtral_matmul_activation_mem_config,
+)
 from models.experimental.voxtraltts.tt.attention import VoxtralTTAttention
 from models.experimental.voxtraltts.tt.mlp import VoxtralTTMLP
 from models.tt_transformers.tt.common import Mode
@@ -34,6 +39,7 @@ class VoxtralTTAudioTokenizerDecoderTransformerBlock:
         self.device = device
         self.block_index = block_index
         self.layer_index = layer_index
+        self.tokenizer_cfg = tokenizer_cfg
         self.dim = tokenizer_cfg.dim
         self.output_dtype = output_dtype
         self.compute_kernel_config = compute_kernel_config
@@ -129,16 +135,57 @@ class VoxtralTTAudioTokenizerDecoderTransformerBlock:
         ttnn.deallocate(x)
         return out
 
-    def __call__(self, x_b1td: ttnn.Tensor, *, attn_mask: ttnn.Tensor | None) -> ttnn.Tensor:
+    def __call__(
+        self,
+        x_b1td: ttnn.Tensor,
+        *,
+        attn_mask: ttnn.Tensor | None,
+        sliding_window: int | None = None,
+    ) -> ttnn.Tensor:
         """``[B, 1, T, D]`` tile → ``[B, 1, T, D]`` tile."""
         max_l1 = 32
         if self.optimizations is not None:
             max_l1 = self.optimizations.matmul_l1_max_seq_len
-        act_mem = voxtral_matmul_activation_mem_config(int(x_b1td.shape[2]), max_l1_seq_len=max_l1)
+        seq_len = int(x_b1td.shape[2])
+        act_mem = voxtral_matmul_activation_mem_config(seq_len, max_l1_seq_len=max_l1)
+
+        matmul_prog = None
+        sdpa_prog = None
+        sliding_window_size = None
+        use_native_sdpa = self.optimizations is not None and self.optimizations.sdpa_native_sliding_window
+        if use_native_sdpa:
+            if sliding_window is None:
+                raise ValueError("sliding_window is required when sdpa_native_sliding_window is enabled.")
+            sliding_window_size = voxtral_audio_tokenizer_ttnn_sliding_window_size(sliding_window)
+            sdpa_prog = voxtral_audio_tokenizer_sdpa_program_config(self.device, seq_len)
+        elif attn_mask is None:
+            raise ValueError("attn_mask is required when sdpa_native_sliding_window is disabled.")
+
+        if self.optimizations is not None and self.optimizations.matmul_program_config:
+            cfg = self.tokenizer_cfg
+            matmul_prog = voxtral_audio_tokenizer_matmul_program_configs(
+                self.device,
+                seq_len,
+                dim=cfg.dim,
+                hidden_dim=cfg.hidden_dim,
+                n_heads=cfg.n_heads,
+                n_kv_heads=cfg.n_kv_heads,
+                head_dim=cfg.head_dim,
+            )
 
         residual = ttnn.clone(x_b1td, dtype=self.output_dtype, memory_config=act_mem)
         normed = self.attention_norm(x_b1td, mode=Mode.DECODE)
-        attn = self.attention(normed, cos=None, sin=None, attn_mask=attn_mask, activation_memory_config=act_mem)
+        attn = self.attention(
+            normed,
+            cos=None,
+            sin=None,
+            attn_mask=None if use_native_sdpa else attn_mask,
+            activation_memory_config=act_mem,
+            wqkv_program_config=matmul_prog["wqkv"] if matmul_prog else None,
+            wo_program_config=matmul_prog["wo"] if matmul_prog else None,
+            sliding_window_size=sliding_window_size,
+            sdpa_program_config=sdpa_prog,
+        )
         ttnn.deallocate(normed)
         attn = self._slice_like(attn, x_b1td)
         if self.layer_scale:
@@ -153,7 +200,12 @@ class VoxtralTTAudioTokenizerDecoderTransformerBlock:
 
         residual = ttnn.clone(h, dtype=self.output_dtype, memory_config=act_mem)
         normed = self.ffn_norm(h, mode=Mode.DECODE)
-        ff = self.mlp(normed, activation_memory_config=act_mem)
+        ff = self.mlp(
+            normed,
+            activation_memory_config=act_mem,
+            ff1_3_program_config=matmul_prog["ff1_3"] if matmul_prog else None,
+            ff2_program_config=matmul_prog["ff2"] if matmul_prog else None,
+        )
         ttnn.deallocate(normed)
         ff = self._slice_like(ff, h)
         if self.layer_scale:

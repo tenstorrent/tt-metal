@@ -123,6 +123,18 @@ def audio_tokenizer_alibi_slopes(n_heads: int) -> torch.Tensor:
     return torch.cat([slopes_power_of_2(m), slopes_power_of_2(2 * m)[::2][: n_heads - m]])
 
 
+def audio_tokenizer_causal_sliding_window_attention_bias(
+    n_heads: int, seq_len: int, sliding_window: int
+) -> torch.Tensor:
+    """Structural causal + sliding-window mask only (no ALiBi), for native TTNN SDPA golden."""
+    pos = torch.arange(seq_len)
+    rel_pos = pos.unsqueeze(0) - pos.unsqueeze(1)
+    mask = torch.zeros(1, n_heads, seq_len, seq_len, dtype=torch.float32)
+    mask = mask.masked_fill(rel_pos.unsqueeze(0) > 0, -1e4)
+    mask = mask.masked_fill(rel_pos.unsqueeze(0) < -sliding_window, -1e4)
+    return mask
+
+
 def audio_tokenizer_sliding_window_attention_bias(n_heads: int, seq_len: int, sliding_window: int) -> torch.Tensor:
     """Additive attention bias ``[1, n_heads, seq_len, seq_len]`` (ALiBi + causal + sliding window)."""
     pos = torch.arange(seq_len)
@@ -143,6 +155,7 @@ def decoder_transformer_block_reference(
     block_index: int,
     layer_index: int,
     sliding_window: int | None = None,
+    include_alibi: bool = True,
 ) -> torch.Tensor:
     """One ``decoder_blocks.{block_index}.layers.{layer_index}`` TransformerBlock in float32."""
     prefix = f"decoder_blocks.{block_index}.layers.{layer_index}"
@@ -169,7 +182,10 @@ def decoder_transformer_block_reference(
     k = k.view(b, t, tokenizer_cfg.n_kv_heads, tokenizer_cfg.head_dim).transpose(1, 2)
     v = v.view(b, t, tokenizer_cfg.n_kv_heads, tokenizer_cfg.head_dim).transpose(1, 2)
     window = tokenizer_cfg.attn_sliding_window_size if sliding_window is None else sliding_window
-    mask = audio_tokenizer_sliding_window_attention_bias(tokenizer_cfg.n_heads, t, window)
+    if include_alibi:
+        mask = audio_tokenizer_sliding_window_attention_bias(tokenizer_cfg.n_heads, t, window)
+    else:
+        mask = audio_tokenizer_causal_sliding_window_attention_bias(tokenizer_cfg.n_heads, t, window)
     attn = F.scaled_dot_product_attention(q, k, v, attn_mask=mask)
     attn = attn.transpose(1, 2).reshape(b, t, tokenizer_cfg.n_heads * tokenizer_cfg.head_dim)
     attn = F.linear(attn, wo)
@@ -235,6 +251,7 @@ def decoder_transformer_block_reference_bf16(
     block_index: int,
     layer_index: int,
     sliding_window: int | None = None,
+    include_alibi: bool = True,
 ) -> torch.Tensor:
     """Same as :func:`decoder_transformer_block_reference` but in bf16 (RMS reductions stay float32)."""
     prefix = f"decoder_blocks.{block_index}.layers.{layer_index}"
@@ -267,7 +284,10 @@ def decoder_transformer_block_reference_bf16(
     k = k.view(b, t, tokenizer_cfg.n_kv_heads, tokenizer_cfg.head_dim).transpose(1, 2)
     v = v.view(b, t, tokenizer_cfg.n_kv_heads, tokenizer_cfg.head_dim).transpose(1, 2)
     window = tokenizer_cfg.attn_sliding_window_size if sliding_window is None else sliding_window
-    mask = audio_tokenizer_sliding_window_attention_bias(tokenizer_cfg.n_heads, t, window).to(torch.bfloat16)
+    if include_alibi:
+        mask = audio_tokenizer_sliding_window_attention_bias(tokenizer_cfg.n_heads, t, window).to(torch.bfloat16)
+    else:
+        mask = audio_tokenizer_causal_sliding_window_attention_bias(tokenizer_cfg.n_heads, t, window).to(torch.bfloat16)
     attn = F.scaled_dot_product_attention(q, k, v, attn_mask=mask)
     attn = attn.transpose(1, 2).reshape(b, t, tokenizer_cfg.n_heads * tokenizer_cfg.head_dim)
     attn = F.linear(attn, wo)
