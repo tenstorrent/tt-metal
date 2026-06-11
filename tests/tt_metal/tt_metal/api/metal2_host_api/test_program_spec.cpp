@@ -2976,14 +2976,18 @@ TEST_F(ProgramSpecTestGen1, MinimalValidProgramSpecWithTensorParameterSucceeds) 
 }
 
 // ============================================================================
-// SECTION 9b: TensorBinding LOCAL access-type validation (Gen1 / WH)
+// SECTION: TensorBinding access-type validation (Gen1 / WH)
 // ============================================================================
-// A LOCAL (NodeLocalMem) binding hands the kernel a base pointer into THIS node's
-// L1 with no address generation, so ValidateProgramSpec requires the bound tensor to
-// be (1) L1-resident, (2) sharded — so it has a fixed per-node base — and (3) sharded
-// over a grid that covers every node the kernel runs on. These tests pin each leg of
-// that rule. REMOTE (the default) carries none of these constraints; the positive
-// REMOTE-DRAM baseline is MinimalValidProgramSpecWithTensorParameterSucceeds above.
+// Access-type legality, host-side:
+//   - REMOTE (TensorAccessor) is data-movement-only — it carries NoC addressgen that doesn't
+//     compile on compute (TRISC) cores, so REMOTE on a compute kernel is rejected.
+//   - LOCAL (NodeLocalMem) hands the kernel a base pointer into THIS node's L1, so the bound
+//     tensor must be (1) L1-resident and (2) sharded (a fixed per-node base). We deliberately do
+//     NOT check shard-grid coverage of the kernel's nodes — that peers into the shard spec and
+//     would have to chase novel sharding schemes (nd-shard, ...); coverage is the user's
+//     responsibility, the same trust borrowed-memory DFBs extend.
+// These tests pin each leg. The positive REMOTE-DRAM baseline is
+// MinimalValidProgramSpecWithTensorParameterSucceeds above.
 
 TEST_F(ProgramSpecTestGen1, LocalBindingShardedL1Succeeds) {
     // Positive baseline for LOCAL: a sharded-L1 tensor whose shard grid covers the kernel's
@@ -3019,20 +3023,31 @@ TEST_F(ProgramSpecTestGen1, LocalBindingInterleavedL1Fails) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("is not sharded")));
 }
 
-TEST_F(ProgramSpecTestGen1, LocalBindingUncoveredShardGridFails) {
-    // Sharded L1, but the kernel runs on a node the shard grid does not cover, so that node
-    // holds no local shard to address. The tensor shards over origin cores (0,0),(1,0); we
-    // move the work unit to node {3,3}, which is outside that grid.
+TEST_F(ProgramSpecTestGen1, RemoteBindingOnComputeKernelFails) {
+    // REMOTE (TensorAccessor) is data-movement-only — its NoC addressgen doesn't compile on TRISC.
+    // Binding REMOTE to a compute kernel must fail cleanly at host validation, not detonate later
+    // as a TRISC compile error. (spec.kernels[1] is the compute kernel in the minimal Gen1 spec.)
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
-    spec.work_units =
-        std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", NodeCoord{3, 3}, {"dm_kernel", "compute_kernel"})};
-    spec.tensor_parameters = {
-        MakeShardedTensorParameter("input_tensor", tt::tt_metal::Shape{1, 1, 64, 32}, {32, 32}, /*num_cores=*/2)};
-    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_lm", TensorAccessType::LOCAL);
+    spec.tensor_parameters = {MakeMinimalTensorParameter("input_tensor")};
+    BindTensorParameterToKernel(spec.kernels[1], "input_tensor", "input_ta", TensorAccessType::REMOTE);
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("shard grid does not cover")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("REMOTE is data-movement-only")));
+}
+
+TEST_F(ProgramSpecTestGen1, SameTensorParameterBoundRemoteAndLocalSucceeds) {
+    // The same TensorParameter may be reached two ways at once: a DM kernel over the NoC
+    // (REMOTE / TensorAccessor) and a compute kernel by local base pointer (LOCAL / NodeLocalMem).
+    // Binding dedup is per accessor_name, not per tensor_parameter_name, so this is legal — each
+    // binding gets its own handle and base-address CRTA. Works by accident-of-design; pin it.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.tensor_parameters = {
+        MakeShardedTensorParameter("input_tensor", tt::tt_metal::Shape{1, 1, 64, 32}, {32, 32}, /*num_cores=*/2)};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta", TensorAccessType::REMOTE);  // DM kernel
+    BindTensorParameterToKernel(spec.kernels[1], "input_tensor", "input_lm", TensorAccessType::LOCAL);   // compute
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 // ============================================================================

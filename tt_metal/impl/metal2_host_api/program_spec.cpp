@@ -678,15 +678,29 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
     }
 
-    // Validate tensor bindings: a LOCAL-access binding requires node-local resident data.
-    // A LocalTensorView hands the kernel a base pointer into THIS node's L1 with no address
-    // generation, so the bound tensor must be L1-resident and sharded such that every node the
-    // kernel runs on holds a local shard. (REMOTE / TensorAccessor bindings carry no such
-    // constraint; they address arbitrary banks over the NoC.) Mutability is intentionally NOT
-    // checked: there is no read/write role on tensor bindings today, and l1_address() would
-    // circumvent it regardless — revisit if a cross-cutting R/W/RW concept lands in Metal 2.0.
+    // Validate tensor-binding access types.
+    //  - REMOTE (TensorAccessor) is data-movement-only: tensor_accessor.h carries NoC
+    //    address-generation that does not compile on compute (TRISC) cores. We reject REMOTE on a
+    //    compute kernel here so the user gets a clean host error rather than a cryptic TRISC
+    //    compile failure later.
+    //  - LOCAL (NodeLocalMem) hands the kernel a base pointer into THIS node's L1 with no address
+    //    generation, so the bound tensor must be L1-resident and sharded (so it has a fixed
+    //    per-node base). We deliberately do NOT check that the shard grid covers the kernel's node
+    //    set: that peers into the shard spec, and novel sharding schemes (nd-shard, ...) would
+    //    force this check to chase them. Coverage is the user's responsibility — an out-of-shard
+    //    node simply reads an undefined local base — the same trust borrowed-memory DFBs extend
+    //    (see "Validate borrowed-memory DFBs" below). Mutability is also intentionally NOT checked:
+    //    there is no read/write role on tensor bindings today, and l1_address() would circumvent it
+    //    regardless — revisit if a cross-cutting R/W/RW concept lands in Metal 2.0.
     for (const auto& kernel : spec.kernels) {
         for (const auto& binding : kernel.tensor_bindings) {
+            TT_FATAL(
+                !(kernel.is_compute_kernel() && binding.access_type == TensorAccessType::REMOTE),
+                "KernelSpec '{}' binds TensorParameter '{}' as REMOTE (TensorAccessor) on a compute kernel, but "
+                "REMOTE is data-movement-only: TensorAccessor carries NoC address-generation that does not compile "
+                "on compute (TRISC) cores. Use a LOCAL (NodeLocalMem) binding for compute kernels.",
+                kernel.unique_id,
+                binding.tensor_parameter_name);
             if (binding.access_type != TensorAccessType::LOCAL) {
                 continue;
             }
@@ -694,7 +708,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             const MemoryConfig& mc = param.spec.memory_config();
             TT_FATAL(
                 mc.is_l1(),
-                "KernelSpec '{}' binds TensorParameter '{}' as LOCAL (LocalTensorView), but its buffer is not "
+                "KernelSpec '{}' binds TensorParameter '{}' as LOCAL (NodeLocalMem), but its buffer is not "
                 "L1-resident. LOCAL requires node-local L1 data; use a REMOTE (TensorAccessor) binding for "
                 "DRAM / interleaved tensors.",
                 kernel.unique_id,
@@ -705,22 +719,6 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 "per-node resident shard (replicated or partitioned); interleaved L1 has no fixed local base address.",
                 kernel.unique_id,
                 binding.tensor_parameter_name);
-            // Coverage: every node this kernel runs on must hold a shard. NodeRangeSet IS CoreRangeSet,
-            // so the kernel's node set and the shard grid compare directly. (Uses the legacy ShardSpec
-            // grid; NdShardSpec-only tensors are gated by L1+sharded above — full nd coverage is a TODO.)
-            if (mc.shard_spec().has_value()) {
-                const CoreRangeSet& shard_grid = mc.shard_spec()->grid;
-                const NodeRangeSet& kernel_nodes = collected.kernel_node_set.at(kernel.unique_id);
-                TT_FATAL(
-                    shard_grid.contains(kernel_nodes),
-                    "KernelSpec '{}' binds TensorParameter '{}' as LOCAL, but the kernel runs on nodes the tensor's "
-                    "shard grid does not cover, so those nodes have no local shard to address. "
-                    "Kernel nodes: {}; shard grid: {}.",
-                    kernel.unique_id,
-                    binding.tensor_parameter_name,
-                    kernel_nodes.str(),
-                    shard_grid.str());
-            }
         }
     }
 
