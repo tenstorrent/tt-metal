@@ -14,6 +14,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
     reconcile_golden_to_actual,
+    shard_grid_bounds,
 )
 
 # Import V2 master config loader for traced model configurations
@@ -87,6 +88,40 @@ def run(
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")
+
+    # A traced sharded input/output memory config may pin a core grid from the
+    # source architecture (e.g. a Blackhole ufld_v2 trace shards across an 11x10
+    # grid: cores up to x=10,y=9). N300 Wormhole only exposes an 8x8 worker grid
+    # (cores 0..7), so placing the tensor on x=10,y=9 is an "in_worker_grid"
+    # TT_FATAL. The pool itself is device-agnostic — re-shard onto this device:
+    # feed the input INTERLEAVED from DRAM, drop the oversized output shard
+    # config, and let max_pool2d auto-shard. We deliberately do NOT carry over
+    # applied_shard_scheme here: with an explicit scheme the op's
+    # determine_parallel_config reuses the source grid width (11 cols -> still
+    # exceeds 8x8), whereas omitting it routes through
+    # determine_pool_config_for_auto_shard, which lays the shard out within the
+    # device's compute grid. DRAM (not L1) input avoids OOMing L1 on the large
+    # re-sharded tensors.
+    def _grid_exceeds_device(mc, dev):
+        mx, my = shard_grid_bounds(mc)
+        if mx is None and my is None:
+            return False
+        try:
+            g = dev.compute_with_storage_grid_size()
+            gx, gy = g.x - 1, g.y - 1
+        except Exception:
+            gx, gy = 7, 7
+        return (mx is not None and mx > gx) or (my is not None and my > gy)
+
+    # Check BOTH the input and output traced memory configs: the oversized grid
+    # can appear on either (and the framework may drop the unparseable input
+    # config to None while the output config still carries the source grid).
+    _regrid_auto_shard = _grid_exceeds_device(input_a_memory_config, device) or _grid_exceeds_device(
+        output_memory_config, device
+    )
+    if _regrid_auto_shard:
+        input_a_memory_config = ttnn.DRAM_MEMORY_CONFIG
+        output_memory_config = None
 
     # Exclude pool-specific params already handled above so they don't leak via op_kwargs
     _pool_keys = {
@@ -203,7 +238,9 @@ def run(
         "memory_config": output_memory_config,
     }
 
-    if not input_is_sharded:
+    # When re-gridding an oversized (cross-arch) shard config, omit
+    # applied_shard_scheme so max_pool2d auto-shards onto this device's grid.
+    if not input_is_sharded and not _regrid_auto_shard:
         if applied_shard_scheme is None:
             applied_shard_scheme = "BLOCK_SHARDED"
         # The trace may record the full enum repr ("TensorMemoryLayout.BLOCK_SHARDED"
@@ -223,7 +260,28 @@ def run(
         pool_kwargs["applied_shard_scheme"] = applied_shard_scheme_ttnn
 
     pool_kwargs.update(op_kwargs)
-    result = ttnn.max_pool2d(**pool_kwargs)
+    try:
+        result = ttnn.max_pool2d(**pool_kwargs)
+    except Exception as e:
+        # A traced shard scheme/grid that came from another architecture can be
+        # unplaceable on N300: the source's HEIGHT/BLOCK split lays cores beyond
+        # the 8x8 worker grid ("in_worker_grid"/"exceeds device compute grid").
+        # This also happens when the framework couldn't parse the (oversized)
+        # traced shard memory config and dropped it to None, so the scheme fell
+        # back to the BLOCK_SHARDED default. Let max_pool2d auto-shard instead —
+        # determine_pool_config_for_auto_shard lays the shard within this device's
+        # grid — but only retry the device-grid placement failures.
+        _msg = str(e).lower()
+        if ("applied_shard_scheme" in pool_kwargs) and (
+            "in_worker_grid" in _msg or "compute grid" in _msg or "core range" in _msg
+        ):
+            # Safety net: drop a still-unplaceable traced output shard config and
+            # let the op auto-shard onto this device's grid.
+            pool_kwargs.pop("applied_shard_scheme", None)
+            pool_kwargs["memory_config"] = None
+            result = ttnn.max_pool2d(**pool_kwargs)
+        else:
+            raise
 
     result = mesh_tensor_to_torch(result, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
