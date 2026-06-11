@@ -32,11 +32,12 @@ def test_verify_parse_error_routes_to_repair(tmp_path):
     assert ctx.state["last_verdict"]["status"] == "parse_error"
 
 
-def test_verify_import_error_routes_to_repair(tmp_path):
+def test_verify_does_not_run_imports(tmp_path):
+    # a bad import is valid SYNTAX -> VERIFY passes; GATE_PCC catches it at runtime.
     ctx, model = _ctx(tmp_path, ["m.py"])
     (model / "m.py").write_text("import a_module_that_does_not_exist_xyz123\n")
-    assert verify(ctx) == states.REPAIR_CODE
-    assert ctx.state["last_verdict"]["status"] == "import_error"
+    assert verify(ctx) == states.GATE_PCC
+    assert ctx.state["last_verdict"]["status"] == "ok"
 
 
 def test_verify_reverts_when_code_budget_exhausted(tmp_path):
