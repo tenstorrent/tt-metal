@@ -344,11 +344,6 @@ TEST(TableMiscTest, ContainsWithIntKey) {
 }
 
 // ---- reflection-based hashing (tt_stl/reflection.hpp) ------------------------
-//
-// Table opts into ttsl reflection through attribute_names / attribute_values(),
-// so ttsl::hash can hash it and it can be nested inside other reflected types.
-// The hash is taken over the underlying entries vector, so it follows insertion
-// order — unlike operator==, which is order independent (see HashFollowsInsertionOrder).
 
 // Canonical hash entry point (matches how reflected structs hash themselves).
 template <typename T>
@@ -400,10 +395,10 @@ TEST(TableHashTest, DifferentSizeChangesHash) {
     EXPECT_NE(hash_of(small), hash_of(big));
 }
 
-TEST(TableHashTest, HashFollowsInsertionOrder) {
-    // Two tables that compare equal but were built in opposite order. Because the
-    // reflected hash is taken over the underlying entries vector, the hashes
-    // differ even though operator== treats the tables as equal.
+TEST(TableHashTest, HashIsOrderIndependent) {
+    // Two tables that compare equal but were built in opposite order must hash equally:
+    // to_hash() folds the per-entry hashes in sorted order, so insertion order drops out
+    // (consistent with operator==, which ignores order).
     StrIntTable a;
     a["x"] = 1;
     a["y"] = 2;
@@ -411,7 +406,7 @@ TEST(TableHashTest, HashFollowsInsertionOrder) {
     b["y"] = 2;
     b["x"] = 1;
     ASSERT_EQ(a, b);
-    EXPECT_NE(hash_of(a), hash_of(b));
+    EXPECT_EQ(hash_of(a), hash_of(b));
 }
 
 TEST(TableHashTest, NonStringKeyValueHashes) {
