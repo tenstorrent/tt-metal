@@ -262,8 +262,6 @@ def create_single_pod_spec_decode_pipeline_configuration(
     runs LM-head sampling + MTP EH matmul, followed by the MTP decoder that
     produces the hidden state for the next level.
     """
-    logger.info(f"ENABLE MTP: {enable_mtp}")
-    logger.info(f"NUM MTP LEVELS: {num_mtp_levels}")
     _MTP_DECODER_LAYER_IDX = 61
     assert 0 <= num_mtp_levels <= 4, f"num_mtp_levels={num_mtp_levels} out of range [0, 4]"
 
