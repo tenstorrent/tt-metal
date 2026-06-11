@@ -18,11 +18,11 @@
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/pack.h"
-#include "api/compute/pack_untilize.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/cb_api.h"
 #include "api/compute/tile_move_copy.h"
 
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "indexer_score_common.hpp"
 
 constexpr uint32_t cb_q = tt::CBIndex::c_0;
@@ -168,24 +168,6 @@ void add_mask(uint32_t idx) {
     cb_push_back(acc_cb, 1);
 }
 
-/**
- * out_cb = untilize(acc front) -> bf16 row-major
- */
-template <uint32_t acc_cb, uint32_t out_cb>
-void untilize_to_out() {
-    // Precondition: acc has 1 produced
-    // Postcondition: acc has 1 consumed, out_cb has 1 produced
-    reconfig_data_format_srca(acc_cb);
-    pack_reconfig_data_format(out_cb);
-    pack_untilize_init<1, 1>(acc_cb, out_cb);
-    cb_wait_front(acc_cb, 1);
-    cb_reserve_back(out_cb, 1);
-    pack_untilize_block<1, 1>(acc_cb, 1, out_cb);
-    cb_push_back(out_cb, 1);
-    cb_pop_front(acc_cb, 1);
-    pack_untilize_uninit(out_cb);
-}
-
 void kernel_main() {
     const uint32_t flat_start = get_arg_val<uint32_t>(0);
     const uint32_t flat_count = get_arg_val<uint32_t>(1);
@@ -238,7 +220,8 @@ void kernel_main() {
                 } else if (k_tile > diag_tile) {
                     add_mask<cb_acc, cb_mask>(1);
                 }
-                untilize_to_out<cb_acc, cb_out>();
+                // acc (1 tile) -> bf16 row-major out; go-to untilize helper
+                compute_kernel_lib::untilize<1, cb_acc, cb_out>(1);
             }
         }
         cb_pop_front(cb_k, k_chunk_tiles);
