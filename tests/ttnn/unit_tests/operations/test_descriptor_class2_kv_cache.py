@@ -23,7 +23,6 @@ import os
 
 os.environ["TT_METAL_FORBID_DESCRIPTOR_REBUILD_ON_CACHE_HIT"] = "1"
 
-import pytest
 import torch
 
 import ttnn
