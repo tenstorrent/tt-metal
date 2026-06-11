@@ -91,8 +91,9 @@ Legend: `[x]` done · `[ ]` open · ⏸️ postponed · 📌 resolved as decisio
 
 **Host fallbacks → device ops (perf debt; contracts in tt/ops.py + Missing op APIs)**
 - [ ] **(8)** sparse_mla gather+SDPA — full host fallback per layer (biggest copy/compute hit); needs sparse gather + SDPA-with-indices, per-row valid length + start_pos
-- [ ] **(9)** cache-slot host readback in chunked _dsa_forward (whole prefix read every chunk)
-- [ ] **(10)** indexer host stems readback (full hidden concat per chunk)
+- [ ] **(9)** MLA cache-slot host readback in chunked _dsa_forward / sparse_mla (whole KVPE prefix read every chunk)
+- [x] **(10)** ~~indexer host stems readback (full hidden concat per chunk)~~ — resolved by (6); only the pe-slice RoPE readback remains, folded into (6)'s F1 host-rope note (coupled to issue #4)
+- [ ] **(19)** indexer key cache → device — reuse v3's cache-*creation*/write **logic** (init_kvpe_cache-style allocator + fill_cache_for_user_/update_padded_kv_cache) to stand up a parallel, index-shaped cache ([max_seq, 128]); not the physical KVPE tensor. Gated on device-side RoPE (#4, so keys are written device-resident) and the dense-full-prefix-read vs SP-shard question (couple with (4) 2x2). Today: host `_index_k_cache` torch buffer.
 
 **Fused C++ ops (out of scope per Approach §4, documented follow-ups)**
 - [ ] **(11)** indexer_logits (DeepGEMM fp8_mqa_logits-style), causal windows, fp8
