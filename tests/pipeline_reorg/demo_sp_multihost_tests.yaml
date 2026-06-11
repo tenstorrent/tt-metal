@@ -47,10 +47,32 @@
 
 - name: "Demo Test with Perf Metrics (DeepSeek V3 B1 Supercluster 4 aka Superpod 1)"
   cmd: |
-    echo "============= SP1 superpod: using allocation configs from /etc/ttop ============="
     TTRUN_DIR=/etc/ttop
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
     PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+
+    echo "========== ttrun debug (runner) =========="
+    echo "TT_METAL_HOME=${TT_METAL_HOME}"
+    echo "PRTE_MCA_prte_default_hostfile=${PRTE_MCA_prte_default_hostfile:-unset}"
+    echo "TTRUN_DIR=${TTRUN_DIR}"
+    echo "TTRUN_PY=${TTRUN_PY}"
+    ls -la "${TTRUN_PY}" || true
+    ls -la "${TTRUN_DIR}" || true
+    for f in hostfile rankfile rank_bindings.yaml mgd.textproto; do
+      echo "--- ${TTRUN_DIR}/${f} ---"
+      cat "${TTRUN_DIR}/${f}" 2>&1 || echo "(missing)"
+    done
+    echo "========== PIPELINE_HOSTS =========="
+    echo "${PIPELINE_HOSTS}"
+    echo "========== workers: /etc/ttop =========="
+    mpirun --pernode --tag-output bash -lc '
+      echo "$(hostname):"
+      ls -la /etc/ttop 2>&1 || echo "  /etc/ttop missing"
+      for f in hostfile rankfile rank_bindings.yaml mgd.textproto; do
+        echo "  --- $f ---"
+        cat "/etc/ttop/$f" 2>&1 || echo "  (missing)"
+      done
+    ' || true
 
     LOGURU_LEVEL=DEBUG TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
@@ -72,10 +94,32 @@
 
 - name: "Stress Test (DeepSeek V3 B1 Supercluster 4 aka Superpod 1)"
   cmd: |
-    echo "============= SP1 superpod: using allocation configs from /etc/ttop ============="
     TTRUN_DIR=/etc/ttop
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
     PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+
+    echo "========== ttrun debug (runner) =========="
+    echo "TT_METAL_HOME=${TT_METAL_HOME}"
+    echo "PRTE_MCA_prte_default_hostfile=${PRTE_MCA_prte_default_hostfile:-unset}"
+    echo "TTRUN_DIR=${TTRUN_DIR}"
+    echo "TTRUN_PY=${TTRUN_PY}"
+    ls -la "${TTRUN_PY}" || true
+    ls -la "${TTRUN_DIR}" || true
+    for f in hostfile rankfile rank_bindings.yaml mgd.textproto; do
+      echo "--- ${TTRUN_DIR}/${f} ---"
+      cat "${TTRUN_DIR}/${f}" 2>&1 || echo "(missing)"
+    done
+    echo "========== PIPELINE_HOSTS =========="
+    echo "${PIPELINE_HOSTS}"
+    echo "========== workers: /etc/ttop =========="
+    mpirun --pernode --tag-output bash -lc '
+      echo "$(hostname):"
+      ls -la /etc/ttop 2>&1 || echo "  /etc/ttop missing"
+      for f in hostfile rankfile rank_bindings.yaml mgd.textproto; do
+        echo "  --- $f ---"
+        cat "/etc/ttop/$f" 2>&1 || echo "  (missing)"
+      done
+    ' || true
 
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
@@ -102,14 +146,31 @@
 
 - name: "Teacher Forcing Test (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)"
   cmd: |
-    echo "============= SP4 superpod: using branch ttrun.py and rank files ============="
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
     SCALEOUT_CONFIG_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/rev_c"
     cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_binding_superpod.yaml" .
     cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_file_superpod" .
-
-    echo "============= SP4 superpod: setting PIPELINE_HOSTS ============="
     PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /etc/ttop/hostfile | sed 's/,$//')
+
+    echo "========== ttrun debug (runner) =========="
+    echo "TT_METAL_HOME=${TT_METAL_HOME}"
+    echo "PRTE_MCA_prte_default_hostfile=${PRTE_MCA_prte_default_hostfile:-unset}"
+    echo "TTRUN_PY=${TTRUN_PY}"
+    ls -la "${TTRUN_PY}" || true
+    echo "--- /etc/ttop/hostfile ---"
+    cat /etc/ttop/hostfile 2>&1 || echo "(missing)"
+    for f in rev_c_rank_file_superpod rev_c_rank_binding_superpod.yaml; do
+      echo "--- ${f} ---"
+      cat "${f}" 2>&1 || echo "(missing)"
+    done
+    echo "========== PIPELINE_HOSTS =========="
+    echo "${PIPELINE_HOSTS}"
+    echo "========== workers: /etc/ttop/hostfile =========="
+    mpirun --pernode --tag-output bash -lc '
+      echo "$(hostname): /etc/ttop/hostfile"
+      cat /etc/ttop/hostfile 2>&1 || echo "  (missing)"
+    ' || true
+
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
       --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=rev_c_rank_file_superpod --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
