@@ -46,7 +46,16 @@ def mesh_device_fixture():
     # for the cross-device completion sync. Without fabric, the large DRAM-width-
     # sliced convs hang in synchronize_device (wedging the device). Fabric config
     # is not part of the config hash, so enabling it does not affect hash matching.
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    #
+    # Fabric requires EVERY device in the system to be active, so on a multi-chip
+    # card (e.g. N300, 2 chips) opening only a 1x1 mesh with FABRIC_1D raises
+    # "Fabric is being used but Device 1 is not active". A 1x1 mesh is single
+    # device and never runs the distributed sliced conv, so it doesn't need fabric
+    # — only enable it for multi-device meshes.
+    _ndev = (mesh_shape[0] * mesh_shape[1]) if mesh_shape else 1
+    _use_fabric = _ndev > 1
+    if _use_fabric:
+        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     # The conv distributes over the mesh ROWS (Shard(0)); the dispatch axis must
     # be ROW-aligned with that distribution + fabric, else synchronize_device
     # hangs on the large sliced convs. (Auto-detect / COL misaligns and hangs.)
@@ -54,7 +63,8 @@ def mesh_device_fixture():
     device_name = ttnn.get_arch_name()
     yield (device, device_name)
     ttnn.close_mesh_device(device)
-    ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+    if _use_fabric:
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
 _DTYPE_MAP = {
@@ -662,7 +672,14 @@ def run(
         out_h = (padded_h - dilation_h * (kernel_h - 1) - 1) // stride_h + 1
         out_w = (padded_w - dilation_w * (kernel_w - 1) - 1) // stride_w + 1
 
-    torch_output = torch_output.reshape(batch_size, out_h, out_w, -1)
+    # A height-sharded conv output is tile-padded along the flattened NHW axis
+    # (e.g. 784 -> 800 rows for a 28x28 map), so the raw readback has more rows
+    # than batch*out_h*out_w and a direct reshape fails ("shape [1,28,28,-1] is
+    # invalid for input of size 128000"). Flatten and slice to the real NHW count
+    # (a no-op when there is no padding) before reshaping.
+    _nhw = batch_size * out_h * out_w
+    _flat = torch_output.reshape(-1, torch_output.shape[-1])
+    torch_output = _flat[:_nhw].reshape(batch_size, out_h, out_w, -1)
     torch_output = torch_output[:, :, :, :out_channels]
 
     torch_golden = torch_golden.permute(0, 2, 3, 1)
