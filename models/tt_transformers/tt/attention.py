@@ -36,6 +36,7 @@ class Attention(LightweightModule):
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
         self.num_devices = configuration.num_devices
+        self.layer_num = layer_num
         self.prefetcher = prefetcher
         self.TG = self.num_devices == 32
         self.hidden_size = configuration.dim
@@ -246,18 +247,6 @@ class Attention(LightweightModule):
         wqkv_width_sharded_mem_config = configuration.create_dram_sharded_mem_config(
             configuration.dim, configuration.qkv_size // configuration.num_devices
         )
-        # The prefetcher picks the decode/prefetch weight layout: the DRAM-core backend returns
-        # its receiver-contiguous layout, the worker-core backend returns the width-sharded default
-        # above (and galaxy/TG always keeps the default).
-        wqkv_mem_config = wqkv_width_sharded_mem_config
-        if self.prefetcher is not None:
-            wqkv_mem_config = self.prefetcher.weight_mem_config(
-                configuration.dim,
-                configuration.qkv_size // configuration.num_devices,
-                wqkv_width_sharded_mem_config,
-                is_galaxy=configuration.is_galaxy,
-            )
-
         qkv_list = []
         for i in range(self.num_devices_per_group):
             # Chunk weights
@@ -275,20 +264,38 @@ class Attention(LightweightModule):
 
         qkv_cat = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)
 
-        # One copy: recv-contig (ND_SHARDED) for the DRAM-core backend, else width-sharded. Both
-        # prefill (direct matmul) and decode (via GCB) read it — the matmul's TensorAccessor reads
-        # ND_SHARDED in1 directly, so no separate width-sharded prefill copy is needed.
+        # Prefill direct matmuls use the normal width-sharded layout. The DRAM-core decode path
+        # needs a separate receiver-contiguous layout that is consumed via the GCB.
         self.wqkv = ttnn.as_tensor(
             qkv_cat,
             dtype=self.wqkv_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG if self.TG else wqkv_mem_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG if self.TG else wqkv_width_sharded_mem_config,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.mesh_device, dims=(3, 2) if self.TG else (2, 3), mesh_shape=configuration.cluster_shape
             ),
-            cache_file_name=cache_name("wqkv_sharded_2d" + prefetcher_cache_suffix),
+            cache_file_name=cache_name("wqkv_sharded_2d_width"),
         )
+        self.wqkv_decode = self.wqkv
+        if self.prefetcher is not None:
+            wqkv_decode_mem_config = self.prefetcher.weight_mem_config(
+                configuration.dim,
+                configuration.qkv_size // configuration.num_devices,
+                wqkv_width_sharded_mem_config,
+                is_galaxy=configuration.is_galaxy,
+            )
+            self.wqkv_decode = ttnn.as_tensor(
+                qkv_cat,
+                dtype=self.wqkv_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG if self.TG else wqkv_decode_mem_config,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, dims=(3, 2) if self.TG else (2, 3), mesh_shape=configuration.cluster_shape
+                ),
+                cache_file_name=cache_name("wqkv_sharded_2d" + prefetcher_cache_suffix),
+            )
 
         def norm_reshard(x, norm, mode, norm_config):
             """Hack until RMSNorm supports height-sharded output config"""
@@ -353,6 +360,13 @@ class Attention(LightweightModule):
                 )
             return ttnn.ShardTensorToMesh(self.mesh_device, dim=2)
 
+        def get_wo_ring_mesh_mapper():
+            return ttnn.ShardTensor2dMesh(
+                self.mesh_device,
+                dims=(2, 3),
+                mesh_shape=configuration.cluster_shape,
+            )
+
         if self.prefetcher is not None:
             # The prefetcher picks the WO ring-weight layout: DRAM-core returns receiver-contiguous,
             # worker-core (and galaxy/TG) keeps the width-sharded ring config.
@@ -368,8 +382,8 @@ class Attention(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=wo_ring_mem_config,
-                mesh_mapper=get_wo_mesh_mapper(),
-                cache_file_name=(cache_name("wo_sharded_ring" + prefetcher_cache_suffix)),
+                mesh_mapper=get_wo_ring_mesh_mapper(),
+                cache_file_name=(cache_name("wo_sharded_ring_2d" + prefetcher_cache_suffix)),
             )
 
         def get_wo_memory_config():
@@ -407,7 +421,7 @@ class Attention(LightweightModule):
                 # Worker-core Prefetcher ignores the kwarg.
                 pc_qkv = self.args.get_attn_qkv_program_config(Mode.DECODE, 1, self.prefetcher)
                 pc_wo = self.args.get_attn_all_gather_matmul_program_config(Mode.DECODE, self.prefetcher)
-                self.prefetcher.insert_tensor(self.wqkv, program_config=pc_qkv)
+                self.prefetcher.insert_tensor(self.wqkv_decode, program_config=pc_qkv)
                 self.prefetcher.insert_tensor(self.wo_sharded_ring, program_config=pc_wo)
 
             self.prefetcher.register_callback(register_weights)
@@ -625,7 +639,7 @@ class Attention(LightweightModule):
         ###
         xqkv_fused_sharded = ttnn.linear(
             x,
-            self.wqkv,
+            self.wqkv_decode,
             memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.DECODE, self.prefetcher),
             program_config=self.args.get_attn_qkv_program_config(Mode.DECODE, 1, self.prefetcher),
             compute_kernel_config=self.li_qkv_decode_compute_kernel_cfg,
@@ -769,10 +783,13 @@ class Attention(LightweightModule):
             ),
         )
 
+        concat_heads_sub_core_grids = None
+        if self.prefetcher is not None and not getattr(self.prefetcher, "requires_external_trace_run", False):
+            concat_heads_sub_core_grids = self.prefetcher.all_worker_cores_range_set
         attn_output_cat = ttnn.experimental.nlp_concat_heads_decode(
             attn_output_11BH,
             num_heads=self.n_local_heads,
-            sub_core_grids=self.prefetcher.all_worker_cores_range_set if self.prefetcher is not None else None,
+            sub_core_grids=concat_heads_sub_core_grids,
         )
         ttnn.deallocate(attn_output_11BH)
         ttnn.deallocate(attn_output_1G4D)
