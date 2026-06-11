@@ -22,12 +22,16 @@ void kernel_main() {
         return;
     }
 
+    CircularBuffer src(src_cb);
+    CircularBuffer mask(mask_cb);
+    CircularBuffer out(out_cb);
+
     binary_op_init_common(src_cb, mask_cb, out_cb);
     mul_tiles_init(src_cb, mask_cb);
 
-    cb_wait_front(mask_cb, 1);
-    cb_wait_front(src_cb, w.Wt);
-    cb_reserve_back(out_cb, w.Wt);
+    mask.wait_front(1);
+    src.wait_front(w.Wt);
+    out.reserve_back(w.Wt);
     for (uint32_t i = 0; i < w.Wt; ++i) {
         tile_regs_acquire();
         mul_tiles(src_cb, mask_cb, i, 0, 0);
@@ -36,7 +40,7 @@ void kernel_main() {
         pack_tile(0, out_cb);
         tile_regs_release();
     }
-    cb_push_back(out_cb, w.Wt);
-    cb_pop_front(src_cb, w.Wt);
-    cb_pop_front(mask_cb, 1);
+    out.push_back(w.Wt);
+    src.pop_front(w.Wt);
+    mask.pop_front(1);
 }
