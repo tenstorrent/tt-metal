@@ -12,7 +12,10 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"  // exposes ttnn::MemoryConfig alias used in member/signature declarations
 
-#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/device_operation.hpp"
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/metal2_artifacts.hpp"
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 namespace ttnn::operations::experimental::transformer {
 
@@ -34,18 +37,37 @@ struct NlpCreateHeadsDeviceOperation {
     using spec_return_value_t = std::tuple<ttnn::TensorSpec, ttnn::TensorSpec, ttnn::TensorSpec>;
     using tensor_return_value_t = std::tuple<Tensor, Tensor, Tensor>;
 
+    // Metal 2.0 factories. Both build a ProgramSpec + ProgramRunArgs (ProgramArtifacts) in place of the
+    // legacy ProgramDescriptor.
+    //
+    // Interleaved — degenerate ProgramSpecFactoryConcept. All Q/K/V inputs and outputs flow through clean
+    // TensorAccessor bindings (TensorParameter + TensorBinding), so the cache-hit path's UpdateTensorArgs
+    // refreshes every address; all run-args live in create_program_artifacts' run_params. (The optional
+    // kv input gets a TensorParameter/binding only when present — that's structural, so it's fine for it
+    // to differ across cache entries.)
     struct Interleaved {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
     };
 
+    // Sharded — degenerate concept WITH the per-enqueue split ("++"). The sharded reader/writer address
+    // the input via raw (noc_x, noc_y, addr) endpoints rather than TensorAccessor bindings, so the source
+    // addresses are baked as plain runtime args. Those addresses (q/k/v base + per-core start offsets)
+    // can change between two dispatches that share a cache entry, so they live in create_per_enqueue_args
+    // and are re-applied on every dispatch via UpdateProgramRunArgs. The output tensors back the Q/K/V
+    // DFBs via borrowed_from, so they are declared as TensorParameters and refreshed the same way.
     struct Sharded {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
+        static tt::tt_metal::experimental::ProgramRunArgs create_per_enqueue_args(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
     };
 
     using program_factory_t = std::variant<Interleaved, Sharded>;

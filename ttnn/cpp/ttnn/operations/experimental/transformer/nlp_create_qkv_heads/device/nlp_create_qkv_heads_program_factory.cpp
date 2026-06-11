@@ -2,11 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <filesystem>
+#include <vector>
+
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 #include "nlp_create_qkv_heads_device_operation.hpp"
 
@@ -15,8 +18,24 @@ namespace ttnn::operations::experimental::transformer {
 using namespace tt::constants;
 using namespace tt;
 using namespace tt::tt_metal;
+namespace m2 = tt::tt_metal::experimental;
 
-ProgramDescriptor NlpCreateHeadsDeviceOperation::Interleaved::create_descriptor(
+namespace {
+
+constexpr const char* INTERLEAVED_READER_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
+    "reader_tm_tile_layout_nlp_create_qkv_heads.cpp";
+constexpr const char* INTERLEAVED_WRITER_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
+    "writer_tm_tile_layout_nlp_create_qkv_heads.cpp";
+constexpr const char* COMPUTE_TRANSPOSE_KERNEL_PATH = "ttnn/cpp/ttnn/kernel/compute/transpose_wh.cpp";
+constexpr const char* SHARDED_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
+    "reader_tm_tile_layout_nlp_create_qkv_heads_sharded.cpp";
+
+}  // namespace
+
+ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interleaved::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
@@ -74,147 +93,206 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Interleaved::create_descriptor(
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_blocks);
 
     ////////////////////////////////////////////////////////////////////////////
-    //                      Grayskull Device Setup
+    //                      Output tensors
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Tensor& q = std::get<0>(output);
     tt_metal::Tensor& k = std::get<1>(output);
     tt_metal::Tensor& v = std::get<2>(output);
 
-    tt_metal::Buffer* q_buffer = q.buffer();
-    TT_ASSERT(q_buffer != nullptr, "Output q buffer should be allocated on device!");
-    tt_metal::Buffer* k_buffer = k.buffer();
-    TT_ASSERT(k_buffer != nullptr, "Output k buffer should be allocated on device!");
-    tt_metal::Buffer* v_buffer = v.buffer();
-    TT_ASSERT(v_buffer != nullptr, "Output v buffer should be allocated on device!");
+    TT_ASSERT(q.buffer() != nullptr, "Output q buffer should be allocated on device!");
+    TT_ASSERT(k.buffer() != nullptr, "Output k buffer should be allocated on device!");
+    TT_ASSERT(v.buffer() != nullptr, "Output v buffer should be allocated on device!");
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    ProgramDescriptor desc;
+    // CB indices kept identical to the legacy program: cb1 carries Q/V (and K when not transposing); cb0 is
+    // the K input for compute and cb16 the transposed K output, used only when transpose_k_heads is set.
+    [[maybe_unused]] constexpr uint32_t src1_cb_index =
+        1;  // cb0 is needed for compute if we want to use generic transpose_wh compute kernel
+    [[maybe_unused]] constexpr uint32_t src0_cb_index = 0;
+    [[maybe_unused]] constexpr uint32_t out_cb_index = 16;
 
-    std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)q_num_tiles,
-        (std::uint32_t)kv_num_tiles,
-    };
-    tt::tt_metal::TensorAccessorArgs(in0_buffer).append_to(reader_compile_time_args);
-    // Always append placeholder/accessor for in1 to keep offsets stable
-    tt::tt_metal::TensorAccessorArgs(read_from_input_tensor_kv ? in1_buffer : nullptr)
-        .append_to(reader_compile_time_args);
+    // Create circular buffers (DFBs)
+    uint32_t micro_block_size = 1;                 // Num tiles to read/wait for in reader and writer
+    uint32_t cb_num_tiles = micro_block_size * 4;  // Quadruple buffer everything
 
-    // TODO: Q, K, V doesn't necessarily need to be the same output mem config
-    std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)q_out_h_tiles,
-        (std::uint32_t)q_out_w_tiles,
-        (std::uint32_t)q_out_HtWt,
-        (std::uint32_t)num_q_heads,   // q_out_c
-        (std::uint32_t)num_kv_heads,  // kv_out_c
-    };
-    tt::tt_metal::TensorAccessorArgs(q_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(k_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(v_buffer).append_to(writer_compile_time_args);
+    // TODO: Investigate perf allocating full in0_w_tiles with double buffer
+    // uint32_t cb1_num_tiles = in0_w_tiles * 2; // double buffer; this runs out of space for generic shapes
+    uint32_t cb1_num_tiles = cb_num_tiles;
 
-    KernelDescriptor::Defines reader_defines;
-    KernelDescriptor::Defines writer_defines;
+    std::vector<m2::DataflowBufferSpec> dfbs;
+    dfbs.push_back(m2::DataflowBufferSpec{
+        .unique_id = m2::DFBSpecName{"qv"},
+        .entry_size = single_tile_size,
+        .num_entries = cb1_num_tiles,
+        .data_format_metadata = cb_data_format,
+    });
+    if (transpose_k_heads) {
+        // If we transpose_k_heads:
+        // - reader will write to cb0, instead of cb1
+        // - compute will wait on cb0 and write to cb16
+        // - writer will wait on cb 16, instead of cb1
+        dfbs.push_back(m2::DataflowBufferSpec{
+            .unique_id = m2::DFBSpecName{"k_in"},
+            .entry_size = single_tile_size,
+            .num_entries = cb_num_tiles,
+            .data_format_metadata = cb_data_format,
+        });
+        dfbs.push_back(m2::DataflowBufferSpec{
+            .unique_id = m2::DFBSpecName{"k_out"},
+            .entry_size = single_tile_size,
+            .num_entries = cb_num_tiles,
+            .data_format_metadata = cb_data_format,
+        });
+    }
+
+    // ---- kernels ----
+    m2::KernelSpec::CompilerOptions reader_opts;
+    m2::KernelSpec::CompilerOptions writer_opts;
+    if (transpose_k_heads) {
+        reader_opts.defines.emplace("TRANSPOSE_K_HEADS", "1");
+        writer_opts.defines.emplace("TRANSPOSE_K_HEADS", "1");
+    }
+    if (read_from_input_tensor_kv) {
+        reader_opts.defines.emplace("READ_FROM_INPUT_TENSOR_KV", "1");
+    }
+
+    std::vector<m2::KernelSpec> kernels;
+
     if (transpose_k_heads) {
         // For FLOAT32 input, enable fp32 dest accumulation so the JIT data-format selection
         // resolves the unpack-dst CB to Tf32 (10-bit mantissa) instead of Float16_b (7-bit
         // mantissa). Mirrors the per-dtype promotion in eltwise unary/binary primitives.
         const bool fp32_dest_acc_en = input_tensor.dtype() == tt_metal::DataType::FLOAT32;
 
-        std::vector<uint32_t> compute_args_core_group_1 = {num_blocks_per_core_group_1 * kv_num_tiles};
-        KernelDescriptor compute_desc_1;
-        compute_desc_1.kernel_source = "ttnn/cpp/ttnn/kernel/compute/transpose_wh.cpp";
-        compute_desc_1.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        compute_desc_1.core_ranges = core_group_1;
-        compute_desc_1.compile_time_args = std::move(compute_args_core_group_1);
-        compute_desc_1.config = ComputeConfigDescriptor{.fp32_dest_acc_en = fp32_dest_acc_en};
-        desc.kernels.push_back(std::move(compute_desc_1));
+        // Compute kernel reads K from cb0 (k_in) and writes transposed K to cb16 (k_out). The legacy
+        // factory split the compute kernel across two core groups so each carries its own per-block tile
+        // count as a compile-time arg; we preserve that by emitting one KernelSpec per non-empty group.
+        m2::KernelSpec compute_1{
+            .unique_id = m2::KernelSpecName{"compute_1"},
+            .source = std::filesystem::path{COMPUTE_TRANSPOSE_KERNEL_PATH},
+            .dfb_bindings =
+                {m2::ConsumerOf(m2::DFBSpecName{"k_in"}, "k_in"), m2::ProducerOf(m2::DFBSpecName{"k_out"}, "k_out")},
+            .compile_time_args = {{"per_core_block_cnt", num_blocks_per_core_group_1 * kv_num_tiles}},
+            .hw_config = m2::ComputeHardwareConfig{.fp32_dest_acc_en = fp32_dest_acc_en},
+        };
+        kernels.push_back(std::move(compute_1));
 
         if (core_group_2.num_cores() > 0) {
-            std::vector<uint32_t> compute_args_core_group_2 = {num_blocks_per_core_group_2 * kv_num_tiles};
-            KernelDescriptor compute_desc_2;
-            compute_desc_2.kernel_source = "ttnn/cpp/ttnn/kernel/compute/transpose_wh.cpp";
-            compute_desc_2.source_type = KernelDescriptor::SourceType::FILE_PATH;
-            compute_desc_2.core_ranges = core_group_2;
-            compute_desc_2.compile_time_args = std::move(compute_args_core_group_2);
-            compute_desc_2.config = ComputeConfigDescriptor{.fp32_dest_acc_en = fp32_dest_acc_en};
-            desc.kernels.push_back(std::move(compute_desc_2));
+            m2::KernelSpec compute_2{
+                .unique_id = m2::KernelSpecName{"compute_2"},
+                .source = std::filesystem::path{COMPUTE_TRANSPOSE_KERNEL_PATH},
+                .dfb_bindings =
+                    {m2::ConsumerOf(m2::DFBSpecName{"k_in"}, "k_in"),
+                     m2::ProducerOf(m2::DFBSpecName{"k_out"}, "k_out")},
+                .compile_time_args = {{"per_core_block_cnt", num_blocks_per_core_group_2 * kv_num_tiles}},
+                .hw_config = m2::ComputeHardwareConfig{.fp32_dest_acc_en = fp32_dest_acc_en},
+            };
+            kernels.push_back(std::move(compute_2));
         }
-
-        reader_defines.emplace_back("TRANSPOSE_K_HEADS", "1");
-        writer_defines.emplace_back("TRANSPOSE_K_HEADS", "1");
-    }
-    if (read_from_input_tensor_kv) {
-        reader_defines.emplace_back("READ_FROM_INPUT_TENSOR_KV", "1");
     }
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
-        "reader_tm_tile_layout_nlp_create_qkv_heads.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.defines = std::move(reader_defines);
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
-        "writer_tm_tile_layout_nlp_create_qkv_heads.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.defines = std::move(writer_defines);
-    writer_desc.config = WriterConfigDescriptor{};
-
-    // Create circular buffers
-    uint32_t micro_block_size = 1;                 // Num tiles to read/wait for in reader and writer
-    uint32_t cb_num_tiles = micro_block_size * 4;  // Quadruple buffer everything
-
-    // TODO: Investigate perf allocating full in0_w_tiles with double buffer
-    // uint32_t cb1_num_tiles = in0_w_tiles * 2; // double buffer; this runs out of space for generic shapes
-    uint32_t src1_cb_index = 1;  // cb0 is needed for compute if we want to use generic transpose_wh compute kernel
-    uint32_t cb1_num_tiles = cb_num_tiles;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = cb1_num_tiles * single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(src1_cb_index),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size,
-        }}},
-    });
-
-    // If we transpose_k_heads:
-    // - reader will write to cb0, instead of cb1
-    // - compute will wait on cb0 and write to cb16
-    // - writer will wait on cb 16, instead of cb1
+    // Reader: produces Q/V into the qv DFB, and K into either qv (no transpose) or k_in (transpose).
+    // When not transposing, K shares the qv DFB. Metal 2.0 forbids a kernel binding the same DFB twice in
+    // the same role, so we emit a single qv ProducerOf and the kernel aliases dfb::cb_k -> dfb::cb_qv under
+    // the (absent) TRANSPOSE_K_HEADS guard. When transposing, K gets its own k_in DFB and a distinct binding.
+    std::vector<m2::DFBBinding> reader_dfb_bindings = {m2::ProducerOf(m2::DFBSpecName{"qv"}, "cb_qv")};
     if (transpose_k_heads) {
-        uint32_t src0_cb_index = 0;
-        uint32_t cb0_num_tiles = cb_num_tiles;
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = cb0_num_tiles * single_tile_size,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(src0_cb_index),
-                .data_format = cb_data_format,
-                .page_size = single_tile_size,
-            }}},
-        });
-
-        uint32_t out_cb_index = 16;
-        uint32_t out_cb_num_tiles = cb_num_tiles;
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = out_cb_num_tiles * single_tile_size,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(out_cb_index),
-                .data_format = cb_data_format,
-                .page_size = single_tile_size,
-            }}},
-        });
+        reader_dfb_bindings.push_back(m2::ProducerOf(m2::DFBSpecName{"k_in"}, "cb_k"));
     }
+    std::vector<m2::TensorBinding> reader_tensor_bindings = {
+        m2::TensorBinding{.tensor_parameter_name = m2::TensorParamName{"in0"}, .accessor_name = "in0"}};
+    if (read_from_input_tensor_kv) {
+        reader_tensor_bindings.push_back(
+            m2::TensorBinding{.tensor_parameter_name = m2::TensorParamName{"in1"}, .accessor_name = "in1"});
+    }
+
+    m2::KernelSpec reader{
+        .unique_id = m2::KernelSpecName{"reader"},
+        .source = std::filesystem::path{INTERLEAVED_READER_KERNEL_PATH},
+        .compiler_options = std::move(reader_opts),
+        .dfb_bindings = std::move(reader_dfb_bindings),
+        .tensor_bindings = std::move(reader_tensor_bindings),
+        .compile_time_args = {{"q_num_tiles", q_num_tiles}, {"kv_num_tiles", kv_num_tiles}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_blocks", "in0_tensor_tile_id", "in1_tensor_tile_id"}},
+        // Reader on NCRISC (RISCV_1 / NOC1), writer on BRISC — mirrors the legacy Reader/Writer configs so
+        // the two data-movement kernels don't collide on the same DM processor.
+        .hw_config =
+            m2::DataMovementHardwareConfig{
+                .gen1_config =
+                    m2::DataMovementHardwareConfig::Gen1Config{
+                        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+                        .noc = tt::tt_metal::NOC::RISCV_1_default}},
+    };
+
+    // Writer: consumes Q/V from qv, K from qv (no transpose) or k_out (transpose), writes to Q/K/V outputs.
+    // Same single-binding rule as the reader: in the non-transpose case the writer binds qv once and the
+    // kernel aliases dfb::cb_k -> dfb::cb_qv; when transposing it consumes K from the dedicated k_out DFB.
+    std::vector<m2::DFBBinding> writer_dfb_bindings = {m2::ConsumerOf(m2::DFBSpecName{"qv"}, "cb_qv")};
+    if (transpose_k_heads) {
+        writer_dfb_bindings.push_back(m2::ConsumerOf(m2::DFBSpecName{"k_out"}, "cb_k"));
+    }
+
+    m2::KernelSpec writer{
+        .unique_id = m2::KernelSpecName{"writer"},
+        .source = std::filesystem::path{INTERLEAVED_WRITER_KERNEL_PATH},
+        .compiler_options = std::move(writer_opts),
+        .dfb_bindings = std::move(writer_dfb_bindings),
+        // TODO: Q, K, V doesn't necessarily need to be the same output mem config
+        .tensor_bindings =
+            {m2::TensorBinding{.tensor_parameter_name = m2::TensorParamName{"q"}, .accessor_name = "q"},
+             m2::TensorBinding{.tensor_parameter_name = m2::TensorParamName{"k"}, .accessor_name = "k"},
+             m2::TensorBinding{.tensor_parameter_name = m2::TensorParamName{"v"}, .accessor_name = "v"}},
+        .compile_time_args =
+            {{"q_out_h_tiles", q_out_h_tiles},
+             {"q_out_w_tiles", q_out_w_tiles},
+             {"q_out_HtWt", q_out_HtWt},
+             {"q_out_c", num_q_heads},
+             {"kv_out_c", num_kv_heads}},
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"num_blocks", "q_out_h_dim", "q_out_tensor_tile_id", "k_out_tensor_tile_id", "v_out_tensor_tile_id"}},
+        .hw_config = m2::DataMovementHardwareConfig{.gen1_config = m2::DataMovementHardwareConfig::Gen1Config{}},
+    };
+
+    kernels.push_back(std::move(reader));
+    kernels.push_back(std::move(writer));
+
+    // ---- ProgramSpec ----
+    m2::ProgramSpec spec;
+    spec.name = "nlp_create_qkv_heads_interleaved";
+    spec.kernels = std::move(kernels);
+    spec.dataflow_buffers = std::move(dfbs);
+    spec.tensor_parameters = {
+        m2::TensorParameter{.unique_id = m2::TensorParamName{"in0"}, .spec = input_tensor.tensor_spec()},
+        m2::TensorParameter{.unique_id = m2::TensorParamName{"q"}, .spec = q.tensor_spec()},
+        m2::TensorParameter{.unique_id = m2::TensorParamName{"k"}, .spec = k.tensor_spec()},
+        m2::TensorParameter{.unique_id = m2::TensorParamName{"v"}, .spec = v.tensor_spec()}};
+    // The optional kv input gets a TensorParameter only when present; structural, so it's fine for it to
+    // differ across cache entries (extract is gated on the same has_value() everywhere).
+    if (read_from_input_tensor_kv) {
+        spec.tensor_parameters.push_back(m2::TensorParameter{
+            .unique_id = m2::TensorParamName{"in1"}, .spec = input_tensor_kv.value().tensor_spec()});
+    }
+
+    // WorkUnit: reader + writer (+ compute kernels when transposing) on all_cores. The compute kernels are
+    // placed on their own core groups (split_work_to_cores), but the WorkUnitSpec carries the full
+    // node set; per-kernel placement is derived from the kernel's runtime-arg coverage.
+    m2::WorkUnitSpec work_unit{.name = "nlp_create_qkv_heads", .target_nodes = all_cores};
+    if (transpose_k_heads) {
+        work_unit.kernels.push_back(m2::KernelSpecName{"compute_1"});
+        if (core_group_2.num_cores() > 0) {
+            work_unit.kernels.push_back(m2::KernelSpecName{"compute_2"});
+        }
+    }
+    work_unit.kernels.push_back(m2::KernelSpecName{"reader"});
+    work_unit.kernels.push_back(m2::KernelSpecName{"writer"});
+    spec.work_units = {std::move(work_unit)};
+
+    // ---- run-args (degenerate: complete set) ----
+    m2::ProgramRunArgs::KernelRunArgs reader_args{.kernel = m2::KernelSpecName{"reader"}};
+    m2::ProgramRunArgs::KernelRunArgs writer_args{.kernel = m2::KernelSpecName{"writer"}};
 
     for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -236,45 +314,177 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Interleaved::create_descriptor(
                                             ? (num_blocks_written / q_out_h_tiles * kv_out_CHtWt) + q_out_h_dim
                                             : v_out_tensor_tile_id;
 
-        KernelDescriptor::RTArgList reader_rt;
-        reader_rt.reserve(5);
-        reader_rt.push_back(in0_buffer);
-        if (in1_buffer != nullptr) {
-            reader_rt.push_back(in1_buffer);
-        } else {
-            reader_rt.push_back(uint32_t{0});
-        }
-        reader_rt.push_back(num_blocks_per_core);
-        reader_rt.push_back(num_blocks_written * in0_w_tiles);
-        reader_rt.push_back(num_blocks_written * in1_w_tiles);
-        reader_desc.emplace_runtime_args(core, reader_rt);
+        reader_args.runtime_arg_values.push_back(
+            {core,
+             {{"num_blocks", num_blocks_per_core},
+              {"in0_tensor_tile_id", num_blocks_written * in0_w_tiles},
+              {"in1_tensor_tile_id", num_blocks_written * in1_w_tiles}}});
 
-        writer_desc.emplace_runtime_args(
-            core,
-            {
-                q_buffer,              // q_tensor_addr
-                k_buffer,              // k_tensor_addr
-                v_buffer,              // v_tensor_addr
-                num_blocks_per_core,   // num_blocks
-                q_out_h_dim,           // q_out_h_dim
-                q_out_tensor_tile_id,  // q_out_tensor_tile_id
-                k_out_tensor_tile_id,  // k_out_tensor_tile_id
-                v_out_tensor_tile_id,  // v_out_tensor_tile_id
-            });
+        writer_args.runtime_arg_values.push_back(
+            {core,
+             {{"num_blocks", num_blocks_per_core},
+              {"q_out_h_dim", q_out_h_dim},
+              {"q_out_tensor_tile_id", q_out_tensor_tile_id},
+              {"k_out_tensor_tile_id", k_out_tensor_tile_id},
+              {"v_out_tensor_tile_id", v_out_tensor_tile_id}}});
 
         num_blocks_written += num_blocks_per_core;
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
+    m2::ProgramRunArgs run_params;
+    run_params.kernel_run_args.push_back(std::move(reader_args));
+    run_params.kernel_run_args.push_back(std::move(writer_args));
+    run_params.tensor_args.emplace(
+        m2::TensorParamName{"in0"}, m2::ProgramRunArgs::TensorArgument{std::cref(input_tensor.mesh_tensor())});
+    if (read_from_input_tensor_kv) {
+        run_params.tensor_args.emplace(
+            m2::TensorParamName{"in1"},
+            m2::ProgramRunArgs::TensorArgument{std::cref(input_tensor_kv.value().mesh_tensor())});
+    }
+    run_params.tensor_args.emplace(
+        m2::TensorParamName{"q"}, m2::ProgramRunArgs::TensorArgument{std::cref(q.mesh_tensor())});
+    run_params.tensor_args.emplace(
+        m2::TensorParamName{"k"}, m2::ProgramRunArgs::TensorArgument{std::cref(k.mesh_tensor())});
+    run_params.tensor_args.emplace(
+        m2::TensorParamName{"v"}, m2::ProgramRunArgs::TensorArgument{std::cref(v.mesh_tensor())});
 
-    return desc;
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_params)};
 }
 
-ProgramDescriptor NlpCreateHeadsDeviceOperation::Sharded::create_descriptor(
+namespace {
+
+// Shared structural derivation for the Sharded variant. A pure function of the operation attributes +
+// the input/output tensor layouts — the per-core source ADDRESSES (which can change per dispatch) are
+// computed separately, in create_per_enqueue_args.
+struct ShardedDerived {
+    CoreRangeSet q_cores;
+    CoreRangeSet k_cores;
+    uint32_t q_num_tiles = 0;
+    uint32_t k_num_tiles = 0;
+    uint32_t v_num_tiles = 0;
+    uint32_t single_tile_size = 0;
+    tt::DataFormat cb_data_format = tt::DataFormat::Invalid;
+    uint32_t num_cores = 0;
+    uint32_t num_cores_x = 0;
+    uint32_t num_cores_y = 0;
+};
+
+ShardedDerived derive_sharded(
+    const NlpCreateHeadsDeviceOperation::operation_attributes_t& /*operation_attributes*/,
+    const NlpCreateHeadsDeviceOperation::tensor_args_t& tensor_args,
+    NlpCreateHeadsDeviceOperation::tensor_return_value_t& output) {
+    const auto& input_tensor = tensor_args.input_tensor_q;
+    ShardedDerived d;
+    d.cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    d.single_tile_size = tt::tile_size(d.cb_data_format);
+
+    // CB indices c_16/c_17/c_18 are no longer baked here — the kernel reads them from its DFB binding
+    // tokens (dfb::cb_q_out / dfb::cb_kv_out). The per-tensor tile counts and core grids remain structural.
+    auto q_shard_spec = std::get<0>(output).shard_spec().value();
+    d.q_cores = q_shard_spec.grid;
+    d.q_num_tiles = q_shard_spec.shape[0] * q_shard_spec.shape[1] / TILE_HW;
+
+    auto k_shard_spec = std::get<1>(output).shard_spec().value();
+    d.k_cores = k_shard_spec.grid;
+    d.k_num_tiles = k_shard_spec.shape[0] * k_shard_spec.shape[1] / TILE_HW;
+
+    auto v_shard_spec = std::get<0>(output).shard_spec().value();
+    d.v_num_tiles = v_shard_spec.shape[0] * v_shard_spec.shape[1] / TILE_HW;
+
+    d.num_cores = std::max(d.q_cores.num_cores(), d.k_cores.num_cores());
+    auto core_grid = d.q_cores.bounding_box();
+    d.num_cores_x = core_grid.end_coord.x + 1;
+    d.num_cores_y = core_grid.end_coord.y + 1;
+    return d;
+}
+
+}  // namespace
+
+ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Sharded::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
+    auto& output = tensor_return_value;
+    const auto d = derive_sharded(operation_attributes, tensor_args, output);
+
+    // Q/K/V output DFBs back onto the output tensors (borrowed memory). c_16 / c_17 / c_18.
+    std::vector<m2::DataflowBufferSpec> dfbs = {
+        m2::DataflowBufferSpec{
+            .unique_id = m2::DFBSpecName{"q_out"},
+            .entry_size = d.single_tile_size,
+            .num_entries = d.q_num_tiles,
+            .data_format_metadata = d.cb_data_format,
+            .borrowed_from = m2::TensorParamName{"q"},
+        },
+        m2::DataflowBufferSpec{
+            .unique_id = m2::DFBSpecName{"k_out"},
+            .entry_size = d.single_tile_size,
+            .num_entries = d.k_num_tiles,
+            .data_format_metadata = d.cb_data_format,
+            .borrowed_from = m2::TensorParamName{"k"},
+        },
+        m2::DataflowBufferSpec{
+            .unique_id = m2::DFBSpecName{"v_out"},
+            .entry_size = d.single_tile_size,
+            .num_entries = d.v_num_tiles,
+            .data_format_metadata = d.cb_data_format,
+            .borrowed_from = m2::TensorParamName{"v"},
+        },
+    };
+
+    // Reader produces Q (cb_q_out) and K (cb_kv_out); writer produces Q (cb_q_out) and V (cb_kv_out). Same
+    // source compiled twice, bound to different output DFBs as the second endpoint, exactly as the legacy
+    // program did with different CB-index compile-time args. The kernel reads every per-core runtime value
+    // positionally (incl. a variable-length NOC coord array), so they are all passed as varargs; the CB
+    // ids come from the DFB binding tokens (dfb::).
+    m2::KernelSpec reader{
+        .unique_id = m2::KernelSpecName{"reader"},
+        .source = std::filesystem::path{SHARDED_KERNEL_PATH},
+        .dfb_bindings =
+            {m2::ProducerOf(m2::DFBSpecName{"q_out"}, "cb_q_out"),
+             m2::ProducerOf(m2::DFBSpecName{"k_out"}, "cb_kv_out")},
+        .hw_config =
+            m2::DataMovementHardwareConfig{
+                .gen1_config =
+                    m2::DataMovementHardwareConfig::Gen1Config{
+                        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+                        .noc = tt::tt_metal::NOC::RISCV_1_default}},
+        .advanced_options = m2::KernelAdvancedOptions{.num_runtime_varargs = 19 + d.num_cores_x + d.num_cores_y},
+    };
+
+    m2::KernelSpec writer{
+        .unique_id = m2::KernelSpecName{"writer"},
+        .source = std::filesystem::path{SHARDED_KERNEL_PATH},
+        .dfb_bindings =
+            {m2::ProducerOf(m2::DFBSpecName{"q_out"}, "cb_q_out"),
+             m2::ProducerOf(m2::DFBSpecName{"v_out"}, "cb_kv_out")},
+        .hw_config = m2::DataMovementHardwareConfig{.gen1_config = m2::DataMovementHardwareConfig::Gen1Config{}},
+        .advanced_options = m2::KernelAdvancedOptions{.num_runtime_varargs = 19 + d.num_cores_x + d.num_cores_y},
+    };
+
+    m2::ProgramSpec spec;
+    spec.name = "nlp_create_qkv_heads_sharded";
+    spec.kernels = {std::move(reader), std::move(writer)};
+    spec.dataflow_buffers = std::move(dfbs);
+    spec.tensor_parameters = {
+        m2::TensorParameter{.unique_id = m2::TensorParamName{"q"}, .spec = std::get<0>(output).tensor_spec()},
+        m2::TensorParameter{.unique_id = m2::TensorParamName{"k"}, .spec = std::get<1>(output).tensor_spec()},
+        m2::TensorParameter{.unique_id = m2::TensorParamName{"v"}, .spec = std::get<2>(output).tensor_spec()}};
+    spec.work_units = {m2::WorkUnitSpec{
+        .name = "nlp_create_qkv_heads_sharded",
+        .kernels = {m2::KernelSpecName{"reader"}, m2::KernelSpecName{"writer"}},
+        .target_nodes = d.q_cores}};
+
+    // All runtime args (incl. the input addresses) are per-enqueue; create_program_artifacts contributes
+    // no run-args of its own (only the tensor bindings, supplied by create_per_enqueue_args).
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = m2::ProgramRunArgs{}};
+}
+
+m2::ProgramRunArgs NlpCreateHeadsDeviceOperation::Sharded::create_per_enqueue_args(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     const auto& input_tensor = tensor_args.input_tensor_q;
     const auto& input_tensor_kv = tensor_args.input_tensor_kv;
     auto& output = tensor_return_value;
@@ -282,73 +492,20 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Sharded::create_descriptor(
     auto num_q_heads = operation_attributes.num_q_heads;
     auto num_kv_heads = operation_attributes.num_kv_heads;
 
-    ProgramDescriptor desc;
-
     tt_metal::IDevice* device = input_tensor.device();
-
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    const auto d = derive_sharded(operation_attributes, tensor_args, output);
 
     const bool read_from_input_tensor_kv = input_tensor_kv.has_value();
 
-    uint32_t single_tile_size = tt::tile_size(cb_data_format);
-
     uint32_t head_tiles = head_dim / TILE_WIDTH;
-    uint32_t head_size = head_tiles * single_tile_size;
+    uint32_t head_size = head_tiles * d.single_tile_size;
 
-    auto q_shard_spec = std::get<0>(output).shard_spec().value();
-    auto q_cores = q_shard_spec.grid;
-    auto q_num_tiles = q_shard_spec.shape[0] * q_shard_spec.shape[1] / TILE_HW;
-
-    uint32_t per_core_out_q_heads = num_q_heads / q_cores.num_cores();
+    uint32_t per_core_out_q_heads = num_q_heads / d.q_cores.num_cores();
     uint32_t per_risc0_out_q_heads = div_up(per_core_out_q_heads, 2);
     uint32_t per_risc1_out_q_heads = per_core_out_q_heads / 2;
     uint32_t per_core_in_q_heads = num_q_heads / input_tensor.shard_spec().value().num_cores();
 
-    uint32_t q_output_cb_index = CBIndex::c_16;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = q_num_tiles * single_tile_size,
-        .core_ranges = q_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(q_output_cb_index),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size,
-        }}},
-        .buffer = std::get<0>(output).buffer(),
-    });
-
-    auto k_shard_spec = std::get<1>(output).shard_spec().value();
-    auto k_cores = k_shard_spec.grid;
-    auto k_num_tiles = k_shard_spec.shape[0] * k_shard_spec.shape[1] / TILE_HW;
-
-    uint32_t k_output_cb_index = CBIndex::c_17;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = k_num_tiles * single_tile_size,
-        .core_ranges = k_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(k_output_cb_index),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size,
-        }}},
-        .buffer = std::get<1>(output).buffer(),
-    });
-
-    auto v_shard_spec = std::get<0>(output).shard_spec().value();
-    auto v_cores = q_shard_spec.grid;
-    auto v_num_tiles = v_shard_spec.shape[0] * v_shard_spec.shape[1] / TILE_HW;
-
-    uint32_t v_output_cb_index = CBIndex::c_18;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = v_num_tiles * single_tile_size,
-        .core_ranges = v_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(v_output_cb_index),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size,
-        }}},
-        .buffer = std::get<2>(output).buffer(),
-    });
-
-    uint32_t per_core_out_kv_heads = num_kv_heads / k_cores.num_cores();
+    uint32_t per_core_out_kv_heads = num_kv_heads / d.k_cores.num_cores();
     uint32_t per_core_in_kv_heads =
         num_kv_heads / (read_from_input_tensor_kv ? input_tensor_kv.value().shard_spec().value().num_cores()
                                                   : input_tensor.shard_spec().value().num_cores());
@@ -358,35 +515,13 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Sharded::create_descriptor(
     if (read_from_input_tensor_kv) {
         k_base_addr = input_tensor_kv.value().buffer()->address();
     } else {
-        k_base_addr = q_base_addr + per_core_in_q_heads * head_tiles * single_tile_size;
+        k_base_addr = q_base_addr + per_core_in_q_heads * head_tiles * d.single_tile_size;
     }
-    uint32_t v_base_addr = k_base_addr + (per_core_in_kv_heads * head_tiles * single_tile_size);
+    uint32_t v_base_addr = k_base_addr + (per_core_in_kv_heads * head_tiles * d.single_tile_size);
 
-    std::vector<uint32_t> reader_compile_time_args = {q_output_cb_index, k_output_cb_index};
-    std::vector<uint32_t> writer_compile_time_args = {q_output_cb_index, v_output_cb_index};
-
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
-        "reader_tm_tile_layout_nlp_create_qkv_heads_sharded.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = q_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
-        "reader_tm_tile_layout_nlp_create_qkv_heads_sharded.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = q_cores;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterConfigDescriptor{};
-
-    uint32_t num_cores = std::max(q_cores.num_cores(), k_cores.num_cores());
-
-    auto core_grid = q_cores.bounding_box();
-    uint32_t num_cores_x = core_grid.end_coord.x + 1, num_cores_y = core_grid.end_coord.y + 1;
+    const uint32_t num_cores = d.num_cores;
+    const uint32_t num_cores_x = d.num_cores_x;
+    const uint32_t num_cores_y = d.num_cores_y;
 
     const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, true);
 
@@ -410,22 +545,15 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Sharded::create_descriptor(
 
     uint32_t remote_q_read = 0;
     uint32_t remote_kv_read = 0;
-    // TODO: convert to emplace_runtime_args(Buffer*) for fast cache-hit patching once the
-    // reader/writer kernel ABI is updated to accept (base_buffer, offset) pairs and compute
-    // q_start_addr = get_arg_val(base_pos) + get_arg_val(offset_pos) in-kernel.  Today both
-    // q_base_addr and q_start_addr are baked as raw uint32_t (q_start_addr = q_base_addr +
-    // remote_q_head_start_idx * head_size), and similarly for K/V whose base addresses are
-    // themselves computed offsets into the input (or kv) buffer rather than standalone
-    // buffers, which makes a clean BufferBinding registration non-trivial.  No BufferBinding
-    // is registered for this op, so the contract-1 adapter falls back to the slow-path
-    // rebuild via apply_descriptor_runtime_args on cache hits (see
-    // mesh_device_operation_adapter.hpp apply_descriptor — Contract-1 branch with empty
-    // resolved_bindings.rt_args), which correctly refreshes the addresses, just not as fast.
+
+    m2::ProgramRunArgs::KernelRunArgs reader_args{.kernel = m2::KernelSpecName{"reader"}};
+    m2::ProgramRunArgs::KernelRunArgs writer_args{.kernel = m2::KernelSpecName{"writer"}};
+
     for (uint32_t i = 0; i < num_cores; ++i) {
         const auto& core = cores[i];
-        bool read_kv_heads = i < k_cores.num_cores();
+        bool read_kv_heads = i < d.k_cores.num_cores();
         std::vector<uint32_t> reader_runtime_args;
-        reader_runtime_args.reserve(18 + num_cores_x + num_cores_y);
+        reader_runtime_args.reserve(19 + num_cores_x + num_cores_y);
         reader_runtime_args = {
             head_size,
             per_risc0_out_q_heads,
@@ -444,7 +572,7 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Sharded::create_descriptor(
             kv_y,
             k_base_addr,
             k_start_addr,
-            k_num_tiles,
+            d.k_num_tiles,
             num_cores_x,
         };
         reader_runtime_args.insert(reader_runtime_args.end(), noc_x_coords.begin(), noc_x_coords.end());
@@ -456,7 +584,7 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Sharded::create_descriptor(
         remote_q_head_start_idx = (remote_q_head_start_idx + per_risc0_out_q_heads) % per_core_in_q_heads;
         q_start_addr = q_base_addr + remote_q_head_start_idx * head_size;
 
-        reader_desc.runtime_args.emplace_back(core, reader_runtime_args);
+        reader_args.advanced_options.runtime_varargs.emplace(core, reader_runtime_args);
 
         reader_runtime_args[1] = per_risc1_out_q_heads;
         reader_runtime_args[3] = remote_q_head_start_idx;
@@ -484,13 +612,19 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Sharded::create_descriptor(
             v_start_addr = v_base_addr + remote_kv_head_start_idx * head_size;
         }
 
-        writer_desc.runtime_args.emplace_back(core, std::move(reader_runtime_args));
+        writer_args.advanced_options.runtime_varargs.emplace(core, std::move(reader_runtime_args));
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-
-    return desc;
+    m2::ProgramRunArgs args;
+    args.kernel_run_args.push_back(std::move(reader_args));
+    args.kernel_run_args.push_back(std::move(writer_args));
+    args.tensor_args.emplace(
+        m2::TensorParamName{"q"}, m2::ProgramRunArgs::TensorArgument{std::cref(std::get<0>(output).mesh_tensor())});
+    args.tensor_args.emplace(
+        m2::TensorParamName{"k"}, m2::ProgramRunArgs::TensorArgument{std::cref(std::get<1>(output).mesh_tensor())});
+    args.tensor_args.emplace(
+        m2::TensorParamName{"v"}, m2::ProgramRunArgs::TensorArgument{std::cref(std::get<2>(output).mesh_tensor())});
+    return args;
 }
 
 }  // namespace ttnn::operations::experimental::transformer

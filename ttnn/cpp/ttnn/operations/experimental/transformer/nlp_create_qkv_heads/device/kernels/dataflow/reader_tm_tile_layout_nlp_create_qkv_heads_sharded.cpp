@@ -12,20 +12,24 @@
 void kernel_main() {
     Noc noc;
 
-    uint32_t head_size = get_arg_val<uint32_t>(0);
-    uint32_t num_q_heads = get_arg_val<uint32_t>(1);
-    uint32_t num_q_heads_per_core = get_arg_val<uint32_t>(2);
-    uint32_t remote_q_head_start_idx = get_arg_val<uint32_t>(3);
-    uint32_t start_q_x = get_arg_val<uint32_t>(4);
-    uint32_t start_q_y = get_arg_val<uint32_t>(5);
-    uint32_t q_base_addr = get_arg_val<uint32_t>(6);
-    uint32_t q_start_addr = get_arg_val<uint32_t>(7);
-    uint32_t q_offset = get_arg_val<uint32_t>(8);
-    constexpr uint32_t cb_id_q_out = get_compile_time_arg_val(0);
+    // Metal 2.0: all per-core runtime values are positional varargs (incl. the variable-length NOC coord
+    // array), accessed via get_vararg(); the two output CB ids come from the DFB binding tokens (dfb::).
+    uint32_t head_size = get_vararg(0);
+    uint32_t num_q_heads = get_vararg(1);
+    uint32_t num_q_heads_per_core = get_vararg(2);
+    uint32_t remote_q_head_start_idx = get_vararg(3);
+    uint32_t start_q_x = get_vararg(4);
+    uint32_t start_q_y = get_vararg(5);
+    uint32_t q_base_addr = get_vararg(6);
+    uint32_t q_start_addr = get_vararg(7);
+    uint32_t q_offset = get_vararg(8);
+    constexpr uint32_t cb_id_q_out = dfb::cb_q_out;
 
-    bool read_kv_heads = get_arg_val<uint32_t>(9);
+    bool read_kv_heads = get_vararg(9);
 
-    uint32_t num_x = get_arg_val<uint32_t>(18);
+    uint32_t num_x = get_vararg(18);
+    // The NOC coord arrays start at vararg index 19 (no named RTAs precede them, so get_arg_addr indexes
+    // varargs directly).
     tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(19));
     tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(19 + num_x));
 
@@ -66,15 +70,15 @@ void kernel_main() {
     }
 
     if (read_kv_heads) {
-        uint32_t num_kv_heads = get_arg_val<uint32_t>(10);
-        uint32_t num_kv_heads_per_core = get_arg_val<uint32_t>(11);
-        uint32_t remote_kv_head_start_idx = get_arg_val<uint32_t>(12);
-        uint32_t start_kv_x = get_arg_val<uint32_t>(13);
-        uint32_t start_kv_y = get_arg_val<uint32_t>(14);
-        uint32_t kv_base_addr = get_arg_val<uint32_t>(15);
-        uint32_t kv_start_addr = get_arg_val<uint32_t>(16);
-        uint32_t num_kv_tiles = get_arg_val<uint32_t>(17);
-        constexpr uint32_t cb_id_kv_out = get_compile_time_arg_val(1);
+        uint32_t num_kv_heads = get_vararg(10);
+        uint32_t num_kv_heads_per_core = get_vararg(11);
+        uint32_t remote_kv_head_start_idx = get_vararg(12);
+        uint32_t start_kv_x = get_vararg(13);
+        uint32_t start_kv_y = get_vararg(14);
+        uint32_t kv_base_addr = get_vararg(15);
+        uint32_t kv_start_addr = get_vararg(16);
+        uint32_t num_kv_tiles = get_vararg(17);
+        constexpr uint32_t cb_id_kv_out = dfb::cb_kv_out;
 
         CircularBuffer cb_kv_out(cb_id_kv_out);
 

@@ -13,35 +13,30 @@
 void kernel_main() {
     Noc noc;
 
-    // WRITER RUNTIME ARGS
-    uint32_t q_tensor_addr = get_arg_val<uint32_t>(0);
-    uint32_t k_tensor_addr = get_arg_val<uint32_t>(1);
-    uint32_t v_tensor_addr = get_arg_val<uint32_t>(2);
-    uint32_t num_blocks = get_arg_val<uint32_t>(3);
-    uint32_t q_out_h_dim = get_arg_val<uint32_t>(4);
-    uint32_t q_out_tensor_tile_id = get_arg_val<uint32_t>(5);
-    uint32_t k_out_tensor_tile_id = get_arg_val<uint32_t>(6);
-    uint32_t v_out_tensor_tile_id = get_arg_val<uint32_t>(7);
+    // WRITER RUNTIME ARGS (Metal 2.0: named args via get_arg(args::), tensor addresses via TensorAccessor
+    // bindings ta::, CB ids via DFB tokens dfb::)
+    uint32_t num_blocks = get_arg(args::num_blocks);
+    uint32_t q_out_h_dim = get_arg(args::q_out_h_dim);
+    uint32_t q_out_tensor_tile_id = get_arg(args::q_out_tensor_tile_id);
+    uint32_t k_out_tensor_tile_id = get_arg(args::k_out_tensor_tile_id);
+    uint32_t v_out_tensor_tile_id = get_arg(args::v_out_tensor_tile_id);
 
     // COMPILE TIME ARGS
-    constexpr uint32_t q_out_h_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t q_out_w_tiles = get_compile_time_arg_val(1);
-    constexpr uint32_t q_out_HtWt = get_compile_time_arg_val(2);
-    constexpr uint32_t q_out_c = get_compile_time_arg_val(3);
-    constexpr uint32_t kv_out_c = get_compile_time_arg_val(4);
-    constexpr auto q_args = TensorAccessorArgs<5>();
-    constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
-    constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
+    constexpr uint32_t q_out_h_tiles = get_arg(args::q_out_h_tiles);
+    constexpr uint32_t q_out_w_tiles = get_arg(args::q_out_w_tiles);
+    constexpr uint32_t q_out_HtWt = get_arg(args::q_out_HtWt);
+    constexpr uint32_t q_out_c = get_arg(args::q_out_c);
+    constexpr uint32_t kv_out_c = get_arg(args::kv_out_c);
 
-    constexpr uint32_t cb_id_qv = 1;  // cb for Q, V heads tiles
+    constexpr uint32_t cb_id_qv = dfb::cb_qv;  // cb for Q, V heads tiles
 #ifdef TRANSPOSE_K_HEADS
-    constexpr uint32_t cb_id_k = 16;  // cb for K heads (filled by compute)
+    constexpr uint32_t cb_id_k = dfb::cb_k;  // K comes from its own k_out DFB (transposed by compute)
 #else
-    constexpr uint32_t cb_id_k = 1;  // cb for K heads (directly from reader)
+    constexpr uint32_t cb_id_k = dfb::cb_qv;  // not transposing: K shares the qv DFB (single binding per kernel)
 #endif
-    const auto sq = TensorAccessor(q_args, q_tensor_addr);
-    const auto sk = TensorAccessor(k_args, k_tensor_addr);
-    const auto sv = TensorAccessor(v_args, v_tensor_addr);
+    const auto sq = TensorAccessor(ta::q);
+    const auto sk = TensorAccessor(ta::k);
+    const auto sv = TensorAccessor(ta::v);
 
     CircularBuffer cb_qv(cb_id_qv);
     CircularBuffer cb_k(cb_id_k);
