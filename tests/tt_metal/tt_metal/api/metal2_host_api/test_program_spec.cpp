@@ -66,7 +66,7 @@ using test_helpers::MakeShardedTensorParameter;
 using test_helpers::ScopedSlowDispatchOverride;
 
 // ============================================================================
-// Compile-time: ProgramSpec and its subcomponents are hashable via ttsl reflection
+// Reflection: ProgramSpec and its subcomponents are hashable via ttsl reflection
 // ============================================================================
 //
 // ttsl::hash (tt_stl/reflection.hpp) hashes a plain aggregate by reflecting over its fields
@@ -122,6 +122,18 @@ static_assert(hashable_v<DFBAdvancedOptions>, "DFBAdvancedOptions must be hashab
 static_assert(hashable_v<SemaphoreAdvancedOptions>, "SemaphoreAdvancedOptions must be hashable via ttsl reflection");
 static_assert(
     hashable_v<TensorParameterAdvancedOptions>, "TensorParameterAdvancedOptions must be hashable via ttsl reflection");
+
+TEST(ProgramSpecReflectionTest, IsHashable) {
+    const ProgramSpec spec = MakeMinimalValidProgramSpec();
+
+    // Deterministic: hashing the same spec twice yields the same value.
+    EXPECT_EQ(ttsl::hash::hash_objects_with_default_seed(spec), ttsl::hash::hash_objects_with_default_seed(spec));
+
+    // Sensitive: changing a field changes the hash.
+    ProgramSpec modified = spec;
+    modified.name += "_v2";
+    EXPECT_NE(ttsl::hash::hash_objects_with_default_seed(spec), ttsl::hash::hash_objects_with_default_seed(modified));
+}
 
 // ============================================================================
 // Test Fixtures
