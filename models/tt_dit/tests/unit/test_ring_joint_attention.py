@@ -590,7 +590,11 @@ def run_test_ring_joint_sdpa(
         nh = math.ceil(nh / up_factor) * up_factor
         logger.info(f"Rounding up nh from {orig_nh} to {nh} so that it divides evenly by up_factor={up_factor}.")
     mesh_device_shape = list(mesh_device.shape)
-    assert mesh_device_shape[rp_axis] >= rp_factor and mesh_device_shape[up_axis] >= up_factor
+    if not (mesh_device_shape[rp_axis] >= rp_factor and mesh_device_shape[up_axis] >= up_factor):
+        pytest.skip(
+            f"Mesh shape {mesh_device.shape} cannot satisfy parallel config "
+            f"rp_axis={rp_axis} rp_factor={rp_factor}, up_axis={up_axis} up_factor={up_factor}"
+        )
 
     submesh = create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_factor)
 
@@ -917,7 +921,11 @@ def test_ring_joint_sdpa_shapes(
     reset_seeds,
 ):
     mesh_device_shape = list(mesh_device.shape)
-    assert mesh_device_shape[rp_axis] >= rp_factor and mesh_device_shape[up_axis] >= up_factor
+    if not (mesh_device_shape[rp_axis] >= rp_factor and mesh_device_shape[up_axis] >= up_factor):
+        pytest.skip(
+            f"Mesh shape {mesh_device.shape} cannot satisfy parallel config "
+            f"rp_axis={rp_axis} rp_factor={rp_factor}, up_axis={up_axis} up_factor={up_factor}"
+        )
 
     submesh = create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_factor)
 
@@ -1230,6 +1238,10 @@ bh_glx_unit_test_params = pytest.mark.parametrize(
     ],
 )
 @pytest.mark.parametrize("mesh_device, num_links", [mesh_device_map["bh_glx"]], ids=["8x4"], indirect=["mesh_device"])
+@pytest.mark.skipif(
+    ttnn.cluster.get_cluster_type() != ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
+    reason="test_ring_joint_sdpa_dit_bh_glx requires a Blackhole Galaxy cluster",
+)
 def test_ring_joint_sdpa_dit_bh_glx(
     mesh_device,
     input_shape,

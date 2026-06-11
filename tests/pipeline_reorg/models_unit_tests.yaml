@@ -567,7 +567,7 @@
       timeout: 45
       tier: 1
     bh_quietbox_2:
-      timeout: 55
+      timeout: 75
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
