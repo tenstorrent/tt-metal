@@ -88,7 +88,7 @@ def _try_load_real_gate_input(max_seq_len: int, dim: int) -> torch.Tensor | None
 
 @pytest.mark.parametrize(
     "gate_fallback_mode",
-    [GateComputeMode.DEVICE, GateComputeMode.DEVICE_FP32],
+    [GateComputeMode.HOST_ALL, GateComputeMode.DEVICE, GateComputeMode.DEVICE_FP32],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
@@ -140,17 +140,22 @@ def _try_load_real_gate_input(max_seq_len: int, dim: int) -> torch.Tensor | None
     ],
     indirect=["mesh_device", "device_params"],
 )
+@pytest.mark.parametrize("variant", ["deepseek_v3_d_p", "kimi_k2_6"], indirect=True, ids=["deepseek_v3", "kimi"])
 def test_forward_pass(
+    variant,
     mesh_device,
     num_links,
     topology,
     gate_fallback_mode,
 ):
+    """Gate PCC for both model variants. The gate itself picks grouped vs plain
+    top-k routing from n_expert_groups (Kimi has one group), so the test just
+    passes the model config and the compute mode."""
     random.seed(42)
     torch.manual_seed(42)
 
-    # Create reference gate
-    config = TtMoEGateConfig()
+    # Build the gate config from the variant's HF dimension constants.
+    config = TtMoEGateConfig.from_model_cfg(variant.model_config)
     config.ccl_config["NUM_LINKS"] = num_links
     adjust_shapes_for_testing(config, mesh_device)
 
@@ -167,7 +172,11 @@ def test_forward_pass(
     )
     reference_model = ReferenceMoEGate(ref_config, use_bitonic_sort=True)
 
-    gate_w = _try_load_real_gate_weights(config.n_routed_experts, config.dim)
+    # Real DeepSeek gate weights (256 experts) can't be reshaped to other expert
+    # counts, so only attempt the real-weight/input load for the 256-expert path.
+    gate_w = (
+        _try_load_real_gate_weights(config.n_routed_experts, config.dim) if config.n_routed_experts == 256 else None
+    )
     if gate_w is None:
         gate_w = create_gate_weights(config.n_routed_experts, config.dim)
     reference_model.weight.data = gate_w["weight"]
@@ -175,7 +184,7 @@ def test_forward_pass(
 
     n_sp_devices = mesh_device.shape[0]
     total_seq_len = config.sp_dim * n_sp_devices
-    torch_input = _try_load_real_gate_input(total_seq_len, config.dim)
+    torch_input = _try_load_real_gate_input(total_seq_len, config.dim) if config.n_routed_experts == 256 else None
     if torch_input is None:
         torch_input = (
             torch.randn(total_seq_len, config.dim, dtype=torch.bfloat16) * 0.1147 * (7168 / config.dim)
