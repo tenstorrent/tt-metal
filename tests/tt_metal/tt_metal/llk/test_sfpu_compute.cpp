@@ -1352,4 +1352,128 @@ INSTANTIATE_TEST_SUITE_P(
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });
 
+// ---------------------------------------------------------------------------
+// tt-llk#951 experiment: does the SFPU interpret DEST loads using the SrcB
+// (ALU_FORMAT_SPEC_REG1_SrcB) format? We run a square SFPU op where SrcA = c_0
+// (the operand copied into DEST) and SrcB = c_1 (host-controlled). The only
+// variable between the two runs is c_1's format, so any output difference is
+// attributable solely to REG1_SrcB -> proves the SFPU reads it.
+namespace unit_tests::compute::sfpu_srcb_probe {
+
+// Returns the first output element after: copy c_0 into DEST, square (SFPU), pack to c_16.
+// `srcb_format_override` is the raw DataFormat enum value forced into ALU_FORMAT_SPEC_REG1_SrcB
+// inside the kernel (Float16_b=5 control, Float16=1 treatment).
+float run_probe(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, float input_value, uint32_t srcb_format_override) {
+    const tt::DataFormat in0_fmt = tt::DataFormat::Float16_b;  // SrcA = E8M7; all CBs same exp family
+    const tt::DataFormat out_fmt = tt::DataFormat::Float16_b;
+    CoreCoord core(0, 0);
+    const uint32_t in0_cb = 0, in1_cb = 1, out_cb = 16;
+    const uint32_t tile_size = tt::tile_size(in0_fmt);  // 2KB
+
+    auto* device = mesh_device->get_devices()[0];
+    auto& cq = mesh_device->mesh_command_queue();
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
+
+    tt::tt_metal::InterleavedBufferConfig dram_cfg{
+        .device = device, .size = tile_size, .page_size = tile_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
+
+    tt_metal::Program program = tt_metal::CreateProgram();
+    workload.add_program(device_range, std::move(program));
+    auto& program_ = workload.get_programs().at(device_range);
+
+    auto in0_dram = CreateBuffer(dram_cfg);
+    auto in1_dram = CreateBuffer(dram_cfg);
+    auto out_dram = CreateBuffer(dram_cfg);
+
+    tt_metal::CreateCircularBuffer(
+        program_,
+        core,
+        tt_metal::CircularBufferConfig(tile_size, {{in0_cb, in0_fmt}}).set_page_size(in0_cb, tile_size));
+    // c_1 exists only to satisfy reader_binary; its data is unused by math. Same family as c_0.
+    tt_metal::CreateCircularBuffer(
+        program_,
+        core,
+        tt_metal::CircularBufferConfig(tile_size, {{in1_cb, in0_fmt}}).set_page_size(in1_cb, tile_size));
+    tt_metal::CreateCircularBuffer(
+        program_,
+        core,
+        tt_metal::CircularBufferConfig(tile_size, {{out_cb, out_fmt}}).set_page_size(out_cb, tile_size));
+
+    auto reader = tt_metal::CreateKernel(
+        program_,
+        "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/reader_binary.cpp",
+        core,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .compile_args = {in0_cb, in1_cb}});
+    auto writer = tt_metal::CreateKernel(
+        program_,
+        "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/writer_unary.cpp",
+        core,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = {out_cb}});
+    tt_metal::CreateKernel(
+        program_,
+        "tests/tt_metal/tt_metal/test_kernels/compute/sfpu_srcb_format_probe.cpp",
+        core,
+        tt_metal::ComputeConfig{.fp32_dest_acc_en = false, .compile_args = {srcb_format_override}});
+
+    // Constant Float16_b input tile.
+    bfloat16 bv(input_value);
+    std::vector<uint32_t> in0_packed(tt::constants::TILE_HW / 2, pack_two_bfloat16_into_uint32({bv, bv}));
+    std::vector<uint32_t> in1_packed(tt::constants::TILE_HW / 2, 0);
+
+    tt_metal::detail::WriteToBuffer(in0_dram, in0_packed);
+    tt_metal::detail::WriteToBuffer(in1_dram, in1_packed);
+
+    tt_metal::SetRuntimeArgs(
+        program_, reader, core, {(uint32_t)in0_dram->address(), 0u, (uint32_t)in1_dram->address(), 0u, 1u});
+    tt_metal::SetRuntimeArgs(program_, writer, core, {(uint32_t)out_dram->address(), 0u, 1u});
+
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
+
+    std::vector<uint32_t> out_packed;
+    tt_metal::detail::ReadFromBuffer(out_dram, out_packed);
+    // Element 0 lives in the low 16 bits of word 0; Float16_b (bf16) -> float is a left shift by 16.
+    const uint32_t fbits = (out_packed.at(0) & 0xFFFFu) << 16;
+    float v;
+    std::memcpy(&v, &fbits, sizeof(v));
+    return v;
+}
+
+}  // namespace unit_tests::compute::sfpu_srcb_probe
+
+TEST_F(LLKMeshDeviceFixture, TensixSfpuSrcbFormatProbe951) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        auto dev = devices_.at(id);
+        const float input = 1.5f;
+        // Control: REG1_SrcB == SrcA format (Float16_b=5, E8M7). SFPU sees DEST correctly.
+        float control = unit_tests::compute::sfpu_srcb_probe::run_probe(
+            dev, input, static_cast<uint32_t>(tt::DataFormat::Float16_b));
+        // Treatment: REG1_SrcB = Float16 (=1, E5M10), different exponent width from the data in DEST.
+        float treatment =
+            unit_tests::compute::sfpu_srcb_probe::run_probe(dev, input, static_cast<uint32_t>(tt::DataFormat::Float16));
+
+        log_info(
+            tt::LogTest,
+            "[951] input={} square_golden={} control(srcB=Float16_b)={} treatment(srcB=Float16)={}",
+            input,
+            input * input,
+            control,
+            treatment);
+
+        // Control should match the true square; treatment should differ purely because REG1_SrcB changed.
+        EXPECT_NEAR(control, input * input, 0.05f);
+        EXPECT_GT(std::abs(treatment - control), 0.1f)
+            << "SFPU output did not change when only ALU_FORMAT_SPEC_REG1_SrcB changed";
+    }
+}
+
 }  // namespace tt::tt_metal
