@@ -31,6 +31,13 @@ ring_trace_params = {**ring_params, "trace_region_size": 300_000_000}
 line_trace_params = {**line_params, "trace_region_size": 300_000_000}
 
 
+# Default-off: full AV gen needs the real LTX checkpoint + Gemma, so it skips in the default suite
+# (no checkpoint present). Runs the same prompt as the girl audio fixture (DEFAULT_LTX_PROMPT — the
+# "young woman with a guitar sings Doo-be-doo" clip the audio tests use), so e2e and audio stay aligned.
+@pytest.mark.skipif(
+    not os.path.exists(default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")),
+    reason="needs the LTX checkpoint (set LTX_CHECKPOINT to a local .safetensors)",
+)
 @pytest.mark.parametrize(
     "no_prompt",
     [{"1": True, "0": False}.get(os.environ.get("NO_PROMPT"), True)],
@@ -254,64 +261,61 @@ def test_audio_decode_girl(mesh_device, mesh_shape, sp_axis, tp_axis, num_links,
 
     _save(wav, f"girl_audio_{'conv1d' if _ao._USE_CONV1D_DEPTHWISE else 'mac'}{'_traced' if traced else ''}.wav")
 
-    # The torch-oracle quality comparison runs eager only: on one pipeline the shape-keyed
-    # trace cache aliases the depthwise toggle, and traced->eager corrupts. Trace is
-    # bit-identical to eager (standalone eager-vs-traced isolation: max|Δ|=0), so run
-    # LTX_TRACED=0 for the stats; the cold/warm timing above already reflects LTX_TRACED.
-    if not traced:
-        # vs the torch oracle: the diffusers vocoder+BWE on CPU with the real checkpoint weights is
-        # the ground truth (MAC is only an in-tree approximation, and conv1d-vs-MAC cancels any
-        # error common to both — e.g. a localized pipeline spike — so MAC alone is blind to it).
-        # Feed both depthwise paths the same TT mel; report per-1s-interval error-to-signal
-        # (rmse/σ + dB) + overall PCC vs torch. The absolute level (~−18 dB conv1d, ~−23 dB MAC) is
-        # the fp32/bf16 pipeline floor, reported but not gated; gate only a gross localized spike.
-        from models.tt_dit.tests.models.ltx.test_audio_components_ltx import _build_torch_stage_c_real
+    # Torch-oracle quality gate vs the diffusers vocoder+BWE (real checkpoint, CPU) — the ground
+    # truth. The conv1d path runs under BOTH eager and traced (gating the traced vocoder/BWE
+    # output, which is otherwise unverified — exactly the gap that let a broken trace ship). The
+    # MAC comparison runs eager-only: running both depthwise toggles on one traced pipeline aliases
+    # the shape-keyed trace cache. Per-1s-interval error-to-signal (rmse/σ, dB) + overall PCC; the
+    # absolute level (~−18 dB conv1d) is the fp32/bf16 floor, gated only against a gross spike.
+    from models.tt_dit.tests.models.ltx.test_audio_components_ltx import _build_torch_stage_c_real
 
-        z = pipeline.tt_audio_decoder.z_channels
-        audio_spatial = latent.reshape(1, latent.shape[1], z, latent.shape[2] // z).permute(0, 2, 1, 3).float()
-        mel = pipeline.tt_audio_decoder(audio_spatial)  # TT mel, fed to both TT and torch
-        _ao._USE_CONV1D_DEPTHWISE = True
-        w_conv = pipeline.tt_vocoder_with_bwe(mel).squeeze(0).float()
+    z = pipeline.tt_audio_decoder.z_channels
+    audio_spatial = latent.reshape(1, latent.shape[1], z, latent.shape[2] // z).permute(0, 2, 1, 3).float()
+    mel = pipeline.tt_audio_decoder(audio_spatial)  # TT mel, fed to both TT and torch
+    _ao._USE_CONV1D_DEPTHWISE = True
+    w_conv = pipeline.tt_vocoder_with_bwe(mel).squeeze(0).float()
+    with torch.no_grad():
+        w_torch = (
+            _build_torch_stage_c_real(default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors"))(mel.float())
+            .squeeze(0)
+            .float()
+        )
+    _save(w_conv, f"girl_audio_conv1d{'_traced' if traced else ''}.wav")
+    _save(w_torch, "girl_audio_torch.wav")
+
+    nn = min(w_torch.shape[-1], w_conv.shape[-1])
+
+    def _vs_torch(test, name):
+        rows = []
+        for start in range(0, nn, sr):
+            r, t = w_torch[..., start : start + sr], test[..., start : start + sr]
+            sig = r.pow(2).mean().sqrt().item() + 1e-9
+            rr = ((r - t) ** 2).mean().sqrt().item() / sig
+            rows.append(rr)
+            logger.info(
+                f"[oracle] t={start//sr}s {name}-vs-torch rmse/σ={rr:.3e} ({20*math.log10(rr+1e-12):+.1f} dB) "
+                f"max|Δ|={(r - t).abs().max().item():.3e}"
+            )
+        pcc = torch.corrcoef(torch.stack([w_torch[..., :nn].flatten(), test[..., :nn].flatten()]))[0, 1].item()
+        worst_, med_ = max(rows), sorted(rows)[len(rows) // 2]
+        print(
+            f"\nAUDIO_GIRL {name}-vs-torch traced={traced} worst_rmse/σ={worst_:.3e} "
+            f"({20*math.log10(worst_+1e-12):+.1f} dB) median={med_:.3e} ratio={worst_/(med_+1e-9):.2f} PCC={pcc:.5f}",
+            flush=True,
+        )
+        return worst_, med_, pcc
+
+    cw, cm, c_pcc = _vs_torch(w_conv, "conv1d")
+    if not traced:
         _ao._USE_CONV1D_DEPTHWISE = False
         w_mac = pipeline.tt_vocoder_with_bwe(mel).squeeze(0).float()
-        with torch.no_grad():
-            w_torch = (
-                _build_torch_stage_c_real(default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors"))(mel.float())
-                .squeeze(0)
-                .float()
-            )
-        _save(w_conv, "girl_audio_conv1d.wav")
         _save(w_mac, "girl_audio_mac.wav")
-        _save(w_torch, "girl_audio_torch.wav")
-
-        nn = min(w_torch.shape[-1], w_conv.shape[-1], w_mac.shape[-1])
-
-        def _vs_torch(test, name):
-            rows = []
-            for start in range(0, nn, sr):
-                r, t = w_torch[..., start : start + sr], test[..., start : start + sr]
-                sig = r.pow(2).mean().sqrt().item() + 1e-9
-                rr = ((r - t) ** 2).mean().sqrt().item() / sig
-                rows.append(rr)
-                logger.info(
-                    f"[oracle] t={start//sr}s {name}-vs-torch rmse/σ={rr:.3e} ({20*math.log10(rr+1e-12):+.1f} dB) "
-                    f"max|Δ|={(r - t).abs().max().item():.3e}"
-                )
-            pcc = torch.corrcoef(torch.stack([w_torch[..., :nn].flatten(), test[..., :nn].flatten()]))[0, 1].item()
-            worst_, med_ = max(rows), sorted(rows)[len(rows) // 2]
-            print(
-                f"\nAUDIO_GIRL {name}-vs-torch worst_rmse/σ={worst_:.3e} ({20*math.log10(worst_+1e-12):+.1f} dB) "
-                f"median={med_:.3e} ratio={worst_/(med_+1e-9):.2f} PCC={pcc:.5f}",
-                flush=True,
-            )
-            return worst_, med_
-
-        cw, cm = _vs_torch(w_conv, "conv1d")
         _vs_torch(w_mac, "mac")
-        # Gross localized spike only: an interval >4x the median AND past a clearly-audible floor
-        # (rmse/σ 0.5 = −6 dB). The uniform conv1d level and content-driven variation pass; static
-        # (a burst far above the rest) fails.
-        assert cw < 0.5 and cw < 4 * cm + 1e-6, f"conv1d-vs-torch localized spike: worst {cw:.3e} vs median {cm:.3e}"
+    # Gross localized spike only: an interval >4x the median AND past a clearly-audible floor
+    # (rmse/σ 0.5 = −6 dB). Also gate overall PCC vs torch — a broken (e.g. mis-traced) vocoder
+    # drops PCC far below the ~0.99 fp32/bf16 floor.
+    assert cw < 0.5 and cw < 4 * cm + 1e-6, f"conv1d-vs-torch localized spike: worst {cw:.3e} vs median {cm:.3e}"
+    assert c_pcc > 0.95, f"conv1d-vs-torch PCC {c_pcc:.4f} below floor (traced={traced}) — vocoder output is wrong"
 
     pipeline.release_traces()
     dur = wav.shape[-1] / sr
