@@ -572,16 +572,33 @@ class VoxtralTTAcousticModel:
             )
         return masked
 
-    def fm_noise_tt(self, bsz: int, seed: int) -> ttnn.Tensor:
-        """FM initial noise ``[bsz, 1, n_acoustic]`` drawn on host to match the CPU reference RNG.
+    def fm_noise_tt(self, bsz: int, seed: int, *, rng: str = "torch", scale: float = 1.0) -> ttnn.Tensor:
+        """FM initial noise ``[bsz, 1, n_acoustic]``.
 
-        The reference (``decode_one_frame``) draws ``x_0 = torch.randn(B, n_acoustic, dtype=bf16)``
-        from the global torch RNG (``_noise_scale == 1.0``). A seeded ``torch.Generator`` reproduces
-        that exact stream, so both ODEs start from identical noise. ``ttnn.randn`` is a *different*
-        RNG and desyncs the FM start, dropping acoustic-code agreement to ~chance.
+        ``rng="torch"`` matches the CPU reference stream for PCC/debug.
+        ``rng="ttnn"`` generates directly on device for fixed-step production free-run.
         """
+        if rng == "ttnn":
+            noise = ttnn.randn(
+                (bsz, 1, self.n_acoustic_out),
+                self.mesh_device,
+                dtype=self.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=self._fm_dram_mem_config,
+                seed=int(seed),
+            )
+            if scale != 1.0:
+                scaled = ttnn.multiply(noise, float(scale), dtype=self.dtype, memory_config=self._fm_dram_mem_config)
+                ttnn.deallocate(noise)
+                noise = scaled
+            return noise
+        if rng != "torch":
+            raise ValueError(f"Unsupported FM noise rng mode: {rng}")
+        host = self.fm_noise_host_torch(bsz, seed)
+        if scale != 1.0:
+            host = host * float(scale)
         return ttnn.from_torch(
-            self.fm_noise_host_torch(bsz, seed),
+            host,
             device=self.mesh_device,
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
