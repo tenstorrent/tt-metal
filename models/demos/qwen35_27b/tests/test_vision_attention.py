@@ -12,6 +12,7 @@ from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.qwen35_27b.tt.vision.functional import qwen3_5_vision_transformer_preprocess
 from models.demos.qwen35_27b.tt.vision.vision_attention import VisionAttention
 from models.demos.qwen35_27b.tt.vision.vision_model_config import VisionModelArgs
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import get_rot_transformation_mat
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
@@ -46,7 +47,7 @@ def test_vision_attention_inference(
     # image_grid_thw (`torch.LongTensor` of shape `(num_images, 3)`, *optional*):
     #     The temporal, height and width of feature shape of each image in LLM.
     # for this test assume 1 image of size 98 x 146 as used in their repo as an example
-    image_grid_thw = torch.tensor([[1, 98, 146]])
+    image_grid_thw = torch.tensor([[1, 16, 16]])
     ref_seq_len = image_grid_thw[0, 1] * image_grid_thw[0, 2]
     # pad seq_len to be divisible by base_model_args.MAX_QKV_MM_SEQ_LEN
     seq_len = ((ref_seq_len // ModelArgs.MAX_QKV_MM_SEQ_LEN) + 1) * ModelArgs.MAX_QKV_MM_SEQ_LEN
@@ -110,8 +111,10 @@ def test_vision_attention_inference(
     )
     transformation_mats = {"prefill": transformation_mats_prefill}
 
+    tt_ccl = TT_CCL(mesh_device)
     tt_model = VisionAttention(
         mesh_device,
+        tt_ccl,
         state_dict,
         weight_cache_path=None,  # Don't cache random weights
         layer_num=0,
@@ -120,17 +123,28 @@ def test_vision_attention_inference(
         configuration=model_args,
     )
 
+    # The TP attention consumes a replicated input (the wrapping
+    # DistributedLayerNorm would have produced this in a full block).
     tt_attention_input = pt_attention_input.clone()
     tt_attention_input = torch.nn.functional.pad(tt_attention_input, (0, 0, 0, seq_len - ref_seq_len))
-    attention_input = model_args.prepare_residual_tensor_prefill(tt_attention_input)
+    attention_input = ttnn.from_torch(
+        tt_attention_input,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
 
     tt_out = tt_model(
         attention_input,
         rot_mats=rot_mats,
     )
+    # The TP attention output is fractured along dim=3 (the hidden dim); concat
+    # along that axis to reassemble the full output.
     tt_out = ttnn.to_torch(
         tt_out,
-        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1),
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3),
     )
     tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(batch_size, seq_len, -1)  # [ batch, seq, hidden_dim]
 

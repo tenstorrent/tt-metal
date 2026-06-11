@@ -21,13 +21,12 @@ class ModelOptimizations:
 
 
 class VisionModelArgs(ModelArgs):
-    def __init__(self, *args, vision_tp: bool = False, **kwargs):
+    def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        # When True, the vision blocks shard their weights across mesh devices
-        # (Megatron-style tensor parallel). When False (default) every device
-        # holds a full replicated copy of the vision weights.
-        self.vision_tp = vision_tp
+        # The vision tower is always tensor-parallel (Megatron-style): the
+        # vision blocks shard their weights across the mesh devices along
+        # cluster axis 1.
 
         # Core dimensions from HF config
         self.dim = self.hf_config.vision_config.hidden_size
@@ -67,21 +66,20 @@ class VisionModelArgs(ModelArgs):
 
         assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
 
-        if self.vision_tp:
-            # Sanity-check the divisibility requirements that the TP code relies on.
-            tp = self.cluster_shape[1]
-            assert self.n_heads % tp == 0, f"vision n_heads ({self.n_heads}) must be divisible by TP={tp}"
-            assert self.qkv_size % tp == 0, f"vision qkv_size ({self.qkv_size}) must be divisible by TP={tp}"
-            assert self.dim % tp == 0, f"vision dim ({self.dim}) must be divisible by TP={tp}"
-            assert self.hidden_dim % tp == 0, f"vision hidden_dim ({self.hidden_dim}) must be divisible by TP={tp}"
-            # PatchMergerTP shards the merger MLP Megatron-style; its
-            # post-shuffle inner dim (mlp_size = hidden * spatial_merge_size^2)
-            # and the final out_hidden_size must both divide cleanly.
-            vision_cfg = self.hf_config.vision_config
-            mlp_size = vision_cfg.hidden_size * (vision_cfg.spatial_merge_size**2)
-            out_hidden_size = vision_cfg.out_hidden_size
-            assert mlp_size % tp == 0, f"vision merger mlp_size ({mlp_size}) must be divisible by TP={tp}"
-            assert out_hidden_size % tp == 0, f"vision out_hidden_size ({out_hidden_size}) must be divisible by TP={tp}"
+        # Sanity-check the divisibility requirements that the TP code relies on.
+        tp = self.cluster_shape[1]
+        assert self.n_heads % tp == 0, f"vision n_heads ({self.n_heads}) must be divisible by TP={tp}"
+        assert self.qkv_size % tp == 0, f"vision qkv_size ({self.qkv_size}) must be divisible by TP={tp}"
+        assert self.dim % tp == 0, f"vision dim ({self.dim}) must be divisible by TP={tp}"
+        assert self.hidden_dim % tp == 0, f"vision hidden_dim ({self.hidden_dim}) must be divisible by TP={tp}"
+        # PatchMerger shards the merger MLP Megatron-style; its post-shuffle
+        # inner dim (mlp_size = hidden * spatial_merge_size^2) and the final
+        # out_hidden_size must both divide cleanly.
+        vision_cfg = self.hf_config.vision_config
+        mlp_size = vision_cfg.hidden_size * (vision_cfg.spatial_merge_size**2)
+        out_hidden_size = vision_cfg.out_hidden_size
+        assert mlp_size % tp == 0, f"vision merger mlp_size ({mlp_size}) must be divisible by TP={tp}"
+        assert out_hidden_size % tp == 0, f"vision out_hidden_size ({out_hidden_size}) must be divisible by TP={tp}"
 
     def prepare_residual_tensor_prefill(self, x_bsh):
         """
@@ -91,21 +89,18 @@ class VisionModelArgs(ModelArgs):
         S: sequence len
         H: dim
 
-        In TP mode the blocks consume tensors fractured along the hidden dim
+        The vision blocks consume tensors fractured along the hidden dim
         (dim=3 of the 4D tensor), so we shard at load time across cluster
-        axis 1 instead of replicating + post-load `mesh_partition`-ing.
+        axis 1.
         """
 
         x_1BSH = x_bsh.unsqueeze(0)
 
-        if self.vision_tp:
-            mesh_mapper = ttnn.ShardTensor2dMesh(
-                self.mesh_device,
-                dims=(None, -1),
-                mesh_shape=self.cluster_shape,
-            )
-        else:
-            mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
+        mesh_mapper = ttnn.ShardTensor2dMesh(
+            self.mesh_device,
+            dims=(None, -1),
+            mesh_shape=self.cluster_shape,
+        )
 
         # input goes to DRAM
         xs_1BSH = ttnn.from_torch(
@@ -126,13 +121,10 @@ class VisionModelArgs(ModelArgs):
         layer_prefix = f"visual.blocks.{layer_num}." if layer_num is not None else ""
         module_map = {
             "MLP": "feed_forward",
-            "MLPTP": "feed_forward",
             "VisionAttention": "attention",
-            "VisionAttentionTP": "attention",
             "VisionBlock": "",
             "VisionTransformer": "visual",
             "PatchMerger": "visual.merger",
-            "PatchMergerTP": "visual.merger",
             "norm1": "norm1",
             "norm2": "norm2",
             "DeepstackMerger": f"visual.deepstack_merger_list.{deepstack_merger_num}",
