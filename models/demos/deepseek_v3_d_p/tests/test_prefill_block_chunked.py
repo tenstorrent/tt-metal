@@ -88,11 +88,48 @@ class ChunkedThresholds:
 THRESHOLDS = ChunkedThresholds()
 
 
-def _load_trace_tensor(trace_dir: Path, subdir: str, layer: int, key: str, total_len: int) -> torch.Tensor:
-    """Load `key` from trace_dir/<subdir>/layer_<layer>.safetensors, sliced to [:total_len]."""
+# Trace layouts: DeepSeek ("single_file") writes one safetensors file per layer with every tensor as
+# a key; Kimi ("chunked_group_a_v1") writes each tensor as a directory of row-sharded files
+# (rows_<start>_<end>.safetensors, chunk_rows each) and renames hidden_states/ -> decoder_io/. Kimi
+# captures only decoder_output + kv_post_transform, so the MLA-intermediate PCC checks
+# (compressed_kv / kv_latent_normed / kv_kpe_roped / post_attn_norm / post_mla_residual) are skipped
+# for that layout — see _has_mla_intermediates and the gated comparisons in the run functions.
+_LAYOUT_SINGLE_FILE = "single_file"
+_LAYOUT_CHUNKED_GROUP_A = "chunked_group_a_v1"
+
+
+def _has_mla_intermediates(layout: str) -> bool:
+    """Whether the trace layout captures the MLA intermediates the block test compares beyond
+    decoder_output and kv_post_transform."""
+    return layout == _LAYOUT_SINGLE_FILE
+
+
+def _read_sharded_rows(tensor_dir: Path, key: str, start: int, end: int) -> torch.Tensor:
+    """Read rows [start:end] of `key` from a chunked_group_a_v1 shard directory, concatenating the
+    rows_<s>_<e>.safetensors shards that overlap the range."""
+    parts = []
+    for shard in sorted(tensor_dir.glob("rows_*.safetensors")):
+        s, e = (int(x) for x in shard.stem.split("_")[1:3])
+        if e <= start or s >= end:
+            continue
+        with safe_open(shard, framework="pt") as f:
+            parts.append(f.get_slice(key)[max(start, s) - s : min(end, e) - s].to(torch.float32))
+    assert parts, f"no shards overlap rows [{start}:{end}] in {tensor_dir}"
+    return torch.cat(parts, dim=0)
+
+
+def _load_trace_tensor(trace_dir: Path, layout: str, subdir: str, layer: int, key: str, total_len: int) -> torch.Tensor:
+    """Load `key` for `layer` sliced to [:total_len] (float32), handling both trace layouts. `subdir`
+    is the logical bucket: "hidden_states" (decoder_io for Kimi) or "kv_cache"."""
+    if layout == _LAYOUT_CHUNKED_GROUP_A:
+        if subdir == "hidden_states":
+            tensor_dir = trace_dir / "decoder_io" / key
+        else:
+            tensor_dir = trace_dir / "kv_cache" / f"layer_{layer}"
+        return _read_sharded_rows(tensor_dir, key, 0, total_len)
     path = trace_dir / subdir / f"layer_{layer}.safetensors"
     with safe_open(path, framework="pt") as f:
-        return f.get_tensor(key)[:total_len].to(torch.float32)
+        return f.get_slice(key)[:total_len].to(torch.float32)
 
 
 def _interleave_pe(pe: torch.Tensor) -> torch.Tensor:
@@ -138,6 +175,8 @@ def run_chunked_block(
     trace_dir = _resolve_trace_dir(variant)
     if not trace_dir.exists():
         pytest.skip(f"golden trace not found: {trace_dir}")
+    layout = variant.prefill_trace_layout
+    has_intermediates = _has_mla_intermediates(layout)
 
     profiler.clear()
     profiler.start("total_test_time")
@@ -165,19 +204,32 @@ def run_chunked_block(
     # --- Golden trace: layer L input is layer L-1 decoder output; references for layer L. ---
     profiler.start("trace_loading")
     input_hidden = _load_trace_tensor(
-        trace_dir, "hidden_states", layer_idx - 1, f"decoder_output_layer_{layer_idx - 1}", total_len
+        trace_dir, layout, "hidden_states", layer_idx - 1, f"decoder_output_layer_{layer_idx - 1}", total_len
     )
-    ref_out = _load_trace_tensor(trace_dir, "hidden_states", layer_idx, f"decoder_output_layer_{layer_idx}", total_len)
-    ref_post_attn_norm = _load_trace_tensor(
-        trace_dir, "hidden_states", layer_idx, f"post_attn_norm_layer_{layer_idx}", total_len
+    ref_out = _load_trace_tensor(
+        trace_dir, layout, "hidden_states", layer_idx, f"decoder_output_layer_{layer_idx}", total_len
     )
-    ref_post_mla_residual = _load_trace_tensor(
-        trace_dir, "hidden_states", layer_idx, f"post_mla_residual_layer_{layer_idx}", total_len
+    g_post = _load_trace_tensor(
+        trace_dir, layout, "kv_cache", layer_idx, f"kv_post_transform_layer_{layer_idx}", total_len
     )
-    g_compressed = _load_trace_tensor(trace_dir, "kv_cache", layer_idx, f"compressed_kv_layer_{layer_idx}", total_len)
-    g_nope = _load_trace_tensor(trace_dir, "kv_cache", layer_idx, f"kv_latent_normed_layer_{layer_idx}", total_len)
-    g_rope = _load_trace_tensor(trace_dir, "kv_cache", layer_idx, f"kv_kpe_roped_layer_{layer_idx}", total_len)
-    g_post = _load_trace_tensor(trace_dir, "kv_cache", layer_idx, f"kv_post_transform_layer_{layer_idx}", total_len)
+    # MLA intermediates: only the single-file (DeepSeek) trace captures these.
+    ref_post_attn_norm = ref_post_mla_residual = g_compressed = g_nope = g_rope = None
+    if has_intermediates:
+        ref_post_attn_norm = _load_trace_tensor(
+            trace_dir, layout, "hidden_states", layer_idx, f"post_attn_norm_layer_{layer_idx}", total_len
+        )
+        ref_post_mla_residual = _load_trace_tensor(
+            trace_dir, layout, "hidden_states", layer_idx, f"post_mla_residual_layer_{layer_idx}", total_len
+        )
+        g_compressed = _load_trace_tensor(
+            trace_dir, layout, "kv_cache", layer_idx, f"compressed_kv_layer_{layer_idx}", total_len
+        )
+        g_nope = _load_trace_tensor(
+            trace_dir, layout, "kv_cache", layer_idx, f"kv_latent_normed_layer_{layer_idx}", total_len
+        )
+        g_rope = _load_trace_tensor(
+            trace_dir, layout, "kv_cache", layer_idx, f"kv_kpe_roped_layer_{layer_idx}", total_len
+        )
     profiler.end("trace_loading")
     logger.info(f"loaded trace: input {tuple(input_hidden.shape)}, ref_out {tuple(ref_out.shape)}")
 
@@ -303,16 +355,20 @@ def run_chunked_block(
     # --- PCC comparisons over [:total_len] ---
     profiler.start("pcc_validation")
     logger.info("Comparing KV intermediates vs golden trace:")
-    _pcc("compressed_kv[nope]", g_compressed[:, :kv_lora], kv_accum["tt_kv"][:, :kv_lora], THRESHOLDS.kv_nope)
-    _pcc_pe("compressed_kv[pe]", g_compressed[:, kv_lora:], kv_accum["tt_kv"][:, kv_lora:], THRESHOLDS.kv_pe)
-    _pcc("kv_latent_normed", g_nope, kv_accum["tt_kv_nope"], THRESHOLDS.kv_nope)
-    _pcc_pe("kv_kpe_roped", g_rope, kv_accum["tt_kv_rope"], THRESHOLDS.kv_pe)
+    if has_intermediates:
+        _pcc("compressed_kv[nope]", g_compressed[:, :kv_lora], kv_accum["tt_kv"][:, :kv_lora], THRESHOLDS.kv_nope)
+        _pcc_pe("compressed_kv[pe]", g_compressed[:, kv_lora:], kv_accum["tt_kv"][:, kv_lora:], THRESHOLDS.kv_pe)
+        _pcc("kv_latent_normed", g_nope, kv_accum["tt_kv_nope"], THRESHOLDS.kv_nope)
+        _pcc_pe("kv_kpe_roped", g_rope, kv_accum["tt_kv_rope"], THRESHOLDS.kv_pe)
+    else:
+        logger.info("  (compressed_kv / kv_latent_normed / kv_kpe_roped not in trace; skipped)")
     _pcc("kv_post_transform[nope]", g_post[:, :kv_lora], kv_accum["tt_kvpe"][:, :kv_lora], THRESHOLDS.kv_nope)
     _pcc_pe("kv_post_transform[pe]", g_post[:, kv_lora:], kv_accum["tt_kvpe"][:, kv_lora:], THRESHOLDS.kv_pe)
 
-    logger.info("Comparing hidden intermediates vs golden trace:")
-    _pcc("post_attn_norm", ref_post_attn_norm, hidden_accum["post_attn_norm"], THRESHOLDS.output)
-    _pcc("post_mla_residual", ref_post_mla_residual, hidden_accum["post_mla_residual"], THRESHOLDS.output)
+    if has_intermediates:
+        logger.info("Comparing hidden intermediates vs golden trace:")
+        _pcc("post_attn_norm", ref_post_attn_norm, hidden_accum["post_attn_norm"], THRESHOLDS.output)
+        _pcc("post_mla_residual", ref_post_mla_residual, hidden_accum["post_mla_residual"], THRESHOLDS.output)
 
     logger.info("Comparing layer output vs golden decoder_output:")
     _pcc("layer_output", ref_out, out_accum, THRESHOLDS.output)
@@ -406,6 +462,8 @@ def run_chunked_block_padded(
     trace_dir = _resolve_trace_dir(variant)
     if not trace_dir.exists():
         pytest.skip(f"golden trace not found: {trace_dir}")
+    layout = variant.prefill_trace_layout
+    has_intermediates = _has_mla_intermediates(layout)
 
     profiler.clear()
     profiler.start("total_test_time")
@@ -446,19 +504,32 @@ def run_chunked_block_padded(
     # --- Golden trace (sliced to the real-token count). ---
     profiler.start("trace_loading")
     input_hidden = _load_trace_tensor(
-        trace_dir, "hidden_states", layer_idx - 1, f"decoder_output_layer_{layer_idx - 1}", total_real
+        trace_dir, layout, "hidden_states", layer_idx - 1, f"decoder_output_layer_{layer_idx - 1}", total_real
     )
-    ref_out = _load_trace_tensor(trace_dir, "hidden_states", layer_idx, f"decoder_output_layer_{layer_idx}", total_real)
-    ref_post_attn_norm = _load_trace_tensor(
-        trace_dir, "hidden_states", layer_idx, f"post_attn_norm_layer_{layer_idx}", total_real
+    ref_out = _load_trace_tensor(
+        trace_dir, layout, "hidden_states", layer_idx, f"decoder_output_layer_{layer_idx}", total_real
     )
-    ref_post_mla_residual = _load_trace_tensor(
-        trace_dir, "hidden_states", layer_idx, f"post_mla_residual_layer_{layer_idx}", total_real
+    g_post = _load_trace_tensor(
+        trace_dir, layout, "kv_cache", layer_idx, f"kv_post_transform_layer_{layer_idx}", total_real
     )
-    g_compressed = _load_trace_tensor(trace_dir, "kv_cache", layer_idx, f"compressed_kv_layer_{layer_idx}", total_real)
-    g_nope = _load_trace_tensor(trace_dir, "kv_cache", layer_idx, f"kv_latent_normed_layer_{layer_idx}", total_real)
-    g_rope = _load_trace_tensor(trace_dir, "kv_cache", layer_idx, f"kv_kpe_roped_layer_{layer_idx}", total_real)
-    g_post = _load_trace_tensor(trace_dir, "kv_cache", layer_idx, f"kv_post_transform_layer_{layer_idx}", total_real)
+    # MLA intermediates: only the single-file (DeepSeek) trace captures these.
+    ref_post_attn_norm = ref_post_mla_residual = g_compressed = g_nope = g_rope = None
+    if has_intermediates:
+        ref_post_attn_norm = _load_trace_tensor(
+            trace_dir, layout, "hidden_states", layer_idx, f"post_attn_norm_layer_{layer_idx}", total_real
+        )
+        ref_post_mla_residual = _load_trace_tensor(
+            trace_dir, layout, "hidden_states", layer_idx, f"post_mla_residual_layer_{layer_idx}", total_real
+        )
+        g_compressed = _load_trace_tensor(
+            trace_dir, layout, "kv_cache", layer_idx, f"compressed_kv_layer_{layer_idx}", total_real
+        )
+        g_nope = _load_trace_tensor(
+            trace_dir, layout, "kv_cache", layer_idx, f"kv_latent_normed_layer_{layer_idx}", total_real
+        )
+        g_rope = _load_trace_tensor(
+            trace_dir, layout, "kv_cache", layer_idx, f"kv_kpe_roped_layer_{layer_idx}", total_real
+        )
     profiler.end("trace_loading")
 
     # --- Block from the prebuilt TTNN cache. ---
@@ -590,16 +661,20 @@ def run_chunked_block_padded(
     # --- PCC vs golden over the real tokens [:total_real] ---
     profiler.start("pcc_validation")
     logger.info("KV intermediates vs golden trace:")
-    _pcc("compressed_kv[nope]", g_compressed[:, :kv_lora], kv_accum["tt_kv"][:, :kv_lora], THRESHOLDS.kv_nope)
-    _pcc_pe("compressed_kv[pe]", g_compressed[:, kv_lora:], kv_accum["tt_kv"][:, kv_lora:], THRESHOLDS.kv_pe)
-    _pcc("kv_latent_normed", g_nope, kv_accum["tt_kv_nope"], THRESHOLDS.kv_nope)
-    _pcc_pe("kv_kpe_roped", g_rope, kv_accum["tt_kv_rope"], THRESHOLDS.kv_pe)
+    if has_intermediates:
+        _pcc("compressed_kv[nope]", g_compressed[:, :kv_lora], kv_accum["tt_kv"][:, :kv_lora], THRESHOLDS.kv_nope)
+        _pcc_pe("compressed_kv[pe]", g_compressed[:, kv_lora:], kv_accum["tt_kv"][:, kv_lora:], THRESHOLDS.kv_pe)
+        _pcc("kv_latent_normed", g_nope, kv_accum["tt_kv_nope"], THRESHOLDS.kv_nope)
+        _pcc_pe("kv_kpe_roped", g_rope, kv_accum["tt_kv_rope"], THRESHOLDS.kv_pe)
+    else:
+        logger.info("  (compressed_kv / kv_latent_normed / kv_kpe_roped not in trace; skipped)")
     _pcc("kv_post_transform[nope]", g_post[:, :kv_lora], kv_accum["tt_kvpe"][:, :kv_lora], THRESHOLDS.kv_nope)
     _pcc_pe("kv_post_transform[pe]", g_post[:, kv_lora:], kv_accum["tt_kvpe"][:, kv_lora:], THRESHOLDS.kv_pe)
 
-    logger.info("Hidden intermediates vs golden trace:")
-    _pcc("post_attn_norm", ref_post_attn_norm, hidden_accum["post_attn_norm"], THRESHOLDS.output)
-    _pcc("post_mla_residual", ref_post_mla_residual, hidden_accum["post_mla_residual"], THRESHOLDS.output)
+    if has_intermediates:
+        logger.info("Hidden intermediates vs golden trace:")
+        _pcc("post_attn_norm", ref_post_attn_norm, hidden_accum["post_attn_norm"], THRESHOLDS.output)
+        _pcc("post_mla_residual", ref_post_mla_residual, hidden_accum["post_mla_residual"], THRESHOLDS.output)
     _pcc("layer_output", ref_out, out_accum, THRESHOLDS.output)
 
     # --- Final: gather the device KV cache, un-rotate, compare the contiguous [:total_real] valid

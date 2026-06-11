@@ -163,6 +163,37 @@ def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
     logger.info(f"Prefill complete for task {task_id} (slot={slot_id}, isl={actual_isl})")
 
 
+def _read_sharded_rows(tensor_dir: Path, key: str, start: int, end: int) -> "torch.Tensor":
+    """Read rows [start:end] of `key` from a chunked_group_a_v1 shard directory (Kimi), concatenating
+    the rows_<s>_<e>.safetensors shards that overlap the range. Mirrors the test-side reader in
+    tests/test_prefill_transformer_chunked.py."""
+    from safetensors import safe_open
+
+    parts = []
+    for shard in sorted(tensor_dir.glob("rows_*.safetensors")):
+        s, e = (int(x) for x in shard.stem.split("_")[1:3])
+        if e <= start or s >= end:
+            continue
+        with safe_open(shard, framework="pt") as f:
+            parts.append(f.get_slice(key)[max(start, s) - s : min(end, e) - s].to(torch.float32))
+    assert parts, f"no shards overlap rows [{start}:{end}] in {tensor_dir}"
+    return torch.cat(parts, dim=0)
+
+
+def _load_kv_post_transform(trace_dir: Path, layer: int, total_len: int) -> "torch.Tensor":
+    """Load kv_post_transform_layer_{layer}[:total_len] (float32), auto-detecting the trace layout:
+    single_file (DeepSeek: kv_cache/layer_N.safetensors with the tensor as a key) vs chunked_group_a_v1
+    (Kimi: kv_cache/layer_N/ directory of row-sharded rows_<s>_<e>.safetensors)."""
+    from safetensors import safe_open
+
+    key = f"kv_post_transform_layer_{layer}"
+    sharded_dir = trace_dir / "kv_cache" / f"layer_{layer}"
+    if sharded_dir.is_dir():
+        return _read_sharded_rows(sharded_dir, key, 0, total_len)
+    with safe_open(trace_dir / "kv_cache" / f"layer_{layer}.safetensors", framework="pt") as fsafe:
+        return fsafe.get_slice(key)[:total_len].to(torch.float32)
+
+
 def _kv_cache_pcc_check(pipeline: TtDeepSeekPrefillPipeline, slot_id: int, n_chunks: int) -> float:
     """Gather the device KV cache for `slot_id`, un-rotate the block-cyclic layout to natural order,
     and PCC-compare each layer against the golden DeepSeek-R1 `kv_post_transform` trace.
@@ -178,7 +209,6 @@ def _kv_cache_pcc_check(pipeline: TtDeepSeekPrefillPipeline, slot_id: int, n_chu
     """
 
     import torch
-    from safetensors import safe_open
 
     from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
     from tests.ttnn.utils_for_testing import comp_pcc
@@ -219,8 +249,7 @@ def _kv_cache_pcc_check(pipeline: TtDeepSeekPrefillPipeline, slot_id: int, n_chu
         nat[p] = cache_full[batch_idx, 0]  # un-rotate block-cyclic -> natural order
         dev_cache = nat[:total_len]
 
-        with safe_open(trace_dir / "kv_cache" / f"layer_{i}.safetensors", framework="pt") as fsafe:
-            g_post = fsafe.get_slice(f"kv_post_transform_layer_{i}")[:total_len].to(torch.float32)
+        g_post = _load_kv_post_transform(trace_dir, i, total_len)
         # nope (kv_lora) compares directly; the RoPE (pe) slice uses the Meta-interleaved basis while
         # the golden stores the HF half-split, so re-interleave the golden before comparing.
         _, pcc_nope = comp_pcc(g_post[:, :kv_lora], dev_cache[:, :kv_lora])
@@ -369,6 +398,7 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DS
     last_slot_id = int(os.environ.get("PREFILL_STANDALONE_CHUNKED_SLOT", "0")) % NUM_USERS
     i = 0
     while not _shutdown:
+        logger.info(f"Waiting for request to arrive...")
         if expected_chunks is not None and i >= expected_chunks:
             logger.info(f"[request] received all {expected_chunks} expected chunks; exiting loop for PCC check")
             break

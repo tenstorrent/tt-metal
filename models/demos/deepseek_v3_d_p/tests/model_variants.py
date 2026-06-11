@@ -49,6 +49,7 @@ class TestVariant:
         ttnn_cache_env: Optional[str] = None,
         prefill_trace_env: Optional[str] = None,
         prefill_trace_default: Optional[str] = None,
+        prefill_trace_layout: str = "single_file",
         moe_pcc_threshold: float = 0.999,
         mla_pcc_threshold: float = 0.999,
         supports_pretrained: bool = True,
@@ -70,6 +71,11 @@ class TestVariant:
         # chunked block/transformer PCC tests. `prefill_trace_env` overrides `prefill_trace_default`.
         self.prefill_trace_env = prefill_trace_env
         self.prefill_trace_default = prefill_trace_default
+        # Trace on-disk layout: "single_file" (one safetensors per layer, all tensors as keys,
+        # DeepSeek) or "chunked_group_a_v1" (each tensor is a directory of row-sharded files and
+        # only decoder_output + kv_post_transform are captured, Kimi). The chunked tests use this
+        # to pick the right reader and to skip PCC checks for tensors the layout does not capture.
+        self.prefill_trace_layout = prefill_trace_layout
         self.moe_pcc_threshold = moe_pcc_threshold
         self.mla_pcc_threshold = mla_pcc_threshold
         self.supports_pretrained = supports_pretrained
@@ -109,10 +115,11 @@ KIMI_V2_6 = TestVariant(
     ref_cache_env="TT_KIMI_PREFILL_HOST_REF_CACHE",
     mla_ref_cache_env="KIMI_MLA_REF_CACHE",
     ttnn_cache_env="TT_KIMI_PREFILL_TTNN_CACHE",
-    # Golden chunked-prefill trace for Kimi K2.6. The trace is not yet published; until it lands the
-    # chunked tests skip (the path won't exist). Point KIMI_PREFILL_TRACE_DIR at it once available.
+    # Golden chunked-prefill trace for Kimi K2.6 (chunked_group_a_v1 row-sharded layout; only
+    # decoder_output + kv_post_transform are captured). Override with KIMI_PREFILL_TRACE_DIR.
     prefill_trace_env="KIMI_PREFILL_TRACE_DIR",
-    prefill_trace_default="/mnt/models/kimi-prefill-cache/golden/kimi_k2_6_chunked_trace",
+    prefill_trace_default="/mnt/models/deepseek-prefill-cache/golden/kimi-26/kimi_longbook_56320/vllm-kimi-k26-b783c42e-56321tok",
+    prefill_trace_layout="chunked_group_a_v1",
     mla_pcc_threshold=0.995,
     moe_pcc_threshold=0.987,
 )

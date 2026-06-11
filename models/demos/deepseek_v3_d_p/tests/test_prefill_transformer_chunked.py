@@ -82,21 +82,57 @@ assert sum(_PADDED_FULL_55K) == SEQ_CACHE and all(v % 32 == 0 and 0 < v <= CHUNK
 LAYER_PCC_THRESHOLD = 0.88
 
 
+# Trace layouts: DeepSeek ("single_file") writes one safetensors file per layer with every tensor
+# as a key; Kimi ("chunked_group_a_v1") writes each tensor as a directory of row-sharded files
+# (rows_<start>_<end>.safetensors, chunk_rows each) and renames hidden_states/ -> decoder_io/. Both
+# capture decoder_output + kv_post_transform (all this test needs), so only the reader differs.
+_LAYOUT_SINGLE_FILE = "single_file"
+_LAYOUT_CHUNKED_GROUP_A = "chunked_group_a_v1"
+
+
+def _read_sharded_rows(tensor_dir: Path, key: str, start: int, end: int) -> torch.Tensor:
+    """Read rows [start:end] of `key` from a chunked_group_a_v1 shard directory, concatenating the
+    rows_<s>_<e>.safetensors shards that overlap the range (partial read, natural order)."""
+    parts = []
+    for shard in sorted(tensor_dir.glob("rows_*.safetensors")):
+        s, e = (int(x) for x in shard.stem.split("_")[1:3])
+        if e <= start or s >= end:
+            continue
+        with safe_open(shard, framework="pt") as f:
+            parts.append(f.get_slice(key)[max(start, s) - s : min(end, e) - s].to(torch.float32))
+    assert parts, f"no shards overlap rows [{start}:{end}] in {tensor_dir}"
+    return torch.cat(parts, dim=0)
+
+
+def _load_layer_rows(
+    trace_dir: Path, layout: str, group: str, layer: int, key: str, start: int, end: int
+) -> torch.Tensor:
+    """Read trace tensor `key` rows [start:end] (float32) for `layer`, handling both layouts. `group`
+    is the logical bucket: "hidden_states" (decoder_io for Kimi) or "kv_cache"."""
+    if layout == _LAYOUT_CHUNKED_GROUP_A:
+        if group == "hidden_states":
+            tensor_dir = trace_dir / "decoder_io" / key
+        else:
+            tensor_dir = trace_dir / "kv_cache" / f"layer_{layer}"
+        return _read_sharded_rows(tensor_dir, key, start, end)
+    path = trace_dir / group / f"layer_{layer}.safetensors"
+    with safe_open(path, framework="pt") as f:
+        return f.get_slice(key)[start:end].to(torch.float32)
+
+
 def _load_metadata_token_ids(trace_dir: Path, total_len: int) -> torch.Tensor:
     with open(trace_dir / "metadata.json") as f:
         md = json.load(f)
     return torch.tensor(md["token_ids"][:total_len], dtype=torch.int64)
 
 
-def _ref_layer_slice(trace_dir: Path, layer: int, start: int, end: int) -> torch.Tensor:
+def _ref_layer_slice(trace_dir: Path, layout: str, layer: int, start: int, end: int) -> torch.Tensor:
     """Read decoder_output_layer_{layer}[start:end] from the trace (partial read, natural order)."""
-    path = trace_dir / "hidden_states" / f"layer_{layer}.safetensors"
-    with safe_open(path, framework="pt") as f:
-        return f.get_slice(f"decoder_output_layer_{layer}")[start:end].to(torch.float32)
+    return _load_layer_rows(trace_dir, layout, "hidden_states", layer, f"decoder_output_layer_{layer}", start, end)
 
 
 def _record_kv_cache_pcc(
-    trace_dir, tt_kvpe_cache, mesh_device, sp, num_layers, seq_len_cache, total_len, kvpe_dim, kv_lora
+    trace_dir, layout, tt_kvpe_cache, mesh_device, sp, num_layers, seq_len_cache, total_len, kvpe_dim, kv_lora
 ):
     """Record-only: gather the device KV cache, un-rotate the block-cyclic layout, and PCC each
     layer's valid region [:total_len] against the golden kv_post_transform trace. nope is compared
@@ -116,9 +152,7 @@ def _record_kv_cache_pcc(
         nat = torch.empty(seq_len_cache, kvpe_dim, dtype=torch.float32)
         nat[p] = cache_full[i, 0]  # un-rotate block-cyclic -> natural order
         dev_cache = nat[:total_len]
-        path = trace_dir / "kv_cache" / f"layer_{i}.safetensors"
-        with safe_open(path, framework="pt") as f:
-            g_post = f.get_slice(f"kv_post_transform_layer_{i}")[:total_len].to(torch.float32)
+        g_post = _load_layer_rows(trace_dir, layout, "kv_cache", i, f"kv_post_transform_layer_{i}", 0, total_len)
         _, pcc_nope = comp_pcc(g_post[:, :kv_lora], dev_cache[:, :kv_lora])
         ref_pe = g_post[:, kv_lora:]
         d = ref_pe.shape[-1]
@@ -141,6 +175,7 @@ def run_chunked_transformer_padded(
     trace_dir = _resolve_trace_dir(variant)
     if not trace_dir.exists():
         pytest.skip(f"golden trace not found: {trace_dir}")
+    layout = variant.prefill_trace_layout
 
     profiler.clear()
     profiler.start("total_test_time")
@@ -276,7 +311,7 @@ def run_chunked_transformer_padded(
 
             natural = torch.zeros(isl, emb_dim, dtype=torch.float32)
             natural[dst] = out_flat[src]  # un-rotate valid rows -> natural order [kv_actual, valid_end)
-            ref = _ref_layer_slice(trace_dir, i, kv_actual, valid_end)
+            ref = _ref_layer_slice(trace_dir, layout, i, kv_actual, valid_end)
             _, pcc = comp_pcc(ref, natural)
             layer_min_pcc[i] = min(layer_min_pcc[i], pcc)
             # Record-only mode: log every per-layer/per-chunk PCC, do not assert (deep-layer
@@ -292,7 +327,16 @@ def run_chunked_transformer_padded(
         logger.info(f"  layer {i}: {layer_min_pcc[i]:.6f}")
 
     _record_kv_cache_pcc(
-        trace_dir, tt_kvpe_cache, mesh_device, sp, num_layers, seq_len_cache, total_len, kvpe_dim, config.kv_lora_rank
+        trace_dir,
+        layout,
+        tt_kvpe_cache,
+        mesh_device,
+        sp,
+        num_layers,
+        seq_len_cache,
+        total_len,
+        kvpe_dim,
+        config.kv_lora_rank,
     )
 
     profiler.end("total_test_time")
@@ -312,6 +356,7 @@ def run_chunked_transformer(
     trace_dir = _resolve_trace_dir(variant)
     if not trace_dir.exists():
         pytest.skip(f"golden trace not found: {trace_dir}")
+    layout = variant.prefill_trace_layout
 
     profiler.clear()
     profiler.start("total_test_time")
@@ -435,7 +480,7 @@ def run_chunked_transformer(
 
             natural = torch.zeros(CHUNK, emb_dim, dtype=torch.float32)
             natural[local_pos] = out_flat  # un-rotate block-cyclic -> natural chunk order
-            ref = _ref_layer_slice(trace_dir, i, kv_actual, kv_actual + CHUNK)
+            ref = _ref_layer_slice(trace_dir, layout, i, kv_actual, kv_actual + CHUNK)
             _, pcc = comp_pcc(ref, natural)
             layer_min_pcc[i] = min(layer_min_pcc[i], pcc)
             # Record-only mode: log every per-layer/per-chunk PCC, do not assert (deep-layer
@@ -451,7 +496,16 @@ def run_chunked_transformer(
         logger.info(f"  layer {i}: {layer_min_pcc[i]:.6f}")
 
     _record_kv_cache_pcc(
-        trace_dir, tt_kvpe_cache, mesh_device, sp, num_layers, SEQ_CACHE, total_len, kvpe_dim, config.kv_lora_rank
+        trace_dir,
+        layout,
+        tt_kvpe_cache,
+        mesh_device,
+        sp,
+        num_layers,
+        SEQ_CACHE,
+        total_len,
+        kvpe_dim,
+        config.kv_lora_rank,
     )
 
     profiler.end("total_test_time")
