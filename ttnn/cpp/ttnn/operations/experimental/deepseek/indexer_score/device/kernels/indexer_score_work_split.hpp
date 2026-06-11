@@ -28,6 +28,18 @@ constexpr uint32_t valid_k_tiles_in_group(
     return valid_k_tiles_in_row((group + 1) * q_tiles_per_unit - 1, chunk_start_tiles, k_len_tiles);
 }
 
+/** Unmasked prefix k-tiles for absolute q-tile-row q_row_abs within a unit starting at k tile
+ *  k_tile_start with k_tiles_in_unit causal-valid tiles. Tiles [0, this) are < the diagonal tile
+ *  (fully valid, no mask); the diagonal tile and beyond are masked. Shared by compute (which
+ *  produces the prefix then masks the suffix) and the writer (which picks the full-strip vs
+ *  per-tile output path), so the two never disagree on which tiles are a clean full-width strip. */
+constexpr uint32_t valid_prefix_tiles(
+    uint32_t q_row_abs, uint32_t k_tile_start, uint32_t k_tiles_in_unit, uint32_t chunk_start_tiles) {
+    const uint32_t diag_tile = chunk_start_tiles + q_row_abs;
+    const uint32_t v = diag_tile > k_tile_start ? diag_tile - k_tile_start : 0;
+    return v < k_tiles_in_unit ? v : k_tiles_in_unit;
+}
+
 /** Number of k-chunk work units in a q-row-group (ceil of its valid width over the k chunk). */
 constexpr uint32_t units_in_group(
     uint32_t group,

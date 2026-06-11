@@ -32,6 +32,8 @@ constexpr uint32_t cb_mask = tt::CBIndex::c_3;
 constexpr uint32_t cb_qk = tt::CBIndex::c_24;
 constexpr uint32_t cb_acc = tt::CBIndex::c_26;
 constexpr uint32_t cb_out = tt::CBIndex::c_16;
+constexpr uint32_t cb_acc_strip = tt::CBIndex::c_27;  // full-width strip accumulator (fast untilize input)
+constexpr uint32_t cb_out_strip = tt::CBIndex::c_18;  // full-width strip output (fast untilize)
 
 // qk subblock height (head rows per DEST pass); first per-kernel compile-time arg.
 constexpr uint32_t heads_per_dest_pass = get_compile_time_arg_val(num_common_ct_args);
@@ -103,7 +105,7 @@ inline void set_mul_mode() {
  *  add_tiles round-trip. `first` is the very first pass of the output tile and seeds acc (l1_acc
  *  off on head 0). Caller reserves/pushes acc_cb and resets l1_acc afterwards. */
 template <uint32_t qk_cb, uint32_t w_cb, uint32_t acc_cb>
-void mul_accum_pass(uint32_t w_base, bool first) {
+void mul_accum_pass(uint32_t w_base, bool first, uint32_t acc_slot) {
     cb_wait_front(qk_cb, heads_per_dest_pass);
     tile_regs_acquire();
     for (uint32_t h = 0; h < heads_per_dest_pass; ++h) {
@@ -113,7 +115,7 @@ void mul_accum_pass(uint32_t w_base, bool first) {
     tile_regs_wait();
     pack_reconfig_l1_acc(first ? 0 : 1);  // first pass seeds (overwrite), all others accumulate
     for (uint32_t h = 0; h < heads_per_dest_pass; ++h) {
-        pack_tile<true>(h, acc_cb, 0);  // every head packs onto acc tile 0
+        pack_tile<true>(h, acc_cb, acc_slot);  // every head packs onto the output tile acc_slot
         if (first && h == 0) {
             pack_reconfig_l1_acc(1);  // seeded: accumulate the remaining heads of the first pass
         }
@@ -126,7 +128,8 @@ void mul_accum_pass(uint32_t w_base, bool first) {
  *  summed by the packer L1-accumulation (mul_accum_pass). Caller reserves cb_acc and pushes it.
  *  Mirrors the original inner loop; factored out so the masked-suffix and unmasked-prefix paths
  *  share it. */
-inline void accumulate_heads(uint32_t r, uint32_t c) {
+template <uint32_t acc_cb>
+inline void accumulate_heads(uint32_t r, uint32_t c, uint32_t acc_slot) {
     bool first = true;
     for (uint32_t group_start = 0; group_start < num_heads; group_start += heads_per_group) {
         if constexpr (stream_heads) {
@@ -141,11 +144,11 @@ inline void accumulate_heads(uint32_t r, uint32_t c) {
             for (uint32_t head = chunk; head < chunk_end; head += heads_per_dest_pass) {
                 matmul_relu_pass<cb_q, cb_k, cb_qk>(head, r, c);
             }
-            set_mul_mode<cb_qk, cb_w, cb_acc>();
+            set_mul_mode<cb_qk, cb_w, acc_cb>();
             for (uint32_t head = chunk; head < chunk_end; head += heads_per_dest_pass) {
                 // w is laid out [q_tiles_per_unit][num_heads] (see reader read_w_group)
                 const uint32_t w_base = r * num_heads + group_start + head;
-                mul_accum_pass<cb_qk, cb_w, cb_acc>(w_base, first);
+                mul_accum_pass<cb_qk, cb_w, acc_cb>(w_base, first, acc_slot);
                 first = false;
             }
         }
@@ -180,12 +183,31 @@ void add_mask(uint32_t idx) {
 
 /** Untilize a unit's n finished acc tiles into row-major out as one num_blocks=n call: the helper
  *  does the pack_untilize init/uninit bracket ONCE and loops n single-tile blocks internally (no
- *  per-tile reconfig), instead of paying the bracket per tile. n is runtime (edge units are
- *  narrower than KC); blocks pop acc / push out one tile at a time in order, so the writer's (r,c)
- *  streaming is unchanged. */
+ *  per-tile reconfig), instead of paying the bracket per tile. Per-tile (W=1) path, used for the
+ *  partial-prefix and masked-suffix rows; full-width rows take the fast strip path instead. */
 template <uint32_t acc_cb, uint32_t out_cb>
 inline void untilize_acc_strip(uint32_t n) {
     compute_kernel_lib::untilize<1, acc_cb, out_cb>(n);
+}
+
+/** Produce one full-width unmasked row as a single W=k_tiles_per_unit fast-untilize strip.
+ *  Accumulate the KC output tiles into contiguous cb_acc_strip slots (uniform KC push so the
+ *  fast packer's KC-tile read never wraps the ring), then untilize the whole strip into
+ *  cb_out_strip with the BH fast-untilize LLK (~3x faster than the W=1 path at low head count).
+ *  The fast untilize runs in its own private half-sync DEST contract and (since this kernel is
+ *  already half-sync) its uninit does NOT restore the math<->pack sync; without that, dest_offset_id
+ *  parity drifts across the many units a multi-core run packs and the diagonal -inf mask bleeds into
+ *  valid tiles. A full mm_block_init after the untilize re-establishes the kernel's sync contract
+ *  (llk_math_pack_sync_init + llk_pack_dest_init) before the next unit's matmul. */
+inline void produce_full_strip(uint32_t r) {
+    cb_reserve_back(cb_acc_strip, k_tiles_per_unit);
+    for (uint32_t c = 0; c < k_tiles_per_unit; ++c) {
+        accumulate_heads<cb_acc_strip>(r, c, c);  // head reduction -> cb_acc_strip slot c
+    }
+    cb_push_back(cb_acc_strip, k_tiles_per_unit);
+    compute_kernel_lib::untilize<k_tiles_per_unit, cb_acc_strip, cb_out_strip>(1);
+    mm_block_init(
+        cb_q, cb_k, cb_qk, 1 /*transpose k*/, 1 /*ct_dim*/, heads_per_dest_pass /*rt_dim*/, head_dim_tiles /*kt_dim*/);
 }
 
 void kernel_main() {
@@ -223,14 +245,21 @@ void kernel_main() {
         for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
             const uint32_t diag_tile = chunk_start_tiles + span.q_tile_start() + r;
             const uint32_t k_tile0 = span.k_tile_start();
-            uint32_t valid = diag_tile > k_tile0 ? diag_tile - k_tile0 : 0;  // # unmasked prefix tiles
-            if (valid > k_tiles_in_unit) {
-                valid = k_tiles_in_unit;
+            const uint32_t valid = row_valid_prefix(span.q_tile_start() + r, k_tile0, k_tiles_in_unit);
+
+            // A full-width unmasked row is one fast-untilize strip; the writer mirrors this branch.
+            if constexpr (use_fast_strip) {
+                if (valid == k_tiles_per_unit) {
+                    produce_full_strip(r);
+                    continue;
+                }
             }
 
+            // Per-tile path: unmasked prefix [0, valid) batch-untilized W=1, then the masked
+            // suffix one tile at a time (add_mask reorders cb_acc, so it must see one tile alone).
             for (uint32_t c = 0; c < valid; ++c) {
                 cb_reserve_back(cb_acc, 1);
-                accumulate_heads(r, c);
+                accumulate_heads<cb_acc>(r, c, 0);
                 cb_push_back(cb_acc, 1);
             }
             if (valid > 0) {
@@ -240,7 +269,7 @@ void kernel_main() {
             for (uint32_t c = valid; c < k_tiles_in_unit; ++c) {
                 const uint32_t k_tile = k_tile0 + c;
                 cb_reserve_back(cb_acc, 1);
-                accumulate_heads(r, c);
+                accumulate_heads<cb_acc>(r, c, 0);
                 cb_push_back(cb_acc, 1);
                 add_mask<cb_acc, cb_mask>(k_tile == diag_tile ? 0 : 1);
                 compute_kernel_lib::untilize<1, cb_acc, cb_out>(1);

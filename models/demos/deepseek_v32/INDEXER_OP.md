@@ -187,8 +187,10 @@ DEST half while math fills the other; flipping `fp32_dest_acc_en` back on
 | c_24 qk | per-subblock relu(q·kᵀ) | `2·HP` DEST fmt |
 | c_25 mul | relu·w contributions | `2·HP` DEST fmt |
 | c_26 acc | accumulator ping-pong | `2·QC·KC` DEST fmt |
-| c_16 out | untilized output | `2·KC` bf16 |
+| c_16 out | untilized output (per-tile W=1 path) | `2·KC` bf16 |
 | c_17 scratch | writer-only −inf source | 1 bf16 |
+| c_18 out_strip | full-width fast-untilize strip output | `2·KC` bf16 |
+| c_27 acc_strip | full-width strip accumulator (fast-untilize input) | `2·KC` DEST fmt |
 
 CB pushes must divide capacity: the k ring pushes a full `KC·Dt` even for
 partial edge chunks (kw < KC) — a kw-sized push wraps the ring mid-block and
@@ -267,6 +269,11 @@ Branch: `skrstic/dsa_indexer_score_op_2` (cleanup) on `skrstic/dsa_indexer_score
       units QC×KC with head streaming; knob tests + GLX KC=16 pass
 - [x] perf: HiFi2 default (bf16 k) and bfp8 k + LoFi (fastest, PCC ≥ 0.9997);
       production perf tests (absolute ms, both k formats) alongside accuracy
+- [x] perf: fast `W>=2` `pack_untilize` for full-width rows (strip CBs c_18/c_27,
+      slot-indexed accumulate, strip writer, mm_block_init sync reset). Untilize
+      ~148→44 ns/tile; sp7 heads8/16 bfp8 1.32/1.51→0.83 ms (1.6–1.8×), heads64
+      unchanged (matmul-bound). Root cause was the BH fast-untilize uninit's
+      compiled-out half-sync re-init; see `INDEXER_FAST_UNTILIZE.md`.
 - [ ] row-major top-k (separate); negative-weights topk-safety test
 - [ ] perf: DEST-resident acc, fused relu·w, knob sweep for best GLX config
 

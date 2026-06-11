@@ -115,8 +115,10 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     constexpr uint32_t cb_mask = CBIndex::c_3;      // [diag -inf, full -inf], persistent
     constexpr uint32_t cb_qk = CBIndex::c_24;       // relu(q.kT) for a whole head group
     constexpr uint32_t cb_acc = CBIndex::c_26;      // unit accumulator ring
-    constexpr uint32_t cb_out = CBIndex::c_16;      // untilized bf16 tiles
+    constexpr uint32_t cb_out = CBIndex::c_16;      // untilized bf16 tiles (per-tile W=1 path)
     constexpr uint32_t cb_scratch = CBIndex::c_17;  // writer-only -inf scratch
+    constexpr uint32_t cb_out_strip = CBIndex::c_18;  // full-width strip output (fast untilize, uniform KC push)
+    constexpr uint32_t cb_acc_strip = CBIndex::c_27;  // full-width strip accumulator (uniform KC push)
 
     make_cb(cb_q, (stream_heads ? 2 : 1) * HB * QC * Dt, DataFormat::Float16_b, bf16_tile);
     make_cb(cb_k, 2 * KC * Dt, k_fmt, k_tile);
@@ -137,6 +139,12 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     make_cb(cb_acc, 2 * QC * KC, acc_fmt, acc_tile);
     make_cb(cb_out, 2 * KC, DataFormat::Float16_b, bf16_tile);
     make_cb(cb_scratch, 1, DataFormat::Float16_b, bf16_tile);
+    // A full-width unmasked row is one W>=2 fast-untilize strip: accumulate KC tiles into cb_acc_strip,
+    // untilize them into cb_out_strip. Dedicated CBs with uniform KC push/pop keep the fast packer's
+    // KC-tile reads contiguous (mixing KC and 1-tile pushes on one ring wraps it mid-strip). Only
+    // meaningful for KC >= 2; for KC == 1 the strip path is compiled out (the tiny CBs go unused).
+    make_cb(cb_out_strip, 2 * KC, DataFormat::Float16_b, bf16_tile);
+    make_cb(cb_acc_strip, 2 * KC, acc_fmt, acc_tile);
 
     const std::vector<uint32_t> common_ct = {Hi, Sqt, Tt, Dt, chunk_t, QC, KC, HB};
 

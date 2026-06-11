@@ -20,7 +20,8 @@
 constexpr uint32_t page_bytes = get_compile_time_arg_val(num_common_ct_args);  // row-major page = T*2 bytes
 
 constexpr uint32_t cb_out = tt::CBIndex::c_16;
-constexpr uint32_t cb_scratch = tt::CBIndex::c_17;  // writer-only -inf scratch tile
+constexpr uint32_t cb_scratch = tt::CBIndex::c_17;    // writer-only -inf scratch tile
+constexpr uint32_t cb_out_strip = tt::CBIndex::c_18;  // full-width fast-untilize strip output
 
 constexpr uint32_t frag_bytes = tt::constants::TILE_WIDTH * sizeof(uint16_t);  // one bf16 tile row
 constexpr uint32_t scratch_bytes = tt::constants::TILE_HW * sizeof(uint16_t);
@@ -48,6 +49,30 @@ inline void write_tile(Noc noc, const OutAcc& out_acc, uint32_t q_row, uint32_t 
     }
     noc.async_write_barrier();
     cb.pop_front(1);
+}
+
+/** Scatter one full-width fast-untilize strip into output rows of q-tile-row q_row, columns
+ *  starting at column tile k_tile_start. The strip is one wide row-major block in cb_out_strip:
+ *  32 rows, each strip_w*32 contiguous bf16 (row pitch strip_w*32 elements). So each of the 32
+ *  rows is a single strip_w*64-byte run written contiguously to the output row at column offset
+ *  k_tile_start*64 -- one async_write per row instead of strip_w per-tile 64 B fragments. */
+template <typename OutAcc>
+inline void write_strip(Noc noc, const OutAcc& out_acc, uint32_t q_row, uint32_t k_tile_start, uint32_t strip_w) {
+    CircularBuffer cb(cb_out_strip);
+    cb.wait_front(strip_w);
+    uint32_t src = cb.get_read_ptr();
+    const uint32_t row_bytes = strip_w * frag_bytes;
+    for (uint32_t rr = 0; rr < tt::constants::TILE_HEIGHT; ++rr) {
+        noc.async_write(
+            CoreLocalMem<uint32_t>(src),
+            out_acc,
+            row_bytes,
+            {},
+            {.page_id = q_row * tt::constants::TILE_HEIGHT + rr, .offset_bytes = k_tile_start * frag_bytes});
+        src += row_bytes;
+    }
+    noc.async_write_barrier();
+    cb.pop_front(strip_w);
 }
 
 /** Fill the group's row tails [tail_start_tiles*32, T) with -inf from the L1 scratch tile.
@@ -100,10 +125,20 @@ void kernel_main() {
     span.start(flat_start);
 
     for (uint32_t i = 0; i < flat_count; ++i) {
-        // compute emits unit tiles in (r, c) row-major order
+        const uint32_t k_tiles_in_unit = span.k_tiles();
+        const uint32_t k_tile0 = span.k_tile_start();
         for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
-            for (uint32_t c = 0; c < span.k_tiles(); ++c) {
-                write_tile(noc, out_acc, span.q_tile_start() + r, span.k_tile_start() + c);
+            const uint32_t q_row_abs = span.q_tile_start() + r;
+            // Mirror compute: a full-width unmasked row arrives as one strip in cb_out_strip;
+            // every other row arrives as per-tile (r, c) tiles in cb_out.
+            if constexpr (use_fast_strip) {
+                if (row_valid_prefix(q_row_abs, k_tile0, k_tiles_in_unit) == k_tiles_per_unit) {
+                    write_strip(noc, out_acc, q_row_abs, k_tile0, k_tiles_per_unit);
+                    continue;
+                }
+            }
+            for (uint32_t c = 0; c < k_tiles_in_unit; ++c) {
+                write_tile(noc, out_acc, q_row_abs, k_tile0 + c);
             }
         }
         if (span.last_in_group()) {

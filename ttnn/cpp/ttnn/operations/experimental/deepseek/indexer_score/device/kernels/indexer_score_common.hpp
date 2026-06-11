@@ -45,6 +45,17 @@ inline uint32_t group_valid_k_tiles(uint32_t group) {
     return ws::valid_k_tiles_in_group(group, q_tiles_per_unit, chunk_start_tiles, k_len_tiles);
 }
 
+// A full-width unmasked row (valid == k_tiles_per_unit) is untilized as one W>=2 strip via the BH
+// fast-untilize LLK; only possible when the k chunk is >= 2 tiles. Partial/masked rows and KC==1
+// stay on the per-tile W=1 path. Compute and the writer both branch on this identically.
+constexpr bool use_fast_strip = k_tiles_per_unit >= 2;
+
+/** Unmasked prefix k-tiles of absolute q-tile-row q_row_abs in a unit (bound to this kernel's
+ *  compile-time chunk_start_tiles). Shared full-strip-vs-per-tile decision (see work-split header). */
+inline uint32_t row_valid_prefix(uint32_t q_row_abs, uint32_t k_tile_start, uint32_t k_tiles_in_unit) {
+    return ws::valid_prefix_tiles(q_row_abs, k_tile_start, k_tiles_in_unit, chunk_start_tiles);
+}
+
 /** Number of k-chunk units in q-row-group `group`. */
 inline uint32_t units_in_group(uint32_t group) {
     return ws::units_in_group(group, q_tiles_per_unit, k_tiles_per_unit, chunk_start_tiles, k_len_tiles);
