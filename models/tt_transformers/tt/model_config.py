@@ -746,8 +746,13 @@ class ModelArgs:
                         )
                     lm_head_num_rows = 8
             self.lm_head_core_grid = ttnn.CoreGrid(y=lm_head_num_rows, x=lm_head_cores_per_row)
+            lm_head_prefetcher = (
+                None
+                if self.prefetcher is not None and getattr(self.prefetcher, "requires_external_trace_run", False)
+                else self.prefetcher
+            )
             self.max_columns_per_device_lm_head = self.get_lm_head_max_columns_per_device(
-                self.lm_head_core_grid, self.prefetcher
+                self.lm_head_core_grid, lm_head_prefetcher
             )
 
             # For maximum performance, set the prefill grid row to 8, even if it can fit in a smaller grid
@@ -1550,6 +1555,13 @@ class ModelArgs:
     def get_attn_sdpa_decode_program_config(self, prefetcher: Prefetcher = None):
         """Get the SDPA program config for decode mode."""
         if prefetcher is not None:
+            if getattr(prefetcher, "requires_external_trace_run", False):
+                return ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=(8, 8),
+                    exp_approx_mode=False,
+                    q_chunk_size=0,
+                    k_chunk_size=0,
+                )
             sdpa_grid_size = (8, 8)
             start_core = ttnn.CoreCoord(1, 0)
             num_sdpa_cores = sdpa_grid_size[0] * sdpa_grid_size[1]
@@ -1756,6 +1768,14 @@ class ModelArgs:
         """Get the memory config for create_qkv_heads output in attention."""
         if mode == Mode.DECODE:
             if prefetcher is not None:
+                if getattr(prefetcher, "requires_external_trace_run", False) and is_blackhole():
+                    return ttnn.create_sharded_memory_config(
+                        shape=(ttnn.TILE_SIZE, self.head_dim),
+                        core_grid=ttnn.CoreGrid(y=4, x=8),
+                        strategy=ttnn.ShardStrategy.HEIGHT,
+                        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                        use_height_and_width_as_shard_shape=True,
+                    )
                 return ttnn.MemoryConfig(
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                     ttnn.BufferType.L1,
@@ -1789,6 +1809,14 @@ class ModelArgs:
         """Get the memory config for SDPA output in attention."""
         if mode == Mode.DECODE:
             if prefetcher is not None:
+                if getattr(prefetcher, "requires_external_trace_run", False) and is_blackhole():
+                    return ttnn.create_sharded_memory_config(
+                        shape=(math.ceil(self.n_local_heads / ttnn.TILE_SIZE) * ttnn.TILE_SIZE, self.head_dim),
+                        core_grid=ttnn.CoreRangeSet({num_to_corerange(batch_size_per_device_group)}),
+                        strategy=ttnn.ShardStrategy.HEIGHT,
+                        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                        use_height_and_width_as_shard_shape=True,
+                    )
                 start_core = ttnn.CoreCoord(1, 0)
                 return ttnn.create_sharded_memory_config(
                     shape=(math.ceil(self.n_local_heads / ttnn.TILE_SIZE) * ttnn.TILE_SIZE, self.head_dim),

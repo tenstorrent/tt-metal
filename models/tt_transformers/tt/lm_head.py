@@ -34,6 +34,9 @@ class LMHead(LightweightModule):
         self.padded_vocab_size = args.padded_vocab_size
         self.num_devices = args.num_devices
         self.prefetcher = prefetcher
+        self.use_lm_head_prefetcher = prefetcher is not None and not getattr(
+            prefetcher, "requires_external_trace_run", False
+        )
 
         size_per_device = self.padded_vocab_size // self.num_devices
 
@@ -72,7 +75,7 @@ class LMHead(LightweightModule):
         self.output_weights_ring_mm = []
 
         self.split_sizes = [self.split_sizes_dram_sharded]
-        if self.prefetcher is not None:
+        if self.use_lm_head_prefetcher:
             self.split_sizes.append(self.split_sizes_ring_mm)
 
         for mode, split_sizes in enumerate(self.split_sizes):
@@ -87,11 +90,16 @@ class LMHead(LightweightModule):
                 # Concatenate the splits from all devices
                 combined_split = torch.cat(device_splits, dim=-1)
 
+                prefetcher_cache_suffix = (
+                    self.prefetcher.weight_cache_suffix()
+                    if mode == 1 and self.use_lm_head_prefetcher and hasattr(self.prefetcher, "weight_cache_suffix")
+                    else ""
+                )
                 cache_file_name = (
                     None
                     if args.dummy_weights
                     else weight_cache_path
-                    / f"output_lm_head_{len(split_sizes)}_split_shard_{i}_{combined_split.shape[-1]}_mode_{mode}"
+                    / f"output_lm_head_{len(split_sizes)}_split_shard_{i}_{combined_split.shape[-1]}_mode_{mode}{prefetcher_cache_suffix}"
                 )
 
                 def pad_to_power_of_2(n):
@@ -141,7 +149,9 @@ class LMHead(LightweightModule):
 
     def forward(self, x: ttnn.Tensor, debug_input_torch=None, debug_weight_torch=None):
         outputs = []
-        use_prefetcher = self.prefetcher is not None and self.prefetcher.mode == Mode.DECODE
+        use_prefetcher = (
+            self.prefetcher is not None and self.use_lm_head_prefetcher and self.prefetcher.mode == Mode.DECODE
+        )
         split_sizes = self.split_sizes_ring_mm if use_prefetcher else self.split_sizes_dram_sharded
         program_configs = [
             self.args.get_lm_head_program_config(split_size, self.prefetcher if use_prefetcher else None)
