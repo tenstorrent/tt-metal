@@ -4,14 +4,17 @@
 
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_program_factory.hpp"
 
+#include <filesystem>
+
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_align.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include "ttnn/metal2_artifacts.hpp"
+#include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
 
 using namespace tt;
 using namespace tt::constants;
@@ -19,32 +22,25 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
+namespace m2 = tt::tt_metal::experimental;
+
 namespace {
-
-// Anonymous-namespace helper unique to sharded_to_interleaved to avoid unity-build collisions.
-void push_s2i_cb_pair(
-    ProgramDescriptor& desc,
-    uint32_t cb_index,
-    tt::DataFormat data_format,
-    uint32_t total_size,
-    uint32_t page_size,
-    const CoreRangeSet& core_ranges,
-    Buffer* bound_buffer) {
-    CBDescriptor cb;
-    cb.total_size = total_size;
-    cb.core_ranges = core_ranges;
-    cb.format_descriptors.push_back(CBFormatDescriptor{
-        .buffer_index = static_cast<uint8_t>(cb_index),
-        .data_format = data_format,
-        .page_size = page_size,
-    });
-    cb.buffer = bound_buffer;
-    desc.cbs.push_back(std::move(cb));
-}
-
+// Op-private kernel paths (unique file-scope constants to avoid unity-build collisions).
+constexpr const char* S2I_READER_PATH =
+    "ttnn/cpp/ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/kernels/dataflow/"
+    "reader_unary_sharded.cpp";
+constexpr const char* S2I_WRITER_TILE_PATH =
+    "ttnn/cpp/ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/kernels/dataflow/"
+    "writer_unary_sharded_blocks_interleaved_start_id.cpp";
+constexpr const char* S2I_WRITER_RM_PATH =
+    "ttnn/cpp/ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/kernels/dataflow/"
+    "writer_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp";
+constexpr const char* S2I_COMPUTE_PATH =
+    "ttnn/cpp/ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/kernels/compute/"
+    "eltwise_copy.cpp";
 }  // namespace
 
-ProgramDescriptor ShardedToInterleavedProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::create_program_artifacts(
     const ShardedToInterleavedParams& operation_attributes,
     const ShardedToInterleavedInputs& tensor_args,
     Tensor& output_tensor) {
@@ -65,8 +61,8 @@ ProgramDescriptor ShardedToInterleavedProgramFactory::create_descriptor(
     uint32_t num_units_per_shard_height_last = 0;
     uint32_t num_units_per_shard_width_last = 0;
 
-    tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
-    tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(input.dtype());
+    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
 
     auto shard_spec = input.shard_spec().value();
     auto shard_strategy = input.memory_config().memory_layout();
@@ -78,7 +74,8 @@ ProgramDescriptor ShardedToInterleavedProgramFactory::create_descriptor(
     const auto cores = corerange_to_cores(all_cores, std::nullopt, rm_orientation);
 
     CoreCoord end_core = cores[num_cores - 1];
-    if (output.layout() == Layout::TILE) {
+    const bool is_tile = output.layout() == Layout::TILE;
+    if (is_tile) {
         input_unit_size = tt::tile_size(input_cb_data_format);
         output_unit_size = tt::tile_size(output_cb_data_format);
         num_units_per_shard_height = shard_spec.shape[0] / TILE_HEIGHT;
@@ -110,7 +107,7 @@ ProgramDescriptor ShardedToInterleavedProgramFactory::create_descriptor(
     if (shard_strategy == TensorMemoryLayout::HEIGHT_SHARDED) {
         num_cores_unpadded = div_up(num_units_height, num_units_per_shard_height);
     } else if (shard_strategy == TensorMemoryLayout::WIDTH_SHARDED) {
-        if (output.layout() == Layout::TILE) {
+        if (is_tile) {
             num_cores_unpadded = div_up(num_units_per_row, num_units_per_shard_width);
         } else {
             num_cores_unpadded = div_up(num_units_per_row, output_unit_size);
@@ -125,80 +122,141 @@ ProgramDescriptor ShardedToInterleavedProgramFactory::create_descriptor(
 
     bool convert_df = input_cb_data_format != output_cb_data_format;
 
-    uint32_t src0_cb_index = CBIndex::c_0;
-    uint32_t out_cb_index = src0_cb_index;
-    uint32_t num_input_units = num_units_per_shard;
     auto* src_buffer = input.buffer();
     auto* dst_buffer = output.buffer();
     uint32_t input_page_size = tt::align(input_unit_size, src_buffer->alignment());
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
     bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);
+    uint32_t num_input_units = num_units_per_shard;
 
-    ProgramDescriptor desc;
+    // -------------------------------------------------------------------------
+    // DataflowBuffers
+    // -------------------------------------------------------------------------
+    // Sharded input DFB (formerly CB c_0): borrowed from the input tensor's L1 shard buffer.
+    m2::DataflowBufferSpec in_dfb{
+        .unique_id = m2::DFBSpecName{"in0"},
+        .entry_size = input_page_size,
+        .num_entries = num_input_units,
+        .data_format_metadata = input_cb_data_format,
+        .borrowed_from = m2::TensorParamName{"input"},
+    };
 
-    // Sharded input CB. Bind to src buffer for dynamic-CB rebinding on cache hits via cb.buffer.
-    push_s2i_cb_pair(
-        desc,
-        src0_cb_index,
-        input_cb_data_format,
-        num_input_units * input_page_size,
-        input_page_size,
-        used_cores,
-        /*bound_buffer=*/src_buffer);
-
+    // Output DFB (formerly CB c_16): only allocated when converting data formats. It is a local,
+    // Program-lifetime L1 buffer that the compute kernel narrows tiles into and the writer drains.
+    std::optional<m2::DataflowBufferSpec> out_dfb;
     if (convert_df) {
-        out_cb_index = CBIndex::c_16;
         uint32_t output_page_size = tt::align(output_unit_size, dst_buffer->alignment());
-        push_s2i_cb_pair(
-            desc,
-            out_cb_index,
-            output_cb_data_format,
-            num_input_units * output_page_size,
-            output_page_size,
-            used_cores,
-            /*bound_buffer=*/nullptr);
+        out_dfb = m2::DataflowBufferSpec{
+            .unique_id = m2::DFBSpecName{"out"},
+            .entry_size = output_page_size,
+            .num_entries = num_input_units,
+            .data_format_metadata = output_cb_data_format,
+        };
     }
+    // The writer always references its output CB via the accessor token "out". When converting, that is
+    // the dedicated output DFB; otherwise it is the (single) borrowed input DFB.
+    const m2::DFBSpecName writer_dfb_name = convert_df ? m2::DFBSpecName{"out"} : m2::DFBSpecName{"in0"};
 
-    // Reader kernel (sharded input streamed in via globally-allocated CB).
-    KernelDescriptor reader_desc;
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = used_cores;
-    reader_desc.config = ReaderConfigDescriptor{};
-    reader_desc.kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp";
-    reader_desc.compile_time_args = {src0_cb_index};
+    // -------------------------------------------------------------------------
+    // Kernels
+    // -------------------------------------------------------------------------
+    // Reader: sole PRODUCER of the borrowed input DFB. Binds "input" via a body-unused TensorAccessor to
+    // satisfy the ProgramSpec referential-integrity check for the borrowed_from input DFB.
+    m2::KernelSpec reader{
+        .unique_id = m2::KernelSpecName{"reader"},
+        .source = std::filesystem::path{S2I_READER_PATH},
+        .dfb_bindings = {m2::ProducerOf(m2::DFBSpecName{"in0"}, "in0")},
+        .tensor_bindings = {m2::TensorBinding{
+            .tensor_parameter_name = m2::TensorParamName{"input"}, .accessor_name = "input"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_units_per_core"}},
+        // Reader on NCRISC so the two data-movement kernels don't collide on the same DM processor.
+        .hw_config =
+            m2::DataMovementHardwareConfig{
+                .gen1_config =
+                    m2::DataMovementHardwareConfig::Gen1Config{
+                        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+                        .noc = tt::tt_metal::NOC::RISCV_1_default}},
+    };
 
-    // Writer kernel (writes interleaved output to DRAM).
-    KernelDescriptor writer_desc;
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = used_cores;
-    writer_desc.config = WriterConfigDescriptor{};
-    std::vector<uint32_t> writer_compile_time_args = {out_cb_index};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
-    if (input.layout() == Layout::TILE) {
-        writer_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
-            "writer_unary_sharded_blocks_interleaved_start_id.cpp";
+    // Writer: CONSUMER of the writer DFB; writes the interleaved output via the real ta::output accessor.
+    m2::KernelSpec::RuntimeArgSchema writer_schema;
+    if (is_tile) {
+        writer_schema.runtime_arg_names = {
+            "block_height_tiles",
+            "block_width_tiles",
+            "unpadded_block_height_tiles",
+            "unpadded_block_width_tiles",
+            "output_width_tiles",
+            "block_num_tiles",
+            "start_id_offset",
+            "start_id_base"};
     } else {
-        writer_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
-            "writer_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp";
+        writer_schema.runtime_arg_names = {
+            "block_height", "block_width_bytes", "padded_block_width_bytes", "input_width_offset_bytes", "start_id"};
     }
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
+    m2::KernelSpec writer{
+        .unique_id = m2::KernelSpecName{"writer"},
+        .source = std::filesystem::path{is_tile ? S2I_WRITER_TILE_PATH : S2I_WRITER_RM_PATH},
+        .dfb_bindings = {m2::ConsumerOf(writer_dfb_name, "out")},
+        .tensor_bindings = {m2::TensorBinding{
+            .tensor_parameter_name = m2::TensorParamName{"output"}, .accessor_name = "output"}},
+        .runtime_arg_schema = writer_schema,
+        // Writer on BRISC (default data-movement config).
+        .hw_config = m2::DataMovementHardwareConfig{.gen1_config = m2::DataMovementHardwareConfig::Gen1Config{}},
+    };
 
-    // Optional compute kernel for data-format conversion.
-    KernelDescriptor compute_desc;
+    // Compute (convert_df only): CONSUMER of the input DFB, PRODUCER of the output DFB.
+    std::optional<m2::KernelSpec> compute;
     if (convert_df) {
-        compute_desc.kernel_source = "ttnn/cpp/ttnn/kernel/compute/eltwise_copy.cpp";
-        compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        compute_desc.core_ranges = used_cores;
-        compute_desc.config = ComputeConfigDescriptor{};
-        compute_desc.compile_time_args = {num_units_per_shard};
+        compute = m2::KernelSpec{
+            .unique_id = m2::KernelSpecName{"compute"},
+            .source = std::filesystem::path{S2I_COMPUTE_PATH},
+            .dfb_bindings =
+                {m2::ConsumerOf(m2::DFBSpecName{"in0"}, "in0"), m2::ProducerOf(m2::DFBSpecName{"out"}, "out")},
+            .runtime_arg_schema = {.runtime_arg_names = {"per_core_tile_cnt"}},
+            .hw_config = m2::ComputeHardwareConfig{},
+        };
     }
 
-    // Reader runtime args: identical on every used core.
+    // -------------------------------------------------------------------------
+    // ProgramSpec assembly
+    // -------------------------------------------------------------------------
+    m2::ProgramSpec spec;
+    spec.name = "sharded_to_interleaved";
+    spec.kernels = {reader, writer};
+    if (convert_df) {
+        spec.kernels.push_back(*compute);
+    }
+    spec.dataflow_buffers = {in_dfb};
+    if (convert_df) {
+        spec.dataflow_buffers.push_back(*out_dfb);
+    }
+    spec.tensor_parameters = {
+        m2::TensorParameter{.unique_id = m2::TensorParamName{"input"}, .spec = input.tensor_spec()},
+        m2::TensorParameter{.unique_id = m2::TensorParamName{"output"}, .spec = output.tensor_spec()}};
+    {
+        m2::WorkUnitSpec wu{.name = "sharded_to_interleaved", .target_nodes = used_cores};
+        wu.kernels = {m2::KernelSpecName{"reader"}, m2::KernelSpecName{"writer"}};
+        if (convert_df) {
+            wu.kernels.push_back(m2::KernelSpecName{"compute"});
+        }
+        spec.work_units = {std::move(wu)};
+    }
+
+    // -------------------------------------------------------------------------
+    // Run-args (degenerate concept: the complete set)
+    // -------------------------------------------------------------------------
+    m2::ProgramRunArgs::KernelRunArgs reader_args{.kernel = m2::KernelSpecName{"reader"}};
+    m2::ProgramRunArgs::KernelRunArgs writer_args{.kernel = m2::KernelSpecName{"writer"}};
+    m2::ProgramRunArgs::KernelRunArgs compute_args{.kernel = m2::KernelSpecName{"compute"}};
+
+    // Reader runtime args: identical on every used core (publish the resident shard).
     for (const auto& core_range : used_cores.ranges()) {
         for (const auto& core : core_range) {
-            reader_desc.emplace_runtime_args(core, {num_units_per_shard});
+            reader_args.runtime_arg_values.push_back({core, {{"num_units_per_core", num_units_per_shard}}});
+            if (convert_df) {
+                compute_args.runtime_arg_values.push_back({core, {{"per_core_tile_cnt", num_units_per_shard}}});
+            }
         }
     }
 
@@ -210,8 +268,8 @@ ProgramDescriptor ShardedToInterleavedProgramFactory::create_descriptor(
     for (uint32_t core_idx = 0; core_idx < num_cores_unpadded; core_idx++) {
         const auto& core = cores[core_idx];
         uint32_t shard_height = num_units_per_shard_height;
-        uint32_t shard_width = input.layout() == Layout::TILE ? num_units_per_shard_width : output_unit_size;
-        if (input.layout() == Layout::TILE) {
+        uint32_t shard_width = is_tile ? num_units_per_shard_width : output_unit_size;
+        if (is_tile) {
             if (shard_strategy == TensorMemoryLayout::HEIGHT_SHARDED) {
                 if (core.x == end_core.x && core.y == end_core.y) {
                     shard_height = num_units_per_shard_height_last;
@@ -237,18 +295,16 @@ ProgramDescriptor ShardedToInterleavedProgramFactory::create_descriptor(
                     }
                 }
             }
-            // Writer run-time args: arg 0 is the destination-buffer base address (binding via Buffer*).
-            KernelDescriptor::RTArgList writer_rt;
-            writer_rt.push_back(dst_buffer);
-            writer_rt.push_back(num_units_per_shard_height);
-            writer_rt.push_back(num_units_per_shard_width);
-            writer_rt.push_back(shard_height);
-            writer_rt.push_back(shard_width);
-            writer_rt.push_back(num_units_offset);
-            writer_rt.push_back(num_units_per_shard);
-            writer_rt.push_back(curr_idx_h + curr_idx_w);
-            writer_rt.push_back(starting_idx_h);
-            writer_desc.emplace_runtime_args(core, writer_rt);
+            writer_args.runtime_arg_values.push_back(
+                {core,
+                 {{"block_height_tiles", num_units_per_shard_height},
+                  {"block_width_tiles", num_units_per_shard_width},
+                  {"unpadded_block_height_tiles", shard_height},
+                  {"unpadded_block_width_tiles", shard_width},
+                  {"output_width_tiles", num_units_offset},
+                  {"block_num_tiles", num_units_per_shard},
+                  {"start_id_offset", curr_idx_h + curr_idx_w},
+                  {"start_id_base", starting_idx_h}}});
 
             curr_idx_w += num_units_per_shard_width;
             if (curr_idx_w >= num_units_per_row) {
@@ -288,16 +344,13 @@ ProgramDescriptor ShardedToInterleavedProgramFactory::create_descriptor(
                     padded_shard_width = tt::align(output_unit_size, l1_alignment);
                 }
             }
-            // Writer run-time args: arg 0 is the destination-buffer base address (binding via Buffer*).
-            KernelDescriptor::RTArgList writer_rt;
-            writer_rt.push_back(dst_buffer);
-            writer_rt.push_back(num_units_per_row);
-            writer_rt.push_back(shard_height);
-            writer_rt.push_back(shard_width);
-            writer_rt.push_back(padded_shard_width);
-            writer_rt.push_back(curr_idx_w);
-            writer_rt.push_back(curr_idx_h);
-            writer_desc.emplace_runtime_args(core, writer_rt);
+            writer_args.runtime_arg_values.push_back(
+                {core,
+                 {{"block_height", shard_height},
+                  {"block_width_bytes", shard_width},
+                  {"padded_block_width_bytes", padded_shard_width},
+                  {"input_width_offset_bytes", curr_idx_w},
+                  {"start_id", curr_idx_h}}});
 
             curr_idx_w += output_unit_size;
             if (curr_idx_w >= num_units_per_row) {
@@ -307,13 +360,18 @@ ProgramDescriptor ShardedToInterleavedProgramFactory::create_descriptor(
         }
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
+    m2::ProgramRunArgs run_params;
+    run_params.kernel_run_args.push_back(std::move(reader_args));
+    run_params.kernel_run_args.push_back(std::move(writer_args));
     if (convert_df) {
-        desc.kernels.push_back(std::move(compute_desc));
+        run_params.kernel_run_args.push_back(std::move(compute_args));
     }
+    run_params.tensor_args.emplace(
+        m2::TensorParamName{"input"}, m2::ProgramRunArgs::TensorArgument{std::cref(input.mesh_tensor())});
+    run_params.tensor_args.emplace(
+        m2::TensorParamName{"output"}, m2::ProgramRunArgs::TensorArgument{std::cref(output.mesh_tensor())});
 
-    return desc;
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_params)};
 }
 
 }  // namespace ttnn::prim
