@@ -21,6 +21,7 @@ struct MinimalMatmulProgramFactory {
         tt::tt_metal::KernelHandle compute_kernels_id{};
         bool transpose_core_grid{};
         bool read_local_slice_from_input{};
+        uint32_t rows_per_group{1};  // core-grid slicing: physical rows per group (grid.y / num_slices)
     };
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 

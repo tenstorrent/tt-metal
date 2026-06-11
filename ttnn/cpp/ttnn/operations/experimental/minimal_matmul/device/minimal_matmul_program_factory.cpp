@@ -55,7 +55,11 @@ std::pair<std::vector<CoreCoord>, uint32_t> build_core_order_for_axis(
     uint32_t axis_length,
     tt::tt_metal::NOC noc,
     bool axis_is_x_when_not_transposed,
-    const CoreCoord& initial_endpoint) {
+    const CoreCoord& initial_endpoint,
+    uint32_t axis_base = 0) {
+    // The forwarding chain covers axis positions [axis_base, axis_base + axis_length). axis_base != 0
+    // is used by core-grid slicing to bound the big-input (down-rows) chain to a single row-group;
+    // initial_endpoint must sit at axis_base. At axis_base == 0 this is the original full-axis chain.
     std::vector<CoreCoord> order;
     order.reserve(axis_length);
     order.push_back(initial_endpoint);
@@ -73,7 +77,7 @@ std::pair<std::vector<CoreCoord>, uint32_t> build_core_order_for_axis(
         size_t& coord_to_modify = transpose_core_grid ? (axis_is_x_when_not_transposed ? worker_core.y : worker_core.x)
                                                       : (axis_is_x_when_not_transposed ? worker_core.x : worker_core.y);
 
-        coord_to_modify = increasing ? worker_idx : (axis_length - worker_idx);
+        coord_to_modify = axis_base + (increasing ? worker_idx : (axis_length - worker_idx));
         if (coord_to_modify == current_axis_value) {
             index_of_current = worker_idx;
         }
@@ -255,7 +259,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     // S=1 reduces exactly to the un-sliced partition. (Step 1: partition only; S>1 also needs the
     // per-group forwarding change before it is correct. Auto-derivation of S is deferred to step 5.)
     uint32_t num_slices = 1;
-    if (const char* s = std::getenv("TT_MM_NUM_SLICES"); s != nullptr) {
+    if (const char* s = std::getenv("TT_MM_NUM_SLICES"); s != nullptr && !fuse_op && !fuse_srs) {
         num_slices = std::max(1u, static_cast<uint32_t>(std::atoi(s)));
     }
     TT_FATAL(
@@ -327,7 +331,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     // TT_MM_MCAST_PREFETCH forces the dataflow on regardless (handled at the mcast-flags block below).
     const uint32_t min_tiles_per_core = std::min(M_tiles_per_core, N_tiles_per_core);
     const char* no_auto_prefetch = std::getenv("TT_MM_NO_AUTO_PREFETCH");
+    // num_slices==1 guard: core-grid slicing currently runs unicast only (mcast+slicing is step 4).
     const bool prefetch_gate = !config.has_value() && !fuse_op && !fuse_srs && min_tiles_per_core <= 2 &&
+                               num_slices == 1 &&
                                !(no_auto_prefetch != nullptr && std::string(no_auto_prefetch) != "0");
     if (prefetch_gate) {
         M_block_tiles = std::min(M_block_tiles, M_tiles_per_core);
@@ -369,8 +375,21 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     auto in1_sender_cores = CoreRange(core_0_0, transpose_core_grid ? core_0_endy : core_endx_0);
     auto in1_receiver_cores = CoreRange(transpose_core_grid ? core_1_0 : core_0_1, core_endx_endy);
 
-    CoreRangeSet in0_sender_spec(in0_sender_cores);
-    CoreRangeSet in0_receiver_spec(in0_receiver_cores);
+    // Slicing: the BIG input (forwarded down rows) gets an injector at EACH group's top row, not just
+    // row 0 — one independent forwarding chain per row-group. The SMALL input (across cols) is
+    // unchanged (injector at col 0 of every row). At num_slices==1 the group-top set is just row 0,
+    // so these specs match the original single-range sender/receiver cores.
+    std::vector<CoreRange> rows_sender_ranges;
+    for (uint32_t g = 0; g < num_slices; g++) {
+        std::size_t r = static_cast<std::size_t>(g * rows_per_group);
+        rows_sender_ranges.push_back(CoreRange(CoreCoord{0, r}, CoreCoord{grid_size.x - 1, r}));
+    }
+    CoreRangeSet rows_sender_spec(rows_sender_ranges);                // big input: group-top rows x all cols
+    CoreRangeSet cols_sender_spec(CoreRange(core_0_0, core_0_endy));  // small input: col 0 x all rows
+    CoreRangeSet in0_sender_spec = transpose_core_grid ? rows_sender_spec : cols_sender_spec;
+    CoreRangeSet in1_sender_spec = transpose_core_grid ? cols_sender_spec : rows_sender_spec;
+    CoreRangeSet in0_receiver_spec = CoreRangeSet(core_grid).subtract(in0_sender_spec);
+    CoreRangeSet in1_receiver_spec = CoreRangeSet(core_grid).subtract(in1_sender_spec);
 
     auto in0_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     auto in0_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
@@ -510,8 +529,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     // k's multicast, overlapping read latency with mcast transit on the single injector DM RISC. The
     // auto-gate (prefetch_gate) was computed earlier with the block sizes (it also clamps the
     // compile-time block). TT_MM_MCAST_PREFETCH forces the dataflow on regardless of the gate.
-    const bool mcast_prefetch = env_flag_set("TT_MM_MCAST_PREFETCH") || prefetch_gate;
-    const bool mcast_broadcast = env_flag_set("TT_MM_MCAST_BROADCAST") || mcast_prefetch;
+    // num_slices==1: slicing runs unicast only for now (mcast+slicing is step 4); force mcast off for S>1.
+    const bool mcast_prefetch = (env_flag_set("TT_MM_MCAST_PREFETCH") || prefetch_gate) && num_slices == 1;
+    const bool mcast_broadcast = (env_flag_set("TT_MM_MCAST_BROADCAST") || mcast_prefetch) && num_slices == 1;
     if (mcast_broadcast) {
         // Replace the store-and-forward chain with a single NoC multicast per block. The injector reads
         // DRAM once and mcasts the block to all cores along its broadcast axis (one hardware-replicated
@@ -694,7 +714,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     auto in1_sender_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out.cpp",
-        in1_sender_cores,
+        in1_sender_spec,
         tt::tt_metal::DataMovementConfig{
             .processor = in1_risc,
             .noc = in1_noc,
@@ -737,7 +757,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     auto in1_receiver_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out.cpp",
-        in1_receiver_cores,
+        in1_receiver_spec,
         tt::tt_metal::DataMovementConfig{
             .processor = in1_risc,
             .noc = in1_noc,
@@ -812,24 +832,39 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         uint32_t in0_idx = transpose_core_grid ? x_idx : y_idx;
         uint32_t in1_idx = transpose_core_grid ? y_idx : x_idx;
 
-        CoreCoord left_core = {(std::size_t)0, (std::size_t)core.y};
-        CoreCoord top_core = {(std::size_t)core.x, (std::size_t)0};
+        // Injector identification by PHYSICAL position (not the sliced idx): the across-cols (small)
+        // injector is at col 0 of every row; the down-rows (big) injector is at each group's top row.
+        const bool is_cols_injector = (core.x == 0);
+        const bool is_rows_injector = (core.y % rows_per_group == 0);
+        const bool is_in0_injector = transpose_core_grid ? is_rows_injector : is_cols_injector;
+        const bool is_in1_injector = transpose_core_grid ? is_cols_injector : is_rows_injector;
 
+        // Forwarding chains: the SMALL input is forwarded across cols (full grid.x, base 0); the BIG
+        // input is forwarded down rows but BOUNDED to the row-group (length rows_per_group, base =
+        // group's top row). The big-input injector endpoint (top_core) sits at the group's top row.
+        const uint32_t base_row = group * rows_per_group;
+        CoreCoord left_core = {(std::size_t)0, (std::size_t)core.y};
+        CoreCoord top_core = {(std::size_t)core.x, (std::size_t)base_row};
+
+        // in0: across-cols (small) when !transpose; down-rows (big, group-bounded) when transpose.
         auto [in0_core_order, in0_core_order_index] = build_core_order_for_axis(
             core,
             transpose_core_grid,
-            in1_parallel_axis_cores,
+            transpose_core_grid ? rows_per_group : grid_size.x,
             in0_noc,
             /*axis_is_x_when_not_transposed=*/true,
-            /*initial_endpoint=*/(transpose_core_grid ? top_core : left_core));
+            /*initial_endpoint=*/(transpose_core_grid ? top_core : left_core),
+            /*axis_base=*/(transpose_core_grid ? base_row : 0));
 
+        // in1: down-rows (big, group-bounded) when !transpose; across-cols (small) when transpose.
         auto [in1_core_order, in1_core_order_index] = build_core_order_for_axis(
             core,
             transpose_core_grid,
-            in0_parallel_axis_cores,
+            transpose_core_grid ? grid_size.x : rows_per_group,
             in1_noc,
             /*axis_is_x_when_not_transposed=*/false,
-            /*initial_endpoint=*/(transpose_core_grid ? left_core : top_core));
+            /*initial_endpoint=*/(transpose_core_grid ? left_core : top_core),
+            /*axis_base=*/(transpose_core_grid ? 0 : base_row));
 
         auto in0_prev_core = clamped_prev(in0_core_order, in0_core_order_index);
         auto in0_next_core = clamped_next(in0_core_order, in0_core_order_index);
@@ -959,8 +994,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             in0_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->fused_op_receiver_signal_semaphore));
             in0_args.push_back(1);  // mcast_signal_op_cores
         }
-        // in0 injector = logical col 0 (in1_idx 0).
-        if (in1_idx == 0) {
+        if (is_in0_injector) {
             SetRuntimeArgs(program, in0_sender_kernels_id, core, in0_args);
         } else {
             SetRuntimeArgs(program, in0_receiver_kernels_id, core, in0_args);
@@ -1021,7 +1055,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             in1_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->fused_op_receiver_signal_semaphore));
             in1_args.push_back(1);  // mcast_signal_op_cores
         }
-        if (in0_idx == 0) {
+        if (is_in1_injector) {
             // in1 sender
             SetRuntimeArgs(program, in1_sender_kernels_id, core, in1_args);
         } else {
@@ -1052,7 +1086,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         in1_receiver_kernels_id,
         compute_kernels_id,
         transpose_core_grid,
-        fuse_op && fused_op_signaler->read_local_slice_from_input};
+        fuse_op && fused_op_signaler->read_local_slice_from_input,
+        rows_per_group};
 }
 
 MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
@@ -1152,10 +1187,14 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
 
     for (uint32_t i = 0; i < override_variables.num_cores; ++i) {
         CoreCoord core = override_variables.cores.at(i);
-        uint32_t in0_idx = override_variables.transpose_core_grid ? core.x : core.y;
-        uint32_t in1_idx = override_variables.transpose_core_grid ? core.y : core.x;
+        // Injector identification by physical position, slicing-aware (must match create()): across-cols
+        // (small) injector at col 0; down-rows (big) injector at each group's top row.
+        const bool is_cols_injector = (core.x == 0);
+        const bool is_rows_injector = (core.y % override_variables.rows_per_group == 0);
+        const bool is_in0_injector = override_variables.transpose_core_grid ? is_rows_injector : is_cols_injector;
+        const bool is_in1_injector = override_variables.transpose_core_grid ? is_cols_injector : is_rows_injector;
 
-        if (in1_idx == 0) {
+        if (is_in0_injector) {
             auto& in0_sender_args = in0_sender_runtime_args[core.x][core.y];
 
             in0_sender_args[in0_in0_addr_idx] = tensor_args.input_tensor.buffer()->address();
@@ -1191,7 +1230,7 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
             }
         }
 
-        if (in0_idx == 0) {
+        if (is_in1_injector) {
             auto& in1_sender_args = in1_sender_runtime_args[core.x][core.y];
             in1_sender_args[in1_in0_addr_idx] = tensor_args.weight_tensor.buffer()->address();
             in1_sender_args[in1_bias_addr_idx] =
