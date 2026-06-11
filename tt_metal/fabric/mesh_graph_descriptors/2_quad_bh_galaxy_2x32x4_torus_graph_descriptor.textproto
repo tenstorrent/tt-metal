@@ -12,9 +12,8 @@ graph_descriptors {
   instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
   instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
 
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+  graph_topology: {
+    layout_type: ALL_TO_ALL
     channels { count: 4 policy: RELAXED }
   }
 }

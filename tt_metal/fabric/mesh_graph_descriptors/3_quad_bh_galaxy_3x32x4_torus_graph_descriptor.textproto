@@ -13,19 +13,8 @@ graph_descriptors {
   instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
   instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
 
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
-    channels { count: 4 policy: RELAXED }
-  }
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
-    channels { count: 4 policy: RELAXED }
-  }
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+  graph_topology: {
+    layout_type: ALL_TO_ALL
     channels { count: 4 policy: RELAXED }
   }
 }
