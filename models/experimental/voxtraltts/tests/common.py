@@ -18,6 +18,14 @@ from models.experimental.voxtraltts.utils.audio_tokenizer_optimizations import (
     voxtral_audio_tokenizer_default_optimizations,
 )
 
+VOXTRAL_STANDARD_CHAR_TEXT = (
+    "Voxtral TTS is a frontier open weights text to speech model for production voice agents. It produces "
+    "realistic expressive speech with natural prosody across English, French, Spanish, German, Italian, "
+    "Portuguese, Dutch, Arabic, and Hindi. The system supports preset voices, low latency streaming, batch "
+    "inference, and twenty four kilohertz audio output for customer support, real time translation, reading "
+    "applications, call centers, and responsive multilingual assistant workflows. With clear speech."
+)
+
 
 def ensure_voxtral_device_available() -> None:
     """Skip the test when the host exposes no Tenstorrent devices."""
