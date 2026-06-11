@@ -33,6 +33,13 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      update-latest-via-branch:
+        required: false
+        type: boolean
+        default: false
+        description: >-
+          Update :latest tags when running from a non-main branch.
+          Ignored on main; scheduled runs on main always update :latest.
   schedule:
     - cron: "0 12 * * *"
 
@@ -550,12 +557,14 @@ jobs:
           echo "images-to-push=$images_to_push_json" >> "$GITHUB_OUTPUT"
   push-latest:
     # Push images based on the dynamic matrix calculated by calculate-to-publish
-    # This job will only run if calculate-to-publish has images to push
+    # This job will only run if calculate-to-publish has images to push.
+    # On non-main branches, :latest is only updated when update-latest-via-branch is set.
     if: >-
       ${{
         !cancelled() &&
         needs.calculate-to-publish.result == 'success' &&
-        needs.calculate-to-publish.outputs.images-to-push != '[]'
+        needs.calculate-to-publish.outputs.images-to-push != '[]' &&
+        (github.ref == 'refs/heads/main' || inputs.update-latest-via-branch)
       }}
     needs:
       - calculate-to-publish
