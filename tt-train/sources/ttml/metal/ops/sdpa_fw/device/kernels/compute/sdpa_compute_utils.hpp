@@ -18,6 +18,7 @@
 #include "api/compute/eltwise_unary/softplus.h"
 #include "api/compute/mask.h"
 #include "api/compute/matmul.h"
+#include "api/compute/reconfig_data_format.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
 #include "tt-train/sources/ttml/metal/common/sdpa_compute_utils_common.hpp"
@@ -409,9 +410,7 @@ void row_reduce_tile_inplace(uint32_t cb_in_idx) {
     reconfig_data_format(cb_matmul_reduce, cb_in_idx);
     tile_regs_acquire();
 
-    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in_idx, cb_matmul_reduce, cb_in_idx);
     matmul_init(cb_in_idx, cb_matmul_reduce, 0);
-    // matmul_init(cb_in_idx, cb_matmul_reduce, 0);
     matmul_tiles(cb_in_idx, cb_matmul_reduce, /* tile_idx */ 0, /* tile_idx */ 0, reduce_dst_idx);
     tile_regs_commit();
 

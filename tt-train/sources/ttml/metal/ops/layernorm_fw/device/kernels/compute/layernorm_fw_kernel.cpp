@@ -504,7 +504,7 @@ void kernel_main() {
 
     init_sfpu(cb_input_idx, cb_output_idx);
     binary_op_init_common(cb_input_idx, cb_gamma_idx, cb_output_idx);
-    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_sum_idx, cb_scaler_idx, cb_mean_bcast_idx);
+    reconfig_data_format(cb_scaler_idx, cb_sum_idx);
     matmul_init(cb_sum_idx, cb_scaler_idx);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {

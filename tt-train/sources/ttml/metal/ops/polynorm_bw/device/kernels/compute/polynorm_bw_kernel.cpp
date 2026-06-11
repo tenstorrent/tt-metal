@@ -144,8 +144,7 @@ inline void copy_scalar_tile_to_reg(const uint32_t cb_src, const uint32_t reg_ds
 }
 
 inline void row_reduce_sum_to_reg(const uint32_t cb_sum, const uint32_t reg_dst) {
-    reconfig_data_format(cb_sum, cb_matmul_reduce);
-    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_sum, cb_matmul_reduce, cb_sum);
+    reconfig_data_format(cb_matmul_reduce, cb_sum);
     matmul_init(cb_sum, cb_matmul_reduce, 0);
     matmul_tiles(cb_sum, cb_matmul_reduce, 0, 0, reg_dst);
 }

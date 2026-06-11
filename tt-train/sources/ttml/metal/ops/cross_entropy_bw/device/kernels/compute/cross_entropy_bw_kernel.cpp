@@ -343,8 +343,7 @@ void reduce_sum_exp_x() {
 
     // We used matmul_tiles instead of reduce_tile, because reduce_tile causes a loss of precision. The same issue has
     // been observed in moreh’s ops.
-    compute_kernel_hw_startup<SrcOrder::Reverse>(
-        cb_exp_sum_before_reduction, cb_mat_mul_reduce, cb_exp_sum_after_reduction);
+    reconfig_data_format(cb_mat_mul_reduce, cb_exp_sum_before_reduction);
     matmul_init(cb_exp_sum_before_reduction, cb_mat_mul_reduce, 0);
     matmul_tiles(
         cb_exp_sum_before_reduction, cb_mat_mul_reduce, /* tile_idx */ 0, /* tile_idx */ 0, reduction_register);

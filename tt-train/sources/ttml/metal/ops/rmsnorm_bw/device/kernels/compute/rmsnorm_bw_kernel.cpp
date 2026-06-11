@@ -318,7 +318,7 @@ void kernel_main() {
 
     init_sfpu(cb_input_idx, cb_dL_da_idx);
     binary_op_init_common(cb_input_idx, cb_gamma_idx, cb_dL_da_idx);
-    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_scale_idx, cb_mat_mul_reduce, cb_scale_idx);
+    reconfig_data_format(cb_mat_mul_reduce, cb_scale_idx);
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         cb_wait_front(cb_rms_a_idx, onetile);
         // This value is constant for the whole row, so we can compute it once per row.

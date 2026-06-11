@@ -67,10 +67,7 @@ ALWI void mul_accumulate_row_to_dst(
 // scalar in `sum_cb_id` via one matmul with the ones tile.
 ALWI void reduce_partial_to_scalar(uint32_t partial_cb_id, uint32_t ones_cb_id, uint32_t sum_cb_id) {
     tile_regs_acquire();
-#if defined(FP32_DEST_ACC_EN)
-    ckernel::reconfig_data_format(partial_cb_id, ones_cb_id);
-#endif
-    compute_kernel_hw_startup<SrcOrder::Reverse>(partial_cb_id, ones_cb_id, sum_cb_id);
+    ckernel::reconfig_data_format(ones_cb_id, partial_cb_id);
     matmul_init(partial_cb_id, ones_cb_id, /*transpose*/ 0);
 
     cb_wait_front(partial_cb_id, ONE_TILE);
