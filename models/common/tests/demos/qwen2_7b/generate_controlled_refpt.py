@@ -18,7 +18,7 @@ Usage::
         --output models/tt_transformers/tests/reference_outputs/Qwen2-7B-Instruct.refpt
 
 Always verify intrinsic self-consistency (top-1 ≥ 95%) before using a ``.refpt`` for
-accuracy thresholding — see ``dev-tools/agentic-bringup/skills/reference-sanity.md``.
+accuracy thresholding — see the reference-sanity guide.
 """
 
 from __future__ import annotations
