@@ -73,7 +73,7 @@ def topk_indices(logits: ttnn.Tensor, k: int) -> ttnn.Tensor:
 
 def sparse_mla(
     q: ttnn.Tensor,
-    kvpe: ttnn.Tensor,
+    kvpe_host: torch.Tensor,
     indices: ttnn.Tensor,
     scale: float,
     start_pos: int = 0,
@@ -91,20 +91,23 @@ def sparse_mla(
 
     Args:
         q: [1, H/tp, S/sp, 576] absorbed queries (nope·wkv_b ++ rope)
-        kvpe: [1, 1, T, 576] full latent prefix (kv 512 ++ pe 64), replicated
+        kvpe_host: [T, 576] full latent prefix on host (caller already gathered it
+            full-T — single-shot via SP all-gather, chunked via kv_cache_to_host —
+            so there is NO device→host→device re-upload here; backlog 9)
         indices: [1, 1, S_global, k] uint32 (global key positions), replicated
         scale: softmax scale (with YaRN mscale)
         start_pos: global position of the chunk's first query row
     Returns:
         out [1, H/tp, S/sp, 512] bf16 — heads TP-sharded, sequence SP-sharded
-    CPU FALLBACK (gather+SDPA on host): no ttnn gather over Skv; fused op is follow-up.
+    CPU FALLBACK (gather+SDPA on host). On-device path is feasible via ttnn.gather
+    (per-row index, TILE) → matmul/softmax/matmul — backlog 8.
     """
     mesh = q.device()
     shape = list(mesh.shape)
     sp, tp = shape[sp_axis], shape[tp_axis]
     assert sp_axis == 0 and tp_axis == 1, "sparse_mla host fallback assumes sp_axis=0 (outer), tp_axis=1"
 
-    kv = _to_host(kvpe)[0, 0]  # [T, 576]
+    kv = kvpe_host  # [T, 576]
     idx_full = _to_host(indices).long()[0, 0]  # [S_global, k]
     s_global = idx_full.shape[0]
     local = s_global // sp
