@@ -1,5 +1,47 @@
 {%- extends "!layout.html" %}
 
+{%- block extrahead %}
+{{ super() }}
+<script>
+(function() {
+    var parts = window.location.pathname.split('/');
+    // URL pattern: /tt-metal/{version}/{project}/...
+    var version = parts[2] || '';
+    if (version && version !== 'latest') {
+        // Add noindex to keep old versions out of search results
+        var noindex = document.createElement('meta');
+        noindex.name = 'robots';
+        noindex.content = 'noindex';
+        document.head.appendChild(noindex);
+        // Add canonical pointing to latest
+        var canonical = document.createElement('link');
+        canonical.rel = 'canonical';
+        canonical.href = window.location.href.replace('/tt-metal/' + version + '/', '/tt-metal/latest/');
+        document.head.appendChild(canonical);
+    }
+})();
+</script>
+{%- endblock %}
+
+{%- block content %}
+<div id="tt-version-warning" style="display:none"></div>
+<script>
+(function() {
+    var parts = window.location.pathname.split('/');
+    var version = parts[2] || '';
+    if (version && version !== 'latest') {
+        var latestUrl = window.location.href.replace('/tt-metal/' + version + '/', '/tt-metal/latest/');
+        var banner = document.getElementById('tt-version-warning');
+        banner.innerHTML =
+            'You are viewing documentation for an older version (<strong>' + version + '</strong>). ' +
+            '<a href="' + latestUrl + '">Click here for the latest version.</a>';
+        banner.style.display = 'block';
+    }
+})();
+</script>
+{{ super() }}
+{%- endblock %}
+
 {%- block sidebartitle %}
 
 {# the logo helper function was removed in Sphinx 6 and deprecated since Sphinx 4 #}
