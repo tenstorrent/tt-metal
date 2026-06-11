@@ -11,6 +11,7 @@
 #include <iterator>
 #include <optional>
 #include <ranges>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -218,6 +219,10 @@ public:
         }
         return true;
     }
+
+    // This is to support ttnn hashing, this allows the Table to be hased as it's underlying storage.
+    static constexpr auto attribute_names = std::forward_as_tuple("entries");
+    auto attribute_values() const { return std::forward_as_tuple(entries_); }
 
 private:
     Storage entries_;

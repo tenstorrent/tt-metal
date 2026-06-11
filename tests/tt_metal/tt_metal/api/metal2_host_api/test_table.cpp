@@ -15,11 +15,13 @@
 #include <map>
 #include <span>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
+#include <tt_stl/reflection.hpp>
 
 namespace {
 
@@ -326,8 +328,8 @@ TEST(TableTest, ContainsWorksOnConstTable) {
 TEST(TableTest, ContainsDoesNotMutateTable) {
     StrIntTable t{{"a", 1}, {"b", 2}};
     const auto size_before = t.size();
-    t.contains("a");
-    t.contains("missing");
+    EXPECT_TRUE(t.contains("a"));
+    EXPECT_FALSE(t.contains("missing"));
     EXPECT_EQ(t.size(), size_before);
 }
 
@@ -339,6 +341,109 @@ TEST(TableMiscTest, ContainsWithIntKey) {
     EXPECT_TRUE(t.contains(2));
     EXPECT_FALSE(t.contains(3));
     EXPECT_FALSE(t.contains(0));
+}
+
+// ---- reflection-based hashing (tt_stl/reflection.hpp) ------------------------
+//
+// Table opts into ttsl reflection through attribute_names / attribute_values(),
+// so ttsl::hash can hash it and it can be nested inside other reflected types.
+// The hash is taken over the underlying entries vector, so it follows insertion
+// order — unlike operator==, which is order independent (see HashFollowsInsertionOrder).
+
+// Compile-time: Table advertises the reflection attribute hooks hash_object uses.
+static_assert(
+    ttsl::reflection::detail::supports_compile_time_attributes_v<StrIntTable>,
+    "Table must expose attribute_names / attribute_values() for ttsl reflection");
+
+// Canonical hash entry point (matches how reflected structs hash themselves).
+template <typename T>
+ttsl::hash::hash_t hash_of(const T& object) {
+    return ttsl::hash::hash_objects_with_default_seed(object);
+}
+
+// A reflected struct that holds a Table, to exercise Table as a nested field
+// (its real use in the Metal 2.0 host API). Must live at namespace scope because
+// a local class can't have the static attribute_names member.
+struct TaggedTable {
+    int tag = 0;
+    StrIntTable table;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("tag", "table");
+    auto attribute_values() const { return std::forward_as_tuple(tag, table); }
+};
+
+TEST(TableHashTest, HashIsDeterministic) {
+    StrIntTable t{{"a", 1}, {"b", 2}};
+    EXPECT_EQ(hash_of(t), hash_of(t));  // same object hashes identically every time
+}
+
+TEST(TableHashTest, EqualTablesHashEqual) {
+    StrIntTable a{{"a", 1}, {"b", 2}, {"c", 3}};
+    StrIntTable b{{"a", 1}, {"b", 2}, {"c", 3}};
+    ASSERT_EQ(a, b);
+    EXPECT_EQ(hash_of(a), hash_of(b));
+}
+
+TEST(TableHashTest, EmptyTables) {
+    EXPECT_EQ(hash_of(StrIntTable{}), hash_of(StrIntTable{}));
+    EXPECT_NE(hash_of(StrIntTable{}), hash_of(StrIntTable{{"a", 1}}));
+}
+
+TEST(TableHashTest, DifferentValueChangesHash) {
+    StrIntTable base{{"a", 1}, {"b", 2}};
+    StrIntTable diff{{"a", 1}, {"b", 99}};
+    EXPECT_NE(hash_of(base), hash_of(diff));
+}
+
+TEST(TableHashTest, DifferentKeyChangesHash) {
+    EXPECT_NE(hash_of(StrIntTable{{"a", 1}}), hash_of(StrIntTable{{"z", 1}}));
+}
+
+TEST(TableHashTest, DifferentSizeChangesHash) {
+    StrIntTable small{{"a", 1}};
+    StrIntTable big{{"a", 1}, {"b", 2}};
+    EXPECT_NE(hash_of(small), hash_of(big));
+}
+
+TEST(TableHashTest, HashFollowsInsertionOrder) {
+    // Two tables that compare equal but were built in opposite order. Because the
+    // reflected hash is taken over the underlying entries vector, the hashes
+    // differ even though operator== treats the tables as equal.
+    StrIntTable a;
+    a["x"] = 1;
+    a["y"] = 2;
+    StrIntTable b;
+    b["y"] = 2;
+    b["x"] = 1;
+    ASSERT_EQ(a, b);
+    EXPECT_NE(hash_of(a), hash_of(b));
+}
+
+TEST(TableHashTest, NonStringKeyValueHashes) {
+    // Reflection recurses into K and V, so any hashable key/value type works.
+    m2::Table<int, std::string> a;
+    a[1] = "one";
+    a[2] = "two";
+    m2::Table<int, std::string> same;
+    same[1] = "one";
+    same[2] = "two";
+    EXPECT_EQ(hash_of(a), hash_of(same));
+    EXPECT_NE(hash_of(a), hash_of(m2::Table<int, std::string>{{1, "one"}}));
+}
+
+TEST(TableHashTest, NestedInReflectedStruct) {
+    TaggedTable a{.tag = 7, .table = {{"a", 1}, {"b", 2}}};
+    TaggedTable b{.tag = 7, .table = {{"a", 1}, {"b", 2}}};
+    EXPECT_EQ(hash_of(a), hash_of(b));
+
+    TaggedTable diff_tag{.tag = 8, .table = {{"a", 1}, {"b", 2}}};
+    EXPECT_NE(hash_of(a), hash_of(diff_tag));
+
+    TaggedTable diff_table{.tag = 7, .table = {{"a", 1}, {"b", 3}}};
+    EXPECT_NE(hash_of(a), hash_of(diff_table));
+
+    // The Table is reachable as a named attribute of the enclosing reflected type.
+    EXPECT_STREQ(std::get<1>(TaggedTable::attribute_names), "table");
 }
 
 }  // namespace
