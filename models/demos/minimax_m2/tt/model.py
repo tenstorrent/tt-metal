@@ -40,7 +40,7 @@ def create_rope_setup(
     shard_batch_to_mesh_dim=0,
 ):
     """
-    Create and return a RotarySetup instance for the GPT-OSS model.
+    Create and return a RotarySetup instance for the MiniMax-M2 model.
 
     This function extracts the rope setup logic from the Model class to allow
     for independent testing and comparison with HuggingFace reference implementations.
@@ -85,15 +85,14 @@ def create_rope_setup(
 
 class Model:
     """
-    GPT-OSS TTNN Model Implementation
+    MiniMax-M2 TTNN Model Implementation
 
-    This class implements the GPT-OSS model using TTNN tensors and operations.
-    It supports both prefill and decode modes with sliding window attention.
+    This class implements the MiniMax-M2 model using TTNN tensors and operations.
+    It supports both prefill and decode modes.
 
     Key Features:
-    - MoE (Mixture of Experts) architecture with router and experts
-    - Sliding window attention for efficient long sequences
-    - Paged attention support for memory efficiency
+    - MoE (Mixture of Experts): sigmoid+bias router (top-8), SiLU-SwiGLU experts
+    - Full causal GQA attention (no sliding window, no sinks) with partial RoPE + QK-norm
     - Compatible with tt_transformers generator interface
     """
 
@@ -113,7 +112,7 @@ class Model:
         use_throughput_experts=False,
     ):
         """
-        Initialize GPT-OSS model
+        Initialize MiniMax-M2 model
 
         Args:
             mesh_device: TTNN mesh device for computation
@@ -299,7 +298,7 @@ class Model:
         use_throughput_experts=False,
     ):
         """Constructor compatible with tt_transformers.Transformer interface"""
-        # Create a dummy CCL manager for GPT-OSS
+        # Create a dummy CCL manager for MiniMax-M2
         from models.demos.minimax_m2.tt.ccl import CCLManager
 
         ccl_manager = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device))
@@ -625,7 +624,7 @@ class Model:
         """
         Post-process traced prefill output to the 32-token tile containing `last_token_idx`.
 
-        Unlike tt_transformers `Transformer`, GPT-OSS `ttnn_prefill_forward` already
+        Unlike tt_transformers `Transformer`, MiniMax-M2 `ttnn_prefill_forward` already
         applies final norm + lm_head, so this method only slices logits.
         """
         get_last_token = (last_token_idx // 32) * 32
@@ -939,7 +938,7 @@ class Model:
             select_idx = None
 
         if sampling_params is not None:
-            # GPT-OSS always emits <|channel|> (token 200005) as the first generated token
+            # MiniMax-M2 always emits <|channel|> (token 200005) as the first generated token
             # regardless of prompt content. Skipping lm_head and returning this hardcoded
             # token saves ~100ms/user by avoiding the 201K-vocab matmul. vLLM device
             # sampling accepts this as a pre-sampled token ID.

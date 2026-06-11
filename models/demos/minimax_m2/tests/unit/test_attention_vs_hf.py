@@ -27,7 +27,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.minimax_m2.config import MeshConfig, ModeConfig
 from models.demos.minimax_m2.tt.attention import Attention, AttentionConfig
-from models.demos.minimax_m2.tt.attention_configs import GPTOSSAttentionProgramConfig
+from models.demos.minimax_m2.tt.attention_configs import MiniMaxM2AttentionProgramConfig
 from models.demos.minimax_m2.tt.ccl import CCLManager
 from models.demos.minimax_m2.tt.model import create_rope_setup
 from models.demos.minimax_m2.utils.general_utils import get_default_num_links
@@ -84,7 +84,7 @@ def test_attention_prefill_vs_hf(mesh_device, device_params, seq_len, reset_seed
         state_dict=state,
         ccl_manager=ccl_manager,
         mesh_config=mesh_config,
-        program_config=GPTOSSAttentionProgramConfig(),
+        program_config=MiniMaxM2AttentionProgramConfig(),
         layer_idx=0,
         transformation_mats=trans_mats,
         create_kv_cache=True,

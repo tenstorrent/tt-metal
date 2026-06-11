@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""GPT-OSS attention program configurations."""
+"""MiniMax-M2 attention program configurations."""
 
 from dataclasses import dataclass
 
@@ -9,9 +9,9 @@ from models.demos.minimax_m2.tt.attention.config import ProgramConfig
 
 
 @dataclass
-class GPTOSSAttentionProgramConfig(ProgramConfig):
+class MiniMaxM2AttentionProgramConfig(ProgramConfig):
     """
-    GPT-OSS attention configuration.
+    MiniMax-M2 attention configuration.
 
     Optimized for: hidden=2088, heads=84, head_dim=64
     Uses TTNN auto-tuning for matmuls (cores=None).

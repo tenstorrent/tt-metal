@@ -9,10 +9,10 @@ Models provide their own ProgramConfig implementations for customization.
 
 Usage:
     from models.demos.minimax_m2.tt.experts import Experts, ExpertConfig
-    from models.demos.minimax_m2.tt.expert_configs import GPTOSSProgramConfig
+    from models.demos.minimax_m2.tt.expert_configs import MiniMaxM2ExpertProgramConfig
 
     config = ExpertConfig(...)
-    program_config = GPTOSSProgramConfig()
+    program_config = MiniMaxM2ExpertProgramConfig()
 
     experts = Experts(
         mesh_device=mesh_device,
