@@ -233,12 +233,13 @@ def create_mesh_device(
     # axis (so they pass axis=None) still need the 8th row/col that only ETH frees
     # (e.g. a (5,8) matmul grid needs y=8, which WORKER ROW's 8x7 lacks).
     #
-    # Gate to single-host small clusters (N150=1, N300=2). On large Galaxy
-    # clusters ETH dispatch cores can't be allocated and a failed ETH open
-    # re-inits MetalContext and wedges the command queue, so leave those on
-    # WORKER. (T3K/larger excluded pending validation on that hardware.)
+    # Gate to single-host clusters (N150=1, N300=2, T3K=8). ETH dispatch (incl.
+    # with FABRIC_1D) is validated on T3K: it frees the full 8x8 (64-bank) grid
+    # per chip and closes cleanly. On large multi-host Galaxy clusters (32 chips)
+    # ETH dispatch cores can't be allocated and a failed ETH open re-inits
+    # MetalContext and wedges the command queue, so leave those on WORKER.
     try:
-        _single_host = ttnn.get_num_devices() <= 2
+        _single_host = ttnn.get_num_devices() <= 8
     except Exception:
         _single_host = False
     if _single_host:
