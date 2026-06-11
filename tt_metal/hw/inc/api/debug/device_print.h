@@ -1337,7 +1337,7 @@ void release_lock();
 
 #if !defined(ARCH_WORMHOLE)
 volatile tt_l1_ptr std::atomic<uint32_t>& get_lock_atomic() {
-#if !defined(ARCH_QUASAR)
+#if !defined(ARCH_QUASAR) || defined(ENV_LLK_INFRA)
     return get_device_print_buffer()->aux.lock;
 #else
     // Atomics require the cached L1 alias.

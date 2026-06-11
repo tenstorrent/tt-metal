@@ -53,7 +53,7 @@ constexpr uintptr_t llk_device_print_buffer_l1_base = LLK_DEVICE_PRINT_BUFFER_BA
 constexpr uintptr_t llk_device_print_buffer_l1_base = LLK_DEVICE_PRINT_BUFFER_BASE;
 #endif
 static_assert(
-    llk_device_print_buffer_l1_base + sizeof(DevicePrintMemoryLayout) <= LLK_RUNTIME_ARGS_START,
+    llk_device_print_buffer_l1_base + sizeof(DevicePrintBufferType) <= LLK_RUNTIME_ARGS_START,
     "LLK device print buffer overlaps RUNTIME_ARGS; "
     "adjust TestConfig.DEVICE_PRINT_BUFFER_BASE / DEVICE_PRINT_PER_THREAD_SIZE "
     "in tests/python_tests/helpers/test_config.py.");

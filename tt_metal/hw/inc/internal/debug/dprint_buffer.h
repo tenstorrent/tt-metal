@@ -6,13 +6,14 @@
 
 #ifdef ENV_LLK_INFRA
 #include "hostdev/device_print_common.h"
+#include "core_config.h"
+using DevicePrintBufferType =
+    DevicePrintBuffer<DEVICE_PRINT_BUFFER_SIZE, static_cast<uint32_t>(TensixProcessorTypes::COUNT), 0>;
 #else
 #include "hostdev/dev_msgs.h"
-#endif
-
 #include "device_print_mem.h"
-
 using DevicePrintBufferType = decltype(DevicePrintMemoryLayout::buffer);
+#endif
 
 inline volatile tt_l1_ptr DevicePrintBufferType* get_device_print_buffer() {
 #ifdef ENV_LLK_INFRA
