@@ -156,6 +156,7 @@ class TtMoe(LightweightModule):
         weight_cache_path: Optional[Path] = None,
         layer_idx: int = 0,
         overlap_shared_expert_with_dispatch: bool = True,
+        use_fp8_compression: bool = False,
     ):
         """
         Initialize TtMoe module.
@@ -192,6 +193,9 @@ class TtMoe(LightweightModule):
             overlap_shared_expert_with_dispatch: If True, run the shared expert and dispatch
                 on disjoint sub-devices so they overlap on-chip. If False, skip sub-device
                 setup and run them sequentially on the full Tensix grid.
+            use_fp8_compression: If True, compress tokens to FP8_E4M3 with per_token_cast_to_fp8
+                before dispatch (fewer bytes over fabric) and decompress the dispatched buffer back
+                to bfloat16 with per_token_cast_back. Requires Blackhole. Defaults to False.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -204,6 +208,7 @@ class TtMoe(LightweightModule):
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim
         self.overlap_shared_expert_with_dispatch = overlap_shared_expert_with_dispatch
+        self.use_fp8_compression = use_fp8_compression
 
         # Unpack row/col CCL config
         if isinstance(num_links, tuple):
@@ -489,6 +494,12 @@ class TtMoe(LightweightModule):
             )
         logger.debug(f"[TtMoe.forward] x (after all_gather) shape: {x.shape}")
 
+        # Compress tokens to fp8 BEFORE loading the dispatch sub-device manager. per_token_cast_to_fp8
+        # (and per_token_cast_back below) run on the full Tensix grid, so they must not be confined to
+        # the dispatch sub-device; x stays alive for the shared expert and is freed once dispatched.
+        if self.use_fp8_compression:
+            x_fp8, scale = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x)
+
         signpost("shared_expert_and_dispatch_start")
         if self.overlap_shared_expert_with_dispatch:
             self.mesh_device.load_sub_device_manager(self.sd_manager_id)
@@ -508,16 +519,55 @@ class TtMoe(LightweightModule):
         # ========================================
         # Dispatch expects full emb_dim on each device (x already has this)
         logger.debug(f"[TtMoe.forward] {x.shape=} {x.memory_config()=}")
-        dispatched_buffer, metadata = self.dispatch_module(
-            x,
-            scores,
-            indices,
-            tt_expert_offsets,
-            self.tt_expert_dispatch_table,
-        )
+        if self.use_fp8_compression:
+            # x (bf16) is no longer needed once the shared expert above has consumed it
+            ttnn.deallocate(x)
+            dispatched_buffer_fp8, metadata = self.dispatch_module(
+                x_fp8,
+                scores,
+                indices,
+                tt_expert_offsets,
+                self.tt_expert_dispatch_table,
+            )
+            ttnn.deallocate(x_fp8)
+        else:
+            dispatched_buffer, metadata = self.dispatch_module(
+                x,
+                scores,
+                indices,
+                tt_expert_offsets,
+                self.tt_expert_dispatch_table,
+            )
+            ttnn.deallocate(x)
+
         if self.overlap_shared_expert_with_dispatch:
             self.mesh_device.clear_loaded_sub_device_manager()
-        x = ttnn.deallocate(x)
+
+        if self.use_fp8_compression:
+            # Decompress AFTER clearing the sub-device manager (full grid). The per-token scale is
+            # all-gathered across the dispatch group so per_token_cast_back can index it by the
+            # metadata's (source coord, token_idx).
+            if self.dispatch_group_size > 1:
+                scale = ttnn.all_gather(
+                    scale,
+                    dim=1,  # token dim
+                    cluster_axis=0,  # dispatch-group axis (rows)
+                    num_links=self.row_num_links,
+                    topology=self.row_topology,
+                )
+            dispatched_buffer = ttnn.experimental.deepseek_prefill.per_token_cast_back(
+                dispatched_buffer_fp8,
+                scale,
+                output_dtype=ttnn.bfloat16,
+                expert_token_counts=tt_expert_token_counts,
+                expert_region_offsets=tt_expert_region_offsets,
+                metadata=metadata,
+                experts_per_chip=self.experts_per_chip,
+                dispatch_group_size=self.dispatch_group_size,
+            )
+            ttnn.deallocate(dispatched_buffer_fp8)
+            ttnn.deallocate(scale)
+
         scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
         indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
         logger.debug(f"[TtMoe.forward] Dispatch output: buffer={dispatched_buffer.shape}, metadata={metadata.shape}")
