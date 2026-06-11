@@ -14,12 +14,43 @@
 #include <iterator>
 #include <map>
 #include <span>
+#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
+#include <tt_stl/reflection.hpp>
+
 #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
+
+// ttsl JSON specializations for Table<K,V>.
+// These live here (not in table.hpp) to avoid pulling reflection.hpp into a public API header.
+namespace ttsl::json {
+
+template <typename K, typename V>
+struct to_json_t<tt::tt_metal::experimental::Table<K, V>> {
+    nlohmann::json operator()(const tt::tt_metal::experimental::Table<K, V>& table) {
+        nlohmann::json json_object = nlohmann::json::object();
+        for (const auto& [key, value] : table) {
+            json_object[to_json(key).dump()] = to_json(value);
+        }
+        return json_object;
+    }
+};
+
+template <typename K, typename V>
+struct from_json_t<tt::tt_metal::experimental::Table<K, V>> {
+    tt::tt_metal::experimental::Table<K, V> operator()(const nlohmann::json& json_object) {
+        tt::tt_metal::experimental::Table<K, V> table;
+        for (const auto& [key, value] : json_object.items()) {
+            table.insert({from_json<K>(nlohmann::json::parse(key)), from_json<V>(value)});
+        }
+        return table;
+    }
+};
+
+}  // namespace ttsl::json
 
 namespace {
 
@@ -339,6 +370,73 @@ TEST(TableMiscTest, ContainsWithIntKey) {
     EXPECT_TRUE(t.contains(2));
     EXPECT_FALSE(t.contains(3));
     EXPECT_FALSE(t.contains(0));
+}
+
+// ---- ttsl reflection: operator<< -------------------------------------------
+
+TEST(TableTest, StreamOutputEmptyTable) {
+    StrIntTable t;
+    std::ostringstream os;
+    os << t;
+    EXPECT_EQ(os.str(), "{}");
+}
+
+TEST(TableTest, StreamOutputContainsKeyAndValue) {
+    StrIntTable t{{"hello", 42}};
+    std::ostringstream os;
+    os << t;
+    const std::string s = os.str();
+    EXPECT_NE(s.find("hello"), std::string::npos);
+    EXPECT_NE(s.find("42"), std::string::npos);
+}
+
+// ---- ttsl reflection: hash --------------------------------------------------
+
+TEST(TableTest, HashIsConsistent) {
+    StrIntTable t{{"a", 1}, {"b", 2}};
+    EXPECT_EQ(ttsl::hash::detail::hash_object(t), ttsl::hash::detail::hash_object(t));
+}
+
+TEST(TableTest, HashIsOrderIndependent) {
+    StrIntTable a{{"a", 1}, {"b", 2}};
+    StrIntTable b;
+    b["b"] = 2;
+    b["a"] = 1;  // inserted in opposite order
+    EXPECT_EQ(ttsl::hash::detail::hash_object(a), ttsl::hash::detail::hash_object(b));
+}
+
+TEST(TableTest, HashDistinguishesDifferentValues) {
+    StrIntTable a{{"a", 1}, {"b", 2}};
+    StrIntTable b{{"a", 1}, {"b", 99}};
+    EXPECT_NE(ttsl::hash::detail::hash_object(a), ttsl::hash::detail::hash_object(b));
+}
+
+TEST(TableTest, HashDistinguishesDifferentKeys) {
+    StrIntTable a{{"a", 1}};
+    StrIntTable b{{"z", 1}};
+    EXPECT_NE(ttsl::hash::detail::hash_object(a), ttsl::hash::detail::hash_object(b));
+}
+
+TEST(TableTest, HashEmptyTableIsZero) {
+    StrIntTable t;
+    EXPECT_EQ(ttsl::hash::detail::hash_object(t), 0u);
+}
+
+// ---- ttsl reflection: to_json / from_json -----------------------------------
+
+TEST(TableTest, JsonRoundtrip) {
+    StrIntTable original{{"a", 1}, {"b", 2}, {"c", 3}};
+    const auto json = ttsl::json::to_json(original);
+    const auto deserialized = ttsl::json::from_json<StrIntTable>(json);
+    EXPECT_EQ(original, deserialized);
+}
+
+TEST(TableTest, JsonEmptyTableRoundtrip) {
+    StrIntTable original;
+    const auto json = ttsl::json::to_json(original);
+    const auto deserialized = ttsl::json::from_json<StrIntTable>(json);
+    EXPECT_EQ(original, deserialized);
+    EXPECT_TRUE(deserialized.empty());
 }
 
 }  // namespace

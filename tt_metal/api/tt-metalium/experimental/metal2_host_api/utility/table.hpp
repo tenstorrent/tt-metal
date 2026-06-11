@@ -10,10 +10,13 @@
 #include <initializer_list>
 #include <iterator>
 #include <optional>
+#include <ostream>
 #include <ranges>
 #include <type_traits>
 #include <utility>
 #include <vector>
+
+#include <functional>
 
 #include <tt_stl/assert.hpp>
 #include <tt_stl/optional_reference.hpp>
@@ -141,6 +144,34 @@ public:
 
     // Returns true if `key` is present in the table, false otherwise.
     [[nodiscard]] bool contains(const K& key) const { return find(key) != end(); }
+
+    // XOR-based order-independent hash (XOR is commutative → insertion order
+    // doesn't affect the result).  Picked up automatically by ttsl::hash::hash_object.
+    // Requires K and V to be std::hash-able.
+    [[nodiscard]] std::size_t to_hash() const noexcept {
+        std::size_t h = 0;
+        for (const auto& [k, v] : entries_) {
+            std::size_t kh = std::hash<K>{}(k);
+            std::size_t vh = std::hash<V>{}(v);
+            // Boost-style combine for the pair, then XOR for order-independence.
+            std::size_t pair_h = kh ^ (vh + 0x9e3779b9u + (kh << 6) + (kh >> 2));
+            h ^= pair_h;
+        }
+        return h;
+    }
+
+    // Stream output matching std::map's format in reflection.hpp: {k: v, k: v}.
+    friend std::ostream& operator<<(std::ostream& os, const Table& t) {
+        os << "{";
+        for (auto it = t.entries_.begin(); it != t.entries_.end(); ++it) {
+            os << it->first << ": " << it->second;
+            if (std::next(it) != t.entries_.end()) {
+                os << ", ";
+            }
+        }
+        os << "}";
+        return os;
+    }
 
     // Inserts an entry only if its key is absent. Returns {iterator to the entry,
     // true} when inserted, or {iterator to the existing entry, false} otherwise.
