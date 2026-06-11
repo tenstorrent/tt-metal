@@ -26,8 +26,6 @@ from models.tt_dit.utils.vbench import assert_vbench_quality
 
 # Trace region for LTX_TRACED=1. Holds both stage traces' command streams (s1 + larger-seq
 # s2); measured need is ~236 MB at 1080p (get_trace_buffers_size), so 300 MB gives headroom.
-# One per fabric topology so the trace region pairs with the row's own fabric config. Harmless
-# for eager runs (the region is just reserved DRAM, never written).
 ring_trace_params = {**ring_params, "trace_region_size": 300_000_000}
 line_trace_params = {**line_params, "trace_region_size": 300_000_000}
 
@@ -48,8 +46,8 @@ line_trace_params = {**line_params, "trace_region_size": 300_000_000}
     [
         [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
         [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
-        # BH on 2x4 (line_trace_params so LTX_TRACED=1 is runnable here; line fabric matches Linear)
-        [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
+        # BH on 2x4
+        [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False],
         # WH (ring) on 4x8. Requires increased worker_l1_size to avoid code-size error in RingAttention.
         [(4, 8), (4, 8), 1, 0, 4, True, {"worker_l1_size": 1344544, **ring_params}, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
