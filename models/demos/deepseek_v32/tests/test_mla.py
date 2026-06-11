@@ -146,8 +146,8 @@ def assert_config_matches(config, args):
         ), f"HF config.{hf_name}={getattr(config, hf_name)} != ModelArgs.{args_name}={getattr(args, args_name)}"
 
 
-# QuietBox bring-up: 1x4 pure TP (agreement 13); 2x2 SP x TP later.
-@pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["1x4"], indirect=True)
+# QuietBox: 1x4 pure TP (agreement 13); 2x2 SP×TP (step 5).
+@pytest.mark.parametrize("mesh_device", [(1, 4), (2, 2)], ids=["1x4", "2x2"], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
     [
