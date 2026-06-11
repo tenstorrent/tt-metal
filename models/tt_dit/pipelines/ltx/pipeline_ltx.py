@@ -16,6 +16,7 @@ import json
 import math
 import os
 from dataclasses import dataclass, field
+from io import BytesIO
 from typing import Callable
 
 import torch
@@ -30,7 +31,7 @@ from ...encoders.gemma.encoder_pair import GemmaTokenizerEncoderPair
 from ...models.transformers.ltx.rope_ltx import LTXRopeType, precompute_freqs_cis, reshape_interleaved_to_bhnd
 from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel
 from ...models.upsampler.latent_upsampler_ltx import LTXLatentUpsampler
-from ...models.vae.vae_ltx import LTXVideoDecoder
+from ...models.vae.vae_ltx import LTXVideoDecoder, LTXVideoEncoder
 from ...parallel.config import (
     AudioTCParallelConfig,
     DiTParallelConfig,
@@ -62,6 +63,12 @@ LTX_UPSAMPLER_HF_REF = "Lightricks/LTX-2.3:ltx-2.3-spatial-upscaler-x2-1.1.safet
 # is a separate concept — do NOT replace `32 * sp_factor` padding math with these.
 TEMPORAL_COMPRESSION = 8
 SPATIAL_COMPRESSION = 32
+
+# Conditioning-image H.264 compression level (CRF). The LTX-2 VAE/DiT are trained on
+# codec-degraded frames, so an I2V conditioning image must be round-tripped through the
+# same lossy codec before VAE encoding — feeding a pristine image yields out-of-distribution
+# latents (frame-0 seam, weak identity). Mirrors ``ltx_pipelines.utils.constants.DEFAULT_IMAGE_CRF``.
+DEFAULT_IMAGE_CRF = 33
 
 # Default negative prompt (inlined from the LTX-2 reference
 # ``ltx_pipelines.utils.constants.DEFAULT_NEGATIVE_PROMPT`` so the pipeline has no
@@ -220,6 +227,8 @@ class LTXPipeline:
     """
 
     HAS_UPSAMPLER: bool = False
+    # When True, the transformer uses per-token video AdaLN modulation (I2V image conditioning).
+    SUPPORTS_IMAGE_CONDITIONING: bool = False
 
     def __init__(
         self,
@@ -344,6 +353,7 @@ class LTXPipeline:
         self.transformer: LTXTransformerModel | None = None
         self.transformer_states: list[TransformerState] = []
         self.vae_decoder = None
+        self.vae_encoder = None
         self.upsampler: LTXLatentUpsampler | None = None
         # On-device audio decode chain (Stage A mel-VAE + Stage B/C vocoder+BWE).
         # Shells are built at `_instantiate_modules`; weights are loaded via
@@ -556,10 +566,14 @@ class LTXPipeline:
         vae_cfg = json.loads(header.get("__metadata__", {}).get("config", "{}")).get("vae", {})
         self._vae_checkpoint_path = checkpoint_path
         self._vae_decoder_blocks = vae_cfg.get("decoder_blocks", [])
+        self._vae_encoder_blocks = vae_cfg.get("encoder_blocks", [])
         self._vae_causal = vae_cfg.get("causal_decoder", False)
         self._vae_base_channels = vae_cfg.get("decoder_base_channels", 128)
+        self._vae_patch_size = vae_cfg.get("patch_size", 4)
         if self._vae_decoder_blocks:
             logger.info(f"VAE config: {len(self._vae_decoder_blocks)} blocks, causal={self._vae_causal}")
+        if self._vae_encoder_blocks:
+            logger.info(f"VAE encoder config: {len(self._vae_encoder_blocks)} blocks")
 
     @staticmethod
     def _build_transformer_state_dict(checkpoint_path: str, lora_specs: list[LoraSpec]) -> dict[str, torch.Tensor]:
@@ -598,6 +612,21 @@ class LTXPipeline:
             has_audio=self.mode == "av",
             apply_gated_attention=self._has_gate,
             cross_attention_adaln=self._cross_attention_adaln,
+            image_conditioning=self.SUPPORTS_IMAGE_CONDITIONING and bool(getattr(self, "_vae_encoder_blocks", [])),
+        )
+
+    def _new_vae_encoder(self, num_frames: int, height: int, width: int) -> LTXVideoEncoder:
+        """Image-conditioning VAE encoder (I2V): pixels -> latent. Shares the decoder's
+        per-channel statistics and the VAE H/W parallel config."""
+        return LTXVideoEncoder(
+            encoder_blocks=self._vae_encoder_blocks,
+            patch_size=self._vae_patch_size,
+            mesh_device=self.mesh_device,
+            parallel_config=self.vae_parallel_config,
+            ccl_manager=self.vae_ccl_manager,
+            num_frames=num_frames or None,
+            height=height or None,
+            width=width or None,
         )
 
     def _new_upsampler(self) -> LTXLatentUpsampler:
@@ -666,6 +695,11 @@ class LTXPipeline:
                 width=self._init_width or None,
             )
 
+        if self._vae_encoder_blocks and self._init_height > 0 and self._init_width > 0:
+            # Single-frame image conditioning; blocking falls back to channel-keyed entries so the
+            # one module can encode at both stage resolutions (conv3d adapts to the runtime shape).
+            self.vae_encoder = self._new_vae_encoder(num_frames=1, height=self._init_height, width=self._init_width)
+
         if self.HAS_UPSAMPLER:
             assert (
                 self._init_height > 0 and self._init_width > 0 and self._init_num_frames > 0
@@ -698,6 +732,18 @@ class LTXPipeline:
         if self.upsampler is not None and self.vae_decoder is not None:
             self.vae_decoder.register_coresident_exclusions(self.upsampler)
             self.upsampler.register_coresident_exclusions(self.vae_decoder)
+
+        # VAE encoder runs once at the start of generate (before stage 1), then is evicted.
+        # Exclude it against the DiT variants, the decoder, and the upsampler.
+        if self.vae_encoder is not None:
+            enc_peers = [*models]
+            if self.vae_decoder is not None:
+                enc_peers.append(self.vae_decoder)
+            if self.upsampler is not None:
+                enc_peers.append(self.upsampler)
+            for m in enc_peers:
+                m.register_coresident_exclusions(self.vae_encoder)
+            self.vae_encoder.register_coresident_exclusions(*enc_peers)
 
         # The on-device Gemma encoder modules are bidirectionally excluded with the DiT
         # variants + VAE; the pair wires the exclusions on each module at its first build.
@@ -836,6 +882,114 @@ class LTXPipeline:
         )
         logger.info(f"Loaded TTNN VAE decoder ({len(self._vae_decoder_blocks)} blocks)")
 
+    def _prepare_vae_encoder(self) -> None:
+        """Push VAE encoder weights onto the mesh (I2V image conditioning). Mirrors
+        ``_prepare_vae``; shares the decoder's ``vae.per_channel_statistics.*``."""
+        if self.vae_encoder is None:
+            return
+
+        def _vae_encoder_state_provider() -> dict[str, torch.Tensor]:
+            logger.info(f"VAE encoder cache miss — loading safetensors: {self._vae_checkpoint_path}")
+            raw = load_file(self._vae_checkpoint_path)
+            enc_state = {}
+            for k, v in raw.items():
+                if k.startswith("vae.encoder."):
+                    enc_state[k.removeprefix("vae.encoder.")] = v
+                elif k.startswith("vae.per_channel_statistics."):
+                    short_key = k.removeprefix("vae.")
+                    if short_key in ("per_channel_statistics.mean-of-means", "per_channel_statistics.std-of-means"):
+                        enc_state[short_key] = v
+            return enc_state
+
+        blocking_key = conv3d_blocking_hash(self.vae_encoder)
+        subfolder = f"vae_enc_{blocking_key}" if blocking_key else "vae_enc"
+        cache_module.load_model(
+            self.vae_encoder,
+            model_name=os.path.basename(self.checkpoint_name).removesuffix(".safetensors"),
+            subfolder=subfolder,
+            parallel_config=self.parallel_config,
+            mesh_shape=tuple(self.mesh_device.shape),
+            get_torch_state_dict=_vae_encoder_state_provider,
+        )
+        logger.info(f"Loaded TTNN VAE encoder ({len(self._vae_encoder_blocks)} blocks)")
+
+    def encode_image(self, image_BCFHW: torch.Tensor) -> torch.Tensor:
+        """Encode a conditioning image/clip ``(B, 3, F, H, W)`` in [-1, 1] to a normalized
+        latent ``(B, 128, F', H', W')``. Loads the encoder (evicting coresident peers)."""
+        assert self.vae_encoder is not None, "VAE encoder not constructed (no encoder_blocks in checkpoint?)"
+        self._prepare_vae_encoder()
+        return self.vae_encoder(image_BCFHW)
+
+    @staticmethod
+    def _crf_codec_roundtrip(arr, crf: int):
+        """Encode/decode an RGB image through libx264 at the given CRF (port of
+        ``ltx_pipelines.utils.media_io.preprocess`` -> ``encode_single_frame`` /
+        ``decode_single_frame``). ``arr`` is ``(H, W, 3)`` uint8; returns ``(H', W', 3)``
+        uint8 where H'/W' are cropped to even dims (codec requirement)."""
+        import av  # lazy import (matches utils/video.py); only needed for I2V conditioning
+        import numpy as np
+
+        # libx264 requires even dimensions; crop to a multiple of 2 like the reference.
+        height = arr.shape[0] // 2 * 2
+        width = arr.shape[1] // 2 * 2
+        arr = np.ascontiguousarray(arr[:height, :width])
+
+        with BytesIO() as buf:
+            container = av.open(buf, mode="w", format="mp4")
+            try:
+                stream = container.add_stream("libx264", rate=1, options={"crf": str(crf), "preset": "veryfast"})
+                stream.height = height
+                stream.width = width
+                av_frame = av.VideoFrame.from_ndarray(arr, format="rgb24").reformat(format="yuv420p")
+                container.mux(stream.encode(av_frame))
+                container.mux(stream.encode())
+            finally:
+                container.close()
+            video_bytes = buf.getvalue()
+
+        with BytesIO(video_bytes) as buf:
+            container = av.open(buf)
+            try:
+                vstream = next(s for s in container.streams if s.type == "video")
+                frame = next(container.decode(vstream))
+            finally:
+                container.close()
+        return frame.to_ndarray(format="rgb24")
+
+    @staticmethod
+    def _load_conditioning_image(
+        image_path: str, height: int, width: int, crf: int = DEFAULT_IMAGE_CRF
+    ) -> torch.Tensor:
+        """Host-side image preprocessing (port of ``load_image_and_preprocess``): decode ->
+        CRF codec round-trip (domain matching) -> resize preserving aspect + center crop ->
+        normalize to [-1, 1]. Returns ``(1, 3, 1, height, width)`` float32.
+
+        The CRF round-trip runs at native resolution before resize (matching the reference
+        order); pass ``crf=0`` to skip it."""
+        import math
+
+        import numpy as np
+        from PIL import Image
+
+        img = Image.open(image_path).convert("RGB")
+        arr = np.asarray(img)  # (H, W, 3) uint8
+        if crf and crf > 0:
+            arr = LTXPipeline._crf_codec_roundtrip(arr, crf)
+        tensor = torch.from_numpy(np.ascontiguousarray(arr)).float()  # (H, W, 3)
+        tensor = tensor.permute(2, 0, 1).unsqueeze(0)  # (1, 3, H, W)
+
+        _, _, src_h, src_w = tensor.shape
+        scale = max(height / src_h, width / src_w)
+        new_h = math.ceil(src_h * scale)
+        new_w = math.ceil(src_w * scale)
+        tensor = torch.nn.functional.interpolate(tensor, size=(new_h, new_w), mode="bilinear", align_corners=False)
+        crop_top = (new_h - height) // 2
+        crop_left = (new_w - width) // 2
+        tensor = tensor[:, :, crop_top : crop_top + height, crop_left : crop_left + width]
+
+        tensor = tensor.unsqueeze(2)  # (1, 3, 1, H, W)
+        return tensor / 127.5 - 1.0
+
     def decode_latents(self, latent: torch.Tensor, latent_frames: int, latent_h: int, latent_w: int) -> torch.Tensor:
         """Decode latent tensor to video pixels.
 
@@ -907,6 +1061,14 @@ class LTXPipeline:
         s1_lh, s1_lw = height // 64, width // 64
         dummy = torch.zeros(1, self.in_channels, latent_frames, s1_lh, s1_lw)
         self._upsample_latent(dummy)
+
+    def _warmup_encode(self, height: int, width: int) -> None:
+        """Load the VAE encoder + JIT-compile encode kernels with a zero single-frame image
+        at the target resolution. No-op when no encoder is configured (non-I2V checkpoints)."""
+        if self.vae_encoder is None:
+            return
+        dummy = torch.zeros(1, 3, 1, height, width)
+        self.encode_image(dummy)
 
     def _warmup_decode(self, num_frames: int, height: int, width: int) -> None:
         """Load VAE + JIT-compile decode kernels with a zero dummy latent at
@@ -1248,8 +1410,16 @@ class LTXPipeline:
         initial_video_latent: torch.Tensor | None = None,
         initial_audio_latent: torch.Tensor | None = None,
         noise_scale: float | None = None,
+        image_cond_latent: torch.Tensor | None = None,
+        image_cond_strength: float = 1.0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Run AV denoising with full MultiModalGuider guidance. Returns (video_latent, audio_latent).
+
+        I2V conditioning: pass ``image_cond_latent`` (the encoded conditioning latent
+        ``(B, 128, F', lh, lw)``, frame-0 aligned) and ``image_cond_strength``. Frame-0 tokens are
+        pinned to the clean image latent via a per-token denoise mask (``denoise_mask = 1 - strength``
+        there), per-token timesteps (``denoise_mask * sigma``), and a per-step ``post_process_latent``
+        blend (mirrors the reference ``VideoConditionByLatentIndex`` + ``GaussianNoiser``).
 
         Stage-2 / refine usage: pass ``sigmas`` (the explicit schedule), the
         upsampled ``initial_video_latent`` plus the stage-1 ``initial_audio_latent``,
@@ -1262,6 +1432,27 @@ class LTXPipeline:
         # SP padding: round seq dim up to TILE_SIZE * sp_factor so ring SDPA's
         # N_local % TILE_HEIGHT == 0 and N_global == N_local * ring_size checks pass.
         video_N = self._sp_pad_len(video_N_real)
+
+        # I2V conditioning state. ``needs_video_ts`` is True whenever the transformer expects a
+        # per-token video timestep (the two-stage pipeline builds it that way), even for pure T2V
+        # (then the mask is all-ones, so timesteps = sigma everywhere == the old scalar path).
+        image_cond = image_cond_latent is not None
+        needs_video_ts = getattr(self.transformer, "image_conditioning", False)
+        denoise_mask = None  # (B, video_N_real, 1)
+        clean_latent = None  # (B, video_N_real, C)
+        n_cond = 0
+        if image_cond or needs_video_ts:
+            denoise_mask = torch.ones(B, video_N_real, 1)
+            if image_cond:
+                cond = image_cond_latent.float()  # (B, C, F', lh, lw)
+                # Patchify to token order f*lh*lw + h*lw + w (matches decode_latents reshape).
+                cond_tokens = cond.permute(0, 2, 3, 4, 1).reshape(B, -1, self.in_channels)
+                n_cond = cond_tokens.shape[1]
+                assert n_cond <= video_N_real, f"image cond tokens {n_cond} exceed video tokens {video_N_real}"
+                clean_latent = torch.zeros(B, video_N_real, self.in_channels)
+                clean_latent[:, :n_cond, :] = cond_tokens
+                denoise_mask[:, :n_cond, :] = 1.0 - image_cond_strength
+                logger.info(f"I2V: pinning {n_cond} frame-0 tokens (strength={image_cond_strength})")
 
         vps = VideoPixelShape(batch=B, frames=num_frames, height=height, width=width, fps=24)
         als = AudioLatentShape.from_video_pixel_shape(vps)
@@ -1311,7 +1502,24 @@ class LTXPipeline:
                 len(sigmas) == num_inference_steps + 1
             ), f"sigmas length {len(sigmas)} must equal num_inference_steps+1 ({num_inference_steps+1})"
 
-        if initial_video_latent is not None:
+        if image_cond:
+            # Reference GaussianNoiser over a conditioned initial state: the base latent has frame-0
+            # tokens replaced by the clean image latent; noise is scaled by ``denoise_mask * ns``.
+            ns = noise_scale if initial_video_latent is not None else sigmas[0].item()
+            if seed is not None:
+                torch.manual_seed(seed)
+            if initial_video_latent is not None:
+                base_v = initial_video_latent.float()
+                if base_v.dim() == 2:
+                    base_v = base_v.unsqueeze(0)
+                base_v = base_v.clone()
+            else:
+                base_v = torch.zeros(B, video_N_real, self.in_channels)
+            base_v[:, :n_cond, :] = clean_latent[:, :n_cond, :]
+            noise_v = torch.randn_like(base_v)
+            scaled_mask = denoise_mask * ns
+            video_lat_real = noise_v * scaled_mask + base_v * (1.0 - scaled_mask)
+        elif initial_video_latent is not None:
             assert noise_scale is not None, "noise_scale required when initial_video_latent is provided"
             if seed is not None:
                 torch.manual_seed(seed)
@@ -1360,7 +1568,14 @@ class LTXPipeline:
             sigma = sigmas[step_idx].item()
             sigma_next = sigmas[step_idx + 1].item()
 
-            def _run(vp, ap, skip_ca=False, skip_sa_blocks=None):
+            # Per-token video timestep (B, video_N): denoise_mask * sigma on real tokens, sigma on
+            # SP-padding tokens. Only consumed when the transformer is in image-conditioning mode.
+            video_ts = None
+            if needs_video_ts:
+                video_ts = torch.full((B, video_N), sigma, dtype=torch.float32)
+                video_ts[:, :video_N_real] = denoise_mask[:, :, 0] * sigma
+
+            def _run(vp, ap, skip_ca=False, skip_sa_blocks=None, video_ts=video_ts):
                 # video_N / audio_N here are LOGICAL (unpadded) — passed as ``logical_n``
                 # to ring SDPA so padded K positions get masked. Tensor shapes themselves
                 # carry the padded counts.
@@ -1377,6 +1592,7 @@ class LTXPipeline:
                     audio_N=audio_N,
                     trans_mat=trans_mat,
                     timestep_torch=torch.tensor([sigma]),
+                    video_timestep_torch=video_ts,
                     video_cross_pe_cos=v_xpe_cos,
                     video_cross_pe_sin=v_xpe_sin,
                     audio_cross_pe_cos=a_xpe_cos,
@@ -1449,6 +1665,13 @@ class LTXPipeline:
                     do_mod=do_mod,
                     real_token_count=audio_N_real,
                 )
+
+            # I2V post_process_latent: pin frame-0 tokens to the clean image latent
+            # (denoised * mask + clean * (1 - mask)) before the Euler step. Audio untouched.
+            if image_cond:
+                v_den_real = v_den[:, :video_N_real, :].float()
+                blended = v_den_real * denoise_mask + clean_latent * (1.0 - denoise_mask)
+                v_den[:, :video_N_real, :] = blended.to(v_den.dtype)
 
             # Gradient estimation: correct velocity using previous step's velocity.
             # GE math operates on real (unpadded) slices only — padded slots are noise-free
