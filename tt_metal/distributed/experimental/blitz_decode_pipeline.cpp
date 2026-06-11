@@ -39,7 +39,26 @@ std::vector<PhysicalPipelineStageConfig> maybe_override_asic_locations_for_force
     const char* force_galaxy_fabric_mode = std::getenv("FORCE_GALAXY_FABRIC_MODE");
     if (force_galaxy_fabric_mode != nullptr && std::string(force_galaxy_fabric_mode) == "1") {
         for (auto& stage_config : pipeline_stage_configs) {
+            // In multi-host mode (e.g. 4x_blaze_loudbox frankenquad), each host owns a
+            // single 4x2 mesh of 8 P150 boards — one chip per tray.
+            //
+            // Loudbox inter-host cabling pattern (from the cabling descriptor):
+            //   host N  tray 5 (upper half, port 2) → host N+1 tray 1 (lower half, port 1)
+            //   host N  tray 6 (upper half, port 2) → host N+1 tray 2 (lower half, port 1)
+            //   ... and so on (tray T+4 on host N → tray T on host N+1)
+            //
+            // The galaxy-level configs use different entry trays per stage (1, 3, 4, 2, …),
+            // which is meaningless for the loudbox where each host has its own 4x2 mesh.
+            // Fixing entry to tray 1 and exit to tray 5 (= tray 1 + 4) is the only choice
+            // that is consistent across all stages:
+            //   - entry tray 1 (asic 0): the chip that receives the cross-host fabric packet
+            //     from the previous host's tray 5
+            //   - exit  tray 5 (asic 0): the chip whose port 2 is cabled to the next host's
+            //     tray 1 port 1
+            // Entry and exit are thus distinct chips → CrossDeviceSend src != dst.
+            stage_config.entry_node_tray_id = 1;
             stage_config.entry_node_asic_location = 0;
+            stage_config.exit_node_tray_id = 5;
             stage_config.exit_node_asic_location = 0;
         }
     }
