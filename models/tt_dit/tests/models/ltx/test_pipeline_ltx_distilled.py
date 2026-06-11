@@ -178,7 +178,7 @@ def test_pipeline_distilled(
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
-        [(2, 4), (2, 4), 1, 0, 2, True, ring_trace_params, ttnn.Topology.Linear, False],
+        [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
         [(4, 8), (4, 8), 1, 0, 2, False, line_trace_params, ttnn.Topology.Linear, False],
     ],
     ids=["bh_2x4sp1tp0", "bh_4x8sp1tp0"],
@@ -215,6 +215,7 @@ def test_audio_decode_girl(mesh_device, mesh_shape, sp_axis, tp_axis, num_links,
         is_fsdp=is_fsdp,
         run_warmup=False,
         traced=traced,
+        audio_only=True,  # skip the ~10-min video warmup; decode_audio captures its own trace
         num_frames=num_frames,
         height=height,
         width=width,
@@ -238,6 +239,9 @@ def test_audio_decode_girl(mesh_device, mesh_shape, sp_axis, tp_axis, num_links,
     audio = pipeline.decode_audio(latent, num_frames, fps=24.0)  # cold: weight load + compile (+ capture)
     cold_ms = (time.perf_counter() - t0) * 1000
 
+    # One untimed decode to absorb a late first-replay cost (the BWE trace captures on the
+    # first post-cold call, not during the cold decode), so warm_ms is true steady state.
+    pipeline.decode_audio(latent, num_frames, fps=24.0)
     N = 5
     t0 = time.perf_counter()
     for _ in range(N):
