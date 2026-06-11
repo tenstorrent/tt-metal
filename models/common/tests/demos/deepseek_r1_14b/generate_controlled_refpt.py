@@ -8,7 +8,7 @@ DeepSeek-R1-Distill-Qwen-14B.
 
 Mirrors the Qwen2.5-7B / Mistral-7B controlled refpt pattern (see
 ``models/common/tests/demos/qwen25_7b/generate_controlled_refpt.py`` and
-``dev-tools/agentic-bringup/skills/reference-sanity.md``). Output ``.refpt`` contains:
+the reference-sanity guide). Output ``.refpt`` contains:
 
     - reference_tokens: [prompt_len + num_target]
     - top5_tokens:      [num_target, 5], aligned to target positions
@@ -167,7 +167,7 @@ def main() -> None:
         print(
             f"\nWARNING: intrinsic top-1 consistency {top1_consistency * 100:.1f}% < 95%. "
             "This refpt has a low ceiling; TT accuracy thresholds will need to be lowered. "
-            "See dev-tools/agentic-bringup/skills/reference-sanity.md."
+            "See the reference-sanity guide."
         )
 
 
