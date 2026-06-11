@@ -1007,9 +1007,9 @@ bool MappingConstraints<TargetNode, GlobalNode>::add_cardinality_constraint(
         return false;
     }
 
-    // Warn if some pairs were filtered but constraint is still satisfiable
+    // Informational: some pairs were filtered but the constraint is still satisfiable (not an error).
     if (!invalid_pairs.empty() && valid_pairs.size() >= min_count) {
-        log_warning(
+        log_debug(
             tt::LogFabric,
             "Cardinality constraint: {} pair(s) were filtered out due to conflicts with required constraints, "
             "but constraint is still satisfiable with {} remaining valid pair(s) (min_count: {})",

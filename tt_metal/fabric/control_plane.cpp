@@ -3501,9 +3501,12 @@ AnnotatedIntermeshConnections ControlPlane::convert_port_descriptors_to_intermes
 
         auto chip_it = cable_lookup.find(my_fn);
         if (chip_it == cable_lookup.end()) {
-            log_warning(
+            // Expected pruning: the broadcast spec enumerates candidate ports across all exit chips, but only
+            // chips that are actual PSD exit nodes for this connection carry a cable. Candidates on non-exit
+            // chips are skipped here; the connection is still realized on the cabled ports. Debug-level only.
+            log_debug(
                 tt::LogFabric,
-                "Broadcast connection references chip M{}D{} which has no PSD inter-mesh cables; "
+                "Broadcast connection candidate on chip M{}D{} has no PSD inter-mesh cable; "
                 "skipping port {} <-> M{} port {}",
                 *my_mesh_id,
                 my_chip,
