@@ -21,9 +21,10 @@
   cmd: |
     ll /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill-fresh
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-    EXPECT_NUM_TESTS=1 pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "8x4 and non_balanced and fabric2d and with_determinism and iter5 and dense and smoke and random" -vvv --tb=short --timeout=900
-    EXPECT_NUM_TESTS=1 pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "8x4 and non_balanced and fabric2d and with_determinism and iter5 and moe and smoke and random" -vvv --tb=short --timeout=900
-    EXPECT_NUM_TESTS=1 TT_DS_PREFILL_TTNN_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache-prefill-fresh \
+    EXPECT_NUM_TESTS=1 TT_DS_PREFILL_HOST_REF_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-prefill-block-golden pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "8x4 and non_balanced and fabric2d and with_determinism and iter5 and dense and smoke and random" -vvv --tb=short --timeout=900
+    EXPECT_NUM_TESTS=1 TT_DS_PREFILL_HOST_REF_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-prefill-block-golden pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "8x4 and non_balanced and fabric2d and with_determinism and iter5 and moe and smoke and random" -vvv --tb=short --timeout=900
+    EXPECT_NUM_TESTS=1 \
+    TT_DS_PREFILL_TTNN_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache-prefill-fresh \
     HF_HOME=/mnt/MLPerf/huggingface/hub \
     TT_DS_PREFILL_HOST_REF_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-prefill-golden-32a3e8b6/ \
     pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py -k "ds_prefill and pretrained and e256_device_fp32 and fabric2d-mesh-8x4 and 61_layers and balanced and right_pad and smoke and no_determinism and iter25 and 25600 and longbook" -vvv --tb=short --timeout=1800
@@ -38,8 +39,8 @@
 - name: "(Galaxy) DeepSeek Prefill Perf tests"
   cmd: |
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-    EXPECT_NUM_TESTS=1 pytest models/demos/deepseek_v3_d_p/tests/perf/test_prefill_block_perf.py -k "block_8x4 and fabric2d and layer0" -vvv --tb=short
-    EXPECT_NUM_TESTS=1 pytest models/demos/deepseek_v3_d_p/tests/perf/test_prefill_block_perf.py -k "block_8x4 and fabric2d and layer3" -vvv --tb=short
+    EXPECT_NUM_TESTS=1 TT_DS_PREFILL_HOST_REF_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-prefill-block-golden pytest models/demos/deepseek_v3_d_p/tests/perf/test_prefill_block_perf.py -k "block_8x4 and fabric2d and layer0" -vvv --tb=short
+    EXPECT_NUM_TESTS=1 TT_DS_PREFILL_HOST_REF_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-prefill-block-golden pytest models/demos/deepseek_v3_d_p/tests/perf/test_prefill_block_perf.py -k "block_8x4 and fabric2d and layer3" -vvv --tb=short
     EXPECT_NUM_TESTS=1 pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_perf.py::test_deepseek_v3_moe_perf_galaxy -vvv --tb=short
     EXPECT_NUM_TESTS=1 pytest models/demos/deepseek_v3_d_p/tests/perf/test_mla_perf.py::test_deepseek_v3_mla_perf_galaxy -vvv --tb=short
     EXPECT_NUM_TESTS=1 pytest models/demos/deepseek_v3_d_p/tests/perf/test_mla_perf.py::test_kimi_mla_chunked_perf_galaxy -vvv --tb=short
