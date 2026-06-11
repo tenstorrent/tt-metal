@@ -1015,14 +1015,17 @@ TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreMultiBlockL1AccComputeMatmul) {
     }
 }
 
-// MxFp4_2x variant: same as above but opts into the 2x-packed src-register format. jit_build emits
-// MxFp4_2x_B as the unpack_dst_format for the MxFp4 inputs (ENABLE_2X_SRC_FORMAT) so the matmul runs
-// the EN_X2 traversal. No compute-API/kernel changes vs the baseline — the format alone drives it.
+// Quasar-only test for matmul variant that enables the 2x source format optimization for MxFp4_2x format,
+// This optimization allows src register datums to store two elements in one.
+// Since MxFp4_2x only supports GAPOOL and MVMUL/MVMULDI instructions, we cannot test it with multiple blocks
+// since multi-block matmul kernel uses datacopy from SRC to DST which is not supported by MxFp4_2x format.
+// We can still verify the correctness of the optimization with single block matmul.
+// L1 acc doesn't work in this case since it also relies on datacopy from SRC to DST for the accumulation.
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixTestSingleCoreMultiBlockComputeMatmulMxFp4X2) {
     unit_tests::compute::matmul::BlockedMatmulConfig config{
-        .M = 1,
-        .K = 1,
-        .N = 1,
+        .M = 2,
+        .K = 2,
+        .N = 2,
         .num_blocks = 1,
         .packer_l1_acc = false,
         .in0_fmt = tt::DataFormat::MxFp4,
