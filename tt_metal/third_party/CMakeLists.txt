@@ -9,13 +9,13 @@ endif()
 
 add_subdirectory(umd)
 
+if(NOT ENABLE_TRACY)
+    return()
+endif()
+
 # Propagate ENABLE_TRACY into Tracy's option before add_subdirectory(tracy).
 # Use CACHE FORCE so Tracy's option() cannot reset it under older CMake policy behavior.
-if(ENABLE_TRACY)
-    set(TRACY_ENABLE ON CACHE BOOL "Enable Tracy profiling instrumentation" FORCE)
-else()
-    set(TRACY_ENABLE OFF CACHE BOOL "Enable Tracy profiling instrumentation" FORCE)
-endif()
+set(TRACY_ENABLE ON CACHE BOOL "Enable Tracy profiling instrumentation" FORCE)
 
 # Avoid hard failures on hosts without invariant TSC.
 set(TRACY_TIMER_FALLBACK ON CACHE BOOL "Tracy: use lower-resolution timer fallback" FORCE)
@@ -23,7 +23,7 @@ set(TRACY_TIMER_FALLBACK ON CACHE BOOL "Tracy: use lower-resolution timer fallba
 add_subdirectory(tracy)
 
 # Tracy symbols/backtraces must be available to TracyClient consumers.
-if(ENABLE_TRACY AND TARGET TracyClient)
+if(TARGET TracyClient)
     target_compile_options(TracyClient PUBLIC -fno-omit-frame-pointer)
     # Tracy sources emit this warning under our global -Werror; keep suppression local to TracyClient.
     target_compile_options(TracyClient PRIVATE -Wno-unused-variable)
@@ -143,68 +143,63 @@ add_custom_target(
         tracy-capture
 )
 
-if(ENABLE_TRACY)
-    # Tracy profiler WASM viewer (Emscripten).
-    # Fetch emsdk via CPM, but install toolchain artifacts under the build tree (not shared CPM cache).
-    # Note emsdk has to be installed the repo just has the scripts, not the toolchain artifacts.
-    set(_cpm_source_cache_save "${CPM_SOURCE_CACHE}")
-    set(CPM_SOURCE_CACHE "")
-    CPMAddPackage(
-        NAME emsdk
-        GITHUB_REPOSITORY emscripten-core/emsdk
-        GIT_TAG
-            0dfff153dc3c596948ac088b8853006c570f2609 # 5.0.7-4-g0dfff15
-        DOWNLOAD_ONLY YES
+# Tracy profiler WASM viewer (Emscripten).
+# Fetch emsdk via CPM, but install toolchain artifacts under the build tree (not shared CPM cache).
+# Note emsdk has to be installed the repo just has the scripts, not the toolchain artifacts.
+set(_cpm_source_cache_save "${CPM_SOURCE_CACHE}")
+set(CPM_SOURCE_CACHE "")
+CPMAddPackage(
+    NAME emsdk
+    GITHUB_REPOSITORY emscripten-core/emsdk
+    GIT_TAG
+        0dfff153dc3c596948ac088b8853006c570f2609 # 5.0.7-4-g0dfff15
+    DOWNLOAD_ONLY YES
+)
+set(CPM_SOURCE_CACHE "${_cpm_source_cache_save}")
+unset(_cpm_source_cache_save)
+
+set(EMSDK_DIR "${emsdk_SOURCE_DIR}")
+set(EMSCRIPTEN_TOOLCHAIN_FILE "${EMSDK_DIR}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake")
+
+if(NOT EXISTS "${EMSCRIPTEN_TOOLCHAIN_FILE}")
+    message(
+        STATUS
+        "Installing Emscripten via emsdk into ${EMSDK_DIR} (first configure only; downloads ~hundreds of MB)..."
     )
-    set(CPM_SOURCE_CACHE "${_cpm_source_cache_save}")
-    unset(_cpm_source_cache_save)
-
-    set(EMSDK_DIR "${emsdk_SOURCE_DIR}")
-    set(EMSCRIPTEN_TOOLCHAIN_FILE "${EMSDK_DIR}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake")
-
-    if(NOT EXISTS "${EMSCRIPTEN_TOOLCHAIN_FILE}")
-        message(
-            STATUS
-            "Installing Emscripten via emsdk into ${EMSDK_DIR} (first configure only; downloads ~hundreds of MB)..."
-        )
-        execute_process(
-            COMMAND
-                ./emsdk install latest
-            WORKING_DIRECTORY "${EMSDK_DIR}"
-            RESULT_VARIABLE _emsdk_install_rc
-        )
-        if(NOT _emsdk_install_rc EQUAL 0)
-            message(FATAL_ERROR "emsdk install failed (exit ${_emsdk_install_rc})")
-        endif()
-        execute_process(
-            COMMAND
-                ./emsdk activate latest
-            WORKING_DIRECTORY "${EMSDK_DIR}"
-            RESULT_VARIABLE _emsdk_activate_rc
-        )
-        if(NOT _emsdk_activate_rc EQUAL 0)
-            message(FATAL_ERROR "emsdk activate failed (exit ${_emsdk_activate_rc})")
-        endif()
-    endif()
-
-    if(NOT EXISTS "${EMSCRIPTEN_TOOLCHAIN_FILE}")
-        message(
-            FATAL_ERROR
-            "Emscripten toolchain file not found at ${EMSCRIPTEN_TOOLCHAIN_FILE} after install/activate."
-        )
-    endif()
-
-    # Keep output path aligned with Python tooling and CI packaging/tests.
-    # No EXCLUDE_FROM_ALL: included in the default build target so cmake --build build
-    # automatically produces the WASM viewer whenever Tracy is enabled.
-    ExternalProject_Add(
-        tracy_profiler_wasm
-        SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/tracy/profiler
-        BINARY_DIR ${CMAKE_BINARY_DIR}/profiler/build_wasm
-        CMAKE_ARGS
-            -DCMAKE_TOOLCHAIN_FILE=${EMSCRIPTEN_TOOLCHAIN_FILE} -DCMAKE_BUILD_TYPE=MinSizeRel
-        BUILD_ALWAYS FALSE
-        INSTALL_COMMAND
-            ""
+    execute_process(
+        COMMAND
+            ./emsdk install latest
+        WORKING_DIRECTORY "${EMSDK_DIR}"
+        RESULT_VARIABLE _emsdk_install_rc
     )
+    if(NOT _emsdk_install_rc EQUAL 0)
+        message(FATAL_ERROR "emsdk install failed (exit ${_emsdk_install_rc})")
+    endif()
+    execute_process(
+        COMMAND
+            ./emsdk activate latest
+        WORKING_DIRECTORY "${EMSDK_DIR}"
+        RESULT_VARIABLE _emsdk_activate_rc
+    )
+    if(NOT _emsdk_activate_rc EQUAL 0)
+        message(FATAL_ERROR "emsdk activate failed (exit ${_emsdk_activate_rc})")
+    endif()
 endif()
+
+if(NOT EXISTS "${EMSCRIPTEN_TOOLCHAIN_FILE}")
+    message(FATAL_ERROR "Emscripten toolchain file not found at ${EMSCRIPTEN_TOOLCHAIN_FILE} after install/activate.")
+endif()
+
+# Keep output path aligned with Python tooling and CI packaging/tests.
+# No EXCLUDE_FROM_ALL: included in the default build target so cmake --build build
+# automatically produces the WASM viewer whenever Tracy is enabled.
+ExternalProject_Add(
+    tracy_profiler_wasm
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/tracy/profiler
+    BINARY_DIR ${CMAKE_BINARY_DIR}/profiler/build_wasm
+    CMAKE_ARGS
+        -DCMAKE_TOOLCHAIN_FILE=${EMSCRIPTEN_TOOLCHAIN_FILE} -DCMAKE_BUILD_TYPE=MinSizeRel
+    BUILD_ALWAYS FALSE
+    INSTALL_COMMAND
+        ""
+)
