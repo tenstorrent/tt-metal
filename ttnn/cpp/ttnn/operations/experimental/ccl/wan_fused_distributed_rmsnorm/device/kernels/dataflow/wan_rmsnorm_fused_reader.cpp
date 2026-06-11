@@ -320,44 +320,47 @@ void kernel_main() {
                     // heads' head_dim_tiles tiles for row r, idx
                     // h*rope_seqlen_tiles*head_dim_tiles + r*head_dim_tiles + c.
                     // Broadcast (per_head_rope=0): [B,1,N,head_dim], idx r*head_dim_tiles+c.
-                    uint32_t rope_tiles_this_row = 0;
-                    if constexpr (per_head_rope != 0) {
-                        const uint32_t num_heads_per_device = num_tile_cols / head_dim_tiles;
-                        rope_tiles_this_row = num_heads_per_device * head_dim_tiles;
-                        cb_reserve_back(rope_cos_cb, rope_tiles_this_row);
-                        cb_reserve_back(rope_sin_cb, rope_tiles_this_row);
+                    // This row's cos/sin tiles, laid out contiguously in the CB as
+                    // [head0: head_dim_tiles, head1: ...] for per-head RoPE (total
+                    // num_tile_cols), or head_dim_tiles for broadcast. Read them in
+                    // block_size-tile groups — the SAME granularity P_ROPE consumes
+                    // them at — barriering + pushing each group, instead of issuing
+                    // the whole row (2*num_tile_cols reads) under a single barrier.
+                    // This caps outstanding rope reads at 2*block_size (cos+sin) so the
+                    // deep reader can't oversubscribe the NoC read-response queue under
+                    // many chunks (the selfattn_qk_s2 traced hang: ~2300 reads issued
+                    // but unreturned). Compute's cumulative cb_wait_front absorbs the
+                    // block-wise pushes (same pattern as the input read above).
+                    const uint32_t rope_tiles_this_row = (per_head_rope != 0) ? num_tile_cols : head_dim_tiles;
+                    for (uint32_t t0 = 0; t0 < rope_tiles_this_row; t0 += block_size) {
+                        const uint32_t grp =
+                            ((rope_tiles_this_row - t0) >= block_size) ? block_size : (rope_tiles_this_row - t0);
+                        cb_reserve_back(rope_cos_cb, grp);
+                        cb_reserve_back(rope_sin_cb, grp);
                         uint32_t rope_cos_wr_ptr = get_write_ptr(rope_cos_cb);
                         uint32_t rope_sin_wr_ptr = get_write_ptr(rope_sin_cb);
-                        for (uint32_t h = 0; h < num_heads_per_device; h++) {
-                            const uint32_t head_base = h * rope_seqlen_tiles * head_dim_tiles + r * head_dim_tiles;
-                            for (uint32_t i = 0; i < head_dim_tiles; i++) {
-#ifndef WAN_ABL_SKIP_ROPE_READ
-                                noc_async_read_tile(head_base + i, rope_cos_accessor, rope_cos_wr_ptr);
-                                noc_async_read_tile(head_base + i, rope_sin_accessor, rope_sin_wr_ptr);
-#endif
-                                rope_cos_wr_ptr += rope_cos_tile_bytes;
-                                rope_sin_wr_ptr += rope_sin_tile_bytes;
+                        for (uint32_t j = 0; j < grp; j++) {
+                            const uint32_t t = t0 + j;
+                            uint32_t src_idx;
+                            if constexpr (per_head_rope != 0) {
+                                // tile t -> head (t / head_dim_tiles), within-head (t % head_dim_tiles)
+                                const uint32_t h = t / head_dim_tiles;
+                                const uint32_t within = t - h * head_dim_tiles;
+                                src_idx = h * rope_seqlen_tiles * head_dim_tiles + r * head_dim_tiles + within;
+                            } else {
+                                src_idx = r * head_dim_tiles + t;
                             }
-                        }
-                    } else {
-                        rope_tiles_this_row = head_dim_tiles;
-                        const uint32_t rope_tile_start_idx = r * head_dim_tiles;
-                        cb_reserve_back(rope_cos_cb, rope_tiles_this_row);
-                        cb_reserve_back(rope_sin_cb, rope_tiles_this_row);
-                        uint32_t rope_cos_wr_ptr = get_write_ptr(rope_cos_cb);
-                        uint32_t rope_sin_wr_ptr = get_write_ptr(rope_sin_cb);
-                        for (uint32_t i = 0; i < head_dim_tiles; i++) {
 #ifndef WAN_ABL_SKIP_ROPE_READ
-                            noc_async_read_tile(rope_tile_start_idx + i, rope_cos_accessor, rope_cos_wr_ptr);
-                            noc_async_read_tile(rope_tile_start_idx + i, rope_sin_accessor, rope_sin_wr_ptr);
+                            noc_async_read_tile(src_idx, rope_cos_accessor, rope_cos_wr_ptr);
+                            noc_async_read_tile(src_idx, rope_sin_accessor, rope_sin_wr_ptr);
 #endif
                             rope_cos_wr_ptr += rope_cos_tile_bytes;
                             rope_sin_wr_ptr += rope_sin_tile_bytes;
                         }
+                        noc_async_read_barrier();
+                        cb_push_back(rope_cos_cb, grp);
+                        cb_push_back(rope_sin_cb, grp);
                     }
-                    noc_async_read_barrier();
-                    cb_push_back(rope_cos_cb, rope_tiles_this_row);
-                    cb_push_back(rope_sin_cb, rope_tiles_this_row);
                 }
             }
         }
