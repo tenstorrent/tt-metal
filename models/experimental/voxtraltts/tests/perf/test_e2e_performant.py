@@ -9,9 +9,9 @@ with ``num_command_queues_for_decode()`` + a trace region, and reports through `
 ``BenchmarkData``, adapted to Voxtral's TTS AR loop.
 
 Unlike a plain LLM, Voxtral decode is a discrete-feedback loop (text-decode -> acoustic FM ->
-code -> embedding -> text-decode). Trace replay lives inside
-``VoxtralTTSPipeline.forward_device_resident`` (text-decode trace + acoustic-FM trace);
-this test drives one full traced generation over a fixed synthetic workload and reports the
+code -> embedding -> text-decode). The trace + 2CQ live inside
+``VoxtralTTSPipeline.forward_device_resident`` (text-decode trace + acoustic-FM trace, CQ1 input
+staging); this test drives one full traced generation over a fixed synthetic workload and reports the
 steady-state per-frame decode time + throughput (frames/s). RTF is intentionally NOT reported: the
 fixed short text + ``fixed_step_count`` make it a throughput regression benchmark, not a real-input RTF
 (use the demo for a meaningful RTF on real text).
