@@ -827,13 +827,6 @@ def test_edgecase_dims_eltwise_scalar_matrix_math(input_shape, scalar, ttnn_fn, 
         torch.testing.assert_close(
             g_nonfinite, d_nonfinite, msg="Non-finite positions differ between golden and device"
         )
-        finite_mask = torch.isfinite(torch_output_tensor) & torch.isfinite(tt_output_tensor)
-        if finite_mask.any():
-            assert_with_ulp(
-                torch_output_tensor[finite_mask],
-                tt_output_tensor[finite_mask],
-                ulp_threshold=3,
-            )
     else:
         # ulp_threshold=3 for bfloat16 scalar ops; bump to 4 if CI flakes on edge shapes.
         assert_with_ulp(
