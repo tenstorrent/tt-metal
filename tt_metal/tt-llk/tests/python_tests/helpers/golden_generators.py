@@ -283,7 +283,20 @@ def register_golden(cls):
 
 
 def get_golden_generator(cls):
-    """Retrieve the registered golden class instance."""
+    """Retrieve the registered golden class instance.
+
+    In compile-only (PRODUCE) mode the golden values are never used: tests skip
+    before any comparison against device results, so return a dummy generator and
+    skip the (potentially expensive) golden computation. Doing the check here,
+    rather than monkeypatching the module attribute, makes it robust to how tests
+    import this function (most do ``from helpers.golden_generators import
+    get_golden_generator``, which binds the name at import time).
+    """
+    from .test_config import BuildMode, TestConfig
+
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        return DummyGoldenGenerator()
+
     if cls not in golden_registry:
         raise KeyError(f"Golden class {cls.__name__} is not registered.")
     return golden_registry[cls]

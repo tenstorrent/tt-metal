@@ -355,6 +355,24 @@ def generate_stimuli(
     num_elements_A = input_dimensions_A[0] * input_dimensions_A[1]
     num_elements_B = input_dimensions_B[0] * input_dimensions_B[1]
 
+    # In compile-only (PRODUCE) mode the generated values are never written to the
+    # device: TestConfig.run() skips right after building the ELFs, before any
+    # stimuli reach L1. Only the tile counts above are consumed (as compile/runtime
+    # parameters), and those are pure dimension math. So skip the expensive random
+    # generation (and the golden computation it feeds), but still return correctly
+    # shaped/typed zero tensors so callers that reshape/tilize the stimuli before
+    # the skip keep working.
+    from ..test_config import BuildMode, TestConfig
+
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        srcA_tensor = torch.zeros(
+            num_elements_A, dtype=_get_dtype_for_format(stimuli_format_A)
+        )
+        srcB_tensor = torch.zeros(
+            num_elements_B, dtype=_get_dtype_for_format(stimuli_format_B)
+        )
+        return srcA_tensor, tile_cnt_A, srcB_tensor, tile_cnt_B
+
     srcA_tensor = _generate_source_tensor(
         stimuli_format=stimuli_format_A,
         num_elements=num_elements_A,

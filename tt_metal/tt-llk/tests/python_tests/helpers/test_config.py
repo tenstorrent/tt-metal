@@ -59,7 +59,6 @@ from .format_config import (
 from .golden_generators import (
     GeneratorProxy,
     ProxyMode,
-    dummy_golden_generator,
     get_golden_proxied,
 )
 from .llk_params import (
@@ -502,7 +501,9 @@ class TestConfig:
 
         if compile_producer:
             TestConfig.BUILD_MODE = BuildMode.PRODUCE
-            golden_generators_module.get_golden_generator = dummy_golden_generator
+            # Goldens are short-circuited inside get_golden_generator() when
+            # BUILD_MODE == PRODUCE, and generate_stimuli() skips tensor generation,
+            # so no golden/stimuli values are computed during compile-only runs.
 
         if compile_consumer:
             TestConfig.BUILD_MODE = BuildMode.CONSUME
