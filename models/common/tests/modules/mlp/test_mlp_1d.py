@@ -96,7 +96,7 @@ def _get_prefill_len_cutoff(hf_model_name: str, mesh_shape: tuple[int, int]) -> 
     # Apply model_config.py logic
     if base_name in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B", "gemma-3-4b"] and device == "N150":
         return 512
-    elif base_name in ["Qwen2.5-7B"] and device == "N300":
+    elif base_name in ["Qwen2.5-7B"] and device in ("N150", "N300"):
         return 512
     elif base_name in ["Mixtral-8x7B"] and device == "T3K":
         return 512

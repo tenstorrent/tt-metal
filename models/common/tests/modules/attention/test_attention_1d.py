@@ -997,6 +997,8 @@ def _list_test_cases() -> list[pytest.param]:
         pytest.param((1, 2), 4096, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, QWEN2_7B, 0.97, id="1x2-prefill-4096-Qwen2-7B", marks=_slow),
         pytest.param((1, 2), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, QWEN2_7B, 0.99, id="1x2-decode-32-Qwen2-7B", marks=_slow),
 
+        # --- Qwen2.5-7B on N150 (1x1) best-effort (memory-heavy full model; attention-only PCC) ---
+        pytest.param((1, 1), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat16, QWEN25_7B, 0.95, id="1x1-prefill-128-Qwen2.5-7B", marks=_slow),
         # --- Qwen2.5-7B on N300 (1x2) ---
         # NOTE: Qwen2.5-7B has large Q/K biases causing numerical precision issues
         pytest.param((1, 2), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat16, QWEN25_7B, 0.98, id="1x2-prefill-128-Qwen2.5-7B", marks=_slow),
