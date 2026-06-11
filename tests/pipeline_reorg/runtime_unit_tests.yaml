@@ -29,6 +29,10 @@
   skus:
     wh_n150_civ2:
       timeout: 5
+    wh_n300_civ2:
+      timeout: 5
+    wh_llmbox:
+      timeout: 5
     bh_p150b_civ2:
       timeout: 5
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
@@ -139,6 +143,8 @@
   skus:
     wh_n150_civ2:
       timeout: 5
+    wh_n300_civ2:
+      timeout: 5
     bh_p150b_civ2:
       timeout: 5
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
@@ -160,6 +166,10 @@
   cmd: ./build/test/tt_metal/distributed/distributed_unit_tests
   skus:
     wh_n150_civ2:
+      timeout: 15
+    wh_n300_civ2:
+      timeout: 15
+    wh_llmbox:
       timeout: 15
     bh_p150b_civ2:
       timeout: 8
@@ -216,6 +226,8 @@
       timeout: 20
     bh_p150b_civ2:
       timeout: 15
+    bh_p300:
+      timeout: 15
     bh_p100a_civ2_viommu:
       timeout: 15
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
@@ -230,6 +242,8 @@
     wh_n300_civ2:
       timeout: 10
     bh_p150b_civ2:
+      timeout: 10
+    bh_p300:
       timeout: 10
     bh_p100a_civ2_viommu:
       timeout: 10
@@ -258,6 +272,8 @@
       timeout: 17
     bh_p150b_civ2:
       timeout: 17
+    bh_p300:
+      timeout: 17
     bh_p100a_civ2_viommu:
       timeout: 17
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
@@ -276,6 +292,8 @@
       timeout: 12
     bh_p150b_civ2:
       timeout: 10
+    bh_p300:
+      timeout: 12
     bh_p100a_civ2_viommu:
       timeout: 12
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
@@ -290,6 +308,8 @@
     wh_n300_civ2:
       timeout: 5
     bh_p150b_civ2:
+      timeout: 5
+    bh_p300:
       timeout: 5
     bh_p100a_civ2_viommu:
       timeout: 5
@@ -306,13 +326,15 @@
       timeout: 10
     bh_p150b_civ2:
       timeout: 10
+    bh_p300:
+      timeout: 10
     bh_p100a_civ2_viommu:
       timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
 # =============================================================================
-# Multi-Card Unit Tests (Galaxy)
+# Multi-Card Unit Tests (BH + Galaxy) — see #46302 for topology matrix
 # =============================================================================
 
 # --- BH Multi-Card: Debug Tools (mesh filters + single AERISC) ---
@@ -391,6 +413,8 @@
     bh_p150b_civ2:
       timeout: 5
     bh_p100a_civ2_viommu:
+      timeout: 5
+    bh_loudbox:
       timeout: 5
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
