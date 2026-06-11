@@ -11,6 +11,8 @@ causal on the height (time) axis. Single-chip.
 
 from __future__ import annotations
 
+from collections import OrderedDict
+
 import einops
 import torch
 
@@ -19,6 +21,7 @@ import ttnn
 from ...layers.audio_ops import Conv2dViaConv3d
 from ...layers.module import Module, ModuleList
 from ...utils.conv3d import conv_pad_in_channels
+from ...utils.tracing import Tracer
 
 LATENT_DOWNSAMPLE_FACTOR = 4
 
@@ -327,6 +330,15 @@ class AudioDecoder(Module):
         self._stats_std = torch.ones(ch)
         self._stats_mean = torch.zeros(ch)
 
+        # forward_traced state, mirroring Vocoder: capture the pure-device graph once per
+        # input shape and replay it (the conv ops are host-dispatch-bound, so this removes
+        # the dominant per-op dispatch cost). _target_shape is set per-input by
+        # _host_to_device and read by _device_to_host, so it is not baked into the graph.
+        self.use_trace = False
+        self._target_shape: tuple[int, int, int, int] | None = None
+        self._traces: "OrderedDict[tuple, Tracer]" = OrderedDict()
+        self._max_traces = None
+
         self.patchifier = AudioPatchifier(
             patch_size=1,
             sample_rate=sample_rate,
@@ -470,11 +482,12 @@ class AudioDecoder(Module):
 
         return decoded_output[:, :target_channels, :target_time, :target_freq]
 
-    def forward(self, latent: torch.Tensor) -> torch.Tensor:
-        """``latent``: ``(B, z_channels, frames, mel_bins)`` →
-        ``(B, out_ch, target_frames, target_mel_bins)``.
-        """
+    def _host_to_device(self, latent: torch.Tensor) -> ttnn.Tensor:
+        """Host preprocessing + upload. Split out so the pure-device graph can be captured
+        for trace replay; sets ``self._target_shape`` (input-dependent, read by
+        ``_device_to_host``) so it is not baked into the captured graph."""
         sample_bcfk, target_shape = self._denormalize_latents(latent)
+        self._target_shape = target_shape
 
         # To BHWC for the device (mel_bins is W).
         sample_bhwc = sample_bcfk.permute(0, 2, 3, 1).contiguous().to(torch.float32)
@@ -483,10 +496,12 @@ class AudioDecoder(Module):
         # Conv2dViaConv3d weight.
         sample_bhwc_padded = conv_pad_in_channels(sample_bhwc)
 
-        x = ttnn.from_torch(
+        return ttnn.from_torch(
             sample_bhwc_padded, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
         )
 
+    def _forward_device(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """The pure on-device decode graph (conv_in → conv_out). Captured for trace replay."""
         x = self.conv_in(x)
         x = self.mid(x)
 
@@ -497,12 +512,43 @@ class AudioDecoder(Module):
         x = self.norm_out(x)
         x = ttnn.silu(x)
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT) if x.layout != ttnn.ROW_MAJOR_LAYOUT else x
-        x = self.conv_out(x)
+        return self.conv_out(x)
 
+    def _device_to_host(self, x: ttnn.Tensor) -> torch.Tensor:
+        """Download + strip out_channels padding (Conv2dViaConv3d) + BHWC → BCHW + reshape."""
         out_bhwc = ttnn.to_torch(ttnn.get_device_tensors(x)[0])
-
-        # Strip out_channels padding from Conv2dViaConv3d, then BHWC → BCHW.
         out_bhwc = out_bhwc[..., : self.out_ch]
         out_bchw = out_bhwc.permute(0, 3, 1, 2).contiguous()
+        return self._adjust_output_shape(out_bchw, self._target_shape)
 
-        return self._adjust_output_shape(out_bchw, target_shape)
+    def forward(self, latent: torch.Tensor) -> torch.Tensor:
+        """``latent``: ``(B, z_channels, frames, mel_bins)`` →
+        ``(B, out_ch, target_frames, target_mel_bins)``.
+        """
+        x = self._host_to_device(latent)
+        y = self._forward_device(x)
+        return self._device_to_host(y)
+
+    def forward_traced(self, latent: torch.Tensor) -> torch.Tensor:
+        """Same result as ``forward`` but captures the device graph once per input shape and
+        replays it, removing per-op host dispatch. Requires the mesh opened with a
+        ``trace_region_size`` large enough for the resident trace."""
+        shape_key = tuple(latent.shape)
+        tracer = self._traces.get(shape_key)
+        if tracer is None:
+            tracer = Tracer(self._forward_device, device=self.mesh_device, prep_run=True, clone_prep_inputs=True)
+            self._traces[shape_key] = tracer
+            if self._max_traces is not None:
+                while len(self._traces) > self._max_traces:
+                    _, evicted = self._traces.popitem(last=False)  # LRU
+                    evicted.release_trace()
+        self._traces.move_to_end(shape_key)  # LRU touch
+        # _host_to_device sets self._target_shape for this shape (read by _device_to_host).
+        y = tracer(self._host_to_device(latent), tracer_blocking_execution=False, tracer_execute_on_capture=False)
+        return self._device_to_host(y)
+
+    def release_trace(self) -> None:
+        """Free all captured traces (call on shutdown, or before re-warming a new bucket set)."""
+        for tracer in self._traces.values():
+            tracer.release_trace()
+        self._traces.clear()
