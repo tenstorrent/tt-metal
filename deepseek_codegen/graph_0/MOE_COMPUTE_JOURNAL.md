@@ -825,3 +825,15 @@ needs moe_compute-internal config tuning and/or the #46208 L1-overlap fix (any a
   let CCLs overlap) — but trace HANGS on CCL replay (journal note) and changes the metric.
 - => CCL is at the device-busy floor for this latency-bound decode. The remaining device-busy lever is
   the MoE (132.9ms = 65%: MoECompute fused 40.6ms + MoE CCL ~28ms), gated by the #46208 L1 fragility.
+
+## MoE TAIL ROUND (2026-06-11) — BF16 weighted-k-sum: moe 2.291 -> 1.824 ms/layer, EST 205 -> ~178 ms
+The #46208-safe slice of the 65% MoE phase = the post-combine tail in run_routed_experts (weighted-k-sum).
+| iter | change | commit | moe ms | full(2L) | EST e2e | PCC | notes |
+|------|--------|--------|--------|----------|---------|-----|-------|
+| m1 | drop redundant FP32 upcasts of combine-out + scores (multiply widens BF16 losslessly) | (committed) | 2.222 | 7.611 | ~201 | ==base (out[9] 1.0, argmax 100%) | numerically identical; moe Typecast 47->12us |
+| m2 | BF16 weighted product + sum w/ fp32_dest_acc + BF16 tail reduce_scatter | (committed) | **1.824** | **7.203** | **~178** | argmax 100%, out[9] PCC 1.0 vs base, golden 0.8988 | **Reduce 170->15us (BF16 hit FastReduceNC fast path!)**; -398us/layer; BF16-product precision negligible |
+
+KEY: the FP32 weighted-k-sum was the hidden cost — BF16 (fp32-accumulated) sum drops it 170->15us. Combined
+m1+m2 = -467us/layer = -27ms e2e across 58 MoE layers. MoE phase now: MoECompute 712 (fused) | ReduceScatter
+293 (CCL, latency-bound) | AllGather 184 (CCL) | BinaryNg 116 | Tilize 108 | dispatch/gate. Remaining tail
+TM = Tilize 108 (to_layout TILE on combine-out) + BinaryNg.
