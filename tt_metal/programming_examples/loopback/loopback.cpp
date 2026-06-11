@@ -5,6 +5,7 @@
 #include <fmt/ostream.h>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <thread>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
@@ -19,8 +20,12 @@ using namespace tt::tt_metal;
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
 #endif
-int main() {
-    constexpr int device_id = 0;
+int main(int argc, char** argv) {
+    // Logical device id. On multi-chip boxes metal's logical id != PCIe id, so to
+    // hit the same physical chip as the X280 (booted on /dev/tenstorrent/N = PCIe
+    // id N) pass the logical id that maps to that PCIe id (see UMD "local chip
+    // ids/PCIe ids" log line at device open).
+    const int device_id = argc > 1 ? std::atoi(argv[1]) : 0;
     std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
 
@@ -33,8 +38,12 @@ int main() {
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    const CoreCoord noc0 = mesh_device->get_device(0)->worker_core_from_logical_core(core);
-    fmt::print("logical (0,0) -> worker core x={} y={}; counter at L1 0x80000\n", noc0.x, noc0.y);
+    const CoreCoord noc0 = mesh_device->get_devices().at(0)->worker_core_from_logical_core(core);
+    fmt::print(
+        "device {} (logical): logical (0,0) -> worker core x={} y={}; counter at L1 0x80000\n",
+        device_id,
+        noc0.x,
+        noc0.y);
 
     distributed::MeshWorkload workload;
     workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
