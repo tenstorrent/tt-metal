@@ -12,27 +12,6 @@ from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.common import Mode
 
 
-def _repeat_kv_ttnn(
-    kv: ttnn.Tensor,
-    repeats: int,
-    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-) -> ttnn.Tensor:
-    """Repeat-interleave KV heads on TT: [B, Kv, S, D] -> [B, Kv*repeats, S, D]."""
-    if repeats == 1:
-        return kv
-    b, kv_heads, s, d = tuple(kv.shape)
-    repeated = []
-    for h in range(kv_heads):
-        head = ttnn.slice(kv, [0, h, 0, 0], [b, h + 1, s, d])
-        head_rep = ttnn.repeat(head, (1, repeats, 1, 1))
-        ttnn.deallocate(head)
-        repeated.append(head_rep)
-    out = ttnn.concat(repeated, dim=1, memory_config=memory_config)
-    for t in repeated:
-        ttnn.deallocate(t)
-    return out
-
-
 class VoxtralTTAttention:
     """GQA attention: fused QKV linear, optional RoPE, SDPA, output proj. Audio tokenizer: ``is_causal``, ``use_qk_norm``, ``attn_mask``."""
 
@@ -50,6 +29,11 @@ class VoxtralTTAttention:
         compute_kernel_config=None,
         sdpa_compute_kernel_config=None,
         activation_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        wqkv_program_config=None,
+        wo_program_config=None,
+        wqkv_mem_config=None,
+        wo_mem_config=None,
+        wqkv_in0_shard_mem_config=None,
         *,
         is_causal: bool = False,
         use_qk_norm: bool = False,
@@ -66,6 +50,9 @@ class VoxtralTTAttention:
         self.compute_kernel_config = compute_kernel_config
         self.sdpa_compute_kernel_config = sdpa_compute_kernel_config or compute_kernel_config
         self.activation_memory_config = activation_memory_config
+        self.wqkv_program_config = wqkv_program_config
+        self.wo_program_config = wo_program_config
+        self.wqkv_in0_shard_mem_config = wqkv_in0_shard_mem_config
         self.is_causal = is_causal
         self.use_qk_norm = use_qk_norm
         self._qk_norm_mode = qk_norm_mode
@@ -117,14 +104,14 @@ class VoxtralTTAttention:
             device=device,
             dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=wqkv_mem_config or ttnn.DRAM_MEMORY_CONFIG,
         )
         self.wo = ttnn.from_torch(
             wo,
             device=device,
             dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=wo_mem_config or ttnn.DRAM_MEMORY_CONFIG,
         )
 
     def __call__(
@@ -137,6 +124,10 @@ class VoxtralTTAttention:
         attn_mask: ttnn.Tensor | None = None,
         qk_norm_mode: Mode | str | None = None,
         activation_memory_config=None,
+        wqkv_program_config=None,
+        wo_program_config=None,
+        sliding_window_size: int | None = None,
+        sdpa_program_config=None,
     ) -> ttnn.Tensor:
         seq_len = hidden_states.shape[-2]
         _qk_mode = self._qk_norm_mode if qk_norm_mode is None else qk_norm_mode
@@ -148,7 +139,25 @@ class VoxtralTTAttention:
         }
         if self.compute_kernel_config is not None:
             _lin_kw["compute_kernel_config"] = self.compute_kernel_config
-        xqkv = ttnn.linear(hidden_states, self.wqkv, **_lin_kw)
+
+        wqkv_prog = wqkv_program_config if wqkv_program_config is not None else self.wqkv_program_config
+        wo_prog = wo_program_config if wo_program_config is not None else self.wo_program_config
+
+        _wqkv_kw = dict(_lin_kw)
+        if wqkv_prog is not None:
+            _wqkv_kw["program_config"] = wqkv_prog
+
+        if self.wqkv_in0_shard_mem_config is not None:
+            # DS path: shard in0 K-wise; output is L1 WIDTH SHARDED.
+            # De-shard after so nlp_create_qkv_heads gets a contiguous interleaved tensor.
+            hs_sharded = ttnn.to_memory_config(hidden_states, self.wqkv_in0_shard_mem_config)
+            _wqkv_kw["memory_config"] = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+            xqkv_sharded = ttnn.linear(hs_sharded, self.wqkv, **_wqkv_kw)
+            ttnn.deallocate(hs_sharded)
+            xqkv = ttnn.to_memory_config(xqkv_sharded, act_mem)
+            ttnn.deallocate(xqkv_sharded)
+        else:
+            xqkv = ttnn.linear(hidden_states, self.wqkv, **_wqkv_kw)
 
         if self.use_qk_norm and self.q_norm is not None and self.k_norm is not None:
             b, one, s, _ = tuple(xqkv.shape)
@@ -204,6 +213,12 @@ class VoxtralTTAttention:
                 mask_owned = True
             else:
                 mask_tt = attention_mask
+
+        if mask_tt is not None and sliding_window_size is not None:
+            ttnn.deallocate(q)
+            ttnn.deallocate(k)
+            ttnn.deallocate(v)
+            raise ValueError("attn_mask and sliding_window_size are mutually exclusive.")
 
         if mask_tt is not None and self.is_causal:
             ttnn.deallocate(q)
@@ -261,31 +276,42 @@ class VoxtralTTAttention:
             else:
                 k = k_rot
 
-        n_rep = self.num_attention_heads // self.num_key_value_heads
-        k_rep = _repeat_kv_ttnn(k, n_rep, memory_config=act_mem)
-        v_rep = _repeat_kv_ttnn(v, n_rep, memory_config=act_mem)
-        if n_rep > 1:
-            ttnn.deallocate(k)
-            ttnn.deallocate(v)
+        # GQA is handled natively by ttnn SDPA (requires only nqh % nkv == 0), so K/V are
+        # passed at num_key_value_heads directly. Materializing repeated KV heads here was
+        # responsible for a large slice/repeat/tilize/untilize op cluster (~15% of device
+        # time) with no functional benefit.
+        use_native_sliding_window = sliding_window_size is not None
         _sdpa_kw = {
-            "attn_mask": mask_tt,
-            "is_causal": self.is_causal if mask_tt is None else False,
             "scale": self.scale,
         }
+        if use_native_sliding_window:
+            _sdpa_kw["is_causal"] = True
+            _sdpa_kw["sliding_window_size"] = int(sliding_window_size)
+        else:
+            _sdpa_kw["attn_mask"] = mask_tt
+            _sdpa_kw["is_causal"] = self.is_causal if mask_tt is None else False
+        if sdpa_program_config is not None:
+            _sdpa_kw["program_config"] = sdpa_program_config
         if self.sdpa_compute_kernel_config is not None:
             _sdpa_kw["compute_kernel_config"] = self.sdpa_compute_kernel_config
-        attn_out = ttnn.transformer.scaled_dot_product_attention(q, k_rep, v_rep, **_sdpa_kw)
-        if mask_owned and mask_tt is not None:
+
+        attn_out = ttnn.transformer.scaled_dot_product_attention(q, k, v, **_sdpa_kw)
+        attn_out = ttnn.to_memory_config(attn_out, act_mem)
+
+        if mask_owned and mask_tt is not None and not use_native_sliding_window:
             ttnn.deallocate(mask_tt)
         ttnn.deallocate(q)
-        ttnn.deallocate(k_rep)
-        ttnn.deallocate(v_rep)
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
 
         attn_out = ttnn.experimental.nlp_concat_heads(
             attn_out,
             memory_config=act_mem,
         )
 
-        out = ttnn.linear(attn_out, self.wo, **_lin_kw)
+        _wo_kw = dict(_lin_kw)
+        if wo_prog is not None:
+            _wo_kw["program_config"] = wo_prog
+        out = ttnn.linear(attn_out, self.wo, **_wo_kw)
         ttnn.deallocate(attn_out)
         return out
