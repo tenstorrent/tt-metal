@@ -337,11 +337,12 @@ class ElfStrings:
             self._info_record_size, self._info_unpack_fmt = _STRING_INFO_LAYOUT[
                 elf.elf.elfclass
             ]
-            strings = elf.sections.get(".device_print_strings")
+            sections = {s.name: s for s in elf.sections}
+            strings = sections.get(".device_print_strings")
             if strings is not None:
                 self._strings_addr = strings.address
                 self._strings_data = bytes(strings.data)
-            info = elf.sections.get(".device_print_strings_info")
+            info = sections.get(".device_print_strings_info")
             if info is not None:
                 self._info_addr = info.address
                 self._info_data = bytes(info.data)
