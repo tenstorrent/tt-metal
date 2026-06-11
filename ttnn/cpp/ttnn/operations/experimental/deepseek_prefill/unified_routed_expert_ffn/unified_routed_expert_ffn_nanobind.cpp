@@ -76,9 +76,12 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         R"doc(
         MoE-level composite: takes the full dispatched buffer + ALL local
         experts' weights and loops over local experts in C++, launching one
-        ``unified_routed_expert_ffn`` device program per expert wrapped by
-        ``ttnn::extract`` (input slice) and ``ttnn::insert`` (output
-        placement). This is NOT a single fused device op across experts —
+        ``unified_routed_expert_ffn`` device program per expert preceded by
+        ``ttnn::extract`` (input slice). The FFN runs in direct-write mode:
+        its writer places each expert's output straight into the shared
+        output buffer at the expert's region offset, so NO separate
+        ``ttnn::insert`` op (and no per-expert temp-buffer DRAM round-trip)
+        is needed. This is NOT a single fused device op across experts —
         per-expert FFN entries still appear in tt-perf-report.
 
         The unified FFN reads device-resident counts/idx and bounds its
