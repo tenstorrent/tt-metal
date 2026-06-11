@@ -571,9 +571,9 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
     // Set packer strides
     set_packer_strides<PackMode::Default>(pack_output_src_format, tile_c_dim);
 
-    // Program the packer X (datum) counter. This is the packer state that used to be owned by
-    // _llk_pack_init_; ownership now lives solely in configure_pack and this reconfig path (mirroring
-    // the Wormhole change). On Blackhole x_start/x_end must stay within a single row (0..FACE_C_DIM-1).
+    // Program the packer X (datum) counter. _llk_pack_init_ owns this counter ("inits own SETADCXX"),
+    // but reconfig also programs it here: a reconfig is not always followed by an init, and on Blackhole
+    // the value is a mode-independent constant (single row, FACE_C_DIM - 1), so it is safe to set here.
     TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
 }
 
@@ -599,10 +599,9 @@ inline void configure_pack(
 
     set_packer_strides<pack_mode>(pack_src_format, tile_c_dim);
 
-    // Program the packer X (datum) counter. This packer state is owned exclusively by configure_pack
-    // and reconfig_packer_data_format; _llk_pack_init_ no longer touches it, so the hw-configure path
-    // must establish it here. On Blackhole x_start/x_end must stay within a single row (0..FACE_C_DIM-1).
-    TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+    // NOTE: the packer X (datum) counter (SETADCXX PAC) is intentionally NOT programmed here. It is
+    // owned by _llk_pack_init_, which runs after hw-configure and sets its own value per the
+    // "inits own SETADCXX" contract.
 
     t6_mutex_acquire(mutex::REG_RMW);
 

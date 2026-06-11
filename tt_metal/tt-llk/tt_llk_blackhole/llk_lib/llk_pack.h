@@ -338,8 +338,8 @@ namespace llk_pack_internal_bh
  * @brief Shared packer-init body behind the @ref _llk_pack_init_ overloads.
  *
  * Runs the common init sequence with each stage individually skippable: program the ADDR_MOD slots,
- * build the MOP template, and set the packer strides. The skip_* template flags let a caller reuse
- * state already established by a prior init or hw-configure.
+ * build the MOP template, set the packer strides, and program the packer X (datum) counter. The
+ * skip_* template flags let a caller reuse state already established by a prior init or hw-configure.
  *
  * @tparam pack_mode: Packing layout, values = <Default/Tilize/Untilize>
  * @tparam zero_output: When true, the packer emits zeros instead of dest data.
@@ -350,8 +350,8 @@ namespace llk_pack_internal_bh
  * @param tile_c_dim: Tile column dimension (datums).
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
  * @param num_tiles: Number of tiles processed per MOP run.
- * @note Init no longer programs the packer X (datum) counter (SETADCXX); that state is owned by
- *       @ref configure_pack and @ref reconfig_packer_data_format, one of which must run before this init.
+ * @note Init owns the packer X (datum) counter (SETADCXX): every init programs its own value, mirroring
+ *       the Wormhole contract. On Blackhole the value is always a single row (FACE_C_DIM - 1).
  */
 template <PackMode pack_mode, bool zero_output, bool skip_addrmod_config, bool skip_packer_strides>
 inline void pack_init_apply(
@@ -370,6 +370,10 @@ inline void pack_init_apply(
     {
         set_packer_strides<pack_mode>(pack_src_format, tile_c_dim);
     }
+
+    // Program the packer X (datum) counter. Per the "inits own SETADCXX" contract, every init sets its
+    // own value; on Blackhole x_start/x_end must stay within a single row (0..FACE_C_DIM-1).
+    TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
 }
 } // namespace llk_pack_internal_bh
 
@@ -449,11 +453,10 @@ inline void _llk_pack_hw_configure_(
 /**
  * @brief Initialize the packer (addrmod + MOP + strides) for a pack op given a source format.
  *
- * The single Blackhole pack-init entry point: programs ADDR_MODs, the MOP template, and (unless
- * skipped) the packer strides. It does NOT program the packer X (datum) counter; that is owned by
- * @ref configure_pack / @ref reconfig_packer_data_format, one of which must run before this init.
- * When packing tilized 8-bit datums the Blackhole row-unswizzle workaround can be skipped (the issue
- * does not affect 8-bit datums).
+ * The single Blackhole pack-init entry point: programs ADDR_MODs, the MOP template, (unless skipped)
+ * the packer strides, and the packer X (datum) counter. Per the "inits own SETADCXX" contract, every
+ * init sets its own X-counter value (FACE_C_DIM - 1 on Blackhole). When packing tilized 8-bit datums
+ * the Blackhole row-unswizzle workaround can be skipped (the issue does not affect 8-bit datums).
  *
  * @tparam pack_mode: Packing layout, values = <Default/Tilize/Untilize>
  * @tparam zero_output: When true, packer emits zeros instead of dest data.
@@ -505,14 +508,14 @@ inline void _llk_pack_init_(
 /**
  * @brief Tear down the packer after a pack op (no-op on Blackhole).
  *
- * On Blackhole the PAC X counter is owned by @ref configure_pack / @ref reconfig_packer_data_format
- * (set to FACE_C_DIM - 1, a single row), so there is no per-pack state for this teardown to restore.
+ * On Blackhole @ref _llk_pack_init_ always sets the PAC X counter to FACE_C_DIM - 1 (a single row),
+ * which is also its default value, so there is no per-pack state for this teardown to restore.
  *
  * @note Pairs with @ref _llk_pack_init_.
  */
 inline void _llk_pack_uninit_()
 {
-    // No state to restore - configure_pack / reconfig_packer_data_format own the PAC X counter (FACE_C_DIM - 1).
+    // No state to restore - Blackhole pack_init sets PAC X counter to FACE_C_DIM - 1 which is the default.
 }
 
 /**
