@@ -230,6 +230,70 @@ def test_v32_mla_vs_cpu_reference(
     ttnn.synchronize_device(mesh_device)
 
 
+# Determinism (backlog 18): same weights + same input run N times must give the
+# SAME device output. Guards run-to-run non-determinism in the DSA path (CCL
+# reductions, host fallback, topk ties). seq4k exercises the active DSA path.
+# No CPU truth needed → fast (no cold reference).
+@pytest.mark.parametrize("mesh_device", [(1, 4), (2, 2)], ids=["1x4", "2x2"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
+        }
+    ],
+    ids=["line"],
+    indirect=True,
+)
+@pytest.mark.parametrize("seq_len", [4096], ids=["seq4k"])
+@pytest.mark.parametrize("n_runs", [3], ids=["x3"])
+@pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
+@pytest.mark.timeout(0)
+def test_v32_mla_determinism(mesh_device, seq_len, n_runs, device_params, variant, config_only):
+    config = config_only
+    args, _, weights, _ = build_cpu_reference(seq_len)
+    config.max_seq_len = seq_len
+    mesh_shape = list(mesh_device.shape)
+    sp_axis, tp_axis = 0, 1
+
+    outs = []
+    for run in range(n_runs):
+        tt_kvpe_cache = init_kvpe_cache(
+            kvpe_cache_head_dim=config.kv_lora_rank + config.qk_rope_head_dim,
+            mesh_device=mesh_device,
+            seq_len=seq_len,
+            mesh_shape=mesh_shape,
+            sp_axis=sp_axis,
+            num_kvpe_cache_layers=1,
+        )
+        # dict(weights): the v32 ttMLA pops indexer keys, so each run needs a fresh dict.
+        tt_output, _, _, shard_dims = v3_test_mla.run_mla_inference(
+            config=config,
+            weights=dict(weights),
+            mesh_device=mesh_device,
+            seq_len=seq_len,
+            mesh_shape=mesh_shape,
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
+            is_balanced=False,
+            topology=ttnn.Topology.Linear,
+            tt_kvpe_cache=tt_kvpe_cache,
+        )
+        outs.append(
+            ttnn.to_torch(
+                tt_output,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape),
+            ).to(torch.bfloat16)
+        )
+        ttnn.synchronize_device(mesh_device)
+
+    for i in range(1, n_runs):
+        exact = torch.equal(outs[0], outs[i])
+        _, msg = assert_with_pcc(outs[0].float(), outs[i].float(), 0.9999)
+        logger.info(f"determinism run0 vs run{i}: exact={exact} pcc={msg}")
+
+
 def run_cpu_reference_chunked(args, mla_cpu, hidden_states, seq_len, chunk, src_tag):
     """Chunk-loop truth on MLACPU decode branch; mask [chunk, end_pos] keeps causality."""
     cache_dir = Path(os.environ.get("DEEPSEEK_V32_MLA_REF_CACHE", "/tmp/deepseek_v32_mla_ref_cache"))

@@ -171,7 +171,7 @@ Done: (4),(5),(6),(7),(9). **(8) retired** — see decision below. Remaining ope
 - [ ] **(15)** decode path
 - [ ] **(16)** multi-layer / multi-user cache
 - [ ] **(17)** replicated-vs-sharded mask dedup
-- [ ] **(18)** determinism tests (Testing section)
+- [x] **(18)** determinism tests — `test_v32_mla_determinism` (seq4k, 1x4 + 2x2, 3 runs each, no CPU truth). **Bit-exact: exact=True, PCC=1.0** run-to-run on both meshes — the DSA path (CCL reductions, host fallback, topk) is fully deterministic. Asserts torch.equal + PCC≥0.9999.
 
 ## References
 1. models/demos/deepseek_v32/reference_cpu - deepseek's reference implementation running on CPU w/o fused ops and sparse attention
