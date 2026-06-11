@@ -363,10 +363,20 @@ def run_routed_experts(x_normed, indices_i32, scores_bf16, st):
             print(
                 f"[moe_dbg] scr[tok0,:] raw           (k=0..7): {[round(float(v),4) for v in _scr0[0, :]]}", flush=True
             )
-        weighted = ttnn.multiply(c, sc, dtype=ttnn.DataType.FLOAT32, memory_config=DRAM)
+        # E_moe_tail iter12: BF16 weighted product (half the [8,32,7168] write) summed with
+        # fp32 accumulation -> the cross-k sum keeps fp32 accuracy while the data is BF16.
+        weighted = ttnn.multiply(c, sc, dtype=ttnn.DataType.BFLOAT16, memory_config=DRAM)
         ttnn.deallocate(c)
         ttnn.deallocate(sc)
-    summed = ttnn.sum(weighted, [0], False, memory_config=DRAM)  # [tokens, hidden] partial
+    summed = ttnn.sum(
+        weighted,
+        [0],
+        False,
+        memory_config=DRAM,
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+        ),
+    )  # [tokens, hidden] partial, BF16 out w/ fp32 accum
     ttnn.deallocate(weighted)
     summed = ttnn.reshape(summed, [1, 1, TOKENS_PER_DEV, HIDDEN], memory_config=DRAM)
     _dbg(dev, "weighted_k_sum")
