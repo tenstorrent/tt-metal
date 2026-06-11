@@ -516,13 +516,13 @@ jobs:
   # still runs end-to-end before changes land on main.
   models-gpt-oss-120b-galaxy-e2e:
     needs: [build, find-changes, docker-images]
-    if: >-
-      ${{
-        github.event.action != 'destroyed' &&
-        github.event_name != 'pull_request' &&
-        (github.ref_name == 'main' ||
-         needs.find-changes.outputs.any-code-changed == 'true')
-      }}
+    # if: >-
+    #   ${{
+    #     github.event.action != 'destroyed' &&
+    #     github.event_name != 'pull_request' &&
+    #     (github.ref_name == 'main' ||
+    #      needs.find-changes.outputs.any-code-changed == 'true')
+    #   }}
     uses: ./.github/workflows/models-e2e-tests-impl.yaml
     secrets: inherit
     with:
