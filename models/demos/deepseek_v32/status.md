@@ -134,7 +134,11 @@ Legend: `[x]` done · `[ ]` open · ⏸️ postponed · 📌 resolved as decisio
 1. No fused indexing op in ttnn (fp8_index + causal mask) — composed-op workaround in tt/ops.py::indexer_logits (device, bf16, no fp8/Hadamard); fused C++ op is follow-up
 2. ~~ttnn.topk k=2048 untested~~ RESOLVED 2026-06-10: works on Blackhole at k=2048 (TILE input, shape test green)
 3. No sparse attention in ttnn — CPU fallback in tt/ops.py::sparse_mla carrying the agreed contract (TP-shard distribution, causality, start_pos); fused C++ op is follow-up
-4. Missing non-interleaved RoPE op — host fallback (F1, single-chip spec), used in indexer host stems
+4. Missing non-interleaved RoPE op — host fallback (F1); after (6) only the pe-slice readback remains on host.
+   **Proposed device fix (all on device, no readback):** the two conventions differ only by a fixed head-dim permutation `P` (interleave the two halves), same per-pair freqs → `RoPE_ni(x) = P⁻¹·RoPE_il(P·x)`.
+   - Bake `P` into v3's rope transformation matrix (`get_rot_transformation_mat`) so a single device matmul yields the non-interleaved result — tile-friendly, reuses v3's rope hook (the naive permute crosses 32×32 tile boundaries sub-tile, so avoid explicit transpose/slice/concat in TILE layout).
+   - Indexer optimization: only `q·k → topk` matters and `P` is orthonormal (preserves dot products), so q and k can stay in permuted space — **no inverse permute needed** as long as every chunk is consistent and the index K-cache stores permuted-space keys (it's internal to v32). Inverse permute only where a consumer needs non-interleaved layout (MLA KVPE — already interleaved, matches v3).
+   - TODO before impl: confirm `rotary_embedding_llama` accepts a custom trans_mat and the cos/sin freq ordering lines up. Unblocks (19) + full device residency.
 5. v3 composition files hardcode ttMLA/TtPrefillBlock — forced copies in v32; fix by upstreaming injection params (tt/README.md)
 6. V3.2 checkpoints (indexer weights) not wired into test conftest — tests run with v3 weights
 
