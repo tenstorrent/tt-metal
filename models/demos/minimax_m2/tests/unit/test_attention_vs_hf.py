@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Tier-2 module-by-module PCC tests for MiniMax-M2, mirroring the gpt_oss approach:
+Tier-2 module-by-module PCC tests for MiniMax-M2:
 build the HuggingFace reference module + the TT module from the SAME random weights
 and compare outputs by PCC.
 

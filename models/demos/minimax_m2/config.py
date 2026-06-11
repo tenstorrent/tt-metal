@@ -3,7 +3,7 @@
 
 """
 This module defines the MeshConfig class which manages parallelization strategies
-across a mesh of devices for the GPT-OSS MoE model.
+across a mesh of devices for the MiniMax-M2 MoE model.
 """
 
 from dataclasses import dataclass

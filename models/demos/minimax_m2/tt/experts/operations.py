@@ -12,7 +12,7 @@ def apply_swiglu(gate, up, config: ExpertConfig):
     """
     Apply MiniMax-M2 SwiGLU activation: silu(gate) * up = gate * sigmoid(gate) * up.
 
-    No clamp, no alpha, no (up + 1) — those are gpt-oss-specific.
+    No clamp, no alpha, no (up + 1).
 
     Args:
         gate: Gate projection output

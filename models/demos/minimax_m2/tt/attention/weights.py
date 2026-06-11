@@ -17,9 +17,8 @@ from .config import AttentionConfig
 class AttentionWeights:
     """Container for attention weight tensors - immutable after creation.
 
-    MiniMax-M2 has no q/k/v/o projection biases and no attention sinks (unlike
-    gpt-oss), so only the two projection weights are stored. QK-norm weights are
-    added in a later step.
+    MiniMax-M2 has no q/k/v/o projection biases and no attention sinks, so only the
+    two projection weights are stored, plus the QK-norm gains.
     """
 
     wqkv: ttnn.Tensor

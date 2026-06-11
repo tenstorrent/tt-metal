@@ -49,7 +49,7 @@ class DecoderLayer:
         self.mlp = MLP(
             mesh_device,
             hf_config,
-            # MiniMax-M2 names the MoE block 'block_sparse_moe' (gpt-oss used 'mlp').
+            # MiniMax-M2 names the MoE block 'block_sparse_moe'.
             substate(state_dict, "block_sparse_moe"),
             ccl_manager,
             dtype=dtype,
@@ -61,7 +61,7 @@ class DecoderLayer:
         )
 
         # MiniMax-M2 lists per-layer attention types in `attn_type_list` (all 1 =
-        # full attention); gpt-oss used `layer_types`. Fall back gracefully.
+        # full attention) via attn_type_list. Fall back gracefully.
         attn_types = getattr(hf_config, "attn_type_list", None) or getattr(hf_config, "layer_types", None)
         self.attention_type = attn_types[layer_idx] if attn_types is not None else 1
 

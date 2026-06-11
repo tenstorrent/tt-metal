@@ -4,12 +4,12 @@
 """
 MiniMax-M2 MoE router (gate).
 
-Differs from gpt-oss's softmax top-k router:
-  * sigmoid scoring (not softmax)
-  * the gate Linear has NO bias; instead a separate ``e_score_correction_bias``
-    is added to the sigmoid scores FOR SELECTION ONLY
+Routing:
+  * sigmoid scoring over all experts (the gate Linear has no bias)
+  * a separate ``e_score_correction_bias`` is added to the sigmoid scores FOR
+    SELECTION ONLY (picks which experts win, not the returned weights)
   * the returned top-k weights are the UNBIASED sigmoid values gathered at the
-    selected indices, then normalized to sum to 1 (not a softmax over top-k)
+    selected indices, then normalized to sum to 1
 
 HF reference (MiniMaxM2SparseMoeBlock.route_tokens_to_experts):
     routing_weights = sigmoid(router_logits.float())
@@ -98,7 +98,7 @@ class TopKRouter:
             else None
         )
 
-        # Custom compute configs were found to degrade quality in gpt-oss; keep default.
+        # Custom compute configs can degrade routing quality; keep the default.
         self.compute_config = None
 
     def __call__(self, hidden_states, use_throughput_experts):

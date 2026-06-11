@@ -69,7 +69,7 @@ def test_experts_prefill_vs_hf(mesh_device, device_params, seq_len, reset_seeds)
         state[f"{e}.w2.weight"] = w2[e]
 
     # Default program config: the experts config auto-snaps core grids to divide Nt
-    # at TP=1 (gpt-oss defaults assume TP-sharded dims).
+    # at TP=1 (default grids assume TP-sharded dims).
     experts = Experts(
         mesh_device=mesh_device,
         config=expert_config,
