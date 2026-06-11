@@ -63,7 +63,9 @@ class Transformer(LightweightModule):
 
         DefaultRopeSetup = HfRotarySetup if self.args.use_hf_rope else RotarySetup
         ActualRopeSetupClass = rope_setup_class if rope_setup_class is not None else DefaultRopeSetup
-        rope_prefetcher = None if getattr(prefetcher, "requires_external_trace_run", False) else prefetcher
+        # Only the worker-core backend co-locates rope on its grid; the DRAM-core backend uses
+        # the default rope placement.
+        rope_prefetcher = prefetcher if (prefetcher is not None and prefetcher.colocate_ops) else None
         self.rope_setup = ActualRopeSetupClass(
             device=mesh_device,
             batch_size=args.max_batch_size,
@@ -930,11 +932,7 @@ class Transformer(LightweightModule):
         if get_last_token != -1:
             x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
 
-        lm_head_prefetcher = (
-            None
-            if self.prefetcher is not None and getattr(self.prefetcher, "requires_external_trace_run", False)
-            else self.prefetcher
-        )
+        lm_head_prefetcher = self.prefetcher if (self.prefetcher is not None and self.prefetcher.colocate_ops) else None
 
         # Output norm
         x = self.norm(x, mode=mode, norm_config=self.args.get_norm_config("lm_head", mode, lm_head_prefetcher))

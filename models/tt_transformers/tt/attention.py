@@ -774,7 +774,7 @@ class Attention(LightweightModule):
         )
 
         concat_heads_sub_core_grids = None
-        if self.prefetcher is not None and not getattr(self.prefetcher, "requires_external_trace_run", False):
+        if self.prefetcher is not None and self.prefetcher.colocate_ops:
             concat_heads_sub_core_grids = self.prefetcher.all_worker_cores_range_set
         attn_output_cat = ttnn.experimental.nlp_concat_heads_decode(
             attn_output_11BH,

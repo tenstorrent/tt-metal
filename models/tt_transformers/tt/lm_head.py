@@ -34,9 +34,9 @@ class LMHead(LightweightModule):
         self.padded_vocab_size = args.padded_vocab_size
         self.num_devices = args.num_devices
         self.prefetcher = prefetcher
-        self.use_lm_head_prefetcher = prefetcher is not None and not getattr(
-            prefetcher, "requires_external_trace_run", False
-        )
+        # Only the worker-core backend co-locates the LM head on its ring (ring-mm path); the
+        # DRAM-core backend uses the default DRAM-sharded LM head.
+        self.use_lm_head_prefetcher = prefetcher is not None and prefetcher.colocate_ops
 
         size_per_device = self.padded_vocab_size // self.num_devices
 
