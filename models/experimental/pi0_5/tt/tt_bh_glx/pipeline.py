@@ -163,6 +163,25 @@ class Pi0_5GLXPipeline:
         # Final adaRMS norm + bias on the LAST denoise chip (last expert chunk).
         self.denoise_head = _DenoiseHead(weights["action_expert"], mesh_handles.denoise_per_chip[-1])
 
+        # Persistent fp32 x_t buffer on denoise[0] for on-device Euler integration.
+        # Allocated once at __init__; sample_actions refreshes its contents per call
+        # via from_torch (or copy_host_to_device_tensor under trace mode).
+        # NOTE: `self.x_t_fp32` is REASSIGNED each Euler step (ttnn.add creates a new
+        # tensor). Trace mode in Phase B.3 will switch to ttnn.add with optional
+        # output tensor to keep the same buffer.
+        _zero_noise = torch.zeros(1, self._action_horizon_padded, self.action_dim, dtype=torch.float32)
+        self.x_t_fp32 = ttnn.from_torch(
+            _zero_noise,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_handles.denoise_per_chip[0],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+        # Pre-compute timesteps + dt scalars (Python floats; ttnn.mul accepts them).
+        self._timesteps = [1.0 - i / self.num_denoising_steps for i in range(self.num_denoising_steps + 1)]
+        self._dts = [self._timesteps[i + 1] - self._timesteps[i] for i in range(self.num_denoising_steps)]
+
         # Cached upstream-openpi compat artifacts (mask + position-aware RoPE).
         # Keyed by (img_present_tuple, lang_real_count, prefix_len). Same idea
         # as the single-chip Pi0_5ModelTTNN._cached_upstream_artifacts (see
@@ -407,30 +426,35 @@ class Pi0_5GLXPipeline:
         prefix_kv_per_chip = migrate_layer_paired(per_layer_kv, self.h.denoise_per_chip, transport=self.transport)
         t.kv_migration_ms = (time.perf_counter() - t0) * 1000.0
 
-        # ---- Stage 2: denoise loop ----
-        # x_t starts as N(0,1) noise, host-padded to ah_padded.
+        # ---- Stage 2: denoise loop (on-device fp32 Euler) ----
         ah = self.action_horizon
         ah_padded = self._action_horizon_padded
-        x_t = torch.zeros(1, ah_padded, self.action_dim, dtype=torch.float32)
-        x_t[:, :ah, :] = torch.randn(1, ah, self.action_dim)
 
-        timesteps = [1.0 - i / self.num_denoising_steps for i in range(self.num_denoising_steps + 1)]
+        # Initial noise: padded to ah_padded, only [:ah] is real (rest zero).
+        # Re-upload into the persistent x_t_fp32 buffer on denoise[0].
+        # ttnn.deallocate the old buffer's content first to free the slot.
+        noise_pad = torch.zeros(1, ah_padded, self.action_dim, dtype=torch.float32)
+        noise_pad[:, :ah, :] = torch.randn(1, ah, self.action_dim)
+        ttnn.deallocate(self.x_t_fp32)
+        self.x_t_fp32 = ttnn.from_torch(
+            noise_pad,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.h.denoise_per_chip[0],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
         t.denoise_step_ms = []
         for i in range(self.num_denoising_steps):
-            ts_now = timesteps[i]
-            ts_next = timesteps[i + 1]
-            dt = ts_next - ts_now
+            ts_now = self._timesteps[i]
+            dt = self._dts[i]
 
             step_start = time.perf_counter()
 
-            # Upload x_t to denoise[0] (bf16 TILE).
-            x_t_ttnn = _upload_torch(
-                x_t, self.h.denoise_per_chip[0], dtype=ttnn.bfloat16, mem_cfg=ttnn.L1_MEMORY_CONFIG
-            )
-
-            # suffix.embed_actions on chip 0.
-            suffix_hidden = self.suffix_slices[0].embed_actions(x_t_ttnn)
-            ttnn.deallocate(x_t_ttnn)
+            # Cast persistent fp32 x_t → bf16 for the embed_actions matmul.
+            x_t_bf16 = ttnn.typecast(self.x_t_fp32, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            suffix_hidden = self.suffix_slices[0].embed_actions(x_t_bf16)
+            ttnn.deallocate(x_t_bf16)
 
             # adarms_cond replicated on each denoise chip.
             adarms_per_chip = self._embed_adarms_per_chip(torch.tensor([ts_now], dtype=torch.float32))
@@ -447,24 +471,30 @@ class Pi0_5GLXPipeline:
                 per_chip_sin=(upstream["suffix_sin"] if upstream is not None else None),
             )
 
-            # Final adaRMS norm + action_out_proj on last denoise chip.
-            velocity_ttnn = self._apply_final_norm_and_project(expert_out, adarms_per_chip[-1])
+            # Final adaRMS norm + action_out_proj on last denoise chip → velocity bf16.
+            velocity_bf16 = self._apply_final_norm_and_project(expert_out, adarms_per_chip[-1])
 
-            # Pull velocity to host and do Euler step in fp32. ttnn.to_torch
-            # is blocking, so it implicitly serializes against any pending
-            # device ops on this submesh — no explicit synchronize_device needed.
-            velocity_torch = ttnn.to_torch(velocity_ttnn).to(torch.float32)
-            # velocity_torch shape: (1, ah_padded, action_dim)
-            x_t = x_t + dt * velocity_torch
+            # On-device Euler: x_t_fp32 ← x_t_fp32 + dt · velocity_fp32, all on denoise[0].
+            # velocity_bf16 lives on denoise[-1]; ship it to denoise[0] via socket
+            # (the "wrap-back" hop), then typecast → mul → add on chip 0.
+            velocity_on_chip0 = self.transport.send(velocity_bf16, self.h.denoise_per_chip[0], tag="velocity_wrap")
+            ttnn.deallocate(velocity_bf16)
+            velocity_fp32 = ttnn.typecast(velocity_on_chip0, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
+            velocity_scaled = ttnn.mul(velocity_fp32, dt, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(velocity_fp32)
+            x_t_new = ttnn.add(self.x_t_fp32, velocity_scaled, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(velocity_scaled)
+            ttnn.deallocate(self.x_t_fp32)
+            self.x_t_fp32 = x_t_new
 
-            ttnn.deallocate(velocity_ttnn)
             for a in adarms_per_chip:
                 ttnn.deallocate(a)
 
             t.denoise_step_ms.append((time.perf_counter() - step_start) * 1000.0)
 
-        # ---- Slice physical → logical action_horizon ----
-        actions = x_t[:, :ah, :]
+        # ---- Final readback: pull x_t_fp32 to host and slice to logical action_horizon ----
+        x_t_final = ttnn.to_torch(self.x_t_fp32)
+        actions = x_t_final[:, :ah, :]
 
         t.total_ms = (time.perf_counter() - wall_start) * 1000.0
         return actions, t
