@@ -197,8 +197,10 @@ runs/
                              #   response} — the input CHECK_EXIT's budget gate is missing
     dashboard.html           # rendered from ledger.jsonl
     profiles/
-      iter_00_baseline.csv   # Tracy outputs, one per measure
-      iter_04.csv
+      baseline_profile.json  # stage-1 baseline buckets — the FIXED reference
+      iter_03_profile.json   # re-bucketed profile after iter 3's committed edit
+                             #   -> ROUTE reads the latest of these (current_profile)
+      run0_raw.csv           # raw Tracy + tt-perf-report CSVs (evidence)
   latest -> 2026-06-09T14-22 # symlink: resume = read runs/latest/state.json
 ```
 
@@ -231,6 +233,7 @@ hand-managed; not part of crash recovery.
   "cost_usd": 0.83,
   "git_sha_clean": "abc123",
   "current_bucket": "ff1-matmul",
+  "current_profile": "profiles/iter_03_profile.json",
   "candidates": ["mlp-fidelity-walk", "mlp-subblock"],
   "tried": ["mlp-subblock"],
   "current_lever": "mlp-fidelity-walk",
@@ -585,8 +588,8 @@ mock for a real module in `agent/handlers/__init__.py`, one line at a time, and 
 
 ### 8.2 `ROUTE`
 
-- **In:** `state.json` (`metric`,`tried`) + `profiles/baseline_profile.json` (`buckets`) + `.cache/playbook_index.json`. **Out:** `state.json` gains `current_bucket` and `candidates` (section ids from `route()`).
-- 🔴 `test_route_state_picks_top_bucket_then_routes`: from the baseline buckets, select the top
+- **In:** `state.json` (`metric`,`tried`) + the **current** profile (`ctx.current_profile()` = `profiles/iter_<N>_profile.json` of the last committed model, or `baseline_profile.json` on iteration 0) + `.cache/playbook_index.json`. **Out:** `state.json` gains `current_bucket` and `candidates` (section ids from `route()`).
+- 🔴 `test_route_state_picks_top_bucket_then_routes`: from the CURRENT profile's buckets (not the frozen baseline — the bottleneck moves as changes land), select the top
 bucket (🔴 `TBD(bucket-select-policy)` — top-by-ms? agent-assisted?), call `route()`, write
 `current_bucket` + `candidates` to state.
 - 🟢 deterministic; agent not involved.
@@ -652,7 +655,7 @@ Reduction-op special-casing (GUIDELINES `07`) deferred.
 
 ### 8.7 `REMEASURE` (noise floor)
 
-- **In:** the edited tree, N (`TBD(noise-N)`), `tracy_tool`. **Out:** `after` metric value = **median** of N runs; Δ vs `before` is discarded as noise if under `TBD(noise-floor)`.
+- **In:** the edited tree, N (`TBD(noise-N)`), `tracy_tool`. **Out:** `after` metric value = **median** of N runs (Δ vs `before` discarded as noise if under `TBD(noise-floor)`), AND the full re-bucketed `profiles/iter_<N>_profile.json` (tracy_tool returns buckets for free) — recorded in `last_decision.profile`, promoted to `current_profile` by COMMIT on a keep.
 - 🔴 `test_remeasure_median_of_3`; `test_remeasure_rejects_below_noise_floor` (Δ under the floor →
 treated as noise, not a win).
 - 🟢 median-of-N (N 🔴 `TBD(noise-N)`, GUIDELINES suggests 3) with absolute floor 🔴
@@ -672,7 +675,7 @@ are absorbed by REPAIR (§8.5.2); an unmeasurable lever is discarded by REMEASUR
 
 - **In:** the decision + `state.json.git_sha_clean`. **Out:** keep → commit, new `git_sha_clean` at HEAD; discard/crash → `git reset --hard <clean>`. Idempotent (safe to re-run on resume).
 - 🔴 `test_commit_noop_if_head_already_there`; `test_revert_resets_to_clean_sha`.
-- 🟢 `commit(msg)` updates `git_sha_clean`; `revert()` = `git reset --hard <clean>`. Branch naming
+- 🟢 `commit(msg)` updates `git_sha_clean` AND promotes `last_decision.profile` to `state.current_profile` (so the next ROUTE routes on the new bottleneck); `revert()` = `git reset --hard <clean>` and leaves `current_profile` unchanged. Branch naming
 🔴 `TBD(git-branch-policy)`.
 
 ### 8.10 `LOG` → `CHECK_EXIT`

@@ -1,226 +1,253 @@
-# Agent Loop — handler guide
+# Agentic performance-optimization workflow
 
-Welcome. If you're reading this, you're about to own a stage of the optimization
-loop. This page tells you what the loop is, how to run it, and — the important
-part — how to drop your work in without breaking anyone else's.
+Point this at a Tenstorrent model and a target metric, and an LLM-driven harness
+optimizes it for you: it profiles a baseline, reads a playbook of known TT-NN
+tricks, edits the model, checks the math still holds (PCC), re-measures, and
+keeps only the changes that actually made it faster — looping until it hits your
+target or runs out of budget.
 
-The short version: **the machine already runs end to end today.** It walks every
-stage, reaches a terminal, writes a ledger, and passes its tests — using stand-in
-"mock" handlers where the real work will go. Your job is to swap one mock for the
-real thing, run the test, and watch it stay green. No big-bang integration day.
+The clever decisions are made by an agent. The profiling, correctness gates, and
+bookkeeping around it are plain deterministic Python. That split is the whole
+design philosophy, and it's why the thing is reproducible and crash-resumable.
+
+```bash
+python -m agent.before_loop \
+    /localdev/gtobar/tt-metal/models/demos/wormhole/bge_m3 \
+    --metric device_ms --target 11 --input 128     # 1. build a baseline
+python -m agent.loop                               # 2. optimize it
+```
 
 ---
 
-## 1. What the loop does
+## 1. The big picture
 
-We point the tool at a model and a metric. The **Before Loop** profiles a clean
-baseline and discovers the model's files, perf test, and PCC gate. Then the
-**Agent Loop** takes over: it finds the slowest group of ops, asks an LLM which
-optimization from the playbook to try, applies that one edit, checks the model is
-still numerically correct (PCC), re-measures, and either keeps the change or
-reverts it. Then it does it again. It stops when it hits your target, runs out of
-budget, or runs out of ideas.
+```mermaid
+flowchart LR
+    IN["model dir<br/>+ target metric"] --> BL
+    subgraph BL["BEFORE LOOP (stage 1, runs once)"]
+        direction LR
+        E["environment<br/>check"] --> C["cache<br/>playbook"] --> D["discover<br/>(sub-agent)"] --> P["preflight"] --> T["tracy<br/>baseline"]
+    end
+    BL --> AL
+    subgraph AL["AGENT LOOP (stage 2, many iterations)"]
+        L["evaluator-optimizer<br/>state machine"]
+    end
+    AL --> OUT(["DONE /<br/>STOPPED /<br/>FAILED"])
+```
 
-Exactly one step in that cycle is an LLM making a judgment call (which lever to
-try). Everything else — profiling, routing, the PCC gate, the keep/revert
-decision — is plain deterministic Python. That split is on purpose: the
-interesting decisions get an agent, and everything we need to be reproducible and
-resumable stays code.
+There are two stages. The **Before Loop** runs once: it reads the hardware,
+indexes the optimization playbook, sends a sub-agent into the model directory to
+discover its perf test, PCC correctness gate, and source files, and captures a
+clean Tracy profile. All of that lands in a `runs/<id>/` directory. The **Agent
+Loop** then takes that baseline and runs many short iterations against it,
+improving the metric one change at a time.
 
-## 2. Quick start (BGE-M3)
+## 2. How the optimization loop thinks
 
-Run the Before Loop once to produce a baseline, then start the loop:
+This is the heart of it — one lap of the state machine, repeated until it exits:
+
+```mermaid
+flowchart TD
+    ROUTE["ROUTE<br/>find slowest op group"] -->|"levers for that op"| SELECT
+    SELECT["🤖 SELECT<br/>pick one lever"] --> APPLY
+    APPLY["APPLY<br/>git checkpoint + edit"] --> VERIFY
+    VERIFY -->|"parses and imports"| GATE["GATE_PCC<br/>correctness"]
+    VERIFY -->|"syntax / import error"| RC["🤖 REPAIR_CODE"]
+    GATE -->|"PCC ok"| REM["REMEASURE<br/>median device_ms"]
+    GATE -->|"runtime crash"| RC
+    GATE -->|"PCC too low"| RP["🤖 REPAIR_PCC"]
+    RC -->|"fix, up to 5x"| VERIFY
+    RP -->|"fix, up to 2x"| VERIFY
+    RC -.->|"5 used up"| REVERT
+    RP -.->|"2 used up"| REVERT
+    REM --> DECIDE
+    DECIDE -->|"faster"| COMMIT
+    DECIDE -->|"no gain"| REVERT
+    COMMIT --> LOG
+    REVERT --> LOG
+    LOG --> EXIT["CHECK_EXIT"]
+    EXIT -->|"keep going"| ROUTE
+    EXIT -->|"target / budget /<br/>out of levers"| STOP(["DONE / STOPPED"])
+
+    classDef agent fill:#fde68a,stroke:#b45309,color:#000;
+    classDef term fill:#bbf7d0,stroke:#15803d,color:#000;
+    class SELECT,RC,RP agent;
+    class STOP term;
+```
+
+> The 🤖 boxes (shaded yellow on GitHub) are the only steps where the LLM
+> decides anything. Everything else is deterministic Python.
+
+Walking the lap:
+
+- **ROUTE** looks at the profiled buckets (matmul, attention, reduction, …),
+  picks the slowest, and asks the playbook router which levers are tagged for
+  that kind of op.
+- **SELECT** is the agent's one judgment call: given the candidate levers and
+  what's already been tried, pick one.
+- **APPLY** records a clean git SHA (so any change is undoable), then an edit
+  sub-agent makes that single change to the model file.
+- **VERIFY** parses and imports the edit — cheap, no hardware. **GATE_PCC** runs
+  the end-to-end correctness test and compares PCC to the model's threshold.
+- When something breaks, the **REPAIR** loop hands the captured error back to the
+  agent to fix: a broken edit gets up to **5** tries (mechanical — bad syntax,
+  bad import, a crash), a correctness regression gets up to **2** (re-apply more
+  conservatively). Out of tries → give up on that lever and revert.
+- **REMEASURE** re-profiles (median of N runs, with a noise floor), **DECIDE**
+  keeps the change only if it's genuinely faster, **COMMIT**/**REVERT** acts on
+  that verdict, **LOG** writes the experiment to the ledger, and **CHECK_EXIT**
+  decides whether to go around again.
+
+Because every transition checkpoints to disk, killing the process mid-run and
+restarting picks up at the exact same state — no lost work, no re-running the
+expensive stages.
+
+## 3. A concrete lap on BGE-M3
+
+Here's what the machine actually sees. The real baseline we captured was **12.09
+ms** of device time, and the profiler tagged the work like this:
+
+| bucket | device ms | share | calls | what the router sees |
+|---|---|---|---|---|
+| **matmul** | 6.74 | 55.7% | 96 | `op_class=matmul, fidelity=hifi2` |
+| reduction | 2.05 | 16.9% | 50 | `op_class=reduction, grid=tiny` |
+| attention | 1.63 | 13.5% | 48 | `op_class=attention, fidelity=hifi2` |
+| eltwise | 1.02 | 8.5% | 78 | `op_class=eltwise, fidelity=hifi4` |
+
+Iteration 1 reads almost like a sentence: **ROUTE** picks `matmul` — it's 56% of
+the time and running at `HiFi2`, so there's headroom. The router returns the
+matmul-tagged levers from the playbook, one of which is the fidelity walk.
+**SELECT** picks `mlp-fidelity-walk`. **APPLY** bumps the matmul's program config
+to HiFi3. **GATE_PCC** runs the BGE-M3 end-to-end test and confirms PCC is still
+≥ 0.99. **REMEASURE** re-profiles; matmul dropped and correctness held, so
+**DECIDE** keeps it and the ledger records the reasoning — *"matmul was
+fidelity-bound at HiFi2; one step to HiFi3 bought N ms with PCC intact."* After that change is committed, the loop **re-profiles the optimized model** —
+so the next lap ROUTE works from the *new* profile, where matmul has shrunk and
+reduction is now the biggest bucket. (The original baseline is kept untouched as
+the reference for total speedup.)
+
+## 4. Running it
 
 ```bash
-# 1) profile a clean baseline + discover the model (writes runs/<id>/)
+# Stage 1 — profile a baseline and discover the model (writes runs/<id>/).
 python -m agent.before_loop \
     /localdev/gtobar/tt-metal/models/demos/wormhole/bge_m3 \
     --metric device_ms --target 11 --input 128
 
-# 2) run the Agent Loop, picking up from runs/latest
+# Stage 2 — optimize, picking up from runs/latest.
 python -m agent.loop
 ```
 
-Right now step 2 runs the **mock skeleton** — it will march ROUTE → SELECT →
-APPLY → … → DONE in a couple of fake iterations without touching the device or
-spending a cent. That's intentional. It proves the wiring works before any real
-handler exists. As you replace mocks with real handlers, the same command starts
-doing real work.
-
-Want to see the machine move without even running the Before Loop? The test does
-it on a fixture:
-
-```bash
-pytest tests/test_engine.py -q -o addopts=
-```
-
-## 3. How it actually works (the 60-second mental model)
-
-There is no big loop function. There's a **dumb dispatcher** (`agent/engine.py`):
-
-```python
-while state not in TERMINAL:
-    next_state = HANDLERS[state](ctx)   # a handler does its work, returns the next state's name
-    save(next_state)                    # checkpoint after every step
-    state = next_state
-```
-
-That's the whole engine. Each **handler** is a function `handler(ctx) -> "NEXT_STATE"`.
-The loop you see in the diagram is an *emergent* property: `GATE_PCC` returns
-`"REPAIR_PCC"`, `REPAIR_PCC` returns `"VERIFY"`, `VERIFY` returns `"GATE_PCC"` —
-they point at each other, so the engine walks in a circle until a counter says
-stop. The engine never "decides to loop"; it just keeps calling the next handler.
-
-Two consequences worth internalizing:
-
-- **State lives on disk, not in a variable.** Counters like `pcc_fix_attempts`
-  live in `state.json`. Kill the process mid-repair, restart, and the engine
-  reads the last state and continues *exactly* where it was. Free crash-resume.
-- **Handlers never open files directly.** Everything goes through `ctx` (a
-  `LoopContext`): `ctx.state` is the live checkpoint dict, `ctx.manifest` is the
-  immutable run config, `ctx.baseline_profile()` gives you the tagged buckets,
-  `ctx.ledger.append(row)` records an experiment, `ctx.record_agent_call(...)`
-  logs tokens + cost. So "what ROUTE hands to SELECT" is just `ctx.state[...]`.
-
-## 4. The walking skeleton: what's real, what's mock
-
-| Real today | Mock today (your job) |
+| command | what it does |
 |---|---|
-| `ROUTE` — picks the top bucket, routes to candidate levers | `SELECT`, `APPLY`, `VERIFY`, `REPAIR_CODE`, `REPAIR_PCC` |
-| `LOG` + `CHECK_EXIT` — writes the ledger row, decides continue/stop | `GATE_PCC`, `REMEASURE`, `DECIDE`, `COMMIT`, `REVERT` |
+| `python -m agent.before_loop <model_dir> --metric device_ms --target 11 --input 128` | profile a baseline + discover the model |
+| `python -m agent.loop [runs_root]` | run the optimization loop from `runs/latest` |
+| `python -m agent.before_loop --help` | full flag reference — `--input` matching, `--devices`, `--metric`, mock toggles |
 
-`ROUTE` and `LOG` are your templates — read them first (`route.py`, `log_exit.py`).
-They're short, real, and show the shape every handler should take. The mocks all
-live in `mocks.py` with the control flow already correct.
+`--input` is human-friendly: `--input 128` matches the sequence-length-128 test
+case; an image model would take `--input 224x224`. If it can't match exactly it
+stops rather than silently run the wrong case. Run `--help` for the rest.
 
-## 5. Claiming a stage
+> **Heads up:** stage 2 currently runs a *walking skeleton* — the state machine is
+> fully wired and runs end to end, but several stages are still stand-ins (see
+> §6). It will march to `DONE` without touching the device yet. Real stages are
+> being filled in one at a time.
 
-Here's the move, start to finish. We'll make `GATE_PCC` real for BGE-M3.
+## 5. What's an agent, and what isn't
 
-**Step 1 — find your leaf.** Open `mocks.py`, find `gate_pcc`. Notice the routing
-is already written and correct:
+The harness is deliberately mostly **not** an LLM. Profiling, routing, the PCC
+gate, the keep/revert decision, every bit of state and bookkeeping — all
+deterministic functions, all unit-tested, all free. The model is invoked at
+exactly three kinds of step:
 
-```python
-def gate_pcc(ctx) -> str:
-    v = _measure_pcc(ctx)                 # <-- this leaf is fake; everything below is real
-    ctx.state["last_verdict"] = v
-    if v["status"] == "ok":        return states.REMEASURE
-    if v["status"] == "pcc_low":
-        ...                               # routes to REPAIR_PCC or REVERT based on the counter
-    ...
-```
+- the **discovery sub-agent** in the Before Loop (explore the model dir, report
+  what it found),
+- **SELECT** (which lever to try this iteration),
+- **REPAIR** (fix a broken or correctness-failing edit).
 
-You are **only** replacing `_measure_pcc`. Do not touch the `return states.X`
-lines — that routing is the design, and it's what keeps the state graph correct
-while everyone works in parallel.
+Keeping the agent on the edges and the machinery in the middle is what makes runs
+reproducible, resumable, and cheap to test.
 
-**Step 2 — implement the real leaf.** Make your own file, `agent/handlers/gate_pcc.py`,
-and write the real measurement. For BGE-M3, discovery already put the e2e test and
-its threshold in the manifest, so you read them straight off `ctx`:
+## 6. Extending it — claim a stage
 
-```python
-# agent/handlers/gate_pcc.py
-from .. import states
+The loop is built as a **walking skeleton**: it runs today using stand-in "mock"
+handlers where real work will go, so you integrate by swapping one mock for the
+real thing and watching the test stay green — never a big-bang merge.
 
-def _measure_pcc(ctx) -> dict:
-    pcc_entry = ctx.manifest["pathmap"]["pcc"]["end_to_end"]
-    test, threshold = pcc_entry["path"], pcc_entry["threshold"]   # e.g. ".../test_bge_m3.py::test_e2e", 0.99
-    try:
-        measured = run_pcc_test(ctx, test)        # your code: run pytest, parse the PCC number
-    except Exception as exc:
-        return {"status": "crash", "error": str(exc)}             # crash -> code-repair
-    if measured >= threshold:
-        return {"status": "ok", "pcc": measured}
-    return {"status": "pcc_low", "pcc": measured}                 # too low -> pcc-repair
+Each stage is a handler: a function `handler(ctx) -> "NEXT_STATE"`. The engine
+(`agent/engine.py`) just calls the current state's handler and goes wherever it
+returns. `ROUTE` (`handlers/route.py`) and `LOG`/`CHECK_EXIT`
+(`handlers/log_exit.py`) are real and are your templates; the rest live in
+`handlers/mocks.py` with the routing already correct.
 
-def gate_pcc(ctx) -> str:
-    ...  # copy the routing from mocks.gate_pcc verbatim, now calling your real _measure_pcc
-```
+**To make a stage real** — say `GATE_PCC`:
 
-**Step 3 — wire it in.** One line in `__init__.py`:
+1. In `mocks.py`, find `gate_pcc`. The routing (the `return states.X` lines) is
+   done; only the leaf `_measure_pcc(ctx)` is fake.
+2. Write the real leaf in your own file `handlers/gate_pcc.py`. The test path and
+   threshold are already on `ctx` from discovery:
+   ```python
+   pcc = ctx.manifest["pathmap"]["pcc"]["end_to_end"]   # {"path": ".../test_e2e", "threshold": 0.99}
+   ```
+   Return `{"status": "ok"|"pcc_low"|"crash", "pcc": <value>}`.
+3. Swap one line in `handlers/__init__.py`: `states.GATE_PCC: gate_pcc.gate_pcc`.
+4. `pytest tests/test_engine.py -q -o addopts=` — still green, now with your real
+   gate in the path.
 
-```python
-from . import gate_pcc as _gate_pcc          # add this import
-...
-states.GATE_PCC: _gate_pcc.gate_pcc,         # was: mocks.gate_pcc
-```
+Four rules keep parallel work painless: **(1)** handler signature is always
+`handler(ctx) -> next_state`; **(2)** fill the leaf, never the routing; **(3)**
+one file per stage (the only shared files are `states.py` and the registry);
+**(4)** read and write run state only through `ctx`. The full per-stage
+contracts, fixtures for working offline, and open questions live in
+`PLAN_AGENT_WORKFLOW.md` (§8).
 
-**Step 4 — stay green.** Run the skeleton test. It should still walk to a
-terminal, now with your real PCC gate in the path:
+## 7. What a run writes (the JSON files)
 
-```bash
-pytest tests/test_engine.py -q -o addopts=
-```
+Everything a run produces lives under `runs/<id>/`, in four lifecycles that are
+never mixed — that separation is deliberate.
 
-That's the whole rhythm. Repeat per stage. Because each stage is its own file and
-the only shared touch-point is that one registry line, two people can do this at
-once without colliding.
+| file | lifecycle | what it holds |
+|---|---|---|
+| `manifest.json` | write-once, immutable | the run's fixed context: hardware (`env` — card, grid, DRAM bandwidth), the discovered `pathmap` (perf test + case, PCC gate path **and its threshold**, components, model files), the lead agent's discovery-review verdict, and the config (metric, target, budget). Written at the start, never touched again. |
+| `state.json` | mutable checkpoint (atomic) | the single live file, and the one resume reads. Current `state`, `iteration`, the `metric` block (name / unit / direction / baseline / current / target), counters (`cost_usd`, tokens, `code_fix_attempts`, `pcc_fix_attempts`), and the working set (`candidates`, `tried`, `selected_lever`, `git_sha_clean`). Rewritten atomically after every transition. |
+| `ledger.jsonl` | append-only | one row per experiment — the **story**: which lever, before/after, delta, PCC, kept or discarded and why, plus the agent's `hypothesis`. This is what a human (or a warm restart days later) reads to understand the run. |
+| `events.jsonl` | append-only | one row per stage entry/exit — the **execution trace**: timestamp, stage, status, detail, iteration. For debugging the run's mechanics. |
+| `agent_calls.jsonl` | append-only | one row per LLM call — the **bill**: stage, role (discovery / select / repair), model, tokens in/out, cached tokens, cost, latency. Feeds the budget gate. |
+| `profiles/baseline_profile.json` | write-once | the tagged op buckets (op_class, fidelity, grid, rank, …) + device_ms / wall_ms of the **original** model. The fixed reference for total speedup — NOT what ROUTE routes on after iteration 0. |
+| `profiles/iter_<N>_profile.json` | write-once per iteration | the re-bucketed profile of the model as edited in iteration N. When DECIDE keeps the change, COMMIT promotes this to the *current* profile (`state.current_profile`), and the next ROUTE routes on it. |
+| `profiles/*.csv` | write-once | the raw Tracy ops CSV and the tt-perf-report output, kept as evidence. |
+| `.cache/playbook_index.json` | derived cache (shared) | the routing index built from the `GUIDELINES/` tags. Content-hashed and rebuilt when the playbook changes; **not** tied to any single run. |
 
-## 6. The four rules that keep integration painless
-
-1. **Signature is sacred:** `handler(ctx) -> next_state_string`. Always a name
-   from `agent/states.py` (or a terminal).
-2. **Fill the leaf, never the routing.** The `return states.X` lines encode the
-   state machine. If you change where a stage goes, you've changed the design —
-   talk to the team first.
-3. **One file per stage.** The shared files are tiny on purpose: `states.py`
-   (names) and `handlers/__init__.py` (the registry). Everything else is yours.
-4. **Talk through `ctx`, not the filesystem.** Read `ctx.state` / `ctx.manifest`,
-   write `ctx.state` / `ctx.ledger`. Then resume and telemetry just work.
-
-## 7. The repair loop (so the inner cycle makes sense)
-
-Between APPLY and REMEASURE the loop can self-heal. Two budgets, by failure type:
-
-- The agent wrote code that won't parse / import / run → that's mechanical, give
-  it room: up to **5** `REPAIR_CODE` attempts, then abandon the lever.
-- The edit ran fine but PCC dropped below the threshold → that's a correctness
-  dead-end, give it a little: up to **2** `REPAIR_PCC` attempts, then discard.
-
-Both counters live in `state.json` and reset when `SELECT` picks a new lever. The
-budgets are in `states.py` (`MAX_CODE_FIX`, `MAX_PCC_FIX`).
+Rule of thumb: **manifest** is what we started with (read-only), **state** is where
+we are now (the one file resume needs), and the **`.jsonl`** files are append-only
+logs you can `tail` live — story (ledger), trace (events), cost (agent_calls).
+ROUTE always routes on the **current** profile (the last committed iteration),
+falling back to the baseline only on iteration 0.
 
 ## 8. When something looks wrong
 
-| You see… | It usually means… |
+| you see… | it usually means… |
 |---|---|
-| `EngineError: no handler registered for state 'X'` | you renamed a state or forgot to register it in `__init__.py` |
-| `EngineError: returned unknown state 'X'` | a handler returned a typo'd name — use the `states.*` constant, not a string literal |
-| `EngineError: exceeded N steps` | a handler routes in a circle with no counter to break it — check your `return` |
-| `ValueError: invalid value '...' for dimension` | a bucket tag isn't in the routing vocabulary (`router.VOCABULARY`) — e.g. compute-bound is `flop`, not `compute` |
-| loop ends `STOPPED` immediately | all candidates already `tried`, or budget/max-iter hit — check `state.json` |
+| `EngineError: no handler registered for state 'X'` | renamed a state, or forgot to register it in `handlers/__init__.py` |
+| `EngineError: returned unknown state 'X'` | a handler returned a typo — use the `states.*` constant, not a string |
+| `EngineError: exceeded N steps` | handlers cycle with no counter to break out — check your `return` |
+| `ValueError: invalid value '...' for dimension` | a bucket tag isn't in `router.VOCABULARY` (e.g. compute-bound is `flop`, not `compute`) |
+| loop ends `STOPPED` right away | every candidate already tried, or budget / max-iter hit — read `runs/latest/state.json` |
 
-## 9. Commands & flags
-
-| Command | What it does |
-|---|---|
-| `python -m agent.before_loop <model_dir> --metric device_ms --target 11 --input 128` | profile baseline + discover the model |
-| `python -m agent.loop [runs_root]` | run the Agent Loop from `runs/latest` (default `runs/`) |
-| `pytest tests/test_engine.py -q -o addopts=` | walk the skeleton to DONE on a fixture |
-| `python -m agent.before_loop --help` | full flag reference (metric, devices, input matching, mock toggles) |
-
-`--help` on the Before Loop is the source of truth for its flags — `--input`
-matching, `--devices`, `--metric`, and the `--mock-*` toggles for hardware-free
-testing are all documented there.
-
-## 10. Where things live
+## 9. Where things live
 
 ```
 agent/
-  engine.py        the dispatcher (don't edit — it's done)
-  states.py        state names + TRANSITIONS contract + repair budgets
-  loop_context.py  the ctx seam: state, manifest, ledger, telemetry helpers
+  before_loop.py   stage 1 driver (environment, discovery, baseline)
+  engine.py        the dispatcher that walks the state machine
+  states.py        state names + transition contract + repair budgets
+  loop_context.py  the ctx seam: state, manifest, ledger, telemetry
   loop.py          `python -m agent.loop` entry point
-  handlers/
-    __init__.py    the registry — swap a mock for your module here, one line
-    route.py       REAL — your template (Member 1)
-    log_exit.py    REAL — your template (Member 2)
-    mocks.py       stand-ins; copy the routing, replace the leaf
+  router.py        playbook index + tag-based lever routing
+  tracy_tool.py    profile -> tt-perf-report -> tagged buckets
+  handlers/        one file per loop stage (route + log_exit real; rest mock)
 runs/<id>/         one run: state.json, manifest.json, ledger.jsonl, profiles/
-tests/
-  test_engine.py   the walking-skeleton test you keep green
-  fixtures/loop/   the entry fixtures (after_before_loop/)
+GUIDELINES/        the optimization playbook (tagged sections the router reads)
+tests/             unit tests + the walking-skeleton engine test
+PLAN_AGENT_WORKFLOW.md   the full design & build plan
 ```
-
-For the full design — every stage's inputs/outputs, the fixtures for working
-offline, and the open TBDs — see `PLAN_AGENT_WORKFLOW.md` (§8 is the loop).
