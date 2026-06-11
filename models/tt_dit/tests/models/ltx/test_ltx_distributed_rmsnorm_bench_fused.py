@@ -257,6 +257,7 @@ def _bench_cfg(submesh, ag_sem, cfg: LtxCfg) -> dict:
         TP_AXIS,
         submesh,
         num_heads_per_device=cfg.heads,
+        num_links=GALAXY_NUM_LINKS,
         weight=inp.get("weight"),
         transformation_mat=inp.get("trans"),
         rope_cos=inp.get("cos_bf16"),

@@ -70,6 +70,7 @@ void bind_wan_fused_distributed_rmsnorm(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("num_heads_per_device") = 1,
         nb::arg("per_head_norm") = false,
+        nb::arg("num_links") = 1,
         nb::arg("weight") = nb::none(),
         nb::arg("transformation_mat") = nb::none(),
         nb::arg("rope_cos") = nb::none(),
