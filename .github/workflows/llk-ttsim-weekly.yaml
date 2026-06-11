@@ -192,7 +192,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Send Slack digest
-        uses: slackapi/slack-github-action@v2.1.1
+        uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
         with:
           method: chat.postMessage
           token: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}

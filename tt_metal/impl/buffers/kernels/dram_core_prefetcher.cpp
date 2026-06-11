@@ -11,13 +11,14 @@
 // fifo_wr_ptr back to L1 so the next request to the same GCB resumes from the right
 // ring offset, and acks the socket page.
 //
-// Request page wire format (one socket page): a DramCorePrefetcherRequestHeader, then
-// a forward-growing table of per-tensor DramCorePrefetcherEntry (address + layout index)
+// Request page wire format (one socket page): a DramCorePrefetcherRequestHeader
+// (one-byte command id + per-command union). The STOP command (all-zero page) exits
+// the request loop; WAIT_CQ blocks on a per-CQ signal slot; PREFETCH is followed by a
+// forward-growing table of per-tensor DramCorePrefetcherEntry (address + layout index)
 // and a backward-growing (from the end of the payload) deduplicated table of
 // DramCorePrefetcherTensorLayout. The kernel walks the entries in order, resolving each
 // entry's geometry from the referenced layout. See
-// tt_metal/impl/buffers/dram_core_prefetcher_request.hpp. A header with
-// num_entries == 0 is the stop sentinel.
+// tt_metal/impl/buffers/dram_core_prefetcher_request.hpp.
 //
 // Per-GCB sender state block layout: see
 // tt_metal/impl/buffers/dram_sender_state_block.hpp.
@@ -36,6 +37,7 @@ using tt::tt_metal::DramCorePrefetcherEntry;
 using tt::tt_metal::DramCorePrefetcherRequestHeader;
 using tt::tt_metal::DramCorePrefetcherTensorLayout;
 using tt::tt_metal::DramSenderStateBlock;
+using tt::tt_metal::kNumCqSignalSlots;
 using tt::tt_metal::kRequestPageBytes;
 
 // DRISC firmware doesn't define cb_interface (no CB infra on DRAM cores).
@@ -163,6 +165,10 @@ void kernel_main() {
     constexpr uint32_t stage_ring_size = get_compile_time_arg_val(1);
     constexpr uint32_t remote_cb_id = get_compile_time_arg_val(2);
     constexpr uint32_t socket_page_size = get_compile_time_arg_val(3);
+    // Base of this core's per-CQ signal slots (kNumCqSignalSlots uint32 counters).
+    // WaitForCqOnDramCorePrefetcher writes an incrementing value here from the
+    // dispatcher; a WAIT_CQ request blocks until the requested slot reaches it.
+    constexpr uint32_t cq_signal_l1_base = get_compile_time_arg_val(4);
     constexpr uint32_t ring_half = stage_ring_size / 2;
     constexpr uint32_t stage_slot_a = stage_ring_base;
     constexpr uint32_t stage_slot_b = stage_ring_base + ring_half;
@@ -181,14 +187,23 @@ void kernel_main() {
     RemoteSenderCBInterface& iface = get_remote_sender_cb_interface(remote_cb_id);
     bool has_loaded_sender_state = false;
 
+    // Zero the per-CQ signal slots before parking on the socket. Safe to do here
+    // (rather than from the host) because no WaitForCqOnDramCorePrefetcher signal
+    // can be enqueued until StartDramCorePrefetcher returns to the single-threaded
+    // host caller, long after this init runs.
+    volatile tt_l1_ptr uint32_t* cq_signal_slots = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cq_signal_l1_base);
+    for (uint32_t i = 0; i < kNumCqSignalSlots; ++i) {
+        cq_signal_slots[i] = 0;
+    }
+
     // ---- Request loop ----
     while (true) {
         socket_wait_for_pages(socket, 1);
 
         volatile tt_l1_ptr DramCorePrefetcherRequestHeader* req =
             reinterpret_cast<volatile tt_l1_ptr DramCorePrefetcherRequestHeader*>(socket.read_ptr);
-        const uint32_t req_num_entries = req->num_entries;
-        if (req_num_entries == 0) {
+        const uint8_t cmd_id = req->base.cmd_id;
+        if (cmd_id == tt::tt_metal::DRAM_PREFETCHER_CMD_STOP) {
             // Stop sentinel. Receiver pages_acked atomics target DRISC L1 while
             // stream mode is active; wait for the last loaded GCB to drain before
             // exiting the request loop and restoring NoC2AXI mode.
@@ -199,7 +214,21 @@ void kernel_main() {
             socket_notify_sender(socket);
             break;
         }
-        const uint32_t gcb_state_addr = req->gcb_state_addr;
+        if (cmd_id == tt::tt_metal::DRAM_PREFETCHER_CMD_WAIT_CQ) {
+            // Block until the dispatcher has bumped this CQ's signal slot to the
+            // requested value. Wrap-safe: compare the unsigned difference as signed.
+            const uint32_t idx = req->wait_cq.cq_index;
+            const uint32_t target = req->wait_cq.cq_wait_value;
+            while ((int32_t)(cq_signal_slots[idx] - target) < 0) {
+                invalidate_l1_cache();
+            }
+            socket_pop_pages(socket, 1);
+            socket_notify_sender(socket);
+            continue;
+        }
+        // DRAM_PREFETCHER_CMD_PREFETCH
+        const uint32_t req_num_entries = req->prefetch.num_entries;
+        const uint32_t gcb_state_addr = req->prefetch.gcb_state_addr;
         volatile tt_l1_ptr DramSenderStateBlock* state =
             reinterpret_cast<volatile tt_l1_ptr DramSenderStateBlock*>(gcb_state_addr);
 
