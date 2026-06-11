@@ -89,6 +89,7 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.moe_expert_token_remap.html">ttnn.moe_expert_token_remap</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.moe_routing_remap.html">ttnn.moe_routing_remap</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.move.html">ttnn.move</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.narrow.html">ttnn.narrow</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.nonzero.html">ttnn.nonzero</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.pad.html">ttnn.pad</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.permute.html">ttnn.permute</a></li>
@@ -219,7 +220,7 @@ If no dimension is specified, the last dimension of the input tensor is used.</p
 </dl>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
-<p>Supported dtypes and layout for input tensor values:</p>
+<p>Supported dtypes and layouts for input tensor values:</p>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd">
@@ -230,19 +231,19 @@ If no dimension is specified, the last dimension of the input tensor is used.</p
 <tbody>
 <tr class="row-even">
 <td><p>BFLOAT16</p></td>
-<td><p>TILE</p></td>
+<td><p>TILE, ROW_MAJOR</p></td>
 </tr>
 <tr class="row-odd">
 <td><p>UINT16</p></td>
-<td><p>TILE</p></td>
+<td><p>TILE, ROW_MAJOR</p></td>
 </tr>
 <tr class="row-even">
 <td><p>FLOAT32</p></td>
-<td><p>TILE</p></td>
+<td><p>TILE, ROW_MAJOR</p></td>
 </tr>
 </tbody>
 </table>
-<p>Supported dtypes and layout for index tensor values:</p>
+<p>Supported dtypes and layouts for index tensor values:</p>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd">
@@ -253,7 +254,7 @@ If no dimension is specified, the last dimension of the input tensor is used.</p
 <tbody>
 <tr class="row-even">
 <td><p>UINT16, UINT32</p></td>
-<td><p>TILE</p></td>
+<td><p>TILE, ROW_MAJOR</p></td>
 </tr>
 </tbody>
 </table>
@@ -263,6 +264,7 @@ If no dimension is specified, the last dimension of the input tensor is used.</p
 <dd>
 <ul class="simple">
 <li><p>Interleaved: DRAM and L1</p></li>
+<li><p>Sharded: HEIGHT_SHARDED, WIDTH_SHARDED, BLOCK_SHARDED (DRAM and L1)</p></li>
 </ul>
 </dd>
 </dl>
