@@ -44,7 +44,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
-    create_kv_chunk_address_table,
+    create_kv_chunk_address_table_ds,
     init_kvpe_cache,
 )
 from models.demos.deepseek_v3_d_p.utils.pcc_plot_utils import generate_pcc_plots, write_pcc_summary
@@ -432,7 +432,7 @@ def run_model(
     lookup_table_config.chunk_size_bytes = CHUNK_SIZE_BYTES
 
     # just create atm for demo purposes, don't actually use it
-    lookup_table = create_kv_chunk_address_table(
+    lookup_table = create_kv_chunk_address_table_ds(
         config=lookup_table_config,
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,

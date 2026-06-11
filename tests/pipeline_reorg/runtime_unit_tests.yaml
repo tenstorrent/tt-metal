@@ -88,6 +88,7 @@
   team: runtime
 
 # --- LLK + SFPI Tests ---
+# WH timeout raised from 8→12 min: full LLK+SFPI suite exceeds 8 min wall clock on wh_n150_civ2.
 - name: runtime_llk
   # 4 tests disabled by #44767.
   disabled_llk_filter: &disabled_llk 'LLKBlackholeSingleCardFixture.TensixComputePackUntilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixComputeUnpackTilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixFp8e4m3ToFp8e4m3:MeshDeviceFixture.Top32RmDevPipelineCompletes'
@@ -96,7 +97,7 @@
     ./build/test/tt_metal/unit_tests_sfpi
   skus:
     wh_n150_civ2:
-      timeout: 8
+      timeout: 12
     bh_p150b_civ2:
       timeout: 8
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
@@ -307,7 +308,7 @@
   team: runtime
 
 # =============================================================================
-# Multi-Card Unit Tests (BH + Galaxy)
+# Multi-Card Unit Tests (Galaxy)
 # =============================================================================
 
 # --- BH Multi-Card: Debug Tools (mesh filters + single AERISC) ---
@@ -318,7 +319,7 @@
     TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='WatcherAssertTest.TestWatcherAssert'
     TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='MeshWatcherFixture.ActiveEthTestWatcherSanitizeEth'
   skus:
-    bh_quietbox:
+    bh_loudbox:
       timeout: 5
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
@@ -329,7 +330,7 @@
     TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='UnitMeshRandomProgramFixture.ActiveEthTestPrograms'
     TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='UnitMeshRandomProgramTraceFixture.ActiveEthTestProgramsTrace'
   skus:
-    bh_quietbox:
+    bh_loudbox:
       timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
@@ -386,8 +387,6 @@
     bh_p150b_civ2:
       timeout: 5
     bh_p100a_civ2_viommu:
-      timeout: 5
-    bh_quietbox:
       timeout: 5
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime

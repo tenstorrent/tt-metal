@@ -30,6 +30,13 @@ void queue_dram_core_prefetcher_request(
     tt::tt_metal::experimental::QueueDramCorePrefetcherRequest(*mesh_device, global_cb, device_subset, inputs);
 }
 
+void wait_for_cq_on_dram_core_prefetcher(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    uint8_t cq_id,
+    const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset) {
+    tt::tt_metal::experimental::WaitForCqOnDramCorePrefetcher(*mesh_device, cq_id, device_subset);
+}
+
 void stop_dram_core_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device) {
     tt::tt_metal::experimental::StopDramCorePrefetcher(*mesh_device);
 }

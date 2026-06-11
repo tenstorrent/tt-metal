@@ -409,7 +409,7 @@ def run_generation(
                 rot_mat_idxs=device_inputs["position_int32"],  # pos_int32 passed as rot_mat_idxs
                 page_table=page_table_tt,
                 kv_cache=tt_kv_cache,
-                sampling_on_device=on_device_sampling,
+                on_device_logits=on_device_sampling,
                 pli_combined=device_inputs.get("pli"),
             )
 
@@ -423,12 +423,21 @@ def run_generation(
 
         def _extract_token(decode_output):
             """Extract next token from model output (token IDs or logits)."""
-            output_cpu = (
-                ttnn.to_torch(ttnn.get_device_tensors(decode_output)[0]) if is_mesh else ttnn.to_torch(decode_output)
-            )
             if on_device_sampling:
-                return output_cpu.reshape(-1)[0].item()
+                # Keep main behavior: decode sampling in this demo remains untraced.
+                # SamplingGenerator.sample() returns (tt_tokens, tt_log_probs); take the tokens.
+                sampled = model.sampling.sample(decode_output, enable_trace=False)
+                tt_tokens = sampled[0] if isinstance(sampled, tuple) else sampled
+                sampled_cpu = (
+                    ttnn.to_torch(ttnn.get_device_tensors(tt_tokens)[0]) if is_mesh else ttnn.to_torch(tt_tokens)
+                )
+                return sampled_cpu.reshape(-1)[0].item()
             else:
+                output_cpu = (
+                    ttnn.to_torch(ttnn.get_device_tensors(decode_output)[0])
+                    if is_mesh
+                    else ttnn.to_torch(decode_output)
+                )
                 return output_cpu.squeeze().argmax().item()
 
         sample_mode = "device" if on_device_sampling else "host"

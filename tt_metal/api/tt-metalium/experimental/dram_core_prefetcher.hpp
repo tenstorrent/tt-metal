@@ -102,6 +102,24 @@ void QueueDramCorePrefetcherRequest(
     const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
     const std::vector<DramCorePrefetcherInput>& input_tensors);
 
+// Fence the prefetcher against command queue `cq_id`: every prefetch request queued
+// after this call waits until all work previously enqueued on `cq_id` has completed
+// on device before it reads DRAM. Use this to guarantee that data written over
+// `cq_id` (e.g. the EnqueueWriteBuffer that populates the weights) has landed before
+// the prefetcher streams it.
+//
+// Call this synchronously on the host thread that issued the data writes — after
+// those writes, and before the QueueDramCorePrefetcherRequest that consumes them.
+//
+//   - `cq_id` selects the command queue to fence against.
+//   - `device_subset` defaults to the full mesh when std::nullopt.
+//
+// Preconditions (TT_FATAL): a prefetcher is active on this mesh device.
+void WaitForCqOnDramCorePrefetcher(
+    distributed::MeshDevice& mesh_device,
+    uint8_t cq_id,
+    const std::optional<distributed::MeshCoordinateRangeSet>& device_subset);
+
 // Block until all previously queued requests have been delivered and the
 // kernels have exited, then release the prefetcher's resources. No-op if no
 // prefetcher is active.
