@@ -5,15 +5,16 @@
 #include "untilize_with_unpadding_single_core_program_factory.hpp"
 
 #include <cmath>
+#include <filesystem>
 
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"
 
@@ -22,7 +23,25 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingSingleCoreProgramFactory::create_descriptor(
+namespace m2 = tt::tt_metal::experimental;
+
+namespace {
+
+// File-scope kernel paths. Names are unique across the untilize_with_unpadding device/ sibling .cpp files
+// (the _UWU_SC suffix) to avoid unity-build collisions. These are op-private Metal 2.0 copies of the
+// shared kernels; the legacy kernels are still consumed positionally by the un-migrated variants.
+constexpr const char* UWU_SC_READER_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
+    "reader_unary_interleaved_start_id_m2.cpp";
+constexpr const char* UWU_SC_WRITER_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
+    "writer_unary_unpad_dims_split_rows_m2.cpp";
+constexpr const char* UWU_SC_COMPUTE_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/compute/untilize_m2.cpp";
+
+}  // namespace
+
+ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingSingleCoreProgramFactory::create_program_artifacts(
     const UntilizeWithUnpaddingParams& operation_attributes, const Tensor& input, Tensor& output) {
     const auto& a = input;
     bool fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
@@ -30,10 +49,9 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingSingleCoreProgramFactory::c
     const auto& input_shape = a.padded_shape();
     const auto& output_shape = output.padded_shape();
 
-    ProgramDescriptor desc;
-
     CoreRange default_core({0, 0}, {0, 0});
     CoreRange core = sub_core_grids.has_value() ? corerange_to_cores(sub_core_grids.value()).at(0) : default_core;
+    CoreCoord core_0 = corerange_to_cores(core).at(0);
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
@@ -44,14 +62,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingSingleCoreProgramFactory::c
     log_debug(tt::LogOp, "input_cb_data_format: {}", input_cb_data_format);
     log_debug(tt::LogOp, "output_cb_data_format: {}", output_cb_data_format);
 
-    tt::tt_metal::Buffer* src0_buffer = a.buffer();
-
     int32_t num_tiles = a.physical_volume() / TILE_HW;
-
-    // This should allocate a DRAM buffer on the device
-
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     auto input_w = input_shape.rank() >= 4 ? input_shape[-4] : 1;
     auto input_z = input_shape.rank() >= 3 ? input_shape[-3] : 1;
@@ -102,112 +113,147 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingSingleCoreProgramFactory::c
     const uint32_t padded_W_diff_blocks = (input_w - output_w) * input_z * input_y / TILE_HEIGHT * num_blocks_w_input;
     const uint32_t num_leftover_Y = output_y - (output_y / TILE_HEIGHT * TILE_HEIGHT);
 
-    constexpr uint8_t src0_cb_index = 0;
+    bool float32_dtype = input_cb_data_format == tt::DataFormat::Float32 or
+                         input_cb_data_format == tt::DataFormat::UInt32 or
+                         input_cb_data_format == tt::DataFormat::Int32;
+
+    const m2::DFBSpecName input_dfb{"src0"};
+    const m2::DFBSpecName output_dfb{"out0"};
+
+    m2::ProgramSpec spec;
+    spec.name = "untilize_with_unpadding_single_core";
+
+    // Input CB (formerly c_0) and Output CB (formerly c_16): both L1-allocated, one block of tiles each.
     uint32_t num_input_tiles = num_tiles_per_block;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_input_tiles * input_single_tile_size,
-        .core_ranges = core,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = src0_cb_index,
-            .data_format = input_cb_data_format,
-            .page_size = input_single_tile_size,
-        }}},
-    });
-
-    constexpr uint8_t output_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = num_tiles_per_block;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_output_tiles * output_single_tile_size,
-        .core_ranges = core,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = output_cb_index,
-            .data_format = output_cb_data_format,
-            .page_size = output_single_tile_size,
-        }}},
-    });
+    spec.dataflow_buffers = {
+        m2::DataflowBufferSpec{
+            .unique_id = input_dfb,
+            .entry_size = input_single_tile_size,
+            .num_entries = num_input_tiles,
+            .data_format_metadata = input_cb_data_format,
+        },
+        m2::DataflowBufferSpec{
+            .unique_id = output_dfb,
+            .entry_size = output_single_tile_size,
+            .num_entries = num_output_tiles,
+            .data_format_metadata = output_cb_data_format,
+        }};
 
-    std::vector<uint32_t> reader_compile_time_args;
-    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+    spec.tensor_parameters = {
+        m2::TensorParameter{.unique_id = m2::TensorParamName{"input"}, .spec = a.tensor_spec()},
+        m2::TensorParameter{.unique_id = m2::TensorParamName{"output"}, .spec = output.tensor_spec()}};
 
-    std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)((
-            input_cb_data_format == tt::DataFormat::Float32 or input_cb_data_format == tt::DataFormat::UInt32 or
-            input_cb_data_format == tt::DataFormat::Int32)),
-        unpadded_stick_size};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
-
-    // Tilized reader
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = core;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    // Untilized writer
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
-        "writer_unary_unpad_dims_split_rows.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = core;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterConfigDescriptor{};
-
-    std::vector<uint32_t> compute_args = {
-        uint32_t(num_tiles / num_tiles_per_block),
-        uint32_t(num_tiles_per_block),
-        uint32_t(src0_cb_index),
-        uint32_t(output_cb_index)};
-
-    KernelDescriptor::Defines compute_kernel_defines;
-    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32 ||
-        input_cb_data_format == tt::DataFormat::Float32) {
-        compute_kernel_defines.emplace_back("DST_ACCUM_MODE", "1");
-    }
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
-        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-    if (fp32_dest_acc_en) {
-        unpack_to_dest_mode[src0_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-    }
-
-    KernelDescriptor compute_desc;
-    compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
-    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = core;
-    compute_desc.compile_time_args = std::move(compute_args);
-    compute_desc.defines = std::move(compute_kernel_defines);
-    compute_desc.config = ComputeConfigDescriptor{
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
+    // Tilized reader on NCRISC (RISCV_1 / NOC1): reads interleaved input tiles into src0.
+    m2::KernelSpec reader{
+        .unique_id = m2::KernelSpecName{"reader"},
+        .source = std::filesystem::path{UWU_SC_READER_KERNEL_PATH},
+        .dfb_bindings = {m2::ProducerOf(input_dfb, "cb_id_in0")},
+        .tensor_bindings = {m2::TensorBinding{
+            .tensor_parameter_name = m2::TensorParamName{"input"}, .accessor_name = "src_args"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_page_id"}},
+        .hw_config =
+            m2::DataMovementHardwareConfig{
+                .gen1_config =
+                    m2::DataMovementHardwareConfig::Gen1Config{
+                        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+                        .noc = tt::tt_metal::NOC::RISCV_1_default}},
     };
 
-    CoreCoord core_0 = corerange_to_cores(core).at(0);
-    reader_desc.emplace_runtime_args(core_0, {src0_buffer, uint32_t(num_tiles), 0u});
-    writer_desc.emplace_runtime_args(
-        core_0,
-        {dst_buffer,
-         output_w,
-         padded_W_diff_blocks,
-         output_z,
-         padded_Z_diff_blocks,
-         output_y,
-         padded_Y_diff_blocks,
-         num_leftover_Y,
-         output_x,
-         padded_stick_size,
-         num_blocks_w_input,
-         num_blocks_w_output,
-         num_blocks_w_diff,
-         block_row_size,
-         block_row_leftover_size});
+    // Untilized writer on BRISC (default Gen1 config): consumes out0, writes unpadded sticks to output.
+    // The (formerly positional) FLOAT32_DTYPE flag becomes a named compile-time arg; the rest become named
+    // runtime args. (Legacy CTA `unpadded_stick_size` was unreferenced in this writer body and is dropped.)
+    m2::KernelSpec writer{
+        .unique_id = m2::KernelSpecName{"writer"},
+        .source = std::filesystem::path{UWU_SC_WRITER_KERNEL_PATH},
+        .dfb_bindings = {m2::ConsumerOf(output_dfb, "cb_id_out0")},
+        .tensor_bindings = {m2::TensorBinding{
+            .tensor_parameter_name = m2::TensorParamName{"output"}, .accessor_name = "dst_args"}},
+        .compile_time_args = {{"float32_dtype", static_cast<uint32_t>(float32_dtype)}},
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"num_unpadded_W",
+                  "padded_W_diff_blocks",
+                  "num_unpadded_Z",
+                  "padded_Z_diff_blocks",
+                  "num_unpadded_Y",
+                  "padded_Y_diff_blocks",
+                  "num_leftover_Y",
+                  "num_unpadded_X",
+                  "padded_X_size",
+                  "num_blocks_w_input",
+                  "num_blocks_w_output",
+                  "num_blocks_w_diff",
+                  "block_row_size",
+                  "block_row_leftover_size"}},
+        .hw_config = m2::DataMovementHardwareConfig{.gen1_config = m2::DataMovementHardwareConfig::Gen1Config{}},
+    };
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc));
+    // Compute kernel: consumes src0, produces out0. DST_ACCUM_MODE mirrors the legacy define for 32-bit
+    // formats; UnpackToDestFp32 on the input DFB when fp32_dest_acc_en.
+    m2::KernelSpec::CompilerOptions::Defines compute_defines;
+    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32 ||
+        input_cb_data_format == tt::DataFormat::Float32) {
+        compute_defines.emplace("DST_ACCUM_MODE", "1");
+    }
+    m2::ComputeHardwareConfig compute_hw{.fp32_dest_acc_en = fp32_dest_acc_en};
+    if (fp32_dest_acc_en) {
+        compute_hw.unpack_to_dest_mode.emplace(input_dfb, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
+    }
+    m2::KernelSpec compute{
+        .unique_id = m2::KernelSpecName{"compute"},
+        .source = std::filesystem::path{UWU_SC_COMPUTE_KERNEL_PATH},
+        .compiler_options = {.defines = std::move(compute_defines)},
+        .dfb_bindings = {m2::ConsumerOf(input_dfb, "src_cb_id"), m2::ProducerOf(output_dfb, "out_cb_id")},
+        .compile_time_args =
+            {{"per_core_block_cnt", static_cast<uint32_t>(num_tiles / num_tiles_per_block)},
+             {"per_core_block_tile_cnt", num_tiles_per_block}},
+        .hw_config = std::move(compute_hw),
+    };
 
-    return desc;
+    spec.kernels = {std::move(reader), std::move(writer), std::move(compute)};
+
+    // Local DFBs (src0, out0) require their producer AND consumer kernels co-located in the same WorkUnitSpec:
+    // reader produces src0 (consumed by compute), compute produces out0 (consumed by writer). All three run
+    // on the single core.
+    spec.work_units = {m2::WorkUnitSpec{
+        .name = "untilize_with_unpadding_single_core",
+        .kernels = {m2::KernelSpecName{"reader"}, m2::KernelSpecName{"writer"}, m2::KernelSpecName{"compute"}},
+        .target_nodes = core}};
+
+    m2::ProgramRunArgs run_args;
+    m2::ProgramRunArgs::KernelRunArgs reader_args{.kernel = m2::KernelSpecName{"reader"}};
+    m2::ProgramRunArgs::KernelRunArgs writer_args{.kernel = m2::KernelSpecName{"writer"}};
+
+    // Reader: read all tiles starting at page 0. Writer takes the full unpad descriptor. The compute kernel
+    // binds no tensor and takes only compile-time args, so it gets no KernelRunArgs entry.
+    reader_args.runtime_arg_values.push_back(
+        {core_0, {{"num_tiles", static_cast<uint32_t>(num_tiles)}, {"start_page_id", uint32_t{0}}}});
+    writer_args.runtime_arg_values.push_back(
+        {core_0,
+         {{"num_unpadded_W", static_cast<uint32_t>(output_w)},
+          {"padded_W_diff_blocks", padded_W_diff_blocks},
+          {"num_unpadded_Z", static_cast<uint32_t>(output_z)},
+          {"padded_Z_diff_blocks", padded_Z_diff_blocks},
+          {"num_unpadded_Y", static_cast<uint32_t>(output_y)},
+          {"padded_Y_diff_blocks", padded_Y_diff_blocks},
+          {"num_leftover_Y", num_leftover_Y},
+          {"num_unpadded_X", static_cast<uint32_t>(output_x)},
+          {"padded_X_size", padded_stick_size},
+          {"num_blocks_w_input", num_blocks_w_input},
+          {"num_blocks_w_output", num_blocks_w_output},
+          {"num_blocks_w_diff", num_blocks_w_diff},
+          {"block_row_size", block_row_size},
+          {"block_row_leftover_size", block_row_leftover_size}}});
+    run_args.kernel_run_args.push_back(std::move(reader_args));
+    run_args.kernel_run_args.push_back(std::move(writer_args));
+
+    run_args.tensor_args.emplace(
+        m2::TensorParamName{"input"}, m2::ProgramRunArgs::TensorArgument{std::cref(a.mesh_tensor())});
+    run_args.tensor_args.emplace(
+        m2::TensorParamName{"output"}, m2::ProgramRunArgs::TensorArgument{std::cref(output.mesh_tensor())});
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim

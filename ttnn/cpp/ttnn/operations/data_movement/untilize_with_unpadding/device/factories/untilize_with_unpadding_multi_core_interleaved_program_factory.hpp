@@ -6,12 +6,18 @@
 
 #include "ttnn/operations/data_movement/untilize_with_unpadding/device/untilize_with_unpadding_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/metal2_artifacts.hpp"
 
 namespace ttnn::prim {
 
+// Metal 2.0 untilize_with_unpadding default multi-core interleaved factory — the degenerate
+// ProgramSpecFactoryConcept. Every run-arg (work split, block-rep varargs) is a pure function of the
+// input/output layout, so there is nothing to vary between two dispatches that share a cache entry.
+// create_program_artifacts returns the spec PLUS all run-args; on a cache hit the framework just refreshes
+// the tensor bindings (UpdateTensorArgs). No extract_immutable_info, no create_per_enqueue_args, no custom
+// hash.
 struct UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const UntilizeWithUnpaddingParams& operation_attributes, const Tensor& input, Tensor& output);
 };
 
