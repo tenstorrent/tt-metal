@@ -20,6 +20,7 @@ NUM_INFERENCE_STEPS = 50
 NUM_PERF_RUNS = 3
 
 
+@pytest.mark.timeout(0)  # weight cache + multi-step traced inference exceeds default 300s
 @pytest.mark.parametrize(
     "width, height",
     [
