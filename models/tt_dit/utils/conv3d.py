@@ -486,6 +486,14 @@ _DEFAULT_BLOCKINGS = {
     (256, 128, (1, 3, 3)): (256, 32, 1, 8, 16),
     (32, 512, (1, 3, 3)): (32, 32, 1, 8, 16),  # conv_in (z_channels 8 -> aligned 32)
     (128, 32, (1, 3, 3)): (128, 32, 1, 8, 16),  # conv_out (out_ch 2 -> aligned 32)
+    # LTX-2.3 22B Video VAE encoder (I2V conditioning) conservative channel fallbacks.
+    # conv_in (48->64 aligned), res_x stacks, compress_*_res inner convs, conv_out (->128 means).
+    (64, 128, (3, 3, 3)): (64, 128, 1, 2, 2),  # conv_in
+    (128, 64, (3, 3, 3)): (128, 64, 1, 2, 2),  # compress_space_res inner conv (mult 2)
+    (256, 256, (3, 3, 3)): (128, 32, 1, 2, 2),  # res_x @256 / compress_time_res inner conv
+    (512, 128, (3, 3, 3)): (256, 32, 1, 1, 1),  # compress_all_res inner conv (mult 2)
+    (512, 512, (3, 3, 3)): (256, 32, 1, 1, 1),  # res_x @512
+    (1024, 1024, (3, 3, 3)): (256, 32, 1, 1, 1),  # res_x @1024 / compress_all_res inner conv (mult 1)
 }
 
 
