@@ -3,27 +3,18 @@
 
 """Up-front precompile collector for any ttnn pytest suite.
 
-Drives the op-agnostic C++ collector (``ttnn.graph.up_front_*``) across a whole
-pytest session via a call-phase hookwrapper: every op of every test body is
-stashed and deduped, then the distinct set is JIT-compiled once, in parallel, at
-session end — warming the on-disk JIT cache (``TT_METAL_CACHE``) so a subsequent
-real run finds its kernels already built.
+A call-phase hookwrapper runs every test body under NO_DISPATCH, stashing and deduping
+its ops via the C++ collector (``ttnn.graph.up_front_*``), then JIT-compiles the distinct
+set once, in parallel, at session end — warming the on-disk cache (``TT_METAL_CACHE``).
+A hookwrapper (vs re-invoking tests) reuses each test's own fixtures, so any suite works.
+``begin_collect(clear=False)`` wraps only the call phase (device setup stays real) and
+accumulates across tests.
 
-A hookwrapper is used (rather than re-invoking each test) because pytest runs each
-body through its own fixture machinery, so this works for arbitrary tests without
-knowing their signatures. ``begin_collect(clear=False)`` wraps ONLY the call phase,
-so NO_DISPATCH never spans fixture setup/teardown (the device is created for real in
-setup); ``clear=False`` makes the collector ACCUMULATE across tests.
+TWO PASSES: under NO_DISPATCH each body runs neutered (addr-0 buffers), so its asserts
+fail and are swallowed — pass 1 only collects + compiles. Re-run for the real, warm results:
 
-TWO PASSES: under NO_DISPATCH each body runs "neutered" (mocked addr-0 buffers,
-nothing dispatched), so its asserts fail and are swallowed — pass 1 only collects +
-compiles. Re-run the SAME suite over the SAME on-disk cache for the real, now-warm
-results:
-
-    # pass 1 — collect every op + parallel-compile the distinct set (warms the cache).
-    # Loading the plugin with -p IS the opt-in; it is active whenever loaded.
-    # (run from the repo root; PYTHONPATH=$PWD ensures the local `tests` package wins
-    #  over any foreign tt-metal checkout on an inherited PYTHONPATH)
+    # pass 1 — collect + parallel-compile (warms the cache). Loading the plugin IS the opt-in.
+    # PYTHONPATH=$PWD makes the local `tests` package win over any foreign checkout on sys.path.
     TT_METAL_CACHE=/tmp/c  PYTHONPATH="$PWD" pytest -p tests.plugins.up_front_collect <tests>
     # pass 2 — real run, warm (plugin not loaded)
     TT_METAL_CACHE=/tmp/c  pytest <tests>
@@ -31,17 +22,13 @@ results:
 Knobs:  UP_FRONT_COLLECT_WORKERS=N (0 => hardware_concurrency) ·
         UP_FRONT_COLLECT_DEVICE_ID=N (device for the session-end compile, default 0)
 
-Limitations:
-  * Tests that drive trace/graph capture are SKIPPED — NO_DISPATCH blocks the real
-    dispatch + buffer allocation that recording needs. They cold-compile in pass 2.
-  * A body that reads a tensor back / branches on values mid-body breaks on addr-0:
-    we capture the ops before that point; the rest cold-compile in pass 2.
-  * Ops that pick their program from live allocator state see empty L1 under
-    NO_DISPATCH and may collect a different variant than the real run uses.
+Cold-compiled in pass 2 instead (NO_DISPATCH can't capture them faithfully): tests driving
+trace/graph capture (skipped); ops after a mid-body tensor readback; ops whose program is
+chosen from live allocator state (they see empty L1 and may collect a different variant).
 
-Collect-time substitutions are all expressed as one of two reversible primitives
-(_AttrPatch / _RebindPatch), grouped into declarative sets (reference ops, verifiers,
-boundary) and entered together under a single ExitStack — see _collect_window.
+Every collect-time substitution is one of two reversible primitives (_AttrPatch /
+_RebindPatch), grouped into declarative sets and entered under one ExitStack — see
+_collect_window.
 """
 
 from __future__ import annotations
@@ -54,28 +41,23 @@ import sys
 
 import pytest
 
-# The plugin is active whenever it is loaded (``-p tests.plugins.up_front_collect``); loading it IS
-# the opt-in. To disable a load that some config forces, use pytest's own ``-p no:up_front_collect``.
+# Active whenever loaded (-p tests.plugins.up_front_collect); disable a forced load with pytest's
+# own -p no:up_front_collect.
 _WORKERS = int(os.environ.get("UP_FRONT_COLLECT_WORKERS", "0"))  # 0 => hardware_concurrency
 _DEVICE_ID = int(os.environ.get("UP_FRONT_COLLECT_DEVICE_ID", "0"))
-# UP_FRONT_REAL_ALLOC=1: collect with REAL buffer addresses (dispatch still blocked) instead of
-# addr-0 mocking, so address-baked / address-branched kernels (pool reader, move fwd/bwd) warm.
-# Costs real device memory (~the real run's peak) — only use when the model fits.
+# Collect with REAL buffer addresses (dispatch still blocked) instead of addr-0 mocking, so
+# address-baked kernels (pool reader, move) warm. Costs ~the real run's peak memory; use when it fits.
 _REAL_ALLOC = os.environ.get("UP_FRONT_REAL_ALLOC") == "1"
-# Fast collect (default): in the collect window (results thrown away under NO_DISPATCH) replace
-# expensive HOST-side torch work — torch.randn -> zeros, the torch *reference* conv/matmul/layer_norm
-# -> shape-correct zeros, comp_pcc -> no-op — and allocate ttnn.from_torch SHAPE-ONLY (skip the host
-# tilize/convert/copy; the dominant collect cost on weight-heavy models). Values are irrelevant under
-# NO_DISPATCH and collected programs depend only on ttnn op shapes/config, so this does NOT change what
-# is collected; the shape-only boundary falls back to the real path for anything it can't safely fake.
-# UP_FRONT_FAST_COLLECT=0 is a debug escape hatch: run the body with real torch (full-fidelity, slow).
+# Fast collect (default): swap host reference work for shape-correct stand-ins (randn/conv/matmul/
+# layer_norm -> zeros, comp_pcc -> no-op) and allocate ttnn.from_torch shape-only. Values are
+# irrelevant under NO_DISPATCH and programs depend only on op shapes/config, so collection is
+# unchanged. =0 is a debug escape hatch: run the body with real torch (slow).
 _FAST_COLLECT = os.environ.get("UP_FRONT_FAST_COLLECT", "1") == "1"
-# UP_FRONT_COLLECT_NO_COMPILE=1: collect/dedup only, skip the session-end parallel compile. Used to
-# isolate the body-run cost from the compile floor when benchmarking.
+# Collect/dedup only, skip the session-end compile (isolates body-run cost when benchmarking).
 _NO_COMPILE = os.environ.get("UP_FRONT_COLLECT_NO_COMPILE") == "1"
 
-# Bodies that drive trace/graph capture can't run under NO_DISPATCH (it blocks the
-# dispatch + alloc that recording needs). Heuristic: scan the test function source.
+# A body is skipped (cold-compiles in pass 2) if its source names any of these: trace/graph capture
+# needs the real dispatch + alloc that NO_DISPATCH blocks.
 _CAPTURE_MARKERS = (
     "begin_trace_capture",
     "capture_trace",
@@ -87,8 +69,7 @@ _CAPTURE_MARKERS = (
 
 @dataclasses.dataclass
 class CollectStats:
-    """Session counters printed at the end. `bodies/swallowed/skipped_capture` are hook-level;
-    `shallow/fallback` count the shape-only boundary's hits vs real-path fallbacks."""
+    """Session counters printed at the end (shallow/fallback = shape-only boundary hits vs fallbacks)."""
 
     bodies: int = 0
     swallowed: int = 0
@@ -117,20 +98,13 @@ def _torch_to_ttnn_dtype(torch_dtype):
     }.get(torch_dtype, ttnn.bfloat16)
 
 
-# ---------------------------------------------------------------------------
-# Patch primitives. Every collect-time substitution is one of these two,
-# entered together under a single ExitStack (see _collect_window) so each has
-# uniform, automatic restore instead of a hand-rolled try/finally.
-# ---------------------------------------------------------------------------
+# Patch primitives: every collect-time substitution is one of these two, entered together under one
+# ExitStack (see _collect_window) for uniform automatic restore.
 
 
 class _AttrPatch:
-    """Reversibly replace ``obj.attr`` with ``build(original)`` for the collect window.
-
-    For callables reached by attribute access on a stable object — e.g. ``torch.randn``,
-    ``ttnn.from_torch``, ``torch.Tensor.__matmul__``. ``build`` receives the original (some
-    replacements wrap it; reference stand-ins ignore it).
-    """
+    """Reversibly set ``obj.attr = build(original)``. For attribute-reached callables —
+    torch.randn, ttnn.from_torch, torch.Tensor.__matmul__ (``build`` may wrap the original or ignore it)."""
 
     def __init__(self, obj, attr, build):
         self._obj, self._attr, self._build = obj, attr, build
@@ -146,11 +120,10 @@ class _AttrPatch:
 
 
 class _RebindPatch:
-    """Reversibly rebind EVERY module attribute that ``is`` ``home_module.attr`` to ``build(original)``.
+    """Reversibly rebind EVERY module attr that ``is`` ``home_module.attr`` to ``build(original)``.
 
-    Needed for helpers pulled into test modules via ``from x import y`` — patching the home module
-    alone wouldn't reach those local copies, so we rebind every reference. No-op if the home module
-    isn't imported or lacks the attribute. All matches share one original, so restore is to that.
+    Reaches helpers pulled in via ``from x import y`` (patching the home module alone wouldn't).
+    No-op if the home module isn't imported or lacks the attr; all matches share the one original.
     """
 
     def __init__(self, home_module, attr, build):
@@ -180,8 +153,8 @@ class _RebindPatch:
 
 
 def _try_shallow(stats, alloc):
-    """Run a shape-only ttnn allocation, tallying shallow vs fallback. Returns the allocated
-    tensor, or None if it raised — in which case the caller falls back to the real ttnn path."""
+    """Run a shape-only ttnn allocation; tally it. Returns the tensor, or None on failure
+    (caller then falls back to the real ttnn path)."""
     try:
         t = alloc()
         stats.shallow += 1
@@ -191,18 +164,12 @@ def _try_shallow(stats, alloc):
         return None
 
 
-# ---------------------------------------------------------------------------
 # Declarative patch sets, built lazily so torch/ttnn imports stay deferred.
-# ---------------------------------------------------------------------------
 
 
 def _reference_op_patches():
-    """Host reference compute -> cheap shape-correct stand-ins.
-
-    Under NO_DISPATCH the values are thrown away and the collected programs depend only on ttnn op
-    shapes/config, so zeroing the inputs / torch reference conv / matmul / layer_norm does not change
-    WHAT is collected — it just drops the wasted golden-reference + RNG cost. ttnn ops are untouched.
-    """
+    """Host reference compute -> shape-correct zeros. Drops the wasted golden-reference + RNG cost;
+    collection is unchanged (programs depend on shapes/config, not values). ttnn ops are untouched."""
     import torch
     import torch.nn.functional as F
 
@@ -232,9 +199,7 @@ def _reference_op_patches():
         return torch.zeros_like(input)  # layer_norm / rms_norm output shape == input shape
 
     def _fast_matmul(a, b):
-        # Host golden reference matmul/@/.matmul()/bmm -> shape-correct zeros, NO GEMM compute.
-        # Output shape via meta inference (no data) so all broadcasting rules stay exact. Only the
-        # host reference uses these; ttnn.matmul is untouched, so the collected programs are unchanged.
+        # Shape via meta inference (no data, broadcasting stays exact); no GEMM compute.
         try:
             shp = tuple(real_matmul(a.to("meta"), b.to("meta")).shape)
             return torch.zeros(shp, dtype=getattr(a, "dtype", torch.bfloat16), device=getattr(a, "device", "cpu"))
@@ -260,12 +225,9 @@ def _reference_op_patches():
 
 
 def _verifier_patches():
-    """Host numeric verifiers -> no-ops.
-
-    A verifier failing on the addr-0/zeros readback aborts the rest of a multi-op body and loses its
-    ops; results are meaningless under NO_DISPATCH anyway. Rebound across modules because tests pull
-    these in via ``from ... import``. comp_pcc has two possible homes; either (or both) is covered.
-    """
+    """Host numeric verifiers -> no-ops: a verifier failing on the addr-0 readback would abort the
+    rest of a multi-op body and lose its ops (results are meaningless under NO_DISPATCH anyway).
+    comp_pcc has two possible home modules; both are covered."""
 
     def _pcc(*a, **k):
         return (True, 0.999999)
@@ -281,12 +243,9 @@ def _verifier_patches():
 
 
 def _boundary_patches(stats):
-    """ttnn<->torch boundary -> SHAPE-ONLY device allocation.
-
-    Program build needs only the spec, so ttnn.from_torch and torch2tt_tensor skip the host
-    tilize/convert/copy (the dominant collect cost on weight-heavy bodies). Anything not safely
-    shape-only (mesh_mapper, custom tile, host/meta tensors) falls back to the real path.
-    """
+    """ttnn<->torch boundary -> shape-only device allocation: program build needs only the spec, so
+    from_torch / torch2tt_tensor skip the host tilize/convert/copy (the dominant collect cost on
+    weight-heavy bodies). Not-safely-shape-only cases (mesh_mapper, custom tile, host/meta) fall back."""
     import ttnn
 
     def _build_from_torch(real_from_torch):
@@ -339,7 +298,7 @@ def _boundary_patches(stats):
         return _shallow_from_torch
 
     def _build_torch2tt(real_t2tt):
-        # torch2tt_tensor builds device tensors outside from_torch (ttnn.Tensor(t).to(...)); same lever.
+        # torch2tt_tensor builds device tensors outside from_torch; same shape-only lever.
         interleaved_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED)
 
         def _shallow_torch2tt(
@@ -380,11 +339,8 @@ def _collect_patches(stats):
 
 @contextlib.contextmanager
 def _collect_window(stats):
-    """Enter every active patch under one ExitStack, run the body, restore all on exit (LIFO).
-
-    With no active patches (UP_FRONT_FAST_COLLECT=0) this is a transparent pass-through, so the body
-    runs with real torch.
-    """
+    """Enter every active patch under one ExitStack, run the body, restore on exit. With no active
+    patches (UP_FRONT_FAST_COLLECT=0) it's a transparent pass-through (body runs with real torch)."""
     with contextlib.ExitStack() as stack:
         for patch in _collect_patches(stats):
             stack.enter_context(patch)
@@ -409,12 +365,11 @@ def pytest_runtest_call(item):
 
     if _drives_capture(item):
         _STATS.skipped_capture += 1
-        return (yield)  # let it run normally; it cold-compiles in pass 2
+        return (yield)  # runs normally; cold-compiles in pass 2
 
     _STATS.bodies += 1
-    # UP_FRONT_LOG_SWALLOWED=1: per-body diagnostic — which tests threw under NO_DISPATCH and
-    # how many ops each stashed before the throw (reveals coverage: a body that throws BEFORE
-    # stashing its op is a real miss; one that throws on the addr-0 readback after stashing is fine).
+    # UP_FRONT_LOG_SWALLOWED=1: per-body trace of throw + ops-stashed-before-throw (a throw BEFORE
+    # stashing is a real miss; one on the addr-0 readback after stashing is fine).
     _log = os.environ.get("UP_FRONT_LOG_SWALLOWED")
     n_before = ttnn.graph.up_front_num_collected() if _log else 0
     swallowed = False
@@ -422,11 +377,10 @@ def pytest_runtest_call(item):
     ttnn.graph.up_front_begin_collect(clear=False, real_alloc=_REAL_ALLOC)  # accumulate; wraps ONLY the body
     try:
         with _collect_window(_STATS):
-            return (yield)  # body runs with the active collect-time patches; ttnn ops still stash
+            return (yield)  # ops stash into the collector as the body runs
     except Exception as e:
-        # Expected under NO_DISPATCH: a readback/assert on an addr-0 output. The
-        # program was already stashed by the funnel before the failure. Swallow so
-        # pass 1 stays green (its results are meaningless — pass 2 is the real run).
+        # Expected under NO_DISPATCH: a readback/assert on an addr-0 output, after the program was
+        # already stashed. Swallow so pass 1 stays green (its results are meaningless).
         _STATS.swallowed += 1
         swallowed = True
         exc_info = f"{type(e).__name__}: {str(e)[:140]}"
@@ -445,7 +399,7 @@ def pytest_runtest_call(item):
 def pytest_sessionstart(session):
     import ttnn
 
-    ttnn.graph.up_front_clear()  # clean slate before accumulating across the session
+    ttnn.graph.up_front_clear()  # clean slate before the session
 
 
 def pytest_sessionfinish(session, exitstatus):
