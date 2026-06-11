@@ -3822,9 +3822,11 @@ def test_env_compat_detects_unpatched_transformers_5x() -> None:
 
     fake_tf = unittest.mock.MagicMock()
     fake_tf.__version__ = "5.8.1"
-    with unittest.mock.patch.object(Path, "read_text", fake_read_text), unittest.mock.patch.object(
-        Path, "is_file", fake_is_file
-    ), unittest.mock.patch.dict(sys.modules, {"transformers": fake_tf}):
+    with (
+        unittest.mock.patch.object(Path, "read_text", fake_read_text),
+        unittest.mock.patch.object(Path, "is_file", fake_is_file),
+        unittest.mock.patch.dict(sys.modules, {"transformers": fake_tf}),
+    ):
         ok, problems = _check_demo_environment_compat()
     assert not ok, "env-check must fail on unpatched transformers 5.x repo"
     joined = "\n".join(problems).lower()
@@ -4930,8 +4932,9 @@ def test_auto_onboard_skip_llm_produces_valid_proposal() -> None:
             status_hint="NEW",
         ),
     ]
-    with patch.object(_ao, "probe_model", return_value=fake_probe), patch.object(
-        _ao, "discover_components_from_hf_id", return_value=fake_components
+    with (
+        patch.object(_ao, "probe_model", return_value=fake_probe),
+        patch.object(_ao, "discover_components_from_hf_id", return_value=fake_components),
     ):
         proposal = _ao.auto_onboard("fake/test-model", skip_llm=True)
 
@@ -5656,3 +5659,49 @@ def test_decode_layer_probe_cache_present_for_iteration_reuse() -> None:
         "PCC-repair iterations with the same collapse signature reuse "
         "the HF reference forward pass"
     )
+
+
+def test_read_graduated_children_injects_child_stubs(tmp_path):
+    ls = importlib.import_module("scripts.tt_hw_planner.llm_synth")
+    demo = tmp_path / "demo"
+    (demo / "_stubs").mkdir(parents=True)
+    (demo / "_stubs" / "parent_child_a.py.last_good_native").write_text(
+        "# CHILD_A_GRADUATED_RECIPE\nclass ChildA: pass\n"
+    )
+    (demo / "_stubs" / "parent_child_b.py").write_text("# CHILD_B_CURRENT_STUB\nclass ChildB: pass\n")
+    components = [
+        {"name": "parent", "status": "NEW"},
+        {
+            "name": "parent_child_a",
+            "submodule_path": "parent.child_a",
+            "_added_by_decomposition_of": "parent",
+            "_child_short_name": "child_a",
+        },
+        {
+            "name": "parent_child_b",
+            "submodule_path": "parent.child_b",
+            "_added_by_decomposition_of": "parent",
+            "_child_short_name": "child_b",
+        },
+        {"name": "unrelated", "_added_by_decomposition_of": "someone_else"},
+    ]
+    block = ls._read_graduated_children(demo, components, "parent")
+    assert block is not None, "recomposed parent must receive its graduated children as reference"
+    assert "CHILD_A_GRADUATED_RECIPE" in block, "must prefer the .last_good_native graduated snapshot"
+    assert "CHILD_B_CURRENT_STUB" in block, "must fall back to the current stub when no snapshot exists"
+    assert "child_a" in block and "child_b" in block, "child labels must be present"
+    assert "unrelated" not in block, "must not pull in children of other parents"
+    assert ls._read_graduated_children(demo, components, "leaf_with_no_children") is None
+
+
+def test_build_prompts_emits_building_blocks_section():
+    ls = importlib.import_module("scripts.tt_hw_planner.llm_synth")
+    import inspect
+
+    src = inspect.getsource(ls.build_prompts)
+    assert "building_blocks" in src, "build_prompts must accept a building_blocks argument"
+    assert "GRADUATED BUILDING BLOCKS" in src, (
+        "build_prompts must inject a GRADUATED BUILDING BLOCKS section so a "
+        "recomposed parent's prompt carries its children's proven recipes"
+    )
+    assert "building_blocks_block" in src

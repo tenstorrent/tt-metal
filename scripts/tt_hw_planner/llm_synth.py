@@ -26,7 +26,6 @@ from .bringup_loop import (
 )
 from .family_backends import DEFAULT_TEMPLATE_PYTEST_EXCLUDE_K
 
-
 _TTNN_CHEATSHEET = """
 TTNN op surface available for synthesis. Use ONLY these. If a feature you
 need is missing, leave a `# TODO(ttnn-gap): ...` comment and skip it rather
@@ -576,6 +575,34 @@ def _camel(name: str) -> str:
     return "".join(part.capitalize() for part in re.split(r"[^A-Za-z0-9]+", name) if part)
 
 
+def _read_graduated_children(demo_dir: Path, components: List[dict], parent_name: str) -> Optional[str]:
+    children = [c for c in components if isinstance(c, dict) and c.get("_added_by_decomposition_of") == parent_name]
+    if not children:
+        return None
+    blocks: List[str] = []
+    for ch in children:
+        safe = _safe_id(ch.get("name") or "")
+        if not safe:
+            continue
+        snap = demo_dir / "_stubs" / f"{safe}.py.last_good_native"
+        cur = demo_dir / "_stubs" / f"{safe}.py"
+        src = snap if snap.is_file() else (cur if cur.is_file() else None)
+        if src is None:
+            continue
+        try:
+            text = src.read_text()
+        except Exception:
+            continue
+        if len(text) > 4000:
+            text = text[:4000] + "\n# ... [child stub truncated] ...\n"
+        label = ch.get("_child_short_name") or ch.get("name") or safe
+        sub = ch.get("submodule_path") or ""
+        blocks.append(f"# ==== graduated child `{label}` ({sub}) ====\n{text}")
+    if not blocks:
+        return None
+    return "\n\n".join(blocks)
+
+
 def build_prompts(
     *,
     component_name: str,
@@ -584,6 +611,7 @@ def build_prompts(
     hf_ctx: HFContext,
     new_shape: dict,
     sibling_example: Optional[str],
+    building_blocks: Optional[str] = None,
     previous_attempt: Optional[str] = None,
     previous_failure: Optional[str] = None,
     manifest_path: Optional[Path] = None,
@@ -638,6 +666,15 @@ def build_prompts(
         f"-----------------------------------------------------------\n"
         f"{sibling_example}\n"
         if sibling_example
+        else ""
+    )
+
+    building_blocks_block = (
+        f"\n\nGRADUATED BUILDING BLOCKS (your decomposed children, already on "
+        f"device and PCC-passing -- reuse their proven recipes verbatim)\n"
+        f"-------------------------------------------------------------------------\n"
+        f"{building_blocks}\n"
+        if building_blocks
         else ""
     )
 
@@ -713,7 +750,7 @@ def build_prompts(
         PROJECT CONVENTIONS (mandatory)
         -------------------------------
         {_PROJECT_CONVENTIONS}
-        {sibling_block}{constraint_block}{retry_block}
+        {sibling_block}{building_blocks_block}{constraint_block}{retry_block}
 
         OUTPUT
         ======
@@ -1035,6 +1072,7 @@ def synthesize_component(
         fetch_upstream=fetch_upstream,
     )
     sibling_example = _read_sibling_example(repo_root, sibling_hint)
+    building_blocks = _read_graduated_children(demo_dir, data.get("components", []), component_name)
 
     test_path, _gen, _existed = _emit_pcc_template(
         demo_dir=demo_dir,
@@ -1065,6 +1103,7 @@ def synthesize_component(
             hf_ctx=hf_ctx,
             new_shape=new_shape,
             sibling_example=sibling_example,
+            building_blocks=building_blocks,
             manifest_path=manifest_path,
             opplan_path=opplan_path,
         )
@@ -1092,6 +1131,7 @@ def synthesize_component(
             hf_ctx=hf_ctx,
             new_shape=new_shape,
             sibling_example=sibling_example,
+            building_blocks=building_blocks,
             previous_attempt=previous_attempt,
             previous_failure=previous_failure,
             manifest_path=manifest_path,
@@ -1653,6 +1693,7 @@ def emit_prompts(
             hf_ctx=hf_ctx,
             new_shape=new_shape,
             sibling_example=sibling_example,
+            building_blocks=building_blocks,
             manifest_path=manifest_path,
             opplan_path=opplan_path,
         )
