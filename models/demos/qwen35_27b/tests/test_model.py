@@ -23,7 +23,7 @@ from models.tt_transformers.tt.load_checkpoints import (
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4), "P150x4": (1, 4)}.get(
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4), "P150x4": (1, 4), "P150": (1, 1)}.get(
             os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
@@ -155,7 +155,7 @@ def test_vision_model_inference(
 
     tt_out = ttnn.to_torch(
         tt_out,
-        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1),
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3),
     )
 
     tt_output_torch = tt_out[:, 0:1, :, : model_args.hf_config.vision_config.out_hidden_size].squeeze(0).squeeze(0)
