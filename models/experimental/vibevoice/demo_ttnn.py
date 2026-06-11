@@ -2,24 +2,36 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-VibeVoice TTNN demo — run inference and compare against website golden audio.
+VibeVoice TTNN demo — run on-device inference and compare against website golden audio.
 
 Defaults to the shortest golden clip with a local text script (1p_CH2EN /
 resources/text/1p_Ch2EN.txt vs resources/golden/1p_CH2EN.wav from
 https://microsoft.github.io/VibeVoice/).
 
+This script runs TT inference only (no HuggingFace reference model). For an optional
+PyTorch baseline on the same inputs, use demo_hf.py or reference/run_inference.py.
+
+Multi-speaker climate demos auto-enable voice cloning from resources/voices/:
+  Speaker 1 Alice  -> en-Alice_woman.wav
+  Speaker 2 Carter -> en-Carter_man.wav
+  Speaker 3 Frank  -> en-Frank_man.wav
+  Speaker 4 Maya   -> en-Maya_woman.wav
+
 Usage (from tt-metal root):
     python models/experimental/vibevoice/demo_ttnn.py
     python models/experimental/vibevoice/demo_ttnn.py --demo 2p_goat
-    python models/experimental/vibevoice/demo_ttnn.py --max_new_tokens 128
+    python models/experimental/vibevoice/demo_ttnn.py --demo 4p_climate_45min --output_dir ~/vv_ttnn_long
+    python models/experimental/vibevoice/demo_ttnn.py --demo 4p_climate_45min --max_new_tokens 256
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import sys
 from pathlib import Path
+from typing import Optional
 
 import torch
 import ttnn
@@ -32,7 +44,12 @@ from models.experimental.vibevoice.common.golden_audio_utils import (
     text_path_for_demo,
 )
 from models.experimental.vibevoice.common.model_utils import ensure_model_weights
-from models.experimental.vibevoice.common.resource_utils import ensure_demo_resources, load_script
+from models.experimental.vibevoice.common.resource_utils import (
+    DEMO_VOICE_CLONES,
+    build_voice_samples,
+    ensure_demo_resources,
+    load_script,
+)
 from models.experimental.vibevoice.tt.ttnn_vibevoice_model import TTVibeVoiceModel
 
 _VV_ROOT = Path(__file__).resolve().parent
@@ -63,11 +80,17 @@ def _load_wav(path: Path) -> torch.Tensor:
     return wav
 
 
-def _voice_path() -> str:
-    from models.experimental.vibevoice.common.config import VOICES_DIR
-
-    p = VOICES_DIR / "en-Alice_woman.wav"
-    return str(p) if p.is_file() else str(next(VOICES_DIR.glob("*.wav")))
+def _demo_output_paths(out_dir: Path, demo_id: str) -> dict[str, Path]:
+    """Per-demo output layout: ``{out_dir}/{demo_id}/{demo_id}_*.wav``."""
+    demo_dir = out_dir / demo_id
+    demo_dir.mkdir(parents=True, exist_ok=True)
+    return {
+        "dir": demo_dir,
+        "tt": demo_dir / f"{demo_id}_tt.wav",
+        "golden": demo_dir / f"{demo_id}_golden.wav",
+        "script": demo_dir / f"{demo_id}_script.txt",
+        "meta": demo_dir / f"{demo_id}_meta.json",
+    }
 
 
 def _compare_audio(golden: torch.Tensor, tt: torch.Tensor) -> dict:
@@ -101,16 +124,30 @@ def main() -> int:
         default=None,
         help=f"Golden demo id (default: shortest with text, usually {MINIMAL_GOLDEN_DEMO_ID})",
     )
-    ap.add_argument("--output_dir", default="/tmp/vv_ttnn_out")
+    ap.add_argument(
+        "--output_dir",
+        default="/tmp/vv_ttnn_out",
+        help="Root output dir; writes {output_dir}/{demo_id}/{demo_id}_tt.wav etc.",
+    )
     ap.add_argument("--model_path", default=None, help="VibeVoice checkpoint (auto-download if omitted)")
-    ap.add_argument("--voice", default=None, help="Voice cloning WAV (default: en-Alice_woman)")
+    ap.add_argument(
+        "--no-voice-cloning",
+        action="store_true",
+        help="Disable voice cloning even when the demo has a speaker preset",
+    )
     ap.add_argument("--cfg_scale", type=float, default=1.3)
     ap.add_argument("--num_steps", type=int, default=10)
     ap.add_argument(
         "--max_new_tokens",
         type=int,
         default=None,
-        help="Optional AR cap (default: until EOS)",
+        help="Optional AR cap (default: until EOS, bounded by max_length_times)",
+    )
+    ap.add_argument(
+        "--max_length_times",
+        type=float,
+        default=2.0,
+        help="Max AR steps ≈ max_length_times × prefill token length (HF default: 2)",
     )
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
@@ -131,77 +168,108 @@ def main() -> int:
         return 1
 
     script = load_script(text_path)
-    voice = args.voice or _voice_path()
+    paths = _demo_output_paths(out_dir, demo_id)
+    paths["script"].write_text(script + "\n", encoding="utf-8")
+    shutil.copy2(golden_wav, paths["golden"])
 
-    print(f"[demo_ttnn] demo={demo_id}  text={text_path.name}  golden={golden_wav.name}")
-    print(f"[demo_ttnn] {demo_entry.website_title} ({demo_entry.website_section})")
+    use_voice_cloning = not args.no_voice_cloning and demo_id in DEMO_VOICE_CLONES
+    voice_mapping: Optional[list[dict[str, str]]] = None
+    voice_samples: Optional[list[str]] = None
+    if use_voice_cloning:
+        voice_samples, voice_mapping = build_voice_samples(script, demo_id)
+
+    print(f"[demo_ttnn] demo={demo_id}  text={text_path.name}  golden={golden_wav.name}", flush=True)
+    print(f"[demo_ttnn] {demo_entry.website_title} ({demo_entry.website_section})", flush=True)
+    print(f"[demo_ttnn] output dir: {paths['dir']}", flush=True)
+    print(f"[demo_ttnn] golden reference → {paths['golden']}", flush=True)
+    print("[demo_ttnn] TT-only inference (no HuggingFace reference model)", flush=True)
+    if use_voice_cloning:
+        print("[demo_ttnn] voice cloning enabled (on-device speech prefill):", flush=True)
+        for entry in voice_mapping or []:
+            print(
+                f"  Speaker {entry['speaker_id']} ({entry['name']}) → {entry['voice_file']}",
+                flush=True,
+            )
+    else:
+        print("[demo_ttnn] text-only prompt (no voice cloning samples)", flush=True)
 
     from vibevoice.processor.vibevoice_processor import VibeVoiceProcessor
 
     processor = VibeVoiceProcessor.from_pretrained(model_path)
-    inputs = processor(
-        text=[script],
-        voice_samples=[[voice]],
-        padding=True,
-        return_tensors="pt",
-        return_attention_mask=True,
-    )
+    processor_kwargs = {
+        "text": [script],
+        "padding": True,
+        "return_tensors": "pt",
+        "return_attention_mask": True,
+    }
+    if voice_samples:
+        processor_kwargs["voice_samples"] = [voice_samples]
+    inputs = processor(**processor_kwargs)
     prefill_len = inputs["input_ids"].shape[1]
 
-    # Voice prefill embeds on CPU (avoids long-waveform acoustic encode on device L1).
-    from vibevoice.modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
-
-    ref_prefill = VibeVoiceForConditionalGenerationInference.from_pretrained(
-        model_path,
-        torch_dtype=torch.float32,
-        device_map="cpu",
-        attn_implementation="sdpa",
+    max_ar_steps = args.max_new_tokens
+    if max_ar_steps is None:
+        max_ar_steps = int(args.max_length_times * prefill_len)
+    print(
+        f"[demo_ttnn] prefill tokens={prefill_len}  max AR steps≈{max_ar_steps} (max_length_times={args.max_length_times})",
+        flush=True,
     )
-    ref_prefill.eval()
-    with torch.no_grad():
-        _, prefill_embeds = ref_prefill._process_speech_inputs(
-            inputs["speech_tensors"].to(ref_prefill.dtype),
-            inputs["speech_masks"],
-        )
-    speech_scale = ref_prefill.model.speech_scaling_factor.item()
-    speech_bias = ref_prefill.model.speech_bias_factor.item()
-    del ref_prefill
 
     mesh = ttnn.open_device(device_id=0, l1_small_size=32768)
     try:
-        print("[demo_ttnn] Loading TTVibeVoiceModel...")
+        print("[demo_ttnn] Loading TTVibeVoiceModel...", flush=True)
         tt_model = TTVibeVoiceModel.from_checkpoint(
             mesh,
             model_path,
             cfg_scale=args.cfg_scale,
             num_diffusion_steps=args.num_steps,
         )
-        tt_model.set_speech_scale_bias(speech_scale, speech_bias)
 
         torch.manual_seed(args.seed)
-        print("[demo_ttnn] TT generate...")
-        tt_out = tt_model.generate(
-            input_ids=inputs["input_ids"],
-            attention_mask=inputs["attention_mask"],
-            speech_input_mask=inputs["speech_input_mask"],
-            prefill_speech_embeds=prefill_embeds,
-            tokenizer=processor.tokenizer,
-            cfg_scale=args.cfg_scale,
-            num_diffusion_steps=args.num_steps,
-            max_new_tokens=args.max_new_tokens,
-        )
+        print("[demo_ttnn] TT generate...", flush=True)
+        generate_kwargs = {
+            "input_ids": inputs["input_ids"],
+            "attention_mask": inputs["attention_mask"],
+            "speech_input_mask": inputs["speech_input_mask"],
+            "tokenizer": processor.tokenizer,
+            "cfg_scale": args.cfg_scale,
+            "num_diffusion_steps": args.num_steps,
+            "max_new_tokens": args.max_new_tokens,
+            "max_length_times": args.max_length_times,
+        }
+        if voice_samples and inputs.get("speech_tensors") is not None:
+            generate_kwargs["speech_tensors"] = inputs["speech_tensors"]
+            generate_kwargs["speech_masks"] = inputs["speech_masks"]
+        tt_out = tt_model.generate(**generate_kwargs)
         tt_speech = tt_out.speech_outputs[0].to(torch.float32).reshape(-1)
         tt_gen = tt_out.sequences[0, prefill_len:]
     finally:
         ttnn.close_device(mesh)
 
-    tt_path = out_dir / "tt.wav"
-    golden_out = out_dir / "golden.wav"
+    tt_path = paths["tt"]
+    golden_out = paths["golden"]
     _write_wav(tt_path, tt_speech)
-    shutil.copy2(golden_wav, golden_out)
 
     golden = _load_wav(golden_wav)
     metrics = _compare_audio(golden, tt_speech)
+
+    meta = {
+        "demo_id": demo_id,
+        "website_title": demo_entry.website_title,
+        "website_section": demo_entry.website_section,
+        "text_file": text_path.name,
+        "voice_cloning": use_voice_cloning,
+        "voice_mapping": voice_mapping,
+        "prefill_tokens": prefill_len,
+        "ar_tokens_generated": int(tt_gen.numel()),
+        "max_length_times": args.max_length_times,
+        "max_new_tokens": args.max_new_tokens,
+        "tt_wav": str(tt_path),
+        "golden_wav": str(golden_out),
+        "script_copy": str(paths["script"]),
+        **metrics,
+    }
+    paths["meta"].write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
 
     mel_msg = (
         f"log-mel L1={metrics['log_mel_l1']:.4f}"
@@ -220,7 +288,7 @@ def main() -> int:
             "demo run; TT free-running LM may stop at a different EOS step."
         )
 
-    print(f"[demo_ttnn] DONE → {out_dir}/tt.wav  vs  {out_dir}/golden.wav")
+    print(f"[demo_ttnn] DONE → {tt_path.name}  vs  {golden_out.name}  under {paths['dir']}/", flush=True)
     return 0
 
 
