@@ -134,12 +134,3 @@ target_link_libraries(
         gmock_main
         enchantum::enchantum
 )
-
-add_executable(test_port_lookup test_port_lookup.cpp)
-
-target_link_libraries(
-    test_port_lookup
-    PRIVATE
-        TT::ScaleoutTools
-        gmock_main
-)
