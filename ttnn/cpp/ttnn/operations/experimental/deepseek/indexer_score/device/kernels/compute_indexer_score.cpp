@@ -98,36 +98,37 @@ inline void set_mul_mode() {
     // guarded: qk and acc share acc_fmt, so this never actually reconfigs (no-op stall removed).
     pack_reconfig_data_format(qk_cb, acc_cb);
     mul_bcast_cols_init_short(qk_cb, w_cb);
+    // Override the math init with acc_to_dest=1 so each mul_tiles_bcast_cols MACs onto the same
+    // DEST tile (hardware accumulate) instead of writing its own. tile_regs_acquire zeroes the
+    // tile, so head 0 seeds it; the whole chunk's head reduction then needs a single pack rather
+    // than one packer-L1-acc round trip per head (the old serialized same-address RMW chain).
+    MATH((llk_math_eltwise_binary_init<ckernel::EltwiseBinaryType::ELWMUL, ckernel::BroadcastType::COL, MATH_FIDELITY>(
+        qk_cb, w_cb, 1 /*acc_to_dest*/)));
 }
 
-/** One DEST pass of the mul+accumulate phase: acc_cb tile 0 += sum_h relu(qk_cb[h]) * w[w_base+h],
- *  accumulated by the packer (pack_reconfig_l1_acc) straight from DEST -- no cb_mul, no per-head
- *  add_tiles round-trip. `first` is the very first pass of the output tile and seeds acc (l1_acc
- *  off on head 0). Caller reserves/pushes acc_cb and resets l1_acc afterwards. */
+/** Mul+accumulate one chunk of `n` heads (all resident in qk_cb) onto the output tile via the
+ *  hardware MAC: dst0 += sum_h relu(qk_cb[h]) * w[w_base+h], summed in DEST by acc_to_dest, then
+ *  packed once onto acc_cb[acc_slot]. `first` is the first chunk of the output tile and overwrites
+ *  the slot (l1_acc off); later chunks (streamed / over-cap head groups) L1-accumulate onto it.
+ *  Caller reserves/pushes acc_cb and resets l1_acc afterwards. */
 template <uint32_t qk_cb, uint32_t w_cb, uint32_t acc_cb>
-void mul_accum_pass(uint32_t w_base, bool first, uint32_t acc_slot) {
-    cb_wait_front(qk_cb, heads_per_dest_pass);
+void mul_accum_chunk(uint32_t w_base, uint32_t n, bool first, uint32_t acc_slot) {
+    cb_wait_front(qk_cb, n);
     tile_regs_acquire();
-    for (uint32_t h = 0; h < heads_per_dest_pass; ++h) {
-        mul_tiles_bcast_cols(qk_cb, w_cb, h, w_base + h, h);
+    for (uint32_t h = 0; h < n; ++h) {
+        mul_tiles_bcast_cols(qk_cb, w_cb, h, w_base + h, 0);  // dst0 += relu(qk[h]) * w[h]
     }
     tile_regs_commit();
     tile_regs_wait();
-    pack_reconfig_l1_acc(first ? 0 : 1);  // first pass seeds (overwrite), all others accumulate
-    for (uint32_t h = 0; h < heads_per_dest_pass; ++h) {
-        pack_tile<true>(h, acc_cb, acc_slot);  // every head packs onto the output tile acc_slot
-        if (first && h == 0) {
-            pack_reconfig_l1_acc(1);  // seeded: accumulate the remaining heads of the first pass
-        }
-    }
+    pack_reconfig_l1_acc(first ? 0 : 1);   // first chunk seeds (overwrite), later chunks accumulate
+    pack_tile<true>(0, acc_cb, acc_slot);  // one pack for the whole chunk's head sum
     tile_regs_release();
-    cb_pop_front(qk_cb, heads_per_dest_pass);
+    cb_pop_front(qk_cb, n);
 }
 
 /** Head reduction for one output tile (r, c): acc front = sum_h relu(q[h,r].k[c]^T) * w[h,r],
- *  summed by the packer L1-accumulation (mul_accum_pass). Caller reserves cb_acc and pushes it.
- *  Mirrors the original inner loop; factored out so the masked-suffix and unmasked-prefix paths
- *  share it. */
+ *  MAC-summed in DEST per chunk (mul_accum_chunk), with L1-acc only across chunks. Caller reserves
+ *  cb_acc and pushes it. Factored out so the masked-suffix and unmasked-prefix paths share it. */
 template <uint32_t acc_cb>
 inline void accumulate_heads(uint32_t r, uint32_t c, uint32_t acc_slot) {
     bool first = true;
@@ -136,8 +137,8 @@ inline void accumulate_heads(uint32_t r, uint32_t c, uint32_t acc_slot) {
             cb_wait_front(cb_q, q_group_tiles);
         }
         // process the group in qk_batch_heads-sized chunks (cb_qk capacity): each chunk runs all
-        // its matmuls, then all its mul+accumulates, so the matmul<->eltwise reinit happens once
-        // per chunk, not per head pass
+        // its matmuls, then MACs the whole chunk's head sum into DEST in one pass, so both the
+        // matmul<->eltwise reinit and the accumulator pack happen once per chunk, not per head
         for (uint32_t chunk = 0; chunk < heads_per_group; chunk += qk_batch_heads) {
             const uint32_t chunk_end = chunk + qk_batch_heads;
             set_matmul_mode<cb_q, cb_k, cb_qk>();
@@ -145,12 +146,10 @@ inline void accumulate_heads(uint32_t r, uint32_t c, uint32_t acc_slot) {
                 matmul_relu_pass<cb_q, cb_k, cb_qk>(head, r, c);
             }
             set_mul_mode<cb_qk, cb_w, acc_cb>();
-            for (uint32_t head = chunk; head < chunk_end; head += heads_per_dest_pass) {
-                // w is laid out [q_tiles_per_unit][num_heads] (see reader read_w_group)
-                const uint32_t w_base = r * num_heads + group_start + head;
-                mul_accum_pass<cb_qk, cb_w, acc_cb>(w_base, first, acc_slot);
-                first = false;
-            }
+            // w is laid out [q_tiles_per_unit][num_heads] (see reader read_w_group)
+            const uint32_t w_base = r * num_heads + group_start + chunk;
+            mul_accum_chunk<cb_qk, cb_w, acc_cb>(w_base, qk_batch_heads, first, acc_slot);
+            first = false;
         }
         if constexpr (stream_heads) {
             cb_pop_front(cb_q, q_group_tiles);
