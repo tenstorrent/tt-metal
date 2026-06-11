@@ -64,7 +64,15 @@ public:
      */
     template <uint32_t ADDR_CRTA_OFFSET>
     CoreLocalMem(NodeLocalMemBindingToken<ADDR_CRTA_OFFSET>) :
-        address_(static_cast<AddressType>(get_common_arg_val<uint32_t>(ADDR_CRTA_OFFSET / sizeof(uint32_t)))) {}
+        address_(static_cast<AddressType>(get_common_arg_val<uint32_t>(ADDR_CRTA_OFFSET / sizeof(uint32_t)))) {
+        // ADDR_CRTA_OFFSET is the byte offset of the binding's base-address word. Host codegen
+        // produces it as `crta_word_index * sizeof(uint32_t)`, so it is word-aligned by
+        // construction. The conversion to a CRTA word index (`/sizeof(uint32_t)`) silently
+        // truncates otherwise — catch any future codegen change that violates the invariant.
+        static_assert(
+            ADDR_CRTA_OFFSET % sizeof(uint32_t) == 0,
+            "NodeLocalMemBindingToken: ADDR_CRTA_OFFSET must be 4-byte aligned");
+    }
 
     /** @brief Copy constructor
      *
