@@ -65,6 +65,35 @@ def _mlp_prefill_pc(mesh_device, m: int, k: int, n: int, fp32_dest: bool):
                 fused_activation=None,
                 fuse_batch=True,
             )
+    # On Wormhole (8x8) gate_up MUST get an explicit config. The compute kernel is
+    # the perf lever (LoFi + no fp32_dest_acc on gate_up_compute), but dropping
+    # fp32_dest_acc doubled the dst budget, so ttnn's auto heuristic now widens
+    # out_block_w to the full per_core_N=18 -- whose out/interm CBs (~440KB+235KB)
+    # overflow L1 in the full 28-layer pipeline (~60KB over; passes standalone in
+    # test_mlp_gateup_sweep where no other L1 buffers are resident). We pin the same
+    # 8x8/per_core 12x18 geometry but sub-block the output to out_block_w=9, which
+    # halves out_CB/interm0_CB/in1_CB (~390KB saved) for the same compute -- far more
+    # headroom than the overflow. in0_block_w=6 is the swept gate_up optimum (bw8
+    # clashes the in-block CB). Falls back to the auto helper off this shape/grid.
+    if int(grid.x) == 8 and int(grid.y) == 8 and k == 1536 and n == 4480 and m % 32 == 0:
+        mt, kt, nt = m // 32, k // 32, n // 32
+        if 81 <= mt <= 90 and kt % 6 == 0:
+            per_core_m = (mt + 7) // 8  # ceil over grid.y=8 -> 12 for the 89-tile prefill
+            per_core_n = (nt + 7) // 8  # ceil over grid.x=8 -> 18
+            out_block_w = per_core_n // 2  # 9; halves the output/interm CBs to fit L1
+            return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+                in0_block_w=6,
+                out_subblock_h=2,  # per_core_m(12) % 2 == 0
+                out_subblock_w=3,  # out_block_w(9) % 3 == 0; 2*3 <= dst(8)
+                out_block_h=per_core_m,
+                out_block_w=out_block_w,
+                per_core_M=per_core_m,
+                per_core_N=per_core_n,
+                transpose_mcast=False,
+                fused_activation=None,
+                fuse_batch=True,
+            )
     return prefill_matmul_2d_config(mesh_device, m, k, n, fp32_dest=fp32_dest)
 
 
@@ -83,10 +112,14 @@ class DotsOCRMLPTP4(TTNNModule):
         #   down    : BFP8 x BFP4 -> BFP8 @ LoFi
         self.gate_up_weight_dtype = tp4_lossy_matmul_dtype()
         self.down_weight_dtype = tp4_lossy_matmul_dtype()
+        # gate_up: dropping fp32_dest_acc (711->525 us, the dominant lever; it also
+        # halves dst so the tuned bw8 config can't fit with it) + LoFi (525->439 us)
+        # gives the lowest device time and still passes the block PCC. See
+        # test_mlp_gateup_sweep. Paired with fp32_dest=False in the program config.
         self.gate_up_compute = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
         self.down_compute = ttnn.WormholeComputeKernelConfig(
@@ -157,7 +190,7 @@ class DotsOCRMLPTP4(TTNNModule):
         m = matmul_m_dim(x)
         K = int(x.shape[-1])
         gate_up_n = int(self.gate_up_w.shape[-1])  # 2 * I/nd
-        gate_up_pc = _mlp_prefill_pc(self.mesh_device, m, K, gate_up_n, fp32_dest=True)
+        gate_up_pc = _mlp_prefill_pc(self.mesh_device, m, K, gate_up_n, fp32_dest=False)
 
         # Single fused gate+up matmul, then split: per chip the output is
         # [gate_shard | up_shard], so chunk(2, dim=-1) recovers them. in0 stays

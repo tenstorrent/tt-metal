@@ -25,6 +25,7 @@ from models.experimental.dots_ocr_tp4.tt.common import (
     all_reduce,
     matmul_m_dim,
     prefill_matmul_2d_config,
+    qkv_prefill_matmul_config,
     shard_to_mesh,
     tp_degree,
 )
@@ -83,12 +84,14 @@ class DotsOCRAttentionTP4(TTNNModule):
             packer_l1_acc=True,
         )
         self.sdpa_program_config = None
-        # SDPA is BF16 in/out (matches the profile); fidelity is internal and
-        # not constrained by the dtype recipe, so keep it at HiFi2 for accuracy.
+        # SDPA is BF16 in/out (matches the profile); fidelity is internal. LoFi +
+        # math_approx (the production tt_symbiote prefill-SDPA recipe) is the fastest
+        # and still passes the block/attention PCC -- ~391 us with the q256/k256
+        # config below vs ~480 us at HiFi2+fp32acc and ~1335 us auto (~3.4x).
         self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
 
@@ -175,15 +178,26 @@ class DotsOCRAttentionTP4(TTNNModule):
                 k_chunk_size=0,
                 exp_approx_mode=False,
             )
-            # Prefill SDPA config: hardware-swept on BH P150x4 for the per-chip
-            # q[1,3,S,128]/kv[1,1,S,128] causal shape -> grid 8x10, q_chunk=128,
-            # k_chunk=256 (~210 us, faster than the auto-config). exp_approx left
-            # off to preserve PCC (it was speed-neutral, ~0.3%). Needs a >=8x10
-            # grid; otherwise leave the auto-config (None).
+            # Prefill SDPA config for the per-chip q[1,3,S,128]/kv[1,1,S,128] causal
+            # shape. The auto-config is terrible here (~1335 us) -- it picks a bad
+            # chunk schedule for the tall-skinny 3-head GQA shape. Both grids
+            # hardware-swept (BH: P150x4 11x10; WH: T3K 8x8); see
+            # test_prefill_sdpa_sweep. exp_approx_mode left off (speed-neutral, keeps
+            # PCC); the LoFi+math_approx compute kernel below is the accuracy lever.
             if int(grid.x) >= 8 and int(grid.y) >= 10:
                 self.sdpa_program_config = ttnn.SDPAProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(8, 10),
                     q_chunk_size=128,
+                    k_chunk_size=256,
+                    exp_approx_mode=False,
+                )
+            elif int(grid.x) >= 8 and int(grid.y) >= 8:
+                # Wormhole 8x8: q256/k256 -> ~422 us vs ~1335 us auto (~3.2x). q256/k512
+                # is ~30 us faster still but its larger score CB clashes in L1 with the
+                # L1 input_layernorm output (decoder_block) inside the full block.
+                self.sdpa_program_config = ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+                    q_chunk_size=256,
                     k_chunk_size=256,
                     exp_approx_mode=False,
                 )
@@ -199,11 +213,25 @@ class DotsOCRAttentionTP4(TTNNModule):
         in the residual stream (RMSNorm, residual adds, o_proj/MLP + all-reduce),
         not these tiny immediately-consumed head tensors.
         """
-        qkv_pc = prefill_matmul_2d_config(
-            self.mesh_device, matmul_m_dim(x), int(x.shape[-1]), int(self.qkv_w.shape[-1]), fp32_dest=False
-        )
+        # Prefill QKV is activation-read-bound: with the input_layernorm output fed
+        # from L1 (see decoder_block) the tuned full-grid config runs the
+        # M=2848/K=1536/N=640 op at ~148 us vs ~206 us auto (~1.4x). Decode (M<=1
+        # tile) gets None here and keeps the auto path.
+        m = matmul_m_dim(x)
+        qkv_pc = qkv_prefill_matmul_config(self.mesh_device, m, int(x.shape[-1]), int(self.qkv_w.shape[-1]))
+        if qkv_pc is None:
+            qkv_pc = prefill_matmul_2d_config(
+                self.mesh_device, m, int(x.shape[-1]), int(self.qkv_w.shape[-1]), fp32_dest=False
+            )
+        x_mm = x
+        # if qkv_pc is None and m > 32 and x.memory_config().buffer_type == ttnn.BufferType.L1:
+        #     # Safety net: program_config=None + an L1 in0 makes ttnn pick
+        #     # MatmulMultiCoreProgramConfig, which hardcodes HiFi4 and ignores
+        #     # qkv_compute (~1515 us, ~10x slower). If we have no tuned config, keep
+        #     # in0 in DRAM so the auto path stays the HiFi2 MatmulMultiCoreReuseMultiCast.
+        #     x_mm = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         qkv = ttnn.linear(
-            x,
+            x_mm,
             self.qkv_w,
             bias=self.qkv_bias,
             dtype=ttnn.bfloat16,
@@ -211,6 +239,8 @@ class DotsOCRAttentionTP4(TTNNModule):
             compute_kernel_config=self.qkv_compute,
             program_config=qkv_pc,
         )
+        if x_mm is not x:
+            ttnn.deallocate(x_mm)
         qkv = ttnn.reshape(qkv, (batch_size, 1, seq_len, -1))
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv,

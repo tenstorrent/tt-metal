@@ -47,7 +47,7 @@ DOTS_OCR_DP2_TP4_MESH_DEVICE_MAP = {
     "T3K": (2, 4),
 }
 
-DOTS_OCR_LAYOUT_PROMPT = "Please output all the text present in the image heading, pagenumber, table data "
+DOTS_OCR_LAYOUT_PROMPT = "output all the text present in the image"
 
 
 def _dots_ocr_parallelism_mode() -> str:

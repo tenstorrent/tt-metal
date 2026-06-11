@@ -20,8 +20,11 @@ class DotsOCRRMSNormTP4(TTNNModule):
         self.mesh_device = mesh_device
         self.eps = eps
         self.tt_weight = None
+        # LoFi (was HiFi4): RMSNorm accumulates in fp32 dest (fp32_dest_acc_en),
+        # so the reduction stays full-precision; LoFi only drops mantissa bits in
+        # the elementwise multiply, which is cheap accuracy for a faster kernel.
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -41,12 +44,15 @@ class DotsOCRRMSNormTP4(TTNNModule):
         m._weights_on_device = True
         return m
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, out_memory_config=None) -> ttnn.Tensor:
         original_shape = x.shape
         # Decode (seq==1): keep the norm L1-resident so the surrounding decode
-        # ops avoid a DRAM round-trip. Prefill stays DRAM-interleaved.
+        # ops avoid a DRAM round-trip. Prefill stays DRAM-interleaved -- unless the
+        # caller requests an explicit ``out_memory_config`` (e.g. the input_layernorm
+        # output is put in L1 to feed the activation-read-bound prefill QKV matmul).
         is_decode = int(original_shape[-2]) == 1
         mc = ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG
+        out_mc = out_memory_config if out_memory_config is not None else mc
         if len(original_shape) == 3:
             x = ttnn.unsqueeze(x, 1)
         if x.layout != ttnn.TILE_LAYOUT:
@@ -56,7 +62,7 @@ class DotsOCRRMSNormTP4(TTNNModule):
             epsilon=self.eps,
             weight=self.tt_weight,
             compute_kernel_config=self.compute_kernel_config,
-            memory_config=mc,
+            memory_config=out_mc,
         )
         if len(original_shape) == 3 and len(out.shape) == 4:
             out = ttnn.reshape(out, [out.shape[0], out.shape[2], out.shape[3]])

@@ -9,6 +9,7 @@ sublayers, so RMSNorm is a local (per-chip) exact op and the only collectives
 are the two all-reduces after ``o_proj`` and ``down_proj``.
 """
 
+import math
 import os
 from dataclasses import dataclass
 
@@ -203,6 +204,66 @@ def prefill_matmul_2d_config(mesh_device, m: int, k: int, n: int, fp32_dest: boo
     out_subblock_w = _largest_divisor_leq(per_core_n, min(4, dst))
     out_subblock_h = 1
     while out_subblock_h * 2 * out_subblock_w <= dst and per_core_m % (out_subblock_h * 2) == 0:
+        out_subblock_h *= 2
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        out_block_h=per_core_m,
+        out_block_w=per_core_n,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=True,
+    )
+
+
+def qkv_prefill_matmul_config(mesh_device, m: int, k: int, n: int):
+    """2D-mcast program config for the TP4 prefill QKV matmul [M,K] x [K,N=640].
+
+    ``prefill_matmul_2d_config`` bails for this op: M-tiles=89 (seq 2848) is prime,
+    so its largest-divisor grid.y collapses to 1 -> per_core_M=89 -> the L1 guard
+    trips -> None -> ttnn's auto heuristic (8x7=56 cores, in0_block_w=6, ~206 us).
+
+    This instead spreads M across the full grid.y with ceil-padding (per_core_M=12
+    for 89 tiles) and uses the sweep optimum from
+    ``test_qkv_prefill_matmul_sweep`` (in0_block_w=4, out_subblock 2x3). Paired
+    with an L1-interleaved in0 (the activation read is the bottleneck) this runs
+    the M=2848/K=1536/N=640 op at ~148 us vs ~206 us (~1.4x). Numerics are
+    unchanged -- only the tiling/scheduling differs.
+
+    Returns None only for decode (M<=1 tile) so the caller keeps the auto path.
+    NOTE: M (seq) need NOT be tile-aligned -- the real prefill seq is 2828 (not a
+    multiple of 32), and the matmul pads M up to per_core_M*grid.y anyway. Requiring
+    m%32==0 here (as prefill_matmul_2d_config does) returns None for the real shape,
+    which -- now that in0 is L1 -- silently drops to ttnn's MatmulMultiCoreProgramConfig
+    (HiFi4, ~1515us, ignores compute_kernel_config). See [[matmul-l1-in0-forces-hifi4]].
+    So we ceil M to tiles and must ALWAYS return a config for prefill.
+    """
+    if k % 32 or n % 32:
+        return None
+    mt, kt, nt = math.ceil(m / 32), k // 32, n // 32
+    if mt <= 1:
+        return None
+    grid = mesh_device.compute_with_storage_grid_size()
+    gx, gy = int(grid.x), int(grid.y)
+    per_core_m = math.ceil(mt / gy)
+    per_core_n = math.ceil(nt / gx)
+    in0_block_w = 4 if kt % 4 == 0 else _largest_divisor_leq(kt, 8)
+
+    # Same conservative L1-CB guard as prefill_matmul_2d_config: bail (-> auto) if
+    # the per-core circular buffers would not fit, rather than risk an OOM.
+    TILE_BYTES = 32 * 32 * 2
+    if (
+        per_core_m * in0_block_w + in0_block_w * per_core_n
+    ) * TILE_BYTES * 2 + per_core_m * per_core_n * TILE_BYTES > 1_300_000:
+        return None
+
+    out_subblock_w = _largest_divisor_leq(per_core_n, 4)
+    out_subblock_h = 1
+    while out_subblock_h * 2 * out_subblock_w <= 8 and per_core_m % (out_subblock_h * 2) == 0:
         out_subblock_h *= 2
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),

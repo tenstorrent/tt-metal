@@ -83,7 +83,11 @@ class DotsOCRDecoderBlockTP4(TTNNModule):
         add_mc = ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG
 
         residual = x
-        h = self.input_layernorm.forward(x)
+        # Put the input_layernorm output in L1: it feeds only the QKV matmul, which
+        # is activation-read-bound -- reading in0 from L1 runs the prefill QKV at
+        # ~148 us vs ~206 us from DRAM (~1.4x, see test_qkv_prefill_matmul_sweep).
+        # The write costs the same as DRAM (no extra copy op); decode is L1 already.
+        h = self.input_layernorm.forward(x, out_memory_config=ttnn.L1_MEMORY_CONFIG)
         h = self.self_attn.forward(h, past_key_value=past_key_value, cache_position=cache_position)
         x = ttnn.add(residual, h, memory_config=add_mc)
         ttnn.deallocate(h)
