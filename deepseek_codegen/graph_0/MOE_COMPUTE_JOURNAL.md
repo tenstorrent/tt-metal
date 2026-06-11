@@ -788,3 +788,26 @@ Structure adapted from Andrej Karpathy's `karpathy/autoresearch` (one-file itera
 fixed comparable measurement, commit-per-win, autonomous loop).
 </content>
 </invoke>
+
+## CCL ROUND (2026-06-11) — num_links + data-volume findings (mostly NEGATIVE, important)
+
+Investigated CCL minimization (CCL is now attention's #1 op: AllGather 194us + ReduceScatter 138us =
+~314us/layer ~ 19ms e2e; MoE CCL even larger ~479us/layer).
+
+- **num_links=2 on all 30 CCL ops: NO-OP** (full 7.660->7.663, every AG/RS time unchanged). `get_num_links`
+  reports max=2 on both axes for this 4x8 BH mesh, and `num_links=None` ALREADY defaults to that max.
+  => the decode CCL is **latency/overhead-bound, not bandwidth-bound** (tiny 32-token decode tensors).
+  More links cannot help. Reverted (commit not kept).
+- **Downcast-before-CCL: already optimal.** Every matmul outputs BF16, CCLs move BF16, and the FP32 upcast
+  happens AFTER reduce_scatter (verified o-proj: matmul_11 BF16 -> RS -> typecast_57 FP32 -> residual).
+  Outputs use reduce_scatter (scatter to 1/8). So "move typecast/reshape to move less data" doesn't apply —
+  data volume is not the bottleneck; per-op launch/sync latency is.
+- **Only remaining CCL lever = fewer ops**: the 9 `all_gather + sum` pairs are logically all_reduce
+  (gather [8,32,X] + local sum). Converting to all_reduce removes the sum + 8x gather materialization, but
+  (a) the big ones are tiny (norm stats [1,32,1], q_b/kv_a [32,576]) — latency-bound, ~same; (b) needs the
+  all_reduce_async semaphore-pool plumbing (E49, currently unused). Low expected ROI in a latency-bound
+  regime; not pursued.
+
+CONCLUSION: safe/tractable attention + CCL levers are largely tapped at **205 ms** (attn 1.10 ms/layer).
+Remaining headroom is in the MoE (132.9 ms = 65% of e2e: MoECompute fused 40.6ms + MoE CCL 27.8ms), which
+needs moe_compute-internal config tuning and/or the #46208 L1-overlap fix (any attention L1 shift trips it).
