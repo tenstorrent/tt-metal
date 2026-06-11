@@ -20,14 +20,6 @@ from utils.llama_completer import LlamaCompletionCtx
 from utils.llama_completer import LlamaGRPOCompleter
 
 
-# Seed can be specified via --seed (defaults to 42). Seeding all RNGs (Python/NumPy/torch) makes a
-# run reproducible across launches, which is required for reproducibility.
-def seed_everything(seed: int) -> None:
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-
-
 class GRPOMonitor(TrainerCallback):
     def __init__(self, output_dir):
         self.file_path = os.path.join(output_dir, "grpo_metrics.csv")
@@ -91,7 +83,10 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
-    seed_everything(args.seed)
+
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
 
     model_id = "meta-llama/Llama-3.2-1B-Instruct"
     tokenizer = AutoTokenizer.from_pretrained(model_id)
