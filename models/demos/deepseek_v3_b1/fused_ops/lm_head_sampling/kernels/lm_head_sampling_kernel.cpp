@@ -91,16 +91,16 @@ struct Core {
     static constexpr bool sampling_is_active_core = get_named_compile_time_arg_val("sampling_is_active_core") == 1;
     static constexpr bool sampling_is_final_core = get_named_compile_time_arg_val("sampling_is_final_core") == 1;
     static constexpr bool sampling_mesh_sender_core = get_named_compile_time_arg_val("sampling_mesh_sender_core") == 1;
-    static constexpr uint32_t fabric_gate_bcast_turn_semaphore_id =
-        get_named_compile_time_arg_val("fabric_gate_bcast_turn_semaphore_id");
-    static constexpr uint32_t fabric_gate_argmax_turn_semaphore_id =
-        get_named_compile_time_arg_val("fabric_gate_argmax_turn_semaphore_id");
+    static constexpr uint32_t fabric_gate_bcast_turn_semaphore_addr =
+        get_named_compile_time_arg_val("fabric_gate_bcast_turn_semaphore_addr");
+    static constexpr uint32_t fabric_gate_argmax_turn_semaphore_addr =
+        get_named_compile_time_arg_val("fabric_gate_argmax_turn_semaphore_addr");
     static constexpr uint32_t fabric_gate_bcast_noc_x = get_named_compile_time_arg_val("fabric_gate_bcast_noc_x");
     static constexpr uint32_t fabric_gate_bcast_noc_y = get_named_compile_time_arg_val("fabric_gate_bcast_noc_y");
     static constexpr uint32_t fabric_gate_argmax_noc_x = get_named_compile_time_arg_val("fabric_gate_argmax_noc_x");
     static constexpr uint32_t fabric_gate_argmax_noc_y = get_named_compile_time_arg_val("fabric_gate_argmax_noc_y");
-    static constexpr uint32_t token_bcast_turn_semaphore_id =
-        get_named_compile_time_arg_val("token_bcast_turn_semaphore_id");
+    static constexpr uint32_t token_bcast_turn_semaphore_addr =
+        get_named_compile_time_arg_val("token_bcast_turn_semaphore_addr");
     static constexpr uint32_t mesh_row = get_named_compile_time_arg_val("mesh_row");
     static constexpr uint32_t mesh_col = get_named_compile_time_arg_val("mesh_col");
 
@@ -125,7 +125,7 @@ struct Core {
     static constexpr bool is_eh_reduce_fabric_core =
         enable_mtp && get_named_compile_time_arg_val("is_reduce_fabric_core") == 1;
     static constexpr bool is_e_norm_device = enable_mtp && get_named_compile_time_arg_val("is_e_norm_device") == 1;
-    static constexpr uint32_t reduce_gate_semaphore_id = get_named_compile_time_arg_val("reduce_gate_semaphore_id");
+    static constexpr uint32_t reduce_gate_semaphore_addr = get_named_compile_time_arg_val("reduce_gate_semaphore_addr");
 
     // ── Verify stage metadata transfer ───────────────────────────────
     static constexpr bool is_exit_device = get_named_compile_time_arg_val("is_exit_device") == 1;
@@ -199,7 +199,7 @@ void kernel_main() {
         .sender = {},
         .receiver =
             {
-                get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
+                get_named_compile_time_arg_val("mcast_data_receiver_semaphore_addr"),
                 get_named_compile_time_arg_val("mcast_dst_cb"),
                 get_named_compile_time_arg_val("mcast_dst_num_pages"),
             },
@@ -218,8 +218,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("sampling_winner_page_bytes"),
         get_named_compile_time_arg_val("sampling_num_senders"),
         get_named_compile_time_arg_val("sampling_expected_remote_incs"),
-        get_named_compile_time_arg_val("sampling_receiver_semaphore_id"),
-        get_named_compile_time_arg_val("sampling_local_ready_semaphore_id"),
+        get_named_compile_time_arg_val("sampling_receiver_semaphore_addr"),
+        get_named_compile_time_arg_val("sampling_local_ready_semaphore_addr"),
         get_named_compile_time_arg_val("sampling_mesh_mode"),
         get_named_compile_time_arg_val("sampling_stage1_sender"),
         get_named_compile_time_arg_val("sampling_stage1_receiver"),
@@ -308,7 +308,7 @@ void kernel_main() {
         .sender = {},
         .receiver =
             {
-                get_semaphore(get_named_compile_time_arg_val("mcast_eh_data_receiver_semaphore")),
+                get_named_compile_time_arg_val("mcast_eh_data_receiver_semaphore_addr"),
                 get_named_compile_time_arg_val("mcast_eh_dst_cb"),
                 get_named_compile_time_arg_val("mcast_eh_dst_num_pages"),
             },
@@ -437,7 +437,7 @@ void kernel_main() {
     // uses that isn't in the micro-op's kernel; we wire it explicitly.
     using SamplingCTArgs = deepseek_b1_ops::TopKSampling::WriterCTArgs<
         get_named_compile_time_arg_val("sampling_winner_page_bytes"),
-        get_named_compile_time_arg_val("sampling_local_ready_semaphore_id"),
+        get_named_compile_time_arg_val("sampling_local_ready_semaphore_addr"),
         get_named_compile_time_arg_val("sampling_socket_mode"),
         get_named_compile_time_arg_val("sampling_socket_cb"),
         get_named_compile_time_arg_val("sampling_socket_page_size_bytes"),
@@ -517,8 +517,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
                 get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
                 get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
-                get_semaphore(get_named_compile_time_arg_val("mcast_data_sender_semaphore")),
-                get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
+                get_named_compile_time_arg_val("mcast_data_sender_semaphore_addr"),
+                get_named_compile_time_arg_val("mcast_data_receiver_semaphore_addr"),
                 get_named_compile_time_arg_val("mcast_data_size_bytes"),
                 mcast_src_cb,
                 get_named_compile_time_arg_val("mcast_src_num_pages"),
@@ -543,8 +543,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("mcast_eh_dest_noc_start_y"),
                 get_named_compile_time_arg_val("mcast_eh_dest_noc_end_x"),
                 get_named_compile_time_arg_val("mcast_eh_dest_noc_end_y"),
-                get_semaphore(get_named_compile_time_arg_val("mcast_eh_data_sender_semaphore")),
-                get_semaphore(get_named_compile_time_arg_val("mcast_eh_data_receiver_semaphore")),
+                get_named_compile_time_arg_val("mcast_eh_data_sender_semaphore_addr"),
+                get_named_compile_time_arg_val("mcast_eh_data_receiver_semaphore_addr"),
                 get_named_compile_time_arg_val("mcast_eh_data_size_bytes"),
                 mcast_eh_src_cb,
                 get_named_compile_time_arg_val("mcast_eh_src_num_pages"),
@@ -790,8 +790,8 @@ void kernel_main() {
 #if defined(COMPILE_FOR_NCRISC)
         // Device-local fabric gate (pre-bcast acquire).
         if constexpr (Core::is_input_core && !Core::skip_ccl) {
-            auto* bcast_turn_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                get_semaphore(Core::fabric_gate_bcast_turn_semaphore_id));
+            auto* bcast_turn_sem =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(Core::fabric_gate_bcast_turn_semaphore_addr);
             noc_semaphore_wait(bcast_turn_sem, 1);
             noc_semaphore_set(bcast_turn_sem, 0);
         }
@@ -815,7 +815,7 @@ void kernel_main() {
             auto argmax_turn_sem_noc_addr = get_noc_addr(
                 Core::fabric_gate_argmax_noc_x,
                 Core::fabric_gate_argmax_noc_y,
-                get_semaphore(Core::fabric_gate_argmax_turn_semaphore_id));
+                Core::fabric_gate_argmax_turn_semaphore_addr);
             noc_semaphore_inc(argmax_turn_sem_noc_addr, 1);
             noc_async_atomic_barrier();
         }
@@ -844,9 +844,7 @@ void kernel_main() {
             noc_async_write(metadata_src, metadata_dst, metadata_size);
             noc_async_write_barrier();
             uint64_t sem_addr = get_noc_addr(
-                argmax_noc_x,
-                argmax_noc_y,
-                get_semaphore(get_named_compile_time_arg_val("metadata_ready_semaphore_id")));
+                argmax_noc_x, argmax_noc_y, get_named_compile_time_arg_val("metadata_ready_semaphore_addr"));
             noc_semaphore_inc(sem_addr, 1);
             noc_async_atomic_barrier();
         }
@@ -880,15 +878,15 @@ void kernel_main() {
 #if defined(COMPILE_FOR_BRISC)
         // Device-local fabric gate (pre-sampling acquire on argmax final core).
         if constexpr (Core::sampling_is_final_core && !Core::skip_ccl) {
-            auto* argmax_turn_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                get_semaphore(Core::fabric_gate_argmax_turn_semaphore_id));
+            auto* argmax_turn_sem =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(Core::fabric_gate_argmax_turn_semaphore_addr);
             noc_semaphore_wait(argmax_turn_sem, 1);
             noc_semaphore_set(argmax_turn_sem, 0);
         }
 
         // Pre-sampling metadata barrier (single source of truth for both stages).
         // The exit-device input core unicasts the DeepseekMetadata struct and
-        // increments `metadata_ready_semaphore_id` above. Sampling.hpp reads
+        // increments `metadata_ready_semaphore_addr` above. Sampling.hpp reads
         // temperature / k / p off this struct on the
         // base stage (enable_metadata=True), and the downstream `mtp` /
         // `update_speculative_state` lambdas read tok0_*/slot_id from it
@@ -897,7 +895,7 @@ void kernel_main() {
         // started before metadata had landed.
         if constexpr (Core::sampling_is_final_core && Core::is_exit_device) {
             volatile tt_l1_ptr uint32_t* metadata_ready_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                get_semaphore(get_named_compile_time_arg_val("metadata_ready_semaphore_id")));
+                get_named_compile_time_arg_val("metadata_ready_semaphore_addr"));
             noc_semaphore_wait(metadata_ready_sem, 1);
             noc_semaphore_set(metadata_ready_sem, 0);
         }
@@ -916,9 +914,7 @@ void kernel_main() {
         // `wait`-ack and `set(0)` and get wiped out, hanging iter N+1's wait.
         if constexpr (Core::sampling_is_final_core && !Core::skip_ccl && Core::is_base_stage && Core::enable_mtp) {
             auto token_turn_sem_noc_addr = get_noc_addr(
-                Core::fabric_gate_bcast_noc_x,
-                Core::fabric_gate_bcast_noc_y,
-                get_semaphore(Core::token_bcast_turn_semaphore_id));
+                Core::fabric_gate_bcast_noc_x, Core::fabric_gate_bcast_noc_y, Core::token_bcast_turn_semaphore_addr);
             noc_semaphore_inc(token_turn_sem_noc_addr, 1);
             noc_async_atomic_barrier();
         }
@@ -942,9 +938,7 @@ void kernel_main() {
             noc_async_write(mtp_argmax_output_addr, dst, 4);
             noc_async_write_barrier();
             uint64_t sem_addr = get_noc_addr(
-                mtp_input_core_noc_x,
-                mtp_input_core_noc_y,
-                get_semaphore(get_named_compile_time_arg_val("mtp_ready_semaphore_id")));
+                mtp_input_core_noc_x, mtp_input_core_noc_y, get_named_compile_time_arg_val("mtp_ready_semaphore_addr"));
             noc_semaphore_inc(sem_addr, 1);
             noc_async_atomic_barrier();
         }
@@ -953,7 +947,7 @@ void kernel_main() {
 #if defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_input_core && !Core::skip_ccl) {
             auto* token_turn_sem =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(Core::token_bcast_turn_semaphore_id));
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(Core::token_bcast_turn_semaphore_addr);
             noc_semaphore_wait(token_turn_sem, 1);
             noc_semaphore_set(token_turn_sem, 0);
         }
@@ -977,7 +971,7 @@ void kernel_main() {
         if constexpr (Core::is_input_core) {
             if constexpr (Core::is_exit_device) {
                 volatile tt_l1_ptr uint32_t* mtp_ready_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                    get_semaphore(get_named_compile_time_arg_val("mtp_ready_semaphore_id")));
+                    get_named_compile_time_arg_val("mtp_ready_semaphore_addr"));
                 noc_semaphore_wait(mtp_ready_sem, 1);
                 noc_semaphore_set(mtp_ready_sem, 0);
             }
@@ -1010,14 +1004,14 @@ void kernel_main() {
                 get_noc_addr(
                     get_named_compile_time_arg_val("reduce_fc_noc_0_x"),
                     get_named_compile_time_arg_val("reduce_fc_noc_0_y"),
-                    get_semaphore(Core::reduce_gate_semaphore_id)),
+                    Core::reduce_gate_semaphore_addr),
                 1);
             noc_async_atomic_barrier();
             noc_semaphore_inc(
                 get_noc_addr(
                     get_named_compile_time_arg_val("reduce_fc_noc_1_x"),
                     get_named_compile_time_arg_val("reduce_fc_noc_1_y"),
-                    get_semaphore(Core::reduce_gate_semaphore_id)),
+                    Core::reduce_gate_semaphore_addr),
                 1);
             noc_async_atomic_barrier();
         }
@@ -1131,8 +1125,7 @@ void kernel_main() {
 
 #if defined(COMPILE_FOR_BRISC)
         if constexpr (Core::is_eh_reduce_fabric_core) {
-            auto* reduce_gate =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(Core::reduce_gate_semaphore_id));
+            auto* reduce_gate = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(Core::reduce_gate_semaphore_addr);
             noc_semaphore_wait(reduce_gate, 1);
             noc_semaphore_set(reduce_gate, 0);
         }
@@ -1189,8 +1182,7 @@ void kernel_main() {
         if constexpr (Core::is_eh_reduce_fabric_core || Core::is_eh_reduce_worker_core) {
             constexpr uint32_t argmax_noc_x = get_named_compile_time_arg_val("argmax_core_noc_x");
             constexpr uint32_t argmax_noc_y = get_named_compile_time_arg_val("argmax_core_noc_y");
-            uint64_t sync_noc_addr =
-                get_noc_addr(argmax_noc_x, argmax_noc_y, get_semaphore(Core::reduce_gate_semaphore_id));
+            uint64_t sync_noc_addr = get_noc_addr(argmax_noc_x, argmax_noc_y, Core::reduce_gate_semaphore_addr);
             noc_semaphore_inc(sync_noc_addr, 1);
             noc_async_atomic_barrier();
         }
@@ -1199,8 +1191,7 @@ void kernel_main() {
 #if defined(COMPILE_FOR_BRISC)
         if constexpr (Core::sampling_is_final_core) {
             constexpr uint32_t reduce_done_num = get_named_compile_time_arg_val("reduce_gate_num_targets");
-            auto* reduce_done_sem =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(Core::reduce_gate_semaphore_id));
+            auto* reduce_done_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(Core::reduce_gate_semaphore_addr);
             noc_semaphore_wait(reduce_done_sem, reduce_done_num);
             noc_semaphore_set(reduce_done_sem, 0);
         }
@@ -1344,7 +1335,7 @@ void kernel_main() {
             auto bcast_turn_sem_noc_addr = get_noc_addr(
                 Core::fabric_gate_bcast_noc_x,
                 Core::fabric_gate_bcast_noc_y,
-                get_semaphore(Core::fabric_gate_bcast_turn_semaphore_id));
+                Core::fabric_gate_bcast_turn_semaphore_addr);
             noc_semaphore_inc(bcast_turn_sem_noc_addr, 1);
             noc_async_atomic_barrier();
         }
