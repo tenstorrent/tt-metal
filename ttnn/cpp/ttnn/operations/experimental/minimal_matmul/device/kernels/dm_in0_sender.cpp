@@ -285,15 +285,22 @@ void kernel_main() {
 
                         // Multicast the current block (non-pipelined broadcast handshake). The flush
                         // guarantees the source slot is read before it can be reused (block k+2 = same slot).
-                        noc_semaphore_wait(in0_sender_semaphore_addr_ptr, in0_num_recv);
-                        noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
-                        uint64_t mcast_data_addr = get_noc_multicast_addr(
-                            in0_mc_start_x, in0_mc_start_y, in0_mc_end_x, in0_mc_end_y, mcast_wp);
-                        noc_async_write_multicast(mcast_wp, mcast_data_addr, current_block_bytes, in0_num_recv);
-                        noc_async_writes_flushed();
-                        uint64_t mcast_valid_addr = get_noc_multicast_addr(
-                            in0_mc_start_x, in0_mc_start_y, in0_mc_end_x, in0_mc_end_y, in0_receiver_semaphore_addr);
-                        noc_semaphore_set_multicast(in0_valid_semaphore_addr, mcast_valid_addr, in0_num_recv);
+                        // num_recv == 0 (single-row slice group) => no receivers, skip the mcast entirely.
+                        if (in0_num_recv > 0) {
+                            noc_semaphore_wait(in0_sender_semaphore_addr_ptr, in0_num_recv);
+                            noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
+                            uint64_t mcast_data_addr = get_noc_multicast_addr(
+                                in0_mc_start_x, in0_mc_start_y, in0_mc_end_x, in0_mc_end_y, mcast_wp);
+                            noc_async_write_multicast(mcast_wp, mcast_data_addr, current_block_bytes, in0_num_recv);
+                            noc_async_writes_flushed();
+                            uint64_t mcast_valid_addr = get_noc_multicast_addr(
+                                in0_mc_start_x,
+                                in0_mc_start_y,
+                                in0_mc_end_x,
+                                in0_mc_end_y,
+                                in0_receiver_semaphore_addr);
+                            noc_semaphore_set_multicast(in0_valid_semaphore_addr, mcast_valid_addr, in0_num_recv);
+                        }
                     }
                 }
             } else
@@ -385,18 +392,21 @@ void kernel_main() {
                 // Only the injector broadcasts: wait until all receivers signaled a free slot, then
                 // one multicast write of the block + one multicast set of their valid semaphores.
                 if constexpr (is_injector_core) {
-                    noc_semaphore_wait(in0_sender_semaphore_addr_ptr, in0_num_recv);
-                    noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
+                    if (in0_num_recv > 0) {  // single-row slice group => no receivers, skip mcast
+                        noc_semaphore_wait(in0_sender_semaphore_addr_ptr, in0_num_recv);
+                        noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
 
-                    uint64_t mcast_data_addr = get_noc_multicast_addr(
-                        in0_mc_start_x, in0_mc_start_y, in0_mc_end_x, in0_mc_end_y, in0_start_address);
-                    noc_async_write_multicast(in0_start_address, mcast_data_addr, current_block_bytes, in0_num_recv);
-                    // Ensure the source L1 read completed before the buffer can be reused next block.
-                    noc_async_writes_flushed();
+                        uint64_t mcast_data_addr = get_noc_multicast_addr(
+                            in0_mc_start_x, in0_mc_start_y, in0_mc_end_x, in0_mc_end_y, in0_start_address);
+                        noc_async_write_multicast(
+                            in0_start_address, mcast_data_addr, current_block_bytes, in0_num_recv);
+                        // Ensure the source L1 read completed before the buffer can be reused next block.
+                        noc_async_writes_flushed();
 
-                    uint64_t mcast_valid_addr = get_noc_multicast_addr(
-                        in0_mc_start_x, in0_mc_start_y, in0_mc_end_x, in0_mc_end_y, in0_receiver_semaphore_addr);
-                    noc_semaphore_set_multicast(in0_valid_semaphore_addr, mcast_valid_addr, in0_num_recv);
+                        uint64_t mcast_valid_addr = get_noc_multicast_addr(
+                            in0_mc_start_x, in0_mc_start_y, in0_mc_end_x, in0_mc_end_y, in0_receiver_semaphore_addr);
+                        noc_semaphore_set_multicast(in0_valid_semaphore_addr, mcast_valid_addr, in0_num_recv);
+                    }
                 }
 #else
                 if (!is_sink_core) {

@@ -331,9 +331,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     // TT_MM_MCAST_PREFETCH forces the dataflow on regardless (handled at the mcast-flags block below).
     const uint32_t min_tiles_per_core = std::min(M_tiles_per_core, N_tiles_per_core);
     const char* no_auto_prefetch = std::getenv("TT_MM_NO_AUTO_PREFETCH");
-    // num_slices==1 guard: core-grid slicing currently runs unicast only (mcast+slicing is step 4).
+    // Gate is computed on the SUB-GRID per-core counts (M/N_tiles_per_core already reflect slicing),
+    // so it composes with slicing: each sub-grid is squarer, min_tiles_per_core is the sub-grid value.
     const bool prefetch_gate = !config.has_value() && !fuse_op && !fuse_srs && min_tiles_per_core <= 2 &&
-                               num_slices == 1 &&
                                !(no_auto_prefetch != nullptr && std::string(no_auto_prefetch) != "0");
     if (prefetch_gate) {
         M_block_tiles = std::min(M_block_tiles, M_tiles_per_core);
@@ -529,9 +529,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     // k's multicast, overlapping read latency with mcast transit on the single injector DM RISC. The
     // auto-gate (prefetch_gate) was computed earlier with the block sizes (it also clamps the
     // compile-time block). TT_MM_MCAST_PREFETCH forces the dataflow on regardless of the gate.
-    // num_slices==1: slicing runs unicast only for now (mcast+slicing is step 4); force mcast off for S>1.
-    const bool mcast_prefetch = (env_flag_set("TT_MM_MCAST_PREFETCH") || prefetch_gate) && num_slices == 1;
-    const bool mcast_broadcast = (env_flag_set("TT_MM_MCAST_BROADCAST") || mcast_prefetch) && num_slices == 1;
+    const bool mcast_prefetch = env_flag_set("TT_MM_MCAST_PREFETCH") || prefetch_gate;
+    const bool mcast_broadcast = env_flag_set("TT_MM_MCAST_BROADCAST") || mcast_prefetch;
     if (mcast_broadcast) {
         // Replace the store-and-forward chain with a single NoC multicast per block. The injector reads
         // DRAM once and mcasts the block to all cores along its broadcast axis (one hardware-replicated
@@ -900,22 +899,26 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         // to in0_idx, in1 perpendicular to in1_idx; transpose swaps which axis is which.
         CoreCoord in0_inj_l, in0_rf_l, in0_rl_l, in1_inj_l, in1_rf_l, in1_rl_l;
         uint32_t num_in0_recv = 0, num_in1_recv = 0;
+        // The big input (down rows) mcasts only within its row-group: rect = [base_row+1, group end],
+        // injector at the group's top row. The small input (across cols) mcasts the full row. num_recv
+        // for the big input is rows_per_group-1 (== 0 when a group is a single row → no big-input mcast,
+        // the kernel skips it). At num_slices==1 (base_row=0, rows_per_group=grid.y) this is the original.
+        const std::size_t grp_last_row = base_row + rows_per_group - 1;
         if (!transpose_core_grid) {
-            // in0 injector at col 0; mcast covers cols 1..grid.x-1 of this row.
-            in0_inj_l = {(std::size_t)0, (std::size_t)core.y};
+            in0_inj_l = {(std::size_t)0, (std::size_t)core.y};  // small: across cols
             in0_rf_l = {(std::size_t)1, (std::size_t)core.y};
             in0_rl_l = {(std::size_t)grid_size.x - 1, (std::size_t)core.y};
             num_in0_recv = grid_size.x - 1;
-            in1_inj_l = {(std::size_t)core.x, (std::size_t)0};
-            in1_rf_l = {(std::size_t)core.x, (std::size_t)1};
-            in1_rl_l = {(std::size_t)core.x, (std::size_t)grid_size.y - 1};
-            num_in1_recv = grid_size.y - 1;
+            in1_inj_l = {(std::size_t)core.x, (std::size_t)base_row};  // big: down group rows
+            in1_rf_l = {(std::size_t)core.x, (std::size_t)(base_row + 1)};
+            in1_rl_l = {(std::size_t)core.x, grp_last_row};
+            num_in1_recv = rows_per_group - 1;
         } else {
-            in0_inj_l = {(std::size_t)core.x, (std::size_t)0};
-            in0_rf_l = {(std::size_t)core.x, (std::size_t)1};
-            in0_rl_l = {(std::size_t)core.x, (std::size_t)grid_size.y - 1};
-            num_in0_recv = grid_size.y - 1;
-            in1_inj_l = {(std::size_t)0, (std::size_t)core.y};
+            in0_inj_l = {(std::size_t)core.x, (std::size_t)base_row};  // big: down group rows
+            in0_rf_l = {(std::size_t)core.x, (std::size_t)(base_row + 1)};
+            in0_rl_l = {(std::size_t)core.x, grp_last_row};
+            num_in0_recv = rows_per_group - 1;
+            in1_inj_l = {(std::size_t)0, (std::size_t)core.y};  // small: across cols
             in1_rf_l = {(std::size_t)1, (std::size_t)core.y};
             in1_rl_l = {(std::size_t)grid_size.x - 1, (std::size_t)core.y};
             num_in1_recv = grid_size.x - 1;
