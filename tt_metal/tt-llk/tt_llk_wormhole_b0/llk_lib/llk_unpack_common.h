@@ -188,7 +188,7 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
         // this register (e.g. bcastA_B) restore back to this baseline on uninit, so the
         // baseline must be re-committed whenever the dst format changes.
         cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32, UNP0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT, UNP0_ADDR_CTRL_XY_REG_1_Ystride_MASK>(
-            canonical_unpA_y_stride(unpack_dst_format, unpack_face_r_dim));
+            canonical_unpA_y_stride(unpack_dst_format));
 
         // Program unpacker0 per context x_dim (face size in l1)
         // Overrides value set by tile descriptor when thread override bit is set in unpack instruction
