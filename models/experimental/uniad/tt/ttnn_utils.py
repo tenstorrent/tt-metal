@@ -62,6 +62,14 @@ _MSDA_GRID_SCALE_CACHE = {}
 # DCN path uses for its grid_sample. Cached per device arch.
 _MSDA_GS_COMPUTE_CONFIG = {}
 
+# Switch the num_levels==1 fast path over to the fused
+# `ttnn.experimental.multi_scale_deformable_attn` op (grid_sample + weighted
+# sum in one kernel) once there is enough batched work to amortize its launch.
+# The kernel packs 32 queries per tile, so it only wins for large N*Q
+# (N = batch*num_heads, Q = num_queries); below this the decomposed
+# grid_sample + sum chain is faster. Threshold from microbench sweep.
+_MSDA_FUSED_MIN_NQ = 1024
+
 
 def _msda_grid_sample_compute_config(device):
     arch = device.arch()
@@ -170,6 +178,39 @@ def multi_scale_deformable_attn_pytorch(
         if _enc_stats is not None:
             _r(_enc_stats, "msda_gs_layout", _t, device)
             _t = _s(device)
+
+        # Fused fast path: when there's enough batched work, replace the
+        # grid_sample + reshape + weighted-sum chain with the single fused
+        # `multi_scale_deformable_attn` device op. value_l (N, h, w, D) and
+        # grid (N, Q*P, 1, 2) are already in the ROW_MAJOR bf16 form the op
+        # wants; only attn needs reshaping to (N, Q, P).
+        if (bs * num_heads) * num_queries >= _MSDA_FUSED_MIN_NQ:
+            attn = attention_weights[:, :, :, 0, :]
+            attn = ttnn.permute(attn, (0, 2, 1, 3))  # (B, H, Q, P)
+            attn = ttnn.reshape(attn, (bs * num_heads, num_queries, num_points))
+            attn = ttnn.to_layout(attn, layout=ttnn.ROW_MAJOR_LAYOUT)
+            # The fused op requires all three inputs in bf16 (decomposed
+            # grid_sample tolerates fp32; this op does not). Most callers
+            # already emit bf16, but some e2e paths feed fp32 sampling
+            # locations / weights — guard each input.
+            if value_l.dtype != ttnn.bfloat16:
+                value_l = ttnn.typecast(value_l, ttnn.bfloat16)
+            if grid.dtype != ttnn.bfloat16:
+                grid = ttnn.typecast(grid, ttnn.bfloat16)
+            if attn.dtype != ttnn.bfloat16:
+                attn = ttnn.typecast(attn, ttnn.bfloat16)
+            output = ttnn.experimental.multi_scale_deformable_attn(value_l, grid, attn)  # (N, Q, D)
+            if _enc_stats is not None:
+                _r(_enc_stats, "msda_grid_sample", _t, device)
+                _t = _s(device)
+
+            output = ttnn.reshape(output, (bs, num_heads, num_queries, head_dim))
+            output = ttnn.to_layout(output, layout=ttnn.TILE_LAYOUT)
+            output = ttnn.permute(output, (0, 2, 1, 3))
+            output = ttnn.reshape(output, (bs, num_queries, num_heads * head_dim))
+            if _enc_stats is not None:
+                _r(_enc_stats, "msda_finalize", _t, device)
+            return output
 
         sampled = ttnn.grid_sample(value_l, grid, compute_kernel_config=_msda_grid_sample_compute_config(device))
         if _enc_stats is not None:
