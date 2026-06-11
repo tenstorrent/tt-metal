@@ -38,6 +38,12 @@ Scripts that collect CI/CD metrics and benchmark data for upload to the analytic
 | `data_analysis/create_dummy_partial_benchmark_json.py` | Creates a synthetic benchmark pickle file for testing the data-collection pipeline. |
 | `data_analysis/create_job_failure_cluster_json.py` | Converts job failure cluster data (from the `slack-output-analysis` action) into pydantic models and saves as JSON for database upload. |
 
+## CI Health & Reporting
+
+| Script | Description |
+|--------|-------------|
+| `ci_digest.py` | One named CI digest. Reports each watched workflow's latest completed scheduled run (real/infra/passing job counts + a collapsible failed-jobs table from `ai_job_summary_*` artifacts) to the step summary + an artifact. Stateless; self-gates on the digest's cron via `--schedule`. Driven by `.github/workflows/ci-digest.yaml`. Usage: `ci_digest.py --name <digest> --workflows <foo.yaml …> [--schedule "0 8 * * *"] [--force]`. Tests: `ci_digest.py --self-test`. |
+
 ## Test & CI Utilities (`utils/`)
 
 | Script | Description |
