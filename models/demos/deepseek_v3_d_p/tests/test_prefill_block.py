@@ -539,8 +539,8 @@ def test_ds_prefill_block(
 )
 @pytest.mark.parametrize(
     "layer_type, gate_fallback_mode",
-    [("dense", None), ("moe", GateComputeMode.HOST_ALL)],
-    ids=["dense", "moe-gate_host"],
+    [("dense", None), ("moe", GateComputeMode.DEVICE)],
+    ids=["dense", "moe-gate_device"],
 )
 @pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
 @pytest.mark.parametrize(
