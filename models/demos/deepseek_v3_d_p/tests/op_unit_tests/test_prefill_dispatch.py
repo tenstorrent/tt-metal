@@ -135,35 +135,9 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             False,
             id="gpt_oss_120b_perf",
         ),
-        # ds v3 PCC variant (unchanged from original).
+        # Single PCC variant: dispatch's PCC path is independent of emb_dim/num_experts
+        # (kernel just loops more tiles/experts), so one PCC config covers all models.
         pytest.param(32, 7168, 16, 4, 4, True, id="pcc"),
-        pytest.param(
-            32,
-            DeepSeekV4ProConfig.EMB_SIZE,
-            16,
-            4,
-            4,
-            True,
-            id="deepseek_v4_pro_pcc",
-        ),
-        pytest.param(
-            32,
-            DeepSeekV4FlashConfig.EMB_SIZE,
-            16,
-            4,
-            4,
-            True,
-            id="deepseek_v4_flash_pcc",
-        ),
-        pytest.param(
-            32,
-            GptOss120BConfig.EMB_SIZE,
-            16,
-            4,
-            4,
-            True,
-            id="gpt_oss_120b_pcc",
-        ),
     ],
 )
 @pytest.mark.parametrize(
