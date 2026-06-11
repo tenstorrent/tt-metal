@@ -342,13 +342,6 @@ void kernel_main() {
     constexpr uint32_t broadcast_ternary_b = 1;
 #endif
 
-#ifdef ABLATE_INJECTOR_COMPUTE
-    // Perf probe: injector cores (row 0 / col 0) skip the matmul MAC but keep CB flow + output, so
-    // their in0/in1 CBs drain instantly and the DM kernels never stall on cb_reserve -> measures the
-    // upper bound of freeing injectors from compute. Output on those cores is garbage (timing only).
-    const uint32_t skip_compute_math = get_arg_val<uint32_t>(argidx++);
-#endif
-
     constexpr uint32_t in0_cb = tt::CBIndex::c_0;
     constexpr uint32_t in1_cb = tt::CBIndex::c_1;
     constexpr uint32_t out_cb = tt::CBIndex::c_2;
@@ -405,19 +398,16 @@ void kernel_main() {
                 cb_wait_front(in0_cb, in0_block_num_tiles);
                 cb_wait_front(in1_cb, in1_block_num_tiles);
 
-#ifdef ABLATE_INJECTOR_COMPUTE
-                if (!skip_compute_math)
-#endif
-                    matmul_blocks(
-                        in0_cb,
-                        in1_cb,
-                        intermediate_cb,
-                        current_M_block_tiles,
-                        current_N_block_tiles,
-                        N_block_tiles,
-                        K_block_tiles,
-                        current_subblock_h,
-                        current_subblock_w);
+                matmul_blocks(
+                    in0_cb,
+                    in1_cb,
+                    intermediate_cb,
+                    current_M_block_tiles,
+                    current_N_block_tiles,
+                    N_block_tiles,
+                    K_block_tiles,
+                    current_subblock_h,
+                    current_subblock_w);
 
                 if (k_block == K_num_blocks - 1) {
                     /**

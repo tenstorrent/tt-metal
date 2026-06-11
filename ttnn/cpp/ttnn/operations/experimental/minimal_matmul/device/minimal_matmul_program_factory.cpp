@@ -348,44 +348,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     auto in1_sender_cores = CoreRange(core_0_0, transpose_core_grid ? core_0_endy : core_endx_0);
     auto in1_receiver_cores = CoreRange(transpose_core_grid ? core_1_0 : core_0_1, core_endx_endy);
 
-    // Stagger places in0 injectors on the diagonal {(r % grid.x, r)} rather than column 0. The kernel
-    // core-spec for in0 sender/receiver becomes a CoreRangeSet; the per-core mcast rectangle + injector
-    // coords (computed below) are what actually move the injector — the kernel itself is unchanged.
-    auto getenv_set = [](const char* n) {
-        const char* v = std::getenv(n);
-        return v != nullptr && v[0] != '\0' && std::string(v) != "0";
-    };
-    // Read-split implies staggered placement (it routes the spread injectors' reads per side of col 5).
-    const bool stagger_env = getenv_set("TT_MM_MCAST_STAGGER") || getenv_set("TT_MM_MCAST_READSPLIT");
-    const bool readsplit_env = getenv_set("TT_MM_MCAST_READSPLIT");
     CoreRangeSet in0_sender_spec(in0_sender_cores);
     CoreRangeSet in0_receiver_spec(in0_receiver_cores);
-    // Read-split: diagonal injectors west of the x=5 DRAM column read+mcast on the default (north/west)
-    // NoC; injectors east of it use the opposite (south/east) NoC, so the col-5 vertical egress splits
-    // N/S instead of all going north. Kernel-split = factory-only (each kernel uses its dedicated NoC).
-    CoreRangeSet in0_sender_east_spec;  // east-side injectors (opposite NoC); empty unless readsplit
-    bool have_east_injectors = false;
-    auto in0_injector_col = [&](uint32_t row) { return row % grid_size.x; };
-    auto in0_injector_is_west = [&](uint32_t row) {
-        return device->worker_core_from_logical_core(CoreCoord{(std::size_t)in0_injector_col(row), (std::size_t)row})
-                   .x < 5;
-    };
-    if (stagger_env && !transpose_core_grid) {
-        std::vector<CoreRange> diag, west, east;
-        for (uint32_t r = 0; r < grid_size.y; r++) {
-            CoreRange cr(CoreCoord{(std::size_t)in0_injector_col(r), (std::size_t)r});
-            diag.push_back(cr);
-            (in0_injector_is_west(r) ? west : east).push_back(cr);
-        }
-        if (readsplit_env && !east.empty()) {
-            in0_sender_spec = CoreRangeSet(west);       // west injectors -> default NoC kernel
-            in0_sender_east_spec = CoreRangeSet(east);  // east injectors -> opposite NoC kernel
-            have_east_injectors = true;
-        } else {
-            in0_sender_spec = CoreRangeSet(diag);
-        }
-        in0_receiver_spec = CoreRangeSet(core_grid).subtract(CoreRangeSet(diag));
-    }
 
     auto in0_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     auto in0_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
@@ -516,86 +480,26 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         dm_noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC;
     }
 
-    // DRAM ablation hooks (perf analysis only; inert unless the env var is set). Each compiles out
-    // one DRAM NoC stream while preserving CB/compute control flow, to measure the compute floor.
+    // Experimental dataflow selectors (env-gated, off by default).
     auto env_flag_set = [](const char* name) {
         const char* v = std::getenv(name);
         return v != nullptr && v[0] != '\0' && std::string(v) != "0";
     };
-    if (env_flag_set("TT_MM_ABLATE_IN0_READ")) {
-        defines["ABLATE_IN0_READ"] = "1";
-    }
-    if (env_flag_set("TT_MM_ABLATE_IN1_READ")) {
-        defines["ABLATE_IN1_READ"] = "1";
-    }
-    if (env_flag_set("TT_MM_ABLATE_OUT_WRITE")) {
-        defines["ABLATE_OUT_WRITE"] = "1";
-    }
-    if (env_flag_set("TT_MM_ABLATE_INTERCORE")) {
-        // Skip inter-core systolic forwarding (L1->L1 unicast + semaphore handshake) on all DM kernels.
-        defines["ABLATE_INTERCORE"] = "1";
-    }
-    if (env_flag_set("TT_MM_DIRECT_DRAM_READ")) {
-        // Experiment: every core reads its own in0/in1 block from DRAM (no forwarding chain).
-        defines["DIRECT_DRAM_READ"] = "1";
-    }
-    const bool mcast_pipelined = env_flag_set("TT_MM_MCAST_PIPELINED");
     // Prefetch: software-pipeline the injector k-loop so block k+1's DRAM read is issued before block
-    // k's multicast, overlapping read latency with mcast transit on the single injector DM RISC. Built
-    // on the non-pipelined broadcast path (the +8% winner); incompatible with the credit/pipelined mcast.
-    // The auto-gate (prefetch_gate) was computed earlier with the block sizes (it also clamps the
+    // k's multicast, overlapping read latency with mcast transit on the single injector DM RISC. The
+    // auto-gate (prefetch_gate) was computed earlier with the block sizes (it also clamps the
     // compile-time block). TT_MM_MCAST_PREFETCH forces the dataflow on regardless of the gate.
     const bool mcast_prefetch = env_flag_set("TT_MM_MCAST_PREFETCH") || prefetch_gate;
-    // Stagger: place the in0 injector for row r at logical col (r % grid.x) (diagonal) instead of all
-    // at col 0, so in0 DRAM-read destinations fan across NoC columns (like in1 already does) and stop
-    // concentrating the col-5 DRAM egress onto one set of links. Non-transpose only for the prototype.
-    const bool mcast_readsplit = readsplit_env && !transpose_core_grid;
-    const bool mcast_stagger = (env_flag_set("TT_MM_MCAST_STAGGER") || readsplit_env) && !transpose_core_grid;
-    const bool mcast_broadcast =
-        env_flag_set("TT_MM_MCAST_BROADCAST") || mcast_pipelined || mcast_stagger || mcast_prefetch;
-    if (mcast_readsplit) {
-        // East injectors put their in0 read+mcast RISC on NOC_0 while in1 (same core) is also NOC_0;
-        // dynamic NoC avoids the dedicated-mode static binding conflict (two RISCs on one NoC).
-        dm_noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC;
-    }
+    const bool mcast_broadcast = env_flag_set("TT_MM_MCAST_BROADCAST") || mcast_prefetch;
     if (mcast_broadcast) {
-        // Prototype: replace the store-and-forward chain with a single NoC multicast per block. The
-        // injector reads DRAM once and mcasts the block to all cores along its broadcast axis (one
-        // hardware-replicated transaction instead of N serialized unicast+handshake hops).
-        TT_FATAL(!fuse_op && !fuse_srs, "TT_MM_MCAST_BROADCAST prototype does not support fused ops");
+        // Replace the store-and-forward chain with a single NoC multicast per block. The injector reads
+        // DRAM once and mcasts the block to all cores along its broadcast axis (one hardware-replicated
+        // transaction instead of N serialized unicast+handshake hops).
+        TT_FATAL(!fuse_op && !fuse_srs, "MCAST_BROADCAST does not support fused ops");
         defines["MCAST_BROADCAST"] = "1";
     }
     if (mcast_prefetch) {
-        TT_FATAL(!mcast_pipelined, "TT_MM_MCAST_PREFETCH targets the non-pipelined broadcast path");
         defines["MCAST_PREFETCH"] = "1";
-    }
-    if (mcast_pipelined) {
-        // Pipelined/credit mcast: receivers pre-grant `double_buffer_factor` credits so the injector
-        // mcasts that many blocks ahead of the slowest receiver (hides delivery behind compute), then
-        // replenish one credit per slot compute frees. Valid is signaled cumulatively (block count).
-        // Per-receiver credit counters live in a small L1 scratch CB (one uint32 slot per group member,
-        // 16B-strided), NOT semaphores (would blow the 16-semaphore-per-core limit). Broadcast
-        // flow-control needs the MIN over receivers, not a sum, hence per-receiver slots.
-        defines["MCAST_PIPELINED"] = std::to_string(double_buffer_factor);
-        defines["MCAST_CREDIT_STRIDE"] = "16";
-        uint32_t in0_credit_cb_id = tt::CBIndex::c_5;
-        uint32_t in1_credit_cb_id = tt::CBIndex::c_6;
-        tt::tt_metal::create_cb(
-            in0_credit_cb_id, program, core_grid, in1_parallel_axis_cores * 16, 1, tt::DataFormat::UInt32);
-        tt::tt_metal::create_cb(
-            in1_credit_cb_id, program, core_grid, in0_parallel_axis_cores * 16, 1, tt::DataFormat::UInt32);
-    }
-    const bool ablate_injector_compute = env_flag_set("TT_MM_ABLATE_INJECTOR_COMPUTE");
-    if (ablate_injector_compute) {
-        // Perf probe (use with mcast): injector cores (row 0 / col 0) skip the matmul MAC so their
-        // CBs drain instantly and reads+mcasts aren't stalled by their own compute. Output garbage.
-        defines["ABLATE_INJECTOR_COMPUTE"] = "1";
-    }
-    if (env_flag_set("TT_MM_CREDIT_FORWARD")) {
-        // Credit-based systolic forwarding: receiver pre-grants `double_buffer_factor` credits so the
-        // sender can run that many blocks ahead without per-block request->serve lockstep (hides hop
-        // latency). Cumulative counters both directions; value = CB block-depth (free slots).
-        defines["CREDIT_FORWARD"] = std::to_string(double_buffer_factor);
     }
 
     if (fuse_op) {
@@ -689,22 +593,6 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             .noc_mode = dm_noc_mode,
             .compile_args = in0_sender_compile_time_args,
             .defines = (fuse_op && fused_op_signaler->read_local_slice_from_input) ? in0_injector_defines : defines});
-
-    // Read-split: east-side injectors run an identical in0-sender kernel but on the OPPOSITE NoC
-    // (large_input_noc = read-preferred, south/east), so their reads exit the x=5 DRAM column southward.
-    tt::tt_metal::KernelHandle in0_sender_east_kernels_id = 0;
-    if (have_east_injectors) {
-        in0_sender_east_kernels_id = CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender.cpp",
-            in0_sender_east_spec,
-            tt::tt_metal::DataMovementConfig{
-                .processor = in0_risc,
-                .noc = large_input_noc,
-                .noc_mode = dm_noc_mode,
-                .compile_args = in0_sender_compile_time_args,
-                .defines = defines});
-    }
 
     std::vector<uint32_t> in0_receiver_compile_time_args = {
         M_tiles,
@@ -951,12 +839,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         CoreCoord in0_inj_l, in0_rf_l, in0_rl_l, in1_inj_l, in1_rf_l, in1_rl_l;
         uint32_t num_in0_recv = 0, num_in1_recv = 0;
         if (!transpose_core_grid) {
-            // Stagger: in0 injector for this row at the diagonal column (r % grid.x), mcast spans the
-            // FULL row (injector interior, self-excluded by HW). Non-stagger: injector at col 0, mcast
-            // covers cols 1..grid.x-1.
-            uint32_t in0_inj_col = mcast_stagger ? in0_injector_col(core.y) : 0;
-            in0_inj_l = {(std::size_t)in0_inj_col, (std::size_t)core.y};
-            in0_rf_l = {(std::size_t)(mcast_stagger ? 0 : 1), (std::size_t)core.y};
+            // in0 injector at col 0; mcast covers cols 1..grid.x-1 of this row.
+            in0_inj_l = {(std::size_t)0, (std::size_t)core.y};
+            in0_rf_l = {(std::size_t)1, (std::size_t)core.y};
             in0_rl_l = {(std::size_t)grid_size.x - 1, (std::size_t)core.y};
             num_in0_recv = grid_size.x - 1;
             in1_inj_l = {(std::size_t)core.x, (std::size_t)0};
@@ -976,11 +861,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         auto in0_inj_p = device->worker_core_from_logical_core(in0_inj_l);
         auto in0_mc_s = device->worker_core_from_logical_core(in0_rf_l);
         auto in0_mc_e = device->worker_core_from_logical_core(in0_rl_l);
-        // Read-split: this row's injector mcasts on NOC_1 (west side) or large_input_noc (east side).
-        // The multicast-rect start/end ordering must match that NoC (swap iff the NoC is NOC_1).
-        const bool in0_mcast_noc_is_noc1 =
-            mcast_readsplit ? in0_injector_is_west(core.y) : (in0_noc == tt::tt_metal::NOC::NOC_1);
-        if (in0_mcast_noc_is_noc1) {
+        // The multicast-rect start/end ordering must match the mcast NoC (swap iff NOC_1).
+        if (in0_noc == tt::tt_metal::NOC::NOC_1) {
             std::swap(in0_mc_s, in0_mc_e);
         }
         auto in1_inj_p = device->worker_core_from_logical_core(in1_inj_l);
@@ -1050,13 +932,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             in0_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->fused_op_receiver_signal_semaphore));
             in0_args.push_back(1);  // mcast_signal_op_cores
         }
-        // in0 injector = diagonal core (col r % grid.x) under stagger, else logical col 0.
-        const bool is_in0_injector =
-            mcast_stagger ? (static_cast<uint32_t>(core.x) == in0_injector_col(core.y)) : (in1_idx == 0);
-        if (is_in0_injector) {
-            // Read-split: east-side injectors run on the opposite-NoC kernel.
-            const bool east = mcast_readsplit && have_east_injectors && !in0_injector_is_west(core.y);
-            SetRuntimeArgs(program, east ? in0_sender_east_kernels_id : in0_sender_kernels_id, core, in0_args);
+        // in0 injector = logical col 0 (in1_idx 0).
+        if (in1_idx == 0) {
+            SetRuntimeArgs(program, in0_sender_kernels_id, core, in0_args);
         } else {
             SetRuntimeArgs(program, in0_receiver_kernels_id, core, in0_args);
         }
@@ -1134,11 +1012,6 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             compute_runtime_args.push_back(*reinterpret_cast<const uint32_t*>(&fused_ternary_scalar.value()));
             uint32_t ternary_b_M_tiles = fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
             compute_runtime_args.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
-        }
-        if (ablate_injector_compute) {
-            // Injector cores = row 0 (in1 injectors) or col 0 (in0 injectors) skip the matmul MAC.
-            const bool is_injector = (in0_idx == 0) || (in1_idx == 0);
-            compute_runtime_args.push_back(is_injector ? 1u : 0u);
         }
         SetRuntimeArgs(program, compute_kernels_id, core, compute_runtime_args);
     }

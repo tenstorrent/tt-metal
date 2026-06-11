@@ -186,19 +186,6 @@ void kernel_main() {
     const uint64_t in0_receiver_semaphore_noc_addr =
         get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_receiver_semaphore_addr);
 
-#ifdef CREDIT_FORWARD
-    // Credit-based forwarding: cumulative counters (semaphores never reset). The receiver pre-grants
-    // CREDIT_FORWARD credits to its predecessor (= # free CB slots), letting the sender run that many
-    // blocks ahead; afterwards it replenishes one credit per slot the compute frees. recv_sem counts
-    // delivered blocks; sender_sem counts granted credits. Both start at INVALID(=0).
-    uint32_t cf_blocks_received = 0;  // blocks consumed from predecessor (this core as receiver)
-    uint32_t cf_blocks_sent = 0;      // blocks delivered to successor (this core as sender)
-    if constexpr (!is_injector_core) {
-        // Pre-grant the initial double-buffer slots so the predecessor can fill them without waiting.
-        noc_semaphore_inc(in0_sender_semaphore_noc_addr, CREDIT_FORWARD);
-    }
-#endif
-
 #ifdef MCAST_BROADCAST
     // Multicast-broadcast prototype args, appended after the output addresses (mcast is incompatible
     // with fused ops, so N_chunks output addresses are the only thing between the fixed args and these).
@@ -213,31 +200,6 @@ void kernel_main() {
     // Receivers signal readiness to the injector's sender semaphore (same L1 offset on every core).
     const uint64_t in0_injector_sender_sem_noc_addr =
         get_noc_addr(in0_inj_noc_x, in0_inj_noc_y, in0_sender_semaphore_addr);
-#ifdef MCAST_PIPELINED
-    // Per-receiver credit counters live in a small L1 scratch CB (one 16B-strided slot per group
-    // member). Slot s is on the injector's core; receiver s incs it (cumulative grant), injector polls.
-    constexpr uint32_t cb_id_in0_credit = tt::CBIndex::c_5;
-    const uint32_t in0_credit_base = get_write_ptr(cb_id_in0_credit);
-    const uint32_t in0_my_group_idx = get_arg_val<uint32_t>(mc_base + 7);
-    const uint64_t in0_my_credit_noc_addr =
-        get_noc_addr(in0_inj_noc_x, in0_inj_noc_y, in0_credit_base + in0_my_group_idx * MCAST_CREDIT_STRIDE);
-    uint32_t mc_blocks_received = 0;
-    uint32_t mc_blocks_sent = 0;
-    // Startup barrier: injector zeroes its credit slots then mcasts a "go" (reuses the otherwise-unused
-    // sender semaphore) so no receiver pre-grants before the slots are zeroed (else a grant is lost).
-    if constexpr (is_injector_core) {
-        for (uint32_t i = 0; i <= in0_num_recv; i++) {
-            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_credit_base + i * MCAST_CREDIT_STRIDE) = 0;
-        }
-        uint64_t go_mcast = get_noc_multicast_addr(
-            in0_mc_start_x, in0_mc_start_y, in0_mc_end_x, in0_mc_end_y, in0_sender_semaphore_addr);
-        noc_semaphore_set_multicast(in0_valid_semaphore_addr, go_mcast, in0_num_recv);
-    } else {
-        noc_semaphore_wait(in0_sender_semaphore_addr_ptr, VALID);
-        // Pre-grant the double-buffer slots so the injector can mcast that many blocks ahead.
-        noc_semaphore_inc(in0_my_credit_noc_addr, MCAST_PIPELINED);
-    }
-#endif
 #endif
 
     /**
@@ -379,14 +341,7 @@ void kernel_main() {
                     cb_reserve_back(cb_id_in0, in0_block_num_tiles);
 
                     uint32_t in0_start_address = get_write_ptr(cb_id_in0);
-                // DIRECT_DRAM_READ (experiment): every core reads its own in0 block straight from DRAM
-                // (no systolic forwarding chain). Costs ~Nx more DRAM read bytes but removes the
-                // per-hop semaphore handshake latency that dominates small/skewed shapes.
-#ifdef DIRECT_DRAM_READ
-                    if constexpr (true) {
-#else
-                if constexpr (is_injector_core) {
-#endif
+                    if constexpr (is_injector_core) {
 #ifdef FUSE_AG
                     if (is_injector_core) {
                         k_block =
@@ -408,121 +363,59 @@ void kernel_main() {
                         m_tile_end,
                         k_block * K_block_tiles,
                         (k_block + 1) * K_block_tiles);
-                } else {
-                // Get from previous device
-                // ABLATE_INTERCORE (perf analysis only): skip the inter-core receive handshake;
-                // CB still pushed below so compute proceeds on stale L1 (measures pure compute floor).
-#ifndef ABLATE_INTERCORE
+                    } else {
+                    // Get from previous core.
 #ifdef MCAST_BROADCAST
-#ifdef MCAST_PIPELINED
-                    // Replenish a credit once past the pre-granted depth (this reserve only returned
-                    // because compute freed a slot), then wait for the injector's cumulative broadcast.
-                    if (mc_blocks_received >= MCAST_PIPELINED) {
-                        noc_semaphore_inc(in0_my_credit_noc_addr, 1);
-                    }
-                    noc_semaphore_wait_min(in0_receiver_semaphore_addr_ptr, mc_blocks_received + 1);
-                    mc_blocks_received++;
-#else
-                    // Signal readiness (slot free) to the injector, then wait for its broadcast.
-                    noc_semaphore_set(in0_receiver_semaphore_addr_ptr, INVALID);
-                    noc_semaphore_inc(in0_injector_sender_sem_noc_addr, 1);
-                    noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, VALID);
-#endif
-#elif defined(CREDIT_FORWARD)
-                    // cb_reserve_back above just returned -> a slot is free. The first CREDIT_FORWARD
-                    // slots were already granted up front (pre-grant); beyond that, this reserve only
-                    // returned because compute freed a slot, so replenish one credit to the predecessor.
-                    if (cf_blocks_received >= CREDIT_FORWARD) {
-                        noc_semaphore_inc(in0_sender_semaphore_noc_addr, 1);
-                    }
-                    noc_semaphore_wait_min(in0_receiver_semaphore_addr_ptr, cf_blocks_received + 1);
-                    cf_blocks_received++;
+                        // Signal readiness (slot free) to the injector, then wait for its broadcast.
+                        noc_semaphore_set(in0_receiver_semaphore_addr_ptr, INVALID);
+                        noc_semaphore_inc(in0_injector_sender_sem_noc_addr, 1);
+                        noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, VALID);
 #else
                     noc_semaphore_set(in0_receiver_semaphore_addr_ptr, INVALID);
                     noc_semaphore_inc(in0_sender_semaphore_noc_addr, 1);
                     noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, VALID);
 #endif
-#endif
-                }
+                    }
 
                 // Critical to performance for sender to push data to compute before mcasting
                 // This frees sender to start next read earlier
                 cb_push_back(cb_id_in0, in0_block_num_tiles);
 
-                // ABLATE_INTERCORE / DIRECT_DRAM_READ: skip the L1->L1 unicast forward + handshake.
-#if !defined(ABLATE_INTERCORE) && !defined(DIRECT_DRAM_READ)
 #ifdef MCAST_BROADCAST
-                    // Only the injector broadcasts: wait until all receivers signaled a free slot, then
-                    // one multicast write of the block + one multicast set of their valid semaphores.
-                    if constexpr (is_injector_core) {
-#ifdef MCAST_PIPELINED
-                        // Wait until EVERY receiver has granted a credit for this block (min over receivers,
-                        // not a sum) so the target slot is free on all of them, then broadcast.
-                        for (uint32_t i = 1; i <= in0_num_recv; i++) {
-                            volatile tt_l1_ptr uint32_t* credit_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                                in0_credit_base + i * MCAST_CREDIT_STRIDE);
-                            noc_semaphore_wait_min(credit_ptr, mc_blocks_sent + 1);
-                        }
-                        uint64_t mcast_data_addr = get_noc_multicast_addr(
-                            in0_mc_start_x, in0_mc_start_y, in0_mc_end_x, in0_mc_end_y, in0_start_address);
-                        noc_async_write_multicast(
-                            in0_start_address, mcast_data_addr, current_block_bytes, in0_num_recv);
-                        noc_async_writes_flushed();
+                // Only the injector broadcasts: wait until all receivers signaled a free slot, then
+                // one multicast write of the block + one multicast set of their valid semaphores.
+                if constexpr (is_injector_core) {
+                    noc_semaphore_wait(in0_sender_semaphore_addr_ptr, in0_num_recv);
+                    noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
 
-                        // Cumulative valid = block count; receivers wait_min(recv_sem >= their block + 1).
-                        noc_semaphore_set(in0_valid_semaphore_addr_ptr, mc_blocks_sent + 1);
-                        uint64_t mcast_valid_addr = get_noc_multicast_addr(
-                            in0_mc_start_x, in0_mc_start_y, in0_mc_end_x, in0_mc_end_y, in0_receiver_semaphore_addr);
-                        noc_semaphore_set_multicast(in0_valid_semaphore_addr, mcast_valid_addr, in0_num_recv);
-                        mc_blocks_sent++;
+                    uint64_t mcast_data_addr = get_noc_multicast_addr(
+                        in0_mc_start_x, in0_mc_start_y, in0_mc_end_x, in0_mc_end_y, in0_start_address);
+                    noc_async_write_multicast(in0_start_address, mcast_data_addr, current_block_bytes, in0_num_recv);
+                    // Ensure the source L1 read completed before the buffer can be reused next block.
+                    noc_async_writes_flushed();
+
+                    uint64_t mcast_valid_addr = get_noc_multicast_addr(
+                        in0_mc_start_x, in0_mc_start_y, in0_mc_end_x, in0_mc_end_y, in0_receiver_semaphore_addr);
+                    noc_semaphore_set_multicast(in0_valid_semaphore_addr, mcast_valid_addr, in0_num_recv);
+                }
 #else
-                        noc_semaphore_wait(in0_sender_semaphore_addr_ptr, in0_num_recv);
-                        noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
+                if (!is_sink_core) {
+                    noc_semaphore_wait(in0_sender_semaphore_addr_ptr, 1);
+                    noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
 
-                        uint64_t mcast_data_addr = get_noc_multicast_addr(
-                            in0_mc_start_x, in0_mc_start_y, in0_mc_end_x, in0_mc_end_y, in0_start_address);
-                        noc_async_write_multicast(
-                            in0_start_address, mcast_data_addr, current_block_bytes, in0_num_recv);
-                        // Ensure the source L1 read completed before the buffer can be reused next block.
-                        noc_async_writes_flushed();
+                    uint64_t in0_unicast_data_addr = get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_start_address);
 
-                        uint64_t mcast_valid_addr = get_noc_multicast_addr(
-                            in0_mc_start_x, in0_mc_start_y, in0_mc_end_x, in0_mc_end_y, in0_receiver_semaphore_addr);
-                        noc_semaphore_set_multicast(in0_valid_semaphore_addr, mcast_valid_addr, in0_num_recv);
-#endif
-                    }
-#else
-                    if (!is_sink_core) {
-#ifdef CREDIT_FORWARD
-                        // Wait for a credit from the successor (cumulative count >= blocks_sent+1), then send.
-                        noc_semaphore_wait_min(in0_sender_semaphore_addr_ptr, cf_blocks_sent + 1);
-#else
-                        noc_semaphore_wait(in0_sender_semaphore_addr_ptr, 1);
-                        noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
-#endif
-
-                        uint64_t in0_unicast_data_addr =
-                            get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_start_address);
-
-                        /**
-                         * in0 is M_block_tiles x K_block_tiles. When M block is partial, we don't need to write the
-                         * padded tiles. Use `current_block_bytes`.
-                         */
-                        noc_async_write(in0_start_address, in0_unicast_data_addr, current_block_bytes);
+                    /**
+                     * in0 is M_block_tiles x K_block_tiles. When M block is partial, we don't need to write the
+                     * padded tiles. Use `current_block_bytes`.
+                     */
+                    noc_async_write(in0_start_address, in0_unicast_data_addr, current_block_bytes);
 
 #ifdef ARCH_BLACKHOLE
                     noc_async_writes_flushed();
 #endif
-
-#ifdef CREDIT_FORWARD
-                    // Signal delivery to the successor (cumulative). It waits recv_sem >= its block count.
-                    noc_semaphore_inc(in0_receiver_semaphore_noc_addr, 1);
-                    cf_blocks_sent++;
-#else
-                        noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
-#endif
-                    }
-#endif
+                    noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
+                }
 #endif
 #ifdef SRS_FUSE_OP_SIGNALER
                 if constexpr (is_output_writer) {

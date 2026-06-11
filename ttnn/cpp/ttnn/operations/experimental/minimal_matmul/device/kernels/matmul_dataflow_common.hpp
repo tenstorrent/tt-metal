@@ -125,8 +125,6 @@ void read_in0_block_sync(
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
 
-// ABLATION (perf analysis only): skip in0 DRAM reads; CB reserve/push (in caller) preserved.
-#ifndef ABLATE_IN0_READ
 // BARRIER-THRESHOLD: barrier on outstanding reads every IN0_READ_BARRIER_THRESHOLD tiles to cap the
 // number of in-flight read requests per injector core and reduce NoC contention. Unlike the
 // output-write path, in0 reads are NOT staggered across cores, so they burst a full block at once.
@@ -171,7 +169,6 @@ void read_in0_block_sync(
     if constexpr (!issue_only) {
         noc_async_read_barrier();
     }
-#endif
 }
 
 /**
@@ -195,8 +192,6 @@ void read_in1_block_sync(
     uint32_t d1_end) {
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
-// ABLATION (perf analysis only): skip in1 DRAM reads; CB reserve/push (in caller) preserved.
-#ifndef ABLATE_IN1_READ
     for (uint32_t i = d0_start; i < d0_end; i++) {
         for (uint32_t j = d1_start; j < d1_end; j++) {
             if (j >= shape.logical_d1) {
@@ -218,7 +213,6 @@ void read_in1_block_sync(
     if constexpr (!issue_only) {
         noc_async_read_barrier();
     }
-#endif
 }
 
 /**
@@ -238,8 +232,6 @@ void write_block_sync(
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
 
-// ABLATION (perf analysis only): skip output DRAM writes (deferred-write path).
-#ifndef ABLATE_OUT_WRITE
     uint32_t wnoc_idx = 0;  // counts actual writes, drives output_write_noc() NOC selection
     for (uint32_t i = d0_start; i < d0_end; i++) {
         if (i >= shape.logical_d0) {
@@ -258,7 +250,6 @@ void write_block_sync(
         read_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
     output_write_flush_all();
-#endif
 }
 
 /**
@@ -377,8 +368,6 @@ void write_block_sync_granular(
     for (uint32_t m_id = 0; m_id < M_block_tiles; m_id++) {
         cb_wait_front(cb_id_out, N_block_tiles);
         uint32_t m_tile = d0_start + m_id;
-        // ABLATION (perf analysis only): skip output DRAM writes; CB wait/pop preserved.
-#ifndef ABLATE_OUT_WRITE
         if (m_tile < d0_end && m_tile < shape.logical_d0) {
             uint32_t out_read_ptr = get_read_ptr(cb_id_out);
             for (uint32_t n_tile_id = d1_start; n_tile_id < d1_end; n_tile_id++) {
@@ -390,12 +379,9 @@ void write_block_sync_granular(
                 out_read_ptr += tile_size_bytes;
             }
         }
-#endif
         cb_pop_front(cb_id_out, N_block_tiles);
     }
-#ifndef ABLATE_OUT_WRITE
     output_write_flush_all();
-#endif
 }
 
 /**
