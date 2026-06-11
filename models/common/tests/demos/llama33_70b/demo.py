@@ -34,7 +34,7 @@ Reference artifact (``.refpt``): use ``generate_controlled_refpt.py`` to produce
 metadata-rich ``.refpt`` with ``prompt_len=512`` before running the accuracy test.
 The legacy TTTv1 artifact at ``models/tt_transformers/tests/reference_outputs/`` may
 lack ``prompt_len`` metadata and its intrinsic top-1 ceiling may be below PERF.md
-thresholds. See ``dev-tools/agentic-bringup/skills/reference-sanity.md``.
+thresholds. See the reference-sanity guide.
 """
 
 import json
