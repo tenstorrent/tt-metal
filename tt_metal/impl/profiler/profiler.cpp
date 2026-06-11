@@ -1892,6 +1892,7 @@ void DeviceProfiler::readDeviceMarkerData(
         timer_id,
         timestamp,
         data,
+        std::vector<uint64_t>{},
         op_name,
         marker_details.source_line_num,
         marker_details.source_file,
@@ -1945,34 +1946,53 @@ void DeviceProfiler::readTsData16BMarkerData(
     const std::vector<uint64_t>& trailer_data,
     uint32_t timer_id,
     uint64_t timestamp) {
-#if defined(TRACY_ENABLE)
     ZoneScoped;
 
-    using EMD = KernelProfilerNocEventMetadata;
-
     nlohmann::json meta_data;
+#if defined(TRACY_ENABLE)
+    if ((timer_id & 0xFFFF) == kernel_profiler::NOC_TRACING_STATIC_ID) {
+        using EMD = KernelProfilerNocEventMetadata;
 
-    EMD event_metadata(data);
-    auto event_contents = event_metadata.getContents();
+        EMD event_metadata(data);
+        auto event_contents = event_metadata.getContents();
 
-    // Local Noc Event is expected to have one trailer with dst_addr
-    if (!std::holds_alternative<EMD::LocalNocEvent>(event_contents)) {
-        TT_THROW("TS_DATA_16B marker contains unexpected event contents {:#X}", event_metadata.asU64());
+        // Local Noc Event is expected to have one trailer with dst_addr
+        if (!std::holds_alternative<EMD::LocalNocEvent>(event_contents)) {
+            TT_THROW("TS_DATA_16B marker contains unexpected event contents {:#X}", event_metadata.asU64());
+        }
+
+        const uint32_t total_data_size = trailer_data.size() + 1;
+        if (total_data_size != kernel_profiler::TimestampedDataSize<kernel_profiler::PacketTypes::TS_DATA_16B>::size) {
+            TT_THROW(
+                "TS_DATA_16B marker expected {} trailers, got {}",
+                kernel_profiler::TimestampedDataSize<kernel_profiler::PacketTypes::TS_DATA_16B>::size,
+                total_data_size);
+        }
+
+        EMD trailer_metadata(trailer_data[0]);
+        const auto& trailer = trailer_metadata.getLocalNocEventDstTrailer();
+        meta_data["dst_addr"] = trailer.getDstAddr();
+        meta_data["src_addr"] = trailer.getSrcAddr();
+        meta_data["noc_status_counter"] = static_cast<uint32_t>(trailer.counter_value);
+
+        auto& noc_debug_state = MetalContext::instance(context_id).noc_debug_state();
+        if (noc_debug_state) {
+            EMD::LocalNocEvent local_noc_event = std::get<EMD::LocalNocEvent>(event_contents);
+            const metal_SocDescriptor& soc_desc =
+                MetalContext::instance(context_id).get_cluster().get_soc_desc(device_id);
+            // disable linting here; slicing is __intended__
+            // NOLINTBEGIN
+            const CoreCoord virtual_core =
+                soc_desc.translate_coord_to(physical_core, CoordSystem::NOC0, CoordSystem::TRANSLATED);
+            // NOLINTEND
+            noc_debug_state->push_event(
+                device_id,
+                timestamp,
+                get_processor_id(risc_type),
+                make_noc_debug_event(virtual_core, local_noc_event, trailer_metadata.getLocalNocEventDstTrailer()));
+        }
     }
-
-    const uint32_t total_data_size = trailer_data.size() + 1;
-    if (total_data_size != kernel_profiler::TimestampedDataSize<kernel_profiler::PacketTypes::TS_DATA_16B>::size) {
-        TT_THROW(
-            "TS_DATA_16B marker expected {} trailers, got {}",
-            kernel_profiler::TimestampedDataSize<kernel_profiler::PacketTypes::TS_DATA_16B>::size,
-            total_data_size);
-    }
-
-    EMD trailer_metadata(trailer_data[0]);
-    const auto& trailer = trailer_metadata.getLocalNocEventDstTrailer();
-    meta_data["dst_addr"] = trailer.getDstAddr();
-    meta_data["src_addr"] = trailer.getSrcAddr();
-    meta_data["noc_status_counter"] = static_cast<uint32_t>(trailer.counter_value);
+#endif
 
     const tracy::MarkerDetails marker_details = getMarkerDetails(timer_id);
     const kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
@@ -1989,6 +2009,7 @@ void DeviceProfiler::readTsData16BMarkerData(
         timer_id,
         timestamp,
         data,
+        trailer_data,
         op_name,
         marker_details.source_line_num,
         marker_details.source_file,
@@ -2001,26 +2022,9 @@ void DeviceProfiler::readTsData16BMarkerData(
         return;
     }
 
-    auto& noc_debug_state = MetalContext::instance(context_id).noc_debug_state();
-    if (noc_debug_state) {
-        EMD::LocalNocEvent local_noc_event = std::get<EMD::LocalNocEvent>(event_contents);
-        const metal_SocDescriptor& soc_desc = MetalContext::instance(context_id).get_cluster().get_soc_desc(device_id);
-        // disable linting here; slicing is __intended__
-        // NOLINTBEGIN
-        const CoreCoord virtual_core =
-            soc_desc.translate_coord_to(physical_core, CoordSystem::NOC0, CoordSystem::TRANSLATED);
-        // NOLINTEND
-        noc_debug_state->push_event(
-            device_id,
-            timestamp,
-            get_processor_id(risc_type),
-            make_noc_debug_event(virtual_core, local_noc_event, trailer_metadata.getLocalNocEventDstTrailer()));
-    }
-
     device_tracy_contexts.try_emplace({device_id, physical_core}, nullptr);
 
     updateFirstTimestamp(timestamp);
-#endif
 }
 
 struct DispatchMetaData {
@@ -2191,7 +2195,7 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
 
                 // If this is a performance counter, extract fields from data and store in marker meta_data
                 if (marker.marker_id == PERF_COUNTER_PROFILER_ID) {
-                    const PerfCounter perf_counter(marker.data);
+                    const PerfCounter perf_counter(marker.data, marker.trailer_data[0]);
                     const uint32_t counter_type_raw = perf_counter.counter_type;
                     // Skip markers with out-of-range counter_type (stale/dropped data).
                     if (!enchantum::contains<PerfCounterType>(counter_type_raw)) {
@@ -2589,6 +2593,7 @@ void DeviceProfiler::pushTracyDeviceResults(
                 orig_marker.marker_id,
                 adjusted_timestamp,
                 orig_marker.data,
+                orig_marker.trailer_data,
                 orig_marker.op_name,
                 orig_marker.line,
                 orig_marker.file,
