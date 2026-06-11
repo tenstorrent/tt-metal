@@ -12,9 +12,30 @@ from __future__ import annotations
 import torch
 import ttnn
 
+import os
+from pathlib import Path
+
+import pytest
+
 from models.experimental.pi0_5.tt.tt_bh_glx import stages
 from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_galaxy_mesh
+from models.experimental.pi0_5.tt.tt_bh_glx.stage_vision import StageVision
 from models.experimental.pi0_5.tt.tt_bh_glx.transport import send_via_host
+
+
+CHECKPOINT_DIR = Path(os.environ.get("PI05_CHECKPOINT_DIR", "/home/tt-admin/pi05_cache/pi05_libero_upstream"))
+SEED = 42
+
+
+def _compute_pcc(a: torch.Tensor, b: torch.Tensor) -> float:
+    t1 = a.flatten().float()
+    t2 = b.flatten().float()
+    m1, m2 = torch.mean(t1), torch.mean(t2)
+    s1, s2 = torch.std(t1), torch.std(t2)
+    if s1 < 1e-6 or s2 < 1e-6:
+        return 1.0 if torch.allclose(t1, t2, atol=1e-5) else 0.0
+    cov = torch.mean((t1 - m1) * (t2 - m2))
+    return (cov / (s1 * s2)).item()
 
 
 def test_mesh_carve_smoke():
@@ -46,3 +67,51 @@ def test_mesh_carve_smoke():
         assert out.shape == probe.shape
         # bf16 round-trip — loose tolerance suffices.
         assert torch.allclose(out.float(), probe, atol=1e-2)
+
+
+@pytest.mark.skipif(
+    not (CHECKPOINT_DIR / "model.safetensors").exists(),
+    reason=f"checkpoint not found at {CHECKPOINT_DIR}",
+)
+def test_vision_stage_pcc():
+    """4-chip SigLIP slices + mm_projector vs torch reference. Target PCC ≥ 0.997."""
+    from models.experimental.pi0_5.common.configs import SigLIPConfig
+    from models.experimental.pi0_5.common.weight_loader import Pi0_5WeightLoader
+    from models.experimental.pi0_5.reference.torch_siglip import SigLIPVisionTower as TorchSigLIPVisionTower
+    from models.experimental.pi0_5.reference.torch_siglip import MultiModalProjector as TorchMMProjector
+
+    # Match the single-chip default config (verified vs pi05_libero_upstream).
+    cfg = SigLIPConfig(
+        hidden_size=1152,
+        intermediate_size=4304,
+        num_hidden_layers=27,
+        num_attention_heads=16,
+        image_size=224,
+        patch_size=14,
+    )
+
+    loader = Pi0_5WeightLoader(str(CHECKPOINT_DIR))
+    vision_w = loader.categorized_weights["vlm_vision"]
+    projector_w = loader.categorized_weights["vlm_projector"]
+
+    bs = int(os.environ.get("PI0_NUM_CAMERAS", "3"))
+    torch.manual_seed(SEED)
+    pixel_values = torch.randn(bs, 3, cfg.image_size, cfg.image_size)
+
+    # Torch reference: SigLIP vision tower + mm_projector → (B, 256, 2048).
+    ref_tower = TorchSigLIPVisionTower(cfg, vision_w)
+    ref_proj = TorchMMProjector(projector_w)
+    with torch.no_grad():
+        ref_feat = ref_tower.forward(pixel_values)
+        ref_out = ref_proj.forward(ref_feat)
+
+    # TTNN sliced pipeline on 4 chips.
+    with open_galaxy_mesh(l1_small_size=24576) as h:
+        stage = StageVision(cfg, loader.categorized_weights, h)
+        out_ttnn = stage.run(pixel_values)
+        out = ttnn.to_torch(out_ttnn)
+
+    assert out.shape == ref_out.shape, f"shape mismatch: {tuple(out.shape)} vs {tuple(ref_out.shape)}"
+    pcc = _compute_pcc(ref_out, out)
+    print(f"\n✅ Vision stage PCC vs torch: {pcc:.6f}  (shape {tuple(out.shape)})")
+    assert pcc >= 0.997, f"PCC {pcc:.6f} < 0.997"
