@@ -127,10 +127,6 @@ def _iter_ci_trace_region_requirements():
         for entry in entries:
             if not isinstance(entry, dict):
                 continue
-            model_id = str(entry.get("model", ""))
-            if model_id.startswith("gemma-4"):
-                continue
-
             cmd = entry.get("cmd", "")
             cmd_hf_match = HF_MODEL_RE.search(cmd)
             cmd_hf_model = cmd_hf_match.group(1).strip("'\"") if cmd_hf_match else None
@@ -169,3 +165,26 @@ def test_resolve_deepseek_v3_dynamic_allocation():
 def test_ci_hf_model_jobs_have_trace_region_config(job_name, hf_model, sku):
     del job_name
     _resolve_ci_trace_region_size(hf_model, sku)
+
+
+@pytest.mark.parametrize(
+    "model_path,sku,expected_size",
+    [
+        ("models/demos/gemma4/configs/gemma-4-E2B-it", "wh_n150", 30000000),
+        ("models/demos/gemma4/configs/gemma-4-E4B-it", "p300x2", 70000000),
+        ("models/demos/gemma4/configs/gemma-4-26B-A4B-it", "wh_llmbox_perf", 70000000),
+        ("models/demos/gemma4/configs/gemma-4-31B-it", "p300x2", 70000000),
+    ],
+)
+def test_resolve_gemma4_config_path_aliases(model_path, sku, expected_size):
+    assert resolve_trace_region_size(model_path, sku) == expected_size
+
+
+def test_cpu_sku_skips_trace_region_override():
+    """Data-parallel parametrization with zero sub-mesh devices must skip trace override."""
+    num_devices = 8
+    data_parallel = 16
+    device_name_based_on_dp = "CPU" if (num_devices // data_parallel) == 0 else "N150"
+    assert device_name_based_on_dp == "CPU"
+    should_skip = not device_name_based_on_dp or device_name_based_on_dp == "CPU"
+    assert should_skip

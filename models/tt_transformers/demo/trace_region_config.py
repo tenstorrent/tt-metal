@@ -96,7 +96,7 @@ def _model_name_candidates() -> list[str]:
 
 def get_supported_trace_region_size(request, mesh_device):
     device_name_based_on_dp = device_name_based_on_data_parallel(request, mesh_device, os.getenv("MESH_DEVICE"))
-    if not device_name_based_on_dp:
+    if not device_name_based_on_dp or device_name_based_on_dp == "CPU":
         return None
 
     sku = normalize_sku(device_name_based_on_dp)

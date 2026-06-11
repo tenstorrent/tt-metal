@@ -23,6 +23,7 @@ import ttnn
 from models.common.sampling.generator import SamplingGenerator, SamplingParams, format_sampling_params
 from models.common.sampling.tt_sampling import TTSampling
 from models.demos.gpt_oss.tt.model import compute_per_device_vocab
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 
 # Every test in this module is pinned to a 4×8 Galaxy mesh with FABRIC_1D_RING
 # (see GPT_OSS_DEVICE_PARAMS below). On systems with fewer devices — e.g. the
@@ -92,7 +93,7 @@ BATCH_SIZE = 32
 # NOT Llama Galaxy's dispatch_core_axis/worker_l1_size/small trace.
 GPT_OSS_DEVICE_PARAMS = {
     "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-    "trace_region_size": 30000000,
+    TRACE_MODEL_KEY_PARAM: "gpt-oss-20b",
 }
 
 
