@@ -35,16 +35,8 @@ void kernel_main() {
     constexpr uint32_t packet_size = get_compile_time_arg_val(6);
     constexpr bool load_balance_across_alt_routes = get_compile_time_arg_val(7) != 0;
     constexpr uint32_t num_connections = get_compile_time_arg_val(8);
-    constexpr uint8_t line_hops = get_compile_time_arg_val(9);
-    constexpr uint8_t rect_e_hops = get_compile_time_arg_val(10);
-    constexpr uint8_t rect_w_hops = get_compile_time_arg_val(11);
-    constexpr uint8_t rect_spine_hops = get_compile_time_arg_val(12);
-    constexpr uint8_t line_hops_alt = get_compile_time_arg_val(13);
-    constexpr uint8_t rect_e_hops_alt = get_compile_time_arg_val(14);
-    constexpr uint8_t rect_w_hops_alt = get_compile_time_arg_val(15);
-    constexpr uint8_t rect_spine_hops_alt = get_compile_time_arg_val(16);
-    constexpr bool do_barrier_sync = get_compile_time_arg_val(17) != 0;
-    constexpr auto input_tensor_args = TensorAccessorArgs<18>();
+    constexpr bool do_barrier_sync = get_compile_time_arg_val(9) != 0;
+    constexpr auto input_tensor_args = TensorAccessorArgs<10>();
     constexpr auto output_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
 
     constexpr bool enable_fabric = (num_connections > 0);
@@ -74,6 +66,14 @@ void kernel_main() {
     const uint8_t final_barrier_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t final_barrier_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
     const bool owns_final_barrier_sem = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t line_hops = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t rect_e_hops = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t rect_w_hops = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t rect_spine_hops = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t line_hops_alt = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t rect_e_hops_alt = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t rect_w_hops_alt = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t rect_spine_hops_alt = get_arg_val<uint32_t>(arg_idx++);
     size_t arg_for_fab = arg_idx;
 
     auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_tensor_address);
@@ -92,19 +92,19 @@ void kernel_main() {
     }
 
     // Build ranges + ranges_alt arrays.
-    // Connection order should match host: line first, then rect (only active ones are present,
-    // indexed 0..num_connections-1).
+    // Connection order matches host: line (E) first, then rect (S) — only active ones are present,
+    // indexed 0..num_connections-1.
     FabricRange ranges[2] = {};      // [0] = E-line, [1] = S-rect (Fabric_2D only)
     FabricRange ranges_alt[2] = {};  // [0] = E-line, [1] = S-rect (Fabric_2D only)
 #ifdef FABRIC_2D
     {
         uint32_t idx = 0;
-        if constexpr (line_hops > 0) {
+        if (line_hops > 0) {
             ranges[idx] = FabricRange{line_hops, 0, 0, 0};
             ranges_alt[idx] = FabricRange{line_hops_alt, 0, 0, 0};
             ++idx;
         }
-        if constexpr (rect_spine_hops > 0) {
+        if (rect_spine_hops > 0) {
             ranges[idx] = FabricRange{rect_e_hops, rect_w_hops, 0, rect_spine_hops};
             ranges_alt[idx] = FabricRange{rect_e_hops_alt, rect_w_hops_alt, 0, rect_spine_hops_alt};
             ++idx;

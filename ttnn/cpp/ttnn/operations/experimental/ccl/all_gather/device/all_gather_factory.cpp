@@ -150,14 +150,16 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
         e_coord.has_value() || w_coord.has_value() || n_coord.has_value() || s_coord.has_value(),
         "No neighboring devices");
 
-    // TODO: num_links should be handled correctly for 2D (per-axis link counts can differ).
+    // We allocate one worker core per link, but not per axis.
+    // Each worker handles both dirs (forward and backward) and also both axes (N/S and E/W).
+    // Known limitation: when the two axes have unequal link counts, the larger axis's extra links
+    // go unused. If this is ever a real use-case, we need to allocate separate worker cores per axis.
     const uint32_t links0 = operation_attributes.axis_num_links[0];
     const uint32_t links1 = operation_attributes.axis_num_links[1];
     const uint32_t min_num_links = std::min(links0 > 0 ? links0 : links1, links1 > 0 ? links1 : links0);
 
-    // Get worker cores, assuming 1 worker per link
+    // Get worker cores
     uint32_t num_workers_per_link = 1;
-
     auto sender_worker_core_range = get_cores_close_to_erisc(min_num_links * num_workers_per_link, true);
     auto sender_worker_cores = corerange_to_cores(sender_worker_core_range);
 
@@ -276,47 +278,31 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
     // KERNEL CREATION
     // Reader (covers forward directions E-line + S-rect)
     std::vector<uint32_t> reader_compile_args = {
-        cb0_id,                             // cb0_id
-        input_page_size,                    // input tensor page size
-        kernel_output_page_size,            // kernel-visible page size = min(input, output)
-        output_pages_per_stripe,            // stripe length (writes before a stripe jump)
-        output_page_stripe_jump,            // value added to page_id at stripe boundary
-        cb_page_size,                       // cb entry size
-        packet_size,                        // packet_size
-        load_balance_across_alt_routes,     // load_balance_across_alt_routes
-        (e_hops > 0) + (s_hops > 0),        // num_connections
-        e_hops,                             // line_hops
-        e_hops,                             // rect_e_hops
-        w_hops,                             // rect_w_hops
-        s_hops,                             // rect_spine_hops
-        ew_load_balance ? w_hops : e_hops,  // line_hops_alt
-        ew_load_balance ? w_hops : e_hops,  // rect_e_hops_alt
-        ew_load_balance ? e_hops : w_hops,  // rect_w_hops_alt
-        ns_load_balance ? n_hops : s_hops,  // rect_spine_hops_alt
-        init_barrier_sem.has_value(),       // do_barrier_sync
+        cb0_id,                          // cb0_id
+        input_page_size,                 // input tensor page size
+        kernel_output_page_size,         // kernel-visible page size = min(input, output)
+        output_pages_per_stripe,         // stripe length (writes before a stripe jump)
+        output_page_stripe_jump,         // value added to page_id at stripe boundary
+        cb_page_size,                    // cb entry size
+        packet_size,                     // packet_size
+        load_balance_across_alt_routes,  // load_balance_across_alt_routes
+        (e_hops > 0) + (s_hops > 0),     // num_connections
+        init_barrier_sem.has_value(),    // do_barrier_sync
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
 
     // Writer (covers backward directions W-line + N-rect)
     std::vector<uint32_t> writer_compile_args = {
-        cb0_id,                             // cb0_id
-        kernel_output_page_size,            // kernel-visible page size = min(input, output)
-        output_pages_per_stripe,            // stripe length (writes before a stripe jump)
-        output_page_stripe_jump,            // value added to page_id at stripe boundary
-        cb_page_size,                       // cb entry size
-        packet_size,                        // packet_size
-        load_balance_across_alt_routes,     // load_balance_across_alt_routes
-        (w_hops > 0) + (n_hops > 0),        // num_connections
-        w_hops,                             // line_hops
-        e_hops,                             // rect_e_hops
-        w_hops,                             // rect_w_hops
-        n_hops,                             // rect_spine_hops
-        ew_load_balance ? e_hops : w_hops,  // line_hops_alt
-        ew_load_balance ? w_hops : e_hops,  // rect_e_hops_alt
-        ew_load_balance ? e_hops : w_hops,  // rect_w_hops_alt
-        ns_load_balance ? s_hops : n_hops,  // rect_spine_hops_alt
-        init_barrier_sem.has_value(),       // do_barrier_sync
+        cb0_id,                          // cb0_id
+        kernel_output_page_size,         // kernel-visible page size = min(input, output)
+        output_pages_per_stripe,         // stripe length (writes before a stripe jump)
+        output_page_stripe_jump,         // value added to page_id at stripe boundary
+        cb_page_size,                    // cb entry size
+        packet_size,                     // packet_size
+        load_balance_across_alt_routes,  // load_balance_across_alt_routes
+        (w_hops > 0) + (n_hops > 0),     // num_connections
+        init_barrier_sem.has_value(),    // do_barrier_sync
     };
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
 
@@ -398,14 +384,21 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
             barrier_core.y,      // init_barrier_sem_noc0_y
             barrier_wait_value,  // init_barrier_sem_wait_value
             final_barrier_sem.has_value() ? final_barrier_sem->address() : 0,
-            drain_sync_core.x,         // final_barrier_sem_noc0_x
-            drain_sync_core.y,         // final_barrier_sem_noc0_y
-            out_ready_sem_wait_value,  // final_barrier_sem_wait_value
-            owns_out_ready_sem,        // owns_final_barrier_sem (wait+reset)
+            drain_sync_core.x,                  // final_barrier_sem_noc0_x
+            drain_sync_core.y,                  // final_barrier_sem_noc0_y
+            out_ready_sem_wait_value,           // final_barrier_sem_wait_value
+            owns_out_ready_sem,                 // owns_final_barrier_sem (wait+reset),
+            e_hops,                             // line_hops
+            e_hops,                             // rect_e_hops
+            w_hops,                             // rect_w_hops
+            s_hops,                             // rect_spine_hops
+            ew_load_balance ? w_hops : e_hops,  // line_hops_alt
+            ew_load_balance ? w_hops : e_hops,  // rect_e_hops_alt
+            ew_load_balance ? e_hops : w_hops,  // rect_w_hops_alt
+            ns_load_balance ? n_hops : s_hops,  // rect_spine_hops_alt
         };
         const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
-        // Reader: E first, then S. Order must match the kernel's ranges[] construction
-        // (which packs E-line into slot 0, S-rect into slot 1 when both are active).
+        // Reader forward connection info: E-line (axis 1) then S-rect (axis 0).
         std::vector<tt::tt_fabric::FabricNodeId> reader_dst_nodes;
         if (e_hops > 0 && e_coord.has_value()) {
             reader_dst_nodes.push_back(mesh_device->get_fabric_node_id(*e_coord));
@@ -436,12 +429,19 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
             barrier_core.x,  // init_barrier_sem_noc0_x
             barrier_core.y,  // init_barrier_sem_noc0_y
             final_barrier_sem.has_value() ? final_barrier_sem->address() : 0,
-            drain_sync_core.x,  // final_barrier_sem_noc0_x
-            drain_sync_core.y,  // final_barrier_sem_noc0_y
+            drain_sync_core.x,                  // final_barrier_sem_noc0_x
+            drain_sync_core.y,                  // final_barrier_sem_noc0_y
+            w_hops,                             // line_hops
+            e_hops,                             // rect_e_hops
+            w_hops,                             // rect_w_hops
+            n_hops,                             // rect_spine_hops
+            ew_load_balance ? e_hops : w_hops,  // line_hops_alt
+            ew_load_balance ? w_hops : e_hops,  // rect_e_hops_alt
+            ew_load_balance ? e_hops : w_hops,  // rect_w_hops_alt
+            ns_load_balance ? s_hops : n_hops,  // rect_spine_hops_alt
         };
 
-        // Writer: W first, then N. Order must match the kernel's ranges[] construction
-        // (which packs W-line into slot 0, N-rect into slot 1 when both are active).
+        // Writer backward connections: W-line (axis 1) then N-rect (axis 0).
         std::vector<tt::tt_fabric::FabricNodeId> writer_dst_nodes;
         if (w_hops > 0 && w_coord.has_value()) {
             writer_dst_nodes.push_back(mesh_device->get_fabric_node_id(*w_coord));
