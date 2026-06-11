@@ -239,3 +239,150 @@ of wedging the device (and needing the flaky reset).
 - Reduce helper (CB semantics audited here): `ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.{hpp,inl}`
 - MUX writer: `ttnn/.../device/kernels/dataflow/wan_rmsnorm_fused_writer_mux.cpp`
 - Reader: `ttnn/.../device/kernels/dataflow/wan_rmsnorm_fused_reader.cpp`
+
+---
+
+## 8. Update (chunk=1 relaxation attempt) — matmul-reduce layer FIXED; two layers remain
+
+Goal: relax the per-head-RoPE `chunk_size_rows=1` clamp to recover AG amortization +
+read/compute overlap on the big TP=4 shapes (`selfattn_qk_s2` is 308us, only ~52% compute).
+
+**Layer 1 (the §2 wedge) — FIXED** by commit `11bc6a0e056`: the POST `reduce<AVG,REDUCE_ROW>`
+was a tile **matmul** (`reduce_uses_matmul<AVG,ROW>==true`); replacing it with an explicit
+FPU eltwise-add of the `ring_size` gathered partial-sum tiles (+`*1/H_full+eps+rsqrt`)
+removes the matmul→pack transition the packer reconfig wedged on. Verified: the §1 repro no
+longer wedges *eagerly*, clamped TP=4 is PCC 99.9991% + perf-neutral, and the 2-arg
+`pack_reconfig` (§6.1) did NOT help (so it was the matmul, not the reconfig args).
+
+**Layer 2 — a chunk>1 reader NoC-read hang (NOT yet fixed).** With the clamp disabled
+(`WAN_RMSNORM_NO_PERHEAD_CLAMP=1`), chunk>1:
+- `a2v_videoQ_s2` (feat=512 → num_tile_cols=16 → chunk=8, 19 chunks): **runs, correct, ~13%
+  faster** (traced 208.6→182.1us). The relaxation pays off here.
+- `selfattn_qk_s2` (feat=1024 → num_tile_cols=32 → chunk=4, 38 chunks): **hangs** under
+  sustained *traced* execution (eager runs fine). Heisenbug: **vanishes under TT_METAL_WATCHER**
+  (polling perturbs timing), so the §4(b) ring-buffer recipe can't catch it.
+- tt-triage on the live no-watcher wedge (run pytest directly, no op-timeout, then
+  `python3 tools/tt-triage.py`): op 10 RUNNING; `check_noc_status` shows the **reader (brisc)
+  on the op worker cores with ~2300 NoC reads issued but unreturned**
+  (`NIU_MST_RD_RESP_RECEIVED`: issued 16707 vs recv 14397). Op kernels don't symbolize in
+  `dump_callstacks` (addr2line/VMA issue, as in §4c). So: reader-side NoC read non-completion,
+  correlated with MORE chunks (38 vs 19) and/or num_tile_cols=32 (cos/sin = 2*32=64 reads per
+  per-row barrier vs 32 for a2v).
+
+**Layer 3 — partial-last-chunk correctness (NOT yet fixed).** chunk>1 shapes whose tile-row
+count isn't divisible by the chunk (e.g. `*_s1` = 1216 rows = 38 tile-rows, chunk=4 → 2-row
+tail) give **94% PCC** (vs 99.99% for evenly-divisible 152/8). The clamp (chunk=1) hid this.
+
+Next-step suspects for layer 2: reader outstanding-read management for chunk>1 (cap cos/sin
+reads per barrier like `input_barrier_tiles` does for input?); CB depth/wrap for input_cb /
+cos-sin CB under many chunks; interaction of the deep-read reader with the AG mcast on the NoC.
+The heisenbug nature (watcher-masked) means try targeted reader/CB changes + the no-watcher
+run_safe_pytest repro (`-x`, 5s dispatch timeout) as the pass/fail oracle, not the watcher.
+
+---
+
+## 9. Update (layer-3 root-cause) — it's a PRE-EXISTING, GENERAL "last row of each chunk" bug
+
+Investigated layer-3 (the chunk>1 correctness bug) with fast eager per-tile-row diffs
+(fused vs composite+standalone baseline). Findings:
+
+- **Not the partial last chunk — it's the LAST ROW of EVERY chunk.** The error is periodic
+  with period = chunk_size_rows. On `selfattn_qk_s1` (1216 rows=38 tile-rows; 13 workers ×
+  ~3 rows ⇒ chunk_size_rows=3, 1 chunk/worker), tile-rows 2,5,8,…,35 (each worker's LAST
+  row) are wrong by ~9-27; all other rows are bf16 noise (~0.1).
+- **General — not rope- or head-specific.** Reproduces identically on `tp4_v_block_s1`
+  (num_heads_per_device=1, NO rope, adaLN bias), `tp4_v_textcross_q_s1` (8 heads, NO rope),
+  and the rope QK shapes. So it's neither the per-head RoPE nor the head-split path.
+- **PRE-EXISTING — not candidate `11bc6a0e056` (eltwise reduce).** Reverting the compute
+  kernel to the pre-#3 matmul reduce gives the byte-identical wrong pattern. So the
+  eltwise-reduce commit is exonerated.
+- **It's GARBAGE DATA, not a wrong rms scale.** On a bad row, fused/baseline ratio has
+  mean≈1.54, std≈0.51, range −0.83→4.52 (sign flips); the adjacent good row is 1.0000
+  (std 0.0025). A wrong per-row rms would be a *uniform* scale — this is varied per element,
+  so the last row's INPUT or OUTPUT data is wrong, not its normalization factor.
+- **Shipping implication.** `block` and `text-cross QK` norms are NOT per-head-rope-clamped,
+  so they ALREADY run chunk>1 in production with this bug — i.e. multi-chunk block/text-cross
+  RMSNorm has been silently producing a wrong last-row-per-worker. (per-head-rope QK norms
+  were saved by the chunk=1 clamp.)
+
+Remaining gap: pin the exact buffer. Leading suspects (all "last row of the chunk" handling):
+the reader's per-row input deep-read / input_cb residency for the final row; the writer's
+per-row output drain (`noc_async_writes_flushed` + per-row pop, final barrier only at kernel
+end); or the AG packed-page scatter tail. Next step: dump the compute's input_cb and output_cb
+for the last row of a chunk (kernel ring-buffer or a DRAM scratch copy) on a tiny chunk=2
+repro, comparing last-row vs first-row bytes. This is eager-testable (fast, safe, no hang).
+
+---
+
+## 10. SOLVED — root cause is a multi-hop fabric-multicast farthest-target drop; fix = clamp chunk=1 for >2-hop AG
+
+Root-caused the chunk>1 correctness bug (sec 9) to the **fabric multicast**, not op logic:
+
+- The bad row's output is a UNIFORM **2.0x** scale (no-bias textcross: ratio mean 2.0055,
+  std 0.034) ⇒ 1/rms is 2x too large ⇒ mean(x²) 4x too small ⇒ with ring_size=4 the gathered
+  sum holds only the LOCAL partial; the 3 remote partials are missing.
+- Direct DRAM-scratch (`pob`) dump for chunk 0 (chunk_size_rows=2): device-1 (1 hop) and
+  device-2 (2 hops) pages have BOTH rows (~32000); **device-3 (3 hops) has row 0 (~32000) but
+  row 1 = 25.6 (stale)**. The FARTHEST multicast target loses everything past the first row.
+- `flush=true` on the fused write+atomic_inc: NO effect. Per-row single-flit packets: NO
+  effect (device-3's 2nd packet still drops; its inc still arrives → no hang). So it is a
+  fabric/EDM multi-hop multicast delivery bug, independent of op packet structuring.
+- Hop-dependent: TP=2 (1 hop) and chunk=1 (single-row page, no tail) are always correct —
+  which is exactly why TP=2 chunk>1 (Wan) and all chunk=1 paths worked.
+
+**Pre-existing production bug:** `block` and `text-cross QK` norms are NOT per-head-rope
+clamped, so they ran chunk>1 at TP=4 and were SILENTLY WRONG on each chunk's last row.
+
+**Fix (shipped here):** force `chunk_size_rows=1` whenever the AG path spans >2 hops
+(`use_mux && ring_size > 2`), in BOTH `compute_sizing` and the program factory. Verified:
+all 8 representative TP=4 configs (block s1/s2, text-cross q s1/s2, self-attn qk, a2v video-Q,
+a2v audio-K) now PCC 99.998-100.000% vs baseline; full TP=4 bench runs with no hang.
+
+**Still open (the original perf goal):** the chunk>1 RELAXATION is fabric-blocked at TP=4 —
+recovering it needs a fabric-team fix to the multi-hop multicast (deliver the full payload to
+the farthest target) or an AG redesign that avoids multi-row multicast (e.g. per-device
+point-to-point with flow control). At TP=4 the op is now correct but pinned to chunk=1.
+
+---
+
+## 11. ACTUAL ROOT CAUSE (supersedes §9–10) — buffer/kernel chunk_size mismatch from num_links
+
+§9–10's "fabric multicast farthest-target tail-drop" was WRONG (the `pob` dump on a
+38-row shape was a red herror). The real bug is a **sizing inconsistency** between the
+DRAM stats buffer and the kernel — nothing to do with the fabric, and the clamp is NOT
+the fix.
+
+Decisive evidence: with chunk>1 (NO_PERHEAD_CLAMP), `selfattn_qk_s1` (38 tile-rows)
+fails at 94% but `selfattn_qk_s2` (152 tile-rows) passes at 99.9997% — BOTH chunk=3,
+both per-head ROPE, both multi-hop. A fabric tail-drop would hit both. The rowdiff
+showed the bad rows are exactly the **last row of every chunk** at a uniform **2x**
+scale (mean(x²) 4x too small ⇒ only the local partial summed). The `pob` dump showed
+the buffer was `[1,1,76,64]` = **window=2, ncd=19 (chunk=2)** while the kernel CT args
+were **chunk=3, ncd=13 (window=3)**.
+
+Why they disagree:
+- `compute_sizing` (sizes the buffer via `create_stats_buffer`) picked `num_workers=19`
+  for 38 rows ⇒ rows_per_worker=2 ⇒ **chunk=2**, and did NOT apply the num_links rounding.
+- `create_at` (the actual program) rounds `num_workers` DOWN to a multiple of
+  `num_links_eff=4` ⇒ `16` ⇒ rows_per_worker=3 ⇒ **chunk=3**.
+- Separately, `create_stats_buffer` hardcoded `num_links=1`, while the op is invoked with
+  `num_links=4`. The buffer geometry depends on num_links (through the rounding), so the
+  two were computed for different link counts.
+
+The writer then emits 3-row (96 B) pages into a buffer laid out for 2-row (64 B) pages
+⇒ the scatter reads garbage into each chunk's last AG row. Shapes where `pick()` was
+already a multiple of num_links (152 → 64 workers, no rounding) happened to agree, which
+is exactly why only *some* shapes were corrupted, and only at num_links>1.
+
+**Fix (shipped, no clamp):**
+1. `compute_sizing`: apply the same `num_links` rounding to `num_workers` that
+   `create_at` does, so buffer geometry == kernel geometry.
+2. `wan_fused_distributed_rmsnorm_create_stats_buffer`: add a `num_links` parameter
+   (was hardcoded to 1); callers pass the SAME value used to invoke the op.
+3. LTX bench + `models/tt_dit/layers/normalization.py`: forward `num_links` (bench) and
+   weight/RoPE (both) into `create_stats_buffer` so its chunk/clamp matches the op.
+
+**Verified:** every TP=4 shape with chunk>1 (NO_PERHEAD_CLAMP) now PCC 99.98–100.00%
+(worst selfattn_qk_s1 99.982%); default path 99.999%; full timed bench runs with no hang.
+The per-head-ROPE clamp remains for its INDEPENDENT reason (cos/sin CB L1 overflow at
+wide features), not the AG.
