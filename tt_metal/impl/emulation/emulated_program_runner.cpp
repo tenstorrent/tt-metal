@@ -1148,7 +1148,10 @@ static std::map<std::string, std::string> build_kernel_defines(
         for (auto& cb_impl : cb_impls) {
             for (uint8_t idx : cb_impl->local_buffer_indices()) {
                 if (idx < EMULE_NUM_CBS) {
-                    tile_sizes[idx] = cb_impl->page_size(idx);
+                    // Calculate tile size from the CB's data format.
+                    const auto& tile = cb_impl->tile(idx);
+                    tile_sizes[idx] = tile.has_value() ? tile->get_tile_size(cb_impl->data_format(idx))
+                                                       : Tile().get_tile_size(cb_impl->data_format(idx));
                     cb_formats[idx] = static_cast<uint8_t>(cb_impl->data_format(idx));
                 }
             }
