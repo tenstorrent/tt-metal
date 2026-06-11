@@ -193,8 +193,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     const sfpi::vFloat vConst1Ln2 = sfpi::vConstFloatPrgm0;
     sfpi::vFloat log2_result = exp_f32 + ln_m * vConst1Ln2;
 
-    // Step 2: base**pow = 2**(pow*log2(base)). Clamp z_f32 to -127 to avoid overflow when result should be 0 (e.g.
-    // 0**+inf, N**-inf).
+    // Step 2: base**pow = 2**(pow*log2(base)). The fp32 exp path handles underflow/overflow itself.
     sfpi::vFloat z_f32 = pow * log2_result;
 
     // 2^z_f32 = exp(z_f32 * ln(2)); use Cody-Waite + Taylor exp for <1 ULP float32 accuracy
