@@ -20,6 +20,13 @@ constexpr uint32_t whole_packet_size = get_compile_time_arg_val(7);
 constexpr uint32_t num_whole_fabric_packets_per_link = get_compile_time_arg_val(8);
 constexpr uint32_t partial_packet_size = get_compile_time_arg_val(9);
 constexpr bool use_fabric = get_compile_time_arg_val(10);
+// L1 landing slot for DEVICE_PULL (pull_from_host=true). In that mode the H2D
+// FIFO lives in pinned host memory and receiver_socket.read_ptr/fifo_addr are
+// FIFO offsets, NOT valid L1 addresses. This scratch slot is where each page is
+// DMA'd from PCIe before being forwarded. Unused (may be 0) in HOST_PUSH mode.
+// Note: CT arg 11 is metadata_size_bytes (unused by this kernel; present for
+// arg-index parity with fused_h2d_receiver_embedding.cpp).
+constexpr uint32_t scratch_l1_addr = get_compile_time_arg_val(12);
 
 FORCE_INLINE void write_data_to_local_core_with_ack(
     SocketSenderInterface& sender_socket, uint32_t l1_read_addr, uint64_t dst_addr, uint32_t page_size) {
@@ -183,6 +190,11 @@ void kernel_main() {
         if (!deepseek_b1_ops::socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;
         }
+        // In DEVICE_PULL mode receiver_socket.read_ptr is a FIFO offset, not an L1
+        // address. Use scratch_l1_addr as the landing buffer for the PCIe DMA and as
+        // the source for any downstream write. In HOST_PUSH mode the data already
+        // sits at receiver_socket.read_ptr in device L1.
+        uint32_t local_page_addr = pull_from_host ? scratch_l1_addr : receiver_socket.read_ptr;
         if constexpr (pull_from_host) {
             // Pages available in H2D socket - read over PCIe
             noc_async_wide_read_any_len_with_state(
@@ -190,7 +202,7 @@ void kernel_main() {
                 pcie_xy_enc,
                 ((static_cast<uint64_t>(read_addr_hi) << 32) | read_addr_lo) + receiver_socket.read_ptr -
                     receiver_socket.fifo_addr,
-                receiver_socket.read_ptr,
+                local_page_addr,
                 page_size);
             noc_async_read_barrier();
         }
@@ -198,11 +210,11 @@ void kernel_main() {
         if constexpr (loopback_mode) {
             cb_reserve_back(downstream_interface_index, 1);
             noc_async_write(
-                receiver_socket.read_ptr, get_noc_addr(get_write_ptr(downstream_interface_index)), page_size);
+                local_page_addr, get_noc_addr(get_write_ptr(downstream_interface_index)), page_size);
             noc_async_write_barrier();
             cb_push_back(downstream_interface_index, 1);
         } else {
-            auto l1_read_addr = receiver_socket.read_ptr;
+            auto l1_read_addr = local_page_addr;
             uint64_t dst_addr = downstream_data_addr + sender_socket.write_ptr;
 
             socket_reserve_pages(sender_socket, 1);
