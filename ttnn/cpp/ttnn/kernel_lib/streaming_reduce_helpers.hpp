@@ -23,7 +23,9 @@
  *  - accumulate_reduce<>     : full streaming reduce — owns the block loop
  *  - accumulate_reduce_block<> : single-iteration helper for callers that
  *    interleave per-block work between sub/mul and reduce
- *  - transform_in_place      : 1-tile in-place transform on a 1-page CB
+ *
+ * For an in-place SFPU finalizer on the accumulator (e.g. rsqrt-with-eps), use
+ * `compute_kernel_lib::transform_in_place` from eltwise_convenience.hpp.
  */
 
 namespace compute_kernel_lib {
@@ -74,8 +76,9 @@ ALWI void accumulate_reduce_block(
 //
 // Post-op routing: `post_op_final` runs only on the last block, via reduce<>'s
 // post_reduce_op hook (in DST after final accumulation, before pack). For
-// multi-instruction finalizers (e.g. rsqrt-with-eps), pass NoOp{} here and use
-// `transform_in_place` on cb_acc afterwards.
+// multi-instruction finalizers (e.g. rsqrt-with-eps), pass NoOp{} here and run
+// `compute_kernel_lib::transform_in_place` (eltwise_convenience.hpp) on cb_acc
+// afterwards.
 template <
     PoolType pool,
     ReduceDim rdim,
@@ -90,25 +93,6 @@ ALWI void accumulate_reduce(
     uint32_t num_blocks,
     ReducePartialScaler partial = ReducePartialScaler::none(),
     PostOp post_op_final = PostOp{});
-
-// =============================================================================
-// transform_in_place — 1-tile in-DST transform with arbitrary user lambda
-// =============================================================================
-//
-// Pops one tile from `cb`, runs `t(0)` against DST[0] (after copy_tile loads
-// the popped tile into DST[0]), then packs DST[0] back into `cb`. The CB
-// must have capacity >= 1 page; the helper pops BEFORE reserve_back so a
-// 1-page CB is sufficient.
-//
-// `t` is a callable taking a single `uint32_t dst_idx`. It can issue any
-// number of in-DST init+op pairs (e.g. rsqrt_tile_init + rsqrt_tile, or a
-// chain like `mul_unary_tile, add_unary_tile, rsqrt_tile`).
-//
-// Format reconfigs are bundled in: SRCA <- cb, packer <- cb. This is cheap
-// and removes a footgun where a previous phase left SRCA/SRCB/packer state
-// pointing elsewhere.
-template <typename Transform>
-ALWI void transform_in_place(uint32_t cb, Transform t);
 
 }  // namespace compute_kernel_lib
 
