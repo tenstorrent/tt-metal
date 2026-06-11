@@ -891,9 +891,9 @@ def test_batch_norm_training_avoids_variance_cancellation(device):
     eps = 1e-5
 
     torch.manual_seed(0)
-    channel_offsets = torch.where(
-        torch.arange(channels, dtype=torch.float32) % 2 == 0, 5.0, -5.0
-    ).view(1, channels, 1, 1)
+    channel_offsets = torch.where(torch.arange(channels, dtype=torch.float32) % 2 == 0, 5.0, -5.0).view(
+        1, channels, 1, 1
+    )
     in_data = (channel_offsets + 0.1 * torch.randn(input_shape, dtype=torch.float32)).to(torch.bfloat16)
 
     def to_tt(tensor):
