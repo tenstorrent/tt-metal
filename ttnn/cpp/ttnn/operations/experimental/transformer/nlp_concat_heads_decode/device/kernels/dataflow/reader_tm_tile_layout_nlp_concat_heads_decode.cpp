@@ -8,28 +8,38 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "api/tensor/tensor_accessor.h"
 
 // #include "api/debug/dprint.h"  // required in all kernels using DPRINT
 
+// Metal 2.0: the output CB id comes from the DFB binding token (dfb::q_output); the input tensor base
+// address comes from the TensorAccessor binding (ta::input); the shape scalars come from named
+// compile-time args (args::); the per-core head offset is the named runtime arg
+// (args::in_tile_offset_by_head); and the input NOC coordinate arrays are positional runtime varargs
+// (get_vararg), which live right after the single named RTA. The data-movement logic is unchanged.
 void kernel_main() {
     Noc noc;
 
-    uint32_t in_tile_offset_by_head = get_arg_val<uint32_t>(0);
-    uint32_t q_start_addr = get_arg_val<uint32_t>(1);
+    uint32_t in_tile_offset_by_head = get_arg(args::in_tile_offset_by_head);
 
-    constexpr uint32_t ELEMENT_SIZE = get_compile_time_arg_val(0);
-    constexpr uint32_t SUBTILE_LINE_BYTES = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_id_q_out = get_compile_time_arg_val(2);
-    constexpr uint32_t head_size = get_compile_time_arg_val(3);
-    constexpr uint32_t batch = get_compile_time_arg_val(4);
-    constexpr uint32_t head_size_num_tiles = get_compile_time_arg_val(5);
+    constexpr uint32_t ELEMENT_SIZE = get_arg(args::element_size);
+    constexpr uint32_t SUBTILE_LINE_BYTES = get_arg(args::sub_tile_line_bytes);
+    constexpr uint32_t cb_id_q_out = dfb::q_output;
+    constexpr uint32_t head_size = get_arg(args::head_size);
+    constexpr uint32_t batch = get_arg(args::batch);
+    constexpr uint32_t head_size_num_tiles = get_arg(args::head_size_num_tiles);
     constexpr uint32_t PHASES_TO_READ =
-        get_compile_time_arg_val(6);  // 0 to read all phases, 1 to read only first phase, 2 to read only second phase
+        get_arg(args::phases_to_read);  // 0 to read all phases, 1 to read only first phase, 2 to read only second phase
 
-    constexpr uint32_t num_x = get_compile_time_arg_val(7);
-    constexpr uint32_t num_y = get_compile_time_arg_val(8);
-    tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(2));
-    tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(2 + num_x));
+    constexpr uint32_t num_x = get_arg(args::num_x);
+    constexpr uint32_t num_y = get_arg(args::num_y);
+    // Varargs (the input NOC coordinate arrays) follow the single named RTA: x coords first, then y coords.
+    tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(1));
+    tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(1 + num_x));
+
+    // Input tensor base address from the tensor accessor binding.
+    const auto input = TensorAccessor(ta::input);
+    uint32_t q_start_addr = input.get_bank_base_address();
 
     CircularBuffer cb_q_out(cb_id_q_out);
     UnicastEndpoint src_ep;
