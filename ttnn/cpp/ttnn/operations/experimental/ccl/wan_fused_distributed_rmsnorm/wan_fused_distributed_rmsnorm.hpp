@@ -53,6 +53,10 @@ std::optional<ttnn::Tensor> wan_fused_distributed_rmsnorm_create_stats_buffer(
     const MeshDevice& mesh_device,
     uint32_t num_heads_per_device = 1,
     bool per_head_norm = false,
+    // MUST equal the num_links the op is invoked with: the buffer's chunk/window
+    // geometry depends on num_workers, which the program rounds to a multiple of
+    // num_links. A mismatch silently corrupts multi-row-chunk AG (see .cpp).
+    uint32_t num_links = 1,
     // RoPE/weight passed through so the buffer's chunk/window sizing matches the
     // program's per-head-RoPE / streaming chunk clamp (needed for per-head RoPE
     // and wide-feature streaming shapes).

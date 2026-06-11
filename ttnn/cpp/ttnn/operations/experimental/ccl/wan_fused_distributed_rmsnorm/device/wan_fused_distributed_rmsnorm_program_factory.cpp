@@ -320,6 +320,27 @@ WanFusedDistributedRmsnormSizing compute_sizing(
     s.is_tp_1 = (args.ring_size == 1) || args.per_head_norm;
     s.num_workers = s.is_tp_1 ? 1u : pick_num_workers_tp_gt_1(s.num_tile_rows);
     s.use_mux = !s.is_tp_1 && (s.num_workers > 1);
+    // CRITICAL: mirror create_at's num_links rounding so the stats-buffer geometry
+    // sized here (chunk_size_rows / num_chunks_per_device / page_size_bytes) agrees
+    // with the program factory's actual kernel layout. create_at rounds num_workers
+    // DOWN to a multiple of num_links_eff; if we skip that here, the two disagree
+    // whenever pick() isn't already link-aligned. e.g. num_tile_rows=38 picks 19
+    // workers -> rows_per_worker=2 -> chunk=2 here, but the factory rounds to 16 ->
+    // rows_per_worker=3 -> chunk=3. The buffer is then laid out for 2-row pages while
+    // the writer emits 3-row pages, so the AG scatters garbage into each chunk's last
+    // row (uniform 2x output on those rows). Shapes where pick() is already a multiple
+    // of num_links (e.g. 152 rows -> 64 workers) happen to agree, which is why only
+    // some shapes were corrupted.
+    {
+        const uint32_t num_links_requested = std::max<uint32_t>(1u, args.num_links);
+        const uint32_t num_links_eff = s.use_mux ? std::min<uint32_t>(num_links_requested, s.num_workers) : 1u;
+        if (s.use_mux && num_links_eff > 1) {
+            s.num_workers = (s.num_workers / num_links_eff) * num_links_eff;
+            if (s.num_workers == 0) {
+                s.num_workers = num_links_eff;
+            }
+        }
+    }
     const uint32_t rows_per_worker = tt::div_up(s.num_tile_rows, s.num_workers);
     // Phase 9 packed-AG: one fabric mcast per chunk, so fewer chunks = fewer
     // fabric round-trips. Aim for 1 chunk per worker (= rows_per_worker rows
