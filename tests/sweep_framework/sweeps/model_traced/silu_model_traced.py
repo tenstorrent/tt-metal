@@ -3,6 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import math
+from typing import Optional, Tuple
+
 import torch
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
@@ -42,6 +45,31 @@ parameters = {
 
 if model_traced_params:
     parameters["model_traced"] = model_traced_params
+
+
+_DTYPE_BYTES = {"BFLOAT16": 2, "BFLOAT8_B": 1, "BFLOAT4_B": 1, "FLOAT32": 4, "UINT32": 4, "INT32": 4, "UINT16": 2}
+
+
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    # Trace-validation replicates a shard-placement tensor in full on every chip.
+    # A few video-model configs are ~1.09B elements (e.g. (21,1,407040,128)),
+    # which only fit when genuinely sharded 1/8 across the mesh; replicated per
+    # chip they need >2 GB and overflow device DRAM ("Out of Memory ... DRAM
+    # buffer"). Skip configs whose full tensor can't be replicated on one chip.
+    shp = test_vector.get("input_a_shape")
+    if isinstance(shp, str):
+        try:
+            shp = tuple(int(x) for x in shp.strip("()[] ").split(",") if x.strip())
+        except Exception:
+            return False, None
+    if not isinstance(shp, (list, tuple)) or not shp:
+        return False, None
+    numel = math.prod(int(d) for d in shp)
+    dt = str(test_vector.get("input_a_dtype", "")).rsplit(".", 1)[-1]
+    nbytes = numel * _DTYPE_BYTES.get(dt, 2)
+    if nbytes > 1_500_000_000:
+        return True, f"silu: full tensor {tuple(shp)} ({nbytes} B) exceeds per-chip DRAM when replicated for validation"
+    return False, None
 
 
 def mesh_device_fixture():
