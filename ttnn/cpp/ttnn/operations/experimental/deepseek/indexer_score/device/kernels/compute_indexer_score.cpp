@@ -53,6 +53,7 @@ void relu_qk_subblock(uint32_t head_in_group, uint32_t r, uint32_t c) {
     // (invisible for bf16 k, corrupts bfp8 k: its exponent bytes are read as bf16).
     reconfig_data_format(k_cb, q_cb);
     pack_reconfig_data_format(qk_cb);
+    pack_reconfig_l1_acc(0);  // overwrite cb_qk (mul_accumulate_pass leaves L1-acc on for cb_acc)
     mm_block_init_short(
         q_cb, k_cb, 1 /*transpose k*/, 1 /*ct_dim*/, heads_per_dest_pass /*rt_dim*/, head_dim_tiles /*kt_dim*/);
     tile_regs_acquire();
@@ -83,70 +84,35 @@ void relu_qk_subblock(uint32_t head_in_group, uint32_t r, uint32_t c) {
 }
 
 /**
- * mul_cb[h] = qk_cb[h] * bcast_cols(w_cb[w_base + h]) for one DEST pass
+ * acc_cb tile 0 += sum_h relu(qk_cb[h]) * bcast_cols(w_cb[w_base + h]) for one DEST pass,
+ * accumulated by the packer (pack_reconfig_l1_acc): each head's relu*w packs straight from
+ * DEST onto acc tile 0, so there is no cb_mul and no per-head add_tiles L1 round-trip.
+ * `first` is the very first pass of the output tile: it seeds acc (l1_acc off on head 0)
+ * before accumulating the rest. Caller reserves/pushes acc_cb and resets l1_acc afterwards.
  */
-template <uint32_t qk_cb, uint32_t w_cb, uint32_t mul_cb>
-void mul_gates_pass(uint32_t w_base) {
-    // Precondition: qk_cb has heads_per_dest_pass produced, w_cb has the w group produced (resident)
-    // Postcondition: qk_cb has heads_per_dest_pass consumed, mul_cb has heads_per_dest_pass produced
+template <uint32_t qk_cb, uint32_t w_cb, uint32_t acc_cb>
+void mul_accumulate_pass(uint32_t w_base, bool first) {
+    // Precondition: qk_cb has heads_per_dest_pass produced; acc_cb has 1 reserved (by caller)
+    // Postcondition: qk_cb consumed; acc_cb tile 0 holds the running head sum (still reserved)
     cb_wait_front(qk_cb, heads_per_dest_pass);
     reconfig_data_format(qk_cb, w_cb);
-    pack_reconfig_data_format(mul_cb);
+    pack_reconfig_data_format(acc_cb);
     mul_bcast_cols_init_short(qk_cb, w_cb);
-    cb_reserve_back(mul_cb, heads_per_dest_pass);
     tile_regs_acquire();
     for (uint32_t h = 0; h < heads_per_dest_pass; ++h) {
         mul_tiles_bcast_cols(qk_cb, w_cb, h, w_base + h, h);
     }
     tile_regs_commit();
     tile_regs_wait();
+    pack_reconfig_l1_acc(first ? 0 : 1);  // first pass seeds (overwrite), all others accumulate
     for (uint32_t h = 0; h < heads_per_dest_pass; ++h) {
-        pack_tile(h, mul_cb);
+        pack_tile<true>(h, acc_cb, 0);  // every head packs onto acc tile 0
+        if (first && h == 0) {
+            pack_reconfig_l1_acc(1);  // seeded: accumulate the remaining heads of the first pass
+        }
     }
     tile_regs_release();
-    cb_push_back(mul_cb, heads_per_dest_pass);
     cb_pop_front(qk_cb, heads_per_dest_pass);
-}
-
-/**
- * acc_cb (ring of unit tiles) += mul_cb[0..heads_per_dest_pass); when first, primed from mul_cb[0].
- */
-template <uint32_t mul_cb, uint32_t acc_cb>
-void accumulate_pass(bool first) {
-    // Precondition: mul_cb has heads_per_dest_pass produced, acc front is this unit tile (unless first)
-    // Postcondition: mul_cb has heads_per_dest_pass consumed, acc has this unit tile at back
-    cb_wait_front(mul_cb, heads_per_dest_pass);
-    pack_reconfig_data_format(acc_cb);
-    uint32_t h = 0;
-    if (first) {
-        // no pre-zeroed acc tile exists, so the first head primes the ring by copy instead of add
-        reconfig_data_format_srca(mul_cb);
-        copy_tile_to_dst_init_short(mul_cb);
-        tile_regs_acquire();
-        copy_tile(mul_cb, 0, 0);
-        tile_regs_commit();
-        cb_reserve_back(acc_cb, 1);
-        tile_regs_wait();
-        pack_tile(0, acc_cb);
-        tile_regs_release();
-        cb_push_back(acc_cb, 1);
-        h = 1;
-    }
-    reconfig_data_format(acc_cb, mul_cb);
-    add_tiles_init(acc_cb, mul_cb);
-    for (; h < heads_per_dest_pass; ++h) {
-        cb_wait_front(acc_cb, 1);
-        tile_regs_acquire();
-        add_tiles(acc_cb, mul_cb, 0, h, 0);
-        tile_regs_commit();
-        cb_pop_front(acc_cb, 1);
-        cb_reserve_back(acc_cb, 1);
-        tile_regs_wait();
-        pack_tile(0, acc_cb);
-        tile_regs_release();
-        cb_push_back(acc_cb, 1);
-    }
-    cb_pop_front(mul_cb, heads_per_dest_pass);
 }
 
 /**
@@ -197,11 +163,13 @@ void kernel_main() {
         const uint32_t k_tiles_in_unit = span.k_tiles();
         cb_wait_front(cb_k, k_chunk_tiles);  // full chunk pushed even on edge units (ring alignment)
 
-        // each tile completes all head groups before the next, so cb_acc holds
-        // exactly one in-flight tile (the serial L1 acc is the known perf TODO)
+        // each tile completes all head groups before the next, so cb_acc holds one
+        // in-flight tile; the 64-head sum accumulates into it via the packer (no L1 round-trip)
         for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
             const uint32_t diag_tile = chunk_start_tiles + span.q_tile_start() + r;
             for (uint32_t c = 0; c < k_tiles_in_unit; ++c) {
+                cb_reserve_back(cb_acc, 1);
+                bool first = true;
                 for (uint32_t group_start = 0; group_start < num_heads; group_start += heads_per_group) {
                     if constexpr (stream_heads) {
                         cb_wait_front(cb_q, q_group_tiles);
@@ -210,13 +178,15 @@ void kernel_main() {
                         // w is laid out [q_tiles_per_unit][num_heads] (see reader read_w_group)
                         const uint32_t w_base = r * num_heads + group_start + head;
                         relu_qk_subblock<cb_q, cb_k, cb_qk>(head, r, c);
-                        mul_gates_pass<cb_qk, cb_w, cb_mul>(w_base);
-                        accumulate_pass<cb_mul, cb_acc>(group_start == 0 && head == 0);
+                        mul_accumulate_pass<cb_qk, cb_w, cb_acc>(w_base, first);
+                        first = false;
                     }
                     if constexpr (stream_heads) {
                         cb_pop_front(cb_q, q_group_tiles);
                     }
                 }
+                pack_reconfig_l1_acc(0);  // done accumulating; downstream packs (mask, untilize) overwrite
+                cb_push_back(cb_acc, 1);
                 const uint32_t k_tile = span.k_tile_start() + c;
                 if (k_tile == diag_tile) {
                     add_mask<cb_acc, cb_mask>(0);
