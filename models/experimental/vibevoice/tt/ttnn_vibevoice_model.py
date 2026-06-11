@@ -9,6 +9,7 @@ Usage:
     output = model.generate(**processor_batch, tokenizer=processor.tokenizer)
 """
 
+from math import prod
 from typing import Optional
 
 import torch
@@ -158,6 +159,7 @@ class TTVibeVoiceModel:
         cfg_scale: float,
         num_diffusion_steps: int,
         max_new_tokens: Optional[int],
+        max_length_times: float = 2.0,
         ref_inference=None,
     ) -> TTVibeVoiceGenerator:
         return TTVibeVoiceGenerator(
@@ -177,9 +179,11 @@ class TTVibeVoiceModel:
             cfg_scale=cfg_scale,
             num_diffusion_steps=num_diffusion_steps,
             max_new_tokens=max_new_tokens,
+            max_length_times=max_length_times,
             speech_scaling_factor=self._speech_scaling_factor,
             speech_bias_factor=self._speech_bias_factor,
             acoustic_fix_std=self._config.acoustic_tokenizer.fix_std,
+            acoustic_encode_chunk_samples=prod(self._config.acoustic_tokenizer.encoder_ratios),
             ref_inference=ref_inference,
         )
 
@@ -195,6 +199,7 @@ class TTVibeVoiceModel:
         num_diffusion_steps: int = 10,
         prefill_speech_embeds: Optional[torch.Tensor] = None,
         max_new_tokens: Optional[int] = None,
+        max_length_times: float = 2.0,
         forced_token_ids: Optional[torch.Tensor] = None,
         rng: Optional[torch.Generator] = None,
         ref_inference=None,
@@ -212,7 +217,7 @@ class TTVibeVoiceModel:
             raise ValueError("tokenizer is required (VibeVoiceProcessor.tokenizer)")
 
         generator = self._make_generator(
-            tokenizer, cfg_scale, num_diffusion_steps, max_new_tokens, ref_inference=ref_inference
+            tokenizer, cfg_scale, num_diffusion_steps, max_new_tokens, max_length_times, ref_inference=ref_inference
         )
         return generator.generate(
             input_ids=input_ids,
