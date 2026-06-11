@@ -6,7 +6,7 @@
 Generate a deterministic, metadata-rich CPU reference ``.refpt`` for Phi-4 (microsoft/phi-4).
 
 Mirrors the DeepSeek-R1-14B / Qwen2.5-7B controlled refpt pattern (see
-``dev-tools/agentic-bringup/skills/reference-sanity.md``). Output ``.refpt`` contains:
+the reference-sanity guide). Output ``.refpt`` contains:
 
     - reference_tokens: [prompt_len + num_target]
     - top5_tokens:      [num_target, 5], aligned to target positions
@@ -156,7 +156,7 @@ def main() -> None:
         print(
             f"\nWARNING: intrinsic top-1 consistency {top1_consistency * 100:.1f}% < 95%. "
             "This refpt has a low ceiling; TT accuracy thresholds will need to be lowered. "
-            "See dev-tools/agentic-bringup/skills/reference-sanity.md."
+            "See the reference-sanity guide."
         )
 
 
