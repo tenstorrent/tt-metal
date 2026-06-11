@@ -510,6 +510,13 @@ _FP32_BLOCKINGS: dict = {
     (32, 32, (3, 1, 1)): (32, 32, 2, 1, 1),  # stage 5 AMP k3
     # BWE vocoder
     (128, 512, (7, 1, 1)): (64, 32, 7, 1, 1),  # conv_pre
+    # BWE upsample inner-convs. Without these they hit the default (…,1,1,1): T_out_block=1
+    # collapses the matmul M dim to a single 1/32-full tile and reloads the weight once per
+    # output frame, so the long-T ups cost ~130/66/15 ms. T_out_block=32 fills the M tile.
+    (512, 256, (12, 1, 1)): (128, 128, 32, 1, 1),  # ups[0] rate6
+    (256, 128, (11, 1, 1)): (128, 64, 32, 1, 1),  # ups[1] rate5
+    (128, 64, (4, 1, 1)): (64, 32, 32, 1, 1),  # ups[2] rate2
+    (64, 32, (4, 1, 1)): (64, 32, 32, 1, 1),  # ups[3] rate2
     (256, 256, (11, 1, 1)): (64, 32, 6, 1, 1),  # stage 0 AMP k11
     (256, 256, (7, 1, 1)): (256, 32, 3, 1, 1),  # stage 0 AMP k7
     (256, 256, (3, 1, 1)): (256, 128, 4, 1, 1),  # stage 0 AMP k3
