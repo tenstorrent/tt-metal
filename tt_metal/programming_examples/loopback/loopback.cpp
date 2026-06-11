@@ -30,20 +30,28 @@ int main(int argc, char** argv) {
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
 
     Program program = CreateProgram();
-    constexpr CoreCoord core = {0, 0};
+
+    // Launch the counter kernel on EVERY Tensix worker core. Each core increments
+    // all 16 u32 of a reserved 64B region (one NoC flit) at L1 0x80000 forever.
+    IDevice* dev = mesh_device->get_devices().at(0);
+    const CoreCoord grid = dev->compute_with_storage_grid_size();
+    const CoreRange all_cores({0, 0}, {grid.x - 1, grid.y - 1});
 
     CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "loopback/kernels/counter.cpp",
-        core,
+        all_cores,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    const CoreCoord noc0 = mesh_device->get_devices().at(0)->worker_core_from_logical_core(core);
+    // Dump every worker core's NOC0 coordinate so the X280 poller can target them.
     fmt::print(
-        "device {} (logical): logical (0,0) -> worker core x={} y={}; counter at L1 0x80000\n",
-        device_id,
-        noc0.x,
-        noc0.y);
+        "device {} (logical): grid {}x{}, counter (16x u32 @ L1 0x80000) on all cores\n", device_id, grid.x, grid.y);
+    for (uint32_t ly = 0; ly < grid.y; ly++) {
+        for (uint32_t lx = 0; lx < grid.x; lx++) {
+            const CoreCoord noc0 = dev->worker_core_from_logical_core(CoreCoord{lx, ly});
+            fmt::print("CORE {} {}\n", noc0.x, noc0.y);
+        }
+    }
 
     distributed::MeshWorkload workload;
     workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
