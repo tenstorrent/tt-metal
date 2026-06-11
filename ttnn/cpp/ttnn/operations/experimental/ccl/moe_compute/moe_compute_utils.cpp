@@ -226,6 +226,12 @@ WeightCoreShardMaps get_weight_core_shard_maps(
     const uint32_t n_dram_banks = static_cast<uint32_t>(in0_core_coords.size());
 
     const bool is_blackhole = mesh_device->arch() == tt::ARCH::BLACKHOLE;
+    if (is_blackhole) {
+        TT_FATAL(
+            bh_ring_size == 8 || bh_ring_size == 12 || bh_ring_size == 16,
+            "bh_ring_size ({}) must be 8, 12, or 16 on BLACKHOLE",
+            bh_ring_size);
+    }
     const uint32_t target_ring_size = is_blackhole ? bh_ring_size : n_dram_banks;
 
     // Ring ordering: sort the DRAM-bank logical core coords by (y, x) descending.
@@ -253,6 +259,8 @@ WeightCoreShardMaps get_weight_core_shard_maps(
     dram_core_ranges.reserve(n_dram_banks);
 
     for (uint32_t ring_pos = 0; ring_pos < target_ring_size; ++ring_pos) {
+        // First n_dram_banks ring positions map to real DRAM-bank-adjacent cores;
+        // positions beyond that are synthetic (HEIGHT_SHARDED regroups onto n_dram_banks physical shards).
         if (ring_pos < n_dram_banks) {
             const uint32_t dram_bank_id = ring_to_dram_bank[ring_pos];
             const ttnn::CoreCoord dram_core(dram_bank_id, 0);
@@ -687,11 +695,22 @@ ttnn::Tensor prepare_w2_tensor_with_bias(
     return result;
 }
 
+// Optionally returns a host tensor to facilitate test quantity caching
 ttnn::Tensor quantize_weights_via_host(
-    const ttnn::Tensor& device_tensor, ttnn::DataType dtype, const ttnn::MemoryConfig& memory_config) {
+    const ttnn::Tensor& device_tensor, ttnn::DataType dtype, const std::optional<ttnn::MemoryConfig>& memory_config) {
     auto host_tensor = ttnn::from_device(device_tensor);
     auto cast_tensor = ttnn::to_dtype(host_tensor, dtype);
-    host_tensor.deallocate(/*force=*/true);
+    // to_dtype is a no-op when the dtype already matches, returning host_tensor itself.
+    // Only free host_tensor when the cast produced a distinct tensor; otherwise the
+    // deallocate would invalidate cast_tensor (the value we return / pass to to_device).
+    if (host_tensor.dtype() != dtype) {
+        host_tensor.deallocate(/*force=*/true);
+    }
+
+    if (!memory_config.has_value()) {
+        return cast_tensor;
+    }
+
     auto result = ttnn::to_device(cast_tensor, device_tensor.device(), memory_config);
     cast_tensor.deallocate(/*force=*/true);
     return result;

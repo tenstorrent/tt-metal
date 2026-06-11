@@ -224,6 +224,67 @@ if [[ "$TEST_CONFIG_EXPLICIT" == false && ( "$CONFIG" == "4x8z" || "$CONFIG" == 
     TEST_CONFIG="$TEST_CONFIG_Z"
 fi
 
+# ---------------------------------------------------------------------------
+# Canonical host ordering (snake/zigzag) for the multi-host quad configs.
+#
+# Mirrors generate_blitz_decode_pipeline_configs.py:sort_hosts_canonical so the
+# operator does not have to pass --hosts in physical ring order. Hosts are
+# grouped by the <rack> number in r<rack>u<unit>; within each group <unit> is
+# sorted descending for even-indexed groups and ascending for odd-indexed
+# groups, producing the serpentine order that matches the physical Z-ring
+# cabling. Unrecognised hostnames (no r<rack>u<unit> pattern) are appended last
+# in input order. Echoes the reordered comma-separated list.
+sort_hosts_canonical() {
+    local csv="$1"
+    local -a in_hosts
+    IFS=',' read -ra in_hosts <<< "$csv"
+
+    local -a unrecognised=()
+    local -A group_units=()
+    local h
+    for h in "${in_hosts[@]}"; do
+        if [[ "$h" =~ ([0-9]+)u([0-9]{2}) ]]; then
+            group_units["${BASH_REMATCH[1]}"]+="${BASH_REMATCH[2]}:${h} "
+        else
+            unrecognised+=("$h")
+        fi
+    done
+
+    local -a racks=()
+    mapfile -t racks < <(printf '%s\n' "${!group_units[@]}" | sort -n)
+
+    local -a out=()
+    local idx=0 r sort_flag entry
+    for r in "${racks[@]}"; do
+        # Even-indexed groups descend by unit, odd-indexed ascend (serpentine).
+        if (( idx % 2 == 0 )); then sort_flag="-rn"; else sort_flag="-n"; fi
+        while IFS= read -r entry; do
+            [[ -n "$entry" ]] && out+=("${entry#*:}")
+        done < <(printf '%s\n' ${group_units[$r]} | sort -t: -k1,1 "$sort_flag")
+        ((idx++))
+    done
+
+    if [[ ${#unrecognised[@]} -gt 0 ]]; then
+        out+=("${unrecognised[@]}")
+    fi
+
+    local joined
+    printf -v joined '%s,' "${out[@]}"
+    echo "${joined%,}"
+}
+
+# Only the multi-host quad configs need deterministic ring order; smaller and
+# single-host configs keep the user's --hosts order untouched.
+if [[ "$CONFIG" == "8x4x4z" || "$CONFIG" == "4x32z" ]]; then
+    HOSTS_ORIG="$HOSTS"
+    HOSTS="$(sort_hosts_canonical "$HOSTS")"
+    if [[ "$HOSTS" != "$HOSTS_ORIG" ]]; then
+        echo "Reordered hosts into canonical ring order for $CONFIG:"
+        echo "  before: $HOSTS_ORIG"
+        echo "  after:  $HOSTS"
+    fi
+fi
+
 # Create output directory if it doesn't exist
 mkdir -p "$OUTPUT_DIR"
 
