@@ -121,16 +121,19 @@ class ttMLA(_ttMLAv3):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.default_compute_kernel_config,
         )
-        kh = ttnn.to_torch(ttnn.get_device_tensors(k)[0])[0, 0]  # replicated -> [S, D_idx]
-        self._index_k_cache[start_pos : start_pos + seq_len] = self._host_rope_pe(kh, seq_len, start_pos).to(
-            torch.bfloat16
-        )
+        # Replicate the index key cache (2x2 decision): gather this chunk's SP-local
+        # keys into full global order, rope with global positions, write host cache.
+        k = self._sp_all_gather(k, dim=2)
+        glob = seq_len * self.sp_factor
+        kh = ttnn.to_torch(ttnn.get_device_tensors(k)[0])[0, 0]  # [glob, D_idx]
+        self._index_k_cache[start_pos : start_pos + glob] = self._host_rope_pe(kh, glob, start_pos).to(torch.bfloat16)
 
     def _indexer_topk(self, hidden_states: ttnn.Tensor, seq_len: int, start_pos: int = 0) -> ttnn.Tensor:
         """Top-k indices [1, 1, S, k] over cached prefix + this chunk. Stems on device
         (backlog 6); only the non-interleaved RoPE stays on host (F1)."""
         a = self.index_args
-        end_pos = start_pos + seq_len
+        glob = seq_len * self.sp_factor  # global query/key count this chunk
+        end_pos = start_pos + glob
         self._indexer_write_k(hidden_states, seq_len, start_pos)
 
         # Q stem: reuse v3 q_a latent (qr), then indexer wq_b — all on device.
@@ -153,11 +156,12 @@ class ttMLA(_ttMLAv3):
             self._idx_wq_b,
             compute_kernel_config=self.default_compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )  # [1, 1, S, H_idx*D_idx]
-        qh = ttnn.to_torch(ttnn.get_device_tensors(q)[0]).reshape(seq_len, a.index_n_heads, a.index_head_dim)
-        qh = self._host_rope_pe(qh, seq_len, start_pos)  # [S, H, D]
+        )  # [1, 1, S/sp, H_idx*D_idx]
+        q = self._sp_all_gather(q, dim=2)  # -> [1, 1, glob, H_idx*D_idx] (full queries, replicated)
+        qh = ttnn.to_torch(ttnn.get_device_tensors(q)[0]).reshape(glob, a.index_n_heads, a.index_head_dim)
+        qh = self._host_rope_pe(qh, glob, start_pos)  # [glob, H, D]
 
-        # weights_proj: device stem + all-reduce + scale -> [1, 1, S, H_idx]
+        # weights_proj: device stem + all-reduce + scale -> [1, 1, glob, H_idx]
         wts = ttnn.linear(
             hidden_states,
             self._idx_wproj,
@@ -165,6 +169,7 @@ class ttMLA(_ttMLAv3):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         wts = self._tp_rs_ag(wts)
+        wts = self._sp_all_gather(wts, dim=2)
         wts = ttnn.multiply(wts, a.index_n_heads**-0.5 * self.scale)
 
         dev = lambda t: ttnn.from_torch(
@@ -174,10 +179,10 @@ class ttMLA(_ttMLAv3):
             dtype=ttnn.bfloat16,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        q_dev = dev(qh.permute(1, 0, 2).reshape(1, a.index_n_heads, seq_len, a.index_head_dim))
+        q_dev = dev(qh.permute(1, 0, 2).reshape(1, a.index_n_heads, glob, a.index_head_dim))
         k_dev = dev(self._index_k_cache[:end_pos].reshape(1, 1, end_pos, a.index_head_dim))
         logits = ops.indexer_logits(q_dev, k_dev, wts)
-        mask = dev(torch.full((1, 1, seq_len, end_pos), float("-inf")).triu_(start_pos + 1))
+        mask = dev(torch.full((1, 1, glob, end_pos), float("-inf")).triu_(start_pos + 1))
         return ops.topk_indices(ttnn.add(logits, mask), min(self.index_args.index_topk, end_pos))
 
     def forward(self, hidden_states, rope_tensors, kvpe_cache, **kwargs):
@@ -188,11 +193,26 @@ class ttMLA(_ttMLAv3):
             if self._has_indexer and kv_isl is not None:
                 self._indexer_write_k(hidden_states, seq_len_local, kv_isl)
             return super().forward(hidden_states, rope_tensors, kvpe_cache, **kwargs)
-        if self.sp_factor != 1:
-            raise NotImplementedError("DSA bring-up: sp=1 only (status.md step 4)")
+        if self.sp_factor > 1 and kv_isl is not None:
+            raise NotImplementedError("DSA 2x2: chunked+SP not yet wired (status.md step 5); single-shot SP only")
 
         indices = self._indexer_topk(hidden_states, seq_len_local, start_pos=kv_isl or 0)
         return self._dsa_forward(hidden_states, rope_tensors, kvpe_cache, indices, **kwargs)
+
+    def _sp_all_gather(self, t, dim):
+        """All-gather across the SP axis (sequence) → full-S replicated on SP. sp=1: no-op."""
+        if self.sp_factor == 1:
+            return t
+        return ttnn.experimental.all_gather_async(
+            t,
+            dim=dim,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.sp_axis),
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.sp_axis),
+            num_links=self.ccl_num_links,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=self.ccl_topology,
+            cluster_axis=self.sp_axis,
+        )
 
     def _dsa_forward(
         self,
@@ -276,7 +296,8 @@ class ttMLA(_ttMLAv3):
         kvpe_b8 = ttnn.typecast(kvpe, dtype=ttnn.bfloat8_b)
         if not is_chunked:
             ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, kvpe_b8, cache_layer_idx)
-            kvpe_prefix = kvpe
+            # KVPE stays SP-sharded (v3); gather full-T for the host sparse attn.
+            kvpe_prefix = self._sp_all_gather(kvpe, dim=2)
         else:
             # Same cache write as v3 _chunked_attn; attention reads the populated prefix.
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
@@ -300,8 +321,11 @@ class ttMLA(_ttMLAv3):
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
 
-        # Sparse attention over selected latents (replaces ring SDPA); latent out [1,H,S,512]
-        attn_out = ops.sparse_mla(q, kvpe_prefix, indices, self.scale, start_pos=start_pos)
+        # Sparse attention over selected latents (replaces ring SDPA); latent out [1,H,S,512].
+        # q SP×TP-sharded, kvpe_prefix gathered full-T, indices full (replicated).
+        attn_out = ops.sparse_mla(
+            q, kvpe_prefix, indices, self.scale, start_pos=start_pos, sp_axis=self.sp_axis, tp_axis=self.tp_axis
+        )
 
         # wkv_b2 AFTER attention (chunked-path style), then v3 epilogue
         attn_out = ttnn.linear(

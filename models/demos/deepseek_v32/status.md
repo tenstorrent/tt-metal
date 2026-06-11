@@ -95,10 +95,11 @@ MLA layer.
 **Key implementation note — global positions.** Under SP each chip's local tokens map to *non-contiguous* global positions (contiguous sharding: chip sp_i holds global [sp_i·S/sp, …)). So per SP shard the host RoPE freqs offset and the causal-mask triu offset must use the **global** query start (sp_i·local + start_pos), not the local/chunk offset. q and out stay SP-sharded; only keys/latents are gathered full-T.
 
 **Slices (test-first):**
-- [ ] 5.1 lift `sp_factor==1` assert behind an sp-aware path; add 2x2 (mesh (2,2)) to single-shot test param; keep 1x4 green (regression guard).
-- [ ] 5.2 indexer: gather index keys across SP at write → replicated host cache (full-T); per-SP-shard score local-Q × full-T with global-position rope+mask → topk; reassemble SP-sharded indices.
-- [ ] 5.3 sparse_mla: SP-gather full-T KVPE (tp-replica per sp shard, concat seq); per (sp,tp) shard attend local queries → reassemble [1, H/tp, S/sp, 512] via ShardTensor2dMesh (heads on tp, seq on sp).
-- [ ] 5.4 e2e PCC vs CPU reference on 2x2 single-shot (truth is single-device, distribution-agnostic — same cached truth as 1x4); chunked 2x2 follows.
+- [x] 5.1 lifted `sp_factor==1` assert; added 2x2 (mesh (2,2)) to single-shot test param; 1x4 regression green (0.9966 unchanged).
+- [x] 5.2 indexer: SP all-gather of the stem outputs (k/q/wts) to full-S (device `all_gather_async` over sp_axis) → existing global-contiguous logic runs unchanged on full seq; index cache replicated, full indices replicated. (Simpler than per-shard global-pos: gather makes positions contiguous.)
+- [x] 5.3 sparse_mla SP×TP-aware: KVPE SP-gathered full-T in `_dsa_forward`; per (sp_i,tp_j) shard attends local queries (global-pos causality) → reassembled via ShardTensor2dMesh (heads on tp, seq on sp). sp=1 collapses to prior behavior (regression-safe).
+- [x] **5.4 e2e PCC vs CPU reference on 2x2 single-shot: seq4k 0.9974 (sparse rows 0.9925, dense 0.9987), KVPE 0.9999 — matches 1x4.** Same cached truth (distribution-agnostic).
+- [ ] 5.5 **chunked 2x2** (guarded with NotImplementedError now): the chunked `_dsa_forward` cache-slot prefix read must SP-gather; indexer write already SP-aware. Follow-up.
 
 ### CPU fallbacks (multichip) — running list
 | id | fallback | where | status / SP behavior |
