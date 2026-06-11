@@ -681,11 +681,24 @@ def run(
     cp_dts = ttnn.get_device_tensors(tensor_e) if is_mesh_device else [tensor_e]
 
     o0 = ttnn.to_torch(out_dts[0])
+
     X, Y, D = o0.shape[1], o0.shape[2], o0.shape[3]
     PADDED = 32
     NH = Y
-    b_eff = max(1, (X * Y) // PADDED)
-    stride = max(1, PADDED // Y)
+    # Two output layouts:
+    #  - [1, B, NH, D]: dim1 is the batch (one row per batch), dim2 the query
+    #    heads. Detected when dim1 == #batches (cur_pos count). Iterate batches
+    #    directly (stride 1) — the head-packing formula below mis-strides this
+    #    whenever NH < 32 and B > 1 (it processed B*NH//32 rows at stride 32//NH,
+    #    comparing batch k's golden against output row (32//NH)*k -> ~0 PCC).
+    #  - head-packed: NH padded to 32 with 32//NH batches per 32-row block.
+    _nbatch = int(ttnn.to_torch(cp_dts[0]).reshape(-1).numel())
+    if X == _nbatch:
+        b_eff = X
+        stride = 1
+    else:
+        b_eff = max(1, (X * Y) // PADDED)
+        stride = max(1, PADDED // Y)
     if _scale in (None, "__ABSENT__"):
         _scale = float(D) ** -0.5
     _scale = float(_scale)
