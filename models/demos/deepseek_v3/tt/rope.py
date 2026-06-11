@@ -257,17 +257,13 @@ class RotarySetup:
 
         # For using height-sharded prefill-mode in decode with batch reinterpreted as seq_len
         # Possible because `rotary_embedding_llama` is (almost) an eltwise op.
-        cos_matrix_prefill_shape = ttnn.to_memory_config(
-            cos, memory_config=mem_config
-        )  # ttnn.interleaved_to_sharded(cos, mem_config)
-        sin_matrix_prefill_shape = ttnn.to_memory_config(
-            sin, memory_config=mem_config
-        )  # ttnn.interleaved_to_sharded(sin, mem_config)
+        cos_matrix_prefill_shape = ttnn.to_memory_config(cos, memory_config=mem_config)
+        sin_matrix_prefill_shape = ttnn.to_memory_config(sin, memory_config=mem_config)
 
         cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], dim]
         sin = ttnn.transpose(sin, 1, 2)  # [1, batch, 1[32], dim]
-        cos = ttnn.interleaved_to_sharded(cos, mem_config)  # [1, 1 (= batch / shard_num_cores), 1[32], self.dim]
-        sin = ttnn.interleaved_to_sharded(sin, mem_config)  # [1, 1 (= batch / shard_num_cores), 1[32], self.dim]
+        cos = ttnn.to_memory_config(cos, mem_config)  # [1, 1 (= batch / shard_num_cores), 1[32], self.dim]
+        sin = ttnn.to_memory_config(sin, mem_config)  # [1, 1 (= batch / shard_num_cores), 1[32], self.dim]
 
         if return_rot_idxs:
             return {
@@ -327,17 +323,13 @@ class RotarySetup:
 
         # For using height-sharded prefill-mode in decode with batch reinterpreted as seq_len
         # Possible because `rotary_embedding_llama` is (almost) an eltwise op.
-        cos_matrix_prefill_shape = ttnn.to_memory_config(
-            cos, memory_config=mem_config
-        )  # ttnn.interleaved_to_sharded(cos, mem_config)
-        sin_matrix_prefill_shape = ttnn.to_memory_config(
-            sin, memory_config=mem_config
-        )  # ttnn.interleaved_to_sharded(sin, mem_config)
+        cos_matrix_prefill_shape = ttnn.to_memory_config(cos, memory_config=mem_config)
+        sin_matrix_prefill_shape = ttnn.to_memory_config(sin, memory_config=mem_config)
 
         cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], dim]
         sin = ttnn.transpose(sin, 1, 2)  # [1, batch, 1[32], dim]
-        cos = ttnn.interleaved_to_sharded(cos, mem_config)
-        sin = ttnn.interleaved_to_sharded(sin, mem_config)
+        cos = ttnn.to_memory_config(cos, mem_config)
+        sin = ttnn.to_memory_config(sin, mem_config)
 
         if return_rot_idxs:
             return {
