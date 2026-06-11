@@ -5,7 +5,7 @@
 
 This stitches the three TP4 pieces into a single image->text model:
 
-  * vision tower  : ``TTNNDotsOCRVisionTowerTP4BH`` (Blackhole TP4, hardware-swept
+  * vision tower  : ``TTNNDotsOCRVisionTower`` (Wormhole TP4/DP2, hardware-swept
                     kernels for the S=11264 / grid 88x128 vision bucket). Emits the
                     merged image embeddings ``[1,1,2816,H]`` column-sharded on H.
   * text prefill  : ``DotsOCRPrefillModelTP4`` (replicated-hidden Megatron TP4).
@@ -41,7 +41,7 @@ from models.experimental.dots_ocr_tp4.tt.model import DotsOCRPrefillModelTP4
 # Vision tower lives in tt_symbiote; the text TP4 rebuild already reuses its rope
 # and paged-cache, so this is consistent with the rest of dots_ocr_tp4.
 from models.experimental.tt_symbiote.core.run_config import TracedRun
-from models.experimental.tt_symbiote.modules.dots_ocr_vision import TTNNDotsOCRVisionTowerTP4BH
+from models.experimental.tt_symbiote.modules.dots_ocr_vision import TTNNDotsOCRVisionTower
 from models.experimental.tt_symbiote.utils.device_management import set_device
 
 
@@ -128,7 +128,7 @@ class DotsOCRModelTP4:
         # --- Vision tower (Blackhole TP4) ---
         vision_tower = None
         if build_vision:
-            vision_tower = TTNNDotsOCRVisionTowerTP4BH.from_torch(hf_model.vision_tower, hf_model.config)
+            vision_tower = TTNNDotsOCRVisionTower.from_torch(hf_model.vision_tower, hf_model.config)
             set_device(vision_tower, mesh_device, register_forward_hook=False, dump_visualization=False)
             vision_tower.preprocess_weights()
             vision_tower.move_weights_to_device()
