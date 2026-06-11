@@ -461,6 +461,7 @@ def recurrent_gated_delta_rule_decode_ttnn(
     scale=None,
     initial_state=None,
     device=None,
+    high_precision=False,
 ):
     """
     Optimized single-token (T=1) decode path for gated delta rule.
@@ -490,6 +491,21 @@ def recurrent_gated_delta_rule_decode_ttnn(
     K = q.shape[3]
     V = v.shape[3]
 
+    # high_precision=True: run the entire single-token recurrent step in fp32. The state update
+    # h = decay * h + beta * (k ⊗ delta) compounds every decode step, and `decay = exp(g)` sits
+    # near 1.0 where bf16 resolution is ~0.008 — so a bf16 decay quantizes the per-step forgetting
+    # coarsely and the error accumulates over hundreds of steps (the long-decode "state saturation"
+    # / repetition collapse). Casting q/k/v/beta/g (and the state below) to fp32 here keeps decay
+    # and the accumulation exact; the read/write matmuls already accumulate in fp32
+    # (fp32_dest_acc_en). Tensors are tiny at decode (T=1) so the cost is negligible. Default off
+    # → all other callers/tests of this shared op are byte-unchanged.
+    if high_precision:
+        q = ttnn.typecast(q, ttnn.float32)
+        k = ttnn.typecast(k, ttnn.float32)
+        v = ttnn.typecast(v, ttnn.float32)
+        beta = ttnn.typecast(beta, ttnn.float32)
+        g = ttnn.typecast(g, ttnn.float32)
+
     # L2 norm
     q = l2_norm_ttnn(q, dim=-1)
     k = l2_norm_ttnn(k, dim=-1)
@@ -514,7 +530,12 @@ def recurrent_gated_delta_rule_decode_ttnn(
     # Ensure state is ready
     h = initial_state
     if h is None:
-        h = ttnn.zeros([B, H, K, V], device=device, dtype=ttnn.bfloat16, memory_config=None)
+        h = ttnn.zeros(
+            [B, H, K, V], device=device, dtype=ttnn.float32 if high_precision else ttnn.bfloat16, memory_config=None
+        )
+    elif high_precision and h.dtype != ttnn.float32:
+        # fp32-exact step needs an fp32 state; cast if the caller kept a bf16 rec_state.
+        h = ttnn.typecast(h, ttnn.float32)
 
     # Run single recurrent step
     # h is always TILE_LAYOUT: either from fused_decay_and_write_ttnn, ttnn.zeros with TILE_LAYOUT,
@@ -566,6 +587,7 @@ def recurrent_gated_delta_rule_decode_inplace_ttnn(
     state_buffer,
     scale=None,
     device=None,
+    high_precision=False,
 ):
     """Like recurrent_gated_delta_rule_decode_ttnn but writes state back to pre-allocated buffer.
 
@@ -582,6 +604,7 @@ def recurrent_gated_delta_rule_decode_inplace_ttnn(
         scale=scale,
         initial_state=state_buffer,
         device=device,
+        high_precision=high_precision,
     )
     # Copy new state back to pre-allocated buffer for trace consistency
     ttnn.copy(new_h, state_buffer)

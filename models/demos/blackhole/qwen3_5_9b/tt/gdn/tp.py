@@ -12,9 +12,11 @@ local heads. Projections/conv are sharded; weights kept interleaved (auto matmul
 Sharding mirrors models/demos/qwen35_27b. GDN output uses the *gated* RMSNorm
 (weight, NO +1) followed by a SiLU(z) gate — distinct from the +1 QK/layer norms.
 """
+import os
+
 import torch
 from tt.ttnn_delta_rule_ops import recurrent_gated_delta_rule_decode_ttnn
-from tt.ttnn_delta_rule_seq import chunk_gated_delta_rule_seq_adapter
+from tt.ttnn_delta_rule_seq import chunk_gated_delta_rule_seq_adapter, create_chunk_masks_seq
 from tt.ttnn_gated_deltanet import _causal_conv1d_fir
 
 import models.demos.blackhole.qwen3_5_9b.tt.gdn._experimental_path  # noqa: F401  (puts experimental backend on sys.path)
@@ -128,8 +130,21 @@ class TPGatedDeltaNet:
         self.K = args.gdn_conv_kernel_size
         self.scale = self.Dk**-0.5
         self.cfg = tpc.COMPUTE_HIFI2
+        # Pre-build the chunk-prefill masks ONCE (replicated across the mesh) so the seq kernel
+        # reads them from cache instead of rebuilding eye/triu/tril via from_torch on every call.
+        # The from_torch fallback is a host write that TT_FATALs inside the captured chunk-outer
+        # trace; pre-allocating here (outside any trace) makes the GDN prefill trace-safe. Mirrors
+        # the single-device gdn/weights.py create_chunk_masks_seq usage.
+        self.chunk_seq_masks = create_chunk_masks_seq(args.gdn_chunk_size, mesh)
         self.conv_states = None
         self.rec_state = None
+        # When True, decode/prefill update rec_state IN PLACE (ttnn.copy into the fixed
+        # buffer) instead of reassigning — required for the decode trace (a trace bakes in
+        # tensor addresses). Set by the model's TP allocate_kv_caches; the demo path leaves
+        # it False (reassign), so the demo's behavior is unchanged.
+        self._stable_state = False
+        self.conv_carry = None  # [1, K-1, qkv_dim_tp] cross-chunk prefill conv carry
+        self._zero_conv0 = None  # persistent zero source for conv_states[0] (trace-safe)
 
     def reset_state(self):
         def z(shape):
@@ -142,7 +157,60 @@ class TPGatedDeltaNet:
             )
 
         self.conv_states = [z((1, self.B, self.qkv_dim_tp)) for _ in range(self.K)]
-        self.rec_state = z((self.B, self.Nv, self.Dk, self.Dv))
+        # fp32 recurrent state by DEFAULT: per-step decode noise compounds through the state
+        # carry over hundreds of decode steps; bf16 carry measurably degrades long generations.
+        # QWEN35_GDN_STATE_BF16=1 reverts to bf16 (memory A/B).
+        if os.environ.get("QWEN35_GDN_STATE_BF16") != "1":  # fp32 DEFAULT (decode-drift mitigation)
+            self.rec_state = ttnn.from_torch(
+                torch.zeros(self.B, self.Nv, self.Dk, self.Dv, dtype=torch.float32),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            )
+        else:
+            self.rec_state = z((self.B, self.Nv, self.Dk, self.Dv))
+        # Cross-chunk prefill carry buffers (chunk-outer trace): conv_carry holds the last
+        # K-1 conv inputs of the previous chunk (= conv_new_state, fed as the next chunk's
+        # left context); _zero_conv0 is a persistent zero source for conv_states[0] so the
+        # capture_state writeback stays trace-safe (no host->device transfer inside a trace).
+        self.conv_carry = z((1, self.K - 1, self.qkv_dim_tp))
+        self._zero_conv0 = z((1, self.B, self.qkv_dim_tp))
+
+    def reset_state_inplace(self):
+        """Zero conv + recurrent state IN PLACE (preserves buffer addresses for tracing).
+
+        Mirrors qwen35_27b gdn.py reset_state_inplace — used between sequences / trace
+        replays so the captured decode trace's baked addresses stay valid.
+        """
+        if self.conv_states is None:
+            self.reset_state()
+            return
+
+        def z(shape):
+            return ttnn.from_torch(
+                torch.zeros(*shape, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            )
+
+        if self.conv_carry is None:
+            # Older state created before the carry buffers existed; allocate them once.
+            self.conv_carry = z((1, self.K - 1, self.qkv_dim_tp))
+            self._zero_conv0 = z((1, self.B, self.qkv_dim_tp))
+        zc = z((1, self.B, self.qkv_dim_tp))
+        for cs in self.conv_states:
+            ttnn.copy(zc, cs)
+        ttnn.deallocate(zc)
+        zr = z((self.B, self.Nv, self.Dk, self.Dv))
+        ttnn.copy(zr, self.rec_state)
+        ttnn.deallocate(zr)
+        # Zero the cross-chunk conv carry so each new sequence starts from scratch.
+        zcc = z((1, self.K - 1, self.qkv_dim_tp))
+        ttnn.copy(zcc, self.conv_carry)
+        ttnn.deallocate(zcc)
 
     def forward_prefill(self, x, chunk_size=128, valid_len=None, capture_state=False):
         """Causal chunk-prefill over a sequence (from scratch, zero init state).
@@ -160,7 +228,21 @@ class TPGatedDeltaNet:
         if len(x.shape) == 4:
             x = ttnn.reshape(x, (1, x.shape[-2], x.shape[-1]))  # [1,T,dim]
         T = x.shape[1]
-        vlen = valid_len or T
+        # Pass the RAW valid_len (may be None) to the conv-FIR / seq kernels below — NOT a
+        # `valid_len or T` coercion. A full chunk (valid_len is None) must take the kernels'
+        # valid_len-None path (a static last-(K-1) slice for the conv state), which is trace-safe;
+        # the valid_len-set path builds a one-hot via ttnn.from_torch (a host write) that TT_FATALs
+        # ("Writes are not supported during trace capture") inside the captured chunk-outer trace.
+        # Masked buckets still pass a real valid_len (< T) so their exact masking is unchanged, and
+        # for a full chunk the None slice and the valid_len==T one-hot select the identical rows.
+
+        # Cross-chunk carry (chunk-outer prefill): when _stable_state, the recurrent + conv
+        # state continue from the persistent buffers (zeroed at sequence start by
+        # reset_state_inplace, so a from-scratch single pass reads zeros == None). The demo
+        # path (_stable_state False) is unchanged: no carry, reassign state.
+        carry = self._stable_state
+        if carry and self.conv_carry is None:
+            self.reset_state()
 
         qkvz = ttnn.linear(x, tw["qkvz"], compute_kernel_config=self.cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         qkv = ttnn.slice(qkvz, (0, 0, 0), (1, T, self.qkv_dim_tp))
@@ -171,7 +253,8 @@ class TPGatedDeltaNet:
         b = ttnn.slice(ab, (0, 0, Nv), (1, T, 2 * Nv))
         ttnn.deallocate(ab)
 
-        # FIR causal conv1d + SiLU over the sequence (zero init conv state).
+        # FIR causal conv1d + SiLU over the sequence. conv_state = the carried last K-1 conv
+        # inputs of the previous chunk (left context); zero == None for a from-scratch pass.
         # valid_len makes new_state capture the last K-1 REAL tokens (not padding).
         conv, conv_new_state = _causal_conv1d_fir(
             qkv,
@@ -180,10 +263,10 @@ class TPGatedDeltaNet:
             self.K,
             self.mesh,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            conv_state=None,
+            conv_state=self.conv_carry if carry else None,
             weight_taps=tw["conv_taps"],
             bias_dev=None,
-            valid_len=vlen,
+            valid_len=valid_len,
         )
         ttnn.deallocate(qkv)
 
@@ -209,29 +292,43 @@ class TPGatedDeltaNet:
             g,
             chunk_size=chunk_size,
             scale=self.scale,
-            initial_state=None,
+            initial_state=self.rec_state if carry else None,
             device=self.mesh,
-            valid_len=vlen,
+            cached_masks=self.chunk_seq_masks,
+            valid_len=valid_len,
         )
-        if capture_state:
-            # Carry recurrent + conv state into decode. conv_states[1..K-1] = last
-            # K-1 real conv inputs (conv_new_state [B,K-1,D]); [0] stays zero.
+        B, D = 1, self.qkv_dim_tp
+        # ---- Carry recurrent + conv state for the NEXT chunk (chunk-outer prefill). ----
+        # In place (ttnn.copy) when _stable_state so the addresses the prefill/decode traces
+        # baked in stay valid across execute_trace replays and across sequences.
+        if carry:
+            ttnn.copy(final_state, self.rec_state)
+            ttnn.deallocate(final_state)
+            ttnn.copy(conv_new_state, self.conv_carry)  # [1, K-1, D] last-K-1 conv inputs
+        else:
             self.rec_state = final_state
-            B, D = 1, self.qkv_dim_tp
+        # ---- Finalize the decode conv window (last chunk / short prompt). ----
+        # conv_states[1..K-1] = the last K-1 real conv inputs; [0] is the (shifted-out) zero.
+        # Harmless to refresh every chunk — the last chunk's values are the ones decode reads.
+        if capture_state:
             if self.conv_states is None:
                 self.reset_state()
-            zero = ttnn.from_torch(
-                torch.zeros(1, B, D, dtype=torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
-            )
-            ttnn.copy(zero, self.conv_states[0])
+            if self._zero_conv0 is not None:
+                ttnn.copy(self._zero_conv0, self.conv_states[0])
+            else:
+                zero = ttnn.from_torch(
+                    torch.zeros(1, B, D, dtype=torch.bfloat16),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.mesh,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+                )
+                ttnn.copy(zero, self.conv_states[0])
+                ttnn.deallocate(zero)
             for j in range(self.K - 1):
                 src = ttnn.reshape(ttnn.slice(conv_new_state, (0, j, 0), (1, j + 1, D)), (1, B, D))
                 ttnn.copy(src, self.conv_states[j + 1])
-            ttnn.deallocate(zero)
+        ttnn.deallocate(conv_new_state)
         # o: [1, T, Nv, Dv] -> gated RMSNorm over Dv + SiLU(z) gate
         out_n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6)
         ttnn.deallocate(o)
@@ -300,9 +397,29 @@ class TPGatedDeltaNet:
         ttnn.deallocate(a)
         g = ttnn.reshape(g, (B, 1, Nv))
 
-        o, self.rec_state = recurrent_gated_delta_rule_decode_ttnn(
-            q, k, v, beta, g, scale=self.scale, initial_state=self.rec_state, device=self.mesh
+        # fp32 decode step DEFAULT (decode-drift mitigation). The per-step gated-delta recurrence
+        # h = decay*h + beta*(k⊗delta) compounds every token; in bf16, `decay = exp(g)` (near 1.0)
+        # quantizes coarsely and the error accumulates over a long decode → late-generation
+        # repetition collapse. high_precision runs the whole step in fp32 (pairs with the fp32
+        # rec_state default). QWEN35_GDN_DECODE_BF16=1 reverts to the bf16 step.
+        o, new_rec = recurrent_gated_delta_rule_decode_ttnn(
+            q,
+            k,
+            v,
+            beta,
+            g,
+            scale=self.scale,
+            initial_state=self.rec_state,
+            device=self.mesh,
+            high_precision=(os.environ.get("QWEN35_GDN_DECODE_BF16") != "1"),
         )
+        if self._stable_state:
+            # In-place update keeps rec_state's address fixed so the decode trace
+            # (captured at pos 0) replays correctly across steps and sequences.
+            ttnn.copy(new_rec, self.rec_state)
+            ttnn.deallocate(new_rec)
+        else:
+            self.rec_state = new_rec
 
         out_r = ttnn.reshape(o, (B, Nv, Dv))
         out_n = ttnn.rms_norm(out_r, weight=tw["norm_w"], epsilon=1e-6)  # gated norm: weight only (no +1)

@@ -63,11 +63,17 @@ class Qwen35ModelArgs(ModelArgs):
         # ------------------------------------------------------------------
         text_config = self.hf_config.get_text_config()
 
-        # RoPE — rope_theta is nested under rope_parameters; the base reads a top-level
-        # "rope_theta" (absent here) so self.rope_theta is None.
+        # RoPE — both rope_theta and partial_rotary_factor live nested under rope_parameters in
+        # these checkpoints; read them there FIRST. Some configs (e.g. 3.6-27B) also hoist
+        # partial_rotary_factor to the top level, but others (3.5-27B / 3.5-27B-FP8) only nest it —
+        # reading the top level alone silently fell back to 1.0 for those, rotating the full
+        # head_dim instead of the trained 0.25 fraction and scrambling RoPE at long context
+        # (fine short, degrades past ~32k). Prefer nested, then top-level, then the 1.0 default.
         rope_params = getattr(text_config, "rope_parameters", None) or {}
         self.rope_theta = rope_params.get("rope_theta", 10_000_000)
-        self.partial_rotary_factor = getattr(text_config, "partial_rotary_factor", 1.0)
+        self.partial_rotary_factor = rope_params.get(
+            "partial_rotary_factor", getattr(text_config, "partial_rotary_factor", 1.0)
+        )
         self.rope_head_dim = int(self.head_dim * self.partial_rotary_factor)
 
         # DeltaNet-specific parameters (base does not know about these)

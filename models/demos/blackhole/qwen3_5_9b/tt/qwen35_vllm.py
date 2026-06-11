@@ -51,6 +51,37 @@ class Qwen35ForCausalLM(Generator):
     model_capabilities = {"supports_prefix_caching": False, "supports_async_decode": False}
 
     @classmethod
+    def get_max_tokens_all_users(
+        cls,
+        model_name: str = "",
+        num_devices: int = 1,
+        tt_data_parallel: int = 1,
+        max_model_len: int | None = None,
+        max_num_seqs: int | None = None,
+        **kwargs,
+    ) -> int:
+        """All-user KV-cache token capacity = served context length (B=1).
+
+        Qwen3.5/3.6 serve one sequence at a time (max_concurrency=1), so the whole
+        paged KV cache belongs to a single user and its capacity is exactly the
+        served context length — max_model_len, i.e. the catalog's max_context.
+        Deriving from max_model_len, instead of the inherited 131072 fallback, lets
+        these models serve at the full requested ISL (e.g. 256K = 262144): the
+        chunk-outer prefill and the full-KV page-table sizing in
+        warmup_model_prefill already scale to whatever KV cache vLLM allocates.
+        The * max_num_seqs keeps the all-user semantics correct if B ever grows.
+        """
+        if max_model_len is not None:
+            return int(max_model_len) * int(max_num_seqs or 1)
+        return super().get_max_tokens_all_users(
+            model_name=model_name,
+            num_devices=num_devices,
+            tt_data_parallel=tt_data_parallel,
+            max_num_seqs=max_num_seqs,
+            **kwargs,
+        )
+
+    @classmethod
     def initialize_vllm_model(
         cls,
         hf_config,
@@ -61,10 +92,11 @@ class Qwen35ForCausalLM(Generator):
         optimizations=None,
         **kwargs,
     ):
-        # HF_MODEL is the single source of truth; vLLM passes the hub name / local path
-        # via hf_config._name_or_path. Resolve to a local dir (download if needed).
-        name_or_path = hf_config._name_or_path
-        if name_or_path and not os.path.isdir(name_or_path):
+        # Resolution order: MODEL_WEIGHTS_DIR (tt-inference-server Docker convention) →
+        # HF_MODEL → vLLM's hf_config._name_or_path (the hub id). Resolve a hub id to a
+        # local snapshot dir (AutoConfig on a bare hub id is unreliable in this transformers).
+        name_or_path = os.environ.get("MODEL_WEIGHTS_DIR") or os.environ.get("HF_MODEL") or hf_config._name_or_path
+        if name_or_path and not os.path.isdir(os.path.expanduser(name_or_path)):
             from huggingface_hub import snapshot_download
 
             name_or_path = snapshot_download(name_or_path)
@@ -79,16 +111,42 @@ class Qwen35ForCausalLM(Generator):
 
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, **kwargs):
         """All prefill is model-owned (Generator drives decode only)."""
-        logits = prefill_dispatch(
-            self.model[0], tokens, page_table, prompt_lens, use_trace=kwargs.get("enable_trace", False)
-        )
+        model = self.model[0]
+        if model.num_devices > 1:
+            return self._prefill_forward_tp(model, tokens, page_table, prompt_lens)
+        logits = prefill_dispatch(model, tokens, page_table, prompt_lens, use_trace=kwargs.get("enable_trace", False))
         logits = ttnn.to_torch(logits)
         # The vLLM runner unpacks (logits, rope_deltas) because the HF config has mrope_section;
         # zero deltas are correct for our text-only port.
         rope_deltas = torch.zeros(logits.shape[0], dtype=torch.long)
         return logits, rope_deltas
 
+    def _prefill_forward_tp(self, model, tokens, page_table, prompt_lens):
+        """TP (B=1) paged prefill via the model-owned masked fixed-bucket path.
+
+        prefill_traced_chunked rounds the prompt up to a fixed bucket and masks the GDN to the
+        EXACT valid_len, so prefill runs one of a bounded, pre-warmed program set (the
+        compile-clobbers-trace fix) — for <=2048 prompts it is entirely the masked bucket (no
+        chunk trace needed). Longer prompts replay the chunk-outer trace (Milestone B). Returns
+        host logits [1, 1, vocab] gathered to a single replica."""
+        T = int(prompt_lens[0]) if prompt_lens is not None else tokens.shape[1]
+        if tokens.shape[1] > T:
+            tokens = tokens[:, :T]
+        logits = model.prefill_traced_chunked(tokens, page_table, actual_len=T)  # [1,1,vocab] replicated
+        logits = (
+            ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(model.mesh_device, dim=0))
+            .reshape(-1, model.args.vocab_size)[:1]
+            .float()
+            .view(1, 1, -1)
+        )
+        return logits, torch.zeros(1, dtype=torch.long)
+
     def decode_forward(self, *args, **kwargs):
+        # Both single-device and TP serve TRACED decode. The decode trace is valid for TP
+        # because GDN state lives in fixed in-place buffers (reset_state_inplace preserves
+        # addresses), and it no longer collides with prefill: TP prefill runs the bounded,
+        # pre-warmed masked-bucket program set (warmed before the trace parks), so a request
+        # never compiles a new program that could clobber the parked decode trace.
         # Standard path (default): the decode trace is captured at position 0 during warmup by the
         # inherited WarmupForwardMixin, then replayed here by Generator.decode_forward — identical
         # to Llama/DeepSeek/Qwen-VL. current_pos and page_table are device input tensors the
@@ -113,6 +171,13 @@ class Qwen35ForCausalLM(Generator):
         return super().decode_forward(*args, **kwargs)
 
     def warmup_model_prefill(self, kv_cache, enable_trace, *args, **kwargs):
+        # Single-device AND TP share this path: capture_prefill_trace_chunked dispatches to its
+        # TP fork (_capture_prefill_trace_chunked_tp) when num_devices>1. The capture compiles the
+        # per-chunk programs AND warms the bounded masked-bucket program set (short prompts + the
+        # long-prompt tail) before the decode trace is parked, so a real request only ever replays
+        # already-compiled programs — the compile-clobbers-trace fix — and long prompts replay the
+        # chunk-outer trace (bounded host dispatch, the 128K path) instead of the eager fallback.
+        #
         # The plugin's warmup_model() is two-phase: it calls this first with
         # enable_trace=False (compile), then resets ``already_warmed_up_prefill``
         # and calls again with enable_trace=True (capture). Only the traced phase
