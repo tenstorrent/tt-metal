@@ -246,13 +246,34 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     const bool fuse_srs = srs_fused_op_signaler.has_value();
     bool transpose_core_grid = M > N && !fuse_srs;
 
+    // Core-grid SLICING (see minimal-matmul-nslicing-plan): split the physical rows (grid.y) into
+    // `num_slices` groups, each an independent sub-matmul on the FULL smaller output dim x a slice of
+    // the bigger dim, to fill cores that idle on skewed shapes. Canonical frame: the smaller dim is
+    // always parallelized over the rows (grid.y) and the bigger over the cols (grid.x) — transpose
+    // canonicalizes this — so slicing always groups grid.y and slices grid.x, regardless of transpose.
+    // Effective parallelism: small dim over (grid.y / S) rows-per-group; big dim over (S * grid.x).
+    // S=1 reduces exactly to the un-sliced partition. (Step 1: partition only; S>1 also needs the
+    // per-group forwarding change before it is correct. Auto-derivation of S is deferred to step 5.)
+    uint32_t num_slices = 1;
+    if (const char* s = std::getenv("TT_MM_NUM_SLICES"); s != nullptr) {
+        num_slices = std::max(1u, static_cast<uint32_t>(std::atoi(s)));
+    }
+    TT_FATAL(
+        grid_size.y % num_slices == 0 && (num_slices & (num_slices - 1)) == 0,
+        "TT_MM_NUM_SLICES ({}) must be a power of 2 dividing grid.y ({})",
+        num_slices,
+        grid_size.y);
+    const uint32_t rows_per_group = grid_size.y / num_slices;   // small-dim parallelism (per group)
+    const uint32_t y_axis_parallel = rows_per_group;            // dim on grid.y is grouped
+    const uint32_t x_axis_parallel = num_slices * grid_size.x;  // dim on grid.x is sliced (cols x slices)
+
     auto in0_noc = transpose_core_grid ? large_input_noc : small_input_noc;
     auto in0_risc = transpose_core_grid ? large_input_risc : small_input_risc;
-    uint32_t in0_parallel_axis_cores = transpose_core_grid ? grid_size.x : grid_size.y;
+    uint32_t in0_parallel_axis_cores = transpose_core_grid ? x_axis_parallel : y_axis_parallel;
 
     auto in1_noc = transpose_core_grid ? small_input_noc : large_input_noc;
     auto in1_risc = transpose_core_grid ? small_input_risc : large_input_risc;
-    uint32_t in1_parallel_axis_cores = transpose_core_grid ? grid_size.y : grid_size.x;
+    uint32_t in1_parallel_axis_cores = transpose_core_grid ? y_axis_parallel : x_axis_parallel;
 
     /**
      * We pad the input dimensions to the nearest multiple of the parallelization factor.
@@ -782,8 +803,14 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
 
     for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
         CoreCoord core = cores.at(core_id);
-        uint32_t in0_idx = transpose_core_grid ? core.x : core.y;
-        uint32_t in1_idx = transpose_core_grid ? core.y : core.x;
+        // Slicing: group physical rows (grid.y). The dim on grid.y is grouped (parallel index = row
+        // within group); the dim on grid.x is sliced (parallel index = group * grid.x + col). At
+        // num_slices==1 this is exactly the original (group=0, y_idx=core.y, x_idx=core.x).
+        const uint32_t group = core.y / rows_per_group;
+        const uint32_t y_idx = core.y % rows_per_group;
+        const uint32_t x_idx = group * grid_size.x + core.x;
+        uint32_t in0_idx = transpose_core_grid ? x_idx : y_idx;
+        uint32_t in1_idx = transpose_core_grid ? y_idx : x_idx;
 
         CoreCoord left_core = {(std::size_t)0, (std::size_t)core.y};
         CoreCoord top_core = {(std::size_t)core.x, (std::size_t)0};
