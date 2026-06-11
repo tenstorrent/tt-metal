@@ -822,6 +822,23 @@ def prefill_linear_ws_out(
                 memory_config=ttnn.L1_MEMORY_CONFIG if return_sharded else memory_config,
             )
             return out
+        # kv_a (K=2048 N=576): 2D 6×4 ibw4 pcN3 (sweep winner ~18.7µs vs ~25.7µs for the
+        # 9-core 1D ws path).  test_prefill_matmul_sweep.py::kv_a on Blackhole p300c.
+        if kt == 64 and nt == 18:
+            mt = max(1, (m_total + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE)
+            out = prefill_linear_2d_bs_out(
+                a,
+                b,
+                device=device,
+                grid_x=6,
+                grid_y=4,
+                in0_block_w=4,
+                per_core_M=max(1, mt // 4),
+                per_core_N=3,
+                compute_kernel_config=ckc,
+                memory_config=ttnn.L1_MEMORY_CONFIG if return_sharded else memory_config,
+            )
+            return out
         # L1 shared expert down: 1D 8×4 ibw4 ws.
         if kt == 12 and nt == 16:
             prog_cfg, ws_mc = _tuned_shared_down_1d_prog_and_ws(m_total=m_total)
