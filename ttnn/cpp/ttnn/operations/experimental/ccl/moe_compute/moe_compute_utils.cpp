@@ -87,10 +87,6 @@ ttnn::Tensor stack_along(const std::vector<ttnn::Tensor>& tensors, int dim) {
 // order, so applying the SAME (full_map, tp_map) pair to W0/W1 (axis=-1) and W2
 // (axis=-2) keeps each real intermediate column paired with its W2 row — i.e. a
 // correct partial contraction once the kernel walks only the per-core prefixes.
-//
-// This replaces a single global right-pad-to-Nt, which front-packed the real
-// data GLOBALLY (concentrated in the low ring cores) and so could not be walked
-// as a balanced per-core TpNt ring.
 ttnn::Tensor front_pack_per_core(
     const ttnn::Tensor& real, int axis, const std::vector<uint32_t>& full_map, const std::vector<uint32_t>& tp_map) {
     const auto shape = real.logical_shape();

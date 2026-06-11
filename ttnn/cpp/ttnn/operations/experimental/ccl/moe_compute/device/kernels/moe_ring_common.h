@@ -124,7 +124,7 @@ struct MoeRingConfig {
     // After add_shared_expert_weights front-packs each core's real TpNt slice to the front of its
     // full-Nt shard, the kernel reads/produces only the real prefix (in2_tiles_per_step_shared per
     // core) and zero-fills the remainder of the full stride; the full W2 walk then contracts
-    // real×real in the prefix and zero×zero past it. See the shared-expert-tp design note.
+    // real×real in the prefix and zero×zero past it.
     static constexpr uint32_t TpNt = detail::div_up<Nt, SharedExpertTp>();
     static constexpr uint32_t in2_tiles_per_step_shared = (((TpNt + num_cores - 1) / num_cores) + 1) & ~1u;
     static constexpr uint32_t w0_w1_blocks_per_shared_expert = w0_w1_blocks_per_col * in2_tiles_per_step_shared / 2;
@@ -135,8 +135,6 @@ struct MoeRingConfig {
         (max_w2_tiles_per_core + W2_TILES_PER_A2A_ITER_W - 1) / W2_TILES_PER_A2A_ITER_W;
     static constexpr uint32_t w2_tiles_per_expert_w = num_a2a_iters * W2_TILES_PER_A2A_ITER_W;
     static constexpr uint32_t w2_blocks_per_expert = get_w2_blocks_per_expert<Nt, has_bias, w2_tiles_per_expert_w>();
-    static constexpr uint32_t w2_blocks_per_shared_expert =
-        get_w2_blocks_per_expert<Nt, has_bias, w2_tiles_per_expert_w, SharedExpertTp>();
 };
 
 }  // namespace moe_ring

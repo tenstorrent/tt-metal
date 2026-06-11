@@ -29,8 +29,6 @@ struct MoEComputeParams {
     uint32_t layer_id = 0;
     uint32_t output_height_shard_dim = 0;
     uint32_t intermediate_size = 0;
-    // Number of shared experts (nullopt when unset / no shared experts). Plumbed through to
-    // the program factory; stored in attributes() so the program cache distinguishes it.
     std::optional<uint32_t> num_shared_experts;
     bool has_bias = false;
 

@@ -565,11 +565,6 @@ def test_tt_moe_decode(
             b2_per_expert=b2_per_expert,
         )
         if shared_id_to_torch_w0 is not None:
-            # The device TP-shards each shared expert's intermediate dim across the replicated
-            # axis (num_tp = mesh_shape[1 - cluster_axis]) and sums the per-device partials, so
-            # the golden mimics that exactly: partition -> zero-pad -> per-device FFN -> sum,
-            # scaled by the raw shared_expert_scale. No num_replicated factor — the disjoint
-            # partials sum to a single full copy (matches the removal of the scale division).
             num_tp = mesh_shape[1 - cluster_axis]
             golden = _add_shared_experts_to_golden_tp(
                 golden,
@@ -603,9 +598,6 @@ def test_tt_moe_decode(
             else:
                 final_output = output
             tt_outputs.append(final_output)
-
-            # Surface async device errors immediately rather than letting them
-            # silently corrupt state and then deadlock at mesh_device teardown.
             ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
         except Exception as e:
             _print_exception_and_fail(f"forward iteration {it} failed: {type(e).__name__}")

@@ -353,9 +353,7 @@ void kernel_main() {
 
             // Read the FULL Nt-tall W2 for every expert, including shared experts. Shared-expert W2
             // is zero-padded to full Nt height (add_shared_expert_weights); the zero rows are inert
-            // under the full contraction the compute kernel performs. Shortening the read to TpNt is
-            // incorrect with the current zero-padded weight layout and is deferred to the
-            // TpNt-geometry work (see the shared-expert-tp design note).
+            // under the full contraction the compute kernel performs.
             for (uint32_t block_id = 0; block_id < Cfg::w2_blocks_per_expert; ++block_id) {
                 noc_async_read_set_trid(trid_to_issue);
 
