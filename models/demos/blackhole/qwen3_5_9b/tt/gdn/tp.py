@@ -12,6 +12,8 @@ local heads. Projections/conv are sharded; weights kept interleaved (auto matmul
 Sharding mirrors models/demos/qwen35_27b. GDN output uses the *gated* RMSNorm
 (weight, NO +1) followed by a SiLU(z) gate — distinct from the +1 QK/layer norms.
 """
+import os
+
 import torch
 from tt.ttnn_delta_rule_ops import recurrent_gated_delta_rule_decode_ttnn
 from tt.ttnn_delta_rule_seq import chunk_gated_delta_rule_seq_adapter, create_chunk_masks_seq
@@ -155,7 +157,19 @@ class TPGatedDeltaNet:
             )
 
         self.conv_states = [z((1, self.B, self.qkv_dim_tp)) for _ in range(self.K)]
-        self.rec_state = z((self.B, self.Nv, self.Dk, self.Dv))
+        # fp32 recurrent state by DEFAULT: per-step decode noise compounds through the state
+        # carry over hundreds of decode steps; bf16 carry measurably degrades long generations.
+        # QWEN35_GDN_STATE_BF16=1 reverts to bf16 (memory A/B).
+        if os.environ.get("QWEN35_GDN_STATE_BF16") != "1":  # fp32 DEFAULT (decode-drift mitigation)
+            self.rec_state = ttnn.from_torch(
+                torch.zeros(self.B, self.Nv, self.Dk, self.Dv, dtype=torch.float32),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            )
+        else:
+            self.rec_state = z((self.B, self.Nv, self.Dk, self.Dv))
         # Cross-chunk prefill carry buffers (chunk-outer trace): conv_carry holds the last
         # K-1 conv inputs of the previous chunk (= conv_new_state, fed as the next chunk's
         # left context); _zero_conv0 is a persistent zero source for conv_states[0] so the
