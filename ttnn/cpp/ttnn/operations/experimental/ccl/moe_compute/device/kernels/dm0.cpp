@@ -54,7 +54,7 @@ void kernel_main() {
 
     constexpr auto w0_w1_args = TensorAccessorArgs<0>();
     constexpr auto w2_args = TensorAccessorArgs<w0_w1_args.next_compile_time_args_offset()>();
-    constexpr auto out_args = TensorAccessorArgs<w2_args.next_compile_time_args_offset()>();
+    [[maybe_unused]] constexpr auto out_args = TensorAccessorArgs<w2_args.next_compile_time_args_offset()>();
 
     // Run-time arguments. dm0 and dm1 share one rt-arg layout emitted by the host
     // (matmul_runtime_args in program_factory.cpp), so dm0 has to consume the layout
@@ -84,20 +84,20 @@ void kernel_main() {
     // CBs
     constexpr auto cb_s2c_in = tt::CBIndex::c_0;     // tilize_output_cb_id
     constexpr auto cb_r2c_w0_w1 = tt::CBIndex::c_3;  // cb_r2c_w0
-    constexpr auto cb_c2w_rdy = tt::CBIndex::c_4;
-    constexpr auto cb_w2c_rdy = tt::CBIndex::c_5;
+    [[maybe_unused]] constexpr auto cb_c2w_rdy = tt::CBIndex::c_4;
+    [[maybe_unused]] constexpr auto cb_w2c_rdy = tt::CBIndex::c_5;
     constexpr auto cb_s2c_in2 = tt::CBIndex::c_6;
-    constexpr auto cb_w2c_md = tt::CBIndex::c_7;
+    [[maybe_unused]] constexpr auto cb_w2c_md = tt::CBIndex::c_7;
 
     // CB Aliases
-    constexpr auto cb_c2s_out = tt::CBIndex::c_1;  // matmul_writer_cb_id
+    [[maybe_unused]] constexpr auto cb_c2s_out = tt::CBIndex::c_1;  // matmul_writer_cb_id
     constexpr auto cb_r2c_w2 = tt::CBIndex::c_3;   // reuse cb_r2c_w0_w1
 
     // Tile sizes
-    constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
+    [[maybe_unused]] constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
     constexpr uint32_t w0_w1_tile_size = get_tile_size(cb_r2c_w0_w1);
     constexpr uint32_t w2_tile_size = get_tile_size(cb_r2c_w2);
-    constexpr uint32_t in2_tile_size = get_tile_size(cb_s2c_in2);
+    [[maybe_unused]] constexpr uint32_t in2_tile_size = get_tile_size(cb_s2c_in2);
 
     //-------------------------------------------------------------------------
     // W0 and W1 reading constants
@@ -116,7 +116,7 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     constexpr uint32_t w0_w1_bytes_per_block = w0_w1_tiles_per_block * w0_w1_tile_size;
     constexpr uint32_t w0_w1_bytes_per_txn = w0_w1_tiles_per_txn * w0_w1_tile_size;
-    constexpr uint32_t w2_bytes_per_block = w2_tiles_per_block * w2_tile_size;
+    [[maybe_unused]] constexpr uint32_t w2_bytes_per_block = w2_tiles_per_block * w2_tile_size;
     constexpr uint32_t w2_bytes_per_txn = w2_tiles_per_txn * w2_tile_size;
 
     // Bank-run loop invariant: w0_w1 and w2 each track their own cur_shard_idx_* but share
