@@ -111,6 +111,54 @@ def test_text_attention_pcc(mesh_device):
     assert pcc > 0.99, f"PCC {pcc:.6f} < 0.99"
 
 
+@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_text_attention_bf16_residual(mesh_device):
+    """bf16 residual input, fp32 QKV (the production configuration after ocr_model.py bf16 prefill change).
+
+    The short-seq explicit-attention path (seq=128 ≤ 1024) must tolerate bf16
+    input because _prefill now uses dtype=ttnn.bfloat16 for the initial h tensor.
+    QKV linear is hardcoded to dtype=ttnn.float32, so Q/K/V are fp32 after
+    projection; rope and attention run in fp32 as before. Gate: PCC > 0.99.
+    """
+    golden = torch.load(GOLDEN)
+    x, ref_out = golden["input"], golden["output"]
+    cos, sin = golden["cos"], golden["sin"]
+    _, seq, dim = x.shape
+
+    sd = _load_weights(
+        "model.layers.0.self_attn",
+        [
+            "q_proj.weight",
+            "q_proj.bias",
+            "k_proj.weight",
+            "k_proj.bias",
+            "v_proj.weight",
+            "v_proj.bias",
+            "o_proj.weight",
+        ],
+    )
+    block = TtTextAttention(mesh_device, sd, num_heads=12, num_kv_heads=2)
+
+    x_tt = ttnn.from_torch(
+        x.reshape(1, 1, seq, dim).float(),
+        dtype=ttnn.bfloat16,  # bf16 residual — the production path
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    rot_mats = block.prepare_rope(cos, sin)
+    causal_mask = block.prepare_causal_mask(seq)
+
+    out_tt = block.forward(x_tt, rot_mats, causal_mask)
+    out = ttnn.to_torch(ttnn.get_device_tensors(out_tt)[0]).float().reshape(seq, dim)
+
+    pcc = _pcc(ref_out.reshape(seq, dim), out)
+    print(f"PCC(text_attention_bf16_residual, seq={seq}) = {pcc:.6f}")
+    assert pcc > 0.99, f"PCC {pcc:.6f} < 0.99"
+
+
 def _load_ref_functional():
     name = "dots_ocr_reference_functional"
     if name not in sys.modules:

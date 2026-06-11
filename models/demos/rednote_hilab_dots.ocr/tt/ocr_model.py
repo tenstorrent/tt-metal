@@ -298,7 +298,7 @@ class TtOCRModel(LightweightModule):
         P32, H = embeds.shape
         h = ttnn.from_torch(
             embeds.reshape(1, 1, P32, H),
-            dtype=ttnn.float32,
+            dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
