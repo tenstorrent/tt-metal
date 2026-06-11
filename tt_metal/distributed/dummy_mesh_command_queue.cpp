@@ -85,6 +85,14 @@ void DummyMeshCommandQueue::enqueue_wait_for_event(const MeshEvent& /*sync_event
     // No-op for inactive rank
 }
 
+void DummyMeshCommandQueue::enqueue_write_dram_core_counter(
+    tt::stl::Span<const DeviceMemoryAddress> /*targets*/,
+    uint32_t /*value*/,
+    bool /*blocking*/,
+    tt::stl::Span<const SubDeviceId> /*sub_device_ids*/) {
+    // No-op for inactive rank: no local device to signal.
+}
+
 void DummyMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> /*sub_device_ids*/) {
     // No-op for inactive rank
 }

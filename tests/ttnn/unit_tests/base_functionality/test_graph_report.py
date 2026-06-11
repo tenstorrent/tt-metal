@@ -2075,6 +2075,174 @@ class TestReportVersion:
         assert report["version"] == ttnn.graph.REPORT_VERSION
 
 
+class TestBufferChunksSchemaAndAggregation:
+    """Schema, version, and per-(op, device, addr, bank, core) aggregation tests
+    for the ``buffer_chunks`` table that replaced the legacy ``buffer_pages``.
+
+    The schema/version tests drive the real ``import_report`` path via
+    ``_make_report`` + ``_import_to_db`` and verify behaviour by querying the
+    resulting database; the pure aggregation tests at the bottom exercise
+    ``_aggregate_pages_to_chunks`` directly with no DB."""
+
+    # Minimum buffer_chunks landed at "3.0"; any later 3.x is also acceptable.
+    # Pinning a literal would force lockstep edits on every unrelated schema
+    # bump, so we assert the floor instead.
+    MIN_SCHEMA_VERSION = (3, 0)
+
+    @staticmethod
+    def _semver_tuple(value):
+        """Parse a dotted version string (``"3.0"``, ``"3.1.4"``) into a tuple of ints."""
+        return tuple(int(p) for p in str(value).split("."))
+
+    @staticmethod
+    def _minimal_report():
+        """Smallest report ``import_report`` accepts: capture_start only, no buffers."""
+        return _make_report([{"counter": 0, "node_type": "capture_start", "params": {}, "connections": []}])
+
+    def test_schema_version_meets_minimum_for_buffer_chunks(self, tmp_path):
+        """The ``schema_version`` written by ``import_report`` is >= the buffer_chunks floor."""
+        conn, cursor = _import_to_db(self._minimal_report(), tmp_path)
+        try:
+            row = cursor.execute("SELECT value FROM report_metadata WHERE key = 'schema_version'").fetchone()
+            assert row is not None, "schema_version not persisted to report_metadata"
+            assert (
+                self._semver_tuple(row[0]) >= self.MIN_SCHEMA_VERSION
+            ), f"schema_version {row[0]!r} predates the buffer_chunks landing"
+        finally:
+            conn.close()
+
+    def test_buffer_chunks_table_is_queryable_with_expected_columns(self, tmp_path):
+        """A ``SELECT`` over every column ttnn-visualizer's ``BufferChunk`` reads succeeds.
+
+        Querying by name (rather than introspecting ``sqlite_master``/``PRAGMA``) means
+        a missing or renamed column raises ``OperationalError`` and fails the test."""
+        conn, cursor = _import_to_db(self._minimal_report(), tmp_path)
+        try:
+            cursor.execute(
+                "SELECT operation_id, device_id, address, bank_id, core_x, core_y, "
+                "chunk_address, chunk_size, page_size, num_pages, buffer_type FROM buffer_chunks"
+            )
+            cursor.fetchall()
+        finally:
+            conn.close()
+
+    def test_legacy_buffer_pages_table_is_not_created(self, tmp_path):
+        """The new importer must not create the legacy ``buffer_pages`` table."""
+        conn, cursor = _import_to_db(self._minimal_report(), tmp_path)
+        try:
+            tables = {
+                row[0] for row in cursor.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+            }
+            assert "buffer_chunks" in tables
+            assert "buffer_pages" not in tables
+        finally:
+            conn.close()
+
+    def test_buffer_pages_fallback_populates_buffer_chunks(self, tmp_path):
+        """A legacy ``buffer_pages`` snapshot in the report is aggregated into ``buffer_chunks``.
+
+        Builds a tiny report with the fallback per-page format (no
+        ``buffer_pages_by_address`` / ``per_operation_buffers``), imports it,
+        and checks that the aggregated row carries the expected math: chunk
+        covers the page-address span, ``num_pages`` reflects input count."""
+        report = self._minimal_report()
+        # Three contiguous L1 pages on one core at address 1000.
+        report["buffer_pages"] = [
+            {
+                "device_id": 0,
+                "address": 1000,
+                "core_x": 0,
+                "core_y": 0,
+                "bank_id": 64,
+                "page_index": i,
+                "page_address": i * 2048,
+                "page_size": 2048,
+                "buffer_type": 1,
+            }
+            for i in range(3)
+        ]
+        conn, cursor = _import_to_db(report, tmp_path)
+        try:
+            rows = cursor.execute(
+                "SELECT device_id, address, bank_id, core_x, core_y, "
+                "chunk_address, chunk_size, page_size, num_pages, buffer_type FROM buffer_chunks"
+            ).fetchall()
+            assert len(rows) == 1, f"expected 1 aggregated chunk, got {rows}"
+            dev, addr, bank, cx, cy, chunk_addr, chunk_size, page_size, num_pages, btype = rows[0]
+            assert (dev, addr, bank, cx, cy) == (0, 1000, 64, 0, 0)
+            assert (chunk_addr, chunk_size, page_size, num_pages, btype) == (0, 3 * 2048, 2048, 3, 1)
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _page(device_id, address, core_x, core_y, bank_id, page_index, page_address, page_size=2048, buffer_type=1):
+        """Build a page tuple in the order produced by ``_parse_page``:
+        ``(device_id, address, core_y, core_x, bank_id, page_index, page_address,
+        page_size, buffer_type)``."""
+        return (device_id, address, core_y, core_x, bank_id, page_index, page_address, page_size, buffer_type)
+
+    def test_aggregate_empty_pages(self):
+        """Empty input yields zero chunk rows."""
+        assert graph_report._aggregate_pages_to_chunks(op_id=1, pages=[]) == []
+
+    def test_aggregate_single_core_collapses_contiguous_pages(self):
+        """A single core's contiguous pages collapse to one chunk with correct math."""
+        pages = [
+            self._page(device_id=1, address=1000, core_x=0, core_y=0, bank_id=64, page_index=i, page_address=i * 2048)
+            for i in range(10)
+        ]
+        rows = graph_report._aggregate_pages_to_chunks(op_id=7, pages=pages)
+        assert len(rows) == 1
+        op, dev, addr, bank, cx, cy, chunk_addr, chunk_size, page_size, num_pages, btype = rows[0]
+        assert (op, dev, addr, bank, cx, cy) == (7, 1, 1000, 64, 0, 0)
+        assert (chunk_addr, chunk_size, page_size, num_pages, btype) == (0, 10 * 2048, 2048, 10, 1)
+
+    def test_aggregate_preserves_per_core_asymmetry(self):
+        """Different cores hosting different page counts produce independent rows."""
+        pages = []
+        # Three cores with 10/10/3 pages — last core has a partial trailing shard.
+        for core_x, n_pages in [(0, 10), (1, 10), (2, 3)]:
+            for i in range(n_pages):
+                pages.append(
+                    self._page(
+                        device_id=1,
+                        address=1000,
+                        core_x=core_x,
+                        core_y=0,
+                        bank_id=64 + core_x,
+                        page_index=i,
+                        page_address=i * 2048,
+                    )
+                )
+
+        rows = graph_report._aggregate_pages_to_chunks(op_id=42, pages=pages)
+        by_core = {(r[4], r[5]): r for r in rows}
+        assert set(by_core.keys()) == {(0, 0), (1, 0), (2, 0)}
+
+        for (cx, _cy), expected_num in [((0, 0), 10), ((1, 0), 10), ((2, 0), 3)]:
+            row = by_core[(cx, 0)]
+            chunk_addr, chunk_size, page_size, num_pages = row[6], row[7], row[8], row[9]
+            assert num_pages == expected_num
+            assert chunk_addr == 0
+            assert chunk_size == expected_num * 2048
+            assert page_size == 2048
+
+    def test_aggregate_separates_groups_by_address_and_buffer_type(self):
+        """Distinct addresses (or buffer types) on the same core produce distinct rows."""
+        pages = [
+            # Two pages of L1 buffer at addr=1000 on core (0,0)/bank 64
+            self._page(1, 1000, 0, 0, 64, 0, 0, page_size=2048, buffer_type=1),
+            self._page(1, 1000, 0, 0, 64, 1, 2048, page_size=2048, buffer_type=1),
+            # One page of DRAM buffer at addr=5000 on same core (different bank)
+            self._page(1, 5000, 0, 0, 70, 0, 0, page_size=4096, buffer_type=0),
+        ]
+        rows = graph_report._aggregate_pages_to_chunks(op_id=1, pages=pages)
+        assert len(rows) == 2
+        by_addr = {r[2]: r for r in rows}
+        assert by_addr[1000][9] == 2 and by_addr[1000][10] == 1  # num_pages=2, buffer_type=1
+        assert by_addr[5000][9] == 1 and by_addr[5000][10] == 0  # num_pages=1, buffer_type=0
+
+
 class TestResNet50Patterns:
     """
     Tests for patterns observed in the ResNet50 reference database:

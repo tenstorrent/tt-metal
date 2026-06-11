@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -122,11 +123,11 @@ ttnn::Tensor prepare_w2_tensor_with_bias(
     uint32_t K,
     uint32_t bh_ring_size = 12);
 
-// Round-trip a device tensor through host to change its dtype and re-upload
+// Round-trip a device tensor through host to change its dtype and optionally re-upload
 // it under the supplied memory config. Used to quantize the packed weight
 // tensors to ``bfloat4_b`` on the DRAM-sharded mem config the kernel consumes.
 // Host side quantization is higher quality and maintains PCC with the original implementation
 ttnn::Tensor quantize_weights_via_host(
-    const ttnn::Tensor& device_tensor, ttnn::DataType dtype, const ttnn::MemoryConfig& memory_config);
+    const ttnn::Tensor& device_tensor, ttnn::DataType dtype, const std::optional<ttnn::MemoryConfig>& memory_config);
 
 }  // namespace ttnn::experimental

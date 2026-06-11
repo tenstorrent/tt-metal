@@ -23,10 +23,6 @@ systems:
     name: "P150 CIv2 (1xP150)"
     weights-cache-mode: lfc
     num_devices: 1
-  - sku: bh_llmbox
-    name: "Quietbox (4xP150)"
-    weights-cache-mode: local-disk
-    num_devices: 4
   - sku: bh_loudbox
     name: "LoudBox (8xP150)"
     weights-cache-mode: cloud-mlperf
