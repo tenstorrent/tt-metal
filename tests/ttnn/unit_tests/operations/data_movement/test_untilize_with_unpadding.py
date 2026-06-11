@@ -15,6 +15,15 @@ TTNN_TO_TORCH_DTYPE = {
 }
 
 
+@pytest.fixture
+def isolate_program_cache(device):
+    """Ensure each test starts with an empty program cache and cleans up after."""
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    yield
+    device.disable_and_clear_program_cache()
+
+
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
 @pytest.mark.parametrize(
     "shape_output_end",
@@ -51,6 +60,59 @@ def test_untilize_with_unpadding_fp32(device, dtype, shape_output_end, input_buf
     torch_result = torch_tensor[slices]
 
     assert torch.equal(result, torch_result), f"untilize_with_unpadding lost {dtype} precision"
+
+
+def test_untilize_with_unpadding_reuses_cache_when_only_width_l1_heuristic_changes(device, isolate_program_cache):
+    """
+    Regression test for issue #46533 first-shot fix.
+
+    This shape keeps the height-side CB estimate tiny (1 tile row) while making the
+    width-side estimate large enough to react to unrelated resident L1 buffers.
+    enough_space_width is not consumed by factory selection or descriptor creation,
+    so changing only that heuristic must not fork the program cache.
+    """
+    torch.manual_seed(0)
+
+    input_shape = [1, 10240, 32]
+    output_end = [0, 10239, 31]
+    torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    assert device.num_program_cache_entries() == 0, "Program cache should be empty before the test"
+
+    with device.cache_entries_counter.measure():
+        output_tensor = ttnn.untilize_with_unpadding(
+            input_tensor, output_tensor_end=output_end, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+    assert_equal(ttnn.to_torch(output_tensor), torch_input)
+    assert device.cache_entries_counter.total == 1
+
+    ttnn.synchronize_device(device)
+
+    hog_shape = [1, 1, 32, 16384]
+    hog_tensors = [
+        ttnn.allocate_tensor_on_device(
+            ttnn.Shape(hog_shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG
+        )
+        for _ in range(3)
+    ]
+    assert len(hog_tensors) == 3
+
+    with device.cache_entries_counter.measure():
+        output_tensor = ttnn.untilize_with_unpadding(
+            input_tensor, output_tensor_end=output_end, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+    assert_equal(ttnn.to_torch(output_tensor), torch_input)
+    assert device.cache_entries_counter.total == 1
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
