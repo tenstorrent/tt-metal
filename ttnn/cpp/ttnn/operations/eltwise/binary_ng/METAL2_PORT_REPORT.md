@@ -1,8 +1,8 @@
 # Metal 2.0 Port Report — binary_ng (`BinaryNgDeviceOperation`)
 
-**Status: IN PROGRESS — host fully ported & C++-GREEN; the no-broadcast · tile path is converted and
-DEVICE-VALIDATED on Wormhole (n300). The remaining runtime-selected kernel paths (broadcast, row-major,
-scalar) are enumerated below as mechanical follow-on.**
+**Status: IN PROGRESS — host fully ported & C++-GREEN; the no-broadcast · tile path AND the scalar
+(b-absent) path are converted and DEVICE-VALIDATED on Wormhole (n300). The remaining runtime-selected
+kernel paths (broadcast, row-major) are enumerated below as mechanical follow-on.**
 
 Ported the single `ProgramFactory` from `ProgramDescriptorFactoryConcept` to `ProgramSpecFactoryConcept`.
 The host `create_program_spec` is atomic and covers **all** paths; kernels are JIT-compiled per selected
@@ -10,22 +10,27 @@ path, so the C++ host builds/validates independently and kernel conversion proce
 
 ## On-device validation (Wormhole B0 n300)
 
-`test_binary_ng_program_cache.py -k "not scalar and not broadcast"` → **10/10 pass** (8 as-written + 2
-with updated cache-count assertions, see Friction). Exercises the no-broadcast tile path end-to-end:
-host spec build → framework validation → kernel JIT → device → PCC, across:
-- **FPU** (bf16 add) and **SFPU** (fp32 add/mul/sub) — both no-broadcast compute kernels.
-- tensor-tensor, interleaved **DRAM** and **L1**, sub-core-grids, differing op-types / input-dtypes /
-  output-dtypes, and correctness across differing logical shapes (per-shape cache entries; see below).
-- No PCC mismatches, no hangs.
+**No-broadcast tile path:** `test_binary_ng_program_cache.py -k "not scalar and not broadcast"` →
+**10/10 pass** (8 as-written + 2 with updated cache-count assertions, see Friction). FPU (bf16 add) +
+SFPU (fp32 add/mul/sub), tensor-tensor, interleaved DRAM + L1, sub-core-grids, differing op-types /
+input-dtypes / output-dtypes, correctness across differing logical shapes. No PCC mismatches, no hangs.
 
-Converted kernels (all no-broadcast tile):
+**Scalar (b-absent) path:** `test_binary_ng_program_cache.py -k "scalar"` → **3/3 pass**;
+`test_binary_scalar.py` → **18/18 pass** (SFPU comparison ops gt/lt/ne/ge/le/eq, bf16). Validates the
+DFB_B producer-moves-to-the-writer binding and the unpack-fp32-gating fix (see Friction).
+
+Converted kernels:
 | File | Notes |
 |---|---|
-| `kernels_ng/dataflow/reader_interleaved_no_bcast.cpp` | `ta::a`/`ta::b`, `dfb::cb_a`/`cb_b`, named RTAs, `has_sharding` CTA. Validated. |
-| `kernels_ng/dataflow/writer_interleaved_no_bcast.cpp` | `ta::c`, `dfb::cb_c`, named RTAs. Validated. |
-| `kernels/compute/eltwise_binary_no_bcast.cpp` | FPU; `#if HAS_ACTIVATIONS`-gated `dfb::cb_a_interim`/`cb_b_interim`. Validated (bf16). |
-| `kernels/compute/eltwise_binary_sfpu_no_bcast.cpp` | SFPU; isclose `rtol`/`atol` → named RTAs. Validated (fp32 add/mul/sub). |
-| `kernels/compute/eltwise_where_no_bcast.cpp` | where; scalar → `args::scalar`. **Converted, not yet device-validated** (no test in the run hit a no-bcast where). |
+| `kernels_ng/dataflow/reader_interleaved_no_bcast.cpp` | no-bcast tile reader. `ta::a`/`ta::b`, `dfb::cb_a`/`cb_b`, named RTAs, `has_sharding` CTA. Validated. |
+| `kernels_ng/dataflow/writer_interleaved_no_bcast.cpp` | no-bcast tile writer. `ta::c`, `dfb::cb_c`. Validated. |
+| `kernels/compute/eltwise_binary_no_bcast.cpp` | FPU no-bcast; `#if HAS_ACTIVATIONS`-gated interims. Validated (bf16). |
+| `kernels/compute/eltwise_binary_sfpu_no_bcast.cpp` | SFPU no-bcast; isclose `rtol`/`atol` named. Validated (fp32 add/mul/sub). |
+| `kernels/compute/eltwise_where_no_bcast.cpp` | where no-bcast; scalar → `args::scalar`. **Converted, not yet device-validated.** |
+| `kernels/dataflow/reader_interleaved_no_bcast.cpp` (legacy `kernels/`) | scalar-path reader (a only); member `get_tile_size()`. Validated. |
+| `kernels/dataflow/writer_interleaved_scalar.cpp` | scalar-path writer; **also producer of DFB_B** (fills c_1 with the packed scalar via `FILL_*`). `ta::c`. Validated. |
+| `kernels/compute/eltwise_binary_scalar.cpp` | FPU scalar compute; interims `#if`-gated. Validated. |
+| `kernels/compute/eltwise_binary_sfpu_scalar.cpp` | SFPU scalar compute; isclose named. Validated (comparison ops). |
 
 ## TTNN ProgramFactory
 ### Concept realized
@@ -66,6 +71,13 @@ pybind surface. All sources are binary_ng-owned.
   conditional DFB token was correctly excluded from name-lookup when `c_3`/`c_4` were unbound. No new
   define was needed — `HAS_ACTIVATIONS` (driven by the host `PROCESS_*_ACTIVATIONS` defines) is the same
   condition that gates the host-side binding, so the two stay in lockstep by construction.
+- **The recipe's "a DFB's producer can move between kernels across paths" warning fired exactly as
+  described** and was the key to the scalar path. DFB_B (c_1) is produced by the **reader** on tensor-b
+  paths but by the **writer** on the scalar path (`writer_interleaved_scalar.cpp` fills c_1 with the
+  packed scalar; compute consumes it). The 1:1 "reader produces b" binding from the no-bcast path would
+  have left DFB_B with a consumer and no producer on the scalar path (validator: 0 producers). Resolved
+  by mapping the role per path: reader-PRODUCER when `b` is a tensor, writer-PRODUCER when `b` is absent,
+  compute-CONSUMER always. Validated (scalar 3/3 + 18/18).
 
 ## Friction
 ### Gaps (doc didn't match reality)
@@ -80,6 +92,17 @@ pybind surface. All sources are binary_ng-owned.
   around by reordering (set the generic `Default` entries first, let the SFPU-specific entries overwrite
   via `operator[]`), avoiding the membership check entirely. **Suggested:** note in the recipe's `Table`
   paragraph which lookup ops are actually available (`operator[]`, `insert`; not `contains`).
+- **The spec validator forbids `UnpackToDestFp32` on a non-Float32 DFB; the legacy CB-id-indexed
+  `unpack_to_dest_mode` array set it unconditionally for SFPU.** Legacy set
+  `unpack_to_dest_mode[c_0/c_1/...] = UnpackToDestFp32` for every SFPU op regardless of CB format —
+  harmless on a bf16 CB in the legacy array. Metal 2.0's validator (`program_spec.cpp:825`) hard-rejects
+  it: *"UnpackToDestFp32 ... but the DFB data format is not Float32 ... Use Default or omit."* Caught by
+  `test_binary_scalar.py` (SFPU bf16 comparison ops): all 18 failed at `MakeProgramFromSpec` until the
+  port gated the SFPU `UnpackToDestFp32` on `dfb_is_fp32(id)`. Numerics confirmed unchanged after the
+  gate (18/18 pass), so the legacy Fp32-on-bf16 setting was a no-op in practice. **Suggested:** the
+  migration guide's `unpack_to_dest_mode` section should state the FP32-only constraint explicitly — it
+  currently says only "every Float32 DFB ... must appear", not "non-Float32 DFBs must NOT carry
+  UnpackToDestFp32". A porter mechanically translating the legacy array hits this.
 
 ### Confusion / near-misses
 - **`is_sfpu_op` routing surprised the "no-bcast FPU" framing.** fp32 `add` routes to the **SFPU**
@@ -120,13 +143,15 @@ DFB's producer/consumer role **per source** before converting.
   where where present}, plus `reader_interleaved_{row,col,scalar,row_col_mixed}_bcast.cpp`.
 - **Row-major path** (`kernels_ng/...rm_*`): 6 readers + `writer_interleaved_rm_no_bcast.cpp` + the rm
   compute selection. (rm and sharding are mutually exclusive.)
-- **Scalar path (b absent)**: legacy `kernels/dataflow/reader_interleaved_no_bcast.cpp`,
-  `writer_interleaved_scalar.cpp`, `eltwise_binary[_sfpu]_scalar.cpp`, `eltwise_where_sfpu_scalar.cpp`.
+- **where-scalar** (`eltwise_where_sfpu_scalar`): blocked by the op-owner's missing-`.cpp` bug
+  (`binary_ng_utils.cpp:125`) — the path resolves to a nonexistent file pre-port, so it can't be
+  exercised until the op owner fixes the extension. Not converted.
 
-**Two host-side items to resolve when those paths are validated (best-effort / unvalidated today):**
-1. **Scalar path `DFB_B` (c_1) is created always but bound only when `b` is present** — on the b-absent
-   scalar path it would be an unbound DFB (validator requires ≥1 producer + ≥1 consumer). Resolve by
-   binding it on the scalar compute kernel (if it reads `c_1`) or by not creating it when `b` is absent.
-2. **Subtile-broadcast scratch `DFB_A_BCAST`/`DFB_B_BCAST` (c_5/c_6)** are bound reader-PRODUCER /
-   compute-CONSUMER as a best-effort guess; verify against the broadcast readers/computes when converting
-   them (a DFB's producer can move between kernels across paths).
+**Host-side item to resolve when the broadcast path is validated (best-effort / unvalidated today):**
+- **Subtile-broadcast scratch `DFB_A_BCAST`/`DFB_B_BCAST` (c_5/c_6)** are bound reader-PRODUCER /
+  compute-CONSUMER as a best-effort guess; verify against the broadcast readers/computes when converting
+  them (a DFB's producer can move between kernels across paths — as the scalar path's DFB_B demonstrated).
+
+**Resolved this session:** the scalar (b-absent) path is converted and validated — `DFB_B` is now
+produced by the writer on that path (see Successes); the SFPU `unpack_to_dest_mode` is gated on the DFB
+format (see Friction).

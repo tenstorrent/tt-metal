@@ -6,40 +6,40 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t start_tile_id = get_arg_val<uint32_t>(1);
-    const uint32_t src_num_tiles = get_arg_val<uint32_t>(2);
-    const uint32_t dst_num_tiles = get_arg_val<uint32_t>(3);
-    const uint32_t dst_shard_width = get_arg_val<uint32_t>(4);
-    const uint32_t nD_stride = get_arg_val<uint32_t>(5);
-    const uint32_t d_stride = get_arg_val<uint32_t>(6);
-    const uint32_t n_stride = get_arg_val<uint32_t>(7);
-    const uint32_t c_stride = get_arg_val<uint32_t>(8);
-    const uint32_t D = get_arg_val<uint32_t>(9);
-    const uint32_t N = get_arg_val<uint32_t>(10);
-    const uint32_t C = get_arg_val<uint32_t>(11);
-    const uint32_t Ht = get_arg_val<uint32_t>(12);
-    const uint32_t Wt = get_arg_val<uint32_t>(13);
-    const uint32_t cND = get_arg_val<uint32_t>(14);  // collapsed dims > 5
-
-    constexpr auto cb_id_src = tt::CBIndex::c_0;
+    // The a buffer base address (legacy RTA 0) is now carried by the TensorBinding ta::a; the
+    // TensorAccessorArgs<N>() CTA plumbing is gone. This reader serves the scalar (b-absent) path: it
+    // fills only cb_a (the b DFB is filled by the writer). The b-named RTAs in the schema are unused here.
+    const uint32_t start_tile_id = get_arg(args::start_tile_id);
+    const uint32_t src_num_tiles = get_arg(args::src_num_tiles);
+    const uint32_t dst_num_tiles = get_arg(args::dst_num_tiles);
+    const uint32_t dst_shard_width = get_arg(args::dst_shard_width);
+    const uint32_t nD_stride = get_arg(args::nD_stride);
+    const uint32_t d_stride = get_arg(args::d_stride);
+    const uint32_t n_stride = get_arg(args::n_stride);
+    const uint32_t c_stride = get_arg(args::c_stride);
+    const uint32_t D = get_arg(args::D);
+    const uint32_t N = get_arg(args::N);
+    const uint32_t C = get_arg(args::C);
+    const uint32_t Ht = get_arg(args::Ht);
+    const uint32_t Wt = get_arg(args::Wt);
+    const uint32_t cND = get_arg(args::cND);  // collapsed dims > 5
 
     Noc noc;
-    CircularBuffer cb_src(cb_id_src);
+    DataflowBuffer cb_src(dfb::cb_a);
 
 #if SRC_SHARDED
     cb_src.reserve_back(src_num_tiles);
     cb_src.push_back(src_num_tiles);
 #else
     constexpr uint32_t onetile = 1;
-    constexpr auto src_args = TensorAccessorArgs<0, 0>();
-    constexpr bool has_sharding = get_compile_time_arg_val(src_args.next_compile_time_args_offset()) == 1;
+    constexpr bool has_sharding = get_arg(args::has_sharding) == 1;
     const uint32_t src_tile_bytes = cb_src.get_tile_size();
-    const auto src = TensorAccessor(src_args, src_addr);
+    const auto src = TensorAccessor(ta::a);
     const uint32_t HtWt = Ht * Wt;
 
     const uint32_t tiles_per_n = C * HtWt;

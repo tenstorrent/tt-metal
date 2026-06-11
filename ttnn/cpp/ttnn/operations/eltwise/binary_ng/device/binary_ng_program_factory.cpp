@@ -758,8 +758,13 @@ ttnn::device_operation::ProgramArtifacts BinaryNgDeviceOperation::ProgramFactory
     }
     if (is_sfpu_op) {
         if (op_type != BinaryOpType::POWER) {
+            // Metal 2.0 spec-validator difference vs legacy: the legacy CB-id-indexed array set
+            // UnpackToDestFp32 on the input/interim/bcast CBs UNCONDITIONALLY for SFPU (harmless on a
+            // non-FP32 CB there). Metal 2.0's validator (program_spec.cpp:825) REJECTS UnpackToDestFp32
+            // on a non-Float32 DFB ("only meaningful for FP32 data"). So gate it on the DFB format;
+            // non-FP32 DFBs get no entry (Default semantics). See METAL2_PORT_REPORT.md.
             for (const auto& id : {DFB_A, DFB_B, DFB_A_INTERIM, DFB_B_INTERIM, DFB_A_BCAST, DFB_B_BCAST}) {
-                if (dfb_created(id)) {
+                if (dfb_created(id) && dfb_is_fp32(id)) {
                     unpack_to_dest_mode[id] = UTD::UnpackToDestFp32;
                 }
             }
@@ -894,12 +899,17 @@ ttnn::device_operation::ProgramArtifacts BinaryNgDeviceOperation::ProgramFactory
 
     Group<DFBBinding> writer_dfb;
     writer_dfb.push_back(dfb_bind(DFB_C, "cb_c", DFBEndpointType::CONSUMER));
+    if (!b_present) {
+        // Scalar path (no b tensor): the writer fills the b DFB (c_1) with the broadcast scalar value,
+        // so on this path the *writer* is DFB_B's producer — the reader is not (producer-moves-by-path).
+        writer_dfb.push_back(dfb_bind(DFB_B, "cb_b", DFBEndpointType::PRODUCER));
+    }
 
     Group<DFBBinding> compute_dfb;
     compute_dfb.push_back(dfb_bind(DFB_A, "cb_a", DFBEndpointType::CONSUMER));
-    if (b_present) {
-        compute_dfb.push_back(dfb_bind(DFB_B, "cb_b", DFBEndpointType::CONSUMER));
-    }
+    // Compute always consumes the b DFB (c_1): the b tensor on tensor paths, or the writer-filled
+    // scalar tile on the scalar path. (DFB_B is always created.)
+    compute_dfb.push_back(dfb_bind(DFB_B, "cb_b", DFBEndpointType::CONSUMER));
     compute_dfb.push_back(dfb_bind(DFB_C, "cb_c", DFBEndpointType::PRODUCER));
     if (dfb_created(DFB_A_INTERIM)) {  // compute self-loop (PREPROCESS produces then consumes)
         compute_dfb.push_back(dfb_bind(DFB_A_INTERIM, "cb_a_interim", DFBEndpointType::PRODUCER));

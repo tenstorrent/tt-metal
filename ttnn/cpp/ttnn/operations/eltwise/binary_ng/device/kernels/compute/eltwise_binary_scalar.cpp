@@ -8,18 +8,29 @@
 
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils.hpp"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
+    uint32_t num_tiles = get_arg(args::num_tiles);
 
-    constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
+    constexpr uint32_t num_tiles_per_cycle = get_arg(args::num_tiles_per_cycle);
     // DPRINT("num_tiles_per_cycle: {}\n", num_tiles_per_cycle);
-    constexpr auto cb_pre_lhs = tt::CBIndex::c_0;
-    constexpr auto cb_pre_rhs = tt::CBIndex::c_1;
-    constexpr auto cb_out = tt::CBIndex::c_2;
+    constexpr auto cb_pre_lhs = dfb::cb_a;
+    constexpr auto cb_pre_rhs = dfb::cb_b;
+    constexpr auto cb_out = dfb::cb_c;
 
-    constexpr auto cb_post_lhs = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs;
-    constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs;
+    // c_3/c_4 (activation interims) are conditionally bound; #ifdef-gate the dfb token (a discarded
+    // `?:` branch is still name-looked-up at parse time). HAS_ACTIVATIONS = host PROCESS_*_ACTIVATIONS.
+#if HAS_ACTIVATIONS(LHS)
+    constexpr auto cb_post_lhs = dfb::cb_a_interim;
+#else
+    constexpr auto cb_post_lhs = cb_pre_lhs;
+#endif
+#if HAS_ACTIVATIONS(RHS)
+    constexpr auto cb_post_rhs = dfb::cb_b_interim;
+#else
+    constexpr auto cb_post_rhs = cb_pre_rhs;
+#endif
 
     binary_op_init_common(cb_post_lhs, cb_post_rhs, cb_out);
 #ifdef PACK_RELU
