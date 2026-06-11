@@ -653,13 +653,26 @@ class VoxtralTTAudioTokenizer:
 
         codes_rm = ttnn.to_layout(codes_b37t, ttnn.ROW_MAJOR_LAYOUT)
         idx_rm = ttnn.add(codes_rm, self._mm_offsets_tt)
+        if codes_rm is not codes_b37t and codes_rm.is_allocated():
+            ttnn.deallocate(codes_rm)
         flat_rm = ttnn.reshape(idx_rm, (b * k, t))
+        if idx_rm is not flat_rm and idx_rm.is_allocated():
+            ttnn.deallocate(idx_rm)
         emb_flat = self.mm_audio_codebook_embedding(flat_rm)
+        if flat_rm.is_allocated():
+            ttnn.deallocate(flat_rm)
         d = int(emb_flat.shape[2])
         emb4 = ttnn.reshape(emb_flat, (b, k, t, d))
+        if emb_flat is not emb4 and emb_flat.is_allocated():
+            ttnn.deallocate(emb_flat)
         out = ttnn.sum(emb4, dim=1)
+        if emb4.is_allocated():
+            ttnn.deallocate(emb4)
         if b == 1:
-            return ttnn.reshape(out, (t, d))
+            reshaped = ttnn.reshape(out, (t, d))
+            if out is not reshaped and out.is_allocated():
+                ttnn.deallocate(out)
+            return reshaped
         return out
 
     def latent_from_codes_tt(self, codes_b37t: ttnn.Tensor) -> ttnn.Tensor:
@@ -794,8 +807,14 @@ class VoxtralTTAudioTokenizer:
             raise RuntimeError("encoder_blocks.1 downsample conv is not loaded for this checkpoint.")
         return self.encoder_downsample_after_transformer_0(x_b1tc)
 
-    def pretransform_decode_tt(self, mel_b1tc: ttnn.Tensor) -> ttnn.Tensor:
-        """``[B,1,T,C_mel]`` → ``[B,1,T*C_mel]`` waveform on device (chunked for P150 L1)."""
+    def pretransform_decode_tt(
+        self, mel_b1tc: ttnn.Tensor, *, return_chunks: bool = False
+    ) -> ttnn.Tensor | list[ttnn.Tensor]:
+        """``[B,1,T,C_mel]`` → waveform on device.
+
+        ``return_chunks=True`` returns bounded TT chunks and leaves host stitching to
+        the explicit export boundary.
+        """
         if len(mel_b1tc.shape) != 4 or int(mel_b1tc.shape[1]) != 1:
             raise ValueError(f"Expected [B,1,T,C_mel] mel, got {tuple(mel_b1tc.shape)}")
         b, _, t, c_mel = (int(mel_b1tc.shape[i]) for i in range(4))
@@ -812,7 +831,7 @@ class VoxtralTTAudioTokenizer:
             out = ttnn.reshape(mel_rm, (b, 1, t * c_mel))
             if mel_rm is not out and mel_rm.is_allocated():
                 ttnn.deallocate(mel_rm)
-            return out
+            return [out] if return_chunks else out
 
         # Long mel: slice+reshape per chunk, then pairwise concat under P150 L1 page limit.
         chunks_flat: list[ttnn.Tensor] = []
@@ -835,13 +854,15 @@ class VoxtralTTAudioTokenizer:
             pos = end
 
         if len(chunks_flat) == 1:
-            return chunks_flat[0]
+            return chunks_flat if return_chunks else chunks_flat[0]
+        if return_chunks:
+            return chunks_flat
         return self._merge_pretransform_flat_chunks(chunks_flat)
 
     def _merge_pretransform_flat_chunks(self, chunks: list[ttnn.Tensor]) -> ttnn.Tensor:
-        """Pairwise ``ttnn.concat`` under P150 L1; host-stitch only if two large segments remain."""
-        # P150 concat CB page limit ≈768k bf16 elems on dim=2 (1.536 MiB); stay below that.
-        max_concat_flat = 640_000
+        """Pairwise ``ttnn.concat`` under P150 L1 without host fallback."""
+        # P150 concat CB page limit is about 730k bf16 elems on dim=2; stay below that.
+        max_concat_flat = 730_000
         tensors = chunks
         while len(tensors) > 1:
             merged_any = False
@@ -872,17 +893,7 @@ class VoxtralTTAudioTokenizer:
         if len(tensors) == 1:
             return tensors[0]
 
-        # Remaining segments each exceed max_concat_flat — device concat would exceed L1 CB page
-        # limit (page size = last-dim bytes > per-core L1).  Download all, cat on CPU, re-upload.
-        host_parts = [ttnn.to_torch(t).bfloat16() for t in tensors]
-        for t in tensors:
-            if t.is_allocated():
-                ttnn.deallocate(t)
-        host_cat = torch.cat(host_parts, dim=2)
-        return ttnn.from_torch(
-            host_cat,
-            device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        raise RuntimeError(
+            "TT waveform concat exceeds the safe P150 concat size. "
+            "Call pretransform_decode_tt(..., return_chunks=True) and export chunks at the host boundary."
         )

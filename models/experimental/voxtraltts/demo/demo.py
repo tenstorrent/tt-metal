@@ -302,10 +302,8 @@ def load_prompt_items(path: str, default_voice: str) -> list[dict[str, Any]]:
 def _save_wav(path: Path, waveform_f32: torch.Tensor, sample_rate: int) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     w = waveform_f32.detach().float().cpu().numpy().reshape(-1)
-    # Peak-normalize to 0.95 so the loudest sample uses ~95% of the int16 range.
-    # Without this the model output sits at ~34% of max (inaudible at normal volume).
     peak = float(np.abs(w).max())
-    if peak > 1e-6:
+    if peak > 0.95:
         w = w * (0.95 / peak)
     w = np.clip(w * 32767.0, -32768.0, 32767.0).astype(np.int16)
     wavfile.write(str(path), sample_rate, w)
