@@ -20,6 +20,7 @@ from models.experimental.vibevoice.common.config import (
     GITHUB_DEMO_BRANCH,
     GITHUB_DEMO_REPO,
     RESOURCES_DIR,
+    VOICES_DIR,
 )
 
 PathLike = Union[str, Path]
@@ -249,6 +250,102 @@ def normalize_script(script: str) -> str:
     if not out:
         raise ValueError("No valid content in script")
     return "\n".join(out)
+
+
+def unique_speaker_ids(script: str) -> list[int]:
+    """Return speaker ids in order of first appearance."""
+    seen: set[int] = set()
+    order: list[int] = []
+    for line in script.split("\n"):
+        match = _SPEAKER_LINE.match(line.strip())
+        if not match:
+            continue
+        speaker_id = int(match.group(1))
+        if speaker_id not in seen:
+            seen.add(speaker_id)
+            order.append(speaker_id)
+    return order
+
+
+# Cast names from the climate podcast scripts (Speaker N labels in 4p_climate_*.txt).
+CLIMATE_4P_SPEAKER_NAMES: dict[int, str] = {
+    1: "Alice",
+    2: "Carter",
+    3: "Frank",
+    4: "Maya",
+}
+
+# resources/voices/ files aligned with the Microsoft demo cast.
+CLIMATE_4P_VOICE_FILES: dict[int, str] = {
+    1: "en-Alice_woman.wav",
+    2: "en-Carter_man.wav",
+    3: "en-Frank_man.wav",
+    4: "en-Maya_woman.wav",
+}
+
+# Per golden-demo voice cloning presets (Speaker N -> voice filename under voices/).
+DEMO_VOICE_CLONES: dict[str, dict[int, str]] = {
+    "4p_climate_45min": CLIMATE_4P_VOICE_FILES,
+    "4p_climate_100min": CLIMATE_4P_VOICE_FILES,
+}
+
+DEMO_SPEAKER_NAMES: dict[str, dict[int, str]] = {
+    "4p_climate_45min": CLIMATE_4P_SPEAKER_NAMES,
+    "4p_climate_100min": CLIMATE_4P_SPEAKER_NAMES,
+}
+
+
+def resolve_voice_path(voice_ref: str, voices_dir: Path = VOICES_DIR) -> Path:
+    """Resolve a voice preset name or filename to an existing WAV under ``voices_dir``."""
+    voices_dir = Path(voices_dir)
+    direct = voices_dir / voice_ref
+    if direct.is_file():
+        return direct
+
+    stem = Path(voice_ref).stem.lower()
+    for wav in sorted(voices_dir.glob("*.wav")):
+        name = wav.stem.lower()
+        if name == stem or stem in name or name.endswith(stem) or stem in name.split("-")[-1]:
+            return wav
+
+    available = ", ".join(p.name for p in sorted(voices_dir.glob("*.wav")))
+    raise FileNotFoundError(f"Voice not found for '{voice_ref}' under {voices_dir}. Available: {available}")
+
+
+def build_voice_samples(
+    script: str,
+    demo_id: Optional[str] = None,
+    *,
+    speaker_voice_files: Optional[dict[int, str]] = None,
+    voices_dir: Path = VOICES_DIR,
+) -> tuple[list[str], list[dict[str, str]]]:
+    """Build processor voice_samples list and a human-readable mapping for logging/meta."""
+    voice_files = speaker_voice_files
+    if voice_files is None:
+        if demo_id is None:
+            raise ValueError("demo_id or speaker_voice_files is required")
+        voice_files = DEMO_VOICE_CLONES.get(demo_id)
+    if not voice_files:
+        raise ValueError(f"No voice clone preset for demo {demo_id!r}")
+
+    speaker_names = DEMO_SPEAKER_NAMES.get(demo_id or "", {})
+    samples: list[str] = []
+    mapping: list[dict[str, str]] = []
+    for speaker_id in unique_speaker_ids(script):
+        voice_file = voice_files.get(speaker_id)
+        if not voice_file:
+            raise ValueError(f"Demo {demo_id!r} has no voice file for Speaker {speaker_id}")
+        path = resolve_voice_path(voice_file, voices_dir)
+        samples.append(str(path))
+        mapping.append(
+            {
+                "speaker_id": str(speaker_id),
+                "name": speaker_names.get(speaker_id, f"Speaker {speaker_id}"),
+                "voice_file": path.name,
+                "voice_path": str(path),
+            }
+        )
+    return samples, mapping
 
 
 def load_script(text_path: Optional[PathLike] = None) -> str:
