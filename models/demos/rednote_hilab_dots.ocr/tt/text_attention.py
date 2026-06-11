@@ -479,6 +479,30 @@ class TtTextAttention(LightweightModule):
         sin_cat[..., : hpd * hd] *= self.decode_q_prescale
         return cos_cat, sin_cat
 
+    def build_full_rope_table(self, max_seq: int, theta: float = 1e6) -> tuple:
+        """Pre-compute fused decode RoPE tables for all positions at once.
+
+        Returns (cos_table, sin_table) host float32 tensors of shape
+        [max_seq, qkv_pad] — same layout as decode_rope_rows() but vectorised
+        over all positions so the result can be loaded to device DRAM once at
+        init and indexed on-device via ttnn.embedding(pos, table).
+        """
+        inv_freq = 1.0 / (theta ** (torch.arange(0, self.head_dim, 2, dtype=torch.float) / self.head_dim))
+        positions = torch.arange(max_seq, dtype=torch.float)
+        freqs = positions.unsqueeze(1) * inv_freq.unsqueeze(0)  # [max_seq, head_dim/2]
+        emb = torch.cat([freqs, freqs], dim=-1)  # [max_seq, head_dim]
+        cos = emb.cos()  # [max_seq, head_dim]
+        sin = emb.sin()
+        hpd, hd = self.heads_per_device, self.head_dim
+        cos_table = torch.zeros(max_seq, self.qkv_pad)
+        sin_table = torch.zeros(max_seq, self.qkv_pad)
+        cos_table[:, : self.qkv_width] = 1.0
+        cos_table[:, : (hpd + 1) * hd] = cos.repeat(1, hpd + 1)
+        sin_table[:, : (hpd + 1) * hd] = sin.repeat(1, hpd + 1)
+        cos_table[:, : hpd * hd] *= self.decode_q_prescale
+        sin_table[:, : hpd * hd] *= self.decode_q_prescale
+        return cos_table, sin_table
+
     def prepare_decode_rope(self, position: int, theta: float = 1e6):
         """Replicated bf16 fused-rope rows (cos_cat, sin_cat) [1,1,1,qkv_width]."""
         rows = self.decode_rope_rows(position, theta)

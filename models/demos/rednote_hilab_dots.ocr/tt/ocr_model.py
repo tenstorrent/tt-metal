@@ -375,57 +375,89 @@ class TtOCRModel(LightweightModule):
         return self._rope_host[slot], self._pos_host[slot]
 
     def _ensure_decode_buffers(self, hidden: int):
-        """Persistent per-step input buffers (stable addresses for trace replay)."""
+        """Persistent per-step input buffers (stable addresses for trace replay).
+
+        On-device RoPE: full [max_seq, qkv_pad] cos/sin tables loaded to DRAM
+        once at init; the trace indexes them with ttnn.embedding(pos_rope, table)
+        eliminating the per-step H2D of ~3 KB cos/sin rows.  Token and position
+        scalars (each 4 bytes) are written via H2D after each trace execution.
+        """
         if self._pt_ids is not None:
             return
         attn = self.layers[0].self_attn
+        max_seq = self.kv_caches[0]["max_seq"]
         rep = ttnn.ReplicateTensorToMesh(self.mesh_device)
         common = dict(device=self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=rep)
+        # Token input: [1,1,1,1] uint32 — same shape as the on-device argmax
+        # output so ttnn.copy(argmax_out, pt_ids) is a direct D2D memcpy.
         self._pt_ids = ttnn.from_torch(
-            torch.zeros(1, 1, 1, 32, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, **common
+            torch.zeros(1, 1, 1, 1, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, **common
         )
-        # Fused-rope rows live in the QKV width-shard (text_attention keeps
-        # the whole decode rope chain in that L1 shard; rows padded 640->768).
-        zeros = torch.zeros(1, 1, 1, attn.qkv_pad)
-        ws = dict(device=self.mesh_device, memory_config=attn.qkv_out_mc, mesh_mapper=rep)
-        self._pt_cos = ttnn.from_torch(zeros, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, **ws)
-        self._pt_sin = ttnn.from_torch(zeros, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, **ws)
+        # Position for RoPE embedding lookup: uint32 [1,1,1,1] ROW_MAJOR.
+        # Kept separate from kv_caches[0]["pos"] (int32 [1] for paged_update_cache).
+        self._pos_rope_dev = ttnn.from_torch(
+            torch.zeros(1, 1, 1, 1, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, **common
+        )
+        # Full RoPE tables for all decode positions: [max_seq, qkv_pad] bf16
+        # ROW_MAJOR on device DRAM. ttnn.embedding indexes these by position.
+        cos_tbl, sin_tbl = attn.build_full_rope_table(max_seq)
+        self._cos_table_dev = ttnn.from_torch(cos_tbl.bfloat16(), layout=ttnn.ROW_MAJOR_LAYOUT, **common)
+        self._sin_table_dev = ttnn.from_torch(sin_tbl.bfloat16(), layout=ttnn.ROW_MAJOR_LAYOUT, **common)
 
-    def _write_decode_inputs(self, token: int, slot: int):
-        """Four small H2D copies into the persistent buffers (the per-step host work)."""
-        ids = torch.zeros(1, 1, 1, 32, dtype=torch.int32)
-        ids[0, 0, 0, 0] = token
-        ids_host = ttnn.from_torch(
-            ids,
+    def _write_decode_inputs(self, slot: int):
+        """Two 4-byte H2D per step: pos_i32 (KV-cache update) and pos_u32 (RoPE lookup).
+
+        RoPE cos/sin are looked up on-device from pre-loaded DRAM tables;
+        no ~3 KB cos/sin rows cross PCIe per step.
+        """
+        rep = ttnn.ReplicateTensorToMesh(self.mesh_device)
+        pos_i32 = ttnn.from_torch(torch.tensor([slot], dtype=torch.int32), dtype=ttnn.int32, mesh_mapper=rep)
+        ttnn.copy_host_to_device_tensor(pos_i32, self.kv_caches[0]["pos"])
+        pos_u32 = ttnn.from_torch(
+            torch.zeros(1, 1, 1, 1, dtype=torch.int32).fill_(slot),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=rep,
         )
-        ttnn.copy_host_to_device_tensor(ids_host, self._pt_ids)
-        (cos_h, sin_h), pos_h = self._host_decode_inputs(slot)
-        ttnn.copy_host_to_device_tensor(cos_h, self._pt_cos)
-        ttnn.copy_host_to_device_tensor(sin_h, self._pt_sin)
-        ttnn.copy_host_to_device_tensor(pos_h, self.kv_caches[0]["pos"])  # shared by all layers
+        ttnn.copy_host_to_device_tensor(pos_u32, self._pos_rope_dev)
 
     def _decode_body_traced(self) -> ttnn.Tensor:
         """Whole token step from persistent buffers; returns [1,1,1,1] uint32 token.
 
         Trace-safe: fixed shapes, every input a long-lived device tensor.
-        On-device greedy argmax (all_gather full vocab -> untilize ->
-        multicore argmax) is the tick-47 proven exact recipe.
+        RoPE cos/sin are looked up from on-device DRAM tables indexed by
+        _pos_rope_dev; token input comes from _pt_ids which is updated D2D
+        from the previous step's argmax output.
         """
-        e = self.embedding.forward(self._pt_ids)  # [1, 1, 32, H] bf16 TILE, replicated
-        x = ttnn.slice(e, [0, 0, 0, 0], [1, 1, 1, e.shape[-1]])
-        ttnn.deallocate(e)
-        # bf16 residual stream (perf REDO 4): the embedding row IS bf16 —
-        # no typecast; layers carry the bf16 dtype through norms/adds/MLP.
-        h = x
+        # _pt_ids is [1,1,1,1] uint32: embedding output is [1,1,1,H] bf16.
+        e = self.embedding.forward(self._pt_ids)
+        h = ttnn.unsqueeze_to_4D(e) if len(e.shape) < 4 else e
+        # On-device RoPE lookup: embedding indexes [max_seq, qkv_pad] DRAM table
+        # by the current position, then reshards to width-sharded L1 for the
+        # fused rope multiply in forward_decode.
+        attn = self.layers[0].self_attn
+        cos_raw = ttnn.embedding(
+            self._pos_rope_dev,
+            self._cos_table_dev,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        cos_row = ttnn.to_memory_config(ttnn.unsqueeze_to_4D(cos_raw), attn.qkv_out_mc)
+        ttnn.deallocate(cos_raw)
+        sin_raw = ttnn.embedding(
+            self._pos_rope_dev,
+            self._sin_table_dev,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        sin_row = ttnn.to_memory_config(ttnn.unsqueeze_to_4D(sin_raw), attn.qkv_out_mc)
+        ttnn.deallocate(sin_raw)
         for layer, kv in zip(self.layers, self.kv_caches):
-            h_next = layer.forward_decode(h, kv, (self._pt_cos, self._pt_sin))
+            h_next = layer.forward_decode(h, kv, (cos_row, sin_row))
             ttnn.deallocate(h)
             h = h_next
-        # bf16 lm_head acts (perf REDO 4): no fp32 re-entry; logits still
-        # leave the vocab matmul fp32 for exact greedy argmax.
+        ttnn.deallocate(cos_row)
+        ttnn.deallocate(sin_row)
         normed = self.final_norm(h)
         ttnn.deallocate(h)
         logits = self.lm_head.forward(normed)  # [1, 1, 1, vocab/N] fp32, vocab-sharded
@@ -442,10 +474,24 @@ class TtOCRModel(LightweightModule):
         return tok
 
     def _decode_step_traced(self, token: int, slot: int, hidden: int) -> tuple[int, str]:
-        """One traced token step; returns (next_token, kind in {capture, replay})."""
+        """One traced token step; returns (next_token, kind in {capture, replay}).
+
+        Non-blocking: execute_trace(blocking=False) queues the trace, then
+        synchronize_device waits once per step.  On-device RoPE tables eliminate
+        the ~3 KB cos/sin H2D per step; only 3×4-byte scalars (pos×2 + token)
+        cross PCIe vs the old 4× variable-size H2D pattern.
+        """
         self._ensure_decode_buffers(hidden)
-        self._write_decode_inputs(token, slot)
+        self._write_decode_inputs(slot)
         if self._decode_trace_id is None:
+            # Load initial token (from prefill) into _pt_ids once.
+            ids_host = ttnn.from_torch(
+                torch.zeros(1, 1, 1, 1, dtype=torch.int32).fill_(token),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            ttnn.copy_host_to_device_tensor(ids_host, self._pt_ids)
             # Untraced compile pass FIRST (program-cache fill allocates device
             # buffers, unsafe while a trace is alive — the tick-47 lesson),
             # then capture exactly once. Output handle stays valid for replays.
@@ -460,9 +506,29 @@ class TtOCRModel(LightweightModule):
                 ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
             ttnn.synchronize_device(self.mesh_device)
             self._decode_trace_id = tid
+            # Seed _pt_ids from the capture result so the first replay sees
+            # the correct next token (H2D: tok is already known from compile pass).
+            ids_h = ttnn.from_torch(
+                torch.zeros(1, 1, 1, 1, dtype=torch.int32).fill_(tok),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            ttnn.copy_host_to_device_tensor(ids_h, self._pt_ids)
+            ttnn.synchronize_device(self.mesh_device)
             return tok, "capture"
-        ttnn.execute_trace(self.mesh_device, self._decode_trace_id, cq_id=0, blocking=True)
+        # Non-blocking: submit trace, wait, then H2D the resulting token (4 bytes)
+        # back into _pt_ids for the next step.
+        ttnn.execute_trace(self.mesh_device, self._decode_trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(self.mesh_device)
         tok = int(ttnn.to_torch(ttnn.get_device_tensors(self._decode_tok_out)[0])[0, 0, 0, 0].item())
+        ids_h = ttnn.from_torch(
+            torch.zeros(1, 1, 1, 1, dtype=torch.int32).fill_(tok),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        ttnn.copy_host_to_device_tensor(ids_h, self._pt_ids)
         return tok, "replay"
 
     def release_decode_trace(self):
