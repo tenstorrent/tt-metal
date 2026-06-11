@@ -117,6 +117,15 @@ struct ProgramCacheKey {
     bool operator==(const ProgramCacheKey& other) const {
         return hash == other.hash && canonical == other.canonical;
     }
+
+    // Custom operator<=> for strong ordering in collections that need it; std::unordered_map only needs operator== and
+    // the hasher.
+    std::strong_ordering operator<=>(const ProgramCacheKey& other) const {
+        if (const auto cmp = hash <=> other.hash; cmp != 0) {
+            return cmp;
+        }
+        return canonical <=> other.canonical;
+    }
 };
 
 struct ProgramCacheKeyHasher {

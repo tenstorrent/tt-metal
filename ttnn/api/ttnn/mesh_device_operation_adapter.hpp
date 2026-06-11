@@ -822,27 +822,22 @@ public:
     //
     // For ops with a custom compute_program_hash we can't infer which fields it keyed on (it may
     // deliberately exclude some, e.g. an RNG seed), so we return an empty string -- opting that op
-    // out of collision resolution (hash-only, today's behavior) unless it provides a
-    // compute_program_canonical_key hook. The default reflection-hash path is mirrored exactly.
+    // out of collision resolution (hash-only, today's behavior). The default reflection-hash path
+    // is mirrored exactly.
     static std::string compute_mesh_workload_canonical_key(
-        tt::tt_metal::distributed::MeshDevice* mesh_device,
+        [[maybe_unused]] tt::tt_metal::distributed::MeshDevice* mesh_device,
         const operation_attributes_t& attrs,
         const tensor_args_t& tensor_args) {
-        std::string key;
         if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
-            if constexpr (requires { DeviceOperation::compute_program_canonical_key(attrs, tensor_args); }) {
-                key = DeviceOperation::compute_program_canonical_key(attrs, tensor_args);
-            } else {
-                return {};  // custom hash, no canonical hook -> opt out of collision resolution
-            }
+            return {};  // custom hash -> opt out of collision resolution
         } else {
-            key = ttsl::hash::canonical_key(ttsl::hash::type_hash<DeviceOperation>, attrs, tensor_args);
+            std::string key = ttsl::hash::canonical_key(ttsl::hash::type_hash<DeviceOperation>, attrs, tensor_args);
+            for (const auto& coord :
+                 mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device)) {
+                key += ttsl::hash::canonical_key(coord);
+            }
+            return key;
         }
-
-        for (const auto& coord : mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device)) {
-            key += ttsl::hash::canonical_key(coord);
-        }
-        return key;
     }
 
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
