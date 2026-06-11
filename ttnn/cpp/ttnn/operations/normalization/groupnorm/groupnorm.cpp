@@ -171,6 +171,7 @@ Tensor group_norm(
     std::optional<Layout> output_layout,
     std::optional<int> num_out_blocks,
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<Tensor>& /*negative_mask*/,
     bool use_welford) {
     if (input_tensor.layout() == Layout::TILE and inplace.has_value()) {
         TT_FATAL(

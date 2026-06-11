@@ -26,6 +26,7 @@ Tensor group_norm(
     std::optional<Layout> output_layout = std::nullopt,
     std::optional<int> num_out_blocks = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    const std::optional<Tensor>& negative_mask = std::nullopt,  // Deprecated: ignored, will be removed soon
     bool use_welford = false);
 
 }  // namespace ttnn

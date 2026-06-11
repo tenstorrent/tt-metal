@@ -57,6 +57,7 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
                 weight (ttnn.Tensor, optional): Gamma (scale) parameter for the affine transformation. When omitted, no scaling is applied. Defaults to `None`.
                 bias (ttnn.Tensor, optional): Beta (shift) parameter for the affine transformation. When omitted, no shift is applied. Defaults to `None`.
                 input_mask (ttnn.Tensor, optional): Deprecated. This argument is ignored and will be removed soon. The mask is now created automatically. Defaults to `None`.
+                negative_mask (ttnn.Tensor, optional): Deprecated. This argument is ignored and will be removed soon. The mask is now created automatically. Defaults to `None`.
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
                 dtype (ttnn.DataType, optional): Defaults to `None`.
                 core_grid (CoreGrid, optional): Defaults to `None`.
@@ -133,6 +134,7 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
         nb::arg("output_layout") = nb::none(),
         nb::arg("num_out_blocks") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("negative_mask") = nb::none(),
         nb::arg("use_welford") = false);
     mod.def(
         "create_group_norm_input_mask",
