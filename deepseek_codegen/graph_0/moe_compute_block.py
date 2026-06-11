@@ -343,7 +343,9 @@ def run_routed_experts(x_normed, indices_i32, scores_bf16, st):
 
     # ---- manual tail: weighted-k-sum -> all_reduce(axis1) -> mesh_partition ----
     c = ttnn.to_layout(tt_combine, ttnn.Layout.TILE, None, memory_config=DRAM)
-    c = ttnn.typecast(c, ttnn.DataType.FLOAT32, memory_config=DRAM)
+    # E_moe_tail: c stays BF16; the multiply below widens to FP32 internally (lossless,
+    # since tt_combine is BF16) -> drops a full [8,32,7168] FP32 typecast + halves the
+    # multiply's input read. Numerically identical.
     if os.environ.get("MOE_NO_TAIL_SCORE"):
         # DIAGNOSTIC: skip the score-multiply to test whether moe_compute's combine already
         # applied scores internally (if e2e PCC jumps to ~0.99, the tail must NOT re-apply).
@@ -351,7 +353,7 @@ def run_routed_experts(x_normed, indices_i32, scores_bf16, st):
     else:
         sc = ttnn.reshape(scr, [TOKENS_PER_DEV, K_SEL], memory_config=DRAM)
         sc = ttnn.to_layout(sc, ttnn.Layout.TILE, None, memory_config=DRAM)
-        sc = ttnn.typecast(sc, ttnn.DataType.FLOAT32, memory_config=DRAM)
+        # E_moe_tail: sc stays BF16 (multiply widens losslessly).
         sc = ttnn.permute(sc, [1, 0], memory_config=DRAM)  # [k, tokens]
         sc = ttnn.reshape(sc, [K_SEL, TOKENS_PER_DEV, 1], memory_config=DRAM)
         if os.environ.get("MOE_DUMP_ROUTED"):
