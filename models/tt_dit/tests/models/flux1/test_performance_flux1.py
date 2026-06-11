@@ -27,9 +27,15 @@ from ....pipelines.flux1.pipeline_flux1 import Flux1Pipeline, Flux1PipelineConfi
     "mesh_device, sp, tp, encoder_tp, vae_tp, topology, num_links",
     [
         [(1, 2), (1, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 2],
-        [(2, 2), (2, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 2],
+        pytest.param(
+            (2, 2), (2, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 2,
+            marks=pytest.mark.skip(reason="Disabled on bh_quietbox_2 (2x2 blackhole mesh): see #46697"),
+        ),
         [(2, 4), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
-        [(2, 4), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 2],
+        pytest.param(
+            (2, 4), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 2,
+            marks=pytest.mark.skip(reason="Disabled on bh_loudbox (bh_2x4 blackhole mesh): see #46697"),
+        ),
         [(4, 8), (4, 0), (8, 1), (4, 0), (4, 0), ttnn.Topology.Linear, 4],
         [(4, 8), (4, 0), (8, 1), (4, 0), (4, 0), ttnn.Topology.Linear, 2],
     ],
