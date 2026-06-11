@@ -527,7 +527,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner_label }}
       runs-on-labels: >-
         ${{
-          matrix.test-group.sku == 'bh_p150b_civ2'
+          (github.event_name == 'merge_group' && matrix.test-group.sku == 'bh_p150b_civ2')
             && '["tt-ubuntu-2204-P150b-viommu-prio-stable"]'
             || toJSON(matrix.test-group.runs_on)
         }}
