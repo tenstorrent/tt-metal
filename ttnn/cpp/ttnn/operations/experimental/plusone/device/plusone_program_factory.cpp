@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <algorithm>
+#include <cstdint>
+#include <filesystem>
+#include <vector>
 
 #include "plusone_program_factory.hpp"
 #include "plusone_device_operation_types.hpp"
@@ -10,18 +13,25 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include "ttnn/operation.hpp"
-#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::experimental::prim {
 
 using namespace tt::tt_metal;
+namespace m2 = tt::tt_metal::experimental;
 
-tt::tt_metal::ProgramDescriptor PlusOneProgramFactory::create_descriptor(
+namespace {
+
+constexpr const char* PLUSONE_READER_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/experimental/plusone/device/kernels/reader_plusone_interleaved.cpp";
+
+}  // namespace
+
+ttnn::device_operation::ProgramArtifacts PlusOneProgramFactory::create_program_artifacts(
     const PlusoneParams& operation_attributes, const Tensor& input, Tensor& /*tensor_return_value*/) {
-    ProgramDescriptor desc;
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     uint32_t input_unit_size = input.element_size();
 
@@ -42,7 +52,6 @@ tt::tt_metal::ProgramDescriptor PlusOneProgramFactory::create_descriptor(
         }
     }
 
-    uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_units = W;
     auto* src_buffer = input.buffer();
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
@@ -50,44 +59,70 @@ tt::tt_metal::ProgramDescriptor PlusOneProgramFactory::create_descriptor(
         src_is_dram ? tt::tt_metal::hal::get_dram_alignment() : tt::tt_metal::hal::get_l1_alignment();
     uint32_t aligned_input_page_size = tt::align(num_input_units * input_unit_size, page_alignment);
 
-    // When the input is sharded, bind the CB to the input buffer so the framework
-    // can re-apply the globally-allocated address on a program-cache hit. For the
-    // interleaved path the CB is plain L1 scratch and the buffer address is passed
-    // through the reader runtime arg instead.
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = aligned_input_page_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(src0_cb_index),
-            .data_format = input_cb_data_format,
-            .page_size = aligned_input_page_size,
-        }}},
-        .buffer = input.is_sharded() ? src_buffer : nullptr,
-    });
+    m2::ProgramSpec spec;
+    spec.name = "plusone";
 
-    std::vector<uint32_t> reader_compile_time_args = {
-        src0_cb_index, src_is_dram, aligned_input_page_size, W, H, operation_attributes.skip_negative_entries};
-    tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+    // The input tensor parameter — the reader's TensorAccessor base address is filled from it on cache
+    // miss and refreshed on a cache hit (UpdateTensorArgs). The op is in-place, so this same tensor is
+    // both read and written.
+    spec.tensor_parameters = {
+        m2::TensorParameter{.unique_id = m2::TensorParamName{"input"}, .spec = input.tensor_spec()}};
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/plusone/device/kernels/reader_plusone_interleaved.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    auto cores = corerange_to_cores(all_cores, num_cores, true);
-
-    // Pass Buffer* (not address) so the framework's cache-hit path can re-patch
-    // the runtime arg without rebuilding the descriptor.
-    for (const auto& core : cores) {
-        reader_desc.emplace_runtime_args(core, {src_buffer});
+    // The "in" DFB. When the input is sharded, borrow the input buffer's L1 storage so the framework can
+    // re-apply the globally-allocated address on a program-cache hit and the increment happens in place
+    // with no NoC traffic. For the interleaved path the DFB is plain L1 scratch and the buffer address is
+    // taken from the TensorAccessor("input") binding inside the reader instead.
+    m2::DataflowBufferSpec in_dfb{
+        .unique_id = m2::DFBSpecName{"in"},
+        .entry_size = aligned_input_page_size,
+        .num_entries = 1,
+        .data_format_metadata = input_cb_data_format,
+    };
+    if (input.is_sharded()) {
+        in_dfb.borrowed_from = m2::TensorParamName{"input"};
     }
+    spec.dataflow_buffers = {std::move(in_dfb)};
 
-    desc.kernels.push_back(std::move(reader_desc));
+    // The single reader kernel both NoC-reads and NoC-writes the SAME buffer (in-place), so it binds the
+    // one DFB as BOTH producer and consumer (single kernel, both roles OK). Formerly-positional
+    // compile-time args become a named Table; the TensorAccessor args that were appended positionally are
+    // now carried by the tensor binding.
+    m2::KernelSpec reader{
+        .unique_id = m2::KernelSpecName{"reader"},
+        .source = std::filesystem::path{PLUSONE_READER_KERNEL_PATH},
+        .dfb_bindings =
+            {m2::ProducerOf(m2::DFBSpecName{"in"}, "cb_id_in0"), m2::ConsumerOf(m2::DFBSpecName{"in"}, "cb_id_in0")},
+        .tensor_bindings = {m2::TensorBinding{
+            .tensor_parameter_name = m2::TensorParamName{"input"}, .accessor_name = "s0_args"}},
+        .compile_time_args =
+            {{"src0_is_dram", static_cast<uint32_t>(src_is_dram)},
+             {"stick_size", aligned_input_page_size},
+             {"W", W},
+             {"H", H},
+             {"skip_negative_entries", static_cast<uint32_t>(operation_attributes.skip_negative_entries)}},
+        .hw_config = m2::DataMovementHardwareConfig{.gen1_config = m2::DataMovementHardwareConfig::Gen1Config{}},
+    };
 
-    return desc;
+    spec.kernels = {std::move(reader)};
+    spec.work_units = {
+        m2::WorkUnitSpec{.name = "plusone", .kernels = {m2::KernelSpecName{"reader"}}, .target_nodes = all_cores}};
+
+    // The reader declares no runtime args (everything is a compile-time arg or comes from the tensor
+    // binding), but a KernelRunArgs must still be present for every kernel; emit an empty per-core entry
+    // on each target core to mirror the legacy SetRuntimeArgs over all_cores.
+    m2::ProgramRunArgs run_args;
+    m2::ProgramRunArgs::KernelRunArgs reader_args{.kernel = m2::KernelSpecName{"reader"}};
+    for (const auto& core : corerange_to_cores(all_cores, num_cores, /*row_wise=*/true)) {
+        reader_args.runtime_arg_values.push_back({core, {}});
+    }
+    run_args.kernel_run_args.push_back(std::move(reader_args));
+
+    // Tensor argument: the framework fills the reader's tensor accessor base address from this, and
+    // refreshes it on a cache hit (UpdateTensorArgs).
+    run_args.tensor_args.emplace(
+        m2::TensorParamName{"input"}, m2::ProgramRunArgs::TensorArgument{std::cref(input.mesh_tensor())});
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::experimental::prim

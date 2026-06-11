@@ -10,20 +10,24 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
+// Metal 2.0: the input address comes from the TensorAccessor binding (ta::s0_args), the CB id from the
+// DFB binding token (dfb::), and the structural scalars (stick_size, W, H, src0_is_dram,
+// skip_negative_entries) from named compile-time args (args::, constexpr) instead of positional
+// compile-time / runtime slots. The op is in-place: the reader NoC-reads the input into the L1 scratch
+// DFB, increments, and NoC-writes back to the SAME buffer (the DFB is bound as both producer and
+// consumer). When sharded the DFB borrows the input's L1 storage, so the increment happens in place with
+// no NoC traffic (src0_is_dram == false).
 void kernel_main() {
     Noc noc;
 
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
+    constexpr uint32_t cb_id_in0 = dfb::cb_id_in0;
+    constexpr bool src0_is_dram = (bool)get_arg(args::src0_is_dram);
+    constexpr uint32_t stick_size = get_arg(args::stick_size);
+    constexpr uint32_t W = get_arg(args::W);
+    constexpr uint32_t H = get_arg(args::H);
+    constexpr bool skip_negative_entries = (bool)get_arg(args::skip_negative_entries);
 
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
-    constexpr bool src0_is_dram = (bool)get_compile_time_arg_val(1);
-    constexpr uint32_t stick_size = get_compile_time_arg_val(2);
-    constexpr uint32_t W = get_compile_time_arg_val(3);
-    constexpr uint32_t H = get_compile_time_arg_val(4);
-    constexpr bool skip_negative_entries = get_compile_time_arg_val(5);
-
-    constexpr auto s0_args = TensorAccessorArgs<6>();
-    const auto s0 = TensorAccessor(s0_args, src_addr);
+    const auto s0 = TensorAccessor(ta::s0_args);
 
     CircularBuffer cb_in0(cb_id_in0);
 
