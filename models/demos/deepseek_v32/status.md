@@ -118,23 +118,24 @@ Open work tracked in the Backlog section below.
 
 Legend: `[x]` done · `[~]` partial · `[ ]` open · ⏸️ postponed · 📌 resolved as decision (no code).
 
-### Recommended implementation order (open items, 2026-06-11)
+### Recommended implementation order (open items, updated 2026-06-11)
 
-`18 → 14 → 13 → 4 → 9 → 8 → 19 → 16 → 3 → 15 → 11/12`
+Done: (4),(5),(6),(7),(9). **(8) retired** — see decision below. Remaining open:
+
+`18 → 14 → 13 → 16 → 19 → 3 → 12 → 15`
 
 | # | Item | Why here |
 |---|---|---|
-| **4** | **2x2 SP×TP** | top production blocker; **rewrites the sparse/cache read paths** → do before the perf-debt items below (else 1x4 rework). Folds in **(17)** mask dedup |
-| 9 | MLA cache-slot readback → device | done inside (4)'s SP-aware read path |
-| 8 | sparse_mla gather+SDPA → device | biggest perf debt; SP-aware after (4); stand-in for fused (12) |
-| 19 | indexer key cache → device | couples with (4); prereq = device non-interleaved RoPE (**issue #4**) |
-| 3 ⏸️ | 50k scale gate | hardware-time gated; cheaper once 8/9 speed the path |
-| 16 | multi-layer / multi-user cache | broadens to the full model |
-| 18 | determinism tests | cheap, no deps — guards every change below |
+| 18 | determinism tests | cheap, no deps — guards every change |
 | 14 | v32 tests in CI | small after 18; locks regressions (long CPU-truths gated) |
 | 13 | upstream injection → v3, delete copies | independent hygiene; kills drift from copied files |
-| 11/12 | fused C++ ops | out-of-scope follow-ups (Approach §4) |
+| 16 | multi-layer / multi-user cache | functional scope expansion toward the full model |
+| 19 | indexer key cache → device | perf; gated on device non-interleaved RoPE (**issue #4**) |
+| 3 ⏸️ | 50k scale gate | hardware-time gated; pre-cache truth on a big box |
+| 12 | **fused ring_sparse_attention** | the real on-device sparse-attn path (absorbs retired (8)); C++ kernel, out-of-scope follow-up |
 | 15 | decode path | beyond current prefill-only scope; largest expansion |
+
+**The MLA-layer milestone is essentially complete** (1x4+2x2, single-shot+chunked, random+pretrained). What remains is hygiene (18/14/13), scope expansion (16/15), and perf (19/12) — none blocking functional correctness.
 
 **Step 4 — chunked prefill**
 - [x] **(1)** MLACPU decode branch accepts intra-chunk causal mask (was mask=None → no within-chunk causality)
@@ -148,17 +149,17 @@ Legend: `[x]` done · `[~]` partial · `[ ]` open · ⏸️ postponed · 📌 re
 - [x] 📌 **(7)** fp8/Hadamard parity — follow v3 cache format (kvpe bfloat8_b); ttnn has no matching fp8, so the functional path is the contract; truth stays use_fp8_path=False/simulate_fp8=False
 
 **Host fallbacks → device ops (perf debt; contracts in tt/ops.py + Missing op APIs)**
-- [ ] **(8)** sparse_mla gather+SDPA → device — full host fallback per layer (biggest copy/compute hit). **Probed on device 2026-06-11:**
-  - Row-gather primitive: **`ttnn.embedding`** — weight [T,576] ROW_MAJOR + flattened idx [1,1,1,Sq·k] uint32 → [Sq·k,576] → reshape [Sq,k,576]. Verified matches `kv[idx]`. (`ttnn.gather` also matches but needs input expanded to [Sq,T,576] — memory-prohibitive; embedding wins, no input expansion.)
-  - **Memory wall:** the selected tensor [Sq,k,576] is the cost — at target (Sq≤4096, k=2048) ≈ 9.6 GB. So device sparse_mla **must query-tile** (process Sq in blocks; [Sq_tile,k,576] bounded). This is a hand-rolled FlashMLA minus fusion — the fused op (12) avoids materializing it.
-  - Plan per query-tile: embedding-gather sel; batched matmul q·selᵀ ×scale → [Sq_tile,H,k]; +causal {0,−inf} mask (start_pos-aware, from idx vs global pos); ttnn.softmax; matmul·sel[:512] → [Sq_tile,H,512]. Test-first: numerics vs the proven host sparse_mla.
+- [x] 📌 **(8)** sparse_mla gather+SDPA → device — **RETIRED 2026-06-11: don't compose it; host fallback stays the functional path, on-device path = fused (12).** Decision rationale:
+  - A composed device version is *feasible* (query-tile to bound `sel=[Sq,k,576]`, ~9.6 GB full → ~0.6 GB at tile=256 via `ttnn.embedding` gather, verified), but **not worth it**: (a) no correctness gain (host fallback already PCC 0.997); (b) the real win is **fusion** (never materialize `sel`, stream over `k`) which a composed op *by definition cannot do*; (c) per-tile ROW_MAJOR↔TILE churn + many small batched matmuls over k=2048 may be net-slower than host; (d) perf is out of scope (spec §3, Approach §4).
+  - SP only gives ~sp× (2×), already captured by query-sharding in (4). The order-of-magnitude relief is fusion, independent of SP — only the kernel delivers it. So there is **no composed workaround**; → folded into (12).
+  - Probe kept as design input for (12): row-gather primitive = `ttnn.embedding` (weight [T,576] RM + flat idx → [Sq·k,576]); `ttnn.gather` needs prohibitive input expansion.
 - [x] **(9)** MLA cache-slot host readback — removed the device→host→device re-upload: `sparse_mla` now consumes the full-T KVPE **as host** (single-shot via SP all-gather→to_torch; chunked via v3 `kv_cache_to_host`). One download, no re-upload. (Full device-residency awaits (8).)
 - [x] **(10)** ~~indexer host stems readback (full hidden concat per chunk)~~ — resolved by (6); only the pe-slice RoPE readback remains, folded into (6)'s F1 host-rope note (coupled to issue #4)
 - [ ] **(19)** indexer key cache → device — reuse v3's cache-*creation*/write **logic** (init_kvpe_cache-style allocator + fill_cache_for_user_/update_padded_kv_cache) to stand up a parallel, index-shaped cache ([max_seq, 128]); not the physical KVPE tensor. Gated on device-side RoPE (#4, so keys are written device-resident) and the dense-full-prefix-read vs SP-shard question (couple with (4) 2x2). Today: host `_index_k_cache` torch buffer.
 
 **Fused C++ ops (out of scope per Approach §4, documented follow-ups)**
 - [ ] **(11)** indexer_logits (DeepGEMM fp8_mqa_logits-style), causal windows, fp8
-- [ ] **(12)** sparse FlashMLA-style attention, per-row topk_length
+- [ ] **(12)** **fused `ring_sparse_attention`** — the on-device sparse-attn path (absorbs retired (8)). One kernel: per-query gather of k selected latents + SDPA + online-softmax (no `sel` materialization) + SP-ring over the latent cache + DSA causal/valid mask. Design inputs from (8) probe: gather via embedding-style row lookup; fusion is the win (vs ~9.6 GB `sel`); SP gives only ~2×. Siblings: v3 `ring_mla` (ring+latent), chunked SDPA plumbing. C++ kernel, out-of-scope follow-up.
 
 **Hygiene**
 - [ ] **(13)** upstream mla_class/block_class injection to v3 → delete the two copied files
