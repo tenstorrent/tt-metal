@@ -93,14 +93,6 @@ def test_softmax_sharded_no_rebuild(device):
     in1_t = ttnn.from_torch(
         input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in0_mem_config
     )
-    in1_t_shard = ttnn.interleaved_to_sharded(
-        in1_t,
-        grid_size,
-        [M // grid_size[1], K // grid_size[0]],
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.ShardOrientation.COL_MAJOR,
-    )
-
     block_w = seq_len // 32
     block_h = seq_len // 32 * fuse_head
     subblock_w = 1
@@ -164,14 +156,6 @@ def test_layernorm_sharded_no_rebuild(device):
     in0_t = ttnn.from_torch(
         in0, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in0_mem_config
     )
-    in0_t_shard = ttnn.interleaved_to_sharded(
-        in0_t,
-        grid_size,
-        [M // grid_size[0], K // grid_size[1]],
-        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-        ttnn.ShardOrientation.COL_MAJOR,
-    )
-
     gamma = torch.rand(in0_shape[3]) * 2 - 1
     beta = torch.rand(in0_shape[3]) * 2.0 - 1.1
     # ROW_MAJOR gamma/beta must be reshaped so the last (padded) dim equals the tile width (32);
@@ -246,14 +230,6 @@ def test_bcast_sharded_h_no_rebuild(device):
     in_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     a_t = ttnn.from_torch(a_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in_mem)
     b_t = ttnn.from_torch(b_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in_mem)
-
-    a_shard = ttnn.interleaved_to_sharded(
-        a_t,
-        grid_size,
-        [H // grid_size[1], W // grid_size[0]],
-        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
 
     def _call():
         inp = ttnn.interleaved_to_sharded(
