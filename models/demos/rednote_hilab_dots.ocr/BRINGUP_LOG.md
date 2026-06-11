@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-11T01:06:25Z
+**Updated:** 2026-06-11T01:48:42Z
 
 ## Block Status
 
@@ -63,7 +63,7 @@
 | text_mlp | reference | done | 1.000000 | 0 | Qwen2 SwiGLU 1536->8960->1536 no bias, real layers.0 weights |
 | text_mlp | ttnn | done | 0.999991 | 0 | Qwen2 SwiGLU down(silu(gate(x))*up(x)) 1536->8960->1536 no bias: two sibling ttnn.linear branches + explicit ttnn.silu + ttnn.mul + row-parallel down ttnn.linear, mirroring reference_impl models/tt_transformers/tt/mlp.py (KB ttnn_silu_2 cited; KB ttnn_mul_1 fused input_tensor_a_activations=[SILU] variant deferred to optimization since the mlp guard requires a traced silu/gelu kernel). Parallelism plan placement=shard implemented: gate/up column-parallel ShardTensorToMesh(dim=-1) (per-chip intermediate 8960/4=2240), down row-parallel (dim=-2) with per-chip PARTIAL sums combined by sync all_gather(dim=3, Topology.Linear) + local adds (same all-reduce idiom as text_attention o_proj; async CCL deferred to optimization per tp-guidance). HiFi4+fp32-acc, bf16; real model.layers.0.mlp weights re-loaded from checkpoint in the test; all-reduced replicated output compared single-device vs golden. Guard ok (lint 0, kernels ok, no new host ops). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | text_mlp | debug | n/a | — | 0 |  |
-| text_mlp | optimization | pending | — | 0 | OCCUPANCY REDO: per the new occupancy+convergence contract — query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid |
+| text_mlp | optimization | done | 0.999892 | 0 | OCCUPANCY REDO done at production decode point (bf16 [1,1,1,1536] row, bfp8 weights, 1x4 mesh, queried 11x10=110 grid): decode block kernel 131.94 -> 94.27 us/device (-28.6%), 100 traced replays. Levers: KB ttnn_mul_1 fused-SiLU mul (cited); DRAM-WIDTH-SHARDED decode weight copies + MatmulMultiCoreReuseMultiCastDRAMSharded (text_attention recipe, inter 2240 zero-padded to 2304); HiFi2 decode matmuls (tt_transformers decode posture, fp32 acc kept; 8-row decode PCC drift gate 0.999892); core A/B 24/12/8 -> 12c best (matmuls BW-plateau 16.9us each ~217GB/s, mul wants wide); reverted-with-evidence: SiLU-in-matmul fused_activation (16.9->34.6us), standalone silu_+plain mul (12.0 vs 11.2us), ttnn.all_reduce (decomposes to identical RS+AG). Per-op final (us/dev): gate/up/down 16.9 ea @12c-DRAM-sharded, RS 15.8 + AG 14.4 @10-12c, fused mul 11.2, i2s/s2i 2.3; sub-70% occupancy waved off via losing max-core A/Bs per contract. Prefill path untouched and verified (seq=2336 fp32: 1448 us/device, no decode ops in trace; PCC 0.999989). Decode weight copies cost ~11MB/layer/chip DRAM. Next headroom: async CCL (31% share) = perf-phase pipeline item. |
 | text_mlp | real_weights | done | 0.999999 | 0 | Added text_mlp_weights(layer_idx) loader (model.layers.N.mlp gate/up/down_proj.weight, raw HF tensors as TtTextMLP.__init__ expects) + _t_text_mlp harness row. Real weights from two sites (layers.0, layers.27) exercise the per-layer index; PCC gated on each, min reported (layers.0=1.000000, layers.27=0.999999). Production-distribution input: golden real post-attention_layernorm activation [1,128,1536]. Production operating point: fp32 [1,1,128,1536] replicated 1x4 mesh, gate/up column-parallel + row-parallel down with reduce_scatter/all_gather all-reduce. 82,575,360 params loaded; tt/text_mlp.py untouched. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | decoder_layer | reference | done | 1.000000 | 0 | Qwen2DecoderLayer pre-norm residual x+attn(ln1(x)); h+mlp(ln2(h)), real layers.0 weights |
 | decoder_layer | ttnn | done | 0.999936 | 0 | Pre-norm residual composition of done sub-blocks: TtTextRMSNorm(input_layernorm, eps=1e-6) -> TtTextAttention (fused per-chip QKV+bias, 12Q/2KV hd128, kv_replication=2, fp32 HF rope + fp32 explicit causal core, row-parallel o_proj + sync all-reduce) -> ttnn.add residual -> TtTextRMSNorm(post_attention_layernorm) -> TtTextMLP (SwiGLU 1536->8960->1536, column/row-parallel + sync all-reduce) -> ttnn.add residual, mirroring reference_impl models/tt_transformers/tt/decoder.py TransformerBlock. Whole layer fp32 (attention path fp32-mandatory: layer-0 logits +-3122, bf16 core PCC ~0.92; fp32 gammas TILE [1,1,1,dim]); residual stream keeps input dtype for chained-caller precision control. Real model.layers.0 weights re-loaded from checkpoint; replicated all-reduced output compared single-device vs golden. Guard ok (lint 0, kernels ok, no new host ops). No KB entries returned for decoder_layer. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
@@ -84,7 +84,6 @@
 
 ## Recent Ticks
 
-- tick 54 (2026-06-10T21:29:25Z): device[vision_patch_embed] — ok
 - tick 55 (2026-06-10T21:37:18Z): device[vision_rmsnorm] — ok
 - tick 56 (2026-06-10T21:53:05Z): device[vision_attention] — ok
 - tick 57 (2026-06-10T22:08:54Z): device[vision_mlp] — ok
@@ -94,6 +93,7 @@
 - tick 61 (2026-06-10T23:20:37Z): device[embedding] — ok
 - tick 62 (2026-06-11T00:09:22Z): device[text_rmsnorm] — ok
 - tick 63 (2026-06-11T01:06:25Z): device[text_attention] — ok
+- tick 64 (2026-06-11T01:48:42Z): device[text_mlp] — ok
 
 ## Host-Resident Exceptions
 

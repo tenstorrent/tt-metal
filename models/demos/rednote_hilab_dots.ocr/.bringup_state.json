@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-11T01:06:25Z",
+  "updated_at": "2026-06-11T01:48:42Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -664,9 +664,16 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
+        "status": "done",
         "attempts": 0,
-        "notes": "OCCUPANCY REDO: per the new occupancy+convergence contract \u2014 query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid"
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/text_mlp.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_text_mlp.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_text_mlp.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/text_mlp.traced_ops.json"
+        ],
+        "notes": "OCCUPANCY REDO done at production decode point (bf16 [1,1,1,1536] row, bfp8 weights, 1x4 mesh, queried 11x10=110 grid): decode block kernel 131.94 -> 94.27 us/device (-28.6%), 100 traced replays. Levers: KB ttnn_mul_1 fused-SiLU mul (cited); DRAM-WIDTH-SHARDED decode weight copies + MatmulMultiCoreReuseMultiCastDRAMSharded (text_attention recipe, inter 2240 zero-padded to 2304); HiFi2 decode matmuls (tt_transformers decode posture, fp32 acc kept; 8-row decode PCC drift gate 0.999892); core A/B 24/12/8 -> 12c best (matmuls BW-plateau 16.9us each ~217GB/s, mul wants wide); reverted-with-evidence: SiLU-in-matmul fused_activation (16.9->34.6us), standalone silu_+plain mul (12.0 vs 11.2us), ttnn.all_reduce (decomposes to identical RS+AG). Per-op final (us/dev): gate/up/down 16.9 ea @12c-DRAM-sharded, RS 15.8 + AG 14.4 @10-12c, fused mul 11.2, i2s/s2i 2.3; sub-70% occupancy waved off via losing max-core A/Bs per contract. Prefill path untouched and verified (seq=2336 fp32: 1448 us/device, no decode ops in trace; PCC 0.999989). Decode weight copies cost ~11MB/layer/chip DRAM. Next headroom: async CCL (31% share) = perf-phase pipeline item.",
+        "pcc": 0.999892
       },
       "real_weights": {
         "status": "done",
@@ -1224,6 +1231,12 @@
       "tick": 63,
       "ts": "2026-06-11T01:06:25Z",
       "action": "device[text_attention]",
+      "result": "ok"
+    },
+    {
+      "tick": 64,
+      "ts": "2026-06-11T01:48:42Z",
+      "action": "device[text_mlp]",
       "result": "ok"
     }
   ],

@@ -91,3 +91,39 @@ def test_text_mlp_pcc(mesh_device):
     pcc = _pcc(ref_out.reshape(seq, dim), out)
     print(f"PCC(text_mlp) = {pcc:.6f}")
     assert pcc > 0.99, f"PCC {pcc:.6f} < 0.99"
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_text_mlp_decode_pcc(mesh_device):
+    """Decode posture (occupancy REDO): bf16 [1,1,1,H] row, bfloat8_b weights.
+
+    Exercises the DRAM-sharded L1 fast path (padded seq <= 32). Reference is
+    the same SwiGLU computed in fp32 torch from the HF weights. Includes a
+    multi-step drift check: the fast path applied repeatedly to fresh rows
+    (each step's PCC gated, not just one lucky row).
+    """
+    golden = torch.load(GOLDEN)
+    sd = _load_weights("model.layers.0.mlp", ["gate_proj.weight", "up_proj.weight", "down_proj.weight"])
+    block = TtTextMLP(mesh_device, sd, dtype=ttnn.bfloat8_b)
+
+    g, u, d = sd["gate_proj.weight"], sd["up_proj.weight"], sd["down_proj.weight"]
+    rows = golden["input"].reshape(-1, golden["input"].shape[-1])
+    worst = 1.0
+    for step in range(8):
+        x = rows[step : step + 1].reshape(1, 1, 1, -1)
+        ref = (torch.nn.functional.silu(x @ g.T) * (x @ u.T)) @ d.T
+        x_tt = ttnn.from_torch(
+            x,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        out_tt = block.forward(x_tt)
+        out = ttnn.to_torch(ttnn.get_device_tensors(out_tt)[0]).float().reshape(1, -1)
+        pcc = _pcc(ref.reshape(1, -1), out)
+        worst = min(worst, pcc)
+        assert pcc > 0.99, f"decode step {step}: PCC {pcc:.6f} < 0.99"
+    print(f"PCC(text_mlp decode, worst of 8 rows) = {worst:.6f}")

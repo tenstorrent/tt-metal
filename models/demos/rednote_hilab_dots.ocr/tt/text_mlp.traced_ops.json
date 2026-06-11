@@ -3,6 +3,5 @@
   "ttnn.deallocate",
   "ttnn.linear",
   "ttnn.multiply",
-  "ttnn.reduce_scatter",
-  "ttnn.silu"
+  "ttnn.reduce_scatter"
 ]

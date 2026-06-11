@@ -1,16 +1,24 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Tracy harness for TtTextMLP at the PRODUCTION operating point.
+"""Tracy harness for TtTextMLP at the PRODUCTION operating points.
 
-Production context (tt/decoder_layer.py): the fp32 text decoder calls
-text_mlp once per layer on a REPLICATED [1, 1, 128, 1536] fp32 residual
-stream on the 1x4 mesh (gate/up column-parallel 8960/4=2240 per chip,
-chip-local silu*mul, row-parallel down_proj + all-reduce), real
-model.layers.0.mlp weights.
+Production context (tt/ocr_model.py / tt/decoder_layer.py):
+
+- DECODE (hot path, traced token step): 28 layers consume a REPLICATED
+  bf16 [1, 1, 1, 1536] residual row every token; MLP weights are stored
+  bfloat8_b (mlp_dtype=mlp_gate_up_dtype=bfloat8_b in ocr_model). Per-chip
+  TP slices: gate/up [1536, 2240] col-parallel, down [2240, 1536]
+  row-parallel + reduce_scatter/all_gather all-reduce.
+- PREFILL (runs once): fp32 [1, 1, P32, 1536] replicated rows (e.g. 128
+  golden bucket, 2336 long sample), same bfloat8_b weights.
 
 Run under tracy:
     python -m tracy -p -v -r --op-support-count 20000 \
         models/demos/rednote_hilab_dots.ocr/tt/profile_text_mlp.py --traced
+
+Flags: --seq 1 (decode row, default) | N (prefill rows); --act-dtype
+bf16|fp32 (production: bf16 decode, fp32 prefill); --weight-dtype
+bfp8|bf16|fp32 (production: bfp8); --iters replay count.
 """
 
 import argparse
@@ -54,12 +62,20 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--traced", action="store_true")
     parser.add_argument("--iters", type=int, default=1, help="profiled replay count")
+    parser.add_argument("--seq", type=int, default=1, help="logical rows: 1 = decode token row (default)")
+    parser.add_argument("--act-dtype", choices=["bf16", "fp32"], default="bf16")
+    parser.add_argument("--weight-dtype", choices=["bfp8", "bf16", "fp32"], default="bfp8")
     args = parser.parse_args()
+    act_dtype = ttnn.bfloat16 if args.act_dtype == "bf16" else ttnn.float32
+    w_dtype = {"bfp8": ttnn.bfloat8_b, "bf16": ttnn.bfloat16, "fp32": ttnn.float32}[args.weight_dtype]
 
     golden = torch.load(_MODEL_DIR / "reference" / "golden" / "text_mlp.pt")
-    x = golden["input"]
-    _, seq, dim = x.shape
-    assert dim == HIDDEN
+    seq, dim = args.seq, HIDDEN
+    # Production-distribution rows from the golden activation, tiled/cropped
+    # to the requested logical seq (decode = 1 row).
+    g = golden["input"].reshape(1, -1, HIDDEN)
+    reps = (seq + g.shape[1] - 1) // g.shape[1]
+    x = g.repeat(1, reps, 1)[:, :seq, :]
 
     sd = _load_weights("model.layers.0.mlp", ["gate_proj.weight", "up_proj.weight", "down_proj.weight"])
 
@@ -70,13 +86,15 @@ def main():
         trace_region_size=50_000_000,
     )
     try:
-        # Production dtype: decoder_layer runs the whole layer fp32.
-        block = TtTextMLP(mesh_device, sd, dtype=ttnn.float32)
+        grid = mesh_device.compute_with_storage_grid_size()
+        print(f"queried compute grid: {grid.x}x{grid.y} = {grid.x * grid.y} cores")
+        # Production weight dtype: ocr_model stores all MLP weights bfloat8_b.
+        block = TtTextMLP(mesh_device, sd, dtype=w_dtype)
 
         # Persistent input buffer: stable address for trace replay.
         x_tt = ttnn.from_torch(
             x.reshape(1, 1, seq, dim).float(),
-            dtype=ttnn.float32,
+            dtype=act_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -103,7 +121,10 @@ def main():
         else:
             out = block.forward(x_tt)
             ttnn.synchronize_device(mesh_device)
-        print("profiled iteration complete (traced=%s, seq=%d)" % (args.traced, seq))
+        print(
+            "profiled iteration complete (traced=%s, seq=%d, act=%s, w=%s)"
+            % (args.traced, seq, args.act_dtype, args.weight_dtype)
+        )
     finally:
         ttnn.close_mesh_device(mesh_device)
 
