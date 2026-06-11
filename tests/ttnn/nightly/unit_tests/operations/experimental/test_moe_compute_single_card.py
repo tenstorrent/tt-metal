@@ -43,6 +43,7 @@ from ttnn.experimental.moe_compute_utils import (
     get_weight_mem_configs,
     auto_output_width_shard_dim,
     get_tilize_drain_core,
+    effective_matmul_ring_size,
 )
 
 # Reuse 6U test helpers verbatim. The intent is that this single-card test
@@ -87,9 +88,9 @@ def _run_moe_compute_single_card_test(
     Single-card MoE compute test body. cluster_axis is fixed to None
     (no dispatch axis on 1x1 mesh) and compute_only is fixed to True.
 
-    `bh_ring_size`: pinned BH matmul ring size. None defaults to 12. Tests that require
-    a specific N (e.g., GPT-OSS needs N=12 because output_width_shard_dim=3 only divides
-    12) should pass it explicitly to lock the layout.
+    `bh_ring_size`: pinned BH matmul ring size. None defaults to 12. Pass the same value to
+    ``auto_output_width_shard_dim(..., matmul_ring_size=effective_matmul_ring_size(...))`` so
+    host tensor layout matches the op's ring-aware width-parallel auto-derivation.
     """
     # The MoE op uses tilize cores keyed off the per-arch layout table in the program
     # factory's `get_layout()` (see #41827) and matmul cores from
@@ -531,22 +532,11 @@ def test_moe_compute_single_card_deepseek(mesh_device, mesh_shape, has_bias, bh_
 
 
 # GPT-OSS canonical config from the GPT-OSS entry in `_MODELS_1x8` (test_moe_compute_6U.py):
-#   experts_per_device=4, has_bias=True, activation=SWIGLU, output_width_shard_dim=3.
-# This single test exercises FOUR distinct BH-specific gaps the baseline DS-v3 test misses:
-#   1. The w2_shard_tiles COMPLEMENTARY branch — for Ht=Nt=90, n_big_ht + n_big_nt == n_cores
-#      when n_cores=12 (90%12 + 90%12 = 6+6 = 12). DS-v3 (balanced 64/8) never enters this branch.
-#   2. The bank-run loop on a NON-BALANCED shard map — shard_tiles(90, c, 12) is [8,7,8,7,8,...],
-#      while DS-v3 at N=8 is [8]*8 (perfectly balanced).
-#   3. The bias path on a non-DS shape (b0/b1 K-padding, b2 N-append, has_bias=True kernel
-#      branch with the cb_c2c_ones_tile + bias-row matmul).
-#   4. SWIGLU activation, which PR #43932 was the first to actually exercise (commit 3918012f6e1).
-#
-# GPT-OSS requires N=12 on BH because hidden_size=2880 → output_width_shard_dim =
-# auto_output_width_shard_dim(2880) = 3 (Ht=90 has no divisor ≤4 except 3). The op
-# validates matmul_num_cores % output_width_shard_dim == 0; on BH only N=12 satisfies
-# this (8%3≠0, 12%3==0, 16%3≠0). The test pins bh_ring_size=12 explicitly via the op
-# kwarg to lock the layout. WH always has 12 DRAM banks (1:1 with ring), so the same
-# N=12 works there too.
+#   experts_per_device=4, has_bias=True, activation=SWIGLU.
+# Ring-aware width dim: N=12 → width=3; N=8/16 → width=2 (90%3==0 but 8%3≠0).
+_GPT_BH_RING_SIZES = [12, 8, 16]  # remove 8, 16 to limit sweep to ring_n=12
+
+
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -557,12 +547,16 @@ def test_moe_compute_single_card_deepseek(mesh_device, mesh_shape, has_bias, bh_
     ],
     indirect=True,
 )
+@pytest.mark.parametrize("bh_ring_size", _GPT_BH_RING_SIZES)
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_single_card_gpt_oss(mesh_device, mesh_shape):
-    """compute_only=True on a 1x1 WH mesh, GPT-OSS-shaped workload (hidden=N=2880, SWIGLU+bias).
+def test_moe_compute_single_card_gpt_oss(mesh_device, mesh_shape, bh_ring_size):
+    """compute_only=True on a 1x1 mesh, GPT-OSS-shaped workload (hidden=N=2880, SWIGLU+bias).
 
-    bh_ring_size=12 is pinned via the op kwarg to lock the layout for the GPT-OSS shape.
+    Parametrized over bh_ring_size. WH always uses N=12; N=8/16 only run on BH.
     """
+    if bh_ring_size != 12 and mesh_device.arch() != ttnn.device.Arch.BLACKHOLE:
+        pytest.skip(f"bh_ring_size={bh_ring_size} is BH-only; WH always uses N=12")
+    ring_n = effective_matmul_ring_size(mesh_device, bh_ring_size)
     _run_moe_compute_single_card_test(
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,
@@ -572,11 +566,11 @@ def test_moe_compute_single_card_gpt_oss(mesh_device, mesh_shape):
         N=2880,
         hidden_size=2880,
         output_height_shard_dim=4,
-        output_width_shard_dim=auto_output_width_shard_dim(2880),  # = 3 (Ht=90; 90%3==0)
+        output_width_shard_dim=auto_output_width_shard_dim(2880, matmul_ring_size=ring_n),
         dtype=ttnn.bfloat16,
         activation_type=MoEActivationFunction.SWIGLU,
         has_bias=True,
-        bh_ring_size=12,
+        bh_ring_size=bh_ring_size,
     )
 
 

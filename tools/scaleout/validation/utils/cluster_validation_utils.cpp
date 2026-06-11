@@ -1412,6 +1412,68 @@ void log_link_retrain_summary(
     log_output_rank0("Link retrain report written to: " + csv_path.string());
 }
 
+void log_unretrainable_channels(
+    const tt::tt_metal::AsicTopology& missing_topology,
+    const PhysicalSystemDescriptor& physical_system_descriptor,
+    uint32_t total_retrain_iterations,
+    const std::filesystem::path& output_path) {
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+
+    if (*distributed_context.rank() != 0) {
+        return;
+    }
+
+    auto channels = collect_retrained_link_identifiers(missing_topology, physical_system_descriptor);
+    if (channels.empty()) {
+        return;
+    }
+
+    std::sort(channels.begin(), channels.end(), [](const auto& lhs, const auto& rhs) {
+        return std::tie(lhs.host, *lhs.tray_id, *lhs.asic_location, lhs.channel) <
+               std::tie(rhs.host, *rhs.tray_id, *rhs.asic_location, rhs.channel);
+    });
+
+    auto format_unique_id = [](const auto& asic_id) {
+        std::stringstream ss;
+        ss << "0x" << std::hex << std::setfill('0') << std::setw(10) << *asic_id;
+        return ss.str();
+    };
+
+    // Best-effort filesystem; the caller is about to throw, so any failure here only loses
+    // diagnostic output, never propagates.
+    std::error_code ec;
+    std::filesystem::create_directories(output_path, ec);
+    if (ec) {
+        log_output_rank0(
+            "[WARN] Could not create output directory for unretrainable channels: " + output_path.string() + " (" +
+            ec.message() + ")");
+        return;
+    }
+
+    const std::filesystem::path yaml_path = output_path / "unretrainable_channels.yaml";
+    std::ofstream yaml_file(yaml_path);
+    if (!yaml_file.is_open()) {
+        log_output_rank0("[WARN] Could not open unretrainable channels file for writing: " + yaml_path.string());
+        return;
+    }
+
+    yaml_file << "# Channels that failed to retrain after " << total_retrain_iterations << " attempts.\n";
+    yaml_file << "# Each entry is one channel endpoint; both ends of an unretrainable cable\n";
+    yaml_file << "# typically appear as separate entries.\n";
+    yaml_file << "total_retrain_iterations: " << total_retrain_iterations << "\n";
+    yaml_file << "unretrainable_channels:\n";
+    for (const auto& channel_id : channels) {
+        yaml_file << "  - host: " << channel_id.host << "\n";
+        yaml_file << "    tray_id: " << *channel_id.tray_id << "\n";
+        yaml_file << "    asic_location: " << *channel_id.asic_location << "\n";
+        yaml_file << "    channel: " << static_cast<int>(channel_id.channel) << "\n";
+        yaml_file << "    asic_unique_id: " << format_unique_id(channel_id.asic_id) << "\n";
+    }
+    yaml_file.close();
+    log_output_rank0(
+        "Unretrainable channels (" + std::to_string(channels.size()) + " endpoints) written to: " + yaml_path.string());
+}
+
 void reset_local_ethernet_links(
     const PhysicalSystemDescriptor& physical_system_descriptor, const tt::tt_metal::AsicTopology& asic_topology) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();

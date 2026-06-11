@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <set>
 #include <unordered_map>
+#include <vector>
 
 #include <umd/device/cluster.hpp>
 #include <umd/device/soc_descriptor.hpp>
@@ -41,17 +42,20 @@ std::string get_mobo_name() {
 }
 
 TrayID get_tray_id_for_chip(
-    tt::umd::ClusterDescriptor& cluster_desc, ChipId chip_id, const std::string& mobo_name, bool using_mock_cluster_desc) {
+    tt::umd::ClusterDescriptor& cluster_desc,
+    ChipId chip_id,
+    const std::string& mobo_name,
+    bool using_mock_cluster_desc) {
+    // SIENAD8-2L2T has two observed PCIe slot enumerations:
+    //   - canonical: trays 1..4 map to 0xc1,0x01,0x41,0x42
+    //   - 0x43 variant: trays 1..4 map to 0xc1,0x01,0x43,0x41
+    // Select the 0x43 variant when that bus is present on the host.
+    static const std::vector<uint16_t> sienad8_canonical_bus_ids = {0xc1, 0x01, 0x41, 0x42};
+    static const std::vector<uint16_t> sienad8_bus_0x43_variant_bus_ids = {0xc1, 0x01, 0x43, 0x41};
     static const std::unordered_map<std::string, std::vector<uint16_t>> mobo_to_bus_ids = {
-        {"SIENAD8-2L2T", {0xc1, 0x01, 0x41, 0x42}},
+        {"SIENAD8-2L2T", sienad8_canonical_bus_ids},
         {"X12DPG-QT6", {0xb1, 0xca, 0x31, 0x4b}},
-        {"H13DSG-O-CPU", {0x01, 0x21, 0x41, 0x61, 0x81, 0xa1, 0xc1, 0xe1}},
-    };
-
-    // BDF aliases: some motherboard variants enumerate PCIe slots differently
-    // Map variant BDFs to their canonical equivalents for tray_id calculation
-    static const std::unordered_map<uint16_t, uint16_t> bus_id_aliases = {
-        {0x43, 0x42},  // bh-qb-10 (SIENAD8-2L2T variant) uses 0x43 for tray 4
+        {"H13DSG-O-CPU", {0x21, 0x01, 0x41, 0x61, 0xa1, 0x81, 0xc1, 0xe1}},
     };
 
     if (using_mock_cluster_desc) {
@@ -61,22 +65,26 @@ TrayID get_tray_id_for_chip(
         auto bus_id = tt::tt_fabric::get_bus_id(cluster_desc, chip_id);
         log_warning(
             tt::LogAlways,
-            "Unknown motherboard '{}' for chip_id={} (bus_id=0x{:x}) — defaulting tray_id to 0. "
+            "Unknown motherboard '{}' for chip_id={} (bus_id=0x{:x}) — falling back to bus_id as tray_id. "
             "Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.",
             mobo_name,
             chip_id,
             bus_id);
-        return TrayID{0};
+        return TrayID{static_cast<uint32_t>(bus_id)};
     }
-    const auto& ordered_bus_ids = mobo_to_bus_ids.at(mobo_name);
-    auto bus_id = tt::tt_fabric::get_bus_id(cluster_desc, chip_id);
-    auto bus_id_it = std::find(ordered_bus_ids.begin(), ordered_bus_ids.end(), bus_id);
-    // Apply alias if original bus_id not found and an alias exists
-    if (bus_id_it == ordered_bus_ids.end()) {
-        if (auto alias_it = bus_id_aliases.find(bus_id); alias_it != bus_id_aliases.end()) {
-            bus_id_it = std::find(ordered_bus_ids.begin(), ordered_bus_ids.end(), alias_it->second);
+
+    std::vector<uint16_t> ordered_bus_ids = mobo_to_bus_ids.at(mobo_name);
+    if (mobo_name == "SIENAD8-2L2T") {
+        const auto& chip_to_bus_id = cluster_desc.get_chip_to_bus_id();
+        const bool has_bus_0x43 = std::any_of(
+            chip_to_bus_id.begin(), chip_to_bus_id.end(), [](const auto& entry) { return entry.second == 0x43; });
+        if (has_bus_0x43) {
+            ordered_bus_ids = sienad8_bus_0x43_variant_bus_ids;
         }
     }
+
+    auto bus_id = tt::tt_fabric::get_bus_id(cluster_desc, chip_id);
+    auto bus_id_it = std::find(ordered_bus_ids.begin(), ordered_bus_ids.end(), bus_id);
     TT_FATAL(bus_id_it != ordered_bus_ids.end(), "Bus ID {} not found.", bus_id);
     auto tray_id = std::distance(ordered_bus_ids.begin(), bus_id_it) + 1;
     return TrayID{static_cast<unsigned int>(tray_id)};
@@ -545,7 +553,6 @@ PhysicalSystemDescriptor run_local_discovery(
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
     tt::TargetDevice target_device_type,
     bool all_hostnames_unique) {
-
     PhysicalSystemDescriptor psd(target_device_type);
     if (is_bh_galaxy_rev_c(cluster_desc)) {
         psd.set_is_bh_galaxy_rev_c(true);
@@ -642,33 +649,24 @@ PhysicalSystemDescriptor run_local_discovery(
 
     psd.get_system_graph().host_connectivity_graph[hostname_key] = {};
     // Get Ethernet Firmware Version from the driver - Initialize to 0 if not available
-    psd.get_ethernet_firmware_version() = cluster_desc.get_cluster_eth_fw_version().value_or(tt::umd::semver_t(0, 0, 0));
+    psd.get_ethernet_firmware_version() =
+        cluster_desc.get_cluster_eth_fw_version().value_or(tt::umd::semver_t(0, 0, 0));
 
     return psd;
 }
 
 PhysicalSystemDescriptor run_local_discovery_live(
+    tt::umd::ClusterDescriptor& cluster_desc,
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
     tt::TargetDevice target_device_type,
     bool all_hostnames_unique) {
-
-    std::unique_ptr<tt::umd::ClusterDescriptor> cdptr =
-        tt::umd::Cluster::create_cluster_descriptor();
-
-    // Live discovery and silicon discovery refresh the descriptor from UMD; other modes keep a stable snapshot of
-    // the caller-provided descriptor.
-    auto& cluster_desc_ref = *cdptr;
-    return run_local_discovery(
-        cluster_desc_ref,
-        distributed_context,
-        target_device_type,
-        all_hostnames_unique);
+    return run_local_discovery(cluster_desc, distributed_context, target_device_type, all_hostnames_unique);
 }
 
 }  // namespace discovery_impl
 
 PhysicalSystemDescriptor run_physical_system_discovery(
-    tt::umd::ClusterDescriptor & cluster_desc,
+    tt::umd::ClusterDescriptor& cluster_desc,
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
     tt::TargetDevice target_device_type,
     bool run_global_discovery,
@@ -681,16 +679,18 @@ PhysicalSystemDescriptor run_physical_system_discovery(
     bool all_hostnames_unique = resolve_hostname_uniqueness(distributed_context);
 
     static constexpr bool dispatch_local_discovery = false;
-    static constexpr bool dispatch_live_discovery  = true;
+    static constexpr bool dispatch_live_discovery = true;
 
-    bool const dispatch_live =
-        (!run_live_discovery || (target_device_type != TargetDevice::Silicon)) ?
-            dispatch_local_discovery : dispatch_live_discovery;
+    const bool dispatch_live = (!run_live_discovery || (target_device_type != TargetDevice::Silicon))
+                                   ? dispatch_local_discovery
+                                   : dispatch_live_discovery;
 
-    PhysicalSystemDescriptor psd = dispatch_live ?
-        discovery_impl::run_local_discovery_live(distributed_context, target_device_type, all_hostnames_unique) :
-        discovery_impl::run_local_discovery(cluster_desc, distributed_context, target_device_type, all_hostnames_unique);
-
+    PhysicalSystemDescriptor psd =
+        dispatch_live
+            ? discovery_impl::run_local_discovery_live(
+                  cluster_desc, distributed_context, target_device_type, all_hostnames_unique)
+            : discovery_impl::run_local_discovery(
+                  cluster_desc, distributed_context, target_device_type, all_hostnames_unique);
 
     // Set local hostname and rank (friend access)
     auto my_rank = *(distributed_context->rank());

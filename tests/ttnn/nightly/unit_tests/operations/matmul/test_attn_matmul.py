@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
-import ttnn
+from tests.ttnn.nightly.unit_tests.operations.matmul.utility_functions import ttnn_attn_matmul, ttnn_group_attn_matmul
 
 
 def generate_input_shapes():
@@ -46,7 +46,7 @@ def test_attn_matmul(num_loops, in0_dtype, in1_dtype, out_dtype, device):
             tt_input_tensor_a = tt_input_tensor_a.to(device)
             tt_input_tensor_b = tt_input_tensor_b.to(device)
             compute_grid_size = device.compute_with_storage_grid_size()
-            tt_output_tensor_on_device = ttnn.experimental.attn_matmul(
+            tt_output_tensor_on_device = ttnn_attn_matmul(
                 tt_input_tensor_a,
                 tt_input_tensor_b,
                 compute_with_storage_grid_size=ttnn.CoreCoord(compute_grid_size.x, compute_grid_size.y),
@@ -111,7 +111,7 @@ def test_attn_matmul_fp32(num_loops, in_dtype, device):
                 packer_l1_acc=False,
             )
 
-            tt_output_tensor_on_device = ttnn.experimental.attn_matmul(
+            tt_output_tensor_on_device = ttnn_attn_matmul(
                 tt_input_tensor_a,
                 tt_input_tensor_b,
                 compute_with_storage_grid_size=ttnn.CoreCoord(compute_grid_size.x, compute_grid_size.y),
@@ -289,7 +289,7 @@ def test_group_attn_matmul(
         else:
             output_mem_config = interleaved_mem_config
 
-        tt_output_tensor_on_device = ttnn.experimental.group_attn_matmul(
+        tt_output_tensor_on_device = ttnn_group_attn_matmul(
             tt_input_tensor_a,
             tt_input_tensor_b,
             compute_with_storage_grid_size=compute_grid_size,
@@ -532,7 +532,7 @@ def test_group_attn_matmul_fp32(
             packer_l1_acc=False,
         )
 
-        tt_output_tensor_on_device = ttnn.experimental.group_attn_matmul(
+        tt_output_tensor_on_device = ttnn_group_attn_matmul(
             tt_input_tensor_a,
             tt_input_tensor_b,
             compute_with_storage_grid_size=compute_grid_size,

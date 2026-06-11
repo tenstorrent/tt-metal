@@ -751,6 +751,41 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                             results.append(skipped_result)
                             suite_pbar.update()
                         break
+            except tt_smi_util.ResetFailed as e:
+                # Every reset mechanism failed: the device is wedged and cannot be
+                # recovered on this host. Continuing would re-hang + re-reset every
+                # remaining vector and burn the whole job timeout, so abort the
+                # suite now (regardless of skip-on-timeout) and mark the rest NOT_RUN.
+                logger.error(f"Device reset failed unrecoverably: {e}. Aborting remaining tests in suite.")
+                result["status"] = TestStatus.FAIL_CRASH_HANG
+                result["exception"] = str(e)
+                # This path breaks before the common footer that stamps this; set it here
+                # so the abort record carries original_vector_data like every other result.
+                result["original_vector_data"] = original_vector_data
+                result["e2e_perf"] = None
+                result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
+                result["timestamp"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
+                result["host"] = get_hostname()
+                result["user"] = get_username()
+                results.append(result)
+                suite_pbar.update()
+                for j in range(i + 1, len(test_vectors)):
+                    remaining_vector = test_vectors[j]
+                    skipped_result = dict()
+                    skipped_result["input_hash"] = header_info[j].get("input_hash", "N/A")
+                    skipped_result["start_time_ts"] = dt.datetime.now(dt.timezone.utc)
+                    skipped_result["original_vector_data"] = remaining_vector.copy()
+                    skipped_result["status"] = TestStatus.NOT_RUN
+                    skipped_result["exception"] = "SKIPPED DUE TO UNRECOVERABLE DEVICE RESET"
+                    skipped_result["e2e_perf"] = None
+                    skipped_result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
+                    skipped_result["timestamp"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
+                    skipped_result["host"] = get_hostname()
+                    skipped_result["user"] = get_username()
+                    results.append(skipped_result)
+                    suite_pbar.update()
+                p = None
+                break
             except Exception as e:
                 logger.exception(f"Unexpected error executing vector: {e}")
                 result["status"] = TestStatus.FAIL_ASSERT_EXCEPTION
@@ -822,7 +857,7 @@ def run_sweeps(
             "initiated_by": get_initiated_by(),
             "host": get_hostname(),
             "card_type": config.arch_name,
-            "runner_label": os.getenv("RUNNER_LABEL"),  # CI runner label (e.g., N150, N300, BH-LLMBox)
+            "runner_label": os.getenv("RUNNER_LABEL"),  # CI runner label (e.g., N150, N300, BH-LoudBox)
             "run_type": "sweeps",
             "run_contents": config.run_contents,
             "git_author": get_git_author(),

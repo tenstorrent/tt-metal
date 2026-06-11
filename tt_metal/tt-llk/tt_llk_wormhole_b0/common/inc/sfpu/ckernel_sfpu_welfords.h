@@ -7,23 +7,10 @@
 #include <array>
 #include <cstdint>
 
+#include "api/numeric/bfloat16.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
-
-// Optimized float to 16-bit parts conversion
-struct FloatBits
-{
-    std::uint16_t high16;
-    std::uint16_t low16;
-
-    explicit FloatBits(float value)
-    {
-        const std::uint32_t bits = __builtin_bit_cast(std::uint32_t, value);
-        high16                   = static_cast<std::uint16_t>(bits >> 16);
-        low16                    = static_cast<std::uint16_t>(bits & 0xFFFF);
-    }
-};
 
 /**
  * @brief Loads the reciprocal of (idx + 1) into LREG7, using a lookup table if available.

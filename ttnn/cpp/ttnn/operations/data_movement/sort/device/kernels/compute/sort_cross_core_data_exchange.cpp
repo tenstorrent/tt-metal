@@ -3,12 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/transpose_wh.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/binary_max_min.h"
+#include "api/compute/tilize.h"
+#include "api/compute/pack_untilize.h"
 
 #include "sort_common.hpp"
 
@@ -34,6 +37,11 @@ void kernel_main() {
     constexpr uint32_t value_tensor_peer_cb_index = get_compile_time_arg_val(15);
     constexpr uint32_t index_tensor_peer_cb_index = get_compile_time_arg_val(16);
     constexpr uint32_t packer_unpacker_sync_cb_index = get_compile_time_arg_val(17);
+    constexpr bool is_row_major = get_compile_time_arg_val(18) == 1;
+    constexpr uint32_t rm_input_cb_index = get_compile_time_arg_val(19);
+    constexpr uint32_t rm_value_output_cb_index = get_compile_time_arg_val(20);
+    constexpr uint32_t rm_index_output_cb_index = get_compile_time_arg_val(21);
+    constexpr uint32_t rm_post_sort_index_cb_index = get_compile_time_arg_val(22);
 
     // Constants
     constexpr uint32_t one_tile = 1;
@@ -52,11 +60,27 @@ void kernel_main() {
     constexpr uint32_t input_dest_end = 1;
     constexpr uint32_t index_dest_end = 3;
 
-    // LLK setup
+    // LLK setup — one compute_kernel_hw_startup at the start, then full inits.
+    compute_kernel_hw_startup(
+        is_row_major ? rm_input_cb_index : input_tensor_cb_index, index_tensor_cb_index, input_tensor_cb_index);
+    if constexpr (is_row_major) {
+        binary_op_init_common(input_tensor_cb_index, index_tensor_cb_index, input_tensor_transposed_cb_index);
+    }
     ckernel::topk_tile_init();
     transpose_wh_init(input_tensor_cb_index, input_tensor_transposed_cb_index);
 
     for (uint32_t h = 0; h < Ht; h++) {
+        if constexpr (is_row_major) {
+            constexpr uint32_t TILE_H = 32;
+            tilize_init(rm_input_cb_index, number_of_tiles_per_core, input_tensor_cb_index);
+            cb_wait_front(rm_input_cb_index, TILE_H);
+            cb_reserve_back(input_tensor_cb_index, number_of_tiles_per_core);
+            tilize_block(rm_input_cb_index, number_of_tiles_per_core, input_tensor_cb_index);
+            cb_push_back(input_tensor_cb_index, number_of_tiles_per_core);
+            cb_pop_front(rm_input_cb_index, TILE_H);
+            tilize_uninit(rm_input_cb_index, input_tensor_cb_index);
+        }
+
         bool dir = ascending ^ ((core_id & 1) == 1);
 
         // Read input value data
@@ -260,10 +284,64 @@ void kernel_main() {
         cb_push_back(input_tensor_transposed_cb_index, number_of_tiles_per_core);
         cb_push_back(index_tensor_transposed_cb_index, number_of_tiles_per_core);
 
-        // Values tensor
-        transpose_and_pack(input_tensor_transposed_cb_index, value_tensor_cb_index, number_of_tiles_per_core);
+        if constexpr (!is_row_major) {
+            transpose_and_pack(input_tensor_transposed_cb_index, value_tensor_cb_index, number_of_tiles_per_core);
+            transpose_and_pack(
+                index_tensor_transposed_cb_index, index_tensor_output_cb_index, number_of_tiles_per_core);
+        } else {
+            // ROW_MAJOR output: un-transpose the sorted tiles back into the
+            // PACK-only RM-input/index CBs (which are now empty after the
+            // tilize_block/sort loops drained them), then pack_untilize them
+            // into TILE_H RM rows for the writer/reader to drain.
+            constexpr uint32_t TILE_H = 32;
+            // DST_ACCUM_MODE is a compile-time macro injected by the framework when
+            // fp32_dest_acc_en=true is set in ComputeConfigDescriptor (controlled by
+            // is_32_bit_data in sort_program_factory.cpp: true for Float32 input or
+            // UInt32 index).  MAX_DEST_TILES is therefore data-format-dependent:
+            // 32-bit DEST holds 4 tiles; 16-bit (BF16) DEST holds 8 tiles.
+            constexpr uint32_t MAX_DEST_TILES = DST_ACCUM_MODE ? 4 : 8;
+            // number_of_tiles_per_core is a power-of-two: get_number_of_tiles_per_core()
+            // returns Wt / num_cores, and Wt is always a power-of-two (padded by
+            // pre_sort_transform_tensor).  MAX_DEST_TILES is also a power-of-two (4 or 8),
+            // so number_of_tiles_per_core % SUB_BLOCK_DIM == 0 is always satisfied.
+            constexpr uint32_t SUB_BLOCK_DIM =
+                (number_of_tiles_per_core < MAX_DEST_TILES) ? number_of_tiles_per_core : MAX_DEST_TILES;
+            constexpr uint32_t NUM_SUB_BLOCKS = number_of_tiles_per_core / SUB_BLOCK_DIM;
+            static_assert(
+                number_of_tiles_per_core % SUB_BLOCK_DIM == 0,
+                "number_of_tiles_per_core must be divisible by SUB_BLOCK_DIM");
 
-        // Indexes tensor
-        transpose_and_pack(index_tensor_transposed_cb_index, index_tensor_output_cb_index, number_of_tiles_per_core);
+            transpose_and_pack(input_tensor_transposed_cb_index, input_tensor_cb_index, number_of_tiles_per_core);
+
+            transpose_and_pack(index_tensor_transposed_cb_index, rm_post_sort_index_cb_index, number_of_tiles_per_core);
+
+            // Untilize values: number_of_tiles_per_core tiles → TILE_H RM pages.
+            binary_op_init_common(input_tensor_cb_index, index_tensor_cb_index, rm_value_output_cb_index);
+            pack_untilize_init<SUB_BLOCK_DIM, number_of_tiles_per_core>(
+                input_tensor_cb_index, rm_value_output_cb_index);
+            cb_wait_front(input_tensor_cb_index, number_of_tiles_per_core);
+            cb_reserve_back(rm_value_output_cb_index, TILE_H);
+            for (uint32_t b = 0; b < NUM_SUB_BLOCKS; ++b) {
+                pack_untilize_block<SUB_BLOCK_DIM, number_of_tiles_per_core>(
+                    input_tensor_cb_index, 1, rm_value_output_cb_index, b);
+                cb_pop_front(input_tensor_cb_index, SUB_BLOCK_DIM);
+            }
+            cb_push_back(rm_value_output_cb_index, TILE_H);
+            pack_untilize_uninit(rm_value_output_cb_index);
+
+            // Untilize indices: number_of_tiles_per_core tiles → TILE_H RM pages.
+            binary_op_init_common(rm_post_sort_index_cb_index, input_tensor_cb_index, rm_index_output_cb_index);
+            pack_untilize_init<SUB_BLOCK_DIM, number_of_tiles_per_core>(
+                rm_post_sort_index_cb_index, rm_index_output_cb_index);
+            cb_wait_front(rm_post_sort_index_cb_index, number_of_tiles_per_core);
+            cb_reserve_back(rm_index_output_cb_index, TILE_H);
+            for (uint32_t b = 0; b < NUM_SUB_BLOCKS; ++b) {
+                pack_untilize_block<SUB_BLOCK_DIM, number_of_tiles_per_core>(
+                    rm_post_sort_index_cb_index, 1, rm_index_output_cb_index, b);
+                cb_pop_front(rm_post_sort_index_cb_index, SUB_BLOCK_DIM);
+            }
+            cb_push_back(rm_index_output_cb_index, TILE_H);
+            pack_untilize_uninit(rm_index_output_cb_index);
+        }
     }  // h loop
 }  // void kernel_main()

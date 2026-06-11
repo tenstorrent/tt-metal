@@ -224,6 +224,67 @@ if [[ "$TEST_CONFIG_EXPLICIT" == false && ( "$CONFIG" == "4x8z" || "$CONFIG" == 
     TEST_CONFIG="$TEST_CONFIG_Z"
 fi
 
+# ---------------------------------------------------------------------------
+# Canonical host ordering (snake/zigzag) for the multi-host quad configs.
+#
+# Mirrors generate_blitz_decode_pipeline_configs.py:sort_hosts_canonical so the
+# operator does not have to pass --hosts in physical ring order. Hosts are
+# grouped by the <rack> number in r<rack>u<unit>; within each group <unit> is
+# sorted descending for even-indexed groups and ascending for odd-indexed
+# groups, producing the serpentine order that matches the physical Z-ring
+# cabling. Unrecognised hostnames (no r<rack>u<unit> pattern) are appended last
+# in input order. Echoes the reordered comma-separated list.
+sort_hosts_canonical() {
+    local csv="$1"
+    local -a in_hosts
+    IFS=',' read -ra in_hosts <<< "$csv"
+
+    local -a unrecognised=()
+    local -A group_units=()
+    local h
+    for h in "${in_hosts[@]}"; do
+        if [[ "$h" =~ ([0-9]+)u([0-9]{2}) ]]; then
+            group_units["${BASH_REMATCH[1]}"]+="${BASH_REMATCH[2]}:${h} "
+        else
+            unrecognised+=("$h")
+        fi
+    done
+
+    local -a racks=()
+    mapfile -t racks < <(printf '%s\n' "${!group_units[@]}" | sort -n)
+
+    local -a out=()
+    local idx=0 r sort_flag entry
+    for r in "${racks[@]}"; do
+        # Even-indexed groups descend by unit, odd-indexed ascend (serpentine).
+        if (( idx % 2 == 0 )); then sort_flag="-rn"; else sort_flag="-n"; fi
+        while IFS= read -r entry; do
+            [[ -n "$entry" ]] && out+=("${entry#*:}")
+        done < <(printf '%s\n' ${group_units[$r]} | sort -t: -k1,1 "$sort_flag")
+        ((idx++))
+    done
+
+    if [[ ${#unrecognised[@]} -gt 0 ]]; then
+        out+=("${unrecognised[@]}")
+    fi
+
+    local joined
+    printf -v joined '%s,' "${out[@]}"
+    echo "${joined%,}"
+}
+
+# Only the multi-host quad configs need deterministic ring order; smaller and
+# single-host configs keep the user's --hosts order untouched.
+if [[ "$CONFIG" == "8x4x4z" || "$CONFIG" == "4x32z" ]]; then
+    HOSTS_ORIG="$HOSTS"
+    HOSTS="$(sort_hosts_canonical "$HOSTS")"
+    if [[ "$HOSTS" != "$HOSTS_ORIG" ]]; then
+        echo "Reordered hosts into canonical ring order for $CONFIG:"
+        echo "  before: $HOSTS_ORIG"
+        echo "  after:  $HOSTS"
+    fi
+fi
+
 # Create output directory if it doesn't exist
 mkdir -p "$OUTPUT_DIR"
 
@@ -289,6 +350,43 @@ run_fabric_discovery_local() {
     fi
 }
 
+# Run 2x4 slice discovery (generate_rank_bindings.py --slice-config) either
+# natively or inside the provided docker image. Mirrors run_fabric_discovery_local
+# for the SINGLE-host slice config (2x4x4z): the internal discovery mpirun is
+# --np 1 and, with --net=host, OpenMPI runs it locally (no ssh) because the
+# container shares the host's hostname. Emits the raw generate_rank_bindings.py
+# stdout (FABRIC_VISIBLE_DEVICES: lines).
+#
+# NOTE: 8x4x4z uses its own helper (resolve_quad_split_rank_table) but follows
+# the same in-image pattern: its discovery is also a single-host (--np 1) mpirun
+# (the per-host slice map is replicated across the identical ring hosts), so it
+# likewise stays local and runs inside one container.
+run_slice_discovery_local() {
+    local slice_config="$1"
+    local hosts_csv="$2"
+
+    if [[ "$DOCKER_IMAGE" == "none" ]]; then
+        local tt_home="${TT_METAL_HOME:-$(pwd)}"
+        local gen_rb="${tt_home}/tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py"
+        cd "$tt_home" && \
+        LD_LIBRARY_PATH="${tt_home}/build/lib:${LD_LIBRARY_PATH:-}" \
+        TT_METAL_HOME="$tt_home" \
+        python3 "$gen_rb" --slice-config "$slice_config" --hosts "$hosts_csv" --mpi-if "$MPI_IF" \
+            --print-devices --work-dir "$tt_home"
+    else
+        docker run --rm --net=host --privileged \
+            -v /tmp:/tmp \
+            -v /dev/hugepages-1G:/dev/hugepages-1G \
+            -v "$HOME:$HOME" \
+            --user "$(id -u):$(id -g)" \
+            -v /etc/passwd:/etc/passwd:ro \
+            -v /etc/group:/etc/group:ro \
+            --entrypoint="" \
+            "$DOCKER_IMAGE" \
+            bash -c 'cd "$TT_METAL_HOME" && python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py --slice-config '"$slice_config"' --hosts '"$hosts_csv"' --mpi-if '"$MPI_IF"' --print-devices --work-dir "$TT_METAL_HOME"'
+    fi
+}
+
 resolve_single_host_z_visible_devices() {
     local fabric_config="$1"
     local expected_ranks="$2"
@@ -318,38 +416,35 @@ resolve_single_host_z_visible_devices() {
     done
 }
 
-# Resolve TT_VISIBLE_DEVICES for 2x4x4z from the multi-host 2x4 slice discovery
-# (generate_rank_bindings.py --slice-config). One mpirun across all hosts
+# Resolve TT_VISIBLE_DEVICES for 2x4x4z from the single-host 2x4 slice discovery
+# (generate_rank_bindings.py --slice-config). The discovery mpirun is --np 1 and
 # produces a per-host slice mapping (Rev C tray swap handled in the gtest), so no
 # per-host SSH loop is needed. Prints one TT_VISIBLE_DEVICES line per rank in
 # host-major order (host0 local mesh 0, host0 local mesh 1, host1 ...).
 #
-# Discovery ALWAYS runs natively on the launch host, even in docker mode: it only
-# reads the hardware topology and emits logical device ids (identical whether run
-# natively or inside a container), and the multi-host discovery gtest cannot be
-# launched across per-rank containers. In docker mode the resolved
-# TT_VISIBLE_DEVICES are forwarded into the containers via -x at launch time.
-# Requires a local host build of test_physical_discovery + python3 (loguru/yaml).
+# Discovery runs via run_slice_discovery_local, which runs natively when --image
+# is "none" and otherwise INSIDE the provided docker image (--net=host shares the
+# host hostname so the --np 1 discovery mpirun stays local, no ssh). The resolved
+# TT_VISIBLE_DEVICES are then forwarded into the test containers via -x at launch
+# time. Native runs require a local build of test_physical_discovery + python3
+# (loguru/yaml); docker runs only require the image.
 resolve_slice_z_visible_devices() {
     local slice_config="$1"
     local hosts_csv="$2"
     local expected_ranks="$3"
-    local tt_home="${TT_METAL_HOME:-$(pwd)}"
-    local gen_rb="${tt_home}/tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py"
 
-    if [[ ! -f "$gen_rb" ]]; then
-        echo "Error: rank binding helper not found: $gen_rb" >&2
-        exit 1
+    if [[ "$DOCKER_IMAGE" == "none" ]]; then
+        local gen_rb="${TT_METAL_HOME:-$(pwd)}/tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py"
+        if [[ ! -f "$gen_rb" ]]; then
+            echo "Error: rank binding helper not found: $gen_rb" >&2
+            exit 1
+        fi
     fi
 
     echo "Resolving TT_VISIBLE_DEVICES via 2x4 slice discovery (--slice-config ${slice_config}, hosts ${hosts_csv})..."
     Z_VISIBLE_DEVICES=()
     mapfile -t Z_VISIBLE_DEVICES < <(
-        cd "$tt_home" && \
-        LD_LIBRARY_PATH="${tt_home}/build/lib:${LD_LIBRARY_PATH:-}" \
-        TT_METAL_HOME="$tt_home" \
-        python3 "$gen_rb" --slice-config "$slice_config" --hosts "$hosts_csv" --mpi-if "$MPI_IF" \
-            --print-devices --work-dir "$tt_home" \
+        run_slice_discovery_local "$slice_config" "$hosts_csv" \
             | grep '^FABRIC_VISIBLE_DEVICES:' | sed 's/^FABRIC_VISIBLE_DEVICES://'
     )
 
@@ -368,8 +463,11 @@ resolve_slice_z_visible_devices() {
 # (mesh_id, host_rank) -> mpi_rank order:
 #   Z_RANK_MESH_ID, Z_RANK_HOST_RANK, Z_RANK_PIN_HOSTS, Z_VISIBLE_DEVICES.
 #
-# Like resolve_slice_z_visible_devices, the slice discovery always runs natively
-# on the launch host (even in docker mode); only the test launch is containerized.
+# Like resolve_slice_z_visible_devices, the slice discovery runs natively when
+# --image is "none" and otherwise INSIDE the provided docker image. The 8x4x4z
+# discovery in generate_rank_bindings.py is a single-host (--np 1) mpirun whose
+# slice -> device map is replicated across the identical ring hosts, so it stays
+# local and runs entirely in one container (no native build required).
 resolve_quad_split_rank_table() {
     local hosts_csv="$1"
     local expected_ranks="$2"
@@ -383,14 +481,35 @@ resolve_quad_split_rank_table() {
 
     echo "Resolving quad split rank table via 2x4 slice discovery (--slice-config 8x4x4z, hosts ${hosts_csv})..."
     local rank_lines=()
-    mapfile -t rank_lines < <(
-        cd "$tt_home" && \
-        LD_LIBRARY_PATH="${tt_home}/build/lib:${LD_LIBRARY_PATH:-}" \
-        TT_METAL_HOME="$tt_home" \
-        python3 "$gen_rb" --slice-config 8x4x4z --hosts "$hosts_csv" --mpi-if "$MPI_IF" \
-            --print-rank-table --work-dir "$tt_home" \
-            | grep '^FABRIC_RANK:' | sed 's/^FABRIC_RANK://'
-    )
+    if [[ "$DOCKER_IMAGE" == "none" ]]; then
+        mapfile -t rank_lines < <(
+            cd "$tt_home" && \
+            LD_LIBRARY_PATH="${tt_home}/build/lib:${LD_LIBRARY_PATH:-}" \
+            TT_METAL_HOME="$tt_home" \
+            python3 "$gen_rb" --slice-config 8x4x4z --hosts "$hosts_csv" --mpi-if "$MPI_IF" \
+                --print-rank-table --work-dir "$tt_home" \
+                | grep '^FABRIC_RANK:' | sed 's/^FABRIC_RANK://'
+        )
+    else
+        # Run the discovery inside the image, but override the image's (possibly
+        # stale) generate_rank_bindings.py with the host's pulled copy so the
+        # single-local-rank discovery logic is used. Discovery is mpirun --np 1
+        # with no --host, so it stays local in this one container (no ssh).
+        mapfile -t rank_lines < <(
+            docker run --rm --net=host --privileged \
+                -v /tmp:/tmp \
+                -v /dev/hugepages-1G:/dev/hugepages-1G \
+                -v "$HOME:$HOME" \
+                -v "$gen_rb":/generate_rank_bindings.py:ro \
+                --user "$(id -u):$(id -g)" \
+                -v /etc/passwd:/etc/passwd:ro \
+                -v /etc/group:/etc/group:ro \
+                --entrypoint="" \
+                "$DOCKER_IMAGE" \
+                bash -c 'cd "$TT_METAL_HOME" && python3 /generate_rank_bindings.py --slice-config 8x4x4z --hosts '"$hosts_csv"' --mpi-if '"$MPI_IF"' --print-rank-table --work-dir "$TT_METAL_HOME"' \
+                | grep '^FABRIC_RANK:' | sed 's/^FABRIC_RANK://'
+        )
+    fi
 
     if [[ "${#rank_lines[@]}" -ne "$expected_ranks" ]]; then
         echo "Error: expected ${expected_ranks} FABRIC_RANK entries for 8x4x4z, got ${#rank_lines[@]}" >&2

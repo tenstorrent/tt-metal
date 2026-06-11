@@ -57,6 +57,7 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        timeout-minutes: 20
         with:
           fetch-depth: 1
 

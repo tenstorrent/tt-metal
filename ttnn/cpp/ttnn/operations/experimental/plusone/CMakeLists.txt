@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_experimental_plusone ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::PlusOne ALIAS ttnn_op_experimental_plusone)
 
-tt_reuse_precompile_headers(ttnn_op_experimental_plusone TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_plusone TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_plusone)
 
 set_target_properties(

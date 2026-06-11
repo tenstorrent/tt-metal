@@ -11,15 +11,13 @@
 using namespace ckernel;
 
 /**
- * @brief MOP configuration for unpack of unary operations
- * @details Sets up MOP for unpacking a single operand by tiles
- * works for any unpack resource
- * @tparam UNP_SEL: Selects which unpacker resource to use,
- * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
- * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32-bit mode
+ * @brief Builds the MOP for unpacking a single (unary) operand by tiles; works for any unpack resource.
+ *
+ * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B/UNP_DEST>
+ * @tparam IS_32b_DEST_EN: Enables using the math destination register in 32-bit mode, values = <true/false>
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table, values = 0 - 16
- * @param num_tiles: number of tiles to unpack at a time for a single operand, default 1 tile of 32x32
+ *        stored in the buffer descriptor table, values = 0 - 16
+ * @param num_tiles: Number of tiles to unpack at a time for a single operand; default 1 tile of 32x32.
  */
 template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN>
 inline void _llk_unpack_unary_operand_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles)
@@ -63,12 +61,13 @@ inline void _llk_unpack_unary_operand_mop_config_(const std::uint32_t buf_desc_i
 }
 
 /**
- * @brief MOP configuration for unpack to SrcA or SrcB with a tile transpose, implements input A -> A^T or B -> B^T
- * @tparam UNP_SEL: Selects which unpacker resource to use, supports p_unpacr::UNP_A or p_unpacr::UNP_B
- * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32-bit mode
+ * @brief Builds the MOP for unpack to SrcA or SrcB with a tile transpose (A -> A^T or B -> B^T).
+ *
+ * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B>
+ * @tparam IS_32b_DEST_EN: Enables using the math destination register in 32-bit mode, values = <true/false>
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table, values = 0 - 16
- * @param num_tiles: number of tiles to unpack at a time for a single operand, default 1 tile of 32x32
+ *        stored in the buffer descriptor table, values = 0 - 16
+ * @param num_tiles: Number of tiles to unpack at a time for a single operand; default 1 tile of 32x32.
  */
 template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN>
 inline void _llk_unpack_unary_operand_transpose_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles)
@@ -121,15 +120,18 @@ inline void _llk_unpack_unary_operand_transpose_mop_config_(const std::uint32_t 
 }
 
 /**
- * @brief MOP configuration for unpack when reuse_dest is active for eltwise binary operations.
- * @details Uses UNPACR_FACE_INC with per-face NOP dvalid for the MOVD-filled source register.
- * For DEST_TO_SRCA: SrcA is filled by MOVD2A (gets dummy dvalid NOP), SrcB is unpacked from CB.
- * For DEST_TO_SRCB: SrcB is filled by MOVD2B (gets dummy dvalid NOP), SrcA is unpacked from CB.
- * MOP inner loop iterates over NUM_FACES, END_OP advances the tile counter.
- * @tparam UNP_SEL: The original unpack selector (not used directly for reuse_dest dispatch)
- * @tparam reuse_dest: Which source register is reused from dest (DEST_TO_SRCA or DEST_TO_SRCB)
- * @param buf_desc_id: The buffer descriptor ID for the CB source
- * @param num_tiles: number of tiles to unpack
+ * @brief Builds the MOP for unpack when reuse_dest is active for eltwise binary operations.
+ *
+ * Uses UNPACR_FACE_INC with a per-face NOP dvalid for the MOVD-filled source register. For
+ * DEST_TO_SRCA, SrcA is filled by MOVD2A (gets the dummy dvalid NOP) and SrcB is unpacked from the CB;
+ * for DEST_TO_SRCB the roles swap. The MOP inner loop iterates over NUM_FACES and END_OP advances the
+ * tile counter.
+ *
+ * @tparam UNP_SEL: The original unpack selector (not used directly for reuse_dest dispatch), values = <p_unpacr::UNP_A/UNP_B/UNP_DEST>
+ * @tparam reuse_dest: Which source register is reused from dest, values = <DEST_TO_SRCA/DEST_TO_SRCB>
+ * @param buf_desc_id: The buffer descriptor ID for the CB source.
+ * @param num_tiles: Number of tiles to unpack.
+ * @param num_faces: Number of faces per tile (MOP inner loop length).
  */
 template <std::uint32_t UNP_SEL, EltwiseBinaryReuseDestType reuse_dest>
 inline void _llk_unpack_unary_operand_reuse_dest_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles, const std::uint32_t num_faces)
@@ -161,15 +163,22 @@ inline void _llk_unpack_unary_operand_reuse_dest_mop_config_(const std::uint32_t
 }
 
 /**
- * @brief Initialized unpacker to unpack a single operand by tiles
- * @tparam UNP_SEL: Selects which unpacker resource to use,
- * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
- * @tparam TRANSPOSE_EN: Enables transpose of a tile, supported for SrcA and SrcB
- * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32-bit mode
- * @tparam reuse_dest: When not NONE, configures per-face unpack with dummy dvalid for reuse_dest
+ * @brief Initializes the unpacker to unpack a single operand by tiles.
+ *
+ * Programs the transpose config, then dispatches to the reuse_dest, transpose, or plain MOP builder.
+ *
+ * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B/UNP_DEST>
+ * @tparam TRANSPOSE_EN: Enables transpose of a tile, supported for SrcA and SrcB, values = <true/false>
+ * @tparam IS_32b_DEST_EN: Enables using the math destination register in 32-bit mode, values = <true/false>
+ * @tparam reuse_dest: When not NONE, configures per-face unpack with dummy dvalid, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table, values = 0 - 16
- * @param num_tiles: number of tiles to unpack at a time for a single operand, default 1 tile of 32x32
+ *        stored in the buffer descriptor table, values = 0 - 16
+ * @param num_tiles: Number of tiles to unpack at a time for a single operand; default 1 tile of 32x32.
+ * @param num_faces: Number of faces per tile (used by the reuse_dest path).
+ * @note On the math thread (T1): for the plain datacopy path pair with @ref _llk_math_eltwise_unary_datacopy_init_; for reuse_dest != NONE this is the
+ *       unpack half of an eltwise binary op, so pair with @ref _llk_math_eltwise_binary_init_ (the dummy-dvalid NOP here feeds the source register that math
+ *       fills with MOVD2A/B from dest).
+ * @note @ref _llk_unpack_unary_operand_ is the matching execute call on this thread.
  */
 template <std::uint32_t UNP_SEL, bool TRANSPOSE_EN, bool IS_32b_DEST_EN, EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void _llk_unpack_unary_operand_init_(
@@ -201,11 +210,12 @@ inline void _llk_unpack_unary_operand_init_(
 }
 
 /**
- * @brief Unpacks a single operand, works for any unpack resource
- * @tparam UNP_SEL: Selects which unpacker resource to use,
- * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
- * @tparam reuse_dest: When not NONE, sets source counter for the CB unpacker only
- * @param l1_tile_idx: Index into the L1 buffer for a tile
+ * @brief Unpacks a single operand; works for any unpack resource.
+ *
+ * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B/UNP_DEST>
+ * @tparam reuse_dest: When not NONE, sets the source counter for the CB unpacker only, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
+ * @param l1_tile_idx: Index into the L1 buffer for a tile.
+ * @note Call @ref _llk_unpack_unary_operand_init_ with matching template args before this function.
  */
 template <std::uint32_t UNP_SEL, EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void _llk_unpack_unary_operand_(const std::uint32_t l1_tile_idx)

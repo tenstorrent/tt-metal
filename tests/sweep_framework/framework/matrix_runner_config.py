@@ -168,7 +168,15 @@ LEAD_MODELS_DEFAULT_TEST_GROUP = "lead-models-single-chip"
 LEAD_MODELS_SUITE_NAME = "model_traced"
 
 # Absent entries use the caller-provided fixed ``batch_size``.
-LEAD_MODELS_BATCH_POLICY = {}
+# ``solo_modules`` — modules that must run in their own dedicated batch (one
+# module per CI job).  Used for ops like all_gather_async that need exclusive
+# device access or have long/unpredictable runtimes that would starve other
+# ops sharing the same batch.
+LEAD_MODELS_BATCH_POLICY = {
+    "solo_modules": [
+        "model_traced.all_gather_async_model_traced",
+    ],
+}
 
 
 # ── Model-traced sweep: per-group batching policy ─────────────────────────────
