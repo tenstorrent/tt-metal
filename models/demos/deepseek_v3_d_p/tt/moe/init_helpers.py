@@ -716,21 +716,31 @@ def create_gate_weights(
     num_routed_experts: int,
     emb_dim: int,
     dtype: torch.dtype = torch.bfloat16,
+    seed: int | None = None,
 ) -> dict:
     """
     Create random gate weights with proper scaling for stable sigmoid routing.
+
+    Args:
+        seed: When provided, weights are drawn from a local ``torch.Generator``
+            seeded with this value, making the output a pure function of
+            ``(num_routed_experts, emb_dim, dtype, seed)`` and independent of the
+            global RNG state / call order. This is required when the result is
+            persisted to a shape-keyed weight cache so that the cached tensor
+            always matches the in-memory reference (see TtMoe cache builders).
 
     Returns dict matching MoEGate format:
         "weight": (n_routed_experts, dim)
         "e_score_correction_bias": (n_routed_experts,)
     """
 
-    weight = torch.randn(num_routed_experts, emb_dim, dtype=dtype)
+    gen = torch.Generator().manual_seed(seed) if seed is not None else None
+    weight = torch.randn(num_routed_experts, emb_dim, dtype=dtype, generator=gen)
     scale = 1.0 / (emb_dim**0.5)  # kaiming-like scale
     weight = weight * scale
     return {
         "weight": weight,
-        "e_score_correction_bias": torch.randn(num_routed_experts, dtype=dtype) * 0.01,
+        "e_score_correction_bias": torch.randn(num_routed_experts, dtype=dtype, generator=gen) * 0.01,
     }
 
 
@@ -784,6 +794,7 @@ def create_torch_expert_weights(
     num_experts: int,
     emb_dim: int,
     hidden_dim: int,
+    seed: int | None = None,
 ) -> list[dict]:
     """
     Create random weights for torch experts.
@@ -792,16 +803,20 @@ def create_torch_expert_weights(
         num_experts: Number of experts to create weights for
         emb_dim: Embedding dimension
         hidden_dim: Hidden/intermediate dimension
+        seed: When provided, weights are drawn from a local ``torch.Generator``
+            seeded with this value, making the output independent of the global
+            RNG state / call order (required for stable shape-keyed weight caches).
 
     Returns:
         List of dicts with gate_proj, up_proj, down_proj per expert
     """
+    gen = torch.Generator().manual_seed(seed) if seed is not None else None
     weights_list = []
     for _ in tqdm(range(num_experts), desc="Creating expert weights"):
         weights = {
-            "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
-            "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
-            "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32) * 0.02,
+            "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32, generator=gen) * 0.02,
+            "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32, generator=gen) * 0.02,
+            "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32, generator=gen) * 0.02,
         }
         weights_list.append(weights)
     return weights_list
@@ -810,6 +825,7 @@ def create_torch_expert_weights(
 def create_shared_expert_weights(
     emb_dim: int,
     hidden_dim: int,
+    seed: int | None = None,
 ) -> dict:
     """
     Create random weights for shared expert in HF format.
@@ -817,14 +833,18 @@ def create_shared_expert_weights(
     Args:
         emb_dim: Embedding dimension
         hidden_dim: Hidden/intermediate dimension
+        seed: When provided, weights are drawn from a local ``torch.Generator``
+            seeded with this value, making the output independent of the global
+            RNG state / call order (required for stable shape-keyed weight caches).
 
     Returns:
         Dict with gate_proj, up_proj, down_proj in HF format (out_features, in_features)
     """
+    gen = torch.Generator().manual_seed(seed) if seed is not None else None
     return {
-        "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
-        "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
-        "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32) * 0.02,
+        "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32, generator=gen) * 0.02,
+        "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32, generator=gen) * 0.02,
+        "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32, generator=gen) * 0.02,
     }
 
 
