@@ -12,6 +12,7 @@ import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.qwen35_27b.tt.vision.patch_merger import PatchMerger
 from models.demos.qwen35_27b.tt.vision.vision_model_config import VisionModelArgs
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta
 
 
@@ -46,6 +47,7 @@ def test_patch_merger_inference(rows, batch_size, mesh_device, reset_seeds, ensu
     state_dict_prefix = model_args.get_state_dict_prefix("PatchMerger")
     state_dict = {f"{state_dict_prefix}.{k}": v for k, v in state_dict.items()}
 
+    tt_ccl = TT_CCL(mesh_device)
     tt_model = PatchMerger(
         mesh_device=mesh_device,
         args=model_args,
@@ -53,9 +55,11 @@ def test_patch_merger_inference(rows, batch_size, mesh_device, reset_seeds, ensu
         state_dict_prefix=state_dict_prefix,
         weight_cache_path=None,  # Don't cache random weights
         dtype=dtype,
+        tt_ccl=tt_ccl,
     )
 
-    # Input shape should match context_dim
+    # Input shape should match context_dim. The TP PatchMerger consumes a tensor
+    # fractured along dim=3 (the hidden dim), matching the vision block output.
     torch_input = torch.randn(batch_size, 1, rows, model_args.hf_config.vision_config.hidden_size, dtype=torch.bfloat16)
     reference_output = reference_model(torch_input)
 
@@ -64,7 +68,7 @@ def test_patch_merger_inference(rows, batch_size, mesh_device, reset_seeds, ensu
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(None, 3) if model_args.is_galaxy else (None, None),
+            dims=(None, -1),
             mesh_shape=model_args.cluster_shape,
         ),
         dtype=ttnn.bfloat16,
@@ -75,9 +79,11 @@ def test_patch_merger_inference(rows, batch_size, mesh_device, reset_seeds, ensu
     logger.info("Run PatchMerger")
     tt_output = tt_model(tt_input)
 
+    # The TP PatchMerger output is fractured along dim=3 (out_hidden_size); concat
+    # along that axis to reassemble the full output.
     tt_output_torch = ttnn.to_torch(
         tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3),
     )
     tt_output_torch = (
         tt_output_torch[:, 0:1, :, : model_args.hf_config.vision_config.out_hidden_size].squeeze(0).squeeze(0)

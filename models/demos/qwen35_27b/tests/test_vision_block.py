@@ -12,6 +12,7 @@ from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.qwen35_27b.tt.vision.functional import qwen3_5_vision_transformer_preprocess
 from models.demos.qwen35_27b.tt.vision.vision_block import VisionBlock
 from models.demos.qwen35_27b.tt.vision.vision_model_config import VisionModelArgs
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import get_rot_transformation_mat
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, standardize_hf_keys_multimodal
 
@@ -50,6 +51,7 @@ def test_vision_block_inference(
 
     model_args = VisionModelArgs(mesh_device, dummy_weights=True, max_batch_size=batch_size, max_seq_len=seq_len)
     reference_whole_model = model_args.reference_vision_model()
+    tt_ccl = TT_CCL(mesh_device)
 
     all_passing = True
     for layer_num in range(n_layers):
@@ -113,6 +115,7 @@ def test_vision_block_inference(
         # Initialize TT model
         tt_model = VisionBlock(
             mesh_device=mesh_device,
+            tt_ccl=tt_ccl,
             state_dict=state_dict,
             weight_cache_path=None,  # Don't cache random weights
             layer_num=layer_num,
@@ -121,7 +124,8 @@ def test_vision_block_inference(
             args=model_args,
         )
 
-        # Prepare input tensor for the TT model
+        # Prepare input tensor for the TT model. The vision block consumes a
+        # tensor fractured along dim=3 (the hidden dim).
         tt_input = pt_input.clone()
         tt_input = torch.nn.functional.pad(tt_input, (0, 0, 0, seq_len - ref_seq_len))
         tt_input = ttnn.from_torch(
@@ -130,7 +134,7 @@ def test_vision_block_inference(
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=model_args.cluster_shape),
         )
 
         # Run our model
@@ -139,10 +143,11 @@ def test_vision_block_inference(
             rot_mats=rot_mats,
         )
 
-        # Process the output
+        # Process the output. The block output is fractured along dim=3 (the
+        # hidden dim); concat along that axis to reassemble the full output.
         tt_out = ttnn.to_torch(
             tt_out,
-            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1),
+            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3),
         )
         tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(batch_size, seq_len, -1)  # [batch, seq, hidden_dim]
 

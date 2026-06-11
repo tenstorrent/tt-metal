@@ -18,7 +18,6 @@ from models.tt_transformers.tt.load_checkpoints import (
 )
 
 from .patch_merger import PatchMerger
-from .patch_merger_tp import PatchMergerTP
 from .vision_block import VisionBlock
 from .vision_model_config import VisionModelArgs
 
@@ -46,20 +45,16 @@ class VisionTransformer(LightweightModule):
             dtype (ttnn.dtype): Data type for computations
             state_dict (dict): State dictionary containing model weights
             weight_cache_path (str): Path to weight cache
-            tt_ccl (TT_CCL, optional): CCL helper. Required when args.vision_tp=True.
-                If None and TP is requested, one is constructed internally.
+            tt_ccl (TT_CCL, optional): CCL helper. The vision tower is always
+                tensor-parallel, so one is constructed internally if not given.
         """
         super().__init__()
         self.args = args
         self.dtype = dtype
         self.weight_cache_path = weight_cache_path
-        self.tensor_parallel = bool(getattr(args, "vision_tp", False))
 
-        # If running TP, ensure we have a TT_CCL on hand. Block-level code is a
-        # no-op in the replicated path, so we still pass `tt_ccl=None` there.
-        if self.tensor_parallel and tt_ccl is None:
-            tt_ccl = TT_CCL(args.mesh_device)
-        self.tt_ccl = tt_ccl
+        # The vision tower is always tensor-parallel and needs a TT_CCL on hand.
+        self.tt_ccl = tt_ccl if tt_ccl is not None else TT_CCL(args.mesh_device)
 
         # Create transformation matrix for RoPE QK prefill
         transformation_mat_torch = get_rot_transformation_mat(
@@ -91,29 +86,19 @@ class VisionTransformer(LightweightModule):
             )
             self.blocks.append(block)
 
-        # In TP mode we use the Megatron-style PatchMergerTP, which consumes a
-        # fractured-along-dim=3 tensor directly (no pre-merger all-gather) and
-        # produces a fractured-along-dim=3 output, mirroring the LLM's
-        # DistributedNorm + LMHead final stretch in `tt_transformers.tt.model`.
-        if self.tensor_parallel:
-            self.patch_merger = PatchMergerTP(
-                mesh_device=args.mesh_device,
-                args=args,
-                state_dict=state_dict,
-                weight_cache_path=weight_cache_path,
-                state_dict_prefix=args.get_state_dict_prefix("PatchMergerTP"),
-                dtype=dtype,
-                tt_ccl=self.tt_ccl,
-            )
-        else:
-            self.patch_merger = PatchMerger(
-                mesh_device=args.mesh_device,
-                args=args,
-                state_dict=state_dict,
-                weight_cache_path=weight_cache_path,
-                state_dict_prefix=args.get_state_dict_prefix("PatchMerger"),
-                dtype=dtype,
-            )
+        # The Megatron-style PatchMerger consumes a fractured-along-dim=3 tensor
+        # directly (no pre-merger all-gather) and produces a fractured-along-dim=3
+        # output, mirroring the LLM's DistributedNorm + LMHead final stretch in
+        # `tt_transformers.tt.model`.
+        self.patch_merger = PatchMerger(
+            mesh_device=args.mesh_device,
+            args=args,
+            state_dict=state_dict,
+            weight_cache_path=weight_cache_path,
+            state_dict_prefix=args.get_state_dict_prefix("PatchMerger"),
+            dtype=dtype,
+            tt_ccl=self.tt_ccl,
+        )
 
     def prepare_input(self, patch_input, seq_len=None):
         """Convert a patchified torch input to a ttnn tensor
@@ -142,17 +127,14 @@ class VisionTransformer(LightweightModule):
 
         Args:
             x (ttnn.Tensor): Input tensor [batch_size, 1, seq_len, hidden_dim].
-                In TP mode this already arrives fractured along dim=3 (the
-                hidden dim) because `prepare_residual_tensor_prefill` shards
-                at load time when `args.vision_tp=True`.
+                This arrives fractured along dim=3 (the hidden dim) because
+                `prepare_residual_tensor_prefill` shards at load time.
             unpadded_seq_len (int): Real sequence length before padding.
             rot_mats (list): Rotation matrices for positional embeddings.
 
         Returns:
-            ttnn.Tensor: Output tensor.
-                - Replicated mode: replicated across the mesh.
-                - TP mode: fractured along dim=3 (each device owns
-                  out_hidden_size/TP), matching the LLM lm_head contract.
+            ttnn.Tensor: Output tensor, fractured along dim=3 (each device owns
+                out_hidden_size/TP), matching the LLM lm_head contract.
         """
         for i, block in enumerate(self.blocks):
             x = block(
@@ -160,10 +142,10 @@ class VisionTransformer(LightweightModule):
                 rot_mats=rot_mats,
             )
 
-        # In TP mode the PatchMergerTP consumes the block output fractured
-        # along dim=3 directly (its first op is a DistributedLayerNorm that
-        # all-gathers internally) and produces a fractured-along-dim=3
-        # output. No pre-merger all-gather is needed.
+        # The PatchMerger consumes the block output fractured along dim=3
+        # directly (its first op is a DistributedLayerNorm that all-gathers
+        # internally) and produces a fractured-along-dim=3 output. No
+        # pre-merger all-gather is needed.
         x = x[:, :, :unpadded_seq_len, :]
         x = self.patch_merger(x)
         return x
@@ -192,7 +174,6 @@ class DropInVisionTransformer(torch.nn.Module):
             dtype (ttnn.dtype): Compute dtype for weights.
             debug (bool): If True, run the reference path alongside and report PCC.
             tt_ccl (TT_CCL, optional): Reuse a CCL helper across multiple models.
-                Only relevant when `model_args.vision_tp=True`.
         """
         super().__init__()
         self.reference_model = reference_model
@@ -312,14 +293,14 @@ class DropInVisionTransformer(torch.nn.Module):
             ttnn.deallocate(rot_mats[1])
 
             # --- Postprocessing ---
-            # 1. Extract the relevant output part and adjust shape (matching test logic)
+            # 1. Extract the relevant output part and adjust shape (matching test logic).
+            # The merger output is fractured along dim=3, so each device owns
+            # out_hidden_size/TP channels.
             out_hidden_size = (
                 self.model_args.hf_config.vision_config.out_hidden_size // self.model_args.cluster_shape[1]
-                if self.model_args.vision_tp
-                else self.model_args.hf_config.vision_config.out_hidden_size
             )
             # Output shape from TT is [1, B=1, S, H_out_padded], slice H and squeeze B, batch dims.
-            # The slice/reshape args are GLOBAL shapes; in TP mode the tensor is already
+            # The slice/reshape args are GLOBAL shapes; the tensor is already
             # fractured along dim=3 and ttnn handles the per-device extents internally.
             final_output = ttnn.reshape(tt_out[:, 0:1, :, :out_hidden_size], (-1, out_hidden_size))
             ttnn.deallocate(tt_out)
@@ -330,18 +311,10 @@ class DropInVisionTransformer(torch.nn.Module):
                 _, pcc = comp_pcc(reference_output, final_output)
                 logger.info(f"DropInVisionTransformer: PCC to reference model: {pcc}")
 
-            # 2. Convert the output to the desired tensor sharding format.
-            # In replicated mode the merger produces a replicated tensor and we
-            # have to shard it along the hidden dim ourselves. In TP mode the
-            # merger already produces a tensor fractured along the hidden dim
-            # (dim=3 in 4D / dim=1 in the 2D-reshaped view), so this is a no-op.
-            # TODO: drop this branch once DP is wired in and the desired output
-            # sharding is identical in both paths.
-            if self.tt_model.tensor_parallel:
-                final_output_sharded = final_output
-            else:
-                final_output_sharded = ttnn.mesh_partition(final_output, 1)
-                ttnn.deallocate(final_output)
+            # 2. The merger already produces a tensor fractured along the hidden
+            # dim (dim=3 in 4D / dim=1 in the 2D-reshaped view), which is the
+            # desired output sharding.
+            final_output_sharded = final_output
 
             # 3. Aggregate in batched users list
             final_outputs.append(final_output_sharded)
