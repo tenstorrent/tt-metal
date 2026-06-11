@@ -143,15 +143,8 @@ void kernel_main() {
             }
             noc_async_read_barrier();
 
+            // Each tap window = union sticks [j .. j+BLOCK_T-1], one contiguous L1->L1 copy.
             for (uint32_t j = 0; j < K; ++j) {
-                cb_reserve_back(scalar_cb_id, 1);
-                const uint32_t tap_bits = get_common_arg_val<uint32_t>(j);
-                float tap;
-                __builtin_memcpy(&tap, &tap_bits, sizeof(float));
-                fill_tile_fp32(scalar_cb_id, tap);
-                cb_push_back(scalar_cb_id, 1);
-
-                // Tap j window = union sticks [j .. j+BLOCK_T-1], one contiguous L1->L1 copy.
                 cb_reserve_back(act_cb_id, block_num_tiles);
                 const uint32_t wptr = get_write_ptr(act_cb_id);
                 noc_async_read(get_noc_addr(scratch_ptr + j * padded_stick_bytes), wptr, BLOCK_T * padded_stick_bytes);
