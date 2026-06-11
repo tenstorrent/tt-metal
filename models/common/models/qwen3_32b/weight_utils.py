@@ -179,7 +179,7 @@ def build_lm_head_lazy_weights(
     # (observed: HF " Rome"=21718 vs TT 21734). Padding to a multiple of (TILE_SIZE*num_devices)
     # makes size_per_device tile-aligned (19008) so the gather is gap-free; the trailing pad
     # columns are zeros at the very end of the vocab. Coder-32B's 152064 was already aligned and
-    # never hit this. See dev-tools/agents-context/.../qwen3_32b/debugging.
+    # never hit this. See the qwen3_32b debugging notes.
     align = 32 * num_devices
     padded_vocab_size = math.ceil(vocab_size / align) * align
     if vocab_size < padded_vocab_size:
