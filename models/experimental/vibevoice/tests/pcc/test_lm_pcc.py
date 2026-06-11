@@ -24,7 +24,6 @@ from models.experimental.vibevoice.tt.load_weights import (
 from models.experimental.vibevoice.tt.ttnn_vibevoice_lm import (
     preprocess_lm_weights,
     TTVibeVoiceLM,
-    create_kv_cache,
 )
 from models.experimental.vibevoice.tt.vibevoice_config import load_vibevoice_model_config
 
@@ -96,20 +95,35 @@ def test_lm_hidden_state_pcc(mesh_device, vv_config, lm_state):
     torch.manual_seed(0)
     cfg = vv_config.decoder
 
-    # Short sequence
-    input_ids = torch.randint(0, cfg.vocab_size, (1, SEQ_LEN), dtype=torch.long)
+    # Sequence of SEQ_LEN+1: first SEQ_LEN drive prefill, the last drives one decode step.
+    input_ids = torch.randint(0, cfg.vocab_size, (1, SEQ_LEN + 1), dtype=torch.long)
 
-    # 1) Reference
-    ref_hidden = _reference_lm_forward(lm_state, input_ids, vv_config)  # [1, S, hidden]
+    # 1) Reference over the full SEQ_LEN+1 (incremental decode == prefix of this).
+    ref_hidden_full = _reference_lm_forward(lm_state, input_ids, vv_config)  # [1, S+1, hidden]
+    ref_prefill = ref_hidden_full[:, :SEQ_LEN]
+    ref_decode = ref_hidden_full[:, SEQ_LEN:]  # [1, 1, hidden]
 
-    # 2) TT forward
+    # 2) TT prefill on the fixed KV cache + one decode step.
     weights = preprocess_lm_weights(lm_state, mesh_device, cfg)
     lm_tt = TTVibeVoiceLM(weights, mesh_device)
 
-    kv_cache = create_kv_cache(cfg.num_hidden_layers)
-    _, tt_hidden = lm_tt.prefill(input_ids, kv_cache=kv_cache, return_last_hidden=True)
+    kv_cache = lm_tt.alloc_kv_cache(SEQ_LEN + 8)
+    _, tt_hidden = lm_tt.prefill(input_ids[:, :SEQ_LEN], kv_cache=kv_cache, return_last_hidden=True)
+    tt_prefill = ttnn.to_torch(tt_hidden).to(torch.float32).squeeze(1)  # [1, S, hidden]
 
-    tt_hidden_torch = ttnn.to_torch(tt_hidden).to(torch.float32).squeeze(1)  # [1, S, hidden]
+    _, tt_dec_hidden = lm_tt.decode_step(
+        input_ids[:, SEQ_LEN : SEQ_LEN + 1], SEQ_LEN, kv_cache, return_last_hidden=True
+    )
+    tt_decode = ttnn.to_torch(tt_dec_hidden).to(torch.float32).squeeze(1)  # [1, 1, hidden]
 
-    passed, pcc_val = comp_pcc(ref_hidden.to(torch.float32), tt_hidden_torch, pcc=0.99)
-    assert passed, f"LM last_hidden_state PCC {pcc_val:.6f} < 0.99"
+    passed_p, pcc_p = comp_pcc(ref_prefill.to(torch.float32), tt_prefill, pcc=0.99)
+    passed_d, pcc_d = comp_pcc(ref_decode.to(torch.float32), tt_decode, pcc=0.99)
+    per_pos = [comp_pcc(ref_prefill[:, p].to(torch.float32), tt_prefill[:, p], pcc=0.99)[1] for p in range(SEQ_LEN)]
+    lows = sorted(range(SEQ_LEN), key=lambda i: per_pos[i])[:6]
+    print(f"[test_lm_pcc] prefill PCC={pcc_p:.6f}  decode PCC={pcc_d:.6f}")
+    print(
+        f"[test_lm_pcc] per-pos prefill PCC: last={per_pos[-1]:.5f} min={min(per_pos):.5f} "
+        f"median={sorted(per_pos)[SEQ_LEN // 2]:.5f}  lows=" + ",".join(f"p{i}={per_pos[i]:.4f}" for i in lows)
+    )
+    assert passed_p, f"LM prefill last_hidden PCC {pcc_p:.6f} < 0.99"
+    assert passed_d, f"LM decode last_hidden PCC {pcc_d:.6f} < 0.99 (fixed-cache + sdpa_decode)"
