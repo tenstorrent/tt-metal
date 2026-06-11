@@ -36,8 +36,6 @@ os.environ["TT_METAL_FORBID_DESCRIPTOR_REBUILD_ON_CACHE_HIT"] = "1"
 
 import pytest
 import torch
-import torch.nn as nn
-import torch.optim as optim
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc

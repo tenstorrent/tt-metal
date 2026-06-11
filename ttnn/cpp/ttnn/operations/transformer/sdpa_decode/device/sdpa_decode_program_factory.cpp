@@ -901,16 +901,14 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         }
         log_debug(tt::LogOp, "reduction_group_base_idx: {}", reduction_group_base_idx);
         // reader runtime args
-        // Q/K/V are mandatory input tensors: pass them as Buffer* so the framework
-        // records BufferBindings and patches only those address slots on cache hits.
-        // NOTE: cur_pos and the optional pos/page_table/attn_mask addresses are
-        // operation_attribute-dependent and change between calls, so they stay raw
-        // uint32_t — binding them would not capture the attribute-driven recompute
-        // (test_sdpa_decode_paged_attention exposed this).
+        // NOTE: do not pass Buffer* here. cur_pos and the optional pos/page_table/attn_mask
+        // addresses are operation_attribute-dependent and change between calls; using
+        // BufferBinding would skip create_descriptor() on cache hits and leave those
+        // scalar args stale (test_sdpa_decode_paged_attention exposed this).
         KernelDescriptor::RTArgList reader_rt_args;
-        reader_rt_args.push_back(q_buffer);
-        reader_rt_args.push_back(k_buffer);
-        reader_rt_args.push_back(v_buffer);
+        reader_rt_args.push_back(q_buffer->address());
+        reader_rt_args.push_back(k_buffer->address());
+        reader_rt_args.push_back(v_buffer->address());
         reader_rt_args.push_back(pos_addr);
         reader_rt_args.push_back(page_table_addr);
         reader_rt_args.push_back(attn_mask_addr);
@@ -932,11 +930,10 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         reader_rt_args.append(output_core_physical_ys);
 
         // writer runtime args (do_reduce is NOT included — writer doesn't use it)
-        // The output tensor base address (slot 0) is bound as Buffer* for in-place
-        // cache-hit patching.  cur_pos and tree_params remain raw uint32_t because they
-        // are operation_attribute-dependent and change between calls.
+        // NOTE: do not pass Buffer* here. cur_pos and tree_params are
+        // operation_attribute-dependent and change between calls.
         KernelDescriptor::RTArgList writer_rt_args;
-        writer_rt_args.push_back(out_buffer);
+        writer_rt_args.push_back(out_buffer->address());
         writer_rt_args.push_back(worker_id_for_reduce);
         writer_rt_args.push_back(worker_id_for_output);
         writer_rt_args.push_back(static_cast<uint32_t>(do_reduce));
