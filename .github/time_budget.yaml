@@ -103,11 +103,18 @@ ttnn:
     bh_p150b_civ2_viommu: 60
 
 train:
-  l2:
-    wh_n150_civ2: 340
-    wh_n300_civ2: 340
-    bh_p100a_civ2_viommu: 340
-    bh_p150b_civ2: 340
+  smoke:
+    wh_n150_civ2: 10
+  unit:
+    wh_n150_civ2: 90
+    wh_n300_civ2: 90
+    bh_p100a_civ2_viommu: 90
+    bh_p150b_civ2: 90
+  perf:
+    wh_n150_civ2: 90
+    wh_n300_civ2: 90
+    bh_p100a_civ2_viommu: 90
+    bh_p150b_civ2: 240
 
 ttsim:
   l2:

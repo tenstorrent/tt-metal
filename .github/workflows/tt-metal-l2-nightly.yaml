@@ -45,8 +45,8 @@ on:
         required: false
         type: boolean
         default: false
-      run_tt_train_model_tests:
-        description: "Run TT-Train Model Tests (Python)"
+      run_tt_train_perf_tests:
+        description: "Run TT-Train Perf Tests (Python)"
         required: false
         type: boolean
         default: false
@@ -410,15 +410,15 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-  tt-train-model-tests:
+  tt-train-perf-tests:
     needs: [resolve-docker-pull-refs, build-artifact, generate-arch-matrix]
     if: |
-      (github.event_name == 'schedule' || inputs.run_tt_train_model_tests) &&
+      (github.event_name == 'schedule' || inputs.run_tt_train_perf_tests) &&
       needs.generate-arch-matrix.outputs.tt-train-skus != ''
     secrets: inherit
     uses: ./.github/workflows/tt-train-tests.yaml
     with:
-      test-category: model
+      test-category: perf
       enabled-skus: ${{ needs.generate-arch-matrix.outputs.tt-train-skus }}
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

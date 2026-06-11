@@ -6,7 +6,7 @@ on:
       test-category:
         required: true
         type: string
-        description: "Choice of 'smoke', 'unit', 'model'. Maps to category with train_ prefix via tests/pipeline_reorg/tt_metal_l2_tests.yaml."
+        description: "Choice of 'smoke', 'unit', 'perf'. Maps tests/pipeline_reorg/train_{test-category}_tests.yaml."
       docker-image:
         required: true
         type: string
@@ -55,9 +55,9 @@ jobs:
   load-test-matrix:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.filter-categories.outputs.matrix }}
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/tt_metal_l2_tests.yaml
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/train_${{ inputs.test-category }}_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -79,7 +79,7 @@ jobs:
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "l2"
+            "${{ inputs.test-category }}"
 
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
@@ -88,18 +88,6 @@ jobs:
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml
-
-      - name: Filter matrix by test category
-        id: filter-categories
-        run: |
-          matrix='${{ steps.build-matrix.outputs.matrix }}'
-          categories='train_${{ inputs.test-category }}'
-          filtered=$(echo "$matrix" | jq -c --arg cats ",$categories," '[.[] | .category as $c | select($cats | contains(",\($c),"))]')
-          {
-            echo "matrix<<EOF"
-            echo "$filtered"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
 
 
   tt-train-tests:
@@ -168,7 +156,7 @@ jobs:
           echo "$TTML_BUILD_DIR" > "$SITE_PACKAGES/_ttml.pth"
 
       - name: Install Python dependencies for metrics
-        if: ${{ matrix.test-group.category == 'train_model' }}
+        if: ${{ inputs.test-category == 'perf' }}
         run: |
           uv pip list
           uv pip install "gitpython==3.1.50" "pydantic==2.9.2" "numpy>=1.24.4,<2" "pyyaml>=5.4"
@@ -191,7 +179,7 @@ jobs:
           retention-days: 30
 
       - name: Upload metrics data to AWS SFTP bucket
-        if: ${{ matrix.test-group.category == 'train_model' }}
+        if: ${{ inputs.test-category == 'perf' }}
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.TT_TRAIN_AWS_KEY }}
