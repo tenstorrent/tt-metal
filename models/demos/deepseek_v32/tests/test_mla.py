@@ -31,7 +31,7 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 from models.demos.deepseek_v32.reference_cpu.model import MLACPU, ModelArgs
 from models.demos.deepseek_v32.reference_cpu.utils import precompute_freqs_cis
-from models.demos.deepseek_v32.reference_cpu.weights import initialize_weights
+from models.demos.deepseek_v32.reference_cpu.weights import DEFAULT_REPO, initialize_weights
 from models.demos.deepseek_v32.tt.mla import ttMLA as ttMLAv32
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -61,8 +61,13 @@ def use_v32_mla(monkeypatch):
     monkeypatch.setattr(v3_test_mla, "ttMLA", ttMLAv32)
 
 
-def build_cpu_reference(seq_len: int, seed: int = 42):
-    """MLACPU with random weights; returns (args, model, v3-format weights dict)."""
+def build_cpu_reference(seq_len: int, seed: int = 42, layer=None, checkpoint_path=None, repo=None):
+    """MLACPU + v3-format weights dict. Returns (args, model, weights, src_tag).
+
+    Weights: random (default) or pretrained layer `layer` (HF repo, or local
+    `checkpoint_path` shards). src_tag identifies the source for ref-cache keys
+    so random and pretrained truths never collide.
+    """
     # Keep max_seq_len at the production 16384, NOT seq_len: YaRN inv_freq and the
     # mscale'd softmax scale only activate when max_seq_len > original_seq_len (4096),
     # and the device tables (HF DeepseekV3YarnRotaryEmbedding) always apply YaRN.
@@ -73,10 +78,33 @@ def build_cpu_reference(seq_len: int, seed: int = 42):
     mla_cpu = MLACPU(args, simulate_fp8=False).eval()
     # Functional-parity indexer (spec.md §104): Hadamard+fp8 dropped on both sides.
     mla_cpu.indexer.use_fp8_path = False
-    initialize_weights(mla_cpu)
+    if checkpoint_path is not None:
+        initialize_weights(mla_cpu, layer=layer or 0, checkpoint_path=checkpoint_path)
+        src_tag = f"ckptL{layer or 0}"
+    elif layer is not None:
+        initialize_weights(mla_cpu, layer=layer, repo=repo or DEFAULT_REPO)
+        src_tag = f"layer{layer}"
+    else:
+        initialize_weights(mla_cpu)  # random
+        src_tag = f"random_seed{seed}"
     sd = mla_cpu.state_dict()
     weights = {v3_name: sd[cpu_name].clone() for cpu_name, v3_name in WEIGHT_NAME_MAP.items()}
-    return args, mla_cpu, weights
+    return args, mla_cpu, weights, src_tag
+
+
+def make_hidden(seq_len, hidden_size, seed=42, input_path=None):
+    """MLA/indexer input [1, seq, hidden] bf16: from --ds-input file (sliced/checked)
+    or deterministic randn(seed)."""
+    if input_path:
+        t = torch.load(input_path, weights_only=True)
+        t = t["hidden_states"] if isinstance(t, dict) else t
+        t = t.reshape(-1, t.shape[-1])  # [.., hidden] -> [tokens, hidden]
+        assert (
+            t.shape[0] >= seq_len and t.shape[-1] == hidden_size
+        ), f"--ds-input {tuple(t.shape)} can't supply [{seq_len}, {hidden_size}]"
+        return t[:seq_len].reshape(1, seq_len, hidden_size).to(torch.bfloat16)
+    torch.manual_seed(seed)
+    return torch.randn(1, seq_len, hidden_size, dtype=torch.bfloat16)
 
 
 def run_cpu_reference(args, mla_cpu, hidden_states, seq_len, seed, cache_tag):
@@ -136,10 +164,14 @@ def assert_config_matches(config, args):
 @pytest.mark.parametrize("seq_len", [256, 2048, 4096], ids=["seq256", "seq2k", "seq4k"])
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
 @pytest.mark.timeout(0)
-def test_v32_mla_vs_cpu_reference(mesh_device, seq_len, device_params, variant, config_only):
+def test_v32_mla_vs_cpu_reference(
+    mesh_device, seq_len, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo
+):
+    # NOTE: input is generated inside v3 run_mla_inference (seeded); --ds-input does
+    # not apply here. Use the chunked test for file-driven input.
     config = config_only
     seed = 42
-    args, mla_cpu, weights = build_cpu_reference(seq_len, seed)
+    args, mla_cpu, weights, src_tag = build_cpu_reference(seq_len, seed, ds_layer, ds_checkpoint, ds_repo)
     assert_config_matches(config, args)
     config.max_seq_len = seq_len  # rope table length (same hack as v3 run_model)
 
@@ -169,7 +201,7 @@ def test_v32_mla_vs_cpu_reference(mesh_device, seq_len, device_params, variant, 
     )
 
     ref_output, ref_kvpe = run_cpu_reference(
-        args, mla_cpu, hidden_states, seq_len, seed, cache_tag=f"random_funcidx_max{args.max_seq_len}"
+        args, mla_cpu, hidden_states, seq_len, seed, cache_tag=f"{src_tag}_funcidx_max{args.max_seq_len}"
     )
 
     tt_output_cpu = ttnn.to_torch(
@@ -198,10 +230,10 @@ def test_v32_mla_vs_cpu_reference(mesh_device, seq_len, device_params, variant, 
     ttnn.synchronize_device(mesh_device)
 
 
-def run_cpu_reference_chunked(args, mla_cpu, hidden_states, seq_len, chunk, seed):
+def run_cpu_reference_chunked(args, mla_cpu, hidden_states, seq_len, chunk, src_tag):
     """Chunk-loop truth on MLACPU decode branch; mask [chunk, end_pos] keeps causality."""
     cache_dir = Path(os.environ.get("DEEPSEEK_V32_MLA_REF_CACHE", "/tmp/deepseek_v32_mla_ref_cache"))
-    cache_path = cache_dir / f"chunked_funcidx_seq{seq_len}_c{chunk}_seed{seed}_v2.pt"
+    cache_path = cache_dir / f"chunked_{src_tag}_funcidx_seq{seq_len}_c{chunk}_v2.pt"
     if cache_path.exists():
         logger.info(f"Loading cached chunked CPU reference from {cache_path}")
         cached = torch.load(cache_path, weights_only=True)
@@ -239,12 +271,14 @@ def run_cpu_reference_chunked(args, mla_cpu, hidden_states, seq_len, chunk, seed
 @pytest.mark.parametrize("seq_len,chunk", [(4096, 1024)], ids=["4k_c1k"])
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
 @pytest.mark.timeout(0)
-def test_v32_mla_chunked_vs_cpu_reference(mesh_device, seq_len, chunk, device_params, variant, config_only):
+def test_v32_mla_chunked_vs_cpu_reference(
+    mesh_device, seq_len, chunk, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo, ds_input
+):
     from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 
     config = config_only
     seed = 42
-    args, mla_cpu, weights = build_cpu_reference(seq_len, seed)
+    args, mla_cpu, weights, src_tag = build_cpu_reference(seq_len, seed, ds_layer, ds_checkpoint, ds_repo)
     assert_config_matches(config, args)
     config.max_seq_len = seq_len
 
@@ -274,8 +308,10 @@ def test_v32_mla_chunked_vs_cpu_reference(mesh_device, seq_len, chunk, device_pa
     rope = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
     rope_tensors = rope.get_rope_tensors_indexed(seq_len, chunk)
 
-    torch.manual_seed(seed)
-    hidden = torch.randn(1, seq_len, config.hidden_size).to(torch.bfloat16)
+    hidden = make_hidden(seq_len, config.hidden_size, seed, ds_input)
+    # File-driven input changes the truth → fold a stable tag into the ref-cache key.
+    if ds_input:
+        src_tag = f"{src_tag}_in{abs(hash(ds_input)) % 10**8}"
     shard_dims = [None, None]
     shard_dims[tp_axis], shard_dims[sp_axis] = -1, -2
 
@@ -297,7 +333,7 @@ def test_v32_mla_chunked_vs_cpu_reference(mesh_device, seq_len, chunk, device_pa
         )
     tt_output = torch.cat(outs, dim=2)
 
-    ref_output, ref_kvpe = run_cpu_reference_chunked(args, mla_cpu, hidden, seq_len, chunk, seed)
+    ref_output, ref_kvpe = run_cpu_reference_chunked(args, mla_cpu, hidden, seq_len, chunk, src_tag)
     from models.common.utility_functions import comp_pcc
 
     for s in range(0, seq_len, chunk):

@@ -85,7 +85,7 @@ Legend: `[x]` done · `[ ]` open · ⏸️ postponed · 📌 resolved as decisio
 
 **Functional gaps (blocking production)**
 - [ ] **(4)** 2x2 SP×TP mesh — indexer needs full sequence per chip (seq AG or distributed topk); sparse_mla prefix read needs SP-aware gathering
-- [ ] **(5)** pretrained weights — V3.2 checkpoint (indexer weights) into conftest; reuse reference_cpu loading + v3 conversion/sharding
+- [ ] **(5)** pretrained weights — *in progress*: test knobs added (conftest `--ds-layer` / `--ds-checkpoint` / `--ds-repo` / `--ds-input`); `build_cpu_reference(layer, checkpoint_path, repo)` loads a specific MLA+indexer layer via reference_cpu `initialize_weights`; `make_hidden(--ds-input)` injects file-driven input (chunked + indexer tests; single-shot uses v3 harness input). ref-cache keyed by weight source so random/pretrained truths don't collide. Remaining: real pretrained PCC run on a downloaded layer (HF shards multi-GB, long; gate it).
 - [ ] **(6)** device-side indexer stems — q/k/weights projections on device; non-interleaved RoPE op (F1 still host)
 - [x] 📌 **(7)** fp8/Hadamard parity — follow v3 cache format (kvpe bfloat8_b); ttnn has no matching fp8, so the functional path is the contract; truth stays use_fp8_path=False/simulate_fp8=False
 
