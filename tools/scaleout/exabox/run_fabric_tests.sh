@@ -295,13 +295,56 @@ sort_hosts_canonical() {
     echo "${joined%,}"
 }
 
+# Apply sort_hosts_canonical independently to each consecutive group of 4 hosts.
+# Used by <N>x32x4, where every 4 --hosts entries form one 32x4 torus mesh: the
+# 4 galaxies within a mesh must be in physical ring order, but the groups
+# themselves keep the operator's input order (group i -> mesh i). This lets the
+# operator pick which 4 galaxies make up each mesh (by grouping) without having
+# to hand-sort the ring order inside each group. Echoes the reordered list.
+sort_hosts_canonical_per_quad() {
+    local csv="$1"
+    local -a in_hosts
+    IFS=',' read -ra in_hosts <<< "$csv"
+    local total=${#in_hosts[@]}
+
+    local -a out=()
+    local i j
+    for ((i = 0; i < total; i += 4)); do
+        local -a quad=()
+        for ((j = i; j < i + 4 && j < total; j++)); do
+            quad+=("${in_hosts[$j]}")
+        done
+        local quad_csv
+        printf -v quad_csv '%s,' "${quad[@]}"
+        quad_csv="${quad_csv%,}"
+        local sorted
+        sorted="$(sort_hosts_canonical "$quad_csv")"
+        IFS=',' read -ra quad <<< "$sorted"
+        out+=("${quad[@]}")
+    done
+
+    local joined
+    printf -v joined '%s,' "${out[@]}"
+    echo "${joined%,}"
+}
+
 # Only the multi-host quad configs need deterministic ring order; smaller and
-# single-host configs keep the user's --hosts order untouched.
+# single-host configs keep the user's --hosts order untouched. 8x4x4z/4x32z are
+# a single quad (one Z-ring) so they canonicalize the whole list; <N>x32x4 has
+# one quad per mesh, so it canonicalizes each group of 4 independently.
 if [[ "$CONFIG" == "8x4x4z" || "$CONFIG" == "4x32z" ]]; then
     HOSTS_ORIG="$HOSTS"
     HOSTS="$(sort_hosts_canonical "$HOSTS")"
     if [[ "$HOSTS" != "$HOSTS_ORIG" ]]; then
         echo "Reordered hosts into canonical ring order for $CONFIG:"
+        echo "  before: $HOSTS_ORIG"
+        echo "  after:  $HOSTS"
+    fi
+elif [[ -n "$NX32X4_NUM_MESHES" ]]; then
+    HOSTS_ORIG="$HOSTS"
+    HOSTS="$(sort_hosts_canonical_per_quad "$HOSTS")"
+    if [[ "$HOSTS" != "$HOSTS_ORIG" ]]; then
+        echo "Reordered each 4-host quad into canonical ring order for $CONFIG:"
         echo "  before: $HOSTS_ORIG"
         echo "  after:  $HOSTS"
     fi
