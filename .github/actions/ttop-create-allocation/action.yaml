@@ -11,10 +11,6 @@ inputs:
     description: 'Allocation spec'
     required: false
     default: ''
-  specFile:
-    description: 'Path to allocation spec file (avoids corrupting large MGD via job outputs)'
-    required: false
-    default: ''
   explicit:
     description: 'List of explicit nodes (ignored when spec is provided)'
     required: false
@@ -39,6 +35,12 @@ runs:
         metadata:
           name: ${{ inputs.allocationName }}
           namespace: ${{ inputs.namespace }}
+          annotations:
+            ci.tenstorrent.com/created-by: ${{ github.actor }}
+            ci.tenstorrent.com/repository: ${{ github.repository }}
+            ci.tenstorrent.com/run-id: \"${{ github.run_id }}\"
+            ci.tenstorrent.com/workflow-ref: ${{ github.workflow_ref }}
+            ci.tenstorrent.com/event-name: ${{ github.event_name }}
         spec:
           retryPolicy: Always
           allocationType: Explicit
@@ -46,28 +48,10 @@ runs:
         ALLOCATION_EOF
         EOF
 
-    - name: Construct allocation manifest (spec file)
-      shell: bash
-      id: spec-file
-      if: ${{ inputs.specFile != '' }}
-      run: |
-        MANIFEST="/tmp/allocation-${{ inputs.allocationName }}.yaml"
-        {
-          echo "apiVersion: tenstorrent.com/v1alpha1"
-          echo "kind: Allocation"
-          echo "metadata:"
-          echo "  name: ${{ inputs.allocationName }}"
-          echo "  namespace: ${{ inputs.namespace }}"
-          echo "spec:"
-          echo "  retryPolicy: Always"
-          sed 's/^/  /' "${{ inputs.specFile }}"
-        } > "${MANIFEST}"
-        echo "ALLOCATION_MANIFEST_PATH=${MANIFEST}" >> "$GITHUB_ENV"
-
     - name: Construct allocation manifest (spec)
       shell: bash
       id: spec
-      if: ${{ inputs.spec != '' && inputs.specFile == '' }}
+      if: ${{ inputs.spec != '' }}
       run: |
         SPEC=$(printf '%s\n' '${{ inputs.spec }}' | sed 's/^/  /')
         cat <<EOF >> $GITHUB_ENV
@@ -77,6 +61,12 @@ runs:
         metadata:
           name: ${{ inputs.allocationName }}
           namespace: ${{ inputs.namespace }}
+          annotations:
+            ci.tenstorrent.com/created-by: ${{ github.actor }}
+            ci.tenstorrent.com/repository: ${{ github.repository }}
+            ci.tenstorrent.com/run-id: \"${{ github.run_id }}\"
+            ci.tenstorrent.com/workflow-ref: ${{ github.workflow_ref }}
+            ci.tenstorrent.com/event-name: ${{ github.event_name }}
         spec:
           retryPolicy: Always
         ${SPEC}
@@ -87,11 +77,7 @@ runs:
       shell: bash
       run: |
         echo "Creating allocation..."
-        if [ -n "${ALLOCATION_MANIFEST_PATH:-}" ]; then
-          kubectl -n ${{ inputs.namespace }} apply -f "${ALLOCATION_MANIFEST_PATH}"
-        else
-          printf "%s" "${{ env.ALLOCATION_MANIFEST }}" | kubectl -n ${{ inputs.namespace }} apply -f -
-        fi
+        printf "%s" "${{ env.ALLOCATION_MANIFEST }}" | kubectl -n ${{ inputs.namespace }} apply -f -
 
     - name: Wait for allocation
       shell: bash
