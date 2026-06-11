@@ -397,8 +397,21 @@ class TPGatedDeltaNet:
         ttnn.deallocate(a)
         g = ttnn.reshape(g, (B, 1, Nv))
 
+        # fp32 decode step DEFAULT (decode-drift mitigation). The per-step gated-delta recurrence
+        # h = decay*h + beta*(k⊗delta) compounds every token; in bf16, `decay = exp(g)` (near 1.0)
+        # quantizes coarsely and the error accumulates over a long decode → late-generation
+        # repetition collapse. high_precision runs the whole step in fp32 (pairs with the fp32
+        # rec_state default). QWEN35_GDN_DECODE_BF16=1 reverts to the bf16 step.
         o, new_rec = recurrent_gated_delta_rule_decode_ttnn(
-            q, k, v, beta, g, scale=self.scale, initial_state=self.rec_state, device=self.mesh
+            q,
+            k,
+            v,
+            beta,
+            g,
+            scale=self.scale,
+            initial_state=self.rec_state,
+            device=self.mesh,
+            high_precision=(os.environ.get("QWEN35_GDN_DECODE_BF16") != "1"),
         )
         if self._stable_state:
             # In-place update keeps rec_state's address fixed so the decode trace
