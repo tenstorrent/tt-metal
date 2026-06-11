@@ -87,13 +87,8 @@ void EnqueueReadMeshBuffer(
     std::vector<DType>& dst,
     std::shared_ptr<MeshBuffer>& mesh_buffer,
     bool blocking = true) {
-    // This API supports reading MeshBuffers sharded across devices
-    // and a Unit-MeshBuffer with a replicated layout.
-    if (mesh_buffer->global_layout() == MeshBufferLayout::SHARDED) {
-        dst.resize(mesh_buffer->global_shard_spec().global_size / sizeof(DType));
-    } else {
-        dst.resize(mesh_buffer->size() / sizeof(DType));
-    }
+    // This API supports reading a Unit-MeshBuffer with a replicated layout.
+    dst.resize(mesh_buffer->size() / sizeof(DType));
     mesh_cq.enqueue_read_mesh_buffer(dst.data(), mesh_buffer, blocking);
 }
 

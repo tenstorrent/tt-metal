@@ -6,7 +6,6 @@
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt_stl/assert.hpp>
-#include <tt_stl/overloaded.hpp>
 #include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal::experimental::per_core_allocation {
@@ -43,14 +42,7 @@ std::shared_ptr<distributed::MeshBuffer> create_on_single_device(
     const distributed::DeviceLocalBufferConfig& device_local_config,
     distributed::MeshDevice* mesh_device,
     const distributed::MeshCoordinate& coord) {
-    const DeviceAddr device_local_size = std::visit(
-        tt::stl::overloaded{
-            [](const distributed::ReplicatedBufferConfig& c) { return c.size; },
-            [](const distributed::ShardedBufferConfig& config) {
-                const auto [shard_height, shard_width] = config.physical_shard_shape();
-                return config.compute_datum_size_bytes() * shard_height * shard_width;
-            }},
-        mesh_buffer_config);
+    const DeviceAddr device_local_size = mesh_buffer_config.size;
 
     // Create a non-owning MeshBuffer — each device buffer will own its own allocation.
     auto mesh_buffer = std::shared_ptr<distributed::MeshBuffer>(new distributed::MeshBuffer(
