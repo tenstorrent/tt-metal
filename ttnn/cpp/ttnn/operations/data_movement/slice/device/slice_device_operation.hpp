@@ -62,7 +62,7 @@ struct SliceDeviceOperation {
     // bindings (rm_stride, tile, tile_tensor_args) or CB `.buffer` bindings (rm_sharded) and has no
     // address-derived rt-arg, so this returns {} for them (the framework patches their bindings).
     static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
-        const operation_attributes_t& operation_attributes,
+        const operation_attributes_t& args,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value,
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
