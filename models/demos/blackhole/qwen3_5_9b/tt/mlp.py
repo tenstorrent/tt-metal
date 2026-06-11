@@ -8,6 +8,7 @@ followed by tt_all_reduce (which reduce-scatters on a mesh with a 1 in its shape
 e.g. P150x4) so the output is fractured along the hidden dim — matching the
 fractured-residual scheme used by models/demos/qwen35_27b.
 """
+import os
 from dataclasses import dataclass
 
 import ttnn
@@ -111,7 +112,14 @@ class Qwen35MLP:
         hidden = ttnn.mul(w1_out, w3_out, memory_config=mc)
         ttnn.deallocate(w1_out)
         ttnn.deallocate(w3_out)
-        output = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc)
+        down_pc = None
+        if (
+            T > 1
+            and getattr(self.args, "prefill_progcfg", None) is not None
+            and os.environ.get("QWEN9B_MLP_DOWN_AUTO") != "1"
+        ):
+            down_pc = self.args.prefill_progcfg(T, hidden.shape[-1], w.w2.shape[-1])
+        output = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc, program_config=down_pc)
         ttnn.deallocate(hidden)
         return output
 
