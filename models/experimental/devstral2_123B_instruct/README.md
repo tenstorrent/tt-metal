@@ -72,10 +72,36 @@ export BH_ARCH_YAML=tt_metal/core_descriptors/blackhole_140_arch_eth_dispatch.ya
 pytest models/experimental/devstral2_123B_instruct/tests/perf/test_e2e_performant.py -k L88
 ```
 
-**Single-layer device perf — validates trace pipeline on a 1-layer model:**
+**Single-layer wall-clock perf — validates trace pipeline on a 1-layer model:**
 
 ```sh
 pytest models/experimental/devstral2_123B_instruct/tests/perf/test_perf.py
+```
+
+**Single-layer device perf (prefill + decode) — Tracy capture for 1-layer partial weights (prefill 128 tokens, decode 1 token at position 128):**
+
+```sh
+pytest models/experimental/devstral2_123B_instruct/tests/perf/test_device_perf_single_layer_prefill_decode.py \
+    -v -m models_device_performance_bare_metal
+```
+
+This invokes `run_device_perf`, which runs the profile workload in `tests/perf/test_profile_single_layer_prefill_decode.py`. Each measured iteration profiles **both** prefill and decode inside the `start`/`stop` signpost window (one warmup iteration runs outside signposts).
+
+After the run, analyze the ops CSV under `generated/profiler/devstral2_123B_instruct_L1_prefill_decode/reports/<timestamp>/`:
+
+```sh
+tt-perf-report generated/profiler/devstral2_123B_instruct_L1_prefill_decode/reports/<timestamp>/ops_perf_results_*.csv \
+    --start-signpost start --end-signpost stop
+```
+
+`--start-signpost` and `--end-signpost` are required; the default `tt-perf-report` mode only anchors on the last signpost and shows no device ops.
+
+Optional: capture Tracy directly without the device-perf dumper:
+
+```sh
+python -m tracy -p -v -r --dump-device-data-mid-run \
+    pytest models/experimental/devstral2_123B_instruct/tests/perf/test_profile_single_layer_prefill_decode.py \
+    ::test_profile_single_layer_prefill_decode -v
 ```
 
 ### Results
@@ -106,7 +132,7 @@ Measured with ``pytest models/experimental/devstral2_123B_instruct/tests/perf/te
 | **`tt/tt_ministral3_decoder_layer.py`** | Decoder layer (attention + MLP + norms). |
 | **`tt/weight_loading.py`** | Host → device FP8 → bf16 weight dequant and upload (shard-by-shard, disk-cached). |
 | **`tests/`** | Per-op PCC tests (attention, MLP, norms, RoPE, decoder layer, full model). |
-| **`tests/perf/`** | Performance tests: e2e throughput (`test_e2e_performant.py`) and single-layer device perf (`test_perf.py`). |
+| **`tests/perf/`** | Performance tests: e2e throughput (`test_e2e_performant.py`), single-layer wall-clock perf (`test_perf.py`), and single-layer prefill+decode device perf (`test_device_perf_single_layer_prefill_decode.py`, `test_profile_single_layer_prefill_decode.py`). |
 | **`reference/`** | Pure PyTorch / HF reference inference script (`devstral2_123b_inference.py`). |
 
 ## Model and limits
