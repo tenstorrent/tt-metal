@@ -316,7 +316,13 @@ def run_standalone_chunked_prefill_loop(pipeline: TtDeepSeekPrefillPipeline) -> 
     seq_len_cache = cfg.max_seq_len  # allocated cache seq dim — drives the block-cyclic inversion below
 
     n_chunks = int(os.environ.get("PREFILL_STANDALONE_CHUNKED_NCHUNKS", "11"))
-    slot_id = int(os.environ.get("PREFILL_STANDALONE_CHUNKED_SLOT", "0")) % NUM_USERS
+    # All-slots mode: prefill + PCC-validate the golden prompt into EVERY user slot
+    # (PREFILL_STANDALONE_CHUNKED_ALL_SLOTS=1). Otherwise fill the single
+    # PREFILL_STANDALONE_CHUNKED_SLOT (default 0), preserving the original behavior.
+    if os.environ.get("PREFILL_STANDALONE_CHUNKED_ALL_SLOTS", "0") == "1":
+        slot_ids = list(range(NUM_USERS))
+    else:
+        slot_ids = [int(os.environ.get("PREFILL_STANDALONE_CHUNKED_SLOT", "0")) % NUM_USERS]
     total_len = n_chunks * chunk_size
     assert total_len <= seq_len_cache, (
         f"{n_chunks} chunks x {chunk_size} = {total_len} exceeds per-user cache max_seq_len={seq_len_cache}; "
@@ -329,7 +335,7 @@ def run_standalone_chunked_prefill_loop(pipeline: TtDeepSeekPrefillPipeline) -> 
 
     logger.info(
         f"[standalone-chunked] trace={trace_dir} n_chunks={n_chunks} chunk_size={chunk_size} "
-        f"total_len={total_len} slot={slot_id} cache={seq_len_cache} sp={sp} layers={num_layers}"
+        f"total_len={total_len} slots={slot_ids} num_users={NUM_USERS} cache={seq_len_cache} sp={sp} layers={num_layers}"
     )
 
     with open(trace_dir / "metadata.json") as f:
@@ -339,29 +345,52 @@ def run_standalone_chunked_prefill_loop(pipeline: TtDeepSeekPrefillPipeline) -> 
         len(token_ids_full) == total_len
     ), f"trace metadata has {len(token_ids_full)} tokens but need {total_len}; lower PREFILL_STANDALONE_CHUNKED_NCHUNKS"
 
-    # --- Drive chunked prefill: one CHUNK_SIZE chunk per pipeline.prefill, advancing kv_actual. ---
-    _t0 = _time.perf_counter()
-    for c in range(n_chunks):
-        kv_actual = c * chunk_size
-        pipeline.prefill(
-            prepare_prefill_input_tensor(
-                token_ids_full[kv_actual : kv_actual + chunk_size],
-                mesh_device,
-                cfg.sp_factor,
-                cfg.is_balanced,
-                cfg.mesh_shape,
-                cfg.sp_axis,
-            ),
-            slot_id=slot_id,
-            kv_actual_isl=kv_actual,
-        )
-        logger.info(f"[standalone-chunked] prefilled chunk {c + 1}/{n_chunks} (kv_actual={kv_actual})")
-    ttnn.synchronize_device(mesh_device)
-    dt_ms = (_time.perf_counter() - _t0) * 1000.0
-    logger.info(f"[standalone-chunked] {n_chunks} chunks prefilled in {dt_ms:.2f} ms")
+    # Prefill the golden prompt into each requested slot, then PCC-validate that slot. Run every slot
+    # before failing so all results are visible (collect failures, assert once at the end).
+    slot_min_pcc: dict[int, float] = {}
+    slot_failures: dict[int, str] = {}
+    for slot_id in slot_ids:
+        # --- Drive chunked prefill: one CHUNK_SIZE chunk per pipeline.prefill, advancing kv_actual. ---
+        _t0 = _time.perf_counter()
+        for c in range(n_chunks):
+            kv_actual = c * chunk_size
+            pipeline.prefill(
+                prepare_prefill_input_tensor(
+                    token_ids_full[kv_actual : kv_actual + chunk_size],
+                    mesh_device,
+                    cfg.sp_factor,
+                    cfg.is_balanced,
+                    cfg.mesh_shape,
+                    cfg.sp_axis,
+                ),
+                slot_id=slot_id,
+                kv_actual_isl=kv_actual,
+            )
+            logger.info(
+                f"[standalone-chunked] slot {slot_id}/{NUM_USERS}: prefilled chunk {c + 1}/{n_chunks} "
+                f"(kv_actual={kv_actual})"
+            )
+        ttnn.synchronize_device(mesh_device)
+        dt_ms = (_time.perf_counter() - _t0) * 1000.0
+        logger.info(f"[standalone-chunked] slot {slot_id}: {n_chunks} chunks prefilled in {dt_ms:.2f} ms")
 
-    # --- PCC the device KV cache against the golden kv_post_transform trace (per layer). ---
-    _kv_cache_pcc_check(pipeline, slot_id, n_chunks)
+        # --- PCC the device KV cache against the golden kv_post_transform trace (per layer). ---
+        try:
+            slot_min_pcc[slot_id] = _kv_cache_pcc_check(pipeline, slot_id, n_chunks)
+        except AssertionError as e:
+            slot_failures[slot_id] = str(e)
+            logger.error(f"[standalone-chunked] slot {slot_id} FAILED PCC: {e}")
+
+    summary = ", ".join(f"slot{s}={slot_min_pcc.get(s, float('nan')):.6f}" for s in slot_ids)
+    logger.info(f"[standalone-chunked] per-slot min PCC over {len(slot_ids)} slot(s): {summary}")
+    if slot_failures:
+        raise AssertionError(
+            f"[standalone-chunked] {len(slot_failures)}/{len(slot_ids)} slots failed PCC: "
+            + "; ".join(f"slot {s}: {m}" for s, m in slot_failures.items())
+        )
+    logger.success(
+        f"[standalone-chunked] ALL {len(slot_ids)} slot(s) PASSED (min PCC {min(slot_min_pcc.values()):.6f})"
+    )
 
 
 def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DStreamService) -> None:
