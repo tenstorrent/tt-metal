@@ -477,15 +477,29 @@ def discover_components_from_hf_id(
     tight."""
     from transformers import AutoConfig, AutoModel
 
+    try:
+        from .cpu_compat import install_cpu_compat
+    except ImportError:
+        install_cpu_compat = None
+
     kwargs: Dict[str, Any] = {"trust_remote_code": trust_remote_code}
     if revision is not None:
         kwargs["revision"] = revision
 
-    if load_weights:
-        model = AutoModel.from_pretrained(model_id, **kwargs)
-    else:
+    def _build():
+        if load_weights:
+            return AutoModel.from_pretrained(model_id, **kwargs)
         config = AutoConfig.from_pretrained(model_id, **kwargs)
-        model = AutoModel.from_config(config, trust_remote_code=trust_remote_code)
+        return AutoModel.from_config(config, trust_remote_code=trust_remote_code)
+
+    if install_cpu_compat is not None:
+        install_cpu_compat()
+    try:
+        model = _build()
+    except ImportError:
+        if install_cpu_compat is None or not install_cpu_compat():
+            raise
+        model = _build()
     try:
         return discover_components(model)
     finally:

@@ -374,16 +374,22 @@ def _extract_components_from_module_tree(
 
         discovered = discover_components_from_hf_id(new_model_id)
     except Exception as exc:
-        # 2026-06-04 Fix 2: route to stderr so the caller (_refresh_plan)
-        # sees this even when stdout is captured. Previously this print
-        # went to stdout, which subprocess.run captures into proc.stdout
-        # and _refresh_plan discarded — making the failure invisible.
         import sys as _sys
 
-        print(
-            f"  [module-tree] skipped for {new_model_id!r}: " f"{type(exc).__name__}: {exc}",
-            file=_sys.stderr,
+        bar = "=" * 72
+        banner = (
+            f"\n{bar}\n"
+            f"  MODEL FAILED TO LOAD — cannot inspect {new_model_id!r}\n"
+            f"{bar}\n"
+            f"  reason: {type(exc).__name__}: {exc}\n"
+            f"  This is NOT 'the model has no components' — the tool could not\n"
+            f"  even construct the model on CPU. If this is a missing accelerator\n"
+            f"  package (e.g. mamba-ssm / causal-conv1d), add a pure-CPU stand-in\n"
+            f"  in scripts/tt_hw_planner/cpu_compat.py so the model opens on CPU.\n"
+            f"{bar}"
         )
+        for _stream in (_sys.stderr, _sys.stdout):
+            print(banner, file=_stream)
         return []
     if not discovered:
         return [

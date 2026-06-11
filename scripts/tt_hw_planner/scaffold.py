@@ -298,6 +298,7 @@ def plan_scaffold(new_model_id: str, *, force_already_supported: bool = False) -
             bringup_plan=bplan_esc,
         )
 
+    _be = None
     try:
         from .family_backends import pick_backend
 
@@ -306,7 +307,11 @@ def plan_scaffold(new_model_id: str, *, force_already_supported: bool = False) -
             model_type=(probe.raw_config or {}).get("model_type"),
             pipeline_tag=getattr(probe, "pipeline_tag", None),
         )
-        if _be is not None and getattr(_be, "routing_mode", "") == "generic":
+        if (
+            _be is not None
+            and getattr(_be, "routing_mode", "") == "generic"
+            and not getattr(_be, "use_module_tree", False)
+        ):
             raise ColdStartScaffoldError(
                 new_model_id,
                 f"{new_model_id} uses a GENERIC LLM/VLM backend "
@@ -321,6 +326,9 @@ def plan_scaffold(new_model_id: str, *, force_already_supported: bool = False) -
         raise
     except Exception:
         pass
+
+    if _be is not None and getattr(_be, "use_module_tree", False):
+        return _plan_demo_folder_scaffold(new_model_id=new_model_id, probe=probe)
 
     sibling_id = compat.similar_supported_model
     if not sibling_id:
