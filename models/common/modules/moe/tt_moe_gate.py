@@ -131,9 +131,21 @@ class TTMoEGate:
 
         self.compute_kernel_config = self._matmul_compute_config(matmul_compute_config)
 
+        # Op path: pad the router weight (+ linear bias) to the block size UP FRONT so the matmul directly
+        # emits padded_experts-wide logits — this avoids a per-forward ttnn.pad (its dispatch + memory copy
+        # dominated the gate latency). Phantom columns are zero (their logit = 0); the phantom score-correction
+        # bias (_PAD_NEG in tt_bias) is what ranks them last, so the zero logit is harmless. (The fallback runs
+        # ttnn.topk over the REAL experts, so it keeps the unpadded weight — padding would add phantom experts
+        # to the topk.)
+        if not self.use_fallback and num_experts < self._padded_experts:
+            pad_cols = self._padded_experts - num_experts
+            torch_gate_weight = torch.nn.functional.pad(torch_gate_weight, (0, pad_cols))  # [hidden, padded_experts]
+            if torch_gate_proj_bias is not None:
+                torch_gate_proj_bias = torch.nn.functional.pad(torch_gate_proj_bias, (0, pad_cols))  # [padded_experts]
+
         # --- router weight (replicated, DRAM) ---
         self.tt_gate_weight = ttnn.from_torch(
-            torch_gate_weight,  # [hidden, num_experts]
+            torch_gate_weight,  # [hidden, num_experts] (op path: padded to [hidden, padded_experts])
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
@@ -144,7 +156,9 @@ class TTMoEGate:
         self.tt_gate_proj_bias = None
         if torch_gate_proj_bias is not None:
             self.tt_gate_proj_bias = ttnn.from_torch(
-                torch_gate_proj_bias.reshape(1, num_experts),  # [1, num_experts] (ttnn.linear bias)
+                torch_gate_proj_bias.reshape(
+                    1, -1
+                ),  # [1, num_experts] (op path: [1, padded_experts]) — ttnn.linear bias
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
@@ -299,18 +313,17 @@ class TTMoEGate:
                 tt_x, self.tt_gate_weight, bias=self.tt_gate_proj_bias, compute_kernel_config=self.compute_kernel_config
             )
 
+        # logits is already padded_experts-wide (the router weight was padded up front, see __init__) — no
+        # per-forward ttnn.pad. Phantom columns are zero; the phantom bias (_PAD_NEG in tt_bias) ranks them
+        # last regardless of their (bounded) score, so they never enter the top-k.
+
         # 1a) external score transform (sqrtsoftplus, deepseek-v4): score = sqrt(softplus(logit)). Applied
         #     here (no in-kernel op) and fed to the gate op with enable_sigmoid=False; the op then adds bias,
-        #     ranks, and linearly renormalizes. Done before the phantom-pad so phantom logits stay _PAD_NEG.
+        #     ranks, and linearly renormalizes. (Phantom cols are 0 → bounded score → ranked out by the bias.)
         if self.score_transform == "sqrtsoftplus":
             # standard softplus log(1+e^x): beta=1, threshold=20 (matches torch's defaults / the golden).
             logits = ttnn.sqrt(ttnn.softplus(logits, beta=1.0, threshold=20.0))
 
-        # 1b) pad the experts dim up to num_blocks×256 (256 single-face, or 512 for the 2-block combine).
-        #     Phantom experts get _PAD_NEG so they rank last (their bias in tt_bias is also _PAD_NEG); they
-        #     never enter the top-k.
-        if self.num_experts < self._padded_experts:
-            logits = ttnn.pad(logits, [(0, 0), (0, 0), (0, 0), (0, self._padded_experts - self.num_experts)], _PAD_NEG)
         total_batch = logits.shape[2]
 
         # 2) the gate op is one-token-per-core: pad batch to a multiple of the core count and
