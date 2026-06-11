@@ -144,7 +144,7 @@ is_valid_config() {
     return 1
 }
 
-SEP=$'\x1f'   # field separator for test entry records (group/filter/config/envvars)
+SEP=$'\x1f'   # field separator for test entry records (group/filter/config/envvars/gtest_repeat)
 ENV_SEP='|'  # separator between env KEY=value pairs (yq join() does not interpret \u escapes)
 EMPTY_ENV='-'  # TSV placeholder for empty env (bash read collapses consecutive tab fields)
 declare -a test_entries=()
@@ -326,6 +326,8 @@ for entry in "${test_entries[@]}"; do
 
     gtest_log_args=()
     logger_env=()
+    json_file=""
+    log_file=""
     if [[ -n "$LOG_DIR" ]]; then
         log_base="$LOG_DIR/${config}_${group}_${resolved_name}"
         count="${log_base_counts["$log_base"]-0}"
@@ -334,9 +336,11 @@ for entry in "${test_entries[@]}"; do
         if [[ $count -gt 1 ]]; then
             log_base="${log_base}_${count}"
         fi
-        gtest_log_args+=("--gtest_output=json:${log_base}.json")
-        logger_env=(env "TT_METAL_LOGGER_FILE=${log_base}.log")
-        echo "  TT_METAL_LOGGER_FILE=${log_base}.log"
+        json_file="${log_base}.json"
+        log_file="${log_base}.log"
+        gtest_log_args+=("--gtest_output=json:${json_file}")
+        logger_env=(env "TT_METAL_LOGGER_FILE=${log_file}")
+        echo "  TT_METAL_LOGGER_FILE=${log_file}"
     fi
 
     test_start=$SECONDS
@@ -344,9 +348,9 @@ for entry in "${test_entries[@]}"; do
     "${logger_env[@]}" "$binary" --gtest_filter="$filter" "${gtest_repeat_args[@]}" "${gtest_log_args[@]}" || rc=$?
 
     elapsed=$((SECONDS - test_start))
-    record_gtest_result "$label" "$elapsed" "$rc" "${log_base}.json"
-    if [[ $rc -ne 0 ]]; then
-        echo "  LOG: ${log_base}.log"
+    record_gtest_result "$label" "$elapsed" "$rc" "$json_file"
+    if [[ $rc -ne 0 && -n "$log_file" ]]; then
+        echo "  LOG: $log_file"
     fi
 
     # Clean up per-test env vars

@@ -76,11 +76,11 @@ unit_tests_debug_tools:
   - filter: "*TestWatcherWaypoints"
     config: 1x3
 
-# Hangs
+# Hangs. Tracked by https://github.com/tenstorrent/tt-metal/issues/44129
 #  - filter: "*TestWatcherTileCounterLogRemapper*"
 #    config: 1x3
 
-# Hangs
+# Hangs. Tracked by https://github.com/tenstorrent/tt-metal/issues/44129
 #  - filter: "*TestWatcherTileCounterLogBypass*"
 #    config: 1x3
 
