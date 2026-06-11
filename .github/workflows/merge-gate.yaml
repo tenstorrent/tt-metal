@@ -525,7 +525,12 @@ jobs:
       test-name: ${{ matrix.test-group.name }}
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner_label }}
-      runs-on-labels: ${{ toJSON(matrix.test-group.runs_on) }}
+      runs-on-labels: >-
+        ${{
+          (github.event_name == 'merge_group' && matrix.test-group.sku == 'bh_p150b_civ2')
+            && '["tt-ubuntu-2204-P150b-viommu-prio-stable"]'
+            || toJSON(matrix.test-group.runs_on)
+        }}
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       dispatch-mode: ${{ matrix.test-group.dispatch_mode }}
