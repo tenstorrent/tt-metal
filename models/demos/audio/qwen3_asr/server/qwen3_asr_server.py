@@ -87,8 +87,15 @@ def _infer(wav, force, max_new_tokens=200):
     audio_embeds = tt_enc.encode_mel(mel, STATE["enc"], STATE["dev"]).float()
     inp = STATE["embed"][input_ids].clone()
     mask = (input_ids == AUDIO_TOKEN_ID)
-    if int(mask.sum()) != audio_embeds.shape[0]:
-        audio_embeds = audio_embeds[:int(mask.sum())]  # guard length mismatch on edges
+    n_mask = int(mask.sum())
+    # Encoder output length should equal the audio-token count; it is >= it by construction
+    # (last partial chunk padded to 13 then masked, matching the reference). Guard BOTH
+    # directions so a future mismatch degrades instead of 500-ing.
+    if audio_embeds.shape[0] > n_mask:
+        audio_embeds = audio_embeds[:n_mask]
+    elif audio_embeds.shape[0] < n_mask:
+        pad = torch.zeros(n_mask - audio_embeds.shape[0], audio_embeds.shape[1])
+        audio_embeds = torch.cat([audio_embeds, pad], 0)
     inp[mask] = audio_embeds
     # use_trace=False in the long-lived server: per-request trace capture/release is
     # not yet robust across many calls (TODO: capture the decode trace once and reuse).
@@ -175,10 +182,13 @@ async def transcribe(file: UploadFile = File(...), model: str = Form("qwen3-asr"
     with _LOCK:
         t0 = time.time()
         if dur <= SINGLE_CAP:
-            text, lang, _ = _infer(wav, force)
-            text = "" if _hallucinated(text) else text
-            langs = [lang] if text else []
-            nseg = 1
+            if _rms(wav) < SIL_RMS:               # non-speech upload -> empty (matches chunk path)
+                text, langs, nseg = "", [], 1
+            else:
+                text, lang, _ = _infer(wav, force)
+                text = "" if _hallucinated(text) else text
+                langs = [lang] if text else []
+                nseg = 1
         else:
             segs = _segment(wav)
             nseg = len(segs)
@@ -192,6 +202,11 @@ async def transcribe(file: UploadFile = File(...), model: str = Form("qwen3-asr"
                     parts.append(tx); langs.append(lg)
             text = " ".join(parts)
         dt = time.time() - t0
-    lang = Counter(langs).most_common(1)[0][0] if langs else (force or "")
+    # forced language: the tag lives in the prompt, not the generated tokens, so _parse
+    # returns "" — echo the requested language instead. Auto-detect: majority vote.
+    if force:
+        lang = force
+    else:
+        lang = Counter(langs).most_common(1)[0][0] if langs else ""
     return {"text": text, "language": lang, "duration": round(dur, 2),
             "rtf": round(dt / max(dur, 1e-3), 3), "segments": nseg, "model": model}
