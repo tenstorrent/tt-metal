@@ -30,32 +30,38 @@ constexpr uint32_t cb_k = tt::CBIndex::c_1;
 constexpr uint32_t cb_w = tt::CBIndex::c_2;
 constexpr uint32_t cb_mask = tt::CBIndex::c_3;
 constexpr uint32_t cb_qk = tt::CBIndex::c_24;
-constexpr uint32_t cb_mul = tt::CBIndex::c_25;
 constexpr uint32_t cb_acc = tt::CBIndex::c_26;
 constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
 // qk subblock height (head rows per DEST pass); first per-kernel compile-time arg.
 constexpr uint32_t heads_per_dest_pass = get_compile_time_arg_val(num_common_ct_args);
+// heads buffered in cb_qk per matmul/mul phase chunk (cb_qk capacity, multiple of HP).
+constexpr uint32_t qk_batch_heads = get_compile_time_arg_val(num_common_ct_args + 1);
 
-/**
- * qk_cb = relu(q_cb[head_in_group..+heads_per_dest_pass) of row r @ k_cb col c^T): one subblock;
- * relu applied by the packer on the way out of DEST. head_in_group is the head
- * offset within the resident group (0..heads_per_group).
- * q blocks are [q_tiles_per_unit][heads_per_group][head_dim_tiles] so the
- * subblock's head rows stride head_dim_tiles - one matmul_block.
- */
+// The per-(r,c) head reduction runs as two phases per head group: matmul_phase fills cb_qk
+// with the group's relu(q.kT) tiles, then mul_accum_phase multiplies by the gates and packs
+// each head onto the single accumulator tile via L1-accumulation. Splitting the phases lets
+// the matmul<->eltwise reconfig + init happen once per group (set_matmul_mode / set_mul_mode)
+// instead of once per head pass.
+
+/** Configure srcA<-k, srcB<-q and matmul mode for the group's matmul phase; cb_qk packs overwrite.
+ *  matmul maps in1->srcA, in0->srcB (matmul.h hw_configure(in1, in0)) -- swapping the reconfig
+ *  misreads k when its format differs from q (invisible for bf16 k, corrupts bfp8 k). */
 template <uint32_t q_cb, uint32_t k_cb, uint32_t qk_cb>
-void relu_qk_subblock(uint32_t head_in_group, uint32_t r, uint32_t c) {
-    // Precondition: q_cb has a q group produced (resident), k_cb has the k chunk produced (resident)
-    // Postcondition: qk_cb has heads_per_dest_pass produced
-    // matmul maps in1 -> srcA, in0 -> srcB (matmul.h hw_configure(in1, in0)), so reconfig
-    // srcA from k and srcB from q -- swapping these misreads k when its format differs from q
-    // (invisible for bf16 k, corrupts bfp8 k: its exponent bytes are read as bf16).
+inline void set_matmul_mode() {
     reconfig_data_format(k_cb, q_cb);
     pack_reconfig_data_format(qk_cb);
-    pack_reconfig_l1_acc(0);  // overwrite cb_qk (mul_accumulate_pass leaves L1-acc on for cb_acc)
+    pack_reconfig_l1_acc(0);  // cb_qk packs overwrite (mul phase turns L1-acc on for cb_acc)
     mm_block_init_short(
         q_cb, k_cb, 1 /*transpose k*/, 1 /*ct_dim*/, heads_per_dest_pass /*rt_dim*/, head_dim_tiles /*kt_dim*/);
+    pack_relu_config(ReluConfig::zero());  // relu in the packer for the whole matmul phase
+}
+
+/** One DEST pass of the matmul phase: qk_cb += relu(q_cb[head..+HP] of row r @ k_cb col c^T).
+ *  q blocks are [q_tiles_per_unit][heads_per_group][head_dim_tiles] so the subblock's head rows
+ *  stride head_dim_tiles. Assumes set_matmul_mode() was called for the group. */
+template <uint32_t q_cb, uint32_t k_cb, uint32_t qk_cb>
+void matmul_relu_pass(uint32_t head_in_group, uint32_t r, uint32_t c) {
     tile_regs_acquire();
     const uint32_t q_base = (r * heads_per_group + head_in_group) * head_dim_tiles;
     for (uint32_t d = 0; d < head_dim_tiles; ++d) {
@@ -73,31 +79,29 @@ void relu_qk_subblock(uint32_t head_in_group, uint32_t r, uint32_t c) {
     tile_regs_commit();
     cb_reserve_back(qk_cb, heads_per_dest_pass);
     tile_regs_wait();
-    // relu in the packer; every other pack must stay linear (negative gates, -inf masks)
-    pack_relu_config(ReluConfig::zero());
     for (uint32_t h = 0; h < heads_per_dest_pass; ++h) {
         pack_tile(h, qk_cb);
     }
-    pack_relu_config(ReluConfig::none());
     tile_regs_release();
     cb_push_back(qk_cb, heads_per_dest_pass);
 }
 
-/**
- * acc_cb tile 0 += sum_h relu(qk_cb[h]) * bcast_cols(w_cb[w_base + h]) for one DEST pass,
- * accumulated by the packer (pack_reconfig_l1_acc): each head's relu*w packs straight from
- * DEST onto acc tile 0, so there is no cb_mul and no per-head add_tiles L1 round-trip.
- * `first` is the very first pass of the output tile: it seeds acc (l1_acc off on head 0)
- * before accumulating the rest. Caller reserves/pushes acc_cb and resets l1_acc afterwards.
- */
+/** Configure srcA<-qk, srcB<-w and bcast-mul mode for the group's mul+accumulate phase. */
 template <uint32_t qk_cb, uint32_t w_cb, uint32_t acc_cb>
-void mul_accumulate_pass(uint32_t w_base, bool first) {
-    // Precondition: qk_cb has heads_per_dest_pass produced; acc_cb has 1 reserved (by caller)
-    // Postcondition: qk_cb consumed; acc_cb tile 0 holds the running head sum (still reserved)
-    cb_wait_front(qk_cb, heads_per_dest_pass);
+inline void set_mul_mode() {
+    pack_relu_config(ReluConfig::none());  // accumulator packs stay linear (negative gates)
     reconfig_data_format(qk_cb, w_cb);
     pack_reconfig_data_format(acc_cb);
     mul_bcast_cols_init_short(qk_cb, w_cb);
+}
+
+/** One DEST pass of the mul+accumulate phase: acc_cb tile 0 += sum_h relu(qk_cb[h]) * w[w_base+h],
+ *  accumulated by the packer (pack_reconfig_l1_acc) straight from DEST -- no cb_mul, no per-head
+ *  add_tiles round-trip. `first` is the very first pass of the output tile and seeds acc (l1_acc
+ *  off on head 0). Caller reserves/pushes acc_cb and resets l1_acc afterwards. */
+template <uint32_t qk_cb, uint32_t w_cb, uint32_t acc_cb>
+void mul_accum_pass(uint32_t w_base, bool first) {
+    cb_wait_front(qk_cb, heads_per_dest_pass);
     tile_regs_acquire();
     for (uint32_t h = 0; h < heads_per_dest_pass; ++h) {
         mul_tiles_bcast_cols(qk_cb, w_cb, h, w_base + h, h);
@@ -174,12 +178,22 @@ void kernel_main() {
                     if constexpr (stream_heads) {
                         cb_wait_front(cb_q, q_group_tiles);
                     }
-                    for (uint32_t head = 0; head < heads_per_group; head += heads_per_dest_pass) {
-                        // w is laid out [q_tiles_per_unit][num_heads] (see reader read_w_group)
-                        const uint32_t w_base = r * num_heads + group_start + head;
-                        relu_qk_subblock<cb_q, cb_k, cb_qk>(head, r, c);
-                        mul_accumulate_pass<cb_qk, cb_w, cb_acc>(w_base, first);
-                        first = false;
+                    // process the group in qk_batch_heads-sized chunks (cb_qk capacity): each
+                    // chunk runs all its matmuls, then all its mul+accumulates, so the
+                    // matmul<->eltwise reinit happens once per chunk, not per head pass
+                    for (uint32_t chunk = 0; chunk < heads_per_group; chunk += qk_batch_heads) {
+                        const uint32_t chunk_end = chunk + qk_batch_heads;
+                        set_matmul_mode<cb_q, cb_k, cb_qk>();
+                        for (uint32_t head = chunk; head < chunk_end; head += heads_per_dest_pass) {
+                            matmul_relu_pass<cb_q, cb_k, cb_qk>(head, r, c);
+                        }
+                        set_mul_mode<cb_qk, cb_w, cb_acc>();
+                        for (uint32_t head = chunk; head < chunk_end; head += heads_per_dest_pass) {
+                            // w is laid out [q_tiles_per_unit][num_heads] (see reader read_w_group)
+                            const uint32_t w_base = r * num_heads + group_start + head;
+                            mul_accum_pass<cb_qk, cb_w, cb_acc>(w_base, first);
+                            first = false;
+                        }
                     }
                     if constexpr (stream_heads) {
                         cb_pop_front(cb_q, q_group_tiles);
