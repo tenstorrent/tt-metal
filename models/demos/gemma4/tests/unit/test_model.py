@@ -544,7 +544,6 @@ def test_full_model_decode(mesh_device, reset_seeds, request):
         rot_mat_idxs=device_inputs[2],
         page_table=device_inputs[3],
         kv_cache=tt_kv_cache,
-        sampling_on_device=False,
     )
     if is_mesh and tp > 1:
         shards = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(logits)]
@@ -648,7 +647,6 @@ def _build_decode_harness(mesh_device, model_path, decode_pos, max_seq_len=8192,
             rot_mat_idxs=inputs["position_int32"],
             page_table=page_table_tt,
             kv_cache=tt_kv_cache,
-            sampling_on_device=False,
             pli_combined=inputs.get("pli"),
         )
         return logits
@@ -990,15 +988,13 @@ def test_single_decode(mesh_device, reset_seeds, request):
         return inputs
 
     def _decode(inputs):
-        # sampling_on_device=False: profile the model forward (incl. lm_head +
-        # all-gather), not the sampling generator.
+        # Profile the model forward (incl. lm_head + all-gather), not the sampling generator.
         logits, _ = model.ttnn_decode_forward(
             x=inputs["embeds"],
             current_pos=inputs["position"],
             rot_mat_idxs=inputs["position_int32"],
             page_table=page_table_tt,
             kv_cache=tt_kv_cache,
-            sampling_on_device=False,
             pli_combined=inputs.get("pli"),
         )
         return logits
