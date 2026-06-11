@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import json
 import os
 from typing import Dict
 
@@ -15,6 +16,31 @@ from ..config import MeshConfig
 from ..tt.ccl import CCLManager
 from ..tt.model_config import ModelArgs
 from ..utils.general_utils import get_default_num_links
+
+# Bundled MiniMax-M2 config.json (dims only — no model code is vendored). HF-reference
+# tests that need the actual modeling classes load them from a real checkpoint via
+# HF_MODEL (see requires_hf_reference below).
+_CONFIG_JSON = os.path.join(os.path.dirname(__file__), "..", "configs", "MiniMax-M2", "config.json")
+
+
+def minimax_config_dims() -> dict:
+    """Load MiniMax-M2 dimension constants from the bundled config.json (no HF needed)."""
+    with open(_CONFIG_JSON) as f:
+        return json.load(f)
+
+
+_HF_MODEL = os.getenv("HF_MODEL")
+# Tests that compare against the HuggingFace reference need the model's modeling code,
+# which ships WITH the checkpoint (loaded at runtime via trust_remote_code) — we do NOT
+# vendor it into the repo. Point HF_MODEL at a downloaded MiniMax-M2 checkpoint to run them.
+requires_hf_reference = pytest.mark.skipif(
+    not (_HF_MODEL and os.path.isdir(_HF_MODEL)),
+    reason="set HF_MODEL to a downloaded MiniMax-M2 checkpoint (carries modeling_minimax_m2.py) to run HF-reference tests",
+)
+
+
+def hf_model_path() -> str:
+    return _HF_MODEL
 
 
 class TestFactory:

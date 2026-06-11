@@ -19,27 +19,23 @@ HF reference: MiniMaxM2SparseMoeBlock.route_tokens_to_experts.
 Runs at mesh (1,1)/TP=1.
 """
 
-import os
 
 import pytest
 import torch
 from loguru import logger
-from transformers import AutoConfig
 
 import ttnn
 from models.common.utility_functions import comp_pcc
 
-from ..test_factory import parametrize_mesh_with_fabric
-
-CONFIG_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "configs", "MiniMax-M2")
+from ..test_factory import minimax_config_dims, parametrize_mesh_with_fabric
 
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
 @pytest.mark.parametrize("seq_len", [128], ids=["s128"])
 @pytest.mark.parametrize("use_bias", [False, True], ids=["no_bias", "score_bias"])
 def test_router_vs_hf(mesh_device, device_params, seq_len, use_bias, reset_seeds):
-    config = AutoConfig.from_pretrained(CONFIG_DIR, trust_remote_code=True)
-    H, E, K = config.hidden_size, config.num_local_experts, config.num_experts_per_tok
+    cfg = minimax_config_dims()
+    H, E, K = cfg["hidden_size"], cfg["num_local_experts"], cfg["num_experts_per_tok"]
 
     gate_w = torch.randn(E, H) * (H**-0.5)
     # Draw the bias unconditionally (then zero it) so `x` sees the same RNG offset in

@@ -12,9 +12,10 @@ This is the first test that exercises the WHOLE layer wired together:
 Reduced expert count (256 -> 32) so the HF reference fits in host RAM and the run
 is fast; bf8 expert weights to isolate wiring/logic from bfp4 quantization.
 Runs at mesh (1,1)/TP=1/EP=1.
-"""
 
-import os
+MiniMax-M2's modeling code ships WITH the checkpoint (not vendored). Set HF_MODEL to a
+downloaded MiniMax-M2 checkpoint to run this; otherwise it skips.
+"""
 
 import pytest
 import torch
@@ -31,23 +32,23 @@ from models.demos.minimax_m2.tt.model import create_rope_setup
 from models.demos.minimax_m2.utils.general_utils import get_default_num_links
 from models.demos.minimax_m2.utils.weight_conversion import convert_hf_qkv_to_meta_format_partial
 
-from ..test_factory import parametrize_mesh_with_fabric
-
-CONFIG_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "configs", "MiniMax-M2")
+from ..test_factory import hf_model_path, parametrize_mesh_with_fabric, requires_hf_reference
 
 
+@requires_hf_reference
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
 @pytest.mark.parametrize("seq_len", [128], ids=["s128"])
 def test_decoder_layer_prefill_vs_hf(mesh_device, device_params, seq_len, reset_seeds):
-    config = AutoConfig.from_pretrained(CONFIG_DIR, trust_remote_code=True)
+    ref_path = hf_model_path()
+    config = AutoConfig.from_pretrained(ref_path, trust_remote_code=True)
     config._attn_implementation = "eager"
     # Reduce experts so the HF reference (a ModuleList of MLPs) fits in host RAM.
     config.num_local_experts = 32
     config.num_experts_per_tok = 8
     H = config.hidden_size
 
-    DecoderRef = get_class_from_dynamic_module("modeling_minimax_m2.MiniMaxM2DecoderLayer", CONFIG_DIR)
-    RotRef = get_class_from_dynamic_module("modeling_minimax_m2.MiniMaxM2RotaryEmbedding", CONFIG_DIR)
+    DecoderRef = get_class_from_dynamic_module("modeling_minimax_m2.MiniMaxM2DecoderLayer", ref_path)
+    RotRef = get_class_from_dynamic_module("modeling_minimax_m2.MiniMaxM2RotaryEmbedding", ref_path)
 
     # --- HF reference layer ---
     ref_layer = DecoderRef(config, layer_idx=0).eval()

@@ -11,12 +11,9 @@ card, and bfloat8_b weights to isolate the compute logic from bfp4 quantization
 (bfp4 accuracy is validated separately later). Runs at mesh (1,1)/TP=1/EP=1.
 """
 
-import os
-
 import pytest
 import torch
 from loguru import logger
-from transformers import AutoConfig
 
 import ttnn
 from models.common.utility_functions import comp_pcc
@@ -26,16 +23,14 @@ from models.demos.minimax_m2.tt.expert_configs import MiniMaxM2ExpertProgramConf
 from models.demos.minimax_m2.tt.experts import ExpertConfig, Experts
 from models.demos.minimax_m2.utils.general_utils import get_default_num_links
 
-from ..test_factory import parametrize_mesh_with_fabric
-
-CONFIG_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "configs", "MiniMax-M2")
+from ..test_factory import minimax_config_dims, parametrize_mesh_with_fabric
 
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
 @pytest.mark.parametrize("seq_len", [128], ids=["s128"])
 def test_experts_prefill_vs_hf(mesh_device, device_params, seq_len, reset_seeds):
-    config = AutoConfig.from_pretrained(CONFIG_DIR, trust_remote_code=True)
-    H, I = config.hidden_size, config.intermediate_size
+    cfg = minimax_config_dims()
+    H, I = cfg["hidden_size"], cfg["intermediate_size"]
     E, K = 32, 8  # reduced expert count (tile-aligned) for a single-card test
 
     scale = H**-0.5

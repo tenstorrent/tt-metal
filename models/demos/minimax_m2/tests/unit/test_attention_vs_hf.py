@@ -6,16 +6,14 @@ Tier-2 module-by-module PCC tests for MiniMax-M2:
 build the HuggingFace reference module + the TT module from the SAME random weights
 and compare outputs by PCC.
 
-MiniMax-M2 is a trust_remote_code model, so the reference classes are loaded from
-the vendored modeling_minimax_m2.py next to configs/MiniMax-M2/config.json
-(requires transformers==4.57.1; see models/demos/minimax_m2/requirements.txt).
+MiniMax-M2 is a trust_remote_code model: its modeling code ships WITH the checkpoint
+(not vendored into this repo). Set HF_MODEL to a downloaded MiniMax-M2 checkpoint to
+run these; otherwise they skip. (transformers==4.57.1 — see requirements.txt.)
 
 These instantiate the full HF config (62 layers' worth of dims) but build only a
 single attention module, so they run at mesh (1,1) / TP=1 on a single card. The
 TP>1 / CCL paths need a multi-card system.
 """
-
-import os
 
 import pytest
 import torch
@@ -33,21 +31,21 @@ from models.demos.minimax_m2.tt.model import create_rope_setup
 from models.demos.minimax_m2.utils.general_utils import get_default_num_links
 from models.demos.minimax_m2.utils.weight_conversion import convert_hf_qkv_to_meta_format_partial
 
-from ..test_factory import parametrize_mesh_with_fabric
-
-CONFIG_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "configs", "MiniMax-M2")
+from ..test_factory import hf_model_path, parametrize_mesh_with_fabric, requires_hf_reference
 
 
+@requires_hf_reference
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
 @pytest.mark.parametrize("seq_len", [128], ids=["s128"])
 def test_attention_prefill_vs_hf(mesh_device, device_params, seq_len, reset_seeds):
     """Full attention block (QKV -> qk-norm -> partial RoPE -> SDPA -> o_proj) vs HF reference."""
-    config = AutoConfig.from_pretrained(CONFIG_DIR, trust_remote_code=True)
+    ref_path = hf_model_path()
+    config = AutoConfig.from_pretrained(ref_path, trust_remote_code=True)
     config._attn_implementation = "eager"
     hidden = config.hidden_size
 
-    AttnRef = get_class_from_dynamic_module("modeling_minimax_m2.MiniMaxM2Attention", CONFIG_DIR)
-    RotRef = get_class_from_dynamic_module("modeling_minimax_m2.MiniMaxM2RotaryEmbedding", CONFIG_DIR)
+    AttnRef = get_class_from_dynamic_module("modeling_minimax_m2.MiniMaxM2Attention", ref_path)
+    RotRef = get_class_from_dynamic_module("modeling_minimax_m2.MiniMaxM2RotaryEmbedding", ref_path)
 
     # --- HF reference ---
     ref_attn = AttnRef(config, layer_idx=0).eval()
