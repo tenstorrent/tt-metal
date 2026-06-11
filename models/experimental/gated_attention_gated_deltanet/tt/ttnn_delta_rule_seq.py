@@ -209,7 +209,7 @@ def _solve_lower_triangular_ttnn(L, eye_1cc, mesh_device):
         fp32_dest_acc_en=True,
         packer_l1_acc=False,
     )
-    mc = ttnn.DRAM_MEMORY_CONFIG
+    mc = ttnn.L1_MEMORY_CONFIG
 
     C = L.shape[1]
     batch = L.shape[0]
