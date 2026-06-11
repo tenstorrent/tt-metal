@@ -261,15 +261,30 @@ def _reshape_tt(x: ttnn.Tensor, shape: list) -> ttnn.Tensor:
 
 @dataclass
 class KVCache:
-    """Simple KV cache for TTVibeVoiceLM."""
+    """Fixed-size KV cache for TTVibeVoiceLM.
 
-    keys: List[Optional[ttnn.Tensor]]  # per-layer, [B, n_kv_heads, S_past, head_dim]
+    Each layer keeps a preallocated DRAM tensor ``[B, n_kv_heads, max_seq, head_dim]``
+    (TILE, bf16).  Prefill writes its slice with ``ttnn.fill_cache`` (offset 0) and
+    decode writes one token per step with ``ttnn.update_cache`` at the absolute
+    position.  ``ttnn.transformer.scaled_dot_product_attention_decode`` reads the
+    valid prefix bounded by ``cur_pos`` — so the tensor shape stays static (trace-
+    friendly) and per-step cost is O(1) in emitted-token count.  This is what lets
+    the model scale to 64k context / ~40k generated tokens without the old
+    concat-grown cache (O(S) realloc/step) or the fp32 GQA materialization.
+    """
+
+    keys: List[Optional[ttnn.Tensor]]  # per-layer, [B, n_kv_heads, max_seq, head_dim]
     values: List[Optional[ttnn.Tensor]]  # per-layer
-    seq_len: int = 0
+    max_seq: int = 0
+
+
+def _round_up(x: int, m: int) -> int:
+    return ((x + m - 1) // m) * m
 
 
 def create_kv_cache(n_layers: int) -> KVCache:
-    return KVCache(keys=[None] * n_layers, values=[None] * n_layers, seq_len=0)
+    """Empty cache (tensors allocated lazily by TTVibeVoiceLM.alloc_kv_cache)."""
+    return KVCache(keys=[None] * n_layers, values=[None] * n_layers, max_seq=0)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -283,15 +298,53 @@ class TTVibeVoiceLM:
     forward() methods operate exclusively on ttnn.Tensor.
     """
 
+    # KV-cache seq length is rounded up to this multiple so the fused SDPA-decode
+    # auto k_chunk_size (must be a multiple of 32 and divide the padded length)
+    # always has clean divisors.
+    _KV_ALIGN = 256
+
     def __init__(self, weights: LMWeights, device):
         self.w = weights
         self.device = device
         self.cfg = weights.config
+        self.scale = 1.0 / math.sqrt(self.cfg.head_dim)
         # Precompute full RoPE tables on device once (sliced per call via ttnn.slice)
         max_len = self.cfg.max_position_embeddings
         self._cos_tt, self._sin_tt = _build_rope_cache_tt(max_len, self.cfg.head_dim, device, self.cfg.rope_theta)
-        # Causal mask cache keyed by (S, S_total) — populated lazily, lives on device
+        # Causal-mask cache for the fp32 prefill path, keyed by (S, S_total).
         self._mask_cache: Dict[Tuple[int, int], ttnn.Tensor] = {}
+
+    def alloc_kv_cache(self, max_seq: int, dtype: ttnn.DataType = ttnn.bfloat16) -> KVCache:
+        """Preallocate a fixed-size KV cache sized to ``max_seq`` (rounded up).
+
+        Shape per layer: ``[1, n_kv_heads, max_seq_aligned, head_dim]`` TILE/DRAM.
+        """
+        cfg = self.cfg
+        max_seq_aligned = _round_up(max(max_seq, self._KV_ALIGN), self._KV_ALIGN)
+        n_kv = cfg.num_key_value_heads
+        head_dim = cfg.head_dim
+        keys: List[ttnn.Tensor] = []
+        values: List[ttnn.Tensor] = []
+        for _ in range(cfg.num_hidden_layers):
+            keys.append(
+                ttnn.zeros(
+                    [1, n_kv, max_seq_aligned, head_dim],
+                    dtype=dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            )
+            values.append(
+                ttnn.zeros(
+                    [1, n_kv, max_seq_aligned, head_dim],
+                    dtype=dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            )
+        return KVCache(keys=keys, values=values, max_seq=max_seq_aligned)
 
     def _embed(self, input_ids) -> ttnn.Tensor:
         """Device embedding lookup via ttnn.embedding. Returns [B, 1, S, hidden] TILE.
@@ -347,17 +400,13 @@ class TTVibeVoiceLM:
 
         # Reshape [B, 1, S, n*hd] → [B, S, n, hd] then permute → [B, n, S, hd]
         # Matches PyTorch: view(B, S, n, hd).transpose(1, 2)
-        q = _reshape_tt(q, [B, S, n_heads, head_dim])
-        q = ttnn.permute(q, (0, 2, 1, 3))  # [B, n_heads, S, hd]
-        k = _reshape_tt(k, [B, S, n_kv, head_dim])
-        k = ttnn.permute(k, (0, 2, 1, 3))  # [B, n_kv, S, hd]
-        v = _reshape_tt(v, [B, S, n_kv, head_dim])
-        v = ttnn.permute(v, (0, 2, 1, 3))  # [B, n_kv, S, hd]
+        q = ttnn.permute(_reshape_tt(q, [B, S, n_heads, head_dim]), (0, 2, 1, 3))  # [B, n_heads, S, hd]
+        k = ttnn.permute(_reshape_tt(k, [B, S, n_kv, head_dim]), (0, 2, 1, 3))  # [B, n_kv, S, hd]
+        v = ttnn.permute(_reshape_tt(v, [B, S, n_kv, head_dim]), (0, 2, 1, 3))  # [B, n_kv, S, hd]
 
-        # Apply RoPE on device; cos/sin: [1, 1, S_total, head_dim]
+        # Apply RoPE on device (validated fp32 path); cos/sin sliced [start_pos : start_pos+S].
         if cos_sin_tt is not None:
             cos_tt, sin_tt = cos_sin_tt
-            S_cos = cos_tt.shape[2]
             c = ttnn.slice(
                 cos_tt, [0, 0, start_pos, 0], [1, 1, start_pos + S, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
@@ -367,51 +416,60 @@ class TTVibeVoiceLM:
             q = _apply_rope_ttnn(q, c, s)
             k = _apply_rope_ttnn(k, c, s)
 
-        # KV cache update (stores ttnn tensors)
-        if kv_cache is not None:
-            if kv_cache.keys[layer_idx] is None:
-                kv_cache.keys[layer_idx] = k
-                kv_cache.values[layer_idx] = v
-            else:
-                kv_cache.keys[layer_idx] = ttnn.concat(
-                    [kv_cache.keys[layer_idx], k], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG
-                )
-                kv_cache.values[layer_idx] = ttnn.concat(
-                    [kv_cache.values[layer_idx], v], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG
-                )
-            k = kv_cache.keys[layer_idx]
-            v = kv_cache.values[layer_idx]
-
-        S_total = k.shape[2]
-
-        # GQA: repeat_interleave KV heads to match Q heads → [B, n_heads, S_total, hd]
-        repeat = n_heads // n_kv
-        k_slices = []
-        v_slices = []
-        for kv_idx in range(n_kv):
-            kh = ttnn.slice(
-                k, [0, kv_idx, 0, 0], [B, kv_idx + 1, S_total, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
-            )
-            vh = ttnn.slice(
-                v, [0, kv_idx, 0, 0], [B, kv_idx + 1, S_total, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
-            )
-            for _ in range(repeat):
-                k_slices.append(kh)
-                v_slices.append(vh)
-        k = ttnn.concat(k_slices, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        v = ttnn.concat(v_slices, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        # Scaled dot-product attention — upcast to float32 for precision
-        scale = 1.0 / math.sqrt(head_dim)
-        q_f32 = ttnn.typecast(q, ttnn.float32)
-        k_f32 = ttnn.typecast(k, ttnn.float32)
-        v_f32 = ttnn.typecast(v, ttnn.float32)
-        k_t = ttnn.permute(k_f32, (0, 1, 3, 2))  # [B, n_heads, hd, S_total]
-        scores = ttnn.matmul(q_f32, k_t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        scores = ttnn.mul(scores, scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        # Causal mask for prefill (S > 1) — cached by (S, S_total), populated lazily
         if S > 1:
+            # ── Prefill: fp32 manual attention reading the fixed-cache prefix ──
+            # The chunk's K/V is written into the preallocated cache at its (tile-
+            # aligned) offset, then we read the whole [0:start_pos+S] prefix and run
+            # the reference-parity fp32 path (GQA materialize + fp32 matmul/softmax).
+            # This keeps prefill numerics identical to the original (PCC >= 0.99);
+            # bf16 flash-SDPA prefill compounds to ~0.984 over 28 layers.  Prefill is
+            # one-time, so the fp32 cost is acceptable.
+            if kv_cache is not None and kv_cache.keys[layer_idx] is not None:
+                # Write this chunk's K/V into the fixed cache and attend over the prefix.
+                ttnn.fill_cache(kv_cache.keys[layer_idx], k, 0, update_idx=start_pos)
+                ttnn.fill_cache(kv_cache.values[layer_idx], v, 0, update_idx=start_pos)
+                S_total = start_pos + S
+                k_all = ttnn.slice(
+                    kv_cache.keys[layer_idx],
+                    [0, 0, 0, 0],
+                    [B, n_kv, S_total, head_dim],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                v_all = ttnn.slice(
+                    kv_cache.values[layer_idx],
+                    [0, 0, 0, 0],
+                    [B, n_kv, S_total, head_dim],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            else:
+                # No allocated cache (single-shot prefill, e.g. PCC tests): attend within
+                # this forward only.  start_pos is 0 in this case.
+                S_total = S
+                k_all, v_all = k, v
+
+            # GQA: repeat_interleave KV heads → [B, n_heads, S_total, hd]
+            repeat = n_heads // n_kv
+            k_slices, v_slices = [], []
+            for kv_idx in range(n_kv):
+                kh = ttnn.slice(
+                    k_all, [0, kv_idx, 0, 0], [B, kv_idx + 1, S_total, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
+                vh = ttnn.slice(
+                    v_all, [0, kv_idx, 0, 0], [B, kv_idx + 1, S_total, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
+                for _ in range(repeat):
+                    k_slices.append(kh)
+                    v_slices.append(vh)
+            k_rep = ttnn.concat(k_slices, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            v_rep = ttnn.concat(v_slices, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+            q_f32 = ttnn.typecast(q, ttnn.float32)
+            k_f32 = ttnn.typecast(k_rep, ttnn.float32)
+            v_f32 = ttnn.typecast(v_rep, ttnn.float32)
+            k_t = ttnn.permute(k_f32, (0, 1, 3, 2))  # [B, n_heads, hd, S_total]
+            scores = ttnn.matmul(q_f32, k_t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            scores = ttnn.mul(scores, self.scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
             cache_key = (S, S_total)
             if cache_key not in self._mask_cache:
                 mask = np.triu(np.full((S, S_total), float("-inf"), dtype=np.float32), k=S_total - S + 1)
@@ -424,14 +482,37 @@ class TTVibeVoiceLM:
                 )
             scores = ttnn.add(scores, self._mask_cache[cache_key], memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        attn = ttnn.softmax(scores, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        out = ttnn.matmul(attn, v_f32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        out = ttnn.typecast(out, ttnn.bfloat16)
-
-        # Reshape [B, n_heads, S, hd] → [B, 1, S, n_heads*hd]
-        # Inverse: permute (0,2,1,3) → [B, S, n_heads, hd], then reshape [B, 1, S, n_heads*hd]
-        out = ttnn.permute(out, (0, 2, 1, 3))  # [B, S, n_heads, hd]
-        out = _reshape_tt(out, [B, 1, S, n_heads * head_dim])
+            attn = ttnn.softmax(scores, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            out = ttnn.matmul(attn, v_f32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            out = ttnn.typecast(out, ttnn.bfloat16)
+            out = _reshape_tt(ttnn.permute(out, (0, 2, 1, 3)), [B, 1, S, n_heads * head_dim])
+        else:
+            # ── Decode: write one token at start_pos, then fused flash-decode over the
+            # cache prefix.  GQA handled natively (no KV-head materialization, no fp32
+            # blow-up); reads only the valid prefix bounded by ``cur_pos``.  ~flat in
+            # emitted-token count → scales to 64k ctx / ~40k tokens, and is trace-ready.
+            #
+            # Precision note: the op is bf16-only (rejects fp32).  Its attention is
+            # numerically excellent (decode hidden PCC 0.9997 vs HF Qwen2) but, being
+            # bf16 vs the fp32 CPU reference, it flips a few *greedy near-ties* among the
+            # constrained tokens (free-running token_match ~0.977).  For this generative
+            # TTS that is a different-but-valid generation, not degraded audio — validated
+            # by the forced-token audio-parity gate (test_e2e_generate_pcc.py).  A grouped
+            # fp32 manual decode matches tokens exactly but measured 358 ms/step (slower
+            # than the old 202 ms), so it is not used.  See PERF_OPTIMIZATION_NOTES.md.
+            assert kv_cache is not None and kv_cache.keys[layer_idx] is not None, "decode needs an allocated KV cache"
+            ttnn.update_cache(kv_cache.keys[layer_idx], k, start_pos)  # k: [1, n_kv, 1, hd]
+            ttnn.update_cache(kv_cache.values[layer_idx], v, start_pos)
+            q_dec = ttnn.permute(q, (0, 2, 1, 3))  # [1, B, n_heads, hd] for sdpa_decode
+            attn = ttnn.transformer.scaled_dot_product_attention_decode(
+                q_dec,
+                kv_cache.keys[layer_idx],
+                kv_cache.values[layer_idx],
+                cur_pos=[start_pos],
+                scale=self.scale,
+                compute_kernel_config=_HIFI4,
+            )  # [1, B, n_heads, hd]
+            out = _reshape_tt(attn, [B, 1, S, n_heads * head_dim])
 
         # Output projection
         out = ttnn.linear(out, layer_w.wo, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -549,7 +630,13 @@ class TTVibeVoiceLM:
         chunk_size: int = 256,
         return_last_hidden: bool = False,
     ) -> Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]:
-        """Prefill with merged embeddings, chunked to fit L1 on long sequences."""
+        """Chunked prefill (fp32 manual attention, reference-parity precision).
+
+        Each chunk's K/V is written into the fixed cache at its (tile-aligned, multiple
+        of ``chunk_size``) offset and the chunk attends to the whole prefix read back
+        from the cache — bounding the fp32 score matrix to ``[n_heads, chunk, S_total]``.
+        ``chunk_size`` must be a multiple of 32 (fill_cache offset alignment).
+        """
         S = inputs_embeds.shape[2]
         if S <= chunk_size:
             return self.forward(
