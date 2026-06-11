@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+import os
 from pathlib import Path
 
 import torch
@@ -329,10 +330,11 @@ class VoxtralTTAcousticModel:
         for n_m in (1, 2):  # bsz=1 → 1 M-tile, bsz=2 → 2 M-tiles
             self._rms_prg_cfg_by_m[n_m], self._rms_shard_cfg_by_m[n_m] = _make_rms_cfg(n_m)
 
-        # BFP8_B weights: 2× bandwidth reduction vs BF16 with same 1D-mcast program configs.
-        # DS sharding requires fuse_batch semantics that 1D-mcast provides but DS does not;
-        # the acoustic FM input (2,1,3,dim) needs per_core_M=2 via fuse_batch, which DS cannot match.
-        _fm_wdtype = ttnn.bfloat8_b
+        _fm_wdtype = (
+            ttnn.bfloat16
+            if os.environ.get("VOXTRAL_ACOUSTIC_WEIGHT_DTYPE", "bfp8").strip().lower() in ("bf16", "bfloat16")
+            else ttnn.bfloat8_b
+        )
 
         self.attentions = [
             VoxtralTTAttention(
@@ -685,36 +687,27 @@ class VoxtralTTAcousticModel:
 
         is_end = ttnn.eq(semantic_code_tt, self._end_audio_token_id_tt)
 
-        # End-audio frame: ttnn.where on uint32 zeros false-branch (TTNN bug).
-        # Fix: cast uint32→int32, mask on device, cast back — no CPU download needed.
         if ttnn.to_torch(is_end).reshape(-1).bool().any():
-            empty_code = self._empty_audio_token_id + self._acoustic_special_token_offset
-            # Step 1: cast uint32 → int32 so ttnn.where works correctly.
             sem_i32 = ttnn.typecast(semantic_code_tt, ttnn.int32, memory_config=self._fm_dram_mem_config)
             ac_i32 = ttnn.typecast(acoustic_tt, ttnn.int32, memory_config=self._fm_dram_mem_config)
             ttnn.deallocate(semantic_code_tt)
             ttnn.deallocate(acoustic_tt)
-            # Step 2: broadcast is_end [B,1,1] → [B,1,n_acoustic_out] for element-wise mask.
             is_end_exp = ttnn.repeat(is_end, (1, 1, self.n_acoustic_out))
             ttnn.deallocate(is_end)
-            # Step 3: fill tensor for masked (end-audio) positions.
-            empty_tt = ttnn.from_torch(
-                torch.full((bsz, 1, self.n_acoustic_out), empty_code, dtype=torch.int32),
-                device=self.mesh_device,
-                dtype=ttnn.int32,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=self._fm_dram_mem_config,
-            )
-            # Step 4: mask — where is_end → empty_code, else keep original acoustic code.
-            masked_i32 = ttnn.where(is_end_exp, empty_tt, ac_i32, memory_config=self._fm_dram_mem_config)
+            empty_tt = self._empty_acoustic_output_codes_tt
+            if bsz != 1:
+                empty_tt = ttnn.repeat(empty_tt, (bsz, 1, 1))
+            empty_i32 = ttnn.typecast(empty_tt, ttnn.int32, memory_config=self._fm_dram_mem_config)
+            if empty_tt is not self._empty_acoustic_output_codes_tt and empty_tt.is_allocated():
+                ttnn.deallocate(empty_tt)
+            ac_masked_i32 = ttnn.where(is_end_exp, empty_i32, ac_i32, memory_config=self._fm_dram_mem_config)
             ttnn.deallocate(is_end_exp)
-            ttnn.deallocate(empty_tt)
+            ttnn.deallocate(empty_i32)
             ttnn.deallocate(ac_i32)
-            # Step 5: cast back to uint32 and concat with semantic code.
             sem_u32 = ttnn.typecast(sem_i32, ttnn.uint32, memory_config=self._fm_dram_mem_config)
-            ac_masked = ttnn.typecast(masked_i32, ttnn.uint32, memory_config=self._fm_dram_mem_config)
+            ac_masked = ttnn.typecast(ac_masked_i32, ttnn.uint32, memory_config=self._fm_dram_mem_config)
             ttnn.deallocate(sem_i32)
-            ttnn.deallocate(masked_i32)
+            ttnn.deallocate(ac_masked_i32)
             codes_tt = ttnn.concat([sem_u32, ac_masked], dim=2, memory_config=self._fm_dram_mem_config)
             ttnn.deallocate(sem_u32)
             ttnn.deallocate(ac_masked)
