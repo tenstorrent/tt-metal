@@ -83,6 +83,12 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     // reduction via SFPU mul_unary_tile inside the compute kernel.
     const bool use_post_mul = operation_attributes.post_mul_scaler != 1.0f;
 
+    // Int32 max/min use the SFPU reduce path (GMPOOL has no Int32 support).
+    // The host already lowers reduce_min to math_op=MAX + negate=true (see reduce_op.cpp::reduce_min),
+    // so this single check covers both MAX and MIN.
+    const bool use_sfpu_reduce_path = a.dtype() == DataType::INT32 && operation_attributes.math_op == ReduceOpMath::MAX;
+    const bool use_fpu_negate = operation_attributes.negate && !use_sfpu_reduce_path;
+
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     auto num_cols = NC * Wt;
     uint32_t num_cores;
@@ -190,7 +196,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
             .tensor = &a,
         });
     } else {
-        uint32_t num_input_tiles = operation_attributes.negate ? chunk_size : 2;
+        uint32_t num_input_tiles = use_fpu_negate ? chunk_size : 2;
         desc.cbs.push_back(CBDescriptor{
             .total_size = num_input_tiles * src0_single_tile_size,
             .core_ranges = all_cores,
@@ -238,7 +244,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
             .tensor = &output,
         });
     } else {
-        uint32_t num_output_tiles = operation_attributes.negate ? chunk_size : 2;
+        uint32_t num_output_tiles = use_fpu_negate ? chunk_size : 2;
         desc.cbs.push_back(CBDescriptor{
             .total_size = num_output_tiles * dst_single_tile_size,
             .core_ranges = all_cores,
@@ -253,7 +259,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     // Packed fp32 scalar passed to the compute kernel for mul_unary_tile post-reduction scaling.
     uint32_t post_mul_scaler_bits = std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler);
 
-    if (operation_attributes.negate) {
+    if (use_fpu_negate) {
         // The reduce_h_neg kernel pushes ntiles tiles per inner-loop iteration
         // via push_back(ntiles).  The CB FIFO write pointer only wraps when
         // wr_ptr exactly reaches fifo_limit, so it is not enough for the CB
@@ -349,6 +355,8 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
         reduce_defines["REDUCE_POST_MUL"] = "1";
     }
 
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+
     KernelDescriptor reader_desc;
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
@@ -440,6 +448,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
         };
     }
 
+    // MIN on Int32 uses -MAX(-x) in reduce_h_neg.
     const std::string compute_kernel =
         rm_path ? std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_rm.cpp")
                 : std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce") +
@@ -455,6 +464,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = dst_full_sync_en,
+        .unpack_to_dest_mode = unpack_to_dest_mode,
     };
 
     std::optional<KernelDescriptor> compute_desc_g2;
@@ -485,6 +495,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = dst_full_sync_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
         };
         compute_desc_g2 = std::move(d);
     }

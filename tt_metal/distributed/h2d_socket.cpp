@@ -136,6 +136,13 @@ void H2DSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_devic
 }
 
 void H2DSocket::init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device, uint32_t pcie_alignment) {
+    if (h2d_mode_ != H2DMode::HOST_PUSH) {
+        // DEVICE_PULL: data FIFO lives in pinned host memory; no device-side L1
+        // allocation needed.
+        write_ptr_ = 0;
+        return;
+    }
+
     auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager();
     auto* recv_device = mesh_device->get_device(recv_core_.device_coord);
     if (svc.claimed_cores(recv_device->id()).contains(recv_core_.core_coord)) {

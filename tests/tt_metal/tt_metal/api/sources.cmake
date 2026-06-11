@@ -71,5 +71,6 @@ set(UNIT_TESTS_API_SOURCES
     test_descriptor_patching.cpp
     test_duplicate_kernel.cpp
     test_core_local_mem_api.cpp
+    test_zero_memory_api.cpp
     disaggregation/test_kv_chunk_address_table.cpp
 )

@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
@@ -31,17 +32,16 @@ inline void dispatch_metadata_local_device(
     noc_async_atomic_barrier();
 }
 
-void zero_buffer_async(uint32_t write_addr, int bytes) {
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    while (bytes > 0) {
-        uint32_t curr_bytes = std::min(bytes, MEM_ZEROS_SIZE);
-        noc_async_read(zeros_noc_addr, write_addr, curr_bytes);
-        write_addr += curr_bytes;
-        bytes -= curr_bytes;
-    }
+void zero_buffer_async(uint32_t cb_id, uint32_t bytes) {
+    Noc noc;
+    CircularBuffer cb(cb_id);
+    noc.async_write_zeros(cb, bytes);
 }
 
-void zero_buffer_barrier() { noc_async_read_barrier(); }
+void zero_buffer_barrier() {
+    Noc noc;
+    noc.write_zeros_l1_barrier();
+}
 
 // Bidirectional multicast write - sends same payload to all devices on ring via multicast in both directions
 // Handles payloads larger than max packet size by splitting into multiple packets
@@ -964,7 +964,7 @@ void kernel_main() {
 
     uint32_t send_preparation_buffer_address = get_write_ptr(send_preparation_buffer_cb_id);
     detail::zero_buffer_async(
-        send_preparation_buffer_address, (token_end_idx - token_start_idx) * num_devices * sizeof(uint8_t));
+        send_preparation_buffer_cb_id, (token_end_idx - token_start_idx) * num_devices * sizeof(uint8_t));
 
     constexpr ReplicateGroup axis = ReplicateGroup(AXIS);
     constexpr uint32_t row = linearized_mesh_coord / mesh_cols;
