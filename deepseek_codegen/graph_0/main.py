@@ -5006,33 +5006,44 @@ def _main(activations, weights):
             math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True
         ),
     )
-    # E_shard: matmul_31 reduce_scatter+all_gather (2-CCL all_reduce) -> all_gather+sum (1 CCL).
     ttnn_reshape_154 = ttnn.reshape(
         ttnn_matmul_31,
-        [1, 32, 2048],
+        [1, 1, 32, 2048],
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
     ttnn.deallocate(ttnn_matmul_31, False)
-    ttnn_mm31_ag = ttnn.all_gather(
+    ttnn_reduce_scatter_11 = ttnn.reduce_scatter(
         input_tensor=ttnn_reshape_154,
-        dim=0,
+        dim=3,
+        cluster_axis=1,
+        subdevice_id=None,
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        num_links=None,
+        topology=ttnn.Topology.Ring,
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        ),
+    )
+    ttnn.deallocate(ttnn_reshape_154, False)
+    ttnn_reshape_155 = ttnn.reshape(
+        ttnn_reduce_scatter_11,
+        [32, 256],
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+    )
+    ttnn.deallocate(ttnn_reduce_scatter_11, False)
+    ttnn_all_gather_29 = ttnn.all_gather(
+        input_tensor=ttnn_reshape_155,
+        dim=1,
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         num_links=None,
         topology=ttnn.Topology.Ring,
     )
-    ttnn.deallocate(ttnn_reshape_154, False)
-    ttnn_all_gather_29 = ttnn.sum(
-        ttnn_mm31_ag,
-        [0],
-        False,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
-        ),
-    )
-    ttnn.deallocate(ttnn_mm31_ag, False)
+    ttnn.deallocate(ttnn_reshape_155, False)
     ttnn_typecast_102 = ttnn.typecast(
         ttnn_all_gather_29,
         ttnn.DataType.FLOAT32,
