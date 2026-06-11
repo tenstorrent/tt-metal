@@ -27,9 +27,9 @@ class GateComputeMode(Enum):
     Each can independently run on device (TTNN) or host (torch).
     The device gate has two precision variants: bf16 (default) and fp32.
 
-    The device gate routing rule is selected from the model config: with a single
-    expert group (n_expert_groups == 1, e.g. Kimi) grouped routing collapses to a
-    plain ttnn.topk; otherwise the grouped-gate kernel is used.
+    The device gate routing rule is selected from the model config: the grouped-topk
+    op handles both cases, collapsing to a plain top-k when there is a single expert
+    group (n_expert_groups == 1, e.g. Kimi) and using grouped routing otherwise.
     """
 
     DEVICE = "device"  # matmul device, gate device (bf16)
@@ -473,64 +473,6 @@ class TtMoEGatePrefill(LightweightModule):
         ttnn.deallocate(bias_f32)
         return ttnn_scores, ttnn_top_k_experts_indices
 
-    def _device_topk_gate(self, logits: ttnn.Tensor, fp32: bool = False) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Plain top-k routing for single-group models (n_expert_groups == 1).
-
-        With one expert group the grouped routing in ``grouped_gate_golden`` is a
-        no-op (the only group is always selected), so it collapses to:
-            scores  = sigmoid(logits)
-            biased  = scores + bias                 # bias used for selection only
-            indices = topk(biased, n_activated_experts)
-            weights = gather(scores, indices)       # weights from UNBIASED scores
-            weights = weights / (sum(weights) + eps) * route_scale
-
-        When ``fp32`` is True, sigmoid/bias/gather/normalize run in float32 for
-        tighter PCC; only the ``ttnn.topk`` selection runs in bf16 (the op does
-        not accept fp32 input). Output weights are returned in bf16 to match the
-        grouped-gate device path.
-
-        Returns (scores, indices) matching the grouped-gate device path.
-        """
-        n_activated = self.config.n_activated_experts
-        epsilon = 1e-20
-
-        if fp32:
-            logits_f32 = ttnn.typecast(logits, ttnn.float32)
-            bias = ttnn.typecast(self.bias, ttnn.float32)
-            scores = ttnn.sigmoid(logits_f32)
-            ttnn.deallocate(logits_f32)
-        else:
-            bias = self.bias
-            scores = ttnn.sigmoid(logits)
-
-        biased = ttnn.add(scores, bias)
-        if fp32:
-            ttnn.deallocate(bias)
-
-        # ttnn.topk requires bf16 input; the values are discarded since the final
-        # weights come from the unbiased sigmoid scores.
-        biased_bf16 = ttnn.typecast(biased, ttnn.bfloat16) if fp32 else biased
-        _, indices = ttnn.topk(biased_bf16, k=n_activated, dim=-1, largest=True, sorted=True)
-        ttnn.deallocate(biased)
-        if fp32:
-            ttnn.deallocate(biased_bf16)
-
-        # Gather unbiased scores at the selected expert indices: (tokens, k).
-        chosen = ttnn.gather(scores, dim=-1, index=indices)
-        ttnn.deallocate(scores)
-
-        # Normalize so the top-k weights sum to 1 per token, then apply route scale.
-        denom = ttnn.sum(chosen, dim=-1, keepdim=True)
-        denom = ttnn.add(denom, epsilon)
-        weights = ttnn.div(chosen, denom)
-        ttnn.deallocate(chosen)
-        ttnn.deallocate(denom)
-        weights = ttnn.mul(weights, self.config.route_scale)
-        if fp32:
-            weights = ttnn.typecast(weights, ttnn.bfloat16)
-
-        return weights, indices
-
     def _host_grouped_gate(self, host_logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Run grouped_gate_golden on host. Returns (indices, scores)."""
         return self.reference_model.grouped_gate_golden(
@@ -562,17 +504,18 @@ class TtMoEGatePrefill(LightweightModule):
 
         # ---- Phase 2: Grouped gate ----
         signpost(header="moe_gate_grouped_gate")
-        # Single expert group (e.g. Kimi) collapses grouped routing to a plain top-k.
+        # The device gate kernels select the routing rule from n_expert_groups: with a single expert
+        # group (n_expert_groups == 1, e.g. Kimi) the grouped-topk op collapses to a plain top-k.
         single_group = self.config.n_expert_groups == 1
         if mode == GateComputeMode.DEVICE:
+            # The bf16 grouped gate (deepseek_grouped_gate) only supports the multi-group DeepSeek
+            # shape; single-group models route through moe_grouped_topk (fp32), which handles n_groups == 1.
             ttnn_scores, ttnn_top_k_experts_indices = (
-                self._device_topk_gate(logits) if single_group else self._device_grouped_gate(logits)
+                self._device_grouped_gate_fp32(logits) if single_group else self._device_grouped_gate(logits)
             )
 
         elif mode == GateComputeMode.DEVICE_FP32:
-            ttnn_scores, ttnn_top_k_experts_indices = (
-                self._device_topk_gate(logits, fp32=True) if single_group else self._device_grouped_gate_fp32(logits)
-            )
+            ttnn_scores, ttnn_top_k_experts_indices = self._device_grouped_gate_fp32(logits)
 
         elif mode == GateComputeMode.HOST_GROUPED_GATE:
             host_logits = self._compose_logits_to_host(logits)
