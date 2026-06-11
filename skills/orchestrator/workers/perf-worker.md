@@ -209,10 +209,21 @@ Use the standard JSON last-line contract. Pre-pend prose with:
 The decode step competes on op count. After tracing, audit per-layer
 decode ops against the decode-specific fused kernels and apply each
 where shapes allow (parity gate after each):
-`nlp_create_qkv_heads_decode` / `nlp_concat_heads_decode`,
-decode-mode `rotary_embedding_llama`, `scaled_dot_product_attention_decode`
-(when activations fit bf16 — pre-scale Q to tame attention sinks before
-rejecting it), and `all_gather_matmul` for row-parallel projections.
+
+- `nlp_create_qkv_heads_decode` / `nlp_concat_heads_decode` — on
+  **Blackhole**, stage bf16 QKV input in L1 before calling
+  `nlp_create_qkv_heads_decode` (bf16 DRAM-interleaved input silently
+  zeros odd head rows; see optimization skill Pitfalls).
+- Decode-mode `rotary_embedding_llama` (or fused matmul-rope R matrix).
+- `scaled_dot_product_attention_decode` — for attention-sink models
+  (|logit| > 1000 post-scale), **pre-scale Q in the RoPE cos/sin tables**
+  (fold 1/√head_dim in; pass scale=1.0 to SDPA), then switch to bf16
+  decode SDPA. Measured: 17.57 → 10.76 ms/step on dots.ocr QB. See
+  "Decode SDPA: bf16 with Q pre-scale" in `skills/optimization/SKILL.md`.
+- MLP all-reduce: try `all_gather(dim=1)` + `fast_reduce_nc` vs RS+AG
+  at 1-row decode shape (22% win measured; skip async CCL at 1-row).
+- `all_gather_matmul` for row-parallel output projections.
+
 "Already passing" is not a reason to skip; record measured deltas.
 
 ## Precision budget

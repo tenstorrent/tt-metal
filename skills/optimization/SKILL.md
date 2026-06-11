@@ -458,6 +458,33 @@ For GQA where K/V at `num_kv_heads` must expand to `num_q_heads` and also typeca
 
 Pure reordering, same math. Measured: 8 typecasts → 4 typecasts per decode, −22 µs/layer.
 
+## CCL patterns for decode all-reduce
+
+### `all_gather(dim=1)` + `fast_reduce_nc` beats RS+AG at 1-row shapes
+
+The standard Megatron row-parallel pattern is reduce-scatter → all_gather (RS+AG),
+which produces a replicated output. At **decode (1-row activations)** the RS shard is
+`[1, 1, 1, hidden/TP]` — tiny enough that the RS kernel setup overhead dominates.
+Replace with:
+```python
+# Replace:  all_reduce = RS + AG
+# With:     all_gather the sharded activations, then reduce on host/device
+h_gathered = ttnn.all_gather(h_sharded, dim=1, num_links=1,
+                              topology=ttnn.Topology.Linear)
+h_reduced  = ttnn.experimental.fast_reduce_nc(h_gathered, dims=[1],
+                                               output_mem_config=L1)
+```
+`all_gather(dim=1)` collects shards from all devices along the mesh dim;
+`fast_reduce_nc` reduces across that dim in a single kernel.
+
+Measured (dots.ocr QB, MLP all-reduce, decode): **RS+AG = 30.80 µs → AG+reduce = 24.02 µs (−22%)**.
+
+**Async CCL is not a win at 1-row.** The semaphore setup cost for async
+`reduce_scatter_minimal_async` / `all_gather_async` exceeds the pipelining benefit
+at 1-token batch size. Measured: async was slower than synchronous AG+reduce at
+this shape. Only switch to async CCL when the per-step kernel time is ≫ the
+semaphore overhead (~several µs).
+
 ## Compute kernel config (standard recipe)
 
 ```python
@@ -481,6 +508,16 @@ Measured (qwen3_tts CP, 5 layers):
 - Binary 89 → 67 µs (−25%)
 
 Caveat: a *partial* fp32 path (e.g. fp32 KV cache fed by bf16 K/V producers) provides no benefit — the storage dtype only matters when its producer matches.
+
+### Norm gamma weights must stay fp32
+
+When switching activations to bf16, keep `rms_norm`/`layer_norm` gamma (and beta)
+weights in **fp32**. Converting gammas to bf16 forces the norm kernel onto an
+interleaved-norm dispatch path that is measurably slower than the fp32-gamma sharded
+path — gammas stay resident in cache anyway, so the dtype does not save DRAM traffic.
+
+Measured (dots.ocr QB): bf16 gammas regressed wall time ~10% vs fp32 gammas at
+the same activation dtype. Always upload: `rms_norm_weight.to(torch.float32)`.
 
 ### Safe partial change: bf16 initial upload with fp32 activations
 
@@ -537,6 +574,52 @@ seq, full e2e WER parity for the guarded short-seq path.
 
 Measured (dots.ocr prefill, seq=2912): manual fp32 → bf16 flash SDPA,
 prefill 486 → 269 ms (same commit as bf16 initial upload above).
+
+### Decode SDPA: bf16 with Q pre-scale (attention-sink models)
+
+At decode time a **single query row sees the full key set including attention-sink
+tokens**. Unlike prefill — where the sink logit is diluted row-by-row across many
+queries — the decode query always hits the full ±3122 logit (dots.ocr: layer-0
+key[0] peak after `scale=1/√head_dim`), so bf16 softmax overflows regardless of
+seq length. Two changes unlock bf16 decode SDPA:
+
+**1. Pre-scale Q at init** — fold `1/sqrt(head_dim)` into the Q section of the RoPE
+cos/sin tables rather than applying it inside SDPA. After RoPE, Q magnitudes are
+÷sqrt(head_dim), so ±3122 → ±276 before bf16 softmax sees them. Use `scale=1.0` in
+the decode SDPA call (prescaling already done):
+```python
+# In build_full_rope_table (once at init):
+decode_q_prescale = 1.0 / math.sqrt(head_dim)
+cos_table[:, : num_q_heads_per_device * head_dim] *= decode_q_prescale
+sin_table[:, : num_q_heads_per_device * head_dim] *= decode_q_prescale
+# Pass scale=1.0 to scaled_dot_product_attention_decode
+```
+
+**2. KV cache → bf16** — once Q is pre-scaled the logits fit bf16. Switch the KV
+cache from fp32 to bf16; this also halves KV-cache DRAM traffic.
+
+Program config (Blackhole, TP=4, GQA nkv=2 replicated to 8 per device):
+```python
+prog_cfg = ttnn.SDPAMultiCoreProgramConfig(
+    compute_with_storage_grid_size=(8, 8),
+    q_chunk_size=num_q_heads_per_device,   # e.g. 4 (16 total ÷ TP=4)
+    k_chunk_size=num_kv_heads_per_device,  # e.g. 8 (nkv=2 replicated 4×)
+)
+compute_cfg = ttnn.init_device_compute_kernel_config(
+    device.arch(),
+    math_fidelity=ttnn.MathFidelity.HiFi2,  # HiFi2 safe after Q prescaling
+    fp32_dest_acc_en=True,
+    packer_l1_acc=True,
+)
+```
+
+⚠️ **Prerequisite**: `nlp_create_qkv_heads_decode` silently zeros odd head rows
+when its input is bf16 DRAM-interleaved on Blackhole (NoC alignment bug — see
+Pitfalls). Stage the QKV output in L1 before the heads op or this change
+produces wrong answers.
+
+Measured (dots.ocr QB TP=4): **17.57 → 10.76 ms/step** (1.63×) in one REDO
+combining pre-scaled Q, bf16 KV cache, and the L1-stage heads fix.
 
 ## KV-cache update patterns
 
@@ -658,6 +741,27 @@ The depthwise conv kernel at some shapes refuses HEIGHT_SHARDED input and OOMs a
 ### Discrete vs continuous correctness
 For models with a quantizer at the end (FSQ codes, token ids), the post-quantization "code agreement" is noisy by design — sub-millith numerical differences flip codes near decision boundaries. Always report **PCC of the pre-quantization output** alongside discrete agreement; PCC ≥ 0.99 means the encoder is structurally correct even if code-agreement is in the 85-95% range.
 
+### `nlp_create_qkv_heads_decode` silently zeros odd head rows with bf16 DRAM input (Blackhole)
+
+On Blackhole, `nlp_create_qkv_heads_decode` produces zeroed output for odd-indexed
+head rows when its input is **bf16 DRAM-interleaved**. Root cause: bf16 sub-tile is
+32 B; Blackhole's DRAM NoC alignment is 64 B; odd rows start at a 32B-misaligned
+offset that the decode heads kernel does not compensate for.
+
+**Symptom**: attention output correct for even heads (0, 2, 4…), all zeros for odd
+heads (1, 3, 5…); whole-head-block PCC ~0.5.
+
+**Fix**: stage the QKV output in L1 before calling the op:
+```python
+xqkv_l1 = ttnn.to_memory_config(xqkv, ttnn.L1_MEMORY_CONFIG)
+q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
+    xqkv_l1, num_heads=..., num_kv_heads=..., ...
+)
+```
+The L1 round-trip costs ~1 µs and is required any time the QKV linear output may
+be bf16 DRAM-interleaved on Blackhole. Also a prerequisite for bf16 decode SDPA
+(see "Decode SDPA: bf16 with Q pre-scale" above).
+
 ### Single-core kernel fallback
 Any of these in the profile is a smell:
 - `LayerNormDeviceOperation` with CORE_COUNT=1
@@ -750,8 +854,12 @@ A pre-bounce to DRAM at the entry of a wrapped `TtConv1d.forward` is almost alwa
 **Compute / data types:**
 - [ ] HiFi4 + fp32_dest_acc + packer_l1_acc on every matmul/conv
 - [ ] bf16 activations end-to-end (no mid-graph fp32 enclaves that force typecasts)
+- [ ] Norm gammas (rms_norm_weight) stay fp32 even when activations go bf16
 - [ ] bf16 weights; fp32 only at boundaries if PCC demands
 - [ ] No *partial* fp32 path (fp32 KV cache fed by bf16 K/V is dead weight)
+- [ ] Attention-sink models (|logits| > 1000 post-scale): prescale Q in RoPE tables; use bf16 decode SDPA with scale=1.0
+- [ ] On Blackhole: stage `nlp_create_qkv_heads_decode` input in L1 when input is bf16 (NoC alignment bug)
+- [ ] MLP decode all-reduce: try `all_gather(dim=1)` + `fast_reduce_nc` vs RS+AG (22% win measured at 1-row); skip async CCL at 1-row batch
 
 **Memory:**
 - [ ] Persistent state (KV caches, mel features, FSQ dequant tables) pre-allocated once
