@@ -214,9 +214,7 @@ public:
                                   // Cumulative of all work performed
                                   double& total_work_runtime,
                                   uint64_t& elapsed_device_time) {
-            for (size_t cq = 0; cq < dispatch_core_telemetry_per_cq.size(); ++cq) {
-                const auto& dispatch_telemetry = dispatch_core_telemetry_per_cq[cq];
-
+            for (const auto& dispatch_telemetry : dispatch_core_telemetry_per_cq) {
                 // Uncompress the averaged work time
                 total_work_runtime += dispatch_telemetry.avg_work_runtime_per_worker * total_number_of_cores;
 
@@ -292,8 +290,7 @@ public:
             bool found_prefetch_core = false;
             bool found_dispatch_core = false;
 
-            for (size_t core_idx = 0; core_idx < cq_entries.size(); ++core_idx) {
-                const auto& core = cq_entries[core_idx];
+            for (const auto& core : cq_entries) {
                 if (core.role == CoreRole::PREFETCH || core.role == CoreRole::PREFETCH_D) {
                     auto telemetry = read_prefetch_core_telemetry(chip_, core.virtual_core);
                     if (telemetry) {
@@ -327,7 +324,7 @@ public:
         const std::vector<DispatchCoreTelemetry>& current_dispatch_core_telemetry,
         const std::vector<PrefetchCoreTelemetry>& current_prefetch_core_telemetry) {
         TT_ASSERT(
-            current_prefetch_core_telemetry.size() == current_prefetch_core_telemetry.size(),
+            current_dispatch_core_telemetry.size() == current_prefetch_core_telemetry.size(),
             "Ensure there is one of each per cq");
         DispatchTelemetryDeviceInfo device_info;
         device_info.info_cqs.resize(current_prefetch_core_telemetry.size());
@@ -336,7 +333,7 @@ public:
 
         for (size_t cq = 0; cq < current_prefetch_core_telemetry.size(); ++cq) {
             auto& cq_info = device_info.info_cqs[cq];
-            auto& prefetch_telemetry = current_prefetch_core_telemetry[cq];
+            const auto& prefetch_telemetry = current_prefetch_core_telemetry[cq];
 
             cq_info.cq_id = cq;
             cq_info.prefetch_waiting_on_upstream =
@@ -351,7 +348,7 @@ public:
         }
         for (size_t cq = 0; cq < current_dispatch_core_telemetry.size(); ++cq) {
             auto& cq_info = device_info.info_cqs[cq];
-            auto& dispatch_telemetry = current_dispatch_core_telemetry[cq];
+            const auto& dispatch_telemetry = current_dispatch_core_telemetry[cq];
 
             TT_ASSERT(cq_info.cq_id == cq, "cq_id mismatch");
 

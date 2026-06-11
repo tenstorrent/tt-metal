@@ -26,7 +26,7 @@ struct DispatchTelemetryCqInfo {
 struct DispatchTelemetryDeviceInfo {
     // Normalized utilization ratio: 1.0 = 100%, 0.0 = 0%
     // Requires worker dispatch
-    std::optional<float> utilization_since_last_read = 0;
+    std::optional<float> utilization_since_last_read = std::nullopt;
     std::vector<DispatchTelemetryCqInfo> info_cqs;
 };
 
@@ -48,8 +48,7 @@ public:
      * @brief Read device-wide dispatch telemetry derived from all command queues.
      *
      * @return Device-wide telemetry info. If there is an issue reading telemetry from the device,
-     *         a warning is logged and an empty optional is returned. If there is an issue reading telemetry
-     *         from a command queue, a warning is logged and that entry will be absent.
+     *         a warning is logged and an empty optional is returned.
      */
     std::optional<DispatchTelemetryDeviceInfo> read_info();
 

@@ -69,8 +69,8 @@ void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDe
         const auto sub_device_id = SubDeviceId{i};
         const auto& sub_device = sub_device_manager->sub_device(sub_device_id);
         workers_per_sub_device.push_back(
-            sub_device.impl()->num_cores(HalProgrammableCoreType::TENSIX) +
-            sub_device.impl()->num_cores(HalProgrammableCoreType::ACTIVE_ETH));
+            sub_device.cores(HalProgrammableCoreType::TENSIX).num_cores() +
+            sub_device.cores(HalProgrammableCoreType::ACTIVE_ETH).num_cores());
     }
     // Dynamic resolution of device types is unclean and poor design. This will be cleaned up
     // when MeshCommandQueue + HWCommandQueue are unified under the same API

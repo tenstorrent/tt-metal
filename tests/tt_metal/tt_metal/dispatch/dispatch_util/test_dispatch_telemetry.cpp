@@ -41,7 +41,7 @@ Program create_blank_program(const TCoreType& core) {
 }
 
 template <typename Func>
-void for_each_worker_core(const CoreRangeSet& worker_cores, Func&& func) {
+void for_each_worker_core(const CoreRangeSet& worker_cores, Func func) {
     for (const CoreRange& core_range : worker_cores.ranges()) {
         for (uint32_t y = core_range.start_coord.y; y <= core_range.end_coord.y; ++y) {
             for (uint32_t x = core_range.start_coord.x; x <= core_range.end_coord.x; ++x) {
@@ -189,7 +189,9 @@ protected:
     }
 
     bool worker_reached_l1_wait(
-        IDevice* device, const CoreCoord& core, std::chrono::milliseconds timeout = std::chrono::milliseconds(5000)) {
+        IDevice* device,
+        const CoreCoord& core,
+        std::chrono::milliseconds timeout = std::chrono::milliseconds(5000)) const {
         auto deadline = std::chrono::steady_clock::now() + timeout;
         std::vector<uint32_t> readback(1);
 
@@ -207,7 +209,7 @@ protected:
     bool all_workers_reached_l1_wait(
         IDevice* device,
         const CoreRangeSet& worker_cores,
-        std::chrono::milliseconds timeout = std::chrono::milliseconds(5000)) {
+        std::chrono::milliseconds timeout = std::chrono::milliseconds(5000)) const {
         auto deadline = std::chrono::steady_clock::now() + timeout;
         std::vector<uint32_t> readback(1);
 

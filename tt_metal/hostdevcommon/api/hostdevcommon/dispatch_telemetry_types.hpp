@@ -39,7 +39,7 @@ struct __attribute__((packed, aligned(4))) PrefetchCoreTelemetry {
     uint32_t command_count = 0;
 };
 
-struct __attribute__((packed, aligned(4))) DispatchCoreTelemetry {
+struct __attribute__((packed, aligned(8))) DispatchCoreTelemetry {
     uint32_t version = DISPATCH_TELEMETRY_VERSION;
     uint32_t signature = DISPATCH_CORE_TELEMETRY_SIGNATURE;
 

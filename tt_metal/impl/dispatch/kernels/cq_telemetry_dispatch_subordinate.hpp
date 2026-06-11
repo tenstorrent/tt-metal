@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include "api/compute/compute_kernel_api.h"
 #include "hostdevcommon/dispatch_telemetry_types.hpp"
 #include "tt_metal/impl/dispatch/kernels/telemetry.hpp"
@@ -187,8 +189,8 @@ FORCE_INLINE void dispatch_subordinate_telemetry() {
                     completion_count[i] = 0;
                     last_work_launch_timestamp[i] = current_last_work_launch_timestamp;
                 }
-                ASSERT(
-                    delta_sem_count <= workers_per_sub_device[i], "delta_sem_count should be on the latest workload");
+                // delta_sem_count should be on the latest workload
+                ASSERT(delta_sem_count <= workers_per_sub_device[i]);
             }
 
             stream_sem_counter[i] = curr_stream_sem_count[i] - delta_sem_count;
