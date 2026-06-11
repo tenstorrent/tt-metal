@@ -678,6 +678,52 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
     }
 
+    // Validate tensor bindings: a LOCAL-access binding requires node-local resident data.
+    // A LocalTensorView hands the kernel a base pointer into THIS node's L1 with no address
+    // generation, so the bound tensor must be L1-resident and sharded such that every node the
+    // kernel runs on holds a local shard. (REMOTE / TensorAccessor bindings carry no such
+    // constraint; they address arbitrary banks over the NoC.) Mutability is intentionally NOT
+    // checked: there is no read/write role on tensor bindings today, and l1_address() would
+    // circumvent it regardless — revisit if a cross-cutting R/W/RW concept lands in Metal 2.0.
+    for (const auto& kernel : spec.kernels) {
+        for (const auto& binding : kernel.tensor_bindings) {
+            if (binding.access_type != TensorAccessType::LOCAL) {
+                continue;
+            }
+            const TensorParameter& param = *collected.tensor_parameter_by_name.at(binding.tensor_parameter_name);
+            const MemoryConfig& mc = param.spec.memory_config();
+            TT_FATAL(
+                mc.is_l1(),
+                "KernelSpec '{}' binds TensorParameter '{}' as LOCAL (LocalTensorView), but its buffer is not "
+                "L1-resident. LOCAL requires node-local L1 data; use a REMOTE (TensorAccessor) binding for "
+                "DRAM / interleaved tensors.",
+                kernel.unique_id,
+                binding.tensor_parameter_name);
+            TT_FATAL(
+                mc.is_sharded(),
+                "KernelSpec '{}' binds TensorParameter '{}' as LOCAL, but it is not sharded. LOCAL requires a "
+                "per-node resident shard (replicated or partitioned); interleaved L1 has no fixed local base address.",
+                kernel.unique_id,
+                binding.tensor_parameter_name);
+            // Coverage: every node this kernel runs on must hold a shard. NodeRangeSet IS CoreRangeSet,
+            // so the kernel's node set and the shard grid compare directly. (Uses the legacy ShardSpec
+            // grid; NdShardSpec-only tensors are gated by L1+sharded above — full nd coverage is a TODO.)
+            if (mc.shard_spec().has_value()) {
+                const CoreRangeSet& shard_grid = mc.shard_spec()->grid;
+                const NodeRangeSet& kernel_nodes = collected.kernel_node_set.at(kernel.unique_id);
+                TT_FATAL(
+                    shard_grid.contains(kernel_nodes),
+                    "KernelSpec '{}' binds TensorParameter '{}' as LOCAL, but the kernel runs on nodes the tensor's "
+                    "shard grid does not cover, so those nodes have no local shard to address. "
+                    "Kernel nodes: {}; shard grid: {}.",
+                    kernel.unique_id,
+                    binding.tensor_parameter_name,
+                    kernel_nodes.str(),
+                    shard_grid.str());
+            }
+        }
+    }
+
     // Validate kernel thread counts
     for (const auto& kernel : spec.kernels) {
         TT_FATAL(kernel.num_threads > 0, "KernelSpec '{}' has no threads!", kernel.unique_id);
@@ -2125,6 +2171,7 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
         handle.cta_offset = cta_word_offset;
         handle.addr_crta_offset = static_cast<uint32_t>(crta_word_index * sizeof(uint32_t));
         handle.num_runtime_field_crta_words = resolved.extra_crta_words;
+        handle.is_local = (binding.access_type == KernelSpec::TensorBinding::AccessType::LOCAL);
 
         out.cta_words.insert(out.cta_words.end(), binding_ctas.begin(), binding_ctas.end());
         cta_word_offset += static_cast<uint32_t>(binding_ctas.size());

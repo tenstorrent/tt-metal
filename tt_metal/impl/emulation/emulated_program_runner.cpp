@@ -599,7 +599,7 @@ static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& 
         // num_rt_words == 0 and are unaffected. Fail loudly on dynamic-shape until
         // snapshot + cache key + get_common_vararg offset math are wired up to
         // consume the per-binding count.
-        [&s](const std::string& name, uint32_t cta_off, uint32_t addr_crta_off, uint32_t num_rt_words) {
+        [&s](const std::string& name, uint32_t cta_off, uint32_t addr_crta_off, uint32_t num_rt_words, bool is_local) {
             TT_FATAL(
                 num_rt_words == 0,
                 "Emule does not yet support dynamic-shape Metal 2.0 tensor bindings "
@@ -609,6 +609,11 @@ static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& 
                 "before enabling this path.",
                 name,
                 num_rt_words);
+            TT_FATAL(
+                !is_local,
+                "Emule does not yet support LOCAL (NodeLocalMem) tensor bindings (binding '{}'). Wire an "
+                "lm:: namespace emit into emit_metal2_namespaces (mirroring genfiles.cpp) before enabling this path.",
+                name);
             s.ta_accessors.push_back({name, cta_off, addr_crta_off});
         });
     return s;

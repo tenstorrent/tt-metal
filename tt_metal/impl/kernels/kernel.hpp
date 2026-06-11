@@ -100,7 +100,7 @@ using SemaphoreLocalAccessorHandleMap = std::unordered_map<std::string, uint16_t
 // TensorParameter name so SetProgramRunArgs can fill the binding's base-address slot
 // (and any runtime accessor fields) from the corresponding TensorArgument at enqueue time.
 struct TensorBindingHandle {
-    std::string accessor_name;          // user-facing identifier (kernel symbol in `ta::`)
+    std::string accessor_name;          // user-facing identifier (kernel symbol in `ta::` or `lm::`)
     std::string tensor_parameter_name;  // refers back to the program-level TensorParameter
     uint32_t cta_offset;                // first word index of this binding's payload in the kernel's compile-time args
     uint32_t addr_crta_offset;  // byte offset of this binding's base-address slot within the kernel's CRTA buffer
@@ -110,6 +110,8 @@ struct TensorBindingHandle {
     // is written here at enqueue time. The first runtime field word lives at byte
     // offset addr_crta_offset + sizeof(uint32_t).
     uint32_t num_runtime_field_crta_words = 0;
+    // For a TensorAccessor, is_local=false; for a NodeLocalMem-based accessor, is_local=true
+    bool is_local = false;
 };
 
 class Kernel : public JitBuildSettings {
@@ -176,7 +178,8 @@ public:
                                             const std::string& accessor_name,
                                             uint32_t cta_offset,
                                             uint32_t addr_crta_offset,
-                                            uint32_t num_runtime_field_crta_words)>) const override;
+                                            uint32_t num_runtime_field_crta_words,
+                                            bool is_local)>) const override;
     const std::vector<TensorBindingHandle>& tensor_binding_handles() const { return tensor_binding_handles_; }
     const std::vector<std::string>& get_runtime_arg_names() const override { return runtime_arg_names_; }
     const std::vector<std::string>& get_common_runtime_arg_names() const override {

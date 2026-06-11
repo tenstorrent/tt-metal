@@ -323,9 +323,15 @@ void Kernel::process_tensor_binding_handles(const std::function<void(
                                                 const std::string& accessor_name,
                                                 uint32_t cta_offset,
                                                 uint32_t addr_crta_offset,
-                                                uint32_t num_runtime_field_crta_words)> callback) const {
+                                                uint32_t num_runtime_field_crta_words,
+                                                bool is_local)> callback) const {
     for (const auto& handle : this->tensor_binding_handles_) {
-        callback(handle.accessor_name, handle.cta_offset, handle.addr_crta_offset, handle.num_runtime_field_crta_words);
+        callback(
+            handle.accessor_name,
+            handle.cta_offset,
+            handle.addr_crta_offset,
+            handle.num_runtime_field_crta_words,
+            handle.is_local);
     }
 }
 
@@ -528,6 +534,9 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(static_cast<uint64_t>(handle.cta_offset));
         hasher.update(static_cast<uint64_t>(handle.addr_crta_offset));
         hasher.update(static_cast<uint64_t>(handle.num_runtime_field_crta_words));
+        // is_local selects the emitted token namespace (lm:: NodeLocalMem vs ta:: TensorAccessor),
+        // which changes the generated header — so it must distinguish cache keys.
+        hasher.update(static_cast<uint64_t>(handle.is_local));
     }
     // Named RTA/CRTA schema: order matters (determines byte offsets), so hash the sequence.
     // Named RTA and CRTA counts also need to be hashed!

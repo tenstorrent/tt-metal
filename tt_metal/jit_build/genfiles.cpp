@@ -114,12 +114,16 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         string name;
         uint32_t cta_offset;
         uint32_t addr_crta_offset;
+        bool is_local;  // LOCAL -> NodeLocalMem (lm::); REMOTE -> TensorAccessor (ta::)
     };
     vector<TaEntry> ta_entries;
     settings.process_tensor_binding_handles(
-        [&ta_entries](const string& name, uint32_t cta_offset, uint32_t addr_crta_offset, uint32_t /*num_rt_words*/) {
-            ta_entries.push_back({name, cta_offset, addr_crta_offset});
-        });
+        [&ta_entries](
+            const string& name,
+            uint32_t cta_offset,
+            uint32_t addr_crta_offset,
+            uint32_t /*num_rt_words*/,
+            bool is_local) { ta_entries.push_back({name, cta_offset, addr_crta_offset, is_local}); });
 
     // Emit the header content:
     //  - DFB accessors are emitted into the dfb namespace
@@ -149,8 +153,16 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         if (!sem_entries.empty()) {
             content << "#include <cstdint>\n";
         }
-        if (!ta_entries.empty()) {
+        bool any_remote_ta = false;
+        bool any_local_ta = false;
+        for (const auto& entry : ta_entries) {
+            (entry.is_local ? any_local_ta : any_remote_ta) = true;
+        }
+        if (any_remote_ta) {
             content << "#include \"api/tensor/tensor_accessor.h\"\n";
+        }
+        if (any_local_ta) {
+            content << "#include \"api/core_local_mem.h\"\n";
         }
         content << "\n";
 
@@ -170,21 +182,38 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             content << "}  // namespace sem\n";
         }
 
-        if (!ta_entries.empty()) {
-            // TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>: pairs the binding's
-            // static layout metadata (TensorAccessorArgs<CTA_OFFSET>) with the byte offset of
-            // its implicit base-address CRTA. The kernel-side TensorAccessor(token) constructor
-            // unpacks both pieces.
-            //
-            // Per-binding type alias (`<name>_t`) lets the framework extend the underlying token
-            // template with extra metadata in the future without touching kernel source.
+        // REMOTE bindings -> ta:: (TensorAccessor). TensorAccessorBindingToken<CTA_OFFSET,
+        // ADDR_CRTA_OFFSET> pairs the binding's static layout metadata (TensorAccessorArgs<CTA_OFFSET>)
+        // with the byte offset of its implicit base-address CRTA; the kernel-side TensorAccessor(token)
+        // ctor unpacks both. The per-binding alias (`<name>_t`) lets the framework extend the token
+        // template with extra metadata later without touching kernel source.
+        if (any_remote_ta) {
             content << "namespace ta {\n";
             for (const auto& entry : ta_entries) {
+                if (entry.is_local) {
+                    continue;
+                }
                 content << "using " << entry.name << "_t = ::tensor_accessor::TensorAccessorBindingToken<"
                         << entry.cta_offset << "u, " << entry.addr_crta_offset << "u>;\n";
                 content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
             }
             content << "}  // namespace ta\n";
+        }
+
+        // LOCAL bindings -> lm:: (NodeLocalMem). NodeLocalMemBindingToken<ADDR_CRTA_OFFSET> carries
+        // only the base-address CRTA word — node-local L1 access hauls no layout metadata, so there
+        // is no CTA payload. The kernel-side NodeLocalMem(token) ctor reads the base address.
+        if (any_local_ta) {
+            content << "namespace lm {\n";
+            for (const auto& entry : ta_entries) {
+                if (!entry.is_local) {
+                    continue;
+                }
+                content << "using " << entry.name << "_t = ::NodeLocalMemBindingToken<" << entry.addr_crta_offset
+                        << "u>;\n";
+                content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
+            }
+            content << "}  // namespace lm\n";
         }
     }
     write_file(path, content.str());

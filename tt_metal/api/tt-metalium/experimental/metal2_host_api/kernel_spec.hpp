@@ -145,10 +145,16 @@ struct KernelSpec {
 
     // Tensor bindings
     // Declares that this kernel accesses a tensor parameter (declared at the ProgramSpec level)
-    // The kernel constructs the accessor via TensorAccessor(ta::<accessor_name>)
+    // The kernel constructs the accessor via either:
+    //   - TensorAccessor(ta::<remote_accessor_name>) - for REMOTE tensor data access (DM only)
+    //   - NodeLocalMem(lm::<local_accessor_name>)    - for LOCAL tensor data access (DM or compute)
     struct TensorBinding {
-        TensorParamName tensor_parameter_name;      // identify the TensorBinding within the ProgramSpec
-        std::string accessor_name;                  // tensor accessor name (used in the kernel source code)
+        // How the kernel accesses the tensor data
+        enum class AccessType { REMOTE, LOCAL };
+
+        TensorParamName tensor_parameter_name;  // identify the TensorBinding within the ProgramSpec
+        std::string accessor_name;              // tensor accessor name (used in the kernel source code)
+        AccessType access_type = AccessType::REMOTE;
     };
     Group<TensorBinding> tensor_bindings;
 
@@ -205,6 +211,7 @@ struct KernelSpec {
 // These aliases lift commonly-used nested enums to the namespace level
 using DFBEndpointType = KernelSpec::DFBBinding::EndpointType;
 using DFBAccessPattern = KernelSpec::DFBBinding::AccessPattern;
+using TensorAccessType = KernelSpec::TensorBinding::AccessType;
 
 // These aliases lift the kernel resource-binding types to the namespace level
 using DFBBinding = KernelSpec::DFBBinding;

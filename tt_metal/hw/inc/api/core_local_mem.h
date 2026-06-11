@@ -12,6 +12,14 @@
 #include "tools/profiler/noc_debugging_profiler.hpp"
 #include "internal/debug/sanitize.h"
 
+// Metal 2.0 opaque token type, used to construct a CoreLocalMem
+template <uint32_t ADDR_CRTA_OFFSET>
+struct NodeLocalMemBindingToken;
+
+// (Needed by Metal 2.0 ctor)
+template <typename T>
+T get_common_arg_val(int arg_idx);
+
 /**
  * @brief Provides a safe pointer to a structure of type T in the core's local memory
  *
@@ -47,6 +55,16 @@ public:
      * @param ptr The pointer to the structure in the core's local memory
      */
     CoreLocalMem(T* ptr) : address_(reinterpret_cast<AddressType>(ptr)) {}
+
+    /** @brief Construct from a Metal opaque token.
+     *
+     * @param token The Metal 2.0 binding token (which implicitly retrieves the address)
+     *
+     * @tparam ADDR_CRTA_OFFSET Byte offset of the base-address word within the kernel's CRTA buffer.
+     */
+    template <uint32_t ADDR_CRTA_OFFSET>
+    CoreLocalMem(NodeLocalMemBindingToken<ADDR_CRTA_OFFSET>) :
+        address_(static_cast<AddressType>(get_common_arg_val<uint32_t>(ADDR_CRTA_OFFSET / sizeof(uint32_t)))) {}
 
     /** @brief Copy constructor
      *
@@ -166,6 +184,11 @@ public:
 private:
     AddressType address_;
 };
+
+// "Node" alias for CoreLocalMem
+// In Metal 2.0, we use "core" to refer to a RISC core, and "node" to refer to a NoC endpoint
+template <typename T, typename AddressType = uintptr_t>
+using NodeLocalMem = CoreLocalMem<T, AddressType>;
 
 // TRISC cores can use CoreLocalMem for L1 pointer access, but noc_traits_t is
 // intentionally omitted since only DM cores have NOC access

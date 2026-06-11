@@ -81,7 +81,8 @@ public:
                                                     const std::string& accessor_name,
                                                     uint32_t cta_offset,
                                                     uint32_t addr_crta_offset,
-                                                    uint32_t num_runtime_field_crta_words)>) const {}
+                                                    uint32_t num_runtime_field_crta_words,
+                                                    bool is_local)>) const {}
 
     // Named RTA/CRTA schema (Metal 2.0 APIs).
     // The order of names determines the byte offset of each arg within the named-args
