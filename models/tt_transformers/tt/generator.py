@@ -808,14 +808,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 if "image_sizes" in local_kwargs and local_kwargs["image_sizes"] is not None:
                     local_kwargs["image_sizes"] = local_kwargs["image_sizes"][idx]
 
-            # NOTE: Unlike decode (which supports `defer_device_sampling` so vLLM can
-            # run the forward and the sampling step separately), prefill sampling is
-            # NOT separable here: each user's logits are produced and sampled on the
-            # fly inside this per-user loop — state is applied per user via
-            # apply_prefill_state and then sampled immediately. There is no single
-            # post-forward logits handle to hand back, and deferring would force
-            # holding every user's logits until the end of the loop. So prefill
-            # always samples in-line.
             if sampling_enabled and not use_batched_prefill:
                 sampling_executed = True
                 sampling_dp = getattr(self.model[model_id], "sampling_dp", 1)
@@ -1531,8 +1523,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 prompt_tokens=model_prompt,
                 output_tokens=model_output,
             )
-            # Advance seeds only for active slots (start_pos >= 0); inactive
-            # slots must keep their counters untouched (they get SKIP values).
             active_seed_slots = None
             if start_pos is not None and start_pos[i] is not None:
                 max_seed_slots = sampling_module.seed_manager.max_batch_size

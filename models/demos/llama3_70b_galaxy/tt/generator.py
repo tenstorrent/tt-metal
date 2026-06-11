@@ -1712,7 +1712,6 @@ class Generator(WarmupForwardMixin):
         # Apply slot remap from condense before advancing seeds.
         if slot_remap is not None:
             sm_bs = seed_manager.max_batch_size
-            # Galaxy decode currently uses a single sampling module/rank, so slot_remap is local [0:sm_bs].
             rank_remap = slot_remap[0:sm_bs]
             _log_sampling_debug(
                 self._sampling_debug_enabled,
@@ -1726,22 +1725,9 @@ class Generator(WarmupForwardMixin):
                 "Galaxy decode slot remap applied",
                 seed_state_after=_seed_manager_debug_summary(seed_manager),
             )
-
-        # Only re-upload sampling params when inputs are being reset (new batch /
-        # mode switch / page-table change). The k/p/temp + penalty *coefficient*
-        # buffers persist on device between decode steps and are read in place by
-        # the sampling trace, so re-applying identical params every step is pure
-        # host->device overhead on the hot decode loop. Seed advancement and slot
-        # remap still run every step. (Penalty accumulation state is reset via
-        # reset_prompt_tokens/reset_output_state, gated on reset_batch.)
-        # `decode_forward` passes its richer `reset_inputs` (covers mode switch /
-        # page-table change); an external caller (e.g. vLLM deferred path) that
-        # only knows the portable `reset_batch` flag still triggers the upload.
-        if reset_inputs or reset_batch:
+        if reset_inputs and sampling_params is not None:
+            # If we have new inputs, we need to set up the sampling module again
             sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
-            # When some slots carry an explicit seed, fill the inactive slots'
-            # params from an active request so trace-replayed sampling stays
-            # deterministic regardless of how vLLM split request admission.
             if active_seed_slots is not None:
                 seed_values = _as_list(getattr(sampling_params, "seed", None))
                 has_active_seed = any(

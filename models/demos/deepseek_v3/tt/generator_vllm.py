@@ -189,10 +189,6 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
             )
 
             if sample_on_device:
-                # Prefill sampling is NOT separable from the forward the way decode is
-                # (no public sample_prefill_on_device): this loop prefills and samples
-                # one user at a time as logits are produced, so we sample in-line here
-                # rather than handing a logits handle back for a deferred sampling call.
                 prefill_logits_sampled_device = self._sample_tokens_device(
                     prefill_logits, user_slots=[user_id], skip_precompile=True
                 )
