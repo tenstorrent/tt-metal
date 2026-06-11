@@ -159,26 +159,39 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
         if cand.exists():
             py = str(cand)
             break
+    pytest_out = ""
     try:
         proc = subprocess.run(
-            [py, "-m", "pytest", str(e2e_dir), "-p", "no:cacheprovider"],
+            [py, "-m", "pytest", str(e2e_dir), "-p", "no:cacheprovider", "-rA", "-s"],
             capture_output=True,
             text=True,
             timeout=timeout_s,
         )
+        pytest_out = proc.stdout or ""
         if proc.returncode != 0:
-            tail = "\n".join((proc.stdout or "").splitlines()[-15:])
+            tail = "\n".join(pytest_out.splitlines()[-15:])
             reasons.append(f"G2/G3: tests/e2e did not pass (pytest rc={proc.returncode}); tail:\n{tail}")
     except subprocess.TimeoutExpired:
         reasons.append(f"G2/G3: tests/e2e exceeded {timeout_s}s with no verdict")
+
+    for cnt, kind in re.findall(r"(\d+)\s+(xfailed|xpassed|skipped|errors?)\b", pytest_out):
+        if int(cnt) > 0:
+            reasons.append(
+                f"G2/G3: tests/e2e reported {cnt} {kind} — a gate test may only PASS; "
+                f"xfail/skip/error is not an accepted outcome (fix it or it stays a gate failure)"
+            )
+
+    for _val in re.findall(r"PCC[^=\n]*=\s*(-?\d+(?:\.\d+)?)", pytest_out):
+        if float(_val) < pcc:
+            reasons.append(f"G3: measured PCC {_val} < required {pcc} (tool-enforced threshold)")
 
     for p in test_files:
         try:
             src = p.read_text(errors="ignore")
         except Exception:
             continue
-        if re.search(r"pytest\.skip|assert\s+True\b", src):
-            reasons.append(f"honesty: {p.name} contains pytest.skip / assert True")
+        if re.search(r"pytest\.xfail|mark\.xfail|pytest\.skip|assert\s+True\b", src):
+            reasons.append(f"honesty: {p.name} contains pytest.xfail / pytest.skip / assert True")
 
     return (len(reasons) == 0), reasons
 
