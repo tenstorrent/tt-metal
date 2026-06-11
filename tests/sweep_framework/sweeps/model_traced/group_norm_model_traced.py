@@ -373,6 +373,33 @@ def run(
     if _cgx > 0 and num_groups % _cgx == 0 and (C // 32) % _cgx == 0:
         num_cores_across_channel = _cgx
 
+    # Most authoritative source: when the input is BLOCK_SHARDED, the device
+    # splits the channels across the shard grid's WIDTH, so the real number of
+    # cores across the channel axis is C / (channel shard width). The mask /
+    # weight / bias must be built for exactly this count, otherwise the
+    # channel->group mapping is wrong and PCC collapses to ~0.707 (1/sqrt(2)).
+    # core_grid is often absent for these configs (-> _cgx defaults to 1) and
+    # weight_shape[-2] (=C/32) doesn't match the shard split either.
+    def _channel_shard_width(mc):
+        try:
+            if isinstance(mc, dict):
+                ss = (mc.get("data") or {}).get("shard_spec") or mc.get("shard_spec")
+                if isinstance(ss, dict):
+                    shp = ss.get("shape")
+                    if isinstance(shp, (list, tuple)) and len(shp) >= 2:
+                        return int(shp[1])
+            elif mc is not None and getattr(mc, "is_sharded", lambda: False)():
+                return int(mc.shard_spec.shape[1])
+        except Exception:
+            return None
+        return None
+
+    _sw = _channel_shard_width(input_a_memory_config)
+    if _sw and _sw > 0 and C % _sw == 0:
+        _nc_shard = C // _sw
+        if _nc_shard > 0 and num_groups % _nc_shard == 0:
+            num_cores_across_channel = _nc_shard
+
     # Use ttnn.create_group_norm_input_mask for proper channel-group mapping.
     # create_group_norm_input_mask only accepts num_cores values that evenly
     # tile the channel/group layout (e.g. 24 crashes for C=768,groups=32 while
@@ -535,7 +562,48 @@ def run(
     for k, v in op_kwargs.items():
         if k not in group_norm_kwargs:
             group_norm_kwargs[k] = v
-    output_tensor = ttnn.group_norm(input_tensor_a, **group_norm_kwargs)
+
+    def _is_cb_clash(msg):
+        m = msg.lower()
+        return any(s in m for s in ("clash", "circular buffer", "out of memory", "l1 buffer"))
+
+    try:
+        output_tensor = ttnn.group_norm(input_tensor_a, **group_norm_kwargs)
+    except Exception as e:
+        if not _is_cb_clash(str(e)) or "num_out_blocks" in group_norm_kwargs:
+            raise
+        # A large BLOCK_SHARDED group_norm (e.g. 16384x640) overflows L1: the
+        # statically allocated compute CBs clash with the per-core sharded
+        # input/output buffers. group_norm's num_out_blocks splits the per-core
+        # height into that many compute sub-blocks, shrinking the CBs so they fit
+        # alongside the shards (the math/PCC is unchanged). Try increasing block
+        # counts that evenly divide the per-core tile height until one fits.
+        _sh = None
+        try:
+            _ss = input_a_memory_config
+            if isinstance(_ss, dict):
+                _spec = (_ss.get("data") or {}).get("shard_spec") or _ss.get("shard_spec")
+                _sh = int(_spec["shape"][0]) if isinstance(_spec, dict) else None
+            elif _ss is not None and getattr(_ss, "is_sharded", lambda: False)():
+                _sh = int(_ss.shard_spec.shape[0])
+        except Exception:
+            _sh = None
+        _htiles = (_sh // 32) if (_sh and _sh % 32 == 0) else 64
+        _candidates = [n for n in (2, 4, 8, 16, 32, 64) if _htiles % n == 0] or [2, 4, 8]
+        output_tensor = None
+        _last = e
+        for _nob in _candidates:
+            try:
+                _gk = dict(group_norm_kwargs)
+                _gk["num_out_blocks"] = _nob
+                output_tensor = ttnn.group_norm(input_tensor_a, **_gk)
+                break
+            except Exception as e2:
+                _last = e2
+                if not _is_cb_clash(str(e2)):
+                    raise
+        if output_tensor is None:
+            raise _last
     mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
