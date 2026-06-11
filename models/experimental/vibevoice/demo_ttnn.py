@@ -215,18 +215,23 @@ def main() -> int:
         flush=True,
     )
 
+    import time as _time
+
     mesh = ttnn.open_device(device_id=0, l1_small_size=32768)
     try:
         print("[demo_ttnn] Loading TTVibeVoiceModel...", flush=True)
+        _t_load0 = _time.perf_counter()
         tt_model = TTVibeVoiceModel.from_checkpoint(
             mesh,
             model_path,
             cfg_scale=args.cfg_scale,
             num_diffusion_steps=args.num_steps,
         )
+        print(f"[demo_ttnn] model load: {_time.perf_counter() - _t_load0:.1f}s", flush=True)
 
         torch.manual_seed(args.seed)
         print("[demo_ttnn] TT generate...", flush=True)
+        _t_gen0 = _time.perf_counter()
         generate_kwargs = {
             "input_ids": inputs["input_ids"],
             "attention_mask": inputs["attention_mask"],
@@ -241,6 +246,7 @@ def main() -> int:
             generate_kwargs["speech_tensors"] = inputs["speech_tensors"]
             generate_kwargs["speech_masks"] = inputs["speech_masks"]
         tt_out = tt_model.generate(**generate_kwargs)
+        print(f"[demo_ttnn] generate wall: {_time.perf_counter() - _t_gen0:.1f}s", flush=True)
         tt_speech = tt_out.speech_outputs[0].to(torch.float32).reshape(-1)
         tt_gen = tt_out.sequences[0, prefill_len:]
     finally:
