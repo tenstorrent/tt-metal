@@ -278,6 +278,22 @@ jobs:
               echo "$(hostname): Driver=${driver} tt_smi=${tt_smi}"
             ' || true
 
+          run_cluster_validation() {
+            mpirun --pernode --tag-output \
+              /home/user/tt-metal/build/tools/scaleout/run_cluster_validation \
+              --send-traffic \
+              --hard-fail \
+              --cabling-descriptor-path /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto \
+              --deployment-descriptor-path /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto \
+              --num-iterations 5
+          }
+
+          echo "--- Checking cluster health before reset ---"
+          if run_cluster_validation; then
+            echo "SUCCESS: Cluster validation passed without reset"
+            exit 0
+          fi
+
           for attempt in $(seq 1 "$MAX_RECOVERY_ATTEMPTS"); do
             echo "=== Recovery attempt $attempt of $MAX_RECOVERY_ATTEMPTS ==="
             reset_success=false
@@ -295,13 +311,7 @@ jobs:
               sleep 5
 
               echo "--- Running cluster validation ---"
-              if mpirun --pernode --tag-output \
-                /home/user/tt-metal/build/tools/scaleout/run_cluster_validation \
-                --send-traffic \
-                --hard-fail \
-                --cabling-descriptor-path /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto \
-                --deployment-descriptor-path /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto \
-                --num-iterations 5; then
+              if run_cluster_validation; then
                 validation_success=true
               else
                 echo "WARNING: Validation failed on attempt $attempt"
@@ -310,27 +320,18 @@ jobs:
               echo "WARNING: Skipping validation because reset failed on attempt $attempt"
             fi
 
-            echo "--- Kill stale processes on all hosts ---"
-            # todo)) figure out a proper way to kill stale processes from the docker containers
-            # mpirun --pernode --tag-output bash -lc '
-            #   mpi_processes="prted|prterun|orted|mpirun"
-            #   test_processes="tt-run|run_cluster_validation"
-            #   b1_demo_processes="models\.demos\.deepseek_v3_b1\.demo\.cli"
-            #   b1_teacher_forced_processes="models\.demos\.deepseek_v3_b1\.demo\.teacher_forced"
-            #   stale_processes="${mpi_processes}|${test_processes}|${b1_demo_processes}|${b1_teacher_forced_processes}"
-            #   pkill -u "$(id -un)" -f "${stale_processes}" || true
-            # '
-
-            echo "Sleeping 30s before retry..."
-            sleep 30
-
-            if [ "$attempt" -gt 4 ] && [ "$reset_success" = true ] && [ "$validation_success" = true ]; then
-              echo "SUCCESS: Recovery completed on attempt $attempt after more than 4 attempts"
+            if [ "$reset_success" = true ] && [ "$validation_success" = true ]; then
+              echo "SUCCESS: Reset and cluster validation passed on attempt $attempt"
               exit 0
+            fi
+
+            if [ "$attempt" -lt "$MAX_RECOVERY_ATTEMPTS" ]; then
+              echo "Sleeping 30s before retry..."
+              sleep 30
             fi
           done
 
-          echo "ERROR: Recovery failed after $MAX_RECOVERY_ATTEMPTS attempts without a reset+validation success after attempt 4"
+          echo "ERROR: Recovery failed after $MAX_RECOVERY_ATTEMPTS attempts"
           exit 1
 
       - name: Verify ttnn imports on workers
