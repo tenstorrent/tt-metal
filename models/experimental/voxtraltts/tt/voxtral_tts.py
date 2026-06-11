@@ -59,6 +59,9 @@ class VoxtralTTSGenerateOutput:
     codes_b37t: torch.Tensor
     shifted_codes_t37: torch.Tensor
     hit_end_audio: bool
+    # Time-to-first-audio: wall-seconds from generation entry (incl. prompt embed + prefill) until the
+    # first acoustic frame's codes are produced. None if no frame was generated.
+    first_frame_s: float | None = None
     debug: VoxtralTTSDebugTrace | None = None
 
 
@@ -492,6 +495,8 @@ class VoxtralTTSPipeline:
         staged PCC and ``test_ttnn_trial.py`` share the same compute path.
         """
         torch.manual_seed(seed)
+        _t_entry = time.perf_counter()  # for time-to-first-audio (TTFA)
+        first_frame_s: float | None = None
         debug = VoxtralTTSDebugTrace() if return_debug else None
 
         request = compose_speech_request(text, self.model_name_or_path, voice=voice)
@@ -671,6 +676,8 @@ class VoxtralTTSPipeline:
 
             if audio_codes is not None:
                 generated_codes.append(audio_codes[0].detach().cpu())
+                if first_frame_s is None:
+                    first_frame_s = time.perf_counter() - _t_entry
             if not fixed_step_count and int(audio_codes[0, 0].item()) == self.end_audio_id:
                 if next_mm_embed_tt is not None and next_mm_embed_tt.is_allocated():
                     ttnn.deallocate(next_mm_embed_tt)
@@ -847,6 +854,7 @@ class VoxtralTTSPipeline:
                 codes_b37t=torch.empty((1, 37, 0), dtype=torch.long),
                 shifted_codes_t37=torch.empty((0, 37), dtype=torch.long),
                 hit_end_audio=False,
+                first_frame_s=first_frame_s,
                 debug=debug,
             )
 
@@ -863,6 +871,7 @@ class VoxtralTTSPipeline:
                 codes_b37t=torch.empty((1, 37, 0), dtype=torch.long),
                 shifted_codes_t37=shifted_audio_tokens.long(),
                 hit_end_audio=hit_end_audio,
+                first_frame_s=first_frame_s,
                 debug=debug,
             )
         codes_b37t = audio_tokens.T.unsqueeze(0).long()
@@ -953,6 +962,7 @@ class VoxtralTTSPipeline:
             codes_b37t=codes_b37t,
             shifted_codes_t37=shifted_audio_tokens.long(),
             hit_end_audio=hit_end_audio,
+            first_frame_s=first_frame_s,
             debug=debug,
         )
 
