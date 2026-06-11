@@ -11,6 +11,10 @@ inputs:
     description: 'Allocation spec'
     required: false
     default: ''
+  specFile:
+    description: 'Path to allocation spec file (preserves large MGD textproto quoting)'
+    required: false
+    default: ''
   explicit:
     description: 'List of explicit nodes (ignored when spec is provided)'
     required: false
@@ -48,10 +52,34 @@ runs:
         ALLOCATION_EOF
         EOF
 
+    - name: Construct allocation manifest (spec file)
+      shell: bash
+      id: spec-file
+      if: ${{ inputs.specFile != '' }}
+      run: |
+        MANIFEST="/tmp/allocation-${{ inputs.allocationName }}.yaml"
+        {
+          echo "apiVersion: tenstorrent.com/v1alpha1"
+          echo "kind: Allocation"
+          echo "metadata:"
+          echo "  name: ${{ inputs.allocationName }}"
+          echo "  namespace: ${{ inputs.namespace }}"
+          echo "  annotations:"
+          echo "    ci.tenstorrent.com/created-by: ${{ github.actor }}"
+          echo "    ci.tenstorrent.com/repository: ${{ github.repository }}"
+          echo "    ci.tenstorrent.com/run-id: \"${{ github.run_id }}\""
+          echo "    ci.tenstorrent.com/workflow-ref: ${{ github.workflow_ref }}"
+          echo "    ci.tenstorrent.com/event-name: ${{ github.event_name }}"
+          echo "spec:"
+          echo "  retryPolicy: Always"
+          sed 's/^/  /' "${{ inputs.specFile }}"
+        } > "${MANIFEST}"
+        echo "ALLOCATION_MANIFEST_PATH=${MANIFEST}" >> "$GITHUB_ENV"
+
     - name: Construct allocation manifest (spec)
       shell: bash
       id: spec
-      if: ${{ inputs.spec != '' }}
+      if: ${{ inputs.spec != '' && inputs.specFile == '' }}
       run: |
         SPEC=$(printf '%s\n' '${{ inputs.spec }}' | sed 's/^/  /')
         cat <<EOF >> $GITHUB_ENV
@@ -77,7 +105,14 @@ runs:
       shell: bash
       run: |
         echo "Creating allocation..."
-        printf "%s" "${{ env.ALLOCATION_MANIFEST }}" | kubectl -n ${{ inputs.namespace }} apply -f -
+        if [ -n "${ALLOCATION_MANIFEST_PATH:-}" ]; then
+          kubectl -n ${{ inputs.namespace }} apply -f "${ALLOCATION_MANIFEST_PATH}"
+        elif [ -n "${ALLOCATION_MANIFEST:-}" ]; then
+          printf "%s" "${ALLOCATION_MANIFEST}" | kubectl -n ${{ inputs.namespace }} apply -f -
+        else
+          echo "ERROR: no allocation manifest (provide spec, specFile, or explicit)"
+          exit 1
+        fi
 
     - name: Wait for allocation
       shell: bash
