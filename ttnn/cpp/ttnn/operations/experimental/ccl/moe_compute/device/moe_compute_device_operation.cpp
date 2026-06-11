@@ -408,28 +408,28 @@ std::vector<ttnn::Tensor> moe_compute(
 
     auto* mesh_device = tilize_input_tensor.device();
 
-    // Auto-compute num_data_parallel_cores: largest divisor of hidden_tiles <= 4.
-    // This replaces the prior hand-rolled per-config (DeepSeek/GPT) lookup. Works for both
-    // WH (N=12) and BH (N in {8, 12, 16}) -- the formula does not depend on ring N.
+    // BH ring size: default 12; supported {8, 12, 16}. WH always uses 12 (12 DRAM banks).
+    // Validate before num_data_parallel_cores derivation so ring-aware width dim can use ring_n.
+    const uint32_t ring_n = (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? bh_ring_size.value_or(12u) : 12u;
+    TT_FATAL(
+        ring_n == 8 || ring_n == 12 || ring_n == 16,
+        "moe_compute: bh_ring_size={} is not supported (must be 8, 12, or 16)",
+        ring_n);
+
+    // Auto-compute num_data_parallel_cores: largest divisor d of hidden_tiles with d <= 4
+    // AND ring_n % d == 0. dm1 maps ring cores to combine columns via
+    // RING_CORES_PER_COMBINE_COL = num_cores / width_shard_dim, so both must divide evenly.
+    // E.g. GPT-OSS (Ht=90) picks d=3 at N=12 but falls back to d=2 at N=8 or N=16.
     const uint32_t hidden_tiles = hidden_size / 32;
     uint32_t num_data_parallel_cores = 1;
     for (uint32_t d = 4; d >= 1; --d) {
-        if (hidden_tiles % d == 0) {
+        if (hidden_tiles % d == 0 && ring_n % d == 0) {
             num_data_parallel_cores = d;
             break;
         }
     }
 
     const auto& combine_cores = get_moe_combine_cores(mesh_device, num_token_parallel_cores, num_data_parallel_cores);
-
-    // BH ring size: default 12; supported {8, 12, 16}. WH always uses 12 (12 DRAM banks).
-    // Validate at the API boundary for a clear "moe_compute:" error; get_cores() re-validates
-    // before kernel build as a structural invariant.
-    const uint32_t ring_n = (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? bh_ring_size.value_or(12u) : 12u;
-    TT_FATAL(
-        ring_n == 8 || ring_n == 12 || ring_n == 16,
-        "moe_compute: bh_ring_size={} is not supported (must be 8, 12, or 16)",
-        ring_n);
 
     TT_FATAL(
         !(compute_only && cluster_axis.has_value()),
