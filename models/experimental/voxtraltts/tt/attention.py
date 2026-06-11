@@ -143,8 +143,19 @@ class VoxtralTTAttention:
         wqkv_prog = wqkv_program_config if wqkv_program_config is not None else self.wqkv_program_config
         wo_prog = wo_program_config if wo_program_config is not None else self.wo_program_config
 
+        # 1D-mcast configs (per_core_M=2) require ≥2 fused M-tiles after fuse_batch.
+        # M-tiles = prod(batch_dims) × ceil(seq / TILE_SIZE). Auto-fall-back for bsz=1.
+        _use_1d_mcast = True
+        if wqkv_program_config is None and self.wqkv_program_config is not None:
+            _hs_shape = list(hidden_states.shape)
+            _m_tiles = math.ceil(_hs_shape[-2] / ttnn.TILE_SIZE)
+            for d in _hs_shape[:-2]:
+                _m_tiles *= d
+            if _m_tiles < 2:
+                _use_1d_mcast = False
+
         _wqkv_kw = dict(_lin_kw)
-        if wqkv_prog is not None:
+        if wqkv_prog is not None and (wqkv_program_config is not None or _use_1d_mcast):
             _wqkv_kw["program_config"] = wqkv_prog
 
         if self.wqkv_in0_shard_mem_config is not None:
@@ -310,7 +321,7 @@ class VoxtralTTAttention:
         )
 
         _wo_kw = dict(_lin_kw)
-        if wo_prog is not None:
+        if wo_prog is not None and (wo_program_config is not None or _use_1d_mcast):
             _wo_kw["program_config"] = wo_prog
         out = ttnn.linear(attn_out, self.wo, **_wo_kw)
         ttnn.deallocate(attn_out)

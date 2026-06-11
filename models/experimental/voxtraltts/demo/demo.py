@@ -83,7 +83,7 @@ class DataArgs:
     # Upper bound on AR acoustic steps. The demo auto-raises this per-prompt when the
     # word count implies more tokens are needed (see _min_speech_tokens). Use a small
     # value like 64 for quick smoke tests; leave at 0 to always use the auto-estimate.
-    max_speech_tokens: int = 13000
+    max_speech_tokens: int = 1000
     seed: int = 0
     default_voice: str = "casual_female"
     warmup_iters: int = 0
@@ -170,11 +170,21 @@ def _parse_demo_args(argv: list[str] | None = None) -> DemoArgs:
 
 def _open_device():
     from tests.scripts.common import get_updated_device_params
+    from models.experimental.voxtraltts.demo.decode_trace_2cq import (
+        decode_trace_enabled,
+        num_command_queues_for_decode,
+    )
 
     device_id = 0
     if ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.TG:
         device_id = 4
-    updated = get_updated_device_params({})
+    params = {}
+    # Traced decode needs a trace region; 2CQ needs a second command queue. Both default on
+    # (see decode_trace_2cq). trace_region_size is env-tunable for the 26-layer decode graph.
+    if decode_trace_enabled():
+        params["trace_region_size"] = int(os.environ.get("VOXTRAL_TRACE_REGION_SIZE", str(200_000_000)))
+        params["num_command_queues"] = num_command_queues_for_decode()
+    updated = get_updated_device_params(params)
     original = ttnn.GetDefaultDevice()
     mesh = ttnn.CreateDevice(device_id=device_id, **updated)
     ttnn.SetDefaultDevice(mesh)
@@ -312,8 +322,9 @@ def _min_speech_tokens(text: str) -> int:
 # The model's free-run PCC (~0.79) causes accumulated errors that collapse the
 # semantic code distribution to a single repeated value after ~200 tokens (~20 words).
 # Keeping each chunk ≤ _CHUNK_MAX_WORDS prevents that collapse.
-_CHUNK_THRESHOLD_WORDS = 9999
-_CHUNK_MAX_WORDS = 20
+_CHUNK_THRESHOLD_WORDS = 100  # threshold for text_max_seq_len > 4096 (long context)
+_CHUNK_THRESHOLD_WORDS_SHORT = 200  # threshold for text_max_seq_len <= 4096 (short context)
+_CHUNK_MAX_WORDS = 200
 
 
 def _split_into_chunks(text: str, max_words: int = _CHUNK_MAX_WORDS) -> list[str]:
@@ -443,10 +454,11 @@ def run_text_mode(
     AR degeneration (semantic-code collapse) that occurs after ~200 acoustic tokens when
     running in free-run mode with PCC ≈ 0.79.
 
-    Chunking is only enabled when text_max_seq_len > 4096 (i.e. the paged KV cache is in
-    use).  At text_max_seq_len <= 4096 the context fits in a single pass without degeneration.
+    Chunking thresholds:
+      - text_max_seq_len > 4096  (long context / paged KV): chunk at > 35 words
+      - text_max_seq_len <= 4096 (short context):           chunk at > 200 words
     """
-    chunk_threshold = _CHUNK_THRESHOLD_WORDS if text_max_seq_len > 4096 else 9999
+    chunk_threshold = _CHUNK_THRESHOLD_WORDS if text_max_seq_len > 4096 else _CHUNK_THRESHOLD_WORDS_SHORT
     if len(text.split()) > chunk_threshold:
         _run_chunked_text_mode(pipe, text, voice, seed, sample_rate, out_path)
         return
@@ -564,6 +576,11 @@ def run_demo(args: DemoArgs) -> None:
         items = load_prompt_items(args.data.prompts_file, args.data.default_voice)
     out_dir = Path(args.data.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Default the demo to traced decode (bit-identical output, ~1.58x faster decode; verified).
+    # Only affects the demo entry point — the pytest device fixture path leaves it off. Override
+    # with VOXTRAL_DECODE_TRACE=0. (2CQ stays opt-in; it regresses on this loop — see decode_trace_2cq.)
+    os.environ.setdefault("VOXTRAL_DECODE_TRACE", "1")
 
     mesh, original = _open_device()
     pipe: VoxtralTTSPipeline | None = None

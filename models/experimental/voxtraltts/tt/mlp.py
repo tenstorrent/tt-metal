@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import torch
 import ttnn
 
@@ -75,22 +77,36 @@ class VoxtralTTMLP:
     def __call__(self, x: ttnn.Tensor, *, activation_memory_config=None) -> ttnn.Tensor:
         act_mem = activation_memory_config or self.activation_memory_config
 
+        _ff1_3_prg = self.ff1_3_program_config
+        _ff2_prg = self.ff2_program_config
+
+        # 1D-mcast configs (per_core_M=2) require ≥2 fused M-tiles after fuse_batch.
+        # M-tiles = prod(batch_dims) × ceil(seq / TILE_SIZE). Auto-fall-back for bsz=1.
+        if _ff1_3_prg is not None:
+            shape = list(x.shape)
+            _m_tiles = math.ceil(shape[-2] / ttnn.TILE_SIZE)
+            for d in shape[:-2]:
+                _m_tiles *= d
+            if _m_tiles < 2:
+                _ff1_3_prg = None
+                _ff2_prg = None
+
         # w1/w3: use width-sharded output when a 1D-mcast program config is provided so
         # per-core work increases (fewer cores, better arithmetic intensity for M=1 tile).
-        has_ff1_3_prg = self.ff1_3_program_config is not None
+        has_ff1_3_prg = _ff1_3_prg is not None
         ff1_3_out_mem = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if has_ff1_3_prg else act_mem
 
         _ff1_3_kw = {"dtype": self.output_dtype, "memory_config": ff1_3_out_mem}
         if self.compute_kernel_config is not None:
             _ff1_3_kw["compute_kernel_config"] = self.compute_kernel_config
         if has_ff1_3_prg:
-            _ff1_3_kw["program_config"] = self.ff1_3_program_config
+            _ff1_3_kw["program_config"] = _ff1_3_prg
 
         _ff2_kw = {"dtype": self.output_dtype, "memory_config": act_mem}
         if self.compute_kernel_config is not None:
             _ff2_kw["compute_kernel_config"] = self.compute_kernel_config
-        if self.ff2_program_config is not None:
-            _ff2_kw["program_config"] = self.ff2_program_config
+        if _ff2_prg is not None:
+            _ff2_kw["program_config"] = _ff2_prg
 
         # For DS matmuls, in0 must be L1 K-width-sharded; shard x then discard the copy.
         if self.ff1_3_in0_shard_mem_config is not None:
