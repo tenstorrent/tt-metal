@@ -85,7 +85,8 @@ template <
     EltwiseBinaryType eltwise_binary_type = EltwiseBinaryType::ELWADD,
     uint32_t num_tiles,
     bool skip_signalling = false,
-    bool fused_signalling = false>
+    bool fused_signalling = false,
+    uint32_t output_granularity>
 ALWI void sdpa_bcast_col_srca_srcb_reuse_tiles(uint32_t dst_tile_index) {
     MATH((llk_math_sdpa_bcast_col_srca_srcb_reuse<
           eltwise_binary_type,
@@ -93,7 +94,8 @@ ALWI void sdpa_bcast_col_srca_srcb_reuse_tiles(uint32_t dst_tile_index) {
           DST_ACCUM_MODE,
           MATH_FIDELITY,
           skip_signalling,
-          fused_signalling>(dst_tile_index)));
+          fused_signalling,
+          output_granularity>(dst_tile_index)));
 }
 
 template <uint32_t num_tiles>
@@ -101,10 +103,14 @@ ALWI void sdpa_sub_bcast_col_srca_srcb_reuse_tiles_init(uint32_t icb0) {
     sdpa_bcast_col_srca_srcb_reuse_tiles_init<EltwiseBinaryType::ELWSUB, num_tiles>(icb0);
 }
 
-template <uint32_t num_tiles, bool skip_signalling = false, bool fused_signalling = false>
+template <uint32_t num_tiles, bool skip_signalling = false, bool fused_signalling = false, uint32_t output_granularity>
 ALWI void sdpa_sub_bcast_col_srca_srcb_reuse_tiles(uint32_t dst_tile_index) {
-    sdpa_bcast_col_srca_srcb_reuse_tiles<EltwiseBinaryType::ELWSUB, num_tiles, skip_signalling, fused_signalling>(
-        dst_tile_index);
+    sdpa_bcast_col_srca_srcb_reuse_tiles<
+        EltwiseBinaryType::ELWSUB,
+        num_tiles,
+        skip_signalling,
+        fused_signalling,
+        output_granularity>(dst_tile_index);
 }
 
 template <uint32_t num_tiles>
@@ -112,10 +118,14 @@ ALWI void sdpa_mul_bcast_col_srca_srcb_reuse_tiles_init(uint32_t icb0) {
     sdpa_bcast_col_srca_srcb_reuse_tiles_init<EltwiseBinaryType::ELWMUL, num_tiles>(icb0);
 }
 
-template <uint32_t num_tiles, bool skip_signalling = false, bool fused_signalling = false>
+template <uint32_t num_tiles, bool skip_signalling = false, bool fused_signalling = false, uint32_t output_granularity>
 ALWI void sdpa_mul_bcast_col_srca_srcb_reuse_tiles(uint32_t dst_tile_index) {
-    sdpa_bcast_col_srca_srcb_reuse_tiles<EltwiseBinaryType::ELWMUL, num_tiles, skip_signalling, fused_signalling>(
-        dst_tile_index);
+    sdpa_bcast_col_srca_srcb_reuse_tiles<
+        EltwiseBinaryType::ELWMUL,
+        num_tiles,
+        skip_signalling,
+        fused_signalling,
+        output_granularity>(dst_tile_index);
 }
 
 template <DataFormat format>
@@ -279,7 +289,7 @@ void compute_sdpa_chunk(
     sdpa_sub_bcast_col_srca_srcb_reuse_tiles_init<chunk_size>(cb_q);  // For tile shape
     MATH((t6_semaphore_wait_on_max<p_stall::STALL_MATH>(semaphore::FPU_SFPU)));
     sdpa_bcast_col_srca_srcb_reuse_preamble(max_dst_offset);
-    sdpa_sub_bcast_col_srca_srcb_reuse_tiles<chunk_size, false>(mm1_dst_offset);
+    sdpa_sub_bcast_col_srca_srcb_reuse_tiles<chunk_size, false, false, 1>(mm1_dst_offset);
     if (!first_chunk) {
         // Exp Sub (SFPU)
         // Signal FPU that tile is ready
@@ -291,7 +301,7 @@ void compute_sdpa_chunk(
         sdpa_mul_bcast_col_srca_srcb_reuse_tiles_init<num_tiles_v>(cb_q);
         MATH((t6_semaphore_wait_on_zero<p_stall::STALL_MATH>(SFPU_FPU)));
         sdpa_bcast_col_srca_srcb_reuse_preamble(corr_exp_dst_offset);
-        sdpa_mul_bcast_col_srca_srcb_reuse_tiles<num_tiles_v, true>(mm2_dst_offset);
+        sdpa_mul_bcast_col_srca_srcb_reuse_tiles<num_tiles_v, true, false, 1>(mm2_dst_offset);
         // FPU has consumed the tile
         MATH((t6_semaphore_post<p_stall::MATH>(semaphore::FPU_SFPU)));
         // Reset to 0
@@ -339,14 +349,14 @@ void compute_sdpa_chunk(
     cb_pop_front(cb_k, num_tiles_k * chunk_size);
 }
 
-template <uint32_t num_tiles_v, bool exp_approx_mode, uint16_t scale_bf16>
+template <uint32_t num_tiles_v, bool exp_approx_mode, uint16_t scale_bf16, uint32_t output_granularity>
 void compute_sdpa_recip(uint32_t cb_q, uint32_t sum_dst_offset, uint32_t recip_dst_offset, uint32_t mm2_dst_offset) {
     PACK((recip_sum<exp_approx_mode, scale_bf16>(sum_dst_offset, recip_dst_offset)));
     PACK((t6_semaphore_post<p_stall::WAIT_SFPU>(SFPU_FPU)));
     sdpa_mul_bcast_col_srca_srcb_reuse_tiles_init<num_tiles_v>(cb_q);
     MATH((t6_semaphore_wait_on_zero<p_stall::STALL_MATH>(SFPU_FPU)));
     sdpa_bcast_col_srca_srcb_reuse_preamble(recip_dst_offset);
-    sdpa_mul_bcast_col_srca_srcb_reuse_tiles<num_tiles_v, false, true>(mm2_dst_offset);
+    sdpa_mul_bcast_col_srca_srcb_reuse_tiles<num_tiles_v, false, true, output_granularity>(mm2_dst_offset);
     MATH((t6_semaphore_get<p_stall::MATH>(SFPU_FPU)));
 }
 

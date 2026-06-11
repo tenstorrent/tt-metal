@@ -291,8 +291,15 @@ TEST_F(CbHashTest, HashCbTriscDiscriminates) {
 TEST_F(CbHashTest, HashCbSfpuDiscriminates) {
     this->RunTestOnDevice(
         [](DevicePrintFixture* f, const std::shared_ptr<distributed::MeshDevice>& d) {
-            std::vector<uint32_t> a(NUM_TILES * 1024, 0xAAAA5555u);
-            std::vector<uint32_t> b(NUM_TILES * 1024, 0x12345678u);
+            // Vary words within each tile: a uniform tile makes all 32 SFPU lane
+            // accumulators identical, and XOR-folding an even count of equal values
+            // cancels to zero even when the hash ran correctly.
+            std::vector<uint32_t> a(NUM_TILES * 1024);
+            std::vector<uint32_t> b(NUM_TILES * 1024);
+            for (size_t i = 0; i < a.size(); ++i) {
+                a[i] = 0xAAAA0000u | static_cast<uint32_t>(i);
+                b[i] = 0x12340000u | static_cast<uint32_t>(i);
+            }
             uint32_t ha = run_once_sfpu(f, d, a);
             uint32_t hb = run_once_sfpu(f, d, b);
             EXPECT_NE(ha, 0u);

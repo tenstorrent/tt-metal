@@ -12,6 +12,11 @@ import pytest
 import torch
 import ttnn
 
+# Force torch CPU ops to use all cores. bf16 matmul on CPU is single-thread on
+# some torch builds even with OMP_NUM_THREADS set; this is the runtime knob that
+# keeps host-side golden compute fast. See test_moe_compute_6U.py for context.
+torch.set_num_threads(os.cpu_count() or 1)
+
 # Mesh graph descriptor paths for different mesh configurations
 MESH_GRAPH_DESC_1x16 = (
     "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_torus_graph_descriptor.textproto"
@@ -623,7 +628,6 @@ def _run_test(
                 batch,
                 seq,
                 select_experts_k,
-                experts,
                 cluster_axis,
                 topology=ttnn.Topology.Ring,
                 num_links=num_links,

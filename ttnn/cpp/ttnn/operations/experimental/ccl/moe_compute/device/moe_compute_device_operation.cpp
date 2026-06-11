@@ -47,6 +47,35 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
         tensor_args.tilize_expert_indices_tensor.dtype() == tt::tt_metal::DataType::UINT16,
         "Indices tensor must be uint16");
 
+    // Input tensor rank guards. Exact ranks are enforced where every caller agrees; lenient
+    // minimum ranks are used for the token/index/score tensors, which legitimately arrive as
+    // rank-3 from some dispatch paths and rank-4 from others (the op only indexes [0]/[1]/[-1]).
+    const auto rank_of = [](const ttnn::Tensor& t) { return t.logical_shape().rank(); };
+    TT_FATAL(
+        rank_of(tensor_args.tilize_input_tensor) >= 3,
+        "tilize_input_tensor must be rank >= 3 ([..., tokens, hidden]); got rank {}",
+        rank_of(tensor_args.tilize_input_tensor));
+    TT_FATAL(
+        rank_of(tensor_args.tilize_expert_indices_tensor) >= 2,
+        "tilize_expert_indices_tensor must be rank >= 2 ([..., tokens, K]); got rank {}",
+        rank_of(tensor_args.tilize_expert_indices_tensor));
+    TT_FATAL(
+        rank_of(tensor_args.tilize_expert_scores_tensor) >= 2,
+        "tilize_expert_scores_tensor must be rank >= 2 ([..., tokens, K]); got rank {}",
+        rank_of(tensor_args.tilize_expert_scores_tensor));
+    TT_FATAL(
+        rank_of(tensor_args.tilize_expert_mapping_tensor) == 2,
+        "tilize_expert_mapping_tensor must be rank 2 ([num_devices, experts]); got rank {}",
+        rank_of(tensor_args.tilize_expert_mapping_tensor));
+    TT_FATAL(
+        rank_of(tensor_args.matmul_w0_w1_tensor) == 6,
+        "matmul_w0_w1_tensor must be rank 6 ([num_cores, L, E, groups_per_core, K, 4*TILE_SIZE]); got rank {}",
+        rank_of(tensor_args.matmul_w0_w1_tensor));
+    TT_FATAL(
+        rank_of(tensor_args.matmul_w2_tensor) == 6,
+        "matmul_w2_tensor must be rank 6 ([num_cores, L, E, groups_per_core, N, 4*TILE_SIZE]); got rank {}",
+        rank_of(tensor_args.matmul_w2_tensor));
+
     // When has_bias=True, dm0 derives per-expert byte strides using ceil((K+1)/W0W1_TXN)*W0W1_TXN and
     // ceil((N+1)/W2_TXN)*W2_TXN. The physical tensors must be padded to those tile counts; if not,
     // dm0 silently reads from wrong expert boundaries after the first expert.
@@ -164,17 +193,10 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
     const ttnn::Tensor& tilize_input_tensor = tensor_args.tilize_input_tensor;
-    const ttnn::Tensor& tilize_mapping_tensor = tensor_args.tilize_expert_mapping_tensor;
-
     const auto& tilize_input_shape = tilize_input_tensor.tensor_spec().logical_shape();
-    const auto& tilize_mapping_shape = tilize_mapping_tensor.tensor_spec().logical_shape();
-
     auto* mesh_device = tilize_input_tensor.device();
-    const auto& mesh_view = mesh_device->get_view();
-    uint32_t num_devices = mesh_view.num_devices();
 
-    uint32_t experts = tilize_mapping_shape[-1];
-    uint32_t experts_per_device = tt::div_up(experts, num_devices);
+    uint32_t experts_per_device = tensor_args.matmul_w0_w1_tensor.logical_shape()[2];
     uint32_t total_tokens =
         tilize_input_shape[0] *
         tilize_input_shape[1];  // tokens_per_device from input, total tokens across all dispatch devices
@@ -377,10 +399,8 @@ std::vector<ttnn::Tensor> moe_compute(
     using OperationType = ttnn::experimental::prim::MoEComputeDeviceOperation;
 
     const auto& input_shape = tilize_input_tensor.tensor_spec().logical_shape();
-    const auto& mapping_shape = tilize_expert_mapping_tensor.tensor_spec().logical_shape();
     const auto& indices_shape = tilize_expert_indices_tensor.tensor_spec().logical_shape();
     const uint32_t hidden_size = input_shape[-1];
-    const uint32_t experts = mapping_shape[-1];
     const uint32_t select_experts_k = indices_shape[-1];
     const uint32_t total_tokens = input_shape[0] * input_shape[1];
 
@@ -388,13 +408,22 @@ std::vector<ttnn::Tensor> moe_compute(
 
     auto* mesh_device = tilize_input_tensor.device();
 
-    // Auto-compute num_data_parallel_cores: largest divisor of hidden_tiles <= 4.
-    // This replaces the prior hand-rolled per-config (DeepSeek/GPT) lookup. Works for both
-    // WH (N=12) and BH (N in {8, 12, 16}) -- the formula does not depend on ring N.
+    // BH ring size: default 12; supported {8, 12, 16}. WH always uses 12 (12 DRAM banks).
+    // Validate before num_data_parallel_cores derivation so ring-aware width dim can use ring_n.
+    const uint32_t ring_n = (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? bh_ring_size.value_or(12u) : 12u;
+    TT_FATAL(
+        ring_n == 8 || ring_n == 12 || ring_n == 16,
+        "moe_compute: bh_ring_size={} is not supported (must be 8, 12, or 16)",
+        ring_n);
+
+    // Auto-compute num_data_parallel_cores: largest divisor d of hidden_tiles with d <= 4
+    // AND ring_n % d == 0. dm1 maps ring cores to combine columns via
+    // RING_CORES_PER_COMBINE_COL = num_cores / width_shard_dim, so both must divide evenly.
+    // E.g. GPT-OSS (Ht=90) picks d=3 at N=12 but falls back to d=2 at N=8 or N=16.
     const uint32_t hidden_tiles = hidden_size / 32;
     uint32_t num_data_parallel_cores = 1;
     for (uint32_t d = 4; d >= 1; --d) {
-        if (hidden_tiles % d == 0) {
+        if (hidden_tiles % d == 0 && ring_n % d == 0) {
             num_data_parallel_cores = d;
             break;
         }
@@ -402,14 +431,11 @@ std::vector<ttnn::Tensor> moe_compute(
 
     const auto& combine_cores = get_moe_combine_cores(mesh_device, num_token_parallel_cores, num_data_parallel_cores);
 
-    // BH ring size: default 12; supported {8, 12, 16}. WH always uses 12 (12 DRAM banks).
-    // Validate at the API boundary for a clear "moe_compute:" error; get_cores() re-validates
-    // before kernel build as a structural invariant.
-    const uint32_t ring_n = (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? bh_ring_size.value_or(12u) : 12u;
     TT_FATAL(
-        ring_n == 8 || ring_n == 12 || ring_n == 16,
-        "moe_compute: bh_ring_size={} is not supported (must be 8, 12, or 16)",
-        ring_n);
+        !(compute_only && cluster_axis.has_value()),
+        "moe_compute: compute_only=True is incompatible with cluster_axis (got cluster_axis={}). "
+        "compute_only skips the combine path, so cluster_axis has no meaning.",
+        cluster_axis.value_or(0));
 
     std::optional<ttnn::experimental::prim::SelectiveReduceCombineParams> combine_params;
     if (!compute_only) {
@@ -443,7 +469,6 @@ std::vector<ttnn::Tensor> moe_compute(
             .batch_size = 1,
             .seq_size = total_tokens,
             .select_experts_k = select_experts_k,
-            .experts = experts,
             .num_links = resolved_num_links,
             .axis = cluster_axis.value(),
             .topology = resolved_topology,

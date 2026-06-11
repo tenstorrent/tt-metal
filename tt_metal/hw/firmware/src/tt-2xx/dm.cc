@@ -111,7 +111,6 @@ void device_setup() {
     // clock gating
     set_deassert_addresses();
     setup_isr_csrs();
-    // wzeromem
     // invalidate_l1_cache
     // clear_destination_registers
     // set_default_sfpu_constant_register_state
@@ -129,7 +128,6 @@ inline void run_triscs(uint32_t enables) {
            subordinate_sync->allNeo1 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
            subordinate_sync->allNeo2 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
            subordinate_sync->allNeo3 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE) {
-        invalidate_l1_cache();
     }
     DPRINT("DM-FW: running TRISCs {}\n", enables);
     invalidate_trisc_instruction_cache();
@@ -230,7 +228,6 @@ extern "C" uint32_t _start1() {
             while (((go_message_signal = mailboxes->go_messages[mailboxes->go_message_index].signal) != RUN_MSG_GO) &&
                    !(mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.preload &
                      DISPATCH_ENABLE_FLAG_PRELOAD)) {
-                invalidate_l1_cache();
                 // While the go signal for kernel execution is not sent, check if the worker was signalled
                 // to reset its launch message read pointer.
                 if ((go_message_signal == RUN_MSG_RESET_READ_PTR) ||
@@ -276,10 +273,6 @@ extern "C" uint32_t _start1() {
                 // }
                 // Copies from L1 to IRAM on chips where NCRISC has IRAM
                 uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
-                // Invalidate the i$ now the kernels have loaded and before running
-                // volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
-                // cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] =
-                //     RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
 
                 run_triscs(enables);
 
@@ -322,7 +315,8 @@ extern "C" uint32_t _start1() {
                 if (enables & (1u << index)) {
                     uintptr_t kernel_lma =
                         (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
-                    asm("FENCE.i");
+                    // Invalidate the i$ now the kernels have loaded and before running
+                    invalidate_l1_icache();
                     uint32_t* kernel_ptr = reinterpret_cast<uint32_t*>(kernel_lma);
                     auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
                     record_stack_usage(stack_free);
@@ -412,7 +406,8 @@ extern "C" uint32_t _start1() {
         while (*((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) != RUN_SYNC_MSG_GO) {
             asm("nop; nop; nop; nop; nop");
         }
-        asm("FENCE.i");
+        // Invalidate the i$ now the kernels have loaded and before running
+        invalidate_l1_icache();
         auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
 
         record_stack_usage(stack_free);

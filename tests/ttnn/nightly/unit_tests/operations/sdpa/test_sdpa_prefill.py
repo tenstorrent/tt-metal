@@ -1529,6 +1529,29 @@ def reference_sdpa_with_attention_sinks(Q, K, V, S, is_causal=True, sliding_wind
     return output
 
 
+def reference_causal_attention_sink_sliding_window_rows(Q, K, V, S, query_positions, sliding_window):
+    b, nh, s, d = Q.shape
+    _, nkv, _, _ = K.shape
+    assert nh % nkv == 0
+    assert S.shape == (1, nh, 1, 1), f"Expected S shape {(1, nh, 1, 1)}, got {S.shape}"
+
+    K_repeated = torch.cat([K[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)
+    V_repeated = torch.cat([V[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)
+    sink_scores = S.repeat_interleave(b, dim=0) * (1.0 / math.sqrt(d))
+
+    rows = []
+    for q_pos in query_positions:
+        window_start = max(0, q_pos + 1 - sliding_window)
+        q = Q[:, :, q_pos : q_pos + 1, :]
+        k = K_repeated[:, :, window_start : q_pos + 1, :]
+        v = V_repeated[:, :, window_start : q_pos + 1, :]
+        qk = torch.matmul(q, k.transpose(-2, -1)) * (1.0 / math.sqrt(d))
+        weights = torch.softmax(torch.cat([qk, sink_scores], dim=-1), dim=-1)[..., :-1]
+        rows.append(torch.matmul(weights, v).squeeze(-2))
+
+    return torch.stack(rows, dim=2)
+
+
 def reference_flash_attention_with_sinks(Q, K, V, S, is_causal=True, q_chunk_size=32, k_chunk_size=32):
     """
     Flash Attention implementation with attention sinks using chunked processing.
@@ -1887,3 +1910,68 @@ def test_sdpa_with_attention_sink_sliding_window(
         sliding_window=sliding_window,
         rmse_threshold=rmse_threshold,
     )
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+def test_sdpa_with_attention_sink_gpt_oss_prefill_sampled_accuracy(device, dtype, reset_seeds):
+    b = 1
+    nh = 64
+    nkv = 8
+    s = 4096
+    d = 64
+    q_chunk_size = 256
+    k_chunk_size = 256
+    sliding_window = 128
+
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=False,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    Q = fa_rand(b, nh, s, d)
+    K = fa_rand(b, nkv, s, d)
+    V = fa_rand(b, nkv, s, d)
+
+    # GPT-OSS stores sink logits in the already-scaled attention-score domain. TTNN SDPA
+    # applies the softmax scale internally, so provide sink / scale to match model usage.
+    scale = 1.0 / math.sqrt(d)
+    S = (torch.rand(1, nh, 1, 1) * 4.0) / scale
+
+    tt_Q = ttnn.from_torch(Q, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+    tt_K = ttnn.from_torch(K, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+    tt_V = ttnn.from_torch(V, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+    tt_S = ttnn.from_torch(S, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+
+    tt_back = ttnn.transformer.scaled_dot_product_attention(
+        tt_Q,
+        tt_K,
+        tt_V,
+        is_causal=True,
+        sliding_window_size=sliding_window,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+        attention_sink=tt_S,
+    )
+    tt_back = ttnn.to_torch(tt_back)[:, :, :s, :]
+
+    assert tt_back.shape == (b, nh, s, d)
+    assert torch.isfinite(tt_back).all()
+
+    query_positions = [0, sliding_window - 1, sliding_window, q_chunk_size - 1, q_chunk_size, s // 2, s - 1]
+    gt = reference_causal_attention_sink_sliding_window_rows(Q, K, V, S, query_positions, sliding_window)
+    tt_rows = tt_back[:, :, query_positions, :]
+
+    out_pass, out_pcc = comp_pcc(gt, tt_rows, 0.99)
+    logger.debug(f"sampled pytorch vs tt: {out_pcc}")
+    rmse = torch.sqrt(((gt - tt_rows) ** 2).mean()).item()
+    logger.debug(f"sampled rmse: {rmse}")
+    assert rmse < 0.02, f"RMSE {rmse} exceeds threshold 0.02"
+    assert out_pass, f"PCC check failed: {out_pcc}"

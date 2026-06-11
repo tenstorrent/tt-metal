@@ -84,7 +84,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         tile_size); // have to reconfigure unpack kernel data formats_array if they change in this run
     _llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false>(
         formats_array[run].unpack_B_src, formats_array[run].unpack_B_dst, tile_size);
-    _llk_unpack_tilize_uninit_wrapper_(formats_array[run].unpack_A_dst, 4 /* num_faces */, FACE_R_DIM);
+    _llk_unpack_tilize_uninit_wrapper_(formats_array[run].unpack_A_dst, 4 /* num_faces */);
     _llk_unpack_AB_matmul_init_<>();
     _llk_unpack_AB_matmul_<>(L1_ADDRESS(buffer_A_tilized), L1_ADDRESS(buffer_B_tilized), 0, 0, tile_size, tile_size);
 }
@@ -162,7 +162,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t res_dst_index       = 0;
     static constexpr bool UNTILIZE          = false;
 
-    int run           = 0; // first L1-to-L1 run, we access the first set of formats_array in our array
+    int run                      = 0; // first L1-to-L1 run, we access the first set of formats_array in our array
     static constexpr bool TILIZE = true;
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>>(
         formats_array[run].pack_src, formats_array[run].pack_dst, 16 * 16 * 4 /* tile_size */);

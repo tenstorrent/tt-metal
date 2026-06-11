@@ -18,8 +18,14 @@ For rmsnorm it computes E(x**2) and returns it as a one tile wide output
 
 namespace pre_add = norm::kernel_util::compute::pre_add;
 
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
+ALWI void ACQ() {
+    tile_regs_acquire();
+    tile_regs_wait();
+}
+ALWI void REL() {
+    tile_regs_commit();
+    tile_regs_release();
+}
 
 void kernel_main() {
     constexpr uint32_t NCHt = get_compile_time_arg_val(0);
@@ -76,9 +82,13 @@ void kernel_main() {
          * sum(x**2)
          */
         // BulkWaitBulkPop: All Wt tiles already in CB (see cumulative wait above)
-        compute_kernel_lib::
-            reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
-                cb_x2, cb_reduce, cb_out, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+        compute_kernel_lib::reduce<
+            PoolType::AVG,
+            ReduceDim::REDUCE_ROW,
+            cb_x2,
+            cb_reduce,
+            cb_out,
+            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
         cb_pop_front(cb_inp, Wt);
         cb_pop_front(cb_reduce, 1);
     }

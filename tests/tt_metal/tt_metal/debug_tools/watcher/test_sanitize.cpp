@@ -187,7 +187,7 @@ void RunTestOnCore(
     // A copy kernel, we'll feed it incorrect inputs to test sanitization.
     KernelHandle dram_copy_kernel = 0;
     int noc = 0;
-    constexpr const char* DRAM_COPY_KERNEL_NAME = "dram_copy";
+    const experimental::KernelSpecName DRAM_COPY_KERNEL_NAME{"dram_copy"};
     if (is_eth_core) {
         // ETH cores: invoke the original (legacy) kernel via the legacy host API.
         tt_metal::EthernetConfig config = {.noc = tt_metal::NOC::NOC_0};
@@ -409,29 +409,28 @@ void RunTestOnCore(
         tt_metal::SetRuntimeArgs(program, dram_copy_kernel, core, rta_values);
     } else {
         experimental::ProgramRunArgs params;
-        params.kernel_run_args = {{
-            .kernel_spec_name = DRAM_COPY_KERNEL_NAME,
+        params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = DRAM_COPY_KERNEL_NAME,
             .runtime_arg_values =
-                {{.node = experimental::NodeCoord{core},
-                  .args =
-                      {{"local_buffer_addr", buffer_addr},
-                       {"buffer_src_addr", input_buffer_addr},
-                       {"src_noc_x", input_buf_noc_xy.x},
-                       {"src_noc_y", input_buf_noc_xy.y},
-                       {"buffer_dst_addr", output_buffer_addr},
-                       {"dst_noc_x", output_buf_noc_xy.x},
-                       {"dst_noc_y", output_buf_noc_xy.y},
-                       {"buffer_size", buffer_size},
-                       {"use_inline_dw_write", use_inline_dw_write},
-                       {"bad_linked_transaction", bad_linked_transaction},
-                       {"l1_overflow_addr", l1_overflow_addr},
-                       {"eth_src_overflow_addr", eth_src_overflow_addr_words},
-                       {"eth_dest_overflow_addr", eth_dest_overflow_addr_words},
-                       {"use_multicast_semaphore_inc", use_multicast_semaphore_inc},
-                       {"mcast_dst_end_x", mcast_dst_end_x},
-                       {"mcast_dst_end_y", mcast_dst_end_y},
-                       {"use_write_with_state", use_write_with_state},
-                       {"use_inline_dw_write_from_state", use_inline_dw_write_from_state}}}},
+                {{experimental::NodeCoord{core},
+                  {{"local_buffer_addr", buffer_addr},
+                   {"buffer_src_addr", input_buffer_addr},
+                   {"src_noc_x", input_buf_noc_xy.x},
+                   {"src_noc_y", input_buf_noc_xy.y},
+                   {"buffer_dst_addr", output_buffer_addr},
+                   {"dst_noc_x", output_buf_noc_xy.x},
+                   {"dst_noc_y", output_buf_noc_xy.y},
+                   {"buffer_size", buffer_size},
+                   {"use_inline_dw_write", use_inline_dw_write},
+                   {"bad_linked_transaction", bad_linked_transaction},
+                   {"l1_overflow_addr", l1_overflow_addr},
+                   {"eth_src_overflow_addr", eth_src_overflow_addr_words},
+                   {"eth_dest_overflow_addr", eth_dest_overflow_addr_words},
+                   {"use_multicast_semaphore_inc", use_multicast_semaphore_inc},
+                   {"mcast_dst_end_x", mcast_dst_end_x},
+                   {"mcast_dst_end_y", mcast_dst_end_y},
+                   {"use_write_with_state", use_write_with_state},
+                   {"use_inline_dw_write_from_state", use_inline_dw_write_from_state}}}},
         }};
         experimental::SetProgramRunArgs(program, params);
     }
