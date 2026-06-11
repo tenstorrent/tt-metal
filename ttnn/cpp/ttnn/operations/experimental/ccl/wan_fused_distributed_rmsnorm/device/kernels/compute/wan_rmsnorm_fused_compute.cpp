@@ -369,7 +369,50 @@ void kernel_main() {
                                     compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
                                     compute_kernel_lib::NoAccumulation{},
                                     eps_rsqrt);
+                            } else if constexpr (stats_tiles_cols > 1) {
+                                // Candidate #3: sum the ring_size gathered partial-sum tiles
+                                // with an FPU eltwise add (dst-accumulate) instead of the
+                                // matmul-based reduce<AVG,REDUCE_ROW>. Each gathered tile
+                                // holds this device's per-token partial sum-of-squares in
+                                // col 0, so adding the tiles element-wise gives the full
+                                // per-token sum in col 0; then *1/H_full + eps + rsqrt on
+                                // dst (mirrors the eps_rsqrt post-op). Removing the matmul
+                                // eliminates the matmul->pack transition that wedges the
+                                // packer at multi-row-chunk x ring_size>1 (see
+                                // WAN_RMSNORM_TP2_HANG_HANDOFF.md). stats_tiles_cols ==
+                                // ring_size == TP is always even (2/4/8).
+                                static_assert(stats_tiles_cols % 2 == 0, "eltwise stats-sum needs even ring_size");
+                                constexpr uint32_t recip_h_full_bits = __builtin_bit_cast(
+                                    uint32_t, 1.0f / static_cast<float>(num_tile_cols * 32u * stats_tiles_cols));
+                                cb_wait_front(stats_gathered_cb, stats_tiles_cols);
+                                reconfig_data_format(stats_gathered_cb, stats_gathered_cb);
+                                pack_reconfig_data_format(reduce_result_cb);
+                                tile_regs_acquire();
+                                // dst[0] = t0 + t1, then dst[0] += t_k + t_{k+1} for the rest.
+                                binary_tiles_init<true, EltwiseBinaryType::ELWADD>(
+                                    stats_gathered_cb, stats_gathered_cb, false);
+                                add_tiles(stats_gathered_cb, stats_gathered_cb, 0, 1, 0);
+                                binary_tiles_init<false, EltwiseBinaryType::ELWADD>(
+                                    stats_gathered_cb, stats_gathered_cb, true);
+                                for (uint32_t k = 2; k < stats_tiles_cols; k += 2) {
+                                    add_tiles(stats_gathered_cb, stats_gathered_cb, k, k + 1, 0);
+                                }
+                                // mean = sum / H_full, then + eps, then rsqrt.
+                                binop_with_scalar_tile_init();
+                                mul_unary_tile(0, recip_h_full_bits);
+                                add_unary_tile(0, eps_bits);
+                                rsqrt_tile_init<use_legacy_rsqrt>();
+                                rsqrt_tile<use_legacy_rsqrt>(0);
+                                tile_regs_commit();
+                                tile_regs_wait();
+                                cb_reserve_back(reduce_result_cb, 1);
+                                pack_tile(0, reduce_result_cb);
+                                cb_push_back(reduce_result_cb, 1);
+                                tile_regs_release();
+                                cb_pop_front(stats_gathered_cb, stats_tiles_cols);
                             } else {
+                                // TP=1: a single gathered tile; the matmul reduce is fine
+                                // (no multi-chunk x ring hang at ring_size==1).
                                 compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW>(
                                     stats_gathered_cb,
                                     reduce_scalar_avg_cb,
