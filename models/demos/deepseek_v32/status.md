@@ -183,7 +183,8 @@ Done: (4),(5),(6),(7),(9). **(8) retired** — see decision below. Remaining ope
    - `ttnn.experimental.rotary_embedding` — also rotate_half, caller cos/sin, `token_index` for decode. Secondary.
    - `ttnn.experimental.rotate_half` — the bare rotate_half tensor op, for custom pipelines.
    - Why this works where `rotary_embedding_llama` can't: llama uses a per-tile [32,32] trans_mat → can only pair *within* a tile (interleaved); the rotate_half ops pair across the 32-split (i, i+32) natively. So the cross-tile pairing is handled inside these ops.
-   - **TODO before adopting (numerics probe, not code-read):** feed the indexer's cos/sin so `rotary_embedding_hf` matches the CPU reference `apply_rotary_emb(interleaved=False)` (freqs from `precompute_freqs_cis`) — confirm PCC on a [.,64] slice. Then the indexer rope moves on-device (removes the q/k pe-slice readbacks, the dominant indexer host transfer) and unblocks (19).
+   - **PROBE CONFIRMED 2026-06-11: PCC 0.99999** vs reference `apply_rotary_emb(interleaved=False)` on a [1,H,128,64] slice. Recipe: x prefill layout `[1, H, S, 64]`; cos/sin `[1,1,S,64]` = `cat([freqs.real, freqs.real], -1)` / `cat([freqs.imag, freqs.imag], -1)` (halves repeated, from `precompute_freqs_cis`); `ttnn.experimental.rotary_embedding_hf(x, cos, sin, is_decode_mode=False, compute_kernel_config=HiFi4/fp32_acc)`. head_dim 64 OK (divisible by 2·TILE).
+   - So on-device indexer RoPE is in-scope and trivial (drop-in for the host `_host_rope_pe`): removes the q/k pe-slice readbacks (the dominant indexer host transfer) and unblocks (19). No C++.
 5. v3 composition files hardcode ttMLA/TtPrefillBlock — forced copies in v32; fix by upstreaming injection params (tt/README.md)
 6. V3.2 checkpoints (indexer weights) not wired into test conftest — tests run with v3 weights
 
