@@ -175,6 +175,23 @@ class TtTextAttention(LightweightModule):
             packer_l1_acc=True,
         )
 
+        # Decode DRAM-sharded matmuls are FLOP-bound at HiFi4 on this small
+        # grid (decoder_layer occupancy redo tracy: QKV 11.3 / rope 8.9 /
+        # o_proj 19.9 us = ~125-130 GB/s weight streaming, while text_mlp's
+        # HiFi2 instances of the SAME kernel run ~230 GB/s). Drop the three
+        # decode matmuls to HiFi2 with fp32 dest acc kept — the
+        # tt_transformers decode posture; the fp32-mandatory part of the
+        # attention path (softmax logits, prefill chain) is untouched and
+        # the rope chain already rounds to bf16 (gate-checked: PCC + e2e
+        # WER parity + long-AR drift).
+        self._dec_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
         # ---- decode DRAM-sharded o_proj (occupancy REDO lever 1) -------
         # M=1 decode matmuls are DRAM weight-streaming bound; the default
         # interleaved kernel read the replicated wo at ~170 GB/s on 48
@@ -193,16 +210,38 @@ class TtTextAttention(LightweightModule):
             spec = ttnn.ShardSpec(self._dram_weight_grid, (k, pad_n // dram_grid.x), ttnn.ShardOrientation.ROW_MAJOR)
             return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, spec)
 
+        def _rect_grid(n):
+            # Rectangular (gx, gy) with gx*gy == n inside the queried compute
+            # grid, nearest-square. RECTANGLE (not the row-wise wrap set):
+            # the layer-scope sharded residual feeds these shards straight
+            # into the sharded RMSNorm, whose program config takes a grid
+            # SIZE — the shard grid must be a (0,0)-anchored rectangle.
+            best = None
+            for gy in range(1, compute_grid.y + 1):
+                if n % gy == 0 and n // gy <= compute_grid.x:
+                    cand = (n // gy, gy)
+                    if best is None or abs(cand[0] - cand[1]) < abs(best[0] - best[1]):
+                        best = cand
+            assert best is not None, f"{n} cores do not fit {compute_grid.x}x{compute_grid.y}"
+            return best
+
         def _l1_ws_mc(width, num_cores):
+            gx, gy = _rect_grid(num_cores)
             return ttnn.create_sharded_memory_config(
                 shape=(32, width // num_cores),
-                core_grid=ttnn.num_cores_to_corerangeset(num_cores, compute_grid, row_wise=True),
+                core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))}),
                 strategy=ttnn.ShardStrategy.WIDTH,
                 use_height_and_width_as_shard_shape=True,
             )
 
         hidden_t = hidden // 32
-        self._o_cores = 8  # ibw=6 (A/B: 24c 110.2, 12c 104.1, 8c 103.7, 4c 105.8 us total)
+        # 12 cores (4x3 rectangle) for the WHOLE decode chain (occupancy redo,
+        # decoder_layer tick): the M=1 DRAM-sharded matmuls are BW-plateau
+        # flat 8->12 cores (QKV-core A/B: 24c 110.2, 12c 104.1, 8c 103.7,
+        # 4c 105.8 us block total), and 12 cores lets the residual stream,
+        # both RMSNorms and the MLP share ONE canonical width-shard spec —
+        # the per-site i2s/s2i bounces fold away at layer scope.
+        self._o_cores = 8  # A/B
         self.wo_dec = ttnn.from_torch(
             o_w.transpose(-2, -1).reshape(1, 1, num_heads * head_dim, hidden).contiguous(),
             dtype=weight_dtype,
@@ -211,9 +250,7 @@ class TtTextAttention(LightweightModule):
             memory_config=_dram_sharded_weight_mc(num_heads * head_dim, hidden),
             mesh_mapper=replicate,
         )
-        self.o_in_mc = _l1_ws_mc(hidden, self._o_cores)
-        self.o_out_mc = _l1_ws_mc(hidden, self._o_cores)
-        self._omm_cores = 16  # o_proj A/B
+        self._omm_cores = 12  # o_proj on the canonical 12-core residual grid
         self.o_in_mc = _l1_ws_mc(hidden, self._omm_cores)
         self.o_out_mc = _l1_ws_mc(hidden, self._omm_cores)
         self.o_pc = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
@@ -293,6 +330,10 @@ class TtTextAttention(LightweightModule):
         rot_pad = torch.zeros(qkv_pad, qkv_pad)
         rot_pad[: self.qkv_width, : self.qkv_width] = rot_full
         self._rot_pad_t = rot_pad
+        # bf16 storage. A/B'd bfloat8_b (exact for 0/±1, halves streamed
+        # bytes): rope matmul unchanged at 8.67 us — the M=1 768x768 matmul
+        # is latency-bound, not BW-bound; reverted to keep the surface
+        # minimal (decoder_layer occupancy redo).
         self.rope_rot_dec = ttnn.from_torch(
             rot_pad.reshape(1, 1, qkv_pad, qkv_pad),
             dtype=ttnn.bfloat16,
@@ -604,16 +645,23 @@ class TtTextAttention(LightweightModule):
     # ------------------------------------------------------------------
     # Device forward (KV-cached single-token decode step)
     # ------------------------------------------------------------------
-    def forward_decode(self, x_111H: ttnn.Tensor, kv_cache, rot_step) -> ttnn.Tensor:
+    def forward_decode(self, x_111H: ttnn.Tensor, kv_cache, rot_step, return_sharded=False) -> ttnn.Tensor:
         """One KV-cached token step: O(1) projections + attention over the cache.
 
-        x_111H: [1, 1, 1, hidden] fp32 TILE_LAYOUT, replicated on the mesh.
+        x_111H: [1, 1, 1, hidden] TILE_LAYOUT, replicated on the mesh —
+            DRAM interleaved, or ALREADY width-sharded in ``qkv_in_mc``
+            (the decoder layer's canonical 12-core residual shard), in
+            which case the entry interleaved_to_sharded is skipped.
         kv_cache: dict from init_kv_cache. ``kv_cache["pos"]`` (persistent
             int32 [1]) must already hold this token's cache slot; it drives
             BOTH the cache write and SDPA causality (no mask tensor).
         rot_step: (cos_cat, sin_cat) from prepare_decode_rope,
             [1, 1, 1, qkv_width] fp32 fused-rope rows.
-        Returns: [1, 1, 1, hidden] fp32, replicated.
+        return_sharded: True returns the o_proj output still width-sharded
+            in ``o_out_mc`` (same spec as ``qkv_in_mc``) so the caller's
+            residual add runs shard-to-shard; False keeps the DRAM
+            interleaved block-output contract.
+        Returns: [1, 1, 1, hidden], replicated.
         No CCL in attention: each chip's KV-head cache copy is local.
 
         Perf REDO 3 decode path: fused fp32 rope on the QKV row (1 matmul
@@ -630,16 +678,20 @@ class TtTextAttention(LightweightModule):
         # Q pre-scaled by 1/sqrt(hd) in the cos/sin rows, so the bf16 SDPA
         # sees the same ±276-magnitude logits as before. The old fp32 chain
         # + separate bf16 typecast op are gone (gate-checked, WER 0.0 5/5).
-        x_ws = ttnn.interleaved_to_sharded(x_111H, self.qkv_in_mc)
+        if x_111H.is_sharded():
+            x_ws = x_111H if x_111H.memory_config() == self.qkv_in_mc else ttnn.reshard(x_111H, self.qkv_in_mc)
+        else:
+            x_ws = ttnn.interleaved_to_sharded(x_111H, self.qkv_in_mc)
         xqkv_mm = ttnn.linear(
             x_ws,
             self.wqkv_dec,
             dtype=ttnn.float32,
             program_config=self.qkv_pc,
             memory_config=self.qkv_out_mc,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self._dec_compute_kernel_config,
         )
-        ttnn.deallocate(x_ws)
+        if x_ws is not x_111H:
+            ttnn.deallocate(x_ws)
         if self.bqkv_dec is None:
             self.bqkv_dec = ttnn.from_torch(
                 self._bqkv_dec_rows,
@@ -658,7 +710,7 @@ class TtTextAttention(LightweightModule):
             dtype=ttnn.float32,
             program_config=self.rope_pc,
             memory_config=self.qkv_out_mc,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self._dec_compute_kernel_config,
         )
         # L1, not DRAM, for the heads-decode input: nlp_create_qkv_heads_decode
         # reads bf16 sub-tile lines (32B) which silently drop ODD head rows
@@ -685,7 +737,12 @@ class TtTextAttention(LightweightModule):
         ttnn.deallocate(roped_bf)
 
         # k/v are already [1, B=1, hpd, hd] HEIGHT_SHARDED L1 — exactly the
-        # paged_update_cache input layout.
+        # paged_update_cache input layout. NOTE (occupancy redo A/B):
+        # paged_fused_update_cache (one launch for K+V) TT_FATALs here —
+        # at B=1 nlp_create_qkv_heads_decode places k and v on the SAME
+        # core (v always shares q's grid; overlap_qk_coregrid=False only
+        # moves k and requires a width-sharded input), and the fused op
+        # demands disjoint input core grids. Two single-core updates stay.
         ttnn.experimental.paged_update_cache(kv_cache["k"], k, update_idxs_tensor=kv_cache["pos"])
         ttnn.experimental.paged_update_cache(kv_cache["v"], v, update_idxs_tensor=kv_cache["pos"])
         ttnn.deallocate(k)
@@ -734,9 +791,11 @@ class TtTextAttention(LightweightModule):
             dtype=x_111H.dtype,
             program_config=self.o_pc,
             memory_config=self.o_out_mc,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self._dec_compute_kernel_config,
         )
         ttnn.deallocate(attn_ws2)
+        if return_sharded:
+            return out_ws
         out = ttnn.sharded_to_interleaved(out_ws, ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(out_ws)
         return out

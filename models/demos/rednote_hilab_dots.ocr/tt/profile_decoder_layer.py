@@ -10,6 +10,13 @@ tensors created once outside the trace, like the production AR loop).
 Run under tracy:
     python -m tracy -p -v -r --op-support-count 20000 \
         models/demos/rednote_hilab_dots.ocr/tt/profile_decoder_layer.py --traced
+
+Decode operating point (production traced token step, ocr_model
+_decode_step_traced — the hot path: 28 layers x every generated token):
+bf16 token row [1, 1, 1, 1536] through forward_decode against persistent
+bf16 KV caches (capacity 3200), slot ~1500, production weight dtypes
+(attn/MLP weights bfloat8_b) — replayed as a metal trace. Run with
+``--decode --traced``.
 """
 
 import argparse
@@ -67,6 +74,7 @@ def _load_weights(prefix, keys):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--traced", action="store_true")
+    parser.add_argument("--decode", action="store_true", help="KV-cached decode token step instead of prefill")
     parser.add_argument("--iters", type=int, default=1, help="profiled replay count")
     args = parser.parse_args()
 
@@ -85,6 +93,52 @@ def main():
         trace_region_size=80_000_000,
     )
     try:
+        if args.decode:
+            # Production decode posture (ocr_model): fp32 attention-path
+            # activations, bfloat8_b attn/MLP weight storage, bf16 residual.
+            layer = TtDecoderLayer(
+                mesh_device,
+                sd,
+                num_heads=12,
+                num_kv_heads=2,
+                dtype=ttnn.float32,
+                mlp_dtype=ttnn.bfloat8_b,
+                attn_weight_dtype=ttnn.bfloat8_b,
+                mlp_gate_up_dtype=ttnn.bfloat8_b,
+            )
+            MAX_SEQ, SLOT = 3200, 1500
+            kv_cache = layer.init_kv_cache(MAX_SEQ)
+            pos_host = ttnn.from_torch(torch.tensor([SLOT], dtype=torch.int32), dtype=ttnn.int32)
+            ttnn.copy_host_to_device_tensor(pos_host, kv_cache["pos"])
+            rot_step = layer.prepare_decode_rope(SLOT)
+            x_tt = ttnn.from_torch(
+                x[:, :1, :].reshape(1, 1, 1, dim).float(),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            for _ in range(3):
+                out = layer.forward_decode(x_tt, kv_cache, rot_step)
+                ttnn.deallocate(out)
+            ttnn.synchronize_device(mesh_device)
+            if args.traced:
+                tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+                out = layer.forward_decode(x_tt, kv_cache, rot_step)
+                ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+                ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+                ttnn.synchronize_device(mesh_device)
+                for _ in range(max(1, args.iters)):
+                    ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+                ttnn.synchronize_device(mesh_device)
+                ttnn.release_trace(mesh_device, tid)
+            else:
+                out = layer.forward_decode(x_tt, kv_cache, rot_step)
+                ttnn.synchronize_device(mesh_device)
+            print("profiled iteration complete (decode, traced=%s, slot=%d)" % (args.traced, SLOT))
+            return
+
         # Production dtype: the whole layer runs fp32 (attention path mandate).
         layer = TtDecoderLayer(mesh_device, sd, num_heads=12, num_kv_heads=2)
 

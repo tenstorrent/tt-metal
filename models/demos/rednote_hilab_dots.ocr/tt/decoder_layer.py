@@ -181,22 +181,42 @@ class TtDecoderLayer(LightweightModule):
     def forward_decode(self, x_111H: ttnn.Tensor, kv_cache, rot_step) -> ttnn.Tensor:
         """KV-cached single-token step: same pre-norm residual wiring, seq=1.
 
-        x_111H: [1, 1, 1, hidden] fp32 TILE_LAYOUT, replicated. rot_step
-        from prepare_decode_rope; kv_cache from init_kv_cache with
-        kv_cache["pos"] already at this token's slot (drives the cache
-        write AND SDPA-decode causality). Norms and MLP are seq-agnostic;
-        only the attention sub-block carries a distinct decode path.
+        x_111H: [1, 1, 1, hidden] TILE_LAYOUT, replicated (bf16 in the
+        production traced step). rot_step from prepare_decode_rope; kv_cache
+        from init_kv_cache with kv_cache["pos"] already at this token's slot
+        (drives the cache write AND SDPA-decode causality). Norms and MLP are
+        seq-agnostic; only the attention sub-block carries a distinct decode
+        path.
+
+        Layer-scope sharded residual (occupancy redo, tick-62 lever): the
+        residual stream is held WIDTH-SHARDED in L1 on the canonical 12-core
+        (4x3) shard — text_attention's ``qkv_in_mc`` == ``o_out_mc`` == the
+        MLP's ``_dec_x_mc`` — across the WHOLE decode step: one
+        interleaved_to_sharded at entry, both RMSNorms consume/produce the
+        shard in place, attention takes the sharded row and returns its
+        o_proj output sharded, the MLP all_gather lands back in the shard,
+        and both residual adds run shard-to-shard. The per-norm i2s/s2i
+        bounce (~1.88 us/site) never pays per-site but folds away here.
+        Block output stays DRAM interleaved (block-output contract).
         """
         res_dtype = x_111H.dtype
-        attn_in = self.input_layernorm(x_111H)
-        attn_out = self.self_attn.forward_decode(attn_in, kv_cache, rot_step)
+        # Canonical 12-core residual shard == o_proj output shard == the
+        # MLP's decode input shard; attention reshards internally if its
+        # QKV-chain core count differs.
+        res_mc = self.self_attn.o_out_mc
+        x_sh = ttnn.interleaved_to_sharded(x_111H, res_mc)
+        attn_in = self.input_layernorm(x_sh)  # sharded pass-through norm
+        attn_out = self.self_attn.forward_decode(attn_in, kv_cache, rot_step, return_sharded=True)
         ttnn.deallocate(attn_in)
-        h = ttnn.add(x_111H, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=res_dtype)
+        h = ttnn.add(x_sh, attn_out, memory_config=res_mc, dtype=res_dtype)
+        ttnn.deallocate(x_sh)
         ttnn.deallocate(attn_out)
-        ff_in = self.post_attention_layernorm(h)
-        ff_out = self.mlp(ff_in)
+        ff_in = self.post_attention_layernorm(h)  # sharded pass-through norm
+        ff_out = self.mlp(ff_in, out_mc=res_mc)
         ttnn.deallocate(ff_in)
-        out = ttnn.add(h, ff_out, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=res_dtype)
+        out_sh = ttnn.add(h, ff_out, memory_config=res_mc, dtype=res_dtype)
         ttnn.deallocate(h)
         ttnn.deallocate(ff_out)
+        out = ttnn.sharded_to_interleaved(out_sh, ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(out_sh)
         return out

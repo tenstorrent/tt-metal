@@ -115,10 +115,26 @@ class TtTextMLP(LightweightModule):
             spec = ttnn.ShardSpec(dram_weight_grid, (k, pad_n // dram_grid.x), ttnn.ShardOrientation.ROW_MAJOR)
             return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, spec)
 
+        def _rect_grid(n):
+            # (0,0)-anchored RECTANGLE, nearest-square (not the row-wise
+            # wrap set): the decoder layer's canonical residual shard feeds
+            # these cores straight from the sharded RMSNorm, whose program
+            # config takes a rectangular grid size. Same helper as
+            # text_attention._rect_grid.
+            best = None
+            for gy in range(1, compute_grid.y + 1):
+                if n % gy == 0 and n // gy <= compute_grid.x:
+                    cand = (n // gy, gy)
+                    if best is None or abs(cand[0] - cand[1]) < abs(best[0] - best[1]):
+                        best = cand
+            assert best is not None, f"{n} cores do not fit {compute_grid.x}x{compute_grid.y}"
+            return best
+
         def _l1_ws_mc(width):
+            gx, gy = _rect_grid(self._dec_cores)
             return ttnn.create_sharded_memory_config(
                 shape=(32, width // self._dec_cores),
-                core_grid=ttnn.num_cores_to_corerangeset(self._dec_cores, compute_grid, row_wise=True),
+                core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))}),
                 strategy=ttnn.ShardStrategy.WIDTH,
                 use_height_and_width_as_shard_shape=True,
             )
@@ -189,7 +205,9 @@ class TtTextMLP(LightweightModule):
     def _forward_decode(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Decode fast path: one padded tile row [1, 1, <=32, hidden].
 
-        i2s L1 width-shard (12 cores) -> DRAM-sharded HiFi2 gate/up matmuls
+        i2s L1 width-shard (12 cores; skipped when the decoder layer hands
+        the residual stream in ALREADY width-sharded — the layer-scope
+        sharded-residual lever) -> DRAM-sharded HiFi2 gate/up matmuls
         -> fused-SiLU mul (stays width-sharded) -> DRAM-sharded down matmul
         -> s2i DRAM for the CCL all-reduce. Occupancy-redo A/B at the
         queried 11x10 grid: the M=1 matmuls are DRAM weight-streaming bound
@@ -199,7 +217,7 @@ class TtTextMLP(LightweightModule):
         MANY (24c 6.2 / 12c 11.2 / 8c 16.4 us). 12 cores minimizes the
         block total (94.3 us/device vs 24c 100.6 / 8c 97.7).
         """
-        x_ws = ttnn.interleaved_to_sharded(x, self._dec_x_mc)
+        x_ws = x if x.is_sharded() else ttnn.interleaved_to_sharded(x, self._dec_x_mc)
         gate = ttnn.linear(
             x_ws,
             self.w1_dec,
@@ -214,7 +232,8 @@ class TtTextMLP(LightweightModule):
             compute_kernel_config=self._dec_compute_kernel_config,
             memory_config=self._dec_h_mc,
         )
-        ttnn.deallocate(x_ws)
+        if x_ws is not x:
+            ttnn.deallocate(x_ws)
         # KB ttnn_mul_1: SiLU fused into the binary mul (the tt_transformers
         # decode posture). Measured A/Bs at 12c per device: fused-SiLU mul
         # 11.2 us beats standalone in-place silu + plain mul (7.1 + 4.9 us)
@@ -239,14 +258,24 @@ class TtTextMLP(LightweightModule):
         ttnn.deallocate(out)
         return out_i
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, out_mc=None) -> ttnn.Tensor:
         """x: [1, 1, seq, hidden] TILE_LAYOUT, replicated across the mesh.
 
+        out_mc: optional L1 width-sharded MemoryConfig for the decode-path
+            output (the decoder layer's canonical residual shard) — the
+            all_gather re-replication lands straight in that shard so the
+            caller's residual add runs shard-to-shard. None keeps the DRAM
+            interleaved block-output contract.
         Returns: [1, 1, seq, hidden], replicated (all-reduced down_proj output).
         """
-        # Decode posture: one padded tile row (logical seq <= 32) on a
-        # DRAM-interleaved input takes the DRAM-sharded L1 fast path.
-        if x.padded_shape[-2] <= 32 and x.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
+        # Decode posture: one padded tile row (logical seq <= 32), DRAM
+        # interleaved or already width-sharded (layer-scope sharded
+        # residual), takes the DRAM-sharded L1 fast path.
+        mem_layout = x.memory_config().memory_layout
+        if x.padded_shape[-2] <= 32 and mem_layout in (
+            ttnn.TensorMemoryLayout.INTERLEAVED,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ):
             out = self._forward_decode(x)
             if self.num_devices > 1:
                 # Same RS+AG all-reduce as prefill. A/B'd single
@@ -255,8 +284,17 @@ class TtTextMLP(LightweightModule):
                 # no fused decode CCL win available on the sync path.
                 reduced = ttnn.reduce_scatter(out, dim=3, num_links=2, topology=ttnn.Topology.Linear)
                 ttnn.deallocate(out)
-                out = ttnn.all_gather(reduced, dim=3, num_links=2, topology=ttnn.Topology.Linear)
+                if out_mc is not None:
+                    out = ttnn.all_gather(
+                        reduced, dim=3, num_links=2, topology=ttnn.Topology.Linear, memory_config=out_mc
+                    )
+                else:
+                    out = ttnn.all_gather(reduced, dim=3, num_links=2, topology=ttnn.Topology.Linear)
                 ttnn.deallocate(reduced)
+            elif out_mc is not None:
+                out_sh = ttnn.interleaved_to_sharded(out, out_mc)
+                ttnn.deallocate(out)
+                out = out_sh
             return out
 
         gate = ttnn.linear(

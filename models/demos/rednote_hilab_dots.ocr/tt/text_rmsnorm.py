@@ -169,12 +169,59 @@ class TtTextRMSNorm(LightweightModule):
         self._sharded_cfg_cache[key] = cfg
         return cfg
 
+    def _sharded_passthrough_pc(self, x: ttnn.Tensor):
+        """Program config consuming an ALREADY width-sharded input in place.
+
+        Layer-scope sharded residual (decoder_layer decode occupancy redo):
+        the caller holds the residual stream WIDTH_SHARDED in L1 across the
+        whole decode step, so the norm reads its input shard directly and
+        writes the output into the SAME shard spec — the per-site i2s/s2i
+        bounce (~1.88 us/site) folds away. Requires a rectangular shard grid
+        anchored at (0,0) (the LN sharded kernel takes a grid SIZE).
+        """
+        spec = x.memory_config().shard_spec
+        shard_h, shard_w = spec.shape
+        key = ("passthrough", shard_h, shard_w, str(spec.grid))
+        if key in self._sharded_cfg_cache:
+            return self._sharded_cfg_cache[key]
+        bbox = spec.grid.bounding_box()
+        gx, gy = bbox.end.x + 1, bbox.end.y + 1
+        pc = None
+        if bbox.start.x == 0 and bbox.start.y == 0 and gx * gy == spec.grid.num_cores():
+            block_w = shard_w // TILE
+            subblock_w = min(4, block_w)
+            while block_w % subblock_w:
+                subblock_w -= 1
+            pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=(gx, gy),
+                subblock_w=subblock_w,
+                block_h=shard_h // TILE,
+                block_w=block_w,
+                inplace=False,
+            )
+        self._sharded_cfg_cache[key] = pc
+        return pc
+
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Replicated path. x: [..., dim] TILE_LAYOUT, replicated across the mesh.
 
-        Returns: same shape, replicated, DRAM interleaved (block-output
-        contract — every decoder_layer consumer is a matmul).
+        Returns: same shape, replicated. DRAM interleaved for an interleaved
+        input (block-output contract — every decoder_layer consumer is a
+        matmul); a WIDTH_SHARDED L1 input (the decode layer-scope sharded
+        residual) is consumed and returned in the SAME shard spec.
         """
+        in_mc = x.memory_config()
+        if in_mc.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED and in_mc.buffer_type == ttnn.BufferType.L1:
+            pc = self._sharded_passthrough_pc(x)
+            if pc is not None:
+                return ttnn.rms_norm(
+                    x,
+                    epsilon=self.eps,
+                    weight=self.weight,
+                    program_config=pc,
+                    memory_config=in_mc,
+                    compute_kernel_config=self.compute_kernel_config,
+                )
         cfgs = self._sharded_cfgs(x)
         if cfgs is None:
             return ttnn.rms_norm(
