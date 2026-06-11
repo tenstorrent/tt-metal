@@ -32,7 +32,7 @@ LazyWeight tensor cache: ``TT_CACHE_PATH/<device_name>`` when set, otherwise
 
 Reference artifact (``.refpt``): use ``generate_controlled_refpt.py`` to produce a
 metadata-rich ``.refpt`` with ``prompt_len=512`` before running the accuracy test.
-See ``dev-tools/agentic-bringup/skills/reference-sanity.md``.
+See the reference-sanity guide.
 """
 
 import json
