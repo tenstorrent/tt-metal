@@ -98,7 +98,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     const bool k_is_bfp8 = k.dtype() == DataType::BFLOAT8_B;
     const DataFormat k_fmt = k_is_bfp8 ? DataFormat::Bfp8_b : DataFormat::Float16_b;
     const uint32_t k_tile = tile_size(k_fmt);
-    const MathFidelity math_fidelity = k_is_bfp8 ? MathFidelity::LoFi : MathFidelity::HiFi2;
+    const MathFidelity math_fidelity = MathFidelity::HiFi2;
 
     auto make_cb = [&](uint32_t idx, uint32_t ntiles, DataFormat fmt, uint32_t tile_bytes) {
         CreateCircularBuffer(
