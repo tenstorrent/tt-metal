@@ -41,6 +41,10 @@ def generate_reference_io(
     state_dict: dict[str, torch.Tensor],
     decode_position_id: int | None = None,
 ):
+    # The bundled reference config may not set _attn_implementation (None) which makes the
+    # reference DeepseekV3DecoderLayer raise KeyError(None); default to eager attention.
+    if getattr(hf_config, "_attn_implementation", None) is None:
+        hf_config._attn_implementation = "eager"
     reference_model = DeepseekV3DecoderLayer(hf_config, layer_idx=layer_idx).eval().to(torch.bfloat16)
     if module_path is not None:
         state_dict = sub_state_dict(state_dict, module_path + ".")
