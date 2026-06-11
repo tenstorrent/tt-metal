@@ -346,21 +346,27 @@ def create_single_pod_single_decoder_pipeline_configuration(
     persistent_mode: bool = True,
     dense_layer_id_override: int | None = None,
     num_slots: int = 64,
+    num_decoder_stages: int = 1,
 ) -> PipelineConfiguration:
-    """16-stage single-pod with exactly ONE KV-generating decoder (base decode, no spec/MTP):
+    """16-stage single-pod with N KV-generating dense decoders (base decode, no spec/MTP):
 
         0: SpecLMHeadWithEmbedding (fused embed + LM head, base-decode mode)
-        1: DenseDecoderStage(layer 0)   <-- the only stage that allocates a KV cache
-        2..15: Passthrough(ACTIVATION_W_TOKEN_META)
+        1..N: DenseDecoderStage(layers 0..N-1)   <-- each allocates a KV cache
+        N+1..15: Passthrough(ACTIVATION_W_TOKEN_META)
+
+    Stages 1..3 are dense (layers 0..2); stages 4..N are MoE (layers 3..N-1),
+    capped at 14 (15 stages + embed). Layer ids are distinct by construction —
+    the migration chunk table keys on layer, so dense_layer_id_override is
+    rejected for num_decoder_stages > 1.
 
     Same stage/mesh positions as the production single-pod spec-decode layout
     (first decoder on mesh 1 — the migration master's expected slot), with the
-    other decoders swapped to passthroughs. Modeled on
-    create_single_pod_spec_decode_no_decoder_pipeline_configuration's supported
-    base-decode shape. Use --no-enable-speculative-decode; pass num_layers=1 to
-    any downstream consumer (e.g. the migration chunk table).
+    remaining decoders swapped to passthroughs. Use --no-enable-speculative-decode.
     """
-    dense_id = dense_layer_id_override if dense_layer_id_override is not None else 0
+    if not 1 <= num_decoder_stages <= 14:
+        raise ValueError(f"num_decoder_stages must be 1..14, got {num_decoder_stages}")
+    if dense_layer_id_override is not None and num_decoder_stages > 1:
+        raise ValueError("dense_layer_id_override would collapse decoder stages onto one layer id")
 
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
         return SpecLMHeadWithEmbeddingStage(
@@ -370,21 +376,34 @@ def create_single_pod_single_decoder_pipeline_configuration(
             spec_weights=weight_provider.load_lm_head(device),  # base decode: LM head fills the spec slot
         )
 
-    def stage_1(device: ttnn.MeshDevice) -> StageKind:
-        return DenseDecoderStage(
-            weights=weight_provider.load_dense_layer(layer_id=dense_id, device=device),
-            layer_idx=dense_id,
+    def _dense_stage(layer_id: int):
+        return lambda device: DenseDecoderStage(
+            weights=weight_provider.load_dense_layer(layer_id=layer_id, device=device),
+            layer_idx=layer_id,
+            num_slots=num_slots,
+        )
+
+    def _moe_stage(layer_id: int):
+        return lambda device: MoEDecoderStage(
+            weights=weight_provider.load_moe_layer(layer_id=layer_id, device=device),
+            layer_idx=layer_id,
             num_slots=num_slots,
         )
 
     def passthrough_stage(device: ttnn.MeshDevice) -> StageKind:
         return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
 
+    first_dense = dense_layer_id_override if dense_layer_id_override is not None else 0
+
+    def _decoder(i: int):
+        layer = first_dense + i
+        return _dense_stage(layer) if i < 3 else _moe_stage(layer)
+
     return PipelineConfiguration(
         {
             0: stage_0,
-            1: stage_1,
-            **{i: passthrough_stage for i in range(2, 16)},
+            **{1 + i: _decoder(i) for i in range(num_decoder_stages)},
+            **{i: passthrough_stage for i in range(1 + num_decoder_stages, 16)},
         }
     )
 
@@ -485,11 +504,13 @@ def create_pipeline_configuration_from_num_procs(
     moe_layer_id_override: int | None = None,
     num_slots: int = 64,
     decoder_only: bool = False,
+    num_decoder_stages: int = 1,
 ) -> PipelineConfiguration:
     """Pick topology from process count (4 -> single_galaxy, 16 -> single_pod, 64 -> sp4).
 
-    decoder_only (16-proc, base decode only): exactly one KV-generating dense
-    decoder on stage 1; all other decoder stages become passthroughs. See
+    decoder_only (16-proc, base decode only): num_decoder_stages KV-generating
+    dense decoders on stages 1..N (distinct layers 0..N-1); all other decoder
+    stages become passthroughs. See
     create_single_pod_single_decoder_pipeline_configuration.
     """
     if num_procs == 4:
@@ -511,6 +532,7 @@ def create_pipeline_configuration_from_num_procs(
                 persistent_mode=persistent_mode,
                 dense_layer_id_override=dense_layer_id_override,
                 num_slots=num_slots,
+                num_decoder_stages=num_decoder_stages,
             )
         if enable_speculative_decode:
             assert enable_mtp, "16-proc pipeline currently requires enable_mtp=True and uses the spec decode topology"

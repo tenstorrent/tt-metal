@@ -178,6 +178,13 @@ def create_parser() -> argparse.ArgumentParser:
         "all other decoder stages become passthroughs. Requires --no-enable-speculative-decode.",
     )
     parser.add_argument(
+        "--num-decoder-stages",
+        type=int,
+        default=1,
+        help="decoder_only: number of KV-generating dense decoders on stages 1..N (1..3, "
+        "distinct layers 0..N-1). Stages N+1..15 stay passthrough.",
+    )
+    parser.add_argument(
         "--migration-cmd-queue",
         type=str,
         default=None,
@@ -250,6 +257,7 @@ def run_demo(
     bspm_dir: Path | None = None,
     bspm_budget: float = 3.5,
     decoder_only: bool = False,
+    num_decoder_stages: int = 1,
     migration_done_file: str | None = None,
     migration_validate_positions: int = 32,
 ) -> None:
@@ -284,6 +292,7 @@ def run_demo(
             bspm_dir=bspm_dir,
             bspm_budget=bspm_budget,
             decoder_only=decoder_only,
+            num_decoder_stages=num_decoder_stages,
             on_kv_cache_ready=on_kv_cache_ready,
         )
 
@@ -408,7 +417,6 @@ def main(argv: list[str] | None = None) -> int:
             table_queue=args.migration_table_queue,
             resp_queue=args.migration_resp_queue,
             table_path=args.migration_table_path,
-            num_layers=1,  # decoder-only config: a single KV-generating layer
             max_seq_len=args.migration_max_seq_len,
             num_slots=args.num_slots,
         )
@@ -437,6 +445,7 @@ def main(argv: list[str] | None = None) -> int:
         bspm_dir=args.bspm_dir,
         bspm_budget=args.bspm_budget,
         decoder_only=args.decoder_only,
+        num_decoder_stages=args.num_decoder_stages,
         on_kv_cache_ready=on_kv_cache_ready,
         migration_done_file=args.migration_done_file,
         migration_validate_positions=args.migration_validate_positions,

@@ -3,24 +3,31 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """on_kv_cache_ready hook: build the KV chunk address table from the live KV
-cache, export it to a protobuf file, and hand it to an already-running
-migration endpoint (tt-llm-engine stack) over its shmem control queues.
+cache, export it to a protobuf file, and hand it (plus the device map) to an
+already-running migration endpoint (tt-llm-engine stack) over its shmem
+control queues.
 
-Runs inside the model process. Only the KV-owning rank (the single
-DenseDecoderStage in the decoder-only single-pod config) does any work; all
-other ranks return immediately.
+Runs inside every model process — the hook is an MPI-collective rendezvous:
+each rank contributes its own (devices, layer, kv address, KV geometry) via
+allgathers, then RANK 0 (the head node / first pipeline stage) materializes the
+full table for all decoder stages and is the SOLE publisher to the migration
+endpoint. Rank 0 owns no KV cache (it is the embedding stage), so it authors
+the table from the geometry gathered from the first KV-owning rank — letting
+the endpoint live on the head node, co-located with stage 0's H2D/D2H sockets
+and the scheduler. Mirrors tt-blaze runners/decode_runner.py::_setup_decode_migration.
 
 Conventions matched to the migration worker (tt-llm-engine
 disaggregation/migration — see its main.cpp / control_thread.cpp):
   * noc_addr encoding: (dram_bank_id << 32) | per_bank_offset — identical to
     the worker's addr_channel/addr_local decode (noc_addr.hpp).
-  * FabricNodeIds registered as (mesh 0, chip 0..N-1) — the worker
-    self-registers its chips as FabricNodeId(MeshId{0}, rank*D + d).
-  * Hostnames registered as "host-0" — the worker's SubordinateInfo hostname
-    for rank 0 (control_thread.cpp build_local_grouping).
-  * The chip order sidecar lists this mesh's PHYSICAL device ids in fabric
-    chip-id order: the launcher must pass exactly this as TT_VISIBLE_DEVICES
-    to the migration endpoint so worker chip d == table chip d.
+  * Device-map backend: the worker opens UMD chips from the
+    send_device_map([(fabric_mesh_id, fabric_chip_id, umd_chip_id), ...])
+    entries and registers each DeviceDram under its REAL FabricNodeId. The
+    table's device groups therefore carry real fabric node ids — no remap.
+  * Hostnames registered as "host-0": the worker's placeholder
+    SubordinateInfo hostname for rank 0 (control_thread.cpp
+    build_local_grouping). Single-host only — multi-host needs per-host
+    hostname tagging once the worker distributes per-rank device-map slices.
 
 The MigrationLayerClient python module comes from the tt-llm-engine build —
 set TT_MIGRATION_PYTHON_DIR to
@@ -32,10 +39,44 @@ from __future__ import annotations
 import os
 import sys
 import time
+from collections import namedtuple
 
 from loguru import logger
 
 import ttnn
+
+# Upper bound for the fixed-size device-list allgather (8 chips/mesh today,
+# 2x headroom). ttnn only exposes single-int allgather, so variable-length
+# lists are padded to this bound and gathered field by field.
+_MAX_DEVICES_PER_MESH = 16
+
+# layer allgather sentinel for ranks that own no KV (embedding, passthrough).
+_SENTINEL_LAYER = -1
+
+
+# KV-cache geometry needed to author the chunk table. Identical across every
+# decoder layer (same FlashMLA layout), so it is gathered ONCE from the first
+# KV-owning rank and used by the publisher — which may itself own no KV (e.g.
+# stage 0 / embedding on the head node). All five fields are small positive
+# ints (well under 2^31) so they ride the signed int allgather without masking.
+KvGeometry = namedtuple(
+    "KvGeometry",
+    ["per_device_seq_len", "kv_cache_dim", "tokens_per_kv_tile", "k_tile_size", "mesh_cols"],
+)
+
+# Sentinel geometry contributed by a rank that owns no KV cache.
+_GEOM_NONE = KvGeometry(0, 0, 0, 0, 0)
+
+
+def _kv_geometry_from_cache(kv_cache, mesh_device) -> KvGeometry:
+    """Read the table geometry from a live KV cache (KV-owning ranks only)."""
+    return KvGeometry(
+        per_device_seq_len=int(kv_cache.shape[2]),
+        kv_cache_dim=int(kv_cache.shape[3]),
+        tokens_per_kv_tile=int(kv_cache.get_tile().tile_shape[0]),
+        k_tile_size=int(kv_cache.get_tile().get_tile_size(kv_cache.dtype)),
+        mesh_cols=int(mesh_device.shape[1]),
+    )
 
 
 def _pack_bank_offset(bank_id: int, bank_offset: int) -> int:
@@ -43,21 +84,24 @@ def _pack_bank_offset(bank_id: int, bank_offset: int) -> int:
     return ((bank_id & 0xFFFFFFFF) << 32) | (bank_offset & 0xFFFFFFFF)
 
 
-def _get_kv_chunk_metadata(kv_cache, position_id: int, slot_id: int, base_addr: int):
+def _get_kv_chunk_metadata(geom: KvGeometry, position_id: int, slot_id: int, base_addr: int):
     """Chunk address math for one (position, slot) — mirrors the FlashMLA
     block layout the attention op reads (lifted from tt-blaze
     runners/kv_cache_table_helpers.get_kv_cache_metadata, single-mesh form).
+
+    `geom` carries the KV-cache geometry (gathered from the first KV rank), so
+    this is computable on a rank that owns no KV cache. The arithmetic is
+    byte-for-byte the same as the original kv_cache-reading version.
 
     Returns (dram_bank_id, per_bank_offset, chunk_size_bytes, sp_idx).
     """
     from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 
-    kv_cache_shape = kv_cache.shape
-    per_device_seq_len = kv_cache_shape[2]
-    kv_cache_dim = kv_cache_shape[3]
+    per_device_seq_len = geom.per_device_seq_len
+    kv_cache_dim = geom.kv_cache_dim
 
-    tokens_per_kv_tile = kv_cache.get_tile().tile_shape[0]
-    k_tile_size = kv_cache.get_tile().get_tile_size(kv_cache.dtype)
+    tokens_per_kv_tile = geom.tokens_per_kv_tile
+    k_tile_size = geom.k_tile_size
     kv_transfer_chunk_size = (kv_cache_dim // tokens_per_kv_tile) * k_tile_size
 
     pc = FlashMLADecode.ProgramConfig(k_chunk_size=128)
@@ -87,112 +131,227 @@ def _get_kv_chunk_metadata(kv_cache, position_id: int, slot_id: int, base_addr: 
     return dram_bank_id, offset, kv_transfer_chunk_size, sp_idx
 
 
-def build_table_from_kv_cache(
-    mesh_device, kv_cache, *, layer_id: int, num_layers: int, max_seq_len: int, num_slots: int
-):
-    """Build a KvChunkAddressTable covering (num_layers × max_seq_len × num_slots)
-    from this rank's live KV tensor. In the decoder-only config num_layers=1 and
-    layer_id is this stage's layer (0).
+def _enumerate_devices(mesh_device) -> list[tuple[int, int, int]]:
+    """Row-major (umd_physical_chip_id, fabric_mesh_id, fabric_chip_id) for
+    this rank's mesh.
 
-    Device groups use REMAPPED fabric ids: (mesh 0, fabric_chip_id) with
-    hostname "host-0" — see module docstring.
+    UMD chip ids must be PHYSICAL: mesh_device.get_device_id returns the
+    LOGICAL id, which equals the physical id only when no TT_VISIBLE_DEVICES
+    remap is in effect. Under a remap, logical d is the d-th smallest visible
+    physical id (UMD parses the env into an unordered_set and renumbers in
+    ascending-physical order).
+    """
+    visible_env = os.environ.get("TT_VISIBLE_DEVICES")
+    phys_by_logical = None
+    if visible_env:
+        phys_by_logical = sorted(int(x) for x in visible_env.split(",") if x != "")
+
+    rows, cols = mesh_device.shape[0], mesh_device.shape[1]
+    out = []
+    for r in range(rows):
+        for c in range(cols):
+            coord = ttnn.MeshCoordinate(r, c)
+            logical = int(mesh_device.get_device_id(coord))
+            phys = phys_by_logical[logical] if phys_by_logical is not None else logical
+            fnid = mesh_device.get_fabric_node_id(coord)
+            out.append((phys, int(fnid.mesh_id), int(fnid.chip_id)))
+    return out
+
+
+def _gather_kv_topology(devices: list[tuple[int, int, int]], layer_id, kv_addr: int, geom_local: KvGeometry):
+    """MPI-collective: every rank (KV-owning or not) MUST call this.
+
+    Returns (all_rank_devices, all_layers, all_addrs, all_host_tags, all_geom)
+    where index = world rank within the current distributed context:
+      all_rank_devices[r] — rank r's row-major (umd, fabric_mesh, fabric_chip)
+      all_layers[r]       — rank r's layer id, or _SENTINEL_LAYER (no KV)
+      all_addrs[r]        — rank r's kv_cache.buffer_address(), or 0 (no KV)
+      all_host_tags[r]    — crc32 of rank r's hostname (matches the worker's
+                            crc32(MPI_Get_processor_name) slicing key)
+      all_geom[r]         — rank r's KvGeometry, or _GEOM_NONE (no KV). Lets a
+                            non-KV publisher (e.g. stage 0) author the table
+                            from the first KV rank's geometry.
+
+    Every rank must pass through the SAME allgather calls in the same order —
+    do not make any of these conditional on rank.
+    """
+    import socket
+    import zlib
+
+    ag = ttnn.distributed_context_allgather_int
+    size = int(ttnn.distributed_context_get_size())
+
+    if len(devices) > _MAX_DEVICES_PER_MESH:
+        raise RuntimeError(
+            f"rank owns {len(devices)} devices, exceeds _MAX_DEVICES_PER_MESH="
+            f"{_MAX_DEVICES_PER_MESH}; bump the constant."
+        )
+    padded = list(devices) + [(0, 0, 0)] * (_MAX_DEVICES_PER_MESH - len(devices))
+
+    counts = list(ag(len(devices)))
+    slot_umd = [list(ag(int(padded[s][0]))) for s in range(_MAX_DEVICES_PER_MESH)]
+    slot_mesh = [list(ag(int(padded[s][1]))) for s in range(_MAX_DEVICES_PER_MESH)]
+    slot_fchip = [list(ag(int(padded[s][2]))) for s in range(_MAX_DEVICES_PER_MESH)]
+    all_rank_devices = [
+        [(slot_umd[s][r], slot_mesh[s][r], slot_fchip[s][r]) for s in range(counts[r])] for r in range(size)
+    ]
+
+    all_layers = list(ag(int(layer_id) if layer_id is not None else _SENTINEL_LAYER))
+    addr_lo = list(ag(kv_addr & 0xFFFFFFFF))
+    addr_hi = list(ag((kv_addr >> 32) & 0xFFFFFFFF))
+    all_addrs = [((hi & 0xFFFFFFFF) << 32) | (lo & 0xFFFFFFFF) for lo, hi in zip(addr_lo, addr_hi)]
+
+    # 31-bit mask: allgather_int is signed; the worker masks identically.
+    host_tag = zlib.crc32(socket.gethostname().encode()) & 0x7FFFFFFF
+    all_host_tags = [t & 0x7FFFFFFF for t in ag(host_tag)]
+
+    # KV geometry — one allgather per field, same fixed order on every rank.
+    # Values are small positive ints; no masking needed.
+    geom_seq = list(ag(int(geom_local.per_device_seq_len)))
+    geom_dim = list(ag(int(geom_local.kv_cache_dim)))
+    geom_tpt = list(ag(int(geom_local.tokens_per_kv_tile)))
+    geom_tile = list(ag(int(geom_local.k_tile_size)))
+    geom_cols = list(ag(int(geom_local.mesh_cols)))
+    all_geom = [
+        KvGeometry(geom_seq[r], geom_dim[r], geom_tpt[r], geom_tile[r], geom_cols[r]) for r in range(size)
+    ]
+
+    return all_rank_devices, all_layers, all_addrs, all_host_tags, all_geom
+
+
+def _build_table_gathered(
+    geom: KvGeometry,
+    *,
+    layer_to_rank: dict[int, int],
+    all_rank_devices: list[list[tuple[int, int, int]]],
+    all_addrs: list[int],
+    all_host_tags: list[int],
+    max_seq_len: int,
+    num_slots: int,
+):
+    """Publisher-only: build the KvChunkAddressTable covering every gathered
+    decoder layer.
+
+    The KV layout (bank striping, chunk/slot strides) is identical on every
+    rank, so the chunk math runs against the gathered geometry of the first KV
+    rank (`geom`); the two things that differ per layer are patched in from the
+    gather — the owning rank's buffer address (independent MeshAllocators) and
+    its mesh's real fabric node ids (device groups, one per sp row). `mesh_cols`
+    also comes from `geom` (the KV mesh shape), NOT the publisher's own mesh,
+    which may be the embedding mesh with a different shape.
     """
     d = ttnn.experimental.disaggregation
     FabricNodeId = ttnn._ttnn.fabric.FabricNodeId
     MeshId = ttnn._ttnn.fabric.MeshId
 
-    base_addr = int(kv_cache.buffer_address())
-    tokens_per_tile = kv_cache.get_tile().tile_shape[0]
+    mesh_cols = geom.mesh_cols
+    tokens_per_tile = geom.tokens_per_kv_tile
     num_chunks = max_seq_len // tokens_per_tile
-    _, _, chunk_size_bytes, _ = _get_kv_chunk_metadata(kv_cache, 0, 0, base_addr)
+    _, _, chunk_size_bytes, _ = _get_kv_chunk_metadata(geom, 0, 0, 0)
 
+    num_layers_cfg = max(layer_to_rank) + 1
     cfg = d.KvChunkAddressTableConfig()
-    cfg.num_layers = num_layers
+    cfg.num_layers = num_layers_cfg
     cfg.max_sequence_length = max_seq_len
     cfg.num_slots = num_slots
     cfg.chunk_n_tokens = tokens_per_tile
     cfg.chunk_size_bytes = chunk_size_bytes
     table = d.KvChunkAddressTable(cfg)
 
-    # Device groups are keyed by the chip index the MIGRATION WORKER will use.
-    # UMD parses TT_VISIBLE_DEVICES into an unordered_set (order discarded) and
-    # renumbers visible devices in ascending-physical order — which is exactly
-    # what mesh_device.get_device_id(coord) returns inside this rank (its
-    # LOGICAL id). So register each sp row's TP pair under the logical ids of
-    # its mesh coords, NOT the fabric chip id (fabric != logical in general).
-    rows, cols = mesh_device.shape[0], mesh_device.shape[1]
-    sp_row_groups = {}
-    for r in range(rows):
-        fnids = [
-            FabricNodeId(MeshId(0), int(mesh_device.get_device_id(ttnn.MeshCoordinate(r, c)))) for c in range(cols)
-        ]
-        dg = table.add_device_group(fnids)
-        for f in fnids:
-            table.set_fabric_node_host(f, "host-0")
-        sp_row_groups[r] = dg
+    # One device group per (owning rank, sp row): the gathered device lists are
+    # row-major, so row r of a rank's mesh is the slice [r*cols, (r+1)*cols).
+    # All meshes are assumed to share the gathered KV geometry's (rows, cols)
+    # shape — asserted via the gathered device count.
+    rank_row_groups: dict[int, dict[int, int]] = {}
 
-    for slot_id in range(num_slots):
-        for chunk_idx in range(num_chunks):
-            pos = chunk_idx * tokens_per_tile
-            bank, offset, size, sp_idx = _get_kv_chunk_metadata(kv_cache, pos, slot_id, base_addr)
-            loc = d.KvCacheLocation()
-            loc.noc_addr = _pack_bank_offset(bank, offset)
-            loc.size_bytes = size
-            loc.device_group_index = sp_row_groups[sp_idx]
-            table.set(layer_id, pos, slot_id, loc)
+    def _row_groups_for(rank: int) -> dict[int, int]:
+        if rank in rank_row_groups:
+            return rank_row_groups[rank]
+        devs = all_rank_devices[rank]
+        if len(devs) % mesh_cols != 0:
+            raise RuntimeError(
+                f"rank {rank} gathered {len(devs)} devices, not divisible by mesh_cols={mesh_cols}"
+            )
+        # Host tag must match the worker grouping's "host-<crc32 hex>" — the
+        # join key for hostname->rank chunk routing.
+        host = f"host-{all_host_tags[rank]:08x}"
+        groups = {}
+        for row in range(len(devs) // mesh_cols):
+            fnids = [
+                FabricNodeId(MeshId(mesh), fchip) for (_, mesh, fchip) in devs[row * mesh_cols : (row + 1) * mesh_cols]
+            ]
+            dg = table.add_device_group(fnids)
+            for f in fnids:
+                table.set_fabric_node_host(f, host)
+            groups[row] = dg
+        rank_row_groups[rank] = groups
+        return groups
+
+    for layer_id, owner_rank in sorted(layer_to_rank.items()):
+        base_addr = all_addrs[owner_rank]
+        row_groups = _row_groups_for(owner_rank)
+        for slot_id in range(num_slots):
+            for chunk_idx in range(num_chunks):
+                pos = chunk_idx * tokens_per_tile
+                bank, offset, size, sp_idx = _get_kv_chunk_metadata(geom, pos, slot_id, base_addr)
+                loc = d.KvCacheLocation()
+                loc.noc_addr = _pack_bank_offset(bank, offset)
+                loc.size_bytes = size
+                loc.device_group_index = row_groups[sp_idx]
+                table.set(layer_id, pos, slot_id, loc)
+                # Sample log: first + last chunk of each (layer, slot) — decoded
+                # (bank, offset) cross-checks against the worker's [dram-io] lines.
+                if chunk_idx in (0, num_chunks - 1):
+                    logger.info(
+                        "[migration-hook] table[{},{},{}]: bank={} off=0x{:x} size={} sp_row={} (owner r{} base 0x{:x})",
+                        layer_id, pos, slot_id, bank, offset, size, sp_idx, owner_rank, base_addr,
+                    )
 
     logger.info(
-        "[migration-hook] table built: layers={} max_seq={} slots={} chunk_n_tokens={} "
-        "chunk_size_bytes={} num_chunks={} base_addr=0x{:x}",
-        num_layers,
+        "[migration-hook] table built: layers={} ({}) max_seq={} slots={} chunk_n_tokens={} "
+        "chunk_size_bytes={} num_chunks={}",
+        num_layers_cfg,
+        sorted(layer_to_rank.items()),
         max_seq_len,
         num_slots,
         tokens_per_tile,
         chunk_size_bytes,
         num_chunks,
-        base_addr,
     )
     return table
 
 
-def _write_chip_sidecar(mesh_device, path: str) -> None:
-    """PHYSICAL device ids (ascending) → the TT_VISIBLE_DEVICES for the
-    migration endpoint.
-
-    UMD parses TT_VISIBLE_DEVICES into an unordered_set — list order is
-    discarded and logical renumbering follows ascending-physical enumeration.
-    So the sidecar is simply this rank's visible physical ids, sorted. The
-    table's chip indices (logical ids) then line up with the worker's chip
-    numbering by construction: worker chip d == d-th smallest physical id ==
-    this rank's logical id d.
-    """
-    visible_env = os.environ.get("TT_VISIBLE_DEVICES")
-    if visible_env:
-        physical = sorted(int(x) for x in visible_env.split(",") if x != "")
-    else:
-        # No remap in effect — logical ids ARE physical ids.
-        rows, cols = mesh_device.shape[0], mesh_device.shape[1]
-        physical = sorted(
-            int(mesh_device.get_device_id(ttnn.MeshCoordinate(r, c))) for r in range(rows) for c in range(cols)
-        )
-    with open(path, "w") as f:
-        f.write(",".join(str(p) for p in physical) + "\n")
-    logger.info(
-        "[migration-hook] chip sidecar written: {} -> {} (rank TT_VISIBLE_DEVICES={})",
-        path,
-        ",".join(str(p) for p in physical),
-        visible_env,
-    )
+# Default location of the _migration_client python module on the shared (NFS)
+# build tree. Used when TT_MIGRATION_PYTHON_DIR isn't forwarded to this rank —
+# which happens on multi-host runs where the migration master (first dense
+# decoder) lands on a host other than the tt-run launch host, so the launch
+# shell's env doesn't propagate. Override with TT_MIGRATION_PYTHON_DIR.
+_DEFAULT_MIGRATION_PYTHON_DIRS = [
+    "/data/asaigal/tt-llm-engine/disaggregation/migration/build_RelWithDebInfo/python",
+]
 
 
 def _attach_migration_client(cmd_q: str, table_q: str, resp_q: str, timeout_s: float = 120.0):
     """Import MigrationLayerClient from the tt-llm-engine build and attach to
     the endpoint's shmem queues, retrying until they exist (the endpoint and
     the model race at startup)."""
-    mig_dir = os.environ.get("TT_MIGRATION_PYTHON_DIR")
-    if mig_dir and os.path.isdir(mig_dir) and mig_dir not in sys.path:
-        sys.path.insert(0, mig_dir)
-    from _migration_client import MigrationLayerClient  # noqa: E402
+    candidates = []
+    env_dir = os.environ.get("TT_MIGRATION_PYTHON_DIR")
+    if env_dir:
+        candidates.append(env_dir)
+    candidates.extend(_DEFAULT_MIGRATION_PYTHON_DIRS)
+    for d in candidates:
+        if d and os.path.isdir(d) and d not in sys.path:
+            sys.path.insert(0, d)
+    try:
+        from _migration_client import MigrationLayerClient  # noqa: E402
+    except ModuleNotFoundError as e:
+        raise ModuleNotFoundError(
+            "[migration-hook] cannot import _migration_client. Tried sys.path entries "
+            f"{candidates}. Set TT_MIGRATION_PYTHON_DIR (and ensure tt-run forwards it to "
+            "every rank via --mpi-args \"-x TT_MIGRATION_PYTHON_DIR\"), or add this rank's "
+            "build path to _DEFAULT_MIGRATION_PYTHON_DIRS."
+        ) from e
 
     deadline = time.monotonic() + timeout_s
     while True:
@@ -284,20 +443,99 @@ def make_on_kv_cache_ready(
     table_queue: str,
     resp_queue: str,
     table_path: str,
-    num_layers: int,
     max_seq_len: int,
     num_slots: int,
 ):
     """Build the on_kv_cache_ready callback for run_demo.
 
-    Signature matches ModelPipeline's invocation: (mesh_device, kv_cache, layer_id).
-    Non-KV ranks (kv_cache=None) return immediately.
+    Signature matches ModelPipeline's invocation: (mesh_device, kv_cache,
+    layer_id), called on EVERY rank. The callback is MPI-collective — all
+    ranks enter the allgathers; non-publisher ranks return after the
+    rendezvous. RANK 0 (head node / first stage) is the sole publisher of
+    SET_TABLE + the device map; it authors the table from the geometry
+    gathered from the first KV-owning rank, so it needs no local KV cache.
+    The migration endpoint MUST run on rank 0's host (its shmem queues are
+    host-local).
     """
 
     def on_kv_cache_ready(mesh_device, kv_cache, layer_id):
-        if kv_cache is None:
+        my_rank = int(ttnn.distributed_context_get_rank())
+
+        if kv_cache is not None:
+            devices = _enumerate_devices(mesh_device)
+            kv_addr = int(kv_cache.buffer_address())
+            geom_local = _kv_geometry_from_cache(kv_cache, mesh_device)
+        else:
+            devices = []
+            kv_addr = 0
+            geom_local = _GEOM_NONE
+        logger.info(
+            "[migration-hook] rank {} local: layer={} kv_addr=0x{:x} geom={} devices(umd,mesh,fchip)={}",
+            my_rank,
+            layer_id,
+            kv_addr,
+            tuple(geom_local),
+            devices,
+        )
+        all_rank_devices, all_layers, all_addrs, all_host_tags, all_geom = _gather_kv_topology(
+            devices, layer_id, kv_addr, geom_local
+        )
+        logger.info(
+            "[migration-hook] rank {} gathered: host_tags={} layers={}",
+            my_rank,
+            [f"{t:08x}" for t in all_host_tags],
+            all_layers,
+        )
+
+        kv_ranks = [r for r, devs in enumerate(all_rank_devices) if devs]
+        if not kv_ranks:
+            raise RuntimeError("[migration-hook] no rank owns a KV cache — nothing to migrate")
+
+        # layer → owning rank, with duplicate-claim detection (a duplicate
+        # means dense_layer_id_override collapsed several stages onto one
+        # layer id — the table key must be unique per stage).
+        layer_to_rank: dict[int, int] = {}
+        for r in kv_ranks:
+            lid = all_layers[r]
+            if lid == _SENTINEL_LAYER:
+                raise RuntimeError(f"[migration-hook] rank {r} owns KV but reported no layer id")
+            if lid in layer_to_rank:
+                raise RuntimeError(
+                    f"[migration-hook] ranks {layer_to_rank[lid]} and {r} both claim layer {lid} "
+                    "— run decoder stages with distinct layer ids (drop dense_layer_id_override)"
+                )
+            layer_to_rank[lid] = r
+
+        # Publisher = rank 0 (the head node / first pipeline stage). It builds
+        # and sends the table even though it owns no KV — using the geometry
+        # gathered from the first KV rank — so the migration endpoint can live
+        # on the head node, co-located with stage 0's H2D/D2H sockets and the
+        # scheduler. The table content is identical to what kv_ranks[0] (the
+        # former publisher) would have produced; only the sending rank moves.
+        # The endpoint MUST run on rank 0's host (its shmem queues are local).
+        master_rank = 0
+        if my_rank != master_rank:
+            logger.info(
+                "[migration-hook] rank {} done (publisher is rank {}; kv_ranks={})", my_rank, master_rank, kv_ranks
+            )
             return
-        logger.info("[migration-hook] kv_cache ready (layer_id={}) — building table", layer_id)
+
+        # Author from the first KV rank's geometry (identical across layers).
+        geom = all_geom[kv_ranks[0]]
+        if geom.tokens_per_kv_tile == 0 or geom.mesh_cols == 0 or geom.per_device_seq_len == 0:
+            raise RuntimeError(
+                f"[migration-hook] publisher rank {my_rank} gathered invalid geometry from kv_rank "
+                f"{kv_ranks[0]}: {tuple(geom)} — gather/order bug"
+            )
+
+        logger.info(
+            "[migration-hook] publisher rank {} building table from kv_rank {} geom={}: layers={} addrs={}",
+            my_rank,
+            kv_ranks[0],
+            tuple(geom),
+            sorted(layer_to_rank.items()),
+            {r: hex(all_addrs[r]) for r in kv_ranks},
+        )
 
         # Derive global max_seq_len when not given: the sequence is striped
         # across sp rows, so global = per-device seq len × sp_dim.
@@ -306,37 +544,46 @@ def make_on_kv_cache_ready(
             from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 
             sp_dim = FlashMLADecode.ProgramConfig(k_chunk_size=128).sp_dim
-            effective_max_seq = int(kv_cache.shape[2]) * sp_dim
+            effective_max_seq = geom.per_device_seq_len * sp_dim
             logger.info(
                 "[migration-hook] derived max_seq_len={} (per_device={} × sp_dim={})",
                 effective_max_seq,
-                int(kv_cache.shape[2]),
+                geom.per_device_seq_len,
                 sp_dim,
             )
 
-        table = build_table_from_kv_cache(
-            mesh_device,
-            kv_cache,
-            layer_id=int(layer_id) if layer_id is not None else 0,
-            num_layers=num_layers,
+        table = _build_table_gathered(
+            geom,
+            layer_to_rank=layer_to_rank,
+            all_rank_devices=all_rank_devices,
+            all_addrs=all_addrs,
+            all_host_tags=all_host_tags,
             max_seq_len=effective_max_seq,
             num_slots=num_slots,
         )
         ttnn.experimental.disaggregation.export_kv_chunk_table_to_protobuf_file(table, table_path)
         logger.info("[migration-hook] table exported to {}", table_path)
-        _write_chip_sidecar(mesh_device, table_path + ".chips")
 
-        # Bootstrap mode: the migration endpoint needs TT_VISIBLE_DEVICES (from
-        # the .chips sidecar) at ITS launch, but the sidecar is produced here —
-        # an export-only first run breaks the cycle.
-        if os.environ.get("TT_MIGRATION_EXPORT_ONLY") == "1":
-            logger.info("[migration-hook] TT_MIGRATION_EXPORT_ONLY=1 — skipping endpoint delivery")
-            return
+        # Device map: (fabric_mesh_id, fabric_chip_id, umd_physical_chip_id, host_tag)
+        # for every KV-owning rank's chips. The worker slices by host_tag and each
+        # worker rank opens only its own host's entries.
+        device_map = [
+            (mesh, fchip, umd, all_host_tags[r]) for r in kv_ranks for (umd, mesh, fchip) in all_rank_devices[r]
+        ]
+
+        for mesh, fchip, umd, tag in device_map:
+            logger.info("[migration-hook] devmap entry: mesh={} fchip={} umd={} host={:08x}", mesh, fchip, umd, tag)
 
         client = _attach_migration_client(cmd_queue, table_queue, resp_queue)
         client.send_kv_chunk_table(table_path)
-        client.wait_ready()
-        logger.info("[migration-hook] migration endpoint WORKER_READY — table delivered")
+        client.send_device_map(device_map)
+        # WORKER_READY now gates on the worker opening every mapped UMD chip —
+        # give it well beyond the 5s binding default.
+        client.wait_ready(120000)
+        logger.info(
+            "[migration-hook] migration endpoint WORKER_READY — table + device map ({} entries) delivered",
+            len(device_map),
+        )
         # Client detaches at scope exit; shmem queues persist for the scheduler.
 
     return on_kv_cache_ready
