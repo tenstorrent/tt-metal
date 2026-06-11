@@ -54,8 +54,14 @@ ProgramDescriptor Conv1dDepthwiseOperation::create_descriptor(
     constexpr uint32_t act_cb = tt::CBIndex::c_0;
     constexpr uint32_t scalar_cb = tt::CBIndex::c_1;
     constexpr uint32_t tilized_cb = tt::CBIndex::c_2;
+    constexpr uint32_t scratch_cb = tt::CBIndex::c_3;
     constexpr uint32_t out_cb = tt::CBIndex::c_16;
     constexpr uint32_t out_rm_cb = tt::CBIndex::c_17;
+
+    // stride==1 + B==1: the reader reads the per-block input-page union once into scratch_cb and
+    // serves the K tap windows by L1->L1 copy (cuts the K× DRAM re-read; the op is read-bound).
+    const bool coalesce = (stride == 1 && B == 1);
+    const uint32_t scratch_num_tiles = tt::div_up(BLOCK_T + K - 1, TILE) * block_w_tiles;
 
     auto push_cb = [&](uint32_t cb_id, uint32_t num_tiles) {
         desc.cbs.push_back(CBDescriptor{
@@ -75,6 +81,9 @@ ProgramDescriptor Conv1dDepthwiseOperation::create_descriptor(
     push_cb(tilized_cb, block_num_tiles);
     push_cb(out_cb, block_num_tiles);
     push_cb(out_rm_cb, block_num_tiles);
+    if (coalesce) {
+        push_cb(scratch_cb, scratch_num_tiles);
+    }
 
     // ---- Reader ----
     KernelDescriptor reader;
@@ -82,7 +91,7 @@ ProgramDescriptor Conv1dDepthwiseOperation::create_descriptor(
     reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader.core_ranges = all_cores;
     reader.config = ReaderConfigDescriptor{};
-    reader.compile_time_args = {act_cb, scalar_cb, C, C_pad, stride, K, T_pad, T_out, block_h_tiles};
+    reader.compile_time_args = {act_cb, scalar_cb, C, C_pad, stride, K, T_pad, T_out, block_h_tiles, scratch_cb, B};
     TensorAccessorArgs(*input.buffer()).append_to(reader.compile_time_args);
     reader.common_runtime_args.reserve(K);
     for (uint32_t j = 0; j < K; ++j) {
