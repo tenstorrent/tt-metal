@@ -14,6 +14,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
     get_mesh_composer,
+    was_replicated_for_validation,
 )
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_named_tensor_kwargs
@@ -324,8 +325,18 @@ def run(
     output_tensor = ttnn.transformer.chunked_scaled_dot_product_attention(
         q_tensor, k_tensor, v_tensor, page_table_tensor, chunk_start_idx, **op_kwargs
     )
-    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
+    # Q/K/V carry a Shard placement (head_dim Shard(3), head Shard(1), etc.) but
+    # create_tensor_on_mesh materializes them REPLICATED on this device, so each
+    # chip computed the full SDPA. Read the result from a single device — using a
+    # Shard concat composer would multiply the head_dim by the mesh factor
+    # (e.g. output [1,16,4096,128] read back as [1,16,4096,256]).
+    if is_mesh_device and was_replicated_for_validation(device, input_a_tensor_placement):
+        output_tensor = mesh_tensor_to_torch(output_tensor, device, force_single_device=True)
+    else:
+        mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
+        output_tensor = mesh_tensor_to_torch(
+            output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer
+        )
     e2e_perf = stop_measuring_time(start_time)
 
     # Comparison threshold. The unit test uses 0.998, which holds for short

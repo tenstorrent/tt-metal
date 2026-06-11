@@ -471,6 +471,32 @@ def get_mesh_composer(mesh_device, tensor_placement: Optional[Dict] = None):
         return None
 
 
+def was_replicated_for_validation(mesh_device, tensor_placement: Optional[Dict] = None) -> bool:
+    """True when create_tensor_on_mesh stored a shard-placement tensor as a full
+    per-chip replica (replicate_with_topology / ReplicateTensorToMesh) rather than
+    truly splitting it.
+
+    On this trace-validation path a sharded placement is ALWAYS materialized
+    replicated: when the device mesh fits the traced mesh, create_tensor_on_mesh
+    returns replicate_with_topology; when it doesn't, it falls back to
+    ReplicateTensorToMesh. Either way each chip holds the FULL tensor and the op
+    runs SPMD producing the FULL result per chip. The output must then be read
+    from a single device — concatenating via a Shard composer would multiply the
+    shard dim by the mesh factor (e.g. a head_dim-Shard(3) SDPA output read back
+    as [.,256] instead of [.,128]).
+    """
+    if not tensor_placement:
+        return False
+    placement_str = str(tensor_placement.get("placement", ""))
+    if "PlacementShard" not in placement_str:
+        return False
+    try:
+        num_devices = mesh_device.get_num_devices() if hasattr(mesh_device, "get_num_devices") else 1
+    except Exception:
+        num_devices = 1
+    return num_devices > 1
+
+
 def _restore_topology(
     tensor: ttnn.Tensor,
     placement_entries: list,
