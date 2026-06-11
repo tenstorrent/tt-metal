@@ -18,7 +18,7 @@
 #   ./dockerfile/build-local.sh dev
 #   ./dockerfile/build-local.sh --help
 #
-# Available targets: ci-build, ci-test, dev, release, release-models
+# Available targets: ci-build, ci-test, ci-test-light, dev, release, release-models
 # =============================================================================
 
 #############################################################
@@ -221,6 +221,92 @@ COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/requireme
 RUN --mount=from=ci-test-venv-layer,source=/install,target=/venv-staging \
     umask 000 && \
     cp -ua /venv-staging/venv/. ${PYTHON_ENV_DIR}/
+
+COPY /scripts/install_debugger.sh ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh
+RUN umask 000 && \
+    if [ "$UBUNTU_VERSION" = "22.04" ]; then \
+    echo "Installing debugger for Ubuntu 22.04..." && \
+    ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh && \
+    echo "Debugger installation completed" && \
+    python3 -c "import ttexalens; print('ttexalens successfully imported')" || echo "ttexalens import failed"; \
+    fi
+
+#############################################################
+# CI Test Light image
+#
+# Lightweight test environment for wheel-centric CI workflows
+# (e.g. ttnn-post-commit) that install a pre-built wheel and
+# run pytest — no C++ compilation required.
+#
+# Derives FROM base (not ci-build), skipping:
+#   - LLVM/clang-20, libclang-20-dev, clang-tidy-20
+#   - mold linker
+#   - doxygen
+#   - ClangBuildAnalyzer
+#
+# Keeps what test workflows actually need:
+#   - ccache (kernel JIT caching at runtime)
+#   - yq (CI YAML parsing)
+#   - ci-test Python venv (torch-cpu, pytest, test deps)
+#   - Shell utilities (jq, curl, wget, zstd, etc.)
+#   - tt-exalens debugger (auto-triage on hangs)
+#############################################################
+
+FROM base AS ci-test-light
+LABEL org.opencontainers.image.source="https://github.com/tenstorrent/tt-metal"
+LABEL org.opencontainers.image.description="TT-Metalium lightweight CI test environment (no C++ toolchain)"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+LABEL org.opencontainers.image.documentation="https://docs.tenstorrent.com/"
+
+ARG UBUNTU_VERSION
+ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
+
+ENV PYTHON_ENV_DIR=/opt/venv
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+ENV CCACHE_TEMPDIR=/tmp/ccache
+
+# Copy only the tools needed at test runtime (no mold, doxygen, clangbuildanalyzer)
+COPY --from=ccache-layer /install/ /usr/local/
+COPY --from=yq-layer /install/bin/yq /usr/local/bin/
+RUN test -x /usr/local/bin/ccache || { echo "ERROR: ccache not found in ccache-layer" >&2; exit 1; } && \
+    test -x /usr/local/bin/yq || { echo "ERROR: yq not found in yq-layer" >&2; exit 1; }
+
+# Install the full ci-test Python venv (torch-cpu + all test deps)
+# Uses ci-build-venv as base, then overlays ci-test-venv additions
+RUN --mount=from=ci-build-venv-layer,source=/install,target=/build-venv-staging \
+    --mount=from=ci-test-venv-layer,source=/install,target=/test-venv-staging \
+    umask 000 && \
+    cp -a /build-venv-staging/venv $PYTHON_ENV_DIR && \
+    cp -ua /test-venv-staging/venv/. ${PYTHON_ENV_DIR}/ && \
+    umask 002 && \
+    echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
+
+RUN git config --global --add safe.directory '*'
+
+# Shell utilities required by CI workflows (setup-job, test scripts, artifact handling)
+# Notably absent vs ci-build: libclang-20-dev, clang-20, llvm-20, clang-tidy-20
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    file \
+    graphviz \
+    jq \
+    sudo \
+    uuid-runtime \
+    wget \
+    zstd \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Install tt-exalens debugger for auto-triage support
+RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/ && \
+    mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/ && \
+    mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/ && \
+    mkdir -p ${TT_METAL_INFRA_DIR}/tools/triage/
+
+COPY /docs/requirements-docs.txt ${TT_METAL_INFRA_DIR}/tt-metal/docs/.
+COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/.
+COPY /tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/.
+COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
 
 COPY /scripts/install_debugger.sh ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh
 RUN umask 000 && \

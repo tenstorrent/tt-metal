@@ -239,6 +239,12 @@ target "ci-test" {
   tags     = ["tt-metalium-ci-test:local"]
 }
 
+target "ci-test-light" {
+  inherits = ["_main-common"]
+  target   = "ci-test-light"
+  tags     = ["tt-metalium-ci-test-light:local"]
+}
+
 target "dev" {
   inherits = ["_main-common"]
   target   = "dev"
@@ -258,7 +264,7 @@ target "release-models" {
 }
 
 group "main" {
-  targets = ["ci-build", "ci-test", "dev"]
+  targets = ["ci-build", "ci-test", "ci-test-light", "dev"]
 }
 
 # =============================================================================
