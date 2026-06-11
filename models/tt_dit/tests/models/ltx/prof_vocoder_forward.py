@@ -241,25 +241,31 @@ def test_prof_vocoder_devicetime(mesh_device, mesh_shape, t_factor, t_axis, c_fa
     )
     tt_voc.load_torch_state_dict(_diffusers_vocoder_state_to_tt(torch_voc.state_dict()))
 
-    # Periodic profiler flush after each AMPBlock1 to bound the device zone buffer.
+    # Periodic profiler flush after each AMPBlock1 to bound the device zone buffer. On a
+    # 32-chip mesh each flush is a full mesh sync + readback (~seconds), so per-block flushing
+    # is the run-phase pathology. Set LTX_PROF_NOFLUSH=1 (with a buffer big enough via
+    # TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT) to capture everything in ONE end-of-run readback.
+    _noflush = os.environ.get("LTX_PROF_NOFLUSH") == "1"
+
     def _walk(m):
         yield m
         for _, c in m.named_children():
             yield from _walk(c)
 
-    for mod in _walk(tt_voc):
-        if isinstance(mod, AMPBlock1):
-            orig = mod.forward
+    if not _noflush:
+        for mod in _walk(tt_voc):
+            if isinstance(mod, AMPBlock1):
+                orig = mod.forward
 
-            def timed(*a, _orig=orig, **k):
-                r = _orig(*a, **k)
-                # Flush only at a quiesced point — reading mid-flight truncates an open
-                # CCL/halo zone -> "End marker without start marker" abort on dump.
-                ttnn.synchronize_device(mesh)
-                ttnn.ReadDeviceProfiler(mesh)
-                return r
+                def timed(*a, _orig=orig, **k):
+                    r = _orig(*a, **k)
+                    # Flush only at a quiesced point — reading mid-flight truncates an open
+                    # CCL/halo zone -> "End marker without start marker" abort on dump.
+                    ttnn.synchronize_device(mesh)
+                    ttnn.ReadDeviceProfiler(mesh)
+                    return r
 
-            mod.forward = timed
+                mod.forward = timed
 
     mel = _vocoder_mel()
     _ = tt_voc(mel)
@@ -703,3 +709,76 @@ def test_prof_bwe_per_conv(mesh_device, device_params):
 
 def _round32(c):
     return ((c + 31) // 32) * 32
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 32768, "fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 300000000}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape",
+    [[(2, 4), (2, 4)], [(4, 8), (4, 8)]],
+    ids=["bh_2x4", "bh_4x8"],
+    indirect=["mesh_device"],
+)
+def test_audio_decoder_traced_wall(mesh_device, mesh_shape, device_params):
+    """Gate + size the mel-VAE (AudioDecoder) trace: eager vs forward_traced, bit-identical.
+    Validates the Conv2dViaConv3d _persistent_zeros fix makes the device graph capturable."""
+    from models.tt_dit.models.audio_vae.audio_decoder_ltx import AudioDecoder
+    from models.tt_dit.tests.models.ltx.test_audio_components_ltx import (
+        _AUDIO_DECODER_CFG,
+        _audio_decoder_state_from_diffusers,
+        _require_diffusers,
+    )
+
+    AutoencoderKLLTX2Audio, _, _ = _require_diffusers()
+    parent = mesh_device
+    mesh = parent.create_submesh(ttnn.MeshShape(*mesh_shape))
+
+    torch.manual_seed(42)
+    ref_vae = AutoencoderKLLTX2Audio(
+        base_channels=_AUDIO_DECODER_CFG["ch"],
+        output_channels=_AUDIO_DECODER_CFG["out_ch"],
+        ch_mult=_AUDIO_DECODER_CFG["ch_mult"],
+        num_res_blocks=_AUDIO_DECODER_CFG["num_res_blocks"],
+        attn_resolutions=_AUDIO_DECODER_CFG["attn_resolutions"],
+        resolution=_AUDIO_DECODER_CFG["resolution"],
+        latent_channels=_AUDIO_DECODER_CFG["z_channels"],
+        norm_type="pixel",
+        causality_axis="height",
+        mid_block_add_attention=_AUDIO_DECODER_CFG["mid_block_add_attention"],
+        sample_rate=_AUDIO_DECODER_CFG["sample_rate"],
+        mel_hop_length=_AUDIO_DECODER_CFG["mel_hop_length"],
+        is_causal=_AUDIO_DECODER_CFG["is_causal"],
+        mel_bins=_AUDIO_DECODER_CFG["mel_bins"],
+    ).eval()
+
+    z_times_f = _AUDIO_DECODER_CFG["z_channels"] * _AUDIO_DECODER_CFG["mel_bins"]
+    tt_decoder = AudioDecoder(mesh_device=mesh, **_AUDIO_DECODER_CFG)
+    tt_decoder.load_torch_state_dict(
+        _audio_decoder_state_from_diffusers(ref_vae, stats_std=torch.ones(z_times_f), stats_mean=torch.zeros(z_times_f))
+    )
+
+    latent = torch.randn(1, _AUDIO_DECODER_CFG["z_channels"], 64, _AUDIO_DECODER_CFG["mel_bins"], dtype=torch.float32)
+
+    def wall(fn, n=5):
+        ttnn.synchronize_device(mesh)
+        t = time.perf_counter()
+        for _ in range(n):
+            out = fn(latent)
+        ttnn.synchronize_device(mesh)
+        return out, (time.perf_counter() - t) * 1000 / n
+
+    out_eager, ms_eager = wall(tt_decoder.forward)
+    _ = tt_decoder.forward_traced(latent)  # capture
+    out_traced, ms_traced = wall(tt_decoder.forward_traced)
+    tt_decoder.release_trace()
+
+    max_abs = (out_eager - out_traced).abs().max().item()
+    print(
+        f"\nAUDIO_DECODER_TRACE_WALL eager={ms_eager:.1f}ms traced={ms_traced:.1f}ms "
+        f"speedup={ms_eager / ms_traced:.2f}x | max|Δ|={max_abs:.3e}",
+        flush=True,
+    )
+    assert max_abs < 5e-3, f"AudioDecoder traced diverged: {max_abs:.3e}"
