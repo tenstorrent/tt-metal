@@ -416,7 +416,12 @@ public:
 
                 // Update Common::DeviceData for paged write
                 Common::DeviceDataUpdater::update_paged_write(
-                    page_payload, device_data, bank_core, bank_id, page_size_alignment_bytes);
+                    page_payload,
+                    device_data,
+                    bank_core,
+                    bank_id,
+                    page_size_alignment_bytes,
+                    is_dram_ ? tt::CoreType::DRAM : tt::CoreType::WORKER);
 
                 // Append page payload to chunk payload
                 chunk_payload.insert(chunk_payload.end(), page_payload.begin(), page_payload.end());

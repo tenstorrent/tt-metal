@@ -61,13 +61,25 @@ struct one_core_data_t {
     std::vector<uint32_t> data;
 };
 
+struct CoreDataKey {
+    tt::CoreType core_type{tt::CoreType::WORKER};
+    CoreCoord core;
+    bool operator==(const CoreDataKey& other) const { return core_type == other.core_type && core == other.core; }
+};
+
+struct CoreDataKeyHash {
+    size_t operator()(const CoreDataKey& key) const {
+        return std::hash<CoreCoord>{}(key.core) ^ (std::hash<int>{}(static_cast<int>(key.core_type)) << 1);
+    }
+};
+
 class DeviceData {
 private:
     int amt_written{0};
     // 10 is a hack...bigger than any core_type
     uint64_t base_data_addr[static_cast<size_t>(tt::CoreType::COUNT)]{};
     uint64_t base_result_data_addr[static_cast<size_t>(tt::CoreType::COUNT)]{};
-    std::unordered_map<CoreCoord, std::unordered_map<uint32_t, one_core_data_t>> all_data;
+    std::unordered_map<CoreDataKey, std::unordered_map<uint32_t, one_core_data_t>, CoreDataKeyHash> all_data;
     CoreCoord host_core;
     size_t host_data_index = 0;
 
@@ -98,12 +110,12 @@ public:
         const DispatchTestConfig& cfg);
 
     // Add expected data to a core
-    void push_one(CoreCoord core, int bank, uint32_t datum);
-    void push_one(CoreCoord core, uint32_t datum);
+    void push_one(CoreCoord core, int bank, uint32_t datum, tt::CoreType core_type = tt::CoreType::WORKER);
+    void push_one(CoreCoord core, uint32_t datum, tt::CoreType core_type = tt::CoreType::WORKER);
     void push_range(const CoreRange& cores, uint32_t datum, bool is_mcast);
 
     // Add invalid data
-    void pad(CoreCoord core, int bank, uint32_t alignment);
+    void pad(CoreCoord core, int bank, uint32_t alignment, tt::CoreType core_type = tt::CoreType::WORKER);
 
     // Some tests write to the same address across multiple cores
     // This takes those core types and pads any that are "behind" with invalid data
@@ -113,21 +125,27 @@ public:
     // Clear data between tests
     void reset();
     uint32_t get_base_result_addr(tt::CoreType core_type);
-    uint32_t get_result_data_addr(CoreCoord core, int bank_id = 0);
+    uint32_t get_result_data_addr(CoreCoord core, int bank_id = 0, tt::CoreType core_type = tt::CoreType::WORKER);
 
     bool validate(distributed::MeshDevice::IDevice* device);
     void overflow_check(distributed::MeshDevice::IDevice* device);
 
     int size() const { return amt_written; }
-    int size(CoreCoord core, int bank_id = 0) { return this->all_data[core][bank_id].data.size(); }
+    int size(CoreCoord core, int bank_id = 0, tt::CoreType core_type = tt::CoreType::WORKER) {
+        return this->all_data[{core_type, core}][bank_id].data.size();
+    }
 
-    std::unordered_map<CoreCoord, std::unordered_map<uint32_t, one_core_data_t>>& get_data() { return this->all_data; }
+    std::unordered_map<CoreDataKey, std::unordered_map<uint32_t, one_core_data_t>, CoreDataKeyHash>& get_data() {
+        return this->all_data;
+    }
 
-    tt::CoreType get_core_type(CoreCoord core) { return this->all_data[core][0].core_type; }
-    uint32_t size_at(CoreCoord core, int bank_id);
-    uint32_t at(CoreCoord core, int bank_id, uint32_t offset);
+    tt::CoreType get_core_type(CoreCoord core, tt::CoreType core_type = tt::CoreType::WORKER) {
+        return this->all_data[{core_type, core}][0].core_type;
+    }
+    uint32_t size_at(CoreCoord core, int bank_id, tt::CoreType core_type = tt::CoreType::WORKER);
+    uint32_t at(CoreCoord core, int bank_id, uint32_t offset, tt::CoreType core_type = tt::CoreType::WORKER);
     CoreCoord get_host_core() { return this->host_core; }
-    bool core_and_bank_present(CoreCoord core, uint32_t bank);
+    bool core_and_bank_present(CoreCoord core, uint32_t bank, tt::CoreType core_type = tt::CoreType::WORKER);
 };
 
 inline DeviceData::DeviceData(
@@ -148,32 +166,31 @@ inline DeviceData::DeviceData(
     this->base_result_data_addr[static_cast<int>(tt::CoreType::PCIE)] = (uint64_t)pcie_data_addr;
     this->base_result_data_addr[static_cast<int>(tt::CoreType::DRAM)] = dram_data_addr;
 
-    // TODO: make this all work w/ phys coords
-    // this is really annoying
-    // the PCIE phys core conflicts w/ worker logical cores
-    // so we hack the physical core for tracking, blech
-    // no simple way to handle this, need to use phys cores
+    // Host (PCIE) data is tracked at an arbitrary reserved coordinate; the core type in the key keeps
+    // it distinct from any worker entry.
     CoreCoord core = {100, 100};
-    this->all_data[core][0] = one_core_data_t();
-    this->all_data[core][0].logical_core = core;
-    this->all_data[core][0].phys_core = core;
-    this->all_data[core][0].core_type = tt::CoreType::PCIE;
-    this->all_data[core][0].bank_id = 20;
-    this->all_data[core][0].bank_offset = 0;
+    one_core_data_t& host_entry = this->all_data[{tt::CoreType::PCIE, core}][0];
+    host_entry = one_core_data_t();
+    host_entry.logical_core = core;
+    host_entry.phys_core = core;
+    host_entry.core_type = tt::CoreType::PCIE;
+    host_entry.bank_id = 20;
+    host_entry.bank_offset = 0;
     this->host_core = core;
 
     // Always populate DRAM
     auto num_banks = device->allocator()->get_num_banks(BufferType::DRAM);
     for (int bank_id = 0; bank_id < num_banks; bank_id++) {
         auto dram_channel = device->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
-        CoreCoord phys_core = device->logical_core_from_dram_channel(dram_channel);
+        CoreCoord dram_core = device->logical_core_from_dram_channel(dram_channel);
         int32_t bank_offset = device->allocator()->get_bank_offset(BufferType::DRAM, bank_id);
-        this->all_data[phys_core][bank_id] = one_core_data_t();
-        this->all_data[phys_core][bank_id].logical_core = phys_core;
-        this->all_data[phys_core][bank_id].phys_core = phys_core;
-        this->all_data[phys_core][bank_id].core_type = tt::CoreType::DRAM;
-        this->all_data[phys_core][bank_id].bank_id = bank_id;
-        this->all_data[phys_core][bank_id].bank_offset = bank_offset;
+        one_core_data_t& entry = this->all_data[{tt::CoreType::DRAM, dram_core}][bank_id];
+        entry = one_core_data_t();
+        entry.logical_core = dram_core;
+        entry.phys_core = dram_core;
+        entry.core_type = tt::CoreType::DRAM;
+        entry.bank_id = bank_id;
+        entry.bank_offset = bank_offset;
     }
 
     // TODO: make banked L1 tests play nicely w/ non-banked L1 tests
@@ -183,24 +200,26 @@ inline DeviceData::DeviceData(
             CoreCoord core = device->allocator()->get_logical_core_from_bank_id(bank_id);
             CoreCoord phys_core = device->worker_core_from_logical_core(core);
             int32_t bank_offset = device->allocator()->get_bank_offset(BufferType::L1, bank_id);
-            this->all_data[core][bank_id] = one_core_data_t();
-            this->all_data[core][bank_id].logical_core = core;
-            this->all_data[core][bank_id].phys_core = phys_core;
-            this->all_data[core][bank_id].core_type = tt::CoreType::WORKER;
-            this->all_data[core][bank_id].bank_id = bank_id;
-            this->all_data[core][bank_id].bank_offset = bank_offset;
+            one_core_data_t& entry = this->all_data[{tt::CoreType::WORKER, core}][bank_id];
+            entry = one_core_data_t();
+            entry.logical_core = core;
+            entry.phys_core = phys_core;
+            entry.core_type = tt::CoreType::WORKER;
+            entry.bank_id = bank_id;
+            entry.bank_offset = bank_offset;
         }
     } else {
         for (uint32_t y = workers.start_coord.y; y <= workers.end_coord.y; y++) {
             for (uint32_t x = workers.start_coord.x; x <= workers.end_coord.x; x++) {
                 CoreCoord core = {x, y};
                 CoreCoord phys_core = device->worker_core_from_logical_core(core);
-                this->all_data[core][0] = one_core_data_t();
-                this->all_data[core][0].logical_core = core;
-                this->all_data[core][0].phys_core = phys_core;
-                this->all_data[core][0].core_type = tt::CoreType::WORKER;
-                this->all_data[core][0].bank_id = 0;
-                this->all_data[core][0].bank_offset = 0;
+                one_core_data_t& entry = this->all_data[{tt::CoreType::WORKER, core}][0];
+                entry = one_core_data_t();
+                entry.logical_core = core;
+                entry.phys_core = phys_core;
+                entry.core_type = tt::CoreType::WORKER;
+                entry.bank_id = 0;
+                entry.bank_offset = 0;
             }
         }
     }
@@ -216,7 +235,7 @@ inline void DeviceData::prepopulate_dram(distributed::MeshDevice::IDevice* devic
         [[maybe_unused]] auto offset = device->allocator()->get_bank_offset(BufferType::DRAM, bank_id);
         auto dram_channel = device->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
         auto bank_core = device->logical_core_from_dram_channel(dram_channel);
-        one_core_data_t& data = this->all_data[bank_core][bank_id];
+        one_core_data_t& data = this->all_data[{tt::CoreType::DRAM, bank_core}][bank_id];
 
         // Generate random or coherent data per bank of specific size.
         for (uint32_t i = 0; i < size_words; i++) {
@@ -248,9 +267,10 @@ inline void DeviceData::prepopulate_dram(distributed::MeshDevice::IDevice* devic
     }
 }
 
-inline bool DeviceData::core_and_bank_present(CoreCoord core, uint32_t bank) {
-    if (this->all_data.contains(core)) {
-        std::unordered_map<uint32_t, one_core_data_t>& core_data = this->all_data.find(core)->second;
+inline bool DeviceData::core_and_bank_present(CoreCoord core, uint32_t bank, tt::CoreType core_type) {
+    const CoreDataKey key{core_type, core};
+    if (this->all_data.contains(key)) {
+        std::unordered_map<uint32_t, one_core_data_t>& core_data = this->all_data.find(key)->second;
         if (core_data.contains(bank)) {
             return true;
         }
@@ -258,19 +278,19 @@ inline bool DeviceData::core_and_bank_present(CoreCoord core, uint32_t bank) {
     return false;
 }
 
-inline void DeviceData::push_one(CoreCoord core, int bank, uint32_t datum) {
-    if (core_and_bank_present(core, bank)) {
+inline void DeviceData::push_one(CoreCoord core, int bank, uint32_t datum, tt::CoreType core_type) {
+    if (core_and_bank_present(core, bank, core_type)) {
         this->amt_written++;
-        this->all_data[core][bank].data.push_back(datum);
-        this->all_data[core][bank].valid.push_back(true);
+        this->all_data[{core_type, core}][bank].data.push_back(datum);
+        this->all_data[{core_type, core}][bank].valid.push_back(true);
     }
 }
 
-inline void DeviceData::push_one(CoreCoord core, uint32_t datum) {
-    if (core_and_bank_present(core, 0)) {
+inline void DeviceData::push_one(CoreCoord core, uint32_t datum, tt::CoreType core_type) {
+    if (core_and_bank_present(core, 0, core_type)) {
         this->amt_written++;
-        this->all_data[core][0].data.push_back(datum);
-        this->all_data[core][0].valid.push_back(true);
+        this->all_data[{core_type, core}][0].data.push_back(datum);
+        this->all_data[{core_type, core}][0].valid.push_back(true);
     }
 }
 
@@ -279,15 +299,16 @@ inline void DeviceData::push_range(const CoreRange& cores, uint32_t datum, bool 
     for (auto y = cores.start_coord.y; y <= cores.end_coord.y; y++) {
         for (auto x = cores.start_coord.x; x <= cores.end_coord.x; x++) {
             CoreCoord core = {x, y};
-            if (core_and_bank_present(core, 0)) {
+            const CoreDataKey key{tt::CoreType::WORKER, core};
+            if (core_and_bank_present(core, 0, tt::CoreType::WORKER)) {
                 if (not counted || not is_mcast) {
                     this->amt_written++;
                     counted = true;
                 }
 
-                TT_FATAL(this->all_data.contains(core), "Core {} not found in all_data", core);
-                this->all_data[core][0].data.push_back(datum);
-                this->all_data[core][0].valid.push_back(true);
+                TT_FATAL(this->all_data.contains(key), "Core {} not found in all_data", core);
+                this->all_data[key][0].data.push_back(datum);
+                this->all_data[key][0].valid.push_back(true);
             }
         }
     }
@@ -297,11 +318,12 @@ inline uint32_t padded_size(uint32_t size, uint32_t alignment) {
     return (size + alignment - 1) / alignment * alignment;
 }
 
-inline void DeviceData::pad(CoreCoord core, int bank, uint32_t alignment) {
-    if (core_and_bank_present(core, bank)) {
-        uint32_t padded = padded_size(this->all_data[core][bank].data.size(), alignment / sizeof(uint32_t));
-        this->all_data[core][bank].data.resize(padded);
-        this->all_data[core][bank].valid.resize(padded);  // pushes false
+inline void DeviceData::pad(CoreCoord core, int bank, uint32_t alignment, tt::CoreType core_type) {
+    if (core_and_bank_present(core, bank, core_type)) {
+        const CoreDataKey key{core_type, core};
+        uint32_t padded = padded_size(this->all_data[key][bank].data.size(), alignment / sizeof(uint32_t));
+        this->all_data[key][bank].data.resize(padded);
+        this->all_data[key][bank].valid.resize(padded);  // pushes false
     }
 }
 
@@ -332,16 +354,16 @@ inline void DeviceData::relevel(CoreRange range) {
     constexpr uint32_t bank = 0;
     for (uint32_t y = range.start_coord.y; y <= range.end_coord.y; y++) {
         for (uint32_t x = range.start_coord.x; x <= range.end_coord.x; x++) {
-            CoreCoord core = {x, y};
-            max = std::max(this->all_data[core][bank].data.size(), max);
+            const CoreDataKey key{tt::CoreType::WORKER, CoreCoord{x, y}};
+            max = std::max(this->all_data[key][bank].data.size(), max);
         }
     }
 
     for (uint32_t y = range.start_coord.y; y <= range.end_coord.y; y++) {
         for (uint32_t x = range.start_coord.x; x <= range.end_coord.x; x++) {
-            CoreCoord core = {x, y};
-            this->all_data[core][bank].data.resize(max);
-            this->all_data[core][bank].valid.resize(max);
+            const CoreDataKey key{tt::CoreType::WORKER, CoreCoord{x, y}};
+            this->all_data[key][bank].data.resize(max);
+            this->all_data[key][bank].valid.resize(max);
         }
     }
 }
@@ -365,15 +387,18 @@ inline uint32_t DeviceData::get_base_result_addr(tt::CoreType core_type) {
     return this->base_result_data_addr[static_cast<int>(core_type)];
 }
 
-inline uint32_t DeviceData::get_result_data_addr(CoreCoord core, int bank_id) {
-    uint32_t base_addr = this->base_result_data_addr[static_cast<int>(this->all_data[core][bank_id].core_type)];
-    return base_addr + (this->all_data[core][bank_id].data.size() * sizeof(uint32_t));
+inline uint32_t DeviceData::get_result_data_addr(CoreCoord core, int bank_id, tt::CoreType core_type) {
+    const CoreDataKey key{core_type, core};
+    uint32_t base_addr = this->base_result_data_addr[static_cast<int>(this->all_data[key][bank_id].core_type)];
+    return base_addr + (this->all_data[key][bank_id].data.size() * sizeof(uint32_t));
 }
 
-inline uint32_t DeviceData::size_at(CoreCoord core, int bank_id) { return this->all_data[core][bank_id].data.size(); }
+inline uint32_t DeviceData::size_at(CoreCoord core, int bank_id, tt::CoreType core_type) {
+    return this->all_data[{core_type, core}][bank_id].data.size();
+}
 
-inline uint32_t DeviceData::at(CoreCoord core, int bank_id, uint32_t offset) {
-    return this->all_data[core][bank_id].data[offset];
+inline uint32_t DeviceData::at(CoreCoord core, int bank_id, uint32_t offset, tt::CoreType core_type) {
+    return this->all_data[{core_type, core}][bank_id].data[offset];
 }
 
 inline bool DeviceData::validate_one_core(
@@ -590,11 +615,12 @@ inline void update_paged_write(
     DeviceData& device_data,
     const CoreCoord& bank_core,
     uint32_t bank_id,
-    uint32_t page_alignment) {
+    uint32_t page_alignment,
+    tt::CoreType core_type) {
     for (const uint32_t datum : payload) {
-        device_data.push_one(bank_core, bank_id, datum);
+        device_data.push_one(bank_core, bank_id, datum, core_type);
     }
-    device_data.pad(bank_core, bank_id, page_alignment);
+    device_data.pad(bank_core, bank_id, page_alignment, core_type);
 }
 
 // Update DeviceData for packed write
@@ -991,9 +1017,6 @@ protected:
 
     void SetUp() override {
         if (!validate_dispatch_mode()) {
-            GTEST_SKIP();
-        }
-        if (is_quasar_sim()) {
             GTEST_SKIP();
         }
         tt_metal::GenericMeshDeviceFixture::SetUp();

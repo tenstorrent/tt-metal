@@ -93,7 +93,7 @@ void update_paged_dram_read(
     uint32_t bank_offset,
     uint32_t page_size_words) {
     for (uint32_t j = 0; j < page_size_words; j++) {
-        uint32_t datum = device_data.at(bank_core, bank_id, bank_offset + j);
+        uint32_t datum = device_data.at(bank_core, bank_id, bank_offset + j, tt::CoreType::DRAM);
         device_data.push_range(workers, datum, false);
     }
 }
@@ -114,11 +114,11 @@ void update_host_data(Common::DeviceData& device_data, const std::vector<uint32_
 
     uint32_t* cmd_as_words = reinterpret_cast<uint32_t*>(&expected_cmd);
     for (uint32_t i = 0; i < sizeof(CQDispatchCmd) / sizeof(uint32_t); i++) {
-        device_data.push_one(device_data.get_host_core(), 0, cmd_as_words[i]);
+        device_data.push_one(device_data.get_host_core(), 0, cmd_as_words[i], tt::CoreType::PCIE);
     }
 
     for (uint32_t i = 0; i < data_size_words; i++) {
-        device_data.push_one(device_data.get_host_core(), 0, data[i]);
+        device_data.push_one(device_data.get_host_core(), 0, data[i], tt::CoreType::PCIE);
     }
 }
 
@@ -133,7 +133,7 @@ void update_read(
     uint32_t bank_offset,
     uint32_t page_size_words) {
     for (uint32_t j = 0; j < page_size_words; j++) {
-        uint32_t datum = device_data.at(bank_core, bank_id, bank_offset + j);
+        uint32_t datum = device_data.at(bank_core, bank_id, bank_offset + j, tt::CoreType::DRAM);
         device_data.push_one(worker_core, datum);
     }
 }
@@ -150,8 +150,8 @@ void update_cross_device_read(
     Common::DeviceData& src_device_data,
     uint32_t size_words) {
     for (uint32_t j = 0; j < size_words; j++) {
-        uint32_t datum = src_device_data.at(src_core, src_bank_id, src_bank_offset + j);
-        dest_device_data.push_one(dest_core, dest_bank_id, datum);
+        uint32_t datum = src_device_data.at(src_core, src_bank_id, src_bank_offset + j, tt::CoreType::DRAM);
+        dest_device_data.push_one(dest_core, dest_bank_id, datum, tt::CoreType::DRAM);
     }
 }
 }  // namespace DeviceDataUpdater
@@ -801,7 +801,6 @@ public:
                 const uint32_t bank_id = page_id % num_banks_;
                 uint32_t bank_offset = page_size_words * (page_id / num_banks_);
 
-                // Get the logical core for this bank
                 const auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
                 const CoreCoord bank_core = device_->logical_core_from_dram_channel(dram_channel);
 
@@ -850,7 +849,6 @@ public:
                 const uint32_t page_id = absolute_start_page + page;
                 const uint32_t bank_id = page_id % num_banks_;
 
-                // Get the logical core for this bank
                 const auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
                 const CoreCoord bank_core = device_->logical_core_from_dram_channel(dram_channel);
 
@@ -860,7 +858,7 @@ public:
 
                 // Update Common::DeviceData for paged write
                 Common::DeviceDataUpdater::update_paged_write(
-                    page_payload, device_data, bank_core, bank_id, page_size_alignment_bytes);
+                    page_payload, device_data, bank_core, bank_id, page_size_alignment_bytes, tt::CoreType::DRAM);
 
                 // Append page payload to chunk payload
                 chunk_payload.insert(chunk_payload.end(), page_payload.begin(), page_payload.end());
@@ -896,7 +894,6 @@ public:
                 // Add dram_data_size_words since we're reading after the pre-populated DRAM data
                 uint32_t bank_offset = dram_data_size_words_ + page_size_words * (page_id / num_banks_);
 
-                // Get the logical core for this bank
                 const auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
                 const CoreCoord bank_core = device_->logical_core_from_dram_channel(dram_channel);
 
@@ -1062,7 +1059,6 @@ public:
             const uint32_t bank_id = page_id % info_.num_banks_;
             uint32_t bank_offset = base_addr_words + (page_size_words * (page_id / info_.num_banks_));
 
-            // Get the logical core for this bank
             const auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
             const CoreCoord bank_core = device_->logical_core_from_dram_channel(dram_channel);
 
@@ -1174,14 +1170,15 @@ public:
 class PrefetcherHostTestFixture : virtual public BasePrefetcherTestFixture {
 protected:
     void pad_host_data(Common::DeviceData& device_data) {
-        Common::one_core_data_t& host_data = device_data.get_data()[device_data.get_host_core()][0];
+        Common::one_core_data_t& host_data =
+            device_data.get_data()[{tt::CoreType::PCIE, device_data.get_host_core()}][0];
 
         int pad =
             dispatch_buffer_page_size_ - ((host_data.data.size() * sizeof(uint32_t)) % dispatch_buffer_page_size_);
         pad = pad % dispatch_buffer_page_size_;
 
         for (int i = 0; i < pad / sizeof(uint32_t); i++) {
-            device_data.push_one(device_data.get_host_core(), 0, HOST_DATA_DIRTY_PATTERN);
+            device_data.push_one(device_data.get_host_core(), 0, HOST_DATA_DIRTY_PATTERN, tt::CoreType::PCIE);
         }
     }
 
@@ -1695,7 +1692,8 @@ protected:
 
             EXPECT_LE(total_length + (device_data.size() * sizeof(uint32_t)), device_data_size_bytes);
 
-            const uint32_t dram_dest_addr = device_data.get_result_data_addr(dest_dram_logical, dest_bank_id);
+            const uint32_t dram_dest_addr =
+                device_data.get_result_data_addr(dest_dram_logical, dest_bank_id, tt::CoreType::DRAM);
 
             const std::vector<CQPrefetchRelayLinearPackedSubCmd> sub_cmds = build_sub_cmds(lengths, addresses);
 
@@ -1711,7 +1709,7 @@ protected:
                 const uint32_t offset_words = (addresses[i] - l1_base) / sizeof(uint32_t);
                 const uint32_t length_words = lengths[i] / sizeof(uint32_t);
                 for (uint32_t j = 0; j < length_words; j++) {
-                    device_data.push_one(dest_dram_logical, dest_bank_id, offset_words + j);
+                    device_data.push_one(dest_dram_logical, dest_bank_id, offset_words + j, tt::CoreType::DRAM);
                 }
             }
 
@@ -2050,7 +2048,8 @@ public:
                 remaining_bytes);
 
             // Capture DRAM address before updating dest_device_data
-            uint32_t dram_addr = dest_device_data.get_result_data_addr(dest_dram_logical_core, dest_dram_bank_id);
+            uint32_t dram_addr =
+                dest_device_data.get_result_data_addr(dest_dram_logical_core, dest_dram_bank_id, tt::CoreType::DRAM);
 
             DeviceCommandCalculator calc;
             calc.add_dispatch_write_linear<false, false>(length);
@@ -2203,7 +2202,8 @@ public:
 
             EXPECT_LE(total_length + (remote_device_data.size() * sizeof(uint32_t)), DEVICE_DATA_SIZE_LARGE);
 
-            const uint32_t dram_dest_addr = remote_device_data.get_result_data_addr(dest_dram_logical, dest_bank_id);
+            const uint32_t dram_dest_addr =
+                remote_device_data.get_result_data_addr(dest_dram_logical, dest_bank_id, tt::CoreType::DRAM);
 
             const std::vector<CQPrefetchRelayLinearPackedSubCmd> sub_cmds = build_sub_cmds(lengths, addresses);
 
@@ -2237,7 +2237,7 @@ public:
                 const uint32_t offset_words = (addresses[i] - l1_base) / sizeof(uint32_t);
                 const uint32_t length_words = lengths[i] / sizeof(uint32_t);
                 for (uint32_t j = 0; j < length_words; j++) {
-                    remote_device_data.push_one(dest_dram_logical, dest_bank_id, offset_words + j);
+                    remote_device_data.push_one(dest_dram_logical, dest_bank_id, offset_words + j, tt::CoreType::DRAM);
                 }
             }
 
@@ -2350,7 +2350,6 @@ protected:
             const uint32_t bank_id = page_idx % num_banks_;
             uint32_t bank_offset = base_addr_words + page_size_words * (page_idx / num_banks_);
 
-            // Get the logical core for this bank
             const auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
             const CoreCoord bank_core = device_->logical_core_from_dram_channel(dram_channel);
 
@@ -3297,7 +3296,7 @@ TEST_P(PrefetcherThroughputTestFixture, HostToDRAMPagedWriteThroughput) {
                 payload_generator_->generate_payload_with_page_id(page_size_words, page_id);
 
             Common::DeviceDataUpdater::update_paged_write(
-                page_payload, device_data, bank_core, bank_id, page_alignment_bytes);
+                page_payload, device_data, bank_core, bank_id, page_alignment_bytes, tt::CoreType::DRAM);
 
             chunk_payload.insert(chunk_payload.end(), page_payload.begin(), page_payload.end());
         }
