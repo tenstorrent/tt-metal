@@ -59,6 +59,8 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/types.hpp"
 
+#include "stream_service_test_utils.hpp"
+
 namespace ttnn::distributed::test {
 namespace {
 
@@ -121,11 +123,8 @@ bool h2d_host_pinning_supported() { return tt::tt_metal::MetalContext::instance(
 // FABRIC_2D over the system mesh (the full Galaxy on a UBB system).
 using D2DStreamServiceTest = tt::tt_metal::GenericMeshDeviceFabric2DFixture;
 
-// Fully-replicated placements sized to a submesh's dimensionality (identity on
-// a 1x1 submesh; full tensor on every device otherwise).
-ttsl::SmallVector<MeshMapperConfig::Placement> replicate_all(const MeshDevice& mesh) {
-    return ttsl::SmallVector<MeshMapperConfig::Placement>(mesh.shape().dims(), MeshMapperConfig::Replicate{});
-}
+// replicate_all() lives in stream_service_test_utils.hpp (shared with the H2D
+// stream-service tests).
 
 // Single worker core per side (num_workers == 1).
 const CoreRange kWorkerCores{CoreCoord{0, 0}, CoreCoord{0, 0}};

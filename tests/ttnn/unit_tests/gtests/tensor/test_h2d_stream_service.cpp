@@ -56,6 +56,8 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/types.hpp"
 
+#include "stream_service_test_utils.hpp"
+
 namespace ttnn::distributed::test {
 namespace {
 
@@ -516,13 +518,8 @@ void run_h2d_stream_service_case(
 
 using H2DStreamServiceTest = ::tt::tt_metal::GenericMeshDeviceFixture;
 
-// Build a fully-replicated placements vector sized to this mesh's dimensionality.
-// Replicate on every mesh dim => same shard at every coord.
-ttsl::SmallVector<MeshMapperConfig::Placement> replicate_all(
-    const tt::tt_metal::distributed::MeshDevice& mesh_device) {
-    return ttsl::SmallVector<MeshMapperConfig::Placement>(
-        mesh_device.shape().dims(), MeshMapperConfig::Replicate{});
-}
+// replicate_all() lives in stream_service_test_utils.hpp (shared with the D2D
+// stream-service tests).
 
 // A — Replicated sweep. Mirrors the row structure used by the sharded sweep
 // below: each row varies (per_row_size, N, scratch_cb, fifo) so the matrix
