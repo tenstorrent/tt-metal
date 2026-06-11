@@ -3,23 +3,17 @@
 # One matrix row per --group, like tests/pipeline_reorg/ttnn-tests.yaml.
 # LLK perf tests are no longer triggered on PR label "llk:performance"
 # ci-quiet log mode is hard-coded.
+# {split_group} is substituted with each row's split_group by prepare_test_matrix.py,
+# so every group below shares one identical cmd that calls a shared runner in
+# tt_metal/tt-llk/tests/: run_llk_perf_wormhole.sh (plain pytest-split) and
+# run_llk_perf_blackhole.sh (slice-level bin-pack + per-slice tt-smi reset).
 
 - name: llk_perf_wormhole group 1/5
   split_group: 1
   team: llk
   cmd: |
     set -euo pipefail
-    cd tests/python_tests
-    mkdir -p perf_data
-    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
-    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
-    pytest $PYTEST_COMPILE_EXTRA --speed-of-light --compile-producer -n 10 -m "perf" --timeout=60 \
-      --splits 5 --group 1 \
-      --junitxml=pytest-report-wormhole-1-compile.xml .
-    pytest $PYTEST_RUN_EXTRA --speed-of-light --compile-consumer -n 15 -x -m "perf" --timeout=60 \
-      --splits 5 --group 1 \
-      --junitxml=pytest-report-wormhole-1-run.xml .
-    junitparser merge pytest-report-wormhole-1-compile.xml pytest-report-wormhole-1-run.xml pytest-report-wormhole-1.xml
+    ./tests/run_llk_perf_wormhole.sh {split_group} 5
   skus:
     wh_n150_civ2:
       timeout: 69
@@ -30,17 +24,7 @@
   team: llk
   cmd: |
     set -euo pipefail
-    cd tests/python_tests
-    mkdir -p perf_data
-    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
-    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
-    pytest $PYTEST_COMPILE_EXTRA --speed-of-light --compile-producer -n 10 -m "perf" --timeout=60 \
-      --splits 5 --group 2 \
-      --junitxml=pytest-report-wormhole-2-compile.xml .
-    pytest $PYTEST_RUN_EXTRA --speed-of-light --compile-consumer -n 15 -x -m "perf" --timeout=60 \
-      --splits 5 --group 2 \
-      --junitxml=pytest-report-wormhole-2-run.xml .
-    junitparser merge pytest-report-wormhole-2-compile.xml pytest-report-wormhole-2-run.xml pytest-report-wormhole-2.xml
+    ./tests/run_llk_perf_wormhole.sh {split_group} 5
   skus:
     wh_n150_civ2:
       timeout: 69
@@ -51,17 +35,7 @@
   team: llk
   cmd: |
     set -euo pipefail
-    cd tests/python_tests
-    mkdir -p perf_data
-    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
-    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
-    pytest $PYTEST_COMPILE_EXTRA --speed-of-light --compile-producer -n 10 -m "perf" --timeout=60 \
-      --splits 5 --group 3 \
-      --junitxml=pytest-report-wormhole-3-compile.xml .
-    pytest $PYTEST_RUN_EXTRA --speed-of-light --compile-consumer -n 15 -x -m "perf" --timeout=60 \
-      --splits 5 --group 3 \
-      --junitxml=pytest-report-wormhole-3-run.xml .
-    junitparser merge pytest-report-wormhole-3-compile.xml pytest-report-wormhole-3-run.xml pytest-report-wormhole-3.xml
+    ./tests/run_llk_perf_wormhole.sh {split_group} 5
   skus:
     wh_n150_civ2:
       timeout: 69
@@ -72,17 +46,7 @@
   team: llk
   cmd: |
     set -euo pipefail
-    cd tests/python_tests
-    mkdir -p perf_data
-    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
-    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
-    pytest $PYTEST_COMPILE_EXTRA --speed-of-light --compile-producer -n 10 -m "perf" --timeout=60 \
-      --splits 5 --group 4 \
-      --junitxml=pytest-report-wormhole-4-compile.xml .
-    pytest $PYTEST_RUN_EXTRA --speed-of-light --compile-consumer -n 15 -x -m "perf" --timeout=60 \
-      --splits 5 --group 4 \
-      --junitxml=pytest-report-wormhole-4-run.xml .
-    junitparser merge pytest-report-wormhole-4-compile.xml pytest-report-wormhole-4-run.xml pytest-report-wormhole-4.xml
+    ./tests/run_llk_perf_wormhole.sh {split_group} 5
   skus:
     wh_n150_civ2:
       timeout: 69
@@ -93,17 +57,7 @@
   team: llk
   cmd: |
     set -euo pipefail
-    cd tests/python_tests
-    mkdir -p perf_data
-    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
-    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
-    pytest $PYTEST_COMPILE_EXTRA --speed-of-light --compile-producer -n 10 -m "perf" --timeout=60 \
-      --splits 5 --group 5 \
-      --junitxml=pytest-report-wormhole-5-compile.xml .
-    pytest $PYTEST_RUN_EXTRA --speed-of-light --compile-consumer -n 15 -x -m "perf" --timeout=60 \
-      --splits 5 --group 5 \
-      --junitxml=pytest-report-wormhole-5-run.xml .
-    junitparser merge pytest-report-wormhole-5-compile.xml pytest-report-wormhole-5-run.xml pytest-report-wormhole-5.xml
+    ./tests/run_llk_perf_wormhole.sh {split_group} 5
   skus:
     wh_n150_civ2:
       timeout: 69
@@ -114,106 +68,7 @@
   team: llk
   cmd: |
     set -euo pipefail
-    cd tests/python_tests
-    mkdir -p perf_data
-
-    GROUP=1
-    N_GROUPS=5
-
-    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
-    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
-
-    # Slice-level greedy bin-pack with an adaptive target, mirroring how
-    # pytest-split distributes items across shards. Files larger than the
-    # target are cut into K slices (no upper cap on K) so an oversized test
-    # overflows into multiple slices/bins instead of pinning a single bin.
-    # Each slice is its own pytest invocation with its own preceding
-    # `tt-smi -r 0` (the reset-between-tests fix this branch exists for).
-    ASSIGNMENTS=$(python3 - "$GROUP" "$N_GROUPS" <<'PY'
-    import subprocess, sys, glob, re, math
-
-    group = int(sys.argv[1])
-    n_groups = int(sys.argv[2])
-
-    # 1. Collect item counts per file (CPU only, no chip access).
-    files = sorted(glob.glob("perf_*.py"))
-    counts = {}
-    for f in files:
-        out = subprocess.run(
-            ["pytest", "--collect-only", "-q", "-m", "perf", f],
-            capture_output=True, text=True
-        ).stdout
-        n = 0
-        for line in out.splitlines():
-            m = re.match(r"^\s*(\d+) tests? collected", line)
-            if m:
-                n = int(m.group(1))
-                break
-        counts[f] = n
-
-    # 2. Adaptive target: half of an ideal bin, floored at 1500. Scales
-    #    with suite size so it auto-adapts as tests are added or grow.
-    total = sum(counts.values())
-    target = max(1500, total // (2 * n_groups))
-
-    # 3. Slice each file into K parts (no upper cap on K).
-    slices = []  # (file, group_idx, total_splits, items)
-    for f, c in counts.items():
-        K = max(1, math.ceil(c / target)) if c > 0 else 1
-        base = c // K if K > 0 else 0
-        rem = c - base * K
-        # Even split; the rem extra items spill into the earliest slices.
-        for i in range(K):
-            slice_items = base + (1 if i < rem else 0)
-            slices.append((f, i + 1, K, slice_items))
-
-    # 4. Greedy bin-pack slices into n_groups bins (first-fit-decreasing).
-    bins = [[0, []] for _ in range(n_groups)]
-    for s in sorted(slices, key=lambda x: -x[3]):
-        bins.sort(key=lambda b: (b[0], len(b[1])))  # lightest bin first
-        bins[0][0] += s[3]
-        bins[0][1].append(s)
-
-    # 5. Emit this group's slices as file:group_idx:total_splits:items.
-    for f, idx, total_splits, items in sorted(bins[group - 1][1]):
-        print(f"{f}:{idx}:{total_splits}:{items}")
-    PY
-    )
-    echo "Group ${GROUP}/${N_GROUPS} slices:"
-    echo "$ASSIGNMENTS"
-
-    # Per slice: compile only this slice's items (producer), reset the board,
-    # then measure (consumer). Slicing the producer keeps each item compiled
-    # exactly once across the run (like main's --splits/--group) instead of
-    # recompiling whole giant files in every group holding one of their slices
-    # — the over-compile that was timing the producer out before the consumer
-    # ever ran.
-    while IFS=":" read -r FILE GIDX TOTAL ITEMS; do
-      [ -z "$FILE" ] && continue
-      tname="${FILE%.py}"
-
-      if [ "$TOTAL" = "1" ]; then
-        SPLIT_ARGS=""
-        REPORT_NAME="${tname}-run"
-      else
-        SPLIT_ARGS="--splits ${TOTAL} --group ${GIDX}"
-        REPORT_NAME="${tname}-s${GIDX}of${TOTAL}-run"
-      fi
-
-      pytest $PYTEST_COMPILE_EXTRA --speed-of-light --compile-producer -n 10 \
-        -m "perf" --timeout=60 \
-        $SPLIT_ARGS \
-        "$FILE"
-      tt-smi -r 0
-      pytest $PYTEST_RUN_EXTRA --speed-of-light --compile-consumer -n 15 \
-        -m "perf" --timeout=60 \
-        $SPLIT_ARGS \
-        --junitxml="pytest-report-blackhole-${GROUP}-${REPORT_NAME}.xml" \
-        "$FILE"
-    done <<< "$ASSIGNMENTS"
-
-    junitparser merge pytest-report-blackhole-${GROUP}-*-run.xml \
-      pytest-report-blackhole-${GROUP}.xml
+    ./tests/run_llk_perf_blackhole.sh {split_group} 5
   skus:
     bh_p150b_civ2:
       timeout: 120
@@ -224,106 +79,7 @@
   team: llk
   cmd: |
     set -euo pipefail
-    cd tests/python_tests
-    mkdir -p perf_data
-
-    GROUP=2
-    N_GROUPS=5
-
-    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
-    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
-
-    # Slice-level greedy bin-pack with an adaptive target, mirroring how
-    # pytest-split distributes items across shards. Files larger than the
-    # target are cut into K slices (no upper cap on K) so an oversized test
-    # overflows into multiple slices/bins instead of pinning a single bin.
-    # Each slice is its own pytest invocation with its own preceding
-    # `tt-smi -r 0` (the reset-between-tests fix this branch exists for).
-    ASSIGNMENTS=$(python3 - "$GROUP" "$N_GROUPS" <<'PY'
-    import subprocess, sys, glob, re, math
-
-    group = int(sys.argv[1])
-    n_groups = int(sys.argv[2])
-
-    # 1. Collect item counts per file (CPU only, no chip access).
-    files = sorted(glob.glob("perf_*.py"))
-    counts = {}
-    for f in files:
-        out = subprocess.run(
-            ["pytest", "--collect-only", "-q", "-m", "perf", f],
-            capture_output=True, text=True
-        ).stdout
-        n = 0
-        for line in out.splitlines():
-            m = re.match(r"^\s*(\d+) tests? collected", line)
-            if m:
-                n = int(m.group(1))
-                break
-        counts[f] = n
-
-    # 2. Adaptive target: half of an ideal bin, floored at 1500. Scales
-    #    with suite size so it auto-adapts as tests are added or grow.
-    total = sum(counts.values())
-    target = max(1500, total // (2 * n_groups))
-
-    # 3. Slice each file into K parts (no upper cap on K).
-    slices = []  # (file, group_idx, total_splits, items)
-    for f, c in counts.items():
-        K = max(1, math.ceil(c / target)) if c > 0 else 1
-        base = c // K if K > 0 else 0
-        rem = c - base * K
-        # Even split; the rem extra items spill into the earliest slices.
-        for i in range(K):
-            slice_items = base + (1 if i < rem else 0)
-            slices.append((f, i + 1, K, slice_items))
-
-    # 4. Greedy bin-pack slices into n_groups bins (first-fit-decreasing).
-    bins = [[0, []] for _ in range(n_groups)]
-    for s in sorted(slices, key=lambda x: -x[3]):
-        bins.sort(key=lambda b: (b[0], len(b[1])))  # lightest bin first
-        bins[0][0] += s[3]
-        bins[0][1].append(s)
-
-    # 5. Emit this group's slices as file:group_idx:total_splits:items.
-    for f, idx, total_splits, items in sorted(bins[group - 1][1]):
-        print(f"{f}:{idx}:{total_splits}:{items}")
-    PY
-    )
-    echo "Group ${GROUP}/${N_GROUPS} slices:"
-    echo "$ASSIGNMENTS"
-
-    # Per slice: compile only this slice's items (producer), reset the board,
-    # then measure (consumer). Slicing the producer keeps each item compiled
-    # exactly once across the run (like main's --splits/--group) instead of
-    # recompiling whole giant files in every group holding one of their slices
-    # — the over-compile that was timing the producer out before the consumer
-    # ever ran.
-    while IFS=":" read -r FILE GIDX TOTAL ITEMS; do
-      [ -z "$FILE" ] && continue
-      tname="${FILE%.py}"
-
-      if [ "$TOTAL" = "1" ]; then
-        SPLIT_ARGS=""
-        REPORT_NAME="${tname}-run"
-      else
-        SPLIT_ARGS="--splits ${TOTAL} --group ${GIDX}"
-        REPORT_NAME="${tname}-s${GIDX}of${TOTAL}-run"
-      fi
-
-      pytest $PYTEST_COMPILE_EXTRA --speed-of-light --compile-producer -n 10 \
-        -m "perf" --timeout=60 \
-        $SPLIT_ARGS \
-        "$FILE"
-      tt-smi -r 0
-      pytest $PYTEST_RUN_EXTRA --speed-of-light --compile-consumer -n 15 \
-        -m "perf" --timeout=60 \
-        $SPLIT_ARGS \
-        --junitxml="pytest-report-blackhole-${GROUP}-${REPORT_NAME}.xml" \
-        "$FILE"
-    done <<< "$ASSIGNMENTS"
-
-    junitparser merge pytest-report-blackhole-${GROUP}-*-run.xml \
-      pytest-report-blackhole-${GROUP}.xml
+    ./tests/run_llk_perf_blackhole.sh {split_group} 5
   skus:
     bh_p150b_civ2:
       timeout: 120
@@ -334,106 +90,7 @@
   team: llk
   cmd: |
     set -euo pipefail
-    cd tests/python_tests
-    mkdir -p perf_data
-
-    GROUP=3
-    N_GROUPS=5
-
-    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
-    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
-
-    # Slice-level greedy bin-pack with an adaptive target, mirroring how
-    # pytest-split distributes items across shards. Files larger than the
-    # target are cut into K slices (no upper cap on K) so an oversized test
-    # overflows into multiple slices/bins instead of pinning a single bin.
-    # Each slice is its own pytest invocation with its own preceding
-    # `tt-smi -r 0` (the reset-between-tests fix this branch exists for).
-    ASSIGNMENTS=$(python3 - "$GROUP" "$N_GROUPS" <<'PY'
-    import subprocess, sys, glob, re, math
-
-    group = int(sys.argv[1])
-    n_groups = int(sys.argv[2])
-
-    # 1. Collect item counts per file (CPU only, no chip access).
-    files = sorted(glob.glob("perf_*.py"))
-    counts = {}
-    for f in files:
-        out = subprocess.run(
-            ["pytest", "--collect-only", "-q", "-m", "perf", f],
-            capture_output=True, text=True
-        ).stdout
-        n = 0
-        for line in out.splitlines():
-            m = re.match(r"^\s*(\d+) tests? collected", line)
-            if m:
-                n = int(m.group(1))
-                break
-        counts[f] = n
-
-    # 2. Adaptive target: half of an ideal bin, floored at 1500. Scales
-    #    with suite size so it auto-adapts as tests are added or grow.
-    total = sum(counts.values())
-    target = max(1500, total // (2 * n_groups))
-
-    # 3. Slice each file into K parts (no upper cap on K).
-    slices = []  # (file, group_idx, total_splits, items)
-    for f, c in counts.items():
-        K = max(1, math.ceil(c / target)) if c > 0 else 1
-        base = c // K if K > 0 else 0
-        rem = c - base * K
-        # Even split; the rem extra items spill into the earliest slices.
-        for i in range(K):
-            slice_items = base + (1 if i < rem else 0)
-            slices.append((f, i + 1, K, slice_items))
-
-    # 4. Greedy bin-pack slices into n_groups bins (first-fit-decreasing).
-    bins = [[0, []] for _ in range(n_groups)]
-    for s in sorted(slices, key=lambda x: -x[3]):
-        bins.sort(key=lambda b: (b[0], len(b[1])))  # lightest bin first
-        bins[0][0] += s[3]
-        bins[0][1].append(s)
-
-    # 5. Emit this group's slices as file:group_idx:total_splits:items.
-    for f, idx, total_splits, items in sorted(bins[group - 1][1]):
-        print(f"{f}:{idx}:{total_splits}:{items}")
-    PY
-    )
-    echo "Group ${GROUP}/${N_GROUPS} slices:"
-    echo "$ASSIGNMENTS"
-
-    # Per slice: compile only this slice's items (producer), reset the board,
-    # then measure (consumer). Slicing the producer keeps each item compiled
-    # exactly once across the run (like main's --splits/--group) instead of
-    # recompiling whole giant files in every group holding one of their slices
-    # — the over-compile that was timing the producer out before the consumer
-    # ever ran.
-    while IFS=":" read -r FILE GIDX TOTAL ITEMS; do
-      [ -z "$FILE" ] && continue
-      tname="${FILE%.py}"
-
-      if [ "$TOTAL" = "1" ]; then
-        SPLIT_ARGS=""
-        REPORT_NAME="${tname}-run"
-      else
-        SPLIT_ARGS="--splits ${TOTAL} --group ${GIDX}"
-        REPORT_NAME="${tname}-s${GIDX}of${TOTAL}-run"
-      fi
-
-      pytest $PYTEST_COMPILE_EXTRA --speed-of-light --compile-producer -n 10 \
-        -m "perf" --timeout=60 \
-        $SPLIT_ARGS \
-        "$FILE"
-      tt-smi -r 0
-      pytest $PYTEST_RUN_EXTRA --speed-of-light --compile-consumer -n 15 \
-        -m "perf" --timeout=60 \
-        $SPLIT_ARGS \
-        --junitxml="pytest-report-blackhole-${GROUP}-${REPORT_NAME}.xml" \
-        "$FILE"
-    done <<< "$ASSIGNMENTS"
-
-    junitparser merge pytest-report-blackhole-${GROUP}-*-run.xml \
-      pytest-report-blackhole-${GROUP}.xml
+    ./tests/run_llk_perf_blackhole.sh {split_group} 5
   skus:
     bh_p150b_civ2:
       timeout: 120
@@ -444,106 +101,7 @@
   team: llk
   cmd: |
     set -euo pipefail
-    cd tests/python_tests
-    mkdir -p perf_data
-
-    GROUP=4
-    N_GROUPS=5
-
-    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
-    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
-
-    # Slice-level greedy bin-pack with an adaptive target, mirroring how
-    # pytest-split distributes items across shards. Files larger than the
-    # target are cut into K slices (no upper cap on K) so an oversized test
-    # overflows into multiple slices/bins instead of pinning a single bin.
-    # Each slice is its own pytest invocation with its own preceding
-    # `tt-smi -r 0` (the reset-between-tests fix this branch exists for).
-    ASSIGNMENTS=$(python3 - "$GROUP" "$N_GROUPS" <<'PY'
-    import subprocess, sys, glob, re, math
-
-    group = int(sys.argv[1])
-    n_groups = int(sys.argv[2])
-
-    # 1. Collect item counts per file (CPU only, no chip access).
-    files = sorted(glob.glob("perf_*.py"))
-    counts = {}
-    for f in files:
-        out = subprocess.run(
-            ["pytest", "--collect-only", "-q", "-m", "perf", f],
-            capture_output=True, text=True
-        ).stdout
-        n = 0
-        for line in out.splitlines():
-            m = re.match(r"^\s*(\d+) tests? collected", line)
-            if m:
-                n = int(m.group(1))
-                break
-        counts[f] = n
-
-    # 2. Adaptive target: half of an ideal bin, floored at 1500. Scales
-    #    with suite size so it auto-adapts as tests are added or grow.
-    total = sum(counts.values())
-    target = max(1500, total // (2 * n_groups))
-
-    # 3. Slice each file into K parts (no upper cap on K).
-    slices = []  # (file, group_idx, total_splits, items)
-    for f, c in counts.items():
-        K = max(1, math.ceil(c / target)) if c > 0 else 1
-        base = c // K if K > 0 else 0
-        rem = c - base * K
-        # Even split; the rem extra items spill into the earliest slices.
-        for i in range(K):
-            slice_items = base + (1 if i < rem else 0)
-            slices.append((f, i + 1, K, slice_items))
-
-    # 4. Greedy bin-pack slices into n_groups bins (first-fit-decreasing).
-    bins = [[0, []] for _ in range(n_groups)]
-    for s in sorted(slices, key=lambda x: -x[3]):
-        bins.sort(key=lambda b: (b[0], len(b[1])))  # lightest bin first
-        bins[0][0] += s[3]
-        bins[0][1].append(s)
-
-    # 5. Emit this group's slices as file:group_idx:total_splits:items.
-    for f, idx, total_splits, items in sorted(bins[group - 1][1]):
-        print(f"{f}:{idx}:{total_splits}:{items}")
-    PY
-    )
-    echo "Group ${GROUP}/${N_GROUPS} slices:"
-    echo "$ASSIGNMENTS"
-
-    # Per slice: compile only this slice's items (producer), reset the board,
-    # then measure (consumer). Slicing the producer keeps each item compiled
-    # exactly once across the run (like main's --splits/--group) instead of
-    # recompiling whole giant files in every group holding one of their slices
-    # — the over-compile that was timing the producer out before the consumer
-    # ever ran.
-    while IFS=":" read -r FILE GIDX TOTAL ITEMS; do
-      [ -z "$FILE" ] && continue
-      tname="${FILE%.py}"
-
-      if [ "$TOTAL" = "1" ]; then
-        SPLIT_ARGS=""
-        REPORT_NAME="${tname}-run"
-      else
-        SPLIT_ARGS="--splits ${TOTAL} --group ${GIDX}"
-        REPORT_NAME="${tname}-s${GIDX}of${TOTAL}-run"
-      fi
-
-      pytest $PYTEST_COMPILE_EXTRA --speed-of-light --compile-producer -n 10 \
-        -m "perf" --timeout=60 \
-        $SPLIT_ARGS \
-        "$FILE"
-      tt-smi -r 0
-      pytest $PYTEST_RUN_EXTRA --speed-of-light --compile-consumer -n 15 \
-        -m "perf" --timeout=60 \
-        $SPLIT_ARGS \
-        --junitxml="pytest-report-blackhole-${GROUP}-${REPORT_NAME}.xml" \
-        "$FILE"
-    done <<< "$ASSIGNMENTS"
-
-    junitparser merge pytest-report-blackhole-${GROUP}-*-run.xml \
-      pytest-report-blackhole-${GROUP}.xml
+    ./tests/run_llk_perf_blackhole.sh {split_group} 5
   skus:
     bh_p150b_civ2:
       timeout: 120
@@ -554,106 +112,7 @@
   team: llk
   cmd: |
     set -euo pipefail
-    cd tests/python_tests
-    mkdir -p perf_data
-
-    GROUP=5
-    N_GROUPS=5
-
-    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
-    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
-
-    # Slice-level greedy bin-pack with an adaptive target, mirroring how
-    # pytest-split distributes items across shards. Files larger than the
-    # target are cut into K slices (no upper cap on K) so an oversized test
-    # overflows into multiple slices/bins instead of pinning a single bin.
-    # Each slice is its own pytest invocation with its own preceding
-    # `tt-smi -r 0` (the reset-between-tests fix this branch exists for).
-    ASSIGNMENTS=$(python3 - "$GROUP" "$N_GROUPS" <<'PY'
-    import subprocess, sys, glob, re, math
-
-    group = int(sys.argv[1])
-    n_groups = int(sys.argv[2])
-
-    # 1. Collect item counts per file (CPU only, no chip access).
-    files = sorted(glob.glob("perf_*.py"))
-    counts = {}
-    for f in files:
-        out = subprocess.run(
-            ["pytest", "--collect-only", "-q", "-m", "perf", f],
-            capture_output=True, text=True
-        ).stdout
-        n = 0
-        for line in out.splitlines():
-            m = re.match(r"^\s*(\d+) tests? collected", line)
-            if m:
-                n = int(m.group(1))
-                break
-        counts[f] = n
-
-    # 2. Adaptive target: half of an ideal bin, floored at 1500. Scales
-    #    with suite size so it auto-adapts as tests are added or grow.
-    total = sum(counts.values())
-    target = max(1500, total // (2 * n_groups))
-
-    # 3. Slice each file into K parts (no upper cap on K).
-    slices = []  # (file, group_idx, total_splits, items)
-    for f, c in counts.items():
-        K = max(1, math.ceil(c / target)) if c > 0 else 1
-        base = c // K if K > 0 else 0
-        rem = c - base * K
-        # Even split; the rem extra items spill into the earliest slices.
-        for i in range(K):
-            slice_items = base + (1 if i < rem else 0)
-            slices.append((f, i + 1, K, slice_items))
-
-    # 4. Greedy bin-pack slices into n_groups bins (first-fit-decreasing).
-    bins = [[0, []] for _ in range(n_groups)]
-    for s in sorted(slices, key=lambda x: -x[3]):
-        bins.sort(key=lambda b: (b[0], len(b[1])))  # lightest bin first
-        bins[0][0] += s[3]
-        bins[0][1].append(s)
-
-    # 5. Emit this group's slices as file:group_idx:total_splits:items.
-    for f, idx, total_splits, items in sorted(bins[group - 1][1]):
-        print(f"{f}:{idx}:{total_splits}:{items}")
-    PY
-    )
-    echo "Group ${GROUP}/${N_GROUPS} slices:"
-    echo "$ASSIGNMENTS"
-
-    # Per slice: compile only this slice's items (producer), reset the board,
-    # then measure (consumer). Slicing the producer keeps each item compiled
-    # exactly once across the run (like main's --splits/--group) instead of
-    # recompiling whole giant files in every group holding one of their slices
-    # — the over-compile that was timing the producer out before the consumer
-    # ever ran.
-    while IFS=":" read -r FILE GIDX TOTAL ITEMS; do
-      [ -z "$FILE" ] && continue
-      tname="${FILE%.py}"
-
-      if [ "$TOTAL" = "1" ]; then
-        SPLIT_ARGS=""
-        REPORT_NAME="${tname}-run"
-      else
-        SPLIT_ARGS="--splits ${TOTAL} --group ${GIDX}"
-        REPORT_NAME="${tname}-s${GIDX}of${TOTAL}-run"
-      fi
-
-      pytest $PYTEST_COMPILE_EXTRA --speed-of-light --compile-producer -n 10 \
-        -m "perf" --timeout=60 \
-        $SPLIT_ARGS \
-        "$FILE"
-      tt-smi -r 0
-      pytest $PYTEST_RUN_EXTRA --speed-of-light --compile-consumer -n 15 \
-        -m "perf" --timeout=60 \
-        $SPLIT_ARGS \
-        --junitxml="pytest-report-blackhole-${GROUP}-${REPORT_NAME}.xml" \
-        "$FILE"
-    done <<< "$ASSIGNMENTS"
-
-    junitparser merge pytest-report-blackhole-${GROUP}-*-run.xml \
-      pytest-report-blackhole-${GROUP}.xml
+    ./tests/run_llk_perf_blackhole.sh {split_group} 5
   skus:
     bh_p150b_civ2:
       timeout: 120
