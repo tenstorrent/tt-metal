@@ -2119,7 +2119,7 @@ class ModelArgs:
     @lru_cache(maxsize=None)
     def get_norm_config(self, norm_type: str, mode: Mode, prefetcher: Prefetcher = None):
         """Get the norm config dict for attention, ff, or lm_head norms."""
-        prefetcher_norm_grid = ttnn.CoreGrid(y=8, x=4)
+        prefetcher_norm_grid = prefetcher.dynamic_worker_core_grid(32) if prefetcher is not None else None
         match norm_type:
             case "attn":
                 if mode == Mode.DECODE and prefetcher is not None:
@@ -2128,11 +2128,9 @@ class ModelArgs:
                         "sharded_output_config": ttnn.create_sharded_memory_config(
                             shape=(
                                 32,
-                                self.dim
-                                // self.cluster_shape[0]
-                                // prefetcher.dynamic_worker_core_grid(32).num_cores(),
+                                self.dim // self.cluster_shape[0] // prefetcher_norm_grid.num_cores(),
                             ),
-                            core_grid=prefetcher.dynamic_worker_core_grid(32),
+                            core_grid=prefetcher_norm_grid,
                             strategy=ttnn.ShardStrategy.WIDTH,
                             orientation=ttnn.ShardOrientation.ROW_MAJOR,
                             use_height_and_width_as_shard_shape=True,
@@ -2158,8 +2156,8 @@ class ModelArgs:
                     return {
                         "sharded_program_config": self.create_sharded_norm_config(prefetcher_norm_grid),
                         "sharded_output_config": ttnn.create_sharded_memory_config(
-                            shape=(32, self.dim // prefetcher.dynamic_worker_core_grid(32).num_cores()),
-                            core_grid=prefetcher.dynamic_worker_core_grid(32),
+                            shape=(32, self.dim // prefetcher_norm_grid.num_cores()),
+                            core_grid=prefetcher_norm_grid,
                             strategy=ttnn.ShardStrategy.WIDTH,
                             orientation=ttnn.ShardOrientation.ROW_MAJOR,
                             use_height_and_width_as_shard_shape=True,
@@ -2191,8 +2189,8 @@ class ModelArgs:
                     return {
                         "sharded_program_config": self.create_sharded_norm_config(prefetcher_norm_grid),
                         "sharded_output_config": ttnn.create_sharded_memory_config(
-                            shape=(32, self.dim // prefetcher.dynamic_worker_core_grid(32).num_cores()),
-                            core_grid=prefetcher.dynamic_worker_core_grid(32),
+                            shape=(32, self.dim // prefetcher_norm_grid.num_cores()),
+                            core_grid=prefetcher_norm_grid,
                             strategy=ttnn.ShardStrategy.WIDTH,
                             orientation=ttnn.ShardOrientation.ROW_MAJOR,
                             use_height_and_width_as_shard_shape=True,
@@ -3486,9 +3484,16 @@ class ModelArgs:
         """Helper function to create LayerNormShardedMultiCoreProgramConfig for RMS NORM.
 
         Args:
-            grid (ttnn.CoreGrid): Grid specification for the norm operation
+            grid (ttnn.CoreGrid or ttnn.CoreRangeSet): Grid specification for the norm operation
         """
-        block_w = self.dim // grid.num_cores // ttnn.TILE_SIZE
+        if hasattr(grid, "bounding_box"):
+            bbox = grid.bounding_box()
+            grid_size = bbox.grid_size()
+            num_cores = grid.num_cores()
+        else:
+            grid_size = grid
+            num_cores = grid.num_cores
+        block_w = self.dim // num_cores // ttnn.TILE_SIZE
         # Find largest value <= 4 that evenly divides block_w
         subblock_w = 4
         while subblock_w > 0:
@@ -3496,7 +3501,7 @@ class ModelArgs:
                 break
             subblock_w -= 1
         return ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=[grid.x, grid.y],
+            compute_with_storage_grid_size=[grid_size.x, grid_size.y],
             subblock_w=subblock_w,
             block_h=self.tile_padded_batch_rows // ttnn.TILE_SIZE,
             block_w=block_w,
