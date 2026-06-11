@@ -92,3 +92,36 @@ def test_text_rmsnorm_pcc(mesh_device):
 
     assert pcc_repl > 0.99, f"replicated PCC {pcc_repl:.6f} < 0.99"
     assert pcc_dist > 0.99, f"distributed PCC {pcc_dist:.6f} < 0.99"
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_text_rmsnorm_decode_row_pcc(mesh_device):
+    """Production DECODE posture: bf16 [1,1,1,H] token row (TILE-padded to 32
+    physical rows), fp32 TILE gamma (ocr_model builds every text norm with
+    dtype=float32). The padded-seq gate must route this onto the 12-core
+    width-sharded kernel (occupancy redo tick-62) without breaking PCC."""
+    golden = torch.load(GOLDEN)
+    x, weight, eps = golden["input"], golden["weight"], golden["eps"]
+    row = x[:, :1, :].unsqueeze(1)  # [1, 1, 1, dim] single token row
+    # Torch reference at the row (Qwen2RMSNorm: fp32 variance, then scale).
+    r32 = row.float()
+    ref_row = r32 * torch.rsqrt(r32.pow(2).mean(-1, keepdim=True) + eps) * weight.float()
+
+    block = TtTextRMSNorm(mesh_device, {"weight": weight}, dtype=ttnn.float32, eps=eps)
+    x_tt = ttnn.from_torch(
+        row,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    # The decode row must qualify for the sharded fast path (padded-seq gate).
+    assert block._sharded_cfgs(x_tt) is not None, "decode row fell back to the 1-core interleaved path"
+    out = block.forward(x_tt)
+    out_r = ttnn.to_torch(ttnn.get_device_tensors(out)[0]).float()
+    assert out_r.shape == ref_row.shape, f"{out_r.shape} != {ref_row.shape}"
+    pcc = _pcc(ref_row, out_r)
+    print(f"PCC(text_rmsnorm, decode row sharded) = {pcc:.6f}")
+    assert pcc > 0.99, f"decode-row PCC {pcc:.6f} < 0.99"

@@ -18,16 +18,18 @@ the reference_impl, this block carries BOTH paths:
 - ``forward``: replicated activation -> fused ``ttnn.rms_norm`` with a
   replicated gamma (the tt_transformers non-TG path; correct whenever the
   decoder keeps a replicated residual stream between CCLs). Optimization
-  phase: when the shape qualifies (tile-aligned seq, hidden tiles divisible
-  by 12, per-core shard within L1 budget), the norm runs WIDTH-SHARDED on a
-  4x3 grid via ``LayerNormShardedMultiCoreProgramConfig`` with an
+  phase: when the shape qualifies (hidden tiles divisible by 12, per-core
+  shard within L1 budget — gated on the PADDED seq so the decode token row
+  [1,1,1,H] -> 32 phys rows qualifies too), the norm runs WIDTH-SHARDED on
+  a 4x3 grid via ``LayerNormShardedMultiCoreProgramConfig`` with an
   i2s/s2i bounce that keeps the DRAM-interleaved output contract (consumers
   are matmuls; the tick-23 L1-interleaved-into-matmul stall forbids an L1
-  pin). Default interleaved LN caps at seq//32 cores (4 @ seq 128); the
-  sharded kernel uses 12. Measured at the production operating point
-  (fp32 [1,1,128,1536] replicated 1x4 mesh, 200 traced replays):
-  24.4 -> 21.1 us/iter (-13.4%), reproducible; 8x6/8x3/2x3/6x2 grids
-  measured worse (block_w=4 with subblock_w=4 is the sweet spot).
+  pin). Default interleaved LN caps at padded_seq//32 cores (1 @ decode,
+  4 @ seq 128); the sharded kernel uses 12. Measured at the production
+  operating points: fp32 [1,1,128,1536] 24.4 -> 21.1 us/iter (-13.4%);
+  DECODE bf16 [1,1,1,1536] traced 18.57 -> 6.92 us/device (-63%, see grid
+  sweep at ``_SHARD_GRID_X``). Larger and smaller grids measured worse
+  (block_w=4 with subblock_w=4 is the sweet spot at both shapes).
 - ``forward_distributed``: hidden-sharded activation [.., dim/N per device]
   -> ``ttnn.rms_norm_pre_all_gather`` (per-device sum(x^2) stats) ->
   ``ttnn.all_gather(dim=3, Topology.Linear)`` (sync variant, acceptable for
@@ -105,9 +107,22 @@ class TtTextRMSNorm(LightweightModule):
         self._sharded_cfg_cache = {}
 
     # Width-sharded grid: 12 cores (4x3), block_w = dim_tiles/12. Measured
-    # best at the production point (fp32 [1,1,128,1536]): 24.4 -> 21.1
-    # us/iter vs default interleaved (which caps at seq//32 cores); 48/24/6-
-    # core grids measured worse (i2s/s2i bounce amortizes only at block_w=4).
+    # best at BOTH production points:
+    # - prefill gate shape (fp32 [1,1,128,1536]): 24.4 -> 21.1 us/iter
+    #   (-13.4%) vs default interleaved (which caps at seq//32 cores);
+    #   48/24/6-core grids measured worse.
+    # - DECODE token row (bf16 [1,1,1,1536] padded to 32 rows, fp32 TILE
+    #   gamma, traced replay, occupancy redo tick-62): interleaved fallback
+    #   was 1/110 cores at 18.57 us/device; sharded total 6.92 us/device
+    #   (LN 5.04 + i2s/s2i bounce 1.88), -63%. Max-core lever A/B at the
+    #   queried 11x10 grid: 48c 7.66 / 24c 7.21 / 16c 7.18 / 12c(6x2) 7.14 /
+    #   8c 6.90 / 6c 7.32 us/device — the single-row op is latency-bound,
+    #   MORE cores measured WORSE; 8-12 cores is the measured ceiling
+    #   (<70%-occupancy wave-off backed by the losing max-core A/B).
+    #   Composition note (decoder_layer/perf tick): a residual stream kept
+    #   WIDTH_SHARDED across the whole decode step would drop the 1.88 us
+    #   bounce per norm call (57 calls/step); per-norm the bounce pays for
+    #   itself vs the 1-core fallback.
     _SHARD_GRID_X, _SHARD_GRID_Y = 4, 3
     # Per-core shard byte cap: keeps the kernel's static CBs well inside the
     # 1.46 MB per-core L1 for long-seq prefill (gate falls back to the fused
@@ -119,7 +134,12 @@ class TtTextRMSNorm(LightweightModule):
         shape/layout doesn't qualify for the width-sharded fast path."""
         if x.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
             return None
-        seq, dim = x.shape[-2], x.shape[-1]
+        # PADDED row count: the decode token row is logical [1,1,1,H] but
+        # physical [1,1,32,H] — the sharded kernel works on the padded tile
+        # rows (LN has no cross-row interaction, pad rows are discarded by
+        # the logical shape). Gating on the logical seq left decode on the
+        # 1-core interleaved fallback (occupancy redo: 18.57 -> 6.92 us/dev).
+        seq, dim = x.padded_shape[-2], x.shape[-1]
         dtype_bytes = 4 if x.dtype == ttnn.float32 else 2
         key = (seq, dim, dtype_bytes)
         if key in self._sharded_cfg_cache:

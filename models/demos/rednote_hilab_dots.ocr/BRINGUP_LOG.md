@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T23:20:37Z
+**Updated:** 2026-06-11T00:09:22Z
 
 ## Block Status
 
@@ -53,7 +53,7 @@
 | text_rmsnorm | reference | done | 1.000000 | 0 | Qwen2RMSNorm eps=1e-6, fp32 variance then weight*x, real layers.0 input_layernorm weight |
 | text_rmsnorm | ttnn | done | 0.999986 | 0 | Qwen2RMSNorm eps=1e-6 via fused ttnn.rms_norm ([1,1,dim//32,32] ROW_MAJOR gamma, HiFi2+fp32-acc per reference_impl models/common/rmsnorm.py) PLUS the parallelism-plan distributed path: rms_norm_pre_all_gather -> sync ttnn.all_gather(dim=3, Topology.Linear; async deferred to optimization per tp-guidance) -> rms_norm_post_all_gather with dim-2-sharded gamma (KB ttnn_rms_norm_post_all_gather cited; KB ttnn_pow chain fused into ttnn.rms_norm). Real layers.0 input_layernorm weight; 1x4 mesh; replicated path compared single-device vs golden (PCC 0.999986), distributed path concat-on-hidden vs golden (PCC 0.999986). Guard ok (lint 0, kernels ok, no new host ops). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | text_rmsnorm | debug | n/a | — | 0 |  |
-| text_rmsnorm | optimization | pending | — | 0 | OCCUPANCY REDO: per the new occupancy+convergence contract — query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid |
+| text_rmsnorm | optimization | done | 0.999994 | 0 | Resume-validation: prior tick's padded-seq sharded-gate edits confirmed. Block PCC 2/2 passed (decode-row 0.999994). Traced decode bf16 [1,1,1,1536]: 6.82 us/device (claimed 6.92, within 1.5%; was 18.57 us 1-core fallback, -63%). Traced prefill fp32 [1,1,128,1536]: 16.4 us/device kernel. e2e OCR parity PASSED. LN 12-core both points; max-core A/B (6-48c) documented losing, at ceiling. Residual bounce (1.88us) removable only at decoder_layer scope. KB cited: ttnn_pow/ttnn_rsqrt fusion into ttnn.rms_norm; ttnn_rms_norm_post_all_gather distributed path. |
 | text_rmsnorm | real_weights | done | 0.999988 | 0 | text_rmsnorm_weights loader added to consolidated tt/weight_loader.py (pure-PyTorch, memoized key-filtered safetensors load; covers model.layers.{i}.input_layernorm/post_attention_layernorm per-layer keys and the stack-level model.norm key; TEXT_NUM_LAYERS=28 constant added; __main__ self-test extended: weight [1536] at all sites, 1536 params each). Stage-1 parametric tests/test_real_hf_weights.py row runs TtTextRMSNorm at the production operating point (fp32 [1,1,128,1536] replicated 1x4 mesh, replicated fused path - the decoder hot path; distributed pre/post path off hot path), golden real residual-stream input, vs the pure-PyTorch reference with the same real weights at THREE sites: input_layernorm@0 PCC 0.999990, post_attention_layernorm@27 0.999988, final_norm 0.999991 (min 0.999988 > 0.99 reported). Block forward untouched; full harness re-run, all 9 rows passing (8 prior rows unchanged). Guard ok (lint 0, params_loaded 4608>0). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | text_attention | reference | done | 1.000000 | 0 | eager causal GQA 12Q/2KV hd128 qkv-bias o_proj-no-bias, rope theta=1e6, real layers.0 weights |
 | text_attention | ttnn | done | 0.999047 | 0 | Fused per-chip QKV ttnn.linear(+bias) -> nlp_create_qkv_heads (3 Q + KV replicated to 3, MHA core) -> explicit fp32 HF-convention rope (slice/neg/concat/mul/add, vision-tower recipe) -> explicit fp32 causal core matmul QK^T * scale + additive triu mask -> ttnn.softmax(numeric_stable) -> matmul PV -> nlp_concat_heads -> row-parallel o_proj + sync all_gather all-reduce. bf16 SDPA rejected by measurement: layer-0 logits reach +-3122 (std 664, Qwen2 attention sink); per-stage isolation showed q/k/v+rope 0.9999+ but bf16 SDPA core 0.9265 (0.92-0.97 across program configs), so the whole path runs fp32 (HiFi4 + fp32 acc; SDPA kernel is bf16-only) -- guard satisfied via softmax alternative. kv_replication=2 per parallelism plan via per-chip KV row repeat; 1x4 mesh; replicated all-reduced output vs golden. Guard ok (lint 0, kernels ok, no new host ops). KB entries reviewed (nlp_create_qkv_heads idiom applied); decode/KV-cache deferred to generation phase. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
@@ -84,7 +84,6 @@
 
 ## Recent Ticks
 
-- tick 52 (2026-06-10T18:51:26Z): perf[ocr] — ok
 - tick 53 (2026-06-10T21:05:20Z): perf[ocr] — ok
 - tick 54 (2026-06-10T21:29:25Z): device[vision_patch_embed] — ok
 - tick 55 (2026-06-10T21:37:18Z): device[vision_rmsnorm] — ok
@@ -94,6 +93,7 @@
 - tick 59 (2026-06-10T22:43:29Z): device[patch_merger] — ok
 - tick 60 (2026-06-10T23:08:15Z): device[vision_transformer] — ok
 - tick 61 (2026-06-10T23:20:37Z): device[embedding] — ok
+- tick 62 (2026-06-11T00:09:22Z): device[text_rmsnorm] — ok
 
 ## Host-Resident Exceptions
 

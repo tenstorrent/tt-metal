@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T23:20:37Z",
+  "updated_at": "2026-06-11T00:09:22Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -539,9 +539,16 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
+        "status": "done",
         "attempts": 0,
-        "notes": "OCCUPANCY REDO: per the new occupancy+convergence contract \u2014 query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid"
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/text_rmsnorm.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_text_rmsnorm.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_text_rmsnorm.py",
+          "generated/profiler/reports/2026_06_11_00_06_52/ops_perf_results_2026_06_11_00_06_52.csv"
+        ],
+        "notes": "Resume-validation: prior tick's padded-seq sharded-gate edits confirmed. Block PCC 2/2 passed (decode-row 0.999994). Traced decode bf16 [1,1,1,1536]: 6.82 us/device (claimed 6.92, within 1.5%; was 18.57 us 1-core fallback, -63%). Traced prefill fp32 [1,1,128,1536]: 16.4 us/device kernel. e2e OCR parity PASSED. LN 12-core both points; max-core A/B (6-48c) documented losing, at ceiling. Residual bounce (1.88us) removable only at decoder_layer scope. KB cited: ttnn_pow/ttnn_rsqrt fusion into ttnn.rms_norm; ttnn_rms_norm_post_all_gather distributed path.",
+        "pcc": 0.999994
       },
       "real_weights": {
         "status": "done",
@@ -1197,6 +1204,12 @@
       "tick": 61,
       "ts": "2026-06-10T23:20:37Z",
       "action": "device[embedding]",
+      "result": "ok"
+    },
+    {
+      "tick": 62,
+      "ts": "2026-06-11T00:09:22Z",
+      "action": "device[text_rmsnorm]",
       "result": "ok"
     }
   ],
