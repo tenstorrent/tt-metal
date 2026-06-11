@@ -29,7 +29,6 @@
 
 #include "hostdevcommon/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"
-#include "hostdev/device_print_common.h"
 
 #ifdef HAL_BUILD
 // HAL will include this file for different arch/cores, resulting in conflicting definitions that
@@ -50,6 +49,7 @@ namespace HAL_BUILD {  // NOLINT(modernize-concat-nested-namespaces)
 #include "dev_mem_map.h"
 // Deprecated in favor of dev_mem_map.h. Keep to avoid breaking changes.
 #include "eth_l1_address_map.h"
+#include "device_print_mem.h"
 
 #if defined(COMPILE_FOR_ERISC)
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
@@ -411,6 +411,13 @@ struct mailboxes_t {
     alignas(TT_ARCH_MAX_NOC_WRITE_ALIGNMENT)  // CODEGEN:skip
         profiler_msg_t profiler;
 };
+
+// DevicePrintMemoryLayout asserts
+static_assert(sizeof(DevicePrintMemoryLayout) == DPRINT_BUFFER_SIZE * PROCESSOR_COUNT);
+static_assert(sizeof(DevicePrintMemoryLayout) % 4 == 0);
+#if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
+static_assert(decltype(DevicePrintMemoryLayout::buffer)::processor_count == PROCESSOR_COUNT);
+#endif
 
 // Watcher struct needs to be 32b-divisible, since we need to write it from host using write_core().
 static_assert(sizeof(watcher_msg_t) % sizeof(uint32_t) == 0);

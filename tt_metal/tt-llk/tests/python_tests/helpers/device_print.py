@@ -8,7 +8,7 @@ and tt_metal/hw/inc/hostdev/device_print_common.h):
 
     DEVICE_PRINT_BUFFER_BASE = TestConfig.DEVICE_PRINT_BUFFER_BASE (layout:
     - struct Aux { uint32 wpos; uint32 rpos; uint8 risc_state[5]; uint32 lock; }
-    - uint8 data[DPRINT_BUFFER_SIZE * PROCESSOR_COUNT - sizeof(struct Aux)]
+    - uint8 data[DEVICE_PRINT_BUFFER_SIZE - sizeof(struct Aux)]
 
     Each record:
     - [4-byte DevicePrintHeader]
