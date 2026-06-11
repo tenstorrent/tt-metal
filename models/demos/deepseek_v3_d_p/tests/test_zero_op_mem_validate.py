@@ -48,8 +48,6 @@ def test_zero_op_mem_validate(mesh_device):
     cache = init_kvpe_cache(
         kvpe, mesh_device, SEQ, [8, 4], sp_axis, num_kvpe_cache_layers=NUM_LAYERS, num_users=NUM_USERS
     )
-    # positions[chip*seq_local + lr] = global natural token at (chip, local lr)
-    positions = blockcyclic_positions(sp, CSG, SEQ)
     ones = torch.ones(1, 1, seq_local, kvpe, dtype=torch.bfloat16)
     tt_ones = ttnn.from_torch(
         ones,
