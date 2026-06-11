@@ -83,7 +83,7 @@ class DataArgs:
     # Upper bound on AR acoustic steps. The demo auto-raises this per-prompt when the
     # word count implies more tokens are needed (see _min_speech_tokens). Use a small
     # value like 64 for quick smoke tests; leave at 0 to always use the auto-estimate.
-    max_speech_tokens: int = 1000
+    max_speech_tokens: int = 5000
     seed: int = 0
     default_voice: str = "casual_female"
     warmup_iters: int = 0
@@ -113,9 +113,10 @@ def _parse_demo_args(argv: list[str] | None = None) -> DemoArgs:
     p.add_argument(
         "--text",
         type=str,
+        nargs="+",
         action="append",
         default=None,
-        help="Inline text prompt (text mode). Repeat --text for multiple prompts; bypasses --prompts JSON.",
+        help="Inline text prompt (text mode). Quotes are optional; repeat --text for multiple prompts. Bypasses --prompts JSON.",
     )
     p.add_argument("--output-dir", type=str, default=DataArgs.output_dir)
     p.add_argument("--mode", type=str, choices=("text", "codes", "latents"), default="text")
@@ -141,8 +142,11 @@ def _parse_demo_args(argv: list[str] | None = None) -> DemoArgs:
         "--paged-block-size", type=int, default=32, help="KV block size for paged attention (multiple of 32)."
     )
     ns = p.parse_args(argv)
-    if ns.text and ns.mode != "text":
+    inline_texts = [" ".join(parts).strip() for parts in ns.text] if ns.text else None
+    if inline_texts and ns.mode != "text":
         p.error("--text is only valid with --mode text")
+    if inline_texts and any(not text for text in inline_texts):
+        p.error("--text requires a non-empty prompt")
     return DemoArgs(
         model=ModelArgs(model_name_or_path=ns.model),
         tt=TTArgs(
@@ -158,7 +162,7 @@ def _parse_demo_args(argv: list[str] | None = None) -> DemoArgs:
             seed=ns.seed,
             default_voice=ns.default_voice,
             warmup_iters=ns.warmup_iters,
-            inline_texts=ns.text,
+            inline_texts=inline_texts,
         ),
     )
 
