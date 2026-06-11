@@ -559,33 +559,30 @@ void kernel_main() {
 
             // Multiply by 1/(√(Var(X) + ε)).
             //
-            // On Wormhole, binary_dest_reuse_tiles<ELWMUL, DEST_TO_SRCB> on c_0 (cb_in)
-            // silently corrupts when an earlier unpack op in this kernel routed through an
-            // UnpackToDestFp32 CB. The two triggers are different in each path:
+            // WORKAROUND (root cause NOT understood). Empirically, the
+            // binary_dest_reuse_tiles<ELWMUL, DEST_TO_SRCB> multiply below produces wrong output
+            // whenever an UnpackToDestFp32 alias was used earlier in this kernel:
             //   * non-fuse welford (welford_fp32_alias): transpose_wh_tile reads cb_x_welford
             //     (c_29, UnpackToDestFp32 alias of cb_x).
             //   * fuse_pre_add welford state (welford_state_fp32_alias): copy_tile reads
             //     cb_ex_welford / cb_ex2_welford (c_30 / c_31, UnpackToDestFp32 aliases of
-            //     cb_ex / cb_ex2). cb_interm_pre_add (c_23) is kept in Default mode and the
-            //     fuse path's transpose_wh_tile on it does not contribute to the trigger.
-            // The leaked unpacker state survives across the welford -> eltwise boundary;
-            // even-indexed DEST half blocks accumulate (output = (1+rsqrt)*(x-mean), ~1.286x),
-            // odd-indexed blocks produce mostly zeros. The standard reconfig_data_format(...,
-            // IGNORE) skip-optimization at the start of the eltwise block does not reset
-            // whatever state needs resetting. Blackhole is unaffected.
+            //     cb_ex / cb_ex2).
+            // Wormhole (#45216): deterministic and large. Blackhole (#46523): intermittent
+            // (nondeterministic back-to-back, disappears under watcher) and small in magnitude.
+            // Staging (x - mean) through cb_xmm and multiplying via the SrcA mul_tiles_bcast_cols
+            // path (instead of reusing DEST) avoids it. Use the DEST_TO_SRCB reuse path otherwise
+            // to skip an extra pack/unpack round-trip (the workaround costs ~3% on the FP32
+            // large-tensor Welford path, measured on a 32x4096 Blackhole case).
             //
-            // If we're on Wormhole and any UnpackToDestFp32 alias is active in
-            // this kernel, stage (x - mean) through cb_xmm and use the mul_tiles_bcast_cols
-            // path so the multiply reads through SrcA instead of reusing DEST.
-            // In all other cases, use the DEST_TO_SRCB reuse path, to avoid an extra pack/unpack
-            // round-trip. Tracked in Issue #45216.
-            constexpr bool wh_dest_reuse_workaround_needed =
-#if defined(ARCH_WORMHOLE)
-                (welford_fp32_alias || welford_state_fp32_alias);
-#else
-                false;
-#endif
-            if constexpr (wh_dest_reuse_workaround_needed) {
+            // The mechanism is unconfirmed and the leaked-state framing above may be wrong: an
+            // attempt to "reset and keep the fast path" did not work. Clearing DBG_FEATURE_DISABLE
+            // bit 11 (set by the to-DEST unpack with no unpack-side re-enable) on the math thread,
+            // on both threads, and a full binary_op_init_common re-init before the eltwise pass
+            // all left the output still nondeterministic -- so whatever causes this is not reset
+            // by any pipeline reprogram we found from the kernel. Avoiding the path is the only
+            // remedy known to work; identifying the real cause needs deeper HW/LLK investigation.
+            constexpr bool dest_reuse_workaround_needed = (welford_fp32_alias || welford_state_fp32_alias);
+            if constexpr (dest_reuse_workaround_needed) {
                 tile_regs_commit();
 
                 const uint32_t cb_xmm_intermediate = get_named_compile_time_arg_val("cb_xmm");
