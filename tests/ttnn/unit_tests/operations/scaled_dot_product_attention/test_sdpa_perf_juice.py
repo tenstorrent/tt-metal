@@ -48,9 +48,9 @@ from ttnn.operations.scaled_dot_product_attention import scaled_dot_product_atte
 # --- HiFi2 matmul peak -------------------------------------------------------
 # LoFi: 8*16*16 = 2048 MAC/cycle/core -> *2 = 4096 FLOP/cycle/core.
 # HiFi2 runs 2 fidelity phases per MAC -> 2048 FLOP/cycle/core.
-# Wormhole worker grid = 8x8 = 64 cores; AI clock ~0.9855 GHz (from device sync).
+# Wormhole worker grid = 8x8 = 64 cores; AI clock = 1.0 GHz.
 GRID_CORES = 64
-PEAK_TFLOPS = 2048 * GRID_CORES * 0.9855e9 / 1e12  # ~129 TFLOPs HiFi2
+PEAK_TFLOPS = 2048 * GRID_CORES * 1.0e9 / 1e12  # ~131 TFLOPs HiFi2
 TILE = 32
 PCC_THRESHOLD = 0.99
 _PERF_LOG = Path("generated/sdpa_juice_perf.txt")
