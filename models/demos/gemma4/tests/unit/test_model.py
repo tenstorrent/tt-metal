@@ -541,7 +541,6 @@ def test_full_model_decode(mesh_device, reset_seeds, request):
         rot_mat_idxs=device_inputs[2],
         page_table=device_inputs[3],
         kv_cache=tt_kv_cache,
-        sampling_on_device=False,
     )
     if is_mesh and tp > 1:
         shards = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(logits)]
