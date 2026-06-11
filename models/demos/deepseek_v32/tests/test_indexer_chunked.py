@@ -9,10 +9,9 @@ parameter (1k dev default per agreement 15).
 """
 
 import pytest
-import torch
 
 import ttnn
-from models.demos.deepseek_v32.tests.test_mla import build_cpu_reference
+from models.demos.deepseek_v32.tests.test_mla import build_cpu_reference, make_hidden
 from models.demos.deepseek_v32.tt import ops
 from models.demos.deepseek_v32.tt.mla import ttMLA
 
@@ -29,13 +28,14 @@ def _shard(t, mesh_device):
 
 @pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["1x4"], indirect=True)
 @pytest.mark.parametrize("seq_len,chunk", [(2048, 1024)], ids=["2k_c1k"])
-def test_indexer_chunked_matches_single_shot(mesh_device, seq_len, chunk, config_only):
+def test_indexer_chunked_matches_single_shot(
+    mesh_device, seq_len, chunk, config_only, ds_layer, ds_checkpoint, ds_repo, ds_input
+):
     config = config_only
-    args, _, weights = build_cpu_reference(seq_len)
+    args, _, weights, _ = build_cpu_reference(seq_len, layer=ds_layer, checkpoint_path=ds_checkpoint, repo=ds_repo)
     config.max_seq_len = seq_len
 
-    torch.manual_seed(7)
-    x = torch.randn(1, 1, seq_len, config.hidden_size, dtype=torch.bfloat16)
+    x = make_hidden(seq_len, config.hidden_size, seed=7, input_path=ds_input).unsqueeze(0)  # [1,1,seq,hidden]
 
     def make_mla():
         return ttMLA(config, dict(weights), mesh_device, layer_idx=0, seq_len=seq_len, sp_axis=0, tp_axis=1)
