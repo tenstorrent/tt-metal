@@ -264,38 +264,28 @@ class Attention(LightweightModule):
 
         qkv_cat = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)
 
-        # Prefill direct matmuls use the normal width-sharded layout. The DRAM-core decode path
-        # needs a separate receiver-contiguous layout that is consumed via the GCB.
-        self.wqkv = ttnn.as_tensor(
-            qkv_cat,
-            dtype=self.wqkv_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG if self.TG else wqkv_width_sharded_mem_config,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                self.mesh_device, dims=(3, 2) if self.TG else (2, 3), mesh_shape=configuration.cluster_shape
-            ),
-            cache_file_name=cache_name("wqkv_sharded_2d_width"),
-        )
-        self.wqkv_decode = self.wqkv
+        # One copy: recv-contig (ND_SHARDED) for the DRAM-core backend, else width-sharded. Both
+        # prefill (direct matmul) and decode (via GCB) read it — the matmul's TensorAccessor reads
+        # ND_SHARDED in1 directly, so no separate width-sharded prefill copy is needed.
+        wqkv_mem_config = wqkv_width_sharded_mem_config
         if self.prefetcher is not None:
-            wqkv_decode_mem_config = self.prefetcher.weight_mem_config(
+            wqkv_mem_config = self.prefetcher.weight_mem_config(
                 configuration.dim,
                 configuration.qkv_size // configuration.num_devices,
                 wqkv_width_sharded_mem_config,
                 is_galaxy=configuration.is_galaxy,
             )
-            self.wqkv_decode = ttnn.as_tensor(
-                qkv_cat,
-                dtype=self.wqkv_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG if self.TG else wqkv_decode_mem_config,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.mesh_device, dims=(3, 2) if self.TG else (2, 3), mesh_shape=configuration.cluster_shape
-                ),
-                cache_file_name=cache_name("wqkv_sharded_2d" + prefetcher_cache_suffix),
-            )
+        self.wqkv = ttnn.as_tensor(
+            qkv_cat,
+            dtype=self.wqkv_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG if self.TG else wqkv_mem_config,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, dims=(3, 2) if self.TG else (2, 3), mesh_shape=configuration.cluster_shape
+            ),
+            cache_file_name=cache_name("wqkv_sharded_2d" + prefetcher_cache_suffix),
+        )
 
         def norm_reshard(x, norm, mode, norm_config):
             """Hack until RMSNorm supports height-sharded output config"""
@@ -421,7 +411,7 @@ class Attention(LightweightModule):
                 # Worker-core Prefetcher ignores the kwarg.
                 pc_qkv = self.args.get_attn_qkv_program_config(Mode.DECODE, 1, self.prefetcher)
                 pc_wo = self.args.get_attn_all_gather_matmul_program_config(Mode.DECODE, self.prefetcher)
-                self.prefetcher.insert_tensor(self.wqkv_decode, program_config=pc_qkv)
+                self.prefetcher.insert_tensor(self.wqkv, program_config=pc_qkv)
                 self.prefetcher.insert_tensor(self.wo_sharded_ring, program_config=pc_wo)
 
             self.prefetcher.register_callback(register_weights)
@@ -639,7 +629,7 @@ class Attention(LightweightModule):
         ###
         xqkv_fused_sharded = ttnn.linear(
             x,
-            self.wqkv_decode,
+            self.wqkv,
             memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.DECODE, self.prefetcher),
             program_config=self.args.get_attn_qkv_program_config(Mode.DECODE, 1, self.prefetcher),
             compute_kernel_config=self.li_qkv_decode_compute_kernel_cfg,
