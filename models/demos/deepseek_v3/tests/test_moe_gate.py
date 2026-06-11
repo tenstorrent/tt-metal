@@ -12,6 +12,7 @@ from loguru import logger
 
 import ttnn
 from models.common.modules.moe.tt_moe_gate import TTMoEGate
+from models.common.modules.moe.tt_moe_gate_config import TTMoEGateConfig
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.moe_gate import MoEGate
@@ -249,26 +250,30 @@ def test_tt_moe_gate_real_weights(
     bias = get_dequantized_tensor(gate_state_dict, "e_score_correction_bias", dtype=torch.float32)  # [n_experts]
     bias = bias - bias.mean()
 
-    gate = TTMoEGate(
-        mesh_device,
-        num_experts=hf_config.n_routed_experts,
+    # Config-driven entry point (mirrors TTMoEDecode). deepseek's deep (7168) + tie-sensitive gate needs
+    # HiFi2 + fp32 accumulation, else the default matmul flips near-tied experts → index accuracy drops
+    # (~0.83 vs ~0.90). Matches models/common/modules/moe/configs/deepseek_v3.yaml. The real
+    # e_score_correction_bias is passed as torch_gate_bias below (so the config flag isn't needed here).
+    gate_config = TTMoEGateConfig(
+        num_routed_experts=hf_config.n_routed_experts,
         select_experts_k=hf_config.num_experts_per_tok,
         hidden_size=hf_config.hidden_size,
-        torch_gate_weight=gate_weight.t().contiguous(),
-        torch_gate_bias=bias,
+        batch_per_device=num_tokens,
         n_group=hf_config.n_group,
         score_func="sigmoid",
-        scaling_factor=hf_config.routed_scaling_factor,
-        eps=1e-20,
-        # deepseek's deep (7168) + tie-sensitive gate needs HiFi2 + fp32 accumulation, else the default
-        # matmul flips near-tied experts → index accuracy drops (~0.83 vs ~0.90). Matches the
-        # `gate_matmul_compute` block in models/common/modules/moe/configs/deepseek_v3.yaml.
-        matmul_compute_config={
+        routed_scaling_factor=hf_config.routed_scaling_factor,
+        gate_matmul_compute={
             "math_fidelity": "HiFi2",
             "math_approx_mode": True,
             "fp32_dest_acc_en": True,
             "packer_l1_acc": True,
         },
+    )
+    gate = TTMoEGate(
+        mesh_device,
+        gate_config,
+        torch_gate_weight=gate_weight.t().contiguous(),
+        torch_gate_bias=bias,
     )
 
     tt_x = ttnn.from_torch(

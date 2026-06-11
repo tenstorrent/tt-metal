@@ -36,6 +36,7 @@ from __future__ import annotations
 import torch
 
 import ttnn
+from models.common.modules.moe.tt_moe_gate_config import TTMoEGateConfig
 from models.demos.deepseek_v3.tt.deepseek_moe_gate.op import DeepseekMoeGateOp
 from models.demos.deepseek_v3.tt.generalized_moe_gate.op import GeneralizedMoeGateOp
 
@@ -56,10 +57,7 @@ class TTMoEGate:
     def __init__(
         self,
         mesh_device,
-        *,
-        num_experts: int,
-        select_experts_k: int,
-        hidden_size: int,
+        config: TTMoEGateConfig,
         torch_gate_weight: torch.Tensor,  # [hidden_size, num_experts] router projection
         # TWO distinct biases (both [num_experts], both optional):
         #   torch_gate_bias      = score-CORRECTION bias (deepseek/sigmoid): added INSIDE the op to the
@@ -68,12 +66,19 @@ class TTMoEGate:
         #                          so it flows into BOTH selection AND the softmax/normalized weights.
         torch_gate_bias: torch.Tensor | None = None,
         torch_gate_proj_bias: torch.Tensor | None = None,
-        n_group: int = 1,  # 1 → generalized (ungrouped) op; 8 → deepseek (grouped) op
-        score_func: str = "softmax",  # "softmax" (no bias) | "sigmoid" | "sqrtsoftplus" (deepseek-v4)
-        scaling_factor: float = 1.0,  # routed_scaling_factor applied after normalize
-        eps: float = 1e-20,
-        matmul_compute_config: dict | object | None = None,  # router-matmul compute kernel config (per-model, optional)
     ):
+        # Entry point mirrors TTMoEDecode: a config + the torch gate weight/bias(es) in; everything
+        # device-side is built here. Unpack the config into the locals the rest of __init__ uses.
+        self.config = config
+        num_experts = config.num_routed_experts
+        select_experts_k = config.select_experts_k
+        hidden_size = config.hidden_size
+        n_group = config.n_group
+        score_func = config.score_func
+        scaling_factor = config.routed_scaling_factor
+        eps = config.eps
+        matmul_compute_config = config.gate_matmul_compute
+
         # `score_func` maps to (a) the score nonlinearity and (b) two op flags -- enable_sigmoid (apply
         # sigmoid inside the op) and output_softmax (softmax over the selected top-k vs linear renorm):
         #   "softmax"      → score=logit,             enable_sigmoid=False, output_softmax=True   (no bias)
@@ -180,9 +185,13 @@ class TTMoEGate:
                 )
             return
 
-        # --- reusable per-core buffers sized to num_device_cores (sliced to batch in forward) ---
-        cores = self.num_device_cores
-        mem = self._sharded_mem_config(cores)
+        # --- per-token buffers, sliced to batch_per_iter in forward. Sized to batch_per_device when the
+        #     config provides it (decode: the per-forward slice is then a free FULL-tensor slice, zero cost),
+        #     else to the device core count (the slice trims cores→batch_per_iter — the variable-batch
+        #     fallback). The slice in forward is kept either way; it's just free in the sized-to-batch case. ---
+        buffer_rows = config.batch_per_device if config.batch_per_device is not None else self.num_device_cores
+        self._buffer_rows = buffer_rows
+        mem = self._sharded_mem_config(buffer_rows)
 
         # bias + input-indices buffers. Real experts [0:num_experts] get torch_gate_bias (or 0 for no-bias —
         # a constant shift changes neither selection nor output, so zeros is the correct no-bias case);
@@ -196,7 +205,7 @@ class TTMoEGate:
                 1, 2
             )  # (1, 32, 32)
             self.tt_bias = ttnn.from_torch(
-                bias_face.repeat(cores, 1, 1),
+                bias_face.repeat(buffer_rows, 1, 1),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
@@ -204,7 +213,7 @@ class TTMoEGate:
             )
             idx = torch.arange(_FACE_EXPERTS, dtype=torch.int32).reshape(1, 16, 16).transpose(1, 2)
             self.tt_input_indices = ttnn.from_torch(
-                idx.repeat(cores, 1, 1),
+                idx.repeat(buffer_rows, 1, 1),
                 dtype=ttnn.uint16,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
@@ -215,10 +224,10 @@ class TTMoEGate:
             # carry GLOBAL expert ids (block b = arange(256)+b*256). Shard (num_blocks*32, 32), tile (32,32).
             # Mirrors test_generalized_moe_gate.py::test_generalized_moe_gate_512_global.
             tile = ttnn.Tile((32, 32))
-            mem_blocks = self._sharded_mem_config(cores, (self.num_blocks * 32, 32))
+            mem_blocks = self._sharded_mem_config(buffer_rows, (self.num_blocks * 32, 32))
             bias_blocks = torch.transpose(bias.reshape(self.num_blocks, 16, 16), -2, -1).contiguous()  # (nb,16,16)
             self.tt_bias = ttnn.from_torch(
-                bias_blocks.unsqueeze(0).repeat(cores, 1, 1, 1),  # (cores, nb, 16, 16)
+                bias_blocks.unsqueeze(0).repeat(buffer_rows, 1, 1, 1),  # (buffer_rows, nb, 16, 16)
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
@@ -229,7 +238,7 @@ class TTMoEGate:
             offs = (torch.arange(self.num_blocks, dtype=torch.int32) * _FACE_EXPERTS).reshape(self.num_blocks, 1, 1)
             idx_blocks = torch.transpose(ar + offs, -2, -1).contiguous().to(torch.int32)  # (nb, 16, 16) global ids
             self.tt_input_indices = ttnn.from_torch(
-                idx_blocks.unsqueeze(0).repeat(cores, 1, 1, 1),
+                idx_blocks.unsqueeze(0).repeat(buffer_rows, 1, 1, 1),
                 dtype=ttnn.uint16,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
@@ -241,14 +250,14 @@ class TTMoEGate:
         # so the final ttnn.view is metadata-only — a TILE buffer routes view through the device
         # reshape_view op, which rejects uint16.
         self.tt_output = ttnn.from_torch(
-            torch.zeros((cores, *_SHARD_SHAPE), dtype=torch.float32),
+            torch.zeros((buffer_rows, *_SHARD_SHAPE), dtype=torch.float32),
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
             memory_config=mem,
         )
         self.tt_output_indices = ttnn.from_torch(
-            torch.zeros((cores, *_SHARD_SHAPE), dtype=torch.int32),
+            torch.zeros((buffer_rows, *_SHARD_SHAPE), dtype=torch.int32),
             dtype=ttnn.uint16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
@@ -326,10 +335,12 @@ class TTMoEGate:
 
         total_batch = logits.shape[2]
 
-        # 2) the gate op is one-token-per-core: pad batch to a multiple of the core count and
-        #    process in equal chunks, reusing the bias/indices/output buffers. (Mirrors moe_gate.py.)
-        cores = self.num_device_cores
-        num_iters = (total_batch + cores - 1) // cores
+        # 2) the gate op is one-token-per-core: process in equal chunks of ≤ chunk tokens, reusing the
+        #    bias/indices/output buffers. chunk = min(cores, buffer_rows): bounded by cores (one token/core)
+        #    AND by the buffers' row count, so the per-iter slice always fits. When buffer_rows ==
+        #    batch_per_device == this iter's batch (decode), the slice is a free full-tensor slice.
+        chunk = min(self.num_device_cores, self._buffer_rows)
+        num_iters = (total_batch + chunk - 1) // chunk
         padding = (num_iters - (total_batch % num_iters)) % num_iters
         batch_per_iter = (total_batch + padding) // num_iters
         if padding != 0:

@@ -25,8 +25,8 @@ import yaml
 from loguru import logger
 
 import ttnn
-from models.common.modules.moe.tt_moe_decode_config import TTMoEDecodeConfig
 from models.common.modules.moe.tt_moe_gate import TTMoEGate
+from models.common.modules.moe.tt_moe_gate_config import TTMoEGateConfig
 from tests.ttnn.utils_for_testing import comp_pcc
 
 CONFIGS_DIR = Path(__file__).resolve().parents[3] / "modules/moe/configs"
@@ -38,39 +38,31 @@ def _config_id(path: Path) -> str:
     return path.stem
 
 
-def _gate_params_for(raw: dict) -> dict:
-    """Gate semantics read straight from the model yaml. Fields (defaults = softmax-no-bias /
-    ungrouped): ``n_group`` (1 → generalized op, 8 → deepseek grouped op), ``score_func``
-    (softmax|sigmoid), ``routed_scaling_factor``."""
-    return {
-        "n_group": raw.get("n_group", 1),
-        "score_func": raw.get("score_func", "softmax"),
-        "scaling_factor": raw.get("routed_scaling_factor", 1.0),
-    }
-
-
 @pytest.mark.parametrize("config_path", CONFIG_PATHS, ids=_config_id)
 @pytest.mark.parametrize("seed", [42])
 def test_tt_moe_gate(device, config_path: Path, seed: int):
     yaml_text = config_path.read_text()
-    config = TTMoEDecodeConfig.from_yaml(yaml_text, topology=ttnn.Topology.Linear)
-    raw = yaml.safe_load(yaml_text)
-    gp = _gate_params_for(raw)
-    matmul_cc = raw.get("gate_matmul_compute")  # optional, per-model router-matmul fidelity (TTMoEGate-only)
+    gate_config = TTMoEGateConfig.from_yaml(yaml_text)
+    raw = yaml.safe_load(yaml_text)  # only for gate_notes (a doc field, not part of the config)
 
-    num_experts = config.num_routed_experts
-    k = config.select_experts_k
-    hidden = config.hidden_size
+    num_experts = gate_config.num_routed_experts
+    k = gate_config.select_experts_k
+    hidden = gate_config.hidden_size
+    n_group = gate_config.n_group
+    score_func = gate_config.score_func
+    scaling = gate_config.routed_scaling_factor
 
-    if num_experts > 512 or (gp["n_group"] == 8 and num_experts != 256):
+    if num_experts > 512 or (n_group == 8 and num_experts != 256):
         pytest.skip(
             f"supports ≤512 experts; n_group=8 (deepseek grouped) needs 256. n_group=1 with k∈(4,6,8) uses "
             f"the kernel op, other k (e.g. 10) uses the ttnn fallback. got N={num_experts}, "
-            f"n_group={gp['n_group']}, k={k}"
+            f"n_group={n_group}, k={k}"
         )
 
-    batch = 32  # decode: one token per core, tile-aligned. (forward() pads/loops for other batch sizes.)
-    logger.info(f"[{config_path.stem}] gate: N={num_experts} k={k} hidden={hidden} batch={batch} {gp}")
+    batch = gate_config.batch_per_device or 32  # decode: one token per core; matches the buffers' batch_per_device
+    logger.info(
+        f"[{config_path.stem}] gate: N={num_experts} k={k} hidden={hidden} batch={batch} score_func={score_func}"
+    )
     # per-model caveats about steps TTMoEGate does NOT cover (e.g. gemma4's RMSNorm + per-dim input scale
     # and per-expert output scale) — the caller must apply these around TTMoEGate.
     if raw.get("gate_notes"):
@@ -80,24 +72,19 @@ def test_tt_moe_gate(device, config_path: Path, seed: int):
     torch.manual_seed(seed)
     hidden_states = (2 * torch.rand((batch, hidden), dtype=torch.bfloat16)) - 1
     gate_weight = ((2 * torch.rand((hidden, num_experts), dtype=torch.bfloat16)) - 1) * 0.1
-    # score-correction bias (deepseek/noaux_tc sigmoid+sqrtsoftplus models): present iff the yaml declares
-    # `score_correction_bias: true` — EXPLICIT, not inferred from score_func. Added to scores for SELECTION
-    # only (the output weights stay unbiased). None → TTMoEGate feeds the op a zeros bias (a no-op).
-    gate_bias = (2 * torch.rand((num_experts,)) - 1) if raw.get("score_correction_bias") else None
-    # router LINEAR bias (gpt-oss, yaml router_bias: true): logits = Wx + b, flows into selection + weights.
-    proj_bias = (2 * torch.rand((num_experts,)) - 1) if raw.get("router_bias") else None
+    # score-correction bias (deepseek/noaux_tc): present iff config.score_correction_bias (EXPLICIT per-model).
+    # Added to scores for SELECTION only (output weights stay unbiased). None → TTMoEGate feeds the op a zeros bias.
+    gate_bias = (2 * torch.rand((num_experts,)) - 1) if gate_config.score_correction_bias else None
+    # router LINEAR bias (gpt-oss, config.router_bias): logits = Wx + b, flows into selection + weights.
+    proj_bias = (2 * torch.rand((num_experts,)) - 1) if gate_config.router_bias else None
 
-    # --- device module + inputs ---
+    # --- device module + inputs (config-driven entry point, mirrors TTMoEDecode) ---
     gate = TTMoEGate(
         device,
-        num_experts=num_experts,
-        select_experts_k=k,
-        hidden_size=hidden,
+        gate_config,
         torch_gate_weight=gate_weight,
         torch_gate_bias=gate_bias,
         torch_gate_proj_bias=proj_bias,
-        matmul_compute_config=matmul_cc,
-        **gp,
     )
     tt_x = ttnn.from_torch(
         hidden_states.reshape(1, 1, batch, hidden),
@@ -109,7 +96,15 @@ def test_tt_moe_gate(device, config_path: Path, seed: int):
 
     # --- golden (hidden -> logits -> gate -> (scores[batch,k], indices[batch,k])) ---
     gold_scores, gold_idx = TTMoEGate.golden(
-        hidden_states, gate_weight, gate_bias, select_experts_k=k, gate_proj_bias=proj_bias, **gp
+        hidden_states,
+        gate_weight,
+        gate_bias,
+        select_experts_k=k,
+        score_func=score_func,
+        scaling_factor=scaling,
+        eps=gate_config.eps,
+        n_group=n_group,
+        gate_proj_bias=proj_bias,
     )
 
     tt_scores, tt_indices = gate.forward(tt_x)
@@ -123,9 +118,9 @@ def test_tt_moe_gate(device, config_path: Path, seed: int):
         logits = logits + proj_bias.float()
     bias = gate_bias.float() if gate_bias is not None else torch.zeros(num_experts)
     # the per-expert score the op ranks/weights with, per score_func (softmax ranks by the raw logit):
-    if gp["score_func"] == "sigmoid":
+    if score_func == "sigmoid":
         score = torch.sigmoid(logits)
-    elif gp["score_func"] == "sqrtsoftplus":
+    elif score_func == "sqrtsoftplus":
         score = torch.sqrt(torch.nn.functional.softplus(logits))
     else:  # softmax
         score = logits
@@ -138,14 +133,14 @@ def test_tt_moe_gate(device, config_path: Path, seed: int):
     #     dev's OWN selection), so it validates the module wiring + normalize regardless of any
     #     selection ambiguity. (bf16-at-scale: exp/softmax over large logits amplifies bf16 noise → loose.)
     dev_sel = torch.gather(score, -1, dev_idx)
-    weights = torch.exp(dev_sel) if gp["score_func"] == "softmax" else dev_sel  # softmax→exp-over-selected; else linear
-    expected = weights / (weights.sum(-1, keepdim=True) + 1e-20) * gp["scaling_factor"]
+    weights = torch.exp(dev_sel) if score_func == "softmax" else dev_sel  # softmax→exp-over-selected; else linear
+    expected = weights / (weights.sum(-1, keepdim=True) + 1e-20) * scaling
     assert torch.allclose(
         dev_scores.sort(-1).values, expected.sort(-1).values, atol=5e-2
     ), f"gate scores not consistent with the device's own selection.\n dev={dev_scores}\n expected={expected}"
 
     # (2) SELECTION vs golden.
-    if gp["n_group"] == 1:
+    if n_group == 1:
         # ungrouped: dev's selected experts form a valid global top-k (ranking-key multiset matches
         # golden). key = score + bias for every score_func (softmax has bias=0, so key=logit there;
         # sigmoid→sigmoid+bias; sqrtsoftplus→sqrt(softplus)+bias). bf16-at-logit-scale noise only swaps
