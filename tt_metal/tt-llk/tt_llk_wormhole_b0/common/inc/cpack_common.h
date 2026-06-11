@@ -682,12 +682,12 @@ template <bool is_fp32_dest_acc_en, PackMode pack_mode>
 inline void configure_pack(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
-    const std::uint32_t tile_size           = 0,
-    const std::uint32_t face_r_dim          = FACE_R_DIM,
-    const std::uint32_t num_faces           = 4,
-    const bool partial_face                 = false,
-    [[maybe_unused]] const bool narrow_tile = false,
-    const std::uint32_t relu_config         = 0)
+    const std::uint32_t tile_size   = 0,
+    const std::uint32_t face_r_dim  = FACE_R_DIM,
+    const std::uint32_t num_faces   = 4,
+    const bool partial_face         = false,
+    const bool narrow_tile          = false,
+    const std::uint32_t relu_config = 0)
 {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize,
@@ -727,12 +727,19 @@ inline void configure_pack(
 
     set_packer_l1_offset(pack_dst_format, face_r_dim);
 
+    // Program the packer X (datum) counter. Along with set_packer_l1_offset / set_packer_strides above,
+    // this is packer state owned exclusively by configure_pack and reconfig_packer_data_format;
+    // _llk_pack_init_ no longer touches it, so the hw-configure path must establish it here.
+    const std::uint32_t face_dim   = face_r_dim * FACE_C_DIM;
+    const std::uint32_t pack_x_dim = (narrow_tile || pack_mode != PackMode::Untilize) ? face_dim : FACE_R_DIM;
+    TT_SETADCXX(p_setadc::PAC, pack_x_dim - 1, 0x0);
+
     // PACK_COUNTERS_SEC0_pack_per_xy_plane = cfg_reg_array[3][0 +: 8];
     // PACK_COUNTERS_SEC0_pack_reads_per_xy_plane = cfg_reg_array[3][8 +: 8];
     // PACK_COUNTERS_SEC0_pack_xys_per_tile = cfg_reg_array[3][16 +: 7];
     // PACK_COUNTERS_SEC0_pack_yz_transposed = cfg_reg_array[3][23 +: 1];
     pack_counters_u pack_counters;
-    pack_counters.val                       = 0;
+    pack_counters.val = 0;
     pack_counters.f.pack_reads_per_xy_plane =
         1; // Default 1 — makes non-reduce operations agnostic to this counter; reduce sets it via _llk_pack_reduce_mask_config_
     for (std::uint32_t i = 0; i < NUM_PACKERS; i++)
