@@ -1,0 +1,51 @@
+Source: 1-layer (N_LAYERS=1, 1 GDN) eager decode profile, on-device sampling, ISL-128.
+One steady decode token = logical idx 928..1050 (122 ops). Critical path = max over 32 devices/op.
+
+=== 1 GDN DECODE LAYER (GDN attn + MLP, the per-layer cost) === (110 logical ops, 1197.6 us)
+OP CODE                          calls  total_us  us/call  cores     %
+----------------------------------------------------------------------
+RMSAllGatherDeviceOperation          3    344.80   114.93     10   29%
+ReduceScatterDeviceOperation         4    255.08    63.77      6   21%
+MatmulDeviceOperation                9    142.38    15.82     68   12%
+AllGatherAsyncDeviceOperation        2    129.81    64.90      6   11%
+AllReduceAsyncDeviceOperation        1     63.72    63.72     12    5%
+AllGatherDeviceOperation             1     48.84    48.84      6    4%
+BinaryNgDeviceOperation             16     34.45     2.15    120    3%
+AllBroadcastDeviceOperation          1     31.40    31.40      1    3%
+TilizeWithValPaddingDeviceOperation     7     25.68     3.67     40    2%
+ReshapeViewDeviceOperation           9     18.04     2.00     24    2%
+SliceDeviceOperation                13     13.34     1.03     40    1%
+TilizeDeviceOperation                1     12.93    12.93     40    1%
+LayerNormDeviceOperation             3     12.29     4.10      6    1%
+TypecastDeviceOperation             11     12.05     1.10     24    1%
+UntilizeWithUnpaddingDeviceOperation     5     10.04     2.01     40    1%
+UnaryDeviceOperation                 5      8.38     1.68     40    1%
+GenericOpDeviceOperation             1      6.34     6.34      1    1%
+TernaryDeviceOperation               1      5.92     5.92    120    0%
+CopyDeviceOperation                  3      4.97     1.66     96    0%
+ConcatDeviceOperation                4      4.15     1.04      6    0%
+ShardedToInterleavedDeviceOperation     4      3.64     0.91     20    0%
+TransposeDeviceOperation             2      2.96     1.48    120    0%
+MorehSumOperation                    1      2.50     2.50      1    0%
+RepeatDeviceOperation                1      1.98     1.98    120    0%
+InterleavedToShardedDeviceOperation     2      1.90     0.95     10    0%
+----------------------------------------------------------------------
+SUBTOTAL                           110   1197.58
+
+=== SHARED LM-HEAD + SAMPLING TAIL (once per token, NOT per layer) === (12 logical ops, 955.4 us)
+OP CODE                          calls  total_us  us/call  cores     %
+----------------------------------------------------------------------
+MinimalMatmulDeviceOperation         1    677.39   677.39     49   71%
+AllGatherAsyncDeviceOperation        1    111.84   111.84     10   12%
+ReduceScatterDeviceOperation         1     95.12    95.12     10   10%
+EmbeddingsDeviceOperation            3     38.02    12.67     32    4%
+PlusOneDeviceOperation               2     29.71    14.86      1    3%
+SliceDeviceOperation                 2      1.80     0.90      2    0%
+InterleavedToShardedDeviceOperation     1      0.95     0.95     10    0%
+UnaryDeviceOperation                 1      0.60     0.60     10    0%
+----------------------------------------------------------------------
+SUBTOTAL                            12    955.43
+
+>>> 1 GDN layer device-kernel = 1197.6 us/tok
+>>> shared tail (LM head+logit gather+embed) = 955.4 us/tok
+>>> full 64-layer token estimate = 64*1198 + 955 = 77600 us ~ 12.9 tok/s (decode-CCL bound)

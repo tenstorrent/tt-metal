@@ -283,7 +283,13 @@ class TtQwen36ModelArgs(TtModelArgs):
         )
         self.model_config.update({f"{key}_TILE": ttnn.TILE_LAYOUT for key in self.OP_KEYS if "LAYOUT" in key})
         self.model_config["USE_PREFETCHER"] = self.use_prefetcher
-        self.model_config["GALAXY_NUM_LINKS"] = 1 if is_blackhole() else 4
+        # BH_GLX fabric supports at most 2 links (3 hard-faults at fabric.cpp:163, confirmed by
+        # tests/test_ccl_num_links_micro.py). The bring-up default was a conservative 1; the whole
+        # decode CCL stack is written for up to 3 links (min(3, GALAXY_NUM_LINKS)). DEFAULT NOW 2:
+        # PCC bit-identical (RS micro 0.9999956 at 1 and 2 links), 64L A/B +1.7% coherent, combined-wins
+        # +3.8% coherent. Set QWEN36_GALAXY_NUM_LINKS=1 to revert. (clamped to 2 max on BH regardless.)
+        _bh_links = int(os.environ.get("QWEN36_GALAXY_NUM_LINKS", "2"))
+        self.model_config["GALAXY_NUM_LINKS"] = min(2, _bh_links) if is_blackhole() else 4
         self.model_config["CCL_TOPOLOGY"] = ttnn.Topology.Linear if is_blackhole() else ttnn.Topology.Ring
         self.model_config["IS_QWEN36"] = True
 
@@ -902,13 +908,17 @@ class TtQwen36ModelArgs(TtModelArgs):
         )
         # LM head prefill: matmul_1d_config over (32 × dim_per_tp) × (dim_per_tp × N).
         # Use MinimalMatmulConfig (no dependency on awkward output dims).
+        # BH grid retune: the 7x7=49 grid is WH-sized; BH has 12x10=120 cores. QWEN36_LM_HEAD_GRID
+        # DEFAULT NOW "12,10" (full BH grid): 1.56x on-op vs 7x7, PCC 0.99994 unchanged
+        # (test_lm_head_grid_micro), combined-wins +3.8% coherent. Set "7,7" to revert to the legacy grid.
+        _lmh_gx, _lmh_gy = (int(v) for v in os.environ.get("QWEN36_LM_HEAD_GRID", "12,10").split(","))
         self.model_config["LM_HEAD_PREFILL_PROGCFG"] = ttnn.MinimalMatmulConfig(
             M_block_size=1,
             K_block_size=8,
             N_block_size=8,
             subblock_h=1,
             subblock_w=2,
-            compute_with_storage_grid_size=ttnn.CoreCoord(7, 7),
+            compute_with_storage_grid_size=ttnn.CoreCoord(_lmh_gx, _lmh_gy),
         )
 
         # ------------------------------------------------------------------
