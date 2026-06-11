@@ -29,6 +29,7 @@ class LoopContext:
         self.ledger = Ledger(run.ledger_path)
         self._agent_calls = run.dir / "agent_calls.jsonl"
         self._events = run.dir / "events.jsonl"
+        self.deps: dict = {}  # injected callables (edit_runner, select_runner) — real by default
 
     # --- construction --------------------------------------------------------
     @classmethod
@@ -75,6 +76,14 @@ class LoopContext:
         rel = self.state.get("current_profile")
         path = (self.run.dir / rel) if rel else (self.run.profiles_dir / "baseline_profile.json")
         return json.loads(Path(path).read_text())
+
+    # --- model source (for APPLY / REPAIR) ----------------------------------
+    def model_root(self) -> Path:
+        return Path(self.manifest["config"]["model_root"])
+
+    def model_files(self) -> list[Path]:
+        root = self.model_root()
+        return [root / rel for rel in self.manifest.get("pathmap", {}).get("model_files", [])]
 
     # --- telemetry (PLAN section 10.1) --------------------------------------
     def record_agent_call(self, stage: str, role: str, model: str, usage: dict | None) -> None:

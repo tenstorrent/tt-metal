@@ -1,11 +1,12 @@
 """Walking-skeleton tests (PLAN 8.1, 8.11).
 
-Proves the engine drives ROUTE -> ... -> terminal end-to-end with mock leaf
-handlers — no API key, no hardware. As members replace mocks with real
-modules in agent/handlers/__init__.py, these stay green.
+The engine drives ROUTE -> ... -> terminal end to end. ROUTE, LOG/CHECK_EXIT,
+and now APPLY are real; the rest are mocks. APPLY's editor is injected
+(ctx.deps["edit_runner"]) so no key/hardware is needed.
 """
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -19,7 +20,6 @@ from agent.run import Run
 FIXTURE = Path(__file__).parent / "fixtures" / "loop" / "after_before_loop"
 
 
-# A tiny, drift-proof playbook index so ROUTE returns deterministic candidates.
 def _entry(anchor):
     e = {"id": anchor, "title": anchor, "file": "f.md", "lever_type": "single-shot"}
     for dim in ("bound", "rank", "fidelity", "grid", "dispatch", "memory", "regime"):
@@ -31,8 +31,38 @@ def _entry(anchor):
 MOCK_INDEX = [_entry("mlp-fidelity-walk"), _entry("subblock-unlock"), _entry("fuse-activation-matmul")]
 
 
+def _fake_editor(*, lever, section, model_files):
+    return {
+        "files": ["model.py"],
+        "summary": "mock edit",
+        "model": "mock",
+        "usage": {"tokens_in": 1, "tokens_out": 1, "cost_usd": 0.0, "latency_s": 0.0},
+    }
+
+
+def _fake_select(*, brief, candidates, tried):
+    return {
+        "lever": candidates[0],
+        "reasoning": "mock pick",
+        "model": "mock",
+        "usage": {"tokens_in": 1, "tokens_out": 1, "cost_usd": 0.0, "latency_s": 0.0},
+    }
+
+
 def _mk_run(tmp_path, state_overrides=None):
-    run = Run.create(tmp_path, config={"config": {}, "env": {}, "pathmap": {}}, run_id="FIXTURE")
+    model = tmp_path / "model"
+    model.mkdir()
+    (model / "model.py").write_text("x = 1\n")
+    for cfg in (["init", "-q"], ["config", "user.email", "t@t"], ["config", "user.name", "t"]):
+        subprocess.run(["git", *cfg], cwd=model, check=True)
+    subprocess.run(["git", "add", "."], cwd=model, check=True)
+    subprocess.run(["git", "commit", "-qm", "init"], cwd=model, check=True)
+
+    run = Run.create(
+        tmp_path / "runs",
+        config={"config": {"model_root": str(model)}, "env": {}, "pathmap": {"model_files": ["model.py"]}},
+        run_id="FIXTURE",
+    )
     state = json.loads((FIXTURE / "state.json").read_text())
     state.update(state_overrides or {})
     run.state_path.write_text(json.dumps(state))
@@ -42,8 +72,15 @@ def _mk_run(tmp_path, state_overrides=None):
     return run
 
 
+def _ctx(run):
+    ctx = LoopContext.from_run(run, index=MOCK_INDEX)
+    ctx.deps["edit_runner"] = _fake_editor  # APPLY is real; editor injected
+    ctx.deps["select_runner"] = _fake_select  # SELECT is real; picker injected
+    return ctx
+
+
 def test_engine_walks_to_done_with_mocks(tmp_path):
-    ctx = LoopContext.from_run(_mk_run(tmp_path), index=MOCK_INDEX)
+    ctx = _ctx(_mk_run(tmp_path))
     final = engine.run(ctx, build_handlers())
     assert final == states.DONE
     assert ctx.state["iteration"] >= 1
@@ -52,7 +89,7 @@ def test_engine_walks_to_done_with_mocks(tmp_path):
 
 def test_engine_appends_ledger_rows_with_experiment_id(tmp_path):
     run = _mk_run(tmp_path)
-    ctx = LoopContext.from_run(run, index=MOCK_INDEX)
+    ctx = _ctx(run)
     engine.run(ctx, build_handlers())
     rows = ctx.ledger.rows()
     assert rows and rows[0]["experiment_id"].startswith("FIXTURE#")
@@ -61,13 +98,17 @@ def test_engine_appends_ledger_rows_with_experiment_id(tmp_path):
 
 def test_engine_checkpoints_terminal_to_disk(tmp_path):
     run = _mk_run(tmp_path)
-    ctx = LoopContext.from_run(run, index=MOCK_INDEX)
-    engine.run(ctx, build_handlers())
+    engine.run(_ctx(run), build_handlers())
     assert json.loads(run.state_path.read_text())["state"] in states.TERMINAL
 
 
+def test_apply_records_clean_sha_in_loop(tmp_path):
+    run = _mk_run(tmp_path)
+    engine.run(_ctx(run), build_handlers())
+    assert len(json.loads(run.state_path.read_text())["git_sha_clean"]) == 40
+
+
 def test_engine_resumes_from_midstate(tmp_path):
-    """Resume = read state from disk and continue; no re-running prior stages."""
     run = _mk_run(
         tmp_path,
         state_overrides={
@@ -76,51 +117,63 @@ def test_engine_resumes_from_midstate(tmp_path):
             "candidates": ["mlp-fidelity-walk"],
         },
     )
-    ctx = LoopContext.from_run(run, index=MOCK_INDEX)
-    final = engine.run(ctx, build_handlers())
+    final = engine.run(_ctx(run), build_handlers())
     assert final in (states.DONE, states.STOPPED)
 
 
 def test_engine_raises_on_unregistered_state(tmp_path):
-    ctx = LoopContext.from_run(_mk_run(tmp_path), index=MOCK_INDEX)
     with pytest.raises(engine.EngineError):
-        engine.run(ctx, {})  # empty registry
+        engine.run(_ctx(_mk_run(tmp_path)), {})
 
 
 def test_engine_step_cap_guards_runaway(tmp_path):
-    ctx = LoopContext.from_run(_mk_run(tmp_path), index=MOCK_INDEX)
-    # a registry that never terminates
+    ctx = _ctx(_mk_run(tmp_path))
     loop_handlers = {states.BEFORE_LOOP_DONE: lambda c: states.ROUTE, states.ROUTE: lambda c: states.BEFORE_LOOP_DONE}
     with pytest.raises(engine.EngineError):
         engine.run(ctx, loop_handlers, max_steps=50)
 
 
 def test_route_handler_is_real_and_picks_top_bucket(tmp_path):
-    ctx = LoopContext.from_run(_mk_run(tmp_path), index=MOCK_INDEX)
+    ctx = _ctx(_mk_run(tmp_path))
     assert route_handler(ctx) == states.SELECT
-    assert ctx.state["current_bucket"] == "matmul"  # top by device_ms
+    assert ctx.state["current_bucket"] == "matmul"
     assert "mlp-fidelity-walk" in ctx.state["candidates"]
 
 
+def test_current_profile_promoted_on_keep(tmp_path):
+    run = _mk_run(tmp_path)
+    ctx = _ctx(run)
+    engine.run(ctx, build_handlers())
+    assert ctx.state.get("current_profile", "").startswith("profiles/iter_")
+    cur = json.loads((run.dir / ctx.state["current_profile"]).read_text())
+    base = json.loads((run.profiles_dir / "baseline_profile.json").read_text())
+    matmul_now = next(b["device_ms"] for b in cur["buckets"] if b["id"] == "matmul")
+    matmul_base = next(b["device_ms"] for b in base["buckets"] if b["id"] == "matmul")
+    assert matmul_now < matmul_base
+
+
 def test_handlers_only_return_declared_transitions(tmp_path):
-    """Every registered state is in the TRANSITIONS contract (no rogue edges)."""
-    handlers = build_handlers()
-    for state in handlers:
+    for state in build_handlers():
         assert state in states.TRANSITIONS, f"{state} missing from states.TRANSITIONS"
 
 
-def test_current_profile_promoted_on_keep(tmp_path):
-    """ROUTE must route on the LATEST committed profile, not the frozen baseline.
-    After a kept change, state['current_profile'] points at an iter profile whose
-    attacked bucket shrank."""
-    run = _mk_run(tmp_path)
-    ctx = LoopContext.from_run(run, index=MOCK_INDEX)
-    engine.run(ctx, build_handlers())
-    assert ctx.state.get("current_profile", "").startswith("profiles/iter_")
-    import json as _j
+def test_route_writes_decision_brief(tmp_path):
+    """ROUTE persists a route_brief with a candidate table + section texts for SELECT."""
+    ctx = _ctx(_mk_run(tmp_path))
+    route_handler(ctx)
+    rel = ctx.state["route_brief"]
+    brief = (ctx.run.dir / rel).read_text()
+    assert rel.startswith("route_brief_")
+    assert "candidate levers" in brief
+    assert "| id | lever_type | file | title |" in brief  # the table header
+    assert "mlp-fidelity-walk" in brief  # a candidate id in the table
 
-    cur = _j.loads((run.dir / ctx.state["current_profile"]).read_text())
-    base = _j.loads((run.profiles_dir / "baseline_profile.json").read_text())
-    matmul_now = next(b["device_ms"] for b in cur["buckets"] if b["id"] == "matmul")
-    matmul_base = next(b["device_ms"] for b in base["buckets"] if b["id"] == "matmul")
-    assert matmul_now < matmul_base  # the committed change moved the profile
+
+def test_engine_stop_after_route_parks_before_select(tmp_path):
+    """--until ROUTE: ROUTE runs (brief written), SELECT/APPLY never do (no key path)."""
+    run = _mk_run(tmp_path)
+    ctx = _ctx(run)
+    parked = engine.run(ctx, build_handlers(), stop_after={states.ROUTE})
+    assert parked == states.SELECT
+    assert ctx.state.get("route_brief")  # ROUTE produced the brief
+    assert ctx.state.get("git_sha_clean") is None  # APPLY never ran

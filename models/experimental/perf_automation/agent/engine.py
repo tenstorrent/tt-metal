@@ -23,12 +23,15 @@ class EngineError(Exception):
     """Unregistered state, illegal transition, or a non-terminating cycle."""
 
 
-def run(ctx: LoopContext, handlers: dict[str, Handler], max_steps: int = 10_000) -> str:
+def run(ctx: LoopContext, handlers: dict[str, Handler], max_steps: int = 10_000, stop_after=None) -> str:
     """Drive the state machine from `ctx.state['state']` to a terminal state.
 
     `max_steps` is an infinite-loop backstop only — real termination comes from
-    CHECK_EXIT (target/budget/max-iter/floor). Returns the terminal state name.
+    CHECK_EXIT (target/budget/max-iter/floor). `stop_after` (a set of state names)
+    parks the engine right after those stages run, for inspecting the pipeline
+    partway. Returns the terminal state, or the parked state if stop_after fired.
     """
+    stop_after = set(stop_after or ())
     state = ctx.state["state"]
     steps = 0
     while state not in states.TERMINAL:
@@ -47,5 +50,7 @@ def run(ctx: LoopContext, handlers: dict[str, Handler], max_steps: int = 10_000)
         ctx.state["state"] = next_state
         ctx.save()  # WAL: every transition is durable before we move on
         ctx.log_event(state, "done", f"-> {next_state}")
+        if state in stop_after:
+            return next_state  # `state` was the last stage to run; parked at next_state
         state = next_state
     return state

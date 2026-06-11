@@ -12,7 +12,9 @@ handler stay untouched.
 from __future__ import annotations
 
 from .. import states
+from . import apply as _apply
 from . import log_exit, mocks, route
+from . import select as _select
 
 
 def build_handlers() -> dict:
@@ -20,8 +22,8 @@ def build_handlers() -> dict:
         states.BEFORE_LOOP_DONE: lambda ctx: states.ROUTE,
         # --- Member 1: decide & act ---
         states.ROUTE: route.route,  # REAL
-        states.SELECT: mocks.select,
-        states.APPLY: mocks.apply,
+        states.SELECT: _select.select,  # REAL
+        states.APPLY: _apply.apply,  # REAL
         states.VERIFY: mocks.verify,
         states.REPAIR_CODE: mocks.repair_code,
         states.REPAIR_PCC: mocks.repair_pcc,
