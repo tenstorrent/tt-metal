@@ -77,7 +77,9 @@ def _ag_async(x, dim, cluster_axis, memory_config):
     # E_ccl EXPERIMENT: async all_gather via the E49 rotating semaphore pool.
     # Uses 1 gather sem + 1 barrier sem per call; slot rotation avoids reuse-before-reset.
     slot = _ccl_next_slot()
-    ag_sem = ce_cache__main["main_const_eval_all_reduce_pool_ag"][slot][0]
+    # all_gather_async requires a list of EXACTLY 2 multi-device semaphores (the E49
+    # pool allocates 2 ag-sems per slot for this reason); barrier takes one.
+    ag_sem = ce_cache__main["main_const_eval_all_reduce_pool_ag"][slot]
     bar_sem = ce_cache__main["main_const_eval_all_reduce_pool_barrier"][slot][0]
     return ttnn.experimental.all_gather_async(
         x,
