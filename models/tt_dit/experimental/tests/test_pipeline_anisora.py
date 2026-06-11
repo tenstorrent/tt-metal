@@ -14,7 +14,7 @@ from loguru import logger
 import ttnn
 from models.tt_dit.experimental.pipelines.pipeline_anisora import AniSoraPipeline
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import ImagePrompt
-from models.tt_dit.utils.test import ring_params
+from models.tt_dit.utils.test import ring_params, ring_params_8k
 
 
 @pytest.mark.parametrize(
@@ -26,8 +26,10 @@ from models.tt_dit.utils.test import ring_params
     [
         # BH Galaxy 4x8 Ring — sole supported config in the first AniSora PR.
         [(4, 8), (4, 8), 2, False, ring_params, ttnn.Topology.Ring, False],
+        # BH quad Galaxy 4x32 Ring (multi-host) — 720p only.
+        [(4, 32), (4, 32), 2, False, ring_params_8k, ttnn.Topology.Ring, False],
     ],
-    ids=["bh_4x8sp1tp0_ring"],
+    ids=["bh_4x8sp1tp0_ring", "bh_4x32sp1tp0_ring"],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
@@ -77,7 +79,7 @@ def test_pipeline_inference(
         num_frames=num_frames,
     )
 
-    prompt = "An anime girl smiling, soft lighting, cinematic."
+    prompt = os.environ.get("PROMPT", "An anime girl smiling, soft lighting, cinematic.")
 
     def run(*, prompt, number, seed):
         logger.info(f"Running AniSora inference with prompt: '{prompt}'")
@@ -110,7 +112,7 @@ def test_pipeline_inference(
             logger.info(f"  Video data range: [{frames.min().item():.3f}, {frames.max().item():.3f}]")
 
         frames = frames[0]
-        output_filename = f"wan_anisora_i2v_{width}x{height}_{number}.mp4"
+        output_filename = f"wan_anisora_i2v_{width}x{height}_{num_inference_steps}steps_{number}.mp4"
         try:
             from models.tt_dit.utils.video import export_to_video
 

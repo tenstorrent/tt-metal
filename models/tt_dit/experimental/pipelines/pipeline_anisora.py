@@ -32,6 +32,7 @@ import contextlib
 import os
 
 import ttnn
+from models.tt_dit.experimental.pipelines.fast_image_encode import FastImageEncodeMixin
 from models.tt_dit.experimental.pipelines.pipeline_wan_distill import _patch_torch_transformer_random
 from models.tt_dit.experimental.utils.lightx2v_loader import load_lightx2v_state_dict
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipelineConfig
@@ -39,7 +40,7 @@ from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
 from models.tt_dit.utils import cache
 
 
-class AniSoraPipeline(WanPipelineI2V):
+class AniSoraPipeline(FastImageEncodeMixin, WanPipelineI2V):
     HF_REPO = "IndexTeam/Index-anisora"
     HIGH_NOISE_FILE = "V3.2/high_noise_model/diffusion_pytorch_model.safetensors"
     LOW_NOISE_FILE = "V3.2/low_noise_model/diffusion_pytorch_model.safetensors"
@@ -47,6 +48,14 @@ class AniSoraPipeline(WanPipelineI2V):
     CACHE_NAMESPACE = "Index-anisora-V3.2"
     RANDOM_CACHE_NAMESPACE = "Index-anisora-random"
     ANISORA_BOUNDARY_RATIO = 0.9
+
+    # Fast image-encode opt flags (see FastImageEncodeMixin). Gated + default OFF;
+    # enable all three for the validated fast path (truncate + swept encoder +
+    # T_out=1 + on-device conditioning). The swept encoder MUST pair with
+    # WAN_ANISORA_ENCODER_T_OUT_1=1 to avoid temporal-blocking artifacts.
+    FAST_ENCODER_FLAG = "WAN_ANISORA_FAST_VAE_ENCODER"
+    ENCODER_T_OUT_1_FLAG = "WAN_ANISORA_ENCODER_T_OUT_1"
+    ONDEVICE_COND_FLAG = "WAN_ANISORA_ONDEVICE_COND"
 
     def __init__(
         self,
@@ -71,6 +80,11 @@ class AniSoraPipeline(WanPipelineI2V):
         ctx = _patch_torch_transformer_random() if random_weights else contextlib.nullcontext()
         with ctx:
             super().__init__(device=device, config=config)
+
+        # Replace the base (slow, H/W=0) VAE encoder with the swept fast encoder
+        # when WAN_ANISORA_FAST_VAE_ENCODER=1 (truncation + on-device conditioning
+        # are applied per-call via the mixin's other gated overrides).
+        self._maybe_install_fast_vae_encoder()
 
     def _prepare_transformer(self, idx: int):
         state = self.transformer_states[idx]

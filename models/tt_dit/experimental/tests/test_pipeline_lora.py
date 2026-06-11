@@ -23,7 +23,7 @@ from loguru import logger
 import ttnn
 from models.tt_dit.experimental.pipelines.pipeline_wan_lora import LoRASpec, WanPipelineI2VLora
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import ImagePrompt
-from models.tt_dit.utils.test import line_params, ring_params
+from models.tt_dit.utils.test import line_params, ring_params, ring_params_8k
 
 
 def _parse_stack(env_val: str) -> List[LoRASpec]:
@@ -69,8 +69,10 @@ def _resolve_lora_args() -> Tuple[List[LoRASpec], List[LoRASpec], float]:
     [
         [(2, 4), (2, 4), 2, True, line_params, ttnn.Topology.Linear, False],
         [(4, 8), (4, 8), 2, False, ring_params, ttnn.Topology.Ring, False],
+        # BH quad Galaxy 4x32 Ring (multi-host) — 720p only.
+        [(4, 32), (4, 32), 2, False, ring_params_8k, ttnn.Topology.Ring, False],
     ],
-    ids=["bh_2x4sp1tp0", "bh_4x8sp1tp0_ring"],
+    ids=["bh_2x4sp1tp0", "bh_4x8sp1tp0_ring", "bh_4x32sp1tp0_ring"],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
