@@ -53,7 +53,10 @@ constexpr uint32_t qk_col_batch = get_compile_time_arg_val(num_common_ct_args + 
  *  misreads k when its format differs from q (invisible for bf16 k, corrupts bfp8 k). */
 template <uint32_t q_cb, uint32_t k_cb, uint32_t qk_cb>
 inline void set_matmul_mode() {
-    reconfig_data_format(k_cb, q_cb);
+    // 4-arg guarded reconfig (prior mode = mul: srcA=qk, srcB=w): srcA qk->k changes format (fires),
+    // srcB w->q is bf16->bf16 so the guard skips it -- only the operand select (in the matmul call)
+    // differs, not the format. Saves one unpack reconfig stall per mode switch.
+    reconfig_data_format(qk_cb, k_cb, cb_w, q_cb);
     // guarded: qk and the prior pack target (cb_out) share acc_fmt in the bf16 path, so this is a
     // no-op there; only the fp32_dest_acc fallback (qk=fp32, out=bf16) actually reconfigs.
     pack_reconfig_data_format(cb_out, qk_cb);
@@ -85,9 +88,7 @@ void matmul_relu_pass(uint32_t head_in_group, uint32_t r, uint32_t c) {
     tile_regs_commit();
     cb_reserve_back(qk_cb, heads_per_dest_pass);
     tile_regs_wait();
-    for (uint32_t h = 0; h < heads_per_dest_pass; ++h) {
-        pack_tile(h, qk_cb);
-    }
+    pack_tile_block(0, qk_cb, heads_per_dest_pass);  // one block pack of the pass's relu(q.kT) tiles
     tile_regs_release();
     cb_push_back(qk_cb, heads_per_dest_pass);
 }
@@ -96,7 +97,9 @@ void matmul_relu_pass(uint32_t head_in_group, uint32_t r, uint32_t c) {
 template <uint32_t qk_cb, uint32_t w_cb, uint32_t acc_cb>
 inline void set_mul_mode() {
     pack_relu_config(ReluConfig::none());  // accumulator packs stay linear (negative gates)
-    reconfig_data_format(qk_cb, w_cb);
+    // 4-arg guarded reconfig (prior mode = matmul: srcA=k, srcB=q): srcA k->qk changes format (fires),
+    // srcB q->w is bf16->bf16 so the guard skips it. Saves one unpack reconfig stall per mode switch.
+    reconfig_data_format(cb_k, qk_cb, cb_q, w_cb);
     // guarded: qk and acc share acc_fmt, so this never actually reconfigs (no-op stall removed).
     pack_reconfig_data_format(qk_cb, acc_cb);
     mul_bcast_cols_init_short(qk_cb, w_cb);
