@@ -651,9 +651,10 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
     tile_regs_commit();
     tile_regs_wait();
 
-    // PR #43096 changed pack_reads_per_xy_plane default from FACE_R_DIM to 1.
-    // The custom TTI_SETADCXX(PAC, 0) packing below requires FACE_R_DIM=16 for
-    // the tile position generator to address 32-element topk output correctly.
+    // The custom TTI_SETADCXX(PAC, 1 - 1, 0x0) below packs 1 element per row across
+    // 16 rows (32 elements total) for the topk output, which requires
+    // pack_reads_per_xy_plane = FACE_R_DIM = 16 so the tile position generator counts
+    // 16 rows before resetting. Save FACE_R_DIM here and restore 1 after pack_tile.
     PACK((cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(FACE_R_DIM)));
     PACK(TTI_SETADCXX(p_setadc::PAC, 1 - 1, 0x0));
 
@@ -762,9 +763,10 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
     tile_regs_wait();
 
     // Step 10: pack final top-32 scores/indices.
-    // PR #43096 changed pack_reads_per_xy_plane default from FACE_R_DIM to 1.
-    // The custom TTI_SETADCXX(PAC, 0) packing below requires FACE_R_DIM=16 for
-    // the tile position generator to address 32-element topk output correctly.
+    // The custom TTI_SETADCXX(PAC, 1 - 1, 0x0) below packs 1 element per row across
+    // 16 rows (32 elements total) for the topk output, which requires
+    // pack_reads_per_xy_plane = FACE_R_DIM = 16 so the tile position generator counts
+    // 16 rows before resetting. Save FACE_R_DIM here and restore 1 after pack_tile.
     PACK((cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(FACE_R_DIM)));
     PACK(TTI_SETADCXX(p_setadc::PAC, 1 - 1, 0x0));
 
