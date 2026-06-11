@@ -258,7 +258,8 @@ ttnn::Tensor narrow(
         }
 
         // Create new shard specifications
-        tt::tt_metal::ShardSpec narrowed_shard_spec(new_core_grid, narrowed_shard_shape, ShardOrientation::ROW_MAJOR);
+        tt::tt_metal::ShardSpec narrowed_shard_spec(
+            new_core_grid, narrowed_shard_shape, shard_spec_buffer.orientation());
         tt::tt_metal::ShardSpecBuffer narrowed_shard_spec_buffer =
             tt::tt_metal::ShardSpecBuffer(narrowed_shard_spec, shard_spec_buffer.page_shape, narrowed_pages_shape);
 
