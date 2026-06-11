@@ -93,7 +93,7 @@ jobs:
       PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
       PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
       PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
-      PRTE_MCA_prte_default_hostfile: /home/user/ttop/hostfile
+      PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile
       PRTE_MCA_prte_fwd_environment: "true"
       PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       VIRTUAL_ENV: /opt/venv
@@ -160,37 +160,27 @@ jobs:
           useDevHostMount: 'true'
           sharedVolumeEnabled: 'true'
 
-      - name: Sync allocation configs to workers
+      - name: Stage allocation configs on NFS
         run: |
           set -euo pipefail
-          # /etc/ttop on workers is a read-only configmap mount; stage writable copies for MPI/tt-run.
           ALLOC_DIR=/etc/ttop
-          TTOP_DIR=/home/user/ttop
-          SSH_OPTS="-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+          TTRUN_DIR=/ci/ttrun
           for f in hostfile rankfile rank_bindings.yaml mgd.textproto; do
             if [ ! -f "${ALLOC_DIR}/${f}" ]; then
-              echo "ERROR: missing ${ALLOC_DIR}/${f} on runner"
+              echo "ERROR: missing ${ALLOC_DIR}/${f}"
               exit 1
             fi
           done
-          mkdir -p "${TTOP_DIR}"
-          cp "${ALLOC_DIR}/hostfile" "${ALLOC_DIR}/rankfile" "${ALLOC_DIR}/mgd.textproto" "${TTOP_DIR}/"
-          cp "${ALLOC_DIR}/rank_bindings.yaml" "${TTOP_DIR}/rank_bindings.yaml"
-          sed -i "s|mesh_graph_desc_path:.*|mesh_graph_desc_path: \"${TTOP_DIR}/mgd.textproto\"|" "${TTOP_DIR}/rank_bindings.yaml"
-          while IFS= read -r hostname; do
-            [ -z "${hostname}" ] && continue
-            echo "Syncing ${TTOP_DIR} -> ${hostname}:${TTOP_DIR}"
-            ssh ${SSH_OPTS} "${hostname}" "mkdir -p ${TTOP_DIR}"
-            for f in hostfile rankfile rank_bindings.yaml mgd.textproto; do
-              scp ${SSH_OPTS} "${TTOP_DIR}/${f}" "${hostname}:${TTOP_DIR}/${f}"
-            done
-          done < "${TTOP_DIR}/hostfile"
+          mkdir -p "${TTRUN_DIR}"
+          cp "${ALLOC_DIR}/hostfile" "${ALLOC_DIR}/rankfile" "${ALLOC_DIR}/mgd.textproto" "${TTRUN_DIR}/"
+          cp "${ALLOC_DIR}/rank_bindings.yaml" "${TTRUN_DIR}/rank_bindings.yaml"
+          sed -i "s|mesh_graph_desc_path:.*|mesh_graph_desc_path: \"${TTRUN_DIR}/mgd.textproto\"|" "${TTRUN_DIR}/rank_bindings.yaml"
 
       - name: Debug allocation configs
         run: |
           set -euo pipefail
           ALLOC_DIR=/etc/ttop
-          TTOP_DIR=/home/user/ttop
+          TTRUN_DIR=/ci/ttrun
 
           dump_dir() {
             local label="$1"
@@ -226,18 +216,18 @@ jobs:
             fi
           }
 
-          dump_dir "Runner allocation (read-only)" "$ALLOC_DIR"
-          dump_dir "Runner runtime (writable)" "$TTOP_DIR"
+          dump_dir "Runner allocation" "$ALLOC_DIR"
+          dump_dir "Runner NFS ttrun" "$TTRUN_DIR"
 
-          if [ -f "${TTOP_DIR}/hostfile" ]; then
-            FIRST_HOST=$(head -1 "${TTOP_DIR}/hostfile")
+          if [ -f "${TTRUN_DIR}/hostfile" ]; then
+            FIRST_HOST=$(head -1 "${TTRUN_DIR}/hostfile")
             echo ""
-            echo "========== Worker ${FIRST_HOST}: ${TTOP_DIR} =========="
+            echo "========== Worker ${FIRST_HOST}: ${TTRUN_DIR} =========="
             ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=no "${FIRST_HOST}" \
-              "ls -la ${TTOP_DIR} 2>&1; for f in hostfile rankfile rank_bindings.yaml mgd.textproto; do echo; echo \"--- \$f ---\"; cat ${TTOP_DIR}/\$f 2>&1 || echo \"(missing)\"; done" \
-              || echo "WARNING: could not read ${TTOP_DIR} on worker ${FIRST_HOST}"
+              "ls -la ${TTRUN_DIR} 2>&1; for f in hostfile rankfile rank_bindings.yaml mgd.textproto; do echo; echo \"--- \$f ---\"; cat ${TTRUN_DIR}/\$f 2>&1 || echo \"(missing)\"; done" \
+              || echo "WARNING: could not read ${TTRUN_DIR} on worker ${FIRST_HOST}"
           else
-            echo "WARNING: no hostfile in ${TTOP_DIR}, skipping worker check"
+            echo "WARNING: no hostfile in ${TTRUN_DIR}, skipping worker check"
           fi
 
       - name: 📦 Download Build Artifact
