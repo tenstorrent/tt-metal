@@ -39,7 +39,9 @@ _fake = _types.ModuleType("transformers.models.siglip.check")
 _fake.check_whether_transformers_replace_is_installed_correctly = lambda: True
 sys.modules["transformers.models.siglip.check"] = _fake
 
-REPO_ROOT = "/home/tt-admin/sdawle/pi0/tt-metal"
+# Resolve REPO_ROOT from this file's location instead of a hard-coded path so
+# the script works in any tt-metal checkout (e.g. pi05_bh_glx vs pi0 worktree).
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 LIBERO_REPO = os.environ.get("LIBERO_REPO_PATH", "/storage/sdawle/libero_repo")
@@ -79,6 +81,7 @@ class Pi0_5LiberoAdapter:
         ),
         backend: str = "pytorch",
         ttnn_device=None,
+        mesh_handles=None,  # ttnn_glx backend only — opened via open_galaxy_mesh()
         max_action_dim: int = 32,
         max_state_dim: int = 32,
         chunk_size: int = 50,
@@ -164,6 +167,14 @@ class Pi0_5LiberoAdapter:
             self._ttnn = ttnn_mod
             self._Pi0_5ModelTTNN = Pi0_5ModelTTNN
             self.model = Pi0_5ModelTTNN(cfg, loader, ttnn_device)
+        elif backend == "ttnn_glx":
+            assert mesh_handles is not None, "ttnn_glx backend requires mesh_handles from open_galaxy_mesh()"
+            from models.experimental.pi0_5.tt.tt_bh_glx.pipeline import Pi0_5GLXPipeline
+
+            self._ttnn = None
+            self._Pi0_5ModelTTNN = None
+            self.mesh_handles = mesh_handles
+            self.model = Pi0_5GLXPipeline(cfg, loader.categorized_weights, mesh_handles)
         else:
             raise ValueError(f"Unknown backend: {backend}")
         self.cfg = cfg
@@ -369,6 +380,21 @@ class Pi0_5LiberoAdapter:
                     state=None,
                 )
             self.model.denoising.config.num_steps = original_steps
+            actions_np = actions[0].float().cpu().numpy()
+        elif self.backend == "ttnn_glx":
+            # 28-chip BH Galaxy host-bounce pipeline. sample_actions takes torch
+            # tensors directly and returns (torch_actions, StageTimings). No trace
+            # or persistent-buffer optimizations in v1.
+            original_steps = self.model.num_denoising_steps
+            self.model.num_denoising_steps = num_denoising_steps
+            with torch.no_grad():
+                actions, _ = self.model.sample_actions(
+                    images=images,
+                    img_masks=img_masks,
+                    lang_tokens=tokens,
+                    lang_masks=lang_mask,
+                )
+            self.model.num_denoising_steps = original_steps
             actions_np = actions[0].float().cpu().numpy()
         elif self._use_trace:
             # === TTNN backend with persistent buffers + trace replay ===
@@ -891,7 +917,7 @@ def main():
         default=None,
         help="Override env step cap. If unset, uses per-suite default (spatial=220, object=280, goal=300, 10=520).",
     )
-    ap.add_argument("--backend", default="pytorch", choices=["pytorch", "ttnn"])
+    ap.add_argument("--backend", default="pytorch", choices=["pytorch", "ttnn", "ttnn_glx"])
     ap.add_argument(
         "--replan-steps",
         type=int,
@@ -988,6 +1014,8 @@ def main():
     print(f"\n📋 Loading PI0.5 LIBERO adapter (backend={args.backend}) from {args.checkpoint}")
     t0 = time.time()
     ttnn_device = None
+    mesh_ctx = None
+    mesh_handles = None
     if args.backend == "ttnn":
         import ttnn
 
@@ -997,10 +1025,17 @@ def main():
             trace_region_size=134_217_728,
         )
         print(f"   ttnn device opened in {time.time() - t0:.1f}s (device_id={args.device_id})")
+    elif args.backend == "ttnn_glx":
+        from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_galaxy_mesh
+
+        mesh_ctx = open_galaxy_mesh(l1_small_size=24576)
+        mesh_handles = mesh_ctx.__enter__()
+        print(f"   ttnn_glx mesh opened in {time.time() - t0:.1f}s (28 chips on 8x4 BH Galaxy)")
     adapter = Pi0_5LiberoAdapter(
         args.checkpoint,
         backend=args.backend,
         ttnn_device=ttnn_device,
+        mesh_handles=mesh_handles,
         chunk_size=args.action_horizon,
         action_horizon=args.action_horizon,
         state_in_prompt=(args.state_in_prompt == "true"),
@@ -1099,6 +1134,8 @@ def main():
         import ttnn
 
         ttnn.close_device(ttnn_device)
+    if mesh_ctx is not None:
+        mesh_ctx.__exit__(None, None, None)
 
 
 if __name__ == "__main__":
