@@ -37,15 +37,14 @@ class Qwen3ASRDecoder(Transformer):
         positions invisible to the last real token."""
         S = inputs_embeds.shape[-2]
         last = S - 1
-        # Prefill padding must satisfy BOTH:
-        #   - attention: S_pad % 256 == 0 (seqlen sharded over 8 cores, tile(32)-aligned)
-        #   - MLP: when S_pad >= prefill_len_cutoff (512 on Blackhole), the MLP reshapes
-        #     x to [1, S_pad//512, 512, -1], so S_pad must be a multiple of 512
-        #     (else the matmul contraction dim breaks: a_shape[-1] != b_shape[-2]).
-        # => valid pads are 256, or any multiple of 512 (512, 1024, 1536, 2048). This lifts
-        # the single-shot prefill cap from ~512 tokens (~20s audio) to max_seq_len
-        # (2048 -> ~150s audio), memory permitting. Trailing pad is causal-masked.
-        S_pad = 256 if S <= 256 else ((S + 511) // 512) * 512
+        # Always pad prefill to a multiple of 512 (the Blackhole prefill_len_cutoff), min 512.
+        # The MLP reshapes x to [1, S//512, 512, -1] only when S >= 512, so a 256-pad prefill
+        # takes a DIFFERENT (no-reshape) code path. Mixing 256-pad and >=512-pad prefills in
+        # one long-lived process corrupts the model (every later request returns garbage/empty)
+        # — likely a program-cache/KV-shape inconsistency across the two paths. Forcing every
+        # prefill onto the >=512 reshape path keeps it consistent. (256 alone is fine; mixing
+        # is not.) Caps single-shot at max_seq_len (2048 -> ~150s). Trailing pad is causal-masked.
+        S_pad = ((S + 511) // 512) * 512
         if S_pad != S:
             inputs_embeds = torch.nn.functional.pad(inputs_embeds, (0, 0, 0, S_pad - S))
         prefill_input, rot_g, rot_l, pt, _ = self.prepare_inputs_prefill_embeds(

@@ -13,12 +13,12 @@ Run in the dev container (chip 3 = fake P150):
     'source /opt/venv/bin/activate && cd /work && \
      uvicorn models.demos.audio.qwen3_asr.server.qwen3_asr_server:app --host 0.0.0.0 --port 8002'
 """
-import io, os, re, sys, threading, time
+import asyncio, io, os, re, sys, threading, time
 import numpy as np
 import soundfile as sf
 import torch
 import ttnn
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect
 from safetensors import safe_open
 from transformers import AutoTokenizer
 from qwen_asr.core.transformers_backend import Qwen3ASRProcessor
@@ -71,9 +71,38 @@ def _load():
                  tok=AutoTokenizer.from_pretrained(CKPT),
                  proc=Qwen3ASRProcessor.from_pretrained(snap, fix_mistral_regex=True))
     print(f"[server] loaded in {time.time()-t0:.1f}s; ready on chip 3 (P150)", flush=True)
-    # NOTE: no silence warmup — warming on all-zero audio left the reused KV cache in a
-    # state that produced empty output on subsequent requests. The first real request of
-    # each new prefill-length pays a one-time JIT compile (~1.5x RTF); later ones are warm.
+
+
+_WARMED = False
+
+
+def _ensure_warm():
+    """Lazily warm the common prefill shapes on the FIRST request (request context).
+    NOTE: running this in the @startup handler instead persistently corrupted the model
+    (every later request returned empty) — warming in request context is safe. Uses a
+    real-speech wav (QWEN3ASR_WARMUP_WAV); skips if absent."""
+    global _WARMED
+    if _WARMED:
+        return
+    _WARMED = True
+    wpath = os.environ.get("QWEN3ASR_WARMUP_WAV", "/warmup.wav")
+    if not os.path.exists(wpath):
+        return
+    tw = time.time()
+    ww, _ = sf.read(wpath, dtype="float32")
+    if ww.ndim > 1:
+        ww = ww.mean(1)
+    # Warm at the real request shapes: 20s -> 512-pad prefill, 40s -> 1024-pad. Full
+    # generation (default max_new_tokens), exactly like a real request — warming with
+    # short clips (256-pad) and/or max_new_tokens=4 left the model corrupted; matching
+    # the real-request shape/length keeps it clean.
+    for sec in (20.0, 40.0):
+        if len(ww) >= int(sec * 16000):
+            try:
+                _infer(ww[:int(sec * 16000)], None)
+            except Exception as e:
+                print(f"[server] warmup {sec}s skipped: {e}", flush=True)
+    print(f"[server] warm in {time.time()-tw:.1f}s", flush=True)
 
 
 def _infer(wav, force, max_new_tokens=200):
@@ -180,6 +209,7 @@ async def transcribe(file: UploadFile = File(...), model: str = Form("qwen3-asr"
     force = None if (not language or language.strip().lower() in ("auto", "", "none")) else language
     dur = len(wav) / SR
     with _LOCK:
+        _ensure_warm()
         t0 = time.time()
         if dur <= SINGLE_CAP:
             if _rms(wav) < SIL_RMS:               # non-speech upload -> empty (matches chunk path)
@@ -210,3 +240,56 @@ async def transcribe(file: UploadFile = File(...), model: str = Form("qwen3-asr"
         lang = Counter(langs).most_common(1)[0][0] if langs else ""
     return {"text": text, "language": lang, "duration": round(dur, 2),
             "rtf": round(dt / max(dur, 1e-3), 3), "segments": nseg, "model": model}
+
+
+# --- P2-4 streaming: WebSocket online ASR (near-real-time, silence-segmented) ---
+# Client streams raw PCM16 mono 16k chunks; server emits committed segments as JSON
+# {"text","language","seg_end_s"} as soon as each phrase ends (silence) or hits max_seg.
+# Single device -> inference runs in a thread executor so audio keeps being received.
+STREAM_MIN_SEG, STREAM_MAX_SEG = 6.0, 14.0
+STREAM_SIL_SEC, STREAM_SIL_RMS = 0.5, 0.01
+
+
+@app.websocket("/v1/audio/stream")
+async def stream(ws: WebSocket):
+    await ws.accept()
+    q = ws.query_params
+    language = q.get("language")
+    force = None if (not language or language.strip().lower() in ("auto", "", "none")) else language
+    min_seg = float(q.get("min_seg", STREAM_MIN_SEG))
+    max_seg = float(q.get("max_seg", STREAM_MAX_SEG))
+    loop = asyncio.get_event_loop()
+
+    def _warm():
+        with _LOCK:
+            _ensure_warm()
+    await loop.run_in_executor(None, _warm)   # compile kernels before the stream's first segment
+
+    buf, nsamp, sil_run, consumed = [], 0, 0.0, 0
+
+    def run_infer(seg):
+        with _LOCK:
+            tx, lg, _ = _infer(seg, force)
+        return ("" if _hallucinated(tx) else tx), lg
+
+    async def flush(seg, final=False):
+        if _rms(seg) < STREAM_SIL_RMS:
+            return
+        tx, lg = await loop.run_in_executor(None, run_infer, seg)
+        if tx:
+            await ws.send_json({"text": tx, "language": (force or lg),
+                                "seg_end_s": round(consumed / SR, 2), "final": final})
+
+    try:
+        while True:
+            data = await ws.receive_bytes()
+            frame = np.frombuffer(data, "<i2").astype(np.float32) / 32768.0
+            buf.append(frame); nsamp += len(frame); consumed += len(frame)
+            sil_run = sil_run + len(frame) / SR if _rms(frame) < STREAM_SIL_RMS else 0.0
+            dur = nsamp / SR
+            if (dur >= min_seg and sil_run >= STREAM_SIL_SEC) or dur >= max_seg:
+                seg = np.concatenate(buf); buf, nsamp, sil_run = [], 0, 0.0
+                await flush(seg)
+    except WebSocketDisconnect:
+        if buf:
+            await flush(np.concatenate(buf), final=True)
