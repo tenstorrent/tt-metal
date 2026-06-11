@@ -150,17 +150,17 @@ struct GeneralizedMoeGate {
             // got the scores. tile_dst_rt_offset = 0/1/2 selects scores/idx/bias.
             pack_reconfig_data_format(CTArgs::run_scores_cb);
             pack_untilize_dest_init<1, 1>(CTArgs::run_scores_cb);
-            pack_untilize_dest<1, 1>(CTArgs::run_scores_cb, 1, 0, 16, 4, 0);  // DEST tile 0 (scores)
+            pack_untilize_dest<1, 1>(CTArgs::run_scores_cb, 1, 0, 0);  // DEST tile 0 (scores)
             pack_untilize_uninit(CTArgs::run_scores_cb);
             cb_push_back(CTArgs::run_scores_cb, 1);
             pack_reconfig_data_format(CTArgs::run_idx_cb);
             pack_untilize_dest_init<1, 1>(CTArgs::run_idx_cb);
-            pack_untilize_dest<1, 1>(CTArgs::run_idx_cb, 1, 0, 16, 4, 1);  // DEST tile 1 (idx)
+            pack_untilize_dest<1, 1>(CTArgs::run_idx_cb, 1, 0, 1);  // DEST tile 1 (idx)
             pack_untilize_uninit(CTArgs::run_idx_cb);
             cb_push_back(CTArgs::run_idx_cb, 1);
             pack_reconfig_data_format(CTArgs::run_bias_cb);
             pack_untilize_dest_init<1, 1>(CTArgs::run_bias_cb);
-            pack_untilize_dest<1, 1>(CTArgs::run_bias_cb, 1, 0, 16, 4, 2);  // DEST tile 2 (bias)
+            pack_untilize_dest<1, 1>(CTArgs::run_bias_cb, 1, 0, 2);  // DEST tile 2 (bias)
             pack_untilize_uninit(CTArgs::run_bias_cb);
             cb_push_back(CTArgs::run_bias_cb, 1);
             tile_regs_release();

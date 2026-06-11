@@ -106,6 +106,63 @@ inline void generalized_moe_gate_transpose_dest_single_face_step1_configure_mop(
     tmp.program();
 }
 
+// step1_hi: clone of step1 with two knobs:
+//   d2b_dst  = MOVD2B source DEST row (which 4 groups to read; post-step0 group g is at row g).
+//   b2d_base = MOVB2D output DEST row base (where to write the resulting run; step1 uses 0).
+// The output base lets the LOW half write its run to rows 8-15 (b2d_base=8) so it does NOT clobber
+// the post-step0 groups 4-7 sitting at rows 4-7 — which the HIGH half (d2b_dst=4) then reads.
+template <std::uint32_t num_tiles, bool is_32bit, std::uint32_t d2b_dst, std::uint32_t b2d_base>
+inline void generalized_moe_gate_transpose_dest_single_face_step1_hi_configure_mop() {
+    static_assert(!is_32bit, "32-bit is not supported for single face transpose");
+    load_replay_buf(
+        ckernel::math::replay_buf_offset,  // replay buffer offset
+        11,                                // 11 instructions: 2x MOVD2B + TRNSPSRCB + 8x MOVB2D
+        [] {
+            TTI_MOVD2B(0, 16, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, d2b_dst);
+            TTI_MOVD2B(0, 28, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, d2b_dst);
+
+            TTI_TRNSPSRCB;
+
+            TTI_MOVB2D(0, 16, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 0);
+            TTI_MOVB2D(0, 18, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 1);
+            TTI_MOVB2D(0, 20, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 2);
+            TTI_MOVB2D(0, 22, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 3);
+            TTI_MOVB2D(0, 24, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 4);
+            TTI_MOVB2D(0, 26, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 5);
+            TTI_MOVB2D(0, 28, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 6);
+            TTI_MOVB2D(0, 30, ADDR_MOD_2, p_movb2d::MOV_1_ROW, b2d_base + 7);
+        });
+    std::uint32_t replay_instr = lltt::replay_insn(math::replay_buf_offset, 11);
+
+    ckernel_template tmp(num_tiles, 1, replay_instr);
+    tmp.program();
+}
+
+// Plain (non-transposed) FPU copy of 4 DEST rows [src..src+3] -> [dst..dst+3], across the 3 data
+// regions (scores/indices/bias, via num_tiles + the ADDR_MOD_2 base advance). Used to stash/restore
+// data in rows 8-15 — which the SFPU merge cannot address (SFPU offsets >=8 wrap) but the FPU can —
+// during the ungrouped two-half assembly. src/dst must be 4-row aligned (0,4,8,12).
+template <std::uint32_t num_tiles, bool is_32bit, std::uint32_t src, std::uint32_t dst, std::uint32_t srcb = 16>
+inline void generalized_moe_gate_copy4rows_configure_mop() {
+    static_assert(!is_32bit, "32-bit is not supported");
+    // srcb selects the 4-row SrcB scratch window (16/20/24/28). Back-to-back copy4rows calls use
+    // DISJOINT srcb windows so a later MOVB2D cannot read a previous copy's SrcB leftover.
+    load_replay_buf(
+        ckernel::math::replay_buf_offset,  // replay buffer offset
+        5,                                 // 5 instructions: 1x MOVD2B + 4x MOVB2D
+        [] {
+            TTI_MOVD2B(0, srcb, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, src);  // DEST rows src..+3 -> SrcB srcb..+3
+            TTI_MOVB2D(
+                0, srcb + 0, ADDR_MOD_3, p_movb2d::MOV_1_ROW, dst + 0);  // SrcB srcb -> DEST dst+0 (no transpose)
+            TTI_MOVB2D(0, srcb + 1, ADDR_MOD_3, p_movb2d::MOV_1_ROW, dst + 1);
+            TTI_MOVB2D(0, srcb + 2, ADDR_MOD_3, p_movb2d::MOV_1_ROW, dst + 2);
+            TTI_MOVB2D(0, srcb + 3, ADDR_MOD_2, p_movb2d::MOV_1_ROW, dst + 3);  // ADDR_MOD_2 advances base by 64
+        });
+    std::uint32_t replay_instr = lltt::replay_insn(math::replay_buf_offset, 5);
+    ckernel_template tmp(num_tiles, 1, replay_instr);
+    tmp.program();
+}
+
 template <std::uint32_t num_tiles = 1, bool is_32bit>
 inline void generalized_moe_gate_transpose_dest_single_face_step2_configure_mop() {
     static_assert(!is_32bit, "32-bit is not supported for single face transpose");
@@ -151,7 +208,40 @@ inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_init
 // Initialize for single face transpose
 template <bool is_32bit = false>
 inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init_() {
-    generalized_moe_gate_transpose_dest_single_face_step2_configure_mop<2, is_32bit>();
+    // num_tiles=3: transpose scores(0) + idx(1) + BIAS(2). The bias (tile 2) MUST be math->standard'd too,
+    // else the combine's bias round-trip packs a math-layout bias -> 2-period-corrupted sort key (the 256
+    // output path never reads bias, so num_tiles=2 was enough there; the >256 combine merge sorts by bias).
+    generalized_moe_gate_transpose_dest_single_face_step2_configure_mop<3, is_32bit>();
+}
+
+// copy4rows init/runner.
+template <std::uint32_t src = 0, std::uint32_t dst = 0, bool is_32bit = false, std::uint32_t srcb = 16>
+inline void _llk_math_generalized_moe_gate_copy4rows_init_() {
+    generalized_moe_gate_copy4rows_configure_mop<3, is_32bit, src, dst, srcb>();
+}
+
+template <bool is_fp32_dest_acc_en, bool is_32bit = false>
+inline void _llk_math_generalized_moe_gate_copy4rows_() {
+    static_assert(!(is_32bit || is_fp32_dest_acc_en), "32-bit / fp32 dest accum not supported");
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::SRCB_VLD);
+    ckernel_template::run();
+}
+
+// step1_hi init/runner — tunable knobs (d2b_dst, b2d_base) for the high-group half.
+template <std::uint32_t d2b_dst = 0, std::uint32_t b2d_base = 24, bool is_32bit = false>
+inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_init_() {
+    generalized_moe_gate_transpose_dest_single_face_step1_hi_configure_mop<3, is_32bit, d2b_dst, b2d_base>();
+}
+
+template <bool is_fp32_dest_acc_en, bool is_32bit = false>
+inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_() {
+    static_assert(
+        !(is_32bit || is_fp32_dest_acc_en),
+        "32-bit and fp32 dest accum enable are not supported for single face transpose");
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::SRCB_VLD);
+    ckernel_template::run();
 }
 
 template <bool is_fp32_dest_acc_en, bool is_32bit = false>
