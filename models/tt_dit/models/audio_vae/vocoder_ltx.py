@@ -252,6 +252,7 @@ class Vocoder(Module):
         # forward_traced cache: input-shape -> Tracer, LRU-ordered; max_traces caps device trace
         # memory (LRU-evict beyond it; None = unbounded).
         self._traces: "OrderedDict[tuple, Tracer]" = OrderedDict()
+        self._warmed_shapes: set = set()
         self._max_traces = max_traces
 
         self.conv_pre = _AlignedOutConv1d(
@@ -361,9 +362,19 @@ class Vocoder(Module):
         shape_key = tuple(mel_spec.shape)
         tracer = self._traces.get(shape_key)
         if tracer is None:
-            # prep_run=True warms the device graph (populates the lazy snake α/β, CCL, tpad-mask
-            # and zeros caches) so the capture is write-free.
-            tracer = Tracer(self._forward_device, device=self.mesh_device, prep_run=True, clone_prep_inputs=True)
+            # First call at this shape: run EAGER (no capture) to warm the lazy device-graph state
+            # (snake α/β, CCL buffers, tpad-mask, zeros) — these persist on the module. The next call
+            # captures with prep_run=False. Why not capture now: a ttnn trace bakes absolute buffer
+            # addresses, so capture and replay must start from the same allocator free-list. The
+            # mel-VAE runs eager before EVERY decode and frees back to a deterministic post-mel-VAE
+            # state; capturing here would either need cold-cache host writes (forbidden in capture)
+            # or a warming pass whose alloc/free perturbs the free-list vs the clean post-mel-VAE
+            # state replay sees → garbage. Warming on a prior decode + prep_run=False (no extra
+            # alloc before capture) makes capture and every replay share the identical free-list.
+            if shape_key not in self._warmed_shapes:
+                self._warmed_shapes.add(shape_key)
+                return self._device_to_host(self._forward_device(self._host_to_device(mel_spec)))
+            tracer = Tracer(self._forward_device, device=self.mesh_device, prep_run=False, clone_prep_inputs=False)
             self._traces[shape_key] = tracer
             if self._max_traces is not None:
                 while len(self._traces) > self._max_traces:
