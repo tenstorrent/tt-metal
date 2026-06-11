@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import Any
+
 import ttnn
 import ttml
 
@@ -108,11 +110,36 @@ class LlamaCompositeKV(Llama):
                 bias_linears=config.attention_bias,
             )
 
-    def export_to_hf_dict(self) -> dict[str, ttnn.Tensor]:
-        """Export this ttml model's parameters as an HF-keyed dict of on-device
-        ``ttnn.Tensor`` handles.
+    def export_to_hf_dict(self, *, to_host: bool = False) -> dict[str, Any]:
+        """Export this ttml model's parameters as an HF-keyed weight dict.
 
-        Output is shaped for direct consumption by tt-transformers'
+        Args:
+            to_host: When ``False`` (default), values are on-device
+                ``ttnn.Tensor`` handles (see the rest of this docstring).
+                When ``True``, every value is instead host-materialized into a
+                row-major ``numpy.ndarray`` with ``ml_dtypes.bfloat16`` dtype,
+                ready to serialize for a host-side network transfer. The
+                host path differs from the on-device path in three ways:
+
+                * **Independent snapshot.** The arrays are copies in host RAM,
+                  so the "do not mutate ttml's parameters before consuming the
+                  dict" constraint below does *not* apply -- ttml may keep
+                  training while the snapshot is shipped over the wire.
+                * **Natural HF shape.** ``ttnn.to_torch`` untilizes to
+                  row-major and leading unit dims are stripped, so Linear /
+                  embedding weights come back 2D ``(out, in)`` / ``(V, H)`` and
+                  gammas come back 1D ``(H,)``. A receiver rebuilds the 4D
+                  device tensor via ``Tensor.from_numpy`` / ``ttnn.from_torch``
+                  (e.g. ``load_checkpoint`` in ``llama_completer_ttml``).
+                * **Single replica.** Parameters are replicated across the mesh
+                  (see the single-device note below); the host read takes one
+                  representative replica rather than concatenating.
+
+                Tied embeddings still share storage: ``model.embed_tokens.weight``
+                and ``lm_head.weight`` are deduped to the *same* numpy array.
+
+        On-device (``to_host=False``) output is shaped for direct consumption
+        by tt-transformers'
         ``Transformer.update_weights(hf_state_dict, hf_rope=False)``:
 
         * keys   -- HF safetensors dot-keys
@@ -226,4 +253,35 @@ class LlamaCompositeKV(Llama):
             out[f"model.layers.{i}.mlp.up_proj.weight"] = t(f"{p}/mlp/w3/weight")
             out[f"model.layers.{i}.mlp.down_proj.weight"] = t(f"{p}/mlp/w2/weight")
 
-        return out
+        if not to_host:
+            return out
+
+        # Host-materialize every value into a row-major ``ml_dtypes.bfloat16``
+        # numpy array (see the ``to_host`` docstring). ``ttnn.to_torch``
+        # untilizes to row-major; for a replicated mesh the per-device buffers
+        # are identical, so ``ConcatMeshToTensor(dim=0)[0]`` reads a single
+        # representative replica. The bf16 -> float32 -> bf16 round-trip is
+        # exact for bf16-representable values and sidesteps numpy's lack of a
+        # native bf16. Tied embeddings share one ttnn handle, so we cache by
+        # tensor identity and return the same array under both HF keys.
+        import ml_dtypes
+        import numpy as np
+        import torch
+
+        device = ttml.autograd.AutoContext.get_instance().get_device()
+        host_cache: dict[int, "np.ndarray"] = {}
+
+        def to_host_np(tensor: ttnn.Tensor) -> "np.ndarray":
+            cached = host_cache.get(id(tensor))
+            if cached is not None:
+                return cached
+            replica = ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))[0]
+            arr = replica.to(torch.float32).numpy().astype(ml_dtypes.bfloat16)
+            # Strip the leading unit dims ttml stores so callers get the
+            # natural HF shape: 2D ``(out, in)`` / ``(V, H)`` or 1D ``(H,)``.
+            while arr.ndim > 1 and arr.shape[0] == 1:
+                arr = arr[0]
+            host_cache[id(tensor)] = arr
+            return arr
+
+        return {k: to_host_np(v) for k, v in out.items()}
