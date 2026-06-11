@@ -20,3 +20,19 @@ q_a was a 2-CCL all_reduce (reduce_scatter+all_gather) into the q_norm — the f
 feeds q_norm directly. No #46208 (these are the qkv-down DRAM reductions). mesh_partition (replicated
 -> sharded) is a free local op.
 Next: same fusion pattern in dense MLP (mlp_0) + MoE shared-FFN/down reductions.
+
+## MoE collective fusion — BLOCKED by moe_compute hang (2026-06-11)
+| step | change | result |
+|------|--------|--------|
+| s3 | MoE shared-FFN matmul_31 reduce_scatter+all_gather -> all_gather+sum (1 CCL) | **HANGS** moe_compute combine, 2x (both at moe_start). PCC clean otherwise. Reverted. |
+
+The same fusion that's a clean win in ATTENTION reliably hangs the moe_compute
+selective_reduce_combine when applied in the MoE phase — any L1-layout shift there trips
+the #46208-class combine sensitivity (glx_reset_auto recovered each time). So MoE-phase
+collective restructuring is blocked until the moe_compute combine L1 reservation is fixed
+(upstream). The dense MLP (mlp_0, layer 0, no moe_compute) would be #46208-safe but is only
+x3 layers (~low value).
+
+## BRANCH RESULT: attention collective fusion = 177.8 -> 168.8 ms (6.28x), PCC bit-identical
+Net deliverable: fuse the qkv-down 3-way reduction into 1 all_gather+sum (both attn layers).
+attn/layer 1.107 -> 0.976 (-131us). The MoE (the 59% bulk) is blocked by the combine hang.
