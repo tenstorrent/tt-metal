@@ -102,8 +102,8 @@ void populate_runtime_arguments(
 
         // running_mean/running_var are optional input tensor_args; pass Buffer* (nullptr -> 0) so the
         // fast path patches them. c is the output tensor.
-        Buffer* running_mean_buf = running_mean_has_value ? running_mean_tensor->buffer() : nullptr;
-        Buffer* running_var_buf = running_var_has_value ? running_var_tensor->buffer() : nullptr;
+        tt::tt_metal::Buffer* running_mean_buf = running_mean_has_value ? running_mean_tensor->buffer() : nullptr;
+        tt::tt_metal::Buffer* running_var_buf = running_var_has_value ? running_var_tensor->buffer() : nullptr;
         tt::tt_metal::KernelDescriptor::RTArgList writer_runtime_args;
         writer_runtime_args.push_back(batch_var_tensor.buffer());  // batch var (input tensor_arg)
         writer_runtime_args.push_back(running_mean_buf);           // old running mean (optional tensor_arg)

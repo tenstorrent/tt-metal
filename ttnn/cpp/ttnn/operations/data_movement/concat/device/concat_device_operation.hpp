@@ -58,7 +58,7 @@ struct ConcatDeviceOperation {
     // Buffer* rt-arg bindings (ConcatProgramFactory, interleaved) or is fully CB `.buffer`-bound with only
     // shape/offset-derived rt-args (s2s tiled / rm / multi), so this returns {} for them.
     static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
-        const operation_attributes_t& operation_attributes,
+        const operation_attributes_t& args,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value,
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);

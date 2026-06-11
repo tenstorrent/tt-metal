@@ -39,7 +39,7 @@ struct UpdateKVCacheOperation {
     // tile_update_offset, batch_read_offset) plus the raw baked tensor addresses would be STALE on a cache
     // hit; declaring this opts the op into the fast path and re-applies them every dispatch.
     static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
-        const operation_attributes_t& operation_attributes,
+        const operation_attributes_t& args,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value,
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
