@@ -33,6 +33,27 @@ PROMPT_TEMPLATE = (
 )
 
 
+REPAIR_TEMPLATE = (
+    "Your previous attempt to apply lever '{lever}' FAILED:\n{error}\n\n"
+    "Fix the problem. KEEP the optimization (below) — do NOT delete or weaken it "
+    "to make the error go away.\n\n"
+    "Optimization:\n{section}\n\n"
+    "Edit ONLY these files (Read first, then Edit):\n{files}\n\n"
+    "When done, output exactly ONE JSON object: "
+    '{{"files": [<repo-relative paths you changed>], "summary": <one sentence>}}'
+)
+
+
+def build_repair_prompt(lever: str, section: str, model_files: list, error: str) -> str:
+    files = "\n".join(f"  - {f}" for f in model_files)
+    return REPAIR_TEMPLATE.format(
+        lever=lever or "(unspecified)",
+        error=error or "(no detail)",
+        section=section or "(apply the lever named above)",
+        files=files,
+    )
+
+
 def build_edit_prompt(lever: str, section: str, model_files: list) -> str:
     files = "\n".join(f"  - {f}" for f in model_files)
     return PROMPT_TEMPLATE.format(
@@ -66,9 +87,9 @@ def make_edit_runner(
     from .config import apply_agent_env, get_model
 
     resolved = apply_agent_env(env_agent_path)
-    model = get_model("sub", resolved)
+    model = get_model("edit", resolved)
 
-    def runner(*, lever: str, section: str, model_files: list) -> dict:
+    def runner(*, lever: str, section: str, model_files: list, error: str | None = None) -> dict:
         import asyncio
 
         from claude_agent_sdk import (
@@ -81,7 +102,10 @@ def make_edit_runner(
 
         from .probes import _extract_json_object, _usage_summary
 
-        prompt = build_edit_prompt(lever, section, [str(p) for p in model_files])
+        files = [str(p) for p in model_files]
+        prompt = (
+            build_repair_prompt(lever, section, files, error) if error else build_edit_prompt(lever, section, files)
+        )
         options = ClaudeAgentOptions(
             model=model,
             system_prompt=(

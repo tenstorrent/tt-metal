@@ -27,10 +27,11 @@ MISSING_ENV_MESSAGE = (
 
 # Model roles (PLAN section 3.1). Sub-agents use sonnet; lead model is TBD(model-lead)
 # (likely Opus 4.8) — default to sonnet until resolved. Both overridable via .env.agent.
-MODEL_ENV_KEYS = {"lead": "AGENT_MODEL_LEAD", "sub": "AGENT_MODEL_SUB"}
+MODEL_ENV_KEYS = {"lead": "AGENT_MODEL_LEAD", "sub": "AGENT_MODEL_SUB", "edit": "AGENT_MODEL_EDIT"}
 MODEL_DEFAULTS = {
     "sub": "anthropic/claude-sonnet-4-6",
     "lead": "anthropic/claude-sonnet-4-6",  # TBD(model-lead)
+    "edit": "anthropic/claude-sonnet-4-6",  # editing/repair is lead-class, NEVER the cheap sub tier
 }
 
 
@@ -79,7 +80,12 @@ def get_model(role: str, config: dict[str, str] | None = None) -> str:
         raise ValueError(f"unknown model role: {role!r} (expected 'lead' or 'sub')")
     config = config or {}
     override = config.get(MODEL_ENV_KEYS[role])
-    return override or MODEL_DEFAULTS[role]
+    if override:
+        return override
+    if role == "edit":
+        # editing/repair inherits the lead model unless AGENT_MODEL_EDIT is set explicitly
+        return config.get(MODEL_ENV_KEYS["lead"]) or MODEL_DEFAULTS["edit"]
+    return MODEL_DEFAULTS[role]
 
 
 # Vars injected into the SDK process env. The ANTHROPIC_* creds plus the POC
