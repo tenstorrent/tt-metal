@@ -153,8 +153,8 @@ def test_mla_fused_sdpa_matches_composite_forward_and_backward():
         out_composite_np = _to_numpy(out_composite)
         ctx.reset_graph()
 
-        x, mask = _make_inputs()
-        out_fused = module(x, mask)
+        x, _ = _make_inputs()
+        out_fused = module(x)  # MLA is causal-only: no mask argument
         ttnn.synchronize_device(device)
         out_fused_np = _to_numpy(out_fused)
         ctx.reset_graph()
@@ -176,8 +176,8 @@ def test_mla_fused_sdpa_matches_composite_forward_and_backward():
         ctx.reset_graph()
 
         zero_grad.zero_grad()
-        x, mask = _make_inputs()
-        loss = ttml.ops.unary.mean(module(x, mask))
+        x, _ = _make_inputs()
+        loss = ttml.ops.unary.mean(module(x))  # MLA is causal-only: no mask argument
         loss.backward(False)
         ttnn.synchronize_device(device)
         fused_grads = {
