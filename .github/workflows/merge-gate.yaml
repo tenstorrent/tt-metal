@@ -515,7 +515,7 @@ jobs:
   # GPT-OSS 120B on a dedicated wh_galaxy machine — quick sanity that the model
   # still runs end-to-end before changes land on main.
   models-gpt-oss-120b-galaxy-e2e:
-    needs: [build, find-changes, docker-images, check-harbor]
+    needs: [build, find-changes, docker-images]
     if: >-
       ${{
         github.event.action != 'destroyed' &&
