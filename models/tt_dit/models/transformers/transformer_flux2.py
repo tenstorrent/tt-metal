@@ -17,6 +17,7 @@ from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear, prepa
 from ...layers.module import Module, ModuleList
 from ...layers.normalization import DistributedLayerNorm
 from ...utils.substate import rename_substate
+from ...utils.tracing import traced_function
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -495,7 +496,7 @@ class Flux2Transformer(Module):
     # We do not shard the last dimension of spatial, because its dimension is less than the tile
     # size for a device count of four and more. This requires padding, which is not currently
     # supported by `reduce_scatter_minimal_async`.
-    # @traced_function(device=lambda self: self.device, clone_prep_inputs=False)
+    @traced_function(device=lambda self: self.device, clone_prep_inputs=False)
     def forward(
         self,
         spatial: ttnn.Tensor,
@@ -599,8 +600,8 @@ class Flux2Transformer(Module):
             if i % 6 == 0:
                 ttnn.ReadDeviceProfiler(spatial.device())
 
-        spatial_time = self.time_embed_out(time_embed)
-        [scale, shift] = ttnn.chunk(spatial_time, 2, dim=-1)
+        time_embed_proj = self.time_embed_out(time_embed)
+        [scale, shift] = ttnn.chunk(time_embed_proj, 2, dim=-1)
         scale = ttnn.typecast(scale + 1, ttnn.bfloat16)
         shift = ttnn.typecast(shift, ttnn.bfloat16)
 
