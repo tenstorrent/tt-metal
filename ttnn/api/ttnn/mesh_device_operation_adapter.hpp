@@ -734,7 +734,9 @@ public:
                 "ProgramSpec factory adapter requires at least one Tensor in tensor_args or "
                 "tensor_return_value to source the MeshDevice");
             auto* mesh_device = first_tensor.value().device();
-            TT_FATAL(mesh_device != nullptr, "First tensor in tensor_args must be allocated on a MeshDevice");
+            TT_FATAL(
+                mesh_device != nullptr,
+                "Source tensor (from tensor_args or tensor_return_value) must be allocated on a MeshDevice");
 
             // Method-surface traits (see operation_concepts.hpp):
             //   kImmutable → cache key & create_program_artifacts input come from extract_immutable_info

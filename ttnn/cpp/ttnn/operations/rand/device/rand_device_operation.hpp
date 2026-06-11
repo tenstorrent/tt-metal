@@ -59,10 +59,10 @@ struct RandDeviceOperation {
         };
 
         static immutable_info_t extract_immutable_info(
-            const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
+            const operation_attributes_t& attrs, const tensor_args_t& tensor_args);
         static ttnn::device_operation::ProgramArtifacts create_program_artifacts(const immutable_info_t& info);
         static tt::tt_metal::experimental::ProgramRunArgs create_per_enqueue_args(
-            const operation_attributes_t& attributes,
+            const operation_attributes_t& attrs,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output,
             const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);

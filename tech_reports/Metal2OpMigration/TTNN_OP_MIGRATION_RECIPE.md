@@ -14,7 +14,7 @@ thing — the cache key:
 
 | concept | extra method | cache key | buys you |
 |---|---|---|---|
-| **`ProgramSpecFactoryConcept`** | — | the generated `ProgramSpec` | the default |
+| **`ProgramSpecFactoryConcept`** | — | default reflection hash of (op type + attributes + tensor args) | the default |
 | **`AdvancedProgramSpecFactoryConcept`** | `extract_immutable_info` | a small hashable `ImmutableInfo` | skips the spec rebuild on a hit; structurally excludes mutable values (e.g. a seed) from the key |
 
 Within **either** concept, the enqueue-invariant fast path is an **optional, incremental** refinement —

@@ -80,7 +80,8 @@ concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } |
 // kernels, DFBs, work-units, argument schemas) plus the ProgramRunArgs (the per-execution values).
 // There are exactly TWO concepts, distinguished by ONE thing — the cache key:
 //
-//   - ProgramSpecFactoryConcept         — the cache key is the generated ProgramSpec.
+//   - ProgramSpecFactoryConcept         — the cache key is the framework default: a reflection hash of
+//                                         (op type + attributes + tensor args).
 //   - AdvancedProgramSpecFactoryConcept — the cache key is a small hashable ImmutableInfo that the
 //                                         factory extracts up front (extract_immutable_info), which is
 //                                         also the SOLE input to create_program_artifacts. This lets the
