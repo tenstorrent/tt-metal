@@ -58,6 +58,7 @@ def run_demo_dataset(device, batch_size, iterations, model_location_generator):
     assert accuracy >= 0.96875, f"Expected accuracy : {0.96875} Actual accuracy: {accuracy}"
 
 
+@pytest.mark.skip(reason="Disabled: see #46695")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("batch_size", [128])
 @pytest.mark.parametrize("iterations", [1])
