@@ -149,7 +149,7 @@ inline void calculate_tanh() {
                 result = _sfpu_tanh_fp32_accurate_<is_fp32_dest_acc_en>(val);
             } else {
                 result = _sfpu_tanh_polynomial_<is_fp32_dest_acc_en>(val);
-                result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
+                result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
             }
 
             sfpi::dst_reg[0] = result;

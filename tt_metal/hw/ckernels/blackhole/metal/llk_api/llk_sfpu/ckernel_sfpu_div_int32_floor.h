@@ -29,7 +29,7 @@ sfpi_inline void calculate_div_int32_body(
     sfpi::vMag b = sfpi::abs(b_orig);
 
     // Convert to floats, but check for the edge case mentioned above.
-    sfpi::vFloat b_f = sfpi::convert<sfpi::vFloat>(b, sfpi::RoundMode::NearestEven);
+    sfpi::vFloat b_f = sfpi::convert<sfpi::vFloat>(b, sfpi::RoundMode::Nearest);
     v_if(b_f < 0.0f) { b_f = 0x1.0p31f; }
     v_endif;
 
@@ -43,7 +43,7 @@ sfpi_inline void calculate_div_int32_body(
     e = e * e + e;
     sfpi::vMag a = sfpi::abs(a_orig);
     inv_b_f = e * inv_b_f + inv_b_f;
-    sfpi::vFloat a_f = sfpi::convert<sfpi::vFloat>(a, sfpi::RoundMode::NearestEven);
+    sfpi::vFloat a_f = sfpi::convert<sfpi::vFloat>(a, sfpi::RoundMode::Nearest);
     v_if(a_f < 0.0f) { a_f = 0x1.0p31f; }
     v_endif;
 
@@ -67,11 +67,11 @@ sfpi_inline void calculate_div_int32_body(
 
     // Compute remainder.
     sfpi::vInt r = a - qb;
-    sfpi::vFloat r_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(r), sfpi::RoundMode::NearestEven);
+    sfpi::vFloat r_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(r), sfpi::RoundMode::Nearest);
 
     // Compute correction value in float32.
     sfpi::vFloat correction_f = r_f * inv_b_f;
-    sfpi::vMag correction = sfpi::convert<sfpi::vUInt16>(correction_f, sfpi::RoundMode::NearestEven);
+    sfpi::vMag correction = sfpi::convert<sfpi::vUInt16>(correction_f, sfpi::RoundMode::Nearest);
 
     // Compute tmp = correction * b.
     sfpi::vInt b1 = sfpi::fractional_mul(correction, b >> 23);

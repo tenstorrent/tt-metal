@@ -48,8 +48,8 @@ sfpi_inline sfpi::vFloat calculate_sfpu_binary_power(sfpi::vFloat base, sfpi::vF
 
     // Check for integer power
     sfpi::vSMag16 pow_smag = sfpi::convert<sfpi::vSMag16>(
-        pow, sfpi::RoundMode::NearestEven);  // int16 should be plenty, since large powers will approach 0/Inf
-    sfpi::vFloat pow_rounded = sfpi::convert<sfpi::vFloat>(pow_smag, sfpi::RoundMode::NearestEven);
+        pow, sfpi::RoundMode::Nearest);  // int16 should be plenty, since large powers will approach 0/Inf
+    sfpi::vFloat pow_rounded = sfpi::convert<sfpi::vFloat>(pow_smag, sfpi::RoundMode::Nearest);
     v_if(pow_rounded == pow) {
         // if pow is integer, set base to positive
         base = sfpi::setsgn(base, 0);
@@ -64,7 +64,7 @@ sfpi_inline sfpi::vFloat calculate_sfpu_binary_power(sfpi::vFloat base, sfpi::vF
 
     // Convert exponent to float
     sfpi::vSMag exp = sfpi::convert<sfpi::vSMag>(exexp(base));
-    sfpi::vFloat expf = sfpi::convert<sfpi::vFloat>(exp, sfpi::RoundMode::NearestEven);
+    sfpi::vFloat expf = sfpi::convert<sfpi::vFloat>(exp, sfpi::RoundMode::Nearest);
 
     // De-normalize to original range
     sfpi::vFloat vConstLn2 = 0.692871f;
@@ -92,8 +92,8 @@ sfpi_inline sfpi::vFloat calculate_sfpu_binary_power(sfpi::vFloat base, sfpi::vF
             // if pow is odd integer, set result to negative
             // Check if odd by dividing by 2 and comparing with floor
             sfpi::vFloat half_pow = pow_rounded * 0.5f;
-            sfpi::vSMag16 half_pow_int = sfpi::convert<sfpi::vSMag16>(half_pow, sfpi::RoundMode::NearestEven);
-            sfpi::vFloat half_pow_floored = sfpi::convert<sfpi::vFloat>(half_pow_int, sfpi::RoundMode::NearestEven);
+            sfpi::vSMag16 half_pow_int = sfpi::convert<sfpi::vSMag16>(half_pow, sfpi::RoundMode::Nearest);
+            sfpi::vFloat half_pow_floored = sfpi::convert<sfpi::vFloat>(half_pow_int, sfpi::RoundMode::Nearest);
             v_if(half_pow != half_pow_floored) { result = sfpi::setsgn(result, 1); }
             v_endif;
         }
