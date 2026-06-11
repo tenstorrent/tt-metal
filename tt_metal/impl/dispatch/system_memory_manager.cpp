@@ -687,6 +687,8 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
         auto fetch_operation_body = [&]() {
             ctx.get_cluster().read_core(&fence, sizeof(uint32_t), this->prefetcher_cores[cq_id], prefetch_q_rd_ptr);
             this->prefetch_q_dev_fences[cq_id] = fence;
+            // Yield to clock the simulator when running on TTSim; no-op on real hardware.
+            ctx.get_cluster().advance_device_execution(this->device_id);
         };
 
         // Condition to check if should continue waiting
@@ -737,6 +739,8 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
         write_ptr_and_toggle = get_cq_completion_wr_ptr<true>(this->device_id, cq_id, this->cq_size);
         write_ptr = write_ptr_and_toggle & 0x7fffffff;
         write_toggle = write_ptr_and_toggle >> 31;
+        // Yield to clock the simulator when running on TTSim; no-op on real hardware.
+        tt::tt_metal::MetalContext::instance(this->context_id).get_cluster().advance_device_execution(this->device_id);
     };
 
     // Condition to check if the operation should continue
