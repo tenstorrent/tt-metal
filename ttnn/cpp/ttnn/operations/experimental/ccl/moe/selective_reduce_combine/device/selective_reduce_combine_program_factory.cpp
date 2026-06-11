@@ -86,7 +86,7 @@ tt::tt_fabric::FabricMuxConfig get_fabric_mux_config(
         buffer_size_bytes_full_size_channel,
         l1_unreserved_base_address);
 
-    if (occupied_l1_tensor_addr.has_value() && config.get_memory_map_end_address() >= *occupied_l1_tensor_addr) {
+    if (occupied_l1_tensor_addr.has_value() && config.get_memory_map_end_address() > *occupied_l1_tensor_addr) {
         return get_fabric_mux_config(
             num_full_size_channels,
             num_header_only_channels,

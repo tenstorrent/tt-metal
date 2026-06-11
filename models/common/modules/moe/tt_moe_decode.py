@@ -325,6 +325,11 @@ class _TTMoEDecodeExpertState:
             torch_b2,
         )
 
+        # An empty mapping ({} when num_shared_experts==0) means "no shared experts" —
+        # normalize to None so the shared-expert paths below are skipped entirely.
+        if not shared_expert_ids_to_devices:
+            shared_expert_ids_to_devices = None
+
         num_routed = torch_w0.shape[1]
         logger.info(
             f"Initializing expert state: routed_experts={num_routed} num_shared={num_shared_experts} "

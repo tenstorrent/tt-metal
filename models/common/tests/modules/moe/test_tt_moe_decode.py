@@ -86,7 +86,7 @@ def is_mesh_graph_descriptor_set(expected_path):
 # ---------------------------------------------------------------------------
 
 
-torch.set_num_threads(os.cpu_count())
+torch.set_num_threads(max(1, os.cpu_count() or 1))
 
 
 @torch.no_grad()
