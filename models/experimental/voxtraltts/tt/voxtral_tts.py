@@ -679,10 +679,9 @@ class VoxtralTTSPipeline:
                     sem_host = sem_host.squeeze(1)
                 debug.set(f"step.{step_idx}.acoustic.semantic_logits", sem_host.squeeze(0))
 
-            if audio_codes is not None:
-                generated_codes.append(audio_codes[0].detach().cpu())
-                if first_frame_s is None:
-                    first_frame_s = time.perf_counter() - _t_entry
+            generated_codes.append(audio_codes[0].detach().cpu())
+            if first_frame_s is None:
+                first_frame_s = time.perf_counter() - _t_entry
             if not fixed_step_count and int(audio_codes[0, 0].item()) == self.end_audio_id:
                 if next_mm_embed_tt is not None and next_mm_embed_tt.is_allocated():
                     ttnn.deallocate(next_mm_embed_tt)
