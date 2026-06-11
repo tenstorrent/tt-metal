@@ -573,12 +573,10 @@ jobs:
       - name: 🛠️ Compile
         timeout-minutes: 90
         run: |
-          # --target install is for the tarball that should get replaced by proper packaging later
+          # Build ALL first (includes tracy_profiler_wasm when Tracy is enabled via CMake),
+          # then run install rules to copy artifacts to CMAKE_INSTALL_PREFIX.
+          cmake --build build
           cmake --build build --target install
-          # WASM viewer is not part of install; build it explicitly when Tracy is enabled.
-          if [ "${{ inputs.tracy }}" = "true" ]; then
-            cmake --build build --target tracy_profiler_wasm
-          fi
 
       - name: 🛠️ Profile
         if: ${{ inputs.profile }}
