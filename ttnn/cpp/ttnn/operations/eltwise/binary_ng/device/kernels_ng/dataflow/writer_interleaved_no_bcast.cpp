@@ -6,37 +6,35 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t index = 0;
-    const uint32_t dst_addr = get_arg_val<uint32_t>(index++);
-    const uint32_t start_tile_id = get_arg_val<uint32_t>(index++);
-    const uint32_t dst_num_tiles = get_arg_val<uint32_t>(index++);
-    const uint32_t dst_shard_width = get_arg_val<uint32_t>(index++);
-    const uint32_t D = get_arg_val<uint32_t>(index++);
-    const uint32_t N = get_arg_val<uint32_t>(index++);
-    const uint32_t C = get_arg_val<uint32_t>(index++);
-    const uint32_t Ht = get_arg_val<uint32_t>(index++);
-    const uint32_t Wt = get_arg_val<uint32_t>(index++);
-    const uint32_t cND = get_arg_val<uint32_t>(index++);  // collapsed dims > 5
+    // The output buffer base address (legacy RTA 0) is now carried by the TensorBinding ta::c; the
+    // TensorAccessorArgs<N>() CTA plumbing is gone (auto-injected by the binding).
+    const uint32_t start_tile_id = get_arg(args::start_tile_id);
+    const uint32_t dst_num_tiles = get_arg(args::dst_num_tiles);
+    const uint32_t dst_shard_width = get_arg(args::dst_shard_width);
+    const uint32_t D = get_arg(args::D);
+    const uint32_t N = get_arg(args::N);
+    const uint32_t C = get_arg(args::C);
+    const uint32_t Ht = get_arg(args::Ht);
+    const uint32_t Wt = get_arg(args::Wt);
+    const uint32_t cND = get_arg(args::cND);  // collapsed dims > 5
 
     constexpr uint32_t onetile = 1;
 
-    constexpr auto cb_id_dst = tt::CBIndex::c_2;
-
     Noc noc;
-    CircularBuffer cb_dst(cb_id_dst);
+    DataflowBuffer cb_dst(dfb::cb_c);
 
 #if !DST_SHARDED
-    constexpr auto dst_args = TensorAccessorArgs<0, 0>();
-    const uint32_t dst_tile_bytes = get_tile_size(cb_id_dst);
-    const auto dst = TensorAccessor(dst_args, dst_addr);
+    const uint32_t dst_tile_bytes = get_tile_size(dfb::cb_c);
+    const auto dst = TensorAccessor(ta::c);
 #endif
 
 #if !DST_SHARDED
-    constexpr bool has_sharding = get_compile_time_arg_val(dst_args.next_compile_time_args_offset()) == 1;
+    constexpr bool has_sharding = get_arg(args::has_sharding) == 1;
     const uint32_t HtWt = Ht * Wt;
 
     const uint32_t tiles_per_n = C * HtWt;

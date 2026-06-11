@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal2_artifacts.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/binary_ng/types.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
@@ -65,7 +66,7 @@ struct BinaryNgDeviceOperation {
     };
 
     struct ProgramFactory {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_spec(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& c);
@@ -76,7 +77,8 @@ struct BinaryNgDeviceOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    // Custom compute_program_hash deleted by the Metal 2.0 port (reverts to the default reflection-based
+    // hash); the legacy hash omitted tensor shape and is incompatible with the framework cache path.
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
 };
 

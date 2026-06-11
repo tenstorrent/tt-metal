@@ -9,17 +9,18 @@
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
-    const uint32_t scalar_value = get_arg_val<uint32_t>(3);
+    uint32_t num_tiles = get_arg(args::num_tiles);
+    const uint32_t scalar_value = get_arg(args::scalar);  // legacy RTA index 3
     const auto scalar_val = reinterpret_cast<const float*>(&scalar_value);
 
-    constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
+    constexpr uint32_t num_tiles_per_cycle = get_arg(args::num_tiles_per_cycle);
 
-    constexpr auto cb_in0 = tt::CBIndex::c_0;
-    constexpr auto cb_in1 = tt::CBIndex::c_1;
-    constexpr auto cb_out = tt::CBIndex::c_2;
+    constexpr auto cb_in0 = dfb::cb_a;
+    constexpr auto cb_in1 = dfb::cb_b;
+    constexpr auto cb_out = dfb::cb_c;
 
     unary_op_init_common(cb_in0, cb_out);
     BINARY_SFPU_INIT

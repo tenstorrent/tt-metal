@@ -11,6 +11,10 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include "ttnn/metal2_artifacts.hpp"
+
 #include <algorithm>
 using namespace tt::tt_metal;
 
@@ -355,6 +359,28 @@ bool is_llk_bcast(
 
     return false;
 }
+
+// ---- Metal 2.0 typed spec-name constants (one per legacy CB / tensor accessor / kernel) ----
+using tt::tt_metal::experimental::DFBSpecName;
+using tt::tt_metal::experimental::KernelSpecName;
+using tt::tt_metal::experimental::TensorParamName;
+
+const DFBSpecName DFB_A{"cb_a"};                  // c_0  (input a)
+const DFBSpecName DFB_B{"cb_b"};                  // c_1  (input b)
+const DFBSpecName DFB_C{"cb_c"};                  // c_2  (output c)
+const DFBSpecName DFB_A_INTERIM{"cb_a_interim"};  // c_3  (lhs-activation interim)
+const DFBSpecName DFB_B_INTERIM{"cb_b_interim"};  // c_4  (rhs-activation interim)
+const DFBSpecName DFB_A_BCAST{"cb_a_bcast"};      // c_5  (a subtile-broadcast scratch)
+const DFBSpecName DFB_B_BCAST{"cb_b_bcast"};      // c_6  (b subtile-broadcast scratch)
+
+const TensorParamName PARAM_A{"a"};
+const TensorParamName PARAM_B{"b"};
+const TensorParamName PARAM_C{"c"};
+
+const KernelSpecName READER{"reader"};
+const KernelSpecName WRITER{"writer"};
+const KernelSpecName COMPUTE{"compute"};
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -381,12 +407,17 @@ std::optional<AllShardVolumes> get_shard_volumes(
 }
 
 // Implements c = a op b
-tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts BinaryNgDeviceOperation::ProgramFactory::create_program_spec(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, tensor_return_value_t& c) {
     using namespace tt;
     using namespace tt::tt_metal;
+    using namespace tt::tt_metal::experimental;
+    using namespace CMAKE_UNIQUE_NAMESPACE;
 
-    ProgramDescriptor desc;
+    // Metal 2.0 spec containers (replacing the legacy `ProgramDescriptor desc`). DFBs replace the
+    // legacy CBs; per-kernel DFB/tensor bindings replace magic CB indices and buffer-address RTAs;
+    // per-core runtime-arg *values* move to ProgramRunArgs (the KernelSpecs below carry only schemas).
+    Group<DataflowBufferSpec> dfbs;
 
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
@@ -430,9 +461,9 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     // we parallelize the computation across the output tiles
     const auto& all_device_cores = operation_attributes.worker_grid;
 
-    Buffer* a_buffer = a.buffer();
+    // Buffer base addresses are no longer plumbed through RTAs (TensorBindings carry them); b_buffer
+    // is retained only to size the b DFB (1 page when b is a scalar).
     Buffer* b_buffer = b.has_value() ? b->buffer() : nullptr;
-    Buffer* c_buffer = c.buffer();
 
     auto op_type = operation_attributes.binary_op_type;
 
@@ -556,19 +587,19 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     const bool inputs_row_major =
         CMAKE_UNIQUE_NAMESPACE::should_use_row_major_path(operation_attributes, b, has_sharding);
 
-    // CB: a (c_0)
+    // DFB: a (c_0)
     {
         uint32_t a_num_pages = a_num_tiles_per_shard.value_or(2);
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = a_single_tile_size * a_num_pages,
-            .core_ranges = all_device_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_0),
-                .data_format = a_data_format,
-                .page_size = a_single_tile_size,
-            }}},
-            .buffer = a_sharded ? a_buffer : nullptr,
-        });
+        DataflowBufferSpec dfb_a{
+            .unique_id = DFB_A,
+            .entry_size = a_single_tile_size,
+            .num_entries = a_num_pages,
+            .data_format_metadata = a_data_format,
+        };
+        if (a_sharded) {
+            dfb_a.borrowed_from = PARAM_A;  // borrowed-memory DFB on the sharded path
+        }
+        dfbs.push_back(std::move(dfb_a));
     }
 
     if (not compute_kernel_defines["PROCESS_LHS_ACTIVATIONS(i)"].empty()) {
@@ -576,30 +607,27 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                                      : op_has_exp ? tt::DataFormat::Float16_b
                                                   : a_data_format;
         uint32_t a_intermediate_single_tile_size = tt::tile_size(a_intermediate_format);
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = a_intermediate_single_tile_size * num_tiles_per_cycle,
-            .core_ranges = all_device_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_3),
-                .data_format = a_intermediate_format,
-                .page_size = a_intermediate_single_tile_size,
-            }}},
+        dfbs.push_back(DataflowBufferSpec{
+            .unique_id = DFB_A_INTERIM,
+            .entry_size = a_intermediate_single_tile_size,
+            .num_entries = num_tiles_per_cycle,
+            .data_format_metadata = a_intermediate_format,
         });
     }
 
-    // CB: b (c_1)
+    // DFB: b (c_1)
     {
         uint32_t b_num_pages = b_buffer == nullptr ? 1 : b_num_tiles_per_shard.value_or(2);
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = b_single_tile_size * b_num_pages,
-            .core_ranges = all_device_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),
-                .data_format = b_data_format,
-                .page_size = b_single_tile_size,
-            }}},
-            .buffer = b_sharded ? b_buffer : nullptr,
-        });
+        DataflowBufferSpec dfb_b{
+            .unique_id = DFB_B,
+            .entry_size = b_single_tile_size,
+            .num_entries = b_num_pages,
+            .data_format_metadata = b_data_format,
+        };
+        if (b_sharded) {
+            dfb_b.borrowed_from = PARAM_B;  // borrowed-memory DFB on the sharded path
+        }
+        dfbs.push_back(std::move(dfb_b));
     }
 
     if (not compute_kernel_defines["PROCESS_RHS_ACTIVATIONS(i)"].empty()) {
@@ -607,14 +635,11 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                                      : op_has_exp ? tt::DataFormat::Float16_b
                                                   : b_data_format;
         uint32_t b_intermediate_single_tile_size = tt::tile_size(b_intermediate_format);
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = b_intermediate_single_tile_size * num_tiles_per_cycle,
-            .core_ranges = all_device_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_4),
-                .data_format = b_intermediate_format,
-                .page_size = b_intermediate_single_tile_size,
-            }}},
+        dfbs.push_back(DataflowBufferSpec{
+            .unique_id = DFB_B_INTERIM,
+            .entry_size = b_intermediate_single_tile_size,
+            .num_entries = num_tiles_per_cycle,
+            .data_format_metadata = b_intermediate_format,
         });
     }
 
@@ -622,44 +647,38 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B ||
         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_A ||
         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_A) {
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = a_single_tile_size * 2,
-            .core_ranges = all_device_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_5),
-                .data_format = a_data_format,
-                .page_size = a_single_tile_size,
-            }}},
+        dfbs.push_back(DataflowBufferSpec{
+            .unique_id = DFB_A_BCAST,
+            .entry_size = a_single_tile_size,
+            .num_entries = 2,
+            .data_format_metadata = a_data_format,
         });
     }
     if (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_B ||
         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ||
         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_B ||
         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B) {
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = b_single_tile_size * 2,
-            .core_ranges = all_device_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_6),
-                .data_format = b_data_format,
-                .page_size = b_single_tile_size,
-            }}},
+        dfbs.push_back(DataflowBufferSpec{
+            .unique_id = DFB_B_BCAST,
+            .entry_size = b_single_tile_size,
+            .num_entries = 2,
+            .data_format_metadata = b_data_format,
         });
     }
 
-    // CB: c (c_2)
+    // DFB: c (c_2)
     {
         uint32_t c_num_pages = c_num_tiles_per_shard.value_or(2);
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = c_single_tile_size * c_num_pages,
-            .core_ranges = all_device_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_2),
-                .data_format = c_data_format,
-                .page_size = c_single_tile_size,
-            }}},
-            .buffer = c_sharded ? c_buffer : nullptr,
-        });
+        DataflowBufferSpec dfb_c{
+            .unique_id = DFB_C,
+            .entry_size = c_single_tile_size,
+            .num_entries = c_num_pages,
+            .data_format_metadata = c_data_format,
+        };
+        if (c_sharded) {
+            dfb_c.borrowed_from = PARAM_C;  // borrowed-memory DFB on the sharded path
+        }
+        dfbs.push_back(std::move(dfb_c));
     }
 
     const bool outputs_row_major = inputs_row_major && operation_attributes.output_layout == Layout::ROW_MAJOR;
@@ -694,21 +713,10 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         writer_kernel = KernelName::WriterNoBcastNg;
     }
 
-    // WRITER KERNEL DESCRIPTOR
-    std::vector<uint32_t> writer_compile_time_args;
-    std::vector<uint32_t> writer_common_runtime_args;
-    tt::tt_metal::TensorAccessorArgs(*c_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
-        .append_to(writer_compile_time_args, writer_common_runtime_args);
-    writer_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source = get_kernel_file_path(writer_kernel, is_sfpu_op, is_where_op);
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_device_cores;
-    writer_desc.compile_time_args = writer_compile_time_args;
-    writer_desc.defines = {writer_defines.begin(), writer_defines.end()};
-    writer_desc.config = WriterConfigDescriptor{};
-    writer_desc.common_runtime_args = writer_common_runtime_args;
+    // WRITER KERNEL — the TensorAccessorArgs CTA plumbing + buffer-address RTA are replaced by the
+    // output TensorBinding (PARAM_C / ta::c); `has_sharding` becomes a named CTA. The KernelSpec is
+    // assembled below (once the reader/compute defines are finalized), alongside reader and compute.
+    const std::string writer_source = get_kernel_file_path(writer_kernel, is_sfpu_op, is_where_op);
 
     // COMPUTE KERNEL
     // fp32 dest accumulation must be enabled whenever any input or output is fp32, otherwise
@@ -720,34 +728,54 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                             (a_data_format == tt::DataFormat::Int32 && b_data_format == tt::DataFormat::Int32) ||
                             (a_data_format == tt::DataFormat::UInt32 && b_data_format == tt::DataFormat::UInt32);
 
-    uint32_t src0_cb_index = tt::CBIndex::c_0;
-    uint32_t src1_cb_index = tt::CBIndex::c_1;
-    uint32_t src0interim_cb_index = tt::CBIndex::c_3;
-    uint32_t src1interim_cb_index = tt::CBIndex::c_4;
+    // Was this DFB created (i.e. bound to a kernel)? Reused for the unpack table and the bindings.
+    auto dfb_created = [&](const DFBSpecName& id) {
+        return std::any_of(dfbs.begin(), dfbs.end(), [&](const auto& d) { return d.unique_id == id; });
+    };
+    auto dfb_is_fp32 = [&](const DFBSpecName& id) {
+        for (const auto& d : dfbs) {
+            if (d.unique_id == id) {
+                return d.data_format_metadata == tt::DataFormat::Float32;
+            }
+        }
+        return false;
+    };
 
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-
+    // Per-DFB unpack-to-dest modes (replaces the legacy NUM_CIRCULAR_BUFFERS-indexed array). Each key
+    // must name a DFB the compute kernel binds, so every entry is gated on the DFB having been created
+    // (c_3/c_4 with activations, c_5/c_6 on broadcast paths). SFPU configures fp32 unpack on the input/
+    // interim/bcast DFBs (independent of fp32_dest_acc_en, mirroring legacy).
+    ComputeHardwareConfig::UnpackToDestModes unpack_to_dest_mode;
+    using UTD = tt::tt_metal::UnpackToDestMode;
+    // Validator: under fp32_dest_acc_en, every consumed Float32 DFB needs an explicit entry. Set these
+    // first (Default); the SFPU precision choices below overwrite where they apply (SFPU wins).
+    if (fp32_dest_acc_en) {
+        for (const auto& id : {DFB_A, DFB_B, DFB_A_INTERIM, DFB_B_INTERIM, DFB_A_BCAST, DFB_B_BCAST}) {
+            if (dfb_created(id) && dfb_is_fp32(id)) {
+                unpack_to_dest_mode[id] = UTD::Default;
+            }
+        }
+    }
     if (is_sfpu_op) {
         if (op_type != BinaryOpType::POWER) {
-            unpack_to_dest_mode[src0_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-            unpack_to_dest_mode[src1_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-            unpack_to_dest_mode[src0interim_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-            unpack_to_dest_mode[src1interim_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-            unpack_to_dest_mode[tt::CBIndex::c_5] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-            unpack_to_dest_mode[tt::CBIndex::c_6] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+            for (const auto& id : {DFB_A, DFB_B, DFB_A_INTERIM, DFB_B_INTERIM, DFB_A_BCAST, DFB_B_BCAST}) {
+                if (dfb_created(id)) {
+                    unpack_to_dest_mode[id] = UTD::UnpackToDestFp32;
+                }
+            }
         } else {
-            unpack_to_dest_mode[src0_cb_index] =
-                (a_dtype == DataType::FLOAT32) ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32 : tt::tt_metal::UnpackToDestMode::Default;
-            unpack_to_dest_mode[src1_cb_index] =
-                (b_dtype == DataType::FLOAT32) ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32 : tt::tt_metal::UnpackToDestMode::Default;
-            unpack_to_dest_mode[src0interim_cb_index] =
-                (a_dtype == DataType::FLOAT32) ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32 : tt::tt_metal::UnpackToDestMode::Default;
-            unpack_to_dest_mode[src1interim_cb_index] =
-                (b_dtype == DataType::FLOAT32) ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32 : tt::tt_metal::UnpackToDestMode::Default;
-            unpack_to_dest_mode[tt::CBIndex::c_5] =
-                (a_dtype == DataType::FLOAT32) ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32 : tt::tt_metal::UnpackToDestMode::Default;
-            unpack_to_dest_mode[tt::CBIndex::c_6] =
-                (b_dtype == DataType::FLOAT32) ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32 : tt::tt_metal::UnpackToDestMode::Default;
+            const auto a_mode = (a_dtype == DataType::FLOAT32) ? UTD::UnpackToDestFp32 : UTD::Default;
+            const auto b_mode = (b_dtype == DataType::FLOAT32) ? UTD::UnpackToDestFp32 : UTD::Default;
+            for (const auto& id : {DFB_A, DFB_A_INTERIM, DFB_A_BCAST}) {
+                if (dfb_created(id)) {
+                    unpack_to_dest_mode[id] = a_mode;
+                }
+            }
+            for (const auto& id : {DFB_B, DFB_B_INTERIM, DFB_B_BCAST}) {
+                if (dfb_created(id)) {
+                    unpack_to_dest_mode[id] = b_mode;
+                }
+            }
         }
     }
 
@@ -838,35 +866,219 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     compute_kernel_defines["WHERE_TTS"] = (op_type == BinaryOpType::WHERE_TTS) ? "1" : "0";
     compute_kernel_defines["WHERE_TST"] = (op_type == BinaryOpType::WHERE_TST) ? "1" : "0";
 
-    KernelDescriptor compute_desc;
-    compute_desc.kernel_source = get_kernel_file_path(compute_kernel, is_sfpu_op, is_where_op);
-    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = all_device_cores;
-    compute_desc.defines = {compute_kernel_defines.begin(), compute_kernel_defines.end()};
-    compute_desc.compile_time_args = {num_tiles_per_cycle};
-    compute_desc.config = ComputeConfigDescriptor{
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .unpack_to_dest_mode = {unpack_to_dest_mode.begin(), unpack_to_dest_mode.end()},
+    // ===================== Metal 2.0 kernel specs =====================
+    using Defines = KernelSpec::CompilerOptions::Defines;
+    const bool b_present = b.has_value();
+    const uint32_t has_sharding_cta = static_cast<uint32_t>(has_sharding);
+
+    auto dfb_bind = [](const DFBSpecName& id, const char* name, DFBEndpointType ep) {
+        return DFBBinding{.dfb_spec_name = id, .accessor_name = name, .endpoint_type = ep};
     };
 
-    // READER KERNEL DESCRIPTOR
-    std::vector<uint32_t> reader_compile_time_args;
-    std::vector<uint32_t> reader_common_runtime_args;
-    tt::tt_metal::TensorAccessorArgs(*a_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
-        .append_to(reader_compile_time_args, reader_common_runtime_args);
-    tt::tt_metal::TensorAccessorArgs(
-        b_buffer != nullptr ? *b_buffer : *a_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
-        .append_to(reader_compile_time_args, reader_common_runtime_args);
-    reader_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
+    // ---- DFB bindings (designated-initializer form). Reader fills the input DFBs (reads, or
+    // reserve/push on the sharded borrowed path); compute consumes inputs, produces output, and
+    // self-loops the activation interims; writer consumes the output. The subtile-broadcast scratch
+    // DFBs (c_5/c_6) are reader-produced / compute-consumed — those broadcast paths are host-supported
+    // but not device-validated this pass (see METAL2_PORT_REPORT.md). ----
+    Group<DFBBinding> reader_dfb;
+    reader_dfb.push_back(dfb_bind(DFB_A, "cb_a", DFBEndpointType::PRODUCER));
+    if (b_present) {
+        reader_dfb.push_back(dfb_bind(DFB_B, "cb_b", DFBEndpointType::PRODUCER));
+    }
+    if (dfb_created(DFB_A_BCAST)) {
+        reader_dfb.push_back(dfb_bind(DFB_A_BCAST, "cb_a_bcast", DFBEndpointType::PRODUCER));
+    }
+    if (dfb_created(DFB_B_BCAST)) {
+        reader_dfb.push_back(dfb_bind(DFB_B_BCAST, "cb_b_bcast", DFBEndpointType::PRODUCER));
+    }
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source = get_kernel_file_path(kernel_config.reader_kernel, is_sfpu_op, is_where_op);
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_device_cores;
-    reader_desc.compile_time_args = reader_compile_time_args;
-    reader_desc.defines = {reader_defines.begin(), reader_defines.end()};
-    reader_desc.config = ReaderConfigDescriptor{};
-    reader_desc.common_runtime_args = reader_common_runtime_args;
+    Group<DFBBinding> writer_dfb;
+    writer_dfb.push_back(dfb_bind(DFB_C, "cb_c", DFBEndpointType::CONSUMER));
+
+    Group<DFBBinding> compute_dfb;
+    compute_dfb.push_back(dfb_bind(DFB_A, "cb_a", DFBEndpointType::CONSUMER));
+    if (b_present) {
+        compute_dfb.push_back(dfb_bind(DFB_B, "cb_b", DFBEndpointType::CONSUMER));
+    }
+    compute_dfb.push_back(dfb_bind(DFB_C, "cb_c", DFBEndpointType::PRODUCER));
+    if (dfb_created(DFB_A_INTERIM)) {  // compute self-loop (PREPROCESS produces then consumes)
+        compute_dfb.push_back(dfb_bind(DFB_A_INTERIM, "cb_a_interim", DFBEndpointType::PRODUCER));
+        compute_dfb.push_back(dfb_bind(DFB_A_INTERIM, "cb_a_interim", DFBEndpointType::CONSUMER));
+    }
+    if (dfb_created(DFB_B_INTERIM)) {
+        compute_dfb.push_back(dfb_bind(DFB_B_INTERIM, "cb_b_interim", DFBEndpointType::PRODUCER));
+        compute_dfb.push_back(dfb_bind(DFB_B_INTERIM, "cb_b_interim", DFBEndpointType::CONSUMER));
+    }
+    if (dfb_created(DFB_A_BCAST)) {
+        compute_dfb.push_back(dfb_bind(DFB_A_BCAST, "cb_a_bcast", DFBEndpointType::CONSUMER));
+    }
+    if (dfb_created(DFB_B_BCAST)) {
+        compute_dfb.push_back(dfb_bind(DFB_B_BCAST, "cb_b_bcast", DFBEndpointType::CONSUMER));
+    }
+
+    // ---- Tensor bindings (replace buffer-address RTAs + TensorAccessorArgs plumbing). ----
+    Group<TensorBinding> reader_tensors;
+    reader_tensors.push_back({.tensor_parameter_name = PARAM_A, .accessor_name = "a"});
+    if (b_present) {
+        reader_tensors.push_back({.tensor_parameter_name = PARAM_B, .accessor_name = "b"});
+    }
+    Group<TensorBinding> writer_tensors;
+    writer_tensors.push_back({.tensor_parameter_name = PARAM_C, .accessor_name = "c"});
+
+    // ---- TensorParameters. dynamic_tensor_shape=true mirrors the legacy ArgConfig::RuntimeTensorShape
+    // accessors (shape read at runtime); see METAL2_PORT_PLAN.md for the sanity-check rationale. ----
+    Group<TensorParameter> tensor_params;
+    {
+        TensorParameter pa{.unique_id = PARAM_A, .spec = a.tensor_spec()};
+        pa.relaxations.dynamic_tensor_shape = true;
+        tensor_params.push_back(std::move(pa));
+        if (b_present) {
+            TensorParameter pb{.unique_id = PARAM_B, .spec = b->tensor_spec()};
+            pb.relaxations.dynamic_tensor_shape = true;
+            tensor_params.push_back(std::move(pb));
+        }
+        TensorParameter pc{.unique_id = PARAM_C, .spec = c.tensor_spec()};
+        pc.relaxations.dynamic_tensor_shape = true;
+        tensor_params.push_back(std::move(pc));
+    }
+
+    // ---- Runtime-arg schemas (named; buffer addresses are gone, carried by the bindings). The name
+    // lists are shared with the per-core value construction in the loop below to keep schema and values
+    // in lockstep. The tile no-broadcast path is the device-validated one; the rm and scalar name sets
+    // faithfully mirror the legacy positional vectors (minus addresses) for the not-yet-converted paths.
+    std::vector<std::string> reader_arg_names;
+    std::vector<std::string> writer_arg_names;
+    std::vector<std::string> compute_arg_names;
+    if (inputs_row_major) {
+        reader_arg_names = {
+            "dst_num_tiles",
+            "aD",
+            "aN",
+            "aC",
+            "aHt",
+            "aND",
+            "bD",
+            "bN",
+            "bC",
+            "bHt",
+            "bND",
+            "cHt",
+            "cC",
+            "cND",
+            "current_block",
+            "num_rows_per_tile",
+            "common_row_width",
+            "a_page_size",
+            "b_page_size",
+            "a_alignment",
+            "b_alignment",
+            "tiles_per_row_width",
+            "reader_stride_bytes",
+            "packed_scalar"};
+        writer_arg_names = {
+            "common_row_width",
+            "dst_num_tiles",
+            "cD",
+            "cN",
+            "cC",
+            "cHt",
+            "cND",
+            "current_block",
+            "num_rows_per_tile",
+            "c_page_size",
+            "c_alignment",
+            "tiles_per_row_width",
+            "writer_stride_bytes"};
+    } else {
+        reader_arg_names = {
+            "start_tile_id",
+            "src_num_tiles",
+            "dst_num_tiles",
+            "dst_shard_width",
+            "nD_stride",
+            "d_stride",
+            "n_stride",
+            "c_stride",
+            "D",
+            "N",
+            "C",
+            "Ht",
+            "Wt",
+            "cND",
+            "nD_stride_b",
+            "d_stride_b",
+            "n_stride_b",
+            "c_stride_b",
+            "src_num_tiles_b"};
+        if (b_present) {
+            writer_arg_names = {"start_tile_id", "dst_num_tiles", "dst_shard_width", "D", "N", "C", "Ht", "Wt", "cND"};
+        } else {
+            writer_arg_names = {
+                "packed_scalar", "start_tile_id", "dst_num_tiles", "dst_shard_width", "D", "N", "C", "Ht", "Wt", "cND"};
+        }
+    }
+    if (op_type == BinaryOpType::ISCLOSE) {
+        compute_arg_names = {"num_tiles", "freq", "counter", "rtol", "atol"};
+    } else {
+        compute_arg_names = {"num_tiles", "freq", "counter", "scalar"};
+    }
+
+    KernelSpec reader_spec{
+        .unique_id = READER,
+        .source = get_kernel_file_path(kernel_config.reader_kernel, is_sfpu_op, is_where_op),
+        .compiler_options = {.defines = Defines(reader_defines)},
+        .dfb_bindings = std::move(reader_dfb),
+        .tensor_bindings = std::move(reader_tensors),
+        .compile_time_args = {{"has_sharding", has_sharding_cta}},
+        .runtime_arg_schema = {.runtime_arg_names = reader_arg_names},
+        .hw_config = DataMovementHardwareConfig{.role = DataMovementHardwareConfig::RoleHint::READER},
+    };
+
+    KernelSpec writer_spec{
+        .unique_id = WRITER,
+        .source = writer_source,
+        .compiler_options = {.defines = Defines(writer_defines)},
+        .dfb_bindings = std::move(writer_dfb),
+        .tensor_bindings = std::move(writer_tensors),
+        .compile_time_args = {{"has_sharding", has_sharding_cta}},
+        .runtime_arg_schema = {.runtime_arg_names = writer_arg_names},
+        .hw_config = DataMovementHardwareConfig{.role = DataMovementHardwareConfig::RoleHint::WRITER},
+    };
+
+    // fp32_dest_acc_en + per-DFB unpack modes only; the legacy ComputeConfigDescriptor set no other
+    // fields, so math_fidelity / math_approx_mode / dst_full_sync_en stay at their defaults.
+    ComputeHardwareConfig compute_hw{
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
+    };
+    KernelSpec compute_spec{
+        .unique_id = COMPUTE,
+        .source = get_kernel_file_path(compute_kernel, is_sfpu_op, is_where_op),
+        .compiler_options = {.defines = Defines(compute_kernel_defines)},
+        .dfb_bindings = std::move(compute_dfb),
+        .compile_time_args = {{"num_tiles_per_cycle", num_tiles_per_cycle}},
+        .runtime_arg_schema = {.runtime_arg_names = compute_arg_names},
+        .hw_config = std::move(compute_hw),
+    };
+
+    // ---- Per-execution run args (values paired with the schemas above). ----
+    KernelRunArgs reader_run{.kernel = READER};
+    KernelRunArgs writer_run{.kernel = WRITER};
+    KernelRunArgs compute_run{.kernel = COMPUTE};
+    auto zero_args = [](const std::vector<std::string>& names) {
+        KernelRunArgs::RuntimeArgValues m;
+        for (const auto& n : names) {
+            m.insert({n, 0u});
+        }
+        return m;
+    };
+    auto make_args = [](const std::vector<std::string>& names, const std::vector<uint32_t>& vals) {
+        KernelRunArgs::RuntimeArgValues m;
+        for (size_t i = 0; i < names.size(); ++i) {
+            m.insert({names[i], vals[i]});
+        }
+        return m;
+    };
 
     // === Inline per-core runtime arguments (previously set_or_update_runtime_arguments) ===
     {
@@ -1037,33 +1249,11 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             } else if (core_group_2.contains(core)) {
                 c_num_tiles_core = num_tiles_per_core_group_2;
             } else {
-                // Keep dummy runtime-arg sizes aligned with the active kernel variant so unused cores do not
-                // inflate the per-kernel max runtime-arg allocation.
-                if (row_major_inputs) {
-                    std::array<uint32_t, 26> dummy_reader{0};
-                    reader_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{dummy_reader.begin(), dummy_reader.end()});
-                    std::array<uint32_t, 14> dummy_writer{0};
-                    writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{dummy_writer.begin(), dummy_writer.end()});
-                } else if (b.has_value()) {
-                    std::array<uint32_t, 21> dummy_reader{0};
-                    reader_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{dummy_reader.begin(), dummy_reader.end()});
-                    std::array<uint32_t, 11> dummy_writer{0};
-                    writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{dummy_writer.begin(), dummy_writer.end()});
-                } else {
-                    std::array<uint32_t, 21> dummy_reader{0};
-                    reader_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{dummy_reader.begin(), dummy_reader.end()});
-                    std::array<uint32_t, 12> dummy_writer{0};
-                    writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{dummy_writer.begin(), dummy_writer.end()});
-                }
-                if (op_type == BinaryOpType::ISCLOSE) {
-                    std::array<uint32_t, 5> dummy_compute{0};
-                    compute_desc.runtime_args.emplace_back(
-                        core, KernelDescriptor::CoreRuntimeArgs{dummy_compute.begin(), dummy_compute.end()});
-                } else {
-                    std::array<uint32_t, 4> dummy_compute{0};
-                    compute_desc.runtime_args.emplace_back(
-                        core, KernelDescriptor::CoreRuntimeArgs{dummy_compute.begin(), dummy_compute.end()});
-                }
+                // Inactive core: zero-valued named args for every schema name. The named schema makes
+                // the legacy per-variant dummy sizing automatic (every core carries the same arg set).
+                reader_run.runtime_arg_values.push_back({core, zero_args(reader_arg_names)});
+                writer_run.runtime_arg_values.push_back({core, zero_args(writer_arg_names)});
+                compute_run.runtime_arg_values.push_back({core, zero_args(compute_arg_names)});
                 continue;
             }
 
@@ -1111,10 +1301,9 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                         b_num_tiles = b_shard_shape[0] * b_shard_shape[1];
                     }
                 }
-                std::vector<uint32_t> writer_runtime_args;
+                std::vector<uint32_t> writer_vals;
                 if (row_major_inputs) {
-                    writer_runtime_args = {
-                        c.buffer()->address(),
+                    writer_vals = {
                         common_row_width_elements,
                         c_num_tiles_core,
                         cD,
@@ -1129,20 +1318,9 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                         tiles_per_row_width,
                         writer_stride_size_bytes};
                 } else {
-                    writer_runtime_args = {
-                        c.buffer()->address(),
-                        c_start_id,
-                        c_num_tiles_core,
-                        c_current_shard_width,
-                        cD,
-                        cN,
-                        cC,
-                        cHt,
-                        cWt,
-                        cND,
-                        0u};
+                    writer_vals = {c_start_id, c_num_tiles_core, c_current_shard_width, cD, cN, cC, cHt, cWt, cND};
                 }
-                writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{writer_runtime_args.begin(), writer_runtime_args.end()});
+                writer_run.runtime_arg_values.push_back({core, make_args(writer_arg_names, writer_vals)});
 
                 auto [freq, counter] =
                     CMAKE_UNIQUE_NAMESPACE::calculate_compute_kernel_args(operation_attributes.subtile_broadcast_type, c_start_id, cHt, cWt);
@@ -1155,32 +1333,26 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                     freq = 1;
                     counter = 0;
                 }
+                std::vector<uint32_t> compute_vals;
                 if (operation_attributes.binary_op_type == BinaryOpType::ISCLOSE) {
-                    const std::array<uint32_t, 5> compute_runtime_args = {
+                    // rtol and atol are float variables
+                    compute_vals = {
                         compute_tiles,
                         freq,
                         counter,
-                        // rtol and atol are float variables
                         std::bit_cast<uint32_t>(operation_attributes.rtol),
                         std::bit_cast<uint32_t>(operation_attributes.atol)};
-                    compute_desc.runtime_args.emplace_back(
-                        core,
-                        KernelDescriptor::CoreRuntimeArgs{compute_runtime_args.begin(), compute_runtime_args.end()});
                 } else {
-                    const std::array<uint32_t, 4> compute_runtime_args = {
-                        compute_tiles, freq, counter, compute_scalar_value};
-                    compute_desc.runtime_args.emplace_back(
-                        core,
-                        KernelDescriptor::CoreRuntimeArgs{compute_runtime_args.begin(), compute_runtime_args.end()});
+                    compute_vals = {compute_tiles, freq, counter, compute_scalar_value};
                 }
+                compute_run.runtime_arg_values.push_back({core, make_args(compute_arg_names, compute_vals)});
             } else {
                 const auto scalar = *operation_attributes.scalar;
                 const auto packed_scalar = pack_scalar_runtime_arg(scalar, a.dtype(), rt_is_quant_op);
                 packed_scalar_for_reader = packed_scalar;
-                std::vector<uint32_t> writer_runtime_args;
+                std::vector<uint32_t> writer_vals;
                 if (row_major_inputs) {
-                    writer_runtime_args = {
-                        c.buffer()->address(),
+                    writer_vals = {
                         common_row_width_elements,
                         c_num_tiles_core,
                         cD,
@@ -1195,44 +1367,30 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                         tiles_per_row_width,
                         writer_stride_size_bytes};
                 } else {
-                    writer_runtime_args = {
-                        packed_scalar,
-                        c.buffer()->address(),
-                        c_start_id,
-                        c_num_tiles_core,
-                        c_current_shard_width,
-                        cD,
-                        cN,
-                        cC,
-                        cHt,
-                        cWt,
-                        cND,
-                        0u};
+                    writer_vals = {
+                        packed_scalar, c_start_id, c_num_tiles_core, c_current_shard_width, cD, cN, cC, cHt, cWt, cND};
                 }
-                writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{writer_runtime_args.begin(), writer_runtime_args.end()});
+                writer_run.runtime_arg_values.push_back({core, make_args(writer_arg_names, writer_vals)});
 
-                std::array compute_runtime_args = {compute_tiles, 0u, 0u, compute_scalar_value};
-                compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{compute_runtime_args.begin(), compute_runtime_args.end()});
+                std::vector<uint32_t> compute_vals = {compute_tiles, 0u, 0u, compute_scalar_value};
+                compute_run.runtime_arg_values.push_back({core, make_args(compute_arg_names, compute_vals)});
             }
-            std::vector<uint32_t> reader_runtime_args;
+            std::vector<uint32_t> reader_vals;
 
             if (row_major_inputs) {
-                const uint32_t b_addr = b.has_value() ? b->buffer()->address() : 0u;
                 const uint32_t b_page_size = b.has_value() ? static_cast<uint32_t>(b->buffer()->aligned_page_size())
                                                            : static_cast<uint32_t>(a.buffer()->aligned_page_size());
                 const uint32_t bD_arg = b.has_value() ? bD : 1u;
                 const uint32_t bN_arg = b.has_value() ? bN : 1u;
                 const uint32_t bC_arg = b.has_value() ? bC : 1u;
                 const uint32_t bHt_r_arg = b.has_value() ? bHt_r : 1u;
-                reader_runtime_args = {
-                    a.buffer()->address(),
+                reader_vals = {
                     c_num_tiles_core,
                     aD,
                     aN,
                     aC,
                     aHt_r,
                     aND,
-                    b_addr,
                     bD_arg,
                     bN_arg,
                     bC_arg,
@@ -1252,8 +1410,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                     reader_stride_size_bytes,
                     packed_scalar_for_reader};
             } else {
-                reader_runtime_args = {
-                    a.buffer()->address(),
+                reader_vals = {
                     c_start_id,
                     a_num_tiles,
                     c_num_tiles_core,
@@ -1268,7 +1425,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                     cHt,
                     cWt,
                     cND,
-                    b.has_value() ? b->buffer()->address() : 0u,
                     bHt * bWt * bC * bN * bD * (bND > 1),
                     bHt * bWt * bC * bN * (bD > 1),
                     bHt * bWt * bC * (bN > 1),
@@ -1277,7 +1433,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 };
             }
 
-            reader_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{reader_runtime_args.begin(), reader_runtime_args.end()});
+            reader_run.runtime_arg_values.push_back({core, make_args(reader_arg_names, reader_vals)});
 
             start_tile_id += c_num_tiles_core;
             if (row_major_inputs) {
@@ -1286,11 +1442,30 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         }
     }
 
-    // Push kernel descriptors: reader (index 0), writer (index 1), compute (index 2)
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc));
-    return desc;
+    // ===================== Assemble the ProgramSpec + ProgramRunArgs =====================
+    WorkUnitSpec work_unit{
+        .name = "binary_ng",
+        .kernels = {READER, WRITER, COMPUTE},
+        .target_nodes = all_device_cores,
+    };
+
+    ProgramSpec spec{
+        .name = "binary_ng",
+        .kernels = {std::move(reader_spec), std::move(writer_spec), std::move(compute_spec)},
+        .dataflow_buffers = std::move(dfbs),
+        .tensor_parameters = std::move(tensor_params),
+        .work_units = {std::move(work_unit)},
+    };
+
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run), std::move(writer_run), std::move(compute_run)};
+    run_args.tensor_args.insert({PARAM_A, TensorArgument{a.mesh_tensor()}});
+    if (b_present) {
+        run_args.tensor_args.insert({PARAM_B, TensorArgument{b->mesh_tensor()}});
+    }
+    run_args.tensor_args.insert({PARAM_C, TensorArgument{c.mesh_tensor()}});
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::operations::binary_ng
