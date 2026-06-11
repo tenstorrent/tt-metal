@@ -247,6 +247,7 @@ class LTXPipeline:
         width: int = 0,
         run_warmup: bool = False,
         traced: bool = False,
+        audio_only: bool = False,
         extra_transformer_variants: list[tuple[str, list[LoraSpec]]] | None = None,
     ):
         self.mesh_device = mesh_device
@@ -336,9 +337,11 @@ class LTXPipeline:
             self._register_coresident_exclusions()
             self._prime_caches()
             # Tracing (prep_run=False) requires precompiled kernels + pre-allocated trace I/O,
-            # so warmup is mandatory when traced.
+            # so warmup is mandatory when traced. audio_only skips the (video) warmup entirely:
+            # decode_audio compiles + captures its own trace lazily on the first call, so the
+            # ~10-min video stage1/upsample/stage2/gemma warmup is pure waste for audio decode.
             valid_shape = num_frames > 0 and height > 0 and width > 0
-            if (run_warmup or traced) and valid_shape:
+            if (run_warmup or traced) and valid_shape and not audio_only:
                 if traced and not run_warmup:
                     logger.info("traced=True: forcing warmup (trace capture requires precompiled kernels)")
                 self.warmup_buffers(num_frames=num_frames, height=height, width=width)
@@ -355,6 +358,8 @@ class LTXPipeline:
                 tracer.release_trace()
         if self.tt_vocoder_with_bwe is not None:
             self.tt_vocoder_with_bwe.release_trace()
+        if self.tt_audio_decoder is not None:
+            self.tt_audio_decoder.release_trace()
         self._trace_state.clear()
         self._prompt_v = StateTensor()
         self._prompt_a = StateTensor()
@@ -1555,10 +1560,12 @@ class LTXPipeline:
         # prep_run=False so capture and every replay share the post-mel-VAE free-list. Gated by the
         # test_audio_decode_girl conv1d-vs-torch oracle, which now runs under trace.)
         self.tt_vocoder_with_bwe.use_trace = self._traced
-        # The BWE generator is a second full Vocoder run eager today — its forward is ~90% host-bound
-        # like the main vocoder, so tracing it removes the bulk of the remaining decode dispatch. Same
-        # self-warming forward_traced path, so the warmup decode covers both generators identically.
-        self.tt_vocoder_with_bwe.use_trace_bwe = self._traced
+        # BWE/VAE trace are env-toggleable for A/B: at real frame counts the audio path is
+        # device-compute-bound, where trace-replay can be net-negative (mel-VAE measured 0.86x).
+        # VAE trace defaults OFF (slower); BWE trace defaults ON — the BWE generator is a second
+        # full Vocoder whose forward is ~90% host-bound, validated 5.36x bit-identical on bh 4x8.
+        self.tt_vocoder_with_bwe.use_trace_bwe = self._traced and os.environ.get("LTX_BWE_TRACE", "1") != "0"
+        self.tt_audio_decoder.use_trace = self._traced and os.environ.get("LTX_VAE_TRACE", "0") == "1"
         if isinstance(audio_parallel_config, AudioTCParallelConfig):
             cfg_desc = f"T-shard={t_factor} axis{t_axis} + channel-TP={c_factor} axis{c_axis}"
         elif audio_parallel_config is not None:
@@ -1638,6 +1645,12 @@ class LTXPipeline:
 
         logger.info("Loaded TTNN audio decoder + vocoder")
 
+    def _decode_mel(self, audio_spatial: torch.Tensor) -> torch.Tensor:
+        """Run the mel-VAE decoder, traced (capture-once/replay) when the pipeline is traced."""
+        if self.tt_audio_decoder.use_trace:
+            return self.tt_audio_decoder.forward_traced(audio_spatial)
+        return self.tt_audio_decoder(audio_spatial)
+
     def decode_audio(self, audio_latent: torch.Tensor, num_frames: int, fps: float = 24.0) -> Audio:
         """Decode an audio latent ``(1, audio_N, 128)`` to a waveform, fully on device.
 
@@ -1674,8 +1687,27 @@ class LTXPipeline:
         z = self.tt_audio_decoder.z_channels
         audio_spatial = audio_latent.reshape(1, audio_N, z, audio_latent.shape[2] // z).permute(0, 2, 1, 3).float()
 
-        mel = self.tt_audio_decoder(audio_spatial)
-        waveform = self.tt_vocoder_with_bwe(mel).squeeze(0).float()
+        # Optional stage-wall split (LTX_TIME_STAGES=1): mel-VAE vs vocoder+BWE, to find
+        # the dominant decode stage. Syncs are host-wall, so this is a coarse stage timer,
+        # not a per-op device profile.
+        _time_stages = os.environ.get("LTX_TIME_STAGES") in ("1", "true", "True")
+        if _time_stages:
+            import time as _t
+
+            ttnn.synchronize_device(self.mesh_device)
+            _t0 = _t.perf_counter()
+            mel = self._decode_mel(audio_spatial)
+            ttnn.synchronize_device(self.mesh_device)
+            _t_vae = _t.perf_counter()
+            waveform = self.tt_vocoder_with_bwe(mel).squeeze(0).float()
+            ttnn.synchronize_device(self.mesh_device)
+            _t_voc = _t.perf_counter()
+            logger.info(
+                f"STAGE_SPLIT mel_vae={(_t_vae - _t0) * 1000:.1f}ms " f"vocoder+bwe={(_t_voc - _t_vae) * 1000:.1f}ms"
+            )
+        else:
+            mel = self._decode_mel(audio_spatial)
+            waveform = self.tt_vocoder_with_bwe(mel).squeeze(0).float()
         sampling_rate = self.tt_vocoder_with_bwe.output_sampling_rate
 
         # Trim to video duration.

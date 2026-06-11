@@ -40,8 +40,8 @@ def _flush_after(cls, mesh):
 
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, device_params",
-    [[(2, 4), (2, 4), line_params]],
-    ids=["bh_2x4sp1tp0"],
+    [[(2, 4), (2, 4), line_params], [(4, 8), (4, 8), line_params]],
+    ids=["bh_2x4sp1tp0", "bh_4x8sp1tp0"],
     indirect=["mesh_device", "device_params"],
 )
 def test_prof_girl_decode(mesh_device, mesh_shape, device_params):
@@ -62,7 +62,7 @@ def test_prof_girl_decode(mesh_device, mesh_shape, device_params):
         sp_axis=1,
         tp_axis=0,
         num_links=2,
-        dynamic_load=True,
+        dynamic_load=(mesh_shape != (4, 8)),
         topology=ttnn.Topology.Linear,
         is_fsdp=False,
         run_warmup=False,
