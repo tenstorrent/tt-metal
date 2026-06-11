@@ -204,30 +204,77 @@ for p in range(max_seq_len):
 
 #### The hot loop
 
-After the structural refactor, the steady-state per-step path is just
-four H2D writes plus one trace execute:
+After the structural refactor, the steady-state per-step path is:
 
 ```python
-# Per-step inputs.
-self._write_input_ids(next_token)       # H2D into persistent input-id buf
-self._write_position_id(pos)            # H2D into persistent pos-id buf
-self._write_cache_pos(pos)              # H2D into self_attn._persistent_pos_tt
-self._write_self_mask(pos)              # H2D into persistent self-mask buf
-
-# Replay the captured trace. All inputs read from the persistent buffers;
-# all outputs land in self._decode_trace_output_tt.
+# Replay the captured trace (non-blocking: host returns immediately).
 ttnn.execute_trace(self.device, self._decode_trace_id,
-                   cq_id=0, blocking=True)
+                   cq_id=0, blocking=False)
+# Wait for the trace + any previously queued H2D to complete.
+ttnn.synchronize_device(self.device)
 
-# Read logits and argmax on host.
-logits = ttnn.to_torch(self._decode_trace_output_tt).to(torch.float32)
-next_token = int(torch.argmax(logits).item())
+# Read next token (4 bytes D2H).
+next_token = int(ttnn.to_torch(
+    ttnn.get_device_tensors(self._decode_trace_output_tt)[0]
+)[0, 0, 0, 0].item())
+
+# Stage next step's inputs (execute after trace completes on device).
+self._write_input_ids(next_token)   # H2D into persistent input-id buf
+self._write_position_id(pos + 1)    # H2D into persistent pos-id buf
+self._write_cache_pos(pos + 1)      # H2D into self_attn._persistent_pos_tt
 ```
+
+Use `blocking=False` + `synchronize_device` rather than `blocking=True`.
+Both wait the same total time, but `blocking=False` lets you queue the
+next step's H2D writes to the device command queue without stalling the
+host — those H2D ops execute on device after the trace, so the device
+idle gap between trace completion and the next trace start is only the
+4-byte D2H read.
 
 `ttnn.copy_host_to_device_tensor(host_tile, dst_persistent_tt)` is the
 key primitive — it writes into the existing device buffer without
 allocating a new one, so the captured trace continues to read from the
 right address.
+
+#### On-device RoPE tables (eliminate per-step cos/sin H2D)
+
+If the model uses RoPE, the per-step H2D for cos/sin rows (~1–3 KB each)
+is the largest recurring H2D cost. Eliminate it by precomputing the full
+`[max_seq, qkv_pad]` table once at init and indexing it on-device:
+
+```python
+# At init: build and upload full tables to device DRAM.
+def _build_rope_tables(self, max_seq):
+    inv_freq = 1.0 / (theta ** (torch.arange(0, head_dim, 2).float() / head_dim))
+    pos = torch.arange(max_seq).float()
+    freqs = pos.unsqueeze(1) * inv_freq.unsqueeze(0)
+    emb = torch.cat([freqs, freqs], dim=-1)  # [max_seq, head_dim]
+    # Pack into [max_seq, qkv_pad] with any fused prescaling applied.
+    cos_tbl = pack_to_qkv_width(emb.cos(), qkv_pad, prescale)
+    sin_tbl = pack_to_qkv_width(emb.sin(), qkv_pad, prescale)
+    self._cos_tbl = ttnn.from_torch(cos_tbl.bfloat16(),
+        layout=ttnn.ROW_MAJOR_LAYOUT, device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device))
+    self._sin_tbl = ttnn.from_torch(sin_tbl.bfloat16(), ...)
+
+# Per-step decode (inside the traced body):
+# _pos_dev is a persistent [1,1,1,1] uint32 written via H2D each step.
+cos_raw = ttnn.embedding(self._pos_dev, self._cos_tbl,
+    layout=ttnn.TILE_LAYOUT,
+    memory_config=ttnn.DRAM_MEMORY_CONFIG)
+cos_row = ttnn.to_memory_config(ttnn.unsqueeze_to_4D(cos_raw), qkv_out_mc)
+ttnn.deallocate(cos_raw)
+# ... same for sin
+```
+
+The tables are load-once; the only per-step H2D is a single 4-byte
+position scalar, replacing ~3 KB × 2 per step. At 180 decode steps and
+~3 KB per table row this saves ~1 MB of PCIe traffic and ~0.2 ms/step.
+Measured on dots.ocr TP=4 QB: 6.92 → 6.7 ms/tok.
+
+The `_pos_dev` persistent buffer must be `ROW_MAJOR_LAYOUT` and `uint32`
+to match `ttnn.embedding`'s index input requirements.
 
 #### KV cache reset between generate() calls
 
@@ -292,16 +339,17 @@ def _generate_traced(self, tokens, max_total, eos_token_id, ...):
         self._decode_trace_id = trace_id
         self._decode_trace_output_tt = logits_tt
 
-    # Steady state: write inputs, replay, argmax.
+    # Steady state: replay (non-blocking), sync, argmax, stage next inputs.
     for pos in range(1, max_total):
-        self._write_input_ids(tokens[-1]); self._write_position_id(pos)
-        self._write_cache_pos(pos); self._write_self_mask(pos)
         ttnn.execute_trace(self.device, self._decode_trace_id,
-                           cq_id=0, blocking=True)
+                           cq_id=0, blocking=False)
+        ttnn.synchronize_device(self.device)
         logits = ttnn.to_torch(self._decode_trace_output_tt).to(torch.float32)
         next_token = int(torch.argmax(logits).item())
         tokens.append(next_token)
         if next_token == eos_token_id: break
+        self._write_input_ids(next_token); self._write_position_id(pos + 1)
+        self._write_cache_pos(pos + 1); self._write_self_mask(pos + 1)
 ```
 
 Open the device with `trace_region_size=256_000_000` (or larger if the
