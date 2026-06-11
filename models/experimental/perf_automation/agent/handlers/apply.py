@@ -28,14 +28,16 @@ def apply(ctx) -> str:
 
     runner = ctx.deps.get("edit_runner") or _default_runner()
     reported, summary, model, usage, err = [], "", "?", None, None
+    prompt_text, response_text = None, None
     try:
         result = runner(lever=lever, section=section, model_files=ctx.model_files(), spec=ctx.state.get("edit_spec"))
         reported = result.get("files") or []
         summary = result.get("summary", "")
         model, usage = result.get("model", "?"), result.get("usage")
+        prompt_text, response_text = result.get("prompt"), result.get("response")
     except Exception as exc:  # editor errored — but its edits may already be on disk
         err = str(exc)[-500:]
-    ctx.record_agent_call(states.APPLY, "edit", model, usage)
+    ctx.record_agent_call(states.APPLY, "edit", model, usage, prompt=prompt_text, response=response_text)
 
     # ground truth: what actually changed on disk since the clean checkpoint,
     # SCOPED to the model dir so unrelated repo edits aren't mistaken for the edit

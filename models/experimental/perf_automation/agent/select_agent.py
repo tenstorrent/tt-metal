@@ -106,6 +106,8 @@ def make_select_runner(
         result = _validate_choice(_extract_json_object("\n".join(chunks)), candidates, tried)
         result["model"] = model
         result["usage"] = usage.get("u")
+        result["prompt"] = prompt
+        result["response"] = "\n".join(chunks)
         return result
 
     return runner

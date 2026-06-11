@@ -84,3 +84,23 @@ def test_select_falls_back_on_runner_error(tmp_path):
     ctx.deps["select_runner"] = boom
     select(ctx)
     assert ctx.state["selected_lever"] == "a"
+
+
+def test_select_persists_prompt_and_response(tmp_path):
+    ctx = _ctx(tmp_path, ["a", "b"], tried=[])
+    ctx.deps["select_runner"] = lambda **k: {
+        "lever": "a",
+        "reasoning": "r",
+        "model": "m",
+        "usage": {"cost_usd": 0.0},
+        "prompt": "PROMPT TEXT",
+        "response": "RESPONSE TEXT",
+    }
+    select(ctx)
+    import json as _j
+
+    rows = [_j.loads(l) for l in (ctx.run.dir / "agent_calls.jsonl").read_text().splitlines()]
+    assert rows[-1]["prompt_file"].startswith("prompts/")
+    assert "prompt_sha" in rows[-1]
+    body = (ctx.run.dir / rows[-1]["prompt_file"]).read_text()
+    assert "PROMPT TEXT" in body and "RESPONSE TEXT" in body

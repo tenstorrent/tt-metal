@@ -108,6 +108,8 @@ def make_plan_runner(
         spec = _validate_spec(_extract_json_object("\n".join(chunks)))
         spec["model"] = model
         spec["usage"] = usage.get("u")
+        spec["prompt"] = prompt
+        spec["response"] = "\n".join(chunks)
         return spec
 
     return runner

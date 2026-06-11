@@ -86,10 +86,37 @@ class LoopContext:
         return [root / rel for rel in self.manifest.get("pathmap", {}).get("model_files", [])]
 
     # --- telemetry (PLAN section 10.1) --------------------------------------
-    def record_agent_call(self, stage: str, role: str, model: str, usage: dict | None) -> None:
-        """One row per query(); accumulate cost+tokens into state (budget gate input)."""
+    def record_agent_call(
+        self,
+        stage: str,
+        role: str,
+        model: str,
+        usage: dict | None,
+        prompt: str | None = None,
+        response: str | None = None,
+    ) -> None:
+        """One row per query(); accumulate cost+tokens into state (budget gate input).
+
+        If prompt/response are given, persist the full text to runs/<id>/prompts/
+        (so agent_calls.jsonl stays lean) and record a pointer + prompt sha — for
+        auditing/summarizing the lead's prompts later.
+        """
+        import hashlib
+
         usage = usage or {}
         row = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "stage": stage, "role": role, "model": model, **usage}
+        if prompt is not None or response is not None:
+            pdir = self.run.dir / "prompts"
+            pdir.mkdir(exist_ok=True)
+            seq = len(list(pdir.glob("*.txt")))
+            fname = f"{seq:03d}_{stage}.txt"
+            (pdir / fname).write_text(
+                f"=== PROMPT ({role} / {model}) ===\n{prompt or ''}\n\n=== RESPONSE ===\n{response or ''}\n",
+                encoding="utf-8",
+            )
+            row["prompt_file"] = f"prompts/{fname}"
+            if prompt:
+                row["prompt_sha"] = hashlib.sha256(prompt.encode()).hexdigest()[:12]
         with open(self._agent_calls, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(row, sort_keys=True) + "\n")
         self.state["cost_usd"] = round(self.state.get("cost_usd", 0.0) + (usage.get("cost_usd") or 0.0), 6)

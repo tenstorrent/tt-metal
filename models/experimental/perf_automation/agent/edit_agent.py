@@ -155,6 +155,8 @@ def make_edit_runner(
         result = _validate_edit_result(_extract_json_object("\n".join(chunks)))
         result["model"] = model
         result["usage"] = usage.get("u")
+        result["prompt"] = prompt
+        result["response"] = "\n".join(chunks)
         return result
 
     return runner

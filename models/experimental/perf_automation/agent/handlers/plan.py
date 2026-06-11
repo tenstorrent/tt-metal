@@ -35,7 +35,14 @@ def plan(ctx) -> str:
         ctx.log_event(states.PLAN, "warn", f"plan failed; APPLY will improvise: {exc}")
         return states.APPLY
 
-    ctx.record_agent_call(states.PLAN, "plan", spec.get("model", "?"), spec.get("usage"))
+    ctx.record_agent_call(
+        states.PLAN,
+        "plan",
+        spec.get("model", "?"),
+        spec.get("usage"),
+        prompt=spec.get("prompt"),
+        response=spec.get("response"),
+    )
     ctx.state["edit_spec"] = {"file": spec.get("file"), "location": spec.get("location"), "change": spec.get("change")}
 
     if str(spec.get("change", "")).strip().upper().startswith("NOOP"):

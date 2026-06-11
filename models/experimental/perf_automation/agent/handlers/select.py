@@ -33,6 +33,7 @@ def select(ctx) -> str:
     runner = ctx.deps.get("select_runner") or _default_runner()
 
     chosen, reasoning, model, usage = untried[0], "fallback: first untried", "?", None
+    prompt_text, response_text = None, None
     try:
         result = runner(brief=brief, candidates=untried, tried=sorted(tried))
         if result.get("lever") in untried:
@@ -40,6 +41,7 @@ def select(ctx) -> str:
             reasoning = result.get("reasoning", "")
             model = result.get("model", "?")
             usage = result.get("usage")
+            prompt_text, response_text = result.get("prompt"), result.get("response")
         else:
             ctx.log_event(states.SELECT, "warn", f"invalid pick {result.get('lever')!r}; fallback {untried[0]}")
     except Exception as exc:  # graceful fallback (PLAN 8.3)
@@ -47,7 +49,7 @@ def select(ctx) -> str:
 
     ctx.state["selected_lever"] = chosen
     ctx.state["select_reasoning"] = reasoning
-    ctx.record_agent_call(states.SELECT, "select", model, usage)
+    ctx.record_agent_call(states.SELECT, "select", model, usage, prompt=prompt_text, response=response_text)
     ctx.log_event(states.SELECT, "info", f"lever={chosen}")
     return states.PLAN
 
