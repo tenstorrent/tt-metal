@@ -278,6 +278,9 @@ class SFTTrainer:
                 data_iter = iter(self.train_dataloader)
                 return next(data_iter)
 
+        # Compilation finishes after the first iteration of THIS run; track the starting step so the
+        # marker fires on resume too, not only when self.step happens to equal 1.
+        start_step = self.step
         bar = tqdm(range(self.step, cfg.max_steps), desc="SFTTrainer", disable=cfg.disable_progress_bar)
         for _ in bar:
             # self.step is 0-based so external lr_schedule callables (e.g.
@@ -352,7 +355,7 @@ class SFTTrainer:
                     cb.on_save(self, self.step, save_path)
 
             profiler_marker(None, f"iteration_{self.step}", dump_results=True)
-            if self.step == 1:
+            if self.step == start_step + 1:
                 profiler_marker(None, "compilation_finished")
 
         for cb in list(self._callbacks):
