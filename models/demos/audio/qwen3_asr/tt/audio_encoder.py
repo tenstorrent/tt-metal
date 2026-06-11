@@ -175,10 +175,12 @@ def _layer(x, lp, device):
         q, k, v, is_causal=False, scale=HEAD_DIM ** -0.5,
     )
     ttnn.deallocate(q); ttnn.deallocate(k); ttnn.deallocate(v)
-    attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.L1_MEMORY_CONFIG)
-    attn = ttnn.linear(attn, lp["o_w"], bias=lp["o_b"], core_grid=core, compute_kernel_config=HIFI4)
-    x = ttnn.add(residual, attn)
-    ttnn.deallocate(attn); ttnn.deallocate(residual)
+    concat = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.L1_MEMORY_CONFIG)
+    ttnn.deallocate(attn)                              # free the SDPA output (don't rely on GC)
+    o = ttnn.linear(concat, lp["o_w"], bias=lp["o_b"], core_grid=core, compute_kernel_config=HIFI4)
+    ttnn.deallocate(concat)
+    x = ttnn.add(residual, o)
+    ttnn.deallocate(o); ttnn.deallocate(residual)
 
     residual = x
     h = ttnn.layer_norm(x, weight=lp["ln2_w"], bias=lp["ln2_b"], epsilon=LN_EPS, compute_kernel_config=HIFI4)
