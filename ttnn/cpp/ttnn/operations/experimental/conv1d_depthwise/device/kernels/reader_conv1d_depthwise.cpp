@@ -127,15 +127,15 @@ void kernel_main() {
     constexpr bool coalesce = (stride == 1 && B == 1);
 
     if constexpr (coalesce) {
-        constexpr uint32_t union_sticks = BLOCK_T + K - 1;
+        constexpr uint32_t union_sticks = (BLOCK_T - 1) * stride + K;
         const uint32_t scratch_ptr = get_write_ptr(scratch_cb_id);
         for (uint32_t blk = 0; blk < num_blocks; ++blk) {
-            const uint32_t base_row = row_start + blk * BLOCK_T;
+            const uint32_t base_in = (row_start + blk * BLOCK_T) * stride;
             // Read the union once. Pages past T_pad (tail of the last partial block) stay zero;
             // their output rows are beyond num_rows and the writer discards them.
             zero_region_u32(scratch_ptr, union_sticks * padded_stick_bytes);
             for (uint32_t u = 0; u < union_sticks; ++u) {
-                const uint32_t in_page = base_row + u;
+                const uint32_t in_page = base_in + u;
                 if (in_page >= T_pad) {
                     break;
                 }
@@ -143,11 +143,22 @@ void kernel_main() {
             }
             noc_async_read_barrier();
 
-            // Each tap window = union sticks [j .. j+BLOCK_T-1], one contiguous L1->L1 copy.
             for (uint32_t j = 0; j < K; ++j) {
                 cb_reserve_back(act_cb_id, block_num_tiles);
                 const uint32_t wptr = get_write_ptr(act_cb_id);
-                noc_async_read(get_noc_addr(scratch_ptr + j * padded_stick_bytes), wptr, BLOCK_T * padded_stick_bytes);
+                if constexpr (stride == 1) {
+                    // Tap window = union sticks [j .. j+BLOCK_T-1] — one contiguous L1->L1 copy.
+                    noc_async_read(
+                        get_noc_addr(scratch_ptr + j * padded_stick_bytes), wptr, BLOCK_T * padded_stick_bytes);
+                } else {
+                    // Strided gather: output row i reads union stick (i*stride + j), from L1.
+                    for (uint32_t i = 0; i < BLOCK_T; ++i) {
+                        noc_async_read(
+                            get_noc_addr(scratch_ptr + (i * stride + j) * padded_stick_bytes),
+                            wptr + i * padded_stick_bytes,
+                            padded_stick_bytes);
+                    }
+                }
                 noc_async_read_barrier();
                 cb_push_back(act_cb_id, block_num_tiles);
             }
