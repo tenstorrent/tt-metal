@@ -18,14 +18,22 @@ TTNN mapping (cf. reference_impl models/tt_transformers/tt/attention.py):
 - explicit fp32 attention core: ``ttnn.matmul`` QK^T -> scale -> causal
   mask add -> ``ttnn.softmax`` -> ``ttnn.matmul`` PV.
 
-Why not ``ttnn.transformer.scaled_dot_product_attention``: the dots.ocr
-text layer-0 attention logits reach ±3122 (std 664 — Qwen2 attention-sink
-behaviour), so bf16 rounding of q/k perturbs logits by O(10) and scrambles
-the softmax; the SDPA kernel is bf16/bf8b-only and measures PCC ~0.92 on
-this block (per-stage isolation; all surrounding stages 0.9999+). The
-whole attention path therefore runs fp32 weights + fp32 activations with
-HiFi4 + fp32 accumulation. Tiny per-chip core (3 heads, hd 128) so the
-fp32 cost is negligible at this phase.
+Prefill attention is dual-path, gated on seq:
+
+- seq ≤ 1024: explicit fp32 QK^T + softmax + PV (fp32 mandatory — at short
+  seq the ±3122 attention-sink logit dominates a sparse softmax distribution;
+  bf16 SDPA measures PCC ~0.92 at native scale, ~0.979 with pre-scaled Q —
+  too coarse when the sink row is 1 of 32).
+- seq > 1024: bf16 flash SDPA (``ttnn.transformer.scaled_dot_product_attention``,
+  is_causal=True, native GQA). At production document seq (~2912), the sink
+  row is 1/2912 of the distribution; the softmax is dense enough that bf16
+  precision gives PCC ~0.979 (accepted). Eliminates the O(S²) fp32 scores
+  matrix (~400 MB/layer × 28 layers = ~11 GB writes) in favour of O(S·hd)
+  flash attention traffic (~1 GB total), saving ~140 ms on prefill.
+
+The DECODE path uses ``scaled_dot_product_attention_decode`` with Q pre-scaled
+by 1/sqrt(head_dim) (folded into the fused-rope cos/sin rows on host) so the
+bf16 SDPA kernel sees ±276-magnitude logits instead of ±3122.
 
 Parallelism plan (ARCHITECTURE.md / inventory notes): placement=shard 4-way
 — 3 Q heads per chip; kv_replication=2, i.e. each of the 2 KV heads is
@@ -381,6 +389,26 @@ class TtTextAttention(LightweightModule):
             k_chunk_size=128,
             exp_approx_mode=False,
         )
+        # Prefill SDPA (long-seq path, seq > 1024): bf16 flash attention with
+        # native GQA (hpd Q heads / 1 KV head per chip). Eliminates the O(S²)
+        # fp32 scores matrix (~400 MB/layer at P32≈2912, 28 layers = ~11 GB
+        # write traffic) in favour of O(S·hd) flash attention reads. Accepts
+        # PCC ~0.979 (the Qwen2 attention-sink ±3122 logit is 1/S of the
+        # prefill at real document seq; the sparse-softmax hazard that dominates
+        # at short seq is diluted). HiFi4 + fp32_dest_acc for best bf16 quality.
+        self.sdpa_prefill_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(grid.x, grid.y),
+            q_chunk_size=256,
+            k_chunk_size=256,
+            exp_approx_mode=False,
+        )
+        self.sdpa_prefill_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
 
     # ------------------------------------------------------------------
     # Host-side input preparation (rope tables stay on host —
@@ -408,7 +436,14 @@ class TtTextAttention(LightweightModule):
         return _to_dev(cos.squeeze(0)), _to_dev(sin.squeeze(0))
 
     def prepare_causal_mask(self, seq: int):
-        """Replicated fp32 additive causal mask [1, heads_per_device, seq, seq]."""
+        """Replicated fp32 additive causal mask [1, heads_per_device, seq, seq].
+
+        Returns None for seq > 1024: the long-seq path uses bf16 flash SDPA
+        with is_causal=True and never reads the mask, so skip the ~400 MB
+        allocation at production document seq lengths.
+        """
+        if seq > 1024:
+            return None
         mask = torch.triu(torch.full((seq, seq), torch.finfo(torch.float32).min / 2), diagonal=1)
         mask = mask.reshape(1, 1, seq, seq).expand(1, self.heads_per_device, seq, seq).contiguous()
         return ttnn.from_torch(
@@ -588,38 +623,64 @@ class TtTextAttention(LightweightModule):
             ttnn.deallocate(k_bf)
             ttnn.deallocate(v_bf)
 
-        # Expand the single KV head to hpd copies for the plain-MHA fp32 core.
-        k = ttnn.concat([k1] * self.heads_per_device, dim=1)
-        v = ttnn.concat([v1] * self.heads_per_device, dim=1)
-        ttnn.deallocate(k1)
-        ttnn.deallocate(v1)
-
-        # Explicit fp32 causal attention (bf16 SDPA kernel scrambles the
-        # ±3000-magnitude Qwen2 layer-0 logits — see module docstring).
-        k_t = ttnn.transpose(k, -2, -1)
-        ttnn.deallocate(k)
-        scores = ttnn.matmul(
-            q,
-            k_t,
-            dtype=ttnn.float32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config,
-        )
-        ttnn.deallocate(q)
-        ttnn.deallocate(k_t)
-        scores = ttnn.multiply(scores, self.scale)
-        scores = ttnn.add(scores, causal_mask)
-        probs = ttnn.softmax(scores, dim=-1, numeric_stable=True)
-        ttnn.deallocate(scores)
-        attn = ttnn.matmul(
-            probs,
-            v,
-            dtype=ttnn.float32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config,
-        )
-        ttnn.deallocate(probs)
-        ttnn.deallocate(v)
+        seq = x_11SH.shape[2]
+        if seq > 1024:
+            # bf16 flash SDPA (long-seq path): eliminates the O(S²) fp32 scores
+            # matrix (~400 MB/layer at P32≈2912). SDPA handles GQA natively
+            # (hpd Q heads / 1 KV head per chip), so no concat expansion needed.
+            # Accepts PCC ~0.979: the ±3122 attention-sink logit is 1/S of the
+            # prefill distribution at document seq; the sparse-softmax hazard
+            # dominates only at short seq. is_causal=True replaces the mask.
+            q_bf = ttnn.typecast(q, ttnn.bfloat16)
+            ttnn.deallocate(q)
+            k_bf = ttnn.typecast(k1, ttnn.bfloat16)
+            ttnn.deallocate(k1)
+            v_bf = ttnn.typecast(v1, ttnn.bfloat16)
+            ttnn.deallocate(v1)
+            attn = ttnn.transformer.scaled_dot_product_attention(
+                q_bf,
+                k_bf,
+                v_bf,
+                is_causal=True,
+                scale=self.scale,
+                program_config=self.sdpa_prefill_program_config,
+                compute_kernel_config=self.sdpa_prefill_compute_kernel_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(q_bf)
+            ttnn.deallocate(k_bf)
+            ttnn.deallocate(v_bf)
+        else:
+            # fp32 explicit path (short seq ≤ 1024): the ±3122 attention-sink
+            # logits dominate a small softmax distribution; fp32 is required.
+            k = ttnn.concat([k1] * self.heads_per_device, dim=1)
+            v = ttnn.concat([v1] * self.heads_per_device, dim=1)
+            ttnn.deallocate(k1)
+            ttnn.deallocate(v1)
+            k_t = ttnn.transpose(k, -2, -1)
+            ttnn.deallocate(k)
+            scores = ttnn.matmul(
+                q,
+                k_t,
+                dtype=ttnn.float32,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config,
+            )
+            ttnn.deallocate(q)
+            ttnn.deallocate(k_t)
+            scores = ttnn.multiply(scores, self.scale)
+            scores = ttnn.add(scores, causal_mask)
+            probs = ttnn.softmax(scores, dim=-1, numeric_stable=True)
+            ttnn.deallocate(scores)
+            attn = ttnn.matmul(
+                probs,
+                v,
+                dtype=ttnn.float32,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config,
+            )
+            ttnn.deallocate(probs)
+            ttnn.deallocate(v)
 
         attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 

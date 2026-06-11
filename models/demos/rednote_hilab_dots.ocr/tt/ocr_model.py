@@ -315,7 +315,7 @@ class TtOCRModel(LightweightModule):
         ttnn.deallocate(h)
         tok = self._lm_head_argmax(normed, prompt_len - 1)
         ttnn.deallocate(normed)
-        for t in (*rot_mats, causal_mask):
+        for t in (*rot_mats, *([] if causal_mask is None else [causal_mask])):
             ttnn.deallocate(t)
         return tok
 
