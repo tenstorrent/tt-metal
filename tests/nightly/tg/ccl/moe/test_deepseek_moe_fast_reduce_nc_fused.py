@@ -8,8 +8,12 @@ replaces the four-op chain:
     permute(scores, (3,1,0,2)) → to_layout(TILE) → mul(activation, scores)
     → deepseek_moe_fast_reduce_nc
 
-Runs on a single Tenstorrent device. Emulates the 16×8 mesh (128 devices)
-by 128 sequential iterations (same pattern as test_deepseek_moe_fast_reduce_nc_single.py).
+The op is a purely local per-device reduction (no inter-chip fabric), so the mesh
+is only used to shard the inputs and run the kernel independently on every device;
+the per-(token, k) on-axis gating is emulated on host against the linearized
+expert→device mapping. Two mesh shapes are covered:
+    - (4, 8): the Wormhole Galaxy 16×8-style grid (32 devices).
+    - (1, 8): a Blackhole 1x8 mesh (8 devices) — gated to Blackhole via skipif.
 """
 
 import random
@@ -20,8 +24,13 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, is_blackhole
 from models.perf.benchmarking_utils import BenchmarkProfiler
+
+# The (1, 8) parametrization targets a Blackhole 1x8 machine; skip it elsewhere.
+# (The (4, 8) Galaxy grid auto-skips on an 8-chip box via the mesh_device fixture's
+# "more devices than available" guard, so it needs no explicit arch gate.)
+_blackhole_1x8_only = pytest.mark.skipif(not is_blackhole(), reason="1x8 mesh case targets a Blackhole 1x8 machine")
 
 
 def _bf16_to_float(bf16):
@@ -171,6 +180,7 @@ PCC_THRESHOLD = 0.999
     "mesh_shape, mesh_device",
     [
         pytest.param((4, 8), (4, 8), id="16x8_grid"),
+        pytest.param((1, 8), (1, 8), id="1x8_grid_bh", marks=_blackhole_1x8_only),
     ],
     indirect=["mesh_device"],
 )
@@ -484,6 +494,7 @@ def _build_perf_input_set(
     "mesh_shape, mesh_device",
     [
         pytest.param((4, 8), (4, 8), id="16x8_grid"),
+        pytest.param((1, 8), (1, 8), id="1x8_grid_bh", marks=_blackhole_1x8_only),
     ],
     indirect=["mesh_device"],
 )
