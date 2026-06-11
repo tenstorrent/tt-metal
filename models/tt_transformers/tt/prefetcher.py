@@ -310,6 +310,10 @@ class Prefetcher(LightweightModule):
         self.legal_receiver_cores: List[int] = self.pf_config["legal_receiver_cores"]
         self.mesh_device: ttnn.MeshDevice = mesh_device
         self.enable_performance_mode: bool = True
+        # The worker-core backend co-locates surrounding (non-GCB-matmul) ops — SDPA, create/concat
+        # heads, lm_head, rope — on its reserved worker grid so the activation stays sharded there.
+        # The DRAM-core backend sets this False (those ops use the model's default placement).
+        self.colocate_ops: bool = True
         self.global_cb: Optional[ttnn.GlobalCircularBuffer] = None
         self.worker_sub_device_id: Optional[ttnn.SubDeviceId] = None
         self.num_tensors: int = num_tensors

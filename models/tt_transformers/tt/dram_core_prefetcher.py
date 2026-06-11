@@ -197,6 +197,12 @@ class DramCorePrefetcher(LightweightModule):
         # decode traces and queue it explicitly before each trace capture/replay.
         self.requires_external_trace_run: bool = True
         self.skip_run_in_forward: bool = False
+        # Surrounding (non-GCB-matmul) ops — SDPA, create/concat heads, lm_head, rope — are NOT
+        # co-located on the prefetcher's cores: the DRISC senders are off the worker grid and the
+        # receiver ring is a small rectangle, so those ops use the model's default placement (the
+        # same the no-prefetcher path uses). The worker-core backend sets this True and reserves
+        # its worker grid for them. Config functions branch on this instead of the backend type.
+        self.colocate_ops: bool = False
 
         logger.info(
             f"[DramCorePrefetcher] model={self.model_name} banks={self.num_senders} recv/bank={self.num_receiver_cores} ring={self.ring_size}"
