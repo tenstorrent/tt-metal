@@ -81,6 +81,21 @@ def _fp32_compute_cfg_hifi4():
     )
 
 
+def _grid_cores(device):
+    """Number of compute cores on ``device``, or None if it can't be introspected.
+
+    Used by the batch-32 grid guard: the recurrent matmuls use
+    MatmulMultiCoreReuseProgramConfig, which pins one core per (batch_unit x M-block)
+    and corrupts results once that product exceeds the grid (see the guards in
+    recurrent_gated_delta_rule_ttnn_fp32 and the per-step helpers).
+    """
+    try:
+        grid = device.compute_with_storage_grid_size()
+        return int(grid.x) * int(grid.y) if hasattr(grid, "x") else int(grid[0]) * int(grid[1])
+    except Exception:
+        return None
+
+
 def _fused_decay_and_write_fp32(
     h,
     k_t,
@@ -119,10 +134,14 @@ def _fused_decay_and_write_fp32(
     )
 
     if outer_product_prog_cfg is None and device is not None:
-        try:
-            outer_product_prog_cfg = _recurrent_outer_product_program_config(device, K, V)
-        except Exception:
-            pass
+        # Grid guard: only rebuild the pinned config when the batch demand fits the grid;
+        # above it, leave None so the outer-product matmul auto-tiles the batch (correct).
+        _gc = _grid_cores(device)
+        if _gc is not None and B * H * ((K + 31) // 32) <= _gc:
+            try:
+                outer_product_prog_cfg = _recurrent_outer_product_program_config(device, K, V)
+            except Exception:
+                pass
 
     if matmul_compute_cfg is None:
         matmul_compute_cfg = _fp32_compute_cfg_hifi4()
@@ -206,10 +225,13 @@ def _fused_decay_and_write_fp32_tiled(
     d_row = delta_row
 
     if outer_product_prog_cfg is None and device is not None:
-        try:
-            outer_product_prog_cfg = _recurrent_outer_product_program_config(device, K, V)
-        except Exception:
-            pass
+        # Grid guard: only rebuild when the batch demand fits the grid (else stay None -> auto).
+        _gc = _grid_cores(device)
+        if _gc is not None and B * H * ((K + 31) // 32) <= _gc:
+            try:
+                outer_product_prog_cfg = _recurrent_outer_product_program_config(device, K, V)
+            except Exception:
+                pass
 
     if matmul_compute_cfg is None:
         matmul_compute_cfg = _fp32_compute_cfg_hifi4()
@@ -305,10 +327,13 @@ def _recurrent_delta_rule_step_fp32(
     if matmul_compute_cfg is None:
         matmul_compute_cfg = _fp32_compute_cfg_hifi4()
     if read_query_prog_cfg is None and device is not None:
-        try:
-            read_query_prog_cfg = _recurrent_read_query_program_config(device, K, V)
-        except Exception:
-            pass
+        # Grid guard: only rebuild when the read/readout batch demand (B*H, M_tiles=1) fits the grid.
+        _gc = _grid_cores(device)
+        if _gc is not None and B * H <= _gc:
+            try:
+                read_query_prog_cfg = _recurrent_read_query_program_config(device, K, V)
+            except Exception:
+                pass
 
     k_row = ttnn.to_layout(
         ttnn.reshape(k_t, [B, H, 1, K], memory_config=ttnn.L1_MEMORY_CONFIG),
@@ -400,10 +425,13 @@ def _recurrent_delta_rule_step_fp32_tiled(
     if matmul_compute_cfg is None:
         matmul_compute_cfg = _fp32_compute_cfg_hifi4()
     if read_query_prog_cfg is None and device is not None:
-        try:
-            read_query_prog_cfg = _recurrent_read_query_program_config(device, K, V)
-        except Exception:
-            pass
+        # Grid guard: only rebuild when the read/readout batch demand (B*H, M_tiles=1) fits the grid.
+        _gc = _grid_cores(device)
+        if _gc is not None and B * H <= _gc:
+            try:
+                read_query_prog_cfg = _recurrent_read_query_program_config(device, K, V)
+            except Exception:
+                pass
 
     # Fuse E: when k_t/v_t arrive bf16 (QWEN36_DN_RECUR_BF16_IN), the read matmul
     # is mixed bf16(k) x fp32(h).  Force dtype=fp32 on the output so the state
@@ -587,6 +615,25 @@ def recurrent_gated_delta_rule_ttnn_fp32(
             outer_product_prog_cfg = _recurrent_outer_product_program_config(device, K, V)
         except Exception:
             pass
+        # Grid guard (batch-32 fix): the recurrent matmuls are batched over [B, H] and use
+        # MatmulMultiCoreReuseProgramConfig, which pins one core per (batch_unit x M-block) and
+        # returns WRONG results once that product exceeds the compute grid. The read/readout
+        # matmuls have M_tiles=1 (demand B*H); the outer product runs per_core_M=1 -> M_tiles=
+        # ceil(K/32) M-blocks (demand B*H*M_tiles). Above the grid, fall back to auto-matmul
+        # (program_config=None), which loops/tiles the batch correctly. B=1 keeps the tuned
+        # config -> bit-identical to production. See tests/test_gdn_recurrent_batch32_micro.py.
+        grid_cores = _grid_cores(device)
+        if grid_cores is None:
+            # Can't introspect the grid: be safe, drop the pinned configs so the batched
+            # matmuls stay correct (auto-matmul) rather than risk silent corruption.
+            read_query_prog_cfg = None
+            outer_product_prog_cfg = None
+        else:
+            m_tiles_outer = (K + 31) // 32
+            if B * H > grid_cores:
+                read_query_prog_cfg = None
+            if B * H * m_tiles_outer > grid_cores:
+                outer_product_prog_cfg = None
 
     # Fuse B: in the pre_transposed decode path keep the per-token tensors in
     # their tiled 4D [B,H,1,K] layout (q[:, :, i:i+1] keeps the T axis) so the
