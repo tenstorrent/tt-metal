@@ -99,7 +99,7 @@ MLA layer.
 - [x] 5.2 indexer: SP all-gather of the stem outputs (k/q/wts) to full-S (device `all_gather_async` over sp_axis) → existing global-contiguous logic runs unchanged on full seq; index cache replicated, full indices replicated. (Simpler than per-shard global-pos: gather makes positions contiguous.)
 - [x] 5.3 sparse_mla SP×TP-aware: KVPE SP-gathered full-T in `_dsa_forward`; per (sp_i,tp_j) shard attends local queries (global-pos causality) → reassembled via ShardTensor2dMesh (heads on tp, seq on sp). sp=1 collapses to prior behavior (regression-safe).
 - [x] **5.4 e2e PCC vs CPU reference on 2x2 single-shot: seq4k 0.9974 (sparse rows 0.9925, dense 0.9987), KVPE 0.9999 — matches 1x4.** Same cached truth (distribution-agnostic).
-- [ ] 5.5 **chunked 2x2** (guarded with NotImplementedError now): the chunked `_dsa_forward` cache-slot prefix read must SP-gather; indexer write already SP-aware. Follow-up.
+- [~] 5.5 **chunked 2x2** — IN PROGRESS, bug found. Switched chunked prefix read to v3 `kv_cache_to_host` (SP-aware composer) + KVPE consumed as host (backlog 9 done). chunked-1x4 green (0.9974), but **chunked-2x2 DSA chunks degrade (chunk@2048 0.73, chunk@3072 0.67)** while dense chunks (0.998) + single-shot-2x2 (0.9974) pass. Cause: under SP the `update_padded_kv_cache` write order isn't plain global-contiguous, so `kv_cache_to_host[slot,:end_pos]` feeds `sparse_mla` the wrong latents. Re-guarded with NotImplementedError; chunked test back to 1x4. **Next: trace the SP cache write/read order (zigzag/padding) and de-interleave correctly.** (Also a test-only bug: the kvpe diagnostic reads shard0 — make SP-aware when re-enabling 2x2 chunked.)
 
 ### CPU fallbacks (multichip) — running list
 | id | fallback | where | status / SP behavior |
@@ -146,8 +146,8 @@ Legend: `[x]` done · `[~]` partial · `[ ]` open · ⏸️ postponed · 📌 re
 - [x] 📌 **(7)** fp8/Hadamard parity — follow v3 cache format (kvpe bfloat8_b); ttnn has no matching fp8, so the functional path is the contract; truth stays use_fp8_path=False/simulate_fp8=False
 
 **Host fallbacks → device ops (perf debt; contracts in tt/ops.py + Missing op APIs)**
-- [ ] **(8)** sparse_mla gather+SDPA — full host fallback per layer (biggest copy/compute hit); needs sparse gather + SDPA-with-indices, per-row valid length + start_pos
-- [ ] **(9)** MLA cache-slot host readback in chunked _dsa_forward / sparse_mla (whole KVPE prefix read every chunk)
+- [ ] **(8)** sparse_mla gather+SDPA → device — full host fallback per layer (biggest copy/compute hit). **FEASIBILITY CONFIRMED (2026-06-11): `ttnn.gather(input, dim, index)` exists, supports per-row multi-dim indices (TILE layout, uint16/uint32), used in v3's own gather tests.** Plan: reshape kvpe→[T,1,576], indices→[Sq,k,1] → `ttnn.gather(dim=0)` → [Sq,k,576]; then batched matmul q·kᵀ × scale, per-row causal/valid mask (start_pos-aware), ttnn.softmax, matmul·v. No new kernel needed (fused ring_sparse_attention is still (12)). Note: `ttnn.embedding` is NOT enough (1D index only); `ttnn.gather` is the op.
+- [x] **(9)** MLA cache-slot host readback — removed the device→host→device re-upload: `sparse_mla` now consumes the full-T KVPE **as host** (single-shot via SP all-gather→to_torch; chunked via v3 `kv_cache_to_host`). One download, no re-upload. (Full device-residency awaits (8).)
 - [x] **(10)** ~~indexer host stems readback (full hidden concat per chunk)~~ — resolved by (6); only the pe-slice RoPE readback remains, folded into (6)'s F1 host-rope note (coupled to issue #4)
 - [ ] **(19)** indexer key cache → device — reuse v3's cache-*creation*/write **logic** (init_kvpe_cache-style allocator + fill_cache_for_user_/update_padded_kv_cache) to stand up a parallel, index-shaped cache ([max_seq, 128]); not the physical KVPE tensor. Gated on device-side RoPE (#4, so keys are written device-resident) and the dense-full-prefix-read vs SP-shard question (couple with (4) 2x2). Today: host `_index_k_cache` torch buffer.
 

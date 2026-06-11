@@ -256,6 +256,7 @@ def run_cpu_reference_chunked(args, mla_cpu, hidden_states, seq_len, chunk, src_
 
 
 # Chunked prefill e2e (step 4): chunk size is a parameter — 1k dev default (agreement 15).
+# 2x2 chunked deferred to slice 5.5 (cache-prefix read order under SP).
 @pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["1x4"], indirect=True)
 @pytest.mark.parametrize(
     "device_params",

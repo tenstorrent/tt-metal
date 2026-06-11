@@ -100,7 +100,7 @@ def test_sparse_mla_numerics(mesh_device, start_pos):
     )
     out = ops.sparse_mla(
         q_sharded,
-        _dev(kvpe, mesh_device),
+        kvpe[0, 0],  # full-T latent on host [skv, 576]
         _dev(idx, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32),
         scale,
         start_pos=start_pos,

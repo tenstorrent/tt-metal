@@ -194,7 +194,9 @@ class ttMLA(_ttMLAv3):
                 self._indexer_write_k(hidden_states, seq_len_local, kv_isl)
             return super().forward(hidden_states, rope_tensors, kvpe_cache, **kwargs)
         if self.sp_factor > 1 and kv_isl is not None:
-            raise NotImplementedError("DSA 2x2: chunked+SP not yet wired (status.md step 5); single-shot SP only")
+            # chunked+SP: kv_cache_to_host prefix read order under SP-sharded
+            # update_padded_kv_cache writes is wrong (DSA chunks ~0.73). Debugging (status 5.5).
+            raise NotImplementedError("DSA chunked+SP not yet correct (status.md 5.5)")
 
         indices = self._indexer_topk(hidden_states, seq_len_local, start_pos=kv_isl or 0)
         return self._dsa_forward(hidden_states, rope_tensors, kvpe_cache, indices, **kwargs)
@@ -294,12 +296,16 @@ class ttMLA(_ttMLAv3):
         kvpe = ttnn.concat([kv_nope, kv_rope], dim=-1)
         ttnn.deallocate(kv_rope)
         kvpe_b8 = ttnn.typecast(kvpe, dtype=ttnn.bfloat8_b)
+        # Full-T latent prefix on HOST for the sparse-attn fallback — no device→host→
+        # device re-upload (backlog 9). KVPE stays SP-sharded on device (v3).
+        end_pos = start_pos + seq_len_local * self.sp_factor
         if not is_chunked:
             ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, kvpe_b8, cache_layer_idx)
-            # KVPE stays SP-sharded (v3); gather full-T for the host sparse attn.
-            kvpe_prefix = self._sp_all_gather(kvpe, dim=2)
+            kvpe_full = self._sp_all_gather(kvpe, dim=2)  # [1,1,T,576] replicated
+            kvpe_host = ttnn.to_torch(ttnn.get_device_tensors(kvpe_full)[0])[0, 0]  # [T,576]
         else:
-            # Same cache write as v3 _chunked_attn; attention reads the populated prefix.
+            # Same cache write as v3 _chunked_attn; read the SP-sharded prefix back with
+            # v3's SP-aware composer (de-interleaves the per-chip chunk writes).
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                 kvpe_cache,
                 kvpe_b8,
@@ -310,21 +316,13 @@ class ttMLA(_ttMLAv3):
                 cluster_axis=self.sp_axis,
             )
             slot = cache_user_id * self.layer_num + cache_layer_idx
-            prefix = ttnn.to_torch(ttnn.get_device_tensors(kvpe_cache)[0])[
-                slot : slot + 1, :, : start_pos + seq_len_local
-            ]
-            kvpe_prefix = ttnn.from_torch(
-                prefix.to(torch.bfloat16),
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
+            full = _ttMLAv3.kv_cache_to_host(kvpe_cache, self.mesh_device, self.sp_axis)
+            kvpe_host = full[slot, 0, :end_pos].to(torch.bfloat16)  # [end_pos, 576]
 
         # Sparse attention over selected latents (replaces ring SDPA); latent out [1,H,S,512].
-        # q SP×TP-sharded, kvpe_prefix gathered full-T, indices full (replicated).
+        # q SP×TP-sharded, kvpe full-T on host, indices full (replicated).
         attn_out = ops.sparse_mla(
-            q, kvpe_prefix, indices, self.scale, start_pos=start_pos, sp_axis=self.sp_axis, tp_axis=self.tp_axis
+            q, kvpe_host, indices, self.scale, start_pos=start_pos, sp_axis=self.sp_axis, tp_axis=self.tp_axis
         )
 
         # wkv_b2 AFTER attention (chunked-path style), then v3 epilogue
