@@ -38,13 +38,19 @@ Limitations:
     we capture the ops before that point; the rest cold-compile in pass 2.
   * Ops that pick their program from live allocator state see empty L1 under
     NO_DISPATCH and may collect a different variant than the real run uses.
+
+Collect-time substitutions are all expressed as one of two reversible primitives
+(_AttrPatch / _RebindPatch), grouped into declarative sets (reference ops, verifiers,
+boundary) and entered together under a single ExitStack — see _collect_window.
 """
 
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import inspect
 import os
+import sys
 
 import pytest
 
@@ -82,8 +88,20 @@ _CAPTURE_MARKERS = (
     "begin_mesh_trace_capture",
 )
 
-_stats = {"bodies": 0, "swallowed": 0, "skipped_capture": 0}
-_fast_stats = {"shallow": 0, "fallback": 0}
+
+@dataclasses.dataclass
+class CollectStats:
+    """Session counters printed at the end. `bodies/swallowed/skipped_capture` are hook-level;
+    `shallow/fallback` count the shape-only boundary's hits vs real-path fallbacks."""
+
+    bodies: int = 0
+    swallowed: int = 0
+    skipped_capture: int = 0
+    shallow: int = 0
+    fallback: int = 0
+
+
+_STATS = CollectStats()
 
 
 def _torch_to_ttnn_dtype(torch_dtype):
@@ -103,173 +121,96 @@ def _torch_to_ttnn_dtype(torch_dtype):
     }.get(torch_dtype, ttnn.bfloat16)
 
 
-@contextlib.contextmanager
-def _shape_only_boundary(stats):
-    """Patch the ttnn<->torch boundary to allocate device tensors SHAPE-ONLY during collect.
+# ---------------------------------------------------------------------------
+# Patch primitives. Every collect-time substitution is one of these two,
+# entered together under a single ExitStack (see _collect_window) so each has
+# uniform, automatic restore instead of a hand-rolled try/finally.
+# ---------------------------------------------------------------------------
 
-    Program build needs only the spec, so ttnn.from_torch and torch2tt_tensor (incl. their
-    `from ... import` bindings) skip the host tilize/convert/copy — the dominant collect cost on
-    weight-heavy bodies. Falls back to the real path for anything not safely shape-only
-    (mesh_mapper, custom tile, host tensors, meta tensors). `stats` gets shallow/fallback counts.
+
+class _AttrPatch:
+    """Reversibly replace ``obj.attr`` with ``build(original)`` for the collect window.
+
+    For callables reached by attribute access on a stable object — e.g. ``torch.randn``,
+    ``ttnn.from_torch``, ``torch.Tensor.__matmul__``. ``build`` receives the original (some
+    replacements wrap it; reference stand-ins ignore it).
     """
-    import sys
 
-    import ttnn
+    def __init__(self, obj, attr, build):
+        self._obj, self._attr, self._build = obj, attr, build
 
-    real_from_torch = ttnn.from_torch
+    def __enter__(self):
+        self._orig = getattr(self._obj, self._attr)
+        setattr(self._obj, self._attr, self._build(self._orig))
+        return self
 
-    def _shallow_from_torch(
-        tensor,
-        dtype=None,
-        *,
-        spec=None,
-        tile=None,
-        layout=None,
-        device=None,
-        memory_config=None,
-        mesh_mapper=None,
-        **kw,
-    ):
-        if (
-            tensor is not None
-            and device is not None
-            and mesh_mapper is None
-            and tile is None
-            and not getattr(tensor, "is_meta", False)
-        ):
-            try:
-                if spec is not None:
-                    dt, lay, mc = spec.dtype, spec.layout, spec.memory_config
-                    shp = ttnn.Shape(tuple(spec.shape))
-                else:
-                    dt = dtype or _torch_to_ttnn_dtype(tensor.dtype)
-                    lay = layout or ttnn.ROW_MAJOR_LAYOUT
-                    mc = memory_config or ttnn.DRAM_MEMORY_CONFIG
-                    shp = ttnn.Shape(tuple(tensor.shape))
-                t = ttnn.allocate_tensor_on_device(shp, dt, lay, device, mc)
-                stats["shallow"] += 1
-                return t
-            except Exception:
-                stats["fallback"] += 1
-        return real_from_torch(
-            tensor,
-            dtype,
-            spec=spec,
-            tile=tile,
-            layout=layout,
-            device=device,
-            memory_config=memory_config,
-            mesh_mapper=mesh_mapper,
-            **kw,
-        )
+    def __exit__(self, *exc):
+        setattr(self._obj, self._attr, self._orig)
+        return False
 
-    # torch2tt_tensor builds device tensors outside from_torch (ttnn.Tensor(t).to(...)); same lever.
-    t2tt_modules = []
-    _ucf = sys.modules.get("models.common.utility_functions")
-    real_t2tt = getattr(_ucf, "torch2tt_tensor", None) if _ucf is not None else None
-    if real_t2tt is not None:
-        _interleaved_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED)
 
-        def _shallow_torch2tt(
-            py_tensor, tt_device, tt_layout=ttnn.TILE_LAYOUT, tt_memory_config=_interleaved_mc, tt_dtype=ttnn.bfloat16
-        ):
-            if tt_device is not None and not getattr(py_tensor, "is_meta", False):
-                try:
-                    size = list(py_tensor.size())
-                    while len(size) < 4:
-                        size.insert(0, 1)
-                    t = ttnn.allocate_tensor_on_device(
-                        ttnn.Shape(tuple(size)), tt_dtype, tt_layout, tt_device, tt_memory_config
-                    )
-                    stats["shallow"] += 1
-                    return t
-                except Exception:
-                    stats["fallback"] += 1
-            return real_t2tt(py_tensor, tt_device, tt_layout, tt_memory_config, tt_dtype)
+class _RebindPatch:
+    """Reversibly rebind EVERY module attribute that ``is`` ``home_module.attr`` to ``build(original)``.
 
+    Needed for helpers pulled into test modules via ``from x import y`` — patching the home module
+    alone wouldn't reach those local copies, so we rebind every reference. No-op if the home module
+    isn't imported or lacks the attribute. All matches share one original, so restore is to that.
+    """
+
+    def __init__(self, home_module, attr, build):
+        self._home_module, self._attr, self._build = home_module, attr, build
+        self._orig = None
+        self._patched = []
+
+    def __enter__(self):
+        home = sys.modules.get(self._home_module)
+        self._orig = getattr(home, self._attr, None) if home is not None else None
+        if self._orig is None:
+            return self
+        replacement = self._build(self._orig)
         for m in list(sys.modules.values()):
             try:
-                if getattr(m, "torch2tt_tensor", None) is real_t2tt:
-                    t2tt_modules.append(m)
-                    m.torch2tt_tensor = _shallow_torch2tt
+                if getattr(m, self._attr, None) is self._orig:
+                    self._patched.append(m)
+                    setattr(m, self._attr, replacement)
             except Exception:
                 pass
+        return self
 
-    ttnn.from_torch = _shallow_from_torch
-    try:
-        yield
-    finally:
-        ttnn.from_torch = real_from_torch
-        for m in t2tt_modules:
-            m.torch2tt_tensor = real_t2tt
-
-
-@contextlib.contextmanager
-def _stub_verifiers():
-    """Fuse off the host-side numeric verifiers during collect (results are meaningless anyway).
-
-    comp_pcc -> (True, ~1) and assert_numeric_metrics -> pass: a verifier failing on addr-0/zeros
-    readback aborts the rest of a multi-op body, losing its ops. Both helpers may also be bound via
-    `from ... import` in test modules, so patch every module attr pointing at the original.
-    """
-    import sys
-
-    saved = []  # (module, attr, original)
-    targets = {}
-    for src, attr, stub in (
-        ("tests.ttnn.utils_for_testing", "comp_pcc", lambda *a, **k: (True, 0.999999)),
-        ("models.common.utility_functions", "comp_pcc", lambda *a, **k: (True, 0.999999)),
-        ("tests.ttnn.utils_for_testing", "assert_numeric_metrics", lambda *a, **k: (True, "collect-stub")),
-    ):
-        mod = sys.modules.get(src)
-        orig = getattr(mod, attr, None) if mod is not None else None
-        if orig is not None:
-            targets[(attr, orig)] = stub
-    for (attr, orig), stub in targets.items():
-        for m in list(sys.modules.values()):
-            try:
-                if getattr(m, attr, None) is orig:
-                    saved.append((m, attr, orig))
-                    setattr(m, attr, stub)
-            except Exception:
-                pass
-    try:
-        yield
-    finally:
-        for m, attr, orig in saved:
-            setattr(m, attr, orig)
-
-
-def _drives_capture(item) -> bool:
-    fn = getattr(item, "function", None)
-    if fn is None:
+    def __exit__(self, *exc):
+        for m in self._patched:
+            setattr(m, self._attr, self._orig)
         return False
+
+
+def _try_shallow(stats, alloc):
+    """Run a shape-only ttnn allocation, tallying shallow vs fallback. Returns the allocated
+    tensor, or None if it raised — in which case the caller falls back to the real ttnn path."""
     try:
-        src = inspect.getsource(fn)
-    except (OSError, TypeError):
-        return False
-    return any(m in src for m in _CAPTURE_MARKERS)
+        t = alloc()
+        stats.shallow += 1
+        return t
+    except Exception:
+        stats.fallback += 1
+        return None
 
 
-@contextlib.contextmanager
-def _cheap_host_ops():
-    """Swap expensive host-side torch work for cheap shape-correct stand-ins during collect.
+# ---------------------------------------------------------------------------
+# Declarative patch sets, built lazily so torch/ttnn imports stay deferred.
+# ---------------------------------------------------------------------------
 
-    Only ttnn op shapes/config determine the collected programs, so zeroing the inputs, the
-    torch reference conv, and the PCC check does not change WHAT is collected — it just removes
-    the wasted golden-reference + PCC + RNG cost from the throwaway collect pass.
+
+def _reference_op_patches():
+    """Host reference compute -> cheap shape-correct stand-ins.
+
+    Under NO_DISPATCH the values are thrown away and the collected programs depend only on ttnn op
+    shapes/config, so zeroing the inputs / torch reference conv / matmul / layer_norm does not change
+    WHAT is collected — it just drops the wasted golden-reference + RNG cost. ttnn ops are untouched.
     """
     import torch
     import torch.nn.functional as F
 
-    real_randn = torch.randn
-    real_rand = torch.rand
-    real_conv2d = F.conv2d
-    real_layer_norm = F.layer_norm
     real_matmul = torch.matmul
-    real_bmm = torch.bmm
-    real_tensor_matmul = torch.Tensor.matmul
-    real_tensor_rmatmul = torch.Tensor.__matmul__
 
     def _fast_randn(*size, **kw):
         if len(size) == 1 and isinstance(size[0], (tuple, list, torch.Size)):
@@ -304,27 +245,166 @@ def _cheap_host_ops():
         except Exception:
             return real_matmul(a, b)
 
-    torch.randn = _fast_randn
-    torch.rand = _fast_randn
-    F.conv2d = _fast_conv2d
-    F.layer_norm = _fast_layer_norm
-    torch.matmul = _fast_matmul
-    torch.bmm = lambda a, b, *x, **k: _fast_matmul(a, b)
-    torch.Tensor.matmul = lambda self, other: _fast_matmul(self, other)
-    torch.Tensor.__matmul__ = lambda self, other: _fast_matmul(self, other)
-    boundary = _shape_only_boundary(_fast_stats) if _FAST_SHALLOW else contextlib.nullcontext()
+    def _fast_bmm(a, b, *x, **k):
+        return _fast_matmul(a, b)
+
+    def _fast_tensor_matmul(self, other):
+        return _fast_matmul(self, other)
+
+    return [
+        _AttrPatch(torch, "randn", lambda _orig: _fast_randn),
+        _AttrPatch(torch, "rand", lambda _orig: _fast_randn),
+        _AttrPatch(F, "conv2d", lambda _orig: _fast_conv2d),
+        _AttrPatch(F, "layer_norm", lambda _orig: _fast_layer_norm),
+        _AttrPatch(torch, "matmul", lambda _orig: _fast_matmul),
+        _AttrPatch(torch, "bmm", lambda _orig: _fast_bmm),
+        _AttrPatch(torch.Tensor, "matmul", lambda _orig: _fast_tensor_matmul),
+        _AttrPatch(torch.Tensor, "__matmul__", lambda _orig: _fast_tensor_matmul),
+    ]
+
+
+def _verifier_patches():
+    """Host numeric verifiers -> no-ops.
+
+    A verifier failing on the addr-0/zeros readback aborts the rest of a multi-op body and loses its
+    ops; results are meaningless under NO_DISPATCH anyway. Rebound across modules because tests pull
+    these in via ``from ... import``. comp_pcc has two possible homes; either (or both) is covered.
+    """
+
+    def _pcc(*a, **k):
+        return (True, 0.999999)
+
+    def _assert_numeric_metrics(*a, **k):
+        return (True, "collect-stub")
+
+    return [
+        _RebindPatch("tests.ttnn.utils_for_testing", "comp_pcc", lambda _orig: _pcc),
+        _RebindPatch("models.common.utility_functions", "comp_pcc", lambda _orig: _pcc),
+        _RebindPatch("tests.ttnn.utils_for_testing", "assert_numeric_metrics", lambda _orig: _assert_numeric_metrics),
+    ]
+
+
+def _boundary_patches(stats):
+    """ttnn<->torch boundary -> SHAPE-ONLY device allocation.
+
+    Program build needs only the spec, so ttnn.from_torch and torch2tt_tensor skip the host
+    tilize/convert/copy (the dominant collect cost on weight-heavy bodies). Anything not safely
+    shape-only (mesh_mapper, custom tile, host/meta tensors) falls back to the real path.
+    """
+    import ttnn
+
+    def _build_from_torch(real_from_torch):
+        def _shallow_from_torch(
+            tensor,
+            dtype=None,
+            *,
+            spec=None,
+            tile=None,
+            layout=None,
+            device=None,
+            memory_config=None,
+            mesh_mapper=None,
+            **kw,
+        ):
+            if (
+                tensor is not None
+                and device is not None
+                and mesh_mapper is None
+                and tile is None
+                and not getattr(tensor, "is_meta", False)
+            ):
+
+                def _alloc():
+                    if spec is not None:
+                        dt, lay, mc = spec.dtype, spec.layout, spec.memory_config
+                        shp = ttnn.Shape(tuple(spec.shape))
+                    else:
+                        dt = dtype or _torch_to_ttnn_dtype(tensor.dtype)
+                        lay = layout or ttnn.ROW_MAJOR_LAYOUT
+                        mc = memory_config or ttnn.DRAM_MEMORY_CONFIG
+                        shp = ttnn.Shape(tuple(tensor.shape))
+                    return ttnn.allocate_tensor_on_device(shp, dt, lay, device, mc)
+
+                t = _try_shallow(stats, _alloc)
+                if t is not None:
+                    return t
+            return real_from_torch(
+                tensor,
+                dtype,
+                spec=spec,
+                tile=tile,
+                layout=layout,
+                device=device,
+                memory_config=memory_config,
+                mesh_mapper=mesh_mapper,
+                **kw,
+            )
+
+        return _shallow_from_torch
+
+    def _build_torch2tt(real_t2tt):
+        # torch2tt_tensor builds device tensors outside from_torch (ttnn.Tensor(t).to(...)); same lever.
+        interleaved_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED)
+
+        def _shallow_torch2tt(
+            py_tensor, tt_device, tt_layout=ttnn.TILE_LAYOUT, tt_memory_config=interleaved_mc, tt_dtype=ttnn.bfloat16
+        ):
+            if tt_device is not None and not getattr(py_tensor, "is_meta", False):
+
+                def _alloc():
+                    size = list(py_tensor.size())
+                    while len(size) < 4:
+                        size.insert(0, 1)
+                    return ttnn.allocate_tensor_on_device(
+                        ttnn.Shape(tuple(size)), tt_dtype, tt_layout, tt_device, tt_memory_config
+                    )
+
+                t = _try_shallow(stats, _alloc)
+                if t is not None:
+                    return t
+            return real_t2tt(py_tensor, tt_device, tt_layout, tt_memory_config, tt_dtype)
+
+        return _shallow_torch2tt
+
+    return [
+        _AttrPatch(ttnn, "from_torch", _build_from_torch),
+        _RebindPatch("models.common.utility_functions", "torch2tt_tensor", _build_torch2tt),
+    ]
+
+
+def _collect_patches(stats):
+    """The patch set active during the collect window, gated by the fast / shallow flags."""
+    patches = []
+    if _FAST_COLLECT:
+        patches += _reference_op_patches()
+        patches += _verifier_patches()
+        if _FAST_SHALLOW:
+            patches += _boundary_patches(stats)
+    return patches
+
+
+@contextlib.contextmanager
+def _collect_window(stats):
+    """Enter every active patch under one ExitStack, run the body, restore all on exit (LIFO).
+
+    With no active patches (UP_FRONT_FAST_COLLECT=0) this is a transparent pass-through, so the body
+    runs with real torch.
+    """
+    with contextlib.ExitStack() as stack:
+        for patch in _collect_patches(stats):
+            stack.enter_context(patch)
+        yield
+
+
+def _drives_capture(item) -> bool:
+    fn = getattr(item, "function", None)
+    if fn is None:
+        return False
     try:
-        with boundary, _stub_verifiers():
-            yield
-    finally:
-        torch.randn = real_randn
-        torch.rand = real_rand
-        F.conv2d = real_conv2d
-        F.layer_norm = real_layer_norm
-        torch.matmul = real_matmul
-        torch.bmm = real_bmm
-        torch.Tensor.matmul = real_tensor_matmul
-        torch.Tensor.__matmul__ = real_tensor_rmatmul
+        src = inspect.getsource(fn)
+    except (OSError, TypeError):
+        return False
+    return any(m in src for m in _CAPTURE_MARKERS)
 
 
 @pytest.hookimpl(wrapper=True)
@@ -336,10 +416,10 @@ def pytest_runtest_call(item):
     import ttnn
 
     if _drives_capture(item):
-        _stats["skipped_capture"] += 1
+        _STATS.skipped_capture += 1
         return (yield)  # let it run normally; it cold-compiles in pass 2
 
-    _stats["bodies"] += 1
+    _STATS.bodies += 1
     # UP_FRONT_LOG_SWALLOWED=1: per-body diagnostic — which tests threw under NO_DISPATCH and
     # how many ops each stashed before the throw (reveals coverage: a body that throws BEFORE
     # stashing its op is a real miss; one that throws on the addr-0 readback after stashing is fine).
@@ -349,15 +429,13 @@ def pytest_runtest_call(item):
     exc_info = ""
     ttnn.graph.up_front_begin_collect(clear=False, real_alloc=_REAL_ALLOC)  # accumulate; wraps ONLY the body
     try:
-        if _FAST_COLLECT:
-            with _cheap_host_ops():
-                return (yield)  # body runs with cheap host stand-ins; ttnn ops still stash
-        return (yield)  # pytest runs the body with its real fixtures; ops stash into the collector
+        with _collect_window(_STATS):
+            return (yield)  # body runs with the active collect-time patches; ttnn ops still stash
     except Exception as e:
         # Expected under NO_DISPATCH: a readback/assert on an addr-0 output. The
         # program was already stashed by the funnel before the failure. Swallow so
         # pass 1 stays green (its results are meaningless — pass 2 is the real run).
-        _stats["swallowed"] += 1
+        _STATS.swallowed += 1
         swallowed = True
         exc_info = f"{type(e).__name__}: {str(e)[:140]}"
         return None
@@ -388,15 +466,14 @@ def pytest_sessionfinish(session, exitstatus):
     n_unique = ttnn.graph.up_front_num_unique()
     n_collected = ttnn.graph.up_front_num_collected()
     print(
-        f"\nUP_FRONT_COLLECT: {n_collected} ops stashed across {_stats['bodies']} bodies "
+        f"\nUP_FRONT_COLLECT: {n_collected} ops stashed across {_STATS.bodies} bodies "
         f"-> {n_unique} unique programs "
-        f"(swallowed {_stats['swallowed']}, skipped-capture {_stats['skipped_capture']})",
+        f"(swallowed {_STATS.swallowed}, skipped-capture {_STATS.skipped_capture})",
         flush=True,
     )
     if _FAST_COLLECT and _FAST_SHALLOW:
         print(
-            f"UP_FRONT_COLLECT: fast-shallow from_torch — shape-only={_fast_stats['shallow']} "
-            f"fallback={_fast_stats['fallback']}",
+            f"UP_FRONT_COLLECT: fast-shallow from_torch — shape-only={_STATS.shallow} " f"fallback={_STATS.fallback}",
             flush=True,
         )
     if n_unique == 0:
