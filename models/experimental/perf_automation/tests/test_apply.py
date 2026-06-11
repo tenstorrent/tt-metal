@@ -38,7 +38,7 @@ def test_apply_records_clean_sha_and_calls_editor(tmp_path):
     ctx = LoopContext.from_run(run, index=[])
     seen = {}
 
-    def fake_editor(*, lever, section, model_files):
+    def fake_editor(*, lever, section, model_files, spec=None):
         seen["lever"] = lever
         seen["files"] = [str(p) for p in model_files]
         return {
@@ -67,7 +67,7 @@ def test_apply_proceeds_when_editor_errors_but_edits_landed(tmp_path):
     run = _run(tmp_path)
     ctx = LoopContext.from_run(run, index=[])
 
-    def editor_edits_then_raises(*, lever, section, model_files):
+    def editor_edits_then_raises(*, lever, section, model_files, spec=None):
         Path(model_files[0]).write_text("y = 2\n")  # real on-disk edit
         raise RuntimeError("edit result.files must be a non-empty array")
 

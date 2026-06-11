@@ -12,6 +12,7 @@ BEFORE_LOOP_DONE = "BEFORE_LOOP_DONE"
 # Outer loop: decide & act (Member 1) ----------------------------------------
 ROUTE = "ROUTE"
 SELECT = "SELECT"
+PLAN = "PLAN"
 APPLY = "APPLY"
 VERIFY = "VERIFY"
 REPAIR_CODE = "REPAIR_CODE"
@@ -42,7 +43,8 @@ MAX_PCC_FIX = 2  # PCC-below-threshold repairs before DISCARD
 TRANSITIONS = {
     BEFORE_LOOP_DONE: [ROUTE],
     ROUTE: [SELECT],
-    SELECT: [APPLY],
+    SELECT: [PLAN],
+    PLAN: [APPLY, REVERT],
     APPLY: [VERIFY],
     VERIFY: [GATE_PCC, REPAIR_CODE, REVERT],
     REPAIR_CODE: [VERIFY],

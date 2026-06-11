@@ -54,6 +54,23 @@ def build_repair_prompt(lever: str, section: str, model_files: list, error: str)
     )
 
 
+SPEC_TEMPLATE = (
+    "Apply this specific change to a model:\n\n"
+    "File: {file}\nLocation: {location}\nChange: {change}\n\n"
+    "Read the file first, then make ONLY this change. Preserve the model's numerical "
+    "behavior; do not refactor unrelated code. When done, output exactly ONE JSON "
+    'object: {{"files": [<repo-relative paths you changed>], "summary": <one sentence>}}'
+)
+
+
+def build_spec_prompt(spec: dict, model_files: list) -> str:
+    return SPEC_TEMPLATE.format(
+        file=spec.get("file", "?"),
+        location=spec.get("location", ""),
+        change=spec.get("change", ""),
+    )
+
+
 def build_edit_prompt(lever: str, section: str, model_files: list) -> str:
     files = "\n".join(f"  - {f}" for f in model_files)
     return PROMPT_TEMPLATE.format(
@@ -89,7 +106,9 @@ def make_edit_runner(
     resolved = apply_agent_env(env_agent_path)
     model = get_model("edit", resolved)
 
-    def runner(*, lever: str, section: str, model_files: list, error: str | None = None) -> dict:
+    def runner(
+        *, lever: str, section: str, model_files: list, error: str | None = None, spec: dict | None = None
+    ) -> dict:
         import asyncio
 
         from claude_agent_sdk import (
@@ -103,9 +122,12 @@ def make_edit_runner(
         from .probes import _extract_json_object, _usage_summary
 
         files = [str(p) for p in model_files]
-        prompt = (
-            build_repair_prompt(lever, section, files, error) if error else build_edit_prompt(lever, section, files)
-        )
+        if error:
+            prompt = build_repair_prompt(lever, section, files, error)
+        elif spec:
+            prompt = build_spec_prompt(spec, files)
+        else:
+            prompt = build_edit_prompt(lever, section, files)
         options = ClaudeAgentOptions(
             model=model,
             system_prompt=(

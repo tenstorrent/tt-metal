@@ -27,7 +27,7 @@ def select(ctx) -> str:
         ctx.state["selected_lever"] = candidates[0] if candidates else None
         ctx.state["select_reasoning"] = "no untried candidates (fallback)"
         ctx.log_event(states.SELECT, "info", "no untried candidates")
-        return states.APPLY
+        return states.PLAN
 
     brief = _read_brief(ctx)
     runner = ctx.deps.get("select_runner") or _default_runner()
@@ -49,7 +49,7 @@ def select(ctx) -> str:
     ctx.state["select_reasoning"] = reasoning
     ctx.record_agent_call(states.SELECT, "select", model, usage)
     ctx.log_event(states.SELECT, "info", f"lever={chosen}")
-    return states.APPLY
+    return states.PLAN
 
 
 def _read_brief(ctx) -> str:

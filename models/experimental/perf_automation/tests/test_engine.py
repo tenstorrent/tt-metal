@@ -31,7 +31,17 @@ def _entry(anchor):
 MOCK_INDEX = [_entry("mlp-fidelity-walk"), _entry("subblock-unlock"), _entry("fuse-activation-matmul")]
 
 
-def _fake_editor(*, lever, section, model_files):
+def _fake_plan(*, lever, section, skeleton, cwd=None):
+    return {
+        "file": "model.py",
+        "location": "x",
+        "change": "tweak",
+        "model": "mock",
+        "usage": {"tokens_in": 1, "tokens_out": 1, "cost_usd": 0.0, "latency_s": 0.0},
+    }
+
+
+def _fake_editor(*, lever, section, model_files, spec=None):
     return {
         "files": ["model.py"],
         "summary": "mock edit",
@@ -91,6 +101,7 @@ def _ctx(run):
     ctx.deps["select_runner"] = _fake_select  # SELECT is real; picker injected
     ctx.deps["pcc_runner"] = lambda c: {"status": "ok", "pcc": 0.999}  # GATE_PCC real; measure injected
     ctx.deps["measure_runner"] = _fake_measure  # REMEASURE real; tracy injected
+    ctx.deps["plan_runner"] = _fake_plan  # PLAN real; planner injected
     return ctx
 
 

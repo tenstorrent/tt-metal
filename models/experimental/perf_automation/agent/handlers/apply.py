@@ -29,7 +29,7 @@ def apply(ctx) -> str:
     runner = ctx.deps.get("edit_runner") or _default_runner()
     reported, summary, model, usage, err = [], "", "?", None, None
     try:
-        result = runner(lever=lever, section=section, model_files=ctx.model_files())
+        result = runner(lever=lever, section=section, model_files=ctx.model_files(), spec=ctx.state.get("edit_spec"))
         reported = result.get("files") or []
         summary = result.get("summary", "")
         model, usage = result.get("model", "?"), result.get("usage")

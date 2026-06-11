@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from .. import states
 from . import apply as _apply
-from . import log_exit, mocks, route
+from . import log_exit, mocks, plan as _plan, route
 from . import select as _select
 from . import gate_pcc as _gate_pcc
 from . import decide as _decide
@@ -27,6 +27,7 @@ def build_handlers() -> dict:
         # --- Member 1: decide & act ---
         states.ROUTE: route.route,  # REAL
         states.SELECT: _select.select,  # REAL
+        states.PLAN: _plan.plan,  # REAL
         states.APPLY: _apply.apply,  # REAL
         states.VERIFY: _verify.verify,  # REAL
         states.REPAIR_CODE: mocks.repair_code,

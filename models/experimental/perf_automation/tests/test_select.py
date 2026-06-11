@@ -61,7 +61,7 @@ def test_select_uses_agent_choice_and_resets_counters(tmp_path):
         "model": "m",
         "usage": {"cost_usd": 0.02, "tokens_in": 3, "tokens_out": 1},
     }
-    assert select(ctx) == states.APPLY
+    assert select(ctx) == states.PLAN
     assert ctx.state["selected_lever"] == "c"
     assert ctx.state["select_reasoning"] == "best for matmul"
     assert ctx.state["code_fix_attempts"] == 0 and ctx.state["pcc_fix_attempts"] == 0
