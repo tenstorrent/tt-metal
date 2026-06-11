@@ -1471,7 +1471,23 @@ def run(
                 return ttnn.linear(_a, input_tensor_b=_b, **_kw)
             return ttnn.linear(_a, _b, **_kw)
 
-        output_tensor = _do_linear(ttnn_a, ttnn_b, **linear_kwargs)
+        try:
+            output_tensor = _do_linear(ttnn_a, ttnn_b, **linear_kwargs)
+        except Exception as _e:
+            # Large L1-sharded matmuls (e.g. SDXL 16384x512) overflow N300 L1: the
+            # static matmul CBs clash with the L1 input/output buffers ("circular
+            # buffers ... clash with L1 buffers" / OOM). On Galaxy each shard is
+            # spread across many chips so it fits; N300 (2 chips) can't reproduce
+            # that. Retry from DRAM (the matmul math is identical — only the L1
+            # placement can't be reproduced) with a DRAM-interleaved output.
+            _m = str(_e).lower()
+            if any(s in _m for s in ("circular buffer", "clash", "l1 buffer", "out of memory", "not enough space")):
+                ttnn_a, ttnn_b = _make_dram_tensors()
+                _kw = dict(linear_kwargs)
+                _kw.pop("memory_config", None)
+                output_tensor = _do_linear(ttnn_a, ttnn_b, **_kw)
+            else:
+                raise
 
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
 
