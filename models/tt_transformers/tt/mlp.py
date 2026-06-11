@@ -6,6 +6,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import is_blackhole
 from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.common import Mode, pad_to_size
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
@@ -115,7 +116,7 @@ class MLP(LightweightModule):
 
             self.prefetcher.register_callback(register_weights)
 
-    def forward(self, x: ttnn.Tensor, mode: Mode) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, mode: Mode, batch_size: int = 1) -> ttnn.Tensor:
         """
         w1 -> gate_proj
         w2 -> down_proj
@@ -123,6 +124,8 @@ class MLP(LightweightModule):
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
         seq_len = x.shape[-2]
+        # batch_size > 1 ⇒ batched prefill; minimal_matmul races on Blackhole there.
+        batched_prefill = batch_size > 1
         TG = self.args.is_galaxy
         layer_num = max(self.layer_num, 0)  # cross_block uses the configuration of the first decoder
         activation_dtype = self.decoders_optimizations.get_tensor_dtype(
@@ -139,7 +142,7 @@ class MLP(LightweightModule):
         # In decode mode (seqlen <= 32) do DRAM sharded matmuls
         # These use HiFi2; this drops 1 bit of the activations but would be FLOP-bound on 12 cores with HiFi4
         pc_1 = self.args.get_mlp_ff1_3_prg_config(mode, seq_len, self.prefetcher)
-        pc_2 = self.args.get_mlp_ff2_prg_config(mode, seq_len, self.prefetcher)
+        pc_2 = self.args.get_mlp_ff2_prg_config(mode, seq_len, self.prefetcher, batched=batched_prefill)
         pc_3 = self.args.get_mlp_ff1_3_prg_config(mode, seq_len, self.prefetcher)
 
         w1_out = ttnn.linear(
@@ -272,7 +275,7 @@ class MLP(LightweightModule):
             decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=self.args
         )
 
-        if seq_len > 128 and mode != Mode.DECODE:
+        if seq_len > 128 and mode != Mode.DECODE and not (batched_prefill and is_blackhole()):
             w2_out = ttnn.experimental.minimal_matmul(
                 w2_in,
                 self.w2,

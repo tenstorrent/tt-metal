@@ -904,12 +904,14 @@ class Attention(LightweightModule):
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // self.MAX_QKV_MM_SEQ_LEN, self.MAX_QKV_MM_SEQ_LEN, -1])
 
-        if self.args.use_minimal_qkv_prefill_matmul(seq_len):
+        # batch_size > 1 ⇒ batched prefill; minimal_matmul races on Blackhole there.
+        batched_prefill = batch_size > 1
+        if self.args.use_minimal_qkv_prefill_matmul(seq_len, batched=batched_prefill):
             xqkv_fused = ttnn.experimental.minimal_matmul(
                 x_11SH,
                 self.wqkv,
                 compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
-                config=self.args.get_attn_qkv_program_config(Mode.PREFILL, seq_len, None),
+                config=self.args.get_attn_qkv_program_config(Mode.PREFILL, seq_len, None, batched=batched_prefill),
             )
         else:
             xqkv_fused = ttnn.linear(
@@ -918,7 +920,7 @@ class Attention(LightweightModule):
                 dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
                 memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.PREFILL, None),
                 compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
-                program_config=self.args.get_attn_qkv_program_config(Mode.PREFILL, seq_len, None),
+                program_config=self.args.get_attn_qkv_program_config(Mode.PREFILL, seq_len, None, batched=batched_prefill),
             )
 
         # FIXME: surely ttnn.linear bias should work?

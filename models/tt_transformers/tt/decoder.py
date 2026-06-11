@@ -309,7 +309,7 @@ class TransformerBlock(LightweightModule):
             hidden_states = ttnn.to_memory_config(hidden_states, memory_config=self.args.get_mlp_act_mem_config(mode))
         # MLP takes replicated inputs and produces fractured outputs
 
-        hidden_states = self.feed_forward.forward(hidden_states, mode)
+        hidden_states = self.feed_forward.forward(hidden_states, mode, batch_size=batch_size)
 
         activation_dtype = self.args.decoders_optimizations.get_tensor_dtype(
             decoder_id=self.layer_num, tensor=TensorGroup.ACTIVATION
