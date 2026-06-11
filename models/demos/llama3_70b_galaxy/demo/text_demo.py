@@ -1661,14 +1661,14 @@ def test_demo_text(
         )
         benchmark_data.add_measurement(
             profiler,
-            0,
+            repeat_batches - 1,  # use the last batch iteration (the one with an end timestamp)
             "inference_decode",
             "tokens/s",
             decode_tok_s,
         )
         benchmark_data.add_measurement(
             profiler,
-            0,
+            repeat_batches - 1,
             "inference_decode",
             "tokens/s/user",
             decode_tok_s_user,
