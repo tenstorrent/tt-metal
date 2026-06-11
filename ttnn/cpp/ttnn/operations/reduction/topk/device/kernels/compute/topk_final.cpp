@@ -92,9 +92,11 @@ void kernel_main() {
         // Copy all received value tiles from local cores to transposed staging buffer
         for (uint32_t wt = 0; wt < Wt; wt++) {
             tile_regs_acquire();
-            input_transposed_cb.reserve_back(1);
             copy_tile(input_cb_index, wt, 0);  // Copy tile from local core wt
             tile_regs_commit();
+
+            input_transposed_cb.reserve_back(1);
+
             tile_regs_wait();
             pack_tile(0, input_transposed_cb_index);  // Pack to staging buffer
             tile_regs_release();
@@ -108,13 +110,16 @@ void kernel_main() {
         pack_reconfig_data_format(index_transposed_cb_index);
         for (uint32_t wt = 0; wt < Wt; wt++) {
             tile_regs_acquire();
-            index_transposed_cb.reserve_back(1);
             copy_tile(index_cb_index, wt, 0);         // Copy index tile from local core wt
             tile_regs_commit();
+
+            index_transposed_cb.reserve_back(1);
+
             tile_regs_wait();
             pack_tile(0, index_transposed_cb_index);  // Pack to staging buffer
-            index_transposed_cb.push_back(1);
             tile_regs_release();
+
+            index_transposed_cb.push_back(1);
         }  // wt loop
         index_transposed_cb.wait_front(Wt);
         index_cb.pop_front(Wt);  // Release input buffer space
