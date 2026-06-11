@@ -114,7 +114,7 @@ Open work tracked in the Backlog section below.
 
 ## Backlog (execution order; numbers are stable cross-refs)
 
-Legend: `[x]` done · `[ ]` open · ⏸️ postponed · 📌 resolved as decision (no code).
+Legend: `[x]` done · `[~]` partial · `[ ]` open · ⏸️ postponed · 📌 resolved as decision (no code).
 
 ### Recommended implementation order (open items, 2026-06-11)
 
@@ -140,7 +140,7 @@ Legend: `[x]` done · `[ ]` open · ⏸️ postponed · 📌 resolved as decisio
 - [ ] ⏸️ **(3)** scale gate 50k cache + 1k chunks overnight (cached truth); 5k once fused kernels land (agreement 15)
 
 **Functional gaps (blocking production)**
-- [ ] **(4)** 2x2 SP×TP mesh — indexer needs full sequence per chip (seq AG or distributed topk); sparse_mla prefix read needs SP-aware gathering
+- [~] **(4)** 2x2 SP×TP mesh — **single-shot DONE** (5.1–5.4, seq4k 2x2 PCC 0.9974; full 1x4+2x2 matrix green). Indexer stems SP-all-gathered, index cache replicated, MLA KVPE SP-sharded + gathered, sparse_mla SP×TP-aware. **Remaining: 5.5 chunked+SP** (cache-slot prefix read must SP-gather; guarded with NotImplementedError now)
 - [x] **(5)** pretrained weights — test knobs (conftest `--ds-layer` / `--ds-checkpoint` / `--ds-repo` / `--ds-input`); `build_cpu_reference(layer, checkpoint_path, repo)` loads a specific MLA+indexer layer via reference_cpu `initialize_weights`; `make_hidden(--ds-input)` injects file-driven input (chunked + indexer tests; single-shot uses v3 harness input). ref-cache keyed by weight source. **Validated on real layer-0 weights: seq256 (dense) output PCC 0.9997; seq4k (DSA active) output 0.9996, sparse rows 0.9994, KVPE 0.9999** — full path HF download → fp8 dequant → weight map → PCC. DSA on trained weights ≈ random or slightly better (sharper top-k selection).
 - [x] **(6)** device-side indexer stems — wq_b/wk/weights_proj GEMMs + k_norm (LayerNorm) + TP all-reduce on device, replicated across TP; wk/weights_proj sharded on the `dim` contraction axis (per-chip partials → `_tp_rs_ag`); qr reuses the v3 q_a stem. Only non-interleaved RoPE stays on host (F1, pe slices read back per chunk). Eliminates the per-chunk full-hidden readback + host GEMMs. Validated 1x4: indexer chunked==single-shot selection green; seq4k e2e PCC 0.9966 (was 0.9975 host — `weights_proj` fp32→bf16 cost, within 0.98 threshold). Test needs FABRIC_1D now (device CCL). Follow-ups → backlog 9/10 (device K-cache, drop pe readback), 4 (2x2)
 - [x] 📌 **(7)** fp8/Hadamard parity — follow v3 cache format (kvpe bfloat8_b); ttnn has no matching fp8, so the functional path is the contract; truth stays use_fp8_path=False/simulate_fp8=False
