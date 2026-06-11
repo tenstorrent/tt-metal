@@ -160,6 +160,27 @@ jobs:
           useDevHostMount: 'true'
           sharedVolumeEnabled: 'true'
 
+      - name: Sync allocation configs to workers
+        run: |
+          set -euo pipefail
+          TTOP_DIR=/etc/ttop
+          SSH_OPTS="-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+          for f in hostfile rankfile rank_bindings.yaml mgd.textproto; do
+            if [ ! -f "${TTOP_DIR}/${f}" ]; then
+              echo "ERROR: missing ${TTOP_DIR}/${f} on runner"
+              exit 1
+            fi
+          done
+          while IFS= read -r hostname; do
+            [ -z "${hostname}" ] && continue
+            echo "Syncing ${TTOP_DIR} -> ${hostname}:${TTOP_DIR}"
+            ssh ${SSH_OPTS} "${hostname}" "sudo mkdir -p ${TTOP_DIR}"
+            for f in hostfile rankfile rank_bindings.yaml mgd.textproto; do
+              scp ${SSH_OPTS} "${TTOP_DIR}/${f}" "${hostname}:/tmp/ttop_${f}"
+              ssh ${SSH_OPTS} "${hostname}" "sudo mv /tmp/ttop_${f} ${TTOP_DIR}/${f} && sudo chmod a+r ${TTOP_DIR}/${f}"
+            done
+          done < "${TTOP_DIR}/hostfile"
+
       - name: Debug allocation configs
         run: |
           set -euo pipefail
@@ -207,9 +228,9 @@ jobs:
             echo "========== Worker ${FIRST_HOST}: ${TTOP_DIR} =========="
             ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=no "${FIRST_HOST}" \
               "ls -la ${TTOP_DIR} 2>&1; for f in hostfile rankfile rank_bindings.yaml mgd.textproto; do echo; echo \"--- \$f ---\"; cat ${TTOP_DIR}/\$f 2>&1 || echo \"(missing)\"; done" \
-              || echo "WARNING: could not read /etc/ttop on worker ${FIRST_HOST}"
+              || echo "WARNING: could not read ${TTOP_DIR} on worker ${FIRST_HOST}"
           else
-            echo "WARNING: no hostfile on runner, skipping worker /etc/ttop check"
+            echo "WARNING: no hostfile on runner, skipping worker check"
           fi
 
       - name: 📦 Download Build Artifact

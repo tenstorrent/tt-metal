@@ -158,6 +158,11 @@ runs:
           scp -o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR  ${{ inputs.directory }}/hostfile "$hostname":/tmp/hostfile
           ssh -o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$hostname" "sudo mv /tmp/hostfile  ${{ inputs.directory }}/hostfile"
 
+          if [ -f "${{ inputs.directory }}/rankfile" ]; then
+            scp -o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR  ${{ inputs.directory }}/rankfile "$hostname":/tmp/rankfile
+            ssh -o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$hostname" "sudo mv /tmp/rankfile  ${{ inputs.directory }}/rankfile"
+          fi
+
         done <  ${{ inputs.directory }}/hostfile
         echo "TT-Run data copied to all the workers"
 
