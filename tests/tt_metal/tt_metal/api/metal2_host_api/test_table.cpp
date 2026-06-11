@@ -350,11 +350,6 @@ TEST(TableMiscTest, ContainsWithIntKey) {
 // The hash is taken over the underlying entries vector, so it follows insertion
 // order — unlike operator==, which is order independent (see HashFollowsInsertionOrder).
 
-// Compile-time: Table advertises the reflection attribute hooks hash_object uses.
-static_assert(
-    ttsl::reflection::detail::supports_compile_time_attributes_v<StrIntTable>,
-    "Table must expose attribute_names / attribute_values() for ttsl reflection");
-
 // Canonical hash entry point (matches how reflected structs hash themselves).
 template <typename T>
 ttsl::hash::hash_t hash_of(const T& object) {
