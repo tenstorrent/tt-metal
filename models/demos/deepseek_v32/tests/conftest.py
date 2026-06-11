@@ -4,7 +4,19 @@
 import pytest
 
 # Reuse all v3 fixtures/hooks (variant, weights, model download, collection rules).
+import models.demos.deepseek_v3_d_p.tests.conftest as _v3_conftest
 from models.demos.deepseek_v3_d_p.tests.conftest import *  # noqa: F401,F403
+
+
+def pytest_configure(config):
+    """Register v32 test-group markers (compose with v3's marker registration)."""
+    _v3_conftest.pytest_configure(config)
+    for line in (
+        "dev: fast inner-loop tests (~1 min, no cold CPU truth) — run per-edit",
+        "gate: full correctness matrix (CPU truths must be cached; ~10-15 min) — pre-commit/CI",
+        "nightly: cold-truth builds + scale gate (big-box only; excluded by default)",
+    ):
+        config.addinivalue_line("markers", line)
 
 
 def pytest_addoption(parser):

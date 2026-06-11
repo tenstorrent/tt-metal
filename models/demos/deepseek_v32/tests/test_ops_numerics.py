@@ -19,6 +19,8 @@ from models.demos.deepseek_v32.reference_cpu.weights import init_random
 from models.demos.deepseek_v32.tt import ops
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
+pytestmark = pytest.mark.dev  # fast op-numerics tests — inner loop
+
 LOGITS_PCC = 0.99
 
 

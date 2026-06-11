@@ -16,6 +16,8 @@ import torch
 import ttnn
 from models.demos.deepseek_v32.tt import ops
 
+pytestmark = pytest.mark.dev  # fast op-contract tests — inner loop
+
 H_IDX, D_IDX = 64, 128
 KVPE_DIM, KV_RANK = 576, 512
 

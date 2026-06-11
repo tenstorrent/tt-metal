@@ -35,6 +35,10 @@ from models.demos.deepseek_v32.reference_cpu.weights import DEFAULT_REPO, initia
 from models.demos.deepseek_v32.tt.mla import ttMLA as ttMLAv32
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
+# e2e/correctness tests — pre-commit/CI (CPU truths must be cached). seq256 also
+# carries `dev` (see its param mark) so `-m dev` gets a fast e2e smoke.
+pytestmark = pytest.mark.gate
+
 OUTPUT_PCC = 0.98
 KVPE_PCC = 0.99
 
@@ -161,7 +165,9 @@ def assert_config_matches(config, args):
 )
 # seq256/seq2k: dense-equivalent (seq <= index_topk, DSA inactive, v32 passthrough).
 # seq4k: sparse path active on both sides (device indexer+sparse_mla vs CPU index mask).
-@pytest.mark.parametrize("seq_len", [256, 2048, 4096], ids=["seq256", "seq2k", "seq4k"])
+@pytest.mark.parametrize(
+    "seq_len", [pytest.param(256, marks=pytest.mark.dev), 2048, 4096], ids=["seq256", "seq2k", "seq4k"]
+)
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
 @pytest.mark.timeout(0)
 def test_v32_mla_vs_cpu_reference(
