@@ -19,7 +19,13 @@ import torch.nn as nn
 from loguru import logger
 
 import ttnn
-from models.tt_dit.models.vae.vae_ltx import LTXCausalConv3d, LTXDepthToSpaceUpsample, LTXResnetBlock3D, LTXVideoDecoder
+from models.tt_dit.models.vae.vae_ltx import (
+    LTXCausalConv3d,
+    LTXDepthToSpaceUpsample,
+    LTXResnetBlock3D,
+    LTXVideoDecoder,
+    LTXVideoEncoder,
+)
 from models.tt_dit.parallel.config import ParallelFactor, VaeHWParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
@@ -749,3 +755,95 @@ def test_ltx_video_decoder_2k(
     generic blockings — correct, but not yet perf-tuned. See conv3d.py.
     """
     _run_ltx_decoder_parity(mesh_device, h_axis, w_axis, num_links, num_frames, height, width, mean=mean, std=std)
+
+
+# ---------------------------------------------------------------------------
+# Encoder parity (LTXVideoEncoder vs ltx_core VideoEncoder)
+# ---------------------------------------------------------------------------
+def _require_ltx_core_encoder():
+    """Return the ltx_core reference VideoEncoder + enums, skipping if unavailable."""
+    pytest.importorskip("ltx_core")
+    from ltx_core.model.video_vae.enums import LogVarianceType, NormLayerType, PaddingModeType
+    from ltx_core.model.video_vae.video_vae import VideoEncoder
+
+    return {
+        "encoder": VideoEncoder,
+        "NormLayerType": NormLayerType,
+        "LogVarianceType": LogVarianceType,
+        "PaddingModeType": PaddingModeType,
+    }
+
+
+# Small encoder config: conv_in (48->128) -> res_x -> compress_space_res -> compress_time_res.
+# Avoids resnet channel-shortcut paths (res_x keeps channels; compress_*_res change channels via
+# space-to-depth), so the parity check isolates the new encoder primitives.
+_LTX_ENCODER_SMALL_BLOCKS = [
+    ("res_x", {"num_layers": 1}),
+    ("compress_space_res", {"multiplier": 2}),
+    ("compress_time_res", {"multiplier": 2}),
+]
+
+
+@pytest.mark.parametrize(
+    "num_frames, height, width",
+    [(9, 64, 64)],
+    ids=["9f_64x64"],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    _LTX_VAE_MESH_DEVICE_PARAMS,
+    ids=_LTX_VAE_MESH_DEVICE_IDS,
+    indirect=["mesh_device", "device_params"],
+)
+def test_ltx_video_encoder(mesh_device: ttnn.MeshDevice, num_frames: int, height: int, width: int):
+    """LTXVideoEncoder parity vs the ltx_core reference VideoEncoder.
+
+    Random weights — checks the encode path (patchify -> conv_in -> down_blocks -> PixelNorm+SiLU
+    -> conv_out (means) -> per-channel normalize) matches the reference numerically.
+    """
+    mods = _require_ltx_core_encoder()
+    VideoEncoder = mods["encoder"]
+
+    torch.manual_seed(42)
+    latent_channels = 128
+
+    ref = VideoEncoder(
+        in_channels=3,
+        out_channels=latent_channels,
+        encoder_blocks=_LTX_ENCODER_SMALL_BLOCKS,
+        patch_size=4,
+        norm_layer=mods["NormLayerType"].PIXEL_NORM,
+        latent_log_var=mods["LogVarianceType"].UNIFORM,
+        encoder_spatial_padding_mode=mods["PaddingModeType"].ZEROS,
+    )
+    # The reference per-channel stats buffers are uninitialized (torch.empty); set known values so
+    # normalize() = (x - mean) / std is deterministic and well-conditioned.
+    with torch.no_grad():
+        ref.per_channel_statistics.get_buffer("mean-of-means").copy_(torch.randn(latent_channels))
+        ref.per_channel_statistics.get_buffer("std-of-means").copy_(torch.rand(latent_channels) + 0.5)
+    ref.eval()
+
+    x = torch.randn(1, 3, num_frames, height, width, dtype=torch.float32)
+    with torch.no_grad():
+        ref_out = ref(x.clone())  # (1, 128, F', H', W')
+
+    tt_model = LTXVideoEncoder(
+        encoder_blocks=_LTX_ENCODER_SMALL_BLOCKS,
+        in_channels=3,
+        out_channels=latent_channels,
+        patch_size=4,
+        mesh_device=mesh_device,
+        num_frames=num_frames,
+        height=height,
+        width=width,
+        **_vae_parallel_kwargs(mesh_device),
+    )
+    tt_model.load_torch_state_dict(ref.state_dict())
+
+    tt_out = _unwrap_tt_output(tt_model(x.clone()))  # host (B, C, F', H', W')
+
+    logger.info(f"ref out {tuple(ref_out.shape)}, TT out {tuple(tt_out.shape)}")
+    assert tt_out.shape == ref_out.shape, f"shape mismatch: TT {tt_out.shape} vs ref {ref_out.shape}"
+    assert torch.isfinite(tt_out).all(), "NaN/Inf in TT encoder output"
+    assert_quality(ref_out, tt_out, pcc=0.99)
+    logger.info("PASSED: LTXVideoEncoder matches ltx_core VideoEncoder")

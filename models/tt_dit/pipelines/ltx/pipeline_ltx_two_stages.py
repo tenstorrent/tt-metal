@@ -5,7 +5,7 @@
 
 Mirrors ``ltx_pipelines.ti2vid_two_stages.TI2VidTwoStagesPipeline``: full-guidance s1
 on the base 22B checkpoint, x2 device upsample, then distilled-LoRA s2 refine.
-Text-only; image conditioning not wired yet.
+Supports text-to-video and image+text-to-video (I2V) conditioning.
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ class LTXTwoStagesPipeline(LTXPipeline):
     distilled-LoRA s2 refine (variant 1 = LoRA-fused base)."""
 
     HAS_UPSAMPLER = True
+    SUPPORTS_IMAGE_CONDITIONING = True
 
     def __init__(
         self,
@@ -73,6 +74,14 @@ class LTXTwoStagesPipeline(LTXPipeline):
         )
 
         s1_h, s1_w = height // 2, width // 2
+
+        # I2V: compile the encoder at both stage resolutions before the DiT loads (it is
+        # coresident-excluded with the transformer, mirroring the generate() ordering).
+        if self.vae_encoder is not None:
+            logger.info(f"warmup image encoder: {s1_h}x{s1_w} + {height}x{width}")
+            self._warmup_encode(s1_h, s1_w)
+            self._warmup_encode(height, width)
+
         self._prepare_transformer(0)
 
         # Zeros at the real shapes compile the shape-driven call_av kernels without loading
@@ -151,6 +160,9 @@ class LTXTwoStagesPipeline(LTXPipeline):
         prompt: str,
         *,
         output_path: str,
+        # I2V conditioning: list of (image_path, frame_idx, strength). Only frame_idx==0
+        # (first-frame image conditioning) is supported. None -> pure text-to-video.
+        images: list[tuple[str, int, float]] | None = None,
         # Consumed by ``__init__`` (variant 1 is built there); if passed here they
         # must match what ``__init__`` saw, else generate raises.
         distilled_lora_path: str | None = None,
@@ -215,6 +227,27 @@ class LTXTwoStagesPipeline(LTXPipeline):
         v_p, a_p = enc[0][0].float(), enc[0][1].float()
         v_n, a_n = enc[1][0].float(), enc[1][1].float()
 
+        # I2V image conditioning: encode the frame-0 image at both stage resolutions before the DiT
+        # loads (the encoder is coresident-excluded with the transformer). The reference re-encodes
+        # per stage; stage 1 uses the half-res latent, stage 2 the full-res latent.
+        s1_cond_latent = full_cond_latent = None
+        cond_strength = 1.0
+        if images:
+            cond_imgs = [img for img in images if img[1] == 0]
+            if len(cond_imgs) != len(images):
+                logger.warning("Two-stage I2V only supports frame_idx==0 conditioning; ignoring keyframe images")
+            if cond_imgs:
+                assert self.vae_encoder is not None, "checkpoint has no VAE encoder; cannot run I2V conditioning"
+                img_path, _, cond_strength = cond_imgs[0]
+                logger.info(f"I2V: encoding conditioning image {img_path} (strength={cond_strength})")
+                t0 = time.time()
+                img_s1 = self._load_conditioning_image(img_path, s1_h, s1_w)
+                img_full = self._load_conditioning_image(img_path, height, width)
+                s1_cond_latent = self.encode_image(img_s1)
+                full_cond_latent = self.encode_image(img_full)
+                timings.append(("Image encode", time.time() - t0))
+                logger.info(f"Image encode: {time.time() - t0:.1f}s")
+
         # Stage 1: variant 0 (base), half-res, full guidance.
         self._prepare_transformer(0)
         logger.info(f"Stage 1: {s1_h}x{s1_w}, {num_inference_steps} guided steps")
@@ -238,6 +271,8 @@ class LTXTwoStagesPipeline(LTXPipeline):
             stg_block=stg_block,
             seed=seed,
             ge_gamma=ge_gamma,
+            image_cond_latent=s1_cond_latent,
+            image_cond_strength=cond_strength,
         )
         t_stage1 = time.time() - t0
         timings.append(("Stage 1 denoise", t_stage1))
@@ -285,6 +320,8 @@ class LTXTwoStagesPipeline(LTXPipeline):
             initial_video_latent=upsampled_flat,
             initial_audio_latent=s2_audio_init,
             noise_scale=s2_sigma_values[0],
+            image_cond_latent=full_cond_latent,
+            image_cond_strength=cond_strength,
         )
         t_stage2 = time.time() - t0
         timings.append(("Stage 2 denoise", t_stage2))
