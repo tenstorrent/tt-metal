@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>indexer_score — Q chunks across cores, K streams from DRAM</title>
+<style>
+  body { margin:0; background:#111418; color:#e3e7ee; font:15px/1.5 ui-sans-serif,system-ui,sans-serif; }
+  h1 { font-size:18px; margin:14px 20px 4px; }
+  h1 small { color:#93a; color:#8c95a8; font-weight:400; }
+  #narr { margin:8px 20px; padding:12px 16px; background:#1b2027; border:1px solid #303847; border-radius:10px; font-size:16px; min-height:52px; }
+  #narr b { color:#5ad0ff; }
+  .controls { display:flex; gap:10px; align-items:center; margin:8px 20px; }
+  button { background:#262d38; color:#e3e7ee; border:1px solid #3a4455; border-radius:8px; padding:9px 18px; font-size:15px; cursor:pointer; }
+  button.primary { background:#5ad0ff; color:#04222f; font-weight:700; }
+  .bar { flex:1; height:8px; background:#262d38; border-radius:4px; overflow:hidden; }
+  .bar div { height:100%; background:#5ad0ff; }
+  #stepnum { color:#8c95a8; min-width:64px; text-align:right; }
+  canvas { display:block; margin:6px 20px; background:#171b21; border:1px solid #303847; border-radius:10px; width:calc(100% - 40px); }
+  .params { display:flex; gap:14px; margin:6px 20px 16px; flex-wrap:wrap; align-items:end; color:#8c95a8; font-size:13px; }
+  .params label { display:block; }
+  .params input { width:84px; background:#262d38; color:#e3e7ee; border:1px solid #3a4455; border-radius:6px; padding:5px 7px; font:14px ui-monospace,monospace; }
+  #stats { color:#8c95a8; font-size:13px; margin-left:auto; font-family:ui-monospace,monospace; }
+</style>
+</head>
+<body>
+<h1>indexer_score &nbsp;<small>score = Σ heads relu(q·kᵀ)·w — unit of work = Q chunk; every core sweeps ALL of K from DRAM</small></h1>
+<div id="narr"></div>
+<div class="controls">
+  <button id="prev">⟨ prev</button>
+  <button id="play" class="primary">▶ play</button>
+  <button id="next">next ⟩</button>
+  <div class="bar"><div id="bar"></div></div><span id="stepnum"></span>
+</div>
+<canvas id="cv" width="1500" height="900"></canvas>
+<div class="params">
+  <label>Sq <input id="pSq" value="640"></label>
+  <label>T <input id="pT" value="55296"></label>
+  <label>D <input id="pD" value="128"></label>
+  <label>heads <input id="pH" value="64"></label>
+  <label>chunk_start <input id="pCS" value="50176"></label>
+  <label>Sq_chunk (tiles) <input id="pQC" value="2"></label>
+  <label>Sk_chunk (tiles) <input id="pKC" value="8"></label>
+  <label>cores <input id="pCores" value="64"></label>
+  <button id="apply">apply</button>
+  <span id="stats"></span>
+</div>
+
+<script>
+'use strict';
+const TILE=32, $=id=>document.getElementById(id), cv=$('cv'), cx=cv.getContext('2d');
+const ceil=(a,b)=>Math.ceil(a/b);
+let P={}, steps=[], si=0, timer=null;
+
+function build(){
+  const Sq=+$('pSq').value, T=+$('pT').value, D=+$('pD').value, H=+$('pH').value,
+        CS=+$('pCS').value, QC=+$('pQC').value, KC=+$('pKC').value, cores=+$('pCores').value;
+  const Sqt=ceil(Sq,TILE), Tt=ceil(T,TILE), Dt=ceil(D,TILE);
+  const nQ=ceil(Sqt,QC), nK=ceil(Tt,KC);
+  // SDPA-style: flat list of Q chunks dealt round-robin to cores; idle cores stay idle
+  const qChunks=[]; for(let i=0;i<nQ;i++) qChunks.push({r0:i*QC, r1:Math.min((i+1)*QC,Sqt), core:i%cores});
+  // K-chunk status vs a Q chunk: 2 all-visible, 1 diagonal (mask), 0 all-future (skip)
+  const stat=(q,k)=>{ const t0=k*KC*TILE, t1=Math.min((k+1)*KC,Tt)*TILE-1,
+        sMax=Math.min(Sq-1,q.r1*TILE-1), s0=q.r0*TILE;
+        if(t0>CS+sMax) return 0; if(Math.min(t1,T-1)<=CS+s0) return 2; return 1; };
+  const focus=qChunks.length-1; // last chunk: diagonal flush against end
+  const G=Math.max(1,Math.ceil(nK/22)); // sweep nK k-chunks in ≤22 animation steps
+  P={Sq,T,D,H,CS,QC,KC,cores,Sqt,Tt,Dt,nQ,nK,qChunks,focus,stat,G};
+
+  steps=[
+   {ph:0,t:'Tilize',d:`q <b>${Sqt}×${Dt}</b> tiles ×${H} heads, kᵀ <b>${Dt}×${Tt}</b>, score <b>${Sqt}×${Tt}</b>. Heads are a <b>sum</b>, so they never split across cores.`},
+   {ph:1,t:'Schedule Q chunks',d:`Like ring-joint SDPA: <b>${nQ} Q chunks</b> (${QC} tile rows each) round-robin across <b>${cores} cores</b> — ${nQ<cores?cores-nQ+' cores idle':ceil(nQ,cores)+' chunk(s)/core'}. Each core owns whole score rows → contiguous RM rows for top-k.`},
+   {ph:2,t:'Q resident',d:`Each core loads its q chunk for <b>all ${H} heads</b> (${QC}×${Dt}×${H} tiles = ${Math.round(QC*Dt*H*2048/1024)} KB) + w, once. K is never resident.`},
+  ];
+  for(let k=0;k<nK;k+=G) steps.push({ph:3,k0:k,k1:Math.min(k+G,nK),
+    t:`K sweep ${Math.min(k+G,nK)}/${nK}`,
+    d:`All cores stream k-chunks ${k}–${Math.min(k+G,nK)-1} (${KC}×${Dt} tiles, triple-buffered) and run ${H} heads: matmul→relu→×w→accumulate. Causal: top rows finish first, bottom rows mask the diagonal, all skip future chunks.`});
+  steps.push({ph:4,t:'−inf fill',d:`Skipped (future + pad) columns never touch compute — writer memsets them to <b>−inf</b> (zeros unsafe: gates negative). Done.`});
+  si=0;
+  $('stats').textContent=`${Sqt}×${Tt} out tiles · q/core ${Math.round(QC*Dt*H*2)}KB · k buf ${KC*Dt*3*2}KB`;
+}
+
+const hue=c=>(c*53)%310;
+function draw(){
+  const s=steps[si]; cx.fillStyle='#171b21'; cx.fillRect(0,0,cv.width,cv.height);
+  const sweep = s.ph===3? s.k1 : s.ph>3? P.nK : 0;
+  const X=130, Y=120, W=1300, Hh=560, tw=W/P.nK, th=Hh/P.nQ;
+  cx.textBaseline='middle';
+
+  // kT strip on top
+  cx.fillStyle='#8c95a8'; cx.font='15px ui-monospace';
+  cx.fillText(`kᵀ  ${P.Dt}×${P.Tt} tiles in DRAM → streamed in ${P.nK} chunks of ${P.KC}`, X, 30);
+  for(let k=0;k<P.nK;k++){
+    cx.fillStyle = k<sweep? '#3a4455' : '#7a5a3a';
+    if(s.ph===3&&k>=s.k0&&k<s.k1) cx.fillStyle='#ffb454';
+    cx.fillRect(X+k*tw, 44, Math.max(tw-1,1), 26);
+  }
+  // q strip on left
+  cx.save(); cx.translate(34,Y+Hh/2); cx.rotate(-Math.PI/2); cx.fillStyle='#8c95a8';
+  cx.textAlign='center'; cx.fillText(`q ${P.Sqt}×${P.Dt}t ×${P.H}h — chunk per core`,0,0); cx.restore();
+  for(const [i,q] of P.qChunks.entries()){
+    cx.fillStyle = s.ph>=1? `hsl(${hue(q.core)} 55% ${s.ph>=2?52:30}%)` : '#2a313d';
+    cx.fillRect(64, Y+i*th, 50, Math.max(th-2,2));
+    if(th>14&&s.ph>=1){cx.fillStyle='#10131a';cx.font='11px ui-monospace';cx.textAlign='center';
+      cx.fillText('c'+q.core,89,Y+i*th+th/2);cx.textAlign='left';}
+  }
+  // score matrix: one row per Q chunk, one col per K chunk
+  for(const [i,q] of P.qChunks.entries()) for(let k=0;k<P.nK;k++){
+    const st=P.stat(q,k), pad=k*P.KC*TILE>=P.T;
+    let col='#222831';
+    if(s.ph>=1) col = st===0? '#262c36' : `hsl(${hue(q.core)} 40% 22%)`;
+    if(k<sweep) col = pad? '#665230' : st===0? (s.ph===4?'#3a4455':'#262c36') : st===1? '#b07fe0' : '#41b883';
+    if(s.ph===3&&k>=s.k0&&k<s.k1&&st>0) col='#ffe28a';
+    cx.fillStyle=col; cx.fillRect(X+k*tw, Y+i*th, Math.max(tw-1,1), Math.max(th-2,2));
+  }
+  if(s.ph===4){cx.fillStyle='#e3e7ee';cx.font='15px ui-monospace';
+    cx.fillText('−inf', X+W-150, Y+18);}
+  // causal line
+  cx.strokeStyle='#ffb454'; cx.lineWidth=2; cx.beginPath();
+  cx.moveTo(X+P.CS/TILE/P.KC*tw, Y); cx.lineTo(X+(P.CS+P.Sq)/TILE/P.KC*tw, Y+Hh); cx.stroke();
+  cx.fillStyle='#ffb454'; cx.font='13px ui-monospace';
+  cx.fillText('t = chunk_start + s', Math.min(X+P.CS/TILE/P.KC*tw-60, X+W-160), Y-10);
+
+  // focus row zoom
+  const fy=Y+Hh+56, f=P.qChunks[P.focus];
+  cx.fillStyle='#8c95a8'; cx.font='15px ui-monospace';
+  cx.fillText(`zoom: core ${f.core}, last Q chunk (rows ${f.r0*TILE}–${Math.min(f.r1*TILE,P.Sq)-1}) — q+w resident, per k-chunk: ${P.H} heads × ${P.KC}×${P.Dt} matmuls → relu → ×w → L1 acc fp32 → pack_untilize → RM`, X, fy-16);
+  for(let k=0;k<P.nK;k++){
+    const st=P.stat(f,k), pad=k*P.KC*TILE>=P.T;
+    cx.fillStyle = k<sweep? (pad?'#665230':st===0?(s.ph===4?'#3a4455':'#262c36'):st===1?'#b07fe0':'#41b883')
+                 : st===0? '#262c36' : '#2e3a4c';
+    if(s.ph===3&&k>=s.k0&&k<s.k1&&st>0) cx.fillStyle='#ffe28a';
+    cx.fillRect(X+k*tw, fy, Math.max(tw-1,1), 40);
+  }
+  cx.fillStyle='#8c95a8'; cx.font='13px ui-monospace';
+  cx.fillText('green done · purple diag+mask · yellow in flight · dark future→−inf · brown pad', X, fy+62);
+
+  $('bar').style.width=(si/(steps.length-1)*100)+'%'; $('stepnum').textContent=(si+1)+' / '+steps.length;
+  $('narr').innerHTML='<b>'+s.t+'</b> — '+s.d;
+}
+
+function go(i){si=Math.max(0,Math.min(steps.length-1,i));draw();}
+$('next').onclick=()=>go(si+1); $('prev').onclick=()=>go(si-1);
+$('play').onclick=()=>{ if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ play';return;}
+  if(si>=steps.length-1)si=0;
+  $('play').textContent='⏸ pause';
+  timer=setInterval(()=>{ if(si>=steps.length-1){clearInterval(timer);timer=null;$('play').textContent='▶ play';} else go(si+1); },800); };
+$('apply').onclick=()=>{build();go(0);};
+build(); go(0);
+</script>
+</body>
+</html>

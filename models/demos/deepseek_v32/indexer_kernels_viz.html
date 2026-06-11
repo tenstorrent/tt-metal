@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>indexer_score — three kernels, one tile at a time</title>
+<style>
+  :root{
+    --bg:#0b0e15;--bg2:#10141f;--panel:#151a28;--panel2:#1b2236;--ink:#e8edf6;--dim:#97a3ba;--line:#283150;
+    --accent:#5ad1c8;--accent2:#7aa2ff;--good:#46d39a;--pack:#c98bff;--unpack:#ffb36b;--red:#ff6b81;
+    --mono:'SF Mono',ui-monospace,'Cascadia Code',Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1100px 650px at 85% -12%,#18223c 0,transparent 60%),var(--bg);
+    color:var(--ink);font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;line-height:1.5;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1280px;margin:0 auto;padding:32px 22px 60px}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.13em;text-transform:uppercase;color:var(--accent)}
+  h1{font-size:30px;line-height:1.15;margin:12px 0 8px;letter-spacing:-.02em}
+  h1 .grad{background:linear-gradient(90deg,var(--accent),var(--accent2));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .lead{color:var(--dim);font-size:16px;max-width:1080px;margin:0 0 8px}
+  .lead b,.lead code{color:var(--ink)} code,.mono{font-family:var(--mono)}
+  .eq{font-family:var(--mono);font-size:14px;color:var(--accent);background:#0e1320;border:1px solid var(--line);border-radius:10px;padding:9px 13px;display:inline-block;margin:8px 0 18px}
+  .panel{background:linear-gradient(180deg,var(--panel),var(--bg2));border:1px solid var(--line);border-radius:14px;padding:22px}
+
+  .lanes{display:grid;grid-template-columns:1fr 1.2fr 1fr;gap:14px}
+  .lane{border:1px solid var(--line);border-radius:12px;background:#0c1018;overflow:hidden;transition:.15s;padding-bottom:12px}
+  .lane.hot{box-shadow:0 0 0 1px var(--accent)}
+  .lane.blk{box-shadow:0 0 0 1px var(--red)}
+  .lane h3{margin:0;padding:9px 14px;font-size:12px;font-family:var(--mono);letter-spacing:.08em;border-bottom:1px solid var(--line);color:var(--dim)}
+  .lane.reader h3 b{color:var(--accent2)} .lane.compute h3 b{color:var(--good)} .lane.writer h3 b{color:var(--pack)}
+  .lane .st{padding:6px 14px;font-family:var(--mono);font-size:11px;min-height:30px;color:var(--unpack);border-bottom:1px solid #141a2b}
+  .lane .st.blk{color:var(--red)}
+  .sub{font-family:var(--mono);font-size:10px;color:var(--dim);margin:10px 14px 4px}
+  .row{display:flex;gap:4px;margin:0 14px;flex-wrap:wrap}
+  .cell{height:20px;border:1px solid var(--line);border-radius:3px;background:#0e1320;font-family:var(--mono);font-size:9px;display:grid;place-items:center;color:#3d4a66;transition:.1s}
+  .cell.q{width:30px}.cell.k{flex:1;min-width:26px}.cell.fr{width:18px;height:13px}
+  .cell.res{background:rgba(122,162,255,.45);border-color:var(--accent2);color:#dbe6ff}
+  .cell.rd{background:rgba(255,179,107,.45);border-color:var(--unpack);color:#ffe2c4}
+  .cell.pre{background:rgba(122,162,255,.22);border-color:var(--accent2);color:var(--accent2)}
+  .cell.done{background:rgba(70,211,154,.25);border-color:var(--good);color:var(--good)}
+  .cell.wr{background:rgba(201,139,255,.5);border-color:var(--pack);color:#f0dcff}
+  .cell.inf{background:rgba(255,107,129,.3);border-color:var(--red);color:var(--red)}
+  .cell.diag{outline:1px dashed var(--unpack)}
+
+  .engine{display:flex;align-items:center;justify-content:center;gap:8px;margin-top:14px;flex-wrap:wrap;padding:0 10px}
+  .reg{text-align:center}.rlabel{font-family:var(--mono);font-size:9px;color:var(--dim);margin-bottom:3px}
+  .tile{min-width:64px;height:30px;padding:0 8px;border-radius:6px;border:1px solid var(--line);background:#0e1320;display:grid;place-items:center;font-family:var(--mono);font-size:11px;font-weight:700;color:var(--dim);transition:.12s}
+  .tile.lit{color:#fff;background:#1a2740;box-shadow:0 0 0 2px var(--accent2)}
+  .mult{font-size:18px;color:var(--good)} .arr{font-size:16px;color:var(--dim)}
+  .fpu{border:1px solid var(--good);border-radius:8px;padding:6px 10px;font-family:var(--mono);font-size:11px;color:var(--good);background:rgba(70,211,154,.06);transition:.12s;min-width:86px;text-align:center}
+  .fpu.mm{background:rgba(70,211,154,.22);box-shadow:0 0 0 2px var(--good)}
+  .fpu.mul{border-color:var(--pack);color:var(--pack);background:rgba(201,139,255,.18);box-shadow:0 0 0 2px var(--pack)}
+  .fpu.mask{border-color:var(--red);color:var(--red);background:rgba(255,107,129,.15);box-shadow:0 0 0 2px var(--red)}
+  .fpu.pk{border-color:var(--unpack);color:var(--unpack);background:rgba(255,179,107,.16);box-shadow:0 0 0 2px var(--unpack)}
+  .dstrow{display:flex;gap:3px}
+  .dslot{width:14px;height:26px;border-radius:3px;border:1px solid var(--line);background:#0e1320;transition:.12s}
+  .dslot.mm{background:rgba(70,211,154,.5);border-color:var(--good)}
+  .dslot.mul{background:rgba(201,139,255,.5);border-color:var(--pack)}
+  .accwrap{margin:12px 14px 0}
+  .accbar{height:9px;border-radius:5px;background:#0e1320;border:1px solid var(--line);overflow:hidden}
+  .accbar div{height:100%;background:linear-gradient(90deg,var(--good),var(--accent));width:0%;transition:.15s}
+
+  .cbrow{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:16px}
+  .cb{border:1px solid var(--line);border-radius:9px;background:#0c1018;padding:7px 10px;min-width:92px;text-align:center}
+  .cb .nm{font-family:var(--mono);font-size:10px;color:var(--dim);margin-bottom:5px}
+  .slots{display:flex;gap:2px;justify-content:center}
+  .slot{width:13px;height:18px;border-radius:3px;border:1px solid var(--line);background:#0e1320;transition:.1s}
+  .slot.f{background:rgba(122,162,255,.55);border-color:var(--accent2)}
+  .slot.f32{background:rgba(70,211,154,.5);border-color:var(--good)}
+  .slot.o{background:rgba(201,139,255,.55);border-color:var(--pack)}
+  .slot.m{background:rgba(255,107,129,.5);border-color:var(--red)}
+  .cb .ct{font-family:var(--mono);font-size:10px;color:#5f6b86;margin-top:4px}
+
+  .stepctrl{display:flex;align-items:center;gap:12px;justify-content:center;margin-top:20px;flex-wrap:wrap}
+  .btn{font-family:var(--mono);font-size:14px;border:1px solid var(--line);background:var(--panel2);color:var(--ink);padding:10px 16px;border-radius:11px;cursor:pointer;transition:.15s}
+  .btn:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+  .btn:disabled{opacity:.35;cursor:not-allowed}
+  .btn.primary{background:linear-gradient(90deg,var(--accent),var(--accent2));color:#04120f;border:none;font-weight:700}
+  .stepno{font-family:var(--mono);font-size:13px;color:var(--dim);min-width:84px;text-align:center}
+  .speedrow{display:flex;gap:6px;justify-content:center;align-items:center;margin-top:10px;font-family:var(--mono);font-size:12px;color:var(--dim)}
+  .sp{font-family:var(--mono);font-size:12px;border:1px solid var(--line);background:var(--panel2);color:var(--dim);padding:5px 11px;border-radius:8px;cursor:pointer}
+  .sp.active{border-color:var(--accent);color:var(--accent)}
+  .dpdesc{margin-top:14px;padding:14px 16px;border-radius:10px;background:#0e1320;border:1px solid var(--line);font-size:14.5px;min-height:54px;font-family:var(--mono);line-height:1.45}
+  .dpdesc b{color:var(--accent)}
+  .tally{display:flex;gap:14px;justify-content:center;margin-top:14px;flex-wrap:wrap}
+  .stat{background:var(--panel2);border:1px solid var(--line);border-radius:11px;padding:8px 18px;text-align:center;min-width:130px}
+  .stat .n{font-family:var(--mono);font-size:22px;font-weight:800;color:var(--good)} .stat .k{font-size:11px;color:var(--dim);font-family:var(--mono);margin-top:2px}
+  .legend{display:flex;gap:16px;justify-content:center;margin-top:12px;font-size:12px;color:var(--dim);flex-wrap:wrap}
+  .legend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <span class="eyebrow">indexer_score · the three kernels of one tensix · mini rank0: Hi=64 · Dt=4 · chunk_t=4 · Tt=8</span>
+  <h1>reader · compute · writer — <span class="grad">what moves at the same time</span></h1>
+  <p class="lead">All three RISCs walk the <b>same flat span</b> of valid tiles. They only meet through CBs:
+  <code>cb_k</code> is double-buffered so the reader prefetches k(t+1) while math chews k(t);
+  <code>cb_out</code> is double-buffered so the writer scatters tile t−1 while compute packs t. q/w stay resident the whole row.</p>
+  <div class="eq">row s0: valid(0)=min(Tt, chunk_t+1)=5 tiles · t4 is the diagonal · t5..t7 never computed → writer −inf tail</div>
+
+  <div class="panel">
+    <div class="lanes">
+      <div class="lane reader" id="laneR"><h3><b>READER</b> · DRAM → L1 (NoC0)</h3><div class="st" id="stR"></div>
+        <div class="sub">q · 64 heads × 4 tiles (8 blocks of 8h)</div><div class="row" id="qrow"></div>
+        <div class="sub">w · 64 heads × 1 tile</div><div class="row" id="wrow"></div>
+        <div class="sub">k in DRAM · 8 columns × Dt — grey never read</div><div class="row" id="krow"></div>
+      </div>
+      <div class="lane compute" id="laneC"><h3><b>COMPUTE</b> · unpack + math + pack</h3><div class="st" id="stC"></div>
+        <div class="engine">
+          <div class="reg"><div class="rlabel">srcA ← q 4t</div><div class="tile" id="srcA">—</div></div>
+          <span class="mult">⊗</span>
+          <div class="reg"><div class="rlabel">srcB ← kᵀ</div><div class="tile" id="srcB">—</div></div>
+          <span class="arr">→</span><div class="fpu" id="fpu">idle</div>
+        </div>
+        <div class="engine" style="margin-top:10px">
+          <div class="reg"><div class="rlabel">DEST · 8 fp32 (one head pass)</div><div class="dstrow" id="dst"></div></div>
+        </div>
+        <div class="accwrap"><div class="rlabel">acc — heads <span id="hcnt">0</span>/64 summed (fp32)</div><div class="accbar"><div id="accfill"></div></div></div>
+      </div>
+      <div class="lane writer" id="laneW"><h3><b>WRITER</b> · L1 → DRAM (NoC1)</h3><div class="st" id="stW"></div>
+        <div class="sub">tile t<span id="wtid">—</span> · 32 row fragments × 64 B</div><div class="row" id="frow"></div>
+        <div class="sub">−inf tail t5..t7</div><div class="row" id="trow"></div>
+      </div>
+    </div>
+
+    <div class="cbrow" id="cbrow"></div>
+
+    <p class="sub" style="text-align:center;margin-top:16px">score row s0 in DRAM · 8 tile-cols</p>
+    <div class="row" id="ostrip" style="max-width:520px;margin:6px auto 0"></div>
+
+    <div class="stepctrl">
+      <button class="btn" id="prev">◂ Prev</button><button class="btn primary" id="play">▶ Play</button><button class="btn" id="next">Next ▸</button>
+      <span class="stepno" id="stepno"></span>
+    </div>
+    <div class="speedrow">speed:
+      <button class="sp" data-sp="1600">0.5×</button><button class="sp active" data-sp="950">1×</button>
+      <button class="sp" data-sp="450">2×</button><button class="sp" data-sp="200">4×</button>
+    </div>
+    <div class="dpdesc" id="desc"></div>
+    <div class="tally">
+      <div class="stat"><div class="n" id="tIn">0</div><div class="k">KB read (q+w+k)</div></div>
+      <div class="stat"><div class="n" id="tOut">0</div><div class="k">tiles → DRAM (of 5)</div></div>
+      <div class="stat"><div class="n" id="tInf">0</div><div class="k">−inf tiles filled (of 3)</div></div>
+    </div>
+    <div class="legend">
+      <span><i style="background:rgba(255,179,107,.45)"></i>moving now</span><span><i style="background:rgba(122,162,255,.45)"></i>resident / prefetched</span>
+      <span><i style="background:rgba(70,211,154,.25)"></i>done</span><span><i style="background:rgba(201,139,255,.5)"></i>scatter</span>
+      <span><i style="background:rgba(255,107,129,.3)"></i>−inf</span><span>red frame = blocked on CB</span>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+const mk=(id,n,cls,txt)=>{const r=$(id),a=[];for(let i=0;i<n;i++){const d=document.createElement('div');d.className='cell '+cls;d.textContent=txt?txt(i):'';r.appendChild(d);a.push(d);}return a;};
+const qE=mk('qrow',8,'q',i=>'h'+i*8),wE=mk('wrow',8,'q',i=>'h'+i*8),kE=mk('krow',8,'k',i=>'t'+i);
+const fE=mk('frow',32,'fr'),tE=mk('trow',3,'k',i=>'t'+(i+5));
+const oE=mk('ostrip',8,'k',i=>'t'+i);oE[4].classList.add('diag');kE[4].classList.add('diag');
+const dE=[];for(let i=0;i<8;i++){const d=document.createElement('div');d.className='dslot';$('dst').appendChild(d);dE.push(d);}
+const CBS=[["cb_q",8,"256t bf16",'f'],["cb_w",8,"64t",'f'],["cb_k 2×Dt",8,"A|B",'f'],["cb_mask",1,"1t",'m'],
+ ["cb_qk",8,"64t fp32",'f32'],["cb_mul",8,"8t fp32",'f32'],["cb_acc",2,"ping-pong",'f32'],["cb_out",2,"2t bf16",'o'],["cb_scratch",1,"−inf",'m']];
+const cbE=CBS.map(([nm,n,ct,cls])=>{const d=document.createElement('div');d.className='cb';
+ d.innerHTML=`<div class="nm">${nm}</div><div class="slots">${'<div class="slot"></div>'.repeat(n)}</div><div class="ct">${ct}</div>`;
+ $('cbrow').appendChild(d);return{slots:[...d.querySelectorAll('.slot')],cls};});
+
+// step: sr/sc/sw status (txt, b=blocked) · qw 0|1|2(loading) · kCur/kPre/kDone · fpu '' mm mul mask pk · dst · heads
+// wt tile scattering, frag 0..32, tail 0..3 · done · cb[q,w,kA,kB,qk,mul,acc,out] · kb in
+const S=[];const A=o=>S.push(Object.assign({sr:'',sc:'',sw:'',rb:0,cb_:0,wb:0,qw:0,kCur:-1,kPre:-1,kt:0,kDone:0,fpu:'',dst:'',heads:0,wt:-1,frag:0,tail:0,done:0,cb:[0,0,0,0,0,0,0,0],kb:0},o));
+
+A({sr:'build mask tile → L1',sc:'waiting: cb_mask',cb_:1,sw:'fill −inf scratch',d:"<b>t=0.</b> One-time setup, all in parallel: reader writes the strict-upper −inf mask tile into L1, writer memsets its −inf scratch. Compute is parked waiting for the mask. Nothing read from DRAM yet."});
+A({sr:'load q row 128 KB + w 4 KB',sc:'waiting: cb_q',cb_:1,sw:'waiting: cb_out',wb:1,qw:2,cb:[0,0,0,0,0,0,0,0],kb:0,d:"<b>New row s0.</b> Reader pulls the whole q row (64 h × 4 t) and w row over NoC0 — they stay resident for all 5 tiles. The other two engines have nothing to chew yet."});
+A({sr:'k col t0 → slot A',sc:'waiting: cb_k',cb_:1,sw:'waiting: cb_out',wb:1,qw:1,kCur:0,cb:[8,8,0,0,0,0,0,0],kb:132,d:"q+w resident (blue). Reader fetches k column t0 (4 tiles, 8 KB) into k slot A — first tile of work unblocks compute."});
+A({sr:'prefetch k t1 → slot B',sc:'mm+relu k(t0) · pass h0–7',kt:0,sw:'waiting: cb_out',wb:1,qw:1,kCur:1,kPre:0,fpu:'mm',dst:'mm',heads:8,cb:[8,8,4,0,2,0,0,0],kb:140,d:"<b>Overlap #1.</b> Math multiplies q⊗kᵀ(t0) into 8 fp32 DEST tiles + relu, while the reader streams k(t1) into the free slot. Two transfers, two engines, same clock."});
+A({sr:'blocked: cb_k full',rb:1,sc:'passes h8..h63 → cb_qk',kt:0,sw:'waiting: cb_out',wb:1,qw:1,kPre:1,fpu:'mm',dst:'mm',heads:64,cb:[8,8,4,4,8,0,0,0],kb:148,d:"Both k slots full → reader pauses (back-pressure). Compute repeats the 8-head pass 8× — 64 relu'd dot products parked in cb_qk."});
+A({sr:'blocked: cb_k full',rb:1,sc:'×w bcast + acc 64 heads',sw:'waiting: cb_out',wb:1,qw:1,kPre:1,fpu:'mul',dst:'mul',heads:64,cb:[8,8,0,4,8,8,1,0],kb:148,d:"k(t0) popped — slot A free, t1 already resident. Each qk × w[h] (column broadcast), summed ping-pong into one fp32 acc tile."});
+A({sr:'k t2 → slot A',sc:'untilize t0 → bf16',sw:'waiting: cb_out',wb:1,qw:1,kCur:2,kPre:1,fpu:'pk',heads:64,cb:[8,8,4,4,0,0,1,1],kb:156,d:"acc packs out as 32 row-major bf16 rows → cb_out. Reader refills slot A with k(t2). Pipeline primed."});
+A({sr:'blocked: cb_k full',rb:1,sc:'mm+relu k(t1)',kt:1,sw:'scatter t0 · 32 × 64 B',qw:1,kPre:2,fpu:'mm',dst:'mm',heads:24,wt:0,frag:32,done:0,cb:[8,8,4,4,8,0,0,1],kb:156,d:"<b>Steady state — three engines busy.</b> Writer scatters t0 fragments to pages 0..31 on NoC1, math is mid-passes on t1, two k columns ready. In and out never collide."});
+A({sr:'k t3 → slot A',sc:'untilize t1',sw:'t0 done · wait t1',qw:1,kCur:3,kPre:2,fpu:'pk',heads:64,done:1,cb:[8,8,4,4,0,0,1,2],kb:164,d:"cb_out is 2 deep: t1 lands behind t0. Compute per tile ≫ scatter (~3.4 KB out vs ~8 KB k in), so the writer is never the bottleneck."});
+A({sr:'k t4 → slot B (last)',sc:'mm ×w acc · t2',kt:2,sw:'scatter t2',qw:1,kCur:4,kPre:3,fpu:'mm',dst:'mm',heads:40,wt:2,frag:18,done:2,cb:[8,8,4,4,8,8,1,1],kb:180,d:"t2, t3: same dance. Reader's final fetch this row is the diagonal column t4 — after this it just waits for the row to flip."});
+A({sr:'row done · idle',sc:'t4: acc += mask',sw:'scatter t3',qw:1,kDone:4,fpu:'mask',heads:64,wt:3,frag:26,done:3,cb:[8,8,0,4,0,0,1,1],kb:188,d:"<b>Diagonal t4.</b> One extra add: the −inf mask tile kills the strict upper triangle (future keys inside the tile). Writer is on t3."});
+A({sr:'idle',sc:'untilize t4',sw:'tail fill t5–t7 ← −inf',qw:1,kDone:5,fpu:'pk',heads:64,tail:3,done:4,inf:1,cb:[8,8,0,0,0,0,1,1],kb:188,d:"<b>Overlap #2.</b> t4 is row s0's last valid tile → its writer streams −inf scratch over t5..t7 on all 32 pages. Skipped tiles never touch the math; zeros aren't safe — gates go negative."});
+A({sr:'load q+w row s1',sc:'q,w popped · wait row',sw:'scatter t4',qw:2,kDone:5,wt:4,frag:32,done:4,inf:1,tail:3,cb:[0,0,0,0,0,0,0,1],kb:320,d:"All three roll to row s1 (valid=6): compute frees q/w, reader immediately reloads for s1 while the writer finishes t4. Same loop until the span ends."});
+A({sr:'span done',sc:'span done',sw:'span done',qw:0,kDone:5,done:5,inf:1,tail:3,kb:320,d:"Row s0: 64 heads × 4 matmuls × 5 tiles, q read once, each k column once, every output byte written once — values from compute, −inf from the writer. SP rank changes only chunk_t."});
+
+let si=0,timer=null,speed=950;
+function render(){
+  const s=S[si];
+  $('stR').textContent=s.sr;$('stC').textContent=s.sc;$('stW').textContent=s.sw;
+  $('stR').className='st'+(s.rb?' blk':'');$('stC').className='st'+(s.cb_?' blk':'');$('stW').className='st'+(s.wb?' blk':'');
+  $('laneR').className='lane reader'+(s.rb?' blk':s.sr&&!/idle|done/.test(s.sr)?' hot':'');
+  $('laneC').className='lane compute'+(s.cb_?' blk':s.fpu?' hot':'');
+  $('laneW').className='lane writer'+(s.wb?' blk':s.wt>=0||s.tail?' hot':'');
+  qE.forEach(e=>e.className='cell q'+(s.qw===2?' rd':s.qw?' res':''));
+  wE.forEach(e=>e.className='cell q'+(s.qw===2?' rd':s.qw?' res':''));
+  kE.forEach((e,i)=>{e.className='cell k'+(i===4?' diag':'')+(i===s.kCur?' rd':i===s.kPre?' pre':i<s.kDone?' done':i>4?'':'');});
+  $('srcA').textContent=s.fpu==='mm'?'q[h,s0]':'—';$('srcA').classList.toggle('lit',s.fpu==='mm');
+  $('srcB').textContent=s.fpu==='mm'?('k t'+s.kt):'—';$('srcB').classList.toggle('lit',s.fpu==='mm');
+  const f=$('fpu');f.className='fpu'+(s.fpu?' '+s.fpu:'');
+  f.textContent={mm:'FPU matmul + relu',mul:'×w + acc',mask:'+ −inf mask',pk:'pack_untilize'}[s.fpu]||'idle';
+  dE.forEach(e=>e.className='dslot'+(s.dst?' '+s.dst:''));
+  $('hcnt').textContent=s.heads;$('accfill').style.width=(s.heads/64*100)+'%';
+  $('wtid').textContent=s.wt>=0?s.wt:'—';
+  fE.forEach((e,i)=>e.className='cell fr'+(s.wt>=0&&i<s.frag?' wr':''));
+  tE.forEach((e,i)=>e.className='cell k'+(i<s.tail?' inf':''));
+  oE.forEach((e,i)=>{e.className='cell k'+(i===4?' diag':'')+(i<s.done?' done':i===s.wt&&s.wt>=s.done?' wr':i>4&&s.inf?' inf':'');});
+  const fl=[s.cb[0],s.cb[1],s.cb[2]+s.cb[3],si>0?1:0,s.cb[4],s.cb[5],s.cb[6],s.cb[7],1];
+  cbE.forEach((cb,i)=>cb.slots.forEach((sl,j)=>sl.className='slot'+(j<fl[i]?' '+cb.cls:'')));
+  $('tIn').textContent=s.kb;$('tOut').textContent=s.done;$('tInf').textContent=s.tail;
+  $('desc').innerHTML=s.d;$('stepno').textContent=(si+1)+' / '+S.length;
+  $('prev').disabled=si===0;$('next').disabled=si===S.length-1;
+}
+function stop(){if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ Play';}}
+function play(){if(si>=S.length-1)si=0;$('play').textContent='⏸ Pause';timer=setInterval(()=>{si<S.length-1?(si++,render()):stop();},speed);}
+$('play').onclick=()=>timer?stop():play();
+$('next').onclick=()=>{stop();if(si<S.length-1){si++;render();}};
+$('prev').onclick=()=>{stop();if(si>0){si--;render();}};
+document.addEventListener('keydown',e=>{if(e.key==='ArrowRight')$('next').click();if(e.key==='ArrowLeft')$('prev').click();if(e.key===' '){e.preventDefault();$('play').click();}});
+document.querySelectorAll('.sp').forEach(b=>{if(b.dataset.sp)b.onclick=()=>{document.querySelectorAll('.sp').forEach(x=>x.classList.remove('active'));b.classList.add('active');speed=+b.dataset.sp;if(timer){stop();play();}};});
+render();
+</script>
+</body>
+</html>

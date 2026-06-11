@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>indexer_score — core 0, chunk by chunk</title>
+<style>
+  :root{
+    --bg:#0b0e15;--bg2:#10141f;--panel:#151a28;--panel2:#1b2236;--ink:#e8edf6;--dim:#97a3ba;--line:#283150;
+    --accent:#5ad1c8;--accent2:#7aa2ff;--good:#46d39a;--pack:#c98bff;--unpack:#ffb36b;--red:#ff6b81;
+    --mono:'SF Mono',ui-monospace,'Cascadia Code',Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1100px 650px at 85% -12%,#18223c 0,transparent 60%),var(--bg);
+    color:var(--ink);font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;line-height:1.5;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1150px;margin:0 auto;padding:32px 22px 60px}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.13em;text-transform:uppercase;color:var(--accent)}
+  h1{font-size:30px;line-height:1.15;margin:12px 0 8px;letter-spacing:-.02em}
+  h1 .grad{background:linear-gradient(90deg,var(--accent),var(--accent2));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .lead{color:var(--dim);font-size:16px;max-width:980px;margin:0 0 8px}
+  .lead b,.lead code{color:var(--ink)} code,.mono{font-family:var(--mono)}
+  .eq{font-family:var(--mono);font-size:14px;color:var(--accent);background:#0e1320;border:1px solid var(--line);border-radius:10px;padding:9px 13px;display:inline-block;margin:8px 0 18px}
+  .panel{background:linear-gradient(180deg,var(--panel),var(--bg2));border:1px solid var(--line);border-radius:14px;padding:22px}
+  .cols{display:flex;gap:26px;flex-wrap:wrap;justify-content:center}
+  .seclbl{font-family:var(--mono);font-size:11px;color:var(--dim);margin:0 0 6px;letter-spacing:.06em}
+  .seclbl b{color:var(--accent2)}
+
+  .hgrid{display:grid;grid-template-columns:repeat(8,38px);gap:5px}
+  .head{position:relative;height:46px;border:1px solid var(--line);border-radius:4px;background:#0c1018;overflow:hidden;transition:.1s}
+  .head .stripe{position:absolute;top:0;left:0;right:0;height:6px;background:#39424f;transition:.1s}
+  .head.lit .stripe{background:var(--accent2);box-shadow:0 0 8px rgba(122,162,255,.8)}
+  .head.done .stripe{background:var(--good)}
+  .head.lit{border-color:var(--accent2)}
+  .wgrid{display:grid;grid-template-columns:repeat(8,12px);gap:5px 31px}
+  .wcol{position:relative;height:46px;border:1px solid var(--line);border-radius:3px;background:#0c1018;overflow:hidden}
+  .wcol .stripe{position:absolute;top:0;left:0;right:0;height:6px;background:#39424f;transition:.1s}
+  .wcol.lit .stripe{background:var(--pack);box-shadow:0 0 8px rgba(201,139,255,.8)}
+  .wcol.done .stripe{background:var(--good)}
+  .blockframe{font-family:var(--mono);font-size:11px;color:var(--unpack);margin-top:7px;min-height:16px}
+
+  .strip{display:grid;grid-template-columns:repeat(110,1fr);gap:1px;margin-top:4px}
+  .kc{height:20px;background:#10141f;border-radius:1px;transition:.08s}
+  .kc.own{background:#222b42}
+  .kc.done{background:var(--good)}
+  .kc.cur{background:var(--unpack);box-shadow:0 0 6px rgba(255,179,107,.7)}
+  .kc.peer{background:#1a2236}
+  .kc.dead{background:#0c1018}
+
+  .l1{width:260px;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#0c1018}
+  .l1 .seg{padding:5px 10px;font-family:var(--mono);font-size:11px;color:#5f6b86;border-bottom:1px solid #141a2b;transition:.12s}
+  .l1 .seg.on{color:#04120f;font-weight:700}
+  .l1 .free{color:#3d4a66;text-align:center;padding:26px 0}
+
+  .engine{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:22px;flex-wrap:wrap}
+  .reg{text-align:center}.rlabel{font-family:var(--mono);font-size:10px;color:var(--dim);margin-bottom:4px}
+  .tile{min-width:86px;height:36px;padding:0 10px;border-radius:7px;border:1px solid var(--line);background:#0e1320;display:grid;place-items:center;font-family:var(--mono);font-size:12px;font-weight:700;color:var(--dim);transition:.12s}
+  .tile.lit{color:#fff;background:#1a2740;box-shadow:0 0 0 2px #fff}
+  .mult{font-size:22px;color:var(--good)} .arr{font-size:20px;color:var(--dim)}
+  .fpu{border:1px solid var(--good);border-radius:10px;padding:9px 14px;font-family:var(--mono);font-size:13px;color:var(--good);background:rgba(70,211,154,.06);transition:.12s}
+  .fpu.lit{background:rgba(70,211,154,.22);box-shadow:0 0 0 2px var(--good)}
+  .fpu.relu{border-color:var(--unpack);color:var(--unpack);background:rgba(255,179,107,.18);box-shadow:0 0 0 2px var(--unpack)}
+  .fpu.mul{border-color:var(--pack);color:var(--pack);background:rgba(201,139,255,.18);box-shadow:0 0 0 2px var(--pack)}
+  .dstrow{display:flex;gap:3px}
+  .dslot{width:17px;height:30px;border-radius:4px;border:1px solid var(--line);background:#0e1320;transition:.12s}
+  .dslot.mm{background:rgba(122,162,255,.5);border-color:var(--accent2)}
+  .dslot.relu{background:rgba(255,179,107,.5);border-color:var(--unpack)}
+  .dslot.mul{background:rgba(201,139,255,.5);border-color:var(--pack)}
+  .pak{padding:7px 12px;border:1px dashed var(--line);border-radius:8px;font-family:var(--mono);font-size:11px;color:#5f6b86;transition:.12s}
+  .pak.active{color:var(--pack);border-color:var(--pack);background:rgba(201,139,255,.12);font-weight:700}
+  .accbar{height:10px;border-radius:5px;background:#0e1320;border:1px solid var(--line);overflow:hidden;width:170px}
+  .accbar div{height:100%;background:linear-gradient(90deg,var(--good),var(--accent));width:0%}
+
+  .stepctrl{display:flex;align-items:center;gap:12px;justify-content:center;margin-top:22px;flex-wrap:wrap}
+  .btn{font-family:var(--mono);font-size:14px;border:1px solid var(--line);background:var(--panel2);color:var(--ink);padding:10px 16px;border-radius:11px;cursor:pointer;transition:.15s}
+  .btn:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+  .btn:disabled{opacity:.35;cursor:not-allowed}
+  .btn.primary{background:linear-gradient(90deg,var(--accent),var(--accent2));color:#04120f;border:none;font-weight:700}
+  .stepno{font-family:var(--mono);font-size:13px;color:var(--dim);min-width:84px;text-align:center}
+  .speedrow{display:flex;gap:6px;justify-content:center;align-items:center;margin-top:10px;font-family:var(--mono);font-size:12px;color:var(--dim)}
+  .sp{font-family:var(--mono);font-size:12px;border:1px solid var(--line);background:var(--panel2);color:var(--dim);padding:5px 11px;border-radius:8px;cursor:pointer}
+  select{font-family:var(--mono);font-size:12px;border:1px solid var(--line);background:var(--panel2);color:var(--ink);padding:5px 8px;border-radius:8px}
+  .sp.active{border-color:var(--accent);color:var(--accent)}
+  .dpdesc{margin-top:14px;padding:14px 16px;border-radius:10px;background:#0e1320;border:1px solid var(--line);font-size:14.5px;min-height:54px;font-family:var(--mono);line-height:1.45}
+  .dpdesc b{color:var(--accent)}
+  .tally{display:flex;gap:14px;justify-content:center;margin-top:14px;flex-wrap:wrap}
+  .stat{background:var(--panel2);border:1px solid var(--line);border-radius:11px;padding:10px 20px;text-align:center;min-width:150px}
+  .stat .n{font-family:var(--mono);font-size:26px;font-weight:800;color:var(--good)} .stat .k{font-size:11px;color:var(--dim);font-family:var(--mono);margin-top:2px}
+  .legend{display:flex;gap:16px;justify-content:center;margin-top:12px;font-size:12px;color:var(--dim);flex-wrap:wrap}
+  .legend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <span class="eyebrow">indexer_score · one tensix · q_chunk=1 · k_chunk=16 · head_block=8</span>
+  <h1>core 0 — row 0, tiles <span class="grad">0–247</span> of score 20×1760</h1>
+  <p class="lead">q and w are <b>64 heads of 20×4 / 20×1 tiles</b> in DRAM — core 0 only touches the <b>s0 stripe</b> (top tile row) of each, 8 heads at a time. K streams in 16-tile chunks; 64 heads accumulate per chunk before one untilized write.</p>
+  <div class="eq">score[s0,t] = Σ<sub>h=0..63</sub> relu(q[h,s0]·kᵀ[t]) · w[h,s0] · 16 k-chunks × 8 head-blocks</div>
+
+  <div class="panel">
+    <div class="speedrow" style="margin:0 0 16px;justify-content:flex-start">
+      knobs:&nbsp; q_chunk <select id="kQC"><option>1</option><option>2</option></select>
+      &nbsp; k_chunk <select id="kKT"><option>8</option><option selected>16</option><option>32</option></select>
+      &nbsp; head_block <select id="kHB"><option>1</option><option>4</option><option selected>8</option><option>16</option><option>64</option></select>
+      <button class="sp" id="kApply">apply</button>
+      <span id="kInfo" style="margin-left:12px"></span>
+    </div>
+    <div class="cols">
+      <div><p class="seclbl"><b>q</b> 64 heads × 20×4 t — s0 stripes only</p><div class="hgrid" id="qgrid"></div><div class="blockframe" id="qlbl"></div></div>
+      <div><p class="seclbl"><b>w</b> 64 heads × 20×1 t</p><div class="wgrid" id="wgrid"></div></div>
+      <div><p class="seclbl"><b>L1</b> snapshot · 1464 KB</p><div class="l1" id="l1"></div></div>
+    </div>
+
+    <p class="seclbl" style="margin-top:18px"><b>kᵀ</b> 4×1760 t in DRAM · 110 chunks of 16 — core 0 reads chunks 0–15 only</p>
+    <div class="strip" id="kstrip"></div>
+    <p class="seclbl" style="margin-top:10px"><b>score row 0</b> — 248 owned · cores 1–5 own the rest · grey = future → −inf</p>
+    <div class="strip" id="ostrip"></div>
+
+    <div class="engine">
+      <div class="reg"><div class="rlabel">srcA ← q[h,s0] 4t</div><div class="tile" id="srcA">—</div></div>
+      <span class="mult">⊗</span>
+      <div class="reg"><div class="rlabel">srcB ← k chunk 64t</div><div class="tile" id="srcB">—</div></div>
+      <span class="arr">→</span><div class="fpu" id="fpu">FPU·SFPU</div><span class="arr">→</span>
+      <div class="reg"><div class="rlabel">DST 16 fp32</div><div class="dstrow" id="dst"></div></div>
+      <span class="arr">→</span><div class="pak" id="pak">PACK l1-acc</div>
+      <div class="reg"><div class="rlabel">acc — heads <span id="hcnt">0</span>/64</div><div class="accbar"><div id="accfill"></div></div></div>
+    </div>
+    <div class="legend">
+      <span><i style="background:var(--accent2)"></i>in L1 now</span><span><i style="background:var(--good)"></i>consumed / done</span>
+      <span><i style="background:var(--unpack)"></i>current k-chunk</span><span><i style="background:#1a2236"></i>other cores</span><span><i style="background:#0c1018"></i>future → −inf</span>
+    </div>
+
+    <div class="stepctrl">
+      <button class="btn" id="prev">◂ Prev</button><button class="btn primary" id="play">▶ Play</button><button class="btn" id="next">Next ▸</button>
+      <span class="stepno" id="stepno"></span>
+    </div>
+    <div class="speedrow">speed:
+      <button class="sp" data-sp="1400">0.5×</button><button class="sp active" data-sp="800">1×</button>
+      <button class="sp" data-sp="400">2×</button><button class="sp" data-sp="180">4×</button>
+    </div>
+    <div class="dpdesc" id="desc"></div>
+    <div class="tally">
+      <div class="stat"><div class="n" id="tOut">0</div><div class="k">tiles → DRAM (of 248)</div></div>
+      <div class="stat"><div class="n" id="tQ">0</div><div class="k">KB q+w read</div></div>
+      <div class="stat"><div class="n" id="tK">0</div><div class="k">KB k read</div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+const H=64,Dt=4,OWNC=248,VALIDC=100,TCt=1760;
+const $=id=>document.getElementById(id);
+let QC=1,Kt=16,HB=8,NB=8,NK=16,TC=110,steps=[],si=0,timer=null,speed=800;
+
+function build(){
+  NB=Math.ceil(H/HB); NK=Math.ceil(OWNC/Kt); TC=Math.ceil(TCt/Kt);
+  const qKB=HB*QC*Dt*2, wKB=HB*QC*2, det=Math.min(NB,4);
+  steps=[];
+  const S=o=>steps.push(Object.assign({kc:0,b:-1,fpu:'',pak:false,heads:0,done:0},o));
+  S({d:`Core 0 owns ${OWNC} valid tile-cols × ${QC} row(s). ${NK} k-chunks of ${Kt}; per chunk ${NB} head-block(s) of ${HB}${HB===H?' (q fully resident — loaded once)':''}. ▶ Play or step →.`});
+  S({ph:'loadk',d:`READER · k-chunk 0 (${Dt}×${Kt} t, ${Dt*Kt*2} KB) → slot A; slot B prefetches chunk 1. acc zeroed.`});
+  for(let b=0;b<det;b++){
+    S({ph:'loadq',b,d:`READER · head-block ${b}: q s-rows of h${b*HB}–${b*HB+HB-1} (${HB}×${QC*Dt} t, ${qKB} KB) + w (${HB}×${QC} t, ${wKB} KB) → L1.`,heads:b*HB});
+    S({ph:'mm',b,fpu:'mm',d:`FPU · per head: q ${QC}×${Dt} ⊗ k ${Dt}×${Kt} → ${QC*Kt} DST tiles (${Math.ceil(QC*Kt/8)} dest blocks). k srcB unpacked once per block.`,heads:b*HB});
+    S({ph:'relu',b,fpu:'relu',d:'SFPU · relu in DST — clamp before sum (relu(x)·w ≠ relu(x·w)).',heads:b*HB});
+    S({ph:'mul',b,fpu:'mul',d:`SFPU · × w[h] broadcast down rows (fused with relu in perf version).`,heads:b*HB});
+    S({ph:'acc',b,pak:true,d:`PACK · DST += acc fp32. heads ${(b+1)*HB}/${H}.`,heads:(b+1)*HB});
+  }
+  if(NB>det) S({ph:'acc',b:NB-1,pak:true,d:`… head-blocks ${det}–${NB-1} same dance → heads ${H}/${H}.`,heads:H});
+  S({ph:'flush',d:`${H} heads in → pack_untilize fp32→bf16 → ${QC*32} RM fragments → DRAM. Chunk 1 already resident.`,heads:H,done:1});
+  for(let kc=1;kc<NK;kc++) S({ph:'fast',kc,d:`k-chunk ${kc}: ${HB===H?'':'q-blocks stream · '}mm → relu → ×w → acc ×${NB} · untilize. tiles ${kc*Kt}–${Math.min(kc*Kt+Kt-1,OWNC-1)}.`,heads:H,done:kc});
+  const qTotal=HB===H? qKB+wKB : NK*NB*(qKB+wKB);
+  S({ph:'done',kc:NK,d:`${OWNC*QC} tiles written. q+w ${qTotal>1024?(qTotal/1024).toFixed(1)+' MB':qTotal+' KB'} ${HB===H?'(resident, once)':'streamed ('+(qKB+wKB)+' KB × '+NB+' × '+NK+')'}, k ${(NK*Dt*Kt*2/1024).toFixed(1)} MB once.`,heads:H,done:NK});
+  // strips
+  $('kstrip').innerHTML='';$('ostrip').innerHTML='';kE.length=0;oE.length=0;
+  for(let i=0;i<TC;i++){const own=i<NK,peer=i<Math.ceil(VALIDC*110/TC/110*TC);
+    const k=document.createElement('div');k.className='kc'+(own?' own':i<TC*VALIDC/110?' peer':' dead');$('kstrip').appendChild(k);kE.push(k);
+    const o=document.createElement('div');o.className=k.className;$('ostrip').appendChild(o);oE.push(o);}
+  // L1
+  const accKB=QC*Kt*4, outKB=2*QC*Kt*2, used=2*Dt*Kt*2+qKB+wKB+accKB+outKB;
+  $('l1').innerHTML='';
+  [[`k slot A · ${Dt}×${Kt} t (Dt×Kt) · ${Dt*Kt*2} KB`],[`k slot B · ${Dt}×${Kt} t prefetch · ${Dt*Kt*2} KB`],
+   [`q block · ${HB}×${QC*Dt} t (${HB}h × ${QC}×${Dt}) · ${qKB} KB`],[`w block · ${HB}×${QC} t · ${wKB} KB`],
+   [`acc · ${QC}×${Kt} t fp32 · ${accKB} KB`],[`out · 2× ${QC}×${Kt} t bf16 · ${outKB} KB`],
+   [`free ≈${1464-used} KB${1464-used<0?' — OVER BUDGET':''}`]]
+   .forEach(([t])=>{const s=document.createElement('div');s.className='seg'+(t.startsWith('free')?' free':'');s.textContent=t;$('l1').appendChild(s);});
+  l1E.length=0;l1E.push(...$('l1').children);
+  $('kInfo').textContent=`${NK} chunks · ${NB} blocks · L1 ${used}/1464 KB`;
+}
+
+const qE=[],wE=[];
+for(let h=0;h<H;h++){const q=document.createElement('div');q.className='head';q.innerHTML='<div class="stripe"></div>';$('qgrid').appendChild(q);qE.push(q);
+  const w=document.createElement('div');w.className='wcol';w.innerHTML='<div class="stripe"></div>';$('wgrid').appendChild(w);wE.push(w);}
+const dE=[];for(let i=0;i<16;i++){const d=document.createElement('div');d.className='dslot';$('dst').appendChild(d);dE.push(d);}
+const kE=[],oE=[],l1E=[];
+build();
+
+function render(){
+  const s=steps[si], busy=s.b>=0, kc=s.kc, done=s.done;
+  qE.forEach((e,h)=>{e.className='head'+(busy&&h>=s.b*HB&&h<s.b*HB+HB?' lit':h<s.heads||s.ph==='flush'||s.ph==='fast'||s.ph==='done'?' done':'');});
+  wE.forEach((e,h)=>{e.className='wcol'+(busy&&h>=s.b*HB&&h<s.b*HB+HB?' lit':h<s.heads?' done':'');});
+  kE.forEach((e,i)=>{if(i>=NK)return;e.className='kc own'+(i<done?' done':i===kc&&si>0&&s.ph!=='done'?' cur':'');});
+  oE.forEach((e,i)=>{if(i>=NK)return;e.className='kc own'+(i<done?' done':i===kc&&si>0&&s.ph!=='done'?' cur':'');});
+  dE.forEach(e=>e.className='dslot'+(s.fpu?' '+s.fpu:''));
+  $('srcA').textContent=busy?`q[h${s.b*HB}..${s.b*HB+7}]`:'—'; $('srcA').classList.toggle('lit',s.fpu==='mm');
+  $('srcB').textContent=si>0&&s.ph!=='done'?`k chunk ${kc}`:'—'; $('srcB').classList.toggle('lit',s.fpu==='mm');
+  const f=$('fpu');f.className='fpu'+(s.fpu?' lit '+s.fpu:'');f.textContent=s.fpu==='relu'?'SFPU relu':s.fpu==='mul'?'SFPU ×w':'FPU matmul';
+  $('pak').classList.toggle('active',s.pak||s.ph==='flush'||s.ph==='fast');
+  $('pak').textContent=s.ph==='flush'||s.ph==='fast'?'PACK untilize→RM':'PACK l1-acc';
+  $('hcnt').textContent=s.heads;$('accfill').style.width=(s.heads/64*100)+'%';
+  const on=i=>l1E[i].style.cssText=`background:${['#7a5a3a','#7a5a3a','#3a4f7a','#5a3a7a','#2e6f50','#3a5a40'][i]};color:#e8edf6`;
+  l1E.forEach(e=>e.style.cssText='');
+  if(si>0){on(0);if(kc<NK-1||s.ph!=='done')on(1);if(s.ph!=='done')on(4);}
+  if(busy){on(2);on(3);} if(s.ph==='flush'||s.ph==='fast')on(5);
+  const blkKB=HB*QC*(Dt+1)*2, kcKB=Dt*Kt*2;
+  $('tOut').textContent=Math.min(done*Kt,OWNC)*QC;
+  $('tQ').textContent=HB===H? (done>0||busy?blkKB:0) : (done*NB+(busy?s.b+1:0))*blkKB;
+  $('tK').textContent=done*kcKB+(si>0&&s.ph!=='done'?kcKB:0);
+  $('desc').innerHTML=s.d; $('stepno').textContent=(si+1)+' / '+steps.length;
+  $('prev').disabled=si===0;$('next').disabled=si===steps.length-1;
+}
+function stop(){if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ Play';}}
+function play(){if(si>=steps.length-1)si=0;$('play').textContent='⏸ Pause';
+  timer=setInterval(()=>{si<steps.length-1?(si++,render()):stop();},speed);}
+$('play').onclick=()=>timer?stop():play();
+$('next').onclick=()=>{stop();if(si<steps.length-1){si++;render();}};
+$('prev').onclick=()=>{stop();if(si>0){si--;render();}};
+document.addEventListener('keydown',e=>{if(e.key==='ArrowRight')$('next').click();if(e.key==='ArrowLeft')$('prev').click();if(e.key===' '){e.preventDefault();$('play').click();}});
+document.querySelectorAll('.sp').forEach(b=>{if(b.dataset.sp)b.onclick=()=>{document.querySelectorAll('.sp').forEach(x=>x.classList.remove('active'));b.classList.add('active');speed=+b.dataset.sp;if(timer){stop();play();}};});
+$('kApply').onclick=()=>{stop();QC=+$('kQC').value;Kt=+$('kKT').value;HB=+$('kHB').value;si=0;build();render();};
+render();
+</script>
+</body>
+</html>

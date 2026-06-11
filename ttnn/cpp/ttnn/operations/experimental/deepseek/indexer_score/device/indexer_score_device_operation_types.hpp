@@ -1,0 +1,44 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstddef>
+
+#include "ttnn/tensor/tensor.hpp"
+#include <tt-metalium/base_types.hpp>
+
+namespace ttnn::operations::experimental::deepseek::indexer {
+
+// Work-unit knobs (elements, tile-aligned; SDPAProgramConfig analogue, INDEXER_OP.md).
+// One unit = q_chunk rows x k_chunk keys; heads stream in head_group blocks.
+struct IndexerScoreProgramConfig {
+    std::size_t q_chunk_size = 32;
+    std::size_t k_chunk_size = 32;
+    std::size_t head_group_size = 1;  // heads resident at once; 1 always fits L1, raise for perf (0 = all)
+};
+
+// Resolve the head_group_size knob to a concrete head count (0 = all Hi heads resident).
+// Single-sourced so validate and the program factory can't drift on the "0 = all" contract.
+inline uint32_t resolve_head_group(const IndexerScoreProgramConfig& cfg, uint32_t Hi) {
+    return cfg.head_group_size == 0 ? Hi : static_cast<uint32_t>(cfg.head_group_size);
+}
+
+struct operation_attributes_t {
+    bool is_causal{true};
+    uint32_t chunk_start_idx{0};
+    IndexerScoreProgramConfig program_config{};
+};
+
+struct tensor_args_t {
+    const Tensor& q;
+    const Tensor& k;
+    const Tensor& weights;
+};
+
+using tensor_return_value_t = Tensor;
+
+using spec_return_value_t = TensorSpec;
+
+}  // namespace ttnn::operations::experimental::deepseek::indexer
