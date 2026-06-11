@@ -24,7 +24,7 @@ test_suite_bh_single_pcie_metal_unit_tests() {
 test_suite_bh_umd_unit_tests() {
     ./build/test/umd/blackhole/unit_tests
     # Filter out the tests that are failing due to local soc descriptor/YAML files, see: https://github.com/tenstorrent/tt-umd/issues/1304
-    gtest_filter="-TestTTVisibleDevices.DifferentConstructors:-AllArchs/IsCoreOfTypeTest.*"
+    gtest_filter="-TestTTVisibleDevices.DifferentConstructors:AllArchs/IsCoreOfTypeTest.*"
     ./build/test/umd/api/api_tests --gtest_filter="$gtest_filter"
 }
 
