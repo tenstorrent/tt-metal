@@ -6,11 +6,13 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <utility>
 
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -92,6 +94,27 @@ struct D2DStreamConfig {
     // trap for a naive standalone caller. Set false when there are no competing
     // fabric ops.
     bool share_fabric_links = true;
+};
+
+// Identifies the two endpoints of a MULTI-HOST D2D pair and the communicator the
+// build-time rendezvous runs over. Used only by create_sender / create_receiver
+// (the single-host create_pair owns both meshes and needs none of this).
+//
+// Each process calls exactly one of create_sender / create_receiver with the SAME
+// D2DEndpointConfig (same ranks, same context). The process that owns the sender
+// mesh must have rank == sender_rank; the process that owns the receiver mesh must
+// have rank == receiver_rank. The fabric mesh-ids for each side are derived from
+// the ranks via the control plane's global rank->(mesh_id, host_rank) bindings, so
+// the two meshes must already be bound in the control plane (multi-host fabric
+// bring-up) before either factory is called.
+struct D2DEndpointConfig {
+    // World ranks of the sender-side and receiver-side hosts.
+    distributed::multihost::Rank sender_rank{0};
+    distributed::multihost::Rank receiver_rank{0};
+
+    // Communicator the two endpoints rendezvous over (service-core exchange +
+    // MeshSocket handshake). nullptr => DistributedContext::get_current_world().
+    std::shared_ptr<distributed::multihost::DistributedContext> distributed_context = nullptr;
 };
 
 // Sender-side handle. Owns: the sender backing tensor, one claimed service core
@@ -231,34 +254,78 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-// Factory. create_pair is the only entry point; D2DStreamService itself holds
-// no state. The two returned handles can be destroyed independently in any
-// order (each owns its own termination semaphore).
+// Factory. D2DStreamService itself holds no state; all three entry points return
+// owning handles that can be destroyed independently in any order (each owns its
+// own termination semaphore).
 //
-// V0 is SINGLE-HOST only: create_pair takes both MeshDevice handles, so the
-// calling process must own both the sender and receiver meshes. This works for
-// a single Galaxy (submeshes carved from one device, fabric routes intra-
-// Galaxy) and for any single host that owns the full topology (e.g. a big mesh
-// spanning Galaxies). Internally it uses MeshSocket::create_socket_pair, which
-// derives fabric mesh-ids locally from both device handles.
+// SINGLE-HOST: create_pair takes both MeshDevice handles, so the calling process
+// must own both the sender and receiver meshes. This works for a single Galaxy
+// (submeshes carved from one device, fabric routes intra-Galaxy) and for any
+// single host that owns the full topology (e.g. a big mesh spanning Galaxies).
+// Internally it uses MeshSocket::create_socket_pair, which derives fabric
+// mesh-ids locally from both device handles and needs no network rendezvous.
 //
-// TODO: multi-host: the usual multi-Galaxy deployment is 1 host per Galaxy, so
-// galaxy_N and galaxy_N+1 live in different processes/ranks and a single
-// process cannot hold both handles. Supporting that requires:
-//   * the per-endpoint MeshSocket(device, config) ctor with sender_rank /
-//     receiver_rank + a DistributedContext, instead of create_socket_pair, and
-//   * splitting this single-process factory into per-side factories joined by a
-//     host-side rendezvous (one host builds the sender endpoint, the other the
-//     receiver; handshake over the DistributedContext / MPI). Mirror
-//     H2DStreamService::export_descriptor / connect, which already does the
-//     cross-process rendezvous for H2D (over /dev/shm there; over the
-//     DistributedContext here).
+// MULTI-HOST: the usual multi-Galaxy deployment is 1 host per Galaxy, so galaxy_N
+// and galaxy_N+1 live in different processes/ranks and a single process cannot
+// hold both handles. create_sender / create_receiver each build ONE endpoint:
+// every process calls exactly the one matching its role, with the SAME
+// D2DEndpointConfig. Internally each uses the per-endpoint MeshSocket(device,
+// config) ctor, which performs the cross-process descriptor handshake over the
+// DistributedContext (no /dev/shm file rendezvous is needed — unlike
+// H2DStreamService, whose H2DSocket has no built-in handshake, MeshSocket does).
+//
+// Because the MeshSocket handshake validates that BOTH endpoints' SocketConnection
+// lists agree on the sender AND receiver service cores, and D2D claims service
+// cores dynamically per device, the two processes first exchange their claimed
+// service cores over the DistributedContext (see create_sender / create_receiver)
+// so each can build the identical connection list before the handshake.
 class D2DStreamService {
 public:
+    // Single-host: caller owns both meshes.
     static std::pair<std::unique_ptr<D2DStreamServiceSender>, std::unique_ptr<D2DStreamServiceReceiver>> create_pair(
         const std::shared_ptr<distributed::MeshDevice>& sender_mesh,
         const std::shared_ptr<distributed::MeshDevice>& receiver_mesh,
         D2DStreamConfig cfg);
+
+    // Multi-host sender endpoint. Called on the process that owns `sender_mesh`
+    // (its rank must equal endpoints.sender_rank). Blocks in the MeshSocket
+    // handshake until the peer process calls create_receiver with a matching
+    // D2DEndpointConfig (subject to the handshake's timeout).
+    static std::unique_ptr<D2DStreamServiceSender> create_sender(
+        const std::shared_ptr<distributed::MeshDevice>& sender_mesh,
+        D2DStreamConfig cfg,
+        const D2DEndpointConfig& endpoints);
+
+    // Multi-host receiver endpoint. Mirror of create_sender; called on the process
+    // that owns `receiver_mesh` (its rank must equal endpoints.receiver_rank).
+    static std::unique_ptr<D2DStreamServiceReceiver> create_receiver(
+        const std::shared_ptr<distributed::MeshDevice>& receiver_mesh,
+        D2DStreamConfig cfg,
+        const D2DEndpointConfig& endpoints);
+
+private:
+    // Shared per-side tail of all three factories. Given an already-constructed
+    // MeshSocket endpoint (single-host via create_socket_pair, multi-host via the
+    // per-endpoint ctor) plus the claimed service cores and backing tensor for one
+    // side, allocate the worker-sync resources, build the persistent workload, and
+    // assemble the handle. Does NOT launch — the caller enqueues in its preferred
+    // order (create_pair launches the receiver before the sender). Releases the
+    // service cores if it throws before the handle takes ownership of them. Defined
+    // here (not as a free helper) because only this friend can construct the
+    // handle's private Impl. The per-shard spec, topology, and chunk plan are
+    // re-derived from `backing` + `cfg` inside.
+    static std::unique_ptr<D2DStreamServiceSender> finalize_sender(
+        const std::shared_ptr<distributed::MeshDevice>& mesh,
+        distributed::MeshSocket socket,
+        std::map<distributed::MeshCoordinate, CoreCoord> service_cores,
+        Tensor backing,
+        const D2DStreamConfig& cfg);
+    static std::unique_ptr<D2DStreamServiceReceiver> finalize_receiver(
+        const std::shared_ptr<distributed::MeshDevice>& mesh,
+        distributed::MeshSocket socket,
+        std::map<distributed::MeshCoordinate, CoreCoord> service_cores,
+        Tensor backing,
+        const D2DStreamConfig& cfg);
 };
 
 }  // namespace tt::tt_metal
