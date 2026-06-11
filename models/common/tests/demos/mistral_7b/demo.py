@@ -35,7 +35,7 @@ the PERF.md thresholds. Generate a deterministic one before tuning::
     ./python_env/bin/python models/common/tests/demos/mistral_7b/generate_controlled_refpt.py \\
         --hf-model mistralai/Mistral-7B-Instruct-v0.3
 
-See ``dev-tools/agentic-bringup/skills/reference-sanity.md``.
+See the reference-sanity guide.
 """
 
 import json

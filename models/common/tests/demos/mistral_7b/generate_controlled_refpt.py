@@ -7,7 +7,7 @@ Generate a deterministic, metadata-rich CPU reference ``.refpt`` for Mistral-7B-
 
 Mirrors the Qwen2.5-7B controlled refpt pattern (see
 ``models/common/tests/demos/qwen25_7b/generate_controlled_refpt.py`` and
-``dev-tools/agentic-bringup/skills/reference-sanity.md``). Output ``.refpt`` contains:
+the reference-sanity guide). Output ``.refpt`` contains:
 
     - reference_tokens: [prompt_len + num_target]
     - top5_tokens:      [num_target, 5], aligned to target positions
