@@ -125,6 +125,12 @@ class Split(ttml.autograd.Function):
             dim += rank
         ctx.dim = dim
 
+        # Chunks must tile the split dim exactly: otherwise the forward would drop
+        # or overrun data and the backward concat would not reconstruct the input.
+        assert (
+            sum(sizes) == val.shape[dim]
+        ), f"autograd_split sizes {list(sizes)} must sum to dim {dim} length {val.shape[dim]}"
+
         outputs = []
         offset = 0
         for size in sizes:
