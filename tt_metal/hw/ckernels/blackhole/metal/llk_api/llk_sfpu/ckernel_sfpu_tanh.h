@@ -54,8 +54,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat val) {
                 1.5497927553951740264892578125e-2f);
 
             result = val * p;
-            // Restore signed zero: the SFPU multiply flushes -0.0 to +0.0, but tanh(-0.0) must be -0.0.
-            result = sfpi::copysgn(result, val);
+            result = sfpi::copysgn(result, val);  // Preserve input sign on zero (tanh(-0.0) = -0.0);
         }
         v_else {
             // Normal region: Use tanh(x) = 2*sigmoid(2x) - 1
@@ -95,7 +94,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_continued_fraction_(sfpi::vFloat val) {
     sfpi::vFloat threshold_value = sfpi::vConst1;
     sfpi::vec_min_max(result, threshold_value);
 
-    result = sfpi::copysgn(result, val);  // restore sign (i.e. tanh(-x) = -tanh(x))
+    result = sfpi::copysgn(result, val);  // Preserve input sign on zero (tanh(-0.0) = -0.0);
 
     return result;
 }
