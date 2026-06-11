@@ -10,11 +10,59 @@ Pipeline (aligned with reference):
   3. On speech_diffusion_id: CFG diffusion → decode → semantic encode → connector sum → next embed
 """
 
+import os
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 import torch
 import ttnn
+
+# Optional, env-gated wall-clock profiler for the generate() pipeline.
+# Enable with VV_PROFILE=1.  When on, each section synchronizes the device so
+# wall time is attributed to the right phase (this serializes the pipeline, so
+# the absolute total is inflated vs a normal run — use it for *relative* breakdown).
+_VV_PROFILE = os.environ.get("VV_PROFILE", "0") == "1"
+
+
+class _Profiler:
+    def __init__(self, device, enabled: bool = _VV_PROFILE):
+        self.device = device
+        self.enabled = enabled
+        self.totals: dict = {}
+        self.counts: dict = {}
+
+    @contextmanager
+    def section(self, name: str):
+        if not self.enabled:
+            yield
+            return
+        ttnn.synchronize_device(self.device)
+        t0 = time.perf_counter()
+        try:
+            yield
+        finally:
+            ttnn.synchronize_device(self.device)
+            dt = time.perf_counter() - t0
+            self.totals[name] = self.totals.get(name, 0.0) + dt
+            self.counts[name] = self.counts.get(name, 0) + 1
+
+    def report(self) -> None:
+        if not self.enabled or not self.totals:
+            return
+        total = sum(self.totals.values())
+        print("\n[VV_PROFILE] ===== generate() timing breakdown (device-synced) =====", flush=True)
+        for name in sorted(self.totals, key=lambda k: -self.totals[k]):
+            t = self.totals[name]
+            c = self.counts[name]
+            print(
+                f"[VV_PROFILE]   {name:30s} {t:9.3f}s  ({100 * t / total:5.1f}%)  "
+                f"n={c:5d}  avg={1000 * t / max(c, 1):8.2f}ms",
+                flush=True,
+            )
+        print(f"[VV_PROFILE]   {'TOTAL (profiled wall)':30s} {total:9.3f}s", flush=True)
+
 
 from models.experimental.vibevoice.tt.ttnn_vibevoice_lm import (
     TTVibeVoiceLM,
@@ -161,6 +209,22 @@ class TTVibeVoiceGenerator:
         ]
         if bos_token_id is not None:
             self.valid_token_ids.append(bos_token_id)
+        # Cached device-side logit mask for the valid-token constraint (built once,
+        # reused every AR step — avoids a full-vocab host alloc + H2D upload per step).
+        self._token_mask_tt: Optional[ttnn.Tensor] = None
+
+    def _token_constraint_mask(self, vocab_size: int) -> ttnn.Tensor:
+        if self._token_mask_tt is None:
+            mask = torch.full((1, 1, 1, vocab_size), float("-inf"), dtype=torch.bfloat16)
+            mask[:, :, :, self.valid_token_ids] = 0.0
+            self._token_mask_tt = ttnn.as_tensor(
+                mask,
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        return self._token_mask_tt
 
     def _reset_ref_tokenizer_caches(self):
         from vibevoice.modular.modular_vibevoice_tokenizer import VibeVoiceTokenizerStreamingCache
@@ -533,22 +597,19 @@ class TTVibeVoiceGenerator:
         if attention_mask is None:
             attention_mask = torch.ones_like(input_ids, dtype=torch.long)
 
-        inputs_embeds = self._build_prefill_embeds(
-            input_ids,
-            speech_tensors,
-            speech_masks,
-            speech_input_mask,
-            prefill_speech_embeds=prefill_speech_embeds,
-        )
+        prof = _Profiler(device)
+
+        with prof.section("prefill_build_embeds (voice-clone encode)"):
+            inputs_embeds = self._build_prefill_embeds(
+                input_ids,
+                speech_tensors,
+                speech_masks,
+                speech_input_mask,
+                prefill_speech_embeds=prefill_speech_embeds,
+            )
         prefill_len = inputs_embeds.shape[2]
 
-        kv_cache_pos = create_kv_cache(cfg.num_hidden_layers)
-        logits_pos, prefill_hidden = self._lm_prefill(inputs_embeds, kv_cache_pos)
-
-        kv_cache_neg = create_kv_cache(cfg.num_hidden_layers)
-        neg_pos, neg_start_hidden = self._reset_neg_cache(kv_cache_neg)
-        neg_prev_diffusion_token: Optional[int] = None  # delayed token for negative CFG
-
+        # Determine the max number of AR steps up front — it sizes the fixed KV cache.
         initial_length = input_ids.shape[-1]
         initial_len = int(attention_mask.sum(dim=-1)[0].item())
         forced_tokens: Optional[List[int]] = None
@@ -564,6 +625,22 @@ class TTVibeVoiceGenerator:
                 cfg.max_position_embeddings - initial_length,
                 int(self.max_length_times * initial_len),
             )
+
+        # Preallocate fixed-size KV caches (TT LM path only).  Positive cache holds
+        # prefill + all generated tokens; negative cache is reset per speech segment
+        # (reused buffer), so it only needs to span one segment ≤ max_steps.
+        if self._ref_lm is None:
+            kv_cache_pos = self.lm.alloc_kv_cache(prefill_len + max_steps + 8)
+            kv_cache_neg = self.lm.alloc_kv_cache(max_steps + 8)
+        else:
+            kv_cache_pos = create_kv_cache(cfg.num_hidden_layers)
+            kv_cache_neg = create_kv_cache(cfg.num_hidden_layers)
+
+        with prof.section("lm_prefill"):
+            logits_pos, prefill_hidden = self._lm_prefill(inputs_embeds, kv_cache_pos)
+
+        neg_pos, neg_start_hidden = self._reset_neg_cache(kv_cache_neg)
+        neg_prev_diffusion_token: Optional[int] = None  # delayed token for negative CFG
 
         sequences = input_ids.clone()
         # On-device streaming: each diffusion step decodes its audio chunk via the
@@ -603,32 +680,37 @@ class TTVibeVoiceGenerator:
                 # AFTER the negative forward).  For the first diffusion step in a
                 # segment, the reference runs the negative model on speech_start_id
                 # alone — we captured that hidden in neg_start_hidden.
-                if neg_prev_diffusion_token is None:
-                    neg_hidden = neg_start_hidden
-                else:
-                    neg_hidden = self._neg_lm_step(neg_prev_diffusion_token, neg_pos, kv_cache_neg)
-                    neg_pos += 1
-                neg_prev_diffusion_token = current_token
-                cond_neg = _condition_from_hidden(neg_hidden)
+                with prof.section("neg_lm_step"):
+                    if neg_prev_diffusion_token is None:
+                        neg_hidden = neg_start_hidden
+                    else:
+                        neg_hidden = self._neg_lm_step(neg_prev_diffusion_token, neg_pos, kv_cache_neg)
+                        neg_pos += 1
+                    neg_prev_diffusion_token = current_token
+                    cond_neg = _condition_from_hidden(neg_hidden)
 
-                speech_latent = self._run_speech_diffusion(cond_pos, cond_neg, latent_size=64, rng=rng)
+                with prof.section("diffusion (CFG x num_steps)"):
+                    speech_latent = self._run_speech_diffusion(cond_pos, cond_neg, latent_size=64, rng=rng)
 
                 # On-device streaming: fused next-step embed + this frame's audio chunk.
-                pending_embeds, audio_chunk = self._post_diffusion_embeds(speech_latent)
-                if isinstance(audio_chunk, torch.Tensor):
-                    audio_chunks.append(audio_chunk.to(torch.float32).reshape(-1))
-                else:
-                    audio_chunks.append(ttnn.to_torch(audio_chunk).to(torch.float32).reshape(-1))
+                with prof.section("post_diffusion (decode+sem_enc+conn)"):
+                    pending_embeds, audio_chunk = self._post_diffusion_embeds(speech_latent)
+                with prof.section("audio_chunk -> host"):
+                    if isinstance(audio_chunk, torch.Tensor):
+                        audio_chunks.append(audio_chunk.to(torch.float32).reshape(-1))
+                    else:
+                        audio_chunks.append(ttnn.to_torch(audio_chunk).to(torch.float32).reshape(-1))
 
             if current_token == self.eos_token_id:
                 break
 
             start_pos = prefill_len + step
-            if pending_embeds is not None:
-                logits, step_hidden = self._lm_step(pending_embeds, start_pos, kv_cache_pos)
-                pending_embeds = None
-            else:
-                logits, step_hidden = self._lm_decode_token(current_token, start_pos, kv_cache_pos)
+            with prof.section("pos_lm_step"):
+                if pending_embeds is not None:
+                    logits, step_hidden = self._lm_step(pending_embeds, start_pos, kv_cache_pos)
+                    pending_embeds = None
+                else:
+                    logits, step_hidden = self._lm_decode_token(current_token, start_pos, kv_cache_pos)
 
             if current_token == self.speech_start_id:
                 neg_pos, neg_start_hidden = self._reset_neg_cache(kv_cache_neg)
@@ -638,12 +720,18 @@ class TTVibeVoiceGenerator:
                 if self.ref_inference is not None:
                     self._reset_ref_tokenizer_caches()
 
-            logits = _apply_token_constraint(logits, self.valid_token_ids, device)
-            if forced_tokens is not None:
-                next_token = forced_tokens[forced_idx] if forced_idx < len(forced_tokens) else self.eos_token_id
-                forced_idx += 1
-            else:
-                next_token = _greedy_argmax(logits, use_fp32=use_fp32_argmax)
+            with prof.section("token_constraint"):
+                logits = ttnn.add(
+                    logits,
+                    self._token_constraint_mask(logits.shape[-1]),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            with prof.section("argmax"):
+                if forced_tokens is not None:
+                    next_token = forced_tokens[forced_idx] if forced_idx < len(forced_tokens) else self.eos_token_id
+                    forced_idx += 1
+                else:
+                    next_token = _greedy_argmax(logits, use_fp32=use_fp32_argmax)
 
         # The per-step streaming decode already produced each frame's audio chunk
         # (with full causal context via the decoder cache); concatenate for the
@@ -652,6 +740,8 @@ class TTVibeVoiceGenerator:
             speech_waveform = torch.cat(audio_chunks, dim=0)
         else:
             speech_waveform = torch.zeros(0)
+
+        prof.report()
 
         return TTVibeVoiceOutput(
             sequences=sequences,
