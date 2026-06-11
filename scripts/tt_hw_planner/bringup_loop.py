@@ -710,6 +710,18 @@ def test_{component_safe}(device_params, device):
     finally:
         _clear_stage_timeout()
 
+    try:
+        torch_module = torch_module.float()
+    except Exception:
+        pass
+    for _k in list(sample_kwargs.keys()):
+        _v = sample_kwargs[_k]
+        if isinstance(_v, torch.Tensor) and _v.is_floating_point():
+            sample_kwargs[_k] = _v.to(torch.float32)
+    _pn, _pt = primary
+    if isinstance(_pt, torch.Tensor) and _pt.is_floating_point():
+        primary = (_pn, _pt.to(torch.float32))
+
     print("[bringup] stage=torch_forward", flush=True)
     _set_stage_timeout(stage_budget_s)
     try:
