@@ -361,11 +361,10 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
             start_stick_id = sticks_processed;
         }
 
-        // input base address bound as Buffer* for cache-hit patching
-        reader_desc.emplace_runtime_args(
+        reader_desc.runtime_args.emplace_back(
             core,
-            {
-                input_tensor.buffer(),
+            KernelDescriptor::CoreRuntimeArgs{
+                input_tensor.buffer()->address(),
                 num_sticks,
                 start_stick_id,
                 static_cast<uint32_t>(cos_angle_q16),
@@ -376,11 +375,10 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
             });
 
         if (!any_sharded && writer_desc.has_value()) {
-            // output base address bound as Buffer* for cache-hit patching
-            writer_desc->emplace_runtime_args(
+            writer_desc->runtime_args.emplace_back(
                 core,
-                {
-                    output_tensor.buffer(),
+                KernelDescriptor::CoreRuntimeArgs{
+                    output_tensor.buffer()->address(),
                     num_sticks,
                     start_stick_id,
                 });

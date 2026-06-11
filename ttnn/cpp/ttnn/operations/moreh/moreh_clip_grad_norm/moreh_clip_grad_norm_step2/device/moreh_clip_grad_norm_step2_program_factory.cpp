@@ -151,13 +151,17 @@ ProgramDescriptor MorehClipGradNormStep2Operation::create_descriptor(
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
-    // reader: bind the input (tmp_pow_sum) buffer base address so the descriptor takes the fast
-    // cache-hit path with the address re-patched each dispatch.
-    reader_desc.emplace_runtime_args(
-        single_core, {tmp_pow_sum.buffer(), static_cast<uint32_t>(num_tiles), std::bit_cast<uint32_t>(decimal)});
+    const auto input_addr = tmp_pow_sum.buffer()->address();
+    const auto output_addr = total_norm.buffer()->address();
 
-    // writer: bind the output (total_norm) buffer base address for the same fast cache-hit path.
-    writer_desc.emplace_runtime_args(single_core, {total_norm.buffer()});
+    // reader
+    reader_desc.runtime_args.emplace_back(
+        single_core,
+        KernelDescriptor::CoreRuntimeArgs{
+            input_addr, static_cast<uint32_t>(num_tiles), std::bit_cast<uint32_t>(decimal)});
+
+    // writer
+    writer_desc.runtime_args.emplace_back(single_core, KernelDescriptor::CoreRuntimeArgs{output_addr});
 
     // compute
     compute_desc.runtime_args.emplace_back(

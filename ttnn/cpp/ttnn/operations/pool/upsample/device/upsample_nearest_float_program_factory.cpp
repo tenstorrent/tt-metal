@@ -133,19 +133,19 @@ ProgramDescriptor UpsampleNearestFloatProgramFactory::create_descriptor(
         const uint32_t num_sticks =
             core_group_1.contains(core) ? num_sticks_per_core_group_1 : num_sticks_per_core_group_2;
 
-        reader_desc.emplace_runtime_args(
+        reader_desc.runtime_args.emplace_back(
             core,
-            {
-                input.buffer(),    // rt_arg[0]: input_buffer_address
-                num_sticks,        // rt_arg[1]: num_sticks
-                sticks_processed,  // rt_arg[2]: start_stick_id
+            KernelDescriptor::CoreRuntimeArgs{
+                input.buffer()->address(),  // rt_arg[0]: input_buffer_address
+                num_sticks,                 // rt_arg[1]: num_sticks
+                sticks_processed,           // rt_arg[2]: start_stick_id
             });
-        writer_desc.emplace_runtime_args(
+        writer_desc.runtime_args.emplace_back(
             core,
-            {
-                output_tensor.buffer(),  // rt_arg[0]: output_buffer_address
-                num_sticks,              // rt_arg[1]: num_sticks
-                sticks_processed,        // rt_arg[2]: start_stick_id
+            KernelDescriptor::CoreRuntimeArgs{
+                output_tensor.buffer()->address(),  // rt_arg[0]: output_buffer_address
+                num_sticks,                         // rt_arg[1]: num_sticks
+                sticks_processed,                   // rt_arg[2]: start_stick_id
             });
 
         sticks_processed += num_sticks;
