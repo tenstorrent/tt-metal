@@ -199,9 +199,21 @@ class DistributedRMSNorm(Module):
         if "weight" in state:
             state["weight"] = state["weight"].reshape(1, self.embedding_dim)
 
-    def _ensure_fused_stats_buffer(self, x: ttnn.Tensor, num_heads_per_device: int):
-        """Lazy-allocate the persistent stats buffer for the fused device op."""
-        key = (tuple(x.shape), num_heads_per_device)
+    def _ensure_fused_stats_buffer(
+        self, x: ttnn.Tensor, num_heads_per_device: int, rope_cos=None, rope_sin=None, trans_mat=None
+    ):
+        """Lazy-allocate the persistent stats buffer for the fused device op.
+
+        The buffer's chunk/window geometry is computed by the SAME compute_sizing
+        the device op uses, so it MUST be fed the same inputs that affect chunking:
+        weight/RoPE (per-head-RoPE & streaming chunk clamp) and num_links (workers
+        are rounded to a multiple of num_links). The op here is invoked with the
+        default num_links (=1), so we leave create_stats_buffer at its default too;
+        but we MUST forward weight/RoPE or the buffer is sized for a different chunk
+        than the kernel writes, silently corrupting each chunk's last AG row.
+        """
+        has_rope = rope_cos is not None
+        key = (tuple(x.shape), num_heads_per_device, has_rope)
         cache = getattr(self, "_fused_stats_buffer_cache", None)
         if cache is None:
             cache = {}
@@ -209,7 +221,14 @@ class DistributedRMSNorm(Module):
         buf = cache.get(key)
         if buf is None:
             buf = ttnn.experimental.wan_fused_distributed_rmsnorm_create_stats_buffer(
-                x, self.mesh_axis, self.mesh_device, num_heads_per_device=num_heads_per_device
+                x,
+                self.mesh_axis,
+                self.mesh_device,
+                num_heads_per_device=num_heads_per_device,
+                weight=self.weight.data if self.weight is not None else None,
+                transformation_mat=trans_mat,
+                rope_cos=rope_cos,
+                rope_sin=rope_sin,
             )
             cache[key] = buf
         return buf
@@ -233,7 +252,9 @@ class DistributedRMSNorm(Module):
             raise ValueError(msg)
 
         if _USE_FUSED_RMSNORM:
-            persistent_output_buffer = self._ensure_fused_stats_buffer(x, num_heads_per_device)
+            persistent_output_buffer = self._ensure_fused_stats_buffer(
+                x, num_heads_per_device, rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat
+            )
             return ttnn.experimental.wan_fused_distributed_rmsnorm(
                 x,
                 self.mesh_axis,
