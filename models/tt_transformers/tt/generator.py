@@ -555,6 +555,15 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # Only paged attention is supported for prefill
             enable_trace = False
 
+        # Track slots refreshed by this prefill so the next decode reset keeps
+        # device-fed tokens for all other slots (their host token is one step
+        # stale under vLLM async scheduling).
+        if not hasattr(self, "_slots_prefilled_since_decode"):
+            self._slots_prefilled_since_decode = set()
+        self._slots_prefilled_since_decode.update(
+            range(tokens.shape[0]) if empty_slots is None else [int(s) for s in empty_slots]
+        )
+
         sampling_on_device_requested = sampling_params is not None
 
         # we need this here because of tt-metal tests
@@ -1290,6 +1299,54 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     rank_remap = slot_remap[i * sm_bs : (i + 1) * sm_bs]
                     sampling_module.seed_manager.apply_slot_remap(rank_remap)
                 sampling_module.seed_manager.get_new_values(active_seed_slots)
+
+        # vLLM under async scheduling supplies a one-step-stale last token at
+        # reset steps (its host state lags device sampling). The device token
+        # buffer holds the authoritative token sampled at the previous decode
+        # step, so on a reset keep it: permute per slot_remap (condense moves),
+        # only taking host tokens for slots freshly prefilled since the last
+        # decode submit (their last token came from prefill, not decode).
+        if (
+            sampling_on_device
+            and (reset_batch or mode_switched)
+            and enable_trace
+            and self.trace_inputs_decode[sampling_on_device]
+        ):
+            new_tokens = []
+            for i, tok_chunk in enumerate(tokens):
+                trace_in = self.trace_inputs_decode[sampling_on_device][i]
+                dev_toks = (
+                    ttnn.to_torch(ttnn.get_device_tensors(trace_in[0])[0])
+                    .reshape(-1)[: tok_chunk.shape[0]]
+                    .to(tok_chunk.dtype)
+                )
+                dev_pos = (
+                    ttnn.to_torch(ttnn.get_device_tensors(trace_in[1])[0])
+                    .reshape(-1)[: tok_chunk.shape[0]]
+                    .to(torch.int64)
+                )
+                if slot_remap is not None:
+                    remap = slot_remap[i * dev_toks.shape[0] : (i + 1) * dev_toks.shape[0]]
+                    remap_t = (remap if isinstance(remap, torch.Tensor) else torch.tensor(remap)).long()
+                    dev_toks = dev_toks[remap_t]
+                    dev_pos = dev_pos[remap_t]
+                # The device token is authoritative only for slots whose device
+                # position chain is continuous with the host view; slots that
+                # were re-added, resumed, or freshly prefilled take host tokens.
+                # The host position itself may lag the device by one step under
+                # async scheduling, so accept both.
+                host_pos = start_pos[i].reshape(-1).to(torch.int64)
+                use_dev = (dev_pos == host_pos) | (dev_pos == host_pos + 1)
+                prefilled = getattr(self, "_slots_prefilled_since_decode", None)
+                if prefilled:
+                    bs = tok_chunk.shape[0]
+                    for slot in prefilled:
+                        if i * bs <= slot < (i + 1) * bs:
+                            use_dev[slot - i * bs] = False
+                merged = torch.where(use_dev, dev_toks.view(-1), tok_chunk.view(-1)).view(tok_chunk.shape)
+                new_tokens.append(merged.to(tok_chunk.dtype))
+            tokens = new_tokens
+        self._slots_prefilled_since_decode = set()
 
         decode_kwargs = {
             "current_pos": start_pos,

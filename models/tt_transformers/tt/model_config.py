@@ -597,6 +597,13 @@ class ModelArgs:
         # Set the max number of tokens for each prefill chunk based on the model and device
         self.max_prefill_chunk_size = self.get_max_prefill_chunk_size()
 
+        # The Blackhole multi-card batched prefill path can leave high batch slots
+        # with stale/wrong paged KV state for Llama 3.1 8B. Keep async decode
+        # enabled, but use the established per-user prefill path for now.
+        self.disable_batched_prefill = (
+            self.base_model_name == "Llama-3.1-8B" and self.device_name in ("P300", "P150x4", "P150x8")
+        )
+
         if (
             self.base_model_name
             in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B", "gemma-3-27b", "gemma-3-4b", "Phi-4"]
