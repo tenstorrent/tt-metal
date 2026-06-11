@@ -4,13 +4,11 @@
 
 Ported from models/demos/qwen35_27b/tt/attention.py forward_decode.
 
-Two long-context (64k+) correctness choices, both confirmed by A/B on bf16 Qwen3.5-27B
-(thinking-off, greedy) and required for coherent 256k generation:
-  - q_norm/k_norm: loaded WITHOUT a +1 offset (see load_attention_weights_tp). HF
-    Qwen3_5RMSNorm applies (1+weight) and the bf16 checkpoints store raw zero-centered
-    q/k-norm (~0.3), but EMPIRICALLY the +1 (sharp attention) collapses long-context
-    generation while no-+1 (flat) is robust. NOT the FP8-(1+w) story an earlier comment
-    claimed — it's a scale/sharpness effect.
+Long-context (64k+) correctness choices, validated at 64k on Qwen3.5-27B-FP8 and Qwen3.6-27B:
+  - HYBRID q/k-norm scaling: PREFILL uses the HF-correct (1+weight) scale (sharp attention,
+    required for retrieval — without it long-context attention is uniform and retrieval is zero);
+    DECODE uses the raw weights (flat attention, robust to the small per-step decode noise that
+    sharp attention amplifies into loops). See load_attention_weights_tp / forward_decode.
   - Q stays bf16 into the chunked SDPA (forward_prefill), NOT bf8. Casting Q to bf8 was
     the real long-context degeneration cause (bf16-Q → coherent 64k/256k summary; bf8-Q →
     loops/gibberish), matching the 9B's deliberately-bf16 path (ttnn_gated_attention.py:277).
@@ -37,8 +35,6 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
     state_dict keys (from the FP8 loader / 9B substate): q_proj/k_proj/v_proj/
     o_proj/q_norm/k_norm. q_proj is the fused per-head [Q,gate] projection.
     """
-    import os
-
     if cache_dir is not None:
         os.makedirs(cache_dir, exist_ok=True)
 
@@ -80,18 +76,17 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
         cache_path=c("wo"),
         dtype=ttnn.bfloat8_b,
     )
-    # Per-head QK norms, replicated, loaded WITHOUT the +1 zero-centered offset — even though HF
-    # Qwen3_5RMSNorm applies (1.0 + weight) and the bf16 checkpoints store the raw zero-centered
-    # weight (measured q_norm means: 9B ~+0.58, Qwen3.5-27B ~+0.32, Qwen3.6-27B ~+0.35). This is an
-    # EMPIRICAL choice, confirmed by A/B on bf16 Qwen3.5-27B at 64k (thinking-off, greedy): adding
-    # +1 (0.32 -> 1.32) collapses long-context generation into numeric gibberish, while no-+1 stays
-    # on-topic (mildly repetitive). The +1 over-sharpens attention at length; the raw scale is the
-    # better operating point on this TT path — most likely compensating for a separate scaling
-    # error in the long-context attention numerics (bf8-Q into chunked SDPA), which is the real
-    # remaining long-context-quality bug (no-+1 still loops, not a clean summary). The single-device
-    # 9B keeps its own +1 path (attention/weights.py); don't cache (tiny tensors, read-only dir).
-    tw["q_norm"] = tpc.replicate(state_dict["q_norm.weight"].to(torch.float32), mesh, None)
-    tw["k_norm"] = tpc.replicate(state_dict["k_norm.weight"].to(torch.float32), mesh, None)
+    # Per-head QK norms, replicated. HF Qwen3_5RMSNorm computes output*(1+weight) and the ckpts
+    # store raw zero-centered weights (means ~0.32-0.58), so +1 is the correct scale. Without it
+    # Q·K logits are ~14x too small and long-context attention is UNIFORM -> zero retrieval at
+    # 64k. QWEN35_QKNORM_NO_PLUS1=1 reverts. Don't cache (tiny tensors, read-only ckpt dir).
+    _plus1 = 0.0 if os.environ.get("QWEN35_QKNORM_NO_PLUS1") else 1.0
+    tw["q_norm"] = tpc.replicate(state_dict["q_norm.weight"].to(torch.float32) + _plus1, mesh, None)
+    tw["k_norm"] = tpc.replicate(state_dict["k_norm.weight"].to(torch.float32) + _plus1, mesh, None)
+    # Flat (raw) twins — the DEFAULT decode scale (hybrid): flat decode attention averages over
+    # keys so per-step decode noise can't flip retrieval (loops/junk). Negligible cost.
+    tw["q_norm_flat"] = tpc.replicate(state_dict["q_norm.weight"].to(torch.float32), mesh, None)
+    tw["k_norm_flat"] = tpc.replicate(state_dict["k_norm.weight"].to(torch.float32), mesh, None)
     return tw
 
 
@@ -172,12 +167,18 @@ class TPAttention:
                 ttnn.fill_cache(self.k_caches[h], ttnn.slice(k, (0, h, 0, 0), (1, h + 1, S, HD)), 0)
                 ttnn.fill_cache(self.v_caches[h], ttnn.slice(v, (0, h, 0, 0), (1, h + 1, S, HD)), 0)
 
-        q8 = ttnn.typecast(q, dtype=ttnn.bfloat8_b)
-        k8 = ttnn.typecast(k, dtype=ttnn.bfloat8_b)
-        v8 = ttnn.typecast(v, dtype=ttnn.bfloat8_b)
-        ttnn.deallocate(q)
-        ttnn.deallocate(k)
-        ttnn.deallocate(v)
+        # Keep Q/K/V bf16 into SDPA (matches forward_prefill_paged + the 9B's working path). The
+        # unconditional bf8 cast here was inconsistent with the documented bf16-Q fix and degraded
+        # the bespoke prefill_tp oracle vs the paged path. QWEN_SDPA_BF8_Q=1 restores the old bf8.
+        if os.environ.get("QWEN_SDPA_BF8_Q") == "1":
+            q8 = ttnn.typecast(q, dtype=ttnn.bfloat8_b)
+            k8 = ttnn.typecast(k, dtype=ttnn.bfloat8_b)
+            v8 = ttnn.typecast(v, dtype=ttnn.bfloat8_b)
+            ttnn.deallocate(q)
+            ttnn.deallocate(k)
+            ttnn.deallocate(v)
+        else:
+            q8, k8, v8 = q, k, v
         padded = max(32, ((S + 31) // 32) * 32)
         ch = min(256 if S >= 2048 else 64, padded)
         sdpa_cfg = ttnn.SDPAProgramConfig(
@@ -230,9 +231,114 @@ class TPAttention:
         v = ttnn.reshape(vp, (1, B, NKV, HD))
         ttnn.deallocate(vp)
 
-        # zero-centered QK RMSNorm (weight already has +1 baked in)
-        q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6), tw["q_norm"])
-        k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6), tw["k_norm"])
+        # QK RMSNorm — DEFAULT raw (no-+1) at DECODE only (hybrid scaling): sharp +1 prefill
+        # retrieves the long context; flat decode averages over keys so the per-step decode noise
+        # cannot flip retrieval (the loop/junk failure mode). Validated 64k on 3.5-FP8 AND 3.6
+        # (coherent Frankenstein summaries; sharp decode loops/junks both). QWEN35_QKNORM_DECODE_SHARP=1
+        # reverts decode to +1.
+        _sharp = os.environ.get("QWEN35_QKNORM_DECODE_SHARP") == "1"
+        q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6), tw["q_norm" if _sharp else "q_norm_flat"])
+        k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6), tw["k_norm" if _sharp else "k_norm_flat"])
+
+        q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH, B, self.rope_dim)
+        k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim)
+
+        # Cap the SDPA-decode grid to 64 cores (tree-reduction limit); auto-grid
+        # grabs all 110 P150 cores for a single user (B=1) and overflows.
+        sdpa_dec_cfg = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8), exp_approx_mode=False, q_chunk_size=0, k_chunk_size=0
+        )
+        if use_paged:
+            # External paged KV cache (vLLM/contract path): update at cur_pos via the
+            # page_table, then paged SDPA-decode. Mirrors qwen35_27b attention.py:188-218.
+            keys, values = self.paged_k, self.paged_v
+            k_p = ttnn.pad(k, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
+            v_p = ttnn.pad(v, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
+            ttnn.deallocate(k)
+            ttnn.deallocate(v)
+            k_sh = ttnn.to_memory_config(k_p, self.args.kv_update_shard_cfg)
+            v_sh = ttnn.to_memory_config(v_p, self.args.kv_update_shard_cfg)
+            ttnn.deallocate(k_p)
+            ttnn.deallocate(v_p)
+            ttnn.experimental.paged_update_cache(keys, k_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
+            ttnn.experimental.paged_update_cache(values, v_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
+            ttnn.deallocate(k_sh)
+            ttnn.deallocate(v_sh)
+            attn_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+                q,
+                keys,
+                values,
+                page_table_tensor=page_table,
+                cur_pos_tensor=cur_pos_tt,
+                scale=self.scale,
+                program_config=sdpa_dec_cfg,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(q)
+            ttnn.deallocate(k)
+            ttnn.deallocate(v)
+        else:
+            q8, k8, v8 = q, k, v
+        padded = max(32, ((S + 31) // 32) * 32)
+        ch = min(256 if S >= 2048 else 64, padded)
+        sdpa_cfg = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8), exp_approx_mode=False, q_chunk_size=ch, k_chunk_size=ch
+        )
+        attn = ttnn.transformer.scaled_dot_product_attention(
+            q8, k8, v8, is_causal=True, scale=self.scale, memory_config=ttnn.DRAM_MEMORY_CONFIG, program_config=sdpa_cfg
+        )
+        ttnn.deallocate(q8)
+        ttnn.deallocate(k8)
+        ttnn.deallocate(v8)
+
+        gated = ttnn.multiply(attn, ttnn.sigmoid(gate))  # [1,NH,S,HD]
+        ttnn.deallocate(attn)
+        ttnn.deallocate(gate)
+        # [1,NH,S,HD] -> [1,S,NH,HD] -> [1,1,S,NH*HD]
+        gated = ttnn.transpose(gated, 1, 2)
+        gated = ttnn.reshape(gated, (1, 1, S, NH * HD))
+        partial = ttnn.linear(
+            gated, tw["wo"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        ttnn.deallocate(gated)
+        return tt_all_reduce(
+            partial,
+            self.mesh,
+            self.tt_ccl,
+            cluster_axis=0,
+            dim=3,
+            topology=self.args.ccl_topology(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def forward_decode(self, x, cur_pos_tt, cos_tt, sin_tt, page_table=None):
+        tw, B, NH, NKV, HD = self.tw, self.B, self.NH, self.NKV, self.HD
+        use_paged = self.use_paged and page_table is not None
+        if not use_paged and self.k_caches is None:
+            self.reset_state()
+
+        qg = ttnn.linear(x, tw["wqkv"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        kp = ttnn.linear(x, tw["wk"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        vp = ttnn.linear(x, tw["wv"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        qg_r = ttnn.reshape(qg, (1, B, NH, HD * 2))
+        ttnn.deallocate(qg)
+        q = ttnn.slice(qg_r, (0, 0, 0, 0), (1, B, NH, HD))
+        gate = ttnn.slice(qg_r, (0, 0, 0, HD), (1, B, NH, HD * 2))
+        ttnn.deallocate(qg_r)
+        k = ttnn.reshape(kp, (1, B, NKV, HD))
+        ttnn.deallocate(kp)
+        v = ttnn.reshape(vp, (1, B, NKV, HD))
+        ttnn.deallocate(vp)
+
+        # QK RMSNorm — DEFAULT raw (no-+1) at DECODE only (hybrid scaling): sharp +1 prefill
+        # retrieves the long context; flat decode averages over keys so the per-step decode noise
+        # cannot flip retrieval (the loop/junk failure mode). Validated 64k on 3.5-FP8 AND 3.6
+        # (coherent Frankenstein summaries; sharp decode loops/junks both). QWEN35_QKNORM_DECODE_SHARP=1
+        # reverts decode to +1.
+        _sharp = os.environ.get("QWEN35_QKNORM_DECODE_SHARP") == "1"
+        q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6), tw["q_norm" if _sharp else "q_norm_flat"])
+        k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6), tw["k_norm" if _sharp else "k_norm_flat"])
 
         q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH, B, self.rope_dim)
         k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim)
