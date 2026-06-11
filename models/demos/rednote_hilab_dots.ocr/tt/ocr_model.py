@@ -384,9 +384,12 @@ class TtOCRModel(LightweightModule):
         self._pt_ids = ttnn.from_torch(
             torch.zeros(1, 1, 1, 32, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, **common
         )
-        zeros = torch.zeros(1, 1, 1, attn.qkv_width)  # fused-rope cos/sin rows
-        self._pt_cos = ttnn.from_torch(zeros, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, **common)
-        self._pt_sin = ttnn.from_torch(zeros, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, **common)
+        # Fused-rope rows live in the QKV width-shard (text_attention keeps
+        # the whole decode rope chain in that L1 shard; rows padded 640->768).
+        zeros = torch.zeros(1, 1, 1, attn.qkv_pad)
+        ws = dict(device=self.mesh_device, memory_config=attn.qkv_out_mc, mesh_mapper=rep)
+        self._pt_cos = ttnn.from_torch(zeros, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, **ws)
+        self._pt_sin = ttnn.from_torch(zeros, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, **ws)
 
     def _write_decode_inputs(self, token: int, slot: int):
         """Four small H2D copies into the persistent buffers (the per-step host work)."""

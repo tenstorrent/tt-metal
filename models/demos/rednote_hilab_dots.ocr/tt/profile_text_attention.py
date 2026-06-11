@@ -12,6 +12,11 @@ model.layers.0.self_attn weights.
 Run under tracy:
     python -m tracy -p -v -r --op-support-count 20000 \
         models/demos/rednote_hilab_dots.ocr/tt/profile_text_attention.py --traced
+
+Decode operating point (production traced token step, ocr_model
+_decode_step_traced): bf16 token row [1, 1, 1, 1536] through forward_decode
+against persistent bf16 KV caches (capacity 3200), slot ~1500 — replayed as a
+metal trace. Run with ``--decode --traced``.
 """
 
 import argparse
@@ -54,6 +59,7 @@ def _load_weights(prefix, keys):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--traced", action="store_true")
+    parser.add_argument("--decode", action="store_true", help="KV-cached decode token step instead of prefill")
     parser.add_argument("--iters", type=int, default=1, help="profiled replay count")
     args = parser.parse_args()
 
@@ -82,7 +88,47 @@ def main():
         trace_region_size=50_000_000,
     )
     try:
-        block = TtTextAttention(mesh_device, sd, num_heads=12, num_kv_heads=2)
+        block = TtTextAttention(
+            mesh_device, sd, num_heads=12, num_kv_heads=2, weight_dtype=ttnn.bfloat8_b
+        )  # production weight dtype (ocr_model attn_weight_dtype)
+
+        if args.decode:
+            # Production traced token step (ocr_model._decode_step_traced):
+            # bf16 [1,1,1,1536] row, persistent KV caches (capacity 3200),
+            # slot ~1500 — a mid-generation cache fill.
+            MAX_SEQ, SLOT = 3200, 1500
+            kv_cache = block.init_kv_cache(MAX_SEQ)
+            pos_host = ttnn.from_torch(torch.tensor([SLOT], dtype=torch.int32), dtype=ttnn.int32)
+            ttnn.copy_host_to_device_tensor(pos_host, kv_cache["pos"])
+            rot_step = block.prepare_decode_rope(SLOT)
+            x_tt = ttnn.from_torch(
+                x[:, :1, :].reshape(1, 1, 1, dim).float(),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            for _ in range(3):
+                out = block.forward_decode(x_tt, kv_cache, rot_step)
+                ttnn.deallocate(out)
+            ttnn.synchronize_device(mesh_device)
+            if args.traced:
+                tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+                out = block.forward_decode(x_tt, kv_cache, rot_step)
+                ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+                ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+                ttnn.synchronize_device(mesh_device)
+                for _ in range(max(1, args.iters)):
+                    ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+                ttnn.synchronize_device(mesh_device)
+                ttnn.release_trace(mesh_device, tid)
+            else:
+                out = block.forward_decode(x_tt, kv_cache, rot_step)
+                ttnn.synchronize_device(mesh_device)
+            print("profiled iteration complete (decode, traced=%s, slot=%d)" % (args.traced, SLOT))
+            return
+
         rot_mats = block.prepare_rope(cos, sin)
         causal_mask = block.prepare_causal_mask(seq)
 

@@ -175,6 +175,87 @@ class TtTextAttention(LightweightModule):
             packer_l1_acc=True,
         )
 
+        # ---- decode DRAM-sharded o_proj (occupancy REDO lever 1) -------
+        # M=1 decode matmuls are DRAM weight-streaming bound; the default
+        # interleaved kernel read the replicated wo at ~170 GB/s on 48
+        # cores. Store a second wo copy WIDTH_SHARDED across the chip's
+        # DRAM banks and run MatmulMultiCoreReuseMultiCastDRAMSharded with
+        # the activation row width-sharded in L1 — same bf16 weights, same
+        # HiFi4+fp32 acc math, layout-only change.
+        compute_grid = mesh_device.compute_with_storage_grid_size()
+        dram_grid = mesh_device.dram_grid_size()
+        self._dram_weight_grid = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_grid.x - 1, dram_grid.y - 1))}
+        )
+
+        def _dram_sharded_weight_mc(k, n):
+            pad_n = ((n + 32 * dram_grid.x - 1) // (32 * dram_grid.x)) * (32 * dram_grid.x)
+            spec = ttnn.ShardSpec(self._dram_weight_grid, (k, pad_n // dram_grid.x), ttnn.ShardOrientation.ROW_MAJOR)
+            return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, spec)
+
+        def _l1_ws_mc(width, num_cores):
+            return ttnn.create_sharded_memory_config(
+                shape=(32, width // num_cores),
+                core_grid=ttnn.num_cores_to_corerangeset(num_cores, compute_grid, row_wise=True),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+        hidden_t = hidden // 32
+        self._o_cores = 8  # ibw=6 (A/B: 24c 110.2, 12c 104.1, 8c 103.7, 4c 105.8 us total)
+        self.wo_dec = ttnn.from_torch(
+            o_w.transpose(-2, -1).reshape(1, 1, num_heads * head_dim, hidden).contiguous(),
+            dtype=weight_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=_dram_sharded_weight_mc(num_heads * head_dim, hidden),
+            mesh_mapper=replicate,
+        )
+        self.o_in_mc = _l1_ws_mc(hidden, self._o_cores)
+        self.o_out_mc = _l1_ws_mc(hidden, self._o_cores)
+        self._omm_cores = 16  # o_proj A/B
+        self.o_in_mc = _l1_ws_mc(hidden, self._omm_cores)
+        self.o_out_mc = _l1_ws_mc(hidden, self._omm_cores)
+        self.o_pc = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=hidden_t // self._omm_cores,
+            per_core_M=1,
+            per_core_N=(hidden_t + self._omm_cores - 1) // self._omm_cores,
+            fused_activation=None,
+        )
+
+        # ---- decode DRAM-sharded fused QKV (lever 2) --------------------
+        # Same recipe for the [1,1536]@[1536,640] QKV row: per-chip weight
+        # and bias zero-padded 640->768 so the 24 cores each own one
+        # N-tile; the zero tail is sliced off after the matmul.
+        qkv_pad = 768
+        self.qkv_pad = qkv_pad
+        per_dev_w_pad = [torch.cat([w, torch.zeros(qkv_pad - w.shape[0], hidden)], dim=0) for w in per_dev_w]
+        per_dev_b_pad = [torch.cat([b, torch.zeros(qkv_pad - b.shape[0])], dim=0) for b in per_dev_b]
+        self._per_dev_b_pad = per_dev_b_pad
+        self.wqkv_dec = ttnn.from_torch(
+            torch.cat(per_dev_w_pad, dim=0).transpose(-2, -1).reshape(1, 1, hidden, -1).contiguous(),
+            dtype=weight_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=_dram_sharded_weight_mc(hidden, qkv_pad),
+            mesh_mapper=shard_cols,
+        )
+        # Bias kept OUT of the DRAM-sharded matmul (the kernel silently
+        # corrupts with fused bias) — added per layer as ONE fp32
+        # width-sharded BinaryNg in the same 8-core L1 shard, so the only
+        # bf16 rounding of the decode QKV row stays the final roped add.
+        self.bqkv_dec = None  # created lazily (qkv_out_mc L1 shard, persistent)
+        self._bqkv_dec_rows = torch.cat(per_dev_b_pad, dim=0).reshape(1, 1, 1, -1)
+        self._shard_cols = shard_cols
+        self.qkv_in_mc = _l1_ws_mc(hidden, self._o_cores)  # [1,1536] row over the QKV core count
+        self.qkv_out_mc = _l1_ws_mc(qkv_pad, self._o_cores)
+        self.qkv_pc = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=hidden_t // self._o_cores,
+            per_core_M=1,
+            per_core_N=qkv_pad // (32 * self._o_cores),
+            fused_activation=None,
+        )
+
         # Decode fused-rope constant (perf REDO 3): rotate_half as ONE fp32
         # matmul on the fused QKV row. R is block-diagonal with the HF
         # rotate-half map per q/k head block and ZEROS over the v block, so
@@ -205,6 +286,27 @@ class TtTextAttention(LightweightModule):
             mesh_mapper=replicate,
         )
         self.heads_l1_height_sharded = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
+
+        # DRAM-sharded decode rope matmul (lever 3): rope_rot 640x640 stored
+        # width-sharded over the DRAM banks; xqkv row width-sharded over 5
+        # cores (K_tiles=20 -> ibw=4, per_core_N=4, no padding).
+        rot_pad = torch.zeros(qkv_pad, qkv_pad)
+        rot_pad[: self.qkv_width, : self.qkv_width] = rot_full
+        self._rot_pad_t = rot_pad
+        self.rope_rot_dec = ttnn.from_torch(
+            rot_pad.reshape(1, 1, qkv_pad, qkv_pad),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=_dram_sharded_weight_mc(qkv_pad, qkv_pad),
+            mesh_mapper=replicate,
+        )
+        self.rope_pc = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=(qkv_pad // 32) // self._o_cores,
+            per_core_M=1,
+            per_core_N=(qkv_pad // 32) // self._o_cores,
+            fused_activation=None,
+        )
 
         # Decode SDPA (perf REDO 3 lever c): the fused bf16-only
         # scaled_dot_product_attention_decode kernel, with Q PRE-SCALED by
@@ -289,8 +391,9 @@ class TtTextAttention(LightweightModule):
         freqs = float(position) * inv_freq
         emb = torch.cat((freqs, freqs), dim=-1)
         hpd, hd = self.heads_per_device, self.head_dim
-        cos_cat = torch.ones(1, 1, 1, self.qkv_width)
-        sin_cat = torch.zeros(1, 1, 1, self.qkv_width)
+        cos_cat = torch.zeros(1, 1, 1, self.qkv_pad)
+        sin_cat = torch.zeros(1, 1, 1, self.qkv_pad)
+        cos_cat[..., : self.qkv_width] = 1.0
         cos_cat[..., : (hpd + 1) * hd] = emb.cos().repeat(hpd + 1)
         sin_cat[..., : (hpd + 1) * hd] = emb.sin().repeat(hpd + 1)
         # Q pre-scale (lever c): rope is linear in x, so scaling the cos/sin
@@ -309,7 +412,7 @@ class TtTextAttention(LightweightModule):
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=self.qkv_out_mc,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
             for t in rows
@@ -370,6 +473,32 @@ class TtTextAttention(LightweightModule):
         ttnn.deallocate(t)
         return out
 
+    def _prefill_pc(self, m_tiles, k_tiles, n_tiles, max_x, max_y):
+        """2D-mcast program config: maximize gx*gy over divisors of N_t/M_t."""
+        gx = max(g for g in range(1, max_x + 1) if n_tiles % g == 0)
+        gy = max(g for g in range(1, max_y + 1) if m_tiles % g == 0)
+        per_n = n_tiles // gx
+        per_m = m_tiles // gy
+        sub_w = next(w for w in (4, 3, 2, 1) if per_n % w == 0)
+        ibw = next(w for w in (8, 6, 4, 3, 2, 1) if k_tiles % w == 0)
+        # fp32 CB budget guard (odd seq -> gy=1 -> per_core_M huge blows L1)
+        tile_b = 4096
+        while ibw > 1 and (2 * per_m * ibw + 2 * ibw * per_n + per_m * per_n) * tile_b > 1_200_000:
+            ibw = next(w for w in (6, 4, 3, 2, 1) if w < ibw and k_tiles % w == 0)
+        if (2 * per_m * ibw + 2 * ibw * per_n + per_m * per_n) * tile_b > 1_200_000:
+            return None  # caller falls back to the default heuristic
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(gx, gy),
+            in0_block_w=ibw,
+            out_subblock_h=1,
+            out_subblock_w=sub_w,
+            per_core_M=m_tiles // gy,
+            per_core_N=per_n,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
+
     def forward(self, x_11SH: ttnn.Tensor, rot_mats, causal_mask: ttnn.Tensor, kv_cache=None) -> ttnn.Tensor:
         """x_11SH: [1, 1, seq, hidden] fp32 TILE_LAYOUT, replicated on the mesh.
 
@@ -381,12 +510,15 @@ class TtTextAttention(LightweightModule):
             decode step overwrites them).
         Returns: [1, 1, seq, hidden] fp32, replicated (all-reduced o_proj output).
         """
+        grid = self.mesh_device.compute_with_storage_grid_size()
+        m_t = x_11SH.shape[2] // 32
         xqkv = ttnn.linear(
             x_11SH,
             self.wqkv,
             bias=self.bqkv,
             dtype=ttnn.float32,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=self._prefill_pc(m_t, x_11SH.shape[3] // 32, self.qkv_width // 32, grid.x, grid.y),
             compute_kernel_config=self.compute_kernel_config,
         )
 
@@ -463,6 +595,7 @@ class TtTextAttention(LightweightModule):
             self.wo,
             dtype=x_11SH.dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=self._prefill_pc(m_t, self.wo.shape[2] // 32, self.wo.shape[3] // 32, grid.x, grid.y),
             compute_kernel_config=self.compute_kernel_config,
         )
         ttnn.deallocate(attn)
@@ -497,33 +630,52 @@ class TtTextAttention(LightweightModule):
         # Q pre-scaled by 1/sqrt(hd) in the cos/sin rows, so the bf16 SDPA
         # sees the same ±276-magnitude logits as before. The old fp32 chain
         # + separate bf16 typecast op are gone (gate-checked, WER 0.0 5/5).
-        xqkv = ttnn.linear(
-            x_111H,
-            self.wqkv,
-            bias=self.bqkv,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        x_ws = ttnn.interleaved_to_sharded(x_111H, self.qkv_in_mc)
+        xqkv_mm = ttnn.linear(
+            x_ws,
+            self.wqkv_dec,
+            dtype=ttnn.float32,
+            program_config=self.qkv_pc,
+            memory_config=self.qkv_out_mc,
             compute_kernel_config=self.compute_kernel_config,
         )
+        ttnn.deallocate(x_ws)
+        if self.bqkv_dec is None:
+            self.bqkv_dec = ttnn.from_torch(
+                self._bqkv_dec_rows,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=self.qkv_out_mc,
+                mesh_mapper=self._shard_cols,
+            )
+        xqkv_b = ttnn.add(xqkv_mm, self.bqkv_dec, dtype=ttnn.float32, memory_config=self.qkv_out_mc)
+        ttnn.deallocate(xqkv_mm)
         cos_cat, sin_cat = rot_step
-        rot = ttnn.matmul(
-            xqkv,
-            self.rope_rot,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        rot_ws = ttnn.matmul(
+            xqkv_b,
+            self.rope_rot_dec,
+            dtype=ttnn.float32,
+            program_config=self.rope_pc,
+            memory_config=self.qkv_out_mc,
             compute_kernel_config=self.compute_kernel_config,
         )
         # L1, not DRAM, for the heads-decode input: nlp_create_qkv_heads_decode
         # reads bf16 sub-tile lines (32B) which silently drop ODD head rows
         # from DRAM on Blackhole (64B DRAM NoC alignment — measured: head 1
         # of 3 comes back zero from a DRAM input, correct from L1).
-        roped_bf = ttnn.add(
-            ttnn.multiply(xqkv, cos_cat),
-            ttnn.multiply(rot, sin_cat),
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+        roped_ws = ttnn.add(
+            ttnn.multiply(xqkv_b, cos_cat, memory_config=self.qkv_out_mc),
+            ttnn.multiply(rot_ws, sin_cat, memory_config=self.qkv_out_mc),
+            dtype=ttnn.bfloat16,
+            memory_config=self.qkv_out_mc,
         )
-        ttnn.deallocate(xqkv)
-        ttnn.deallocate(rot)
+        ttnn.deallocate(xqkv_b)
+        ttnn.deallocate(rot_ws)
+        roped_pad = ttnn.sharded_to_interleaved(roped_ws, ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(roped_ws)
+        roped_bf = ttnn.slice(roped_pad, [0, 0, 0, 0], [1, 1, 1, self.qkv_width], memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(roped_pad)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
             roped_bf,
             num_heads=self.heads_per_device,
@@ -567,15 +719,24 @@ class TtTextAttention(LightweightModule):
         # op on the narrow bf16 heads row replaces the reduce_scatter +
         # all_gather all-reduce of fp32 partial sums.
         if self.num_devices > 1:
-            attn_full = ttnn.all_gather(attn, dim=3, num_links=2, topology=ttnn.Topology.Linear)
+            # Gather straight into the o_proj width-sharded L1 layout (saves
+            # the separate interleaved_to_sharded reshard).
+            attn_ws2 = ttnn.all_gather(
+                attn, dim=3, num_links=2, topology=ttnn.Topology.Linear, memory_config=self.o_in_mc
+            )
             ttnn.deallocate(attn)
-            attn = attn_full
-        out = ttnn.linear(
-            attn,
-            self.wo,
+        else:
+            attn_ws2 = ttnn.interleaved_to_sharded(attn, self.o_in_mc)
+            ttnn.deallocate(attn)
+        out_ws = ttnn.linear(
+            attn_ws2,
+            self.wo_dec,
             dtype=x_111H.dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=self.o_pc,
+            memory_config=self.o_out_mc,
             compute_kernel_config=self.compute_kernel_config,
         )
-        ttnn.deallocate(attn)
+        ttnn.deallocate(attn_ws2)
+        out = ttnn.sharded_to_interleaved(out_ws, ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(out_ws)
         return out
