@@ -58,8 +58,7 @@ def valid_acc_to_dest(dest_sync_dims_dest_acc) -> list:
     """Pick the acc_to_dest modes worth running for a given input size.
 
     acc_to_dest=True accumulates `get_num_tiles_per_accumulation(True)` result tiles into
-    dest, so it only makes sense when the tile count is a non-zero multiple of that. Filtering
-    here means those combinations are never generated (instead of generated then skipped).
+    dest, so it only makes sense when the tile count is a non-zero multiple of that.
     """
     _, input_dimensions, _ = dest_sync_dims_dest_acc
     total_tiles = (

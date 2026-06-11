@@ -117,8 +117,7 @@ ALL_DATACOPY_COMBINATIONS = generate_eltwise_unary_datacopy_combinations(
 @pytest.mark.quasar
 @parametrize(
     formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices=ALL_DATACOPY_COMBINATIONS,
-    # MX formats REQUIRE implied_math_format=Yes on Quasar (bypass format inference pipeline);
-    # don't generate the No variant for them. combo[0] is the FormatConfig.
+    # don't generate the No variant for them. combo[0] is the InputOutputFormat (input/output pair).
     implied_math_format=lambda formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices: (
         [ImpliedMathFormat.Yes]
         if formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices[

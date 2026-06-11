@@ -143,7 +143,6 @@ def valid_output_dimensions(formats, dest_sync_mode, input_dimensions) -> list:
     ],
     dest_sync_mode=[DestSync.Half, DestSync.Full],
     input_dimensions=INPUT_DIMENSIONS,
-    # Only pair each input size with reuse_dest-compatible output sizes (see helper).
     output_dimensions=valid_output_dimensions,
 )
 def test_eltwise_binary_reuse_dest_quasar(

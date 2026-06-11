@@ -127,8 +127,7 @@ def generate_qsr_pack_l1_acc_combinations(
 @pytest.mark.quasar
 @parametrize(
     formats_dest_acc=generate_qsr_pack_l1_acc_combinations(PACK_L1_ACC_FORMATS),
-    # MX formats REQUIRE implied_math_format=Yes on Quasar (bypass format inference pipeline);
-    # don't generate the No variant for them. formats_dest_acc[0] is the FormatConfig.
+    # don't generate the No variant for them. formats_dest_acc[0] is the InputOutputFormat (input/output pair).
     implied_math_format=lambda formats_dest_acc: (
         [ImpliedMathFormat.Yes]
         if formats_dest_acc[0].input_format.is_mx_format()
