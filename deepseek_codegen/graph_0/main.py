@@ -3057,36 +3057,18 @@ def _main(activations, weights):
         ),
     )
     ttnn.deallocate(ttnn_typecast_37, False)
-    ttnn_slice_68 = ttnn.slice(
+    # E_shard: fuse the 3 separate cross-device reductions of matmul_0's partial output
+    # (was kv_a all_gather+sum, q_a reduce_scatter, indexer all_gather+sum) into ONE
+    # all_gather+sum of the full [32,2304], then slice locally. q_a is mesh_partition'd
+    # back to its [32,192] shard downstream. Saves 2 CCLs + 2 sums / attn layer.
+    ttnn_mm0_4d = ttnn.reshape(
         ttnn_matmul_0,
-        [0, 0],
-        [32, 576],
-        [1, 1],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn_slice_70 = ttnn.slice(
-        ttnn_matmul_0,
-        [0, 640],
-        [32, 2176],
-        [1, 1],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn_slice_71 = ttnn.slice(
-        ttnn_matmul_0,
-        [0, 2176],
-        [32, 2304],
-        [1, 1],
+        [1, 32, 2304],
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
     ttnn.deallocate(ttnn_matmul_0, False)
-    ttnn_reshape_21 = ttnn.reshape(
-        ttnn_slice_71,
-        [1, 32, 128],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_slice_71, False)
-    ttnn_all_gather_3 = ttnn.all_gather(
-        input_tensor=ttnn_reshape_21,
+    ttnn_mm0_ag = ttnn.all_gather(
+        input_tensor=ttnn_mm0_4d,
         dim=0,
         cluster_axis=1,
         subdevice_id=None,
@@ -3094,9 +3076,9 @@ def _main(activations, weights):
         num_links=None,
         topology=ttnn.Topology.Ring,
     )
-    ttnn.deallocate(ttnn_reshape_21, False)
-    ttnn_sum_2 = ttnn.sum(
-        ttnn_all_gather_3,
+    ttnn.deallocate(ttnn_mm0_4d, False)
+    ttnn_mm0_red = ttnn.sum(
+        ttnn_mm0_ag,
         [0],
         False,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
@@ -3104,13 +3086,37 @@ def _main(activations, weights):
             math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
         ),
     )
-    ttnn.deallocate(ttnn_all_gather_3, False)
+    ttnn.deallocate(ttnn_mm0_ag, False)
+    ttnn_slice_68 = ttnn.slice(
+        ttnn_mm0_red,
+        [0, 0],
+        [32, 576],
+        [1, 1],
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+    )
+    ttnn_slice_70 = ttnn.slice(
+        ttnn_mm0_red,
+        [0, 640],
+        [32, 2176],
+        [1, 1],
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+    )
+    ttnn_slice_71 = ttnn.slice(
+        ttnn_mm0_red,
+        [0, 2176],
+        [32, 2304],
+        [1, 1],
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+    )
+    ttnn.deallocate(ttnn_mm0_red, False)
+    # E_shard: indexer already reduced by the fused all_gather above -> skip its own
+    # reshape_21/all_gather_3/sum_2; typecast the slice directly.
     ttnn_typecast_38 = ttnn.typecast(
-        ttnn_sum_2,
+        ttnn_slice_71,
         ttnn.DataType.FLOAT32,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
-    ttnn.deallocate(ttnn_sum_2, False)
+    ttnn.deallocate(ttnn_slice_71, False)
     ttnn_reshape_22 = ttnn.reshape(
         ttnn_typecast_38,
         [32, 1, 128],
@@ -3348,20 +3354,13 @@ def _main(activations, weights):
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
     ttnn.deallocate(ttnn_slice_70, False)
-    ttnn_reduce_scatter_0 = ttnn.reduce_scatter(
+    # E_shard: q_a already reduced by the fused all_gather -> just re-shard it to the
+    # [32,192] TP slice with a LOCAL mesh_partition (no CCL), replacing reduce_scatter_0.
+    ttnn_reduce_scatter_0 = ttnn.mesh_partition(
         input_tensor=ttnn_reshape_29,
         dim=3,
         cluster_axis=1,
-        subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
-        topology=ttnn.Topology.Ring,
-        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        ),
     )
     ttnn.deallocate(ttnn_reshape_29, False)
     ttnn_reshape_30 = ttnn.reshape(
@@ -3459,32 +3458,9 @@ def _main(activations, weights):
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
     ttnn.deallocate(ttnn_matmul_6, False)
-    ttnn_reshape_45 = ttnn.reshape(
-        ttnn_slice_68,
-        [1, 32, 576],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_slice_68, False)
-    ttnn_all_gather_6 = ttnn.all_gather(
-        input_tensor=ttnn_reshape_45,
-        dim=0,
-        cluster_axis=1,
-        subdevice_id=None,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
-        topology=ttnn.Topology.Ring,
-    )
-    ttnn.deallocate(ttnn_reshape_45, False)
-    ttnn_sum_5 = ttnn.sum(
-        ttnn_all_gather_6,
-        [0],
-        False,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
-        ),
-    )
-    ttnn.deallocate(ttnn_all_gather_6, False)
+    # E_shard: kv_a already reduced by the fused all_gather -> slice_68 IS sum_5
+    # (skip reshape_45/all_gather_6/sum_5). Alias so downstream refs are unchanged.
+    ttnn_sum_5 = ttnn_slice_68
     ttnn_slice_87 = ttnn.slice(
         ttnn_sum_5,
         [0, 0],
