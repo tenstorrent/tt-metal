@@ -14,6 +14,19 @@
 using namespace ckernel;
 
 /**
+ * @brief Returns the NOP Tensix instruction for unused unpacker engine
+ *
+ * @tparam UNP_SEL: unpacker engine in use
+ */
+template <std::uint32_t UNP_SEL>
+constexpr std::uint32_t nop_insn_for_unused_unpacker_engine()
+{
+    static_assert((UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B), "UNP_SEL must be UNP_A or UNP_B");
+    constexpr auto unpacr_engine = UNP_SEL == p_unpacr::UNP_A ? p_unpacr::UNP_B : p_unpacr::UNP_A;
+    return TT_OP_UNPACR_NOP(unpacr_engine, 1 /*Set_Dvalid*/, 0 /*Stall_Cntrl*/, 0 /*Bank_Clr_Ctrl*/, 0 /*Src_ClrVal_Ctrl*/, 0 /*Nop_type*/);
+}
+
+/**
  * @brief MOP configuration for unpack of unary operations
  * @details Sets up MOP for unpacking a single operand by tiles
  * Specialized for tiny-tile unpack where each face is a separate tile in HW.
@@ -66,13 +79,10 @@ inline void _llk_unpack_unary_operand_variable_tile_size_mop_config_(
 
     // If IS_32b_DEST_EN and UNP_SEL = UNP_A, zero out the SRCB reg
     // The only test in which there is a unary upk to SRCA with 32b DF is the datacopy kernel, which uses ELWADD
-    if constexpr (UNP_SEL == p_unpacr::UNP_A && IS_32b_DEST_EN)
+    if constexpr (IS_32b_DEST_EN)
     {
-        temp.set_start_op(TT_OP_UNPACR_NOP(p_unpacr::UNP_B, 1 /*Set_Dvalid*/, 0 /*Stall_Cntrl*/, 0 /*Bank_Clr_Ctrl*/, 0 /*Src_ClrVal_Ctrl*/, 0 /*Nop_type*/));
-    }
-    else if constexpr (UNP_SEL == p_unpacr::UNP_B && IS_32b_DEST_EN)
-    {
-        temp.set_start_op(TT_OP_UNPACR_NOP(p_unpacr::UNP_A, 1 /*Set_Dvalid*/, 0 /*Stall_Cntrl*/, 0 /*Bank_Clr_Ctrl*/, 0 /*Src_ClrVal_Ctrl*/, 0 /*Nop_type*/));
+        const std::uint32_t clr_unused_unpacr_engine = nop_insn_for_unused_unpacker_engine<UNP_SEL>();
+        temp.set_start_op(clr_unused_unpacr_engine);
     }
 
     temp.program_bank0_sw_cntl(instrn_buffer);
@@ -118,13 +128,10 @@ inline void _llk_unpack_unary_operand_mop_config_(const std::uint32_t buf_desc_i
 
     // If IS_32b_DEST_EN and UNP_SEL = UNP_A, zero out the SRCB reg
     // The only test in which there is a unary upk to SRCA with 32b DF is the datacopy kernel, which uses ELWADD
-    if constexpr (UNP_SEL == p_unpacr::UNP_A && IS_32b_DEST_EN)
+    if constexpr (IS_32b_DEST_EN && (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_B))
     {
-        temp.set_end_op(TT_OP_UNPACR_NOP(p_unpacr::UNP_B, 1 /*Set_Dvalid*/, 0 /*Stall_Cntrl*/, 0 /*Bank_Clr_Ctrl*/, 0 /*Src_ClrVal_Ctrl*/, 0 /*Nop_type*/));
-    }
-    else if constexpr (UNP_SEL == p_unpacr::UNP_B && IS_32b_DEST_EN)
-    {
-        temp.set_end_op(TT_OP_UNPACR_NOP(p_unpacr::UNP_A, 1 /*Set_Dvalid*/, 0 /*Stall_Cntrl*/, 0 /*Bank_Clr_Ctrl*/, 0 /*Src_ClrVal_Ctrl*/, 0 /*Nop_type*/));
+        const std::uint32_t clr_unused_unpacr_engine = nop_insn_for_unused_unpacker_engine<UNP_SEL>();
+        temp.set_end_op(clr_unused_unpacr_engine);
     }
 
     temp.program_bank0_sw_cntl(instrn_buffer);
@@ -208,14 +215,8 @@ inline void _llk_unpack_unary_operand_transpose_mop_config_(const std::uint32_t 
     // 32-bit datacopy uses ELWADD, which requires datavalid from both SrcA and SrcB
     if constexpr (IS_32b_DEST_EN)
     {
-        if constexpr (UNP_SEL == p_unpacr::UNP_A)
-        {
-            temp.set_end_op(TT_OP_UNPACR_NOP(p_unpacr::UNP_B, 1 /*Set_Dvalid*/, 0 /*Stall_Cntrl*/, 0 /*Bank_Clr_Ctrl*/, 0 /*Src_ClrVal_Ctrl*/, 0 /*Nop_type*/));
-        }
-        else if constexpr (UNP_SEL == p_unpacr::UNP_B)
-        {
-            temp.set_end_op(TT_OP_UNPACR_NOP(p_unpacr::UNP_A, 1 /*Set_Dvalid*/, 0 /*Stall_Cntrl*/, 0 /*Bank_Clr_Ctrl*/, 0 /*Src_ClrVal_Ctrl*/, 0 /*Nop_type*/));
-        }
+        const std::uint32_t clr_unused_unpacr_engine = nop_insn_for_unused_unpacker_engine<UNP_SEL>();
+        temp.set_end_op(clr_unused_unpacr_engine);
     }
 
     temp.program_bank0_sw_cntl(instrn_buffer);
@@ -327,13 +328,20 @@ inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, con
     }
     else
     {
-        if (tensor_shape.total_num_faces() == NUM_FACES || tensor_shape.total_num_faces() == 1) // Using regular tile dimensions
+        if constexpr (UNP_SEL == p_unpacr::UNP_DEST) // workaround for unpack to dest, since not supported for tiny tile currently
         {
             _llk_unpack_unary_operand_mop_config_<UNP_SEL, IS_32b_DEST_EN>(buf_desc_id, num_tiles);
         }
-        else // Using tiny-tiles
+        else
         {
-            _llk_unpack_unary_operand_variable_tile_size_mop_config_<UNP_SEL, IS_32b_DEST_EN>(buf_desc_id, num_tiles, tensor_shape);
+            if (tensor_shape.total_num_faces() == NUM_FACES || tensor_shape.total_num_faces() == 1) // Using regular tile dimensions
+            {
+                _llk_unpack_unary_operand_mop_config_<UNP_SEL, IS_32b_DEST_EN>(buf_desc_id, num_tiles);
+            }
+            else // Using tiny-tiles
+            {
+                _llk_unpack_unary_operand_variable_tile_size_mop_config_<UNP_SEL, IS_32b_DEST_EN>(buf_desc_id, num_tiles, tensor_shape);
+            }
         }
     }
 }
