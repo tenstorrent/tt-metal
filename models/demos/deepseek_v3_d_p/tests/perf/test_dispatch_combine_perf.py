@@ -40,26 +40,26 @@ _REAL_INDICES_TOPOS = [("linear", 2), ("ring", 2)]
 # are developed separately, so each is asserted against its own baseline —
 # a regression localizes to the responsible kernel.
 _DISPATCH_REAL_INDICES_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
-    # (topo, nlinks, layer, col): expected_ns. Recalibrated 2026-06-11 on bh-51-special,
-    # averaged over 2 runs against LONGBOOK_QA_ENG_25600/expert_routing.safetensors.
-    ("linear", 2, 27, 2): 11_886_254,  # 43.2%
-    ("linear", 2, 38, 0): 7_292_260,  # 41.2%
-    ("linear", 2, 50, 0): 8_449_519,  # 39.9%
-    ("linear", 2, 28, 1): 11_129_613,  # 39.5%
-    ("ring", 2, 27, 2): 7_214_938,
-    ("ring", 2, 38, 0): 5_123_612,
-    ("ring", 2, 50, 0): 4_904_337,
-    ("ring", 2, 28, 1): 5_486_943,
+    # (topo, nlinks, layer, col): expected_ns. Recalibrated 2026-06-11 on CI LB f04cs04
+    # against LONGBOOK_QA_ENG_25600/expert_routing.safetensors.
+    ("linear", 2, 27, 2): 11_997_669,  # 43.2%
+    ("linear", 2, 38, 0): 7_267_844,  # 41.2%
+    ("linear", 2, 50, 0): 8_499_541,  # 39.9%
+    ("linear", 2, 28, 1): 10_998_444,  # 39.5%
+    ("ring", 2, 27, 2): 7_291_342,
+    ("ring", 2, 38, 0): 5_190_564,
+    ("ring", 2, 50, 0): 4_935_201,
+    ("ring", 2, 28, 1): 5_640_890,
 }
 _COMBINE_REAL_INDICES_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
-    ("linear", 2, 27, 2): 11_603_859,
-    ("linear", 2, 38, 0): 8_284_537,
-    ("linear", 2, 50, 0): 8_740_586,
-    ("linear", 2, 28, 1): 11_972_087,
-    ("ring", 2, 27, 2): 11_459_510,
-    ("ring", 2, 38, 0): 6_191_493,
-    ("ring", 2, 50, 0): 6_427_028,
-    ("ring", 2, 28, 1): 10_690_756,
+    ("linear", 2, 27, 2): 11_846_889,
+    ("linear", 2, 38, 0): 8_497_993,
+    ("linear", 2, 50, 0): 8_403_393,
+    ("linear", 2, 28, 1): 12_038_881,
+    ("ring", 2, 27, 2): 11_565_037,
+    ("ring", 2, 38, 0): 6_048_907,
+    ("ring", 2, 50, 0): 6_324_508,
+    ("ring", 2, 28, 1): 10_617_030,
 }
 
 
