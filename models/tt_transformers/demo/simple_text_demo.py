@@ -936,8 +936,19 @@ def test_demo_text(
     if use_prefetcher and not is_blackhole():
         logger.warning("--use_prefetcher requested but DRAM prefetcher is only supported on Blackhole; disabling.")
         use_prefetcher = False
+    # The worker-core prefetcher's is_prefetcher_supported() gate rejects 8B on <4 cards
+    # (ring=16 weight > L1 budget). The DRAM-core backend uses a higher ring (its own gate,
+    # is_dram_core_prefetcher_supported, runs in the DramCorePrefetcher ctor), so when it's
+    # selected bypass the worker gate and let that backend self-validate.
+    use_dram_core_prefetcher = (
+        os.getenv("TT_METAL_USE_DRAM_CORE_PREFETCHER", "0") == "1"
+        and os.getenv("TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES", "0") == "1"
+    )
     use_prefetcher = (
-        use_prefetcher and is_prefetcher_supported(hf_dir, num_devices) and "Llama" in hf_dir and "8B" in hf_dir
+        use_prefetcher
+        and "Llama" in hf_dir
+        and "8B" in hf_dir
+        and (use_dram_core_prefetcher or is_prefetcher_supported(hf_dir, num_devices))
     )
     global_batch_size = batch_size * data_parallel  # input batch_size is interpreted as size per DP group
     use_hf_rope = request.config.getoption("--use_hf_rope")
