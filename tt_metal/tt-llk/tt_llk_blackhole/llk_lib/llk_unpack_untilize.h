@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// DEPRECATED: The unpack-based untilize LLK has poor performance and is deprecated in favor of the
+// pack_untilize LLK (llk_pack_untilize.h). It is retained only for the legacy untilize compute API and
+// is scheduled for removal; see tt-metal#22904.
+
 #pragma once
 
 #include <cstdint>

@@ -1,0 +1,13 @@
+# --- Mesh Descriptors ------------------------------------------------------
+# 8x4 Blackhole galaxy mesh spanning 2x2 hosts (4 processes, each owns a 4x2 slice)
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 8, 4 ] }
+  host_topology   { dims: [ 2, 2 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }

@@ -8,15 +8,18 @@ from pathlib import Path
 
 import torch
 from loguru import logger
-from transformers import AutoConfig
 
 import ttnn
-from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.runners.h2d_socket_sync_op import h2d_socket_sync
-from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import prepare_prefill_input_tensor
+from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import (
+    build_h2d_service,
+    get_variant,
+    load_hf_config,
+    open_mesh_device,
+    prepare_prefill_input_tensor,
+    resolve_weight_cache_path,
+)
 from models.demos.deepseek_v3_d_p.tt.tt_deepseek_prefill_pipeline import (
     TtDeepSeekPrefillPipeline,
     TtPrefillPipelineConfig,
@@ -46,14 +49,18 @@ H2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(
     placements=[ttnn.PlacementShard(0), ttnn.PlacementReplicate()],
 )
 
+
+VARIANT = get_variant(os.environ.get("PREFILL_MODEL_VARIANT", "deepseek_v3_d_p"))
+MODEL_CFG = VARIANT.model_config
+
 _sp = int(os.environ.get("PREFILL_SP", 8))
 _tp = int(os.environ.get("PREFILL_TP", 4))
 GLOBAL_MESH_SHAPE = (_sp, _tp)
 NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", 61))
 MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 3200 * _sp))
-IS_BALANCED = os.environ.get("PREFILL_IS_BALANCED", "1") == "1"
+IS_BALANCED = os.environ.get("PREFILL_IS_BALANCED", "1" if VARIANT.default_is_balanced else "0") == "1"
 CAPACITY_FACTOR = int(os.environ.get("PREFILL_CAPACITY_FACTOR", 8))
-_gate_mode_name = os.environ.get("PREFILL_GATE_FALLBACK_MODE", "DEVICE_FP32")
+_gate_mode_name = os.environ.get("PREFILL_GATE_FALLBACK_MODE", VARIANT.default_gate_mode)
 
 _shutdown = False
 
@@ -63,118 +70,7 @@ def _handle_sigterm(signum, frame):
     _shutdown = True
 
 
-def _is_shutdown() -> bool:
-    return _shutdown
-
-
-def _load_hf_config():
-    model_path = os.environ.get("DEEPSEEK_V3_HF_MODEL") or "models/demos/deepseek_v3/reference"
-    logger.info(f"Loading HF config from {model_path}")
-    return AutoConfig.from_pretrained(model_path, trust_remote_code=True)
-
-
-def _open_mesh_device():
-    sp = GLOBAL_MESH_SHAPE[0]
-    fabric_config = ttnn.FabricConfig.FABRIC_1D if sp <= 8 else ttnn.FabricConfig.FABRIC_2D
-
-    fabric_router_config = create_fabric_router_config(
-        max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE,
-    )
-
-    ttnn.set_fabric_config(
-        fabric_config,
-        ttnn.FabricReliabilityMode.RELAXED_INIT,
-        None,
-        ttnn.FabricTensixConfig.DISABLED,
-        ttnn.FabricUDMMode.DISABLED,
-        ttnn.FabricManagerMode.DEFAULT,
-        fabric_router_config,
-    )
-    return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*GLOBAL_MESH_SHAPE))
-
-
-DEFAULT_TTNN_CACHE = "/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure"
-DEFAULT_HOST_REF_CACHE = "/tmp/prefill_ref_cache"
-
-# TtPrefillTransformer reads these env vars directly and aborts if unset.
-# Export defaults here so the runner works without the caller having to set them.
-os.environ.setdefault("TT_DS_PREFILL_TTNN_CACHE", DEFAULT_TTNN_CACHE)
-os.environ.setdefault("TT_DS_PREFILL_HOST_REF_CACHE", DEFAULT_HOST_REF_CACHE)
-
-
-def _resolve_weight_cache_path() -> Path | None:
-    """Mirror the layout produced by the pytest weight_cache_path fixture so
-    we read the same files the cache-populate run wrote:
-      $TT_DS_PREFILL_TTNN_CACHE / deepseek_v3_d_p_{arch}_{N}dev / {sp}x{tp}
-    Defaults to DEFAULT_TTNN_CACHE; returns None only if explicitly set empty."""
-    env_cache = os.environ.get("TT_DS_PREFILL_TTNN_CACHE", DEFAULT_TTNN_CACHE)
-    if not env_cache:
-        return None
-    arch = "bh" if is_blackhole() else "wh"
-    num_devices = ttnn.get_num_devices()
-    sp, tp = GLOBAL_MESH_SHAPE
-    path = Path(env_cache) / f"deepseek_v3_d_p_{arch}_{num_devices}dev" / f"{sp}x{tp}"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def _build_h2d_service(mesh_device: ttnn.MeshDevice) -> ttnn.H2DStreamService:
-    """Construct an H2DStreamService whose per-shard backing tensor matches
-    what `prepare_prefill_input_tensor` would have produced.
-
-    Per-shard target: `(1, 1, isl_per_chip)` uint32 ROW_MAJOR DRAM.
-    Achieved by setting global_spec.shape = `(sp_factor, 1, isl_per_chip)` and
-    mapping `[Shard(0), Replicate]` on a `(sp, tp)` mesh — first axis of the
-    tensor is sharded across mesh rows (sp), nothing else is split.
-
-    No `worker_cores`, no metadata: Mode 1 only. Per-iter usage is
-    `forward_to_tensor_bytes(...) -> barrier() -> consume the backing tensor
-    via the standard FD-dispatched embedding op` (see run_standalone_loop).
-    """
-    sp_factor, tp_factor = GLOBAL_MESH_SHAPE
-    assert MAX_SEQ_LEN % sp_factor == 0, f"MAX_SEQ_LEN={MAX_SEQ_LEN} must be divisible by sp_factor={sp_factor}"
-    isl_per_chip = MAX_SEQ_LEN // sp_factor
-    per_chip_bytes = isl_per_chip * 4  # uint32
-
-    global_spec = _make_global_spec()
-    mapper = ttnn.create_mesh_mapper(
-        mesh_device,
-        H2D_MAPPER_CONFIG,
-    )
-    # worker_cores set so the service-core kernel multicasts a data-ready inc
-    # after each transfer; h2d_socket_sync() waits on that on-device, which
-    # avoids the host-side barrier() round-trip per iteration.
-    # metadata_size_bytes set so the producer can ship per-iter control bytes
-    # (slot_id, actual_start, actual_end) inline with the token push.
-    service = ttnn.H2DStreamService(
-        mesh_device=mesh_device,
-        global_spec=global_spec,
-        fifo_size_bytes=8 * per_chip_bytes,  # 8 in-flight pages of headroom
-        scratch_cb_size_bytes=per_chip_bytes,  # one page; service requires >= page_size
-        mapper=mapper,
-        worker_cores=H2D_SYNC_WORKER_CORES,
-        metadata_size_bytes=H2D_METADATA_SIZE_BYTES,
-    )
-    logger.info(
-        f"[h2d] H2DStreamService built: global_shape=({sp_factor},1,{isl_per_chip}) "
-        f"uint32 ROW_MAJOR DRAM, per_chip_bytes={per_chip_bytes}, "
-        f"worker_cores={H2D_SYNC_WORKER_CORES}"
-    )
-    return service
-
-
-def _make_global_spec() -> ttnn.TensorSpec:
-    """Per-iter input spec used by `_build_h2d_service` to set the service's
-    global tensor shape (the producer matches it on the host side).
-    Shape `(sp_factor, 1, isl_per_chip)` uint32 ROW_MAJOR DRAM."""
-    sp_factor = GLOBAL_MESH_SHAPE[0]
-    isl_per_chip = MAX_SEQ_LEN // sp_factor
-    return ttnn.TensorSpec(
-        shape=ttnn.Shape([sp_factor, 1, isl_per_chip]),
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        buffer_type=ttnn.BufferType.DRAM,
-    )
+os.environ.setdefault(VARIANT.ttnn_cache_env, VARIANT.ttnn_cache_default)
 
 
 def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
@@ -296,8 +192,10 @@ def _print_config() -> None:
     """Print all env var values at startup so the config is visible in logs."""
     UNSET = "<NOT SET>"
     rows = [
-        ("DEEPSEEK_V3_HF_MODEL", os.environ.get("DEEPSEEK_V3_HF_MODEL", UNSET)),
-        ("TT_DS_PREFILL_TTNN_CACHE", os.environ.get("TT_DS_PREFILL_TTNN_CACHE", DEFAULT_TTNN_CACHE)),
+        ("PREFILL_MODEL_VARIANT", VARIANT.name),
+        (VARIANT.hf_model_env, os.environ.get(VARIANT.hf_model_env, VARIANT.hf_model_default)),
+        (VARIANT.ttnn_cache_env, os.environ.get(VARIANT.ttnn_cache_env, VARIANT.ttnn_cache_default)),
+        ("resolved weight_cache_path", str(resolve_weight_cache_path(VARIANT, GLOBAL_MESH_SHAPE))),
         ("PREFILL_SP", str(_sp)),
         ("PREFILL_TP", str(_tp)),
         ("PREFILL_NUM_LAYERS", str(NUM_LAYERS)),
@@ -332,12 +230,12 @@ def main() -> None:
         f"migration={'ON (KV chunk table publish)' if enable_migration else 'OFF'}"
     )
 
-    mesh_device = _open_mesh_device()
+    mesh_device = open_mesh_device(GLOBAL_MESH_SHAPE, MODEL_CFG)
 
-    hf_config = _load_hf_config()
+    hf_config = load_hf_config(VARIANT)
     hf_config.max_seq_len = MAX_SEQ_LEN
 
-    cache_path = _resolve_weight_cache_path()
+    cache_path = resolve_weight_cache_path(VARIANT, GLOBAL_MESH_SHAPE)
     pipeline_config = TtPrefillPipelineConfig(
         num_layers=NUM_LAYERS,
         max_seq_len=MAX_SEQ_LEN,
@@ -347,6 +245,7 @@ def main() -> None:
         capacity_factor=CAPACITY_FACTOR,
         gate_fallback_mode=GateComputeMode[_gate_mode_name],
         weight_cache_path=cache_path,
+        model_cfg=MODEL_CFG,
     )
 
     pipeline = TtDeepSeekPrefillPipeline(
@@ -357,6 +256,7 @@ def main() -> None:
     )
     pipeline.compile()
 
+    ack_channel = None
     if enable_migration:
         # Standalone-worker model: build the KV chunk address table from the device
         # KV layout and serialize it to a .pb file. The inference server / orchestrator
@@ -370,6 +270,7 @@ def main() -> None:
 
         table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
         build_and_serialize_kv_chunk_table(
+            variant=VARIANT,
             mesh_device=mesh_device,
             kvpe_cache=pipeline.kvpe_cache,
             seq_len=MAX_SEQ_LEN,
@@ -395,13 +296,29 @@ def main() -> None:
         # service cores don't fit a single custom sub-device. Revert to the
         # default whole-chip sub-device so the service program validates.
         mesh_device.clear_loaded_sub_device_manager()
-        h2d_service = _build_h2d_service(mesh_device)
+        h2d_service = build_h2d_service(
+            mesh_device,
+            mesh_shape=GLOBAL_MESH_SHAPE,
+            max_seq_len=MAX_SEQ_LEN,
+            mapper_config=H2D_MAPPER_CONFIG,
+            worker_cores=H2D_SYNC_WORKER_CORES,
+            metadata_size_bytes=H2D_METADATA_SIZE_BYTES,
+        )
         service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
         descriptor_path = h2d_service.export_descriptor(service_id)
         logger.info(
             f"[h2d] exported descriptor service_id={service_id!r} -> {descriptor_path}; "
             f"run prefill_h2d_producer.py (or the scheduler) in another process to drive token pushes."
         )
+
+        # Per-layer LayerAck: the runner bumps a counter once per layer; the scheduler
+        # reads the delta (the ack carries no payload) and drives the migration worker.
+        # ttnn.InterProcessCounterChannel owns a named POSIX shm segment the scheduler
+        # connects to via shm_layer_ack_name(service_id).
+        ack_shm_name = f"/tt_prefill_layer_acks_{service_id}"
+        ack_channel = ttnn.InterProcessCounterChannel(ack_shm_name)
+        pipeline.set_layer_ack_channel(ack_channel)
+        logger.info(f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer")
 
         logger.info("Setup complete, entering request loop")
         run_request_loop(pipeline, h2d_service)
@@ -414,6 +331,11 @@ def main() -> None:
 
         del h2d_service
         gc.collect()
+
+    if ack_channel is not None:
+        # munmap + shm_unlink; doesn't need the mesh, but tear down here for symmetry.
+        ack_channel.shutdown()
+        del ack_channel
 
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
     ttnn.close_mesh_device(mesh_device)

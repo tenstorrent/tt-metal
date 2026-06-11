@@ -249,6 +249,7 @@ jobs:
       product: tt-metalium
       build-type: 'ASan'
       enable-kernel-ccache: true
+    secrets: inherit
 
   ttnn-examples:
     needs: [ asan-build, find-changed-files ]
@@ -270,6 +271,7 @@ jobs:
       product: tt-nn
       build-type: 'ASan'
       enable-kernel-ccache: true
+    secrets: inherit
 
   # A quick check that parses the models charts in README.md and models/README.md
   # and ensures that models attributes are in sync.
@@ -282,7 +284,7 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       timeout-minutes: 20
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
       with:
         python-version: '3.10'
     - name: Run model charts sync Python script

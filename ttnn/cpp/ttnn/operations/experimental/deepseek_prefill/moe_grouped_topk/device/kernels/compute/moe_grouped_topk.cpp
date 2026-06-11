@@ -80,7 +80,7 @@ void process_and_sort_tiles(
     cb_wait_front(cb_expert_index_template, Wt);
     cb_wait_front(cb_biased_scores, Wt);
     for (uint32_t wt = 0; wt < Wt; wt += 2) {
-        acquire_dst();
+        tile_regs_acquire();
         // transpose and unpack into dest regs
         reconfig_data_format_srca(cb_biased_scores);
         transpose_wh_init_short(cb_biased_scores);
@@ -99,6 +99,8 @@ void process_and_sort_tiles(
         // pack sorted score tiles
         pack_reconfig_data_format(cb_sorted_group_scores);
         cb_reserve_back(cb_sorted_group_scores, 1);
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(0, cb_sorted_group_scores);
         cb_push_back(cb_sorted_group_scores, 1);
 
@@ -119,7 +121,7 @@ void process_and_sort_tiles(
         cb_wait_front(cb_sorted_expert_indices_temp, 2);
         cb_pop_front(cb_sorted_expert_indices_temp, 2);
 
-        release_dst();
+        tile_regs_release();
         ascending = switch_dir ? !ascending : ascending;
     }
 }
@@ -158,7 +160,7 @@ void topk_group_scores(
     cb_reserve_back(cb_sorted_group_order, 1);
 
     // Sort single input and index tile that have already ben transposed.
-    acquire_dst();
+    tile_regs_acquire();
     // local sort into k groups
     cb_wait_front(cb_group_summed_scores, 1);
     cb_wait_front(cb_group_index_template, 1);
@@ -172,12 +174,14 @@ void topk_group_scores(
     // llk_topk_sort -> inplace
     ckernel::topk_local_sort<stable_sort>(0, (int)ascending, log_topk_groups);
 
+    tile_regs_commit();
+    tile_regs_wait();
     // pack index tile into cb_sorted_group_order
     pack_reconfig_data_format(cb_sorted_group_order);
     pack_tile(2, cb_sorted_group_order);
     cb_pop_front(cb_group_summed_scores, 1);
     // don't pop group indices as it gets reused for the next tile heights
-    release_dst();
+    tile_regs_release();
 
     cb_push_back(cb_sorted_group_order, 1);
 }
@@ -191,7 +195,6 @@ void transpose_and_pack(const uint32_t input_cb_index, const uint32_t output_cb_
         cb_wait_front(input_cb_index, 1);
         transpose_wh_tile(input_cb_index, 0, 0);
         tile_regs_commit();
-
         tile_regs_wait();
         cb_reserve_back(output_cb_index, 1);
 
@@ -254,7 +257,6 @@ void topk(
     }
     ckernel::topk_rebuild<stable_sort>(0, (int)ascending, 0, 32, 5, true);
     tile_regs_commit();
-
     tile_regs_wait();
     cb_reserve_back(cb_final_indices_transposed, 1);
     pack_reconfig_data_format(cb_final_indices_transposed);

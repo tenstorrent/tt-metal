@@ -5,6 +5,7 @@
 import pytest
 import torch
 import ttnn
+from tests.ttnn.nightly.unit_tests.operations.matmul.utility_functions import ttnn_matmul, ttnn_linear
 
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from tests.ttnn.unit_tests.operations.matmul.test_matmul_deepseek import _run_matmul_2d_interleaved_in0_sharded_in1
@@ -110,14 +111,14 @@ def test_sd_matmul(device, batch_size, channel_a, channel_b, m_size, k_size, n_s
     pcc = 0.94 if dtype == ttnn.bfloat8_b else 0.98
 
     if has_bias:
-        output_tensor = ttnn.linear(
+        output_tensor = ttnn_linear(
             input_tensor_a,
             input_tensor_b,
             bias=input_tensor_c,
             core_grid=core_grid,
         )
     else:
-        output_tensor = ttnn.matmul(
+        output_tensor = ttnn_matmul(
             input_tensor_a,
             input_tensor_b,
             core_grid=core_grid,
@@ -203,7 +204,7 @@ def test_sdxl_matmul(
         packer_l1_acc=True,
     )
 
-    output_tensor = ttnn.linear(
+    output_tensor = ttnn_linear(
         tt_act_block_sharded,
         tt_weights,
         bias=tt_bias,
@@ -337,10 +338,10 @@ def test_matmul_transpose_a_with_low_precision_rhs(device, rhs_dtype):
         packer_l1_acc=True,
     )
 
-    out_ref = ttnn.to_torch(ttnn.matmul(a_perm_ref, b, compute_kernel_config=compute_kernel_config))
+    out_ref = ttnn.to_torch(ttnn_matmul(a_perm_ref, b, compute_kernel_config=compute_kernel_config))
 
     out_candidate = ttnn.to_torch(
-        ttnn.matmul(a_perm_cand, b, transpose_a=True, compute_kernel_config=compute_kernel_config)
+        ttnn_matmul(a_perm_cand, b, transpose_a=True, compute_kernel_config=compute_kernel_config)
     )
 
     assert out_ref.shape == out_candidate.shape
@@ -439,7 +440,7 @@ def test_matmul_transpose_a_fuse_batch(device, batch, m, k, n, program_config):
         packer_l1_acc=True,
     )
 
-    output = ttnn.matmul(
+    output = ttnn_matmul(
         a,
         b,
         transpose_a=True,
@@ -489,7 +490,7 @@ def test_matmul_m_direction_padding(device):
     )
 
     # Perform matrix multiplication
-    result = ttnn.matmul(
+    result = ttnn_matmul(
         tensor_a,
         tensor_b,
         program_config=program_config,

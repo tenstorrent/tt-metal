@@ -36,10 +36,10 @@ void kernel_main() {
     cb_src.reserve_back(onetile);
 #ifdef FILL_WITH_VALUE_FLOAT
     const auto float_ptr = reinterpret_cast<const float*>(&packed_scalar);
-    FILL_WITH_VALUE_FLOAT(cb_id_src, *float_ptr);
+    FILL_WITH_VALUE_FLOAT(cb_src.get_write_ptr(), *float_ptr);
 #endif
 #ifdef FILL_WITH_VALUE
-    FILL_WITH_VALUE(cb_id_src, packed_scalar);
+    FILL_WITH_VALUE(cb_src.get_write_ptr(), packed_scalar);
 #endif
     cb_src.push_back(onetile);
 
