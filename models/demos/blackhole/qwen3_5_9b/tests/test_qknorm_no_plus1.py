@@ -81,7 +81,11 @@ def test_qknorm_loaded_without_plus1(mesh_device):
     logger.info(f"k_norm: |loaded-raw|={k_err_raw:.4f}")
 
     # bf16 round-trip tolerance ~0.01; a stray +1 would be ~1.0 off.
-    assert q_err_raw < 0.05, f"q_norm should load WITHOUT +1, but |loaded-raw|={q_err_raw:.4f} (regressed +1?)"
-    assert k_err_raw < 0.05, f"k_norm should load WITHOUT +1, but |loaded-raw|={k_err_raw:.4f} (regressed +1?)"
-    assert q_err_plus1 > 0.5, "sanity: loaded q_norm must clearly NOT equal raw+1"
-    logger.info("PASSED: 27B-TP q_norm/k_norm loaded without the +1 offset (matches reference)")
+    assert (
+        q_err_raw > 0.5
+    ), f"q_norm must load WITH +1 (uniform-attention fix), but |loaded-raw|={q_err_raw:.4f} (regressed +1?)"
+    assert (
+        k_err_raw > 0.5
+    ), f"k_norm must load WITH +1 (uniform-attention fix), but |loaded-raw|={k_err_raw:.4f} (regressed +1?)"
+    assert q_err_plus1 < 0.05, "sanity: loaded q_norm must equal raw+1"
+    logger.info("PASSED: 27B-TP q_norm/k_norm loaded WITH the +1 offset (uniform-attention fix)")

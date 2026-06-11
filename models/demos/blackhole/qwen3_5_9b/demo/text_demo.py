@@ -165,7 +165,13 @@ def _get_prompt(seqlen, tokenizer):
         # QWEN35_NO_THINK=1 disables thinking (Qwen /no_think + no <think> seed) to test whether
         # the long-context degeneration is the known thinking-mode loop vs a real forward issue.
         if os.environ.get("QWEN35_NO_THINK"):
-            suffix = f"\n\nBased on the above text: {instruction} /no_think<|im_end|>\n<|im_start|>assistant\n"
+            # Correct Qwen enable_thinking=False scaffold: seed an EMPTY <think></think> block
+            # (chat_template.jinja line 150) so the model skips reasoning. The bare "/no_think" text
+            # token is ignored by the model in this manual-prompt path (observed: it thinks anyway).
+            suffix = (
+                f"\n\nBased on the above text: {instruction}<|im_end|>\n"
+                f"<|im_start|>assistant\n<think>\n\n</think>\n\n"
+            )
         else:
             suffix = f"\n\nBased on the above text: {instruction}<|im_end|>\n<|im_start|>assistant\n<think>\n"
         wrapper_ids = tokenizer(prefix + suffix, add_special_tokens=False, return_tensors="pt")["input_ids"]
@@ -254,11 +260,11 @@ def _blocks_for(seqlen, max_generated_tokens):
         (128, 50, False),
         (4096, 100, True),
         (4096, 100, False),
-        (8192, 100, True),
+        (8192, 500, True),
         (8192, 100, False),
         (16384, 100, True),
         (32768, 100, True),
-        (65536, 100, True),
+        (65536, 500, True),
         (65536, 100, False),
         (131072, 100, True),
         (262144, 100, True),
@@ -451,6 +457,9 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     # (~3) hard-blocks completing an n-gram that already occurred. Both are decoding-only; the
     # forward pass / retrieval is correct (the q_norm fix). Set QWEN35_REP_PENALTY / QWEN35_NO_REPEAT_NGRAM.
     _rep_pen = float(os.environ.get("QWEN35_REP_PENALTY", "1.0") or 1.0)
+    # Anti-repetition default OFF: a cumulative rep-penalty poisons long generations (~100+ tok:
+    # common syntax tokens get penalized into junk vocab) and no-repeat-ngram cascades at high
+    # entropy. Loops on softened long-ctx logits are a decode-kernel-drift symptom; vLLM samples.
     _no_repeat = int(os.environ.get("QWEN35_NO_REPEAT_NGRAM", "0") or 0)
     _pick_step = [0]
     generated = []
@@ -537,15 +546,17 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     def _restore_gdn(snap):
         mapper = ttnn.ShardTensorToMesh(mesh, dim=0)
 
-        def _back(t):
-            return ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=mapper)
+        def _back(t, dtype):
+            # Match the target buffer dtype — rec_state may be fp32 (fp32 by default);
+            # restoring a hardcoded-bf16 tensor into an fp32 buffer corrupts the state.
+            return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=mapper)
 
         for dn, (rec, convs) in zip(_gdn, snap):
-            r = _back(rec)
+            r = _back(rec, dn.rec_state.dtype)
             ttnn.copy(r, dn.rec_state)
             ttnn.deallocate(r)
             for j, c in enumerate(convs):
-                cc = _back(c)
+                cc = _back(c, dn.conv_states[j].dtype)
                 ttnn.copy(cc, dn.conv_states[j])
                 ttnn.deallocate(cc)
 
@@ -762,7 +773,7 @@ def _log_results(perf, prompt_len, num_generated, text):
     logger.info(f"  Prefill {prompt_len} tokens:  TTFT = {ttft:.3f}s ({prompt_len / ttft:.0f} tok/s)")
     logger.info(f"  Decode:  {avg_ms:.1f}ms/token  ({tok_s:.1f} tok/s)")
     logger.info(f"  Generated {num_generated} tokens in {perf['decode_steps']} steps")
-    logger.info(f"  Text: {text[:200]}")
+    logger.info(f"  Text: {text[:6000]}")
     logger.info("=" * 70)
 
 

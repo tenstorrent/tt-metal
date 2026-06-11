@@ -5,6 +5,7 @@ Assembly: tok_embeddings → 32 × Qwen35DecoderLayer → RMSNorm → LM Head
 Manages hybrid state: KV cache (8 attention layers) + recurrent state (24 DeltaNet layers).
 """
 import math
+import os
 
 import torch
 from loguru import logger
@@ -732,6 +733,17 @@ class Qwen35Model:
         if warmup_masked_buckets:
             self.warmup_prefill_masked_buckets(page_table)
 
+        # QWEN35_TP_PREFILL_EAGER=1: do NOT park the chunk trace, so prefill_traced_chunked falls
+        # back to the EAGER chunk loop (_prefill_chunked_eager_tp). This A/Bs the traced-chunk-outer
+        # vs eager prefill hypothesis for the 64k long-context degeneration — the reference 27B
+        # prefills eagerly and retrieves verbatim, while this codebase's traced chunk-outer path
+        # degenerates. Warmup + GDN _stable_state binding above already ran, so the eager fallback
+        # has its programs compiled and state bound; _chunked_trace_id stays None (set False above).
+        if os.environ.get("QWEN35_TP_PREFILL_EAGER") == "1":
+            self._reset_gdn_state_for_new_sequence()
+            logger.info("Chunked prefill trace (TP) SKIPPED — eager prefill (QWEN35_TP_PREFILL_EAGER=1)")
+            return
+
         # ---- Capture the trace. ----
         self._reset_gdn_state_for_new_sequence()
         self._chunked_trace_id = ttnn.begin_trace_capture(device, cq_id=0)
@@ -809,7 +821,7 @@ class Qwen35Model:
                 return b
         return ((length + 127) // 128) * 128
 
-    def _forward_prefill_chunk_masked(self, token_buf, valid_len, chunk_start, page_table, bucket):
+    def _forward_prefill_chunk_masked(self, token_buf, valid_len, chunk_start, page_table, bucket, flex_sdpa=True):
         """Single masked fixed-bucket prefill forward over `bucket` positions.
 
         token_buf is [1, bucket]: the first valid_len positions are real, the rest are
@@ -822,7 +834,9 @@ class Qwen35Model:
         last-layer hidden state [1, bucket, hidden_size] (single device) or
         [1, 1, bucket, hidden_size] (TP)."""
         if self.num_devices > 1:
-            return self._forward_prefill_chunk_masked_tp(token_buf, valid_len, chunk_start, page_table, bucket)
+            return self._forward_prefill_chunk_masked_tp(
+                token_buf, valid_len, chunk_start, page_table, bucket, flex_sdpa=flex_sdpa
+            )
         block_size = get_block_size(self._paged_kv_caches)
         tok = ttnn.from_torch(
             token_buf.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
@@ -944,14 +958,26 @@ class Qwen35Model:
                     chunk_page_table=chunk_pt,
                     chunk_start_idx=chunk_start,
                     chunk_start_idx_tensor=csi_tensor,
+                    valid_len=valid_len,  # unused by full attention; keys the dbg capture row
                 )
             else:
                 x_new = layer.forward(x, mode="prefill", chunk_size=self.args.gdn_chunk_size, valid_len=valid_len)
             ttnn.deallocate(x)
             x = x_new
+        # Free the per-chunk inputs; only the hidden `x` must survive. Without this the EAGER chunk
+        # loop (_prefill_chunked_eager_tp, 32 chunks at 64k) leaks cos/sin/page-tables/chunk_start
+        # every chunk and exhausts device memory past ~4 chunks (~7872 tokens) — the documented
+        # "eager prefill crashes past ~7872 tokens". The masked-bucket tail/short path leaked these
+        # too (once per call, benign), now fixed uniformly.
+        ttnn.deallocate(cos)
+        ttnn.deallocate(sin)
+        ttnn.deallocate(full_pt)
+        ttnn.deallocate(chunk_pt)
+        if csi_tensor is not None:
+            ttnn.deallocate(csi_tensor)
         return x
 
-    def prefill_masked_bucket(self, token_ids, page_table, actual_len, chunk_start=0, bucket=None):
+    def prefill_masked_bucket(self, token_ids, page_table, actual_len, chunk_start=0, bucket=None, flex_sdpa=True):
         """Masked fixed-bucket prefill for a segment of `actual_len` real tokens.
 
         Pads the segment up to a fixed bucket length, runs all layers ONCE, and masks the GDN
@@ -985,7 +1011,9 @@ class Qwen35Model:
         else:
             token_buf = real
 
-        hidden = self._forward_prefill_chunk_masked(token_buf, actual_len, chunk_start, page_table, bucket)
+        hidden = self._forward_prefill_chunk_masked(
+            token_buf, actual_len, chunk_start, page_table, bucket, flex_sdpa=flex_sdpa
+        )
         ttnn.synchronize_device(self.device)
 
         if self.num_devices > 1:
@@ -1103,7 +1131,16 @@ class Qwen35Model:
                 return self._prefill_traced_chunked_tp(
                     token_ids, page_table, actual_len, num_full, chunk_size, tail_real
                 )
-            return self._prefill_chunked_eager_tp(token_ids, page_table, actual_len, num_full, chunk_size, tail_real)
+            # Eager fallback (also reached when QWEN35_TP_PREFILL_EAGER=1 skips parking the trace).
+            # Default eager = flexible qk=64 — identical SDPA to the traced path, so eager-vs-traced
+            # isolates the trace replay ALONE. QWEN35_TP_PREFILL_INT_SDPA=1 switches the eager chunks
+            # (and tail) to the reference 27B's INT chunk_start qk=256 SDPA for a full reference match
+            # (slower: a host-int chunk_start compiles a fresh SDPA program per chunk, but no trace is
+            # parked during prefill so the recompiles are safe).
+            flex = os.environ.get("QWEN35_TP_PREFILL_INT_SDPA") != "1"
+            return self._prefill_chunked_eager_tp(
+                token_ids, page_table, actual_len, num_full, chunk_size, tail_real, flex_sdpa=flex
+            )
 
         # >= 1 full chunk: re-zero GDN state once (the warmup-dirty-state guard); it then carries
         # in place across the chunk replays + the masked tail (whose chunk_start>0 skips the reset).
@@ -1219,7 +1256,7 @@ class Qwen35Model:
             ttnn.deallocate(last_hidden)
             cs = num_full * chunk_size
             return self.prefill_masked_bucket(
-                token_ids[:, cs:actual_len], page_table, actual_len=tail_real, chunk_start=cs
+                token_ids[:, cs:actual_len], page_table, actual_len=tail_real, chunk_start=cs, flex_sdpa=flex_sdpa
             )
         # Exact multiple of chunk_size: next-token logit from the last full chunk's last position.
         logits = self._masked_bucket_logits_tp(last_hidden, chunk_size, chunk_size)
