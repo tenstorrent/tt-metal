@@ -12,10 +12,11 @@ DSA forward = v3 forward with ring SDPA swapped for ops.sparse_mla (indices
 replace the mask). v3's single-shot path materializes V before SDPA; we keep
 attention latent and apply wkv_b2 after, like v3's chunked path.
 
-Functional bring-up shortcuts (documented in status.md, status "step 3"):
-  - indexer stems (wq_b/wk/k_norm/weights_proj + non-interleaved RoPE F1) on host;
+Functional bring-up shortcuts (documented in status.md):
+  - indexer stems (wq_b/wk/k_norm/weights_proj) on device, replicated across TP;
+    only the non-interleaved RoPE stays on host (F1) — pe slices read back per chunk;
   - sparse attention via ops.sparse_mla CPU fallback;
-  - single-shot prefill only; sp=1 (indexer needs full local seq; 2x2 later).
+  - sp=1 only (indexer needs full local seq; 2x2 later).
 """
 
 import torch
@@ -33,12 +34,9 @@ class ttMLA(_ttMLAv3):
     """V3.2 MLA with DSA. Dense passthrough of v3 at seq <= index_topk."""
 
     def __init__(self, config, weights, mesh_device, **kwargs):
-        # Indexer weights are v32-only — keep on host (host stems), don't pass to v3.
-        self.indexer_weights = {n: weights.pop(f"{n}.weight") for n in INDEXER_WEIGHT_NAMES if f"{n}.weight" in weights}
-        # Indexer consumes the MLA q-latent (qr); host copies of the q_a stem for F1.
-        self.host_q_a = {
-            n: weights[f"{n}.weight"].clone() for n in ("q_a_proj", "q_a_layernorm") if f"{n}.weight" in weights
-        }
+        # Indexer weights are v32-only — pop before v3 sees them, upload to device
+        # after super().__init__ (which sets mesh_device / tp_axis / tp_factor).
+        idx_host = {n: weights.pop(f"{n}.weight") for n in INDEXER_WEIGHT_NAMES if f"{n}.weight" in weights}
         self.index_args = ModelArgs(max_batch_size=1)
         # Host indexer K-cache (chunked prefill): chunks only carry their own
         # hidden, but logits need every prior key. [max_seq, D_idx] per layer.
@@ -52,50 +50,122 @@ class ttMLA(_ttMLAv3):
             self.index_args.max_seq_len, config.kv_lora_rank + config.qk_rope_head_dim, dtype=torch.bfloat16
         )
         super().__init__(config, weights, mesh_device, **kwargs)
+        self._has_indexer = bool(idx_host)
+        if self._has_indexer:
+            self._upload_indexer_weights(idx_host)
 
-    def _indexer_update_kcache(self, hidden_states: ttnn.Tensor, seq_len: int, start_pos: int):
-        """Write this chunk's index keys into the host K-cache. Must run on EVERY
-        chunk — including dense-passthrough ones — or later DSA chunks score
-        against zero keys for the early prefix. Returns (x, freqs) for reuse."""
-        a = self.index_args
-        w = self.indexer_weights
-        end_pos = start_pos + seq_len
-        # hidden is TP-sharded on dim, sp=1: concat TP shards -> [1, S, dim]
-        x = torch.cat([ttnn.to_torch(s) for s in ttnn.get_device_tensors(hidden_states)], dim=-1)[0].to(torch.bfloat16)
-        freqs = precompute_freqs_cis(a)[start_pos:end_pos]
-        k = torch.nn.functional.layer_norm(
-            x @ w["indexer.wk"].T, (a.index_head_dim,), w["indexer.k_norm"], w["indexer.k_norm_bias"]
+    def _upload_indexer_weights(self, w):
+        """Indexer weights → device (backlog 6: stems on device, replicated across TP).
+
+        wk / weights_proj contract over `dim` (hidden is TP-sharded on dim), so they
+        are uploaded transposed and sharded on that contraction axis → matmul yields
+        per-chip partials reduced by _tp_rs_ag. wq_b consumes the full q-latent and
+        k_norm runs on the reduced 128-wide key, so both are replicated.
+        """
+
+        def repl(t):
+            return ttnn.from_torch(
+                t.contiguous().to(torch.bfloat16),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+
+        def shard_in(t):  # t [out, in] -> device [in, out] sharded on `in` across tp_axis
+            dims = [None, None]
+            dims[self.tp_axis] = 0
+            return ttnn.from_torch(
+                t.T.contiguous().to(torch.bfloat16),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=dims
+                ),
+            )
+
+        self._idx_wq_b = repl(w["indexer.wq_b"].T)  # [q_lora_rank, H_idx*D_idx]
+        self._idx_wk = shard_in(w["indexer.wk"])  # [dim, D_idx] sharded on dim
+        self._idx_wproj = shard_in(w["indexer.weights_proj"])  # [dim, H_idx] sharded on dim
+        self._idx_knorm_w = repl(w["indexer.k_norm"])  # [D_idx]
+        self._idx_knorm_b = repl(w["indexer.k_norm_bias"])  # [D_idx]
+
+    def _host_rope_pe(self, t_host, seq_len, start_pos):
+        """Non-interleaved RoPE on the rope half of the last dim (F1, host fallback).
+        t_host [..., S, D_idx] in reference layout ([S,H,D] or [S,D]); returns same shape."""
+        freqs = precompute_freqs_cis(self.index_args)[start_pos : start_pos + seq_len]
+        pe, nope = t_host[..., :64], t_host[..., 64:]
+        if pe.dim() == 3:  # q: [S, H, 64] -> reference wants [B, S, H, rope]
+            pe = apply_rotary_emb(pe.unsqueeze(0), freqs, interleaved=False).squeeze(0)
+        else:  # k: [S, 64] -> [B, S, 1, rope]
+            pe = apply_rotary_emb(pe.reshape(1, seq_len, 1, 64), freqs, interleaved=False).reshape(seq_len, 64)
+        return torch.cat([pe, nope], dim=-1)
+
+    def _indexer_write_k(self, hidden_states: ttnn.Tensor, seq_len: int, start_pos: int):
+        """Device K stem (wk + TP all-reduce + k_norm), host rope, write host K-cache.
+        Runs on EVERY chunk — dense-passthrough included — else later DSA chunks score
+        against zero keys for the early prefix."""
+        k = ttnn.linear(
+            hidden_states,
+            self._idx_wk,
+            compute_kernel_config=self.default_compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # per-chip partial [1, 1, S, D_idx]
+        k = self._tp_rs_ag(k)  # all-reduce over TP
+        k = ttnn.layer_norm(
+            k,
+            weight=self._idx_knorm_w,
+            bias=self._idx_knorm_b,
+            epsilon=1e-6,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.default_compute_kernel_config,
         )
-        k_pe, k_nope = torch.split(k, [64, a.index_head_dim - 64], dim=-1)
-        k = torch.cat([apply_rotary_emb(k_pe.unsqueeze(2), freqs, interleaved=False).squeeze(2), k_nope], dim=-1)
-        self._index_k_cache[start_pos:end_pos] = k[0]
-        return x, freqs
+        kh = ttnn.to_torch(ttnn.get_device_tensors(k)[0])[0, 0]  # replicated -> [S, D_idx]
+        self._index_k_cache[start_pos : start_pos + seq_len] = self._host_rope_pe(kh, seq_len, start_pos).to(
+            torch.bfloat16
+        )
 
     def _indexer_topk(self, hidden_states: ttnn.Tensor, seq_len: int, start_pos: int = 0) -> ttnn.Tensor:
-        """Top-k indices [1, 1, S, k] over the cached prefix + this chunk.
-
-        Chunked: writes this chunk's index keys into the host K-cache and scores
-        q against keys [0, start_pos + seq_len). Causal mask offset by start_pos.
-        """
+        """Top-k indices [1, 1, S, k] over cached prefix + this chunk. Stems on device
+        (backlog 6); only the non-interleaved RoPE stays on host (F1)."""
         a = self.index_args
-        w = self.indexer_weights
         end_pos = start_pos + seq_len
-        x, freqs = self._indexer_update_kcache(hidden_states, seq_len, start_pos)
+        self._indexer_write_k(hidden_states, seq_len, start_pos)
 
-        # qr = MLA q-latent (shared with the MLA stem in the reference)
-        qr = torch.nn.functional.rms_norm(
-            x @ self.host_q_a["q_a_proj"].T,
-            (self.config.q_lora_rank,),
-            self.host_q_a["q_a_layernorm"],
-            self.config.rms_norm_eps,
+        # Q stem: reuse v3 q_a latent (qr), then indexer wq_b — all on device.
+        qr = ttnn.linear(
+            hidden_states,
+            self.q_a_proj_weight,
+            compute_kernel_config=self.default_compute_kernel_config,
+            **self._get_mm_kwargs("q_a_proj", seq_len),
         )
-        q = (qr @ w["indexer.wq_b"].T).view(1, seq_len, a.index_n_heads, a.index_head_dim)
-        q_pe, q_nope = torch.split(q, [64, a.index_head_dim - 64], dim=-1)
-        q = torch.cat([apply_rotary_emb(q_pe, freqs, interleaved=False), q_nope], dim=-1)
+        qr = self._tp_rs_ag(qr)
+        qr = ttnn.rms_norm(
+            qr,
+            weight=self.q_a_layernorm_weight,
+            epsilon=self.config.rms_norm_eps,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.default_compute_kernel_config,
+        )
+        q = ttnn.linear(
+            qr,
+            self._idx_wq_b,
+            compute_kernel_config=self.default_compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [1, 1, S, H_idx*D_idx]
+        qh = ttnn.to_torch(ttnn.get_device_tensors(q)[0]).reshape(seq_len, a.index_n_heads, a.index_head_dim)
+        qh = self._host_rope_pe(qh, seq_len, start_pos)  # [S, H, D]
 
-        k = self._index_k_cache[:end_pos].unsqueeze(0)
-
-        wts = (x.float() @ w["indexer.weights_proj"].T.float()) * a.index_n_heads**-0.5 * self.scale
+        # weights_proj: device stem + all-reduce + scale -> [1, 1, S, H_idx]
+        wts = ttnn.linear(
+            hidden_states,
+            self._idx_wproj,
+            compute_kernel_config=self.default_compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        wts = self._tp_rs_ag(wts)
+        wts = ttnn.multiply(wts, a.index_n_heads**-0.5 * self.scale)
 
         dev = lambda t: ttnn.from_torch(
             t.to(torch.bfloat16),
@@ -104,7 +174,9 @@ class ttMLA(_ttMLAv3):
             dtype=ttnn.bfloat16,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        logits = ops.indexer_logits(dev(q.permute(0, 2, 1, 3)), dev(k.unsqueeze(1)), dev(wts.unsqueeze(1)))
+        q_dev = dev(qh.permute(1, 0, 2).reshape(1, a.index_n_heads, seq_len, a.index_head_dim))
+        k_dev = dev(self._index_k_cache[:end_pos].reshape(1, 1, end_pos, a.index_head_dim))
+        logits = ops.indexer_logits(q_dev, k_dev, wts)
         mask = dev(torch.full((1, 1, seq_len, end_pos), float("-inf")).triu_(start_pos + 1))
         return ops.topk_indices(ttnn.add(logits, mask), min(self.index_args.index_topk, end_pos))
 
@@ -112,9 +184,9 @@ class ttMLA(_ttMLAv3):
         seq_len_local = hidden_states.shape[2]
         kv_isl = kwargs.get("kv_actual_isl")
         end_pos = (kv_isl or 0) + seq_len_local * self.sp_factor
-        if end_pos <= self.index_args.index_topk or not self.indexer_weights:
-            if self.indexer_weights and kv_isl is not None:
-                self._indexer_update_kcache(hidden_states, seq_len_local, kv_isl)
+        if end_pos <= self.index_args.index_topk or not self._has_indexer:
+            if self._has_indexer and kv_isl is not None:
+                self._indexer_write_k(hidden_states, seq_len_local, kv_isl)
             return super().forward(hidden_states, rope_tensors, kvpe_cache, **kwargs)
         if self.sp_factor != 1:
             raise NotImplementedError("DSA bring-up: sp=1 only (status.md step 4)")

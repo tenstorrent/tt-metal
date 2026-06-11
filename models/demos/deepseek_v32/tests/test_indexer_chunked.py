@@ -9,8 +9,10 @@ parameter (1k dev default per agreement 15).
 """
 
 import pytest
+from ttnn.device import is_blackhole
 
 import ttnn
+from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 from models.demos.deepseek_v32.tests.test_mla import build_cpu_reference, make_hidden
 from models.demos.deepseek_v32.tt import ops
 from models.demos.deepseek_v32.tt.mla import ttMLA
@@ -27,9 +29,20 @@ def _shard(t, mesh_device):
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["1x4"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,  # device indexer stems do TP all-reduce
+            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
+        }
+    ],
+    ids=["line"],
+    indirect=True,
+)
 @pytest.mark.parametrize("seq_len,chunk", [(2048, 1024)], ids=["2k_c1k"])
 def test_indexer_chunked_matches_single_shot(
-    mesh_device, seq_len, chunk, config_only, ds_layer, ds_checkpoint, ds_repo, ds_input
+    mesh_device, seq_len, chunk, device_params, config_only, ds_layer, ds_checkpoint, ds_repo, ds_input
 ):
     config = config_only
     args, _, weights, _ = build_cpu_reference(seq_len, layer=ds_layer, checkpoint_path=ds_checkpoint, repo=ds_repo)
