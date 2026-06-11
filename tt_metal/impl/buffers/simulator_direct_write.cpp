@@ -17,9 +17,14 @@ bool is_direct_write_enabled(const DirectWriteGuard& guard, const void* src, con
     if (guard.target != tt::TargetDevice::Simulator) {
         return false;
     }
-    if (!guard.cq_idle) {
-        return false;
-    }
+    // NOTE: deliberately NOT gated on guard.cq_idle. On the simulator the device never executes
+    // dispatch concurrently with the host: the host drives the sim clock and is not clocking during
+    // a host-side tensor upload, so any in-flight CQ commands are frozen and cannot race with this
+    // synchronous H2D write. The write therefore lands before clocking resumes — the correct order
+    // for a weight preload (weights written before any program reads them). Requiring an idle CQ
+    // instead would force a finish()/drain before each preload, which on the multi-host galaxy sim
+    // deadlocks in the FD completion path (the dispatcher write pointer never propagates back to
+    // host sysmem). Firing regardless of in_use_ keeps the preload synchronous and deadlock-free.
     if (guard.rtoptions == nullptr || !guard.rtoptions->get_simulator_direct_tensor_writes()) {
         return false;
     }
