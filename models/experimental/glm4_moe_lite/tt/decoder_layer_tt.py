@@ -1067,7 +1067,9 @@ def run_decoder_layer_prefill_update_cache_tt(
 
         def _kvb2_head_parallel_prefill(a_latent: ttnn.Tensor) -> ttnn.Tensor:
             # a_latent: [1, H, S, kv_lora]
-            a_part = ttnn.mesh_partition(a_latent, dim=1, cluster_axis=tp_axis)
+            # Land the partition output directly in L1 so the kv_b2 matmul's input
+            # staging copy (CopyDeviceOperation) is avoided (~640 KiB fits L1).
+            a_part = ttnn.mesh_partition(a_latent, dim=1, cluster_axis=tp_axis, memory_config=ttnn.L1_MEMORY_CONFIG)
             v_local = _mlp_linear(a_part, w.w_kv_b2, memory_config=kv_b2_out_mc)
             ttnn.deallocate(a_part, force=False)
             if use_nlp_concat:

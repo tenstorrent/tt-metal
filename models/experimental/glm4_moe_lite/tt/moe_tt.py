@@ -1647,6 +1647,14 @@ def moe_sparse_experts_forward_tt(
             ttnn.deallocate(_topk_idx_rm, force=False)
 
         experts_per_device = int(rt.num_experts_per_device)
+        # Pre-cast the routed-expert input to BFP8 once, before slicing per chunk.
+        # Each chunk's prepare_sparse_moe_matmul_in0 then hits its dtype==bfloat8_b
+        # early-return and skips its own gate_up-input typecast (4 casts → 1).
+        # PCC-neutral: BFP8 quantization is identical whether done once or per chunk.
+        if local_weights_full is not None and hidden_states.dtype != ttnn.bfloat8_b:
+            _hs_pre = hidden_states
+            hidden_states = ttnn.typecast(hidden_states, dtype=ttnn.bfloat8_b, memory_config=memory_config)
+            ttnn.deallocate(_hs_pre, force=False)
         out_chunks: list[ttnn.Tensor] = []
         for start in range(0, tokens_per_device, per_device_chunk):
             end = min(start + per_device_chunk, tokens_per_device)
