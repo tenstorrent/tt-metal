@@ -141,6 +141,19 @@ class SpeculativeDecoder:
         # scratch and corrupt it (manifests as a hang on a *re*-replay). seed()
         # writes into this buffer via ttnn.copy instead of cloning.
         self._anchor_buf = None
+        # Packed-query verify: all K+1 candidates in the query-heads dim of ONE
+        # batch=1 forward (one QKV/norm/RoPE over K+1 rows, one masked SDPA per
+        # layer, loop-free staging KV write) instead of K+1 pseudo-users with
+        # sequential per-candidate KV writes. This is the default multi-token
+        # verify; single-token calls (seed/reseed) keep the plain batch=1 path.
+        # (The fused single-trace paths keep the batch-dim verify.)
+        # S_k (mask key length) is padded to this bucket so the verify trace
+        # shape stays stable as the context grows; a new trace is captured when
+        # the bucket rolls.
+        self._pv_sk_bucket = 1024
+        self._pv_ready = False
+        self._pv_a_prev = -1  # last hot block index (-1 ⇒ staging unseeded)
+        self._pv_traces = {}  # (P, S_k) -> persistent trace inputs/outputs
 
     def _fused_shift_seed_row(self, accepted, K):
         if self._fused_shift_seed == "current":
@@ -276,9 +289,225 @@ class SpeculativeDecoder:
             t = ttnn.to_torch(logits)
         return t[..., : self.target.vocab_size]
 
+    # ── packed-query verify ──────────────────────────────────────────────
+    def _pv_setup(self):
+        """Lazy one-time setup for the packed verify: allocate per-layer hot-
+        block staging buffers (non-KV-shared layers only) and stash the shape
+        constants the host-side index/mask builders need."""
+        if self._pv_ready:
+            return
+        from models.demos.gemma4.tt.attention.kv_cache import PV_HOT_BLOCKS, init_kv_staging
+
+        target = self.target
+        # Paged cache shape: [max_blocks, nkv_local, block_size, head_dim].
+        self._pv_bs = int(self.tt_kv_cache[0][0].padded_shape[2])
+        self._pv_blk = PV_HOT_BLOCKS
+        self._pv_s2 = self._pv_blk * self._pv_bs
+        tp = self._tp
+        first_cfg = target.layers[0].self_attn.config
+        self._pv_h_local = first_cfg.num_attention_heads // tp
+        self._pv_window = target.hf_config.sliding_window
+        self._pv_nkv = {}  # layer_type -> nkv_local (staging/cache head count)
+        for i, layer in enumerate(target.layers):
+            cfg = layer.self_attn.config
+            if cfg.cache_position_modulo is not None:
+                raise NotImplementedError("packed verify does not support bounded sliding KV caches")
+            if i in target.kv_shared_layer_map:
+                continue  # shares source layer's cache+staging; skips KV writes
+            layer.self_attn.kv_staging = init_kv_staging(
+                self.mesh_device, cfg, max_batch_size=1, block_size=self._pv_bs, blk=self._pv_blk
+            )
+            lt = target.hf_config.layer_types[i]
+            self._pv_nkv[lt] = int(layer.self_attn.kv_staging[0].shape[1])
+        self._pv_pages = (
+            self.page_table_torch[0] if self.page_table_torch.dim() > 1 else self.page_table_torch
+        ).to(torch.int64)
+        self._pv_ready = True
+
+    def _pv_seed_staging(self, c):
+        """Seed every layer's staging block-slot 0 with the committed content of
+        the hot block at position ``c`` (read from the cache — the only
+        committed-cache read in the design, once per generation)."""
+        bs, S2 = self._pv_bs, self._pv_s2
+        a = c // bs
+        self._pv_a_prev = a
+        if c % bs == 0:
+            return  # fresh block — zeros are fine
+        blk_phys = int(self._pv_pages[a])
+        for i, layer in enumerate(self.target.layers):
+            if i in self.target.kv_shared_layer_map:
+                continue
+            staging = layer.self_attn.kv_staging
+            cache = self.tt_kv_cache[i]
+            for kv in (0, 1):
+                stg = staging[kv]
+                nkv, hd = stg.shape[1], stg.shape[3]
+                block = ttnn.slice(cache[kv], [blk_phys, 0, 0, 0], [blk_phys + 1, nkv, bs, hd])
+                tail = ttnn.slice(stg, [0, 0, bs, 0], [1, nkv, S2, hd])
+                rebuilt = ttnn.concat([block, tail], dim=2)
+                ttnn.assign(rebuilt, stg)
+                for t in (rebuilt, block, tail):
+                    ttnn.deallocate(t)
+
+    def _pv_host_inputs(self, c, P):
+        """Host tensors for one packed verify at anchor position ``c``.
+
+        Returns dict of torch tensors: pos [1,P]u32, masks [1,1,H*P,S_k] bf16
+        (full + sliding), embed_idx per layer type [1,nkv*S2]u32, hot_pt
+        [1,BLK]i32, and S_k.
+        """
+        bs, S2, BLK = self._pv_bs, self._pv_s2, self._pv_blk
+        a, off = c // bs, c % bs
+        roll = 1 if a == self._pv_a_prev + 1 else 0
+        H, W = self._pv_h_local, self._pv_window
+
+        pos = torch.arange(c, c + P, dtype=torch.int32).reshape(1, P)
+
+        # Additive masks, head-major rows h*P+p: causal upper bound c+p; sliding
+        # adds the window lower bound. S_k is bucket-padded for trace stability.
+        NEG = -1e9
+        S_k = ((c + P + self._pv_sk_bucket - 1) // self._pv_sk_bucket) * self._pv_sk_bucket
+        j = torch.arange(S_k)
+        rows_full = torch.empty(P, S_k)
+        rows_slide = torch.empty(P, S_k)
+        for p in range(P):
+            upper = c + p
+            rows_full[p] = torch.where(j <= upper, 0.0, NEG)
+            rows_slide[p] = torch.where((j <= upper) & (j > upper - W), 0.0, NEG)
+        mask_full = rows_full.repeat(H, 1).reshape(1, 1, H * P, S_k).to(torch.bfloat16)
+        mask_slide = rows_slide.repeat(H, 1).reshape(1, 1, H * P, S_k).to(torch.bfloat16)
+
+        # merge_idx over staging positions: committed prefix from staging
+        # (identity, or +bs on a rollover — the prefix came from the spill
+        # block), the P new rows from new_seq (concat index S2+p), stale tail
+        # identity. embed_idx bakes the per-head flattened row offset in
+        # (new_seq is padded to 32 rows in packed_decode_forward).
+        m = torch.arange(S2, dtype=torch.int64)
+        if roll:
+            m[:off] += bs
+        m[off : off + P] = S2 + torch.arange(P)
+        p_pad = ((P + 31) // 32) * 32
+        src_seq = S2 + p_pad
+        embed = {}
+        for lt, nkv in self._pv_nkv.items():
+            off_h = (torch.arange(nkv, dtype=torch.int64) * src_seq).unsqueeze(1)
+            embed[lt] = (m.unsqueeze(0) + off_h).reshape(1, nkv * S2).to(torch.int32)
+
+        hot = torch.full((1, BLK), -1, dtype=torch.int32)
+        hot[0, 0] = int(self._pv_pages[a])
+        if off + P > bs:
+            hot[0, 1] = int(self._pv_pages[a + 1])
+
+        return {"pos": pos, "mask_full": mask_full, "mask_slide": mask_slide, "embed": embed, "hot": hot, "S_k": S_k}
+
+    def _pv_from_torch(self, t, dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=True):
+        return ttnn.from_torch(
+            t,
+            device=self.mesh_device if device else None,
+            layout=layout,
+            dtype=dtype,
+            mesh_mapper=self._mapper,
+        )
+
+    def _pv_device_inputs(self, tokens, h):
+        """Device tensors for one packed verify from host dict ``h``."""
+        return {
+            "x": self._tokens_tensor(tokens),
+            "pos": self._pv_from_torch(h["pos"], ttnn.uint32),
+            "mask_full": self._pv_from_torch(h["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+            "mask_slide": self._pv_from_torch(h["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+            "embed": {lt: self._pv_from_torch(e, ttnn.uint32) for lt, e in h["embed"].items()},
+            "hot": self._pv_from_torch(h["hot"], ttnn.int32),
+        }
+
+    def _pv_call(self, dev, P):
+        return self.target.ttnn_packed_verify_forward(
+            x=dev["x"],
+            position_idx=dev["pos"],
+            attn_mask_full=dev["mask_full"],
+            attn_mask_sliding=dev["mask_slide"],
+            packed_p=P,
+            page_table=dev.get("pt"),
+            kv_cache=self.tt_kv_cache,
+            embed_idx_full=dev["embed"].get("full_attention"),
+            embed_idx_sliding=dev["embed"].get("sliding_attention"),
+            hot_pt=dev["hot"],
+        )
+
+    def _verify_packed(self, tokens, positions):
+        """Packed verify (eager). Same contract as ``_verify``."""
+        self._pv_setup()
+        P = len(tokens)
+        c = positions[0]
+        if self._pv_a_prev < 0:
+            self._pv_seed_staging(c)
+        h = self._pv_host_inputs(c, P)
+        dev = self._pv_device_inputs(tokens, h)
+        dev["pt"] = self._page_table(1)
+        logits, hidden = self._pv_call(dev, P)
+        self._pv_a_prev = c // self._pv_bs
+        lh = self._logits_to_host(logits).reshape(P, -1)
+        logits.deallocate(True)
+        for t in (dev["x"], dev["pos"], dev["mask_full"], dev["mask_slide"], dev["hot"], dev["pt"]):
+            t.deallocate(True)
+        for e in dev["embed"].values():
+            e.deallocate(True)
+        return lh, hidden
+
+    def _verify_packed_traced(self, tokens, positions):
+        """Packed verify via trace, keyed by (P, S_k bucket). Persistent device
+        inputs are refreshed per step via copy_host_to_device_tensor; a new
+        trace is captured lazily when P or the S_k bucket changes."""
+        self._pv_setup()
+        P = len(tokens)
+        c = positions[0]
+        if self._pv_a_prev < 0:
+            self._pv_seed_staging(c)
+        h = self._pv_host_inputs(c, P)
+        key = (P, h["S_k"])
+        tr = self._pv_traces.get(key)
+        if tr is None:
+            dev = self._pv_device_inputs(tokens, h)
+            dev["pt"] = self._page_table(1)
+            # Compile run (warm program cache), then capture. Both runs write
+            # the SAME tokens to the SAME positions, so KV writes are idempotent.
+            logits, hidden = self._pv_call(dev, P)
+            ttnn.synchronize_device(self.mesh_device)
+            logits.deallocate(True)
+            hidden.deallocate(True)
+            tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+            logits, hidden = self._pv_call(dev, P)
+            ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
+            dev.update({"id": tid, "logits": logits, "hidden": hidden})
+            self._pv_traces[key] = dev
+        else:
+            ttnn.copy_host_to_device_tensor(self._host_tokens(tokens), tr["x"])
+            for src, dst in (
+                (self._pv_from_torch(h["pos"], ttnn.uint32, device=False), tr["pos"]),
+                (self._pv_from_torch(h["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=False), tr["mask_full"]),
+                (self._pv_from_torch(h["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=False), tr["mask_slide"]),
+                (self._pv_from_torch(h["hot"], ttnn.int32, device=False), tr["hot"]),
+            ):
+                ttnn.copy_host_to_device_tensor(src, dst)
+            for lt, e in h["embed"].items():
+                ttnn.copy_host_to_device_tensor(self._pv_from_torch(e, ttnn.uint32, device=False), tr["embed"][lt])
+            ttnn.execute_trace(self.mesh_device, tr["id"], cq_id=0, blocking=False)
+        tr = self._pv_traces[key]
+        self._pv_a_prev = c // self._pv_bs
+        lh = self._logits_to_host(tr["logits"]).reshape(P, -1)
+        # Persistent hidden — caller must consume before the next replay.
+        return lh, tr["hidden"]
+
     # ── target forwards ───────────────────────────────────────────────────
     def _verify(self, tokens, positions):
         """Batched verify. Returns (logits_host [B,vocab], hidden_device [1,1,B,h])."""
+        # Packed-query verify: all K+1 candidates in one batch=1 pass (positions
+        # packed into the query-heads dim, loop-free staging KV write).
+        # Single-token calls (seed/reseed) keep the plain verify.
+        if len(tokens) > 1:
+            if self._use_trace:
+                return self._verify_packed_traced(tokens, positions)
+            return self._verify_packed(tokens, positions)
         # Tracing: BOTH the batch=1 verify (seed/reseed) and the batch=K+1
         # speculative verify capture + replay correctly. The per-candidate
         # sequential_kv_write loop (the race fix for the shared paged block) is
@@ -594,6 +823,7 @@ class SpeculativeDecoder:
         """
         if self._use_trace:
             return self._generate_fused_traced(anchor_token, anchor_pos, max_new_tokens)
+        self._pv_a_prev = -1  # re-seed packed-verify staging for the new anchor/request
         self._last_fused_setup_s = 0.0
         K = self.draft_len
         out, accepts = [], []
@@ -852,6 +1082,7 @@ class SpeculativeDecoder:
         """
         greedy = not temperature or temperature <= 0
         traced = self._use_trace
+        self._pv_a_prev = -1  # re-seed packed-verify staging for the new anchor/request
         out = []
         accepts = []
         # Own (and free) only what we allocate: a caller-provided anchor_hidden
