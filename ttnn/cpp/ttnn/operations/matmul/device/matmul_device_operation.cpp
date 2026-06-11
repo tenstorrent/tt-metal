@@ -468,6 +468,43 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
         chosen_program_config);
 }
 
+void validate_matmul_fused_operations(
+    const std::optional<const Tensor>& optional_bias,
+    const std::optional<ttnn::operations::unary::UnaryWithParam>& fused_activation,
+    const operations::matmul::MatmulProgramConfig& chosen_program_config) {
+    // Determine which fused operations the chosen program config supports.
+    bool config_supports_fused_ops = false;
+    std::visit(
+        [&config_supports_fused_ops](const auto& program_config) {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            // MatmulMultiCoreProgramConfig and MatmulMultiCoreReuseProgramConfig have no
+            // bias / fused_activation kernel paths. Other configs support both; gather_in0
+            // on 1D multicast rejects bias separately in its dedicated check below.
+            config_supports_fused_ops =
+                !std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreProgramConfig> &&
+                !std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig>;
+        },
+        chosen_program_config);
+
+    if (fused_activation.has_value()) {
+        log_info(
+            tt::LogOp,
+            "matmul fused activation {} requested with program config: {}",
+            fused_activation->op_type,
+            ttsl::get_active_type_name_in_variant(chosen_program_config));
+    }
+
+    // Reject bias or activation if the selected config does not support them.
+    TT_FATAL(
+        !optional_bias.has_value() || config_supports_fused_ops,
+        "Bias is not supported for this matmul program config: {}",
+        ttsl::get_active_type_name_in_variant(chosen_program_config));
+    TT_FATAL(
+        !fused_activation.has_value() || config_supports_fused_ops,
+        "Fused activation is not supported for this matmul program config: {}",
+        ttsl::get_active_type_name_in_variant(chosen_program_config));
+}
+
 bool get_broadcast_batch(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,

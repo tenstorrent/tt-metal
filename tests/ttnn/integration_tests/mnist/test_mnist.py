@@ -21,7 +21,8 @@ from models.demos.vision.classification.mnist.tt import tt_mnist
     [128],
 )
 def test_mnist(reset_seeds, device, batch_size, model_location_generator):
-    state_dict = torch.load(model_location_generator("mnist_model.pt", model_subdir="mnist"))
+    # state_dict = torch.load(model_location_generator("mnist_model.pt", model_subdir="mnist"))
+    state_dict = torch.load("tests/ttnn/integration_tests/mnist/mnist_model.pt")
     model = MnistModel(state_dict)
     model = model.eval()
     transform = transforms.Compose([transforms.ToTensor()])

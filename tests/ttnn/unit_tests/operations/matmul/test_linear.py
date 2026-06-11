@@ -1360,3 +1360,34 @@ def test_linear_with_batched(device, a_shape, b_shape, bias_shape):
         frobenius_threshold=0.002,
         pcc_threshold=0.99,
     )
+
+
+@pytest.mark.parametrize(
+    "activation",
+    [
+        # ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+        # ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+        # ttnn.UnaryWithParam(ttnn.UnaryOpType.TANH),
+        # ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID),
+    ],
+)
+def test_linear_fused_activation_rejected_for_multicore_program_config(device, activation):
+    """MatmulMultiCoreProgramConfig has no fused activation kernel path — must be rejected."""
+    torch.manual_seed(0)
+    # m, k, n = 1024, 512, 512
+    m, k, n = 64, 128, 64
+    in0 = torch.randn(1, 1, m, k, dtype=torch.bfloat16)
+    in1 = torch.randn(1, 1, k, n, dtype=torch.bfloat16)
+
+    in0_t = ttnn.from_torch(in0, layout=ttnn.TILE_LAYOUT, device=device)
+    in1_t = ttnn.from_torch(in1, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # with pytest.raises(RuntimeError, match="Fused activation is not supported for this matmul program config"):
+    ttnn.linear(
+        in0_t,
+        in1_t,
+        bias=None,
+        activation=activation,
+        # program_config=ttnn.MatmulMultiCoreProgramConfig(),
+    )
