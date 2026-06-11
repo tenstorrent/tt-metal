@@ -55,11 +55,20 @@ class StageDenoise:
         prefix_kv_per_chip: List[List[Tuple["ttnn.Tensor", "ttnn.Tensor"]]],
         attention_mask: Optional["ttnn.Tensor"] = None,
         position_ids: Optional["ttnn.Tensor"] = None,
+        per_chip_attn_mask: Optional[List["ttnn.Tensor"]] = None,
+        per_chip_cos: Optional[List["ttnn.Tensor"]] = None,
+        per_chip_sin: Optional[List["ttnn.Tensor"]] = None,
     ) -> "ttnn.Tensor":
         """Chain `suffix_hidden` through 6 chips, 3 expert layers per chip.
 
         adarms_conds: per-chip adarms_cond tensor (already on that chip).
         prefix_kv_per_chip: kv_migration.migrate_layer_paired() output.
+
+        Upstream-openpi compat (PI0_UPSTREAM_MASKS=1): per_chip_attn_mask,
+        per_chip_cos, per_chip_sin each are length-6 lists holding the expert
+        cross-attention mask and prefix-offset-aware suffix RoPE tables, one
+        ttnn.Tensor per denoise chip.
+
         Returns the final hidden on chips[5].
         """
         if len(adarms_conds) != stages.DENOISE_NUM_CHIPS:
@@ -69,12 +78,17 @@ class StageDenoise:
 
         hidden = suffix_hidden_chip0
         for i, chunk in enumerate(self.chunks):
+            m_i = per_chip_attn_mask[i] if per_chip_attn_mask is not None else attention_mask
+            c_i = per_chip_cos[i] if per_chip_cos is not None else None
+            s_i = per_chip_sin[i] if per_chip_sin is not None else None
             hidden = chunk.forward(
                 hidden,
                 adarms_conds[i],
                 prefix_kv_per_chip[i],
-                attention_mask,
+                m_i,
                 position_ids,
+                c_i,
+                s_i,
             )
             if i < len(self.chunks) - 1:
                 hidden = send_via_host(hidden, self.chips[i + 1])

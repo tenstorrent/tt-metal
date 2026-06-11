@@ -84,15 +84,22 @@ class ExpertChunkSlice:
         prefix_kv_for_chunk: List[Tuple["ttnn.Tensor", "ttnn.Tensor"]],
         attention_mask: Optional["ttnn.Tensor"] = None,
         position_ids: Optional["ttnn.Tensor"] = None,
+        cos_override: Optional["ttnn.Tensor"] = None,
+        sin_override: Optional["ttnn.Tensor"] = None,
     ) -> "ttnn.Tensor":
-        """Run this chip's expert blocks. prefix_kv_for_chunk has one (K, V) per local layer."""
+        """Run this chip's expert blocks. prefix_kv_for_chunk has one (K, V) per local layer.
+
+        cos_override / sin_override: per-chip position-aware suffix RoPE tables
+        for the upstream-openpi compat path (PI0_UPSTREAM_MASKS=1). When None,
+        each block uses its own sequential cos_meta / sin_meta.
+        """
         if len(prefix_kv_for_chunk) != len(self.blocks):
             raise RuntimeError(f"expected {len(self.blocks)} prefix KV tuples, got {len(prefix_kv_for_chunk)}")
         for block, past_kv in zip(self.blocks, prefix_kv_for_chunk):
             hidden, _ = block.forward(
                 hidden,
-                None,  # cos override (block uses self.cos_meta)
-                None,
+                cos_override,
+                sin_override,
                 adarms_cond,
                 attention_mask,
                 position_ids,

@@ -36,6 +36,7 @@ Simplifications vs single-chip ttnn_pi0_5_model.py:
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Dict, List, Optional, Tuple
 
@@ -44,6 +45,11 @@ import ttnn
 
 from models.experimental.pi0_5.common.configs import Pi0_5ModelConfig, SuffixConfig
 from models.experimental.pi0_5.tt.ttnn_gemma import ada_rms_norm_no_gate_ttnn
+from models.experimental.pi0_5.tt.ttnn_pi0_5_model import (
+    _MASK_VAL,
+    _precompute_rope_table_torch,
+    use_upstream_masks,
+)
 
 from .kv_migration import migrate_layer_paired
 from .stage_denoise import StageDenoise
@@ -151,6 +157,135 @@ class Pi0_5GLXPipeline:
         # Final adaRMS norm + bias on the LAST denoise chip (last expert chunk).
         self.denoise_head = _DenoiseHead(weights["action_expert"], mesh_handles.denoise_per_chip[-1])
 
+        # Cached upstream-openpi compat artifacts (mask + position-aware RoPE).
+        # Keyed by (img_present_tuple, lang_real_count, prefix_len). Same idea
+        # as the single-chip Pi0_5ModelTTNN._cached_upstream_artifacts (see
+        # ttnn_pi0_5_model.py:344). Built lazily on the first sample_actions
+        # call and reused within a task. Each artifact set is replicated across
+        # the appropriate stage's per-chip submeshes.
+        self._upstream_cache_key = None
+        self._upstream_per_chip = None  # dict with prefix_* (18-list) and expert_* (6-list)
+        self._rope_l1 = os.environ.get("PI0_ROPE_TABLES_L1", "").lower() in ("1", "true", "yes", "on")
+
+    # ---- upstream-openpi compat artifacts -------------------------------
+
+    def _upstream_key(
+        self, img_masks: Optional[List[torch.Tensor]], lang_masks: Optional[torch.Tensor], prefix_len: int
+    ):
+        img_present = tuple(bool(m.item()) if m.numel() == 1 else bool(m[0].item()) for m in (img_masks or []))
+        lang_real = int(lang_masks.to(torch.bool)[0].sum().item()) if lang_masks is not None else 0
+        return (img_present, lang_real, prefix_len)
+
+    def _build_and_upload_upstream_artifacts(
+        self,
+        img_masks: List[torch.Tensor],
+        lang_masks: torch.Tensor,
+        prefix_len: int,
+    ) -> None:
+        """Port of Pi0_5ModelTTNN._build_upstream_attn_artifacts adapted for the
+        mesh model: each prefill chip gets its own (prefix_attn_mask, prefix_cos,
+        prefix_sin) copy; each denoise chip gets its own (expert_attn_mask,
+        suffix_cos, suffix_sin). Results cached on self._upstream_per_chip.
+        """
+        num_image_tokens = self.config.siglip_config.num_patches
+        action_horizon = self.action_horizon
+        suffix_padded = self._action_horizon_padded
+        prefix_padded = ((prefix_len + 31) // 32) * 32
+        vlm_head_dim = self.config.vlm_config.head_dim
+        expert_head_dim = self.config.expert_config.head_dim
+        max_seq_len = self.config.max_seq_len
+
+        # 1) 1D prefix pad_mask (image-pad-aware + lang-pad-aware).
+        pad_segments = []
+        for m in img_masks:
+            real = bool(m.item()) if m.numel() == 1 else bool(m[0].item())
+            pad_segments.append(torch.full((num_image_tokens,), real, dtype=torch.bool))
+        pad_segments.append(lang_masks[0].to(torch.bool))
+        pad_mask = torch.cat(pad_segments, dim=0)
+        assert pad_mask.shape[0] == prefix_len, (pad_mask.shape, prefix_len)
+        prefix_real_count = int(pad_mask.sum().item())
+
+        # 2) Prefix attention mask (additive bf16, finite -1e4 for masked).
+        prefix_all_real_aligned = (prefix_real_count == prefix_len) and (prefix_padded == prefix_len)
+        if prefix_all_real_aligned:
+            prefix_mask_4d = None
+        else:
+            pad_2d = pad_mask[:, None] & pad_mask[None, :]
+            pm = torch.zeros(prefix_padded, prefix_padded, dtype=torch.bfloat16)
+            pm[:prefix_len, :prefix_len].masked_fill_(~pad_2d, _MASK_VAL)
+            if prefix_padded > prefix_len:
+                pm[prefix_len:, :] = _MASK_VAL
+                pm[:, prefix_len:] = _MASK_VAL
+            prefix_mask_4d = pm.unsqueeze(0).unsqueeze(0)
+
+        # 3) Prefix RoPE at cumsum(pad)-1 positions.
+        position_ids = torch.cumsum(pad_mask.to(torch.int64), dim=0) - 1
+        position_ids = position_ids.clamp(min=0, max=max_seq_len - 1)
+        cos_vlm, sin_vlm = _precompute_rope_table_torch(vlm_head_dim, max_seq_len)
+        prefix_cos = cos_vlm[position_ids]
+        prefix_sin = sin_vlm[position_ids]
+        if prefix_padded > prefix_len:
+            zc = torch.zeros(prefix_padded - prefix_len, vlm_head_dim, dtype=prefix_cos.dtype)
+            zs = torch.zeros(prefix_padded - prefix_len, vlm_head_dim, dtype=prefix_sin.dtype)
+            prefix_cos = torch.cat([prefix_cos, zc], dim=0)
+            prefix_sin = torch.cat([prefix_sin, zs], dim=0)
+        prefix_cos_4d = prefix_cos.unsqueeze(0).unsqueeze(0)
+        prefix_sin_4d = prefix_sin.unsqueeze(0).unsqueeze(0)
+
+        # 4) Suffix RoPE at prefix_real_count + [0..suffix_padded-1].
+        cos_exp, sin_exp = _precompute_rope_table_torch(expert_head_dim, max_seq_len)
+        suffix_positions = (torch.arange(suffix_padded, dtype=torch.int64) + prefix_real_count).clamp(
+            max=max_seq_len - 1
+        )
+        suffix_cos_4d = cos_exp[suffix_positions].unsqueeze(0).unsqueeze(0)
+        suffix_sin_4d = sin_exp[suffix_positions].unsqueeze(0).unsqueeze(0)
+
+        # 5) Expert cross-attention mask (suffix→prefix+suffix).
+        kv_total = prefix_padded + suffix_padded
+        em = torch.zeros(suffix_padded, kv_total, dtype=torch.bfloat16)
+        pad_blocked = (~pad_mask).nonzero(as_tuple=True)[0]
+        if pad_blocked.numel() > 0:
+            em[:, pad_blocked] = _MASK_VAL
+        if prefix_padded > prefix_len:
+            em[:, prefix_len:prefix_padded] = _MASK_VAL
+        if suffix_padded > action_horizon:
+            em[:, prefix_padded + action_horizon : kv_total] = _MASK_VAL
+            em[action_horizon:suffix_padded, :] = _MASK_VAL
+        expert_mask_4d = em.unsqueeze(0).unsqueeze(0)
+
+        # Upload: replicate to each chip on the relevant submesh.
+        rope_mc = ttnn.L1_MEMORY_CONFIG if self._rope_l1 else ttnn.DRAM_MEMORY_CONFIG
+
+        def _up(host_t, chip, mc):
+            return ttnn.from_torch(
+                host_t.to(torch.bfloat16) if host_t.dtype != torch.bfloat16 else host_t,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=chip,
+                memory_config=mc,
+            )
+
+        per_chip_prefix_mask = (
+            [_up(prefix_mask_4d, c, ttnn.DRAM_MEMORY_CONFIG) for c in self.h.prefill_per_chip]
+            if prefix_mask_4d is not None
+            else None
+        )
+        per_chip_prefix_cos = [_up(prefix_cos_4d, c, rope_mc) for c in self.h.prefill_per_chip]
+        per_chip_prefix_sin = [_up(prefix_sin_4d, c, rope_mc) for c in self.h.prefill_per_chip]
+        per_chip_expert_mask = [_up(expert_mask_4d, c, ttnn.DRAM_MEMORY_CONFIG) for c in self.h.denoise_per_chip]
+        per_chip_suffix_cos = [_up(suffix_cos_4d, c, rope_mc) for c in self.h.denoise_per_chip]
+        per_chip_suffix_sin = [_up(suffix_sin_4d, c, rope_mc) for c in self.h.denoise_per_chip]
+
+        self._upstream_per_chip = {
+            "prefix_attn_mask": per_chip_prefix_mask,  # None or len-18 list
+            "prefix_cos": per_chip_prefix_cos,
+            "prefix_sin": per_chip_prefix_sin,
+            "expert_attn_mask": per_chip_expert_mask,
+            "suffix_cos": per_chip_suffix_cos,
+            "suffix_sin": per_chip_suffix_sin,
+            "prefix_real_count": prefix_real_count,
+        }
+
     # ---- helpers ----------------------------------------------------------
 
     def _build_prefix(self, vision_out_on_p0: "ttnn.Tensor", lang_tokens_torch: torch.Tensor) -> "ttnn.Tensor":
@@ -239,8 +374,28 @@ class Pi0_5GLXPipeline:
 
         # ---- Build prefix embeddings + Stage 1: prefill ----
         prefix_embs = self._build_prefix(vision_out_p0, lang_tokens)
+        prefix_len = int(prefix_embs.shape[1])
+
+        # Upstream-openpi compat artifacts (gated by PI0_UPSTREAM_MASKS=1). Build
+        # once per (img_present, lang_real_count, prefix_len) — cached across
+        # subsequent sample_actions calls for the same prompt/scene shape.
+        upstream = None
+        if use_upstream_masks() and img_masks is not None and lang_masks is not None:
+            key = self._upstream_key(img_masks, lang_masks, prefix_len)
+            if self._upstream_per_chip is None or self._upstream_cache_key != key:
+                self._build_and_upload_upstream_artifacts(img_masks, lang_masks, prefix_len)
+                self._upstream_cache_key = key
+            upstream = self._upstream_per_chip
+
         t0 = time.perf_counter()
-        _final_hidden, per_layer_kv = self.stage_prefill.run(prefix_embs, attention_mask=None, position_ids=None)
+        _final_hidden, per_layer_kv = self.stage_prefill.run(
+            prefix_embs,
+            attention_mask=None,
+            position_ids=None,
+            per_chip_attn_mask=(upstream["prefix_attn_mask"] if upstream is not None else None),
+            per_chip_cos=(upstream["prefix_cos"] if upstream is not None else None),
+            per_chip_sin=(upstream["prefix_sin"] if upstream is not None else None),
+        )
         ttnn.synchronize_device(self.h.prefill_per_chip[-1])
         t.prefill_ms = (time.perf_counter() - t0) * 1000.0
 
@@ -281,7 +436,14 @@ class Pi0_5GLXPipeline:
 
             # 18-layer expert chain across 6 chips.
             expert_out = self.stage_denoise.run_expert_chain(
-                suffix_hidden, adarms_per_chip, prefix_kv_per_chip, attention_mask=None, position_ids=None
+                suffix_hidden,
+                adarms_per_chip,
+                prefix_kv_per_chip,
+                attention_mask=None,
+                position_ids=None,
+                per_chip_attn_mask=(upstream["expert_attn_mask"] if upstream is not None else None),
+                per_chip_cos=(upstream["suffix_cos"] if upstream is not None else None),
+                per_chip_sin=(upstream["suffix_sin"] if upstream is not None else None),
             )
 
             # Final adaRMS norm + action_out_proj on last denoise chip.

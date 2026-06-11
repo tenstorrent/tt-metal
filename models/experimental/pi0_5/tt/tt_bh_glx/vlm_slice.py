@@ -107,11 +107,17 @@ class VLMBlockSlice:
         hidden: "ttnn.Tensor",
         attention_mask: Optional["ttnn.Tensor"] = None,
         position_ids: Optional["ttnn.Tensor"] = None,
+        cos_override: Optional["ttnn.Tensor"] = None,
+        sin_override: Optional["ttnn.Tensor"] = None,
     ) -> Tuple["ttnn.Tensor", Tuple["ttnn.Tensor", "ttnn.Tensor"]]:
+        # cos_override / sin_override: position-aware RoPE tables shaped
+        # [1, 1, prefix_padded, head_dim] for the upstream-openpi compat path
+        # (PI0_UPSTREAM_MASKS=1). When None, the block falls back to its own
+        # sequential cos_meta / sin_meta.
         hidden, new_kv = self.block.forward(
             hidden,
-            None,  # cos override (block uses self.cos_meta)
-            None,
+            cos_override,
+            sin_override,
             attention_mask,
             position_ids,
             None,  # no past KV — this IS the prefill

@@ -56,16 +56,27 @@ class StagePrefill:
         prefix_embs_on_chip0: "ttnn.Tensor",
         attention_mask: Optional["ttnn.Tensor"] = None,
         position_ids: Optional["ttnn.Tensor"] = None,
+        per_chip_attn_mask: Optional[List["ttnn.Tensor"]] = None,
+        per_chip_cos: Optional[List["ttnn.Tensor"]] = None,
+        per_chip_sin: Optional[List["ttnn.Tensor"]] = None,
     ) -> Tuple["ttnn.Tensor", List[Tuple["ttnn.Tensor", "ttnn.Tensor"]]]:
         """prefix_embs_on_chip0 must be a ttnn.Tensor on prefill_per_chip[0].
 
         Returns (final_hidden_on_chip17, [(K_chip_i, V_chip_i)]_i=0..17).
         Per-layer KV stays on the chip that produced it.
+
+        Upstream-openpi compat (PI0_UPSTREAM_MASKS=1): pass per_chip_attn_mask,
+        per_chip_cos, per_chip_sin — each a list of 18 ttnn.Tensors (one per
+        prefill chip) holding the prefix attention mask and position-aware RoPE
+        tables. When None, the legacy "no mask, sequential RoPE" path runs.
         """
         hidden = prefix_embs_on_chip0
         per_layer_kv: List[Tuple["ttnn.Tensor", "ttnn.Tensor"]] = []
         for i, sl in enumerate(self.slices):
-            hidden, (k, v) = sl.forward(hidden, attention_mask, position_ids)
+            m_i = per_chip_attn_mask[i] if per_chip_attn_mask is not None else attention_mask
+            c_i = per_chip_cos[i] if per_chip_cos is not None else None
+            s_i = per_chip_sin[i] if per_chip_sin is not None else None
+            hidden, (k, v) = sl.forward(hidden, m_i, position_ids, c_i, s_i)
             per_layer_kv.append((k, v))
             if i < len(self.slices) - 1:
                 hidden = send_via_host(hidden, self.chips[i + 1])
