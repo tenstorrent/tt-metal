@@ -30,6 +30,7 @@ jobs:
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
       - name: Install dependencies
@@ -95,6 +96,7 @@ jobs:
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
       - name: Enable performance mode
@@ -223,8 +225,7 @@ jobs:
         timeout-minutes: 10
         with:
           name: perf-report-csv-${{ matrix.test-group.model-type }}-${{ matrix.test-group.arch }}-${{ matrix.test-group.model }}-bare-metal
-          path:
-            ${{ steps.check-perf-report.outputs.perf_report_filename_all_gather }}
+          path: ${{ steps.check-perf-report.outputs.perf_report_filename_all_gather }}
       - name: Upload metrics data to AWS SFTP bucket
         timeout-minutes: 5
         if: ${{ !cancelled() && matrix.test-group.team == 'train'}}

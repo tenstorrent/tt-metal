@@ -75,8 +75,8 @@ inline void _init_reduce_max_col_subblock_4x2_()
 
 inline void _move_to_next_subblock_4x2_()
 {
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_3, -128 & 0x3fff); // wherever
-    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_3, -126 & 0x3fff); // wherever
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_3, -128 & 0x3ff); // wherever
+    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_3, -126 & 0x3ff); // wherever
 
     TTI_SFPTRANSP(0, 0, 0, 0); // all arguments are unused
 
@@ -84,8 +84,8 @@ inline void _move_to_next_subblock_4x2_()
     TTI_SFPSWAP(0 /*unused*/, p_sfpu::LREG5 /*lreg_src_c*/, p_sfpu::LREG6 /*lreg_dest*/, 1 /*instr_mod1*/);
     TTI_SFPSWAP(0 /*unused*/, p_sfpu::LREG4 /*lreg_src_c*/, p_sfpu::LREG5 /*lreg_dest*/, 1 /*instr_mod1*/);
 
-    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_3, -128 & 0x3fff); // wherever
-    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_3, -126 & 0x3fff); // wherever
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_3, -128 & 0x3ff); // wherever
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_3, -126 & 0x3ff); // wherever
 }
 
 template <PoolType pool_type, ReduceDim reduce_dim, DataFormat format>

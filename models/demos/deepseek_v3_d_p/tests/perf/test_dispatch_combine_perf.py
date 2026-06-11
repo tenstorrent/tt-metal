@@ -212,7 +212,7 @@ def _perf_param(
     if dtype_filter:
         k_filter += f" and {dtype_filter}"
     return (
-        f"pytest models/demos/deepseek_v3_d_p/tests/pcc/{worker_file}::{worker_test} " f"-k '{k_filter}'",
+        f"pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/{worker_file}::{worker_test} " f"-k '{k_filter}'",
         expected_ns,
         f"deepseek_v3_{op}",
         model_name,
@@ -236,12 +236,12 @@ _DISPATCH_PERF_PARAMS = [
         "test_ttnn_dispatch",
         "linear",
         2,
-        4_108_262,
+        4_068_188,
         "",
         dtype_filter="bf16_out",
     ),
     _perf_param(
-        "dispatch", "test_prefill_dispatch.py", "test_ttnn_dispatch", "ring", 2, 3_683_084, "", dtype_filter="bf16_out"
+        "dispatch", "test_prefill_dispatch.py", "test_ttnn_dispatch", "ring", 2, 2_652_427, "", dtype_filter="bf16_out"
     ),
 ]
 _COMBINE_PERF_PARAMS = [

@@ -24,7 +24,8 @@ You are the expert on **Quasar** architecture.
 
 Quasar uses **semantic naming** — different from WH/BH's letter-based naming:
 - Unpack: `llk_unpack_unary_operand.h`, `llk_unpack_binary_operands.h`, `llk_unpack_binary_broadcast_operands.h`, `llk_unpack_matmul.h`
-- Math: `llk_math_eltwise_binary_broadcast.h`, `llk_math_eltwise_unary_sfpu_common.h`, `llk_math_matmul.h`
+- Math (SFPU): `llk_math_eltwise_unary_sfpu.h`, `llk_math_eltwise_binary_sfpu.h`, `llk_math_eltwise_ternary_sfpu.h` — all include the shared base `llk_math_eltwise_sfpu_common.h`
+- Math (other): `llk_math_eltwise_binary_broadcast.h`, `llk_math_matmul.h`
 - Pack: `llk_pack.h`, `llk_pack_matmul.h`
 - SFPU: `common/inc/sfpu/ckernel_sfpu_{op}.h`
 - Unique to QSR: `llk_srcs.h` (no equivalent in WH/BH)

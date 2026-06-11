@@ -179,8 +179,6 @@ void enable_power_management() {
 }
 
 void set_deassert_addresses() {
-    volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
-
 #ifdef ARCH_BLACKHOLE
     WRITE_REG(RISCV_DEBUG_REG_NCRISC_RESET_PC, MEM_NCRISC_FIRMWARE_BASE);
     WRITE_REG(RISCV_DEBUG_REG_TRISC0_RESET_PC, MEM_TRISC0_FIRMWARE_BASE);
@@ -189,6 +187,8 @@ void set_deassert_addresses() {
     WRITE_REG(RISCV_DEBUG_REG_TRISC_RESET_PC_OVERRIDE, 0b111);
     WRITE_REG(RISCV_DEBUG_REG_NCRISC_RESET_PC_OVERRIDE, 0x1);
 #else
+    volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
+
     cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = MEM_NCRISC_FIRMWARE_BASE;
     cfg_regs[TRISC_RESET_PC_SEC0_PC_ADDR32] = MEM_TRISC0_FIRMWARE_BASE;
     cfg_regs[TRISC_RESET_PC_SEC1_PC_ADDR32] = MEM_TRISC1_FIRMWARE_BASE;

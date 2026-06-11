@@ -1,0 +1,19 @@
+# gemma_4_26b
+mesh_shape: [8, 4]
+cluster_axis: 0
+batch_per_device: 32
+hidden_size: 2816
+select_experts_k: 8
+num_routed_experts: 64
+num_shared_experts: 0
+has_bias: false
+
+compute:
+  intermediate_size: 704
+  activation_type: GELU
+
+reduce:
+  shared_expert_scale: 1.0
+
+experts:
+  expert_mapping: sequential

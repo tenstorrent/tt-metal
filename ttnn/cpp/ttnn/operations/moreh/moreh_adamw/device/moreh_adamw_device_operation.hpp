@@ -5,12 +5,14 @@
 #pragma once
 
 #include <optional>
+#include <vector>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 namespace ttnn::operations::moreh::moreh_adamw {
 
@@ -25,6 +27,17 @@ struct MorehAdamWDeviceOperation {
         bool amsgrad = false;
         const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
+
+        // lr and step are excluded from the program hash (they vary every optimizer step, so
+        // hashing them would recompile every call); they are re-applied on each cache hit via
+        // get_dynamic_runtime_args(). beta1/beta2/eps/weight_decay are rarely-varying
+        // hyperparameters and stay in the hash.
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "beta1", "beta2", "eps", "weight_decay", "amsgrad", "memory_config", "compute_kernel_config");
+        auto attribute_values() const {
+            return std::forward_as_tuple(
+                beta1, beta2, eps, weight_decay, amsgrad, memory_config, compute_kernel_config);
+        }
     };
 
     struct tensor_args_t {
@@ -58,7 +71,15 @@ struct MorehAdamWDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    // lr/step (and the step-derived beta1/beta2 exponents) are excluded from the hash, so they
+    // must be re-applied to the cached program on every fast-path cache hit. Mirrors the reader and
+    // compute runtime args built in create_descriptor() — test_moreh_adamw_cache enforces it (it
+    // fails outright if step/lr stay frozen across the cache-hit steps).
+    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
 };
 }  // namespace ttnn::operations::moreh::moreh_adamw
 

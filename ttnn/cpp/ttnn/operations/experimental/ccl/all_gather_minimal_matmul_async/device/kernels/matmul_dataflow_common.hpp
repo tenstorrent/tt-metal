@@ -7,6 +7,7 @@
 #include <tuple>
 #include <utility>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 
 namespace detail {
 template <typename... Args, uint32_t... Indexes>
@@ -72,12 +73,14 @@ using namespace tt::tt_fabric::linear::experimental;
 #endif
 
 #ifdef IS_IN0
+template <bool IsLinear>
 void compute_actual_k_block(
     uint32_t k_block_iter,
     uint32_t total_k_block_count,
     uint32_t my_rank,
     uint32_t k_blocks_per_device,
     uint32_t k_tiles_per_block,
+    uint32_t k_tiles_per_device,
     uint32_t num_devices,
     bool is_forward,
     bool is_first_n_block,
@@ -91,12 +94,14 @@ void compute_actual_k_block(
     uint32_t& k_left_start_tile,
     uint32_t& k_right_start_tile) {
 #else
+template <bool IsLinear>
 void compute_actual_k_block(
     uint32_t k_block_iter,
     uint32_t total_k_block_count,
     uint32_t my_rank,
     uint32_t k_blocks_per_device,
     uint32_t k_tiles_per_block,
+    uint32_t k_tiles_per_device,
     uint32_t num_devices,
     bool is_forward,
     uint32_t k_left_tiles,
@@ -104,43 +109,76 @@ void compute_actual_k_block(
     uint32_t& k_right_start_tile) {
 #endif
     // Start with self
-    // Then for each device_iter, you are reading k_blocks_per_device half blocks from each direction
-    // Left block coming from your forward device, and right block coming from your backward device
+    // Then for each device_iter, read k_blocks_per_device blocks from each direction.
+    // Ring: left half from forward device, right half from backward device (bidirectional half-block).
+    // Linear: full block from one direction (k_left=K_block_tiles, k_right=0), relayed hop-by-hop.
+    //
+    // K-tile address = device_rank * k_tiles_per_device + device_k_block_iter * k_tiles_per_block.
+    // k_tiles_per_device is the *actual* K-tile span per device (not k_blocks_per_device *
+    // k_tiles_per_block, which over-counts by k_tiles_per_block - K_block_tail_tiles when the
+    // last block per device is a tail block).
     uint32_t actual_k_block_iter = is_forward ? k_block_iter : (total_k_block_count - 1 - k_block_iter);
     uint32_t device_iter = actual_k_block_iter / k_blocks_per_device;
     uint32_t device_k_block_iter = actual_k_block_iter % k_blocks_per_device;
     if (device_iter == 0) {
         // Local
-        k_left_start_tile = (my_rank * k_blocks_per_device + device_k_block_iter) * k_tiles_per_block;
+        k_left_start_tile = my_rank * k_tiles_per_device + device_k_block_iter * k_tiles_per_block;
         k_right_start_tile = k_left_start_tile + k_left_tiles;
     } else {
-        // Remote
-        // Forward rank (origin of left half)
-        int32_t actual_device_rank = my_rank + device_iter;
-        if ((uint32_t)actual_device_rank >= num_devices) {
-            actual_device_rank = actual_device_rank - num_devices;
-        }
-        k_left_start_tile = (actual_device_rank * k_blocks_per_device + device_k_block_iter) * k_tiles_per_block;
+        if constexpr (IsLinear) {
+            // Linear uni-ring: slice at iter K = (my_rank + K) mod N. Data flows leftward
+            // around a virtual ring (Dev k -> Dev k-1 each iter; Dev 0 long-sends to Dev N-1).
+            uint32_t actual_device_rank = my_rank + device_iter;
+            if (actual_device_rank >= num_devices) {
+                actual_device_rank -= num_devices;
+            }
+            k_left_start_tile = actual_device_rank * k_tiles_per_device + device_k_block_iter * k_tiles_per_block;
+            k_right_start_tile = k_left_start_tile;  // unused: k_right_tiles == 0
+        } else {
+            // Ring: bidirectional half-block. Left half from forward device, right half from
+            // backward device (modular wrap-around).
+            int32_t actual_device_rank = my_rank + device_iter;
+            if ((uint32_t)actual_device_rank >= num_devices) {
+                actual_device_rank = actual_device_rank - num_devices;
+            }
+            k_left_start_tile = actual_device_rank * k_tiles_per_device + device_k_block_iter * k_tiles_per_block;
 
-        // Backward rank
-        actual_device_rank = my_rank - device_iter;
-        if (actual_device_rank < 0) {
-            actual_device_rank = num_devices + actual_device_rank;
+            actual_device_rank = my_rank - device_iter;
+            if (actual_device_rank < 0) {
+                actual_device_rank = num_devices + actual_device_rank;
+            }
+            k_right_start_tile =
+                actual_device_rank * k_tiles_per_device + device_k_block_iter * k_tiles_per_block + k_left_tiles;
         }
-        k_right_start_tile =
-            (actual_device_rank * k_blocks_per_device + device_k_block_iter) * k_tiles_per_block + k_left_tiles;
     }
 #ifdef IS_IN0
-    if (device_iter > 0 && is_first_n_block) {
-        // When we are not reading from local, and we are in the first forward pass through n, wait for data to arrive
+    if (is_first_n_block) {
         if (is_injector_core) {
-            noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + in0_core_order_size);
-            sem_target_forward += in0_core_order_size;
-            noc_semaphore_wait_min(out_ready_semaphore_backward, sem_target_backward + in0_core_order_size);
-            sem_target_backward += in0_core_order_size;
+            if constexpr (IsLinear) {
+                // Linear uni-ring: one slice per iter from "successor" (Dev k+1 normally; for
+                // Dev N-1, from Dev 0 via long send). All sends use out_ready_semaphore_forward
+                // at the receiver — single sem per iter.
+                //
+                // The sender skips the redundant final relay lap (the last K_blocks_per_device
+                // iters; see dm_in0_sender), so it fires exactly (N-1)*K_blocks_per_device sem
+                // incs per m_block — precisely the count the receiver waits on here. sem ends each
+                // m_block exactly at sem_target with nothing left in flight, so no compensation
+                // (and no end-of-op drain) is needed.
+                if (device_iter > 0) {
+                    noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + 1);
+                    sem_target_forward += 1;
+                }
+            } else if (device_iter > 0) {
+                // Ring: both halves arrive simultaneously from both directions
+                // (both neighbors always exist for Ring topology by construction).
+                noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + in0_core_order_size);
+                sem_target_forward += in0_core_order_size;
+                noc_semaphore_wait_min(out_ready_semaphore_backward, sem_target_backward + in0_core_order_size);
+                sem_target_backward += in0_core_order_size;
+            }
         }
     }
-#endif
+#endif  // IS_IN0
 }
 
 #ifdef USE_MUX
@@ -242,20 +280,8 @@ bool is_backward_k_block_iter(uint32_t k_block_iter, uint32_t k_blocks_per_devic
     return (device_iter % 2);
 }
 
-void fill_zeros_async(uint32_t write_addr, uint32_t tile_bytes) {
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    // Fill tile with zeros
-    uint32_t bytes_left = tile_bytes;
-    for (;;) {
-        uint32_t read_size = bytes_left > MEM_ZEROS_SIZE ? MEM_ZEROS_SIZE : bytes_left;
-        noc_async_read(zeros_noc_addr, write_addr, read_size);
-        write_addr += read_size;
-        bytes_left -= read_size;
-        if (bytes_left == 0) {
-            break;
-        }
-    }
+inline void fill_zeros_async(const Noc& noc, const CircularBuffer& cb, uint32_t bytes, uint32_t offset_bytes = 0) {
+    noc.async_write_zeros(cb, bytes, {.offset_bytes = offset_bytes});
 }
 
 struct TensorShape2D {
@@ -290,7 +316,7 @@ template <
 void read_in0_block_sync(
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
-    uint32_t write_ptr,
+    uint32_t cb_id,
     uint32_t tile_size_bytes,
 #ifdef READ_FROM_LOCAL_INPUT
     const LocalTensorAccessorType& in3_accessor,
@@ -308,8 +334,15 @@ void read_in0_block_sync(
     uint32_t d1_tiles_right) {
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end_left > d1_start_left);
-    ASSERT(d1_end_right > d1_start_right);
+    // Linear topology is unidirectional: the "right" (backward) half is legitimately empty
+    // (k_right_tiles == 0 for a full block), so allow an empty range here. A non-empty-but-
+    // inverted range would still be a bug, hence >=.
+    ASSERT(d1_end_right >= d1_start_right);
 
+    Noc noc;
+    CircularBuffer cb(cb_id);
+    const uint32_t cb_base_write_ptr = cb.get_write_ptr();
+    uint32_t write_ptr = cb_base_write_ptr;
     for (uint32_t i = d0_start; i < d0_end; i++) {
         if (i >= shape.logical_d0) {
             break;
@@ -329,7 +362,7 @@ void read_in0_block_sync(
                 }
 #endif
             } else {
-                fill_zeros_async(write_ptr, tile_size_bytes);
+                fill_zeros_async(noc, cb, tile_size_bytes, write_ptr - cb_base_write_ptr);
             }
             write_ptr += tile_size_bytes;
         }
@@ -350,7 +383,7 @@ void read_in0_block_sync(
                 }
 #endif
             } else {
-                fill_zeros_async(write_ptr, tile_size_bytes);
+                fill_zeros_async(noc, cb, tile_size_bytes, write_ptr - cb_base_write_ptr);
             }
             write_ptr += tile_size_bytes;
         }
@@ -358,6 +391,7 @@ void read_in0_block_sync(
         write_ptr += (d1_tiles_right - (d1_end_right - d1_start_right)) * tile_size_bytes;
     }
     noc_async_read_barrier();
+    noc.write_zeros_l1_barrier();
 }
 
 /**
@@ -369,7 +403,7 @@ template <uint32_t K_block_tiles, uint32_t N_block_tiles, typename TensorAccesso
 void read_in1_block_sync(
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
-    uint32_t write_ptr,
+    uint32_t cb_id,
     uint32_t tile_size_bytes,
     uint32_t d0_start_left,
     uint32_t d0_end_left,
@@ -378,8 +412,13 @@ void read_in1_block_sync(
     uint32_t d1_start,
     uint32_t d1_end) {
     ASSERT(d0_end_left > d0_start_left);
-    ASSERT(d0_end_right > d0_start_right);
+    // Linear topology is unidirectional: the "right" (backward) half is legitimately empty.
+    ASSERT(d0_end_right >= d0_start_right);
     ASSERT(d1_end > d1_start);
+    Noc noc;
+    CircularBuffer cb(cb_id);
+    const uint32_t cb_base_write_ptr = cb.get_write_ptr();
+    uint32_t write_ptr = cb_base_write_ptr;
     for (uint32_t i = d0_start_left; i < d0_end_left; i++) {
         for (uint32_t j = d1_start; j < d1_end; j++) {
             if (j >= shape.logical_d1) {
@@ -390,7 +429,7 @@ void read_in1_block_sync(
                 uint32_t tile_id = i * shape.logical_d1 + j;
                 noc_async_read_page(tile_id, tensor_accessor, write_ptr);
             } else {
-                fill_zeros_async(write_ptr, tile_size_bytes);
+                fill_zeros_async(noc, cb, tile_size_bytes, write_ptr - cb_base_write_ptr);
             }
             write_ptr += tile_size_bytes;
         }
@@ -407,7 +446,7 @@ void read_in1_block_sync(
                 uint32_t tile_id = i * shape.logical_d1 + j;
                 noc_async_read_page(tile_id, tensor_accessor, write_ptr);
             } else {
-                fill_zeros_async(write_ptr, tile_size_bytes);
+                fill_zeros_async(noc, cb, tile_size_bytes, write_ptr - cb_base_write_ptr);
             }
             write_ptr += tile_size_bytes;
         }
@@ -415,6 +454,7 @@ void read_in1_block_sync(
         write_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
     noc_async_read_barrier();
+    noc.write_zeros_l1_barrier();
 }
 
 /**
@@ -806,12 +846,15 @@ FORCE_INLINE PacketHeaders allocate_and_init_packet_headers(
     const AddrGen& in0_reader,
     uint32_t num_tiles_to_write_per_packet,
     uint32_t in3_tile_size) {
-    PacketHeaders hdrs;
+    PacketHeaders hdrs{};  // zero-initialized (nullptrs) when !valid
+    if (!valid) {
+        return hdrs;
+    }
     hdrs.scatter_hdr = PacketHeaderPool::allocate_header();
     hdrs.unicast_hdr = PacketHeaderPool::allocate_header();
     hdrs.sem_inc_hdr = PacketHeaderPool::allocate_header();
 
-    if (valid) {
+    {
         uint16_t page_size = tt::tt_fabric::linear::addrgen_detail::get_page_size(in0_reader);
         uint64_t dummy_addrs[4] = {0, 0, 0, 0};
         uint16_t chunk_sizes[3] = {page_size, page_size, page_size};

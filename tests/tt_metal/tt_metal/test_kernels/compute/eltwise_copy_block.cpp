@@ -14,7 +14,7 @@ void kernel_main() {
     CircularBuffer cb16(tt::CBIndex::c_16);
 
     for (uint32_t block = 0; block < num_blocks; ++block) {
-        acquire_dst();
+        tile_regs_acquire();
 
         // Wait tiles on the input / copy to dst / pop from input
         cb0.wait_front(block_num_tiles);
@@ -23,6 +23,9 @@ void kernel_main() {
         }
         cb0.pop_front(block_num_tiles);
 
+        tile_regs_commit();
+        tile_regs_wait();
+
         // Reserve space in output / pack / push to output
         cb16.reserve_back(block_num_tiles);
         for (uint32_t t = 0; t < block_num_tiles; ++t) {
@@ -30,6 +33,6 @@ void kernel_main() {
         }
         cb16.push_back(block_num_tiles);
 
-        release_dst();
+        tile_regs_release();
     }
 }

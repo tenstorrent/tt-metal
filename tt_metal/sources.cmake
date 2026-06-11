@@ -1,4 +1,5 @@
 set(TT_METAL_PUBLIC_API
+    api/internal/service/inter_process_counter_channel.hpp
     api/tt-metalium/allocator.hpp
     api/tt-metalium/base_types.hpp
     api/tt-metalium/bfloat16.hpp
@@ -69,7 +70,10 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/metal2_host_api/program_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp
-    api/tt-metalium/experimental/mock_device.hpp
+    api/tt-metalium/experimental/metal2_host_api/utility/group.hpp
+    api/tt-metalium/experimental/metal2_host_api/utility/table.hpp
+    api/tt-metalium/experimental/mock_device/mock_allocator.hpp
+    api/tt-metalium/experimental/mock_device/mock_device.hpp
     api/tt-metalium/experimental/noc_estimator/noc_estimator.hpp
     api/tt-metalium/experimental/noc_estimator/types.hpp
     api/tt-metalium/experimental/offline_kernel_compile.hpp
@@ -103,6 +107,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/udm/mesh_tensor_builder.hpp
     api/tt-metalium/experimental/udm/mesh_utils.hpp
     api/tt-metalium/experimental/udm/types.hpp
+    api/tt-metalium/face_geometry.hpp
     api/tt-metalium/global_circular_buffer.hpp
     api/tt-metalium/global_semaphore.hpp
     api/tt-metalium/graph_tracking.hpp

@@ -56,6 +56,7 @@
 #include <env_lib.hpp>
 
 #include "allocator/l1_banking_allocator.hpp"
+#include "impl/device/mock_allocator.hpp"
 #include "debug/inspector/inspector.hpp"
 #include "sub_device/sub_device_manager.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
@@ -769,6 +770,20 @@ MeshCommandQueue& MeshDeviceImpl::mesh_command_queue(std::optional<uint8_t> cq_i
     return *command_queue;
 }
 
+MeshCommandQueueBase& MeshDeviceImpl::mesh_command_queue_base(std::optional<uint8_t> cq_id) const {
+    auto id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
+
+    // If the mesh device has no local devices, return the dummy mesh command queue.
+    if (this->get_view().get_devices().empty()) {
+        return *mesh_command_queues_[0];
+    }
+
+    TT_FATAL(id < mesh_command_queues_.size(), "cq_id {} is out of range", id);
+    const auto& command_queue = mesh_command_queues_[id];
+    TT_FATAL(id == command_queue->id(), "MeshCommandQueue id mismatch, expected {}, got {}", id, command_queue->id());
+    return *command_queue;
+}
+
 DeviceIds MeshDeviceImpl::get_device_ids() const {
     DeviceIds device_ids;
     for (auto* device : this->get_devices()) {
@@ -1384,9 +1399,13 @@ bool MeshDeviceImpl::initialize_impl(
     cq_shared_state->sub_device_cq_owner.resize(1);
 
     const auto& allocator = reference_device()->allocator_impl();
+    const auto& alloc_config = allocator->get_config();
+    auto is_mock = MetalContext::instance(context_id_).get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
+    auto mesh_allocator =
+        is_mock ? experimental::make_mock_allocator(alloc_config) : std::make_unique<L1BankingAllocator>(alloc_config);
     // SubDeviceManagerTracker needs a MeshDevice pointer.
-    sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(
-        pimpl_wrapper, std::make_unique<L1BankingAllocator>(allocator->get_config()), sub_devices);
+    sub_device_manager_tracker_ =
+        std::make_unique<SubDeviceManagerTracker>(pimpl_wrapper, std::move(mesh_allocator), sub_devices);
     // Issue #19729: Store the maximum number of active ethernet cores across opened physical devices in the Mesh
     // as the number of virtual ethernet cores seen by the MeshDevice
     num_virtual_eth_cores_ =
@@ -1448,11 +1467,11 @@ D2HSocket* MeshDeviceImpl::get_realtime_profiler_socket() const {
 
 DramCorePrefetcherManager& MeshDeviceImpl::dram_core_prefetcher(MeshDevice* mesh_device) {
     if (!dram_core_prefetcher_) {
-        dram_core_prefetcher_ = std::make_unique<DramCorePrefetcherManager>(mesh_device);
+        dram_core_prefetcher_ =
+            std::make_unique<DramCorePrefetcherManager>(mesh_device, std::bind(&MeshDeviceImpl::lock_api, this));
     }
     return *dram_core_prefetcher_;
 }
-
 
 CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(uint32_t bank_id) const {
     const auto& soc_desc = MetalContext::instance(context_id_).get_cluster().get_soc_desc(reference_device()->id());

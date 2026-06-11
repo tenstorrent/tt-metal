@@ -87,10 +87,33 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     CoreCoord ccl_core_grid_offset,
     bool is_causal = false,
     bool is_balanced = false,
+    bool is_cross = false,
     std::optional<float> scale = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
-    std::optional<uint32_t> cache_batch_idx = std::nullopt,
+    std::optional<uint32_t> kv_cache_batch_idx = std::nullopt,
+    std::optional<uint32_t> kv_actual_isl = std::nullopt);
+
+std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_kv,
+    ttnn::Tensor& persistent_output_buffer_kv,
+    uint32_t head_dim_v,
+    std::size_t logical_n,
+    operations::transformer::SDPAProgramConfig program_config,
+    int32_t dim,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    uint32_t num_links,
+    uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    ttnn::ccl::Topology topology,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    CoreCoord ccl_core_grid_offset,
+    bool is_balanced = false,
+    std::optional<float> scale = std::nullopt,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
+    std::optional<uint32_t> kv_cache_batch_idx = std::nullopt,
     std::optional<uint32_t> kv_actual_isl = std::nullopt);
 
 struct ExecuteExpRingJointAttention {

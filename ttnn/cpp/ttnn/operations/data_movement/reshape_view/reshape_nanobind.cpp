@@ -43,7 +43,7 @@ void bind_reshape_view_operation(nb::module_& mod) {
                 * shape: Shape of tensor.
 
             Keyword Args:
-                * :attr:`memory_config`: Memory Config of the output tensor. Default is to match input tensor memory config
+                * :attr:`memory_config`: Memory Config of the output tensor. Default is to match input tensor memory config. If ``memory_config`` specifies a sharded layout without ``shard_spec``, the input tensor's ``shard_spec`` is used as the seed grid (layout should match the input).
                 * :attr:`pad_value` (number): Value to pad the output tensor. Default is 0
                 * :attr:`reshape_tile_mode` (TileReshapeMapMode): Advanced option. Set to RECREATE to recompute and reallocate the mapping tensor. This may alleviate DRAM fragmentation but is slow. Default is CACHE. This keyword is named :attr:`reshape_tile_mode` on all overloads; the small-vector (tuple/list) shape overload previously used the name ``recreate_mapping_tensor`` for the same option—update callers to ``reshape_tile_mode``.
                 * :attr:`sub_core_grids` (CoreRangeSet, optional): Specifies sub-core grid ranges for advanced core selection control. Default uses all the cores in the device.
