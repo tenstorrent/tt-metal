@@ -25,8 +25,13 @@ from loguru import logger
 
 import ttnn
 
-GLX_HEADS, GLX_DIM = 64, 128
+GLX_HEADS, GLX_DIM = 64, 128  # full indexer head count
 GLX_SQ = 640  # queries per device (5120 chunk / SP=8)
+# Production tests below run two per-device head counts: 64 (whole indexer on one device) and
+# 16 (the 64 heads split across TP=4 -> 16 heads/device, partial scores all-reduce-summed across
+# TP). The op needs no change for the shard: it sums only the heads it is given and the causal
+# -inf mask is head-independent, so -inf survives the cross-TP sum.
+GLX_HEAD_CASES = [16, 64]
 GLX_T = 56320  # all-gathered keys: 50K history + 5K chunk = 55K, tile-aligned
 GLX_HISTORY = GLX_T - 8 * GLX_SQ  # 51200 keys visible to every query
 
@@ -121,49 +126,53 @@ def production_config():
     return ttnn.IndexerScoreProgramConfig(
         q_chunk_size=32,
         k_chunk_size=512,
-        head_group_size=0,  # all 64 heads resident
+        head_group_size=0,  # all 16 heads (this device's TP shard) resident
     )
 
 
+@pytest.mark.parametrize("heads", GLX_HEAD_CASES, ids=["heads16", "heads64"])
 @pytest.mark.parametrize("sp_rank", [0, 7], ids=["rank0", "rank7"])
-def test_indexer_score_production(device, sp_rank):
-    """GLX chunked prefill with the production knobs."""
+def test_indexer_score_production(device, sp_rank, heads):
+    """GLX chunked prefill with the production knobs (64-head whole indexer, 16-head TP=4 shard)."""
     chunk_start = GLX_HISTORY + sp_rank * GLX_SQ
-    q, k, w = make_inputs(GLX_HEADS, GLX_DIM, GLX_SQ, GLX_T)
+    q, k, w = make_inputs(heads, GLX_DIM, GLX_SQ, GLX_T)
     out = run_indexer(q, k, w, chunk_start, device, program_config=production_config())
     ref = indexer_score_ref(q, k, w, chunk_start)
     assert_indexer_match(out, ref, GLX_SQ, GLX_T)
 
 
+@pytest.mark.parametrize("heads", GLX_HEAD_CASES, ids=["heads16", "heads64"])
 @pytest.mark.parametrize("sp_rank", [0, 7], ids=["rank0", "rank7"])
-def test_indexer_score_bfp8_k(device, sp_rank):
+def test_indexer_score_bfp8_k(device, sp_rank, heads):
     """k as bfp8_b (matmul srcA): halves k BW and selects LoFi in the factory.
 
     PCC stays >= 0.999 (the bfp8 quantization of well-conditioned k is well below the
     bf16 sum's noise); negative gates keep -inf padding distinguishable from low scores.
     """
     chunk_start = GLX_HISTORY + sp_rank * GLX_SQ
-    q, k, w = make_inputs(GLX_HEADS, GLX_DIM, GLX_SQ, GLX_T)
+    q, k, w = make_inputs(heads, GLX_DIM, GLX_SQ, GLX_T)
     out = run_indexer(q, k, w, chunk_start, device, program_config=production_config(), k_dtype=ttnn.bfloat8_b)
     ref = indexer_score_ref(q, k, w, chunk_start)
     assert_indexer_match(out, ref, GLX_SQ, GLX_T, check_neg=True)
 
 
+@pytest.mark.parametrize("heads", GLX_HEAD_CASES, ids=["heads16", "heads64"])
 @pytest.mark.parametrize("k_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["k_bf16", "k_bfp8"])
 @pytest.mark.parametrize("sp_rank", [0, 7], ids=["rank0", "rank7"])
-def test_indexer_score_production_perf(device, sp_rank, k_dtype):
+def test_indexer_score_production_perf(device, sp_rank, k_dtype, heads):
     """Absolute wall-clock latency per op for the production GLX shape (boundary SP ranks).
 
-    Inputs are placed on device once (host transfer excluded) and the op is run program-
-    cache-warm with a device sync around a fixed iteration count. This is host-dispatched
-    single-op latency: it includes enqueue overhead, not pure device-kernel time (use the
-    tracy device profiler for that). The logged ms is the signal; the assert is only a
-    coarse hang / gross-regression guard (absolute wall-clock thresholds are board-dependent).
+    Runs both the 64-head whole indexer and the 16-head TP=4 shard. Inputs are placed on
+    device once (host transfer excluded) and the op is run program-cache-warm with a device
+    sync around a fixed iteration count. This is host-dispatched single-op latency: it
+    includes enqueue overhead, not pure device-kernel time (use the tracy device profiler
+    for that). The logged ms is the signal; the assert is only a coarse hang / gross-
+    regression guard (absolute wall-clock thresholds are board-dependent).
     """
     warmup_iters, measured_iters = 3, 20
     chunk_start = GLX_HISTORY + sp_rank * GLX_SQ
     cfg = production_config()
-    q, k, w = make_inputs(GLX_HEADS, GLX_DIM, GLX_SQ, GLX_T)
+    q, k, w = make_inputs(heads, GLX_DIM, GLX_SQ, GLX_T)
     q_dev = to_device(q, device)
     k_dev = to_device(k, device, dtype=k_dtype)  # bfp8_b k selects LoFi in the factory
     w_dev = to_device(w, device)
@@ -185,9 +194,12 @@ def test_indexer_score_production_perf(device, sp_rank, k_dtype):
 
     k_tag = "bf16" if k_dtype == ttnn.bfloat16 else "bfp8"
     logger.info(
-        f"indexer_score production rank{sp_rank} k={k_tag}: {ms_per_op:.3f} ms/op (mean of {measured_iters} iters)"
+        f"indexer_score production rank{sp_rank} heads={heads} k={k_tag}: "
+        f"{ms_per_op:.3f} ms/op (mean of {measured_iters} iters)"
     )
-    assert ms_per_op < 50.0, f"rank{sp_rank} k={k_tag}: {ms_per_op:.3f} ms/op exceeds 50 ms guard (regression or hang)"
+    assert (
+        ms_per_op < 50.0
+    ), f"rank{sp_rank} heads={heads} k={k_tag}: {ms_per_op:.3f} ms/op exceeds 50 ms guard (regression or hang)"
 
 
 @pytest.mark.parametrize(
@@ -316,17 +328,30 @@ def sp7_valid_tiles():
     return sum(min(tt_tiles, chunk_t + s + 1) for s in range(sqt))
 
 
-def indexer_mm_flops(valid_tiles):
+def indexer_mm_flops(valid_tiles, heads):
     """Matmul FLOPs the kernel performs: each valid 32x32 output tile is, per head, a 32x32xD
     matmul = (32*32) elements x (2*D) FLOPs; summed over heads and valid tiles."""
-    return valid_tiles * GLX_HEADS * (32 * 32) * (2 * GLX_DIM)
+    return valid_tiles * heads * (32 * 32) * (2 * GLX_DIM)
+
+
+# (heads, k_id, fidelity) cases for the sp7 profiler tests. fidelity must match the factory
+# choice for the k dtype (HiFi2 today). The id is shared by perf_impl (the profiled inner test)
+# and math_util (which spawns perf_impl by id), so they must stay in lockstep.
+_SP7_PERF_CASES = [
+    (16, "k_bf16", "HiFi2"),
+    (16, "k_bfp8", "HiFi2"),
+    (64, "k_bf16", "HiFi2"),
+    (64, "k_bfp8", "HiFi2"),
+]
+_SP7_PERF_IDS = [f"heads{h}_{k}" for h, k, _ in _SP7_PERF_CASES]
 
 
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="perf test - run locally with tracy")
-@pytest.mark.parametrize("k_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["k_bf16", "k_bfp8"])
-def test_indexer_score_sp7_perf_impl(device, k_dtype):
+@pytest.mark.parametrize("heads, k_id", [(h, k) for h, k, _ in _SP7_PERF_CASES], ids=_SP7_PERF_IDS)
+def test_indexer_score_sp7_perf_impl(device, heads, k_id):
     """Inner test profiled by tracy: a few indexer_score ops at GLX sp_rank 7. No accuracy check."""
-    q, k, w = make_inputs(GLX_HEADS, GLX_DIM, GLX_SQ, GLX_T)
+    k_dtype = ttnn.bfloat16 if k_id == "k_bf16" else ttnn.bfloat8_b
+    q, k, w = make_inputs(heads, GLX_DIM, GLX_SQ, GLX_T)
     q_dev = to_device(q, device)
     k_dev = to_device(k, device, dtype=k_dtype)
     w_dev = to_device(w, device)
@@ -339,22 +364,22 @@ def test_indexer_score_sp7_perf_impl(device, k_dtype):
 
 
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="perf test - run locally with tracy")
-@pytest.mark.parametrize(
-    "k_id, fidelity",
-    [("k_bf16", "HiFi2"), ("k_bfp8", "HiFi2")],  # must match the factory fidelity per k dtype
-)
-def test_indexer_score_sp7_math_util(k_id, fidelity):
+@pytest.mark.parametrize("heads, k_id, fidelity", _SP7_PERF_CASES, ids=_SP7_PERF_IDS)
+def test_indexer_score_sp7_math_util(heads, k_id, fidelity):
     """sp_rank 7 matmul math utilization from a tracy device-kernel-duration measurement.
 
     Spawns the inner perf_impl test under the device profiler, reads the minimum
     DEVICE KERNEL DURATION, and reports math_util = mm_flops / (cores * cycles * peak).
-    No accuracy check.
+    Runs the 64-head whole indexer and the 16-head TP=4 shard. No accuracy check.
     """
     from tracy.process_model_log import run_device_profiler
     from tests.nightly.sdpa_perf_utils import post_process_ops_log
 
     subdir = "ttnn_indexer_score_sp7"
-    command = "pytest tests/nightly/blackhole/sdpa/test_indexer_score.py::" f"test_indexer_score_sp7_perf_impl[{k_id}]"
+    perf_id = f"heads{heads}_{k_id}"
+    command = (
+        "pytest tests/nightly/blackhole/sdpa/test_indexer_score.py::" f"test_indexer_score_sp7_perf_impl[{perf_id}]"
+    )
     with mock.patch.dict(os.environ, {"CI": "false"}):
         run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
     r = post_process_ops_log(
@@ -370,14 +395,14 @@ def test_indexer_score_sp7_math_util(k_id, fidelity):
     duration_ns = float(r["DEVICE KERNEL DURATION [ns]"].min())
 
     valid_tiles = sp7_valid_tiles()
-    mm_flops = indexer_mm_flops(valid_tiles)
+    mm_flops = indexer_mm_flops(valid_tiles, heads)
     peak = _MM_FLOPS_PER_CYCLE_PER_CORE[fidelity]
     cycles = duration_ns * _BH_CLOCK_GHZ
     theoretical_flops = core_count * cycles * peak
     math_util = (mm_flops / theoretical_flops) * 100 if theoretical_flops > 0 else 0.0
 
     logger.info(
-        f"indexer_score sp7 {k_id} ({fidelity}): device={duration_ns / 1e6:.3f} ms, "
+        f"indexer_score sp7 heads={heads} {k_id} ({fidelity}): device={duration_ns / 1e6:.3f} ms, "
         f"cores={core_count}, V={valid_tiles} tiles, mm={mm_flops / 1e9:.1f} GFLOP, "
         f"peak={peak} FLOP/cyc/core @ {_BH_CLOCK_GHZ} GHz -> math_util={math_util:.1f}%"
     )
