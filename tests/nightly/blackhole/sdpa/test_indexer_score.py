@@ -338,6 +338,7 @@ def indexer_mm_flops(valid_tiles, heads):
 # choice for the k dtype (HiFi2 today). The id is shared by perf_impl (the profiled inner test)
 # and math_util (which spawns perf_impl by id), so they must stay in lockstep.
 _SP7_PERF_CASES = [
+    (8, "k_bfp8", "HiFi2"),
     (16, "k_bf16", "HiFi2"),
     (16, "k_bfp8", "HiFi2"),
     (64, "k_bf16", "HiFi2"),

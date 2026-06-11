@@ -50,7 +50,9 @@ constexpr uint32_t qk_batch_heads = get_compile_time_arg_val(num_common_ct_args 
 template <uint32_t q_cb, uint32_t k_cb, uint32_t qk_cb>
 inline void set_matmul_mode() {
     reconfig_data_format(k_cb, q_cb);
-    pack_reconfig_data_format(qk_cb);
+    // guarded: qk and the prior pack target (cb_out) share acc_fmt in the bf16 path, so this is a
+    // no-op there; only the fp32_dest_acc fallback (qk=fp32, out=bf16) actually reconfigs.
+    pack_reconfig_data_format(cb_out, qk_cb);
     pack_reconfig_l1_acc(0);  // cb_qk packs overwrite (mul phase turns L1-acc on for cb_acc)
     mm_block_init_short(
         q_cb, k_cb, 1 /*transpose k*/, 1 /*ct_dim*/, heads_per_dest_pass /*rt_dim*/, head_dim_tiles /*kt_dim*/);
@@ -91,7 +93,8 @@ template <uint32_t qk_cb, uint32_t w_cb, uint32_t acc_cb>
 inline void set_mul_mode() {
     pack_relu_config(ReluConfig::none());  // accumulator packs stay linear (negative gates)
     reconfig_data_format(qk_cb, w_cb);
-    pack_reconfig_data_format(acc_cb);
+    // guarded: qk and acc share acc_fmt, so this never actually reconfigs (no-op stall removed).
+    pack_reconfig_data_format(qk_cb, acc_cb);
     mul_bcast_cols_init_short(qk_cb, w_cb);
 }
 
@@ -119,13 +122,47 @@ void mul_accum_pass(uint32_t w_base, bool first) {
     cb_pop_front(qk_cb, heads_per_dest_pass);
 }
 
-/**
- * acc front += mask_cb[idx] (0 = diag strict-upper -inf, 1 = full -inf)
- */
+/** Head reduction for one output tile (r, c): acc front = sum_h relu(q[h,r].k[c]^T) * w[h,r],
+ *  summed by the packer L1-accumulation (mul_accum_pass). Caller reserves cb_acc and pushes it.
+ *  Mirrors the original inner loop; factored out so the masked-suffix and unmasked-prefix paths
+ *  share it. */
+inline void accumulate_heads(uint32_t r, uint32_t c) {
+    bool first = true;
+    for (uint32_t group_start = 0; group_start < num_heads; group_start += heads_per_group) {
+        if constexpr (stream_heads) {
+            cb_wait_front(cb_q, q_group_tiles);
+        }
+        // process the group in qk_batch_heads-sized chunks (cb_qk capacity): each chunk runs all
+        // its matmuls, then all its mul+accumulates, so the matmul<->eltwise reinit happens once
+        // per chunk, not per head pass
+        for (uint32_t chunk = 0; chunk < heads_per_group; chunk += qk_batch_heads) {
+            const uint32_t chunk_end = chunk + qk_batch_heads;
+            set_matmul_mode<cb_q, cb_k, cb_qk>();
+            for (uint32_t head = chunk; head < chunk_end; head += heads_per_dest_pass) {
+                matmul_relu_pass<cb_q, cb_k, cb_qk>(head, r, c);
+            }
+            set_mul_mode<cb_qk, cb_w, cb_acc>();
+            for (uint32_t head = chunk; head < chunk_end; head += heads_per_dest_pass) {
+                // w is laid out [q_tiles_per_unit][num_heads] (see reader read_w_group)
+                const uint32_t w_base = r * num_heads + group_start + head;
+                mul_accum_pass<cb_qk, cb_w, cb_acc>(w_base, first);
+                first = false;
+            }
+        }
+        if constexpr (stream_heads) {
+            cb_pop_front(cb_q, q_group_tiles);
+        }
+    }
+    pack_reconfig_l1_acc(0);  // done accumulating; downstream packs (mask, untilize) overwrite
+}
+
+/** acc front += mask_cb[idx] (0 = diag strict-upper -inf, 1 = full -inf), via a real eltwise
+ *  add (preserves -inf; the packer L1-acc path does not). Pops + repushes the acc front, so it
+ *  must run when the masked tile is the only one in cb_acc -- which is why masked tiles (always a
+ *  contiguous suffix of a unit's c-range) are produced one at a time after the unmasked prefix
+ *  has been drained by its batch untilize. */
 template <uint32_t acc_cb, uint32_t mask_cb>
 void add_mask(uint32_t idx) {
-    // Precondition: acc has 1 produced, mask_cb has 2 produced (resident)
-    // Postcondition: acc has 1 produced
     reconfig_data_format(acc_cb, mask_cb);
     pack_reconfig_data_format(acc_cb);
     add_tiles_init(acc_cb, mask_cb);
@@ -139,6 +176,16 @@ void add_mask(uint32_t idx) {
     pack_tile(0, acc_cb);
     tile_regs_release();
     cb_push_back(acc_cb, 1);
+}
+
+/** Untilize a unit's n finished acc tiles into row-major out as one num_blocks=n call: the helper
+ *  does the pack_untilize init/uninit bracket ONCE and loops n single-tile blocks internally (no
+ *  per-tile reconfig), instead of paying the bracket per tile. n is runtime (edge units are
+ *  narrower than KC); blocks pop acc / push out one tile at a time in order, so the writer's (r,c)
+ *  streaming is unchanged. */
+template <uint32_t acc_cb, uint32_t out_cb>
+inline void untilize_acc_strip(uint32_t n) {
+    compute_kernel_lib::untilize<1, acc_cb, out_cb>(n);
 }
 
 void kernel_main() {
@@ -167,47 +214,35 @@ void kernel_main() {
         const uint32_t k_tiles_in_unit = span.k_tiles();
         cb_wait_front(cb_k, k_chunk_tiles);  // full chunk pushed even on edge units (ring alignment)
 
-        // each tile completes all head groups before the next, so cb_acc holds one
-        // in-flight tile; the 64-head sum accumulates into it via the packer (no L1 round-trip)
+        // k_tile rises with c, so the causal split is a prefix/suffix: tiles c in [0, m) are
+        // fully valid (k_tile < diag_tile), tiles [m, k) are masked (diagonal then future). The
+        // valid prefix needs no mask, so produce it then batch-untilize the strip with one
+        // pack_untilize init/uninit (the head-count-independent fixed cost we are cutting). The
+        // masked suffix is rare (<=1 tile/row at high sp_rank) and uses the immediate add_mask
+        // path -- add_mask reorders cb_acc, so it must see one tile at a time.
         for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
             const uint32_t diag_tile = chunk_start_tiles + span.q_tile_start() + r;
-            for (uint32_t c = 0; c < k_tiles_in_unit; ++c) {
+            const uint32_t k_tile0 = span.k_tile_start();
+            uint32_t valid = diag_tile > k_tile0 ? diag_tile - k_tile0 : 0;  // # unmasked prefix tiles
+            if (valid > k_tiles_in_unit) {
+                valid = k_tiles_in_unit;
+            }
+
+            for (uint32_t c = 0; c < valid; ++c) {
                 cb_reserve_back(cb_acc, 1);
-                bool first = true;
-                for (uint32_t group_start = 0; group_start < num_heads; group_start += heads_per_group) {
-                    if constexpr (stream_heads) {
-                        cb_wait_front(cb_q, q_group_tiles);
-                    }
-                    // process the group in qk_batch_heads-sized chunks (cb_qk capacity): each
-                    // chunk runs all its matmuls, then all its mul+accumulates, so the
-                    // matmul<->eltwise reinit happens once per chunk, not per head pass
-                    for (uint32_t chunk = 0; chunk < heads_per_group; chunk += qk_batch_heads) {
-                        const uint32_t chunk_end = chunk + qk_batch_heads;
-                        set_matmul_mode<cb_q, cb_k, cb_qk>();
-                        for (uint32_t head = chunk; head < chunk_end; head += heads_per_dest_pass) {
-                            matmul_relu_pass<cb_q, cb_k, cb_qk>(head, r, c);
-                        }
-                        set_mul_mode<cb_qk, cb_w, cb_acc>();
-                        for (uint32_t head = chunk; head < chunk_end; head += heads_per_dest_pass) {
-                            // w is laid out [q_tiles_per_unit][num_heads] (see reader read_w_group)
-                            const uint32_t w_base = r * num_heads + group_start + head;
-                            mul_accum_pass<cb_qk, cb_w, cb_acc>(w_base, first);
-                            first = false;
-                        }
-                    }
-                    if constexpr (stream_heads) {
-                        cb_pop_front(cb_q, q_group_tiles);
-                    }
-                }
-                pack_reconfig_l1_acc(0);  // done accumulating; downstream packs (mask, untilize) overwrite
+                accumulate_heads(r, c);
                 cb_push_back(cb_acc, 1);
-                const uint32_t k_tile = span.k_tile_start() + c;
-                if (k_tile == diag_tile) {
-                    add_mask<cb_acc, cb_mask>(0);
-                } else if (k_tile > diag_tile) {
-                    add_mask<cb_acc, cb_mask>(1);
-                }
-                // acc (1 tile) -> bf16 row-major out; go-to untilize helper
+            }
+            if (valid > 0) {
+                untilize_acc_strip<cb_acc, cb_out>(valid);
+            }
+
+            for (uint32_t c = valid; c < k_tiles_in_unit; ++c) {
+                const uint32_t k_tile = k_tile0 + c;
+                cb_reserve_back(cb_acc, 1);
+                accumulate_heads(r, c);
+                cb_push_back(cb_acc, 1);
+                add_mask<cb_acc, cb_mask>(k_tile == diag_tile ? 0 : 1);
                 compute_kernel_lib::untilize<1, cb_acc, cb_out>(1);
             }
         }
