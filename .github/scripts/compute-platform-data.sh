@@ -75,11 +75,10 @@ DEV_NAME="${DISTRO}-${VERSION}-dev-${ARCH}"
 BASIC_DEV_NAME="${DISTRO}-${VERSION}-basic-dev-${ARCH}"
 BASIC_TTNN_NAME="${DISTRO}-${VERSION}-basic-ttnn-runtime-${ARCH}"
 
-# Extra files for hash computation
-EXTRA_FILES="dockerfile/docker-bake.hcl dockerfile/Dockerfile.tools"
-BASIC_DEV_EXTRA_FILES="$EXTRA_FILES"
-MANYLINUX_EXTRA_FILES="$EXTRA_FILES"
-VENV_EXTRA_FILES="dockerfile/docker-bake.hcl"
+# Extra files for hash computation.
+# Tool consumers include Dockerfile.tools so tool-layer build behavior remains
+# part of their tag material. Bake target metadata is generated per image below.
+TOOL_EXTRA_FILE="dockerfile/Dockerfile.tools"
 
 combine_hashes() {
     printf '%s\n' "$@" | sha1sum | cut -d' ' -f1
@@ -87,6 +86,39 @@ combine_hashes() {
 
 manifest_exists() {
     docker manifest inspect "$1" > /dev/null 2>&1
+}
+
+bake_print() {
+    local target="$1"
+    local -a bake_cmd
+
+    if docker buildx version > /dev/null 2>&1; then
+        bake_cmd=(docker buildx)
+    elif command -v docker-buildx > /dev/null 2>&1; then
+        bake_cmd=(docker-buildx)
+    else
+        echo "ERROR: Docker Buildx is required to compute Bake target hash inputs." >&2
+        exit 1
+    fi
+
+    UBUNTU_VERSION="$VERSION" PYTHON_VERSION="$PYTHON_VERSION" \
+        "${bake_cmd[@]}" bake -f dockerfile/docker-bake.hcl --progress=quiet --print "$target"
+}
+
+write_bake_target_hash_input() {
+    local target="$1"
+    local output="$2"
+
+    bake_print "$target" | jq -S -c --arg target "$target" '
+        .target[$target] // error("Bake target not found: " + $target)
+        | del(.tags, .output, ."cache-from", ."cache-to")
+        | {bake_target: $target, build: .}
+    ' > "$output"
+
+    if [ ! -s "$output" ]; then
+        echo "ERROR: Failed to compute Bake hash input for target: $target" >&2
+        exit 1
+    fi
 }
 
 TMP_DIR=$(mktemp -d)
@@ -140,6 +172,15 @@ CI_TEST_LIGHT_STAGE="$TMP_DIR/stage.ci-test-light"
 CI_TEST_STAGE="$TMP_DIR/stage.ci-test"
 DEV_LIGHT_STAGE="$TMP_DIR/stage.dev-light"
 DEV_STAGE="$TMP_DIR/stage.dev"
+CI_BUILD_LIGHT_BAKE_INPUT="$TMP_DIR/bake.ci-build-light.json"
+CI_BUILD_BAKE_INPUT="$TMP_DIR/bake.ci-build.json"
+CI_TEST_LIGHT_BAKE_INPUT="$TMP_DIR/bake.ci-test-light.json"
+CI_TEST_BAKE_INPUT="$TMP_DIR/bake.ci-test.json"
+DEV_LIGHT_BAKE_INPUT="$TMP_DIR/bake.dev-light.json"
+DEV_BAKE_INPUT="$TMP_DIR/bake.dev.json"
+BASIC_DEV_BAKE_INPUT="$TMP_DIR/bake.basic-dev.json"
+BASIC_TTNN_BAKE_INPUT="$TMP_DIR/bake.basic-ttnn-runtime.json"
+MANYLINUX_BAKE_INPUT="$TMP_DIR/bake.manylinux.json"
 
 # Hash only the Dockerfile stages needed to build each target. This keeps
 # unrelated non-light venv stages from changing light image tags.
@@ -156,21 +197,34 @@ combine_dockerfile_parts "$DEV_LIGHT_DOCKERFILE" "$CI_TEST_LIGHT_DOCKERFILE" "$D
 combine_dockerfile_parts "$DEV_DOCKERFILE" "$DEV_LIGHT_DOCKERFILE" "$DEV_STAGE"
 
 # Compute hashes
-CI_BUILD_LIGHT_DOCKERFILE_HASH=$(.github/scripts/dockerfile-hash.sh "$CI_BUILD_LIGHT_DOCKERFILE" $EXTRA_FILES)
-CI_BUILD_DOCKERFILE_HASH=$(.github/scripts/dockerfile-hash.sh "$CI_BUILD_DOCKERFILE" $EXTRA_FILES)
-CI_TEST_LIGHT_DOCKERFILE_HASH=$(.github/scripts/dockerfile-hash.sh "$CI_TEST_LIGHT_DOCKERFILE" $EXTRA_FILES)
-CI_TEST_DOCKERFILE_HASH=$(.github/scripts/dockerfile-hash.sh "$CI_TEST_DOCKERFILE" $EXTRA_FILES)
-DEV_LIGHT_DOCKERFILE_HASH=$(.github/scripts/dockerfile-hash.sh "$DEV_LIGHT_DOCKERFILE" $EXTRA_FILES)
-DEV_DOCKERFILE_HASH=$(.github/scripts/dockerfile-hash.sh "$DEV_DOCKERFILE" $EXTRA_FILES)
-BASIC_DEV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev $BASIC_DEV_EXTRA_FILES)
-BASIC_TTNN_HASH="$BASIC_DEV_HASH"
-MANYLINUX_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.manylinux $MANYLINUX_EXTRA_FILES)
+write_bake_target_hash_input "ci-build-light" "$CI_BUILD_LIGHT_BAKE_INPUT"
+write_bake_target_hash_input "ci-build" "$CI_BUILD_BAKE_INPUT"
+write_bake_target_hash_input "ci-test-light" "$CI_TEST_LIGHT_BAKE_INPUT"
+write_bake_target_hash_input "ci-test" "$CI_TEST_BAKE_INPUT"
+write_bake_target_hash_input "dev-light" "$DEV_LIGHT_BAKE_INPUT"
+write_bake_target_hash_input "dev" "$DEV_BAKE_INPUT"
+write_bake_target_hash_input "basic-dev" "$BASIC_DEV_BAKE_INPUT"
+write_bake_target_hash_input "basic-ttnn-runtime" "$BASIC_TTNN_BAKE_INPUT"
+write_bake_target_hash_input "manylinux" "$MANYLINUX_BAKE_INPUT"
+
+CI_BUILD_LIGHT_DOCKERFILE_HASH=$(.github/scripts/dockerfile-hash.sh "$CI_BUILD_LIGHT_DOCKERFILE" "$CI_BUILD_LIGHT_BAKE_INPUT" "$TOOL_EXTRA_FILE")
+CI_BUILD_DOCKERFILE_HASH=$(.github/scripts/dockerfile-hash.sh "$CI_BUILD_DOCKERFILE" "$CI_BUILD_BAKE_INPUT" "$TOOL_EXTRA_FILE")
+CI_TEST_LIGHT_DOCKERFILE_HASH=$(.github/scripts/dockerfile-hash.sh "$CI_TEST_LIGHT_DOCKERFILE" "$CI_TEST_LIGHT_BAKE_INPUT" "$TOOL_EXTRA_FILE")
+CI_TEST_DOCKERFILE_HASH=$(.github/scripts/dockerfile-hash.sh "$CI_TEST_DOCKERFILE" "$CI_TEST_BAKE_INPUT" "$TOOL_EXTRA_FILE")
+DEV_LIGHT_DOCKERFILE_HASH=$(.github/scripts/dockerfile-hash.sh "$DEV_LIGHT_DOCKERFILE" "$DEV_LIGHT_BAKE_INPUT" "$TOOL_EXTRA_FILE")
+DEV_DOCKERFILE_HASH=$(.github/scripts/dockerfile-hash.sh "$DEV_DOCKERFILE" "$DEV_BAKE_INPUT" "$TOOL_EXTRA_FILE")
+BASIC_DEV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev "$BASIC_DEV_BAKE_INPUT" "$TOOL_EXTRA_FILE")
+BASIC_TTNN_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev "$BASIC_TTNN_BAKE_INPUT" "$TOOL_EXTRA_FILE")
+MANYLINUX_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.manylinux "$MANYLINUX_BAKE_INPUT" "$TOOL_EXTRA_FILE")
 
 # Compute separate hashes for the two venv images so ci-build-venv is reusable
-# across ci-test-only dependency changes. Both hashes still include the shared
-# venv build inputs from docker-bake.hcl.
+# across ci-test-only dependency changes. Hash the resolved Bake target metadata
+# for each image instead of the whole docker-bake.hcl, so unrelated Bake targets
+# do not invalidate venv image tags.
 
 CI_BUILD_VENV_DOCKERFILE="$TMP_DIR/Dockerfile.python.ci-build"
+CI_BUILD_VENV_BAKE_INPUT="$TMP_DIR/bake.ci-build-venv.json"
+CI_TEST_VENV_BAKE_INPUT="$TMP_DIR/bake.ci-test-venv.json"
 # Split Dockerfile.python at the ci-test-venv stage boundary to hash only the
 # ci-build-venv portion. The awk pattern is keyed on the exact stage name line
 # "FROM ci-build-venv-builder AS ci-test-venv-builder" in Dockerfile.python.
@@ -187,8 +241,11 @@ if [ ! -s "$CI_BUILD_VENV_DOCKERFILE" ]; then
     exit 1
 fi
 
-CI_BUILD_VENV_HASH=$(.github/scripts/dockerfile-hash.sh "$CI_BUILD_VENV_DOCKERFILE" $VENV_EXTRA_FILES)
-CI_TEST_VENV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.python $VENV_EXTRA_FILES)
+write_bake_target_hash_input "ci-build-venv" "$CI_BUILD_VENV_BAKE_INPUT"
+write_bake_target_hash_input "ci-test-venv" "$CI_TEST_VENV_BAKE_INPUT"
+
+CI_BUILD_VENV_HASH=$(.github/scripts/dockerfile-hash.sh "$CI_BUILD_VENV_DOCKERFILE" "$CI_BUILD_VENV_BAKE_INPUT")
+CI_TEST_VENV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.python "$CI_TEST_VENV_BAKE_INPUT")
 
 # Compute canonical tool tag material without registry access. Final image hashes
 # include this explicitly so a dev-image manifest hit can stand in for the
@@ -206,7 +263,7 @@ CI_TEST_HASH=$(combine_hashes "$CI_TEST_DOCKERFILE_HASH" "$CI_TEST_LIGHT_HASH" "
 DEV_LIGHT_HASH=$(combine_hashes "$DEV_LIGHT_DOCKERFILE_HASH" "$CI_TEST_LIGHT_HASH" "$TOOL_TAGS_HASH")
 DEV_HASH=$(combine_hashes "$DEV_DOCKERFILE_HASH" "$CI_BUILD_LIGHT_HASH" "$CI_BUILD_HASH" "$CI_TEST_LIGHT_HASH" "$CI_TEST_HASH" "$DEV_LIGHT_HASH" "$CI_BUILD_VENV_HASH" "$CI_TEST_VENV_HASH")
 BASIC_DEV_HASH=$(combine_hashes "$BASIC_DEV_HASH" "$TOOL_TAGS_HASH")
-BASIC_TTNN_HASH="$BASIC_DEV_HASH"
+BASIC_TTNN_HASH=$(combine_hashes "$BASIC_TTNN_HASH" "$TOOL_TAGS_HASH")
 MANYLINUX_HASH=$(combine_hashes "$MANYLINUX_HASH" "$TOOL_TAGS_HASH")
 
 # Build tags
