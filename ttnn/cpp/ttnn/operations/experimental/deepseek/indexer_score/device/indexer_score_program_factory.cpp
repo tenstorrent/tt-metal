@@ -4,6 +4,8 @@
 
 #include "indexer_score_program_factory.hpp"
 
+#include <cstdlib>
+
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -148,15 +150,23 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
 
     const std::vector<uint32_t> common_ct = {Hi, Sqt, Tt, Dt, chunk_t, QC, KC, HB};
 
+    // Compute-ceiling measurement toggle: when INDEXER_DMA_OFF is set the reader/writer skip
+    // their NoC reads/writes (but still push/pop CBs) so the compute kernel runs unstarved and
+    // sp7_math_util reports the pure compute ceiling. Off (0) by default -> zero runtime cost.
+    // Appended LAST in each kernel's CT args so the TensorAccessor offsets above are unaffected.
+    const uint32_t dma_off = (std::getenv("INDEXER_DMA_OFF") != nullptr) ? 1u : 0u;
+
     std::vector<uint32_t> reader_ct = common_ct;
     TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*k.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*w.buffer()).append_to(reader_ct);
+    reader_ct.push_back(dma_off);
 
     std::vector<uint32_t> writer_ct = common_ct;
     constexpr uint32_t out_elem_bytes = 2;    // bf16 output (compute_output_specs)
     writer_ct.push_back(T * out_elem_bytes);  // row-major page = one full row of T scores
     TensorAccessorArgs(*out.buffer()).append_to(writer_ct);
+    writer_ct.push_back(dma_off);
 
     std::vector<uint32_t> compute_ct = common_ct;
     compute_ct.push_back(qk_subblock_h);

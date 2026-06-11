@@ -33,21 +33,23 @@ inline uint32_t fill_inf_scratch_and_get_addr() {
 }
 
 /** Scatter one untilized tile's rows into output rows of q-tile-row q_row, column tile k_tile. */
-template <typename OutAcc>
+template <bool dma_off, typename OutAcc>
 inline void write_tile(Noc noc, const OutAcc& out_acc, uint32_t q_row, uint32_t k_tile) {
     CircularBuffer cb(cb_out);
     cb.wait_front(1);
-    uint32_t src = cb.get_read_ptr();
-    for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
-        noc.async_write(
-            CoreLocalMem<uint32_t>(src),
-            out_acc,
-            frag_bytes,
-            {},
-            {.page_id = q_row * tt::constants::TILE_HEIGHT + r, .offset_bytes = k_tile * frag_bytes});
-        src += frag_bytes;
+    if constexpr (!dma_off) {  // compute-ceiling toggle: skip the NoC writes, still pop the tile
+        uint32_t src = cb.get_read_ptr();
+        for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
+            noc.async_write(
+                CoreLocalMem<uint32_t>(src),
+                out_acc,
+                frag_bytes,
+                {},
+                {.page_id = q_row * tt::constants::TILE_HEIGHT + r, .offset_bytes = k_tile * frag_bytes});
+            src += frag_bytes;
+        }
+        noc.async_write_barrier();
     }
-    noc.async_write_barrier();
     cb.pop_front(1);
 }
 
@@ -56,22 +58,24 @@ inline void write_tile(Noc noc, const OutAcc& out_acc, uint32_t q_row, uint32_t 
  *  32 rows, each strip_w*32 contiguous bf16 (row pitch strip_w*32 elements). So each of the 32
  *  rows is a single strip_w*64-byte run written contiguously to the output row at column offset
  *  k_tile_start*64 -- one async_write per row instead of strip_w per-tile 64 B fragments. */
-template <typename OutAcc>
+template <bool dma_off, typename OutAcc>
 inline void write_strip(Noc noc, const OutAcc& out_acc, uint32_t q_row, uint32_t k_tile_start, uint32_t strip_w) {
     CircularBuffer cb(cb_out_strip);
     cb.wait_front(strip_w);
-    uint32_t src = cb.get_read_ptr();
-    const uint32_t row_bytes = strip_w * frag_bytes;
-    for (uint32_t rr = 0; rr < tt::constants::TILE_HEIGHT; ++rr) {
-        noc.async_write(
-            CoreLocalMem<uint32_t>(src),
-            out_acc,
-            row_bytes,
-            {},
-            {.page_id = q_row * tt::constants::TILE_HEIGHT + rr, .offset_bytes = k_tile_start * frag_bytes});
-        src += row_bytes;
+    if constexpr (!dma_off) {  // compute-ceiling toggle: skip the NoC writes, still pop the strip
+        uint32_t src = cb.get_read_ptr();
+        const uint32_t row_bytes = strip_w * frag_bytes;
+        for (uint32_t rr = 0; rr < tt::constants::TILE_HEIGHT; ++rr) {
+            noc.async_write(
+                CoreLocalMem<uint32_t>(src),
+                out_acc,
+                row_bytes,
+                {},
+                {.page_id = q_row * tt::constants::TILE_HEIGHT + rr, .offset_bytes = k_tile_start * frag_bytes});
+            src += row_bytes;
+        }
+        noc.async_write_barrier();
     }
-    noc.async_write_barrier();
     cb.pop_front(strip_w);
 }
 
@@ -115,6 +119,8 @@ void kernel_main() {
     const uint32_t flat_count = get_arg_val<uint32_t>(2);
 
     constexpr auto out_args = TensorAccessorArgs<num_common_ct_args + 1>();
+    // compute-ceiling toggle, appended last in the CT args (after page_bytes + the out TensorAccessor)
+    constexpr bool dma_off = get_compile_time_arg_val(out_args.next_compile_time_args_offset()) != 0;
     const auto out_acc = TensorAccessor(out_args, out_addr, page_bytes);
 
     Noc noc;
@@ -133,15 +139,16 @@ void kernel_main() {
             // every other row arrives as per-tile (r, c) tiles in cb_out.
             if constexpr (use_fast_strip) {
                 if (row_valid_prefix(q_row_abs, k_tile0, k_tiles_in_unit) == k_tiles_per_unit) {
-                    write_strip(noc, out_acc, q_row_abs, k_tile0, k_tiles_per_unit);
+                    write_strip<dma_off>(noc, out_acc, q_row_abs, k_tile0, k_tiles_per_unit);
                     continue;
                 }
             }
             for (uint32_t c = 0; c < k_tiles_in_unit; ++c) {
-                write_tile(noc, out_acc, q_row_abs, k_tile0 + c);
+                write_tile<dma_off>(noc, out_acc, q_row_abs, k_tile0 + c);
             }
         }
-        if (span.last_in_group()) {
+        // skip the -inf tail fill under the ceiling toggle (pure output write, no CB sync)
+        if (!dma_off && span.last_in_group()) {
             fill_group_tails(noc, out_acc, scratch, span.q_tile_start(), span.valid_k_tiles());
         }
         span.advance();

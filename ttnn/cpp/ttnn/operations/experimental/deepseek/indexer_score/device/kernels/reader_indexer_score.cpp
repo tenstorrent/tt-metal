@@ -40,38 +40,42 @@ inline void build_mask_tiles(Noc noc) {
 /** Read the q head-group block starting at head first_head for the group at q-tile-row q_row_start:
  *  [q_tiles_per_unit][heads_per_group][head_dim_tiles] (heads contiguous per row so a DEST pass's
  *  head rows stride head_dim_tiles for matmul_block), tile id = h*q_len_tiles*head_dim_tiles + s*head_dim_tiles + d. */
-template <typename QAcc>
+template <bool dma_off, typename QAcc>
 inline void read_q_block(Noc noc, const QAcc& q_acc, uint32_t q_row_start, uint32_t first_head) {
     CircularBuffer cb(cb_q);
     cb.reserve_back(q_group_tiles);
-    uint32_t ptr = cb.get_write_ptr();
-    for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
-        for (uint32_t h = first_head; h < first_head + heads_per_group; ++h) {
-            const uint32_t base = h * q_len_tiles * head_dim_tiles + (q_row_start + r) * head_dim_tiles;
-            for (uint32_t d = 0; d < head_dim_tiles; ++d) {
-                noc.async_read(q_acc, CoreLocalMem<uint32_t>(ptr), tile_bytes, {.page_id = base + d}, {});
-                ptr += tile_bytes;
+    if constexpr (!dma_off) {  // compute-ceiling toggle: skip the NoC reads, still push the block
+        uint32_t ptr = cb.get_write_ptr();
+        for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
+            for (uint32_t h = first_head; h < first_head + heads_per_group; ++h) {
+                const uint32_t base = h * q_len_tiles * head_dim_tiles + (q_row_start + r) * head_dim_tiles;
+                for (uint32_t d = 0; d < head_dim_tiles; ++d) {
+                    noc.async_read(q_acc, CoreLocalMem<uint32_t>(ptr), tile_bytes, {.page_id = base + d}, {});
+                    ptr += tile_bytes;
+                }
             }
         }
+        noc.async_read_barrier();
     }
-    noc.async_read_barrier();
     cb.push_back(q_group_tiles);
 }
 
 /** Read the resident w group: [q_tiles_per_unit][num_heads], tile id = h*q_len_tiles + s. */
-template <typename WAcc>
+template <bool dma_off, typename WAcc>
 inline void read_w_group(Noc noc, const WAcc& w_acc, uint32_t q_row_start) {
     CircularBuffer cb(cb_w);
     cb.reserve_back(w_group_tiles);
-    uint32_t ptr = cb.get_write_ptr();
-    for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
-        for (uint32_t h = 0; h < num_heads; ++h) {
-            noc.async_read(
-                w_acc, CoreLocalMem<uint32_t>(ptr), tile_bytes, {.page_id = h * q_len_tiles + q_row_start + r}, {});
-            ptr += tile_bytes;
+    if constexpr (!dma_off) {  // compute-ceiling toggle: skip the NoC reads, still push the group
+        uint32_t ptr = cb.get_write_ptr();
+        for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
+            for (uint32_t h = 0; h < num_heads; ++h) {
+                noc.async_read(
+                    w_acc, CoreLocalMem<uint32_t>(ptr), tile_bytes, {.page_id = h * q_len_tiles + q_row_start + r}, {});
+                ptr += tile_bytes;
+            }
         }
+        noc.async_read_barrier();
     }
-    noc.async_read_barrier();
     cb.push_back(w_group_tiles);
 }
 
@@ -79,23 +83,25 @@ inline void read_w_group(Noc noc, const WAcc& w_acc, uint32_t q_row_start) {
  *  Always reserves/pushes the full k_tiles_per_unit*head_dim_tiles so the 2-chunk ring stays
  *  half-aligned (a partial push would wrap mid-block and overflow the CB); the unread tail
  *  is never consumed. */
-template <typename KAcc>
+template <bool dma_off, typename KAcc>
 inline void read_k_chunk(Noc noc, const KAcc& k_acc, uint32_t k_tile_start, uint32_t k_tiles_in_unit) {
     CircularBuffer cb(cb_k);
     cb.reserve_back(k_chunk_tiles);
-    uint32_t ptr = cb.get_write_ptr();
-    for (uint32_t c = 0; c < k_tiles_in_unit; ++c) {
-        for (uint32_t d = 0; d < head_dim_tiles; ++d) {
-            noc.async_read(
-                k_acc,
-                CoreLocalMem<uint32_t>(ptr),
-                k_tile_bytes,
-                {.page_id = (k_tile_start + c) * head_dim_tiles + d},
-                {});
-            ptr += k_tile_bytes;
+    if constexpr (!dma_off) {  // compute-ceiling toggle: skip the NoC reads, still push the chunk
+        uint32_t ptr = cb.get_write_ptr();
+        for (uint32_t c = 0; c < k_tiles_in_unit; ++c) {
+            for (uint32_t d = 0; d < head_dim_tiles; ++d) {
+                noc.async_read(
+                    k_acc,
+                    CoreLocalMem<uint32_t>(ptr),
+                    k_tile_bytes,
+                    {.page_id = (k_tile_start + c) * head_dim_tiles + d},
+                    {});
+                ptr += k_tile_bytes;
+            }
         }
+        noc.async_read_barrier();
     }
-    noc.async_read_barrier();
     cb.push_back(k_chunk_tiles);
 }
 
@@ -109,6 +115,8 @@ void kernel_main() {
     constexpr auto q_args = TensorAccessorArgs<num_common_ct_args>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto w_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
+    // compute-ceiling toggle, appended last in the CT args (after the three TensorAccessors)
+    constexpr bool dma_off = get_compile_time_arg_val(w_args.next_compile_time_args_offset()) != 0;
     const auto q_acc = TensorAccessor(q_args, q_addr, tile_bytes);
     const auto k_acc = TensorAccessor(k_args, k_addr, k_tile_bytes);
     const auto w_acc = TensorAccessor(w_args, w_addr, tile_bytes);
@@ -123,19 +131,19 @@ void kernel_main() {
     bool need_group = true;
     for (uint32_t i = 0; i < flat_count; ++i) {
         if (need_group) {
-            read_w_group(noc, w_acc, span.q_tile_start());
+            read_w_group<dma_off>(noc, w_acc, span.q_tile_start());
             if constexpr (!stream_heads) {
-                read_q_block(noc, q_acc, span.q_tile_start(), 0);
+                read_q_block<dma_off>(noc, q_acc, span.q_tile_start(), 0);
             }
             need_group = false;
         }
-        read_k_chunk(noc, k_acc, span.k_tile_start(), span.k_tiles());
+        read_k_chunk<dma_off>(noc, k_acc, span.k_tile_start(), span.k_tiles());
         if constexpr (stream_heads) {
             // one q-block per (r, c) output tile per head group; must match compute's
             // (r outer, c inner) tile order so each block lands in the tile that consumes it
             for (uint32_t tile_idx = 0; tile_idx < q_tiles_per_unit * span.k_tiles(); ++tile_idx) {
                 for (uint32_t first_head = 0; first_head < num_heads; first_head += heads_per_group) {
-                    read_q_block(noc, q_acc, span.q_tile_start(), first_head);
+                    read_q_block<dma_off>(noc, q_acc, span.q_tile_start(), first_head);
                 }
             }
         }
