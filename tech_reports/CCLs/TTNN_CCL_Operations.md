@@ -63,7 +63,27 @@ out = ttnn.to_torch(tt, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
 | `ttnn.point_to_point(t, sender_coord, receiver_coord, topology)` | one chip → one chip | Send/Recv |
 | `ttnn.all_to_all_dispatch` / `all_to_all_combine` | MoE token routing to expert chips and back | AlltoAll |
 
-Reduce / Gather / Scatter have no dedicated TTNN primitive — compose from the above.
+Reduce / Gather / Scatter have no dedicated TTNN primitive — compose (reduce = all_reduce + keep root copy; gather = all_gather likewise; scatter = mesh-sharded `from_torch`).
+
+### Per-op detail
+
+**AllGather** — `out = concat(in_0 … in_{N−1})` along `dim`, every chip:
+
+```
+chip0 [A]  chip1 [B]  chip2 [C]  chip3 [D]   →   every chip [A B C D]
+```
+
+Order = mesh-coordinate order along `cluster_axis` (not arrival). On `MeshShape(8,4)`: axis 1 → 8 independent rings of 4; axis 0 → 4 rings of 8. Pairs with sharded matmul for tensor parallelism.
+
+**ReduceScatter** — `out_i = Σ_j in_j[slice_i]`; bandwidth-optimal (each link carries each byte once).
+
+**AllReduce** — semantically ReduceScatter + AllGather; identical Sum tensor everywhere; the tensor-parallel workhorse.
+
+**Broadcast / AllBroadcast** — root by `sender_coord`; all_broadcast returns per-source list (composite-fallback backbone).
+
+**Send/Recv** — `point_to_point` lands in an intermediate buffer on the receiver, then local copy (optional-intermediate API exposed).
+
+**AlltoAll dispatch/combine** — expert-table token routing (MoE).
 
 **Reduction semantics: Sum only.** The experimental signature accepts `math_op: ReduceType` but drops it (`all_reduce_async.cpp` comments out the parameter). Min/max/mean: all_gather then local `ttnn.min/max/mean` along the gather dim — correct at `num_chips×` bandwidth. Negation does not rescue max; verify on every tt-metal bump.
 
@@ -96,6 +116,15 @@ TT-Fabric extends the NoC over Ethernet: a worker issues a NoC-style command whi
 
 **Layer 5 — session.** Fire-and-forget writes; flow control is semaphore credits.
 
+Line VC, per router:
+
+```
+worker ──NoC──▶ Sender ch0 (8 slots) ─┐
+neighbor ─────▶ Sender ch1 (8 slots) ─┴─▶ ETH ─▶ Receiver (16) ─▶ local NoC │ forward
+```
+
+Galaxy `FABRIC_1D` = 8 row + 4 col line fabrics × planes, each independent — why `cluster_axis` CCLs scale without crosstalk.
+
 ---
 
 # 3. Anatomy of a CCL device kernel
@@ -110,7 +139,25 @@ A CCL op is ordinary Tensix kernels: same NCRISC/BRISC dataflow + TRISC compute,
 
 **Sync.** Remote inc + `wait_min(1 | ring−1 | target)`; reset before reuse — sender before own inc; receiver at end.
 
-**Mux.** Shared sender; CT/RT block; status wait → connect → disconnect; worker 0 terminates. Coalescing/slice walks stay op-owned. Smallest ref: p2p writer (~116 lines).
+**Mux.** Shared sender; CT/RT block; status wait → connect → disconnect; worker 0 terminates. Coalescing/slice walks stay op-owned.
+
+**Minimal send sequence** (p2p writer, ~116 lines, the smallest reference):
+
+```cpp
+auto conn = FabricConnectionManager::build_from_args<...START_ONLY>(idx);
+cb_reserve_back(hdr_cb,1); auto* hdr = (volatile PACKET_HEADER_TYPE*)get_read_ptr(hdr_cb);
+fabric_set_unicast_route((LowLatencyPacketHeader*)hdr, num_hops);
+noc_semaphore_wait(rsem,1); noc_semaphore_set(rsem,0);          // ready; reset BEFORE inc
+conn.open_finish();
+for(...page loop...) { tt_memmove(pkt, src, n);                  // coalesce
+  to_noc_unicast_write(n, hdr, packet_idx, dst);                 // header + accessor
+  perform_payload_send(dir, pkt, n, hdr); }                      // slot wait + flush
+hdr2->to_noc_unicast_atomic_inc({get_noc_addr(rsem),1});         // done
+dir.wait_for_empty_write_slot(); dir.send_payload_flush_blocking_from_address(hdr2, sz);
+conn.close();
+```
+
+Receiver = same handshake mirrored + plain `noc_async_read` of the intermediate.
 
 # 4. Worked example: all_gather end to end
 
@@ -151,7 +198,7 @@ Same vocabulary as single-chip, run per chip with mesh context: ring index from 
 | topology | ring halves worst hops; split-fwd halves last slice |
 | pipelining | ~10 µs hop ≫ NoC; cumulative sems hide latency |
 
-Sender ch1 shares the wire with passthrough — long lines self-throttle.
+Sender ch1 shares the wire with passthrough — long lines self-throttle; staged trees beat naive broadcast over long lines. Sim wall-clock is payload-bound (DM ≈ memcpy) — perf on hardware only, Tracy + `tt_metal/tools/profiler`.
 
 # 7. Testing and simulation (craq-sim)
 
@@ -160,7 +207,16 @@ Simulation: BH-only craq-sim fork (forked umd+metal); one process; `TT_METAL_SIM
 
 # 8. Pitfalls
 
-Sum-only ignored `math_op` · Galaxy ROW_MAJOR/fp32 garbage (TILE+bf16) · reshape/concat L1 OOM (chunk) · composite fallback · reset before reuse · fabric before open · contested handles · sim slow-dispatch trap.
+| Pitfall | Symptom | Fix |
+|---|---|---|
+| `math_op` ignored | min/max plausible on small data, wrong at scale | gather + local reduce |
+| ROW_MAJOR/fp32 at 32 chips | `inf`/1e13 garbage, no error | TILE + bf16; convert around |
+| Mesh-sharded reshape/concat | L1 OOM, CB ∝ total bytes | chunk last dim |
+| Composite fallback | stable op slow | check layout/padding |
+| Sem reset misplaced | first run green, second hangs | sender pre-inc, receiver end |
+| Fabric after open / reopen | hang / `fabric_context_` fail | config first; one mesh |
+| Stale sems | next process hangs | reset; 6U `-glx_reset` |
+| Sim slow-dispatch trap | silently wrong dispatch path | plain pytest + timeout |
 
 # 9. Files
 
