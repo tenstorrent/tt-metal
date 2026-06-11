@@ -60,7 +60,6 @@ class Gemma4VisionMLP(LightweightModule):
         self.four_bit_mlp = args.optimizations.bfp4_mlp
         # ---- gate_proj and up_proj: column-sharded ----------------------------------------------------
         # Shape: [1, 1, dim, hidden_dim]; shard dim=-1 across cluster axis 1.
-        print(self.state_dict)
         self.gate_proj = as_weight_tensor("w1", (-1, -2), ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b)
         self.up_proj = as_weight_tensor("w3", (-1, -2), ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b)
         # ---- down_proj: row-sharded -------------------------------------------------------
