@@ -36,8 +36,8 @@ import ttnn
 
 from models.experimental.devstral2_123B_instruct.tt.model_args import Devstral2Args, RopeParameters
 from models.experimental.devstral2_123B_instruct.tt.weight_loading import (
-    ROPE_TABLE_MEM_CONFIG,
     resolve_weight_cache_path,
+    rope_table_mem_config,
     upload_replicated_tile,
     weight_cache_file,
 )
@@ -209,6 +209,7 @@ class TtRotaryEmbedding:
         self._cos_q_host = cos_q
         self._sin_q_host = sin_q
         cache_path = resolve_weight_cache_path(weight_cache_path, args)
+        prefill_rope_mem = rope_table_mem_config(max_pos, args.head_dim)
 
         def _upload(t: torch.Tensor, name: str) -> ttnn.Tensor:
             tt = t.to(torch.bfloat16).reshape(1, 1, max_pos, args.head_dim)
@@ -216,7 +217,7 @@ class TtRotaryEmbedding:
                 tt,
                 mesh_device,
                 dtype=dtype,
-                memory_config=ROPE_TABLE_MEM_CONFIG,
+                memory_config=prefill_rope_mem,
                 weight_cache_path=cache_path,
                 cache_key=f"rotary_{name}",
             )
@@ -230,7 +231,7 @@ class TtRotaryEmbedding:
             get_rot_transformation_mat(),
             mesh_device,
             dtype=ttnn.bfloat16,
-            memory_config=ROPE_TABLE_MEM_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             weight_cache_path=cache_path,
             cache_key="rotary_trans_mat",
         )

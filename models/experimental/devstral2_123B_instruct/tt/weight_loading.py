@@ -6,7 +6,8 @@
 
 Tests load bf16 CPU tensors via ``tests/_devstral_weights``; each ``Tt*`` module uploads through the
 helpers below (TP shard or replicate, tile layout materialized at upload). Matmul weights use DRAM +
-TILE; embeddings use DRAM + ROW_MAJOR; RoPE tables use L1 + TILE.
+TILE; embeddings use DRAM + ROW_MAJOR; short-context RoPE prefill tables use L1 + TILE (DRAM when
+``rope_table_mem_config`` says the table is too large, e.g. 256K context).
 """
 
 from __future__ import annotations
@@ -36,8 +37,23 @@ _DTYPE_CACHE_DIR = {
 MATMUL_WEIGHT_MEM_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 NORM_WEIGHT_MEM_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 EMBED_WEIGHT_MEM_CONFIG = ttnn.DRAM_MEMORY_CONFIG
-ROPE_TABLE_MEM_CONFIG = ttnn.L1_MEMORY_CONFIG
 KV_CACHE_MEM_CONFIG = ttnn.DRAM_MEMORY_CONFIG
+
+# RoPE prefill tables are replicated interleaved across ~110 L1 banks on BH. Short contexts
+# (e.g. 96K) fit in L1; 256K tables need ~600 KiB/bank and OOM once cos/sin accumulate — use DRAM.
+_ROPE_L1_PER_BANK_LIMIT = 400_000
+
+
+def rope_table_mem_config(max_position_embeddings: int, head_dim: int) -> ttnn.MemoryConfig:
+    """L1 for short RoPE tables; DRAM for long-context tables that exceed per-bank L1 headroom."""
+    if os.getenv("DEVSTRAL2_ROPE_DRAM", "").lower() in ("1", "true", "yes"):
+        return ttnn.DRAM_MEMORY_CONFIG
+    if os.getenv("DEVSTRAL2_ROPE_DRAM", "").lower() in ("0", "false", "no"):
+        return ttnn.L1_MEMORY_CONFIG
+    table_bytes = int(max_position_embeddings) * int(head_dim) * 2  # bfloat16
+    if table_bytes // 110 > _ROPE_L1_PER_BANK_LIMIT:
+        return ttnn.DRAM_MEMORY_CONFIG
+    return ttnn.L1_MEMORY_CONFIG
 
 
 def resolve_weight_cache_path(

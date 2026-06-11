@@ -41,6 +41,8 @@ Runtime knobs are environment variables (kept on env vars to avoid project-wide
 pytest CLI option churn)::
 
     DEVSTRAL2_PROMPT="Write a Python function to reverse a linked list."
+    DEVSTRAL2_MESSAGES_JSON="messages_256k_text (1).json"  # repo-root 256k chat messages
+    DEVSTRAL2_ROPE_DRAM=1         # force RoPE prefill tables to DRAM (auto at 256K if unset)
     DEVSTRAL2_MAX_NEW_TOKENS=100
     DEVSTRAL2_NUM_LAYERS=         # unset/empty = full num_hidden_layers
     DEVSTRAL2_TRACE_PREFILL=1     # 0 = never capture prefill trace (default: on)
@@ -58,8 +60,10 @@ is cached on disk (see ``tt/weight_loading.py``).
 
 from __future__ import annotations
 
+import json
 import os
 import time
+from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
 import pytest
@@ -100,6 +104,65 @@ from models.experimental.devstral2_123B_instruct.tt.weight_loading import DEVSTR
 from models.tt_transformers.tt.ccl import TT_CCL
 
 
+_DEFAULT_MESSAGES_JSON = "messages_256k_text (1).json"
+
+
+def _repo_root() -> Path:
+    return Path(os.environ.get("TT_METAL_HOME", Path(__file__).resolve().parents[4]))
+
+
+def _resolve_messages_json_path(raw: str) -> Path:
+    """Resolve ``DEVSTRAL2_MESSAGES_JSON`` relative to ``TT_METAL_HOME`` when needed."""
+    path = Path(raw).expanduser()
+    if path.is_file():
+        return path
+    candidate = _repo_root() / raw
+    if candidate.is_file():
+        return candidate
+    raise FileNotFoundError(f"DEVSTRAL2_MESSAGES_JSON not found: {raw!r} (also tried {candidate})")
+
+
+def _load_messages_json(path: Path) -> Tuple[List[dict], dict]:
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    messages = data.get("messages")
+    if not isinstance(messages, list) or not messages:
+        raise ValueError(f"Expected non-empty 'messages' list in {path}")
+    return messages, data.get("metadata") or {}
+
+
+def _encode_chat(
+    tokenizer,
+    *,
+    prompt: Optional[str],
+    messages: Optional[List[dict]],
+) -> torch.Tensor:
+    if messages is not None:
+        chat_messages = messages
+    elif getattr(tokenizer, "chat_template", None):
+        chat_messages = [{"role": "user", "content": prompt}]
+    else:
+        return tokenizer(prompt, return_tensors="pt")["input_ids"][0].to(torch.long)
+
+    encoded = tokenizer.apply_chat_template(
+        chat_messages,
+        add_generation_prompt=True,
+        return_tensors="pt",
+        return_dict=True,
+    )
+    return encoded["input_ids"][0].to(torch.long)
+
+
+def _prompt_log_text(*, prompt: Optional[str], messages: Optional[List[dict]], metadata: dict) -> str:
+    if prompt is not None:
+        return prompt
+    if metadata:
+        meta_bits = ", ".join(f"{k}={v}" for k, v in metadata.items() if v is not None)
+        if meta_bits:
+            return f"<messages json> ({meta_bits})"
+    return "<messages json>"
+
+
 def _mesh_device_param():
     return {
         "N150": (1, 1),
@@ -115,9 +178,14 @@ def _round_up(value: int, multiple: int) -> int:
     return ((value + multiple - 1) // multiple) * multiple
 
 
+def _round_up_max_seq_len(seq_len: int, kv_block_size: int) -> int:
+    """Round ``max_seq_len`` so logical KV blocks are a multiple of 8 (flexible chunked SDPA)."""
+    return _round_up(seq_len, kv_block_size * 8)
+
+
 def _min_max_seq_len() -> int:
     """Minimum KV/RoPE budget (multiple of ``kv_block_size``); default 98304 via env."""
-    raw = os.environ.get("DEVSTRAL2_MIN_MAX_SEQ_LEN", "98304").strip()
+    raw = os.environ.get("DEVSTRAL2_MIN_MAX_SEQ_LEN", "262144").strip()
     floor = int(raw)
     block = Devstral2Args.kv_block_size
     if floor % block != 0:
@@ -366,7 +434,9 @@ def _build_state_dict(num_layers: int, *, want_lm_head: bool):
 def _generate(
     mesh_device,
     *,
-    prompt: str,
+    prompt: Optional[str],
+    messages: Optional[List[dict]],
+    messages_metadata: Optional[dict],
     max_new_tokens: int,
     num_layers_override: Optional[int],
 ) -> str:
@@ -379,24 +449,30 @@ def _generate(
     logger.info(f"Building TT model with {num_layers} / {text_cfg.num_hidden_layers} decoder layers.")
 
     # Tokenize first so we can size the KV cache to (prompt + max_new_tokens).
-    if getattr(tokenizer, "chat_template", None):
-        encoded = tokenizer.apply_chat_template(
-            [{"role": "user", "content": prompt}],
-            add_generation_prompt=True,
-            return_tensors="pt",
-            return_dict=True,
-        )
-        input_ids = encoded["input_ids"][0].to(torch.long)
-    else:
-        input_ids = tokenizer(prompt, return_tensors="pt")["input_ids"][0].to(torch.long)
+    input_ids = _encode_chat(tokenizer, prompt=prompt, messages=messages)
     prompt_len = int(input_ids.shape[0])
+    prompt_log = _prompt_log_text(
+        prompt=prompt,
+        messages=messages,
+        metadata=messages_metadata or {},
+    )
 
     # Chunked paged prefill: pad to whole ``kv_block_size`` blocks (default 128).
     kv_block_size = Devstral2Args.kv_block_size
     num_prefill_chunks = max(1, (prompt_len + kv_block_size - 1) // kv_block_size)
     padded_prompt_len = num_prefill_chunks * kv_block_size
     min_seq_len = _min_max_seq_len()
-    max_seq_len = max(_round_up(padded_prompt_len + max_new_tokens, kv_block_size), min_seq_len)
+    if messages_metadata:
+        target_tokens = messages_metadata.get("measured_tokens") or messages_metadata.get("target_tokens")
+        if target_tokens is not None:
+            min_seq_len = max(
+                min_seq_len,
+                _round_up(int(target_tokens) + max_new_tokens, kv_block_size),
+            )
+    max_seq_len = _round_up_max_seq_len(
+        max(_round_up(padded_prompt_len + max_new_tokens, kv_block_size), min_seq_len),
+        kv_block_size,
+    )
     pad_id = tokenizer.pad_token_id
     if pad_id is None:
         pad_id = tokenizer.eos_token_id or 0
@@ -725,7 +801,10 @@ def _generate(
             sampler.deallocate()
 
     logger.info("=== Prompt ===")
-    logger.info(prompt)
+    if len(prompt_log) > 500:
+        logger.info(f"{prompt_log[:500]}... [{len(prompt_log)} chars total]")
+    else:
+        logger.info(prompt_log)
     logger.info("=== Response ===")
     logger.info(decoded)
 
@@ -743,11 +822,28 @@ def _text_demo_device_params():
     }
 
 
+def _resolve_text_demo_inputs() -> Tuple[Optional[str], Optional[List[dict]], Optional[dict]]:
+    """Prompt from ``DEVSTRAL2_MESSAGES_JSON`` (256k bench) or ``DEVSTRAL2_PROMPT``."""
+    raw_json = os.environ.get("DEVSTRAL2_MESSAGES_JSON")
+    if raw_json is not None:
+        raw_json = raw_json.strip()
+        if raw_json.lower() not in ("", "0", "false", "no"):
+            path = _resolve_messages_json_path(raw_json)
+            messages, metadata = _load_messages_json(path)
+            logger.info(f"Loaded {len(messages)} chat message(s) from {path}")
+            if metadata:
+                logger.info(f"Messages metadata: {metadata}")
+            return None, messages, metadata
+
+    prompt = os.environ.get("DEVSTRAL2_PROMPT") or "Write a Python function to reverse a linked list."
+    return prompt, None, None
+
+
 @pytest.mark.timeout(0)
 @pytest.mark.parametrize("mesh_device", [_mesh_device_param()], indirect=True)
 @pytest.mark.parametrize("device_params", [_text_demo_device_params()], indirect=True)
 def test_devstral2_123B_instruct_text_demo(mesh_device):
-    prompt = os.environ.get("DEVSTRAL2_PROMPT") or "Write a Python function to reverse a linked list."
+    prompt, messages, messages_metadata = _resolve_text_demo_inputs()
     max_new_tokens = int(os.environ.get("DEVSTRAL2_MAX_NEW_TOKENS") or "100")
     raw_layers = os.environ.get("DEVSTRAL2_NUM_LAYERS", "")
     num_layers_override = int(raw_layers) if raw_layers else None
@@ -755,6 +851,8 @@ def test_devstral2_123B_instruct_text_demo(mesh_device):
     response = _generate(
         mesh_device,
         prompt=prompt,
+        messages=messages,
+        messages_metadata=messages_metadata,
         max_new_tokens=max_new_tokens,
         num_layers_override=num_layers_override,
     )
