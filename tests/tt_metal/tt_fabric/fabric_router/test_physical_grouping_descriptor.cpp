@@ -1895,9 +1895,9 @@ TEST(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_BlitzPipeline2x
     bool found_mesh_match = false;
     for (const auto& [instance_name, groupings] : valid_groupings.at("MESH")) {
         for (const auto& grouping : groupings) {
-            if (grouping.asic_count == 8u && grouping.name == "4x2_Mesh_flat") {
+            if (grouping.asic_count == 8u && grouping.name == "4x2_Mesh_horizontal_flat") {
                 found_mesh_match = true;
-                EXPECT_EQ(grouping.name, "4x2_Mesh_flat") << "Should match 4x2_Mesh_flat grouping";
+                EXPECT_EQ(grouping.name, "4x2_Mesh_horizontal_flat") << "Should match 4x2_Mesh_horizontal_flat grouping";
                 EXPECT_EQ(grouping.asic_count, 8u) << "Should have 8 ASICs";
                 break;
             }
@@ -1906,7 +1906,8 @@ TEST(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_BlitzPipeline2x
             break;
         }
     }
-    EXPECT_TRUE(found_mesh_match) << "Should find a match for 4x2 mesh (8 ASICs) matching 4x2_Mesh_flat grouping";
+    EXPECT_TRUE(found_mesh_match)
+        << "Should find a match for 4x2 mesh (8 ASICs) matching 4x2_Mesh_horizontal_flat grouping";
 
     // Check that we have FABRIC level grouping (G0)
     ASSERT_EQ(valid_groupings.count("FABRIC"), 1u) << "Should have FABRIC instance type";
@@ -2098,8 +2099,8 @@ TEST(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_SingleGalaxy4x8
         }
     }
 
-    // Should have exactly one valid grouping match
-    ASSERT_EQ(total_groupings, 1u) << "Should have exactly one valid grouping match";
+    // A 4x8 (32-ASIC) mesh matches both the MESH and a torus variant of the 4x8_Mesh grouping → 2 matches.
+    ASSERT_EQ(total_groupings, 2u) << "Should have two valid grouping matches (mesh + torus variant)";
 
     // Check that we have matches for MESH instances
     ASSERT_EQ(valid_groupings.size(), 1u) << "Should have exactly one instance type (MESH)";

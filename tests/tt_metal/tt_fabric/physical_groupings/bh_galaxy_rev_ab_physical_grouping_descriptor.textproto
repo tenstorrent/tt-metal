@@ -248,36 +248,6 @@ groupings {
   ]
 }
 
-# Vertical 2x4 (single tray, 8 ASICs) — alias for MGD 2x4 device topology
-groupings {
-  name: "2x4_Mesh_vertical"
-  preset_type: MESH
-  instances: [
-    { id: 0 grouping_ref { custom_type: "TRAY_1" } }
-  ]
-}
-groupings {
-  name: "2x4_Mesh_vertical"
-  preset_type: MESH
-  instances: [
-    { id: 0 grouping_ref { custom_type: "TRAY_2" } }
-  ]
-}
-groupings {
-  name: "2x4_Mesh_vertical"
-  preset_type: MESH
-  instances: [
-    { id: 0 grouping_ref { custom_type: "TRAY_3" } }
-  ]
-}
-groupings {
-  name: "2x4_Mesh_vertical"
-  preset_type: MESH
-  instances: [
-    { id: 0 grouping_ref { custom_type: "TRAY_4" } }
-  ]
-}
-
 groupings {
   name: "4x2_Mesh_horizontal"
   preset_type: MESH

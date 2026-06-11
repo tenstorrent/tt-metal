@@ -819,8 +819,9 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
         // Required nodes from MGD adjacency graph (this represents the topology pattern to match)
         size_t required_nodes = mgd_grouping_info.adjacency_graph.get_nodes().size();
 
-        // RING dims from MGD device topology. Matching uses LINE-only MGD graphs; PGD provides topology
-        // variants and committed groupings are rebuilt with RING via finalize_mesh_grouping_with_device_topology.
+        // MGD device topology. Matching uses LINE-only MGD graphs and the PGD supplies the topology via its
+        // MESH/TORUSX/TORUSY/TORUSXY variants (committed directly). device_topo is only used for the fallback
+        // grouping below when no PGD variant places on the PSD.
         const auto device_topo = get_mgd_instance_device_topology(mesh_graph_descriptor, instance_name);
 
         // Group valid candidates by node difference (map is ordered by key ascending)
@@ -881,22 +882,42 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                 continue;
             }
 
-            // Build the grouping that will actually be committed for this MGD mesh: the flattened PGD
-            // candidate rebuilt with the MGD device topology (adds RING wrap edges). The PSD-placement
-            // check below validates this exact grouping so that validation and the later find_all_in_psd
-            // placement use the same graph (previously validation used the LINE-only candidate while
-            // placement used the RING grouping, so a torus that the slot-pinned PGD candidate cannot host
-            // was silently accepted). Keeping the PGD (tray_id, asic_location) slot labels is intentional:
-            // when an MGD mesh requests a topology the PGD grouping cannot physically host at its pinned
-            // slots (e.g. a 4x4 RING/RING sub-torus whose wrap edges land on non-adjacent tray slots), the
-            // pinned validation correctly fails, leaving committed_pgd_matches false so we fall back to the
-            // MGD mesh grouping (placed by topology only, see below).
+            // The grouping committed for this MGD mesh is the matched PGD topology variant itself. Each variant
+            // already encodes its own topology (the MESH grid, or RING wrap edges for TORUSX/TORUSY/TORUSXY) and
+            // was pre-filtered by can_map_to_psd during flattening, so we PSD-validate and commit the variant's
+            // own adjacency directly rather than rebuilding it from the MGD device topology. Keeping the PGD
+            // (tray_id, asic_location) slot labels is intentional so find_all_in_psd places on the same graph.
             auto make_committed_grouping = [&](const MeshTopologyMatch& match) -> GroupingInfo {
-                const GroupingInfo& flattened_grouping = mesh_flat_groupings.at(match.name)[match.idx];
-                return device_topo.has_value() ? finalize_mesh_grouping_with_device_topology(
-                                                     flattened_grouping, *device_topo, &match.mapping.target_to_global)
-                                               : flattened_grouping;
+                return mesh_flat_groupings.at(match.name)[match.idx];
             };
+
+            // Prefer the simplest topology that fits: order variants MESH -> TORUSX -> TORUSY -> TORUSXY so the
+            // smallest topology that matches is used. The downstream set-packing solver de-duplicates variants
+            // that cover the same physical ASIC set (find_all_in_psd / solve_for_many_groupings_to_psd), so
+            // committing variants MESH-first means each physical region keeps its MESH form rather than a torus
+            // form, while distinct physical regions (e.g. two tray-pairs for a 2x8) are each committed.
+            auto variant_priority = [&](const MeshTopologyMatch& m) -> int {
+                const std::string& type = mesh_flat_groupings.at(m.name)[m.idx].type;
+                if (type == "MESH") {
+                    return 0;
+                }
+                if (type == "TORUSX") {
+                    return 1;
+                }
+                if (type == "TORUSY") {
+                    return 2;
+                }
+                if (type == "TORUSXY") {
+                    return 3;
+                }
+                return 4;
+            };
+            std::stable_sort(
+                best_matches_topology.begin(),
+                best_matches_topology.end(),
+                [&](const MeshTopologyMatch& a, const MeshTopologyMatch& b) {
+                    return variant_priority(a) < variant_priority(b);
+                });
 
             if (physical_system_descriptor != nullptr) {
                 for (const auto& match : best_matches_topology) {

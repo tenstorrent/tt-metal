@@ -4886,10 +4886,11 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
     // Create PSD from mock cluster
     tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
 
-    // Load PGD - using triple_16x8_quad_bh_galaxy_physical_groupings
+    // Load PGD - the single BH galaxy mock cluster is a RevC layout, so pair it with the RevC grouping
+    // descriptor (the RevAB descriptor's pinned slot connectivity does not match a RevC PSD).
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 

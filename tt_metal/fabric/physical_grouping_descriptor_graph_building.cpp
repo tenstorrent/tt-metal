@@ -1068,11 +1068,14 @@ std::vector<FlattenedMesh> build_flattened_meshes_for_item(
 
 std::vector<tt::tt_fabric::GroupingInfo> flattened_mesh_to_topology_variants(
     const tt::tt_fabric::GroupingInfo& grouping, const FlattenedMesh& mesh) {
-    static const std::array<std::pair<const char*, std::array<bool, 2>>, 4> k_variants = {{
-        {"MESH", {false, false}},
-        {"TORUSX", {true, false}},
-        {"TORUSY", {false, true}},
-        {"TORUSXY", {true, true}},
+    // name_suffix gives each topology variant a distinct grouping name (in addition to the GroupingInfo::type
+    // field) so logs and committed groupings make clear which variant matched/placed. The MESH variant keeps
+    // the plain "_flat" name; torus variants append "_torus_x/_y/_xy".
+    static const std::array<std::tuple<const char*, const char*, std::array<bool, 2>>, 4> k_variants = {{
+        {"MESH", "", {false, false}},
+        {"TORUSX", "_torus_x", {true, false}},
+        {"TORUSY", "_torus_y", {false, true}},
+        {"TORUSXY", "_torus_xy", {true, true}},
     }};
 
     std::vector<tt::tt_fabric::GroupingInfo> result;
@@ -1083,9 +1086,9 @@ std::vector<tt::tt_fabric::GroupingInfo> flattened_mesh_to_topology_variants(
         asic_grid_dims.size() >= 2 &&
         static_cast<size_t>(asic_grid_dims[0] * asic_grid_dims[1]) == mesh.nodes_row_major.size();
 
-    for (const auto& [topo_type, ring_dims_template] : k_variants) {
+    for (const auto& [topo_type, name_suffix, ring_dims_template] : k_variants) {
         tt::tt_fabric::GroupingInfo info = grouping;
-        info.name = grouping.name + "_flat";
+        info.name = grouping.name + "_flat" + name_suffix;
         info.type = topo_type;
         rebuild_items_from_flattened_mesh(info, mesh);
 
