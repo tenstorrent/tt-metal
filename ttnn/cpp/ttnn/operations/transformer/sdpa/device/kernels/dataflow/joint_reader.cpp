@@ -4,9 +4,12 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "dataflow_common.hpp"
 
 void kernel_main() {
+    Noc noc;
+
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NH = get_compile_time_arg_val(1);
     constexpr uint32_t DHt = get_compile_time_arg_val(2);

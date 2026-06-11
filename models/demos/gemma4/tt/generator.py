@@ -68,7 +68,7 @@ class Gemma4Generator(Generator):
             kv_cache,
             enable_trace=enable_trace,
             can_sample_on_device=can_sample_on_device,
-            non_greedy_decoding_on_device=non_greedy_decoding_on_device,
+            greedy_only=greedy_only,
         )
 
     def prefill_forward_text(

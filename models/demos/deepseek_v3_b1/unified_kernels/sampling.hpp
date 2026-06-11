@@ -136,26 +136,20 @@ FORCE_INLINE void generate_row0_bcast(const uint32_t cb_id, uint16_t bf16_val) {
 template <bool legacy_compat = true>
 void calculate_sampling_recip_scalar() {
     sfpi::vFloat in = sfpi::dst_reg[0];
+    sfpi::vFloat out;
     if constexpr (legacy_compat) {
-        sfpi::vFloat out = ckernel::sfpu::_reciprocal_compat_<APPROX ? 2 : 3>(in);
-        if constexpr (DST_ACCUM_MODE || APPROX) {
-            sfpi::dst_reg[0] = out;
-        } else {
-            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(out, sfpi::RoundMode::NearestEven));
-        }
+        out = ckernel::sfpu::_reciprocal_compat_<APPROX ? 2 : 3>(in);
+    } else if constexpr (APPROX) {
+        out = ckernel::sfpu::_sfpu_reciprocal_<0>(in);
+    } else if constexpr (DST_ACCUM_MODE) {
+        out = ckernel::sfpu::_sfpu_reciprocal_<2>(in);
     } else {
-        if constexpr (APPROX) {
-            sfpi::dst_reg[0] = ckernel::sfpu::_sfpu_reciprocal_<0>(in);
-        } else {
-            if constexpr (DST_ACCUM_MODE) {
-                sfpi::dst_reg[0] = ckernel::sfpu::_sfpu_reciprocal_<2>(in);
-            } else {
-                sfpi::vFloat out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
-                sfpi::dst_reg[0] =
-                    sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(out, sfpi::RoundMode::NearestEven));
-            }
-        }
+        out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
     }
+    if constexpr (!(DST_ACCUM_MODE || APPROX)) {
+        out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::NearestEven);
+    }
+    sfpi::dst_reg[0] = out;
 }
 
 template <bool legacy_compat = true>
@@ -599,7 +593,7 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
     cb_reserve_back(out_scores_cb, 1);
     cb_reserve_back(out_indices_cb, 1);
 
-    acquire_dst();
+    tile_regs_acquire();
 
     uint32_t num_faces = 4;
     reconfig_data_format_srca(in_scores_cb);
@@ -654,15 +648,18 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
         MATH((llk_math_deepseek_top32_rm_merge<false, DST_ACCUM_MODE>(value_offset_tiles, true)));
         MATH((llk_math_deepseek_top32_rm_rebuild<false, DST_ACCUM_MODE>(value_offset_tiles, decreasing, true)));
     }
+    tile_regs_commit();
+    tile_regs_wait();
 
     PACK(TTI_SETADCXX(p_setadc::PAC, 1 - 1, 0x0));
+
     ckernel::pack_reconfig_data_format(out_scores_cb);
     ckernel::pack_tile(value_offset_tiles, out_scores_cb);
     ckernel::pack_reconfig_data_format(out_indices_cb);
     ckernel::pack_tile(index_offset_tiles, out_indices_cb);
     PACK(TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0));
 
-    release_dst();
+    tile_regs_release();
 
     cb_pop_front(in_scores_cb, num_input_tiles);
     cb_pop_front(in_indices_cb, num_input_tiles);
@@ -697,7 +694,7 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
     cb_reserve_back(out_scores_cb, 1);
     cb_reserve_back(out_indices_cb, 1);
 
-    acquire_dst();
+    tile_regs_acquire();
 
     const uint32_t num_chunks = row_elements / chunk_size;
 
@@ -756,9 +753,12 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
         MATH((llk_math_deepseek_top32_rm_merge<false, DST_ACCUM_MODE>(value_offset_tiles, true)));
         MATH((llk_math_deepseek_top32_rm_rebuild<false, DST_ACCUM_MODE>(value_offset_tiles, decreasing, true)));
     }
+    tile_regs_commit();
+    tile_regs_wait();
 
     // Step 10: pack final top-32 scores/indices.
     PACK(TTI_SETADCXX(p_setadc::PAC, 1 - 1, 0x0));
+
     ckernel::pack_reconfig_data_format(out_scores_cb);
     ckernel::pack_tile(value_offset_tiles, out_scores_cb);
     ckernel::pack_reconfig_data_format(out_indices_cb);
@@ -771,7 +771,7 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
     UNPACK(TTI_SETADCXY(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111));
     UNPACK(TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111));
 
-    release_dst();
+    tile_regs_release();
 
     cb_pop_front(in_scores_cb, num_input_tiles);
     cb_pop_front(in_indices_cb, num_input_tiles);

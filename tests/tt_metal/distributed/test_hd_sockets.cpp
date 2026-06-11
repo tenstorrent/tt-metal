@@ -175,6 +175,19 @@ void test_hd_socket_loopback(
 
     TT_FATAL(data_size % page_size == 0, "Data size must be a multiple of page size");
 
+    // DEVICE_PULL landing slot (CT arg 6): the H2D FIFO lives in pinned host memory, so the
+    // loopback kernel needs a page of local L1 to pull into before writing back to the D2H socket.
+    const ReplicatedBufferConfig scratch_buffer_config{.size = page_size};
+    auto scratch_shard_params =
+        ShardSpecBuffer(CoreRangeSet(socket_core.core_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+    const DeviceLocalBufferConfig scratch_device_local_config{
+        .page_size = page_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(scratch_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = false,
+    };
+    auto scratch_buffer = MeshBuffer::create(scratch_buffer_config, scratch_device_local_config, mesh_device.get());
+
     auto send_program = CreateProgram();
     CreateKernel(
         send_program,
@@ -190,6 +203,7 @@ void test_hd_socket_loopback(
                 static_cast<uint32_t>(data_size),
                 static_cast<uint32_t>(num_iterations),
                 h2d_mode == H2DMode::DEVICE_PULL,
+                static_cast<uint32_t>(scratch_buffer->address()),
             }});
 
     uint32_t num_txns = data_size / page_size;
@@ -228,6 +242,19 @@ void test_hd_socket_multithreaded_loopback(
 
     TT_FATAL(data_size % page_size == 0, "Data size must be a multiple of page size");
 
+    // DEVICE_PULL landing slot (CT arg 6): the H2D FIFO lives in pinned host memory, so the
+    // loopback kernel needs a page of local L1 to pull into before writing back to the D2H socket.
+    const ReplicatedBufferConfig scratch_buffer_config{.size = page_size};
+    auto scratch_shard_params =
+        ShardSpecBuffer(CoreRangeSet(socket_core.core_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+    const DeviceLocalBufferConfig scratch_device_local_config{
+        .page_size = page_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(scratch_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = false,
+    };
+    auto scratch_buffer = MeshBuffer::create(scratch_buffer_config, scratch_device_local_config, mesh_device.get());
+
     auto send_program = CreateProgram();
     CreateKernel(
         send_program,
@@ -243,6 +270,7 @@ void test_hd_socket_multithreaded_loopback(
                 static_cast<uint32_t>(data_size),
                 static_cast<uint32_t>(num_iterations),
                 h2d_mode == H2DMode::DEVICE_PULL,
+                static_cast<uint32_t>(scratch_buffer->address()),
             }});
 
     uint32_t num_txns = data_size / page_size;

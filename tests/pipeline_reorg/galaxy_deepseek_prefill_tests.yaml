@@ -57,6 +57,7 @@
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528 DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI TT_DS_PREFILL_TTNN_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI TT_DS_PREFILL_HOST_REF_CACHE=/tmp/deepseek_v3_transformer_ref_cache DEEPSEEK_V3_TRACE_DIR=/mnt/MLPerf/deepseek-prefill-cache MESH_DEVICE=TG
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
     pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_kv_cache_table -k "line and pretrained" -vvv --tb=short
+    pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_kimi_kv_cache_mock -k "line" -vvv --tb=short
   test_type: kv_cache_table
   test_group: module
   skus:
@@ -107,12 +108,12 @@
 - name: "(Galaxy) DeepSeek Prefill - Kimi MoE"
   cmd: |
     export MESH_DEVICE=TG
-    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_moe -k "mesh-8x4" -vvv --tb=short
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_moe -k "mesh-8x4 and (kimi-5k-pcc or kimi-25k-perf)" -vvv --tb=short
   test_type: kimi_moe
   test_group: module
   skus:
     bh_galaxy:
-      timeout: 45
+      timeout: 30
   owner_id: U08RL15T4N8
   team: models
 
