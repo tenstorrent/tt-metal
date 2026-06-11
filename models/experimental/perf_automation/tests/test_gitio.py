@@ -49,3 +49,11 @@ def test_reset_hard_restores(tmp_path):
 def test_repo_root_raises_outside_repo(tmp_path):
     with pytest.raises(gitio.GitError):
         gitio.repo_root(tmp_path)
+
+
+def test_changed_files_lists_worktree_edits(tmp_path):
+    repo = _init_repo(tmp_path)
+    sha = gitio.head_sha(repo)
+    assert gitio.changed_files(repo, sha) == []
+    (repo / "model.py").write_text("x = 2\n")
+    assert gitio.changed_files(repo, sha) == ["model.py"]

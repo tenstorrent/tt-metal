@@ -45,3 +45,12 @@ def reset_hard(repo, sha: str) -> None:
     r = _git(["reset", "--hard", sha], repo)
     if r.returncode != 0:
         raise GitError(f"git reset --hard {sha} failed: {r.stderr.strip()}")
+
+
+def changed_files(repo, sha: str) -> list[str]:
+    """Repo-relative paths changed in the working tree since `sha` (ground truth
+    for what an edit actually touched, independent of the agent's self-report)."""
+    r = _git(["diff", "--name-only", sha], repo)
+    if r.returncode != 0:
+        raise GitError(f"git diff failed at {repo}: {r.stderr.strip()}")
+    return [ln for ln in r.stdout.splitlines() if ln.strip()]

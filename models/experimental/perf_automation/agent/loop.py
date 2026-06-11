@@ -15,6 +15,7 @@ import argparse
 from . import engine, states
 from .handlers import build_handlers
 from .loop_context import LoopContext
+from .looplog import make_logger
 
 _STATES = sorted(states.TRANSITIONS)
 
@@ -31,7 +32,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     stop_after = {args.until} if args.until else None
-    reached = engine.run(ctx, build_handlers(), stop_after=stop_after)
+    reached = engine.run(ctx, build_handlers(), stop_after=stop_after, log=make_logger())
 
     m = ctx.state.get("metric", {})
     if args.until and reached not in states.TERMINAL:

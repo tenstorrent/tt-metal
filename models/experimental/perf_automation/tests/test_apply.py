@@ -57,3 +57,39 @@ def test_apply_records_clean_sha_and_calls_editor(tmp_path):
     assert seen["files"][0].endswith("model/model.py")  # absolute model file path
     assert ctx.state["last_edit"]["files"] == ["model.py"]  # result recorded
     assert ctx.state["cost_usd"] == 0.01  # telemetry accumulated
+
+
+def test_apply_proceeds_when_editor_errors_but_edits_landed(tmp_path):
+    """The tmux failure mode: editor edits on disk then its final JSON is bad.
+    git-diff ground truth catches the change, so APPLY proceeds instead of crashing."""
+    from pathlib import Path
+
+    run = _run(tmp_path)
+    ctx = LoopContext.from_run(run, index=[])
+
+    def editor_edits_then_raises(*, lever, section, model_files):
+        Path(model_files[0]).write_text("y = 2\n")  # real on-disk edit
+        raise RuntimeError("edit result.files must be a non-empty array")
+
+    ctx.deps["edit_runner"] = editor_edits_then_raises
+    assert apply(ctx) == states.VERIFY
+    assert "model.py" in ctx.state["last_edit"]["files"]
+
+
+def test_apply_repairs_when_no_edit_lands(tmp_path):
+    run = _run(tmp_path)
+    ctx = LoopContext.from_run(run, index=[])
+    ctx.deps["edit_runner"] = lambda **k: {"files": [], "summary": "", "model": "m", "usage": None}
+    assert apply(ctx) == states.REPAIR_CODE
+    assert ctx.state["last_verdict"]["status"] == "edit_failed"
+
+
+def test_apply_reverts_when_no_edit_and_budget_exhausted(tmp_path):
+    run = _run(tmp_path)
+    s = json.loads(run.state_path.read_text())
+    s["code_fix_attempts"] = 5
+    run.state_path.write_text(json.dumps(s))
+    ctx = LoopContext.from_run(run, index=[])
+    ctx.deps["edit_runner"] = lambda **k: {"files": [], "model": "m", "usage": None}
+    assert apply(ctx) == states.REVERT
+    assert ctx.state["last_decision"]["reason"] == "edit_failed"

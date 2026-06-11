@@ -23,7 +23,7 @@ class EngineError(Exception):
     """Unregistered state, illegal transition, or a non-terminating cycle."""
 
 
-def run(ctx: LoopContext, handlers: dict[str, Handler], max_steps: int = 10_000, stop_after=None) -> str:
+def run(ctx: LoopContext, handlers: dict[str, Handler], max_steps: int = 10_000, stop_after=None, log=None) -> str:
     """Drive the state machine from `ctx.state['state']` to a terminal state.
 
     `max_steps` is an infinite-loop backstop only — real termination comes from
@@ -50,6 +50,8 @@ def run(ctx: LoopContext, handlers: dict[str, Handler], max_steps: int = 10_000,
         ctx.state["state"] = next_state
         ctx.save()  # WAL: every transition is durable before we move on
         ctx.log_event(state, "done", f"-> {next_state}")
+        if log:
+            log(ctx, state, next_state)
         if state in stop_after:
             return next_state  # `state` was the last stage to run; parked at next_state
         state = next_state

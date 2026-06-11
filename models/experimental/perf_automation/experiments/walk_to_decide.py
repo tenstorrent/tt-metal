@@ -19,6 +19,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # perf_automation on path
 
 from agent import engine, states
+from agent.looplog import make_logger
 from agent.handlers import build_handlers
 from agent.loop_context import LoopContext
 from agent.run import Run
@@ -128,7 +129,7 @@ def _fake_measure(c):
 
 ctx.deps["measure_runner"] = _fake_measure
 
-reached = engine.run(ctx, build_handlers(), stop_after={states.DECIDE})
+reached = engine.run(ctx, build_handlers(), stop_after={states.DECIDE}, log=make_logger())
 
 print("\n=== ROUTE -> DECIDE PASS ===")
 for ln in (run.dir / "events.jsonl").read_text().splitlines():

@@ -44,8 +44,30 @@ def _verify_files(files: list) -> dict:
     return {"status": "ok"}
 
 
+def _resolve(ctx, raw: list):
+    from .. import gitio
+
+    model_root = ctx.model_root()
+    try:
+        repo = gitio.repo_root(model_root)
+    except Exception:
+        repo = model_root
+    out = []
+    for f in raw:
+        p = Path(f)
+        if p.is_absolute():
+            out.append(p)
+        elif (model_root / p).exists():
+            out.append(model_root / p)
+        elif (repo / p).exists():
+            out.append(repo / p)
+        else:
+            out.append(model_root / p)
+    return out
+
+
 def verify(ctx) -> str:
-    files = [ctx.model_root() / f for f in (ctx.state.get("last_edit") or {}).get("files", [])]
+    files = _resolve(ctx, (ctx.state.get("last_edit") or {}).get("files", []))
     verdict = _verify_files(files)
     ctx.state["last_verdict"] = verdict
 
