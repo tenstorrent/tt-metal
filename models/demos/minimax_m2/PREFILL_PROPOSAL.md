@@ -18,11 +18,18 @@ attention block 0.9991 · router (decomposed) · experts 0.9990 · **full decode
 0.99993** vs HF. The M2 architecture deltas (partial RoPE, distributed QK-norm,
 sigmoid+bias router, SiLU-SwiGLU experts, no biases/sinks/sliding-window) are done.
 
+**Done:** gpt-oss naming/dead-reference cleanup (program-config classes renamed, stale
+docstrings fixed; delta "vs gpt-oss" comments kept as documentation).
+
 **In progress — serving skeleton (scaffold, see §4/§8):** prefill runner + pipeline +
 per-layer KV migration seam + chunked prefill. Tiering:
-- *Tier 1 (build + validate here):* chunked prefill (op confirmed, see §11.2), standalone runner.
+- *Tier 1 (build + validate here):* **chunked/paged attention rewire** (OWNER: attention —
+  op confirmed GQA-capable + paged-required, see §6/§11.2; replaces the current dead
+  write-only KV fill), standalone runner.
 - *Tier 2 (seam/stub, cross-team / multi-card):* per-layer migration, P/D disaggregation.
 - *Tier 3 (defer, undefined):* EP=8 (`experts_throughput/` is the future home, untouched).
+  Note: DeepSeek prefill does EP+SP+TP; our current EP=1 is a functional-first choice
+  (gpt-oss origin), NOT the DeepSeek end-state — EP-in-prefill is the scaling target.
 
 **Not validated anywhere yet:** TP>1 / EP / SP collectives, paged KV read-back, full
 model logits, real weights, bfp4 accuracy, decode path, long context. All need the
@@ -103,9 +110,12 @@ With SP=4 and 5 120-token chunks, each row processes **1 280 tokens per chunk**.
 > single-card math validated, not multi-device validated.
 
 ```
-✅ Attention prefill
+✅ Attention prefill (MATH validated @ TP=1)
      QKV projection → distributed QK-norm → partial RoPE (dim 64)
-     → paged_fill_cache (per user) → causal SDPA → output proj + reduce-scatter
+     → NON-chunked causal SDPA on the fresh Q/K/V → output proj + reduce-scatter
+  ⚠️  KV-cache fill is currently WRITE-ONLY / DEAD: paged_fill_cache (or fill_cache)
+      runs, but SDPA reads the fresh tensors, not the cache. No chunked SDPA is wired.
+      OWNER: attention (rewire — see §6/§9); this dead path is removed in that work.
 
 ✅ Experts prefill
      sigmoid router with e_score_correction_bias
@@ -244,6 +254,20 @@ Per chunk, each layer:
 ---
 
 ## 6. KV Cache Layout
+
+> **Verified status (2026-06-10):**
+> - **Chunked SDPA exists and supports M2's GQA.** `ttnn.transformer.chunked_scaled_dot_product_attention`
+>   validates `nqh >= nkv && nqh % nkv == 0` (48/8 ✅) and a GQA case (nh=8/nkv=1, head_dim 128)
+>   is in the nightly test. So GQA is NOT a blocker.
+> - **Chunked SDPA requires PAGED KV** (reads K/V from the cache via page_table; no non-paged variant).
+> - **We do NOT have working paged/chunked attention yet.** Current prefill fills the cache but the
+>   SDPA call is the *non-chunked* op on fresh Q/K/V — the fill is dead. The rewire (attention owner):
+>   `paged_fill_cache(chunk) → chunked_scaled_dot_product_attention(q, k_cache, v_cache, page_table, chunk_start_idx)`.
+> - **MLA vs GQA — important:** DeepSeek's attention is **MLA** (`chunked_flash_mla_prefill`, latent KV).
+>   **M2 is standard GQA**, so M2 uses the standard `chunked_scaled_dot_product_attention` — reference
+>   the **llama3_70b_galaxy** GQA path, NOT DeepSeek's MLA kernel. Follow DeepSeek for the serving/
+>   migration/chunking *pattern* only; the attention *op* comes from the GQA chunked-SDPA users.
+
 
 ```
 Prefill KV cache (lives on prefill Galaxy):
