@@ -97,7 +97,6 @@ class SamplingGenerator:
         args,
         mesh_device,
         tt_ccl,
-        enable_internal_trace: bool = True,
         cq_id: int = 0,
     ):
         self.mesh_device = mesh_device
@@ -105,8 +104,6 @@ class SamplingGenerator:
         self.args = args
         self._sampling_debug_enabled = is_llama33_70b_model(args)
         self.sub_core_grids = getattr(args, "sub_core_grids", None)
-        self.enable_internal_trace = enable_internal_trace
-
         self.tt_sampling = TTSampling(mesh_device=mesh_device, tt_ccl=tt_ccl, args=args)
         self.tt_penalties = TTPenalties(mesh_device=mesh_device, args=args)
 
@@ -389,9 +386,7 @@ class SamplingGenerator:
         force_argmax = self.tt_sampling.force_argmax_sampling
         # Explicit request seeds update a persistent seed tensor every token;
         # run them directly so trace replay cannot observe stale seed state.
-        use_internal_trace = (
-            enable_trace and self.enable_internal_trace and not self.seed_manager.has_active_request_seed()
-        )
+        use_internal_trace = enable_trace and not self.seed_manager.has_active_request_seed()
         _log_sampling_debug(
             self._sampling_debug_enabled,
             "SamplingGenerator sample",
