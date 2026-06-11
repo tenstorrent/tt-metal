@@ -35,7 +35,7 @@ sfpi_inline void calculate_div_int32_body(
     sfpi::vMag b = sfpi::abs(b_u);
 
     // Convert to floats, but check for the edge case mentioned above.
-    sfpi::vFloat b_f = sfpi::convert<sfpi::vFloat>(b, sfpi::RoundMode::Nearest);
+    sfpi::vFloat b_f = sfpi::convert<sfpi::vFloat>(b, sfpi::RoundMode::NearestEven);
     v_if(b_f < 0.0f) { b_f = 2147483648.0f; }
     v_endif;
 
@@ -70,7 +70,7 @@ sfpi_inline void calculate_div_int32_body(
 
     // Final step of Halley's Method
     inv_b_f = e * inv_b_f + inv_b_f;
-    sfpi::vFloat a_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(a), sfpi::RoundMode::Nearest);
+    sfpi::vFloat a_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(a), sfpi::RoundMode::NearestEven);
 
     // Apply scale
     inv_b_f = inv_b_f * scale;
@@ -91,10 +91,10 @@ sfpi_inline void calculate_div_int32_body(
     // Now q2 = q>>22, q1 = q>>11
     // And so qb = (q2<<22 + q1<<11) * (b2<<22 + b1<<11 + b0)
     //           = (q2<<22 * b0) + (q1<<11 * b1<<11) + (q1<<11 * b0)
-    sfpi::vFloat q1 = sfpi::convert<sfpi::vFloat>(q_m & MASK_11, sfpi::RoundMode::Nearest);
-    sfpi::vFloat q2 = sfpi::convert<sfpi::vFloat>(q_m >> 11, sfpi::RoundMode::Nearest);
-    sfpi::vFloat b1 = sfpi::convert<sfpi::vFloat>((b >> 11) & MASK_11, sfpi::RoundMode::Nearest);
-    sfpi::vFloat b0 = sfpi::convert<sfpi::vFloat>(b & MASK_11, sfpi::RoundMode::Nearest);
+    sfpi::vFloat q1 = sfpi::convert<sfpi::vFloat>(q_m & MASK_11, sfpi::RoundMode::NearestEven);
+    sfpi::vFloat q2 = sfpi::convert<sfpi::vFloat>(q_m >> 11, sfpi::RoundMode::NearestEven);
+    sfpi::vFloat b1 = sfpi::convert<sfpi::vFloat>((b >> 11) & MASK_11, sfpi::RoundMode::NearestEven);
+    sfpi::vFloat b0 = sfpi::convert<sfpi::vFloat>(b & MASK_11, sfpi::RoundMode::NearestEven);
     auto q = sfpi::vUInt(q_m) << 11;
 
     sfpi::vFloat MANTISSA_ALIGNMENT_OFFSET = 8388608.0f;
@@ -111,13 +111,13 @@ sfpi_inline void calculate_div_int32_body(
         sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].get(), 4, sfpi::SFPLOAD_ADDR_MODE_NOINC);
     a = sfpi::abs(a);
     sfpi::vInt r = a - qb;
-    sfpi::vFloat r_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(r), sfpi::RoundMode::Nearest);
+    sfpi::vFloat r_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(r), sfpi::RoundMode::NearestEven);
 
     // Compute correction value in float32.
     sfpi::vFloat correction_f = r_f * inv_b_f;
-    sfpi::vFloat b2 = sfpi::convert<sfpi::vFloat>(b >> 22, sfpi::RoundMode::Nearest);
-    auto correction = sfpi::convert<sfpi::vUInt16>(correction_f, sfpi::RoundMode::Nearest);
-    correction_f = sfpi::convert<sfpi::vFloat>(correction, sfpi::RoundMode::Nearest);
+    sfpi::vFloat b2 = sfpi::convert<sfpi::vFloat>(b >> 22, sfpi::RoundMode::NearestEven);
+    auto correction = sfpi::convert<sfpi::vUInt16>(correction_f, sfpi::RoundMode::NearestEven);
+    correction_f = sfpi::convert<sfpi::vFloat>(correction, sfpi::RoundMode::NearestEven);
 
     // correction should fit into 11 bits, thus:
     // tmp = correction * (b2<<22 + b1<<11 + b0)

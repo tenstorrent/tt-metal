@@ -62,7 +62,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val) {
         sfpi::exexp(z, sfpi::ExponentMode::NoDebias);  // Extract exponent ( = 2**(integer part of val/ln2))
     sfpi::vMag fractional_part = sfpi::exman(z);       // Extract mantissa ( = leftover part, in [0; 1])
 
-    sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::Nearest);
+    sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::NearestEven);
 
     // To refine approximation of 2**(x_f), we use an approximation of 2**x on [0; 2^23]
     // This uses a 2nd degree polynomial adjustment of the fractional part
@@ -76,7 +76,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val) {
         // This can reduce accuracy: for instance, 9**2 = 80.8 gets round to 80.5
         // rather than 81 (which would have been correct).
         // To avoid this issue, we explicitly convert to bfloat16 using round-to-nearest-even.
-        y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
+        y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::NearestEven);
     }
 
     return y;
@@ -129,7 +129,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
         exexp(z, sfpi::ExponentMode::NoDebias);   // Extract exponent ( = 2**(integer part of val/ln2))
     sfpi::vMag fractional_part = sfpi::exman(z);  // Extract mantissa ( = leftover part, in [0; 1])
 
-    sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::Nearest);
+    sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::NearestEven);
 
     // To refine approximation of 2**(x_f), we use an approximation of 2**x on [0; 2^23]
     // This uses a 2nd degree polynomial adjustment of the fractional part
@@ -143,7 +143,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
         // This can reduce accuracy: for instance, 9**2 = 80.8 gets round to 80.5
         // rather than 81 (which would have been correct).
         // To avoid this issue, we explicitly convert to bfloat16 using round-to-nearest-even.
-        y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
+        y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::NearestEven);
     }
 
     return y;
@@ -203,8 +203,8 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
     // interleaved with first coefficient of polynomial
     j = 1.442695f * a;
     r = 1.37805939e-3f;
-    sfpi::vSMag i_smag = sfpi::convert<sfpi::vSMag16>(j, sfpi::RoundMode::Nearest);
-    j = sfpi::convert<sfpi::vFloat>(i_smag, sfpi::RoundMode::Nearest);
+    sfpi::vSMag i_smag = sfpi::convert<sfpi::vSMag16>(j, sfpi::RoundMode::NearestEven);
+    j = sfpi::convert<sfpi::vFloat>(i_smag, sfpi::RoundMode::NearestEven);
 
     // f = a - i*j (two-part cody-waite)
     f = j * -6.93145752e-1f + a;
@@ -349,7 +349,7 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     // the integer-part-as-float-encoding which feeds SETEXP later.
     TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPEXMAN_MOD1_PAD9);
 
-    // frac = convert<vFloat>(fractional_part, RoundMode::Nearest)
+    // frac = convert<vFloat>(fractional_part, RoundMode::NearestEven)
     TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPCAST_MOD1_INT32_TO_FP32_RNE);
 
     // Polynomial refinement of 2^x_f on [0, 1] in Horner form:
