@@ -326,6 +326,52 @@ void blocked_matmul_and_pack(
 }
 
 /**
+ * Matmul + pack of scores against in-place latent V (V read from K^T: V[sk][vd] == K^T[vd][sk]).
+ * Each output column vd is its own matmul chain over K^T row vd (in1 base vd*KT_stride, inner
+ * stride 1), so unlike blocked_matmul_and_pack the strided columns can't be folded into one matmul.
+ * Batches as many columns as DST holds per acquire/commit/pack to keep the FPU busy, instead of
+ * paying the handshake + pack-configure per column (~2/3 FPU idle for the 1-wide path).
+ *
+ * Loops: outer walks columns in DST-sized batches; middle does one column (= one matmul chain) per
+ * DST tile; inner accumulates that chain over inner_dim tiles. Each batch is packed out in one go.
+ */
+template <uint32_t vDHt, uint32_t dst_size, uint32_t subblock_h>
+void inplace_v_matmul_pack_batched(
+    uint32_t in0_cb,
+    uint32_t in1_cb,
+    uint32_t out_cb,
+    uint32_t in0_index_start,
+    uint32_t inner_dim,
+    uint32_t KT_stride) {
+    // Each output column is written column-major into DST (column c at c*subblock_h), but the
+    // pack below reads DST row-major; the two orderings only coincide when subblock_h==1, which
+    // kt_inplace_v guarantees via Sq_chunk_t==1. Enforce it so this can't silently corrupt if
+    // reused with multi-tile Q.
+    static_assert(subblock_h == 1, "inplace_v_matmul_pack_batched requires single-tile Q (subblock_h==1)");
+    // subblock_h DST tiles per output column; batch as many columns as DST holds.
+    const uint32_t cols_per_batch = dst_size / subblock_h;
+    for (uint32_t vs0 = 0; vs0 < vDHt; vs0 += cols_per_batch) {
+        const uint32_t cols = (vDHt - vs0 < cols_per_batch) ? (vDHt - vs0) : cols_per_batch;
+        tile_regs_acquire();
+        for (uint32_t c = 0; c < cols; ++c) {
+            uint32_t in0_index = in0_index_start;
+            uint32_t in1_index = (vs0 + c) * KT_stride;
+            for (uint32_t inner = 0; inner < inner_dim; ++inner) {
+                matmul_block_no_mop(
+                    in0_cb, in1_cb, in0_index, in1_index, c * subblock_h, false, 1, subblock_h, KT_stride);
+                in0_index++;
+                in1_index++;
+            }
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        configure_row_pack_width(out_cb, cols);
+        pack_contiguous_rows_nocfg(out_cb, 0, subblock_h, vDHt, vs0, cols);
+        tile_regs_release();
+    }
+}
+
+/**
  * Per-row-group max reduction with optional eltwise_max against prev values.
  * Reads from in0_cb at row group offset, writes to out_cb sequentially.
  */
@@ -1285,80 +1331,109 @@ static void sdpa_inner_loop_step(
         // q_subblock 0: drain last row's sub_exp in-place + first QKT@V matmul
         {
             MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)@V");
-            // Split-drain: interleave per-column-subblock sub_exp with partial V matmul.
-            // Each kt_sub softmaxes one column chunk of the last row, then multiplies
-            // with the corresponding V rows; partial products accumulate via L1.
             const uint32_t matmul_inner = actual_sbw;
-            for (uint32_t kt_sub = 0; kt_sub < kt_num_full_subblocks; ++kt_sub) {
-                sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
-                    cb_qkt_im,
-                    cur.max,
-                    cur.sum,
-                    KT_stride,
-                    q_num_subblocks - 1,
-                    kt_sub * actual_sbw,
-                    qkt_subblock_h,
-                    actual_sbw);
-                // PACK-to-UNPACK barrier: sub_exp writes cb_qkt_im in-place via pack_tile<true>;
-                // V matmul UNPACK below reads the same positions and needs to see those writes.
-                // For q_num_subblocks==1 the cb_wait_front was already satisfied by Phase 1's
-                // cb_push_back_hold_wr_ptr, so it doesn't sync sub_exp's writes; explicit
-                // semaphore handshake required.
+
+            // sub_exp_block_bcast_cols softmaxes the last Q row in place, one column-subblock at a
+            // time. The PACK->UNPACK barrier after it makes those in-place pack writes visible to
+            // the V-matmul unpack; only needed when q_num_subblocks==1 (Phase 1's hold_wr_ptr
+            // didn't sync them).
+
+            if constexpr (!kt_inplace_v) {
+                // Split-drain (common, materialized-V path): interleave each column-subblock's
+                // sub_exp with its partial V matmul; partial products accumulate across kt_sub via L1.
+                for (uint32_t kt_sub = 0; kt_sub < kt_num_full_subblocks; ++kt_sub) {
+                    sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
+                        cb_qkt_im,
+                        cur.max,
+                        cur.sum,
+                        KT_stride,
+                        q_num_subblocks - 1,
+                        kt_sub * actual_sbw,
+                        qkt_subblock_h,
+                        actual_sbw);
+                    if constexpr (q_num_subblocks == 1) {
+                        PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
+                        UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+                        UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+                    }
+                    if (kt_sub == 0) {
+                        cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
+                        cb_wait_front(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
+                    }
+                    if (kt_sub > 0) {
+                        PACK((llk_pack_reconfig_l1_acc(1)));
+                    }
+
+                    {
+                        MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
+                        uint32_t v_index_offset = 0;
+                        sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
+                            out_cb, out_cb);
+                        // cb_qkt_im rows are laid out at KT_stride even when this kt_sub only consumes a
+                        // narrower logical width. Keep unpack init on the physical stride; inner_dim below
+                        // still limits how many V rows are multiplied.
+                        mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
+                        configure_row_pack_width(out_cb, qktv_subblock_w);
+                        for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
+                            const uint32_t qktv_in1_index = kt_sub * matmul_inner * vDHt + v_index_offset;
+                            blocked_matmul_and_pack<false, vDHt, vDHt>(
+                                cb_qkt_im,
+                                cb_v_in,
+                                out_cb,
+                                qktv_in0_index_offset + kt_sub * matmul_inner,
+                                qktv_in1_index,
+                                0,
+                                v_subblock * qktv_subblock_w,
+                                qktv_subblock_w,
+                                qktv_h,
+                                matmul_inner,
+                                KT_stride,
+                                /*trigger_reduce=*/false,
+                                /*skip_pack_configure=*/true);
+                            v_index_offset += qktv_subblock_w;
+                        }
+                        sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
+                    }
+
+                    if (kt_sub > 0) {
+                        PACK((llk_pack_reconfig_l1_acc(0)));
+                    }
+                }
+            } else {
+                // In-place latent-V full-Sk single pass: softmax the whole row, then one matmul chain
+                // per output column over all active_Sk tiles (DST-accumulated, packed once per DST
+                // group). Vs split-drain this drops the L1-acc and the per-kt_sub packs/barriers.
+                // active_Sk == kt_num_full_subblocks * actual_sbw exactly, so one pass covers the row.
+                for (uint32_t kt_sub = 0; kt_sub < kt_num_full_subblocks; ++kt_sub) {
+                    sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
+                        cb_qkt_im,
+                        cur.max,
+                        cur.sum,
+                        KT_stride,
+                        q_num_subblocks - 1,
+                        kt_sub * actual_sbw,
+                        qkt_subblock_h,
+                        actual_sbw);
+                }
                 if constexpr (q_num_subblocks == 1) {
                     PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
                     UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
                     UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
                 }
-                if (kt_sub == 0) {
-                    cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
-                    // In-place latent-V reads V from K^T, already fronted by Phase 1's K^T wait.
-                    if constexpr (!kt_inplace_v) {
-                        cb_wait_front(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
-                    }
-                }
-                if (kt_sub > 0) {
-                    PACK((llk_pack_reconfig_l1_acc(1)));
-                }
-
+                cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
                 {
                     MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
-                    uint32_t v_index_offset = 0;
                     sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
                         out_cb, out_cb);
-                    // cb_qkt_im rows are laid out at KT_stride even when this kt_sub only consumes a
-                    // narrower logical width. Keep unpack init on the physical stride; inner_dim below
-                    // still limits how many V rows are multiplied.
                     mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
-                    // Configure once before v_subblock loop; skip inside.
-                    configure_row_pack_width(out_cb, qktv_subblock_w);
-                    for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
-                        // In-place latent-V reads V column v_subblock straight from K^T row v_subblock,
-                        // walking that row with in1 stride 1; the materialized path reads contiguous V
-                        // columns (in1 stride vDHt). qktv_subblock_w is 1 for the in-place path (the
-                        // host forces it), so the pack offset / width below collapse to one tile.
-                        const uint32_t qktv_in1_index = kt_inplace_v ? (v_subblock * KT_stride + kt_sub * matmul_inner)
-                                                                     : (kt_sub * matmul_inner * vDHt + v_index_offset);
-                        blocked_matmul_and_pack<false, kt_inplace_v ? 1 : vDHt, vDHt>(
-                            cb_qkt_im,
-                            cb_v_in,
-                            out_cb,
-                            qktv_in0_index_offset + kt_sub * matmul_inner,
-                            qktv_in1_index,
-                            0,
-                            v_subblock * qktv_subblock_w,
-                            qktv_subblock_w,
-                            qktv_h,
-                            matmul_inner,
-                            KT_stride,
-                            /*trigger_reduce=*/false,
-                            /*skip_pack_configure=*/true);
-                        v_index_offset += qktv_subblock_w;
-                    }
+                    inplace_v_matmul_pack_batched<vDHt, dst_size, qktv_h>(
+                        cb_qkt_im,
+                        cb_v_in,
+                        out_cb,
+                        qktv_in0_index_offset,
+                        /*inner_dim=*/kt_num_full_subblocks * matmul_inner,
+                        KT_stride);
                     sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
-                }
-
-                if (kt_sub > 0) {
-                    PACK((llk_pack_reconfig_l1_acc(0)));
                 }
             }
             qktv_in0_index_offset += qktv_h * KT_stride;

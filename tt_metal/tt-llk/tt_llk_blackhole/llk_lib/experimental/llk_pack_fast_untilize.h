@@ -384,7 +384,6 @@ inline void _llk_pack_fast_untilize_uninit_(const std::uint32_t pack_src_format)
         _llk_pack_fast_untilize_clear_output_row_stride_();
     }
     set_packer_strides<PackMode::Default>(pack_src_format, TILE_C_DIM);
-    TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
     _llk_pack_init_<PackMode::Default, false, false>(FACE_R_DIM, TILE_C_DIM, FAST_UNTILIZE_NUM_FACES, 1);
 }
 

@@ -9,7 +9,7 @@
 
 #include "llk_assert.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
-#include "llk_math_eltwise_unary_sfpu_common.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 
 // =============================================================================
 // SFPU invocation helper
@@ -33,9 +33,13 @@ namespace ckernel {
 
 template <DstSync DST_SYNC, bool DST_ACCUM, typename Callable, typename... Args>
 inline __attribute__((always_inline)) void _sfpu_check_and_call_(
-    Callable&& sfpu_func, std::uint32_t dst_index, [[maybe_unused]] VectorMode vector_mode, Args&&... args) {
-    LLK_ASSERT(vector_mode == VectorMode::RC, "Quasar currently only supports vector mode RC");
-    _llk_math_eltwise_unary_sfpu_params_(std::forward<Callable>(sfpu_func), dst_index, std::forward<Args>(args)...);
+    Callable&& sfpu_func, std::uint32_t dst_index, VectorMode vector_mode, Args&&... args) {
+    LLK_ASSERT(
+        vector_mode == VectorMode::R || vector_mode == VectorMode::C || vector_mode == VectorMode::RC ||
+            vector_mode == VectorMode::None,
+        "Quasar SFPU supports vector modes R, C, RC, None");
+    _llk_math_eltwise_unary_sfpu_params_(
+        std::forward<Callable>(sfpu_func), dst_index, vector_mode, std::forward<Args>(args)...);
 }
 
 }  // namespace ckernel

@@ -40,16 +40,30 @@ void kernel_main() {
         cb_c24.push_back(onetile);
 
         // reduce-w
-        compute_kernel_lib::reduce<
-            REDUCE_OP,
-            REDUCE_DIM,
-            compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-            compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-            tt::CBIndex::c_24,
-            tt::CBIndex::c_2,
-            last_out ? tt::CBIndex::c_16 : tt::CBIndex::c_25,
-            compute_kernel_lib::ReduceInputBlockShape::single(),
-            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-            compute_kernel_lib::Accumulate::at(tt::CBIndex::c_25, block));
+        if (last_out) {
+            compute_kernel_lib::reduce<
+                REDUCE_OP,
+                REDUCE_DIM,
+                tt::CBIndex::c_24,
+                tt::CBIndex::c_2,
+                tt::CBIndex::c_16,
+                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                compute_kernel_lib::ReduceInputBlockShape::single(),
+                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                compute_kernel_lib::Accumulate::at(tt::CBIndex::c_25, block));
+        } else {
+            compute_kernel_lib::reduce<
+                REDUCE_OP,
+                REDUCE_DIM,
+                tt::CBIndex::c_24,
+                tt::CBIndex::c_2,
+                tt::CBIndex::c_25,
+                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                compute_kernel_lib::ReduceInputBlockShape::single(),
+                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                compute_kernel_lib::Accumulate::at(tt::CBIndex::c_25, block));
+        }
     }
 }

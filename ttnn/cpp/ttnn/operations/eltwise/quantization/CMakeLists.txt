@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_eltwise_quantization ${LIB_TYPE})
 add_library(TTNN::Ops::Eltwise::Quantization ALIAS ttnn_op_eltwise_quantization)
 
-tt_reuse_precompile_headers(ttnn_op_eltwise_quantization TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_eltwise_quantization TTNN::PCHLean)
 TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_quantization)
 
 target_sources(

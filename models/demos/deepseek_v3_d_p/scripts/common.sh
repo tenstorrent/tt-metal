@@ -26,7 +26,7 @@ LOG_DIR="/data/$USER/$LOG_NAME"
 
 # Test selection — single source of truth.
 TEST_FILE="$TT_METAL_HOME/models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py"
-KFILTER="pretrained and e256_device_fp32 and mesh-8x4 and 61_layers and balanced and right_pad and smoke and iter25 and 25600 and pie960"
+KFILTER="ds_prefill and pretrained and e256_device_fp32 and fabric2d-mesh-8x4 and 61_layers and balanced and right_pad and smoke and no_determinism and iter25 and 25600 and longbook"
 
 # Inner-iteration count, derived from the iterNN token in the filter above.
 INNER_ITERS=$(grep -oE 'iter[0-9]+' <<<"$KFILTER" | grep -oE '[0-9]+' | head -1)
@@ -47,7 +47,7 @@ scan_log_dir() {
   pass=0; fail=0; hang=0; running=0; pending=0
   details=()
 
-  local i f next N iter layer mtime now idle elapsed
+  local i f next N iter layer mtime now idle elapsed loading progress
   for i in $(seq 1 "$LOOP"); do
     f=$(log_for "$dir" "$i")
     next=$(log_for "$dir" $((i + 1)))
@@ -70,14 +70,22 @@ scan_log_dir() {
       now=$(date +%s)
       idle=$((now - mtime))
 
+      # Before the forward loop starts there are no forward_layer markers; show
+      # which layer's weights are currently being loaded from cache instead.
+      progress="$layer"
+      if [ -z "$layer" ]; then
+        loading=$(grep 'Loaded cache for' "$f" 2>/dev/null | grep -oE 'layer_[0-9]+' | tail -1)
+        [ -n "$loading" ] && progress="loading weights $loading"
+      fi
+
       if [ -f "$next" ]; then
-        details+=("  $N: HANG?  iter=$iter/$INNER_ITERS  $layer")
+        details+=("  $N: HANG?  iter=$iter/$INNER_ITERS  $progress")
         ((hang++))
       elif [ "$idle" -gt "$STALE_SECS" ]; then
-        details+=("  $N: STALE ${idle}s  iter=$iter/$INNER_ITERS  $layer")
+        details+=("  $N: STALE ${idle}s  iter=$iter/$INNER_ITERS  $progress")
         ((running++))
       else
-        details+=("  $N: RUN    iter=$iter/$INNER_ITERS  $layer  (idle ${idle}s)")
+        details+=("  $N: RUN    iter=$iter/$INNER_ITERS  $progress  (idle ${idle}s)")
         ((running++))
       fi
     fi

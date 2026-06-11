@@ -136,5 +136,4 @@ inline void _llk_pack_rows_(const std::uint32_t tile_index, const std::uint32_t 
  */
 inline void _llk_pack_rows_uninit_()
 {
-    TTI_SETADCXX(p_setadc::PAC, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
 }

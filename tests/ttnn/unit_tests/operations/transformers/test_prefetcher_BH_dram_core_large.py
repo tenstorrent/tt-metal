@@ -237,6 +237,8 @@ def test_dram_core_prefetcher_BH_param(
 
     # ---- Run: prefetcher (async) -> matmul (consumes via gcb) -> stop drains ----
     ttnn.experimental.start_dram_core_prefetcher(device)
+    # Fence the prefetcher against the weight write so it never reads stale DRAM.
+    ttnn.experimental.wait_for_cq_on_dram_core_prefetcher(device, 0)
     ttnn.experimental.queue_dram_core_prefetcher_request(device, [(tt_weight, ring_size)], global_cb=gcb)
     tt_out = ttnn.linear(
         tt_act,

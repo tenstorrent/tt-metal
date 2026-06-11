@@ -107,9 +107,13 @@ Tensor batch_norm(
         // propagate the precision requirement here so that the output `batch_mean`/`batch_var` are in
         // higher precision rather than inheriting the `dtype` of input.
         batch_mean = operations::normalization::mean_NHW(input, memory_config, compute_kernel_config);
-        auto mean_sq = operations::normalization::mean_NHW(
-            ttnn::square(input, memory_config), memory_config, compute_kernel_config);
-        batch_var = ttnn::subtract(mean_sq, ttnn::square(batch_mean, memory_config), std::nullopt, memory_config);
+        // Use the centered two-pass form E[(x - mean)^2] instead of E[x^2] - E[x]^2.
+        // The latter suffers catastrophic cancellation when the batch mean is large
+        // relative to the batch variance, which can drive the variance slightly
+        // negative and produce NaNs in the normalization step.
+        auto centered = ttnn::subtract(input, batch_mean, std::nullopt, memory_config);
+        batch_var = operations::normalization::mean_NHW(
+            ttnn::square(centered, memory_config), memory_config, compute_kernel_config);
     } else {
         TT_FATAL(
             (running_mean.has_value() && running_var.has_value()),
