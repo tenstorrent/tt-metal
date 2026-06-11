@@ -63,3 +63,27 @@ if constexpr (use_batch_offset) { auto a = TensorAccessor(ta::batch_offset); ...
 2. **#3 (runtime/variadic accessors)** — unblocks binary_ng (a very common op) + concat + reshard.
 3. **#4 (vararg invariance)** — required before attention ops (sdpa/sdpa_decode) get the fast path.
 4. **#5 ergonomics** — cheap quality-of-life.
+
+---
+
+## Audrey's triage response (2026-06-11) — and our follow-ups
+
+Almost nothing here is a permanent blocker. Status per item:
+
+- **#1 (conditional tokens)** — KNOWN ("found ages ago"); a **recipe issue**, not a new bug. Proper fix needs
+  **first-class kernel args**; there's an existing **workaround**. → FOLLOW-UP: get the workaround from
+  Audrey / the recipe and apply to the #1-blocked ops (nlp_create_qkv_heads_decode, paged_cache fill,
+  nlp_create_qkv_heads transpose) — un-blockable now, no metal wait.
+- **#2 (borrowed/compute binding)** — Audrey is FIXING both halves: half 1 (borrowed_from not registering a
+  user) **fixed yesterday**; half 2 (compute-only accessor binding) **found last night, PR up shortly**.
+  → FOLLOW-UP: after her PR lands + rebase, RE-ATTEMPT the #2 ops — esp. **rotary_embedding_llama decode**
+  (the headline dynamic-arg win), plus rotary_fused_qk, embedding sharded, concat S2S.
+- **#3 (runtime/variadic accessors)** — Audrey suspects an **invocation difference**, not a gap; she **ported
+  binary_ng yesterday** (with assorted Device-2.0 issues). → FOLLOW-UP: get her binary_ng port / correct
+  chained-accessor invocation; our agent likely used the wrong one. Re-attempt binary_ng + concat/reshard.
+- **#4 (vararg per-arg invariance)** — acknowledged; **easy fix but needs a hack**. → wait before the
+  sdpa/sdpa_decode fast path.
+- **#5 (validation ergonomics)** — Audrey will address (error-messaging improvements).
+
+**Net:** the "blocked" list is mostly TEMPORARY. Re-attempt order once #1 workaround is in hand + #2 PR lands:
+rotary-decode (#2, the win) → the #1 ops → binary_ng (#3 invocation) → sdpa/sdpa_decode (#4).
