@@ -48,15 +48,15 @@ Warm-iteration wall time on Blackhole p150b (`test_ttnn_uniad.py::test_uniad`,
 
 | Phase                              |  ms |
 | ---------------------------------- | --: |
-| `extract_img_feat` (ResNet101+FPN) | 372 |
-| `get_bev_features` (BEV encoder)   | 422 |
-| `get_detections` (DETR decoder)    |  89 |
-| `simple_test_track` (subtotal)     | 959 |
-| `seg_head.forward_test`            | 262 |
+| `extract_img_feat` (ResNet101+FPN) | 394 |
+| `get_bev_features` (BEV encoder)   | 392 |
+| `get_detections` (DETR decoder)    |  88 |
+| `simple_test_track` (subtotal)     | 951 |
+| `seg_head.forward_test`            | 256 |
 | `motion_head.forward_test`         | 122 |
-| `planning_head.forward_test`       |  39 |
+| `planning_head.forward_test`       |  36 |
 | `occ_head`                         |   1 |
-| **forward total**                  | **~1383** |
+| **forward total**                  | **~1367** |
 
 Per-run noise is ±2-3 % on each phase. PCC `sdc_traj` ≥ 0.99 (gate
 floor). The committed `tests/perf_baseline.json` pins each phase to
