@@ -37,8 +37,8 @@ _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py"
         # would otherwise match both 1D and 2D variants).
         (
             f"pytest {_TEST_PATH} -k 'mesh-8x4 and layer0 and gate_device and no_ref and isl_25k and not fabric2d-'",
-            19_185_763,  # Recalibrated 2026-06-02 (CI run 26781295939): FABRIC_1D path sped up ~7% by the
-            "deepseek_v3_prefill_block",  # ccl_routing_utils migration (non-blocking atomic-inc flush, etc.).
+            19_378_393,  # Recalibrated 2026-06-10 on bh-glx-110-c08u02 (deepseek_v3_d_p perf run); FABRIC_1D.
+            "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_8x4_layer0_dense",
             1,
             1,
@@ -57,7 +57,7 @@ _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py"
         ),
         (
             f"pytest {_TEST_PATH} -k 'mesh-8x4 and layer3 and gate_device and no_ref and isl_25k and not fabric2d-'",
-            71_674_205,  # Recalibrated 2026-06-09 on bh-glx-110-c05u02 — post-main-rebase speedup from #45189 (unified_routed_expert_ffn).
+            71_888_628,  # Recalibrated 2026-06-10 on bh-glx-110-c08u02 (deepseek_v3_d_p perf run); FABRIC_1D.
             "deepseek_v3_prefill_block_25k",
             "deepseek_v3_prefill_block_8x4_layer3_moe_25k",
             1,
@@ -67,7 +67,7 @@ _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py"
         ),
         (
             f"pytest {_TEST_PATH} -k 'mesh-2x4-2link and layer3 and gate_device and no_ref and isl_6k4'",
-            107_554_551,
+            58_750_603,  # Recalibrated 2026-06-10 on BH LoudBox 2x4; FABRIC_1D.
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_2x4_layer3_moe",
             1,
@@ -80,7 +80,7 @@ _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py"
         # with a wide margin so the first run will pass and surface the measured number.
         (
             f"pytest {_TEST_PATH} -k 'fabric2d-mesh-8x4 and layer0 and gate_device and no_ref and isl_25k'",
-            26_070_387,  # Recalibrated 2026-06-05 on bh-glx-d07u02 (post-main-rebase).
+            25_862_584,  # Recalibrated 2026-06-10 on bh-glx-110-c08u02 (with FABRIC_2D init flush=false change).
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_8x4_layer0_dense_fabric2d",
             1,
@@ -100,7 +100,7 @@ _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py"
         ),
         (
             f"pytest {_TEST_PATH} -k 'fabric2d-mesh-8x4 and layer3 and gate_device and no_ref and isl_25k'",
-            86_581_430,  # Recalibrated 2026-06-05 on bh-glx-d07u02 — post-main-rebase speedup from #45189 (unified_routed_expert_ffn).
+            87_100_959,  # Recalibrated 2026-06-10 on bh-glx-110-c08u02 (with FABRIC_2D init flush=false change).
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_8x4_layer3_moe_fabric2d_25k",
             1,
@@ -110,8 +110,8 @@ _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py"
         ),
         (
             f"pytest {_TEST_PATH} -k 'fabric2d-mesh-2x4 and layer3 and gate_device and no_ref and isl_6k4'",
-            75_467_194,  # Recalibrated 2026-06-05 on bh_loudbox bh-lb-02 (post-main-rebase): ~38% speedup from
-            "deepseek_v3_prefill_block",  # #45189 (unified_routed_expert_ffn), matching the fabric2d-mesh-8x4 layer3 recalibration.
+            72_463_075,  # Recalibrated 2026-06-10 on BH LoudBox 2x4; FABRIC_2D.
+            "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_2x4_layer3_moe_fabric2d",
             1,
             1,

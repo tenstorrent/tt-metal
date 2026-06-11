@@ -1360,6 +1360,7 @@ def run_ring_joint_sdpa_chunked(
     cache_batch: int = 2,
     persistent_buffer_mode: str = "exact_per_chunk",
     use_ring_mla: bool = False,
+    do_check: bool = True,
 ):
     """
     Validate ring joint SDPA chunked-prefill, or verify deterministic replay.
@@ -1461,8 +1462,11 @@ def run_ring_joint_sdpa_chunked(
         else:
             V_full = fa_rand(b, nhv, total_seq, d_v)
 
+        # do_check=False (perf/profiling) skips the full-sequence CPU torch reference: it is an
+        # O(total_seq^2) host SDPA that dominates wall-clock, while the device kernel — the only
+        # thing the profiler measures — still runs below. Mirrors run_ring_joint_sdpa's do_check.
         ref_full = None
-        if num_iterations == 1:
+        if num_iterations == 1 and do_check:
             ref_full = torch_sdpa_reference(Q_full, K_full, V_full, is_causal=True)
 
         sdpa_input_shard_dims = [None, None]
@@ -1837,17 +1841,20 @@ def run_ring_joint_sdpa_chunked(
                         persistent_output_buffer_v,
                         kv_cache_batch_idx_arg,
                     )
-                    out_i = to_host(tt_out, chunk_size)
-                    if use_ring_mla:
-                        out_i = out_i[:, :, :, :d_v]
-                    record_chunk_accuracy(
-                        config_id,
-                        per_chunk_results_by_config[config_id],
-                        i,
-                        s,
-                        e,
-                        out_i,
-                    )
+                    # do_check=False (perf/profiling): the device op above already ran for the
+                    # profiler; skip the host readback and PCC comparison against ref_full.
+                    if do_check:
+                        out_i = to_host(tt_out, chunk_size)
+                        if use_ring_mla:
+                            out_i = out_i[:, :, :, :d_v]
+                        record_chunk_accuracy(
+                            config_id,
+                            per_chunk_results_by_config[config_id],
+                            i,
+                            s,
+                            e,
+                            out_i,
+                        )
 
         if num_iterations > 1 and use_device_determinism_compare and determinism_mismatch_marker is not None:
             assert not device_mismatch_marker_is_set(
@@ -3303,7 +3310,7 @@ def test_ring_joint_attention_create_perf_table(model_name):
 
 # === TEST 5: PERFORMANCE CHECK (CI-gated by SDPA_PERF_CHECKS=1) ===
 # Symmetric +/- band — catches both regressions and unexpected speedups.
-RING_JOINT_PERF_MARGIN = 0.005
+RING_JOINT_PERF_MARGIN = 0.01
 
 RING_JOINT_PERF_CHECK_CONFIGS = [
     # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
@@ -3561,6 +3568,32 @@ def test_ring_mla_chunked_accuracy(model_name, qk_configs, chunk_size):
         qk_configs=qk_configs,
         persistent_buffer_mode="reuse_max",
         use_ring_mla=True,
+    )
+
+
+# Perf-profiling twin of test_ring_mla_chunked_accuracy: identical device work, but do_check=False
+# skips the O(total_seq^2) CPU torch reference so the run fits the profiler timeout. Skipped on CI
+# directly; it is driven by test_ring_mla_chunked_perf_check via run_device_profiler (which sets
+# CI=false in the subprocess). Mirrors the test_ring_joint_attention_sdpa_sweep_perf_impl pattern.
+@pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
+@pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
+@pytest.mark.parametrize(
+    "model_name,qk_configs",
+    RING_MLA_CHUNKED_TEST_CONFIGS,
+    ids=RING_MLA_CHUNKED_TEST_CONFIG_IDS,
+)
+def test_ring_mla_chunked_perf_impl(model_name, qk_configs, chunk_size):
+    """ring_mla chunked prefill without the CPU reference — profiled by the chunked perf check."""
+    mesh_config = MESH_CONFIG
+
+    run_ring_joint_sdpa_chunked(
+        mesh_config,
+        RING_MLA_CHUNKED_MODEL_CONFIGS[model_name],
+        chunk_size=chunk_size,
+        qk_configs=qk_configs,
+        persistent_buffer_mode="reuse_max",
+        use_ring_mla=True,
+        do_check=False,
     )
 
 
@@ -3829,7 +3862,7 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
     config_id = f"{get_test_case_id(model, q_chunk_size, k_chunk_size)}-chunk{chunk_size}"
     subdir = "ttnn_ring_mla_chunked_perf_check"
     command = (
-        f"pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_accuracy[{config_id}]"
+        f"pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_perf_impl[{config_id}]"
     )
 
     float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]

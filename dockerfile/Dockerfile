@@ -26,6 +26,9 @@
 #############################################################
 
 ARG UBUNTU_VERSION=22.04
+# As of June 2026: this is where you set SMI version of Metal container image
+# for CI and things like IRD or other workflows using the dev container.
+ARG TT_SMI_VERSION=5.2.0
 # PYTHON_VERSION can be explicitly set or auto-detected from UBUNTU_VERSION:
 # Ubuntu 22.04 -> Python 3.10
 # Ubuntu 24.04 -> Python 3.12
@@ -200,7 +203,16 @@ LABEL org.opencontainers.image.licenses="Apache-2.0"
 LABEL org.opencontainers.image.documentation="https://docs.tenstorrent.com/"
 
 ARG UBUNTU_VERSION
+ARG TT_SMI_VERSION
 ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
+
+# Install tt-smi from GitHub releases and make it executable for all users
+# (notably the default non-root container user). Verify the installed version
+# matches TT_SMI_VERSION in the same command.
+RUN curl -fsSL -o /usr/local/bin/tt-smi \
+    "https://github.com/tenstorrent/tt-smi/releases/download/v${TT_SMI_VERSION}/tt-smi-${TT_SMI_VERSION}-ubuntu-${UBUNTU_VERSION}" && \
+    chmod a+rx /usr/local/bin/tt-smi && \
+    tt-smi --version | grep -q "${TT_SMI_VERSION}"
 
 # Create directories for infra (needed even with pre-built venv for requirements file reference)
 RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/ && \

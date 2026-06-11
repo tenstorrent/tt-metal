@@ -261,6 +261,7 @@ target_link_libraries(
         TTNN::Ops::Examples
         TTNN::Ops::Experimental::AdaptivePool
         TTNN::Ops::Experimental::BcastTo
+        TTNN::Ops::Experimental::MultiScaleDeformableAttn
         TTNN::Ops::Experimental::CCL
         TTNN::Ops::Experimental::CNN
         TTNN::Ops::Experimental::Conv3d
@@ -287,6 +288,8 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeekPrefill::MoeGroupedTopk
         TTNN::Ops::Experimental::DeepSeekPrefill::UpdatePaddedKvCache
         TTNN::Ops::Experimental::DeepSeekPrefill::RotaryEmbeddingIndexed
+        TTNN::Ops::Experimental::DeepSeekPrefill::PerTokenCastToFp8
+        TTNN::Ops::Experimental::DeepSeekPrefill::PerTokenCastBack
         TTNN::Ops::Experimental::PagedCache
         TTNN::Ops::Experimental::PlusOne
         TTNN::Ops::Experimental::Reduction
@@ -520,6 +523,7 @@ add_subdirectory(cpp/ttnn/operations/embedding_backward)
 add_subdirectory(cpp/ttnn/operations/examples)
 add_subdirectory(cpp/ttnn/operations/experimental/adaptive_pool)
 add_subdirectory(cpp/ttnn/operations/experimental/bcast_to)
+add_subdirectory(cpp/ttnn/operations/experimental/multi_scale_deformable_attn)
 add_subdirectory(cpp/ttnn/operations/experimental/ccl)
 add_subdirectory(cpp/ttnn/operations/experimental/cnn)
 add_subdirectory(cpp/ttnn/operations/experimental/conv3d)
@@ -545,6 +549,8 @@ add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/insert)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed)
+add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8)
+add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_back)
 add_subdirectory(cpp/ttnn/operations/experimental/padded_slice)
 add_subdirectory(cpp/ttnn/operations/experimental/paged_cache)
 add_subdirectory(cpp/ttnn/operations/experimental/plusone)

@@ -235,7 +235,7 @@ void kernel_main() {
                     read_in1_block_sync<K_block_tiles, N_block_tiles>(
                         in1_reader,
                         in1_shape,
-                        in1_start_address,
+                        cb_id_in1,
                         in1_tile_size,
                         k_block_left_tile,
                         k_block_left_tile + k_left_tiles,
