@@ -26,9 +26,9 @@ from .tt_matmul_memory import activation_interleaved_mc, maybe_reshard_to_caller
 # ``decoder.encode.norm2`` (C=1024, bf16, L≈96) still needs the decomposed path for PCC > 0.99.
 _LEGACY_INSTANCE_NORM_CHANNELS = frozenset({1024})
 
-# Fold InstanceNorm affine (w, b) into AdaIN coef/shift. BF16 generator path is gated until casts
-# are validated on full kmodel PCC (see ``test_tt_kmodel_stft_and_phase_fallback_pcc``).
-_ENABLE_AFFINE_FOLD_BF16 = False
+# Fold InstanceNorm affine (w, b) into AdaIN coef/shift on generator BF16 paths. Coef/shift math
+# runs in FP32 and is cast once to the activation dtype before ``addcmul``.
+_ENABLE_AFFINE_FOLD_BF16 = True
 
 
 def _cast_to_dtype(
@@ -50,6 +50,36 @@ def _use_affine_fold(activation_dtype) -> bool:
     if activation_dtype == ttnn.float32:
         return True
     return _ENABLE_AFFINE_FOLD_BF16
+
+
+def _fold_adain_coef_shift_fp32(
+    *,
+    gamma: ttnn.Tensor,
+    beta: ttnn.Tensor,
+    inst_weight: Optional[ttnn.Tensor],
+    inst_bias: Optional[ttnn.Tensor],
+    memory_config: ttnn.MemoryConfig,
+) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Fold ``(1+gamma)*w`` and ``beta + (1+gamma)*b`` in FP32 for stable BF16 AdaIN."""
+    gamma = _cast_to_dtype(gamma, ttnn.float32, memory_config=memory_config)
+    beta = _cast_to_dtype(beta, ttnn.float32, memory_config=memory_config)
+    in_w = _cast_to_dtype(inst_weight, ttnn.float32, memory_config=memory_config, deallocate_source=False)
+    in_b = _cast_to_dtype(inst_bias, ttnn.float32, memory_config=memory_config, deallocate_source=False)
+
+    coef = ttnn.add(gamma, 1.0, memory_config=memory_config)
+    ttnn.deallocate(gamma)
+    if in_b is not None:
+        tmp_b = ttnn.multiply(coef, in_b, memory_config=memory_config)
+        shift = ttnn.add(beta, tmp_b, memory_config=memory_config)
+        ttnn.deallocate(tmp_b)
+        ttnn.deallocate(beta)
+    else:
+        shift = beta
+    if in_w is not None:
+        scaled_coef = ttnn.multiply(coef, in_w, memory_config=memory_config)
+        ttnn.deallocate(coef)
+        coef = scaled_coef
+    return coef, shift
 
 
 @dataclass(frozen=True)
@@ -278,46 +308,23 @@ class TTAdaIN1d:
         act_dtype = y.dtype
 
         if fold_affine:
-            gamma = _cast_to_dtype(gamma, act_dtype, memory_config=memory_config)
-            beta = _cast_to_dtype(beta, act_dtype, memory_config=memory_config)
-
-            in_w = _cast_to_dtype(
-                p.instancenorm.weight, act_dtype, memory_config=memory_config, deallocate_source=False
+            coef, shift = _fold_adain_coef_shift_fp32(
+                gamma=gamma,
+                beta=beta,
+                inst_weight=p.instancenorm.weight,
+                inst_bias=p.instancenorm.bias,
+                memory_config=memory_config,
             )
-            in_b = _cast_to_dtype(p.instancenorm.bias, act_dtype, memory_config=memory_config, deallocate_source=False)
+            if act_dtype != ttnn.float32:
+                coef = _cast_to_dtype(coef, act_dtype, memory_config=memory_config)
+                shift = _cast_to_dtype(shift, act_dtype, memory_config=memory_config)
 
-            coef = ttnn.add(gamma, 1.0, memory_config=memory_config)
-            ttnn.deallocate(gamma)
-            if in_b is not None:
-                tmp_b = ttnn.multiply(coef, in_b, memory_config=memory_config)
-                shift = ttnn.add(beta, tmp_b, memory_config=memory_config)
-                ttnn.deallocate(tmp_b)
-                ttnn.deallocate(beta)
-            else:
-                shift = beta
-            if in_w is not None:
-                scaled_coef = ttnn.multiply(coef, in_w, memory_config=memory_config)
-                ttnn.deallocate(coef)
-                coef = scaled_coef
-
-            if act_dtype == ttnn.float32:
-                out = ttnn.addcmul(shift, y, coef, memory_config=memory_config)
-                ttnn.deallocate(y)
-                ttnn.deallocate(coef)
-                ttnn.deallocate(shift)
-                if fuse_leaky_slope is not None:
-                    out = ttnn.leaky_relu(out, negative_slope=fuse_leaky_slope, memory_config=memory_config)
-                return out
-
-            y_scaled = ttnn.multiply(y, coef, memory_config=memory_config)
-            ttnn.deallocate(coef)
+            out = ttnn.addcmul(shift, y, coef, memory_config=memory_config)
             ttnn.deallocate(y)
-            add_kwargs: dict = {"memory_config": memory_config}
-            if fuse_leaky_slope is not None:
-                add_kwargs["activations"] = [ttnn.UnaryWithParam(ttnn.UnaryOpType.LEAKY_RELU, fuse_leaky_slope)]
-            out = ttnn.add(y_scaled, shift, **add_kwargs)
+            ttnn.deallocate(coef)
             ttnn.deallocate(shift)
-            ttnn.deallocate(y_scaled)
+            if fuse_leaky_slope is not None:
+                out = ttnn.leaky_relu(out, negative_slope=fuse_leaky_slope, memory_config=memory_config)
             return out
 
         scale = ttnn.add(gamma, 1.0, memory_config=memory_config)
