@@ -22,11 +22,10 @@ from models.experimental.pi0_5.common.configs import Pi0_5ModelConfig
 
 from . import stages
 from .expert_slice import ExpertChunkSlice
-from .transport import send_via_host
 
 
 class StageDenoise:
-    def __init__(self, config: Pi0_5ModelConfig, weights: Dict[str, dict], mesh_handles):
+    def __init__(self, config: Pi0_5ModelConfig, weights: Dict[str, dict], mesh_handles, transport=None):
         chips = mesh_handles.denoise_per_chip
         if len(chips) != stages.DENOISE_NUM_CHIPS:
             raise RuntimeError(f"denoise stage requires {stages.DENOISE_NUM_CHIPS} chips, got {len(chips)}")
@@ -47,6 +46,11 @@ class StageDenoise:
             )
             for c in range(stages.DENOISE_NUM_CHIPS)
         ]
+        if transport is None:
+            from .transport import SocketTransport
+
+            transport = SocketTransport()
+        self.transport = transport
 
     def run_expert_chain(
         self,
@@ -91,5 +95,5 @@ class StageDenoise:
                 s_i,
             )
             if i < len(self.chunks) - 1:
-                hidden = send_via_host(hidden, self.chips[i + 1])
+                hidden = self.transport.send(hidden, self.chips[i + 1])
         return hidden

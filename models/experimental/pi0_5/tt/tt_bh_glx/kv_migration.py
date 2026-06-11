@@ -1,11 +1,18 @@
 # SPDX-FileCopyrightText: 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Layer-paired prefill -> denoise KV migration via host bounce.
+"""Layer-paired prefill → denoise KV migration via fabric sockets.
 
 For 18 prefill layers and 6 denoise chips, layers 3*i, 3*i+1, 3*i+2 from
 prefill end up grouped on denoise chip i — the same 3 layers whose
-cross-attention K/V that denoise chip's expert blocks will read.
+cross-attention K/V the denoise chip's expert blocks read.
+
+v2 uses ``SocketTransport.send`` (direct-write via fabric) — zero host
+bounce, no ``ttnn.synchronize_device``. The bf16→bf8_b typecast (from v1
+host-bounce era) is kept for now: the expert's per-step k_rope is bf8_b
+and ``ttnn.concat([past_k, k_rope])`` on MeshDevice still requires
+matching dtype. Recovering the ~3 PCC points the typecast costs is a
+follow-up (typecast k_rope UP to bf16 inside attention instead).
 """
 
 from __future__ import annotations
@@ -15,12 +22,12 @@ from typing import List, Tuple
 import ttnn
 
 from . import stages
-from .transport import send_via_host
 
 
 def migrate_layer_paired(
     per_layer_kv,  # List[(K, V)] of length VLM_TOTAL_LAYERS, each on prefill_per_chip[i]
     denoise_per_chip,  # List of 6 denoise submeshes
+    transport=None,
 ) -> List[List[Tuple]]:
     """Returns prefix_kv_per_denoise_chip[chip_idx] = [(K_lo, V_lo), (K_lo+1, V_lo+1), (K_lo+2, V_lo+2)].
 
@@ -30,6 +37,10 @@ def migrate_layer_paired(
         raise RuntimeError(f"expected {stages.VLM_TOTAL_LAYERS} per-layer KV tuples, got {len(per_layer_kv)}")
     if len(denoise_per_chip) != stages.DENOISE_NUM_CHIPS:
         raise RuntimeError(f"expected {stages.DENOISE_NUM_CHIPS} denoise chips, got {len(denoise_per_chip)}")
+    if transport is None:
+        from .transport import SocketTransport
+
+        transport = SocketTransport()
 
     out: List[List[Tuple]] = []
     n_per = stages.EXPERT_LAYERS_PER_CHIP
@@ -38,12 +49,15 @@ def migrate_layer_paired(
         lo = chip_idx * n_per
         for j in range(n_per):
             k_src, v_src = per_layer_kv[lo + j]
-            k_dst = send_via_host(k_src, dst)
-            v_dst = send_via_host(v_src, dst)
-            # The expert's per-step k_rope is bfloat8_b (xqkv linear emits bf8_b);
-            # cross-attention concat([past_k, k_rope]) requires matching dtype on
-            # MeshDevice paths (the single-Device path is lenient). VLM prefill
-            # emits bf16 KV — convert here so prefix and current K match.
+            # Tag K vs V so they get separate cached receiver buffers (else
+            # the V send would overwrite the K buffer between the same chip pair).
+            # Tag also includes the local-layer index since each denoise chip
+            # holds 3 KV-pairs and they each need their own bufs.
+            k_dst = transport.send(k_src, dst, tag=f"kv:{j}:K")
+            v_dst = transport.send(v_src, dst, tag=f"kv:{j}:V")
+            # Match expert's per-step k_rope dtype (bf8_b) so the cross-attn
+            # concat([past_k, k_rope]) doesn't trigger MeshDevice's strict
+            # dtype check. See module docstring.
             if k_dst.dtype != ttnn.bfloat8_b:
                 k_dst = ttnn.typecast(k_dst, ttnn.bfloat8_b)
             if v_dst.dtype != ttnn.bfloat8_b:

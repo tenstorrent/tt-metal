@@ -19,12 +19,11 @@ from models.experimental.pi0_5.tt.ttnn_common import get_ln_weight_memory_config
 from models.experimental.pi0_5.tt.ttnn_gemma import rms_norm_ttnn
 
 from . import stages
-from .transport import send_via_host
 from .vlm_slice import VLMBlockSlice
 
 
 class StagePrefill:
-    def __init__(self, config: Pi0_5ModelConfig, weights: Dict[str, dict], mesh_handles):
+    def __init__(self, config: Pi0_5ModelConfig, weights: Dict[str, dict], mesh_handles, transport=None):
         chips = mesh_handles.prefill_per_chip
         if len(chips) != stages.PREFILL_NUM_CHIPS:
             raise RuntimeError(f"prefill stage requires {stages.PREFILL_NUM_CHIPS} chips, got {len(chips)}")
@@ -50,6 +49,11 @@ class StagePrefill:
             memory_config=get_ln_weight_memory_config(),
         )
         self.vlm_norm_eps = config.vlm_config.rms_norm_eps
+        if transport is None:
+            from .transport import SocketTransport
+
+            transport = SocketTransport()
+        self.transport = transport
 
     def run(
         self,
@@ -79,7 +83,7 @@ class StagePrefill:
             hidden, (k, v) = sl.forward(hidden, m_i, position_ids, c_i, s_i)
             per_layer_kv.append((k, v))
             if i < len(self.slices) - 1:
-                hidden = send_via_host(hidden, self.chips[i + 1])
+                hidden = self.transport.send(hidden, self.chips[i + 1])
 
         # Final VLM RMS norm on the last chip.
         hidden = rms_norm_ttnn(hidden, self.vlm_norm, self.vlm_norm_eps)

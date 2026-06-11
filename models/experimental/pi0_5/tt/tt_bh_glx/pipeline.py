@@ -57,7 +57,7 @@ from .stage_prefill import StagePrefill
 from .stage_vision import StageVision
 from .stages import StageTimings
 from .suffix_slice import SuffixSlice
-from .transport import send_via_host
+from .transport import SocketTransport
 
 
 _HIDDEN_SCALE_DTYPE = ttnn.bfloat16
@@ -132,10 +132,16 @@ class Pi0_5GLXPipeline:
         self.action_dim = config.action_dim
         self._action_horizon_padded = ((config.action_horizon + 31) // 32) * 32
 
-        # Per-stage executors.
-        self.stage_vision = StageVision(config.siglip_config, weights, mesh_handles)
-        self.stage_prefill = StagePrefill(config, weights, mesh_handles)
-        self.stage_denoise = StageDenoise(config, weights, mesh_handles)
+        # Single SocketTransport instance shared across all stages + KV migration.
+        # Caches one socket pair + receiver buffer per (src_chip, dst_chip, tag)
+        # so the cross-chip wiring is paid once at first call and reused on
+        # every subsequent sample_actions.
+        self.transport = SocketTransport()
+
+        # Per-stage executors (all share the same transport).
+        self.stage_vision = StageVision(config.siglip_config, weights, mesh_handles, transport=self.transport)
+        self.stage_prefill = StagePrefill(config, weights, mesh_handles, transport=self.transport)
+        self.stage_denoise = StageDenoise(config, weights, mesh_handles, transport=self.transport)
 
         # Lang token embed on prefill[0].
         self.prefill_head = _PrefillHead(
@@ -363,13 +369,11 @@ class Pi0_5GLXPipeline:
         # ---- Stage 0: vision ----
         t0 = time.perf_counter()
         vision_out = self.stage_vision.run(pixel_values)
-        ttnn.synchronize_device(self.h.vision_per_chip[-1])
         t.vision_ms = (time.perf_counter() - t0) * 1000.0
 
-        # ---- Transport 0→1: vision[3] → prefill[0] ----
+        # ---- Transport 0→1: vision[3] → prefill[0] (fabric socket) ----
         t0 = time.perf_counter()
-        vision_out_p0 = send_via_host(vision_out, self.h.prefill_per_chip[0])
-        ttnn.synchronize_device(self.h.prefill_per_chip[0])
+        vision_out_p0 = self.transport.send(vision_out, self.h.prefill_per_chip[0], tag="v2p")
         t.transport_v2p_ms = (time.perf_counter() - t0) * 1000.0
 
         # ---- Build prefix embeddings + Stage 1: prefill ----
@@ -396,14 +400,11 @@ class Pi0_5GLXPipeline:
             per_chip_cos=(upstream["prefix_cos"] if upstream is not None else None),
             per_chip_sin=(upstream["prefix_sin"] if upstream is not None else None),
         )
-        ttnn.synchronize_device(self.h.prefill_per_chip[-1])
         t.prefill_ms = (time.perf_counter() - t0) * 1000.0
 
-        # ---- Transport 1→2: layer-paired KV migration ----
+        # ---- Transport 1→2: layer-paired KV migration (fabric sockets) ----
         t0 = time.perf_counter()
-        prefix_kv_per_chip = migrate_layer_paired(per_layer_kv, self.h.denoise_per_chip)
-        for chip in self.h.denoise_per_chip:
-            ttnn.synchronize_device(chip)
+        prefix_kv_per_chip = migrate_layer_paired(per_layer_kv, self.h.denoise_per_chip, transport=self.transport)
         t.kv_migration_ms = (time.perf_counter() - t0) * 1000.0
 
         # ---- Stage 2: denoise loop ----
@@ -448,9 +449,10 @@ class Pi0_5GLXPipeline:
 
             # Final adaRMS norm + action_out_proj on last denoise chip.
             velocity_ttnn = self._apply_final_norm_and_project(expert_out, adarms_per_chip[-1])
-            ttnn.synchronize_device(self.h.denoise_per_chip[-1])
 
-            # Pull velocity to host and do Euler step in fp32.
+            # Pull velocity to host and do Euler step in fp32. ttnn.to_torch
+            # is blocking, so it implicitly serializes against any pending
+            # device ops on this submesh — no explicit synchronize_device needed.
             velocity_torch = ttnn.to_torch(velocity_ttnn).to(torch.float32)
             # velocity_torch shape: (1, ah_padded, action_dim)
             x_t = x_t + dt * velocity_torch

@@ -24,12 +24,11 @@ import ttnn
 
 from models.experimental.pi0_5.common.configs import SigLIPConfig
 from . import stages
-from .transport import send_via_host
 from .vision_slice import SigLIPEmbedSlice, SigLIPLayerSlice, SigLIPTailSlice
 
 
 class StageVision:
-    def __init__(self, config: SigLIPConfig, weights: Dict[str, dict], mesh_handles):
+    def __init__(self, config: SigLIPConfig, weights: Dict[str, dict], mesh_handles, transport=None):
         if len(mesh_handles.vision_per_chip) != 4:
             raise RuntimeError(f"vision stage requires 4 chips, got {len(mesh_handles.vision_per_chip)}")
         if config.num_hidden_layers != stages.SIGLIP_TOTAL_LAYERS:
@@ -52,6 +51,11 @@ class StageVision:
         self.tail_slice = SigLIPTailSlice(config, vw, pw, chips[3], layer_range=(N2, N3))
 
         self.chips = chips
+        if transport is None:
+            from .transport import SocketTransport
+
+            transport = SocketTransport()
+        self.transport = transport
 
     def run(self, pixel_values: torch.Tensor):
         """pixel_values: (B, 3, H, W) torch tensor. Returns ttnn (B, 256, 2048) on chips[3]."""
@@ -63,9 +67,9 @@ class StageVision:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         h0 = self.embed_slice.forward(pixel_values_ttnn)
-        h1 = send_via_host(h0, self.chips[1])
+        h1 = self.transport.send(h0, self.chips[1])
         h1 = self.layer_slice_a.forward(h1)
-        h2 = send_via_host(h1, self.chips[2])
+        h2 = self.transport.send(h1, self.chips[2])
         h2 = self.layer_slice_b.forward(h2)
-        h3 = send_via_host(h2, self.chips[3])
+        h3 = self.transport.send(h2, self.chips[3])
         return self.tail_slice.forward(h3)
