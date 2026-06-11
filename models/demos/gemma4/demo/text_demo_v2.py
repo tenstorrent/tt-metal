@@ -429,7 +429,7 @@ def test_demo_text(
         kv_cache=tt_kv_cache,
         enable_trace=enable_trace,
         can_sample_on_device=False,
-        non_greedy_decoding_on_device=False,
+        greedy_only=True,
     )
     logger.info("Warmup complete")
 
@@ -637,7 +637,7 @@ def _run_spec_decode(
     page_table = create_tt_page_table(batch_size, paged_attention_config)
 
     generator.warmup_model_prefill(
-        kv_cache=tt_kv_cache, enable_trace=enable_trace, can_sample_on_device=False, non_greedy_decoding_on_device=False
+        kv_cache=tt_kv_cache, enable_trace=enable_trace, can_sample_on_device=False, greedy_only=True
     )
 
     input_tokens_prefill_pt, encoded_prompts, decoding_pos, prefill_lens = preprocess_inputs_prefill(
