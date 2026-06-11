@@ -13,6 +13,7 @@ import types
 from pathlib import Path
 from typing import Any
 
+import pytest
 import torch
 from loguru import logger
 from transformers import MistralCommonBackend
@@ -187,7 +188,33 @@ def _tt_prefill_paged_chunked(
     return tt_out_last, sample_idx
 
 
-def main():
+def pytest_addoption(parser):
+    """Register demo CLI flags for ``pytest -p ...tt_text_demo ... --mesh-width N``."""
+    parser.addoption("--mesh-width", action="store", default=None, type=int, help="Device mesh width (1 x N)")
+    parser.addoption("--max-new-tokens", action="store", default=None, type=int, help="New tokens after prompt")
+
+
+def _argv_from_pytest(request) -> list[str]:
+    argv = ["tt_text_demo.py"]
+    mesh_width = request.config.getoption("--mesh-width")
+    if mesh_width is not None:
+        argv.extend(["--mesh-width", str(mesh_width)])
+    max_new_tokens = request.config.getoption("--max-new-tokens")
+    if max_new_tokens is not None:
+        argv.extend(["--max-new-tokens", str(max_new_tokens)])
+    return argv
+
+
+@pytest.mark.timeout(900)
+def test_demo(request):
+    """Pytest entrypoint; same path as ``python .../tt_text_demo.py [args]``."""
+    mesh_width = request.config.getoption("--mesh-width")
+    if mesh_width is not None and mesh_width > ttnn.get_num_devices():
+        pytest.skip(f"--mesh-width {mesh_width} requested but only {ttnn.get_num_devices()} device(s) are visible.")
+    main(_argv_from_pytest(request))
+
+
+def main(argv: list[str] | None = None):
     ref_max = int(DEFAULT_GENERATE_KWARGS["max_new_tokens"])
     ref_temp = float(DEFAULT_GENERATE_KWARGS["temperature"])
     ref_do_sample = bool(DEFAULT_GENERATE_KWARGS["do_sample"])
@@ -292,7 +319,7 @@ def main():
         help="Chunk size for chunked + paged prefill when prompt exceeds N tokens "
         "(must be a positive multiple of 512).",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(None if argv is None else argv[1:])
     prefer_stochastic_sampling = (not args.greedy) and ref_do_sample
 
     if args.prefill_chunk_size <= 0 or args.prefill_chunk_size % 512 != 0:
@@ -452,7 +479,6 @@ def main():
                 args=model_args,
                 mesh_device=mesh_device,
                 tt_ccl=shared_tt_ccl,
-                enable_internal_trace=False,
             )
             sampling_empty_slots = list(range(sampling.tt_sampling.max_batch_size))
             seed_for_params = args.seed if args.seed is not None else None

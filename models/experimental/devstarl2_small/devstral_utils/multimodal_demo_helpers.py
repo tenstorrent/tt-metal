@@ -625,7 +625,6 @@ def tt_capture_decode_trace(
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
-    sampling.enable_internal_trace = True  # required for sample(enable_trace=True)
     sampling.capture_trace(logits, tt_out_tok=tokens_out_prealloc)
 
     return TtDecodeTraceContext(

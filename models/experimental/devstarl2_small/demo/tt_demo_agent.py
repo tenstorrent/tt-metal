@@ -697,7 +697,6 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
                 args=model_args,
                 mesh_device=mesh_device,
                 tt_ccl=shared_tt_ccl,
-                enable_internal_trace=False,
             )
             sampling_empty_slots = list(range(sampling.tt_sampling.max_batch_size))
             seed_for_params = config.seed

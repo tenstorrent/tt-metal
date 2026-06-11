@@ -15,6 +15,7 @@ import time
 import types
 from pathlib import Path
 
+import pytest
 import torch
 from loguru import logger
 from PIL import Image
@@ -570,7 +571,6 @@ def run_tt(
                 args=model_args,
                 mesh_device=mesh_device,
                 tt_ccl=TT_CCL(mesh_device),
-                enable_internal_trace=False,
             )
             sampling_empty_slots = list(range(sampling.tt_sampling.max_batch_size))
             seed_for_params = seed if seed is not None else None
@@ -865,7 +865,40 @@ def run_tt(
         _tt_demo.close_devstral_demo_mesh(mesh_device)
 
 
-def main() -> None:
+def pytest_addoption(parser):
+    """Register demo CLI flags for ``pytest -p ...tt_image_demo ... --mesh-width N``."""
+    parser.addoption("--mesh-width", action="store", default=None, type=int, help="Device mesh width (1 x N)")
+    parser.addoption("--backend", action="store", default=None, choices=("hf", "tt"), help="hf or tt backend")
+    parser.addoption("--image", action="store", default=None, help="Input image path")
+    parser.addoption("--vision-square-pixels", action="store", default=None, type=int, help="Square vision resize (px)")
+    parser.addoption("--max-new-tokens", action="store", default=None, type=int, help="New tokens to generate")
+
+
+def _argv_from_pytest(request) -> list[str]:
+    argv = ["tt_image_demo.py"]
+    for option, flag in (
+        ("--mesh-width", "--mesh-width"),
+        ("--backend", "--backend"),
+        ("--image", "--image"),
+        ("--vision-square-pixels", "--vision-square-pixels"),
+        ("--max-new-tokens", "--max-new-tokens"),
+    ):
+        value = request.config.getoption(option)
+        if value is not None:
+            argv.extend([flag, str(value)])
+    return argv
+
+
+@pytest.mark.timeout(900)
+def test_demo(request):
+    """Pytest entrypoint; same path as ``python -m ...tt_image_demo`` or ``python .../tt_image_demo.py``."""
+    mesh_width = request.config.getoption("--mesh-width")
+    if mesh_width is not None and mesh_width > ttnn.get_num_devices():
+        pytest.skip(f"--mesh-width {mesh_width} requested but only {ttnn.get_num_devices()} device(s) are visible.")
+    main(_argv_from_pytest(request))
+
+
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         description="HF multimodal or TT TtDevstral2SmallModel demo (model_loading.py prompt)."
     )
@@ -932,7 +965,7 @@ def main() -> None:
         help="HF and TT: resize image to exactly S×S (LANCZOS) before processor (e.g. 1540 for HF-style "
         "square vision). Overrides vision-max-edge when set.",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(None if argv is None else argv[1:])
 
     if args.vision_square_pixels is not None and args.vision_square_pixels <= 0:
         parser.error("--vision-square-pixels must be a positive integer when set.")
