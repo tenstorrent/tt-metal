@@ -280,7 +280,9 @@ Branch: `skrstic/dsa_indexer_score_op_2` (cleanup) on `skrstic/dsa_indexer_score
       k-columns per matmul↔mul mode switch** (the win: the gate w is column-
       independent + the k chunk is resident, so one switch/row not one/tile);
       block-pack qk + guarded 4-arg reconfig. sp7 ceiling heads8 52.6→66.8%,
-      heads16→69.6%, heads64→72.1% math-util. See `INDEXER_PROFILING.md`.
+      heads16→69.6%, heads64→72.1% math-util. Full analysis (breakdown, theoretical
+      limits, why ~67% is the HiFi2 max, dead ends) in `INDEXER_COMPUTE_CEILING.md`;
+      how to measure in `INDEXER_PROFILING.md`.
 - [ ] row-major top-k (separate); negative-weights topk-safety test
 - [ ] perf: knob sweep for best GLX config; gate-mul is HiFi2-bound (the ~21%
       non-matmul remainder) — would need a fidelity change to cut further
