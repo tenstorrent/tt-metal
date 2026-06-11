@@ -482,6 +482,62 @@ Measured (qwen3_tts CP, 5 layers):
 
 Caveat: a *partial* fp32 path (e.g. fp32 KV cache fed by bf16 K/V producers) provides no benefit — the storage dtype only matters when its producer matches.
 
+### Safe partial change: bf16 initial upload with fp32 activations
+
+When switching the FULL activation graph to bf16 breaks PCC (e.g. fp32
+softmax is mandatory due to attention sink logits at ±3000+), the initial
+embedding upload to device is still safe to change to bf16. This removes
+the fp32→bf16 typecast at the very start of the compute graph with no
+downstream effect because the first op (norm or linear with `dtype=fp32`)
+immediately upcasts.
+
+Pattern: in `_prefill`, change only the `from_torch` dtype:
+```python
+h = ttnn.from_torch(embeds, dtype=ttnn.bfloat16, ...)  # was float32
+```
+All subsequent activations remain fp32. This is safe when:
+- The first consuming op has an explicit output `dtype=ttnn.float32`
+  (norm, QKV linear), so Q/K/V are fp32 regardless of h's dtype.
+- The model has a measured fp32-mandatory path (attention sink, softmax
+  overflow) that blocks full bf16 activation switching.
+
+Measured (dots.ocr prefill, seq=2912): 302 → 269 ms (−11%).
+
+### Long-sequence prefill: bf16 flash SDPA with fp32 guard
+
+For prefill at seq > 1024, `ttnn.transformer.scaled_dot_product_attention`
+with bf16 Q/K/V is faster than the manual fp32 chain. BUT: models with
+attention-sink logits (e.g. Qwen2/dots.ocr layer-0 K[0] dominates at
+±3122 logits) break at short seq in bf16 softmax — the sink saturates
+bf16 dynamic range and the attention distribution collapses.
+
+Guard on sequence length:
+```python
+USE_FLASH_SDPA_THRESHOLD = 1024  # calibrated per model
+
+if seq > USE_FLASH_SDPA_THRESHOLD:
+    # bf16 flash SDPA — correct because sink logit is diluted across
+    # many query rows; per-row max remains in bf16 range.
+    attn_out = ttnn.transformer.scaled_dot_product_attention(
+        q_bf16, k_bf16, v_bf16, is_causal=True,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        compute_kernel_config=hifi4_bf16,
+    )
+else:
+    # fp32 explicit path — mandatory for short seq where the single
+    # attention-sink row dominates softmax and overflows bf16.
+    attn_out = manual_fp32_sdpa(q, k, v, mask)
+```
+
+Verify the threshold with a PCC sweep: at seq=128 bf16 SDPA will fail
+(PCC ~0.5); at seq=1280 it is typically fine (PCC ~0.96). Measure at
+the production seq too; the sink affects EVERY query row so PCC does
+not improve with longer seq — it plateaus. Gate: PCC > 0.95 for long
+seq, full e2e WER parity for the guarded short-seq path.
+
+Measured (dots.ocr prefill, seq=2912): manual fp32 → bf16 flash SDPA,
+prefill 486 → 269 ms (same commit as bf16 initial upload above).
+
 ## KV-cache update patterns
 
 ### Use `fill_cache` for multi-position writes
