@@ -352,3 +352,17 @@ def create_model(cfg: ModelConfig, use_tp: bool = False) -> Model:
     if adapter is None:
         raise ValueError(f"Unsupported model type: {cfg.model_type}")
     return adapter.build(cfg, use_tp)
+
+
+def instantiate_model_from_config(cfg: ModelConfig, lazy_init: bool, *, use_tp: bool = False) -> Model:
+    """Create the model, deferring Parameter allocation when ``lazy_init`` is True.
+
+    With ``lazy_init`` the returned model holds ``TensorMetadata`` for every parameter; the caller
+    must call ``ttml.materialize_module(model)`` after any pre-materialize transforms (e.g.
+    ``ttml.fsdp.fully_shard``, which rewrites each lazy param's mapper so materialize allocates the
+    weights already-sharded). With ``lazy_init=False`` parameters are allocated eagerly.
+    """
+    if lazy_init:
+        with ttml.lazy_init():
+            return create_model(cfg, use_tp=use_tp)
+    return create_model(cfg, use_tp=use_tp)

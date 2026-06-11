@@ -49,7 +49,7 @@ from ttml.datasets import InMemoryDataloader, causal_lm_collate_fn
 from ttml.trainers import SFTConfig, SFTTrainer, TrainerCallback
 
 from formatting import HEADER_WIDTH, print_footer, print_header, shorten_home
-from model_builders import FLOPS_REGISTRY, Model, ModelConfig, create_model, parse_model_config
+from model_builders import FLOPS_REGISTRY, Model, ModelConfig, instantiate_model_from_config, parse_model_config
 from callbacks import (
     AverageLossCallback,
     DDPCallback,
@@ -469,27 +469,31 @@ def run_training(
     if tokenizer is not None:
         model_cfg.vocab_size = tokenizer.vocab_size
 
-    model = create_model(model_cfg, use_tp=device_cfg.enable_tp)
-    if args.print_summary:
-        summary(model)
-    total_params = sum(math.prod(p.shape()) for p in model.parameters().values())
+    # Lazy alloc only helps when sharding, so default it on under FSDP (--no-lazy to disable).
+    lazy_init = device_cfg.enable_fsdp and not args.no_lazy
+    model = instantiate_model_from_config(model_cfg, lazy_init=lazy_init, use_tp=device_cfg.enable_tp)
 
     flops_per_token = 0
     flops_fn = FLOPS_REGISTRY.get(model_cfg.model_type)
     if flops_fn is not None:
         flops_per_token = flops_fn(model.config, seq_len)
 
-    if args.track_memory:
-        MemoryUsageTracker.snapshot("MODEL_CREATION")
-
-    # FSDP: shard params across the "fsdp" axis (per-block + root) BEFORE building the optimizer, so
-    # its state is sized against the sharded shapes. The trainer keeps enable_fsdp off (it must not
-    # re-shard); gradient sync stays callback-driven — ttml.sync_gradients skips the fsdp axis, which
-    # FSDP reduce-scatters in backward.
+    # Shard params before the optimizer is built so its state matches the sharded shapes (the caller
+    # owns sharding, not the trainer).
     if device_cfg.enable_fsdp:
         for block in model.blocks:
             ttml.fsdp.fully_shard(block)
         ttml.fsdp.fully_shard(model)
+
+    # Materialize after fully_shard rewrote the mappers, so weights allocate already-sharded.
+    if lazy_init:
+        ttml.materialize_module(model)
+
+    if args.print_summary:
+        summary(model)
+    total_params = sum(math.prod(p.shape()) for p in model.parameters().values())
+    if args.track_memory:
+        MemoryUsageTracker.snapshot("MODEL_CREATION")
 
     optimizer = create_optimizer(model, yaml_config)
     if args.track_memory:
@@ -529,7 +533,7 @@ def run_training(
 
     callbacks: list[TrainerCallback] = []
 
-    # Training mechanics: mutate gradients / model state during the step.
+    # DDPCallback all-reduces the dp axis (a no-op on fsdp, which FSDP reduce-scatters in backward).
     if mesh.has_axis("dp") and mesh.axis_size("dp") > 1:
         callbacks.append(DDPCallback())
     if model_cfg.model_type == "deepseek":
@@ -568,9 +572,6 @@ def run_training(
         disable_progress_bar=True,
     )
 
-    # Fused mean cross-entropy over every token (this is pretraining — there's no prompt/padding
-    # loss mask, so the trainer's default masked path doesn't apply). Under TP the LM head emits
-    # vocab-sharded logits, so route through vocab-parallel cross-entropy on the "tp" axis.
     def _causal_lm_loss(logits, batch):
         if mesh.has_axis("tp") and mesh.axis_size("tp") > 1:
             return ttml.ops.distributed.vocab_parallel_cross_entropy_loss(

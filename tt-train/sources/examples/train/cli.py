@@ -45,6 +45,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Enable gradient clipping with this max-norm",
     )
+    g.add_argument(
+        "--no-lazy",
+        dest="no_lazy",
+        action="store_true",
+        help="Disable lazy parameter init under FSDP (allocate eagerly, then shard; more peak memory)",
+    )
 
     g = p.add_argument_group("Checkpointing")
     g.add_argument(
