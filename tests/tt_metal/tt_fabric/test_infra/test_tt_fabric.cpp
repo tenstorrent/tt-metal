@@ -214,6 +214,12 @@ int main(int argc, char** argv) {
                 test_context.close_devices();
                 return 1;  // Hard exit - cannot run performance benchmarks with invalid frequencies
             }
+            // Gate on ethernet link health: a degraded/retraining link inflates measured cycles and
+            // produces bimodal bandwidth variance that fails golden comparison without any clock change.
+            if (!fixture->validate_fabric_link_health_for_performance_tests()) {
+                test_context.close_devices();
+                return 1;  // Hard exit - cannot run performance benchmarks on degraded ethernet links
+            }
         }
 
         // Check topology-based skip conditions after devices are opened
