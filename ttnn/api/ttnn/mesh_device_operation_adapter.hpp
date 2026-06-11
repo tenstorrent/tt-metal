@@ -17,6 +17,8 @@
 #include <iterator>
 #include <memory>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <type_traits>
 #include <concepts>
 #include <unordered_map>
@@ -820,18 +822,22 @@ public:
     // hash hit so a 64-bit collision is resolved to a correct (rebuild) miss instead of a wrong
     // hit (issue #45821). It must mirror the SAME inputs the hash combines.
     //
+    // The key is prefixed with op_type_name (the DeviceOperation's type name) so distinct ops can
+    // never alias on a hash collision.
     // For ops with a custom compute_program_hash we can't infer which fields it keyed on (it may
     // deliberately exclude some, e.g. an RNG seed), so we return an empty string -- opting that op
     // out of collision resolution (hash-only, today's behavior). The default reflection-hash path
     // is mirrored exactly.
     static std::string compute_mesh_workload_canonical_key(
         [[maybe_unused]] tt::tt_metal::distributed::MeshDevice* mesh_device,
+        std::string_view op_type_name,
         const operation_attributes_t& attrs,
         const tensor_args_t& tensor_args) {
+        std::string key{op_type_name};
         if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
-            return {};  // custom hash -> opt out of collision resolution
+            return key;  // custom hash -> opt out beyond the op-identity prefix
         } else {
-            std::string key = ttsl::hash::canonical_key(ttsl::hash::type_hash<DeviceOperation>, attrs, tensor_args);
+            key += ttsl::hash::canonical_key(attrs, tensor_args);
             for (const auto& coord :
                  mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device)) {
                 key += ttsl::hash::canonical_key(coord);
