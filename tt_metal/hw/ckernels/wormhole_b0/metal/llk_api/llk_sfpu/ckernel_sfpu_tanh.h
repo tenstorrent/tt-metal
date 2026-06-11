@@ -36,10 +36,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat val) {
     // exp==255: NaN (default) or ±Inf (mantissa==0)
     v_if(exponent == 255) {
         result = std::numeric_limits<float>::quiet_NaN();
-        v_if(mantissa == 0) {
-            sfpi::vFloat one = sfpi::vConst1;
-            result = sfpi::copysgn(one, val);
-        }
+        v_if(mantissa == 0) { result = sfpi::copysgn(sfpi::vConst1, val); }
         v_endif;
     }
     v_else {
