@@ -84,7 +84,7 @@ test_suite_bh_single_pcie_llama_demo_tests() {
 }
 
 test_suite_bh_multi_pcie_metal_unit_tests() {
-    echo "[upstream-tests] Running BH LLMBox metal unit tests"
+    echo "[upstream-tests] Running BH multi-PCIe metal unit tests"
 
     # Health check loop. Needed due to the following issues:
     # https://tenstorrent.atlassian.net/browse/SYS-1634
@@ -106,9 +106,7 @@ test_suite_bh_multi_pcie_metal_unit_tests() {
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*:-*ChannelTrimming*"
 
     ./build/test/tt_metal/unit_tests_eth
-    if [[ "$hw_topology" == "blackhole_llmbox" ]]; then
-        pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_qb.py
-    elif [[ "$hw_topology" == "blackhole_qb_ge" ]]; then
+    if [[ "$hw_topology" == "blackhole_qb_ge" ]]; then
         pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_qb_ge.py
     elif [[ "$hw_topology" == "blackhole_loudbox" ]]; then
         pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_lb.py
@@ -122,7 +120,7 @@ test_suite_bh_multi_pcie_llama_demo_tests() {
 
     if [[ "$hw_topology" == "blackhole_p300" ]]; then
         local data_parallel_devices="2"
-    elif [[ "$hw_topology" == "blackhole_llmbox" ]] || [[ "$hw_topology" == "blackhole_qb_ge" ]]; then
+    elif [[ "$hw_topology" == "blackhole_qb_ge" ]]; then
         local data_parallel_devices="4"
     elif [[ "$hw_topology" == "blackhole_loudbox" ]]; then
         local data_parallel_devices="8"
@@ -141,7 +139,7 @@ test_suite_bh_multi_pcie_llama_stress_tests() {
 
     if [[ "$hw_topology" == "blackhole_p300" ]]; then
         local data_parallel_devices="2"
-    elif [[ "$hw_topology" == "blackhole_llmbox" ]] || [[ "$hw_topology" == "blackhole_qb_ge" ]]; then
+    elif [[ "$hw_topology" == "blackhole_qb_ge" ]]; then
         local data_parallel_devices="4"
     elif [[ "$hw_topology" == "blackhole_loudbox" ]]; then
         local data_parallel_devices="8"
@@ -278,11 +276,6 @@ test_suite_bh_umd_unit_tests
 test_suite_bh_pcie_didt_tests
 test_suite_bh_single_pcie_python_unit_tests
 test_suite_bh_single_pcie_metal_unit_tests"
-
-hw_topology_test_suites["blackhole_llmbox"]="
-test_suite_bh_multi_pcie_metal_unit_tests
-test_suite_bh_pcie_didt_tests
-test_suite_bh_multi_pcie_llama_demo_tests"
 
 hw_topology_test_suites["blackhole_loudbox"]="
 test_suite_bh_multi_pcie_metal_unit_tests
