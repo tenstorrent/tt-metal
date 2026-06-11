@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
 
 void kernel_main() {
