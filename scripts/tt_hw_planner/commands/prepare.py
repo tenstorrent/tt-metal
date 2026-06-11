@@ -21,7 +21,7 @@ def cmd_prepare(args) -> int:
     )
 
     mesh_override: Optional[Tuple[int, int]] = None
-    if args.mesh:
+    if getattr(args, "mesh", None):
         try:
             mesh_override = _parse_mesh(args.mesh)
         except ValueError as e:
