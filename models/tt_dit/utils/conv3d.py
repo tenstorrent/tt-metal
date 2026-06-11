@@ -438,6 +438,23 @@ def register_conv3d_configs(configs: dict) -> None:
     _DEFAULT_BLOCKINGS.update({(c_in, c_out, _ntuple(ks, 3)): tuple(v) for (c_in, c_out, ks), v in configs.items()})
 
 
+# When True, get_conv3d_config caps T_out_block at 1. The swept image-encoder
+# blockings use T_out_block of 3-7 on several layers; that temporal blocking is
+# what the hypersensitive 4-step distill amplifies into a duplicate-subject
+# artifact — the same failure mode documented for the 2x4 conv_out (T_out_block=4
+# -> frame-24/25 artifact). Forcing T_out_block=1 keeps the fast C/H/W blocking
+# (the bulk of the speedup) while restoring frame-wise fidelity. Scope this with
+# set_force_t_out_block_1() around a single encoder build so the decoder and
+# other conv3d users are unaffected.
+_FORCE_T_OUT_BLOCK_1 = False
+
+
+def set_force_t_out_block_1(enabled: bool) -> None:
+    """Toggle the global T_out_block=1 cap for conv3d configs (see above)."""
+    global _FORCE_T_OUT_BLOCK_1
+    _FORCE_T_OUT_BLOCK_1 = enabled
+
+
 def get_conv3d_config(
     in_channels, out_channels, kernel_size, weights_dtype, grid_size, *, h_factor=1, w_factor=1, T=0, H=0, W=0
 ):
@@ -483,6 +500,10 @@ def get_conv3d_config(
                 f"conv3d blocking [NONE] {blocking_key} -> no match in any table, using hardcoded default: "
                 f"Cin={C_in_block} Cout={C_out_block} T={T_out_block} H={H_out_block} W={W_out_block}"
             )
+
+    if _FORCE_T_OUT_BLOCK_1 and T_out_block != 1:
+        logger.debug(f"conv3d blocking [force T_out=1] {blocking_key}: T_out_block {T_out_block} -> 1")
+        T_out_block = 1
 
     return ttnn.Conv3dConfig(
         weights_dtype=weights_dtype,

@@ -110,21 +110,30 @@ cd /data_bh/ubuntu/tt-metal && source python_env/bin/activate && tt-run \
 
 ## Performance — base vs distill (quad 4x32, 720p, 81 frames, traced)
 
-| Stage                | Base i2v (40-step, CFG) | Distill (4-step, CFG fix) |
-| -------------------- | ----------------------: | ------------------------: |
-| Text Encoding        |                   0.17s |                     0.17s |
-| Image Encoding (VAE) |                   6.61s |                     6.00s |
-| Denoising            |    37.31s (80 forwards) |        2.59s (4 forwards) |
-| VAE Decoding         |                   0.44s |                     0.42s |
-| **Total Pipeline**   |              **44.59s** |                **~9.3s**  |
+| Stage                | Base i2v (40-step, CFG) | Distill (4-step, all opts) |
+| -------------------- | ----------------------: | -------------------------: |
+| Text Encoding        |                   0.17s |                      0.17s |
+| Image Encoding (VAE) |                   6.61s |                      0.37s |
+| Denoising            |    37.31s (80 forwards) |         2.91s (4 forwards) |
+| VAE Decoding         |                   0.44s |                      0.45s |
+| **Total Pipeline**   |              **44.59s** |                 **3.98s**  |
 
-- Per-forward denoise: base **0.47 s/fwd**, distill **0.65 s/fwd**. The distill's
+### Distill optimization journey (total pipeline, traced)
+
+| Stage of work               | Total  | Change                                                       |
+| --------------------------- | -----: | ------------------------------------------------------------ |
+| Cloud-deployed baseline     | ~20s   | ran on default/single-galaxy mesh config                     |
+| Quad-galaxy config          | ~11.2s | correct 4x32 parallelism via `WanPipelineConfig.default()`   |
+| CFG fix                     | ~9.3s  | drop the redundant unconditional forward (CFG is baked in)   |
+| Fast VAE encoder            | 6.70s  | truncated 33-frame encode + swept conv3d blockings + T_out=1 |
+| **+ On-device conditioning**| **3.98s** | build zero frames on-device; transfer only the 1 image    |
+
+- Image-encode went **6.0s → 0.37s** (≈ matches the Prodia I2V pipeline's 0.34s).
+  Denoising (2.91s) is now the dominant stage.
+- Per-forward denoise: base **0.47 s/fwd**, distill **~0.73 s/fwd**. The distill's
   higher per-forward cost is the high→low expert switch (`transformer` →
   `transformer_2`) amortized over just 4 steps vs base's 40 — structural, not a
   missing optimization.
-- Image-encode (~6s) is the **same shared, un-tuned VAE encoder path** for both.
-  It's only ~15% of the base pipeline but ~65% of the distill, so it's the #1
-  remaining lever for the distill.
 - The distill inherits the base's full optimization path (parallelism, SDPA
   fracture, tracing, conv3d/matmul blocking) automatically via
   `WanPipelineConfig.default()`, keyed on mesh shape.
@@ -139,22 +148,56 @@ distill's `create_pipeline` skips the dead forward — denoise dropped from 4.45
 2.59s (total 11.19s → ~9.3s) with **bit-identical math** (frame-0 PCC 0.999 vs the
 pre-fix baseline, visually confirmed coherent).
 
-### Tried but REVERTED: encoder chunking (~8s, failed quality)
-We attempted to cut the ~6s image-encode by building the VAE encoder with real
-height/width and a larger `encoder_t_chunk_size` (16 instead of the default 4), so
-it would (a) hit the swept 4x32 conv3d blocking entries and (b) run ~6 passes
-instead of ~20. This **did** drop the pipeline to ~8.0–8.4s.
+### Shipped (gated): fast VAE image-encode (6.0s → 0.37s)
+The image-encode stage was ~65% of the distill pipeline. It is cut to ~0.37s by
+three composable, env-gated optimizations in the distill pipeline (all default
+**OFF** so base/T2V behavior is untouched):
 
-**However, a visual/PCC check showed it corrupted the conditioning encode** on the
-production T=81 / 4x32 path: frame 0 (the decoded conditioning) came out as noise
-(PCC ~0.57 then garbage), and later frames were flat grey. The swept 4x32 encoder
-blockings / chunked-cache path were validated for a T=33 sweep on 4x8, not the
-T=81 path used here. **Because output quality broke, the encoder change was fully
-reverted** — only the CFG fix remains. Properly capturing this win needs a conv3d
-sweep at the real T=81 shapes (or a cheaper conditioning path), not just a chunk
-bump.
+1. **Truncated encode** (always on for the distill, via `_encode_frames_for`).
+   For I2V the conditioning image sits at frame 0 and all later frames are zeros,
+   which the causal Wan VAE encoder maps to a steady-state latent. We encode only
+   the first 33 pixel frames (→ 9 latent frames) and replicate the last latent to
+   fill the rest. Quality-safe on its own.
+
+2. **Swept conv3d blockings + `T_out_block=1`** (`WAN_DISTILL_FAST_VAE_ENCODER=1`,
+   `WAN_DISTILL_ENCODER_T_OUT_1=1`). The base builds the encoder with H/W=0, which
+   falls into the slow `_DEFAULT_BLOCKINGS`. Rebuilding it at the real resolution +
+   truncated-T chunk size keys the **swept** conv3d entries — encoder forward drops
+   **1.44s → 0.21s (7×)**. Capping `T_out_block` at 1 keeps that speed while
+   avoiding the temporal-blocking artifact the 4-step distill is sensitive to (the
+   blocking cache key only depends on `C_in_block`, so prepared weights are shared).
+
+3. **On-device conditioning assembly** (`WAN_DISTILL_ONDEVICE_COND=1`). The base
+   builds the full 33-frame pixel video on the **host** (mostly zeros) and ships
+   ~180 MB to device. Instead we transfer only the conditioned frame (~5.5 MB) and
+   build the zero frames **on-device** via binary doubling (Prodia pattern). This
+   cuts `prepare_latents` from **2.99s → 0.38s** (compiled).
+
+Quality: validated against the full-encode baseline (same seed) with per-frame PCC
++ visual inspection on in-distribution inputs (anime portrait + real images). The
+fast path is visually indistinguishable from full encode; per-frame PCC sits in the
+same band as plain truncation (~0.86–0.94, divergence only on late frames, no
+duplicate-subject / frame-0-noise artifacts).
+
+> Earlier, a naive `encoder_t_chunk_size` bump (without the truncation, swept-key,
+> and `T_out=1` pieces) corrupted the T=81 encode. The cause was traced to a bad
+> test fixture (out-of-distribution fractal image + contradicting prompt) plus
+> temporal blocking; the three-part approach above resolves both.
+
+To enable all three (the shipping fast config):
+
+```bash
+export WAN_DISTILL_FAST_VAE_ENCODER=1 WAN_DISTILL_ENCODER_T_OUT_1=1 WAN_DISTILL_ONDEVICE_COND=1
+```
+
+Comparison / validation harnesses:
+- `models/tt_dit/experimental/tests/test_encode_compare_seeds.py` — full vs each
+  fast variant, N seeds, per-frame PCC + saved mp4s.
+- `models/tt_dit/experimental/tests/test_validate_real_images.py` — baseline vs the
+  shipping fast config across multiple real conditioning images.
 
 ## Next levers (for the distill specifically)
-1. Image-encode (~6s, ~65% of pipeline): conv3d sweep at production T=81 shapes,
-   or reduce the number of conditioning frames encoded.
-2. bf8 quantization on denoise (needs PCC check) — applies to base too.
+1. Denoising (2.91s, now ~73% of pipeline): bf8 quantization (needs PCC check) —
+   applies to base too.
+2. Promote the fast image-encode flags to default-on once multi-image quality
+   sign-off is complete.

@@ -56,6 +56,12 @@ class WanPipelineI2V(WanPipeline):
             get_torch_state_dict=lambda: self._vae.torch_state_dict(),
         )
 
+        # Pixel-frame chunk size passed to the VAE encoder forward. Default 4
+        # matches the encoder's own forward default (preserves base behavior);
+        # subclasses (e.g. the distill) override this together with a real-H/W
+        # encoder build to hit the swept conv3d blockings.
+        self._encoder_t_chunk_size = 4
+
         # warmup buffers with a sample image_prompt sized to the target resolution.
         self(
             prompts=["warmup"],
@@ -102,6 +108,19 @@ class WanPipelineI2V(WanPipeline):
         )
         return ttnn.reshape(model_input, (*tuple(latents.shape)[:-1], -1))
 
+    def _encode_frames_for(self, num_frames: int, max_cond_pos: int) -> int:
+        """Number of pixel frames to VAE-encode for image conditioning.
+
+        Base encodes all ``num_frames``. Subclasses may truncate: for I2V the
+        conditioning frames beyond the first are zeros, which the causal Wan VAE
+        encoder maps to a steady-state latent, so the tail latent frames can be
+        replicated instead of encoded (see ``prepare_latents``). The returned
+        value must be ``>= max_cond_pos + 1`` so every conditioned frame is
+        actually encoded.
+        """
+        del max_cond_pos
+        return num_frames
+
     def prepare_latents(
         self,
         batch_size: int,
@@ -132,31 +151,106 @@ class WanPipelineI2V(WanPipeline):
 
         latent_shape = latents.shape
 
-        # Initialize mask
+        # Number of pixel frames to actually encode (subclasses may truncate;
+        # base encodes all num_frames). The mask still spans the full num_frames.
+        max_cond_pos = max(frame_pos for _, frame_pos in image_prompt)
+        enc_frames = self._encode_frames_for(num_frames, max_cond_pos)
+
+        # Initialize mask (spans the full num_frames; cheap host op).
         msk = torch.zeros(batch_size, num_frames, latent_shape[-2], latent_shape[-1])
         inserted_frames = set()
-        ## Encode image
-        # Convert image to tensor
-        video_condition = None
-        for image, frame_pos in image_prompt:
+        for _, frame_pos in image_prompt:
             assert (
                 frame_pos not in inserted_frames
             ), f"Frame position {frame_pos} already processed. Please remove duplicate frame positions."
             inserted_frames.add(frame_pos)
-            image = self.video_processor.preprocess(image, height=height, width=width).to(device, dtype=torch.float32)
+            msk[:, frame_pos, :, :] = 1
 
+        # VAE-encode the conditioning frames -> latent (device->host, sliced to
+        # logical H/W, cast to ``dtype``). Overridable: the base builds the full
+        # pixel video on host and transfers it; subclasses may assemble the zero
+        # frames on-device to avoid the large host->device transfer.
+        encoded_video_torch = self._encode_image_condition(
+            image_prompt, enc_frames=enc_frames, height=height, width=width, dtype=dtype, device=device
+        )
+
+        latents_mean = (
+            torch.tensor(self._vae.config.latents_mean)
+            .view(1, self._vae.config.z_dim, 1, 1, 1)
+            .to(encoded_video_torch.device, encoded_video_torch.dtype)
+        )
+        latents_std = 1.0 / torch.tensor(self._vae.config.latents_std).view(1, self._vae.config.z_dim, 1, 1, 1).to(
+            encoded_video_torch.device, encoded_video_torch.dtype
+        )
+
+        encoded_video_torch = (encoded_video_torch - latents_mean) * latents_std
+
+        # If we truncated the pixel-frame encode (enc_frames < num_frames), the
+        # remaining latent frames correspond to all-zero conditioning, which the
+        # causal encoder produces as a steady-state latent. Replicate the last
+        # encoded latent frame to fill the full latent-frame count. No-op for the
+        # base path where enc_frames == num_frames.
+        num_latent_frames = (num_frames - 1) // self.vae_scale_factor_temporal + 1
+        encoded_latent_frames = encoded_video_torch.shape[2]
+        if encoded_latent_frames < num_latent_frames:
+            encoded_video_torch = torch.cat(
+                [
+                    encoded_video_torch,
+                    encoded_video_torch[:, :, -1:, :, :].expand(
+                        -1, -1, num_latent_frames - encoded_latent_frames, -1, -1
+                    ),
+                ],
+                dim=2,
+            )
+
+        # Finalize mask setup into the latent space
+        msk = torch.concat([torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:]], dim=1)
+        msk = msk.view(1, msk.shape[1] // 4, 4, latent_shape[-2], latent_shape[-1])
+        msk = msk.transpose(1, 2)
+
+        tt_y = torch.cat([msk, encoded_video_torch], dim=1)
+
+        return latents, tt_y
+
+    def _vae_encode_to_torch(self, tt_video_condition_BTHWC, logical_h, logical_w, dtype):
+        """Run the VAE encoder on an already-padded/sharded BTHWC pixel video
+        and bring the latent back to host (sliced to logical H/W, cast to
+        ``dtype``). Shared by the host-build and on-device-build paths."""
+        encoded_video_BCTHW, new_logical_h, new_logical_w = self.tt_vae_encoder(
+            tt_video_condition_BTHWC, logical_h, logical_w=logical_w, encoder_t_chunk_size=self._encoder_t_chunk_size
+        )
+        concat_dims = [None, None]
+        concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
+        concat_dims[self.vae_parallel_config.width_parallel.mesh_axis] = 4
+        encoded_video_torch = fast_device_to_host(
+            encoded_video_BCTHW,
+            self.mesh_device,
+            concat_dims,
+            ccl_manager=self.vae_ccl_manager,
+        )
+        encoded_video_torch = encoded_video_torch[:, :, :, :new_logical_h, :new_logical_w]
+        return encoded_video_torch.to(dtype=dtype)
+
+    def _encode_image_condition(self, image_prompt, *, enc_frames, height, width, dtype, device):
+        """Build the conditioning pixel video on host, transfer it to device,
+        and VAE-encode it. Base/T2V behavior: allocates the full ``enc_frames``
+        pixel video (mostly zeros) on the host and ships it to the device.
+
+        Subclasses may override to assemble the zero frames directly on-device
+        and only transfer the conditioned frame(s), avoiding the large
+        host->device transfer (see ``WanDistillPipelineI2V``)."""
+        video_condition = None
+        for image, frame_pos in image_prompt:
+            image = self.video_processor.preprocess(image, height=height, width=width).to(device, dtype=torch.float32)
             if video_condition is None:
-                video_condition = image.new_zeros(image.shape[0], image.shape[1], num_frames, height, width)
+                video_condition = image.new_zeros(image.shape[0], image.shape[1], enc_frames, height, width)
             if self._expand_timesteps:  # Unverified code path
                 video_condition = image_prompt.unqueeze(2)
                 assert len(image_prompt) == 1, "Only single image conditioning is supported for expand timesteps"
             else:
                 video_condition[:, :, frame_pos, :, :] = image
-            msk[:, frame_pos, :, :] = 1
 
-        # Convert to ttnn
         tt_video_condition_BTHWC = video_condition.permute(0, 2, 3, 4, 1)
-        # --> Do the required padding and sharding. Verify if this is needed.
         tt_video_condition_BTHWC = conv_pad_in_channels(tt_video_condition_BTHWC)
         tt_video_condition_BTHWC, logical_h = conv_pad_height(
             tt_video_condition_BTHWC, self.vae_parallel_config.height_parallel.factor * self.vae_scale_factor_spatial
@@ -173,40 +267,4 @@ class WanPipelineI2V(WanPipeline):
                 self.vae_parallel_config.width_parallel.mesh_axis: 3,
             },
         )
-
-        encoded_video_BCTHW, new_logical_h, new_logical_w = self.tt_vae_encoder(
-            tt_video_condition_BTHWC, logical_h, logical_w=logical_w
-        )
-
-        # convert to torch
-        concat_dims = [None, None]
-        concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
-        concat_dims[self.vae_parallel_config.width_parallel.mesh_axis] = 4
-        encoded_video_torch = fast_device_to_host(
-            encoded_video_BCTHW,
-            self.mesh_device,
-            concat_dims,
-            ccl_manager=self.vae_ccl_manager,
-        )
-        encoded_video_torch = encoded_video_torch[:, :, :, :new_logical_h, :new_logical_w]
-        encoded_video_torch = encoded_video_torch.to(dtype=dtype)
-
-        latents_mean = (
-            torch.tensor(self._vae.config.latents_mean)
-            .view(1, self._vae.config.z_dim, 1, 1, 1)
-            .to(encoded_video_torch.device, encoded_video_torch.dtype)
-        )
-        latents_std = 1.0 / torch.tensor(self._vae.config.latents_std).view(1, self._vae.config.z_dim, 1, 1, 1).to(
-            encoded_video_torch.device, encoded_video_torch.dtype
-        )
-
-        encoded_video_torch = (encoded_video_torch - latents_mean) * latents_std
-
-        # Finalize mask setup into the latent space
-        msk = torch.concat([torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:]], dim=1)
-        msk = msk.view(1, msk.shape[1] // 4, 4, latent_shape[-2], latent_shape[-1])
-        msk = msk.transpose(1, 2)
-
-        tt_y = torch.cat([msk, encoded_video_torch], dim=1)
-
-        return latents, tt_y
+        return self._vae_encode_to_torch(tt_video_condition_BTHWC, logical_h, logical_w, dtype)
