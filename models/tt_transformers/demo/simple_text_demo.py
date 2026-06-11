@@ -1545,7 +1545,7 @@ def test_demo_text(
             config_params={"data_parallel": data_parallel, "tensor_parallel": num_devices // data_parallel},
             input_sequence_length=max(prefill_lens),
             output_sequence_length=num_tokens_generated_decode[0],
-            precision="performance" if "performance" in test_id else "accuracy",
+            precision="accuracy" if token_accuracy else "performance",
             device_hostname=socket.gethostname(),
         )
 
