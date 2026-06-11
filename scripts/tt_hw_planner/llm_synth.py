@@ -462,7 +462,9 @@ def extract_hf_context(
         ) from exc
 
     try:
-        model = transformers.AutoModel.from_pretrained(model_id, trust_remote_code=True)
+        model = transformers.AutoModel.from_pretrained(
+            model_id, trust_remote_code=True, torch_dtype="bfloat16", low_cpu_mem_usage=True
+        )
         model.eval()
     except (ValueError, KeyError, OSError, ImportError) as exc:
         installed = getattr(transformers, "__version__", "unknown")

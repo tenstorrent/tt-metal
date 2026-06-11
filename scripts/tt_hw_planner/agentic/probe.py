@@ -173,6 +173,7 @@ def load_hf_model_cascade(
                 model_id,
                 torch_dtype=dtype,
                 trust_remote_code=True,
+                low_cpu_mem_usage=True,
             )
             used_loader = loader
             if verbose:

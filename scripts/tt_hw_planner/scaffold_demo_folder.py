@@ -119,7 +119,7 @@ def test_demo(device_params, device):
     os.environ.setdefault("HF_MODEL", HF_MODEL_ID)
     tok = AutoTokenizer.from_pretrained(HF_MODEL_ID, trust_remote_code=True)
     model = AutoModel.from_pretrained(
-        HF_MODEL_ID, trust_remote_code=True, torch_dtype=torch.bfloat16
+        HF_MODEL_ID, trust_remote_code=True, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True
     )
     model.eval()
     sentence = os.environ.get("TT_PLANNER_PROBE_INPUT", "The quick brown fox jumps over the lazy dog.")

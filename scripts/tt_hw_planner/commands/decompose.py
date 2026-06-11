@@ -107,7 +107,9 @@ def cmd_decompose(args) -> int:
         return 2
 
     try:
-        hf_model = transformers.AutoModel.from_pretrained(model_id, trust_remote_code=True)
+        hf_model = transformers.AutoModel.from_pretrained(
+            model_id, trust_remote_code=True, torch_dtype="bfloat16", low_cpu_mem_usage=True
+        )
     except Exception as e:
         print(f"error: HF load failed: {e}", file=sys.stderr)
         return 2

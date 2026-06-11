@@ -176,7 +176,7 @@ def test_e2e_pipeline(device_params, device):
     # ------------------------------------------------------------------
     # HF reference forward
     # ------------------------------------------------------------------
-    hf_model = transformers.AutoModel.from_pretrained(HF_MODEL_ID, torch_dtype=torch.bfloat16)
+    hf_model = transformers.AutoModel.from_pretrained(HF_MODEL_ID, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True)
     hf_model.eval()
 
     # TODO[e2e]: replace this dummy input with the model-specific probe
@@ -818,7 +818,7 @@ def test_e2e_pipeline_harness(device_params, device):
         repo_root=Path.cwd(),
     )
 
-    hf_model = transformers.AutoModel.from_pretrained(HF_MODEL_ID, torch_dtype=torch.bfloat16)
+    hf_model = transformers.AutoModel.from_pretrained(HF_MODEL_ID, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True)
     hf_model.eval()
 
     result = run_e2e_pipeline(

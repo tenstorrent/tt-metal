@@ -6962,7 +6962,9 @@ def _resolve_torch_submodule_for_component(model_id: str, demo_dir: Path, compon
     try:
         import transformers
 
-        model = transformers.AutoModel.from_pretrained(model_id, trust_remote_code=True)
+        model = transformers.AutoModel.from_pretrained(
+            model_id, trust_remote_code=True, torch_dtype="bfloat16", low_cpu_mem_usage=True
+        )
         model.eval()
     except Exception:
         model = None

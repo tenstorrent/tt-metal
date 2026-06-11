@@ -409,7 +409,9 @@ def _resolve_torch_module_from_candidates(
     try:
         import transformers
 
-        model = transformers.AutoModel.from_pretrained(hf_model_id, trust_remote_code=True)
+        model = transformers.AutoModel.from_pretrained(
+            hf_model_id, trust_remote_code=True, torch_dtype="bfloat16", low_cpu_mem_usage=True
+        )
         model.eval()
     except Exception as exc:
         warn(f"AutoModel.from_pretrained({hf_model_id!r}) raised: {exc}")
@@ -465,7 +467,9 @@ def _resolve_torch_module_from_manifest(
     try:
         import transformers
 
-        model = transformers.AutoModel.from_pretrained(hf_model_id, trust_remote_code=True)
+        model = transformers.AutoModel.from_pretrained(
+            hf_model_id, trust_remote_code=True, torch_dtype="bfloat16", low_cpu_mem_usage=True
+        )
         model.eval()
         return _resolve_dotted(model, sub_path)
     except Exception as exc:
@@ -1142,7 +1146,7 @@ def localize_decode_divergence(
         )
 
     dtype_obj = _torch_dtype_from_string(torch_dtype)
-    dtype_kwarg: Dict[str, Any] = {}
+    dtype_kwarg: Dict[str, Any] = {"low_cpu_mem_usage": True}
     if dtype_obj is not None:
         dtype_kwarg["torch_dtype"] = dtype_obj
 

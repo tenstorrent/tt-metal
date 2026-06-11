@@ -488,7 +488,7 @@ def discover_components_from_hf_id(
 
     def _build():
         if load_weights:
-            return AutoModel.from_pretrained(model_id, **kwargs)
+            return AutoModel.from_pretrained(model_id, low_cpu_mem_usage=True, **kwargs)
         config = AutoConfig.from_pretrained(model_id, **kwargs)
         return AutoModel.from_config(config, trust_remote_code=trust_remote_code)
 
