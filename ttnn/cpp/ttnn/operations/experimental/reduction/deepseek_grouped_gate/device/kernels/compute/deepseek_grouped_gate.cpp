@@ -264,20 +264,22 @@ void topk(
     cb_pop_front(cb_winning_group_indices, tiles);
 }
 
-void normalize_scores(
-    const uint32_t cb_gathered_sigmoid,
-    const uint32_t cb_reduce_ones_scalar,
-    const uint32_t cb_reduce_intermediate,
-    const uint32_t cb_reciprocal_sums,
-    const uint32_t cb_epsilon_scalar,
-    const uint32_t cb_normalized_scores) {
+template <
+    uint32_t cb_gathered_sigmoid,
+    uint32_t cb_reduce_ones_scalar,
+    uint32_t cb_reduce_intermediate,
+    uint32_t cb_reciprocal_sums,
+    uint32_t cb_epsilon_scalar,
+    uint32_t cb_normalized_scores>
+void normalize_scores() {
     // 1. Sum row (experts) to get row vector of sums [1, 32]
-    compute_kernel_lib::
-        reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
-            cb_gathered_sigmoid,
-            cb_reduce_ones_scalar,
-            cb_reduce_intermediate,
-            compute_kernel_lib::ReduceInputBlockShape::single());
+    compute_kernel_lib::reduce<
+        PoolType::SUM,
+        ReduceDim::REDUCE_ROW,
+        cb_gathered_sigmoid,
+        cb_reduce_ones_scalar,
+        cb_reduce_intermediate,
+        compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(compute_kernel_lib::ReduceInputBlockShape::single());
 
     // 2. Add epsilon to intermediate results
     tile_regs_acquire();
@@ -418,13 +420,13 @@ void kernel_main() {
             log_topk_groups,
             n_activated_experts,
             log_n_activated_experts);
-        blocks::normalize_scores(
+        blocks::normalize_scores<
             cb_gathered_sigmoid,
             cb_reduce_ones_scalar,
             cb_reduce_intermediate,
             cb_reciprocal_sums,
             cb_epsilon_scalar,
-            cb_normalized_scores);
+            cb_normalized_scores>();
         blocks::scale(cb_normalized_scores, cb_route_scale_scalar, cb_out_weights);
     }
 }

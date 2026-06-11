@@ -126,6 +126,16 @@ ALL_MESH_CONFIGS = [
         reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
     ),
     _mesh_param(
+        (4, 2),
+        ttnn.FabricConfig.FABRIC_2D,
+        get_max_payload_size(),
+        2,
+        ttnn.Topology.Linear,
+        "mesh-4x2",
+        "fabric2d-mesh-4x2-2link",
+        reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
+    ),
+    _mesh_param(
         (2, 4),
         ttnn.FabricConfig.FABRIC_2D,
         get_max_payload_size(),

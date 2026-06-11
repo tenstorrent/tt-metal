@@ -93,6 +93,21 @@ def gelu_decomposed(x: ttnn.Tensor) -> ttnn.Tensor:
     return ttnn.multiply(x_times_bracket, 0.5)
 
 
+def gelu_tanh_decomposed(x: ttnn.Tensor) -> ttnn.Tensor:
+    # GELU tanh approximation: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+    #
+    # This unfused decomposition is higher precision than the fused tanh-LUT GELU
+    # (ttnn.UnaryOpType.GELU, True) and recovers PCC on the Wan text embedder, which
+    # regressed when the fused LUT path was introduced. The cube is computed as
+    # x * x * x (instead of ttnn.pow(x, 3)) to keep the decomposition explicit and
+    # avoid relying on ttnn.pow implementation details.
+    sqrt_2_over_pi = math.sqrt(2.0 / math.pi)
+    x_cubed = ttnn.multiply(ttnn.multiply(x, x), x)
+    inner = ttnn.add(x, ttnn.multiply(x_cubed, 0.044715))
+    one_plus_tanh = ttnn.add(ttnn.tanh(ttnn.multiply(inner, sqrt_2_over_pi)), 1.0)
+    return ttnn.multiply(ttnn.multiply(x, one_plus_tanh), 0.5)
+
+
 class ColParallelLinear(Module):
     """
     Linear layer with column parallel weights
@@ -449,6 +464,8 @@ def _apply_activation_fn(t: ttnn.Tensor, activation_fn: str | None) -> ttnn.Tens
         return ttnn.silu(t)
     if activation_fn == "decomposed_gelu":
         return gelu_decomposed(t)
+    if activation_fn == "gelu_tanh_decomposed":
+        return gelu_tanh_decomposed(t)
     if activation_fn == "quick_gelu":
         return t * ttnn.sigmoid(1.702 * t)  # quick approx gelu
     if activation_fn == "swiglu":

@@ -82,6 +82,11 @@ GENERATE_PROTO_FILES(
 )
 list(APPEND IMPL_SRC ${PROTO_SRCS})
 
+# Serializer free-functions (export_to_protobuf_file / import_from_protobuf_file).
+# protobuf::libprotobuf is already linked below and the generated pb.h include
+# dir is already on this target, so this is the natural home for it.
+list(APPEND IMPL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/experimental/disaggregation/kv_chunk_address_table_protobuf.cpp)
+
 if(TT_METAL_USE_EMULE)
     list(APPEND IMPL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emulated_program_runner.cpp)
 endif()
