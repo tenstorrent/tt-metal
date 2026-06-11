@@ -118,7 +118,6 @@ Pick the **primary** category. Multiple may apply — pick the one whose structu
 | **WRONG_REGISTER_ALLOCATION** | `DATA_MISMATCH` only on multi-step ops; tester juggled LREGs without a plan | § Solution Approach §6c ran out of LREGs, aliased a live value under a 2-cycle hazard, or clobbered a register the caller relies on |
 | **WRONG_FORMAT_APPLICABILITY** | Only specific formats fail (all `MxFp8*`, all integer, all `dest_acc=Yes`, etc.) across every attempt | § Format Applicability marked a format "Yes" that the chosen instruction sequence cannot actually handle (e.g. `SFPNONLINEAR` rejects integer inputs; Float32→Float16 requires `dest_acc=Yes`) |
 | **WRONG_INIT_UNINIT_SYMMETRY** | First run passes, later runs regress; or adjacent tests in the matrix fail after this kernel ran | § Solution Approach §6d — init changed hardware state without a mirrored uninit, or the uninit "restores" something init never touched |
-| **SFPI_LEAK** | The generated kernel contains `sfpi::vFloat`, `v_if`, `lut2`, `sFloat16b`, or similar Blackhole-only constructs — the tester saw compile errors or wrong results driven by those | Translate every remaining SFPI construct via the table in `llk-analyzer.md` §6. Quasar has no SFPI DSL; the analysis must encode the target-intrinsic form explicitly |
 | **MISSING_INSTRUCTION_ON_TARGET** | The kernel uses an instruction the target assembler rejected (or simulated to a NOP); `assembly.yaml` has no matching entry | Drop that instruction. Redesign the semantic step — sometimes this is an algorithm change (Taylor instead of LUT, integer emulation, etc.) |
 | **HARNESS_INCOMPATIBILITY** | Every variant times out or returns all-zeros with near-identical signatures; the tester's sibling smoke passes; the test source calls foreign-arch `_llk_*` / sync / `wait_*` symbols or reaches them via a `*_compat*` shim; at least one of the tester's attempts completed the pipeline on a variant that uses the "suspected" code path | The kernel plan was probably fine — the test source was written against a sibling architecture and never converted. The refined analysis must direct the tester to author a target-native test source (§1A.4) before any further kernel edits. Do NOT rewrite §6b pseudocode under this category |
 | **UNDIAGNOSABLE** | The 10 attempts have no coherent pattern — different signatures, different categories, no structural thread | Escalate. Do not refine on noise |
@@ -169,7 +168,7 @@ A hard ban committed to the analysis propagates into every future writer run —
 
 Before rewriting anything, verify your hypothesis against the source of truth for the category you picked. The analyzer's own citations may be what led the writer astray — do not trust them.
 
-- **WRONG_INSTRUCTION_MAPPING / SFPI_LEAK** — fetch the Confluence page for the suspect instruction. For SFPU: SFPU ISA (page `1170505767`) and the full ISA tree (page `1613201604`). Re-read the mode list, operand semantics, and result-register behavior. Cross-check `tt_llk_{target_arch}/instructions/assembly.yaml`.
+- **WRONG_INSTRUCTION_MAPPING** — fetch the Confluence page for the suspect instruction. For SFPU: SFPU ISA (page `1170505767`) and the full ISA tree (page `1613201604`). Re-read the mode list, operand semantics, and result-register behavior. Cross-check `tt_llk_{target_arch}/instructions/assembly.yaml`.
   ```
   Grep: pattern="^{INSTRUCTION}:", path="tt_llk_{target_arch}/instructions/assembly.yaml"
   ```
@@ -233,7 +232,6 @@ Edit `codegen/artifacts/{op}_analysis.md` using `Edit` (or `Write` if the rewrit
   - `WRONG_REGISTER_ALLOCATION` → § Solution Approach §6c AND the affected §6b pseudocode lines
   - `WRONG_FORMAT_APPLICABILITY` → § Format Applicability (the affected rows)
   - `WRONG_INIT_UNINIT_SYMMETRY` → § Solution Approach §6d AND the affected §6b
-  - `SFPI_LEAK` → § Solution Approach §6b end-to-end (every remaining SFPI construct replaced with its target-intrinsic equivalent)
   - `MISSING_INSTRUCTION_ON_TARGET` → § Available Instructions (drop), § Semantic → Instruction Mapping (redesign), § Solution Approach §6b (new pseudocode)
   - `HARNESS_INCOMPATIBILITY` → § Target Pattern Survey §2b (replace the cited test source with a target-native one, or document that a native one must be authored by the tester §1A.4); add a § Risks entry pinning the harness gap so the next writer does not shim again. Do NOT rewrite §6b pseudocode under this category — the kernel plan likely held
 - **Cite sources.** Every rewritten line must be anchored: `{path}:{line}`, Confluence page ID + section, or `assembly.yaml` entry.
