@@ -33,6 +33,7 @@
   "gemma-4-26B-A4B-it": {
     "1x4": {
       "test_attention_prefill[blackhole-seq4096-global-1x4]": 0.97,
+      "test_attention_paged_decode_via_harness[blackhole-sliding-1x4]": 0.98,
       "test_layer_forward[blackhole-prefill_128-sliding-1x4]": 0.97,
       "test_layer_forward[blackhole-prefill_1024-sliding-1x4]": 0.97,
       "test_layer_forward[blackhole-prefill_4096-sliding-1x4]": 0.97
@@ -53,6 +54,10 @@
     }
   },
   "gemma-4-31B-it": {
+    "1x1": {
+      "test_attention_decode_paged[blackhole-cache512-global-1x1]": 0.98,
+      "test_attention_decode_bounded_vs_unbounded_parity[blackhole-cache1500-1x1]": 0.97
+    },
     "1x4": {
       "test_attention_prefill[blackhole-seq1024-global-1x4]": 0.97,
       "test_attention_prefill[blackhole-seq4096-global-1x4]": 0.97,
