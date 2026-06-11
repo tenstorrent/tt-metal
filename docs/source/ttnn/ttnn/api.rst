@@ -366,6 +366,7 @@ Reduction
    ttnn.sampling
    ttnn.std
    ttnn.sum
+   ttnn.experimental.topk_large_indices
    ttnn.topk
    ttnn.var
 
