@@ -108,6 +108,16 @@ bool service_cores_supported() {
     return cluster.is_ubb_galaxy() || cluster.arch() == tt::ARCH::BLACKHOLE;
 }
 
+// The H2D front-end (make_h2d_service) pins a host DMA buffer for its FIFO. On a
+// host booted with the IOMMU in passthrough/identity mode (e.g. iommu=pt, as on
+// the Blackhole Galaxy bh-glx-*), UMD must pin physically-contiguous pages
+// (TENSTORRENT_PIN_PAGES_CONTIGUOUS) and rejects the multi-page, non-contiguous
+// H2D buffer with EINVAL ("Failed to pin pages for DMA buffer ..."). This is a
+// host-config / H2D-infra limitation, NOT a D2D bug: the pure-D2D tests below run
+// fine. Tests that build an H2DStreamService skip cleanly when the IOMMU isn't in
+// DMA-translation mode. See notes/d2d_galaxy_h2d_pinning_failure.md.
+bool h2d_host_pinning_supported() { return tt::tt_metal::MetalContext::instance().get_cluster().is_iommu_enabled(); }
+
 // FABRIC_2D over the system mesh (the full Galaxy on a UBB system).
 using D2DStreamServiceTest = tt::tt_metal::GenericMeshDeviceFabric2DFixture;
 
@@ -1686,6 +1696,10 @@ TEST_F(D2DStreamServiceTest, H2DtoD2DBridge1Core) {
     if (!service_cores_supported()) {
         GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
     }
+    if (!h2d_host_pinning_supported()) {
+        GTEST_SKIP() << "H2D front-end host-DMA pinning requires a DMA-translation IOMMU (not iommu=pt); "
+                        "see notes/d2d_galaxy_h2d_pinning_failure.md.";
+    }
     const auto shape = this->mesh_device_->shape();
     if (shape.dims() != 2 || this->mesh_device_->num_devices() < 2) {
         GTEST_SKIP() << "Need a 2D mesh with >= 2 devices to carve distinct submeshes; got " << shape;
@@ -1702,6 +1716,10 @@ TEST_F(D2DStreamServiceTest, H2DtoD2DBridge4Cores) {
     if (!service_cores_supported()) {
         GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
     }
+    if (!h2d_host_pinning_supported()) {
+        GTEST_SKIP() << "H2D front-end host-DMA pinning requires a DMA-translation IOMMU (not iommu=pt); "
+                        "see notes/d2d_galaxy_h2d_pinning_failure.md.";
+    }
     const auto shape = this->mesh_device_->shape();
     if (shape.dims() != 2 || this->mesh_device_->num_devices() < 2) {
         GTEST_SKIP() << "Need a 2D mesh with >= 2 devices to carve distinct submeshes; got " << shape;
@@ -1717,6 +1735,10 @@ TEST_F(D2DStreamServiceTest, H2DtoD2DBridge4Cores) {
 TEST_F(D2DStreamServiceTest, H2DtoD2DBridgeAllCores) {
     if (!service_cores_supported()) {
         GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
+    }
+    if (!h2d_host_pinning_supported()) {
+        GTEST_SKIP() << "H2D front-end host-DMA pinning requires a DMA-translation IOMMU (not iommu=pt); "
+                        "see notes/d2d_galaxy_h2d_pinning_failure.md.";
     }
     const auto shape = this->mesh_device_->shape();
     if (shape.dims() != 2 || this->mesh_device_->num_devices() < 2) {
@@ -1735,6 +1757,10 @@ TEST_F(D2DStreamServiceTest, H2DtoD2DBridgeAllCores) {
 TEST_F(D2DStreamServiceTest, H2DtoD2DBridgeMetadataAllCores) {
     if (!service_cores_supported()) {
         GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
+    }
+    if (!h2d_host_pinning_supported()) {
+        GTEST_SKIP() << "H2D front-end host-DMA pinning requires a DMA-translation IOMMU (not iommu=pt); "
+                        "see notes/d2d_galaxy_h2d_pinning_failure.md.";
     }
     const auto shape = this->mesh_device_->shape();
     if (shape.dims() != 2 || this->mesh_device_->num_devices() < 2) {
@@ -1760,6 +1786,10 @@ TEST_F(D2DStreamServiceTest, H2DtoD2DBridgeReuseAllCores) {
     if (!service_cores_supported()) {
         GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
     }
+    if (!h2d_host_pinning_supported()) {
+        GTEST_SKIP() << "H2D front-end host-DMA pinning requires a DMA-translation IOMMU (not iommu=pt); "
+                        "see notes/d2d_galaxy_h2d_pinning_failure.md.";
+    }
     const auto shape = this->mesh_device_->shape();
     if (shape.dims() != 2 || this->mesh_device_->num_devices() < 2) {
         GTEST_SKIP() << "Need a 2D mesh with >= 2 devices to carve distinct submeshes; got " << shape;
@@ -1779,6 +1809,10 @@ TEST_F(D2DStreamServiceTest, H2DtoD2DBridgeRowPair) {
     if (!service_cores_supported()) {
         GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
     }
+    if (!h2d_host_pinning_supported()) {
+        GTEST_SKIP() << "H2D front-end host-DMA pinning requires a DMA-translation IOMMU (not iommu=pt); "
+                        "see notes/d2d_galaxy_h2d_pinning_failure.md.";
+    }
     const auto shape = this->mesh_device_->shape();
     if (shape.dims() != 2 || shape[0] < 2 || shape[1] < 2) {
         GTEST_SKIP() << "Need a >= 2x2 mesh to carve 1x2 <-> 1x2 submeshes; got " << shape;
@@ -1796,6 +1830,10 @@ TEST_F(D2DStreamServiceTest, H2DtoD2DBridgeRowPair) {
 #define D2D_SINGLECHIP_ALLCORES_GUARD()                                                                \
     if (!service_cores_supported()) {                                                                  \
         GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";             \
+    }                                                                                                  \
+    if (!h2d_host_pinning_supported()) {                                                               \
+        GTEST_SKIP() << "H2D front-end host-DMA pinning requires a DMA-translation IOMMU (not "        \
+                        "iommu=pt); see notes/d2d_galaxy_h2d_pinning_failure.md.";                     \
     }                                                                                                  \
     const auto shape = this->mesh_device_->shape();                                                    \
     if (shape.dims() != 2 || this->mesh_device_->num_devices() < 2) {                                  \
