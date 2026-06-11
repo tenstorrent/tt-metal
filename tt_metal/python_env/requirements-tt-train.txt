@@ -5,4 +5,4 @@
 datasets>=2.20,<3
 ml-dtypes
 streamlit
-sklearn
+scikit-learn
