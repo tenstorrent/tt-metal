@@ -20,15 +20,15 @@ nothing dispatched), so its asserts fail and are swallowed — pass 1 only colle
 compiles. Re-run the SAME suite over the SAME on-disk cache for the real, now-warm
 results:
 
-    # pass 1 — collect every op + parallel-compile the distinct set (warms the cache)
+    # pass 1 — collect every op + parallel-compile the distinct set (warms the cache).
+    # Loading the plugin with -p IS the opt-in; it is active whenever loaded.
     # (run from the repo root; PYTHONPATH=$PWD ensures the local `tests` package wins
     #  over any foreign tt-metal checkout on an inherited PYTHONPATH)
-    UP_FRONT_COLLECT=1 TT_METAL_CACHE=/tmp/c  PYTHONPATH="$PWD" pytest -p tests.plugins.up_front_collect <tests>
-    # pass 2 — real run, warm (plugin off)
+    TT_METAL_CACHE=/tmp/c  PYTHONPATH="$PWD" pytest -p tests.plugins.up_front_collect <tests>
+    # pass 2 — real run, warm (plugin not loaded)
     TT_METAL_CACHE=/tmp/c  pytest <tests>
 
-Knobs:  UP_FRONT_COLLECT=1 (enable; no-op otherwise) ·
-        UP_FRONT_COLLECT_WORKERS=N (0 => hardware_concurrency) ·
+Knobs:  UP_FRONT_COLLECT_WORKERS=N (0 => hardware_concurrency) ·
         UP_FRONT_COLLECT_DEVICE_ID=N (device for the session-end compile, default 0)
 
 Limitations:
@@ -54,26 +54,22 @@ import sys
 
 import pytest
 
-_ACTIVE = os.environ.get("UP_FRONT_COLLECT") == "1"
+# The plugin is active whenever it is loaded (``-p tests.plugins.up_front_collect``); loading it IS
+# the opt-in. To disable a load that some config forces, use pytest's own ``-p no:up_front_collect``.
 _WORKERS = int(os.environ.get("UP_FRONT_COLLECT_WORKERS", "0"))  # 0 => hardware_concurrency
 _DEVICE_ID = int(os.environ.get("UP_FRONT_COLLECT_DEVICE_ID", "0"))
 # UP_FRONT_REAL_ALLOC=1: collect with REAL buffer addresses (dispatch still blocked) instead of
 # addr-0 mocking, so address-baked / address-branched kernels (pool reader, move fwd/bwd) warm.
 # Costs real device memory (~the real run's peak) — only use when the model fits.
 _REAL_ALLOC = os.environ.get("UP_FRONT_REAL_ALLOC") == "1"
-# UP_FRONT_FAST_COLLECT=1 (default): in the collect window (results thrown away under NO_DISPATCH),
-# replace expensive HOST-side torch work — torch.randn -> zeros, the torch *reference* conv
-# (torch.nn.functional.conv2d) -> shape-correct zeros, comp_pcc -> no-op. Values are irrelevant
-# under NO_DISPATCH and collected programs depend only on ttnn op shapes/config, so this does NOT
-# change what is collected — it stops pass 1 paying for the golden reference + PCC + RNG.
-# Set =0 to run the body with real torch (full-fidelity, slower collect).
+# Fast collect (default): in the collect window (results thrown away under NO_DISPATCH) replace
+# expensive HOST-side torch work — torch.randn -> zeros, the torch *reference* conv/matmul/layer_norm
+# -> shape-correct zeros, comp_pcc -> no-op — and allocate ttnn.from_torch SHAPE-ONLY (skip the host
+# tilize/convert/copy; the dominant collect cost on weight-heavy models). Values are irrelevant under
+# NO_DISPATCH and collected programs depend only on ttnn op shapes/config, so this does NOT change what
+# is collected; the shape-only boundary falls back to the real path for anything it can't safely fake.
+# UP_FRONT_FAST_COLLECT=0 is a debug escape hatch: run the body with real torch (full-fidelity, slow).
 _FAST_COLLECT = os.environ.get("UP_FRONT_FAST_COLLECT", "1") == "1"
-# UP_FRONT_FAST_COLLECT_SHALLOW=1 (default): within fast collect, make ttnn.from_torch allocate the
-# ttnn tensor SHAPE-ONLY (skip the host tilize/convert/copy) — program build needs only the spec, not
-# values. Removes the dominant collect cost on weight-heavy models (e.g. SDXL UNet weight prep, ~35s
-# of from_torch). Keeps REAL torch tensors so host-side weight prep value reads still work. Set =0 to
-# restore the original full from_torch inside fast collect.
-_FAST_SHALLOW = os.environ.get("UP_FRONT_FAST_COLLECT_SHALLOW", "1") == "1"
 # UP_FRONT_COLLECT_NO_COMPILE=1: collect/dedup only, skip the session-end parallel compile. Used to
 # isolate the body-run cost from the compile floor when benchmarking.
 _NO_COMPILE = os.environ.get("UP_FRONT_COLLECT_NO_COMPILE") == "1"
@@ -373,13 +369,12 @@ def _boundary_patches(stats):
 
 
 def _collect_patches(stats):
-    """The patch set active during the collect window, gated by the fast / shallow flags."""
+    """The patch set active during the collect window (empty unless fast collect is on)."""
     patches = []
     if _FAST_COLLECT:
         patches += _reference_op_patches()
         patches += _verifier_patches()
-        if _FAST_SHALLOW:
-            patches += _boundary_patches(stats)
+        patches += _boundary_patches(stats)
     return patches
 
 
@@ -410,9 +405,6 @@ def _drives_capture(item) -> bool:
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_call(item):
     """Run each body under one NO_DISPATCH collect window (call phase only)."""
-    if not _ACTIVE:
-        return (yield)
-
     import ttnn
 
     if _drives_capture(item):
@@ -451,16 +443,12 @@ def pytest_runtest_call(item):
 
 
 def pytest_sessionstart(session):
-    if not _ACTIVE:
-        return
     import ttnn
 
     ttnn.graph.up_front_clear()  # clean slate before accumulating across the session
 
 
 def pytest_sessionfinish(session, exitstatus):
-    if not _ACTIVE:
-        return
     import ttnn
 
     n_unique = ttnn.graph.up_front_num_unique()
@@ -471,7 +459,7 @@ def pytest_sessionfinish(session, exitstatus):
         f"(swallowed {_STATS.swallowed}, skipped-capture {_STATS.skipped_capture})",
         flush=True,
     )
-    if _FAST_COLLECT and _FAST_SHALLOW:
+    if _FAST_COLLECT:
         print(
             f"UP_FRONT_COLLECT: fast-shallow from_torch — shape-only={_STATS.shallow} " f"fallback={_STATS.fallback}",
             flush=True,
