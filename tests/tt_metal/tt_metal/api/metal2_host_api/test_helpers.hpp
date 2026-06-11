@@ -172,12 +172,17 @@ inline TensorParameter MakeMinimalTensorParameter(
     };
 }
 
-// Helper to add a TensorBinding to a kernel.
+// Helper to add a TensorBinding to a kernel. access_type defaults to REMOTE
+// (TensorAccessor); pass TensorAccessType::LOCAL for a NodeLocalMem binding.
 inline void BindTensorParameterToKernel(
-    KernelSpec& kernel, const std::string& tensor_parameter_name, const std::string& accessor_name) {
+    KernelSpec& kernel,
+    const std::string& tensor_parameter_name,
+    const std::string& accessor_name,
+    TensorAccessType access_type = TensorAccessType::REMOTE) {
     kernel.tensor_bindings.push_back(TensorBinding{
         .tensor_parameter_name = TensorParamName{tensor_parameter_name},
         .accessor_name = accessor_name,
+        .access_type = access_type,
     });
 }
 

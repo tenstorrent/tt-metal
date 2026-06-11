@@ -14,7 +14,7 @@
 
 // Metal 2.0 opaque token type, used to construct a CoreLocalMem
 template <uint32_t ADDR_CRTA_OFFSET>
-struct NodeLocalMemBindingToken;
+struct NodeLocalMemBindingToken {};
 
 // (Needed by Metal 2.0 ctor)
 template <typename T>

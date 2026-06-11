@@ -2976,6 +2976,66 @@ TEST_F(ProgramSpecTestGen1, MinimalValidProgramSpecWithTensorParameterSucceeds) 
 }
 
 // ============================================================================
+// SECTION 9b: TensorBinding LOCAL access-type validation (Gen1 / WH)
+// ============================================================================
+// A LOCAL (NodeLocalMem) binding hands the kernel a base pointer into THIS node's
+// L1 with no address generation, so ValidateProgramSpec requires the bound tensor to
+// be (1) L1-resident, (2) sharded — so it has a fixed per-node base — and (3) sharded
+// over a grid that covers every node the kernel runs on. These tests pin each leg of
+// that rule. REMOTE (the default) carries none of these constraints; the positive
+// REMOTE-DRAM baseline is MinimalValidProgramSpecWithTensorParameterSucceeds above.
+
+TEST_F(ProgramSpecTestGen1, LocalBindingShardedL1Succeeds) {
+    // Positive baseline for LOCAL: a sharded-L1 tensor whose shard grid covers the kernel's
+    // node {0,0}. MakeShardedTensorParameter shards across origin cores (0,0),(1,0); the
+    // minimal Gen1 spec runs its kernels on {0,0}, so the coverage check is satisfied.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.tensor_parameters = {
+        MakeShardedTensorParameter("input_tensor", tt::tt_metal::Shape{1, 1, 64, 32}, {32, 32}, /*num_cores=*/2)};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_lm", TensorAccessType::LOCAL);
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestGen1, LocalBindingDramFails) {
+    // LOCAL requires node-local L1 data; a DRAM tensor has no fixed local base address.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.tensor_parameters = {MakeMinimalTensorParameter("input_tensor", tt::tt_metal::BufferType::DRAM)};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_lm", TensorAccessType::LOCAL);
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("is not L1-resident")));
+}
+
+TEST_F(ProgramSpecTestGen1, LocalBindingInterleavedL1Fails) {
+    // L1 but interleaved: no per-node resident shard, so no fixed local base address.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.tensor_parameters = {MakeMinimalTensorParameter("input_tensor", tt::tt_metal::BufferType::L1)};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_lm", TensorAccessType::LOCAL);
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("is not sharded")));
+}
+
+TEST_F(ProgramSpecTestGen1, LocalBindingUncoveredShardGridFails) {
+    // Sharded L1, but the kernel runs on a node the shard grid does not cover, so that node
+    // holds no local shard to address. The tensor shards over origin cores (0,0),(1,0); we
+    // move the work unit to node {3,3}, which is outside that grid.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.work_units =
+        std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", NodeCoord{3, 3}, {"dm_kernel", "compute_kernel"})};
+    spec.tensor_parameters = {
+        MakeShardedTensorParameter("input_tensor", tt::tt_metal::Shape{1, 1, 64, 32}, {32, 32}, /*num_cores=*/2)};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_lm", TensorAccessType::LOCAL);
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("shard grid does not cover")));
+}
+
+// ============================================================================
 // SECTION 10: TensorParameter JIT Smoke Tests (Gen1 / WH)
 // ============================================================================
 // Codegen-path smoke test for the Metal 2.0 TensorAccessor binding feature. Ends in
@@ -3012,6 +3072,47 @@ void kernel_main() {
     spec.tensor_parameters = {MakeMinimalTensorParameter("input_tensor")};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_tensor");
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+TEST_F(ProgramSpecTestGen1, NodeLocalMemBindingJITSmokeComputeKernel) {
+    // The payoff test for the LOCAL path: a COMPUTE kernel constructs a NodeLocalMem from a
+    // binding token and reads node-local L1. This is the first end-to-end exercise of the lm::
+    // codegen (genfiles emits `#include "api/core_local_mem.h"` + the lm:: token alias) AND the
+    // first compute/TRISC compile of CoreLocalMem. Unlike TensorAccessor — which hauls NoC
+    // address-generation headers that don't compile on TRISC (see the DM-only note above) —
+    // NodeLocalMem carries no NoC machinery, so a compute kernel can build against it. That
+    // claim is exactly what this test pins: it compiles the kernel on all three TRISCs
+    // (UNPACK / MATH / PACK).
+    //
+    // CTAD can't deduce T from the token (the lm:: token carries no element type), so the
+    // element type is spelled explicitly: NodeLocalMem<uint32_t>(lm::input_tensor).
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "lm_smoke_compute";
+
+    auto compute_kernel = MakeMinimalComputeKernel("compute_kernel");
+    compute_kernel.source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    NodeLocalMem<uint32_t> local(lm::input_tensor);
+    auto addr = local.get_address();
+    auto val = local[0];
+    (void)addr;
+    (void)val;
+}
+)"};
+
+    // Sharded L1 over origin cores (0,0),(1,0); the kernel runs on {0,0}, so the LOCAL
+    // coverage rule is satisfied and the binding reaches codegen.
+    spec.kernels = {compute_kernel};
+    spec.tensor_parameters = {
+        MakeShardedTensorParameter("input_tensor", tt::tt_metal::Shape{1, 1, 64, 32}, {32, 32}, /*num_cores=*/2)};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_tensor", TensorAccessType::LOCAL);
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute_kernel"})};
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
     IDevice* device = mesh_device_->get_devices()[0];
