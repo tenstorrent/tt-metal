@@ -15,7 +15,7 @@ CPU forward through a 72B model is memory-bandwidth bound and large — expect s
 per token on typical dev hosts and a peak host-RAM footprint of ~150 GB at bf16; 512 target
 tokens may take well over an hour. Reduce ``--num-target-tokens`` for faster iteration
 (intrinsic top-1 / top-5 consistency stats are printed regardless). See
-``dev-tools/agentic-bringup/skills/reference-sanity.md`` before pinning an accuracy threshold.
+the reference-sanity guide before pinning an accuracy threshold.
 """
 
 from __future__ import annotations
