@@ -28,8 +28,8 @@ _TILE = 32
 # Larger T_aligned should use the 1D-mcast path or default matmul.
 _EN_WIDTH_SHARD_MAX_M = 64
 
-# 1x(N/32) output width-shard CoreGrid overflows BH P150 (13-wide) when N >= 416.
-_MAX_STYLE_LINEAR_WIDTH_SHARD_CORES = 12
+# 1x(N/32) output width-shard CoreGrid overflows BH P150 (11-wide) when N >= 384.
+_MAX_STYLE_LINEAR_WIDTH_SHARD_CORES = 11
 
 
 def tile_padded_rows(n: int) -> int:

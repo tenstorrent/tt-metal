@@ -123,26 +123,65 @@ def dram_height_slice_num_slices(
 _DRAM_SLICE_TARGET_ROWS_DEFAULT = 512
 _DRAM_SLICE_TARGET_ROWS_LONG = 128
 _DRAM_SLICE_LONG_SEQ_THRESHOLD = 4096
+# Decoder decode block depthwise pool (groups≈1090) at T_mel ~500–1000 overflows L1 unless sliced.
+_DRAM_SLICE_HIGH_CHANNEL_THRESHOLD = 512
+_DRAM_SLICE_HIGH_CHANNEL_MIN_SEQ = 256
 
 
-def dram_height_slice_target_rows(sliced_dim: int) -> int:
+def dram_height_slice_target_rows(
+    sliced_dim: int,
+    *,
+    channels: int = 1,
+    activation_dtype=None,
+) -> int:
     """Pick per-slice row budget for ``Conv2dDRAMSliceHeight`` on Blackhole."""
     if sliced_dim >= _DRAM_SLICE_LONG_SEQ_THRESHOLD:
-        return _DRAM_SLICE_TARGET_ROWS_LONG
-    return _DRAM_SLICE_TARGET_ROWS_DEFAULT
+        base = _DRAM_SLICE_TARGET_ROWS_LONG
+    else:
+        base = _DRAM_SLICE_TARGET_ROWS_DEFAULT
+
+    elem_bytes = 4 if activation_dtype == ttnn.float32 else 2
+    # Keep per-slice activation footprint under ~256 KiB (empirical BH L1 CB headroom).
+    budget_rows = max(32, (256 * 1024) // max(channels * elem_bytes, 1))
+    if channels >= 1024:
+        return min(base, 32, budget_rows)
+    if channels >= _DRAM_SLICE_HIGH_CHANNEL_THRESHOLD:
+        return min(base, 64, budget_rows)
+    return min(base, budget_rows)
 
 
 def dram_height_slice_config(
     sliced_dim: int,
     *,
+    channels: int = 1,
+    activation_dtype=None,
     target_rows_per_slice: int | None = None,
 ) -> ttnn.Conv2dSliceConfig:
     if target_rows_per_slice is None:
-        target_rows_per_slice = dram_height_slice_target_rows(sliced_dim)
+        target_rows_per_slice = dram_height_slice_target_rows(
+            sliced_dim, channels=channels, activation_dtype=activation_dtype
+        )
     return ttnn.Conv2dSliceConfig(
         slice_type=ttnn.Conv2dDRAMSliceHeight,
         num_slices=dram_height_slice_num_slices(sliced_dim, target_rows_per_slice=target_rows_per_slice),
     )
+
+
+def _conv_transpose_use_dram_height_slice(
+    *,
+    spatial_style: str,
+    seq: int,
+    channels: int,
+    activation_dtype,
+) -> bool:
+    """Whether height-style ``conv_transpose2d`` needs DRAM height slicing on BH."""
+    if spatial_style != "height":
+        return False
+    if seq >= 1024:
+        return True
+    if channels >= _DRAM_SLICE_HIGH_CHANNEL_THRESHOLD and seq >= _DRAM_SLICE_HIGH_CHANNEL_MIN_SEQ:
+        return True
+    return activation_dtype == ttnn.float32 and channels >= 256 and seq >= 384
 
 
 @dataclass(frozen=True)
@@ -709,7 +748,12 @@ def tt_conv_transpose1d_nlc(
     # slicing.  With dram_slice_config, requesting output_layout=TILE_LAYOUT causes TTNN
     # to pre-allocate the full output as L1-sharded, overflowing BH L1 (1.5 MiB/bank).
     # Skip output_layout for that path; we convert to TILE in DRAM afterward.
-    _use_dram_slice = params.spatial_style == "height" and seq >= 1024
+    _use_dram_slice = _conv_transpose_use_dram_height_slice(
+        spatial_style=params.spatial_style,
+        seq=seq,
+        channels=params.in_channels,
+        activation_dtype=x_nlc.dtype,
+    )
     if conv_config is None:
         conv_config = ttnn.Conv2dConfig(weights_dtype=params.weight.dtype)
         # Keep conv-transpose configuration/bias tensors in DRAM and free activations eagerly
@@ -734,7 +778,15 @@ def tt_conv_transpose1d_nlc(
 
     if params.spatial_style == "height":
         # Matches ``ttnn_adain_resblk_encode._TtDepthwiseConvTransposePool`` (Kokoro istftnet pool).
-        _height_slice_cfg = dram_height_slice_config(seq) if _use_dram_slice else None
+        _height_slice_cfg = (
+            dram_height_slice_config(
+                seq,
+                channels=params.in_channels,
+                activation_dtype=x_nlc.dtype,
+            )
+            if _use_dram_slice
+            else None
+        )
         y, out_hw = ttnn.conv_transpose2d(
             input_tensor=x,
             weight_tensor=params.weight,
