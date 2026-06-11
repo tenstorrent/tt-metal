@@ -1548,16 +1548,13 @@ class LTXPipeline:
             mesh_device=self.mesh_device,
             dtype=ttnn.float32,
         )
-        # Capture-once/replay the main vocoder device graph (warmup captures, real decode replays).
-        # DISABLED by default (losullivan): the vocoder/BWE trace replays WRONG audio (eager is
-        # correct — PCC 0.994 vs torch — but traced is garbage, rmse/σ ~8; the trace machinery, not
-        # the ops). Gated by the test_audio_decode_girl conv1d-vs-torch oracle. Re-enable with
-        # LTX_AUDIO_TRACE=1 once fixed. The transformer denoise trace (self._traced) is independent.
-        self.tt_vocoder_with_bwe.use_trace = self._traced and os.environ.get("LTX_AUDIO_TRACE", "0") in (
-            "1",
-            "true",
-            "True",
-        )
+        # Capture-once/replay the main vocoder device graph when the pipeline runs traced.
+        # (Previously produced garbage audio: a ttnn trace bakes absolute buffer addresses, and the
+        # vocoder's prep_run alloc/free desynced them from the replay-time allocator state. Fixed in
+        # Vocoder.forward_traced — warm caches on a prior eager decode, then capture with
+        # prep_run=False so capture and every replay share the post-mel-VAE free-list. Gated by the
+        # test_audio_decode_girl conv1d-vs-torch oracle, which now runs under trace.)
+        self.tt_vocoder_with_bwe.use_trace = self._traced
         if isinstance(audio_parallel_config, AudioTCParallelConfig):
             cfg_desc = f"T-shard={t_factor} axis{t_axis} + channel-TP={c_factor} axis{c_axis}"
         elif audio_parallel_config is not None:
