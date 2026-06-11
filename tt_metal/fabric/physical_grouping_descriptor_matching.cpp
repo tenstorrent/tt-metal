@@ -269,8 +269,16 @@ AdjacencyGraph<uint32_t> build_mgd_mesh_instance_adjacency(
         asic_ids.push_back(i);
     }
 
-    // LINE-only graph for topology matching (RING edges are added when groupings are committed).
-    return build_row_major_mesh_graph(asic_ids, device_dims, "", 1);
+    // Build the graph with the MGD's declared per-dimension topology (RING vs LINE). Using the real wrap
+    // edges is what restricts the match to the correct PGD topology variant: a RING/RING MGD is a torus, so
+    // only the TORUSXY variant contains all its wrap edges and matches, while MESH/TORUSX/TORUSY (missing
+    // some wraps) correctly fail to match. (A LINE-only graph here would embed in every variant.)
+    std::vector<bool> ring_dims;
+    ring_dims.reserve(device_topology.dim_types_size());
+    for (int i = 0; i < device_topology.dim_types_size(); ++i) {
+        ring_dims.push_back(device_topology.dim_types(i) == proto::TorusTopology::RING);
+    }
+    return build_row_major_mesh_graph(asic_ids, device_dims, "", 1, ring_dims);
 }
 
 // Helper function to build adjacency graph from MGD switch instance

@@ -4897,7 +4897,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
     // Load MGD - using single_galaxy_1x16_torus_graph_descriptor which has 1 mesh of 1x16 (16 nodes)
     const std::filesystem::path mgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_torus_graph_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_4x4_torus_test.textproto";
     ASSERT_TRUE(std::filesystem::exists(mgd_path)) << "MGD file not found: " << mgd_path;
     MeshGraphDescriptor mgd{mgd_path};
 
