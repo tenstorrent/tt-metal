@@ -147,7 +147,7 @@ void calculate_sampling_recip_scalar() {
         out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
     }
     if constexpr (!(DST_ACCUM_MODE || APPROX)) {
-        out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::NearestEven);
+        out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
     }
     sfpi::dst_reg[0] = out;
 }
