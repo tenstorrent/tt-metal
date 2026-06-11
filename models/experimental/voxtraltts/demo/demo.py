@@ -53,6 +53,7 @@ import ttnn
 
 from models.experimental.voxtraltts.reference.voxtral_config import DEFAULT_VOXTRAL_MODEL, load_voxtral_config
 from models.experimental.voxtraltts.tt.voxtral_tts import VoxtralTTSPipeline
+from models.experimental.voxtraltts.tt.voxtral_tt_args import voxtral_text_hf_aligned_optimizations
 
 
 # ---------------------------------------------------------------------------
@@ -242,6 +243,7 @@ def _load_pipeline(mesh: ttnn.Device, args: DemoArgs) -> VoxtralTTSPipeline:
         model_name_or_path=args.model.model_name_or_path,
         text_max_seq_len=args.tt.text_max_seq_len,
         text_dtype=_ttnn_dtype(args.tt.text_dtype),
+        text_optimizations=voxtral_text_hf_aligned_optimizations,
         acoustic_dtype=_ttnn_dtype(args.tt.acoustic_dtype),
         tokenizer_dtype=_ttnn_dtype(args.tt.tokenizer_dtype),
         use_paged_kv_cache=args.tt.use_paged_kv_cache,
