@@ -134,7 +134,17 @@ delivered a win.
    isolated preallocated-input wall-clock bench before acting; and if a
    whole stage's wall ≫ Σ(its op kernel times), suspect a layout/L1
    stall, not a slow kernel (see optimization skill).
-8. Apply ONE targeted optimization. Common high-leverage levers proven
+8. **Also audit per-step H2D overhead** — this is invisible in tracy's
+   device-kernel CSV but shows up as device idle time between traces.
+   Count the H2D calls made per decode step and their sizes:
+   - RoPE cos/sin rows (~1–3 KB each): if the model H2D's a fresh row
+     per step, replace with on-device RoPE tables precomputed at init
+     and indexed via `ttnn.embedding(pos_dev, table)` (see
+     `skills/perf/SKILL.md` "On-device RoPE tables"). Measured savings:
+     ~0.2 ms/step at 3 KB/row × 2 rows on dots.ocr.
+   - Token id buffer: if the token id is padded (e.g. [1,1,1,32]) shrink
+     it to [1,1,1,1] — the embedding op only needs the first element.
+   Apply ONE targeted optimization. Common high-leverage levers proven
    across models (see `skills/optimization/SKILL.md`): SDPA q256/k512
    chunking (prefill AND vision), fused `rotary_embedding`, native GQA in
    SDPA (drop repeat_kv), bf8+HiFi2 SDPA for VLM vision, lm_head
