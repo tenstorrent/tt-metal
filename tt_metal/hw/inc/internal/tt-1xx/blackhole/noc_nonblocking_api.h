@@ -258,6 +258,36 @@ inline __attribute__((always_inline)) bool ncrisc_noc_packet_tags_cleared(uint32
            NOC_CMD_BUF_READ_REG(noc, NCRISC_AT_CMD_BUF, NOC_PACKET_TAG) == 0;
 }
 
+// True iff NCRISC_RD_CMD_BUF NOC_CTRL static VC equals the firmware default (1).
+// Static VC is the 3-bit field selected by NOC_CMD_STATIC_VC (bits [15:13]).
+// Plain reads (no CUSTOM_VC) inherit this field implicitly, so a kernel that
+// programmed a custom read VC must leave it back at the default for the next kernel.
+inline __attribute__((always_inline)) bool ncrisc_noc_read_vc_is_default(uint32_t noc) {
+    constexpr uint32_t static_vc_mask = NOC_CMD_STATIC_VC(0x7);
+    return (NOC_CMD_BUF_READ_REG(noc, NCRISC_RD_CMD_BUF, NOC_CTRL) & static_vc_mask) == NOC_CMD_STATIC_VC(1);
+}
+
+// Restore NOC_CTRL for the command buffers that can carry a persisted static VC
+// (read + write) back to the firmware default (static VC = 1, matching noc_init).
+// Cheap and safe: the next plain transaction overwrites NOC_CTRL regardless, so
+// this only matters for the stateful read/write APIs that set NOC_CTRL once and
+// reuse it. Atomic / wr_reg command buffers rewrite the full NOC_CTRL field on
+// every transaction and need no reset.
+inline __attribute__((always_inline)) void noc_reset_cmd_buf_vc_to_default(uint32_t noc) {
+    while (!noc_cmd_buf_ready(noc, NCRISC_RD_CMD_BUF));
+    NOC_CMD_BUF_WRITE_REG(
+        noc,
+        NCRISC_RD_CMD_BUF,
+        NOC_CTRL,
+        NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1));
+    while (!noc_cmd_buf_ready(noc, NCRISC_WR_CMD_BUF));
+    NOC_CMD_BUF_WRITE_REG(
+        noc,
+        NCRISC_WR_CMD_BUF,
+        NOC_CTRL,
+        NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1) | NOC_CMD_RESP_MARKED);
+}
+
 // Restores cmd_buf from state; waits for cmd_buf ready before writing.
 inline __attribute__((always_inline)) void noc_cmd_buf_restore_state(
     uint32_t noc, uint32_t cmd_buf, const NocCmdBufState* state) {

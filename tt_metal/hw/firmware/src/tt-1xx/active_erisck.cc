@@ -49,6 +49,11 @@ void _start() {
             ASSERT(ncrisc_noc_nonposted_atomics_flushed(NOC_INDEX), DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped);
             ASSERT(ncrisc_noc_posted_writes_sent(NOC_INDEX), DebugAssertNCriscNOCPostedWritesSentTripped);
             ASSERT(ncrisc_noc_packet_tags_cleared(NOC_INDEX), DebugAssertNCriscNOCPacketTagClearedTripped);
+            // Assert (watcher) then restore: a kernel that programmed a custom read VC must leave the read
+            // command buffer at the firmware default, since the next kernel's plain reads inherit NOC_CTRL.
+            // The reset is the always-on safety net; the assert blames the offending kernel before it runs.
+            ASSERT(ncrisc_noc_read_vc_is_default(NOC_INDEX), DebugAssertNCriscNOCReadVCNotDefaultTripped);
+            noc_reset_cmd_buf_vc_to_default(NOC_INDEX);
             WAYPOINT("NKFD");
         }
 

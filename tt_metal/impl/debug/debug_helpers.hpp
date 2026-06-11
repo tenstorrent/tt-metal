@@ -129,6 +129,10 @@ inline std::string get_debug_assert_message(
             return "detected invalid NOC command buffer state before starting the next kernel "
                    "(write-capable NOC packet tags must be zero so implicit transaction ID users start with "
                    "transaction ID 0).";
+        case dev_msgs::DebugAssertNCriscNOCReadVCNotDefaultTripped:
+            return "detected invalid NOC command buffer state before starting the next kernel "
+                   "(NCRISC read command buffer left at a non-default NOC VC; restore the firmware "
+                   "default VC before kernel exit).";
         case dev_msgs::DebugAssertRtaOutOfBounds: return "accessed unique runtime arg index out of bounds.";
         case dev_msgs::DebugAssertCrtaOutOfBounds: return "accessed common runtime arg index out of bounds.";
         case dev_msgs::DebugAssertHwFault:
