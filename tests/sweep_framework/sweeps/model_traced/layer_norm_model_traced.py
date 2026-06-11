@@ -142,10 +142,26 @@ def run(
     def _flatten_affine(t):
         if t is None:
             return None
-        return t.reshape(-1) if t.numel() == _norm else t.squeeze()
+        if t.numel() == _norm:
+            return t.reshape(-1)
+        # Tile-row-padded storage: gamma/beta logically [C] but stored with an
+        # extra leading dim, e.g. (1, 32, C) -> reshape (-1, C) and take row 0.
+        # torch.layer_norm and ttnn.layer_norm both require the affine weight to
+        # match normalized_shape ([C]); the padded (1,32,C) is rejected
+        # ("got weight of shape [32, C] and normalized_shape = [C]").
+        if t.shape[-1] == _norm:
+            return t.reshape(-1, _norm)[0].contiguous()
+        return t.squeeze()
 
-    golden_weight = _flatten_affine(torch_weight)
-    golden_bias = _flatten_affine(torch_bias)
+    # Collapse gamma/beta to their logical [C] form for BOTH the golden and the
+    # device tensor (the device path below uses torch_weight/torch_bias).
+    _weight_collapsed = (
+        torch_weight is not None and tuple(torch_weight.shape) != (_norm,) and torch_weight.numel() != _norm
+    )
+    torch_weight = _flatten_affine(torch_weight)
+    torch_bias = _flatten_affine(torch_bias)
+    golden_weight = torch_weight
+    golden_bias = torch_bias
     golden_input = torch_input_tensor_a if torch_residual is None else (torch_input_tensor_a + torch_residual)
     torch_output_tensor = torch.nn.functional.layer_norm(
         golden_input,
@@ -191,6 +207,14 @@ def run(
         if isinstance(w_mem, dict):
             w_mem = parse_dict_value("weight_memory_config", w_mem) or ttnn.DRAM_MEMORY_CONFIG
         w_placement = weight_kwargs.get("tensor_placement")
+        # When the gamma was collapsed from a tile-padded (1,32,C) storage shape
+        # to its logical [C], the traced placement/sharded mem config (laid out
+        # for the padded shape) no longer applies — replicate the small 1-D gamma
+        # from DRAM as [1,1,1,C].
+        if _weight_collapsed:
+            torch_weight = torch_weight.reshape(1, 1, 1, _norm)
+            w_placement = None
+            w_mem = ttnn.DRAM_MEMORY_CONFIG
 
         if not is_host:
             if is_mesh_device and w_placement:
@@ -215,6 +239,10 @@ def run(
         if isinstance(b_mem, dict):
             b_mem = parse_dict_value("bias_memory_config", b_mem) or ttnn.DRAM_MEMORY_CONFIG
         b_placement = bias_kwargs.get("tensor_placement")
+        if _weight_collapsed:
+            torch_bias = torch_bias.reshape(1, 1, 1, _norm)
+            b_placement = None
+            b_mem = ttnn.DRAM_MEMORY_CONFIG
 
         if not is_host:
             if is_mesh_device and b_placement:
