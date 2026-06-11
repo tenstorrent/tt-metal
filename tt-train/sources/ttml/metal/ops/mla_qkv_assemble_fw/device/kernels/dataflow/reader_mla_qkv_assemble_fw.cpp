@@ -22,14 +22,14 @@ void kernel_main() {
     constexpr uint32_t cb_v = tt::CBIndex::c_2;
     constexpr uint32_t cb_kpe = tt::CBIndex::c_3;
 
-    constexpr uint32_t Th = get_compile_time_arg_val(0);  // q tiles per head (Tn + Tr)
-    constexpr uint32_t Tn = get_compile_time_arg_val(1);  // qk_nope_dim / TILE_W
-    constexpr uint32_t Tv = get_compile_time_arg_val(2);  // v_dim       / TILE_W
-    constexpr uint32_t Tr = get_compile_time_arg_val(3);  // qk_rope_dim / TILE_W (k_pe tiles/block)
-    constexpr uint32_t n_heads = get_compile_time_arg_val(4);
-    constexpr uint32_t block_size = get_compile_time_arg_val(5);  // tiles streamed per chunk
+    constexpr uint32_t Tn = get_compile_time_arg_val(0);  // qk_nope_dim / TILE_W
+    constexpr uint32_t Tv = get_compile_time_arg_val(1);  // v_dim       / TILE_W
+    constexpr uint32_t Tr = get_compile_time_arg_val(2);  // qk_rope_dim / TILE_W (k_pe tiles/block)
+    constexpr uint32_t n_heads = get_compile_time_arg_val(3);
+    constexpr uint32_t block_size = get_compile_time_arg_val(4);  // tiles streamed per chunk
+    constexpr uint32_t Th = Tn + Tr;                              // q tiles per head (computed, matches writer)
 
-    constexpr auto q_args = TensorAccessorArgs<6>();
+    constexpr auto q_args = TensorAccessorArgs<5>();
     constexpr auto kv_up_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto kpe_args = TensorAccessorArgs<kv_up_args.next_compile_time_args_offset()>();
 

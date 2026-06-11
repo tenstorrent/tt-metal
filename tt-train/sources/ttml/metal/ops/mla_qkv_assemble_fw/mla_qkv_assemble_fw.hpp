@@ -16,8 +16,10 @@ namespace ttml::metal {
 // Splits Q into per-head layout, demuxes the per-head [k_nope_h | v_h] stripes
 // from a single packed projection output (the result of `wkv_b`), and
 // broadcasts the post-RoPE shared `k_pe` into every head's rope-suffix. Pure
-// data movement — RoPE on Q's rope-suffix happens *outside* this op (a
-// `rope_trailing` call after).
+// data movement — RoPE on Q's rope-suffix happens *outside* this op (today via
+// the composite slice/rope/concat in mla.py). A future fused q-rope op could
+// take over Q's head-split + suffix rotation, letting Q be dropped from this op
+// entirely.
 //
 // Shapes (TILE layout, INTERLEAVED memory):
 //   q_pre  : [B, 1, S, n_heads * (qk_nope_dim + qk_rope_dim)]

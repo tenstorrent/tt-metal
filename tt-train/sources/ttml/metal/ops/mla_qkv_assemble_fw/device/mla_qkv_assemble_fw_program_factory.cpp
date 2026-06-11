@@ -215,7 +215,7 @@ MLAQKVAssembleFwProgramFactory::cached_program_t MLAQKVAssembleFwProgramFactory:
     auto* k_buffer = k.buffer();
     auto* v_buffer = v.buffer();
 
-    std::vector<uint32_t> reader_compile_time_args = {Th, Tn, Tv, Tr, H, block_size};
+    std::vector<uint32_t> reader_compile_time_args = {Tn, Tv, Tr, H, block_size};
     tt::tt_metal::TensorAccessorArgs(q_pre_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(kv_up_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(k_pe_buffer).append_to(reader_compile_time_args);
