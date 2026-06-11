@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     PerfRunType,
@@ -28,6 +29,7 @@ from helpers.test_variant_parameters import (
             DataFormat.Float32,
             DataFormat.Int32,
             DataFormat.Bfp8_b,
+            DataFormat.Fp8_e4m3,
         ]
     ),
     full_rt_dim=[1, 2, 3, 4, 5, 6, 7, 8],
@@ -39,6 +41,12 @@ def test_perf_pack_untilize(
     full_rt_dim,
     full_ct_dim,
 ):
+    if get_chip_architecture() == ChipArchitecture.WORMHOLE and (
+        formats.input_format == DataFormat.Fp8_e4m3
+        or formats.output_format == DataFormat.Fp8_e4m3
+    ):
+        pytest.skip("Fp8_e4m3 not supported on wormhole")
+
     if formats.output_format == DataFormat.Bfp8_b:
         pytest.skip("Pack Untilize does not support Bfp8_b output")
 
