@@ -920,6 +920,15 @@ def _compute_split(model_id: str) -> Dict[str, int]:
     on_device = len(cats["reuse"]) + len(cats["adapt"]) + len(clean_native) + len(rt_partial)
     on_cpu = len(cats["new_fallback"])
     total = on_device + on_cpu
+
+    from .bringup_loop import find_demo_dir
+
+    graduated = len(cats["new_native"])
+    _demo = find_demo_dir(model_id)
+    if _demo is not None:
+        for _n in cats["adapt"]:
+            if _stub_has_graduated_from_autofill(_demo / "_stubs" / f"{_safe_id(_n)}.py"):
+                graduated += 1
     return {
         "reuse": len(cats["reuse"]),
         "adapt": len(cats["adapt"]),
@@ -929,6 +938,7 @@ def _compute_split(model_id: str) -> Dict[str, int]:
         "new_fallback": len(cats["new_fallback"]),
         "on_device": on_device,
         "on_cpu": on_cpu,
+        "graduated": graduated,
         "total": total,
     }
 
@@ -945,6 +955,8 @@ def _format_compute_split(model_id: str, *, label: str = "compute split", indent
     lines = [
         f"{indent}{label}: {s['on_device']}/{total} on device ({pct(s['on_device'])}), "
         f"{s['on_cpu']}/{total} on CPU ({pct(s['on_cpu'])})",
+        f"{indent}  Graduated (ON_DEVICE) : {s.get('graduated', 0)}/{total} "
+        f"({pct(s.get('graduated', 0))}) actually graduated (native stub, PCC-verified)",
         f"{indent}  on device : REUSE={s['reuse']}  ADAPT={s['adapt']}  "
         f"NEW-native={s['new_native']}  NEW-partial-CPU={s['new_native_partial_cpu']}",
         f"{indent}  on CPU    : NEW-fallback={s['new_fallback']}",
@@ -7333,7 +7345,6 @@ from ._cli_helpers.auto_iterate import (  # noqa: F401
     add_iter_loop_cli_args,
     iter_loop_kwargs_from,
 )
-
 
 _DEVICE_RESET_COUNT: int = 0
 _DEVICE_RESET_MAX_PER_PROCESS: int = 3
