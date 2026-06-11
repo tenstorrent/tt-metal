@@ -267,7 +267,7 @@ inline void _llk_math_eltwise_di_binary_addrmod_()
  * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
  * values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @tparam reuse_dest: When not NONE, reuses the destination register as SrcA or SrcB, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
- * @tparam EN_DI: Enable the direct-indexing instruction variant
+ * @tparam ENABLE_DIRECT_INDEXING: Enable the direct-indexing instruction variant
  * @param tensor_shape: Contains all the information of the tensor shape: num faces, face row/col dim, etc
  * @param acc_to_dest: When true, accumulate the result into the destination register instead of overwriting
  * @note On the unpack thread (T0): for reuse_dest == NONE pair with @ref _llk_unpack_binary_operands_init_; for DEST_TO_SRCA/DEST_TO_SRCB pair with
@@ -279,10 +279,10 @@ template <
     EltwiseBinaryType ELTWISE_BINARY_TYPE,
     ckernel::MathFidelity MATH_FIDELITY_TYPE,
     EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool EN_DI                            = false>
+    bool ENABLE_DIRECT_INDEXING           = false>
 inline void _llk_math_eltwise_binary_init_(const ckernel::TensorShape& tensor_shape, bool acc_to_dest = false)
 {
-    if constexpr (EN_DI)
+    if constexpr (ENABLE_DIRECT_INDEXING)
     {
         _llk_math_eltwise_di_binary_addrmod_<MATH_FIDELITY_TYPE>();
         _llk_math_eltwise_di_binary_mop_config_<ELTWISE_BINARY_TYPE, MATH_FIDELITY_TYPE>(tensor_shape, acc_to_dest);

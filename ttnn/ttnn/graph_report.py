@@ -64,7 +64,8 @@ else:
 SUPPORTED_REPORT_VERSION = 1
 # String so we can follow semver-like bumps (was int on an older branch). Bump when the
 # visualizer schema changes; stale DBs are deleted on import (no migration path).
-DATABASE_SCHEMA_VERSION = "2.4"
+# 3.1 — buffer_chunks (#46376) plus rank on buffer_chunks for multi-host merges.
+DATABASE_SCHEMA_VERSION = "3.1"
 
 # Second and later JSON files for the same rank get operation ids shifted by this stride
 # so they do not collide (each capture must have fewer than this many ops).
@@ -567,19 +568,25 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
     """
     )
 
-    # Buffer pages table (when detailed buffer report is enabled)
+    # Buffer chunks table (pre-aggregated per (op, device, addr, bank, core)).
+    # Replaces the legacy ``buffer_pages`` table: each chunk row collapses
+    # the contiguous pages of a single buffer placement on a single core
+    # into one record. ttnn-visualizer reads this table directly and falls
+    # back to aggregating the legacy ``buffer_pages`` table on the fly when
+    # only the old schema is available.
     cursor.execute(
         """
-        CREATE TABLE IF NOT EXISTS buffer_pages (
+        CREATE TABLE IF NOT EXISTS buffer_chunks (
             operation_id int,
             device_id int,
             address int,
-            core_y int,
-            core_x int,
             bank_id int,
-            page_index int,
-            page_address int,
+            core_x int,
+            core_y int,
+            chunk_address int,
+            chunk_size int,
             page_size int,
+            num_pages int,
             buffer_type int,
             rank int NOT NULL DEFAULT 0
         )
@@ -652,6 +659,65 @@ def _compute_max_size_per_bank(size, page_size, buffer_type, layout, num_cores, 
         return pages_per_core * page_size
 
     return size
+
+
+def _aggregate_pages_to_chunks(op_id, pages, rank: int = 0):
+    """Collapse per-page rows for a single op_id into per-(addr, bank, core) chunks.
+
+    Mirrors the SQL ``GROUP BY (operation_id, device_id, address, bank_id,
+    core_x, core_y, buffer_type)`` used by ttnn-visualizer's legacy fallback,
+    so the importer-written ``buffer_chunks`` rows are bit-identical to what
+    the visualizer would compute from raw ``buffer_pages`` on the fly.
+
+    ``pages`` is an iterable of 9-tuples in the order produced by
+    ``_parse_page``: ``(device_id, address, core_y, core_x, bank_id,
+    page_index, page_address, page_size, buffer_type)``.
+    """
+    # Mutable accumulator per group is a 4-slot list; these constants name the
+    # slots so the in-place update block below stays self-describing without
+    # paying the per-page allocation cost of a dataclass/namedtuple.
+    ACC_START, ACC_END, ACC_PAGE_SIZE, ACC_COUNT = 0, 1, 2, 3
+
+    groups = {}
+    for device_id, address, core_y, core_x, bank_id, _page_index, page_address, page_size, buffer_type in pages:
+        key = (device_id, address, bank_id, core_x, core_y, buffer_type)
+        end = page_address + page_size
+        existing = groups.get(key)
+        if existing is None:
+            groups[key] = [page_address, end, page_size, 1]
+        else:
+            if page_address < existing[ACC_START]:
+                existing[ACC_START] = page_address
+            if end > existing[ACC_END]:
+                existing[ACC_END] = end
+            if page_size > existing[ACC_PAGE_SIZE]:
+                existing[ACC_PAGE_SIZE] = page_size
+            existing[ACC_COUNT] += 1
+
+    rows = []
+    for (device_id, address, bank_id, core_x, core_y, buffer_type), (
+        start,
+        end,
+        max_page_size,
+        count,
+    ) in groups.items():
+        rows.append(
+            (
+                op_id,
+                device_id,
+                address,
+                bank_id,
+                core_x,
+                core_y,
+                start,
+                end - start,
+                max_page_size,
+                count,
+                buffer_type,
+                rank,
+            )
+        )
+    return rows
 
 
 def _validate_graph_integrity(
@@ -1775,10 +1841,11 @@ def import_report(
                         f.write(report["mesh_coordinate_mapping"])
                     total_stats["mesh_coordinate_mapping"] = True
 
-            # Import buffer pages.
+            # Import buffer chunks (collapsed per-(op, device, addr, bank, core)).
             # Preferred: buffer_pages_by_address (compact, ~0.5 MB) combined with
-            # per_operation_buffers to reconstruct per-operation buffer_pages.
-            # Fallback: flat buffer_pages snapshot from end of capture.
+            # per_operation_buffers to reconstruct per-operation pages, then
+            # aggregate into chunks. Fallback: flat buffer_pages snapshot from
+            # end of capture, also aggregated.
             graph_counter_to_op_id = stats.get("graph_counter_to_op_id", {}) if "graph" in report else {}
             bp_by_addr = report.get("buffer_pages_by_address")
             per_op_bufs = report.get("per_operation_buffers")
@@ -1847,28 +1914,36 @@ def import_report(
                             start_c = end_stack.pop()
                             start_to_end[start_c] = c
 
-                buffer_pages_batch = []
+                pages_by_op = {}
                 for graph_counter_str, bufs in per_op_bufs.items():
                     graph_counter = int(graph_counter_str)
                     op_id = graph_counter_to_op_id.get(graph_counter)
                     if op_id is None:
                         continue
                     end_counter = start_to_end.get(graph_counter, graph_counter)
+                    bucket = pages_by_op.get(op_id)
+                    if bucket is None:
+                        bucket = []
+                        pages_by_op[op_id] = bucket
                     for buf in bufs:
                         addr = buf.get("address", 0)
-                        for page_tuple in _get_pages_for_addr(addr, end_counter):
-                            buffer_pages_batch.append((op_id, *page_tuple, rank))
-                if buffer_pages_batch:
+                        bucket.extend(_get_pages_for_addr(addr, end_counter))
+
+                buffer_chunks_batch = []
+                for op_id, pages in pages_by_op.items():
+                    if pages:
+                        buffer_chunks_batch.extend(_aggregate_pages_to_chunks(op_id, pages, rank=rank))
+                if buffer_chunks_batch:
                     cursor.executemany(
-                        """INSERT INTO buffer_pages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", buffer_pages_batch
+                        """INSERT INTO buffer_chunks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        buffer_chunks_batch,
                     )
-                    total_stats["buffer_pages"] = total_stats.get("buffer_pages", 0) + len(buffer_pages_batch)
+                    total_stats["buffer_chunks"] = total_stats.get("buffer_chunks", 0) + len(buffer_chunks_batch)
             elif "buffer_pages" in report and report["buffer_pages"]:
                 # Legacy flat snapshot: attach to first operation id in this file's range when possible.
                 legacy_op_id = base_operation_id + 1 if stats.get("operations", 0) > 0 else base_operation_id
-                buffer_pages_batch = [
+                pages_for_op = [
                     (
-                        legacy_op_id,
                         page.get("device_id", 0),
                         page.get("address", 0),
                         page.get("core_y", 0),
@@ -1878,14 +1953,16 @@ def import_report(
                         page.get("page_address", 0),
                         page.get("page_size", 0),
                         page.get("buffer_type", 0),
-                        rank,
                     )
                     for page in report["buffer_pages"]
                 ]
-                cursor.executemany(
-                    """INSERT INTO buffer_pages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", buffer_pages_batch
-                )
-                total_stats["buffer_pages"] = total_stats.get("buffer_pages", 0) + len(buffer_pages_batch)
+                buffer_chunks_batch = _aggregate_pages_to_chunks(legacy_op_id, pages_for_op, rank=rank)
+                if buffer_chunks_batch:
+                    cursor.executemany(
+                        """INSERT INTO buffer_chunks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        buffer_chunks_batch,
+                    )
+                    total_stats["buffer_chunks"] = total_stats.get("buffer_chunks", 0) + len(buffer_chunks_batch)
 
             total_stats["files"] += 1
 
@@ -1910,8 +1987,8 @@ def import_report(
             summary.append(f"  - {total_stats['tensor_consumer_rows']} tensor_consumers rows")
         if total_stats.get("tensor_producer_rows", 0) > 0:
             summary.append(f"  - {total_stats['tensor_producer_rows']} tensor_producers rows")
-        if total_stats.get("buffer_pages", 0) > 0:
-            summary.append(f"  - {total_stats['buffer_pages']} buffer pages")
+        if total_stats.get("buffer_chunks", 0) > 0:
+            summary.append(f"  - {total_stats['buffer_chunks']} buffer chunks")
         if total_stats.get("cluster_descriptor"):
             summary.append("  - cluster_descriptor YAML saved")
         if total_stats.get("mesh_coordinate_mapping"):

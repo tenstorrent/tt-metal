@@ -13,7 +13,7 @@ from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.debug_tensix import TensixDebug
 from ttexalens.hardware.risc_debug import CallstackEntry
 from ttexalens.tt_exalens_lib import (
-    ElfFile,
+    ParsedElfFile,
     TTException,
     arc_msg,
     callstack,
@@ -360,7 +360,7 @@ def reset_mailboxes(location: str = "0,0"):
 
 def pull_coverage_stream_from_tensix(
     location: str | OnChipCoordinate,
-    elf: str | ElfFile,
+    elf: str | ParsedElfFile,
     stream_path: str,
     device_id: int = 0,
     context: Context | None = None,

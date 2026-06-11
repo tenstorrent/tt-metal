@@ -230,6 +230,10 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         sampling_params = kwargs.get("sampling_params", None)
         sample_on_device = bool(sampling_params is not None)
         reset_batch = kwargs.get("reset_batch", False)
+        # NOTE: vLLM also passes `slot_remap` (the seed-slot reindex map from batch
+        # condense) in kwargs, but deepseek does not consume it — so per-request
+        # seeded determinism is not preserved across condense. Tracked by
+        # https://github.com/tenstorrent/tt-metal/issues/46350.
 
         # Set kv_cache if provided and all entries are valid
         if kv_cache is not None and not any(entry is None for entry in kv_cache):
@@ -251,10 +255,9 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         )
 
         if sample_on_device:
-            decode_output = self._sample_tokens_device(
+            decode_output = self.sample_decode_on_device(
                 decode_step_output,
                 enable_trace=enable_trace,
-                skip_precompile=True,
             )
             if read_from_device:
                 decode_output = self._tokens_from_device(
