@@ -7,6 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 
 #include "ttnn/operations/reduction/topk/device/topk_device_operation_types.hpp"
+#include "ttnn/metal2_artifacts.hpp"
 
 #include <tt-metalium/program_descriptors.hpp>
 
@@ -21,8 +22,12 @@ struct TopKDeviceOperation {
     using spec_return_value_t = std::tuple<TensorSpec, TensorSpec>;
     using tensor_return_value_t = std::tuple<Tensor, Tensor>;
 
+    // Metal 2.0 single-core factory — degenerate ProgramSpecFactoryConcept (single create_program_artifacts
+    // returning the immutable ProgramSpec + the complete ProgramRunArgs). topk has no per-dispatch dynamic
+    // scalar (sort order `largest` is a compile-time arg), so the work-split run-args are simply re-applied
+    // on every cache hit by the framework. No custom hash, no extract_immutable_info, no per-enqueue split.
     struct TopKSingleCoreProgramFactory {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);

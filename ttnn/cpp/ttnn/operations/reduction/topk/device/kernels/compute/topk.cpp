@@ -115,22 +115,22 @@ FORCE_INLINE void cb_reserve_push_back(const uint32_t cb, const uint32_t count) 
 }
 
 void kernel_main() {
-    // Runtime arguments
-    const uint32_t work_per_core = get_arg_val<uint32_t>(0);
+    // Runtime arguments (Metal 2.0: named per-core run arg)
+    const uint32_t work_per_core = get_arg(args::work_per_core);
 
-    // Compile time args
-    constexpr uint32_t input_val_cb_index = get_compile_time_arg_val(0);        // Input values circular buffer
-    constexpr uint32_t input_ind_cb_index = get_compile_time_arg_val(1);        // Input indices circular buffer
-    constexpr uint32_t transposed_val_cb_index = get_compile_time_arg_val(2);   // Transposed values buffer
-    constexpr uint32_t transposed_ind_cb_index = get_compile_time_arg_val(3);   // Transposed indices buffer
-    constexpr uint32_t result_prep_val_cb_index = get_compile_time_arg_val(4);  // Result preparation values buffer
-    constexpr uint32_t result_prep_ind_cb_index = get_compile_time_arg_val(5);  // Result preparation indices buffer
-    constexpr uint32_t output_val_cb_index = get_compile_time_arg_val(6);       // Final output values buffer
-    constexpr uint32_t output_ind_cb_index = get_compile_time_arg_val(7);       // Final output indices buffer
-    constexpr uint32_t Ht = get_compile_time_arg_val(8);                        // Height in tiles
-    constexpr uint32_t Wt = get_compile_time_arg_val(9);                        // Width in tiles
-    constexpr uint32_t output_tiles = get_compile_time_arg_val(10);             // Number of output tiles (ceil(K/32))
-    constexpr uint32_t largest = get_compile_time_arg_val(11);                  // 1 for largest K, 0 for smallest K
+    // Compile time args (Metal 2.0: DFB ids from dfb::, scalars from named args::)
+    constexpr uint32_t input_val_cb_index = dfb::topk_sc_input;                  // Input values dataflow buffer
+    constexpr uint32_t input_ind_cb_index = dfb::topk_sc_index;                  // Input indices dataflow buffer
+    constexpr uint32_t transposed_val_cb_index = dfb::topk_sc_transposed_val;    // Transposed values buffer
+    constexpr uint32_t transposed_ind_cb_index = dfb::topk_sc_transposed_ind;    // Transposed indices buffer
+    constexpr uint32_t result_prep_val_cb_index = dfb::topk_sc_result_prep_val;  // Result preparation values buffer
+    constexpr uint32_t result_prep_ind_cb_index = dfb::topk_sc_result_prep_ind;  // Result preparation indices buffer
+    constexpr uint32_t output_val_cb_index = dfb::topk_sc_output_val;            // Final output values buffer
+    constexpr uint32_t output_ind_cb_index = dfb::topk_sc_output_ind;            // Final output indices buffer
+    constexpr uint32_t Ht = get_arg(args::Ht);                                   // Height in tiles
+    constexpr uint32_t Wt = get_arg(args::Wt);                                   // Width in tiles
+    constexpr uint32_t output_tiles = get_arg(args::output_tiles);               // Number of output tiles (ceil(K/32))
+    constexpr uint32_t largest = get_arg(args::largest);                         // 1 for largest K, 0 for smallest K
 
     // Initialize kernel components
     ckernel::topk_tile_init();

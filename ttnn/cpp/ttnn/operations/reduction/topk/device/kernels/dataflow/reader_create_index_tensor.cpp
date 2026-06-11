@@ -12,32 +12,28 @@
 #include <cstdint>
 
 void kernel_main() {
-    // Runtime arguments
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t id = get_arg_val<uint32_t>(1);
-    const uint32_t work_per_core = get_arg_val<uint32_t>(2);
+    // Runtime arguments (Metal 2.0: named per-core run args)
+    const uint32_t id = get_arg(args::id);
+    const uint32_t work_per_core = get_arg(args::work_per_core);
 
-    // Compile time arguments
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_intermed_index = get_compile_time_arg_val(1);
-    constexpr uint32_t Ht = get_compile_time_arg_val(2);
-    constexpr uint32_t Wt = get_compile_time_arg_val(3);
-    constexpr uint32_t total_number_of_cores = get_compile_time_arg_val(4);
-    constexpr bool uint16_output = get_compile_time_arg_val(5) == 1;
-    constexpr auto inout_tensor_args = TensorAccessorArgs<6>();
+    // Compile time arguments (Metal 2.0: DFB ids from dfb::, scalars from named args::)
+    constexpr uint32_t cb_id_in0 = dfb::topk_sc_input;
+    constexpr uint32_t cb_intermed_index = dfb::topk_sc_index;
+    constexpr uint32_t Ht = get_arg(args::Ht);
+    constexpr uint32_t Wt = get_arg(args::Wt);
+    constexpr uint32_t total_number_of_cores = get_arg(args::total_number_of_cores);
+    constexpr bool uint16_output = get_arg(args::uint16_output) == 1;
 
 #if not GENERATE_INDICES
     // Precomputed indices tensor accessor
-    constexpr auto indices_args = TensorAccessorArgs<inout_tensor_args.next_compile_time_args_offset()>();
-    const uint32_t src_indices_addr = get_arg_val<uint32_t>(3);
-    const auto indices_accessor = TensorAccessor(indices_args, src_indices_addr);
+    const auto indices_accessor = TensorAccessor(ta::indices_tensor);
 #endif  // not GENERATE_INDICES
 
     // Constants
     constexpr uint32_t onetile = 1;
 
     // Tensor accessor
-    const auto inout_tensor_accessor = TensorAccessor(inout_tensor_args, src_addr);
+    const auto inout_tensor_accessor = TensorAccessor(ta::inout_tensor);
 
     Noc noc;
     CircularBuffer cb_in0(cb_id_in0);

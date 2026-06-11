@@ -8,27 +8,23 @@
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    // Runtime args
-    const uint32_t dst_addr0 = get_arg_val<uint32_t>(0);
-    const uint32_t dst_addr1 = get_arg_val<uint32_t>(1);
-    const uint32_t id = get_arg_val<uint32_t>(2);
-    const uint32_t work_per_core = get_arg_val<uint32_t>(3);
+    // Runtime args (Metal 2.0: named per-core run args)
+    const uint32_t id = get_arg(args::id);
+    const uint32_t work_per_core = get_arg(args::work_per_core);
 
-    // Compile time args
-    constexpr uint32_t values_cb_index = get_compile_time_arg_val(0);
-    constexpr uint32_t output_ind_cb_index = get_compile_time_arg_val(1);
-    constexpr uint32_t Ht = get_compile_time_arg_val(2);
-    constexpr uint32_t Kt = get_compile_time_arg_val(3);
-    constexpr uint32_t total_number_of_cores = get_compile_time_arg_val(4);
-    constexpr auto values_tensor_args = TensorAccessorArgs<5>();
-    constexpr auto indices_tensor_args = TensorAccessorArgs<values_tensor_args.next_compile_time_args_offset()>();
+    // Compile time args (Metal 2.0: DFB ids from dfb::, scalars from named args::)
+    constexpr uint32_t values_cb_index = dfb::topk_sc_output_val;
+    constexpr uint32_t output_ind_cb_index = dfb::topk_sc_output_ind;
+    constexpr uint32_t Ht = get_arg(args::Ht);
+    constexpr uint32_t Kt = get_arg(args::Kt);
+    constexpr uint32_t total_number_of_cores = get_arg(args::total_number_of_cores);
 
     // Constants
     constexpr uint32_t onetile = 1;
 
     // Tensor config
-    const auto values_tensor_accessor = TensorAccessor(values_tensor_args, dst_addr0);
-    const auto indices_tensor_accessor = TensorAccessor(indices_tensor_args, dst_addr1);
+    const auto values_tensor_accessor = TensorAccessor(ta::values_tensor);
+    const auto indices_tensor_accessor = TensorAccessor(ta::indices_tensor);
 
     Noc noc;
     CircularBuffer values_cb(values_cb_index);
