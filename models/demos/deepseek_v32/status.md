@@ -78,8 +78,23 @@ Open work tracked in the Backlog section below.
 
 Legend: `[x]` done · `[ ]` open · ⏸️ postponed · 📌 resolved as decision (no code).
 
-**Recommended implementation order (open items, 2026-06-11):** 18 → 14 → 13 → **4** → 9 → 8 → 19 → 16 → 3 → 15 → 11/12.
-Rationale: lock correctness cheaply first (18 determinism, 14 CI), then independent hygiene (13). Do **(4) 2x2 before the perf-debt items (8/9/17/19)** — they all live in the sparse/cache read paths that (4) rewrites for SP sharding, so doing them on 1x4 first = rework; (17) folds into (4), (9)/(8) are done in (4)'s SP-aware read path. (19) also needs device non-interleaved RoPE (issue #4) as a prereq. Then broaden scope (16 multi-layer, 15 decode — beyond current prefill-only scope). Fused C++ ops (11/12) are out-of-scope follow-ups, last. (3) 50k gate is hardware-time gated, run once 8/9 speed the path.
+### Recommended implementation order (open items, 2026-06-11)
+
+`18 → 14 → 13 → 4 → 9 → 8 → 19 → 16 → 3 → 15 → 11/12`
+
+| # | Item | Why here |
+|---|---|---|
+| 18 | determinism tests | cheap, no deps — guards every change below |
+| 14 | v32 tests in CI | small after 18; locks regressions (long CPU-truths gated) |
+| 13 | upstream injection → v3, delete copies | independent hygiene; kills drift from copied files |
+| **4** | **2x2 SP×TP** | top production blocker; **rewrites the sparse/cache read paths** → do before the perf-debt items below (else 1x4 rework). Folds in **(17)** mask dedup |
+| 9 | MLA cache-slot readback → device | done inside (4)'s SP-aware read path |
+| 8 | sparse_mla gather+SDPA → device | biggest perf debt; SP-aware after (4); stand-in for fused (12) |
+| 19 | indexer key cache → device | couples with (4); prereq = device non-interleaved RoPE (**issue #4**) |
+| 16 | multi-layer / multi-user cache | broadens to the full model |
+| 3 ⏸️ | 50k scale gate | hardware-time gated; cheaper once 8/9 speed the path |
+| 15 | decode path | beyond current prefill-only scope; largest expansion |
+| 11/12 | fused C++ ops | out-of-scope follow-ups (Approach §4), last |
 
 **Step 4 — chunked prefill**
 - [x] **(1)** MLACPU decode branch accepts intra-chunk causal mask (was mask=None → no within-chunk causality)
