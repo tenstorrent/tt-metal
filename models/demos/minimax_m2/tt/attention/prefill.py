@@ -128,7 +128,7 @@ def prefill_forward(
 
     # Concat heads and apply output projection
     tt_sdpa_out_pre_concat = tt_sdpa_out
-    tt_sdpa_out = concat_heads(tt_sdpa_out, is_decode_mode=False)
+    tt_sdpa_out = concat_heads(tt_sdpa_out)
     tt_sdpa_out_pre_concat.deallocate(True)
 
     # Flatten back for output projection: [B, 1, S, H] -> [1, 1, B*S, H]

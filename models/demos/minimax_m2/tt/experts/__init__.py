@@ -31,7 +31,6 @@ import ttnn
 from models.demos.minimax_m2.config import MeshConfig, ModeConfig
 
 from .config import ExpertConfig, ProgramConfig
-from .decode import decode_forward
 from .prefill import prefill_forward
 from .weights import load_expert_weights
 
@@ -123,42 +122,27 @@ class Experts:
         self,
         hidden_states,
         topk_expert_weights: ttnn.Tensor,
-        is_decode: bool = True,
         topk_expert_indices: ttnn.Tensor = None,
     ):
         """
-        Forward pass - automatically dispatches to decode or prefill.
+        Prefill experts forward.
 
         Args:
             hidden_states: Input tensor [batch, seq_len, hidden_size]
-            topk_expert_weights: Sparse router scores output [seq_len, num_experts]
-            is_decode: Decode mode
-            topk_expert_indices: Top-k expert indices per token (unused in this version of experts)
+            topk_expert_weights: Dense router weights [seq_len, num_experts]
+            topk_expert_indices: Top-k expert indices per token (unused in this version)
 
         Returns:
             Expert output tensor [1, batch, seq_len, hidden_size]
         """
-        # Determine mode based on sequence length
-        if is_decode:
-            return decode_forward(
-                hidden_states=hidden_states,
-                routing_weights=topk_expert_weights,
-                weights=self.weights,
-                config=self.config,
-                mesh_config=self.mesh_config,
-                mesh_device=self.mesh_device,
-                ccl_manager=self.ccl_manager,
-                program_config=self.program_config,
-            )
-        else:
-            return prefill_forward(
-                hidden_states=hidden_states,
-                routing_weights=topk_expert_weights,
-                weights=self.weights,
-                config=self.config,
-                mesh_config=self.mesh_config,
-                mesh_device=self.mesh_device,
-                ccl_manager=self.ccl_manager,
-                program_config=self.program_config,
-                prefill_sparsity=self.prefill_sparsity,
-            )
+        return prefill_forward(
+            hidden_states=hidden_states,
+            routing_weights=topk_expert_weights,
+            weights=self.weights,
+            config=self.config,
+            mesh_config=self.mesh_config,
+            mesh_device=self.mesh_device,
+            ccl_manager=self.ccl_manager,
+            program_config=self.program_config,
+            prefill_sparsity=self.prefill_sparsity,
+        )

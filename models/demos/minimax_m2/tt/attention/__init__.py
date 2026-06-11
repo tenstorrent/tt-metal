@@ -6,8 +6,7 @@ import ttnn
 from models.demos.minimax_m2.config import MeshConfig
 
 from .config import AttentionConfig, ProgramConfig
-from .decode import decode_forward
-from .kv_cache import get_kv_memory_config, init_kv_cache
+from .kv_cache import init_kv_cache
 from .prefill import prefill_forward
 from .weights import load_attention_weights
 
@@ -90,14 +89,6 @@ class Attention:
             self.kv_cache = None
             self.layer_past = None
 
-        # Get KV memory config for decode mode
-        self.kv_mem_cfg = get_kv_memory_config(
-            mesh_device,
-            config.max_local_batch_size,
-            mesh_config.shard_size(config.num_kv_heads),
-            config.head_dim,
-        )
-
         # Store references for backward compatibility
         self.hidden_size = config.hidden_size
         self.num_heads = config.num_heads
@@ -112,68 +103,38 @@ class Attention:
         position_idx=None,
         page_table=None,
         kv_cache=None,
-        is_decode=True,
         user_id=0,
         batch_size=1,
     ):
         """
-        Forward pass - automatically dispatches to decode or prefill.
+        Prefill attention forward.
 
         Args:
             hidden_states: Input tensor [batch, seq_len, hidden_size]
             rope_mats: Tuple of (cos, sin) matrices for RoPE
-            position_idx: Position index for KV cache update
             page_table: Page table for paged attention (optional)
             kv_cache: External KV cache (optional, uses internal if not provided)
-            is_decode: Whether this is decode mode (default: True)
-            user_id: User/batch index for KV cache fill in prefill mode (default: 0)
+            user_id: User/batch index for KV cache fill (default: 0)
 
         Returns:
             Attention output [batch, seq_len, hidden_size]
         """
-        # batch_size, seq_len, hidden_size = hidden_states.shape
-
-        # Determine mode based on sequence length
-        # is_decode = seq_len == 1
-        # is_decode = True
-
-        # Use provided kv_cache or internal cache
         cache = kv_cache if kv_cache is not None else self.kv_cache
+        transformation_mat = self.transformation_mats["prefill"] if self.transformation_mats else None
 
-        # Get transformation matrix for the mode
-        mode = "decode" if is_decode else "prefill"
-        transformation_mat = self.transformation_mats[mode] if self.transformation_mats else None
-
-        if is_decode:
-            return decode_forward(
-                hidden_states=hidden_states,
-                rope_mats=rope_mats,
-                weights=self.weights,
-                kv_cache=cache,
-                config=self.config,
-                mesh_config=self.mesh_config,
-                mesh_device=self.mesh_device,
-                program_config=self.program_config,
-                transformation_mat=transformation_mat,
-                kv_mem_cfg=self.kv_mem_cfg,
-                position_idx=position_idx,
-                page_table=page_table,
-                ccl_manager=self.ccl_manager,
-            )
-        else:
-            return prefill_forward(
-                hidden_states=hidden_states,
-                rope_mats=rope_mats,
-                user_id=user_id,
-                weights=self.weights,
-                kv_cache=cache,
-                config=self.config,
-                mesh_config=self.mesh_config,
-                mesh_device=self.mesh_device,
-                program_config=self.program_config,
-                transformation_mat=transformation_mat,
-                position_idx=position_idx,
-                page_table=page_table,
-                ccl_manager=self.ccl_manager,
-                batch_size=batch_size,
-            )
+        return prefill_forward(
+            hidden_states=hidden_states,
+            rope_mats=rope_mats,
+            user_id=user_id,
+            weights=self.weights,
+            kv_cache=cache,
+            config=self.config,
+            mesh_config=self.mesh_config,
+            mesh_device=self.mesh_device,
+            program_config=self.program_config,
+            transformation_mat=transformation_mat,
+            position_idx=position_idx,
+            page_table=page_table,
+            ccl_manager=self.ccl_manager,
+            batch_size=batch_size,
+        )

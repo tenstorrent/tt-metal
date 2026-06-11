@@ -10,17 +10,7 @@ from models.demos.minimax_m2.tt.experts.config import ProgramConfig
 
 @dataclass
 class MiniMaxM2ExpertProgramConfig(ProgramConfig):
-    """
-    MiniMax-M2 expert configuration.
-
-    Optimized for: hidden=2088, intermediate=360
-    """
-
-    # Decode
-    decode_gate_up_cores: tuple[int, int] = (3, 4)
-    decode_gate_up_in0_block_w: int = 30
-    decode_down_cores: tuple[int, int] = (5, 6)
-    decode_down_in0_block_w: int = 12
+    """MiniMax-M2 prefill expert configuration."""
 
     # Prefill
     prefill_gate_up_cores: tuple[int, int] = (3, 4)

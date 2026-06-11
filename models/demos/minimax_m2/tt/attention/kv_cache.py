@@ -4,7 +4,6 @@
 import torch
 
 import ttnn
-from models.common.utility_functions import nearest_y
 from models.demos.minimax_m2.config import MeshConfig
 from models.demos.minimax_m2.utils.general_utils import get_cache_file_name
 
@@ -80,34 +79,3 @@ def init_kv_cache(
     )
 
     return [k_cache, v_cache]
-
-
-def get_kv_memory_config(mesh_device, max_local_batch_size: int, num_local_kv_heads: int, head_dim: int):
-    """
-    Get sharded memory config for KV tensors in decode mode.
-
-    Args:
-        mesh_device: TTNN mesh device
-        max_local_batch_size: Maximum local batch size per device
-        num_local_kv_heads: Number of KV heads per device
-        head_dim: Head dimension
-
-    Returns:
-        Sharded memory config for KV tensors
-    """
-    grid_size = ttnn.CoreCoord(8, 8)
-
-    # KV tensors should be [local_batch_size, num_local_kv_heads, 1, head_dim] for decode
-    kv_shape = (1, max_local_batch_size, num_local_kv_heads, head_dim)
-    kv_shard_height = nearest_y(kv_shape[1], ttnn.TILE_SIZE)  # height = num_local_kv_heads
-    kv_shard_width = kv_shape[3]  # width = head_dim
-    kv_num_cores = kv_shape[1]  # cores = 1 (sequence length for decode)
-
-    kv_core_grid = ttnn.num_cores_to_corerangeset(kv_num_cores, grid_size, row_wise=True)
-
-    return ttnn.create_sharded_memory_config(
-        shape=(kv_shard_height, kv_shard_width),
-        core_grid=kv_core_grid,
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        use_height_and_width_as_shard_shape=True,
-    )

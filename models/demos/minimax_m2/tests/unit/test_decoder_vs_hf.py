@@ -97,7 +97,7 @@ def test_decoder_layer_prefill_vs_hf(mesh_device, device_params, seq_len, reset_
         dtype=ttnn.bfloat16,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
-    out_tt = decoder(x_tt, position_embeddings=rope_mats, is_decode=False)
+    out_tt = decoder(x_tt, position_embeddings=rope_mats)
     out = ttnn.to_torch(ttnn.get_device_tensors(out_tt)[0]).reshape(1, seq_len, H)
 
     passing, pcc = comp_pcc(ref_out, out, 0.97)
