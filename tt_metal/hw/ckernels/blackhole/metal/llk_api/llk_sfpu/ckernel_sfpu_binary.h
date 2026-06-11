@@ -13,6 +13,7 @@
 #include "ckernel_sfpu_recip.h"
 #include "ckernel_sfpu_conversions.h"
 #include "ckernel_sfpu_exp.h"
+#include "sfpu/ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_log.h"
 
 using namespace sfpi;
@@ -155,10 +156,16 @@ inline void calculate_sfpu_binary_div(const uint dst_index_in0, const uint dst_i
         sfpi::vFloat r = _sfpu_reciprocal_<2>(in1);
         sfpi::vFloat q0 = in0 * r;
         if constexpr (is_fp32_dest_acc_en) {
-            // Residual (Markstein) refinement: removes the double-rounding of
-            // in0 * round(1/in1) so the fp32 quotient is correctly-rounded.
-            sfpi::vFloat e = in0 - result * in1;  // residual (≈ Sterbenz-exact)
-            result = result + e * r;              // correctly-rounded quotient
+            // Skip quotient refinement when in0*r is already non-finite (biased exponent == 255).
+            // If in0*r = +/-inf, then the residual e = in0 - (+/-inf)*in1 = -/+inf and
+            // result + e*r = inf + (-inf) = NaN, which would corrupt IEEE overflow behavior.
+            v_if(sfpi::exexp(result, sfpi::ExponentMode::NoDebias) != 255) {
+                // Residual (Markstein) refinement removes the double-rounding of in0 * round(1/in1).
+                // The residual subtraction is exact under Sterbenz's lemma.
+                sfpi::vFloat e = in0 - result * in1;
+                result = result + e * r;
+            }
+            v_endif;
         }
 
         v_if(in1 == 0) {

@@ -29,7 +29,6 @@ sfpi_inline sfpi::vInt _float_to_int32_positive_(sfpi::vFloat in) {
     return result;
 }
 
-// Helper function for rsub and div
 // Convert float32 to bfloat16 using IEEE 754 Round-to-Nearest-Even (RNE)
 // This implements the "add 0x7fff + LSB" algorithm for correct tie-breaking
 sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
