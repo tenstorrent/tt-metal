@@ -1102,9 +1102,9 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
 
                     TT_FATAL(!optional_bias.has_value(), "Bias is not supported when using gather_in0.");
                 } else {
-                    auto grid_1d = program_config.allowed_worker_cores.value().bounding_box().grid_size();
-                    check_tensor_in_grid(input_tensor_a, grid_1d);
-                    check_tensor_in_grid(input_tensor_b, grid_1d);
+                    const auto device_grid_1d = input_tensor_a.device()->compute_with_storage_grid_size();
+                    check_tensor_in_grid(input_tensor_a, device_grid_1d);
+                    check_tensor_in_grid(input_tensor_b, device_grid_1d);
                 }
                 if (program_config.mcast_in0 || program_config.gather_in0) {
                     if (input_tensor_a.is_sharded()) {
@@ -1368,9 +1368,9 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
                                      operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
-                auto grid_2d = program_config.allowed_worker_cores.value().bounding_box().grid_size();
-                check_tensor_in_grid(input_tensor_a, grid_2d);
-                check_tensor_in_grid(input_tensor_b, grid_2d);
+                const tt::tt_metal::CoreCoord device_grid = input_tensor_a.device()->compute_with_storage_grid_size();
+                check_tensor_in_grid(input_tensor_a, device_grid);
+                check_tensor_in_grid(input_tensor_b, device_grid);
                 if (input_tensor_a.memory_config().is_sharded()) {
                     TT_FATAL(program_config.fuse_batch, "Batch fusion is required when input A is sharded");
                     auto tensor_a_memory_layout = input_tensor_a.memory_config().memory_layout();
