@@ -248,6 +248,17 @@ def parse_args() -> argparse.Namespace:
         help="Stage number to use for the first prompt file, useful when continuing from a later stage.",
     )
     parser.add_argument(
+        "--resume-stage",
+        type=int,
+        default=None,
+        help=(
+            "Resume an existing terminal stage from --log-dir/manifest.txt using "
+            "its recorded stage_N_thread_id, then continue later stages. This is "
+            "for usageLimited/budgetLimited/blocker recovery where --start-index "
+            "would lose the stopped thread's context."
+        ),
+    )
+    parser.add_argument(
         "--config",
         action="append",
         default=[],
@@ -288,6 +299,10 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if args.start_index < 1:
         raise SystemExit("--start-index must be >= 1")
+    if args.resume_stage is not None and args.resume_stage < 1:
+        raise SystemExit("--resume-stage must be >= 1")
+    if args.resume_stage is not None and args.log_dir is None:
+        raise SystemExit("--resume-stage requires --log-dir pointing at the existing multigoal log directory")
     return args
 
 
@@ -305,6 +320,14 @@ def parse_replacements(items: list[str]) -> list[tuple[str, str]]:
             raise SystemExit("--replace OLD cannot be empty")
         replacements.append((old, new))
     return replacements
+
+
+def replacement_value(replacements: list[tuple[str, str]], name: str) -> str | None:
+    value: str | None = None
+    for old, new in replacements:
+        if old == name:
+            value = new
+    return value
 
 
 def load_prompt(path: pathlib.Path, replacements: list[tuple[str, str]]) -> str:
@@ -353,6 +376,20 @@ def input_items_for_objective(repo: pathlib.Path, objective: str) -> tuple[list[
     items: list[JsonObject] = [{"type": "text", "text": objective}]
     missing: list[str] = []
     for name in parse_skill_names(objective):
+        path = skill_path(repo, name)
+        if path is None:
+            missing.append(name)
+            continue
+        items.append({"type": "skill", "name": name, "path": str(path)})
+    return items, missing
+
+
+def input_items_for_resume(
+    repo: pathlib.Path, message: str, original_objective: str
+) -> tuple[list[JsonObject], list[str]]:
+    items: list[JsonObject] = [{"type": "text", "text": message}]
+    missing: list[str] = []
+    for name in parse_skill_names(original_objective):
         path = skill_path(repo, name)
         if path is None:
             missing.append(name)
@@ -431,11 +468,34 @@ def thread_start_params(args: argparse.Namespace, repo: pathlib.Path) -> JsonObj
     return params
 
 
+def thread_resume_params(args: argparse.Namespace, repo: pathlib.Path, thread_id: str) -> JsonObject:
+    params = thread_start_params(args, repo)
+    params["threadId"] = thread_id
+    return params
+
+
 def goal_from_response(result: JsonObject) -> JsonObject:
     goal = result.get("goal")
     if not isinstance(goal, dict):
         raise RuntimeError(f"app-server response did not include a goal object: {result!r}")
     return goal
+
+
+def in_progress_turn_ids(result: JsonObject) -> list[str]:
+    thread = result.get("thread")
+    if not isinstance(thread, dict):
+        return []
+    turns = thread.get("turns")
+    if not isinstance(turns, list):
+        return []
+    ids: list[str] = []
+    for turn in turns:
+        if not isinstance(turn, dict) or turn.get("status") != "inProgress":
+            continue
+        turn_id = turn.get("id")
+        if isinstance(turn_id, str):
+            ids.append(turn_id)
+    return ids
 
 
 def update_stage_state(state: StageState, message: JsonObject) -> None:
@@ -516,7 +576,10 @@ def write_manifest_header(
     home: pathlib.Path,
     codex_bin: str,
     args: argparse.Namespace,
+    replacements: list[tuple[str, str]],
+    model_dir: str | None,
 ) -> None:
+    hf_model = replacement_value(replacements, "HF_MODEL")
     path.write_text(
         "\n".join(
             [
@@ -524,6 +587,8 @@ def write_manifest_header(
                 f"repo={repo}",
                 f"codex_home={home}",
                 f"codex_bin={codex_bin}",
+                f"hf_model={hf_model or ''}",
+                f"model_dir={model_dir or ''}",
                 "runner=app-server",
                 f"approval_policy={args.approval_policy}",
                 f"sandbox={args.sandbox}",
@@ -539,6 +604,31 @@ def append_manifest(path: pathlib.Path, lines: list[str]) -> None:
     with path.open("a", encoding="utf-8") as f:
         for line in lines:
             f.write(line + "\n")
+
+
+def read_manifest(path: pathlib.Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    if not path.exists():
+        return values
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        if "=" not in raw or raw.startswith("- "):
+            continue
+        key, value = raw.split("=", 1)
+        values[key] = value
+    return values
+
+
+def next_resume_attempt(manifest_values: dict[str, str], index: int) -> int:
+    prefix = f"stage_{index}_resume_"
+    attempts: list[int] = []
+    for key in manifest_values:
+        if not key.startswith(prefix):
+            continue
+        rest = key[len(prefix) :]
+        number = rest.split("_", 1)[0]
+        if number.isdigit():
+            attempts.append(int(number))
+    return max(attempts, default=0) + 1
 
 
 def execute_goal(
@@ -587,6 +677,8 @@ def execute_goal(
         turn_id: str | None = None
         if isinstance(turn, dict) and isinstance(turn.get("id"), str):
             turn_id = turn["id"]
+            if turn.get("status") == "inProgress":
+                state.active_turns.add(turn_id)
         if turn_id is not None:
             wait_for_turn_started(client, log, state, turn_id)
 
@@ -604,9 +696,128 @@ def execute_goal(
         return terminal, thread_id, state.last_turn_error
 
 
+def execute_resumed_goal(
+    client: AppServerClient,
+    args: argparse.Namespace,
+    repo: pathlib.Path,
+    objective: str,
+    thread_id: str,
+    output_log: pathlib.Path,
+    prompt_copy: pathlib.Path,
+) -> tuple[str, str | None]:
+    """Resume an existing stage thread and run one continuation turn.
+
+    Returns (terminal_status, last_turn_error).
+    """
+    message = "\n".join(
+        [
+            "Continue this existing multigoal stage after the previous turn stopped before the stage was complete.",
+            "",
+            f"Original goal prompt copy: {prompt_copy}",
+            "",
+            "Keep working on the same goal and use the existing artifacts, logs, and code state.",
+            "Do not restart from scratch unless the current artifacts require it.",
+            "The multigoal runner will run this stage's check script after you mark the goal complete, then continue later stages.",
+            "When the original goal is genuinely complete, mark the goal complete. If it is impossible to proceed, mark it blocked with the concrete blocker.",
+        ]
+    )
+    input_items, _missing = input_items_for_resume(repo, message, objective)
+    with output_log.open("w", encoding="utf-8") as log:
+        resumed = client.request("thread/resume", thread_resume_params(args, repo, thread_id), log)
+        state = StageState(thread_id=thread_id, objective=objective)
+        state.active_turns.update(in_progress_turn_ids(resumed))
+        if state.active_turns:
+            active = client.request(
+                "thread/goal/set",
+                {"threadId": thread_id, "objective": objective, "status": "active"},
+                log,
+                lambda msg: update_stage_state(state, msg),
+            )
+            active_goal = goal_from_response(active)
+            if active_goal.get("objective") != objective or active_goal.get("status") != "active":
+                raise RuntimeError(f"active resumed goal was not set exactly: {active_goal!r}")
+            state.status = "active"
+            state.terminal_status = None
+            terminal = wait_for_stage_terminal(client, log, state)
+            return terminal, state.last_turn_error
+
+        paused = client.request(
+            "thread/goal/set",
+            {"threadId": thread_id, "objective": objective, "status": "paused"},
+            log,
+            lambda msg: update_stage_state(state, msg),
+        )
+        paused_goal = goal_from_response(paused)
+        if paused_goal.get("objective") != objective or paused_goal.get("status") != "paused":
+            raise RuntimeError(f"paused resumed goal was not set exactly: {paused_goal!r}")
+        state.status = "paused"
+        state.terminal_status = None
+
+        turn_payload = turn_params(args, repo)
+        turn_payload["input"] = input_items
+        turn_payload["threadId"] = thread_id
+        turn_started = client.request(
+            "turn/start",
+            turn_payload,
+            log,
+            lambda msg: update_stage_state(state, msg),
+        )
+        turn = turn_started.get("turn")
+        if isinstance(turn, dict) and isinstance(turn.get("id"), str):
+            turn_id = turn["id"]
+            if turn.get("status") == "inProgress":
+                state.active_turns.add(turn_id)
+            wait_for_turn_started(client, log, state, turn_id)
+
+        active = client.request(
+            "thread/goal/set",
+            {"threadId": thread_id, "objective": objective, "status": "active"},
+            log,
+            lambda msg: update_stage_state(state, msg),
+        )
+        active_goal = goal_from_response(active)
+        if active_goal.get("objective") != objective or active_goal.get("status") != "active":
+            raise RuntimeError(f"active resumed goal was not set exactly: {active_goal!r}")
+        state.status = "active"
+        state.terminal_status = None
+
+        terminal = wait_for_stage_terminal(client, log, state)
+        return terminal, state.last_turn_error
+
+
 def find_check_script(prompt_path: pathlib.Path) -> pathlib.Path | None:
     candidate = prompt_path.with_name(prompt_path.stem + ".check.sh")
     return candidate if candidate.exists() else None
+
+
+def requires_model_dir(args: argparse.Namespace) -> bool:
+    if args.no_checks:
+        return False
+    return any(find_check_script(prompt_path) is not None for prompt_path in args.prompt_files)
+
+
+def resolve_model_dir_for_launch(
+    *,
+    replacements: list[tuple[str, str]],
+    manifest_values: dict[str, str],
+    required: bool,
+) -> str | None:
+    replacement_model_dir = replacement_value(replacements, "MODEL_DIR")
+    manifest_model_dir = manifest_values.get("model_dir") or None
+    if replacement_model_dir and manifest_model_dir and replacement_model_dir != manifest_model_dir:
+        raise SystemExit(
+            "MODEL_DIR replacement does not match existing manifest model_dir:\n"
+            f"  --replace MODEL_DIR={replacement_model_dir}\n"
+            f"  manifest model_dir={manifest_model_dir}"
+        )
+    model_dir = replacement_model_dir or manifest_model_dir
+    if required and not model_dir:
+        raise SystemExit(
+            "MODEL_DIR is required when launching prompts with runner-side check scripts. "
+            "Pass --replace MODEL_DIR=models/autoports/<model_dir> so stage gates are "
+            "scoped to the exact autoport directory instead of relying on HF_MODEL fuzzy matching."
+        )
+    return model_dir
 
 
 def replacement_env(replacements: list[tuple[str, str]]) -> dict[str, str]:
@@ -690,12 +901,14 @@ def run_stage_checks(
     prompt_path: pathlib.Path,
     prompt_copy: pathlib.Path,
     replacements: list[tuple[str, str]],
+    manifest_key_prefix: str | None = None,
 ) -> str:
     """Run the stage's check script with remediation. Returns the check status string."""
+    manifest_key_prefix = manifest_key_prefix or f"stage_{index}"
     script = find_check_script(prompt_path)
     if script is None or args.no_checks:
         status = "skipped" if args.no_checks and script is not None else "none"
-        append_manifest(manifest, [f"stage_{index}_check={status}"])
+        append_manifest(manifest, [f"{manifest_key_prefix}_check={status}"])
         return status
 
     extra_env = replacement_env(replacements)
@@ -706,17 +919,17 @@ def run_stage_checks(
     for attempt in range(args.check_retries + 1):
         check_log = log_dir / f"{name}.check-{attempt + 1}.log"
         code = run_check_script(script, repo, extra_env, check_log)
-        append_manifest(manifest, [f"stage_{index}_check_attempt_{attempt + 1}=exit{code}"])
+        append_manifest(manifest, [f"{manifest_key_prefix}_check_attempt_{attempt + 1}=exit{code}"])
         if code not in (CHECK_PASS, CHECK_ADVISORY, CHECK_CRITICAL):
             # Broken check or environment: retry once for transients.
             check_log = log_dir / f"{name}.check-{attempt + 1}-retry.log"
             code = run_check_script(script, repo, extra_env, check_log)
-            append_manifest(manifest, [f"stage_{index}_check_attempt_{attempt + 1}_retry=exit{code}"])
+            append_manifest(manifest, [f"{manifest_key_prefix}_check_attempt_{attempt + 1}_retry=exit{code}"])
         if code == CHECK_PASS:
-            append_manifest(manifest, [f"stage_{index}_check=pass"])
+            append_manifest(manifest, [f"{manifest_key_prefix}_check=pass"])
             return "pass"
         if code not in (CHECK_ADVISORY, CHECK_CRITICAL):
-            append_manifest(manifest, [f"stage_{index}_check=check-error(exit{code})"])
+            append_manifest(manifest, [f"{manifest_key_prefix}_check=check-error(exit{code})"])
             return f"check-error(exit{code})"
         if attempt >= args.check_retries:
             break
@@ -737,12 +950,12 @@ def run_stage_checks(
             objective,
             remediation_log,
             on_thread_started=lambda tid: append_manifest(
-                manifest, [f"stage_{index}_remediation_{attempt + 1}_thread_id={tid}"]
+                manifest, [f"{manifest_key_prefix}_remediation_{attempt + 1}_thread_id={tid}"]
             ),
         )
         append_manifest(
             manifest,
-            [f"stage_{index}_remediation_{attempt + 1}_terminal_status={terminal}"],
+            [f"{manifest_key_prefix}_remediation_{attempt + 1}_terminal_status={terminal}"],
         )
         if terminal != "complete":
             detail = f": {turn_error}" if turn_error else ""
@@ -750,7 +963,7 @@ def run_stage_checks(
             break
 
     status = "critical-fail" if code >= CHECK_CRITICAL else "advisory-fail"
-    append_manifest(manifest, [f"stage_{index}_check={status}"])
+    append_manifest(manifest, [f"{manifest_key_prefix}_check={status}"])
     return status
 
 
@@ -855,12 +1068,97 @@ def run_stage(
     return 0
 
 
+def run_resumed_stage(
+    client: AppServerClient,
+    args: argparse.Namespace,
+    repo: pathlib.Path,
+    log_dir: pathlib.Path,
+    manifest: pathlib.Path,
+    index: int,
+    prompt_path: pathlib.Path,
+    replacements: list[tuple[str, str]],
+    manifest_values: dict[str, str],
+) -> int:
+    prompt = load_prompt(prompt_path, replacements)
+    objective = objective_from_prompt(prompt)
+    name = stage_name(index, prompt_path)
+    prompt_copy = log_dir / f"{name}.prompt.txt"
+    if not prompt_copy.exists():
+        prompt_copy.write_text(prompt, encoding="utf-8")
+    thread_id = manifest_values.get(f"stage_{index}_thread_id")
+    if not thread_id:
+        raise RuntimeError(f"cannot resume stage {index}: manifest has no stage_{index}_thread_id")
+    attempt = next_resume_attempt(manifest_values, index)
+    resume_name = f"{name}.resume-{attempt}"
+    output_log = log_dir / f"{resume_name}.jsonl"
+
+    print(f"\n== Resume stage {index}: {prompt_path} ==", file=sys.stderr)
+    print(f"+ thread: {thread_id}", file=sys.stderr)
+    print(f"+ log: {output_log}", file=sys.stderr)
+    append_manifest(
+        manifest,
+        [
+            f"stage_{index}_resume_{attempt}_started_at_utc={timestamp()}",
+            f"stage_{index}_resume_{attempt}_thread_id={thread_id}",
+        ],
+    )
+
+    terminal, turn_error = execute_resumed_goal(
+        client,
+        args,
+        repo,
+        objective,
+        thread_id,
+        output_log,
+        prompt_copy,
+    )
+    append_manifest(manifest, [f"stage_{index}_resume_{attempt}_terminal_status={terminal}"])
+    print(f"stage_resume_terminal_status={terminal}", file=sys.stderr)
+    if terminal == "turnFailed":
+        append_status(log_dir, resume_name, terminal, "not-run")
+        print(f"Stopping after resumed stage {index}: turn failed: {turn_error}", file=sys.stderr)
+        return 5
+    if terminal != "complete":
+        append_status(log_dir, resume_name, terminal, "not-run")
+        print(f"Stopping after resumed stage {index}: goal is {terminal}", file=sys.stderr)
+        return 3
+
+    check_status = run_stage_checks(
+        client,
+        args,
+        repo,
+        log_dir,
+        manifest,
+        index,
+        resume_name,
+        prompt,
+        prompt_path,
+        prompt_copy,
+        replacements,
+        manifest_key_prefix=f"stage_{index}_resume_{attempt}",
+    )
+    append_status(log_dir, resume_name, terminal, check_status)
+    if check_status == "critical-fail":
+        print(
+            f"Stopping after resumed stage {index}: verification failed critically after "
+            f"{args.check_retries} remediation attempt(s).",
+            file=sys.stderr,
+        )
+        return 6
+    if check_status.startswith("check-error") and args.check_error_policy == "stop":
+        print(
+            f"Stopping after resumed stage {index}: the verification check itself failed ({check_status}).",
+            file=sys.stderr,
+        )
+        return 7
+    return 0
+
+
 def main() -> int:
     args = parse_args()
     repo = args.repo.expanduser().resolve()
     env = os.environ.copy()
     home = codex_home(env, args.codex_home)
-    codex_bin = resolve_codex_bin(args.codex_bin)
     default_log_root = pathlib.Path(
         os.environ.get(
             "RUN_MULTIGOAL_LOG_DIR",
@@ -871,7 +1169,21 @@ def main() -> int:
     log_dir.mkdir(parents=True, exist_ok=True)
     replacements = parse_replacements(args.replace)
     manifest = log_dir / "manifest.txt"
-    write_manifest_header(manifest, repo, home, codex_bin, args)
+    if args.resume_stage is not None and not manifest.exists():
+        raise SystemExit(f"--resume-stage requires an existing manifest: {manifest}")
+    manifest_values = read_manifest(manifest) if args.resume_stage is not None else {}
+    model_dir = resolve_model_dir_for_launch(
+        replacements=replacements,
+        manifest_values=manifest_values,
+        required=requires_model_dir(args),
+    )
+    if model_dir and replacement_value(replacements, "MODEL_DIR") is None:
+        replacements.append(("MODEL_DIR", model_dir))
+    codex_bin = resolve_codex_bin(args.codex_bin)
+    if args.resume_stage is None:
+        write_manifest_header(manifest, repo, home, codex_bin, args, replacements, model_dir)
+    elif model_dir and not manifest_values.get("model_dir"):
+        append_manifest(manifest, [f"model_dir={model_dir}"])
 
     # Validate every prompt up front so an over-long or malformed late-stage
     # prompt cannot kill a run hours in.
@@ -881,6 +1193,8 @@ def main() -> int:
     if args.dry_run:
         client: AppServerClient | None = None
         for index, prompt_path in enumerate(args.prompt_files, start=args.start_index):
+            if args.resume_stage is not None and index < args.resume_stage:
+                continue
             code = run_stage(
                 client,  # type: ignore[arg-type]
                 args,
@@ -912,17 +1226,33 @@ def main() -> int:
             )
             client._send({"method": "initialized"}, init_log)
 
+        manifest_values = read_manifest(manifest)
         for index, prompt_path in enumerate(args.prompt_files, start=args.start_index):
-            code = run_stage(
-                client,
-                args,
-                repo,
-                log_dir,
-                manifest,
-                index,
-                prompt_path,
-                replacements,
-            )
+            if args.resume_stage is not None and index < args.resume_stage:
+                continue
+            if args.resume_stage is not None and index == args.resume_stage:
+                code = run_resumed_stage(
+                    client,
+                    args,
+                    repo,
+                    log_dir,
+                    manifest,
+                    index,
+                    prompt_path,
+                    replacements,
+                    manifest_values,
+                )
+            else:
+                code = run_stage(
+                    client,
+                    args,
+                    repo,
+                    log_dir,
+                    manifest,
+                    index,
+                    prompt_path,
+                    replacements,
+                )
             if code != 0:
                 return code
 
