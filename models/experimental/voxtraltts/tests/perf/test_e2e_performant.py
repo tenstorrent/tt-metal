@@ -9,18 +9,17 @@ with ``num_command_queues_for_decode()`` + a trace region, and reports through `
 ``BenchmarkData``, adapted to Voxtral's TTS AR loop.
 
 Unlike a plain LLM, Voxtral decode is a discrete-feedback loop (text-decode -> acoustic FM ->
-code -> embedding -> text-decode). The trace + 2CQ live inside
-``VoxtralTTSPipeline.forward_device_resident`` (text-decode trace + acoustic-FM trace, CQ1 input
-staging); this test drives one full traced generation and reports the steady-state per-frame decode
+code -> embedding -> text-decode). Trace replay lives inside
+``VoxtralTTSPipeline.forward_device_resident`` (text-decode trace + acoustic-FM trace);
+this test drives one full traced generation and reports the steady-state per-frame decode
 time, RTF, and throughput.
 
   1. Build the TT pipeline (untimed).
   2. Warm-up generation (compile + trace capture; untimed).
   3. Timed generation: full traced AR loop -> per-frame decode time + RTF + frames/s.
 
-Decode trace + 2CQ (CQ1 input H2D, CQ0 trace replay) is on by default
-(``VOXTRAL_DECODE_TRACE=1`` / ``VOXTRAL_DECODE_TRACE_2CQ=1``; set ``0`` for single-CQ / no-trace
-baselines).
+Decode trace is on by default; 2CQ is opt-in because this loop is faster with one CQ
+(``VOXTRAL_DECODE_TRACE=1`` / ``VOXTRAL_DECODE_TRACE_2CQ=0``; set 2CQ to ``1`` for comparison).
 
 Run::
 
@@ -40,10 +39,10 @@ from loguru import logger
 import ttnn
 
 # Enable traced decode for the perf run BEFORE device_params is evaluated (collection time), so the
-# device opens with a trace region + 2 command queues. Override with VOXTRAL_DECODE_TRACE=0.
+# device opens with a trace region and the selected command queue count. Override with VOXTRAL_DECODE_TRACE=0.
 os.environ.setdefault("VOXTRAL_DECODE_TRACE", "1")
 
-# The trace + 2CQ staging run *inside* VoxtralTTSPipeline.forward_device_resident (the TTS AR loop
+# The trace replay runs *inside* VoxtralTTSPipeline.forward_device_resident (the TTS AR loop
 # owns the loop), so this perf test only needs the two device-config helpers; the staging/replay
 # helpers (DecodeTrace2CQ, stage_decode_inputs, signal_decode_step_done, ...) are exercised through
 # forward_device_resident.
@@ -65,7 +64,7 @@ _WARMUP_TOKENS = 16  # short warm-up: compile + trace capture only (untimed)
 
 
 def _e2e_perf_device_params():
-    """Open the device with a trace region + N command queues."""
+    """Open the device with a trace region and the decode command queue count."""
     return {
         "trace_region_size": int(os.environ.get("VOXTRAL_TRACE_REGION_SIZE", str(200_000_000))),
         "num_command_queues": num_command_queues_for_decode(),
