@@ -236,12 +236,12 @@ _DISPATCH_PERF_PARAMS = [
         "test_ttnn_dispatch",
         "linear",
         2,
-        4_108_262,
+        4_068_188,
         "",
         dtype_filter="bf16_out",
     ),
     _perf_param(
-        "dispatch", "test_prefill_dispatch.py", "test_ttnn_dispatch", "ring", 2, 3_683_084, "", dtype_filter="bf16_out"
+        "dispatch", "test_prefill_dispatch.py", "test_ttnn_dispatch", "ring", 2, 2_652_427, "", dtype_filter="bf16_out"
     ),
 ]
 _COMBINE_PERF_PARAMS = [

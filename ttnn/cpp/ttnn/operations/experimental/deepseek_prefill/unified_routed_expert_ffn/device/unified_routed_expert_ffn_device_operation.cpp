@@ -75,9 +75,12 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     // Aux tensors: counts / global_expert_idx_table are small UINT32 vectors
     // the reader fetches via DRAM accessor. The reader does a single
     // noc_async_read_page(page=0, ...) and then indexes anywhere in
-    // [0, num_experts), so the full vector must fit in one page (= one tile
-    // for TILE layout, 1024 uint32 entries). Validate here so larger expert
-    // counts produce a clean assertion instead of silent OOB reads at runtime.
+    // [0, num_global_experts), so the full vector must fit in one page. The
+    // L1 scratch CB is sized to hold MAX_GLOBAL_EXPERTS UINT32 entries (see
+    // the program factory), which covers DeepSeek V3 (256), Kimi (384) and any
+    // model up to MAX_GLOBAL_EXPERTS routed experts. Validate the length here
+    // so larger expert counts produce a clean assertion instead of silent OOB
+    // reads at runtime.
     for (const auto& [name, a] : std::initializer_list<std::pair<const char*, const ttnn::Tensor&>>{
              {"counts", t.counts}, {"global_expert_idx_table", t.global_expert_idx_table}}) {
         TT_FATAL(a.storage_type() == tt::tt_metal::StorageType::DEVICE, "{} must be on device", name);
@@ -85,12 +88,12 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(is_dram_interleaved(a), "{} must be DRAM-interleaved", name);
         const uint32_t num_entries = a.logical_shape()[-1];
         TT_FATAL(
-            num_entries <= tt::constants::TILE_HW,
-            "{} length ({}) must fit in one tile ({} entries) — reader fetches "
-            "only page 0 of this tensor",
+            num_entries <= MAX_GLOBAL_EXPERTS,
+            "{} length ({}) exceeds the maximum supported number of experts ({}) — "
+            "the reader fetches only page 0 of this tensor into a fixed-size L1 scratch",
             name,
             num_entries,
-            tt::constants::TILE_HW);
+            MAX_GLOBAL_EXPERTS);
     }
     TT_FATAL(
         op.local_expert_id < t.global_expert_idx_table.logical_shape()[-1],

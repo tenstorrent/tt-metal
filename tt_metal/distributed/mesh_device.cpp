@@ -770,6 +770,20 @@ MeshCommandQueue& MeshDeviceImpl::mesh_command_queue(std::optional<uint8_t> cq_i
     return *command_queue;
 }
 
+MeshCommandQueueBase& MeshDeviceImpl::mesh_command_queue_base(std::optional<uint8_t> cq_id) const {
+    auto id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
+
+    // If the mesh device has no local devices, return the dummy mesh command queue.
+    if (this->get_view().get_devices().empty()) {
+        return *mesh_command_queues_[0];
+    }
+
+    TT_FATAL(id < mesh_command_queues_.size(), "cq_id {} is out of range", id);
+    const auto& command_queue = mesh_command_queues_[id];
+    TT_FATAL(id == command_queue->id(), "MeshCommandQueue id mismatch, expected {}, got {}", id, command_queue->id());
+    return *command_queue;
+}
+
 DeviceIds MeshDeviceImpl::get_device_ids() const {
     DeviceIds device_ids;
     for (auto* device : this->get_devices()) {

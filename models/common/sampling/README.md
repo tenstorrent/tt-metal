@@ -35,17 +35,7 @@ tt_tokens = sampling.sample(
 ```
 
 `SamplingGenerator.sample()` accepts `enable_trace=True` to record/replay
-sampling traces. Callers typically instantiate the module with tracing enabled
-and then choose per-request whether to split the trace.
-
-## Two-Part Trace Mode
-Before running decode, set `generator.enable_split_sampling = True` (or
-`False`) to choose between the two behaviors:
-
-1. **Split trace:** The model trace stops at logits and `SamplingGenerator`
-   captures/executes a dedicated sampling trace immediately afterward.
-2. **Single trace:** Sampling runs inline as part of the model trace for
-   maximum performance.
+sampling traces.
 
 ## File Map
 

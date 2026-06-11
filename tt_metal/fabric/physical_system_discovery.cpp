@@ -65,12 +65,12 @@ TrayID get_tray_id_for_chip(
         auto bus_id = tt::tt_fabric::get_bus_id(cluster_desc, chip_id);
         log_warning(
             tt::LogAlways,
-            "Unknown motherboard '{}' for chip_id={} (bus_id=0x{:x}) — defaulting tray_id to 0. "
+            "Unknown motherboard '{}' for chip_id={} (bus_id=0x{:x}) — falling back to bus_id as tray_id. "
             "Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.",
             mobo_name,
             chip_id,
             bus_id);
-        return TrayID{0};
+        return TrayID{static_cast<uint32_t>(bus_id)};
     }
 
     std::vector<uint16_t> ordered_bus_ids = mobo_to_bus_ids.at(mobo_name);

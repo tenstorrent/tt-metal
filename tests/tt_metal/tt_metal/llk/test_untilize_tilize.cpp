@@ -58,7 +58,7 @@ using namespace tt::test_utils;
 
 namespace unit_tests::compute::tilize {
 
-enum UntilizeType : uint8_t { UNPACK = 0, PACK = 1, DST = 2 };
+enum UntilizeType : uint8_t { PACK = 1, DST = 2 };
 
 enum TilizeType : uint8_t {
     UNPACK_A = 0,
@@ -185,7 +185,7 @@ static void validate_result(
 }
 
 // Metal 2.0 single-core helper covering all migrated tilize/untilize kernels:
-//   - UntilizeType::UNPACK / PACK / DST (compute kernels: unpack_untilize / pack_untilize / dst_untilize)
+//   - UntilizeType::PACK / DST (compute kernels: pack_untilize / dst_untilize)
 //   - TilizeType::UNPACK_A (compute kernel: tilize.cpp, optionally with FAST_TILIZE)
 void run_single_core_tilize_program(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const TestConfig& test_config) {
@@ -663,30 +663,6 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeUnpackTilizeA_B) {
             .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A_B,
             .golden_function = ::unit_tests::compute::gold_standard_tilize_w_elwadd};
         unit_tests::compute::tilize::run_single_core_unpack_tilizeA_B_program(this->devices_.at(0), test_config);
-    }
-}
-
-/**************************************
-Following tests are for Unpack Untilize
-***************************************/
-
-TEST_F(LLKMeshDeviceFixture, TensixComputeUnpackUntilize) {
-    vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
-    for (auto num_tile : num_tiles) {
-        for (bool fp32_dest_acc_en : {true, false}) {
-            for (bool dst_full_sync_en : {true, false}) {
-                unit_tests::compute::tilize::TestConfig test_config = {
-                    .dst_full_sync_en = dst_full_sync_en,
-                    .fp32_dest_acc_en = fp32_dest_acc_en,
-                    .input_single_tile_size = 2 * 1024,
-                    .output_single_tile_size = 1024 * (fp32_dest_acc_en ? 4 : 2),
-                    .num_tiles_r = num_tile[0],
-                    .num_tiles_c = num_tile[1],
-                    .untilize_type = unit_tests::compute::tilize::UntilizeType::UNPACK,
-                    .golden_function = ::unit_tests::compute::gold_standard_untilize};
-                unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
-            }
-        }
     }
 }
 
