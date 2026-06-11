@@ -15,6 +15,7 @@ from .. import states
 from . import apply as _apply
 from . import log_exit, mocks, route
 from . import select as _select
+from . import verify as _verify
 
 
 def build_handlers() -> dict:
@@ -24,7 +25,7 @@ def build_handlers() -> dict:
         states.ROUTE: route.route,  # REAL
         states.SELECT: _select.select,  # REAL
         states.APPLY: _apply.apply,  # REAL
-        states.VERIFY: mocks.verify,
+        states.VERIFY: _verify.verify,  # REAL
         states.REPAIR_CODE: mocks.repair_code,
         states.REPAIR_PCC: mocks.repair_pcc,
         # --- Member 2: evaluate & record ---
