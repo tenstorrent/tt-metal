@@ -41,18 +41,19 @@ from models.demos.blackhole.qwen3_5_9b.tt.model_config import Qwen35ModelArgs
 
 # Same mesh resolution as the sibling TP tests: explicit MESH_DEVICE, else all
 # local devices (capped at the (1,4) TP the model targets).
-MESH_SHAPE = {"N150": (1, 1), "P150x4": (1, 4)}.get(
-    os.environ.get("MESH_DEVICE"), (1, min(len(ttnn.get_device_ids()), 4))
-)
 MAX_SEQ = 2048
 PREFILL_BUCKETS = [128, 512, 2048]
 DECODE_CACHE_LENS = [32, 512, 1500]
 ROPE_POSITIONS = [0, 32, 511, 1024, 2047]
 
 # Reusable parametrization stack (mesh shape + 1D fabric for the TP CCLs).
-parametrize_mesh = pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
-parametrize_fabric = pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
+parameterized_mesh_and_fabric = pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        ((1, 1), {}),
+        ((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D}),
+    ],
+    indirect=True,
 )
 
 
@@ -135,8 +136,7 @@ def _gather_kv(attn, args, mesh_device):
 
 
 @torch.no_grad()
-@parametrize_mesh
-@parametrize_fabric
+@parameterized_mesh_and_fabric
 @pytest.mark.parametrize("seq_len", PREFILL_BUCKETS, ids=lambda s: f"seq{s}")
 def test_attention_prefill_pcc(mesh_device, seq_len, reset_seeds, ensure_gc):
     """Causal prefill vs HF golden at several bucket lengths, including the
@@ -180,8 +180,7 @@ def test_attention_prefill_pcc(mesh_device, seq_len, reset_seeds, ensure_gc):
 
 
 @torch.no_grad()
-@parametrize_mesh
-@parametrize_fabric
+@parameterized_mesh_and_fabric
 @pytest.mark.parametrize("cache_len", DECODE_CACHE_LENS, ids=lambda c: f"cache{c}")
 def test_attention_decode_deep_cache(mesh_device, cache_len, reset_seeds, ensure_gc):
     """One decode step for B=32 users against a pre-filled cache of cache_len
@@ -231,8 +230,7 @@ def test_attention_decode_deep_cache(mesh_device, cache_len, reset_seeds, ensure
 
 
 @torch.no_grad()
-@parametrize_mesh
-@parametrize_fabric
+@parameterized_mesh_and_fabric
 def test_attention_decode_ragged_positions(mesh_device, reset_seeds, ensure_gc):
     """Every user at a different cache depth (vLLM continuous batching):
     exercises paged_update_cache's per-user update_idxs and SDPA decode's
@@ -295,8 +293,7 @@ def _rope_dims(cfg):
 
 
 @torch.no_grad()
-@parametrize_mesh
-@parametrize_fabric
+@parameterized_mesh_and_fabric
 @pytest.mark.parametrize("position", ROPE_POSITIONS, ids=lambda p: f"pos{p}")
 def test_rope_decode_position(mesh_device, position, reset_seeds, ensure_gc):
     """rot_mats_decode tables + apply_partial_rope_decode vs HF apply_rotary_pos_emb
@@ -333,8 +330,7 @@ def test_rope_decode_position(mesh_device, position, reset_seeds, ensure_gc):
 
 
 @torch.no_grad()
-@parametrize_mesh
-@parametrize_fabric
+@parameterized_mesh_and_fabric
 def test_rope_prefill_full_range(mesh_device, reset_seeds, ensure_gc):
     """apply_partial_rope_prefill over all positions 0..MAX_SEQ-1 at once vs HF.
     Uses the per-device production head count (n_heads / 4) to keep it light."""

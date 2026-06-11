@@ -25,16 +25,23 @@ from models.demos.blackhole.qwen3_5_9b.tests.unit.reference import hf_mlp, model
 from models.demos.blackhole.qwen3_5_9b.tt.mlp import Qwen35MLP
 from models.demos.blackhole.qwen3_5_9b.tt.model_config import Qwen35ModelArgs
 
-MESH_SHAPE = {"N150": (1, 1), "P150x4": (1, 4)}.get(
-    os.environ.get("MESH_DEVICE"), (1, min(len(ttnn.get_device_ids()), 4))
-)
 # 32 = decode batch shape [1,1,B,dim]; the rest are prefill buckets [1,1,S,dim].
 N_ROWS = [32, 128, 512, 2048]
 
 
 @torch.no_grad()
-@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+# Pair each mesh shape with the device_params it needs (a cartesian product would
+# force FABRIC_1D onto the unit mesh too, where the single fabric router has no
+# ethernet partner and the open times out). The single-device forward returns
+# before tt_all_reduce, so it needs no fabric; only the (1,4) TP reduce-scatter does.
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        ((1, 1), {}),
+        ((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D}),
+    ],
+    indirect=True,
+)
 @pytest.mark.parametrize("n_rows", N_ROWS, ids=lambda n: f"rows{n}")
 def test_mlp_pcc(mesh_device, n_rows, reset_seeds, ensure_gc):
     mp = model_path()
