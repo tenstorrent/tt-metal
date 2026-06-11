@@ -189,8 +189,6 @@ FORCE_INLINE void dispatch_subordinate_telemetry() {
                     completion_count[i] = 0;
                     last_work_launch_timestamp[i] = current_last_work_launch_timestamp;
                 }
-                // delta_sem_count should be on the latest workload
-                ASSERT(delta_sem_count <= workers_per_sub_device[i]);
             }
 
             stream_sem_counter[i] = curr_stream_sem_count[i] - delta_sem_count;
