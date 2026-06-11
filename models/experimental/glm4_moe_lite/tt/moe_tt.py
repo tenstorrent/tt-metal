@@ -130,6 +130,7 @@ def _make_sparse_matmul_program_config(
     in0_block_w: int,
     out_subblock_h: int = 1,
     out_subblock_w: int = 1,
+    out_block_w: int = 1,
     per_core_M: int = 1,
 ) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
     grid = device.compute_with_storage_grid_size()
@@ -165,7 +166,7 @@ def _make_sparse_matmul_program_config(
         out_subblock_h=int(out_subblock_h),
         out_subblock_w=int(out_subblock_w),
         out_block_h=1,
-        out_block_w=1,
+        out_block_w=int(out_block_w),
         per_core_M=int(per_core_M),
         per_core_N=int(per_core_N),
         fuse_batch=False,
@@ -481,10 +482,11 @@ def create_moe_runtime(*, device: Any, hparams: Glm4MoeLiteHParams) -> Glm4MoeLi
         in0_block_w=8,
         per_core_M=per_core_M,
     )
-    down_program_config = _make_sparse_matmul_program_config(
-        device=device,
-        out_features=int(hparams.hidden_size),
-        in0_block_w=8,
+    # Wide output block (out_block_w=2, out_subblock_w=2) sweep winner for down
+    # (K=1536, N=2048) at per_core_M=1; grid 4x8 → 32 work blocks for per_core_N=2.
+    down_program_config = _tuned_prefill_sparse_matmul_pc(
+        grid_x=4,
+        grid_y=8,
         per_core_M=per_core_M,
     )
 
@@ -498,6 +500,8 @@ def create_moe_runtime(*, device: Any, hparams: Glm4MoeLiteHParams) -> Glm4MoeLi
             device=device,
             out_features=int(hparams.moe_intermediate_size) * 2,
             in0_block_w=8,
+            out_subblock_w=2,
+            out_block_w=2,
             per_core_M=per_core_M,
         )
 
@@ -1470,6 +1474,8 @@ def moe_sparse_experts_forward_tt(
     memory_config: ttnn.MemoryConfig,
     skip_defensive_clones: bool = False,
     skip_final_reduce: bool = False,
+    _precomputed_local_weights: ttnn.Tensor | None = None,
+    _precomputed_sparsity: ttnn.Tensor | None = None,
 ) -> ttnn.Tensor:
     """Run routed experts and return routed output [1,1,T,H] TILE.
 
@@ -1615,6 +1621,32 @@ def moe_sparse_experts_forward_tt(
         per_device_chunk = (per_device_chunk // block) * block
         per_device_chunk = max(block, per_device_chunk)
 
+        # Hoist routing (scatter + moe_expert_token_remap) out of the chunk loop:
+        # compute local_weights/sparsity once over all tokens, then slice per chunk.
+        # The remap is the dominant per-chunk overhead (one ~100us op per chunk), and
+        # its outputs are token-/block-wise independent, so this is numerically exact.
+        # Only valid for the replicated-token reduce path (a2a is not chunked here).
+        local_weights_full = sparsity_full = None
+        if not use_all_to_all:
+            _topk_idx_rm = _ensure_row_major_topk(topk_expert_indices)
+            _topk_w_rm = _ensure_row_major_topk(topk_expert_weights)
+            _weights_zero = _get_scatter_zero_tensor(
+                device=device, tokens_per_device=tokens_per_device, num_experts=int(rt.num_experts)
+            )
+            _topk_w_dense = ttnn.scatter(
+                _weights_zero, 3, _topk_idx_rm, _topk_w_rm, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            ttnn.deallocate(_topk_w_rm, force=False)
+            local_weights_full, sparsity_full = ttnn.moe_expert_token_remap(
+                _topk_w_dense,
+                rt.expert_mapping_tensors,
+                _topk_idx_rm,
+                reduction_size=block,
+            )
+            ttnn.deallocate(_topk_w_dense, force=False)
+            ttnn.deallocate(_topk_idx_rm, force=False)
+
+        experts_per_device = int(rt.num_experts_per_device)
         out_chunks: list[ttnn.Tensor] = []
         for start in range(0, tokens_per_device, per_device_chunk):
             end = min(start + per_device_chunk, tokens_per_device)
@@ -1629,6 +1661,18 @@ def moe_sparse_experts_forward_tt(
                 [0, 0, start, 0],
                 [1, 1, end, int(rt.num_experts_per_tok)],
             )
+            lw_chunk = sp_chunk = None
+            if local_weights_full is not None:
+                # Slice the precomputed routing for this chunk's tokens / blocks.
+                # SliceDeviceOperation materializes an owned copy (not an aliasing
+                # view) for these DRAM tensors, so the recursive call may deallocate
+                # it without corrupting local_weights_full for later chunks.
+                lw_chunk = ttnn.slice(local_weights_full, [0, 0, start, 0], [1, 1, end, experts_per_device])
+                sp_chunk = ttnn.slice(
+                    sparsity_full,
+                    [0, 0, start // block, 0],
+                    [1, 1, end // block, experts_per_device],
+                )
             out_chunks.append(
                 moe_sparse_experts_forward_tt(
                     device=device,
@@ -1640,10 +1684,15 @@ def moe_sparse_experts_forward_tt(
                     memory_config=memory_config,
                     skip_final_reduce=skip_final_reduce,
                     skip_defensive_clones=skip_defensive_clones,
+                    _precomputed_local_weights=lw_chunk,
+                    _precomputed_sparsity=sp_chunk,
                 )
             )
 
         # The chunked calls consume their own slice inputs; we still own the base tensors.
+        if local_weights_full is not None:
+            ttnn.deallocate(local_weights_full, force=False)
+            ttnn.deallocate(sparsity_full, force=False)
         ttnn.deallocate(hidden_states, force=False)
         ttnn.deallocate(topk_expert_indices, force=False)
         ttnn.deallocate(topk_expert_weights, force=False)
@@ -1718,32 +1767,40 @@ def moe_sparse_experts_forward_tt(
         # Replicated-token + all-reduce path:
         # - Tokens are replicated across devices, and experts are sharded.
         # - Each device computes its local expert contributions and we sum across the mesh.
-        topk_indices_rm = _ensure_row_major_topk(topk_expert_indices)
-        topk_weights_rm = _ensure_row_major_topk(topk_expert_weights)
+        if _precomputed_local_weights is not None:
+            # Routing (scatter + moe_expert_token_remap) was computed once over the
+            # full token range by the chunking caller and sliced per chunk. Both
+            # outputs are token-/block-wise independent, so the slice is exact and we
+            # skip re-running the remap (the per-chunk hot op) here.
+            local_weights = _precomputed_local_weights
+            sparsity = _precomputed_sparsity
+        else:
+            topk_indices_rm = _ensure_row_major_topk(topk_expert_indices)
+            topk_weights_rm = _ensure_row_major_topk(topk_expert_weights)
 
-        weights_zero = _get_scatter_zero_tensor(
-            device=device, tokens_per_device=tokens_per_device, num_experts=int(rt.num_experts)
-        )
-        topk_weights_dense = ttnn.scatter(
-            weights_zero,
-            3,
-            topk_indices_rm,
-            topk_weights_rm,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        ttnn.deallocate(topk_weights_rm, force=False)
-        local_weights, sparsity = ttnn.moe_expert_token_remap(
-            topk_weights_dense,
-            rt.expert_mapping_tensors,
-            topk_indices_rm,
-            reduction_size=int(rt.sparsity_block_size),
-        )
-        # `ttnn.moe_expert_token_remap` returns a UINT16 (0/1) sparsity tensor.
-        # `ttnn.sparse_matmul` accepts this UINT16 sparsity directly, and keeping it as
-        # UINT16 avoids a device-side typecast on small Row-Major tensors (e.g. last dim
-        # = experts_per_device = 8) which currently requires padding to a multiple of 32.
-        ttnn.deallocate(topk_weights_dense, force=False)
-        ttnn.deallocate(topk_indices_rm, force=False)
+            weights_zero = _get_scatter_zero_tensor(
+                device=device, tokens_per_device=tokens_per_device, num_experts=int(rt.num_experts)
+            )
+            topk_weights_dense = ttnn.scatter(
+                weights_zero,
+                3,
+                topk_indices_rm,
+                topk_weights_rm,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(topk_weights_rm, force=False)
+            local_weights, sparsity = ttnn.moe_expert_token_remap(
+                topk_weights_dense,
+                rt.expert_mapping_tensors,
+                topk_indices_rm,
+                reduction_size=int(rt.sparsity_block_size),
+            )
+            # `ttnn.moe_expert_token_remap` returns a UINT16 (0/1) sparsity tensor.
+            # `ttnn.sparse_matmul` accepts this UINT16 sparsity directly, and keeping it as
+            # UINT16 avoids a device-side typecast on small Row-Major tensors (e.g. last dim
+            # = experts_per_device = 8) which currently requires padding to a multiple of 32.
+            ttnn.deallocate(topk_weights_dense, force=False)
+            ttnn.deallocate(topk_indices_rm, force=False)
 
         if debug:
             lw_dt = ttnn.get_device_tensors(local_weights)
