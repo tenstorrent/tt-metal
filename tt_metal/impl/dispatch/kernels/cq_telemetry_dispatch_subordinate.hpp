@@ -71,21 +71,23 @@ FORCE_INLINE void dispatch_subordinate_telemetry() {
 
     uint32_t sub_device_update_sem = 0;
     uint32_t stream_reset_update_sem = 0;
-    volatile tt_l1_ptr uint32_t* sub_device_update_sem_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sub_device_update_sem_addr);
-    volatile tt_l1_ptr uint32_t* stream_reset_update_sem_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_stream_reset_update_addr);
-    volatile tt_l1_ptr uint32_t* telemetry_compute_terminate =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(telemetry_compute_terminate_addr);
+    auto sub_device_update_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sub_device_update_sem_addr);
+    auto stream_reset_update_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_stream_reset_update_addr);
+    auto telemetry_compute_terminate = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(telemetry_compute_terminate_addr);
+    auto dispatch_telemetry =
+        reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchCoreTelemetry*>(dispatch_telemetry_base);
+
+    // Start with all workers in the complete state until work is detected
+    for (uint32_t i = 0; i < total_sub_devices; ++i) {
+        completion_count[i] = workers_per_sub_device[i];
+        dispatch_telemetry->completion_count[i] = completion_count[i];
+    }
 
     while (!done) {
         if (*telemetry_compute_terminate != 0) {
             done = true;
             break;
         }
-
-        auto dispatch_telemetry =
-            reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchCoreTelemetry*>(dispatch_telemetry_base);
 
         for (uint32_t i = 0; i < total_sub_devices; ++i) {
             const uint32_t latest_sub_device_update_sem = *sub_device_update_sem_ptr;
