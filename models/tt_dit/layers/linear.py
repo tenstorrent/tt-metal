@@ -554,7 +554,7 @@ def _apply_activation_fn(t: ttnn.Tensor, activation_fn: str | None) -> ttnn.Tens
         return t * ttnn.sigmoid(1.702 * t)  # quick approx gelu
     if activation_fn == "swiglu":
         t, gate = ttnn.chunk(t, 2, -1)
-        return t * ttnn.silu(gate)
+        return t * ttnn.silu(gate, output_tensor=gate)
 
     msg = f"Activation function {activation_fn} not supported"
     raise ValueError(msg)
