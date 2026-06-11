@@ -63,6 +63,16 @@ inline int type_hash_counter = 0;
 template <typename T>
 inline const int type_hash = type_hash_counter++;
 
+// Public hashing API (defined below).
+template <typename... Types>
+hash_t hash_objects(hash_t seed, const Types&... args) noexcept;
+
+template <typename... Types>
+hash_t hash_objects_with_default_seed(const Types&... args) noexcept;
+
+template <typename T>
+void hash_combine(std::size_t& seed, const T& value);
+
 namespace detail {
 
 // Forward declare the hash_object overloads and hash_objects so the definitions below can recurse freely.
