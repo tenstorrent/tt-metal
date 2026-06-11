@@ -3,6 +3,26 @@
 Short how-to for timing a region of a compute/dataflow kernel with a **scoped
 device zone** and running the `indexer_score` tests (incl. under Tracy).
 
+## Compute ceiling (math-util with data movement off)
+
+The matmul **math-utilization** ceiling = util when the compute kernel is never
+starved by NoC traffic. Set `INDEXER_DMA_OFF=1` and the reader/writer skip their
+NoC reads/writes (still pushing/popping CBs), so the compute runs unstarved and
+`test_indexer_score_sp7_math_util` reports the pure compute ceiling:
+
+```bash
+INDEXER_DMA_OFF=1 scripts/run_safe_pytest.sh \
+  tests/nightly/blackhole/sdpa/test_indexer_score.py::"test_indexer_score_sp7_math_util[heads8_k_bfp8]"
+```
+
+The flag is a compile-time arg appended last in the reader/writer CT args (env read
+in the program factory), off by default with zero runtime cost. Drop the env var to
+measure the full kernel (DMA on).
+
+Current sp7 ceilings (HiFi2, bf16 DEST half-sync): heads8 bfp8 **66.8%**, heads16
+**69.6%**, heads64 **72.1%**. The matmul (q.kT) is ~74% of compute; the rest is the
+HiFi2 gate bcast-mul (~21%, counted as non-matmul in math-util) + untilize/reinit.
+
 ## Scoped device zones
 
 `DeviceZoneScopedN("NAME")` is an RAII timer: it stamps a start cycle where it is

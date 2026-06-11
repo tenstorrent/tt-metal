@@ -184,7 +184,7 @@ DEST half while math fills the other; flipping `fp32_dest_acc_en` back on
 | c_1 k | k chunk, double buffered | `2·KC·Dt` bf16/bfp8_b |
 | c_2 w | resident w group `[QC][Hi]` | `Hi·QC` bf16 |
 | c_3 mask | [diag strict-upper, full] −inf tiles, persistent | 2 bf16 |
-| c_24 qk | per-subblock relu(q·kᵀ) | `2·HP` DEST fmt |
+| c_24 qk | batched relu(q·kᵀ) | `qk_col_batch·qk_batch_heads` DEST fmt (≤128-tile L1 cap) |
 | c_25 mul | relu·w contributions | `2·HP` DEST fmt |
 | c_26 acc | accumulator ping-pong | `2·QC·KC` DEST fmt |
 | c_16 out | untilized output (per-tile W=1 path) | `2·KC` bf16 |
@@ -274,7 +274,15 @@ Branch: `skrstic/dsa_indexer_score_op_2` (cleanup) on `skrstic/dsa_indexer_score
       ~148→44 ns/tile; sp7 heads8/16 bfp8 1.32/1.51→0.83 ms (1.6–1.8×), heads64
       unchanged (matmul-bound). Root cause was the BH fast-untilize uninit's
       compiled-out half-sync re-init; see `INDEXER_FAST_UNTILIZE.md`.
+- [x] perf: compute-ceiling push (HiFi2 fixed). `INDEXER_DMA_OFF` env→CT toggle
+      (skip NoC, keep CBs) for measuring the ceiling via `sp7_math_util`; MAC head
+      reduction into DEST (`acc_to_dest=1`, one pack/chunk); **batch qk_col_batch
+      k-columns per matmul↔mul mode switch** (the win: the gate w is column-
+      independent + the k chunk is resident, so one switch/row not one/tile);
+      block-pack qk + guarded 4-arg reconfig. sp7 ceiling heads8 52.6→66.8%,
+      heads16→69.6%, heads64→72.1% math-util. See `INDEXER_PROFILING.md`.
 - [ ] row-major top-k (separate); negative-weights topk-safety test
-- [ ] perf: DEST-resident acc, fused relu·w, knob sweep for best GLX config
+- [ ] perf: knob sweep for best GLX config; gate-mul is HiFi2-bound (the ~21%
+      non-matmul remainder) — would need a fidelity change to cut further
 
 Out of scope: decode/paged variant, fused score+topk.
