@@ -57,16 +57,23 @@ class StageVision:
             transport = SocketTransport()
         self.transport = transport
 
-    def run(self, pixel_values: torch.Tensor):
-        """pixel_values: (B, 3, H, W) torch tensor. Returns ttnn (B, 256, 2048) on chips[3]."""
-        pixel_values_ttnn = ttnn.from_torch(
-            pixel_values,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.chips[0],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        h0 = self.embed_slice.forward(pixel_values_ttnn)
+    def run(self, pixel_values):
+        """pixel_values: (B, 3, H, W) — torch tensor OR persistent ttnn.Tensor on chips[0].
+
+        For trace-capture compatibility, callers should pass a persistent
+        ttnn.Tensor (pre-allocated on chips[0], refreshed via
+        copy_host_to_device_tensor on CQ 1 between calls). Torch tensor
+        input is supported for eager testing; we upload it inline.
+        """
+        if isinstance(pixel_values, torch.Tensor):
+            pixel_values = ttnn.from_torch(
+                pixel_values,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.chips[0],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        h0 = self.embed_slice.forward(pixel_values)
         h1 = self.transport.send(h0, self.chips[1])
         h1 = self.layer_slice_a.forward(h1)
         h2 = self.transport.send(h1, self.chips[2])

@@ -90,14 +90,23 @@ class _PrefillHead:
             device=submesh,
         )
 
-    def embed_lang(self, lang_tokens_torch: torch.Tensor) -> "ttnn.Tensor":
-        """Returns (B, lang_len, vlm_hidden) bf16 TILE."""
-        tokens_ttnn = ttnn.from_torch(
-            lang_tokens_torch.to(torch.uint32),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.submesh,
-        )
+    def embed_lang(self, lang_tokens) -> "ttnn.Tensor":
+        """Returns (B, lang_len, vlm_hidden) bf16 TILE.
+
+        ``lang_tokens`` is either a torch.Tensor (eager path — uploaded inline)
+        or a persistent ttnn.Tensor on self.submesh (trace path — references
+        the pre-allocated buffer that copy_host_to_device_tensor refreshes
+        between calls).
+        """
+        if isinstance(lang_tokens, torch.Tensor):
+            tokens_ttnn = ttnn.from_torch(
+                lang_tokens.to(torch.uint32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.submesh,
+            )
+        else:
+            tokens_ttnn = lang_tokens
         lang_emb = ttnn.embedding(tokens_ttnn, self.vlm_embed_tokens)
         if lang_emb.layout != ttnn.TILE_LAYOUT:
             lang_emb = ttnn.to_layout(lang_emb, ttnn.TILE_LAYOUT)
