@@ -340,7 +340,6 @@ class Model:
         page_table,
         kv_cache,
         get_last_token=-1,
-        is_decode=True,
         user_id=0,
         sampling_on_device=False,
         batch_size=1,
@@ -349,7 +348,7 @@ class Model:
         on_layer_complete=None,
     ):
         """
-        Shared forward pass through decoder layers and final projection.
+        Prefill forward pass through decoder layers and final projection.
 
         on_layer_complete: optional callback ``fn(layer_idx)`` invoked after each
             decoder layer finishes. This is the SEAM for per-layer KV migration in
@@ -374,8 +373,7 @@ class Model:
         Returns:
             logits: Output logits
         """
-        # Determine mode based on current_pos presence
-        mode = Mode.DECODE if current_pos is not None else Mode.PREFILL
+        mode = Mode.PREFILL
 
         if page_tables_per_layer is not None and len(page_tables_per_layer) != len(self.layers):
             raise ValueError(
@@ -393,7 +391,6 @@ class Model:
                 position_idx=current_pos,
                 page_table=layer_page_table,
                 kv_cache=layer_kv_cache,
-                is_decode=is_decode,
                 user_id=user_id,
                 batch_size=batch_size,
             )
@@ -508,66 +505,6 @@ class Model:
             )
             ttnn.copy_host_to_device_tensor(host_pt, persistent[i])
 
-    def ttnn_decode_forward(
-        self,
-        tokens,
-        current_pos,
-        rot_mat_idxs=None,
-        page_table=None,
-        kv_cache=None,
-        sampling_on_device=False,
-        capture_sampling_trace=False,
-        page_tables_per_layer=None,
-    ):
-        if page_tables_per_layer is None:
-            # vLLM hybrid path: the bridge stashes the per-layer list on the
-            # model object before calling Generator.decode_forward, since the
-            # generator's many internal ttnn_decode_forward sites can't all
-            # plumb the new kwarg cleanly. Pick it up here when present.
-            page_tables_per_layer = getattr(self, "_active_page_tables_per_layer", None)
-        page_tables_per_layer = self._page_tables_to_ttnn(page_tables_per_layer)
-        """
-        Decode forward pass - processes single tokens.
-        Matches tt-transformers interface where rot_mat_idxs are used for on-device RoPE lookup.
-        """
-        # For non-row-sharded b<32, token buffer is padded to 32 — only embed real tokens
-        actual_batch = current_pos.shape[-1]
-        if not self.users_row_sharded and tokens.shape[-1] > actual_batch:
-            tokens_for_embed = tokens[:, :, :, :actual_batch]
-        else:
-            tokens_for_embed = tokens
-        input_embeds = ttnn.embedding(
-            tokens_for_embed, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b
-        )
-        input_embeds = ttnn.unsqueeze(input_embeds, 0)
-        # Get RoPE embeddings via on-device embedding lookup (matches tt-transformers)
-        rope_mats = self.rope_setup.get_rot_mats(self.get_tt_pos_idx(rot_mat_idxs))
-
-        # Forward through layers and head (shared with prefill)
-        out = self._forward_layers_and_head(
-            hidden_states=input_embeds,
-            rope_mats=rope_mats,
-            current_pos=current_pos,
-            page_table=page_table,
-            kv_cache=kv_cache,
-            is_decode=True,
-            sampling_on_device=sampling_on_device,
-            page_tables_per_layer=page_tables_per_layer,
-        )
-
-        if sampling_on_device and self.sampling is not None:
-            # Pad logits batch to 32 (TTSampling requirement) before split-trace or sampling
-            batch_dim = out.shape[-2]
-            if batch_dim < 32:
-                out = ttnn.pad(out, padding=[(0, 0), (0, 0), (0, 32 - batch_dim), (0, 0)], value=0.0)
-            self._increment_decode_positions_device(current_pos, rot_mat_idxs)
-            if capture_sampling_trace:
-                return out
-            tt_toks, tt_log_probs = self.sampling.sample(out, tt_out_tok=tokens, enable_trace=False)
-            return tt_toks, tt_log_probs
-
-        return out, None
-
     def ttnn_prefill_forward(
         self,
         x,
@@ -585,9 +522,8 @@ class Model:
         on_layer_complete=None,
     ):
         if page_tables_per_layer is None:
-            # See ttnn_decode_forward: the bridge stashes per-layer page tables
-            # on the model when in vLLM hybrid mode, since Generator's prefill
-            # path doesn't thread the kwarg.
+            # vLLM hybrid mode stashes per-layer page tables on the model since the
+            # Generator's prefill path doesn't thread the kwarg; pick them up here.
             page_tables_per_layer = getattr(self, "_active_page_tables_per_layer", None)
         page_tables_per_layer = self._page_tables_to_ttnn(page_tables_per_layer)
         """Prefill forward pass - processes full sequences"""
@@ -610,7 +546,6 @@ class Model:
             page_table=page_table,
             kv_cache=kv_cache,
             get_last_token=get_last_token,
-            is_decode=False,
             user_id=user_id,
             batch_size=batch_size,
             skip_lm_head=skip_lm_head,

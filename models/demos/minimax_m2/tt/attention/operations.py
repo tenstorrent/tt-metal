@@ -26,26 +26,6 @@ def apply_qkv_projection(hidden_states, weights: AttentionWeights):
     return xqkv_fused
 
 
-def split_qkv_heads_decode(xqkv_fused, num_heads: int, num_kv_heads: int):
-    """
-    Split QKV into separate head tensors for decode mode.
-
-    Args:
-        xqkv_fused: Fused QKV tensor
-        num_heads: Number of Q heads
-        num_kv_heads: Number of K/V heads
-
-    Returns:
-        Tuple (Q, K, V) with shapes [1, num_heads, 1, head_dim]
-    """
-    return ttnn.experimental.nlp_create_qkv_heads_decode(
-        xqkv_fused,
-        num_heads=num_heads,
-        num_kv_heads=num_kv_heads,
-        memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
-    )
-
-
 def split_qkv_heads_prefill(xqkv_fused, num_heads: int, num_kv_heads: int):
     """
     Split QKV into separate head tensors for prefill mode.
@@ -185,19 +165,16 @@ def apply_qk_norm(xqkv_fused, weights: AttentionWeights, config, mesh_config, cc
     return out
 
 
-def concat_heads(tensor, is_decode_mode: bool):
+def concat_heads(tensor):
     """
-    Concatenate attention heads back to hidden dimension.
+    Concatenate attention heads back to hidden dimension (prefill).
 
     Args:
         tensor: Attention output tensor with separate heads
-        is_decode_mode: Whether in decode mode
 
     Returns:
         Tensor with concatenated heads [batch, seq_len, hidden_size]
     """
-    if is_decode_mode:
-        tensor = ttnn.transpose(tensor, 1, 2)
     return ttnn.experimental.nlp_concat_heads(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 

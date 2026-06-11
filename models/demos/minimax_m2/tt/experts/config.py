@@ -52,39 +52,17 @@ class ProgramConfig:
 
     Models just need to specify grid sizes and chunking parameters.
     The boilerplate MatmulProgramConfig generation is handled automatically.
-
-    Example:
-        # MiniMax-M2 config
-        config = ProgramConfig(
-            decode_gate_up_cores=(3, 4),
-            decode_down_cores=(5, 6),
-        )
-
-        # Mixtral with different settings
-        config = ProgramConfig(
-            decode_gate_up_cores=(4, 6),
-            decode_down_cores=(6, 8),
-            sequence_chunk_size=2048,
-        )
     """
-
-    # Core grid sizes for decode
-    decode_gate_up_cores: tuple[int, int] = (3, 4)
-    decode_down_cores: tuple[int, int] = (5, 6)
 
     # Core grid sizes for prefill
     prefill_gate_up_cores: tuple[int, int] = (3, 4)
     prefill_down_cores: tuple[int, int] = (5, 6)
 
     # Sparse matmul subblock widths
-    decode_gate_up_subblock_w: int = 1
-    decode_down_subblock_w: int = 1
     prefill_gate_up_subblock_w: int = 1
     prefill_down_subblock_w: int = 1
 
     # Input block widths (in0_block_w)
-    decode_gate_up_in0_block_w: int = 1
-    decode_down_in0_block_w: int = 1
     prefill_gate_up_in0_block_w: int = 1
     prefill_down_in0_block_w: int = 1
 
@@ -94,8 +72,6 @@ class ProgramConfig:
 
     def __post_init__(self):
         """Validate configuration on creation"""
-        self._validate_cores("decode_gate_up_cores", self.decode_gate_up_cores)
-        self._validate_cores("decode_down_cores", self.decode_down_cores)
         self._validate_cores("prefill_gate_up_cores", self.prefill_gate_up_cores)
         self._validate_cores("prefill_down_cores", self.prefill_down_cores)
 
@@ -198,32 +174,6 @@ class ProgramConfig:
             fuse_batch=False,
             fused_activation=None,
             mcast_in0=True,
-        )
-
-    def get_decode_gate_up_config(
-        self, m: int, n: int, k: int = None
-    ) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
-        """Get program config for decode gate/up projections"""
-        return self._build_matmul_config(
-            self.decode_gate_up_cores,
-            m,
-            n,
-            in0_block_w=self.decode_gate_up_in0_block_w,
-            out_subblock_w=self.decode_gate_up_subblock_w,
-            k=k,
-        )
-
-    def get_decode_down_config(
-        self, m: int, n: int, k: int = None
-    ) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
-        """Get program config for decode down projection"""
-        return self._build_matmul_config(
-            self.decode_down_cores,
-            m,
-            n,
-            in0_block_w=self.decode_down_in0_block_w,
-            out_subblock_w=self.decode_down_subblock_w,
-            k=k,
         )
 
     def get_prefill_gate_up_config(

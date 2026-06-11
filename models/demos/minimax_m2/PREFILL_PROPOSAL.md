@@ -135,14 +135,14 @@ With SP=4 and 5 120-token chunks, each row processes **1 280 tokens per chunk**.
 ### Hard blockers (will crash at runtime)
 
 ```
-❌ batch_size > 1 in experts  →  NotImplementedError  (experts/prefill.py:243)
+❌ batch_size > 1 in experts  →  NotImplementedError  (experts/prefill.py)
                                   blocks DP=4 mode entirely
 
-⚠️ Decode QK-norm UNVALIDATED →  the qk-norm call IS wired into decode.py, but the
-                                  decode path uses a sharded-L1 xqkv layout the
-                                  apply_qk_norm slicing was not written/tested for.
-                                  Decode is entirely unrun — validate before trusting
-                                  long-generation accuracy. (attention/decode.py)
+ℹ️ Decode is NOT in this repo  →  this is a PREFILL-only component; decode runs
+                                  separately (tt-blaze, like all new models). The
+                                  decode forward path + dispatch were removed. (A few
+                                  decode Generator I/O helpers remain in model.py as a
+                                  noted follow-up; harmless dead code.)
 
 ❌ No prefill runner / server connection
                               →  prefill_runner.py is scaffold (stubs);

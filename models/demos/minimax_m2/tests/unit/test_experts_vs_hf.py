@@ -83,7 +83,7 @@ def test_experts_prefill_vs_hf(mesh_device, device_params, seq_len, reset_seeds)
         dense, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=repl
     )
 
-    out_tt = experts(h_tt, topk_expert_weights=dense_tt, is_decode=False)
+    out_tt = experts(h_tt, topk_expert_weights=dense_tt)
     out = ttnn.to_torch(ttnn.get_device_tensors(out_tt)[0]).reshape(seq_len, H)
 
     passing, pcc = comp_pcc(out_ref, out, 0.97)

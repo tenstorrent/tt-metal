@@ -157,8 +157,8 @@ class MLP:
                 tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
             )
 
-    def __call__(self, hidden_states, is_decode):
-        """Forward pass: route -> experts
+    def __call__(self, hidden_states):
+        """Forward pass: route -> experts (prefill)
         Args:
             hidden_states: Input tensor [batch, seq_len, hidden_size]
         Returns:
@@ -166,6 +166,6 @@ class MLP:
         """
         expert_indices, expert_weights = self.router(hidden_states, self.use_throughput_experts)
         expert_output = self.experts(
-            hidden_states, topk_expert_indices=expert_indices, topk_expert_weights=expert_weights, is_decode=is_decode
+            hidden_states, topk_expert_indices=expert_indices, topk_expert_weights=expert_weights
         )
         return expert_output
