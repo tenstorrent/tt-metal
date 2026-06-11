@@ -37,6 +37,7 @@ jobs:
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: |
             .github
@@ -125,6 +126,7 @@ jobs:
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -141,8 +143,6 @@ jobs:
         # Skip this on single-card systems
         if: ${{ matrix.test-group.sku != 'bh_p150' && matrix.test-group.sku != 'bh_p150_perf' }}
         timeout-minutes: 10
-        with:
-          runner-label: ${{ matrix.test-group.sku == 'bh_deskbox' && 'BH-DeskBox' || '' }}
       - name: Download Llama model weights from LFC
         if: ${{ matrix.test-group['weights-cache-mode'] == 'lfc' && contains(matrix.test-group.name, 'llama') }}
         timeout-minutes: 15

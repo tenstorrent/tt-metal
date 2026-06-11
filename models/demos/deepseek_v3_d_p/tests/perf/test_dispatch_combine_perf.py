@@ -24,7 +24,6 @@ import pytest
 
 from models.demos.deepseek_v3_d_p.utils.perf_utils import run_model_device_perf_test_per_op
 
-
 # Top 4 absolute hottest (layer, col) pairs from LONGBOOK_QA_ENG_25600.
 # Each token picks 8 of 256 experts; "in-col share" = fraction of those picks
 # landing in the column's 64 experts (uniform random would be 25%).

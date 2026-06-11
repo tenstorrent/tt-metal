@@ -9,6 +9,11 @@ from loguru import logger
 from math import prod
 import torch
 
+# Force torch CPU ops to use all cores. bf16 matmul on CPU is single-thread on
+# some torch builds even with OMP_NUM_THREADS set; this is the runtime knob that
+# keeps host-side golden compute fast. See test_moe_compute_6U.py for context.
+torch.set_num_threads(os.cpu_count() or 1)
+
 import ttnn
 
 from ttnn.experimental.moe_compute_utils import cluster_distance, map_shared_experts
@@ -747,6 +752,10 @@ def get_shared_expert_to_device_map(routed_experts, devices, mode):
             routed_experts + 1: list(range(1, devices, 2)),
         }
 
+    # 2 shared fully replicated, same as DeepSeek OCR
+    elif mode == "all_shared_x2":
+        return {routed_experts: list(range(devices)), routed_experts + 1: list(range(devices))}
+
     else:
         raise RuntimeError("Invalid shared expert mode")
 
@@ -797,7 +806,7 @@ def get_shared_expert_to_device_map(routed_experts, devices, mode):
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("routed_experts_per_device", [2])
-@pytest.mark.parametrize("shared_expert_mode", ["no_shared", "all_shared", "alternate_shared"])
+@pytest.mark.parametrize("shared_expert_mode", ["no_shared", "all_shared", "all_shared_x2", "alternate_shared"])
 def test_correctness(mesh_device, mesh_shape, cluster_axis, routed_experts_per_device, shared_expert_mode):
     batches_per_device = 32
     routed_experts = routed_experts_per_device * mesh_shape[cluster_axis]
@@ -837,6 +846,92 @@ def test_correctness(mesh_device, mesh_shape, cluster_axis, routed_experts_per_d
         dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH,
         use_persistent_mode=use_persistent_mode,
         shared_expert_ids_to_devices=shared_expert_ids_to_devices,
+    )
+
+
+# Correctness test on a Linear (non-wrapping) fabric. Topology is derived from the fabric config, so
+# using FABRIC_1D instead of FABRIC_1D_RING exercises the Linear path of SPARSE_MCAST_SHORTEST_PATH.
+# alternate_shared is the key case: its destination sets straddle both sides of every source device.
+@pytest.mark.skipif(
+    not (is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16) or is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8)),
+    reason=f"Requires TT_MESH_GRAPH_DESC_PATH to be 1x16 or 1x8 descriptor",
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=4352),
+            "trace_region_size": 500000,
+        },
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_shape, mesh_device, cluster_axis",
+    [
+        pytest.param(
+            (1, 8),
+            (1, 8),
+            1,
+            marks=pytest.mark.skipif(
+                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8),
+                reason=f"1x8 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x8}",
+            ),
+            id="1x8",
+        ),
+        pytest.param(
+            (1, 16),
+            (1, 16),
+            1,
+            marks=pytest.mark.skipif(
+                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
+                reason=f"1x16 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}",
+            ),
+            id="1x16",
+        ),
+    ],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize("routed_experts_per_device", [2])
+def test_correctness_linear(mesh_device, mesh_shape, cluster_axis, routed_experts_per_device):
+    batches_per_device = 32
+    routed_experts = routed_experts_per_device * mesh_shape[cluster_axis]
+    select_experts_k = 8
+    hidden_size = 7168
+    seq_len = 1
+    num_iters = 20
+    warmup_iters = 5
+    num_links = 4
+    dtype = ttnn.bfloat16
+    congestion_scheme = "random_sequential_experts"
+    worker_mode = ttnn.WorkerMode.DIRECT
+    use_persistent_mode = True
+
+    dispatch_devices = mesh_shape[cluster_axis]
+    batch = batches_per_device * dispatch_devices
+    trace_mode = True
+
+    run_all_to_all_dispatch_metadata_test(
+        mesh_device,
+        mesh_shape,
+        batch,
+        routed_experts,
+        select_experts_k,
+        hidden_size,
+        seq_len,
+        num_iters,
+        warmup_iters,
+        trace_mode,
+        num_links=num_links,
+        scheme=congestion_scheme,
+        dtype=dtype,
+        cluster_axis=cluster_axis,
+        worker_mode=worker_mode,
+        dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH,
+        use_persistent_mode=use_persistent_mode,
     )
 
 

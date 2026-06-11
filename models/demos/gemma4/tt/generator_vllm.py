@@ -45,14 +45,11 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
     model_capabilities = {
         "supports_prefix_caching": False,
         "supports_async_decode": False,
+        "supports_sample_on_device": True,
     }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Gemma4 decode traces return sampled tokens directly, like the working
-        # standalone demo. Do not split sampling into a second trace that
-        # assumes the first trace input tensor is a token buffer.
-        self.enable_split_sampling = False
         # Mirrors the env-var check in :meth:`initialize_vllm_model` so the
         # forward-side padding logic doesn't need to re-read the environment
         # on every step. Defaults to on; flip ``GEMMA4_BOUNDED_SLIDING_KV_CACHE=0``

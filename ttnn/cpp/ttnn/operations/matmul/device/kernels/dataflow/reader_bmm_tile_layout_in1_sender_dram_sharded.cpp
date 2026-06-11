@@ -56,8 +56,10 @@ void kernel_main() {
     constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_in1");
     constexpr uint32_t cb_id_out = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t cb_id_out_reshard = get_named_compile_time_arg_val("cb_out_reshard");
-    constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
-    constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size_bytes;
+    // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM and the
+    // in1 CB pages are sized to match, so the block size in L1 must use the padded page stride
+    // (in1_num_pages * in1_page_size) rather than get_tile_size() (the unpadded tile size).
+    constexpr uint32_t in1_block_size_bytes = in1_num_pages * in1_page_size;
 
     Noc noc;
     CircularBuffer cb_in1(cb_id_in1);
