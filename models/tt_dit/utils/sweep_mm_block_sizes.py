@@ -18,15 +18,15 @@ Architecture:
 Usage:
     # Orchestrator: sweep one shape
     pytest models/tt_dit/utils/sweep_mm_block_sizes.py::test_mm_sweep \\
-        -k "9472_3456_5120_11x10_mm_plain-bh_4x8" -x -s
+        -k "9472_3456_5120_11x10_mm_plain-bh_4x8_sp1_tp0" -x -s
 
     # Worker: run directly (useful for debugging, no profiling)
     pytest models/tt_dit/utils/sweep_mm_block_sizes.py::test_mm_sweep_worker \\
-        -k "9472_3456_5120_11x10_mm_plain-bh_4x8" -x -s
+        -k "9472_3456_5120_11x10_mm_plain-bh_4x8_sp1_tp0" -x -s
 
     # Standalone script
     python models/tt_dit/utils/sweep_mm_block_sizes.py \\
-        --device-config bh_4x8 --shape 9472,3456,5120
+        --device-config bh_4x8_sp1_tp0 --shape 9472,3456,5120
 """
 
 import argparse
@@ -42,6 +42,7 @@ from tqdm import tqdm
 from tracy import signpost
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 
 # ============================================================================
 # DEVICE CONFIGURATIONS
@@ -50,16 +51,27 @@ import ttnn
 # The worker and orchestrator will pick it up automatically.
 
 DEVICE_CONFIGS = {
-    "bh_4x8": {
+    "bh_4x8_sp1_tp0": {
         "mesh_shape": (4, 8),
         "fabric_config": "FABRIC_1D_RING",
-        "fabric_router_config_payload": None,  # use default (4352) to match model
+        "fabric_router_config_payload": 8192,  # use default (4352) to match model
         "topology": "Ring",
         "num_links": 2,
         "num_workers_per_link": 6,
         "sp_axis": 1,
         "tp_axis": 0,
         "cluster_axis": 0,
+    },
+    "bh_4x8_sp0_tp1": {
+        "mesh_shape": (4, 8),
+        "fabric_config": "FABRIC_1D_RING",
+        "fabric_router_config_payload": 8192,  # use default (4352) to match model
+        "topology": "Ring",
+        "num_links": 2,
+        "num_workers_per_link": 6,
+        "sp_axis": 0,
+        "tp_axis": 1,
+        "cluster_axis": 1,
     },
     # WH Galaxy 4x8, 4-device cluster along axis 0 (rows). Matches wh4x8links4_*
     # configs in tests/.../test_all_gather_minimal_matmul_async.py.
@@ -87,7 +99,7 @@ DEVICE_CONFIGS = {
     },
 }
 
-DEFAULT_DEVICE_CONFIG = "bh_4x8"
+DEFAULT_DEVICE_CONFIG = "bh_4x8_sp1_tp0"
 
 
 def resolve_config(name):
@@ -144,6 +156,43 @@ SHAPES = [
     (3072, 5120, 3840, 8, 8, True, "plain"),
     (3072, 5120, 1280, 8, 8, True, "plain"),
     (3072, 5120, 3456, 8, 8, True, "plain_gelu"),
+    # -----------------------------------------------------------------------
+    # Flux2 BH 4×8 — TP8_SP4 (bh_4x8_sp0_tp1): K_per_device = 6144/8 = 768,
+    # SP=4 halves M relative to global token count. Core grid 12×9 (AGMM).
+    # Top-3 agmm ops by device time from matmulshapes_new.md, Section 1.
+    # FFN in-proj (ff_spatial, x_c_mlp): activation_fn="swiglu" → swiglu is
+    # applied post-matmul via _apply_activation_fn, NOT fused → use_case="plain".
+    # Attention QKV (to_qkv): chunks=3, math_approx_mode=True → use_case="qkv".
+    # -----------------------------------------------------------------------
+    # 1024 tokens
+    (1024, 768, 4608, 12, 9, True, "plain"),  # DBL_ff_spatial_mm_in_proj (swiglu post-matmul, not fused)
+    (1152, 768, 4608, 12, 9, True, "plain"),  # SNG_x_c_mlp
+    (128, 768, 4608, 12, 9, True, "plain"),  # DBL_ff_ctx_spatial_mm_in_proj
+    # 2048 tokens
+    (4096, 768, 4608, 12, 9, True, "plain"),  # DBL_ff_spatial_mm_in_proj
+    (4224, 768, 4608, 12, 9, True, "plain"),  # SNG_x_c_mlp
+    (4096, 768, 2304, 12, 9, True, "qkv"),  # SNG_attn_to_qkv (chunks=3, math_approx_mode=True)
+    # 4096 tokens
+    (16384, 768, 4608, 12, 9, True, "plain"),  # DBL_ff_spatial_mm_in_proj
+    (16512, 768, 4608, 12, 9, True, "plain"),  # SNG_x_c_mlp
+    (16384, 768, 2304, 12, 9, True, "qkv"),  # DBL_attn_to_qkv
+    # -----------------------------------------------------------------------
+    # Flux2 BH 4×8 — TP4_SP8 (bh_4x8_sp1_tp0): K_per_device = 6144/4 = 1536,
+    # SP=8 halves M and doubles N relative to TP8_SP4. Core grid 12×9 (AGMM).
+    # Top-3 agmm ops by device time from matmulshapes_new.md, Section 2.
+    # -----------------------------------------------------------------------
+    # 1024 tokens
+    (576, 1536, 9216, 12, 9, True, "plain"),
+    (512, 1536, 9216, 12, 9, True, "plain"),
+    (64, 1536, 9216, 12, 9, True, "plain"),
+    # 2048 tokens
+    (2048, 1536, 9216, 12, 9, True, "plain"),
+    (2112, 1536, 9216, 12, 9, True, "plain"),
+    (2048, 1536, 4608, 12, 9, True, "plain"),
+    # 4096 tokens
+    (8192, 1536, 9216, 12, 9, True, "plain"),
+    (8256, 1536, 9216, 12, 9, True, "plain"),
+    (8192, 1536, 4608, 12, 9, True, "plain"),
 ]
 
 SHAPE_IDS = [f"{M}_{K}_{N}_{cgx}x{cgy}_{'agmm' if agmm else 'mm'}_{uc}" for M, K, N, cgx, cgy, agmm, uc in SHAPES]
@@ -611,7 +660,7 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
                 barrier_semaphore=None,
                 force_transpose=True,
                 num_workers_per_link=cfg["num_workers_per_link"],
-                num_buffers_per_channel=48,
+                num_buffers_per_channel=24 if is_blackhole() else 48,
                 scalar=scalar,
                 addcmul_input_tensor1=addcmul_tensor1,
                 addcmul_input_tensor2=addcmul_tensor2,
