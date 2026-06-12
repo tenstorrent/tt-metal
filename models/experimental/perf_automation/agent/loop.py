@@ -4,7 +4,7 @@
 
 Reads runs/latest/state.json (must be at BEFORE_LOOP_DONE), then drives the
 state machine. `--until ROUTE` runs through ROUTE and stops (no key needed —
-SELECT/APPLY never run), so you can inspect runs/latest/route_brief_*.md.
+SELECT/APPLY never run), so you can inspect runs/latest/route_briefs.jsonl.
 Real SELECT/REPAIR handlers load .env.agent themselves (section 3.1).
 """
 
@@ -37,8 +37,8 @@ def main(argv: list[str] | None = None) -> int:
     m = ctx.state.get("metric", {})
     if args.until and reached not in states.TERMINAL:
         print(f"ran through {args.until}; parked at {reached}.")
-        if ctx.state.get("route_brief"):
-            print(f"brief: {ctx.run.dir / ctx.state['route_brief']}")
+        if ctx.state.get("route_brief_id"):
+            print(f"brief_id: {ctx.state['route_brief_id']}  (runs/latest/route_briefs.jsonl)")
     else:
         print(
             f"loop finished: {reached}  (iteration {ctx.state.get('iteration')}, "

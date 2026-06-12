@@ -98,28 +98,52 @@ class LoopContext:
     ) -> None:
         """One row per query(); accumulate cost+tokens into state (budget gate input).
 
-        If prompt/response are given, persist the full text to runs/<id>/prompts/
-        (so agent_calls.jsonl stays lean) and record a pointer + prompt sha — for
-        auditing/summarizing the lead's prompts later.
+        agent_calls.jsonl is the LEAN cost/token stream. When prompt/response
+        are given, the full payload is appended to a single prompts.jsonl,
+        linked 1:1 by agent_call_id (no per-call files).
         """
         import hashlib
 
+        from .events import append_jsonl, make_agent_call_row, next_agent_call_seq
+
         usage = usage or {}
-        row = {"ts": utc_ts(), "stage": stage, "role": role, "model": model, **usage}
+        ts = utc_ts()
+        iteration = self.state.get("iteration")
+        seq = next_agent_call_seq(self._agent_calls)  # monotonic, unique per run
+        prompt_sha = hashlib.sha256(prompt.encode()).hexdigest()[:12] if prompt else None
+        response_sha = hashlib.sha256(response.encode()).hexdigest()[:12] if response else None
+        row = make_agent_call_row(
+            run_id=self.run.run_id,
+            phase="loop",
+            iteration=iteration,
+            stage=stage,
+            role=role,
+            model=model,
+            usage=usage,
+            seq=seq,
+            prompt_sha=prompt_sha,
+            response_sha=response_sha,
+            ts=ts,
+        )
         if prompt is not None or response is not None:
-            pdir = self.run.dir / "prompts"
-            pdir.mkdir(exist_ok=True)
-            seq = len(list(pdir.glob("*.txt")))
-            fname = f"{seq:03d}_{stage}.txt"
-            (pdir / fname).write_text(
-                f"=== PROMPT ({role} / {model}) ===\n{prompt or ''}\n\n=== RESPONSE ===\n{response or ''}\n",
-                encoding="utf-8",
+            append_jsonl(
+                self.run.dir / "prompts.jsonl",
+                {
+                    "agent_call_id": row["agent_call_id"],  # FK -> agent_calls.jsonl
+                    "run_id": self.run.run_id,
+                    "ts": ts,
+                    "phase": "loop",
+                    "iteration": iteration,
+                    "stage": stage,
+                    "role": role,
+                    "model": model,
+                    "prompt": prompt or "",
+                    "response": response or "",
+                    "prompt_sha": prompt_sha,
+                    "response_sha": response_sha,
+                },
             )
-            row["prompt_file"] = f"prompts/{fname}"
-            if prompt:
-                row["prompt_sha"] = hashlib.sha256(prompt.encode()).hexdigest()[:12]
-        with open(self._agent_calls, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, sort_keys=True) + "\n")
+        append_jsonl(self._agent_calls, row)
         self.state["cost_usd"] = round(self.state.get("cost_usd", 0.0) + (usage.get("cost_usd") or 0.0), 6)
         self.state["tokens_in"] = self.state.get("tokens_in", 0) + (usage.get("tokens_in") or 0)
         self.state["tokens_out"] = self.state.get("tokens_out", 0) + (usage.get("tokens_out") or 0)

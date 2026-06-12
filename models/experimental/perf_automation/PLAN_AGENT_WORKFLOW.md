@@ -58,7 +58,7 @@ guards), `states.py` (names + `TRANSITIONS` + repair budgets), `loop_context.py`
 seam: state/manifest/ledger + `record_agent_call` + `current_profile`/`model_root`), `loop.py`
 entry, `looplog.py` (one terse line per stage). Resume-from-midstate covered.
 - **M5 agent edge** — ✅ DONE (real handlers, injectable agent/hardware leaves):
-  - **ROUTE** real — top bucket → `route()` → writes `route_brief_<N>.md` (table + playbook text
+  - **ROUTE** real — top bucket → `route()` → writes `route_brief_<N>.json` (candidates + playbook text
     + **op-class-filtered model map**, the ast skeleton from `model_map.py`). Routes on the
     **current** profile, not the frozen baseline.
   - **SELECT** real — lead picks one untried lever from the brief; enum-constrained; fallback to
@@ -884,8 +884,8 @@ and zero API spend**; the real wiring is swapped in only at integration.
 - **NOOP guard:** PLAN returns `NOOP` when a lever is already applied (e.g. BGE-M3 already fuses
   QKV) → discard `already_applied` with no edit/gate/measure spent.
 - **VERIFY = syntax-only** (§8.5.1). **Prompt logging:** every agentic call's full prompt+response
-  persists to `runs/<id>/prompts/<NNN>_<stage>.txt`; `agent_calls.jsonl` carries `prompt_file` +
-  `prompt_sha`.
+  persists as JSON to `runs/<id>/prompts/<NNN>_<stage>.json`; `agent_calls.jsonl` carries
+  `agent_call_id`, `prompt_file`, `prompt_sha`, and `response_sha`.
 
 **Bugs found by running on real hardware (and fixed):**
 - VERIFY standalone-import check → false `import_error` on package-import files → dropped (syntax-only).
@@ -901,8 +901,8 @@ deferred placeholder (reads `last_decision.spread` when wired).
 
 **New state.json fields:** `current_profile`, `current_bucket`, `candidates`, `tried`,
 `selected_lever`, `select_reasoning`, `edit_spec`, `last_edit`, `last_verdict`, `last_decision`,
-`code_fix_attempts`, `pcc_fix_attempts`. **New run-dir artifacts:** `route_brief_<N>.md`,
-`profiles/iter_<N>_profile.json`, `prompts/`.
+`code_fix_attempts`, `pcc_fix_attempts`. **New run-dir artifacts:** `route_brief_<N>.json`,
+`profiles/iter_<N>_profile.json`, `prompts/*.json`.
 
 **References (localization design):** aider repo-map (tree-sitter symbol skeleton + PageRank +
 token budget) https://aider.chat/docs/repomap.html ; 2026 just-in-time-retrieval-beats-stuffing +

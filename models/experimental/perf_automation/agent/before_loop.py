@@ -23,7 +23,6 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .checkpoint import Checkpoint
-from .clock import utc_ts
 from .events import write_event
 from .environment import environment_check
 from .model_files import read_model_files
@@ -213,10 +212,20 @@ def before_loop(
 
     def record_agent_call(stage: str, role: str, model: str, usage: dict | None) -> str:
         """Append one row per query(); accumulate totals; return event suffix."""
+        from .events import append_jsonl, make_agent_call_row, next_agent_call_seq
+
         usage = usage or {}
-        row = {"ts": utc_ts(), "stage": stage, "role": role, "model": model, **usage}
-        with open(agent_calls_path, "a") as fh:
-            fh.write(json.dumps(row, sort_keys=True) + "\n")
+        row = make_agent_call_row(
+            run_id=run.run_id,
+            phase="before_loop",
+            iteration=None,
+            stage=stage,
+            role=role,
+            model=model,
+            usage=usage,
+            seq=next_agent_call_seq(agent_calls_path),
+        )
+        append_jsonl(agent_calls_path, row)
         for k in ("tokens_in", "tokens_out"):
             agent_totals[k] += usage.get(k) or 0
         agent_totals["cost_usd"] += usage.get("cost_usd") or 0.0

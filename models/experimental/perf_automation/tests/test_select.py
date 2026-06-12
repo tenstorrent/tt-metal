@@ -100,7 +100,12 @@ def test_select_persists_prompt_and_response(tmp_path):
     import json as _j
 
     rows = [_j.loads(l) for l in (ctx.run.dir / "agent_calls.jsonl").read_text().splitlines()]
-    assert rows[-1]["prompt_file"].startswith("prompts/")
-    assert "prompt_sha" in rows[-1]
-    body = (ctx.run.dir / rows[-1]["prompt_file"]).read_text()
-    assert "PROMPT TEXT" in body and "RESPONSE TEXT" in body
+    call = rows[-1]
+    assert "agent_call_id" in call
+    assert call["prompt_sha"] and call["response_sha"]
+    assert "prompt_file" not in call  # no per-call files; join by agent_call_id
+    # full payload lives in the SINGLE prompts.jsonl, linked by agent_call_id
+    payloads = [_j.loads(l) for l in (ctx.run.dir / "prompts.jsonl").read_text().splitlines()]
+    body = next(b for b in payloads if b["agent_call_id"] == call["agent_call_id"])
+    assert body["prompt"] == "PROMPT TEXT"
+    assert body["response"] == "RESPONSE TEXT"

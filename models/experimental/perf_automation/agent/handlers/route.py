@@ -1,12 +1,12 @@
 """ROUTE handler (Member 1 / lead) — REAL, deterministic. No agent, no device.
 
 Picks the slowest bucket of the CURRENT profile, asks the router which playbook
-levers are tagged for it, and writes a **route brief** — a table of candidates
-plus the full extracted text of each section. That brief is the decision
-material SELECT (the agent) reads to choose one lever.
+levers are tagged for it, and appends a **route brief row** to route_briefs.jsonl — candidate metadata,
+model map, and full extracted section texts. SELECT reads that row back (by
+route_brief_id) as its decision material.
 
 In:  ctx.current_profile() buckets + ctx.index (playbook).
-Out: ctx.state["current_bucket"], ["candidates"] (ids), ["route_brief"] (file path). -> SELECT
+Out: ctx.state["current_bucket"], ["candidates"] (ids), ["route_brief_id"]. -> SELECT
 """
 
 from __future__ import annotations
@@ -29,33 +29,31 @@ def _bucket_query(tags: dict[str, Any]) -> dict[str, Any]:
 
 def build_route_brief(
     bucket: dict[str, Any], hits: list[dict[str, Any]], read_section: Callable[[str], str], skeleton: str = ""
-) -> str:
-    """Assemble the human/agent-readable decision brief: bottleneck + table + section texts."""
-    t = bucket.get("tags", {})
-    out: list[str] = [
-        f"# ROUTE brief — bottleneck: {bucket['id']}",
-        "",
-        f"**{bucket['id']}** — {bucket.get('device_ms')} ms " f"({bucket.get('pct')}%), {bucket.get('count')} calls",
-        "tags: " + ", ".join(f"{k}={v}" for k, v in sorted(t.items())),
-        "",
-        f"## {len(hits)} candidate levers (choose ONE)",
-        "",
-        "| id | lever_type | file | title |",
-        "|----|-----------|------|-------|",
-    ]
+) -> dict[str, Any]:
+    """Assemble JSON decision material: bottleneck + candidates + section texts."""
+    sections = []
     for h in hits:
-        out.append(f"| {h['id']} | {h.get('lever_type', '')} | {h['file']} | {h['title']} |")
-    if skeleton:
-        out += ["", "## Model map — where the bottleneck's ops live (file:line:scope)", "", "```", skeleton, "```"]
-    out += ["", "## Playbook sections — the full text to decide from", ""]
-    for h in hits:
-        out += [f"### {h['id']}  ({h['file']})", ""]
         try:
-            out.append(read_section(h["id"]))
+            text = read_section(h["id"])
         except KeyError:
-            out.append("_(section text unavailable in this index)_")
-        out += ["", "---", ""]
-    return "\n".join(out)
+            text = ""
+        sections.append({"id": h["id"], "file": h["file"], "title": h["title"], "text": text})
+    return {
+        "row_type": "route_brief",
+        "bucket": bucket,
+        "candidate_count": len(hits),
+        "candidates": [
+            {
+                "id": h["id"],
+                "lever_type": h.get("lever_type", ""),
+                "file": h["file"],
+                "title": h["title"],
+            }
+            for h in hits
+        ],
+        "model_map": skeleton,
+        "sections": sections,
+    }
 
 
 def route(ctx) -> str:
@@ -76,10 +74,23 @@ def route(ctx) -> str:
     except Exception:
         skeleton = ""
 
-    # persist the decision material for SELECT (and for a human to inspect)
-    rel = f"route_brief_{ctx.state.get('iteration', 0):02d}.md"
-    (ctx.run.dir / rel).write_text(build_route_brief(bucket, hits, router.read_section, skeleton))
-    ctx.state["route_brief"] = rel
+    # append structured decision material to the single route_briefs.jsonl stream;
+    # SELECT reads its row back by route_brief_id (state below points at it).
+    from ..events import append_jsonl
 
-    ctx.log_event(states.ROUTE, "info", f"bucket={bucket['id']} candidates={len(hits)} brief={rel}")
+    route_brief_id = f"{ctx.run.run_id}:{ctx.state.get('iteration', 0)}:ROUTE"
+    payload = build_route_brief(bucket, hits, router.read_section, skeleton)
+    payload.update(
+        {
+            "route_brief_id": route_brief_id,
+            "run_id": ctx.run.run_id,
+            "iteration": ctx.state.get("iteration", 0),
+            "stage": states.ROUTE,
+            "query": query,
+        }
+    )
+    append_jsonl(ctx.run.dir / "route_briefs.jsonl", payload)
+    ctx.state["route_brief_id"] = route_brief_id
+
+    ctx.log_event(states.ROUTE, "info", f"bucket={bucket['id']} candidates={len(hits)} brief_id={route_brief_id}")
     return states.SELECT

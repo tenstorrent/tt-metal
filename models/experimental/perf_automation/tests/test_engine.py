@@ -184,16 +184,20 @@ def test_handlers_only_return_declared_transitions(tmp_path):
 
 
 def test_route_writes_decision_brief(tmp_path):
-    """ROUTE persists a route_brief with a candidate table + section texts for SELECT."""
+    """ROUTE appends a route_briefs.jsonl row with candidates + section texts for SELECT."""
+    from agent.events import read_jsonl_last
+
     ctx = _ctx(_mk_run(tmp_path))
     route_handler(ctx)
-    rel = ctx.state["route_brief"]
-    brief = (ctx.run.dir / rel).read_text()
-    assert rel.startswith("route_brief_")
-    assert "candidate levers" in brief
-    assert "| id | lever_type | file | title |" in brief  # the table header
-    assert "mlp-fidelity-walk" in brief  # a candidate id in the table
-    assert "Model map" in brief  # the filtered ast skeleton is included
+    rid = ctx.state["route_brief_id"]
+    brief = read_jsonl_last(ctx.run.dir / "route_briefs.jsonl", route_brief_id=rid)
+    assert brief is not None
+    assert brief["route_brief_id"] == rid
+    assert brief["row_type"] == "route_brief"
+    assert brief["bucket"]["id"] == "matmul"
+    assert "mlp-fidelity-walk" in [c["id"] for c in brief["candidates"]]
+    assert brief["model_map"]  # the filtered ast skeleton is included
+    assert any(s["id"] == "mlp-fidelity-walk" and s["text"] for s in brief["sections"])
 
 
 def test_engine_stop_after_route_parks_before_select(tmp_path):
@@ -202,7 +206,7 @@ def test_engine_stop_after_route_parks_before_select(tmp_path):
     ctx = _ctx(run)
     parked = engine.run(ctx, build_handlers(), stop_after={states.ROUTE})
     assert parked == states.SELECT
-    assert ctx.state.get("route_brief")  # ROUTE produced the brief
+    assert ctx.state.get("route_brief_id")  # ROUTE produced the brief
     assert ctx.state.get("git_sha_clean") is None  # APPLY never ran
 
 
