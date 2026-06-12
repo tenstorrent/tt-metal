@@ -30,7 +30,7 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
     v_endif;
 
     // Compute reciprocal of b
-    sfpi::vFloat neg_b_f = sfpi::setman(sfpi::vConstNeg1, b_f);
+    sfpi::vFloat neg_b_f = sfpi::copyman(-1.0f, b_f);
 
     sfpi::vFloat inv_b_f = sfpi::vConstFloatPrgm2 + sfpi::vConstFloatPrgm1 * neg_b_f;
 

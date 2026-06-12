@@ -48,7 +48,7 @@ sfpi_inline void calculate_div_int32_body(
 
     // Combines the sign and exponent of -1.0 with the mantissa of `b_f`.
     // Scale the input value to the range [1.0, 2.0), and make it negative.
-    sfpi::vFloat neg_b_f = sfpi::setman(sfpi::vConstNeg1, b_f);
+    sfpi::vFloat neg_b_f = sfpi::copyman(-1.0f, b_f);
     // Linear approximation.
     sfpi::vFloat inv_b_f = sfpi::vConstFloatPrgm2 + sfpi::vConstFloatPrgm1 * neg_b_f;
     sfpi::vFloat scale = sfpi::setman(b_f, 0);
