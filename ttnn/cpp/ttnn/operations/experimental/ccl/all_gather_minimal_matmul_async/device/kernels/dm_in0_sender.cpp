@@ -293,7 +293,6 @@ void kernel_main() {
             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
 
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
-                DeviceZoneScopedN("in0 block");
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
                         cb_wait_front(cb_id_out, out_block_num_tiles);
@@ -359,7 +358,6 @@ void kernel_main() {
                     k_block_left_tile,
                     k_block_right_tile);
                 if (is_injector_core) {
-                    DeviceZoneScopedN("injector core read in0 block");
                     read_in0_block_sync<M_block_tiles, K_block_tiles>(
                         in0_reader,
                         in0_shape,
@@ -410,7 +408,6 @@ void kernel_main() {
 #if MATMUL_ISOLATION_MODE == 0
 #ifdef USE_MUX
                 if (n_block_iter == 0) {
-                    DeviceZoneScopedN("AGMM Zone: in0 fabric half-block send (all-gather payload + sem inc)");
                     bool forward_slice = false;
                     if (k_block_iter < (K_num_blocks - (K_num_blocks / num_devices))) {
                         forward_slice = true;
