@@ -54,7 +54,35 @@ ENV NOTE (2026-06-12): runs must execute INSIDE the container `tt-xla-ird-mvasil
 /home/ubuntu/mvasiljevic bind-mounts to container /home/mvasiljevic; the venv's uv-python lives at
 /home/mvasiljevic/.local and only resolves in-container). Drive via `docker exec tt-xla-ird-mvasiljevic`.
 
-## TILE-ALIGNMENT AUDIT + CONVERGENCE (2026-06-12) — safe positive-EV levers exhausted
+## STAT-GATHER TILE REPACK — BIG WIN (2026-06-12, credit: user "CCL sends full tiles" insight)
+| step | change | result |
+|------|--------|--------|
+| s5 | RMS-norm partial-stat all_gathers: gather [1,32,1] dim=0 -> [8,32,1] (8 padded tiles) REPLACED by gather [32,1] dim=1 -> [32,8] (1 tile) + sum([1]). All 5 sites (all_gather_2/8/12/18/31). | **KEEP**. Commit fb2ac9d. PCC vs HEAD: logits cos64 0.99979782, argmax 100%, non-MoE bit-identical. |
+
+ROOT CAUSE: CCL transmits FULL 32x32 TILES. The TP RMS-norm reduces a per-token partial stat
+([32,1], one scalar/token) across the 8 hidden-shard devices. Gathering [1,32,1] over dim=0 makes the
+output [8,32,1] = 8 SEPARATE tiles (each [32,1] padded to a full 32-wide tile = 1024 elems for 32 real)
+-> the gather moved 8 padded tiles. Gathering [32,1] over dim=1 packs the 8 partials as columns [32,8]
+= 1 tile. Numerically identical sum (fp reduction-order only -> cos 0.9998, argmax 100%).
+
+MEASURED (clean, op-level; AllGather device time per phase, summary.csv): stat gather 41-47us -> ~2us,
+AllGather total dropped -44 to -47us in EVERY phase (attn0 167->120, dense 205->160, attn1 126->82,
+moe 199->154, lmhead 307->263). ReduceScatter UNCHANGED (control). The phase-TOTALS were noise-dominated
+(+110us/phase global slowdown hit untouched lmhead/prologue too) so the keep rests on the deterministic
+AllGather component delta, not the noisy totals.
+
+EST e2e: -45us per stat gather x ~123 gathers (61 layers x 2 norms [input + post-attn] + lm_head) =
+~-5.5ms. 166.4 -> ~160.9 ms (6.36x -> ~6.58x). This is the bandwidth-recovery the earlier
+"convergence" missed: the stat gathers WERE sending mostly tile-padding, and dim=1 packing recovers it.
+
+WHY the gathers can't be eliminated entirely (user Q): hidden is TP-sharded (axis1, 8x896) and matmuls
+are row-parallel (contract the 896 shard -> reduce), so activations stay hidden-sharded and norms need
+the full-hidden stat -> an axis1 reduction. Gathering the scalar stat (not the [.,7168] activation) is
+already bandwidth-minimal; the dim=1 repack removes the remaining tile-padding waste. Eliminating the
+gather entirely needs a fundamental re-shard (replicate activations / column-parallel) that relocates
+cost to activation gathers/reshards — high risk on generated code, not pursued.
+
+## TILE-ALIGNMENT AUDIT (2026-06-12) — matmuls aligned; head-dim padding structural
 Audited the rfuse perf report (perf_reports/rfuse_2026_06_12_05_45_41) for tile (32x32) misalignment.
 
 MATMULS: all tile-aligned. Every contraction/output dim is a multiple of 32 (32,128,512,896,2048,2304,
@@ -80,12 +108,13 @@ latency-bound), and dense is only x3 layers (~0.4ms ceiling). (b) MoE expert/com
 bulk) — blocked by combine L1 fragility. (c) lm_head ArgMax/matmul (445us+1291us) — runs x1, <1% e2e.
 (d) RoPE cos/sin repeats (42us/layer) — per-batch broadcast is required (correct as-is).
 
-CONVERGED: every clean collective fusion is landed (qkv x2 attn, router); remaining attention TMs are
-structurally necessary MLA format conversions (head split, RoPE interleave, SDPA concat) — prior round
-already eliminated the foldable ones. STOP per skill criterion (no patch moves the number w/o breaking
-PCC or hitting the blocked combine).
+Remaining attention TMs are structurally necessary MLA format conversions (head split, RoPE interleave,
+SDPA concat) — prior round eliminated the foldable ones. (This "audit" first concluded CONVERGED, but the
+user's "CCL sends full tiles" prompt then surfaced the stat-gather tile-padding win above — s5.)
 
-## BRANCH RESULT: attention + router collective fusion = 177.8 -> 166.4 ms (6.36x), PCC bit-identical
+## BRANCH RESULT: collective fusion + stat-gather tile repack = 177.8 -> ~160.9 ms (~6.58x), PCC argmax-100%
 Net deliverable: (1) fuse the qkv-down 3-way reduction into 1 all_gather+sum (both attn layers),
 attn/layer 1.107 -> 0.976 (-131us); (2) fuse the MoE router all-reduce into 1 all_gather+sum (-40us/MoE
-layer). The MoE expert/combine collectives (the 59% bulk) remain blocked by the combine L1 fragility.
+layer); (3) repack the 5 RMS-norm stat gathers dim=0->dim=1 (8 padded tiles -> 1 tile), -45us per stat
+gather x ~123 gathers (~-5.5ms). The MoE expert/combine collectives (the 59% bulk) remain blocked by the
+combine L1 fragility.
