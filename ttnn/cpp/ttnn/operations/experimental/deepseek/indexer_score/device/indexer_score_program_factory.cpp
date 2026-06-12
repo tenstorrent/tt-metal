@@ -75,18 +75,21 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     const auto [qk_subblock_h, qk_subblock_w] = ttnn::prim::detail::determine_largest_subblock_size(HB, 1, dst_size);
     TT_FATAL(HB % qk_subblock_h == 0, "head group {} must be divisible by qk_subblock_h={}", HB, qk_subblock_h);
 
-    // Auto-tune QC (q-tile-rows per work unit) up from the requested value to the largest divisor
-    // of Sqt whose resident CBs still fit L1. A unit's K chunk is read once but its matmul feeds
-    // all QC q-rows, so larger QC cuts the reader's K DRAM traffic ~QC-fold (K is otherwise
-    // re-read once per q-row-group, ~Sqt times over). The writer's strip path is already hidden
-    // under compute, so the reader is the only data-movement bottleneck.
+    // Auto-tune QC (q-tile-rows per work unit). A unit's K chunk is read once but its matmul feeds
+    // all QC q-rows, so larger QC cuts the reader's K DRAM traffic ~QC-fold (K is otherwise re-read
+    // once per q-row-group, ~Sqt times over). The writer's strip path is already hidden under
+    // compute, so the reader is the only data-movement bottleneck.
     //
-    // But QC>1 only helps when the op is *reader-bound*: per output tile the K traffic is
-    // ~Dt*k_tile bytes (independent of heads) while the matmul work is ~HB heads * fidelity
-    // passes, so K dominates exactly when k_tile is large relative to HB. When compute dominates
-    // (more resident heads), raising QC just adds the multi-row-group masking overhead and
-    // regresses. The k_tile > 51*HB*fidelity test (calibrated on BH: DRAM BW vs FPU throughput)
-    // fires for the 8-head shard but leaves the compute-bound 16/64-head cases at QC=1.
+    // QC>1 only helps when the op is *reader-bound*: per output tile the K traffic is ~Dt*k_tile
+    // bytes (independent of heads) while the matmul work is ~HB heads * fidelity passes, so K
+    // dominates exactly when k_tile is large relative to HB. The k_tile > 51*HB*fidelity test
+    // (calibrated on BH: DRAM BW vs FPU throughput) fires for the 8-head shard / bf16 k and leaves
+    // the compute-bound 16/64-head bfp8 cases at QC=1.
+    //
+    // We bump by a SINGLE divisor step (to QC=2 for GLX). Measured sp7: one doubling clears the
+    // K-bandwidth knee (heads8 bfp8 0.73->0.49 ms, heads16 bf16 1.35->0.89), but a second doubling
+    // does NOT help the reader (already past the knee) and regresses on the higher compute ceiling
+    // + larger resident CBs (QC=4 measured 0.52 / 1.36 -- worse than QC=2). So one step, then stop.
     {
         const bool sh = HB < Hi;
         constexpr uint32_t fidelity_passes = 2;  // HiFi2 (math_fidelity below); LoFi would be 1
@@ -125,14 +128,17 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
         // bypassing the reader-bound gate so any head count can be swept.
         const char* qc_env = std::getenv("INDEXER_QC");
         const uint32_t qc_force = qc_env != nullptr ? (uint32_t)std::atoi(qc_env) : 0u;
-        if (qc_force != 0 || reader_bound) {
-            for (uint32_t cand = QC + 1; cand <= Sqt_avail; ++cand) {
-                if (Sqt_avail % cand != 0 || cand % QC != 0 || footprint(cand) > l1_budget) {
-                    continue;
+        for (uint32_t cand = QC + 1; cand <= Sqt_avail; ++cand) {
+            if (Sqt_avail % cand != 0 || cand % QC != 0 || footprint(cand) > l1_budget) {
+                continue;
+            }
+            if (qc_force != 0) {
+                if (cand == qc_force) {
+                    QC = cand;  // diagnostic override: climb to the exact forced QC
                 }
-                if (qc_force == 0 || cand == qc_force) {
-                    QC = cand;
-                }
+            } else if (reader_bound) {
+                QC = cand;  // auto: take the first (smallest) qualifying step -- the QC=2 knee
+                break;
             }
         }
     }
