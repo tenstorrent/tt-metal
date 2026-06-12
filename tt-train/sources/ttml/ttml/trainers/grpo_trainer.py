@@ -113,6 +113,16 @@ class GRPOConfig:
     # without error; the trainer ignores any value provided here.
     batch_size: Optional[int] = None
 
+    def __post_init__(self) -> None:
+        # Warn (once per construction) when a deprecated field is explicitly set.
+        # TODO: remove this field and warning once all configs have migrated.
+        if self.batch_size is not None:
+            logging.warning(
+                "grpo_config: 'batch_size' is deprecated and ignored; the generation batch "
+                "size is now derived from per_device_train_batch_size, num_devices, "
+                "num_generations, and gradient_accumulation_steps. Remove it from your config."
+            )
+
 
 def get_grpo_config(yaml_config: dict, output_dir: str = "") -> GRPOConfig:
     """Build a :class:`GRPOConfig` from a top-level YAML config dict.
