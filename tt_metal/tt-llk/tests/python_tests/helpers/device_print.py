@@ -30,9 +30,9 @@ from typing import Any
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import (
     BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
-    DataFormat,
     QUASAR_DATA_FORMAT_ENUM_VALUES,
     WORMHOLE_DATA_FORMAT_ENUM_VALUES,
+    DataFormat,
 )
 from helpers.logger import logger
 from helpers.utils import TILE_BG_RESULT, format_tile_row
@@ -344,6 +344,10 @@ class ElfStrings:
             self._info_record_size, self._info_unpack_fmt = _STRING_INFO_LAYOUT[
                 elf.elf.elfclass
             ]
+            # tt-exalens drifted ParsedElfFile.sections between a name-keyed dict
+            # (<=0.3.20, what main pins) and a list[ParsedElfFileSection] (0.3.17).
+            # The emulator box can ship the list-shape build, so normalize both to a
+            # dict here rather than depend on the installed version.
             raw_sections = elf.sections
             sections = (
                 raw_sections

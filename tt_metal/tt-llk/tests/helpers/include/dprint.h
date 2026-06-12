@@ -7,9 +7,9 @@
 // calls compile to nothing when the macro is not set.
 
 // PROCESSOR_INDEX, LLK_DEVICE_PRINT_BUFFER_BASE, LLK_RUNTIME_ARGS_START
-// and DPRINT_BUFFER_SIZE are passed in by test_config.py at build time;
+// and DEVICE_PRINT_BUFFER_SIZE are passed in by test_config.py at build time;
 // see RISC_INFO, DEVICE_PRINT_BUFFER_BASE, DEVICE_PRINT_RUNTIME_ARGS_START
-// and DEVICE_PRINT_PER_THREAD_SIZE in test_config.py.
+// and DEVICE_PRINT_BUFFER_SIZE in test_config.py.
 
 // Disabled under COVERAGE: coverage linker scripts grow TRISC sections
 // way past the device print buffer slot, so they can't share L1.
@@ -45,8 +45,10 @@ inline __attribute__((always_inline)) void invalidate_l1_cache()
 #error "LLK_DEVICE_PRINT_BUFFER_BASE and LLK_RUNTIME_ARGS_START must be defined by the build"
 #endif
 
-// On Quasar the buffer base is the uncached alias (since atomics on uncached L1 hang).
-// We strip the alias to compare the physical L1 address against RUNTIME_ARGS.
+// On Quasar the LLK buffer base is handed to the build in the uncached L1 alias window
+// (the upper 4 MB at MEM_L1_UNCACHED_BASE; see kernel_buffer_base in test_config.py),
+// so its numeric value carries that offset. Strip it to recover the physical L1 address
+// for the RUNTIME_ARGS overlap check below.
 #if defined(ARCH_QUASAR)
 constexpr uintptr_t llk_device_print_buffer_l1_base = LLK_DEVICE_PRINT_BUFFER_BASE - MEM_L1_UNCACHED_BASE;
 #else
@@ -55,7 +57,7 @@ constexpr uintptr_t llk_device_print_buffer_l1_base = LLK_DEVICE_PRINT_BUFFER_BA
 static_assert(
     llk_device_print_buffer_l1_base + sizeof(DevicePrintBufferType) <= LLK_RUNTIME_ARGS_START,
     "LLK device print buffer overlaps RUNTIME_ARGS; "
-    "adjust TestConfig.DEVICE_PRINT_BUFFER_BASE / DEVICE_PRINT_PER_THREAD_SIZE "
+    "adjust TestConfig.DEVICE_PRINT_BUFFER_BASE / DEVICE_PRINT_BUFFER_SIZE "
     "in tests/python_tests/helpers/test_config.py.");
 
 // A single #include "dprint.h" exposes every device print facility.

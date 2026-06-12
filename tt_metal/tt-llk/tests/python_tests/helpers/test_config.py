@@ -228,14 +228,7 @@ class TestConfig:
         _PERF_COUNTERS_BUFFER_SIZE + 4
     )  # +4 for sync control word
 
-    # Device print buffer; must match dprint.h. Sits above loaders, under RUNTIME_ARGS_START.
-    # PROCESSOR_COUNT and DEVICE_PRINT_BUFFER_SIZE are set per-arch in setup_arch():
-    # device-side DevicePrintMemoryLayout (hostdev/device_print_common.h) sizes itself from
-    # TensixProcessorTypes::COUNT (5 on WH/BH, 24 on Quasar).
-    # Subject to change once debug print is removed; it can be turned into a flat buffer
-    # sized independently of thread count.
-    # 0x15000 fits the L1 gap between TRISC2_LOADER_INIT_MEM end and
-    # RUNTIME_ARGS_START (0x20000) on BH/WH/Quasar non-coverage layouts.
+    # Device print buffer. It sits above loaders, and under RUNTIME_ARGS_START.
     # Coverage builds extend TRISC sections past this address; device print
     # is disabled under coverage so the conflict doesn't matter.
     DEVICE_PRINT_BUFFER_BASE: ClassVar[int] = 0x15000
@@ -244,11 +237,8 @@ class TestConfig:
     # -DLLK_RUNTIME_ARGS_START so dprint.h can static_assert that the
     # device print buffer doesn't overlap RUNTIME_ARGS.
     DEVICE_PRINT_RUNTIME_ARGS_START: ClassVar[int] = 0x20000
-    DEVICE_PRINT_PER_THREAD_SIZE: ClassVar[int] = (
-        1024  # passed to the build as -DDPRINT_BUFFER_SIZE
-    )
     PROCESSOR_COUNT: ClassVar[int] = 0
-    DEVICE_PRINT_BUFFER_SIZE: ClassVar[int] = 0
+    DEVICE_PRINT_BUFFER_SIZE: ClassVar[int] = 0x4000
     DEVICE_PRINT_ENABLED: ClassVar[bool] = False
 
     # Single source of truth that maps component, risc_id and display name.
@@ -311,12 +301,6 @@ class TestConfig:
                 raise ValueError(
                     "Must provide CHIP_ARCH environment variable (wormhole / blackhole / quasar)"
                 )
-
-        TestConfig.DEVICE_PRINT_BUFFER_SIZE = (
-            # Change after debug print is removed.
-            TestConfig.DEVICE_PRINT_PER_THREAD_SIZE
-            * TestConfig.PROCESSOR_COUNT
-        )
 
     @staticmethod
     def setup_paths(sources_path: Path):
