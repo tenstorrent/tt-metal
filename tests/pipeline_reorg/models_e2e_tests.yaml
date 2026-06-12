@@ -622,3 +622,15 @@
       tier: 2
   owner_id: U06ECNVR0EN # Evan Smal
   team: models
+
+
+- name: TT-DiT Flux.1 e2e tests
+  cmd: |
+    pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_performance_flux1.py
+  model: flux.1-schnell
+  skus:
+    bh_quietbox_2:
+      timeout: 45
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models

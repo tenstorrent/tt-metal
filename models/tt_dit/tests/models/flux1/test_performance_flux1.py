@@ -14,6 +14,16 @@ from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from ....parallel.config import DiTParallelConfig, EncoderParallelConfig, VAEParallelConfig
 from ....pipelines.events import profiler_event_callback
 from ....pipelines.flux1.pipeline_flux1 import Flux1Pipeline, Flux1PipelineConfig
+from ...dataset_eval.clip_encoder import CLIPEncoder
+
+# Test prompts - diverse set for comprehensive performance testing
+TEST_PROMPTS = [
+    """A neon-lit alley in a sprawling cyberpunk metropolis at night, rain-slick streets reflecting glowing holograms, dense atmosphere, flying cars in the sky, people in high-tech streetwear — ultra-detailed, cinematic lighting, 4K""",
+    """A colossal whale floating through a desert sky like a blimp, casting a long shadow over sand dunes, people in ancient robes watching in awe, golden hour lighting, dreamlike color palette — surrealism, concept art, Greg Rutkowski style""",
+    """A Roman general standing on a battlefield at dawn, torn red cape blowing in the wind, distant soldiers forming ranks, painterly brushwork in the style of Caravaggio, chiaroscuro lighting, epic composition""",
+    """A tiny, fluffy dragon curled up in a teacup, warm cozy lighting, big expressive eyes, intricate scale patterns, surrounded by books and potions — high detail, Studio Ghibli meets Pixar""",
+    """An epic, high-definition cinematic shot of a rustic snowy cabin glowing warmly at dusk, nestled in a serene winter landscape. Surrounded by gentle snow-covered pines and delicate falling snowflakes — captured in a rich, atmospheric, wide-angle scene with deep cinematic depth and warmth.""",
+]
 
 
 # TODO: Factor out commonalities with sd35
@@ -48,7 +58,7 @@ from ....pipelines.flux1.pipeline_flux1 import Flux1Pipeline, Flux1PipelineConfi
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 50000000}],
     indirect=True,
 )
-def test_flux1_pipeline_performance(
+def test_flux1_pipeline_performance_speed(
     *,
     mesh_device: ttnn.MeshDevice,
     image_w,
@@ -103,21 +113,12 @@ def test_flux1_pipeline_performance(
         ),
     )
 
-    # Test prompts - diverse set for comprehensive performance testing
-    prompts = [
-        """A neon-lit alley in a sprawling cyberpunk metropolis at night, rain-slick streets reflecting glowing holograms, dense atmosphere, flying cars in the sky, people in high-tech streetwear — ultra-detailed, cinematic lighting, 4K""",
-        """A colossal whale floating through a desert sky like a blimp, casting a long shadow over sand dunes, people in ancient robes watching in awe, golden hour lighting, dreamlike color palette — surrealism, concept art, Greg Rutkowski style""",
-        """A Roman general standing on a battlefield at dawn, torn red cape blowing in the wind, distant soldiers forming ranks, painterly brushwork in the style of Caravaggio, chiaroscuro lighting, epic composition""",
-        """A tiny, fluffy dragon curled up in a teacup, warm cozy lighting, big expressive eyes, intricate scale patterns, surrounded by books and potions — high detail, Studio Ghibli meets Pixar""",
-        """An epic, high-definition cinematic shot of a rustic snowy cabin glowing warmly at dusk, nestled in a serene winter landscape. Surrounded by gentle snow-covered pines and delicate falling snowflakes — captured in a rich, atmospheric, wide-angle scene with deep cinematic depth and warmth.""",
-    ]
-
     # Warmup runs
     for i in range(2):
         logger.info("Running warmup iteration...")
         with benchmark_profiler("run", iteration=0):
             images = pipeline.run_single_prompt(
-                prompt=prompts[0],
+                prompt=TEST_PROMPTS[0],
                 num_inference_steps=num_inference_steps,
             )
         images[0].save(f"flux1_dev_{image_w}_{image_h}_warmup_{i}.png")
@@ -129,11 +130,13 @@ def test_flux1_pipeline_performance(
 
     # Optional Tracy profiling (if available)
     profiler = None
+    traced = False
     try:
         from tracy import Profiler
 
         profiler = Profiler()
         profiler.enable()
+        traced = True
         logger.info("Tracy profiling enabled")
     except ImportError:
         logger.info("Tracy profiler not available, continuing without profiling")
@@ -143,11 +146,12 @@ def test_flux1_pipeline_performance(
             logger.info(f"Performance run {i+1}/{num_perf_runs}...")
 
             # Run pipeline with different prompt
-            prompt_idx = (i + 1) % len(prompts)
+            prompt_idx = (i + 1) % len(TEST_PROMPTS)
             with benchmark_profiler("run", iteration=i):
                 images = pipeline.run_single_prompt(
-                    prompt=prompts[prompt_idx],
+                    prompt=TEST_PROMPTS[prompt_idx],
                     num_inference_steps=num_inference_steps,
+                    traced=traced,
                     on_event=profiler_event_callback(benchmark_profiler, i),
                 )
             images[0].save(f"flux1_dev_{image_w}_{image_h}_perf_run{i}.png")
@@ -355,3 +359,151 @@ def test_flux1_pipeline_performance(
     pipeline.synchronize_devices()
 
     logger.info("Performance test completed successfully!")
+
+
+@pytest.mark.parametrize(
+    "image_w, image_h, guidance_scale, num_inference_steps",
+    [
+        (1024, 1024, 3.5, 28),
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device, sp, tp, encoder_tp, vae_tp, topology, num_links",
+    [
+        [(1, 2), (1, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 2],
+    ],
+    ids=[
+        "2x2sp0tp1",
+    ],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 50000000}],
+    indirect=True,
+)
+def test_flux1_pipeline_performance_accuracy(
+    *,
+    mesh_device: ttnn.MeshDevice,
+    image_w,
+    image_h,
+    guidance_scale,
+    num_inference_steps,
+    sp,
+    tp,
+    encoder_tp,
+    vae_tp,
+    topology,
+    num_links,
+    model_location_generator,
+    is_ci_env,
+    galaxy_type,
+) -> None:
+    pipeline = Flux1Pipeline(
+        device=mesh_device,
+        config=Flux1PipelineConfig.default(
+            mesh_shape=mesh_device.shape,
+            dit_parallel_config=DiTParallelConfig.from_tuples(cfg=(1, 0), sp=sp, tp=tp),
+            encoder_parallel_config=EncoderParallelConfig.from_tuple(encoder_tp),
+            vae_parallel_config=VAEParallelConfig.from_tuple(vae_tp),
+            topology=topology,
+            num_links=num_links,
+            width=image_w,
+            height=image_h,
+            checkpoint_name=model_location_generator(f"black-forest-labs/FLUX.1-dev"),
+        ),
+    )
+
+    # Warmup runs
+    for i in range(2):
+        logger.info("Running warmup iteration...")
+        images = pipeline.run_single_prompt(
+            prompt=TEST_PROMPTS[0],
+            num_inference_steps=num_inference_steps,
+        )
+
+    output_images = []
+    for i in range(len(TEST_PROMPTS)):
+        images = pipeline.run_single_prompt(
+            prompt=TEST_PROMPTS[i],
+            num_inference_steps=num_inference_steps,
+        )
+        images[0].save(f"flux1_dev_{image_w}_{image_h}_perf_run{i}.png")
+        output_images.append(images[0])
+
+    clip = CLIPEncoder()
+    clip_scores = []
+
+    for prompt, image in zip(TEST_PROMPTS, output_images):
+        clip_scores.append(100 * clip.get_clip_score(prompt, image).item())
+
+    for prompt, score in zip(TEST_PROMPTS, clip_scores):
+        logger.info(f'Propmpt "{prompt[:50]}". Score {score}')
+        assert score > 30.0
+
+
+@pytest.mark.parametrize(
+    "image_w, image_h, guidance_scale, num_inference_steps",
+    [
+        (1024, 1024, 3.5, 28),
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device, sp, tp, encoder_tp, vae_tp, topology, num_links",
+    [
+        [(1, 2), (1, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 2],
+    ],
+    ids=[
+        "2x2sp0tp1",
+    ],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 50000000}],
+    indirect=True,
+)
+def test_flux1_pipeline_performance_determinism(
+    *,
+    mesh_device: ttnn.MeshDevice,
+    image_w,
+    image_h,
+    guidance_scale,
+    num_inference_steps,
+    sp,
+    tp,
+    encoder_tp,
+    vae_tp,
+    topology,
+    num_links,
+    model_location_generator,
+    is_ci_env,
+    galaxy_type,
+) -> None:
+    pipeline = Flux1Pipeline(
+        device=mesh_device,
+        config=Flux1PipelineConfig.default(
+            mesh_shape=mesh_device.shape,
+            dit_parallel_config=DiTParallelConfig.from_tuples(cfg=(1, 0), sp=sp, tp=tp),
+            encoder_parallel_config=EncoderParallelConfig.from_tuple(encoder_tp),
+            vae_parallel_config=VAEParallelConfig.from_tuple(vae_tp),
+            topology=topology,
+            num_links=num_links,
+            width=image_w,
+            height=image_h,
+            checkpoint_name=model_location_generator(f"black-forest-labs/FLUX.1-dev"),
+        ),
+    )
+
+    clip = CLIPEncoder()
+    clip_scores = []
+    num_iters = 3
+    for i in range(num_iters):
+        images = pipeline.run_single_prompt(
+            prompt=TEST_PROMPTS[0],
+            num_inference_steps=num_inference_steps,
+        )
+        images[0].save(f"flux1_dev_{image_w}_{image_h}_perf_run{i}.png")
+        clip_scores.append(100 * clip.get_clip_score(TEST_PROMPTS[0], images[0]).item())
+
+    assert all(score == clip_scores[0] for score in clip_scores)
