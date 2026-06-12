@@ -157,7 +157,6 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
     uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
     uint32_t out_num_subblocks_h = per_core_M_per_batch / out_subblock_h;
     uint32_t out_num_subblocks_w = in1_num_subblocks;
-    uint32_t num_tiles_per_block_out = per_core_M_per_batch * per_core_N;
     uint32_t num_output_blocks_total = (B * M / per_core_M) * (N / per_core_N);
 
     std::optional<tt::tt_metal::ShardSpec> shard_spec = std::nullopt;
@@ -198,16 +197,27 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
                 "invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This "
                 "will become a hard error in a future release.");
         }
-        CoreCoord grid = program_config.allowed_worker_cores.has_value()
-                             ? program_config.allowed_worker_cores.value().bounding_box().grid_size()
-                             : program_config.compute_with_storage_grid_size;
-        std::tie(
-            num_cores,
-            all_cores,
-            core_group_1,
-            core_group_2,
-            num_blocks_per_core_group_1,
-            num_blocks_per_core_group_2) = tt::tt_metal::split_work_to_cores(grid, num_output_blocks_total);
+        // Use the CoreRangeSet overload so the output core ranges carry the actual
+        // absolute coordinates (e.g. (4,0)-(7,0)) rather than always starting at (0,0).
+        if (program_config.allowed_worker_cores.has_value()) {
+            std::tie(
+                num_cores,
+                all_cores,
+                core_group_1,
+                core_group_2,
+                num_blocks_per_core_group_1,
+                num_blocks_per_core_group_2) =
+                tt::tt_metal::split_work_to_cores(program_config.allowed_worker_cores.value(), num_output_blocks_total);
+        } else {
+            CoreCoord grid = program_config.compute_with_storage_grid_size;
+            std::tie(
+                num_cores,
+                all_cores,
+                core_group_1,
+                core_group_2,
+                num_blocks_per_core_group_1,
+                num_blocks_per_core_group_2) = tt::tt_metal::split_work_to_cores(grid, num_output_blocks_total);
+        }
         num_blocks_per_core_group_1 *= batch_scale_factor;
         num_blocks_per_core_group_2 *= batch_scale_factor;
     }
@@ -404,13 +414,10 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
 
         reader_kernel_desc.emplace_runtime_args(core, {in0_buffer, in0_start_tile_id, num_output_blocks_per_core});
 
+        uint32_t out_start_tile_id =
+            (start_batch * M * N) + (start_m_block * per_core_M_per_batch * N) + (start_n_block * per_core_N);
         reader_writer_kernel_desc.emplace_runtime_args(
-            core,
-            {in1_buffer,
-             in1_start_tile_id,
-             num_output_blocks_per_core,
-             output,
-             num_blocks_written * num_tiles_per_block_out});
+            core, {in1_buffer, in1_start_tile_id, num_output_blocks_per_core, output, out_start_tile_id});
 
         // Compute kernels have no per-core runtime args
         if (i < g1_numcores) {

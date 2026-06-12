@@ -25,7 +25,6 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/dataflow/circular_buffer.h"
-
 #include "layernorm_compute_utils.h"
 
 namespace generic = norm::kernel_util::generic;
