@@ -619,6 +619,7 @@ def main() -> None:
         # so only it knows the KV cache NoC addresses; it has no IPC with the worker.
         from models.demos.deepseek_v3_d_p.tt.runners.integration_setup import (
             build_and_serialize_kv_chunk_table,
+            build_device_map,
             send_kv_chunk_table,
         )
 
@@ -631,9 +632,14 @@ def main() -> None:
             mesh_shape=GLOBAL_MESH_SHAPE,
             sp_axis=0,  # GLOBAL_MESH_SHAPE = (sp, tp) — SP is axis 0
             num_users=NUM_USERS,
+            chunk_size_global=CHUNK_SIZE,  # block-cyclic period (prefill chunk size)
             path=table_path,
         )
-        send_kv_chunk_table(table_path)
+        # Send SET_TABLE + the real device map so a DEVICE-mode migration_endpoint
+        # opens the model's chips via UMD and reaches WORKER_READY (the runner is the
+        # only CreateDevice-capable process that knows the fnid<->umd mapping).
+        device_map = build_device_map(mesh_device, GLOBAL_MESH_SHAPE)
+        send_kv_chunk_table(table_path, device_map=device_map)
 
     if os.environ.get("PREFILL_STANDALONE_CHUNKED", "0") == "1":
         # Standalone validation: golden longbook_qa input, chunked prefill, KV-cache PCC vs trace.
