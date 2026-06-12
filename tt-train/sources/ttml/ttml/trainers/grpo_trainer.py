@@ -88,10 +88,15 @@ class GRPOConfig:
     epsilon: float
     # Number of completions resident on a single device within one micro-batch.
     # The across-mesh micro-batch size is per_device_train_batch_size *
-    # num_devices, and the per-batch prompt count is derived from it (see
+    # num_devices, and the per micro-batch prompt count is derived from it (see
     # GRPOTrainer.train).
     per_device_train_batch_size: int
     num_iterations: int
+    # Number of micro-batches per generation (effective) batch and per optimizer
+    # step. The generation batch generates gradient_accumulation_steps *
+    # per_device_train_batch_size * num_devices completions, then the trainer
+    # accumulates gradients over micro-batche of size per_device_train_batch_size * num_devices
+    # before each optimizer step. Larger values mean a larger effective batch per step.
     gradient_accumulation_steps: int
     logging_steps: int
     output_dir: str
@@ -394,37 +399,51 @@ class GRPOTrainer:
         dp_mapper: Any = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0) if ddp_enabled else None
         dp_composer: Any = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0) if ddp_enabled else None
 
-        # Derive the across-mesh micro-batch size (in completions) and the
-        # per-batch prompt count from ``per_device_train_batch_size`` up front,
-        # and validate the divisibility relationships so misconfigurations fail
-        # with a clear message instead of a cryptic shard assert deep in
+        # Derive the across-mesh micro-batch size (in completions), the per
+        # micro-batch prompt count, and the generation (effective) batch size up
+        # front, and validate the divisibility relationships so misconfigurations
+        # fail with a clear message instead of a cryptic shard assert deep in
         # ``compute_nlog_probs`` (or a silently ragged final micro-batch).
         #
         # ``per_device_train_batch_size`` is the number of completions resident
         # on a single device within one micro-batch, so the whole mesh handles
         # ``completions_per_microbatch = per_device_train_batch_size *
-        # num_devices`` completions per micro-batch. The per-batch prompt count
-        # is then derived as ``completions_per_microbatch // num_generations``.
-        # By construction ``completions_per_microbatch`` is divisible by
+        # num_devices`` completions per micro-batch. The per micro-batch prompt
+        # count is ``completions_per_microbatch // num_generations``. By
+        # construction ``completions_per_microbatch`` is divisible by
         # ``num_devices``, so each micro-batch always shards evenly along axis 0.
+        #
+        # The generation (effective) batch spans ``gradient_accumulation_steps``
+        # micro-batches: each batch generates ``grad_accum`` times the per
+        # micro-batch prompt count, then the trainer runs one forward/backward
+        # pass per micro-batch accumulating gradients before a single optimizer
+        # step. Increasing ``gradient_accumulation_steps`` therefore generates
+        # proportionally more completions per batch and trains over that many
+        # micro-batches between optimizer steps.
         if grpo_cfg.per_device_train_batch_size <= 0:
             raise ValueError(
                 f"per_device_train_batch_size must be positive, got {grpo_cfg.per_device_train_batch_size}"
             )
+        grad_accum = grpo_cfg.gradient_accumulation_steps
+        if grad_accum <= 0:
+            raise ValueError(f"gradient_accumulation_steps must be positive, got {grad_accum}")
         completions_per_microbatch = grpo_cfg.per_device_train_batch_size * num_devices
         if completions_per_microbatch % grpo_cfg.num_generations != 0:
             raise ValueError(
                 f"per_device_train_batch_size * num_devices ({grpo_cfg.per_device_train_batch_size} * "
                 f"{num_devices} = {completions_per_microbatch}) must be divisible by "
-                f"num_generations ({grpo_cfg.num_generations}) so the per-batch prompt count is an integer"
+                f"num_generations ({grpo_cfg.num_generations}) so the per micro-batch prompt count is an integer"
             )
-        batch_size = completions_per_microbatch // grpo_cfg.num_generations
+        prompts_per_microbatch = completions_per_microbatch // grpo_cfg.num_generations
+        generation_batch_prompts = prompts_per_microbatch * grad_accum
 
         total_prompts = min(grpo_cfg.prompts_to_train, len(self.dataset))
-        if total_prompts % batch_size != 0:
+        if total_prompts % generation_batch_prompts != 0:
             raise ValueError(
-                f"prompts_to_train ({total_prompts}) must be divisible by the derived batch_size ({batch_size}) "
-                "to avoid a ragged final batch that can break micro-batch sharding"
+                f"prompts_to_train ({total_prompts}) must be divisible by the generation batch size "
+                f"(prompts_per_microbatch * gradient_accumulation_steps = {prompts_per_microbatch} * "
+                f"{grad_accum} = {generation_batch_prompts}) to avoid a ragged final batch that can break "
+                "micro-batch sharding"
             )
         dataset = self.dataset.select(range(total_prompts))
         prompts = [tokenizer.encode(row["prompt"]) for row in dataset]
@@ -432,23 +451,17 @@ class GRPOTrainer:
 
         num_batches = 0
         num_steps = 0
-        accum_count = 0
-        grad_accum = grpo_cfg.gradient_accumulation_steps
-        accum_rewards: List[np.ndarray] = []
-        accum_completion_lens: List[int] = []
-        accum_generation_time_s = 0.0
         step_t0 = time.perf_counter()
-
-        optimizer.zero_grad()
 
         for cb in self.callbacks:
             cb.on_train_begin(self)
 
+        # Each iteration yields one generation (effective) batch worth of
+        # completions, i.e. ``grad_accum`` micro-batches.
         for prompts_batch, completions_batch, dataset_columns_dict, generation_time_s in iter_batched_completions(
-            completer, prompts, extra_columns, batch_size, grpo_cfg.num_generations
+            completer, prompts, extra_columns, generation_batch_prompts, grpo_cfg.num_generations
         ):
             num_batches += 1
-            accum_generation_time_s += generation_time_s
 
             completions_strs = [tokenizer.decode(c, skip_special_tokens=True) for c in completions_batch]
             prompts_strs = [tokenizer.decode(p) for p in prompts_batch]
@@ -456,9 +469,10 @@ class GRPOTrainer:
             rewards_np = np.array(rewards, dtype=np.float32)
 
             advantages_np = compute_advantages_host(rewards_np, grpo_cfg.num_generations)
-            accum_rewards.append(rewards_np)
-            accum_completion_lens.extend(len(c) for c in completions_batch)
+            completion_lens = [len(c) for c in completions_batch]
 
+            # Reference (old) log-probs for every micro-batch in the generation
+            # batch, computed once and reused across mini-epochs.
             probs_old_list = []
             tt_model.eval()
             with no_grad():
@@ -470,7 +484,10 @@ class GRPOTrainer:
 
             for mini_epoch in range(grpo_cfg.num_iterations):
                 tt_model.train()
+                optimizer.zero_grad()
 
+                # Accumulate gradients over all ``grad_accum`` micro-batches of
+                # the generation batch before taking a single optimizer step.
                 for i, (p, c) in enumerate(
                     iter_micro_batch(prompts_batch, completions_batch, completions_per_microbatch),
                 ):
@@ -487,12 +504,16 @@ class GRPOTrainer:
                     nlog_old, mask_old = probs_old_list[i]
                     nlog_probs_new, mask_new = completer.compute_nlog_probs(p, c)
 
+                    # ``len(prompts_batch)`` is the global completion count of the
+                    # whole generation batch (all ``grad_accum`` micro-batches), so
+                    # accumulating the per-micro-batch losses yields the mean over
+                    # the full effective batch.
                     loss = self._compute_grpo_loss(
                         nlog_old,
                         nlog_probs_new,
                         mask_old,
                         adv_ttml,
-                        len(prompts_batch) * grad_accum,
+                        len(prompts_batch),
                         grpo_cfg.epsilon,
                         ddp_world_size=num_devices if ddp_enabled else 1,
                     )
@@ -502,71 +523,63 @@ class GRPOTrainer:
 
                     _deallocate_tensors([nlog_probs_new, mask_new, adv_ttml, loss])
 
-                accum_count += 1
+                warmup_factor = 1.0 if grpo_cfg.warmup_steps == 0 else min(1.0, (num_steps + 1) / grpo_cfg.warmup_steps)
+                optimizer.set_lr(base_lr * warmup_factor)
 
-                if accum_count == grad_accum:
-                    warmup_factor = (
-                        1.0 if grpo_cfg.warmup_steps == 0 else min(1.0, (num_steps + 1) / grpo_cfg.warmup_steps)
-                    )
-                    optimizer.set_lr(base_lr * warmup_factor)
+                if ddp_enabled:
+                    ttml.core.distributed.synchronize_gradients(tt_model.parameters())
 
-                    if ddp_enabled:
-                        ttml.core.distributed.synchronize_gradients(tt_model.parameters())
+                for cb in self.callbacks:
+                    cb.on_before_optimizer_step(self)
+                optimizer.step()
+                optimizer.zero_grad()
 
+                step_time_s = time.perf_counter() - step_t0
+                # Generation runs once per effective batch; attribute its cost to
+                # the first mini-epoch's step only.
+                generation_time_s_for_step = generation_time_s if mini_epoch == 0 else 0.0
+
+                num_steps += 1
+                mean_reward = float(rewards_np.mean())
+                if completion_lens:
+                    mean_completion_len = sum(completion_lens) / len(completion_lens)
+                    min_completion_len = min(completion_lens)
+                    max_completion_len = max(completion_lens)
+                else:
+                    mean_completion_len = 0.0
+                    min_completion_len = 0
+                    max_completion_len = 0
+
+                if grpo_cfg.logging_steps > 0 and num_steps % grpo_cfg.logging_steps == 0:
+                    step_metrics = {
+                        "reward_mean": mean_reward,
+                        "reward_std": float(rewards_np.std()),
+                        "mean_completion_len": mean_completion_len,
+                        "min_completion_len": min_completion_len,
+                        "max_completion_len": max_completion_len,
+                        "lr": base_lr * warmup_factor,
+                        "step_time_s": step_time_s,
+                        "generation_time_s": generation_time_s_for_step,
+                    }
                     for cb in self.callbacks:
-                        cb.on_before_optimizer_step(self)
-                    optimizer.step()
-                    optimizer.zero_grad()
-                    accum_count = 0
+                        cb.on_step_end(self, num_steps, **step_metrics)
 
-                    step_time_s = time.perf_counter() - step_t0
-                    generation_time_s_for_step = accum_generation_time_s
+                step_t0 = time.perf_counter()
 
-                    num_steps += 1
-                    all_rewards = np.concatenate(accum_rewards)
-                    mean_reward = float(all_rewards.mean())
-                    if accum_completion_lens:
-                        mean_completion_len = sum(accum_completion_lens) / len(accum_completion_lens)
-                        min_completion_len = min(accum_completion_lens)
-                        max_completion_len = max(accum_completion_lens)
-                    else:
-                        mean_completion_len = 0.0
-                        min_completion_len = 0
-                        max_completion_len = 0
-
-                    if grpo_cfg.logging_steps > 0 and num_steps % grpo_cfg.logging_steps == 0:
-                        step_metrics = {
-                            "reward_mean": mean_reward,
-                            "reward_std": float(all_rewards.std()),
-                            "mean_completion_len": mean_completion_len,
-                            "min_completion_len": min_completion_len,
-                            "max_completion_len": max_completion_len,
-                            "lr": base_lr * warmup_factor,
-                            "step_time_s": step_time_s,
-                            "generation_time_s": generation_time_s_for_step,
-                        }
-                        for cb in self.callbacks:
-                            cb.on_step_end(self, num_steps, **step_metrics)
-
-                    accum_rewards.clear()
-                    accum_completion_lens.clear()
-                    accum_generation_time_s = 0.0
-                    step_t0 = time.perf_counter()
-
-                    if grpo_cfg.checkpointing and num_steps % grpo_cfg.checkpoint_interval == 0:
-                        ckpt_dir = os.path.join(grpo_cfg.output_dir, "checkpoints", f"grpo_step_{num_steps}")
-                        save_checkpoint(
-                            tt_model,
-                            num_steps,
-                            grpo_cfg.output_dir,
-                            dp_composer=dp_composer,
-                            tokenizer=tokenizer,
-                            grpo_config=grpo_cfg,
-                            optimizer=optimizer,
-                            model_source=self.model_source,
-                        )
-                        for cb in self.callbacks:
-                            cb.on_save(self, num_steps, ckpt_dir)
+                if grpo_cfg.checkpointing and num_steps % grpo_cfg.checkpoint_interval == 0:
+                    ckpt_dir = os.path.join(grpo_cfg.output_dir, "checkpoints", f"grpo_step_{num_steps}")
+                    save_checkpoint(
+                        tt_model,
+                        num_steps,
+                        grpo_cfg.output_dir,
+                        dp_composer=dp_composer,
+                        tokenizer=tokenizer,
+                        grpo_config=grpo_cfg,
+                        optimizer=optimizer,
+                        model_source=self.model_source,
+                    )
+                    for cb in self.callbacks:
+                        cb.on_save(self, num_steps, ckpt_dir)
 
             for nlog_old, mask_old in probs_old_list:
                 _deallocate_tensors([nlog_old, mask_old])

@@ -17,8 +17,10 @@ Speed strategy:
   * ``max_completion_length=4`` so autoregressive generation is cheap.
   * Exactly one optimizer step (``gradient_accumulation_steps=1``,
     ``num_iterations=1``, ``prompts_to_train=2``). On this single device
-    ``per_device_train_batch_size=4`` and ``num_generations=2`` derive a
-    per-batch prompt count of ``4 * 1 / 2 = 2``.
+    ``per_device_train_batch_size=4`` and ``num_generations=2`` give a
+    per-micro-batch prompt count of ``4 * 1 / 2 = 2``, and with
+    ``gradient_accumulation_steps=1`` the generation batch is also 2 prompts
+    (one micro-batch per optimizer step).
   * ``num_generations=2`` is the minimum that yields a non-zero advantage
     (group of 1 -> mean == reward -> advantage == 0 -> loss == 0).
 
@@ -276,12 +278,12 @@ def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path):
     assert recorder.train_end == 1, "on_train_end should fire exactly once"
 
     assert reward_calls, "reward_func was never invoked"
-    # The across-mesh micro-batch (= completions per generation batch) is
-    # per_device_train_batch_size * num_devices, matching how the trainer
-    # derives it. Query num_devices the same way GRPOTrainer.train does so this
-    # holds for single- and multi-device meshes alike.
+    # reward_func runs once per generation (effective) batch, which spans
+    # gradient_accumulation_steps micro-batches of per_device_train_batch_size *
+    # num_devices completions each. Query num_devices the same way
+    # GRPOTrainer.train does so this holds for single- and multi-device meshes.
     num_devices = ttml.autograd.AutoContext.get_instance().get_device().get_num_devices()
-    expected_completions = grpo_cfg.per_device_train_batch_size * num_devices
+    expected_completions = grpo_cfg.per_device_train_batch_size * num_devices * grpo_cfg.gradient_accumulation_steps
     assert (
         len(reward_calls[0]) == expected_completions
     ), f"expected {expected_completions} completions per batch, got {len(reward_calls[0])}"
