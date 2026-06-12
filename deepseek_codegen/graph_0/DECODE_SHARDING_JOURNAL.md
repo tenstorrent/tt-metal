@@ -54,6 +54,37 @@ ENV NOTE (2026-06-12): runs must execute INSIDE the container `tt-xla-ird-mvasil
 /home/ubuntu/mvasiljevic bind-mounts to container /home/mvasiljevic; the venv's uv-python lives at
 /home/mvasiljevic/.local and only resolves in-container). Drive via `docker exec tt-xla-ird-mvasiljevic`.
 
+## TILE-ALIGNMENT AUDIT + CONVERGENCE (2026-06-12) — safe positive-EV levers exhausted
+Audited the rfuse perf report (perf_reports/rfuse_2026_06_12_05_45_41) for tile (32x32) misalignment.
+
+MATMULS: all tile-aligned. Every contraction/output dim is a multiple of 32 (32,128,512,896,2048,2304,
+3072,4608,7168,129280). They show "SLOW" purely because decode M=32 (1 tile-row -> low arithmetic
+intensity, DRAM-bound) — INHERENT to decode, not an alignment defect. Math fidelity already tuned
+(HiFi2 BF16xBFP8 bulk; HiFi4 FP32 only on router gate + lm_head where top-k / final logits need it).
+
+REAL ALIGNMENT WASTE = heads-per-device = 16 (128 heads / 8-way TP). 16 lands in a TILED dim in a few
+attention tensors (reshape_42 [32,1,16,192], slice_86 [32,1,16,128], _sdpa_q [1,32,16,576]) -> padded
+16->32 (2x tiles, half padding) + the head-split reshape forces a physical retile (the 52us 2-core
+ReshapeView + a 32us one per attn layer). BUT this is STRUCTURAL, not cheaply removable: the per-head
+absorbed matmul (matmul_6, b={16}) REQUIRES heads as the batch dim, reached via permute_29 [2,0,1,3];
+after that permute the data is [16,32,128] (16=batch, last-2 aligned, NO pad). Any alternative access
+(e.g. reshape to aligned [512,192] then back to [32,16,128]) just RE-PADS at a different step — the
+padded intermediate is intrinsic to going from token-major [32,3072] to head-batch [16,32,128].
+And permute_29/38 is the exact op whose L1-layout shift DETERMINISTICALLY trips the #46208 combine hang
+(the a7 revert). So the head relayout is zero/negative-EV AND high-risk. NOT pursued.
+
+OTHER LEVERS RULED OUT: (a) dense-MLP all-reduce fusion (reduce_scatter_3/4 + all_gather_10/11) — same
+pattern as the router but on [128,4608] (18x wider): the fused all_gather(dim0) would move ~(N-1)=7x the
+data vs the decomposed ~1.75x -> bandwidth-bound NET LOSS (router won only because [32,256] is tiny /
+latency-bound), and dense is only x3 layers (~0.4ms ceiling). (b) MoE expert/combine collectives (59%
+bulk) — blocked by combine L1 fragility. (c) lm_head ArgMax/matmul (445us+1291us) — runs x1, <1% e2e.
+(d) RoPE cos/sin repeats (42us/layer) — per-batch broadcast is required (correct as-is).
+
+CONVERGED: every clean collective fusion is landed (qkv x2 attn, router); remaining attention TMs are
+structurally necessary MLA format conversions (head split, RoPE interleave, SDPA concat) — prior round
+already eliminated the foldable ones. STOP per skill criterion (no patch moves the number w/o breaking
+PCC or hitting the blocked combine).
+
 ## BRANCH RESULT: attention + router collective fusion = 177.8 -> 166.4 ms (6.36x), PCC bit-identical
 Net deliverable: (1) fuse the qkv-down 3-way reduction into 1 all_gather+sum (both attn layers),
 attn/layer 1.107 -> 0.976 (-131us); (2) fuse the MoE router all-reduce into 1 all_gather+sum (-40us/MoE
