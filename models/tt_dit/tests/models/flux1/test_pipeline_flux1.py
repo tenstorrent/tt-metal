@@ -22,7 +22,14 @@ from ....pipelines.flux1.pipeline_flux1 import Flux1Pipeline, Flux1PipelineConfi
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 50000000}],
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "l1_small_size": 32768,
+            "trace_region_size": 50000000,
+            "require_exact_physical_num_devices": True,
+        }
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize(
