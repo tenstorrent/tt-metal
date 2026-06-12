@@ -36,10 +36,10 @@ std::atomic<bool> g_watchdog_requested{false};
 static std::atomic<bool> g_stop_message_printed{false};
 
 static std::string test_dram_trim_copy(std::string s) {
-    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) {
+    while (!s.empty() && std::isspace(s.front())) {
         s.erase(s.begin());
     }
-    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) {
+    while (!s.empty() && std::isspace(s.back())) {
         s.pop_back();
     }
     return s;
@@ -56,7 +56,7 @@ static std::vector<std::string> get_tenstorrent_pci_bdf_lines() {
     std::vector<std::string> lines;
 
     DIR* dir = opendir("/sys/bus/pci/devices");
-    if (dir == nullptr) {
+    if (!dir) {
         return lines;
     }
 
@@ -68,7 +68,7 @@ static std::vector<std::string> get_tenstorrent_pci_bdf_lines() {
 
         const std::string base = "/sys/bus/pci/devices/" + bdf;
         std::string vendor = test_dram_read_text_file_trimmed(base + "/vendor");
-        std::transform(vendor.begin(), vendor.end(), vendor.begin(), [](unsigned char c) { return std::tolower(c); });
+        std::transform(vendor.begin(), vendor.end(), vendor.begin(), [](char c) { return std::tolower(c); });
 
         // Tenstorrent PCI vendor id. This catches Blackhole/Galaxy boards exposed on PCIe.
         if (vendor != "0x1e52") {
@@ -94,7 +94,7 @@ static const std::vector<std::string>& test_dram_get_tenstorrent_pci_bdfs_cached
         std::vector<std::string> out;
 
         DIR* dir = opendir("/sys/bus/pci/devices");
-        if (dir == nullptr) {
+        if (!dir) {
             return out;
         }
 
@@ -106,8 +106,7 @@ static const std::vector<std::string>& test_dram_get_tenstorrent_pci_bdfs_cached
 
             const std::string base = "/sys/bus/pci/devices/" + bdf;
             std::string vendor = test_dram_read_text_file_trimmed(base + "/vendor");
-            std::transform(
-                vendor.begin(), vendor.end(), vendor.begin(), [](unsigned char c) { return std::tolower(c); });
+            std::transform(vendor.begin(), vendor.end(), vendor.begin(), [](char c) { return std::tolower(c); });
 
             if (vendor == "0x1e52") {
                 out.push_back(bdf);
@@ -189,7 +188,7 @@ static void accumulate_pattern_timing_summary(DramPatternTimingSummary& dst, con
 
         dst.ticks[r.pattern_id] += r.job_total_ticks;
         dst.jobs[r.pattern_id] += 1u;
-        dst.bytes[r.pattern_id] += static_cast<uint64_t>(r.words_checked) * sizeof(uint32_t);
+        dst.bytes[r.pattern_id] += (uint64_t)r.words_checked * sizeof(uint32_t);
     }
 }
 
@@ -203,7 +202,7 @@ static void merge_pattern_timing_summary(DramPatternTimingSummary& dst, const Dr
 
 static uint32_t get_dram_test_loops_from_env(uint32_t default_loops = 1u) {
     const char* env = std::getenv("DRAM_TEST_LOOPS");
-    if (env == nullptr || env[0] == '\0') {
+    if (!env || env[0] == '\0') {
         return default_loops;
     }
 
@@ -218,7 +217,7 @@ static uint32_t get_dram_test_loops_from_env(uint32_t default_loops = 1u) {
 
 static bool pattern_timing_enabled() {
     const char* env = std::getenv("DRAM_TEST_PATTERN_TIMING");
-    return (env != nullptr) && (std::atoi(env) != 0);
+    return env && std::atoi(env);
 }
 
 static void log_pattern_timing_summary(
@@ -230,7 +229,7 @@ static void log_pattern_timing_summary(
     bool any = false;
 
     for (uint32_t pattern_id = 0; pattern_id < DramPatternTimingSummary::kMaxPatternId; ++pattern_id) {
-        if (summary.jobs[pattern_id] != 0u) {
+        if (summary.jobs[pattern_id]) {
             any = true;
             break;
         }
@@ -248,10 +247,10 @@ static void log_pattern_timing_summary(
     double raw_total_ms = 0.0;
 
     for (uint32_t pattern_id = 0; pattern_id < DramPatternTimingSummary::kMaxPatternId; ++pattern_id) {
-        raw_total_ms += static_cast<double>(summary.ticks[pattern_id]) * 1000.0 / kBlackholeClockHz;
+        raw_total_ms += summary.ticks[pattern_id] * 1000.0 / kBlackholeClockHz;
     }
 
-    const double scale = (raw_total_ms > 0.0 && test_wall_ms > 0.0) ? (test_wall_ms / raw_total_ms) : 1.0;
+    const double scale = raw_total_ms > 0.0 && test_wall_ms > 0.0 ? test_wall_ms / raw_total_ms : 1.0;
 
     log_info(tt::LogTest, "=== {} BRISC job time by DRAM pattern ===", test_name);
     log_info(
@@ -269,7 +268,7 @@ static void log_pattern_timing_summary(
             continue;
         }
 
-        const double raw_pattern_ms = static_cast<double>(summary.ticks[pattern_id]) * 1000.0 / kBlackholeClockHz;
+        const double raw_pattern_ms = summary.ticks[pattern_id] * 1000.0 / kBlackholeClockHz;
         const double scaled_pattern_ms = raw_pattern_ms * scale;
 
         log_info(
@@ -340,11 +339,11 @@ static std::string format_error_pct(double pct) {
 static void accumulate_bank_summary(DramBankSummary& dst, const DramBaseResult& result) {
     dst.pass &= (result.failures == 0u);
 
-    dst.checked_bytes += static_cast<uint64_t>(result.words_checked) * sizeof(uint32_t);
+    dst.checked_bytes += (uint64_t)result.words_checked * sizeof(uint32_t);
 
-    dst.suspected_write_error_bytes += static_cast<uint64_t>(result.suspected_write_failures) * sizeof(uint32_t);
+    dst.suspected_write_error_bytes += (uint64_t)result.suspected_write_failures * sizeof(uint32_t);
 
-    dst.suspected_read_error_bytes += static_cast<uint64_t>(result.suspected_read_failures) * sizeof(uint32_t);
+    dst.suspected_read_error_bytes += (uint64_t)result.suspected_read_failures * sizeof(uint32_t);
 }
 
 static DramChipSummary make_chip_bank_summary(
@@ -379,7 +378,7 @@ static std::pair<std::string, std::string> test_dram_ubb_tray_and_location_from_
     const std::string d_text = bdf.substr(first_colon_pos + 1, second_colon_pos - first_colon_pos - 1);
 
     try {
-        const auto d = static_cast<uint32_t>(std::stoul(d_text, nullptr, 16));
+        const uint32_t d = std::stoul(d_text, nullptr, 16);
         const uint32_t upper_nibble = (d >> 4) & 0xF;
         const uint32_t lower_nibble = d & 0xF;
 
@@ -557,7 +556,7 @@ static void log_dram_pattern_mode_once() {
 
         std::string pattern_list;
         for (size_t i = 0; i < names.size(); i++) {
-            if (i != 0) {
+            if (i) {
                 pattern_list += ",";
             }
             pattern_list += names[i];
@@ -1050,7 +1049,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentOptimalWorkersAllDramBanks)
         accumulate_galaxy_summary(chip_summary, run, jobs.size());
         accumulate_pattern_timing_summary(chip_pattern_timing, run);
 
-        chip_summary.chips.push_back(make_chip_bank_summary(device, static_cast<uint32_t>(assignments.size()), run));
+        chip_summary.chips.push_back(make_chip_bank_summary(device, assignments.size(), run));
 
         const auto& s = run.summary;
 
@@ -1186,7 +1185,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentAllWorkersSingleDramSequent
 
     log_info(tt::LogTest, "Persistent all-workers single-DRAM sequential sweep running on {} chip(s)", devices_.size());
 
-    const uint32_t chips_to_test = get_dram_max_chips_from_env(static_cast<uint32_t>(devices_.size()));
+    const uint32_t chips_to_test = get_dram_max_chips_from_env(devices_.size());
 
     const bool parallel_chips = true;
 
@@ -1243,8 +1242,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentAllWorkersSingleDramSequent
             total_bytes_per_controller,
             chunk_bytes);
 
-        const uint64_t bytes_per_core_base =
-            (static_cast<uint64_t>(total_bytes_per_controller) / worker_cores.size()) & ~0xFFFULL;
+        const uint64_t bytes_per_core_base = (total_bytes_per_controller / worker_cores.size()) & ~0xFFFULL;
 
         TT_FATAL(
             bytes_per_core_base >= chunk_bytes,
@@ -1255,7 +1253,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentAllWorkersSingleDramSequent
         TT_FATAL(bytes_per_core_base <= std::numeric_limits<uint32_t>::max(), "bytes_per_core_base must fit uint32_t");
 
         const uint64_t covered_bytes = bytes_per_core_base * worker_cores.size();
-        const uint64_t remainder_bytes = static_cast<uint64_t>(total_bytes_per_controller) - covered_bytes;
+        const uint64_t remainder_bytes = total_bytes_per_controller - covered_bytes;
 
         const auto full_start = std::chrono::steady_clock::now();
 
@@ -1305,9 +1303,9 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentAllWorkersSingleDramSequent
 
                             job.job_id = job_id++;
                             job.bank_id = bank_id;
-                            job.bank_offset_lo = static_cast<uint32_t>(bank_offset & 0xFFFFFFFFull);
-                            job.bank_offset_hi = static_cast<uint32_t>((bank_offset >> 32) & 0xFFFFFFFFull);
-                            job.total_bytes = static_cast<uint32_t>(bytes_this_core);
+                            job.bank_offset_lo = bank_offset & 0xFFFFFFFFull;
+                            job.bank_offset_hi = (bank_offset >> 32) & 0xFFFFFFFFull;
+                            job.total_bytes = bytes_this_core;
                             job.chunk_bytes = chunk_bytes;
                             job.pattern_id = pattern_id;
                             job.seed = seed;
@@ -1330,7 +1328,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentAllWorkersSingleDramSequent
                 seed += advance_seed;
             }
 
-            const uint64_t bank_jobs = static_cast<uint64_t>(job_id - 1u);
+            const uint64_t bank_jobs = job_id - 1u;
 
             const auto bank_start = std::chrono::steady_clock::now();
 
@@ -1525,7 +1523,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentPartitionedWorkersAllDramBa
 
     log_info(tt::LogTest, "Persistent partitioned-workers all-DRAM test running on {} chip(s)", devices_.size());
 
-    const uint32_t chips_to_test = get_dram_max_chips_from_env(static_cast<uint32_t>(devices_.size()));
+    const uint32_t chips_to_test = get_dram_max_chips_from_env(devices_.size());
 
     const bool parallel_chips = true;
 
@@ -1586,7 +1584,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentPartitionedWorkersAllDramBa
         std::vector<std::vector<size_t>> workers_for_bank(num_dram_channels);
 
         for (size_t worker_idx = 0; worker_idx < worker_cores.size(); worker_idx++) {
-            const uint32_t bank_id = static_cast<uint32_t>(worker_idx % num_dram_channels);
+            const uint32_t bank_id = worker_idx % num_dram_channels;
             workers_for_bank[bank_id].push_back(worker_idx);
         }
 
@@ -1626,7 +1624,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentPartitionedWorkersAllDramBa
                         TT_FATAL(!bank_workers.empty(), "No workers assigned to DRAM bank {}", bank_id);
 
                         const uint64_t bytes_per_core_base =
-                            (static_cast<uint64_t>(total_bytes_per_controller) / bank_workers.size()) & ~0xFFFULL;
+                            (total_bytes_per_controller / bank_workers.size()) & ~0xFFFULL;
 
                         TT_FATAL(
                             bytes_per_core_base >= chunk_bytes,
@@ -1639,8 +1637,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentPartitionedWorkersAllDramBa
                             "bytes_per_core_base must fit uint32_t");
 
                         const uint64_t covered_bytes = bytes_per_core_base * bank_workers.size();
-                        const uint64_t remainder_bytes =
-                            static_cast<uint64_t>(total_bytes_per_controller) - covered_bytes;
+                        const uint64_t remainder_bytes = total_bytes_per_controller - covered_bytes;
 
                         for (size_t local_idx = 0; local_idx < bank_workers.size(); local_idx++) {
                             const size_t worker_idx = bank_workers[local_idx];
@@ -1667,9 +1664,9 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentPartitionedWorkersAllDramBa
 
                             job.job_id = job_id++;
                             job.bank_id = bank_id;
-                            job.bank_offset_lo = static_cast<uint32_t>(bank_offset & 0xFFFFFFFFull);
-                            job.bank_offset_hi = static_cast<uint32_t>((bank_offset >> 32) & 0xFFFFFFFFull);
-                            job.total_bytes = static_cast<uint32_t>(bytes_this_core);
+                            job.bank_offset_lo = bank_offset & 0xFFFFFFFFull;
+                            job.bank_offset_hi = (bank_offset >> 32) & 0xFFFFFFFFull;
+                            job.total_bytes = bytes_this_core;
                             job.chunk_bytes = chunk_bytes;
                             job.pattern_id = pattern_id;
                             job.seed = seed;
@@ -1693,7 +1690,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentPartitionedWorkersAllDramBa
             seed += advance_seed;
         }
 
-        const uint64_t total_jobs_for_chip = static_cast<uint64_t>(job_id - 1u);
+        const uint64_t total_jobs_for_chip = job_id - 1u;
 
         const auto start = std::chrono::steady_clock::now();
 

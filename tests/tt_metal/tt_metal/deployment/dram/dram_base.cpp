@@ -39,7 +39,7 @@ static uint32_t get_dram_insert_errors_pattern_id_from_env_once() {
         return 0u;
     }
 
-    return static_cast<uint32_t>(value);
+    return value;
 }
 
 namespace tt::tt_metal {
@@ -51,10 +51,10 @@ using namespace std;
 using namespace tt;
 
 static std::string trim_copy(std::string s) {
-    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) {
+    while (!s.empty() && std::isspace(s.front())) {
         s.erase(s.begin());
     }
-    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) {
+    while (!s.empty() && std::isspace(s.back())) {
         s.pop_back();
     }
     return s;
@@ -84,8 +84,7 @@ static const std::vector<std::string>& get_tenstorrent_pci_bdfs_cached() {
 
             const std::string base = "/sys/bus/pci/devices/" + bdf;
             std::string vendor = read_text_file_trimmed(base + "/vendor");
-            std::transform(
-                vendor.begin(), vendor.end(), vendor.begin(), [](unsigned char c) { return std::tolower(c); });
+            std::transform(vendor.begin(), vendor.end(), vendor.begin(), [](char c) { return std::tolower(c); });
 
             // Tenstorrent PCI vendor id. Sorted order gives a stable best-effort map:
             // runtime bdf={} device_id=0 -> first Tenstorrent BDF, bdf={} device_id=1 -> second, etc.
@@ -129,7 +128,7 @@ static std::pair<std::string, std::string> dram_ubb_tray_and_location_from_bdf(c
     const std::string d_text = bdf.substr(first_colon_pos + 1, second_colon_pos - first_colon_pos - 1);
 
     try {
-        const auto d = static_cast<uint32_t>(std::stoul(d_text, nullptr, 16));
+        const uint32_t d = std::stoul(d_text, nullptr, 16);
         const uint32_t upper_nibble = (d >> 4) & 0xF;
         const uint32_t lower_nibble = d & 0xF;
 
@@ -469,7 +468,7 @@ DramRunSummary run_dram_multi_core_single_controller_test(
     const uint32_t expect_l1_address = l1_alloc(&alloc, cfg.chunk_bytes, DRAM_TEST_NOC_WORD_BYTES);
     const uint32_t observe_l1_address = l1_alloc(&alloc, cfg.chunk_bytes, DRAM_TEST_NOC_WORD_BYTES);
 
-    std::vector<uint32_t> zero_result(sizeof(DramBaseResult) / sizeof(uint32_t), 0u);
+    std::vector<uint32_t> zero_result(sizeof(DramBaseResult) / sizeof zero_result[0], 0u);
     for (const auto& core : cores) {
         MetalContext::instance().get_cluster().write_core(
             device->id(), device->worker_core_from_logical_core(core), zero_result, result_l1_address);
@@ -507,9 +506,9 @@ DramRunSummary run_dram_multi_core_single_controller_test(
             core,
             {
                 cfg.bank_id,
-                (uint32_t)(bank_offset & 0xFFFFFFFFull),
-                (uint32_t)((bank_offset >> 32) & 0xFFFFFFFFull),
-                (uint32_t)bytes_this_core,
+                bank_offset & 0xFFFFFFFFull,
+                (bank_offset >> 32) & 0xFFFFFFFFull,
+                bytes_this_core,
                 cfg.chunk_bytes,
                 cfg.pattern_id,
                 seed,
@@ -594,7 +593,7 @@ DramRunSummary run_dram_multi_core_all_controllers_test(
     const uint32_t expect_l1_address = l1_alloc(&alloc, chunk_bytes, DRAM_TEST_NOC_WORD_BYTES);
     const uint32_t observe_l1_address = l1_alloc(&alloc, chunk_bytes, DRAM_TEST_NOC_WORD_BYTES);
 
-    std::vector<uint32_t> zero_result(sizeof(DramBaseResult) / sizeof(uint32_t), 0u);
+    std::vector<uint32_t> zero_result(sizeof(DramBaseResult) / sizeof zero_result[0], 0u);
     for (const auto& core : cores) {
         MetalContext::instance().get_cluster().write_core(
             device->id(), device->worker_core_from_logical_core(core), zero_result, result_l1_address);
@@ -655,9 +654,9 @@ DramRunSummary run_dram_multi_core_all_controllers_test(
                 core,
                 {
                     bank_id,
-                    (uint32_t)(bank_offset & 0xFFFFFFFFull),
-                    (uint32_t)((bank_offset >> 32) & 0xFFFFFFFFull),
-                    (uint32_t)bytes_this_core,
+                    bank_offset & 0xFFFFFFFFull,
+                    (bank_offset >> 32) & 0xFFFFFFFFull,
+                    bytes_this_core,
                     chunk_bytes,
                     pattern_id,
                     seed,
@@ -786,8 +785,8 @@ DramRunSummary run_dram_eight_single_core_single_controller_test(
             core,
             {
                 bank_id,
-                (uint32_t)(bank_offset & 0xFFFFFFFFull),
-                (uint32_t)((bank_offset >> 32) & 0xFFFFFFFFull),
+                bank_offset & 0xFFFFFFFFull,
+                (bank_offset >> 32) & 0xFFFFFFFFull,
                 total_bytes_per_controller,
                 chunk_bytes,
                 pattern_id,
@@ -912,8 +911,8 @@ DramMultiInstanceSummary run_dram_eight_single_core_single_controller_test_verbo
             core,
             {
                 bank_id,
-                (uint32_t)(bank_offset & 0xFFFFFFFFull),
-                (uint32_t)((bank_offset >> 32) & 0xFFFFFFFFull),
+                bank_offset & 0xFFFFFFFFull,
+                (bank_offset >> 32) & 0xFFFFFFFFull,
                 total_bytes_per_controller,
                 chunk_bytes,
                 pattern_id,
@@ -1165,7 +1164,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
         MetalContext::instance().get_cluster().write_core(
             device->id(), device->worker_core_from_logical_core(core), zero_mailbox, r.sync_mailbox_l1_addr);
 
-        std::vector<uint32_t> zero_results((sizeof(DramBaseResult) * queue_capacity) / sizeof(uint32_t), 0u);
+        std::vector<uint32_t> zero_results(sizeof(DramBaseResult) * queue_capacity / sizeof zero_results[0], 0u);
 
         MetalContext::instance().get_cluster().write_core(
             device->id(), device->worker_core_from_logical_core(core), zero_results, r.result_ring_l1_addr);
@@ -1215,7 +1214,8 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                 r.sync_mailbox_l1_addr,
             });
 
-        [[maybe_unused]] auto compute_kernel = tt_metal::CreateKernel(
+        [[maybe_unused]]
+        auto compute_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/deployment/kernels/dram_compare_compute_kernel.cpp",
             r.core,
@@ -1240,7 +1240,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
         }
 
         std::vector<uint32_t> job_words;
-        job_words.reserve(sizeof(DramWorkItem) / sizeof(uint32_t) * preload);
+        job_words.reserve(sizeof(DramWorkItem) / sizeof job_words[0] * preload);
 
         for (uint32_t j = 0; j < preload; j++) {
             const DramWorkItem& job = core_jobs[j];
@@ -1248,7 +1248,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
 
             const uint32_t* p = (const uint32_t*)&job;
 
-            job_words.insert(job_words.end(), p, p + sizeof(DramWorkItem) / sizeof(uint32_t));
+            job_words.insert(job_words.end(), p, p + sizeof(DramWorkItem) / sizeof job_words[0]);
         }
 
         MetalContext::instance().get_cluster().write_core(
@@ -1445,9 +1445,9 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
 
                     const bool core_done = status->jobs_completed >= core_jobs.size();
 
-                    const bool tensix_progress = (hb_delta != 0u) || (jobs_delta != 0u);
+                    const bool tensix_progress = hb_delta || jobs_delta;
 
-                    const bool arc_progress = (arc_delta != 0u);
+                    const bool arc_progress = arc_delta;
 
                     if (r.monitor_initialized && !core_done && !g_stop_requested.load()) {
                         uint32_t stall_reason = 0;
@@ -1458,7 +1458,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                             stall_reason = 2;
                         }
 
-                        if (stall_reason == 0) {
+                        if (!stall_reason) {
                             if (r.stall_watchdog_armed) {
                                 log_info(
                                     tt::LogTest,
