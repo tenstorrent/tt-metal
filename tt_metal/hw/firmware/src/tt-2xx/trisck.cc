@@ -60,8 +60,8 @@ uint32_t _start() {
     // if (hartid == /* leading core */ 0) {
     extern uint32_t __ldm_tdata_start[];
     extern uint32_t __ldm_tdata_end[];
-    uint32_t neo_id = csr_read<CSR::NEO_ID>();
-    uint32_t trisc_id = csr_read<CSR::TRISC_ID>();
+    uint32_t neo_id = internal_::get_neo_id();
+    uint32_t trisc_id = internal_::get_trisc_id();
 
     // Obtain launch message from mailbox.
     uint32_t launch_idx = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
