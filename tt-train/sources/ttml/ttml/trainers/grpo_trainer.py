@@ -95,7 +95,7 @@ class GRPOConfig:
     # Number of micro-batches per generation (effective) batch and per optimizer
     # step. The generation batch generates gradient_accumulation_steps *
     # per_device_train_batch_size * num_devices completions, then the trainer
-    # accumulates gradients over micro-batche of size per_device_train_batch_size * num_devices
+    # accumulates gradients over micro-batches of size per_device_train_batch_size * num_devices
     # before each optimizer step. Larger values mean a larger effective batch per step.
     gradient_accumulation_steps: int
     logging_steps: int
