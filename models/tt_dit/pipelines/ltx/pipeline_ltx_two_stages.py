@@ -77,7 +77,7 @@ class LTXTwoStagesPipeline(LTXPipeline):
 
         # I2V: compile the encoder at both stage resolutions before the DiT loads (it is
         # coresident-excluded with the transformer, mirroring the generate() ordering).
-        if self.vae_encoder is not None:
+        if self.vae_encoder is not None and os.environ.get("LTX_I2V_IMAGE"):
             logger.info(f"warmup image encoder: {s1_h}x{s1_w} + {height}x{width}")
             self._warmup_encode(s1_h, s1_w)
             self._warmup_encode(height, width)
