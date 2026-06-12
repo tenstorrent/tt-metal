@@ -1560,11 +1560,11 @@ class LTXPipeline:
         # prep_run=False so capture and every replay share the post-mel-VAE free-list. Gated by the
         # test_audio_decode_girl conv1d-vs-torch oracle, which now runs under trace.)
         self.tt_vocoder_with_bwe.use_trace = self._traced
-        # BWE/VAE trace are env-toggleable for A/B: at real frame counts the audio path is
-        # device-compute-bound, where trace-replay can be net-negative (mel-VAE measured 0.86x).
-        # VAE trace defaults OFF (slower); BWE trace defaults ON — the BWE generator is a second
-        # full Vocoder whose forward is ~90% host-bound, validated 5.36x bit-identical on bh 4x8.
-        self.tt_vocoder_with_bwe.use_trace_bwe = self._traced and os.environ.get("LTX_BWE_TRACE", "1") != "0"
+        # BWE/VAE trace are env-toggleable for A/B. Both default OFF: at real frame counts the
+        # BWE and mel-VAE forwards are device-compute-bound, where trace-replay is net-negative
+        # (mel-VAE 0.86x; BWE 1.74s traced vs 1.17s eager on the 6s girl clip, bh 4x8). Trace only
+        # wins on short, host-dispatch-bound inputs. Set LTX_BWE_TRACE=1 / LTX_VAE_TRACE=1 to force.
+        self.tt_vocoder_with_bwe.use_trace_bwe = self._traced and os.environ.get("LTX_BWE_TRACE", "0") == "1"
         self.tt_audio_decoder.use_trace = self._traced and os.environ.get("LTX_VAE_TRACE", "0") == "1"
         if isinstance(audio_parallel_config, AudioTCParallelConfig):
             cfg_desc = f"T-shard={t_factor} axis{t_axis} + channel-TP={c_factor} axis{c_axis}"
