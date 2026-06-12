@@ -29,6 +29,22 @@
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/type_name.hpp>
 
+namespace ttsl::hash {
+
+using hash_t = std::uint64_t;
+
+// Public hashing API (defined below).
+template <typename... Types>
+hash_t hash_objects(hash_t seed, const Types&... args) noexcept;
+
+template <typename... Types>
+hash_t hash_objects_with_default_seed(const Types&... args) noexcept;
+
+template <typename T>
+void hash_combine(std::size_t& seed, const T& value);
+
+}  // namespace ttsl::hash
+
 namespace ttsl {
 
 namespace detail {
@@ -55,23 +71,12 @@ namespace hash {
 
 constexpr bool DEBUG_HASH_OBJECT_FUNCTION = false;
 
-using hash_t = std::uint64_t;
 constexpr hash_t DEFAULT_SEED = 1234;
 
 // stuff this in a header somewhere
 inline int type_hash_counter = 0;
 template <typename T>
 inline const int type_hash = type_hash_counter++;
-
-// Public hashing API (defined below).
-template <typename... Types>
-hash_t hash_objects(hash_t seed, const Types&... args) noexcept;
-
-template <typename... Types>
-hash_t hash_objects_with_default_seed(const Types&... args) noexcept;
-
-template <typename T>
-void hash_combine(std::size_t& seed, const T& value);
 
 namespace detail {
 
