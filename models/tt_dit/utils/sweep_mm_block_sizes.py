@@ -110,7 +110,7 @@ def resolve_config(name):
 # SHAPE TABLE
 # ============================================================================
 
-# (M, K, N, core_grid_x, core_grid_y, is_agmm, use_case)
+# (M, K, N, core_grid_x, core_grid_y, is_agmm, use_case, force_transpose)
 # M, K, N are the matmul dimensions as seen by the kernel (per-device).
 # Core grid matches what the model passes to get_matmul_config at runtime.
 # For is_agmm=False: calls ttnn.experimental.minimal_matmul
@@ -127,15 +127,15 @@ def resolve_config(name):
 # Add model-specific shapes via register_matmul_configs() and extend this list as needed.
 SHAPES = [
     # plain: basic matmul, no fused activation or addcmul (Wan2.2 720p DiT, 11x10 grid)
-    (9472, 3456, 5120, 11, 10, False, "plain"),
+    (9472, 3456, 5120, 11, 10, False, "plain", True),
     # ff2: RowParallelLinear — same kernel path as plain (Wan2.2 480p DiT, 11x10 grid)
-    (2368, 3456, 5120, 11, 10, False, "ff2"),
+    (2368, 3456, 5120, 11, 10, False, "ff2", True),
     # qkv: attention QKV projection, chunks=3, approx math (Wan2.2 720p AGMM, 12x9 grid)
-    (9472, 5120, 3840, 12, 9, True, "qkv"),
+    (9472, 5120, 3840, 12, 9, True, "qkv", True),
     # to_out: attention output with fused addcmul, approx math (Wan2.2 720p AGMM, 12x9 grid)
-    (9472, 5120, 1280, 12, 9, True, "to_out"),
+    (9472, 5120, 1280, 12, 9, True, "to_out", True),
     # ff1_gelu: FFN first linear with fused GELU activation (Wan2.2 720p AGMM, 12x9 grid)
-    (9472, 5120, 3456, 12, 9, True, "ff1_gelu"),
+    (9472, 5120, 3456, 12, 9, True, "ff1_gelu", True),
     # cross_attn_kv: cross-attention KV via minimal_matmul_split, chunks=2 (11x10 grid)
     (128, 5120, 2560, 11, 10, False, "cross_attn_kv"),
     # WH AGMM Wan2.2 shapes (8x8 grid), K-fractured across 4 devices.
@@ -146,7 +146,7 @@ SHAPES = [
     (3072, 5120, 3456, 8, 8, True, "plain_gelu"),
 ]
 
-SHAPE_IDS = [f"{M}_{K}_{N}_{cgx}x{cgy}_{'agmm' if agmm else 'mm'}_{uc}" for M, K, N, cgx, cgy, agmm, uc in SHAPES]
+SHAPE_IDS = [f"{M}_{K}_{N}_{cgx}x{cgy}_{'agmm' if agmm else 'mm'}_{uc}" for M, K, N, cgx, cgy, agmm, uc, ft in SHAPES]
 
 # Per-use-case configuration overrides applied in the worker.
 USE_CASE_CONFIGS = {
@@ -174,6 +174,12 @@ USE_CASE_CONFIGS = {
         "math_approx_mode": True,
         "use_matmul_split": True,
     },
+    # FLUX 2.2 use cases — match test_all_gather_minimal_matmul_async_dev.py
+    # (HiFi2, math_approx_mode=False, exact GELU).
+    "flux_plain": {},  # bias on, no activation, chunks=1 (flux22-1/2/3/4)
+    "flux_nobias": {"use_bias": False},  # flux22-5 has no bias
+    "flux_gelu_chunks2": {"fused_activation": (ttnn.UnaryOpType.GELU, False), "chunks": 2},  # flux22-6
+    "flux_nobias_mm": {"use_bias": False},  # standalone minimal_matmul flux22-5 (no bias)
 }
 
 # Whether the sweep uses fp32 dest accumulator. With fp32 dest, the DEST tile
@@ -731,7 +737,7 @@ def test_mm_sweep_worker(device_config, shape):
     _quiet_loguru()
 
     cfg = resolve_config(device_config)
-    M, K, N, cgx, cgy, is_agmm, use_case = shape
+    M, K, N, cgx, cgy, is_agmm, use_case, force_transpose = shape
     uc_cfg = USE_CASE_CONFIGS[use_case]
 
     cluster_size = cfg["mesh_shape"][cfg["cluster_axis"]]
