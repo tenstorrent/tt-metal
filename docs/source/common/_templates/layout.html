@@ -5,8 +5,9 @@
 <script>
 (function() {
     var parts = window.location.pathname.split('/');
-    // URL pattern: /tt-metal/{version}/{project}/...
-    var version = parts[2] || '';
+    // Only applies to the hosted docs layout: /tt-metal/{version}/{project}/...
+    // Skips local builds (make html/server) where this prefix is absent.
+    var version = parts[1] === 'tt-metal' ? (parts[2] || '') : '';
     if (version && version !== 'latest') {
         // Add noindex to keep old versions out of search results
         var noindex = document.createElement('meta');
@@ -28,7 +29,9 @@
 <script>
 (function() {
     var parts = window.location.pathname.split('/');
-    var version = parts[2] || '';
+    // Only applies to the hosted docs layout: /tt-metal/{version}/{project}/...
+    // Skips local builds (make html/server) where this prefix is absent.
+    var version = parts[1] === 'tt-metal' ? (parts[2] || '') : '';
     if (version && version !== 'latest') {
         var latestUrl = window.location.href.replace('/tt-metal/' + version + '/', '/tt-metal/latest/');
         var banner = document.getElementById('tt-version-warning');
