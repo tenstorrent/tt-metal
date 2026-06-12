@@ -154,6 +154,15 @@ void kernel_main() {
     uint32_t read_addr_lo = receiver_socket.h2d.data_addr_lo;
     uint32_t pcie_xy_enc = receiver_socket.h2d.pcie_xy_enc;
 
+    if constexpr (pull_from_host) {
+        // DEVICE_PULL issues PCIe NOC reads via noc_read_with_state (see pcie_noc_utils.h), which only
+        // programs the SRC/NOC/DST/LEN registers and relies on NOC_CTRL having already been configured
+        // as a read. On Blackhole's unified-DM build read_cmd_buf maps to OVERLAY_RD_CMD_BUF, which
+        // firmware noc_init() does NOT set up (it only inits the NCRISC_* buffers). Without this the read
+        // never completes and noc_async_read_barrier() hangs on the first page.
+        noc_read_init_state<read_cmd_buf>(NOC_INDEX);
+    }
+
     volatile tt_l1_ptr PACKET_HEADER_TYPE* downstream_data_packet_header_addr = nullptr;
     volatile tt_l1_ptr PACKET_HEADER_TYPE* downstream_data_packet_header_addr_2 = nullptr;
 
