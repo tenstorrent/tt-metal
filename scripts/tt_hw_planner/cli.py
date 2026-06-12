@@ -8722,7 +8722,6 @@ def _cmd_up_core(args) -> int:
             # PCC-repair land in main tree. Non-fatal.
             try:
                 from .agentic.persistence import sync_graduated_to_main_tree
-                from .bringup_loop import _safe_id, find_demo_dir
 
                 _demo_dir_path2 = find_demo_dir(MODEL)
                 if _demo_dir_path2 is not None:
@@ -10553,29 +10552,25 @@ def main(argv: Optional[List[str]] = None) -> int:
     paut = sub.add_parser(
         "auto-up",
         help=(
-            "ZERO-FLAG entry point: hand a HuggingFace model id, the brain "
-            "does the rest. Sets sane defaults for --auto, --auto-agent, "
-            "tiered model selection, iter budget, and per-component cap so "
-            "the orchestrator drives every decision. Power users can fall "
+            "Low-flag entry point: hand a HuggingFace model id plus target "
+            "hardware (--box and --mesh, both required) and the brain does "
+            "the rest. Sets sane defaults for --auto, --auto-agent, tiered "
+            "model selection, iter budget, and per-component cap so the "
+            "orchestrator drives every other decision. Power users can fall "
             "back to `up` with explicit flags."
         ),
     )
     paut.add_argument("model_id", help="HuggingFace model id, e.g. facebook/sam2-hiera-tiny")
     paut.add_argument(
         "--box",
-        default="QB2",
+        required=True,
         choices=[b.name for b in HARDWARE],
-        help="target hardware (default: QB2)",
+        help="target hardware (required)",
     )
     paut.add_argument(
         "--mesh",
-        default=None,
-        help=(
-            "Mesh shape override, e.g. '1,4' or '2x2'. Without this flag, "
-            "auto-up picks the box's LARGEST canonical mesh (most chips, "
-            "tiebreak to max-TP shape). Pass an explicit value to use a "
-            "smaller mesh."
-        ),
+        required=True,
+        help="Mesh shape, e.g. '1,4' or '2x2' (required); must be canonical for --box.",
     )
     paut.set_defaults(func=cmd_bringup)
 
@@ -10600,14 +10595,14 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     pprom.add_argument(
         "--box",
-        default="QB2",
+        required=True,
         choices=[b.name for b in HARDWARE],
-        help="target hardware (default: QB2)",
+        help="target hardware (required)",
     )
     pprom.add_argument(
         "--mesh",
-        default=None,
-        help="override mesh shape (e.g. '1,4'); must be canonical for --box.",
+        required=True,
+        help="mesh shape (e.g. '1,4') (required); must be canonical for --box.",
     )
     pprom.add_argument(
         "--dtype",
