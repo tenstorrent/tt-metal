@@ -24,6 +24,35 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
+namespace {
+// Zero the "tail" of a 32x32 tile resident in L1: every element (r,c) with
+// r >= keep_rows OR c >= keep_cols is set to 0. The tile is stored as four
+// row-major 16x16 faces ([tl,tr,bl,br]); we honor that layout so the bytes
+// match a TILE-layout tensor. elem_bytes is 2 (bf16) or 4 (fp32) — a zero bit
+// pattern is 0.0 for both, so we just clear elem_bytes per element. Used to
+// neutralize from_torch's non-zero padding on the partial last D / KV tile
+// before it reaches the QKᵀ contraction (D padding) or to bound the score
+// for padded keys (KV padding).
+inline void zero_tile_tail(uint32_t l1_addr, uint32_t elem_bytes, uint32_t keep_rows, uint32_t keep_cols) {
+    if (keep_rows >= 32 && keep_cols >= 32) {
+        return;
+    }
+    volatile tt_l1_ptr uint8_t* base = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(l1_addr);
+    for (uint32_t r = 0; r < 32; ++r) {
+        for (uint32_t c = 0; c < 32; ++c) {
+            if (r >= keep_rows || c >= keep_cols) {
+                const uint32_t face = (r >> 4) * 2 + (c >> 4);     // 0=tl 1=tr 2=bl 3=br
+                const uint32_t within = (r & 15) * 16 + (c & 15);  // row-major within 16x16 face
+                const uint32_t off = (face * 256 + within) * elem_bytes;
+                for (uint32_t bb = 0; bb < elem_bytes; ++bb) {
+                    base[off + bb] = 0;
+                }
+            }
+        }
+    }
+}
+}  // namespace
+
 void kernel_main() {
     constexpr uint32_t D_t = get_compile_time_arg_val(0);
     constexpr uint32_t S_q_t = get_compile_time_arg_val(1);
@@ -34,13 +63,18 @@ void kernel_main() {
     constexpr uint32_t scale_bits = get_compile_time_arg_val(6);
     constexpr uint32_t H_kv = get_compile_time_arg_val(7);  // K/V heads (== H for MHA)
     constexpr bool is_causal = get_compile_time_arg_val(8) != 0;
+    // Non-aligned edges (Refinement 4). d_valid / kv_valid are the valid
+    // column counts of the partial last D / last KV tile (0 == tile-aligned).
+    constexpr uint32_t d_valid = get_compile_time_arg_val(9);
+    constexpr uint32_t kv_valid = get_compile_time_arg_val(10);
+    constexpr uint32_t elem_bytes = get_compile_time_arg_val(11);  // 2=bf16, 4=fp32
 
     // GQA/MQA head broadcast: each Q head h maps to KV head h / group, where
     // group = H_q / H_kv (== 1 for MHA, == H_q for MQA). H % H_kv == 0 is
     // enforced in validate(), so this is exact integer division.
     constexpr uint32_t kv_group = H / H_kv;
 
-    constexpr auto q_args = TensorAccessorArgs<9>();
+    constexpr auto q_args = TensorAccessorArgs<12>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -56,6 +90,7 @@ void kernel_main() {
     constexpr uint32_t cb_k_in = 1;
     constexpr uint32_t cb_v_in = 2;
     constexpr uint32_t cb_mask_in = 3;
+    constexpr uint32_t cb_kv_pad_mask = 6;  // -inf column mask for the partial last KV tile
     constexpr uint32_t cb_causal_mask = 7;
     constexpr uint32_t cb_scale = 8;
     constexpr uint32_t cb_scaler_max = 9;
@@ -95,6 +130,29 @@ void kernel_main() {
         cb_push_back(cb_causal_mask, 1);
     }
 
+    // On-device -inf column mask for the partial last KV tile (S_kv non-aligned,
+    // kv_valid != 0). element (r,c) = 0 if c < kv_valid (real key) else -inf
+    // (padded key position) — identical for every row. Generated once and held
+    // in cb_kv_pad_mask; the compute kernel adds it to the score block ONLY on
+    // the last KV block (j == S_kv_t-1), so the padded keys get -inf and drop
+    // out of the softmax (running max/sum). Composes additively with the
+    // custom / causal masks. Same {0,-inf} bf16 fill + face layout as the
+    // causal mask above.
+    if constexpr (kv_valid != 0) {
+        constexpr uint16_t BF16_ZERO = 0x0000;
+        constexpr uint16_t BF16_NEG_INF = 0xFF80;
+        cb_reserve_back(cb_kv_pad_mask, 1);
+        volatile tt_l1_ptr uint16_t* m = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_kv_pad_mask));
+        for (uint32_t r = 0; r < 32; ++r) {
+            for (uint32_t c = 0; c < 32; ++c) {
+                const uint32_t face = (r >> 4) * 2 + (c >> 4);
+                const uint32_t within = (r & 15) * 16 + (c & 15);
+                m[face * 256 + within] = (c < kv_valid) ? BF16_ZERO : BF16_NEG_INF;
+            }
+        }
+        cb_push_back(cb_kv_pad_mask, 1);
+    }
+
     const uint32_t tile_bytes = get_tile_size(cb_q_in);
 
     const auto q_acc = TensorAccessor(q_args, q_addr, tile_bytes);
@@ -118,6 +176,13 @@ void kernel_main() {
                 noc_async_read_tile(base + d, q_acc, l1 + d * tile_bytes);
             }
             noc_async_read_barrier();
+            // Zero Q's padded D columns of the last D tile: QKᵀ contracts over D,
+            // so garbage in the padded columns would pollute the dot product
+            // (0*x = 0 once zeroed). Q's partial S_q rows need no zeroing — rows
+            // are independent and padded output rows are dropped.
+            if constexpr (d_valid != 0) {
+                zero_tile_tail(l1 + (D_t - 1) * tile_bytes, elem_bytes, /*keep_rows=*/32, /*keep_cols=*/d_valid);
+            }
             cb_push_back(cb_q_in, D_t);
         }
 
@@ -130,6 +195,14 @@ void kernel_main() {
         const uint32_t kv_blocks = is_causal ? (qi + 1) : S_kv_t;
         for (uint32_t j = 0; j < kv_blocks; ++j) {
             const uint32_t kv_base = ((b * H_kv + h_kv) * S_kv_t + j) * D_t;
+            // Last KV block carries the partial S_kv tile: its rows >= kv_valid
+            // are padded key positions. We zero those rows in K (so the score
+            // column for a padded key is exactly Q·0 = 0, never an overflow /
+            // nan from garbage) and in V (so a masked-out P·V term is 0*0, not
+            // 0*garbage); the compute kernel then adds the -inf column mask, so
+            // the padded keys drop out of the softmax entirely.
+            const bool last_kv = (j == S_kv_t - 1);
+            const uint32_t kv_keep_rows = (last_kv && kv_valid != 0) ? kv_valid : 32u;
 
             // K block
             {
@@ -139,6 +212,14 @@ void kernel_main() {
                     noc_async_read_tile(kv_base + d, k_acc, l1 + d * tile_bytes);
                 }
                 noc_async_read_barrier();
+                // Zero K's padded D columns (last D tile) and padded S_kv rows
+                // (last KV block, all D tiles).
+                if constexpr (d_valid != 0 || kv_valid != 0) {
+                    for (uint32_t d = 0; d < D_t; ++d) {
+                        const uint32_t keep_cols = (d_valid != 0 && d == D_t - 1) ? d_valid : 32u;
+                        zero_tile_tail(l1 + d * tile_bytes, elem_bytes, kv_keep_rows, keep_cols);
+                    }
+                }
                 cb_push_back(cb_k_in, D_t);
             }
 
@@ -150,6 +231,16 @@ void kernel_main() {
                     noc_async_read_tile(kv_base + d, v_acc, l1 + d * tile_bytes);
                 }
                 noc_async_read_barrier();
+                // Zero V's padded S_kv rows on the last KV block (P·V safety:
+                // masked P columns are exactly 0, but 0*garbage could be nan).
+                // V's padded D columns map to dropped output columns — no need.
+                if constexpr (kv_valid != 0) {
+                    if (last_kv) {
+                        for (uint32_t d = 0; d < D_t; ++d) {
+                            zero_tile_tail(l1 + d * tile_bytes, elem_bytes, kv_keep_rows, /*keep_cols=*/32u);
+                        }
+                    }
+                }
                 cb_push_back(cb_v_in, D_t);
             }
 

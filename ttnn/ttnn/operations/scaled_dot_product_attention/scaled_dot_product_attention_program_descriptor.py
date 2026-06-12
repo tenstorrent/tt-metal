@@ -28,6 +28,7 @@ CB_Q_IN = 0
 CB_K_IN = 1
 CB_V_IN = 2
 CB_MASK_IN = 3
+CB_KV_PAD_MASK = 6  # on-device -inf column mask for the last KV tile (S_kv non-aligned)
 CB_CAUSAL_MASK = 7  # on-device triangular bias (causal only); reader-filled once
 CB_SCALE = 8
 CB_SCALER_MAX = 9
@@ -98,9 +99,27 @@ def create_program_descriptor(
     mask_h = int(attn_mask.shape[1]) if attn_mask is not None else 1
     has_mask = attn_mask is not None
 
-    D_t = d // TILE_DIM
-    S_q_t = s_q // TILE_DIM
-    S_kv_t = s_kv // TILE_DIM
+    D_t = (d + TILE_DIM - 1) // TILE_DIM
+    S_q_t = (s_q + TILE_DIM - 1) // TILE_DIM
+    S_kv_t = (s_kv + TILE_DIM - 1) // TILE_DIM
+
+    # Non-tile-aligned handling (Refinement 4). The last tile along a partial
+    # dimension carries padding from from_torch's tilization (NOT guaranteed
+    # zero). Two independent edges:
+    #   * d_valid  = D % 32  — partial last D tile. QK^T contracts over D, so
+    #     Q/K's padded D columns must be ZEROED in the reader (0*x = 0); else
+    #     garbage padding pollutes the dot product.
+    #   * kv_valid = S_kv % 32 — partial last KV tile. The padded key columns of
+    #     the score block would otherwise enter the softmax (score ~ 0, not
+    #     -inf) and inflate the running max/sum. An on-device -inf column mask
+    #     is added to the score on the last KV block (j == S_kv_t-1).
+    # S_q % 32 (partial query rows) needs nothing: rows are independent in every
+    # tile op and the padded output rows are dropped on readback.
+    d_valid = d % TILE_DIM
+    kv_valid = s_kv % TILE_DIM
+    # bf16=2B, fp32=4B per element (bf8b non-aligned is an op EXCLUSION, never
+    # reaches here). Used by the reader's column/row zeroing of the last tile.
+    elem_bytes = 4 if query.dtype == ttnn.float32 else 2
 
     total_units = b * h * S_q_t
 
@@ -181,6 +200,13 @@ def create_program_descriptor(
     ]
     if has_mask:
         cbs.append(cb(CB_MASK_IN, 2))  # mask block: input dtype (see note above)
+    if kv_valid != 0:
+        # On-device -inf column mask for the partial last KV tile. element
+        # (r,c) = 0 if c < kv_valid else -inf (same for every row). Reader fills
+        # it once; compute adds it to the score block on the last KV block
+        # (j == S_kv_t-1), composing additively with the custom / causal masks.
+        # bf16 is exact for {0,-inf} and mirrors cb_scale / cb_causal_mask.
+        cbs.append(cb(CB_KV_PAD_MASK, 1, ttnn.bfloat16))
     if is_causal:
         # On-device triangular bias. q_chunk_t == k_chunk_t == 1 and causal
         # requires S_q == S_kv, so the diagonal-straddling block is always
@@ -195,7 +221,20 @@ def create_program_descriptor(
     # --- Reader CT args ---
     # h is H_q (Q/output heads); h_kv is the K/V head count. For GQA/MQA the
     # reader remaps each Q head to KV head h_q // (H_q / h_kv). MHA → h_kv == h.
-    reader_ct = [D_t, S_q_t, S_kv_t, h, mask_h, 1 if has_mask else 0, _f32_bits(scale), h_kv, 1 if is_causal else 0]
+    reader_ct = [
+        D_t,
+        S_q_t,
+        S_kv_t,
+        h,
+        mask_h,
+        1 if has_mask else 0,
+        _f32_bits(scale),
+        h_kv,
+        1 if is_causal else 0,
+        d_valid,  # partial last-D-tile valid columns (0 = D tile-aligned)
+        kv_valid,  # partial last-KV-tile valid columns (0 = S_kv tile-aligned)
+        elem_bytes,  # element size for the reader's last-tile zeroing (2=bf16, 4=fp32)
+    ]
     reader_ct.extend(ttnn.TensorAccessorArgs(query).get_compile_time_args())
     reader_ct.extend(ttnn.TensorAccessorArgs(key).get_compile_time_args())
     reader_ct.extend(ttnn.TensorAccessorArgs(value).get_compile_time_args())
@@ -213,7 +252,7 @@ def create_program_descriptor(
     # is_causal + S_q_t let the compute kernel decode qi = (start_unit+u) % S_q_t
     # and (a) cap the KV loop at j <= qi (skip whole-future blocks) and (b) add
     # the on-device triangular bias on the diagonal block j == qi.
-    compute_ct = [D_t, S_kv_t, 1 if has_mask else 0, 1 if is_causal else 0, S_q_t]
+    compute_ct = [D_t, S_kv_t, 1 if has_mask else 0, 1 if is_causal else 0, S_q_t, kv_valid]
 
     q_addr = query.buffer_address()
     k_addr = key.buffer_address()

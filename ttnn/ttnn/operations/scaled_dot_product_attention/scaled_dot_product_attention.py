@@ -71,7 +71,7 @@ INPUT_TAGGERS = {
 SUPPORTED = {
     "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT],
-    "alignment": ["tile_aligned"],
+    "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
     "attention_kind": ["self", "cross"],
     "kv_heads_mode": ["mha", "gqa", "mqa"],
     "mask_mode": ["none", "custom", "causal"],
@@ -91,6 +91,16 @@ EXCLUSIONS = [
     # mathematically well-defined but corresponds to no real workload and the
     # on-device generation path would be wrong for it — refuse it explicitly.
     {"mask_mode": "causal", "attention_kind": "cross"},
+    # bfloat8_b on a partial last tile (Refinement 4). Block-float shares one
+    # exponent across each 16x16 face; from_torch's tilization computes that
+    # shared exponent from ALL values in the face INCLUDING the non-zero
+    # padding, so the padded columns/rows can dominate the exponent and crush
+    # the live values' mantissa. The reader's post-read zeroing cannot fix this
+    # — the tile arrives already packed with the corrupted exponent. bf16/fp32
+    # have no shared exponent and are zeroed cleanly; bf8b non-aligned is
+    # refused for now (canonical EXCLUSION flagged in Refinement 1).
+    {"dtype": ttnn.bfloat8_b, "alignment": "w_non_aligned"},
+    {"dtype": ttnn.bfloat8_b, "alignment": "h_non_aligned"},
 ]
 
 

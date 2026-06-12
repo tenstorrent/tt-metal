@@ -58,6 +58,7 @@ constexpr uint32_t cb_q_in = 0;
 constexpr uint32_t cb_k_in = 1;
 constexpr uint32_t cb_v_in = 2;
 constexpr uint32_t cb_mask_in = 3;
+constexpr uint32_t cb_kv_pad_mask = 6;  // -inf column mask for the partial last KV tile
 constexpr uint32_t cb_causal_mask = 7;  // on-device triangular bias (causal only)
 constexpr uint32_t cb_scale = 8;
 constexpr uint32_t cb_scaler_max = 9;
@@ -87,6 +88,10 @@ void kernel_main() {
     constexpr bool has_mask = get_compile_time_arg_val(2) != 0;
     constexpr bool is_causal = get_compile_time_arg_val(3) != 0;
     constexpr uint32_t S_q_t = get_compile_time_arg_val(4);
+    // S_kv % 32 (0 == tile-aligned). When non-zero, the last KV block's padded
+    // key columns must be masked to -inf so they drop out of the softmax.
+    constexpr uint32_t kv_valid = get_compile_time_arg_val(5);
+    constexpr bool has_kv_pad_mask = (kv_valid != 0);
 
     const uint32_t num_units = get_arg_val<uint32_t>(0);
     const uint32_t start_unit = get_arg_val<uint32_t>(1);
@@ -180,6 +185,24 @@ void kernel_main() {
                     ckl::add<
                         cb_qk,
                         cb_causal_mask,
+                        cb_qk,
+                        BroadcastDim::None,
+                        InputLifecycle::Streaming,
+                        InputLifecycle::HeldStream>(K_CHUNK_T);
+                }
+            }
+
+            // ---- E (non-aligned S_kv): -inf the padded key columns on the
+            // last KV block so they drop out of the softmax. cb_kv_pad_mask is
+            // a constant {0,-inf} column tile (HeldStream: filled once by the
+            // reader, never popped). Composes additively with the custom /
+            // causal masks above. Only the last KV block (j == num_kv_blocks-1)
+            // carries the partial tile.
+            if constexpr (has_kv_pad_mask) {
+                if (j == num_kv_blocks - 1) {
+                    ckl::add<
+                        cb_qk,
+                        cb_kv_pad_mask,
                         cb_qk,
                         BroadcastDim::None,
                         InputLifecycle::Streaming,
