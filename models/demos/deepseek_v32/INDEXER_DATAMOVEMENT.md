@@ -39,52 +39,59 @@ With QC=1 each K tile is re-read once per q-row-group (~Sqt=20× over: total K r
 Tt·Dt unique). Raising QC (q-tile-rows per work unit) reuses each K chunk across QC q-rows in the
 matmul → K DRAM traffic ~QC-fold less.
 
-The factory auto-tunes QC up from the requested value to the largest divisor of Sqt whose
-resident CBs fit L1 (footprint vs `l1_size_per_core() − 320 KB`; the reserve covers the tracy
-profiler's per-RISC L1 so the perf test still builds), **gated on the op being reader-bound**:
-`k_tile_bytes > 51·HB·fidelity_passes` (per-tile K bytes vs ~HB-head matmul work; BH-calibrated).
-Compute-bound cases stay at QC=1 so the multi-row-group masking overhead never regresses them.
+The factory auto-tunes QC up from the requested value by **a single divisor step of Sqt** (to
+QC=2 for the GLX shape) when the op is **reader-bound**: `k_tile_bytes > 51·HB·fidelity_passes`
+(per-tile K bytes vs ~HB-head matmul work; BH-calibrated). The step must fit L1 (footprint vs
+`l1_size_per_core() − 320 KB`; the reserve covers the tracy profiler's per-RISC L1). Compute-bound
+cases stay at QC=1 so the multi-row-group masking overhead never regresses them.
 
-| case               | QC   | before → after        | math_util       |
-|--------------------|------|-----------------------|-----------------|
-| heads8  bfp8       | 1→4  | 0.729 → **0.523** ms  | 33.1 → 46.1%    |
-| heads16 bf16       | 1→2  | 1.324 → **0.892** ms  | 36.5 → 54.1%    |
-| heads16 bfp8       | 1    | 0.795 ms (unchanged)  | compute-bound   |
-| heads64 bfp8/bf16  | 1    | ~2.89 / 2.93 (unchgd) | compute-bound   |
+**Stop at one step — QC=2 is the K-bandwidth knee.** A second doubling (QC 2→4) does NOT help the
+reader (already past the knee) and regresses on the higher compute ceiling + larger resident CBs.
+Drift-controlled sp7 sweep:
 
-QC>1 raises the compute ceiling a few % (heads8 0.361→0.386); the reader-bound gate is what keeps
-that from regressing the compute-bound cases (QC=2 *regressed* heads16 bfp8 0.795→0.831). bf16 k
-doubles reader bytes, which is why heads16-bf16 *is* reader-bound and bumps while heads16-bfp8
-does not. Accuracy 41/41 (bf16+bfp8, all sp ranks).
+| case               | QC=1   | QC=2 (chosen) | QC=4   | math_util (QC=2) |
+|--------------------|--------|---------------|--------|------------------|
+| heads8  bfp8       | 0.732  | **0.491**     | 0.523  | ~49%             |
+| heads16 bf16       | 1.354  | **0.890**     | 1.357  | 54.1%            |
+| heads16 bfp8       | **0.797** (compute-bound, stays QC=1) | 0.831 | — | — |
+| heads64 bfp8/bf16  | **~2.89 / 2.93** (compute-bound, QC=1) | — | — | — |
 
-## Where the reader gap is after Win 1 (heads8 bfp8, QC=4)
+(An earlier, transient measurement had QC=4 ≈ QC=2 for heads8 and the auto-tune was set to
+max-fitting QC; the drift-controlled re-measure showed QC=2 clearly best, so the policy is now a
+single step.) bf16 k doubles reader bytes, which is why heads16-bf16 *is* reader-bound and bumps
+while heads16-bfp8 does not. Accuracy 41/41 (bf16+bfp8, all sp ranks).
 
-reader-only 0.498 vs ceiling 0.386 → +0.112 ms still exposed. Per-input (READ_*_OFF):
+## Where the reader gap is after Win 1 (heads8 bfp8, QC=2)
 
-| input | exposed | shareable? |
-|-------|---------|------------|
-| q     | 0.059   | **yes** — every core in a q-row-group reads the identical q-block (~22× redundant across cores) |
-| w     | 0.020   | **yes** — same (read identically per group) |
-| k     | 0.031   | no — each core's k-chunk is distinct |
+reader-only 0.454 vs ceiling 0.373 → +0.081 ms still exposed. Per-input (READ_*_OFF), full kernel:
 
-Note QC2→QC4 barely moved reader-only (0.503→0.498): beyond QC=2 the reader is **no longer
-K-bandwidth-bound**; the residual is q/w cross-core redundancy + fixed per-read cost. So a
-k-stationary rewrite would *not* help — the next lever is sharing q/w, not cutting K further.
+| input | full-kernel saving if skipped | shareable? |
+|-------|-------------------------------|------------|
+| q     | ~0.070 (0.493→0.423)          | **yes** — every core in a q-row-group reads the identical q-block (~22× redundant across cores) |
+| w     | +~0.016 (→0.407 with q)       | **yes** — same (read identically per group) |
+| k     | the rest                      | no — each core's k-chunk is distinct |
 
-## What's left — q/w multicast (analyzed, not yet implemented)
+Beyond QC=2 the reader is **no longer K-bandwidth-bound**; the residual is q/w cross-core
+redundancy + fixed per-read cost. So a k-stationary rewrite would *not* help — the next lever is
+sharing q/w, not cutting K further.
 
-q (and w) for a q-row-group are read identically by all ~22 cores that share that group, ~22×
-redundant (~29 MB q + ~7 MB w vs ~10 MB k at QC=4). Multicasting them (one core reads from DRAM,
-broadcasts L1→L1 to the group's cores; receivers wait on a semaphore — the `ring_joint_sdpa`
-`chain_link.hpp` idiom) would cut that DRAM traffic ~22×.
+## What's left — q/w sharing (attempted; needs the right transport)
 
-Measured upper bound (full kernel with those reads skipped entirely, the best a perfect mcast
-could do minus mcast overhead): Q off → 0.449, **Q+W off → 0.420** — only 0.034 above the 0.386
-compute ceiling. So q+w sharing would get heads8 bfp8 from 0.524 to ~0.42 ms (a further ~20%) and
-**nearly fully hide the reader** (only k's 0.031 + a tiny residual would remain).
+q (and w) for a q-row-group are read identically by all ~22 cores that share it (~22× redundant).
+Measured upper bound at QC=2 (full kernel with those reads skipped): Q off → 0.423, **Q+W off →
+0.407** — only 0.034 above the 0.373 ceiling. So q+w sharing would take heads8 bfp8 ~0.49 → ~0.41
+(another ~17%) and **nearly fully hide the reader**.
 
-Complexity/risk: the output-stationary flat deal lays a group's cores out as a **contiguous
-row-major run, not a rectangle**, so per-group mcast needs ≤3 rectangles (head partial row / full
-rows / tail partial row) plus boundary cores that belong to two groups — intricate and
-deadlock-prone. A mcast-friendly rectangular per-group deal, or a store-and-forward unicast chain
-along the contiguous run, are the two viable shapes.
+**Tried — parallel-pull unicast (env `INDEXER_QW_UNICAST`, reverted):** each group's first core
+(injector) reads q/w from DRAM and the group's other cores pull it from the injector's L1. It
+**regressed 3.7× (0.49→1.9 ms)**: the injector is `c_lo(g)`, the straddle core that first *receives*
+group g−1, so the per-group q-reads serialize into a chain across all groups instead of running in
+parallel. **Double-buffering cb_q/cb_w was inert** (0.490 vs 0.492 — the q/w cost is DRAM-bandwidth
+redundancy, not a boundary stall).
+
+**Fix for a working version:** the injector must be a core *fully inside* g (e.g. `c_lo(g)+1`),
+which has no g−1 work and reads g's q/w at kernel start — so the groups pipeline. And the transport
+should be **multicast** (one broadcast) not parallel-pull (which also contends ~22-way on the
+injector's L1). The output-stationary flat deal lays a group's cores out as a contiguous row-major
+run (≈2 rows on the 11×10 grid) — not a clean rectangle — so mcast needs ≤3 rectangles, or a
+deal aligned to whole grid rows.
