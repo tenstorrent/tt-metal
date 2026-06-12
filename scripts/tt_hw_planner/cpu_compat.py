@@ -23,12 +23,30 @@ Design rules:
 
 from __future__ import annotations
 
+import importlib.abc
+import importlib.machinery
 import importlib.util
 import sys
 import types
 from typing import List
 
 _MARKER = "_TT_CPU_COMPAT"
+
+_ACCEL_PACKAGES = frozenset(
+    {
+        "mamba_ssm",
+        "causal_conv1d",
+        "flash_attn",
+        "flash_attn_2",
+        "triton",
+        "apex",
+        "xformers",
+        "vllm",
+        "flashinfer",
+        "deepspeed",
+        "mambapy",
+    }
+)
 
 
 def _genuinely_importable(name: str) -> bool:
@@ -147,6 +165,55 @@ _PROVIDERS = {
 }
 
 
+class _HollowCallable:
+    def __init__(self, qualname: str) -> None:
+        object.__setattr__(self, "_qualname", qualname)
+
+    def __getattr__(self, name: str):
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
+        return _HollowCallable(f"{object.__getattribute__(self, '_qualname')}.{name}")
+
+    def __call__(self, *args, **kwargs):
+        q = object.__getattribute__(self, "_qualname")
+        raise RuntimeError(
+            f"'{q}' is a hollow CPU stand-in for a missing accelerator package "
+            f"and was actually called; this code path needs a real CPU "
+            f"implementation of '{q}'."
+        )
+
+
+class _HollowModule(types.ModuleType):
+    def __init__(self, fullname: str) -> None:
+        super().__init__(fullname)
+        self.__path__ = []
+        setattr(self, _MARKER, True)
+
+    def __getattr__(self, name: str):
+        if name == "__version__":
+            return "0.0.0+hollow"
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
+        return _HollowCallable(f"{self.__name__}.{name}")
+
+
+class _AccelHollowFinder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+    def find_spec(self, fullname, path=None, target=None):
+        top = fullname.split(".")[0]
+        if top not in _ACCEL_PACKAGES or top in _PROVIDERS:
+            return None
+        return importlib.machinery.ModuleSpec(fullname, self, is_package=True)
+
+    def create_module(self, spec):
+        return _HollowModule(spec.name)
+
+    def exec_module(self, module):
+        pass
+
+
+_ACCEL_HOLLOW_FINDER = _AccelHollowFinder()
+
+
 def install_cpu_compat() -> List[str]:
     """Install pure-CPU stand-ins for any known accelerator package that is
     missing. Returns the list of package names a stand-in was installed for
@@ -161,4 +228,6 @@ def install_cpu_compat() -> List[str]:
             installed.extend(provider())
         except Exception as exc:
             print(f"  [cpu-compat] failed to install stand-in for {name!r}: {type(exc).__name__}: {exc}")
+    if _ACCEL_HOLLOW_FINDER not in sys.meta_path:
+        sys.meta_path.append(_ACCEL_HOLLOW_FINDER)
     return installed
