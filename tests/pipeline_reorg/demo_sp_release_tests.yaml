@@ -35,7 +35,7 @@
   skus:
     bh_galaxy:
       timeout: 20
-  owner_id: U08RL15T4N8 # David Popov
+  owner_id: U0ACLAM77PS # Kosta Grujcic
   team: models
 
 - name: "(Galaxy) DeepSeek Prefill Perf tests"
@@ -50,7 +50,7 @@
   skus:
     bh_galaxy:
       timeout: 30
-  owner_id: U08RL15T4N8 # David Popov
+  owner_id: U0ACLAM77PS # Kosta Grujcic
   team: models
 
 - name: "(bh loudbox) DeepSeek Prefill modules"
@@ -65,7 +65,7 @@
   skus:
     bh_loudbox:
       timeout: 75
-  owner_id: U08RL15T4N8 # David Popov
+  owner_id: U0ACLAM77PS # Kosta Grujcic
   team: models
 
 # ============================================================================
