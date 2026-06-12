@@ -14,18 +14,12 @@
 
 namespace tt::tt_metal::tt_sim {
 
-bool is_direct_write_enabled(const DirectWriteGuard& guard, const void* src, const BufferRegion& region) {
+namespace {
+
+bool has_direct_write_runtime_requirements(const DirectWriteGuard& guard, const void* src, const BufferRegion& region) {
     if (guard.target != tt::TargetDevice::Simulator) {
         return false;
     }
-    // NOTE: deliberately NOT gated on guard.cq_idle. On the simulator the device never executes
-    // dispatch concurrently with the host: the host drives the sim clock and is not clocking during
-    // a host-side tensor upload, so any in-flight CQ commands are frozen and cannot race with this
-    // synchronous H2D write. The write therefore lands before clocking resumes — the correct order
-    // for a weight preload (weights written before any program reads them). Requiring an idle CQ
-    // instead would force a finish()/drain before each preload, which on the multi-host galaxy sim
-    // deadlocks in the FD completion path (the dispatcher write pointer never propagates back to
-    // host sysmem). Firing regardless of in_use_ keeps the preload synchronous and deadlock-free.
     if (guard.rtoptions == nullptr || !guard.rtoptions->get_simulator_direct_tensor_writes()) {
         return false;
     }
@@ -36,6 +30,16 @@ bool is_direct_write_enabled(const DirectWriteGuard& guard, const void* src, con
         return false;
     }
     return true;
+}
+
+}  // namespace
+
+bool is_direct_write_enabled(const DirectWriteGuard& guard, const void* src, const BufferRegion& region) {
+    if (!has_direct_write_runtime_requirements(guard, src, region)) {
+        return false;
+    }
+    // Most direct writes must not bypass work that has already been queued through FD.
+    return guard.cq_idle;
 }
 
 void write_shard(
@@ -54,10 +58,21 @@ bool try_direct_write(
     const void* src,
     const BufferRegion& region,
     const CoreRangeSet* logical_core_filter) {
-    if (!is_direct_write_enabled(guard, src, region)) {
+    if (!has_direct_write_runtime_requirements(guard, src, region)) {
         return false;
     }
-    if (shard_view.buffer_type() == BufferType::TRACE) {
+    auto buffer_type = shard_view.buffer_type();
+    bool is_l1_sharded_upload = buffer_type == BufferType::L1 && is_sharded(shard_view.buffer_layout());
+    bool can_direct_write_buffer = buffer_type == BufferType::DRAM || is_l1_sharded_upload;
+    // Keep interleaved L1 on the normal CQ path. Those tensors can be transient
+    // decode intermediates whose ordering is observable by host fallback paths.
+    if (!can_direct_write_buffer) {
+        return false;
+    }
+    // Sharded L1 full-buffer uploads are TTNN input-staging writes in the
+    // DeepSeek decode path. Allow them to bypass unrelated pending FD work in
+    // simulator debug mode; keep DRAM and interleaved L1 ordered.
+    if (!guard.cq_idle && !is_l1_sharded_upload) {
         return false;
     }
     // Trace-enabled tests depend on normal CQ ordering/capture semantics even for tensor writes.

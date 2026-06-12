@@ -145,6 +145,12 @@ private:
     // Used to Maintain state: Mark/Check if this data structure is being used for dispatch.
     // This is temporary - will not be needed when we MeshCommandQueue is the only dispatch interface.
     std::atomic<bool> in_use_ = false;
+    // Tracks FD work whose ordering must not be bypassed by simulator direct writes.
+    DispatchArray<std::atomic<bool>> pending_ordered_work_{};
+
+    void mark_pending_ordered_work(tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+    void clear_pending_ordered_work(tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+    bool has_pending_ordered_work() const;
 
     const uint32_t prefetcher_dram_aligned_block_size_;
     const uint64_t prefetcher_cache_sizeB_;
