@@ -3240,9 +3240,16 @@ def _main(activations, weights):
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
     ttnn.deallocate(_rope_sin_pos, False)
+    # E_rope_cse: the cos/sin repeats are loop-invariant across all 6 RoPE sites + both
+    # layers (one decode position). Compute the 2 distinct broadcast shapes ONCE and reuse;
+    # freed at the last site (rope5, still before moe_start). Saves ~8 repeats / 2-layer graph.
+    _rope_cos32 = ttnn.repeat(_rope_cos_pos_4d, ttnn.Shape([1, 1, 32, 1]))
+    _rope_sin32 = ttnn.repeat(_rope_sin_pos_4d, ttnn.Shape([1, 1, 32, 1]))
+    _rope_cos512 = ttnn.repeat(_rope_cos_pos_4d, ttnn.Shape([1, 1, 512, 1]))
+    _rope_sin512 = ttnn.repeat(_rope_sin_pos_4d, ttnn.Shape([1, 1, 512, 1]))
     # Per-site repeat for site 1 (seq_len=32).
-    _rope0_cos_tiled = ttnn.repeat(_rope_cos_pos_4d, ttnn.Shape([1, 1, 32, 1]))
-    _rope0_sin_tiled = ttnn.repeat(_rope_sin_pos_4d, ttnn.Shape([1, 1, 32, 1]))
+    _rope0_cos_tiled = _rope_cos32
+    _rope0_sin_tiled = _rope_sin32
     # Run the kernel (prefill mode, DRAM-interleaved I/O).
     _rope0_out = ttnn.experimental.rotary_embedding_llama(
         _rope0_x,
@@ -3252,8 +3259,7 @@ def _main(activations, weights):
         is_decode_mode=False,
     )
     ttnn.deallocate(_rope0_x, False)
-    ttnn.deallocate(_rope0_cos_tiled, False)
-    ttnn.deallocate(_rope0_sin_tiled, False)
+    # _rope0_cos/sin_tiled are shared (E_rope_cse) — freed at rope5
     # Output [1, 1, 32, 64] BF16 interleaved-pair → convert back to half-concat [32, 64].
     _rope0_out_5d = ttnn.reshape(
         _rope0_out,
@@ -3544,8 +3550,8 @@ def _main(activations, weights):
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
     ttnn.deallocate(ttnn_slice_88, False)
-    _rope1_cos = ttnn.repeat(_rope_cos_pos_4d, ttnn.Shape([1, 1, 512, 1]))
-    _rope1_sin = ttnn.repeat(_rope_sin_pos_4d, ttnn.Shape([1, 1, 512, 1]))
+    _rope1_cos = _rope_cos512
+    _rope1_sin = _rope_sin512
     _rope1_out = ttnn.experimental.rotary_embedding_llama(
         _rope1_x,
         _rope1_cos,
@@ -3554,8 +3560,7 @@ def _main(activations, weights):
         is_decode_mode=False,
     )
     ttnn.deallocate(_rope1_x, False)
-    ttnn.deallocate(_rope1_cos, False)
-    ttnn.deallocate(_rope1_sin, False)
+    # _rope1_cos/sin are shared (E_rope_cse) — freed at rope5
     ttnn_reshape_51 = ttnn.reshape(
         _rope1_out,
         [32, 16, 64],
@@ -3578,8 +3583,8 @@ def _main(activations, weights):
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
     ttnn.deallocate(ttnn_slice_91, False)
-    _rope2_cos = ttnn.repeat(_rope_cos_pos_4d, ttnn.Shape([1, 1, 32, 1]))
-    _rope2_sin = ttnn.repeat(_rope_sin_pos_4d, ttnn.Shape([1, 1, 32, 1]))
+    _rope2_cos = _rope_cos32
+    _rope2_sin = _rope_sin32
     _rope2_out = ttnn.experimental.rotary_embedding_llama(
         _rope2_x,
         _rope2_cos,
@@ -3588,8 +3593,7 @@ def _main(activations, weights):
         is_decode_mode=False,
     )
     ttnn.deallocate(_rope2_x, False)
-    ttnn.deallocate(_rope2_cos, False)
-    ttnn.deallocate(_rope2_sin, False)
+    # _rope2_cos/sin are shared (E_rope_cse) — freed at rope5
     ttnn_reshape_53 = ttnn.reshape(
         _rope2_out,
         [1, 32, 1, 64],
@@ -4258,8 +4262,8 @@ def _main(activations, weights):
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1, None),
     )
     ttnn.deallocate(_rope3_x_perm, False)
-    _rope3_cos = ttnn.repeat(_rope_cos_pos_4d, ttnn.Shape([1, 1, 32, 1]))
-    _rope3_sin = ttnn.repeat(_rope_sin_pos_4d, ttnn.Shape([1, 1, 32, 1]))
+    _rope3_cos = _rope_cos32
+    _rope3_sin = _rope_sin32
     _rope3_out = ttnn.experimental.rotary_embedding_llama(
         _rope3_x,
         _rope3_cos,
@@ -4268,8 +4272,7 @@ def _main(activations, weights):
         is_decode_mode=False,
     )
     ttnn.deallocate(_rope3_x, False)
-    ttnn.deallocate(_rope3_cos, False)
-    ttnn.deallocate(_rope3_sin, False)
+    # _rope3_cos/sin are shared (E_rope_cse) — freed at rope5
     # Output [1, 1, 32, 64] interleaved-pair → convert back to half-concat [32, 64].
     _rope3_out_5d = ttnn.reshape(
         _rope3_out,
@@ -4523,8 +4526,8 @@ def _main(activations, weights):
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
     ttnn.deallocate(ttnn_slice_179, False)
-    _rope4_cos = ttnn.repeat(_rope_cos_pos_4d, ttnn.Shape([1, 1, 512, 1]))
-    _rope4_sin = ttnn.repeat(_rope_sin_pos_4d, ttnn.Shape([1, 1, 512, 1]))
+    _rope4_cos = _rope_cos512
+    _rope4_sin = _rope_sin512
     _rope4_out = ttnn.experimental.rotary_embedding_llama(
         _rope4_x,
         _rope4_cos,
@@ -4533,8 +4536,7 @@ def _main(activations, weights):
         is_decode_mode=False,
     )
     ttnn.deallocate(_rope4_x, False)
-    ttnn.deallocate(_rope4_cos, False)
-    ttnn.deallocate(_rope4_sin, False)
+    # _rope4_cos/sin are shared (E_rope_cse) — freed at rope5
     ttnn_reshape_102 = ttnn.reshape(
         _rope4_out,
         [32, 16, 64],
@@ -4556,8 +4558,8 @@ def _main(activations, weights):
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
     ttnn.deallocate(ttnn_slice_182, False)
-    _rope5_cos = ttnn.repeat(_rope_cos_pos_4d, ttnn.Shape([1, 1, 32, 1]))
-    _rope5_sin = ttnn.repeat(_rope_sin_pos_4d, ttnn.Shape([1, 1, 32, 1]))
+    _rope5_cos = _rope_cos32
+    _rope5_sin = _rope_sin32
     _rope5_out = ttnn.experimental.rotary_embedding_llama(
         _rope5_x,
         _rope5_cos,
@@ -4566,8 +4568,11 @@ def _main(activations, weights):
         is_decode_mode=False,
     )
     ttnn.deallocate(_rope5_x, False)
-    ttnn.deallocate(_rope5_cos, False)
-    ttnn.deallocate(_rope5_sin, False)
+    # E_rope_cse: rope5 is the last RoPE site — free the 4 shared cos/sin tensors here.
+    ttnn.deallocate(_rope_cos32, False)
+    ttnn.deallocate(_rope_sin32, False)
+    ttnn.deallocate(_rope_cos512, False)
+    ttnn.deallocate(_rope_sin512, False)
     ttnn_reshape_104 = ttnn.reshape(
         _rope5_out,
         [1, 32, 1, 64],
