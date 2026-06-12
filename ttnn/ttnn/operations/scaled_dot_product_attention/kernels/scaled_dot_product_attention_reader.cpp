@@ -67,6 +67,7 @@ void kernel_main() {
     const auto q_acc = TensorAccessor(q_args, q_addr, tile_bytes);
     const auto k_acc = TensorAccessor(k_args, k_addr, tile_bytes);
     const auto v_acc = TensorAccessor(v_args, v_addr, tile_bytes);
+    [[maybe_unused]] const auto mask_acc = TensorAccessor(mask_args, mask_addr, tile_bytes);
 
     for (uint32_t idx = 0; idx < num_units; ++idx) {
         const uint32_t u = start_unit + idx;
@@ -114,7 +115,6 @@ void kernel_main() {
 
             // Mask block (custom only): one tile, broadcast across heads when mask_H == 1.
             if constexpr (has_mask) {
-                const auto mask_acc = TensorAccessor(mask_args, mask_addr, tile_bytes);
                 const uint32_t mh = (mask_H == 1) ? 0 : h;
                 const uint32_t mtile = ((b * mask_H + mh) * S_q_t + qi) * S_kv_t + j;
                 cb_reserve_back(cb_mask_in, 1);

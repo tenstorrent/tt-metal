@@ -82,15 +82,22 @@ def create_program_descriptor(
 
     all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
 
-    tile_size = ttnn.tile_size(query.dtype)
-
     # --- Circular buffers ---
+    # The online-softmax recurrence keeps its running accumulators (m_i, l_i,
+    # O_i) and the per-iteration scratch derived from them in fp32. Packing
+    # these back to bf16 between KV blocks would compound rounding across the
+    # KV loop (error grows with S / num_kv_blocks) — see op_design.md Key
+    # Risks ("Numerical exactness requires fp32 DEST accumulation"). Streamed
+    # I/O CBs (Q/K/V/mask) and the score/prob blocks stay bf16.
     def cb(index, num_pages, fmt=query.dtype):
+        page = ttnn.tile_size(fmt)
         return ttnn.CBDescriptor(
-            total_size=num_pages * tile_size,
+            total_size=num_pages * page,
             core_ranges=all_cores,
-            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=fmt, page_size=tile_size)],
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=fmt, page_size=page)],
         )
+
+    f32 = ttnn.float32
 
     cbs = [
         cb(CB_Q_IN, 2 * D_t),  # Q block, held across KV loop (double-buffered)
@@ -99,17 +106,17 @@ def create_program_descriptor(
         cb(CB_SCALE, 1, ttnn.bfloat16),
         cb(CB_SCALER_MAX, 1, ttnn.bfloat16),
         cb(CB_SCALER_SUM, 1, ttnn.bfloat16),
-        cb(CB_MAX, 2),  # >=2: in-place BinaryMax reserves while 1 held
-        cb(CB_MAX_PREV, 2),
-        cb(CB_CORR, 2),
-        cb(CB_L, 2),
-        cb(CB_L_BLOCK, 2),
-        cb(CB_M_BLK, 2),
+        cb(CB_MAX, 2, f32),  # running max m_i (persists across KV loop)
+        cb(CB_MAX_PREV, 2, f32),
+        cb(CB_CORR, 2, f32),
+        cb(CB_L, 2, f32),  # running sum l_i (persists)
+        cb(CB_L_BLOCK, 2, f32),
+        cb(CB_M_BLK, 2, f32),
         cb(CB_QK, 2),
         cb(CB_P, 2),
-        cb(CB_O_ACC, 2 * D_t),
-        cb(CB_PV, 2 * D_t),
-        cb(CB_O_TMP, 2 * D_t),
+        cb(CB_O_ACC, 2 * D_t, f32),  # running output O_i (persists)
+        cb(CB_PV, 2 * D_t, f32),
+        cb(CB_O_TMP, 2 * D_t, f32),
         cb(CB_OUT, 2 * D_t, output_tensor.dtype),
     ]
     if has_mask:
