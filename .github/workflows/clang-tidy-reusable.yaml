@@ -164,10 +164,25 @@ jobs:
       - name: Configure git safe.directory
         run: git config --global --add safe.directory /work
 
+      - name: Select CMake clang-tidy preset
+        run: |
+          # Use fix-parallel for PR suggestion jobs: the wrapper exports per-TU fixes
+          # during the build itself so no second analysis pass is needed.
+          # For all other jobs use the standard preset with ctcache shim.
+          if [[ "${{ inputs.post-pr-suggestions }}" == "true" && "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "CLANG_TIDY_PRESET=clang-tidy-fix-parallel" >> $GITHUB_ENV
+            echo "Using clang-tidy-fix-parallel (exports fixes during build)"
+          else
+            echo "CLANG_TIDY_PRESET=clang-tidy" >> $GITHUB_ENV
+            echo "Using clang-tidy (ctcache shim path)"
+          fi
+
       # Shim approach: cmake always sees the same command text ("./clang-tidy-shim;...")
       # so Ninja never force-rebuilds TUs just because the analysis tool changed.
       # During prereq builds the shim is a no-op; for analysis it delegates to ctcache.
+      # Not used when CLANG_TIDY_PRESET=clang-tidy-fix-parallel (which has its own wrapper).
       - name: Create shim (no-op for prereq builds)
+        if: ${{ env.CLANG_TIDY_PRESET == 'clang-tidy' }}
         run: |
           cat > ./clang-tidy-shim << 'SHIMEOF'
           #!/bin/bash
@@ -189,10 +204,14 @@ jobs:
 
       - name: 🔧 CMake configure
         run: |
-          CLANG_TIDY_CMD="$(pwd)/clang-tidy-shim;--warnings-as-errors=*"
-          cmake --preset clang-tidy \
-            -DCMAKE_CXX_CLANG_TIDY="$CLANG_TIDY_CMD" \
-            -DCMAKE_C_CLANG_TIDY="$CLANG_TIDY_CMD"
+          if [[ "$CLANG_TIDY_PRESET" == "clang-tidy-fix-parallel" ]]; then
+            cmake --preset clang-tidy-fix-parallel
+          else
+            CLANG_TIDY_CMD="$(pwd)/clang-tidy-shim;--warnings-as-errors=*"
+            cmake --preset clang-tidy \
+              -DCMAKE_CXX_CLANG_TIDY="$CLANG_TIDY_CMD" \
+              -DCMAKE_C_CLANG_TIDY="$CLANG_TIDY_CMD"
+          fi
 
       - name: Pack CPM cache
         if: steps.cpm-cache.outputs.cache-hit != 'true'
@@ -216,10 +235,11 @@ jobs:
           echo "Building prerequisite targets (will not be analyzed): ${{ inputs.prereq-targets }}"
           for target in ${{ inputs.prereq-targets }}; do
             echo "Building target: $target"
-            cmake --build --preset clang-tidy --target "$target"
+            cmake --build --preset "$CLANG_TIDY_PRESET" --target "$target"
           done
 
       - name: Activate analysis shim
+        if: ${{ env.CLANG_TIDY_PRESET == 'clang-tidy' }}
         run: |
           # Overwrite the no-op shim with the real analysis wrapper.
           # The filename stays ./clang-tidy-shim so Ninja's command hash is unchanged.
@@ -251,62 +271,31 @@ jobs:
             echo "Scanning specific targets: ${{ inputs.scan-targets }}"
             for target in ${{ inputs.scan-targets }}; do
               echo "Scanning target: $target"
-              cmake --build --preset clang-tidy --target "$target"
+              cmake --build --preset "$CLANG_TIDY_PRESET" --target "$target"
             done
           else
             echo "Scanning all targets"
-            cmake --build --preset clang-tidy
+            cmake --build --preset "$CLANG_TIDY_PRESET"
           fi
 
-      - name: Export PR-diff clang-tidy fix suggestions
+      - name: Apply clang-tidy fixes to working tree
         if: ${{ inputs.post-pr-suggestions && github.event_name == 'pull_request' && !cancelled() }}
-        shell: bash
         run: |
-          BASE_SHA="${{ github.event.pull_request.base.sha }}"
-          git fetch --no-tags --depth=1 origin "$BASE_SHA" 2>/dev/null || true
-          git tag -f _pr_base "$BASE_SHA" 2>/dev/null || true
-          mkdir -p clang-tidy-result
-          # Find compile_commands.json — look in the preset binaryDir first
-          CC_JSON=$(find . -name compile_commands.json -path '*clang-tidy*' | head -1)
-          [[ -z "$CC_JSON" ]] && CC_JSON=$(find . -name compile_commands.json | head -1)
-          if [[ -z "$CC_JSON" ]]; then
-            echo "No compile_commands.json found — skipping PR suggestions"
-            exit 0
-          fi
-          BUILD_DIR=$(dirname "$CC_JSON")
-          PREFIX=$(pwd)/
-          jq -r '.[].file' "$CC_JSON" | sed "s|^${PREFIX}||" > rel_files.txt
-          git diff --name-only _pr_base HEAD > changed.txt
-          grep -F -f rel_files.txt changed.txt > common.txt || true
-          if [[ ! -s common.txt ]]; then
-            echo "No changed files in compile_commands — skipping PR suggestions"
-            exit 0
-          fi
-          git diff _pr_base -- $(cat common.txt) > pr.diff
-          python3 -c "import yaml" 2>/dev/null || uv pip install -q pyyaml
-          clang-tidy-diff-20.py -p1 -path "$BUILD_DIR" \
-            -clang-tidy-binary clang-tidy-20 \
-            -export-fixes clang-tidy-result/fixes.yml \
-            -j"$(nproc)" < pr.diff || true
-          # platisd/clang-tidy-pr-comments strips `repo_path_prefix/REPO/REPO/` from paths
-          # in fixes.yml. The build runs in Docker at /work (no subdirectory), so rewrite
-          # paths to match what the action expects with the default /__w prefix.
-          REPO_NAME="$(basename "$GITHUB_REPOSITORY")"
-          if [[ -f clang-tidy-result/fixes.yml ]]; then
-            sed -i "s|/work/|/__w/${REPO_NAME}/${REPO_NAME}/|g" clang-tidy-result/fixes.yml
+          FIXES_DIR=".build/clang-tidy-fix-parallel/fixes"
+          if ls "$FIXES_DIR"/*.yaml 2>/dev/null | grep -q .; then
+            clang-apply-replacements-20 "$FIXES_DIR"
+          else
+            echo "No fix files found in $FIXES_DIR — nothing to suggest"
           fi
 
       - name: Post inline clang-tidy suggestions on PR
         if: ${{ inputs.post-pr-suggestions && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false && !cancelled() }}
-        uses: platisd/clang-tidy-pr-comments@28cfb84edafa771c044bde7e4a2a3fae57463818
+        uses: reviewdog/action-suggester@aa38384ceb608d00f84b4690cacc83a5aba307ff  # v1.24.0
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          clang_tidy_fixes: clang-tidy-result/fixes.yml
-          pull_request_id: ${{ github.event.pull_request.number }}
-          request_changes: false
-          suggestions_per_comment: 10
-          python_path: python3
-          auto_resolve_conversations: true
+          tool_name: clang-tidy
+          github_token: ${{ github.token }}
+          filter_mode: diff_context
+          cleanup: false
 
       - name: Publish Ccache summary
         if: always()
