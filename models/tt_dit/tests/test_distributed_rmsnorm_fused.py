@@ -518,11 +518,13 @@ _CORR_PARAMS = [
     ((4, 8), _DP_GAL, WAN, 4, ttnn.Topology.Linear, GALAXY_LINKS, 1),
     ((4, 8), _DP_GAL, LTX, 2, ttnn.Topology.Linear, GALAXY_LINKS, 1),
     ((4, 8), _DP_GAL, LTX, 4, ttnn.Topology.Linear, GALAXY_LINKS, 1),
+    # TP=2 (1x2 LINE submesh): per-device feat is 2x the TP=4 case (Wan 2560, LTX video 2048).
+    ((4, 8), _DP_GAL, WAN, 2, ttnn.Topology.Linear, GALAXY_LINKS, 1),
     # TP=4 RING on the full-mesh 4-axis (replicate axis 1).
     ((4, 8), _DP_GAL_RING, WAN, 4, ttnn.Topology.Ring, GALAXY_LINKS, 0),
     ((4, 8), _DP_GAL_RING, LTX, 4, ttnn.Topology.Ring, GALAXY_LINKS, 0),
 ]
-_CORR_IDS = ["wan_tp4", "ltx_tp2", "ltx_tp4", "wan_tp4_ring", "ltx_tp4_ring"]
+_CORR_IDS = ["wan_tp4", "ltx_tp2", "ltx_tp4", "wan_tp2", "wan_tp4_ring", "ltx_tp4_ring"]
 
 
 @pytest.mark.parametrize(
@@ -542,42 +544,48 @@ def test_corr_det(mesh_device, model, tp, topology, op_override, tp_axis):
     flagged = []
 
     for cfg in _select(_make_cfgs(model, tp), "CORR_ONLY"):
-        inp = _build(submesh, cfg, tp_axis)
-        pob = _make_pob(inp, submesh, cfg, links, tp_axis)
-        ref = _torch_ref(cfg)
-        comp = _gather(_run_baseline(inp, submesh, ag, cfg, topology, tp_axis, op_override), tp_axis)
-        out0 = _gather(_run_fused(inp, submesh, ag, cfg, topology, tp_axis, pob, op_override), tp_axis)
+        logger.info(f"=== [{model}] {cfg.cid} rows={cfg.rows} feat={cfg.feat_local} heads={cfg.heads} "
+                    f"hd={cfg.head_dim} rope={cfg.rope} ===")
+        try:  # isolate per-config so an OOM/hang on one shape characterizes it without losing the rest
+            inp = _build(submesh, cfg, tp_axis)
+            pob = _make_pob(inp, submesh, cfg, links, tp_axis)
+            ref = _torch_ref(cfg)
+            comp = _gather(_run_baseline(inp, submesh, ag, cfg, topology, tp_axis, op_override), tp_axis)
+            out0 = _gather(_run_fused(inp, submesh, ag, cfg, topology, tp_axis, pob, op_override), tp_axis)
 
-        ndiff, maxdelta, worst_oi = 0, 0.0, None
-        for _ in range(9):  # 10 fused runs total, same input -> must be bit-exact
-            p = _make_pob(inp, submesh, cfg, links, tp_axis) if fresh_pob else pob
-            oi = _gather(_run_fused(inp, submesh, ag, cfg, topology, tp_axis, p, op_override), tp_axis)
-            d = (oi - out0).abs().max().item()
-            if d > 0.0:
-                ndiff += 1
-                if d > maxdelta:
-                    maxdelta, worst_oi = d, oi.clone()
-            del oi
-        det = ndiff == 0
+            ndiff, maxdelta, worst_oi = 0, 0.0, None
+            for _ in range(9):  # 10 fused runs total, same input -> must be bit-exact
+                p = _make_pob(inp, submesh, cfg, links, tp_axis) if fresh_pob else pob
+                oi = _gather(_run_fused(inp, submesh, ag, cfg, topology, tp_axis, p, op_override), tp_axis)
+                d = (oi - out0).abs().max().item()
+                if d > 0.0:
+                    ndiff += 1
+                    if d > maxdelta:
+                        maxdelta, worst_oi = d, oi.clone()
+                del oi
+            det = ndiff == 0
 
-        if ndiff and _os.getenv("CORR_LOCALIZE") == "1":
-            rd = (worst_oi - out0).abs().amax(dim=-1)  # [N] per-token max-abs-diff
-            bad = (rd > 1e-3).nonzero().flatten().tolist()
-            span = f"[{min(bad)},{max(bad)}]" if bad else "[]"
-            logger.info(f"  LOCALIZE {cfg.cid}: {len(bad)}/{out0.shape[0]} tokens differ; first10={bad[:10]} span={span}")
+            if ndiff and _os.getenv("CORR_LOCALIZE") == "1":
+                rd = (worst_oi - out0).abs().amax(dim=-1)  # [N] per-token max-abs-diff
+                bad = (rd > 1e-3).nonzero().flatten().tolist()
+                span = f"[{min(bad)},{max(bad)}]" if bad else "[]"
+                logger.info(f"  LOCALIZE {cfg.cid}: {len(bad)}/{out0.shape[0]} tokens differ; first10={bad[:10]} span={span}")
 
-        pcc_ft, pcc_ct, pcc_fc = _pcc(out0, ref), _pcc(comp, ref), _pcc(out0, comp)
-        denom = ref.abs().mean().clamp_min(1e-6)
-        maxabs = (out0 - ref).abs().max().item()
-        ratio = (out0.abs().mean() / denom).item()
-        worstrow = ((out0 - ref).abs().mean(-1) / ref.abs().mean(-1).clamp_min(1e-6)).max().item()
-        susp = (pcc_ft < 0.999) or (worstrow > 0.10) or (abs(ratio - 1.0) > 0.05) or (not det)
-        if susp:
+            pcc_ft, pcc_ct, pcc_fc = _pcc(out0, ref), _pcc(comp, ref), _pcc(out0, comp)
+            denom = ref.abs().mean().clamp_min(1e-6)
+            maxabs = (out0 - ref).abs().max().item()
+            ratio = (out0.abs().mean() / denom).item()
+            worstrow = ((out0 - ref).abs().mean(-1) / ref.abs().mean(-1).clamp_min(1e-6)).max().item()
+            susp = (pcc_ft < 0.999) or (worstrow > 0.10) or (abs(ratio - 1.0) > 0.05) or (not det)
+            if susp:
+                flagged.append(cfg.cid)
+            logger.info(
+                f"RMSCORR {cfg.cid:<22} det={'OK' if det else 'FAIL'} pcc(F:torch)={pcc_ft * 100:.4f}% "
+                f"pcc(base:torch)={pcc_ct * 100:.4f}% pcc(F:base)={pcc_fc * 100:.4f}% maxabs={maxabs:.4f} "
+                f"ratio={ratio:.4f} worstrow={worstrow * 100:.2f}% det_ndiff={ndiff}/9 det_maxdelta={maxdelta:.4f}"
+                f"{'  <-- SUSPICIOUS' if susp else ''}"
+            )
+        except Exception as e:  # noqa: BLE001 — characterize (OOM / FATAL / hang-timeout), keep sweeping
             flagged.append(cfg.cid)
-        logger.info(
-            f"RMSCORR {cfg.cid:<22} det={'OK' if det else 'FAIL'} pcc(F:torch)={pcc_ft * 100:.4f}% "
-            f"pcc(base:torch)={pcc_ct * 100:.4f}% pcc(F:base)={pcc_fc * 100:.4f}% maxabs={maxabs:.4f} "
-            f"ratio={ratio:.4f} worstrow={worstrow * 100:.2f}% det_ndiff={ndiff}/9 det_maxdelta={maxdelta:.4f}"
-            f"{'  <-- SUSPICIOUS' if susp else ''}"
-        )
+            logger.warning(f"RMSCORR {cfg.cid:<22} CONFIG FAILED: {type(e).__name__}: {str(e)[:220]}")
     logger.info(f"RMSCORR [{model} tp{tp}] flagged: {flagged if flagged else 'NONE'}")
