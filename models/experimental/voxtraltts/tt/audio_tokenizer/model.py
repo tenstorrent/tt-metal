@@ -318,9 +318,6 @@ class VoxtralTTAudioTokenizer:
                 # kernel_w(7) * 1024ch * 2B = 14336B > 8192B NOC burst on the height-sharded conv
                 # reader; split in_channels (1024 -> 512) so each coalesced read fits (7*512*2=7168B).
                 input_channel_splits=2,
-                # Keep conv partials height-sharded through input-split add; deshard once per
-                # output split before interleaved channel concat (single-core sharded concat N/A).
-                keep_sharded_splits=True,
                 weight_dtype=self._weight_dtype,
                 activations_dtype=self._dtype,
                 output_dtype=self._dtype,
@@ -893,9 +890,9 @@ class VoxtralTTAudioTokenizer:
         return self._merge_pretransform_flat_chunks(chunks_flat)
 
     def _merge_pretransform_flat_chunks(self, chunks: list[ttnn.Tensor]) -> ttnn.Tensor:
-        """Pairwise ``ttnn.concat`` under P150 L1 without host fallback."""
-        # P150 concat CB page limit is about 730k bf16 elems on dim=2; stay below that.
-        max_concat_flat = 730_000
+        """Pairwise ``ttnn.concat`` under P150 L1; host-stitch only if two large segments remain."""
+        # P150 concat CB page limit ≈768k bf16 elems on dim=2 (1.536 MiB); stay below that.
+        max_concat_flat = 640_000
         tensors = chunks
         while len(tensors) > 1:
             merged_any = False
@@ -926,7 +923,17 @@ class VoxtralTTAudioTokenizer:
         if len(tensors) == 1:
             return tensors[0]
 
-        raise RuntimeError(
-            "TT waveform concat exceeds the safe P150 concat size. "
-            "Call pretransform_decode_tt(..., return_chunks=True) and export chunks at the host boundary."
+        # Remaining segments each exceed max_concat_flat — device concat would exceed L1 CB page
+        # limit (page size = last-dim bytes > per-core L1). Download all, cat on CPU, re-upload.
+        host_parts = [ttnn.to_torch(t).bfloat16() for t in tensors]
+        for t in tensors:
+            if t.is_allocated():
+                ttnn.deallocate(t)
+        host_cat = torch.cat(host_parts, dim=2)
+        return ttnn.from_torch(
+            host_cat,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )

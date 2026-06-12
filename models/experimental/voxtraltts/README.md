@@ -47,29 +47,26 @@ The CPU reference expects `torch`, `transformers`, `mistral-common >= 1.10.0`, `
 
 `VoxtralTTAudioTokenizer` uses `voxtral_audio_tokenizer_default_optimizations()` unless you pass a custom `AudioTokenizerOptimizations` preset.
 
-### SDPA: native sliding window (default **on**)
+### SDPA: dense ALiBi (default **on**)
 
-By default, decoder transformer SDPA uses TTNN **native causal + sliding-window** attention:
+By default, decoder transformer SDPA uses a dense **ALiBi + causal + sliding-window** ``attn_mask``
+(production accuracy; clean waveform vs CPU golden). Matmul Tier-1 program configs stay enabled.
 
-- `is_causal=True` + `sliding_window_size` (per stage: 2 / 4 / 8 / 16 from config)
-- Chunked `SDPAProgramConfig` (8×8 grid)
-- **No** dense `[1, H, T, T]` DRAM mask — faster decode, especially at large `T`
-
-**Trade-off:** ALiBi is omitted (TTNN does not allow `is_causal` and `attn_mask` together). Native SDPA matches structural causal+window attention only, not the full vLLM/Mistral ALiBi golden. Use dense-mask mode when you need production-accuracy PCC against the trained reference.
+**Optional native SDPA** (``is_causal=True`` + ``sliding_window_size``, no ALiBi mask) is faster but
+adds audible hiss / ~15% PCC drop — opt in only for perf bring-up.
 
 | Goal | Setting |
 |------|---------|
-| **Fast decode (default)** | *(no env var)* or ensure `VOXTRAL_AUDIO_TOKENIZER_SDPA_NATIVE_WINDOW_OFF` is unset |
-| **Production ALiBi accuracy** | `export VOXTRAL_AUDIO_TOKENIZER_SDPA_NATIVE_WINDOW_OFF=1` |
+| **Production decode (default)** | *(no env var)* — dense ALiBi |
+| **Fast native SDPA (perf)** | `export VOXTRAL_AUDIO_TOKENIZER_SDPA_NATIVE_WINDOW=1` |
 | **Python (accuracy tests)** | `voxtral_audio_tokenizer_dense_mask_sdpa_optimizations()` |
 
 ```bash
-# Default: native SDPA (fast)
-pytest models/experimental/voxtraltts/tests/test_audio_tokenizer_native_sdpa_pcc.py -sv
+# Production path (dense ALiBi)
+pytest models/experimental/voxtraltts/tests/test_audio_tokenizer_decoder_transformer_block.py -sv
 
-# Dense ALiBi mask (production golden, slower)
-VOXTRAL_AUDIO_TOKENIZER_SDPA_NATIVE_WINDOW_OFF=1 \
-  pytest models/experimental/voxtraltts/tests/test_audio_tokenizer_decoder_transformer_block.py -sv
+# Native SDPA perf path (no ALiBi)
+pytest models/experimental/voxtraltts/tests/test_audio_tokenizer_native_sdpa_pcc.py -sv
 ```
 
 ### Matmul Tier 1 program configs (default **on**)
@@ -86,4 +83,4 @@ export VOXTRAL_AUDIO_TOKENIZER_MATMUL_PROGCFG_OFF=1   # opt out
 pytest models/experimental/voxtraltts/tests/test_audio_tokenizer_opt.py -sv --timeout=0
 ```
 
-Uses default optimizations (native SDPA + Tier 1 matmul). For Tracy capture, see `tests/perf/README.md`.
+Uses default optimizations (dense ALiBi SDPA + Tier 1 matmul; set ``VOXTRAL_AUDIO_TOKENIZER_SDPA_NATIVE_WINDOW=1`` for native SDPA perf). For Tracy capture, see `tests/perf/README.md`.
