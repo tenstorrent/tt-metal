@@ -173,7 +173,7 @@ non-aligned EXCLUSION named in Refinement 1.
 
 ---
 
-### [ ] Refinement 5 — fp32 large-head-dim L1 budget (D=1024 OOM)
+### [x] Refinement 5 — fp32 large-head-dim L1 budget (D=1024 OOM)
 
 **Goal**: make `dtype=float32` with `D=1024` (D_t=32) fit L1. Currently the 4
 `Q1x1x128x1024` fp32 golden cells throw `program.cpp:1450` ("statically

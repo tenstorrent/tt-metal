@@ -268,3 +268,63 @@
   PCC + shape assertions, plus the bf8b × non-aligned EXCLUSION
   (NotImplementedError). Probes 005–008 (from_torch padding inspection, before/
   after the fix on the non-aligned shape set).
+
+## Refinement 5 — fp32 large-head-dim L1 budget (D=1024 OOM)  [x] complete
+- **Date**: 2026-06-12
+- **What was done**:
+  - **Host-side only — no kernel change.** The compute kernel's CB push/pop
+    balance is untouched; only the program descriptor's CB *sizing* changed.
+  - **Root cause (confirmed).** fp32 D=1024 → D_t=32. The seven D_t-scaling
+    CBs (cb_q/k/v_in, cb_o_acc, cb_pv, cb_o_tmp, cb_out) are each `2*D_t` pages.
+    At fp32 (4096 B/tile) the double-buffered set totals ~1.82 MB
+    (7 × 2 × 32 × 4096 = 1835008 B) plus ~70 KB of fixed CBs ≈ 1.91 MB, beyond
+    the 1.5 MB (1499136 B) static-CB ceiling → `program.cpp:1450`. bf16/bf8b
+    (half/quarter the bytes) and small-D fp32 fit, so this is fp32-large-D
+    specific and orthogonal to numerics.
+  - **Fix (lever 1 of the verifier's order — single-buffer the D_t CBs).** The
+    descriptor now builds a footprint-driven CB inventory: it computes the
+    double-buffered footprint and, only when it exceeds `L1_BUDGET -
+    SAFETY_MARGIN` (32 KB), demotes D_t-scaling CBs from `2*D_t` → `1*D_t`
+    pages in a SAFE priority order until it fits:
+    1. `cb_o_acc` / `cb_pv` / `cb_o_tmp` — compute→compute (intra-compute) CBs.
+       Per `/memory-budget-metal` §4.2 the "2 pages for pipelining" is
+       fictitious: one compute thread, the consumer pops the block before the
+       next producer reserves it, so `1*D_t` suffices with **zero** pipelining
+       loss. (`cb_o_tmp` is pure scratch for the `corr*O_i` block-bcast — lever
+       2 was folded in here rather than splitting it away.)
+    2. `cb_out` — compute→writer; single-buffering serializes one handoff per
+       work unit (modest, outside the KV hot loop).
+    3. `cb_q_in` — reader→compute, held across the KV loop (modest); demoted
+       last, **never reached** for the supported shapes.
+    `cb_k_in` / `cb_v_in` are **never** demoted — they stream per KV block in
+    the hot loop where double-buffering is real reader/compute pipelining.
+  - **fp32 D=1024** demotes `{cb_o_acc, cb_pv, cb_o_tmp, cb_out}` → 1382400 B
+    (1.32 MB), fits with ~116 KB headroom. `cb_q_in` and the KV stream stay
+    double-buffered. **bf16 / bf8b / small-D fp32 already fit double-buffered,
+    so the footprint check is a no-op → byte-identical to Refinement 4.**
+  - **No EXCLUSION, no shape-size tagger** (per the Refinement 5 contract — the
+    allocator OOM was the signal; the fix removes it natively). Chunking the D
+    dimension (lever 3) was not needed: single-buffering alone cleared the
+    budget with margin.
+- **Accuracy achieved** (randn inputs, default config = HiFi4 + fp32 DEST acc):
+  - fp32 D=1024 `Q1x1x128x1024`: PCC ≈ 0.99999, max_abs ≈ 0.0023.
+  - PCC ≥ 0.999 across all 8 new `..._large_head_dim.py` cases (none / custom /
+    causal / explicit-scale / GQA / multi-head / multi-batch), NaN-free.
+- **Golden test progress**: **1002 / 1156 passing** (was 996 at Refinement 4),
+  112 xfailed, 1 skipped, **2 failed**. **+6 newly passing** = exactly the
+  `Q1x1x128x1024` fp32 cells across `mask_mode ∈ {none, custom, causal}` (the
+  R4 "6× L1 OOM" deferral — now all green). **Zero regression** to the 996.
+  The 2 remaining `test_golden` failures are the `Q1x1x8192x64` fp32 SFPU-exp
+  precision floor (rms 0.0284 vs 0.02) → **Refinement 6** (unchanged by this
+  refinement; orthogonal — D=1024 is a memory issue, S=8192 is a precision
+  issue). `test_regression.py`: 10 pre-existing uniform/negative-input
+  relative-RMS metric artifacts (small D=32/D=64 shapes, `max_abs` tiny
+  0.01–0.027; documented in Refinement 1) — not D=1024 cells, not touched by
+  this change.
+- **Issues encountered**: None. Passed on the first descriptor implementation
+  (8/8 new tests, acceptance suite green, +6 golden, zero regression).
+- **Tests added**: `tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention_large_head_dim.py`
+  — 8 cases: fp32 D=1024 across {none, custom mask, causal, explicit scale,
+  GQA 4:1, multi-head, multi-batch} with NaN-free + PCC + shape assertions,
+  plus a bf16 D=1024 sanity case (confirms the L1-budget single-buffering is
+  NOT triggered for bf16). Probes 009–010 (fp32 D=1024 fit + PCC verification).
