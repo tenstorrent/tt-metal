@@ -75,27 +75,34 @@ def _deserialize_params(model: Model, serialized: dict) -> None:
 
 
 def _serialize_optimizer(optimizer: "ttml.optimizers.OptimizerBase") -> dict:
-    """Split an optimizer state_dict into picklable scalars + numpy-serialized moment maps."""
-    scalars, moments = {}, {}
-    for key, val in optimizer.get_state_dict().items():
-        if isinstance(val, ttml.NamedParameters):
-            moments[key] = {name: _serialize_tensor(tensor) for name, tensor in val.items()}
-        elif isinstance(val, (bool, int, float)):  # steps / lr / betas / flags
-            scalars[key] = val
-        else:
-            raise ValueError(f"checkpointing: unsupported optimizer state '{key}' of type {type(val).__name__}")
-    return {"scalars": scalars, "moments": moments}
+    """Serialize an optimizer's state_dict: scalars, moment maps, and any nested composite sub-states."""
+
+    def encode(value):  # one state_dict value: scalar, NamedParameters, or nested sub-dict
+        if isinstance(value, ttml.NamedParameters):
+            return {"named_parameters": {name: _serialize_tensor(tensor) for name, tensor in value.items()}}
+        if isinstance(value, dict):
+            return {key: encode(v) for key, v in value.items()}
+        if isinstance(value, (bool, int, float)):
+            return value
+        raise ValueError(f"checkpointing: unsupported optimizer state of type {type(value).__name__}")
+
+    return {key: encode(value) for key, value in optimizer.get_state_dict().items()}
 
 
 def _deserialize_optimizer(optimizer: "ttml.optimizers.OptimizerBase", serialized: dict) -> None:
-    """Restore a `_serialize_optimizer` dict into an optimizer in place via set_state_dict."""
-    state_dict = dict(serialized["scalars"])
-    for key, tensor_map in serialized["moments"].items():
-        named = ttml.NamedParameters()
-        for name, entry in tensor_map.items():
-            named[name] = _deserialize_tensor(entry)
-        state_dict[key] = named
-    optimizer.set_state_dict(state_dict)
+    """Restore a `_serialize_optimizer` blob into an optimizer in place via set_state_dict."""
+
+    def decode(node):
+        if not isinstance(node, dict):
+            return node  # scalar
+        if "named_parameters" in node:
+            named = ttml.NamedParameters()
+            for name, entry in node["named_parameters"].items():
+                named[name] = _deserialize_tensor(entry)
+            return named
+        return {key: decode(v) for key, v in node.items()}  # nested sub-state
+
+    optimizer.set_state_dict({key: decode(value) for key, value in serialized.items()})
 
 
 def build_checkpoint_io(
@@ -119,7 +126,7 @@ def build_checkpoint_io(
                 },
                 f,
             )
-        os.replace(tmp_path, path)  # atomic rename — a crash mid-write leaves the previous checkpoint intact
+        os.replace(tmp_path, path)  # atomic rename: a crash mid-write leaves the previous checkpoint intact
         print(f"  Saved checkpoint to {path}")
 
     def loader(trainer: SFTTrainer, path: str) -> int:
