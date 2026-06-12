@@ -477,6 +477,14 @@ class Generator(WarmupForwardMixin):
         all_users = [0] if use_batched_prefill else empty_slots
 
         for id, user_id in enumerate(all_users):
+            # Batch-32 looped prefill: fully drain the PREVIOUS user's async CCLs before issuing the
+            # next user's collectives. tt-triage on a user-1 prefill hang showed a FABRIC CCL RING
+            # STALL (ethernet cores spinning across all 32 chips) — the next user's reduce_scatter/
+            # all_gather collided with the prior user's in-flight ring traffic. A full device barrier
+            # between users serializes the per-user prefills so the ring can never overlap. (1 user
+            # /batch-1 prefill is unaffected — the loop runs once.)
+            if id > 0:
+                ttnn.synchronize_device(self.mesh_device)
             logger.info(
                 f"Prefilling User {user_id}, use_batched_prefill: {use_batched_prefill}, prompt_lens: {prompt_lens[id]}, prefill_seq_len: {prefill_seq_lens[id]}, num_cached_tokens: {num_cached_tokens_list[id]}"
             )
@@ -1150,9 +1158,17 @@ class Generator(WarmupForwardMixin):
         reset_batch=False,
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
+        batch_size: int | None = None,
     ):
         if getattr(self, "_disable_decode_tracing", False):
             enable_trace = False
+
+        # Number of active decode users in the 32-row tile. Default to max_batch_size so a server
+        # constructed with max_batch_size=32 decodes all 32 in one pass; batch-1 stays the default.
+        # Load-bearing: threaded into the model decode forward (no-collapse full-attn + packed-N
+        # logits tail at B>1) and used to key a SEPARATE decode trace per batch size.
+        if batch_size is None:
+            batch_size = getattr(self.model_args, "max_batch_size", 1)
 
         if sampling_params is None:
             return_logits = True
@@ -1214,11 +1230,13 @@ class Generator(WarmupForwardMixin):
                 **decode_kwargs,
                 reset_inputs=reset_inputs,
                 return_logits=return_logits,
+                batch_size=batch_size,
             )
         else:
             tt_tok = self._decode_forward_no_trace_text(
                 **decode_kwargs,
                 return_logits=return_logits,
+                batch_size=batch_size,
             )
             tt_log_probs = None
 
@@ -1246,6 +1264,7 @@ class Generator(WarmupForwardMixin):
         is_cur_pos_sharded=False,
         is_page_table_sharded=False,
         return_logits=False,
+        batch_size=1,
     ):
         """
         Performs text decode step.
@@ -1264,6 +1283,7 @@ class Generator(WarmupForwardMixin):
             is_cur_pos_sharded=is_cur_pos_sharded,
             return_logits=return_logits,
             capture_sampling_trace=self.enable_split_sampling,
+            batch_size=batch_size,
         )
         # TODO this actually never calls sampling, because we're telling the model we'll do it ourselves.
         # We also never set the sampling module up with the right parameters.
@@ -1278,6 +1298,7 @@ class Generator(WarmupForwardMixin):
         is_cur_pos_sharded=False,
         is_page_table_sharded=False,
         return_logits=False,
+        batch_size=1,
     ):
         """
         Captures a trace for the decode_forward method.
@@ -1301,6 +1322,7 @@ class Generator(WarmupForwardMixin):
             is_cur_pos_sharded=is_cur_pos_sharded,
             is_page_table_sharded=is_page_table_sharded,
             return_logits=return_logits,
+            batch_size=batch_size,
         )
         logger.info("Done Compiling Model")
 
@@ -1331,6 +1353,7 @@ class Generator(WarmupForwardMixin):
             is_cur_pos_sharded=is_cur_pos_sharded,
             return_logits=return_logits,
             capture_sampling_trace=self.enable_split_sampling,
+            batch_size=batch_size,
         )
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
@@ -1364,13 +1387,17 @@ class Generator(WarmupForwardMixin):
         is_cur_pos_sharded=False,
         is_page_table_sharded=False,
         return_logits=False,
+        batch_size=1,
     ):
         """
         Run decode forward text with tracing
         """
         tokens = tokens.view(-1, 1)
+        # Key the trace on (return_logits, batch_size): B=1 and B=32 decodes have different shapes
+        # (full-attn row collapse, packed-N logits tail) and MUST NOT share a captured trace.
+        tkey = (return_logits, batch_size)
         # The trace is different depending on whether we are returning logits or sampling on device
-        if not self.trace_ids_decode[return_logits]:
+        if not self.trace_ids_decode[tkey]:
             trace_id, tt_out_tok, *device_inputs = self._capture_trace_text(
                 tokens,
                 current_pos,
@@ -1379,10 +1406,11 @@ class Generator(WarmupForwardMixin):
                 is_cur_pos_sharded=is_cur_pos_sharded,
                 is_page_table_sharded=is_page_table_sharded,
                 return_logits=return_logits,
+                batch_size=batch_size,
             )
-            self.trace_ids_decode[return_logits] = trace_id
-            self.trace_inputs_decode[return_logits] = device_inputs
-            self.trace_output_decode[return_logits] = tt_out_tok
+            self.trace_ids_decode[tkey] = trace_id
+            self.trace_inputs_decode[tkey] = device_inputs
+            self.trace_output_decode[tkey] = tt_out_tok
         if reset_inputs:
             host_inputs = self.model.prepare_decode_inputs_host(
                 tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded
@@ -1390,13 +1418,13 @@ class Generator(WarmupForwardMixin):
             shard_specs = self.model.prepare_decode_shard_configs(is_cur_pos_sharded, is_page_table_sharded)
             device_inputs = copy_host_to_device(
                 host_tensors=host_inputs,
-                device_tensors=self.trace_inputs_decode[return_logits],
+                device_tensors=self.trace_inputs_decode[tkey],
                 shard_specs=shard_specs,
             )
 
         _dbg = os.environ.get("QWEN36_TRACE_DBG", "0") == "1"
         if _dbg:
-            _ti = self.trace_inputs_decode[return_logits]
+            _ti = self.trace_inputs_decode[tkey]
             try:
                 _cp = ttnn.to_torch(ttnn.get_device_tensors(_ti[1])[0]).flatten()[:4].tolist()
                 _tok = ttnn.to_torch(ttnn.get_device_tensors(_ti[0])[0]).flatten()[:4].tolist()
@@ -1426,9 +1454,9 @@ class Generator(WarmupForwardMixin):
             self.model.refresh_decode_per_step_buffers(current_pos)
 
         trace_tok_rm = self._decode_forward_trace_text(
-            self.trace_ids_decode[return_logits],
-            self.trace_inputs_decode[return_logits],
-            self.trace_output_decode[return_logits],
+            self.trace_ids_decode[tkey],
+            self.trace_inputs_decode[tkey],
+            self.trace_output_decode[tkey],
             tokens,
             current_pos,
             page_table=page_table,
@@ -1437,10 +1465,10 @@ class Generator(WarmupForwardMixin):
         if self.enable_split_sampling and not return_logits:
             _out = self.model.sampling.sample(
                 logits=trace_tok_rm[0],
-                tt_out_tok=self.trace_inputs_decode[return_logits][0],
+                tt_out_tok=self.trace_inputs_decode[tkey][0],
             )
             if _dbg:
-                _ti = self.trace_inputs_decode[return_logits]
+                _ti = self.trace_inputs_decode[tkey]
                 try:
                     _cp2 = ttnn.to_torch(ttnn.get_device_tensors(_ti[1])[0]).flatten()[:4].tolist()
                     _tok2 = ttnn.to_torch(ttnn.get_device_tensors(_ti[0])[0]).flatten()[:4].tolist()

@@ -99,8 +99,17 @@ def bh_glx_mesh():
     )
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(8, 4))
     yield mesh
-    ttnn.close_mesh_device(mesh)
-    ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+    # ROBUST TEARDOWN: on a test error, close_mesh_device can throw
+    # ("SubDeviceManagerTracker not initialized / remote devices only"); if that
+    # propagates, set_fabric_config(DISABLED) is skipped and the fabric is left
+    # ENABLED -> the next process inherits a dirty fabric (ethernet-core timeout /
+    # IndexError / hang). Always disable the fabric, even if close fails.
+    try:
+        ttnn.close_mesh_device(mesh)
+    except Exception as _e:
+        print(f"[teardown] close_mesh_device raised (continuing to disable fabric): {_e}", flush=True)
+    finally:
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
 # ---------------------------------------------------------------------------

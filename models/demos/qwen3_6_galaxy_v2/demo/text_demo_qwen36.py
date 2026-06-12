@@ -180,11 +180,14 @@ def _build_tt_model_paged(mesh, state_dict, pattern, n_layers, paged_attention_c
     return model, args
 
 
-def _build_tt_model_paged_kv(mesh, state_dict, pattern, n_layers, paged_attention_config):
+def _build_tt_model_paged_kv(mesh, state_dict, pattern, n_layers, paged_attention_config, max_batch_size=1):
     """Same as _build_tt_model_paged but with use_paged_kv_cache=True — the contract
     the Generator (prefill_forward_text / decode_forward) + tt-inference-server use.
     The full-attention layers allocate ``attention.layer_past`` against the paged
-    config; DeltaNet layers carry recurrent state (no kv)."""
+    config; DeltaNet layers carry recurrent state (no kv).
+
+    max_batch_size: number of concurrent decode users (1 = production batch-1; 32 = batched decode).
+    Sizes the GDN/conv recurrent state buffers + paged KV + sampler to the batch."""
     from models.demos.qwen3_6_galaxy_v2.tt.llama_model import TtTransformer
     from models.demos.qwen3_6_galaxy_v2.tt.qwen36_model_config import TtQwen36ModelArgs
 
@@ -194,9 +197,9 @@ def _build_tt_model_paged_kv(mesh, state_dict, pattern, n_layers, paged_attentio
     # seq-len; the >128k generator path needs the same (build actual-len rope), TODO.
     _msl = os.environ.get("QWEN36_MAX_SEQ_LEN")
     if _msl is not None:
-        args = TtQwen36ModelArgs(mesh, max_seq_len=int(_msl))
+        args = TtQwen36ModelArgs(mesh, max_seq_len=int(_msl), max_batch_size=max_batch_size)
     else:
-        args = TtQwen36ModelArgs(mesh)
+        args = TtQwen36ModelArgs(mesh, max_batch_size=max_batch_size)
     args.n_layers = n_layers
     args.linear_attention_pattern = pattern
     weight_cache_path = args.weight_cache_path(ttnn.bfloat8_b)

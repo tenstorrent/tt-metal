@@ -2638,12 +2638,15 @@ class TtQwen36DeltaAttention(LightweightModule):
             if _packed_tmp is not None:
                 _packed_tmp.deallocate(True)
                 _packed_tmp = None
+            # DRAM interleaved input (mem=DRAM) + default use_qwen36_residual_buffer=False routes
+            # decode-mode line_all_reduce through the reduce_scatter+all_gather decomposition
+            # (llama_ccl.py ~1082) — the same DRAM RS+AG the proven batch-1 prefill path uses. (The
+            # old `use_persistent_buffer=False` kwarg never existed on line_all_reduce -> TypeError.)
             reduced = self.tt_ccl.line_all_reduce(
                 partial,
                 cluster_axis=0,
                 num_links=_do_num_links,
                 memory_config=mem,
-                use_persistent_buffer=False,
             )
             partial.deallocate(True)
             return reduced

@@ -1113,10 +1113,15 @@ class TtTransformer(LightweightModule):
         is_cur_pos_sharded=False,
         return_logits=False,
         capture_sampling_trace=False,  # If true, return logits so sampling can be traced elsewhere
+        batch_size=1,
     ):
         """
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
+
+        batch_size is the number of active decode users (1..max_batch_size). It is load-bearing for
+        qwen3.6 decode: it activates the no-collapse full-attn row path (llama_decoder ~545) and the
+        packed-N decode logits tail (forward ~1403) at B>1. B=1 keeps the single-user path identical.
         """
         # qwen3.6 current_pos is replicated (single-core DRAM), not L1 sub-core
         # sharded — so plus_one must use the single-core grid (is_cur_pos_sharded
@@ -1161,6 +1166,7 @@ class TtTransformer(LightweightModule):
             mode="decode",
             page_table=page_table,
             kv_cache=kv_cache,
+            batch_size=batch_size,
         )
         if os.environ.get("QWEN36_RS_DBG", "0") == "1":
             _tl = tt_logits[0] if isinstance(tt_logits, (list, tuple)) else tt_logits
