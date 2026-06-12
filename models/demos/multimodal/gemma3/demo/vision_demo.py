@@ -25,7 +25,6 @@ import torch
 
 import ttnn
 from models.common.sampling import SamplingParams
-from models.common.utility_functions import is_blackhole
 from models.demos.multimodal.gemma3.tt.gemma_e2e_model import GemmaMultimodalGenerator
 from models.demos.utils.device_sku import get_current_device_sku_name
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
@@ -148,13 +147,6 @@ def prepare_generator_args(
 
 def _gemma3_vision_demo_device_params():
     resolved_size = resolve_trace_region_size("gemma-3-27b-vision", get_current_device_sku_name())
-    if is_blackhole():
-        return {
-            "fabric_config": True,
-            "trace_region_size": resolved_size,
-            "num_command_queues": 2,
-            "l1_small_size": 24576,
-        }
     return {
         "fabric_config": True,
         "trace_region_size": resolved_size,
