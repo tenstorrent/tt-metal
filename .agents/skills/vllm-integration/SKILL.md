@@ -26,9 +26,11 @@ tt/generator.py
 
 If they do not, use `$full-model` first. During vLLM integration you may make small, evidence-backed changes to `model.py` or `generator.py` when the serving adapter exposes a real contract gap, but avoid turning this stage back into full-model bringup.
 
+Before writing adapter code, load the datatype-sweep selection and confirm the generator constructs that exact policy: weight groups, activation/residual dtype, CCL dtype, KV-cache dtype, compute fidelities, and layer exceptions. Serving uses the selected full-model policy. Serving a reduced-speed model does not satisfy completion.
+
 ## vLLM Adapter
 
-`tt/generator_vllm.py` should delegate to the existing generator's low-level methods wherever possible. Keep it thin unless the model shape contract genuinely requires a thicker adapter.
+`tt/generator_vllm.py` should delegate to the existing generator's low-level methods. Keep adapter-only code limited to vLLM interface translation.
 
 Read:
 
@@ -45,9 +47,20 @@ Not every cache must be vLLM-owned. vLLM owns the attention KV cache, but recurr
 
 Make prompt lengths, page tables, decode positions, batch dimensions, trace-side state, and on-device sampling explicit. The serving decode pass must drive the generator's traced decode path, not an eager-only fallback. When adding or debugging trace capture/replay, trace-safe inputs, or replay correctness for this adapter, use `$tt-enable-tracing`. The adapter should not duplicate model logic that already lives in `tt/model.py` or `tt/generator.py`.
 
-For decode performance, implement the vLLM async split before advertising it: `decode_forward(..., read_from_device=False)` should return device tensors, `read_decode_output(..., async_read=True)` should perform the minimal deferred read, and `process_decode_output_host(...)` should do host formatting. Only set `supports_async_decode=True` after this path passes the vLLM plugin's expectations with decode trace enabled. Leave prefix caching `False` unless it is implemented and tested.
+For decode performance, implement the vLLM async split before advertising it: `decode_forward(..., read_from_device=False)` should return device tensors, `read_decode_output(..., async_read=True)` should perform the minimal deferred read, and `process_decode_output_host(...)` should do host formatting. Only set `supports_async_decode=True` after this path passes the vLLM plugin's expectations with decode trace enabled and stale-token/current-position tests passing. Leave prefix caching `False` unless it is implemented and tested.
 
-The traced serving decode path should reuse persistent trace inputs and replay via `ttnn.execute_trace(..., blocking=False)`. For `sample_on_device_mode=all`, keep sampling on device using the common sampling trace support; if the model trace returns sampler-ready logits, pass them as already prepared rather than rebuilding or reading full logits on the host. Remove host greedy/top-1 argmax fast paths, or prove they are not used by the measured benchmark. Avoid copying a full page table every token when it is unchanged, but add a stale-input test before reducing any token/position/page-table refresh.
+Do not treat `supports_async_decode=True` as permission for scheduler overlap. It only means the adapter can split submit/read/host-formatting. The steady overlap path is a separate contract: vLLM may build and submit decode step N+1 before sampled token N has been applied to host scheduler state. For a new adapter, set `tt_async_decode_allows_overlap = False` whenever next-step `model_input` is built from vLLM host state such as `input_batch.token_ids_cpu`, `num_tokens`, positions, or per-request scheduler tables, or whenever the adapter refreshes traced token/current-position/page-table tensors from that `model_input`.
+
+Only set `tt_async_decode_allows_overlap = True` after a focused overlap test proves all of these under `--async-scheduling` and `sample_on_device_mode=all`:
+
+- sampled token N is either applied to host scheduler state before step N+1 input construction, or step N+1 input construction is entirely device-owned and cannot be overwritten by stale host state;
+- current-position/RoPE position state advances exactly once per emitted token and matches the request's output length;
+- traced token/current-position/page-table inputs observed immediately before replay N+1 contain the new values, not the previous step's values;
+- the async-overlap qualitative output passes the degenerate-output check, with no doubled subwords or repeated control tokens.
+
+If the vLLM plugin or harness is being changed, prefer the same safety rule there: overlap should default to false unless the model declares this proof-backed capability. Leaving overlap disabled may cost a few tokens/sec/user; letting it default on can silently corrupt generation.
+
+The traced serving decode path reuses the full-model generator's canonical split-sampling path and replays via `ttnn.execute_trace(..., blocking=False)`. For `sample_on_device_mode=all`, serving has no new sampling strategy, host greedy/top-1 argmax, full-logits readback, generic top-k fallback for greedy, or Python readback/writeback token-feedback loop. If the full-model generator lacks split sampling, stop and fix `$full-model`; do not complete vLLM by patching sampling in the adapter. Do not copy a full page table every token when it is unchanged. Reduce token/current-position/page-table refresh to actual scheduler state changes, then prove both changed and unchanged cases with stale-input tests.
 
 ## Plugin Registration
 
@@ -95,7 +108,7 @@ python -m models.common.readiness_check.run_vllm_server \
   --model-dir ... --hf-model ...
 ```
 
-The runner enforces on-device sampling (`sample_on_device_mode: all` in the TT plugin config). If the full-model stage left sampler work incomplete, finish the smallest necessary model/generator change here and record it.
+The runner enforces on-device sampling (`sample_on_device_mode: all` in the TT plugin config). The full-model stage must already provide traced token-out split sampling. If it does not, return to `$full-model`; this stage should only adapt that contract to vLLM.
 
 Check stages:
 
@@ -104,6 +117,8 @@ Check stages:
 - `benchmark`: runs the configured synthetic workload and records TTFT P50/P99, ITL P50/P99, aggregate output throughput, and mean per-user decode t/s/u.
 
 When optimizing decode serving overhead, benchmark with the exact same runner, prompt/output lengths, `max_num_seqs`, model length, mesh, TT config, and sampling mode as the canonical or previous comparison. Report TTFT, ITL, output throughput, and mean per-user decode t/s/u before/after; compare directly to the canonical same-machine implementation when it is available.
+
+Keep teacher-forcing and serving performance separate. A readiness/PERF teacher-forcing number is useful as a decoder/generator lower bound; vLLM throughput includes serving orchestration, sampling, token feedback, request handling, and readback. If serving is much slower than teacher forcing, remove avoidable serving-specific overhead before retuning the decoder stack: fallback sampling, stale-input refreshes, per-token page-table copies, blocking trace replay, synchronizations, readbacks, and adapter-side reconstruction.
 
 `--max-num-seqs` is passed to both server launch and sampling pytest (`--tt-max-num-seqs`).
 
@@ -138,13 +153,15 @@ If the tokenizer has no chat template, say so explicitly, treat the checkpoint a
 
 ## Evidence To Leave
 
-Final vLLM integration evidence should show:
+Done means all of these are true and recorded:
 
 - Full-model generator readiness baseline used before adding vLLM.
+- Selected datatype policy loaded by serving, including KV-cache and CCL dtype.
 - Adapter class, low-level generator methods it delegates to, and KV-cache ownership contract.
 - Plugin registration path and architecture name.
 - Exact successful `run_vllm_server` invocation.
-- Capability flags with evidence: no unproven `supports_async_decode=True`, no prefix-caching claim without tests, and on-device sampling verified for the measured mode.
+- Capability flags with evidence: no unproven `supports_async_decode=True`, explicit `tt_async_decode_allows_overlap` value with proof if true, no prefix-caching claim without tests, and on-device sampling verified for the measured mode.
+- Evidence that serving uses the full-model split-sampling contract: internal sampling trace, `tt_out_tok` feedback into the persistent decode token input, greedy force-argmax for greedy benchmarks, and stale-token/current-position smoke coverage.
 - Logit-determinism evidence through vLLM, with run-to-run and cross-batch-position reproducibility checks and standalone baseline comparison.
 - Sampling test results, with any reproducibility-only failures separated from real failures.
 - Qualitative greedy and sampled serving-output verdict.
