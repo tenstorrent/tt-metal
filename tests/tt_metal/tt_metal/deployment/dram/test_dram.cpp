@@ -89,46 +89,6 @@ static std::vector<std::string> get_tenstorrent_pci_bdf_lines() {
     return lines;
 }
 
-static const std::vector<std::string>& test_dram_get_tenstorrent_pci_bdfs_cached() {
-    static const std::vector<std::string> bdfs = []() {
-        std::vector<std::string> out;
-
-        DIR* dir = opendir("/sys/bus/pci/devices");
-        if (!dir) {
-            return out;
-        }
-
-        while (auto* entry = readdir(dir)) {
-            const std::string bdf = entry->d_name;
-            if (bdf.empty() || bdf[0] == '.') {
-                continue;
-            }
-
-            const std::string base = "/sys/bus/pci/devices/" + bdf;
-            std::string vendor = test_dram_read_text_file_trimmed(base + "/vendor");
-            std::transform(vendor.begin(), vendor.end(), vendor.begin(), [](char c) { return std::tolower(c); });
-
-            if (vendor == "0x1e52") {
-                out.push_back(bdf);
-            }
-        }
-
-        closedir(dir);
-        std::sort(out.begin(), out.end());
-        return out;
-    }();
-
-    return bdfs;
-}
-
-static std::string test_dram_pci_bdf_for_device_id(uint32_t device_id) {
-    const auto& bdfs = test_dram_get_tenstorrent_pci_bdfs_cached();
-    if (device_id < bdfs.size()) {
-        return bdfs[device_id];
-    }
-    return "unknown";
-}
-
 static void log_blackhole_galaxy_pci_bdfs_once() {
     static std::once_flag once;
     std::call_once(once, []() {
@@ -453,7 +413,7 @@ static void log_dram_bank_result_table(const DramGalaxySummary& s) {
 
     for (const auto& chip : s.chips) {
         std::string row = "|";
-        const auto bdf = test_dram_pci_bdf_for_device_id(chip.device_id);
+        const auto bdf = pci_bdf_for_device_id(chip.device_id);
         const auto [ubb_tray, location] = test_dram_ubb_tray_and_location_from_bdf(bdf);
         row += make_left_cell(bdf, bdf_col_width) + "|";
         row += make_left_cell(ubb_tray, ubb_col_width) + "|";
@@ -939,7 +899,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentOptimalWorkersAllDramBanks)
             "Starting chip {}/{} bdf={} device_id={}",
             chip_index + 1,
             chips_to_test,
-            test_dram_pci_bdf_for_device_id(device->id()),
+            pci_bdf_for_device_id(device->id()),
             device->id());
 
         const auto assignments = get_optimal_dram_bank_worker_assignments(mesh_device, tt_metal::NOC::NOC_0);
@@ -947,7 +907,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentOptimalWorkersAllDramBanks)
         log_info(
             tt::LogTest,
             "bdf={} device_id={} persistent optimal-worker test uses {} DRAM channels and {} worker cores",
-            test_dram_pci_bdf_for_device_id(device->id()),
+            pci_bdf_for_device_id(device->id()),
             device->id(),
             device->num_dram_channels(),
             assignments.size());
@@ -957,7 +917,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentOptimalWorkersAllDramBanks)
                 log_info(
                     tt::LogTest,
                     "bdf={} device_id={} DRAM bank {} assigned to logical worker core ({}, {})",
-                    test_dram_pci_bdf_for_device_id(device->id()),
+                    pci_bdf_for_device_id(device->id()),
                     device->id(),
                     a.bank_id,
                     a.worker_core.x,
@@ -1063,20 +1023,20 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentOptimalWorkersAllDramBanks)
             log_info(
                 tt::LogTest,
                 "=== Persistent Optimal DRAM Deployment Chip Summary bdf={} device_id={} ===",
-                test_dram_pci_bdf_for_device_id(device->id()),
+                pci_bdf_for_device_id(device->id()),
                 device->id());
 
             if (g_watchdog_requested.load()) {
                 log_info(
                     tt::LogTest,
                     "bdf={} device_id={} status=ABORTED reason=stall_watchdog",
-                    test_dram_pci_bdf_for_device_id(device->id()),
+                    pci_bdf_for_device_id(device->id()),
                     device->id());
             }
 
             string message = fmt::format(
                 "bdf={} device_id={} dram_channels={} workers={} jobs={} time={:.2f} ms checked_bytes={} pass={}",
-                test_dram_pci_bdf_for_device_id(device->id()),
+                pci_bdf_for_device_id(device->id()),
                 device->id(),
                 assignments.size(),
                 worker_cores.size(),
@@ -1095,7 +1055,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentOptimalWorkersAllDramBanks)
                 log_info(
                     tt::LogTest,
                     "bdf={} device_id={} all jobs passed with no errors",
-                    test_dram_pci_bdf_for_device_id(device->id()),
+                    pci_bdf_for_device_id(device->id()),
                     device->id());
             }
 
@@ -1218,7 +1178,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentAllWorkersSingleDramSequent
             "Starting chip {}/{} bdf={} device_id={}",
             chip_index + 1,
             chips_to_test,
-            test_dram_pci_bdf_for_device_id(device->id()),
+            pci_bdf_for_device_id(device->id()),
             device->id());
 
         const uint32_t num_dram_channels = device->num_dram_channels();
@@ -1235,7 +1195,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentAllWorkersSingleDramSequent
             tt::LogTest,
             "bdf={} device_id={} persistent all-workers single-DRAM sequential sweep: workers={} dram_channels={} "
             "bytes_per_dram={} chunk_bytes={}",
-            test_dram_pci_bdf_for_device_id(device->id()),
+            pci_bdf_for_device_id(device->id()),
             device->id(),
             worker_cores.size(),
             num_dram_channels,
@@ -1362,7 +1322,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentAllWorkersSingleDramSequent
                 std::string message = fmt::format(
                     "bdf={} device_id={} completed DRAM bank {}/{} workers={} jobs={} duration={} checked_bytes={} "
                     "pass={}",
-                    test_dram_pci_bdf_for_device_id(device->id()),
+                    pci_bdf_for_device_id(device->id()),
                     device->id(),
                     bank_id + 1,
                     num_dram_channels,
@@ -1405,20 +1365,20 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentAllWorkersSingleDramSequent
             log_info(
                 tt::LogTest,
                 "=== Persistent All-Workers Single-DRAM Sequential Sweep Chip Summary bdf={} device_id={} ===",
-                test_dram_pci_bdf_for_device_id(device->id()),
+                pci_bdf_for_device_id(device->id()),
                 device->id());
 
             if (g_watchdog_requested.load()) {
                 log_info(
                     tt::LogTest,
                     "bdf={} device_id={} status=ABORTED reason=stall_watchdog",
-                    test_dram_pci_bdf_for_device_id(device->id()),
+                    pci_bdf_for_device_id(device->id()),
                     device->id());
             }
 
             std::string message = fmt::format(
                 "bdf={} device_id={} workers={} dram_channels={} duration={} pass={}",
-                test_dram_pci_bdf_for_device_id(device->id()),
+                pci_bdf_for_device_id(device->id()),
                 device->id(),
                 worker_cores.size(),
                 num_dram_channels,
@@ -1435,7 +1395,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentAllWorkersSingleDramSequent
                 log_info(
                     tt::LogTest,
                     "bdf={} device_id={} all banks passed with no errors",
-                    test_dram_pci_bdf_for_device_id(device->id()),
+                    pci_bdf_for_device_id(device->id()),
                     device->id());
             }
 
@@ -1556,7 +1516,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentPartitionedWorkersAllDramBa
             "Starting chip {}/{} bdf={} device_id={}",
             chip_index + 1,
             chips_to_test,
-            test_dram_pci_bdf_for_device_id(device->id()),
+            pci_bdf_for_device_id(device->id()),
             device->id());
 
         const uint32_t num_dram_channels = device->num_dram_channels();
@@ -1574,7 +1534,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentPartitionedWorkersAllDramBa
             tt::LogTest,
             "bdf={} device_id={} persistent partitioned-workers all-DRAM test: workers={} dram_channels={} "
             "bytes_per_dram={} chunk_bytes={}",
-            test_dram_pci_bdf_for_device_id(device->id()),
+            pci_bdf_for_device_id(device->id()),
             device->id(),
             worker_cores.size(),
             num_dram_channels,
@@ -1593,7 +1553,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentPartitionedWorkersAllDramBa
                 log_info(
                     tt::LogTest,
                     "bdf={} device_id={} DRAM bank {} assigned {} worker cores",
-                    test_dram_pci_bdf_for_device_id(device->id()),
+                    pci_bdf_for_device_id(device->id()),
                     device->id(),
                     bank_id,
                     workers_for_bank[bank_id].size());
@@ -1728,20 +1688,20 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentPartitionedWorkersAllDramBa
             log_info(
                 tt::LogTest,
                 "=== Persistent Partitioned Workers All-DRAM Chip Summary bdf={} device_id={} ===",
-                test_dram_pci_bdf_for_device_id(device->id()),
+                pci_bdf_for_device_id(device->id()),
                 device->id());
 
             if (g_watchdog_requested.load()) {
                 log_info(
                     tt::LogTest,
                     "bdf={} device_id={} status=ABORTED reason=stall_watchdog",
-                    test_dram_pci_bdf_for_device_id(device->id()),
+                    pci_bdf_for_device_id(device->id()),
                     device->id());
             }
 
             std::string message = fmt::format(
                 "bdf={} device_id={} workers={} dram_channels={} jobs={} duration={} checked_bytes={} pass={}",
-                test_dram_pci_bdf_for_device_id(device->id()),
+                pci_bdf_for_device_id(device->id()),
                 device->id(),
                 worker_cores.size(),
                 num_dram_channels,
@@ -1760,7 +1720,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentPartitionedWorkersAllDramBa
                 log_info(
                     tt::LogTest,
                     "bdf={} device_id={} all jobs passed with no errors",
-                    test_dram_pci_bdf_for_device_id(device->id()),
+                    pci_bdf_for_device_id(device->id()),
                     device->id());
             }
 
