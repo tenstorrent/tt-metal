@@ -303,7 +303,12 @@ def run_hf(
             "Add sample.jpeg under models/experimental/devstarl2_small/resource/."
         )
 
-    processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(
+        model_id,
+        trust_remote_code=True,
+        fix_mistral_regex=True,
+        local_files_only=os.getenv("CI") == "true",
+    )
     model = AutoModelForImageTextToText.from_pretrained(
         model_id,
         torch_dtype=torch.float16,
@@ -413,7 +418,12 @@ def run_tt(
     do_sample = not greedy
     gen_temperature = temperature if not greedy else _DEFAULT_SAMPLE_TEMPERATURE
 
-    processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(
+        model_id,
+        trust_remote_code=True,
+        fix_mistral_regex=True,
+        local_files_only=os.getenv("CI") == "true",
+    )
     image = Image.open(image_path).convert("RGB")
     image = _prepare_vision_image(image, vision_max_edge, vision_square_pixels)
     prompt = processor.apply_chat_template(
@@ -592,6 +602,7 @@ def run_tt(
             tokenizer = MistralCommonBackend.from_pretrained(
                 model_id,
                 trust_remote_code=True,
+                fix_mistral_regex=True,
                 local_files_only=os.getenv("CI") == "true",
             )
         pad_token_id = getattr(tokenizer, "pad_token_id", None)
