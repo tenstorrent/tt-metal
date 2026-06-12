@@ -4996,44 +4996,44 @@ def _main(activations, weights):
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
     ttnn.deallocate(ttnn_matmul_31, False)
-    ttnn_reduce_scatter_11 = ttnn.reduce_scatter(
+    # E_moe_ccl_fuse (matmul_31 / shared-FFN w1): the all-reduce was reduce_scatter(dim3,axis1)
+    # + all_gather(dim1,axis1) = 2 CCLs incl. an expensive HiFi4-fp32 reduce_scatter. Fuse into
+    # all_gather(dim0,axis1) of the partials + local bf16 sum (hits FastReduceNC). UNBLOCKED by
+    # PR #46544 dynamic mux sizing (previously hung the concurrent moe_compute combine, #46208).
+    # MEASURED -37.7us / MoE layer (reduce_scatter -80us, all_gather +14us, fast local sum +4us);
+    # argmax 100% bit-identical, logits cos64 0.999998.
+    ttnn_s3_ag = ttnn.all_gather(
         input_tensor=ttnn_reshape_154,
-        dim=3,
+        dim=0,
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         num_links=None,
         topology=ttnn.Topology.Ring,
-        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        ),
     )
     ttnn.deallocate(ttnn_reshape_154, False)
-    ttnn_reshape_155 = ttnn.reshape(
-        ttnn_reduce_scatter_11,
-        [32, 256],
+    ttnn_s3_red = ttnn.sum(
+        ttnn_s3_ag,
+        [0],
+        False,
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+        ),
+    )
+    ttnn.deallocate(ttnn_s3_ag, False)
+    ttnn_s3_2d = ttnn.reshape(
+        ttnn_s3_red,
+        [32, 2048],
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
-    ttnn.deallocate(ttnn_reduce_scatter_11, False)
-    ttnn_all_gather_29 = ttnn.all_gather(
-        input_tensor=ttnn_reshape_155,
-        dim=1,
-        cluster_axis=1,
-        subdevice_id=None,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
-        topology=ttnn.Topology.Ring,
-    )
-    ttnn.deallocate(ttnn_reshape_155, False)
+    ttnn.deallocate(ttnn_s3_red, False)
     ttnn_typecast_102 = ttnn.typecast(
-        ttnn_all_gather_29,
+        ttnn_s3_2d,
         ttnn.DataType.FLOAT32,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
-    ttnn.deallocate(ttnn_all_gather_29, False)
+    ttnn.deallocate(ttnn_s3_2d, False)
     ttnn_matmul_32 = ttnn.matmul(
         ttnn_reshape_120,
         ce_cache__main["main_const_eval_29"],
@@ -5054,44 +5054,40 @@ def _main(activations, weights):
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
     ttnn.deallocate(ttnn_matmul_32, False)
-    ttnn_reduce_scatter_12 = ttnn.reduce_scatter(
+    # E_moe_ccl_fuse (matmul_32 / shared-FFN w3): sibling of the w1 fusion above. Same
+    # reduce_scatter+all_gather -> all_gather(dim0)+local FastReduceNC sum. UNBLOCKED by #46544.
+    ttnn_s3b_ag = ttnn.all_gather(
         input_tensor=ttnn_reshape_156,
-        dim=3,
+        dim=0,
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         num_links=None,
         topology=ttnn.Topology.Ring,
-        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        ),
     )
     ttnn.deallocate(ttnn_reshape_156, False)
-    ttnn_reshape_157 = ttnn.reshape(
-        ttnn_reduce_scatter_12,
-        [32, 256],
+    ttnn_s3b_red = ttnn.sum(
+        ttnn_s3b_ag,
+        [0],
+        False,
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+        ),
+    )
+    ttnn.deallocate(ttnn_s3b_ag, False)
+    ttnn_s3b_2d = ttnn.reshape(
+        ttnn_s3b_red,
+        [32, 2048],
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
-    ttnn.deallocate(ttnn_reduce_scatter_12, False)
-    ttnn_all_gather_30 = ttnn.all_gather(
-        input_tensor=ttnn_reshape_157,
-        dim=1,
-        cluster_axis=1,
-        subdevice_id=None,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
-        topology=ttnn.Topology.Ring,
-    )
-    ttnn.deallocate(ttnn_reshape_157, False)
+    ttnn.deallocate(ttnn_s3b_red, False)
     ttnn_typecast_103 = ttnn.typecast(
-        ttnn_all_gather_30,
+        ttnn_s3b_2d,
         ttnn.DataType.FLOAT32,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
-    ttnn.deallocate(ttnn_all_gather_30, False)
+    ttnn.deallocate(ttnn_s3b_2d, False)
     ttnn_typecast_104 = ttnn.multiply(
         ttnn_typecast_102,
         ttnn_typecast_103,
