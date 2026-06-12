@@ -2237,6 +2237,20 @@ inline void _topk_xl_add_lsb_indices_init_()
         .set(ADDR_MOD_4);
 }
 
+template <std::uint32_t reg>
+inline void _topk_xl_promote_positive_zero_for_fused_index_()
+{
+    // The fused representation stores the BF16 value in bits [31:16] and
+    // the tie-breaking index in bits [15:0]. For +0.0, this creates an FP32
+    // subnormal. SFPSWAP can canonicalize that back to +0.0, erasing the
+    // index payload. Use a tiny negative normal surrogate for +0.0 while the
+    // value is internal to topk_large_indices; the op returns indices only.
+    TTI_SFPLOADI(reg, sfpi::SFPLOADI_MOD0_LOWER, 0);
+    TTI_SFPSETCC(0, reg, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
+    TTI_SFPLOADI(reg, sfpi::SFPLOADI_MOD0_UPPER, 0x8080);
+    TTI_SFPENCC(0, 0, 0, 0);
+}
+
 // Builds the per-element global index in LREG0..LREG3 and ORs it into the
 // low 16 bits of each FP32 word in the first two DST tiles.
 //
@@ -2285,14 +2299,18 @@ inline void _topk_xl_add_lsb_indices_()
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     // ── OR the precomputed indices into the low 16 bits of every DST word.
-    // The body (12 instructions: 4 loads + 4 ORs + 4 stores + 4 IADDs) is
-    // recorded into replay slots [0..15] once and replayed for the
+    // The body is recorded into replay slots [0..31] once and replayed for the
     // remaining iters.
-    lltt::record<lltt::Exec>(0, 16);
+    lltt::record<lltt::Exec>(0, 32);
     TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
     TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, 2);
     TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, 16 + 0);
     TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_7, 16 + 2);
+
+    _topk_xl_promote_positive_zero_for_fused_index_<p_sfpu::LREG4>();
+    _topk_xl_promote_positive_zero_for_fused_index_<p_sfpu::LREG5>();
+    _topk_xl_promote_positive_zero_for_fused_index_<p_sfpu::LREG6>();
+    _topk_xl_promote_positive_zero_for_fused_index_<p_sfpu::LREG7>();
 
     TTI_SFPOR(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
     TTI_SFPOR(0, p_sfpu::LREG1, p_sfpu::LREG5, 0);
@@ -2311,7 +2329,7 @@ inline void _topk_xl_add_lsb_indices_()
 
     for (int i = 1; i < 4; i++)
     {
-        lltt::replay(0, 16);
+        lltt::replay(0, 32);
     }
 
     // Outer loop over the remaining face-pairs. We hoist the
@@ -2335,7 +2353,7 @@ inline void _topk_xl_add_lsb_indices_()
 
         for (int i = 0; i < 4; i++)
         {
-            lltt::replay(0, 16);
+            lltt::replay(0, 32);
         }
     }
 }
