@@ -38,6 +38,7 @@ def decode_forward(
     ccl_manager=None,
     is_kv_shared=False,
     position_idx_cache=None,
+    sequential_kv_write=False,
 ):
     """
     Single-token decode attention, fully on device.
@@ -142,24 +143,82 @@ def decode_forward(
                 # split_qkv_heads_decode's local head count.
                 num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
                 eff_bs = effective_block_size(k_cache, config.head_dim, num_local_kv_heads)
-                ttnn.experimental.paged_update_cache(
-                    k_cache,
-                    tt_k,
-                    update_idxs_tensor=cache_pos,
-                    page_table=page_table,
-                    block_size=eff_bs,
-                    num_kv_heads=num_local_kv_heads,
-                    **paged_modulo_kwargs,
-                )
-                ttnn.experimental.paged_update_cache(
-                    v_cache,
-                    tt_v,
-                    update_idxs_tensor=cache_pos,
-                    page_table=page_table,
-                    block_size=eff_bs,
-                    num_kv_heads=num_local_kv_heads,
-                    **paged_modulo_kwargs,
-                )
+                batch = tt_k.shape[1]
+                if sequential_kv_write and batch > 1:
+                    # Speculative VERIFY: the B candidates sit at consecutive
+                    # positions that share ONE paged block (all batch rows of the
+                    # page table point to the same physical blocks). A single
+                    # batched paged_update_cache then has multiple batch entries
+                    # read-modify-write the SAME block tile concurrently and race
+                    # (only some writes survive -> corrupt KV). Writing each
+                    # position with its own ordered op serializes the block RMW.
+                    # Matmuls + SDPA still run once on the full batch, so the
+                    # verify speedup is preserved (only these tiny writes loop).
+                    # paged_update_cache wants a sharded update tensor with
+                    # num_shards == num_users. Slice each candidate to a batch=1
+                    # [1,1,nkv,hd] tensor (from DRAM, where slicing is clean) and
+                    # reshard onto a single core. q_sharded_mem shards one user per
+                    # core (shard shape = [32, head_dim], head_dim shared by Q/K),
+                    # so a 1-core config with that same shard shape is exactly the
+                    # per-user layout the op expects.
+                    _shard_shape = list(q_sharded_mem.shard_spec.shape)
+                    _one_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+                    single_user_mem = ttnn.MemoryConfig(
+                        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                        ttnn.BufferType.L1,
+                        ttnn.ShardSpec(_one_core, _shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+                    )
+                    k_seq = ttnn.to_memory_config(tt_k, ttnn.DRAM_MEMORY_CONFIG)
+                    v_seq = ttnn.to_memory_config(tt_v, ttnn.DRAM_MEMORY_CONFIG)
+                    nkv, hd = k_seq.shape[2], k_seq.shape[3]
+                    for b in range(batch):
+                        kb = ttnn.slice(k_seq, [0, b, 0, 0], [1, b + 1, nkv, hd])
+                        vb = ttnn.slice(v_seq, [0, b, 0, 0], [1, b + 1, nkv, hd])
+                        kb = ttnn.to_memory_config(kb, single_user_mem)
+                        vb = ttnn.to_memory_config(vb, single_user_mem)
+                        pos_b = ttnn.slice(cache_pos, [b], [b + 1])
+                        pt_b = ttnn.slice(page_table, [b, 0], [b + 1, page_table.shape[1]])
+                        ttnn.experimental.paged_update_cache(
+                            k_cache,
+                            kb,
+                            update_idxs_tensor=pos_b,
+                            page_table=pt_b,
+                            block_size=eff_bs,
+                            num_kv_heads=num_local_kv_heads,
+                            **paged_modulo_kwargs,
+                        )
+                        ttnn.experimental.paged_update_cache(
+                            v_cache,
+                            vb,
+                            update_idxs_tensor=pos_b,
+                            page_table=pt_b,
+                            block_size=eff_bs,
+                            num_kv_heads=num_local_kv_heads,
+                            **paged_modulo_kwargs,
+                        )
+                        for t in (kb, vb, pos_b, pt_b):
+                            t.deallocate(True)
+                    k_seq.deallocate(True)
+                    v_seq.deallocate(True)
+                else:
+                    ttnn.experimental.paged_update_cache(
+                        k_cache,
+                        tt_k,
+                        update_idxs_tensor=cache_pos,
+                        page_table=page_table,
+                        block_size=eff_bs,
+                        num_kv_heads=num_local_kv_heads,
+                        **paged_modulo_kwargs,
+                    )
+                    ttnn.experimental.paged_update_cache(
+                        v_cache,
+                        tt_v,
+                        update_idxs_tensor=cache_pos,
+                        page_table=page_table,
+                        block_size=eff_bs,
+                        num_kv_heads=num_local_kv_heads,
+                        **paged_modulo_kwargs,
+                    )
             else:
                 ttnn.experimental.paged_update_cache(k_cache, tt_k, update_idxs_tensor=cache_pos)
                 ttnn.experimental.paged_update_cache(v_cache, tt_v, update_idxs_tensor=cache_pos)

@@ -96,7 +96,9 @@ class RMSNorm(nn.Module):
             program_config=self._sharded_cfg[1],
         )
         x_sh.deallocate(True)
-        return ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG)
+        out_interleaved = ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG)
+        out.deallocate(True)
+        return out_interleaved
 
     def forward(self, x):
         if self.is_distributed:

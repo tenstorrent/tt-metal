@@ -138,7 +138,9 @@ void kernel_main() {
             constexpr uint32_t valid_tiles_in_last_chunk = valid_Skt - last_chunk_first_tile;
             lw_mask.global_n_padded_tiles = Sk_chunk_t - valid_tiles_in_last_chunk;
         }
-        if constexpr (is_causal || sliding_window_size > 0 || k_partial_col > 0) {
+        // A user-provided dense mask is streamed per-chunk by the reader and consumed inside the
+        // inner loop — it does not use the writer-generated lightweight palette, so skip this wait.
+        if constexpr ((is_causal || sliding_window_size > 0 || k_partial_col > 0) && !use_provided_mask) {
             cb_wait_front(cb_mask_in, lw_mask_tile_count);
         }
 
@@ -171,7 +173,8 @@ void kernel_main() {
             sliding_window_size,
             is_causal,
             use_attention_sink,
-            cb_attention_sink>(
+            cb_attention_sink,
+            use_provided_mask>(
             global_q_count,
             k_num_chunks,
             cb_out_im_A,
