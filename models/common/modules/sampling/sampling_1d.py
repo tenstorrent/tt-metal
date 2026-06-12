@@ -297,10 +297,12 @@ class Sampling1D(LightweightModule):
         confirmed for Linear+barrier) is that the Linear all-gather's barrier issues a host-assisted
         event-sync + per-device semaphore writes that are illegal inside capture; Ring is
         self-synchronising and needs no barrier. This matches the model's own
-        ``gather_and_untilize_logits`` (Ring, no barrier), which captures cleanly — and is what
-        unblocks on-device greedy sampling under the traced executor. Below 8 devices (no ring) fall
-        back to the clamped Linear+barrier path (correct eagerly, but not trace-capture safe —
-        N150/N300 sampling stays on the eager executor).
+"""Multi-device: all-gather logits before argmax.
+
+On ring-capable meshes (e.g. T3K 1×8) use Ring topology with no barrier semaphore to match the
+model's logits gather and avoid trace-capture issues seen with some barrier-based configurations.
+For other meshes, fall back to the clamped Linear+barrier path.
+"""
         """
         cfg = self.config
         if default_topology(cfg.mesh_device) == ttnn.Topology.Ring:
