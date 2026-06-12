@@ -177,6 +177,55 @@ SHAPES = [
     (16512, 768, 4608, 12, 9, True, "plain"),  # SNG_x_c_mlp
     (16384, 768, 2304, 12, 9, True, "qkv"),  # DBL_attn_to_qkv
     # -----------------------------------------------------------------------
+    # Flux2 BH 4×8 — TP8_SP4 (bh_4x8_sp0_tp1): K_global sweep entries.
+    # K=6144 (global) compensates for the double cluster_size division in
+    # get_per_core_dims, giving correct K_per_device=24 tiles for block gen.
+    # Ordered by max device time descending (matmul_agmm_new.md Section 3).
+    # -----------------------------------------------------------------------
+    (16384, 6144, 4608, 12, 9, True, "plain"),  # #1  DBL_ff_spatial_mm_in_proj
+    (16512, 6144, 4608, 12, 9, True, "plain"),  # #2  SNG_x_c_mlp
+    (16384, 6144, 2304, 12, 9, True, "qkv"),  # #3  DBL_attn_to_qkv
+    (16384, 6144, 768, 12, 9, True, "to_out"),  # #4  DBL_attn_out_mm_spatial
+    (4096, 6144, 4608, 12, 9, True, "plain"),  # #5  DBL_ff_spatial_mm_in_proj
+    (4224, 6144, 4608, 12, 9, True, "plain"),  # #6  SNG_x_c_mlp
+    (4096, 6144, 2304, 12, 9, True, "qkv"),  # #7  SNG_attn_to_qkv
+    (4096, 6144, 768, 12, 9, True, "to_out"),  # #8  DBL_attn_out_mm_spatial
+    (1024, 6144, 4608, 12, 9, True, "plain"),  # #9  DBL_ff_spatial_mm_in_proj
+    (1152, 6144, 4608, 12, 9, True, "plain"),  # #10 SNG_x_c_mlp
+    (
+        128,
+        6144,
+        4608,
+        12,
+        9,
+        True,
+        "plain",
+    ),  # #11 DBL_ff_ctx_spatial_mm_in_proj (⚠️ high variance, compare vs worst=406µs)
+    (1024, 6144, 2304, 12, 9, True, "qkv"),  # #12 SNG_attn_to_qkv
+    (1024, 6144, 768, 12, 9, True, "to_out"),  # #13 DBL_attn_out_mm_spatial
+    (128, 6144, 2304, 12, 9, True, "qkv"),  # #14 DBL_attn_add_qkv_proj (⚠️ worst=249µs)
+    (128, 6144, 768, 12, 9, True, "to_out"),  # #15 DBL_attn_out_mm_prompt (⚠️ worst=162µs)
+    # -----------------------------------------------------------------------
+    # Flux2 BH 4×8 — TP4_SP8 (bh_4x8_sp1_tp0): K_global sweep entries.
+    # K=6144 (global) gives K_per_device=48 tiles (6144/32/4). Ordered by
+    # max device time descending (matmul_agmm_new.md Section 3, shapes 16-30).
+    # -----------------------------------------------------------------------
+    (8192, 6144, 9216, 12, 9, True, "plain"),  # #16
+    (8256, 6144, 9216, 12, 9, True, "plain"),  # #17
+    (8192, 6144, 4608, 12, 9, True, "qkv"),  # #18
+    (8192, 6144, 1536, 12, 9, True, "to_out"),  # #19
+    (2048, 6144, 9216, 12, 9, True, "plain"),  # #20
+    (2112, 6144, 9216, 12, 9, True, "plain"),  # #21
+    (2048, 6144, 4608, 12, 9, True, "qkv"),  # #22
+    (576, 6144, 9216, 12, 9, True, "plain"),  # #23
+    (512, 6144, 9216, 12, 9, True, "plain"),  # #24
+    (64, 6144, 9216, 12, 9, True, "plain"),  # #25
+    (512, 6144, 4608, 12, 9, True, "qkv"),  # #26
+    (64, 6144, 4608, 12, 9, True, "qkv"),  # #27
+    (2048, 6144, 1536, 12, 9, True, "to_out"),  # #28
+    (512, 6144, 1536, 12, 9, True, "to_out"),  # #29
+    (64, 6144, 1536, 12, 9, True, "to_out"),  # #30
+    # -----------------------------------------------------------------------
     # Flux2 BH 4×8 — TP4_SP8 (bh_4x8_sp1_tp0): K_per_device = 6144/4 = 1536,
     # SP=8 halves M and doubles N relative to TP8_SP4. Core grid 12×9 (AGMM).
     # Top-3 agmm ops by device time from matmulshapes_new.md, Section 2.
@@ -915,7 +964,7 @@ def test_mm_sweep(device_config, shape):
     # `-s` so the worker's print/tqdm output flows through to the user's terminal.
     command = (
         f"pytest models/tt_dit/utils/sweep_mm_block_sizes.py"
-        f"::test_mm_sweep_worker[{shape_id}-{device_config}] -x -s"
+        f"::test_mm_sweep_worker[{shape_id}-{device_config}] -x -s --timeout 90000"
     )
 
     write_csv_header(CSV_FILE)
@@ -1068,7 +1117,7 @@ def main():
         os.environ["MM_SWEEP_VALID_COMBOS_FILE"] = combos_file
         command = (
             f"pytest models/tt_dit/utils/sweep_mm_block_sizes.py"
-            f"::test_mm_sweep_worker[{shape_id}-{device_config}] -x"
+            f"::test_mm_sweep_worker[{shape_id}-{device_config}] -x --timeout 90000"
         )
 
         try:
