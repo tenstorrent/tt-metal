@@ -514,7 +514,7 @@ def initialize_test_inputs(
     indices_shape = (dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
 
     weights = torch.randn(weights_shape, dtype=torch.bfloat16)
-    weights = weights / weights.sum(dim=-1, keepdim=True)  # Normalize so topk sums to 1
+    weights = torch.softmax(weights.float(), dim=-1).to(torch.bfloat16)
     indices = torch.randint(0, num_routed_experts, indices_shape, dtype=torch.int32)
 
     # Validate expert activations
