@@ -8,44 +8,6 @@
 // receiver backing tensor (DRAM, filled by the receiver service kernel) and
 // copies it into a SEPARATE output tensor (DRAM, same spec), so the host can
 // validate the output tensor end-to-end instead of peeking at the backing tensor.
-//
-// Per iteration:
-//   1. spin on the local data_ready_sem until the service multicast-incs it
-//      (transfer landed in the backing tensor), then reset it to 0,
-//   2. copy pages [start_page, end_page) backing -> output via a single-slot
-//      scratch CB, then barrier so the output DRAM is durable,
-//   3. atomic-inc consumed_counter on the receiver service core (the service
-//      waits for num_workers of these before draining the next transfer).
-//
-// Optional metadata is NOT touched here: the receiver service already multicast
-// the blob into every worker core's L1 at receiver->get_metadata_addr(); the
-// host reads that L1 directly after Finish (single-transfer-per-Finish verify
-// flow, so the read is race-free).
-//
-// Page partitioning across the worker grid is computed host-side (start/end RT
-// args); a worker with an empty range (start == end) still runs steps 1 and 3 so
-// the service's num_workers ack count is always satisfied (no deadlock).
-//
-// Runs a fixed num_iters then exits so a test can Finish() the workload. Mirrors
-// placeholder_d2d_receiver_worker.cpp's sem protocol (spin / reset, no counter).
-//
-// CT layout (keep in sync with make_receiver_consumer_workload in
-// tests/ttnn/unit_tests/gtests/tensor/test_d2d_stream_service.cpp):
-//   [0] data_ready_sem_addr  (local worker-core L1)
-//   [1] input_tensor_addr    (receiver backing tensor base)
-//   [2] output_tensor_addr   (output tensor base — same spec as input)
-//   [3] page_size            (bytes per tensor page)
-//   [4] num_iters
-//   [5] scratch_cb_index     (single-slot scratch CB)
-//   [6..] TensorAccessorArgs (one set; input and output share spec, reused with
-//                             the two distinct base addresses)
-//
-// RT layout (per worker):
-//   [0] start_page            (inclusive)
-//   [1] end_page              (exclusive)
-//   [2] consumed_counter_addr (L1 address on the receiver service core)
-//   [3] service_noc_x         (physical NoC x of the service core)
-//   [4] service_noc_y         (physical NoC y of the service core)
 
 #include <cstdint>
 

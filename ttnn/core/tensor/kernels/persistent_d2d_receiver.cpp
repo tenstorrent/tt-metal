@@ -99,7 +99,6 @@ void kernel_main() {
     // life. LEASE mode: hold nothing until granted a turn — opened per drain below.
     bool fabric_open = false;
     if constexpr (share_fabric_links == 0) {
-        DEVICE_PRINT("D2DStreamService receiver opening fabric connection (own mode)\n");
         fabric_connection.open();
         fabric_open = true;
     }
@@ -151,7 +150,6 @@ void kernel_main() {
                 }
             }
             if (terminated) {
-                DEVICE_PRINT("D2DStreamService receiver terminated\n");
                 break;
             }
             // Acquire the credit-return connection for exactly this drain.
@@ -271,7 +269,6 @@ void kernel_main() {
     noc_async_write_barrier();
     noc_async_atomic_barrier();
     update_socket_config(receiver_socket);
-    DEVICE_PRINT("D2DStreamService receiver closing fabric connection\n");
     // In LEASE mode the connection is already closed between transfers (and on the
     // termination path, which only fires from an idle wait); in OWN mode it is held
     // open for the kernel's life and closed here.

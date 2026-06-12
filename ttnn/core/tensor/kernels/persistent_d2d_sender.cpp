@@ -134,7 +134,6 @@ void kernel_main() {
     // LEASE mode: hold nothing until granted a turn — opened per transfer below.
     bool fabric_open = false;
     if constexpr (share_fabric_links == 0) {
-        DEVICE_PRINT("D2DStreamService sender opening fabric connection (own mode)\n");
         fabric_connection.open();
         fabric_open = true;
     }
@@ -247,7 +246,6 @@ void kernel_main() {
 
     update_socket_config(sender_socket);
 
-    DEVICE_PRINT("D2DStreamService sender closing fabric connection\n");
     // In LEASE mode the connection is already closed between transfers (and on the
     // termination path, which only fires from the idle wait); in OWN mode it is held
     // open for the kernel's life and closed here.

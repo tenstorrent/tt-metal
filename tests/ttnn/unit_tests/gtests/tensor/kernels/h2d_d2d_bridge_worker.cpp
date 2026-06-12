@@ -7,60 +7,6 @@
 // it drains the H2D backing tensor (fed by the host via forward_to_tensor) into
 // the D2D SENDER backing tensor, then triggers the D2D sender service to forward
 // it over fabric.
-//
-// Per iteration (ordering is load-bearing — see notes/d2d_test_flow_vs_realistic_workload.md):
-//   1. spin on the local H2D data_ready_sem until the H2D service multicast-incs
-//      it (the host push landed in the H2D backing tensor), then reset it,
-//   2. copy pages [start_page, end_page) H2D backing -> D2D sender backing via a
-//      single-slot scratch CB, then barrier so the D2D backing slice is durable,
-//   3. (designated core, metadata on) copy the metadata blob the H2D service
-//      multicast into THIS worker core's L1 (h2d_metadata_l1_addr) into the D2D
-//      sender SERVICE core's L1 (d2d_sender_metadata_l1_addr) via a unicast NoC
-//      write, then barrier — must finish before step 5,
-//   4. atomic-inc the H2D consumed_counter on the H2D service core: frees the H2D
-//      service to stream the next token. Strictly AFTER step 2's barriers (the
-//      H2D backing tensor is step 2's read source) and after step 3's read of
-//      h2d_metadata_l1_addr,
-//   5. atomic-inc the D2D data_ready_counter on the D2D sender service core:
-//      triggers the D2D forward. After steps 2 and 3 (data + metadata in place),
-//   6. spin on the local D2D consumed_sem until the D2D sender service
-//      multicast-incs it (transfer drained over fabric), then reset it. Gates the
-//      NEXT iteration's step-2 write so we don't overwrite the D2D sender backing
-//      tensor before the service forwarded it.
-//
-// No nested cross-service waits: the only blocking wait (step 6) depends on the
-// D2D drain (driven by the receiver-side consumer), not on H2D — so no cycle.
-//
-// An empty page range (num_pages < num_workers) is valid: that worker copies
-// nothing but still runs the acks/waits so both services' num_workers ack counts
-// are satisfied (no deadlock). The metadata writer is independent of the page
-// range, so it may be an empty-range core.
-//
-// CT layout (keep in sync with make_bridge_workload in
-// tests/ttnn/unit_tests/gtests/tensor/test_d2d_stream_service.cpp):
-//   [0] h2d_data_ready_sem_addr   (local worker-core L1)
-//   [1] h2d_input_addr            (H2D backing tensor base)
-//   [2] d2d_sender_backing_addr   (D2D sender backing tensor base — same spec)
-//   [3] page_size                 (bytes per tensor page)
-//   [4] num_iters
-//   [5] scratch_cb_index          (single-slot scratch CB)
-//   [6] d2d_consumed_sem_addr     (local worker-core L1)
-//   [7] metadata_enabled          (0/1)
-//   [8] metadata_size_bytes
-//   [9] h2d_metadata_l1_addr      (local worker-core L1 — H2D multicast dest / copy source)
-//   [10..] TensorAccessorArgs     (one set; H2D backing and D2D sender backing share spec)
-//
-// RT layout (per worker):
-//   [0] start_page                    (inclusive)
-//   [1] end_page                      (exclusive)
-//   [2] h2d_consumed_counter_addr     (L1 on the H2D service core)
-//   [3] h2d_service_noc_x
-//   [4] h2d_service_noc_y
-//   [5] d2d_data_ready_counter_addr   (L1 on the D2D sender service core)
-//   [6] d2d_service_noc_x
-//   [7] d2d_service_noc_y
-//   [8] is_metadata_writer            (1 only on the designated core)
-//   [9] d2d_sender_metadata_l1_addr   (L1 on the D2D sender service core; 0 if unused)
 
 #include <cstdint>
 

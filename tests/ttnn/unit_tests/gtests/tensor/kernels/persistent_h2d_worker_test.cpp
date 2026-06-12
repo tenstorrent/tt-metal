@@ -12,24 +12,6 @@
 // iteration. The host re-enqueues this workload once per service iteration
 // with an updated `target_data_ready` runtime arg.
 //
-// CT layout (must stay in sync with the test's worker-program build in
-// tests/ttnn/unit_tests/gtests/tensor/test_h2d_stream_service.cpp):
-//   [0] data_ready_sem_addr  (uint32, local worker-core L1)
-//   [1] input_tensor_addr    (uint32, backing tensor base)
-//   [2] output_tensor_addr   (uint32, output tensor base — same spec as input)
-//   [3] page_size            (uint32, bytes per tensor page)
-//   [4] scratch_cb_index     (uint32, single-slot scratch CB)
-//   [5..] TensorAccessorArgs (single set; input and output share the same spec
-//                             and reuse this args object with different bases)
-//
-// RT layout (per-worker; service-core fields are uniform across workers within
-// a device but may differ across devices, so kept as RT):
-//   [0] start_page                — first tensor page this worker handles (inclusive)
-//   [1] end_page                  — last tensor page (exclusive)
-//   [2] consumed_counter_addr     — L1 address of the counter on the service core
-//   [3] service_noc_x             — physical NoC x of the service core
-//   [4] service_noc_y             — physical NoC y of the service core
-//
 // data_ready_sem protocol: the host zero-initialises the GlobalSemaphore at
 // service construction. Each service iteration the receiver kernel multicasts
 // an inc-by-1 to every worker's local copy. Each worker spins until its local
