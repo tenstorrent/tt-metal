@@ -49,11 +49,12 @@ std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed
     bool nw_corner_only) {
     std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
 
-    // Sub-galaxy slices: pin only the NW corner (node 0) to tray 1 / asic 1. This is a single-position pin
-    // (the only kind the rank-binding solver supports) that fixes orientation without over-constraining a slice.
+    // Sub-galaxy slices: pin only the NW corner (node 0) to any tray-corner ASIC (asic_location==1 on
+    // trays 1..4). The host-rank partition may land on any tray, so tray 1 alone is unsatisfiable.
     if (nw_corner_only) {
         fixed_asic_position_pinnings.emplace_back(
-            FabricNodeId{mesh_id, 0}, std::vector<AsicPosition>{AsicPosition{1, 1}});
+            FabricNodeId{mesh_id, 0},
+            std::vector<AsicPosition>{AsicPosition{1, 1}, AsicPosition{2, 1}, AsicPosition{3, 1}, AsicPosition{4, 1}});
         return fixed_asic_position_pinnings;
     }
 
@@ -1906,22 +1907,12 @@ void add_pinning_constraints(
 
         if (!asic_ids.empty()) {
             if (!intra_mesh_constraints.add_required_constraint(fabric_node, asic_ids)) {
-                // Pin unsatisfiable within the node's rank slice (e.g. an auto Galaxy corner pin whose
-                // ASIC is owned by another host rank under per-host slicing). If rank bindings are active,
-                // drop the pin and let the rank binding govern placement instead of failing the mapping.
-                // add_required_constraint already rolled back, so the node keeps its rank-binding domain.
-                if (!config.disable_rank_bindings) {
-                    log_warning(
-                        tt::LogFabric,
-                        "Pinning for fabric node (mesh={}, chip={}) is incompatible with its rank binding: "
-                        "no pinned ASIC position lies in the node's host-rank partition. Dropping the pin and "
-                        "letting the rank binding determine placement.",
-                        fabric_node.mesh_id.get(),
-                        fabric_node.chip_id);
-                    continue;
-                }
-                TT_THROW(
-                    "Failed to add required constraint for fabric node (mesh={}, chip={})",
+                // Pinnings (MGD, galaxy fixed corner pins, etc.) must never be silently dropped.
+                TT_FATAL(
+                    false,
+                    "Pinning for fabric node (mesh={}, chip={}) is unsatisfiable: no pinned ASIC position lies in "
+                    "the node's host-rank partition or mapping domain. Either relax rank bindings, fix the MGD "
+                    "pinnings, or adjust the physical topology.",
                     fabric_node.mesh_id.get(),
                     fabric_node.chip_id);
             }
