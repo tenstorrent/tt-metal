@@ -322,6 +322,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/global_circular_buffer.cpp
     cpp/ttnn-nanobind/global_semaphore.cpp
     cpp/ttnn-nanobind/hd_socket.cpp
+    cpp/ttnn-nanobind/d2d_stream_service.cpp
     cpp/ttnn-nanobind/h2d_stream_service.cpp
     cpp/ttnn-nanobind/mesh_socket.cpp
     cpp/ttnn-nanobind/profiler.cpp
