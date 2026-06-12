@@ -596,7 +596,9 @@ def _pick_agent_model_for_iter(
 
     - **heavy** (sonnet, typically) fires when light has had a shot:
         * ``force_heavy`` (used by repair loops on no-edit iters)
-        * ``complexity_bonus >= 2`` (palette > 30 ops, or LLM gaps)
+        * ``complexity_bonus >= 2`` (palette > 30 ops, or LLM gaps) AND
+          ``attempts_so_far >= 2`` (iter-1 keeps the haiku fast-pass even on
+          complex components; complexity escalates from iter-2)
         * ``failure_class`` in ``_HEAVY_FAILURE_CLASSES``
         * ``attempts_so_far >= 2``
 
@@ -631,7 +633,7 @@ def _pick_agent_model_for_iter(
 
     if force_heavy:
         return (heavy, "heavy:forced(no-edit-or-stuck-iter)")
-    if complexity_bonus >= 2:
+    if complexity_bonus >= 2 and attempts_so_far >= 2:
         return (heavy, f"heavy:complexity={complexity_bonus}")
     if failure_class in _HEAVY_FAILURE_CLASSES:
         return (heavy, f"heavy:failure={failure_class}")
