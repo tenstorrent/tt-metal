@@ -79,6 +79,7 @@ ACCURACY_PARAMS = list(
 
 
 @skip_for_coverage
+@pytest.mark.accuracy
 @pytest.mark.parametrize(
     "formats,approx_mode,mathop,fast_mode,dest_acc", ACCURACY_PARAMS
 )

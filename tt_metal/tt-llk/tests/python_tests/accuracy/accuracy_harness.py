@@ -69,9 +69,10 @@ CSV_COLUMNS: List[str] = [
     "is_finite_golden",
 ]
 
-# Float precision on disk: bf16/fp16 outputs carry <=11 mantissa bits, so 7
-# significant digits is lossless-enough and far shorter than full float64 repr.
-FLOAT_FORMAT = "%.7g"
+# Float precision on disk: float32 needs up to 9 significant digits to
+# round-trip exactly (bf16/fp16 need far fewer), so %.9g is lossless for every
+# format we sweep while staying far shorter than full float64 repr.
+FLOAT_FORMAT = "%.9g"
 
 _ARCH_ABBR = {"wormhole": "wh", "blackhole": "bh", "quasar": "qsr"}
 _FMT_ABBR = {

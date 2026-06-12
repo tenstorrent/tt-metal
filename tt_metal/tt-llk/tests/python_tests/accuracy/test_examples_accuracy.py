@@ -8,6 +8,7 @@ op / format / config, and it contributes rows to that op's CSV via the shared
 shard->merge pipeline. Sanity-assert only.
 """
 
+import pytest
 from accuracy.accuracy_harness import run_case
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import (
@@ -18,6 +19,7 @@ from helpers.llk_params import (
 )
 
 
+@pytest.mark.accuracy
 def test_accuracy_exp_f16b_dest_acc():
     """Single-op example: exp in Float16_b with fp32 dest accumulator."""
     run_case(
@@ -29,6 +31,7 @@ def test_accuracy_exp_f16b_dest_acc():
     )
 
 
+@pytest.mark.accuracy
 def test_accuracy_reciprocal_f16b():
     """Single-op example: reciprocal (two-band domain, hole around 0)."""
     run_case(
