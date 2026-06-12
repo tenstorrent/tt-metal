@@ -9,18 +9,18 @@
 #include "api/compute/tile_move_copy.h"
 #ifdef TRISC_UNPACK
 #ifdef ARCH_BLACKHOLE
-#include "llk_unpack_A_topk_xl_copy_api.h"
+#include "experimental/llk_unpack_A_topk_xl_copy_api.h"
 #endif
 #endif
 #ifdef TRISC_MATH
 #ifdef ARCH_BLACKHOLE
-#include "llk_math_topk_xl_copy_api.h"
-#include "llk_math_eltwise_unary_sfpu_topk_xl.h"
+#include "experimental/llk_math_topk_xl_copy_api.h"
+#include "experimental/llk_math_eltwise_unary_sfpu_topk_xl.h"
 #endif
 #endif
 #ifdef TRISC_PACK
 #ifdef ARCH_BLACKHOLE
-#include "llk_math_eltwise_unary_sfpu_topk_xl.h"
+#include "experimental/llk_math_eltwise_unary_sfpu_topk_xl.h"
 #endif
 #endif
 

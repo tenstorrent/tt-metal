@@ -36,7 +36,7 @@ void bind_topk_large_indices(nb::module_& mod) {
             * rank must be >= 1;
             * all leading dimensions are flattened into independent rows;
             * the flattened leading-dimension row count must fit in uint32_t;
-            * the last dimension is the row length reduced by Top-K;
+            * the last dimension is the input row length;
             * the flattened row count must be > 0;
             * the last dimension must be >= k and <= 1,073,741,824 elements.
 

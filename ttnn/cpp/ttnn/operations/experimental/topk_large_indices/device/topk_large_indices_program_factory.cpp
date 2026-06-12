@@ -58,7 +58,7 @@ LlkTargetK snap_to_llk_target_k(uint32_t k) {
 
 RuntimeShapeArgs get_runtime_shape_args(const Tensor& input, LlkTargetK llk_target_k) {
     const uint32_t llk_k = to_uint32(llk_target_k);
-    const auto shape = input.logical_shape();
+    const auto& shape = input.logical_shape();
     const uint32_t n = shape[shape.rank() - 1];
     const uint32_t num_chunks = tt::div_up(n, llk_k);
     const uint32_t tail_elements = n - ((num_chunks - 1) * llk_k);

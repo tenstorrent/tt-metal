@@ -55,7 +55,7 @@ void validate_runtime_args(const operation_attributes_t& attrs, const tensor_arg
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "topk_large_indices input must be on device");
     TT_FATAL(input.buffer() != nullptr, "topk_large_indices input must have an allocated buffer");
 
-    const auto shape = input.logical_shape();
+    const auto& shape = input.logical_shape();
     TT_FATAL(shape.rank() >= 1, "topk_large_indices input must have rank >= 1");
     const uint64_t num_rows = flattened_rows_excluding_last_dim(shape);
     TT_FATAL(num_rows > 0, "topk_large_indices input must have at least one row");
@@ -103,7 +103,7 @@ ttsl::hash::hash_t TopkLargeIndicesDeviceOperation::compute_program_hash(
 
 spec_return_value_t TopkLargeIndicesDeviceOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    const auto input_shape = tensor_args.input_tensor.logical_shape();
+    const auto& input_shape = tensor_args.input_tensor.logical_shape();
     std::vector<uint32_t> output_shape_vec;
     output_shape_vec.reserve(input_shape.rank());
     for (uint32_t i = 0; i < input_shape.rank(); ++i) {

@@ -85,6 +85,26 @@ def test_topk_large_indices_row_major_bfloat16_uint32_indices(device, k, num_row
     _assert_topk_matches_torch(torch_input, tt_indices, k)
 
 
+def test_topk_large_indices_random_bfloat16_ties_return_distinct_indices(device):
+    torch.manual_seed(0)
+    rows = 8
+    n = 4096
+    k = 2048
+    torch_input = torch.randn(1, 1, rows, n, dtype=torch.bfloat16)
+
+    tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k)
+    indices = ttnn.to_torch(tt_indices, dtype=torch.uint32).to(torch.int64)[0, 0]
+
+    assert indices.min() >= 0
+    assert indices.max() < n
+    for row_indices in indices:
+        assert row_indices.unique().numel() == k
+
+    actual_values = torch.gather(torch_input.float()[0, 0], dim=-1, index=indices)
+    ref_values, _ = torch.topk(torch_input.float()[0, 0], k, dim=-1, largest=True, sorted=True)
+    assert_equal(actual_values.sort(dim=-1).values, ref_values.sort(dim=-1).values)
+
+
 @pytest.mark.parametrize(
     "shape,k",
     [
