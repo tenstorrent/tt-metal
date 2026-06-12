@@ -2985,13 +2985,13 @@ def _main(activations, weights):
     ttnn.deallocate(ttnn_rms_stats_4d_0, False)
     ttnn_reshape_20 = ttnn.reshape(
         ttnn_rms_sliced_0,
-        [1, 32, 1],
+        [32, 1],
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
     ttnn.deallocate(ttnn_rms_sliced_0, False)
     ttnn_all_gather_2 = ttnn.all_gather(
         input_tensor=ttnn_reshape_20,
-        dim=0,
+        dim=1,
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
@@ -3001,8 +3001,8 @@ def _main(activations, weights):
     ttnn.deallocate(ttnn_reshape_20, False)
     ttnn_sum_1 = ttnn.sum(
         ttnn_all_gather_2,
-        [0],
-        False,
+        [1],
+        True,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         compute_kernel_config=ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
@@ -3807,13 +3807,13 @@ def _main(activations, weights):
     ttnn.deallocate(ttnn_rms_stats_4d_1, False)
     ttnn_reshape_66 = ttnn.reshape(
         ttnn_rms_sliced_1,
-        [1, 32, 1],
+        [32, 1],
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
     ttnn.deallocate(ttnn_rms_sliced_1, False)
     ttnn_all_gather_8 = ttnn.all_gather(
         input_tensor=ttnn_reshape_66,
-        dim=0,
+        dim=1,
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
@@ -3823,8 +3823,8 @@ def _main(activations, weights):
     ttnn.deallocate(ttnn_reshape_66, False)
     ttnn_sum_7 = ttnn.sum(
         ttnn_all_gather_8,
-        [0],
-        False,
+        [1],
+        True,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         compute_kernel_config=ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
@@ -4080,13 +4080,13 @@ def _main(activations, weights):
     ttnn.deallocate(ttnn_rms_stats_4d_2, False)
     ttnn_reshape_73 = ttnn.reshape(
         ttnn_rms_sliced_2,
-        [1, 32, 1],
+        [32, 1],
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
     ttnn.deallocate(ttnn_rms_sliced_2, False)
     ttnn_all_gather_12 = ttnn.all_gather(
         input_tensor=ttnn_reshape_73,
-        dim=0,
+        dim=1,
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
@@ -4096,8 +4096,8 @@ def _main(activations, weights):
     ttnn.deallocate(ttnn_reshape_73, False)
     ttnn_sum_9 = ttnn.sum(
         ttnn_all_gather_12,
-        [0],
-        False,
+        [1],
+        True,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         compute_kernel_config=ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
@@ -4790,13 +4790,13 @@ def _main(activations, weights):
     ttnn.deallocate(ttnn_rms_stats_4d_3, False)
     ttnn_reshape_118 = ttnn.reshape(
         ttnn_rms_sliced_3,
-        [1, 32, 1],
+        [32, 1],
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
     ttnn.deallocate(ttnn_rms_sliced_3, False)
     ttnn_all_gather_18 = ttnn.all_gather(
         input_tensor=ttnn_reshape_118,
-        dim=0,
+        dim=1,
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
@@ -4806,8 +4806,8 @@ def _main(activations, weights):
     ttnn.deallocate(ttnn_reshape_118, False)
     ttnn_sum_15 = ttnn.sum(
         ttnn_all_gather_18,
-        [0],
-        False,
+        [1],
+        True,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         compute_kernel_config=ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
@@ -5178,13 +5178,13 @@ def _main(activations, weights):
     ttnn.deallocate(ttnn_rms_stats_4d_4, False)
     ttnn_reshape_159 = ttnn.reshape(
         ttnn_rms_sliced_4,
-        [1, 32, 1],
+        [32, 1],
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
     ttnn.deallocate(ttnn_rms_sliced_4, False)
     ttnn_all_gather_31 = ttnn.all_gather(
         input_tensor=ttnn_reshape_159,
-        dim=0,
+        dim=1,
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
@@ -5194,8 +5194,8 @@ def _main(activations, weights):
     ttnn.deallocate(ttnn_reshape_159, False)
     ttnn_sum_20 = ttnn.sum(
         ttnn_all_gather_31,
-        [0],
-        False,
+        [1],
+        True,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         compute_kernel_config=ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
