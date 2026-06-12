@@ -113,12 +113,17 @@ def preprocess_tt_adain_resblock1(
     *,
     weights_dtype=ttnn.bfloat16,
     conv_weights_dtype=ttnn.float32,
+    alpha_dtype=ttnn.bfloat16,
 ) -> TTAdaINResBlock1Params:
     """Upload a reference ``AdaINResBlock1`` (3 stages × {2 AdaIN, 2 Conv, 2 alpha}) to device.
 
     Convolution weights stay at ``conv_weights_dtype`` (default fp32) to match PyTorch PCC
     on Wormhole — bf16 conv weights typically land near ~0.9 vs reference (same trade-off as
     :func:`preprocess_tt_adain_resblk_1d`).
+
+    ``alpha`` (Snake1D) uses ``alpha_dtype`` (default bf16), decoupled from ``weights_dtype``: the
+    generator runs Snake on bf16 activations, and a bf16 ``alpha`` keeps both per-sample multiplies
+    in :func:`_tt_snake1d` on the fast pure-bf16 path instead of the ~6x-slower mixed bf16xfp32 op.
     """
     n_stages = len(module.convs1)
     assert (
@@ -141,8 +146,8 @@ def preprocess_tt_adain_resblock1(
             adain2=preprocess_tt_adain_1d(module.adain2[i], device, weights_dtype=weights_dtype),
             conv1=_conv1d_to_tt_params(c1, device, weights_dtype=conv_weights_dtype),
             conv2=_conv1d_to_tt_params(c2, device, weights_dtype=conv_weights_dtype),
-            alpha1=_alpha_to_tt(module.alpha1[i], device, weights_dtype=weights_dtype),
-            alpha2=_alpha_to_tt(module.alpha2[i], device, weights_dtype=weights_dtype),
+            alpha1=_alpha_to_tt(module.alpha1[i], device, weights_dtype=alpha_dtype),
+            alpha2=_alpha_to_tt(module.alpha2[i], device, weights_dtype=alpha_dtype),
         )
         stages.append(stage)
 
@@ -159,7 +164,18 @@ def _tt_snake1d(
     *,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
-    """``x + (1/alpha) * sin(alpha * x)^2`` (Snake1D from BigVGAN / Kokoro istftnet)."""
+    """``x + (1/alpha) * sin(alpha * x)^2`` (Snake1D from BigVGAN / Kokoro istftnet).
+
+    ``alpha`` is a tiny per-channel ``[1, 1, C]`` weight. When its dtype does not match the
+    activation we cast it once here so both full-length multiplies stay same-dtype: a mixed
+    ``bf16 x fp32`` elementwise op is ~6x slower than a pure-``bf16`` one on Blackhole. ``alpha``
+    is normally uploaded in the activation dtype (see :func:`preprocess_tt_adain_resblock1`), so
+    this cast is a no-op on the common generator (bf16) path.
+    """
+    alpha_cast = None
+    if alpha.dtype != x.dtype:
+        alpha_cast = ttnn.typecast(alpha, x.dtype, memory_config=memory_config)
+        alpha = alpha_cast
     ax = ttnn.multiply(x, alpha, memory_config=memory_config)
     sin_ax = ttnn.sin(ax, memory_config=memory_config)
     ttnn.deallocate(ax)
@@ -171,6 +187,8 @@ def _tt_snake1d(
     ttnn.deallocate(inv_alpha)
     out = ttnn.add(x, delta, memory_config=memory_config)
     ttnn.deallocate(delta)
+    if alpha_cast is not None:
+        ttnn.deallocate(alpha_cast)
     return out
 
 
