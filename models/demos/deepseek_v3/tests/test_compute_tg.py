@@ -60,7 +60,6 @@ def run_moe_compute_test(
     N,
     hidden_size,
     output_height_shard_dim,
-    output_width_shard_dim,
     dtype,
     enable_trace,
 ):
@@ -438,7 +437,6 @@ def run_moe_compute_test(
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("enable_trace", [False])  # Trace mode disabled due to L1 memory constraints
 @pytest.mark.parametrize("output_height_shard_dim", [4])
-@pytest.mark.parametrize("output_width_shard_dim", [4])
 def test_compute_correctness(
     mesh_device,
     mesh_shape,
@@ -451,7 +449,6 @@ def test_compute_correctness(
     N,
     hidden_size,
     output_height_shard_dim,
-    output_width_shard_dim,
     dtype,
     enable_trace,
 ):
@@ -468,7 +465,6 @@ def test_compute_correctness(
         N,
         hidden_size,
         output_height_shard_dim,
-        output_width_shard_dim,
         dtype,
         enable_trace,
     )

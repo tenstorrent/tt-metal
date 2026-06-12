@@ -268,22 +268,33 @@ MoEComputeCoreSelection select_moe_compute_cores(
                     compact.emplace_back(x, y);
                 }
             }
-            if (compact.size() == num_matmul) {
-                const CoreRange compact_bbox = CoreRangeSet(compact).bounding_box();
-                TT_ASSERT(
-                    !compact_bbox.intersects(mux_bbox),
-                    "Compact matmul bbox {} still intersects mux bbox {}",
-                    compact_bbox.str(),
-                    mux_bbox.str());
-                log_info(
-                    tt::LogOp,
-                    "moe_compute: DRAM-optimal matmul bbox {} overlaps mux bbox {}; "
-                    "using compact matmul cores (bbox {}) to avoid L1 corruption from tilize multicast",
-                    matmul_bbox_trial.str(),
-                    mux_bbox.str(),
-                    compact_bbox.str());
-                matmul_cores = compact;
-            }
+            TT_FATAL(
+                compact.size() == num_matmul,
+                "moe_compute: DRAM-optimal matmul bbox {} overlaps mux bbox {} but compact "
+                "placement only found {}/{} cores (worker_grid {}x{}, start_y={}, max_x={}). "
+                "Tilize multicast to the overlapping rectangle would corrupt mux L1.",
+                matmul_bbox_trial.str(),
+                mux_bbox.str(),
+                compact.size(),
+                num_matmul,
+                worker_grid.x,
+                worker_grid.y,
+                start_y,
+                max_x);
+            const CoreRange compact_bbox = CoreRangeSet(compact).bounding_box();
+            TT_FATAL(
+                !compact_bbox.intersects(mux_bbox),
+                "Compact matmul bbox {} still intersects mux bbox {}",
+                compact_bbox.str(),
+                mux_bbox.str());
+            log_info(
+                tt::LogOp,
+                "moe_compute: DRAM-optimal matmul bbox {} overlaps mux bbox {}; "
+                "using compact matmul cores (bbox {}) to avoid L1 corruption from tilize multicast",
+                matmul_bbox_trial.str(),
+                mux_bbox.str(),
+                compact_bbox.str());
+            matmul_cores = compact;
         }
     }
 
