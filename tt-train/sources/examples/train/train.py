@@ -439,7 +439,7 @@ def run_training(
     if args.track_memory:
         # Open the capture here so the setup snapshots below land in one session; held for the
         # whole run (release ends the capture), and MemoryTrackerCallback closes it after step 1.
-        mem_guard = MemoryUsageTracker.begin_capture()
+        mem_guard = MemoryUsageTracker.begin_capture()  # noqa: F841 -- held to keep the capture active
         MemoryUsageTracker.snapshot("ENTRY")
 
     # Silent setup: gather everything, then emit a single header block before training.

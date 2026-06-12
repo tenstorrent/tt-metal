@@ -257,6 +257,10 @@ class SFTTrainer:
     # Public API
     # ------------------------------------------------------------------
 
+    @property
+    def optimizer(self):
+        return self._optimizer
+
     def train(self) -> None:
         """Run the full training loop.
 

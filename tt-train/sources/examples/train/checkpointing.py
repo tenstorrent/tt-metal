@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import os
 import pickle
 import re
 from pathlib import Path
@@ -21,36 +22,49 @@ from ttml.trainers import SFTTrainer
 from model_builders import Model, ModelConfig, create_model
 
 
+def _serialize_tensor(tensor: "ttml.autograd.Tensor") -> dict:
+    """Serialize one autograd Tensor to a pickle-friendly dict: float32 array + layout + dtype."""
+    val = tensor.get_value()
+    if val.dtype == ttnn.DataType.FLOAT32:
+        dtype = "FLOAT32"
+    elif val.dtype == ttnn.DataType.BFLOAT16:
+        dtype = "BFLOAT16"
+    else:
+        raise ValueError(f"checkpointing: unsupported tensor dtype {val.dtype} (only FLOAT32 and BFLOAT16)")
+    return {
+        "data": tensor.to_numpy(ttnn.DataType.FLOAT32),
+        "layout": "ROW_MAJOR" if val.get_layout() == ttnn.Layout.ROW_MAJOR else "TILE",
+        "dtype": dtype,
+    }
+
+
+def _deserialize_tensor(serialized: dict) -> "ttml.autograd.Tensor":
+    """Rebuild a Tensor from a `_serialize_tensor` dict."""
+    layout = ttnn.Layout.ROW_MAJOR if serialized["layout"] == "ROW_MAJOR" else ttnn.Layout.TILE
+    if serialized["dtype"] == "FLOAT32":
+        arr, new_type = serialized["data"], ttnn.DataType.FLOAT32
+    else:
+        arr, new_type = serialized["data"].astype(ml_dtypes.bfloat16), ttnn.DataType.BFLOAT16
+    return ttml.autograd.Tensor.from_numpy(arr, layout=layout, new_type=new_type)
+
+
 def _serialize_params(model: Model) -> dict:
-    """Serialize parameters into a pickle-friendly dict: float32 arrays + layout metadata per param."""
-    state = {}
-    for name, param in model.parameters().items():
-        layout = param.tensor.get_value().get_layout()
-        arr = param.tensor.to_numpy(ttnn.DataType.FLOAT32)
-        state[name] = {
-            "data": arr,
-            "layout": layout.value if hasattr(layout, "value") else str(layout),
-            "shape": arr.shape,
-        }
-    return state
+    """Serialize a model's parameters into a pickle-friendly dict: float32 array + layout + dtype per param."""
+    return {name: _serialize_tensor(param.tensor) for name, param in model.parameters().items()}
 
 
-def _restore_params(params: dict, model_state: dict) -> None:
-    """Restore params from a `_serialize_params` dict into a parameter map (cast back to bf16)."""
+def _deserialize_params(model: Model, serialized: dict) -> None:
+    """Restore a `_serialize_params` dict into a model's parameters in place."""
+    params = model.parameters()
     restored = set()
-    for name, item in model_state.items():
+    for name, entry in serialized.items():
         if name not in params:
             continue
-        arr, layout_str = (item["data"], item.get("layout", "TILE")) if isinstance(item, dict) else (item, "TILE")
-        layout = ttnn.Layout.ROW_MAJOR if "ROW_MAJOR" in str(layout_str) else ttnn.Layout.TILE
-        tensor = ttml.autograd.Tensor.from_numpy(
-            arr.astype(ml_dtypes.bfloat16), layout=layout, new_type=ttnn.DataType.BFLOAT16
-        )
-        params[name].assign(tensor)
+        params[name].assign(_deserialize_tensor(entry))
         restored.add(name)
 
     missing = set(params) - restored  # in model, not restored → left at init (dangerous)
-    unexpected = set(model_state) - set(params)  # in checkpoint, not in model → ignored
+    unexpected = set(serialized) - set(params)  # in checkpoint, not in model → ignored
     if missing or unexpected:
         print(
             f"  [warn] checkpoint restore mismatch: "
@@ -60,31 +74,59 @@ def _restore_params(params: dict, model_state: dict) -> None:
         )
 
 
+def _serialize_optimizer(optimizer: "ttml.optimizers.OptimizerBase") -> dict:
+    """Split an optimizer state_dict into picklable scalars + numpy-serialized moment maps."""
+    scalars, moments = {}, {}
+    for key, val in optimizer.get_state_dict().items():
+        if isinstance(val, ttml.NamedParameters):
+            moments[key] = {name: _serialize_tensor(tensor) for name, tensor in val.items()}
+        elif isinstance(val, (bool, int, float)):  # steps / lr / betas / flags
+            scalars[key] = val
+        else:
+            raise ValueError(f"checkpointing: unsupported optimizer state '{key}' of type {type(val).__name__}")
+    return {"scalars": scalars, "moments": moments}
+
+
+def _deserialize_optimizer(optimizer: "ttml.optimizers.OptimizerBase", serialized: dict) -> None:
+    """Restore a `_serialize_optimizer` dict into an optimizer in place via set_state_dict."""
+    state_dict = dict(serialized["scalars"])
+    for key, tensor_map in serialized["moments"].items():
+        named = ttml.NamedParameters()
+        for name, entry in tensor_map.items():
+            named[name] = _deserialize_tensor(entry)
+        state_dict[key] = named
+    optimizer.set_state_dict(state_dict)
+
+
 def build_checkpoint_io(
     tokenizer: CharTokenizer | None,
     model_cfg: ModelConfig,
 ) -> tuple[Callable[[SFTTrainer, str], None], Callable[[SFTTrainer, str], int]]:
-    """Return `(saver, loader)` closures. Saver writes step+params+tokenizer+model_config; loader restores params and returns step."""
+    """Return `(saver, loader)` closures. Saver writes step+params+optimizer+tokenizer+model_config; loader restores params+optimizer and returns step."""
 
     def saver(trainer: SFTTrainer, path: str) -> None:
         if not path.endswith(".pkl"):
             path = path + ".pkl"
-        with open(path, "wb") as f:
+        tmp_path = path + ".tmp"
+        with open(tmp_path, "wb") as f:
             pickle.dump(
                 {
                     "step": trainer.step,
                     "model_state": _serialize_params(trainer.model),
+                    "optimizer_state": _serialize_optimizer(trainer.optimizer),
                     "tokenizer": tokenizer,
                     "model_config": model_cfg,
                 },
                 f,
             )
+        os.replace(tmp_path, path)  # atomic rename — a crash mid-write leaves the previous checkpoint intact
         print(f"  Saved checkpoint to {path}")
 
     def loader(trainer: SFTTrainer, path: str) -> int:
         with open(path, "rb") as f:
             ckpt = pickle.load(f)
-        _restore_params(trainer.model.parameters(), ckpt["model_state"])
+        _deserialize_params(trainer.model, ckpt["model_state"])
+        _deserialize_optimizer(trainer.optimizer, ckpt["optimizer_state"])
         return int(ckpt["step"])
 
     return saver, loader
@@ -134,5 +176,5 @@ def load_for_inference(
     step = int(ckpt["step"])
 
     model = create_model(model_cfg, use_tp=False)
-    _restore_params(model.parameters(), ckpt["model_state"])
+    _deserialize_params(model, ckpt["model_state"])
     return model, tokenizer, model_cfg, step
