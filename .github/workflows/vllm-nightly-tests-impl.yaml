@@ -83,9 +83,8 @@ jobs:
           #     "owner_id": "U08TJ70UFRT"
           #   },
           #
-          # Disabled due to Metal timeout in reduce-scatter async test model (failure run):
-          #   https://github.com/tenstorrent/tt-metal/actions/runs/27176391956/job/80227043847#step:17:442
-          # TODO: file a tracking issue and replace this TODO with the issue URL.
+          # Disabled due to Metal timeout in reduce-scatter async tests
+          # https://github.com/tenstorrent/vllm/issues/416
           # Originally disabled in:
           #   https://github.com/tenstorrent/tt-metal/pull/39088
           #   {
