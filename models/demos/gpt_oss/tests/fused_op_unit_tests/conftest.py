@@ -3,7 +3,7 @@
 
 """
 Tests in this directory exercise the throughput-experts fused ops (TopKRouter
-fused kernel, all_to_all_dispatch / combine, moe_gpt, etc.) and are pinned to
+fused kernel, all_to_all_dispatch / combine, moe_compute, etc.) and are pinned to
 a 4×8 Galaxy mesh with FABRIC_1D_RING. On systems with fewer devices — e.g.
 the 1×1 Blackhole P150 dev box — pytest's mesh_device fixture would TT_FATAL
 when trying to open a 4×8 mesh and crash the entire test session. Skip the

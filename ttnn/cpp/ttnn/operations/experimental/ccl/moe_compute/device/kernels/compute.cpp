@@ -17,8 +17,7 @@
 
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK
-#include "ckernel_sfpu_exp.h"
-#include "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/swiglu_sfpu.h"
+#include "swiglu_sfpu.h"
 #include "ckernel_sfpu_silu.h"
 #include "ckernel_sfpu_binary.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
@@ -245,7 +244,7 @@ void kernel_main() {
 
     if constexpr (has_bias) {
         // Create a ones-tile for bias addition (matmul with ones × bias_row = bias).
-        // Same sequence as moe_gpt compute.cpp for GPT-OSS compatibility.
+        // Same sequence as legacy compute.cpp for GPT-OSS compatibility.
         unary_op_init_common(cb_c2c_ones_tile_id, cb_c2c_ones_tile_id);
         tile_regs_acquire();
         fill_tile_init();
@@ -433,7 +432,7 @@ void kernel_main() {
 
             cb_c2s_out.reserve_back(num_w0_w1_tiles_h);
 
-            // Init pack_untilize ONCE before the iter loop (hoisted, mirrors moe_gpt pattern).
+            // Init pack_untilize ONCE before the iter loop (hoisted from per-iter).
             // Cycling init/uninit per-iter triggers BH's MATH reconfig_remap workaround
             // (pack_untilize.h:66-80, tt-metal#17132) which races with in-flight PACR/MOP
             // execution and produces garbage output (NaN/Inf) on BH silicon.
@@ -509,14 +508,14 @@ void kernel_main() {
                 tile_regs_release();
             }
 
-            // Uninit pack_untilize ONCE after the iter loop (hoisted, mirrors moe_gpt pattern).
+            // Uninit pack_untilize ONCE after the iter loop (hoisted from per-iter).
             pack_untilize_uninit(cb_c2s_out_id);
 
             cb_c2s_out.push_back(num_w0_w1_tiles_h);
 
             // Toggle the buffer to use
             use_second_half_buffer = !use_second_half_buffer;
-            // Restore packer data format for next chunk's activation pipeline (mirrors moe_gpt:342).
+            // Restore packer data format for next chunk's activation pipeline.
             pack_reconfig_data_format(cb_s2c_in2_id);
 
         }  // end for (chunk)

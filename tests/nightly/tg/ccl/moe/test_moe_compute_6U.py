@@ -770,7 +770,6 @@ GELU_PCC_THRESHOLD = 0.986
 def _get_base_pcc_threshold(activation_type, has_bias):
     # Determine PCC threshold based on activation type
     # Note: this threshold is applicable for checking a block of 32 tokens, smaller matrices will need a lower threshold
-    # https://github.com/tenstorrent/tt-metal/blob/368efa1f7062704b8e885aa72dae115e91320032/tests/ttnn/nightly/unit_tests/operations/experimental/test_moe_gpt_e2e.py#L438
     act_threshold = None
     if activation_type == MoEActivationFunction.SWIGLU:
         act_threshold = SWIGLU_PCC_THRESHOLD

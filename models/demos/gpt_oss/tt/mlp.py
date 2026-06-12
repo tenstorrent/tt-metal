@@ -14,7 +14,7 @@ from .experts_throughput import (
     DeepSeekPrefillConfig,
     ThroughputExpertConfig,
     ThroughputExperts,
-    create_fused_moe_gpt_config,
+    create_fused_moe_compute_config,
 )
 from .topk import TopKRouter
 
@@ -65,7 +65,7 @@ class MLP:
             # Create fused MoE config if requested
             fused_config = None
             if use_throughput_experts:
-                fused_config = create_fused_moe_gpt_config(
+                fused_config = create_fused_moe_compute_config(
                     mesh_device=mesh_device,
                     config=throughput_expert_config,
                     state_dict=experts_state_dict,

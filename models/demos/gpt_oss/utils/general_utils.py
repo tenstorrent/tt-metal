@@ -25,8 +25,8 @@ def get_default_num_links(mesh_device):
 
 
 def throughput_experts_supported_on_arch():
-    """Whether the throughput-optimized experts path (all_to_all dispatch/combine, moe_gpt,
-    selective_reduce_combine) is supported on the current arch.
+    """Whether the throughput-optimized experts path (all_to_all dispatch/combine, moe_compute)
+    is supported on the current arch.
 
     Currently disabled on Blackhole; only the batch=1 low-latency expert path runs there.
     """

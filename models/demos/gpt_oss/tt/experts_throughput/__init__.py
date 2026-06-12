@@ -43,7 +43,7 @@ from .config import (
     ThroughputProgramConfig,
     AllToAllDispatchConfig,
     AllToAllCombineConfig,
-    FusedMoeGptConfig,
+    FusedMoeComputeConfig,
     create_expert_mapping_tensors,
     create_remap_topk_mask,
 )
@@ -53,8 +53,7 @@ from .prefill import DeepSeekPrefillConfig, forward_prefill_deepseek, _prepare_e
 from .weights import (
     ThroughputExpertWeights,
     load_throughput_expert_weights,
-    create_fused_moe_gpt_config,
-    get_moe_gpt_combine_core_range,
+    create_fused_moe_compute_config,
 )
 
 __all__ = [
@@ -65,10 +64,9 @@ __all__ = [
     "ThroughputExpertWeights",
     "AllToAllDispatchConfig",
     "AllToAllCombineConfig",
-    "FusedMoeGptConfig",
+    "FusedMoeComputeConfig",
     "fused_decode_forward",
-    "create_fused_moe_gpt_config",
-    "get_moe_gpt_combine_core_range",
+    "create_fused_moe_compute_config",
 ]
 
 
@@ -110,7 +108,7 @@ class ThroughputExperts:
         dispatch_cluster_axis: Optional[int] = None,
         decode_memory_config: ttnn.MemoryConfig = None,
         prefill_memory_config: ttnn.MemoryConfig = None,
-        fused_config: Optional[FusedMoeGptConfig] = None,
+        fused_config: Optional[FusedMoeComputeConfig] = None,
         prefill_config: Optional["DeepSeekPrefillConfig"] = None,
     ):
         """
@@ -127,7 +125,7 @@ class ThroughputExperts:
             decode_memory_config: Memory config for decode (default: L1)
             prefill_memory_config: Memory config for prefill (default: DRAM)
             fused_config: If provided, use the fused flow (all_to_all_dispatch_metadata +
-                moe_gpt + selective_reduce_combine) for decode instead of the dense flow.
+                moe_compute) for decode instead of the dense flow.
                 The existing unit tests use the dense flow (fused_config=None).
 
         Raises:
@@ -173,7 +171,7 @@ class ThroughputExperts:
         )
 
         # Load weights for the dense flow. When using the fused flow (fused_config is set),
-        # the weights are pre-loaded in moe_gpt format and stored in fused_config.
+        # the weights are pre-loaded in moe_compute format and stored in fused_config.
         # We still load the dense weights here for prefill and for backward compatibility.
         self.weights = load_throughput_expert_weights(
             mesh_device=mesh_device,
@@ -277,7 +275,7 @@ class ThroughputExperts:
         Decode forward pass.
 
         When fused_config is set (passed at init), uses the fused flow:
-          all_to_all_dispatch_metadata → moe_gpt → selective_reduce_combine
+          all_to_all_dispatch_metadata → moe_compute (Full mode)
         Otherwise uses the dense flow:
           all_to_all_dispatch → batched matmul → all_to_all_combine → weighted sum → all_reduce
 

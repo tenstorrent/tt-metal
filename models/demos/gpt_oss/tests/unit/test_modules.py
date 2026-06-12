@@ -319,13 +319,13 @@ def run_throughput_experts_component(
 def run_fused_throughput_experts_component(
     mesh_device, hidden_shape, config, reference_layer, decoder_layer, is_row_sharded
 ):
-    """Test fused experts: all_to_all_dispatch_metadata → moe_gpt → selective_reduce_combine.
+    """Test fused experts: all_to_all_dispatch_metadata → moe_compute (Full mode).
 
     Uses global expert IDs (0..num_experts-1). Dispatch (cluster_axis=0, column rings of
-    4 devices) silently skips experts not on the local column ring; moe_gpt processes only
+    4 devices) silently skips experts not on the local column ring; moe_compute processes only
     the tokens it receives. routing_weight_map=None → unweighted sum over processed experts.
     """
-    from models.demos.gpt_oss.tt.experts_throughput import create_fused_moe_gpt_config, fused_decode_forward
+    from models.demos.gpt_oss.tt.experts_throughput import create_fused_moe_compute_config, fused_decode_forward
     from models.demos.gpt_oss.utils.general_utils import get_default_num_links
 
     _, _, num_tokens, hidden_size = hidden_shape
@@ -343,7 +343,7 @@ def run_fused_throughput_experts_component(
         "down_proj": ref_state["mlp.experts.down_proj"],  # [E, intermediate_size, hidden_size]
     }
 
-    fused_config = create_fused_moe_gpt_config(
+    fused_config = create_fused_moe_compute_config(
         mesh_device=mesh_device,
         config=tt_config,
         state_dict=fused_state_dict,
@@ -373,7 +373,7 @@ def run_fused_throughput_experts_component(
     # Create hidden states - tokens on dim 0 matching e2e test format
     hidden_states_torch = torch.randn(num_tokens, 1, 1, hidden_size, dtype=torch.float32)
 
-    # Zero out bias in reference model since moe_gpt kernel doesn't add bias.
+    # Zero out bias in reference model since moe_compute kernel doesn't add bias.
     reference_experts = reference_layer.mlp.experts.eval()
     with torch.no_grad():
         reference_experts.gate_up_proj_bias.zero_()
@@ -456,7 +456,7 @@ def run_fused_throughput_experts_component(
             "dispatch_scores",
             "combine_preallocated",
             "tt_dispatch_mapping",
-            "tt_moe_gpt_mapping",
+            "tt_expert_mapping",
             "tt_w0_w1",
             "tt_w2",
         ]:

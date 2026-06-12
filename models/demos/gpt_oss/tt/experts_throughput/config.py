@@ -283,24 +283,24 @@ class ThroughputProgramConfig:
 
 
 @dataclass
-class FusedMoeGptConfig:
+class FusedMoeComputeConfig:
     """Configuration and pre-allocated resources for the fused MoE decode flow.
 
-    The fused flow uses three ops instead of the dense all_to_all flow:
-      all_to_all_dispatch_metadata → moe_gpt → selective_reduce_combine
+    The fused flow uses two ops instead of the dense all_to_all flow:
+      all_to_all_dispatch_metadata → moe_compute (Full mode, with integrated combine)
 
     Pre-allocated resources (dispatch/combine output tensors and semaphores) are
     reused across iterations to avoid per-call allocations.
 
     Attributes:
-        tt_w0_w1: moe_gpt gate+up weight tensor (DRAM HEIGHT_SHARDED, prepared by
-            prepare_w0_w1_tensor from experts_throughput.weights)
-        tt_w2: moe_gpt down weight tensor (DRAM HEIGHT_SHARDED, prepared by
-            prepare_w2_tensor from experts_throughput.weights)
-        tt_dispatch_mapping: Expert mapping for all_to_all_dispatch_metadata and moe_gpt.
-            Both ops use [D, E] format: mapping[d, e] = linearized device ID that owns
-            global expert e. Formula: e // experts_per_device (same for all d).
-            Shape: [total_devices, num_experts] uint16, DRAM.
+        tt_w0_w1: Gate+up weight tensor (DRAM HEIGHT_SHARDED, prepared by
+            ttnn.experimental.prepare_w0_w1_tensor_with_bias)
+        tt_w2: Down weight tensor (DRAM HEIGHT_SHARDED, prepared by
+            ttnn.experimental.prepare_w2_tensor_with_bias)
+        tt_dispatch_mapping: Expert mapping for all_to_all_dispatch_metadata (DRAM).
+            Shape: [total_devices, num_experts] uint16.
+        tt_expert_mapping: Expert mapping for moe_compute (L1).
+            Same data as tt_dispatch_mapping but in L1 memory.
         dispatch_sparse: Pre-allocated sparse buffer output from dispatch
             [ring_devices, total_tokens, hidden_size] bfloat16, DRAM (sharded per device)
         dispatch_indices: Pre-allocated expert indices output from dispatch
@@ -309,28 +309,25 @@ class FusedMoeGptConfig:
             HEIGHT_SHARDED L1, [total_tokens, selected_k] bfloat16 per device
         dispatch_semaphore: Global semaphore for dispatch synchronization
         combine_preallocated: Pre-allocated combine output tensor, DRAM
-            Shape: [experts_per_cluster, M, hidden_size] per device
-        combine_semaphore: Global semaphore for selective_reduce_combine
+            Shape: [select_experts_k, tokens_per_device, hidden_size] per device
+        combine_semaphore: Global semaphore for moe_compute combine
         cluster_axis: Mesh axis for the dispatch ring (default: 0, ring along rows)
-        combine_worker_cores: List of CoreCoord for selective_reduce_combine workers
-        combine_mux_cores: CoreRangeSet for selective_reduce_combine mux cores
-        combine_token_parallel_core_dim: Token-parallel core dimension (default: 4)
-        combine_data_parallel_core_dim: Data-parallel core dimension (default: 4)
+        output_height_shard_dim: Token-parallel combine core count (default: 4)
+        mux_core_range_set: Cores to avoid for fabric mux
+        has_bias: Whether weights include bias (GPT-OSS: True)
+        activation_type: MoE activation function (GPT-OSS: SWIGLU)
         num_links: Number of fabric links for all ops (default: 4)
     """
 
-    # Weight tensors in moe_gpt format
+    # Weight tensors prepared via moe_compute_utils
     tt_w0_w1: object  # ttnn.Tensor
     tt_w2: object  # ttnn.Tensor
 
     # Routing mapping tensor for dispatch (DRAM)
-    # Shape [total_devices, experts_per_ring] uint16, DRAM.
-    # Uses ring-local expert IDs: mapping[d, e] = (e // E) * mesh_cols + (d % mesh_cols)
     tt_dispatch_mapping: object  # ttnn.Tensor
 
-    # Routing mapping tensor for moe_gpt (L1)
-    # Same data as tt_dispatch_mapping but in L1 memory (required by moe_gpt kernel).
-    tt_moe_gpt_mapping: object  # ttnn.Tensor
+    # Routing mapping tensor for moe_compute (L1)
+    tt_expert_mapping: object  # ttnn.Tensor
 
     # Pre-allocated dispatch output tensors
     dispatch_sparse: object  # ttnn.Tensor, DRAM
@@ -342,12 +339,12 @@ class FusedMoeGptConfig:
     combine_preallocated: object  # ttnn.Tensor, DRAM
     combine_semaphore: object  # ttnn.GlobalSemaphore
 
-    # Core topology parameters
+    # Op parameters
     cluster_axis: int = 0
-    combine_worker_cores: object = None  # List[ttnn.CoreCoord], 16 cores
-    combine_mux_cores: object = None  # ttnn.CoreRangeSet
-    combine_token_parallel_core_dim: int = 4
-    combine_data_parallel_core_dim: int = 4
+    output_height_shard_dim: int = 4
+    mux_core_range_set: object = None  # ttnn.CoreRangeSet
+    has_bias: bool = True
+    activation_type: object = None  # ttnn.MoEActivationFunction
     num_links: int = 4
 
 

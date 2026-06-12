@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fused decode forward pass using all_to_all_dispatch_metadata + moe_gpt + selective_reduce_combine.
+"""Fused decode forward pass using all_to_all_dispatch_metadata + moe_compute.
 
 This implements the optimized sparse MoE forward pass for decode. Compared to the
 existing dense flow (all_to_all_dispatch + batched matmul + all_to_all_combine), the
@@ -12,15 +12,14 @@ fused flow is more efficient:
     → all_to_all_combine → weighted sum → all_reduce
 
   New (fused/sparse):
-    all_to_all_dispatch_metadata → moe_gpt (tilize + W0/W1/SwiGLU + A2A ring + W2 + combine)
-    → selective_reduce_combine → score weighting → sum → all_reduce
+    all_to_all_dispatch_metadata → moe_compute (tilize + matmul + ring A2A + combine)
+    → score weighting → sum → all_reduce
 
 Key differences:
-  - moe_gpt only processes tokens actually routed to each expert (sparse, not dense)
-  - W0/W1/SwiGLU/A2A ring/W2/combine are fused into a single kernel
+  - moe_compute only processes tokens actually routed to each expert (sparse, not dense)
+  - Tilize/W0/W1/activation/A2A ring/W2/combine are fused into a single op
   - No need to repeat input across the expert dimension
-  - selective_reduce_combine aliases moe_gpt's BLOCK_SHARDED combine output directly
-    via set_globally_allocated_address — no TM ops needed between moe_gpt and combine
+  - moe_compute integrates selective_reduce_combine internally (Full mode)
   - Score weighting: combine outputs [K, M, H], permute scores [M, 1, 1, K] -> [K, 1, M, 1],
     broadcast multiply, sum over K dim. No host round-trip needed.
 
@@ -32,7 +31,7 @@ from math import prod
 
 import ttnn
 
-from .config import FusedMoeGptConfig, ThroughputExpertConfig
+from .config import FusedMoeComputeConfig, ThroughputExpertConfig
 
 
 def fused_decode_forward(
@@ -40,10 +39,10 @@ def fused_decode_forward(
     topk_expert_indices: ttnn.Tensor,
     topk_expert_scores: ttnn.Tensor,
     config: ThroughputExpertConfig,
-    fused_config: FusedMoeGptConfig,
+    fused_config: FusedMoeComputeConfig,
     mesh_device,
 ) -> ttnn.Tensor:
-    """Fused decode: all_to_all_dispatch_metadata + moe_gpt + selective_reduce_combine.
+    """Fused decode: all_to_all_dispatch_metadata + moe_compute (Full mode).
 
     Args:
         hidden_states: Input token embeddings [B, 1, S, H] in L1 (required by dispatch).
@@ -53,7 +52,7 @@ def fused_decode_forward(
         topk_expert_scores: Expert routing scores [B, 1, S, K], HEIGHT_SHARDED L1 bfloat16.
             Same memory config as topk_expert_indices.
         config: ThroughputExpertConfig with model dimensions.
-        fused_config: FusedMoeGptConfig with pre-allocated resources and weight tensors.
+        fused_config: FusedMoeComputeConfig with pre-allocated resources and weight tensors.
         mesh_device: TTNN mesh device.
 
     Returns:
@@ -118,16 +117,6 @@ def fused_decode_forward(
         scores_dispatch_rm = ttnn.clone(scores_dispatch_rm, memory_config=ttnn.L1_MEMORY_CONFIG)
     topk_expert_scores = ttnn.reshape(scores_dispatch_rm, (tokens_per_device, 1, 1, K_sel))
 
-    # Create zeroed combine output buffer before dispatch (dispatch is the cross-device barrier).
-    combine_output_zeroed = ttnn.moreh_full(
-        shape=fused_config.combine_preallocated.shape,
-        fill_value=0,
-        device=mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        dtype=ttnn.bfloat16,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
     # ------------------------------------------------------------------
     # Step 1: all_to_all_dispatch_metadata
     # ------------------------------------------------------------------
@@ -153,43 +142,29 @@ def fused_decode_forward(
     tt_sparse_l1 = ttnn.reshape(tt_sparse_l1, [total_tokens, config.hidden_size])
 
     # ------------------------------------------------------------------
-    # Step 2: moe_gpt (fused sparse compute)
+    # Step 2+3: moe_compute (fused sparse compute + combine)
+    # moe_compute in Full mode integrates selective_reduce_combine internally.
     # ------------------------------------------------------------------
-    moe_gpt_outputs = ttnn.experimental.moe_gpt(
+    moe_compute_outputs = ttnn.experimental.moe_compute(
         tt_sparse_l1,
-        expert_indices=tt_indices,
-        expert_scores=tt_scores,
-        expert_mapping=fused_config.tt_moe_gpt_mapping,
-        w0_w1_tensor=fused_config.tt_w0_w1,
-        w2_tensor=fused_config.tt_w2,
-        cluster_axis=cluster_axis,
-    )
-    # ------------------------------------------------------------------
-    # Step 3: selective_reduce_combine
-    # With the K-indexed fix (upstream #38542), the combine writer uses the
-    # token_activations metadata to look up each token's K-index, so the
-    # output is [select_experts_k, M, H] instead of [experts_per_ring, M, H].
-    # ------------------------------------------------------------------
-    # mul(0) removed — moreh_full provides zeroed output_tensor
-    tt_combine_output = ttnn.experimental.selective_reduce_combine(
-        moe_gpt_outputs[4],
-        moe_gpt_outputs[1],
-        moe_gpt_outputs[2],
-        moe_gpt_outputs[0],
-        hidden_size=config.hidden_size,
-        batch_size=total_tokens,
-        seq_size=1,
-        select_experts_k=K_sel,
+        tt_indices,
+        tt_scores,
+        fused_config.tt_expert_mapping,
+        fused_config.tt_w0_w1,
+        fused_config.tt_w2,
+        layer_id=0,
+        output_height_shard_dim=fused_config.output_height_shard_dim,
+        intermediate_size=config.intermediate_size,
+        has_bias=fused_config.has_bias,
         cluster_axis=cluster_axis,
         topology=ttnn.Topology.Ring,
         num_links=fused_config.num_links,
-        token_parallel_core_dim=fused_config.combine_token_parallel_core_dim,
-        data_parallel_core_dim=fused_config.combine_data_parallel_core_dim,
-        worker_cores=fused_config.combine_worker_cores,
-        mux_core_range_set=fused_config.combine_mux_cores,
-        output_tensor=combine_output_zeroed,
+        mux_core_range_set=fused_config.mux_core_range_set,
+        optional_output_tensor=fused_config.combine_preallocated,
         optional_cross_device_semaphore=fused_config.combine_semaphore,
+        activation_type=fused_config.activation_type,
     )
+    tt_combine_output = moe_compute_outputs[5]
 
     # ------------------------------------------------------------------
     # Post-processing: apply routing scores and reduce over K dimension.

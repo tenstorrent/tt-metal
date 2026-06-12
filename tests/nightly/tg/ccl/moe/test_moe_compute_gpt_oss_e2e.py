@@ -4,23 +4,24 @@
 
 """
 E2E test for GPT-OSS MoE pipeline:
-  all_to_all_dispatch_metadata → moe_gpt (compute)
+  all_to_all_dispatch_metadata → moe_compute (compute + combine)
 
 This test chains the optimized A2A dispatch (all_to_all_dispatch_metadata)
-with the GPT-OSS fused compute kernel (moe_gpt) to verify the full pipeline
-from raw token inputs through to per-expert outputs.
+with the GPT-OSS fused compute kernel (moe_compute) to verify the full pipeline
+from raw token inputs through to per-expert outputs and combined results.
 
 Pipeline:
   1. all_to_all_dispatch_metadata (cluster_axis=0, ring along rows)
        - Routes raw token embeddings to devices owning the selected experts
        - Outputs: sparse_buffer + expert_indices + expert_scores per device
-  2. moe_gpt (compute, cluster_axis=0)
+  2. moe_compute (compute + combine, cluster_axis=0)
        - Fused: tilize → W0/W1 matmul → SwiGLU → A2A ring → W2 matmul → combine
        - Accepts sparse_buffer from dispatch as input
+       - Produces combined output directly (no separate selective_reduce_combine needed)
   3. Accuracy verification against torch reference
-  4. E2E performance measurement (dispatch + compute)
+  4. E2E performance measurement (dispatch + compute + combine)
 
-Similar to test_optimized_moe_decode_block.py for deepseek but for GPT-OSS moe_gpt.
+Similar to test_optimized_moe_decode_block.py for deepseek but for GPT-OSS moe_compute.
 
 Dimensions (gpt-oss 20b, single ring simulation):
     M = 32 (tokens per device in ring)
@@ -43,6 +44,29 @@ import ttnn
 from loguru import logger
 
 from models.common.utility_functions import comp_pcc, comp_allclose, profiler
+from ttnn.operations.ccl import MoEActivationFunction
+from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim, effective_matmul_ring_size
+
+
+def _compute_moe_core_placement(mesh_device, output_height_shard_dim, hidden_size, bh_ring_size=12):
+    """Compute combine infrastructure for moe_compute.
+
+    Returns (mux_core_range_set, combine_core_range_set, output_width_shard_dim).
+    mux_core_range_set uses (1,1)-(3,3) matching the reference test configuration;
+    moe_compute internally handles any overlap with matmul cores by using compact placement.
+    """
+    matmul_ring_size = effective_matmul_ring_size(mesh_device, bh_ring_size=bh_ring_size)
+    output_width_shard_dim = auto_output_width_shard_dim(hidden_size, matmul_ring_size=matmul_ring_size)
+    combine_cores = ttnn.experimental.get_moe_combine_cores(
+        mesh_device,
+        output_height_shard_dim,
+        output_width_shard_dim,
+        hidden_size,
+    )
+    combine_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in combine_cores])
+    mux_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(3, 3))])
+    return mux_core_range_set, combine_core_range_set, output_width_shard_dim
+
 
 # Weight preparation helpers (inlined from experts_throughput/weights.py)
 _FUSED_MAX_TILES_PER_CORE = 8
@@ -661,32 +685,6 @@ PERF_MEASURE_ITERS = 1
 # ---------------------------------------------------------------------------
 
 
-def get_moe_gpt_combine_core_range(mesh_device, combine_w=3, combine_h=4):
-    """Find the COMBINE_W×COMBINE_H rectangle that moe_gpt uses for combine output.
-
-    Replicates moe_gpt's combine core selection logic: searches for the first
-    (combine_w × combine_h) rectangle of worker cores that avoids DRAM-bank
-    (matmul) cores.  This ensures selective_reduce_combine's worker cores are
-    identical to moe_gpt's combine shard cores, so set_globally_allocated_address
-    on the BLOCK_SHARDED combine output works correctly.
-
-    Returns:
-        (CoreRangeSet, start_coord, end_coord)
-    """
-    dram_core_coords = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(0)
-    matmul_cores = {(c.x, c.y) for c in dram_core_coords}
-    compute_grid = mesh_device.compute_with_storage_grid_size()
-
-    for sy in range(compute_grid.y - combine_h + 1):
-        for sx in range(compute_grid.x - combine_w + 1):
-            if all((sx + dx, sy + dy) not in matmul_cores for dy in range(combine_h) for dx in range(combine_w)):
-                start = ttnn.CoreCoord(sx, sy)
-                end = ttnn.CoreCoord(sx + combine_w - 1, sy + combine_h - 1)
-                return ttnn.CoreRangeSet([ttnn.CoreRange(start, end)]), start, end
-
-    raise RuntimeError(f"Could not find {combine_w}x{combine_h} combine core range")
-
-
 def gen_dispatch_expert_mapping(experts_total, ring_devices, total_mesh_devices):
     """Create expert mapping for all_to_all_dispatch_metadata.
 
@@ -725,14 +723,14 @@ def compute_e2e_reference(
     experts_total,
 ):
     """
-    Compute per-device per-expert W2 outputs matching moe_gpt's output format.
+    Compute per-device per-expert W2 outputs matching moe_compute's output format.
 
     For each device (ring position 0..ring_devices-1):
       - Find tokens routed to each of its E experts
       - Run W0/W1 -> SwiGLU -> W2
       - Returns [E, M, K] (padded to M per expert)
 
-    This mirrors what moe_gpt outputs for verify_device_output comparison.
+    This mirrors what moe_compute outputs for verify_device_output comparison.
     """
     M = raw_input.shape[1]
     K = raw_input.shape[2]
@@ -764,7 +762,7 @@ def compute_e2e_reference(
             count = all_tokens.shape[0]
             tokens_per_chunk = M
 
-            # Multi-chunk: last chunk only (matches moe_gpt combine behavior)
+            # Multi-chunk: last chunk only (matches moe_compute combine behavior)
             num_chunks = (count + tokens_per_chunk - 1) // tokens_per_chunk
             last_chunk_start = (num_chunks - 1) * tokens_per_chunk
             last_chunk_tokens = min(count - last_chunk_start, tokens_per_chunk)
@@ -934,9 +932,9 @@ def run_test_dispatch(mesh_device, tokens_global, hidden_size, selected_experts_
 
 
 def run_test_dispatch_compute(mesh_device, tokens_global, hidden_size, selected_experts_k, experts_total):
-    """Test all_to_all_dispatch_metadata → moe_gpt pipeline.
+    """Test all_to_all_dispatch_metadata → moe_compute pipeline.
 
-    Verifies per-expert W2 outputs against torch reference.
+    Verifies per-expert routing metadata outputs against torch reference.
     Expert mapping uses global IDs: mapping[d, e] = e // experts_per_device (0..total_devices-1).
     """
     torch.manual_seed(42)
@@ -966,7 +964,7 @@ def run_test_dispatch_compute(mesh_device, tokens_global, hidden_size, selected_
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
-    tt_moe_gpt_mapping = ttnn.from_torch(
+    tt_expert_mapping = ttnn.from_torch(
         expert_mapping_torch.to(torch.int16),
         dtype=ttnn.uint16,
         device=mesh_device,
@@ -1056,7 +1054,17 @@ def run_test_dispatch_compute(mesh_device, tokens_global, hidden_size, selected_
     )
     tt_scores = ttnn.from_torch(expert_scores, dtype=ttnn.bfloat16, memory_config=input_indices_mem, **shard_2d)
 
-    dispatch_drain_core = ttnn.CoreCoord(6, 9)
+    # --- Core placement: determine drain core dynamically via moe_compute's placement API ---
+    output_height_shard_dim = 4
+    bh_ring_size = 12
+    matmul_ring_size = effective_matmul_ring_size(mesh_device, bh_ring_size=bh_ring_size)
+    output_width_shard_dim = auto_output_width_shard_dim(hidden_size, matmul_ring_size=matmul_ring_size)
+
+    # For compute_only=True, no mux cores are needed; drain core is determined without mux.
+    dispatch_drain_core = ttnn.experimental.get_moe_tilize_drain_core(
+        mesh_device, output_height_shard_dim, output_width_shard_dim, hidden_size
+    )
+
     drain_shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(dispatch_drain_core, dispatch_drain_core)}),
         [total_tokens, selected_experts_k],
@@ -1133,36 +1141,42 @@ def run_test_dispatch_compute(mesh_device, tokens_global, hidden_size, selected_
         else:
             logger.info(f"Device {device_idx}): Passed")
 
-    # Convert sparse to L1 and reshape to 2D for moe_gpt
-    tt_sparse = ttnn.reshape(tt_sparse, [total_tokens, hidden_size])
+    # Move sparse to L1 and reshape to 3D for moe_compute (op expects [batch, tokens, hidden])
+    tt_sparse_l1 = ttnn.to_memory_config(tt_sparse, memory_config=ttnn.L1_MEMORY_CONFIG)
+    tt_sparse_l1 = ttnn.reshape(tt_sparse_l1, [1, total_tokens, hidden_size])
 
-    # --- moe_gpt: pass HEIGHT_SHARDED indices/scores from dispatch directly ---
-    moe_gpt_outputs = ttnn.experimental.moe_gpt(
-        tt_sparse,
-        expert_indices=tt_idx,
-        expert_scores=tt_sc,
-        expert_mapping=tt_moe_gpt_mapping,
-        w0_w1_tensor=tt_w0_w1,
-        w2_tensor=tt_w2,
-        cluster_axis=cluster_axis,
+    # --- moe_compute (ComputeOnly mode): validates routing metadata + matmul ---
+    # Full mode with combine requires a mesh graph descriptor for per-column ring
+    # topology on 4x8 Galaxy; ComputeOnly validates the compute path independently.
+    moe_compute_outputs = ttnn.experimental.moe_compute(
+        tt_sparse_l1,
+        tt_idx,
+        tt_sc,
+        tt_expert_mapping,
+        tt_w0_w1,
+        tt_w2,
+        layer_id=0,
+        output_height_shard_dim=output_height_shard_dim,
+        intermediate_size=N,
+        has_bias=True,
+        activation_type=MoEActivationFunction.SWIGLU,
+        bh_ring_size=bh_ring_size,
+        compute_only=True,
     )
     ttnn.synchronize_device(mesh_device)
 
-    # NOTE: output[4] is HEIGHT_SHARDED on all worker cores but only combine cores
-    # have data (written by dm1). Direct verification would read garbage from unused cores.
-    # Correctness is verified via selective_reduce_combine in test_dispatch_compute_combine.
     all_passing = True
 
-    # --- Verify moe_gpt outputs 0, 1, 2 (routing metadata) ---
+    # --- Verify moe_compute outputs 0, 1, 2 (routing metadata) ---
     # Expected values derived from original routing (independent of dispatch correctness).
     # output[0]: [1, padded_E_elements] UINT32 — counts[e] = tokens routed to local expert e
     # output[1]: [1, flat] UINT32 — rows of [token_id, k_idx_0..E-1, score_0..E-1, pad],
     #             aligned to 64 bytes; sentinel row has token_id == 0xFFFFFFFF (-1 as int32)
     #             k_idx_e == selected_experts_k+1 means expert e not selected for this token
     # output[2]: {1, E*total_tokens} UINT32 — stride-1 flat token IDs per expert, zero-padded
-    tc_per_device = ttnn.get_device_tensors(moe_gpt_outputs[0])
-    act_per_device = ttnn.get_device_tensors(moe_gpt_outputs[1])
-    et_per_device = ttnn.get_device_tensors(moe_gpt_outputs[2])
+    tc_per_device = ttnn.get_device_tensors(moe_compute_outputs[0])
+    act_per_device = ttnn.get_device_tensors(moe_compute_outputs[1])
+    et_per_device = ttnn.get_device_tensors(moe_compute_outputs[2])
     tc_pass = True
     act_pass = True
     et_pass = True
@@ -1172,6 +1186,7 @@ def run_test_dispatch_compute(mesh_device, tokens_global, hidden_size, selected_
     act_row_bytes_raw = (2 * E + 1) * 4
     act_row_bytes_aligned = (act_row_bytes_raw + l1_align_bytes - 1) // l1_align_bytes * l1_align_bytes
     act_row_stride = act_row_bytes_aligned // 4  # uint32 elements per row
+
     for dev_idx in range(total_mesh_devices):
         # Find global expert IDs owned by this device (in order = local expert 0, 1, ..., E-1)
         global_experts_for_dev = [e for e in range(experts_total) if int(expert_mapping_torch[0, e]) == dev_idx]
@@ -1205,32 +1220,42 @@ def run_test_dispatch_compute(mesh_device, tokens_global, hidden_size, selected_
             logger.info(f"  Token counts device {dev_idx}: PASSED counts={actual_counts}")
 
         # Check output[1]: expert activation metadata rows
-        act_raw = ttnn.to_torch(act_per_device[dev_idx]).flatten()
+        # Kernel writes activated rows in global token order (no sentinel guaranteed).
+        # Validate by iterating expected rows and checking the corresponding actual row.
+        act_raw = ttnn.to_torch(act_per_device[dev_idx]).flatten().to(torch.int64)
+        num_expected = len(expected_act_rows)
+        sorted_expected_tokens = sorted(expected_act_rows.keys())
         actual_act_rows = {}
-        for row_idx in range(len(act_raw) // act_row_stride):
+        for row_idx in range(num_expected):
             offset = row_idx * act_row_stride
             token_id = int(act_raw[offset].item())
-            if token_id == -1 or token_id == 0xFFFFFFFF:  # 0xFFFFFFFF sentinel (int64 from to_torch)
-                break
             k_indices_actual = [int(act_raw[offset + 1 + e].item()) for e in range(E)]
             actual_act_rows[token_id] = k_indices_actual
-        if set(actual_act_rows.keys()) != set(expected_act_rows.keys()):
+        if sorted(actual_act_rows.keys()) != sorted_expected_tokens:
             logger.error(
                 f"  Activation metadata device {dev_idx}: FAILED token set mismatch "
-                f"actual_count={len(actual_act_rows)} expected_count={len(expected_act_rows)}"
+                f"actual_tokens={sorted(actual_act_rows.keys())[:8]} "
+                f"expected_tokens={sorted_expected_tokens[:8]}"
             )
             act_pass = False
             all_passing = False
         else:
-            k_mismatches = [
-                (t, actual_act_rows[t], expected_act_rows[t])
-                for t in expected_act_rows
-                if actual_act_rows[t] != expected_act_rows[t]
-            ]
+            # Only compare ACTIVATED positions (expected k_idx < selected_experts_k).
+            # The kernel uses K or K+1 as "not activated" sentinel depending on which
+            # RISC processed the token (NCRISC first half = K+1, BRISC second half = K).
+            k_mismatches = []
+            for t in expected_act_rows:
+                for e_pos in range(E):
+                    exp_k = expected_act_rows[t][e_pos]
+                    if exp_k < selected_experts_k:
+                        act_k = actual_act_rows[t][e_pos]
+                        if act_k != exp_k:
+                            k_mismatches.append((t, e_pos, act_k, exp_k))
             if k_mismatches:
                 logger.error(
                     f"  Activation metadata device {dev_idx}: FAILED {len(k_mismatches)} k_idx mismatches, "
-                    f"first: token {k_mismatches[0][0]} actual={k_mismatches[0][1]} expected={k_mismatches[0][2]}"
+                    f"first: token {k_mismatches[0][0]} expert_pos {k_mismatches[0][1]} "
+                    f"actual={k_mismatches[0][2]} expected={k_mismatches[0][3]}"
                 )
                 act_pass = False
                 all_passing = False
@@ -1261,17 +1286,17 @@ def run_test_dispatch_compute(mesh_device, tokens_global, hidden_size, selected_
     if tc_pass:
         logger.info("output[0] (token counts): ALL PASSED")
     else:
-        logger.warning("output[0] (token counts): SOME FAILED — moe_gpt kernel may not scan full mapping")
+        logger.warning("output[0] (token counts): SOME FAILED — moe_compute kernel may not scan full mapping")
     if act_pass:
         logger.info("output[1] (activation metadata): ALL PASSED")
     else:
-        logger.warning("output[1] (activation metadata): SOME FAILED — moe_gpt kernel may not scan full mapping")
+        logger.warning("output[1] (activation metadata): SOME FAILED — moe_compute kernel may not scan full mapping")
     if et_pass:
         logger.info("output[2] (token indices): ALL PASSED")
     else:
-        logger.warning("output[2] (token indices): SOME FAILED — moe_gpt kernel may not scan full mapping")
+        logger.warning("output[2] (token indices): SOME FAILED — moe_compute kernel may not scan full mapping")
 
-    for t in moe_gpt_outputs:
+    for t in moe_compute_outputs:
         ttnn.deallocate(t)
 
     return all_passing
@@ -1283,9 +1308,9 @@ def run_test_dispatch_compute(mesh_device, tokens_global, hidden_size, selected_
 
 
 def run_test_dispatch_compute_combine(mesh_device, tokens_global, hidden_size, selected_experts_k, experts_total):
-    """Test all_to_all_dispatch_metadata → moe_gpt pipeline.
+    """Test all_to_all_dispatch_metadata → moe_compute pipeline with combine verification.
 
-    Verifies per-expert W2 outputs against torch reference.
+    Verifies per-expert W2 outputs and combine accuracy against torch reference.
     Expert mapping uses global IDs: mapping[d, e] = e // experts_per_device (0..total_devices-1).
     """
     torch.manual_seed(42)
@@ -1315,7 +1340,7 @@ def run_test_dispatch_compute_combine(mesh_device, tokens_global, hidden_size, s
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
-    tt_moe_gpt_mapping = ttnn.from_torch(
+    tt_expert_mapping = ttnn.from_torch(
         expert_mapping_torch.to(torch.int16),
         dtype=ttnn.uint16,
         device=mesh_device,
@@ -1405,7 +1430,19 @@ def run_test_dispatch_compute_combine(mesh_device, tokens_global, hidden_size, s
     )
     tt_scores = ttnn.from_torch(expert_scores, dtype=ttnn.bfloat16, memory_config=input_indices_mem, **shard_2d)
 
-    dispatch_drain_core = ttnn.CoreCoord(6, 9)
+    # --- Combine infrastructure ---
+    output_height_shard_dim = 4
+    bh_ring_size = 12
+    mux_core_range_set, combine_core_range_set, output_width_shard_dim = _compute_moe_core_placement(
+        mesh_device, output_height_shard_dim, hidden_size, bh_ring_size=bh_ring_size
+    )
+
+    # Dynamic drain core: must match what moe_compute picks internally (accounts for mux).
+    dispatch_drain_core = ttnn.experimental.get_moe_tilize_drain_core(
+        mesh_device, output_height_shard_dim, output_width_shard_dim, hidden_size, mux_core_range_set
+    )
+    logger.info(f"Dynamic drain core (E2E): ({dispatch_drain_core.x}, {dispatch_drain_core.y})")
+
     drain_shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(dispatch_drain_core, dispatch_drain_core)}),
         [total_tokens, selected_experts_k],
@@ -1440,6 +1477,17 @@ def run_test_dispatch_compute_combine(mesh_device, tokens_global, hidden_size, s
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1))}
     )
     semaphore = ttnn.create_global_semaphore(mesh_device, all_cores, 0)
+
+    combine_semaphore = ttnn.create_global_semaphore(mesh_device, combine_core_range_set, 0)
+    tokens_per_device = M
+    tt_combine_preallocated = ttnn.from_torch(
+        torch.zeros(selected_experts_k, tokens_per_device, hidden_size, dtype=torch.bfloat16),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
 
     tt_input_l1 = ttnn.to_memory_config(tt_raw_input, memory_config=ttnn.L1_MEMORY_CONFIG)
     ttnn.synchronize_device(mesh_device)
@@ -1482,52 +1530,52 @@ def run_test_dispatch_compute_combine(mesh_device, tokens_global, hidden_size, s
         else:
             logger.info(f"Device {device_idx}): Passed")
 
-    # Convert sparse to L1 and reshape to 2D for moe_gpt
-    tt_sparse = ttnn.reshape(tt_sparse, [total_tokens, hidden_size])
+    # Reshape sparse to 3D for moe_compute (op expects [batch, tokens, hidden])
+    tt_sparse = ttnn.reshape(tt_sparse, [1, total_tokens, hidden_size])
 
-    # --- moe_gpt: pass HEIGHT_SHARDED indices/scores from dispatch directly ---
-    moe_gpt_outputs = ttnn.experimental.moe_gpt(
+    # --- moe_compute: pass HEIGHT_SHARDED indices/scores from dispatch directly ---
+    moe_compute_outputs = ttnn.experimental.moe_compute(
         tt_sparse,
-        expert_indices=tt_idx,
-        expert_scores=tt_sc,
-        expert_mapping=tt_moe_gpt_mapping,
-        w0_w1_tensor=tt_w0_w1,
-        w2_tensor=tt_w2,
+        tt_idx,
+        tt_sc,
+        tt_expert_mapping,
+        tt_w0_w1,
+        tt_w2,
+        layer_id=0,
+        output_height_shard_dim=output_height_shard_dim,
+        intermediate_size=N,
+        has_bias=True,
         cluster_axis=cluster_axis,
+        topology=ttnn.Topology.Ring,
+        num_links=4,
+        mux_core_range_set=mux_core_range_set,
+        optional_output_tensor=tt_combine_preallocated,
+        optional_cross_device_semaphore=combine_semaphore,
+        activation_type=MoEActivationFunction.SWIGLU,
+        bh_ring_size=bh_ring_size,
     )
     ttnn.synchronize_device(mesh_device)
+    logger.info("moe_compute complete (compute + combine fused).")
 
-    # NOTE: output[4] is HEIGHT_SHARDED on all worker cores but only combine cores
-    # have data (written by dm1). Direct verification would read garbage from unused cores.
-    # Correctness is verified via selective_reduce_combine output below.
     all_passing = True
 
-    # --- Verify moe_gpt outputs 0, 1, 2 (routing metadata) ---
-    # Expected values derived from original routing (independent of dispatch correctness).
-    # output[0]: [1, padded_E_elements] UINT32 — counts[e] = tokens routed to local expert e
-    # output[1]: [1, flat] UINT32 — rows of [token_id, k_idx_0..E-1, score_0..E-1, pad],
-    #             aligned to 64 bytes; sentinel row has token_id == 0xFFFFFFFF (-1 as int32)
-    #             k_idx_e == selected_experts_k+1 means expert e not selected for this token
-    # output[2]: {1, E*total_tokens} UINT32 — stride-1 flat token IDs per expert, zero-padded
-    tc_per_device = ttnn.get_device_tensors(moe_gpt_outputs[0])
-    act_per_device = ttnn.get_device_tensors(moe_gpt_outputs[1])
-    et_per_device = ttnn.get_device_tensors(moe_gpt_outputs[2])
+    # --- Verify moe_compute outputs 0, 1, 2 (routing metadata) ---
+    tc_per_device = ttnn.get_device_tensors(moe_compute_outputs[0])
+    act_per_device = ttnn.get_device_tensors(moe_compute_outputs[1])
+    et_per_device = ttnn.get_device_tensors(moe_compute_outputs[2])
     tc_pass = True
     act_pass = True
     et_pass = True
-    # Row stride for output[1]: align((2E+1)*4, l1_alignment) / 4 uint32 elements
-    # l1_alignment = hal::get_l1_alignment() = 16 bytes on TT hardware
     l1_align_bytes = 16
     act_row_bytes_raw = (2 * E + 1) * 4
     act_row_bytes_aligned = (act_row_bytes_raw + l1_align_bytes - 1) // l1_align_bytes * l1_align_bytes
     act_row_stride = act_row_bytes_aligned // 4  # uint32 elements per row
     for dev_idx in range(total_mesh_devices):
-        # Find global expert IDs owned by this device (in order = local expert 0, 1, ..., E-1)
         global_experts_for_dev = [e for e in range(experts_total) if int(expert_mapping_torch[0, e]) == dev_idx]
 
         expected_counts = []
         expected_slots_per_expert = []
-        expected_act_rows = {}  # token_id → k_indices list [E]
+        expected_act_rows = {}
         for local_e, global_e in enumerate(global_experts_for_dev):
             routed = (expert_indices[0, 0, :, :] == global_e).any(dim=-1)
             expected_counts.append(int(routed.sum().item()))
@@ -1543,7 +1591,6 @@ def run_test_dispatch_compute_combine(mesh_device, tokens_global, hidden_size, s
             if activated:
                 expected_act_rows[t] = k_indices_expected
 
-        # Check output[0]: per-expert token counts (first E entries of the padded row)
         tc_raw = ttnn.to_torch(tc_per_device[dev_idx]).flatten()
         actual_counts = [int(tc_raw[i].item()) for i in range(E)]
         if actual_counts != expected_counts:
@@ -1553,45 +1600,48 @@ def run_test_dispatch_compute_combine(mesh_device, tokens_global, hidden_size, s
         else:
             logger.info(f"  Token counts device {dev_idx}: PASSED counts={actual_counts}")
 
-        # Check output[1]: expert activation metadata rows
-        act_raw = ttnn.to_torch(act_per_device[dev_idx]).flatten()
+        # Kernel writes activated rows in global token order (no sentinel guaranteed).
+        act_raw = ttnn.to_torch(act_per_device[dev_idx]).flatten().to(torch.int64)
+        num_expected = len(expected_act_rows)
+        sorted_expected_tokens = sorted(expected_act_rows.keys())
         actual_act_rows = {}
-        for row_idx in range(len(act_raw) // act_row_stride):
+        for row_idx in range(num_expected):
             offset = row_idx * act_row_stride
             token_id = int(act_raw[offset].item())
-            if token_id == -1 or token_id == 0xFFFFFFFF:  # 0xFFFFFFFF sentinel (int64 from to_torch)
-                break
             k_indices_actual = [int(act_raw[offset + 1 + e].item()) for e in range(E)]
             actual_act_rows[token_id] = k_indices_actual
-        if set(actual_act_rows.keys()) != set(expected_act_rows.keys()):
+        if sorted(actual_act_rows.keys()) != sorted_expected_tokens:
             logger.error(
                 f"  Activation metadata device {dev_idx}: FAILED token set mismatch "
-                f"actual_act_rows={set(actual_act_rows.keys())} expected_act_rows={set(expected_act_rows.keys())}"
+                f"actual_tokens={sorted(actual_act_rows.keys())[:8]} "
+                f"expected_tokens={sorted_expected_tokens[:8]}"
             )
             act_pass = False
             all_passing = False
         else:
-            k_mismatches = [
-                (t, actual_act_rows[t], expected_act_rows[t])
-                for t in expected_act_rows
-                if actual_act_rows[t] != expected_act_rows[t]
-            ]
+            # Only compare ACTIVATED positions (expected k_idx < selected_experts_k).
+            k_mismatches = []
+            for t in expected_act_rows:
+                for e_pos in range(E):
+                    exp_k = expected_act_rows[t][e_pos]
+                    if exp_k < selected_experts_k:
+                        act_k = actual_act_rows[t][e_pos]
+                        if act_k != exp_k:
+                            k_mismatches.append((t, e_pos, act_k, exp_k))
             if k_mismatches:
                 logger.error(
                     f"  Activation metadata device {dev_idx}: FAILED {len(k_mismatches)} k_idx mismatches, "
-                    f"first: token {k_mismatches[0][0]} actual={k_mismatches[0][1]} expected={k_mismatches[0][2]}"
+                    f"first: token {k_mismatches[0][0]} expert_pos {k_mismatches[0][1]} "
+                    f"actual={k_mismatches[0][2]} expected={k_mismatches[0][3]}"
                 )
                 act_pass = False
                 all_passing = False
             elif dev_idx < 4:
                 logger.info(f"  Activation metadata device {dev_idx}: PASSED {len(actual_act_rows)} activated tokens")
 
-        # Check output[2]: token slot indices per local expert
-        # Shape: {E, (T+1)*stride} matching moe_compute format; stride = align(4, 16) / 4 = 4.
-        # Token IDs at offset (e_row * stride + k * stride) within the flattened tensor.
-        tc_raw = ttnn.to_torch(tc_per_device[dev_idx]).reshape(-1)  # [padded_E]
-        et_raw = ttnn.to_torch(et_per_device[dev_idx]).reshape(-1)  # [E * (T+1) * stride]
-        e_t_stride = 4  # align(sizeof(uint32_t), 16) / sizeof(uint32_t)
+        tc_raw = ttnn.to_torch(tc_per_device[dev_idx]).reshape(-1)
+        et_raw = ttnn.to_torch(et_per_device[dev_idx]).reshape(-1)
+        e_t_stride = 4
         e_t_row_elems = (total_tokens + 1) * e_t_stride
         for local_e in range(E):
             count = int(tc_raw[local_e].item())
@@ -1610,80 +1660,23 @@ def run_test_dispatch_compute_combine(mesh_device, tokens_global, hidden_size, s
     if tc_pass:
         logger.info("output[0] (token counts): ALL PASSED")
     else:
-        logger.warning("output[0] (token counts): SOME FAILED — moe_gpt kernel may not scan full mapping")
+        logger.warning("output[0] (token counts): SOME FAILED — moe_compute kernel may not scan full mapping")
     if act_pass:
         logger.info("output[1] (activation metadata): ALL PASSED")
     else:
-        logger.warning("output[1] (activation metadata): SOME FAILED — moe_gpt kernel may not scan full mapping")
+        logger.warning("output[1] (activation metadata): SOME FAILED — moe_compute kernel may not scan full mapping")
     if et_pass:
         logger.info("output[2] (token indices): ALL PASSED")
     else:
-        logger.warning("output[2] (token indices): SOME FAILED — moe_gpt kernel may not scan full mapping")
+        logger.warning("output[2] (token indices): SOME FAILED — moe_compute kernel may not scan full mapping")
 
-    # --- Setup selective_reduce_combine infrastructure ---
-    mesh_cols = mesh_device.shape[1]  # 8
-    num_clusters = total_mesh_devices // ring_devices  # 8 independent column rings
-    experts_per_ring = experts_total // num_clusters  # 16 ring-local experts per ring
-    global_experts = experts_total  # 128
-
-    COMBINE_H = 4  # token_parallel_core_dim (rows)
-    COMBINE_W = 3  # data_parallel_core_dim (cols)
-    combine_core_range_set, combine_start, combine_end = get_moe_gpt_combine_core_range(
-        mesh_device, COMBINE_W, COMBINE_H
-    )
-    combine_worker_cores = list(ttnn.corerange_to_cores(combine_core_range_set, row_wise=True))
-    mux_start = ttnn.CoreCoord(combine_end.x + 1, combine_start.y)
-    mux_end = ttnn.CoreCoord(combine_end.x + 2, combine_end.y)
-    combine_mux_cores = ttnn.CoreRangeSet([ttnn.CoreRange(mux_start, mux_end)])
-    combine_semaphore = ttnn.create_global_semaphore(mesh_device, all_cores, 0)
-
-    # Pre-allocate combine output: [K, M, hidden_size] (K-indexed) replicated on all devices
-    tt_combine_preallocated = ttnn.from_torch(
-        torch.zeros(selected_experts_k, M, hidden_size, dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        device=mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-
-    # --- Run selective_reduce_combine ---
-    tt_combine_result = ttnn.experimental.selective_reduce_combine(
-        moe_gpt_outputs[4],  # BLOCK_SHARDED token-parallel input {E*total_tokens, K}
-        moe_gpt_outputs[1],  # dense_metadata: not used by kernel, pass as-is
-        moe_gpt_outputs[2],  # token_maps {E, (T+1)*stride} matching moe_compute format
-        moe_gpt_outputs[0],  # token_counts [1, E]
-        hidden_size=hidden_size,
-        batch_size=total_tokens,  # total ring tokens (128); tokens_per_device = 128/4 = 32
-        seq_size=1,
-        select_experts_k=selected_experts_k,
-        cluster_axis=cluster_axis,
-        topology=ttnn.Topology.Ring,
-        num_links=4,
-        token_parallel_core_dim=COMBINE_H,
-        data_parallel_core_dim=COMBINE_W,
-        worker_cores=combine_worker_cores,
-        mux_core_range_set=combine_mux_cores,
-        output_tensor=tt_combine_preallocated,
-        optional_cross_device_semaphore=combine_semaphore,
-    )
-    ttnn.synchronize_device(mesh_device)
-    logger.info("selective_reduce_combine complete.")
-
-    # Deallocate converted inputs and moe_gpt outputs
-    for i in range(4):
-        ttnn.deallocate(moe_gpt_outputs[i])
-
-    # --- Verify combine output accuracy ---
-    # With K-indexed output (upstream #38542), combine shape is [K, M, hidden_size].
+    # --- Verify combine output accuracy (moe_compute output[4]) ---
+    # With K-indexed output, combine shape is [K, M, hidden_size].
     # Slot k (0..K-1) holds the W2 output for each token's k-th selected expert.
     # combine[k, t, :] = W2(SwiGLU(W0*x, W1*x)) for global_expert = expert_indices[t, k].
-    #
-    # Verification: sum over K slots -> [M, hidden_size] and compare PCC against
-    # torch reference (unweighted sum of W2 outputs from all selected experts per token).
     K_sel = selected_experts_k
     combine_pass = True
-    combine_per_device = ttnn.get_device_tensors(tt_combine_result)
+    combine_per_device = ttnn.get_device_tensors(moe_compute_outputs[4])
     raw_input_2d = raw_input_torch.reshape(tokens_global, hidden_size)  # [128, 2880]
 
     for dev_idx in range(total_mesh_devices):
@@ -1693,8 +1686,6 @@ def run_test_dispatch_compute_combine(mesh_device, tokens_global, hidden_size, s
         actual_combine = ttnn.to_torch(combine_per_device[dev_idx]).reshape(K_sel, M, hidden_size)
 
         # Build torch reference: only include experts belonging to THIS ring.
-        # Use the actual expert mapping tensor to determine ring membership.
-        # An expert belongs to ring 'col' if its owning device has col index == col.
         ring_expert_set = set()
         for e_global in range(experts_total):
             owning_device = int(expert_mapping_torch[0, e_global])
@@ -1732,9 +1723,13 @@ def run_test_dispatch_compute_combine(mesh_device, tokens_global, hidden_size, s
             all_passing = False
 
     if combine_pass:
-        logger.info("selective_reduce_combine: ALL PASSED")
+        logger.info("moe_compute combine output: ALL PASSED")
     else:
-        logger.warning("selective_reduce_combine: SOME FAILED")
+        logger.warning("moe_compute combine output: SOME FAILED")
+
+    # Deallocate moe_compute outputs [0,1,2,3]
+    for i in range(4):
+        ttnn.deallocate(moe_compute_outputs[i])
 
     return all_passing
 
@@ -1744,7 +1739,7 @@ def run_test_dispatch_compute_combine(mesh_device, tokens_global, hidden_size, s
 # ---------------------------------------------------------------------------
 
 
-def run_test_moe_gpt_e2e(
+def run_test_moe_compute_gpt_oss_e2e(
     mesh_device,
     M,
     K,
@@ -1755,12 +1750,12 @@ def run_test_moe_gpt_e2e(
     measure_perf=False,
 ):
     """
-    E2E test: all_to_all_dispatch_metadata → moe_gpt.
+    E2E test: all_to_all_dispatch_metadata → moe_compute.
 
     1. Creates raw token inputs and expert routing per device
     2. Runs all_to_all_dispatch_metadata to dispatch tokens
-    3. Feeds dispatch output into moe_gpt
-    4. Verifies per-expert outputs against torch reference
+    3. Feeds dispatch output into moe_compute (fused compute + combine)
+    4. Verifies combine output against torch reference
     5. Optionally measures e2e performance
     """
     torch.manual_seed(42)
@@ -1778,7 +1773,7 @@ def run_test_moe_gpt_e2e(
     logger.info(f"  M={M}, K={K}, N={N}, E={E}, experts_total={experts_total}")
     logger.info(f"  selected_experts_k={selected_experts_k}")
 
-    tokens_per_chunk = 32  # moe_gpt tiles tokens in 32-token chunks
+    tokens_per_chunk = 32  # moe_compute tiles tokens in 32-token chunks
 
     # ------------------------------------------------------------------
     # Weight infrastructure
@@ -1848,12 +1843,6 @@ def run_test_moe_gpt_e2e(
     # ------------------------------------------------------------------
     # Expert mappings
     # ------------------------------------------------------------------
-    # Both dispatch and moe_gpt use the SAME linearized-device-ID format:
-    #   mapping[d, e] = (e // experts_per_device) * mesh_cols + (d % mesh_cols)
-    # This sends tokens from device d to the device in the same column that owns expert e.
-    # On a (4,8) mesh with cluster_axis=0, each column is an independent ring.
-    # For (1,6) mesh (6U test), device_id == ring_pos so both formats coincide,
-    # but on (4,8) they differ: ring_pos=0..3 vs linearized_id=0,8,16,24 (col 0).
     expert_mapping_torch = create_expert_mapping_tensors(
         num_devices=total_mesh_devices,
         num_experts_global=experts_total,
@@ -1872,8 +1861,8 @@ def run_test_moe_gpt_e2e(
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
-    # moe_gpt mapping: same tensor, also replicated
-    tt_moe_gpt_mapping = ttnn.from_torch(
+    # moe_compute mapping: same tensor, also replicated
+    tt_expert_mapping = ttnn.from_torch(
         expert_mapping_torch.to(torch.int16),
         dtype=ttnn.uint16,
         device=mesh_device,
@@ -1885,11 +1874,6 @@ def run_test_moe_gpt_e2e(
     # ------------------------------------------------------------------
     # Raw input tokens and expert routing (per ring device)
     # ------------------------------------------------------------------
-    # Each ring device starts with M=32 tokens. For 4x8 mesh with cluster_axis=0,
-    # all 8 columns run the same simulation (replicated).
-    # After dispatch, each device has [total_tokens=128, K] sparse_buffer.
-
-    # Create raw input: [ring_devices * M, 1, 1, K] to shard along rows
     raw_input_torch = torch.rand(ring_devices * M, 1, 1, K, dtype=torch.bfloat16) - 0.5
 
     # Create expert routing: [ring_devices * M, 1, 1, selected_k]
@@ -1921,9 +1905,6 @@ def run_test_moe_gpt_e2e(
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=tuple(mesh_device.shape)),
     )
 
-    # Input indices/scores MUST be in L1 (not DRAM) - the dispatch kernel requires L1 alignment (16B).
-    # DRAM uses 32B alignment which causes metadata write offsets to overflow the output buffer.
-    # Use HEIGHT_SHARDED with 1 row per core: M tokens across num_cores_x × num_cores_y cores.
     tokens_per_device = M
     num_cores_y = min(8, tokens_per_device)
     num_cores_x = (tokens_per_device + num_cores_y - 1) // num_cores_y
@@ -1964,14 +1945,9 @@ def run_test_moe_gpt_e2e(
 
     # ------------------------------------------------------------------
     # Pre-allocate dispatch output tensors
-    # Shape must match dispatch's expected output: [ring_devices, total_tokens, K] globally,
-    # giving each device [1, total_tokens, K] (3D with leading ring-position dim).
-    # Dispatch writes one row per ring device (ring_devices * total_tokens total rows globally).
-    # moe_gpt needs [total_tokens, K] (2D), so we reshape AFTER converting to L1.
     # ------------------------------------------------------------------
     dispatch_drain_core = ttnn.CoreCoord(6, 9)
 
-    # Sparse buffer: [ring_devices, total_tokens, K] → [1, 128, 2880] per device (DRAM)
     dispatch_sparse_shape = torch.zeros(ring_devices, total_tokens, K, dtype=torch.bfloat16)
     tt_dispatch_sparse = ttnn.from_torch(
         dispatch_sparse_shape,
@@ -1982,8 +1958,6 @@ def run_test_moe_gpt_e2e(
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=tuple(mesh_device.shape)),
     )
 
-    # Output metadata (indices/scores): HEIGHT_SHARDED on drain_core, [total_tokens, k] per device (L1)
-    # Shard shape [128, 4] on single drain core. from_torch zero-initializes the output buffer.
     dispatch_output_shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(dispatch_drain_core, dispatch_drain_core)}),
         [total_tokens, selected_experts_k],
@@ -2016,79 +1990,42 @@ def run_test_moe_gpt_e2e(
     )
 
     # ------------------------------------------------------------------
-    # Global semaphores and selective_reduce_combine configuration
+    # Global semaphores and moe_compute combine configuration
     # ------------------------------------------------------------------
     compute_grid = mesh_device.compute_with_storage_grid_size()
     all_worker_cores = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1))}
     )
     dispatch_semaphore = ttnn.create_global_semaphore(mesh_device, all_worker_cores, 0)
-    combine_semaphore = ttnn.create_global_semaphore(mesh_device, all_worker_cores, 0)
 
-    # selective_reduce_combine core parameters.
-    # Worker cores must be the SAME as moe_gpt's combine shard cores so that
-    # CircularBufferConfig::set_globally_allocated_address(*input_tensor.buffer())
-    # correctly aliases each core's BLOCK_SHARDED shard.
-    #
-    # moe_gpt uses COMBINE_H=4 rows × COMBINE_W=3 cols = 12 cores.
-    # Shard per core: [E*M/COMBINE_H, K/COMBINE_W] = [4*32/4, 2880/3] = [32, 960] = 61440 B.
-    #
-    # CB size formula (must ≤ 61440 = L1 bank limit = shard size):
-    #   (K/dp) * (M/tp) * E = (2880/3) * (32/4) * 4 = 1920 * 8 * 4 = 61440 ✓
-    # This requires batch_size=M=32 (per-device tokens), NOT total_tokens=128.
-    COMBINE_H = 4  # token_parallel_core_dim = rows (expert / token dimension)
-    COMBINE_W = 3  # data_parallel_core_dim  = cols (hidden dimension)
-    moe_gpt_combine_core_range_set, combine_start, combine_end = get_moe_gpt_combine_core_range(
-        mesh_device, COMBINE_W, COMBINE_H
+    output_height_shard_dim = 4
+    bh_ring_size = 12
+    mux_core_range_set, combine_core_range_set, output_width_shard_dim = _compute_moe_core_placement(
+        mesh_device, output_height_shard_dim, K, bh_ring_size=bh_ring_size
     )
-    logger.info(f"moe_gpt combine cores: ({combine_start.x},{combine_start.y}) to ({combine_end.x},{combine_end.y})")
-    # corerange_to_cores iterates x-fast (ROW_MAJOR), consistent with BLOCK_SHARDED shard assignment
-    combine_worker_cores = list(ttnn.corerange_to_cores(moe_gpt_combine_core_range_set, row_wise=True))
-    combine_token_parallel_core_dim = COMBINE_H  # 4
-    combine_data_parallel_core_dim = COMBINE_W  # 3
+    logger.info(f"moe_compute dynamic mux_core_range_set, output_width_shard_dim={output_width_shard_dim}")
+    combine_semaphore = ttnn.create_global_semaphore(mesh_device, combine_core_range_set, 0)
 
-    # Mux cores: 2 columns immediately right of worker cores.
-    # Need num_links * ring_neighbors = 4 * 2 = 8 mux cores = 2 cols × COMBINE_H rows.
-    mux_start = ttnn.CoreCoord(combine_end.x + 1, combine_start.y)
-    mux_end = ttnn.CoreCoord(combine_end.x + 2, combine_end.y)
-    combine_mux_cores = ttnn.CoreRangeSet([ttnn.CoreRange(mux_start, mux_end)])
-    logger.info(f"combine mux cores: ({mux_start.x},{mux_start.y}) to ({mux_end.x},{mux_end.y})")
-
-    # Pre-allocate selective_reduce_combine output.
-    # selective_reduce_combine uses: experts_per_device = global_experts / total_devices
-    # GPT-OSS: 128 global experts / 32 devices = 4 per device (same as E=4 local experts).
-    # DeepSeek:  256 global experts / 128 devices = 2 per device.
-    # experts_total is the GLOBAL expert count across all devices (128 for GPT-OSS on 4x8).
-    # Each column-ring has experts_total / mesh_cols = 16 ring-local experts.
-    # experts_per_device = experts_total / total_mesh_devices = 128 / 32 = 4 = E ✓
-    global_experts = experts_total  # 128
-    experts_per_cluster = experts_total // mesh_cols  # 128 // 8 = 16 ring-local experts
-    combine_output_torch = torch.zeros(selected_experts_k, M, K, dtype=torch.bfloat16)
+    # Pre-allocate combine output: [K_sel, tokens_per_device, hidden_size] replicated in DRAM
     tt_combine_preallocated = ttnn.from_torch(
-        combine_output_torch,
-        dtype=ttnn.bfloat16,
+        torch.zeros(selected_experts_k, M, K, dtype=torch.bfloat16),
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
     # ------------------------------------------------------------------
     # Move raw input to L1 (dispatch expects L1 input tokens)
-    # expert_indices/scores are already in L1 HEIGHT_SHARDED (required by dispatch kernel)
     # ------------------------------------------------------------------
     tt_raw_input_l1 = ttnn.to_memory_config(tt_raw_input, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     ttnn.synchronize_device(mesh_device)
 
     # ------------------------------------------------------------------
-    # Run dispatch + moe_gpt (one iteration for accuracy check)
+    # Run dispatch + moe_compute (one iteration for accuracy check)
     # ------------------------------------------------------------------
-    # Use SPARSE_UNICAST dispatch algorithm: SPARSE_MCAST_SHORTEST_PATH has a bug for cluster_axis=0
-    # where it computes hop distances using linearized device IDs (0-31) instead of column ring
-    # positions (0-3). For device 0→8, it gets distance=8 (bit 7 in hop_mask) instead of 1 (bit 0),
-    # causing the sparse multicast to target the wrong device. SPARSE_UNICAST uses get_route()
-    # which correctly returns SOUTH (1 hop) for column-adjacent devices.
     logger.info("Running all_to_all_dispatch_metadata...")
     (
         tt_sparse_output,
@@ -2109,8 +2046,7 @@ def run_test_moe_gpt_e2e(
     ttnn.synchronize_device(mesh_device)
     logger.info("Dispatch complete, reading output for reference...")
 
-    # Read dispatch outputs per device to CPU BEFORE running moe_gpt
-    # (moe_gpt may reuse L1 for indices/scores internally)
+    # Read dispatch outputs per device to CPU BEFORE running moe_compute
     dispatch_sparse_devices = ttnn.get_device_tensors(tt_sparse_output)
     dispatch_indices_devices = ttnn.get_device_tensors(tt_indices_output)
     dispatch_scores_devices = ttnn.get_device_tensors(tt_scores_output)
@@ -2138,67 +2074,39 @@ def run_test_moe_gpt_e2e(
             f"indices row0={indices_sample[0].tolist()}, row32={indices_sample[32].tolist() if total_tokens > 32 else 'N/A'}"
         )
 
-    # Move sparse_buffer to L1 for moe_gpt (expects L1 input)
-    # Dispatch output is [1, total_tokens, K] per device (3D); moe_gpt needs [total_tokens, K] (2D)
-    # because it reads tokens = sparse_shape[0].
+    # Move sparse_buffer to L1 for moe_compute (expects L1 input)
     tt_sparse_l1 = ttnn.to_memory_config(tt_sparse_output, memory_config=ttnn.L1_MEMORY_CONFIG)
-    tt_sparse_l1 = ttnn.reshape(tt_sparse_l1, [total_tokens, K])  # [1,128,2880] → [128,2880]
+    tt_sparse_l1 = ttnn.reshape(tt_sparse_l1, [1, total_tokens, K])
 
-    logger.info("Running moe_gpt...")
-    # Pass HEIGHT_SHARDED dispatch outputs directly to moe_gpt.
-    # moe_gpt uses CB aliasing: the drain tilize core is set to the dispatch drain core,
-    # and the indices/scores CBs are backed directly by the HEIGHT_SHARDED L1 buffers.
-    moe_gpt_outputs = ttnn.experimental.moe_gpt(
+    logger.info("Running moe_compute...")
+    moe_compute_outputs = ttnn.experimental.moe_compute(
         tt_sparse_l1,
-        expert_indices=tt_indices_output,
-        expert_scores=tt_scores_output,
-        expert_mapping=tt_moe_gpt_mapping,
-        w0_w1_tensor=tt_w0_w1,
-        w2_tensor=tt_w2,
-        cluster_axis=cluster_axis,
-    )
-
-    ttnn.synchronize_device(mesh_device)
-    logger.info("moe_gpt complete, verifying moe_gpt accuracy (before selective_reduce_combine)...")
-
-    # NOTE: output[4] is HEIGHT_SHARDED on all worker cores but only combine cores
-    # have data (written by dm1). Direct verification would read garbage from unused cores.
-    # Correctness is verified via selective_reduce_combine output below.
-    all_passing = True
-
-    # ------------------------------------------------------------------
-    # Run selective_reduce_combine directly with moe_gpt outputs.
-    # moe_gpt now outputs token-parallel BLOCK_SHARDED combine data {E*M_ring, K}
-    # and stride-1 e_t {1, E*M_ring}, directly compatible with selective_reduce_combine.
-    # ------------------------------------------------------------------
-    M_ring = total_tokens  # 128 = M * ring_devices
-
-    logger.info("Running selective_reduce_combine...")
-    tt_combine_output = ttnn.experimental.selective_reduce_combine(
-        moe_gpt_outputs[4],  # BLOCK_SHARDED token-parallel input {E*M_ring, K}
-        moe_gpt_outputs[1],  # dense_metadata: not used by kernel
-        moe_gpt_outputs[2],  # token_maps {E, (T+1)*stride} matching moe_compute format
-        moe_gpt_outputs[0],  # token_counts {1, E}
-        hidden_size=K,
-        batch_size=M_ring,  # 128; tokens_per_device = 128/4 = 32
-        seq_size=1,
-        select_experts_k=selected_experts_k,
+        tt_indices_output,
+        tt_scores_output,
+        tt_expert_mapping,
+        tt_w0_w1,
+        tt_w2,
+        layer_id=0,
+        output_height_shard_dim=output_height_shard_dim,
+        intermediate_size=N,
+        has_bias=True,
         cluster_axis=cluster_axis,
         topology=ttnn.Topology.Ring,
         num_links=4,
-        token_parallel_core_dim=combine_token_parallel_core_dim,
-        data_parallel_core_dim=combine_data_parallel_core_dim,
-        worker_cores=combine_worker_cores,
-        mux_core_range_set=combine_mux_cores,
-        output_tensor=tt_combine_preallocated,
+        mux_core_range_set=mux_core_range_set,
+        optional_output_tensor=tt_combine_preallocated,
         optional_cross_device_semaphore=combine_semaphore,
+        activation_type=MoEActivationFunction.SWIGLU,
+        bh_ring_size=bh_ring_size,
     )
 
     ttnn.synchronize_device(mesh_device)
-    logger.info("selective_reduce_combine complete.")
+    logger.info("moe_compute complete (fused compute + combine).")
+
+    all_passing = True
 
     # ------------------------------------------------------------------
-    # Performance measurement (dispatch + moe_gpt + selective_reduce_combine)
+    # Performance measurement (dispatch + moe_compute)
     # ------------------------------------------------------------------
     if measure_perf:
         logger.info(f"Measuring e2e performance over {PERF_MEASURE_ITERS} iterations...")
@@ -2220,60 +2128,50 @@ def run_test_moe_gpt_e2e(
             ttnn.deallocate(tt_raw_input_l1_)
 
             tt_sparse_l1_ = ttnn.to_memory_config(tt_sparse_, memory_config=ttnn.L1_MEMORY_CONFIG)
-            tt_sparse_l1_ = ttnn.reshape(tt_sparse_l1_, [total_tokens, K])  # [1,128,2880] → [128,2880]
-            # Use HEIGHT_SHARDED indices/scores directly from dispatch (same format as accuracy path).
-            out = ttnn.experimental.moe_gpt(
+            tt_sparse_l1_ = ttnn.reshape(tt_sparse_l1_, [1, total_tokens, K])
+            out = ttnn.experimental.moe_compute(
                 tt_sparse_l1_,
-                expert_indices=tt_idx_,
-                expert_scores=tt_sc_,
-                expert_mapping=tt_moe_gpt_mapping,
-                w0_w1_tensor=tt_w0_w1,
-                w2_tensor=tt_w2,
-                cluster_axis=cluster_axis,
-            )
-            ttnn.deallocate(tt_sparse_l1_)
-
-            tt_combine_out_ = ttnn.experimental.selective_reduce_combine(
-                out[4],
-                out[1],
-                out[2],
-                out[0],
-                hidden_size=K,
-                batch_size=M_ring,  # total ring tokens (128); tokens_per_device = 128/4 = 32
-                seq_size=1,
-                select_experts_k=selected_experts_k,
+                tt_idx_,
+                tt_sc_,
+                tt_expert_mapping,
+                tt_w0_w1,
+                tt_w2,
+                layer_id=0,
+                output_height_shard_dim=output_height_shard_dim,
+                intermediate_size=N,
+                has_bias=True,
                 cluster_axis=cluster_axis,
                 topology=ttnn.Topology.Ring,
                 num_links=4,
-                token_parallel_core_dim=combine_token_parallel_core_dim,
-                data_parallel_core_dim=combine_data_parallel_core_dim,
-                worker_cores=combine_worker_cores,
-                mux_core_range_set=combine_mux_cores,
-                output_tensor=tt_combine_preallocated,
+                mux_core_range_set=mux_core_range_set,
+                optional_output_tensor=tt_combine_preallocated,
                 optional_cross_device_semaphore=combine_semaphore,
+                activation_type=MoEActivationFunction.SWIGLU,
+                bh_ring_size=bh_ring_size,
             )
-            return out, tt_combine_out_
+            ttnn.deallocate(tt_sparse_l1_)
+            return out
 
         # Warmup
         for _ in range(PERF_WARMUP_ITERS):
-            out, combine_out = run_pipeline()
+            out = run_pipeline()
             ttnn.synchronize_device(mesh_device)
-            for t in out:
-                ttnn.deallocate(t)
+            for i in range(4):
+                ttnn.deallocate(out[i])
 
         # Measure (single call for Tracy device profiler)
         profiler.clear()
-        profiler.start("moe_gpt_e2e")
+        profiler.start("moe_compute_e2e")
         for _ in range(PERF_MEASURE_ITERS):
-            out, combine_out = run_pipeline()
+            out = run_pipeline()
             ttnn.synchronize_device(mesh_device)
-            for t in out:
-                ttnn.deallocate(t)
-        profiler.end("moe_gpt_e2e", PERF_CNT=PERF_MEASURE_ITERS)
+            for i in range(4):
+                ttnn.deallocate(out[i])
+        profiler.end("moe_compute_e2e", PERF_CNT=PERF_MEASURE_ITERS)
 
-        perf_us = profiler.get("moe_gpt_e2e") * 1e6
+        perf_us = profiler.get("moe_compute_e2e") * 1e6
         logger.info(
-            f"E2E (dispatch + moe_gpt + selective_reduce_combine) avg latency: {perf_us:.1f} us "
+            f"E2E (dispatch + moe_compute) avg latency: {perf_us:.1f} us "
             f"over {PERF_MEASURE_ITERS} iters (warmup {PERF_WARMUP_ITERS})"
         )
         return all_passing, perf_us
@@ -2307,7 +2205,7 @@ def run_test_moe_gpt_e2e(
 @pytest.mark.parametrize("K, N", [(2880, 2880)])
 @pytest.mark.parametrize("E, experts_total", [(4, 128)])
 @pytest.mark.parametrize("selected_experts_k", [4])
-def test_moe_gpt_e2e(
+def test_moe_compute_gpt_oss_e2e(
     mesh_device,
     M,
     K,
@@ -2317,14 +2215,14 @@ def test_moe_gpt_e2e(
     selected_experts_k,
     device_params,
 ):
-    """E2E test: all_to_all_dispatch_metadata → moe_gpt (compute).
+    """E2E test: all_to_all_dispatch_metadata → moe_compute (compute + combine).
 
-    Verifies the full dispatch+compute pipeline from raw token inputs
-    through to per-expert W2 outputs on a 4x8 galaxy mesh.
+    Verifies the full dispatch+compute+combine pipeline from raw token inputs
+    through to combined outputs on a 4x8 galaxy mesh.
     """
     mesh_device.disable_and_clear_program_cache()
 
-    passing = run_test_moe_gpt_e2e(
+    passing = run_test_moe_compute_gpt_oss_e2e(
         mesh_device=mesh_device,
         M=M,
         K=K,
@@ -2335,7 +2233,7 @@ def test_moe_gpt_e2e(
         measure_perf=False,
     )
 
-    assert passing, "E2E dispatch+moe_gpt accuracy check failed for one or more devices"
+    assert passing, "E2E dispatch+moe_compute accuracy check failed for one or more devices"
 
 
 @pytest.mark.parametrize(
@@ -2359,7 +2257,7 @@ def test_moe_gpt_e2e(
 @pytest.mark.parametrize("K, N", [(2880, 2880)])
 @pytest.mark.parametrize("E, experts_total", [(4, 128)])
 @pytest.mark.parametrize("selected_experts_k", [4])
-def test_moe_gpt_e2e_perf(
+def test_moe_compute_gpt_oss_e2e_perf(
     mesh_device,
     M,
     K,
@@ -2369,13 +2267,13 @@ def test_moe_gpt_e2e_perf(
     selected_experts_k,
     device_params,
 ):
-    """E2E performance test: all_to_all_dispatch_metadata → moe_gpt.
+    """E2E performance test: all_to_all_dispatch_metadata → moe_compute.
 
-    Measures wall-clock latency of the dispatch+compute pipeline on a 4x8 galaxy mesh.
+    Measures wall-clock latency of the dispatch+compute+combine pipeline on a 4x8 galaxy mesh.
     """
     mesh_device.disable_and_clear_program_cache()
 
-    result = run_test_moe_gpt_e2e(
+    result = run_test_moe_compute_gpt_oss_e2e(
         mesh_device=mesh_device,
         M=M,
         K=K,
@@ -2392,7 +2290,7 @@ def test_moe_gpt_e2e_perf(
         passing = result
         perf_us = None
 
-    assert passing, "E2E dispatch+moe_gpt accuracy check failed for one or more devices"
+    assert passing, "E2E dispatch+moe_compute accuracy check failed for one or more devices"
     if perf_us is not None:
         logger.info(f"PERF RESULT: E2E avg latency = {perf_us:.1f} us")
 
@@ -2431,7 +2329,7 @@ def test_dispatch(mesh_device, tokens_global, hidden_size, selected_experts_k, e
 @pytest.mark.parametrize("selected_experts_k", [4])
 @pytest.mark.parametrize("experts_total", [128])
 def test_dispatch_compute(mesh_device, tokens_global, hidden_size, selected_experts_k, experts_total, device_params):
-    """Test all_to_all_dispatch_metadata: verifies sparse buffer correctness per device."""
+    """Test all_to_all_dispatch_metadata → moe_compute: verifies routing metadata outputs."""
     mesh_device.disable_and_clear_program_cache()
     passing = run_test_dispatch_compute(
         mesh_device=mesh_device,
@@ -2440,7 +2338,7 @@ def test_dispatch_compute(mesh_device, tokens_global, hidden_size, selected_expe
         selected_experts_k=selected_experts_k,
         experts_total=experts_total,
     )
-    assert passing, "Dispatch sparse buffer mismatch on one or more devices"
+    assert passing, "Dispatch+compute routing metadata mismatch on one or more devices"
 
 
 @pytest.mark.parametrize(
@@ -2456,7 +2354,7 @@ def test_dispatch_compute(mesh_device, tokens_global, hidden_size, selected_expe
 def test_dispatch_compute_combine(
     mesh_device, tokens_global, hidden_size, selected_experts_k, experts_total, device_params
 ):
-    """Test all_to_all_dispatch_metadata → moe_gpt → selective_reduce_combine pipeline."""
+    """Test all_to_all_dispatch_metadata → moe_compute (with combine verification) pipeline."""
     mesh_device.disable_and_clear_program_cache()
     passing = run_test_dispatch_compute_combine(
         mesh_device=mesh_device,
@@ -2465,14 +2363,14 @@ def test_dispatch_compute_combine(
         selected_experts_k=selected_experts_k,
         experts_total=experts_total,
     )
-    assert passing, "Dispatch sparse buffer mismatch on one or more devices"
+    assert passing, "Dispatch+compute+combine mismatch on one or more devices"
 
 
 def run_test_combine_isolation(mesh_device, tokens_global, hidden_size, selected_experts_k, experts_total, num_iters=5):
-    """Test selective_reduce_combine in isolation with gpt-oss shapes.
+    """Test moe_compute combine stability with gpt-oss shapes.
 
-    Runs dispatch+moe_gpt once to generate real combine inputs, then calls
-    selective_reduce_combine multiple times to verify correctness and stability.
+    Runs the full moe_compute pipeline (dispatch + compute + combine) multiple
+    times to verify correctness and stability of the fused combine output.
     """
     torch.manual_seed(42)
     cluster_axis = 0
@@ -2502,7 +2400,7 @@ def run_test_combine_isolation(mesh_device, tokens_global, hidden_size, selected
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
-    tt_moe_gpt_mapping = ttnn.from_torch(
+    tt_expert_mapping = ttnn.from_torch(
         expert_mapping_torch.to(torch.int16),
         dtype=ttnn.uint16,
         device=mesh_device,
@@ -2628,55 +2526,13 @@ def run_test_combine_isolation(mesh_device, tokens_global, hidden_size, selected
     )
     dispatch_sem = ttnn.create_global_semaphore(mesh_device, all_cores, 0)
 
-    tt_input_l1 = ttnn.to_memory_config(tt_raw_input, memory_config=ttnn.L1_MEMORY_CONFIG)
-    ttnn.synchronize_device(mesh_device)
-
-    # --- Dispatch ---
-    (tt_sparse, tt_idx, tt_sc) = ttnn.experimental.all_to_all_dispatch_metadata(
-        tt_input_l1,
-        tt_indices,
-        tt_scores,
-        tt_dispatch_mapping,
-        cluster_axis=cluster_axis,
-        num_links=4,
-        output_tensors=(tt_sparse_out, tt_indices_out, tt_scores_out),
-        cross_device_semaphore=dispatch_sem,
-        dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_UNICAST,
+    # --- Combine infrastructure ---
+    output_height_shard_dim = 4
+    bh_ring_size = 12
+    mux_core_range_set, combine_core_range_set, output_width_shard_dim = _compute_moe_core_placement(
+        mesh_device, output_height_shard_dim, hidden_size, bh_ring_size=bh_ring_size
     )
-    ttnn.synchronize_device(mesh_device)
-    logger.info("combine_isolation: dispatch done")
-
-    # --- moe_gpt ---
-    tt_sparse = ttnn.reshape(tt_sparse, [total_tokens, hidden_size])
-    moe_gpt_outputs = ttnn.experimental.moe_gpt(
-        tt_sparse,
-        expert_indices=tt_idx,
-        expert_scores=tt_sc,
-        expert_mapping=tt_moe_gpt_mapping,
-        w0_w1_tensor=tt_w0_w1,
-        w2_tensor=tt_w2,
-        cluster_axis=cluster_axis,
-    )
-    ttnn.synchronize_device(mesh_device)
-    logger.info("combine_isolation: moe_gpt done")
-    # Debug: print moe_gpt output tensor configs
-    for i in range(5):
-        t = moe_gpt_outputs[i]
-        per_dev = ttnn.get_device_tensors(t)
-        logger.info(f"  moe_gpt_output[{i}]: shape={t.shape}, dtype={t.dtype}, layout={t.layout}")
-        logger.info(f"    per_device[0] shape={per_dev[0].shape}, memory_config={per_dev[0].memory_config()}")
-
-    # --- Setup combine infrastructure ---
-    COMBINE_H = 4
-    COMBINE_W = 3
-    combine_core_range_set, combine_start, combine_end = get_moe_gpt_combine_core_range(
-        mesh_device, COMBINE_W, COMBINE_H
-    )
-    combine_worker_cores = list(ttnn.corerange_to_cores(combine_core_range_set, row_wise=True))
-    mux_start = ttnn.CoreCoord(combine_end.x + 1, combine_start.y)
-    mux_end = ttnn.CoreCoord(combine_end.x + 2, combine_end.y)
-    combine_mux_cores = ttnn.CoreRangeSet([ttnn.CoreRange(mux_start, mux_end)])
-    combine_semaphore = ttnn.create_global_semaphore(mesh_device, all_cores, 0)
+    combine_semaphore = ttnn.create_global_semaphore(mesh_device, combine_core_range_set, 0)
 
     # --- Build torch reference ---
     raw_input_2d = raw_input_torch.reshape(tokens_global, hidden_size)
@@ -2709,42 +2565,62 @@ def run_test_combine_isolation(mesh_device, tokens_global, hidden_size, selected
                     ref_combine[k, t] = activated @ torch_w2[0, local_e].to(torch.float32)
         ref_per_device[dev_idx] = ref_combine
 
-    # Pre-allocate combine output tensor (same as test_dispatch_compute_combine)
+    # Pre-allocate combine output: [K_sel, tokens_per_device, hidden_size] replicated in DRAM
     tt_combine_preallocated = ttnn.from_torch(
         torch.zeros(selected_experts_k, M, hidden_size, dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
-    # --- Run combine N times ---
+    # --- Run moe_compute N times (full pipeline each time for stability testing) ---
     all_passing = True
     for iteration in range(num_iters):
-        tt_combine_result = ttnn.experimental.selective_reduce_combine(
-            moe_gpt_outputs[4],
-            moe_gpt_outputs[1],
-            moe_gpt_outputs[2],
-            moe_gpt_outputs[0],
-            hidden_size=hidden_size,
-            batch_size=total_tokens,
-            seq_size=1,
-            select_experts_k=selected_experts_k,
+        tt_input_l1 = ttnn.to_memory_config(tt_raw_input, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.synchronize_device(mesh_device)
+
+        # Dispatch
+        (tt_sparse, tt_idx, tt_sc) = ttnn.experimental.all_to_all_dispatch_metadata(
+            tt_input_l1,
+            tt_indices,
+            tt_scores,
+            tt_dispatch_mapping,
             cluster_axis=cluster_axis,
-            topology=ttnn.Topology.Ring,
             num_links=4,
-            token_parallel_core_dim=COMBINE_H,
-            data_parallel_core_dim=COMBINE_W,
-            worker_cores=combine_worker_cores,
-            mux_core_range_set=combine_mux_cores,
-            output_tensor=tt_combine_preallocated,
-            optional_cross_device_semaphore=combine_semaphore,
+            output_tensors=(tt_sparse_out, tt_indices_out, tt_scores_out),
+            cross_device_semaphore=dispatch_sem,
+            dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_UNICAST,
         )
         ttnn.synchronize_device(mesh_device)
 
-        # Verify
-        combine_per_device = ttnn.get_device_tensors(tt_combine_result)
+        # moe_compute (fused compute + combine)
+        tt_sparse = ttnn.reshape(tt_sparse, [1, total_tokens, hidden_size])
+        moe_compute_outputs = ttnn.experimental.moe_compute(
+            tt_sparse,
+            tt_idx,
+            tt_sc,
+            tt_expert_mapping,
+            tt_w0_w1,
+            tt_w2,
+            layer_id=0,
+            output_height_shard_dim=output_height_shard_dim,
+            intermediate_size=N,
+            has_bias=True,
+            cluster_axis=cluster_axis,
+            topology=ttnn.Topology.Ring,
+            num_links=4,
+            mux_core_range_set=mux_core_range_set,
+            optional_output_tensor=tt_combine_preallocated,
+            optional_cross_device_semaphore=combine_semaphore,
+            activation_type=MoEActivationFunction.SWIGLU,
+            bh_ring_size=bh_ring_size,
+        )
+        ttnn.synchronize_device(mesh_device)
+
+        # Verify combine output (moe_compute_outputs[4])
+        combine_per_device = ttnn.get_device_tensors(moe_compute_outputs[4])
         iter_passing = True
         for dev_idx in range(total_mesh_devices):
             actual_combine = ttnn.to_torch(combine_per_device[dev_idx]).reshape(K_sel, M, hidden_size)
@@ -2761,9 +2637,9 @@ def run_test_combine_isolation(mesh_device, tokens_global, hidden_size, selected
         else:
             logger.error(f"combine_isolation iter {iteration}: SOME FAILED")
 
-    # Cleanup
-    for i in range(4):  # output[3] and [4] share a buffer; deallocating [3] frees both
-        ttnn.deallocate(moe_gpt_outputs[i])
+        # Cleanup moe_compute outputs
+        for i in range(4):
+            ttnn.deallocate(moe_compute_outputs[i])
 
     return all_passing
 
@@ -2782,7 +2658,7 @@ def run_test_combine_isolation(mesh_device, tokens_global, hidden_size, selected
 def test_combine_isolation(
     mesh_device, tokens_global, hidden_size, selected_experts_k, experts_total, num_iters, device_params
 ):
-    """Test selective_reduce_combine in isolation: generate data via dispatch+moe_gpt, then run combine N times."""
+    """Test moe_compute combine stability: run full pipeline N times and verify combine output each time."""
     mesh_device.disable_and_clear_program_cache()
     passing = run_test_combine_isolation(
         mesh_device=mesh_device,
@@ -2804,10 +2680,10 @@ def run_test_full_pipeline_multi_iter(
     num_iters=3,
     use_output_tensor=True,
 ):
-    """Test full fused pipeline (dispatch -> moe_gpt -> combine) N times.
+    """Test full fused pipeline (dispatch -> moe_compute) N times.
 
-    Unlike combine_isolation (which reuses moe_gpt outputs), this runs the
-    ENTIRE pipeline each iteration, mimicking what the model does across layers.
+    Each iteration runs the ENTIRE pipeline with fresh inputs, mimicking
+    what the model does across layers.
     """
     torch.manual_seed(42)
     cluster_axis = 0
@@ -2836,7 +2712,7 @@ def run_test_full_pipeline_multi_iter(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
-    tt_moe_gpt_mapping = ttnn.from_torch(
+    tt_expert_mapping = ttnn.from_torch(
         expert_mapping_torch.to(torch.int16),
         dtype=ttnn.uint16,
         device=mesh_device,
@@ -2901,25 +2777,21 @@ def run_test_full_pipeline_multi_iter(
     )
     dispatch_sem = ttnn.create_global_semaphore(mesh_device, all_cores, 0)
 
-    COMBINE_H = 4
-    COMBINE_W = 3
-    combine_core_range_set, combine_start, combine_end = get_moe_gpt_combine_core_range(
-        mesh_device, COMBINE_W, COMBINE_H
+    output_height_shard_dim = 4
+    bh_ring_size = 12
+    mux_core_range_set, combine_core_range_set, output_width_shard_dim = _compute_moe_core_placement(
+        mesh_device, output_height_shard_dim, hidden_size, bh_ring_size=bh_ring_size
     )
-    combine_worker_cores = list(ttnn.corerange_to_cores(combine_core_range_set, row_wise=True))
-    mux_start = ttnn.CoreCoord(combine_end.x + 1, combine_start.y)
-    mux_end = ttnn.CoreCoord(combine_end.x + 2, combine_end.y)
-    combine_mux_cores = ttnn.CoreRangeSet([ttnn.CoreRange(mux_start, mux_end)])
-    combine_semaphore = ttnn.create_global_semaphore(mesh_device, all_cores, 0)
+    combine_semaphore = ttnn.create_global_semaphore(mesh_device, combine_core_range_set, 0)
 
     # Pre-allocate combine output (reused across iterations if use_output_tensor)
     tt_combine_preallocated = None
     if use_output_tensor:
         tt_combine_preallocated = ttnn.from_torch(
             torch.zeros(selected_experts_k, M, hidden_size, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
             device=mesh_device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
@@ -3013,55 +2885,44 @@ def run_test_full_pipeline_multi_iter(
         ttnn.synchronize_device(mesh_device)
         logger.info(f"  iter {iteration}: dispatch done")
 
-        # --- Step 2: moe_gpt ---
-        tt_sparse_2d = ttnn.reshape(tt_sparse, [total_tokens, hidden_size])
-        logger.info(f"  iter {iteration}: moe_gpt")
-        moe_gpt_outputs = ttnn.experimental.moe_gpt(
-            tt_sparse_2d,
-            expert_indices=tt_idx,
-            expert_scores=tt_sc,
-            expert_mapping=tt_moe_gpt_mapping,
-            w0_w1_tensor=tt_w0_w1,
-            w2_tensor=tt_w2,
-            cluster_axis=cluster_axis,
-        )
-        ttnn.synchronize_device(mesh_device)
-        logger.info(f"  iter {iteration}: moe_gpt done")
+        # --- Step 2: moe_compute (fused compute + combine) ---
+        tt_sparse_2d = ttnn.reshape(tt_sparse, [1, total_tokens, hidden_size])
+        logger.info(f"  iter {iteration}: moe_compute")
 
-        # --- Step 3: selective_reduce_combine ---
-        logger.info(f"  iter {iteration}: combine (use_output_tensor={use_output_tensor})")
-        combine_kwargs = dict(
-            hidden_size=hidden_size,
-            batch_size=total_tokens,
-            seq_size=1,
-            select_experts_k=selected_experts_k,
+        moe_compute_kwargs = dict(
+            layer_id=0,
+            output_height_shard_dim=output_height_shard_dim,
+            intermediate_size=N,
+            has_bias=True,
             cluster_axis=cluster_axis,
             topology=ttnn.Topology.Ring,
             num_links=4,
-            token_parallel_core_dim=COMBINE_H,
-            data_parallel_core_dim=COMBINE_W,
-            worker_cores=combine_worker_cores,
-            mux_core_range_set=combine_mux_cores,
+            mux_core_range_set=mux_core_range_set,
+            activation_type=MoEActivationFunction.SWIGLU,
+            bh_ring_size=bh_ring_size,
         )
         if use_output_tensor:
-            combine_kwargs["output_tensor"] = tt_combine_preallocated
-            combine_kwargs["optional_cross_device_semaphore"] = combine_semaphore
+            moe_compute_kwargs["optional_output_tensor"] = tt_combine_preallocated
+            moe_compute_kwargs["optional_cross_device_semaphore"] = combine_semaphore
 
-        tt_combine_result = ttnn.experimental.selective_reduce_combine(
-            moe_gpt_outputs[4],
-            moe_gpt_outputs[1],
-            moe_gpt_outputs[2],
-            moe_gpt_outputs[0],
-            **combine_kwargs,
+        moe_compute_outputs = ttnn.experimental.moe_compute(
+            tt_sparse_2d,
+            tt_idx,
+            tt_sc,
+            tt_expert_mapping,
+            tt_w0_w1,
+            tt_w2,
+            **moe_compute_kwargs,
         )
         ttnn.synchronize_device(mesh_device)
-        logger.info(f"  iter {iteration}: combine done")
+        logger.info(f"  iter {iteration}: moe_compute done")
 
-        # --- Cleanup moe_gpt outputs (like fused_decode.py does) ---
-        for i in range(4):  # output[3] and [4] share a buffer; deallocating [3] frees both
-            ttnn.deallocate(moe_gpt_outputs[i])
+        # --- Cleanup moe_compute outputs ---
+        for i in range(4):
+            ttnn.deallocate(moe_compute_outputs[i])
 
         # --- Optional: do tilize + deallocate combine output (like model does) ---
+        tt_combine_result = moe_compute_outputs[4]
         tt_combine_tile = ttnn.to_layout(tt_combine_result, ttnn.TILE_LAYOUT)
         if not use_output_tensor:
             ttnn.deallocate(tt_combine_result)
@@ -3097,11 +2958,11 @@ def test_full_pipeline_multi_iter(
     use_output_tensor,
     device_params,
 ):
-    """Test full fused pipeline (dispatch -> moe_gpt -> combine) run N times.
+    """Test full fused pipeline (dispatch -> moe_compute) run N times.
 
     This mimics what the model does across layers: each iteration is a fresh
-    dispatch+moe_gpt+combine with deallocations in between.
-    Tests both with and without output_tensor to isolate the hang cause.
+    dispatch+moe_compute with deallocations in between.
+    Tests both with and without output_tensor to isolate potential issues.
     """
     mesh_device.enable_program_cache()
     passing = run_test_full_pipeline_multi_iter(
