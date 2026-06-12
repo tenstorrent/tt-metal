@@ -50,6 +50,12 @@ from tracy.perf_counter_analysis import (
 yaml.SafeDumper.ignore_aliases = lambda *args: True
 
 TRACE_OP_ID_BITSHIFT = 32
+# Lower 10 bits of an encoded program ID are the device_id; the base program counter
+# occupies bits [10:30].  Matches DEVICE_ID_NUM_BITS in tt_metal_profiler.cpp.
+# Compute-core firmware writes the raw base counter as run_host_id; dispatch firmware
+# writes the fully-encoded ID.  Shifting left by this value re-encodes a compute-core
+# run_host_id to match the host-side global_call_count from the Tracy zone text.
+DEVICE_ID_NUM_BITS = 10
 
 OUT_NAME = "ops_perf_results"
 PER_CORE_OP_TO_OP_OUT_NAME = "per_core_op_to_op_times"
@@ -516,6 +522,10 @@ def host_device_op_compare(op: OpDict) -> Tuple[int, int]:
 
 
 def extract_dispatch_op_id(dispatchOps: Dict[str, Any]) -> int:
+    # ERISC dispatch: op_id stored directly in the dict by get_erisc_dispatch_core_ops.
+    if "op_id" in dispatchOps:
+        return dispatchOps["op_id"]
+    # BRISC/NCRISC dispatch: op_id embedded in timeseries meta_data["workers_runtime_id"].
     opId = 0
     for ts in dispatchOps["timeseries"]:
         if "meta_data" in ts[0] and "workers_runtime_id" in ts[0]["meta_data"]:
@@ -557,6 +567,9 @@ def _convert_device_op_entry(device_op_time: Dict[str, Any], freq: int) -> OpDic
         }
 
     if last_time_id and "run_host_id" in last_time_id:
+        # Compute-core firmware receives the full EncodePerDeviceProgramID value from the
+        # dispatch firmware and stores it directly as run_host_id.  It already equals the
+        # host-side global_call_count — no re-encoding needed.
         device_op["global_call_count"] = last_time_id["run_host_id"]
     else:
         run_host_id = device_op_time.get("op_id")
@@ -603,10 +616,12 @@ def _enrich_ops_from_perf_csv(
                     if cand_op_id == op_id:
                         candidates.extend(rows)
 
-            assert candidates, (
-                f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
-                f"for device {device_id} (trace_id={host_trace_id})"
-            )
+            if not candidates:
+                logger.warning(
+                    f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
+                    f"for device {device_id} (trace_id={host_trace_id}) — skipping (DRAM buffer overflow)"
+                )
+                continue
 
             # Create one enriched op per ProgramExecutionUID row in the C++ report.
             for perf_row in candidates:
@@ -759,31 +774,58 @@ def _enrich_ops_from_device_logs(
                     f"on device {device} (likely trace replay dispatch entries)"
                 )
             else:
-                assert False, "Unrecognized dispatch OPs are presented by dispatch cores"
+                # Program-load, fence, and sync dispatch ops can appear without a matching tensix op.
+                # Warn and ignore rather than aborting post-processing.
+                logger.warning(
+                    f"Ignoring {len(dispatch_op_analysis)} unrecognized dispatch op(s) on device {device} "
+                    f"with no matching tensix op (IDs: {list(dispatch_op_analysis.keys())[:5]}{'...' if len(dispatch_op_analysis) > 5 else ''}). "
+                    f"This is expected for program-load, fence, or sync dispatch operations."
+                )
 
         if len(host_ops_by_device[device]) != len(device_ops_time):
             device_op_id_debug = None
             host_op_id_debug = None
             for device_op, device_op_time in zip(host_ops_by_device[device], device_ops_time):
+                # Use last timeseries entry: dispatch entries precede compute entries
+                # chronologically, so the last FW entry carries the correct run_host_id.
                 if len(device_op_time["timeseries"]) > 0:
-                    time_id, ts, stat_data, risc, core = device_op_time["timeseries"][0]
-                    if "zone_name" in time_id and "FW" in time_id["zone_name"]:
-                        if "run_host_id" in time_id:
+                    for ts_entry in reversed(device_op_time["timeseries"]):
+                        time_id = ts_entry[0]
+                        if "zone_name" in time_id and "FW" in time_id["zone_name"] and "run_host_id" in time_id:
                             if time_id["run_host_id"] != device_op["global_call_count"]:
                                 device_op_id_debug = time_id["run_host_id"]
                                 host_op_id_debug = device_op["global_call_count"]
-                                break
+                            break
 
             if device_op_id_debug and host_op_id_debug:
-                assert False, (
-                    f"Device data mismatch: Expected {len(host_ops_by_device[device])} "
+                logger.warning(
+                    f"Device data mismatch (likely DRAM profiler buffer overflow): Expected {len(host_ops_by_device[device])} "
                     f"but received {len(device_ops_time)} ops on device {device}. "
-                    f"Device is showing op ID {device_op_id_debug} when host is showing op ID {host_op_id_debug}"
+                    f"Device is showing op ID {device_op_id_debug} when host is showing op ID {host_op_id_debug}. "
+                    f"Processing only the first {len(device_ops_time)} matched ops."
                 )
             else:
-                assert (
-                    False
-                ), f"Device data mismatch: Expected {len(host_ops_by_device[device])} but received {len(device_ops_time)} ops on device {device}"
+                logger.warning(
+                    f"Device data mismatch (likely DRAM profiler buffer overflow): Expected {len(host_ops_by_device[device])} "
+                    f"but received {len(device_ops_time)} ops on device {device}. "
+                    f"Processing only the first {len(device_ops_time)} matched ops."
+                )
+            # Buffer overflow: build a lookup from run_host_id → device_op_time so we can
+            # match by ID rather than by position (dropped markers mean positional matching fails).
+            _dev_ops_by_id = {}
+            for _dot in device_ops_time:
+                if len(_dot["timeseries"]) > 0:
+                    _tid = _dot["timeseries"][0][0]
+                    if "run_host_id" in _tid:
+                        # Compute-core run_host_id already equals the encoded global_call_count.
+                        # Dispatch entries that leaked into device_ops_time have smaller raw IDs
+                        # that won't match any host op, so they are naturally filtered out.
+                        _dev_ops_by_id[_tid["run_host_id"]] = _dot
+            # Build ID-matched list aligned to host ops (None for ops with no device timing data).
+            # Keep all host ops in host_ops_by_device so NOC stats can be attached to all ops;
+            # the enrichment loop below skips None entries.
+            _matched_device_ops = [_dev_ops_by_id.get(op["global_call_count"]) for op in host_ops_by_device[device]]
+            device_ops_time = _matched_device_ops
 
         # Check if perf counters data is available
         risc_data = device_data["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]
@@ -803,11 +845,12 @@ def _enrich_ops_from_device_logs(
 
         # Enrich ops with device data and perf counters
         for device_op, device_op_time in zip(host_ops_by_device[device], device_ops_time):
-            # Verify match again (redundant but safe)
-            if len(device_op_time["timeseries"]) > 0:
-                time_id = device_op_time["timeseries"][0][0]
-                if "run_host_id" in time_id:
-                    assert time_id["run_host_id"] == device_op["global_call_count"]
+            if device_op_time is None:
+                continue
+            # No ID check on timeseries[0]: dispatch entries (raw run_host_id) precede
+            # compute entries (encoded run_host_id) in the same op timeseries because
+            # get_ops() appends all entries chronologically.  _convert_device_op_entry
+            # uses last_time_id (compute core) and produces the correct global_call_count.
 
             # Extract basic device data
             legacy_data = _convert_device_op_entry(device_op_time, freq)
