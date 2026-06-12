@@ -10,6 +10,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.common import Mode
+from models.tt_transformers.tt.prefetcher import colocating_prefetcher
 
 
 class LMHead(LightweightModule):
@@ -36,7 +37,7 @@ class LMHead(LightweightModule):
         self.prefetcher = prefetcher
         # Only the worker-core backend co-locates the LM head on its ring (ring-mm path); the
         # DRAM-core backend uses the default DRAM-sharded LM head.
-        self.use_lm_head_prefetcher = prefetcher is not None and prefetcher.colocate_ops
+        self.use_lm_head_prefetcher = colocating_prefetcher(prefetcher) is not None
 
         size_per_device = self.padded_vocab_size // self.num_devices
 
@@ -149,9 +150,7 @@ class LMHead(LightweightModule):
 
     def forward(self, x: ttnn.Tensor, debug_input_torch=None, debug_weight_torch=None):
         outputs = []
-        use_prefetcher = (
-            self.prefetcher is not None and self.use_lm_head_prefetcher and self.prefetcher.mode == Mode.DECODE
-        )
+        use_prefetcher = self.use_lm_head_prefetcher and self.prefetcher.mode == Mode.DECODE
         split_sizes = self.split_sizes_ring_mm if use_prefetcher else self.split_sizes_dram_sharded
         program_configs = [
             self.args.get_lm_head_program_config(split_size, self.prefetcher if use_prefetcher else None)
