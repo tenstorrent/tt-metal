@@ -24,6 +24,7 @@ from models.experimental.glm4_moe_lite.tt.linear_helpers import (
     attn_linear,
     attn_wo_linear,
     mlp_linear,
+    sharded_decode_norm,
     tp_row_parallel_linear,
 )
 from models.experimental.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfig
@@ -130,7 +131,16 @@ def kv_cache_update(
             ttnn.deallocate(kv, force=False)
             kv = None
 
-        kv_nope = w.kv_a_layernorm(kv_nope, mode="decode")
+        if cfg.sharded_decode_norm:
+            kv_nope = sharded_decode_norm(
+                w.kv_a_layernorm,
+                kv_nope,
+                device=device,
+                width=int(hparams.kv_lora_rank),
+                downstream_mc=cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            kv_nope = w.kv_a_layernorm(kv_nope, mode="decode")
 
         if not cfg.skip_typecast and kv_rope.dtype != ttnn.bfloat16:
             kv_rope = ttnn.typecast(kv_rope, dtype=ttnn.bfloat16)
@@ -225,7 +235,16 @@ def q_projection(
     else:
         q_a = attn_linear(x, w.w_q_a, device=device, cfg=cfg, force_no_tp=cfg.attn_dp)
 
-    q_a = w.q_a_layernorm(q_a, mode="decode")
+    if cfg.sharded_decode_norm:
+        q_a = sharded_decode_norm(
+            w.q_a_layernorm,
+            q_a,
+            device=device,
+            width=int(hparams.q_lora_rank),
+            downstream_mc=cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG,
+        )
+    else:
+        q_a = w.q_a_layernorm(q_a, mode="decode")
     q = attn_linear(q_a, w.w_q_b, device=device, cfg=cfg, force_no_tp=cfg.attn_dp)
     ttnn.deallocate(q_a, force=False)
 

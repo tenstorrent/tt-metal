@@ -45,13 +45,44 @@ class Matmul1dProgOverrides:
 
 
 # LM-head 1D multicast tuning (edit in source; ``None`` = auto heuristics).
+# Tuned via test_decode_matmul_sweep.py on Blackhole p300c (11×10=110 cores):
+# full grid, per_core_N=11 (Nt=1210/110), in0_block_w=2, out_subblock_w=1 → 146.6us
+# (vs 169us auto, 1.15x). The shape is DRAM-bandwidth-bound so config gains are modest;
+# the DRAM-sharded path (GLM4_MOE_LITE_DRAM_SHARDED_LM_HEAD) is the larger lever.
 LM_HEAD_MATMUL_OVERRIDES = Matmul1dProgOverrides(
-    in0_block_w=None,
+    in0_block_w=2,
     per_core_M=None,
-    per_core_N=None,
-    out_subblock_w=None,
-    out_subblock_h=None,
+    per_core_N=11,
+    out_subblock_w=1,
+    out_subblock_h=1,
 )
+
+
+@dataclass(frozen=True)
+class _DecodeTuned:
+    """Swept-optimal 1D mcast config for a specific decode (K, N) matmul."""
+
+    num_cores: int
+    in0_block_w: int
+    per_core_N: int
+    out_subblock_w: int
+    in0_dram: bool = False  # True → stream in0 from DRAM (else L1-resident)
+
+
+# Decode matmul (K, N) → tuned config, from test_decode_matmul_sweep.py winners
+# (Blackhole p300c, M=32, LoFi).  These shapes otherwise fall through to ttnn's
+# auto config in mlp_linear (the per_core_N=1 "SLOW" path); consulting this table
+# in mlp_linear's decode branch applies the swept config + WIDTH_SHARDED L1 output.
+# Keyed (K, N) so only the exact measured shapes change; all others are untouched.
+_DECODE_MATMUL_TUNED: dict[tuple[int, int], _DecodeTuned] = {
+    (2048, 768): _DecodeTuned(num_cores=8, in0_block_w=4, per_core_N=3, out_subblock_w=3),  # q_a: 28→13us (2.1x)
+    (768, 5120): _DecodeTuned(
+        num_cores=40, in0_block_w=4, per_core_N=4, out_subblock_w=4, in0_dram=True
+    ),  # q_b: 17→12us
+    (1280, 2048): _DecodeTuned(
+        num_cores=32, in0_block_w=4, per_core_N=2, out_subblock_w=2
+    ),  # w_o (head-parallel): 23→11us (2.2x)
+}
 
 
 # Default compute kernel config for prefill 1D+ws matmuls (LoFi + BFP4 weights).
@@ -474,14 +505,15 @@ def compute_1d_mlp_down_prog_cfg(
     m_tiles = max(1, (m_total + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE)
     k_tiles = (K + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
     n_tiles = (N + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
-    num_cores = _DOWN_MATMUL_NUM_CORES
-
-    if n_tiles % num_cores != 0:
+    # Prefer per_core_N=4 (swept-optimal for N=2048 → 16 cores, 1.3x vs the 64-core
+    # baseline); fall back to the previous 32-core/per_core_N=2 when 4 doesn't divide.
+    if n_tiles % 4 == 0:
+        per_core_N, out_subblock_w = 4, 4
+    elif n_tiles % _DOWN_MATMUL_NUM_CORES == 0 and (n_tiles // _DOWN_MATMUL_NUM_CORES) % _DOWN_OUT_SUBBLOCK_W == 0:
+        per_core_N, out_subblock_w = n_tiles // _DOWN_MATMUL_NUM_CORES, _DOWN_OUT_SUBBLOCK_W
+    else:
         return compute_1d_prog_cfg(device, b_weight, m_total)
-
-    per_core_N = n_tiles // num_cores
-    if per_core_N % _DOWN_OUT_SUBBLOCK_W != 0:
-        return compute_1d_prog_cfg(device, b_weight, m_total)
+    num_cores = n_tiles // per_core_N
 
     grid = device.compute_with_storage_grid_size()
     max_x, max_y = int(grid.x), int(grid.y)
@@ -508,9 +540,9 @@ def compute_1d_mlp_down_prog_cfg(
         compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
         in0_block_w=in0_bw,
         out_subblock_h=1,
-        out_subblock_w=_DOWN_OUT_SUBBLOCK_W,
+        out_subblock_w=out_subblock_w,
         out_block_h=1,
-        out_block_w=_DOWN_OUT_SUBBLOCK_W,
+        out_block_w=out_subblock_w,
         per_core_M=m_tiles,
         per_core_N=per_core_N,
         fuse_batch=True,
@@ -653,6 +685,28 @@ def prefill_width_sharded_norm_config(device: Any, m_total: int, width: int, *, 
         "sharded_program_config": prog,
         "sharded_output_config": ws_mc,
     }
+
+
+def sharded_decode_norm(norm_fn: Any, x: ttnn.Tensor, *, device: Any, width: int, downstream_mc: ttnn.MemoryConfig):
+    """Run a decode RMSNorm width-sharded across cores instead of on a single core.
+
+    ``ttnn.rms_norm`` on an interleaved [B, width] decode activation runs on ONE
+    core (~30us for width=2048).  Width-sharding the input lets the LayerNorm
+    sharded multi-core kernel parallelize the reduction; one to_memory_config
+    gathers the result back to the downstream interleaved format.  Falls back to
+    the plain single-core norm if the width is not shardable on this grid.
+    """
+    m_total = int(x.shape[-2])
+    try:
+        norm_cfg = prefill_width_sharded_norm_config(device, m_total, int(width))
+        x_sharded = ttnn.to_memory_config(x, norm_cfg["sharded_output_config"])
+    except Exception:
+        return norm_fn(x, mode="decode")
+    out_sharded = norm_fn(x_sharded, mode="decode", in_sharded=True, out_sharded=True, norm_config=norm_cfg)
+    ttnn.deallocate(x_sharded, force=False)
+    out = ttnn.to_memory_config(out_sharded, downstream_mc)
+    ttnn.deallocate(out_sharded, force=False)
+    return out
 
 
 def _prefill_1d_prog_and_ws_mc_matched_in0(
@@ -954,6 +1008,66 @@ def prefill_per_head_linear(
     return out
 
 
+def _resolve_grid(num_cores: int, max_x: int, max_y: int) -> tuple[int, int] | None:
+    """Largest (gx, gy) with gx*gy == num_cores that fits the physical grid."""
+    for gx in range(min(max_x, num_cores), 0, -1):
+        if num_cores % gx == 0 and num_cores // gx <= max_y:
+            return gx, num_cores // gx
+    return None
+
+
+def _tuned_decode_linear(
+    a: ttnn.Tensor,
+    b: ttnn.Tensor,
+    *,
+    device: Any,
+    cfg: Glm4RuntimeConfig,
+    memory_config: ttnn.MemoryConfig | None,
+    tuned: _DecodeTuned,
+) -> ttnn.Tensor | None:
+    """Run a decode matmul with a swept-optimal 1D config + WIDTH_SHARDED L1 output.
+
+    Mirrors the attn_wo_linear / mlp_gate_up_linear pattern: each core writes its
+    output shard to local L1 (no NOC hop), then one to_memory_config gathers the
+    shards to the downstream format.  Returns None if the grid cannot host the
+    config (caller falls back to the default path).
+    """
+    grid = device.compute_with_storage_grid_size()
+    g = _resolve_grid(tuned.num_cores, int(grid.x), int(grid.y))
+    if g is None:
+        return None
+    core_x, core_y = g
+    prog_cfg = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(core_x, core_y),
+        in0_block_w=tuned.in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=tuned.out_subblock_w,
+        per_core_M=1,
+        per_core_N=tuned.per_core_N,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+    out_mc = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+    )
+    act = ttnn.to_memory_config(a, ttnn.DRAM_MEMORY_CONFIG if tuned.in0_dram else ttnn.L1_MEMORY_CONFIG)
+    out_sharded = ttnn.linear(
+        act,
+        b,
+        program_config=prog_cfg,
+        compute_kernel_config=cfg.mlp_compute_kernel_config(),
+        memory_config=out_mc,
+    )
+    if act is not a:
+        ttnn.deallocate(act, force=False)
+    downstream = memory_config if memory_config is not None else (cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG)
+    out = ttnn.to_memory_config(out_sharded, downstream)
+    ttnn.deallocate(out_sharded, force=False)
+    return out
+
+
 def mlp_linear(
     a: ttnn.Tensor,
     b: ttnn.Tensor,
@@ -990,6 +1104,12 @@ def mlp_linear(
     if b_batch == 1:
         if m_total > ttnn.TILE_SIZE:
             return _prefill_linear_ws_out(a, b, device=device, cfg=cfg, memory_config=memory_config)
+        # Swept-optimal decode config for known (K, N) shapes (q_a, q_b, head-parallel w_o).
+        tuned = _DECODE_MATMUL_TUNED.get((int(b.shape[-2]), int(b.shape[-1])))
+        if tuned is not None:
+            tuned_out = _tuned_decode_linear(a, b, device=device, cfg=cfg, memory_config=memory_config, tuned=tuned)
+            if tuned_out is not None:
+                return tuned_out
         if cfg.explicit_prog_cfg and m_total <= ttnn.TILE_SIZE:
             # Thread fp32-DST into the subblock heuristic so out_subblock_w respects the 4-tile DST budget.
             kwargs["program_config"] = compute_1d_prog_cfg(device, b, m_total, fp32_dest_acc_en=cfg.moe_fp32_acc)
@@ -1207,9 +1327,8 @@ def dram_sharded_mlp(
     return result_dram
 
 
-# Gate/up decode tuning: per_core_N=2, out_subblock_w=2, WIDTH_SHARDED L1 output.
-_GATE_UP_PER_CORE_N = 2
-_GATE_UP_OUT_SUBBLOCK_W = 2
+# Gate/up decode tuning: per_core_N preferred 4 (fallback to this), WIDTH_SHARDED L1 output.
+_GATE_UP_PER_CORE_N = 2  # fallback per_core_N when N-tiles not divisible by the swept-optimal 4
 
 
 def mlp_gate_up_linear(
@@ -1243,15 +1362,15 @@ def mlp_gate_up_linear(
     k_tiles = (K + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
     m_tiles = max(1, (m_total + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE)
 
-    if (
-        m_total > ttnn.TILE_SIZE
-        or b_batch != 1
-        or n_tiles % _GATE_UP_PER_CORE_N != 0
-        or _GATE_UP_PER_CORE_N % _GATE_UP_OUT_SUBBLOCK_W != 0
-    ):
+    # Prefer per_core_N=4 (swept-optimal for dense gate/up N=2560 → 20 cores, 1.4x vs
+    # the 80-core baseline); fall back to 2 for shapes (e.g. shared-expert) where 4
+    # doesn't divide n_tiles — preserving the previous behavior there.
+    per_core_N = next((p for p in (4, _GATE_UP_PER_CORE_N) if n_tiles % p == 0), None)
+    if m_total > ttnn.TILE_SIZE or b_batch != 1 or per_core_N is None:
         return mlp_linear(a, b, device=device, cfg=cfg, memory_config=memory_config)
+    out_subblock_w = per_core_N  # out_subblock_h=1 → h*w = per_core_N ≤ 8 (bf16 DST), ≤4 (fp32)
 
-    num_cores = n_tiles // _GATE_UP_PER_CORE_N
+    num_cores = n_tiles // per_core_N
     grid = device.compute_with_storage_grid_size()
     max_x, max_y = int(grid.x), int(grid.y)
     core_x, core_y = None, None
@@ -1276,11 +1395,11 @@ def mlp_gate_up_linear(
         compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
         in0_block_w=in0_bw,
         out_subblock_h=1,
-        out_subblock_w=_GATE_UP_OUT_SUBBLOCK_W,
+        out_subblock_w=out_subblock_w,
         out_block_h=1,
-        out_block_w=_GATE_UP_OUT_SUBBLOCK_W,
+        out_block_w=out_subblock_w,
         per_core_M=m_tiles,
-        per_core_N=_GATE_UP_PER_CORE_N,
+        per_core_N=per_core_N,
         fuse_batch=True,
         fused_activation=None,
         mcast_in0=True,
@@ -1288,7 +1407,7 @@ def mlp_gate_up_linear(
 
     # WIDTH_SHARDED output: each core writes its result shard to local L1; to_memory_config gathers downstream.
     out_shard_h = m_tiles * ttnn.TILE_SIZE
-    out_shard_w = _GATE_UP_PER_CORE_N * ttnn.TILE_SIZE
+    out_shard_w = per_core_N * ttnn.TILE_SIZE
     out_mc = ttnn.create_sharded_memory_config(
         shape=(out_shard_h, out_shard_w),
         core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_x - 1, core_y - 1))]),

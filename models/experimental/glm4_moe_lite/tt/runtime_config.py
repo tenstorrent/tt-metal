@@ -94,6 +94,7 @@ class Glm4RuntimeConfig:
 
     # --- Memory layout ---
     decode_l1_act: bool
+    sharded_decode_norm: bool
     dram_sharded_weights: bool
     dram_sharded_attn: bool
     dram_sharded_mlp: bool
@@ -170,6 +171,7 @@ class Glm4RuntimeConfig:
             skip_typecast=_env_bool("GLM4_MOE_LITE_SKIP_TYPECAST"),
             # Memory layout
             decode_l1_act=_env_bool("GLM4_MOE_LITE_DECODE_L1_ACT"),
+            sharded_decode_norm=_env_bool("GLM4_MOE_LITE_SHARDED_DECODE_NORM"),
             dram_sharded_weights=dram_sharded,
             dram_sharded_attn=dram_sharded and _env_bool("GLM4_MOE_LITE_DRAM_SHARDED_ATTN"),
             dram_sharded_mlp=dram_sharded_mlp_val,
