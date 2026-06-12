@@ -1,0 +1,109 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# TTNN implementation of the HunyuanImage-3.0 MLP (SwiGLU expert FFN / shared MLP).
+# Mirrors ref/moe/mlp.py (hidden_act="silu"):
+#     gu = gate_and_up_proj(x)          # [.., 2*I]
+#     x1, x2 = gu.chunk(2, dim=-1)
+#     out = down_proj(x1 * silu(x2))    # [.., H]
+#
+# Weight layout in the checkpoint (PyTorch nn.Linear -> [out, in]):
+#     gate_and_up_proj.weight : [2*I, H]
+#     down_proj.weight        : [H, I]
+# ttnn.linear computes x @ W, so we store the transposes: [H, 2*I] and [I, H].
+
+import ttnn
+from models.common.lightweightmodule import LightweightModule
+
+
+class HunyuanTtMLP(LightweightModule):
+    """
+    Single-device TTNN SwiGLU MLP (one routed expert, or the shared MLP).
+
+    Args:
+        device:      TTNN device.
+        hidden_size: Model hidden size (e.g. 4096).
+        state_dict:  Model state_dict (plain torch tensors).
+        prefix:      Module prefix, e.g. ``model.layers.0.mlp.experts.0`` or
+                     ``model.layers.0.mlp.shared_mlp``. The weights
+                     ``{prefix}.gate_and_up_proj.weight`` and
+                     ``{prefix}.down_proj.weight`` are read.
+        weight_dtype: TTNN dtype for the linear weights (default bfloat16;
+                      use ttnn.bfloat8_b for the BFP8 plan target).
+    """
+
+    def __init__(
+        self,
+        device,
+        hidden_size: int,
+        state_dict: dict,
+        prefix: str,
+        weight_dtype=ttnn.bfloat16,
+    ):
+        super().__init__()
+        self.device = device
+        self.hidden_size = hidden_size
+
+        w_gu = state_dict[f"{prefix}.gate_and_up_proj.weight"]  # [2I, H]
+        w_dn = state_dict[f"{prefix}.down_proj.weight"]  # [H, I]
+        self.inter2 = w_gu.shape[0]  # 2I
+        self.inter = self.inter2 // 2  # I
+
+        self.w_gate_up = ttnn.from_torch(
+            w_gu.transpose(0, 1).contiguous(),  # [H, 2I]
+            dtype=weight_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self.w_down = ttnn.from_torch(
+            w_dn.transpose(0, 1).contiguous(),  # [I, H]
+            dtype=weight_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
+    def deallocate(self):
+        """Free this MLP's device weights (used when streaming experts)."""
+        ttnn.deallocate(self.w_gate_up)
+        ttnn.deallocate(self.w_down)
+
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """
+        Args:
+            x: TTNN tensor [.., H] in TILE_LAYOUT.
+        Returns:
+            [.., H] tensor.
+        """
+        gu = ttnn.linear(
+            x,
+            self.w_gate_up,
+            compute_kernel_config=self.compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [.., 2I]
+
+        # SwiGLU: split into gate (x1) and up (x2) halves along the last dim.
+        x1, x2 = ttnn.chunk(gu, 2, dim=-1)
+        ttnn.deallocate(gu)
+        act = ttnn.silu(x2)
+        h = ttnn.multiply(x1, act)
+        ttnn.deallocate(x1)
+        ttnn.deallocate(x2)
+        ttnn.deallocate(act)
+
+        out = ttnn.linear(
+            h,
+            self.w_down,
+            compute_kernel_config=self.compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [.., H]
+        ttnn.deallocate(h)
+        return out
