@@ -93,6 +93,32 @@ TEST(GenerateRankBindingsHelpersTest, WriteRankfile_SortsByRankAscending) {
     EXPECT_EQ(ranks[2], 2);
 }
 
+TEST(GenerateRankBindingsHelpersTest, WriteRankfile_MockClusterUsesLocalhost) {
+    // Mock runs must place every rank on the literal "localhost" so OpenMPI/PRRTE launches locally instead of
+    // attempting an ssh to the (possibly unresolvable) real hostname returned by gethostname().
+    const auto dir = make_temp_dir("rankfile_mock");
+    const auto path = dir / "rankfile";
+    std::vector<RankBindingConfig> bindings = {
+        make_binding(0, 0, 0, "host-a", 0),
+        make_binding(1, 0, 0, "host-b", 1),
+    };
+
+    write_rankfile(bindings, path.string(), /*mock_cluster_rankfile=*/true);
+
+    std::ifstream in(path.string());
+    std::string line;
+    int line_count = 0;
+    while (std::getline(in, line)) {
+        if (line.empty()) {
+            continue;
+        }
+        ++line_count;
+        EXPECT_NE(line.find("=localhost "), std::string::npos)
+            << "Mock rankfile line should target localhost: " << line;
+    }
+    EXPECT_EQ(line_count, 2);
+}
+
 TEST(GenerateRankBindingsHelpersTest, WritePhase2MockMapping_WritesRankToClusterDesc) {
     const auto dir = make_temp_dir("phase2");
     const auto path = dir / "phase2_mock_mapping.yaml";
