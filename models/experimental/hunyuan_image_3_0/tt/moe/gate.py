@@ -1,0 +1,119 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# TTNN implementation of the HunyuanImage-3.0 MoE router (gate).
+#
+# Mirrors the production inference path `HunyuanTopKGate.easy_topk`
+# (see ref/moe/gate.py):
+#     logits = x @ wg.T            # wg: [num_experts, hidden], bias-free
+#     gates  = softmax(logits, dim=-1)         # over the expert axis
+#     w, idx = topk(gates, moe_topk)
+#     w      = w / clamp(w.sum(-1, keepdim=True), min=1e-8)   # if norm_topk_prob
+#
+# Notes:
+# - The reference keeps the router projection + softmax in fp32 because bf16
+#   ties can flip expert selection. We request HiFi4 + fp32 dest accumulation
+#   on the matmul so the logits are computed in high precision.
+# - ttnn.topk requires the reduced (last) dim to be a multiple of 64 and k a
+#   power of two; num_experts=64 / moe_topk=8 satisfy both.
+
+import ttnn
+from models.common.lightweightmodule import LightweightModule
+
+
+class HunyuanTtTopKGate(LightweightModule):
+    """
+    Single-device TTNN MoE router.
+
+    Args:
+        device:       TTNN device.
+        hidden_size:  Model hidden size (e.g. 4096).
+        num_experts:  Number of routed experts (e.g. 64).
+        moe_topk:     Experts selected per token (e.g. 8).
+        state_dict:   Model state_dict (plain torch tensors).
+        weight_key:   Router weight key, with or without the ``.weight`` suffix,
+                      e.g. ``model.layers.0.mlp.gate.wg``.
+        norm_topk_prob: Renormalise the selected top-k weights (default True).
+        weight_dtype: TTNN dtype for the router weight (default bfloat16).
+    """
+
+    def __init__(
+        self,
+        device,
+        hidden_size: int,
+        num_experts: int,
+        moe_topk: int,
+        state_dict: dict,
+        weight_key: str,
+        norm_topk_prob: bool = True,
+        weight_dtype=ttnn.float32,
+    ):
+        super().__init__()
+        self.device = device
+        self.num_experts = num_experts
+        self.moe_topk = moe_topk
+        self.norm_topk_prob = norm_topk_prob
+        self.weight_dtype = weight_dtype
+
+        key = weight_key.removesuffix(".weight") + ".weight"
+        w = state_dict[key]  # [num_experts, hidden]
+        # ttnn.linear computes x @ weight, so store as [hidden, num_experts].
+        # The reference router runs in fp32 (wg is fp32, input upcast); keeping
+        # the projection in fp32 here avoids bf16 ties flipping borderline
+        # expert selections.
+        w_t = w.transpose(0, 1).contiguous().float()
+        self.wg = ttnn.from_torch(
+            w_t,
+            dtype=weight_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # High-fidelity matmul so routing logits stay close to fp32.
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
+    def forward(self, x: ttnn.Tensor):
+        """
+        Args:
+            x: TTNN tensor [B, S, H] in TILE_LAYOUT.
+        Returns:
+            (topk_weight, topk_index)
+              topk_weight: [B, S, moe_topk]  routed probabilities (normalised)
+              topk_index:  [B, S, moe_topk]  selected expert ids (uint)
+        """
+        # Upcast activations to match the fp32 router weight (mirrors the
+        # reference, which casts hidden states to fp32 before the projection).
+        if self.weight_dtype == ttnn.float32 and x.get_dtype() != ttnn.float32:
+            x = ttnn.typecast(x, ttnn.float32)
+
+        logits = ttnn.linear(
+            x,
+            self.wg,
+            compute_kernel_config=self.compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [B, S, num_experts]
+
+        gates = ttnn.softmax(logits, dim=-1)
+        ttnn.deallocate(logits)
+
+        # ttnn.topk requires bf16/bf8 input. Computing softmax in fp32 first
+        # keeps the expert ordering correct; the bf16 cast only happens after.
+        gates_bf16 = ttnn.typecast(gates, ttnn.bfloat16) if gates.get_dtype() != ttnn.bfloat16 else gates
+        ttnn.deallocate(gates)
+
+        topk_weight, topk_index = ttnn.topk(gates_bf16, self.moe_topk, dim=-1)
+        ttnn.deallocate(gates_bf16)
+
+        if self.norm_topk_prob:
+            denom = ttnn.sum(topk_weight, dim=-1, keepdim=True)  # [B, S, 1]
+            denom = ttnn.clip(denom, 1e-8, float("inf"))
+            topk_weight = ttnn.div(topk_weight, denom)
+            ttnn.deallocate(denom)
+
+        return topk_weight, topk_index
