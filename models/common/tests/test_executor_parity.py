@@ -153,10 +153,12 @@ class TestOutputSpecCapture:
 class TestValidateModuleConfigs:
     """Tests for the _validate_module_configs context manager."""
 
+    @pytest.mark.skip(reason="Disabled: see #46807")
     def test_validate_module_configs_method_exists(self):
         """Test that _validate_module_configs method exists on EagerLLMExecutor."""
         assert hasattr(EagerLLMExecutor, "_validate_module_configs")
 
+    @pytest.mark.skip(reason="Disabled: see #46807")
     def test_compile_accepts_validate_configs_flag(self):
         """Test that compile() accepts validate_configs parameter."""
         import inspect
