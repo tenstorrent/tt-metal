@@ -64,8 +64,13 @@ from ..utils.test import line_params, ring_params
 WAN = "wan"
 LTX = "ltx"
 
+# tp_axis = which MESH axis holds the TP cluster. Two strategies, both supported here:
+#   * tp_axis=1: carve a 1xTP LINE submesh (one row of the parent) — used for line/BH benches.
+#   * tp_axis=0: use the FULL 2D mesh; TP rides the 4-wide axis (a closed ring on the
+#     galaxy torus) and everything replicates across the 8-wide axis 1. This is the
+#     production "BH 4x8 ring" config (distributed_rmsnorm_av.md §0) and is the ONLY way
+#     to get a real wrap link for Ring topology — a 1x4 sub-row of the 8-wide axis is open.
 NORM_EPS = 1e-6
-TP_AXIS = 1  # axis of the 1xTP submesh that holds the TP cluster
 GALAXY_LINKS = int(_os.getenv("WAN_GALAXY_LINKS", "4"))
 _ITERS = {WAN: 100, LTX: 50}  # bench iterations per model
 _PINGPONG = 2  # (pob, AG-sem) sets alternated across traced fused iters (skew absorber)
@@ -169,10 +174,11 @@ def _select(cfgs: list[Cfg], env: str) -> list[Cfg]:
 # ---------------------------------------------------------------------------
 
 
-def _build(submesh: ttnn.MeshDevice, cfg: Cfg) -> dict:
+def _build(submesh: ttnn.MeshDevice, cfg: Cfg, tp_axis: int) -> dict:
     torch.manual_seed(0)
     x = torch.randn((1, 1, cfg.rows, cfg.dim), dtype=torch.bfloat16)
-    out = {"x": bf16_tensor(x, device=submesh, mesh_axis=TP_AXIS, shard_dim=-1)}
+    # Feature dim sharded across the TP mesh axis; the other mesh axis (if any) replicates.
+    out = {"x": bf16_tensor(x, device=submesh, mesh_axis=tp_axis, shard_dim=-1)}
 
     if cfg.is_block:
         # adaLN: out = normed*(1+scale) + shift. scale/shift per-channel; the fused
@@ -181,14 +187,14 @@ def _build(submesh: ttnn.MeshDevice, cfg: Cfg) -> dict:
         scale = torch.randn(cfg.dim, dtype=torch.bfloat16)
         shift = torch.randn(cfg.dim, dtype=torch.bfloat16)
         scale_p1 = (scale.float() + 1.0).to(torch.bfloat16)
-        out["weight"] = bf16_tensor(scale_p1.reshape(1, cfg.dim), device=submesh, mesh_axis=TP_AXIS, shard_dim=-1)
-        out["bias"] = bf16_tensor(shift.reshape(1, cfg.dim), device=submesh, mesh_axis=TP_AXIS, shard_dim=-1)
-        out["scale_b"] = bf16_tensor(scale_p1.reshape(1, 1, 1, cfg.dim), device=submesh, mesh_axis=TP_AXIS, shard_dim=-1)
-        out["shift_b"] = bf16_tensor(shift.reshape(1, 1, 1, cfg.dim), device=submesh, mesh_axis=TP_AXIS, shard_dim=-1)
+        out["weight"] = bf16_tensor(scale_p1.reshape(1, cfg.dim), device=submesh, mesh_axis=tp_axis, shard_dim=-1)
+        out["bias"] = bf16_tensor(shift.reshape(1, cfg.dim), device=submesh, mesh_axis=tp_axis, shard_dim=-1)
+        out["scale_b"] = bf16_tensor(scale_p1.reshape(1, 1, 1, cfg.dim), device=submesh, mesh_axis=tp_axis, shard_dim=-1)
+        out["shift_b"] = bf16_tensor(shift.reshape(1, 1, 1, cfg.dim), device=submesh, mesh_axis=tp_axis, shard_dim=-1)
         return out
 
     w = torch.randn(cfg.dim, dtype=torch.bfloat16)
-    out["weight"] = bf16_tensor(w.reshape(1, cfg.dim), device=submesh, mesh_axis=TP_AXIS, shard_dim=-1)
+    out["weight"] = bf16_tensor(w.reshape(1, cfg.dim), device=submesh, mesh_axis=tp_axis, shard_dim=-1)
     if cfg.rope:
         if cfg.broadcast_rope:  # Wan: shared across heads, fp32, replicated
             cos_raw = torch.randn(1, cfg.rows, 1, cfg.head_dim // 2)
@@ -197,11 +203,13 @@ def _build(submesh: ttnn.MeshDevice, cfg: Cfg) -> dict:
             out["cos"] = from_torch(cos_f.permute(0, 2, 1, 3), device=submesh, dtype=ttnn.float32)  # (1,1,rows,hd)
             out["sin"] = from_torch(sin_f.permute(0, 2, 1, 3), device=submesh, dtype=ttnn.float32)
         else:  # LTX: per-head, bf16, head axis TP-sharded (matches production rotary tables)
+            head_axes = [None, None, None, None]
+            head_axes[1] = tp_axis  # shard tensor dim 1 (heads) onto the TP mesh axis
             cos_raw = torch.randn(1, cfg.full_heads, cfg.rows, cfg.head_dim // 2)
             sin_raw = torch.randn(1, cfg.full_heads, cfg.rows, cfg.head_dim // 2)
             cos_f, sin_f = stack_cos_sin(cos_raw, sin_raw)  # (1, H, rows, hd)
-            out["cos"] = from_torch(cos_f, device=submesh, dtype=ttnn.bfloat16, mesh_axes=[None, TP_AXIS, None, None])
-            out["sin"] = from_torch(sin_f, device=submesh, dtype=ttnn.bfloat16, mesh_axes=[None, TP_AXIS, None, None])
+            out["cos"] = from_torch(cos_f, device=submesh, dtype=ttnn.bfloat16, mesh_axes=head_axes)
+            out["sin"] = from_torch(sin_f, device=submesh, dtype=ttnn.bfloat16, mesh_axes=head_axes)
         out["trans"] = bf16_tensor(get_rot_transformation_mat(), device=submesh)
     return out
 
@@ -244,8 +252,19 @@ def _torch_ref(cfg: Cfg) -> torch.Tensor:
     return y
 
 
-def _gather(out) -> torch.Tensor:
-    ts = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(out)]
+def _gather(out, tp_axis: int) -> torch.Tensor:
+    # On a 2D mesh the output has TP shards along tp_axis and (for the ring strategy)
+    # identical replicas along the other axis. Pull ONE replica (other-axis coord 0),
+    # ordered by TP position, then concat. For a 1xTP submesh the other axis is a
+    # singleton so this selects every shard — backward compatible.
+    coords = list(out.tensor_topology().mesh_coords())
+    devs = ttnn.get_device_tensors(out)
+    rep_axis = 1 - tp_axis
+    sel = sorted(
+        ((int(c[tp_axis]), d) for c, d in zip(coords, devs) if int(c[rep_axis]) == 0),
+        key=lambda kv: kv[0],
+    )
+    ts = [ttnn.to_torch(d).float() for _, d in sel]
     if ts[0].ndim == 4 and ts[0].shape[1] > 1:  # head-split [1, H_dev, N, hd] -> concat heads
         full = torch.cat(ts, dim=1)  # [1, H, N, hd]
         return full[0].permute(1, 0, 2).reshape(full.shape[2], -1)  # [N, H*hd] head-contiguous
@@ -270,10 +289,10 @@ def _fused_links(op_override):
     return op_override if op_override is not None else 2  # BH bench fused = 2-link MUX default
 
 
-def _call_op(inp, submesh, sem, cfg, topology, *, use_device_op, pob, num_links, weight, bias, rope):
+def _call_op(inp, submesh, sem, cfg, topology, tp_axis, *, use_device_op, pob, num_links, weight, bias, rope):
     return ttnn.experimental.wan_fused_distributed_rmsnorm(
         inp["x"],
-        TP_AXIS,
+        tp_axis,
         submesh,
         sem,
         topology=topology,
@@ -291,28 +310,28 @@ def _call_op(inp, submesh, sem, cfg, topology, *, use_device_op, pob, num_links,
     )
 
 
-def _run_fused(inp, submesh, sem, cfg, topology, pob, op_override):
+def _run_fused(inp, submesh, sem, cfg, topology, tp_axis, pob, op_override):
     bias = inp.get("bias") if cfg.is_block else None
     return _call_op(
-        inp, submesh, sem, cfg, topology,
+        inp, submesh, sem, cfg, topology, tp_axis,
         use_device_op=True, pob=pob, num_links=_fused_links(op_override),
         weight=inp["weight"], bias=bias, rope=cfg.rope,
     )
 
 
-def _run_baseline(inp, submesh, sem, cfg, topology, op_override):
+def _run_baseline(inp, submesh, sem, cfg, topology, tp_axis, op_override):
     # op_override = composite link count: None on BH (default 1), GALAXY_LINKS on galaxy.
     if cfg.model == WAN:
         # Wan's composite C++ op fuses weight+RoPE in-op (the production baseline).
         return _call_op(
-            inp, submesh, sem, cfg, topology,
+            inp, submesh, sem, cfg, topology, tp_axis,
             use_device_op=False, pob=None, num_links=op_override,
             weight=inp["weight"], bias=None, rope=cfg.rope,
         )
     # LTX: composite RMSNorm (+static weight for non-block) then the *unfused* trailing op.
     weight = None if cfg.is_block else inp["weight"]
     normed = _call_op(
-        inp, submesh, sem, cfg, topology,
+        inp, submesh, sem, cfg, topology, tp_axis,
         use_device_op=False, pob=None, num_links=op_override,
         weight=weight, bias=None, rope=False,
     )
@@ -323,12 +342,12 @@ def _run_baseline(inp, submesh, sem, cfg, topology, op_override):
     return normed
 
 
-def _make_pob(inp, submesh, cfg, num_links):
+def _make_pob(inp, submesh, cfg, num_links, tp_axis):
     # Pass weight/RoPE + num_links so the stats-buffer geometry (chunk/window sizing
     # and the num_workers link-rounding) matches the program; a mismatch corrupts the AG.
     return ttnn.experimental.wan_fused_distributed_rmsnorm_create_stats_buffer(
         inp["x"],
-        TP_AXIS,
+        tp_axis,
         submesh,
         num_heads_per_device=cfg.heads,
         num_links=num_links,
@@ -339,7 +358,11 @@ def _make_pob(inp, submesh, cfg, num_links):
     )
 
 
-def _submesh(mesh_device, tp):
+def _resolve_submesh(mesh_device, tp, tp_axis):
+    if tp_axis == 0:
+        # TP rides the full mesh's axis-0 (the closed 4-wide ring); axis 1 replicates.
+        assert tuple(mesh_device.shape)[0] == tp, f"tp_axis=0 needs mesh rows==tp, got {tuple(mesh_device.shape)} tp={tp}"
+        return mesh_device
     return mesh_device if tuple(mesh_device.shape) == (1, tp) else mesh_device.create_submesh(ttnn.MeshShape(1, tp))
 
 
@@ -379,8 +402,8 @@ def _trace_and_time(submesh, run_ops, *, num_iters: int) -> float:
     return elapsed_us / num_iters
 
 
-def _bench_cfg(submesh, ccl, cfg: Cfg, topology, op_override) -> dict:
-    inp = _build(submesh, cfg)
+def _bench_cfg(submesh, ccl, cfg: Cfg, topology, tp_axis, op_override) -> dict:
+    inp = _build(submesh, cfg, tp_axis)
     methods = [m.strip() for m in _os.getenv("RMS_BENCH_METHODS", "baseline,fused").split(",") if m.strip()]
     iters = _ITERS[cfg.model]
     t: dict = {}
@@ -388,9 +411,9 @@ def _bench_cfg(submesh, ccl, cfg: Cfg, topology, op_override) -> dict:
     # failure and keep sweeping so the table shows what fuses vs. what doesn't.
     if "baseline" in methods:
         try:
-            sem = ccl.get_ag_ping_pong_semaphore(TP_AXIS)
+            sem = ccl.get_ag_ping_pong_semaphore(tp_axis)
             t["baseline"] = _trace_and_time(
-                submesh, lambda: _run_baseline(inp, submesh, sem, cfg, topology, op_override), num_iters=iters
+                submesh, lambda: _run_baseline(inp, submesh, sem, cfg, topology, tp_axis, op_override), num_iters=iters
             )
         except Exception as e:  # noqa: BLE001
             t["baseline_err"] = type(e).__name__
@@ -398,10 +421,11 @@ def _bench_cfg(submesh, ccl, cfg: Cfg, topology, op_override) -> dict:
     if "fused" in methods:
         try:
             links = _fused_links(op_override)
-            pobs = [_make_pob(inp, submesh, cfg, links) for _ in range(_PINGPONG)]
-            sems = [ccl.get_ag_ping_pong_semaphore(TP_AXIS) for _ in range(_PINGPONG)]
+            pobs = [_make_pob(inp, submesh, cfg, links, tp_axis) for _ in range(_PINGPONG)]
+            sems = [ccl.get_ag_ping_pong_semaphore(tp_axis) for _ in range(_PINGPONG)]
             run_ops = [
-                (lambda p=p, s=s: _run_fused(inp, submesh, s, cfg, topology, p, op_override)) for p, s in zip(pobs, sems)
+                (lambda p=p, s=s: _run_fused(inp, submesh, s, cfg, topology, tp_axis, p, op_override))
+                for p, s in zip(pobs, sems)
             ]
             t["fused"] = _trace_and_time(submesh, run_ops, num_iters=iters)
         except Exception as e:  # noqa: BLE001
@@ -441,26 +465,33 @@ def _write_csv(rows: list[dict], filename: str) -> None:
     logger.info(f"Wrote CSV: {path}")
 
 
-# mesh, device_params, model, tp, topology, op_override(=galaxy links; None on BH)
+# mesh, device_params, model, tp, topology, op_override(=galaxy links; None on BH), tp_axis
 _DP_GAL = {**line_params, "trace_region_size": 131072}
+_DP_GAL_RING = {**ring_params, "trace_region_size": 131072}
 _BENCH_PARAMS = [
-    ((2, 4), {**line_params, "trace_region_size": 90112}, WAN, 4, ttnn.Topology.Linear, None),
-    ((1, 8), {**ring_params, "trace_region_size": 90112}, WAN, 8, ttnn.Topology.Ring, None),
-    ((4, 8), _DP_GAL, WAN, 4, ttnn.Topology.Linear, GALAXY_LINKS),
-    ((4, 8), _DP_GAL, LTX, 2, ttnn.Topology.Linear, GALAXY_LINKS),
-    ((4, 8), _DP_GAL, LTX, 4, ttnn.Topology.Linear, GALAXY_LINKS),
+    ((2, 4), {**line_params, "trace_region_size": 90112}, WAN, 4, ttnn.Topology.Linear, None, 1),
+    ((1, 8), {**ring_params, "trace_region_size": 90112}, WAN, 8, ttnn.Topology.Ring, None, 1),
+    ((4, 8), _DP_GAL, WAN, 4, ttnn.Topology.Linear, GALAXY_LINKS, 1),
+    ((4, 8), _DP_GAL, LTX, 2, ttnn.Topology.Linear, GALAXY_LINKS, 1),
+    ((4, 8), _DP_GAL, LTX, 4, ttnn.Topology.Linear, GALAXY_LINKS, 1),
+    # TP=4 RING on the full-mesh 4-axis (replicate axis 1) — the production galaxy config.
+    ((4, 8), _DP_GAL_RING, WAN, 4, ttnn.Topology.Ring, GALAXY_LINKS, 0),
+    ((4, 8), _DP_GAL_RING, LTX, 4, ttnn.Topology.Ring, GALAXY_LINKS, 0),
 ]
-_BENCH_IDS = ["wan_tp4_line", "wan_tp8_ring", "wan_tp4_galaxy", "ltx_tp2_galaxy", "ltx_tp4_galaxy"]
+_BENCH_IDS = [
+    "wan_tp4_line", "wan_tp8_ring", "wan_tp4_galaxy", "ltx_tp2_galaxy", "ltx_tp4_galaxy",
+    "wan_tp4_ring", "ltx_tp4_ring",
+]
 
 
 @pytest.mark.parametrize(
-    ("mesh_device", "device_params", "model", "tp", "topology", "op_override"),
+    ("mesh_device", "device_params", "model", "tp", "topology", "op_override", "tp_axis"),
     [pytest.param(*p, id=i) for p, i in zip(_BENCH_PARAMS, _BENCH_IDS)],
     indirect=["mesh_device", "device_params"],
 )
-def test_bench(mesh_device, model, tp, topology, op_override):
+def test_bench(mesh_device, model, tp, topology, op_override, tp_axis):
     """Traced baseline vs fused timing for every config of one (model, topology)."""
-    submesh = _submesh(mesh_device, tp)
+    submesh = _resolve_submesh(mesh_device, tp, tp_axis)
     ccl = CCLManager(mesh_device=submesh, num_links=(op_override or 1), topology=topology)
     cfgs = _select(_make_cfgs(model, tp), "RMS_BENCH_ONLY")
     rows: list[dict] = []
@@ -469,7 +500,7 @@ def test_bench(mesh_device, model, tp, topology, op_override):
         row = {"cid": cfg.cid, "tp": cfg.tp, "rows": cfg.rows, "feat": cfg.feat_local,
                "heads": cfg.heads, "hd": cfg.head_dim, "pattern": cfg.pattern}
         try:  # a per-config crash (e.g. input alloc / device hiccup) must not lose the table
-            row.update(_bench_cfg(submesh, ccl, cfg, topology, op_override))
+            row.update(_bench_cfg(submesh, ccl, cfg, topology, tp_axis, op_override))
         except Exception as e:  # noqa: BLE001
             row["fused_err"] = row["baseline_err"] = type(e).__name__
             logger.warning(f"{cfg.cid} CONFIG FAILED: {str(e)[:160]}")
@@ -484,40 +515,43 @@ def test_bench(mesh_device, model, tp, topology, op_override):
 # ---------------------------------------------------------------------------
 
 _CORR_PARAMS = [
-    ((4, 8), _DP_GAL, WAN, 4, ttnn.Topology.Linear, GALAXY_LINKS),
-    ((4, 8), _DP_GAL, LTX, 2, ttnn.Topology.Linear, GALAXY_LINKS),
-    ((4, 8), _DP_GAL, LTX, 4, ttnn.Topology.Linear, GALAXY_LINKS),
+    ((4, 8), _DP_GAL, WAN, 4, ttnn.Topology.Linear, GALAXY_LINKS, 1),
+    ((4, 8), _DP_GAL, LTX, 2, ttnn.Topology.Linear, GALAXY_LINKS, 1),
+    ((4, 8), _DP_GAL, LTX, 4, ttnn.Topology.Linear, GALAXY_LINKS, 1),
+    # TP=4 RING on the full-mesh 4-axis (replicate axis 1).
+    ((4, 8), _DP_GAL_RING, WAN, 4, ttnn.Topology.Ring, GALAXY_LINKS, 0),
+    ((4, 8), _DP_GAL_RING, LTX, 4, ttnn.Topology.Ring, GALAXY_LINKS, 0),
 ]
-_CORR_IDS = ["wan_tp4", "ltx_tp2", "ltx_tp4"]
+_CORR_IDS = ["wan_tp4", "ltx_tp2", "ltx_tp4", "wan_tp4_ring", "ltx_tp4_ring"]
 
 
 @pytest.mark.parametrize(
-    ("mesh_device", "device_params", "model", "tp", "topology", "op_override"),
+    ("mesh_device", "device_params", "model", "tp", "topology", "op_override", "tp_axis"),
     [pytest.param(*p, id=i) for p, i in zip(_CORR_PARAMS, _CORR_IDS)],
     indirect=["mesh_device", "device_params"],
 )
-def test_corr_det(mesh_device, model, tp, topology, op_override):
+def test_corr_det(mesh_device, model, tp, topology, op_override, tp_axis):
     """Fused vs fp32-PyTorch reference AND vs on-device composite baseline, plus a
     10x bit-exact determinism check. CORR_FRESH_POB=1 allocates a fresh stats buffer
     per run (surfaces uninitialized-DRAM reads); CORR_LOCALIZE=1 prints divergent tokens."""
-    submesh = _submesh(mesh_device, tp)
+    submesh = _resolve_submesh(mesh_device, tp, tp_axis)
     ccl = CCLManager(mesh_device=submesh, num_links=(op_override or 1), topology=topology)
-    ag = ccl.get_ag_ping_pong_semaphore(TP_AXIS)
+    ag = ccl.get_ag_ping_pong_semaphore(tp_axis)
     fresh_pob = _os.getenv("CORR_FRESH_POB") == "1"
     links = _fused_links(op_override)
     flagged = []
 
     for cfg in _select(_make_cfgs(model, tp), "CORR_ONLY"):
-        inp = _build(submesh, cfg)
-        pob = _make_pob(inp, submesh, cfg, links)
+        inp = _build(submesh, cfg, tp_axis)
+        pob = _make_pob(inp, submesh, cfg, links, tp_axis)
         ref = _torch_ref(cfg)
-        comp = _gather(_run_baseline(inp, submesh, ag, cfg, topology, op_override))
-        out0 = _gather(_run_fused(inp, submesh, ag, cfg, topology, pob, op_override))
+        comp = _gather(_run_baseline(inp, submesh, ag, cfg, topology, tp_axis, op_override), tp_axis)
+        out0 = _gather(_run_fused(inp, submesh, ag, cfg, topology, tp_axis, pob, op_override), tp_axis)
 
         ndiff, maxdelta, worst_oi = 0, 0.0, None
         for _ in range(9):  # 10 fused runs total, same input -> must be bit-exact
-            p = _make_pob(inp, submesh, cfg, links) if fresh_pob else pob
-            oi = _gather(_run_fused(inp, submesh, ag, cfg, topology, p, op_override))
+            p = _make_pob(inp, submesh, cfg, links, tp_axis) if fresh_pob else pob
+            oi = _gather(_run_fused(inp, submesh, ag, cfg, topology, tp_axis, p, op_override), tp_axis)
             d = (oi - out0).abs().max().item()
             if d > 0.0:
                 ndiff += 1
