@@ -1021,7 +1021,7 @@ TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreMultiBlockL1AccComputeMatmul) {
 // since multi-block matmul kernel uses datacopy from SRC to DST which is not supported by MxFp4_2x format.
 // We can still verify the correctness of the optimization with single block matmul.
 // L1 acc doesn't work in this case since it also relies on datacopy from SRC to DST for the accumulation.
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixTestSingleCoreMultiBlockComputeMatmulMxFp4X2) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixTestSingleCoreSingleBlockComputeMatmulMxFp4X2) {
     unit_tests::compute::matmul::BlockedMatmulConfig config{
         .M = 2,
         .K = 2,

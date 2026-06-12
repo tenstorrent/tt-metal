@@ -116,7 +116,6 @@ ALWI void mm_init(
     PACK((llk_pack_init(out_cb_id)));
 #else
     LLK_ASSERT(transpose == 0, "Matmul transpose not yet implemented for Quasar");
-
     UNPACK((llk_unpack_hw_configure(in1_cb_id, in0_cb_id)));
     UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id)));
 
@@ -275,7 +274,6 @@ ALWI void mm_block_init(
     PACK((llk_pack_init<PackMode::Default, false /* zero_output */>(out_cb_id)));
 #else
     LLK_ASSERT(transpose == 0, "Matmul transpose not yet implemented for Quasar");
-
     UNPACK((llk_unpack_hw_configure(in1_cb_id, in0_cb_id)));
     UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id, ct_dim, rt_dim, kt_dim)));
 

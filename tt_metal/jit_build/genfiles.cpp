@@ -372,14 +372,17 @@ void emit_formats_array(
     std::string_view array_name,
     int array_size,
     const std::vector<DataFormat>& formats) {
-    // Remap host-only enum values to HW values for device compilation.
-    // Int16 has a unique host value (13) to avoid colliding with UInt16 (9),
-    // but the Quasar HW expects Int16 = 9 in tensix_types.h.
+    // Remap host-only enum values to HW values for device compilation. Several
+    // formats use a host enum value that differs from the Quasar HW value in
+    // tensix_types.h (to keep host enum values unique / avoid collisions):
+    //   - Int16:      host 13 (UInt16 owns 9 on host) -> HW 9
+    //   - MxFp4_2x_B: host 29 (UInt32 owns 24 on host) -> HW 24
     auto as_int = [](DataFormat f) -> std::underlying_type_t<DataFormat> {
-        if (f == DataFormat::Int16) {
-            return 9;  // HW value from tensix_types.h
+        switch (f) {
+            case DataFormat::Int16: return 9;
+            case DataFormat::MxFp4_2x_B: return 24;
+            default: return static_cast<std::underlying_type_t<DataFormat>>(f);
         }
-        return static_cast<std::underlying_type_t<DataFormat>>(f);
     };
     emit_formats_array(out, array_type, array_name, array_size, formats | std::views::transform(as_int));
 }

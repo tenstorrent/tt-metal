@@ -521,10 +521,12 @@ void run_single_core_reduce_program(
     if (test_config.input_format == tt::DataFormat::MxFp4) {
         std::vector<bfloat16> native = unpack_uint32_vec_into_bfloat16_vec(src_vec);
         std::vector<float> in_floats(native.begin(), native.end());
+        // src_vec is already tile-major (TILED_NFACES), so pack as tile-major (no row-major
+        // transform) - matching how the matmul stimulus feeds tile-major data.
         std::vector<uint32_t> mxfp4_packed =
-            tt::tt_metal::pack_as_mxfp4_tiles(tt::stl::make_const_span(in_floats), /*row_major_input=*/true);
+            tt::tt_metal::pack_as_mxfp4_tiles(tt::stl::make_const_span(in_floats), /*row_major_input=*/false);
         tt_metal::detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), mxfp4_packed);
-        // Decode the quantized values back (tile/face order) and repack as bf16 for the golden source.
+        // Decode the quantized values back (tile-major) and repack as bf16 for the golden source.
         std::vector<float> quantized = tt::tt_metal::unpack_mxfp4_tiles_into_float_vec(
             tt::stl::make_const_span(mxfp4_packed), /*row_major_output=*/false);
         src_vec.resize(quantized.size() / 2);
