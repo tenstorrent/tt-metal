@@ -330,8 +330,6 @@ ALWI void fast_tilize_block(
         // Always program the current unit dim at block entry.
         uint32_t prev_chunk = 0;
 
-        PACK((llk_pack_fast_tilize_row_begin(ocb, output_tile_index)));
-
         while (tiles_done < block) {
             // BH fast-tilize MOP supports unit_dim 2, 3, 4 (not 1).
             // Avoid chunk=1 by splitting: remaining=5 → 2+3 instead of 4+1.
@@ -349,15 +347,13 @@ ALWI void fast_tilize_block(
             }
             UNPACK((llk_unpack_fast_tilize_block(icb, input_tile_index, chunk, tiles_done)));
             MATH((llk_math_fast_tilize_block_(0, icb, 4)));
-            PACK((llk_pack_fast_tilize_row_chunk(0, ocb, chunk)));
+            PACK((llk_pack_fast_tilize_block(0, ocb, output_tile_index + tiles_done, chunk)));
 
             MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
             PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
 
             tiles_done += chunk;
         }
-
-        PACK((llk_pack_fast_tilize_row_end()));
     }
 #else
     uint32_t full_dim = block;
