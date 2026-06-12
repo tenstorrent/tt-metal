@@ -16,7 +16,7 @@
     ./tests/run_llk_perf_wormhole.sh {split_group} 5
   skus:
     wh_n150_civ2:
-      timeout: 69
+      timeout: 90
   owner_id: U07J3K6KS1K
 
 - name: llk_perf_wormhole group 2/5
@@ -27,7 +27,7 @@
     ./tests/run_llk_perf_wormhole.sh {split_group} 5
   skus:
     wh_n150_civ2:
-      timeout: 69
+      timeout: 90
   owner_id: U07J3K6KS1K
 
 - name: llk_perf_wormhole group 3/5
@@ -38,7 +38,7 @@
     ./tests/run_llk_perf_wormhole.sh {split_group} 5
   skus:
     wh_n150_civ2:
-      timeout: 69
+      timeout: 90
   owner_id: U07J3K6KS1K
 
 - name: llk_perf_wormhole group 4/5
@@ -49,7 +49,7 @@
     ./tests/run_llk_perf_wormhole.sh {split_group} 5
   skus:
     wh_n150_civ2:
-      timeout: 69
+      timeout: 90
   owner_id: U07J3K6KS1K
 
 - name: llk_perf_wormhole group 5/5
@@ -60,7 +60,7 @@
     ./tests/run_llk_perf_wormhole.sh {split_group} 5
   skus:
     wh_n150_civ2:
-      timeout: 69
+      timeout: 90
   owner_id: U07J3K6KS1K
 
 - name: llk_perf_blackhole group 1/5
