@@ -122,7 +122,7 @@ TTT_MESH_SHAPE = (1, 1)
 # Worker memory budget. 32 is comfortably below the [1, 1] N300 chip
 # capacity for a 1B Llama instruct at bf16/bfp8 with 2K context, and
 # divides cleanly into typical batch_size * num_generations products.
-TTT_MAX_BATCH_SIZE = 16
+TTT_MAX_BATCH_SIZE = 32
 TTT_MAX_SEQ_LEN = 2048
 
 # Push weights every step. GRPO updates the policy each gradient step,
