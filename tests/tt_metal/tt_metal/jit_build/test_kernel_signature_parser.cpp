@@ -194,4 +194,57 @@ TEST(KernelSignatureParser, StressLargeNoisySource) {
     std::printf("[stress] parsed %.2f MB (%d blocks) in %.1f us  =>  %.1f MB/s\n", mb, kBlocks, us, mb / (us / 1e6));
 }
 
+// --- validate_signature_against_schema -------------------------------------------------------
+
+// Exact match: template params == CTAs, function params == RTAs ∪ CRTAs.
+TEST(KernelSignatureSchema, MatchPasses) {
+    KernelMainSignature sig;
+    sig.name = "k";
+    sig.template_param_names = {"block_h", "block_w"};
+    sig.fn_param_names = {"start_tile_id", "num_tiles", "scaler"};
+    EXPECT_NO_THROW(
+        validate_signature_against_schema(sig, {"block_h", "block_w"}, {"start_tile_id", "num_tiles"}, {"scaler"}));
+}
+
+// Set-based, not positional: a different declaration order still matches (the shim binds by name).
+TEST(KernelSignatureSchema, OrderIndependent) {
+    KernelMainSignature sig;
+    sig.name = "k";
+    sig.template_param_names = {"block_w", "block_h"};
+    sig.fn_param_names = {"scaler", "num_tiles", "start_tile_id"};
+    EXPECT_NO_THROW(
+        validate_signature_against_schema(sig, {"block_h", "block_w"}, {"start_tile_id", "num_tiles"}, {"scaler"}));
+}
+
+// A function parameter the host never registered -> throw.
+TEST(KernelSignatureSchema, UnregisteredFunctionParamThrows) {
+    KernelMainSignature sig;
+    sig.name = "k";
+    sig.fn_param_names = {"start_tile_id", "typo_name"};
+    EXPECT_THROW(validate_signature_against_schema(sig, {}, {"start_tile_id"}, {}), std::runtime_error);
+}
+
+// A registered runtime arg the kernel doesn't take -> throw (the silent-drift case).
+TEST(KernelSignatureSchema, UnusedRegisteredArgThrows) {
+    KernelMainSignature sig;
+    sig.name = "k";
+    sig.fn_param_names = {"start_tile_id"};
+    EXPECT_THROW(validate_signature_against_schema(sig, {}, {"start_tile_id", "num_tiles"}, {}), std::runtime_error);
+}
+
+// A template parameter that doesn't match a registered CTA -> throw.
+TEST(KernelSignatureSchema, CtaMismatchThrows) {
+    KernelMainSignature sig;
+    sig.name = "k";
+    sig.template_param_names = {"block_h"};
+    EXPECT_THROW(validate_signature_against_schema(sig, {"block_w"}, {}, {}), std::runtime_error);
+}
+
+// An empty schema matches a kernel that takes no arguments.
+TEST(KernelSignatureSchema, EmptyMatches) {
+    KernelMainSignature sig;
+    sig.name = "k";
+    EXPECT_NO_THROW(validate_signature_against_schema(sig, {}, {}, {}));
+}
+
 }  // namespace tt::tt_metal

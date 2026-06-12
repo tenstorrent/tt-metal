@@ -4,6 +4,7 @@
 
 #include "jit_build/kernel_signature_parser.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <stdexcept>
 #include <string>
@@ -351,6 +352,77 @@ std::optional<KernelMainSignature> parse_kernel_main_signature(const std::string
     sig.fn_param_names = extract_param_names(fn_body, "function parameter");
 
     return sig;
+}
+
+namespace {
+
+// Join names for an error message: "a, b, c" (or "<none>" if empty).
+std::string join_names(const std::vector<std::string>& names) {
+    if (names.empty()) {
+        return "<none>";
+    }
+    std::string s;
+    for (size_t i = 0; i < names.size(); ++i) {
+        s += (i ? ", " : "") + names[i];
+    }
+    return s;
+}
+
+// Compare the kernel-declared names against the host-registered names as sets and throw a clear
+// two-sided error if they differ. `kernel_kind` / `host_kind` are human labels for the message
+// ("template parameter" / "compile-time argument", etc.). The lists are tiny (a handful of args
+// per kernel), so linear membership scans are fine.
+void check_name_sets(
+    const std::vector<std::string>& kernel_names,
+    const std::vector<std::string>& host_names,
+    const char* kernel_kind,
+    const char* host_kind,
+    const std::string& entry_name) {
+    std::vector<std::string> unregistered;  // kernel declares it, host didn't register it
+    std::vector<std::string> unused;        // host registered it, kernel doesn't take it
+    for (const auto& k : kernel_names) {
+        if (std::find(host_names.begin(), host_names.end(), k) == host_names.end()) {
+            unregistered.push_back(k);
+        }
+    }
+    for (const auto& h : host_names) {
+        if (std::find(kernel_names.begin(), kernel_names.end(), h) == kernel_names.end()) {
+            unused.push_back(h);
+        }
+    }
+    if (unregistered.empty() && unused.empty()) {
+        return;
+    }
+    std::string msg =
+        "TT_KERNEL entry '" + entry_name + "': " + kernel_kind + "s do not match the registered " + host_kind + "s.";
+    if (!unregistered.empty()) {
+        msg += std::string("\n  ") + kernel_kind + "(s) with no matching registered " + host_kind + ": " +
+               join_names(unregistered);
+    }
+    if (!unused.empty()) {
+        msg += std::string("\n  registered ") + host_kind + "(s) not taken as a " + kernel_kind + ": " +
+               join_names(unused);
+    }
+    throw std::runtime_error(msg);
+}
+
+}  // namespace
+
+void validate_signature_against_schema(
+    const KernelMainSignature& sig,
+    const std::vector<std::string>& cta_names,
+    const std::vector<std::string>& rta_names,
+    const std::vector<std::string>& crta_names) {
+    // CTAs: template parameters must name exactly the registered named compile-time args.
+    check_name_sets(sig.template_param_names, cta_names, "template parameter", "compile-time argument", sig.name);
+
+    // Runtime args: function parameters must name exactly the union of named RTAs and CRTAs. The
+    // kernel can't distinguish the two, so they are checked together.
+    std::vector<std::string> runtime_names;
+    runtime_names.reserve(rta_names.size() + crta_names.size());
+    runtime_names.insert(runtime_names.end(), rta_names.begin(), rta_names.end());
+    runtime_names.insert(runtime_names.end(), crta_names.begin(), crta_names.end());
+    check_name_sets(sig.fn_param_names, runtime_names, "function parameter", "runtime argument", sig.name);
 }
 
 }  // namespace tt::tt_metal

@@ -342,6 +342,20 @@ void jit_build_genfiles_kernel_include(
             fmt::join(sig->fn_param_names, ", "),
             source_desc);
         if (is_metal2) {
+            // Cross-check the kernel's declared parameters against the host-registered schema
+            // before generating the shim, so a name typo or schema drift fails here with a clear
+            // message rather than as a compile error buried in generated code (kernel param the
+            // host never registered) or a silently-unused arg (registered name the kernel never
+            // takes).
+            std::vector<std::string> cta_names;
+            settings.process_named_compile_time_args(
+                [&cta_names](const std::unordered_map<std::string, uint32_t>& named) {
+                    for (const auto& entry : named) {
+                        cta_names.push_back(entry.first);
+                    }
+                });
+            validate_signature_against_schema(
+                *sig, cta_names, settings.get_runtime_arg_names(), settings.get_common_runtime_arg_names());
             kernel_header_content += generate_kernel_main_shim(*sig);
         } else {
             // A TT_KERNEL entry has no hand-written kernel_main(), so without the generated
