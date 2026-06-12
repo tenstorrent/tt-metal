@@ -184,11 +184,10 @@ std::vector<std::string> split_top_level_commas(const std::string& s) {
 std::string strip_const(const std::string& type) {
     constexpr std::string_view kw = "const";
     std::string t = type;
-    if (t.size() > kw.size() && std::string_view(t).substr(0, kw.size()) == kw && is_ws(t[kw.size()])) {
+    if (t.size() > kw.size() && std::string_view(t).starts_with(kw) && is_ws(t[kw.size()])) {
         t = trim(t.substr(kw.size()));
     }
-    if (t.size() > kw.size() && std::string_view(t).substr(t.size() - kw.size()) == kw &&
-        is_ws(t[t.size() - kw.size() - 1])) {
+    if (t.size() > kw.size() && std::string_view(t).ends_with(kw) && is_ws(t[t.size() - kw.size() - 1])) {
         t = trim(t.substr(0, t.size() - kw.size()));
     }
     return t;
