@@ -611,6 +611,7 @@ def main() -> None:
             mesh_shape=GLOBAL_MESH_SHAPE,
             sp_axis=0,  # GLOBAL_MESH_SHAPE = (sp, tp) — SP is axis 0
             num_users=NUM_USERS,
+            chunk_size_global=CHUNK_SIZE,  # block-cyclic period of the non-balanced prefill cache
             path=table_path,
         )
         send_kv_chunk_table(table_path)

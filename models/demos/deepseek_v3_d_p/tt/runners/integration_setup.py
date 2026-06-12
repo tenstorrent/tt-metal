@@ -28,7 +28,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
-    create_kv_chunk_address_table_kimi,
+    create_kv_chunk_address_table_deepseek,
 )
 
 # bfp8 [1, 1, 32, 576] KV chunk: 18 tiles * 1088 B = 19584 B.
@@ -51,21 +51,24 @@ def _serialize_table_to_path(table, path: str) -> None:
 
 
 def build_and_serialize_kv_chunk_table(
-    *, mesh_device, kvpe_cache, seq_len, num_layers, mesh_shape, sp_axis, num_users, path
+    *, mesh_device, kvpe_cache, seq_len, num_layers, mesh_shape, sp_axis, num_users, chunk_size_global, path
 ) -> str:
-    """Build the KV chunk address table from the device KV layout (via the shared
-    kv_cache_utils.create_kv_chunk_address_table_kimi) and serialize it to ``path`` for
-    the inference server to forward via SET_TABLE. Returns the path on success.
+    """Build the KV chunk address table from the device KV layout and serialize it to ``path``
+    for the inference server to forward via SET_TABLE. Returns the path on success.
 
-    Uses the kimi (non-balanced, sequential-layout) builder, which lays out one slot per
-    user — matching the user-major KV cache batch (slot = user*num_layers + layer)."""
+    Uses the DeepSeek BLOCK-CYCLIC builder (create_kv_chunk_address_table_deepseek): the DeepSeek
+    non-balanced prefill cache stores positions block-cyclic across the SP shards (NOT the Kimi
+    contiguous-block layout), so each natural position must map to its true block-cyclic storage
+    chip + offset — otherwise a partial migration copies the wrong (un-prefilled) storage chunks
+    and the migrated KV fails its PCC check. ``chunk_size_global`` is the prefill chunk size (the
+    block-cyclic period; same value passed to blockcyclic_positions)."""
     cfg = _disaggregation().KvChunkAddressTableConfig()
     cfg.num_layers = num_layers
     cfg.max_sequence_length = seq_len
     cfg.num_slots = num_users
     cfg.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     cfg.chunk_size_bytes = _CHUNK_SIZE_BYTES
-    table = create_kv_chunk_address_table_kimi(
+    table = create_kv_chunk_address_table_deepseek(
         config=cfg,
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,
@@ -74,6 +77,7 @@ def build_and_serialize_kv_chunk_table(
         tt_kvpe_cache=kvpe_cache,
         chunk_size_bytes=_CHUNK_SIZE_BYTES,
         num_users=num_users,
+        chunk_size_global=chunk_size_global,
     )
     _serialize_table_to_path(table, path)
     logger.info(f"[migration] KV chunk address table serialized to {path} (entries={table.total_entries()})")
