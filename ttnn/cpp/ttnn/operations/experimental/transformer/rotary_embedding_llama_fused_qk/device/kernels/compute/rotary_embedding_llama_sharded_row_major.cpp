@@ -8,7 +8,8 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
 #include "api/compute/matmul.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 ALWI void ACQ() {
     tile_regs_acquire();
@@ -25,41 +26,40 @@ void kernel_main() {
     // if (!has_work) {
     //     return;
     // }
-    const bool is_q = get_arg_val<uint32_t>(0);
+    const bool is_q = get_arg(args::is_q);
 
     // First 6 args for q and k heads
     // - First 3 are for q
     // - Next 3 are for k
-    constexpr uint32_t q_in_cb = get_compile_time_arg_val(0);
-    constexpr uint32_t q_out_cb = get_compile_time_arg_val(1);
-    constexpr uint32_t q_Ht = get_compile_time_arg_val(2);
-    constexpr uint32_t k_in_cb = get_compile_time_arg_val(3);
-    constexpr uint32_t k_out_cb = get_compile_time_arg_val(4);
-    constexpr uint32_t k_Ht = get_compile_time_arg_val(5);
-    uint32_t in_cb = q_in_cb;
-    uint32_t out_cb = q_out_cb;
+    // q/k in/out CBs are selected at runtime from is_q; both candidate DFBs are bound on
+    // this kernel, so the runtime-dynamic CB id flows through the DFBAccessor->uint32_t
+    // implicit conversion.
+    constexpr uint32_t q_Ht = get_arg(args::q_Ht);
+    constexpr uint32_t k_Ht = get_arg(args::k_Ht);
+    uint32_t in_cb = dfb::q_in;
+    uint32_t out_cb = dfb::q_out;
     uint32_t Ht = q_Ht;
     if (!is_q) {
-        in_cb = k_in_cb;
-        out_cb = k_out_cb;
+        in_cb = dfb::k_in;
+        out_cb = dfb::k_out;
         Ht = k_Ht;
     }
 
-    constexpr uint32_t Wt = get_compile_time_arg_val(6);  // How many tiles in wrapped RM inputs
+    constexpr uint32_t Wt = get_arg(args::Wt);  // How many tiles in wrapped RM inputs
 
-    constexpr uint32_t cos_cb = get_compile_time_arg_val(7);
-    constexpr uint32_t sin_cb = get_compile_time_arg_val(8);
-    constexpr uint32_t trans_mat_cb = get_compile_time_arg_val(9);
+    constexpr auto cos_cb = dfb::cos;
+    constexpr auto sin_cb = dfb::sin;
+    constexpr auto trans_mat_cb = dfb::trans_mat;
 
-    constexpr uint32_t rotated_in_interm_cb = get_compile_time_arg_val(10);
-    constexpr uint32_t cos_interm_cb = get_compile_time_arg_val(11);
-    constexpr uint32_t sin_interm_cb = get_compile_time_arg_val(12);
+    constexpr auto rotated_in_interm_cb = dfb::rotated_in_interm;
+    constexpr auto cos_interm_cb = dfb::cos_interm;
+    constexpr auto sin_interm_cb = dfb::sin_interm;
 
-    CircularBuffer in_cb_obj(in_cb);
-    CircularBuffer out_cb_obj(out_cb);
-    CircularBuffer rotated_in_interm_cb_obj(rotated_in_interm_cb);
-    CircularBuffer cos_interm_cb_obj(cos_interm_cb);
-    CircularBuffer sin_interm_cb_obj(sin_interm_cb);
+    DataflowBuffer in_cb_obj(in_cb);
+    DataflowBuffer out_cb_obj(out_cb);
+    DataflowBuffer rotated_in_interm_cb_obj(rotated_in_interm_cb);
+    DataflowBuffer cos_interm_cb_obj(cos_interm_cb);
+    DataflowBuffer sin_interm_cb_obj(sin_interm_cb);
 
     mm_init(in_cb, trans_mat_cb, out_cb);
     binary_op_init_common(rotated_in_interm_cb, sin_cb, sin_interm_cb);  // General Init for all binary ops
