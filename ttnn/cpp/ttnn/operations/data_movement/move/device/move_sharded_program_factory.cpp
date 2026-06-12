@@ -17,6 +17,14 @@ namespace ttnn::prim {
 
 using namespace tt::tt_metal;
 
+MoveShardedReaderArgs compute_move_sharded_reader_args(const Tensor& input, const Tensor& output) {
+    const uint32_t total_size_bytes = input.buffer()->aligned_size_per_bank();
+    const uint32_t move_chunk_size_bytes = output.buffer()->address() - input.buffer()->address();
+    const uint32_t num_chunks = total_size_bytes / move_chunk_size_bytes;
+    const uint32_t remainder_chunk_size_bytes = total_size_bytes % move_chunk_size_bytes;
+    return {total_size_bytes, num_chunks, move_chunk_size_bytes, remainder_chunk_size_bytes};
+}
+
 ProgramDescriptor MoveShardedProgramFactory::create_descriptor(
     const MoveOperationAttributes& /*operation_attributes*/,
     const MoveTensorArgs& tensor_args,
@@ -39,16 +47,18 @@ ProgramDescriptor MoveShardedProgramFactory::create_descriptor(
     const uint32_t src_cb_sharded = tt::CBIndex::c_0;
     const uint32_t dst_cb_sharded = tt::CBIndex::c_1;
 
-    const uint32_t total_size_bytes = input.buffer()->aligned_size_per_bank();
+    // Address-derived reader args — single source of truth shared with
+    // MoveDeviceOperation::get_dynamic_runtime_args, which re-applies them on every cache hit.
+    const auto reader_args = compute_move_sharded_reader_args(input, output);
+    const uint32_t total_size_bytes = reader_args.total_size_bytes;
+    const uint32_t num_chunks = reader_args.num_chunks;
+    const uint32_t move_chunk_size_bytes = reader_args.move_chunk_size_bytes;
+    const uint32_t remainder_chunk_size_bytes = reader_args.remainder_chunk_size_bytes;
     const uint32_t page_size_bytes = input.buffer()->aligned_page_size();
 
     Buffer* src_buffer = input.buffer();
     Buffer* dst_buffer = output.buffer();
 
-    const uint32_t input_buffer_address = src_buffer->address();
-    const uint32_t output_buffer_address = dst_buffer->address();
-
-    const uint32_t move_chunk_size_bytes = output_buffer_address - input_buffer_address;
     TT_FATAL(
         src_buffer->alignment() == dst_buffer->alignment(),
         "Expected input buffer alignment ({} B) and output buffer alignment ({} B) to be equal",
@@ -58,8 +68,6 @@ ProgramDescriptor MoveShardedProgramFactory::create_descriptor(
         move_chunk_size_bytes % src_buffer->alignment() == 0,
         "Expected chunk size bytes to move to be {} byte aligned.",
         src_buffer->alignment());
-    const uint32_t num_chunks = total_size_bytes / move_chunk_size_bytes;
-    const uint32_t remainder_chunk_size_bytes = total_size_bytes % move_chunk_size_bytes;
 
     ProgramDescriptor desc;
 
@@ -97,13 +105,11 @@ ProgramDescriptor MoveShardedProgramFactory::create_descriptor(
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_desc.config = DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
 
-    // Runtime args derive from the address arithmetic (output_addr - input_addr) and
-    // therefore must be recomputed every call.  We deliberately emit them as plain
-    // scalars (no Buffer* / BufferBinding) so the adapter's resolved bindings stay
-    // empty and the slow cache-hit path runs create_descriptor() again — which
-    // recomputes move_chunk_size_bytes, num_chunks, remainder_chunk_size_bytes
-    // from the freshly-allocated buffer addresses.  CB addresses are still patched
-    // via desc.cbs[*].buffer in apply_descriptor_runtime_args().
+    // num_chunks / move_chunk_size_bytes / remainder derive from the address arithmetic
+    // (output_addr - input_addr), so they change whenever the buffers are re-allocated. They are
+    // emitted as plain scalars here at build time; on a cache hit they are re-applied (not rebuilt)
+    // by MoveDeviceOperation::get_dynamic_runtime_args via the same compute_move_sharded_reader_args
+    // helper, while the src/dst CB addresses are patched via desc.cbs[*].buffer.
     const auto cores = corerange_to_cores(shard_grid, std::nullopt, true);
     for (const auto& core : cores) {
         reader_desc.emplace_runtime_args(

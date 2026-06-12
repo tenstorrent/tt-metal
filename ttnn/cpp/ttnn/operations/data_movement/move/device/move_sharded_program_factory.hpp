@@ -10,6 +10,17 @@
 
 namespace ttnn::prim {
 
+// Address-derived reader args for the in-place sharded move (chunk size = output_addr - input_addr).
+// Single source of truth: computed here once and used both by the factory at build time and by
+// MoveDeviceOperation::get_dynamic_runtime_args to re-apply them on every cache hit.
+struct MoveShardedReaderArgs {
+    uint32_t total_size_bytes;
+    uint32_t num_chunks;
+    uint32_t move_chunk_size_bytes;
+    uint32_t remainder_chunk_size_bytes;
+};
+MoveShardedReaderArgs compute_move_sharded_reader_args(const Tensor& input, const Tensor& output);
+
 struct MoveShardedProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const MoveOperationAttributes& operation_attributes,

@@ -35,6 +35,13 @@
 
 namespace ttnn::device_operation {
 
+// Read ONCE at startup, not per dispatch. Off by default (zero behavioral change); CI sets the env
+// to make a descriptor slow-path rebuild on a cache hit fail loudly (see the TT_FATAL below). A
+// namespace-scope inline variable avoids the function-local-static init guard that would otherwise
+// run on every slow-path dispatch.
+inline const bool g_forbid_descriptor_rebuild_on_cache_hit =
+    std::getenv("TT_METAL_FORBID_DESCRIPTOR_REBUILD_ON_CACHE_HIT") != nullptr;
+
 template <typename T>
 using AdaptedCachedMeshWorkload = tt::tt_metal::program_cache::detail::AdaptedCachedMeshWorkload<T>;
 
@@ -621,10 +628,8 @@ public:
                         // by default (zero behavioral change), flipped on in CI via
                         // TT_METAL_FORBID_DESCRIPTOR_REBUILD_ON_CACHE_HIT to fail loudly and name the
                         // offending op. Mirrors set_program_cache_misses_allowed.
-                        [[maybe_unused]] static const bool forbid_descriptor_rebuild_on_cache_hit =
-                            std::getenv("TT_METAL_FORBID_DESCRIPTOR_REBUILD_ON_CACHE_HIT") != nullptr;
                         TT_FATAL(
-                            !forbid_descriptor_rebuild_on_cache_hit,
+                            !g_forbid_descriptor_rebuild_on_cache_hit,
                             "DeviceOperation '{}' fell to the descriptor slow-path rebuild on a "
                             "program-cache hit: it declared neither Buffer* runtime-arg bindings nor "
                             "get_dynamic_runtime_args(), so create_descriptor() is re-run every dispatch "

@@ -122,12 +122,9 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> MoveDeviceOperation::get_dynamic_ru
     }
     const Tensor& input = tensor_args.input_tensor;
     Tensor& output = tensor_return_value;
-    // Mirror MoveShardedProgramFactory::create_descriptor's reader-arg derivation, recomputed from the
-    // CURRENT buffers (their addresses change across dispatches).
-    const uint32_t total_size_bytes = input.buffer()->aligned_size_per_bank();
-    const uint32_t move_chunk_size_bytes = output.buffer()->address() - input.buffer()->address();
-    const uint32_t num_chunks = total_size_bytes / move_chunk_size_bytes;
-    const uint32_t remainder_chunk_size_bytes = total_size_bytes % move_chunk_size_bytes;
+    // Same derivation the factory uses at build time (single source of truth), recomputed from the
+    // CURRENT buffers since their addresses change across dispatches.
+    const auto reader_args = compute_move_sharded_reader_args(input, output);
 
     // Reader is kernel 0; its args are [0]=total_size_bytes (stable, shape-derived), [1]=num_chunks,
     // [2]=move_chunk_size_bytes, [3]=remainder_chunk_size_bytes. Re-apply the three address-derived
@@ -136,9 +133,9 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> MoveDeviceOperation::get_dynamic_ru
     const auto cores = tt::tt_metal::corerange_to_cores(input.shard_spec().value().grid, std::nullopt, true);
     dynamic_args.reserve(cores.size() * 3);
     for (const auto& core : cores) {
-        dynamic_args.push_back({kReaderKernelIdx, core, 1, num_chunks});
-        dynamic_args.push_back({kReaderKernelIdx, core, 2, move_chunk_size_bytes});
-        dynamic_args.push_back({kReaderKernelIdx, core, 3, remainder_chunk_size_bytes});
+        dynamic_args.push_back({kReaderKernelIdx, core, 1, reader_args.num_chunks});
+        dynamic_args.push_back({kReaderKernelIdx, core, 2, reader_args.move_chunk_size_bytes});
+        dynamic_args.push_back({kReaderKernelIdx, core, 3, reader_args.remainder_chunk_size_bytes});
     }
     return dynamic_args;
 }
