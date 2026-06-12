@@ -78,8 +78,10 @@ redundant (~29 MB q + ~7 MB w vs ~10 MB k at QC=4). Multicasting them (one core 
 broadcasts L1→L1 to the group's cores; receivers wait on a semaphore — the `ring_joint_sdpa`
 `chain_link.hpp` idiom) would cut that DRAM traffic ~22×.
 
-Estimated upside: reader-only 0.498 → ~0.42, full kernel 0.524 → ~0.45 (≈13%). It cannot reach
-"fully hidden" (compute ceiling 0.386) — k (0.031) + residual remain.
+Measured upper bound (full kernel with those reads skipped entirely, the best a perfect mcast
+could do minus mcast overhead): Q off → 0.449, **Q+W off → 0.420** — only 0.034 above the 0.386
+compute ceiling. So q+w sharing would get heads8 bfp8 from 0.524 to ~0.42 ms (a further ~20%) and
+**nearly fully hide the reader** (only k's 0.031 + a tiny residual would remain).
 
 Complexity/risk: the output-stationary flat deal lays a group's cores out as a **contiguous
 row-major run, not a rectangle**, so per-group mcast needs ≤3 rectangles (head partial row / full
