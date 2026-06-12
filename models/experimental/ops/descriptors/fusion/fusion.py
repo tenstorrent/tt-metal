@@ -84,8 +84,7 @@ _ENABLE_TRUTHY_VALUES = frozenset({"1", "true", "yes", "on"})
 def _check_fusion_enabled() -> None:
     if os.environ.get(_ENABLE_ENV_VAR, "").strip().lower() not in _ENABLE_TRUTHY_VALUES:
         raise RuntimeError(
-            "Sequential/Parallel fusion is not yet production-ready and requires ProgramSpec to be "
-            f"exposed to Python before general use. Set {_ENABLE_ENV_VAR}=1 to opt in."
+            f"Sequential/Parallel fusion is disabled until ProgramSpec is exposed to Python. Set {_ENABLE_ENV_VAR}=1 to opt in."
         )
 
 
