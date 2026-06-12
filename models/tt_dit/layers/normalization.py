@@ -218,19 +218,37 @@ class DistributedRMSNorm(Module):
         if cache is None:
             cache = {}
             self._fused_stats_buffer_cache = cache
-        buf = cache.get(key)
-        if buf is None:
-            buf = ttnn.experimental.wan_fused_distributed_rmsnorm_create_stats_buffer(
-                x,
-                self.mesh_axis,
-                self.mesh_device,
-                num_heads_per_device=num_heads_per_device,
-                weight=self.weight.data if self.weight is not None else None,
-                transformation_mat=trans_mat,
-                rope_cos=rope_cos,
-                rope_sin=rope_sin,
-            )
-            cache[key] = buf
+        entry = cache.get(key)
+        if entry is None:
+            # Rotating POOL of buffers (not a single cached one). The device op resets
+            # its out_ready semaphore at end-of-op, so two same-shape norm ops that
+            # share ONE scratch buffer race on the AG, and a lagging device's atomic
+            # inc can land across the reset onto the wrong invocation (the dropped-sem
+            # / device-skew hazard). Handing each successive call a different buffer
+            # (paired with get_ag_ping_pong_semaphore's 2-set sem rotation) keeps a
+            # buffer free of in-flight AG traffic from the previous use. Pool size 2
+            # matches the sem ping-pong depth. (create_stats_buffer returns None for
+            # the non-MUX path, where there's no AG and no buffer is needed.)
+            bufs = [
+                ttnn.experimental.wan_fused_distributed_rmsnorm_create_stats_buffer(
+                    x,
+                    self.mesh_axis,
+                    self.mesh_device,
+                    num_heads_per_device=num_heads_per_device,
+                    weight=self.weight.data if self.weight is not None else None,
+                    transformation_mat=trans_mat,
+                    rope_cos=rope_cos,
+                    rope_sin=rope_sin,
+                )
+                for _ in range(2)
+            ]
+            entry = {"bufs": bufs, "idx": 0}
+            cache[key] = entry
+        bufs = entry["bufs"]
+        if bufs[0] is None:
+            return None
+        buf = bufs[entry["idx"]]
+        entry["idx"] = (entry["idx"] + 1) % len(bufs)
         return buf
 
     def forward(
