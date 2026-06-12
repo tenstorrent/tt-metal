@@ -10,7 +10,7 @@
 namespace ttml::metal {
 
 // Fused forward for MLA Q RoPE on the rope slice only:
-//   q_out[..., 0:qk_nope] = q_in[..., 0:qk_nope]
+//   q_out[..., 0:qk_nope] = q_in[..., 0:qk_nope]   (reader -> writer, no compute)
 //   q_out[..., qk_nope:] = RoPE(q_in[..., qk_nope:])
 //
 // q_in / q_out: [B, n_heads, S, qk_nope_dim + qk_rope_dim]  (head-major, TILE layout)

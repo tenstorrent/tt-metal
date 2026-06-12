@@ -14,23 +14,15 @@
 
 // L1 budget: all circular buffers comfortably fit in the ~1.5 MB per-core L1.
 // Per core the op allocates (in tiles, with kCbDoubleBuffer = 2):
-//   cb_q   = 2*Th   cb_out = 2*Th        (whole head rows, double-buffered)
-//   cb_cos = 2*Tr   cb_sin = 2*Tr        (one sequence-tile of trig, double-buffered)
-//   cb_trans = 1                          (constant rotation matrix)
-//   rotated_in + cos_interm + sin_interm = 3*Tr  (rope intermediates)
-//   => total = 4*Th + 7*Tr + 1 tiles.
+//   cb_nope = 2*Tn   cb_q_pe = 2*Tr   cb_rope_out = 2*Tr   (q_nope bypasses compute)
+//   cb_cos = 2*Tr    cb_sin = 2*Tr
+//   cb_trans = 1
+//   rotated_in + cos_interm + sin_interm = 3*Tr
+//   => total = 2*Tn + 9*Tr + 1 tiles.
 //
-// DST strategy: Tr <= 8 always (qk_rope_dim <= 256). When Tn <= 8, batch all nope tiles in DST;
-// when Tn > 8, compile with Q_ROPE_CHUNKED_NOPE and copy nope in fp32-dependent chunks
-// (4 tiles when fp32 dest acc is on, 8 when off).
+// q_nope is demuxed reader->writer; compute touches only Tr rope tiles (Tr <= 8).
 
 namespace {
-
-// Max nope tiles per copy/pack acquire block. Matches usable half-sync Dst capacity with
-// dst_full_sync_en=false (default): 8 tiles (bf16 dest) or 4 tiles (fp32 dest acc). Batching
-// more copy_tile + pack_tile ops in one acquire crosses the half-sync boundary and corrupts output.
-constexpr uint32_t kMaxNopeDstTilesBf16 = 8U;
-constexpr uint32_t kMaxNopeDstTilesFp32 = 4U;
 
 constexpr auto kReaderKernelPath =
     "tt-train/sources/ttml/metal/ops/q_rope_fw/device/kernels/dataflow/reader_q_rope_fw.cpp";
@@ -48,14 +40,15 @@ constexpr uint32_t kReaderArgTransAddr = 3;
 
 constexpr uint32_t kWriterArgQOutAddr = 0;
 
-constexpr auto kQCbIndex = tt::CBIndex::c_0;
+constexpr auto kQPeCbIndex = tt::CBIndex::c_0;
 constexpr auto kCosCbIndex = tt::CBIndex::c_1;
 constexpr auto kSinCbIndex = tt::CBIndex::c_2;
 constexpr auto kTransCbIndex = tt::CBIndex::c_3;
+constexpr auto kNopeCbIndex = tt::CBIndex::c_4;
 constexpr auto kRotatedInIntermCbIndex = tt::CBIndex::c_24;
 constexpr auto kCosIntermCbIndex = tt::CBIndex::c_25;
 constexpr auto kSinIntermCbIndex = tt::CBIndex::c_26;
-constexpr auto kOutCbIndex = tt::CBIndex::c_16;
+constexpr auto kRopeOutCbIndex = tt::CBIndex::c_16;
 
 constexpr uint32_t kCbDoubleBuffer = 2U;
 
@@ -153,8 +146,6 @@ QRopeFwProgramFactory::cached_program_t QRopeFwProgramFactory::create(
     const uint32_t num_blocks = B * Ts;
 
     const bool fp32_dest_acc_en = args.fp32_dest_acc_en;
-    const uint32_t max_nope_dst_tiles = fp32_dest_acc_en ? kMaxNopeDstTilesFp32 : kMaxNopeDstTilesBf16;
-    const bool use_chunked_nope = (Tn > max_nope_dst_tiles);
     TT_FATAL(
         Tr <= 8U,
         "QRopeFw: qk_rope_dim ({}) / TILE_W = {} exceeds max rope tiles (8, head_dim 256).",
@@ -170,27 +161,28 @@ QRopeFwProgramFactory::cached_program_t QRopeFwProgramFactory::create(
     const tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(q_in.dtype());
     const uint32_t single_tile_size = tt::tile_size(data_format);
 
-    // Q in/out CBs hold whole head rows (Th tiles), double-buffered. The reader pushes Th and the
-    // compute/writer consume Th, so sizing by Th (not an arbitrary chunk) keeps the counts matched.
-    const uint32_t q_cb_num_tiles = kCbDoubleBuffer * Th;
+    const uint32_t nope_cb_num_tiles = kCbDoubleBuffer * Tn;
+    const uint32_t rope_cb_num_tiles = kCbDoubleBuffer * Tr;
     const uint32_t trig_cb_num_tiles = kCbDoubleBuffer * Tr;
 
-    [[maybe_unused]] auto cb_q =
-        create_circular_buffer(program, all_cores, kQCbIndex, data_format, single_tile_size, q_cb_num_tiles);
+    [[maybe_unused]] auto cb_q_pe =
+        create_circular_buffer(program, all_cores, kQPeCbIndex, data_format, single_tile_size, rope_cb_num_tiles);
     [[maybe_unused]] auto cb_cos =
         create_circular_buffer(program, all_cores, kCosCbIndex, data_format, single_tile_size, trig_cb_num_tiles);
     [[maybe_unused]] auto cb_sin =
         create_circular_buffer(program, all_cores, kSinCbIndex, data_format, single_tile_size, trig_cb_num_tiles);
     [[maybe_unused]] auto cb_trans =
         create_circular_buffer(program, all_cores, kTransCbIndex, data_format, single_tile_size, 1U);
+    [[maybe_unused]] auto cb_nope =
+        create_circular_buffer(program, all_cores, kNopeCbIndex, data_format, single_tile_size, nope_cb_num_tiles);
     [[maybe_unused]] auto cb_rotated_in =
         create_circular_buffer(program, all_cores, kRotatedInIntermCbIndex, data_format, single_tile_size, Tr);
     [[maybe_unused]] auto cb_cos_interm =
         create_circular_buffer(program, all_cores, kCosIntermCbIndex, data_format, single_tile_size, Tr);
     [[maybe_unused]] auto cb_sin_interm =
         create_circular_buffer(program, all_cores, kSinIntermCbIndex, data_format, single_tile_size, Tr);
-    [[maybe_unused]] auto cb_out =
-        create_circular_buffer(program, all_cores, kOutCbIndex, data_format, single_tile_size, q_cb_num_tiles);
+    [[maybe_unused]] auto cb_rope_out =
+        create_circular_buffer(program, all_cores, kRopeOutCbIndex, data_format, single_tile_size, rope_cb_num_tiles);
 
     auto* q_in_buffer = q_in.buffer();
     auto* cos_buffer = tensor_args.cos_cache.buffer();
@@ -198,41 +190,33 @@ QRopeFwProgramFactory::cached_program_t QRopeFwProgramFactory::create(
     auto* trans_buffer = tensor_args.trans_mat.buffer();
     auto* q_out_buffer = q_out.buffer();
 
-    std::vector<uint32_t> reader_compile_time_args = {Th, Tr, H, Ts, tiles_per_head};
+    std::vector<uint32_t> reader_compile_time_args = {Tn, Tr, H, Ts, tiles_per_head};
     tt::tt_metal::TensorAccessorArgs(q_in_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(cos_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(sin_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(trans_buffer).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {Th, H, Ts, tiles_per_head};
+    std::vector<uint32_t> writer_compile_time_args = {Tn, Tr, H, Ts, tiles_per_head};
     tt::tt_metal::TensorAccessorArgs(q_out_buffer).append_to(writer_compile_time_args);
 
     const std::vector<uint32_t> compute_compile_time_args = {
-        (std::uint32_t)kQCbIndex,
+        (std::uint32_t)kQPeCbIndex,
         (std::uint32_t)kCosCbIndex,
         (std::uint32_t)kSinCbIndex,
         (std::uint32_t)kTransCbIndex,
         (std::uint32_t)kRotatedInIntermCbIndex,
         (std::uint32_t)kCosIntermCbIndex,
         (std::uint32_t)kSinIntermCbIndex,
-        (std::uint32_t)kOutCbIndex,
-        Tn,
+        (std::uint32_t)kRopeOutCbIndex,
         Tr,
-        Th,
         H,
     };
 
-    std::map<std::string, std::string> defines;
-    if (use_chunked_nope) {
-        defines["Q_ROPE_CHUNKED_NOPE"] = "1";
-        defines["Q_ROPE_NOPE_CHUNK_TILES"] = std::to_string(max_nope_dst_tiles);
-    }
-
     QRopeFwKernels kernels;
-    kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
-    kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
-    kernels.compute = create_compute_kernel(
-        program, all_cores, compute_compile_time_args, defines, kComputeKernelPath, fp32_dest_acc_en);
+    kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, {}, kReaderKernelPath);
+    kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, {}, kWriterKernelPath);
+    kernels.compute =
+        create_compute_kernel(program, all_cores, compute_compile_time_args, {}, kComputeKernelPath, fp32_dest_acc_en);
 
     assign_per_core_runtime_args(
         program,

@@ -13,22 +13,25 @@ void kernel_main() {
     const uint32_t cos_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t sin_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t trans_mat_addr = get_arg_val<uint32_t>(runtime_args_counter++);
+    // This core's contiguous share of global work units (B * Ts); one block = one (batch, seq-tile) slice.
     const uint32_t num_blocks = get_arg_val<uint32_t>(runtime_args_counter++);
-    uint32_t sb = get_arg_val<uint32_t>(runtime_args_counter++);            // s-tile-row in current batch
-    uint32_t q_block_base = get_arg_val<uint32_t>(runtime_args_counter++);  // head 0 of (b, sb), w=0
+    // Sequence-tile row within the current batch [0, Ts); indexes cos/sin cache rows (no batch dim).
+    uint32_t sb = get_arg_val<uint32_t>(runtime_args_counter++);
+    // Tile id of head 0, width 0 for the current (batch, sb); head h uses q_block_base + h * tiles_per_head.
+    uint32_t q_block_base = get_arg_val<uint32_t>(runtime_args_counter++);
 
-    constexpr uint32_t cb_q = tt::CBIndex::c_0;
+    constexpr uint32_t cb_q_pe = tt::CBIndex::c_0;
     constexpr uint32_t cb_cos = tt::CBIndex::c_1;
     constexpr uint32_t cb_sin = tt::CBIndex::c_2;
     constexpr uint32_t cb_trans = tt::CBIndex::c_3;
+    constexpr uint32_t cb_nope = tt::CBIndex::c_4;
 
-    constexpr uint32_t Th = get_compile_time_arg_val(0);
+    constexpr uint32_t Tn = get_compile_time_arg_val(0);
     constexpr uint32_t Tr = get_compile_time_arg_val(1);
     constexpr uint32_t n_heads = get_compile_time_arg_val(2);
     constexpr uint32_t Ts = get_compile_time_arg_val(3);
-    // Tiles in one (batch, head) page of Q [B, H, S, D]: Ts sequence tiles (S / 32) × Th width tiles
-    // ((qk_nope_dim + qk_rope_dim) / 32). Head h starts at q_block_base + h * tiles_per_head.
     constexpr uint32_t tiles_per_head = get_compile_time_arg_val(4);
+    constexpr uint32_t Th = Tn + Tr;
 
     constexpr auto q_args = TensorAccessorArgs<5>();
     constexpr auto cos_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
@@ -40,7 +43,7 @@ void kernel_main() {
     const auto sin_gen = TensorAccessor(sin_args, sin_addr);
     const auto trans_gen = TensorAccessor(trans_args, trans_mat_addr);
 
-    const uint32_t tile_bytes = get_tile_size(cb_q);
+    const uint32_t tile_bytes = get_tile_size(cb_q_pe);
 
     // Advancing q_block_base after each block (all heads for one (batch b, sequence tile sb)):
     //   - Same batch, next sb:  q_block_base += Th          (one more 32-row slice on head 0's page)
@@ -70,11 +73,6 @@ void kernel_main() {
     noc_async_read_barrier();
     cb_push_back(cb_trans, 1U);
 
-    // num_blocks = this core's share of the global B * Ts work units, where one unit ("block") is a
-    // single (batch, sequence-tile) pair: one 32-row sequence slice for one batch item. The host hands
-    // each core a contiguous run of those units, so as `block` advances we walk sequence tiles and roll
-    // over into the next batch once sb reaches Ts.
-    //
     // cos/sin caches are [1, 1, S, qk_rope_dim] = Ts rows of Tr tiles with NO batch dim, so they are
     // indexed by sequence tile `sb` only (valid tile ids 0 .. Ts*Tr - 1) and every batch re-reads the
     // same rows. We must wrap sb at Ts: if it kept growing across a batch boundary, sb * Tr would point
@@ -89,7 +87,10 @@ void kernel_main() {
 
         for (uint32_t h = 0U; h < n_heads; ++h) {
             const uint32_t head_q = q_block_base + h * tiles_per_head;
-            read_tiles_by_row(cb_q, q_gen, head_q, Th, tile_bytes, Th);
+            // q_nope bypasses compute: reader -> writer.
+            read_tiles_by_row(cb_nope, q_gen, head_q, Tn, tile_bytes, Tn);
+            // q_pe -> compute.
+            read_tiles_by_row(cb_q_pe, q_gen, head_q + Tn, Tr, tile_bytes, Tr);
         }
 
         ++sb;

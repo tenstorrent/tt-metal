@@ -147,22 +147,21 @@ INSTANTIATE_TEST_SUITE_P(
             .n_heads = 2,
             .qk_nope_dim = 256,
             .qk_rope_dim = 224},  // Tn = 8, Tr = 7, Th = 15
-        // Tn > 4 (fp32 on): chunked nope in 4-tile DST batches.
+        // Large Tn: q_nope bypasses compute (reader -> writer); only Tr rope tiles hit DST.
         QRopeShape{
             .name = "chunked_nope_tn35",
             .batch = 1,
             .seq_len = 32,
             .n_heads = 2,
             .qk_nope_dim = 1120,
-            .qk_rope_dim = 64},  // Tn = 35, Tr = 2, fp32 on
-        // Tn > 8 (fp32 off): chunked nope in 8-tile DST batches.
+            .qk_rope_dim = 64},  // Tn = 35, Tr = 2
         QRopeShape{
             .name = "chunked_nope_tn35_fp32_off",
             .batch = 1,
             .seq_len = 32,
             .n_heads = 2,
             .qk_nope_dim = 1120,
-            .qk_rope_dim = 160},  // Tn = 35, Tr = 5, fp32 off
+            .qk_rope_dim = 160},  // Tn = 35, Tr = 5, fp32 dest acc off
         // B * Ts = 8 blocks: exercises multi-core split and repeated batch-boundary jumps.
         QRopeShape{
             .name = "batch4_st2", .batch = 4, .seq_len = 64, .n_heads = 2, .qk_nope_dim = 32, .qk_rope_dim = 32}),
