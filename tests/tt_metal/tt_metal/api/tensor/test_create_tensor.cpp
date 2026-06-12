@@ -44,7 +44,10 @@ TEST_P(CreateTensorTest, Tile) {
     auto mem_cfg = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     constexpr DataType dtype = DataType::BFLOAT16;
 
+    constexpr uint32_t datum_size_bytes = 2;
+
     TensorSpec tensor_spec(input_shape, TensorLayout(dtype, PageConfig(Layout::TILE), mem_cfg));
+    ASSERT_EQ(input_shape.volume() * datum_size_bytes, tensor_spec.compute_packed_buffer_size_bytes());
 
     std::vector<bfloat16> host_data(input_shape.volume(), bfloat16(1.0f));
 
@@ -96,7 +99,12 @@ TEST_P(EmptyTensorTest, Combinations) {
         GTEST_SKIP() << "Skipping test with ROW_MAJOR layout and BFLOAT8_B dtype!";
     }
 
-    TensorLayout tensor_layout(dtype, PageConfig(layout), memory_config);
+    auto tensor_layout = TensorLayout::fromPaddedShape(
+        dtype, PageConfig(layout), memory_config, /* logical */ shape, /* padded */ shape);
+
+    auto tensor = MeshTensor::allocate_on_device(
+        *mesh_device_, TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), memory_config)), TensorTopology());
+    EXPECT_EQ(tensor.logical_shape(), shape);
 
     ::test_utils::test_tensor_on_device(shape, tensor_layout, *mesh_device_);
 }
