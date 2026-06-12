@@ -693,6 +693,8 @@ void DataflowBufferImpl::update_size(std::optional<uint32_t> new_entry_size, std
 
         // The transaction-id count is preserved on re-entry, so the new num_entries must keep the same
         // divisibility that compute_txn_descriptor() enforces. Check up front with an actionable message.
+        // TODO: #46893 tracks re-deriving/reassigning the txn-id count on resize (e.g. double->quad
+        // buffering).
         auto check_divisor = [&](bool is_producer, uint8_t num_txn_ids, uint8_t num_tcs) {
             const bool consumes_all = !is_producer && (config.cap == ::dfb::AccessPattern::ALL);
             const uint8_t num_pc = is_producer ? config.num_producers : config.num_consumers;
@@ -1615,7 +1617,7 @@ void ProgramImpl::apply_dfb_size_overrides(const std::vector<DfbSizeOverride>& o
     }
 
     // (b) Alias-group coherence gate. Aliased DFBs total-size change is only safe if the whole group
-    //     agrees on one new total size. An change with total_size unchanged does not disturb the shared
+    //     agrees on one new total size. A change with total_size unchanged does not disturb the shared
     //     region and is allowed.
     for (const auto& o : overrides) {
         auto dfb = get_dataflow_buffer(o.dfb_id);
