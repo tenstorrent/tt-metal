@@ -453,15 +453,6 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/llk-unit-tests-impl.yaml
     with:
-      test-name: ${{ matrix.test-group.name }}
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner_label }}
-      runs-on-labels: >-
-        ${{
-          (github.event_name == 'merge_group' && matrix.test-group.sku == 'bh_p150b_civ2')
-            && '["tt-ubuntu-2204-P150b-viommu-prio-stable"]'
-            || toJSON(matrix.test-group.runs_on)
-        }}
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       l2-only: false
@@ -473,10 +464,10 @@ jobs:
            || needs.find-changes.outputs.llk-ci-changed == 'true'
            || (needs.find-changes.outputs.llk-wormhole-changed == 'true'
                && needs.find-changes.outputs.llk-blackhole-changed == 'true'))
-          && 'wh_n150_civ2,bh_p150b_civ2'
+          && 'wh_n150_civ2,bh_p150b_civ2_viommu_prio'
           || (needs.find-changes.outputs.llk-wormhole-changed == 'true' && 'wh_n150_civ2')
-          || (needs.find-changes.outputs.llk-blackhole-changed == 'true' && 'bh_p150b_civ2')
-          || 'wh_n150_civ2,bh_p150b_civ2' }}
+          || (needs.find-changes.outputs.llk-blackhole-changed == 'true' && 'bh_p150b_civ2_viommu_prio')
+          || 'wh_n150_civ2,bh_p150b_civ2_viommu_prio' }}
 
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
