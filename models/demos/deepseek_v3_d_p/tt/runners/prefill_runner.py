@@ -348,6 +348,68 @@ def validate_migration_kv(pipeline: TtDeepSeekPrefillPipeline, src_slot: int, ds
     return src_pcc, dst_pcc
 
 
+def validate_migrations_pairwise(pipeline: TtDeepSeekPrefillPipeline, pairs, golden_src_slots=()):
+    """Validate N concurrent slot->slot migrations of ARBITRARY (distinct) prompts.
+
+    With N separate prompts there is no single golden to PCC each dst against, so instead we assert
+    each dst slot's KV matches ITS OWN src slot's KV — i.e. the migration copied that user's KV
+    faithfully. This (a) works for any prompts, (b) catches cross-talk between concurrent migrations
+    (a dst receiving another pair's data), and (c) is cheap: it pulls the device KV cache ONCE and
+    compares slots in host memory (no per-pair device read). The compare is on the raw stored cache
+    (storage->storage copy), so no block-cyclic un-rotate is needed.
+
+    For any src in `golden_src_slots` (the slot prefilled with the real golden prompt) it ALSO PCCs
+    src + dst against the golden trace, anchoring that the prefill itself is model-correct (not just
+    self-consistent). Emits `[kv-migrate-validate]` lines; raises AssertionError on any failure.
+    """
+    import torch
+
+    from tests.ttnn.utils_for_testing import comp_pcc
+
+    cfg = pipeline.config
+    mesh_device = pipeline.mesh_device
+    num_layers = cfg.num_layers
+    thr = float(os.environ.get("PREFILL_MIGRATE_PAIRWISE_PCC", "0.99"))
+
+    # Single gather of the whole cache: [num_users*num_layers, 1, seq_len_cache, kvpe] (TP via [:, :1]).
+    cache_full = ttnn.to_torch(
+        pipeline.kvpe_cache,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
+    ).to(torch.float32)[:, :1]
+
+    failures = []
+    for src, dst in pairs:
+        min_pcc = 1.0
+        for layer in range(num_layers):
+            sb = src * num_layers + layer
+            db = dst * num_layers + layer
+            _, pcc = comp_pcc(cache_full[sb, 0], cache_full[db, 0])
+            min_pcc = min(min_pcc, pcc)
+        status = "PASS" if min_pcc >= thr else "FAIL"
+        logger.info(f"[kv-migrate-validate] pairwise src_slot={src} dst_slot={dst} min_pcc={min_pcc:.6f} -> {status}")
+        print(f"[kv-migrate-validate] AFTER pairwise src={src} dst={dst} min_pcc={min_pcc:.6f}")
+        if min_pcc < thr:
+            failures.append((src, dst, min_pcc))
+
+    if failures:
+        msg = "; ".join(f"{s}->{d} pcc={p:.6f}" for s, d, p in failures)
+        raise AssertionError(f"[kv-migrate-validate] {len(failures)} pair(s) dst!=src below {thr}: {msg}")
+    logger.success(f"[kv-migrate-validate] ALL {len(pairs)} pair(s) dst==src PASSED (>= {thr})")
+
+    # Golden anchor (optional): confirm the prefill itself is model-correct for the golden-prompt slot.
+    n_pairs = max(1, len(pairs))
+    gchunks = max(1, int(os.environ.get("PREFILL_STANDALONE_CHUNKED_NCHUNKS", "1")) // n_pairs)
+    for s in golden_src_slots:
+        d = next((dd for ss, dd in pairs if ss == s), None)
+        logger.info(f"[kv-migrate-validate] golden anchor: validating src slot {s} (n_chunks={gchunks})")
+        sp = _kv_cache_pcc_check(pipeline, s, gchunks)
+        print(f"[kv-migrate-validate] GOLDEN src_slot={s} min_pcc={sp:.6f}")
+        if d is not None:
+            logger.info(f"[kv-migrate-validate] golden anchor: validating dst slot {d}")
+            dp = _kv_cache_pcc_check(pipeline, d, gchunks)
+            print(f"[kv-migrate-validate] GOLDEN dst_slot={d} min_pcc={dp:.6f}")
+
+
 def run_standalone_chunked_prefill_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
     """Standalone chunked-prefill *validation* loop: drive the golden longbook_qa prompt through the
     pipeline in CHUNK_SIZE chunks (exactly as `run_standalone_loop` drives the chunk loop), then PCC
@@ -613,9 +675,20 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DS
                 ]
             logger.success(f"[kv-migrate-validate] sentinel found — validating {len(pairs)} pair(s): {pairs}")
             ttnn.synchronize_device(pipeline.mesh_device)
-            for src_slot, dst_slot in pairs:
-                n_src = chunks_per_slot.get(src_slot, i)  # per-slot chunk count (NOT the loop total)
-                validate_migration_kv(pipeline, src_slot, dst_slot, n_src)
+            if os.environ.get("PREFILL_MIGRATE_PAIRWISE", "0") == "1":
+                # N separate prompts: validate each dst == its src (migration fidelity, catches
+                # cross-talk); golden-anchor the slot(s) given by PREFILL_MIGRATE_GOLDEN_SLOT.
+                golden_src = [
+                    int(x) % NUM_USERS
+                    for x in os.environ.get("PREFILL_MIGRATE_GOLDEN_SLOT", "").split(",")
+                    if x.strip().isdigit()
+                ]
+                validate_migrations_pairwise(pipeline, pairs, golden_src_slots=golden_src)
+            else:
+                # Same prompt across slots: PCC each (src, dst) against the shared golden.
+                for src_slot, dst_slot in pairs:
+                    n_src = chunks_per_slot.get(src_slot, i)  # per-slot chunk count (NOT the loop total)
+                    validate_migration_kv(pipeline, src_slot, dst_slot, n_src)
             logger.success(f"[kv-migrate-validate] ALL {len(pairs)} migrated pair(s) PASSED")
         else:
             logger.info(f"[request] running KV-cache PCC check (slot={last_slot_id}, n_chunks={i})")
