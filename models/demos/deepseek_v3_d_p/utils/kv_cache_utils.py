@@ -223,6 +223,91 @@ def create_kv_chunk_address_table_kimi(
     return lookup_table
 
 
+def create_kv_chunk_address_table_deepseek(
+    config, mesh_device, mesh_shape, seq_len, sp_axis, tt_kvpe_cache, chunk_size_bytes, num_users, chunk_size_global
+):
+    """Block-cyclic-aware KV chunk address table for the DeepSeek non-balanced prefill cache.
+
+    The DeepSeek prefill KV cache stores positions in BLOCK-CYCLIC order across the SP shards
+    (see tt.mla.utils.blockcyclic_positions / update_padded_kv_cache): natural position P lives on
+    SP-row chip ``c = (P % chunk_size_global) // chunk_local`` at local row
+    ``lr = (P // chunk_size_global) * chunk_local + (P % chunk_size_global) % chunk_local``,
+    where ``chunk_local = chunk_size_global // sp``.
+
+    The Kimi builder instead assumes a CONTIGUOUS-block layout (position P on chip
+    P // seq_len_local), which mismaps every position: a partial migration of natural range [0, N)
+    then copies contiguous storage chunk 0..N/32 — mostly UN-prefilled storage — instead of the
+    block-cyclic-scattered chunks that actually hold the first N tokens (observed: AFTER-migration
+    KV PCC ~0.35 because only ~1/sp of the data lands correctly). This builder maps each natural
+    position to its true block-cyclic storage chip + local DRAM-bank offset, reusing the same
+    ROUND_ROBIN_1D bank/offset math as init_kvpe_cache's NdShardSpec
+    (linear = batch * chunks_per_layer_local + local_chunk; bank = linear % banks;
+    offset = (linear // banks) * chunk_size_bytes), so a [0, N) migration moves exactly the
+    prefilled KV. ``slot`` is the user index; cache batch index = slot * num_layers + layer.
+    """
+    sp = mesh_shape[sp_axis]
+    assert (
+        seq_len % (sp * NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK) == 0
+    ), f"seq_len {seq_len} must be divisible by sp({sp}) * {NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK}"
+    assert chunk_size_global % sp == 0, f"chunk_size_global {chunk_size_global} must be divisible by sp {sp}"
+    chunk_local = chunk_size_global // sp
+    assert (
+        chunk_local % NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK == 0
+    ), f"chunk_local {chunk_local} must be divisible by {NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK}"
+    seq_len_local = seq_len // sp
+    chunks_per_layer_local = seq_len_local // NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+
+    lookup_table = ttnn.experimental.disaggregation.KvChunkAddressTable(config)
+    host_name = socket.gethostname()
+    num_layers = config.num_layers
+
+    # One device group per SP row (the row's TP columns hold replicated KV). Single-process
+    # runner => rank 0 of size 1 => covers all rows; multi-rank slices rows per rank.
+    rank = ttnn.distributed_context_get_rank()
+    size = ttnn.distributed_context_get_size()
+    total_rows = mesh_shape[0]
+    rank_row_start = int(rank) * total_rows // int(size)
+    rank_row_end = rank_row_start + total_rows // int(size)
+    device_group_for_row = {}
+    all_fabric_node_ids = []
+    for row in range(rank_row_start, rank_row_end):
+        fabric_node_ids = [
+            mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(row, col)) for col in range(mesh_shape[1])
+        ]
+        all_fabric_node_ids.extend(fabric_node_ids)
+        device_group_for_row[row] = lookup_table.add_device_group(fabric_node_ids)
+    for fid in all_fabric_node_ids:
+        lookup_table.set_fabric_node_host(fid, host_name=host_name)
+
+    dram_bank_base_addr = tt_kvpe_cache.buffer_address()
+    for slot in range(num_users):
+        for layer in range(num_layers):
+            batch = slot * num_layers + layer
+            for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+                slab = position // chunk_size_global
+                rem = position % chunk_size_global
+                c = rem // chunk_local
+                if c < rank_row_start or c >= rank_row_end:
+                    continue  # this SP-row chip is owned by another rank
+                off = rem % chunk_local
+                local_row = slab * chunk_local + off
+                local_chunk = local_row // NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+                linear = batch * chunks_per_layer_local + local_chunk
+                bank_id = linear % BH_NUM_DRAM_BANKS
+                bank_offset = (linear // BH_NUM_DRAM_BANKS) * chunk_size_bytes
+                location = ttnn.experimental.disaggregation.KvCacheLocation()
+                location.noc_addr = (bank_id << 32) | (dram_bank_base_addr + bank_offset)
+                location.size_bytes = chunk_size_bytes
+                location.device_group_index = device_group_for_row[c]
+                lookup_table.set(layer, position, slot, location)
+
+    logger.info(
+        f"[migration] DeepSeek block-cyclic KV chunk table: sp={sp} chunk_local={chunk_local} "
+        f"seq_len_local={seq_len_local} entries={lookup_table.total_entries()}"
+    )
+    return lookup_table
+
+
 def init_kvpe_cache(kvpe_cache_head_dim, mesh_device, seq_len, mesh_shape, sp_axis, num_kvpe_cache_layers, num_users=1):
     """
     Initialize KVPE cache for MLA.

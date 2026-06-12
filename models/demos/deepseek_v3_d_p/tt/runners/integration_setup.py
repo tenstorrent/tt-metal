@@ -28,7 +28,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
-    create_kv_chunk_address_table_kimi,
+    create_kv_chunk_address_table_deepseek,
 )
 
 # bfp8 [1, 1, 32, 576] KV chunk: 18 tiles * 1088 B = 19584 B.
@@ -51,21 +51,24 @@ def _serialize_table_to_path(table, path: str) -> None:
 
 
 def build_and_serialize_kv_chunk_table(
-    *, mesh_device, kvpe_cache, seq_len, num_layers, mesh_shape, sp_axis, num_users, path
+    *, mesh_device, kvpe_cache, seq_len, num_layers, mesh_shape, sp_axis, num_users, chunk_size_global, path
 ) -> str:
-    """Build the KV chunk address table from the device KV layout (via the shared
-    kv_cache_utils.create_kv_chunk_address_table_kimi) and serialize it to ``path`` for
-    the inference server to forward via SET_TABLE. Returns the path on success.
+    """Build the KV chunk address table from the device KV layout and serialize it to ``path``
+    for the inference server to forward via SET_TABLE. Returns the path on success.
 
-    Uses the kimi (non-balanced, sequential-layout) builder, which lays out one slot per
-    user — matching the user-major KV cache batch (slot = user*num_layers + layer)."""
+    Uses the DeepSeek BLOCK-CYCLIC builder (create_kv_chunk_address_table_deepseek): the DeepSeek
+    non-balanced prefill cache stores positions block-cyclic across the SP shards (NOT the Kimi
+    contiguous-block layout), so each natural position must map to its true block-cyclic storage
+    chip + offset — otherwise a partial migration copies the wrong (un-prefilled) storage chunks
+    and the migrated KV fails its PCC check. ``chunk_size_global`` is the prefill chunk size (the
+    block-cyclic period; same value passed to blockcyclic_positions)."""
     cfg = _disaggregation().KvChunkAddressTableConfig()
     cfg.num_layers = num_layers
     cfg.max_sequence_length = seq_len
     cfg.num_slots = num_users
     cfg.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     cfg.chunk_size_bytes = _CHUNK_SIZE_BYTES
-    table = create_kv_chunk_address_table_kimi(
+    table = create_kv_chunk_address_table_deepseek(
         config=cfg,
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,
@@ -74,15 +77,41 @@ def build_and_serialize_kv_chunk_table(
         tt_kvpe_cache=kvpe_cache,
         chunk_size_bytes=_CHUNK_SIZE_BYTES,
         num_users=num_users,
+        chunk_size_global=chunk_size_global,
     )
     _serialize_table_to_path(table, path)
     logger.info(f"[migration] KV chunk address table serialized to {path} (entries={table.total_entries()})")
     return path
 
 
-def send_kv_chunk_table(table_path: str) -> bool:
+def build_device_map(mesh_device, mesh_shape):
+    """Build the migration device map from the runner's live mesh.
+
+    The migration_endpoint (device mode) opens/keys the model's chips via UMD from
+    these entries — the fnid<->umd mapping is only resolvable by a CreateDevice-capable
+    process (the runner), so it must be streamed to the worker, not guessed. Each entry
+    is ``(fabric_node_mesh_id, fabric_node_chip_id, umd_chip_id)`` (see
+    MigrationLayerClient::send_device_map and worker_context.hpp). Mirrors the device-map
+    construction in disaggregation/tests/test_mla_prefill_migration.py.
+    """
+    rows, cols = int(mesh_shape[0]), int(mesh_shape[1])
+    entries = []
+    for row in range(rows):
+        for col in range(cols):
+            coord = ttnn.MeshCoordinate(row, col)
+            fnid = mesh_device.get_fabric_node_id(coord)
+            umd_chip = mesh_device.get_device_id(coord)
+            entries.append((int(fnid.mesh_id), int(fnid.chip_id), int(umd_chip)))
+    logger.info(f"[migration] built device map: {len(entries)} chips from mesh_shape={rows}x{cols}")
+    return entries
+
+
+def send_kv_chunk_table(table_path: str, device_map=None) -> bool:
     """Forward the serialized table to the migration_worker via SET_TABLE, using
-    the tt-llm-engine MigrationLayerClient.
+    the tt-llm-engine MigrationLayerClient. If ``device_map`` is given (a list of
+    ``(mesh_id, fnid_chip, umd_chip)`` tuples from build_device_map), also send it via
+    ``send_device_map`` so a DEVICE-mode endpoint opens the model's chips and reaches
+    WORKER_READY (an empty/None map leaves the worker gated unless it is synthetic).
 
     The client extension (``_migration_client``) lives in tt-llm-engine (the
     superproject), so it is imported LAZILY here — only when migration is actually
@@ -124,4 +153,10 @@ def send_kv_chunk_table(table_path: str) -> bool:
 
     client.send_kv_chunk_table(table_path)
     logger.info(f"[migration] sent SET_TABLE({table_path}) via MigrationLayerClient on {table_q}")
+    if device_map is not None:
+        client.send_device_map(device_map)
+        logger.info(
+            f"[migration] sent device map ({len(device_map)} chips) via MigrationLayerClient on {table_q}; "
+            f"device-mode endpoint will open these chips and emit WORKER_READY"
+        )
     return True
