@@ -28,13 +28,13 @@ from models.demos.deepseek_v3_d_p.utils.perf_utils import run_model_device_perf_
 # Each token picks 8 of 256 experts; "in-col share" = fraction of those picks
 # landing in the column's 64 experts (uniform random would be 25%).
 # Narrowed to a single (layer, col)/topology so only
-# ring-8-2link-real-l28-col1 is generated for baseline capture.
+# ring-8-2link-real-l50-col0 is generated for baseline capture.
 _REAL_INDICES_PICKS: list[tuple[int, int]] = [
     # (layer, col)
     # (27, 2),  # 43.2% in-col share — hottest in the corpus
     # (38, 0),  # 41.2%
-    # (50, 0),  # 39.9%
-    (28, 1),  # 39.5%
+    (50, 0),  # 39.9%
+    # (28, 1),  # 39.5%
 ]
 _REAL_INDICES_TOPOS = [("ring", 2)]  # ("linear", 2) disabled
 
