@@ -46,10 +46,10 @@ _DISPATCH_REAL_INDICES_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
     ("linear", 2, 38, 0): 7_208_142,  # 41.2%
     ("linear", 2, 50, 0): 8_441_255,  # 39.9%
     ("linear", 2, 28, 1): 11_078_364,  # 39.5%
-    ("ring", 2, 27, 2): 7_212_175,
-    ("ring", 2, 38, 0): 5_184_732,
-    ("ring", 2, 50, 0): 4_928_074,
-    ("ring", 2, 28, 1): 5_538_430,
+    ("ring", 2, 27, 2): 6_932_894,
+    ("ring", 2, 38, 0): 4_891_353,
+    ("ring", 2, 50, 0): 4_671_776,
+    ("ring", 2, 28, 1): 5_803_593,
 }
 _COMBINE_REAL_INDICES_EXPECTED_NS: dict[tuple[str, int, int, int], int] = {
     ("linear", 2, 27, 2): 11_847_122,
