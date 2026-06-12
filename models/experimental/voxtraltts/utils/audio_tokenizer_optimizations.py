@@ -4,7 +4,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, replace
 
 import ttnn
 
@@ -21,6 +22,14 @@ class AudioTokenizerOptimizations:
     sdpa_compute_kernel_config: ttnn.WormholeComputeKernelConfig
     # Use L1 for matmul in0 when T <= this (DRAM for longer decode stacks to avoid L1 overflow).
     matmul_l1_max_seq_len: int = 128
+    # Explicit 2D multicast matmul program configs per forward (Tier 1 decode tuning).
+    matmul_program_config: bool = True
+    # Native TTNN causal + sliding_window SDPA (no dense [1,H,T,T] mask; ALiBi omitted).
+    sdpa_native_sliding_window: bool = True
+
+
+def _env_flag(name: str) -> bool:
+    return os.getenv(name, "").lower() in ("1", "true", "yes", "on")
 
 
 def voxtral_audio_tokenizer_default_optimizations() -> AudioTokenizerOptimizations:
@@ -30,6 +39,16 @@ def voxtral_audio_tokenizer_default_optimizations() -> AudioTokenizerOptimizatio
         activation_dtype=ttnn.bfloat16,
         matmul_compute_kernel_config=COMPUTE_KERNEL_CONFIG_VOXTRAL_AUDIO_TOKENIZER,
         sdpa_compute_kernel_config=COMPUTE_KERNEL_CONFIG_VOXTRAL_AUDIO_TOKENIZER,
+        matmul_program_config=not _env_flag("VOXTRAL_AUDIO_TOKENIZER_MATMUL_PROGCFG_OFF"),
+        sdpa_native_sliding_window=not _env_flag("VOXTRAL_AUDIO_TOKENIZER_SDPA_NATIVE_WINDOW_OFF"),
+    )
+
+
+def voxtral_audio_tokenizer_dense_mask_sdpa_optimizations() -> AudioTokenizerOptimizations:
+    """Dense ALiBi + sliding-window ``attn_mask`` SDPA (production accuracy, slower decode)."""
+    return replace(
+        voxtral_audio_tokenizer_default_optimizations(),
+        sdpa_native_sliding_window=False,
     )
 
 
@@ -40,4 +59,5 @@ def voxtral_audio_tokenizer_high_accuracy_optimizations() -> AudioTokenizerOptim
         activation_dtype=ttnn.bfloat16,
         matmul_compute_kernel_config=COMPUTE_KERNEL_CONFIG_VOXTRAL_AUDIO_TOKENIZER,
         sdpa_compute_kernel_config=COMPUTE_KERNEL_CONFIG_VOXTRAL_AUDIO_TOKENIZER,
+        sdpa_native_sliding_window=False,
     )
