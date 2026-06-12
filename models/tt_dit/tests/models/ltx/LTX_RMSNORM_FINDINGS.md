@@ -1,11 +1,13 @@
-# LTX-2.3 AV DistributedRMSNorm fusion: coverage & findings
+# DistributedRMSNorm fusion (LTX-2.3 AV + Wan2.2): coverage & findings
 
-Benchmark suite: `test_ltx_distributed_rmsnorm_bench_fused.py`. Covers every distinct
-RMSNorm shape×fusion-pattern from the LTX-2.3 AV transformer block (see
-`distributed_rmsnorm_av.md`), at TP=2 (SP=4) and TP=4 (SP=8), both video stages —
-14 distinct configs/TP, 3 fusion patterns. Baseline = composite RMSNorm +
-the *unfused* trailing op LTX uses today (`ttnn.addcmul` for adaLN, standalone
-`ttnn.experimental.rotary_embedding_llama` for RoPE); fused = the single device op.
+Benchmark + correctness suite: `models/tt_dit/tests/test_distributed_rmsnorm_fused.py`
+(one parametrized file covering **both** LTX-2.3 AV and Wan2.2 — they drive the same
+fused device op). Covers every distinct RMSNorm shape×fusion-pattern from the LTX-2.3 AV
+transformer block (see `distributed_rmsnorm_av.md`; 14 configs/TP, 3 fusion patterns) and
+the 7 Wan2.2 720p attention call sites. Baseline = composite RMSNorm + the *unfused*
+trailing op LTX uses today (`ttnn.addcmul` for adaLN, standalone
+`ttnn.experimental.rotary_embedding_llama` for RoPE); for Wan the composite C++ op fuses
+weight+RoPE in-op. Fused = the single device op.
 
 ## Feature support: nothing missing at the API level
 Every LTX fusion opportunity maps onto the existing op — no new kernel capability needed:
@@ -15,34 +17,82 @@ Every LTX fusion opportunity maps onto the existing op — no new kernel capabil
 - **per-head RoPE** `(1,H,N,head_dim)` → auto-detected (`rope_cos.shape[1]==num_heads_per_device`).
 - whole-row norm + per-head rope → `per_head_norm=False` + per-head rope (independent flags).
 
-## Baseline (composite + unfused op) vs fused — TP=4 galaxy LINE, 4 links
-Baseline = composite RMSNorm (`use_device_op=False`) + the unfused trailing op
-(`ttnn.addcmul` for block norms / standalone `rotary_embedding_llama` for RoPE).
-Fused = the single device op. All 14 TP=4 configs fuse.
+## TP=4 RING — the production galaxy config (full 4×8 mesh, 4 links)
+This is the canonical BH-Galaxy config (`distributed_rmsnorm_av.md` §0): open the full
+**4×8** mesh, ride TP on the **4-wide axis 0** (a *closed* ring on the galaxy torus — the
+only axis with a real wrap link; a 1×4 sub-row of the 8-wide axis is open, hence the
+"TP=4 LINE only" constraint that bit us before), and **replicate** activations / weights /
+RoPE across the 8-wide axis 1. Run with `test_corr_det[...ring]` / `test_bench[...ring]`.
+
+**Correctness + determinism (Ring):** every config of both models passes — Wan 7/7 and
+LTX 14/14 `det=OK` (0/9 over 10 fresh-pob runs, bit-exact), `pcc(fused:torch)` 99.99–100%,
+`pcc(fused:composite)` ≈100%. Identical to LINE — topology changes routing, not the math.
+
+**Wan2.2 — TP=4 RING:**
+
+| config | pattern | feat | rows | baseline µs | fused µs | speedup |
+|---|---|---:|---:|---:|---:|---:|
+| self_sp4_N18944 | qk+rope | 1280 | 18944 | 1154.84 | 897.93 | **1.29×** |
+| self_sp8_N9472 | qk+rope | 1280 | 9472 | 572.98 | 505.71 | 1.13× |
+| self_sp32_N2368 | qk+rope | 1280 | 2368 | 187.49 | 191.49 | 0.98× |
+| cross_q_sp4_N18944 | qk | 1280 | 18944 | 944.48 | 584.56 | **1.62×** |
+| cross_q_sp8_N9472 | qk | 1280 | 9472 | 472.84 | 335.90 | **1.41×** |
+| cross_q_sp32_N2368 | qk | 1280 | 2368 | 141.48 | 141.57 | 1.00× |
+| cross_k_prompt_L512 | qk | 1280 | 512 | 73.69 | 67.20 | 1.10× |
+
+**LTX-2.3 — TP=4 RING:**
 
 | config | pattern | feat | hd | rows | baseline µs | fused µs | speedup |
 |---|---|---:|---:|---:|---:|---:|---:|
-| v_block_s1 | block+adaLN | 1024 | — | 1216 | 143 | 106 | **1.36×** |
-| v_block_s2 | block+adaLN | 1024 | — | 4864 | 454 | 193 | **2.35×** |
-| a_block | block+adaLN | 512 | — | 32 | 35 | 25 | **1.40×** |
-| v_selfattn_qk_s1 | qk+per-head rope | 1024 | 128 | 1216 | 149 | 175 | 0.85× |
-| v_selfattn_qk_s2 | qk+per-head rope | 1024 | 128 | 4864 | 476 | 543 | 0.88× |
-| a_selfattn_qk | qk+per-head rope | 512 | 64 | 32 | 53 | 31 | **1.73×** |
-| a2v_videoQ_s1 | qk+per-head rope | 512 | 64 | 1216 | 111 | 117 | 0.96× |
-| a2v_videoQ_s2 | qk+per-head rope | 512 | 64 | 4864 | 323 | 292 | **1.11×** |
-| a2v_audioK | qk+per-head rope | 512 | 64 | 256 | 80 | 56 | **1.44×** |
-| v_textcross_q_s1 | qk (no rope) | 1024 | 128 | 1216 | 93 | 94 | 0.99× |
-| v_textcross_q_s2 | qk (no rope) | 1024 | 128 | 4864 | 273 | 183 | **1.50×** |
-| v_textcross_k | qk (no rope) | 1024 | 128 | 1024 | 86 | 79 | **1.09×** |
-| a_textcross_q | qk (no rope) | 512 | 64 | 32 | 34 | 23 | **1.49×** |
-| a_textcross_k | qk (no rope) | 512 | 64 | 1024 | 75 | 67 | **1.13×** |
+| v_block_s1 | block+adaLN | 1024 | — | 1216 | 139.86 | 110.35 | **1.27×** |
+| v_block_s2 | block+adaLN | 1024 | — | 4864 | 432.84 | 207.02 | **2.09×** |
+| a_block | block+adaLN | 512 | — | 32 | 33.70 | 24.93 | **1.35×** |
+| v_selfattn_qk_s1 | qk+per-head rope | 1024 | 128 | 1216 | 145.28 | 128.45 | **1.13×** |
+| v_selfattn_qk_s2 | qk+per-head rope | 1024 | 128 | 4864 | 453.22 | 258.78 | **1.75×** |
+| a_selfattn_qk | qk+per-head rope | 512 | 64 | 32 | 51.86 | 29.58 | **1.75×** |
+| a2v_videoQ_s1 | qk+per-head rope | 512 | 64 | 1216 | 107.02 | 104.69 | 1.02× |
+| a2v_videoQ_s2 | qk+per-head rope | 512 | 64 | 4864 | 289.68 | 183.40 | **1.58×** |
+| a2v_audioK | qk+per-head rope | 512 | 64 | 256 | 80.11 | 57.68 | **1.39×** |
+| v_textcross_q_s1 | qk (no rope) | 1024 | 128 | 1216 | 89.05 | 101.90 | 0.87× |
+| v_textcross_q_s2 | qk (no rope) | 1024 | 128 | 4864 | 247.11 | 186.52 | **1.32×** |
+| v_textcross_k | qk (no rope) | 1024 | 128 | 1024 | 82.70 | 84.74 | 0.98× |
+| a_textcross_q | qk (no rope) | 512 | 64 | 32 | 32.93 | 22.85 | **1.44×** |
+| a_textcross_k | qk (no rope) | 512 | 64 | 1024 | 72.19 | 74.48 | 0.97× |
 
-Takeaways: block-norm adaLN fusion is the biggest win (1.36–2.35×); no-rope QK and
-small/audio QK+rope win (1.1–1.7×); **video self-attn QK+per-head-rope (feat 1024)
-LOSES (0.85–0.88×)** because the per-head-RoPE chunk≥2 deadlock forces chunk=1, killing
-read/compute overlap — fixing that deadlock (open bug #1 below) is the lever that turns
-these into wins. (TP=2 not tabulated: its per-head-rope configs OOM (feat 2048) or hit
-the TP=2 hang, bug #2.)
+Takeaways (both topologies): the fused op wins biggest on large-token configs (LTX
+`v_block_s2` 2.1×, `v_selfattn_qk_s2` 1.75×; Wan `cross_q_sp4` 1.6×). Small/dispatch-bound
+configs (≤2368 rows) hover near 1.0×, and a couple of short no-trailing-op QK configs are
+a slight wash (0.87–0.98×) — there the fused op has marginally more setup than a bare
+composite norm with nothing to fold in. Per-head-rope no longer regresses (the old chunk≥2
+deadlock is dodged by forcing chunk-1; self-attn now wins 1.1–1.75×).
+
+> **NB (full-mesh memory):** the Ring config runs on all 32 devices (4 TP × 8 replicas),
+> ~8× the buffer/trace pressure of a 4-device LINE submesh. On the (flaky) galaxy the LTX
+> 14-config ring sweep can trip a `system_memory_manager` throw mid-run; the numbers above
+> were gathered in small `RMS_BENCH_ONLY` batches with a `tt-smi -glx_reset` between each.
+
+## Baseline vs fused — TP=4 galaxy LINE, 4 links (1×4 submesh)
+Same op, LINE topology on a 1×4 submesh (4 devices). Within noise of the RING numbers
+above (topology only changes fabric routing). All 14 TP=4 configs fuse.
+
+| config | pattern | feat | hd | rows | baseline µs | fused µs | speedup |
+|---|---|---:|---:|---:|---:|---:|---:|
+| v_block_s1 | block+adaLN | 1024 | — | 1216 | 143.63 | 108.50 | **1.32×** |
+| v_block_s2 | block+adaLN | 1024 | — | 4864 | 458.41 | 210.41 | **2.18×** |
+| a_block | block+adaLN | 512 | — | 32 | 34.95 | 24.80 | **1.41×** |
+| v_selfattn_qk_s1 | qk+per-head rope | 1024 | 128 | 1216 | 149.60 | 125.53 | **1.19×** |
+| v_selfattn_qk_s2 | qk+per-head rope | 1024 | 128 | 4864 | 476.94 | 258.56 | **1.84×** |
+| a_selfattn_qk | qk+per-head rope | 512 | 64 | 32 | 52.95 | 29.55 | **1.79×** |
+| a2v_videoQ_s1 | qk+per-head rope | 512 | 64 | 1216 | 111.17 | 100.82 | **1.10×** |
+| a2v_videoQ_s2 | qk+per-head rope | 512 | 64 | 4864 | 323.70 | 186.19 | **1.74×** |
+| a2v_audioK | qk+per-head rope | 512 | 64 | 256 | 80.01 | 54.69 | **1.46×** |
+| v_textcross_q_s1 | qk (no rope) | 1024 | 128 | 1216 | 93.44 | 100.41 | 0.93× |
+| v_textcross_q_s2 | qk (no rope) | 1024 | 128 | 4864 | 274.62 | 190.76 | **1.44×** |
+| v_textcross_k | qk (no rope) | 1024 | 128 | 1024 | 85.71 | 81.31 | **1.05×** |
+| a_textcross_q | qk (no rope) | 512 | 64 | 32 | 33.89 | 22.77 | **1.49×** |
+| a_textcross_k | qk (no rope) | 512 | 64 | 1024 | 75.45 | 70.24 | **1.07×** |
+
+(TP=2 not tabulated: its per-head-rope configs OOM (feat 2048) or hit the TP=2 hang, bug #2.)
 
 ## Two host-side L1/chunk-sizing bugs — FIXED (chunk clamp)
 
