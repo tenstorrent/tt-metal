@@ -1112,7 +1112,7 @@ ProgramRunArgs MergeProgramRunArgs(ProgramRunArgs base, std::span<const ProgramR
         for (const auto& [name, arg] : other.tensor_args) {
             if (!skip_validation) {
                 TT_FATAL(
-                    base.tensor_args.find(name) == base.tensor_args.end(),
+                    !base.tensor_args.contains(name),
                     "MergeProgramRunArgs: TensorParameter '{}' is specified in more than one ProgramRunArgs.",
                     name);
             }

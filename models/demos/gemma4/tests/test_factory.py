@@ -93,6 +93,32 @@ def _model_key():
     return os.path.basename(_get_model_path().rstrip("/"))
 
 
+@lru_cache(maxsize=1)
+def _model_key_candidates():
+    """Return possible threshold-table keys for the active HF_MODEL.
+
+    Local runs sometimes point HF_MODEL at a HuggingFace cache/snapshot path
+    whose basename is a hash, not "gemma-4-31B-it". Keep the fast basename path,
+    then infer well-known Gemma4 variants from the loaded config as a fallback.
+    """
+    candidates = [_model_key()]
+    try:
+        from transformers import AutoConfig
+
+        config = AutoConfig.from_pretrained(_get_model_path(), trust_remote_code=True)
+        tc = getattr(config, "text_config", config)
+        hidden = getattr(tc, "hidden_size", None)
+        is_moe = bool(getattr(tc, "enable_moe_block", False))
+        if hidden == 5376 and not is_moe:
+            candidates.append("gemma-4-31B-it")
+        elif is_moe:
+            candidates.append("gemma-4-26B-A4B-it")
+    except Exception:
+        # Config inference is best-effort; fall back to the HF_MODEL basename.
+        return tuple(dict.fromkeys(candidates))
+    return tuple(dict.fromkeys(candidates))
+
+
 def _mesh_key_from_node_name(node_name):
     """Extract the mesh-shape suffix (e.g. "1x1") from a pytest node name.
 
@@ -124,9 +150,12 @@ def get_pcc_threshold(request, default=0.99):
     table = _load_pcc_thresholds()
     node_name = request.node.name
     mesh_key = _mesh_key_from_node_name(node_name)
-    model_entry = table.get(_model_key(), {})
-    mesh_entry = model_entry.get(mesh_key, {}) if mesh_key else {}
-    return mesh_entry.get(node_name, default)
+    for model_key in _model_key_candidates():
+        model_entry = table.get(model_key, {})
+        mesh_entry = model_entry.get(mesh_key, {}) if mesh_key else {}
+        if node_name in mesh_entry:
+            return mesh_entry[node_name]
+    return default
 
 
 def is_moe_model():

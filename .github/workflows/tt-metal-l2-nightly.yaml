@@ -40,18 +40,13 @@ on:
         required: false
         type: boolean
         default: false
-      run_tt_train_cpp_unit_tests:
-        description: "Run tt-train-cpp-unit-tests"
+      run_tt_train_unit_tests:
+        description: "Run TT-Train Unit Tests"
         required: false
         type: boolean
         default: false
-      run_tt_train_model_tests:
-        description: "Run tt-train-models"
-        required: false
-        type: boolean
-        default: false
-      run_tt_train_python_unit_tests:
-        description: "Run tt-train-python-unit-tests"
+      run_tt_train_perf_tests:
+        description: "Run TT-Train Perf Tests (Python)"
         required: false
         type: boolean
         default: false
@@ -68,7 +63,7 @@ on:
       additional_test_categories:
         description: >
           Additional test categories to run (comma-separated, e.g.,
-          conv,pool,sdxl,train,sdpa,eltwise,matmul,experimental,docs_examples,ops_docs_check,misc,moreh,fused,reduction,data_movement,transformers,compute_fused)
+          conv,pool,sdxl,sdpa,eltwise,matmul,experimental,docs_examples,ops_docs_check,misc,moreh,fused,reduction,data_movement,transformers,compute_fused)
         required: false
         type: string
         default: ""
@@ -133,11 +128,10 @@ jobs:
       matrix-cpp-tests: ${{ steps.parse.outputs.matrix-cpp-tests }}
       matrix-sd-fd-tests: ${{ steps.parse.outputs.matrix-sd-fd-tests }}
       matrix-tutorials: ${{ steps.parse.outputs.matrix-tutorials }}
-      matrix-tt-train-tests: ${{ steps.parse.outputs.matrix-tt-train-tests }}
+      tt-train-skus: ${{ steps.parse.outputs.tt-train-skus }}
       matrix-wormhole-only: ${{ steps.parse.outputs.matrix-wormhole-only }}
       matrix-blackhole-only: ${{ steps.parse.outputs.matrix-blackhole-only }}
-      # Comma-separated SKU string spanning every entry in tt_metal_l2_nightly_tests.yaml
-      # (HW + viommu + sim) for the consolidated L2 nightly impl.
+      # Comma-separated SKU string spanning every entry in the dependant yamls (HW + viommu + sim).
       l2-nightly-skus: ${{ steps.parse.outputs.l2-nightly-skus }}
     steps:
       - id: parse
@@ -241,17 +235,16 @@ jobs:
           fi
           echo "matrix-tutorials=$matrix_tutorials" >> $GITHUB_OUTPUT
 
-          # Matrix for tt-train-cpp-unit-tests (N150, N300, P100a, P150b)
-          matrix_tt_train='[]'
+          # SKU coverage for tests/pipeline_reorg/tt-train-tests.yaml
+          tt_train_skus=()
           if [[ "$run_wormhole" == "true" ]]; then
-            matrix_tt_train=$(add_entry "$matrix_tt_train" "wormhole_b0" "N150")
-            matrix_tt_train=$(add_entry "$matrix_tt_train" "wormhole_b0" "N300")
+            tt_train_skus+=("wh_n150_civ2" "wh_n300_civ2")
           fi
           if [[ "$run_blackhole" == "true" ]]; then
-            matrix_tt_train=$(add_entry "$matrix_tt_train" "blackhole" "P100a")
-            matrix_tt_train=$(add_entry "$matrix_tt_train" "blackhole" "P150b")
+            tt_train_skus+=("bh_p100a_civ2_viommu" "bh_p150b_civ2")
           fi
-          echo "matrix-tt-train-tests=$matrix_tt_train" >> $GITHUB_OUTPUT
+          tt_train_skus_str=$(IFS=,; echo "${tt_train_skus[*]}")
+          echo "tt-train-skus=$tt_train_skus_str" >> $GITHUB_OUTPUT
 
           # Matrix for wormhole-only jobs (N150)
           matrix_wh='[]'
@@ -267,7 +260,9 @@ jobs:
           fi
           echo "matrix-blackhole-only=$matrix_bh" >> $GITHUB_OUTPUT
 
-          # SKU coverage for tests/pipeline_reorg/tt_metal_l2_nightly_tests.yaml.
+          # SKU coverage for L2 nightly impls. Per-impl test yamls (e.g.
+          # tt_metal_l2_nightly_tests.yaml, syseng_unit_tests.yaml) filter this
+          # superset down to the SKUs they declare.
           l2_nightly_skus=()
           if [[ "$run_wormhole" == "true" ]]; then
             l2_nightly_skus+=("wh_n150" "wh_n300" "wh_n150_civ2" "wh_n300_civ2" "sim_wormhole_b0")
@@ -301,7 +296,7 @@ jobs:
       enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
       additional_test_categories: >-
         ${{ github.event_name == 'schedule' &&
-        'conv,matmul,fused,reduction,experimental,pool,eltwise,transformers,moreh,misc,sdpa,data_movement,docs_examples,sdxl,train,compute_fused'
+        'conv,matmul,fused,reduction,experimental,pool,eltwise,transformers,moreh,misc,sdpa,data_movement,docs_examples,sdxl,compute_fused'
         || inputs.additional_test_categories }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   ttnn-ops-docs-check:
@@ -322,24 +317,18 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  didt-tests:
-    needs: [resolve-docker-pull-refs, build-artifact, generate-arch-matrix]
+  syseng-didt-tests:
+    needs: [ build-artifact, generate-arch-matrix]
     if: |
       (github.event_name == 'schedule' || inputs.run_didt_tests) &&
-      needs.generate-arch-matrix.outputs.matrix-l2-tests != '[]'
+      needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
     secrets: inherit
-    uses: ./.github/workflows/didt-tests.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-l2-tests) }}
+    uses: ./.github/workflows/syseng-didt-tests-impl.yaml
     with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
-      timeout: 20
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
   # FD C++ Unit Tests
   cpp-unit-tests:
     needs: [resolve-docker-pull-refs, build-artifact, generate-arch-matrix]
@@ -402,61 +391,32 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-  tt-train-cpp-unit-tests:
+  tt-train-unit-tests:
     needs: [resolve-docker-pull-refs, build-artifact, generate-arch-matrix]
     if: |
-      (github.event_name == 'schedule' || inputs.run_tt_train_cpp_unit_tests) &&
-      needs.generate-arch-matrix.outputs.matrix-tt-train-tests != '[]'
+      (github.event_name == 'schedule' || inputs.run_tt_train_unit_tests) &&
+      needs.generate-arch-matrix.outputs.tt-train-skus != ''
     secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-tt-train-tests) }}
-    uses: ./.github/workflows/tt-train-post-commit.yaml
+    uses: ./.github/workflows/tt-train-tests.yaml
     with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      timeout: 90
-      gtest_filter: "*"
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-  tt-train-models:
-    needs: [resolve-docker-pull-refs, build-artifact, generate-arch-matrix]
-    if: |
-      (github.event_name == 'schedule' || inputs.run_tt_train_model_tests) &&
-      needs.generate-arch-matrix.outputs.matrix-tt-train-tests != '[]'
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-tt-train-tests) }}
-    uses: ./.github/workflows/tt-train-run-models.yaml
-    with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
+      test-category: unit
+      enabled-skus: ${{ needs.generate-arch-matrix.outputs.tt-train-skus }}
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      timeout: 240
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-  tt-train-python-unit-tests:
+  tt-train-perf-tests:
     needs: [resolve-docker-pull-refs, build-artifact, generate-arch-matrix]
     if: |
-      (github.event_name == 'schedule' || inputs.run_tt_train_python_unit_tests) &&
-      needs.generate-arch-matrix.outputs.matrix-tt-train-tests != '[]'
+      (github.event_name == 'schedule' || inputs.run_tt_train_perf_tests) &&
+      needs.generate-arch-matrix.outputs.tt-train-skus != ''
     secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-tt-train-tests) }}
-    uses: ./.github/workflows/tt-train-post-commit.yaml
+    uses: ./.github/workflows/tt-train-tests.yaml
     with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
+      test-category: perf
+      enabled-skus: ${{ needs.generate-arch-matrix.outputs.tt-train-skus }}
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      timeout: 10
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   # FD Model Tests
@@ -482,16 +442,12 @@ jobs:
     needs: [resolve-docker-pull-refs, build-artifact, generate-arch-matrix]
     if: ${{ needs.generate-arch-matrix.outputs.matrix-wormhole-only != '[]' }}
     secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-wormhole-only) }}
-    uses: ./.github/workflows/triage.yaml
+    uses: ./.github/workflows/triage-tests-impl.yaml
     with:
-      runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: wh_n150_civ2
       run-hang-report-test: true
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   # TT-CNN Unit tests

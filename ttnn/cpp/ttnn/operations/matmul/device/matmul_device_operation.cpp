@@ -635,6 +635,53 @@ void validate_dram_sender_global_cb_gather_in0_geometry(
         recv_per_bank);
 }
 
+// Receiver-contiguous counterpart of the cross-check above. The recv-contig weight is an
+// NdShardSpec tensor (num_shards == ring_size) with a strided bank->ring mapping, so the
+// K-row-major "bank b owns ring positions [b*rpb, (b+1)*rpb)" convention does not apply and
+// the bank-walk assertion is intentionally omitted. The two silent-hang guards still hold:
+// the weight K-tiles must divide ring_size, and per_core_N must equal the per-receiver N
+// (N_tiles / ring_size) so the matmul's in1 page size matches what the prefetcher pushes.
+void validate_dram_sender_global_cb_gather_in0_geometry_recv_contig(
+    const tt::tt_metal::experimental::GlobalCircularBuffer& gcb,
+    const Tensor& input_tensor_a,
+    const ttnn::Shape& b_shape_padded,
+    const tt::tt_metal::Tile& in1_tile,
+    const operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config) {
+    const uint32_t ring_size = input_tensor_a.shard_spec().value().grid.num_cores();
+    const uint32_t num_recv = gcb.receiver_cores().num_cores();
+    TT_FATAL(
+        num_recv == ring_size,
+        "global_cb receiver count ({}) must equal in0 (activation) ring_size ({}). Receivers and matmul "
+        "workers must be the same set of cores.",
+        num_recv,
+        ring_size);
+
+    const uint32_t weight_K_tiles = b_shape_padded[-2] / in1_tile.get_height();
+    const uint32_t weight_N_tiles = b_shape_padded[-1] / in1_tile.get_width();
+    TT_FATAL(
+        weight_K_tiles % ring_size == 0,
+        "Weight K ({} tiles) must be divisible by ring_size ({}) for receiver-contiguous gather_in0 + "
+        "global_cb (remainder {}). The activation grid pads K past the weight K and the matmul would "
+        "wait forever for in1 pages the prefetcher never pushes.",
+        weight_K_tiles,
+        ring_size,
+        weight_K_tiles % ring_size);
+    TT_FATAL(
+        weight_N_tiles % ring_size == 0,
+        "Weight N ({} tiles) must be divisible by ring_size ({}) for receiver-contiguous gather_in0 + global_cb",
+        weight_N_tiles,
+        ring_size);
+    const uint32_t per_recv_N_tiles = weight_N_tiles / ring_size;
+    TT_FATAL(
+        per_recv_N_tiles == program_config.per_core_N,
+        "Matmul per_core_N ({}) must equal weight per-receiver N ({} = N_tiles {} / ring_size {}); otherwise "
+        "the matmul's in1 page size disagrees with what the recv-contig prefetcher pushes.",
+        program_config.per_core_N,
+        per_recv_N_tiles,
+        weight_N_tiles,
+        ring_size);
+}
+
 }  // namespace
 
 MatmulDeviceOperation::program_factory_t MatmulDeviceOperation::select_program_factory(
@@ -1053,8 +1100,15 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                     TT_FATAL(
                         input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
                             (input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                             input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM) ||
+                            // Receiver-contiguous DRAM-core prefetcher: in1 is an NdShardSpec DRAM
+                            // weight (reported as ND_SHARDED) whose data is delivered via the
+                            // global CB receivers, not read directly per its DRAM layout. The
+                            // weight's own layout is irrelevant to the matmul in this case.
+                            (attributes.global_cb.has_value() &&
                              input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM),
-                        "Input tensor B must be width sharded or DRAM interleaved when using gather_in0.");
+                        "Input tensor B must be width sharded, DRAM interleaved, or a DRAM weight fed "
+                        "via a global circular buffer when using gather_in0.");
                     if (!attributes.global_cb.has_value() && input_tensor_b.is_sharded()) {
                         if (input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::L1) {
                             TT_FATAL(
@@ -1090,21 +1144,39 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                             "Num global CB receivers must be 1 when global CB is not provided.");
                     }
 
-                    // Cross-validate the DRAM-sender global_cb's geometry against the matmul +
-                    // weight shape (silent-hang guards). Gated on the DRAM-sender path; see the
-                    // helper for why.
+                    // Cross-check program_config against the in1 weight shape (silent-hang guards),
+                    // gated on the DRAM-sender path. The two DRAM-sender weight layouts have
+                    // different bank->ring conventions, so dispatch per in1 memory_layout():
+                    //   * WIDTH_SHARDED (K-row-major): each bank holds one wide (K, N/num_banks)
+                    //     shard feeding the contiguous ring positions [b*rpb, (b+1)*rpb).
+                    //   * ND_SHARDED (receiver-contiguous): an NdShardSpec weight with round-robin
+                    //     shard placement and a strided bank->ring mapping.
+                    // NdShardSpec reports memory_layout() == ND_SHARDED (see MemoryConfig(BufferType,
+                    // NdShardSpec)); the prefetcher manager and validator key on the same enum.
                     if (attributes.global_cb.has_value() && input_tensor_a.is_sharded() &&
                         tt::tt_metal::experimental::sender_core_type(attributes.global_cb.value()) ==
                             tt::tt_metal::experimental::SenderCoreType::Dram) {
-                        validate_dram_sender_global_cb_gather_in0_geometry(
-                            attributes.global_cb.value(), input_tensor_a, b_shape_padded, in1_tile, program_config);
+                        const auto in1_layout = input_tensor_b.memory_config().memory_layout();
+                        if (in1_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+                            validate_dram_sender_global_cb_gather_in0_geometry(
+                                attributes.global_cb.value(), input_tensor_a, b_shape_padded, in1_tile, program_config);
+                        } else if (in1_layout == TensorMemoryLayout::ND_SHARDED) {
+                            validate_dram_sender_global_cb_gather_in0_geometry_recv_contig(
+                                attributes.global_cb.value(), input_tensor_a, b_shape_padded, in1_tile, program_config);
+                        } else {
+                            TT_FATAL(
+                                false,
+                                "gather_in0 matmul with a DRAM-sender global CB requires in1 to be WIDTH_SHARDED "
+                                "(K-row-major) or ND_SHARDED (receiver-contiguous), but got {}.",
+                                in1_layout);
+                        }
                     }
 
                     TT_FATAL(!optional_bias.has_value(), "Bias is not supported when using gather_in0.");
                 } else {
-                    auto grid_1d = program_config.allowed_worker_cores.value().bounding_box().grid_size();
-                    check_tensor_in_grid(input_tensor_a, grid_1d);
-                    check_tensor_in_grid(input_tensor_b, grid_1d);
+                    const auto device_grid_1d = input_tensor_a.device()->compute_with_storage_grid_size();
+                    check_tensor_in_grid(input_tensor_a, device_grid_1d);
+                    check_tensor_in_grid(input_tensor_b, device_grid_1d);
                 }
                 if (program_config.mcast_in0 || program_config.gather_in0) {
                     if (input_tensor_a.is_sharded()) {
@@ -1368,9 +1440,9 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
                                      operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
-                auto grid_2d = program_config.allowed_worker_cores.value().bounding_box().grid_size();
-                check_tensor_in_grid(input_tensor_a, grid_2d);
-                check_tensor_in_grid(input_tensor_b, grid_2d);
+                const tt::tt_metal::CoreCoord device_grid = input_tensor_a.device()->compute_with_storage_grid_size();
+                check_tensor_in_grid(input_tensor_a, device_grid);
+                check_tensor_in_grid(input_tensor_b, device_grid);
                 if (input_tensor_a.memory_config().is_sharded()) {
                     TT_FATAL(program_config.fuse_batch, "Batch fusion is required when input A is sharded");
                     auto tensor_a_memory_layout = input_tensor_a.memory_config().memory_layout();
@@ -1916,14 +1988,15 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
 
                     uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
                     uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
+                    ShardOrientation shard_orientation =
+                        program_config.transpose_mcast ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
                     CoreRangeSet all_cores;
-                    ShardOrientation shard_orientation;
-                    if (program_config.transpose_mcast) {
+                    if (attributes.output_mem_config.shard_spec().has_value()) {
+                        all_cores = attributes.output_mem_config.shard_spec()->grid;
+                    } else if (program_config.transpose_mcast) {
                         all_cores = CoreRangeSet({CoreRange({0, 0}, {num_blocks_y - 1, num_blocks_x - 1})});
-                        shard_orientation = ShardOrientation::COL_MAJOR;
                     } else {
                         all_cores = CoreRangeSet({CoreRange({0, 0}, {num_blocks_x - 1, num_blocks_y - 1})});
-                        shard_orientation = ShardOrientation::ROW_MAJOR;
                     }
                     tt::tt_metal::ShardSpec shard_spec = tt::tt_metal::ShardSpec{
                         all_cores,
@@ -1957,9 +2030,14 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         shard_orientation = input_tensor_b.shard_spec().value().orientation;
                     }
 
-                    auto cwsg_2d = program_config.allowed_worker_cores.value().bounding_box().grid_size();
-                    CoreRangeSet all_cores =
-                        num_cores_to_corerangeset(num_cores, cwsg_2d, shard_orientation == ShardOrientation::ROW_MAJOR);
+                    CoreRangeSet all_cores;
+                    if (attributes.output_mem_config.shard_spec().has_value()) {
+                        all_cores = attributes.output_mem_config.shard_spec()->grid;
+                    } else {
+                        auto cwsg_2d = program_config.allowed_worker_cores.value().bounding_box().grid_size();
+                        all_cores = num_cores_to_corerangeset(
+                            num_cores, cwsg_2d, shard_orientation == ShardOrientation::ROW_MAJOR);
+                    }
                     tt::tt_metal::ShardSpec shard_spec = tt::tt_metal::ShardSpec{
                         all_cores,
                         {per_core_M * in0_tile.get_height(), per_core_N * in1_tile.get_width()},
