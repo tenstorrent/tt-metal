@@ -2,15 +2,15 @@ dest_acc: true
 
 operands:
   - name: "input_A"
-    dims: [256, 256]
+    dims: [32, 32]
     format: "Float32"
-    const_value: 0.3123
+    const_value: 0.335
   - name: "input_B"
-    dims: [256, 256]
+    dims: [32, 32]
     format: "Float32"
     const_value: 1.0
   - name: "reduced_output"
-    dims: [256, 256]
+    dims: [32, 32]
     format: "Float32"
 
 operations:
@@ -21,9 +21,9 @@ operations:
         src_b: "input_B"
         operation: "Reduce"
         reduce_dim: "REDUCE_ROW"
-        reduce_pool: "SUM"
+        reduce_pool: "MAX"
         unpacker: "ReduceUnpacker"
         math_fidelity: "HiFi4"
         enforce_fp32_accumulation: true
     packer: "Packer"
-    block_size: [64, 64]
+    # block_size: [64, 64]

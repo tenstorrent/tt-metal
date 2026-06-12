@@ -43,7 +43,7 @@ class FusedGolden:
         master_golden = master_golden.flatten()
 
         torch.set_printoptions(precision=16)
-        print(res_tensor)
+        print(res_tensor.view(output.dimensions))
 
         logger.info("L1 golden check:")
         l1_passed = passed_test(

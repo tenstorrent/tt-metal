@@ -8,6 +8,7 @@
 
 #include "ckernel_globals.h"
 #include "ckernel_include.h"
+#include "ckernel_instr_params.h"
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cmath_common.h"
@@ -29,17 +30,14 @@ inline void reduce_row_perform_transpose()
 {
     if (enforce_fp32_accumulation)
     {
-        TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 1);
-        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Tf32));
-
         TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
         TTI_TRNSPSRCB;
         TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
 
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 16);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 20);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 24);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 28);
+        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 0, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 0);
+        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 4, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 4);
+        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 8, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 8);
+        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 12, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 12);
 
         TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
         TTI_TRNSPSRCB;
@@ -50,31 +48,34 @@ inline void reduce_row_perform_transpose()
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
 
-        TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 0);
+        TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
 
-        //////////////////////////////////////////////////
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_0, 0);
+        TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_0, 4);
+        TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::FP32, ADDR_MOD_0, 8);
+        TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::FP32, ADDR_MOD_0, 12);
+
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
+
+        TTI_MOVA2D(p_mov::DEST_NORM, 0, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 0);
+        TTI_MOVA2D(p_mov::DEST_NORM, 8, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 8);
 
         TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
 
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_0, 0);
-        TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_0, 4);
-        TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_0, 8);
-        TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::DEFAULT, ADDR_MOD_0, 12);
+        TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, 0);
+        TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, 4);
+        TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, 8);
+        TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, 12);
 
-        TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::DEFAULT, ADDR_MOD_0, 16);
-        TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::DEFAULT, ADDR_MOD_0, 20);
-        TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::DEFAULT, ADDR_MOD_0, 24);
-        TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::DEFAULT, ADDR_MOD_0, 28);
+        TTI_SFPSHFT(0xFEA, 0, p_sfpu::LREG4, 1);
+        TTI_SFPSHFT(0xFEA, 0, p_sfpu::LREG5, 1);
+        TTI_SFPSHFT(0xFEA, 0, p_sfpu::LREG6, 1);
+        TTI_SFPSHFT(0xFEA, 0, p_sfpu::LREG7, 1);
 
-        TTI_SFPSHFT((-16) & 0xFFF, p_sfpu::LREG4, p_sfpu::LREG4, 1);
-        TTI_SFPSHFT((-16) & 0xFFF, p_sfpu::LREG5, p_sfpu::LREG5, 1);
-        TTI_SFPSHFT((-16) & 0xFFF, p_sfpu::LREG6, p_sfpu::LREG6, 1);
-        TTI_SFPSHFT((-16) & 0xFFF, p_sfpu::LREG7, p_sfpu::LREG7, 1);
-
-        TTI_SFPOR(0, p_sfpu::LREG4, p_sfpu::LREG0, InstrModLoadStore::DEFAULT);
-        TTI_SFPOR(0, p_sfpu::LREG5, p_sfpu::LREG1, InstrModLoadStore::DEFAULT);
-        TTI_SFPOR(0, p_sfpu::LREG6, p_sfpu::LREG2, InstrModLoadStore::DEFAULT);
-        TTI_SFPOR(0, p_sfpu::LREG7, p_sfpu::LREG3, InstrModLoadStore::DEFAULT);
+        TTI_SFPOR(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
+        TTI_SFPOR(0, p_sfpu::LREG5, p_sfpu::LREG1, 0);
+        TTI_SFPOR(0, p_sfpu::LREG6, p_sfpu::LREG2, 0);
+        TTI_SFPOR(0, p_sfpu::LREG7, p_sfpu::LREG3, 0);
 
         TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_0, 0);
         TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_0, 4);
