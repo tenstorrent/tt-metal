@@ -190,6 +190,11 @@ private:
     std::shared_ptr<MeshBuffer> config_buffer_;
     SocketConfig config_;
     SocketEndpoint socket_endpoint_type_;
+    // True when the socket was addressed by explicit sender/receiver ranks (vs by mesh ids).
+    // In that case the endpoints are known, so a point-to-point 2-rank handshake is used even
+    // across meshes, instead of the all-hosts-of-both-meshes handshake required when only mesh
+    // ids are known.
+    bool rank_addressed_ = false;
     std::unordered_map<multihost::Rank, multihost::Rank> rank_translation_table_;
     // TODO: replace with enchantum::array
     std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, enchantum::count<SocketEndpoint>>
