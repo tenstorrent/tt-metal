@@ -26,6 +26,7 @@
 #include <reflect>
 
 #include <tt_stl/concepts.hpp>
+#include <tt_stl/reflection_detail/reflection_traits.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/type_name.hpp>
 
@@ -128,33 +129,13 @@ inline hash_t hash_object(const T&) noexcept;
 template <typename... Types>
 inline hash_t hash_objects(hash_t, const Types&...) noexcept;
 
-// Detection of the member-based hashing customization points a type can opt into:
-//  - a `to_hash()` method, or
-//  - the `attribute_names` / `attribute_values()` pair.
+// Detection of a `to_hash()` customization method. (The compile-time attribute
+// protocol detectors live in <tt_stl/reflection_detail/reflection_traits.hpp>.)
 template <typename T>
 using has_to_hash_t = decltype(std::declval<const T>().to_hash());
 
 template <typename T>
 constexpr bool supports_to_hash_v = std::experimental::is_detected_v<has_to_hash_t, T>;
-
-template <typename T>
-using has_attribute_names_t = decltype(std::declval<T>().attribute_names);
-
-template <typename T>
-using has_attribute_values_t = decltype(std::declval<T>().attribute_values());
-
-template <typename T>
-constexpr bool supports_compile_time_attributes_v = std::experimental::is_detected_v<has_attribute_names_t, T> and
-                                                    std::experimental::is_detected_v<has_attribute_values_t, T>;
-
-template <typename T>
-static constexpr std::size_t get_num_attributes() {
-    static_assert(
-        std::tuple_size_v<decltype(T::attribute_names)> ==
-            std::tuple_size_v<decltype(std::declval<T>().attribute_values())>,
-        "Number of attribute_names must match number of attribute_values");
-    return std::tuple_size_v<decltype(T::attribute_names)>;
-}
 
 template <typename T, typename = std::void_t<>>
 struct is_std_hashable : std::false_type {};
@@ -216,12 +197,12 @@ inline hash_t hash_object(const T& object) noexcept {
             fmt::print("Hashing struct {} using to_hash method: {}\n", short_type_name<std::decay_t<T>>, object);
         }
         return object.to_hash();
-    } else if constexpr (detail::supports_compile_time_attributes_v<T>) {
+    } else if constexpr (ttsl::reflection::detail::supports_compile_time_attributes_v<T>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print(
                 "Hashing struct {} using compile-time attributes: {}\n", short_type_name<std::decay_t<T>>, object);
         }
-        constexpr auto num_attributes = detail::get_num_attributes<T>();
+        constexpr auto num_attributes = ttsl::reflection::detail::get_num_attributes<T>();
         hash_t hash = 0;
         const auto attribute_values = object.attribute_values();
         [&hash, &attribute_values]<size_t... Ns>(std::index_sequence<Ns...>) {
