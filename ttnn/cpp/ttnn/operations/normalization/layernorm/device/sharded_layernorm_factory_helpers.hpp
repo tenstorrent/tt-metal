@@ -54,6 +54,9 @@ struct GridParams {
     uint32_t num_blocks = 0;
     bool use_mcast = false;
     bool use_two_stage_reduce = false;
+    // Height-sharded: full normalized (width) dim on every core, so each core is an
+    // independent row-local reduction worker (no cross-core width mcast).
+    bool height_sharded = false;
 
     static GridParams compute(const Tensor& input, uint32_t block_ht, CoreCoord compute_with_storage_grid_size);
 };

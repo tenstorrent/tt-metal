@@ -121,20 +121,44 @@ GridParams GridParams::compute(const Tensor& input, uint32_t block_ht, CoreCoord
     if (bbox.start_coord.x != 0 || bbox.start_coord.y != 0) {
         offset = bbox.start_coord;
     }
-    uint32_t nb = get_num_blocks(mcast, rw, gs, spec);
+    // Height-sharded keeps the full normalized (width) dim on every core, so there is no
+    // cross-core width reduction: each core normalizes its own rows independently. Force a
+    // single reduction block and disable mcast/two-stage reduce so the sharded factory runs
+    // the row-local path (analogous to the interleaved kernel, reading from the local shard CB).
+    bool is_height_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+    uint32_t nb = is_height_sharded ? 1 : get_num_blocks(mcast, rw, gs, spec);
     return GridParams{
         .shard_spec = spec,
         .grid_size = gs,
         .grid_offset = offset,
-        .mcast_1d = mcast,
+        .mcast_1d = is_height_sharded ? false : mcast,
         .row_wise = rw,
         .num_blocks = nb,
         .use_mcast = nb > 1,
-        .use_two_stage_reduce = should_use_two_stage_reduce(mcast, rw, gs, compute_with_storage_grid_size)};
+        .use_two_stage_reduce =
+            is_height_sharded ? false : should_use_two_stage_reduce(mcast, rw, gs, compute_with_storage_grid_size),
+        .height_sharded = is_height_sharded};
 }
 
 WorkerDistribution WorkerDistribution::compute(const GridParams& grid, uint32_t block_ht) {
     WorkerDistribution w;
+    if (grid.height_sharded) {
+        // Every core owns the full width and normalizes its own rows independently: there is no
+        // cross-core width reduction. Each core gathers a single (local) reduction block, so the
+        // gather count (num_cores_all_to_all_first_stage / num_blocks_first_stage) is 1. The fact
+        // that *all* cores are independent workers is expressed in compute_core_ranges_2d (which
+        // assigns the all-to-all sender kernel to the entire shard grid for height-sharded), not
+        // via num_cores_all_to_all -- that variable drives the per-core gather loop length.
+        w.num_rows_per_all_to_all_worker = block_ht;
+        w.num_rows_per_all_to_all_worker_last = block_ht;
+        w.num_cores_all_to_all = 1;
+        w.num_cores_all_to_all_first_stage = 1;
+        w.num_cores_all_to_all_second_stage = 0;
+        w.num_blocks_first_stage = 1;
+        w.num_blocks_second_stage = 0;
+        w.num_none_all_to_all_workers = 0;
+        return w;
+    }
     w.num_rows_per_all_to_all_worker = tt::div_up(block_ht, grid.num_blocks);
     if (grid.use_two_stage_reduce) {
         if (grid.row_wise) {
@@ -325,6 +349,22 @@ CoreRanges compute_core_ranges_2d(const GridParams& grid, const WorkerDistributi
     uint32_t num_cores_x = grid.grid_size.x;
     uint32_t num_cores_y = grid.grid_size.y;
 
+    if (grid.height_sharded) {
+        // Every core is an independent row-local worker, so the reader-sender + writer-sender +
+        // compute-all-to-all kernels are assigned to the entire shard grid (no width-reduction
+        // receivers). reader_sender is assigned to sender_cores (a single CoreRange), so cover the
+        // whole grid via its bounding box; all_to_all_cores (writer/compute) covers all cores.
+        // Each core's gather length is 1, so it reduces and normalizes only its own rows.
+        const auto bbox = grid.shard_spec.grid.bounding_box();
+        cr.all_to_all_cores = cr.all_cores;
+        cr.all_to_all_workers_except_sender = CoreRangeSet();
+        cr.not_all_to_all_workers = CoreRangeSet();
+        cr.sender_cores = {bbox.start_coord, bbox.end_coord};
+        cr.num_cores_x_mcast = 1;
+        cr.num_cores_y_mcast = 1;
+        return cr;
+    }
+
     if (grid.row_wise) {
         cr.sender_cores = {
             {(std::size_t)start_core.x, (std::size_t)start_core.y},
@@ -389,7 +429,10 @@ CoreRanges CoreRanges::compute(const GridParams& grid, const WorkerDistribution&
     // Note: all_cores comes from grid.shard_spec.grid which already has the offset embedded,
     // so we don't apply the offset to it. Other ranges are computed from (0,0)-based
     // coordinates and need the offset applied.
-    if (grid.grid_offset.has_value()) {
+    // For height-sharded, all_to_all_cores is set to all_cores (which already embeds the grid
+    // offset) and there are no receiver/except-sender ranges, so the offset must not be applied
+    // again. sender_cores is unused for mcast in this path (num_cores_*_mcast == 1).
+    if (grid.grid_offset.has_value() && !grid.height_sharded) {
         const auto& offset = grid.grid_offset.value();
         cr.start_core = {cr.start_core.x + offset.x, cr.start_core.y + offset.y};
         cr.sender_cores = {
@@ -1207,6 +1250,13 @@ CoreIndices CoreIndices::compute(uint32_t core_idx, const CoreCoord& core, const
         }
     }
 
+    // Height-sharded: every core owns the full width and is its own block-0 reduction worker, so
+    // it dispatches as an all-to-all sender (width_index 0) that gathers and normalizes only its
+    // own rows. gamma/beta therefore start at tile 0 and the full width is reduced.
+    if (ctx.grid.height_sharded) {
+        idx.width_index = 0;
+    }
+
     idx.width_index_two_stage = idx.width_index % ctx.workers.num_blocks_first_stage;
 
     if (ctx.grid.use_two_stage_reduce) {
@@ -1265,6 +1315,24 @@ std::vector<uint32_t> build_compute_args(
 
 std::vector<uint32_t> build_reader_sender_args(
     const CoreCoord& core, const CoreIndices& idx, const RuntimeArgsContext& ctx, IDevice* device) {
+    // Height-sharded: each core gathers a single (local) block -- its own shard. Point the gather
+    // at the core's own NOC coordinate and use a degenerate (self) mcast range; no cross-core
+    // width mcast/gather occurs (num_blocks_first_stage == 1, use_mcast == false). Arg layout
+    // matches the row-wise non-mcast-1d sender: 4 mcast-range coords, (width-in-row, 0), then
+    // num_blocks_first_stage (==1) mcast_noc_x entries and one mcast_noc_y entry.
+    if (ctx.grid.height_sharded) {
+        CoreCoord self = device->worker_core_from_logical_core(core);
+        std::vector<uint32_t> args;
+        args.push_back(self.x);
+        args.push_back(self.y);
+        args.push_back(self.x);
+        args.push_back(self.y);
+        args.push_back(0);
+        args.push_back(0);
+        args.push_back(self.x);  // mcast_noc_x[0] -> self
+        args.push_back(self.y);  // mcast_noc_y    -> self
+        return args;
+    }
     // Compute mcast range
     CoreCoord mcast_start, mcast_end;
     if (ctx.grid.mcast_1d) {

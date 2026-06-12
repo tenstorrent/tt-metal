@@ -146,14 +146,17 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
         }
     }
     if (a.is_sharded()) {
-        // TODO: Add support for this (should be similar to interleaved)
-        TT_FATAL(
-            a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED,
-            "Height sharded inputs are not supported.");
+        // Height-sharded inputs keep the full normalized (width) dim on each core, so the
+        // RMS/LayerNorm reduction is purely row-local (no cross-core mcast). This is the
+        // "similar to interleaved" path: it is enabled by forcing num_blocks=1 /
+        // use_mcast=false in the sharded program factory (see GridParams::compute).
+        const bool is_height_sharded = a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
         TT_FATAL(
             operation_attributes.output_mem_config.is_sharded() &&
-                operation_attributes.output_mem_config.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED,
-            "Sharded inputs require sharded outputs.");
+                (is_height_sharded
+                     ? operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED
+                     : operation_attributes.output_mem_config.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED),
+            "Sharded inputs require sharded outputs (height-sharded in -> height-sharded out).");
         if (b.has_value()) {
             TT_FATAL(b.value().is_sharded(), "residual tensor b should be sharded if input a is sharded");
             TT_FATAL(b.value().shard_spec() == a.shard_spec(), "Both a and b should have the same shard spec");
@@ -275,7 +278,18 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
 
                 bool mcast_1d = M == block_h;
                 bool row_wise = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-                if (mcast_1d) {
+                bool is_height_sharded = a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+                if (is_height_sharded) {
+                    // Full normalized (width) dim lives on every core, so block_w spans the
+                    // entire width (no cross-core width split) and block_h is the per-core row
+                    // count. Both are validated against the shard shape below; the reduction is
+                    // row-local (num_blocks=1 / use_mcast=false in the program factory).
+                    TT_FATAL(
+                        Kt == program_config.block_w,
+                        "Height-sharded block_w ({}) must equal full K in tiles ({})",
+                        program_config.block_w,
+                        Kt);
+                } else if (mcast_1d) {
                     TT_FATAL(
                         tt::div_up(Kt, shard_spec.num_cores()) == program_config.block_w,
                         "block_w ({}) must equal to K (in tiles) / num_cores ({})",
@@ -286,10 +300,6 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                         "block_h ({}) must equal to M (in tiles) ({})",
                         program_config.block_h,
                         Mt);
-                    TT_FATAL(
-                        a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED,
-                        "Height sharded memory layout is not supported, got: {}",
-                        a.memory_config().memory_layout());
                 } else {
                     uint32_t num_cores_c = bbox.end_coord.x - bbox.start_coord.x + 1;
                     uint32_t num_cores_r = bbox.end_coord.y - bbox.start_coord.y + 1;
