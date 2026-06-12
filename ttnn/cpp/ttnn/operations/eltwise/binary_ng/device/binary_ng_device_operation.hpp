@@ -8,8 +8,10 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/binary_ng/types.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/distributed/types.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 namespace ttnn::operations::binary_ng {
 
 enum class SubtileBroadcastType {
@@ -78,6 +80,19 @@ struct BinaryNgDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
+
+    // The reader/writer/compute per-core args (work-split tile counts, start ids, per-core shard tile
+    // counts, broadcast freq/counter, stride terms) and the baked scalar/zero-point are SHAPE/SCALAR-derived
+    // but are NOT covered by compute_program_hash (it hashes no tensor shape). On a cache hit the descriptor
+    // is not rebuilt, so the args baked at first miss would otherwise stay frozen and corrupt a
+    // differently-shaped (or differently-scalared) call sharing the same cache entry. Re-derive and re-apply
+    // them on every dispatch here (the tensor addresses are patched separately via the Buffer* arg bindings
+    // on the fast path; on the scalar/quant slow path they are plain values and are re-applied here too).
+    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::operations::binary_ng

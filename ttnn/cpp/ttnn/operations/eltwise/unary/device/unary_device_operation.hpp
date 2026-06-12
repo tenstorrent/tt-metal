@@ -9,8 +9,10 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -52,6 +54,18 @@ struct UnaryDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
+
+    // The reader/writer/compute per-core args (work-split tile counts + start ids) and the baked SFPU
+    // scalars are SHAPE/SCALAR-derived but are NOT all covered by compute_program_hash (for TILED
+    // interleaved padded_shape is excluded). On a cache hit the descriptor is not rebuilt, so the args
+    // baked at first miss would otherwise stay frozen and corrupt a differently-shaped call sharing the
+    // same cache entry. Re-derive and re-apply them on every dispatch here (the tensor addresses are
+    // patched separately via the Buffer* arg-0 bindings).
+    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::operations::unary
