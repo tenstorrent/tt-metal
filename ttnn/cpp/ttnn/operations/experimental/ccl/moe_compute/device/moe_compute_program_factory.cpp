@@ -457,7 +457,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     const uint32_t intermediate_size = args.intermediate_size;
     const uint32_t hidden_tiles = hidden_size / 32;
     const uint32_t intermediate_tiles = intermediate_size / 32;
-    const uint32_t num_shared_experts = args.num_shared_experts.value_or(0);
+    const uint32_t num_shared_experts = args.num_shared_experts_per_device.value_or(0);
 
     // Cores
     const auto

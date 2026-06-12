@@ -220,11 +220,14 @@ class ComputeConfig(_TTOpKwargs):
     has_bias: bool
     activation_type: ActivationFunction
     intermediate_size: int
-    num_shared_experts: int
+    # Splatted into moe_compute as `num_shared_experts_per_device`. This is the *physical*
+    # per-device shared-expert count, derived by the parent from `shared_expert_ids_to_devices`
+    # (see TTMoEDecodeConfig._shared_experts_per_device) — NOT the logical `num_shared_experts`.
+    num_shared_experts_per_device: int
 
     @classmethod
     def adopt_fields(cls) -> set[str]:
-        return {"cluster_axis", "has_bias", "num_shared_experts"}
+        return {"cluster_axis", "has_bias", "num_shared_experts_per_device"}
 
 
 class PostCombineTilizeConfig(_TTOpKwargs):
@@ -480,6 +483,35 @@ class TTMoEDecodeConfig(BaseModel):
         "topology",
     )
 
+    @staticmethod
+    def _shared_experts_per_device(shared_expert_ids_to_devices: Any, num_devices: int, num_shared_experts: int) -> int:
+        """Number of *physical* shared experts resident on each device.
+
+        This is what `moe_compute` wants as `num_shared_experts_per_device`, and it is
+        NOT the logical `num_shared_experts`. It is derived from
+        `shared_expert_ids_to_devices` (global shared-expert id → list of hosting device
+        linear ids): fully-replicated placement puts every shared expert on every device
+        (per-device count == num_shared_experts), while a distributed placement (each
+        shared expert on a subset of devices) yields a smaller, uniform per-device count.
+        e.g. 2 shared experts each residing on half the devices → 1 per device.
+        """
+        if not num_shared_experts:
+            return 0
+        # None or the "fully_replicated" convenience keyword (not yet expanded at this
+        # point): every shared expert resides on every device.
+        if shared_expert_ids_to_devices is None or isinstance(shared_expert_ids_to_devices, str):
+            return num_shared_experts
+        counts = [0] * num_devices
+        for devices in shared_expert_ids_to_devices.values():
+            for device_id in devices:
+                counts[device_id] += 1
+        if len(set(counts)) != 1:
+            raise ValueError(
+                "shared_expert_ids_to_devices must place an equal number of shared experts on every "
+                f"device to derive num_shared_experts_per_device; got per-device counts {counts}"
+            )
+        return counts[0]
+
     @classmethod
     def _adoptable(cls, data: dict[str, Any]) -> dict[str, Any]:
         """Full lookup of values sub-configs may adopt by name.
@@ -523,6 +555,20 @@ class TTMoEDecodeConfig(BaseModel):
         pre_split_chunk = resolved["hidden_size"] // num_fast_reduce_outputs
         split_size = ((pre_split_chunk + align_unit - 1) // align_unit) * align_unit
 
+        # Derive the *physical* per-device shared-expert count moe_compute wants from the
+        # experts sub-config's device assignment. Use only `.values()` (device-id lists),
+        # so the dict/str/None and JSON-stringified-key forms all work uniformly.
+        experts_data = data.get("experts")
+        if isinstance(experts_data, BaseModel):
+            shared_expert_ids_to_devices = getattr(experts_data, "shared_expert_ids_to_devices", None)
+        elif isinstance(experts_data, dict):
+            shared_expert_ids_to_devices = experts_data.get("shared_expert_ids_to_devices")
+        else:
+            shared_expert_ids_to_devices = None
+        num_shared_experts_per_device = cls._shared_experts_per_device(
+            shared_expert_ids_to_devices, prod(resolved["mesh_shape"]), resolved["num_shared_experts"]
+        )
+
         return {
             **resolved,
             # derived
@@ -530,6 +576,7 @@ class TTMoEDecodeConfig(BaseModel):
             "split_size": split_size,
             "num_fast_reduce_outputs": num_fast_reduce_outputs,
             "effective_experts_k": resolved["select_experts_k"] + resolved["num_shared_experts"],
+            "num_shared_experts_per_device": num_shared_experts_per_device,
         }
 
     @model_validator(mode="before")
