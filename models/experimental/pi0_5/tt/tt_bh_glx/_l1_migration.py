@@ -32,6 +32,44 @@ def denoise_l1_enabled() -> bool:
     return os.environ.get("PI0_GLX_DENOISE_L1", "1").lower() in ("1", "true", "yes", "on")
 
 
+def prefill_mlp_l1_enabled() -> bool:
+    """Whether to width-shard the prefill VLM MLP weights into L1. Default OFF.
+
+    Width-sharded weights require a matmul that consumes them; the current
+    MinimalMatmul / ttnn.linear path expects interleaved weights, so this is
+    opt-in until the faster width-sharded-aware matmul is wired."""
+    return os.environ.get("PI0_GLX_PREFILL_MLP_L1", "0").lower() in ("1", "true", "yes", "on")
+
+
+def prefill_mlp_l1_projs() -> tuple:
+    """Which MLP projections to place in L1. Env PI0_GLX_PREFILL_MLP_L1_PROJ
+    (comma list), default all three. Use 'gate_proj,up_proj' to keep down_proj
+    in DRAM — frees ~304 KB/core, which clears the normal-matmul CB clash."""
+    raw = os.environ.get("PI0_GLX_PREFILL_MLP_L1_PROJ", "gate_proj,up_proj,down_proj")
+    return tuple(p.strip() for p in raw.split(",") if p.strip())
+
+
+def prefill_mlp_l1_layout() -> str:
+    """'interleaved' (for the normal matmul) or 'width_sharded'. Env
+    PI0_GLX_PREFILL_MLP_L1_LAYOUT. Default 'interleaved' — the normal
+    MatmulMultiCoreReuseMultiCast / ttnn.linear path reads interleaved weights."""
+    return os.environ.get("PI0_GLX_PREFILL_MLP_L1_LAYOUT", "interleaved").strip().lower()
+
+
+def prefill_mlp_l1_grid() -> tuple:
+    """(grid_x, grid_y) for prefill MLP width-sharding. Env PI0_GLX_PREFILL_MLP_L1_GRID='gx,gy'.
+
+    Default 12x10=120 (the full BH Tensix grid the matmul reports). N=16384 is
+    512 tiles, which is NOT divisible by 120, so the shard is uneven/padded:
+    ceil(512/120)=5 tiles/core → padded N=19200 (~17% waste). The padded shard
+    fits L1 (~1.25 MB/core for gate+up+down at bf8). For an even (un-padded)
+    shard use a divisor-clean grid (8x8=64), but that overflows L1 with all
+    three weights — see the budget guard in migrate_prefill_mlp_weights_to_l1."""
+    raw = os.environ.get("PI0_GLX_PREFILL_MLP_L1_GRID", "12,10")
+    gx, gy = (int(x) for x in raw.split(","))
+    return gx, gy
+
+
 def _to_l1(t: Optional["ttnn.Tensor"]) -> Optional["ttnn.Tensor"]:
     """Move a tensor to L1 and free the DRAM source; idempotent on L1 tensors.
 
@@ -89,3 +127,99 @@ def migrate_denoise_weights_to_l1(stage_denoise, suffix_slices, denoise_head) ->
 
     denoise_head.mod_weight = _to_l1(denoise_head.mod_weight)
     denoise_head.mod_bias = _to_l1(denoise_head.mod_bias)
+
+
+# ---------------------------------------------------------------------------- #
+# Prefill VLM MLP — width-sharded L1 (opt-in, for a width-shard-aware matmul)   #
+# ---------------------------------------------------------------------------- #
+
+# bf8_b effective bytes/element: 1 data byte + 1 exponent byte per 16-element
+# block ≈ 17/16. Used only for the per-core L1 budget guard.
+_BF8_BYTES_PER_ELEM = 17.0 / 16.0
+# Conservative usable L1 per Blackhole Tensix core (1.5 MB minus CB/runtime).
+_USABLE_L1_PER_CORE = 1_400_000
+
+
+def _shard_width_tiles(n: int, num_cores: int) -> int:
+    """Tiles of width each core holds (ceil) — supports uneven/padded sharding."""
+    n_tiles = n // 32
+    return -(-n_tiles // num_cores)  # ceil division
+
+
+def _to_l1_width_sharded(t, grid_x: int, grid_y: int):
+    """Move a 2D weight to WIDTH_SHARDED L1 on a grid_x*grid_y core grid.
+
+    Each core owns a [K, shard_w] column slice where shard_w = ceil(N_tiles /
+    num_cores) * 32. When N_tiles isn't divisible by num_cores the shard is
+    padded (num_cores*shard_w > N) — the trailing cores hold padding. Frees the
+    DRAM source. Idempotent on tensors already in L1.
+    """
+    if t is None:
+        return None
+    if t.memory_config().buffer_type == ttnn.BufferType.L1:
+        return t
+    shape = list(t.shape)
+    while len(shape) > 2 and shape[0] == 1:
+        shape = shape[1:]
+    if len(shape) != 2:
+        raise ValueError(f"_to_l1_width_sharded expects a 2D weight, got {list(t.shape)}")
+    k, n = shape
+    if n % 32 != 0:
+        raise ValueError(f"_to_l1_width_sharded: N={n} not tile-aligned (mod 32)")
+    num_cores = grid_x * grid_y
+    shard_w = _shard_width_tiles(n, num_cores) * 32
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))})
+    shard_spec = ttnn.ShardSpec(grid, (k, shard_w), ttnn.ShardOrientation.ROW_MAJOR)
+    memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+    moved = ttnn.to_memory_config(t, memcfg)
+    ttnn.deallocate(t)
+    return moved
+
+
+# Aggregate usable L1 per BH chip: 120-core compute grid * 1.5 MB, derated to
+# ~1.4 MB/core for CB/runtime reservations.
+_AGG_L1_PER_CHIP = 120 * _USABLE_L1_PER_CORE
+
+
+def migrate_prefill_mlp_weights_to_l1(stage_prefill, layout: str, grid_x: int, grid_y: int, projs: tuple) -> None:
+    """Move the selected prefill VLM block MLP weights into L1.
+
+    `projs` is the subset of ('gate_proj','up_proj','down_proj') to migrate;
+    the rest stay in DRAM. Gemma MLP has no biases. layout='interleaved'
+    (for the normal matmul) bank-interleaves; 'width_sharded' gives each core a
+    [K, N/cores] slice (for a width-shard-aware matmul). Both raise (not
+    silently OOM) if the migrated weights overflow the relevant L1 budget.
+    """
+    if not stage_prefill.slices:
+        return
+    mlp0 = stage_prefill.slices[0].block.mlp
+    sel0 = [getattr(mlp0, p) for p in projs]
+
+    if layout == "width_sharded":
+        num_cores = grid_x * grid_y
+        per_core = 0.0
+        for w in sel0:
+            k, n = [d for d in list(w.shape) if d != 1][-2:]
+            per_core += (k * _shard_width_tiles(n, num_cores) * 32) * _BF8_BYTES_PER_ELEM
+        if per_core > _USABLE_L1_PER_CORE:
+            raise RuntimeError(
+                f"prefill MLP width-shard ({','.join(projs)}) needs ~{per_core/1e6:.2f} MB/core on "
+                f"{grid_x}x{grid_y}={num_cores} cores, over ~{_USABLE_L1_PER_CORE/1e6:.2f} MB/core. "
+                f"Use a larger grid (PI0_GLX_PREFILL_MLP_L1_GRID) or fewer projs."
+            )
+        for sl in stage_prefill.slices:
+            mlp = sl.block.mlp
+            for p in projs:
+                setattr(mlp, p, _to_l1_width_sharded(getattr(mlp, p), grid_x, grid_y))
+    else:  # interleaved
+        agg = sum((k := [d for d in list(w.shape) if d != 1])[-2] * k[-1] * _BF8_BYTES_PER_ELEM for w in sel0)
+        if agg > _AGG_L1_PER_CHIP:
+            raise RuntimeError(
+                f"prefill MLP interleaved-L1 ({','.join(projs)}) needs ~{agg/1e6:.0f} MB/chip, over the "
+                f"~{_AGG_L1_PER_CHIP/1e6:.0f} MB aggregate L1. Note: even when the weights fit, the normal "
+                f"matmul's static CB region must also fit per-core — see the gate+up-only note."
+            )
+        for sl in stage_prefill.slices:
+            mlp = sl.block.mlp
+            for p in projs:
+                setattr(mlp, p, _to_l1(getattr(mlp, p)))

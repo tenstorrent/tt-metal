@@ -58,7 +58,15 @@ from models.experimental.pi0_5.tt.ttnn_pi0_5_model import (
     use_upstream_masks,
 )
 
-from ._l1_migration import denoise_l1_enabled, migrate_denoise_weights_to_l1
+from ._l1_migration import (
+    denoise_l1_enabled,
+    migrate_denoise_weights_to_l1,
+    migrate_prefill_mlp_weights_to_l1,
+    prefill_mlp_l1_enabled,
+    prefill_mlp_l1_grid,
+    prefill_mlp_l1_layout,
+    prefill_mlp_l1_projs,
+)
 from .kv_migration import migrate_layer_paired
 from .stage_denoise import StageDenoise
 from .stage_prefill import StagePrefill
@@ -251,6 +259,15 @@ class Pi0_5GLXPipeline:
         self._denoise_l1 = denoise_l1_enabled()
         if self._denoise_l1:
             migrate_denoise_weights_to_l1(self.stage_denoise, self.suffix_slices, self.denoise_head)
+
+        # Opt-in (PI0_GLX_PREFILL_MLP_L1=1): width-shard the prefill VLM MLP
+        # weights (gate/up/down) into L1 for a width-shard-aware matmul. OFF by
+        # default — the current matmul path expects interleaved weights.
+        if prefill_mlp_l1_enabled():
+            gx, gy = prefill_mlp_l1_grid()
+            migrate_prefill_mlp_weights_to_l1(
+                self.stage_prefill, prefill_mlp_l1_layout(), gx, gy, prefill_mlp_l1_projs()
+            )
 
     # ---- upstream-openpi compat artifacts -------------------------------
 
@@ -465,10 +482,30 @@ class Pi0_5GLXPipeline:
 
         Returns the final actions tensor (= self.x_t_fp32 by reference) so the
         caller can either ttnn.to_torch it (eager) or remember it as the trace
-        output handle (trace mode)."""
+        output handle (trace mode).
+
+        PI0_GLX_TRACE_DEBUG=1 prints a marker after each stage enqueues and then
+        drains that stage's submesh with ttnn.synchronize_device. A stall then
+        localizes to either enqueue (the stage's "enqueued" line never prints)
+        or execution (the run hangs at that stage's drain) — and tells us whether
+        per-stage draining is enough to make the no-readback path complete (the
+        eager path only completes because of its terminal to_torch)."""
+        dbg = os.environ.get("PI0_GLX_TRACE_DEBUG", "").lower() in ("1", "true", "yes", "on")
+
+        def _mark(stage: str, drain_mesh=None):
+            if not dbg:
+                return
+            print(f"[glx-trace-dbg] {stage}: enqueued", flush=True)
+            if drain_mesh is not None:
+                ttnn.synchronize_device(drain_mesh)
+                print(f"[glx-trace-dbg] {stage}: drained", flush=True)
+
         vision_out = self.stage_vision.run(self.pixel_values_buf)
+        _mark("vision", self.h.vision_per_chip[-1])
         vision_out_p0 = self.transport.send(vision_out, self.h.prefill_per_chip[0], tag="v2p")
+        _mark("v2p", self.h.prefill_per_chip[0])
         prefix_embs = self._build_prefix(vision_out_p0, self.lang_tokens_buf)
+        _mark("build_prefix", self.h.prefill_per_chip[0])
         _final_hidden, per_layer_kv = self.stage_prefill.run(
             prefix_embs,
             attention_mask=None,
@@ -477,10 +514,13 @@ class Pi0_5GLXPipeline:
             per_chip_cos=(upstream["prefix_cos"] if upstream is not None else None),
             per_chip_sin=(upstream["prefix_sin"] if upstream is not None else None),
         )
+        _mark("prefill", self.h.prefill_per_chip[-1])
         prefix_kv_per_chip = migrate_layer_paired(
             per_layer_kv, self.h.denoise_per_chip, transport=self.transport, to_l1=self._denoise_l1
         )
+        _mark("kv_migration", self.h.denoise_per_chip[-1])
         self._run_denoise_loop_device(prefix_kv_per_chip, upstream)
+        _mark("denoise", self.h.denoise_per_chip[0])
         return self.x_t_fp32
 
     def capture_trace(
