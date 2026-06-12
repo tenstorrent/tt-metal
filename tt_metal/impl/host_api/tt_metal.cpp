@@ -236,6 +236,7 @@ bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t addres
 }
 
 bool ReadFromDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::span<uint8_t> host_buffer) {
+    IDevice* unused = NULL;  // TEST: deliberate clang-tidy violation (modernize-use-nullptr)
     bool pass = true;
     MetalContext::instance().get_cluster().dram_barrier(device->id());
     MetalContext::instance().get_cluster().read_dram_vec(
