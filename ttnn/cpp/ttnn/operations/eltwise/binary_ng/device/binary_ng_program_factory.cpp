@@ -1102,6 +1102,17 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             uint32_t compute_tiles = row_major_inputs ? (c_num_tiles_core * tiles_per_row_width) : c_num_tiles_core;
 
             uint32_t packed_scalar_for_reader = 0u;
+            // A scalar op's scalar isn't hashed, so binding addresses would freeze it on a cache hit.
+            // Only fast-path when no scalar is baked; otherwise raw addresses keep the op on the slow
+            // path that re-bakes the scalar each dispatch (matching main). Plain add_ etc. stay fast.
+            const bool can_fast_path = !operation_attributes.scalar.has_value() && !rt_is_quant_op;
+            const auto push_addr = [can_fast_path](KernelDescriptor::RTArgList& args, tt::tt_metal::Buffer* buf) {
+                if (can_fast_path && buf != nullptr) {
+                    args.push_back(buf);
+                } else {
+                    args.push_back(buf != nullptr ? static_cast<uint32_t>(buf->address()) : 0u);
+                }
+            };
             if (b.has_value()) {
                 if (rt_has_sharding) {
                     if (all_same_shard_spec) {
@@ -1115,7 +1126,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 // place via a BufferBinding instead of forcing a descriptor rebuild every dispatch.
                 KernelDescriptor::RTArgList writer_runtime_args;
                 if (row_major_inputs) {
-                    writer_runtime_args.push_back(c.buffer());
+                    push_addr(writer_runtime_args, c.buffer());
                     writer_runtime_args.push_back(common_row_width_elements);
                     writer_runtime_args.push_back(c_num_tiles_core);
                     writer_runtime_args.push_back(cD);
@@ -1130,7 +1141,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                     writer_runtime_args.push_back(tiles_per_row_width);
                     writer_runtime_args.push_back(writer_stride_size_bytes);
                 } else {
-                    writer_runtime_args.push_back(c.buffer());
+                    push_addr(writer_runtime_args, c.buffer());
                     writer_runtime_args.push_back(c_start_id);
                     writer_runtime_args.push_back(c_num_tiles_core);
                     writer_runtime_args.push_back(c_current_shard_width);
@@ -1181,7 +1192,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 // (arg 0 for row-major, arg 1 here — after the packed scalar) instead of rebuilding.
                 KernelDescriptor::RTArgList writer_runtime_args;
                 if (row_major_inputs) {
-                    writer_runtime_args.push_back(c.buffer());
+                    push_addr(writer_runtime_args, c.buffer());
                     writer_runtime_args.push_back(common_row_width_elements);
                     writer_runtime_args.push_back(c_num_tiles_core);
                     writer_runtime_args.push_back(cD);
@@ -1197,7 +1208,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                     writer_runtime_args.push_back(writer_stride_size_bytes);
                 } else {
                     writer_runtime_args.push_back(packed_scalar);
-                    writer_runtime_args.push_back(c.buffer());
+                    push_addr(writer_runtime_args, c.buffer());
                     writer_runtime_args.push_back(c_start_id);
                     writer_runtime_args.push_back(c_num_tiles_core);
                     writer_runtime_args.push_back(c_current_shard_width);
@@ -1226,14 +1237,14 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 const uint32_t bN_arg = b.has_value() ? bN : 1u;
                 const uint32_t bC_arg = b.has_value() ? bC : 1u;
                 const uint32_t bHt_r_arg = b.has_value() ? bHt_r : 1u;
-                reader_runtime_args.push_back(a.buffer());
+                push_addr(reader_runtime_args, a.buffer());
                 reader_runtime_args.push_back(c_num_tiles_core);
                 reader_runtime_args.push_back(aD);
                 reader_runtime_args.push_back(aN);
                 reader_runtime_args.push_back(aC);
                 reader_runtime_args.push_back(aHt_r);
                 reader_runtime_args.push_back(aND);
-                reader_runtime_args.push_back(b.has_value() ? b->buffer() : nullptr);
+                push_addr(reader_runtime_args, b.has_value() ? b->buffer() : nullptr);
                 reader_runtime_args.push_back(bD_arg);
                 reader_runtime_args.push_back(bN_arg);
                 reader_runtime_args.push_back(bC_arg);
@@ -1253,7 +1264,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 reader_runtime_args.push_back(reader_stride_size_bytes);
                 reader_runtime_args.push_back(packed_scalar_for_reader);
             } else {
-                reader_runtime_args.push_back(a.buffer());
+                push_addr(reader_runtime_args, a.buffer());
                 reader_runtime_args.push_back(c_start_id);
                 reader_runtime_args.push_back(a_num_tiles);
                 reader_runtime_args.push_back(c_num_tiles_core);
@@ -1268,7 +1279,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 reader_runtime_args.push_back(cHt);
                 reader_runtime_args.push_back(cWt);
                 reader_runtime_args.push_back(cND);
-                reader_runtime_args.push_back(b.has_value() ? b->buffer() : nullptr);
+                push_addr(reader_runtime_args, b.has_value() ? b->buffer() : nullptr);
                 reader_runtime_args.push_back(bHt * bWt * bC * bN * bD * (bND > 1));
                 reader_runtime_args.push_back(bHt * bWt * bC * bN * (bD > 1));
                 reader_runtime_args.push_back(bHt * bWt * bC * (bN > 1));

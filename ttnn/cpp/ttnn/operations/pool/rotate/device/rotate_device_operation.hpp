@@ -4,11 +4,15 @@
 
 #pragma once
 
+#include <optional>
 #include <string>
 #include <tuple>
 #include <variant>
+#include <vector>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 #include "ttnn/device_operation.hpp"
+#include "ttnn/distributed/types.hpp"
 
 namespace ttnn::operations::rotate {
 
@@ -52,6 +56,21 @@ struct RotateDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+
+    // The reader kernel (kernel index 0 in both program factories) bakes the angle-DERIVED values
+    // (cos_angle_q16, sin_angle_q16, center_x_q16, center_y_q16, fill) into reader runtime args [3..7].
+    // compute_program_hash deliberately EXCLUDES angle/center/fill (only memory_config, interpolation_mode,
+    // input shape and dtype participate), so a program-cache HIT with a different angle/center/fill would
+    // otherwise re-use the previously baked values and produce a WRONG result. The tensor base addresses
+    // (reader arg [0], writer arg [0]) ride on patchable Buffer* rt-arg bindings handled by the framework,
+    // but these scalar args cannot be expressed that way -- so we re-derive them EXACTLY as the factory
+    // does and re-apply them on every cache hit here. Declaring this also opts the op into the descriptor
+    // fast-path (no create_descriptor() rebuild on a hit). Mirrors the move / pool pattern.
+    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::operations::rotate

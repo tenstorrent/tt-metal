@@ -3,11 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <ttnn/operations/pool/rotate/device/rotate_device_operation.hpp>
+#include <ttnn/operations/pool/device/kernels/fixed_point_arithmetic.hpp>
 
+#include <bit>
 #include <cmath>
+#include <cstdint>
+#include <vector>
 #include <ttnn/tensor/types.hpp>
 #include <ttnn/tensor/tensor_spec.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::rotate {
 
@@ -130,6 +137,139 @@ ttsl::hash::hash_t RotateDeviceOperation::compute_program_hash(
         operation_attributes.interpolation_mode,
         tensor_args.input.logical_shape(),
         tensor_args.input.dtype());
+}
+
+std::vector<tt::tt_metal::DynamicRuntimeArg> RotateDeviceOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /* mesh_dispatch_coordinate */) {
+    using tt::tt_metal::CoreCoord;
+
+    const auto& input_tensor = tensor_args.input;
+
+    // --- Recompute cos/sin/center EXACTLY as both program factories do --------------------------
+    const float angle_rad = operation_attributes.angle * M_PI / 180.0f;
+    const float cos_angle = std::cos(angle_rad);
+    const float sin_angle = std::sin(angle_rad);
+
+    const auto& input_shape = input_tensor.padded_shape();
+    const uint32_t input_batch = input_shape[0];
+    const uint32_t input_height = input_shape[1];
+    const uint32_t input_width = input_shape[2];
+
+    float center_x = 0.0f;
+    float center_y = 0.0f;
+    if (operation_attributes.center.has_value()) {
+        center_x = std::get<0>(operation_attributes.center.value()) - 0.5f;
+        center_y = std::get<1>(operation_attributes.center.value()) - 0.5f;
+    } else {
+        center_x = (static_cast<float>(input_width) - 1.0f) / 2.0f;
+        center_y = (static_cast<float>(input_height) - 1.0f) / 2.0f;
+    }
+
+    const bool is_bilinear = operation_attributes.interpolation_mode == "bilinear";
+
+    // Fill value bits: bilinear keeps the float32 bit pattern for fp32 inputs and bf16 bits for bf16
+    // inputs; nearest always emits the bf16 bit pattern (matches the respective factory).
+    uint32_t fill_value_bits = 0;
+    {
+        const bfloat16 bf16_value(operation_attributes.fill);
+        const uint16_t fill_bf16 = std::bit_cast<uint16_t>(bf16_value);
+        if (is_bilinear) {
+            const bool is_bfloat16 = input_tensor.dtype() == DataType::BFLOAT16;
+            fill_value_bits =
+                is_bfloat16 ? static_cast<uint32_t>(fill_bf16) : std::bit_cast<uint32_t>(operation_attributes.fill);
+        } else {
+            fill_value_bits = static_cast<uint32_t>(fill_bf16);
+        }
+    }
+
+    const uint32_t cos_angle_q16 = static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(cos_angle));
+    const uint32_t sin_angle_q16 = static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(sin_angle));
+    const uint32_t center_x_q16 = static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_x));
+    const uint32_t center_y_q16 = static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_y));
+
+    // --- Re-derive the work-core list EXACTLY as the selected factory does ----------------------
+    // The reader is pushed first into desc.kernels in both factories => reader kernel index == 0.
+    // Its angle-derived args occupy reader runtime args [3]=cos, [4]=sin, [5]=center_x, [6]=center_y,
+    // [7]=fill (args [0..2] are buffer*/num_sticks/start_stick_id and are NOT re-applied here).
+    constexpr uint32_t kReaderKernelIdx = 0;
+    constexpr uint32_t kCosArgIdx = 3;
+    constexpr uint32_t kSinArgIdx = 4;
+    constexpr uint32_t kCenterXArgIdx = 5;
+    constexpr uint32_t kCenterYArgIdx = 6;
+    constexpr uint32_t kFillArgIdx = 7;
+
+    const bool is_input_sharded = input_tensor.is_sharded();
+    const bool is_nd_sharded = input_tensor.memory_config().nd_shard_spec().has_value();
+
+    std::vector<CoreCoord> logical_cores;
+    uint32_t num_cores = 0;
+
+    auto* device = input_tensor.device();
+    const uint32_t total_output_sticks = input_batch * input_height * input_width;
+
+    if (is_bilinear) {
+        // Mirror BilinearProgramFactory::create_descriptor's work-core derivation.
+        // Note: bilinear has no ND-sharded path; it keys off input.shard_spec() then output.shard_spec().
+        if (is_input_sharded) {
+            const auto input_shard_spec = input_tensor.shard_spec().value();
+            num_cores = input_shard_spec.num_cores();
+            logical_cores = tt::tt_metal::corerange_to_cores(
+                input_shard_spec.grid,
+                num_cores,
+                input_shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
+        } else if (tensor_return_value.is_sharded()) {
+            // Output-sharded, input interleaved: factory derives cores from the OUTPUT shard spec.
+            const auto output_shard_spec = tensor_return_value.shard_spec().value();
+            const uint32_t output_nsticks_per_core = output_shard_spec.shape[0];
+            num_cores = (total_output_sticks + output_nsticks_per_core - 1) / output_nsticks_per_core;
+            logical_cores = tt::tt_metal::corerange_to_cores(
+                output_shard_spec.grid,
+                num_cores,
+                output_shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
+        } else {
+            const auto compute_grid_size = device->compute_with_storage_grid_size();
+            auto [num_cores_used, all_cores_range, cg1, cg2, ns1, ns2] =
+                tt::tt_metal::split_work_to_cores(compute_grid_size, total_output_sticks);
+            num_cores = num_cores_used;
+            logical_cores = tt::tt_metal::corerange_to_cores(all_cores_range, num_cores, true);
+        }
+    } else {
+        // Mirror NearestProgramFactory::create_descriptor's work-core derivation.
+        if (is_input_sharded && !is_nd_sharded) {
+            const auto input_shard_spec = input_tensor.shard_spec().value();
+            num_cores = input_shard_spec.num_cores();
+            logical_cores = tt::tt_metal::corerange_to_cores(
+                input_shard_spec.grid,
+                num_cores,
+                input_shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
+        } else if (is_nd_sharded) {
+            const auto& nd_shard_spec = input_tensor.memory_config().nd_shard_spec().value();
+            num_cores = nd_shard_spec.grid.num_cores();
+            logical_cores = tt::tt_metal::corerange_to_cores(
+                nd_shard_spec.grid, num_cores, nd_shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
+        } else {
+            const auto compute_grid_size = device->compute_with_storage_grid_size();
+            auto [num_cores_used, all_cores_range, cg1, cg2, ns1, ns2] =
+                tt::tt_metal::split_work_to_cores(compute_grid_size, total_output_sticks);
+            num_cores = num_cores_used;
+            logical_cores = tt::tt_metal::corerange_to_cores(all_cores_range, num_cores, true);
+        }
+    }
+
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+    dynamic_args.reserve(static_cast<size_t>(num_cores) * 5);
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        const CoreCoord& core = logical_cores[i];
+        dynamic_args.push_back({kReaderKernelIdx, core, kCosArgIdx, cos_angle_q16});
+        dynamic_args.push_back({kReaderKernelIdx, core, kSinArgIdx, sin_angle_q16});
+        dynamic_args.push_back({kReaderKernelIdx, core, kCenterXArgIdx, center_x_q16});
+        dynamic_args.push_back({kReaderKernelIdx, core, kCenterYArgIdx, center_y_q16});
+        dynamic_args.push_back({kReaderKernelIdx, core, kFillArgIdx, fill_value_bits});
+    }
+    return dynamic_args;
 }
 
 }  // namespace ttnn::operations::rotate
