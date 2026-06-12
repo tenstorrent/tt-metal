@@ -315,6 +315,14 @@ class TtQwen36FullAttention(LightweightModule):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        # Lower-fidelity kernel for the bulk QKVG / output projections (qk_norm
+        # and SDPA keep HiFi4). bf8 weights tolerate HiFi2 w/o fp32 dest-acc.
+        self.compute_kernel_proj = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
 
         try:
             self._out_num_links = int(os.environ.get("QWEN36_CCL_NUM_LINKS", "1"))
@@ -593,7 +601,7 @@ class TtQwen36FullAttention(LightweightModule):
         """
         mem = ttnn.DRAM_MEMORY_CONFIG
         xqkvg = ttnn.linear(
-            x_3d, self.w_qkvg, dtype=ttnn.bfloat16, memory_config=mem, compute_kernel_config=self.compute_kernel
+            x_3d, self.w_qkvg, dtype=ttnn.bfloat16, memory_config=mem, compute_kernel_config=self.compute_kernel_proj
         )
         if len(list(xqkvg.shape)) == 4:
             _, _, _Tq, _Nq = list(xqkvg.shape)
@@ -653,7 +661,7 @@ class TtQwen36FullAttention(LightweightModule):
             gated = attn_flat
 
         partial = ttnn.linear(
-            gated, self.w_out, dtype=ttnn.bfloat16, memory_config=mem, compute_kernel_config=self.compute_kernel
+            gated, self.w_out, dtype=ttnn.bfloat16, memory_config=mem, compute_kernel_config=self.compute_kernel_proj
         )
         gated.deallocate(True)
         # 1D-TP reduce_scatter (framework tt_all_reduce on a (1,tp) mesh): SUM the

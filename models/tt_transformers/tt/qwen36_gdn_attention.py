@@ -181,6 +181,15 @@ class TtQwen36GDNAttention(LightweightModule):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        # Lower-fidelity kernel for the bulk input/output projections (qkvz, ba,
+        # out). The recurrent state + norm stay HiFi4/fp32; the projections feed
+        # bf8 weights and tolerate HiFi2 without fp32 dest-acc (cheaper MACs).
+        self.compute_kernel_proj = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
 
         # --- Number of TP links for the out-proj all_reduce ------------------
         try:
@@ -490,7 +499,7 @@ class TtQwen36GDNAttention(LightweightModule):
         slice (fed straight into the conv) and ``z`` the gate.
         """
         mem = ttnn.DRAM_MEMORY_CONFIG
-        ck = self.compute_kernel
+        ck = self.compute_kernel_proj
 
         qkvz = ttnn.linear(x, self.w_qkvz, dtype=self.dtype, memory_config=mem, compute_kernel_config=ck)
         out_rank = len(qkvz.shape)
@@ -598,7 +607,7 @@ class TtQwen36GDNAttention(LightweightModule):
             self.w_out,
             dtype=ttnn.bfloat16,
             memory_config=mem,
-            compute_kernel_config=self.compute_kernel,
+            compute_kernel_config=self.compute_kernel_proj,
         )
         # tt_all_reduce reduce_scatters on dim=3, so the input must be 4D
         # [1, 1, B*T, H]. At decode (T=1) the partial is [1, 1, H] (3D) and
@@ -751,41 +760,36 @@ class TtQwen36GDNAttention(LightweightModule):
             mixed, B, T, conv_state=self.conv_state_buffer
         )
 
-        # 3. Per-head layout
-        q_h = ttnn.reshape(q_conv, [B, T, self.n_k_per_chip, self.head_dim])
-        k_h = ttnn.reshape(k_conv, [B, T, self.n_k_per_chip, self.head_dim])
-        v_h = ttnn.reshape(v_conv, [B, T, self.n_v_per_chip, self.head_dim])
+        # 3. Per-head layout — FUSED-HEADS [B, H, T, D] (pre_transposed). At
+        #    decode T==1 the [B, H, 1, D] and [B, 1, H, D] layouts share identical
+        #    contiguous memory, so this reshape is bit-identical to the
+        #    [B, T, H, D] form but lets the recurrent core run pre_transposed:
+        #    it SKIPS its 5 in-core transposes. That avoids the Blackhole bf16
+        #    sub-tile transpose corruption (H=6 padded to a 32-tile) WITHOUT the
+        #    fp32 up-cast — so q/k/v stay bf16 and the recurrent matmuls run bf16
+        #    (QWEN36_DN_RECUR_BF16_IN, default on) instead of fp32. (Matches the
+        #    galaxy use_dn_fused_heads decode path.)
+        q_h = ttnn.reshape(q_conv, [B, self.n_k_per_chip, T, self.head_dim])
+        k_h = ttnn.reshape(k_conv, [B, self.n_k_per_chip, T, self.head_dim])
+        v_h = ttnn.reshape(v_conv, [B, self.n_v_per_chip, T, self.head_dim])
         z_h = ttnn.reshape(z, [B, T, self.n_v_per_chip, self.head_dim])
         q_conv.deallocate(True)
         k_conv.deallocate(True)
         v_conv.deallocate(True)
 
-        # 4. beta and g
+        # 4. beta and g → [B, n_v, T] (pre_transposed layout; bit-identical at T=1)
         beta, g = self._compute_beta_g(b, a)
         b.deallocate(True)
         a.deallocate(True)
+        beta = ttnn.reshape(beta, [B, self.n_v_per_chip, T])
+        g = ttnn.reshape(g, [B, self.n_v_per_chip, T])
 
-        # 5. GQA expand q, k
-        q_exp, k_exp = self._gqa_expand_q_k(q_h, k_h)
+        # 5. GQA expand q, k on the head dim (now dim 1)
+        q_exp, k_exp = self._gqa_expand_q_k(q_h, k_h, head_dim_axis=1)
         q_h.deallocate(True)
         k_h.deallocate(True)
 
-        # 6. Recurrent delta rule — fp32-state fork (reused galaxy core).
-        #
-        # Up-cast q/k/v to fp32 BEFORE the core. The core (pre_transposed=False)
-        # transposes q/k/v on dims (1,2) and only THEN up-casts bf16→fp32. On
-        # Blackhole, ttnn.transpose of a bf16 tensor whose head dim is sub-tile
-        # (H=6, padded to a 32-tile) corrupts the data → the recurrent matmuls
-        # produce ~1e36 and decode collapses to noise (PCC ≈ 0). Transposing in
-        # fp32 is correct. This is perf-neutral: the core up-casts q/k/v to fp32
-        # internally anyway (the default, bf16_in off), so we only move the cast
-        # ahead of the transpose. (Isolated via per-tensor fp32 sweep: q/k/v fp32
-        # → PCC 0.9996; beta/g fp32 alone → still 0.) The galaxy decode dodges
-        # this by running pre_transposed=True (fused heads, no in-core transpose).
-        _mem = ttnn.DRAM_MEMORY_CONFIG
-        q_exp = ttnn.typecast(q_exp, ttnn.float32, memory_config=_mem)
-        k_exp = ttnn.typecast(k_exp, ttnn.float32, memory_config=_mem)
-        v_h = ttnn.typecast(v_h, ttnn.float32, memory_config=_mem)
+        # 6. Recurrent delta rule — pre_transposed=True (bf16 q/k/v, no in-core transpose).
         core_out, new_state = recurrent_gated_delta_rule_ttnn_fp32(
             q=q_exp,
             k=k_exp,
@@ -794,7 +798,7 @@ class TtQwen36GDNAttention(LightweightModule):
             g=g,
             initial_state=self.dn_state_buffer,
             device=self.mesh_device,
-            pre_transposed=False,
+            pre_transposed=True,
         )
         q_exp.deallocate(True)
         k_exp.deallocate(True)
