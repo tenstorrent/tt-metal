@@ -2,7 +2,7 @@
 # Usage: get-target-tools.sh <bake-target-or-group>
 # Prints space-separated tool names derived from docker-bake.hcl.
 #
-# For consumer targets (ci-build-light, ci-build, ci-test-light, ci-test, dev-light, basic-dev, manylinux, evaluation):
+# For consumer targets (ci-build-light, ci-build, ci-test-light, ci-test, dev-light, dev, basic-dev, manylinux, evaluation):
 #   Extracts context keys ending in "-layer", strips the suffix.
 #
 # For tool groups (tools):
