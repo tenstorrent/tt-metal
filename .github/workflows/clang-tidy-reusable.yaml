@@ -284,7 +284,7 @@ jobs:
             exit 0
           fi
           git diff _pr_base -- $(cat common.txt) > pr.diff
-          python3 -c "import yaml" 2>/dev/null || uv pip install --system -q pyyaml
+          python3 -c "import yaml" 2>/dev/null || uv pip install -q pyyaml
           clang-tidy-diff-20.py -p1 -path "$BUILD_DIR" \
             -export-fixes clang-tidy-result/fixes.yml \
             -j"$(nproc)" < pr.diff || true
