@@ -95,14 +95,14 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       architecture: amd64
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
-      # Use the PR branch HEAD (not the merge commit) for Docker image builds.
-      # For pull_request events github.sha is the ephemeral merge commit (branch + latest main
-      # merged by GHA) — a synthetic ref that only exists for the duration of this run and is
-      # never checked out by anyone else. Image hashes must be purely file-content-based, so
-      # we explicitly pass the branch HEAD here.  This ensures that build-all-docker-images.yaml
-      # triggered manually on the same branch produces identical hashes without any SHA
-      # coordination. Falls back to github.sha for non-PR events (merge_group, push, dispatch).
-      ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      # Use the merge commit (github.sha) rather than pr.head.sha.
+      # GHA always resolves workflow *files* from the merge commit; using head.sha for the
+      # working-tree checkout creates a mismatch where the workflow calls scripts that don't
+      # exist on the PR branch yet (e.g. a new .github/scripts/ file lands on main and
+      # immediately breaks unrelated open PRs that haven't rebased).
+      # Consistency: code and workflow definitions are both from the same merge commit,
+      # so "re-run after a main update" failures are explainable as code conflicts rather
+      # than invisible infrastructure drift.
 
   resolve-docker-pull-refs:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
