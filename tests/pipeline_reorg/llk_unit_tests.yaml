@@ -10,14 +10,13 @@
 #       timeout: The maximum allowed runtime for this job in minutes on that SKU.
 #   team: The team that owns the test budget.
 #   arch: Architecture string (wormhole_b0 or blackhole).
-#   dispatch_mode: "fd" for fast dispatch, "sd" for slow dispatch. The impl
-#                  filters entries whose dispatch_mode does not match the
-#                  caller's dispatch-mode input.
+#   dispatch_mode: "fd" for fast dispatch, "sd" for slow dispatch. The impl sets
+#                  TT_METAL_SLOW_DISPATCH_MODE=1 when dispatch_mode == "sd".
 #   gtest_shard_total / gtest_shard_index: Optional sharding via GTEST_TOTAL_SHARDS
 #                  and GTEST_SHARD_INDEX env vars.
-#   nightly_only: Optional bool. When true, only callers passing
-#                 include-nightly-only=true (i.e. the L2 nightly pipeline) will
-#                 pick up this entry. Merge-gate skips it.
+#   l2_only: Optional bool. When true, only callers passing l2-only=true
+#            (i.e. the tt metal L2 pipeline) will pick up this entry.
+#            Merge-gate skips it.
 #
 # For max allowed timeout refer to .github/time_budget.yaml
 
@@ -120,7 +119,7 @@
   team: llk
   arch: wormhole_b0
   dispatch_mode: sd
-  nightly_only: true
+  l2_only: true
 
 - name: LLK SD blackhole (full suite, nightly)
   cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='-MeshDeviceFixture.Top32RmDevPipelineCompletes'
@@ -132,4 +131,4 @@
   team: llk
   arch: blackhole
   dispatch_mode: sd
-  nightly_only: true
+  l2_only: true

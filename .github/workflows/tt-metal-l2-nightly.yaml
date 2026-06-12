@@ -342,7 +342,7 @@ jobs:
   # LLK SD Unit Tests — runs the full LLK gtest binary in slow dispatch as a
   # comprehensive nightly regression on every supported SKU. SKU set and per-
   # entry filters live in tests/pipeline_reorg/llk_unit_tests.yaml (entries
-  # tagged nightly_only: true). Merge-gate covers the FD path separately.
+  # tagged l2_only: true). Merge-gate covers the FD path separately.
   llk-unit-tests:
     needs: [resolve-docker-pull-refs, build-artifact, generate-arch-matrix]
     if: |

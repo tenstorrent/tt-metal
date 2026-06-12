@@ -17,7 +17,7 @@ on:
         required: false
         type: boolean
         default: false
-        description: "false: run entries whose nightly_only is unset/false (merge-gate). true: run only entries flagged nightly_only: true (l2 nightly set)."
+        description: "false: run entries whose l2_only is unset/false (merge-gate). true: run only entries flagged l2_only: true (l2 nightly set)."
       enable-llk-asserts:
         required: false
         type: boolean
@@ -57,17 +57,17 @@ jobs:
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml
-      - name: Filter matrix by nightly_only flag
+      - name: Filter matrix by l2_only flag
         id: filter-matrix
         env:
           MATRIX: ${{ steps.build-matrix.outputs.matrix }}
-          NIGHTLY_ONLY: ${{ inputs.l2-only }}
+          L2_ONLY: ${{ inputs.l2-only }}
         run: |
-          # Exclusive split: l2-only=false picks entries without nightly_only;
-          # l2-only=true picks entries flagged nightly_only.
+          # Exclusive split: l2-only=false picks entries without l2_only;
+          # l2-only=true picks entries flagged l2_only.
           filtered=$(echo "$MATRIX" | jq -c \
-            --argjson nightly_only "$NIGHTLY_ONLY" \
-            '[.[] | select((.nightly_only // false) == $nightly_only)]')
+            --argjson l2_only "$L2_ONLY" \
+            '[.[] | select((.l2_only // false) == $l2_only)]')
           echo "matrix<<EOF" >> "$GITHUB_OUTPUT"
           echo "$filtered" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
@@ -123,7 +123,14 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           mkdir -p generated/test_reports
-          ${{ matrix.test-group.dispatch_mode == 'sd' && 'TT_METAL_SLOW_DISPATCH_MODE=1 ' || '' }}${{ matrix.test-group.cmd }}
+          if [[ '${{ matrix.test-group.dispatch_mode }}' == 'sd' ]]; then
+            TT_METAL_SLOW_DISPATCH_MODE=1 ${{ matrix.test-group.cmd }}
+          elif [[ '${{ matrix.test-group.dispatch_mode }}' == 'fd' ]]; then
+            ${{ matrix.test-group.cmd }}
+          else
+            echo "Unsupported dispatch_mode: '${{ matrix.test-group.dispatch_mode }}'. Expected one of: fd, sd." >&2
+            exit 1
+          fi
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
