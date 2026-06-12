@@ -10,7 +10,11 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.utils.model_targets import normalize_sku
-from models.demos.utils.trace_region_sizes import TraceRegionSizeNotConfiguredError, resolve_trace_region_size
+from models.demos.utils.trace_region_sizes import (
+    TraceRegionSizeNotConfiguredError,
+    hf_model_name_candidates,
+    resolve_trace_region_size,
+)
 
 # NOTE: We need to override trace_region_size before the mesh device is opened
 # NOTE: When using DP, we need to have the imlpemented logic because when we parametrize the test with a specific trace region size, all submeshes will have that trace region size
@@ -84,14 +88,7 @@ def _model_name_candidates() -> list[str]:
         base = base_model_name_from_env()
         return [base] if base else []
 
-    candidates = [hf_model]
-    basename = hf_model.strip("/").split("/")[-1]
-    if basename not in candidates:
-        candidates.append(basename)
-    base = get_base_model_name(basename)
-    if base not in candidates:
-        candidates.append(base)
-    return candidates
+    return hf_model_name_candidates(hf_model)
 
 
 def get_supported_trace_region_size(request, mesh_device):

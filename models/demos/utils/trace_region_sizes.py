@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import functools
+import re
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,30 @@ TRACE_MODEL_KEY_PARAM = "_trace_model_key"
 
 class TraceRegionSizeNotConfiguredError(ValueError):
     """Raised when trace_region_size is missing from model_trace_region_sizes.yaml."""
+
+
+def _append_unique(candidates: list[str], value: str) -> None:
+    if value and value not in candidates:
+        candidates.append(value)
+
+
+def hf_model_name_candidates(hf_model: str) -> list[str]:
+    """Build model name candidates from HF_MODEL env values, including hub cache paths."""
+    candidates: list[str] = []
+    _append_unique(candidates, hf_model)
+
+    basename = hf_model.strip("/").split("/")[-1]
+    _append_unique(candidates, basename)
+
+    hub_match = re.search(r"models--([^/]+)--([^/]+)", hf_model)
+    if hub_match:
+        _append_unique(candidates, f"{hub_match.group(1)}/{hub_match.group(2)}")
+
+    base_match = re.search(r"(.*?\d+[bB])-", basename)
+    if base_match:
+        _append_unique(candidates, base_match.group(1))
+
+    return candidates
 
 
 def _missing_trace_region_size_message(model_name: str, sku: str) -> str:

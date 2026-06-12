@@ -321,6 +321,8 @@ sizes:
       - "google/gemma-4-E4B-it"
       - "models/demos/gemma4/configs/gemma-4-E4B-it"
     skus:
+      bh_p150:
+        trace_region_size: 70000000
       bh_p300:
         trace_region_size: 70000000
       p300x2:
@@ -335,7 +337,11 @@ sizes:
       - "google/gemma-4-26B-A4B-it"
       - "models/demos/gemma4/configs/gemma-4-26B-A4B-it"
     skus:
+      wh_n150:
+        trace_region_size: 70000000
       wh_llmbox_perf:
+        trace_region_size: 70000000
+      bh_p150:
         trace_region_size: 70000000
       p300x2:
         trace_region_size: 70000000
@@ -348,7 +354,11 @@ sizes:
       - "google/gemma-4-31B-it"
       - "models/demos/gemma4/configs/gemma-4-31B-it"
     skus:
+      wh_n150:
+        trace_region_size: 70000000
       wh_llmbox_perf:
+        trace_region_size: 70000000
+      bh_p150:
         trace_region_size: 70000000
       p300x2:
         trace_region_size: 70000000

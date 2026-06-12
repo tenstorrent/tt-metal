@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import re
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from models.demos.utils.trace_region_sizes import (
     TRACE_REGION_SIZE_DYNAMIC,
     TRACE_REGION_SIZES_YAML_PATH,
     TraceRegionSizeNotConfiguredError,
+    hf_model_name_candidates,
     load_trace_region_sizes,
     resolve_trace_region_size,
 )
@@ -94,22 +96,9 @@ def test_resolve_trace_region_size_raises_when_not_configured():
         resolve_trace_region_size("unknown-model", "wh_n150")
 
 
-def _hf_model_name_candidates(hf_model: str) -> list[str]:
-    candidates = [hf_model]
-    basename = hf_model.strip("/").split("/")[-1]
-    if basename not in candidates:
-        candidates.append(basename)
-    match = re.search(r"(.*?\d+[bB])-", basename)
-    if match:
-        base = match.group(1)
-        if base not in candidates:
-            candidates.append(base)
-    return candidates
-
-
 def _resolve_ci_trace_region_size(hf_model: str, sku: str) -> int:
     last_error: TraceRegionSizeNotConfiguredError | None = None
-    for candidate in _hf_model_name_candidates(hf_model):
+    for candidate in hf_model_name_candidates(hf_model):
         try:
             return resolve_trace_region_size(candidate, sku)
         except TraceRegionSizeNotConfiguredError as exc:
@@ -172,12 +161,58 @@ def test_ci_hf_model_jobs_have_trace_region_config(job_name, hf_model, sku):
     [
         ("models/demos/gemma4/configs/gemma-4-E2B-it", "wh_n150", 30000000),
         ("models/demos/gemma4/configs/gemma-4-E4B-it", "p300x2", 70000000),
+        ("models/demos/gemma4/configs/gemma-4-E4B-it", "bh_p150", 70000000),
         ("models/demos/gemma4/configs/gemma-4-26B-A4B-it", "wh_llmbox_perf", 70000000),
+        ("models/demos/gemma4/configs/gemma-4-26B-A4B-it", "wh_n150", 70000000),
+        ("models/demos/gemma4/configs/gemma-4-26B-A4B-it", "bh_p150", 70000000),
         ("models/demos/gemma4/configs/gemma-4-31B-it", "p300x2", 70000000),
+        ("models/demos/gemma4/configs/gemma-4-31B-it", "wh_n150", 70000000),
+        ("models/demos/gemma4/configs/gemma-4-31B-it", "bh_p150", 70000000),
     ],
 )
 def test_resolve_gemma4_config_path_aliases(model_path, sku, expected_size):
     assert resolve_trace_region_size(model_path, sku) == expected_size
+
+
+@pytest.mark.parametrize(
+    "hub_path,sku,expected_size",
+    [
+        (
+            "/mnt/MLPerf/huggingface/hub/models--google--gemma-3-27b-it/snapshots/005ad3404e59d6023443cb575daa05336842228a",
+            "wh_llmbox_perf",
+            30000000,
+        ),
+        (
+            "/mnt/MLPerf/huggingface/hub/models--google--gemma-3-4b-it/snapshots/093f9f388b31de276ce2de164bdc2081324b9767",
+            "wh_n150",
+            30000000,
+        ),
+    ],
+)
+def test_resolve_trace_region_size_from_hf_hub_cache_path(hub_path, sku, expected_size):
+    last_error: TraceRegionSizeNotConfiguredError | None = None
+    for candidate in hf_model_name_candidates(hub_path):
+        try:
+            assert resolve_trace_region_size(candidate, sku) == expected_size
+            return
+        except TraceRegionSizeNotConfiguredError as exc:
+            last_error = exc
+    assert last_error is not None
+    raise last_error
+
+
+def _gpt_oss_trace_model_key_from_env() -> str:
+    """Mirrors models.demos.gpt_oss.tests.unit.test_sampling._gpt_oss_trace_model_key."""
+    hf = os.getenv("HF_MODEL", "").lower()
+    return "gpt-oss-120b" if "120b" in hf else "gpt-oss-20b"
+
+
+def test_gpt_oss_trace_model_key_from_hf_model(monkeypatch):
+    monkeypatch.setenv("HF_MODEL", "models/demos/gpt_oss/configs/gpt-oss-120b")
+    assert _gpt_oss_trace_model_key_from_env() == "gpt-oss-120b"
+
+    monkeypatch.setenv("HF_MODEL", "models/demos/gpt_oss/configs/gpt-oss-20b")
+    assert _gpt_oss_trace_model_key_from_env() == "gpt-oss-20b"
 
 
 def test_cpu_sku_skips_trace_region_override():

@@ -13,6 +13,7 @@ vocab dimensions (201088, TP=8) to verify:
 - Sampled token IDs are always < vocab_size (no padding tokens leak through)
 """
 
+import os
 from collections import Counter
 
 import pytest
@@ -89,11 +90,17 @@ VOCAB_SIZE = 201088
 MAX_TOP_K = 32
 BATCH_SIZE = 32
 
+
+def _gpt_oss_trace_model_key() -> str:
+    hf = os.getenv("HF_MODEL", "").lower()
+    return "gpt-oss-120b" if "120b" in hf else "gpt-oss-20b"
+
+
 # GPT-OSS device params: FABRIC_1D_RING + large trace region.
 # NOT Llama Galaxy's dispatch_core_axis/worker_l1_size/small trace.
 GPT_OSS_DEVICE_PARAMS = {
     "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-    TRACE_MODEL_KEY_PARAM: "gpt-oss-20b",
+    TRACE_MODEL_KEY_PARAM: _gpt_oss_trace_model_key(),
 }
 
 
