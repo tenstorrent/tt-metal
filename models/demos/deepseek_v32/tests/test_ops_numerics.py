@@ -68,7 +68,8 @@ def test_indexer_logits_numerics(mesh_device, seq):
 def test_topk_indices_match(mesh_device, skv, k):
     torch.manual_seed(0)
     logits = torch.randn(1, 1, 128, skv, dtype=torch.bfloat16)
-    got = ops._to_host(ops.topk_indices(_dev(logits, mesh_device), k)).long()[0, 0]
+    # topk_large_indices is ROW_MAJOR bf16 in (chains off indexer_score's row-major out).
+    got = ops._to_host(ops.topk_indices(_dev(logits, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT), k)).long()[0, 0]
     want = torch.topk(logits.float(), k, dim=-1).indices[0, 0]
     overlap = torch.tensor([len(set(g.tolist()) & set(w.tolist())) for g, w in zip(got, want)]).float() / k
     # bf16 ties at the k-th score swap boundary entries — a band that grows with k

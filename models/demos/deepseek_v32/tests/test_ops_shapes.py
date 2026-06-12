@@ -45,7 +45,14 @@ def test_indexer_logits_shape(mesh_device, sq, skv):
 @pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["1x4"], indirect=True)
 @pytest.mark.parametrize("sq,skv,k", [(128, 512, 64), (128, 4096, 2048)], ids=["k64", "k2048"])
 def test_topk_indices_shape(mesh_device, sq, skv, k):
-    logits = _dev(torch.randn(1, 1, sq, skv), mesh_device)
+    # topk_large_indices is ROW_MAJOR bf16 in (chains off indexer_score's row-major out).
+    logits = ttnn.from_torch(
+        torch.randn(1, 1, sq, skv),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
     indices = ops.topk_indices(logits, k)
     assert list(indices.shape) == [1, 1, sq, k]
 

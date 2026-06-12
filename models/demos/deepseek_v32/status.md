@@ -162,7 +162,9 @@ Done: (4),(5),(6),(7),(9). **(8) retired** — see decision below. Remaining ope
   - Validated: indexer chunked==single-shot consistency green; e2e seq4k 1x4 0.9966 / 2x2 0.9974 / chunked 2x2 0.9970 — unchanged from host-rope (rope PCC was 0.99999). Removed dead `_index_k_cache`/`_kvpe_mirror`/`_host_rope_pe`/`apply_rotary_emb`.
 
 **Fused C++ ops (out of scope per Approach §4, documented follow-ups)**
-- [ ] **(11)** indexer_logits (DeepGEMM fp8_mqa_logits-style), causal windows, fp8
+- [x] **(11)** indexer_logits → **fused op landed 2026-06-12.** Merged `skrstic/dsa_indexer_score_op_2` (`ttnn.experimental.deepseek.indexer_score`) + `pjosipovic/topk_xl` (`ttnn.experimental.topk_large_indices`); `tt/ops.py` now wraps both instead of composing.
+  - `indexer_score(q [1,Hi,Sq,D], k [1,1,T,D], weights [1,Hi,Sq,1], is_causal, chunk_start_idx)` → score [1,1,Sq,T] **bf16 ROW_MAJOR, causality FUSED** (future cols -inf from `chunk_start_idx`). So `_indexer_topk` dropped the host triu-mask add; `indexer_logits` permutes the `[1,1,Sq,Hi]` weights_proj output to the op's `[1,Hi,Sq,1]`.
+  - `topk_large_indices(logits, k)` (Blackhole-only) chains directly off the row-major bf16 score → ROW_MAJOR uint32 indices. k∈[16,2048], multiple of 16 (active path k=index_topk=2048). -inf columns survive as the **sentinel index 0xFFFFFFFF**; `sparse_mla` clamps the gather and drops them via its index>row_pos / index≥T mask (extends the line-200 per-row-length contract). bf16 (no fp8/Hadamard) still the contract.
 - [ ] **(12)** **fused `ring_sparse_attention`** — the on-device sparse-attn path (absorbs retired (8)). One kernel: per-query gather of k selected latents + SDPA + online-softmax (no `sel` materialization) + SP-ring over the latent cache + DSA causal/valid mask. Design inputs from (8) probe: gather via embedding-style row lookup; fusion is the win (vs ~9.6 GB `sel`); SP gives only ~2×. Siblings: v3 `ring_mla` (ring+latent), chunked SDPA plumbing. C++ kernel, out-of-scope follow-up.
 
 **Hygiene**
@@ -179,9 +181,9 @@ Done: (4),(5),(6),(7),(9). **(8) retired** — see decision below. Remaining ope
 3. models/demos/deepseek_v3_d_p - tt multichip implementation for deepseek v3
 
 ## Issues
-1. No fused indexing op in ttnn (fp8_index + causal mask) — composed-op workaround in tt/ops.py::indexer_logits (device, bf16, no fp8/Hadamard); fused C++ op is follow-up
-2. ~~ttnn.topk k=2048 untested~~ RESOLVED 2026-06-10: works on Blackhole at k=2048 (TILE input, shape test green)
-3. No sparse attention in ttnn — CPU fallback in tt/ops.py::sparse_mla carrying the agreed contract (TP-shard distribution, causality, start_pos); fused C++ op is follow-up
+1. ~~No fused indexing op in ttnn~~ RESOLVED 2026-06-12: `ttnn.experimental.deepseek.indexer_score` merged (fused causal mask, bf16; no fp8/Hadamard yet). tt/ops.py::indexer_logits now wraps it. See backlog (11).
+2. ~~ttnn.topk k=2048 untested~~ RESOLVED 2026-06-10 (worked at k=2048); SUPERSEDED 2026-06-12 by `ttnn.experimental.topk_large_indices` (Blackhole-only, ROW_MAJOR bf16 in, uint32 out, 0xFFFFFFFF sentinel for -inf). tt/ops.py::topk_indices wraps it.
+3. No sparse attention in ttnn — CPU fallback in tt/ops.py::sparse_mla carrying the agreed contract (TP-shard distribution, causality, start_pos); fused C++ op is follow-up. (Now sentinel-aware: clamps the gather + masks index≥T for topk's 0xFFFFFFFF.)
 4. ~~Missing non-interleaved RoPE op~~ — **RESOLVED by investigation 2026-06-11: ttnn HAS native non-interleaved (rotate_half) RoPE ops.** No permutation wrapper and no kernel change needed (the earlier "bake P into the trans_mat" plan is moot).
    - **`ttnn.experimental.rotary_embedding_hf`** — dedicated HF-format (rotate_half) RoPE; caller-supplied cos/sin; `is_decode_mode` flag; TILE (decode also RM); head_dim 64 fits (two 32-tiles, split at 32). **Primary candidate.**
    - `ttnn.experimental.rotary_embedding` — also rotate_half, caller cos/sin, `token_index` for decode. Secondary.

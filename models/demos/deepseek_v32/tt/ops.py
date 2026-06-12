@@ -13,7 +13,6 @@ replicated across TP, B=1 prefill.
 """
 
 import torch
-from loguru import logger
 
 import ttnn
 
@@ -23,52 +22,44 @@ def _to_host(t: ttnn.Tensor) -> torch.Tensor:
     return ttnn.to_torch(ttnn.get_device_tensors(t)[0])
 
 
-def indexer_logits(q: ttnn.Tensor, k: ttnn.Tensor, w: ttnn.Tensor) -> ttnn.Tensor:
+def indexer_logits(q: ttnn.Tensor, k: ttnn.Tensor, w: ttnn.Tensor, chunk_start_idx: int = 0) -> ttnn.Tensor:
     """
-    Index scores per (query, key): logits[s, t] = sum_h w[s, h] * relu(q[s, h] . k[t]).
+    Index scores per (query, key), causality fused:
+      logits[s, t] = sum_h w[s, h] * relu(q[s, h] . k[t])  for t <= chunk_start_idx + s,
+      logits[s, t] = -inf                                   for future/pad columns.
 
-    Fused reference: DeepGEMM fp8_mqa_logits (causal ks/ke windows; fp8 inputs).
-    Workaround: composed ttnn ops, bf16, causal handled by the caller's mask add.
+    Backed by the merged ``ttnn.experimental.deepseek.indexer_score`` C++ op
+    (replaces the composed matmul+relu+head-sum workaround). The op applies the
+    causal -inf mask itself from ``chunk_start_idx`` — the caller no longer adds a
+    triu mask (status.md missing-op (11)).
 
     Args:
-        q: [1, H_idx, Sq, D_idx] index queries (non-interleaved RoPE preapplied)
-        k: [1, 1, Skv, D_idx] index keys (shared across heads)
-        w: [1, 1, Sq, H_idx] per-head weights (weights_proj output)
+        q: [1, H_idx, Sq, D_idx] index queries (non-interleaved RoPE preapplied), tiled bf16
+        k: [1, 1, Skv, D_idx] index keys (shared across heads), tiled bf16
+        w: [1, 1, Sq, H_idx] per-head weights (weights_proj output, scales pre-folded)
+        chunk_start_idx: global position of query row 0 (causal offset for chunked prefill)
     Returns:
-        logits [1, 1, Sq, Skv] bf16
+        logits [1, 1, Sq, Skv] bf16 ROW_MAJOR; future/pad columns -inf.
     """
-    scores = ttnn.matmul(q, ttnn.transpose(k, -2, -1))  # [1, H, Sq, Skv]
-    scores = ttnn.relu(scores)
-    # Weighted head reduce: [1,1,Sq,H] x [1,H,Sq,Skv] — bring H next to Skv and matmul.
-    scores = ttnn.permute(scores, (0, 2, 1, 3))  # [1, Sq, H, Skv]
-    w_rows = ttnn.permute(w, (0, 2, 1, 3))  # [1, Sq, 1, H]
-    logits = ttnn.matmul(w_rows, scores)  # [1, Sq, 1, Skv]
-    return ttnn.permute(logits, (0, 2, 1, 3))  # [1, 1, Sq, Skv]
+    # The op takes per-head weights as [1, H_idx, Sq, 1]; weights_proj gives [1, 1, Sq, H_idx].
+    weights = ttnn.permute(w, (0, 3, 2, 1))  # [1, H_idx, Sq, 1]
+    return ttnn.experimental.deepseek.indexer_score(q, k, weights, is_causal=True, chunk_start_idx=chunk_start_idx)
 
 
 def topk_indices(logits: ttnn.Tensor, k: int) -> ttnn.Tensor:
     """
-    Top-k key indices per query row. Out [1, 1, Sq, k] uint32 (FlashMLA contract:
-    indices replace the causal mask; caller pre-masks logits so future keys never win).
-    Workaround: ttnn.topk needs row-major last-dim and k<=Skv; host fallback otherwise.
+    Top-k key indices per query row. Out [1, 1, Sq, k] uint32 ROW_MAJOR, sorted
+    descending (FlashMLA contract: indices replace the causal mask).
+
+    Backed by the merged ``ttnn.experimental.topk_large_indices`` C++ op
+    (Blackhole-only; ROW_MAJOR bf16 in → ROW_MAJOR uint32 out). It chains directly
+    off ``indexer_logits`` (same ROW_MAJOR bf16 layout). Causal -inf columns from
+    indexer_score survive as the sentinel index 0xFFFFFFFF when a row has fewer
+    than ``k`` valid keys; ``sparse_mla`` drops those via its index > row_pos mask.
+
+    k constraints (topk_large_indices): 16 <= k <= 2048 and k a multiple of 16.
     """
-    skv = logits.shape[-1]
-    if k > skv:
-        raise ValueError(f"topk k={k} exceeds Skv={skv}; pad upstream (status.md API 2)")
-    try:
-        # ttnn.topk asserts TILE layout (topk_device_operation.cpp) — agreement 4's
-        # "row-major" note was wrong; documented in status.md.
-        _, indices = ttnn.topk(logits, k, dim=-1)
-        return indices
-    except Exception as e:  # untested at k=2048 (status.md issue 2)
-        logger.warning(f"ttnn.topk failed ({e}); host fallback")
-        _, idx = torch.topk(_to_host(logits).float(), k, dim=-1)
-        return ttnn.from_torch(
-            idx.to(torch.int32),
-            device=logits.device(),
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(logits.device()),
-        )
+    return ttnn.experimental.topk_large_indices(logits, k=k)
 
 
 def sparse_mla(
@@ -117,9 +108,13 @@ def sparse_mla(
     out_full = torch.zeros(1, h_local * tp, s_global, 512, dtype=torch.float32)
     for sp_i in range(sp):
         idx_i = idx_full[sp_i * local : (sp_i + 1) * local]  # [local, k]
-        sel = kv[idx_i]  # [local, k, 576]
         q_pos = start_pos + sp_i * local + torch.arange(local)  # global query rows
-        future = (idx_i > q_pos.view(local, 1)).unsqueeze(0)  # [1, local, k]
+        # topk's -inf sentinel (0xFFFFFFFF) marks causally-masked keys; together with any
+        # future index it is dropped here (FlashMLA per-row contract). Clamp first so the
+        # gather stays in-bounds — masked rows contribute nothing after the softmax.
+        future = ((idx_i > q_pos.view(local, 1)) | (idx_i >= kv.shape[0])).unsqueeze(0)  # [1, local, k]
+        idx_i = idx_i.clamp(max=kv.shape[0] - 1)
+        sel = kv[idx_i]  # [local, k, 576]
         for tp_j in range(tp):
             q_t = ttnn.to_torch(q_shards[sp_i * tp + tp_j])[0].float()  # [H/tp, local, 576]
             scores = (torch.einsum("hsd,skd->hsk", q_t, sel.float()) * scale).masked_fill(future, float("-inf"))

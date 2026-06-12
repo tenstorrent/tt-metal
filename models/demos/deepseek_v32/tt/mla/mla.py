@@ -188,15 +188,10 @@ class ttMLA(_ttMLAv3):
         wts = self._sp_all_gather(wts, dim=2)
         wts = ttnn.multiply(wts, a.index_n_heads**-0.5 * self.scale)
 
-        logits = ops.indexer_logits(q_dev, self._index_kbuf, wts)  # device index cache
-        mask = ttnn.from_torch(
-            torch.full((1, 1, glob, end_pos), float("-inf")).triu_(start_pos + 1).to(torch.bfloat16),
-            device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
-        return ops.topk_indices(ttnn.add(logits, mask), min(self.index_args.index_topk, end_pos))
+        # Causality is fused inside indexer_score (future columns -> -inf from chunk_start_idx),
+        # so no triu mask add here; topk_large_indices chains off the row-major bf16 logits.
+        logits = ops.indexer_logits(q_dev, self._index_kbuf, wts, chunk_start_idx=start_pos)
+        return ops.topk_indices(logits, min(self.index_args.index_topk, end_pos))
 
     def forward(self, hidden_states, rope_tensors, kvpe_cache, **kwargs):
         seq_len_local = hidden_states.shape[2]
