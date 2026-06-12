@@ -89,7 +89,6 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.moe_expert_token_remap.html">ttnn.moe_expert_token_remap</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.moe_routing_remap.html">ttnn.moe_routing_remap</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.move.html">ttnn.move</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.narrow.html">ttnn.narrow</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.nonzero.html">ttnn.nonzero</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.pad.html">ttnn.pad</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.permute.html">ttnn.permute</a></li>
@@ -182,7 +181,7 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.fill_implicit_tile_padding">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">fill_implicit_tile_padding</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fill_value</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span> <span class="pre">or</span> <span class="pre">float</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.fill_implicit_tile_padding" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">fill_implicit_tile_padding</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fill_value</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.fill_implicit_tile_padding" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>Fills the implicit padding of a tiled input tensor with the specified value.
@@ -193,9 +192,7 @@ Specifically, any nD tensor will have the implicit padding of the last 2 dims th
 <dd class="field-odd">
 <ul class="simple">
 <li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – Any input tensor with desired device and data types for output tensor.</p></li>
-<li><p><strong>fill_value</strong> (<em>int</em><em> or </em><em>float</em>) – Value to fill the tensor padding with. An int is interpreted as the raw
-integer bit pattern (e.g. for int32 values that are not exactly float-representable); a float is
-decoded numerically.</p></li>
+<li><p><strong>fill_value</strong> (<em>float</em>) – Value to fill the tensor padding with.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>

@@ -116,49 +116,33 @@
   <section id="untilize">
 <h1>untilize<a class="headerlink" href="#untilize" title="Permalink to this heading"></a>
 </h1>
-<div class="deprecated">
-<p><span class="versionmodified deprecated">Deprecated since version The: </span>unpack-based <code class="docutils literal notranslate"><span class="pre">untilize</span></code> op is deprecated in favor of <a class="reference internal" href="../pack_unpack/pack_untilize.html"><span class="doc">pack_untilize</span></a>,
-which is significantly faster and in line with the programming model. It is scheduled for removal; see
-<a class="reference external" href="https://github.com/tenstorrent/tt-metal/issues/22904">tt-metal#22904</a>.</p>
-</div>
 <dl class="cpp function">
 <dt class="sig sig-object cpp" id="_CPPv4N7ckernel13untilize_initE8uint32_t8uint32_t">
 <span class="target" id="namespaceckernel_1a0b97d54822d74f92569c05ddb94bf4d6"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">untilize_init</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">call_line</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">__builtin_LINE</span></span><span class="p"><span class="pre">(</span></span><span class="p"><span class="pre">)</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel13untilize_initE8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p></p>
-<dl>
-<dt class="sig sig-object cpp">
-<em><span class="pre">Deprecated:</span></em>
-</dt>
-<dd>
-<p>The unpack-based untilize op is deprecated in favor of <code class="docutils literal notranslate"><span class="pre">pack_untilize</span></code>, which is significantly faster (up to ~10x) and in line with our programming model. This API is scheduled for removal; see tt-metal#22904.</p>
-</dd>
-</dl>
-
-
 <p>Initializes the hardware and internal state for the untilize operation. This function should be called before performing any untilize operations in the compute kernel. The circular buffer (CB) ID provided must correspond to the buffer containing the input data to be untilized. If the data format or properties of the input operand differ from those previously configured, ensure that the appropriate reconfiguration functions are called before this initialization.</p>
 <p>Return value: None</p>
 <p></p>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd">
-<th class="head"><p>Param Type  </p></th>
-<th class="head"><p>Name  </p></th>
-<th class="head"><p>Description  </p></th>
-<th class="head"><p>Type  </p></th>
-<th class="head"><p>Valid Range  </p></th>
-<th class="head"><p>Required  </p></th>
+<th class="head"><p>Param Type   </p></th>
+<th class="head"><p>Name   </p></th>
+<th class="head"><p>Description   </p></th>
+<th class="head"><p>Type   </p></th>
+<th class="head"><p>Valid Range   </p></th>
+<th class="head"><p>Required    </p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>Function  </p></td>
-<td><p>icb  </p></td>
-<td><p>The identifier of the circular buffer (CB) for input data  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>0 to 31  </p></td>
-<td><p>True  </p></td>
+<td><p>Function   </p></td>
+<td><p>icb   </p></td>
+<td><p>The identifier of the circular buffer (CB) for input data   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True   </p></td>
 </tr>
 </tbody>
 </table>
@@ -184,60 +168,49 @@ which is significantly faster and in line with the programming model. It is sche
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd">
-<th class="head"><p>Param Type  </p></th>
-<th class="head"><p>Name  </p></th>
-<th class="head"><p>Description  </p></th>
-<th class="head"><p>Type  </p></th>
-<th class="head"><p>Valid Range  </p></th>
-<th class="head"><p>Required  </p></th>
+<th class="head"><p>Param Type   </p></th>
+<th class="head"><p>Name   </p></th>
+<th class="head"><p>Description   </p></th>
+<th class="head"><p>Type   </p></th>
+<th class="head"><p>Valid Range   </p></th>
+<th class="head"><p>Required    </p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>Template  </p></td>
-<td><p>block_ct_dim  </p></td>
-<td><p>The number of tiles stored in DEST at one moment  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>1 to max (see comment)  </p></td>
-<td><p>False  </p></td>
+<td><p>Template   </p></td>
+<td><p>block_ct_dim   </p></td>
+<td><p>The number of tiles stored in DEST at one moment   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>1 to max (see comment)   </p></td>
+<td><p>False    </p></td>
 </tr>
 <tr class="row-odd">
-<td><p>Function  </p></td>
-<td><p>icb  </p></td>
-<td><p>The identifier of the circular buffer (CB) for input  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>0 to 31  </p></td>
-<td><p>True  </p></td>
+<td><p>Function   </p></td>
+<td><p>icb   </p></td>
+<td><p>The identifier of the circular buffer (CB) for input   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True    </p></td>
 </tr>
 <tr class="row-even">
-<td><p>Function  </p></td>
-<td><p>full_ct_dim  </p></td>
-<td><p>Width of a full input in tiles  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>Divisible by block_ct_dim  </p></td>
-<td><p>True  </p></td>
+<td><p>Function   </p></td>
+<td><p>full_ct_dim   </p></td>
+<td><p>Width of a full input in tiles   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>Divisible by block_ct_dim   </p></td>
+<td><p>True    </p></td>
 </tr>
 <tr class="row-odd">
-<td><p>Function  </p></td>
-<td><p>ocb  </p></td>
-<td><p>The identifier of the circular buffer (CB) for output  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>0 to 31  </p></td>
-<td><p>True  </p></td>
+<td><p>Function   </p></td>
+<td><p>ocb   </p></td>
+<td><p>The identifier of the circular buffer (CB) for output   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True   </p></td>
 </tr>
 </tbody>
 </table>
-
-<p></p>
-<dl>
-<dt class="sig sig-object cpp">
-<em><span class="pre">Deprecated:</span></em>
-</dt>
-<dd>
-<p>The unpack-based untilize op is deprecated in favor of <code class="docutils literal notranslate"><span class="pre">pack_untilize</span></code>. Scheduled for removal, see tt-metal#22904. </p>
-</dd>
-</dl>
-
 
 </dd>
 </dl>
@@ -248,38 +221,28 @@ which is significantly faster and in line with the programming model. It is sche
 </dt>
 <dd>
 <p>Restores hardware and internal state after the untilize operation is complete. This function should be called after untilize_block operation is finished. The circular buffer (CB) ID provided must correspond to the buffer that was used for the untilize operation and it’s initialization.</p>
-<p></p>
-<dl>
-<dt class="sig sig-object cpp">
-<em><span class="pre">Deprecated:</span></em>
-</dt>
-<dd>
-<p>The unpack-based untilize op is not in line with our programming model and is deprecated in favor of <code class="docutils literal notranslate"><span class="pre">pack_untilize</span></code>. Scheduled for removal, see tt-metal#22904.</p>
-</dd>
-</dl>
-
-
+<p>NOTE: This function is not in line with our programming model, and will be removed by the end of 2025 as a part of tt-metal#22904.</p>
 <p>Return value: None</p>
 <p></p>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd">
-<th class="head"><p>Param Type  </p></th>
-<th class="head"><p>Name  </p></th>
-<th class="head"><p>Description  </p></th>
-<th class="head"><p>Type  </p></th>
-<th class="head"><p>Valid Range  </p></th>
-<th class="head"><p>Required  </p></th>
+<th class="head"><p>Param Type   </p></th>
+<th class="head"><p>Name   </p></th>
+<th class="head"><p>Description   </p></th>
+<th class="head"><p>Type   </p></th>
+<th class="head"><p>Valid Range   </p></th>
+<th class="head"><p>Required    </p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>Function  </p></td>
-<td><p>icb  </p></td>
-<td><p>The identifier of the circular buffer (CB) for input data  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>0 to 31  </p></td>
-<td><p>True  </p></td>
+<td><p>Function   </p></td>
+<td><p>icb   </p></td>
+<td><p>The identifier of the circular buffer (CB) for input data   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0 to 31   </p></td>
+<td><p>True   </p></td>
 </tr>
 </tbody>
 </table>
