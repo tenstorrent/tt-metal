@@ -176,7 +176,7 @@ If no dimension is provided, std is computed over all dimensions yielding a sing
 <li><p><strong>scalar</strong> (<em>float</em><em>, </em><em>optional</em>) – A scaling factor to be applied to the input tensor. Defaults to <cite>1.0</cite>.</p></li>
 <li><p><strong>correction</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to apply Bessel’s correction (i.e. N-1). Defaults to <cite>True</cite>.</p></li>
 <li><p><strong>sub_core_grids</strong> (<em>ttnn.CoreRangeSet</em><em>, </em><em>optional</em>) – Subcore grids to use for the operation. Defaults to <cite>None</cite>, which will use all cores.</p></li>
-<li><p><strong>use_legacy</strong> (<em>bool</em><em>, </em><em>optional</em>) – When True, uses the legacy two-pass implementation. When False, uses the numerically stable Welford algorithm. Defaults to <cite>False</cite>.</p></li>
+<li><p><strong>use_legacy</strong> (<em>bool</em><em>, </em><em>optional</em>) – Deprecated and non-functional. The numerically stable Welford algorithm is always used. This argument is ignored and will be removed at some point. Defaults to False.</p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
