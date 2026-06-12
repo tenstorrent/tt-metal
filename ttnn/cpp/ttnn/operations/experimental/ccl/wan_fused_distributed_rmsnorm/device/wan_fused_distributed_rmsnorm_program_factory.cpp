@@ -68,7 +68,12 @@ uint32_t float_to_u32(float v) {
 // channels per core. For big shapes (Wan N=18944 with ~592 tile rows),
 // more workers means fewer chunks-per-worker, which keeps each worker's
 // chunk loop short and the per-chunk fabric overhead amortized.
-constexpr uint32_t kMaxMuxWorkersPerChip = 64u;
+// Worker-count contention ceiling. A feat=1024 RoPE sweep (powers-of-2 tile-rows
+// x workers x chunk) showed parallel scaling is near-linear up to 32 workers, then
+// MUX-link + simultaneous-DRAM-read contention makes MORE workers SLOWER (64 was
+// 4-20% worse than 32 at seq 2048/4096). So 32 is a perf ceiling, not a core budget.
+// WAN_RMSNORM_WORKER_CAP overrides it for tuning/sweeps.
+constexpr uint32_t kMaxMuxWorkersPerChip = 32u;
 // num_tile_rows below this falls back to the LEGACY whole-tile writer
 // (single worker). The packed-page MUX writer has significant per-chunk
 // fabric overhead that doesn't pay off until we have ≥4 tile-rows worth
@@ -136,6 +141,23 @@ uint32_t input_cb_chunks() {
 uint32_t force_num_workers() {
     static const uint32_t v = [] {
         const char* env = std::getenv("WAN_RMSNORM_FORCE_WORKERS");
+        if (env != nullptr) {
+            const long n = std::strtol(env, nullptr, 10);
+            if (n > 0) {
+                return static_cast<uint32_t>(n);
+            }
+        }
+        return 0u;
+    }();
+    return v;
+}
+// Diagnostic sweep knob: WAN_RMSNORM_FORCE_CHUNK=N forces chunk_size_rows=N
+// (applied last in both compute_sizing and the program factory so the stats
+// buffer stays consistent with the kernel). Timing-only; combine with
+// WAN_RMSNORM_NO_PERHEAD_CLAMP=1 to defeat the per-head/streaming clamps.
+uint32_t force_chunk_size() {
+    static const uint32_t v = [] {
+        const char* env = std::getenv("WAN_RMSNORM_FORCE_CHUNK");
         if (env != nullptr) {
             const long n = std::strtol(env, nullptr, 10);
             if (n > 0) {
@@ -295,11 +317,12 @@ uint32_t pick_num_workers_tp_gt_1(uint32_t num_tile_rows) {
     if (forced > 0u) {
         return std::min<uint32_t>(forced, num_tile_rows);
     }
-    if (num_tile_rows <= kSmallShapeRowsLimit) {
-        return std::min<uint32_t>(cap, num_tile_rows);
-    }
-    const uint32_t target = std::max(1u, num_tile_rows / 2u);
-    return std::min<uint32_t>(target, cap);
+    // One worker per tile-row, capped at the contention ceiling (kMaxMuxWorkersPerChip).
+    // The sweep showed min(rows, 32) is optimal at every sequence length: below 32 rows
+    // more workers always help (compute-bound, ~linear scaling); above it the cap avoids
+    // the >32-worker contention regression. Supersedes the old rows/2 large-shape rule,
+    // which under-parallelized at 32 tile-rows and over-parallelized past 64.
+    return std::min<uint32_t>(num_tile_rows, cap);
 }
 
 // Sizing derivation used in both spec computation (to size the stats scratch
@@ -348,7 +371,12 @@ WanFusedDistributedRmsnormSizing compute_sizing(
     // has few rows. Cap at kMaxChunkSizeRows for L1 budget (chunk-sized CBs:
     // input, stats_local, packed_gathered, stats_gathered all scale with
     // chunk_size).
-    constexpr uint32_t kMaxChunkSizeRows = 8u;
+    // Chunk cap = 1. A fuller sweep (rope + non-rope, real 38/152-tile-row sizes,
+    // chunk 1-4 at W up to 64) showed chunk=1 is best or tied EVERYWHERE: fabric/AG
+    // is only ~2us exposed so bigger chunks buy no amortization, and chunk>1 is ~10%
+    // SLOWER on the large (152-row) shapes (the prefetch-overlap win never
+    // materialized). So pin chunk=1; WAN_RMSNORM_FORCE_CHUNK still overrides for sweeps.
+    constexpr uint32_t kMaxChunkSizeRows = 1u;
     // L1 budget cap: input_cb is double-buffered 2 * chunk * num_tile_cols
     // bf16 tiles = chunk * num_tile_cols * 4 KB per worker. Other CBs add
     // ~150 KB. Keep input_cb ≤ 512 KB so total ≤ 750 KB (half of L1):
@@ -385,6 +413,9 @@ WanFusedDistributedRmsnormSizing compute_sizing(
     }
     if ((per_head_rope && !perhead_chunk_clamp_disabled()) || streaming) {
         s.chunk_size_rows = 1u;
+    }
+    if (s.use_mux && force_chunk_size() > 0u) {
+        s.chunk_size_rows = force_chunk_size();
     }
     s.window_size = s.chunk_size_rows;
     // Pages are addressed across the whole chip (not per-worker) so the
@@ -575,7 +606,12 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // N's compute and chunk N's output drain. When the worker has ≥2 rows, pick
     // ceil(rows/2) as the chunk size (capped at kMaxChunkSizeRows); when only
     // 1 row, chunk=1 (no overlap possible at all).
-    constexpr uint32_t kMaxChunkSizeRows = 8u;
+    // Chunk cap = 1. A fuller sweep (rope + non-rope, real 38/152-tile-row sizes,
+    // chunk 1-4 at W up to 64) showed chunk=1 is best or tied EVERYWHERE: fabric/AG
+    // is only ~2us exposed so bigger chunks buy no amortization, and chunk>1 is ~10%
+    // SLOWER on the large (152-row) shapes (the prefetch-overlap win never
+    // materialized). So pin chunk=1; WAN_RMSNORM_FORCE_CHUNK still overrides for sweeps.
+    constexpr uint32_t kMaxChunkSizeRows = 1u;
     // L1 budget cap (matches compute_sizing): chunk * num_tile_cols ≤ 128
     // keeps input_cb under ~512 KB per worker.
     const uint32_t chunk_h_cap = std::max(1u, 128u / std::max(1u, num_tile_cols));
@@ -631,6 +667,9 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // cos/sin streaming, a separate change), NOT a hang.
     if ((per_head_rope && !perhead_chunk_clamp_disabled()) || streaming_low_l1) {
         chunk_size_rows = 1u;
+    }
+    if (use_mux && force_chunk_size() > 0u) {
+        chunk_size_rows = force_chunk_size();
     }
     // Phase 9 packed-page AG: every chunk this chip processes maps to a distinct
     // DRAM page. Page index = my_device_index * num_chunks_per_device + chunk_idx.
