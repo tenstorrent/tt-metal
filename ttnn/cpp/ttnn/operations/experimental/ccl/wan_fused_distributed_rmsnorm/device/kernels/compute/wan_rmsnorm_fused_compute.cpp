@@ -389,8 +389,8 @@ void kernel_main() {
                                 // per-token sum in col 0; then *1/H_full + eps + rsqrt on
                                 // dst (mirrors the eps_rsqrt post-op). Removing the matmul
                                 // eliminates the matmul->pack transition that wedges the
-                                // packer at multi-row-chunk x ring_size>1 (see
-                                // WAN_RMSNORM_TP2_HANG_HANDOFF.md). stats_tiles_cols ==
+                                // packer at multi-row-chunk x ring_size>1 (see the TP=2 hang
+                                // note in RMSNORM_FUSION_FINDINGS.md). stats_tiles_cols ==
                                 // ring_size == TP is always even (2/4/8).
                                 static_assert(stats_tiles_cols % 2 == 0, "eltwise stats-sum needs even ring_size");
                                 constexpr uint32_t recip_h_full_bits = __builtin_bit_cast(

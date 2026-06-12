@@ -1,0 +1,133 @@
+# Distributed RMSNorm fusion (Wan2.2 + LTX-2.3 AV): findings & speedups
+
+Single source of truth for the fused distributed-RMSNorm op
+(`ttnn.experimental.wan_fused_distributed_rmsnorm`) — one device program that does
+pre-allgather (sum-of-squares) → TP all-gather of partial stats → post-allgather
+(norm + weight/bias + per-head/broadcast RoPE), folding the trailing affine / adaLN
+`addcmul` / RoPE into the post step. Both production models drive the same op.
+
+**Test + bench:** `models/tt_dit/tests/test_distributed_rmsnorm_fused.py` (one parametrized
+file, both models). `test_bench` = traced baseline-vs-fused timing (+CSV); `test_corr_det`
+= fused vs fp32-PyTorch ref AND vs on-device composite, plus 10× bit-exact determinism.
+**Spec / module mapping:** `distributed_rmsnorm_av.md` (which LTX modules fuse, shapes).
+
+**Adding a config:** one row in `_WAN_RAW` (Wan: `cid, seq_len, use_rope`) or one `mk(...)`
+line in `_make_cfgs` (LTX: `cid, rows, dim, head_dim, rope`) → flows into perf + PCC +
+determinism automatically. A new mesh/topology = one row in `_BENCH_PARAMS`/`_CORR_PARAMS`
+`(mesh, device_params, model, tp, topology, links, tp_axis)`. Isolate with
+`RMS_BENCH_ONLY=`/`CORR_ONLY=`; pick methods with `RMS_BENCH_METHODS=`.
+
+Baseline = composite RMSNorm (`use_device_op=False`) + the *unfused* trailing op LTX uses
+today (`ttnn.addcmul` for adaLN, standalone `rotary_embedding_llama` for RoPE); for Wan the
+composite C++ op fuses weight+RoPE in-op. Fused = the single device op.
+
+---
+
+## Speedups — TP=4 on WH Galaxy (4×8), 4 links
+
+LINE = 1×4 submesh; RING = full 4×8 mesh, TP on the closed 4-axis, replicate the 8-axis
+(the production galaxy config, `distributed_rmsnorm_av.md` §0). Times are µs/iter (traced);
+↑ = baseline/fused speedup. LINE and RING are within run-to-run noise of each other —
+topology only changes fabric routing, not the math.
+
+**Correctness + determinism (both topologies):** all configs pass — Wan 7/7 and LTX 14/14
+`det=OK` (0/9 over 10 fresh-pob runs, bit-exact), `pcc(fused:torch)` 99.99–100%,
+`pcc(fused:composite)` ≈100%.
+
+### Wan2.2 14B (feat/dev 1280, head_dim 128, broadcast RoPE)
+
+| config | rows | pattern | LINE base | LINE fused | LINE ↑ | RING base | RING fused | RING ↑ |
+|---|---:|---|---:|---:|---:|---:|---:|---:|
+| self_sp4_N18944 | 18944 | qk+rope | 1267.55 | 934.35 | **1.36×** | 1154.84 | 897.93 | **1.29×** |
+| self_sp8_N9472 | 9472 | qk+rope | 615.30 | 518.75 | 1.19× | 572.98 | 505.71 | 1.13× |
+| self_sp32_N2368 | 2368 | qk+rope | 196.78 | 190.77 | 1.03× | 187.49 | 191.49 | 0.98× |
+| cross_q_sp4_N18944 | 18944 | qk | 1060.46 | 604.21 | **1.76×** | 944.48 | 584.56 | **1.62×** |
+| cross_q_sp8_N9472 | 9472 | qk | 527.53 | 345.64 | **1.53×** | 472.84 | 335.90 | **1.41×** |
+| cross_q_sp32_N2368 | 2368 | qk | 151.05 | 140.72 | 1.07× | 141.48 | 141.57 | 1.00× |
+| cross_k_prompt_L512 | 512 | qk | 75.53 | 64.09 | 1.18× | 73.69 | 67.20 | 1.10× |
+
+### LTX-2.3 AV (video feat/dev 1024 hd 128, audio 512 hd 64, per-head RoPE)
+
+| config | rows | pattern | LINE base | LINE fused | LINE ↑ | RING base | RING fused | RING ↑ |
+|---|---:|---|---:|---:|---:|---:|---:|---:|
+| v_block_s1 | 1216 | block+adaLN | 143.63 | 108.50 | **1.32×** | 139.86 | 110.35 | **1.27×** |
+| v_block_s2 | 4864 | block+adaLN | 458.41 | 210.41 | **2.18×** | 432.84 | 207.02 | **2.09×** |
+| a_block | 32 | block+adaLN | 34.95 | 24.80 | **1.41×** | 33.70 | 24.93 | **1.35×** |
+| v_selfattn_qk_s1 | 1216 | qk+rope | 149.60 | 125.53 | **1.19×** | 145.28 | 128.45 | **1.13×** |
+| v_selfattn_qk_s2 | 4864 | qk+rope | 476.94 | 258.56 | **1.84×** | 453.22 | 258.78 | **1.75×** |
+| a_selfattn_qk | 32 | qk+rope | 52.95 | 29.55 | **1.79×** | 51.86 | 29.58 | **1.75×** |
+| a2v_videoQ_s1 | 1216 | qk+rope | 111.17 | 100.82 | **1.10×** | 107.02 | 104.69 | 1.02× |
+| a2v_videoQ_s2 | 4864 | qk+rope | 323.70 | 186.19 | **1.74×** | 289.68 | 183.40 | **1.58×** |
+| a2v_audioK | 256 | qk+rope | 80.01 | 54.69 | **1.46×** | 80.11 | 57.68 | **1.39×** |
+| v_textcross_q_s1 | 1216 | qk | 93.44 | 100.41 | 0.93× | 89.05 | 101.90 | 0.87× |
+| v_textcross_q_s2 | 4864 | qk | 274.62 | 190.76 | **1.44×** | 247.11 | 186.52 | **1.32×** |
+| v_textcross_k | 1024 | qk | 85.71 | 81.31 | **1.05×** | 82.70 | 84.74 | 0.98× |
+| a_textcross_q | 32 | qk | 33.89 | 22.77 | **1.49×** | 32.93 | 22.85 | **1.44×** |
+| a_textcross_k | 1024 | qk | 75.45 | 70.24 | **1.07×** | 72.19 | 74.48 | 0.97× |
+
+**Takeaways:** fused wins biggest on large-token configs (LTX `v_block_s2` ~2.1×,
+`v_selfattn_qk_s2` ~1.8×; Wan `cross_q_sp4` ~1.7×). Small/dispatch-bound configs (≤2368
+rows) hover near 1.0×, and a couple of short no-trailing-op QK configs are a slight wash
+(0.87–0.98×) — there the fused op has marginally more setup than a bare composite norm with
+nothing to fold in.
+
+> **Full-mesh RING memory:** RING runs on all 32 devices (4 TP × 8 replicas), ~8× the
+> buffer/trace pressure of the 4-device LINE submesh. On the (flaky) galaxy a long traced
+> ring sweep can trip a `system_memory_manager` throw mid-run; gather big sweeps in small
+> `RMS_BENCH_ONLY` batches with `tt-smi -glx_reset` between each. Per-config error isolation
+> in `test_bench` keeps the table from being lost when one config fails.
+
+---
+
+## Tuning knobs & heuristic (workers, chunks)
+
+Current heuristic (committed): `num_workers = min(tile_rows, 32)` (`kMaxMuxWorkersPerChip`,
+a contention ceiling) and `chunk_size_rows = 1` (`kMaxChunkSizeRows`). A Wormhole sweep
+(chunk 1–4, rope + non-rope, real sizes) found **chunk=1 best-or-tied everywhere**: the AG
+is only ~2µs exposed so bigger chunks bought no amortization, and chunk>1 was ~10% *slower*
+on large shapes (the prefetch/compute-overlap win never materialized).
+
+> **Blackhole caveat:** the chunk=1 and worker-cap=32 choices are **Wormhole-only**. BH's
+> different mem-BW/FLOP ratio can flip the chunk>1 prefetch tradeoff — **re-sweep, don't
+> assume.** Sweep with no code change via `WAN_RMSNORM_FORCE_WORKERS`, `WAN_RMSNORM_WORKER_CAP`,
+> `WAN_RMSNORM_FORCE_CHUNK` (all read through the single sizing path so buffer + kernel stay
+> consistent), then make `kMaxMuxWorkersPerChip`/`kMaxChunkSizeRows` arch-conditional.
+
+A split-sender ring AG (each worker one full-wrap mcast instead of two arc mcasts) was
+tried and **reverted** — essentially neutral (only the largest no-RoPE shape gained ~3%)
+and more fragile under traced replay. Dual-direction arc AG is the only path.
+
+---
+
+## Feature support — nothing missing at the API level
+- **adaLN addcmul** `normed·(1+scale)+shift` → `weight=(1+scale)` + `bias=shift` (broadcast).
+- **static QK affine** → `weight`.
+- **create_heads** → `num_heads_per_device` (emits BHNE).
+- **per-head RoPE** `(1,H,N,head_dim)` → auto-detected (`rope_cos.shape[1]==num_heads_per_device`).
+- whole-row norm + per-head rope → `per_head_norm=False` + per-head rope (independent flags).
+
+---
+
+## Resolved gotchas & current limits
+- **chunk=1 AG uninitialized-read race (FIXED, `0ef362b10e6`):** the packed-page fused
+  write+atomic_inc used `flush=false`, so the receiver's inc could beat the payload commit
+  → sem-gated read of uninit DRAM (intermittent non-determinism on large no-RoPE shapes).
+  `flush=true` orders write-before-inc.
+- **stats-buffer / kernel sizing mismatch (FIXED):** `create_stats_buffer` and the program
+  factory must agree on the `num_links` worker rounding and chunk size; the buffer is
+  otherwise chip-global (num_workers-independent). Pass weight/RoPE + `num_links` to the buffer.
+- **TP=2 multi-chunk POST hang (FIXED, `11bc6a0e056`):** the matmul stats-reduce wedged the
+  packer at `ring_size>1` × multi-chunk; replaced with an FPU eltwise-add (requires even
+  `ring_size` = TP, always 2/4/8). Detailed root-cause notes are in commit `11bc6a0e056`.
+- **Host L1/chunk-sizing bugs (FIXED):** LTX's wider features + per-head RoPE exposed two
+  clamps; `chunk_size_rows=1` is forced for per-head RoPE (keeps cos/sin resident, fits feat
+  1024) and the streaming-low-L1 fallback. Applied identically in `compute_sizing` and the
+  factory so the buffer matches; **Wan is byte-identically unaffected**.
+- **Open limit — feat-2048 per-head RoPE** (TP=2 video self-attn / A↔V video) exceeds L1
+  even at chunk-1 → clean compile-time OOM; would need cos/sin streaming (a kernel change).
+  This is why TP=2 isn't tabulated above (TP=4 is the shipping config).
+- **Underlying — per-head RoPE chunk≥2** compute path is avoided by pinning chunk=1; the
+  deeper chunk≥2 deadlock isn't separately fixed (no need at chunk=1).
+
+The fused op's per-head-rope correctness also has a standalone regression test:
+`test_wan_fused_distributed_rmsnorm_device_op.py::...tp1_rope`.
