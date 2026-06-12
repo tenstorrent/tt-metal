@@ -548,7 +548,19 @@ static bool fine_grained_contains_string(
 }
 
 static bool check_topology_filter(const ParsedTestConfig& test_config, const std::optional<std::string>& filter_value) {
-    auto topo = tt::tt_fabric::Topology::Linear;  // Default value
+    if (filter_value == "TorusX") {
+        return test_config.fabric_setup.topology == tt::tt_fabric::Topology::Torus &&
+               test_config.fabric_setup.torus_config == "X";
+    }
+    if (filter_value == "TorusY") {
+        return test_config.fabric_setup.topology == tt::tt_fabric::Topology::Torus &&
+               test_config.fabric_setup.torus_config == "Y";
+    }
+    if (filter_value == "TorusXY") {
+        return test_config.fabric_setup.topology == tt::tt_fabric::Topology::Torus &&
+               test_config.fabric_setup.torus_config == "XY";
+    }
+    auto topo = tt::tt_fabric::Topology::Linear;
     if (filter_value == "Ring") {
         topo = tt::tt_fabric::Topology::Ring;
     } else if (filter_value == "Linear") {
@@ -560,7 +572,8 @@ static bool check_topology_filter(const ParsedTestConfig& test_config, const std
     } else {
         log_info(
             tt::LogTest,
-            "Unsupported topology filter value: '{}'. Supported values are: Ring, Linear, Mesh, Torus",
+            "Unsupported topology filter value: '{}'. Supported values are: Ring, Linear, Mesh, Torus, TorusX, TorusY, "
+            "TorusXY",
             filter_value);
         return false;
     }
@@ -1088,6 +1101,15 @@ bool TestConfigBuilder::should_skip_test_on_platform(const ParsedTestConfig& tes
             }
         }
     }
+    if (device_info_provider_.is_multi_mesh() && (test_config.fabric_setup.topology == Topology::Linear ||
+                                                  test_config.fabric_setup.topology == Topology::Ring)) {
+        log_info(
+            LogTest,
+            "Skipping test '{}' - {} topology is not compatible with a multi-mesh fabric",
+            test_config.name,
+            enchantum::to_string(test_config.fabric_setup.topology));
+        return true;
+    }
     return false;
 }
 
@@ -1247,7 +1269,8 @@ std::vector<TestConfig> TestConfigBuilder::expand_high_level_patterns(ParsedTest
                     num_pairs,
                     p_config.name);
             } else if (p.type == "sequential_neighbor_exchange"){
-                auto neighbor_pairs = this->route_manager_.get_neighbor_exchange_pairs();
+                auto neighbor_pairs =
+                    this->filter_pairs_by_mesh_scope(this->route_manager_.get_neighbor_exchange_pairs(), p.mesh_scope);
                 uint32_t num_pairs = static_cast<uint32_t>(neighbor_pairs.size());
                 max_iterations = std::max(max_iterations, num_pairs);
                 log_info(
@@ -1256,7 +1279,6 @@ std::vector<TestConfig> TestConfigBuilder::expand_high_level_patterns(ParsedTest
                     num_pairs,
                     p_config.name);
             }
-
         }
     }
 
@@ -1745,11 +1767,11 @@ void TestConfigBuilder::expand_patterns_into_test(
         } else if (pattern.type == "all_devices_uniform_pattern") {
             expand_all_devices_uniform_pattern(test, defaults);
         } else if (pattern.type == "neighbor_exchange") {
-            expand_neighbor_exchange(test, defaults);
+            expand_neighbor_exchange(test, defaults, pattern.mesh_scope);
         } else if (pattern.type == "sequential_all_to_all") {
             expand_sequential_all_to_all_unicast(test, defaults, iteration_idx, pattern.mesh_scope);
         } else if (pattern.type == "sequential_neighbor_exchange") {
-            expand_sequential_neighbor_exchange(test, defaults, iteration_idx);
+            expand_sequential_neighbor_exchange(test, defaults, iteration_idx, pattern.mesh_scope);
         } else {
             TT_THROW("Unsupported pattern type: {}", pattern.type);
         }
@@ -1968,22 +1990,31 @@ void TestConfigBuilder::expand_unidirectional_linear_unicast_or_multicast(
 }
 
 void TestConfigBuilder::expand_neighbor_exchange(
-    ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
+    ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, MeshTrafficScope mesh_scope) {
     log_debug(LogTest, "Expanding neighbor_exchange pattern for test: {}", test.name);
     auto neighbor_pairs = this->route_manager_.get_neighbor_exchange_pairs();
+    // Restrict to intra-/inter-mesh neighbor pairs when requested. With mesh_scope: inter_mesh this
+    // keeps only neighbor pairs that cross a mesh boundary, so the exchange exercises inter-mesh links.
+    neighbor_pairs = filter_pairs_by_mesh_scope(neighbor_pairs, mesh_scope);
     if (!neighbor_pairs.empty()) {
         add_senders_from_pairs(test, neighbor_pairs, base_pattern);
     }
 }
 
 void TestConfigBuilder::expand_sequential_neighbor_exchange(
-    ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, uint32_t iteration_idx) {
+    ParsedTestConfig& test,
+    const ParsedTrafficPatternConfig& base_pattern,
+    uint32_t iteration_idx,
+    MeshTrafficScope mesh_scope) {
     log_debug(
         LogTest,
         "Expanding sequential_neighbor_exchange pattern for test: {} (iteration {})",
         test.name,
         iteration_idx);
     auto neighbor_pairs = this->route_manager_.get_neighbor_exchange_pairs();
+    // Restrict to intra-/inter-mesh neighbor pairs before selecting this iteration's pair. The
+    // iteration count is driven by the filtered pair list, so each iteration maps to one in-scope pair.
+    neighbor_pairs = filter_pairs_by_mesh_scope(neighbor_pairs, mesh_scope);
 
     if (neighbor_pairs.empty()) {
         log_warning(LogTest, "No valid pairs found for sequential_neighbor_exchange pattern");
