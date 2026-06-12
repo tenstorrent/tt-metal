@@ -165,6 +165,7 @@ def run_sdpa_noncausal(
     rmse_threshold=None,
     bcast_mask_batch_dim=False,
     bcast_mask_head_dim=True,
+    mask_dtype=ttnn.bfloat4_b,
 ):
     torch.manual_seed(1234)
     if sk is None:
@@ -203,7 +204,7 @@ def run_sdpa_noncausal(
             )
         )
         mask = mask * -1e9
-        tt_mask = ttnn.from_torch(mask, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_mask = ttnn.from_torch(mask, dtype=mask_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
     tt_Q = ttnn.from_torch(Q, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
     tt_K = ttnn.from_torch(K, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
@@ -510,6 +511,59 @@ def test_sdpa_noncausal_mask(
         use_mask=True,
         bcast_mask_batch_dim=bcast_mask_batch_dim,
         bcast_mask_head_dim=bcast_mask_head_dim,
+    )
+
+
+# Provided masks run on the streaming compute kernel (apply_provided_mask_streaming). Covers
+# non-block-float (bf16) and block-float (bfp8/bfp4) mask dtypes — the latter exercise the
+# unpacker data-format reconfig in the dense-mask copy path (copy_tile_to_dst_init_short_with_dt),
+# which is required so block-float source tiles are not mis-decoded as fp16. Also covers
+# broadcast-batch/head and K-padded (s=160) shapes.
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize(
+    "mask_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["mask-bf16", "mask-bfp8", "mask-bfp4"]
+)
+@pytest.mark.parametrize("q_chunk_size", [32, 128], ids=["q32", "q128"])
+@pytest.mark.parametrize("k_chunk_size", [64, 128], ids=["k64", "k128"])
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d",
+    (
+        [1, 16, 16, 128, 64],
+        [2, 8, 1, 160, 64],  # K-padded (q32/k64,k128) and Q+K-padded (q128)
+    ),
+)
+@pytest.mark.parametrize("bcast_mask_batch_dim", [True, False], ids=["bcast-mask-batch-dim", "no-bcast-mask-batch-dim"])
+@pytest.mark.parametrize("bcast_mask_head_dim", [True, False], ids=["bcast-mask-head-dim", "no-bcast-mask-head-dim"])
+def test_sdpa_noncausal_mask_streaming(
+    device,
+    b,
+    nh,
+    nkv,
+    s,
+    d,
+    q_chunk_size,
+    k_chunk_size,
+    dtype,
+    mask_dtype,
+    bcast_mask_batch_dim,
+    bcast_mask_head_dim,
+):
+    rmse_threshold = 0.007
+    run_sdpa_noncausal(
+        device,
+        b,
+        nh,
+        nkv,
+        s,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        rmse_threshold=rmse_threshold,
+        use_mask=True,
+        bcast_mask_batch_dim=bcast_mask_batch_dim,
+        bcast_mask_head_dim=bcast_mask_head_dim,
+        mask_dtype=mask_dtype,
     )
 
 

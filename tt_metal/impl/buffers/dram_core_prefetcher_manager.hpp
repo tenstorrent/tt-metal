@@ -131,6 +131,7 @@ private:
     uint32_t stage_ring_base_ = 0;
     uint32_t stage_ring_size_ = 0;
     uint32_t ring_half_ = 0;
+    uint32_t stage_third_ = 0;
     // Per-DRAM-core L1 layout (uniform across all sender cores on all devices).
     // socket_config / socket_data are local L1 addresses; host writes add the
     // DRAM_L1_NOC_OFFSET (passed into H2DSocket's DRAM-recv ctor) before going
@@ -145,12 +146,15 @@ private:
     // write and the WAIT_CQ request value.
     std::array<uint32_t, kNumCqSignalSlots> cq_signal_counter_{};
 
-    // sender_logical_cores_[s] = logical DRAM core for bank s. Picked at start
-    // via pick_unused_dram_logical_core(s); GCBs queued must use the same
-    // picks (deterministic on bank_id), which they do because the GCB factory
-    // calls the same picker.
+    // sender_logical_cores_[s] = logical DRAM core for sender s. Picked at start
+    // via pick_unused_dram_logical_core / dram_sender_logical_cores; GCBs queued
+    // must use the same picks (deterministic on bank_id), which they do because the
+    // GCB factory calls the same pickers with the same dual_senders_per_bank flag.
     std::vector<CoreCoord> sender_logical_cores_;
     uint32_t num_senders_ = 0;
+    uint32_t num_banks_ = 0;
+    // When true, each DRAM bank is driven by two sender cores (see DramCorePrefetcherConfig).
+    bool dual_senders_per_bank_ = false;
 
     // One program per IDevice in the mesh; programs_[d].
     std::vector<std::unique_ptr<Program>> programs_;

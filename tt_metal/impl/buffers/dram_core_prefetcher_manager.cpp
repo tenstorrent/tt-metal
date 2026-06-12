@@ -15,6 +15,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal.hpp>
@@ -60,12 +61,49 @@ std::pair<uint32_t, uint32_t> pick_page_size(uint32_t max_page_size, uint32_t nu
     return {page, static_cast<uint32_t>(total / page)};
 }
 
-// Address-independent per-tensor geometry for the DRAM-core prefetcher kernel — see
+// Distinguishes the two supported buffer layouts the prefetcher knows how to
+// consume. KRowMajor is the legacy layout: one shard per DRAM bank,
+// K-row-major within the bank. ReceiverContiguous stacks num_receivers slabs
+// per bank, each slab being (K, n_per_recv) contiguous bytes. Detection is
+// implicit per the design doc — see detect_layout_mode().
+enum class LayoutMode : uint32_t {
+    KRowMajor = 0,
+    ReceiverContiguous = 1,
+};
+
+// Detection keys on how the weight was allocated, NOT the shard count: receiver-contiguous
+// weights are created with an NdShardSpec (num_shards == ring_size), K-row-major weights use a
+// legacy (WIDTH_SHARDED) shard spec. Counting shards is ambiguous when total_receivers ==
+// num_banks (one receiver per bank, num_shards == num_banks == total_receivers): the count tie
+// would route a recv-contig tensor down the K-row path, where compute_tensor_layout_krow_major
+// calls shard_spec() and TT_FATALs because the buffer only has an NdShardSpec.
+LayoutMode detect_layout_mode(const MeshTensor& t, const Buffer& buf, uint32_t total_receivers) {
+    // Legacy ShardSpec path: one wide shard per bank by construction. Some WIDTH_SHARDED
+    // tensors also carry an NdShardSpec-like descriptor through BDS, so prefer the explicit
+    // legacy shard spec before classifying a tensor as receiver-contiguous.
+    if (buf.has_shard_spec()) {
+        return LayoutMode::KRowMajor;
+    }
+
+    if (t.nd_shard_spec().has_value()) {
+        const auto& bds_opt = buf.buffer_distribution_spec();
+        TT_FATAL(
+            bds_opt.has_value() && static_cast<uint32_t>(bds_opt->num_shards()) == total_receivers,
+            "Receiver-contiguous DRAM-core prefetcher weight must have num_shards == total_receivers "
+            "(ring_size = {}); got {} shards.",
+            total_receivers,
+            bds_opt.has_value() ? static_cast<uint32_t>(bds_opt->num_shards()) : 0u);
+        return LayoutMode::ReceiverContiguous;
+    }
+    return LayoutMode::KRowMajor;
+}
+
+// Address-independent per-tensor geometry for the K-row-major DRAM layout — see
 // DramCorePrefetcherTensorLayout in impl/buffers/dram_core_prefetcher_request.hpp for
 // the field-by-field documentation, and tt_metal/impl/buffers/prefetcher_matmul_design.md
 // §6 for the fit ladder. The tensor's bank-local address is carried separately in the
 // per-tensor DramCorePrefetcherEntry, so identical-geometry tensors share one layout.
-DramCorePrefetcherTensorLayout compute_tensor_layout(
+DramCorePrefetcherTensorLayout compute_tensor_layout_krow_major(
     const MeshTensor& t, uint32_t block_count, uint32_t num_receivers, uint32_t ring_half, ContextId context_id) {
     const auto* ref_buffer = t.mesh_buffer().get_reference_buffer();
     const auto shard_shape = ref_buffer->shard_spec().shape();
@@ -159,6 +197,168 @@ bool layout_equal(const DramCorePrefetcherTensorLayout& a, const DramCorePrefetc
     return std::memcmp(&a, &b, sizeof(DramCorePrefetcherTensorLayout)) == 0;
 }
 
+// Receiver-contiguous layout: BDS holds `ring_size` shards round-robin across
+// `num_senders` banks, so each bank stacks `num_receivers` shards each of shape
+// (K_tiles, n_per_recv_tiles). Per (receiver, block) the source bytes are a
+// single contiguous DRAM region. The kernel dynamically batches B blocks per
+// per-receiver visit (B clamped by free space and fifo wrap at runtime); the
+// manager just computes the static ceiling target_per_visit_pages. The tensor's
+// bank-local address is carried separately in the per-tensor
+// DramCorePrefetcherEntry, so identical-geometry tensors share one layout.
+DramCorePrefetcherTensorLayout compute_tensor_layout_recv_contig(
+    const MeshTensor& t, uint32_t block_count, uint32_t stage_third, ContextId context_id) {
+    // Read the original (non-squeezed) NdShardSpec from the MemoryConfig — the
+    // BDS internally collapses adjacent matching dims, so its
+    // shard_shape_in_pages() can come back rank-1 even though the caller
+    // passed a 2D shape.
+    const auto& nd_opt = t.nd_shard_spec();
+    TT_FATAL(
+        nd_opt.has_value(),
+        "Receiver-contiguous DRAM-core prefetcher tensor must be allocated with an "
+        "NdShardSpec (e.g. ttnn.MemoryConfig(BufferType.DRAM, NdShardSpec(...))).");
+    const auto& shard_shape = nd_opt->shard_shape;
+    TT_FATAL(
+        shard_shape.rank() == 2,
+        "Receiver-contiguous NdShardSpec shard shape must be 2D (K_elems, n_per_recv_elems); got rank {}",
+        shard_shape.rank());
+    const uint32_t k_elems = shard_shape[0];
+    const uint32_t n_per_recv_elems = shard_shape[1];
+    TT_FATAL(
+        k_elems % tt::constants::TILE_HEIGHT == 0 && n_per_recv_elems % tt::constants::TILE_WIDTH == 0,
+        "Receiver-contiguous shard shape ({}, {}) must be tile-aligned (TILE={}, {})",
+        k_elems,
+        n_per_recv_elems,
+        tt::constants::TILE_HEIGHT,
+        tt::constants::TILE_WIDTH);
+    const uint32_t k_tiles_raw = k_elems / tt::constants::TILE_HEIGHT;
+    const uint32_t n_per_recv = n_per_recv_elems / tt::constants::TILE_WIDTH;
+    TT_FATAL(
+        k_tiles_raw > 0 && n_per_recv > 0,
+        "Receiver-contiguous shard shape has zero dim: ({}, {})",
+        k_tiles_raw,
+        n_per_recv);
+
+    const uint32_t tile_bytes = tt::tile_size(datatype_to_dataformat_converter(t.dtype()));
+    TT_FATAL(block_count > 0, "DRAM-core prefetcher block_count must be > 0");
+    // K must divide evenly into block_count K-blocks. A ceil here would make the kernel push
+    // block_count * ceil(K_tiles/block_count) K-rows per receiver — more than the slab
+    // (recv_stride = K_tiles * n_per_recv * tile_bytes) holds — so the last block over-reads
+    // into the next receiver's slab (or past the buffer for the last slab). For a matmul-fed
+    // weight, compute block_count via dram_core_prefetcher_block_count_for_matmul_1d(), which
+    // also pins block_count == ring_size.
+    TT_FATAL(
+        k_tiles_raw % block_count == 0,
+        "Receiver-contiguous: weight K ({} tiles) must be divisible by block_count ({}); remainder {}. "
+        "block_count must equal the matmul ring_size.",
+        k_tiles_raw,
+        block_count,
+        k_tiles_raw % block_count);
+    const uint32_t k_block_w_tiles = k_tiles_raw / block_count;
+
+    const uint32_t noc_max_burst = MetalContext::instance(context_id).hal().get_noc_max_burst_size_bytes();
+    const auto [coalesced_page_size, coalesced_num_pages] = pick_page_size(noc_max_burst, n_per_recv, tile_bytes);
+    TT_FATAL(
+        coalesced_page_size <= noc_max_burst,
+        "DRAM-core prefetcher coalesced page size ({} B) exceeds the one-packet NoC write limit ({} B).",
+        coalesced_page_size,
+        noc_max_burst);
+
+    const uint32_t bytes_per_recv_per_block = k_block_w_tiles * n_per_recv * tile_bytes;
+    const uint32_t recv_stride_bytes = k_tiles_raw * n_per_recv * tile_bytes;
+
+    // Fit ladder. Rung 1: full block fits in one stage-third (the kernel uses
+    // 3 rotating slots, not 2 halves, so the constraint is tighter than the
+    // legacy K-row path). Rung 2: K-sub split for shapes where one block
+    // exceeds the stage_third; the kernel walks sub-bands across slots and
+    // multi-block batching still works because B blocks of a receiver are
+    // contiguous in DRAM.
+    uint32_t rows_per_sub = 0;
+    uint32_t num_sub = 1;
+    if (bytes_per_recv_per_block <= stage_third) {
+        rows_per_sub = k_block_w_tiles;
+        num_sub = 1;
+    } else {
+        rows_per_sub = 0;
+        for (uint32_t d = k_block_w_tiles; d >= 1; --d) {
+            if (k_block_w_tiles % d == 0 && static_cast<uint64_t>(d) * n_per_recv * tile_bytes <= stage_third) {
+                rows_per_sub = d;
+                break;
+            }
+        }
+        TT_FATAL(
+            rows_per_sub >= 1,
+            "Receiver-contiguous mode cannot fit a single K-row slice "
+            "(n_per_recv={}, tile_bytes={}, stage_third={} B). Reduce n_per_recv or grow num_global_cb_receivers.",
+            n_per_recv,
+            tile_bytes,
+            stage_third);
+        num_sub = k_block_w_tiles / rows_per_sub;
+    }
+
+    const uint32_t sub_chunk_bytes = rows_per_sub * n_per_recv * tile_bytes;
+    TT_FATAL(
+        sub_chunk_bytes <= stage_third,
+        "Internal: receiver-contiguous chunk size {} B exceeds stage_third {} B",
+        sub_chunk_bytes,
+        stage_third);
+
+    // target_per_visit_pages: ~6 stage thirds' worth of blocks per visit. The
+    // kernel amortizes one noc_async_write_one_packet_set_state per receiver
+    // visit, so making each visit cover many blocks reduces set_state cost.
+    // The kernel further clamps by free downstream space, remaining blocks,
+    // and fifo-wrap distance, so the static ceiling is a hint, not a contract.
+    const uint32_t page_bytes_per_recv = k_block_w_tiles * coalesced_num_pages * coalesced_page_size;
+    const uint32_t stage_slot_pages = page_bytes_per_recv > 0 ? stage_third / page_bytes_per_recv : 0;
+    constexpr uint32_t kVisitStageSlotMultiplier = 6;
+    uint32_t target_per_visit_pages = stage_slot_pages * kVisitStageSlotMultiplier;
+    if (target_per_visit_pages == 0) {
+        target_per_visit_pages = 1;
+    }
+
+    DramCorePrefetcherTensorLayout g;
+    g.num_sub = num_sub;
+    g.M = 1;  // unused in recv-contig (no N-chunking)
+    g.rows_per_sub = rows_per_sub;
+    g.coalesced_page_size = coalesced_page_size;
+    g.coalesced_num_pages = coalesced_num_pages;
+    g.sub_chunk_bytes = sub_chunk_bytes;
+    g.sub_stride_bytes = rows_per_sub * n_per_recv * tile_bytes;
+    g.block_stride_bytes = k_block_w_tiles * n_per_recv * tile_bytes;  // within-slab K-block stride
+    g.page_bytes_per_recv = page_bytes_per_recv;
+    g.layout_mode = static_cast<uint32_t>(LayoutMode::ReceiverContiguous);
+    g.target_per_visit_pages = target_per_visit_pages;
+    g.recv_stride_bytes = recv_stride_bytes;
+    g.block_count = block_count;
+    return g;
+}
+
+DramCorePrefetcherTensorLayout compute_tensor_layout(
+    const MeshTensor& t,
+    uint32_t block_count,
+    uint32_t num_banks,
+    uint32_t receivers_per_bank,
+    uint32_t total_receivers,
+    uint32_t ring_half,
+    uint32_t stage_third,
+    ContextId context_id) {
+    const auto* ref_buffer = t.mesh_buffer().get_reference_buffer();
+    const LayoutMode mode = detect_layout_mode(t, *ref_buffer, total_receivers);
+    if (mode == LayoutMode::KRowMajor) {
+        // KRowMajor is single-sender-per-bank only, so receivers_per_bank is the bank's
+        // full receiver count and the bank receiver counts must be uniform. (Receiver-
+        // contiguous derives its geometry from the shard shape and ignores the receiver
+        // count entirely, and tolerates non-uniform per-bank receivers.)
+        TT_FATAL(
+            num_banks > 0 && total_receivers % num_banks == 0,
+            "DRAM-core prefetcher (K-row-major): total receivers ({}) must divide evenly across {} banks. "
+            "Non-uniform per-bank receiver counts are only supported by the receiver-contiguous layout.",
+            total_receivers,
+            num_banks);
+        return compute_tensor_layout_krow_major(t, block_count, receivers_per_bank, ring_half, context_id);
+    }
+    return compute_tensor_layout_recv_contig(t, block_count, stage_third, context_id);
+}
+
 }  // namespace
 
 DramCorePrefetcherManager::DramCorePrefetcherManager(
@@ -176,12 +376,21 @@ void DramCorePrefetcherManager::enumerate_dram_senders() {
                                .get_cluster()
                                .get_soc_desc(mesh_device_->get_view().get_devices().front()->id());
     const uint32_t num_banks = soc_desc.get_num_dram_views();
+    num_banks_ = num_banks;
     sender_logical_cores_.clear();
-    sender_logical_cores_.reserve(num_banks);
+    sender_logical_cores_.reserve((dual_senders_per_bank_ ? 2 : 1) * num_banks);
     for (uint32_t b = 0; b < num_banks; ++b) {
-        sender_logical_cores_.push_back(mesh_device_->impl().pick_unused_dram_logical_core(b));
+        if (dual_senders_per_bank_) {
+            // Two senders per bank: the free subchannel then the NOC1-endpoint subchannel.
+            // Must match the GCB factory's build_dram_sender_mapping ordering.
+            for (const CoreCoord& core : mesh_device_->impl().dram_sender_logical_cores(b)) {
+                sender_logical_cores_.push_back(core);
+            }
+        } else {
+            sender_logical_cores_.push_back(mesh_device_->impl().pick_unused_dram_logical_core(b));
+        }
     }
-    num_senders_ = num_banks;
+    num_senders_ = static_cast<uint32_t>(sender_logical_cores_.size());
 }
 
 void DramCorePrefetcherManager::allocate_sockets() {
@@ -254,7 +463,7 @@ void DramCorePrefetcherManager::build_and_launch_programs(uint32_t stage_ring_ba
 
 void DramCorePrefetcherManager::start(const experimental::DramCorePrefetcherConfig& config) {
     auto lock = lock_api_function_();
-    (void)config;
+    dual_senders_per_bank_ = config.dual_senders_per_bank;
     TT_FATAL(
         !active_, "A DRAM-core prefetcher is already active on this mesh device. Call StopDramCorePrefetcher first.");
 
@@ -304,17 +513,23 @@ void DramCorePrefetcherManager::start(const experimental::DramCorePrefetcherConf
         "DRISC L1 kernel region ({} B) too small for socket buffers + stage ring",
         kernel_region_size);
     stage_ring_size_ = kernel_region_end - stage_ring_base_;
-    stage_ring_size_ &= ~(2 * l1_alignment - 1);
-    // After masking down, make sure the ring is still big enough for at least
-    // one minimal sub-chunk per half. Catches accidental shrink-to-zero if the
+    // Align stage_ring_size to LCM(2, 3, l1_alignment) so both halves (K-row
+    // path) and thirds (recv-contig path) are individually l1-aligned. With
+    // l1_alignment=16, LCM = 48. Bitmask shortcut doesn't work because 48 is
+    // not a power of 2 — use integer division.
+    const uint32_t kRingSizeAlign = 6u * l1_alignment;  // = LCM(2*3, l1_alignment) when l1_alignment is even
+    stage_ring_size_ = (stage_ring_size_ / kRingSizeAlign) * kRingSizeAlign;
+    // After aligning down, make sure the ring is still big enough for at least
+    // one minimal sub-chunk per slot. Catches accidental shrink-to-zero if the
     // socket carve-out ever grows past the L1 region.
     TT_FATAL(
-        stage_ring_size_ >= 4 * l1_alignment,
-        "DRISC L1 stage ring shrank to {} B after alignment masking — socket buffers consumed too much of the {} B "
+        stage_ring_size_ >= 6 * l1_alignment,
+        "DRISC L1 stage ring shrank to {} B after alignment — socket buffers consumed too much of the {} B "
         "kernel region",
         stage_ring_size_,
         kernel_region_size);
     ring_half_ = stage_ring_size_ / 2;
+    stage_third_ = stage_ring_size_ / 3;
 
     // Populate devices_ list once; both allocate_sockets and build_and_launch_programs use it.
     // Build the coord->index map at the same time so worker_loop fan-out is O(targets).
@@ -355,10 +570,21 @@ std::vector<std::vector<uint8_t>> DramCorePrefetcherManager::serialize_request_p
 
     const ContextId context_id = mesh_device_->impl().get_context_id();
 
-    // Derive num_receivers from the GCB itself so each Queue call can target a
-    // GCB with a different receiver count. The DRAM-sender GCB ctor enforces a
-    // uniform receiver count across senders, so front() speaks for every sender.
-    const uint32_t gcb_num_receivers = gcb.sender_receiver_core_mapping().front().second.num_cores();
+    // Derive the receiver counts from the GCB itself so each Queue call can target a
+    // GCB with a different receiver count. total_receivers (== ring_size) and
+    // receivers_per_bank are independent of how many DRISC senders drive a bank; the
+    // per-sender split (when dual_senders_per_bank_) just partitions a bank's receivers.
+    const auto& mapping = gcb.sender_receiver_core_mapping();
+    uint32_t total_receivers = 0;
+    for (const auto& [_sender, receivers] : mapping) {
+        total_receivers += receivers.num_cores();
+    }
+    TT_FATAL(num_banks_ > 0, "DRAM-core prefetcher: num_banks must be > 0");
+    // receivers_per_bank is only consumed by the K-row-major layout (single sender per
+    // bank). Recv-contig derives its geometry from the shard shape and ignores it, and
+    // its receivers need not be uniform per bank — so the even-divisibility requirement
+    // is enforced per-tensor in compute_tensor_layout(), only for K-row-major tensors.
+    const uint32_t receivers_per_bank = total_receivers / num_banks_;
     const uint32_t gcb_state_addr = static_cast<uint32_t>(experimental::sender_state_drisc_l1_base(gcb));
 
     const uint32_t pcie_alignment = MetalContext::instance(context_id).hal().get_alignment(HalMemType::HOST);
@@ -394,11 +620,39 @@ std::vector<std::vector<uint8_t>> DramCorePrefetcherManager::serialize_request_p
     };
 
     begin_page();
-    for (const auto& input : data_tensors) {
+    for (size_t tensor_idx = 0; tensor_idx < data_tensors.size(); ++tensor_idx) {
+        const auto& input = data_tensors[tensor_idx];
         // block_count is per-tensor: it sets how many K-blocks the kernel pushes
         // (and how K is divided in compute_tensor_layout), replacing the GCB ring size.
-        const DramCorePrefetcherTensorLayout layout =
-            compute_tensor_layout(input.tensor.get(), input.block_count, gcb_num_receivers, ring_half_, context_id);
+        const DramCorePrefetcherTensorLayout layout = compute_tensor_layout(
+            input.tensor.get(),
+            input.block_count,
+            num_banks_,
+            receivers_per_bank,
+            total_receivers,
+            ring_half_,
+            stage_third_,
+            context_id);
+        // dual_senders_per_bank only makes sense for the receiver-contiguous layout (a K-row-major
+        // bank holds one shard, nothing to split). Reject the mismatch here rather than silently
+        // building wrong per-sender geometry.
+        TT_FATAL(
+            !dual_senders_per_bank_ || layout.layout_mode == static_cast<uint32_t>(LayoutMode::ReceiverContiguous),
+            "DRAM-core prefetcher: dual_senders_per_bank is only supported for the receiver-contiguous "
+            "DRAM layout, but input tensor {} is K-row-major.",
+            tensor_idx);
+
+        // The sender's free-space poll counts whole per-receiver pages; if the GCB's per-receiver
+        // fifo can't hold even one full page the poll never reaches a usable block and the DRISC
+        // kernel hangs. Guard it here (applies to both layouts).
+        TT_FATAL(
+            gcb.size() >= layout.page_bytes_per_recv,
+            "DRAM-core prefetcher: GCB per-receiver fifo size ({} B) must be at least one full per-receiver "
+            "page ({} B) for input tensor {}; a smaller fifo makes the sender's free-space poll spin forever.",
+            gcb.size(),
+            layout.page_bytes_per_recv,
+            tensor_idx);
+
         const uint32_t bank_local_base = static_cast<uint32_t>(input.tensor.get().mesh_buffer().address());
 
         // Find this layout in the current page (dedup), or decide it needs adding.
