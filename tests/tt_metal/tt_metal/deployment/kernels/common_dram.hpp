@@ -7,6 +7,8 @@
 
 static constexpr uint32_t DRAM_TEST_NOC_WORD_BYTES = 64;
 static constexpr uint64_t DRAM_TEST_MAX_BANK_BYTES = 0xFF000000ULL;
+static constexpr uint64_t DRAM_TEST_RESERVED_TOP_BYTES = 2048ULL;
+static constexpr uint64_t DRAM_TEST_EFFECTIVE_MAX_BANK_BYTES = DRAM_TEST_MAX_BANK_BYTES - DRAM_TEST_RESERVED_TOP_BYTES;
 static constexpr uint32_t DRAM_TEST_BYTES = 32u * 1024u * 1024u;  // 32MB
 
 // Recommended small default queue depth for persistent worker mode.
