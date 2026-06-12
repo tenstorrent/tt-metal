@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // =============================================================================
-// mcast_pipe — `Pipe`: a two-sided NoC-multicast + semaphore-handshake helper.
+// mcast_pipe — `SenderPipe` / `ReceiverPipe`: a NoC-multicast + semaphore-handshake helper.
 // =============================================================================
 //
 // Wraps the recurring dataflow block:
@@ -11,36 +11,55 @@
 //   set up a source L1 region -> multicast a block to a receiver rectangle ->
 //   handshake with the receivers (sem set / wait / inc) -> flush before reuse.
 //
-// `Pipe` exists on BOTH sides of the channel: the sender core calls `send()` /
-// `send_signal()`, each receiver core calls `receive()` / `receive_signal()`.
-// They are two faces of the same channel.
+// The channel has TWO faces, materialized as TWO objects (Round 4):
+//   * the SENDER core constructs a `SenderPipe` and calls `send()` / `send_signal()`;
+//   * each RECEIVER core constructs a `ReceiverPipe` and calls `receive(sx, sy)` /
+//     `receive_signal()`.
+// They are NOT the same type. The asymmetry is real: a receiver never multicasts, so it
+// has no use for the broadcast rectangle or the recipient count — it only needs the two
+// semaphores and, at `receive()` time, the sender's core coords (the target of its ack).
+// Forcing both onto one object meant the receiver carried dead `dest`/`num_active` args
+// ("pass 1 by convention") — the split deletes them.
 //
-// Built on the object API (`Noc`, `Semaphore<>`) — NOT the legacy free functions.
+// Built ENTIRELY on the object API (`Noc`, `Semaphore<>`, Unicast/MulticastEndpoint) — NO
+// legacy free functions. Every NoC transaction (data mcast, self-copy read, and the flag
+// mcast) goes through the `Noc` object; the multicast NoC-address math lives in
+// `MulticastEndpoint`, not an open-coded `get_noc_multicast_addr` (Round 4 / noc 2.0).
 //
 // -----------------------------------------------------------------------------
-// GEOMETRY + RECIPIENT COUNT, NOT A MODE KNOB (Round 2)
+// GEOMETRY + RECIPIENT COUNT (sender side only)
 // -----------------------------------------------------------------------------
-// The caller does NOT pick a multicast mode. It states two quantities and the Pipe
+// The caller does NOT pick a multicast mode. It states two quantities and the SenderPipe
 // infers everything else:
-//   * `McastRect` is PURE GEOMETRY — the broadcast bounding box; it is NOT a transfer count.
-//   * `num_active_cores` is the RECIPIENT count EXCLUDING the sender. It is the `num_dsts` for
-//     both the data and the flag mcast (+1 internally on the loopback path, which counts self),
-//     and the R->S handshake ACK count. (For the migrated ops these coincide; a future op where
-//     ACKs < recipients — conv-1D weights — would need a third count and is out of scope.)
+//   * `McastRect` is PURE GEOMETRY — the broadcast bounding box; it is NOT a transfer count. It is
+//     the ONLY runtime ctor arg (its virtual coords vary per sender core under one kernel binary).
+//   * `NUM_ACTIVE_RECEIVER_CORES` (a TEMPLATE param — compile-time, core-uniform) is the RECIPIENT
+//     count: the number of cores the data is multicast to, NOT counting the sender's own in-place
+//     copy. It equals the EXCLUDE_SRC NoC `num_dests` AND the R->S ACK count — exactly the value every
+//     production factory already computes (matmul's `in0_mcast_num_dests`, etc.), so a shared sender
+//     kernel passes the same value across topologies (1D in-rect / 2D out-of-rect) with no host edit.
+//     The SenderPipe derives the mcast population from it per inferred mode, so the caller never
+//     reasons about mcast mode:
+//        EXCLUDE_SRC            : mcast_dests = NUM_ACTIVE_RECEIVER_CORES         (ack count = same)
+//        INCLUDE_SRC (loopback) : mcast_dests = NUM_ACTIVE_RECEIVER_CORES + 1     (+1 = the self-copy;
+//                                 the self-copy does not ack, so the ACK count stays = NUM_ACTIVE...)
+//     (For a future op where ACKs < recipients — conv-1D weights — a third count would be
+//     needed; out of scope.)
 //
 // The EXCLUDE_SRC vs INCLUDE_SRC (loopback) choice is INFERRED per send(), no caller input:
 //   loopback (INCLUDE_SRC) iff `sender_in_rect_() && src != dst`. `my_x`/`my_y` are read
 //   in the Pipe's `noc_` index space, the same space the rect uses (IR1).
-//   * sender OUTSIDE box                  -> plain multicast (EXCLUDE_SRC)
-//   * sender INSIDE box, src != dst       -> loopback multicast (INCLUDE_SRC): if the sender is
-//       a recipient (conv-WS self-gather) this IS its own copy; if it is in the box but inactive
-//       the self-write is a dead store into landing memory nobody reads — harmless either way.
-//   * sender INSIDE box, src == dst       -> plain multicast (EXCLUDE_SRC): its copy is already
-//       in place (matmul in0, R6 extract path); an overlapping self-loopback is unspecified.
-//   * num_active_cores == 0 & in box      -> self-only: local copy (loopback to just self hangs)
+//   (N = NUM_ACTIVE_RECEIVER_CORES, the recipient count.)
+//   * sender OUTSIDE box                  -> plain multicast (EXCLUDE_SRC), mcast_dests = N
+//   * sender INSIDE box, src != dst       -> loopback multicast (INCLUDE_SRC): the sender is itself
+//       a recipient (conv-WS self-gather) -> mcast_dests = N + 1 (its self-copy is the +1).
+//   * sender INSIDE box, src == dst       -> plain multicast (EXCLUDE_SRC), mcast_dests = N:
+//       its copy is already in place (matmul in0, R6 extract path); never self-overwrite. N here is
+//       the OTHER cores (the in-box sender is not counted in N — N is recipients, not box area).
+//   * N == 0 (no receiver cores) -> self-only local copy if in box (loopback to just self hangs,
+//       H5); else nothing. Skip handshake/fence.
 //   The flag mcast rides the SAME mode as the data mcast of that send() (INV4 single path);
-//   send_signal() has no data so it is always EXCLUDE_SRC. `num_active_cores` never counts the
-//   sender; the loopback path adds the +1 for the self-write internally.
+//   send_signal() has no data so it is always EXCLUDE_SRC.
 //   OUT of inference reach: a sender that needs the loopback FLAG with src == dst (R6 role-flip
 //   extract path: flag INCLUDE, data EXCLUDE) — stays raw this round.
 //
@@ -48,28 +67,59 @@
 // style_bakeoff.md), not by argument:
 //   * F1 fence       -> async_writes_flushed (SENT), NOT barrier  (flush −27% vs barrier)
 //   * F2 staging     -> level flag (VALID/INVALID) default         (flag −29% vs counter)
-//   * F4 linking     -> linked data+flag pair + flush (default)    (linked −36% vs unlinked)
+//   * F4 linking     -> linked data+flag pair + flush (always)     (linked −36% vs unlinked)
 //   * flag reset     -> receiver clears BEFORE acking (clear-before-ack, H11)
 //   * data->flag     -> data then flag, same Noc / VC-4 (INV4) — the flag proves arrival
 //
 // Internal dual-paths (predicates, NOT a config blob the caller navigates):
 //   * loopback       -> EXCLUDE_SRC | INCLUDE_SRC | self-only-local-copy (inferred, above)
-//   * F4 linking     -> LINKED (default) | unlinked + barrier-between (LINK=false)
 //   * Staging::Counter forces the fence to async_atomic_barrier (a write flush HANGS the
 //     non-posted multicast atomic — bake-off F2).
 //
-// Use-case knobs (the only caller-facing template choices):
+// F4 linking is NOT a knob (Round 4): every migrated call site links, so the data mcast is
+// ALWAYS issued linked to the following flag mcast (the linked pair enforces data-before-flag
+// without a barrier, −36%). The unlinked + barrier-between arm had no shipping consumer: its one
+// cited candidate (sdpa_decode read_k) was assumed to need a barrier between data and flag, but on
+// inspection it merely uses a conservative one — sdpa's own chain_link.hpp links the same broadcast,
+// so read_k can link too and would gain the −36%. If a FUTURE kernel must genuinely fence between
+// data and flag, re-introduce the arm as a refinement then; don't carry the knob speculatively now.
+//
+// TEMPLATE params (all compile-time + core-uniform; the caller-facing choices):
+//   SenderPipe<NUM_ACTIVE_RECEIVER_CORES, DATA_READY_SEM_ID, CONSUMED_SEM_ID,
+//              STAGING = Flag, PRE_HANDSHAKE = true, INITIAL_READY = VALID>(noc, dest)
+//   ReceiverPipe<DATA_READY_SEM_ID, CONSUMED_SEM_ID, STAGING = Flag, PRE_HANDSHAKE = true>(noc)
 //   * STAGING       (default Flag)   — Counter only for monotone / streaming protocols.
 //   * PRE_HANDSHAKE (default true)   — false when each receiver reserves a fresh CB slot.
-//   * LINK          (default true)   — false where a barrier is structurally required
-//                                       between data and flag (e.g. sdpa read_k).
+//   * INITIAL_READY (default VALID)  — sender's local "ready" value (Flag only); INVALID for a
+//                                       signal sender that starts cleared (sharded-LN phase-1).
+//
+// -----------------------------------------------------------------------------
+// SEMAPHORE LIFECYCLE OWNED BY THE PIPE (Round 4)
+// -----------------------------------------------------------------------------
+// The semaphore *IDs* are TEMPLATE params (compile-time in every kernel), not pre-built
+// `Semaphore<>` objects. Each Pipe instantiates its `Semaphore<>` internally. A Pipe kernel-inits
+// a cell ONLY when this core establishes a happens-before edge to every other writer of that cell
+// before they write it — otherwise the init races and must come from the HOST:
+//   * ReceiverPipe inits its `data_ready` = INVALID (Staging::Flag). SAFE: the receiver writes it
+//                  before its own ack, and the sender (the only other writer) is gated behind that
+//                  ack — strict happens-before.
+//   * SenderPipe   pre-sets ONLY its OWN local `data_ready` = `INITIAL_READY` (default VALID — the
+//                  value it broadcasts; Staging::Flag). SAFE: the sender is the sole writer of its
+//                  own cell before the first send. `INITIAL_READY = INVALID` for a signal sender.
+//   * SenderPipe DOES NOT init `consumed`. RACY if it did: receivers increment the sender's counter
+//                  remotely with NO happens-before relative to the sender's ctor (a receiver can ack
+//                  before the sender core even runs), so a ctor `set(0)` would clobber an early ack
+//                  and HANG. Its initial 0 MUST come from host `CreateSemaphore(..., 0)`.
+// HOST-side `CreateSemaphore` on the union of sender+receiver cores allocates the IDs AND owns the
+// initial value of any cell written by a remote core (the `consumed` counter); the Pipe owns only
+// the race-free local inits above.
 //
 // Preconditions (INV9): single sender per receiver; semaphores created on the union of
 // sender+receiver cores; the landing address `dst_l1` is identical across all receivers.
 //
-// Scoped OUT (raw API this round): rotating-sender / role-flip same-core (R6); streaming
-// chunked send of a not-yet-complete block (R4); preprogram-state mcast set-state; ring /
-// fabric CCL. The object API auto-chunks a *fully-ready* block > NOC_MAX_BURST_SIZE.
+// Scoped OUT (raw API this round): rotating-sender / role-flip same-core flag-INCLUDE arm (R6);
+// streaming chunked send of a not-yet-complete block (R4); preprogram-state mcast set-state;
+// ring / fabric CCL. The object API auto-chunks a *fully-ready* block > NOC_MAX_BURST_SIZE.
 // =============================================================================
 
 #pragma once
@@ -91,12 +141,16 @@ enum class Staging { Flag, Counter };
 
 // -----------------------------------------------------------------------------
 // A multicast destination rectangle, in NoC (virtual) coordinates. PURE GEOMETRY: the
-// broadcast bounding box. The transfer/ACK count is the separate `num_active_cores` ctor
-// arg — NOT the area.
+// broadcast bounding box. The transfer/ACK count is the separate `NUM_ACTIVE_RECEIVER_CORES`
+// template param — NOT the area. SENDER side only (the receiver does not multicast).
 //
-//   SENDER side  : the receiver rectangle.
-//   RECEIVER side: {sender_x, sender_y} 1x1 — points back at the sender (the target of the
-//                  R->S "consumed" ack). Construct with the `single_core` factory below.
+// CORNER ORDERING IS OWNED HERE (not the caller). The mcast hardware walks the rect from
+// `start` in the NoC's routing direction up to `end`, so `start` must be the corner the
+// routing reaches FIRST: the low corner on NoC0 (+x/+y), the high corner on NoC1 (-x/-y).
+// `McastRect` stores the four numbers in WHATEVER order it was constructed with — canonical
+// top-left→bottom-right, or already swapped (some hosts std::swap for NOC_1) — and
+// `start_end_for_noc()` always re-derives the routing-correct (start,end) for the live NoC.
+// So however the rect is initialized, the mcast APIs always receive the corners in good order.
 // -----------------------------------------------------------------------------
 struct McastRect {
     uint32_t x0{};
@@ -104,31 +158,65 @@ struct McastRect {
     uint32_t x1{};
     uint32_t y1{};
 
-    // Receiver-side helper: a degenerate 1x1 rect pointing at the sender core.
-    static constexpr McastRect single_core(uint32_t x, uint32_t y) { return McastRect{x, y, x, y}; }
+    // Order-agnostic normalized bounds (tolerate either input ordering).
+    constexpr uint32_t xlo() const { return x0 < x1 ? x0 : x1; }
+    constexpr uint32_t xhi() const { return x0 < x1 ? x1 : x0; }
+    constexpr uint32_t ylo() const { return y0 < y1 ? y0 : y1; }
+    constexpr uint32_t yhi() const { return y0 < y1 ? y1 : y0; }
+
+    // Routing-correct (start_x, start_y, end_x, end_y) for the mcast APIs on `noc_id`.
+    // NoC0 → start = low corner; NoC1 → start = high corner (the per-NoC swap the host used to
+    // do with std::swap on NOC_1 — now owned by the rect, applied as a full diagonal-corner swap
+    // to match the host's CoreCoord-pair swap).
+    struct Bounds {
+        uint32_t sx, sy, ex, ey;
+    };
+    constexpr Bounds start_end_for_noc(uint8_t noc_id) const {
+        return noc_id == 1 ? Bounds{xhi(), yhi(), xlo(), ylo()} : Bounds{xlo(), ylo(), xhi(), yhi()};
+    }
 };
 
-// -----------------------------------------------------------------------------
-// Pipe — the two-sided channel.
-// -----------------------------------------------------------------------------
+// =============================================================================
+// SenderPipe — the broadcasting face of the channel.
+// =============================================================================
+// All compile-time-known, core-uniform values are TEMPLATE params (every migrated kernel sources
+// them from `get_compile_time_arg_val`, and they are identical across all cores running the kernel):
+//   * NUM_ACTIVE_RECEIVER_CORES — FULL recipient count, INCLUDING the sender when it is one of the
+//                                 recipients. The Pipe derives ack_count and mcast_dests from it.
+//   * DATA_READY_SEM_ID         — S->R "data is ready" flag id.
+//   * CONSUMED_SEM_ID           — R->S "dest drained" counter id (used iff PRE_HANDSHAKE).
+//   * STAGING / PRE_HANDSHAKE   — the use-case knobs.
+//   * INITIAL_READY             — value the ctor pre-sets the sender's LOCAL data-ready cell to
+//                                 (Flag staging only). DEFAULT `VALID` (5/6 migrated data senders set
+//                                 VALID before the loop). A signal sender that must start INVALID
+//                                 passes `INITIAL_READY = INVALID` (sharded-LN phase-1). Folding it in
+//                                 lets call sites drop their manual `<flag_sem>.set(VALID)` line.
+// The ONLY runtime ctor input is the `McastRect` — its (virtual) coords vary per sender core under
+// one compiled binary (e.g. each row-sender in a 2D matmul targets a different row), so it is set
+// per-core via runtime args and CANNOT be a template param. `send()`/`send_signal()` payload + the
+// receiver's sender coords are runtime for the same reason (CB pointers; rotating senders).
 template <
+    uint32_t NUM_ACTIVE_RECEIVER_CORES,
+    uint32_t DATA_READY_SEM_ID,
+    uint32_t CONSUMED_SEM_ID,
     Staging STAGING = Staging::Flag,  // F2 use-case knob
     bool PRE_HANDSHAKE = true,        // H2 use-case knob
-    bool LINK = true>                 // F4 linking (constexpr)
-class Pipe {
+    uint32_t INITIAL_READY = VALID>   // local "ready" value (Flag only); INVALID for a signal sender
+class SenderPipe {
 public:
-    // `dest`             — receiver rectangle (geometry only).
-    // `num_active_cores` — handshake participant count (R->S ACKs the sender waits for, and the
-    //                      EXCLUDE-path num_dests). NEVER counts the sender — the loopback path
-    //                      adds its own +1. On the RECEIVER side this is unused (receivers never
-    //                      multicast); pass 1 by convention.
-    Pipe(
-        const Noc& noc,
-        const McastRect& dest,
-        uint32_t num_active_cores,
-        Semaphore<> data_ready,
-        Semaphore<> consumed) :
-        noc_(noc), dest_(dest), num_active_cores_(num_active_cores), data_ready_(data_ready), consumed_(consumed) {}
+    // `dest` — receiver rectangle (geometry only). The only runtime ctor arg (see above).
+    explicit SenderPipe(const Noc& noc, const McastRect& dest) :
+        noc_(noc), dest_(dest), data_ready_(DATA_READY_SEM_ID), consumed_(CONSUMED_SEM_ID) {
+        // NOTE: the `consumed` ACK counter is NOT kernel-initialized here. Receivers increment it
+        // remotely (`up()`) with NO happens-before relative to this ctor — a receiver can ack before
+        // the sender core even runs, so a ctor `set(0)` would clobber an early ack and hang. Its
+        // initial value (0) MUST come from host `CreateSemaphore(..., 0)` (every call site does this).
+        // The sender DOES own its own local data-ready cell (only it writes it before the first send),
+        // so pre-setting that to the broadcast "ready" value is race-free (Flag staging only).
+        if constexpr (STAGING == Staging::Flag) {
+            data_ready_.set(INITIAL_READY);
+        }
+    }
 
     // ===== DATA channel (a block + a ready-flag) =====
     // send() is atomic and absorbs ALL FOUR guards (callers cannot reorder or skip them):
@@ -137,115 +225,84 @@ public:
     //   raise flag                          — data-before-flag, same VC (INV4); reset owned (H11)
     //   fence                               — flush (F1); atomic-barrier on the counter path
     void send(uint32_t src_l1, uint32_t dst_l1, uint32_t size) {
-        // Self-only degenerate: no receivers, sender alone in its own box (loopback with just
-        // self is unspecified, may hang, H5) — collapse to a local copy, skip handshake/fence.
-        if (num_active_cores_ == 0 && sender_in_rect_()) {
-            local_copy_(src_l1, dst_l1, size);
+        // Self-only degenerate: no receiver cores at all. If the sender is in its own box and lands
+        // a copy elsewhere, do a local copy (loopback to just self may hang, H5); else nothing.
+        if (NUM_ACTIVE_RECEIVER_CORES == 0) {
+            if (sender_in_rect_()) {
+                local_copy_(src_l1, dst_l1, size);
+            }
             return;
         }
         if constexpr (PRE_HANDSHAKE) {
-            consumed_.wait(num_active_cores_);
+            consumed_.wait(NUM_ACTIVE_RECEIVER_CORES);
             consumed_.set(0);
         }
         // Loopback iff the sender is in the box AND lands its own copy somewhere else than its
         // source (src == dst means the copy is already in place; never self-overwrite in place).
         const bool loopback = sender_in_rect_() && src_l1 != dst_l1;
-        send_data_(src_l1, dst_l1, size, loopback);
-        raise_flag_(VALID, loopback);  // flag rides the same mode as the data (INV4 single path)
+        // NUM_ACTIVE_RECEIVER_CORES is the RECIPIENT count (the EXCLUDE_SRC NoC num_dests = the ACK
+        // count). The loopback (INCLUDE_SRC) path adds +1 for the sender's own self-copy. The sender's
+        // own copy never acks, so the consumed wait above is on NUM_ACTIVE_RECEIVER_CORES.
+        const uint32_t mcast_dests = loopback ? NUM_ACTIVE_RECEIVER_CORES + 1 : NUM_ACTIVE_RECEIVER_CORES;
+        send_data_(src_l1, dst_l1, size, loopback, mcast_dests);
+        raise_flag_(VALID, loopback, mcast_dests);  // flag rides the same mode as the data (INV4)
         fence_();
-    }
-
-    // receive(): wait data-ready, clear the flag (clear-before-ack, H11), [ack slot-free].
-    // On return the block is in the receiver's dst L1, bit-exact (flag arrival => data
-    // arrival via INV4). What the caller does with the dst is its own business (the Pipe
-    // never owned the downstream CB consume).
-    void receive() {
-        if constexpr (PRE_HANDSHAKE) {
-            // tell the sender "my dest is free / I am ready" (remote atomic inc on its counter)
-            consumed_.up(noc_, dest_.x0, dest_.y0, 1);
-        }
-        if constexpr (STAGING == Staging::Counter) {
-            data_ready_.wait_min(++round_);
-        } else {
-            data_ready_.wait(VALID);
-            data_ready_.set(INVALID);  // clear this round's flag; next receive()'s ack follows (H11)
-        }
     }
 
     // ===== CONTROL channel (a pure flag, no data block, R2) =====
     // Broadcast a control flag. `value` carries a payload for value-carrying flags
-    // (e.g. moe_gpt token counts); defaults to VALID for a plain doorbell.
+    // (e.g. moe_gpt token counts); defaults to VALID for a plain doorbell. Always EXCLUDE_SRC
+    // (no data accompanies it), so the destination population is the recipient count.
     void send_signal(uint32_t value = VALID) {
-        raise_flag_(value);
-        fence_();
-    }
-
-    // Wait the control flag and RETURN its value. Symmetric with send_signal().
-    //   * Staging::Flag    — a plain doorbell: returns VALID once the flag arrives, then clears.
-    //   * Staging::Counter — returns the monotone round number reached.
-    // Value-carrying-flag payload extraction (moe_gpt: token counts packed in the sem word) is
-    // a migration-time concern for that op — it reads its own sem cell directly, since it owns
-    // the cell address. Kept out of the generic doorbell path to keep receive()/receive_signal()
-    // dead simple.
-    uint32_t receive_signal() {
-        if constexpr (STAGING == Staging::Counter) {
-            data_ready_.wait_min(++round_);
-            return round_;
-        } else {
-            data_ready_.wait(VALID);
-            data_ready_.set(INVALID);
-            return VALID;
+        if (NUM_ACTIVE_RECEIVER_CORES == 0) {
+            return;  // nobody to signal
         }
+        raise_flag_(value, /*loopback=*/false, NUM_ACTIVE_RECEIVER_CORES);
+        fence_();
     }
 
 private:
     // ---- is the sender's own core inside the receiver rect? (IR1: compare in noc_'s space) ----
-    // `my_x`/`my_y` are the core's own NoC coords for this noc index — the same coordinate space
-    // the rect uses. NOC1 rects arrive with start/end swapped (NoC addressing order), so the
-    // membership test must normalize the bounds rather than assume x0<=x1, y0<=y1.
     bool sender_in_rect_() const {
         const uint32_t mx = my_x[noc_.get_noc_id()];
         const uint32_t my = my_y[noc_.get_noc_id()];
-        const uint32_t xlo = dest_.x0 < dest_.x1 ? dest_.x0 : dest_.x1;
-        const uint32_t xhi = dest_.x0 < dest_.x1 ? dest_.x1 : dest_.x0;
-        const uint32_t ylo = dest_.y0 < dest_.y1 ? dest_.y0 : dest_.y1;
-        const uint32_t yhi = dest_.y0 < dest_.y1 ? dest_.y1 : dest_.y0;
-        return mx >= xlo && mx <= xhi && my >= ylo && my <= yhi;
+        return mx >= dest_.xlo() && mx <= dest_.xhi() && my >= dest_.ylo() && my <= dest_.yhi();
     }
 
-    // ---- data multicast (degenerate self-only already short-circuited in send()) ----
-    // `num_active_cores` never counts the sender; the loopback path adds the +1 for the
-    // self-write (the API counts self there). EXCLUDE writes `num_active_cores` cores even
-    // when the sender sits inside the box.
-    void send_data_(uint32_t src_l1, uint32_t dst_l1, uint32_t size, bool loopback) {
-        const uint64_t dst_noc =
-            ::get_noc_multicast_addr(dest_.x0, dest_.y0, dest_.x1, dest_.y1, dst_l1, noc_.get_noc_id());
+    // ---- data multicast via the Noc object (noc 2.0) ----
+    void send_data_(uint32_t src_l1, uint32_t dst_l1, uint32_t size, bool loopback, uint32_t mcast_dests) {
+        const auto r = dest_.start_end_for_noc(noc_.get_noc_id());  // routing-correct start/end
+        UnicastEndpoint src_ep;
+        MulticastEndpoint dst_ep;
+        const typename noc_traits_t<UnicastEndpoint>::src_args_type src_args{.addr = src_l1};
+        const typename noc_traits_t<MulticastEndpoint>::dst_args_mcast_type dst_args{r.sx, r.sy, r.ex, r.ey, dst_l1};
+        // Data is ALWAYS linked to the following flag mcast (raise_flag_ issues the flag with
+        // linked=false to terminate the chain). The linked pair enforces data-before-flag without
+        // a barrier (F4, −36%). No unlinked arm — see the header note.
         if (loopback) {
-            noc_async_write_multicast_loopback_src(
-                src_l1, dst_noc, size, num_active_cores_ + 1, /*linked=*/LINK, noc_.get_noc_id());
+            noc_.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
+                src_ep, dst_ep, size, mcast_dests, src_args, dst_args, /*linked=*/true);
         } else {
-            noc_async_write_multicast(src_l1, dst_noc, size, num_active_cores_, /*linked=*/LINK, noc_.get_noc_id());
-        }
-        if constexpr (!LINK) {
-            // Unlinked fallback: a barrier must separate data and flag (H10 / F4 unlinked arm).
-            noc_.async_write_barrier();
+            noc_.async_write_multicast<NocOptions::DEFAULT>(
+                src_ep, dst_ep, size, mcast_dests, src_args, dst_args, /*linked=*/true);
         }
     }
 
     // ---- raise the data-ready flag (or a control flag with a payload) ----
     // `loopback` mirrors the data mcast of the same send() (INV4: same path); send_signal()
     // has no data, so its flag is always EXCLUDE_SRC.
-    void raise_flag_(uint32_t value = VALID, bool loopback = false) {
+    void raise_flag_(uint32_t value, bool loopback, uint32_t mcast_dests) {
+        const auto r = dest_.start_end_for_noc(noc_.get_noc_id());  // routing-correct start/end
         if constexpr (STAGING == Staging::Counter) {
-            data_ready_.inc_multicast(noc_, dest_.x0, dest_.y0, dest_.x1, dest_.y1, value, num_active_cores_);
+            data_ready_.inc_multicast(noc_, r.sx, r.sy, r.ex, r.ey, value, mcast_dests);
         } else {
             data_ready_.set(value);
             if (loopback) {
-                data_ready_.set_multicast<Noc::McastMode::INCLUDE_SRC>(
-                    noc_, dest_.x0, dest_.y0, dest_.x1, dest_.y1, num_active_cores_ + 1, /*linked=*/false);
+                data_ready_.set_multicast<NocOptions::MCAST_INCL_SRC>(
+                    noc_, r.sx, r.sy, r.ex, r.ey, mcast_dests, /*linked=*/false);
             } else {
-                data_ready_.set_multicast<Noc::McastMode::EXCLUDE_SRC>(
-                    noc_, dest_.x0, dest_.y0, dest_.x1, dest_.y1, num_active_cores_, /*linked=*/false);
+                data_ready_.set_multicast<NocOptions::DEFAULT>(
+                    noc_, r.sx, r.sy, r.ex, r.ey, mcast_dests, /*linked=*/false);
             }
         }
     }
@@ -262,20 +319,88 @@ private:
         }
     }
 
-    // ---- local L1 self-copy (degenerate self-only guard) ----
+    // ---- local L1 self-copy (degenerate self-only guard) via the Noc object (noc 2.0) ----
     void local_copy_(uint32_t src_l1, uint32_t dst_l1, uint32_t size) {
         if (src_l1 == dst_l1) {
             return;  // src == dst: nothing to copy (source polymorphism, R4)
         }
-        const uint64_t self_src =
-            get_noc_addr(my_x[noc_.get_noc_id()], my_y[noc_.get_noc_id()], src_l1, noc_.get_noc_id());
-        noc_async_read(self_src, dst_l1, size);
+        UnicastEndpoint src_ep, dst_ep;
+        const uint32_t mx = my_x[noc_.get_noc_id()];
+        const uint32_t my = my_y[noc_.get_noc_id()];
+        noc_.async_read(
+            src_ep,
+            dst_ep,
+            size,
+            typename noc_traits_t<UnicastEndpoint>::src_args_type{mx, my, src_l1},
+            typename noc_traits_t<UnicastEndpoint>::dst_args_type{0, 0, dst_l1});
         noc_.async_read_barrier();
     }
 
     Noc noc_;
     McastRect dest_;
-    uint32_t num_active_cores_;
+    Semaphore<> data_ready_;
+    Semaphore<> consumed_;
+};
+
+// =============================================================================
+// ReceiverPipe — the listening face of the channel. No rectangle, no recipient count.
+// =============================================================================
+// Sem ids + use-case knobs are TEMPLATE params (compile-time, core-uniform — same as SenderPipe).
+//   * DATA_READY_SEM_ID — S->R "data is ready" flag id (this core waits on it).
+//   * CONSUMED_SEM_ID   — R->S "dest drained" counter id (this core increments it on the sender
+//                         remotely; the id supplies the shared L1 offset).
+// The only runtime input is the sender's coords, passed to receive() (they vary per receiver in 2D
+// and rotate per block in R6 — must be runtime).
+template <
+    uint32_t DATA_READY_SEM_ID,
+    uint32_t CONSUMED_SEM_ID,
+    Staging STAGING = Staging::Flag,  // F2 use-case knob (must match the SenderPipe's)
+    bool PRE_HANDSHAKE = true>        // H2 use-case knob (must match the SenderPipe's)
+class ReceiverPipe {
+public:
+    explicit ReceiverPipe(const Noc& noc) : noc_(noc), data_ready_(DATA_READY_SEM_ID), consumed_(CONSUMED_SEM_ID) {
+        // Init the flag THIS side waits on. Counter staging needs no reset/init (monotone).
+        if constexpr (STAGING == Staging::Flag) {
+            data_ready_.set(INVALID);
+        }
+    }
+
+    // receive(): [ack the sender], wait data-ready, clear the flag (clear-before-ack, H11).
+    // `sender_x`/`sender_y` are the SENDER core's NoC coords — the target of the R->S
+    // "consumed" ack. On return the block is in the receiver's dst L1, bit-exact (flag arrival
+    // => data arrival via INV4). What the caller does with the dst is its own business.
+    void receive(uint32_t sender_x, uint32_t sender_y) {
+        if constexpr (PRE_HANDSHAKE) {
+            // tell the sender "my dest is free / I am ready" (remote atomic inc on its counter)
+            consumed_.up(noc_, sender_x, sender_y, 1);
+        }
+        if constexpr (STAGING == Staging::Counter) {
+            data_ready_.wait_min(++round_);
+        } else {
+            data_ready_.wait(VALID);
+            data_ready_.set(INVALID);  // clear this round's flag; next receive()'s ack follows (H11)
+        }
+    }
+
+    // Wait the control flag and RETURN its value. Symmetric with SenderPipe::send_signal().
+    //   * Staging::Flag    — a plain doorbell: returns VALID once the flag arrives, then clears.
+    //   * Staging::Counter — returns the monotone round number reached.
+    // Value-carrying-flag payload extraction (moe_gpt: token counts packed in the sem word) is
+    // a migration-time concern for that op — it reads its own sem cell directly, since it owns
+    // the cell address. Kept out of the generic doorbell path to keep receive_signal() simple.
+    uint32_t receive_signal() {
+        if constexpr (STAGING == Staging::Counter) {
+            data_ready_.wait_min(++round_);
+            return round_;
+        } else {
+            data_ready_.wait(VALID);
+            data_ready_.set(INVALID);
+            return VALID;
+        }
+    }
+
+private:
+    Noc noc_;
     Semaphore<> data_ready_;
     Semaphore<> consumed_;
     uint32_t round_ = 0;  // monotone round counter for Staging::Counter

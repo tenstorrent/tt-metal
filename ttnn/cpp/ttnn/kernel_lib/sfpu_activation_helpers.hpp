@@ -2,7 +2,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
-#include "ttnn/operations/matmul/shared_with_host/activation_type.hpp"
+// TODO(nuked-op matmul): KernelActivation formerly lived in
+// "ttnn/operations/matmul/shared_with_host/activation_type.hpp" (now nuked).
+// Inlined here verbatim so this header (and the matmul kernels that include it)
+// still compile. Restore the shared header when the matmul op is recreated.
+#include <cstdint>
+namespace ttnn::operations::matmul {
+enum class KernelActivation : uint32_t {
+    NONE,
+    GELU,
+    TANH,
+    SILU,
+    RELU6,
+    SIGMOID,
+    HARDSIGMOID,
+    HARDTANH,
+    SELU,
+    SOFTPLUS
+};
+}  // namespace ttnn::operations::matmul
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_unary/gelu.h"
 #include "api/compute/eltwise_unary/relu.h"

@@ -165,14 +165,11 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/cnn/convert_to_chw/convert_to_chw_nanobind.cpp
     cpp/ttnn/operations/experimental/cnn/convert_to_hwc/convert_to_hwc_nanobind.cpp
     cpp/ttnn/operations/experimental/conv3d/conv3d_nanobind.cpp
-    cpp/ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.cpp
-    cpp/ttnn/operations/experimental/minimal_matmul/minimal_matmul_split_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize/deepseek_moe_post_combine_tilize_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/post_combine_reduce/post_combine_reduce_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm/moe_gate_mm_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek/moe/deepseek_moe_gate/deepseek_moe_gate_nanobind.cpp
     cpp/ttnn/operations/experimental/topk_router_gpt/topk_router_gpt_nanobind.cpp
-    cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/matmul_wo_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/moe_gpt/moe_gpt_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/combine/combine_nanobind.cpp
@@ -185,8 +182,6 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/experimental_nanobind.cpp
     cpp/ttnn/operations/experimental/fusion/fusion_dispatch_op_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/moe_grouped_topk_nanobind.cpp
-    cpp/ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_nanobind.cpp
-    cpp/ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_nanobind.cpp
     cpp/ttnn/operations/experimental/paged_cache/paged_cache_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/masked_bincount/masked_bincount_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum_nanobind.cpp
@@ -222,7 +217,6 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/rmsnorm_distributed_nanobind.cpp
     cpp/ttnn/operations/experimental/transformer/dit_layernorm_pre_all_gather/dit_layernorm_pre_all_gather_nanobind.cpp
     cpp/ttnn/operations/experimental/transformer/dit_layernorm_post_all_gather/dit_layernorm_post_all_gather_nanobind.cpp
-    cpp/ttnn/operations/experimental/transformer/dit_minimal_matmul_addcmul_fused/dit_minimal_matmul_addcmul_fused_nanobind.cpp
     cpp/ttnn/operations/experimental/transformer/dit_rms_norm_unary_fused/dit_rms_norm_unary_fused_nanobind.cpp
     cpp/ttnn/operations/experimental/transformer/rotary_embedding/rotary_embedding_nanobind.cpp
     cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama_nanobind.cpp
@@ -238,7 +232,6 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/index_fill/index_fill_nanobind.cpp
     cpp/ttnn/operations/kv_cache/kv_cache_nanobind.cpp
     cpp/ttnn/operations/loss/loss_nanobind.cpp
-    cpp/ttnn/operations/matmul/matmul_nanobind.cpp
     cpp/ttnn/operations/moreh/moreh_nanobind.cpp
     cpp/ttnn/operations/moreh/moreh_abs_pow/moreh_abs_pow_nanobind.cpp
     cpp/ttnn/operations/moreh/moreh_adam/moreh_adam_nanobind.cpp
@@ -259,8 +252,6 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/moreh/moreh_layer_norm_backward/moreh_layer_norm_backward_nanobind.cpp
     cpp/ttnn/operations/moreh/moreh_linear/moreh_linear_nanobind.cpp
     cpp/ttnn/operations/moreh/moreh_linear_backward/moreh_linear_backward_nanobind.cpp
-    cpp/ttnn/operations/moreh/moreh_matmul/moreh_matmul_nanobind.cpp
-    cpp/ttnn/operations/moreh/moreh_matmul_backward/moreh_matmul_backward_nanobind.cpp
     cpp/ttnn/operations/moreh/moreh_mean/moreh_mean_nanobind.cpp
     cpp/ttnn/operations/moreh/moreh_mean_backward/moreh_mean_backward_nanobind.cpp
     cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_nanobind.cpp
@@ -350,11 +341,9 @@ set(TTNN_SRC_PYBIND
 )
 
 set(CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND
-    cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/llama_all_gather_matmul_async_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/all_gather_async/all_gather_async_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/strided_all_gather_async/strided_all_gather_async_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/all_gather_concat_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/rs_matmul_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/ccl_experimental_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/rms_allgather/rms_allgather_nanobind.cpp
@@ -364,11 +353,6 @@ set(CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND
     cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/all_to_all_async_generic_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/strided_reduce_scatter_async/strided_reduce_scatter_async_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/minimal_matmul_strided_reduce_scatter_async/minimal_matmul_strided_reduce_scatter_async_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/all_gather_matmul_async/all_gather_matmul_async_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/strided_all_gather_minimal_matmul_async/strided_all_gather_minimal_matmul_async_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/all_gather_minimal_matmul_async_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/ring_attention_all_gather_async_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/send_recv_async/send_async/send_async_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/send_recv_async/recv_async/recv_async_nanobind.cpp

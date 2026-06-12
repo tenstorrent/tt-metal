@@ -37,8 +37,6 @@ void kernel_main() {
     constexpr uint32_t cb_out0_id = tt::CBIndex::c_16;
 
     Noc noc;
-    Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
-    Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
     CircularBuffer cb_ex_partial(cb_ex_partial_id);
     CircularBuffer cb_ex_global(cb_ex_global_id);
     CircularBuffer cb_in0(cb_in0_id);
@@ -51,14 +49,10 @@ void kernel_main() {
 
     // mcast_pipe: receiver side of the reduce mcast. The mcast sender broadcasts the global reduce
     // result + a VALID flag; this core acks (consumed) then waits the flag. Note the GN naming is
-    // flipped vs matmul: reduce_sender_sem is the S->R data-ready FLAG (cleared+waited here), and
-    // reduce_receiver_sem is the R->S consumed COUNTER (up'd here). Degenerate 1x1 rect -> sender.
-    dataflow_kernel_lib::Pipe<> reduce_pipe(
-        noc,
-        dataflow_kernel_lib::McastRect::single_core(mcast_sender_noc_x, mcast_sender_noc_y),
-        /*num_active_cores=*/1,  // unused on the receive path (receivers never multicast)
-        reduce_sender_sem,       // data ready (S->R level flag)
-        reduce_receiver_sem);    // consumed (R->S counter)
+    // flipped vs matmul: reduce_sender_sem is the S->R data-ready FLAG (cleared+waited here, the
+    // ReceiverPipe's DATA_READY_SEM_ID), and reduce_receiver_sem is the R->S consumed COUNTER
+    // (up'd on the sender here, the CONSUMED_SEM_ID). The sender coords go to receive().
+    dataflow_kernel_lib::ReceiverPipe<reduce_sender_semaphore_id, reduce_receiver_semaphore_id> reduce_pipe(noc);
 
 #if defined(READER_REPACK) and defined(TILIZE_IN)
     uint32_t in0_l1_read_addr = cb_in0.get_read_ptr();
@@ -87,7 +81,7 @@ void kernel_main() {
             cb_ex_partial.wait_front(1);
             cb_ex_global.reserve_back(1);
             // mcast_pipe: ack sender (consumed) + wait reduce-result VALID flag + clear for next round.
-            reduce_pipe.receive();
+            reduce_pipe.receive(mcast_sender_noc_x, mcast_sender_noc_y);
             cb_ex_global.push_back(1);
             cb_ex_partial.pop_front(1);
         }

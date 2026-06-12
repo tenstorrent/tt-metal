@@ -117,29 +117,8 @@ void bind_dram_core_prefetcher(nb::module_& mod) {
         nb::arg("size"),
         nb::arg("buffer_type") = tt::tt_metal::BufferType::L1);
 
-    ttnn::bind_function<"create_global_circular_buffer_for_matmul_1d", "ttnn.experimental.">(
-        mod,
-        R"doc(
-            Build a DRAM-sender GlobalCircularBuffer sized to feed one or more 1D ring matmuls
-            (gather_in0=true) with their weight tensors. See impl notes in
-            tt_metal/impl/buffers/global_circular_buffer.cpp.
-
-            Args:
-                mesh_device: The mesh device.
-                program_configs: List of 1D mcast matmul program configs (each gather_in0=True).
-                weights: List of DRAM-sharded in1 tensors, one per program_config.
-                bank_to_receivers: List of (bank_id, receivers) pairs.
-                size: GCB size in bytes.
-                buffer_type: Buffer type (L1 or L1_SMALL).
-        )doc",
-        &ttnn::global_circular_buffer::create_global_circular_buffer_for_matmul_1d,
-        nb::keep_alive<0, 1>(),
-        nb::arg("mesh_device"),
-        nb::arg("program_configs"),
-        nb::arg("weights"),
-        nb::arg("bank_to_receivers"),
-        nb::arg("size"),
-        nb::arg("buffer_type") = tt::tt_metal::BufferType::L1);
+    // TODO(nuked-op matmul): removed binding for create_global_circular_buffer_for_matmul_1d —
+    // the factory took nuked matmul program-config types. Restore when matmul is recreated.
 }
 
 }  // namespace ttnn::operations::experimental

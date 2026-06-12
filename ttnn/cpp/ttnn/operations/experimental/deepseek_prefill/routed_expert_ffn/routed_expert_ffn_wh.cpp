@@ -10,7 +10,7 @@
 #include "tt-metalium/math.hpp"
 #include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/matmul/matmul.hpp"
+// TODO(nuked-op matmul): #include "ttnn/operations/matmul/matmul.hpp" removed (op deleted)
 
 namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn::detail {
 
@@ -21,6 +21,7 @@ ttnn::Tensor routed_expert_ffn_wh(
     const ttnn::Tensor& down_proj,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& output) {
+    (void)up_proj;  // TODO(nuked-op matmul): up_proj was only consumed by the nuked matmul call
     // Wormhole compute grid is fixed at 8x8. All configs below are tuned for this
     // grid; bail loudly on anything else so we don't silently emit a bad program config.
     constexpr uint32_t GRID_X = 8;
@@ -64,46 +65,19 @@ ttnn::Tensor routed_expert_ffn_wh(
     // Cap subblock to fit dest register (h*w <= 8 on WH)
     const uint32_t gate_up_sub_w = largest_divisor(gate_up_per_core_N, GRID_X);
 
+    (void)gate_up_in0_bw;
+    (void)gate_up_sub_w;
     auto gate_up_grid = CoreRangeSet({CoreRange({0, 0}, {GRID_X - 1, gate_up_grid_y - 1})});
-
-    auto gate_up_config = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
-        .compute_with_storage_grid_size = {GRID_X, gate_up_grid_y},
-        .in0_block_w = gate_up_in0_bw,
-        .out_subblock_h = 1,
-        .out_subblock_w = gate_up_sub_w,
-        .out_block_h = gate_up_per_core_M,
-        .out_block_w = gate_up_per_core_N,
-        .per_core_M = gate_up_per_core_M,
-        .per_core_N = gate_up_per_core_N,
-        .transpose_mcast = false,
-        .fuse_batch = false,
-    };
 
     auto gate_up_shard = tt::tt_metal::ShardSpec(
         gate_up_grid, {gate_up_per_core_M * ttnn::TILE_SIZE, gate_up_per_core_N * ttnn::TILE_SIZE});
     auto gate_up_mem = MemoryConfig{TensorMemoryLayout::BLOCK_SHARDED, BufferType::L1, gate_up_shard};
+    (void)gate_up_mem;
 
-    auto gate_result = ttnn::matmul(
-        /*input_tensor_a=*/x,
-        /*input_tensor_b=*/gate_proj,
-        /*transpose_a=*/false,
-        /*transpose_b=*/false,
-        /*memory_config=*/gate_up_mem,
-        /*dtype=*/std::nullopt,
-        /*program_config=*/gate_up_config,
-        /*activation=*/std::string("silu"),
-        /*compute_kernel_config=*/compute_kernel_config);
-
-    auto up_result = ttnn::matmul(
-        /*input_tensor_a=*/x,
-        /*input_tensor_b=*/up_proj,
-        /*transpose_a=*/false,
-        /*transpose_b=*/false,
-        /*memory_config=*/gate_up_mem,
-        /*dtype=*/std::nullopt,
-        /*program_config=*/gate_up_config,
-        /*activation=*/std::nullopt,
-        /*compute_kernel_config=*/compute_kernel_config);
+    // TODO(nuked-op matmul): restore real call (was ttnn::matmul(x, gate_proj, ..., "silu"))
+    auto gate_result = x;
+    // TODO(nuked-op matmul): restore real call (was ttnn::matmul(x, up_proj, ...))
+    auto up_result = x;
 
     // In-place multiply: result stays in gate_result's block-sharded L1 buffer
     ttnn::multiply_(/*lhs=*/gate_result, /*rhs=*/up_result);
@@ -135,41 +109,18 @@ ttnn::Tensor routed_expert_ffn_wh(
     // Block-sharded output requires out_subblock_h == 1
     const uint32_t down_sub_w = largest_divisor(down_per_core_N, GRID_X);
     const uint32_t down_sub_h = 1;
-
-    auto down_config = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
-        .compute_with_storage_grid_size = {GRID_X, down_grid_y},
-        .in0_block_w = down_in0_bw,
-        .out_subblock_h = down_sub_h,
-        .out_subblock_w = down_sub_w,
-        .out_block_h = down_per_core_M,
-        .out_block_w = down_per_core_N,
-        .per_core_M = down_per_core_M,
-        .per_core_N = down_per_core_N,
-        .transpose_mcast = false,
-        .fuse_batch = true};
+    (void)down_in0_bw;
+    (void)down_sub_w;
+    (void)down_sub_h;
 
     auto down_grid = CoreRangeSet({CoreRange({0, 0}, {GRID_X - 1, down_grid_y - 1})});
     auto down_shard =
         tt::tt_metal::ShardSpec(down_grid, {down_per_core_M * ttnn::TILE_SIZE, down_per_core_N * ttnn::TILE_SIZE});
     auto down_mem = MemoryConfig{TensorMemoryLayout::BLOCK_SHARDED, BufferType::L1, down_shard};
+    (void)down_mem;
 
-    // Fast path: matmul writes directly to the L1 block-sharded buffer.
-    // optional_output_tensor isn't passed — matmul would ignore it since the
-    // memory_configs don't match. We hand the caller's tensor to the reshard.
-    auto result = ttnn::matmul(
-        /*input_tensor_a=*/gate_result,
-        /*input_tensor_b=*/down_proj,
-        /*transpose_a=*/false,
-        /*transpose_b=*/false,
-        /*memory_config=*/down_mem,
-        /*dtype=*/std::nullopt,
-        /*program_config=*/down_config,
-        /*activation=*/std::nullopt,
-        /*compute_kernel_config=*/compute_kernel_config,
-        /*core_grid=*/std::nullopt,
-        /*output_tile=*/std::nullopt,
-        /*optional_output_tensor=*/std::nullopt);
-    gate_result.deallocate(/*force=*/true);
+    // TODO(nuked-op matmul): restore real call (was ttnn::matmul(gate_result, down_proj, ...))
+    auto result = gate_result;
 
     // Always reshard L1 to DRAM interleaved. Releases the L1 shard so it doesn't
     // persist across expert calls. If the caller supplied a DRAM output tensor,

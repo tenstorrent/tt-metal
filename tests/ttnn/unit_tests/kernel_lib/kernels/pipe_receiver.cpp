@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// mcast_pipe helper unit test: RECEIVER kernel driving dataflow_kernel_lib::Pipe.
-// Ported from bakeoff_mcast_receiver.cpp. The receiver-side Pipe is constructed with a
-// degenerate 1x1 rect pointing back at the sender (the target of the consumed ack).
+// mcast_pipe helper unit test: RECEIVER kernel driving dataflow_kernel_lib::ReceiverPipe.
+// Ported from bakeoff_mcast_receiver.cpp. The ReceiverPipe takes only the noc + (template) sem
+// ids; the sender's coords (the target of the consumed ack) are passed to receive().
 //   STAGING_COUNTER(0/1) -> Staging::Flag (wait+reset) | Staging::Counter (wait_min)
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -44,18 +44,12 @@ void kernel_main() {
     // reserve the landing region: write_ptr == base == the address the sender mcasts to
     cb_dst_obj.reserve_back(payload_pages);
 
-    // LINK is irrelevant on the receiver path (only STAGING + PRE_HANDSHAKE matter); defaults are
-    // fine. The dest points back at the sender for the consumed ack, and num_active_cores is unused
-    // on the receiver (it never multicasts) — pass 1 by convention.
-    Pipe<STG, pre_handshake != 0, true> pipe(
-        noc,
-        McastRect::single_core(sender_x, sender_y),
-        /*num_active_cores=*/1,
-        Semaphore<>(data_ready_sem_id),
-        Semaphore<>(consumed_sem_id));
+    // The receiver takes no rectangle / count — just the noc; the sem ids are template params.
+    // The sender's coords (target of the consumed ack) are passed to receive().
+    ReceiverPipe<data_ready_sem_id, consumed_sem_id, STG, pre_handshake != 0> pipe(noc);
 
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
-        pipe.receive();
+        pipe.receive(sender_x, sender_y);
     }
 
     cb_dst_obj.push_back(payload_pages);

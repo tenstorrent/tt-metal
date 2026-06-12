@@ -7,17 +7,10 @@
 #include <nanobind/nanobind.h>
 
 #include "ttnn/operations/experimental/ccl/rms_allgather/rms_allgather_nanobind.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_matmul_async/all_gather_matmul_async_nanobind.hpp"
-#include "ttnn/operations/experimental/ccl/strided_all_gather_minimal_matmul_async/strided_all_gather_minimal_matmul_async_nanobind.hpp"
-#include "ttnn/operations/experimental/ccl/minimal_matmul_strided_reduce_scatter_async/minimal_matmul_strided_reduce_scatter_async_nanobind.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/all_gather_minimal_matmul_async_nanobind.hpp"
-#include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.hpp"
-#include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/llama_all_gather_matmul_async_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/all_to_all_async/all_to_all_async_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/all_to_all_async_generic/all_to_all_async_generic_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/all_gather_concat_nanobind.hpp"
-#include "ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/rs_matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/llama_reduce_scatter/llama_reduce_scatter_nanobind.hpp"
@@ -38,18 +31,11 @@ namespace ttnn::operations::experimental::ccl {
 
 void py_module(nb::module_& mod) {
     ccl::bind_fused_rms_minimal(mod);
-    ccl::bind_all_gather_matmul_async(mod);
-    ccl::bind_strided_all_gather_minimal_matmul_async(mod);
-    ccl::bind_minimal_matmul_strided_reduce_scatter_async(mod);
-    ccl::bind_all_gather_minimal_matmul_async(mod);
-    ccl::bind_llama_all_gather_matmul_async(mod);
     ccl::bind_all_gather_async(mod);
     ccl::bind_strided_all_gather_async(mod);
     ccl::bind_all_to_all_async(mod);
     ccl::bind_all_to_all_async_generic(mod);
     ccl::bind_all_gather_concat(mod);
-    ccl::bind_matmul_reduce_scatter_async(mod);
-    ccl::bind_rs_matmul(mod);
     ccl::bind_reduce_scatter_minimal_async(mod);
     ccl::bind_strided_reduce_scatter_async(mod);
     ccl::bind_all_reduce_async(mod);
