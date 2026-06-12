@@ -302,16 +302,15 @@ def test_ttnn_dispatch(
     # Run torch reference for all EP ranks at once
     torch_dispatched, torch_metadata = torch_dispatch_module(x, weights, indices, expert_offsets)
 
-    # Quantize the torch dispatch reference to fp8_e4m3fn so it carries the same precision as
-    # the TT dispatch output (which packs BF16->FP8 at the untilize stage). This isolates
-    # dispatch routing correctness from fp8 quantization noise in the PCC. Round-trip to float32
-    # since validate_dispatch_buffer_pcc expects a real float dtype (and matches the TT side below).
-    if use_fp8_output:
-        torch_dispatched = torch_dispatched.to(torch.float8_e4m3fn).to(torch.float32)
-
     # Convert TTNN outputs to torch for comparison
     mesh_composer = get_ep_mesh_composer(mesh_device)
     if use_fp8_output:
+        # Quantize the torch reference to fp8_e4m3fn so it carries the same precision as the TT
+        # dispatch output (which packs BF16->FP8 at the untilize stage), isolating routing
+        # correctness from fp8 quantization noise. Round-trip to float32 since
+        # validate_dispatch_buffer_pcc expects a real float dtype — matching the TT side below.
+        torch_dispatched = torch_dispatched.to(torch.float8_e4m3fn).to(torch.float32)
+
         # ttnn.to_torch returns a torch.float8_e4m3fn tensor for FP8_E4M3 device tensors; widen to fp32 for PCC.
         tt_out_dispatched = ttnn.to_torch(tt_dispatched, mesh_composer=mesh_composer)
         assert (
