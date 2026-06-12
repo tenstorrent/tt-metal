@@ -301,7 +301,7 @@ jobs:
           suggestions_per_comment: 10
           python_path: python3
           auto_resolve_conversations: true
-          repo_path_prefix: /__w
+          repo_path_prefix: /work
 
       - name: Publish Ccache summary
         if: always()
