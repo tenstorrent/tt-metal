@@ -213,11 +213,17 @@ grid_12_9_configs = {
     (1024, 128, 768): (8, 2, 8, (2, 1)),  # dual-grid sweep 12x9, 9.7 μs, 7.0% FLOP util
     (512, 15360, 768): (2, 16, 4, (2, 2)),  # dual-grid sweep 12x9, 120.2 μs, 33.7% FLOP util
     (128, 15360, 768): (2, 16, 4, (2, 2)),  # M_tiles=4 same as (512,…); unswept estimate
-    (1024, 6144, 768): (3, 8, 5, (3, 1)),  # dual-grid sweep 12x9, 81.1 μs, 39.9% FLOP util
+    (1024, 6144, 768): (3, 8, 6, (1, 3)),  # 195.3 μs, −25.0% vs baseline — attn to_out (sweep rank-1, 2026-06-11)
     (512, 6144, 768): (2, 8, 8, (2, 2)),  # dual-grid sweep 12x9, 55.9 μs, 29.0% FLOP util
-    (1024, 6144, 4608): (8, 8, 6, (4, 1)),  # dual-grid sweep 12x9, 275.1 μs, 70.6% FLOP util
-    (512, 6144, 4608): (3, 8, 16, (3, 1)),  # dual-grid sweep 12x9, 212.5 μs, 45.7% FLOP util
-    (1024, 6144, 2304): (4, 4, 8, (4, 1)),  # dual-grid sweep 12x9, 144.0 μs, 67.4% FLOP util
+    (1024, 6144, 4608): (3, 8, 8, (1, 4)),  # 432.6 μs, −16.6% vs baseline — ff1 spatial (sweep rank-1, 2026-06-11)
+    (1152, 6144, 4608): (
+        3,
+        8,
+        8,
+        (1, 4),
+    ),  # 463.7 μs, −6.4% vs baseline — ff1 spatial xc-merged (sweep rank-1, 2026-06-11)
+    (512, 6144, 4608): (8, 8, 8, (2, 2)),  # 377.8 μs — attn to_qkv TP4_SP8 (sweep rank-1, 2026-06-12)
+    (1024, 6144, 2304): (3, 8, 8, (1, 4)),  # 269.9 μs, −21.4% vs baseline — attn to_qkv (sweep rank-1, 2026-06-11)
     (512, 6144, 2304): (2, 8, 12, (1, 3)),  # dual-grid sweep 12x9, 116.2 μs, 41.8% FLOP util
     (9472, 5120, 1280): (10, 8, 8, (2, 1)),
     (2368, 5120, 1280): (10, 8, 6, (2, 1)),
@@ -227,43 +233,67 @@ grid_12_9_configs = {
     (9472, 5120, 3840): (7, 5, 16, (1, 2)),
     (2368, 5120, 3840): (7, 5, 16, (1, 2)),
     # flux2 2048-res sweep rank-1 — 12×9 AGMM grid (2026-05-31, 2048.md)
-    (4096, 6144, 4608): (11, 4, 10, (1, 2)),  # 1167.0 μs, 44.9% util  ff1 spatial
-    (128, 6144, 4608): (8, 6, 8, (2, 2)),  # 355.5 μs,   4.6% util  ff1 prompt
+    (4096, 6144, 4608): (11, 8, 8, (1, 4)),  # 1180.7 μs, −12.3% vs baseline — ff1 spatial (sweep rank-1, 2026-06-11)
+    (128, 6144, 4608): (2, 8, 8, (2, 2)),  # 358.6 μs, −11.7% vs baseline — ff1 prompt (sweep rank-1, 2026-06-11)
     # x_c_merged_fused: concat([spatial, prompt_sp_sharded], dim=1) → M=4096+128=4224
     # Same M_per_core as (4096,…) on 9-row grid (ceil(132/9)=ceil(128/9)=15); same blocking.
-    (4224, 6144, 4608): (11, 4, 10, (1, 2)),
+    (4224, 6144, 4608): (
+        11,
+        8,
+        8,
+        (1, 4),
+    ),  # 1189.1 μs, −9.4% vs baseline — ff1 spatial xc-merged (sweep rank-1, 2026-06-11)
+    (4096, 6144, 2304): (11, 8, 8, (1, 4)),  # 722.7 μs, −7.0% vs baseline — attn to_qkv (sweep rank-1, 2026-06-11)
+    (4096, 6144, 768): (12, 6, 3, (4, 1)),  # 659.7 μs, −4.9% vs baseline — attn to_out (sweep rank-1, 2026-06-11)
     # M=2048: M_tiles=64, M_per_core=ceil(64/9)=8 — M_block=8 fills each core exactly.
     # Same K/N as (1024, 6144, 4608); reuse that blocking. Unverified estimate.
-    (2048, 6144, 4608): (8, 8, 6, (4, 1)),
-    # (4096, 6144,  768): (11, 4,  4, (1, 4)),  # 642.2 μs,  13.6% util  to_out spatial
-    # (128,  6144,  768): ( 2, 12, 4, (2, 2)),  # 97.0 μs,    2.8% util  to_out prompt (slower than heuristic)
-    (128, 6144, 768): (1, 8, 4, (1, 4)),  # heuristic result — faster than swept above  [UNSWEPT ESTIMATE]
+    (2048, 6144, 4608): (6, 6, 16, (2, 2)),  # 618.7 μs — attn to_qkv TP4_SP8 (sweep rank-1, 2026-06-12)
+    (2048, 6144, 9216): (6, 8, 12, (2, 2)),  # 1104.2 μs — ff1 spatial TP4_SP8 (sweep rank-1, 2026-06-12)
+    (2048, 6144, 1536): (8, 6, 6, (2, 2)),  # 413.3 μs — attn to_out TP4_SP8 (sweep rank-1, 2026-06-12)
+    (512, 6144, 9216): (4, 8, 8, (2, 2)),  # 705.0 μs — ff1 spatial TP4_SP8 (sweep rank-1, 2026-06-12)
+    (512, 6144, 1536): (2, 8, 6, (2, 2)),  # 166.7 μs — attn to_out TP4_SP8 (sweep rank-1, 2026-06-12)
+    (576, 6144, 9216): (2, 8, 8, (2, 2)),  # 706.0 μs — ff1 xc-merged TP4_SP8 (sweep rank-1, 2026-06-12)
+    (64, 6144, 9216): (6, 4, 16, (2, 2)),  # 689.6 μs — ff1 prompt TP4_SP8 (sweep rank-1, 2026-06-12)
+    (64, 6144, 4608): (4, 4, 16, (2, 2)),  # 356.9 μs — attn to_qkv prompt TP4_SP8 (sweep rank-1, 2026-06-12)
+    (64, 6144, 1536): (2, 6, 6, (2, 2)),  # 144.8 μs — attn to_out prompt TP4_SP8 (sweep rank-1, 2026-06-12)
+    (2112, 6144, 9216): (8, 6, 12, (2, 2)),  # 1112.9 μs — ff1 xc-merged TP4_SP8 (sweep rank-1, 2026-06-12)
+    (128, 6144, 768): (2, 12, 6, (2, 2)),  # 90.1 μs, −44.4% vs baseline — attn to_out prompt (sweep rank-1, 2026-06-12)
     # flux2 4096-res estimates — 12×9 AGMM grid.
     # AGMM overhead empirically varies with K and M_block (not fixed):
     #   K=4608, M_b=16 → overhead ≈ 848 KB (848,384 B); max CBs = 353 tiles
     #   K=6144, M_b=16 → overhead ≈ 1069 KB (1,094,144 B); max CBs = 233 tiles  ← tightest
     # M_block=16 for M=16384 (ceil(512/12)=43 → capped); subblocks from 2048-res swept entries.
     # K_block and N_block chosen to keep CBs ≤ 224 tiles (safe margin below 233 tile limit).
-    (16384, 6144, 4608): (16, 2, 8, (1, 2)),  # 224 tiles — ff1 spatial   (N_b=10→264 ✗, N_b=8→224✓) [UNSWEPT ESTIMATE]
+    (16384, 6144, 4608): (10, 6, 10, (2, 2)),  # 4194.6 μs, −41.1% vs baseline — ff1 spatial (sweep rank-1, 2026-06-11)
     # Prompt-only shapes (M=128 → AGMM path, same 12x9 grid as spatial).
     # Default 1x8x8 (152 tiles) crashes at 4096-res; use K_b=4 to halve in1 tiles.
-    (128, 6144, 2304): (1, 4, 8, (1, 4)),  #  80 tiles — ff1/ff2 prompt                    [UNSWEPT ESTIMATE]
-    (16384, 6144, 2304): (16, 2, 8, (4, 1)),  # 224 tiles — ff2/to_out    (K_b=3→272 ✗)      [UNSWEPT ESTIMATE]
-    (16384, 6144, 768): (16, 4, 4, (1, 4)),  # 224 tiles — to_out        (K_b=4 fits too)    [UNSWEPT ESTIMATE]
+    (128, 6144, 2304): (
+        2,
+        4,
+        8,
+        (2, 2),
+    ),  # 189.5 μs, −23.9% vs baseline — attn add_qkv prompt (sweep rank-1, 2026-06-12)
+    (16384, 6144, 2304): (12, 6, 8, (2, 2)),  # 2666.7 μs, −47.1% vs baseline — attn to_qkv (sweep rank-1, 2026-06-11)
+    (16384, 6144, 768): (16, 8, 3, (4, 1)),  # 2534.4 μs, −16.0% vs baseline — attn to_out (sweep rank-1, 2026-06-11)
     # x_c_merged at 4096-res: M=16384+128=16512 → M_tiles=516; 516%16≠0, use M_block=12 (516%12=0)
     # ff2 (K=4608, overhead ≈ 848 KB for K_per_dev=18): max CBs = 354 tiles; K_b=4 → 224 t ✓
     (16384, 4608, 768): (16, 4, 4, (1, 4)),  # 224 tiles — ff2 spatial                       [UNSWEPT ESTIMATE]
     # x_c_merged at 4096-res: M=16384+128=16512 → M_tiles=516; 516%16≠0, use M_block=12 (516%12=0)
-    (16512, 6144, 4608): (12, 2, 10, (1, 2)),  # 208 tiles  [UNSWEPT ESTIMATE]
+    (16512, 6144, 4608): (
+        10,
+        6,
+        10,
+        (2, 2),
+    ),  # 4243.7 μs, −39.5% vs baseline — ff1 spatial xc-merged (sweep rank-1, 2026-06-11)
     (16512, 6144, 2304): (12, 2, 8, (4, 1)),  # 176 tiles  (K_b=3→216 reduced to K_b=2)       [UNSWEPT ESTIMATE]
     (16512, 4608, 768): (12, 4, 4, (1, 4)),  # 176 tiles — ff2 merged    [UNSWEPT ESTIMATE]
     # flux2 8192-token shapes (e.g. 4096-res with SP=8, or alt-parallelism).
     # (8192, 6144, 4608) heuristic (16,8,16)→768 tiles crashes at 3,256,832 B (2.07×L1).
     # AGMM overhead scales with M_block; using M_block=8 (half of capped 16) + K_b=2 is safe.
     # M_t=256; 256%8=0 ✓. Subblocks mirror M=16384 entries.
-    (8192, 6144, 4608): (8, 2, 8, (1, 4)),  # 128 tiles — ff1 spatial   [UNSWEPT ESTIMATE]
+    (8192, 6144, 4608): (6, 6, 16, (2, 2)),  # 2126.3 μs — attn to_qkv TP4_SP8 (sweep rank-1, 2026-06-12)
     (8192, 6144, 2304): (8, 2, 8, (4, 1)),  # 128 tiles — ff1 chunk/ff2 [UNSWEPT ESTIMATE]
-    (8192, 6144, 1536): (8, 2, 8, (1, 4)),  # 128 tiles — attn/proj     [UNSWEPT ESTIMATE]
+    (8192, 6144, 1536): (8, 12, 6, (2, 2)),  # 1540.5 μs — attn to_out TP4_SP8 (sweep rank-1, 2026-06-12)
     (8192, 6144, 768): (8, 4, 4, (1, 4)),  # 112 tiles — to_out        [UNSWEPT ESTIMATE]
     (8192, 4608, 768): (8, 4, 4, (1, 4)),  # 112 tiles — ff2 spatial   [UNSWEPT ESTIMATE]
     # M=16384 companion for N=1536 (K=6144, M_b=16): overhead~1069 KB, max 233 tiles; (16,2,8)→224✓
@@ -276,12 +306,12 @@ grid_12_9_configs = {
     # total_CBs ≈ (63/32)×matmul_CBs + 158 KB (empirical from compile-time arg analysis).
     # N=9216: use N_block=8 (not 16) — N_block=16 with (16,8,16) crashes at 3,256,832 B.
     # N_t=288; 288%8=0 ✓.
-    (8256, 6144, 9216): (6, 2, 8, (1, 4)),  # 104 tiles — ff1/qkv merged [UNSWEPT ESTIMATE]
+    (8256, 6144, 9216): (8, 6, 12, (2, 2)),  # 3940.7 μs — ff1 xc-merged TP4_SP8 (sweep rank-1, 2026-06-12)
     (8256, 6144, 4608): (6, 2, 8, (1, 4)),  # 104 tiles — ff1 merged     [UNSWEPT ESTIMATE]
     (8256, 6144, 2304): (6, 2, 8, (4, 1)),  # 104 tiles  [UNSWEPT ESTIMATE]
     (8256, 6144, 768): (6, 4, 4, (1, 4)),  #  88 tiles — to_out merged  [UNSWEPT ESTIMATE]
     # Spatial-only M=8192 with N=9216 — same N_block=8 constraint applies
-    (8192, 6144, 9216): (8, 2, 8, (1, 4)),  # 128 tiles — ff1/qkv spatial [UNSWEPT ESTIMATE]
+    (8192, 6144, 9216): (8, 6, 12, (2, 2)),  # 3905.8 μs — ff1 spatial TP4_SP8 (sweep rank-1, 2026-06-12)
     # M=16384 with N=9216 (K=6144, M_b=16, formula: (63/32)×224t×2048+158KB≈1.06MB ✓)
     (16384, 6144, 9216): (16, 2, 8, (1, 4)),  # 224 tiles               [UNSWEPT ESTIMATE]
 }
