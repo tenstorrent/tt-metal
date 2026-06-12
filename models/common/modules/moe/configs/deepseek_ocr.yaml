@@ -15,6 +15,21 @@ n_group: 1
 score_func: softmax
 routed_scaling_factor: 1.0
 
+# router matmul program config: tuned 2D-mcast blocking for the gate matmul (batch 32 × hidden 1280 @
+# 1280 × 256 — N=64 experts padded to 256). in0_block_w=20 = largest ≤32 divisor of K=40 tiles (hidden 1280
+# isn't a 1024-multiple, so 32 doesn't divide K); out is 1×8 tiles → per_core_M=1, per_core_N=2 (4 cores in
+# N). compute_with_storage_grid_size is device-derived (auto-filled). Omit to let ttnn auto-select (slower).
+gate_matmul_program_config:
+  in0_block_w: 20
+  out_subblock_h: 1
+  out_subblock_w: 2
+  out_block_h: 1
+  out_block_w: 2
+  per_core_M: 1
+  per_core_N: 2
+  transpose_mcast: false
+  fused_activation: null
+
 compute:
   intermediate_size: 896
   activation_type: SILU

@@ -268,6 +268,20 @@ def test_tt_moe_gate_real_weights(
             "fp32_dest_acc_en": True,
             "packer_l1_acc": True,
         },
+        # tuned 2D-mcast program config for the gate matmul (batch×7168 @ 7168×256) — same values as
+        # deepseek's own MoEGate decode gate_proj and deepseek_v3.yaml. compute_with_storage_grid_size is
+        # device-derived (auto-filled by TTMoEGate), so it is omitted here.
+        gate_matmul_program_config={
+            "in0_block_w": 32,
+            "out_subblock_h": 1,
+            "out_subblock_w": 2,
+            "out_block_h": 1,
+            "out_block_w": 2,
+            "per_core_M": 1,
+            "per_core_N": 2,
+            "transpose_mcast": False,
+            "fused_activation": None,
+        },
     )
     gate = TTMoEGate(
         mesh_device,

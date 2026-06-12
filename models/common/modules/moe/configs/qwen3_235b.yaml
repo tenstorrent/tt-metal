@@ -24,6 +24,21 @@ gate_matmul_compute:
   fp32_dest_acc_en: true
   packer_l1_acc: true
 
+# router matmul program config: tuned 2D-mcast blocking for the gate matmul (batch 32 × hidden 4096 @
+# 4096 × 256 — N=128 experts padded to 256). Same blocking as deepseek_v3: in0_block_w=32 divides K=128
+# tiles; out is 1×8 tiles → per_core_M=1, per_core_N=2. compute_with_storage_grid_size is device-derived
+# (auto-filled). Omit this block to let ttnn auto-select (slower).
+gate_matmul_program_config:
+  in0_block_w: 32
+  out_subblock_h: 1
+  out_subblock_w: 2
+  out_block_h: 1
+  out_block_w: 2
+  per_core_M: 1
+  per_core_N: 2
+  transpose_mcast: false
+  fused_activation: null
+
 compute:
   intermediate_size: 1536
   activation_type: SILU

@@ -40,9 +40,18 @@ def _config_id(path: Path) -> str:
     return path.stem
 
 
+@pytest.mark.parametrize(
+    # 4×8 = 32-chip mesh (TG/Galaxy). TTMoEGate is a PER-DEVICE gate (no cross-chip comms): its weight +
+    # op buffers replicate to every chip, so each chip runs the same one-token-per-core routing independently.
+    # The mesh_device fixture auto-skips when fewer chips are available. (More shapes can be added here in the
+    # pytest.param form used by test_tt_moe_decode.py.)
+    "mesh_device",
+    [pytest.param((4, 8), id="4x8")],
+    indirect=True,
+)
 @pytest.mark.parametrize("config_path", CONFIG_PATHS, ids=_config_id)
 @pytest.mark.parametrize("seed", [42])
-def test_tt_moe_gate(device, config_path: Path, seed: int):
+def test_tt_moe_gate(mesh_device, config_path: Path, seed: int):
     yaml_text = config_path.read_text()
     gate_config = TTMoEGateConfig.from_yaml(yaml_text)
     raw = yaml.safe_load(yaml_text)  # only for gate_notes (a doc field, not part of the config)
@@ -64,9 +73,10 @@ def test_tt_moe_gate(device, config_path: Path, seed: int):
     if n_group == 8 and (num_experts != 256 or k != 8):
         pytest.skip(f"n_group=8 (deepseek grouped op) is hardwired to 256 experts select-8; got N={num_experts}, k={k}")
 
-    batch = gate_config.batch_per_device or 32  # decode: one token per core; matches the buffers' batch_per_device
+    batch = gate_config.batch_per_device or 32  # PER-DEVICE batch (one token per core); replicated to every chip
     logger.info(
-        f"[{config_path.stem}] gate: N={num_experts} k={k} hidden={hidden} batch={batch} score_func={score_func}"
+        f"[{config_path.stem}] gate: N={num_experts} k={k} hidden={hidden} batch={batch} "
+        f"score_func={score_func} mesh={tuple(mesh_device.shape)}"
     )
     # per-model caveats about steps TTMoEGate does NOT cover (e.g. gemma4's RMSNorm + per-dim input scale
     # and per-expert output scale) — the caller must apply these around TTMoEGate.
@@ -85,18 +95,21 @@ def test_tt_moe_gate(device, config_path: Path, seed: int):
 
     # --- device module + inputs (config-driven entry point, mirrors TTMoEDecode) ---
     gate = TTMoEGate(
-        device,
+        mesh_device,
         gate_config,
         torch_gate_weight=gate_weight,
         torch_gate_bias=gate_bias,
         torch_gate_proj_bias=proj_bias,
     )
+    # replicate the hidden states to every chip — matches TTMoEGate's replicated weight/buffers, so each chip
+    # routes the same batch (ReplicateTensorToMesh is a no-op on a 1-chip mesh, so this also works at 1×1).
     tt_x = ttnn.from_torch(
         hidden_states.reshape(1, 1, batch, hidden),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=device,
+        device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
     # --- golden (hidden -> logits -> gate -> (scores[batch,k], indices[batch,k])) ---
@@ -113,8 +126,10 @@ def test_tt_moe_gate(device, config_path: Path, seed: int):
     )
 
     tt_scores, tt_indices = gate.forward(tt_x)
-    dev_scores = ttnn.to_torch(tt_scores).reshape(batch, k).float()
-    dev_idx = ttnn.to_torch(tt_indices).reshape(batch, k).to(torch.int64)
+    # every chip computed the same routing (replicated inputs); concat over the mesh and keep the first chip.
+    composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+    dev_scores = ttnn.to_torch(tt_scores, mesh_composer=composer).reshape(-1, k)[:batch].float()
+    dev_idx = ttnn.to_torch(tt_indices, mesh_composer=composer).reshape(-1, k)[:batch].to(torch.int64)
 
     # --- verify (torch fp32 golden; the device matmul runs HiFi2 + fp32 accumulation, so its residual
     #     bf16 noise only nudges rank-boundary experts — the checks below tolerate that) ---

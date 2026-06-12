@@ -78,6 +78,7 @@ class TTMoEGate:
         scaling_factor = config.routed_scaling_factor
         eps = config.eps
         matmul_compute_config = config.gate_matmul_compute
+        matmul_program_config = config.gate_matmul_program_config
 
         # `score_func` maps to (a) the score nonlinearity and (b) two op flags -- enable_sigmoid (apply
         # sigmoid inside the op) and output_softmax (softmax over the selected top-k vs linear renorm):
@@ -141,6 +142,7 @@ class TTMoEGate:
         self._grid = grid
 
         self.compute_kernel_config = self._matmul_compute_config(matmul_compute_config)
+        self.matmul_program_config = self._matmul_program_config(matmul_program_config)
 
         # Op path: pad the router weight (+ linear bias) to the block size UP FRONT so the matmul directly
         # emits padded_experts-wide logits — this avoids a per-forward ttnn.pad (its dispatch + memory copy
@@ -302,6 +304,32 @@ class TTMoEGate:
             packer_l1_acc=cfg.pop("packer_l1_acc", True),
         )
 
+    def _matmul_program_config(self, cfg):
+        """Build the router-matmul ``program_config`` from a per-model dict (or pass through an
+        already-built config / ``None``).
+
+        The gate matmul is tiny (``batch×hidden @ hidden×experts``) but ttnn's auto-selected program config
+        is generic; a hand-tuned 2D-multicast config (kernel grid + block/subblock sizing) can materially
+        cut its latency — deepseek's ``MoEGate`` ships one (``per_core_M=1, per_core_N=2, …``). There is no
+        universal setting (it depends on the matmul shape and the device grid), so it is per-model config
+        (yaml ``gate_matmul_program_config``) rather than hardcoded, and ``None`` keeps ttnn's auto pick.
+
+          - ``None``        → ttnn auto-selects the program config (fine for most gates).
+          - ``dict``        → key ``type`` names the ttnn program-config class (default
+                              "MatmulMultiCoreReuseMultiCastProgramConfig"); the remaining keys are its
+                              kwargs (e.g. ``in0_block_w``, ``per_core_M``, ``per_core_N``, ``out_subblock_*``,
+                              ``transpose_mcast``). ``compute_with_storage_grid_size`` is device-derived — it
+                              is auto-filled from the mesh device when the dict omits it (so the yaml stays
+                              arch-agnostic, like deepseek's ``mesh_device.compute_with_storage_grid_size()``).
+          - ttnn config     → used as-is.
+        """
+        if cfg is None or not isinstance(cfg, dict):
+            return cfg
+        cfg = dict(cfg)
+        pc_class = getattr(ttnn, cfg.pop("type", "MatmulMultiCoreReuseMultiCastProgramConfig"))
+        cfg.setdefault("compute_with_storage_grid_size", self.mesh_device.compute_with_storage_grid_size())
+        return pc_class(**cfg)
+
     def _sharded_mem_config(self, num_cores: int, shard_shape: tuple = _SHARD_SHAPE) -> ttnn.MemoryConfig:
         # one token per core; shard_shape is (32,32) for a single 256-block, (num_blocks*32, 32) for the
         # combine path (num_blocks tiles stacked per core).
@@ -320,12 +348,22 @@ class TTMoEGate:
             return self._forward_fallback(tt_x)
         # 1) router projection → logits [1, 1, batch, num_experts]. With a router LINEAR bias (gpt-oss) it's
         #    Wx + b via ttnn.linear; otherwise the proven bias-free matmul (unchanged for every other model).
-        #    compute_kernel_config is per-model (see __init__): a deep, tie-sensitive gate wants HiFi2 + fp32.
+        #    compute_kernel_config + program_config are per-model (see __init__): a deep, tie-sensitive gate
+        #    wants HiFi2 + fp32, and a tuned 2D-mcast program_config can cut the matmul latency (else None).
         if self.tt_gate_proj_bias is None:
-            logits = ttnn.matmul(tt_x, self.tt_gate_weight, compute_kernel_config=self.compute_kernel_config)
+            logits = ttnn.matmul(
+                tt_x,
+                self.tt_gate_weight,
+                compute_kernel_config=self.compute_kernel_config,
+                program_config=self.matmul_program_config,
+            )
         else:
             logits = ttnn.linear(
-                tt_x, self.tt_gate_weight, bias=self.tt_gate_proj_bias, compute_kernel_config=self.compute_kernel_config
+                tt_x,
+                self.tt_gate_weight,
+                bias=self.tt_gate_proj_bias,
+                compute_kernel_config=self.compute_kernel_config,
+                program_config=self.matmul_program_config,
             )
 
         # logits is already padded_experts-wide (the router weight was padded up front, see __init__) — no
@@ -419,10 +457,19 @@ class TTMoEGate:
         ``(weights, indices)`` each ``[1, 1, batch, k]``, indices uint16 (like the op path)."""
         # 1) logits = Wx (+ router LINEAR bias). compute_kernel_config per-model (HiFi2 for deep gates).
         if self.tt_gate_proj_bias is None:
-            logits = ttnn.matmul(tt_x, self.tt_gate_weight, compute_kernel_config=self.compute_kernel_config)
+            logits = ttnn.matmul(
+                tt_x,
+                self.tt_gate_weight,
+                compute_kernel_config=self.compute_kernel_config,
+                program_config=self.matmul_program_config,
+            )
         else:
             logits = ttnn.linear(
-                tt_x, self.tt_gate_weight, bias=self.tt_gate_proj_bias, compute_kernel_config=self.compute_kernel_config
+                tt_x,
+                self.tt_gate_weight,
+                bias=self.tt_gate_proj_bias,
+                compute_kernel_config=self.compute_kernel_config,
+                program_config=self.matmul_program_config,
             )
 
         # 2) score = transform(logits): sqrt(softplus) | sigmoid | identity(softmax ranks by raw logit).

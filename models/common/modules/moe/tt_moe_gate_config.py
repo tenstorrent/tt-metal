@@ -28,6 +28,7 @@ _GATE_YAML_KEYS = (
     "score_correction_bias",
     "router_bias",
     "gate_matmul_compute",
+    "gate_matmul_program_config",
 )
 
 
@@ -55,6 +56,10 @@ class TTMoEGateConfig(BaseModel):
     score_correction_bias: bool = False  # deepseek/noaux_tc: e_score_correction_bias (selection-only)
     router_bias: bool = False  # gpt-oss: router LINEAR bias (into logits → selection AND weights)
     gate_matmul_compute: dict | None = None  # per-model router-matmul compute kernel config
+    # per-model router-matmul program config (kernel grid / blocking) — a tuned 2D-mcast config can
+    # materially cut the gate matmul's latency. `type` names the ttnn program-config class (default
+    # MatmulMultiCoreReuseMultiCastProgramConfig); remaining keys are its kwargs. None → ttnn auto-picks.
+    gate_matmul_program_config: dict | None = None
     eps: float = 1e-20
 
     @classmethod
