@@ -14,15 +14,13 @@
 
 // L1 budget: all circular buffers comfortably fit in the ~1.5 MB per-core L1.
 // Per core the op allocates (in tiles, with kCbDoubleBuffer = 2):
-//   cb_nope = 2*max_chunk_heads*Tn
-//   cb_q_pe = 2*max_chunk_tiles   cb_rope_out = 2*max_chunk_tiles
+//   cb_nope = 2*Tn   cb_q_pe = 2*Tr   cb_rope_out = 2*Tr   (q_nope bypasses compute)
 //   cb_cos = 2*Tr    cb_sin = 2*Tr
 //   cb_trans = 1
-//   rotated_in + cos_interm + sin_interm = 3*max_chunk_tiles
-//   => total = 2*max_chunk_heads*Tn + 4*max_chunk_tiles + 3*max_chunk_tiles + 4*Tr + 1 tiles.
+//   rotated_in + cos_interm + sin_interm = 3*Tr
+//   => total = 2*Tn + 9*Tr + 1 tiles.
 //
-// max_chunk_tiles = max(1, max_dst/Tr)*Tr where max_dst is 4 (fp32 dest acc) or 8; Tr <= max_dst.
-// Reader/writer push heads in max_chunk_heads chunks to match compute and avoid cb_nope deadlock.
+// q_nope is demuxed reader->writer; compute touches only Tr rope tiles (Tr <= 8).
 
 namespace {
 
@@ -154,11 +152,6 @@ QRopeFwProgramFactory::cached_program_t QRopeFwProgramFactory::create(
         args.qk_rope_dim,
         Tr);
 
-    // DST: 4 tile slots with fp32 dest acc, 8 without. Batch multiple heads when Tr is small.
-    const uint32_t max_dst_tiles = fp32_dest_acc_en ? 4U : 8U;
-    const uint32_t max_chunk_heads = std::max(1U, max_dst_tiles / Tr);
-    const uint32_t max_chunk_tiles = max_chunk_heads * Tr;
-
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
@@ -168,10 +161,9 @@ QRopeFwProgramFactory::cached_program_t QRopeFwProgramFactory::create(
     const tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(q_in.dtype());
     const uint32_t single_tile_size = tt::tile_size(data_format);
 
-    const uint32_t nope_cb_num_tiles = kCbDoubleBuffer * max_chunk_heads * Tn;
-    const uint32_t rope_cb_num_tiles = kCbDoubleBuffer * max_chunk_tiles;
+    const uint32_t nope_cb_num_tiles = kCbDoubleBuffer * Tn;
+    const uint32_t rope_cb_num_tiles = kCbDoubleBuffer * Tr;
     const uint32_t trig_cb_num_tiles = kCbDoubleBuffer * Tr;
-    const uint32_t interm_cb_num_tiles = max_chunk_tiles;
 
     [[maybe_unused]] auto cb_q_pe =
         create_circular_buffer(program, all_cores, kQPeCbIndex, data_format, single_tile_size, rope_cb_num_tiles);
@@ -183,12 +175,12 @@ QRopeFwProgramFactory::cached_program_t QRopeFwProgramFactory::create(
         create_circular_buffer(program, all_cores, kTransCbIndex, data_format, single_tile_size, 1U);
     [[maybe_unused]] auto cb_nope =
         create_circular_buffer(program, all_cores, kNopeCbIndex, data_format, single_tile_size, nope_cb_num_tiles);
-    [[maybe_unused]] auto cb_rotated_in = create_circular_buffer(
-        program, all_cores, kRotatedInIntermCbIndex, data_format, single_tile_size, interm_cb_num_tiles);
-    [[maybe_unused]] auto cb_cos_interm = create_circular_buffer(
-        program, all_cores, kCosIntermCbIndex, data_format, single_tile_size, interm_cb_num_tiles);
-    [[maybe_unused]] auto cb_sin_interm = create_circular_buffer(
-        program, all_cores, kSinIntermCbIndex, data_format, single_tile_size, interm_cb_num_tiles);
+    [[maybe_unused]] auto cb_rotated_in =
+        create_circular_buffer(program, all_cores, kRotatedInIntermCbIndex, data_format, single_tile_size, Tr);
+    [[maybe_unused]] auto cb_cos_interm =
+        create_circular_buffer(program, all_cores, kCosIntermCbIndex, data_format, single_tile_size, Tr);
+    [[maybe_unused]] auto cb_sin_interm =
+        create_circular_buffer(program, all_cores, kSinIntermCbIndex, data_format, single_tile_size, Tr);
     [[maybe_unused]] auto cb_rope_out =
         create_circular_buffer(program, all_cores, kRopeOutCbIndex, data_format, single_tile_size, rope_cb_num_tiles);
 
