@@ -38,19 +38,21 @@ TT_VISIBLE_DEVICES=0 TT_VADV2_TIMING=1 TT_VADV2_WARM_ITERS=2 \
 
 Measured on Blackhole p150b with the command above.
 
-- Warm wall (anchor `call#3`): **~989 ms** (sub-1-second).
+- Warm wall (anchor `call#3`): **~808 ms** (sub-1-second).
 - Cold wall (`call#1`, includes JIT compile + first-touch): ~7030 ms.
 - PCC: all 9 output keys (`bev_embed`, `all_cls_scores`, `all_bbox_preds`,
   `all_traj_preds`, `all_traj_cls_scores`, `map_all_cls_scores`,
   `map_all_bbox_preds`, `map_all_pts_preds`, `ego_fut_preds`) pass the
   per-key floors pinned in `test_tt_vad.py`.
 
+The `num_levels==1` MSDA path routes through the fused
+`ttnn.experimental.multi_scale_deformable_attn` op (grid_sample + weighted
+sum in one kernel) when `N*Q` clears an amortization threshold; this was the
+last large lever (warm wall 989 → 808 ms) since the BEV encoder runs
+`Q=10000`. Smaller shapes fall back to the decomposed grid_sample chain.
+
 ### Known follow-ups
 
-- **Fused MSDA op** (`ttnn.experimental.multi_scale_deformable_attn`).
-  Largest remaining single lever: VADv2's `n_feats=1` matches the fused
-  op's `num_levels==1` fast path and the BEV encoder runs `Q=10000`.
-  Requires a small adapter in `tt_utils.multi_scale_deformable_attn`.
 - **Metal Trace replay.** Every model-side blocker is cleared
   (persistent buffers for `shift`/`can_bus`, static zeros caches for
   `bev_mask`/`bev_pos`/`level_start_index`/`slots`/`sentinel_row`), but

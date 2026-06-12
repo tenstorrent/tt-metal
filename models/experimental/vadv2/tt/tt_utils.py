@@ -5,6 +5,15 @@
 import ttnn
 
 
+# Switch the num_levels==1 path over to the fused
+# `ttnn.experimental.multi_scale_deformable_attn` op (grid_sample + weighted
+# sum in one kernel) once there is enough batched work to amortize its launch.
+# The kernel packs 32 queries per tile, so it only wins for large N*Q
+# (N = bs*num_heads, Q = num_queries); below this the decomposed grid_sample +
+# sum chain is faster. Threshold from the UniAD microbench sweep.
+_MSDA_FUSED_MIN_NQ = 1024
+
+
 def multi_scale_deformable_attn(value, value_spatial_shapes, sampling_locations, attention_weights, device, hw_py=None):
     """multi_scale_deformable_attn.
 
@@ -21,6 +30,53 @@ def multi_scale_deformable_attn(value, value_spatial_shapes, sampling_locations,
     value_list.append(value)
     sampling_locations = ttnn.to_layout(sampling_locations, layout=ttnn.ROW_MAJOR_LAYOUT)
     sampling_grids = 2 * sampling_locations - 1
+
+    # Fused fast path: when num_levels==1 and there's enough batched work,
+    # replace the grid_sample + reshape + weighted-sum chain with the single
+    # fused `multi_scale_deformable_attn` device op. The op packs grid_sample +
+    # weighted sum in one kernel and matches mmcv (align_corners=False).
+    if num_levels == 1 and (bs * num_heads) * num_queries >= _MSDA_FUSED_MIN_NQ:
+        if hw_py is not None:
+            H_int, W_int = hw_py[0]
+        else:
+            H_int, W_int = int(value_spatial_shapes[0, 0].item()), int(value_spatial_shapes[0, 1].item())
+
+        # value (bs, num_value, num_heads, D) -> (N, H, W, D) ROW_MAJOR bf16
+        value_l = ttnn.reshape(value, [bs, value.shape[1], num_heads * embed_dims])
+        value_l = ttnn.permute(value_l, (0, 2, 1))
+        value_l = ttnn.reshape(value_l, [bs * num_heads, embed_dims, H_int, W_int])
+        value_l = ttnn.permute(value_l, (0, 2, 3, 1))
+        value_l = ttnn.to_layout(value_l, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        # sampling_grids (bs, Q, num_heads, 1, num_points, 2) -> (N, Q*P, 1, 2)
+        grid = sampling_grids[:, :, :, 0]  # (bs, Q, num_heads, num_points, 2)
+        grid = ttnn.permute(grid, (0, 2, 1, 3, 4))  # (bs, num_heads, Q, num_points, 2)
+        grid = ttnn.reshape(grid, [bs * num_heads, num_queries * num_points, 1, 2])
+
+        # attention_weights (bs, Q, num_heads, 1, num_points) -> (N, Q, P)
+        attn = attention_weights[:, :, :, 0, :]  # (bs, Q, num_heads, num_points)
+        attn = ttnn.permute(attn, (0, 2, 1, 3))  # (bs, num_heads, Q, num_points)
+        attn = ttnn.reshape(attn, [bs * num_heads, num_queries, num_points])
+        attn = ttnn.to_layout(attn, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        # The fused op requires all three inputs in bf16.
+        if value_l.dtype != ttnn.bfloat16:
+            value_l = ttnn.typecast(value_l, ttnn.bfloat16)
+        if grid.dtype != ttnn.bfloat16:
+            grid = ttnn.typecast(grid, ttnn.bfloat16)
+        if attn.dtype != ttnn.bfloat16:
+            attn = ttnn.typecast(attn, ttnn.bfloat16)
+
+        output = ttnn.experimental.multi_scale_deformable_attn(value_l, grid, attn)  # (N, Q, D)
+        ttnn.deallocate(value)
+        ttnn.deallocate(sampling_grids)
+
+        output = ttnn.reshape(output, [bs, num_heads, num_queries, embed_dims])
+        output = ttnn.to_layout(output, layout=ttnn.TILE_LAYOUT)
+        output = ttnn.permute(output, (0, 2, 1, 3))
+        output = ttnn.reshape(output, [bs, num_queries, num_heads * embed_dims])
+        return output
+
     sampling_value_list = []
 
     for level, (H_, W_) in enumerate(value_spatial_shapes):
