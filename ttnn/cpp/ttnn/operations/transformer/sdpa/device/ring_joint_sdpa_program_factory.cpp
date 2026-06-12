@@ -8,6 +8,7 @@
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
@@ -31,6 +32,8 @@
 using namespace tt::tt_metal;
 
 namespace {
+
+namespace ag_rt = ttnn::ring_attention_all_gather_async_detail;
 
 // Host-side summary of which ring-loop iterations do useful SDPA work. Bits are indexed by ring_iter,
 // not ring_id; kernels still advance their sync/ring-id sequence on every iter before checking the mask.
@@ -111,6 +114,11 @@ struct RingWritePlan {
 constexpr uint32_t kReaderKernelIndex = 0;
 constexpr uint32_t kWriterKernelIndex = 1;
 constexpr uint32_t kComputeKernelIndex = 2;
+
+// The helper appends 4 kernels after the 3 SDPA kernels above, in order: reader_forward (3),
+// writer_forward (4), reader_backward (5), writer_backward (6) (helper desc.kernels.push_back order).
+constexpr uint32_t kAllGatherReaderForwardKernelIndex = 3;
+constexpr uint32_t kAllGatherReaderBackwardKernelIndex = 5;
 
 // Compute runtime args 0/1 are global_q_start/global_q_end (see ring_joint_sdpa.cpp kernel_main).
 // A core with global_q_start == global_q_end got no Q chunks at emplace time and is idle.
@@ -456,6 +464,40 @@ void apply_ring_joint_scalar_runtime_args(
     const RingJointRuntimeArgLayout layout = get_runtime_arg_layout(args, tensor_args);
     const uint32_t num_cores = layout.grid_size.x * layout.grid_size.y;
     const uint32_t kv_cache_batch_idx = args.kv_cache_batch_idx.value_or(0);
+
+    // Re-patch the fused all-gather readers to gather the single cache slot `kv_cache_batch_idx`.
+    // input_batch_base is uniform across all gather cores/links, so patch every core that runs the
+    // reader. Mirrors the helper's create-time arithmetic so miss and hit paths agree.
+    if (patch_indexed_kv_cache) {
+        const Tensor& input_k = tensor_args.input_k;
+        const bool v_shares_k = tensor_args.has_latent_v();
+        const uint32_t num_ag_inputs = v_shares_k ? 1u : (tensor_args.input_v.has_value() ? 2u : 1u);
+        const std::array<const Tensor*, 2> ag_inputs = {
+            &input_k, tensor_args.input_v.has_value() ? &tensor_args.input_v.value() : &input_k};
+        const auto patch_all_gather_reader = [&](uint32_t kernel_id) {
+            auto& grid_args = GetRuntimeArgs(program, kernel_id);  // [x][y] per-core args
+            for (auto& col_args : grid_args) {
+                for (auto& core_args : col_args) {
+                    for (uint32_t in = 0; in < num_ag_inputs; ++in) {
+                        const auto& shape = ag_inputs[in]->padded_shape();
+                        const uint32_t num_heads = shape[1];
+                        const uint32_t Ht = shape[2] / tt::constants::TILE_WIDTH;
+                        const uint32_t Wt = shape[3] / tt::constants::TILE_WIDTH;
+                        const uint32_t input_batch_base =
+                            ag_rt::input_batch_base_pages(kv_cache_batch_idx, num_heads, Ht, Wt);
+                        const uint32_t idx = ag_rt::kReaderRuntimeArgHeaderCount +
+                                             in * ag_rt::kTensorDescriptorFieldCount +
+                                             ag_rt::kInputBatchBaseFieldOffset;
+                        if (core_args.size() > idx) {  // skip cores that don't run this kernel
+                            write_runtime_arg(core_args, idx, input_batch_base, "all_gather_reader.input_batch_base");
+                        }
+                    }
+                }
+            }
+        };
+        patch_all_gather_reader(kAllGatherReaderForwardKernelIndex);
+        patch_all_gather_reader(kAllGatherReaderBackwardKernelIndex);
+    }
 
     for (uint32_t i = 0; i < num_cores; ++i) {
         const CoreCoord core = {i % layout.grid_size.x, i / layout.grid_size.x};
@@ -2112,10 +2154,10 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         all_gather_input_tensors.push_back(input_tensor_v);
         all_gather_output_tensors.push_back(gathered_input_tensor_v);
     }
-    // Append the all-gather portion to `desc`. The helper assigns sequential
-    // semaphore IDs starting at `desc.semaphores.size()` (current count) and
-    // returns kernel indices into `desc.kernels`. Runtime args are auto-patched
-    // by the descriptor framework on cache hits, so no override path is needed.
+    // Append the all-gather portion to `desc`. Buffer addresses are auto-patched on cache hits; the
+    // indexed-mode input_batch_base scalar is re-patched in apply_ring_joint_scalar_runtime_args.
+    // The trailing kv_cache_batch_idx makes the gather collect only that cache slot (std::nullopt =>
+    // full batch).
     ring_attention_all_gather_async_multi_core_with_workers_helper(
         desc,
         all_gather_input_tensors,
@@ -2132,7 +2174,8 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         args.all_gather_operation_attributes.sub_device_id,
         all_gather_fused_op_signaler,
         args.ccl_core_grid_offset,
-        args.all_gather_operation_attributes.core_allocation_strategy);
+        args.all_gather_operation_attributes.core_allocation_strategy,
+        args.kv_cache_batch_idx);
 
     return desc;
 }
