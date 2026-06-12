@@ -1272,26 +1272,33 @@ static void run_single_dfb_program_2_0(
             }
             EXPECT_EQ(expected, output) << "M2 Tensix→DM ring-pressure mismatch";
         } else if (
-            p.producer_type == M2PorCType::TENSIX && p.cap == m2::DFBAccessPattern::BLOCKED && p.num_consumers > 1) {
-            // Tensix→DM BLOCKED, multi-thread: a permutation, NOT identity. The Tensix producer only
-            // posts credits over a host-prefilled FLAT ring (L1[k] = input[k]). Unlike DM→DM BLOCKED
-            // — where the DM producer's block-strided DRAM read (dfb_blocked_producer_2_0.cpp) applies
-            // the inverse interleave that exactly cancels the consumer's — there is no DRAM-reading
-            // producer here, so nothing cancels the consumer's de-interleave. Consumer c reads its
-            // contiguous sub-ring (capacity = num_entries/num_consumers, stride_in_entries=1) and
-            // writes block b to out page (b*num_consumers + c)*block_size. Net device map:
-            //   output[(b*N + c)*block_size + j] = input[c*capacity + b*block_size + j]
-            // (For N==1 this degenerates to identity — handled by the else branch below.)
+            p.producer_type == M2PorCType::TENSIX && p.cap == m2::DFBAccessPattern::BLOCKED &&
+            (p.num_consumers > 1 || p.num_producers > p.num_consumers)) {
+            // Tensix→DM BLOCKED (any integer-ratio thread counts): a permutation, NOT identity. A Tensix
+            // producer only posts credits over a host-prefilled FLAT ring (L1[k] = input[k]) — unlike a DM
+            // producer there is no block-strided DRAM read to cancel the consumer's de-interleave.
+            // cap=BLOCKED splits the ring into max(P,C) contiguous sub-rings of capacity=num_entries/max(P,C)
+            // (stride 1). Consumer c, tile-counter slot t reads sub-ring (t*C + c); for fan-in P>C each
+            // consumer round-robins ntc = P/C sub-rings per pop_front, else ntc = 1. Consumer c writes block
+            // b to out page (b*C + c)*block_size. General device map (symmetric, fan-out C>=P, fan-in P>C):
+            //   output[(b*C + c)*bs + j] = input[((b % ntc)*C + c)*capacity + (b / ntc)*bs + j]
+            //   capacity = num_entries/max(P,C),  ntc = (P>=C) ? P/C : 1.
+            // (N==1 symmetric degenerates to identity — handled by the else branch. For C>=P, ntc=1 and
+            // capacity=num_entries/C, recovering the simple c*capacity + b*bs + j form.) The guard includes
+            // num_producers>num_consumers so fan-in cases with C==1 reach this branch (not else-identity),
+            // and using max(P,C) is what makes 4Bx2B correct.
             const uint32_t wpe = p.entry_size / sizeof(uint32_t);
-            const uint32_t N = p.num_consumers;
-            const uint32_t capacity = p.num_entries / N;
+            const uint32_t P = p.num_producers;
+            const uint32_t C = p.num_consumers;
+            const uint32_t capacity = p.num_entries / std::max(P, C);
+            const uint32_t ntc = (P >= C) ? (P / C) : 1u;
             const uint32_t blocks_per_thread = num_entries_per_consumer / p.block_size;
             std::vector<uint32_t> expected(input.size(), 0u);
-            for (uint32_t c = 0; c < N; ++c) {
+            for (uint32_t c = 0; c < C; ++c) {
                 for (uint32_t b = 0; b < blocks_per_thread; ++b) {
                     for (uint32_t j = 0; j < p.block_size; ++j) {
-                        const uint32_t src = c * capacity + b * p.block_size + j;
-                        const uint32_t dst = (b * N + c) * p.block_size + j;
+                        const uint32_t src = ((b % ntc) * C + c) * capacity + (b / ntc) * p.block_size + j;
+                        const uint32_t dst = (b * C + c) * p.block_size + j;
                         std::copy(
                             input.begin() + src * wpe, input.begin() + (src + 1) * wpe, expected.begin() + dst * wpe);
                     }
@@ -1318,6 +1325,41 @@ static void run_single_dfb_program_2_0(
                 }
             }
             EXPECT_EQ(expected, output) << "M2 Tensix→DM BLOCKED multi-thread permutation mismatch";
+        } else if (
+            p.producer_type == M2PorCType::TENSIX && p.pap == m2::DFBAccessPattern::BLOCKED &&
+            p.cap == m2::DFBAccessPattern::ALL) {
+            // Trisc→DM BLOCKED→ALL. A Tensix BLOCKED producer feeding a DM ALL consumer routes the credit
+            // fan-out through the REMAPPER (not broadcast_tc — that path needs a DM producer). The host
+            // pre-fills the ring FLAT (ring[s]=input[s]); the ALL consumer reads round-robin across the P
+            // producer sub-rings (out tile r ← ring slot (r%P)*capacity + (r/P), capacity=num_entries/P). So
+            // output[r] = input[(r%P)*capacity + (r/P)] — identity at P==1, block-size-independent (the
+            // consumer reads per-tile, the flat prefill carries no block order).
+            const uint32_t wpe = p.entry_size / sizeof(uint32_t);
+            const uint32_t P = p.num_producers;
+            const uint32_t capacity = p.num_entries / P;
+            std::vector<uint32_t> expected(input.size(), 0u);
+            for (uint32_t r = 0; r < p.num_entries; ++r) {
+                const uint32_t src = (r % P) * capacity + (r / P);
+                std::copy(input.begin() + src * wpe, input.begin() + (src + 1) * wpe, expected.begin() + r * wpe);
+            }
+            if (expected != output) {
+                for (uint32_t t = 0; t < std::min<uint32_t>(entries_per_core, 16); ++t) {
+                    int match = -1;
+                    for (uint32_t src = 0; src < p.num_entries; ++src) {
+                        if (std::equal(
+                                input.begin() + src * wpe, input.begin() + (src + 1) * wpe, output.begin() + t * wpe)) {
+                            match = static_cast<int>(src);
+                            break;
+                        }
+                    }
+                    log_info(
+                        tt::LogTest,
+                        "  Trisc→DM BLOCKED→ALL output tile {} ← {}",
+                        t,
+                        match >= 0 ? ("input page " + std::to_string(match)) : std::string("UNKNOWN"));
+                }
+            }
+            EXPECT_EQ(expected, output) << "M2 Trisc→DM BLOCKED→ALL (remapper fan-out) mismatch";
         } else if (
             p.producer_type == M2PorCType::DM && p.consumer_type == M2PorCType::DM &&
             p.pap == m2::DFBAccessPattern::BLOCKED && p.cap == m2::DFBAccessPattern::ALL) {
@@ -1742,6 +1784,55 @@ TEST_F(MeshDeviceFixture, TensixDMTest1xDFB1Bx1B_blk4_entry2048_2_0) {
     };
     run_single_dfb_program_2_0(this->devices_.at(0), params);
 }
+
+// --- ASYMMETRIC Trisc→DM BLOCKED→BLOCKED (Tensix BLOCKED producer → DM BLOCKED consumer) ---
+// Parity with the DM→DM asymmetric set. Tensix producer threads ∈ {1,2,4}; DM consumer C ≤ 6 (the producer
+// is on Tensix cores, so the DM P+C≤6 budget only counts C here); integer ratios; EXPLICIT sync only
+// (asymmetric implicit BLOCKED is FATAL). All verify against the generalized Tensix→DM BLOCKED permutation
+// golden (capacity=num_entries/max(P,C), ntc=(P>=C)?P/C:1). Fan-in P>C uses a 32-entry ring so the
+// permutation is non-degenerate (at the minimal ring some P>C goldens collapse to identity).
+DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB1Bx2B_blk4, TENSIX, DM, 1, 2, 4, 16, false)
+DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB1Bx4B_blk4, TENSIX, DM, 1, 4, 4, 16, false)
+DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB2Bx4B_blk4, TENSIX, DM, 2, 4, 4, 16, false)
+DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB2Bx1B_blk4, TENSIX, DM, 2, 1, 4, 16, false)
+DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB4Bx1B_blk4, TENSIX, DM, 4, 1, 4, 32, false)
+DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB4Bx2B_blk4, TENSIX, DM, 4, 2, 4, 32, false)
+
+// --- IMPLICIT-sync symmetric Trisc→DM BLOCKED→BLOCKED ---
+// The Tensix producer posts EXPLICIT credits (the ISR/implicit path is DM-only, #ifndef COMPILE_FOR_TRISC),
+// so this is a Tensix explicit-post producer feeding a DM implicit-drain consumer. Same permutation golden
+// (sync-agnostic). Exercises the first-time block-post vs per-tile-drain pairing on the Trisc→DM path.
+DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB2Bx2B_blk4_impl, TENSIX, DM, 2, 2, 4, 16, true)
+DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB4Bx4B_blk4_impl, TENSIX, DM, 4, 4, 4, 32, true)
+
+// --- Trisc→DM BLOCKED→ALL (Tensix BLOCKED producer → DM ALL consumer) ---
+// A Tensix producer at cap=ALL routes the credit fan-out through the REMAPPER instead of broadcast_tc
+// (dm_dm_all is false when the producer is not DM). Golden: output[r]=input[(r%P)*capacity+(r/P)],
+// capacity=num_entries/P (identity at P==1). C<=4. The cases below span both odd and even total RISC
+// counts (P+C): the serialized DFB config blob is 36 + 62*(P+C) bytes, so an odd P+C makes it non-word-
+// aligned. This is regression coverage for the write_to_device trailing-partial-word truncation that used
+// to drop the producer's remapper bytes (remapper_consumer_ids_mask / producer_client_type) — see the
+// word-alignment pad in tt_metal.cpp. 1Bx2A/1Bx4A (P+C odd) exercise that boundary directly.
+#define DFB_TRISC_BLOCKED_ALL_TEST_2_0(suffix, num_p, num_c, blk, entries) \
+    TEST_F(MeshDeviceFixture, suffix##_2_0) {                              \
+        M2SingleDFBParams params{                                          \
+            .producer_type = M2PorCType::TENSIX,                           \
+            .consumer_type = M2PorCType::DM,                               \
+            .num_producers = (num_p),                                      \
+            .num_consumers = (num_c),                                      \
+            .pap = m2::DFBAccessPattern::BLOCKED,                          \
+            .cap = m2::DFBAccessPattern::ALL,                              \
+            .implicit_sync = false,                                        \
+            .num_entries = (entries),                                      \
+            .block_size = (blk),                                           \
+        };                                                                 \
+        run_single_dfb_program_2_0(this->devices_.at(0), params);          \
+    }
+DFB_TRISC_BLOCKED_ALL_TEST_2_0(TensixDMTest1xDFB1Bx1A_blk4, 1, 1, 4, 16)  // P+C=2 (even): 1->1, no fan-out
+DFB_TRISC_BLOCKED_ALL_TEST_2_0(TensixDMTest1xDFB1Bx2A_blk4, 1, 2, 4, 16)  // P+C=3 (odd): 1->2 broadcast
+DFB_TRISC_BLOCKED_ALL_TEST_2_0(TensixDMTest1xDFB1Bx4A_blk4, 1, 4, 4, 16)  // P+C=5 (odd): 1->4 broadcast
+DFB_TRISC_BLOCKED_ALL_TEST_2_0(TensixDMTest1xDFB2Bx2A_blk4, 2, 2, 4, 16)  // P+C=4 (even): 2 pairs
+DFB_TRISC_BLOCKED_ALL_TEST_2_0(TensixDMTest1xDFB2Bx4A_blk4, 2, 4, 4, 16)  // P+C=6 (even): 2 pairs, P<C
 
 // --- BLOCKED-producer → ALL-consumer (DM-DM, explicit sync) ---
 // The producer block-bursts into its contiguous per-producer sub-ring; every ALL consumer reads every
