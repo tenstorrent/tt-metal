@@ -262,7 +262,6 @@ jobs:
         if: ${{ inputs.post-pr-suggestions && github.event_name == 'pull_request' && !cancelled() }}
         shell: bash
         run: |
-          git config --global --add safe.directory /work
           BASE_SHA="${{ github.event.pull_request.base.sha }}"
           git fetch --no-tags --depth=1 origin "$BASE_SHA" 2>/dev/null || true
           git tag -f _pr_base "$BASE_SHA" 2>/dev/null || true
@@ -289,6 +288,13 @@ jobs:
             -clang-tidy-binary clang-tidy-20 \
             -export-fixes clang-tidy-result/fixes.yml \
             -j"$(nproc)" < pr.diff || true
+          # platisd/clang-tidy-pr-comments strips `repo_path_prefix/REPO/REPO/` from paths
+          # in fixes.yml. The build runs in Docker at /work (no subdirectory), so rewrite
+          # paths to match what the action expects with the default /__w prefix.
+          REPO_NAME="$(basename "$GITHUB_REPOSITORY")"
+          if [[ -f clang-tidy-result/fixes.yml ]]; then
+            sed -i "s|/work/|/__w/${REPO_NAME}/${REPO_NAME}/|g" clang-tidy-result/fixes.yml
+          fi
 
       - name: Post inline clang-tidy suggestions on PR
         if: ${{ inputs.post-pr-suggestions && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false && !cancelled() }}
@@ -301,7 +307,6 @@ jobs:
           suggestions_per_comment: 10
           python_path: python3
           auto_resolve_conversations: true
-          repo_path_prefix: /work
 
       - name: Publish Ccache summary
         if: always()
