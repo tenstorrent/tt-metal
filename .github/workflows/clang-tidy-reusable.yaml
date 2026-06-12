@@ -27,6 +27,11 @@ on:
         type: string
         default: ""
         description: "Specific target(s) to scan (space-separated). If empty, scans all targets."
+      post-pr-suggestions:
+        required: false
+        type: boolean
+        default: false
+        description: "Export clang-tidy fixes and post inline review suggestions on the PR diff"
 
 jobs:
   clang-tidy:
@@ -34,6 +39,9 @@ jobs:
     timeout-minutes: 240
     runs-on: tt-ubuntu-2204-xlarge-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
+    permissions:
+      pull-requests: write
+      contents: write # to allow posting inline PR review suggestions and auto-closing conversations
     container:
       image: ${{ inputs.ci-build-docker-image }}
       env:
@@ -249,6 +257,49 @@ jobs:
             echo "Scanning all targets"
             cmake --build --preset clang-tidy
           fi
+
+      - name: Export PR-diff clang-tidy fix suggestions
+        if: ${{ inputs.post-pr-suggestions && github.event_name == 'pull_request' }}
+        shell: bash
+        run: |
+          git config --global --add safe.directory /work
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          git fetch --no-tags --depth=1 origin "$BASE_SHA" 2>/dev/null || true
+          git tag -f _pr_base "$BASE_SHA" 2>/dev/null || true
+          mkdir -p clang-tidy-result
+          # Find compile_commands.json — look in the preset binaryDir first
+          CC_JSON=$(find . -name compile_commands.json -path '*clang-tidy*' | head -1)
+          [[ -z "$CC_JSON" ]] && CC_JSON=$(find . -name compile_commands.json | head -1)
+          if [[ -z "$CC_JSON" ]]; then
+            echo "No compile_commands.json found — skipping PR suggestions"
+            exit 0
+          fi
+          BUILD_DIR=$(dirname "$CC_JSON")
+          PREFIX=$(pwd)/
+          jq -r '.[].file' "$CC_JSON" | sed "s|^${PREFIX}||" > rel_files.txt
+          git diff --name-only _pr_base HEAD > changed.txt
+          grep -F -f rel_files.txt changed.txt > common.txt || true
+          if [[ ! -s common.txt ]]; then
+            echo "No changed files in compile_commands — skipping PR suggestions"
+            exit 0
+          fi
+          git diff _pr_base -- $(cat common.txt) > pr.diff
+          clang-tidy-diff-20.py -p1 -path "$BUILD_DIR" \
+            -export-fixes clang-tidy-result/fixes.yml \
+            -j"$(nproc)" < pr.diff || true
+
+      - name: Post inline clang-tidy suggestions on PR
+        if: ${{ inputs.post-pr-suggestions && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false }}
+        uses: platisd/clang-tidy-pr-comments@28cfb84edafa771c044bde7e4a2a3fae57463818
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          clang_tidy_fixes: clang-tidy-result/fixes.yml
+          pull_request_id: ${{ github.event.pull_request.number }}
+          request_changes: false
+          suggestions_per_comment: 10
+          python_path: python3
+          auto_resolve_conversations: true
+          repo_path_prefix: /__w
 
       - name: Publish Ccache summary
         if: always()
