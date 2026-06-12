@@ -293,38 +293,92 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         num_slices,
         grid_size.y);
 
-    // Core-grid K-PARALLELISM (split-K, plan A2; env TT_MM_K_SLICES). Split the physical rows into
-    // `num_k_slices` OUTER bands; each band computes the FULL M/N output over a 1/num_k_slices slice of
-    // the K reduction, writing its partial into its own [num_k_slices * M, N] M-stripe (the host sums
-    // the bands). Fills cores that idle on output-starved shapes (M_tiles*N_tiles < num_cores), where
-    // M/N slicing cannot help. The num_slices N-slice groups nest INSIDE each K-band. num_k_slices=1
-    // reduces exactly to the existing partition. Env-only for now (sweepable alongside TT_MM_NUM_SLICES).
+    // Core-grid K-PARALLELISM (split-K): split the physical rows into `num_k_slices` (Pk) OUTER bands,
+    // each computing the FULL M/N output over a 1/Pk slice of the K reduction. Two ways to engage:
+    //   * EXPLICIT (env): TT_MM_K_SLICES=Pk [+ TT_MM_K_FUSED=1 -> plan B fused [M,N]; else plan A2
+    //     host-summed [Pk*M,N]]. Full manual control, sweepable alongside TT_MM_NUM_SLICES.
+    //   * AUTO (default): when neither TT_MM_NUM_SLICES nor TT_MM_K_SLICES is pinned, a heuristic jointly
+    //     picks (num_slices S, num_k_slices Pk) spending the grid.y row budget S*Pk=grid.y between
+    //     N/M-slicing and K-reduction. Auto K-par ALWAYS uses the fused reduction (plan B -> single
+    //     [M,N]), so the output shape is identical to the no-K-par path and compute_output_specs needs no
+    //     change. S*Pk=grid.y => rows_per_group=1 => no M-padding. Validated on 28 "FLUX" shapes: geomean
+    //     1.30x, 0 regressions, 96.4% of oracle-best (see minimal_matmul_nslice_kpar_flux.md).
+    const bool num_slices_pinned = std::getenv("TT_MM_NUM_SLICES") != nullptr;
+    const bool k_slices_pinned = std::getenv("TT_MM_K_SLICES") != nullptr;
+    const bool kpar_auto_ok = !config.has_value() && !fuse_op && !fuse_srs;
+
     uint32_t num_k_slices = 1;
-    if (const char* s = std::getenv("TT_MM_K_SLICES"); s != nullptr && !fuse_op && !fuse_srs && !config.has_value()) {
-        num_k_slices = std::max(1u, static_cast<uint32_t>(std::atoi(s)));
+    bool num_k_fused = false;
+    if (k_slices_pinned && kpar_auto_ok) {
+        num_k_slices = std::max(1u, static_cast<uint32_t>(std::atoi(std::getenv("TT_MM_K_SLICES"))));
+        const char* kf = std::getenv("TT_MM_K_FUSED");
+        num_k_fused = (kf != nullptr && std::atoi(kf) != 0);
+    } else if (kpar_auto_ok && !num_slices_pinned && std::getenv("TT_MM_NO_AUTO_KPAR") == nullptr) {
+        // Joint (S, Pk) auto heuristic. Fires only where the N-slicer already engages (num_slices>1) —
+        // the delivery-bound/skewed regime the heuristic was fit on. K-dominance score
+        //   D = K_tiles * num_cores / out_tiles
+        // measures deep reduction vs how output-saturated the grid already is; bigger D => more K-bands.
+        // Tunable thresholds (override via env, re-fit per architecture).
+        struct KParParams {
+            uint32_t d8, d4, d2;  // D thresholds selecting Pk = 8 / 4 / 2 (else 1)
+            uint32_t nwide;       // N_tiles >= this -> in1 DRAM-bandwidth bound, disable K-par
+            uint32_t min_kt;      // keep K_tiles/Pk >= this (deep-K availability)
+        };
+        // WH 8x8 back-tested defaults. To make these architecture-specific, branch on device->arch()
+        // here and assign a re-fit KParParams (e.g. BH grid.y=10 changes the row budget and core count);
+        // until then every arch reuses these and can be tuned live via the TT_MM_KPAR_* env vars below.
+        KParParams kp{280u, 40u, 20u, 256u, 8u};
+        auto envov = [](const char* n, uint32_t& f) {
+            if (const char* s = std::getenv(n)) {
+                f = static_cast<uint32_t>(std::atoi(s));
+            }
+        };
+        envov("TT_MM_KPAR_D8", kp.d8);
+        envov("TT_MM_KPAR_D4", kp.d4);
+        envov("TT_MM_KPAR_D2", kp.d2);
+        envov("TT_MM_KPAR_NWIDE", kp.nwide);
+        envov("TT_MM_KPAR_MINKB", kp.min_kt);
+
+        if (num_slices > 1) {
+            const uint32_t cores = grid_size.x * grid_size.y;
+            const uint32_t out_tiles = M_tiles * N_tiles;
+            const double D = out_tiles ? static_cast<double>(K_tiles) * cores / out_tiles : 0.0;
+            uint32_t Pk = D >= kp.d8 ? 8u : D >= kp.d4 ? 4u : D >= kp.d2 ? 2u : 1u;
+            if (N_tiles >= kp.nwide) {
+                Pk = 1u;  // wide-N DRAM guard
+            }
+            while (Pk > 1 && grid_size.y % Pk != 0) {
+                Pk /= 2;  // fit the row budget
+            }
+            while (Pk > 1 && (K_tiles % Pk != 0 || K_tiles / Pk < kp.min_kt)) {
+                Pk /= 2;  // deep-K availability
+            }
+            if (Pk > 1) {
+                num_slices = grid_size.y / Pk;  // rows_per_group = 1 (no M-padding); S*Pk = grid.y
+                num_k_slices = Pk;
+                num_k_fused = true;
+                log_debug(
+                    tt::LogOp,
+                    "minimal_matmul auto K-par: D={:.0f} -> num_slices={} num_k_slices={} (fused)",
+                    D,
+                    num_slices,
+                    num_k_slices);
+            }
+        }
     }
     TT_FATAL(
         grid_size.y % (num_slices * num_k_slices) == 0 && (num_k_slices & (num_k_slices - 1)) == 0,
-        "TT_MM_K_SLICES ({}): must be a power of 2 and num_slices*num_k_slices ({}) must divide grid.y ({})",
+        "num_k_slices ({}): must be a power of 2 and num_slices*num_k_slices ({}) must divide grid.y ({})",
         num_k_slices,
         num_slices * num_k_slices,
         grid_size.y);
-    TT_FATAL(
-        K_tiles % num_k_slices == 0,
-        "TT_MM_K_SLICES ({}) must divide K_tiles ({}) [A2 split-K limitation]",
-        num_k_slices,
-        K_tiles);
-    // Reduction mode: A2 (host-summed [K_slices*M, N] partials, default) vs B (fused on-device column
-    // reduction -> single [M, N]). B is under construction; guard so it cannot return wrong results.
-    const char* k_fused_env = std::getenv("TT_MM_K_FUSED");
-    const bool num_k_fused =
-        (k_fused_env != nullptr && std::atoi(k_fused_env) != 0) && !config.has_value() && !fuse_op && !fuse_srs;
-    // Plan B (fused on-device column reduction) is incompatible with the mcast prototypes (they own the
-    // same store-and-forward semaphore protocol the reduction reuses the pattern of) and with N-chunk
-    // split outputs. Keep B on the plain unicast path for now.
+    TT_FATAL(K_tiles % num_k_slices == 0, "num_k_slices ({}) must divide K_tiles ({})", num_k_slices, K_tiles);
+    // Plan B (fused on-device column reduction) needs >1 K-band; A2 (host-summed) is the explicit-env
+    // alternative. The reduction reuses the store-and-forward semaphore pattern, so it stays on the
+    // plain unicast path (incompatible with the mcast prototypes / N-chunk split outputs).
     TT_FATAL(
         !(num_k_fused && num_k_slices == 1),
-        "TT_MM_K_FUSED (plan B) requires TT_MM_K_SLICES > 1 (the fused reduction needs >1 K-band).");
+        "fused split-K (plan B) requires num_k_slices > 1 (the fused reduction needs >1 K-band).");
     // Sub-grid K_block refinement: a sliced sub-grid has small per-core M/N, so the default K_block=8
     // makes the per-k-block work too coarse — finer K (4) pipelines read/forward/compute better.
     // Measured ~+8%/+6%/+3.6% on sliced 4864x4096x512 / 4864x4096x32 / 32x2048x2048. Only on the auto

@@ -47,6 +47,10 @@ def test_ksplit_perf(device):
     K = int(os.environ.get("FL_K", "6144"))
     N = int(os.environ.get("FL_N", "256"))
     reps = int(os.environ.get("FC_REPS", "20"))
+    Pk = int(os.environ.get("TT_MM_K_SLICES", "1"))
+    if Pk > 1:
+        os.environ["TT_MM_K_FUSED"] = os.environ.get("TT_MM_K_FUSED", "1")
+    fused = os.environ.get("TT_MM_K_FUSED", "0") not in ("0", "")
     torch.manual_seed(0)
     ti = torch.randn((M, K), dtype=torch.bfloat16)
     wi = torch.randn((K, N), dtype=torch.bfloat16)
@@ -59,6 +63,14 @@ def test_ksplit_perf(device):
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
     )
+    # PCC check once (output [M,N] for fused/normal; [Pk*M,N] for A2-stacked -> reshape+sum)
+    out = ttnn.experimental.minimal_matmul(tt_i, tt_w, compute_kernel_config=cc)
+    got = ttnn.to_torch(out).float()
+    ref = ti.float() @ wi.float()
+    res = got if got.shape[-2] == M else got.reshape(Pk, M, N).sum(0)
+    pcc = torch.corrcoef(torch.stack([ref.flatten(), res.flatten()]))[0, 1].item()
+    print(f"COMBO_PCC M{M}K{K}N{N} S{os.environ.get('TT_MM_NUM_SLICES','auto')} Pk{Pk} fused{int(fused)} pcc={pcc:.5f}")
+    out.deallocate()
     for _ in range(reps):
         out = ttnn.experimental.minimal_matmul(tt_i, tt_w, compute_kernel_config=cc)
         ttnn.synchronize_device(device)
