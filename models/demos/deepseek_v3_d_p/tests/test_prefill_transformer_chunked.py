@@ -25,6 +25,7 @@ Override the trace dir with DEEPSEEK_PREFILL_TRACE_DIR.
 import gc
 import json
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -459,6 +460,7 @@ def run_chunked_transformer(
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, None)),
         )
 
+        start_time = time.time()
         _, layer_outputs = transformer.forward_chunk(
             tt_tokens,
             tt_kvpe_cache,
@@ -468,6 +470,8 @@ def run_chunked_transformer(
             return_layer_outputs=True,
         )
         ttnn.synchronize_device(mesh_device)
+        end_time = time.time()
+        logger.info(f"Time for chunk {c} is: {end_time - start_time} seconds")
 
         for i in range(num_layers):
             out_flat = ttnn.to_torch(
@@ -512,6 +516,162 @@ def run_chunked_transformer(
     logger.success(
         f"Chunked prefill transformer passed (num_layers={num_layers}, n_chunks={n_chunks}, "
         f"min PCC {min(layer_min_pcc.values()):.6f})"
+    )
+    for key in profiler.times:
+        logger.info(f"  {key}: {profiler.get(key) * 1000:.2f} ms")
+
+
+def run_chunked_transformer_no_pcc(
+    variant,
+    config,
+    mesh_device,
+    weight_cache_path,
+    num_layers,
+    n_chunks,
+    gate_fallback_mode,
+    num_links,
+    topology,
+    num_iters,
+):
+    """No-PCC perf/smoke variant of run_chunked_transformer: build the transformer ONCE, then drive
+    the full n_chunks-chunk prefill `num_iters` times. No per-layer intermediate readback, no PCC —
+    forward_chunk runs with return_layer_outputs=False so nothing is cloned to host. Tokens are the
+    real (longbook) ids from the golden trace when present, else a synthetic in-vocab pattern; either
+    way nothing is compared against the trace. The KV cache is reused across iterations: each chunk
+    overwrites the same [0, total_len) region in order, so a re-run reproduces the same writes without
+    re-allocation."""
+    if weight_cache_path is None:
+        pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
+
+    profiler.clear()
+    profiler.start("total_test_time")
+
+    sp_axis, tp_axis = 0, 1
+    mesh_shape = list(mesh_device.shape)
+    sp = mesh_shape[sp_axis]
+    tp = mesh_shape[tp_axis]
+    assert (sp, tp) == (8, 4), f"this test targets mesh-8x4, got {mesh_shape}"
+
+    chunk_local = CHUNK // sp  # 640
+    total_len = n_chunks * CHUNK
+    assert total_len <= SEQ_CACHE, f"{n_chunks} chunks ({total_len}) exceed cache {SEQ_CACHE}"
+
+    kvpe_dim = config.qk_rope_head_dim + config.kv_lora_rank
+    config.max_seq_len = SEQ_CACHE
+
+    logger.info(
+        f"chunked transformer (no-PCC): num_layers={num_layers} mesh={mesh_shape} n_chunks={n_chunks} "
+        f"total_len={total_len} cache={SEQ_CACHE} chunk={CHUNK} num_iters={num_iters}"
+    )
+
+    # Token ids: prefer the real (longbook) ids from the golden trace — same source as the PCC tests,
+    # but here we never compare against the trace (return_layer_outputs=False below). If the trace is
+    # absent, fall back to a deterministic in-vocab pattern so this stays a trace-optional smoke test.
+    vocab_size = config.vocab_size
+    trace_dir = _resolve_trace_dir(variant)
+    if trace_dir.exists():
+        trace_tokens = _load_metadata_token_ids(trace_dir, total_len)
+        if trace_tokens.numel() < total_len:
+            # trace shorter than the requested run: wrap-repeat to fill total_len
+            reps = (total_len + trace_tokens.numel() - 1) // trace_tokens.numel()
+            trace_tokens = trace_tokens.repeat(reps)[:total_len]
+        token_ids_full = trace_tokens % vocab_size
+        logger.info(f"no-PCC: loaded {token_ids_full.numel()} token ids from trace {trace_dir}")
+    else:
+        token_ids_full = torch.arange(total_len, dtype=torch.int64) % vocab_size
+        logger.info(f"no-PCC: trace not found ({trace_dir}); using synthetic token ids")
+
+    # --- Weights from the prebuilt TTNN cache (empty state_dict when complete). ---
+    effective_cache_path = weight_cache_path / f"{sp}x{tp}"
+    experts_per_chip = variant.model_config.NUM_ROUTED_EXPERTS // (sp * tp)
+    assert TtPrefillTransformer.check_cache_complete(
+        effective_cache_path,
+        num_layers,
+        experts_per_chip=experts_per_chip,
+        first_k_dense=variant.model_config.NUM_DENSE_LAYERS,
+    ), f"TTNN cache incomplete for {num_layers} layers at {effective_cache_path}"
+
+    profiler.start("tt_transformer_creation")
+    transformer = TtPrefillTransformer(
+        mesh_device=mesh_device,
+        config=config,
+        model_cfg=variant.model_config,
+        state_dict={},
+        num_layers=num_layers,
+        seq_len=CHUNK,  # per-chunk size -> MoE/FFN dispatch buffers
+        mla_seq_len=SEQ_CACHE,  # KV ring buffer = full cache
+        dispatch_buffer_capacity_factor=8,
+        num_links=num_links,
+        topology=topology,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        is_balanced=False,
+        gate_fallback_mode=gate_fallback_mode,
+        weight_cache_path=effective_cache_path,
+        lm_head_is_column_parallel=True,
+        is_chunked=True,
+        slot_num=1,
+    )
+    ttnn.synchronize_device(mesh_device)
+    gc.collect()
+    profiler.end("tt_transformer_creation")
+
+    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
+    indexed_rope = rope_setup.get_rope_tensors_indexed(cache_seq_len_global=SEQ_CACHE, chunk_size_global=CHUNK)
+
+    tt_kvpe_cache = init_kvpe_cache(
+        kvpe_cache_head_dim=kvpe_dim,
+        mesh_device=mesh_device,
+        seq_len=SEQ_CACHE,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=num_layers,
+        num_users=1,
+    )
+
+    # Precompute per-chunk SP-sharded token tiles once (reused across iterations).
+    chunk_tokens = []
+    for c in range(n_chunks):
+        kv_actual = c * CHUNK  # chunk-aligned -> rotation degenerates
+        positions = rotated_chip_positions(kv_actual, sp, chunk_local)
+        flat = torch.tensor([positions[ch][r] for ch in range(sp) for r in range(chunk_local)], dtype=torch.long)
+        chunk_tokens.append(token_ids_full[flat].reshape(sp, 1, chunk_local))
+
+    mesh_device.enable_program_cache()
+
+    profiler.start("tt_forward")
+    for it in range(num_iters):
+        iter_start = time.time()
+        for c in range(n_chunks):
+            kv_actual = c * CHUNK
+            tt_tokens = ttnn.from_torch(
+                chunk_tokens[c],
+                device=mesh_device,
+                dtype=ttnn.uint32,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, None)),
+            )
+
+            chunk_start = time.time()
+            h, _ = transformer.forward_chunk(
+                tt_tokens,
+                tt_kvpe_cache,
+                indexed_rope,
+                kv_actual_isl=kv_actual,
+                cache_user_id=0,
+                return_layer_outputs=False,  # no intermediates stored / read back
+            )
+            ttnn.synchronize_device(mesh_device)
+            ttnn.deallocate(h)
+            ttnn.deallocate(tt_tokens)
+            logger.info(f"  iter {it} chunk {c}: {time.time() - chunk_start:.3f}s")
+        logger.info(f"iter {it} done ({n_chunks} chunks) in {time.time() - iter_start:.3f}s")
+    profiler.end("tt_forward")
+
+    profiler.end("total_test_time")
+    logger.success(
+        f"Chunked prefill no-PCC run done (num_layers={num_layers}, n_chunks={n_chunks}, num_iters={num_iters})"
     )
     for key in profiler.times:
         logger.info(f"  {key}: {profiler.get(key) * 1000:.2f} ms")
@@ -712,4 +872,56 @@ def test_kimi_prefill_transformer_chunked_padded(
         GateComputeMode.DEVICE_FP32,
         num_links,
         topology,
+    )
+
+
+# No-PCC perf/smoke variant: runs the full n_chunks-chunk prefill `num_iters` times with no golden
+# trace, no intermediate readback, and no PCC. Requires only the Kimi TTNN weight cache (set
+# TT_KIMI_PREFILL_TTNN_CACHE + KIMI_K2_6_HF_MODEL); the golden trace is NOT needed.
+@pytest.mark.parametrize("num_iters", [1, 10, 20], ids=["iters1", "iters10", "iters20"])
+@pytest.mark.parametrize("n_chunks", [11], ids=["chunks11"])
+@pytest.mark.parametrize("num_layers", [1, 10, 61], ids=["L1", "L10", "L61"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    [
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
+@pytest.mark.timeout(0)
+def test_kimi_prefill_transformer_chunked_no_pcc(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    weight_cache_path,
+    num_layers,
+    n_chunks,
+    num_iters,
+    num_links,
+    topology,
+):
+    run_chunked_transformer_no_pcc(
+        variant,
+        config_only,
+        mesh_device,
+        weight_cache_path,
+        num_layers,
+        n_chunks,
+        GateComputeMode.DEVICE_FP32,
+        num_links,
+        topology,
+        num_iters,
     )

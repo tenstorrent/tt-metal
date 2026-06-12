@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -218,6 +219,12 @@ class TtDeepSeekPrefillPipeline:
             cache_user_id=slot_id,
             on_layer_complete=self._on_layer_complete,
         )
+        # Timing experiment (PREFILL_PREFILL_SYNC=1): block on full device completion inside the
+        # caller's timed region, mirroring test_prefill_transformer_chunked's per-chunk
+        # synchronize_device — so the runner's pipeline.prefill() ms is apples-to-apples with the
+        # test's forward_chunk timing instead of measuring async-dispatch-only.
+        if os.environ.get("PREFILL_PREFILL_SYNC", "0") == "1":
+            ttnn.synchronize_device(self.mesh_device)
         ttnn.deallocate(input_tensor)
         ttnn.deallocate(h)
 

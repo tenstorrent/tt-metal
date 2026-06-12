@@ -428,6 +428,12 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DS
         # Time ONLY the prefill compute, not the idle h2d_socket_sync wait above. prefill() consumes
         # (deallocates) tt_tokens; free the metadata tensor here. No token is returned — chunked
         # prefill fills the KV cache and the decode stage reads it directly.
+        # Timing experiment (PREFILL_PRESYNC=1): drain the device BEFORE starting the timer so the
+        # h2d_socket_sync chunk-copy (and any prior-chunk tail) isn't charged to this chunk's
+        # prefill() — isolates whether the runner's ~constant per-chunk overhead is leaked socket/copy
+        # work in the timed region vs genuine forward_chunk compute.
+        if os.environ.get("PREFILL_PRESYNC", "0") == "1":
+            ttnn.synchronize_device(pipeline.mesh_device)
         _t0 = _time.perf_counter()
         pipeline.prefill(
             tt_tokens,
@@ -591,10 +597,16 @@ def main() -> None:
         # reads the delta (the ack carries no payload) and drives the migration worker.
         # ttnn.InterProcessCounterChannel owns a named POSIX shm segment the scheduler
         # connects to via shm_layer_ack_name(service_id).
-        ack_shm_name = f"/tt_prefill_layer_acks_{service_id}"
-        ack_channel = ttnn.InterProcessCounterChannel(ack_shm_name)
-        pipeline.set_layer_ack_channel(ack_channel)
-        logger.info(f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer")
+        # Timing experiment (PREFILL_DISABLE_LAYER_ACK=1): skip the per-layer ack channel so
+        # forward_chunk fires NO on_layer_complete callback — isolates whether the per-layer Python
+        # round-trip serializes async dispatch. ack_channel stays None; the teardown below no-ops.
+        if os.environ.get("PREFILL_DISABLE_LAYER_ACK", "0") == "1":
+            logger.info("[migration] LayerAck channel DISABLED (PREFILL_DISABLE_LAYER_ACK=1) — no per-layer acks")
+        else:
+            ack_shm_name = f"/tt_prefill_layer_acks_{service_id}"
+            ack_channel = ttnn.InterProcessCounterChannel(ack_shm_name)
+            pipeline.set_layer_ack_channel(ack_channel)
+            logger.info(f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer")
 
         logger.info("Setup complete, entering request loop")
         run_request_loop(pipeline, h2d_service)
