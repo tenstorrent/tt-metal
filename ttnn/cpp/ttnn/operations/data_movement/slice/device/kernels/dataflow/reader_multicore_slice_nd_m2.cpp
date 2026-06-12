@@ -25,19 +25,19 @@ void kernel_main() {
     const uint32_t num_rows_for_this_core = get_arg(args::num_rows);
     const uint32_t start_row_for_this_core = get_arg(args::start_row);
 
-    // Per-dim arrays as runtime varargs, in the order the factory appends them:
-    // [input_dims, output_dims, slice_starts, slice_ends, slice_steps], each `tensor_rank` long.
+    // Per-dim arrays are op-level (identical across cores) -> common varargs, in the order the
+    // factory appends them: [input_dims, output_dims, slice_starts, slice_ends, slice_steps].
     uint32_t input_dims[tensor_rank];
     uint32_t output_dims[tensor_rank];
     uint32_t slice_starts[tensor_rank];
     uint32_t slice_ends[tensor_rank];
     uint32_t slice_steps[tensor_rank];
     for (uint32_t i = 0; i < tensor_rank; ++i) {
-        input_dims[i] = get_vararg(i);
-        output_dims[i] = get_vararg(tensor_rank + i);
-        slice_starts[i] = get_vararg(2 * tensor_rank + i);
-        slice_ends[i] = get_vararg(3 * tensor_rank + i);
-        slice_steps[i] = get_vararg(4 * tensor_rank + i);
+        input_dims[i] = get_common_vararg(i);
+        output_dims[i] = get_common_vararg(tensor_rank + i);
+        slice_starts[i] = get_common_vararg(2 * tensor_rank + i);
+        slice_ends[i] = get_common_vararg(3 * tensor_rank + i);
+        slice_steps[i] = get_common_vararg(4 * tensor_rank + i);
     }
 
     const uint32_t input_bytes_per_row = input_dims[tensor_rank - 1] * element_size;

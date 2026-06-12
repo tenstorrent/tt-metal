@@ -19,10 +19,10 @@ void kernel_main() {
     const uint32_t num_rows_for_this_core = get_arg(args::num_rows);
     const uint32_t start_row_for_this_core = get_arg(args::start_row);
 
-    // output_dims[tensor_rank] as runtime varargs.
+    // output_dims[tensor_rank] is op-level (identical across cores) -> common varargs.
     uint32_t output_dims[tensor_rank];
     for (uint32_t i = 0; i < tensor_rank; ++i) {
-        output_dims[i] = get_vararg(i);
+        output_dims[i] = get_common_vararg(i);
     }
 
     const uint32_t output_bytes_per_row = output_dims[tensor_rank - 1] * element_size;
