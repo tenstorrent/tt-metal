@@ -192,3 +192,14 @@ has no moe_compute; the hang is the dim0 gather itself or its DRAM/L1 footprint)
 does NOT generalize to wide tensors. Bound: narrow reductions (shared-FFN [32,2048]) fuse safely;
 wide ones (dense [128,4608], lm_head [32,129280]) do not. Dense was only x3 layers (~0.1ms ceiling)
 so low loss. Decomposed reduce_scatter+all_gather (bandwidth-optimal all-reduce) stays for dense.
+
+## ROPE x-perm -> transpose — NO-OP (2026-06-12, E_rope_transpose, reverted)
+Converted the rank-4 rope x-perm [0,1,3,2] -> ttnn.transpose(2,3) (both layers). PCC clean
+(argmax 100%, golden 0.8989). But MEASURED no-op: total Permute+Transpose TM time flat (attn0 0.0us,
+attn1 -0.5us) -- the rope x-perm is a tiny [32,1,2,32] tensor, transpose==permute for it (the
+"~10x faster" only applies to LARGE transposing permutes). Reverted per skill (number didn't drop).
+Also found: ttnn.transpose has NO rank-5 path (only unsqueezes rank<4) -> the 5D rope out-perm
+[0,1,2,4,3] CRASHES if converted. The real attention TM lever is the head-relayout permute_29/38
+([2,0,1,3] 3-cycle, the #46208 trigger -- now combine-safe under #46544 but needs a restructure,
+not a simple transpose). NOTE: device hit a transient ethernet-core-26-25 init fault mid-session
+(after repeated resets); glx_reset_auto recovered it. Crashes during that window were device, not code.
