@@ -54,6 +54,10 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __b
         MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
         MATH((llk_math_transpose_dest_init<false, true>()));
     } else if (is_8bit_int) {
+        // 8-bit integer (Int8/UInt8) transpose needs the int-FPU (ELWADD) A2D reconstruct path,
+        // selected here via is_int_fpu_en. Ideally the LLK layer would infer this path from the
+        // data format instead of selecting it here in the Compute API layer.
+        // TODO: #46832.
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, true, icb)));
         MATH((llk_math_eltwise_unary_datacopy_init<
               DataCopyType::A2D,
@@ -117,6 +121,10 @@ ALWI void transpose_wh_init_short(uint32_t icb, uint32_t call_line = __builtin_L
         MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
         MATH((llk_math_transpose_dest_init<false, true>()));
     } else if (is_8bit_int) {
+        // 8-bit integer (Int8/UInt8) transpose needs the int-FPU (ELWADD) A2D reconstruct path,
+        // selected here via is_int_fpu_en. Ideally the LLK layer would infer this path from the
+        // data format instead of selecting it here in the Compute API layer.
+        // TODO: #46832.
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, true, icb)));
         MATH((llk_math_eltwise_unary_datacopy_init<
               DataCopyType::A2D,
