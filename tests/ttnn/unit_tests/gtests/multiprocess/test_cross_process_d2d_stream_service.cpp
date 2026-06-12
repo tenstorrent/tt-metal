@@ -21,18 +21,7 @@
 // the per-iter device loop (no in-loop push, no host<->device lock-step), so stage 0's
 // device loop is uniform with every other stage.
 //
-// Why a thread and not a separate "host" process/rank: in this unified fabric world
-// every rank owns a mesh, and a device-owning process can't drive cross-process H2D
-// into another process's device (a mesh-less feeder rank would also fight the fixture's
-// world_size==num_meshes requirement). forward_to_tensor's push is a direct PCIe/sysmem
-// write, independent of the mesh command queue, so a separate thread of stage 0's own
-// (device-owning) process is the way to feed concurrently.
-//
-// UNBUNDLED op/sync model — the point of this test. A real model-graph op (matmul
-// / CCL) OWNS its handshake SIGNALS (it incs data_ready_counter after it produces,
-// and inbound consumed_counter after it reads) but CANNOT self-gate: it must not
-// overwrite the outbound D2D backing tensor until the sender service has forwarded
-// the previous iter. A black-box op can't spin a semaphore before it runs, so that
+// In case a black-box op can't spin a semaphore before it runs, the
 // overwrite-gate is a SEPARATE op — `d2d_sync` — that waits the sender's
 // consumed_sem. So each stage's per-iter sequence is the production cascade shape:
 //
@@ -255,12 +244,6 @@ void h2d_push_token(H2DStreamService& h2d_service, uint32_t num_u32, uint32_t ba
 // the FIFO fills; the relay drains one token per iter), so stage 0's device loop is
 // uniform with every other stage (no in-loop push).
 //
-// In-process ON PURPOSE: a dedicated feeder RANK can't do this — in the unified fabric
-// world every rank owns a mesh, and a device-owning process can't drive cross-process
-// H2D into another process's device (and a mesh-less feeder rank fights the fixture's
-// world_size==num_meshes requirement). forward_to_tensor's push is a direct PCIe/sysmem
-// write, independent of the mesh command queue the main thread drives — so a separate
-// thread of the SAME (device-owning) process is the way to feed concurrently.
 void run_h2d_feed_loop(H2DStreamService& h2d_service, const ttnn::Shape& global_shape, uint32_t num_iters) {
     const uint32_t num_u32 = static_cast<uint32_t>(global_shape.volume());
     for (uint32_t i = 0; i < num_iters; ++i) {
@@ -376,15 +359,14 @@ MeshWorkload make_gate_workload(D2DStreamServiceSender* sender, const std::share
 
 // Build a stub competing fabric op for the outbound boundary: opens (and closes) a
 // WorkerToFabricEdmSender on the SAME link the D2D sender service uses, so the lease
-// arbitrates real contention on that EDM channel. The downstream FabricNodeId is
-// re-derived here from the receiver rank (the socket resolved the same one
-// internally) — kept in the test because it's purely workload-specific, not a
-// D2DStreamService API concern. Runs on the sender's worker grid (off the service
-// core), one program per coord.
+// arbitrates real contention on that EDM channel.
 MeshWorkload make_stub_fabric_workload(
     D2DStreamServiceSender* sender, const std::shared_ptr<MeshDevice>& mesh, Rank downstream_rank) {
     const auto& coords = sender->get_backing_tensor().tensor_topology().mesh_coords();
-    const CoreRange worker_cores = sender->get_worker_cores();
+    // The competing op models a SINGLE model-graph fabric op (e.g. one row CCL) contending
+    // for the EDM sender channel, so it runs on exactly ONE worker core.
+    const CoreCoord stub_core = sender->get_worker_cores().start_coord;
+    const CoreRange stub_core_range{stub_core, stub_core};
 
     // Resolve the downstream mesh's (mesh_id, host_rank) from the global rank bindings,
     // mirroring MeshSocket's resolve_fabric_node_id_from_rank.
@@ -409,15 +391,13 @@ MeshWorkload make_stub_fabric_workload(
         auto kernel = CreateKernel(
             program,
             "tests/ttnn/unit_tests/gtests/tensor/kernels/d2d_stub_fabric_op.cpp",
-            worker_cores,
+            stub_core_range,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-        for (const auto& wc : worker_cores) {
-            std::vector<uint32_t> rt_args;
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                sender_node, downstream_node, links.front(), program, wc, rt_args);
-            SetRuntimeArgs(program, kernel, wc, rt_args);
-        }
+        std::vector<uint32_t> rt_args;
+        tt::tt_fabric::append_fabric_connection_rt_args(
+            sender_node, downstream_node, links.front(), program, stub_core, rt_args);
+        SetRuntimeArgs(program, kernel, stub_core, rt_args);
         workload.add_program(MeshCoordinateRange(coord), std::move(program));
     }
     return workload;
