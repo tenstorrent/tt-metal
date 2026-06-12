@@ -67,7 +67,7 @@ You do not skip the audit. You do not pre-load the recipe document. The audit is
 
 ## Feasibility audit
 
-For the op in scope, work through the audit in seven subjects, in order: **[Prerequisites](#prerequisites)** (ProgramDescriptor + Device 2.0), **[Feature compatibility](#feature-compatibility)**, **[TensorAccessor handling](#tensoraccessor-handling)**, **[Out-of-directory coupling](#out-of-directory-coupling)**, **[Custom program hash](#custom-program-hash)**, **[Other signals](#other-signals)**, and **[Factory concept](#factory-concept)** (decided last, since it consumes the others' findings). Each subject's checks have three possible outcomes:
+For the op in scope, work through the audit in seven subjects, in order: **[Prerequisites](#prerequisites)** (ProgramDescriptor + Device 2.0), **[Feature compatibility](#feature-compatibility)**, **[TensorAccessor handling](#tensoraccessor-handling)**, **[Out-of-directory coupling](#out-of-directory-coupling)**, **[Custom program hash](#custom-program-hash)**, **[Other signals](#other-signals)**, and **[TTNN factory concept analysis](#ttnn-factory-concept-analysis)** (run last, since it draws on the others' findings). Each subject's checks have three possible outcomes:
 
 - **Green** — proceed past this check.
 - **Yellow** — requires user judgment (ambiguous signal, or a supported-but-trade-off construct). Ask the user; respect the answer.
@@ -87,8 +87,8 @@ For the op in scope, work through the audit in seven subjects, in order: **[Prer
 | Op on ProgramDescriptor API | **GATE** | brief: cleared/blocked · team: detail → ProgramDescriptor team |
 | Device 2.0 compliance (own + donor kernels) | **GATE** | brief: cleared/blocked · team: exact violations → Device 2.0 team |
 | UNSUPPORTED feature in use (incl. CTA varargs) | **GATE** | brief: cleared/blocked · team: detail → wait-for-feature |
-| Advanced factory concept required | **GATE** | brief: blocked · team: detail |
-| Factory concept to implement | **PORT WORK** | brief (Plan) + team |
+| TTNN factory analysis — op-owned tensors · genuine MeshWorkload need | **FYI-U** | team only |
+| TTNN factory analysis — pybind `create_descriptor` · other risky pybind · custom override-RTA | **FYI-P** | brief (Watch-for) + team |
 | Per-binding TensorAccessor handling — Case 1 re-express / Case 2 bridge | **PORT WORK** | brief (Construct) + team |
 | Delete custom `compute_program_hash` (→ default) | **PORT WORK** | brief (Construct) + team |
 | Notable constructs — aliased CB / borrowed-mem DFB / dynamic TA (confusing); non-zero sem init (deprecated-but-fine) | **FYI-P** | brief (Watch-for) + team |
@@ -101,7 +101,7 @@ For the op in scope, work through the audit in seven subjects, in order: **[Prer
 | Incidental code anomalies — dead RTAs, dead-but-hashed attributes, suspicious constants | **FYI-U** | team only |
 
 **The four roles:**
-- **GATE** — blocks the port (an unmet prereq, an UNSUPPORTED feature, or a framework-stubbed factory concept). On PASS, the porter brief carries a one-line "cleared"; on FAIL, *no brief is issued* (there is no port) and the detail routes to the owning team. Always complete every check even after a GATE fails — the report captures everything the port will eventually need.
+- **GATE** — blocks the port (an unmet prereq or an UNSUPPORTED feature). On PASS, the porter brief carries a one-line "cleared"; on FAIL, *no brief is issued* (there is no port) and the detail routes to the owning team. Always complete every check even after a GATE fails — the report captures everything the port will eventually need.
 - **PORT WORK** — the porter must *act* on it during the port.
 - **FYI-P** — informational, surfaced *to the porter* (and recorded for the team).
 - **FYI-U** — informational, *team-only* (feeds other workstreams; never reaches the porter).
@@ -271,7 +271,7 @@ This signal **does not gate the port**, but it induces a **port-the-family-toget
 
 - **No Metal 2.0 factory concept reads the custom hash.** It has no role in the ported caching path.
 - **PD-ported custom hashes are frequently incorrect now.** Many were written against an earlier framework and silently omit `TensorSpec` from the key — which trips `UpdateTensorArgs` legality failures on fast-path cache hits (a cache hit on a `ProgramSpec` built for different inputs).
-- **The default is correct-by-construction.** `MaximizeCacheReuse` hashes the generated `ProgramSpec`; `MinimizeCacheHitCost` hashes the op args. Either way the cache key reflects what actually determines the program.
+- **The default is correct-by-construction.** The default hash keys on what actually determines the program — the generated spec and the op args that produced it — so a cache hit only happens for a genuinely equivalent program.
 
 So this is neither "patch the custom hash" nor "wait and see if it bites at verification" — it is a deletion the porter performs as part of the port, recorded prominently in the port report (a device-op-class change). Do **not** try to repair a custom hash to include `TensorSpec`; that path leads to subtle bugs.
 
@@ -289,30 +289,29 @@ Metal 2.0 **supports** RTA varargs via the kernel-side vararg mechanism, so this
 
 **Incidental code anomalies (FYI-U).** While reading the op you will sometimes notice latent issues that are neither audit findings nor the porter's to fix — a dead/unused RTA, an attribute the factory forces or ignores yet still feeds to `compute_program_hash`, a suspicious hardcoded constant. Record these in the report's **Misc anomalies** section: team-only, non-gating, *not* porter-actionable (they route to the op owner, never into the port diff). Don't go hunting for them — just note what you happen to see while auditing.
 
-### Factory concept
+### TTNN factory concept analysis
 
-Decide which Metal 2.0 factory concept the port will land on. Run this subject **last** — after [Prerequisites](#prerequisites), [Feature compatibility](#feature-compatibility), and [TensorAccessor handling](#tensoraccessor-handling) have produced their findings (the decision consumes them), and before writing the report. Deciding it here means the porter inherits a complete package (feasibility cleared + factory shape determined) rather than re-deriving at port time. This finding is **PORT WORK** when the chosen concept is implemented, and a **GATE** when the op requires an unimplemented Advanced concept.
+**This subject is analysis, not a decision.** It does **not** choose a Metal 2.0 factory concept and it does **not** gate the port — the concept is selected downstream from the facts gathered here. Your job is to answer six questions about the op's TTNN-side shape and record each with `file:line` evidence; the downstream concept-selection process (see [`port_op_to_metal2_ttnn_factory.md`](port_op_to_metal2_ttnn_factory.md)) consumes them. Run this subject **last**, after the other subjects have produced their findings — op-owned-tensor recognition draws on the [TensorAccessor-handling](#tensoraccessor-handling) per-binding inventory.
 
-**Walk the decision tree in [`port_op_to_metal2_ttnn_factory.md`](port_op_to_metal2_ttnn_factory.md).** That document is the authoritative reference for the decision; this subject sets the audit-facing context and gating semantics, then defers to it for the substance.
+**Scope reminder.** Throughout, *"does this op …"* means *"do **any** of this op's ProgramFactories …"* — inspect every ProgramFactory the op defines; a yes on any one is a yes for the op, and you attribute the finding to the factory (and DeviceOperation, when bundled) where it appears.
 
-**Inputs:**
+Answer each question Yes/No with the evidence that decided it:
 
-- The legacy op's TTNN factory class (file paths already recorded in the identifying section of your report).
-- The [TensorAccessor-handling](#tensoraccessor-handling) per-binding inventory (informs Decision 2's op-owned-resource recognition).
-- The factory-selection document itself.
+1. **Op-owned tensors?** Does any ProgramFactory allocate and manage device tensors of its own — intermediate / scratch tensors beyond the op's declared input and output tensors? *Recognition:* a factory (or the device-operation's tensor plumbing) that creates a device tensor it owns — e.g. `create_device_tensor` / `allocate_tensor_on_device` in the factory or device-op `.cpp`, or an intermediate `Tensor` constructed and threaded into the program that is not in `tensor_args` / `tensor_return_value`. Record each owned-tensor site.
 
-**Output:**
+2. **MeshWorkload concept needed?** Does any ProgramFactory *genuinely* require multi-program / MeshWorkload structure (true cross-program or cross-device coordination)? *Recognition:* the factory provides `create_mesh_workload` / `create_workload_descriptor`, or the device-operation carries `cached_mesh_workload_t`. **False-positive trap — read this before answering Yes.** The TTNN descriptor infra *forces* single-program ops that have op-owned tensors (Q1) onto the MeshWorkload path as a plumbing artifact — that is **not** a genuine MeshWorkload need. Distinguish "needs MeshWorkload because the op is genuinely multi-program / cross-device-coordinated" (→ **Yes**) from "appears on the MeshWorkload path only because it has op-owned tensors" (→ **No**, and say so explicitly, naming Q1 as the cause). When you can't tell, mark it a question for the user rather than guessing Yes.
 
-- The factory-concept lines in `METAL2_PREPORT_AUDIT.md` — under **Gate detail** (chosen concept + decision-tree path, or RED with the stop-signal rationale) and **Port-work summary** (concept + caching strategy) — per the [team-doc template](#output-the-two-documents).
+3. **Pybind `create_descriptor`?** Does the op pybind the *innards of a ProgramFactory*? **Carve-out first:** every op pybinds the op *itself* — the user-facing function (`bind_function<"op_name">` / `mod.def("op_name", …)`), its program-config classes, its enums. **That normal surface is expected and is *not* a finding.** What this question targets is the surprise: a binding of the **ProgramFactory class** that reaches into `create_descriptor`. *Recognition:* an `nb::class_<…ProgramFactory>(…).def_static("create_descriptor", …)` (or `.def`) in the op's `*_nanobind.cpp`. The port deletes this (a sanctioned device-op-class edit — see `port_op_to_metal2_ttnn_factory.md`); record the binding site. *(Canonical example: layernorm's `bind_normalization_layernorm_program_factory` binds `create_descriptor` on both factory classes — note the extra `core_range_set` parameter that exists **only** to drive the pybind hook, the tell that this is factory-innards, not the normal op surface.)*
 
-**Op-level roll-up:**
+4. **Other migration-risky pybind?** Does the op pybind anything *else* from the **ProgramFactory or DeviceOperation internals** that would interfere with the Metal 2.0 migration? *(Deliberately broad — and the Q3 carve-out applies again: the normal op-function / program-config / enum bindings don't count.)* The discriminator is *what the `nb::class_<>` wraps*: a `DeviceOperation` or factory/param class is the surprise. Look for the device-op's methods exposed to Python (`compute_program_hash`, `create_output_tensors`, `compute_output_specs`, `select_program_factory`), pybound attribute / input structs, a factory parameter that exists only to drive a pybind hook, or any introspection entry point returning `ProgramDescriptor`. When something looks like it could complicate the port, surface it with its site rather than deciding it's harmless. *(Canonical example: layernorm's `bind_normalization_layernorm_device_operation` and `..._params_and_inputs`.)*
 
-- **`✓ GREEN` (PORT WORK)** — the decision tree completes and the chosen concept is one of `ProgramSpecFactoryConcept` or `WorkloadSpecFactoryConcept` (both implemented). The porter implements against it.
-- **`✗ RED` (GATE)** — Decision 4 fires: the legacy op's structure requires an `Advanced*` concept (extract-immutable-info / spec / run-args split), which is stubbed-only today. Port blocked on framework implementation.
+5. **Custom hash?** Does the op declare a custom `compute_program_hash`? Yes/No + `file:line`. *This is a presence check only* — the treatment (the port deletes it, reverting to the default) lives in the [Custom program hash](#custom-program-hash) subject; cross-reference it rather than re-deriving.
 
-**Don't reach for Advanced opportunistically.** Decision 4 should fire only when the basic shape genuinely cannot serve — substantial immutable-extraction work that re-running every dispatch is unacceptable for. "It would be nice to have" is not the bar; "this op cannot be ported correctly without it" is. When in doubt, assume basic suffices and surface the question in the report's Questions for the user section.
+6. **Custom override-runtime-args?** Does any ProgramFactory define a custom `override_runtime_arguments` (the cached-program override hook)? Yes/No + `file:line`. *Recognition:* a `static void <Factory>::override_runtime_arguments(...)` declaration / definition.
 
-**Branch-independence note.** The decision walks the legacy code, so the audit can run on `main` even though the chosen concept will only exist in `ttnn/api/ttnn/operation_concepts.hpp` after `akertesz/ttnn-metal2concept-improvements` merges. The factory-selection doc covers branch-side details for the downstream port.
+**Finding roles.** None of these gate. Q1 and Q2 are **FYI-U** (team-only — they feed the downstream concept selection). Q3, Q4, and Q6 are also **FYI-P** porter heads-ups, because each presages a device-op-class edit; Q5 (custom hash) is already carried as PORT WORK by the [Custom program hash](#custom-program-hash) subject, so here it's a presence cross-reference. Record all six in the team doc; surface Q3/Q4/Q6 in the porter brief.
+
+**Output.** Record the six answers in `METAL2_PREPORT_AUDIT.md`: the Yes/No summary fills the *TTNN Readiness* rows of the [Status summary](#output-the-two-documents), the full evidence lands under **TTNN factory analysis** in the Team-only section, and the porter-relevant items (Q3, Q4, Q6) are mirrored into **Heads-ups** (and thus the brief).
 
 ### Output: the two documents
 
@@ -361,11 +360,13 @@ Opens with a **status summary that mirrors the cross-team readiness spreadsheet 
 | *Prereqs* — Cross-op escapes | Ok / issue |
 | *Feature Support* — overall | GREEN / RED |
 | *Feature Support* — Variadic-CTA | Ok / Unsupported |
-| *TTNN Readiness* — Port Type | `<concept>` / `<strategy>` → Option `<N>` |
-| *TTNN Readiness* — TTNN infra++ | op-owned tensors · pybound descriptor · … / none |
+| *TTNN Readiness* — Op-owned tensors | No / Yes: `<factory + site>` |
+| *TTNN Readiness* — MeshWorkload needed | No / No (op-owned-tensor artifact only) / Yes (genuine): `<reason>` |
+| *TTNN Readiness* — Pybind `create_descriptor` | No / Yes: `<nanobind site>` |
+| *TTNN Readiness* — Other risky pybind | None / `<description + site>` |
+| *TTNN Readiness* — Custom hash | No / Yes → delete (see Custom program hash) |
+| *TTNN Readiness* — Custom override-RTA | No / Yes: `<factory + site>` |
 | *TTNN Readiness* — Fake CBs (address-only) | None / present: `<(CB, endpoint) sites>` (workaround) |
-
-Port Type → Option map: **1** = `MinimizeCacheHitCost` (basic or advanced); **2** = `MaximizeCacheReuse` basic; **3** = `MaximizeCacheReuse` advanced.
 
 **Fake CBs** = CBs used purely as an address source. **Litmus: does the CB have a producer *and* a consumer?** (Same core may be both.) No producer–consumer pair → fake: a Metal 2.0 DFB needs ≥1 of each, so a fake CB can't be expressed as a DFB — the port resolves it with the sanctioned fake-CB workaround (see the porting recipe), so it's an **FYI-P heads-up, not a gate**. Granularity is the **(CB, endpoint) edge** — the same CB can be a real LLK operand on one binding and address-only on another; record each address-only edge.
 
@@ -396,11 +397,8 @@ Port Type → Option map: **1** = `MinimizeCacheHitCost` (basic or advanced); **
   | `UpdateCircularBuffer*` | GREEN / RED / N/A | |
   | Variable-count compile-time arguments (CTA varargs) | GREEN / RED / N/A | |
 
-- **Factory concept:** <chosen concept + decision-tree path (Decisions 1–4) + caching strategy — or — RED: Advanced required, not yet implemented, with the stop-signal rationale.>
-
 ## Port-work summary  *(mirrors the brief)*
 
-- **Factory concept:** `<concept>` · caching strategy `<strategy>`.
 - **Tensor bindings** (per binding): `<name>` Case 1 (re-express) / Case 2 (bridge via `get_bank_base_address`) / clean.
 - **Custom hash:** delete custom `compute_program_hash` → default (sanctioned exception) | none.
 
@@ -410,12 +408,14 @@ Port Type → Option map: **1** = `MinimizeCacheHitCost` (basic or advanced); **
 - **Fake CBs (address-only):** each CB used purely as an address source — no producer + consumer pair — at the `(CB, endpoint)` edge with `file:line`. The port resolves it with the fake-CB workaround (see the porting recipe); it does **not** gate.
 - **Cross-op / shared kernels:** borrowed kernel files + shared-kernel coupling.
 - **RTA varargs:** kernel + recognition site.
+- **TTNN factory analysis (porter-relevant):** pybind `create_descriptor` to delete · other migration-risky pybind · custom `override_runtime_arguments` — each with `file:line`.
 
 ## Team-only
 
 - **TensorAccessor convertibility** (per Case-2 binding): convertible / genuinely exotic.
 - **Out-of-directory coupling & donor shape:** the full by-shape inventory (op-level roll-up, summary table, per-call detail, borrowed kernel files).
 - **Relaxation candidates** (mined from the custom hash before deletion): **FALLIBLE — candidates to verify**, default strict.
+- **TTNN factory analysis:** the six-question answers — op-owned tensors, MeshWorkload need (genuine vs. op-owned-tensor artifact), pybind `create_descriptor`, other risky pybind, custom hash, custom `override_runtime_arguments` — with `file:line` evidence. Feeds downstream concept selection; does not gate.
 
 ## Misc anomalies  *(omit if none; team-only, non-gating)*
 
@@ -443,14 +443,20 @@ Ordered by the porter's workflow: plan → construct → watch-for. Issued when 
 
 > Audit cleared all gates. This is your actionable input; the full record is in `METAL2_PREPORT_AUDIT.md`.
 
-**Gates cleared:** ProgramDescriptor ✓ · Device 2.0 ✓ *(or ▲ if holdovers — see Blocked-until)* · Features ✓ · Factory concept available ✓
+**Gates cleared:** ProgramDescriptor ✓ · Device 2.0 ✓ *(or ▲ if holdovers — see Blocked-until)* · Features ✓
 
 <Include this block prominently **only** when the Device 2.0 gate cleared as YELLOW (isolated holdovers); omit it on a fully clean port:>
 > ⚠ **BLOCKED until Device 2.0 cleanup.** This port **cannot begin** until these isolated Device 2.0 holdovers are fixed — *separately, on the Device 2.0 track; never in the port diff*: `<kernel:file:line — call → member-form>`, … Once they're clean, proceed with this brief as-is — **no re-audit needed.**
 
-## Plan — factory concept
+## TTNN factory analysis
 
-Implement `<concept>` · caching strategy `<strategy>` (→ the TTNN factory-selection doc, `port_op_to_metal2_ttnn_factory.md`). <escalation note, if any>
+The factory concept is selected downstream from these facts (→ `port_op_to_metal2_ttnn_factory.md`); the port does not pick it here. Carry these forward:
+
+- **Op-owned tensors:** <none | `<factory + site>`>
+- **MeshWorkload:** <not needed | genuine multi-program need | op-owned-tensor artifact only (not a real need)>
+- **Pybind `create_descriptor`:** <none | delete at `<nanobind site>`>
+- **Other risky pybind:** <none | `<description + site>`>
+- **Custom `override_runtime_arguments`:** <none | `<factory + site>`>
 
 ## Construct — to do
 
@@ -488,9 +494,9 @@ Save the file(s) and surface the path(s) with the Result line. **Stop here.** Th
 
 ### After the audit: what happens next
 
-- **On RED**: this op cannot be ported in its current state. Surface the `METAL2_PREPORT_AUDIT.md` path and Result; stop. No brief is written, and the recipe is not loaded. (A Factory-concept RED — Advanced required — is the same outcome.)
+- **On RED**: this op cannot be ported in its current state. Surface the `METAL2_PREPORT_AUDIT.md` path and Result; stop. No brief is written, and the recipe is not loaded.
 - **On YELLOW**: surface the path, the Result, and the open questions. Wait for the user's decisions. On resolution, update the team doc in place and confirm GREEN before any handoff.
-- **On GREEN + explicit user go-ahead**: both files are written (the team doc and the brief). Load [`port_op_to_metal2_recipe.md`](port_op_to_metal2_recipe.md) to perform the port, passing the audit files as context — the recipe needs the cleared gates and decisions, *including the chosen factory concept*. Do not load the recipe on your own initiative; the user must explicitly approve.
+- **On GREEN + explicit user go-ahead**: both files are written (the team doc and the brief). Load [`port_op_to_metal2_recipe.md`](port_op_to_metal2_recipe.md) to perform the port, passing the audit files as context — the recipe needs the cleared gates and decisions, *including the TTNN factory analysis*. Do not load the recipe on your own initiative; the user must explicitly approve.
 - **On GREEN with isolated Device 2.0 holdovers**: both files are written — the brief carries the **Blocked-until** notice. Surface the brief, the team doc, and the holdover list. The path forward: the holdovers are fixed **first**, on the Device 2.0 track (*not* as part of the port), after which the porter proceeds with the already-issued brief — **no re-audit**. The recipe loads once the holdovers are clean and the user gives go-ahead.
 
 ---
