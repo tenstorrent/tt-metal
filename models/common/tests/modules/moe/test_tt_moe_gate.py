@@ -11,8 +11,10 @@ and verify against the torch golden. ``TTMoEGate`` produces exactly the routing
 ``(tt_scores, tt_indices)`` that ``test_tt_moe_decode`` currently fakes with random
 tensors, so the two compose into the full router→MoE path.
 
-Scaffold scope: ``num_routed_experts == 256`` (``n_group`` 1 → generalized op, 8 → deepseek
-grouped op). Other sizes (64/128 pad-to-256, 512 combine) are skipped for now.
+Coverage: every model YAML in ``configs/`` runs. n_group=1 spans the kernel op (k∈{4,6,8}, ≤512 experts:
+64/128/160 pad-to-256, 256 single-face, 384/512 2-block combine) and the ttnn fallback (any other k, e.g.
+512-experts top-10); n_group=8 is the deepseek grouped op (256 select-8). The only skips are configs
+``TTMoEGate`` doesn't wire — n_group∉{1,8}, or n_group=8 not at exactly 256/k8 (mirrors __init__'s guards).
 """
 
 from __future__ import annotations
@@ -52,12 +54,15 @@ def test_tt_moe_gate(device, config_path: Path, seed: int):
     score_func = gate_config.score_func
     scaling = gate_config.routed_scaling_factor
 
-    if num_experts > 512 or (n_group == 8 and num_experts != 256):
-        pytest.skip(
-            f"supports ≤512 experts; n_group=8 (deepseek grouped) needs 256. n_group=1 with k∈(4,6,8) uses "
-            f"the kernel op, other k (e.g. 10) uses the ttnn fallback. got N={num_experts}, "
-            f"n_group={n_group}, k={k}"
-        )
+    # Skip only what TTMoEGate genuinely can't build (mirrors its __init__ guards):
+    #   • n_group ∈ {1, 8} only.
+    #   • n_group=8 = the deepseek grouped op, HARDWIRED to 256 experts select-8 (8 groups × 32 → top-8) — so
+    #     EXACTLY N==256, k==8 (not "≤256": a smaller N has ≠32 experts/group, which the kernel can't do).
+    #   • n_group=1 has NO expert ceiling: k∈{4,6,8} & N≤512 → kernel op; any other k OR N>512 → ttnn fallback.
+    if n_group not in (1, 8):
+        pytest.skip(f"only n_group 1 (generalized/ungrouped) / 8 (deepseek grouped) are wired; got n_group={n_group}")
+    if n_group == 8 and (num_experts != 256 or k != 8):
+        pytest.skip(f"n_group=8 (deepseek grouped op) is hardwired to 256 experts select-8; got N={num_experts}, k={k}")
 
     batch = gate_config.batch_per_device or 32  # decode: one token per core; matches the buffers' batch_per_device
     logger.info(

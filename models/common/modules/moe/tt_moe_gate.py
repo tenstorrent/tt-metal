@@ -20,15 +20,16 @@ bias / input-indices / output buffers. External tensors are plain L1-interleaved
 the height-sharded layout the op needs is produced inside ``forward``.
 
 Gate-op selection (via ``n_group``):
-  - ``n_group=1`` → ``generalized_moe_gate`` (ungrouped global top-k; configurable ``topk`` +
-    sigmoid/softmax). Softmax-no-bias models use ``enable_sigmoid=False, output_softmax=True``
-    (softmax-over-selected ≡ softmax-front + renormalize, since the global Z cancels).
-  - ``n_group=8`` → ``deepseek_moe_gate`` (grouped top-8; sigmoid + bias). Only the 256-expert
-    select-8 case is allowed.
+  - ``n_group=1`` → ungrouped global top-k. With k ∈ {4,6,8} and ≤512 experts it uses the
+    ``generalized_moe_gate`` kernel (configurable ``topk`` + sigmoid/softmax; softmax-no-bias models use
+    ``enable_sigmoid=False, output_softmax=True`` since softmax-over-selected ≡ softmax-front + renormalize).
+    Any other k, OR >512 experts, takes a pure-ttnn fallback (``matmul → topk → softmax``) — so there is
+    NO expert-count ceiling for n_group=1.
+  - ``n_group=8`` → ``deepseek_moe_gate`` (grouped; sigmoid + bias). The kernel is HARDWIRED to 256 experts
+    as 8 groups × 32, emitting top-8, so this path is EXACTLY 256-experts-select-8 (see ``__init__``).
 
-Scope: ``num_experts`` ≤ 512. ≤256 runs on one 256-face (fewer experts padded up with phantom
-``_PAD_NEG`` experts that rank last); 257-512 uses the op's 2-block combine path (generalized op only).
-``n_group=8`` (deepseek grouped) is single-256-block only.
+Expert layout (kernel-op path only): ≤256 runs on one 256-face (fewer experts padded up with phantom
+``_PAD_NEG`` experts that rank last); 257-512 uses the op's 2-block combine path (n_group=1 only).
 """
 
 from __future__ import annotations
@@ -88,35 +89,41 @@ class TTMoEGate:
         # bias, ranks, and linearly renormalizes -- same tail as the sigmoid path).
         if score_func not in ("softmax", "sigmoid", "sqrtsoftplus"):
             raise ValueError(f"score_func must be 'softmax' | 'sigmoid' | 'sqrtsoftplus'; got {score_func!r}")
-        # n_group picks the backing op: 1 = generalized_moe_gate (configurable top-k, ungrouped),
-        # 8 = deepseek_moe_gate (grouped top-8). Only these two are wired today.
+        # n_group picks the backing op: 1 = generalized/ungrouped (kernel op or ttnn fallback),
+        # 8 = deepseek_moe_gate (grouped). Only these two are wired.
         if n_group not in (1, 8):
-            raise NotImplementedError(f"n_group must be 1 (generalized) or 8 (deepseek); got {n_group}")
+            raise NotImplementedError(
+                f"n_group must be 1 (generalized/ungrouped) or 8 (deepseek grouped); got {n_group}"
+            )
+        if num_experts < 1:
+            raise ValueError(f"num_experts must be ≥ 1; got {num_experts}")
+        # n_group=8 → the deepseek grouped op. It is HARDWIRED to 256 experts laid out as 8 groups × 32,
+        # emitting top-8 (top-2-sum per group → top-4 groups → top-8 of 128). It takes NO group/expert-count/k
+        # argument — DeepseekMoeGateOp.golden bakes in the top-2/top-4/top-8 constants, and the op unit test
+        # (models/demos/deepseek_v3_b1/tests/unit_tests/test_deepseek_moe_gate.py) only ever feeds (batch,8,32).
+        # So n_group=8 is EXACTLY 256-experts-select-8: a <256 grouped model has ≠32 experts/group (padding to
+        # 256 would re-group it → wrong top-8) and k≠8 isn't emitted, so neither is supported. (No real grouped
+        # model is <256 anyway — deepseek-v3 / ling-1t are both 256.)
         if n_group == 8 and not (num_experts == 256 and select_experts_k == 8):
             raise NotImplementedError(
-                f"n_group==8 (deepseek_moe_gate) only supports 256 experts select-8 (got N={num_experts}, k={select_experts_k})"
+                f"n_group=8 (deepseek grouped op) is hardwired to 256 experts select-8; got N={num_experts}, k={select_experts_k}"
             )
-        # generalized_moe_gate's rank-mask only covers k=4/6/8 (drop threshold = 16*(k-4)). Ungrouped cases
-        # outside that (e.g. qwen3.5: top-10) take a pure-ttnn FALLBACK (matmul → topk → softmax, see
-        # _forward_fallback) instead of the kernel op. The grouped (n_group=8) op has no fallback.
-        use_fallback = (n_group == 1) and (select_experts_k not in (4, 6, 8))
-        # The op works in 256-expert blocks (a 16×16 face). ≤256 experts pad up to ONE block; 257-512 use the
-        # op's 2-block COMBINE path (each block → a re-mergeable top-k run → global top-k over both). Either
-        # way the phantom experts (num_experts..num_blocks*256) get a large-negative logit + bias (_PAD_NEG)
-        # so they rank last. The grouped (n_group=8) op is single-block only.
-        if not (1 <= num_experts <= 2 * _FACE_EXPERTS):
-            raise NotImplementedError(
-                f"TTMoEGate supports up to {2 * _FACE_EXPERTS} experts (1-2 blocks); got {num_experts}"
-            )
-        if num_experts > _FACE_EXPERTS and n_group != 1:
-            raise NotImplementedError(
-                f"num_experts>{_FACE_EXPERTS} uses the generalized combine path (n_group=1); got n_group={n_group}"
-            )
+        # Ungrouped (n_group=1) dispatch — TWO backends, and NO expert-count ceiling (a large N is NOT rejected,
+        # it just takes the fallback):
+        #   • kernel op (forward):           k ∈ {4,6,8} AND N ≤ 512. The op works in 256-expert blocks (a 16×16
+        #     face): ≤256 pads up to ONE block, 257-512 uses the op's 2-block COMBINE path. Phantom experts
+        #     (num_experts..num_blocks*256) get a large-negative logit + bias (_PAD_NEG) so they rank last.
+        #   • ttnn fallback (_forward_fallback): EVERYTHING else — k ∉ {4,6,8} (the kernel's rank-mask only
+        #     covers 4/6/8, drop threshold = 16*(k-4)) OR N > 512 (beyond the 2-block combine). It is pure
+        #     ttnn.matmul → topk → softmax, so it handles any k and any N (e.g. qwen3.5: 512-experts top-10).
+        use_fallback = (n_group == 1) and (select_experts_k not in (4, 6, 8) or num_experts > 2 * _FACE_EXPERTS)
 
         self.mesh_device = mesh_device
         self.num_experts = num_experts
-        self.num_blocks = (num_experts + _FACE_EXPERTS - 1) // _FACE_EXPERTS  # 1 (≤256) or 2 (257-512)
-        self._padded_experts = self.num_blocks * _FACE_EXPERTS  # 256 or 512
+        # op-path block count: 1 (≤256) or 2 (257-512). For the n_group=1 fallback (N>512) these are computed
+        # but UNUSED — the fallback returns early below and runs ttnn.topk over the full unpadded logits.
+        self.num_blocks = (num_experts + _FACE_EXPERTS - 1) // _FACE_EXPERTS
+        self._padded_experts = self.num_blocks * _FACE_EXPERTS
         self.k = select_experts_k
         self.hidden_size = hidden_size
         self.n_group = n_group
