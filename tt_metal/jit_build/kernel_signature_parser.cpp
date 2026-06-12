@@ -46,10 +46,12 @@ std::string trim(const std::string& s) {
     return s.substr(b, e - b);
 }
 
-// Step 1: return a copy of the source with comments and string/char literals and preprocessor
-// directive lines replaced by spaces (newlines preserved). This keeps byte offsets and the
-// structural punctuation intact while ensuring the marker / signature scan never trips over a
-// TT_KERNEL inside a comment, a string, or the `#define TT_KERNEL ...` line.
+// Step 1: return a same-length copy of the source with every comment, string/char literal, and
+// preprocessor-directive line blanked to spaces. This leaves the real code — identifiers and the
+// structural punctuation < > ( ) { } , — at its original positions, with all the noise turned to
+// whitespace. That single property is what lets the scan below find the lone TT_KERNEL token and
+// bracket-match the template/parameter lists without ever matching a TT_KERNEL (or a stray
+// bracket/comma) hiding inside a comment, a string, or the `#define TT_KERNEL ...` line.
 std::string strip_noise(const std::string& s) {
     std::string out(s.size(), ' ');
     enum class St { Normal, LineComment, BlockComment, String, Char, Preproc };
@@ -88,12 +90,16 @@ std::string strip_noise(const std::string& s) {
                 }
                 break;
             case St::LineComment:
-                if (c == '\n') {
+                if (c == '\\' && nx == '\n') {
+                    i += 2;  // line continuation: the // comment continues onto the next line
+                } else if (c == '\n') {
                     out[i] = '\n';
                     at_line_start = true;
                     st = St::Normal;
+                    ++i;
+                } else {
+                    ++i;
                 }
-                ++i;
                 break;
             case St::BlockComment:
                 if (c == '*' && nx == '/') {

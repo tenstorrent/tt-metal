@@ -344,10 +344,13 @@ void jit_build_genfiles_kernel_include(
         if (is_metal2) {
             kernel_header_content += generate_kernel_main_shim(*sig);
         } else {
-            log_warning(
-                tt::LogBuildKernels,
-                "TT_KERNEL entry '{}' found in a non-Metal2.0 kernel; no kernel_main() shim generated. "
-                "Named kernel arguments require the Metal 2.0 host API.",
+            // A TT_KERNEL entry has no hand-written kernel_main(), so without the generated
+            // shim the kernel would fail to link, probably with a confusing error.
+            // Catch the issue here instead, with a clear message.
+            TT_FATAL(
+                false,
+                "TT_KERNEL entry '{}' found in a non-Metal 2.0 kernel. Named kernel arguments (the TT_KERNEL "
+                "marker with template/function parameters) require the Metal 2.0 host API.",
                 sig->name);
         }
     }
