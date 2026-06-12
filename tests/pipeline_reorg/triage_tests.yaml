@@ -23,8 +23,6 @@
   skus:
     wh_n150_civ2:
       timeout: 11
-    wh_n150:
-      timeout: 11
     bh_p150b_civ2_viommu_prio:
       timeout: 11
     bh_p150b_civ2_viommu:
@@ -39,8 +37,6 @@
     - hang-report
   skus:
     wh_n150_civ2:
-      timeout: 5
-    wh_n150:
       timeout: 5
     bh_p150b_civ2_viommu_prio:
       timeout: 5
