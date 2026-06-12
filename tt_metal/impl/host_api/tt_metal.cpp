@@ -118,7 +118,7 @@ DataMovementConfigStatus CheckDataMovementConfig(
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                 const KernelGroup* kernel_group = program.impl().kernels_on_core(
                     CoreCoord(x, y), hal.get_programmable_core_type_index(programmable_core));
-                if (kernel_group != NULL) {  // TEST: modernize-use-nullptr violation
+                if (kernel_group != nullptr) {
                     bool local_noc0_in_use = false;
                     bool local_noc1_in_use = false;
                     bool has_dm0 = false;
