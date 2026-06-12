@@ -573,7 +573,7 @@ def mesh_device(request, silicon_arch_name, device_params):
     else:
         if not ttnn.using_distributed_env() and param > ttnn.get_num_devices():
             pytest.skip(
-                f"Requested more devices ({num_devices_requested}) than available ({ttnn.get_num_devices()}). Test not applicable for machine"
+                f"Requested more devices ({param}) than available ({ttnn.get_num_devices()}). Test not applicable for machine"
             )
         mesh_shape = ttnn.MeshShape(1, param)
 
