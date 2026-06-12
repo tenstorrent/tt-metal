@@ -124,6 +124,16 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
         constexpr uint64_t l1_reserve = 320 * 1024;
         const uint64_t l1_budget = (uint64_t)q.device()->l1_size_per_core() - l1_reserve;
         const uint32_t Sqt_avail = Sq / TILE_HEIGHT;
+        // Clamp QC DOWN to the largest divisor of Sqt (<= requested) whose CBs fit L1, so a config
+        // whose requested QC overflows L1 (e.g. QC=2 with all 64 heads resident -> cb_q alone is
+        // 1 MB, ~2 MB total) falls back to a feasible QC instead of failing CB allocation.
+        while (QC > 1 && footprint(QC) > l1_budget) {
+            uint32_t d = QC - 1;
+            while (d > 1 && Sqt_avail % d != 0) {
+                --d;
+            }
+            QC = d;  // 1 always divides and has the smallest footprint
+        }
         // INDEXER_QC diagnostic override: force a specific QC (still must divide Sqt + fit L1),
         // bypassing the reader-bound gate so any head count can be swept.
         const char* qc_env = std::getenv("INDEXER_QC");

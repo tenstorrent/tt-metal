@@ -61,6 +61,30 @@ max-fitting QC; the drift-controlled re-measure showed QC=2 clearly best, so the
 single step.) bf16 k doubles reader bytes, which is why heads16-bf16 *is* reader-bound and bumps
 while heads16-bfp8 does not. Accuracy 41/41 (bf16+bfp8, all sp ranks).
 
+The factory also **clamps QC down** to the largest divisor of Sqt (≤ requested) whose CBs fit L1,
+so a config whose requested QC overflows L1 — e.g. QC=2 with all 64 heads resident, where cb_q
+alone is 1 MB and the total is ~2 MB > 1.5 MB — falls back to a feasible QC (QC=1, ~1.38 MB) rather
+than failing CB allocation.
+
+### Optimal knobs for heads8 bfp8 sp7 (KC × QC × HB sweep)
+
+- **HB (head group) = all heads resident (`head_group_size=0`)** — not close: HB<Hi streams the
+  q-block per output tile and is **~24× slower** (HB=4: 11.58 ms, HB=2: 11.44 ms vs HB=8: 0.48 ms).
+- **QC = 2** at every KC (the K-bandwidth knee, above).
+- **KC (k_chunk) = 8 (`k_chunk_size=256`)** is the optimum; the binding constraint is that KC must
+  stay small enough for QC=2 to fit L1, and within that KC=8 load-balances the work units slightly
+  better than KC=16:
+
+  | KC \ QC | 1     | 2         | 4     |
+  |---------|-------|-----------|-------|
+  | 4       | 0.755 | 0.668     | 0.539 |
+  | **8**   | 0.737 | **0.476** | 0.520 |
+  | 16      | 0.724 | 0.488     | 0.524 |
+  | 32      | 0.735 | 0.733\*   | 0.738\* |
+
+  \*KC=32 is too large → QC=2 no longer fits L1 → clamps back to QC=1, losing the whole win. So the
+  production config is KC=8 + the QC auto-tune (→ QC=2), giving heads8 bfp8 sp7 **0.476 ms**.
+
 ## Where the reader gap is after Win 1 (heads8 bfp8, QC=2)
 
 reader-only 0.454 vs ceiling 0.373 → +0.081 ms still exposed. Per-input (READ_*_OFF), full kernel:

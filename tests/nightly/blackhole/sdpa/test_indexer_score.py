@@ -122,11 +122,16 @@ def test_indexer_score_glx_chunked(device, heads, dim, sq, t, chunk_start):
 
 def production_config():
     """Production (GLX chunked-prefill) knobs, shared by the accuracy and perf tests."""
-    # q_chunk=64 with all heads resident doubles q/w/acc CBs to ~2 MB > L1, so QC stays 1.
+    # head_group_size=0 keeps all this device's heads resident: head streaming re-reads q per
+    # output tile and is ~24x slower (heads8 sp7 0.48ms -> 11.5ms), so it is never used here.
+    # k_chunk=256 (KC=8) over 512: both leave room for the factory to auto-bump QC to 2 (the
+    # K-bandwidth knee), and KC=8 load-balances the work units slightly better on heads8 (0.48
+    # vs 0.49ms sp7); KC>=32 is too large -- QC=2 no longer fits L1 and the bump is lost.
+    # q_chunk_size is the floor; the factory auto-tunes QC (and clamps it down to fit L1).
     return ttnn.IndexerScoreProgramConfig(
         q_chunk_size=32,
-        k_chunk_size=512,
-        head_group_size=0,  # all 16 heads (this device's TP shard) resident
+        k_chunk_size=256,
+        head_group_size=0,
     )
 
 
