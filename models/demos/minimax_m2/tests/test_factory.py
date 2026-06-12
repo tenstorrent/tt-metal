@@ -138,7 +138,7 @@ class TestFactory:
         }
 
 
-def parametrize_mesh_with_fabric(mesh_shapes=None):
+def parametrize_mesh_with_fabric(mesh_shapes=None, linear_fabric=False):
     """Universal mesh + fabric parametrization for minimax_m2 tests.
 
     Generates a paired ``(mesh_device, device_params)`` parametrize. Each
@@ -199,11 +199,15 @@ def parametrize_mesh_with_fabric(mesh_shapes=None):
             )
         ]
     else:
+        # Multi-device fabric: default is FABRIC_1D_RING (torus), but a plain-MESH
+        # Galaxy (no wrap-around links) can only do FABRIC_1D — pass linear_fabric=True
+        # there (and use ttnn.Topology.Linear in the CCLManager). See galaxy_mesh_smoke.py.
+        multidev_fabric = ttnn.FabricConfig.FABRIC_1D if linear_fabric else ttnn.FabricConfig.FABRIC_1D_RING
         params = [
             pytest.param(
                 shape,
                 {
-                    "fabric_config": (None if shape == (1, 1) else ttnn.FabricConfig.FABRIC_1D_RING),
+                    "fabric_config": (None if shape == (1, 1) else multidev_fabric),
                     "trace_region_size": 100000000,
                 },
                 id=f"{shape[0]}x{shape[1]}",
