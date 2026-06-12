@@ -490,80 +490,50 @@ void JitBuildState::write_build_state_hash(const string& out_dir) const {
 void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* settings, size_t src_index) const {
     // ZoneScoped;
 
-    string cmd{"cd " + out_dir + " && " + env_.gpp_};
-    string defines = this->defines_;
+    // Build the compile recipe (opt/cflags/includes/defines, including kernel-specific
+    // include paths and the named-compile-arg map) ONCE via export_target_recipe, then turn it
+    // into an argv with the shared builder and run it SHELL-FREE via exec_command. This is the
+    // same path the JIT compile server and preprocess-and-ship use, so the three cannot drift
+    // (jit_compile_server.cpp TODO 1). Shell-free also means map-valued defines like
+    // -DKERNEL_COMPILE_TIME_ARG_MAP={"name",idx},... need no escaping — each define is one argv
+    // element, passed verbatim (the macro expansion lives in tt_metal/hw/inc/compile_time_args.h).
+    const tt::jit_build::TargetRecipe recipe = export_target_recipe(settings);
 
+    std::string cflags = recipe.cflags;
     if (env_.get_rtoptions().get_build_map_enabled()) {
-        cmd += "-save-temps=obj -fdump-tree-all -fdump-rtl-all ";
+        cflags += " -save-temps=obj -fdump-tree-all -fdump-rtl-all";
     }
 
-    if (settings) {
-        // Append user args
-        if (process_defines_at_compile_) {
-            settings->process_defines([&defines](const string& define, const string& value) {
-                defines += fmt::format("-D{}='{}' ", define, value);
-            });
-        }
+    const std::string obj_path = out_dir + this->objs_[src_index];
+    const std::string obj_temp_path = out_dir + this->temp_objs_[src_index];
+    const std::string temp_d_path = fs::path(obj_temp_path).replace_extension("d").string();
 
-        settings->process_compile_time_args([&defines](const std::vector<uint32_t>& values) {
-            if (values.empty()) {
-                return;
-            }
-            defines += fmt::format("-DKERNEL_COMPILE_TIME_ARGS={} ", fmt::join(values, ","));
-        });
-
-        // This creates a command-line define for named compile time args
-        // Ex. for named_args like {"buffer_size": 1024, "num_tiles": 64}
-        // This generates:
-        // -DKERNEL_COMPILE_TIME_ARG_MAP="{{\"buffer_size\",1024}, {\"num_tiles\",64}} "
-        // The macro expansion is defined in tt_metal/hw/inc/compile_time_args.h
-        settings->process_named_compile_time_args(
-            [&defines](const std::unordered_map<std::string, uint32_t>& named_args) {
-                if (named_args.empty()) {
-                    return;
-                }
-                std::ostringstream ss;
-                ss << "-DKERNEL_COMPILE_TIME_ARG_MAP=\"";
-                for (const auto& [name, value] : named_args) {
-                    ss << "{\\\"" << name << "\\\"," << value << "}, ";
-                }
-                ss << "\"";
-                defines += ss.str() + " ";
-            });
-
-        cmd += fmt::format("-{} ", settings->get_compiler_opt_level());
-    } else {
-        cmd += fmt::format("-{} ", this->default_compile_opt_level_);
-    }
-
-    // Append common args provided by the build state
-    std::string obj_path = out_dir + this->objs_[src_index];
-    std::string obj_temp_path = out_dir + this->temp_objs_[src_index];
-    std::string temp_d_path = fs::path(obj_temp_path).replace_extension("d").string();
-    cmd += this->cflags_;
-    cmd += this->includes_;
-    // Add kernel-specific include paths (e.g., kernel source directory for relative includes)
-    if (settings) {
-        settings->process_include_paths([&cmd](const std::string& path) { cmd += fmt::format("-I{} ", path); });
-    }
-    cmd += fmt::format("-c -o {} {} -MF {} ", obj_temp_path, this->srcs_[src_index], temp_d_path);
-    cmd += defines;
+    std::vector<std::string> args = tt::jit_build::utils::build_gpp_argv(
+        env_.gpp_,
+        recipe.compiler_opt_level,
+        cflags,
+        recipe.includes,
+        recipe.defines,
+        this->srcs_[src_index],
+        tt::jit_build::utils::GppAction::Compile,
+        obj_temp_path,
+        temp_d_path);
 
     if (env_.get_rtoptions().get_log_kernels_compilation_commands()) {
-        log_info(tt::LogBuildKernels, "    g++ compile cmd: {}", cmd);
+        log_info(tt::LogBuildKernels, "    g++ compile cmd: {}", fmt::join(args, " "));
     }
 
     if (env_.get_rtoptions().get_watcher_enabled() && settings) {
-        log_kernel_defines_and_args(out_dir, settings->get_full_kernel_name(), defines);
+        log_kernel_defines_and_args(
+            out_dir, settings->get_full_kernel_name(), fmt::format("{}", fmt::join(recipe.defines, " ")));
     }
 
     // log file and dephash file can be renamed after compilation, but the .o file
     // needs to be renamed after link step to avoid LTO reading inconsistent object files.
     jit_build::utils::FileRenamer log_file(obj_path + ".log");
     fs::remove(log_file.path());
-    bool result =
-        tt::jit_build::utils::run_command(cmd, log_file.path(), env_.get_rtoptions().get_dump_build_commands());
-    report_result(this->target_name_, "compile", cmd, log_file.path(), result);
+    bool result = tt::jit_build::utils::exec_command(args, out_dir, log_file.path());
+    report_result(this->target_name_, "compile", fmt::format("{}", fmt::join(args, " ")), log_file.path(), result);
     jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash");
     fs::remove(temp_d_path);  // .d file not needed after hash is written
 }

@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <functional>
 #include <future>
 #include <initializer_list>
@@ -196,6 +197,58 @@ KernelCompileDescriptor build_kernel_descriptor(
             device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
         desc.request.targets.push_back(bs.export_target_recipe(kernel.get()));
         desc.expected_elf_paths.push_back(bs.get_target_out_path(kernel->get_full_kernel_name()));
+    }
+
+    // Preprocess-and-ship (TT_METAL_JIT_PREPROCESS=1): run each source through the
+    // preprocessor (-E) on the client and ship the self-contained .ii as content. The
+    // server then compiles the .ii with no include tree, no defines, and no source file
+    // on its filesystem -- only the toolchain. Reuses the generated_files content channel
+    // (written into the per-kernel cache dir on the server), so no RPC/server change is
+    // required: the .ii is referenced as a sibling of the target output dir ("../<name>").
+    static const bool preprocess_and_ship = std::getenv("TT_METAL_JIT_PREPROCESS") != nullptr;
+    if (preprocess_and_ship) {
+        for (std::size_t t = 0; t < desc.request.targets.size(); ++t) {
+            auto& target = desc.request.targets[t];
+            const std::string client_out_dir = std::filesystem::path(desc.expected_elf_paths[t]).parent_path().string();
+            std::filesystem::create_directories(client_out_dir);
+            for (std::size_t i = 0; i < target.srcs.size(); ++i) {
+                const std::string ii_name =
+                    target.target_name + "__" + std::filesystem::path(target.objs[i]).filename().string() + ".ii";
+                const std::string ii_path = client_out_dir + "/" + ii_name;
+                // Preprocess with the EXACT compile flags via the shared argv builder + exec_command
+                // (posix_spawn, NO shell). A shell command string would mangle map-valued defines
+                // like -DKERNEL_COMPILE_TIME_ARG_MAP={"cb_in0",1},... (braces/quotes/commas/spaces)
+                // and drop named compile-time args. cwd = client_out_dir so -I. / -I.. resolve to
+                // the target + generated-files dirs, identical to the real compile env.
+                const auto args = tt::jit_build::utils::build_gpp_argv(
+                    desc.request.gpp,
+                    target.compiler_opt_level,
+                    target.cflags,
+                    target.includes,
+                    target.defines,
+                    target.srcs[i],
+                    tt::jit_build::utils::GppAction::Preprocess,
+                    ii_path);
+                if (!tt::jit_build::utils::exec_command(args, client_out_dir, ii_path + ".log")) {
+                    TT_THROW("preprocess-and-ship: -E failed for {} (log: {})", target.srcs[i], ii_path + ".log");
+                }
+                const auto bytes = tt::jit_build::utils::read_file_bytes(ii_path);
+                tt::jit_build::GeneratedFile gf;
+                gf.name = ii_name;
+                gf.content.assign(bytes.begin(), bytes.end());
+                desc.request.generated_files.push_back(std::move(gf));
+                // Server compiles this self-contained unit instead of the original source path.
+                target.srcs[i] = "../" + ii_name;
+            }
+            // The .ii has includes + defines baked in; the server must not need the tree.
+            target.includes.clear();
+            target.defines.clear();
+            // -P drops the system-header markers that normally suppress warnings inside
+            // libstdc++; without them -Werror trips on standard-library internals. Downgrade
+            // warnings-to-errors for the preprocessed compile (codegen is unaffected, and the
+            // original source compiled clean, so this only tolerates now-unmasked system warnings).
+            target.cflags += " -Wno-error";
+        }
     }
 
     return desc;
