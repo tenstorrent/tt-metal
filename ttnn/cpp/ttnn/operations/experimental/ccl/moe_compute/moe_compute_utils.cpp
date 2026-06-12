@@ -89,7 +89,7 @@ ttnn::Tensor stack_along(const std::vector<ttnn::Tensor>& tensors, int dim) {
 // correct partial contraction once the kernel walks only the per-core prefixes.
 ttnn::Tensor front_pack_per_core(
     const ttnn::Tensor& real, int axis, const std::vector<uint32_t>& full_map, const std::vector<uint32_t>& tp_map) {
-    const auto shape = real.logical_shape();
+    const auto& shape = real.logical_shape();
     const int rank = static_cast<int>(shape.rank());
     const int ax = axis < 0 ? rank + axis : axis;
     const uint32_t num_cores = static_cast<uint32_t>(full_map.size());
