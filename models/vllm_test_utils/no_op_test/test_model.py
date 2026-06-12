@@ -10,9 +10,13 @@ from models.vllm_test_utils.generative_base import GenerativeTestModelBase
 class DummyNoOpModel(GenerativeTestModelBase):
     """
     Dummy model class which does nothing for prefill and decode forward.
-    Returns zero logits for host-side sampling. Used to measure the host
-    overheads from vLLM.
+    Returns zero logits for host-side sampling and zero token IDs for
+    device-side sampling. Used to measure the host overheads from vLLM.
     """
+
+    model_capabilities = {
+        "supports_sample_on_device": True,
+    }
 
     def __init__(self, mesh_device, max_batch_size, vocab_size, **kwargs):
         # Accept arbitrary kwargs so the signature supports `vllm_config=...`
@@ -29,11 +33,13 @@ class DummyNoOpModel(GenerativeTestModelBase):
 
     def prefill_forward(self, *args, **kwargs):
         tokens = kwargs.get("tokens")
-        # Run nothing for prefill forward in this dummy model
+        if kwargs.get("sampling_params") is not None:
+            return torch.zeros(tokens.shape[0], dtype=torch.int64, device=tokens.device)
         return torch.zeros(tokens.shape[0], 1, self.vocab_size, dtype=torch.float32)
 
     def decode_forward(self, *args, **kwargs):
-        # Run nothing for decode forward in this dummy model
         tokens = kwargs.get("tokens")
         assert tokens.shape[0] == self.max_batch_size, "Batch size mismatch"
+        if kwargs.get("sampling_params") is not None:
+            return torch.zeros(tokens.shape[0], dtype=torch.int64, device=tokens.device)
         return self.decode_out
