@@ -23,14 +23,18 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
     const auto& weight_tensor = tensor_args.weight_tensor;
     const auto& config = operation_attributes.config;
 
-    // Basic device/storage checks
-    TT_FATAL(
-        act_tensor.storage_type() == StorageType::DEVICE && weight_tensor.storage_type() == StorageType::DEVICE,
-        "variable_matmul operands must be on device");
-    TT_FATAL(act_tensor.device() == weight_tensor.device(), "variable_matmul inputs must reside on the same device");
-    TT_FATAL(
-        act_tensor.buffer() != nullptr && weight_tensor.buffer() != nullptr,
-        "variable_matmul inputs must be allocated in device buffers");
+    // Every tensor handed to the kernels must live in device storage on one shared device — the
+    // kernels read buffer addresses directly, so a host/null/cross-device tensor would fault at
+    // launch. check_on_device enforces this uniformly for inputs, the optional output, and offsets.
+    TT_FATAL(act_tensor.storage_type() == StorageType::DEVICE, "variable_matmul activation must be on device");
+    auto* device = act_tensor.device();
+    auto check_on_device = [device](const ttnn::Tensor& t, const char* name) {
+        TT_FATAL(t.storage_type() == StorageType::DEVICE, "variable_matmul {} must be on device", name);
+        TT_FATAL(t.buffer() != nullptr, "variable_matmul {} must be allocated in a device buffer", name);
+        TT_FATAL(t.device() == device, "variable_matmul {} must reside on the same device as the input", name);
+    };
+    check_on_device(act_tensor, "activation");
+    check_on_device(weight_tensor, "weight");
 
     // Layout requirements: all inputs must be TILE layout
     TT_FATAL(
@@ -129,13 +133,7 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
     // Write-at-offset validation
     if (tensor_args.output_tensor.has_value()) {
         const auto& out = tensor_args.output_tensor.value();
-        // The output buffer's raw address is handed to the kernels, so validate it lives in
-        // device storage on the same device as the inputs before any later shape checks.
-        TT_FATAL(out.storage_type() == StorageType::DEVICE, "variable_matmul output tensor must be on device");
-        TT_FATAL(out.buffer() != nullptr, "variable_matmul output tensor must be allocated in a device buffer");
-        TT_FATAL(
-            out.device() == act_tensor.device(),
-            "variable_matmul output tensor must reside on the same device as the inputs");
+        check_on_device(out, "output tensor");
         const auto& out_logical = out.logical_shape();
         const uint32_t matmul_N = operation_attributes.transpose_b ? w_logical[-2] : w_logical[-1];
         const uint32_t out_M_tiles = tt::div_up(out_logical[-2], TILE_HEIGHT);
@@ -165,6 +163,7 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
             "variable_matmul: OffsetsRole::InputAndOutputRow requires a caller-provided output_tensor.");
     }
     const auto& off = tensor_args.offsets_tensor.value();
+    check_on_device(off, "offsets_tensor");
     TT_FATAL(off.dtype() == ttnn::DataType::UINT32, "variable_matmul: offsets_tensor must be UINT32.");
     TT_FATAL(off.layout() == ttnn::Layout::ROW_MAJOR, "variable_matmul: offsets_tensor must be ROW_MAJOR.");
     // The kernels read offsets[start..start+2] (a {start, end} pair). Bound the start index so
