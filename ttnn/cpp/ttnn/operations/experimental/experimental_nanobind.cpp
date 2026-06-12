@@ -6,10 +6,8 @@
 
 #include <nanobind/nanobind.h>
 
-#include "ttnn/operations/experimental/adaptive_pool/adaptive_pools_nanobind.hpp"
 #include "ttnn/operations/experimental/cnn/convert_to_chw/convert_to_chw_nanobind.hpp"
 #include "ttnn/operations/experimental/cnn/convert_to_hwc/convert_to_hwc_nanobind.hpp"
-#include "ttnn/operations/experimental/conv3d/conv3d_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc_fused/deepseek_moe_fast_reduce_nc_fused_nanobind.hpp"
@@ -37,7 +35,6 @@
 #include "ttnn/operations/experimental/transformer/dit_layernorm_pre_all_gather/dit_layernorm_pre_all_gather_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/dit_layernorm_post_all_gather/dit_layernorm_post_all_gather_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/dit_minimal_matmul_addcmul_fused/dit_minimal_matmul_addcmul_fused_nanobind.hpp"
-#include "ttnn/operations/experimental/transformer/dit_rms_norm_unary_fused/dit_rms_norm_unary_fused_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding/rotary_embedding_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_hf/rotary_embedding_hf_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama_nanobind.hpp"
@@ -70,7 +67,6 @@
 #include "ttnn/operations/experimental/deepseek/mla/matmul_wo/matmul_wo_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/moe/deepseek_moe_gate/deepseek_moe_gate_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/generalized_moe_gate_nanobind.hpp"
-#include "ttnn/operations/experimental/indexer_score/indexer_score_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/moe_gpt/moe_gpt_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine/combine_nanobind.hpp"
@@ -116,7 +112,6 @@ void py_module(nb::module_& mod) {
     transformer::bind_dit_layernorm_pre_all_gather(mod);
     transformer::bind_dit_layernorm_post_all_gather(mod);
     transformer::bind_dit_minimal_matmul_addcmul_fused(mod);
-    transformer::bind_dit_rms_norm_unary_fused(mod);
     transformer::bind_rotary_embedding(mod);
     transformer::bind_rotary_embedding_hf(mod);
     transformer::bind_rotary_embedding_llama(mod);
@@ -137,10 +132,6 @@ void py_module(nb::module_& mod) {
 
     cnn::detail::bind_convert_to_chw(mod);
     cnn::detail::bind_convert_to_hwc(mod);
-
-    ttnn::operations::experimental::conv3d::detail::bind_conv3d(mod);
-    adaptive_pool::bind_adaptive_avg_pool2d_operation(mod);
-    adaptive_pool::bind_adaptive_max_pool2d_operation(mod);
 
     copy::detail::bind_typecast(mod);
 
@@ -187,7 +178,6 @@ void py_module(nb::module_& mod) {
     topk_large_indices::detail::bind_topk_large_indices(mod);
     topk_router_gpt::detail::bind_topk_router_gpt(mod);
     deepseek::mla::detail::bind_matmul_wo(mod);
-    indexer_score::detail::bind_indexer_score(mod);
     moe_gpt::detail::bind_moe_gpt(mod);
 
     // DeepSeek prefill MoE operations

@@ -259,12 +259,10 @@ target_link_libraries(
         TTNN::Ops::Embedding
         TTNN::Ops::Embedding::Backward
         TTNN::Ops::Examples
-        TTNN::Ops::Experimental::AdaptivePool
         TTNN::Ops::Experimental::BcastTo
         TTNN::Ops::Experimental::MultiScaleDeformableAttn
         TTNN::Ops::Experimental::CCL
         TTNN::Ops::Experimental::CNN
-        TTNN::Ops::Experimental::Conv3d
         TTNN::Ops::Experimental::Copy
         TTNN::Ops::Experimental::TensorPrefetcher
         TTNN::Ops::Experimental::Dropout
@@ -281,7 +279,6 @@ target_link_libraries(
         TTNN::Ops::Experimental::TopkLargeIndices
         TTNN::Ops::Experimental::TopkRouterGpt
         TTNN::Ops::Experimental::Deepseek::MLA::Matmul_WO
-        TTNN::Ops::Experimental::IndexerScore
         TTNN::Ops::Experimental::MoEGPT
         TTNN::Ops::Experimental::DeepSeekPrefill::Dispatch
         TTNN::Ops::Experimental::DeepSeekPrefill::Combine
@@ -528,13 +525,11 @@ add_subdirectory(cpp/ttnn/operations/eltwise/unary_backward)
 add_subdirectory(cpp/ttnn/operations/embedding)
 add_subdirectory(cpp/ttnn/operations/embedding_backward)
 add_subdirectory(cpp/ttnn/operations/examples)
-add_subdirectory(cpp/ttnn/operations/experimental/adaptive_pool)
 add_subdirectory(cpp/ttnn/operations/experimental/quasar)
 add_subdirectory(cpp/ttnn/operations/experimental/bcast_to)
 add_subdirectory(cpp/ttnn/operations/experimental/multi_scale_deformable_attn)
 add_subdirectory(cpp/ttnn/operations/experimental/ccl)
 add_subdirectory(cpp/ttnn/operations/experimental/cnn)
-add_subdirectory(cpp/ttnn/operations/experimental/conv3d)
 add_subdirectory(cpp/ttnn/operations/experimental/copy)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/post_combine_reduce)
@@ -550,7 +545,6 @@ add_subdirectory(cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_g
 add_subdirectory(cpp/ttnn/operations/experimental/topk_large_indices)
 add_subdirectory(cpp/ttnn/operations/experimental/topk_router_gpt)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo)
-add_subdirectory(cpp/ttnn/operations/experimental/indexer_score)
 add_subdirectory(cpp/ttnn/operations/experimental/ccl/moe_gpt)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/dispatch)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/combine)

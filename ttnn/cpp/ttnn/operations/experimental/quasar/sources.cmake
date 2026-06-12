@@ -15,14 +15,10 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_API_HEADERS
     slice/slice.hpp
     transpose/transpose.hpp
     reshard/reshard.hpp
-    halo/halo.hpp
-    pool_generic/generic_pools.hpp
-    conv2d/conv2d.hpp
     matmul/matmul.hpp
     binary_ng/types.hpp
     binary/binary.hpp
     binary/binary_composite.hpp
-    fold/fold.hpp
     interleaved_to_sharded/interleaved_to_sharded.hpp
     sharded_to_interleaved/sharded_to_interleaved.hpp
     to_memory_config/to_memory_config_op.hpp
@@ -98,19 +94,6 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     move/device/move_overlap_program_factory.cpp
     move/device/move_program_factory.cpp
     move/device/move_sharded_program_factory.cpp
-    # halo (no nanobind; internal op)
-    halo/halo.cpp
-    halo/device/halo_device_operation.cpp
-    halo/device/untilize_with_halo_program_factory.cpp
-    # pool_generic
-    pool_generic/generic_pools.cpp
-    pool_generic/device/pool_op.cpp
-    pool_generic/device/pool_multi_core_program_factory.cpp
-    # conv2d
-    conv2d/conv2d.cpp
-    conv2d/device/conv2d_device_operation.cpp
-    conv2d/device/conv2d_op_sharded_program_factory.cpp
-    conv2d/device/conv2d_op_width_sharded_program_factory.cpp
     # binary_ng (device backend; no host op / no nanobind)
     binary_ng/device/binary_ng_device_operation.cpp
     binary_ng/device/binary_ng_program_factory.cpp
@@ -120,11 +103,6 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     binary/binary.cpp
     binary/common/binary_op_utils.cpp
     binary/device/binary_composite_op.cpp
-    # fold (compositional: own device op + internal pad/transpose/slice/reshard -> quasar)
-    fold/fold.cpp
-    fold/device/fold_device_op.cpp
-    fold/device/fold_multi_core_program_factory.cpp
-    fold/device/fold_multi_core_dram_program_factory.cpp
     # to_memory_config trio (interleaved_to_sharded + sharded_to_interleaved + to_memory_config dispatcher)
     interleaved_to_sharded/interleaved_to_sharded.cpp
     interleaved_to_sharded/device/interleaved_to_sharded_op.cpp
