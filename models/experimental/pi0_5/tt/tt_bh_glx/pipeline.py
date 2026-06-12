@@ -51,6 +51,7 @@ from models.experimental.pi0_5.tt.ttnn_pi0_5_model import (
     use_upstream_masks,
 )
 
+from ._l1_migration import denoise_l1_enabled, migrate_denoise_weights_to_l1
 from .kv_migration import migrate_layer_paired
 from .stage_denoise import StageDenoise
 from .stage_prefill import StagePrefill
@@ -235,6 +236,14 @@ class Pi0_5GLXPipeline:
         self._trace_id = None
         self._captured_actions = None
         self._rope_l1 = os.environ.get("PI0_ROPE_TABLES_L1", "").lower() in ("1", "true", "yes", "on")
+
+        # Move the static denoise-stage weights from DRAM into L1 so the N-step
+        # Euler loop reads them on-chip instead of re-streaming ~93 MB/chip from
+        # DRAM every step. Gated by PI0_GLX_DENOISE_L1 (default ON). The flag is
+        # also threaded into KV migration so the per-call prefix KV lands in L1.
+        self._denoise_l1 = denoise_l1_enabled()
+        if self._denoise_l1:
+            migrate_denoise_weights_to_l1(self.stage_denoise, self.suffix_slices, self.denoise_head)
 
     # ---- upstream-openpi compat artifacts -------------------------------
 
@@ -461,7 +470,9 @@ class Pi0_5GLXPipeline:
             per_chip_cos=(upstream["prefix_cos"] if upstream is not None else None),
             per_chip_sin=(upstream["prefix_sin"] if upstream is not None else None),
         )
-        prefix_kv_per_chip = migrate_layer_paired(per_layer_kv, self.h.denoise_per_chip, transport=self.transport)
+        prefix_kv_per_chip = migrate_layer_paired(
+            per_layer_kv, self.h.denoise_per_chip, transport=self.transport, to_l1=self._denoise_l1
+        )
         self._run_denoise_loop_device(prefix_kv_per_chip, upstream)
         return self.x_t_fp32
 
@@ -584,7 +595,9 @@ class Pi0_5GLXPipeline:
 
         # ---- Transport 1→2: layer-paired KV migration (fabric sockets) ----
         t0 = time.perf_counter()
-        prefix_kv_per_chip = migrate_layer_paired(per_layer_kv, self.h.denoise_per_chip, transport=self.transport)
+        prefix_kv_per_chip = migrate_layer_paired(
+            per_layer_kv, self.h.denoise_per_chip, transport=self.transport, to_l1=self._denoise_l1
+        )
         t.kv_migration_ms = (time.perf_counter() - t0) * 1000.0
 
         # ---- Stage 2: denoise loop (on-device fp32 Euler) ----

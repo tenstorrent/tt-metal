@@ -28,6 +28,7 @@ def migrate_layer_paired(
     per_layer_kv,  # List[(K, V)] of length VLM_TOTAL_LAYERS, each on prefill_per_chip[i]
     denoise_per_chip,  # List of 6 denoise submeshes
     transport=None,
+    to_l1=False,  # place the migrated KV in L1 (denoise reads it every step)
 ) -> List[List[Tuple]]:
     """Returns prefix_kv_per_denoise_chip[chip_idx] = [(K_lo, V_lo), (K_lo+1, V_lo+1), (K_lo+2, V_lo+2)].
 
@@ -57,11 +58,19 @@ def migrate_layer_paired(
             v_dst = transport.send(v_src, dst, tag=f"kv:{j}:V")
             # Match expert's per-step k_rope dtype (bf8_b) so the cross-attn
             # concat([past_k, k_rope]) doesn't trigger MeshDevice's strict
-            # dtype check. See module docstring.
+            # dtype check. See module docstring. When to_l1, land the KV in L1
+            # so the expert reads it on-chip every step (the typecast already
+            # produces a fresh tensor; the rare already-bf8 case takes a copy
+            # so the cached DRAM recv buffer is left intact for reuse).
+            kv_mc = ttnn.L1_MEMORY_CONFIG if to_l1 else ttnn.DRAM_MEMORY_CONFIG
             if k_dst.dtype != ttnn.bfloat8_b:
-                k_dst = ttnn.typecast(k_dst, ttnn.bfloat8_b)
+                k_dst = ttnn.typecast(k_dst, ttnn.bfloat8_b, memory_config=kv_mc)
+            elif to_l1:
+                k_dst = ttnn.to_memory_config(k_dst, ttnn.L1_MEMORY_CONFIG)
             if v_dst.dtype != ttnn.bfloat8_b:
-                v_dst = ttnn.typecast(v_dst, ttnn.bfloat8_b)
+                v_dst = ttnn.typecast(v_dst, ttnn.bfloat8_b, memory_config=kv_mc)
+            elif to_l1:
+                v_dst = ttnn.to_memory_config(v_dst, ttnn.L1_MEMORY_CONFIG)
             chip_kv.append((k_dst, v_dst))
         out.append(chip_kv)
     return out
