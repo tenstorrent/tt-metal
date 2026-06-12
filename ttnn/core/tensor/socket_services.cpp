@@ -94,19 +94,8 @@ Tensor make_borrowed_host_tensor(ttsl::Span<const std::byte> bytes, const Tensor
     TT_THROW("Unreachable");
 }
 
-// Worker-sync CT-arg block. Populated when Config::worker_cores is set; all
-// fields zero when disabled (the kernel's `if constexpr (worker_sync_enabled)`
-// gate skips the block entirely).
-struct WorkerSyncArgs {
-    bool enabled = false;
-    uint32_t data_ready_sem_addr = 0;     // worker-grid L1 (mesh-wide GlobalSemaphore)
-    uint32_t consumed_counter_addr = 0;   // service-core L1 (per-coord, allocated via ServiceCoreManager)
-    uint32_t mcast_noc_x_start = 0;       // physical NoC bbox of worker_cores on this device
-    uint32_t mcast_noc_y_start = 0;
-    uint32_t mcast_noc_x_end = 0;
-    uint32_t mcast_noc_y_end = 0;
-    uint32_t num_workers = 0;             // mcast destination count + sync arithmetic target
-};
+// WorkerSyncArgs is shared with the D2D service via stream_service_common.hpp.
+// The using-directive below pulls it in without the namespace prefix.
 
 // Metadata multicast CT-arg block. Populated when Config::metadata_size_bytes > 0;
 // all fields zero when disabled (the kernel's `if constexpr (metadata_enabled)`
@@ -174,8 +163,8 @@ Program build_persistent_h2d_program(
         // Worker-sync block (indices 8..15). All zero when disabled; the
         // kernel's `if constexpr (worker_sync_enabled)` guards every use.
         static_cast<uint32_t>(worker_sync.enabled ? 1u : 0u),
-        worker_sync.data_ready_sem_addr,
-        worker_sync.consumed_counter_addr,
+        worker_sync.sem_addr,
+        worker_sync.counter_addr,
         worker_sync.mcast_noc_x_start,
         worker_sync.mcast_noc_y_start,
         worker_sync.mcast_noc_x_end,
@@ -256,19 +245,10 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
     // choice per coord and use it as the recv core for that coord's socket,
     // semaphore, and persistent program. H2DSocket auto-detects service cores
     // and allocates its config + data buffers from the service-core L1 region.
-    auto& svc = tt::tt_metal::internal::ServiceCoreManager::get();
+    // claim_one_service_core_per_coord skips already-claimed cores, so an H2D +
+    // D2D (or two D2D directions) on the same device each get their own core.
     const auto& coords = topology.mesh_coords();
-    for (const auto& coord : coords) {
-        auto* d = mesh_device_->get_device(coord);
-        auto claimable = svc.get_claimable_cores(d);
-        TT_FATAL(
-            !claimable.empty(),
-            "H2DStreamService: no claimable service core on device at coord {}",
-            coord);
-        const CoreCoord chosen = claimable.front();
-        svc.claim(d, {chosen});
-        service_cores_.emplace(coord, chosen);
-    }
+    service_cores_ = claim_one_service_core_per_coord(mesh_device_, coords, "H2D");
 
     // --- B4: create one socket per participating mesh coord -------------------
     // Iterating topology.mesh_coords() (not the full mesh shape) keeps replication-
@@ -313,6 +293,8 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
     for (auto& s : sockets_) {
         s->set_page_size(plan.socket_page_size);
     }
+
+    auto& svc = tt::tt_metal::internal::ServiceCoreManager::get();
 
     // --- B7: allocate + zero-init the per-device termination signals ----------
     // One uint32 in L1 per device, on that device's service core. We manage it
@@ -435,18 +417,14 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
         // block via `if constexpr (worker_sync_enabled == 0)`.
         WorkerSyncArgs worker_sync;
         if (cfg_.worker_cores.has_value()) {
-            const auto& worker_range = cfg_.worker_cores.value();
             auto* d = mesh_device_->get_device(core.device_coord);
-            const auto start_phys = d->worker_core_from_logical_core(worker_range.start_coord);
-            const auto end_phys = d->worker_core_from_logical_core(worker_range.end_coord);
-            worker_sync.enabled = true;
-            worker_sync.data_ready_sem_addr = static_cast<uint32_t>(data_ready_sem_->address());
-            worker_sync.consumed_counter_addr = static_cast<uint32_t>(consumed_addrs_.at(core.device_coord));
-            worker_sync.mcast_noc_x_start = static_cast<uint32_t>(start_phys.x);
-            worker_sync.mcast_noc_y_start = static_cast<uint32_t>(start_phys.y);
-            worker_sync.mcast_noc_x_end = static_cast<uint32_t>(end_phys.x);
-            worker_sync.mcast_noc_y_end = static_cast<uint32_t>(end_phys.y);
-            worker_sync.num_workers = num_workers_;
+            worker_sync = make_worker_sync_args(
+                d,
+                cfg_.worker_cores.value(),
+                num_workers_,
+                static_cast<uint32_t>(data_ready_sem_->address()),
+                static_cast<uint32_t>(consumed_addrs_.at(core.device_coord)),
+                /*enabled=*/true);
         }
 
         // Per-coord metadata args. Populated only when cfg.metadata_size_bytes

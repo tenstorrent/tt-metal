@@ -6,12 +6,18 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <map>
+#include <memory>
+#include <optional>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
+#include <tt-metalium/internal/service/service_core_manager.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
@@ -100,6 +106,76 @@ inline ChunkPlan derive_chunk_plan(
 // + sync-arithmetic target).
 inline uint32_t core_range_size(const CoreRange& range) {
     return (range.end_coord.x - range.start_coord.x + 1) * (range.end_coord.y - range.start_coord.y + 1);
+}
+
+// Per-coord worker-sync CT-arg block. `sem_addr` is the mesh-wide worker-grid
+// GlobalSemaphore; `counter_addr` is the per-coord service-core L1 word.
+// All zero when disabled.
+struct WorkerSyncArgs {
+    bool enabled = false;
+    uint32_t sem_addr = 0;
+    uint32_t counter_addr = 0;
+    uint32_t mcast_noc_x_start = 0;
+    uint32_t mcast_noc_y_start = 0;
+    uint32_t mcast_noc_x_end = 0;
+    uint32_t mcast_noc_y_end = 0;
+    uint32_t num_workers = 0;
+};
+
+inline WorkerSyncArgs make_worker_sync_args(
+    IDevice* device,
+    const CoreRange& worker_cores,
+    uint32_t num_workers,
+    uint32_t sem_addr,
+    uint32_t counter_addr,
+    bool enabled) {
+    WorkerSyncArgs ws;
+    const auto start_phys = device->worker_core_from_logical_core(worker_cores.start_coord);
+    const auto end_phys = device->worker_core_from_logical_core(worker_cores.end_coord);
+    ws.enabled = enabled;
+    ws.sem_addr = sem_addr;
+    ws.counter_addr = counter_addr;
+    ws.mcast_noc_x_start = static_cast<uint32_t>(start_phys.x);
+    ws.mcast_noc_y_start = static_cast<uint32_t>(start_phys.y);
+    ws.mcast_noc_x_end = static_cast<uint32_t>(end_phys.x);
+    ws.mcast_noc_y_end = static_cast<uint32_t>(end_phys.y);
+    ws.num_workers = num_workers;
+    return ws;
+}
+
+// Claim one service core per participating coord on `mesh`, skipping any cores
+// already claimed via ServiceCoreManager. This lets multiple services (e.g. an
+// H2D + a D2D sender, or inbound + outbound D2D) share a device without
+// re-picking an already-taken core and TT_FATALing in claim(). `side` is a
+// human-readable label used in the error message only.
+inline std::map<distributed::MeshCoordinate, CoreCoord> claim_one_service_core_per_coord(
+    const std::shared_ptr<distributed::MeshDevice>& mesh,
+    const std::vector<distributed::MeshCoordinate>& coords,
+    const char* side) {
+    auto& svc = internal::ServiceCoreManager::get();
+    std::map<distributed::MeshCoordinate, CoreCoord> service_cores;
+    for (const auto& coord : coords) {
+        auto* d = mesh->get_device(coord);
+        const auto claimable = svc.get_claimable_cores(d);
+        const auto already_claimed = svc.claimed_cores(d->id());
+        std::optional<CoreCoord> chosen;
+        for (const auto& c : claimable) {
+            if (!already_claimed.contains(c)) {
+                chosen = c;
+                break;
+            }
+        }
+        TT_FATAL(
+            chosen.has_value(),
+            "StreamService: no unclaimed {} service core on device at coord {} ({} claimable, {} already claimed)",
+            side,
+            coord,
+            claimable.size(),
+            already_claimed.size());
+        svc.claim(d, {*chosen});
+        service_cores.emplace(coord, *chosen);
+    }
+    return service_cores;
 }
 
 }  // namespace tt::tt_metal::stream_service_common
