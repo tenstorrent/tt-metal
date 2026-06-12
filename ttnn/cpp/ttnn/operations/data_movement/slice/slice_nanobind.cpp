@@ -18,6 +18,7 @@
 #include "slice.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_descriptor_builders.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -158,14 +159,17 @@ void bind_slice_descriptor(nb::module_& mod) {
             nb::arg("operation_attributes"),
             nb::arg("tensor_args"));
 
+    // The Python-visible name stays SliceTileProgramFactory.create_descriptor (zero Python churn),
+    // but the implementation now calls the standalone build_slice_tile_descriptor — so the bind no
+    // longer depends on a create_descriptor method living on the factory. When the factory migrates
+    // to Metal 2.0 (and drops create_descriptor), this bind keeps working unchanged.
     nb::class_<ttnn::prim::SliceTileProgramFactory>(mod, "SliceTileProgramFactory")
         .def_static(
             "create_descriptor",
             [](const ttnn::prim::SliceParams& operation_attributes,
                const ttnn::prim::SliceInputs& tensor_args,
                Tensor& tensor_return_value) {
-                return ttnn::prim::SliceTileProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value);
+                return ttnn::prim::build_slice_tile_descriptor(operation_attributes, tensor_args, tensor_return_value);
             },
             nb::arg("operation_attributes"),
             nb::arg("tensor_args"),
