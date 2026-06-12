@@ -24,10 +24,27 @@
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
+#include "tt_metal/fabric/port_lookup.hpp"
 
 namespace tt::tt_metal {
 
 namespace {
+
+// Single conversion point for scaleout's duplicated PortType. No default case so
+// enum drift is caught at compile time.
+PortType to_metal_port_type(tt::scaleout_tools::PortType pt) {
+    switch (pt) {
+        case tt::scaleout_tools::PortType::TRACE: return PortType::TRACE;
+        case tt::scaleout_tools::PortType::QSFP_DD: return PortType::QSFP_DD;
+        case tt::scaleout_tools::PortType::WARP100: return PortType::WARP100;
+        case tt::scaleout_tools::PortType::WARP400: return PortType::WARP400;
+        case tt::scaleout_tools::PortType::LINKING_BOARD_1: return PortType::LINKING_BOARD_1;
+        case tt::scaleout_tools::PortType::LINKING_BOARD_2: return PortType::LINKING_BOARD_2;
+        case tt::scaleout_tools::PortType::LINKING_BOARD_3: return PortType::LINKING_BOARD_3;
+        case tt::scaleout_tools::PortType::UNKNOWN: return PortType::UNKNOWN;
+    }
+    return PortType::UNKNOWN;
+}
 
 std::string get_mobo_name() {
     std::ifstream file("/sys/class/dmi/id/board_name");
@@ -65,12 +82,12 @@ TrayID get_tray_id_for_chip(
         auto bus_id = tt::tt_fabric::get_bus_id(cluster_desc, chip_id);
         log_warning(
             tt::LogAlways,
-            "Unknown motherboard '{}' for chip_id={} (bus_id=0x{:x}) — defaulting tray_id to 0. "
+            "Unknown motherboard '{}' for chip_id={} (bus_id=0x{:x}) — falling back to bus_id as tray_id. "
             "Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.",
             mobo_name,
             chip_id,
             bus_id);
-        return TrayID{0};
+        return TrayID{static_cast<uint32_t>(bus_id)};
     }
 
     std::vector<uint16_t> ordered_bus_ids = mobo_to_bus_ids.at(mobo_name);
@@ -219,6 +236,42 @@ void validate_eth_fw_versions(
         peer_host_name,
         psd.get_ethernet_firmware_version().to_string(),
         peer_ethernet_firmware_version.to_string());
+}
+
+void validate_fw_bundle_versions(
+    PhysicalSystemDescriptor& psd,
+    const std::optional<tt::umd::FirmwareBundleVersion>& peer_firmware_bundle_version,
+    const std::string& my_host_name,
+    const std::string& peer_host_name) {
+    // Skip validation if firmware bundle versions are not available (e.g., CPU-only tests, older UMD)
+    if (!psd.get_firmware_bundle_version().has_value() || !peer_firmware_bundle_version.has_value()) {
+        log_warning(
+            tt::LogMetal,
+            "Skipping firmware bundle version validation between {} and {}: firmware bundle versions not available "
+            "(local: {}, peer: {}). This may occur in CPU-only mode or with older UMD versions.",
+            my_host_name,
+            peer_host_name,
+            psd.get_firmware_bundle_version().has_value() ? "available" : "unavailable",
+            peer_firmware_bundle_version.has_value() ? "available" : "unavailable");
+        return;
+    }
+
+    log_debug(
+        tt::LogMetal,
+        "Validating firmware bundle versions: {} has {} vs {} has {}",
+        my_host_name,
+        psd.get_firmware_bundle_version()->to_string(),
+        peer_host_name,
+        peer_firmware_bundle_version->to_string());
+
+    TT_FATAL(
+        peer_firmware_bundle_version.value() == psd.get_firmware_bundle_version().value(),
+        "Firmware Bundle Versions are expected to be consistent across all nodes in the cluster. The following "
+        "hosts have different Firmware Bundle Versions: {} ({}) and {} ({})",
+        my_host_name,
+        psd.get_firmware_bundle_version()->to_string(),
+        peer_host_name,
+        peer_firmware_bundle_version->to_string());
 }
 
 void remove_unresolved_nodes(PhysicalSystemDescriptor& psd) {
@@ -465,10 +518,12 @@ void exchange_metadata(
     bool issue_gather) {
     using namespace tt::tt_metal::distributed::multihost;
     constexpr uint32_t controller_rank = 0;
-    if (*(distributed_context->size()) == 1) {
+    auto my_rank = *(distributed_context->rank());
+    auto total_size = *(distributed_context->size());
+
+    if (total_size == 1) {
         return;
     }
-    auto my_rank = *(distributed_context->rank());
     std::set<uint32_t> sender_ranks;
     std::set<uint32_t> receiver_ranks;
 
@@ -487,7 +542,6 @@ void exchange_metadata(
             }
         }
     }
-
     if (sender_ranks.contains(my_rank)) {
         auto serialized_desc = serialize_physical_system_descriptor_to_bytes(psd);
         std::size_t desc_size = serialized_desc.size();
@@ -527,6 +581,11 @@ void exchange_metadata(
             validate_eth_fw_versions(
                 psd,
                 peer_desc.get_ethernet_firmware_version(),
+                psd.get_asic_descriptors().begin()->second.host_name,
+                peer_desc.get_asic_descriptors().begin()->second.host_name);
+            validate_fw_bundle_versions(
+                psd,
+                peer_desc.get_firmware_bundle_version(),
                 psd.get_asic_descriptors().begin()->second.host_name,
                 peer_desc.get_asic_descriptors().begin()->second.host_name);
             psd.merge(std::move(peer_desc));
@@ -579,6 +638,18 @@ PhysicalSystemDescriptor run_local_discovery(
     auto& asic_graph = psd.get_system_graph().asic_connectivity_graph[hostname_key];
     auto& exit_nodes = psd.get_exit_node_connection_table()[hostname_key];
 
+    auto make_eth_connection = [&](AsicID src_asic, uint8_t src_chan, uint8_t dst_chan, bool is_local) {
+        return EthConnection{
+            src_chan,
+            dst_chan,
+            is_local,
+            to_metal_port_type(tt::scaleout_tools::resolve_port_type(
+                psd.get_asic_descriptors().at(src_asic).board_type,
+                *psd.get_asic_descriptors().at(src_asic).asic_location,
+                src_chan)),
+        };
+    };
+
     auto add_local_asic_descriptor = [&](AsicID src_unique_id, ChipId src_chip_id) {
         auto [tray_id, asic_location] = get_asic_position(
             cluster_desc,
@@ -611,12 +682,13 @@ PhysicalSystemDescriptor run_local_discovery(
             if (!visited_dst.contains(dst_chip)) {
                 // This neighbor has not been visited. Add it to the graph and mark visited.
                 asic_graph[src_unique_id].push_back(
-                    {AsicID{chip_unique_ids.at(dst_chip)}, {EthConnection(chan, dst_chan, true)}});
+                    {AsicID{chip_unique_ids.at(dst_chip)}, {make_eth_connection(src_unique_id, chan, dst_chan, true)}});
                 visited_dst[dst_chip] = asic_graph[src_unique_id].size() - 1;
             } else {
                 // This neighbor has already been visited. There is more than one channel to it.
                 // Update the existing entry with the new channel.
-                asic_graph[src_unique_id][visited_dst[dst_chip]].second.push_back(EthConnection(chan, dst_chan, true));
+                asic_graph[src_unique_id][visited_dst[dst_chip]].second.push_back(
+                    make_eth_connection(src_unique_id, chan, dst_chan, true));
             }
         }
     }
@@ -634,37 +706,36 @@ PhysicalSystemDescriptor run_local_discovery(
             auto dst_unique_id = AsicID{std::get<0>(remote_info)};
             auto dst_chan = std::get<1>(remote_info);
             if (!visited_dst.contains(dst_unique_id)) {
-                asic_graph[local_unique_id].push_back({dst_unique_id, {EthConnection(eth_chan, dst_chan, false)}});
+                asic_graph[local_unique_id].push_back(
+                    {dst_unique_id, {make_eth_connection(local_unique_id, eth_chan, dst_chan, false)}});
                 visited_dst[dst_unique_id] = asic_graph[local_unique_id].size() - 1;
             } else {
                 asic_graph[local_unique_id][visited_dst[dst_unique_id]].second.push_back(
-                    EthConnection(eth_chan, dst_chan, false));
+                    make_eth_connection(local_unique_id, eth_chan, dst_chan, false));
             }
             exit_nodes.push_back(ExitNodeConnection{
                 .src_exit_node = local_unique_id,
                 .dst_exit_node = dst_unique_id,
-                .eth_conn = EthConnection(eth_chan, dst_chan, false)});
+                .eth_conn = make_eth_connection(local_unique_id, eth_chan, dst_chan, false),
+            });
         }
     }
 
     psd.get_system_graph().host_connectivity_graph[hostname_key] = {};
     // Get Ethernet Firmware Version from the driver - Initialize to 0 if not available
-    psd.get_ethernet_firmware_version() =
-        cluster_desc.get_cluster_eth_fw_version().value_or(tt::umd::semver_t(0, 0, 0));
+    psd.get_ethernet_firmware_version() = cluster_desc.get_cluster_eth_fw_version().value_or(tt::umd::semver_t(0, 0, 0));
+    // Get Firmware Bundle Version from the driver
+    psd.get_firmware_bundle_version() = cluster_desc.get_cluster_firmware_bundle_version();
 
     return psd;
 }
 
 PhysicalSystemDescriptor run_local_discovery_live(
+    tt::umd::ClusterDescriptor& cluster_desc,
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
     tt::TargetDevice target_device_type,
     bool all_hostnames_unique) {
-    std::unique_ptr<tt::umd::ClusterDescriptor> cdptr = tt::umd::Cluster::create_cluster_descriptor();
-
-    // Live discovery and silicon discovery refresh the descriptor from UMD; other modes keep a stable snapshot of
-    // the caller-provided descriptor.
-    auto& cluster_desc_ref = *cdptr;
-    return run_local_discovery(cluster_desc_ref, distributed_context, target_device_type, all_hostnames_unique);
+    return run_local_discovery(cluster_desc, distributed_context, target_device_type, all_hostnames_unique);
 }
 
 }  // namespace discovery_impl
@@ -691,7 +762,8 @@ PhysicalSystemDescriptor run_physical_system_discovery(
 
     PhysicalSystemDescriptor psd =
         dispatch_live
-            ? discovery_impl::run_local_discovery_live(distributed_context, target_device_type, all_hostnames_unique)
+            ? discovery_impl::run_local_discovery_live(
+                  cluster_desc, distributed_context, target_device_type, all_hostnames_unique)
             : discovery_impl::run_local_discovery(
                   cluster_desc, distributed_context, target_device_type, all_hostnames_unique);
 

@@ -6,7 +6,7 @@ add_library(
     ALIAS ttnn_op_experimental_deepseek_prefill_moe_grouped_topk
 )
 
-target_precompile_headers(ttnn_op_experimental_deepseek_prefill_moe_grouped_topk REUSE_FROM TTNN::PCH)
+target_precompile_headers(ttnn_op_experimental_deepseek_prefill_moe_grouped_topk REUSE_FROM TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_deepseek_prefill_moe_grouped_topk)
 
 set_target_properties(

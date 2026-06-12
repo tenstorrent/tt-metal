@@ -9,6 +9,11 @@ from loguru import logger
 from math import prod
 import torch
 
+# Force torch CPU ops to use all cores. bf16 matmul on CPU is single-thread on
+# some torch builds even with OMP_NUM_THREADS set; this is the runtime knob that
+# keeps host-side golden compute fast. See test_moe_compute_6U.py for context.
+torch.set_num_threads(os.cpu_count() or 1)
+
 import ttnn
 
 from ttnn.experimental.moe_compute_utils import cluster_distance, map_shared_experts
@@ -747,6 +752,10 @@ def get_shared_expert_to_device_map(routed_experts, devices, mode):
             routed_experts + 1: list(range(1, devices, 2)),
         }
 
+    # 2 shared fully replicated, same as DeepSeek OCR
+    elif mode == "all_shared_x2":
+        return {routed_experts: list(range(devices)), routed_experts + 1: list(range(devices))}
+
     else:
         raise RuntimeError("Invalid shared expert mode")
 
@@ -797,7 +806,7 @@ def get_shared_expert_to_device_map(routed_experts, devices, mode):
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("routed_experts_per_device", [2])
-@pytest.mark.parametrize("shared_expert_mode", ["no_shared", "all_shared", "alternate_shared"])
+@pytest.mark.parametrize("shared_expert_mode", ["no_shared", "all_shared", "all_shared_x2", "alternate_shared"])
 def test_correctness(mesh_device, mesh_shape, cluster_axis, routed_experts_per_device, shared_expert_mode):
     batches_per_device = 32
     routed_experts = routed_experts_per_device * mesh_shape[cluster_axis]

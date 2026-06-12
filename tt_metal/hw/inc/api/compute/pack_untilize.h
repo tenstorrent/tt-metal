@@ -282,6 +282,23 @@ ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __
     pack_untilize_detail::pack_untilize_init_impl<block_ct_dim, full_ct_dim, true>(icb, ocb, call_line);
 }
 
+// clang-format off
+/**
+ * Same as `pack_untilize_init`, but does not (re)configure BH DEST remap. Use this when the caller has
+ * already configured BH DEST remap (and no intervening operation requires a different DEST remap state).
+ * On non-Blackhole architectures this behaves the same as `pack_untilize_init`. See `pack_untilize_init`
+ * for the full description and parameter list.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name         | Description                       | Type     | Valid Range               | Required            |
+ * |------------|--------------|-----------------------------------|----------|---------------------------|---------------------|
+ * | Template   | block_ct_dim | Width of a single block in tiles  | uint32_t | 1 to max (see note)       | False (default = 8) |
+ * | Template   | full_ct_dim  | Width of a full input in tiles    | uint32_t | Divisible by block_ct_dim | False               |
+ * | Function   | icb          | Input circular buffer identifier  | uint32_t | 0 to 31                   | True                |
+ * | Function   | ocb          | Output circular buffer identifier | uint32_t | 0 to 31                   | True                |
+ */
+// clang-format on
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
 ALWI void pack_untilize_init_skip_remap(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     pack_untilize_detail::pack_untilize_init_impl<block_ct_dim, full_ct_dim, false>(icb, ocb, call_line);

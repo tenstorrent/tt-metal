@@ -48,6 +48,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     bool use_column_major_ccl,
     bool is_causal,
     bool is_balanced,
+    bool is_cross,
     std::optional<uint32_t> kv_cache_batch_idx,
     std::optional<uint32_t> kv_actual_isl) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
@@ -75,6 +76,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         ccl_core_grid_offset,
         is_causal,
         is_balanced,
+        is_cross,
         scale,
         compute_kernel_config,
         strategy,
@@ -473,6 +475,7 @@ void bind_sdpa(nb::module_& mod) {
                 If False (default), uses row-major allocation. Defaults to False.
             is_causal (bool): Whether to use causal attention masking. Defaults to False.
             is_balanced (bool): Whether to use balanced attention computation. Defaults to False.
+            is_cross (bool): Whether to use non-causal cross-attention (short Q, long K/V). Defaults to False.
             kv_cache_batch_idx (int, optional): Selects the shared K/V cache batch slot when K and V are full caches.
             kv_actual_isl (int, optional): Prior valid global KV length before this fixed-size chunk.
                 When passed, enables KV-pad-aware rotation and derives current valid tokens as
@@ -525,6 +528,7 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("use_column_major_ccl") = false,
         nb::arg("is_causal").noconvert() = false,
         nb::arg("is_balanced").noconvert() = false,
+        nb::arg("is_cross").noconvert() = false,
         nb::arg("kv_cache_batch_idx").noconvert() = nb::none(),
         nb::arg("kv_actual_isl").noconvert() = nb::none());
 
