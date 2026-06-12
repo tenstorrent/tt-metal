@@ -255,13 +255,17 @@ def _tt_audio(
 # ---------------------------------------------------------------------------
 
 
-def _setup(ckpt_path: Path, device) -> tuple[KModel, TTKModel, str, torch.Tensor]:
+def _setup(ckpt_path: Path, device, *, disable_complex: bool = True) -> tuple[KModel, TTKModel, str, torch.Tensor]:
     phonemes, ref_s = _phonemize(_TEST_TEXT)
 
+    # disable_complex=False -> reference generator uses TorchSTFT (torch.stft), the same STFT as the
+    # TT use_torch_stft_fallback path. disable_complex=True -> CustomSTFT (conv1d), which must be
+    # paired with the on-device TTCustomSTFT (the custom_stft tests). Pairing TTTorchSTFT against
+    # CustomSTFT adds a spurious phase-convention mismatch at near-zero-magnitude STFT bins.
     ref = KModel(
         repo_id="hexgrad/Kokoro-82M",
         model=str(ckpt_path),
-        disable_complex=True,
+        disable_complex=disable_complex,
     ).eval()
 
     params = preprocess_tt_kmodel(ref, device)
@@ -422,7 +426,22 @@ def test_tt_kmodel_custom_stft_phase_fallback_pcc(device):
 
 
 def test_tt_kmodel_stft_and_phase_fallback_pcc(device):
-    """Config E — recommended config: STFT + SineGen + Phase. Empirical PCC ≈ 0.408.
+    """Config E — recommended config: STFT + SineGen + Phase. Measured PCC = 0.883261 (23 phonemes).
+
+    The reference is built ``disable_complex=False`` so its generator uses ``TorchSTFT``
+    (``torch.stft``) — the *same* STFT formulation as the TT ``use_torch_stft_fallback`` vocoder.
+    Pairing the TT ``TTTorchSTFT`` against the old ``disable_complex=True`` reference (``CustomSTFT``)
+    was apples-to-oranges and cost ~0.038 end-to-end (~0.072 at decoder isolation) via a spurious
+    STFT phase-convention mismatch at near-zero-magnitude bins (~63% of harmonic-source bins are
+    spectral silence, where atan2 phase is ill-defined and the two STFTs disagree by up to ±2π).
+
+    The iSTFT op is **numerically faithful** — not a precision sink, not a formulation ceiling
+    (its conv_transpose2d OLA is device-only because the dense iSTFT matrix would be ~19.36 GiB
+    > 1 GiB and is skipped — see ``tt_torch_stft.py:303`` log — yet it reproduces a float64
+    evaluation of the same math to PCC 0.999997). With the matched reference AND a perfect harmonic
+    source, the whole decoder+iSTFT reaches G7_audio ~0.998. The residual Config-E gap is the
+    on-device SineGen/m_source harmonic source (BF16 phase chain), not the STFT/iSTFT — localized
+    op-by-op in ``test_tt_kmodel_pcc_degradation.py``.
 
     These CPU fallbacks address the two dominant BH-BF16 precision failure points in the
     vocoder. Each is justified by a per-op test under ``test_tt_torch_stft_pcc.py`` /
@@ -448,13 +467,18 @@ def test_tt_kmodel_stft_and_phase_fallback_pcc(device):
     Also enables ``use_torch_linear_fallback`` and ``use_torch_tanh_fallback`` so the
     m_source merge matches ref after CPU f0 upsample + SineGen (see ``DECODE_STACK_NOTES.md``).
 
-    Floor (> 0.55): fp32 prosody path + STFT/phase fallbacks; captured text ~0.79 PCC.
+    Floor (> 0.84): fp32 prosody path + STFT/phase fallbacks. Measured 0.883261 at 23 phonemes
+    (ref disable_complex=False); floor kept at 0.84 for run-to-run margin. The residual gap to 1.0
+    is the on-device SineGen/m_source harmonic source; see ``test_tt_kmodel_pcc_degradation.py``
+    for the op-by-op localization of the ~0.15 deficit.
     """
     ckpt_path = _find_checkpoint()
     if ckpt_path is None:
         pytest.skip("Kokoro-82M checkpoint not found locally.")
 
-    ref, params, phonemes, ref_s = _setup(ckpt_path, device)
+    # TT vocoder uses TTTorchSTFT (torch.stft formulation); pair it with the matching reference
+    # (disable_complex=False -> TorchSTFT) so the comparison is apples-to-apples.
+    ref, params, phonemes, ref_s = _setup(ckpt_path, device, disable_complex=False)
     y_ref = _ref_audio(ref, phonemes, ref_s)
 
     y_hat = _tt_audio(device, ref, params, phonemes, ref_s, **STFT_PHASE_FALLBACK_KWARGS)
