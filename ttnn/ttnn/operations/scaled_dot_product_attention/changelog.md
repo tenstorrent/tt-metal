@@ -144,3 +144,62 @@
   — 20 cases: GQA/MQA over 6 head-ratio shapes × {bf16, fp32, bf8b},
   MQA composed with a custom additive mask, and a non-divisible-heads
   rejection check.
+
+## Refinement 3 — Causal masking (on-device triangular bias)  [x] complete
+- **Date**: 2026-06-12
+- **What was done**:
+  - `SUPPORTED["mask_mode"]` += `"causal"` (was `["none", "custom"]`).
+  - `EXCLUSIONS` += `{"mask_mode": "causal", "attention_kind": "cross"}` —
+    causal requires a square score matrix (S_q == S_kv, decoder self-attn);
+    the on-device generation path assumes it. Rectangular causal is refused
+    (raises `ExcludedCell`/`NotImplementedError` → observed as xfail_expected).
+  - **On-device triangular bias, generated ONCE.** Because the kernel runs
+    `q_chunk_t == k_chunk_t == 1` and causal forces S_q == S_kv, the
+    diagonal-straddling KV block is always `j == qi` and its per-element mask
+    (element (r,c) = 0 if c <= r else -inf) is the SAME constant 32x32 tile for
+    every work unit. The reader generates it once at kernel start into a
+    dedicated `cb_causal_mask` (1 bf16 page, allocated only when `is_causal`)
+    via a manual L1 fill that honors the 32x32 4-face (16x16) tile layout —
+    so the bytes are byte-identical to a TILE-layout DRAM mask read. bf16 is
+    exact for {0, -inf}; -inf bit pattern 0xFF80.
+  - **Three-region control flow.** Both reader and compute cap the KV loop at
+    `j <= qi`: future blocks (`j > qi`) are never read or computed (the
+    ~half-KV-work causal speedup, and keeps cb_k_in/cb_v_in push==wait). Past
+    blocks (`j < qi`) get no mask (fully attended). The diagonal block
+    (`j == qi`) adds `cb_causal_mask` (HeldStream) to the score block at the
+    Phase E slot, then the unchanged online-softmax recurrence runs.
+  - **New args**: reader CT8 `is_causal` (accessor CT offsets 8→9); compute
+    CT3 `is_causal` + CT4 `S_q_t` + RT1 `start_unit` so compute decodes
+    `qi = (start_unit + u) % S_q_t`. Program descriptor gained an `is_causal`
+    param threaded from the entry point.
+  - The masking math is structurally identical to the already-validated
+    custom-mask path (the golden "custom" cell uses the same triangular -inf
+    additive bias), so correctness was pre-proven; the new work is the
+    on-device generation + block-skipping control flow.
+- **Accuracy achieved** (randn inputs, default config):
+  - bf16: PCC >= 0.995. fp32: PCC >= 0.999. bf8b: PCC >= 0.99. All shapes in
+    `test_scaled_dot_product_attention_causal.py` (single-tile, multi-tile,
+    multi-head, multi-batch, GQA 4:1, MQA 8:1, Llama3 GQA) pass.
+  - Deterministic diagonal-block check (`test_causal_first_row_...`): with a
+    single Q tile-row, output row 0 attends only to key 0 — verified exact.
+- **Golden test progress**: **880 / 1156 passing** (was 647 at Refinement 2),
+  228 xfailed, 1 skipped, **8 failed**. **+233 newly passing** = the
+  `mask_mode=causal, attention_kind=self, tile_aligned` registry cells across
+  bf16/fp32/bf8b and mha/gqa/mqa. **Zero causal-specific failures; zero XPASS
+  drift.** The 8 failures are all pre-existing, out-of-scope deferrals:
+  - 6× `Q1x1x128x1024` fp32 → L1 OOM (`program.cpp:1450`). Fails IDENTICALLY
+    for `mask_mode ∈ {none, custom, causal}` at this shape, confirming it is
+    the fp32 D=1024 large-head-dim OOM, **orthogonal to causal** → Refinement 5.
+    (Causal adds only one bf16 mask tile; the OOM is the D_t=32 fp32 CBs.)
+  - 2× `Q1x1x8192x64` fp32 (mask_mode=none) → SFPU-exp precision floor
+    (rms 0.0284 vs 0.02) → Refinement 6. Note: causal+S=8192+fp32 is NOT among
+    the failures — causal processes ~half the KV blocks, so the
+    √num_blocks exp-accumulation error stays below the 0.02 target.
+- **Issues encountered**: None. Passed on the first kernel implementation
+  (35/35 new causal tests under both --dev and non-dev; no regression on the
+  44 acceptance + GQA/MQA cases).
+- **Tests added**: `tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention_causal.py`
+  — 35 cases: causal self-attn over 10 shapes × {bf16, fp32, bf8b}, explicit
+  vs auto scale, a deterministic diagonal-block correctness check, the
+  causal+cross EXCLUSION (NotImplementedError), and is_causal+attn_mask
+  mutual-exclusion (ValueError).

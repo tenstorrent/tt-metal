@@ -119,7 +119,7 @@ canaries (currently failing `other` = validate() rejection) in addition to the
 
 ---
 
-### [ ] Refinement 3 — Causal masking (on-device triangular bias)
+### [x] Refinement 3 — Causal masking (on-device triangular bias)
 
 **Goal**: add `"causal"` to `SUPPORTED["mask_mode"]`. Generate the triangular
 −inf bias **on-device** from `is_causal` (never a caller tensor, never a
