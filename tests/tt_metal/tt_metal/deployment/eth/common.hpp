@@ -771,6 +771,13 @@ double get_eth_bw() {
     }
 }
 
+void print_detected_devices() {
+    log_info(tt::LogTest, "Detected devices:");
+    for (auto& l : get_chip_physical_locations()) {
+        log_info(tt::LogTest, "  {}", l);
+    }
+}
+
 }  // namespace tt::tt_metal
 
 #endif /* _ETH_COMMON_HPP */

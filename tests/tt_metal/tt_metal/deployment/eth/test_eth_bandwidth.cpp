@@ -112,6 +112,8 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet01Bandwidth) {
     vector<LinkError> errors;
     int n = 0;
 
+    print_detected_devices();
+
     for (const auto& sender_mesh_device : devices_) {
         auto* const sender_device = sender_mesh_device->get_devices()[0];
         for (const auto& receiver_mesh_device : devices_) {
