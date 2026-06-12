@@ -12,9 +12,9 @@ These ops transfer a tensor between two submeshes of a single ``MeshDevice`` usi
 into the receiver's output tensor and uses the socket only for the handshake/completion signal.
 
 ``buffered_recv`` differs from ``recv_direct_async`` in that it takes ``N`` output tensors (a ring of
-receive buffers) and a global semaphore used to coordinate buffer availability. The buffered receive
-logic is currently a skeleton, so these tests exercise the op wiring and validate correctness on the
-first buffer.
+receive buffers); buffer availability is coordinated through an internally-allocated, zero-initialized
+persistent L1_SMALL buffer. The buffered receive logic is currently a skeleton, so these tests
+exercise the op wiring and validate correctness on the first buffer.
 """
 
 import pytest
@@ -80,22 +80,18 @@ def _run_buffered_send_recv_case(
         ttnn.allocate_tensor_on_device(input_tensor.spec, receiver_mesh_device) for _ in range(num_buffers)
     ]
 
-    # Global semaphore used by buffered_recv to coordinate buffer availability.
-    grid = receiver_mesh_device.compute_with_storage_grid_size()
-    available_cores = ttnn.num_cores_to_corerangeset(grid.x * grid.y, grid, row_wise=True)
-    global_semaphore = ttnn.create_global_semaphore(receiver_mesh_device, available_cores, 0)
-
-    print("Running buffered_send")
-    ttnn.experimental.buffered_send(input_tensor, send_socket)
-    print("Running buffered_recv")
-    # buffered_recv returns a single tensor (the receive buffer that holds the data).
-    output_tensor = ttnn.experimental.buffered_recv(output_tensors, recv_socket, global_semaphore)
-
-    print("Synchronizing devices")
-    ttnn.synchronize_device(sender_mesh_device)
-    print("Finished synchronizing sender")
-    ttnn.synchronize_device(receiver_mesh_device)
-    print("Finished synchronizing receiver")
+    for x in range(10):
+        print("Running buffered_send")
+        ttnn.experimental.buffered_send(input_tensor, send_socket)
+        print("Running buffered_recv")
+        # buffered_recv returns a single tensor (the receive buffer that holds the data). Buffer
+        # availability is coordinated by an internal, zero-initialized persistent L1_SMALL buffer.
+        output_tensor = ttnn.experimental.buffered_recv(output_tensors, recv_socket)
+        print("Synchronizing devices")
+        ttnn.synchronize_device(sender_mesh_device)
+        print("Finished synchronizing sender")
+        ttnn.synchronize_device(receiver_mesh_device)
+        print("Finished synchronizing receiver")
     input_data = ttnn.to_torch(input_tensor, mesh_composer=ttnn.ConcatMeshToTensor(sender_mesh_device, dim=0))
     # SKELETON: only the first receive buffer is wired up for now.
     output_data = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(receiver_mesh_device, dim=0))
@@ -104,7 +100,9 @@ def _run_buffered_send_recv_case(
 
 
 @pytest.mark.timeout(120)
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": 2048}], indirect=True
+)
 @pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)
 @pytest.mark.parametrize(
     "tensor_shape",
@@ -118,7 +116,9 @@ def _run_buffered_send_recv_case(
 )
 @pytest.mark.parametrize(
     "num_connections",
-    [1],
+    [
+        1,
+    ],
     ids=lambda v: f"conn{v}",
 )
 @pytest.mark.parametrize(

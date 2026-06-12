@@ -9,41 +9,21 @@
 #include "api/socket_api.h"
 #include "api/tensor/tensor_accessor.h"
 #include "api/debug/dprint.h"  // required in all kernels using DPRINT
+#include "ttnn/operations/experimental/ccl/send_recv_async/buffered_common/buffered_async_types.hpp"
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
 constexpr uint32_t data_cb_id = get_compile_time_arg_val(0);
 constexpr uint32_t fabric_packet_header_cb_id = get_compile_time_arg_val(1);
-constexpr uint32_t handshake_cb_id = get_compile_time_arg_val(2);
-constexpr uint32_t handshake_page_size = get_compile_time_arg_val(3);
-constexpr uint32_t output_page_size = get_compile_time_arg_val(4);
-constexpr uint32_t socket_page_size = get_compile_time_arg_val(5);
-constexpr uint32_t num_pages_per_packet = get_compile_time_arg_val(6);
-constexpr uint32_t num_whole_packets_per_page = get_compile_time_arg_val(7);
-constexpr uint32_t partial_packet_size = get_compile_time_arg_val(8);
-constexpr uint32_t whole_packet_size = get_compile_time_arg_val(9);
-constexpr uint32_t output_args_cta_idx = 10;
+constexpr uint32_t handshake_page_size = get_compile_time_arg_val(2);
+constexpr uint32_t output_page_size = get_compile_time_arg_val(3);
+constexpr uint32_t socket_page_size = get_compile_time_arg_val(4);
+constexpr uint32_t num_pages_per_packet = get_compile_time_arg_val(5);
+constexpr uint32_t num_whole_packets_per_page = get_compile_time_arg_val(6);
+constexpr uint32_t partial_packet_size = get_compile_time_arg_val(7);
+constexpr uint32_t whole_packet_size = get_compile_time_arg_val(8);
+constexpr uint32_t output_args_cta_idx = 9;
 constexpr uint32_t output_args_crta_idx = 0;
-
-// Upper bound on the size of the receiver's ring of receive buffers. Only used to size a scratch
-// array; the actual count is advertised by the receiver at runtime (INFO_NUM_TENSORS_OFFSET).
-constexpr uint32_t MAX_OUTPUT_TENSORS = 12;
-
-// Handshake landing-zone layout (must match buffered_recv/device/kernels/receiver_buffered.cpp).
-// Offsets are in bytes from the base of handshake page 0. The receiver bulk-writes the
-// OutputTensorInfo struct at INFO_STRUCT_OFFSET (kept 0 so the NoC write destination is aligned),
-// then sets the 4-byte valid flag at the end of the page last so the sender never observes a
-// partially-written struct.
-constexpr uint32_t INFO_STRUCT_OFFSET = 0;
-// OutputTensorInfo struct fields (relative to handshake page 0):
-constexpr uint32_t INFO_NUM_TENSORS_OFFSET = INFO_STRUCT_OFFSET + 0;
-constexpr uint32_t INFO_PAGE_SIZE_OFFSET = INFO_STRUCT_OFFSET + 4;
-constexpr uint32_t INFO_NUM_PAGES_OFFSET = INFO_STRUCT_OFFSET + 8;
-// Array of `num_tensors` output base addresses (one per receive buffer in the ring).
-constexpr uint32_t INFO_BASE_ADDR_OFFSET = INFO_STRUCT_OFFSET + 12;
-// Valid sentinel lives in the last word of the handshake page so it never overlaps the struct and
-// is written by a separate (4-byte aligned) inline write after the struct lands.
-constexpr uint32_t INFO_VALID_OFFSET = handshake_page_size - sizeof(uint32_t);
 
 FORCE_INLINE void fabric_write_page(
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
@@ -68,6 +48,10 @@ void kernel_main() {
     uint32_t page_start_offset = get_arg_val<uint32_t>(rt_args_idx++);    // page start offset for this core
     uint32_t num_whole_packets = get_arg_val<uint32_t>(rt_args_idx++);    // whole packets for this core
     uint32_t num_pages_remainder = get_arg_val<uint32_t>(rt_args_idx++);  // remainder pages for this core
+    // Base address of the persistent L1_SMALL handshake buffer: page 0 is the dest-info landing
+    // zone (the receiver writes the OutputTensorInfo struct here), page 1 stages the advertise
+    // payload.
+    uint32_t handshake_base_addr = get_arg_val<uint32_t>(rt_args_idx++);
 
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
@@ -90,58 +74,60 @@ void kernel_main() {
     sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
     fabric_set_unicast_route(data_packet_header_addr, downstream_enc);
 
-    // Handshake buffer: page 0 is the dest-info landing zone, page 1 stages the advertise payload.
-    uint32_t handshake_base_addr = get_write_ptr(handshake_cb_id);
-    uint32_t advertise_stage_addr = handshake_base_addr + handshake_page_size;
+    // Handshake buffer pages: page 0 is the dest-info landing zone, page 1 stages the advertise
+    // payload. Both live in the persistent L1_SMALL buffer addressed by handshake_base_addr.
 
-    // Clear the valid flag before advertising so we never observe a stale completion.
-    volatile tt_l1_ptr uint32_t* valid_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_base_addr);
-    *valid_ptr = 0;
-
-    // Stage the address the receiver should write its dest-info struct back to.
-    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(advertise_stage_addr)[0] = handshake_base_addr;
+    // The receiver signals validity by writing the OutputTensorInfo struct, whose first field
+    // (num_tensors) becomes non-zero once the struct lands. Clear it before advertising so we never
+    // observe a stale completion.
+    auto* dest_info_ptr = reinterpret_cast<volatile tt_l1_ptr OutputTensorInfo*>(handshake_base_addr);
 
     //////////////////////////////////////////////////
     // STEP 1: advertise the handshake-buffer address over the socket
     //////////////////////////////////////////////////
-    DPRINT("advertise_stage_addr = {}\n", advertise_stage_addr);
-    {
+    DPRINT("handshake_base_addr = {}, handshake_page_size = {}\n", handshake_base_addr, handshake_page_size);
+    if (dest_info_ptr->num_tensors == 0) {
         socket_reserve_pages(sender_socket, 1);
         uint64_t advertise_dst_addr = get_noc_addr(
             downstream_enc.d2d.downstream_noc_x,
             downstream_enc.d2d.downstream_noc_y,
             sender_socket.downstream_fifo_addr + sender_socket.write_ptr);
-        fabric_write_page(
-            fabric_connection, data_packet_header_addr, advertise_stage_addr, advertise_dst_addr, handshake_page_size);
+
+        data_packet_header_addr->to_noc_unicast_inline_write(
+            NocUnicastInlineWriteCommandHeader{advertise_dst_addr, handshake_base_addr});
+        fabric_connection.wait_for_empty_write_slot();
+        fabric_connection.send_payload_flush_blocking_from_address(
+            (uint32_t)data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+
+        // fabric_write_page(
+        //     fabric_connection, data_packet_header_addr, advertise_stage_addr, advertise_dst_addr,
+        //     handshake_page_size);
         socket_push_pages(sender_socket, 1);
         fabric_socket_notify_receiver(sender_socket, fabric_connection, socket_packet_header_addr);
-    }
-    DPRINT("Sent handshake address to receiver\n");
+        DPRINT("Sent handshake address to receiver\n");
 
-    //////////////////////////////////////////////////
-    // STEP 2: wait for the receiver to write back the destination tensor info, including the ring of
-    // receive-buffer base addresses.
-    //
-    // SKELETON: the data is streamed into the first receive buffer only. The N-buffer ring and the
-    // global-semaphore-based coordination still need to be implemented.
-    //////////////////////////////////////////////////
-    DPRINT("Waiting for destination tensor info from receiver in {}\n", handshake_base_addr);
-    do {
-        invalidate_l1_cache();
-    } while (*valid_ptr == 0);
-    DPRINT("Received destination tensor info from receiver\n");
-    uint32_t num_output_buffers =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_base_addr + INFO_NUM_TENSORS_OFFSET)[0];
-    DPRINT("num_output_buffers = {}\n", num_output_buffers);
-    // Receive all advertised output base addresses (the ring of receive buffers).
-    uint32_t output_base_addrs[MAX_OUTPUT_TENSORS];
-    for (uint32_t i = 0; i < num_output_buffers; ++i) {
-        output_base_addrs[i] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-            handshake_base_addr + INFO_BASE_ADDR_OFFSET + i * sizeof(uint32_t))[0];
+        //////////////////////////////////////////////////
+        // STEP 2: wait for the receiver to write back the destination tensor info, including the ring of
+        // receive-buffer base addresses.
+        //
+        // SKELETON: the data is streamed into the first receive buffer only. The N-buffer ring and the
+        // global-semaphore-based coordination still need to be implemented.
+        //////////////////////////////////////////////////
+        DPRINT("Waiting for destination tensor info from receiver in {}\n", handshake_base_addr);
+        do {
+            invalidate_l1_cache();
+        } while (dest_info_ptr->num_tensors == 0);
+        DPRINT("Received destination tensor info from receiver\n");
+
+    } else {
+        DPRINT("Destination tensor info already received from receiver\n");
     }
-    DPRINT("output_base_addrs = {}\n", output_base_addrs);
-    uint32_t output_base_addr = output_base_addrs[0];
-    // DPRINT("output_base_addr = {}\n", output_base_addr);
+
+    // Copy the whole OutputTensorInfo struct out of the landing zone exactly once, then work from
+    // the local copy (the ring of receive-buffer base addresses lives in dest_info.base_addr).
+    OutputTensorInfo dest_info = *reinterpret_cast<tt_l1_ptr OutputTensorInfo*>(handshake_base_addr);
+    DPRINT("num_output_buffers = {}\n", dest_info.num_tensors);
+    uint32_t output_base_addr = dest_info.base_addr[0];
     auto output_addr_gen_args = TensorAccessorArgs<output_args_cta_idx, output_args_crta_idx>();
     auto output_addr_gen = TensorAccessor(output_addr_gen_args, output_base_addr, output_page_size);
     //////////////////////////////////////////////////

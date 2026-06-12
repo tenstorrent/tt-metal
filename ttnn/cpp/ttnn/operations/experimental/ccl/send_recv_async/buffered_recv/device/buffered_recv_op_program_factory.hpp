@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tt-metalium/mesh_buffer.hpp>
+
 #include "buffered_recv_op_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
@@ -12,6 +14,10 @@ namespace ttnn::experimental::prim {
 struct BufferedRecvSharedVariables {
     std::vector<tt::tt_metal::CoreCoord> receiver_core_coords;
     tt::tt_metal::KernelHandle handshake_kernel_id{};
+    // Internally-allocated, zero-initialized persistent L1_SMALL buffer used to coordinate receive-
+    // buffer availability (replaces the previously caller-provided global semaphore). Kept alive
+    // here so the device-side allocation outlives the cached workload and its address stays stable.
+    tt::tt_metal::distributed::AnyBuffer coordination_buffer;
 };
 
 struct BufferedRecvMeshWorkloadFactory {

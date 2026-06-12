@@ -18,8 +18,9 @@ void bind_buffered_recv(nb::module_& mod) {
         Performs a buffered recv paired with buffered_send.
 
         Unlike recv_direct_async (which takes a single output tensor), buffered_recv takes N
-        output tensors that act as a ring of receive buffers, the receive :attr:`mesh_socket`, and a
-        :attr:`global_semaphore` used to coordinate buffer availability.
+        output tensors that act as a ring of receive buffers and the receive :attr:`mesh_socket`.
+        Buffer availability is coordinated through an internally-allocated, zero-initialized
+        persistent L1_SMALL buffer (no caller-provided global semaphore is required).
 
         Note:
             This is currently a skeleton implementation; the full buffered receive logic is not yet
@@ -28,7 +29,6 @@ void bind_buffered_recv(nb::module_& mod) {
         Args:
             output_tensors (List[ttnn.Tensor]): Tensors to receive the data into.
             mesh_socket (ttnn.MeshSocket): MeshSocket to receive the data from.
-            global_semaphore (ttnn.GlobalSemaphore): Global semaphore used to coordinate buffers.
 
         Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md
 
@@ -38,8 +38,7 @@ void bind_buffered_recv(nb::module_& mod) {
         )doc",
         &ttnn::experimental::buffered_recv,
         nb::arg("output_tensors"),
-        nb::arg("mesh_socket"),
-        nb::arg("global_semaphore"));
+        nb::arg("mesh_socket"));
 }
 
 }  // namespace ttnn::operations::experimental::ccl

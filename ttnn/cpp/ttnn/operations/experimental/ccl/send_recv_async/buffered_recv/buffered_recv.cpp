@@ -12,10 +12,8 @@
 namespace ttnn::experimental {
 
 ttnn::Tensor buffered_recv(
-    const std::vector<ttnn::Tensor>& output_tensors,
-    const tt::tt_metal::distributed::MeshSocket& mesh_socket,
-    const tt::tt_metal::GlobalSemaphore& global_semaphore) {
-    return ttnn::prim::buffered_recv(output_tensors, mesh_socket, global_semaphore);
+    const std::vector<ttnn::Tensor>& output_tensors, const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
+    return ttnn::prim::buffered_recv(output_tensors, mesh_socket);
 }
 
 }  // namespace ttnn::experimental

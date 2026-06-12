@@ -13,6 +13,8 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_recv_utils.hpp"
@@ -108,6 +110,33 @@ BufferedRecvMeshWorkloadFactory::create_at(
         receiver_core_range_set = receiver_core_range_set.merge(CoreRangeSet({CoreRange(core, core)}));
     }
 
+    // Internally-allocated persistent L1_SMALL buffer used to coordinate receive-buffer availability
+    // (replaces the previously caller-provided global semaphore). One uint32 per receiver core,
+    // HEIGHT_SHARDED so every core sees its word at the same L1 address, mirroring how GlobalSemaphore
+    // allocates its backing buffer. Zero-initialized below with a blocking write so the kernel always
+    // observes a clean slate before it runs.
+    uint32_t coordination_page_size = sizeof(uint32_t);
+    auto coordination_shard_parameters = tt::tt_metal::ShardSpecBuffer(
+        receiver_core_range_set, {1, 1}, tt::tt_metal::ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
+    tt::tt_metal::ShardedBufferConfig coordination_buffer_config = {
+        .device = output_tensor.device(),
+        .size = num_cores * coordination_page_size,
+        .page_size = coordination_page_size,
+        .buffer_type = tt::tt_metal::BufferType::L1_SMALL,
+        .buffer_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+        .shard_parameters = std::move(coordination_shard_parameters),
+    };
+    auto coordination_buffer = tt::tt_metal::distributed::AnyBuffer::create(coordination_buffer_config);
+    auto coordination_buffer_addr = static_cast<uint32_t>(coordination_buffer.get_buffer()->address());
+
+    // Zero-initialize the coordination buffer (blocking, so the reset lands before the program runs).
+    {
+        std::vector<uint32_t> zeros(num_cores, 0);
+        auto coordination_mesh_buffer = coordination_buffer.get_mesh_buffer();
+        tt::tt_metal::distributed::EnqueueWriteMeshBuffer(
+            mesh_device->mesh_command_queue(), coordination_mesh_buffer, zeros, /*blocking=*/true);
+    }
+
     uint32_t packet_header_cb_num_pages = 2;
     uint32_t packet_header_cb_page_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
@@ -122,22 +151,10 @@ BufferedRecvMeshWorkloadFactory::create_at(
 
     const auto num_output_tensors = static_cast<uint32_t>(tensor_args.size());
 
-    // CB to stage the OutputTensorInfo struct advertised back to the sender:
-    // {num_tensors, page_size, num_pages, base_addr[num_output_tensors]}.
-    auto output_info_cb_index = tt::CBIndex::c_1;
-    uint32_t output_info_cb_page_size =
-        tt::align(static_cast<uint32_t>((3 + num_output_tensors) * sizeof(uint32_t)), max_alignment);
-    tt::tt_metal::CircularBufferConfig cb_output_info_config =
-        tt::tt_metal::CircularBufferConfig(output_info_cb_page_size, {{output_info_cb_index, tt::DataFormat::UInt32}})
-            .set_page_size(output_info_cb_index, output_info_cb_page_size);
-
-    CreateCircularBuffer(program, receiver_core_range_set, cb_output_info_config);
-
     std::vector<uint32_t> handshake_compile_args = {
         packet_header_cb_index,  // fabric_packet_header_cb_id
         handshake_page_size,     // handshake_page_size (socket page size)
-        num_output_tensors,      // num_output_tensors (ring of receive buffers)
-        output_info_cb_index,    // output_info_cb_id
+        num_output_tensors       // num_output_tensors (ring of receive buffers)
     };
 
     auto handshake_kernel_id = tt::tt_metal::CreateKernel(
@@ -145,8 +162,9 @@ BufferedRecvMeshWorkloadFactory::create_at(
         "ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/buffered_recv/device/kernels/"
         "receiver_buffered.cpp",
         receiver_core_range_set,
-        tt::tt_metal::WriterDataMovementConfig(handshake_compile_args));
+        tt::tt_metal::ReaderDataMovementConfig(handshake_compile_args));
 
+    log_info(tt::LogOp, "Coordination buffer address: {}", coordination_buffer_addr);
     for (uint32_t core_idx = 0; core_idx < num_cores; ++core_idx) {
         log_info(tt::LogOp, "Launching buffered recv receiver kernel for core {}", receiver_core_coords[core_idx]);
         const auto& receiver_core_coord = receiver_core_coords[core_idx];
@@ -157,6 +175,7 @@ BufferedRecvMeshWorkloadFactory::create_at(
             mesh_socket.get_config_buffer()->address(),  // socket_config_addr
             static_cast<uint32_t>(output_page_size),     // output_page_size
             static_cast<uint32_t>(total_num_pages),      // num_pages
+            coordination_buffer_addr,                    // coordination_buffer_addr (persistent L1_SMALL)
         };
         // One base address per output tensor in the ring of receive buffers.
         for (const auto& tensor : tensor_args) {
@@ -183,6 +202,7 @@ BufferedRecvMeshWorkloadFactory::create_at(
         shared_variables_t{
             .receiver_core_coords = receiver_core_coords,
             .handshake_kernel_id = handshake_kernel_id,
+            .coordination_buffer = std::move(coordination_buffer),
         }};
 }
 
@@ -199,11 +219,15 @@ void BufferedRecvMeshWorkloadFactory::override_runtime_arguments(
 
         const auto& mesh_socket = operation_attributes.mesh_socket;
 
-        // Runtime arg layout: [socket_config_addr, output_page_size, num_pages, output_base_addr[0..N]].
-        constexpr size_t output_base_addr_offset = 3;
+        // Runtime arg layout:
+        // [socket_config_addr, output_page_size, num_pages, coordination_buffer_addr, output_base_addr[0..N]].
+        constexpr size_t output_base_addr_offset = 4;
+        const auto coordination_buffer_addr =
+            static_cast<uint32_t>(shared_vars.coordination_buffer.get_buffer()->address());
         for (const auto& receiver_core_coord : receiver_core_coords) {
             auto& handshake_runtime_args = GetRuntimeArgs(program, handshake_kernel_id, receiver_core_coord);
             handshake_runtime_args[0] = mesh_socket.get_config_buffer()->address();
+            handshake_runtime_args[3] = coordination_buffer_addr;
             for (size_t i = 0; i < tensor_args.size(); ++i) {
                 handshake_runtime_args[output_base_addr_offset + i] = tensor_args[i].buffer()->address();
             }

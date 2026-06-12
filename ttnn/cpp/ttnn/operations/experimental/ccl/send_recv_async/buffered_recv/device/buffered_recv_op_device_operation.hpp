@@ -30,8 +30,6 @@ struct BufferedRecvDeviceOperation {
 namespace ttnn::prim {
 
 Tensor buffered_recv(
-    const std::vector<ttnn::Tensor>& output_tensors,
-    const tt::tt_metal::distributed::MeshSocket& mesh_socket,
-    const tt::tt_metal::GlobalSemaphore& global_semaphore);
+    const std::vector<ttnn::Tensor>& output_tensors, const tt::tt_metal::distributed::MeshSocket& mesh_socket);
 
 }  // namespace ttnn::prim

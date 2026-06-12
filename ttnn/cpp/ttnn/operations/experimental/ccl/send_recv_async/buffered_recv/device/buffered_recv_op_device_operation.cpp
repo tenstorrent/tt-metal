@@ -65,8 +65,7 @@ BufferedRecvDeviceOperation::tensor_return_value_t BufferedRecvDeviceOperation::
 ttsl::hash::hash_t BufferedRecvDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "BufferedRecvDeviceOperation::compute_program_hash is called");
-    return tt::tt_metal::operation::hash_operation<BufferedRecvDeviceOperation>(
-        args.mesh_socket, args.global_semaphore, tensor_args);
+    return tt::tt_metal::operation::hash_operation<BufferedRecvDeviceOperation>(args.mesh_socket, tensor_args);
 }
 
 }  // namespace ttnn::experimental::prim
@@ -74,12 +73,10 @@ ttsl::hash::hash_t BufferedRecvDeviceOperation::compute_program_hash(
 namespace ttnn::prim {
 
 Tensor buffered_recv(
-    const std::vector<ttnn::Tensor>& output_tensors,
-    const tt::tt_metal::distributed::MeshSocket& mesh_socket,
-    const tt::tt_metal::GlobalSemaphore& global_semaphore) {
+    const std::vector<ttnn::Tensor>& output_tensors, const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
     using OperationType = ttnn::experimental::prim::BufferedRecvDeviceOperation;
 
-    auto operation_attributes = OperationType::operation_attributes_t(mesh_socket, global_semaphore);
+    auto operation_attributes = OperationType::operation_attributes_t(mesh_socket);
     const auto& tensor_args = output_tensors;
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_align.hpp>
@@ -153,16 +154,31 @@ BufferedSendMeshWorkloadFactory::create_at(
 
     CreateCircularBuffer(program, sender_core_range_set, cb_packet_header_config);
 
-    // Handshake CB: page 0 is the dest-info landing zone (receiver writes back here), page 1 stages
-    // the advertise payload that is pushed to the receiver over the socket.
-    auto handshake_cb_index = tt::CBIndex::c_2;
-    uint32_t handshake_cb_num_pages = 2;
-    tt::tt_metal::CircularBufferConfig cb_handshake_config =
-        tt::tt_metal::CircularBufferConfig(
-            handshake_cb_num_pages * handshake_page_size, {{handshake_cb_index, tt::DataFormat::UInt32}})
-            .set_page_size(handshake_cb_index, handshake_page_size);
+    // Persistent L1_SMALL buffer backing the handshake: page 0 is the dest-info landing zone (the
+    // receiver writes the OutputTensorInfo struct back here), page 1 stages the advertise payload
+    // pushed to the receiver over the socket. Unlike a CB, this allocation persists across program
+    // reuse and is not aliased by the data CBs, which the buffered ring relies on. Sharded one page
+    // per sender core (HEIGHT_SHARDED) so every sender core sees the struct at the same L1 address,
+    // mirroring how GlobalSemaphore allocates its persistent L1_SMALL buffer.
+    uint32_t info_buffer_page_size = 2 * handshake_page_size;
+    auto info_shard_parameters = tt::tt_metal::ShardSpecBuffer(
+        sender_core_range_set, {1, 1}, tt::tt_metal::ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
+    tt::tt_metal::ShardedBufferConfig info_buffer_config = {
+        .device = input_tensor.device(),
+        .size = num_cores * info_buffer_page_size,
+        .page_size = info_buffer_page_size,
+        .buffer_type = tt::tt_metal::BufferType::L1_SMALL,
+        .buffer_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+        .shard_parameters = std::move(info_shard_parameters),
+    };
+    auto info_buffer = tt::tt_metal::distributed::AnyBuffer::create(info_buffer_config);
+    auto info_buffer_addr = static_cast<uint32_t>(info_buffer.get_buffer()->address());
 
-    CreateCircularBuffer(program, sender_core_range_set, cb_handshake_config);
+    // Zero-initialize the info buffer (blocking, so the reset lands before the program runs).
+    std::vector<uint32_t> zeros(num_cores * info_buffer_page_size / sizeof(uint32_t), 0);
+    auto info_mesh_buffer = info_buffer.get_mesh_buffer();
+    tt::tt_metal::distributed::EnqueueWriteMeshBuffer(
+        mesh_device->mesh_command_queue(), info_mesh_buffer, zeros, /*blocking=*/true);
 
     const auto input_accessor_args = tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer());
     auto compile_time_args = input_accessor_args.get_compile_time_args();
@@ -189,7 +205,6 @@ BufferedSendMeshWorkloadFactory::create_at(
     std::vector<uint32_t> writer_compile_args = {
         src0_cb_index,               // cb0_id
         packet_header_cb_index,      // fabric_packet_header_cb_id
-        handshake_cb_index,          // handshake_cb_id
         handshake_page_size,         // handshake_page_size (socket page size)
         input_page_size,             // output_page_size
         socket_aligned_page_size,    // socket_page_size
@@ -235,6 +250,7 @@ BufferedSendMeshWorkloadFactory::create_at(
             page_start_offset,                           // page_start_offset
             num_whole_packets,                           // num_whole_packets
             num_pages_remainder,                         // num_pages_remainder
+            info_buffer_addr,                            // handshake_info_buffer_addr (persistent L1_SMALL)
         };
 
         const auto& sender_fabric_node_id = sender_fabric_node_ids[core_idx];
@@ -259,6 +275,7 @@ BufferedSendMeshWorkloadFactory::create_at(
             .sender_core_coords = sender_core_coords,
             .reader_kernel_id = reader_kernel_id,
             .writer_kernel_id = writer_kernel_id,
+            .info_buffer = std::move(info_buffer),
         }};
 }
 
@@ -283,6 +300,9 @@ void BufferedSendMeshWorkloadFactory::override_runtime_arguments(
 
             reader_runtime_args[0] = input_tensor.buffer()->address();
             writer_runtime_args[0] = mesh_socket.get_config_buffer()->address();
+            // The persistent L1_SMALL buffer keeps a stable address across reuse, but refresh it
+            // defensively in case the cached allocation was rebuilt.
+            writer_runtime_args[5] = static_cast<uint32_t>(shared_vars.info_buffer.get_buffer()->address());
         }
     }
 }
