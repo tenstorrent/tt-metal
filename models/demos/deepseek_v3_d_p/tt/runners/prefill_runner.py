@@ -552,6 +552,7 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DS
     )
 
     last_slot_id = int(os.environ.get("PREFILL_STANDALONE_CHUNKED_SLOT", "0")) % NUM_USERS
+    chunks_per_slot: dict[int, int] = {}  # per-slot chunk count (concurrent multi-slot migration)
     i = 0
     while not _shutdown:
         if expected_chunks is not None and i >= expected_chunks:
@@ -570,6 +571,7 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DS
         meta_host = ttnn.to_torch(ttnn.get_device_tensors(tt_metadata)[0]).view(torch.int32).flatten()
         slot_id = int(meta_host[0]) % NUM_USERS
         last_slot_id = slot_id
+        chunks_per_slot[slot_id] = chunks_per_slot.get(slot_id, 0) + 1
         actual_start = int(meta_host[1])
         actual_end = int(meta_host[2])
         actual_isl = actual_end - actual_start
@@ -604,15 +606,16 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DS
         ttnn.synchronize_device(pipeline.mesh_device)
 
         if os.environ.get("PREFILL_VALIDATE_MIGRATION", "0") == "1":
-            # Migration mode: tt-llm-engine (the prefill scheduler/driver) migrates
-            # slot src -> dst over the migration layer and writes a DONE sentinel when
-            # prefill + migration finish. Wait for that sentinel (so the migrated KV
-            # has landed in the dst slot), then validate BOTH slots ONCE: src (BEFORE)
-            # and dst (AFTER) against the same golden trace.
+            # Migration mode: tt-llm-engine (the prefill scheduler/driver) migrates N
+            # (src -> dst) pairs over the migration layer and writes a DONE sentinel when
+            # prefill + all migrations finish. The sentinel CONTENT is the machine-readable
+            # pair list ("src dst" per line) the driver wrote, so we validate exactly the
+            # pairs that migrated (BEFORE=src, AFTER=dst) against the same golden. Each src
+            # slot is validated with ITS OWN chunk count (not the loop total), since with
+            # concurrent migrations the chunks are spread across N slots. Falls back to the
+            # single PREFILL_MIGRATE_SRC/DST_SLOT env pair if the sentinel carries no pairs.
             done_file = os.environ.get("MIGRATION_DONE_FILE", "/tmp/migration_done.sentinel")
             wait_s = int(os.environ.get("PREFILL_MIGRATE_WAIT_S", "1200"))
-            src_slot = int(os.environ.get("PREFILL_MIGRATE_SRC_SLOT", "0")) % NUM_USERS
-            dst_slot = int(os.environ.get("PREFILL_MIGRATE_DST_SLOT", "1")) % NUM_USERS
             logger.info(f"[kv-migrate-validate] waiting for DONE sentinel {done_file} (<= {wait_s}s)")
             deadline = _time.time() + wait_s
             while not os.path.exists(done_file):
@@ -622,9 +625,28 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DS
                         "(did the prefill driver finish prefill + migration?)"
                     )
                 _time.sleep(0.5)
-            logger.success(f"[kv-migrate-validate] sentinel found — validating slot {src_slot} -> {dst_slot}")
+            # Parse "src dst" pairs from the sentinel; fall back to the env single pair.
+            pairs = []
+            try:
+                for line in open(done_file).read().splitlines():
+                    parts = line.split()
+                    if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                        pairs.append((int(parts[0]) % NUM_USERS, int(parts[1]) % NUM_USERS))
+            except OSError:
+                pass
+            if not pairs:
+                pairs = [
+                    (
+                        int(os.environ.get("PREFILL_MIGRATE_SRC_SLOT", "0")) % NUM_USERS,
+                        int(os.environ.get("PREFILL_MIGRATE_DST_SLOT", "1")) % NUM_USERS,
+                    )
+                ]
+            logger.success(f"[kv-migrate-validate] sentinel found — validating {len(pairs)} pair(s): {pairs}")
             ttnn.synchronize_device(pipeline.mesh_device)
-            validate_migration_kv(pipeline, src_slot, dst_slot, i)
+            for src_slot, dst_slot in pairs:
+                n_src = chunks_per_slot.get(src_slot, i)  # per-slot chunk count (NOT the loop total)
+                validate_migration_kv(pipeline, src_slot, dst_slot, n_src)
+            logger.success(f"[kv-migrate-validate] ALL {len(pairs)} migrated pair(s) PASSED")
         else:
             logger.info(f"[request] running KV-cache PCC check (slot={last_slot_id}, n_chunks={i})")
             _kv_cache_pcc_check(pipeline, last_slot_id, i)
