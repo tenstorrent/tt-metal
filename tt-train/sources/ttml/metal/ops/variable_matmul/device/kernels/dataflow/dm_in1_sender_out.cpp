@@ -83,8 +83,7 @@ void kernel_main() {
         // real in1 tile reads only begin inside the K-loop below.
         // Limitation: this reads exactly ONE page (kPageBytes) of the offsets tensor. The
         // (start, end) pair must therefore fall within page 0 — i.e. (E + 1) * sizeof(uint32_t)
-        // <= kPageBytes, where E is num_experts. On Blackhole kPageBytes is typically 4 KB
-        // (~1024 experts max). Larger E would need a strided / page-aware read.
+        // <= kPageBytes, where E is num_experts.
         constexpr uint32_t kPageBytes = decltype(offsets_args)::AlignedPageSize;
         const uint32_t offsets_l1_addr = get_write_ptr(tt::CBIndex::c_1);
         noc_async_read(get_noc_addr(0, offsets_acc), offsets_l1_addr, kPageBytes);
