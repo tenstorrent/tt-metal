@@ -28,6 +28,8 @@ namespace {
 ttml::metal::VariableMatmulConfig make_var_mm_config(ttnn::distributed::MeshDevice* device) {
     const auto grid = device->compute_with_storage_grid_size();
     return ttml::metal::VariableMatmulConfig{
+        // M/K/N block sizes tuned for the MoE matmul shapes; 2x2 subblock uses the full
+        // FP32 DEST register budget (subblock_h*subblock_w == max_dest_volume).
         .M_block_size = 4,
         .K_block_size = 8,
         .N_block_size = 8,
