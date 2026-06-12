@@ -409,6 +409,10 @@ void trisc_fused_softmax_top_p_sampling_block() {
         cb_wait_front(p_cb, 1);
         tile_regs_acquire();
         // Step 9: DST[0] = T(probs), re-loaded from probs_cb (bf16).
+        // SrcA was last configured for exp_cb (Step 5 reduce + Step 7 rmsnorm); the
+        // pack_reconfig_data_format above only touches the packer, so reconfigure SrcA
+        // for probs_cb here to satisfy the unpacker's pre-init self-check.
+        reconfig_data_format_srca(exp_cb, probs_cb);
         copy_tile_to_dst_init_short(probs_cb);
         copy_tile(probs_cb, 0, 0);
     }
