@@ -222,7 +222,9 @@ def _load_kv_post_transform(trace_dir: Path, layer: int, total_len: int) -> "tor
         return fsafe.get_slice(key)[:total_len].to(torch.float32)
 
 
-def _kv_cache_pcc_check(pipeline: TtDeepSeekPrefillPipeline, slot_id: int, n_chunks: int) -> float:
+def _kv_cache_pcc_check(
+    pipeline: TtDeepSeekPrefillPipeline, slot_id: int, n_chunks: int, pt_path_override: str | None = None
+) -> float:
     """Gather the device KV cache for `slot_id`, un-rotate the block-cyclic layout to natural order,
     and PCC-compare each layer against the golden DeepSeek-R1 `kv_post_transform` trace.
 
@@ -257,7 +259,7 @@ def _kv_cache_pcc_check(pipeline: TtDeepSeekPrefillPipeline, slot_id: int, n_chu
     seq_len_cache = cfg.max_seq_len
     total_len = n_chunks * chunk_size
 
-    pt_path = os.environ.get("DEEPSEEK_PREFILL_TRACE_PT", "").strip()
+    pt_path = (pt_path_override or os.environ.get("DEEPSEEK_PREFILL_TRACE_PT", "")).strip()
     if pt_path:
         if not Path(pt_path).is_file():
             raise FileNotFoundError(f"DEEPSEEK_PREFILL_TRACE_PT={pt_path} does not exist or is not a file")
@@ -429,14 +431,18 @@ def validate_migrations_pairwise(pipeline: TtDeepSeekPrefillPipeline, pairs, gol
     # Golden anchor (optional): confirm the prefill itself is model-correct for the golden-prompt slot.
     n_pairs = max(1, len(pairs))
     gchunks = max(1, int(os.environ.get("PREFILL_STANDALONE_CHUNKED_NCHUNKS", "1")) // n_pairs)
+    # Per-slot golden: each slot anchors its OWN prompt's .pt (env PREFILL_MIGRATE_GOLDEN_PT_<slot>),
+    # so N DISTINCT prompts are ALL golden-verified in ONE concurrent run. Falls back to the global
+    # DEEPSEEK_PREFILL_TRACE_PT/_DIR when no per-slot .pt is given.
     for s in golden_src_slots:
         d = next((dd for ss, dd in pairs if ss == s), None)
-        logger.info(f"[kv-migrate-validate] golden anchor: validating src slot {s} (n_chunks={gchunks})")
-        sp = _kv_cache_pcc_check(pipeline, s, gchunks)
+        gpt = os.environ.get(f"PREFILL_MIGRATE_GOLDEN_PT_{s}", "").strip() or None
+        logger.info(f"[kv-migrate-validate] golden anchor: src slot {s} (n_chunks={gchunks}) pt={gpt or 'global'}")
+        sp = _kv_cache_pcc_check(pipeline, s, gchunks, pt_path_override=gpt)
         print(f"[kv-migrate-validate] GOLDEN src_slot={s} min_pcc={sp:.6f}")
         if d is not None:
-            logger.info(f"[kv-migrate-validate] golden anchor: validating dst slot {d}")
-            dp = _kv_cache_pcc_check(pipeline, d, gchunks)
+            logger.info(f"[kv-migrate-validate] golden anchor: dst slot {d} (pt={gpt or 'global'})")
+            dp = _kv_cache_pcc_check(pipeline, d, gchunks, pt_path_override=gpt)
             print(f"[kv-migrate-validate] GOLDEN dst_slot={d} min_pcc={dp:.6f}")
 
 
