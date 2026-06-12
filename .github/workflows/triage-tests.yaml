@@ -1,4 +1,4 @@
-name: "(Runtime) Triage Tests"
+name: "(Debug) Triage Tests"
 
 on:
   workflow_dispatch:
