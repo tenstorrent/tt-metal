@@ -3,9 +3,12 @@
 Port plan for `nlp_concat_heads`, from legacy `ProgramDescriptorFactoryConcept` (`create_descriptor`) to
 Metal 2.0 `ProgramSpecFactoryConcept` (`create_program_spec`).
 
-**Outcome: grounded stop — the factory stays entirely on legacy.** See `METAL2_PORT_REPORT.md` →
-*Successful failure*. The inventory below is recorded for the eventual port (once the cross-op writer is
-prepared for Metal 2.0 by its owner).
+**Outcome: PORTED (both paths).** On revisit, the interleaved path's cross-op writer was forked
+(`writer_unary_interleaved_start_id_metal2.cpp`, in this op's own dir) and converted, so the whole factory
+moved to `create_program_spec`. Sharded path = borrowed-memory fake-CB self-loops (reader=PRODUCER /
+writer=CONSUMER); interleaved path = clean Case-1 `TensorAccessor` + the forked writer. Verified:
+`test_nlp_concat_heads.py` → 217 passed on Blackhole p150b. See `METAL2_PORT_REPORT.md`. The inventory below
+documents both paths.
 
 ## Legacy Inventory
 

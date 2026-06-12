@@ -4,7 +4,15 @@ Feasibility audit for porting `experimental/transformer/nlp_concat_heads` from t
 `ProgramDescriptorFactoryConcept` (`create_descriptor`) to the Metal 2.0 `ProgramSpecFactoryConcept`
 (`create_program_spec`).
 
-## Overall status: **RED — blocked by a cross-op shared kernel** (see TensorAccessor handling / cross-op writer below)
+## Overall status: **GREEN — PORTED** (cross-op writer resolved by fork; see update note)
+
+> **UPDATE (revisit):** Originally audited RED on the assumption the cross-op interleaved writer could be
+> neither edited nor forked. The patterns catalog *does* sanction a `_metal2` fork for exactly this case, so on
+> revisit the op was fully ported — the interleaved writer was forked into the op's own dir and converted, and
+> the whole factory now satisfies `ProgramSpecFactoryConcept`. **Verified: `test_nlp_concat_heads.py` → 217
+> passed on Blackhole p150b.** See `METAL2_PORT_REPORT.md`. Original RED analysis retained below for the record.
+
+### Original analysis (superseded)
 
 The op is structurally simple and the *sharded* path is cleanly portable in isolation. But the op has a
 **single factory with runtime kernel-source selection** across two paths (sharded / interleaved), and the
