@@ -79,7 +79,7 @@ ALWI void acosh_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(acosh, ckernel::sfpu::i
  */
 // clang-format on
 ALWI void acosh_tile(uint32_t idst) {
-    MATH(SFPU_TWO_PARAM_KERNEL(calculate_acosh, APPROX, 8 /*ITER*/, idst, VectorMode::RC));
+    MATH(SFPU_THREE_PARAM_KERNEL_FP32_FIRST(calculate_acosh, APPROX, DST_ACCUM_MODE, 8 /*ITER*/, idst, VectorMode::RC));
 }
 
 /**
@@ -126,7 +126,7 @@ ALWI void asinh_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(asinh, ckernel::sfpu::i
  */
 // clang-format on
 ALWI void asinh_tile(uint32_t idst) {
-    MATH(SFPU_TWO_PARAM_KERNEL(calculate_asinh, APPROX, 8 /*ITER*/, idst, VectorMode::RC));
+    MATH(SFPU_THREE_PARAM_KERNEL_FP32_FIRST(calculate_asinh, APPROX, DST_ACCUM_MODE, 8 /*ITER*/, idst, VectorMode::RC));
 }
 
 /**
