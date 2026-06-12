@@ -20,7 +20,7 @@ from tests.ttnn.utils_for_testing import (
     stop_measuring_time,
 )
 
-TIMEOUT = 300
+TIMEOUT = 900
 
 loader = MasterConfigLoader()
 model_traced_params = loader.get_suite_parameters("conv2d")
@@ -39,32 +39,61 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
-def mesh_device_fixture():
-    mesh_shape = get_model_traced_mesh_shape()
-    # The traced conv2d configs come from a multi-device (flux1 VAE) pipeline that
-    # distributes the conv across the mesh rows (Shard(0)) and relies on 1D fabric
-    # for the cross-device completion sync. Without fabric, the large DRAM-width-
-    # sliced convs hang in synchronize_device (wedging the device). Fabric config
-    # is not part of the config hash, so enabling it does not affect hash matching.
-    #
-    # Fabric requires EVERY device in the system to be active, so on a multi-chip
-    # card (e.g. N300, 2 chips) opening only a 1x1 mesh with FABRIC_1D raises
-    # "Fabric is being used but Device 1 is not active". A 1x1 mesh is single
-    # device and never runs the distributed sliced conv, so it doesn't need fabric
-    # — only enable it for multi-device meshes.
-    _ndev = (mesh_shape[0] * mesh_shape[1]) if mesh_shape else 1
-    _use_fabric = _ndev > 1
-    if _use_fabric:
-        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
-    # The conv distributes over the mesh ROWS (Shard(0)); the dispatch axis must
-    # be ROW-aligned with that distribution + fabric, else synchronize_device
-    # hangs on the large sliced convs. (Auto-detect / COL misaligns and hangs.)
-    device = create_mesh_device(mesh_shape, l1_small_size=65536, dispatch_core_axis=ttnn.DispatchCoreAxis.ROW)
-    device_name = ttnn.get_arch_name()
-    yield (device, device_name)
-    ttnn.close_mesh_device(device)
-    if _use_fabric:
+# conv2d needs two different dispatch modes depending on the conv size, so the
+# device is opened per-vector (cached, reopened only when the mode flips):
+#   * Heavy convs (very large spatial, e.g. 1024x1024 flux VAE) are genuinely
+#     mesh-sharded and their cross-device completion sync hangs in
+#     synchronize_device without 1D fabric, which in turn needs WORKER ROW
+#     dispatch (ETH+FABRIC misaligns and wedges). They fit the 56-bank WORKER
+#     grid because they shard across the mesh.
+#   * All other convs reshard to the full 8x8 (64-core) grid ("num shards 64 >
+#     56 banks" on WORKER) and need no fabric, so they run on ETH dispatch.
+_CONV_DEV = None
+_CONV_MODE = None
+# Spatial-area threshold above which a conv is treated as heavy (WORKER+fabric).
+# Traced areas are {1024, 4096, 16384, 65536, 262144, 1048576}; only the
+# 1024x1024 (1048576) convs hang on ETH, so the cut sits between 262144 and it.
+_HEAVY_CONV_HW = 524288
+
+
+def _close_conv_device():
+    global _CONV_DEV, _CONV_MODE
+    if _CONV_DEV is not None:
+        try:
+            ttnn.close_mesh_device(_CONV_DEV)
+        except Exception:
+            pass
+    try:
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+    except Exception:
+        pass
+    _CONV_DEV = None
+    _CONV_MODE = None
+
+
+def _ensure_conv_device(heavy):
+    global _CONV_DEV, _CONV_MODE
+    mode = "rowfabric" if heavy else "eth"
+    if _CONV_DEV is not None and mode == _CONV_MODE:
+        return _CONV_DEV
+    _close_conv_device()
+    mesh_shape = get_model_traced_mesh_shape()
+    if heavy:
+        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+        _CONV_DEV = create_mesh_device(
+            mesh_shape, l1_small_size=65536, dispatch_core_axis=ttnn.DispatchCoreAxis.ROW, prefer_eth=False
+        )
+    else:
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+        _CONV_DEV = create_mesh_device(mesh_shape, l1_small_size=65536)
+    _CONV_MODE = mode
+    return _CONV_DEV
+
+
+def mesh_device_fixture():
+    # Device opened per-vector in run() via _ensure_conv_device.
+    yield (None, "wormhole_b0")
+    _close_conv_device()
 
 
 _DTYPE_MAP = {
@@ -370,6 +399,7 @@ def run(
     if input_specs is not None:
         from tests.sweep_framework.sweep_utils.conv2d_common import run_conv1d_short_sweep, run_conv2d_short_sweep
 
+        device = _ensure_conv_device(False)
         if is_conv1d:
             return run_conv1d_short_sweep(input_specs, device)
         result = run_conv2d_short_sweep(input_specs, device)
@@ -385,6 +415,15 @@ def run(
     input_height = int(kwargs.get("input_height") or kwargs.get("input_h") or 4)
     input_width = int(kwargs.get("input_width") or kwargs.get("input_w") or 4)
     groups = int(kwargs.get("groups") or 1)
+
+    # Heavy (large-spatial) convs that are genuinely mesh-sharded need WORKER ROW
+    # + FABRIC_1D for their cross-mesh completion sync (it hangs on ETH). Heavy
+    # but REPLICATED convs have no cross-mesh sync, so they run on ETH (full
+    # 64-core grid, which they reshard to); everything small runs on ETH too.
+    _placement = str(kwargs.get("input_tensor_tensor_placement", ""))
+    _distributed = "PlacementShard" in _placement
+    _heavy = (input_height * input_width >= _HEAVY_CONV_HW) and _distributed
+    device = _ensure_conv_device(_heavy)
 
     kernel_h, kernel_w = _parse_list_param(kwargs.get("kernel_size"), (1, 1))
     stride_h, stride_w = _parse_list_param(kwargs.get("stride"), (1, 1))

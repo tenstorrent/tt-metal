@@ -195,6 +195,7 @@ def create_mesh_device(
     device_ids: Optional[list] = None,
     l1_small_size: int = 79104,
     dispatch_core_axis=None,
+    prefer_eth: bool = True,
 ) -> ttnn.MeshDevice:
     """
     Create a mesh device with the specified shape.
@@ -242,7 +243,11 @@ def create_mesh_device(
         _single_host = ttnn.get_num_devices() <= 8
     except Exception:
         _single_host = False
-    if _single_host:
+    # prefer_eth=False lets a caller opt out of ETH dispatch. conv2d needs WORKER
+    # ROW dispatch aligned with its mesh-row distribution + FABRIC_1D, otherwise
+    # the distributed DRAM-sliced convs hang in synchronize_device; ETH dispatch
+    # (not row-aligned) wedges those, so conv2d forces WORKER.
+    if _single_host and prefer_eth:
         try:
             return ttnn.open_mesh_device(
                 mesh_shape=ttnn.MeshShape(*mesh_shape),
