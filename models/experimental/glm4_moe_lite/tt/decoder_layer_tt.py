@@ -21,6 +21,7 @@ from models.experimental.glm4_moe_lite.tt.linear_helpers import (
     prefill_norm_config_from_width_sharded_tensor,
     prefill_per_head_linear,
     prefill_width_sharded_norm_config,
+    sharded_decode_norm,
 )
 from models.experimental.glm4_moe_lite.tt.mlp_decode import dense_mlp_forward, moe_mlp_forward
 from models.experimental.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfig
@@ -449,7 +450,16 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
         signpost(f"L{layer_idx}_attn-start")
     residual = x_embed_tok
     t0 = time.perf_counter() if profile is not None else 0.0
-    x = w.input_layernorm(x_embed_tok, mode="decode")
+    if cfg.sharded_decode_norm:
+        x = sharded_decode_norm(
+            w.input_layernorm,
+            x_embed_tok,
+            device=device,
+            width=int(hparams.hidden_size),
+            downstream_mc=cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG,
+        )
+    else:
+        x = w.input_layernorm(x_embed_tok, mode="decode")
     _profile_add(profile, "norm_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
     # ---- KV Cache Update ----
@@ -540,7 +550,16 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
         signpost(f"L{layer_idx}_moe-start")
     residual = x_attn_out
     t0 = time.perf_counter() if profile is not None else 0.0
-    x = w.post_attention_layernorm(x_attn_out, mode="decode")
+    if cfg.sharded_decode_norm:
+        x = sharded_decode_norm(
+            w.post_attention_layernorm,
+            x_attn_out,
+            device=device,
+            width=int(hparams.hidden_size),
+            downstream_mc=cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG,
+        )
+    else:
+        x = w.post_attention_layernorm(x_attn_out, mode="decode")
     _profile_add(profile, "mlp_norm_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
     use_moe = moe_runtime is not None and getattr(w, "moe", None) is not None
