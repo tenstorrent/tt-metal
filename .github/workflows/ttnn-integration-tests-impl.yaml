@@ -1,13 +1,4 @@
-name: "[internal] ttnn framework integration tests impl"
-
-# Runs the ttnn-team ttnn-integration bucket (framework / API surface tests)
-# of the L2 nightly pipeline. Reads
-# tests/pipeline_reorg/ttnn_integration_tests.yaml and budgets under
-# ttnn.ttnn_integration.<sku>.
-#
-# Container env uses the basic-ttnn-runtime image (no MLPerf mount, no
-# /dev/hugepages-1G requirement) so the tutorial-style tests work in the
-# minimum dev environment.
+name: "[internal] ttnn integration tests impl"
 
 on:
   workflow_call:

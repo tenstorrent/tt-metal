@@ -1,9 +1,5 @@
 name: "[internal] ttnn ops unit tests impl"
 
-# Runs the ops-team per-op unit-test bucket of the L2 nightly pipeline.
-# Reads tests/pipeline_reorg/ops_unit_tests.yaml and budgets under
-# ops.unit.<sku>. Same shape as tt-metal-l2-impl.yaml.
-
 on:
   workflow_call:
     inputs:

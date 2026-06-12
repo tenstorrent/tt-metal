@@ -1,9 +1,5 @@
 name: "[internal] ttnn cnn unit tests impl"
 
-# Runs the ttnn-team tt-cnn unit-test bucket of the L2 nightly pipeline.
-# Reads tests/pipeline_reorg/cnn_unit_tests.yaml and budgets under
-# ttnn.cnn_unit.<sku>.
-
 on:
   workflow_call:
     inputs:
@@ -35,7 +31,7 @@ jobs:
     outputs:
       matrix: ${{ steps.filter-categories.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/cnn_unit_tests.yaml
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/tt_cnn_unit_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

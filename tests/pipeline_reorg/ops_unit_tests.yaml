@@ -1,19 +1,21 @@
-# Test matrix for ops-team per-op unit tests in the L2 nightly pipeline.
-# Entry fields:
-#   name: Display name for the matrix job.
-#   cmd: Command to run.
-#   skus: Mapping of SKU -> { timeout: <minutes> }.
-#   owner_id: Slack user ID notified on failure.
-#   team: Owning team (always "ops" for this file; budget rolls up under ops.unit).
-#   category: Selector used by tt-metal-l2-nightly.yaml's `additional_test_categories`
-#     dispatch input. On dispatch the impl filters this matrix to entries whose
-#     category appears in the comma-separated list; on schedule the filter is bypassed.
-#
-# For max allowed timeout refer to .github/time_budget.yaml.
+# This file defines the test matrix for the ops unit tests pipeline.
 
-# =============================================================================
-# Python per-op nightly tests (moved from tt_metal_l2_tests.yaml)
-# =============================================================================
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run for the test.
+#   skus: A mapping of SKU names to their configuration.
+#     Each SKU entry contains:
+#       timeout: The maximum allowed runtime for this job in minutes on that SKU.
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+#   category: Selector used by tt-metal-l2-nightly.yaml's additional_test_categories
+#     dispatch input. On dispatch the impl filters this matrix to entries whose
+#     category appears in the comma-separated list; on schedule the filter is
+#     bypassed and every entry runs.
+
+# For max allowed timeout refer to .github/time_budget.yaml
+
+# --- Python per-op tests ---
 
 - name: ttnn nightly conv tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode" --timeout=600'
@@ -331,14 +333,7 @@
   team: ops
   category: docs_examples
 
-# =============================================================================
-# C++ ttnn unit tests (extracted from cpp-post-commit.yaml's inline matrix).
-# These ran nightly via `run_cpp_tests` on civ2 viommu SKUs (the cpp impl
-# resolves runner-label -> tt-ubuntu-2204-{N150,N300,P100a,P150b}-viommu-stable).
-# Each test gets its own category so l2-nightly can route `run_cpp_tests=true`
-# to exactly these entries by passing `cpp_accessor,cpp_lab_examples` to the
-# `additional_test_categories` filter.
-# =============================================================================
+# --- C++ ttnn unit tests ---
 
 - name: ttnn tensor accessor
   cmd: './build/test/ttnn/unit_tests_ttnn_accessor'

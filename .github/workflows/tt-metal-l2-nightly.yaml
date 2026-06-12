@@ -257,7 +257,7 @@ jobs:
       (github.event_name == 'schedule' || inputs.run_tt_cnn_unit_tests) &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
     secrets: inherit
-    uses: ./.github/workflows/cnn-unit-tests-impl.yaml
+    uses: ./.github/workflows/tt-cnn-unit-tests-impl.yaml
     with:
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

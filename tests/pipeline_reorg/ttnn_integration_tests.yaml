@@ -1,22 +1,23 @@
-# Test matrix for ttnn-team framework-integration tests in the L2 nightly
-# pipeline.
-#
-# Bucketing: this is the "ttnn / integration" file of the ttnn-org 3x3 split
-# ({ttnn, ops, cnn} x {unit, integration, perf}). Tests that exercise the ttnn
-# framework / API surface end-to-end (not a single op, not the cnn library)
-# live here.
-#
-# Entry fields: see ops_unit_tests.yaml header for shared field semantics.
-# Budget rolls up under `ttnn.integration` (impl passes "integration" to
-# verify_time_budget.py).
-#
-# For max allowed timeout refer to .github/time_budget.yaml.
+# This file defines the test matrix for the ttnn integration tests pipeline.
+
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run for the test.
+#   skus: A mapping of SKU names to their configuration.
+#     Each SKU entry contains:
+#       timeout: The maximum allowed runtime for this job in minutes on that SKU.
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+#   category: Selector used by tt-metal-l2-nightly.yaml's additional_test_categories
+#     dispatch input. On dispatch the impl filters this matrix to entries whose
+#     category appears in the comma-separated list; on schedule the filter is
+#     bypassed and every entry runs.
+
+# For max allowed timeout refer to .github/time_budget.yaml
 
 - name: ttnn tutorials
-  # Notebook-based tutorial tests. Previously lived as the standalone
-  # ttnn-tutorials-post-commit.yaml workflow invoked from l2-nightly. Sets
-  # up a minimum dev environment, installs tutorial deps and tt-triage, then
-  # runs the tutorial pytest suite.
+  # Notebook-based tutorial tests. Sets up a minimum dev environment, installs
+  # tutorial deps and tt-triage, then runs the tutorial pytest suite.
   cmd: |
     cd docs/source/ttnn/ttnn/tutorials/ttnn_tutorials_basic_python
     uv pip install --index-strategy unsafe-best-match --no-cache -r tutorials-dev.txt

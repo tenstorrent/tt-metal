@@ -31,10 +31,6 @@ on:
         required: false
         type: boolean
         default: false
-      cpp-unit:
-        required: false
-        type: boolean
-        default: false
       platform:
         required: false
         type: choice
@@ -69,7 +65,6 @@ jobs:
       run-perf-models: ${{ steps.logic.outputs.run-perf-models }}
       run-perf-device-models: ${{ steps.logic.outputs.run-perf-device-models }}
       run-ttnn-models-frequent: ${{ steps.logic.outputs.run-ttnn-models-frequent }}
-      run-cpp-unit: ${{ steps.logic.outputs.run-cpp-unit }}
     steps:
       - name: Determine test execution
         id: logic
@@ -80,21 +75,18 @@ jobs:
               echo "run-perf-models=${{ inputs.single-card-perf-models }}" >> $GITHUB_OUTPUT
               echo "run-perf-device-models=${{ inputs.single-card-perf-device-models }}" >> $GITHUB_OUTPUT
               echo "run-ttnn-models-frequent=${{ inputs.single-card-ttnn-models-frequent }}" >> $GITHUB_OUTPUT
-              echo "run-cpp-unit=${{ inputs.cpp-unit }}" >> $GITHUB_OUTPUT
               ;;
             "models-mandatory")
               echo "run-demo=false" >> $GITHUB_OUTPUT
               echo "run-perf-models=false" >> $GITHUB_OUTPUT
               echo "run-perf-device-models=true" >> $GITHUB_OUTPUT
               echo "run-ttnn-models-frequent=true" >> $GITHUB_OUTPUT
-              echo "run-cpp-unit=true" >> $GITHUB_OUTPUT
               ;;
             "models-extended")
               echo "run-demo=true" >> $GITHUB_OUTPUT
               echo "run-perf-models=true" >> $GITHUB_OUTPUT
               echo "run-perf-device-models=true" >> $GITHUB_OUTPUT
               echo "run-ttnn-models-frequent=true" >> $GITHUB_OUTPUT
-              echo "run-cpp-unit=true" >> $GITHUB_OUTPUT
               ;;
           esac
   check-harbor:
@@ -156,13 +148,3 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  cpp-unit-tests:
-    if: ${{ needs.determine-tests.outputs.run-cpp-unit == 'true' }}
-    needs: [build-artifact, determine-tests]
-    secrets: inherit
-    uses: ./.github/workflows/cpp-post-commit.yaml
-    with:
-      arch: wormhole_b0
-      runner-label: n300
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

@@ -1,10 +1,5 @@
 name: "[internal] ttnn ops integration tests impl"
 
-# Runs the ops-team integration bucket (cross-op concerns: docs check, etc.)
-# of the L2 nightly pipeline. Reads
-# tests/pipeline_reorg/ops_integration_tests.yaml and budgets under
-# ops.integration.<sku>.
-
 on:
   workflow_call:
     inputs:
