@@ -17,24 +17,6 @@ namespace ttml::ops {
 
 namespace {
 
-bool can_use_fused_q_rope(uint32_t qk_nope_dim, uint32_t qk_rope_dim, uint32_t seq_len) {
-    using namespace tt::constants;
-    if (qk_nope_dim % TILE_WIDTH != 0 || qk_rope_dim % TILE_WIDTH != 0) {
-        return false;
-    }
-    if (seq_len % TILE_HEIGHT != 0) {
-        return false;
-    }
-    if (qk_rope_dim > 256U) {
-        return false;
-    }
-    const uint32_t Tr = qk_rope_dim / TILE_WIDTH;
-    if (Tr + 1U > 8U) {
-        return false;
-    }
-    return true;
-}
-
 ttnn::Tensor composite_q_rope_bw(
     const ttnn::Tensor& d_out, const RotaryEmbeddingParams& rope_params, uint32_t qk_nope_dim, uint32_t qk_rope_dim) {
     const auto shape = d_out.logical_shape();
@@ -67,11 +49,6 @@ autograd::TensorPtr q_rope(
     uint32_t qk_nope_dim,
     uint32_t qk_rope_dim) {
     const uint32_t S = q_full->get_value().logical_shape()[2];
-
-    if (!can_use_fused_q_rope(qk_nope_dim, qk_rope_dim, S)) {
-        throw std::runtime_error(
-            "ttml::ops::q_rope fused kernel unsupported for these dimensions; use slice + rope + concat.");
-    }
 
     auto q_out = ttml::metal::q_rope_fw(
         q_full->get_value(),

@@ -128,6 +128,7 @@ void kernel_main() {
 
             // q_pe * cos -> cos_interm_cb.
             tile_regs_acquire();
+            mul_tiles_init(in_cb, cos_cb);
             for (uint32_t j = 0U; j < Tr; ++j) {
                 const uint32_t in_tile = Tn + j;
                 mul_tiles(in_cb, cos_cb, in_tile, j, j);

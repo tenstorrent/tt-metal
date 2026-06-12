@@ -10,7 +10,6 @@
 namespace ttml::ops {
 
 // Fused MLA Q RoPE forward: copy q_nope, apply RoPE to q_pe, return full head.
-// Falls back to slice + ttnn RoPE + concat when shapes are unsupported by the metal op.
 autograd::TensorPtr q_rope(
     const autograd::TensorPtr& q_full,
     const RotaryEmbeddingParams& rope_params,

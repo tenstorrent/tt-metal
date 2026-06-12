@@ -69,6 +69,7 @@ void QRopeFwDeviceOperation::validate_on_program_cache_miss(
         "QRopeFw: qk_nope_dim ({}) must be a multiple of TILE_WIDTH ({})",
         args.qk_nope_dim,
         TILE_WIDTH);
+    TT_FATAL(args.qk_rope_dim != 0U, "QRopeFw: qk_rope_dim must be non-zero.");
     TT_FATAL(
         args.qk_rope_dim % TILE_WIDTH == 0,
         "QRopeFw: qk_rope_dim ({}) must be a multiple of TILE_WIDTH ({})",
