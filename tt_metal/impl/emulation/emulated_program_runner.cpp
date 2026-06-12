@@ -1035,27 +1035,48 @@ static std::map<std::string, std::string> build_kernel_defines(
     }
     defines["EMULE_SEM_ALIGN"] = std::to_string(EMULE_SEM_ALIGN);
 
-    // Collect CB tile sizes from program for constexpr get_tile_size().
+    // Collect CB tile sizes + per-CB tile shape from program for the constexpr
+    // get_tile_size() / get_tile_r_dim() / get_tile_c_dim() metadata. The shape
+    // (height/width) is the ground truth for thin tiles (e.g. Tile([1,16])) —
+    // the emulated reduce/unpack primitives bound their iteration by it instead
+    // of assuming a full 32x32 tile. Default 32x32 when a CB has no Tile spec.
     const auto& core_range_set = kernel.core_range_set();
     if (!core_range_set.ranges().empty()) {
         auto first_core = core_range_set.ranges().begin()->start_coord;
         auto cb_impls = impl.circular_buffers_on_core(first_core);
         uint32_t tile_sizes[EMULE_NUM_CBS] = {};
+        uint32_t tile_r_dim[EMULE_NUM_CBS];
+        uint32_t tile_c_dim[EMULE_NUM_CBS];
+        for (uint32_t i = 0; i < EMULE_NUM_CBS; i++) {
+            tile_r_dim[i] = tt::constants::TILE_HEIGHT;
+            tile_c_dim[i] = tt::constants::TILE_WIDTH;
+        }
         for (auto& cb_impl : cb_impls) {
+            const auto& tiles = cb_impl->config().tiles();
             for (uint8_t idx : cb_impl->local_buffer_indices()) {
                 if (idx < EMULE_NUM_CBS) {
                     tile_sizes[idx] = cb_impl->page_size(idx);
+                    if (tiles[idx].has_value()) {
+                        tile_r_dim[idx] = tiles[idx]->get_height();
+                        tile_c_dim[idx] = tiles[idx]->get_width();
+                    }
                 }
             }
         }
-        std::ostringstream ts;
+        std::ostringstream ts, tr, tc;
         for (uint32_t i = 0; i < EMULE_NUM_CBS; i++) {
             if (i) {
                 ts << ',';
+                tr << ',';
+                tc << ',';
             }
             ts << tile_sizes[i];
+            tr << tile_r_dim[i];
+            tc << tile_c_dim[i];
         }
         defines["EMULE_TILE_SIZES"] = ts.str();
+        defines["EMULE_TILE_R_DIM"] = tr.str();
+        defines["EMULE_TILE_C_DIM"] = tc.str();
     }
     return defines;
 }
