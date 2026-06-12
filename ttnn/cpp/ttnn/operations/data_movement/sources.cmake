@@ -115,6 +115,7 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     slice/device/slice_program_factory_rm_stride.cpp
     slice/device/slice_program_factory_tile.cpp
     slice/device/slice_program_factory_tile_tensor_args.cpp
+    slice/device/slice_descriptor_builders.cpp
     slice/slice.cpp
     split/device/split_device_operation.cpp
     split/device/split_program_factory.cpp
