@@ -573,9 +573,7 @@ jobs:
       - name: 🛠️ Compile
         timeout-minutes: 90
         run: |
-          # Build ALL first (includes tracy_profiler_wasm when Tracy is enabled via CMake),
-          # then run install rules to copy artifacts to CMAKE_INSTALL_PREFIX.
-          cmake --build build
+          # --target install is for the tarball that should get replaced by proper packaging later
           cmake --build build --target install
 
       - name: 🛠️ Profile
