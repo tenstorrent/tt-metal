@@ -20,7 +20,6 @@ work can be split. **Rule:** every item is either *validated* (PCC test) or *sca
 | SHM request loop | `tt/runners/prefill_runner.py` | 2 | serving team | SHM protocol + C++ server | No |
 | P/D disaggregation glue | pipeline + migration | 2 | migration + runner | migration API | No |
 | EP=8 experts | `tt/experts_throughput/` (uses ttnn fused moe_gpt op; rewrite for EP) | 3 | model | **EP design undefined** | No (multi-card) |
-| Decode QK-norm validation | `tt/attention/decode.py` | — | model | decode path unrun | Reduced-config |
 | Perf (trace, slice_write, reduce_scatter, grids) | various | 3 | perf | functional first | Partly |
 
 ## Suggested first cuts
