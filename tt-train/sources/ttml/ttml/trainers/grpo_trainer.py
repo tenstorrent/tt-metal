@@ -95,7 +95,7 @@ class GRPOConfig:
     # Number of micro-batches per generation (effective) batch and per optimizer
     # step. The generation batch generates gradient_accumulation_steps *
     # per_device_train_batch_size * num_devices completions, then the trainer
-    # accumulates gradients over micro-batche of size per_device_train_batch_size * num_devices
+    # accumulates gradients over micro-batches of size per_device_train_batch_size * num_devices
     # before each optimizer step. Larger values mean a larger effective batch per step.
     gradient_accumulation_steps: int
     logging_steps: int
@@ -145,6 +145,11 @@ def get_grpo_config(yaml_config: dict, output_dir: str = "") -> GRPOConfig:
     # configs have migrated to ``per_device_train_batch_size``.
     if "micro_batch_size" in fields:
         old_value = fields.pop("micro_batch_size")
+        if "per_device_train_batch_size" in fields and fields["per_device_train_batch_size"] != old_value:
+            raise ValueError(
+                "grpo_config: both 'micro_batch_size' (deprecated) and 'per_device_train_batch_size' are set with different values; "
+                "remove 'micro_batch_size' and keep only 'per_device_train_batch_size'."
+            )
         logging.warning(
             "grpo_config: 'micro_batch_size' is deprecated and will be removed; "
             "use 'per_device_train_batch_size' instead."
@@ -451,6 +456,8 @@ class GRPOTrainer:
         grad_accum = grpo_cfg.gradient_accumulation_steps
         if grad_accum <= 0:
             raise ValueError(f"gradient_accumulation_steps must be positive, got {grad_accum}")
+        if grpo_cfg.num_generations <= 0:
+            raise ValueError(f"num_generations must be positive, got {grpo_cfg.num_generations}")
         completions_per_microbatch = grpo_cfg.per_device_train_batch_size * num_devices
         if completions_per_microbatch % grpo_cfg.num_generations != 0:
             raise ValueError(
