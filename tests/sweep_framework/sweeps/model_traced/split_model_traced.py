@@ -110,7 +110,19 @@ def run(
     start_time = start_measuring_time()
     # Pop split_size from op_kwargs since ttnn.split takes it as a positional argument
     op_kwargs.pop("split_size", None)
-    output_tensors = ttnn.split(input_tensor_a, split_size, dim=dim, **op_kwargs)
+    try:
+        output_tensors = ttnn.split(input_tensor_a, split_size, dim=dim, **op_kwargs)
+    except Exception as e:
+        # Splitting a very wide tensor (e.g. a 128256/32064 vocab projection) with
+        # a traced sharded/L1 output config overflows L1 — the op's static CBs
+        # clash with the output buffers. Retry with a DRAM-interleaved output so
+        # the op sizes its footprint to DRAM (the result is layout-independent).
+        _m = str(e).lower()
+        if not any(s in _m for s in ("clash", "circular buffer", "out of memory", "l1 buffer")):
+            raise
+        _kw = {k: v for k, v in op_kwargs.items() if k != "memory_config"}
+        _kw["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+        output_tensors = ttnn.split(input_tensor_a, split_size, dim=dim, **_kw)
     output_tensors = [mesh_tensor_to_torch(t, device if is_mesh_device else None) for t in output_tensors]
     e2e_perf = stop_measuring_time(start_time)
 
