@@ -1107,21 +1107,37 @@ static std::map<std::string, std::string> build_kernel_defines(
         auto first_core = core_range_set.ranges().begin()->start_coord;
         auto cb_impls = impl.circular_buffers_on_core(first_core);
         uint32_t tile_sizes[EMULE_NUM_CBS] = {};
+        // Per-CB data format (tt::DataFormat enum value). 255 (Invalid) marks
+        // unconfigured slots — analog of the host's std::optional<DataFormat>
+        // empty state. Mirrors genfiles.cpp::compute_data_formats, which bakes
+        // chlkc_descriptors.h's unpack_src_format[]/pack_dst_format[] on silicon.
+        // Without this the JIT-side arrays default to all-Invalid and emule's
+        // format dispatch falls back to a page-size heuristic that misclassifies
+        // thin bf16 tiles (e.g. a [1,32] reduce scaler, page=64) as Bfp8_b.
+        uint8_t data_formats[EMULE_NUM_CBS];
+        for (uint32_t i = 0; i < EMULE_NUM_CBS; i++) {
+            data_formats[i] = static_cast<uint8_t>(tt::DataFormat::Invalid);
+        }
         for (auto& cb_impl : cb_impls) {
             for (uint8_t idx : cb_impl->local_buffer_indices()) {
                 if (idx < EMULE_NUM_CBS) {
                     tile_sizes[idx] = cb_impl->page_size(idx);
+                    data_formats[idx] = static_cast<uint8_t>(cb_impl->data_format(idx));
                 }
             }
         }
         std::ostringstream ts;
+        std::ostringstream df;
         for (uint32_t i = 0; i < EMULE_NUM_CBS; i++) {
             if (i) {
                 ts << ',';
+                df << ',';
             }
             ts << tile_sizes[i];
+            df << static_cast<uint32_t>(data_formats[i]);
         }
         defines["EMULE_TILE_SIZES"] = ts.str();
+        defines["EMULE_CB_DATA_FORMATS"] = df.str();
     }
     return defines;
 }
