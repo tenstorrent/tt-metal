@@ -1,4 +1,5 @@
 #include "tt_metal/tt_metal/deployment/deployment_common.hpp"
+
 #include "dram_base.hpp"
 
 #include <gtest/gtest.h>
@@ -14,9 +15,17 @@
 #include <chrono>
 #include <thread>
 #include <algorithm>
+#include <fstream>
 #include <cctype>
+#include <dirent.h>
 #include <cstdlib>
+#include <string>
 #include <umd/device/types/telemetry.hpp>
+
+static bool get_dram_inject_tensix_heartbeat_stall_from_env_once() {
+    const char* env = std::getenv("DRAM_TEST_INJECT_TENSIX_HEARTBEAT_STALL");
+    return (env != nullptr) && (std::string(env) == "1");
+}
 
 static uint32_t get_dram_insert_errors_pattern_id_from_env_once() {
     const char* env = std::getenv("DRAM_INSERT_ERRORS_PATTERN_ID");
@@ -30,7 +39,7 @@ static uint32_t get_dram_insert_errors_pattern_id_from_env_once() {
         return 0u;
     }
 
-    return value;
+    return static_cast<uint32_t>(value);
 }
 
 namespace tt::tt_metal {
@@ -41,14 +50,142 @@ extern std::atomic<bool> g_watchdog_requested;
 using namespace std;
 using namespace tt;
 
+static std::string trim_copy(std::string s) {
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) {
+        s.erase(s.begin());
+    }
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) {
+        s.pop_back();
+    }
+    return s;
+}
+
+static std::string read_text_file_trimmed(const std::string& path) {
+    std::ifstream file(path);
+    std::string value;
+    std::getline(file, value);
+    return trim_copy(value);
+}
+
+static const std::vector<std::string>& get_tenstorrent_pci_bdfs_cached() {
+    static const std::vector<std::string> bdfs = []() {
+        std::vector<std::string> out;
+
+        DIR* dir = opendir("/sys/bus/pci/devices");
+        if (dir == nullptr) {
+            return out;
+        }
+
+        while (auto* entry = readdir(dir)) {
+            const std::string bdf = entry->d_name;
+            if (bdf.empty() || bdf[0] == '.') {
+                continue;
+            }
+
+            const std::string base = "/sys/bus/pci/devices/" + bdf;
+            std::string vendor = read_text_file_trimmed(base + "/vendor");
+            std::transform(
+                vendor.begin(), vendor.end(), vendor.begin(), [](unsigned char c) { return std::tolower(c); });
+
+            // Tenstorrent PCI vendor id. Sorted order gives a stable best-effort map:
+            // runtime bdf={} device_id=0 -> first Tenstorrent BDF, bdf={} device_id=1 -> second, etc.
+            if (vendor == "0x1e52") {
+                out.push_back(bdf);
+            }
+        }
+
+        closedir(dir);
+        std::sort(out.begin(), out.end());
+        return out;
+    }();
+
+    return bdfs;
+}
+
+static std::string pci_bdf_for_device_id(uint32_t device_id) {
+    const auto& bdfs = get_tenstorrent_pci_bdfs_cached();
+    if (device_id < bdfs.size()) {
+        return bdfs[device_id];
+    }
+    return "unknown";
+}
+
+struct DramPhysicalLocation {
+    std::string bdf;
+    std::string ubb_tray;
+    std::string location;
+};
+
+static std::pair<std::string, std::string> dram_ubb_tray_and_location_from_bdf(const std::string& bdf) {
+    const auto first_colon_pos = bdf.find(':');
+    const auto second_colon_pos =
+        first_colon_pos == std::string::npos ? std::string::npos : bdf.find(':', first_colon_pos + 1);
+
+    if (first_colon_pos == std::string::npos || second_colon_pos == std::string::npos ||
+        second_colon_pos <= first_colon_pos + 1) {
+        return {"unknown", "unknown"};
+    }
+
+    const std::string d_text = bdf.substr(first_colon_pos + 1, second_colon_pos - first_colon_pos - 1);
+
+    try {
+        const auto d = static_cast<uint32_t>(std::stoul(d_text, nullptr, 16));
+        const uint32_t upper_nibble = (d >> 4) & 0xF;
+        const uint32_t lower_nibble = d & 0xF;
+
+        std::string ubb_tray = "unknown";
+        switch (upper_nibble) {
+            case 0x0: ubb_tray = "1"; break;
+            case 0x4: ubb_tray = "2"; break;
+            case 0xC: ubb_tray = "3"; break;
+            case 0x8: ubb_tray = "4"; break;
+            default: break;
+        }
+
+        return {ubb_tray, fmt::format("{}", lower_nibble)};
+    } catch (...) {
+        return {"unknown", "unknown"};
+    }
+}
+
+static DramPhysicalLocation dram_physical_location_for_device_id(uint32_t device_id) {
+    DramPhysicalLocation loc;
+    loc.bdf = pci_bdf_for_device_id(device_id);
+    auto decoded = dram_ubb_tray_and_location_from_bdf(loc.bdf);
+    loc.ubb_tray = decoded.first;
+    loc.location = decoded.second;
+    return loc;
+}
+
 static std::string device_log_prefix(IDevice* device) {
     const uint32_t device_id = device->id();
     return fmt::format("[bdf={}][device_id={}]", pci_bdf_for_device_id(device_id), device_id);
 }
 
+static void ArmWatchdogHardExit(const std::string& reason) {
+    std::thread([reason]() {
+        std::this_thread::sleep_for(std::chrono::seconds(3));
+        log_error(
+            tt::LogTest,
+            "\n"
+            "================ DRAM WATCHDOG HARD EXIT ================\n"
+            "Reason: {}\n"
+            "Metal/device cleanup did not complete.\n"
+            "\n"
+            "If the next run cannot acquire the device or topology mapping fails, execute:\n"
+            "    source ~/.tenstorrent-venv/bin/activate\n"
+            "    tt-smi -r\n"
+            "=========================================================",
+            reason);
+        std::cout.flush();
+        std::cerr.flush();
+        std::_Exit(2);
+    }).detach();
+}
+
 static bool dram_test_verbose_enabled() {
     const char* env = std::getenv("DRAM_TEST_VERBOSE");
-    return env && strcmp(env, "0");
+    return env != nullptr && std::string(env) == "1";
 }
 
 static void log_verbose_dram_work_item(
@@ -113,7 +250,7 @@ static void log_dram_failure(IDevice* device, const CoreCoord& core, const DramB
     log_info(
         tt::LogTest,
         "{} Mismatch on dram_controller={} core {} pattern={} repeat={} pass={}: failures={}, "
-        "first_fail_classified_as={}, write_failures={}, read_failures={}, words_checked={}",
+        "first_fail_classified_as={}, write_failures={}, read_failures={}",
         device_log_prefix(device),
         result->bank_id,
         core,
@@ -123,8 +260,7 @@ static void log_dram_failure(IDevice* device, const CoreCoord& core, const DramB
         result->failures,
         dram_failure_kind_name(result->failure_kind),
         result->suspected_write_failures,
-        result->suspected_read_failures,
-        result->words_checked);
+        result->suspected_read_failures);
 }
 
 static inline void accumulate_result_into_summary(DramRunSummary& summary, const DramBaseResult* result) {
@@ -193,7 +329,7 @@ DramRunSummary run_dram_base_test(
     auto* const device = mesh_device->get_devices()[0];
 
     TT_FATAL(cfg.bank_id < 8, "bank_id must not exceed the total number of controllers");
-    TT_FATAL(cfg.total_bytes <= DRAM_TEST_MAX_BANK_BYTES, "total_bytes must be under (4GB-16MB)");
+    TT_FATAL(cfg.total_bytes <= DRAM_TEST_EFFECTIVE_MAX_BANK_BYTES, "total_bytes must be under (4GB-16MB-2KB)");
     TT_FATAL(cfg.chunk_bytes % sizeof(uint32_t) == 0, "chunk_bytes must be word aligned");
     TT_FATAL(cfg.total_bytes % sizeof(uint32_t) == 0, "total_bytes must be word aligned");
 
@@ -312,9 +448,11 @@ DramRunSummary run_dram_multi_core_single_controller_test(
 
     TT_FATAL(!cores.empty(), "No cores provided");
     TT_FATAL(cfg.bank_id < 8, "bank_id must not exceed the total number of controllers");
-    TT_FATAL(cfg.total_bytes <= DRAM_TEST_MAX_BANK_BYTES, "total_bytes must be under (4GB-16MB)");
+    TT_FATAL(cfg.total_bytes <= DRAM_TEST_EFFECTIVE_MAX_BANK_BYTES, "total_bytes must be under (4GB-16MB-2KB)");
     TT_FATAL(cfg.chunk_bytes % sizeof(uint32_t) == 0, "chunk_bytes must be word aligned");
-    TT_FATAL(cfg.total_bytes % 4096u == 0, "total_bytes must be 4KB aligned for multi-core controller mode");
+    TT_FATAL(
+        cfg.total_bytes % DRAM_TEST_NOC_WORD_BYTES == 0,
+        "total_bytes must be NOC word aligned for multi-core controller mode");
 
     const uint64_t total_bytes = cfg.total_bytes;
     const uint64_t bytes_per_core_base = (total_bytes / cores.size()) & ~0xFFFULL;
@@ -324,8 +462,6 @@ DramRunSummary run_dram_multi_core_single_controller_test(
 
     const uint64_t covered_bytes = bytes_per_core_base * cores.size();
     const uint64_t remainder_bytes = total_bytes - covered_bytes;
-
-    TT_FATAL((remainder_bytes & 0xFFFULL) == 0ULL, "remainder_bytes must stay 4KB aligned");
 
     struct l1_allocator alloc = new_tensix_allocator();
 
@@ -445,9 +581,12 @@ DramRunSummary run_dram_multi_core_all_controllers_test(
 
     TT_FATAL(!cores.empty(), "No cores provided");
     TT_FATAL(
-        total_bytes_per_controller <= DRAM_TEST_MAX_BANK_BYTES, "total_bytes_per_controller must be under (4GB-16MB)");
+        total_bytes_per_controller <= DRAM_TEST_EFFECTIVE_MAX_BANK_BYTES,
+        "total_bytes_per_controller must be under (4GB-16MB-2KB)");
     TT_FATAL(chunk_bytes % sizeof(uint32_t) == 0, "chunk_bytes must be word aligned");
-    TT_FATAL(total_bytes_per_controller % 4096u == 0, "total_bytes_per_controller must be 4KB aligned");
+    TT_FATAL(
+        total_bytes_per_controller % DRAM_TEST_NOC_WORD_BYTES == 0,
+        "total_bytes_per_controller must be NOC word aligned");
 
     struct l1_allocator alloc = new_tensix_allocator();
 
@@ -493,8 +632,6 @@ DramRunSummary run_dram_multi_core_all_controllers_test(
 
         const uint64_t covered_bytes = bytes_per_core_base * cores_in_this_controller;
         const uint64_t remainder_bytes = total_bytes_per_controller - covered_bytes;
-
-        TT_FATAL((remainder_bytes & 0xFFFULL) == 0ULL, "remainder_bytes must stay 4KB aligned");
 
         for (size_t local_idx = 0; local_idx < cores_in_this_controller; local_idx++) {
             const size_t global_idx = core_begin + local_idx;
@@ -601,13 +738,16 @@ DramRunSummary run_dram_eight_single_core_single_controller_test(
         num_controllers,
         cores.size());
     TT_FATAL(
-        total_bytes_per_controller <= DRAM_TEST_MAX_BANK_BYTES, "total_bytes_per_controller must be under (4GB-16MB)");
+        total_bytes_per_controller <= DRAM_TEST_EFFECTIVE_MAX_BANK_BYTES,
+        "total_bytes_per_controller must be under (4GB-16MB-2KB)");
     TT_FATAL(chunk_bytes % sizeof(uint32_t) == 0, "chunk_bytes must be word aligned");
-    TT_FATAL(total_bytes_per_controller % 4096u == 0, "total_bytes_per_controller must be 4KB aligned");
+    TT_FATAL(
+        total_bytes_per_controller % DRAM_TEST_NOC_WORD_BYTES == 0,
+        "total_bytes_per_controller must be NOC word aligned");
     TT_FATAL((bank_offset & 0xFFFULL) == 0ULL, "bank_offset must be 4KB aligned");
     TT_FATAL(
-        bank_offset + total_bytes_per_controller <= DRAM_TEST_MAX_BANK_BYTES,
-        "bank_offset + total_bytes_per_controller exceeds DRAM_TEST_MAX_BANK_BYTES");
+        bank_offset + total_bytes_per_controller <= DRAM_TEST_EFFECTIVE_MAX_BANK_BYTES,
+        "bank_offset + total_bytes_per_controller exceeds DRAM_TEST_EFFECTIVE_MAX_BANK_BYTES");
     TT_FATAL(bank_offset <= std::numeric_limits<uint64_t>::max(), "bank_offset out of range");
 
     struct l1_allocator alloc = new_tensix_allocator();
@@ -725,13 +865,16 @@ DramMultiInstanceSummary run_dram_eight_single_core_single_controller_test_verbo
         num_controllers,
         cores.size());
     TT_FATAL(
-        total_bytes_per_controller <= DRAM_TEST_MAX_BANK_BYTES, "total_bytes_per_controller must be under (4GB-16MB)");
+        total_bytes_per_controller <= DRAM_TEST_EFFECTIVE_MAX_BANK_BYTES,
+        "total_bytes_per_controller must be under (4GB-16MB-2KB)");
     TT_FATAL(chunk_bytes % sizeof(uint32_t) == 0, "chunk_bytes must be word aligned");
-    TT_FATAL(total_bytes_per_controller % 4096u == 0, "total_bytes_per_controller must be 4KB aligned");
+    TT_FATAL(
+        total_bytes_per_controller % DRAM_TEST_NOC_WORD_BYTES == 0,
+        "total_bytes_per_controller must be NOC word aligned");
     TT_FATAL((bank_offset & 0xFFFULL) == 0ULL, "bank_offset must be 4KB aligned");
     TT_FATAL(
-        bank_offset + total_bytes_per_controller <= DRAM_TEST_MAX_BANK_BYTES,
-        "bank_offset + total_bytes_per_controller exceeds DRAM_TEST_MAX_BANK_BYTES");
+        bank_offset + total_bytes_per_controller <= DRAM_TEST_EFFECTIVE_MAX_BANK_BYTES,
+        "bank_offset + total_bytes_per_controller exceeds DRAM_TEST_EFFECTIVE_MAX_BANK_BYTES");
 
     struct l1_allocator alloc = new_tensix_allocator();
 
@@ -863,7 +1006,6 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
     TT_FATAL(queue_capacity > 0, "queue_capacity must be non-zero");
 
     const uint32_t max_in_flight_jobs_per_core = queue_capacity;
-
     log_info(
         tt::LogTest,
         "{} persistent queue_capacity={} workers={} total_jobs={}",
@@ -887,7 +1029,6 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
         uint32_t observe_pong_l1_addr = 0;
         uint32_t wake_flag_l1_addr = 0;
         uint32_t sync_mailbox_l1_addr = 0;
-
         uint32_t jobs_enqueued = 0;
         uint32_t jobs_observed_done = 0;
         uint32_t host_tail_shadow = 0;
@@ -944,7 +1085,6 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
 
         r.wake_flag_l1_addr = l1_alloc(&alloc, sizeof(uint32_t), 4);
         r.sync_mailbox_l1_addr = l1_alloc(&alloc, kDramSyncMailboxWords * sizeof(uint32_t), 32);
-
         DramJobQueueCtrl ctrl{};
         dram_job_queue_ctrl_init(ctrl, queue_capacity);
 
@@ -1120,6 +1260,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
         DramJobQueueCtrl ctrl{};
         dram_job_queue_ctrl_init(ctrl, queue_capacity);
         ctrl.tail = r.host_tail_shadow;
+        ctrl.reserved0 = get_dram_inject_tensix_heartbeat_stall_from_env_once() ? 1u : 0u;
 
         MetalContext::instance().get_cluster().write_core(
             device->id(),
@@ -1144,7 +1285,6 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
 
     constexpr auto kMonitorPrintInterval = std::chrono::seconds(2);
     constexpr auto kStallWatchdogTimeout = std::chrono::seconds(10);
-    constexpr auto kWatchdogGraceExitDelay = std::chrono::seconds(3);
 
     constexpr bool print_per_core_monitor = false;
     constexpr bool print_persistent_run_start_finish = true;
@@ -1229,29 +1369,33 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                     }
                 }
 
-                if (global_monitor_initialized) {
-                    const uint64_t arc_delta = arc_tick - global_prev_arc_tick;
-                    log_info(
-                        tt::LogTest,
-                        "{} monitor: arc={} delta={} {} jobs={}/{}",
-                        device_log_prefix(device),
-                        arc_tick,
-                        arc_delta,
-                        (all_cores_progressing || all_cores_done) ? "all cores progressing"
-                                                                  : "some cores not progressing",
-                        completed_jobs_total,
-                        total_jobs);
-                } else {
-                    log_info(
-                        tt::LogTest,
-                        "{} monitor: arc={} {} jobs={}/{}",
-                        device_log_prefix(device),
-                        arc_tick,
-                        (all_cores_progressing || all_cores_done) ? "all cores progressing"
-                                                                  : "some cores not progressing",
-                        completed_jobs_total,
-                        total_jobs);
+                if (dram_test_verbose_enabled()) {
+                    if (global_monitor_initialized) {
+                        const uint64_t arc_delta = arc_tick - global_prev_arc_tick;
+                        log_info(
+                            tt::LogTest,
+                            "{} monitor: arc={} delta={} {} jobs={}/{}",
+                            device_log_prefix(device),
+                            arc_tick,
+                            arc_delta,
+                            (all_cores_progressing || all_cores_done) ? "all cores progressing"
+                                                                      : "some cores not progressing",
+                            completed_jobs_total,
+                            total_jobs);
+                    } else {
+                        log_info(
+                            tt::LogTest,
+                            "{} monitor: arc={} {} jobs={}/{}",
+                            device_log_prefix(device),
+                            arc_tick,
+                            (all_cores_progressing || all_cores_done) ? "all cores progressing"
+                                                                      : "some cores not progressing",
+                            completed_jobs_total,
+                            total_jobs);
+                    }
+                }
 
+                if (!global_monitor_initialized) {
                     global_monitor_initialized = true;
                 }
 
@@ -1343,19 +1487,38 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                                     core_jobs.size());
 
                             } else if ((now - r.stall_watchdog_start_time) >= kStallWatchdogTimeout) {
+                                const auto stuck_for_s =
+                                    std::chrono::duration_cast<std::chrono::seconds>(now - r.stall_watchdog_start_time)
+                                        .count();
                                 log_critical(
                                     tt::LogTest,
-                                    "{} watchdog timeout: core=({}, {}) reason={} stuck_for={}s jobs={}/{} hb={} "
-                                    "arc={} "
-                                    "stage={} job_id={}; requesting graceful stop. If the test does not exit, "
-                                    "terminate the process manually. If the next run cannot acquire the device or "
-                                    "topology mapping fails, run: tt-smi -r",
-                                    device_log_prefix(device),
+                                    "\n"
+                                    "================ DRAM WATCHDOG TIMEOUT ================\n"
+                                    "BDF          : {}\n"
+                                    "UBB tray     : {}\n"
+                                    "Location     : {}\n"
+                                    "DRAM Channel : unknown\n"
+                                    "Worker Core  : ({}, {})\n"
+                                    "Reason       : {}\n"
+                                    "Stuck For    : {}s\n"
+                                    "Jobs         : {}/{}\n"
+                                    "Heartbeat    : {}\n"
+                                    "ARC          : {}\n"
+                                    "Stage        : {}\n"
+                                    "Job ID       : {}\n"
+                                    "\n"
+                                    "Requesting graceful stop.\n"
+                                    "If the next run cannot acquire the device or topology mapping fails, execute:\n"
+                                    "    source ~/.tenstorrent-venv/bin/activate\n"
+                                    "    tt-smi -r\n"
+                                    "======================================================",
+                                    dram_physical_location_for_device_id(device->id()).bdf,
+                                    dram_physical_location_for_device_id(device->id()).ubb_tray,
+                                    dram_physical_location_for_device_id(device->id()).location,
                                     r.core.x,
                                     r.core.y,
                                     dram_watchdog_reason_name(r.stall_watchdog_reason),
-                                    std::chrono::duration_cast<std::chrono::seconds>(now - r.stall_watchdog_start_time)
-                                        .count(),
+                                    stuck_for_s,
                                     status->jobs_completed,
                                     core_jobs.size(),
                                     status->heartbeat_tick,
@@ -1367,20 +1530,12 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                                 g_watchdog_requested.store(true);
                                 g_stop_requested.store(true);
 
-                                std::thread([core = r.core,
-                                             delay = kWatchdogGraceExitDelay,
-                                             prefix = device_log_prefix(device)]() {
-                                    std::this_thread::sleep_for(delay);
-
-                                    log_critical(
-                                        tt::LogTest,
-                                        "{} watchdog hard-exit: core=({}, {}) exiting process after grace period",
-                                        prefix,
-                                        core.x,
-                                        core.y);
-
-                                    std::_Exit(2);
-                                }).detach();
+                                ArmWatchdogHardExit(fmt::format(
+                                    "{} watchdog timeout on worker core=({}, {}) reason={}",
+                                    device_log_prefix(device),
+                                    r.core.x,
+                                    r.core.y,
+                                    dram_watchdog_reason_name(r.stall_watchdog_reason)));
                             }
                         }
                     }
@@ -1421,26 +1576,30 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                             const uint64_t arc_tick = read_arc_global_tick(device);
                             const uint64_t completed_jobs_total = get_completed_jobs_total();
 
-                            if (global_monitor_initialized) {
-                                const uint64_t arc_delta = arc_tick - global_prev_arc_tick;
+                            if (dram_test_verbose_enabled()) {
+                                if (global_monitor_initialized) {
+                                    const uint64_t arc_delta = arc_tick - global_prev_arc_tick;
 
-                                log_info(
-                                    tt::LogTest,
-                                    "{} monitor: arc={} delta={} all cores progressing jobs={}/{}",
-                                    device_log_prefix(device),
-                                    arc_tick,
-                                    arc_delta,
-                                    completed_jobs_total,
-                                    total_jobs);
-                            } else {
-                                log_info(
-                                    tt::LogTest,
-                                    "{} monitor: arc={} all cores progressing jobs={}/{}",
-                                    device_log_prefix(device),
-                                    arc_tick,
-                                    completed_jobs_total,
-                                    total_jobs);
+                                    log_info(
+                                        tt::LogTest,
+                                        "{} monitor: arc={} delta={} all cores progressing jobs={}/{}",
+                                        device_log_prefix(device),
+                                        arc_tick,
+                                        arc_delta,
+                                        completed_jobs_total,
+                                        total_jobs);
+                                } else {
+                                    log_info(
+                                        tt::LogTest,
+                                        "{} monitor: arc={} all cores progressing jobs={}/{}",
+                                        device_log_prefix(device),
+                                        arc_tick,
+                                        completed_jobs_total,
+                                        total_jobs);
+                                }
+                            }
 
+                            if (!global_monitor_initialized) {
                                 global_monitor_initialized = true;
                             }
 
@@ -1486,20 +1645,45 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                         const bool heartbeat_stopped = (now_poll - last_heartbeat_change_time) >= kNoHeartbeatTimeout;
 
                         if (result_overdue || heartbeat_stopped) {
-                            log_info(
-                                tt::LogTest,
-                                "{} result wait timeout: core={} job={} slot={} waited={}s heartbeat_idle={}s "
-                                "status_jobs_completed={} expected(job_id={}, pattern={}, pass={}, repeat={}, bank={}) "
-                                "got(job_id={}, pattern={}, pass={}, repeat={}, bank={}, words={}, transfers={}); "
-                                "requesting stop",
-                                device_log_prefix(device),
-                                core_idx,
-                                done_index,
-                                done_slot,
+                            const auto waited_s =
                                 std::chrono::duration_cast<std::chrono::seconds>(now_poll - result_wait_start_time)
-                                    .count(),
+                                    .count();
+                            const auto heartbeat_idle_s =
                                 std::chrono::duration_cast<std::chrono::seconds>(now_poll - last_heartbeat_change_time)
-                                    .count(),
+                                    .count();
+                            log_error(
+                                tt::LogTest,
+                                "\n"
+                                "================ DRAM WATCHDOG TIMEOUT ================\n"
+                                "BDF          : {}\n"
+                                "UBB tray     : {}\n"
+                                "Location     : {}\n"
+                                "DRAM Channel : {}\n"
+                                "Worker Core  : ({}, {})\n"
+                                "Core Index   : {}\n"
+                                "Queue Slot   : {}\n"
+                                "Waited       : {}s\n"
+                                "Heartbeat Idle: {}s\n"
+                                "Status Jobs  : {}\n"
+                                "\n"
+                                "Expected Job : job_id={} pattern={} pass={} repeat={} bank={}\n"
+                                "Observed     : job_id={} pattern={} pass={} repeat={} bank={} words={} transfers={}\n"
+                                "\n"
+                                "Requesting graceful stop.\n"
+                                "If the next run cannot acquire the device or topology mapping fails, execute:\n"
+                                "    source ~/.tenstorrent-venv/bin/activate\n"
+                                "    tt-smi -r\n"
+                                "======================================================",
+                                dram_physical_location_for_device_id(device->id()).bdf,
+                                dram_physical_location_for_device_id(device->id()).ubb_tray,
+                                dram_physical_location_for_device_id(device->id()).location,
+                                expected_job.bank_id,
+                                r.core.x,
+                                r.core.y,
+                                core_idx,
+                                done_slot,
+                                waited_s,
+                                heartbeat_idle_s,
                                 status_poll->jobs_completed,
                                 expected_job.job_id,
                                 expected_job.pattern_id,
@@ -1515,8 +1699,21 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                                 result_copy.transfers);
 
                             out.summary.pass = false;
+                            g_watchdog_requested.store(true);
                             g_stop_requested.store(true);
                             broadcast_stop_to_all_cores();
+                            ArmWatchdogHardExit(fmt::format(
+                                "{} result wait timeout on bdf={} ubb_tray={} location={} dram_channel={} core=({}, "
+                                "{}) expected_job={} transfers={}",
+                                device_log_prefix(device),
+                                dram_physical_location_for_device_id(device->id()).bdf,
+                                dram_physical_location_for_device_id(device->id()).ubb_tray,
+                                dram_physical_location_for_device_id(device->id()).location,
+                                expected_job.bank_id,
+                                r.core.x,
+                                r.core.y,
+                                expected_job.job_id,
+                                result_copy.transfers));
                             break;
                         }
 
