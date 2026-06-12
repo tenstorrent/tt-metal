@@ -156,11 +156,8 @@ def _tilized_index(h: int, w: int) -> int:
     return (face_r * 2 + face_c) * 256 + (h % 16) * 16 + (w % 16)
 
 
-# Formats test_dprint_tile exercises. tile_slice unpacks the input into SrcA, so on
-# Quasar a format must be a valid SrcA register format; that leaves the 5 below
-# (UInt16/Bfp4_b/Bfp8_b/UInt32 aren't). The 32-bit formats run with
-# DestAccumulation.Yes since Quasar can't pack 32-bit out of a 16-bit dest. WH/BH
-# accept everything in _BYTES_PER_ELT.
+# Formats test_dprint_tile exercises. It requires SrcA data format support.
+# WH/BH accept everything in _BYTES_PER_ELT.
 _TILE_TEST_FORMATS = (
     [
         DataFormat.Int8,
@@ -179,9 +176,6 @@ _TILE_TEST_FORMATS = (
 )
 def test_dprint_tile(formats):
     formats = formats[0]
-    # 32-bit formats can only be packed from a 32-bit dest (a hard requirement on
-    # Quasar, valid everywhere). The slice is read straight from L1, so dest width
-    # doesn't change the printed values.
     dest_acc = (
         DestAccumulation.Yes
         if formats.input_format.is_32_bit()
