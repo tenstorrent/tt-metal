@@ -49,7 +49,7 @@
   cmd: |
     TTRUN_DIR=/etc/ttop
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
-    PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+    PIPELINE_HOSTS=$(awk 'NF {printf "%s:4,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
 
     echo "========== ttrun debug (runner) =========="
     echo "TT_METAL_HOME=${TT_METAL_HOME}"
