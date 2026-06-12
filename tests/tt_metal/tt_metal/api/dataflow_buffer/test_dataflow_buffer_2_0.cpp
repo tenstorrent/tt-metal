@@ -350,6 +350,232 @@ TEST_F(MeshDeviceFixture, A1_2_0_DMTensixDMTest2xDFB1Sx1S_Relu) {
 }
 
 // =====================================================================================
+// A1-BLOCKED: DRAM-verified data validation of the DM→Trisc column.
+//
+//   DRAM in_tensor → [DFB_IN: P DM BLOCKED producers → 1 Tensix consumer(cap=X)]
+//                  → Tensix copy_tile (dfb_eltwise_copy) → [DFB_OUT: 1 Tensix STRIDED
+//                    producer → 1 DM STRIDED consumer] → DRAM out_tensor.
+//
+// A Tensix consumer writes no DRAM, so we can't data-verify it directly; instead the Tensix
+// COPIES each consumed tile straight through to DFB_OUT, and a DM back-half writes it to DRAM
+// where we compare against a golden. The DFB_OUT back-half (1 Tensix producer → 1 DM consumer,
+// both STRIDED, single-thread) is a clean identity pass-through, so DRAM_out[k] == the Tensix's
+// k-th tile consumed from DFB_IN — which is exactly the existing DM→DM BLOCKED→cap golden at
+// num_consumers=1. We keep EXACTLY ONE Tensix thread (fan-in: P DM producers → 1 Tensix consumer)
+// to avoid the multi-thread PACK/UNPACK L1 coherence race that gated the intra 4-thread test.
+//
+// Golden per cap (C_tensix=1): BLOCKED→BLOCKED is identity for any P; BLOCKED→ALL is the
+// C-independent permutation output[(b*bs+j)*P+p]=input[(b*P+p)*bs+j] (identity at P==1);
+// BLOCKED→STRIDED requires C≥P so C=1 forces P=1 → identity.
+static void run_a1_blocked_pipeline(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    m2::DFBAccessPattern cap_in,
+    uint32_t P,
+    uint32_t block_size,
+    uint32_t num_entries) {
+    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "M2 path is Quasar-only (Gen2Config)";
+    }
+    IDevice* device = mesh_device->get_devices()[0];
+    constexpr uint32_t entry_size = 2 * 32 * 32;  // bf16 tile = 2048 B
+    const m2::NodeCoord node{0, 0};
+
+    const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, num_entries, DataType::BFLOAT16);
+    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
+    auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
+
+    const m2::DFBSpecName DFB_IN{"dfb_in"};
+    const m2::DFBSpecName DFB_OUT{"dfb_out"};
+    const m2::KernelSpecName PRODUCER{"producer"};
+    const m2::KernelSpecName CONSUMER{"consumer"};
+    const m2::KernelSpecName COMPUTE{"compute"};
+    const m2::TensorParamName IN_TENSOR{"in_tensor"};
+    const m2::TensorParamName OUT_TENSOR{"out_tensor"};
+
+    m2::DataflowBufferSpec dfb_in{
+        .unique_id = DFB_IN,
+        .entry_size = entry_size,
+        .num_entries = num_entries,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+    m2::DataflowBufferSpec dfb_out{
+        .unique_id = DFB_OUT,
+        .entry_size = entry_size,
+        .num_entries = num_entries,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+
+    // Front half: P DM BLOCKED producers → DFB_IN (consumer is the Tensix below, pattern cap_in).
+    const char* producer_src =
+        (cap_in == m2::DFBAccessPattern::STRIDED)
+            ? "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_strided_producer_2_0.cpp"
+            : "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_producer_2_0.cpp";
+    auto producer = make_dm_kernel(PRODUCER, producer_src, static_cast<uint8_t>(P));
+    producer.dfb_bindings = {
+        {.dfb_spec_name = DFB_IN,
+         .accessor_name = "out",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
+         .access_pattern = m2::DFBAccessPattern::BLOCKED,
+         .block_size = block_size}};
+    producer.tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}};
+    producer.compile_time_args = {
+        {"num_entries_per_producer", num_entries / P}, {"block_size", block_size}, {"implicit_sync", 0u}};
+    producer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
+
+    // Middle: single Tensix thread consumes DFB_IN (cap_in) and copies through to DFB_OUT (STRIDED).
+    // dfb_eltwise_copy is pattern-agnostic (per-tile wait_front/copy_tile/pack_tile/pop_front) — no edit.
+    auto compute =
+        make_compute_kernel(COMPUTE, "tests/tt_metal/tt_metal/test_kernels/compute/dfb_eltwise_copy_2_0.cpp");
+    compute.dfb_bindings = {
+        {.dfb_spec_name = DFB_IN,
+         .accessor_name = "in",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
+         .access_pattern = cap_in,
+         .block_size = (cap_in == m2::DFBAccessPattern::BLOCKED) ? block_size : 0u},
+        {.dfb_spec_name = DFB_OUT,
+         .accessor_name = "out",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED},
+    };
+    compute.compile_time_args = {{"per_core_tile_cnt", num_entries}};
+
+    // Back half (identity pass-through): DFB_OUT → 1 DM STRIDED consumer → DRAM.
+    auto consumer = make_dm_kernel(CONSUMER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer_2_0.cpp");
+    consumer.dfb_bindings = {
+        {.dfb_spec_name = DFB_OUT,
+         .accessor_name = "in",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED}};
+    consumer.tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}};
+    consumer.compile_time_args = {
+        {"num_entries_per_consumer", num_entries}, {"blocked_consumer", 0u}, {"implicit_sync", 0u}};
+    consumer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
+
+    disable_implicit_sync_for(producer, DFB_IN);
+    disable_implicit_sync_for(consumer, DFB_OUT);
+
+    m2::WorkUnitSpec wu{.name = "wu", .kernels = {PRODUCER, CONSUMER, COMPUTE}, .target_nodes = node};
+    m2::ProgramSpec spec{
+        .name = "a1_blocked_2_0",
+        .kernels = {producer, consumer, compute},
+        .dataflow_buffers = {dfb_in, dfb_out},
+        .tensor_parameters =
+            {
+                {.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()},
+                {.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()},
+            },
+        .work_units = {wu},
+    };
+    Program program = m2::MakeProgramFromSpec(*mesh_device, spec);
+
+    m2::ProgramRunArgs params;
+    params.kernel_run_args = {
+        m2::ProgramRunArgs::KernelRunArgs{
+            .kernel = PRODUCER,
+            .runtime_arg_values = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}},
+        },
+        m2::ProgramRunArgs::KernelRunArgs{
+            .kernel = CONSUMER,
+            .runtime_arg_values = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}},
+        },
+        m2::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+    };
+    params.tensor_args = {{IN_TENSOR, std::cref(in_tensor)}, {OUT_TENSOR, std::cref(out_tensor)}};
+    m2::SetProgramRunArgs(program, params);
+
+    const uint32_t total_bytes = entry_size * num_entries;
+    auto input = create_random_vector_of_bfloat16(total_bytes, 2.0f, 0xA1B1);
+    detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), input);
+    m2_writeshard_barrier_uint32(device, in_tensor, input);
+
+    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
+
+    std::vector<uint32_t> output;
+    detail::ReadFromBuffer(*out_tensor.mesh_buffer().get_reference_buffer(), output);
+
+    // DRAM_out[k] = the Tensix's k-th consumed tile from DFB_IN (the back-half is a FIFO identity
+    // pass-through). NOTE this is the raw CONSUME ORDER — for BLOCKED it is NOT the DM→DM identity,
+    // because the A1 back-half does not do the DM block-consumer's reordering write.
+    const uint32_t wpe = entry_size / sizeof(uint32_t);
+    const uint32_t bs = block_size;
+    const char* cap_name = (cap_in == m2::DFBAccessPattern::BLOCKED) ? "BLOCKED"
+                           : (cap_in == m2::DFBAccessPattern::ALL)   ? "ALL"
+                                                                     : "STRIDED";
+    std::vector<uint32_t> expected(input.size(), 0u);
+    if (cap_in == m2::DFBAccessPattern::ALL) {
+        // BLOCKED→ALL: the ALL consumer writes in consume order, so this matches the DM→DM golden:
+        // output[(b*bs+j)*P+p] = input[(b*P+p)*bs+j], capacity=num_entries/P. Identity at P==1.
+        const uint32_t capacity = num_entries / P;
+        const uint32_t blocks_per_producer = capacity / bs;
+        for (uint32_t pp = 0; pp < P; ++pp) {
+            for (uint32_t b = 0; b < blocks_per_producer; ++b) {
+                for (uint32_t j = 0; j < bs; ++j) {
+                    const uint32_t src = (b * P + pp) * bs + j;
+                    const uint32_t dst = (b * bs + j) * P + pp;
+                    std::copy(input.begin() + src * wpe, input.begin() + (src + 1) * wpe, expected.begin() + dst * wpe);
+                }
+            }
+        }
+    } else if (cap_in == m2::DFBAccessPattern::BLOCKED) {
+        // BLOCKED→BLOCKED, C=1: the single consumer round-robins the P producer sub-rings — its k-th
+        // pop is TC (k%P), sub-ring position (k/P). Producer p filled sub-ring position s with input
+        // page (s/bs * P + p)*bs + s%bs. Identity at P==1, a permutation for P>1.
+        for (uint32_t k = 0; k < num_entries; ++k) {
+            const uint32_t p = k % P;
+            const uint32_t s = k / P;
+            const uint32_t src = (s / bs * P + p) * bs + (s % bs);
+            std::copy(input.begin() + src * wpe, input.begin() + (src + 1) * wpe, expected.begin() + k * wpe);
+        }
+    } else {
+        // BLOCKED→STRIDED: C≥P forces P==1 here → identity.
+        expected = input;
+    }
+
+    if (expected != output) {
+        for (uint32_t t = 0; t < std::min<uint32_t>(num_entries, 16); ++t) {
+            int match = -1;
+            for (uint32_t src = 0; src < num_entries; ++src) {
+                if (std::equal(input.begin() + src * wpe, input.begin() + (src + 1) * wpe, output.begin() + t * wpe)) {
+                    match = static_cast<int>(src);
+                    break;
+                }
+            }
+            log_info(
+                tt::LogTest,
+                "  A1 DM→Trisc BLOCKED→{} output tile {} ← {}",
+                cap_name,
+                t,
+                match >= 0 ? ("input page " + std::to_string(match)) : std::string("UNKNOWN"));
+        }
+    }
+    EXPECT_EQ(expected, output) << "A1 DM→Trisc BLOCKED→" << cap_name << " data mismatch (P=" << P << ")";
+}
+
+// Identity cases (high confidence): BLOCKED any P, STRIDED P==1, ALL P==1.
+TEST_F(MeshDeviceFixture, A1Blocked_2_0_DMTensixDM_BLOCKED_1B_blk4) {
+    run_a1_blocked_pipeline(this->devices_.at(0), m2::DFBAccessPattern::BLOCKED, 1, 4, 16);
+}
+TEST_F(MeshDeviceFixture, A1Blocked_2_0_DMTensixDM_STRIDED_1B_blk4) {
+    run_a1_blocked_pipeline(this->devices_.at(0), m2::DFBAccessPattern::STRIDED, 1, 4, 16);
+}
+TEST_F(MeshDeviceFixture, A1Blocked_2_0_DMTensixDM_ALL_1B_blk4) {
+    run_a1_blocked_pipeline(this->devices_.at(0), m2::DFBAccessPattern::ALL, 1, 4, 16);
+}
+// Fan-in (P>1 → 1 Tensix consumer): BLOCKED identity, ALL permutation. Exercises real multi-sub-ring reads.
+TEST_F(MeshDeviceFixture, A1Blocked_2_0_DMTensixDM_BLOCKED_2B_blk4) {
+    run_a1_blocked_pipeline(this->devices_.at(0), m2::DFBAccessPattern::BLOCKED, 2, 4, 16);
+}
+TEST_F(MeshDeviceFixture, A1Blocked_2_0_DMTensixDM_BLOCKED_4B_blk4) {
+    run_a1_blocked_pipeline(this->devices_.at(0), m2::DFBAccessPattern::BLOCKED, 4, 4, 16);
+}
+TEST_F(MeshDeviceFixture, A1Blocked_2_0_DMTensixDM_ALL_2B_blk4) {
+    run_a1_blocked_pipeline(this->devices_.at(0), m2::DFBAccessPattern::ALL, 2, 4, 16);
+}
+TEST_F(MeshDeviceFixture, A1Blocked_2_0_DMTensixDM_ALL_4B_blk4) {
+    run_a1_blocked_pipeline(this->devices_.at(0), m2::DFBAccessPattern::ALL, 4, 4, 16);
+}
+
+// =====================================================================================
 // B-series helper: minimal DM-DFB-DM pipeline with implicit sync option.
 // Parallels run_single_dfb_program for the DM↔DM case.
 // =====================================================================================
