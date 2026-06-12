@@ -1,12 +1,32 @@
 # --- Meshes ---------------------------------------------------------------
+# dim_types [LINE, RING]: the size-4 (X) dimension is a torus ring so this
+# descriptor is valid for FABRIC_2D_TORUS_X (FabricConfig can still restrict
+# it down to FABRIC_2D / MESH).
 
 mesh_descriptors {
   name: "M0"
   arch: BLACKHOLE
-  device_topology { dims: [ 2, 4 ] }
+  device_topology { dims: [ 2, 4 ], dim_types: [ LINE, RING ] }
   host_topology   { dims: [ 1, 1 ] }
   channels { count: 2 policy: RELAXED }
 }
+
+# --- Pinnings ---------------------------------------------------------------
+# Canonical coord->physical-chip embedding for the 8-chip P150 loudbox cube.
+# Forces the topology solver to a deterministic embedding that respects the
+# cube's two 4-rings (column 0 -> chips {0,1,2,3}, column 1 -> {4,5,6,7}),
+# which the blaze cross-device socket staging routes correctly. Without this
+# the SAT solver may pick a valid-but-non-canonical embedding, causing the
+# cross_device_send to deliver to the wrong chip (embedding reads all zeros).
+# See tt-metal issue #46706. tray_id == umd_chip_id + 1, asic_location 0.
+pinnings { logical_fabric_node_id { mesh_id: 0 chip_id: 0 } physical_asic_position { tray_id: 1 asic_location: 0 } }
+pinnings { logical_fabric_node_id { mesh_id: 0 chip_id: 1 } physical_asic_position { tray_id: 2 asic_location: 0 } }
+pinnings { logical_fabric_node_id { mesh_id: 0 chip_id: 2 } physical_asic_position { tray_id: 4 asic_location: 0 } }
+pinnings { logical_fabric_node_id { mesh_id: 0 chip_id: 3 } physical_asic_position { tray_id: 3 asic_location: 0 } }
+pinnings { logical_fabric_node_id { mesh_id: 0 chip_id: 4 } physical_asic_position { tray_id: 5 asic_location: 0 } }
+pinnings { logical_fabric_node_id { mesh_id: 0 chip_id: 5 } physical_asic_position { tray_id: 6 asic_location: 0 } }
+pinnings { logical_fabric_node_id { mesh_id: 0 chip_id: 6 } physical_asic_position { tray_id: 8 asic_location: 0 } }
+pinnings { logical_fabric_node_id { mesh_id: 0 chip_id: 7 } physical_asic_position { tray_id: 7 asic_location: 0 } }
 
 # --- Instantiation ----------------------------------------------------------
 top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
