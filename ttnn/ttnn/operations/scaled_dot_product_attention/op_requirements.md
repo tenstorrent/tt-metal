@@ -60,7 +60,7 @@
 
 ---
 
-### [ ] Refinement 1 — Numerical configurability (dtype + compute_kernel_config)
+### [~] Refinement 1 — Numerical configurability (dtype + compute_kernel_config)
 
 **Goal**: add `ttnn.float32` and `ttnn.bfloat8_b` to `SUPPORTED["dtype"]`, expose
 `compute_kernel_config: ttnn.ComputeKernelConfig` on the entry point (so
@@ -84,6 +84,14 @@ exposed `math_fidelity`/`fp32_dest_acc_en`) that lifts the non-registry
 `test_negative_input` / `test_uniform_input` canaries — no separate entry for
 those. Covers `(dtype, FLOAT32)` and `(dtype, BFLOAT8_B)`; the dtype axis
 appears in 744 of the 976 xfail_expected cells, so this is the largest unlock.
+
+**Status (2026-06-12, partial `[~]`)**: dtype + compute_kernel_config + CB-format
+derivation + dtype-aware default fidelity all landed. Golden 140 → 414 pass.
+bf16 and bf8b: fully passing (all tile-aligned golden cells). fp32: 134/140 pass;
+2 residual corners left RED (not excluded, per protocol) and handed off as the
+sharper refinements below — (a) fp32 D=1024 L1 OOM → Refinement 5; (b) fp32
+S=8192 SFPU-exp precision floor → Refinement 6. See `changelog.md` for measured
+metrics and the expert-debugger root-cause.
 
 ---
 
@@ -162,3 +170,59 @@ non-aligned EXCLUSION named in Refinement 1.
 
 **Done when**: registry cells with `alignment ∈ {h_non_aligned, w_non_aligned}`
 (current dtype/kv_heads/mask SUPPORTED) pass, minus any documented EXCLUSION.
+
+---
+
+### [ ] Refinement 5 — fp32 large-head-dim L1 budget (D=1024 OOM)
+
+**Goal**: make `dtype=float32` with `D=1024` (D_t=32) fit L1. Currently the 4
+`Q1x1x128x1024` fp32 golden cells throw `program.cpp:1450` ("statically
+allocated circular buffers grow beyond max L1 size"): fp32 is 4 B/elem and the
+D_t-scaled, double-buffered CBs (cb_q/k/v_in, cb_o_acc, cb_pv, cb_o_tmp, cb_out
+at `2*D_t` each) total ~1.8 MB > the 1.5 MB L1 budget at D_t=32. bf16/bf8b D=1024
+fit (half/quarter the bytes), so this is fp32-specific and orthogonal to numerics.
+
+**Implementation skill**: /memory-budget-metal
+
+**Verifier notes**: do NOT add an EXCLUSION and do NOT bucket these out with a
+shape-size tagger (the allocator OOM is the signal). Concrete next levers, in
+order of cheapness: (1) single-buffer the D_t-scaled CBs on the fp32 path (drop
+`2*D_t` → `1*D_t` for cb_o_acc/cb_pv/cb_o_tmp and/or cb_q/k/v_in) — measure the
+pipelining cost; (2) split cb_o_tmp away (it is pure scratch for the
+`corr*O_i` block-bcast); (3) if still tight, chunk the D dimension so the
+output/PV CBs hold a D-sub-block rather than full D_t. Per-core CB footprint
+must stop scaling unboundedly with D_t × dtype-bytes. Keep bf16/bf8b unchanged.
+
+**Done when**: the 4 `Q1x1x128x1024` fp32 golden cells pass (or the minimal
+documented subset, if a D-chunk boundary forces one), with no regression to the
+414 currently-passing cells.
+
+---
+
+### [ ] Refinement 6 — fp32 long-context precision (S=8192, two-pass softmax)
+
+**Goal**: lift the 2 `Q1x1x8192x64` fp32 golden cells (PCC 0.9996, rms 0.0284 vs
+the 0.02 fp32 target; max_abs only 0.0034). Root cause is **confirmed** (see
+changelog + the ttnn-expert-debugger investigation in git history): it is SFPU
+`exp` rounding accumulated across the 256 online-softmax KV blocks (rms grows
+~√num_blocks), NOT TF32 matmul and NOT the corr-rescale/normalize (host
+simulation: full-fp32-matmul flash recurrence rms = 0.000; TF32 matmul rms =
+0.0004, flat in S). The kernel already runs at the max precision the descriptor
+exposes (HiFi4 + fp32_dest_acc + accurate exp) — no descriptor/helper-level
+lever closes it.
+
+**Verifier notes**: this is **algorithmic**, outside R1's descriptor-level
+scope. Candidate levers, both net-new: (1) a non-online (two-pass) softmax for
+the fp32 long-context path — materialize the per-row max/sum in a first pass so
+`exp` is evaluated once per element instead of re-corrected per block, removing
+the √num_blocks accumulation (costs the O(S) memory the flash algorithm was
+designed to avoid, so likely gated on a `dtype==fp32 and S large` branch); or
+(2) a wider Q-block (`q_chunk_t > 1`) to amortize fewer recurrence steps per
+row. The online-softmax topology is binding for the default path, so any
+two-pass variant must be a guarded fp32-long-context alternative, not a
+replacement. Note: this sits at/below the hardware floor of the current
+online-softmax + Wormhole-SFPU stack — confirm the chosen lever actually clears
+0.02 on S=8192 before committing to it.
+
+**Done when**: the 2 `Q1x1x8192x64` fp32 golden cells pass, with no regression
+to the 414 currently-passing cells and no change to the bf16/bf8b paths.

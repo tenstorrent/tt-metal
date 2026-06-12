@@ -36,3 +36,73 @@
   (PCC + abs/RMS across 4 shapes). The acceptance suite
   (`test_scaled_dot_product_attention.py`, 24 cases) and the golden suite were
   already present; both pass.
+
+## Refinement 1 — Numerical configurability (dtype + compute_kernel_config)  [~] partial
+- **Date**: 2026-06-12
+- **What was done**:
+  - `SUPPORTED["dtype"]` += `ttnn.float32`, `ttnn.bfloat8_b` (was `[bfloat16]`).
+  - Public entry point exposes optional `compute_kernel_config` (a
+    `ttnn.*ComputeKernelConfig`): `math_fidelity`, `fp32_dest_acc_en`,
+    `math_approx_mode`, `dst_full_sync_en` are now caller-controlled.
+  - Program descriptor derives ALL CB data formats from dtype + config
+    (subsuming the Phase-0 hard-coded f32 accumulator formats): input/output CBs
+    follow the tensor dtype; intermediate/accumulator CBs (running m_i/l_i/O_i,
+    their scratch, AND the score/prob blocks cb_qk/cb_p — the verifier's
+    score-path precision lever) are fp32 when `fp32_dest_acc_en`, else input
+    dtype. Reduce scalers stay bf16 (packed-scaler format).
+  - **Default `math_fidelity` is dtype-aware**: bf16/bf8b keep Phase-0 HiFi2
+    (bf16 path byte-identical to Phase 0); fp32 defaults to HiFi4. fp32 matmul
+    operands truncate to TF32 in srcA/srcB, so HiFi2 leaves fp32 at ~bf16
+    precision; HiFi4's multi-pass matmul recovers the mantissa to meet fp32's
+    tight golden RMS target. This is a new default for a newly-added dtype, not
+    a change to prior bf16 behavior.
+  - **No `UnpackToDestFp32` tags**: every intermediate/accumulator CB feeds an
+    FPU op (matmul/reduce/FPU-binary), which is incompatible with the tag. The
+    fp32 storage already gives the precision win; FPU inputs land in TF32
+    regardless (unavoidable srcA/srcB drop).
+  - Defensive: bf8b intermediate CBs are floored to bf16 when
+    `fp32_dest_acc_en=False` (block-float is unusable for the running stats).
+- **Accuracy achieved** (default config, golden randn inputs):
+  - bf16: PCC ≥ 0.995, rms ≤ 0.05 — all golden cells pass.
+  - bf8b: PCC ≥ 0.97 (rand) / 0.9998 (randn) on tile-aligned, rms ≤ 0.027 — all
+    golden cells pass.
+  - fp32: PCC ≈ 0.9996–1.0; rms ≤ 0.012 for S ≤ 2048 (HiFi4). 134/140 fp32
+    golden cells pass.
+  - Precision matrix (8 shapes × 3 dtypes × 4 fidelities × fp32_acc × {uniform,
+    normal}): 320 passed, 64 skipped (bf8b+lp_acc). Full table in
+    `precision_matrix_results.md`.
+- **Golden test progress**: **414 / 1156 passing** (was 140 at Phase 0), 696
+  xfailed (was 976), 1 skipped, **6 failed** — all fp32 corners (see below).
+  Regression canaries: 14 fail (down from Phase-0 19) — 4 are GQA/MQA correctly
+  rejected by validate() (Refinement 2 scope); 10 are uniform/negative
+  distribution canaries that are relative-RMS metric artifacts (max_abs tiny,
+  0.01–0.03; near-uniform softmax → near-constant output → rms denominator
+  collapses). The score-path fp32 lever (cb_qk/cb_p) was applied but does not
+  move these because the bottleneck is the metric, not precision.
+- **Issues encountered / deferred (left failing per protocol, NOT excluded)**:
+  - **fp32 D=1024 (`Q1x1x128x1024`, 4 cells): L1 OOM.** Explicit
+    `program.cpp` throw — fp32 CBs (4 B/elem, footprint scales with D_t and
+    double-buffering) exceed the 1.5 MB L1 budget at D_t=32. Orthogonal to
+    numerics; bf16/bf8b D=1024 fit. → **Refinement 5** (memory-budget: chunk D
+    or single-buffer large-D fp32 CBs).
+  - **fp32 S=8192 (`Q1x1x8192x64`, 2 cells): precision near-miss** (PCC 0.9996,
+    rms 0.0284 vs 0.02; max_abs 0.0034). Root cause confirmed by the
+    ttnn-expert-debugger via host-side simulation: it is **SFPU `exp` precision
+    accumulated across the 256 online-softmax KV blocks** (rms grows
+    ~√num_blocks: 32blk 0.0059 → 256blk 0.0284), NOT TF32 matmul (full-fp32
+    matmul sim = 0.0000; TF32 sim = 0.0004, flat in S). Kernel already runs at
+    the max precision the descriptor exposes (HiFi4 + fp32_dest_acc + accurate
+    exp); no descriptor/helper-level lever closes it. → **Refinement 6**
+    (algorithmic: two-pass softmax for the fp32 long-context path, or wider
+    Q-block to amortize fewer recurrence steps — net-new, outside R1's
+    descriptor-level scope). This is at/below the hardware floor of the
+    online-softmax + Wormhole-SFPU stack for the 256-block cell.
+  - The canonical `bf8b × non-aligned` EXCLUSION is NOT added yet — the
+    `alignment` axis is still `tile_aligned`-only; it arms with Refinement 4.
+- **Tests added**:
+  - `test_scaled_dot_product_attention_precision_matrix.py` (the authoritative
+    precision-characterization matrix) + `precision_matrix_results.md`.
+  - `test_scaled_dot_product_attention_debug.py` (CPU-only flash-recurrence
+    precision simulation, authored by the expert-debugger — pinpoints exp as
+    the S=8192 fp32 error source; preserved as a regression/analysis artifact).
+  - Probes `probe_001`–`probe_004` (dtype sweep, HiFi sweep, S-sweep).
