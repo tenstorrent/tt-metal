@@ -27,6 +27,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.format_config import (
+    BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
+    DataFormat,
+    QUASAR_DATA_FORMAT_ENUM_VALUES,
+    WORMHOLE_DATA_FORMAT_ENUM_VALUES,
+)
 from helpers.logger import logger
 from helpers.utils import TILE_BG_RESULT, format_tile_row
 from ttexalens.tt_exalens_lib import parse_elf, read_from_device, write_words_to_device
@@ -466,18 +473,27 @@ class ElfStrings:
 
 
 # DataFormat enum values from tt_metal/hw/inc/internal/tt-{1,2}xx/*/tensix_types.h.
-# Only formats that can plausibly be sent are listed.
-_DF_FLOAT32 = 0
-_DF_FLOAT16 = 1
-_DF_TF32 = 4
-_DF_FLOAT16_B = 5
-_DF_BFP8_B = 6
-_DF_BFP4_B = 7
-_DF_INT32 = 8
-_DF_UINT16 = 9
-_DF_INT8 = 14
-_DF_UINT32 = 24
-_DF_UINT8 = 30
+# These differ per arch (e.g. UInt8 is 30 on WH/BH but 17 on Quasar), and the
+# device stamps the *active* arch's value into typed-array / tile-slice headers,
+# so we resolve each format against the running arch to match the wire. Formats
+# absent on the current arch resolve to None and never match a real wire value.
+_ARCH_DATA_FORMAT_ENUM = {
+    ChipArchitecture.WORMHOLE: WORMHOLE_DATA_FORMAT_ENUM_VALUES,
+    ChipArchitecture.BLACKHOLE: BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
+    ChipArchitecture.QUASAR: QUASAR_DATA_FORMAT_ENUM_VALUES,
+}[get_chip_architecture()]
+
+_DF_FLOAT32 = _ARCH_DATA_FORMAT_ENUM.get(DataFormat.Float32)
+_DF_FLOAT16 = _ARCH_DATA_FORMAT_ENUM.get(DataFormat.Float16)
+_DF_TF32 = _ARCH_DATA_FORMAT_ENUM.get(DataFormat.Tf32)
+_DF_FLOAT16_B = _ARCH_DATA_FORMAT_ENUM.get(DataFormat.Float16_b)
+_DF_BFP8_B = _ARCH_DATA_FORMAT_ENUM.get(DataFormat.Bfp8_b)
+_DF_BFP4_B = _ARCH_DATA_FORMAT_ENUM.get(DataFormat.Bfp4_b)
+_DF_INT32 = _ARCH_DATA_FORMAT_ENUM.get(DataFormat.Int32)
+_DF_UINT16 = _ARCH_DATA_FORMAT_ENUM.get(DataFormat.UInt16)
+_DF_INT8 = _ARCH_DATA_FORMAT_ENUM.get(DataFormat.Int8)
+_DF_UINT32 = _ARCH_DATA_FORMAT_ENUM.get(DataFormat.UInt32)
+_DF_UINT8 = _ARCH_DATA_FORMAT_ENUM.get(DataFormat.UInt8)
 
 
 def _bitcast_f32(bits: int) -> float:
