@@ -457,16 +457,25 @@ def test_full_forward_wall(mesh_device, mesh_shape, t_factor, t_axis, c_factor, 
     [{"l1_small_size": 32768, "fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 300000000}],
     indirect=True,
 )
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
-def test_vocoder_with_bwe_traced(mesh_device, device_params):
-    # Validate the VocoderWithBWE.use_trace wiring: traced main vocoder + eager BWE == fully eager.
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, t_factor, t_axis, c_factor, c_axis",
+    [
+        [(2, 4), (2, 4), 4, 1, 2, 0],
+        [(4, 8), (4, 8), 8, 1, 4, 0],
+    ],
+    ids=["bh_2x4", "bh_4x8"],
+    indirect=["mesh_device"],
+)
+def test_vocoder_with_bwe_traced(mesh_device, mesh_shape, t_factor, t_axis, c_factor, c_axis, device_params):
+    # Validate both generators traced (main + BWE) == fully eager, on the replayed graph (the
+    # production path): warm -> capture -> replay, compare replay to eager.
     from models.tt_dit.tests.models.ltx.test_audio_components_ltx import _build_torch_stage_c, _build_tt_stage_c
 
     parent = mesh_device
-    mesh = parent.create_submesh(ttnn.MeshShape(2, 4))
+    mesh = parent.create_submesh(ttnn.MeshShape(*mesh_shape))
     pc = AudioTCParallelConfig(
-        time_parallel=ParallelFactor(factor=4, mesh_axis=1),
-        channel_parallel=ParallelFactor(factor=2, mesh_axis=0),
+        time_parallel=ParallelFactor(factor=t_factor, mesh_axis=t_axis),
+        channel_parallel=ParallelFactor(factor=c_factor, mesh_axis=c_axis),
     )
     ccl = CCLManager(mesh, num_links=1, topology=ttnn.Topology.Linear)
     torch_full = _build_torch_stage_c(seed=42)
@@ -477,13 +486,25 @@ def test_vocoder_with_bwe_traced(mesh_device, device_params):
 
     mel = _vocoder_mel()
     tt_full.use_trace = False
+    tt_full.use_trace_bwe = False
     out_eager = tt_full(mel)
+    t0 = time.perf_counter()
+    for _ in range(5):
+        out_eager = tt_full(mel)
+    eager_ms = (time.perf_counter() - t0) * 1000 / 5
     tt_full.use_trace = True
-    _ = tt_full(mel)  # capture
-    out_traced = tt_full(mel)  # replay
+    tt_full.use_trace_bwe = True
+    _ = tt_full(mel)  # warm lazy device-graph state
+    _ = tt_full(mel)  # capture (prep_run=False)
+    out_traced = tt_full(mel)  # replay — the production path
+    t0 = time.perf_counter()
+    for _ in range(5):
+        out_traced = tt_full(mel)
+    traced_ms = (time.perf_counter() - t0) * 1000 / 5
     tt_full.release_trace()
     max_abs = (out_eager - out_traced).abs().max().item()
-    print(f"\nVOC_BWE_TRACED max|Δ|(traced vs eager)={max_abs:.3e}", flush=True)
+    print(f"\nVOC_BWE_TRACED max|Δ|(replay vs eager)={max_abs:.3e}", flush=True)
+    print(f"VOC_BWE_WALL eager={eager_ms:.2f}ms traced={traced_ms:.2f}ms speedup={eager_ms/traced_ms:.2f}x", flush=True)
     assert max_abs < 5e-3, f"VocoderWithBWE traced diverged: {max_abs:.3e}"
 
 
