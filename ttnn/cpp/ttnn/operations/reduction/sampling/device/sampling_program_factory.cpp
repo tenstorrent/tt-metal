@@ -62,11 +62,12 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
     auto input_shape = input_values_tensor.logical_shape();
     const uint32_t tile_height = input_values_tensor.tensor_spec().tile().get_height();
     const uint32_t tile_width = input_values_tensor.tensor_spec().tile().get_width();
-    // `num_users` is the logical user count (rows) in the range [1, 32], so the data still
-    // occupies a single padded row-tile (Ht == 1); only `num_users` cores actually run. Decoupling
-    // num_cores from Ht*tile_height is what lets <32 users work: the old `(.../tile_height)` would
-    // integer-divide to Ht == 0 (and num_cores == 0) for fewer than tile_height users.
-    const uint32_t num_users = input_shape[0] * input_shape[1] * input_shape[2];
+    // `num_users` is the logical user count (rows in dim 2) in the range [1, 32]; validation
+    // guarantees N == C == 1, so it is just input_shape[2]. The data still occupies a single padded
+    // row-tile (Ht == 1) and only `num_users` cores run. Decoupling num_cores from Ht*tile_height is
+    // what lets <32 users work: the old `(.../tile_height)` would integer-divide to Ht == 0 (and
+    // num_cores == 0) for fewer than tile_height users.
+    const uint32_t num_users = input_shape[2];
     uint32_t Ht = (num_users + tile_height - 1) / tile_height;  // == 1 for 1..32 users
     uint32_t Wt = input_shape[3] / tile_width;
     auto num_cores = num_users;
@@ -88,7 +89,7 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
         for (const auto& core : cores) {
             active_core_ranges.emplace_back(core);
         }
-        core_grid = CoreRangeSet(active_core_ranges);
+        core_grid = CoreRangeSet(std::move(active_core_ranges));
     }
 
     validate_reduce_op_program_grid(

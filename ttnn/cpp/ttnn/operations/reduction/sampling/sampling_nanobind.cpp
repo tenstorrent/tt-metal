@@ -97,18 +97,19 @@ void bind_reduction_sampling_operation(nb::module_& mod) {
 
         Limitations:
             - Inputs must be 4D tensors with shape [N, C, H, W], and must be located on the device.
-            - The input tensors represent ``num_users = N*C*H`` users, which must be in the range
-              ``[1, 32]``. The op runs one core per user, so ``num_users`` cores are used.
-            - The last dimension of:attr:`input_values_tensor` must be padded to a multiple of 32
+            - Input dims 0 and 1 (``N``, ``C``) must equal 1
+            - Input dim 2 (``H``) represents the number of users, which must be in
+              the range ``[1, 32]``. The op runs one core per user, so ``num_users`` cores are used.
+            - The last dimension of:attr:`input_values_tensor` (``W``) must be padded to a multiple of 32
             - The number of tiles along the last dimension, ``Wt = W / 32``, must be a power of 2
               (i.e. ``W`` must be a power-of-2 multiple of 32: 32, 64, 128, 256, ...). The internal
               top-k stage uses a bitonic merge tree that assumes a power-of-2 tile count; a
               non-power-of-2 ``Wt`` is rejected. Pad ``W`` up to the next power-of-2 multiple of 32
               (e.g. with ``-inf`` values and dummy indices) if needed.
             - The overall shape of :attr:`input_values_tensor` must match that of :attr:`input_indices_tensor`.
-            - :attr:`k`: Must contain ``num_users`` values (one per user), in the range '(0,32]'.
-            - :attr:`p`, :attr:`temp`: Must contain ``num_users`` values (one per user); :attr:`p`
-              values must be in the range `[0.0, 1.0]`.
+            - :attr:`k`: Must be a 1D tensor of shape ``[num_users]`` (one value per user), in the range '(0,32]'.
+            - :attr:`p`, :attr:`temp`: Must be 1D tensors of shape ``[num_users]`` (one value per user);
+              :attr:`p` values must be in the range `[0.0, 1.0]`.
             - :attr:`sub_core_grids` (if provided): must supply at least ``num_users`` cores (1 to 32);
               only the first ``num_users`` cores are used and any extras are ignored.
         )doc";

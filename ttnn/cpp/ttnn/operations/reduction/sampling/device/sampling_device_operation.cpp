@@ -60,7 +60,18 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
     auto input_shape = input_values_tensor.logical_shape();
     TT_FATAL(input_shape.rank() == 4, "Sampling input_values must be rank-4; got rank {}", input_shape.rank());
 
-    const uint32_t num_users = input_shape[0] * input_shape[1] * input_shape[2];
+    // Users live in dim 2 (H): the output is sized [1,1,1,H] and the per-user inputs/cores are
+    // indexed by the user (row) index. dims 0 and 1 (N, C) must therefore be 1; otherwise
+    // num_users = N*C*H would exceed H and the writer would index past the H-sized output.
+    TT_FATAL(
+        input_shape[0] == 1 && input_shape[1] == 1,
+        "Sampling requires input dims 0 and 1 (N, C) to be 1; got [{}, {}, {}, {}]!",
+        input_shape[0],
+        input_shape[1],
+        input_shape[2],
+        input_shape[3]);
+    // N and C are guaranteed to be 1 by the check above, so the user count is just dim 2 (H).
+    const uint32_t num_users = input_shape[2];
     TT_FATAL(
         num_users >= 1 && num_users <= 32,
         "Sampling currently supports between 1 and 32 users (one core per user); got {}!",

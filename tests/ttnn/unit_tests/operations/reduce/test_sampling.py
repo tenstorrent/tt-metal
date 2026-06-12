@@ -6,14 +6,7 @@ import torch
 import torch.nn.functional as F
 import pytest
 import ttnn
-import numpy as np
 from loguru import logger
-from tests.ttnn.unit_tests.operations.test_utils import (
-    get_compute_kernel_options,
-    compute_kernel_options,
-    compute_kernel_ids,
-    get_lib_dtype,
-)
 from models.common.utility_functions import is_wormhole_b0, is_blackhole
 
 
