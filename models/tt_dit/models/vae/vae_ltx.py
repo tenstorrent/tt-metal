@@ -929,7 +929,20 @@ class LTXSpaceToDepthDownsample(Module):
             first_frame = x_BTHWC[:, :1, :, :, :]
             x_BTHWC = ttnn.concat([first_frame, x_BTHWC], dim=1)
 
-        B, T, H, W, _ = x_BTHWC.shape
+        B, T, H, W, C = x_BTHWC.shape
+
+        # Pad H/W so the space-to-depth reshape is exact (same idea as the temporal p1 pad).
+        # ttnn.pad only reliably pads the lowest dims on a <=4D tensor, so collapse (B, T)
+        # into a single leading dim, pad both spatial dims at once, then restore the 5D shape.
+        pad_h = (p2 - H % p2) % p2 if p2 > 1 else 0
+        pad_w = (p3 - W % p3) % p3 if p3 > 1 else 0
+        if pad_h or pad_w:
+            x_BTHWC = ttnn.reshape(x_BTHWC, (B * T, H, W, C))
+            x_BTHWC = ttnn.pad(x_BTHWC, [(0, 0), (0, pad_h), (0, pad_w), (0, 0)], value=0.0)
+            H += pad_h
+            W += pad_w
+            x_BTHWC = ttnn.reshape(x_BTHWC, (B, T, H, W, C))
+
         d, h, w = T // p1, H // p2, W // p3
 
         # Residual skip: space-to-depth the input, then mean-pool channel groups to out_channels.
