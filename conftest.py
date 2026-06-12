@@ -587,8 +587,7 @@ def mesh_device(request, silicon_arch_name, device_params):
             device_params["trace_region_size"] = override_trace_region_size
     else:
         logger.info(
-            f"Keeping trace_region_size={device_params['trace_region_size']!r} "
-            f"from device_params (TRACE_MODEL_KEY path)"
+            f"Keeping trace_region_size={device_params['trace_region_size']!r} from device_params (already set)"
         )
 
     updated_device_params = get_updated_device_params(device_params)
