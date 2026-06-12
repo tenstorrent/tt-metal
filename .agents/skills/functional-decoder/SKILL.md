@@ -30,11 +30,11 @@ class FunctionalDecoder(LightweightModule):
     def decode_forward(self, ...): ...
 ```
 
-The exact forward signatures should fit the model. Keep them keyword-friendly and document them in the final report.
+Implement forward signatures that fit the model. Keep them keyword-friendly. Record the signatures in the README.
 
 ## How To Approach It
 
-Start by understanding the HF model Load `AutoConfig`, inspect the installed `configuration_*.py` and `modeling_*.py`, and identify the decoder layer, attention, RoPE, cache API, MLP/MoE path, residual order, norm behavior, activation, bias flags, head shapes, and layer-kind differences. Trace through the model's execution line by line to make sure you understand it.
+Start by understanding the HF model. Load `AutoConfig`, inspect the installed `configuration_*.py` and `modeling_*.py`, and identify the decoder layer, attention, RoPE, cache API, MLP/MoE path, residual order, norm behavior, activation, bias flags, head shapes, and layer-kind differences. Trace through the model's execution line by line to make sure you understand it.
 
 Implement correctness first. BF16, tile layout, and DRAM memory are fine while proving semantics. Move weight conversion, reshaping, dtype selection, `ttnn.as_tensor`, and cache construction into `from_state_dict` or setup helpers. Keep runtime prefill/decode free of hidden `torch`, `from_torch`, `to_torch`, or host fallback except explicit test boundaries.
 
@@ -44,7 +44,7 @@ When PCC is low, debug it. Split the decoder into components, check HF parity, r
 
 ## Evidence To Leave
 
-Use `PCC >= 0.995` as the default acceptance bar for prefill and decode unless the model gives a concrete reason to choose a different bar. Final evidence should cover:
+Use `PCC >= 0.995` as the default acceptance bar for prefill and decode unless the model gives a concrete reason to choose a different bar. Done means all of these are true and recorded:
 
 - HF-vs-TTNN prefill and decode PCC and performance for each meaningful layer kind.
 - Prefill and decode on-device performance measured from warmed runs (using traced execution for decode) - these should have perf report outputs to prove it.
@@ -98,6 +98,7 @@ Use this reference while bringing up a TTNN decoder layer. It folds in relevant 
 
 - Use paged prefill and paged decode as the final path. Non-paged cache is not worth spending time on for this bringup.
 - Paged prefill usually uses `ttnn.experimental.paged_fill_cache`; decode uses `ttnn.experimental.paged_update_cache` and `ttnn.transformer.paged_scaled_dot_product_attention_decode`.
+- Treat prefill fill-cache and decode update-cache as different dtype contracts. When the cache is lower precision such as `ttnn.bfloat8_b`, prefill should cast the K/V tensors passed to `paged_fill_cache` to the destination cache dtype before filling. Do not blindly apply the same cast to decode: `paged_update_cache` update tensors must remain a supported compute dtype such as BF16/FLOAT32, even when the destination cache is BFP8.
 - Decode should use tensor current positions when tracing; Python lists or scalar host state tend to break traceability.
 - Use page-table permutations, nonzero slots, and random current positions to catch address and indexing bugs.
 - For hybrid attention, inspect per-layer page-table routing and cache specs instead of assuming one page table shape covers every layer.

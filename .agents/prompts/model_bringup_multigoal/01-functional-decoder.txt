@@ -9,11 +9,11 @@ Goal completion requirements:
 - Decode forward pass runs fully with ttnn's traced execution.
 - Tests cover every meaningful target layer kind with real target config shapes, including paged prefill, paged decode, page table handling, current-position handling, and the longest feasible sequence/context lengths.
 - At least one test uses real weights and evidence shows it passes.
-- HF-vs-TTNN prefill and decode PCC meet the functional-decoder acceptance bar, defaulting to PCC >= 0.995 unless a model-specific issue or evidence justifies a different threshold.
-- Warmed prefill and traced warmed decode performance are measured and recorded, with human-readable tt-perf-report tables plus CSV/provenance logs where the profiler supports them.
-- The runtime fallback audit is clean: no torch, ttnn.from_torch, ttnn.to_torch, or host fallback inside a single measured prefill/decode pass except explicit test harness boundaries.
-- Determinism/repeated-input evidence and a watcher-clean run exist, or the report gives a concrete environment reason watcher could not be run.
-- models/autoports/<model>/doc/functional_decoder/README.md and work_log.md summarize commands, PCC, perf, limitations, and exact artifacts.
+- HF-vs-TTNN prefill and decode PCC meet the functional-decoder acceptance bar. The default is PCC >= 0.995 unless a model-specific issue in the agentic-research project specifies otherwise. Any different threshold needs model-specific evidence in the report.
+- Warmed prefill and traced warmed decode performance are measured and recorded, with human-readable tt-perf-report tables plus CSV/provenance logs.
+- The runtime fallback audit is clean: no torch, ttnn.from_torch, ttnn.to_torch, or host fallback inside a single measured prefill/decode pass.
+- Determinism/repeated-input evidence and a watcher-clean run exist.
+- models/autoports/<model>/doc/functional_decoder/README.md and work_log.md record commands, PCC, perf, limitations, and exact artifacts.
 - The functional-decoder skill's final objectives are satisfied.
 
-Do not mark this goal blocked just because PCC, trace replay, watcher, profiler, CCL, cache, MoE or other validation currently fails. Those failures are expected bringup work. Before marking blocked, isolate the failure to the smallest reproducible component, compare against the optimized single-chip baseline, try a concrete fix/refutation loop, and for subtle PCC, mesh/CCL, cache, or routed-expert bugs use $autofix or document why those skills could not be used. A blocked result requires evidence that continued debugging by the agent is no longer meaningful, not merely that a requirement is still failing.
+Do not mark this goal complete while any completion requirement is unmet.
