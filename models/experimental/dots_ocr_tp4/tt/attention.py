@@ -235,7 +235,7 @@ class DotsOCRAttentionTP4(TTNNModule):
             self.qkv_w,
             bias=self.qkv_bias,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.qkv_compute,
             program_config=qkv_pc,
         )
@@ -247,7 +247,7 @@ class DotsOCRAttentionTP4(TTNNModule):
             num_heads=self.q_heads_per_chip,
             num_kv_heads=self.kv_heads_per_chip,
             transpose_k_heads=False,
-            memory_config=heads_mem_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(qkv)
         return q, k, v

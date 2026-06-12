@@ -2024,6 +2024,12 @@ class TTNNDotsVisionAttention(TTNNModule):
         (frees the partial-output CB budget). Either knob alone doesn't move
         the needle. q=128 variants regressed ~17% (too many outer Q passes),
         and q=512 variants OOM or also regressed in earlier ablation.
+
+        NOTE: this op runs WITHOUT an attn_mask on the hot path (images that
+        fill their bucket have no key padding -> is_causal=False, mask=None), so
+        larger k_chunk = fewer outer K passes = faster. A sweep that forces a
+        full [1,1,S,S] mask adds a second q_chunk*k_chunk CB and wrongly favours
+        small k -- don't tune from the masked shape.
         """
         grid = self.device.compute_with_storage_grid_size()
         grid_size = ttnn.CoreCoord(grid.x, grid.y)
@@ -2032,16 +2038,25 @@ class TTNNDotsVisionAttention(TTNNModule):
             q_chunk = k_chunk = max(32, ((seq_len + 31) // 32) * 32)
         elif seq_len <= 1024:
             q_chunk = k_chunk = 128
+        elif seq_len <= 2048:
+            # Small-S regime (the TP4 per-chip 3-head hot path at the common
+            # bucket): q_chunk=128 beats 256 here -- the per-q-chunk softmax/
+            # rescale overhead dominates over the extra outer-Q passes when S is
+            # small, so the smaller q tile wins. Sweep at S=2048,H=3 (no mask,
+            # is_causal=False): q128/k512 172 us vs q256/k512 214 us (~19%);
+            # q256/k256 238 us (the config that regressed +13% in-model).
+            # q128/k512 scores CB is HALF q256/k512's, so strictly trace-safe.
+            q_chunk = 128
+            k_chunk = 512
         else:
-            # k_chunk=512 (not 1024): under trace capture the generate pins extra
-            # persistent L1, so the q=256/k=1024 scores CB (~1 MB/core) no longer
-            # fits and clashes with this SDPA's static CBs. Halving k_chunk frees
-            # ~512 KB/core (well past the overflow); divides the padded vision seq
-            # evenly. Minor SDPA perf cost vs k=1024.
+            # Large-S regime: q_chunk=256 overtakes 128 once S>=3072 (more outer
+            # Q passes amortize). k_chunk=512 (not 1024): under trace capture the
+            # generate pins extra persistent L1, so the q256/k1024 scores CB
+            # (~1 MB/core) no longer fits and clashes with this SDPA's static
+            # CBs. Halving k_chunk frees ~512 KB/core; minor perf cost vs k1024.
+            # Sweep S=3072,H=3: q256/k512 343 us vs q128/k512 355 us.
             q_chunk = 256
             k_chunk = 512
-        # q_chunk = 512
-        # k_chunk = 512   -- same product (256K), overflow..
         return SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,
             q_chunk_size=q_chunk,
