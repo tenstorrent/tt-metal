@@ -590,6 +590,7 @@ def run_tt(
         tokenizer = MistralCommonBackend.from_pretrained(
             model_id,
             trust_remote_code=True,
+            cache_dir=os.getenv("HF_HOME") or None,
             local_files_only=os.getenv("CI") == "true",
         )
         pad_token_id = getattr(tokenizer, "pad_token_id", None)
