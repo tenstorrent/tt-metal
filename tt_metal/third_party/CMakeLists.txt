@@ -10,17 +10,16 @@ endif()
 add_subdirectory(umd)
 
 # Propagate ENABLE_TRACY into Tracy's option before add_subdirectory(tracy).
-# Use CACHE FORCE so Tracy's option() cannot reset it under older CMake policy behavior.
 # Tracy's add_subdirectory must always run: it creates Tracy::TracyClient, which many
 # targets link against unconditionally. With TRACY_ENABLE=OFF it becomes a no-op stub.
 if(ENABLE_TRACY)
-    set(TRACY_ENABLE ON CACHE BOOL "Enable Tracy profiling instrumentation" FORCE)
+    set(TRACY_ENABLE ON)
 else()
-    set(TRACY_ENABLE OFF CACHE BOOL "Enable Tracy profiling instrumentation" FORCE)
+    set(TRACY_ENABLE OFF)
 endif()
 
 # Avoid hard failures on hosts without invariant TSC.
-set(TRACY_TIMER_FALLBACK ON CACHE BOOL "Tracy: use lower-resolution timer fallback" FORCE)
+set(TRACY_TIMER_FALLBACK ON)
 
 add_subdirectory(tracy)
 
@@ -28,75 +27,75 @@ if(NOT ENABLE_TRACY)
     return()
 endif()
 
-# Tracy symbols/backtraces must be available to TracyClient consumers.
-if(TARGET TracyClient)
-    target_compile_options(TracyClient PUBLIC -fno-omit-frame-pointer)
-    # Tracy sources emit this warning under our global -Werror; keep suppression local to TracyClient.
-    target_compile_options(TracyClient PRIVATE -Wno-unused-variable)
-    target_link_options(TracyClient PUBLIC -rdynamic)
+# This setup ensures that when someone links against TracyClient:
+#   Their code preserves frame pointers (-fno-omit-frame-pointer) → backtraces work.
+#   Their executable exports symbols (-rdynamic) → Tracy can map addresses to names.
+target_compile_options(TracyClient PUBLIC -fno-omit-frame-pointer)
+# Tracy sources emit this warning under our global -Werror; keep suppression local to TracyClient.
+target_compile_options(TracyClient PRIVATE -Wno-unused-variable)
+target_link_options(TracyClient PUBLIC -rdynamic)
 
-    # Keep TracyClient in the standard lib output/install paths so wheel/CPack dependency discovery works.
-    set_target_properties(
+# Keep TracyClient in the standard lib output/install paths so wheel/CPack dependency discovery works.
+set_target_properties(
+    TracyClient
+    PROPERTIES
+        EXCLUDE_FROM_ALL
+            TRUE
+        LIBRARY_OUTPUT_DIRECTORY
+            "${PROJECT_BINARY_DIR}/lib"
+        ARCHIVE_OUTPUT_DIRECTORY
+            "${PROJECT_BINARY_DIR}/lib"
+        OUTPUT_NAME
+            "tracy"
+)
+install(
+    TARGETS
         TracyClient
-        PROPERTIES
-            EXCLUDE_FROM_ALL
-                TRUE
-            LIBRARY_OUTPUT_DIRECTORY
-                "${PROJECT_BINARY_DIR}/lib"
-            ARCHIVE_OUTPUT_DIRECTORY
-                "${PROJECT_BINARY_DIR}/lib"
-            OUTPUT_NAME
-                "tracy"
-    )
-    install(
-        TARGETS
-            TracyClient
-        LIBRARY
-            DESTINATION ${CMAKE_INSTALL_LIBDIR}
-            COMPONENT metalium-runtime
-        ARCHIVE
-            DESTINATION ${CMAKE_INSTALL_LIBDIR}
-            COMPONENT metalium-runtime
-    )
+    LIBRARY
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        COMPONENT metalium-runtime
+    ARCHIVE
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        COMPONENT metalium-runtime
+)
 
-    # TracyClient is a PUBLIC dependency of TT::Metalium, so its interface exports
-    # $<INSTALL_INTERFACE:include/tracy>. Tracy's own header install rules are
-    # COMPONENT-less (they land in "Unspecified", which cmake/packaging.cmake drops),
-    # so the packaged SDK advertised that include dir without shipping it -> every
-    # downstream find_package(tt-metalium) consumer failed at configure with
-    # "Imported target TT::Metalium includes non-existent path .../include/tracy".
-    # Ship the public headers under the dev component so the SDK package is consistent.
-    # Layout mirrors Tracy's own install: tracy/Tracy.hpp plus its ../client and
-    # ../common siblings, all under <includedir>/tracy.
-    install(
-        DIRECTORY
-            ${CMAKE_CURRENT_SOURCE_DIR}/tracy/public/tracy
-            ${CMAKE_CURRENT_SOURCE_DIR}/tracy/public/client
-            ${CMAKE_CURRENT_SOURCE_DIR}/tracy/public/common
-        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tracy
-        COMPONENT metalium-dev
-        FILES_MATCHING
-        PATTERN
-        "*.h"
-        PATTERN
-        "*.hpp"
-    )
-endif()
+# TracyClient is a PUBLIC dependency of TT::Metalium, so its interface exports
+# $<INSTALL_INTERFACE:include/tracy>. Tracy's own header install rules are
+# COMPONENT-less (they land in "Unspecified", which cmake/packaging.cmake drops),
+# so the packaged SDK advertised that include dir without shipping it -> every
+# downstream find_package(tt-metalium) consumer failed at configure with
+# "Imported target TT::Metalium includes non-existent path .../include/tracy".
+# Ship the public headers under the dev component so the SDK package is consistent.
+# Layout mirrors Tracy's own install: tracy/Tracy.hpp plus its ../client and
+# ../common siblings, all under <includedir>/tracy.
+install(
+    DIRECTORY
+        ${CMAKE_CURRENT_SOURCE_DIR}/tracy/public/tracy
+        ${CMAKE_CURRENT_SOURCE_DIR}/tracy/public/client
+        ${CMAKE_CURRENT_SOURCE_DIR}/tracy/public/common
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tracy
+    COMPONENT metalium-dev
+    FILES_MATCHING
+    PATTERN
+    "*.h"
+    PATTERN
+    "*.hpp"
+)
 
 set(NO_FILESELECTOR ON)
 
 # Build Tracy CLI deps statically so the binaries run from packaged artifacts without build/_deps.
 set(_tt_tracy_saved_build_shared_libs "${BUILD_SHARED_LIBS}")
-set(BUILD_SHARED_LIBS OFF CACHE BOOL "Create shared libraries" FORCE)
+set(BUILD_SHARED_LIBS OFF)
 
 # Disable Tracy's -march=native for portable CLI binaries in CI.
-set(NO_ISA_EXTENSIONS ON CACHE BOOL "Disable Tracy -march=native for portable CLI tools" FORCE)
+set(NO_ISA_EXTENSIONS ON)
 
 add_subdirectory(tracy/csvexport)
 add_subdirectory(tracy/capture)
 
 # Restore global shared-lib preference after Tracy CLI configuration.
-set(BUILD_SHARED_LIBS "${_tt_tracy_saved_build_shared_libs}" CACHE BOOL "Create shared libraries" FORCE)
+set(BUILD_SHARED_LIBS "${_tt_tracy_saved_build_shared_libs}")
 unset(_tt_tracy_saved_build_shared_libs)
 
 # Keep CLI output in the path used by Python tooling and CI packaging.
