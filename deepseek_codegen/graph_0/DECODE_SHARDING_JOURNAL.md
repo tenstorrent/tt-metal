@@ -150,3 +150,32 @@ the established noisy-totals methodology. EST e2e: ~-4.5us x 61 attn layers ~= -
 
 NOTE: profiler windowing needs the full path to tt-perf-report (python_env/bin); run_profile.sh's bare
 `tt-perf-report` isn't on the docker login-shell PATH. Re-window the existing CSV if windows fail.
+
+## MoE COMBINE FRAGILITY FIXED → shared-FFN CCL fusion UNBLOCKED (2026-06-12, BIG WIN)
+| step | change | result |
+|------|--------|--------|
+| mux | Vendor PR #46544 (e4bc86b) dynamic mux-buffer sizing into selective_reduce_combine_program_factory; supersedes local num_buffers=13 hack | commit 17e504e. Rebuilt ttnncpp. get_fabric_mux_config recursively decrements buffers (from 15) until the mux L1 region fits below the lowest occupied compute L1 tensor. |
+| E_moe_ccl_fuse | shared-FFN w1 (matmul_31) + w3 (matmul_32) all-reduce: reduce_scatter(dim3,ax1)+all_gather(dim1,ax1) -> all_gather(dim0,ax1)+local bf16 sum (FastReduceNC). Both layers. | **KEEP**. Commit 2c84eea. No hang (was deterministic #46208/s3 hang). |
+
+KEY: the s3 fusion that DETERMINISTICALLY hung the moe_compute combine (06-11, even with the
+vendored #45764 writer-semaphore fix + static num_buffers=13) now runs CLEAN once #46544's dynamic
+mux sizing gives the combine adaptive L1 headroom under the fused layout's L1 shift. So the combine
+"L1 fragility" that blocked ALL MoE-phase collective restructuring is RESOLVED by #46544.
+
+MEASURED (muxs3b_2026_06_12_10_50_04 vs ropecse, 2-layer = 1 MoE layer):
+  ReduceScatter 228.6us/3 -> 84.4us/1   (-144us, -2 ops: both shared-FFN RS gone)
+  AllGather     139.9us/3 -> 177.4us/3  (+37.5us: 2 dim0 gathers replace 2 small dim1 gathers)
+  FastReduceNC   13.2us/1 -> 22.6us/3   (+9.4us: 2 new bf16 dim0 local sums on the fast path)
+  MoE phase total 1889.7 -> 1802.6      = -87.1us / MoE layer  (full 2L -99us)
+EST e2e: -87.1us x 58 MoE layers ~= -5.0ms  (~158.5 -> ~153.5 ms).
+
+CORRECTNESS: argmax 100% bit-identical to ropecse; HEAD-rel logits cos64 0.999996; ABSOLUTE golden
+PCC = 0.8989 (UNCHANGED from the ropecse 0.8989 bf4 floor -> the fp reduction-order change is
+numerically free on top of the bf4 quantization). Verified vs ../golden_logits.pt.
+
+MYTH BUSTED: the earlier "fusing a wide all-reduce is bandwidth net-loss" projection (used to rule out
+dense-MLP + shared-FFN fusion) is WRONG when measured: the HiFi4-fp32 reduce_scatter (compute+comm)
+costs ~80us, far more than the extra dim0-gather bytes (~19us) + a cheap FastReduceNC local sum (~5us).
+REOPENS: (a) the 1 remaining MoE-phase reduce_scatter (84us); (b) dense-MLP reduce_scatter_3/4 +
+all_gather_10/11 (x3 layers); (c) broader MoE-phase L1-sharding (skill's last untapped lever) - all now
+combine-safe under #46544.
