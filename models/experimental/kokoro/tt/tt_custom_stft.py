@@ -52,7 +52,8 @@ import torch
 
 import ttnn
 
-from models.experimental.kokoro.tt.tt_torch_stft import _StridedStftConv, _build_conv_stft_kernels
+from models.experimental.kokoro.tt.tt_conv import dram_height_slice_config, dram_height_slice_target_rows
+from models.experimental.kokoro.tt.tt_torch_stft import _build_conv_stft_kernels
 
 
 @dataclass(frozen=True)
@@ -138,6 +139,24 @@ def preprocess_tt_custom_stft(
     )
 
 
+def _stft_conv_slice_config(input_height: int) -> ttnn.Conv2dSliceConfig:
+    """Pick DRAM height slices for the forward STFT conv2d.
+
+    Each slice still runs an L1 height-sharded conv internally; ``num_slices`` controls how
+    much height is staged from DRAM per pass.  The generic helper defaults to ``min_slices=8``
+    even when the full height fits, which adds unnecessary padded-slice / halo / move overhead
+    on Kokoro-scale inputs.
+
+    ``Conv2dL1FullSliceConfig`` (pure L1 chunking, no DRAM slice glue) is not usable here:
+    this STFT geometry (1→11 ch, 20×1 kernel, stride 5, width 1) hits a BH conv2d program
+    factory limit (``reader_indices`` CB sizing) for both L1Full and single-slice DRAM paths.
+    """
+    target = dram_height_slice_target_rows(input_height, channels=1, activation_dtype=ttnn.float32)
+    if input_height <= target:
+        return ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=2)
+    return dram_height_slice_config(input_height, channels=1, activation_dtype=ttnn.float32)
+
+
 def _time_slice_n1tc(x: ttnn.Tensor, t0: int, t1: int, *, memory_config: ttnn.MemoryConfig) -> ttnn.Tensor:
     b = int(x.shape[0])
     c = int(x.shape[3])
@@ -159,6 +178,98 @@ def _replicate_pad_dim2(x_n1tc: ttnn.Tensor, time_len: int, pad: int) -> ttnn.Te
     ttnn.deallocate(left)
     ttnn.deallocate(right)
     return out
+
+
+class _StridedStftConv:
+    """Strided conv2d projection for one STFT branch (real or imag)."""
+
+    def __init__(self, device: ttnn.Device, weight_rm: ttnn.Tensor, hop_length: int) -> None:
+        self.device = device
+        self.weight_rm = weight_rm
+        self.weight_prepared = weight_rm
+        self._prep_key: tuple | None = None
+        self.hop_length = int(hop_length)
+        self.out_channels = int(weight_rm.shape[0])
+        self.in_channels = int(weight_rm.shape[1])
+        self.kernel_size = int(weight_rm.shape[2])
+        self.conv_config = ttnn.Conv2dConfig(
+            weights_dtype=ttnn.float32,
+            output_layout=ttnn.TILE_LAYOUT,
+            deallocate_activation=False,
+            reallocate_halo_output=False,
+            enable_act_double_buffer=False,
+            enable_weights_double_buffer=False,
+            config_tensors_in_dram=True,
+            reshard_if_not_optimal=False,
+            force_split_reader=False,
+            transpose_shards=False,
+            enable_activation_reuse=False,
+            full_inner_dim=False,
+        )
+        self.compute_cfg = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi3,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+
+    def __call__(self, x_n1tc: ttnn.Tensor, batch_size: int, input_height: int) -> ttnn.Tensor:
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        slice_cfg = _stft_conv_slice_config(input_height)
+        if x_n1tc.layout == ttnn.ROW_MAJOR_LAYOUT:
+            x_rm = x_n1tc
+        else:
+            x_rm = ttnn.to_layout(x_n1tc, ttnn.ROW_MAJOR_LAYOUT)
+        key = (batch_size, input_height, slice_cfg.num_slices)
+        if self._prep_key != key:
+            self.weight_prepared = ttnn.prepare_conv_weights(
+                weight_tensor=self.weight_rm,
+                input_memory_config=x_rm.memory_config(),
+                input_layout=x_rm.layout,
+                weights_format="OIHW",
+                in_channels=self.in_channels,
+                out_channels=self.out_channels,
+                batch_size=batch_size,
+                input_height=input_height,
+                input_width=1,
+                kernel_size=(self.kernel_size, 1),
+                stride=(self.hop_length, 1),
+                padding=(0, 0),
+                dilation=(1, 1),
+                has_bias=False,
+                groups=1,
+                device=self.device,
+                input_dtype=x_rm.dtype,
+                conv_config=self.conv_config,
+                compute_config=self.compute_cfg,
+                slice_config=slice_cfg,
+            )
+            self._prep_key = key
+        result, [oh, _ow], wpair = ttnn.conv2d(
+            input_tensor=x_rm,
+            weight_tensor=self.weight_prepared,
+            device=self.device,
+            in_channels=self.in_channels,
+            out_channels=self.out_channels,
+            batch_size=batch_size,
+            input_height=input_height,
+            input_width=1,
+            kernel_size=(self.kernel_size, 1),
+            stride=(self.hop_length, 1),
+            padding=(0, 0),
+            bias_tensor=None,
+            conv_config=self.conv_config,
+            compute_config=self.compute_cfg,
+            slice_config=slice_cfg,
+            return_weights_and_bias=True,
+            return_output_dim=True,
+        )
+        self.weight_prepared = wpair[0]
+        out = ttnn.reshape(result, [batch_size, int(oh), self.out_channels], memory_config=mc)
+        if out.layout != ttnn.TILE_LAYOUT:
+            out = ttnn.to_layout(out, ttnn.TILE_LAYOUT, memory_config=mc)
+        return ttnn.permute(out, (0, 2, 1), memory_config=mc)
 
 
 class TTCustomSTFT:
@@ -213,7 +324,6 @@ class TTCustomSTFT:
             x_padded = x_n1lc
             L_padded = L_in
 
-        # Strided conv2d branches → ``[B, K, F]`` each.
         X_real = self._conv_real(x_padded, B, L_padded)
         X_imag = self._conv_imag(x_padded, B, L_padded)
         ttnn.deallocate(x_padded)
@@ -233,13 +343,9 @@ class TTCustomSTFT:
             ttnn.multiply(X_imag, X_imag, memory_config=mc),
             memory_config=mc,
         )
-        eps_t = ttnn.full_like(mag_sq, self._EPS, memory_config=mc)
-        mag_sq = ttnn.add(mag_sq, eps_t, memory_config=mc)
-        ttnn.deallocate(eps_t)
-        magnitude = ttnn.sqrt(mag_sq, memory_config=mc)
-        ttnn.deallocate(mag_sq)
-
+        magnitude = ttnn.sqrt(ttnn.add(mag_sq, self._EPS, memory_config=mc), memory_config=mc)
         phase = ttnn.atan2(X_imag, X_real, memory_config=mc)
+        ttnn.deallocate(mag_sq)
         # (imag == 0) & (real < 0) -> π  (matches reference correction_mask)
         corr_mask = ttnn.logical_and(
             ttnn.eq(X_imag, 0.0, memory_config=mc),
