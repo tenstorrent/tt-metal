@@ -1649,9 +1649,16 @@ static void run_dfb_size_override_test(
     uint32_t entry_size_spec,   // DFB-declared entry_size
     uint32_t num_entries_spec,  // DFB-declared ring depth
     uint32_t workload,          // entries streamed (CTAs / entries_per_core)
-    const std::vector<DfbSizeOverride>& launches) {
+    const std::vector<DfbSizeOverride>& launches,
+    uint8_t num_producers = 1,
+    uint8_t num_consumers = 1) {
     IDevice* device = mesh_device->get_devices()[0];
     const bool implicit_sync = (device->arch() == ARCH::QUASAR) && implicit_sync_param;
+
+    // Per-thread compile-time loop bounds; the strided kernels split `workload` across the threads
+    // (ceiling division, with a runtime entries_per_core bound to skip the tail).
+    const uint32_t entries_per_producer = (workload + num_producers - 1) / num_producers;
+    const uint32_t entries_per_consumer = (workload + num_consumers - 1) / num_consumers;
 
     const experimental::DFBSpecName DFB_NAME{"dfb"};
     const experimental::KernelSpecName PRODUCER{"producer"};
@@ -1679,20 +1686,20 @@ static void run_dfb_size_override_test(
     experimental::KernelSpec producer_spec{
         .unique_id = PRODUCER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
-        .num_threads = 1,
+        .num_threads = num_producers,
         .dfb_bindings = {experimental::ProducerOf(DFB_NAME, "out")},
         .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
         .compile_time_args =
-            {{"num_entries_per_producer", workload},
+            {{"num_entries_per_producer", entries_per_producer},
              {"implicit_sync", static_cast<uint32_t>(implicit_sync ? 1u : 0u)},
-             {"num_producers", 1u}},
+             {"num_producers", static_cast<uint32_t>(num_producers)}},
         .runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}},
         .hw_config = dm_producer_cfg,
     };
     experimental::KernelSpec consumer_spec{
         .unique_id = CONSUMER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer.cpp",
-        .num_threads = 1,
+        .num_threads = num_consumers,
         .dfb_bindings = {{
             .dfb_spec_name = DFB_NAME,
             .accessor_name = "in",
@@ -1701,10 +1708,10 @@ static void run_dfb_size_override_test(
         }},
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
         .compile_time_args =
-            {{"num_entries_per_consumer", workload},
+            {{"num_entries_per_consumer", entries_per_consumer},
              {"blocked_consumer", 0u},
              {"implicit_sync", static_cast<uint32_t>(implicit_sync ? 1u : 0u)},
-             {"num_consumers", 1u}},
+             {"num_consumers", static_cast<uint32_t>(num_consumers)}},
         .runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}},
         .hw_config = dm_consumer_cfg,
     };
@@ -1834,6 +1841,51 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB_BothOverride) {
         /*num_entries_spec=*/8,
         /*workload=*/8,
         {DfbSizeOverride{.entry_size = 64, .num_entries = 4}});
+}
+
+// Symmetric 3P/3C: ring 6 -> 12 (1 TC per side).
+TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB_NumEntriesOverride_ReEntry_3Sx3S) {
+    DFB_SKIP_IF_UNSUPPORTED(3, 3);
+    run_dfb_size_override_test(
+        this->devices_.at(0),
+        GetParam(),
+        /*data_entry_size=*/64,
+        /*entry_size_spec=*/64,
+        /*num_entries_spec=*/6,
+        /*workload=*/6,
+        {DfbSizeOverride{}, DfbSizeOverride{.num_entries = 12}},
+        /*num_producers=*/3,
+        /*num_consumers=*/3);
+}
+
+// Asymmetric 1P/4C: ring 8 -> 16.
+TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB_NumEntriesOverride_ReEntry_1Sx4S) {
+    DFB_SKIP_IF_UNSUPPORTED(1, 4);
+    run_dfb_size_override_test(
+        this->devices_.at(0),
+        GetParam(),
+        /*data_entry_size=*/64,
+        /*entry_size_spec=*/64,
+        /*num_entries_spec=*/8,
+        /*workload=*/8,
+        {DfbSizeOverride{}, DfbSizeOverride{.num_entries = 16}},
+        /*num_producers=*/1,
+        /*num_consumers=*/4);
+}
+
+// Asymmetric 4P/1C: ring 8 -> 16.
+TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB_NumEntriesOverride_ReEntry_4Sx1S) {
+    DFB_SKIP_IF_UNSUPPORTED(4, 1);
+    run_dfb_size_override_test(
+        this->devices_.at(0),
+        GetParam(),
+        /*data_entry_size=*/64,
+        /*entry_size_spec=*/64,
+        /*num_entries_spec=*/8,
+        /*workload=*/8,
+        {DfbSizeOverride{}, DfbSizeOverride{.num_entries = 16}},
+        /*num_producers=*/4,
+        /*num_consumers=*/1);
 }
 
 // 3 strided DM producers, 3 strided DM consumers, num_entries=3 -> capacity=1.
