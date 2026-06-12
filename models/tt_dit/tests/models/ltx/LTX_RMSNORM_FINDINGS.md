@@ -28,17 +28,19 @@ RoPE across the 8-wide axis 1. Run with `test_corr_det[...ring]` / `test_bench[.
 LTX 14/14 `det=OK` (0/9 over 10 fresh-pob runs, bit-exact), `pcc(fused:torch)` 99.99–100%,
 `pcc(fused:composite)` ≈100%. Identical to LINE — topology changes routing, not the math.
 
-**Wan2.2 — TP=4 RING:**
+**Wan2.2 — TP=4 RING** (`fused-split` = `WAN_RMSNORM_RING_SPLIT=1`, see split-sender section below):
 
-| config | pattern | feat | rows | baseline µs | fused µs | speedup |
-|---|---|---:|---:|---:|---:|---:|
-| self_sp4_N18944 | qk+rope | 1280 | 18944 | 1154.84 | 897.93 | **1.29×** |
-| self_sp8_N9472 | qk+rope | 1280 | 9472 | 572.98 | 505.71 | 1.13× |
-| self_sp32_N2368 | qk+rope | 1280 | 2368 | 187.49 | 191.49 | 0.98× |
-| cross_q_sp4_N18944 | qk | 1280 | 18944 | 944.48 | 584.56 | **1.62×** |
-| cross_q_sp8_N9472 | qk | 1280 | 9472 | 472.84 | 335.90 | **1.41×** |
-| cross_q_sp32_N2368 | qk | 1280 | 2368 | 141.48 | 141.57 | 1.00× |
-| cross_k_prompt_L512 | qk | 1280 | 512 | 73.69 | 67.20 | 1.10× |
+| config | pattern | feat | rows | baseline µs | fused µs | fused-split µs | split vs fused |
+|---|---|---:|---:|---:|---:|---:|---:|
+| self_sp4_N18944 | qk+rope | 1280 | 18944 | 1154.84 | 897.93 | 897.81 | ~0% |
+| self_sp8_N9472 | qk+rope | 1280 | 9472 | 572.98 | 505.71 | 505.32 | ~0% |
+| self_sp32_N2368 | qk+rope | 1280 | 2368 | 187.49 | 191.49 | 192.03 | ~0% |
+| cross_q_sp4_N18944 | qk | 1280 | 18944 | 944.48 | 604.21 | 585.43 | **−3.1%** |
+| cross_q_sp8_N9472 | qk | 1280 | 9472 | 472.84 | 335.90 | 336.14 | ~0% |
+| cross_q_sp32_N2368 | qk | 1280 | 2368 | 141.48 | 141.57 | 141.54 | ~0% |
+| cross_k_prompt_L512 | qk | 1280 | 512 | 73.69 | 67.20 | 67.17 | ~0% |
+
+(`fused` µs above are the dual-direction default. The earlier cross_q numbers were re-measured here for a same-session comparison.) LTX spot-checks of the two largest AG-exposed configs: `v_block_s2` 207.02→207.03 µs, `v_textcross_q_s2` 186.52→187.25 µs — both ~0%.
 
 **LTX-2.3 — TP=4 RING:**
 
@@ -70,6 +72,27 @@ deadlock is dodged by forcing chunk-1; self-attn now wins 1.1–1.75×).
 > ~8× the buffer/trace pressure of a 4-device LINE submesh. On the (flaky) galaxy the LTX
 > 14-config ring sweep can trip a `system_memory_manager` throw mid-run; the numbers above
 > were gathered in small `RMS_BENCH_ONLY` batches with a `tt-smi -glx_reset` between each.
+
+### Split-sender ring AG (`WAN_RMSNORM_RING_SPLIT`) — marginal, kept off by default
+Default ring AG: every MUX worker mcasts BOTH directions (fwd arc + bwd arc, each
+~⌈(ring−1)/2⌉ hops). Split mode instead partitions a link's workers into fwd-only and
+bwd-only halves; each does ONE full-wrap mcast (ring−1 hops, reaching all peers one way
+around) and each MUX serves half the channels. Hypothesis: fewer fabric injections per
+worker + a shorter MUX channel loop. Confined to the kernel layout (`create_at`); the
+writer is unchanged (both `num_targets`=ring−1, per-worker `connection_valid` picks the
+direction). **Correctness verified:** Wan TP=4 ring 7/7 `det=OK`, PCC 99.99–100%, identical
+to non-split.
+
+**Result: essentially neutral.** Only `cross_q_sp4` (the largest no-RoPE shape, 18944 rows,
+where the AG is most exposed) improves, ~3.1% (604→585 µs). Everywhere else it's within
+noise: RoPE configs are compute-bound (AG isn't the bottleneck), small configs are
+dispatch-bound, and the LTX AG-exposed configs (block / no-rope QK) show 0%. The two wins
+are real but the all-gather isn't on the critical path for any shape except the single
+biggest. It's also **more fragile**: the longer one-directional full-wrap traffic makes the
+traced back-to-back sweep trip the cumulative `system_memory_manager` hang sooner (the split
+sweep needed one config per process to complete; the dual-direction sweep tolerated 7).
+So split mode stays **off by default**; the flag is retained for future ring-size sweeps
+(larger rings = more hops saved by halving the arc, where it may pay off more).
 
 ## Baseline vs fused — TP=4 galaxy LINE, 4 links (1×4 submesh)
 Same op, LINE topology on a 1×4 submesh (4 devices). Within noise of the RING numbers
