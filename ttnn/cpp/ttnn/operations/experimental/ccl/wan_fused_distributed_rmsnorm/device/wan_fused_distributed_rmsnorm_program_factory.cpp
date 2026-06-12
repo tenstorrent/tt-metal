@@ -86,7 +86,7 @@ constexpr uint32_t kMuxRowsThreshold = 4u;
 // superseding the old SMALL/LARGE two-regime rule (which under-parallelized
 // medium shapes via rows/2 and over-parallelized large ones). With chunk pinned
 // to 1, fabric/AG is negligible (~2us), so there's no packet-count reason to use
-// fewer workers. See the commit history / PERF_LOG.md.
+// fewer workers. See the commit history / RMSNORM_FUSION_FINDINGS.md.
 // Diagnostic override: WAN_RMSNORM_WORKER_CAP lets a perf sweep dial the
 // per-chip worker cap without rebuilding. Read once. Defaults to
 // kMaxMuxWorkersPerChip. Read inside the single-source-of-truth sizing path so
