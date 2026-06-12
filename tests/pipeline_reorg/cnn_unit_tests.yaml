@@ -1,0 +1,29 @@
+# Test matrix for cnn-team tt-cnn unit tests in the L2 nightly pipeline.
+#
+# Bucketing: this is the "cnn / unit" file of the ttnn-org 3x3 split
+# ({ttnn, ops, cnn} x {unit, integration, perf}). tt-cnn library unit tests
+# live here.
+#
+# Entry fields: see ops_unit_tests.yaml header for shared field semantics.
+# Budget rolls up under `cnn.unit` (impl passes "unit" to
+# verify_time_budget.py).
+#
+# For max allowed timeout refer to .github/time_budget.yaml.
+
+- name: tt-cnn pipeline unit tests
+  cmd: 'pytest models/tt_cnn/tests/test_pipeline.py'
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+  team: cnn
+  category: cnn_pipeline
+
+- name: tt-cnn builder unit tests
+  cmd: 'pytest models/tt_cnn/tests/test_builder.py'
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+  team: cnn
+  category: cnn_builder

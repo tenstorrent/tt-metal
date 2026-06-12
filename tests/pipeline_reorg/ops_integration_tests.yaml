@@ -1,0 +1,24 @@
+# Test matrix for ops-team integration tests in the L2 nightly pipeline.
+#
+# Bucketing: this is the "ops / integration" file of the ttnn-org 3x3 split
+# ({ttnn, ops, cnn} x {unit, integration, perf}). Cross-op concerns that don't
+# belong to a single operator family (e.g. registered-ops doc coverage) live
+# here.
+#
+# Entry fields: see ops_unit_tests.yaml header for shared field semantics.
+# Budget rolls up under `ops.integration` (impl passes "integration" to
+# verify_time_budget.py).
+#
+# For max allowed timeout refer to .github/time_budget.yaml.
+
+- name: ttnn ops docs check
+  # Verifies every TTNN op registered in the codebase has a documentation
+  # entry in the API reference. Previously lived as the standalone
+  # ttnn-ops-docs-check.yaml workflow invoked from l2-nightly.
+  cmd: 'python3 scripts/detect_undocumented_ttnn_ops.py'
+  skus:
+    wh_n150_civ2:
+      timeout: 30
+  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+  team: ops
+  category: ops_docs_check

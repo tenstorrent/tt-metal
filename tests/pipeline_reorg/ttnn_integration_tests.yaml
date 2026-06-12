@@ -1,0 +1,40 @@
+# Test matrix for ttnn-team framework-integration tests in the L2 nightly
+# pipeline.
+#
+# Bucketing: this is the "ttnn / integration" file of the ttnn-org 3x3 split
+# ({ttnn, ops, cnn} x {unit, integration, perf}). Tests that exercise the ttnn
+# framework / API surface end-to-end (not a single op, not the cnn library)
+# live here.
+#
+# Entry fields: see ops_unit_tests.yaml header for shared field semantics.
+# Budget rolls up under `ttnn.integration` (impl passes "integration" to
+# verify_time_budget.py).
+#
+# For max allowed timeout refer to .github/time_budget.yaml.
+
+- name: ttnn tutorials
+  # Notebook-based tutorial tests. Previously lived as the standalone
+  # ttnn-tutorials-post-commit.yaml workflow invoked from l2-nightly. Sets
+  # up a minimum dev environment, installs tutorial deps and tt-triage, then
+  # runs the tutorial pytest suite.
+  cmd: |
+    cd docs/source/ttnn/ttnn/tutorials/ttnn_tutorials_basic_python
+    uv pip install --index-strategy unsafe-best-match --no-cache -r tutorials-dev.txt
+    cd /work
+    cd scripts/basic_dev_image
+    uv pip install -r minimum-testing-kit.txt
+    cd /work
+    apt-get update && apt-get install -y curl
+    source /opt/venv/bin/activate
+    uv pip install --index-strategy unsafe-best-match --no-cache -r ./tools/triage/requirements.txt
+    python3 -m pytest tests/ttnn/notebook_tests/test_tutorials.py -v
+  skus:
+    wh_n150_civ2:
+      timeout: 30
+    bh_p100a_civ2_viommu:
+      timeout: 30
+    bh_p150b_civ2_viommu:
+      timeout: 30
+  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+  team: ttnn
+  category: tutorials

@@ -82,6 +82,7 @@ ttnn:
   integration:
     wh_llmbox: 30
     wh_galaxy: 340
+<<<<<<< HEAD
   l2:
     wh_n150: 825
     wh_n300: 825
@@ -91,6 +92,11 @@ ttnn:
     wh_n300_civ2: 250
     bh_p100a_civ2_viommu: 20
     bh_p150b_civ2_viommu: 20
+=======
+    wh_n150_civ2: 30
+    bh_p100a_civ2_viommu: 30
+    bh_p150b_civ2_viommu: 30
+>>>>>>> 0a056f51dc2 (WIP ttnn l2 reorg)
   # Profiler budgets are kept under their own subheading for now while team /
   # test-framework assignment is being settled. Tracked in
   # https://github.com/tenstorrent/tt-metal/issues/44285
@@ -101,6 +107,23 @@ ttnn:
     wh_n300_civ2: 60
     bh_p100a_civ2_viommu: 60
     bh_p150b_civ2_viommu: 60
+
+ops:
+  unit:
+    wh_n150: 970
+    wh_n300: 970
+    bh_p100: 795
+    bh_p150b_civ2: 940
+    wh_n150_civ2: 110
+    wh_n300_civ2: 110
+    bh_p100a_civ2_viommu: 110
+    bh_p150b_civ2_viommu: 110
+  integration:
+    wh_n150_civ2: 30
+
+cnn:
+  unit:
+    wh_n150_civ2: 20
 
 train:
   smoke:
