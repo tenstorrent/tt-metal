@@ -292,6 +292,13 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         "TT_MM_NUM_SLICES ({}) must be a power of 2 dividing grid.y ({})",
         num_slices,
         grid_size.y);
+    // Sub-grid K_block refinement: a sliced sub-grid has small per-core M/N, so the default K_block=8
+    // makes the per-k-block work too coarse — finer K (4) pipelines read/forward/compute better.
+    // Measured ~+8%/+6%/+3.6% on sliced 4864x4096x512 / 4864x4096x32 / 32x2048x2048. Only on the auto
+    // path (no pinned config); the caller's K_block is respected when a config is given.
+    if (num_slices > 1 && !config.has_value()) {
+        K_block_tiles = std::min(K_block_tiles, 4u);
+    }
     const uint32_t rows_per_group = grid_size.y / num_slices;   // small-dim parallelism (per group)
     const uint32_t y_axis_parallel = rows_per_group;            // dim on grid.y is grouped
     const uint32_t x_axis_parallel = num_slices * grid_size.x;  // dim on grid.x is sliced (cols x slices)
