@@ -120,16 +120,22 @@ def test_indexer_score_glx_chunked(device, heads, dim, sq, t, chunk_start):
     assert_indexer_match(out, ref, sq, t, check_neg=True)
 
 
-def production_config():
-    """Production (GLX chunked-prefill) knobs, shared by the accuracy and perf tests."""
-    # head_group_size=0 keeps all this device's heads resident: head streaming re-reads q per
-    # output tile and is ~24x slower (heads8 sp7 0.48ms -> 11.5ms), so it is never used here.
-    # k_chunk=256 (KC=8) over 512: both leave room for the factory to auto-bump QC to 2 (the
-    # K-bandwidth knee), and KC=8 load-balances the work units slightly better on heads8 (0.48
-    # vs 0.49ms sp7); KC>=32 is too large -- QC=2 no longer fits L1 and the bump is lost.
-    # q_chunk_size is the floor; the factory auto-tunes QC (and clamps it down to fit L1).
+def production_config(heads):
+    """Production (GLX chunked-prefill) knobs. The factory no longer auto-tunes -- the caller picks
+    QC/KC/HB and an oversized config is rejected, so this helper owns the per-head-count choice.
+
+    - head_group_size=0 keeps all of this device's heads resident: head streaming re-reads q per
+      output tile and is ~24x slower (heads8 sp7 0.48ms -> 11.5ms), so it is never used here.
+    - QC=2 (q_chunk_size=64) reuses each resident K chunk across 2 q-rows, cutting the reader's
+      redundant K reads ~2x -- the K-bandwidth knee and the win for the 8-head TP=8 shard
+      (sp7 bfp8 0.73 -> 0.48 ms). At 64 heads, QC=2 with all heads resident overflows L1 (cb_q
+      alone ~1 MB), so QC stays 1 (32); the 64-head case is compute-bound and gains nothing from
+      QC=2 anyway.
+    - k_chunk=256 (KC=8) over 512: KC=8 load-balances the work units slightly better on heads8
+      (0.48 vs 0.49 ms sp7) and stays small enough to leave L1 room for QC=2; KC>=32 is too large.
+    """
     return ttnn.IndexerScoreProgramConfig(
-        q_chunk_size=32,
+        q_chunk_size=64 if heads <= 16 else 32,
         k_chunk_size=256,
         head_group_size=0,
     )
@@ -141,7 +147,7 @@ def test_indexer_score_production(device, sp_rank, heads):
     """GLX chunked prefill with the production knobs (64-head whole indexer, 16-head TP=4 shard)."""
     chunk_start = GLX_HISTORY + sp_rank * GLX_SQ
     q, k, w = make_inputs(heads, GLX_DIM, GLX_SQ, GLX_T)
-    out = run_indexer(q, k, w, chunk_start, device, program_config=production_config())
+    out = run_indexer(q, k, w, chunk_start, device, program_config=production_config(heads))
     ref = indexer_score_ref(q, k, w, chunk_start)
     assert_indexer_match(out, ref, GLX_SQ, GLX_T)
 
@@ -156,7 +162,7 @@ def test_indexer_score_bfp8_k(device, sp_rank, heads):
     """
     chunk_start = GLX_HISTORY + sp_rank * GLX_SQ
     q, k, w = make_inputs(heads, GLX_DIM, GLX_SQ, GLX_T)
-    out = run_indexer(q, k, w, chunk_start, device, program_config=production_config(), k_dtype=ttnn.bfloat8_b)
+    out = run_indexer(q, k, w, chunk_start, device, program_config=production_config(heads), k_dtype=ttnn.bfloat8_b)
     ref = indexer_score_ref(q, k, w, chunk_start)
     assert_indexer_match(out, ref, GLX_SQ, GLX_T, check_neg=True)
 
@@ -176,7 +182,7 @@ def test_indexer_score_production_perf(device, sp_rank, k_dtype, heads):
     """
     warmup_iters, measured_iters = 3, 20
     chunk_start = GLX_HISTORY + sp_rank * GLX_SQ
-    cfg = production_config()
+    cfg = production_config(heads)
     q, k, w = make_inputs(heads, GLX_DIM, GLX_SQ, GLX_T)
     q_dev = to_device(q, device)
     k_dev = to_device(k, device, dtype=k_dtype)  # bfp8_b k selects LoFi in the factory
@@ -211,7 +217,8 @@ def test_indexer_score_production_perf(device, sp_rank, k_dtype, heads):
     "q_chunk, k_chunk, head_group, chunk_start",
     [
         (32, 32, 1, 128),  # default: one head resident, streamed per tile
-        (64, 32, 0, 128),  # QC=2: multi-row groups, full-future tiles masked in compute
+        (64, 32, 16, 128),  # QC=2: multi-row groups, full-future tiles masked in compute (HB=16 of
+        # 64 resident: QC=2 with all 64 heads would overflow L1, and the factory no longer clamps)
         (32, 128, 0, 128),  # KC=4: chunked k, partial edge chunks
         (32, 32, 32, 128),  # head streaming, 2 groups
         (64, 128, 16, 128),  # everything at once
@@ -252,8 +259,12 @@ def test_indexer_score_multicore_qc2(device):
     Exercises the writer's group-level -inf tail fill (every row tail starts at the
     group's valid width) when the tail owner and the cores producing the group's
     future tiles are different cores.
+
+    16 heads (not 64): QC=2 with all heads resident must fit L1 (cb_q ~ HB*QC*Dt), and
+    64 heads * QC=2 overflows. The factory no longer clamps QC down, so the caller picks a
+    head count where QC=2 actually takes effect rather than silently falling back to QC=1.
     """
-    heads, dim, sq, t, chunk_start = 64, 128, 128, 2048, 512
+    heads, dim, sq, t, chunk_start = 16, 128, 128, 2048, 512
     cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=32, head_group_size=0)
     q, k, w = make_inputs(heads, dim, sq, t)
     out = run_indexer(q, k, w, chunk_start, device, program_config=cfg)
@@ -270,8 +281,19 @@ def test_indexer_score_multicore_qc2(device):
         (True, 128, ttnn.IndexerScoreProgramConfig(q_chunk_size=96)),  # QC=3 does not divide Sqt=2
         (True, 128, ttnn.IndexerScoreProgramConfig(k_chunk_size=512)),  # KC=16 > Tt=8
         (True, 128, ttnn.IndexerScoreProgramConfig(head_group_size=3)),  # 3 does not divide Hi=64
+        # QC=2 with all 64 heads resident overflows L1 (cb_q ~1 MB); the factory rejects it up front
+        # instead of clamping QC down (the caller owns the knobs).
+        (True, 128, ttnn.IndexerScoreProgramConfig(q_chunk_size=64, head_group_size=0)),
     ],
-    ids=["chunk_unaligned", "window_overflow", "non_causal", "qc_indivisible", "kc_oversize", "hb_indivisible"],
+    ids=[
+        "chunk_unaligned",
+        "window_overflow",
+        "non_causal",
+        "qc_indivisible",
+        "kc_oversize",
+        "hb_indivisible",
+        "l1_overflow",
+    ],
 )
 def test_indexer_score_invalid_config(device, is_causal, chunk_start, cfg):
     """Host-side validation should reject bad inputs before any kernel launches."""
@@ -361,7 +383,7 @@ def test_indexer_score_sp7_perf_impl(device, heads, k_id):
     q_dev = to_device(q, device)
     k_dev = to_device(k, device, dtype=k_dtype)
     w_dev = to_device(w, device)
-    cfg = production_config()
+    cfg = production_config(heads)
     for _ in range(5):  # tracy logs each op's device duration; the outer test takes the min
         ttnn.experimental.deepseek.indexer_score(
             q_dev, k_dev, w_dev, chunk_start_idx=SP7_CHUNK_START, program_config=cfg

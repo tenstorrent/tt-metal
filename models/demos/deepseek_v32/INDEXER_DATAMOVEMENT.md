@@ -14,7 +14,7 @@ half-sync**, device-kernel time from `test_indexer_score_sp7_math_util` (DMA on 
 - `INDEXER_DMA_OFF=1` → compute ceiling (reader+writer skip NoC, still push/pop CBs).
 - `INDEXER_DMA_OFF_READER=1` / `INDEXER_DMA_OFF_WRITER=1` → disable one side (isolate it).
 - `INDEXER_READ_Q_OFF` / `_K_OFF` / `_W_OFF` → skip just one input's reads (attribute the reader).
-- `INDEXER_QC=<n>` → force a specific QC (bypasses the auto-tune gate) for sweeps.
+- QC is set directly via the program config (`q_chunk_size`) — sweep by passing different configs.
 
 ## The bottleneck is the READER, not the writer
 
@@ -33,17 +33,20 @@ gap (+0.282), plus ~0.08 of reader/writer DRAM contention when both run. **Optim
 The reader is **bandwidth-bound, not latency-bound**: deepening cb_k (2→3→4 chunks) made it
 *worse* (more L1 pressure + DRAM contention, no latency win). The fix is fewer bytes.
 
-## Win 1 — auto-tune QC to cut redundant K reads (committed)
+## Win 1 — raise QC to cut redundant K reads (caller-chosen)
 
 With QC=1 each K tile is re-read once per q-row-group (~Sqt=20× over: total K reads = V·Dt vs
 Tt·Dt unique). Raising QC (q-tile-rows per work unit) reuses each K chunk across QC q-rows in the
 matmul → K DRAM traffic ~QC-fold less.
 
-The factory auto-tunes QC up from the requested value by **a single divisor step of Sqt** (to
-QC=2 for the GLX shape) when the op is **reader-bound**: `k_tile_bytes > 51·HB·fidelity_passes`
-(per-tile K bytes vs ~HB-head matmul work; BH-calibrated). The step must fit L1 (footprint vs
-`l1_size_per_core() − 320 KB`; the reserve covers the tracy profiler's per-RISC L1). Compute-bound
-cases stay at QC=1 so the multi-row-group masking overhead never regresses them.
+**The caller picks QC via `q_chunk_size`** (the factory does not auto-tune it — an oversized config
+is rejected, not silently adjusted). QC=2 is the right choice when the op is **reader-bound**
+(`k_tile_bytes > ~51·HB·fidelity_passes` — per-tile K bytes vs ~HB-head matmul work; BH-calibrated),
+which holds for the 8-head TP shard and for bf16 k. The chosen QC must fit L1 (CB footprint vs
+`l1_size_per_core() − 320 KB`; the reserve covers the tracy profiler's per-RISC L1) — the factory
+TT_FATALs otherwise. Compute-bound cases (16/64-head bfp8) stay at QC=1 so the multi-row-group
+masking overhead never regresses them. `production_config(heads)` in the test encodes this policy
+(QC=2 for heads ≤ 16, QC=1 for 64).
 
 **Stop at one step — QC=2 is the K-bandwidth knee.** A second doubling (QC 2→4) does NOT help the
 reader (already past the knee) and regresses on the higher compute ceiling + larger resident CBs.
@@ -61,10 +64,11 @@ max-fitting QC; the drift-controlled re-measure showed QC=2 clearly best, so the
 single step.) bf16 k doubles reader bytes, which is why heads16-bf16 *is* reader-bound and bumps
 while heads16-bfp8 does not. Accuracy 41/41 (bf16+bfp8, all sp ranks).
 
-The factory also **clamps QC down** to the largest divisor of Sqt (≤ requested) whose CBs fit L1,
-so a config whose requested QC overflows L1 — e.g. QC=2 with all 64 heads resident, where cb_q
-alone is 1 MB and the total is ~2 MB > 1.5 MB — falls back to a feasible QC (QC=1, ~1.38 MB) rather
-than failing CB allocation.
+A config whose CBs overflow L1 — e.g. QC=2 with all 64 heads resident, where cb_q alone is 1 MB and
+the total is ~2 MB > 1.5 MB — is **rejected by the factory's L1-fit TT_FATAL**, not silently adjusted.
+The caller must pick a feasible QC (so the 64-head case stays QC=1, which is also its compute-bound
+optimum). An earlier version clamped QC down automatically; that was removed because it silently ran
+"QC=2" configs at QC=1, hiding the infeasibility — the knobs are now the caller's responsibility.
 
 ### Optimal knobs for heads8 bfp8 sp7 (KC × QC × HB sweep)
 
@@ -82,8 +86,9 @@ than failing CB allocation.
   | 16      | 0.724 | 0.488     | 0.524 |
   | 32      | 0.735 | 0.733\*   | 0.738\* |
 
-  \*KC=32 is too large → QC=2 no longer fits L1 → clamps back to QC=1, losing the whole win. So the
-  production config is KC=8 + the QC auto-tune (→ QC=2), giving heads8 bfp8 sp7 **0.476 ms**.
+  \*KC=32 is too large → QC=2 no longer fits L1 (the factory rejects it), losing the whole win. So the
+  production config is **KC=8 + QC=2** (set directly in `production_config`), giving heads8 bfp8 sp7
+  **0.476 ms**.
 
 ## Where the reader gap is after Win 1 (heads8 bfp8, QC=2)
 

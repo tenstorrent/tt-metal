@@ -285,13 +285,14 @@ Branch: `skrstic/dsa_indexer_score_op_2` (cleanup) on `skrstic/dsa_indexer_score
       how to measure in `INDEXER_PROFILING.md`.
 - [x] perf: data-movement / DMA hiding. The **reader** (not the writer, whose
       fast-strip path is already hidden) is the bottleneck, bandwidth-bound on
-      redundant **K** reads (re-read once per q-row-group). Factory **auto-tunes QC**
-      up to the largest L1-fitting divisor of Sqt, gated on the op being reader-bound
-      (`k_tile > 51·HB·fidelity`), so K is reused across QC q-rows: heads8 bfp8
-      0.729→0.523 ms (33→46% util, QC 1→4), heads16 bf16 1.324→0.892 (QC 1→2);
-      compute-bound 16/64-head bfp8 stay QC=1 (no regression). Per-input reader
-      DMA-off mask (`INDEXER_READ_{Q,K,W}_OFF`) for attribution. Next lever (analyzed,
-      not done): multicast the per-group-shared q/w. Full analysis in
+      redundant **K** reads (re-read once per q-row-group). **Raising QC** reuses K
+      across QC q-rows: QC=2 is the knee for reader-bound shapes (heads8 bfp8
+      0.729→0.476 ms, heads16 bf16 1.324→0.892). **The caller picks QC** (via
+      `q_chunk_size`); the factory takes the knobs verbatim and TT_FATALs an
+      oversized config rather than clamping. `production_config(heads)` encodes the
+      policy: QC=2 for heads ≤ 16, QC=1 for the compute-bound 64-head case. Per-input
+      reader DMA-off mask (`INDEXER_READ_{Q,K,W}_OFF`) for attribution. Next lever
+      (analyzed, not done): multicast the per-group-shared q/w. Full analysis in
       `INDEXER_DATAMOVEMENT.md`.
 - [ ] row-major top-k (separate); negative-weights topk-safety test
 - [ ] perf: knob sweep for best GLX config; gate-mul is HiFi2-bound (the ~21%
