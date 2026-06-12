@@ -221,9 +221,7 @@ def test_ttnn_reduce_ds(mesh_device, seq_len, emb_dim, topk, use_weights):
     run_reduce(mesh_device, seq_len, emb_dim, topk, use_weights)
 
 
-# GLM 5.1 reduce shape (emb 6144, topk = num_experts_per_tok). emb 6144 sits on a known BH
-# combine flakiness value, so it is skipped in CI (which runs op_unit_tests/ unfiltered) and
-# only runs locally.
+# GLM 5.1 reduce shape (emb 6144, topk = num_experts_per_tok).
 @pytest.mark.parametrize("use_weights", [True, False], ids=["weighted", "unweighted"])
 @pytest.mark.parametrize(
     "seq_len, emb_dim, topk",
@@ -231,15 +229,11 @@ def test_ttnn_reduce_ds(mesh_device, seq_len, emb_dim, topk, use_weights):
     ids=["glm"],
 )
 @pytest.mark.parametrize("mesh_device, device_params", REDUCE_MESH_PARAMS, indirect=["mesh_device", "device_params"])
-def test_ttnn_reduce_glm(mesh_device, seq_len, emb_dim, topk, use_weights, is_ci_env, is_ci_v2_env):
-    if is_ci_env or is_ci_v2_env:
-        pytest.skip("GLM 5.1 model support not yet fully approved for CI; skip for now")
+def test_ttnn_reduce_glm(mesh_device, seq_len, emb_dim, topk, use_weights):
     run_reduce(mesh_device, seq_len, emb_dim, topk, use_weights)
 
 
-# MiniMax M2.7 reduce shape (emb 3072, topk = num_experts_per_tok). MiniMax model support is
-# not yet implemented, so this forward-looking shape is skipped in CI (which runs
-# op_unit_tests/ unfiltered) and only runs locally.
+# MiniMax M2.7 reduce shape (emb 3072, topk = num_experts_per_tok).
 @pytest.mark.parametrize("use_weights", [True, False], ids=["weighted", "unweighted"])
 @pytest.mark.parametrize(
     "seq_len, emb_dim, topk",
@@ -247,7 +241,5 @@ def test_ttnn_reduce_glm(mesh_device, seq_len, emb_dim, topk, use_weights, is_ci
     ids=["minimax"],
 )
 @pytest.mark.parametrize("mesh_device, device_params", REDUCE_MESH_PARAMS, indirect=["mesh_device", "device_params"])
-def test_ttnn_reduce_minimax(mesh_device, seq_len, emb_dim, topk, use_weights, is_ci_env, is_ci_v2_env):
-    if is_ci_env or is_ci_v2_env:
-        pytest.skip("MiniMax M2.7 model support not yet implemented; skip forward-looking shape in CI")
+def test_ttnn_reduce_minimax(mesh_device, seq_len, emb_dim, topk, use_weights):
     run_reduce(mesh_device, seq_len, emb_dim, topk, use_weights)

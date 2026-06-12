@@ -523,9 +523,7 @@ def test_ttnn_routed_expert_ds(
     )
 
 
-# GLM 5.1 dims (emb 6144, hidden = MOE_INTERMEDIATE_SIZE 2048), PCC skipped. emb 6144 sits on a
-# known BH combine flakiness value, so it is skipped in CI (which runs op_unit_tests/ unfiltered)
-# and only runs locally.
+# GLM 5.1 dims (emb 6144, hidden = MOE_INTERMEDIATE_SIZE 2048), PCC skipped.
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
     [
@@ -556,11 +554,7 @@ def test_ttnn_routed_expert_glm(
     dispatch_buffer_capacity_factor,
     run_pcc_check,
     use_predictable_data,
-    is_ci_env,
-    is_ci_v2_env,
 ):
-    if is_ci_env or is_ci_v2_env:
-        pytest.skip("GLM 5.1 model support not yet fully approved for CI; skip for now")
     run_routed_expert(
         mesh_device,
         device_params,
@@ -575,9 +569,7 @@ def test_ttnn_routed_expert_glm(
     )
 
 
-# MiniMax M2.7 dims (emb 3072, hidden = MOE_INTERMEDIATE_SIZE 1536), PCC skipped. MiniMax model
-# support is not yet implemented, so these forward-looking dims are skipped in CI (which runs
-# op_unit_tests/ unfiltered) and only run locally.
+# MiniMax M2.7 dims (emb 3072, hidden = MOE_INTERMEDIATE_SIZE 1536), PCC skipped.
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
     [
@@ -608,11 +600,7 @@ def test_ttnn_routed_expert_minimax(
     dispatch_buffer_capacity_factor,
     run_pcc_check,
     use_predictable_data,
-    is_ci_env,
-    is_ci_v2_env,
 ):
-    if is_ci_env or is_ci_v2_env:
-        pytest.skip("MiniMax M2.7 model support not yet implemented; skip forward-looking dims in CI")
     run_routed_expert(
         mesh_device,
         device_params,

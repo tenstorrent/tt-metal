@@ -396,8 +396,6 @@ def test_ttnn_combine_ds(
 # Galaxy (8 experts/chip via num_routed_experts // num_devices); this op test runs on at most
 # 8 chips, so perf scales experts down by 32/8 = 4 to preserve that per-chip load. The PCC
 # param shrinks further (// 16 experts, half experts/token) to keep the full comparison cheap.
-# emb 6144 sits on a known BH combine flakiness value, so it is skipped in CI (which runs
-# op_unit_tests/ unfiltered) and only runs locally.
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
     [
@@ -446,11 +444,7 @@ def test_ttnn_combine_glm(
     run_pcc_check,
     dispatched_buffer_layout,
     use_fp8_output,
-    is_ci_env,
-    is_ci_v2_env,
 ):
-    if is_ci_env or is_ci_v2_env:
-        pytest.skip("GLM 5.1 model support not yet fully approved for CI; skip for now")
     run_combine(
         mesh_device,
         seq_len_per_chip,
@@ -472,8 +466,6 @@ def test_ttnn_combine_glm(
 # at most 8 chips, so perf scales experts down by 32/8 = 4 to preserve that per-chip load. The
 # PCC param shrinks further (// 16 experts, half experts/token) to keep the full comparison
 # cheap. Only MoE shape is exercised here; MiniMax's GQA attention is irrelevant to combine.
-# MiniMax model support is not yet implemented, so these forward-looking shapes are skipped in
-# CI (which runs op_unit_tests/ unfiltered) and only run locally.
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
     [
@@ -522,11 +514,7 @@ def test_ttnn_combine_minimax(
     run_pcc_check,
     dispatched_buffer_layout,
     use_fp8_output,
-    is_ci_env,
-    is_ci_v2_env,
 ):
-    if is_ci_env or is_ci_v2_env:
-        pytest.skip("MiniMax M2.7 model support not yet fully approved for CI; skip for now")
     run_combine(
         mesh_device,
         seq_len_per_chip,

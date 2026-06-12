@@ -402,8 +402,7 @@ def test_ttnn_dispatch_combine_ds(
     )
 
 
-# emb 6144 sits on a known BH combine flakiness value, so it is skipped in CI (which runs
-# op_unit_tests/ unfiltered) and only runs locally.
+# GLM 5.1 round-trip shape (emb 6144).
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor",
     [(3200, GLM51Config.EMB_SIZE, GLM51Config.NUM_ROUTED_EXPERTS // 4, 2, 2)],
@@ -431,11 +430,7 @@ def test_ttnn_dispatch_combine_glm(
     topology,
     use_predictable_data,
     dispatched_buffer_layout,
-    is_ci_env,
-    is_ci_v2_env,
 ):
-    if is_ci_env or is_ci_v2_env:
-        pytest.skip("GLM 5.1 model support not yet fully approved for CI; skip for now")
     run_dispatch_combine(
         mesh_device,
         seq_len_per_chip,
@@ -450,8 +445,7 @@ def test_ttnn_dispatch_combine_glm(
     )
 
 
-# MiniMax M2.7 model support is not yet implemented, so this forward-looking shape is skipped in
-# CI (which runs op_unit_tests/ unfiltered) and only runs locally.
+# MiniMax M2.7 round-trip shape (emb 3072).
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor",
     [(3200, MiniMaxM27Config.EMB_SIZE, MiniMaxM27Config.NUM_ROUTED_EXPERTS // 4, 2, 2)],
@@ -479,11 +473,7 @@ def test_ttnn_dispatch_combine_minimax(
     topology,
     use_predictable_data,
     dispatched_buffer_layout,
-    is_ci_env,
-    is_ci_v2_env,
 ):
-    if is_ci_env or is_ci_v2_env:
-        pytest.skip("MiniMax M2.7 model support not yet implemented; skip forward-looking shape in CI")
     run_dispatch_combine(
         mesh_device,
         seq_len_per_chip,
