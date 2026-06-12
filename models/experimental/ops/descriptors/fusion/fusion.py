@@ -870,6 +870,13 @@ class Sequential:
     """
 
     def __init__(self, *items, **named_items):
+        import os
+
+        if not os.environ.get("TTNN_ENABLE_PARALLEL_SEQUENTIAL"):
+            raise RuntimeError(
+                "Sequential/Parallel fusion is not yet production-ready and requires ProgramSpec to be "
+                "exposed to Python before general use. Set TTNN_ENABLE_PARALLEL_SEQUENTIAL=1 to opt in."
+            )
         all_items = list(items)
         for item in named_items.values():
             all_items.append(item)
@@ -1043,6 +1050,13 @@ class Parallel:
     """
 
     def __init__(self, *items, **named_items):
+        import os
+
+        if not os.environ.get("TTNN_ENABLE_PARALLEL_SEQUENTIAL"):
+            raise RuntimeError(
+                "Sequential/Parallel fusion is not yet production-ready and requires ProgramSpec to be "
+                "exposed to Python before general use. Set TTNN_ENABLE_PARALLEL_SEQUENTIAL=1 to opt in."
+            )
         all_items = list(items)
         for item in named_items.values():
             all_items.append(item)
