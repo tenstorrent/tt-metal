@@ -1,28 +1,40 @@
-## Update — decode now ~158.5 ms device perf (~6.7× since E47, 0.98 → ~6.5 samp/s)
+# Update — decode ~158.5 ms device perf (~6.7× since E47)
 
-**Now: ~0.15 s/token · ~6.5 samples/sec — ~6.7× since E47** (E47 = 1.02 s/token, 0.98 samp/s).
-Hand-tuned the EmitPy `main.py`; PCC held throughout (argmax 100%, logits cos ≈ 1.0 vs baseline).
+**0.98 → ~6.5 samp/s** · E47 was 1.02 s/token (0.98 samp/s).
+**Correctness:** next-token argmax = 100% throughout; each effort ≈-numerically-equal to the prior step. Golden-logits PCC fell ~0.92 → **0.90** at the bf4 `moe_compute` swap (effort 1) and held there (bf4 floor).
 
-**Full-model device perf** (per decode step, ms; 61 layers = 3 dense + 58 MoE):
+**Device perf** (per decode step; 61 layers = 3 dense + 58 MoE):
 ```
-device perf = prologue + attn×61 + dense×3 + moe×58 + lm_head
-            = 0.019    + 0.890×61 + 0.619×3 + 1.739×58 + 2.439
-            ≈ 158.5 ms
+prologue + attn×61 + dense×3 + moe×58 + lm_head
+0.019    + 0.890×61 + 0.619×3 + 1.739×58 + 2.439  ≈ 158.5 ms
 ```
 
-| effort | what | commit(s) | speedup |
-|---|-----|---|---|
-| **Fused MoE experts** | swap sparse_matmul path → `ttnn.experimental.moe_compute` (+ tail `reduce_scatter`; freeing dead weights fixed a combine hang) | `dcec039`,`6bca510` | **+314%** |
-| **Attention layout** | MLA chains→L1, `permute→ttnn.transpose` (~10×), reshape elimination, RoPE op (attn 1.97→1.10 ms/layer) | `bf666df` | +25% |
-| **MoE tail precision** | drop redundant FP32 upcasts, then BF16 weighted-k-sum → hits `FastReduceNC` fast path (Reduce 170→15 µs) + BF16 `reduce_scatter` | `012ba4c`,`70d3616` | +15% |
-| **Reshard + fuse collectives** | re-shard q_a locally (`mesh_partition` replaces a `reduce_scatter`) so qkv-down's 3 reductions → 1 `all_gather+sum`; same for router all-reduce | `16b3ab2`,`f8cebd8`,`b3e0f41` | +7% |
+| effort | what | commits | speedup |
+|---|---|---|---|
+| **Fused MoE experts** | sparse_matmul path → `ttnn.experimental.moe_compute` (bf4) | `dcec039`,`6bca510` | **+314%** |
+| **Attention layout** | MLA chains→L1, `permute→ttnn.transpose`, reshape elim, RoPE op | `bf666df` | +25% |
+| **MoE tail precision** | BF16 weighted-k-sum → `FastReduceNC` fast path (170→15 µs) | `012ba4c`,`70d3616` | +15% |
+| **Reshard + fuse collectives** | local `mesh_partition` reshard → qkv-down 3 reductions→1 `all_gather+sum`; router too | `16b3ab2`,`f8cebd8`,`b3e0f41` | +7% |
 
-**Biggest lever, still blocked:** MoE = ~59% of decode device perf, but expert/combine collective restructuring trips the `moe_compute selective_reduce_combine` L1-overlap fragility — **#46208** (term-barrier **#43444** fixed by **#45764**; residual worked around with `num_buffers 14→13`).
+**Pure CCL share** (explicit `all_gather`/`reduce_scatter`/`all_to_all`):
 
-**Patterns worth automating in the compiler:** (a) fuse N reductions of slices of one matmul output → 1 reduction; (b) tile-aware gather dim (pack partials into a tile dim, not the leading dim); (c) CSE loop-invariant RoPE broadcasts across layers; (d) emit combine/reduce in the dtype that hits `FastReduceNC`.
+| part | attn | dense | moe | lm_head | **full model** |
+|---|---|---|---|---|---|
+| CCL % | 23% | 57% | 32% | 24% | **~29%** |
 
-**Full detail (per-step PCC + device deltas):**
-- MoE-compute journal (1059→256→205→177.8 ms + combine-hang root cause): https://github.com/tenstorrent/tt-metal/blob/mvasiljevic/deepseek-decode-sharding/deepseek_codegen/graph_0/MOE_COMPUTE_JOURNAL.md
-- Decode-sharding journal (this update's fusion / tile-repack / RoPE-CSE work): https://github.com/tenstorrent/tt-metal/blob/mvasiljevic/deepseek-decode-sharding/deepseek_codegen/graph_0/DECODE_SHARDING_JOURNAL.md
+Excludes the MoE combine fused inside `MoECompute` (~35–40% incl. it). **We don't run trace here** — the full model is served with trace, which CCLs are probably the most affected by, so real CCL cost is likely lower.
 
-*speedup = how much faster that effort made it (relative to just before it). Full-model device perf projected to s/token (anchored to E47 = 1.02 s/token). Smaller follow-on wins (tile-packing, RoPE CSE) carry it the rest of the way to ~6.5 samp/s.*
+**Blocked (biggest lever):** MoE = ~59% of device perf, but expert/combine restructuring trips the `moe_compute selective_reduce_combine` L1-overlap — **#46208** (barrier #43444 fixed by #45764; residual `num_buffers 14→13`).
+
+**Latest (E_idxnorm, commit `55d3fe8`):** indexer k_norm runs in bf16 (dropped the fp32 up/down-cast round-trip, both layers; −4 typecasts/decode-step). Full-graph live-outs **bit-identical** to the ropecse golden (the indexer is a top-k *selection* signal → bf16-tolerant). ~−0.27 ms. After this, the **safe typecast/CSE vein is exhausted**: remaining fp32 casts are precision/integer-critical (embedding+RMS residual, dense-MLP cross-device reduction accumulation, the UINT32 KV-cache-index `where`, pre-lm_head norm); the cache-index/`where` is already computed once and shared across layers. Bigger levers stay blocked (MoE combine #46208) or structural+hang-risky (head-relayout permutes).
+
+**Compiler could auto-emit** (each generalizes a manual win above):
+- lower transposing `permute` → `ttnn.transpose` (~10× faster) — *Attention layout*
+- fuse N reductions of one matmul's output slices → 1 reduction — *Reshard + fuse collectives*
+- tile-aware gather dim: pack partials into a tile dim, not the leading dim — *stat-gather repack*
+- emit combine/reduce in the dtype that hits `FastReduceNC` (BF16) — *MoE tail precision*
+- CSE loop-invariant RoPE cos/sin broadcasts — *already covered* (hand-added code, outside the compiled graph)
+
+**Detail:** [MoE-compute journal](https://github.com/tenstorrent/tt-metal/blob/mvasiljevic/deepseek-decode-sharding/deepseek_codegen/graph_0/MOE_COMPUTE_JOURNAL.md) · [Decode-sharding journal](https://github.com/tenstorrent/tt-metal/blob/mvasiljevic/deepseek-decode-sharding/deepseek_codegen/graph_0/DECODE_SHARDING_JOURNAL.md) · [Latest perf profile](https://github.com/tenstorrent/tt-metal/tree/mvasiljevic/deepseek-decode-sharding/deepseek_codegen/graph_0/perf_reports/ropecse_2026_06_12_07_08_23)
+
+<sub>speedup = per-effort gain vs the prior step. Full-model device perf projected to s/token (anchored to E47). +5% RoPE-CSE / +stat-gather tile-repack carry it the last bit to ~6.5 samp/s.</sub>
