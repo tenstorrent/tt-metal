@@ -69,7 +69,7 @@ def _deserialize_params(model: Model, serialized: dict) -> None:
         print(
             f"  [warn] checkpoint restore mismatch: "
             f"{len(missing)} model param(s) left at init "
-            f"({sorted(missing)[:3]}{'…' if len(missing) > 3 else ''}), "
+            f"({sorted(missing)[:3]}{'...' if len(missing) > 3 else ''}), "
             f"{len(unexpected)} checkpoint param(s) ignored"
         )
 

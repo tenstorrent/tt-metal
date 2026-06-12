@@ -442,7 +442,7 @@ def run_training(
         mem_guard = MemoryUsageTracker.begin_capture()  # noqa: F841 -- held to keep the capture active
         MemoryUsageTracker.snapshot("ENTRY")
 
-    # Silent setup: gather everything, then emit a single header block before training.
+    # Build everything (printing phase progress for the slow steps), then emit the header block.
     data_path = _resolve_data_path(training_cfg)
 
     resume_path = None
@@ -462,6 +462,7 @@ def run_training(
     # model_cfg is now final (the checkpoint's on resume), so build the dataset from its
     # seq_len — dataset windowing must match the model and collate_fn(seq_len=...) below.
     seq_len = model_cfg.max_sequence_length
+    print("Loading data...", flush=True)
     dataset, tokenizer = build_dataset(data_path, seq_len, model_cfg.vocab_size)
 
     # Char data auto-detects its vocab (config leaves it 0); record the real size so the model
@@ -471,6 +472,7 @@ def run_training(
 
     # Lazy alloc only helps when sharding, so default it on under FSDP (--no-lazy to disable).
     lazy_init = device_cfg.enable_fsdp and not args.no_lazy
+    print("Building model...", flush=True)
     model = instantiate_model_from_config(model_cfg, lazy_init=lazy_init, use_tp=device_cfg.enable_tp)
 
     flops_per_token = 0
@@ -481,12 +483,14 @@ def run_training(
     # Shard params before the optimizer is built so its state matches the sharded shapes (the caller
     # owns sharding, not the trainer).
     if device_cfg.enable_fsdp:
+        print("Sharding model...", flush=True)
         for block in model.blocks:
             ttml.fsdp.fully_shard(block)
         ttml.fsdp.fully_shard(model)
 
     # Materialize after fully_shard rewrote the mappers, so weights allocate already-sharded.
     if lazy_init:
+        print("Materializing parameters...", flush=True)
         ttml.materialize_module(model)
 
     if args.print_summary:
@@ -594,30 +598,31 @@ def run_training(
     )
 
     if resume_path:
+        print(f"Resuming from {shorten_home(resume_path)}...", flush=True)
         trainer.load_checkpoint(resume_path)
 
     # ─ Build header sections ─
     padded_vocab = round_up_to_tile(model_cfg.vocab_size, 32)
     if model_cfg.vocab_size != padded_vocab:
-        vocab_str = f"{model_cfg.vocab_size} → {padded_vocab} padded"
+        vocab_str = f"{model_cfg.vocab_size} -> {padded_vocab} padded"
     else:
         vocab_str = f"{model_cfg.vocab_size}"
 
     if training_cfg.scheduler_type == "warmup_linear":
         warmup = int(effective_max_steps * _WARMUP_LINEAR_WARMUP_FRACTION)
-        schedule_str = f"warmup_linear · {warmup:,} warmup · {effective_max_steps - warmup:,} decay"
+        schedule_str = f"warmup_linear ; {warmup:,} warmup ; {effective_max_steps - warmup:,} decay"
     else:
         schedule_str = "constant"
 
     model_fields: list[tuple[str, str]] = [
         (
             "arch",
-            f"{model_cfg.num_blocks} layers · {model_cfg.embedding_dim} dim · {model_cfg.num_heads} heads · seq {seq_len}",
+            f"{model_cfg.num_blocks} layers ; {model_cfg.embedding_dim} dim ; {model_cfg.num_heads} heads ; seq {seq_len}",
         ),
         ("params", f"{total_params:,}"),
     ]
     if flops_per_token > 0:
-        model_fields.append(("flops", f"{flops_per_token / 1e9:.3g}G / token"))
+        model_fields.append(("flops", f"{flops_per_token / 1e9:.3g}G per token"))
     grad_ckpt = "on" if model_cfg.runner_type == ttml.models.RunnerType.MemoryEfficient else "off"
     model_fields.append(("grad ckpt", grad_ckpt))
 
@@ -643,13 +648,13 @@ def run_training(
     dp_size = mesh.axis_size("dp") if mesh.has_axis("dp") else 1
     global_batch = training_cfg.batch_size * grad_accum * dp_size
     batch_str = (
-        f"size {training_cfg.batch_size} · accum {training_cfg.gradient_accumulation_steps} "
-        f"· global {global_batch:,} · dropout {model_cfg.dropout_prob}"
+        f"size {training_cfg.batch_size} ; accum {training_cfg.gradient_accumulation_steps} "
+        f"; global {global_batch:,} ; dropout {model_cfg.dropout_prob}"
     )
 
     hardware_fields: list[tuple[str, str]] = [
         ("chip", _device_arch_name()),
-        ("mesh", "×".join(str(s) for s in mesh.shape)),
+        ("mesh", "x".join(str(s) for s in mesh.shape)),
     ]
     if peak_tflops > 0:
         hardware_fields.append(("peak", f"{peak_tflops:.1f} TFLOPS bf16"))
@@ -658,7 +663,7 @@ def run_training(
     ckpt_lines: list[str] = []
     if args.checkpoint_dir:
         ckpt_pattern = os.path.join(args.checkpoint_dir, prefixed(args.checkpoint_prefix, "step_*.pkl"))
-        ckpt_lines.append(f"save every {training_cfg.model_save_interval} → {shorten_home(ckpt_pattern)}")
+        ckpt_lines.append(f"save every {training_cfg.model_save_interval} -> {shorten_home(ckpt_pattern)}")
     if resume_path:
         ckpt_lines.append(f"resume {shorten_home(resume_path)} @ step {resume_step}")
 
@@ -687,7 +692,7 @@ def run_training(
     if diag_lines:
         sections.append(("diagnostics", "\n".join(diag_lines)))
 
-    print_header(f"{model_cfg.model_type} · training", sections)
+    print_header(f"{model_cfg.model_type} - training", sections)
 
     start = time.time()
     trainer.train()
@@ -719,7 +724,7 @@ def run_inference(args: argparse.Namespace, seed: int) -> None:
     total_params = sum(math.prod(p.shape()) for p in model.parameters().values())
     padded_vocab = round_up_to_tile(model_cfg.vocab_size, 32)
     vocab_str = (
-        f"{tokenizer.vocab_size} → {padded_vocab} padded"
+        f"{tokenizer.vocab_size} -> {padded_vocab} padded"
         if tokenizer.vocab_size != padded_vocab
         else str(model_cfg.vocab_size)
     )
@@ -737,7 +742,7 @@ def run_inference(args: argparse.Namespace, seed: int) -> None:
             [
                 (
                     "arch",
-                    f"{model_cfg.num_blocks} layers · {model_cfg.embedding_dim} dim · {model_cfg.num_heads} heads · seq {seq_len}",
+                    f"{model_cfg.num_blocks} layers ; {model_cfg.embedding_dim} dim ; {model_cfg.num_heads} heads ; seq {seq_len}",
                 ),
                 ("params", f"{total_params:,}"),
                 ("vocab", vocab_str),
@@ -758,12 +763,12 @@ def run_inference(args: argparse.Namespace, seed: int) -> None:
             "hardware",
             [
                 ("chip", _device_arch_name()),
-                ("mesh", "×".join(str(s) for s in ttml.mesh().shape)),
+                ("mesh", "x".join(str(s) for s in ttml.mesh().shape)),
                 ("memory", f"{get_available_device_memory_in_bytes() / (1024 * 1024):,.0f} MB"),
             ],
         ),
     ]
-    print_header(f"{model_cfg.model_type} · inference", sections)
+    print_header(f"{model_cfg.model_type} - inference", sections)
 
     text, elapsed, first_token_s = generate(
         model,
@@ -776,8 +781,8 @@ def run_inference(args: argparse.Namespace, seed: int) -> None:
         top_k=args.top_k,
     )
 
-    output_divider = "── OUTPUT "
-    print(output_divider + "─" * (HEADER_WIDTH - len(output_divider)))
+    output_divider = "[OUTPUT] "
+    print(output_divider + "-" * (HEADER_WIDTH - len(output_divider)))
     print(text)
 
     n = args.max_new_tokens
@@ -785,7 +790,7 @@ def run_inference(args: argparse.Namespace, seed: int) -> None:
     if n > 1 and elapsed > first_token_s:
         speed += f"  ({(n - 1) / (elapsed - first_token_s):.3g} steady)"
     print_footer(
-        f"{model_cfg.model_type} · generated",
+        f"{model_cfg.model_type} - generated",
         [("tokens", f"{n:,}"), ("time", f"{elapsed:.2f} s"), ("speed", speed)],
     )
 

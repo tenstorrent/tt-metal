@@ -16,9 +16,9 @@ _CONTENT_WIDTH = HEADER_WIDTH - 4
 
 
 def _print_banner(title: str) -> None:
-    print("═" * HEADER_WIDTH)
+    print("=" * HEADER_WIDTH)
     print(f"  {title}")
-    print("═" * HEADER_WIDTH)
+    print("=" * HEADER_WIDTH)
 
 
 # Break a long value after whitespace or a path-like separator (/ . _ -), keeping the
@@ -46,15 +46,15 @@ def _wrap(text: str, width: int) -> list[str]:
 
 
 def _print_section(name: str, fields: list[tuple[str, str]] | str, label_width: int | None = None) -> None:
-    """Emit `── NAME ──…─` divider, then 2-space-indented `key  value` rows (or bare lines if `fields` is a string).
+    """Emit `[NAME] ----` divider, then 2-space-indented `key  value` rows (or bare lines if `fields` is a string).
 
     Content wraps within a 2-space margin on both sides: string fields wrap back to the left indent,
     kv values wrap back to the column where the value starts. When `label_width` is provided, the key
     column is right-justified to that width — used to align value columns across multiple sections.
     """
-    prefix = f"── {name.upper()} "
+    prefix = f"[{name.upper()}] "
     print()
-    print(prefix + "─" * (HEADER_WIDTH - len(prefix)))
+    print(prefix + "-" * (HEADER_WIDTH - len(prefix)))
     if isinstance(fields, str):
         for line in fields.split("\n"):
             for chunk in _wrap(line, _CONTENT_WIDTH):
@@ -73,7 +73,7 @@ def _print_section(name: str, fields: list[tuple[str, str]] | str, label_width: 
 
 def _print_header_close() -> None:
     print()
-    print("═" * HEADER_WIDTH)
+    print("=" * HEADER_WIDTH)
     print()
 
 
@@ -91,11 +91,11 @@ def print_footer(title: str, fields: list[tuple[str, str]]) -> None:
     """Closing banner mirroring `_print_banner`: title rule, aligned `key  value` rows, closing rule."""
     width = max((len(k) for k, _ in fields), default=0)
     print()
-    print("═" * HEADER_WIDTH)
+    print("=" * HEADER_WIDTH)
     print(f"  {title}")
     for label, value in fields:
         print(f"  {label.rjust(width)}  {value}")
-    print("═" * HEADER_WIDTH)
+    print("=" * HEADER_WIDTH)
     print()
 
 
