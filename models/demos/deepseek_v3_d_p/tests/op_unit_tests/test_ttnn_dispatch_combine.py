@@ -16,6 +16,9 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
@@ -44,28 +47,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
 
 
-# dispatch_buffer_capacity_factor below is ceil(N/2) of the most conservative
-# integer N such that dgs*seq*N >= theoretical worst-case dispatch buffer.
-# Real traffic never approaches the worst case, so half-capacity is sufficient.
-@pytest.mark.parametrize(
-    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor",
-    [
-        (3200, 7168, 64, 2, 2),
-    ],
-    ids=["3200-avg"],
-)
-@pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
-    ALL_MESH_CONFIGS,
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
-@pytest.mark.parametrize(
-    "dispatched_buffer_layout",
-    [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-    ids=["dispatched_buffer_tile", "dispatched_buffer_row_major"],
-)
-def test_ttnn_dispatch_combine(
+def run_dispatch_combine(
     mesh_device,
     seq_len_per_chip,
     emb_dim,
@@ -77,7 +59,9 @@ def test_ttnn_dispatch_combine(
     use_predictable_data,
     dispatched_buffer_layout,
 ):
-    """Test end-to-end TTNN dispatch→combine round-trip with host reduction."""
+    """Run the end-to-end TTNN dispatch→combine round-trip with host reduction against the torch
+    reference. Shared body for the per-model test entrypoints below — they differ only on the
+    emb_dim shape axis (the round-trip's expert/topk/capacity tuning is model-independent)."""
     torch.manual_seed(42)
 
     num_devices = mesh_device.get_num_devices()
@@ -372,6 +356,148 @@ def test_ttnn_dispatch_combine(
     logger.debug("✅ TTNN dispatch→combine round-trip matches input!")
 
 
+# Per-model round-trip entrypoints. Only emb_dim is model-dependent here; the round-trip is a
+# single always-on correctness case (no pcc/perf split), and its expert/topk/capacity tuning
+# (num_routed_experts = NUM_ROUTED_EXPERTS // 4, topk 2, capacity 2) is sized so the flat
+# dispatch buffer does not overflow — independent of the model.
+@pytest.mark.parametrize(
+    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor",
+    [(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.NUM_ROUTED_EXPERTS // 4, 2, 2)],
+    ids=["3200-avg"],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    ALL_MESH_CONFIGS,
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+@pytest.mark.parametrize(
+    "dispatched_buffer_layout",
+    [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+    ids=["dispatched_buffer_tile", "dispatched_buffer_row_major"],
+)
+def test_ttnn_dispatch_combine_ds(
+    mesh_device,
+    seq_len_per_chip,
+    emb_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    num_links,
+    topology,
+    use_predictable_data,
+    dispatched_buffer_layout,
+):
+    run_dispatch_combine(
+        mesh_device,
+        seq_len_per_chip,
+        emb_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        num_links,
+        topology,
+        use_predictable_data,
+        dispatched_buffer_layout,
+    )
+
+
+# emb 6144 sits on a known BH combine flakiness value, so it is skipped in CI (which runs
+# op_unit_tests/ unfiltered) and only runs locally.
+@pytest.mark.parametrize(
+    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor",
+    [(3200, GLM51Config.EMB_SIZE, GLM51Config.NUM_ROUTED_EXPERTS // 4, 2, 2)],
+    ids=["3200-avg"],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    ALL_MESH_CONFIGS,
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+@pytest.mark.parametrize(
+    "dispatched_buffer_layout",
+    [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+    ids=["dispatched_buffer_tile", "dispatched_buffer_row_major"],
+)
+def test_ttnn_dispatch_combine_glm(
+    mesh_device,
+    seq_len_per_chip,
+    emb_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    num_links,
+    topology,
+    use_predictable_data,
+    dispatched_buffer_layout,
+    is_ci_env,
+    is_ci_v2_env,
+):
+    if is_ci_env or is_ci_v2_env:
+        pytest.skip("GLM 5.1 model support not yet fully approved for CI; skip for now")
+    run_dispatch_combine(
+        mesh_device,
+        seq_len_per_chip,
+        emb_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        num_links,
+        topology,
+        use_predictable_data,
+        dispatched_buffer_layout,
+    )
+
+
+# MiniMax M2.7 model support is not yet implemented, so this forward-looking shape is skipped in
+# CI (which runs op_unit_tests/ unfiltered) and only runs locally.
+@pytest.mark.parametrize(
+    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor",
+    [(3200, MiniMaxM27Config.EMB_SIZE, MiniMaxM27Config.NUM_ROUTED_EXPERTS // 4, 2, 2)],
+    ids=["3200-avg"],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    ALL_MESH_CONFIGS,
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+@pytest.mark.parametrize(
+    "dispatched_buffer_layout",
+    [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+    ids=["dispatched_buffer_tile", "dispatched_buffer_row_major"],
+)
+def test_ttnn_dispatch_combine_minimax(
+    mesh_device,
+    seq_len_per_chip,
+    emb_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    num_links,
+    topology,
+    use_predictable_data,
+    dispatched_buffer_layout,
+    is_ci_env,
+    is_ci_v2_env,
+):
+    if is_ci_env or is_ci_v2_env:
+        pytest.skip("MiniMax M2.7 model support not yet implemented; skip forward-looking shape in CI")
+    run_dispatch_combine(
+        mesh_device,
+        seq_len_per_chip,
+        emb_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        num_links,
+        topology,
+        use_predictable_data,
+        dispatched_buffer_layout,
+    )
+
+
 # ------------------------------------------------------------------------------
 # How the `indices` tensor is constructed
 # ------------------------------------------------------------------------------
@@ -608,7 +734,7 @@ def test_ttnn_dispatch_combine_top4(mesh_device, num_links, topology, dispatched
     # dispatch_buffer_capacity_factor: ceil(N/2) of the most conservative integer
     # N such that dgs*seq*N >= theoretical worst-case dispatch buffer. Real traffic
     # never approaches the worst case, so half-capacity is sufficient.
-    test_ttnn_dispatch_combine(
+    run_dispatch_combine(
         mesh_device=mesh_device,
         seq_len_per_chip=1600,
         emb_dim=7168,

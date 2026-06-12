@@ -18,6 +18,8 @@ from tracy import signpost
 import ttnn
 from models.common.utility_functions import profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
@@ -96,55 +98,40 @@ def run_torch_routed_experts(
     return expert_outputs
 
 
-# dispatch_buffer_capacity_factor below is the most conservative integer such
-# that dgs*seq*factor >= theoretical worst-case required dispatch buffer.
-@pytest.mark.parametrize(
-    "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
-    [
-        # fmt: off
-        (320, 1024, 512, 64, 2, 9, True),
-        (3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 2, 3, False),
-        # fmt: on
-    ],
-    ids=["small-dims-validate-pcc", "deepseek-v3-dims-skip-pcc"],
-)
-@pytest.mark.parametrize(
-    "mesh_device, device_params",
-    [
-        pytest.param(
-            1,
-            {"fabric_config": ttnn.FabricConfig.DISABLED},
-            id="single-1",
-        ),
-        pytest.param(
-            (4, 1),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="linear"),
-            id="linear-4",
-        ),
-        pytest.param(
-            (8, 1),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
-            id="linear-8",
-        ),
-        pytest.param(
-            (4, 2),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-            id="mesh-4x2",
-        ),
-        pytest.param(
-            (2, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-4x2"),
-            id="mesh-2x4",
-        ),
-    ],
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
-def test_ttnn_routed_expert(
+ROUTED_EXPERT_MESH_PARAMS = [
+    pytest.param(
+        1,
+        {"fabric_config": ttnn.FabricConfig.DISABLED},
+        id="single-1",
+    ),
+    pytest.param(
+        (4, 1),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="linear"),
+        id="linear-4",
+    ),
+    pytest.param(
+        (8, 1),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
+        id="linear-8",
+    ),
+    pytest.param(
+        (4, 2),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+        id="mesh-4x2",
+    ),
+    pytest.param(
+        (2, 4),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-4x2"),
+        id="mesh-2x4",
+    ),
+]
+
+
+def run_routed_expert(
     mesh_device,
     device_params,
     seq_len_per_chip,
@@ -156,12 +143,9 @@ def test_ttnn_routed_expert(
     run_pcc_check,
     use_predictable_data,
 ):
-    """
-    Test TtRoutedExpert with DeepSeek V3 dimensions on various mesh configurations.
-
-    Validates that the TTNN routed expert FFN computation matches torch reference.
-    Each device processes its local experts independently (no CCL needed).
-    """
+    """Run TtRoutedExpert against the torch reference and (optionally) PCC-check it. Shared body
+    for the per-model test entrypoints below — they differ only on the (emb_dim, hidden_dim)
+    shape axis. Each device processes its local experts independently (no CCL needed)."""
     profiler.clear()
     profiler.start("test_ttnn_routed_expert")
     num_devices = mesh_device.get_num_devices()
@@ -450,3 +434,194 @@ def test_ttnn_routed_expert(
         logger.debug(f"{key}: {profiler.get(key) * 1000:.2f} ms")
 
     logger.debug("TtRoutedExpert PCC Test PASSED!")
+
+
+# dispatch_buffer_capacity_factor below is the most conservative integer such
+# that dgs*seq*factor >= theoretical worst-case required dispatch buffer.
+#
+# Model-independent correctness shape — small emb/hidden that validates PCC without tying to
+# any model's dimensions. Kept in a single test so it is not duplicated per model. The per-model
+# entrypoints below run the larger model dims with PCC skipped (full-dim PCC is too expensive).
+@pytest.mark.parametrize(
+    "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
+    [(320, 1024, 512, 64, 2, 9, True)],
+    ids=["small-dims-validate-pcc"],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params", ROUTED_EXPERT_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+@pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+def test_ttnn_routed_expert(
+    mesh_device,
+    device_params,
+    seq_len_per_chip,
+    emb_dim,
+    hidden_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    run_pcc_check,
+    use_predictable_data,
+):
+    run_routed_expert(
+        mesh_device,
+        device_params,
+        seq_len_per_chip,
+        emb_dim,
+        hidden_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        run_pcc_check,
+        use_predictable_data,
+    )
+
+
+# DeepSeek V3 dims (emb 7168, hidden = MOE_INTERMEDIATE_SIZE 2048), PCC skipped.
+@pytest.mark.parametrize(
+    "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
+    [
+        (
+            3200,
+            DeepSeekV3Config.EMB_SIZE,
+            DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,
+            DeepSeekV3Config.NUM_ROUTED_EXPERTS // 4,
+            2,
+            3,
+            False,
+        )
+    ],
+    ids=["ds-dims-skip-pcc"],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params", ROUTED_EXPERT_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+@pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+def test_ttnn_routed_expert_ds(
+    mesh_device,
+    device_params,
+    seq_len_per_chip,
+    emb_dim,
+    hidden_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    run_pcc_check,
+    use_predictable_data,
+):
+    run_routed_expert(
+        mesh_device,
+        device_params,
+        seq_len_per_chip,
+        emb_dim,
+        hidden_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        run_pcc_check,
+        use_predictable_data,
+    )
+
+
+# GLM 5.1 dims (emb 6144, hidden = MOE_INTERMEDIATE_SIZE 2048), PCC skipped. emb 6144 sits on a
+# known BH combine flakiness value, so it is skipped in CI (which runs op_unit_tests/ unfiltered)
+# and only runs locally.
+@pytest.mark.parametrize(
+    "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
+    [
+        (
+            3200,
+            GLM51Config.EMB_SIZE,
+            GLM51Config.MOE_INTERMEDIATE_SIZE,
+            GLM51Config.NUM_ROUTED_EXPERTS // 4,
+            2,
+            3,
+            False,
+        )
+    ],
+    ids=["glm-dims-skip-pcc"],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params", ROUTED_EXPERT_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+@pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+def test_ttnn_routed_expert_glm(
+    mesh_device,
+    device_params,
+    seq_len_per_chip,
+    emb_dim,
+    hidden_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    run_pcc_check,
+    use_predictable_data,
+    is_ci_env,
+    is_ci_v2_env,
+):
+    if is_ci_env or is_ci_v2_env:
+        pytest.skip("GLM 5.1 model support not yet fully approved for CI; skip for now")
+    run_routed_expert(
+        mesh_device,
+        device_params,
+        seq_len_per_chip,
+        emb_dim,
+        hidden_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        run_pcc_check,
+        use_predictable_data,
+    )
+
+
+# MiniMax M2.7 dims (emb 3072, hidden = MOE_INTERMEDIATE_SIZE 1536), PCC skipped. MiniMax model
+# support is not yet implemented, so these forward-looking dims are skipped in CI (which runs
+# op_unit_tests/ unfiltered) and only run locally.
+@pytest.mark.parametrize(
+    "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
+    [
+        (
+            3200,
+            MiniMaxM27Config.EMB_SIZE,
+            MiniMaxM27Config.MOE_INTERMEDIATE_SIZE,
+            MiniMaxM27Config.NUM_ROUTED_EXPERTS // 4,
+            2,
+            3,
+            False,
+        )
+    ],
+    ids=["minimax-dims-skip-pcc"],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params", ROUTED_EXPERT_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+@pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+def test_ttnn_routed_expert_minimax(
+    mesh_device,
+    device_params,
+    seq_len_per_chip,
+    emb_dim,
+    hidden_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    run_pcc_check,
+    use_predictable_data,
+    is_ci_env,
+    is_ci_v2_env,
+):
+    if is_ci_env or is_ci_v2_env:
+        pytest.skip("MiniMax M2.7 model support not yet implemented; skip forward-looking dims in CI")
+    run_routed_expert(
+        mesh_device,
+        device_params,
+        seq_len_per_chip,
+        emb_dim,
+        hidden_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        run_pcc_check,
+        use_predictable_data,
+    )

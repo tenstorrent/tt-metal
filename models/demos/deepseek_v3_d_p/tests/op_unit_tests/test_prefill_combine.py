@@ -16,6 +16,9 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
@@ -40,29 +43,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
 
 
-# dispatch_buffer_capacity_factor below is ceil(N/2) of the most conservative
-# integer N such that dgs*seq*N >= theoretical worst-case dispatch buffer.
-# Real traffic never approaches the worst case, so half-capacity is sufficient.
-@pytest.mark.parametrize(
-    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
-    [
-        pytest.param(128, 7 * 1024, 16, 4, 4, True, id="pcc"),
-        pytest.param(3200, 7168, 64, 2, 8, False, id="perf_no_pcc"),
-    ],
-)
-@pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
-    ALL_MESH_CONFIGS,
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
-@pytest.mark.parametrize(
-    "dispatched_buffer_layout",
-    [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-    ids=["tile", "row_major"],
-)
-@pytest.mark.parametrize("use_fp8_output", [False, True], ids=["bf16_out", "fp8_out"])
-def test_ttnn_combine(
+def run_combine(
     mesh_device,
     seq_len_per_chip,
     emb_dim,
@@ -76,7 +57,9 @@ def test_ttnn_combine(
     dispatched_buffer_layout,
     use_fp8_output,
 ):
-    """Test TTNN combine operation in isolation using torch reference inputs."""
+    """Run the TTNN combine op in isolation against the torch reference. Shared body for the
+    per-model test entrypoints below — they differ only on the (emb_dim, num_routed_experts,
+    num_experts_per_tok) shape axis."""
     num_devices = mesh_device.get_num_devices()
     if num_devices >= 8 and not run_pcc_check and use_predictable_data:
         pytest.skip("8-chip perf only runs with random data")
@@ -336,3 +319,225 @@ def test_ttnn_combine(
     result.assert_passed("Combine data mismatch")
 
     logger.debug("✅ TTNN combine operation matches torch reference!")
+
+
+# DeepSeek V3 combine shapes (emb 7168). DeepSeek V3 671B deploys 256 routed experts across a
+# 32-chip Galaxy (8 experts/chip via num_routed_experts // num_devices); this op test runs on
+# at most 8 chips, so perf scales experts down by 32/8 = 4 to preserve that per-chip load. The
+# PCC param shrinks further (// 16 experts, half experts/token) to keep the full comparison
+# cheap. dispatch_buffer_capacity_factor is ceil(N/2) of the most conservative integer N such
+# that dgs*seq*N >= worst-case dispatch buffer; real traffic stays well under.
+@pytest.mark.parametrize(
+    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
+    [
+        pytest.param(
+            128,
+            DeepSeekV3Config.EMB_SIZE,
+            DeepSeekV3Config.NUM_ROUTED_EXPERTS // 16,
+            4,
+            4,
+            True,
+            id="pcc",
+        ),
+        pytest.param(
+            3200,
+            DeepSeekV3Config.EMB_SIZE,
+            DeepSeekV3Config.NUM_ROUTED_EXPERTS // 4,
+            2,
+            8,
+            False,
+            id="perf_no_pcc",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    ALL_MESH_CONFIGS,
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+@pytest.mark.parametrize(
+    "dispatched_buffer_layout",
+    [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+    ids=["tile", "row_major"],
+)
+@pytest.mark.parametrize("use_fp8_output", [False, True], ids=["bf16_out", "fp8_out"])
+def test_ttnn_combine_ds(
+    mesh_device,
+    seq_len_per_chip,
+    emb_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    num_links,
+    topology,
+    use_predictable_data,
+    run_pcc_check,
+    dispatched_buffer_layout,
+    use_fp8_output,
+):
+    run_combine(
+        mesh_device,
+        seq_len_per_chip,
+        emb_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        num_links,
+        topology,
+        use_predictable_data,
+        run_pcc_check,
+        dispatched_buffer_layout,
+        use_fp8_output,
+    )
+
+
+# GLM 5.1 combine shapes (emb 6144). GLM 5.1 deploys 256 routed experts across a 32-chip
+# Galaxy (8 experts/chip via num_routed_experts // num_devices); this op test runs on at most
+# 8 chips, so perf scales experts down by 32/8 = 4 to preserve that per-chip load. The PCC
+# param shrinks further (// 16 experts, half experts/token) to keep the full comparison cheap.
+# emb 6144 sits on a known BH combine flakiness value, so it is skipped in CI (which runs
+# op_unit_tests/ unfiltered) and only runs locally.
+@pytest.mark.parametrize(
+    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
+    [
+        pytest.param(
+            128,
+            GLM51Config.EMB_SIZE,
+            GLM51Config.NUM_ROUTED_EXPERTS // 16,
+            4,
+            4,
+            True,
+            id="pcc",
+        ),
+        pytest.param(
+            3200,
+            GLM51Config.EMB_SIZE,
+            GLM51Config.NUM_ROUTED_EXPERTS // 4,
+            2,
+            8,
+            False,
+            id="perf_no_pcc",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    ALL_MESH_CONFIGS,
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+@pytest.mark.parametrize(
+    "dispatched_buffer_layout",
+    [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+    ids=["tile", "row_major"],
+)
+@pytest.mark.parametrize("use_fp8_output", [False, True], ids=["bf16_out", "fp8_out"])
+def test_ttnn_combine_glm(
+    mesh_device,
+    seq_len_per_chip,
+    emb_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    num_links,
+    topology,
+    use_predictable_data,
+    run_pcc_check,
+    dispatched_buffer_layout,
+    use_fp8_output,
+    is_ci_env,
+    is_ci_v2_env,
+):
+    if is_ci_env or is_ci_v2_env:
+        pytest.skip("GLM 5.1 model support not yet fully approved for CI; skip for now")
+    run_combine(
+        mesh_device,
+        seq_len_per_chip,
+        emb_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        num_links,
+        topology,
+        use_predictable_data,
+        run_pcc_check,
+        dispatched_buffer_layout,
+        use_fp8_output,
+    )
+
+
+# MiniMax M2.7 combine shapes (emb 3072). MiniMax M2.7 deploys 256 routed experts across a
+# 32-chip Galaxy (8 experts/chip via num_routed_experts // num_devices); this op test runs on
+# at most 8 chips, so perf scales experts down by 32/8 = 4 to preserve that per-chip load. The
+# PCC param shrinks further (// 16 experts, half experts/token) to keep the full comparison
+# cheap. Only MoE shape is exercised here; MiniMax's GQA attention is irrelevant to combine.
+# MiniMax model support is not yet implemented, so these forward-looking shapes are skipped in
+# CI (which runs op_unit_tests/ unfiltered) and only run locally.
+@pytest.mark.parametrize(
+    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
+    [
+        pytest.param(
+            128,
+            MiniMaxM27Config.EMB_SIZE,
+            MiniMaxM27Config.NUM_ROUTED_EXPERTS // 16,
+            4,
+            4,
+            True,
+            id="pcc",
+        ),
+        pytest.param(
+            3200,
+            MiniMaxM27Config.EMB_SIZE,
+            MiniMaxM27Config.NUM_ROUTED_EXPERTS // 4,
+            2,
+            8,
+            False,
+            id="perf_no_pcc",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    ALL_MESH_CONFIGS,
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+@pytest.mark.parametrize(
+    "dispatched_buffer_layout",
+    [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+    ids=["tile", "row_major"],
+)
+@pytest.mark.parametrize("use_fp8_output", [False, True], ids=["bf16_out", "fp8_out"])
+def test_ttnn_combine_minimax(
+    mesh_device,
+    seq_len_per_chip,
+    emb_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    num_links,
+    topology,
+    use_predictable_data,
+    run_pcc_check,
+    dispatched_buffer_layout,
+    use_fp8_output,
+    is_ci_env,
+    is_ci_v2_env,
+):
+    if is_ci_env or is_ci_v2_env:
+        pytest.skip("MiniMax M2.7 model support not yet fully approved for CI; skip for now")
+    run_combine(
+        mesh_device,
+        seq_len_per_chip,
+        emb_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        num_links,
+        topology,
+        use_predictable_data,
+        run_pcc_check,
+        dispatched_buffer_layout,
+        use_fp8_output,
+    )

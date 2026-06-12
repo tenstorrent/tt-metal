@@ -15,44 +15,36 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from tests.ttnn.utils_for_testing import comp_pcc
 
 
-@pytest.mark.parametrize(
-    "num_tokens, emb_dim, hidden_dim",
-    [
-        (1024, 7168, 2048),  # DeepSeek V3 dims, 1K tokens
-        (2048, 7168, 2048),  # DeepSeek V3 dims, 2K tokens
-        (4096, 7168, 2048),  # DeepSeek V3 dims, 4K tokens
-        (5120, 7168, 2048),  # DeepSeek V3 dims, 5K tokens
-        (6144, 7168, 2048),  # DeepSeek V3 dims, 6K tokens
-        (8192, 7168, 2048),  # DeepSeek V3 dims, 8K tokens
-        (25600, 7168, 2048),  # DeepSeek V3 dims, 25K tokens
-    ],
-    ids=[
-        "ds-v3-1k",
-        "ds-v3-2k",
-        "ds-v3-4k",
-        "ds-v3-5k",
-        "ds-v3-6k",
-        "ds-v3-8k",
-        "ds-v3-25k",
-    ],
-)
-@pytest.mark.parametrize(
-    "mesh_device, device_params",
-    [
-        pytest.param(
-            1,
-            {"fabric_config": ttnn.FabricConfig.DISABLED},
-            id="single-chip",
-        ),
-    ],
-    indirect=["mesh_device", "device_params"],
-)
-def test_single_routed_expert(
+SINGLE_CHIP_MESH_PARAMS = [
+    pytest.param(
+        1,
+        {"fabric_config": ttnn.FabricConfig.DISABLED},
+        id="single-chip",
+    ),
+]
+
+# Token-count sweep for the single-expert profiling test, applied per model with that model's
+# (emb_dim, hidden_dim). The (num_tokens, id) pairs are model-independent.
+_TOKEN_SWEEP = [
+    (1024, "1k"),
+    (2048, "2k"),
+    (4096, "4k"),
+    (5120, "5k"),
+    (6144, "6k"),
+    (8192, "8k"),
+    (25600, "25k"),
+]
+
+
+def run_single_routed_expert(
     mesh_device,
     device_params,
     num_tokens: int,
@@ -60,7 +52,8 @@ def test_single_routed_expert(
     hidden_dim: int,
 ):
     """
-    Simplest test: 1 chip, 1 expert.
+    Simplest scenario: 1 chip, 1 expert. Shared body for the per-model entrypoints below — they
+    differ only on the (emb_dim, hidden_dim) shape axis.
 
     Perfect for profiling the core FFN computation without any mesh complexity.
     """
@@ -158,36 +151,57 @@ def test_single_routed_expert(
     logger.debug("Test PASSED!")
 
 
+# DeepSeek V3 dims (emb 7168, hidden = MOE_INTERMEDIATE_SIZE 2048) across the token sweep.
 @pytest.mark.parametrize(
-    "allocated_tokens, active_tokens, emb_dim, hidden_dim",
-    [
-        (4096, 2048, 7168, 2048),
-        (25 * 1024, 2048, 7168, 2048),
-        (25 * 1024, 4096, 7168, 2048),
-        (16384, 2048, 7168, 2048),
-        (16384, 4096, 7168, 2048),
-    ],
-    ids=[
-        "ds-v3-4k-alloc-2k-active",
-        "ds-v3-25k-alloc-2k-active",
-        "ds-v3-25k-alloc-4k-active",
-        "ds-v3-16k-alloc-2k-active",
-        "ds-v3-16k-alloc-4k-active",
-    ],
+    "num_tokens, emb_dim, hidden_dim",
+    [(n, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE) for n, _ in _TOKEN_SWEEP],
+    ids=[f"ds-v3-{tag}" for _, tag in _TOKEN_SWEEP],
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params",
-    [
-        pytest.param(
-            1,
-            {"fabric_config": ttnn.FabricConfig.DISABLED},
-            id="single-chip",
-        ),
-    ],
-    indirect=["mesh_device", "device_params"],
+    "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
-@pytest.mark.skipif(not is_blackhole(), reason="device-side count-aware sparsity is Blackhole-only")
-def test_single_routed_expert_faked_token_count(
+def test_single_routed_expert_ds(mesh_device, device_params, num_tokens: int, emb_dim: int, hidden_dim: int):
+    run_single_routed_expert(mesh_device, device_params, num_tokens, emb_dim, hidden_dim)
+
+
+# MiniMax M2.7 dims (emb 3072, hidden = MOE_INTERMEDIATE_SIZE 1536) across the token sweep.
+@pytest.mark.parametrize(
+    "num_tokens, emb_dim, hidden_dim",
+    [(n, MiniMaxM27Config.EMB_SIZE, MiniMaxM27Config.MOE_INTERMEDIATE_SIZE) for n, _ in _TOKEN_SWEEP],
+    ids=[f"minimax-{tag}" for _, tag in _TOKEN_SWEEP],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+def test_single_routed_expert_minimax(mesh_device, device_params, num_tokens: int, emb_dim: int, hidden_dim: int):
+    run_single_routed_expert(mesh_device, device_params, num_tokens, emb_dim, hidden_dim)
+
+
+# GLM 5.1 dims (emb 6144, hidden = MOE_INTERMEDIATE_SIZE 2048) across the token sweep.
+@pytest.mark.parametrize(
+    "num_tokens, emb_dim, hidden_dim",
+    [(n, GLM51Config.EMB_SIZE, GLM51Config.MOE_INTERMEDIATE_SIZE) for n, _ in _TOKEN_SWEEP],
+    ids=[f"glm-{tag}" for _, tag in _TOKEN_SWEEP],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+def test_single_routed_expert_glm(mesh_device, device_params, num_tokens: int, emb_dim: int, hidden_dim: int):
+    run_single_routed_expert(mesh_device, device_params, num_tokens, emb_dim, hidden_dim)
+
+
+# (allocated_tokens, active_tokens, id) sweep for the count-aware sparsity test, applied per
+# model with that model's (emb_dim, hidden_dim). The alloc/active pairs are model-independent.
+_FAKED_SWEEP = [
+    (4096, 2048, "4k-alloc-2k-active"),
+    (25 * 1024, 2048, "25k-alloc-2k-active"),
+    (25 * 1024, 4096, "25k-alloc-4k-active"),
+    (16384, 2048, "16k-alloc-2k-active"),
+    (16384, 4096, "16k-alloc-4k-active"),
+]
+
+
+def run_single_routed_expert_faked_token_count(
     mesh_device,
     device_params,
     allocated_tokens: int,
@@ -197,7 +211,8 @@ def test_single_routed_expert_faked_token_count(
 ):
     """
     Verifies the unified kernel honors expert_token_counts and skips work on
-    inactive padding rows.
+    inactive padding rows. Shared body for the per-model entrypoints below — they differ only on
+    the (emb_dim, hidden_dim) shape axis.
 
     Dispatch buffer sized for ``allocated_tokens`` but only the first
     ``active_tokens`` rows hold real data; the rest is zero padding. The
@@ -276,3 +291,63 @@ def test_single_routed_expert_faked_token_count(
     assert pcc >= 0.97, f"PCC {pcc:.6f} below threshold 0.97"
     assert not torch.isnan(tt_output_active).any(), "Active output contains NaN"
     assert not torch.isinf(tt_output_active).any(), "Active output contains Inf"
+
+
+# DeepSeek V3 dims (emb 7168, hidden = MOE_INTERMEDIATE_SIZE 2048) across the alloc/active sweep.
+@pytest.mark.parametrize(
+    "allocated_tokens, active_tokens, emb_dim, hidden_dim",
+    [
+        (alloc, active, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE)
+        for alloc, active, _ in _FAKED_SWEEP
+    ],
+    ids=[f"ds-v3-{tag}" for _, _, tag in _FAKED_SWEEP],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+@pytest.mark.skipif(not is_blackhole(), reason="device-side count-aware sparsity is Blackhole-only")
+def test_single_routed_expert_faked_token_count_ds(
+    mesh_device, device_params, allocated_tokens: int, active_tokens: int, emb_dim: int, hidden_dim: int
+):
+    run_single_routed_expert_faked_token_count(
+        mesh_device, device_params, allocated_tokens, active_tokens, emb_dim, hidden_dim
+    )
+
+
+# MiniMax M2.7 dims (emb 3072, hidden = MOE_INTERMEDIATE_SIZE 1536) across the alloc/active sweep.
+@pytest.mark.parametrize(
+    "allocated_tokens, active_tokens, emb_dim, hidden_dim",
+    [
+        (alloc, active, MiniMaxM27Config.EMB_SIZE, MiniMaxM27Config.MOE_INTERMEDIATE_SIZE)
+        for alloc, active, _ in _FAKED_SWEEP
+    ],
+    ids=[f"minimax-{tag}" for _, _, tag in _FAKED_SWEEP],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+@pytest.mark.skipif(not is_blackhole(), reason="device-side count-aware sparsity is Blackhole-only")
+def test_single_routed_expert_faked_token_count_minimax(
+    mesh_device, device_params, allocated_tokens: int, active_tokens: int, emb_dim: int, hidden_dim: int
+):
+    run_single_routed_expert_faked_token_count(
+        mesh_device, device_params, allocated_tokens, active_tokens, emb_dim, hidden_dim
+    )
+
+
+# GLM 5.1 dims (emb 6144, hidden = MOE_INTERMEDIATE_SIZE 2048) across the alloc/active sweep.
+@pytest.mark.parametrize(
+    "allocated_tokens, active_tokens, emb_dim, hidden_dim",
+    [(alloc, active, GLM51Config.EMB_SIZE, GLM51Config.MOE_INTERMEDIATE_SIZE) for alloc, active, _ in _FAKED_SWEEP],
+    ids=[f"glm-{tag}" for _, _, tag in _FAKED_SWEEP],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+@pytest.mark.skipif(not is_blackhole(), reason="device-side count-aware sparsity is Blackhole-only")
+def test_single_routed_expert_faked_token_count_glm(
+    mesh_device, device_params, allocated_tokens: int, active_tokens: int, emb_dim: int, hidden_dim: int
+):
+    run_single_routed_expert_faked_token_count(
+        mesh_device, device_params, allocated_tokens, active_tokens, emb_dim, hidden_dim
+    )

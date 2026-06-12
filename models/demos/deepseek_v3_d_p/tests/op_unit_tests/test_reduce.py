@@ -17,6 +17,9 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.reduce import TorchReduceModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     create_sparse_combine_output,
@@ -27,41 +30,32 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
 from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule
 from tests.ttnn.utils_for_testing import comp_pcc
 
+REDUCE_MESH_PARAMS = [
+    pytest.param(
+        (4, 1),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="linear"),
+        id="linear-4",
+    ),
+    pytest.param(
+        (4, 2),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+        id="mesh-4x2",
+    ),
+]
 
-@pytest.mark.parametrize("use_weights", [True, False], ids=["weighted", "unweighted"])
-@pytest.mark.parametrize(
-    "seq_len, emb_dim, topk",
-    [
-        (32, 2048, 8),
-        (3200, 7 * 1024, 8),  # DeepSeek values
-    ],
-)
-@pytest.mark.parametrize(
-    "mesh_device, device_params",
-    [
-        pytest.param(
-            (4, 1),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="linear"),
-            id="linear-4",
-        ),
-        pytest.param(
-            (4, 2),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-            id="mesh-4x2",
-        ),
-    ],
-    indirect=["mesh_device", "device_params"],
-)
-def test_ttnn_reduce(
+
+def run_reduce(
     mesh_device,
     seq_len,
     emb_dim,
     topk,
     use_weights,
 ):
-    """Test TTNN reduce module in isolation using synthetic sparse inputs."""
+    """Run the TTNN reduce module in isolation against the torch reference. Shared body for the
+    per-model test entrypoints below — they differ only on the emb_dim shape axis (topk is
+    num_experts_per_tok = 8 for every variant)."""
     torch.manual_seed(42)
 
     signpost(f"reduce-{mesh_device.shape}-seq{seq_len}-{'weighted' if use_weights else 'unweighted'}")
@@ -204,3 +198,56 @@ def test_ttnn_reduce(
 
     logger.debug(f"TTNN reduce operation matches torch reference! (PCC={pcc:.6f})")
     assert pcc > threshold, f"PCC {pcc:.6f} below threshold {threshold}"
+
+
+# Model-independent sanity shape — small seq/emb that exercises the reduce kernel without
+# tying to any model's dimensions. Kept in a single test so it is not duplicated per model.
+@pytest.mark.parametrize("use_weights", [True, False], ids=["weighted", "unweighted"])
+@pytest.mark.parametrize("seq_len, emb_dim, topk", [(32, 2048, 8)], ids=["generic"])
+@pytest.mark.parametrize("mesh_device, device_params", REDUCE_MESH_PARAMS, indirect=["mesh_device", "device_params"])
+def test_ttnn_reduce(mesh_device, seq_len, emb_dim, topk, use_weights):
+    run_reduce(mesh_device, seq_len, emb_dim, topk, use_weights)
+
+
+# DeepSeek V3 reduce shape (emb 7168, topk = num_experts_per_tok).
+@pytest.mark.parametrize("use_weights", [True, False], ids=["weighted", "unweighted"])
+@pytest.mark.parametrize(
+    "seq_len, emb_dim, topk",
+    [(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.NUM_EXPERTS_PER_TOKEN)],
+    ids=["ds"],
+)
+@pytest.mark.parametrize("mesh_device, device_params", REDUCE_MESH_PARAMS, indirect=["mesh_device", "device_params"])
+def test_ttnn_reduce_ds(mesh_device, seq_len, emb_dim, topk, use_weights):
+    run_reduce(mesh_device, seq_len, emb_dim, topk, use_weights)
+
+
+# GLM 5.1 reduce shape (emb 6144, topk = num_experts_per_tok). emb 6144 sits on a known BH
+# combine flakiness value, so it is skipped in CI (which runs op_unit_tests/ unfiltered) and
+# only runs locally.
+@pytest.mark.parametrize("use_weights", [True, False], ids=["weighted", "unweighted"])
+@pytest.mark.parametrize(
+    "seq_len, emb_dim, topk",
+    [(3200, GLM51Config.EMB_SIZE, GLM51Config.NUM_EXPERTS_PER_TOKEN)],
+    ids=["glm"],
+)
+@pytest.mark.parametrize("mesh_device, device_params", REDUCE_MESH_PARAMS, indirect=["mesh_device", "device_params"])
+def test_ttnn_reduce_glm(mesh_device, seq_len, emb_dim, topk, use_weights, is_ci_env, is_ci_v2_env):
+    if is_ci_env or is_ci_v2_env:
+        pytest.skip("GLM 5.1 model support not yet fully approved for CI; skip for now")
+    run_reduce(mesh_device, seq_len, emb_dim, topk, use_weights)
+
+
+# MiniMax M2.7 reduce shape (emb 3072, topk = num_experts_per_tok). MiniMax model support is
+# not yet implemented, so this forward-looking shape is skipped in CI (which runs
+# op_unit_tests/ unfiltered) and only runs locally.
+@pytest.mark.parametrize("use_weights", [True, False], ids=["weighted", "unweighted"])
+@pytest.mark.parametrize(
+    "seq_len, emb_dim, topk",
+    [(3200, MiniMaxM27Config.EMB_SIZE, MiniMaxM27Config.NUM_EXPERTS_PER_TOKEN)],
+    ids=["minimax"],
+)
+@pytest.mark.parametrize("mesh_device, device_params", REDUCE_MESH_PARAMS, indirect=["mesh_device", "device_params"])
+def test_ttnn_reduce_minimax(mesh_device, seq_len, emb_dim, topk, use_weights, is_ci_env, is_ci_v2_env):
+    if is_ci_env or is_ci_v2_env:
+        pytest.skip("MiniMax M2.7 model support not yet implemented; skip forward-looking shape in CI")
+    run_reduce(mesh_device, seq_len, emb_dim, topk, use_weights)
