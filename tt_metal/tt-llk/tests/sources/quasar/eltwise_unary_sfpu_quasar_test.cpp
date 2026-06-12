@@ -2,13 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Consolidated Quasar unary-SFPU test. The operation is selected at compile
-// time via the SFPU_UNARY_OPERATION = SfpuType::<op> constant emitted by the
-// python MATH_OP template parameter, then dispatched through
-// sfpu_operations_quasar.h. One source covers every supported unary op
-// (abs, exp, gelu, relu, reciprocal, sqrt, tanh, sigmoid, silu, rsqrt, square),
-// mirroring how Blackhole's eltwise_unary_sfpu_test.cpp works.
-
 #include <cstdint>
 
 #include "ckernel.h"

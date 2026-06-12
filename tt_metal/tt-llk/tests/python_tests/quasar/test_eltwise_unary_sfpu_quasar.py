@@ -1,21 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Consolidated Quasar unary-SFPU test.
-
-Replaces the four standalone Quasar unary-SFPU test pairs (abs, square, rsqrt,
-nonlinear) with a single python driver + single cpp source
-(`sources/quasar/eltwise_unary_sfpu_quasar_test.cpp`). The operation is selected
-at compile time via the `SFPU_UNARY_OPERATION = SfpuType::<op>` constant emitted
-by `MATH_OP`, mirroring how Blackhole's `test_zzz_eltwise_unary_sfpu.py` drives a
-single `eltwise_unary_sfpu_test.cpp`.
-
-Per-operation sweeps (input dimensions, dest-sync modes, input-stimuli ranges)
-are preserved exactly from the original standalone files so coverage is
-unchanged — see OP_CONFIGS below.
-"""
-
 import math
 from dataclasses import dataclass
 from typing import List, Optional
@@ -196,27 +181,6 @@ def prepare_square_inputs(
     return src_A_values.to(input_torch_format)
 
 
-def prepare_rsqrt_inputs(
-    src_A: torch.Tensor,
-    input_format: DataFormat,
-) -> torch.Tensor:
-    """
-    Prepare input tensor for rsqrt across the full representable range using a
-    log-uniform distribution (rsqrt accepts only positive inputs).
-    """
-    torch_format = format_dict[input_format]
-    finfo = torch.finfo(torch_format)
-    min_val = max(1e-6, finfo.tiny * 100)
-    max_val = finfo.max
-
-    # Transform uniform [0,1) to log-uniform [min_val, max_val]
-    log_min = torch.log(torch.tensor(min_val, dtype=torch.float32))
-    log_max = torch.log(torch.tensor(float(max_val), dtype=torch.float32))
-    return torch.exp(log_min + src_A.to(torch.float32) * (log_max - log_min)).to(
-        torch_format
-    )
-
-
 def prepare_inputs_for_operation(
     src_A: torch.Tensor,
     mathop: MathOperation,
@@ -225,7 +189,7 @@ def prepare_inputs_for_operation(
 ) -> torch.Tensor:
     """
     Prepare input tensor for the nonlinear ops (exp, gelu, relu, reciprocal,
-    sqrt, tanh, sigmoid, silu) with operation-specific safe value ranges.
+    sqrt, rsqrt, tanh, sigmoid, silu) with operation-specific safe value ranges.
     """
     torch_format = format_dict[input_format]
 
@@ -320,6 +284,17 @@ def prepare_inputs_for_operation(
             src_A_float32,
         )
         src_A = src_A_float32.to(torch_format)
+    elif mathop == MathOperation.Rsqrt:
+        # Full representable range via log-uniform distribution
+        # (rsqrt accepts only positive inputs).
+        finfo = torch.finfo(torch_format)
+        min_val = max(1e-6, finfo.tiny * 100)
+        max_val = finfo.max
+        log_min = torch.log(torch.tensor(min_val, dtype=torch.float32))
+        log_max = torch.log(torch.tensor(float(max_val), dtype=torch.float32))
+        src_A = torch.exp(log_min + src_A.to(torch.float32) * (log_max - log_min)).to(
+            torch_format
+        )
     elif mathop == MathOperation.Tanh:
         # Scale to range [-10, 10] for tanh
         min_val = -10.0
@@ -355,8 +330,6 @@ def prepare_unary_inputs(
         return prepare_abs_inputs(src_A, src_B, input_format, output_format)
     if mathop == MathOperation.Square:
         return prepare_square_inputs(src_A, src_B, input_format, output_format)
-    if mathop == MathOperation.Rsqrt:
-        return prepare_rsqrt_inputs(src_A, input_format)
     return prepare_inputs_for_operation(src_A, mathop, input_format, output_format)
 
 
@@ -374,24 +347,22 @@ class OpConfig:
     uniform_spec: bool = False
 
 
-_THREE_DIMS = ([32, 32], [64, 64], [32, 64])
-_TWO_DIMS = ([32, 32], [64, 64])
-_HALF_FULL = (DestSync.Half, DestSync.Full)
-_HALF_ONLY = (DestSync.Half,)  # abs did not sweep dest_sync (DEST_SYNC() default)
+TENSOR_DIMS = ([32, 32], [64, 64])
+DEST_SYNC_MODES = (DestSync.Half, DestSync.Full)
 
 OP_CONFIGS = [
-    OpConfig(MathOperation.Abs, _THREE_DIMS, _HALF_ONLY, seed=42),
-    OpConfig(MathOperation.Square, _THREE_DIMS, _HALF_FULL, seed=42),
-    OpConfig(MathOperation.Rsqrt, _TWO_DIMS, _HALF_FULL, uniform_spec=True),
+    OpConfig(MathOperation.Abs, TENSOR_DIMS, DEST_SYNC_MODES, seed=42),
+    OpConfig(MathOperation.Square, TENSOR_DIMS, DEST_SYNC_MODES, seed=42),
+    OpConfig(MathOperation.Rsqrt, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     # Nonlinear ops: identical [32,32]/[64,64] × Half/Full × uniform-spec sweep.
-    OpConfig(MathOperation.Exp, _TWO_DIMS, _HALF_FULL, uniform_spec=True),
-    OpConfig(MathOperation.Gelu, _TWO_DIMS, _HALF_FULL, uniform_spec=True),
-    OpConfig(MathOperation.Relu, _TWO_DIMS, _HALF_FULL, uniform_spec=True),
-    OpConfig(MathOperation.Reciprocal, _TWO_DIMS, _HALF_FULL, uniform_spec=True),
-    OpConfig(MathOperation.Sqrt, _TWO_DIMS, _HALF_FULL, uniform_spec=True),
-    OpConfig(MathOperation.Tanh, _TWO_DIMS, _HALF_FULL, uniform_spec=True),
-    OpConfig(MathOperation.Sigmoid, _TWO_DIMS, _HALF_FULL, uniform_spec=True),
-    OpConfig(MathOperation.Silu, _TWO_DIMS, _HALF_FULL, uniform_spec=True),
+    OpConfig(MathOperation.Exp, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(MathOperation.Gelu, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(MathOperation.Relu, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(MathOperation.Reciprocal, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(MathOperation.Sqrt, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(MathOperation.Tanh, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(MathOperation.Sigmoid, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(MathOperation.Silu, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
 ]
 
 OP_CONFIG_BY_MATHOP = {cfg.mathop: cfg for cfg in OP_CONFIGS}

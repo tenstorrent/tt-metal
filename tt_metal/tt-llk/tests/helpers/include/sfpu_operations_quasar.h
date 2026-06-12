@@ -10,11 +10,6 @@
 #include "llk_defs.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 
-// Quasar unary-SFPU operation headers. Quasar exposes lower-level
-// `_calculate_*_` / `_init_*_` entry points (not the metal `llk_sfpu/`
-// wrappers that the Blackhole `sfpu_operations.h` dispatches through), so this
-// header is the Quasar-specific equivalent of that dispatcher.
-//
 // To add a new Quasar unary SFPU operation:
 // 1. Include its `ckernel_sfpu_<op>.h` below.
 // 2. Add the `SfpuType` enumerator to the `if constexpr` chain in
