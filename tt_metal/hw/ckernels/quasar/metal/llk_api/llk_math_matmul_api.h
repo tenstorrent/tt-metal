@@ -36,6 +36,7 @@ inline void llk_math_matmul_init(
     const std::uint32_t operandB_id = get_operand_id(operandB);
     const DataFormat srcB_format = static_cast<DataFormat>(get_operand_dst_format(operandA_id));
     const DataFormat srcA_format = static_cast<DataFormat>(get_operand_dst_format(operandB_id));
+    LLK_ASSERT(is_2x_format(srcA_format) == is_2x_format(srcB_format));
 
     _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, DST_ACCUM_MODE>(
         srcA_format, srcB_format);

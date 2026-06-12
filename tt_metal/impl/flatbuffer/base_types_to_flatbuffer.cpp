@@ -84,7 +84,7 @@ flatbuffer::DataFormat to_flatbuffer(tt::DataFormat input) {
         case tt::DataFormat::MxFp4: return flatbuffer::DataFormat::MxFp4;
         case tt::DataFormat::MxFp4_2x_A:
         case tt::DataFormat::MxFp4_2x_B:
-            TT_THROW("MxFp4_2x is a register-only format and should be serialized to flatbuffer.");
+            TT_THROW("MxFp4_2x is a register-only format and should not be serialized to flatbuffer.");
         case tt::DataFormat::MxFp6P: return flatbuffer::DataFormat::MxFp6P;
         case tt::DataFormat::MxFp6R: return flatbuffer::DataFormat::MxFp6R;
         case tt::DataFormat::MxFp8R: return flatbuffer::DataFormat::MxFp8R;
