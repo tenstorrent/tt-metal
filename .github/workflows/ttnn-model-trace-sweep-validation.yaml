@@ -161,9 +161,33 @@ jobs:
           echo "Triggered by: ${{ github.actor }}"
           echo "::endgroup::"
 
+  verify-sweep-validation-budget:
+    name: Verify sweep validation budget
+    needs: inspect-trace-selection-registry
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github
+          sparse-checkout-cone-mode: true
+      - name: Check budget
+        run: |
+          pip3 install PyYAML > /dev/null 2>&1
+          # Validation runs a fixed set of jobs per model; estimate from selected models
+          MODELS='${{ needs.inspect-trace-selection-registry.outputs.selected-models }}'
+          JOB_COUNT=$(echo "$MODELS" | jq -r 'length' 2>/dev/null || echo 1)
+          echo "Estimated validation jobs: $JOB_COUNT"
+          for sku in wh_n150 wh_n300 bh_p150b wh_galaxy; do
+            python3 .github/scripts/utils/verify_sweep_budget.py \
+              .github/time_budget.yaml sweep_validation \
+              --sku "$sku" --job-count "$JOB_COUNT" --timeout-minutes 60 || true
+          done
+
   run-model-trace-sweep-validation:
     name: Run model trace sweep validation
-    needs: inspect-trace-selection-registry
+    needs: [inspect-trace-selection-registry, verify-sweep-validation-budget]
     uses: ./.github/workflows/ttnn-model-trace-sweep-validation-impl.yaml
     secrets: inherit
     with:

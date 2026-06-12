@@ -101,6 +101,20 @@ ttnn:
     wh_n300_civ2: 60
     bh_p100a_civ2_viommu: 60
     bh_p150b_civ2_viommu: 60
+  # Sweep budgets: per-SKU caps for the ttnn-run-sweeps and sweep-validation
+  # workflows. Each parallel sweep job has a 60-min timeout; the budget is
+  # num_jobs * 60 rounded up with headroom.
+  sweep:
+    wh_n150: 1800       # nightly + comprehensive
+    wh_n300: 1800
+    bh_p150b: 1800
+    wh_galaxy: 1800     # lead-models + model-traced Galaxy sweeps
+    bh_loudbox: 600
+  sweep_validation:
+    wh_n150: 120
+    wh_n300: 120
+    bh_p150b: 120
+    wh_galaxy: 120
 
 train:
   l2:

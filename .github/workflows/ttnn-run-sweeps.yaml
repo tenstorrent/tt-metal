@@ -981,6 +981,33 @@ jobs:
           jq . /tmp/sweep_matrix.pretty.json
           echo "::endgroup::"
 
+      - name: Verify sweep budget
+        shell: bash
+        run: |
+          pip3 install PyYAML > /dev/null 2>&1
+          # Count jobs per HW group from the matrix outputs
+          for hw in n150 n300 p150b t3k galaxy; do
+            matrix_key="${hw}-matrix"
+            matrix_json=$(cat /tmp/sweep_matrix.pretty.json | jq -r ".\"${hw}\"" 2>/dev/null || echo "null")
+            if [[ "$matrix_json" != "null" && "$matrix_json" != "" ]]; then
+              job_count=$(echo "$matrix_json" | jq '.include | length' 2>/dev/null || echo 0)
+              if [[ "$job_count" -gt 0 ]]; then
+                # Map hw group to budget SKU name
+                case "$hw" in
+                  n150)   sku="wh_n150" ;;
+                  n300)   sku="wh_n300" ;;
+                  p150b)  sku="bh_p150b" ;;
+                  galaxy) sku="wh_galaxy" ;;
+                  t3k)    sku="wh_galaxy" ;;
+                  *)      sku="$hw" ;;
+                esac
+                python3 .github/scripts/utils/verify_sweep_budget.py \
+                  .github/time_budget.yaml sweep \
+                  --sku "$sku" --job-count "$job_count" --timeout-minutes 60
+              fi
+            fi
+          done
+
   ttnn-run-single-sweep:
     name: Run single sweep
     needs: [resolve-inputs, build-artifact, ttnn-generate-sweeps]
