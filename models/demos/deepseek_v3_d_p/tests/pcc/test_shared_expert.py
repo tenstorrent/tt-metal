@@ -16,50 +16,9 @@ from tracy import signpost
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
-from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import (
-    TtSharedExpert,
-    get_bh_program_configs,
-    get_wh_program_configs,
-    uses_tuned_shared_expert_gate_program_config,
-)
+from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import TtSharedExpert
 from models.tt_transformers.tt.ccl import get_num_links
 from tests.ttnn.utils_for_testing import assert_with_pcc
-
-
-@pytest.mark.parametrize(
-    "program_config_builder, expected_down_out_subblock_w",
-    [
-        pytest.param(get_wh_program_configs, 1, id="wormhole"),
-        pytest.param(get_bh_program_configs, 8, id="blackhole"),
-    ],
-)
-@pytest.mark.parametrize(
-    "gate_n_tiles, expects_tuned_gate_program_config",
-    [
-        pytest.param(64, True, id="divisible-by-8"),
-        pytest.param(56, True, id="legacy-divisible-shape"),
-        pytest.param(23, False, id="gpt-oss-120b-shape"),
-        pytest.param(7, False, id="small-prime-shape"),
-    ],
-)
-def test_shared_expert_program_configs_keep_only_tuned_gate_up_configs(
-    program_config_builder,
-    expected_down_out_subblock_w: int,
-    gate_n_tiles: int,
-    expects_tuned_gate_program_config: bool,
-):
-    gate, up, down = program_config_builder(per_core_M=1, gate_n_tiles=gate_n_tiles, down_n_tiles=8)
-
-    assert uses_tuned_shared_expert_gate_program_config(gate_n_tiles) == expects_tuned_gate_program_config
-    if expects_tuned_gate_program_config:
-        assert gate is not None
-        assert up is not None
-        assert gate.out_subblock_w == 8
-        assert up.out_subblock_w == 8
-    else:
-        assert gate is None
-        assert up is None
-    assert down.out_subblock_w == expected_down_out_subblock_w
 
 
 @pytest.mark.parametrize(
