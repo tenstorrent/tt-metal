@@ -41,7 +41,7 @@ def _fake_plan(*, lever, section, skeleton, cwd=None):
     }
 
 
-def _fake_editor(*, lever, section, model_files, spec=None):
+def _fake_editor(*, lever, section, model_files, error=None, spec=None, cwd=None):
     return {
         "files": ["model.py"],
         "summary": "mock edit",
@@ -204,3 +204,84 @@ def test_engine_stop_after_route_parks_before_select(tmp_path):
     assert parked == states.SELECT
     assert ctx.state.get("route_brief")  # ROUTE produced the brief
     assert ctx.state.get("git_sha_clean") is None  # APPLY never ran
+
+
+# --------------------------- repair-path integration -----------------------
+def _scripted_editor(*steps):
+    """Editor whose Nth call runs steps[N](model_py_path). Each step writes the
+    model file and returns a runner-shaped result. The last step repeats."""
+    calls = {"n": 0}
+
+    def editor(*, lever, section, model_files, error=None, spec=None, cwd=None):
+        i = min(calls["n"], len(steps) - 1)
+        calls["n"] += 1
+        return steps[i](Path(model_files[0]))
+
+    editor.calls = calls
+    return editor
+
+
+def _writes(text):
+    def step(model_py):
+        model_py.write_text(text)
+        return {
+            "files": ["model.py"],
+            "summary": "edit",
+            "model": "mock",
+            "usage": {"tokens_in": 1, "tokens_out": 1, "cost_usd": 0.0, "latency_s": 0.0},
+        }
+
+    return step
+
+
+def _role_count(run, role):
+    f = run.dir / "agent_calls.jsonl"
+    if not f.exists():
+        return 0
+    return sum(1 for ln in f.read_text().splitlines() if ln.strip() and json.loads(ln).get("role") == role)
+
+
+def test_engine_repair_code_self_heals_syntax_error(tmp_path):
+    """APPLY lands a broken edit -> VERIFY parse_error -> REPAIR_CODE re-edits ->
+    VERIFY ok -> GATE_PCC ... -> DONE. Proves the real REPAIR_CODE handler + graph.
+    (Counters reset per-lever each iteration, so we count the persisted repair calls.)"""
+    run = _mk_run(tmp_path)
+    ctx = _ctx(run)
+    ctx.deps["edit_runner"] = _scripted_editor(_writes("def (:\n"), _writes("x = 2\n"))
+    final = engine.run(ctx, build_handlers())
+    assert final == states.DONE
+    assert _role_count(run, "repair_code") == 1  # exactly one code self-heal ran
+    assert _role_count(run, "repair_pcc") == 0
+
+
+def test_engine_repair_pcc_recovers_low_pcc(tmp_path):
+    """GATE_PCC sees pcc_low -> REPAIR_PCC re-edits -> VERIFY -> GATE_PCC ok ->
+    REMEASURE -> DECIDE. Proves the real REPAIR_PCC handler + graph."""
+    run = _mk_run(tmp_path)
+    ctx = _ctx(run)
+    ctx.deps["edit_runner"] = _scripted_editor(_writes("x = 2\n"))  # always valid syntax
+    pcc_calls = {"n": 0}
+
+    def pcc_runner(c):
+        pcc_calls["n"] += 1
+        return {"status": "pcc_low", "pcc": 0.80} if pcc_calls["n"] == 1 else {"status": "ok", "pcc": 0.999}
+
+    ctx.deps["pcc_runner"] = pcc_runner
+    final = engine.run(ctx, build_handlers())
+    assert final == states.DONE
+    assert _role_count(run, "repair_pcc") == 1  # exactly one PCC recovery ran
+    assert _role_count(run, "repair_code") == 0  # code path untouched
+    assert pcc_calls["n"] >= 2  # gate failed then passed
+
+
+def test_engine_repair_code_exhausts_budget_then_reverts(tmp_path):
+    """Editor can never fix the syntax error: REPAIR_CODE runs up to MAX_CODE_FIX
+    times for a lever, then the graph discards (edit_failed) -> REVERT."""
+    run = _mk_run(tmp_path)
+    ctx = _ctx(run)
+    ctx.deps["edit_runner"] = _scripted_editor(_writes("def (:\n"))  # always broken
+    final = engine.run(ctx, build_handlers())
+    assert final in states.TERMINAL
+    # at least one full budget exhaustion happened (>= MAX repairs) and ended in discard
+    assert _role_count(run, "repair_code") >= states.MAX_CODE_FIX
+    assert ctx.state["last_decision"]["reason"] == "edit_failed"
