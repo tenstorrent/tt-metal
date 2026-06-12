@@ -74,7 +74,7 @@ inline void _init_swiglu_()
     TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_LOWER, 0xDB23);  // alpha low half — combined: exact FP32 1.702f
 }
 
-// Per-face inner loop: reads `iterations` (= TEST_FACE_R_DIM / SFP_ROWS)
+// Per-face inner loop: reads `ITERATIONS` (= TEST_FACE_R_DIM / SFP_ROWS)
 // 32-datum row-pairs of (gate, up), writes the swiglu output back to Dest.
 //
 // The body interleaves independent ops from the gate min-clamp, up clip, and
@@ -93,10 +93,11 @@ inline void _init_swiglu_()
 //   LREG5     : +2L           (loaded by _init_swiglu_)
 //   LREG6     : alpha         (loaded by _init_swiglu_)
 //   LREG7     : -alpha_gate   → exp+1 → glu = gate_clamped * sigmoid
-inline void _calculate_swiglu_(const int iterations, const int gate_offset_idx, const int up_offset_idx, const int out_offset_idx)
+template <int ITERATIONS = SFPU_ITERATIONS>
+inline void _calculate_swiglu_(const int gate_offset_idx, const int up_offset_idx, const int out_offset_idx)
 {
 #pragma GCC unroll 8
-    for (int d = 0; d < iterations; d++)
+    for (int d = 0; d < ITERATIONS; d++)
     {
         TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, gate_offset_idx + (d << 1));
         TT_SFPLOAD(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, up_offset_idx + (d << 1));

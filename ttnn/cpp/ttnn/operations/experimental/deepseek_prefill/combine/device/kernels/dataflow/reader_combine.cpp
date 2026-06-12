@@ -143,12 +143,10 @@ void kernel_main() {
         uint32_t page_end = get_arg_val<uint32_t>(rt_args++);
         uint32_t output_init_done_semaphore_id = get_arg_val<uint32_t>(rt_args++);
         uint32_t output_init_done_sem_address = get_semaphore(output_init_done_semaphore_id);
-        uint32_t zero_buf = get_write_ptr(cb_zero_buffer_id);
 
         {
             // DeviceZoneScopedN("combine-output-zeroing-SENDER-writing");
-            fill_zero_buffer(cb_zero_buffer_id);
-            zero_pages(zero_buf, page_start, page_end, aligned_output_page_size, output_addr_gen);
+            zero_pages(cb_zero_buffer_id, page_start, page_end, aligned_output_page_size, output_addr_gen);
         }
 
         volatile tt_l1_ptr uint32_t* output_init_done_sem_ptr =
@@ -373,6 +371,10 @@ void kernel_main() {
                     route_info[0] = route;
                     route_info[1] = distance;
                     route_info[2] = output_page_idx;
+                    // FABRIC_2D: writer recomputes the EDM direction from route_info[3] (dst_chip)
+                    // and ignores slots [0..1]. All four slots are written unconditionally so the
+                    // 2D writer doesn't see uninitialized garbage in the dst_chip slot.
+                    route_info[3] = dst_chip;
                     {
                         // DeviceZoneScopedN("sending-for-FABRIC-write");
                         uint32_t output_dst = cb_base + l1_alignment;
@@ -451,6 +453,11 @@ void kernel_main() {
                         uint32_t distance =
                             manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
 
+                        // Push route info to writer.
+                        // route_info layout: [0]=route, [1]=distance, [2]=output_page_idx, [3]=dst_chip.
+                        // route + distance are consumed by the 1D writer; under FABRIC_2D the writer
+                        // recomputes the EDM direction from route_info[3] and ignores slots [0..1].
+                        // All four slots are written unconditionally
                         cb_reserve_back(cb_route_info_id, 1);
                         uint32_t cb_base = get_write_ptr(cb_route_info_id);
                         volatile tt_l1_ptr uint32_t* route_info =
@@ -458,7 +465,7 @@ void kernel_main() {
                         route_info[0] = route;
                         route_info[1] = distance;
                         route_info[2] = output_page_idx;
-                        route_info[3] = 0;
+                        route_info[3] = dst_chip;
 
                         uint32_t output_dst = cb_base + l1_alignment;
                         noc_async_read(

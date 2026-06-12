@@ -51,7 +51,7 @@ jobs:
           #
           # The two Gemma4-31B vLLM entries below are temporarily disabled —
           # the full unquantized KV cache for the global-attention layers
-          # runs out of DRAM on both 1x4 (BH-QB-GE) and 1x8 (WH-T3K).
+          # runs out of DRAM on both 1x4 (BH-Quietbox-2) and 1x8 (WH-T3K).
           # Re-enable once KV cache quantization lands — TODO: file follow-up issue.
           #
           # Disabled entries preserved verbatim for the re-enable:
@@ -117,7 +117,7 @@ jobs:
             {
               "name": "[WH-N150] Gemma4-E2B",
               "model": "google/gemma-4-E2B-it",
-              "server-timeout": 15,
+              "server-timeout": 10,
               "benchmark-timeout": 5,
               "runner-label": "N150",
               "arch": "arch-wormhole_b0",
@@ -142,7 +142,7 @@ jobs:
             {
               "name": "[BH-QB-2] Gemma4-26B-A4B",
               "model": "google/gemma-4-26B-A4B-it",
-              "server-timeout": 15,
+              "server-timeout": 30,
               "benchmark-timeout": 5,
               "runner-label": "BH-Quietbox-2",
               "arch": "arch-blackhole",
@@ -184,6 +184,7 @@ jobs:
               "additional-server-args": "--data_parallel_size 4 --max_num_seqs 32 --async-scheduling",
               "structured-output": true,
               "sampling-tests": true,
+              "sampling-test-timeout": 40,
               "additional-structured-output-args": "--backend openai-chat --endpoint /v1/chat/completions --dataset json",
               "co-owner-1-id": "U08TJ70UFRT",
               "co-owner-2-id": "U06F3ER8X9A"
@@ -223,21 +224,6 @@ jobs:
               "co-owner-2-id": "U08CEGF78ET"
             },
             {
-              "name": "[BH-DB] Llama-3.1-8B-Instruct with sampling-tests",
-              "model": "meta-llama/Llama-3.1-8B-Instruct",
-              "server-timeout": 10,
-              "benchmark-timeout": 5,
-              "runner-label": "BH-DeskBox",
-              "arch": "arch-blackhole",
-              "mesh-device": "P150x2",
-              "tt-llama-text-ver": "tt_transformers",
-              "additional-server-args": "--data_parallel_size 2 --async-scheduling",
-              "structured-output": true,
-              "sampling-tests": true,
-              "multimodal": false,
-              "owner_id": "U08GELBB1AP"
-            },
-            {
               "name": "[BH-QB-2] Llama-3.1-8B-Instruct",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 10,
@@ -253,7 +239,7 @@ jobs:
               "owner_id": "U08GELBB1AP"
             },
             {
-              "name": "[BH-LB] Llama-3.1-8B-Instruct",
+              "name": "[BH-LB] Llama-3.1-8B-Instruct with sampling-tests",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 35,
               "benchmark-timeout": 10,
@@ -263,6 +249,7 @@ jobs:
               "tt-llama-text-ver": "tt_transformers",
               "additional-server-args": "--data_parallel_size 8 --async-scheduling",
               "structured-output": true,
+              "sampling-tests": true,
               "multimodal": false,
               "owner_id": "U08GELBB1AP"
             },
@@ -366,7 +353,7 @@ jobs:
               "runner-label": "config-t3000",
               "arch": "arch-wormhole_b0",
               "mesh-device": "(1, 2)",
-              "tt-config": "{\"register_test_models\": true, \"sample_on_device_mode\": \"all\", \"input_queue_batching_delay\": 0}",
+              "tt-config": "{\"register_test_models\": true, \"input_queue_batching_delay\": 0}",
               "additional-server-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct --async-scheduling",
               "additional-benchmark-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct --temperature 0.0",
               "multimodal": false,
@@ -434,6 +421,7 @@ jobs:
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -448,11 +436,10 @@ jobs:
         if: ${{ contains(matrix.test-group.mesh-device, 'P150') }}
         uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
         timeout-minutes: 10
-        with:
-          runner-label: ${{ matrix.test-group.runner-label }}
 
       - name: ⬇️ Checkout vLLM
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           repository: tenstorrent/vllm
           path: docker-job/vllm
@@ -622,14 +609,23 @@ jobs:
             "${ADDITIONAL_BENCHMARK_ARGS[@]}" \
             2>&1 | tee ${FILE_BENCHMARK_LOG}
 
-          # If the backend fails, the benchmark will still complete successfully but with all-zero results.
-          # It will contain a warning message, though
-          warning_message="All requests failed"
-          if grep -q "$warning_message" "${FILE_BENCHMARK_LOG}"; then
-            echo "❌ All requests failed"
+          # `vllm bench serve` exits 0 even when individual requests fail (a crashed
+          # engine surfaces as failed requests, not a non-zero exit). Gate on the saved result and
+          # require EVERY request to complete successfully.
+          RESULT_JSON="output/vllm_result.json"
+          if [ ! -f "$RESULT_JSON" ]; then
+            echo "❌ Benchmark result file not found ($RESULT_JSON) — the benchmark did not complete"
             echo "Check out the server log in a step below."
             exit 1
           fi
+          completed=$(python3 -c "import json; print(json.load(open('$RESULT_JSON'))['completed'])")
+          expected=$(python3 -c "import json; print(json.load(open('$RESULT_JSON'))['num_prompts'])")
+          if [ "$completed" != "$expected" ]; then
+            echo "❌ Only $completed/$expected requests completed successfully (require all)"
+            echo "Check out the server log in a step below."
+            exit 1
+          fi
+          echo "✅ All $expected requests completed successfully"
       - name: 📐 Run structured output benchmark
         if: ${{ matrix.test-group.structured-output }}
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
@@ -714,7 +710,7 @@ jobs:
           fi
       - name: 🧪 Run sampling tests
         if: ${{ matrix.test-group.sampling-tests }}
-        timeout-minutes: 10
+        timeout-minutes: ${{ matrix.test-group.sampling-test-timeout || 10 }}
         run: |
           {
             FILTER="${{ matrix.test-group.sampling-test-filter }}"
@@ -804,6 +800,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
       - id: ai-run-summary
         continue-on-error: true
         uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/run@main

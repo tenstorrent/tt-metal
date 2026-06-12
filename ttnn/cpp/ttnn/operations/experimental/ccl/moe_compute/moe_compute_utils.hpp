@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -39,7 +40,7 @@ struct WeightCoreShardMaps {
 // ``w2_shard_tiles`` (complementary when ``Nt%n_cores + Ht%n_cores == n_cores``)
 // for W2. Ring ordering: DRAM bank logical coords sorted by ``(y, x)`` descending.
 WeightCoreShardMaps get_weight_core_shard_maps(
-    ttnn::MeshDevice* mesh_device, uint32_t hidden_size, uint32_t intermediate_size);
+    ttnn::MeshDevice* mesh_device, uint32_t hidden_size, uint32_t intermediate_size, uint32_t bh_ring_size = 12);
 
 // DRAM-sharded memory configs for the packed W0/W1 and W2 weight tensors. The
 // shard maps and DRAM-bank CoreRangeSet are computed internally to match
@@ -58,7 +59,8 @@ WeightMemoryConfigs get_weight_mem_configs(
     uint32_t experts_per_device,
     uint32_t hidden_size,
     uint32_t intermediate_size,
-    bool has_bias = false);
+    bool has_bias = false,
+    uint32_t bh_ring_size = 12);
 
 // Append per-device shared experts after routed experts along the experts dim.
 //
@@ -80,14 +82,20 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> add_shared_expert_weights(
 // The per-core shard map is derived internally from ``K`` (hidden_size) and
 // ``N`` (intermediate_size) via ``get_weight_core_shard_maps``.
 ttnn::Tensor prepare_w0_w1_tensor_for_moe_compute(
-    const ttnn::Tensor& tt_w0, const ttnn::Tensor& tt_w1, uint32_t L, uint32_t E, uint32_t K, uint32_t N);
+    const ttnn::Tensor& tt_w0,
+    const ttnn::Tensor& tt_w1,
+    uint32_t L,
+    uint32_t E,
+    uint32_t K,
+    uint32_t N,
+    uint32_t bh_ring_size = 12);
 
 // Pack W2 into the ring-rotated per-core layout the MoE kernel reads.
 // Output local shape: ``(num_cores, L, E, w2_groups_per_core, N_padded, 4*TILE)``.
 // The per-core shard maps are derived internally from ``K`` (hidden_size) and
 // ``N`` (intermediate_size) via ``get_weight_core_shard_maps``.
 ttnn::Tensor prepare_w2_tensor_for_moe_compute(
-    const ttnn::Tensor& tt_w2, uint32_t L, uint32_t E, uint32_t N, uint32_t K);
+    const ttnn::Tensor& tt_w2, uint32_t L, uint32_t E, uint32_t N, uint32_t K, uint32_t bh_ring_size = 12);
 
 // Bias-aware W0/W1 packer: appends bias tiles along K, then delegates to the
 // no-bias packer. Bias inputs are PyTorch-format ``(L, E, N)``; output matches
@@ -100,19 +108,26 @@ ttnn::Tensor prepare_w0_w1_tensor_with_bias(
     uint32_t L,
     uint32_t E,
     uint32_t K,
-    uint32_t N);
+    uint32_t N,
+    uint32_t bh_ring_size = 12);
 
 // Bias-aware W2 packer: weight tiles get ring-rotated as usual; bias tile row
 // is column-sharded and concatenated along N **without** rotation, then N is
 // padded to a multiple of BLOCK_TILES_H tiles.
 ttnn::Tensor prepare_w2_tensor_with_bias(
-    const ttnn::Tensor& tt_w2, const ttnn::Tensor& tt_b2, uint32_t L, uint32_t E, uint32_t N, uint32_t K);
+    const ttnn::Tensor& tt_w2,
+    const ttnn::Tensor& tt_b2,
+    uint32_t L,
+    uint32_t E,
+    uint32_t N,
+    uint32_t K,
+    uint32_t bh_ring_size = 12);
 
-// Round-trip a device tensor through host to change its dtype and re-upload
+// Round-trip a device tensor through host to change its dtype and optionally re-upload
 // it under the supplied memory config. Used to quantize the packed weight
 // tensors to ``bfloat4_b`` on the DRAM-sharded mem config the kernel consumes.
 // Host side quantization is higher quality and maintains PCC with the original implementation
 ttnn::Tensor quantize_weights_via_host(
-    const ttnn::Tensor& device_tensor, ttnn::DataType dtype, const ttnn::MemoryConfig& memory_config);
+    const ttnn::Tensor& device_tensor, ttnn::DataType dtype, const std::optional<ttnn::MemoryConfig>& memory_config);
 
 }  // namespace ttnn::experimental

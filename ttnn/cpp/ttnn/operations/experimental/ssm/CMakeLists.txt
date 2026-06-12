@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_experimental_ssm ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::SSM ALIAS ttnn_op_experimental_ssm)
 
-tt_reuse_precompile_headers(ttnn_op_experimental_ssm TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_ssm TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_ssm)
 
 set_target_properties(

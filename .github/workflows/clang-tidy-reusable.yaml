@@ -35,7 +35,7 @@ jobs:
     runs-on: tt-ubuntu-2204-xlarge-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
-      image: harbor.ci.tenstorrent.net/${{ inputs.ci-build-docker-image }}
+      image: ${{ inputs.ci-build-docker-image }}
       env:
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
@@ -68,13 +68,14 @@ jobs:
           REDIS_PASSWORD="${{ secrets.REDIS_PASSWORD }}"
           REDIS_HOST="${{ vars.REDIS_HOST }}"
           REDIS_PORT="${{ vars.REDIS_PORT }}"
-          REDIS_READONLY="${{ vars.REDIS_IS_READONLY }}"
-          CCACHE_PARTS=(
-            "redis://${REDIS_USER}:${REDIS_PASSWORD}"
-            "@${REDIS_HOST}:${REDIS_PORT}"
-            "|read-only=${REDIS_READONLY}"
-          )
-          CCACHE_REMOTE_STORAGE=$(IFS=''; echo "${CCACHE_PARTS[*]}")
+          # ccache 4.13 bug: read-only is std::optional<bool>; the write gate checks
+          # `if (entry.config.read_only)` which is true whenever the optional HAS a value —
+          # including when that value is false.  Omit the property entirely unless we
+          # actually want read-only mode; ccache's default when absent is writable.
+          CCACHE_REMOTE_STORAGE="redis://${REDIS_USER}:${REDIS_PASSWORD}@${REDIS_HOST}:${REDIS_PORT}"
+          if [ "${{ vars.REDIS_IS_READONLY }}" = "true" ]; then
+            CCACHE_REMOTE_STORAGE="${CCACHE_REMOTE_STORAGE}|read-only=true"
+          fi
           echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
 
@@ -147,6 +148,7 @@ jobs:
 
       - name: Check out repo
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           clean: true
@@ -167,7 +169,7 @@ jobs:
 
       - name: 📦 Restore CPM source cache
         id: cpm-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .cpmcache.tar.zst
           key: cpm-z22-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt', 'tt-train/cmake/dependencies.cmake') }}
@@ -191,7 +193,7 @@ jobs:
 
       - name: Save CPM source cache
         if: steps.cpm-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .cpmcache.tar.zst
           key: ${{ steps.cpm-cache.outputs.cache-primary-key }}

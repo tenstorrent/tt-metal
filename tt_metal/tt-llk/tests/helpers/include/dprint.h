@@ -24,8 +24,6 @@
 
 #include "dev_mem_map.h"
 
-#define USE_DEVICE_PRINT
-
 // Device print occasionally writes from host; Blackhole needs a fence,
 // and Quasar on DM cores needs a cache flush on top of that.
 // Informed by tt_metal/hw/inc/internal/tt-{1,2}xx/risc_common.h.
@@ -60,6 +58,9 @@ static_assert(
     "adjust TestConfig.DEVICE_PRINT_BUFFER_BASE / DEVICE_PRINT_PER_THREAD_SIZE "
     "in tests/python_tests/helpers/test_config.py.");
 
+// A single #include "dprint.h" exposes every device print facility.
+#include "api/debug/dprint_tile.h"
+#include "dprint_tensix.h"
 #else
 
 #define DEVICE_PRINT(fmt, ...)

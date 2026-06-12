@@ -361,26 +361,25 @@ def run_generation(
         trace_device_inputs = None
 
         # ── Decode helpers ─────────────────────────────────────────────────
-        # Embedding + PLI computed on host (fast for single-token decode),
-        # transferred as ROW_MAJOR to device.  Trace captures decoder layers onward.
+        # Token IDs (+ optional PLI) staged on host; embedding lookup runs on
+        # device inside ``ttnn_decode_forward``. Trace captures decoder onward.
         # Sampling: SamplingGenerator for TP >= 2, host torch.argmax for TP = 1.
         on_device_sampling = model.sampling is not None
 
         def _make_decode_inputs(tok, pos):
             """Create host tensors for one decode iteration."""
-            embeds_torch, pli_torch = model.compute_host_embeddings(tok)
-            # ROW_MAJOR on host — TILE conversion happens on device inside the trace.
-            embeds_h = ttnn.from_torch(
-                embeds_torch,
+            pli_torch = model.compute_host_pli(tok)
+            tokens_h = ttnn.from_torch(
+                torch.tensor([[tok]], dtype=torch.int32),
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.uint32,
                 mesh_mapper=replicate,
             )
             pos_padded = torch.nn.functional.pad(
                 torch.tensor([pos], dtype=torch.int32).reshape(1, 1), (0, 31), "constant", 0
             )
             inputs = {
-                "embeds": embeds_h,
+                "tokens": tokens_h,
                 "position": ttnn.from_torch(
                     pos_padded,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -396,7 +395,7 @@ def run_generation(
             }
             if pli_torch is not None:
                 inputs["pli"] = ttnn.from_torch(
-                    pli_torch,
+                    pli_torch.to(torch.bfloat16),
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     dtype=ttnn.bfloat16,
                     mesh_mapper=replicate,
@@ -405,12 +404,12 @@ def run_generation(
 
         def _fwd(device_inputs):
             return model.ttnn_decode_forward(
-                x=device_inputs["embeds"],
+                x=device_inputs["tokens"],
                 current_pos=device_inputs["position"],
                 rot_mat_idxs=device_inputs["position_int32"],  # pos_int32 passed as rot_mat_idxs
                 page_table=page_table_tt,
                 kv_cache=tt_kv_cache,
-                sampling_on_device=on_device_sampling,
+                on_device_logits=on_device_sampling,
                 pli_combined=device_inputs.get("pli"),
             )
 
@@ -424,17 +423,27 @@ def run_generation(
 
         def _extract_token(decode_output):
             """Extract next token from model output (token IDs or logits)."""
-            output_cpu = (
-                ttnn.to_torch(ttnn.get_device_tensors(decode_output)[0]) if is_mesh else ttnn.to_torch(decode_output)
-            )
             if on_device_sampling:
-                return output_cpu.reshape(-1)[0].item()
+                # Keep main behavior: decode sampling in this demo remains untraced.
+                # SamplingGenerator.sample() returns (tt_tokens, tt_log_probs); take the tokens.
+                sampled = model.sampling.sample(decode_output, enable_trace=False)
+                tt_tokens = sampled[0] if isinstance(sampled, tuple) else sampled
+                sampled_cpu = (
+                    ttnn.to_torch(ttnn.get_device_tensors(tt_tokens)[0]) if is_mesh else ttnn.to_torch(tt_tokens)
+                )
+                return sampled_cpu.reshape(-1)[0].item()
             else:
+                output_cpu = (
+                    ttnn.to_torch(ttnn.get_device_tensors(decode_output)[0])
+                    if is_mesh
+                    else ttnn.to_torch(decode_output)
+                )
                 return output_cpu.squeeze().argmax().item()
 
         sample_mode = "device" if on_device_sampling else "host"
         logger.info(
-            f"Decoding (trace={'ON' if enable_decode_trace else 'OFF'}, " f"embedding=host, sampling={sample_mode})..."
+            f"Decoding (trace={'ON' if enable_decode_trace else 'OFF'}, "
+            f"embedding=device, sampling={sample_mode})..."
         )
         profiler.start(f"inference_decode", iteration=prompt_idx)
 

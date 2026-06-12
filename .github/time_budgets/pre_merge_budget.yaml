@@ -1,0 +1,29 @@
+# Per-SKU time budgets (minutes per run) for the merge gate and PR gate.
+#
+# Capacity model:
+#   - Weekly machine hours per SKU come from pools.yaml.
+#   - 50% of weekly capacity is reserved for the combined merge + PR gates,
+#     split 60/40 between merge gate and PR gate respectively.
+#   - Peak run rates (13:00-21:00 UTC): merge gate ~15 runs/hr (~3x per merge),
+#     PR gate ~20 runs/hr (~4x per merge).
+#
+# Closed form (minutes per run):
+#   merge_gate = weekly_hours / 140
+#   pr_gate    = weekly_hours / 280
+# Values are rounded to the nearest whole minute.
+
+merge_gate:
+  # ── CIv2 ────────────────────────────────
+  wh_n150_civ2:           15
+  wh_n300_civ2:           53
+  wh_llmbox_civ2:          5
+  bh_p150b_civ2_viommu:    9
+  bh_p150b_civ2:          20
+
+pr_gate:
+  # ── CIv2 ────────────────────────────────
+  wh_n150_civ2:            8
+  wh_n300_civ2:           26
+  wh_llmbox_civ2:          2
+  bh_p150b_civ2_viommu:    5
+  bh_p150b_civ2:          10

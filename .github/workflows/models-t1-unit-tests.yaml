@@ -17,6 +17,7 @@ on:
           - qwen3-32b-galaxy
           - gpt-oss-120b
           - whisper
+          - dit-common
           # llama3.3-70b-galaxy: disabled — see #42139
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
@@ -72,6 +73,8 @@ permissions:
 run-name: "(Tier 1) Models Unit${{ github.event_name == 'schedule' && ' [scheduled]' || '' }}"
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   resolve-skus:
     runs-on: ubuntu-latest
     outputs:
@@ -98,17 +101,20 @@ jobs:
           echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
           echo "model=all" >> $GITHUB_OUTPUT
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   models-unit-tests:
-    needs: [build-artifact, resolve-skus]
+    needs: [check-harbor, build-artifact, resolve-skus]
     secrets: inherit
     uses: ./.github/workflows/models-unit-tests-impl.yaml
     with:

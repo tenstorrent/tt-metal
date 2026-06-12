@@ -18,14 +18,14 @@ on:
       runner-label:
         required: false
         type: string
-        default: "BH-LLMBox"
+        default: "BH-LoudBox"
       fast-only:
         required: false
         type: boolean
         default: false
         description: "If true, run only tests with test-type == fast; otherwise run all tests."
       enable-watcher:
-        description: 'Enable watcher'
+        description: "Enable watcher"
         default: false
         type: boolean
       enable-llk-asserts:
@@ -34,7 +34,7 @@ on:
         default: false
         description: "Enable LLK asserts"
       model:
-        description: 'Filter tests by model-name (default: all)'
+        description: "Filter tests by model-name (default: all)"
         required: false
         type: string
         default: "all"
@@ -85,15 +85,13 @@ jobs:
           if [[ "$runner_label" == *viommu* ]]; then viommu_json="true"; fi
           loudbox_json="false"
           if [[ "$runner_label" == *LoudBox* ]]; then loudbox_json="true"; fi
-          quietbox_json="false"
-          if [[ "$runner_label" == *LLMBox* ]]; then quietbox_json="true"; fi
 
           if [ "$fast_only" == "true" ]; then
-            filtered_tests=$(echo "$all_tests" | jq -c --argjson viommu "$viommu_json" --argjson loudbox "$loudbox_json" --argjson quietbox "$quietbox_json" \
-              '[.[] | select(((.["test-type"] == "fast") or (.["test-type"] == "fast-viommu" and $viommu)) and ((.["test-type"] != "loudbox") or $loudbox) and ((.["test-type"] != "qb") or $quietbox))]')
+            filtered_tests=$(echo "$all_tests" | jq -c --argjson viommu "$viommu_json" --argjson loudbox "$loudbox_json" \
+              '[.[] | select(((.["test-type"] == "fast") or (.["test-type"] == "fast-viommu" and $viommu)) and ((.["test-type"] != "loudbox") or $loudbox))]')
           else
-            filtered_tests=$(echo "$all_tests" | jq -c --argjson viommu "$viommu_json" --argjson loudbox "$loudbox_json" --argjson quietbox "$quietbox_json" \
-              '[.[] | select(((.["test-type"] != "fast-viommu" and .["test-type"] != "slow-viommu") or $viommu) and ((.["test-type"] != "loudbox") or $loudbox) and ((.["test-type"] != "qb") or $quietbox))]')
+            filtered_tests=$(echo "$all_tests" | jq -c --argjson viommu "$viommu_json" --argjson loudbox "$loudbox_json" \
+              '[.[] | select(((.["test-type"] != "fast-viommu" and .["test-type"] != "slow-viommu") or $viommu) and ((.["test-type"] != "loudbox") or $loudbox))]')
           fi
 
           # Filter by model if specified
@@ -152,6 +150,7 @@ jobs:
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -170,8 +169,6 @@ jobs:
           hang-detection-timeout: ${{ contains(matrix.test-group.name, 'PERF') && '20.0' || '5.0' }}
       - uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
         timeout-minutes: 10
-        with:
-          runner-label: ${{ inputs.runner-label }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
@@ -249,6 +246,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
       - id: extract-matrix
         env:
           MATRIX_WRAPPER: ${{ needs.generate-matrix.outputs.matrix }}

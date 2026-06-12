@@ -141,6 +141,55 @@ def _is_program_config_dict(value: Any) -> bool:
     return False
 
 
+def _is_core_range_set_dict(value: Any) -> bool:
+    """Check if a value looks like a CoreRangeSet dict."""
+    return isinstance(value, dict) and value.get("type") == "CoreRangeSet"
+
+
+def _parse_core_range_set(value: Any) -> Any:
+    """Parse a CoreRangeSet dict into a ttnn.CoreRangeSet.
+
+    Handles C++ repr format: {"type": "CoreRangeSet", "value": "{[0-0 - 7-7]}"}
+    where each CoreRange is rendered as [x1-y1 - x2-y2] by CoreRange::str().
+    Also handles structured data format with "data" key.
+    """
+    import re
+    import json as _json
+    import ttnn  # required: this helper builds ttnn.CoreRange/CoreCoord/CoreRangeSet
+
+    data = value.get("data")
+    if data is not None:
+        try:
+            if isinstance(data, str):
+                data = _json.loads(data)
+            if isinstance(data, list):
+                core_ranges = set()
+                for rd in data:
+                    start = rd["start"]
+                    end = rd["end"]
+                    core_ranges.add(
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(start["x"], start["y"]),
+                            ttnn.CoreCoord(end["x"], end["y"]),
+                        )
+                    )
+                if core_ranges:
+                    return ttnn.CoreRangeSet(core_ranges)
+        except (KeyError, TypeError, ValueError):
+            # Malformed/partial structured "data" — fall through to the
+            # regex-based repr parser below rather than failing the vector.
+            pass
+
+    repr_str = str(value.get("value", value.get("repr", "")))
+    core_ranges = set()
+    for m in re.finditer(r"\[(\d+)-(\d+)\s*-\s*(\d+)-(\d+)\]", repr_str):
+        x1, y1, x2, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+        core_ranges.add(ttnn.CoreRange(ttnn.CoreCoord(x1, y1), ttnn.CoreCoord(x2, y2)))
+    if core_ranges:
+        return ttnn.CoreRangeSet(core_ranges)
+    return None
+
+
 def _is_core_grid_dict(value: Any) -> bool:
     """Check if a value looks like a core_grid dict."""
     if not isinstance(value, dict):
@@ -188,6 +237,58 @@ def _maybe_parse_unary_list(value: Any) -> Any:
     return value
 
 
+def _create_output_tensor(descriptor: dict, device, input_shape=None) -> Any:
+    """Create a preallocated output tensor from a traced output_tensor descriptor.
+
+    The descriptor has: original_shape, original_dtype, layout, memory_config.
+    We create an empty tensor on device with matching specs so the op trace
+    records the same output_tensor argument as the model.
+    """
+    import ttnn
+    import torch
+
+    shape = descriptor.get("original_shape")
+    if not shape:
+        shape = input_shape
+    if not shape:
+        return None
+
+    if isinstance(shape, dict) and "value" in shape:
+        import re
+
+        m = re.match(r"Shape\(\[([0-9,\s]+)\]\)", str(shape["value"]))
+        if m:
+            shape = [int(x.strip()) for x in m.group(1).split(",")]
+    if isinstance(shape, str):
+        import ast
+
+        try:
+            shape = ast.literal_eval(shape)
+        except Exception:
+            return None
+
+    dtype_str = descriptor.get("original_dtype", "DataType.BFLOAT16")
+    dtype = parse_dtype(dtype_str) if isinstance(dtype_str, str) else None
+    if dtype is None:
+        dtype = ttnn.bfloat16
+
+    layout_str = descriptor.get("layout", "Layout.TILE")
+    layout = parse_layout(layout_str) if isinstance(layout_str, str) else None
+    if layout is None:
+        layout = ttnn.TILE_LAYOUT
+
+    mc_dict = descriptor.get("memory_config")
+    memory_config = dict_to_memory_config(mc_dict) if isinstance(mc_dict, dict) else ttnn.DRAM_MEMORY_CONFIG
+
+    try:
+        # Preallocated output buffer is overwritten by the op; use empty() to
+        # skip a host-side memset of potentially large tensors.
+        torch_tensor = torch.empty(shape, dtype=torch.float32)
+        return ttnn.from_torch(torch_tensor, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
+    except Exception:
+        return None
+
+
 def parse_dict_value(key: str, value: Any) -> Any:
     """Parse a dict value into the appropriate ttnn object based on its structure.
 
@@ -209,10 +310,24 @@ def parse_dict_value(key: str, value: Any) -> Any:
             return parse_dtype(value.get("repr", ""))
         elif _is_layout_dict(value):
             return parse_layout(value.get("repr", ""))
+        elif _is_core_range_set_dict(value):
+            return _parse_core_range_set(value)
+        elif value.get("type") == "Shape":
+            import re as _shape_re
+
+            m = _shape_re.search(r"Shape\(\[(.*?)\]\)", str(value.get("value", "")))
+            if m:
+                return [int(x.strip()) for x in m.group(1).split(",") if x.strip()]
     except (ValueError, TypeError, KeyError):
+        # malformed structured Shape data — fall through to regex repr parsing below
         pass
 
-    # Return as-is if we can't parse it (sweep test can handle it)
+    # Dicts with a "type" key that we couldn't parse into a ttnn object
+    # must NOT be passed to C++ bindings — they'll cause "incompatible
+    # function arguments". Return None so build_op_kwargs drops them.
+    if isinstance(value, dict) and "type" in value:
+        return None
+
     return value
 
 
@@ -256,6 +371,7 @@ def build_op_kwargs(
     exclude: Optional[Set[str]] = None,
     include_only: Optional[Set[str]] = None,
     output_memory_config: Any = None,
+    device: Any = None,
 ) -> Dict[str, Any]:
     """Extract actual op kwargs from the full test vector kwargs.
 
@@ -327,6 +443,13 @@ def build_op_kwargs(
         list_parsed = _maybe_parse_unary_list(value)
         if list_parsed is not value:
             op_kwargs[key] = list_parsed
+            continue
+        # Create preallocated output tensor from descriptor
+        if key == "output_tensor" and isinstance(value, dict) and device is not None:
+            input_shape = kwargs.get("input_a_shape")
+            tensor = _create_output_tensor(value, device, input_shape=input_shape)
+            if tensor is not None:
+                op_kwargs[key] = tensor
             continue
         # Parse dict values into ttnn objects
         parsed = parse_dict_value(key, value)

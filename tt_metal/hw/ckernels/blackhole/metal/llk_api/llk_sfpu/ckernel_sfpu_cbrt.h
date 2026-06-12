@@ -37,13 +37,13 @@ inline void calculate_cube_root() {
         // f = (0x548c2b4b - i * 1.0/3.0) / 256.0 + 2^23
         //   = (0x548c2b4b/256.0 - i * 1.0/3.0/256.0) + 2^23
 
-        sfpi::vFloat f = sfpi::int32_to_float(sfpi::reinterpret<sfpi::vInt>(x), sfpi::RoundMode::NearestEven);
+        sfpi::vFloat f = sfpi::convert<sfpi::vFloat>(sfpi::as<sfpi::vSMag>(x), sfpi::RoundMode::NearestEven);
 
         f = f * negative_third_256 + magic;
 
         // Now, left-shift by 8 to restore integer result.
 
-        sfpi::vFloat y = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(f) << 8);
+        sfpi::vFloat y = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(f) << 8);
 
         if constexpr (is_fp32_dest_acc_en) {
             sfpi::vFloat c = (x * y) * (y * y);

@@ -300,12 +300,12 @@ void run_single_core_unary_broadcast_quasar(
     auto out_tensor = MeshTensor::allocate_on_device(
         *mesh_device, make_flat_dram_tensor_spec(out_tile_size, num_tiles), TensorTopology{});
 
-    constexpr const char* SRC_DFB = "src_dfb";
-    constexpr const char* DST_DFB = "dst_dfb";
-    constexpr const char* READER = "reader";
-    constexpr const char* WRITER = "writer";
-    constexpr const char* COMPUTE = "compute";
-    constexpr const char* OUT_TENSOR = "out_tensor";
+    const experimental::DFBSpecName SRC_DFB{"src_dfb"};
+    const experimental::DFBSpecName DST_DFB{"dst_dfb"};
+    const experimental::KernelSpecName READER{"reader"};
+    const experimental::KernelSpecName WRITER{"writer"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
+    const experimental::TensorParamName OUT_TENSOR{"out_tensor"};
 
     experimental::DataflowBufferSpec src_dfb_spec{
         .unique_id = SRC_DFB,
@@ -353,7 +353,7 @@ void run_single_core_unary_broadcast_quasar(
     };
 
     experimental::KernelSpec::CompilerOptions::Defines compute_defines;
-    compute_defines.emplace_back("BCAST_DIM", broadcast_dim_to_type.at(test_config.broadcast_dim));
+    compute_defines.emplace("BCAST_DIM", broadcast_dim_to_type.at(test_config.broadcast_dim));
 
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
@@ -398,22 +398,21 @@ void run_single_core_unary_broadcast_quasar(
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = READER,
+            .kernel = READER,
             .runtime_arg_values =
-                {{.node = node,
-                  .args =
-                      {{"src_addr", src_dram_addr},
-                       {"src_dram_bank_id", 0u},
-                       {"num_tiles", num_tiles},
-                       {"ublock_size_tiles", 1u},
-                       {"reader_only", 0u}}}},
+                {{node,
+                  {{"src_addr", src_dram_addr},
+                   {"src_dram_bank_id", 0u},
+                   {"num_tiles", num_tiles},
+                   {"ublock_size_tiles", 1u},
+                   {"reader_only", 0u}}}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = WRITER,
-            .runtime_arg_values = {{.node = node, .args = {{"num_tiles", num_tiles}}}},
+            .kernel = WRITER,
+            .runtime_arg_values = {{node, {{"num_tiles", num_tiles}}}},
         },
     };
-    params.tensor_args = {{.tensor_parameter_name = OUT_TENSOR, .tensor = out_tensor}};
+    params.tensor_args = {{OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{out_tensor}}};
     experimental::SetProgramRunArgs(program, params);
 
     std::vector<uint32_t> packed_tilized_input;

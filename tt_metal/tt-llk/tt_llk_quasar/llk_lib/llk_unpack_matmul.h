@@ -11,20 +11,18 @@
 using namespace ckernel;
 
 /**
- * @brief Initializes unpacker to unpack operand 0 (buf_desc_id_0) into SrcB
- * and unpacks operand 1 (buf_desc_id_1) into SrcA. Matrix multiply FPU operation does SrcB * SrcA.
- * In order to get output of rowmajor matrix multiplication input 0 * Input 1, need to initialize
- * SrcA and SrcB to be input 1 & input 0 respectively.
- * The following matrix multiply has the following dimensions:
- * IMPORTANT NOTE:
- * This unpacker only sets up Input0 [rt_dim, 1] x Input1 [1, ct_dim]
- * kt_dim is assumed to be iterated over outside this api call
- * ct_dim * rt_dim <= 8 tiles in Float16b, ct_dim * rt_dim <= 4 tiles in Float32
+ * @brief Builds the MOP that unpacks operand 0 into SrcB and operand 1 into SrcA for matrix multiply.
+ *
+ * The matrix multiply FPU operation computes SrcB * SrcA. To obtain the row-major result
+ * Input0 * Input1, SrcA and SrcB are loaded from Input1 and Input0 respectively. This unpacker only
+ * sets up Input0 [rt_dim, 1] x Input1 [1, ct_dim]; kt_dim is assumed to be iterated over outside this
+ * call. Constraints: ct_dim * rt_dim <= 8 tiles in a 16-bit format, ct_dim * rt_dim <= 4 tiles in a 32-bit format.
+ *
  * @param buf_desc_id_0/1: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table, values = 0 - 32
- * @param ct_dim: number of tiles in the column dimension for input1 of matrix multiply
- * @param rt_dim: number of tiles in the row dimension for input0 of matrix multiply
- * @param kt_dim: number of tiles in the common dimension between input0 & input1 of matrix multiply
+ *        stored in the buffer descriptor table, values = 0 - 32
+ * @param ct_dim: Number of tiles in the column dimension for input1 of the matrix multiply.
+ * @param rt_dim: Number of tiles in the row dimension for input0 of the matrix multiply.
+ * @param kt_dim: Number of tiles in the common dimension between input0 and input1 of the matrix multiply.
  */
 inline void _llk_unpack_matmul_mop_config_(
     std::uint32_t buf_desc_id_0, std::uint32_t buf_desc_id_1, std::uint8_t ct_dim, std::uint8_t rt_dim, std::uint32_t kt_dim)
@@ -54,23 +52,22 @@ inline void _llk_unpack_matmul_mop_config_(
 }
 
 /**
- * @brief Initializes unpacker to unpack operand 0 (buf_desc_id_0) into SrcB
- * and unpacks operand 1 (buf_desc_id_1) into SrcA. Matrix multiply FPU operation does SrcB * SrcA.
- * In order to get output of rowmajor matrix multiplication input 0 * Input 1, need to initialize
- * SrcA and SrcB to be input 1 & input 0 respectively.
- * The following matrix multiply has the following dimensions:
- * Output [rt_dim, ct_dim] = Input0 [rt_dim, kt_dim] x Input1 [kt_dim, ct_dim]
- * IMPORTANT NOTE:
- * This unpacker only sets up Input0 [rt_dim, 1] x Input1 [1, ct_dim]
- * kt_dim is assumed to be iterated over outside this api call
- * ct_dim * rt_dim <= 8 tiles in Float16b, ct_dim * rt_dim <= 4 tiles in Float32
- * @tparam TRANSPOSE_EN: Enables transpose of a tile, currently only supported for SrcA,
- * but can support other unpackers
+ * @brief Initializes the unpacker to unpack operand 0 into SrcB and operand 1 into SrcA for matrix multiply.
+ *
+ * The matrix multiply FPU operation computes SrcB * SrcA. To obtain the row-major result
+ * Output [rt_dim, ct_dim] = Input0 [rt_dim, kt_dim] x Input1 [kt_dim, ct_dim], SrcA and SrcB are loaded
+ * from Input1 and Input0 respectively. This unpacker only sets up Input0 [rt_dim, 1] x Input1 [1, ct_dim];
+ * kt_dim is assumed to be iterated over outside this call. Constraints: ct_dim * rt_dim <= 8 tiles in
+ * a 16-bit format, ct_dim * rt_dim <= 4 tiles in a 32-bit format.
+ *
+ * @tparam TRANSPOSE_EN: Enables transpose of a tile, currently only supported for SrcA but can support other unpackers, values = <true/false>
  * @param buf_desc_id_0/1: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table, values = 0 - 16
- * @param ct_dim: number of tiles in the column dimension for input1 of matrix multiply
- * @param rt_dim: number of tiles in the row dimension for input0 of matrix multiply
- * @param kt_dim: number of tiles in the common dimension between input0 & input1 of matrix multiply
+ *        stored in the buffer descriptor table, values = 0 - 16
+ * @param ct_dim: Number of tiles in the column dimension for input1 of the matrix multiply.
+ * @param rt_dim: Number of tiles in the row dimension for input0 of the matrix multiply.
+ * @param kt_dim: Number of tiles in the common dimension between input0 and input1 of the matrix multiply.
+ * @note On the math thread, pair with @ref _llk_math_matmul_init_ (T1); on the pack thread, pair with @ref _llk_pack_init_ (T2).
+ * @note @ref _llk_unpack_matmul_ is the matching execute call on this thread.
  */
 template <bool TRANSPOSE_EN>
 inline void _llk_unpack_matmul_init_(std::uint32_t buf_desc_id_0, std::uint32_t buf_desc_id_1, std::uint8_t ct_dim, std::uint8_t rt_dim, std::uint32_t kt_dim)
@@ -82,22 +79,19 @@ inline void _llk_unpack_matmul_init_(std::uint32_t buf_desc_id_0, std::uint32_t 
 }
 
 /**
- * @brief Performs unpack operation for matrix multiply such that:
- * Input 0 -> unpack to SrcB
- * Input 1 -> unpack to SrcA
- * Performs unpack for rt & ct dims of input0 & input 1 respectively
- * The following matrix multiply has the following dimensions:
- * Output [rt_dim, ct_dim] = Input0 [rt_dim, kt_dim] x Input1 [kt_dim, ct_dim]
- * IMPORTANT NOTE:
- * This unpacker only sets up Input0 [rt_dim, 1] x Input1 [1, ct_dim]
- * kt_dim is assumed to be iterated over outside this api call
- * ct_dim * rt_dim <= 8 tiles in Float16b, ct_dim * rt_dim <= 4 tiles in Float32
- * @param ct_dim: number of tiles in the column dimension for input1 of matrix multiply
- * @param rt_dim: number of tiles in the row dimension for input0 of matrix multiply
- * @param kt_dim: number of tiles in the common dimension between input0 & input1 of matrix multiply
- * @param start_l1_tile_idx_0/1: Start tile index into the L1 buffer
- * start_l1_tile_idx_0 -> UNPACKER1 -> SRCB
- * start_l1_tile_idx_1 -> UNPACKER0 -> SRCA
+ * @brief Unpacks operands for matrix multiply: Input0 -> SrcB, Input1 -> SrcA.
+ *
+ * Unpacks for the rt and ct dims of input0 and input1 respectively, producing
+ * Output [rt_dim, ct_dim] = Input0 [rt_dim, kt_dim] x Input1 [kt_dim, ct_dim]. This unpacker only sets
+ * up Input0 [rt_dim, 1] x Input1 [1, ct_dim]; kt_dim is assumed to be iterated over outside this call.
+ * Constraints: ct_dim * rt_dim <= 8 tiles in a 16-bit format, ct_dim * rt_dim <= 4 tiles in a 32-bit format.
+ *
+ * @param ct_dim: Number of tiles in the column dimension for input1 of the matrix multiply.
+ * @param rt_dim: Number of tiles in the row dimension for input0 of the matrix multiply.
+ * @param kt_dim: Number of tiles in the common dimension between input0 and input1 of the matrix multiply.
+ * @param start_l1_tile_idx_0/1: Start tile index into the L1 buffer;
+ *        start_l1_tile_idx_0 -> UNPACKER1 -> SRCB, start_l1_tile_idx_1 -> UNPACKER0 -> SRCA.
+ * @note Call @ref _llk_unpack_matmul_init_ with matching template args before this function.
  */
 inline void _llk_unpack_matmul_(
     std::uint8_t ct_dim, std::uint8_t rt_dim, std::uint32_t kt_dim, const std::uint32_t start_l1_tile_idx_0, const std::uint32_t start_l1_tile_idx_1)

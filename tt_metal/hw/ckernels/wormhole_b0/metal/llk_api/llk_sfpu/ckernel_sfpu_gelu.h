@@ -226,10 +226,10 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
         sfpi::vFloat xlog2 = x2 * NEG_HALF_ONE_LN2 + 127.0f;
 
         sfpi::vInt z = _float_to_int32_for_exp_21f_(xlog2);
-        sfpi::vInt exponential_part = sfpi::exexp(sfpi::reinterpret<sfpi::vFloat>(z), sfpi::ExponentMode::NoDebias);
-        sfpi::vInt fractional_part = sfpi::exman(sfpi::reinterpret<sfpi::vFloat>(z));
+        sfpi::vInt exponential_part = sfpi::exexp(sfpi::as<sfpi::vFloat>(z), sfpi::ExponentMode::NoDebias);
+        sfpi::vMag fractional_part = sfpi::exman(sfpi::as<sfpi::vFloat>(z));
 
-        sfpi::vFloat frac = sfpi::int32_to_float(fractional_part, sfpi::RoundMode::NearestEven);
+        sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::NearestEven);
         frac = PolynomialEvaluator::eval(frac, 1.0017248f, 7.839635491371155e-08f, 4.791750143340323e-15f);
         sfpi::vFloat exp_val = sfpi::setexp(frac, exponential_part);
 
