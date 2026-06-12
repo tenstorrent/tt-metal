@@ -3145,13 +3145,9 @@ def _main(activations, weights):
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1, None),
     )
     ttnn.deallocate(ttnn_slice_72, False)
-    # E_rope_transpose: [0,1,3,2] is a rank-4 last-2-axis swap -> ttnn.transpose (~10x faster).
-    # (The 5D out-perm [0,1,2,4,3] is NOT converted: ttnn.transpose only unsqueezes rank<4, no
-    # rank-5 path -> it crashes. x-perm is rank-4, safe.) Numerically identical (gated).
-    _rope0_x_perm = ttnn.transpose(
+    _rope0_x_perm = ttnn.permute(
         _rope0_x_split,
-        2,
-        3,
+        [0, 1, 3, 2],
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1, None),
         pad_value=0.0,
     )
@@ -4233,11 +4229,9 @@ def _main(activations, weights):
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1, None),
     )
     ttnn.deallocate(ttnn_slice_165, False)
-    # E_rope_transpose: rank-4 last-2-axis swap -> ttnn.transpose (mirror of layer 0).
-    _rope3_x_perm = ttnn.transpose(
+    _rope3_x_perm = ttnn.permute(
         _rope3_x_split,
-        2,
-        3,
+        [0, 1, 3, 2],
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1, None),
         pad_value=0.0,
     )
