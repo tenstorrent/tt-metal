@@ -121,6 +121,35 @@ def create_program_descriptor(
     # reaches here). Used by the reader's column/row zeroing of the last tile.
     elem_bytes = 4 if query.dtype == ttnn.float32 else 2
 
+    # --- Two-pass softmax gate (Refinement 6) -----------------------------
+    # The online-softmax recurrence accumulates SFPU-exp rounding across the KV
+    # blocks (error ~ sqrt(num_kv_blocks); see changelog R6). At fp32 the tight
+    # golden rms target (0.02) is breached only at the longest context
+    # (S_kv = 8192 → 256 blocks: device rms 0.0284). For that regime we switch
+    # to a NON-online two-pass softmax: pass 1 finds the global per-row max (no
+    # exp), pass 2 recomputes the scores and evaluates exp ONCE per element with
+    # the final max, accumulating l/O by plain addition (no per-block
+    # correction). Host simulation (calibrated to the device's 0.0284) puts the
+    # two-pass rms at ~0.004 — clears 0.02 with >4x margin.
+    #
+    # Gated narrowly so the binding online-softmax path is byte-identical for
+    # every other cell:
+    #   * dtype == fp32      — bf16/bf8b have looser targets the online path
+    #                          already meets; never switch them.
+    #   * S_kv_t > 128       — only S_kv > 4096 (i.e. S=8192, 256 blocks) breaches
+    #                          the target. S=4096 (128 blocks, rms 0.0151) passes
+    #                          online, so it is left on the online path.
+    #   * not is_causal      — causal processes ~half the KV blocks, so its
+    #                          effective accumulation stays under target even at
+    #                          S=8192; keep its (block-skipping) online path.
+    #   * not has_mask       — the failing cells are MHA/no-mask; custom-mask
+    #                          long-context fp32 already passes online. Keeping
+    #                          masks on the online path avoids re-applying them
+    #                          in both passes for no benefit.
+    # Two-pass re-reads K from DRAM (pass 1 + pass 2) — per-core memory stays
+    # O(1) (no score materialization), so no L1/OOM interaction with Refinement 5.
+    two_pass = query.dtype == ttnn.float32 and S_kv_t > 128 and not is_causal and not has_mask
+
     total_units = b * h * S_q_t
 
     # --- Work distribution over the compute grid ---
@@ -282,6 +311,7 @@ def create_program_descriptor(
         d_valid,  # partial last-D-tile valid columns (0 = D tile-aligned)
         kv_valid,  # partial last-KV-tile valid columns (0 = S_kv tile-aligned)
         elem_bytes,  # element size for the reader's last-tile zeroing (2=bf16, 4=fp32)
+        1 if two_pass else 0,  # Refinement 6: stream K twice for the fp32 two-pass path
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(query).get_compile_time_args())
     reader_ct.extend(ttnn.TensorAccessorArgs(key).get_compile_time_args())
@@ -300,7 +330,7 @@ def create_program_descriptor(
     # is_causal + S_q_t let the compute kernel decode qi = (start_unit+u) % S_q_t
     # and (a) cap the KV loop at j <= qi (skip whole-future blocks) and (b) add
     # the on-device triangular bias on the diagonal block j == qi.
-    compute_ct = [D_t, S_kv_t, 1 if has_mask else 0, 1 if is_causal else 0, S_q_t, kv_valid]
+    compute_ct = [D_t, S_kv_t, 1 if has_mask else 0, 1 if is_causal else 0, S_q_t, kv_valid, 1 if two_pass else 0]
 
     q_addr = query.buffer_address()
     k_addr = key.buffer_address()

@@ -328,3 +328,67 @@
   GQA 4:1, multi-head, multi-batch} with NaN-free + PCC + shape assertions,
   plus a bf16 D=1024 sanity case (confirms the L1-budget single-buffering is
   NOT triggered for bf16). Probes 009–010 (fp32 D=1024 fit + PCC verification).
+
+## Refinement 6 — fp32 long-context precision (S=8192, two-pass softmax)  [x] complete
+- **Date**: 2026-06-12
+- **What was done**:
+  - **Algorithmic, gated two-pass softmax for the fp32 long-context regime.**
+    The online-softmax recurrence accumulates SFPU-`exp` rounding across the KV
+    blocks (error ~ sqrt(num_kv_blocks); root cause confirmed by the
+    ttnn-expert-debugger in R1 — see the debug artifact
+    `test_scaled_dot_product_attention_debug.py`). At fp32 the tight golden rms
+    target (0.02) was breached only at S_kv = 8192 (256 blocks; online device
+    rms 0.0284). For that regime the kernels now run a NON-online two-pass
+    softmax: **pass 1** computes the global per-row max over all KV blocks (no
+    exp, no V); **pass 2** recomputes the scores and evaluates `exp(S - m_global)`
+    ONCE per element, accumulating `l_i`/`O_i` by plain addition (no per-block
+    `corr = exp(m_prev - m_new)` rescaling). Eliminating the multiplicative
+    correction chain removes both the extra exp family AND the error
+    amplification it propagates across 256 blocks.
+  - **O(1) memory preserved.** Pass 2 RE-READS K from DRAM and recomputes QKᵀ
+    rather than materializing the S_q×S_kv scores, so per-core L1 footprint is
+    unchanged (no interaction with the Refinement 5 large-D budget). Reader
+    streams K twice (pass 1 + pass 2), V once (pass 2). Cost: 2× QKᵀ matmul +
+    2× K DRAM reads on the gated path only.
+  - **Gated host-side** in the program descriptor so the binding online-softmax
+    topology is byte-identical for every other cell:
+    `two_pass = (dtype==float32) and (S_kv_t > 128) and (not is_causal) and (not has_mask)`.
+    Only S_kv = 8192 self/no-mask/non-causal fp32 cells trigger it; S=4096
+    (128 blocks, online rms 0.0151) stays online, causal (~half blocks) stays
+    online, custom-mask long-context fp32 (already passing) stays online.
+  - **De-risked before implementation** (per the verifier's "confirm it clears
+    0.02 first" instruction): a host simulation calibrated the SFPU-exp error to
+    the device's measured 0.0284 (`exp_err≈0.0042`) on the online model, then
+    applied the SAME error to the two-pass model → rms **0.0043** (>4× margin
+    under 0.02). This matched the device result almost exactly.
+  - **New CT args**: reader CT12 `two_pass` (accessor CT offset 12→13); compute
+    CT6 `two_pass`. Descriptor threads the gate to both. No new CBs (two-pass
+    reuses cb_max/cb_l/cb_o_acc/cb_p/cb_pv; cb_max_prev/cb_corr/cb_o_tmp simply
+    go unused on that path). No SUPPORTED/EXCLUSIONS change — fp32 was already
+    supported; this turns a numerically-failing in-contract cell green (no
+    drift).
+- **Accuracy achieved** (randn inputs, default config = HiFi4 + fp32 DEST acc):
+  - fp32 `Q1x1x8192x64` (two-pass): PCC ≈ 0.99999, **rms ≈ 0.0038** (was 0.0284
+    online) — clears the 0.02 target with ~5× margin. NaN-free.
+  - fp32 `Q1x2x8192x64` (multi-head, two-pass): PCC ≥ 0.999, rms ≤ 0.02.
+  - fp32 S=4096 / S=512 (online, unaffected): PCC ≥ 0.999, rms ≤ 0.02.
+  - Forced-gate probe on small shapes (128/256/2-head): PCC ≈ 0.99999,
+    rms 0.0034–0.0042 — two-pass path correct independent of S.
+- **Golden test progress**: **1004 / 1156 passing** (was 1002 at Refinement 5).
+  **+2 newly passing** = the `Q1x1x8192x64` fp32 mask_mode=none × {auto,
+  explicit} cells (the last `test_golden` deferral). Verified on the long-context
+  slice: all 18 `Q1x1x8192x64` golden cells pass (3 dtypes × 3 mask_modes × 2
+  scale modes, incl. all 6 fp32); all 72 S=4096 cells pass (online path
+  unchanged); broad samples (1024x64, 256x128, GQA 1x8x128x64) all pass.
+  Remaining failures: the 10 pre-existing `test_regression.py`
+  uniform/negative-input relative-RMS metric artifacts (documented in R1, not
+  touched by this change). The full 1156-cell suite was not run end-to-end in
+  one shot (exceeds the 10-min device-lock cap); coverage was taken via the
+  affected/adjacent slices above + the acceptance suite.
+- **Issues encountered**: None blocking. The two-pass kernel passed on the first
+  implementation (forced-gate probe, then real S=8192) under both --dev and
+  non-dev (no race conditions).
+- **Tests added**: `tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention_long_context.py`
+  — 5 cases: fp32 S=8192 two-pass clears the target (auto + explicit scale),
+  fp32 S=8192 multi-head, and two non-regression guards (fp32 S=4096 stays
+  online, fp32 short unaffected), all with PCC + rms + NaN-free assertions.

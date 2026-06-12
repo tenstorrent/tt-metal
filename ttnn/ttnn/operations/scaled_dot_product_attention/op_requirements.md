@@ -199,7 +199,7 @@ documented subset, if a D-chunk boundary forces one), with no regression to the
 
 ---
 
-### [ ] Refinement 6 — fp32 long-context precision (S=8192, two-pass softmax)
+### [x] Refinement 6 — fp32 long-context precision (S=8192, two-pass softmax)
 
 **Goal**: lift the 2 `Q1x1x8192x64` fp32 golden cells (PCC 0.9996, rms 0.0284 vs
 the 0.02 fp32 target; max_abs only 0.0034). Root cause is **confirmed** (see

@@ -68,13 +68,21 @@ void kernel_main() {
     constexpr uint32_t d_valid = get_compile_time_arg_val(9);
     constexpr uint32_t kv_valid = get_compile_time_arg_val(10);
     constexpr uint32_t elem_bytes = get_compile_time_arg_val(11);  // 2=bf16, 4=fp32
+    // Two-pass softmax (Refinement 6): the fp32 long-context path streams K
+    // TWICE (pass 1 finds the global row-max with no exp; pass 2 recomputes the
+    // scores and weights V). Gated host-side to dtype==fp32 && !causal && !mask
+    // && S_kv_t > 128 — the only regime where the 256-block online-softmax
+    // exp-accumulation breaches the fp32 rms target. Re-reading K from DRAM
+    // keeps per-core memory O(1) (no score materialization). MHA/no-mask only,
+    // so no mask/causal handling is needed in this branch.
+    constexpr bool two_pass = get_compile_time_arg_val(12) != 0;
 
     // GQA/MQA head broadcast: each Q head h maps to KV head h / group, where
     // group = H_q / H_kv (== 1 for MHA, == H_q for MQA). H % H_kv == 0 is
     // enforced in validate(), so this is exact integer division.
     constexpr uint32_t kv_group = H / H_kv;
 
-    constexpr auto q_args = TensorAccessorArgs<12>();
+    constexpr auto q_args = TensorAccessorArgs<13>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -187,6 +195,62 @@ void kernel_main() {
         }
 
         const uint32_t h_kv = h / kv_group;  // K/V head feeding this Q head
+
+        // --- Two-pass branch (Refinement 6): fp32 long-context, MHA/no-mask. ---
+        // Pass 1 streams K only; pass 2 streams K again + V. Re-reading K keeps
+        // memory O(1). Reuses the same per-tile read + last-tile zeroing logic
+        // as the online branch (the zeroing is compiled out when tile-aligned,
+        // which the gated shapes always are). The online branch below is left
+        // untouched.
+        if constexpr (two_pass) {
+            auto read_k = [&](uint32_t j) {
+                const uint32_t kv_base = ((b * H_kv + h_kv) * S_kv_t + j) * D_t;
+                const bool last_kv = (j == S_kv_t - 1);
+                const uint32_t kv_keep_rows = (last_kv && kv_valid != 0) ? kv_valid : 32u;
+                cb_reserve_back(cb_k_in, D_t);
+                uint32_t l1 = get_write_ptr(cb_k_in);
+                for (uint32_t d = 0; d < D_t; ++d) {
+                    noc_async_read_tile(kv_base + d, k_acc, l1 + d * tile_bytes);
+                }
+                noc_async_read_barrier();
+                if constexpr (d_valid != 0 || kv_valid != 0) {
+                    for (uint32_t d = 0; d < D_t; ++d) {
+                        const uint32_t keep_cols = (d_valid != 0 && d == D_t - 1) ? d_valid : 32u;
+                        zero_tile_tail(l1 + d * tile_bytes, elem_bytes, kv_keep_rows, keep_cols);
+                    }
+                }
+                cb_push_back(cb_k_in, D_t);
+            };
+            auto read_v = [&](uint32_t j) {
+                const uint32_t kv_base = ((b * H_kv + h_kv) * S_kv_t + j) * D_t;
+                const bool last_kv = (j == S_kv_t - 1);
+                const uint32_t kv_keep_rows = (last_kv && kv_valid != 0) ? kv_valid : 32u;
+                cb_reserve_back(cb_v_in, D_t);
+                uint32_t l1 = get_write_ptr(cb_v_in);
+                for (uint32_t d = 0; d < D_t; ++d) {
+                    noc_async_read_tile(kv_base + d, v_acc, l1 + d * tile_bytes);
+                }
+                noc_async_read_barrier();
+                if constexpr (kv_valid != 0) {
+                    if (last_kv) {
+                        for (uint32_t d = 0; d < D_t; ++d) {
+                            zero_tile_tail(l1 + d * tile_bytes, elem_bytes, kv_keep_rows, /*keep_cols=*/32u);
+                        }
+                    }
+                }
+                cb_push_back(cb_v_in, D_t);
+            };
+            // Pass 1: K only.
+            for (uint32_t j = 0; j < S_kv_t; ++j) {
+                read_k(j);
+            }
+            // Pass 2: K again + V.
+            for (uint32_t j = 0; j < S_kv_t; ++j) {
+                read_k(j);
+                read_v(j);
+            }
+            continue;  // next work unit
+        }
 
         // Causal: KV blocks j > qi are entirely in the future (all key
         // positions exceed all query positions in this Q-block) → masked out,

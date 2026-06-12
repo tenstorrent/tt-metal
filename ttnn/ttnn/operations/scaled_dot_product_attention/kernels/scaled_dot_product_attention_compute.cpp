@@ -92,6 +92,16 @@ void kernel_main() {
     // key columns must be masked to -inf so they drop out of the softmax.
     constexpr uint32_t kv_valid = get_compile_time_arg_val(5);
     constexpr bool has_kv_pad_mask = (kv_valid != 0);
+    // Two-pass softmax (Refinement 6). When set, run a NON-online softmax for
+    // this work unit: pass 1 computes the global per-row max over all KV blocks
+    // (no exp, no V); pass 2 recomputes the scores, evaluates exp(S - m_global)
+    // ONCE per element, and accumulates l_i / O_i by plain addition (no
+    // per-block correction). This removes the √num_blocks SFPU-exp accumulation
+    // that the online recurrence's repeated corr=exp(m_prev-m_new) rescaling
+    // suffers across 256 KV blocks at S=8192 (see changelog R6). Gated host-side
+    // to dtype==fp32 && !causal && !has_mask && S_kv_t > 128, so the binding
+    // online-softmax path below is byte-identical for every other cell.
+    constexpr bool two_pass = get_compile_time_arg_val(6) != 0;
 
     const uint32_t num_units = get_arg_val<uint32_t>(0);
     const uint32_t start_unit = get_arg_val<uint32_t>(1);
@@ -140,6 +150,146 @@ void kernel_main() {
         // j == qi is the diagonal block that gets the on-device triangular bias.
         const uint32_t qi = is_causal ? ((start_unit + u) % S_q_t) : 0;
         const uint32_t kv_blocks = is_causal ? (qi + 1) : num_kv_blocks;
+
+        // ===================== TWO-PASS SOFTMAX (Refinement 6) =================
+        // fp32 long-context, MHA / no-mask / non-causal. Pass 1 = global row-max
+        // (no exp); pass 2 = exp(S - m_global) once per element + plain l/O
+        // accumulation. cb_max_prev / cb_corr / cb_o_tmp are unused here.
+        if constexpr (two_pass) {
+            // ---- PASS 1: m = max over all KV blocks of (Q.Kᵀ * scale [+ kv_pad]) ----
+            for (uint32_t j = 0; j < num_kv_blocks; ++j) {
+                const bool first = (j == 0);
+
+                ckl::matmul_block<
+                    /*transpose=*/true,
+                    /*packer_l1_acc=*/false,
+                    ckl::LastBlockTarget::Out,
+                    ckl::OutputCBLayout::SubblockMajor,
+                    ckl::matmul_config::InitMode::Short,
+                    ckl::InputPolicy::WaitAndRetainOnLastBlock,
+                    ckl::InputPolicy::WaitAndPopPerKBlock>(cb_q_buf, cb_k_buf, cb_qk_buf, cb_q_buf, qk_shape);
+
+                ckl::mul<
+                    cb_qk,
+                    cb_scale,
+                    cb_qk,
+                    BroadcastDim::Scalar,
+                    InputLifecycle::Streaming,
+                    InputLifecycle::HeldStream>(K_CHUNK_T);
+
+                if constexpr (has_kv_pad_mask) {
+                    if (j == num_kv_blocks - 1) {
+                        ckl::add<
+                            cb_qk,
+                            cb_kv_pad_mask,
+                            cb_qk,
+                            BroadcastDim::None,
+                            InputLifecycle::Streaming,
+                            InputLifecycle::HeldStream>(K_CHUNK_T);
+                    }
+                }
+
+                if (first) {
+                    // m = rowmax(S). Default policy POPS cb_qk (score discarded).
+                    ckl::reduce<ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>(
+                        cb_qk, cb_scaler_max, cb_max, reduce_shape);
+                } else {
+                    ckl::reduce<ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>(
+                        cb_qk, cb_scaler_max, cb_m_blk, reduce_shape);
+                    // m = max(m, m_blk)  (in place into cb_max)
+                    ckl::binary_sfpu<ckl::BinaryMax<>, cb_max, cb_m_blk, cb_max>(Q_CHUNK_T);
+                }
+            }
+
+            // ---- PASS 2: l = Σ exp(S - m); O = Σ exp(S - m).V; O /= l ----
+            for (uint32_t j = 0; j < num_kv_blocks; ++j) {
+                const bool first = (j == 0);
+
+                ckl::matmul_block<
+                    /*transpose=*/true,
+                    /*packer_l1_acc=*/false,
+                    ckl::LastBlockTarget::Out,
+                    ckl::OutputCBLayout::SubblockMajor,
+                    ckl::matmul_config::InitMode::Short,
+                    ckl::InputPolicy::WaitAndRetainOnLastBlock,
+                    ckl::InputPolicy::WaitAndPopPerKBlock>(cb_q_buf, cb_k_buf, cb_qk_buf, cb_q_buf, qk_shape);
+
+                ckl::mul<
+                    cb_qk,
+                    cb_scale,
+                    cb_qk,
+                    BroadcastDim::Scalar,
+                    InputLifecycle::Streaming,
+                    InputLifecycle::HeldStream>(K_CHUNK_T);
+
+                if constexpr (has_kv_pad_mask) {
+                    if (j == num_kv_blocks - 1) {
+                        ckl::add<
+                            cb_qk,
+                            cb_kv_pad_mask,
+                            cb_qk,
+                            BroadcastDim::None,
+                            InputLifecycle::Streaming,
+                            InputLifecycle::HeldStream>(K_CHUNK_T);
+                    }
+                }
+
+                // P = exp(S - m)  (m broadcast down columns; cb_max HeldStream —
+                // the SAME global max for every block, never popped until end).
+                ckl::eltwise_chain(
+                    EltwiseShape::grid(Q_CHUNK_T, K_CHUNK_T),
+                    BinaryFpu<
+                        cb_qk,
+                        cb_max,
+                        BinaryFpuOp::Sub,
+                        BroadcastDim::Col,
+                        InputLifecycle::Streaming,
+                        InputLifecycle::HeldStream>{},
+                    ckl::Exp<>{},
+                    PackTile<cb_p>{});
+
+                // l_blk = rowsum(P)  (cb_p retained for the P.V matmul)
+                ckl::reduce<
+                    ckernel::PoolType::SUM,
+                    ckernel::ReduceDim::REDUCE_ROW,
+                    ckl::ReduceInputPolicy::WaitUpfrontNoPop>(cb_p, cb_scaler_sum, cb_l_block, reduce_shape);
+
+                if (first) {
+                    ckl::copy<cb_l_block, cb_l>(Q_CHUNK_T);
+                } else {
+                    // l_i = l_i + l_blk (no correction — m is global)
+                    ckl::add<cb_l, cb_l_block, cb_l>(Q_CHUNK_T);
+                }
+
+                ckl::matmul_block<
+                    /*transpose=*/false,
+                    /*packer_l1_acc=*/false,
+                    ckl::LastBlockTarget::Out,
+                    ckl::OutputCBLayout::SubblockMajor,
+                    ckl::matmul_config::InitMode::Short,
+                    ckl::InputPolicy::WaitAndPopPerKBlock,
+                    ckl::InputPolicy::WaitAndPopPerKBlock>(cb_p_buf, cb_v_buf, cb_pv_buf, cb_p_buf, pv_shape);
+
+                if (first) {
+                    ckl::copy<cb_pv, cb_o_acc>(D_t);
+                } else {
+                    // O_i = O_i + PV (no correction)
+                    ckl::add<cb_o_acc, cb_pv, cb_o_acc>(D_t);
+                }
+            }
+
+            // 1/l_i, then O_i /= l_i -> cb_out
+            ckl::unary<ckl::Recip<>, cb_l, cb_l>(Q_CHUNK_T);
+            ckl::mul<cb_o_acc, cb_l, cb_out, BroadcastDim::Col, InputLifecycle::Streaming, InputLifecycle::HeldStream>(
+                EltwiseShape::grid(Q_CHUNK_T, D_t));
+
+            // Release per-work-unit persistent / held CBs.
+            cb_pop_front(cb_q_in, D_t);       // Q retained by every QKᵀ matmul (both passes)
+            cb_pop_front(cb_max, Q_CHUNK_T);  // global m_i held across pass 2
+            cb_pop_front(cb_l, Q_CHUNK_T);    // 1/l_i held by the normalize mul
+            continue;                         // next work unit
+        }
+        // =================== END TWO-PASS; ONLINE PATH BELOW ===================
 
         for (uint32_t j = 0; j < kv_blocks; ++j) {
             const bool first = (j == 0);
