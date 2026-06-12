@@ -21,12 +21,25 @@ env:
 on:
   workflow_dispatch:
     inputs:
+      # See build-all-docker-images.yaml `ref` input for the merge-commit vs branch-HEAD
+      # rationale: tool image content (dockerfile/docker-bake.hcl, tool build scripts) must be
+      # checked out from the same tree the caller used to compute the tool hashes/tags.
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: "Git ref to checkout (defaults to github.sha if not provided)"
       tool-data:
         required: true
         type: string
         description: "JSON from preflight containing tool_tags, any_missing, and *_exists flags"
   workflow_call:
     inputs:
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: "Git ref to checkout (defaults to github.sha if not provided)"
       tool-data:
         required: true
         type: string
@@ -90,6 +103,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
+          ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 1
 
       - name: Login to GitHub Container Registry

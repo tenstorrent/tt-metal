@@ -24,6 +24,24 @@ env:
 on:
   workflow_call:
     inputs:
+      # WHY ref INPUT EXISTS:
+      # pr-gate.yaml builds images from the merge commit (github.sha for pull_request events
+      # is the ephemeral merge commit = branch HEAD + latest main merged). workflow_dispatch
+      # uses branch HEAD as github.sha. These are different git trees; compute-platform-data.sh
+      # is fully deterministic given the same tree, so different trees produce different image
+      # hashes. When using build-all to check/rebuild images already built by pr-gate, pass
+      # the merge commit SHA (visible in the pr-gate run's "Calculate Tags" job as the
+      # checked-out ref) to ensure hash consistency.
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Git ref to checkout for hash computation and builds. When calling from
+          pr-gate or any workflow where github.sha is a merge commit, pass
+          github.sha explicitly so all hash computations use the same tree that
+          pr-gate used. Defaults to github.sha (branch HEAD for workflow_dispatch,
+          merge commit for pull_request events).
       force-rebuild:
         required: false
         type: boolean
@@ -106,6 +124,17 @@ on:
         value: ${{ jobs.preflight.outputs.llk-ci-tag }}
   workflow_dispatch:
     inputs:
+      # See the workflow_call `ref` input above for the merge-commit vs branch-HEAD rationale.
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Git ref to checkout for hash computation and builds. When calling from
+          pr-gate or any workflow where github.sha is a merge commit, pass
+          github.sha explicitly so all hash computations use the same tree that
+          pr-gate used. Defaults to github.sha (branch HEAD for workflow_dispatch,
+          merge commit for pull_request events).
       force-rebuild:
         required: false
         type: boolean
@@ -144,6 +173,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
+          ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 1
           submodules: recursive
 
@@ -277,6 +307,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
+          ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 1
           submodules: recursive
       - name: Login to GitHub Container Registry
@@ -297,6 +328,7 @@ jobs:
     needs: [preflight]
     uses: ./.github/workflows/build-docker-tools.yaml
     with:
+      ref: ${{ inputs.ref || github.sha }}
       tool-data: ${{ needs.preflight.outputs.tool-data }}
     secrets: inherit
 
@@ -307,6 +339,7 @@ jobs:
     if: always() && !failure() && !cancelled()
     uses: ./.github/workflows/build-docker-artifact.yaml
     with:
+      ref: ${{ inputs.ref || github.sha }}
       build-manylinux: true
       skip-llk-build: true
       harbor-prefix: ${{ needs.preflight.outputs.harbor-prefix }}
@@ -321,6 +354,7 @@ jobs:
     if: always() && !failure() && !cancelled()
     uses: ./.github/workflows/build-docker-artifact.yaml
     with:
+      ref: ${{ inputs.ref || github.sha }}
       build-manylinux: false
       skip-llk-build: true
       harbor-prefix: ${{ needs.preflight.outputs.harbor-prefix }}
