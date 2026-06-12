@@ -31,14 +31,39 @@
 // ============================================================
 // Watchdog validation: intentional Tensix heartbeat stall
 // ============================================================
-// 0 = disabled, 1 = enabled
-#define DRAM_TEST_INJECT_TENSIX_HEARTBEAT_STALL 0
+// Runtime-controlled from host via DramJobQueueCtrl::reserved0.
+// Host sets reserved0=1 when env DRAM_TEST_INJECT_TENSIX_HEARTBEAT_STALL=1.
+// Keep the actual stall point fixed for the negative watchdog validation test.
+static constexpr uint32_t DRAM_TEST_STALL_JOB_ID = 1u;
+static constexpr uint32_t DRAM_TEST_STALL_AFTER_TRANSFERS = 10u;
 
-// Job id where the kernel will intentionally stop updating heartbeat.
-#define DRAM_TEST_STALL_JOB_ID 53u
+static inline bool dram_inject_tensix_heartbeat_stall_enabled(volatile DramJobQueueCtrl* ctrl) {
+    return ctrl != nullptr && ctrl->reserved0 != 0u;
+}
 
-// Stall after this many completed chunk transfers inside that job.
-#define DRAM_TEST_STALL_AFTER_TRANSFERS 10u
+static inline void dram_maybe_inject_tensix_heartbeat_stall(
+    const DramTestParameters& p,
+    volatile DramBaseResult* result,
+    volatile DramJobQueueCtrl* ctrl,
+    volatile CoreProgressStatus* status,
+    volatile uint32_t* sync_mb) {
+    if (dram_inject_tensix_heartbeat_stall_enabled(ctrl) && (p.job_id == DRAM_TEST_STALL_JOB_ID) &&
+        (result->transfers >= DRAM_TEST_STALL_AFTER_TRANSFERS)) {
+        status->current_stage = DRAM_PROGRESS_STAGE_VERIFY;
+        status->current_job_id = p.job_id;
+        sync_mb[MB_CURRENT_STAGE] = MB_STAGE_VERIFY;
+
+        while (true) {
+            // Intentional watchdog validation hang.
+            // Do not update heartbeat here.
+            // Expected host behavior:
+            //   hb_delta  == 0
+            //   jobs_delta == 0
+            //   arc_delta > 0
+            // => watchdog reason should become kernel_stall.
+        }
+    }
+}
 
 struct DramPendingDiagnostic {
     uint32_t valid;
@@ -894,16 +919,7 @@ static inline bool run_one_dram_job(
                 sync_mb[MB_WORDS_CHECKED] = result->words_checked;
                 sync_mb[MB_FAILURES] = result->failures;
 
-#if DRAM_TEST_INJECT_TENSIX_HEARTBEAT_STALL
-                if ((p.job_id == DRAM_TEST_STALL_JOB_ID) && (result->transfers >= DRAM_TEST_STALL_AFTER_TRANSFERS)) {
-                    status->current_stage = DRAM_PROGRESS_STAGE_VERIFY;
-                    status->current_job_id = p.job_id;
-                    sync_mb[MB_CURRENT_STAGE] = MB_STAGE_VERIFY;
-                    while (true) {
-                        // Intentional watchdog validation hang.
-                    }
-                }
-#endif
+                dram_maybe_inject_tensix_heartbeat_stall(p, result, ctrl, status, sync_mb);
                 current_chunk = next_chunk;
                 have_current = have_next;
                 continue;
@@ -987,23 +1003,7 @@ static inline bool run_one_dram_job(
         sync_mb[MB_WORDS_CHECKED] = result->words_checked;
         sync_mb[MB_FAILURES] = result->failures;
 
-#if DRAM_TEST_INJECT_TENSIX_HEARTBEAT_STALL
-        if ((p.job_id == DRAM_TEST_STALL_JOB_ID) && (result->transfers >= DRAM_TEST_STALL_AFTER_TRANSFERS)) {
-            status->current_stage = DRAM_PROGRESS_STAGE_VERIFY;
-            status->current_job_id = p.job_id;
-            sync_mb[MB_CURRENT_STAGE] = MB_STAGE_VERIFY;
-
-            while (true) {
-                // Intentional watchdog validation hang.
-                // Do not update heartbeat here.
-                // Expected host behavior:
-                //   hb_delta  == 0
-                //   jobs_delta == 0
-                //   arc_delta > 0
-                // => watchdog reason should become kernel_stall.
-            }
-        }
-#endif
+        dram_maybe_inject_tensix_heartbeat_stall(p, result, ctrl, status, sync_mb);
 
         current_chunk = next_chunk;
         have_current = have_next;
