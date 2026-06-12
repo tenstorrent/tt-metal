@@ -29,10 +29,16 @@ set(UNIT_TESTS_API_SOURCES
     metal2_host_api/test_program_run_args.cpp
     metal2_host_api/test_table.cpp
     test_kernel_thread_sync.cpp
+    tensor/common_tensor_test_utils.cpp
     tensor/test_tensor_sharding.cpp
     tensor/test_host_tensor.cpp
     tensor/test_mesh_tensor.cpp
     tensor/test_tensor_types.cpp
+    tensor/test_tensor_layout.cpp
+    tensor/test_create_tensor.cpp
+    tensor/test_create_tensor_with_layout.cpp
+    tensor/test_tensor_nd_sharding.cpp
+    tensor/test_vector_conversion.cpp
     test_banked.cpp
     test_bit_utils.cpp
     test_filesystem_utils.cpp
