@@ -129,6 +129,13 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
     // Write-at-offset validation
     if (tensor_args.output_tensor.has_value()) {
         const auto& out = tensor_args.output_tensor.value();
+        // The output buffer's raw address is handed to the kernels, so validate it lives in
+        // device storage on the same device as the inputs before any later shape checks.
+        TT_FATAL(out.storage_type() == StorageType::DEVICE, "variable_matmul output tensor must be on device");
+        TT_FATAL(out.buffer() != nullptr, "variable_matmul output tensor must be allocated in a device buffer");
+        TT_FATAL(
+            out.device() == act_tensor.device(),
+            "variable_matmul output tensor must reside on the same device as the inputs");
         const auto& out_logical = out.logical_shape();
         const uint32_t matmul_N = operation_attributes.transpose_b ? w_logical[-2] : w_logical[-1];
         const uint32_t out_M_tiles = tt::div_up(out_logical[-2], TILE_HEIGHT);
