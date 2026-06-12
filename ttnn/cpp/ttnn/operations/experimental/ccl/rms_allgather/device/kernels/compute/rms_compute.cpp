@@ -211,22 +211,22 @@ void kernel_main() {
         }
     }
     // (x - Ex) * 1/[sqrt(Var + eps)] — Col-bcast over the block, single chain.
-    // cb_xmm: resident input — original neither wait_front's it nor needs a per-tile wait, and
-    //   pops num_tiles_per_block after the loop. DeferredPop would express that but is NOT
-    //   block_size-compatible (no wait -> cannot stage a multi-tile DEST window; chain_supports_block
-    //   static_assert). So CallerManaged (no wait/pop, block-supporting) + the explicit
-    //   cb_pop_front(cb_xmm) restored after the chain. cb_ex_global: 1-tile scalar held via the
-    //   explicit wait(1)/pop(1) kept outside -> CallerManaged, Scalar index, BroadcastDim::Col.
-    //   cb_im out: reserve+push num_tiles_per_block -> Bulk. reconfig_data_format +
+    // cb_xmm (A): resident block of num_tiles_per_block tiles. Bulk folds the trailing
+    //   cb_pop_front into the chain (AtEnd pop of M tiles); its Upfront wait(M) is a no-op
+    //   because the block is already resident (the prior pop of M proves M are present).
+    //   NOTE: DeferredPop would read as "no wait, pop at end", but policy_supports_block
+    //   (eltwise_chain.inl) excludes it, so it static_asserts under BlockSize>1 — Bulk is
+    //   the block-safe lifecycle that still folds the pop.
+    // cb_ex_global (B): 1-tile scalar -> Bulk folds its wait(1)/pop(1) (Scalar window = 1:
+    //   Upfront wait_front(1) + AtEnd pop_front(1)), Scalar index, BroadcastDim::Col.
+    // cb_im out: reserve+push num_tiles_per_block -> Bulk. reconfig_data_format +
     //   mul_bcast_cols_init_short -> Input; pack_reconfig(cb_im) -> Output.
-    // cb_ex_global: 1-tile scalar -> Bulk folds its wait(1)/pop(1) into the chain (Scalar
-    //   window = 1: Upfront wait_front(1) + AtEnd pop_front(1)).
     compute_kernel_lib::mul<
         cb_xmm,
         cb_ex_global,
         cb_im,
         compute_kernel_lib::BroadcastDim::Col,
-        compute_kernel_lib::InputLifecycle::CallerManaged,
+        compute_kernel_lib::InputLifecycle::Bulk,
         compute_kernel_lib::InputLifecycle::Bulk,
         compute_kernel_lib::OutputLifecycle::Bulk,
         compute_kernel_lib::BinaryDataFormatReconfig::Input,
@@ -234,7 +234,6 @@ void kernel_main() {
         compute_kernel_lib::OperandKind::Block,
         compute_kernel_lib::OperandKind::Scalar>(
         compute_kernel_lib::EltwiseShape::tiles(num_tiles_per_block, subblock_w));
-    cb_pop_front(cb_xmm, num_tiles_per_block);
 
     // gamma: cb_im * gamma (bcast-rows) -> cb_outgamma, single chain.
     // cb_im: Bulk (chain waits+pops num_tiles_per_block — folds the prior cb_wait_front(cb_im)
