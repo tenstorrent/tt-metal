@@ -93,6 +93,34 @@ os.environ.setdefault("TT_DS_PREFILL_TTNN_CACHE", VARIANT.ttnn_cache_default)
 os.environ.setdefault("TT_DS_PREFILL_HOST_REF_CACHE", DEFAULT_HOST_REF_CACHE)
 
 
+_kv_pt_trace_cache: dict[str, dict] = {}
+
+
+def _load_kv_pt_trace(pt_path: str) -> dict:
+    """Load (and memoize) a `.pt` reference produced by `save_reference_cache`
+    (see `utils.transformer_helpers`). Holds `ref_snapshots` + `ref_kvpe_list`;
+    we only consume `ref_kvpe_list[i]` shape `[1, 1, seq, kv_lora + qk_rope_head_dim]`
+    here. `mmap=True` keeps it lazy on first touch; subsequent layers are zero-copy
+    slices into the same backing storage.
+
+    Both `validate_migration_kv` PCC calls (BEFORE/AFTER) reuse one load via the
+    module-level cache; the cache lives for the runner's lifetime.
+    """
+    import torch
+
+    cached = _kv_pt_trace_cache.get(pt_path)
+    if cached is not None:
+        return cached
+    cached = torch.load(pt_path, map_location="cpu", weights_only=True, mmap=True)
+    if "ref_kvpe_list" not in cached:
+        raise KeyError(
+            f"DEEPSEEK_PREFILL_TRACE_PT={pt_path} missing 'ref_kvpe_list'. "
+            f"Got keys: {list(cached.keys())}. Expected a save_reference_cache .pt."
+        )
+    _kv_pt_trace_cache[pt_path] = cached
+    return cached
+
+
 def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
     """Truly standalone: read token IDs from a JSON file, shard them via
     `prepare_prefill_input_tensor`, and feed `pipeline.prefill`. No H2D socket,
@@ -203,7 +231,15 @@ def _kv_cache_pcc_check(pipeline: TtDeepSeekPrefillPipeline, slot_id: int, n_chu
     (unless PREFILL_STANDALONE_CHUNKED_RECORD_ONLY=1) when any layer is below threshold.
 
     Env:
-      DEEPSEEK_PREFILL_TRACE_DIR              golden trace dir (default: the longbook_qa 56320 trace)
+      DEEPSEEK_PREFILL_TRACE_PT               golden reference .pt produced by save_reference_cache
+                                              (carries ref_kvpe_list[layer] of shape
+                                              [1, 1, seq, kv_lora + qk_rope_head_dim]). Preferred
+                                              when set — covers ISL/layer configs without a
+                                              standalone safetensors trace dir.
+      DEEPSEEK_PREFILL_TRACE_DIR              golden trace dir (default: the longbook_qa 56320 trace).
+                                              Used only if DEEPSEEK_PREFILL_TRACE_PT is unset.
+                                              Holds kv_cache/layer_*.safetensors keyed by
+                                              kv_post_transform_layer_<i>.
       PREFILL_STANDALONE_CHUNKED_PCC          min per-layer KV-cache PCC threshold (default 0.88)
       PREFILL_STANDALONE_CHUNKED_RECORD_ONLY  "1" -> log PCC only, do not assert
     """
@@ -221,9 +257,25 @@ def _kv_cache_pcc_check(pipeline: TtDeepSeekPrefillPipeline, slot_id: int, n_chu
     seq_len_cache = cfg.max_seq_len
     total_len = n_chunks * chunk_size
 
-    trace_dir = Path(os.environ.get("DEEPSEEK_PREFILL_TRACE_DIR", DEFAULT_PREFILL_TRACE_DIR))
-    if not trace_dir.exists():
-        raise FileNotFoundError(f"golden trace dir not found: {trace_dir} (set DEEPSEEK_PREFILL_TRACE_DIR)")
+    pt_path = os.environ.get("DEEPSEEK_PREFILL_TRACE_PT", "").strip()
+    if pt_path:
+        if not Path(pt_path).is_file():
+            raise FileNotFoundError(f"DEEPSEEK_PREFILL_TRACE_PT={pt_path} does not exist or is not a file")
+        kv_pt = _load_kv_pt_trace(pt_path)["ref_kvpe_list"]
+        if len(kv_pt) < num_layers:
+            raise RuntimeError(
+                f"DEEPSEEK_PREFILL_TRACE_PT={pt_path} has {len(kv_pt)} layers in ref_kvpe_list "
+                f"but pipeline.num_layers={num_layers}; pick a .pt that matches the runner's layer count."
+            )
+        trace_dir = None
+    else:
+        trace_dir = Path(os.environ.get("DEEPSEEK_PREFILL_TRACE_DIR", DEFAULT_PREFILL_TRACE_DIR))
+        if not trace_dir.exists():
+            raise FileNotFoundError(
+                f"golden trace dir not found: {trace_dir} "
+                "(set DEEPSEEK_PREFILL_TRACE_DIR or DEEPSEEK_PREFILL_TRACE_PT)"
+            )
+        kv_pt = None
 
     threshold = float(os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.88"))
     record_only = os.environ.get("PREFILL_STANDALONE_CHUNKED_RECORD_ONLY", "0") == "1"
@@ -249,17 +301,32 @@ def _kv_cache_pcc_check(pipeline: TtDeepSeekPrefillPipeline, slot_id: int, n_chu
         nat[p] = cache_full[batch_idx, 0]  # un-rotate block-cyclic -> natural order
         dev_cache = nat[:total_len]
 
-        g_post = _load_kv_post_transform(trace_dir, i, total_len)
-        # nope (kv_lora) compares directly; the RoPE (pe) slice uses the Meta-interleaved basis while
-        # the golden stores the HF half-split, so re-interleave the golden before comparing.
+        if kv_pt is not None:
+            # ref_kvpe_list[i] = ref_cache.key_cache[i] from HF's DynamicCache after the HF model's MLA
+            # forward. Per tests/test_prefill_transformer.py (canonical KVPE PCC, lines ~664-671),
+            # this tensor is ALREADY in the device's rotary basis — pe is compared directly with no
+            # re-interleave. Applying HF->Meta to it produces noise (see _ref_pe_for_comp below).
+            g_post = kv_pt[i][0, 0, :total_len].to(torch.float32)
+        else:
+            # The safetensors trace stores `kv_post_transform_layer_<i>` in HF half-split layout
+            # (single-file DeepSeek or Kimi's row-sharded dir — _load_kv_post_transform auto-detects);
+            # nope (kv_lora) compares directly, the pe slice is re-interleaved to Meta below.
+            g_post = _load_kv_post_transform(trace_dir, i, total_len)
         _, pcc_nope = comp_pcc(g_post[:, :kv_lora], dev_cache[:, :kv_lora])
         ref_pe = g_post[:, kv_lora:]
-        d = ref_pe.shape[-1]
-        ref_pe_int = torch.stack([ref_pe[:, : d // 2], ref_pe[:, d // 2 :]], dim=-1).reshape(-1, d)  # HF -> Meta
-        _, pcc_pe = comp_pcc(ref_pe_int, dev_cache[:, kv_lora:])
+        if kv_pt is not None:
+            ref_pe_for_comp = ref_pe  # already Meta-interleaved (HF DynamicCache from save_reference_cache)
+            basis_tag = "direct"
+        else:
+            d = ref_pe.shape[-1]
+            ref_pe_for_comp = torch.stack([ref_pe[:, : d // 2], ref_pe[:, d // 2 :]], dim=-1).reshape(
+                -1, d
+            )  # HF -> Meta
+            basis_tag = "interleaved"
+        _, pcc_pe = comp_pcc(ref_pe_for_comp, dev_cache[:, kv_lora:])
         layer_pcc = min(pcc_nope, pcc_pe)
         min_pcc = min(min_pcc, layer_pcc)
-        logger.info(f"  cache layer {i} PCC: nope={pcc_nope:.6f} pe(interleaved)={pcc_pe:.6f} -> {layer_pcc:.6f}")
+        logger.info(f"  cache layer {i} PCC: nope={pcc_nope:.6f} pe({basis_tag})={pcc_pe:.6f} -> {layer_pcc:.6f}")
         if layer_pcc < threshold:
             failures.append((i, layer_pcc))
 
@@ -360,21 +427,50 @@ def run_standalone_chunked_prefill_loop(pipeline: TtDeepSeekPrefillPipeline) -> 
         f"bump PREFILL_MAX_SEQ_LEN or lower PREFILL_STANDALONE_CHUNKED_NCHUNKS"
     )
 
-    trace_dir = Path(os.environ.get("DEEPSEEK_PREFILL_TRACE_DIR", DEFAULT_PREFILL_TRACE_DIR))
-    if not trace_dir.exists():
-        raise FileNotFoundError(f"golden trace dir not found: {trace_dir} (set DEEPSEEK_PREFILL_TRACE_DIR)")
-
-    logger.info(
-        f"[standalone-chunked] trace={trace_dir} n_chunks={n_chunks} chunk_size={chunk_size} "
-        f"total_len={total_len} slots={slot_ids} num_users={NUM_USERS} cache={seq_len_cache} sp={sp} layers={num_layers}"
+    # Input tokens: when a .pt golden is in use (DEEPSEEK_PREFILL_TRACE_PT), the runner's KV would
+    # diverge from the .pt's ref_kvpe_list unless we drive the same prompt that produced the .pt.
+    # Allow DEEPSEEK_PREFILL_TOKENS_JSON (or PREFILL_STANDALONE_INPUT as a fallback) to point at the
+    # matching standalone_input_*.json shipped next to the .pt; otherwise fall back to the legacy
+    # safetensors-trace path that reads metadata.json from DEEPSEEK_PREFILL_TRACE_DIR.
+    tokens_json = (
+        os.environ.get("DEEPSEEK_PREFILL_TOKENS_JSON", "").strip()
+        or os.environ.get("PREFILL_STANDALONE_INPUT", "").strip()
     )
-
-    with open(trace_dir / "metadata.json") as f:
-        md = json.load(f)
+    pt_path_present = bool(os.environ.get("DEEPSEEK_PREFILL_TRACE_PT", "").strip())
+    if tokens_json or pt_path_present:
+        if not tokens_json:
+            raise RuntimeError(
+                "DEEPSEEK_PREFILL_TRACE_PT is set but no input tokens were provided. "
+                "Point DEEPSEEK_PREFILL_TOKENS_JSON (or PREFILL_STANDALONE_INPUT) at the "
+                "standalone_input_*.json that produced the .pt."
+            )
+        if not Path(tokens_json).is_file():
+            raise FileNotFoundError(f"DEEPSEEK_PREFILL_TOKENS_JSON={tokens_json} does not exist")
+        logger.info(
+            f"[standalone-chunked] tokens_json={tokens_json} n_chunks={n_chunks} chunk_size={chunk_size} "
+            f"total_len={total_len} slots={slot_ids} num_users={NUM_USERS} cache={seq_len_cache} sp={sp} layers={num_layers}"
+        )
+        with open(tokens_json) as f:
+            md = json.load(f)
+    else:
+        trace_dir = Path(os.environ.get("DEEPSEEK_PREFILL_TRACE_DIR", DEFAULT_PREFILL_TRACE_DIR))
+        if not trace_dir.exists():
+            raise FileNotFoundError(
+                f"golden trace dir not found: {trace_dir} "
+                "(set DEEPSEEK_PREFILL_TRACE_DIR, or use DEEPSEEK_PREFILL_TRACE_PT + DEEPSEEK_PREFILL_TOKENS_JSON)"
+            )
+        logger.info(
+            f"[standalone-chunked] trace={trace_dir} n_chunks={n_chunks} chunk_size={chunk_size} "
+            f"total_len={total_len} slots={slot_ids} num_users={NUM_USERS} cache={seq_len_cache} sp={sp} layers={num_layers}"
+        )
+        with open(trace_dir / "metadata.json") as f:
+            md = json.load(f)
     token_ids_full = list(md["token_ids"])[:total_len]
-    assert (
-        len(token_ids_full) == total_len
-    ), f"trace metadata has {len(token_ids_full)} tokens but need {total_len}; lower PREFILL_STANDALONE_CHUNKED_NCHUNKS"
+    assert len(token_ids_full) == total_len, (
+        f"input tokens have {len(token_ids_full)} entries but need {total_len} "
+        f"(n_chunks={n_chunks} * chunk_size={chunk_size}); "
+        "lower PREFILL_STANDALONE_CHUNKED_NCHUNKS, lower PREFILL_CHUNK_SIZE, or pick a longer prompt"
+    )
 
     # Prefill the golden prompt into each requested slot, then PCC-validate that slot. Run every slot
     # before failing so all results are visible (collect failures, assert once at the end).
@@ -554,11 +650,22 @@ def _print_config() -> None:
         ("PREFILL_STANDALONE_ITERS", os.environ.get("PREFILL_STANDALONE_ITERS", "1")),
         ("PREFILL_STANDALONE_CHUNKED", os.environ.get("PREFILL_STANDALONE_CHUNKED", "0")),
         ("DEEPSEEK_PREFILL_TRACE_DIR", os.environ.get("DEEPSEEK_PREFILL_TRACE_DIR", DEFAULT_PREFILL_TRACE_DIR)),
+        ("DEEPSEEK_PREFILL_TRACE_PT", os.environ.get("DEEPSEEK_PREFILL_TRACE_PT", "<NOT SET>")),
+        ("DEEPSEEK_PREFILL_TOKENS_JSON", os.environ.get("DEEPSEEK_PREFILL_TOKENS_JSON", "<NOT SET>")),
         ("PREFILL_STANDALONE_CHUNKED_NCHUNKS", os.environ.get("PREFILL_STANDALONE_CHUNKED_NCHUNKS", "11")),
         ("PREFILL_STANDALONE_CHUNKED_SLOT", os.environ.get("PREFILL_STANDALONE_CHUNKED_SLOT", "0")),
         ("PREFILL_STANDALONE_CHUNKED_PCC", os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.88")),
         ("PREFILL_REQUEST_LOOP_PCC", os.environ.get("PREFILL_REQUEST_LOOP_PCC", "0")),
         ("PREFILL_ENABLE_MIGRATION", os.environ.get("PREFILL_ENABLE_MIGRATION", "0")),
+        (
+            "PREFILL_MIGRATION_TABLE_PATH",
+            os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb"),
+        ),
+        ("PREFILL_MIGRATION_CMD_QUEUE", os.environ.get("PREFILL_MIGRATION_CMD_QUEUE", "/prefill_mig_cmd_1")),
+        ("PREFILL_MIGRATION_TABLE_QUEUE", os.environ.get("PREFILL_MIGRATION_TABLE_QUEUE", "/prefill_mig_tbl_1")),
+        ("PREFILL_MIGRATION_RESP_QUEUE", os.environ.get("PREFILL_MIGRATION_RESP_QUEUE", "/prefill_mig_rsp_1")),
+        ("PREFILL_MIGRATION_WAIT_READY_MS", os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000")),
+        ("PREFILL_MIGRATION_CLIENT_DIR", os.environ.get("PREFILL_MIGRATION_CLIENT_DIR", "<NOT SET>")),
         ("PREFILL_H2D_SERVICE_ID", os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")),
     ]
 
@@ -612,19 +719,19 @@ def main() -> None:
 
     ack_channel = None
     if enable_migration:
-        # Standalone-worker model: build the KV chunk address table from the device
-        # KV layout and serialize it to a .pb file. The inference server / orchestrator
-        # forwards this path to the migration_worker via
-        # MigrationLayerClient.send_kv_chunk_table(path). The runner owns the device,
-        # so only it knows the KV cache NoC addresses; it has no IPC with the worker.
-        from models.demos.deepseek_v3_d_p.tt.runners.integration_setup import (
-            build_and_serialize_kv_chunk_table,
-            build_device_map,
-            send_kv_chunk_table,
-        )
+        # Full migration bring-up. The runner owns the device, so it is the ONLY
+        # component that knows both the KV cache NoC addresses
+        # (kvpe_cache.buffer_address()) and the local mesh's UMD chip ids — and
+        # the worker needs BOTH to reach WORKER_READY (it gates on SetTable +
+        # AssignDevMap; see control_thread.cpp::maybe_emit_worker_ready). The
+        # call serializes the table, sends SET_TABLE + AssignDevMap, then blocks
+        # until WORKER_READY so the scheduler can safely start migrations as
+        # soon as the request loop opens.
+        from models.demos.deepseek_v3_d_p.tt.runners.integration_setup import publish_kv_chunk_table_and_wait_ready
 
         table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
-        build_and_serialize_kv_chunk_table(
+        wait_ready_ms = int(os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000"))
+        publish_kv_chunk_table_and_wait_ready(
             mesh_device=mesh_device,
             kvpe_cache=pipeline.kvpe_cache,
             seq_len=MAX_SEQ_LEN,
@@ -634,12 +741,8 @@ def main() -> None:
             num_users=NUM_USERS,
             chunk_size_global=CHUNK_SIZE,  # block-cyclic period (prefill chunk size)
             path=table_path,
+            wait_ready_timeout_ms=wait_ready_ms,
         )
-        # Send SET_TABLE + the real device map so a DEVICE-mode migration_endpoint
-        # opens the model's chips via UMD and reaches WORKER_READY (the runner is the
-        # only CreateDevice-capable process that knows the fnid<->umd mapping).
-        device_map = build_device_map(mesh_device, GLOBAL_MESH_SHAPE)
-        send_kv_chunk_table(table_path, device_map=device_map)
 
     if os.environ.get("PREFILL_STANDALONE_CHUNKED", "0") == "1":
         # Standalone validation: golden longbook_qa input, chunked prefill, KV-cache PCC vs trace.
