@@ -122,7 +122,17 @@ def create_program_descriptor(
     # inputs land in TF32 regardless, which is the unavoidable srcA/srcB drop.
     input_fmt = query.dtype
     out_fmt = output_tensor.dtype
-    accum_fmt = ttnn.float32 if fp32_dest_acc_en else input_fmt
+    if fp32_dest_acc_en:
+        accum_fmt = ttnn.float32
+    elif input_fmt == ttnn.bfloat8_b:
+        # Block-float (16 values share an exponent) is unusable for the online-
+        # softmax running stats: cb_max / cb_l hold one valid value per row and
+        # cb_qk / cb_p hold raw scores / probabilities — bf8b storage collapses
+        # them (PCC -> 0). Floor bf8b intermediates to bf16 when fp32 DEST acc is
+        # off. (With the default fp32_dest_acc_en=True this branch is dead.)
+        accum_fmt = ttnn.bfloat16
+    else:
+        accum_fmt = input_fmt
 
     def cb(index, num_pages, fmt=input_fmt):
         page = ttnn.tile_size(fmt)
