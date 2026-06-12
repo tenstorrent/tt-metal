@@ -78,6 +78,33 @@ static_assert(sizeof(TensorShape) == 4, "TensorShape must be 4 bytes");
 constexpr TensorShape DEFAULT_TENSOR_SHAPE = {MAX_FACE_R_DIM, MAX_FACE_C_DIM, MAX_NUM_FACES_R_DIM, MAX_NUM_FACES_C_DIM};
 
 /**
+ * @brief Construct a TensorShape from explicit face dimensions and face-grid counts.
+ *
+ * Convenience builder that mirrors the aggregate constructor and is convenient at call sites
+ * that derive components from runtime values.
+ */
+constexpr TensorShape make_tensor_shape(
+    const std::uint8_t face_r_dim, const std::uint8_t face_c_dim, const std::uint8_t num_faces_r_dim, const std::uint8_t num_faces_c_dim)
+{
+    return TensorShape {face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim};
+}
+
+/**
+ * @brief Construct a TensorShape from the legacy (face_r_dim, num_faces) pair.
+ *
+ * Maps the historical scalar parameters used across LLK call sites to a structured TensorShape:
+ * - num_faces == 1: 1x1 face grid (face_r_dim x 16)
+ * - num_faces == 2: 1x2 face grid (face_r_dim x 32)
+ * - num_faces == 4: 2x2 face grid (32x32)
+ *
+ * face_c_dim is always MAX_FACE_C_DIM (16) for HW.
+ */
+constexpr TensorShape make_tensor_shape_from_legacy(const std::uint8_t face_r_dim, const std::uint8_t num_faces)
+{
+    return TensorShape {face_r_dim, MAX_FACE_C_DIM, static_cast<std::uint8_t>(num_faces == 4 ? 2 : 1), static_cast<std::uint8_t>(num_faces == 1 ? 1 : 2)};
+}
+
+/**
  * @brief Validates tensor shape for operations that depend on face positioning within a tile.
  * Will start relaxing this constraint once we test larger tensor shapes.
  *

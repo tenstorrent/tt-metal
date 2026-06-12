@@ -86,3 +86,30 @@ def construct_tile_shape(tile_dimensions: Tuple[int, int] = (32, 32)) -> TileSha
         num_faces_r_dim=num_faces_r_dim,
         num_faces_c_dim=num_faces_c_dim,
     )
+
+
+def cpp_tensor_shape(tile_shape: TileShape) -> str:
+    """
+    Emit the C++ ``ckernel::TensorShape`` aggregate literal that matches ``tile_shape``.
+
+    Used by fuser code generators to construct the C++ TensorShape value
+    expected by LLK functions taking a ``ckernel::TensorShape`` parameter.
+    """
+    return (
+        "ckernel::make_tensor_shape("
+        f"{tile_shape.face_r_dim}, "
+        f"{tile_shape.face_c_dim}, "
+        f"{tile_shape.num_faces_r_dim}, "
+        f"{tile_shape.num_faces_c_dim})"
+    )
+
+
+def cpp_tensor_shape_from_legacy(face_r_dim: int, num_faces: int) -> str:
+    """
+    Emit a C++ ``ckernel::make_tensor_shape_from_legacy`` call string from legacy
+    scalar parameters (face_r_dim, total num_faces).
+
+    Mirrors the C++ helper of the same name for fuser code generators that only
+    have legacy scalar values available.
+    """
+    return f"ckernel::make_tensor_shape_from_legacy({face_r_dim}, {num_faces})"

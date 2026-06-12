@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "../../common/tensor_shape.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_globals.h"
@@ -32,7 +33,7 @@ using namespace ckernel::unpacker;
  * @tparam binary_reuse_dest: Reuse dest as a source operand, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
  * @tparam unpack_to_dest: Unpack directly into the dest register (32-bit datums).
  * @param transpose_of_faces: Whether faces are reordered (transposed) during the unpack.
- * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
+ * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim).
  * @param unpack_src_format: Source data format of the operand in L1.
  * @param unpack_dst_format: Destination data format the operand is converted to.
  */
@@ -42,14 +43,15 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest                          = false>
 inline void _llk_unpack_A_mop_config_(
-    const bool transpose_of_faces, const std::uint32_t num_faces, const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format = 0)
+    const bool transpose_of_faces, const ckernel::TensorShape tensor_shape, const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format = 0)
 {
     static_assert(
         !((BType != BroadcastType::NONE) && acc_to_dest && (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB)), "Not supported configuration!");
     static_assert(
         !(((acc_to_dest) || (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE)) && (unpack_to_dest)),
         "Not supported configuration when unpacking to dest!");
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+    const std::uint8_t num_faces = tensor_shape.total_num_faces();
 
     static constexpr std::uint32_t unpack_srca =
         TT_OP_UNPACR(SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
@@ -216,8 +218,7 @@ inline void _llk_unpack_A_mop_config_(
  * @tparam unpack_to_dest: Unpack directly into the dest register (32-bit datums).
  * @param transpose_of_faces: Nonzero to reorder (transpose) faces during the unpack.
  * @param within_face_16x16_transpose: Nonzero to enable the 16x16 within-face transpose (haloize mode).
- * @param face_r_dim: Number of rows per face.
- * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
+ * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim).
  * @param unpack_src_format: Source data format of the operand in L1.
  * @param unpack_dst_format: Destination data format the operand is converted to.
  * @note Call @ref _llk_unpack_A_uninit_ after this function to restore the modified datum-count state.
@@ -232,12 +233,13 @@ template <
 inline void _llk_unpack_A_init_(
     const std::uint32_t transpose_of_faces          = 0,
     const std::uint32_t within_face_16x16_transpose = 0,
-    const std::uint32_t face_r_dim                  = FACE_R_DIM,
-    const std::uint32_t num_faces                   = 4,
+    const ckernel::TensorShape tensor_shape         = ckernel::DEFAULT_TENSOR_SHAPE,
     const std::uint32_t unpack_src_format           = 0,
     const std::uint32_t unpack_dst_format           = 0)
 {
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+    const std::uint8_t face_r_dim = tensor_shape.face_r_dim;
+    const std::uint8_t num_faces  = tensor_shape.total_num_faces();
     LLK_ASSERT(BType != BroadcastType::COL || num_faces == 4, "Unary Broadcast Column requires num_faces == 4 (32x32 only)");
     LLK_ASSERT(transpose_of_faces == 0 || face_r_dim == 16, "Partial faces are not supported for transpose datacopy, face_r_dim must be 16 rows");
     LLK_ASSERT(transpose_of_faces == 0 || num_faces == 4 || num_faces == 1, "Transpose requires num_faces == 4 or 1 (32x32 and 16x16 only)");
@@ -262,7 +264,8 @@ inline void _llk_unpack_A_init_(
         config_unpacker_x_end<UNP_SEL>(face_r_dim);
     }
 
-    _llk_unpack_A_mop_config_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(transpose_of_faces > 0, num_faces, unpack_src_format, unpack_dst_format);
+    _llk_unpack_A_mop_config_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
+        transpose_of_faces > 0, tensor_shape, unpack_src_format, unpack_dst_format);
 }
 
 /**
@@ -353,12 +356,12 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
  * a full face worth of datums.
  *
  * @tparam BType: Broadcast type, values = <NONE/COL/ROW/SCALAR>
- * @param face_r_dim: Number of rows per face, used to compute the restored datum count.
+ * @param tensor_shape: Tensor shape describing tile dimensions; only face_r_dim/face_c_dim are read.
  * @note Call @ref _llk_unpack_A_init_ with matching template args before this function.
  */
 template <BroadcastType BType = BroadcastType::NONE>
-inline void _llk_unpack_A_uninit_(const std::uint32_t face_r_dim)
+inline void _llk_unpack_A_uninit_(const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
     constexpr std::uint32_t UNP_SEL = (BType == BroadcastType::NONE) ? p_setadc::UNP_A : p_setadc::UNP_AB;
-    TT_SETADCXX(UNP_SEL, face_r_dim * FACE_C_DIM - 1, 0x0);
+    TT_SETADCXX(UNP_SEL, tensor_shape.face_r_dim * tensor_shape.face_c_dim - 1, 0x0);
 }
