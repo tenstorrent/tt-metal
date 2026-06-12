@@ -35,7 +35,7 @@ from ..test_factory import hf_model_path, parametrize_mesh_with_fabric, requires
 
 
 @requires_hf_reference
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 8)], linear_fabric=True)
 @pytest.mark.parametrize("seq_len", [128], ids=["s128"])
 def test_attention_prefill_vs_hf(mesh_device, device_params, seq_len, reset_seeds):
     """Full attention block (QKV -> qk-norm -> partial RoPE -> SDPA -> o_proj) vs HF reference."""
@@ -61,7 +61,8 @@ def test_attention_prefill_vs_hf(mesh_device, device_params, seq_len, reset_seed
     # Uses the SAME production helper the real weight-load path uses.
     state = convert_hf_qkv_to_meta_format_partial(ref_attn.state_dict(), config.head_dim, config.rotary_dim)
     mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1], ep=mesh_device.shape[0]))
-    ccl_manager = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device))
+    # Linear topology: this Galaxy is a plain MESH (no torus). Harmless at TP=1.
+    ccl_manager = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device), topology=ttnn.Topology.Linear)
     rope_setup = create_rope_setup(mesh_device=mesh_device, hf_config=config, datatype=ttnn.bfloat16)
     trans_mats = rope_setup.get_both_trans_mats()
 

@@ -26,7 +26,7 @@ from models.demos.minimax_m2.utils.general_utils import get_default_num_links
 from ..test_factory import minimax_config_dims, parametrize_mesh_with_fabric
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 8)], linear_fabric=True)
 @pytest.mark.parametrize("seq_len", [128], ids=["s128"])
 def test_experts_prefill_vs_hf(mesh_device, device_params, seq_len, reset_seeds):
     cfg = minimax_config_dims()
@@ -55,7 +55,8 @@ def test_experts_prefill_vs_hf(mesh_device, device_params, seq_len, reset_seeds)
     # --- TT experts ---
     expert_config = ExpertConfig(intermediate_size=I, num_experts=E, hidden_size=H, num_experts_per_tok=K)
     mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1], ep=mesh_device.shape[0]))
-    ccl_manager = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device))
+    # Linear topology: this Galaxy is a plain MESH (no torus). Harmless at TP=1.
+    ccl_manager = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device), topology=ttnn.Topology.Linear)
 
     state = {}
     for e in range(E):

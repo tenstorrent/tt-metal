@@ -232,6 +232,7 @@ class ModelArgs:
             # Check if we have a cached torch_state_dict.pt file
             model = AutoModelForCausalLM.from_pretrained(
                 weights_path,
+                trust_remote_code=True,  # MiniMax-M2 ships its modeling code with the checkpoint
                 torch_dtype="auto"
                 # Note that the default setting is torch.dtype.float32, but model weights are
                 # may come in any dtype. If the model weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
