@@ -6,7 +6,7 @@ import torch
 import pytest
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp, assert_with_pcc
 
 pytestmark = pytest.mark.use_module_device
 
@@ -1552,3 +1552,40 @@ def test_bitwise_left_shift_subcore_grid_tensor_scalar(device, shape, sub_core_g
     result = ttnn.to_torch(result_tt)
 
     assert torch.equal(result, golden)
+
+
+# Mixed float x 32-bit-integer arithmetic used to bit-reinterpret the integer operand as float
+# (e.g. div(bf16, uint32) -> inf). The integer operand is now promoted to the floating compute dtype.
+@pytest.mark.parametrize("ttnn_op", [ttnn.div, ttnn.mul])
+@pytest.mark.parametrize("float_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("int_dtype", [ttnn.uint32, ttnn.int32])
+@pytest.mark.parametrize("int_on_lhs", [False, True])
+def test_mixed_float_int_promotion(device, ttnn_op, float_dtype, int_dtype, int_on_lhs):
+    torch.manual_seed(0)
+    float_torch = torch.rand((1, 1, 32, 32), dtype=torch.float32) * 4.0 + 1.0  # [1, 5]
+    int_torch = torch.randint(1, 50, (1, 1, 32, 32)).to(torch.int32)  # non-negative
+
+    float_tt = ttnn.from_torch(float_torch, dtype=float_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    int_tt = ttnn.from_torch(int_torch, dtype=int_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    if int_on_lhs:
+        lhs_torch, rhs_torch, lhs_tt, rhs_tt = int_torch.float(), float_torch, int_tt, float_tt
+    else:
+        lhs_torch, rhs_torch, lhs_tt, rhs_tt = float_torch, int_torch.float(), float_tt, int_tt
+
+    golden_fn = ttnn.get_golden_function(ttnn_op)
+    z_torch = golden_fn(lhs_torch, rhs_torch)
+
+    z_tt = ttnn_op(lhs_tt, rhs_tt)
+    tt_out = ttnn.to_torch(z_tt)
+
+    assert torch.isfinite(tt_out).all(), "mixed float/int op produced non-finite values"
+    # Output follows the promoted floating dtype, never the integer dtype.
+    expected_dtype = ttnn.float32 if float_dtype == ttnn.float32 else ttnn.bfloat16
+    assert z_tt.dtype == expected_dtype
+    assert_with_pcc(z_torch, tt_out, 0.999)
+    # The old bit-reinterpretation bug produced finite, constant-scale-wrong values that PCC alone
+    # would still rate near 1.0, so additionally bound the per-element relative error by magnitude.
+    rtol = 0.05 if expected_dtype == ttnn.bfloat16 else 0.01
+    rel_err = (tt_out.float() - z_torch.float()).abs() / z_torch.float().abs().clamp_min(1e-3)
+    assert rel_err.max() < rtol, f"max relative error {rel_err.max():.4g} exceeds {rtol}"

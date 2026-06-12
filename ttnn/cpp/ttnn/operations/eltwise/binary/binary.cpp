@@ -506,7 +506,41 @@ inline auto invoke_binary_ng_impl(
             TT_FATAL(temp_dtype == DataType::FLOAT32, "For integer division, supported output dtype is FLOAT32");
         }
     }
-    const auto out_dtype = output_preallocated ? output->dtype() : dtype.value_or(a_dtype);
+
+    // Mixed float x 32-bit-integer arithmetic: binary_ng has no value conversion for a mismatched
+    // integer operand, so its raw bits are reinterpreted as float when the integer CB is unpacked in
+    // fp32 mode, producing inf / garbage (e.g. div(bf16, uint32) -> inf). Promote the integer operand
+    // to the floating compute dtype, matching PyTorch type promotion and the existing UINT8->UINT16 and
+    // integer-division handling. Scoped to DIV/MUL, the arithmetic ops where this corruption occurs.
+    const auto is_32bit_int = [](DataType dt) { return dt == DataType::INT32 || dt == DataType::UINT32; };
+    const auto float_promote_target = [](DataType float_dtype) {
+        return float_dtype == DataType::FLOAT32 ? DataType::FLOAT32 : DataType::BFLOAT16;
+    };
+    std::optional<Tensor> lhs_promoted;
+    std::optional<Tensor> rhs_promoted;
+    if constexpr (requires { rhs.dtype(); }) {
+        const bool is_float_arith = (binary_op_type == operations::binary::BinaryOpType::DIV) ||
+                                    (binary_op_type == operations::binary::BinaryOpType::MUL);
+        if (is_float_arith) {
+            if (is_32bit_int(a_dtype) && tt::tt_metal::is_floating_point(b_dtype)) {
+                lhs_promoted = ttnn::typecast(lhs, float_promote_target(b_dtype));
+            } else if (is_32bit_int(b_dtype) && tt::tt_metal::is_floating_point(a_dtype)) {
+                rhs_promoted = ttnn::typecast(rhs, float_promote_target(a_dtype));
+            }
+        }
+    }
+    const Tensor& lhs_eff = lhs_promoted.has_value() ? *lhs_promoted : lhs;
+    decltype(auto) rhs_eff = [&]() -> decltype(auto) {
+        if constexpr (requires { rhs.dtype(); }) {
+            return (rhs_promoted.has_value() ? *rhs_promoted : rhs);
+        } else {
+            return (rhs);
+        }
+    }();
+
+    // When an integer operand is promoted and no explicit output dtype is requested, the result should
+    // follow the promoted (floating) type rather than the original integer dtype of lhs.
+    const auto out_dtype = output_preallocated ? output->dtype() : dtype.value_or(lhs_eff.dtype());
 
     if (dtype.has_value() && output_preallocated) {
         TT_FATAL(*dtype == out_dtype, "If both output dtype and output tensor are provided, their dtypes should match");
@@ -514,12 +548,12 @@ inline auto invoke_binary_ng_impl(
 
     // RM is never BFLOAT8 or BFLOAT4 so we can assume it goes in here.
 
-    const auto input_a_rm = operations::binary::detail::is_layout_or_scalar(lhs, Layout::ROW_MAJOR);
-    const auto input_b_rm = operations::binary::detail::is_layout_or_scalar(rhs, Layout::ROW_MAJOR);
-    const auto input_a_sharded = lhs.memory_config().is_sharded();
+    const auto input_a_rm = operations::binary::detail::is_layout_or_scalar(lhs_eff, Layout::ROW_MAJOR);
+    const auto input_b_rm = operations::binary::detail::is_layout_or_scalar(rhs_eff, Layout::ROW_MAJOR);
+    const auto input_a_sharded = lhs_eff.memory_config().is_sharded();
     const auto input_b_sharded = [&]() {
-        if constexpr (requires { rhs.memory_config(); }) {
-            return rhs.memory_config().is_sharded();
+        if constexpr (requires { rhs_eff.memory_config(); }) {
+            return rhs_eff.memory_config().is_sharded();
         } else {
             return false;
         }
@@ -530,8 +564,8 @@ inline auto invoke_binary_ng_impl(
         "Optional output tensor with Row Major input is not supported right now for Elementwise operations");
     if (input_a_rm and input_b_rm and not input_a_sharded and not input_b_sharded) {
         auto result = ttnn::prim::binary_ng(
-            lhs,
-            rhs,
+            lhs_eff,
+            rhs_eff,
             binary_op_type,
             out_dtype,
             memory_config,
@@ -547,8 +581,8 @@ inline auto invoke_binary_ng_impl(
         return result;
     }
     // Either one or both are tiles
-    const auto input_a = operations::binary::detail::to_layout(lhs, Layout::TILE);
-    const auto input_b = operations::binary::detail::to_layout(rhs, Layout::TILE);
+    const auto input_a = operations::binary::detail::to_layout(lhs_eff, Layout::TILE);
+    const auto input_b = operations::binary::detail::to_layout(rhs_eff, Layout::TILE);
 
     auto result = ttnn::prim::binary_ng(
         input_a,
