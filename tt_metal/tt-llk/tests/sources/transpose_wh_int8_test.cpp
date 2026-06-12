@@ -3,8 +3,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Faithful reproduction of the transpose_wh i8 path after the format-driven
-// A2D reconstruct decision moved into the LLK datacopy init boundary:
+// Faithful reproduction of the compute-API transpose_wh i8 path:
 // the full 32x32 transpose is performed in the UNPACKER (transpose_of_faces +
 // within_face_16x16_transpose / haloize), and the math thread only does the
 // A2D datacopy that reconstructs the Int8 register datum into DEST. There is no
@@ -56,7 +55,8 @@ using namespace ckernel;
 template <bool is_fp32_dest_acc_en>
 void init_transpose_wh_a2d_datacopy(const std::uint32_t num_faces, const std::uint32_t src_format, const std::uint32_t dst_format)
 {
-    const bool needs_int_fpu = masked_data_format(src_format) == to_underlying(DataFormat::Int8);
+    // Low-nibble compare intentionally matches both signed Int8 and unsigned UInt8, mirroring transpose_wh.
+    const bool needs_int_fpu = (src_format & 0xf) == to_underlying(DataFormat::Int8);
     if (needs_int_fpu)
     {
         _llk_math_eltwise_unary_datacopy_init_wrapper_<
@@ -83,9 +83,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 
-    // Mirror the LLK API boundary locally so this test can keep passing explicit
-    // runtime formats without adding transpose_wh-specific inference helpers to
-    // the shared LLK test wrapper surface.
+    // Mirror transpose_wh locally so this test can keep passing explicit runtime
+    // formats without adding transpose_wh-specific helpers to the shared LLK
+    // wrapper surface.
     init_transpose_wh_a2d_datacopy<is_fp32_dest_acc_en>(params.num_faces, formats.unpack_A_src, formats.math);
 
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
