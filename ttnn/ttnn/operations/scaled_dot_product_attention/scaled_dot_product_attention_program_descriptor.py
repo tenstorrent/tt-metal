@@ -28,6 +28,7 @@ CB_Q_IN = 0
 CB_K_IN = 1
 CB_V_IN = 2
 CB_MASK_IN = 3
+CB_CAUSAL_MASK = 7  # on-device triangular bias (causal only); reader-filled once
 CB_SCALE = 8
 CB_SCALER_MAX = 9
 CB_SCALER_SUM = 15
@@ -57,6 +58,7 @@ def create_program_descriptor(
     output_tensor: ttnn.Tensor,
     *,
     scale: float,
+    is_causal: bool = False,
     compute_kernel_config=None,
 ) -> ttnn.ProgramDescriptor:
     device = query.device()
@@ -179,11 +181,21 @@ def create_program_descriptor(
     ]
     if has_mask:
         cbs.append(cb(CB_MASK_IN, 2))  # mask block: input dtype (see note above)
+    if is_causal:
+        # On-device triangular bias. q_chunk_t == k_chunk_t == 1 and causal
+        # requires S_q == S_kv, so the diagonal-straddling block is always
+        # j == qi and its per-element mask (element (r,c) = 0 if c <= r else
+        # -inf) is the SAME constant tile for every work unit. The reader
+        # generates it once into this CB; the compute adds it to the score
+        # block only on the diagonal KV block. bf16 is exact for {0, -inf} and
+        # mirrors the cb_scale format (a bf16 second operand to an fp32 score
+        # block — same mixed-format add as the scale mul).
+        cbs.append(cb(CB_CAUSAL_MASK, 1, ttnn.bfloat16))
 
     # --- Reader CT args ---
     # h is H_q (Q/output heads); h_kv is the K/V head count. For GQA/MQA the
     # reader remaps each Q head to KV head h_q // (H_q / h_kv). MHA → h_kv == h.
-    reader_ct = [D_t, S_q_t, S_kv_t, h, mask_h, 1 if has_mask else 0, _f32_bits(scale), h_kv]
+    reader_ct = [D_t, S_q_t, S_kv_t, h, mask_h, 1 if has_mask else 0, _f32_bits(scale), h_kv, 1 if is_causal else 0]
     reader_ct.extend(ttnn.TensorAccessorArgs(query).get_compile_time_args())
     reader_ct.extend(ttnn.TensorAccessorArgs(key).get_compile_time_args())
     reader_ct.extend(ttnn.TensorAccessorArgs(value).get_compile_time_args())
@@ -198,7 +210,10 @@ def create_program_descriptor(
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
     # --- Compute CT args ---
-    compute_ct = [D_t, S_kv_t, 1 if has_mask else 0]
+    # is_causal + S_q_t let the compute kernel decode qi = (start_unit+u) % S_q_t
+    # and (a) cap the KV loop at j <= qi (skip whole-future blocks) and (b) add
+    # the on-device triangular bias on the diagonal block j == qi.
+    compute_ct = [D_t, S_kv_t, 1 if has_mask else 0, 1 if is_causal else 0, S_q_t]
 
     q_addr = query.buffer_address()
     k_addr = key.buffer_address()
@@ -215,7 +230,7 @@ def create_program_descriptor(
         n = base + (1 if i < rem else 0)
         reader_rt[c.x][c.y] = [q_addr, k_addr, v_addr, mask_addr, start, n]
         writer_rt[c.x][c.y] = [out_addr, start, n]
-        compute_rt[c.x][c.y] = [n]
+        compute_rt[c.x][c.y] = [n, start]
         start += n
 
     reader_kernel = ttnn.KernelDescriptor(

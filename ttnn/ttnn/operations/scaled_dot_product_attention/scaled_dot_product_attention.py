@@ -74,7 +74,7 @@ SUPPORTED = {
     "alignment": ["tile_aligned"],
     "attention_kind": ["self", "cross"],
     "kv_heads_mode": ["mha", "gqa", "mqa"],
-    "mask_mode": ["none", "custom"],
+    "mask_mode": ["none", "custom", "causal"],
     "scale_mode": ["auto", "explicit"],
 }
 
@@ -83,7 +83,15 @@ SUPPORTED = {
 # 3. EXCLUSIONS — cells inside cartesian(SUPPORTED) refused for now
 # ---------------------------------------------------------------------------
 
-EXCLUSIONS = []
+EXCLUSIONS = [
+    # Causal masking generates an on-device upper-triangular bias from the
+    # diagonal-block position (element (r,c) masked iff c > r) and skips the
+    # whole-future KV blocks. Both assume a square score matrix (S_q == S_kv),
+    # i.e. decoder self-attention. A rectangular S_q x S_kv causal mask is
+    # mathematically well-defined but corresponds to no real workload and the
+    # on-device generation path would be wrong for it — refuse it explicitly.
+    {"mask_mode": "causal", "attention_kind": "cross"},
+]
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +214,14 @@ def scaled_dot_product_attention(
     )
 
     program_descriptor = create_program_descriptor(
-        query, key, value, attn_mask, output_tensor, scale=scale, compute_kernel_config=compute_kernel_config
+        query,
+        key,
+        value,
+        attn_mask,
+        output_tensor,
+        scale=scale,
+        is_causal=is_causal,
+        compute_kernel_config=compute_kernel_config,
     )
 
     io_tensors = [query, key, value]

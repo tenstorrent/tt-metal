@@ -33,13 +33,14 @@ void kernel_main() {
     constexpr bool has_mask = get_compile_time_arg_val(5) != 0;
     constexpr uint32_t scale_bits = get_compile_time_arg_val(6);
     constexpr uint32_t H_kv = get_compile_time_arg_val(7);  // K/V heads (== H for MHA)
+    constexpr bool is_causal = get_compile_time_arg_val(8) != 0;
 
     // GQA/MQA head broadcast: each Q head h maps to KV head h / group, where
     // group = H_q / H_kv (== 1 for MHA, == H_q for MQA). H % H_kv == 0 is
     // enforced in validate(), so this is exact integer division.
     constexpr uint32_t kv_group = H / H_kv;
 
-    constexpr auto q_args = TensorAccessorArgs<8>();
+    constexpr auto q_args = TensorAccessorArgs<9>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -55,6 +56,7 @@ void kernel_main() {
     constexpr uint32_t cb_k_in = 1;
     constexpr uint32_t cb_v_in = 2;
     constexpr uint32_t cb_mask_in = 3;
+    constexpr uint32_t cb_causal_mask = 7;
     constexpr uint32_t cb_scale = 8;
     constexpr uint32_t cb_scaler_max = 9;
     constexpr uint32_t cb_scaler_sum = 15;
@@ -67,6 +69,31 @@ void kernel_main() {
         1.0f);
     dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler_sum, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
         1.0f);
+
+    // On-device causal triangular bias (causal only). q_chunk_t == k_chunk_t
+    // == 1 and causal requires S_q == S_kv, so the diagonal-straddling KV block
+    // is always j == qi and its per-element mask is a single CONSTANT tile,
+    // identical for every work unit: element (r,c) = 0 if c <= r (attend) else
+    // -inf (future key). Generated once here and held in cb_causal_mask for the
+    // whole kernel; the compute kernel adds it to the score block only on the
+    // diagonal block. The 32x32 tile is stored as 4 row-major 16x16 faces
+    // (order [tl,tr,bl,br]); we honor that face layout so the bytes match a
+    // TILE-layout DRAM mask read (the already-validated custom-mask path uses
+    // the identical -inf triangular pattern).
+    if constexpr (is_causal) {
+        constexpr uint16_t BF16_ZERO = 0x0000;
+        constexpr uint16_t BF16_NEG_INF = 0xFF80;  // top 16 bits of fp32 -inf (0xFF800000)
+        cb_reserve_back(cb_causal_mask, 1);
+        volatile tt_l1_ptr uint16_t* m = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_causal_mask));
+        for (uint32_t r = 0; r < 32; ++r) {
+            for (uint32_t c = 0; c < 32; ++c) {
+                const uint32_t face = (r >> 4) * 2 + (c >> 4);     // 0=tl 1=tr 2=bl 3=br
+                const uint32_t within = (r & 15) * 16 + (c & 15);  // row-major within 16x16 face
+                m[face * 256 + within] = (c <= r) ? BF16_ZERO : BF16_NEG_INF;
+            }
+        }
+        cb_push_back(cb_causal_mask, 1);
+    }
 
     const uint32_t tile_bytes = get_tile_size(cb_q_in);
 
@@ -96,7 +123,12 @@ void kernel_main() {
 
         const uint32_t h_kv = h / kv_group;  // K/V head feeding this Q head
 
-        for (uint32_t j = 0; j < S_kv_t; ++j) {
+        // Causal: KV blocks j > qi are entirely in the future (all key
+        // positions exceed all query positions in this Q-block) → masked out,
+        // so we never read/stream them. This is the ~half-KV-work causal win
+        // and keeps cb_k_in/cb_v_in push counts equal to compute's wait counts.
+        const uint32_t kv_blocks = is_causal ? (qi + 1) : S_kv_t;
+        for (uint32_t j = 0; j < kv_blocks; ++j) {
             const uint32_t kv_base = ((b * H_kv + h_kv) * S_kv_t + j) * D_t;
 
             // K block

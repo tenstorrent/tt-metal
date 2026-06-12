@@ -12,7 +12,8 @@
 // Recurrence over KV blocks j:
 //   S      = Q . Kᵀ           (matmul_block, transpose)
 //   S     *= scale            (mul, Scalar bcast)
-//   S     += M_ij             (add, custom mask only)
+//   S     += M_ij             (add, custom mask; or on-device triangular bias
+//                              on the diagonal block when is_causal)
 //   m_blk  = rowmax(S)        (reduce MAX REDUCE_ROW)
 //   m_new  = max(m_prev,m_blk)(binary_sfpu BinaryMax)   [j>0]
 //   corr   = exp(m_prev-m_new)(sub+exp chain)           [j>0]
@@ -57,6 +58,7 @@ constexpr uint32_t cb_q_in = 0;
 constexpr uint32_t cb_k_in = 1;
 constexpr uint32_t cb_v_in = 2;
 constexpr uint32_t cb_mask_in = 3;
+constexpr uint32_t cb_causal_mask = 7;  // on-device triangular bias (causal only)
 constexpr uint32_t cb_scale = 8;
 constexpr uint32_t cb_scaler_max = 9;
 constexpr uint32_t cb_scaler_sum = 15;
@@ -83,8 +85,11 @@ void kernel_main() {
     constexpr uint32_t D_t = get_compile_time_arg_val(0);
     constexpr uint32_t num_kv_blocks = get_compile_time_arg_val(1);
     constexpr bool has_mask = get_compile_time_arg_val(2) != 0;
+    constexpr bool is_causal = get_compile_time_arg_val(3) != 0;
+    constexpr uint32_t S_q_t = get_compile_time_arg_val(4);
 
     const uint32_t num_units = get_arg_val<uint32_t>(0);
+    const uint32_t start_unit = get_arg_val<uint32_t>(1);
 
     // Boot: single hw_configure-bearing matmul init. matmul_block's Short init
     // (default) handles all subsequent matmul re-inits; reduce/eltwise helpers
@@ -124,7 +129,14 @@ void kernel_main() {
     constexpr auto reduce_shape = ckl::ReduceInputBlockShape::of(Q_CHUNK_T, K_CHUNK_T);
 
     for (uint32_t u = 0; u < num_units; ++u) {
-        for (uint32_t j = 0; j < num_kv_blocks; ++j) {
+        // Causal: this work unit owns Q tile-row qi (= global unit index mod
+        // S_q_t). Only KV blocks j in [0, qi] are processed — j > qi is the
+        // whole-future region (skipped, not read by the reader either) and
+        // j == qi is the diagonal block that gets the on-device triangular bias.
+        const uint32_t qi = is_causal ? ((start_unit + u) % S_q_t) : 0;
+        const uint32_t kv_blocks = is_causal ? (qi + 1) : num_kv_blocks;
+
+        for (uint32_t j = 0; j < kv_blocks; ++j) {
             const bool first = (j == 0);
 
             // ---- C: S = Q . Kᵀ  (Q retained across the KV loop, K popped) ----
@@ -156,6 +168,23 @@ void kernel_main() {
                     BroadcastDim::None,
                     InputLifecycle::Streaming,
                     InputLifecycle::Streaming>(K_CHUNK_T);
+            }
+
+            // ---- E (causal): S += triangular bias on the diagonal block ----
+            // Past blocks (j < qi) are fully attended (no mask). Future blocks
+            // (j > qi) are never reached (skipped by kv_blocks). Only the
+            // diagonal block j == qi gets the constant upper-triangular -inf
+            // bias from cb_causal_mask (HeldStream: filled once, never popped).
+            if constexpr (is_causal) {
+                if (j == qi) {
+                    ckl::add<
+                        cb_qk,
+                        cb_causal_mask,
+                        cb_qk,
+                        BroadcastDim::None,
+                        InputLifecycle::Streaming,
+                        InputLifecycle::HeldStream>(K_CHUNK_T);
+                }
             }
 
             // ---- G: m_blk = rowmax(S)  (cb_qk retained for the P subtract) ----
