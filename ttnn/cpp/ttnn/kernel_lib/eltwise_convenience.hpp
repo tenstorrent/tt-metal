@@ -20,6 +20,7 @@
  *     unary<Exp<>, dfb_in, dfb_out>(n);                           // exp(x)
  *     binary_sfpu<DivBinary<>, dfb_a, dfb_b, dfb_out>(n);         // a / b (SFPU)
  *     copy<dfb_in, dfb_out>(n);
+ *     transform_in_place<dfb_acc>(Ht, AddUnary<>{eps_bits}, Rsqrt<>{});  // in-place finalizer
  *
  * The shape argument is an `EltwiseShape` (implicitly built from a plain `uint32_t` tile
  * count), so both `op<...>(n_tiles)` and `op<...>(EltwiseShape::grid(Ht, Wt))` work.
@@ -194,6 +195,50 @@ template <
     PackTileReconfig OutReconfig = PackTileReconfig::Output>
 ALWI void unary_bcast(EltwiseShape shape) {
     eltwise_chain(shape, UnaryBcast<Dim, CbIn, Life, Reconfig>{}, PackTile<CbOut, OutLife, OutReconfig>{});
+}
+
+// ---------------------------------------------------------------------------
+// In-place SFPU transform — CopyTile(D0) -> Ops... -> PackTile(D0) on ONE CB.
+//
+// This is the eltwise-chain replacement for streaming_reduce_helpers' lambda-based
+// `transform_in_place`. Instead of a runtime lambda issuing init+op pairs against DST,
+// the SFPU ops are passed as constructed chain elements, so runtime-scalar ops compose
+// (e.g. a rsqrt-with-eps finalizer is `AddUnary<>{eps_bits}, Rsqrt<>{}`). Every op acts
+// on DST[0]; pass them already constructed because scalar ops carry their parameter as a
+// constructor argument:
+//
+//     transform_in_place<cb_acc>(EltwiseShape::single(), AddUnary<>{eps_bits}, Rsqrt<>{});
+//     transform_in_place<cb_acc>(Ht, MulUnary<>{scale_bits});   // N-tile / row accumulator
+//
+// In-place is correct because the chain pops the input in the compute phase BEFORE the
+// pack phase reserves the output, so a 1-page CB is sufficient — the same pop-before-
+// reserve ordering the hand-rolled helper used, and the same SRCA<-cb / packer<-cb
+// reconfig (CopyTileReconfig::Input + PackTileReconfig::Output by default).
+//
+// Lifecycle is fixed to Streaming on both sides (the chain owns wait/pop on the input and
+// reserve/push on the output, one tile per iter) and the read is a Scalar front-relative
+// index — the only configurable levers are the two reconfig knobs. Drop to `eltwise_chain`
+// directly for anything outside this shape (held operands, block indexing, etc.).
+//
+// The shape argument is the only required runtime arg (an `EltwiseShape`, implicitly built
+// from a bare tile count). Like the rest of this header, no engine-wide init is emitted —
+// the caller owns `compute_kernel_hw_startup(...)`.
+// ---------------------------------------------------------------------------
+template <
+    uint32_t Cb,
+    CopyTileReconfig Reconfig = CopyTileReconfig::Input,
+    PackTileReconfig OutReconfig = PackTileReconfig::Output,
+    class... Ops>
+ALWI void transform_in_place(EltwiseShape shape, Ops... ops) {
+    static_assert(sizeof...(Ops) >= 1, "transform_in_place: pass at least one SFPU op element");
+    static_assert(
+        (is_dest_only_op_v<Ops> && ...),
+        "transform_in_place: every op must be a DEST-only SFPU element (e.g. Rsqrt<>, AddUnary<>)");
+    eltwise_chain(
+        shape,
+        CopyTile<Cb, Dst::D0, InputLifecycle::Streaming, Reconfig, OperandKind::Scalar>{},
+        ops...,
+        PackTile<Cb, OutputLifecycle::Streaming, OutReconfig>{});
 }
 
 }  // namespace compute_kernel_lib
