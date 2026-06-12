@@ -1129,6 +1129,12 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                         std::memcpy(dfb_config_vec.data() + offset, serialized.data(), serialized.size());
                         offset += serialized.size();
                     }
+                    // write_to_device transfers whole 32-bit words and silently drops a trailing partial
+                    // word. When the serialized blob size isn't a multiple of 4, this loses the final bytes
+                    // of the last per-risc struct (e.g. the producer's remapper_consumer_ids_mask /
+                    // producer_client_type), leaving the remapper with no clientR targets. Pad to a whole
+                    // word so every byte lands; the reserved L1 region is already L1-aligned, so there is room.
+                    dfb_config_vec.resize(tt::align(dfb_config_vec.size(), sizeof(uint32_t)), 0);
                     uint64_t addr = kernel_config_base + program.impl().get_program_config(index).dfb_offset;
                     log_info(
                         tt::LogMetal,
