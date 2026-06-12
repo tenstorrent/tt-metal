@@ -38,7 +38,7 @@ TT_VISIBLE_DEVICES=0 TT_VADV2_TIMING=1 TT_VADV2_WARM_ITERS=2 \
 
 Measured on Blackhole p150b with the command above.
 
-- Warm wall (anchor `call#3`): **~808 ms** (sub-1-second).
+- Warm wall (anchor `call#3`): **~771 ms** (sub-1-second).
 - Cold wall (`call#1`, includes JIT compile + first-touch): ~7030 ms.
 - PCC: all 9 output keys (`bev_embed`, `all_cls_scores`, `all_bbox_preds`,
   `all_traj_preds`, `all_traj_cls_scores`, `map_all_cls_scores`,
@@ -50,6 +50,14 @@ The `num_levels==1` MSDA path routes through the fused
 sum in one kernel) when `N*Q` clears an amortization threshold; this was the
 last large lever (warm wall 989 → 808 ms) since the BEV encoder runs
 `Q=10000`. Smaller shapes fall back to the decomposed grid_sample chain.
+
+The motion/map decoder multi-head attention runs batched matmuls with a
+large batch (`bsz * num_heads`, up to ~14400) but a single query row, which
+ttnn's matmul heuristic collapses onto one core. `TtMultiheadAttention`
+passes an explicit `core_grid` for that regime so the batches spread across
+the full grid (`q@kᵀ` and `attn@v`: 1 → 130 cores), dropping warm matmul
+device time 47.3 → 15.5 ms and warm wall 808 → 771 ms with bit-identical
+output.
 
 ### Known follow-ups
 

@@ -7,6 +7,27 @@ import math
 from models.experimental.vadv2.tt.matmul_helpers import linear_flatten_batch
 
 
+def _batched_mm_core_grid(B, Nt, device):
+    """Pick a core grid for a batched (B, Nt, *) matmul.
+
+    When a batched matmul has many independent batches but a tiny per-batch
+    problem (few query rows), ttnn's matmul heuristic collapses the whole op
+    onto a single core. The motion/map decoders hit this: B = bsz*num_heads
+    can be ~14000 with Nt == 1, so q@kᵀ and attn@v each run ~14 ms on one
+    core. Spreading the batches across the grid drops that to ~0.25 ms with no
+    change to the math (each core owns whole batches; the contraction is not
+    split across cores). Large per-batch problems (e.g. DETR self-attn with
+    Nt~900) already parallelize, so leave those to the heuristic.
+    """
+    if B < 64 or Nt > 8:
+        return None
+    cg = device.core_grid
+    n = min(B, cg.x * cg.y)
+    x = min(cg.x, n)
+    y = max(1, min(cg.y, n // x))
+    return ttnn.CoreGrid(y=y, x=x)
+
+
 class TtMultiheadAttention:
     def __init__(
         self,
@@ -123,15 +144,18 @@ class TtMultiheadAttention:
         q_scaled = query * math.sqrt(1.0 / float(E))
         key_transposed = ttnn.permute(key, (0, 2, 1))
 
+        mm_core_grid = _batched_mm_core_grid(B, Nt, self.device)
+        mm_kw = {"core_grid": mm_core_grid} if mm_core_grid is not None else {}
+
         if attn_mask is not None:
-            attn_output_weights = ttnn.matmul(q_scaled, key_transposed)
+            attn_output_weights = ttnn.matmul(q_scaled, key_transposed, **mm_kw)
             attn_output_weights = attn_output_weights + attn_mask
         else:
-            attn_output_weights = ttnn.matmul(q_scaled, key_transposed)
+            attn_output_weights = ttnn.matmul(q_scaled, key_transposed, **mm_kw)
 
         attn_output_weights = ttnn.softmax(attn_output_weights, dim=-1)
 
-        attn_output = ttnn.matmul(attn_output_weights, value)
+        attn_output = ttnn.matmul(attn_output_weights, value, **mm_kw)
 
         attn_output = ttnn.permute(attn_output, (1, 0, 2))
         attn_output = ttnn.reshape(attn_output, (tgt_len * bsz, embed_dim))
