@@ -711,11 +711,7 @@ def test_wan_patch_embed(
 )
 @pytest.mark.parametrize(
     "mesh_device, num_links",
-    [
-        pytest.param((2, 4), 1, marks=pytest.mark.skip(reason="Disabled on wh_llmbox (t3k, 2x4 wormhole mesh): see #46554")),
-        [(4, 8), 4],
-        [(4, 8), 2],
-    ],
+    [[(2, 4), 1], [(4, 8), 4], [(4, 8), 2]],
     ids=["t3k", "wh_glx", "bh_glx"],
     indirect=["mesh_device"],
 )
