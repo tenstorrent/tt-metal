@@ -36,3 +36,5 @@ def test_voxtral_audio_tokenizer_opt(voxtral_runtime_mesh_device, reset_seeds):
     )
     assert result.timed_frames >= 1
     assert result.wav_shape[0] == 1
+    if result.waveform_pcc is not None:
+        print(f"\n[test_audio_tokenizer_opt] waveform PCC vs CPU golden: {result.waveform_pcc:.6f}\n")
