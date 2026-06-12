@@ -38,6 +38,14 @@ struct FormatParams {
     uint32_t elem_sat_neg_bits = 0;
     InfNanRepresentation inf_rep = InfNanRepresentation::NotRepresentable;
     InfNanRepresentation nan_rep = InfNanRepresentation::NotRepresentable;
+    // MX integer-format (MxInt2/4/8) parameters. Unused by the floating-point MX
+    // formats (which leave is_integer=false). When is_integer is true the element
+    // is a signed two's-complement integer of width elem_width_bits with an
+    // implicit scale of 1/elem_int_scale; the shared block scale (E8M0) is applied
+    // on top. elem_int_max is the symmetric clamp magnitude.
+    bool is_integer = false;
+    uint32_t elem_int_scale = 0;  // round(scaled * elem_int_scale): 64 (MxInt8), 4 (MxInt4), 1 (MxInt2)
+    int elem_int_max = 0;         // symmetric clamp: 127 (MxInt8), 7 (MxInt4), 1 (MxInt2)
 };
 
 struct RoundResult {
