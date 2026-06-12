@@ -731,10 +731,9 @@ void verify_metadata_reuse(
 }
 
 // ===========================================================================
-// Part A: real receiver consumer (D2D -> Host). A consumer worker reads its page
-// slice of the receiver backing tensor into a SEPARATE output tensor; the host
-// validates the output tensor (not the backing tensor). See
-// notes/d2d_test_flow_vs_realistic_workload.md.
+// Receiver consumer workload builder. A consumer worker reads its page slice of
+// the receiver backing tensor into a SEPARATE output tensor. Used by the H2D
+// bridge tests (Part B) below.
 // ===========================================================================
 
 // Row-major worker index within a CoreRange (robust to iterator order).
@@ -834,93 +833,11 @@ void expect_output_tensor_iota(
     }
 }
 
-// Part A driver: real consumer end-to-end (no H2D). The existing placeholder
-// sender worker produces value (fill_base + iter) into the sender backing tensor;
-// the receiver consumer copies the landed data into a separate output tensor. The
-// final value (fill_base + num_iters - 1) must appear in the output tensor on
-// every coord. With metadata enabled, the {-1,0,final} blob must also land on the
-// sender service core and every receiver worker core.
-void verify_receiver_consume(
-    const std::shared_ptr<MeshDevice>& sender_mesh,
-    const std::shared_ptr<MeshDevice>& receiver_mesh,
-    const ttnn::Shape& global_shape,
-    const CoreRange& worker_cores,
-    uint32_t num_iters,
-    uint32_t metadata_size_bytes = 0) {
-    constexpr uint32_t kFillBase = 1u;
-    auto cfg = make_config(sender_mesh, global_shape);
-    cfg.sender_worker_cores = worker_cores;
-    cfg.receiver_worker_cores = worker_cores;
-    cfg.metadata_size_bytes = metadata_size_bytes;
-    auto [sender, receiver] = D2DStreamService::create_pair(sender_mesh, receiver_mesh, std::move(cfg));
-
-    auto output_tensor = tt::tt_metal::create_device_tensor(
-        receiver->get_backing_tensor().tensor_spec(),
-        receiver_mesh.get(),
-        receiver->get_backing_tensor().tensor_topology());
-
-    auto consumer_workload = make_receiver_consumer_workload(receiver.get(), receiver_mesh, output_tensor, num_iters);
-    auto sender_workload =
-        make_sender_worker_workload(sender.get(), sender_mesh, num_iters, kFillBase, metadata_size_bytes);
-
-    EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(), consumer_workload, /*blocking=*/false);
-    EnqueueMeshWorkload(sender_mesh->mesh_command_queue(), sender_workload, /*blocking=*/false);
-    Finish(sender_mesh->mesh_command_queue());
-    Finish(receiver_mesh->mesh_command_queue());
-
-    const uint32_t final_value = kFillBase + num_iters - 1;
-    expect_output_tensor_iota(output_tensor, receiver_mesh, final_value);
-    if (metadata_size_bytes > 0) {
-        expect_metadata_everywhere(
-            sender.get(), receiver.get(), sender_mesh, receiver_mesh, {static_cast<uint32_t>(-1), 0u, final_value});
-    }
-}
-
-// Part A reuse: build the pair once, drive num_rounds single-transfer rounds with
-// distinct seeds against the same persistent service + a reused output tensor,
-// verifying each round. Catches early kernel exit / stale-buffer reuse.
-void verify_receiver_consume_reuse(
-    const std::shared_ptr<MeshDevice>& sender_mesh,
-    const std::shared_ptr<MeshDevice>& receiver_mesh,
-    const ttnn::Shape& global_shape,
-    const CoreRange& worker_cores,
-    uint32_t num_rounds,
-    uint32_t metadata_size_bytes = 0) {
-    auto cfg = make_config(sender_mesh, global_shape);
-    cfg.sender_worker_cores = worker_cores;
-    cfg.receiver_worker_cores = worker_cores;
-    cfg.metadata_size_bytes = metadata_size_bytes;
-    auto [sender, receiver] = D2DStreamService::create_pair(sender_mesh, receiver_mesh, std::move(cfg));
-
-    auto output_tensor = tt::tt_metal::create_device_tensor(
-        receiver->get_backing_tensor().tensor_spec(),
-        receiver_mesh.get(),
-        receiver->get_backing_tensor().tensor_topology());
-
-    for (uint32_t round = 0; round < num_rounds; ++round) {
-        const uint32_t seed = 0x1000u + round * 0x111u;
-        auto consumer_workload =
-            make_receiver_consumer_workload(receiver.get(), receiver_mesh, output_tensor, /*num_iters=*/1);
-        auto sender_workload = make_sender_worker_workload(
-            sender.get(), sender_mesh, /*num_iters=*/1, /*fill_base=*/seed, metadata_size_bytes);
-        EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(), consumer_workload, /*blocking=*/false);
-        EnqueueMeshWorkload(sender_mesh->mesh_command_queue(), sender_workload, /*blocking=*/false);
-        Finish(sender_mesh->mesh_command_queue());
-        Finish(receiver_mesh->mesh_command_queue());
-
-        expect_output_tensor_iota(output_tensor, receiver_mesh, seed);
-        if (metadata_size_bytes > 0) {
-            expect_metadata_everywhere(
-                sender.get(), receiver.get(), sender_mesh, receiver_mesh, {static_cast<uint32_t>(-1), 0u, seed});
-        }
-    }
-}
-
 // ===========================================================================
 // Part B: H2D front-end (Host -> H2D -> bridge -> D2D -> Host). A bridge worker on
 // the sender mesh drains the H2D backing tensor into the D2D sender backing tensor
-// and drives both handshakes; the receiver consumer (Part A) lands the result in
-// an output tensor the host validates.
+// and drives both handshakes; the receiver consumer lands the result in an output
+// tensor the host validates.
 // ===========================================================================
 
 // Build the bridge worker workload on the sender mesh: one program per coord. Each
@@ -1566,121 +1483,6 @@ TEST_F(D2DStreamServiceTest, MetadataReuse4Cores) {
     auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
     verify_metadata_reuse(
         sender_mesh, receiver_mesh, fixed_per_core_shape(kWorkerCores4), kWorkerCores4, /*num_rounds=*/4);
-}
-
-// ===========================================================================
-// Part A tests: real receiver consumer (D2D -> Host).
-// ===========================================================================
-
-// Single worker core: the consumer copies the whole landed tensor into the output
-// tensor over several iterations.
-TEST_F(D2DStreamServiceTest, ReceiverConsume1Core) {
-    if (!service_cores_supported()) {
-        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
-    }
-    const auto shape = this->mesh_device_->shape();
-    if (shape.dims() != 2 || this->mesh_device_->num_devices() < 2) {
-        GTEST_SKIP() << "Need a 2D mesh with >= 2 devices to carve distinct submeshes; got " << shape;
-    }
-    const auto coord0 = MeshCoordinate(0, 0);
-    const auto coord1 = (shape[1] >= 2) ? MeshCoordinate(0, 1) : MeshCoordinate(1, 0);
-    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
-    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
-    verify_receiver_consume(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), kWorkerCores, /*num_iters=*/4);
-}
-
-// 4 cores with a page count NOT divisible by 4 (30 pages) to exercise the
-// partition remainder branch (first 2 workers carry one extra page).
-TEST_F(D2DStreamServiceTest, ReceiverConsume4Cores) {
-    if (!service_cores_supported()) {
-        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
-    }
-    const auto shape = this->mesh_device_->shape();
-    if (shape.dims() != 2 || this->mesh_device_->num_devices() < 2) {
-        GTEST_SKIP() << "Need a 2D mesh with >= 2 devices to carve distinct submeshes; got " << shape;
-    }
-    const auto coord0 = MeshCoordinate(0, 0);
-    const auto coord1 = (shape[1] >= 2) ? MeshCoordinate(0, 1) : MeshCoordinate(1, 0);
-    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
-    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
-    verify_receiver_consume(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 30, 64}), kWorkerCores4, /*num_iters=*/3);
-}
-
-// Full worker grid (the realistic case). num_pages < num_workers exercises the
-// empty-range workers (they still handshake).
-TEST_F(D2DStreamServiceTest, ReceiverConsumeAllCores) {
-    if (!service_cores_supported()) {
-        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
-    }
-    const auto shape = this->mesh_device_->shape();
-    if (shape.dims() != 2 || this->mesh_device_->num_devices() < 2) {
-        GTEST_SKIP() << "Need a 2D mesh with >= 2 devices to carve distinct submeshes; got " << shape;
-    }
-    const auto coord0 = MeshCoordinate(0, 0);
-    const auto coord1 = (shape[1] >= 2) ? MeshCoordinate(0, 1) : MeshCoordinate(1, 0);
-    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
-    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
-    const auto grid = receiver_mesh->compute_with_storage_grid_size();
-    const CoreRange all_cores{CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}};
-    verify_receiver_consume(sender_mesh, receiver_mesh, fixed_per_core_shape(all_cores), all_cores, /*num_iters=*/4);
-}
-
-// Full grid + metadata: the {-1,0,final} blob must land on the sender service core
-// and every receiver worker core, alongside the consumed output tensor.
-TEST_F(D2DStreamServiceTest, ReceiverConsumeMetadataAllCores) {
-    if (!service_cores_supported()) {
-        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
-    }
-    const auto shape = this->mesh_device_->shape();
-    if (shape.dims() != 2 || this->mesh_device_->num_devices() < 2) {
-        GTEST_SKIP() << "Need a 2D mesh with >= 2 devices to carve distinct submeshes; got " << shape;
-    }
-    const auto coord0 = MeshCoordinate(0, 0);
-    const auto coord1 = (shape[1] >= 2) ? MeshCoordinate(0, 1) : MeshCoordinate(1, 0);
-    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
-    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
-    const auto grid = receiver_mesh->compute_with_storage_grid_size();
-    const CoreRange all_cores{CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}};
-    verify_receiver_consume(
-        sender_mesh,
-        receiver_mesh,
-        fixed_per_core_shape(all_cores),
-        all_cores,
-        /*num_iters=*/4,
-        /*metadata_size_bytes=*/3u * sizeof(uint32_t));
-}
-
-// Full grid + reuse: build once, drive several rounds with distinct seeds.
-TEST_F(D2DStreamServiceTest, ReceiverConsumeReuseAllCores) {
-    if (!service_cores_supported()) {
-        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
-    }
-    const auto shape = this->mesh_device_->shape();
-    if (shape.dims() != 2 || this->mesh_device_->num_devices() < 2) {
-        GTEST_SKIP() << "Need a 2D mesh with >= 2 devices to carve distinct submeshes; got " << shape;
-    }
-    const auto coord0 = MeshCoordinate(0, 0);
-    const auto coord1 = (shape[1] >= 2) ? MeshCoordinate(0, 1) : MeshCoordinate(1, 0);
-    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
-    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
-    const auto grid = receiver_mesh->compute_with_storage_grid_size();
-    const CoreRange all_cores{CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}};
-    verify_receiver_consume_reuse(
-        sender_mesh, receiver_mesh, fixed_per_core_shape(all_cores), all_cores, /*num_rounds=*/4);
-}
-
-// Multi-device variant: mirrors the existing RowPair setup (1x2 <-> 1x2).
-TEST_F(D2DStreamServiceTest, ReceiverConsumeRowPair) {
-    if (!service_cores_supported()) {
-        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
-    }
-    const auto shape = this->mesh_device_->shape();
-    if (shape.dims() != 2 || shape[0] < 2 || shape[1] < 2) {
-        GTEST_SKIP() << "Need a >= 2x2 mesh to carve 1x2 <-> 1x2 submeshes; got " << shape;
-    }
-    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(0, 0));
-    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(1, 0));
-    verify_receiver_consume(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), kWorkerCores, /*num_iters=*/4);
 }
 
 // ===========================================================================
