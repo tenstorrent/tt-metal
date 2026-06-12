@@ -172,9 +172,12 @@ class Generator(WarmupForwardMixin):
                 if skip_sequence_lengths:
                     break
 
-        # Vision compile for multimodal models
-        if getattr(self.model_args[0], "is_multimodal", False):
-            vision_chunk_size = getattr(self.model_args[0], "vision_chunk_size", 896)
+        # Vision compile for multimodal models. Skip when the model has no valid
+        # vision chunk size (e.g. Qwen3.6 run text-only: it carries a vision_config
+        # but the text demo never builds the vision tower → vision_chunk_size <= 0).
+        _vision_chunk_size = getattr(self.model_args[0], "vision_chunk_size", 896)
+        if getattr(self.model_args[0], "is_multimodal", False) and _vision_chunk_size and _vision_chunk_size > 0:
+            vision_chunk_size = _vision_chunk_size
             vision_channels = getattr(self.model_args[0], "vision_in_channels", 3)
             model_id = 0
 

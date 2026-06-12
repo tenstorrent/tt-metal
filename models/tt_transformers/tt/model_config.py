@@ -636,10 +636,15 @@ class ModelArgs:
                 self.n_heads % self.cluster_shape[1] == 0
             ), f"n_heads must be divisible by num_devices: {self.n_heads} % {self.cluster_shape[1]}"
 
-            assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
+            # Qwen3.6 full-attn has n_kv_heads=4 which doesn't divide an 8-chip mesh; the ported 1D-TP
+            # full-attn class REPLICATES the KV heads (each chip holds all 4) instead of sharding them.
+            _qwen36_replicate_kv = getattr(self, "is_qwen36", False) and (self.n_kv_heads % self.cluster_shape[1] != 0)
+            if not _qwen36_replicate_kv:
+                assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
-            self.min_kv_prefill_shard_seqlen = (ttnn.TILE_SIZE * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
+            _local_kv_heads = self.n_kv_heads if _qwen36_replicate_kv else (self.n_kv_heads // self.cluster_shape[1])
+            self.min_kv_prefill_shard_seqlen = (ttnn.TILE_SIZE * 8 * 8) / _local_kv_heads
 
             # All Gather Matmul for Dense Out (DO) - computed flag stored as instance attribute
             # NOTE: Fused all gather matmul only supports a core grid of size num_devices x 1
@@ -1059,6 +1064,12 @@ class ModelArgs:
 
         self.capped_warmup_seq_len = min(self.max_prefill_chunk_size, self.max_seq_len)
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
+        # Qwen3.6 GDN prefill (chunk_gated_delta_rule_ttnn) does a host-side matrix
+        # op (ttnn.to_torch on the chunk attention matrix) that is illegal under
+        # trace capture ("Reads are not supported during trace capture"). Disable
+        # prefill tracing — the galaxy stack likewise loops prefill un-traced.
+        if getattr(self, "is_qwen36", False):
+            self.trace_prefill_supported_seq_lens = []
 
     @property
     def decoders_optimizations(self):
@@ -2554,8 +2565,45 @@ class ModelArgs:
 
         return activation_map.get(hidden_activation, ttnn.UnaryOpType.SILU)
 
-    def _set_model_specific_params(self):
-        return
+    def _set_model_specific_params(self, config=None):
+        # Qwen3.6 (model_type qwen3_5/qwen3_6): a GDN/DeltaNet hybrid (linear-attention + full-attention
+        # layers). Capture the GDN params + the non-standard full-attn knobs (partial rotary, output
+        # gate, mRoPE) so the per-layer attention dispatch + the ported 1D-TP attention classes can read
+        # them off ModelArgs. Guarded on the model_type/name so no other model is affected.
+        config = config or {}
+        mt = str(config.get("model_type", "")).lower()
+        if mt.startswith(("qwen3_5", "qwen3_6")) or "qwen3.6" in self.model_name.lower():
+            self.is_qwen36 = True
+            # GDN / DeltaNet linear-attention params
+            self.linear_num_key_heads = config.get("linear_num_key_heads")
+            self.linear_num_value_heads = config.get("linear_num_value_heads")
+            self.linear_head_dim = config.get("linear_key_head_dim", config.get("linear_value_head_dim"))
+            self.linear_conv_kernel = config.get("linear_conv_kernel_dim")
+            # Full-attention non-standard knobs (NOT in stock DefaultAttention)
+            self.partial_rotary_factor = config.get("partial_rotary_factor", 1.0)
+            self.rope_dim = int(self.head_dim * self.partial_rotary_factor)
+            _rp = config.get("rope_parameters", {}) or {}
+            self.mrope_section = _rp.get("mrope_section")
+            self.mrope_interleaved = _rp.get("mrope_interleaved", False)
+            # qwen3.6 stores rope_theta inside rope_parameters (top-level rope_theta is None).
+            if self.rope_theta is None:
+                self.rope_theta = _rp.get("rope_theta", 10000000.0)
+            # No sliding-window / local rope in qwen3.6 — keep rope_theta_local None so the
+            # framework skips building an (unused, wrong-dim) local rope setup.
+            self.rope_theta_local = None
+            self.attn_output_gate = config.get("attn_output_gate", False)
+            self.qk_norm = True
+            # Qwen3NextRMSNorm is ZERO-CENTERED: out = (1 + w) * norm(x). This applies
+            # to ALL transformer norms (input/post-attn layernorms, final norm, AND the
+            # per-head q/k norm) — only the GatedDeltaNet inner RMSNormGated is plain.
+            # The framework default rms_norm_add_unit_offset=False drops the +1, which
+            # silently breaks every norm (qk_norm PCC ~0.9 → attention ~0.55). Matches
+            # the galaxy TtQwen36ModelArgs.zero_centered_norm = True.
+            self.rms_norm_add_unit_offset = True
+            self.zero_centered_norm = True
+            # Per-layer hybrid pattern: layer_types == "linear_attention" -> GDN, "full_attention" -> FA.
+            self.linear_attention_pattern = config.get("layer_types", self.layer_types)
+            self.full_attention_interval = config.get("full_attention_interval", 4)
 
     def _set_params_from_dict(self, config):
         eos_token_id = config.get("eos_token_id", None)
@@ -2698,7 +2746,7 @@ class ModelArgs:
         self.state_dict_text_prefix = self._get_text_prefix()
         self.state_dict_vision_prefix = self._get_vision_prefix()
 
-        self._set_model_specific_params()
+        self._set_model_specific_params(config)
 
     @property
     def use_scaled_rope(self):
@@ -2784,19 +2832,34 @@ class ModelArgs:
             vision_config.update({k: v for k, v in base_config.items() if k not in ["text_config", "vision_config"]})
             return vision_config
 
-        from transformers import AutoConfig
+        from transformers import AutoConfig, PretrainedConfig
+
+        def _load_hf_config(path):
+            # Some checkpoints (e.g. Qwen3.6 / model_type qwen3_5) have a model_type that public
+            # transformers does not register, so AutoConfig.from_pretrained raises and no custom
+            # config code is shipped. Fall back to building a generic PretrainedConfig from the raw
+            # config.json (gives .to_dict() + attribute access, which is all ModelArgs needs).
+            try:
+                return AutoConfig.from_pretrained(
+                    path, trust_remote_code=self.trust_remote_code_hf, local_files_only=os.getenv("CI") == "true"
+                )
+            except (ValueError, KeyError) as e:
+                # Resolve config.json for either a local dir OR an HF hub id (-> cache snapshot).
+                if os.path.isfile(os.path.join(str(path), "config.json")):
+                    cfg_json = os.path.join(str(path), "config.json")
+                else:
+                    from transformers.utils import cached_file
+
+                    cfg_json = cached_file(str(path), "config.json", local_files_only=os.getenv("CI") == "true")
+                logger.warning(f"AutoConfig failed ({str(e)[:80]}...); loading raw config.json from {cfg_json}")
+                with open(cfg_json) as f:
+                    return PretrainedConfig.from_dict(json.load(f))
 
         if self.dummy_weights:
             logger.info(f"Loading state param for dummy {self.model_name} from {self.LOCAL_HF_PARAMS[self.model_name]}")
-            self.hf_config = AutoConfig.from_pretrained(
-                self.LOCAL_HF_PARAMS[self.model_name], trust_remote_code=self.trust_remote_code_hf
-            )
+            self.hf_config = _load_hf_config(self.LOCAL_HF_PARAMS[self.model_name])
         else:
-            self.hf_config = AutoConfig.from_pretrained(
-                self.CKPT_DIR,
-                trust_remote_code=self.trust_remote_code_hf,
-                local_files_only=os.getenv("CI") == "true",
-            )
+            self.hf_config = _load_hf_config(self.CKPT_DIR)
 
         config = self.hf_config.to_dict()
 
@@ -2937,7 +3000,54 @@ class ModelArgs:
         raise ValueError(f"Unknown model for config {type(self.hf_config)}")
 
     # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
+    def _load_qwen36_raw_state_dict(self):
+        """Load Qwen3.6 weights from RAW safetensors (text-only) and map HF→Meta keys.
+
+        AutoModelForCausalLM is broken for model_type qwen3_5 and the model is a VLM
+        (vision_config present), so the framework's get_hf_model_cls path fails. We
+        instead read the safetensors shards directly, drop the vision tower, and apply
+        ONLY the key rename (map_hf_to_meta_keys — NO split_hf_keys / QKV permute, which
+        would mangle the GDN fused in_proj_qkvz and the gate-fused q_proj that the
+        TtQwen36{GDN,Full}Attention classes split themselves). After the rename:
+        model.language_model.* prefix is stripped; input_layernorm→attention_norm,
+        post_attention_layernorm→ffn_norm, mlp→feed_forward(+w1/w2/w3),
+        self_attn→attention(+wq/wk/wv/wo), embed_tokens→tok_embeddings, lm_head→output;
+        the GDN linear_attn.* keys survive intact (whole-word rename misses them).
+        """
+        import json as _json
+
+        from safetensors.torch import load_file as _load_st
+        from transformers.utils import cached_file
+
+        from models.tt_transformers.tt.load_checkpoints import map_hf_to_meta_keys, standardize_hf_keys
+
+        idx_path = cached_file(self.CKPT_DIR, "model.safetensors.index.json")
+        with open(idx_path) as f:
+            weight_map = _json.load(f)["weight_map"]
+        shards = sorted(set(weight_map.values()))
+        sd = {}
+        for shard in shards:
+            sd.update(_load_st(cached_file(self.CKPT_DIR, shard)))
+        # Text-only: drop the vision tower / multimodal projector weights.
+        sd = {k: v for k, v in sd.items() if "visual" not in k and "vision" not in k}
+        sd = standardize_hf_keys(sd)
+        sd = map_hf_to_meta_keys(sd)
+        self.fuse_qkv = False
+        self.fuse_mlp = False
+        self.is_mixture_of_experts = False
+        return sd
+
     def load_state_dict(self):
+        # Qwen3.6: VLM with model_type qwen3_5 (AutoModel broken) → raw safetensors, text-only.
+        if getattr(self, "is_qwen36", False) and not self.dummy_weights:
+            state_dict = self._load_qwen36_raw_state_dict()
+            keys_dict = list(state_dict.keys())[:]
+            remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
+            for k in keys_dict:
+                if any([r in k for r in remv]):
+                    state_dict.pop(k)
+            return state_dict
+
         # by default, the model is not a mixture-of-expert. This will be set to True if we find any `.experts.` in the keys
         if self.dummy_weights:
             from transformers import AutoConfig

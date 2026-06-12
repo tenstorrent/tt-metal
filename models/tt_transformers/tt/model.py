@@ -100,7 +100,9 @@ class Transformer(LightweightModule):
                 transformation_mats=self.trans_mats_dict,
                 paged_attention_config=paged_attention_config,
                 use_paged_kv_cache=use_paged_kv_cache,
-                attention_class=attention_class,
+                # attention_class may be a per-layer selector: callable(layer_num)
+                # -> class (qwen3.6 dispatches GDN vs full-attn from layer_types).
+                attention_class=(attention_class(i) if callable(attention_class) else attention_class),
                 prefetcher=prefetcher,
             )
             for i in tqdm(range(self.n_layers))

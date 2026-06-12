@@ -681,6 +681,11 @@ def cap_seq_lens_to_max_prefill_chunk_size(seq_lens, cap):
 
 
 def get_block_size(kv_cache):
+    # Hybrid models (e.g. Qwen3.6 GDN/full-attn) have None entries for the
+    # linear-attention layers (no paged KV cache) — use the first real cache.
+    for layer_cache in kv_cache:
+        if layer_cache is not None:
+            return layer_cache[0].shape[2]
     return kv_cache[0][0].shape[2]
 
 
@@ -840,6 +845,24 @@ def create_tt_model(
     if not state_dict:
         state_dict = tt_model_args.load_state_dict()
 
+    # Qwen3.6: hybrid per-layer attention dispatch. layer_types[i] == "linear_attention"
+    # → GDN/DeltaNet 1D-TP block; "full_attention" → the partial-RoPE/gate/mRoPE 1D-TP
+    # block. Passed as a per-layer selector (model.py resolves callable(attention_class)).
+    attention_class = None
+    rope_setup_class = None
+    if getattr(tt_model_args, "is_qwen36", False):
+        from models.tt_transformers.tt.qwen36_full_attention import Qwen36RopeSetup, TtQwen36FullAttention
+        from models.tt_transformers.tt.qwen36_gdn_attention import TtQwen36GDNAttention
+
+        _pattern = getattr(tt_model_args, "linear_attention_pattern", None)
+
+        def attention_class(layer_num, _pat=_pattern):
+            is_linear = _pat is not None and _pat[layer_num] == "linear_attention"
+            return TtQwen36GDNAttention if is_linear else TtQwen36FullAttention
+
+        # Full-attn uses PARTIAL rotary (rope_dim 64) + HF/NeoX cos-sin layout.
+        rope_setup_class = Qwen36RopeSetup
+
     model = Transformer(
         args=tt_model_args,
         mesh_device=mesh_device,
@@ -847,10 +870,18 @@ def create_tt_model(
         state_dict=state_dict,
         weight_cache_path=tt_model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
+        attention_class=attention_class,
+        rope_setup_class=rope_setup_class,
         prefetcher=prefetcher,
     )
 
-    tt_kv_cache = [l.attention.layer_past for l in model.layers] if paged_attention_config else None
+    # KV cache: only the full-attention layers hold a paged layer_past. GDN
+    # linear-attention layers keep recurrent/conv state instead (no layer_past),
+    # so guard the extraction (getattr → None) and let the generator skip them.
+    if paged_attention_config:
+        tt_kv_cache = [getattr(l.attention, "layer_past", None) for l in model.layers]
+    else:
+        tt_kv_cache = None
 
     return tt_model_args, model, tt_kv_cache, state_dict
 
