@@ -687,7 +687,11 @@ class VoxtralTTAcousticModel:
 
         is_end = ttnn.eq(semantic_code_tt, self._end_audio_token_id_tt)
 
-        if ttnn.to_torch(is_end).reshape(-1).bool().any():
+        # is_end is replicated across the mesh (acoustic weights are replicated); read device 0
+        # to avoid "supply a mesh composer" on a multi-device to_torch.
+        _is_end_dev = ttnn.get_device_tensors(is_end)
+        _is_end_host = ttnn.to_torch(_is_end_dev[0]) if len(_is_end_dev) > 1 else ttnn.to_torch(is_end)
+        if _is_end_host.reshape(-1).bool().any():
             sem_i32 = ttnn.typecast(semantic_code_tt, ttnn.int32, memory_config=self._fm_dram_mem_config)
             ac_i32 = ttnn.typecast(acoustic_tt, ttnn.int32, memory_config=self._fm_dram_mem_config)
             ttnn.deallocate(semantic_code_tt)

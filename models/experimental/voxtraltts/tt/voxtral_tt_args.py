@@ -243,12 +243,14 @@ def get_VoxtralTTArgs(preloaded_state_dict: Optional[dict[str, torch.Tensor]] = 
                 # interleaved 1D mcast (~76us on 48 cores) instead of DRAM-sharded (~103us) — sweep
                 # winner test_matmul_32x9216x3072_sweep (1.36x on w2). ON by default; disable with
                 # VOXTRAL_MLP_FF2_1D=0.
-                self.mlp_ff2_interleaved_weights = os.environ.get("VOXTRAL_MLP_FF2_1D", "1") == "1"
+                ff2_default = "0" if self.num_devices > 1 else "1"
+                self.mlp_ff2_interleaved_weights = os.environ.get("VOXTRAL_MLP_FF2_1D", ff2_default) == "1"
                 # Attention output proj wo (4096x3072) interleaved-weight path: weights DRAM-interleaved
                 # (attention.py gate) + L1-interleaved wo_in/wo_out so the decode matmul is a fully
                 # interleaved 1D mcast (~38us on 48 cores) instead of DRAM-sharded (~51us) — sweep winner
                 # test_matmul_32x4096x3072_sweep (1.32x on wo). ON by default; disable with VOXTRAL_ATTN_WO_1D=0.
-                self.attn_wo_interleaved_weights = os.environ.get("VOXTRAL_ATTN_WO_1D", "1") == "1"
+                wo_default = "0" if self.num_devices > 1 else "1"
+                self.attn_wo_interleaved_weights = os.environ.get("VOXTRAL_ATTN_WO_1D", wo_default) == "1"
                 # Prefill: L1 interleaved activations (Matmul/LayerNorm/SDPA Tracy labels; lower DRAM BW).
                 # Disable with VOXTRAL_TEXT_PREFILL_L1=0 if prefill OOMs on very long sequences.
                 self.prefill_activations_l1 = os.environ.get("VOXTRAL_TEXT_PREFILL_L1", "1") != "0"
@@ -390,6 +392,15 @@ def get_VoxtralTTArgs(preloaded_state_dict: Optional[dict[str, torch.Tensor]] = 
 
         def get_residual_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
             if self._prefill_l1_mem(mode):
+                return ttnn.L1_MEMORY_CONFIG
+            # BH QuietBox (TP, num_devices>1): the base decode residual config pins an explicit
+            # DRAM-shard core grid (dram_shard_core_grid_for_k) that overlaps Blackhole's COL
+            # dispatch cores, causing "Illegal kernel placement for reshard_reader" at the MLP
+            # output reshard (mlp.py). Use plain interleaved L1 (as the galaxy path does) so the
+            # allocator places shards only on worker cores, avoiding the dispatch column.
+            # get_mlp_output_mem_config derives from this, so this also fixes that reshard.
+            # Single-chip (num_devices==1) keeps the tuned sharded config unchanged.
+            if mode == Mode.DECODE and prefetcher is None and not self.is_galaxy and self.num_devices > 1:
                 return ttnn.L1_MEMORY_CONFIG
             return super().get_residual_mem_config(mode, prefetcher)
 

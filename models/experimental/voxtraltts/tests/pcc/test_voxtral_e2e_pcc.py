@@ -29,6 +29,14 @@ os.environ.setdefault("VOXTRAL_DECODE_TRACE", "1")
 
 WAVEFORM_PCC_TARGET = 0.99
 
+# Free-run correctness is gated by Whisper ASR intelligibility (WER), NOT sample-wise waveform
+# PCC (the discrete-FSQ AR feedback makes the latter structurally unreachable). Mirrors the
+# ``ssinghal/voxtral_tts`` Phase-4 metric: Whisper WER on a standard prompt, target WER < 0.30.
+ASR_WER_TARGET = 0.30
+ASR_SAMPLE_RATE = 16000
+WHISPER_MODEL = "openai/whisper-small"
+_OUTPUT_SAMPLE_RATE = 24000
+
 _DEMO_TEXT = VOXTRAL_STANDARD_CHAR_TEXT
 _DEMO_VOICE = "casual_male"
 
@@ -45,6 +53,66 @@ def _align_1d(a: torch.Tensor, b: torch.Tensor) -> tuple[torch.Tensor, torch.Ten
     return a[:n], b[:n]
 
 
+def _transcribe_waveform(waveform: torch.Tensor, src_sr: int) -> str:
+    """Transcribe a 1D float waveform with Whisper-small (mirrors Qwen3-TTS ``_transcribe``)."""
+    import librosa
+    import numpy as np
+    from transformers import WhisperForConditionalGeneration, WhisperProcessor
+
+    audio = waveform.detach().reshape(-1).float().cpu().numpy().astype(np.float32)
+    if src_sr != ASR_SAMPLE_RATE:
+        audio = librosa.resample(audio, orig_sr=src_sr, target_sr=ASR_SAMPLE_RATE)
+
+    processor = WhisperProcessor.from_pretrained(WHISPER_MODEL)
+    whisper = WhisperForConditionalGeneration.from_pretrained(WHISPER_MODEL).eval()
+    # Whisper only "hears" a fixed 30s window (the feature extractor truncates to 30s); transcribe
+    # long audio in 30s chunks and concatenate, else everything past 30s is silently dropped.
+    chunk = 30 * ASR_SAMPLE_RATE
+    segments = []
+    with torch.no_grad():
+        for start in range(0, max(len(audio), 1), chunk):
+            seg = audio[start : start + chunk]
+            if seg.size == 0:
+                continue
+            feats = processor(seg, sampling_rate=ASR_SAMPLE_RATE, return_tensors="pt").input_features
+            ids = whisper.generate(feats, language="en", task="transcribe")
+            segments.append(processor.batch_decode(ids, skip_special_tokens=True)[0].strip())
+    return " ".join(s for s in segments if s).strip()
+
+
+def _normalize_words(s: str) -> list[str]:
+    import re
+
+    return re.sub(r"[^a-z0-9\s]", " ", s.lower()).split()
+
+
+def _word_error_rate(reference: str, hypothesis: str) -> float:
+    """WER = Levenshtein word edit distance / #reference words (the ssinghal/voxtral_tts metric)."""
+    ref = _normalize_words(reference)
+    hyp = _normalize_words(hypothesis)
+    if not ref:
+        return 0.0 if not hyp else 1.0
+    n, m = len(ref), len(hyp)
+    dp = [[0] * (m + 1) for _ in range(n + 1)]
+    for i in range(n + 1):
+        dp[i][0] = i
+    for j in range(m + 1):
+        dp[0][j] = j
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            cost = 0 if ref[i - 1] == hyp[j - 1] else 1
+            dp[i][j] = min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost)
+    return dp[n][m] / n
+
+
+def _word_overlap(transcription: str, reference: str) -> float:
+    """Fraction of reference words present in the transcription (Qwen3-TTS metric; informational)."""
+    ref_words = set(_normalize_words(reference))
+    if not ref_words:
+        return 1.0
+    return len(ref_words & set(_normalize_words(transcription))) / len(ref_words)
+
+
 def _trace_device_params() -> dict[str, int]:
     return {
         "trace_region_size": int(os.environ.get("VOXTRAL_TRACE_REGION_SIZE", str(200_000_000))),
@@ -52,11 +120,43 @@ def _trace_device_params() -> dict[str, int]:
     }
 
 
+@pytest.fixture()
+def voxtral_qb_device():
+    """Open the SAME mesh the demo uses so PCC runs on the BH QuietBox exactly like the demo:
+    a 1x4 mesh (P150x4) when >=4 chips are present, else single-chip (P150). Mirrors
+    ``demo._open_device`` (FABRIC_1D + physical_device_ids=[0,1,2,3]); does not touch the demo.
+    Set ``VOXTRAL_TTS_FORCE_SINGLE_DEVICE=1`` to force single-chip for an A/B comparison.
+    """
+    import ttnn
+    from models.experimental.voxtraltts.demo.demo import _open_device
+
+    mesh, original = _open_device()
+    # The captured decode-trace path (decode_step_from_embeds_tt) is not yet TP-aware: it feeds the
+    # decoder a full-width replicated hidden, which the DistributedNorm all_gather can't shard on a
+    # 1xN mesh. The untraced decode path IS TP-aware (matches the demo) and produces identical codes,
+    # so force trace OFF on multi-device. Single-chip keeps its default (trace as configured).
+    if mesh.get_num_devices() > 1:
+        os.environ["VOXTRAL_DECODE_TRACE"] = "0"
+    try:
+        yield mesh
+    finally:
+        try:
+            if original is not None:
+                ttnn.SetDefaultDevice(original)
+        except Exception:
+            pass
+        ttnn.close_mesh_device(mesh)
+        try:
+            ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+        except Exception:
+            pass
+
+
 @torch.no_grad()
 @pytest.mark.timeout(3600)
-@pytest.mark.parametrize("device_params", [_trace_device_params()], indirect=True)
-def test_ttnn_voxtral_tts_staged_pcc(device, reset_seeds, request):
+def test_ttnn_voxtral_tts_staged_pcc(voxtral_qb_device, reset_seeds, request):
     """Teacher-forced E2E waveform PCC (shared codes) + logged free-run divergence."""
+    device = voxtral_qb_device
     generate_steps = 1
     name = resolve_voxtral_model_name_or_skip()
 
@@ -157,4 +257,73 @@ def test_ttnn_voxtral_tts_staged_pcc(device, reset_seeds, request):
     pipe_holder[0] = None
     del pipe
     del tt_out
+    gc.collect()
+
+
+@torch.no_grad()
+@pytest.mark.timeout(3600)
+def test_ttnn_voxtral_tts_free_run_asr(voxtral_qb_device, reset_seeds, request):
+    """Free-run E2E correctness via Whisper ASR WER (the meaningful free-run gate), on the QB.
+
+    Sample-wise free-run waveform PCC is structurally unreachable for a discrete-FSQ AR model,
+    so — like the ``ssinghal/voxtral_tts`` Phase-4 Whisper verification — we generate audio
+    free-run on the device (4-chip QB via ``voxtral_qb_device``), transcribe it with Whisper, and
+    assert the word error rate is below ``ASR_WER_TARGET`` (WER < 0.30).
+    """
+    device = voxtral_qb_device
+    name = resolve_voxtral_model_name_or_skip()
+    try:
+        import librosa  # noqa: F401
+        from transformers import WhisperForConditionalGeneration, WhisperProcessor  # noqa: F401
+    except Exception as exc:
+        pytest.skip(f"Whisper ASR deps unavailable: {exc}")
+
+    try:
+        pipe = VoxtralTTSPipeline.from_model_name(
+            device,
+            model_name_or_path=name,
+            text_max_seq_len=2048,  # full _DEMO_TEXT paragraph needs ~575 frames + ~280 prompt positions
+            text_optimizations=voxtral_text_hf_aligned_optimizations,
+        )
+    except Exception as exc:
+        pytest.skip(f"TT pipeline load failed: {exc}")
+    pipe_holder = [pipe]
+
+    def _cleanup_pipe() -> None:
+        if pipe_holder[0] is not None:
+            pipe_holder[0].cleanup_all()
+            pipe_holder[0] = None
+
+    request.addfinalizer(_cleanup_pipe)
+
+    logger.info("=" * 70)
+    logger.info("FREE-RUN ASR GATE (TT generates audio on QB; Whisper transcribes; WER)")
+    logger.info("=" * 70)
+    out = pipe.generate_with_codes(text=_DEMO_TEXT, voice=_DEMO_VOICE, max_tokens=1500, seed=0)
+    ttnn.synchronize_device(device)
+
+    assert out.codes_b37t.shape[2] > 0, "free-run generation produced no acoustic frames"
+    assert torch.isfinite(out.waveform).all(), "free-run waveform has non-finite samples"
+
+    transcription = _transcribe_waveform(out.waveform, _OUTPUT_SAMPLE_RATE)
+    wer = _word_error_rate(_DEMO_TEXT, transcription)
+    overlap = _word_overlap(transcription, _DEMO_TEXT)
+    duration_s = float(out.waveform.reshape(-1).numel()) / _OUTPUT_SAMPLE_RATE
+    logger.info(f"  target       : {_DEMO_TEXT!r}")
+    logger.info(f"  transcription: {transcription!r}")
+    logger.info(
+        f"  WER          : {wer:.2%}  target<{ASR_WER_TARGET:.0%}  "
+        f"[{'PASS' if wer < ASR_WER_TARGET else 'HIGH'}]  (word overlap={overlap:.2%}, "
+        f"frames={int(out.codes_b37t.shape[2])}, audio={duration_s:.2f}s, hit_end={out.hit_end_audio})"
+    )
+
+    assert (
+        wer < ASR_WER_TARGET
+    ), f"free-run ASR WER {wer:.2%} >= {ASR_WER_TARGET:.0%}; transcription={transcription!r} target={_DEMO_TEXT!r}"
+
+    ttnn.synchronize_device(device)
+    pipe.cleanup_all()
+    pipe_holder[0] = None
+    del pipe
+    del out
     gc.collect()

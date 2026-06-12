@@ -181,9 +181,8 @@ def _open_device():
         num_command_queues_for_decode,
     )
 
-    device_id = 0
-    if ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.TG:
-        device_id = 4
+    n_devices = ttnn.get_num_devices()
+    force_single = os.environ.get("VOXTRAL_TTS_FORCE_SINGLE_DEVICE", "").lower() in ("1", "true", "yes", "on")
     params = {}
     # Traced decode needs a trace region; 2CQ needs a second command queue. Both default on
     # (see decode_trace_2cq). trace_region_size is env-tunable for the 26-layer decode graph.
@@ -192,29 +191,49 @@ def _open_device():
         params["num_command_queues"] = num_command_queues_for_decode()
     updated = get_updated_device_params(params)
     original = ttnn.GetDefaultDevice()
-    mesh = ttnn.CreateDevice(device_id=device_id, **updated)
+
+    if n_devices >= 4 and not force_single:
+        # Blackhole QuietBox: use all four chips as a 1x4 tensor-parallel mesh.
+        # Fabric must be configured before opening the mesh or TT CCL collectives can fail.
+        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+        mesh_shape = ttnn.MeshShape(1, 4)
+        device_ids = [0, 1, 2, 3]
+        logger.info("Opening Voxtral TTS on 1x4 BH QB mesh (physical_device_ids={})", device_ids)
+    elif ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.TG:
+        mesh_shape = ttnn.MeshShape(1, 1)
+        device_ids = [4]
+        logger.info("Opening Voxtral TTS on TG single-device mesh (physical_device_ids={})", device_ids)
+    else:
+        mesh_shape = ttnn.MeshShape(1, 1)
+        device_ids = [0]
+        logger.info("Opening Voxtral TTS on 1x1 mesh (physical_device_ids={})", device_ids)
+
+    mesh = ttnn.open_mesh_device(mesh_shape, physical_device_ids=device_ids, **updated)
     ttnn.SetDefaultDevice(mesh)
     return mesh, original
 
 
-def _check_seq_len_memory(text_max_seq_len: int) -> None:
+def _check_seq_len_memory(text_max_seq_len: int, n_devices: int = 1) -> None:
     """Warn early if text_max_seq_len will likely cause OOM.
 
     KV cache is pre-allocated at model init regardless of actual input length.
-    Formula: seq_len × 32 layers × 8 KV heads × 128 head_dim × 2 (K+V) × 2 bytes (bf16).
+    For TP=n_devices the text KV cache is sharded, so each chip holds 1/n_devices.
+    Formula per chip: seq_len × 32 layers × 8 KV heads × 128 head_dim × 2 (K+V) × 2 bytes / n_devices.
     """
-    kv_bytes = text_max_seq_len * 32 * 8 * 128 * 2 * 2
+    n_devices = max(1, int(n_devices))
+    kv_bytes = text_max_seq_len * 32 * 8 * 128 * 2 * 2 // n_devices
     kv_gb = kv_bytes / (1024**3)
-    DEVICE_DRAM_GB = 32.0  # Blackhole P150 (A84) — 32 GB LPDDR5 DRAM
-    WEIGHTS_GB = 14.5  # Voxtral-4B-TTS: text+acoustic+tokenizer weights + driver/OS overhead
+    DEVICE_DRAM_GB = 32.0  # Blackhole — 32 GB LPDDR5 DRAM per chip
+    WEIGHTS_GB = 14.5  # Conservative full-pipeline footprint; text weights are TP-sharded on QB.
     RUNTIME_HEADROOM_GB = 4.0
     usable_gb = DEVICE_DRAM_GB * 0.85
     estimated_total_gb = WEIGHTS_GB + kv_gb + RUNTIME_HEADROOM_GB
     available_gb = usable_gb - WEIGHTS_GB - RUNTIME_HEADROOM_GB
 
     logger.info(
-        f"[memory] text_max_seq_len={text_max_seq_len} → KV cache = {kv_gb:.2f} GB "
-        f"(Blackhole P150: {DEVICE_DRAM_GB:.0f} GB DRAM, estimated total footprint ~{estimated_total_gb:.2f} GB)"
+        f"[memory] text_max_seq_len={text_max_seq_len}, n_devices={n_devices} → "
+        f"per-chip KV cache = {kv_gb:.2f} GB "
+        f"(Blackhole: {DEVICE_DRAM_GB:.0f} GB DRAM/chip, estimated per-chip footprint ~{estimated_total_gb:.2f} GB)"
     )
     if estimated_total_gb > usable_gb:
         raise MemoryError(
@@ -238,7 +257,7 @@ def _check_seq_len_memory(text_max_seq_len: int) -> None:
 
 
 def _load_pipeline(mesh: ttnn.Device, args: DemoArgs) -> VoxtralTTSPipeline:
-    _check_seq_len_memory(args.tt.text_max_seq_len)
+    _check_seq_len_memory(args.tt.text_max_seq_len, n_devices=mesh.get_num_devices())
     return VoxtralTTSPipeline.from_model_name(
         mesh,
         model_name_or_path=args.model.model_name_or_path,
@@ -633,10 +652,11 @@ def run_demo(args: DemoArgs) -> None:
     out_dir = Path(args.data.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Default the demo to traced decode (bit-identical output, ~1.58x faster decode; verified).
-    # Only affects the demo entry point — the pytest device fixture path leaves it off. Override
-    # with VOXTRAL_DECODE_TRACE=0. (2CQ stays opt-in; it regresses on this loop — see decode_trace_2cq.)
-    os.environ.setdefault("VOXTRAL_DECODE_TRACE", "1")
+    # Default the demo to traced decode on single-chip only. The current trace staging buffers
+    # are single-chip/full-width; on TP=4 the normal decode path is the validated route.
+    # Override explicitly with VOXTRAL_DECODE_TRACE=0/1.
+    if "VOXTRAL_DECODE_TRACE" not in os.environ:
+        os.environ["VOXTRAL_DECODE_TRACE"] = "0" if ttnn.get_num_devices() >= 4 else "1"
 
     mesh, original = _open_device()
     pipe: VoxtralTTSPipeline | None = None
@@ -711,7 +731,7 @@ def run_demo(args: DemoArgs) -> None:
         if pipe is not None:
             pipe.cleanup_all()
         ttnn.SetDefaultDevice(original)
-        ttnn.close_device(mesh)
+        ttnn.close_mesh_device(mesh)
 
 
 def main(argv: list[str] | None = None) -> None:

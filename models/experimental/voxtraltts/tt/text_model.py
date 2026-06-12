@@ -186,9 +186,33 @@ class VoxtralTTTextModel:
             ),
         )
 
-        if isinstance(x_embed, ttnn.Tensor):
-            # Embed already on device (from mm_audio_encode_tokens_summed_forward).
-            # Convert layout + memory config in one call — no host round-trip.
+        multi = self.inner.mesh_device.get_num_devices() > 1
+        if multi:
+            # On a TP mesh the decoder residual must be width-FRACTURED (dim/num_devices per chip),
+            # exactly like the prefill path — the per-layer DistributedNorm all_gathers it back to
+            # the full dim. A replicated (full-width) embed makes that all_gather over-wide and trips
+            # the sharded-grid assert in the norm. Gather whatever came in (replicated or fractured)
+            # to a host [1,1,1,dim] vector, then re-shard across the mesh width.
+            if isinstance(x_embed, ttnn.Tensor):
+                work = ttnn.to_memory_config(x_embed, ttnn.DRAM_MEMORY_CONFIG)
+                host = ttnn.to_torch(work, mesh_composer=ttnn.ConcatMeshToTensor(self.inner.mesh_device, dim=-1))
+                if work.is_allocated():
+                    ttnn.deallocate(work)
+            else:
+                host = x_embed
+            host_vec = host.reshape(-1)[:dim].reshape(1, 1, 1, dim).to(dtype=torch.bfloat16).contiguous()
+            x_tt = ttnn.from_torch(
+                host_vec,
+                device=self.inner.mesh_device,
+                dtype=activation_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=self._decode_mem_cfg,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.inner.mesh_device, dims=(None, 3), mesh_shape=self.inner.args.cluster_shape
+                ),
+            )
+        elif isinstance(x_embed, ttnn.Tensor):
+            # Single-device: embed already on device.
             if x_embed.layout != ttnn.TILE_LAYOUT:
                 x_tt = ttnn.to_layout(x_embed, ttnn.TILE_LAYOUT, memory_config=self._decode_mem_cfg)
             else:
@@ -271,10 +295,15 @@ class VoxtralTTTextModel:
         """
         dim = self.inner.args.dim
         activation_dtype = _decode_activation_dtype(self.inner.args) or ttnn.bfloat16
+        use_host_decode_prepare = torch.is_tensor(inputs_embeds) and int(self.inner.args.num_devices) > 1
 
         # ── SINGLE TT UPLOAD ─────────────────────────────────────────────────
         # One ttnn.from_torch for the full sequence — no per-step DMA.
-        if isinstance(inputs_embeds, ttnn.Tensor):
+        if use_host_decode_prepare:
+            S = int(inputs_embeds.shape[0])
+            owns_embeds_tt = False
+            embeds_tt = None
+        elif isinstance(inputs_embeds, ttnn.Tensor):
             S = int(inputs_embeds.shape[0])
             owns_embeds_tt = False  # caller owns the original; updated below if we create new tensors
             # Need ROW_MAJOR for non-tile-aligned per-token slicing.
@@ -312,12 +341,19 @@ class VoxtralTTTextModel:
             is_last = i == S - 1
             collect_this = collect_layer_hiddens and is_last
 
-            # Slice token i on device — zero host round-trips for the embedding data.
-            embed_i_rm = ttnn.slice(embeds_tt, (i, 0, 0, 0), (i + 1, 1, 1, dim))
-            # Convert to TILE_LAYOUT + decode shard in one call.
-            embed_i_tt = ttnn.to_layout(embed_i_rm, ttnn.TILE_LAYOUT, memory_config=self._decode_mem_cfg)
-            if embed_i_rm.is_allocated():
-                ttnn.deallocate(embed_i_rm)
+            if use_host_decode_prepare:
+                embed_i_tt = self.inner.args.prepare_residual_tensor_decode(
+                    inputs_embeds[i : i + 1].reshape(1, 1, dim),
+                    self._decode_mem_cfg,
+                )
+            else:
+                # Slice token i on device — zero host round-trips for the embedding data.
+                embed_width = int(embeds_tt.shape[-1])
+                embed_i_rm = ttnn.slice(embeds_tt, (i, 0, 0, 0), (i + 1, 1, 1, embed_width))
+                # Convert to TILE_LAYOUT + decode shard in one call.
+                embed_i_tt = ttnn.to_layout(embed_i_rm, ttnn.TILE_LAYOUT, memory_config=self._decode_mem_cfg)
+                if embed_i_rm.is_allocated():
+                    ttnn.deallocate(embed_i_rm)
 
             # Position/rope: pos_idx is a Python int — a 1-element scalar index (4 bytes),
             # not embedding data. This tiny transfer is unavoidable.
@@ -379,7 +415,7 @@ class VoxtralTTTextModel:
             if current_pos_tt.is_allocated():
                 ttnn.deallocate(current_pos_tt)
 
-        if owns_embeds_tt and embeds_tt.is_allocated():
+        if owns_embeds_tt and embeds_tt is not None and embeds_tt.is_allocated():
             ttnn.deallocate(embeds_tt)
 
         assert last_hidden_tt is not None
