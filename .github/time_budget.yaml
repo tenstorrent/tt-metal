@@ -167,7 +167,9 @@ runtime:
 debug:
   triage:
     wh_n150_civ2: 16
+    wh_n150: 16
     bh_p150b_civ2_viommu_prio: 16
+    bh_p150b_civ2_viommu: 16
 
 llk:
   unit:
