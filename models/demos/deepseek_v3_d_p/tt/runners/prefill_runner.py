@@ -280,6 +280,37 @@ def _kv_cache_pcc_check(pipeline: TtDeepSeekPrefillPipeline, slot_id: int, n_chu
     return min_pcc
 
 
+def validate_migration_kv(pipeline: TtDeepSeekPrefillPipeline, src_slot: int, dst_slot: int, n_chunks: int):
+    """Validate the KV cache BEFORE and AFTER a slot->slot migration.
+
+    The migration (src_slot -> dst_slot) is driven by tt-llm-engine (the prefill
+    scheduler / driver over the migration layer) — the runner never issues migrate
+    itself (see integration_setup; the runner only publishes the table via SET_TABLE).
+    This reuses `_kv_cache_pcc_check` to PCC BOTH endpoints against the SAME golden
+    `kv_post_transform` trace:
+
+      * BEFORE: the SRC slot — the model-produced KV that tt-llm-engine migrates.
+      * AFTER:  the DST slot — the migrated copy tt-llm-engine wrote.
+
+    A correct migration => the DST slot PCCs to golden exactly as the SRC slot does, so
+    a drop (or an empty / 0-PCC dst) flags a broken or absent migration. Emits
+    `[kv-migrate-validate] BEFORE/AFTER` lines (orchestrators parse these).
+    """
+    logger.info(f"[kv-migrate-validate] BEFORE migration: validating SRC slot {src_slot}")
+    src_pcc = _kv_cache_pcc_check(pipeline, src_slot, n_chunks)
+    print(f"[kv-migrate-validate] BEFORE src_slot={src_slot} min_pcc={src_pcc:.6f}")
+
+    logger.info(f"[kv-migrate-validate] AFTER migration: validating DST slot {dst_slot}")
+    dst_pcc = _kv_cache_pcc_check(pipeline, dst_slot, n_chunks)
+    print(f"[kv-migrate-validate] AFTER dst_slot={dst_slot} min_pcc={dst_pcc:.6f}")
+
+    logger.success(
+        f"[kv-migrate-validate] slot {src_slot} -> {dst_slot}: "
+        f"BEFORE(src) min_pcc={src_pcc:.6f}, AFTER(dst) min_pcc={dst_pcc:.6f}"
+    )
+    return src_pcc, dst_pcc
+
+
 def run_standalone_chunked_prefill_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
     """Standalone chunked-prefill *validation* loop: drive the golden longbook_qa prompt through the
     pipeline in CHUNK_SIZE chunks (exactly as `run_standalone_loop` drives the chunk loop), then PCC
@@ -391,6 +422,21 @@ def run_standalone_chunked_prefill_loop(pipeline: TtDeepSeekPrefillPipeline) -> 
     logger.success(
         f"[standalone-chunked] ALL {len(slot_ids)} slot(s) PASSED (min PCC {min(slot_min_pcc.values()):.6f})"
     )
+
+    # Migration KV validation: with PREFILL_VALIDATE_MIGRATION=1, after prefilling the
+    # src slot above, validate the KV cache BEFORE (src) and AFTER (dst) the slot->slot
+    # migration that tt-llm-engine (the prefill scheduler/driver) drives over the
+    # migration layer. Requires the src slot to have been prefilled (include it in
+    # slot_ids, e.g. ALL_SLOTS=1 or PREFILL_STANDALONE_CHUNKED_SLOT=<src>) and the
+    # engine to have migrated src->dst into the same live cache before this runs.
+    if os.environ.get("PREFILL_VALIDATE_MIGRATION", "0") == "1":
+        mig_src = int(os.environ.get("PREFILL_MIGRATE_SRC_SLOT", "0")) % NUM_USERS
+        mig_dst = int(os.environ.get("PREFILL_MIGRATE_DST_SLOT", "1")) % NUM_USERS
+        logger.info(
+            f"[kv-migrate-validate] PREFILL_VALIDATE_MIGRATION=1 — validating "
+            f"src_slot={mig_src} -> dst_slot={mig_dst} (migration driven by tt-llm-engine)"
+        )
+        validate_migration_kv(pipeline, mig_src, mig_dst, n_chunks)
 
 
 def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DStreamService) -> None:
