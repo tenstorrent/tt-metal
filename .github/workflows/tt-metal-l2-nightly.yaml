@@ -344,14 +344,14 @@ jobs:
   # entry filters live in tests/pipeline_reorg/llk_unit_tests.yaml (entries
   # tagged l2_only: true). Merge-gate covers the FD path separately.
   llk-unit-tests:
-    needs: [resolve-docker-pull-refs, build-artifact, generate-arch-matrix]
+    needs: [build-artifact, generate-arch-matrix]
     if: |
       (github.event_name == 'schedule' || inputs.run_llk_unit_tests) &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
     secrets: inherit
     uses: ./.github/workflows/llk-unit-tests-impl.yaml
     with:
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
       l2-only: true
