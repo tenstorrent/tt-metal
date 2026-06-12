@@ -88,9 +88,7 @@ void kernel_main() {
 
         for (uint32_t h = 0U; h < n_heads; ++h) {
             const uint32_t head_q = q_block_base + h * tiles_per_head;
-            // q_nope bypasses compute: reader -> writer (streamed in kNopeChunkTiles blocks).
             read_full_row_tiles(cb_nope, q_gen, Tn, kNopeChunkTiles, tile_bytes, head_q);
-            // q_pe -> compute.
             read_tiles_by_row(cb_q_pe, q_gen, head_q + Tn, Tr, tile_bytes, Tr);
         }
 

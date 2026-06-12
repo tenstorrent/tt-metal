@@ -35,9 +35,7 @@ void kernel_main() {
     for (uint32_t block = 0U; block < num_blocks; ++block) {
         for (uint32_t h = 0U; h < n_heads; ++h) {
             const uint32_t head_q = q_block_base + h * tiles_per_head;
-            // q_nope: passthrough from reader (streamed in kNopeChunkTiles blocks).
             write_full_row_tiles(cb_nope, q_out_gen, Tn, kNopeChunkTiles, tile_bytes, head_q);
-            // q_pe: rotated by compute; interleave after nope in [nope | rope] head layout.
             write_tiles_by_row(cb_rope_out, q_out_gen, head_q + Tn, Tr, tile_bytes, Tr);
         }
 
