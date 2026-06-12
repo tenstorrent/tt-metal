@@ -2,92 +2,79 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile_tensor_args.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 
+#include <filesystem>
 #include <optional>
+#include <vector>
+
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
+namespace m2 = tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
-tt::tt_metal::ProgramDescriptor SliceTileTensorArgsProgramFactory::create_descriptor(
-    const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
-    const auto& input_tensor = tensor_args.input;
-    const auto& start_tensor = tensor_args.start_tensor.value();
-    const auto& end_tensor = tensor_args.end_tensor.value();
-    tt::tt_metal::IDevice* device = input_tensor.device();
-    ProgramDescriptor desc;
+namespace {
+
+constexpr const char* READER_KERNEL =
+    "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_slice_tile_tensor_args_m2.cpp";
+constexpr const char* WRITER_KERNEL =
+    "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_slice_tile_tensor_args_m2.cpp";
+
+// Enqueue-invariant work geometry: a pure function of shape + slice params (all in the cache key).
+// Note: unlike the static-args tile factory, the per-core reader start_id here is the *base* tile
+// id (start_offset == 0); the slice start_offset is computed on-device from the start tensor.
+struct SliceTileTensorArgsGeometry {
+    CoreRangeSet all_cores;
+    std::vector<CoreCoord> cores;
+    uint32_t num_dims = 0;
+    uint32_t single_tile_size = 0;
+    uint32_t tile_width = 0;
+    uint32_t tile_height = 0;
+    tt::DataFormat data_format = tt::DataFormat::Invalid;
+
+    // Common, broadcast to every core (read-only on device):
+    // [num_unpadded..., num_padded..., input_shape...].
+    std::vector<uint32_t> num_unpadded_per_dim;
+    std::vector<uint32_t> num_padded_per_dim;
+    std::vector<uint32_t> input_shape_per_dim;
+
+    // Per-core values (parallel to `cores`).
+    std::vector<uint32_t> reader_start_id;
+    std::vector<uint32_t> reader_num_tiles;
+    std::vector<std::vector<uint32_t>> id_per_dim;  // [core][num_dims], the running-index seed
+    std::vector<uint32_t> writer_start_id;          // == cumulative num_tiles_written
+};
+
+SliceTileTensorArgsGeometry compute_geometry(
+    const SliceParams& args, const SliceInputs& tensor_args, const Tensor& output) {
+    const auto& input = tensor_args.input;
+    IDevice* device = input.device();
+
+    SliceTileTensorArgsGeometry g;
+    g.data_format = datatype_to_dataformat_converter(input.dtype());
+    g.single_tile_size = tt::tile_size(g.data_format);
+
+    auto tile_shape = input.tensor_spec().tile().get_tile_shape();
+    g.tile_width = tile_shape[1];
+    g.tile_height = tile_shape[0];
 
     uint32_t num_unpadded_tiles = output.physical_volume() / TILE_HW;
-
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         args.sub_core_grids.has_value()
             ? tt::tt_metal::split_work_to_cores(args.sub_core_grids.value(), num_unpadded_tiles)
             : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_tiles);
+    g.all_cores = all_cores;
 
-    tt::tt_metal::Buffer* src_buffer = input_tensor.buffer();
-    tt::tt_metal::Buffer* start_buffer = start_tensor.buffer();
-    tt::tt_metal::Buffer* end_buffer = end_tensor.buffer();
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
-
-    TT_FATAL(src_buffer != nullptr, "Input buffer should be allocated on device!");
-    TT_FATAL(start_buffer != nullptr, "Start buffer should be allocated on device!");
-    TT_FATAL(end_buffer != nullptr, "End buffer should be allocated on device!");
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t single_tile_size = tt::tile_size(cb_data_format);
-
-    constexpr uint8_t src0_cb_index = 0;
-    constexpr uint8_t tensor_cb_index = 1;
-    constexpr uint32_t num_input_tiles = 2;
-
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_input_tiles * single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = src0_cb_index,
-            .data_format = cb_data_format,
-            .page_size = single_tile_size,
-        }}},
-    });
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = tensor_cb_index,
-            .data_format = cb_data_format,
-            .page_size = single_tile_size,
-        }}},
-    });
-
-    std::uint32_t num_dims = static_cast<std::uint32_t>(input_tensor.padded_shape().rank());
-    auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
-    uint32_t tile_width = tile_shape[1];
-    uint32_t tile_height = tile_shape[0];
-
-    std::vector<uint32_t> reader_compile_time_args = {
-        src0_cb_index, tensor_cb_index, num_dims, tile_width, tile_height};
-    TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*start_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*end_buffer).append_to(reader_compile_time_args);
-
-    std::vector<uint32_t> writer_compile_time_args = {src0_cb_index};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
-
-    // Reader common runtime args layout (matches kernel):
-    //   [src_addr, start_buf_addr, end_buf_addr,
-    //    num_unpadded_per_dim..., num_padded_per_dim..., input_shape...]
-    const auto& input_shape = input_tensor.padded_shape();
+    const auto& input_shape = input.padded_shape();
     const auto& output_shape = output.padded_shape();
+    g.num_dims = static_cast<uint32_t>(input_shape.rank());
+
     uint32_t num_unpadded_Xt = output_shape[-1] / TILE_WIDTH;
     uint32_t num_total_Xt = input_shape[-1] / TILE_WIDTH;
     uint32_t num_padded_Xt = num_total_Xt - num_unpadded_Xt;
@@ -95,40 +82,35 @@ tt::tt_metal::ProgramDescriptor SliceTileTensorArgsProgramFactory::create_descri
     uint32_t num_total_Yt = input_shape[-2] / TILE_HEIGHT;
     uint32_t num_padded_Yt = (num_total_Yt - num_unpadded_Yt) * num_total_Xt;
 
-    std::vector<uint32_t> accumulated_total_per_dim(num_dims);
+    std::vector<uint32_t> accumulated_total_per_dim(g.num_dims);
     accumulated_total_per_dim[0] = num_total_Xt;
     accumulated_total_per_dim[1] = num_total_Yt * num_total_Xt;
 
-    std::vector<uint32_t> reader_common_args(3 + (num_dims * 3));
-    reader_common_args[0] = src_buffer->address();
-    reader_common_args[1] = start_buffer->address();
-    reader_common_args[2] = end_buffer->address();
-    uint32_t* num_unpadded_tiles_per_dim = reader_common_args.data() + 3;
-    uint32_t* num_padded_tiles_per_dim = num_unpadded_tiles_per_dim + num_dims;
-    uint32_t* input_shape_args = num_padded_tiles_per_dim + num_dims;
-    num_unpadded_tiles_per_dim[0] = num_unpadded_Xt;
-    num_unpadded_tiles_per_dim[1] = num_unpadded_Yt;
-    num_padded_tiles_per_dim[0] = num_padded_Xt;
-    num_padded_tiles_per_dim[1] = num_padded_Yt;
-    for (int32_t i = 2; i < static_cast<int32_t>(num_dims); ++i) {
+    g.num_unpadded_per_dim.resize(g.num_dims);
+    g.num_padded_per_dim.resize(g.num_dims);
+    g.input_shape_per_dim.resize(g.num_dims);
+    g.num_unpadded_per_dim[0] = num_unpadded_Xt;
+    g.num_unpadded_per_dim[1] = num_unpadded_Yt;
+    g.num_padded_per_dim[0] = num_padded_Xt;
+    g.num_padded_per_dim[1] = num_padded_Yt;
+    for (int32_t i = 2; i < static_cast<int32_t>(g.num_dims); ++i) {
         uint32_t num_unpadded_dim = output_shape[-(i + 1)];
         uint32_t num_total_dim = input_shape[-(i + 1)];
         uint32_t num_padded_dim = (num_total_dim - num_unpadded_dim) * accumulated_total_per_dim[i - 1];
-        num_unpadded_tiles_per_dim[i] = num_unpadded_dim;
-        num_padded_tiles_per_dim[i] = num_padded_dim;
+        g.num_unpadded_per_dim[i] = num_unpadded_dim;
+        g.num_padded_per_dim[i] = num_padded_dim;
         accumulated_total_per_dim[i] = num_total_dim * accumulated_total_per_dim[i - 1];
     }
-    for (int32_t i = 0; i < static_cast<int32_t>(num_dims); ++i) {
-        input_shape_args[i] = input_shape[i];
+    for (int32_t i = 0; i < static_cast<int32_t>(g.num_dims); ++i) {
+        g.input_shape_per_dim[i] = input_shape[i];
     }
 
-    // Reader per-core runtime args: [start_id, num_tiles, id_per_dim...]
-    // Writer per-core runtime args: [dst_addr, num_tiles, start_id]
+    // start_offset is computed on-device from the start tensor, so the host seeds with 0.
     constexpr uint32_t start_offset = 0;
-    KernelDescriptor::RuntimeArgs reader_runtime_args;
-    KernelDescriptor::RuntimeArgs writer_runtime_args;
+
+    g.cores = corerange_to_cores(all_cores);
     uint32_t num_tiles_written = 0;
-    for (const auto& core : corerange_to_cores(all_cores)) {
+    for (const auto& core : g.cores) {
         uint32_t num_tiles_per_core;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
@@ -136,53 +118,148 @@ tt::tt_metal::ProgramDescriptor SliceTileTensorArgsProgramFactory::create_descri
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
             // no-op core
-            std::vector<uint32_t> reader_args(2 + num_dims, 0);
-            reader_runtime_args.emplace_back(core, std::move(reader_args));
-            writer_runtime_args.emplace_back(core, std::vector<uint32_t>{0, 0, 0});
+            g.reader_start_id.push_back(0);
+            g.reader_num_tiles.push_back(0);
+            g.id_per_dim.emplace_back(g.num_dims, 0);
+            g.writer_start_id.push_back(0);
             continue;
         }
 
-        std::vector<uint32_t> reader_args(2 + num_dims);
-        reader_args[2] = num_tiles_written % num_unpadded_tiles_per_dim[0];
-        uint32_t unpadded_written = num_tiles_written / num_unpadded_tiles_per_dim[0];
-        uint32_t start_id = reader_args[2] + start_offset;
-        for (uint32_t j = 1; j < num_dims; ++j) {
-            reader_args[2 + j] = unpadded_written % num_unpadded_tiles_per_dim[j];
-            unpadded_written = unpadded_written / num_unpadded_tiles_per_dim[j];
-            start_id += reader_args[2 + j] * accumulated_total_per_dim[j - 1];
+        std::vector<uint32_t> ids(g.num_dims);
+        ids[0] = num_tiles_written % g.num_unpadded_per_dim[0];
+        uint32_t unpadded_written = num_tiles_written / g.num_unpadded_per_dim[0];
+        uint32_t start_id = ids[0] + start_offset;
+        for (uint32_t j = 1; j < g.num_dims; ++j) {
+            ids[j] = unpadded_written % g.num_unpadded_per_dim[j];
+            unpadded_written = unpadded_written / g.num_unpadded_per_dim[j];
+            start_id += ids[j] * accumulated_total_per_dim[j - 1];
         }
-        reader_args[0] = start_id;
-        reader_args[1] = num_tiles_per_core;
-
-        reader_runtime_args.emplace_back(core, std::move(reader_args));
-        writer_runtime_args.emplace_back(
-            core, std::vector<uint32_t>{dst_buffer->address(), num_tiles_per_core, num_tiles_written});
+        g.reader_start_id.push_back(start_id);
+        g.reader_num_tiles.push_back(num_tiles_per_core);
+        g.id_per_dim.push_back(std::move(ids));
+        g.writer_start_id.push_back(num_tiles_written);
         num_tiles_written += num_tiles_per_core;
     }
+    return g;
+}
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
-        "reader_unary_unpad_dims_interleaved_start_id_tensor_args.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.runtime_args = std::move(reader_runtime_args);
-    reader_desc.common_runtime_args = std::move(reader_common_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-    desc.kernels.push_back(std::move(reader_desc));
+m2::NodeCoord node_of(const CoreCoord& c) {
+    return m2::NodeCoord{static_cast<std::size_t>(c.x), static_cast<std::size_t>(c.y)};
+}
 
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.runtime_args = std::move(writer_runtime_args);
-    writer_desc.config = WriterConfigDescriptor{};
-    desc.kernels.push_back(std::move(writer_desc));
+}  // namespace
 
-    return desc;
+m2::ProgramSpec SliceTileTensorArgsProgramFactory::create_program_spec(
+    const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
+    const auto g = compute_geometry(args, tensor_args, output);
+
+    // Source-tile staging CB (double-buffered).
+    m2::DataflowBufferSpec cb{
+        .unique_id = m2::DFBSpecName{"cb"},
+        .entry_size = g.single_tile_size,
+        .num_entries = 2,
+        .data_format_metadata = g.data_format,
+    };
+    // Single-entry staging CB used to read the start/end index tensors.
+    m2::DataflowBufferSpec cb_tensor{
+        .unique_id = m2::DFBSpecName{"cb_tensor"},
+        .entry_size = g.single_tile_size,
+        .num_entries = 1,
+        .data_format_metadata = g.data_format,
+    };
+
+    m2::KernelSpec reader{
+        .unique_id = m2::KernelSpecName{"reader"},
+        .source = std::filesystem::path{READER_KERNEL},
+        .dfb_bindings =
+            {m2::ProducerOf(m2::DFBSpecName{"cb"}, "cb_in"),
+             m2::ProducerOf(m2::DFBSpecName{"cb_tensor"}, "cb_tensor")},
+        .tensor_bindings =
+            {m2::TensorBinding{.tensor_parameter_name = m2::TensorParamName{"src"}, .accessor_name = "src"},
+             m2::TensorBinding{.tensor_parameter_name = m2::TensorParamName{"starts"}, .accessor_name = "starts"},
+             m2::TensorBinding{.tensor_parameter_name = m2::TensorParamName{"ends"}, .accessor_name = "ends"}},
+        .compile_time_args =
+            {{"num_dims", g.num_dims}, {"tile_width", g.tile_width}, {"tile_height", g.tile_height}},
+        .runtime_arg_schema = {.runtime_arg_names = {"start_id", "num_tiles"}},
+        .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementHardwareConfig::RoleHint::READER},
+        .advanced_options =
+            m2::KernelAdvancedOptions{
+                .num_runtime_varargs = g.num_dims, .num_common_runtime_varargs = 3 * g.num_dims},
+    };
+
+    m2::KernelSpec writer{
+        .unique_id = m2::KernelSpecName{"writer"},
+        .source = std::filesystem::path{WRITER_KERNEL},
+        .dfb_bindings = {m2::ConsumerOf(m2::DFBSpecName{"cb"}, "cb_out")},
+        .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = m2::TensorParamName{"dst"}, .accessor_name = "dst"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
+        .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementHardwareConfig::RoleHint::WRITER},
+    };
+
+    m2::ProgramSpec spec;
+    spec.name = "slice_tile_tensor_args";
+    spec.kernels = {std::move(reader), std::move(writer)};
+    spec.dataflow_buffers = {std::move(cb), std::move(cb_tensor)};
+    spec.tensor_parameters = {
+        m2::TensorParameter{.unique_id = m2::TensorParamName{"src"}, .spec = tensor_args.input.tensor_spec()},
+        m2::TensorParameter{
+            .unique_id = m2::TensorParamName{"starts"}, .spec = tensor_args.start_tensor.value().tensor_spec()},
+        m2::TensorParameter{
+            .unique_id = m2::TensorParamName{"ends"}, .spec = tensor_args.end_tensor.value().tensor_spec()},
+        m2::TensorParameter{.unique_id = m2::TensorParamName{"dst"}, .spec = output.tensor_spec()}};
+    spec.work_units = {m2::WorkUnitSpec{
+        .name = "slice",
+        .kernels = {m2::KernelSpecName{"reader"}, m2::KernelSpecName{"writer"}},
+        .target_nodes = g.all_cores}};
+    return spec;
+}
+
+m2::ProgramRunArgs SliceTileTensorArgsProgramFactory::create_invariant_run_args(
+    const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
+    const auto g = compute_geometry(args, tensor_args, output);
+
+    m2::ProgramRunArgs::KernelRunArgs reader_args{.kernel = m2::KernelSpecName{"reader"}};
+    m2::ProgramRunArgs::KernelRunArgs writer_args{.kernel = m2::KernelSpecName{"writer"}};
+
+    // Common varargs (broadcast): [num_unpadded..., num_padded..., input_shape...].
+    auto& common = reader_args.advanced_options.common_runtime_varargs;
+    common.insert(common.end(), g.num_unpadded_per_dim.begin(), g.num_unpadded_per_dim.end());
+    common.insert(common.end(), g.num_padded_per_dim.begin(), g.num_padded_per_dim.end());
+    common.insert(common.end(), g.input_shape_per_dim.begin(), g.input_shape_per_dim.end());
+
+    for (size_t i = 0; i < g.cores.size(); ++i) {
+        const auto node = node_of(g.cores[i]);
+        reader_args.runtime_arg_values.push_back(
+            {node, {{"start_id", g.reader_start_id[i]}, {"num_tiles", g.reader_num_tiles[i]}}});
+        reader_args.advanced_options.runtime_varargs.emplace(
+            node, m2::AdvancedKernelRunArgs::Varargs(g.id_per_dim[i].begin(), g.id_per_dim[i].end()));
+        writer_args.runtime_arg_values.push_back(
+            {node, {{"num_pages", g.reader_num_tiles[i]}, {"start_id", g.writer_start_id[i]}}});
+    }
+
+    m2::ProgramRunArgs run_args;
+    run_args.kernel_run_args.push_back(std::move(reader_args));
+    run_args.kernel_run_args.push_back(std::move(writer_args));
+    return run_args;
+}
+
+m2::ProgramRunArgs SliceTileTensorArgsProgramFactory::create_per_enqueue_args(
+    const SliceParams& /*args*/,
+    const SliceInputs& tensor_args,
+    Tensor& output,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    m2::ProgramRunArgs run_args;
+    run_args.tensor_args.emplace(
+        m2::TensorParamName{"src"}, m2::ProgramRunArgs::TensorArgument{std::cref(tensor_args.input.mesh_tensor())});
+    run_args.tensor_args.emplace(
+        m2::TensorParamName{"starts"},
+        m2::ProgramRunArgs::TensorArgument{std::cref(tensor_args.start_tensor.value().mesh_tensor())});
+    run_args.tensor_args.emplace(
+        m2::TensorParamName{"ends"},
+        m2::ProgramRunArgs::TensorArgument{std::cref(tensor_args.end_tensor.value().mesh_tensor())});
+    run_args.tensor_args.emplace(
+        m2::TensorParamName{"dst"}, m2::ProgramRunArgs::TensorArgument{std::cref(output.mesh_tensor())});
+    return run_args;
 }
 
 }  // namespace ttnn::prim
