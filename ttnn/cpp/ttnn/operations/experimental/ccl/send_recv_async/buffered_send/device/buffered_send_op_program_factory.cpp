@@ -200,11 +200,12 @@ BufferedSendMeshWorkloadFactory::create_at(
     };
     writer_compile_args.insert(writer_compile_args.end(), compile_time_args.begin(), compile_time_args.end());
 
-    // buffered_send reuses the send_direct_async writer kernel (identical behaviour).
+    // buffered_send uses its own writer kernel: it receives the ring of receive-buffer addresses
+    // advertised by buffered_recv and streams the tensor into the first one.
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/send_direct_async/device/kernels/"
-        "sender_direct_writer.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/buffered_send/device/kernels/"
+        "sender_buffered.cpp",
         sender_core_range_set,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
 

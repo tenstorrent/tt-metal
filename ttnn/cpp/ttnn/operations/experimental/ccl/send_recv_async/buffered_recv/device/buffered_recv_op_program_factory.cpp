@@ -25,7 +25,7 @@ BufferedRecvMeshWorkloadFactory::cached_mesh_workload_t BufferedRecvMeshWorkload
     const BufferedRecvParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const std::vector<Tensor>& tensor_args,
-    std::vector<Tensor>& tensor_return_value) {
+    Tensor& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
     ttnn::MeshCoordinateRangeSet workload_coords =
@@ -44,7 +44,7 @@ BufferedRecvMeshWorkloadFactory::create_at(
     const BufferedRecvParams& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
     const std::vector<Tensor>& tensor_args,
-    std::vector<Tensor>& /*tensor_return_value*/) {
+    Tensor& /*tensor_return_value*/) {
     auto mesh_socket = operation_attributes.mesh_socket;
 
     // SKELETON: only the first output buffer is wired up for now. The N-buffer ring and the
@@ -120,30 +120,48 @@ BufferedRecvMeshWorkloadFactory::create_at(
 
     CreateCircularBuffer(program, receiver_core_range_set, cb_packet_header_config);
 
+    const auto num_output_tensors = static_cast<uint32_t>(tensor_args.size());
+
+    // CB to stage the OutputTensorInfo struct advertised back to the sender:
+    // {num_tensors, page_size, num_pages, base_addr[num_output_tensors]}.
+    auto output_info_cb_index = tt::CBIndex::c_1;
+    uint32_t output_info_cb_page_size =
+        tt::align(static_cast<uint32_t>((3 + num_output_tensors) * sizeof(uint32_t)), max_alignment);
+    tt::tt_metal::CircularBufferConfig cb_output_info_config =
+        tt::tt_metal::CircularBufferConfig(output_info_cb_page_size, {{output_info_cb_index, tt::DataFormat::UInt32}})
+            .set_page_size(output_info_cb_index, output_info_cb_page_size);
+
+    CreateCircularBuffer(program, receiver_core_range_set, cb_output_info_config);
+
     std::vector<uint32_t> handshake_compile_args = {
         packet_header_cb_index,  // fabric_packet_header_cb_id
         handshake_page_size,     // handshake_page_size (socket page size)
+        num_output_tensors,      // num_output_tensors (ring of receive buffers)
+        output_info_cb_index,    // output_info_cb_id
     };
 
-    // SKELETON: reuse the recv_direct_async receiver kernel for the single-buffer handshake.
     auto handshake_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/recv_direct_async/device/kernels/"
-        "receiver_direct.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/buffered_recv/device/kernels/"
+        "receiver_buffered.cpp",
         receiver_core_range_set,
         tt::tt_metal::WriterDataMovementConfig(handshake_compile_args));
 
     for (uint32_t core_idx = 0; core_idx < num_cores; ++core_idx) {
+        log_info(tt::LogOp, "Launching buffered recv receiver kernel for core {}", receiver_core_coords[core_idx]);
         const auto& receiver_core_coord = receiver_core_coords[core_idx];
         const auto& sender_fabric_node_id = sender_fabric_node_ids[core_idx];
         const auto& receiver_fabric_node_id = receiver_fabric_node_ids[core_idx];
 
         std::vector<uint32_t> handshake_rt_args = {
             mesh_socket.get_config_buffer()->address(),  // socket_config_addr
-            output_tensor.buffer()->address(),           // output_base_addr
             static_cast<uint32_t>(output_page_size),     // output_page_size
             static_cast<uint32_t>(total_num_pages),      // num_pages
         };
+        // One base address per output tensor in the ring of receive buffers.
+        for (const auto& tensor : tensor_args) {
+            handshake_rt_args.push_back(tensor.buffer()->address());
+        }
 
         auto link_indices = tt::tt_fabric::get_forwarding_link_indices(receiver_fabric_node_id, sender_fabric_node_id);
         TT_FATAL(!link_indices.empty(), "No link indices found for receiver core");
@@ -172,7 +190,7 @@ void BufferedRecvMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
     const BufferedRecvParams& operation_attributes,
     const std::vector<Tensor>& tensor_args,
-    [[maybe_unused]] std::vector<Tensor>& tensor_return_value) {
+    [[maybe_unused]] Tensor& tensor_return_value) {
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
 
@@ -180,12 +198,15 @@ void BufferedRecvMeshWorkloadFactory::override_runtime_arguments(
         const auto& handshake_kernel_id = shared_vars.handshake_kernel_id;
 
         const auto& mesh_socket = operation_attributes.mesh_socket;
-        const auto& output_tensor = tensor_args.at(0);
 
+        // Runtime arg layout: [socket_config_addr, output_page_size, num_pages, output_base_addr[0..N]].
+        constexpr size_t output_base_addr_offset = 3;
         for (const auto& receiver_core_coord : receiver_core_coords) {
             auto& handshake_runtime_args = GetRuntimeArgs(program, handshake_kernel_id, receiver_core_coord);
             handshake_runtime_args[0] = mesh_socket.get_config_buffer()->address();
-            handshake_runtime_args[1] = output_tensor.buffer()->address();
+            for (size_t i = 0; i < tensor_args.size(); ++i) {
+                handshake_runtime_args[output_base_addr_offset + i] = tensor_args[i].buffer()->address();
+            }
         }
     }
 }

@@ -20,6 +20,24 @@ void BufferedRecvDeviceOperation::validate_on_program_cache_miss(
     for (const auto& output_tensor : output_tensors) {
         TT_FATAL(output_tensor.device() != nullptr, "buffered_recv op requires a device");
     }
+
+    // All output tensors form a ring of receive buffers, so they must be homogeneous: same device,
+    // dtype, layout and memory config.
+    const auto& first_output_tensor = output_tensors.front();
+    for (const auto& output_tensor : output_tensors) {
+        TT_FATAL(
+            output_tensor.device() == first_output_tensor.device(),
+            "buffered_recv op requires all output tensors to be on the same device");
+        TT_FATAL(
+            output_tensor.dtype() == first_output_tensor.dtype(),
+            "buffered_recv op requires all output tensors to have the same dtype");
+        TT_FATAL(
+            output_tensor.layout() == first_output_tensor.layout(),
+            "buffered_recv op requires all output tensors to have the same layout");
+        TT_FATAL(
+            output_tensor.memory_config() == first_output_tensor.memory_config(),
+            "buffered_recv op requires all output tensors to have the same memory config");
+    }
     TT_FATAL(
         mesh_socket.get_socket_endpoint_type() == tt::tt_metal::distributed::SocketEndpoint::RECEIVER,
         "buffered_recv op requires a {} socket",
@@ -34,17 +52,14 @@ void BufferedRecvDeviceOperation::validate_on_program_cache_miss(
 
 BufferedRecvDeviceOperation::spec_return_value_t BufferedRecvDeviceOperation::compute_output_specs(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
-    spec_return_value_t specs;
-    specs.reserve(tensor_args.size());
-    for (const auto& output_tensor : tensor_args) {
-        specs.push_back(output_tensor.tensor_spec());
-    }
-    return specs;
+    // SKELETON: only the first receive buffer is wired up for now.
+    return tensor_args.at(0).tensor_spec();
 }
 
 BufferedRecvDeviceOperation::tensor_return_value_t BufferedRecvDeviceOperation::create_output_tensors(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
-    return tensor_args;
+    // SKELETON: only the first receive buffer is wired up for now.
+    return tensor_args.at(0);
 }
 
 ttsl::hash::hash_t BufferedRecvDeviceOperation::compute_program_hash(
@@ -58,7 +73,7 @@ ttsl::hash::hash_t BufferedRecvDeviceOperation::compute_program_hash(
 
 namespace ttnn::prim {
 
-std::vector<Tensor> buffered_recv(
+Tensor buffered_recv(
     const std::vector<ttnn::Tensor>& output_tensors,
     const tt::tt_metal::distributed::MeshSocket& mesh_socket,
     const tt::tt_metal::GlobalSemaphore& global_semaphore) {

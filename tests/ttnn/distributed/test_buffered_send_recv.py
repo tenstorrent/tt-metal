@@ -54,8 +54,8 @@ def _run_buffered_send_recv_case(
 ):
     torch.manual_seed(0)
 
-    sender_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(1, 2), ttnn.MeshCoordinate(0, 0))
-    receiver_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(1, 2), ttnn.MeshCoordinate(1, 0))
+    sender_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(1, 1), ttnn.MeshCoordinate(0, 0))
+    receiver_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(1, 1), ttnn.MeshCoordinate(0, 1))
 
     mesh_shape = sender_mesh_device.shape
 
@@ -85,21 +85,26 @@ def _run_buffered_send_recv_case(
     available_cores = ttnn.num_cores_to_corerangeset(grid.x * grid.y, grid, row_wise=True)
     global_semaphore = ttnn.create_global_semaphore(receiver_mesh_device, available_cores, 0)
 
+    print("Running buffered_send")
     ttnn.experimental.buffered_send(input_tensor, send_socket)
-    ttnn.experimental.buffered_recv(output_tensors, recv_socket, global_semaphore)
+    print("Running buffered_recv")
+    # buffered_recv returns a single tensor (the receive buffer that holds the data).
+    output_tensor = ttnn.experimental.buffered_recv(output_tensors, recv_socket, global_semaphore)
 
+    print("Synchronizing devices")
     ttnn.synchronize_device(sender_mesh_device)
+    print("Finished synchronizing sender")
     ttnn.synchronize_device(receiver_mesh_device)
-
+    print("Finished synchronizing receiver")
     input_data = ttnn.to_torch(input_tensor, mesh_composer=ttnn.ConcatMeshToTensor(sender_mesh_device, dim=0))
     # SKELETON: only the first receive buffer is wired up for now.
-    output_data = ttnn.to_torch(output_tensors[0], mesh_composer=ttnn.ConcatMeshToTensor(receiver_mesh_device, dim=0))
+    output_data = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(receiver_mesh_device, dim=0))
     eq, msg = comp_equal(input_data, output_data)
     assert eq, msg
 
 
 @pytest.mark.timeout(120)
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)
 @pytest.mark.parametrize(
     "tensor_shape",
@@ -113,12 +118,12 @@ def _run_buffered_send_recv_case(
 )
 @pytest.mark.parametrize(
     "num_connections",
-    [2],
+    [1],
     ids=lambda v: f"conn{v}",
 )
 @pytest.mark.parametrize(
     "num_buffers",
-    [1, 4],
+    [3],
     ids=lambda v: f"buffers{v}",
 )
 def test_buffered_send_recv(

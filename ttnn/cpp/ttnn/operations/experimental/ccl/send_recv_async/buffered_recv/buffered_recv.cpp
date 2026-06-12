@@ -11,7 +11,7 @@
 
 namespace ttnn::experimental {
 
-std::vector<ttnn::Tensor> buffered_recv(
+ttnn::Tensor buffered_recv(
     const std::vector<ttnn::Tensor>& output_tensors,
     const tt::tt_metal::distributed::MeshSocket& mesh_socket,
     const tt::tt_metal::GlobalSemaphore& global_semaphore) {

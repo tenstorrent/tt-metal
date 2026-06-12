@@ -33,7 +33,7 @@ void bind_buffered_recv(nb::module_& mod) {
         Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md
 
         Returns:
-            std::vector<ttnn.Tensor>: A vector containing the output tensors.
+            ttnn.Tensor: The output tensor that received the data.
 
         )doc",
         &ttnn::experimental::buffered_recv,
