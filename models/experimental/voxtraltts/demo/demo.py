@@ -23,6 +23,10 @@ Modes
 ``latents``
     Pre-computed ``[1,1,T,C]`` latent tensor → TT mel decode + pretransform
 
+Audio tokenizer decode uses **native sliding-window SDPA** by default (fast path validated
+by ``test_audio_tokenizer_native_sdpa_pcc``). Pass ``--dense-alibi-sdpa`` for production-quality
+ALiBi decode (slower, cleaner waveform).
+
 Run (from tt-metal repo root)::
 
     export VOXTRAL_TTS_MODEL=mistralai/Voxtral-4B-TTS-2603
@@ -55,6 +59,10 @@ import ttnn
 from models.experimental.voxtraltts.reference.voxtral_config import DEFAULT_VOXTRAL_MODEL, load_voxtral_config
 from models.experimental.voxtraltts.tt.voxtral_tts import VoxtralTTSPipeline
 from models.experimental.voxtraltts.tt.voxtral_tt_args import voxtral_text_hf_aligned_optimizations
+from models.experimental.voxtraltts.utils.audio_tokenizer_optimizations import (
+    voxtral_audio_tokenizer_dense_mask_sdpa_optimizations,
+    voxtral_audio_tokenizer_native_sdpa_optimizations,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -75,6 +83,7 @@ class TTArgs:
     tokenizer_dtype: str = "bfloat16"
     use_paged_kv_cache: bool = False
     paged_block_size: int = 32
+    dense_alibi_sdpa: bool = False
 
 
 @dataclass
@@ -143,6 +152,13 @@ def _parse_demo_args(argv: list[str] | None = None) -> DemoArgs:
     p.add_argument(
         "--paged-block-size", type=int, default=32, help="KV block size for paged attention (multiple of 32)."
     )
+    p.add_argument(
+        "--dense-alibi-sdpa",
+        action="store_true",
+        default=False,
+        help="Use dense ALiBi SDPA for audio tokenizer decode (slower, cleaner audio). "
+        "Default is native sliding-window SDPA (faster demo path).",
+    )
     ns = p.parse_args(argv)
     inline_texts = [" ".join(parts).strip() for parts in ns.text] if ns.text else None
     if inline_texts and ns.mode != "text":
@@ -155,6 +171,7 @@ def _parse_demo_args(argv: list[str] | None = None) -> DemoArgs:
             text_max_seq_len=ns.text_max_seq_len,
             use_paged_kv_cache=ns.use_paged_kv_cache,
             paged_block_size=ns.paged_block_size,
+            dense_alibi_sdpa=ns.dense_alibi_sdpa,
         ),
         data=DataArgs(
             prompts_file=ns.prompts,
@@ -239,6 +256,11 @@ def _check_seq_len_memory(text_max_seq_len: int) -> None:
 
 def _load_pipeline(mesh: ttnn.Device, args: DemoArgs) -> VoxtralTTSPipeline:
     _check_seq_len_memory(args.tt.text_max_seq_len)
+    audio_tokenizer_optimizations = (
+        voxtral_audio_tokenizer_dense_mask_sdpa_optimizations()
+        if args.tt.dense_alibi_sdpa
+        else voxtral_audio_tokenizer_native_sdpa_optimizations()
+    )
     return VoxtralTTSPipeline.from_model_name(
         mesh,
         model_name_or_path=args.model.model_name_or_path,
@@ -247,6 +269,7 @@ def _load_pipeline(mesh: ttnn.Device, args: DemoArgs) -> VoxtralTTSPipeline:
         text_optimizations=voxtral_text_hf_aligned_optimizations,
         acoustic_dtype=_ttnn_dtype(args.tt.acoustic_dtype),
         tokenizer_dtype=_ttnn_dtype(args.tt.tokenizer_dtype),
+        audio_tokenizer_optimizations=audio_tokenizer_optimizations,
         use_paged_kv_cache=args.tt.use_paged_kv_cache,
         paged_block_size=args.tt.paged_block_size,
     )
