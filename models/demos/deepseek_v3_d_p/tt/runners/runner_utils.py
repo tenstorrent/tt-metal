@@ -73,7 +73,7 @@ VARIANTS = {
         ttnn_cache_env="TT_KIMI_PREFILL_TTNN_CACHE",
         ttnn_cache_default="/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill",
         default_is_balanced=False,  # Kimi is validated only in non_balanced layout
-        default_gate_mode="DEVICE",  # Kimi (1 expert group) routes via the device top-k gate
+        default_gate_mode="DEVICE_FP32",  # Kimi (1 expert group) routes through the fp32 grouped-topk device kernel (handles n_groups == 1)
     ),
 }
 

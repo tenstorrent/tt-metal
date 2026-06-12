@@ -749,8 +749,9 @@ def test_ds_prefill_block_chunked_padded(
 # Kimi K2.6 variants
 # ---------------------------------------------------------------------------
 # Same chunked-prefill machinery as the DeepSeek tests, with the kimi_k2_6 variant: the device gate
-# (GateComputeMode.DEVICE — Kimi has a single expert group, so the grouped routing collapses to a
-# plain device top-k) and KimiK26Config fabric payload size. Kimi has a single dense layer (NUM_DENSE_LAYERS=1,
+# (GateComputeMode.DEVICE_FP32 — Kimi has a single expert group, so it routes through the fp32
+# grouped-topk device kernel, which handles the n_groups == 1 case) and KimiK26Config fabric payload
+# size. Kimi has a single dense layer (NUM_DENSE_LAYERS=1,
 # layer 0); the block test reads layer L-1's decoder output as layer L's input, so we cannot drive
 # the lone dense layer (would need layer -1) — only the first MoE layer (layer 1) is exercised.
 # These skip until the Kimi golden trace lands (set KIMI_PREFILL_TRACE_DIR; see model_variants.py).
@@ -759,8 +760,8 @@ def test_ds_prefill_block_chunked_padded(
 @pytest.mark.parametrize("n_chunks", [1, 2, 5, 10, 11], ids=["chunks1", "chunks2", "chunks5", "chunks10", "chunks11"])
 @pytest.mark.parametrize(
     "layer_idx, gate_fallback_mode",
-    [(1, GateComputeMode.DEVICE)],
-    ids=["moe-gate_device"],
+    [(1, GateComputeMode.DEVICE_FP32)],
+    ids=["moe_gate_device"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
@@ -810,8 +811,8 @@ def test_kimi_prefill_block_chunked(
 @pytest.mark.parametrize("splits", [[1024, 4096], _PADDED_FULL_55K], ids=["1k+4k", "full55k"])
 @pytest.mark.parametrize(
     "layer_idx, gate_fallback_mode",
-    [(1, GateComputeMode.DEVICE)],
-    ids=["moe-gate_device"],
+    [(1, GateComputeMode.DEVICE_FP32)],
+    ids=["moe_gate_device"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",

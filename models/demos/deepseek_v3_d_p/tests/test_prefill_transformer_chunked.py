@@ -617,8 +617,9 @@ def test_ds_prefill_transformer_chunked_padded(
 # Kimi K2.6 variants
 # ---------------------------------------------------------------------------
 # Same chunked-prefill validation as the DeepSeek tests, with the kimi_k2_6 variant and the device gate
-# (GateComputeMode.DEVICE — Kimi has a single expert group, so the grouped routing collapses to a
-# plain device top-k) + KimiK26Config fabric payload. These skip until the Kimi golden trace lands (set
+# (GateComputeMode.DEVICE_FP32 — Kimi has a single expert group, so it routes through the fp32
+# grouped-topk device kernel, which handles the n_groups == 1 case) + KimiK26Config fabric payload.
+# These skip until the Kimi golden trace lands (set
 # KIMI_PREFILL_TRACE_DIR; see model_variants.py).
 
 
@@ -662,7 +663,7 @@ def test_kimi_prefill_transformer_chunked(
         weight_cache_path,
         num_layers,
         n_chunks,
-        GateComputeMode.DEVICE,
+        GateComputeMode.DEVICE_FP32,
         num_links,
         topology,
     )
@@ -708,7 +709,7 @@ def test_kimi_prefill_transformer_chunked_padded(
         weight_cache_path,
         num_layers,
         splits,
-        GateComputeMode.DEVICE,
+        GateComputeMode.DEVICE_FP32,
         num_links,
         topology,
     )
