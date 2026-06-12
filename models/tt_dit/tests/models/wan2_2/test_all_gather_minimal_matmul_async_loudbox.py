@@ -64,12 +64,12 @@ def get_1x8_mesh(mesh_device):
     "M, K, N, use_bias, activation, chunks, fuse_addcmul, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
     [
         # TODO: run perf tests
-        (1024, 6144, 2304, True, None, 1, False, 1, 4, 12, 1, 4),
-        (512, 6144, 2304, True, None, 1, False, 1, 4, 24, 1, 4),
-        (1024, 6144, 768, True, None, 1, False, 2, 3, 16, 1, 2),  # DOES TRANSPOSE, NOT useful
-        (512, 6144, 768, True, None, 1, False, 2, 3, 16, 1, 2),
-        (1024, 6144, 4608, False, None, 1, False, 1, 4, 24, 1, 4),  # OG test case
-        (768, 6144, 1536, True, "gelu", 2, False, 2, 2, 12, 1, 2),
+        (1024, 6144, 2304, True, None, 1, False, 12, 4, 7, 4, 1),
+        (512, 6144, 2304, True, None, 1, False, 2, 8, 7, 2, 1),
+        (1024, 6144, 768, True, None, 1, False, 8, 12, 3, 4, 1),  # DOES TRANSPOSE, NOT useful
+        (512, 6144, 768, True, None, 1, False, 10, 8, 3, 1, 3),
+        (1024, 6144, 4608, False, None, 1, False, 8, 3, 14, 2, 2),  # OG test case
+        (768, 6144, 1536, True, "gelu", 2, False, 3, 4, 5, 3, 1),
     ],
     ids=["flux22-1", "flux22-2", "flux22-3", "flux22-4", "flux22-5", "flux22-6"],
 )
@@ -114,7 +114,13 @@ def test_linear_AGMM_perf(
     if is_wormhole_b0():
         pytest.skip("Blackhole config not supported on wormhole_b0")
 
-    mesh_device = get_1x8_mesh(mesh_device)
+    # Full 4x8 Galaxy: run on the whole mesh (M sharded across the 4 rows, K gathered across the 8
+    # columns). All other configs carve down to a 1x8. The M params are per-device, so on the full
+    # 4x8 scale M by the sp-axis size (x4) to keep per-device M at the swept/tuned size.
+    if mesh_device.shape == ttnn.MeshShape(4, 8):
+        M = M * mesh_device.shape[sp_axis]
+    else:
+        mesh_device = get_1x8_mesh(mesh_device)
 
     # Mirror the program factory's grid heuristic (all_gather_minimal_matmul_async_program_factory.cpp):
     # the matmul transposes its core grid when force_transpose is set OR the per-device output is taller

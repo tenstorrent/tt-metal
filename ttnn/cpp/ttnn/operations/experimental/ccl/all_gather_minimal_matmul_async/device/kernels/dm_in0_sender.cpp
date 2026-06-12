@@ -322,7 +322,6 @@ void kernel_main() {
             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
 
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
-                DeviceZoneScopedN("in0 block");
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
                         cb_out.wait_front(out_block_num_tiles);
@@ -413,7 +412,6 @@ void kernel_main() {
                     }
                 }
                 if (is_injector_core) {
-                    DeviceZoneScopedN("injector core read in0 block");
                     read_in0_block_sync<M_block_tiles, K_block_tiles>(
                         noc_obj,
                         in0_reader,
