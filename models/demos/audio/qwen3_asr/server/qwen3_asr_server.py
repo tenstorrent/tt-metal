@@ -105,9 +105,23 @@ def _ensure_warm():
     print(f"[server] warm in {time.time()-tw:.1f}s", flush=True)
 
 
+FIXED_INFER_SEC = 14.0  # every _infer runs at EXACTLY this audio length (see below)
+
+
 def _infer(wav, force, max_new_tokens=200):
-    """Run the full TT pipeline on a 16k mono float32 waveform. Returns (text, lang, secs)."""
+    """Run the full TT pipeline on a 16k mono float32 waveform. Returns (text, lang, secs).
+
+    ROOT-CAUSE FIX (variable-prefill-length corruption): in the long-lived encoder+decoder
+    pipeline, mixing requests of DIFFERENT prefill lengths corrupts the decoder — it "locks"
+    to the first request's length and emits only the language tag + EOS (empty transcript) for
+    other lengths (encoder-alone and decoder-alone are each stable; the interleaving with a
+    varying real sequence length is the trigger — a length-keyed program/state issue in
+    tt-metal). Pinning every request to ONE fixed audio length (pad short with silence, cap
+    long) makes the prefill length constant -> all requests transcribe fully. Verified: varied
+    14s clips and 6s-padded-to-14s clips all transcribe; the old 6s/30s mix truncated."""
     t0 = time.time()
+    n = int(FIXED_INFER_SEC * SR)
+    wav = wav[:n] if len(wav) >= n else np.concatenate([wav, np.zeros(n - len(wav), dtype=np.float32)])
     prompt = _build_prompt(STATE["proc"], force)
     inputs = STATE["proc"](text=[prompt], audio=[wav], return_tensors="pt", padding=True)
     input_ids = inputs["input_ids"][0].long()
@@ -136,11 +150,16 @@ def _infer(wav, force, max_new_tokens=200):
 
 # --- Tier-2 long-form: silence-aware chunking + hallucination/non-speech gating ---
 SR = 16000
-SINGLE_CAP = 45.0          # <= this -> single-shot; longer -> chunk
-# Wide silence search [start+SEG_MIN, start+SEG_MAX]: prefer the longest pause anywhere in
-# the window (not just near TARGET) so cuts land at natural boundaries instead of hard-capping
-# mid-word at SEG_MAX. SEG_MAX stays <=45s (~1024 prefill).
-SEG_TARGET, SEG_MAX, SEG_MIN = 38.0, 45.0, 18.0
+# CRITICAL: keep EVERY segment <= ~32s so its prefill pads to exactly 512 tokens (one MLP
+# reshape bucket, S//512==1). The decoder MLP reshapes prefill x to [1, S_pad//512, 512, -1];
+# 512-pad (bucket 1) and 1024-pad (bucket 2, for >~37s) take different program shapes, and
+# MIXING buckets across requests in the long-lived server corrupts later requests (they return
+# empty) — the same failure class as the old 256-vs-512 mix. Capping all segments to one bucket
+# (512) makes the server stable. Longer audio is chunked; nothing is single-shot above the cap.
+SINGLE_CAP = FIXED_INFER_SEC   # <= this -> single-shot; longer -> chunk. Segments are <=FIXED_INFER_SEC
+# so _infer's fixed-length pin never drops real audio. Constant prefill length across all requests
+# is what keeps the pipeline stable (see _infer). Longer audio is silence-chunked into <=14s windows.
+SEG_TARGET, SEG_MAX, SEG_MIN = 12.0, 14.0, 7.0
 SIL_RMS = 0.005          # per-frame silence detection for segment CUTTING (not speech gating)
 SPEECH_MIN = 0.008       # speech-presence gate on the 90th-pctile of short-window RMS
 
