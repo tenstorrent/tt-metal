@@ -634,6 +634,28 @@ void verify_fabric_lease_stress(
     expect_receiver_backing_iota(receiver.get(), receiver_mesh, num_iters);
 }
 
+// Assert the metadata blob equals `expected` on every receiver worker core's L1
+// (where the receiver service multicast it). Factored out so the multi-hop chain
+// driver can validate the terminal receiver without a paired sender on the same mesh.
+void expect_metadata_on_receiver_workers(
+    D2DStreamServiceReceiver* receiver,
+    const std::shared_ptr<MeshDevice>& receiver_mesh,
+    const std::vector<uint32_t>& expected) {
+    const uint32_t md_bytes = static_cast<uint32_t>(expected.size() * sizeof(uint32_t));
+    const uint32_t recv_md_addr = static_cast<uint32_t>(receiver->get_metadata_addr());
+    const CoreRange recv_workers = receiver->get_worker_cores();
+    std::vector<uint32_t> rb;
+    for (const auto& coord : receiver->get_backing_tensor().tensor_topology().mesh_coords()) {
+        auto* device = receiver_mesh->get_device(coord);
+        for (const auto& wc : recv_workers) {
+            rb.clear();
+            tt::tt_metal::detail::ReadFromDeviceL1(device, wc, recv_md_addr, md_bytes, rb);
+            EXPECT_EQ(rb, expected) << "receiver metadata mismatch at coord " << coord << " core (" << wc.x << ","
+                                    << wc.y << ")";
+        }
+    }
+}
+
 // Assert the metadata blob equals `expected` on BOTH the sender service core L1
 // (where the designated worker wrote it) and every receiver worker core's L1
 // (where the receiver service multicast it).
@@ -657,17 +679,7 @@ void expect_metadata_everywhere(
         EXPECT_EQ(rb, expected) << "sender service-core metadata mismatch at " << coord;
     }
 
-    const uint32_t recv_md_addr = static_cast<uint32_t>(receiver->get_metadata_addr());
-    const CoreRange recv_workers = receiver->get_worker_cores();
-    for (const auto& coord : receiver->get_backing_tensor().tensor_topology().mesh_coords()) {
-        auto* device = receiver_mesh->get_device(coord);
-        for (const auto& wc : recv_workers) {
-            rb.clear();
-            tt::tt_metal::detail::ReadFromDeviceL1(device, wc, recv_md_addr, md_bytes, rb);
-            EXPECT_EQ(rb, expected) << "receiver metadata mismatch at coord " << coord << " core (" << wc.x << ","
-                                    << wc.y << ")";
-        }
-    }
+    expect_metadata_on_receiver_workers(receiver, receiver_mesh, expected);
 }
 
 // STEP 3 driver: full end-to-end metadata. Real sender + receiver workers drive
@@ -841,16 +853,30 @@ void expect_output_tensor_iota(
 // ===========================================================================
 
 // Build the bridge worker workload on the sender mesh: one program per coord. Each
-// worker copies its page slice of the H2D backing tensor into the D2D sender
+// worker copies its page slice of the UPSTREAM backing tensor into the D2D sender
 // backing tensor and runs both handshakes num_iters times. The designated
 // (highest-id) worker forwards the metadata from its L1 to the D2D sender service.
+//
+// Templated on the upstream type so the same builder serves both the stage-0 bridge
+// (upstream == H2DStreamService) and a middle-stage bridge in a multi-hop chain
+// (upstream == D2DStreamServiceReceiver). Both expose the identical upstream-handshake
+// getters (get_backing_tensor / get_per_shard_spec / get_data_ready_sem_addr /
+// get_consumed_counter_addr / get_service_core / get_metadata_addr), and the bridge
+// kernel is upstream-agnostic, so the only difference is the deduced type.
+template <typename Upstream>
 MeshWorkload make_bridge_workload(
-    H2DStreamService& h2d_service,
+    Upstream& upstream,
     D2DStreamServiceSender* d2d_sender,
     const std::shared_ptr<MeshDevice>& mesh,
     const CoreRange& worker_cores,
     uint32_t num_iters,
     uint32_t metadata_size_bytes) {
+    // The kernel reuses a single TensorAccessorArgs (built from the D2D sender backing)
+    // for both the upstream read and the downstream write, so the two specs must match.
+    TT_FATAL(
+        upstream.get_per_shard_spec() == d2d_sender->get_per_shard_spec(),
+        "make_bridge_workload: upstream and D2D sender per-shard specs must match");
+
     const auto& coords = d2d_sender->get_backing_tensor().tensor_topology().mesh_coords();
     const auto* backing_buffer = d2d_sender->get_backing_tensor().buffer();
     const uint32_t page_size = backing_buffer->aligned_page_size();
@@ -859,10 +885,9 @@ MeshWorkload make_bridge_workload(
     const bool metadata_enabled = metadata_size_bytes > 0;
     constexpr auto kScratchCb = CBIndex::c_0;
 
-    const uint32_t h2d_input_addr = static_cast<uint32_t>(h2d_service.get_backing_tensor().buffer()->address());
+    const uint32_t h2d_input_addr = static_cast<uint32_t>(upstream.get_backing_tensor().buffer()->address());
     const uint32_t d2d_backing_addr = static_cast<uint32_t>(backing_buffer->address());
-    const uint32_t h2d_metadata_l1_addr =
-        metadata_enabled ? static_cast<uint32_t>(h2d_service.get_metadata_addr()) : 0u;
+    const uint32_t h2d_metadata_l1_addr = metadata_enabled ? static_cast<uint32_t>(upstream.get_metadata_addr()) : 0u;
 
     MeshWorkload workload;
     for (const auto& coord : coords) {
@@ -875,7 +900,7 @@ MeshWorkload make_bridge_workload(
         const auto* dbuf = d2d_sender->get_backing_tensor().mesh_buffer().get_device_buffer(coord);
         auto accessor_ct = TensorAccessorArgs(*dbuf).get_compile_time_args();
         std::vector<uint32_t> ct_args = {
-            static_cast<uint32_t>(h2d_service.get_data_ready_sem_addr()),
+            static_cast<uint32_t>(upstream.get_data_ready_sem_addr()),
             h2d_input_addr,
             d2d_backing_addr,
             page_size,
@@ -896,7 +921,7 @@ MeshWorkload make_bridge_workload(
                 .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = ct_args});
 
         auto* device = mesh->get_device(coord);
-        const auto h2d_service_phys = device->worker_core_from_logical_core(h2d_service.get_service_core(coord));
+        const auto h2d_service_phys = device->worker_core_from_logical_core(upstream.get_service_core(coord));
         const auto d2d_service_phys = device->worker_core_from_logical_core(d2d_sender->get_service_core(coord));
         const uint32_t d2d_md_addr =
             metadata_enabled ? static_cast<uint32_t>(d2d_sender->get_metadata_addr(coord)) : 0u;
@@ -907,7 +932,7 @@ MeshWorkload make_bridge_workload(
             const std::vector<uint32_t> rt_args = {
                 start_page,
                 end_page,
-                static_cast<uint32_t>(h2d_service.get_consumed_counter_addr(coord)),
+                static_cast<uint32_t>(upstream.get_consumed_counter_addr(coord)),
                 static_cast<uint32_t>(h2d_service_phys.x),
                 static_cast<uint32_t>(h2d_service_phys.y),
                 static_cast<uint32_t>(d2d_sender->get_data_ready_counter_addr(coord)),
@@ -1008,6 +1033,77 @@ void verify_h2d_d2d_bridge(
     if (metadata_enabled) {
         expect_metadata_everywhere(
             sender.get(), receiver.get(), sender_mesh, receiver_mesh, {static_cast<uint32_t>(-1), 0u, final_value});
+    }
+}
+
+// 1->1->1 chain driver: full Host -> H2D -> bridge -> D2D0 -> MIDDLE bridge -> D2D1 ->
+// consumer -> Host across three colinear devices, all D2D pairs in OWN mode. stage1 is
+// the MIDDLE device: it hosts BOTH the D2D0 receiver (inbound) and the D2D1 sender
+// (outbound) at once. Their fabric connections route in opposite directions
+// (stage1->stage0 credit-return vs stage1->stage2 data), so on colinear devices they
+// land on distinct EDM channels and never collide -- which is why OWN mode is safe here
+// without the per-transfer lease handshake. The MIDDLE worker reuses the bridge kernel
+// with its upstream = the D2D0 receiver (instead of an H2D service); see
+// make_bridge_workload. The host streams num_iters tokens (value kFillBase+i); the final
+// value must reach the stage2 output tensor, with metadata {-1,0,final} multicast to the
+// stage2 receiver worker cores when enabled.
+void verify_three_stage_chain(
+    const std::shared_ptr<MeshDevice>& stage0,
+    const std::shared_ptr<MeshDevice>& stage1,
+    const std::shared_ptr<MeshDevice>& stage2,
+    const ttnn::Shape& global_shape,
+    const CoreRange& worker_cores,
+    uint32_t num_iters,
+    uint32_t metadata_size_bytes = 0) {
+    constexpr uint32_t kFillBase = 1u;
+    const bool metadata_enabled = metadata_size_bytes > 0;
+
+    const auto global_spec = make_config(stage0, global_shape).global_spec;
+    auto h2d_service = make_h2d_service(stage0, global_spec, worker_cores, metadata_size_bytes);
+
+    // make_config defaults share_fabric_links to false (OWN mode).
+    auto cfg0 = make_config(stage0, global_shape);
+    cfg0.sender_worker_cores = worker_cores;
+    cfg0.receiver_worker_cores = worker_cores;
+    cfg0.metadata_size_bytes = metadata_size_bytes;
+    auto [sender0, receiver0] = D2DStreamService::create_pair(stage0, stage1, std::move(cfg0));
+
+    auto cfg1 = make_config(stage1, global_shape);
+    cfg1.sender_worker_cores = worker_cores;
+    cfg1.receiver_worker_cores = worker_cores;
+    cfg1.metadata_size_bytes = metadata_size_bytes;
+    auto [sender1, receiver1] = D2DStreamService::create_pair(stage1, stage2, std::move(cfg1));
+
+    auto output_tensor = tt::tt_metal::create_device_tensor(
+        receiver1->get_backing_tensor().tensor_spec(), stage2.get(), receiver1->get_backing_tensor().tensor_topology());
+
+    auto consumer_workload = make_receiver_consumer_workload(receiver1.get(), stage2, output_tensor, num_iters);
+    // MIDDLE bridge: upstream = D2D0 receiver (on stage1), downstream = D2D1 sender (on stage1).
+    auto middle_workload =
+        make_bridge_workload(*receiver0, sender1.get(), stage1, worker_cores, num_iters, metadata_size_bytes);
+    // Stage-0 bridge: upstream = H2D service, downstream = D2D0 sender (both on stage0).
+    auto stage0_workload =
+        make_bridge_workload(*h2d_service, sender0.get(), stage0, worker_cores, num_iters, metadata_size_bytes);
+
+    EnqueueMeshWorkload(stage2->mesh_command_queue(), consumer_workload, /*blocking=*/false);
+    EnqueueMeshWorkload(stage1->mesh_command_queue(), middle_workload, /*blocking=*/false);
+    EnqueueMeshWorkload(stage0->mesh_command_queue(), stage0_workload, /*blocking=*/false);
+
+    const uint32_t num_u32 = static_cast<uint32_t>(global_shape.volume());
+    for (uint32_t i = 0; i < num_iters; ++i) {
+        h2d_push_token(*h2d_service, num_u32, kFillBase + i, metadata_size_bytes);
+    }
+    h2d_service->barrier();
+    Finish(stage0->mesh_command_queue());
+    Finish(stage1->mesh_command_queue());
+    Finish(stage2->mesh_command_queue());
+
+    const uint32_t final_value = kFillBase + num_iters - 1;
+    expect_output_tensor_iota(output_tensor, stage2, final_value);
+    if (metadata_enabled) {
+        // The D2D1 receiver service multicasts the blob into every stage2 receiver worker
+        // core's L1; assert the final token's {-1,0,final} landed there.
+        expect_metadata_on_receiver_workers(receiver1.get(), stage2, {static_cast<uint32_t>(-1), 0u, final_value});
     }
 }
 
@@ -1752,6 +1848,70 @@ TEST_F(D2DStreamServiceTest, DtypeBfloat4B) {
         all_cores,
         /*num_iters=*/2,
         /*modulus=*/64);
+}
+
+// ===========================================================================
+// 1->1->1 chain tests: Host -> H2D -> bridge -> D2D0 -> MIDDLE bridge -> D2D1 ->
+// consumer -> Host across three colinear devices, all D2D pairs in OWN mode. The
+// middle device (stage1) runs an inbound D2D receiver and an outbound D2D sender
+// simultaneously -- consecutive device-to-device data movement without a host
+// round trip. Requires three COLINEAR devices so the middle's inbound (->stage0)
+// and outbound (->stage2) fabric connections route in opposite directions (distinct
+// EDM channels), which is what lets them coexist in OWN mode.
+// ===========================================================================
+#define D2D_THREE_STAGE_GUARD()                                                                                       \
+    if (!service_cores_supported()) {                                                                                 \
+        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";                            \
+    }                                                                                                                 \
+    if (!h2d_host_pinning_supported()) {                                                                              \
+        GTEST_SKIP() << "H2D front-end host-DMA pinning requires a DMA-translation IOMMU (not "                       \
+                        "iommu=pt); see notes/d2d_galaxy_h2d_pinning_failure.md.";                                    \
+    }                                                                                                                 \
+    const auto shape = this->mesh_device_->shape();                                                                   \
+    if (shape.dims() != 2 || (shape[1] < 3 && shape[0] < 3)) {                                                        \
+        GTEST_SKIP() << "Need a 2D mesh with >= 3 colinear devices for a 1->1->1 chain; got " << shape;               \
+    }                                                                                                                 \
+    const bool kRowChain = shape[1] >= 3;                                                                             \
+    auto stage0 = this->mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));                          \
+    auto stage1 =                                                                                                     \
+        this->mesh_device_->create_submesh(MeshShape(1, 1), kRowChain ? MeshCoordinate(0, 1) : MeshCoordinate(1, 0)); \
+    auto stage2 =                                                                                                     \
+        this->mesh_device_->create_submesh(MeshShape(1, 1), kRowChain ? MeshCoordinate(0, 2) : MeshCoordinate(2, 0))
+
+// Single core, one transfer: proves the OWN-mode consecutive-D2D chain composes.
+TEST_F(D2DStreamServiceTest, ThreeStageChainOwnSingleTransfer) {
+    D2D_THREE_STAGE_GUARD();
+    verify_three_stage_chain(stage0, stage1, stage2, ttnn::Shape({1, 1, 32, 64}), kWorkerCores, /*num_iters=*/1);
+}
+
+// Single core, several transfers: proves the persistent middle device keeps
+// consuming inbound and producing outbound across iterations without desync.
+TEST_F(D2DStreamServiceTest, ThreeStageChainOwnReuse) {
+    D2D_THREE_STAGE_GUARD();
+    verify_three_stage_chain(stage0, stage1, stage2, ttnn::Shape({1, 1, 32, 64}), kWorkerCores, /*num_iters=*/4);
+}
+
+// Full worker grid: exercises per-core page partitioning (worker_page_range) through
+// every stage, including the middle bridge that both consumes and produces per slice.
+TEST_F(D2DStreamServiceTest, ThreeStageChainOwnAllCores) {
+    D2D_THREE_STAGE_GUARD();
+    const auto grid = stage1->compute_with_storage_grid_size();
+    const CoreRange all_cores{CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}};
+    verify_three_stage_chain(stage0, stage1, stage2, fixed_per_core_shape(all_cores), all_cores, /*num_iters=*/4);
+}
+
+// Full grid + inline metadata forwarded through BOTH hops. The middle bridge copies the
+// blob from the D2D0 receiver worker L1 into the D2D1 sender service L1, exactly as the
+// stage-0 bridge does from the H2D service -- the bridge kernel's metadata path is
+// upstream-agnostic. The final token's {-1,0,final} must land on every stage2 receiver
+// worker core.
+TEST_F(D2DStreamServiceTest, ThreeStageChainOwnMetadataAllCores) {
+    D2D_THREE_STAGE_GUARD();
+    const auto grid = stage1->compute_with_storage_grid_size();
+    const CoreRange all_cores{CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}};
+    constexpr uint32_t kMetadataBytes = static_cast<uint32_t>(3 * sizeof(uint32_t));
+    verify_three_stage_chain(
+        stage0, stage1, stage2, fixed_per_core_shape(all_cores), all_cores, /*num_iters=*/4, kMetadataBytes);
 }
 
 }  // namespace
