@@ -24,8 +24,6 @@ import pytest
 import torch
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_equal
-
 
 @pytest.fixture(scope="module")
 def cache_device():
