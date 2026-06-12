@@ -258,7 +258,7 @@ jobs:
             l2_nightly_skus+=("wh_n150" "wh_n300" "wh_n150_civ2" "wh_n300_civ2" "sim_wormhole_b0")
           fi
           if [[ "$run_blackhole" == "true" ]]; then
-            l2_nightly_skus+=("bh_p100" "bh_p150b_civ2" "bh_p100a_civ2_viommu" "bh_p150b_civ2_viommu" "bh_p150b_civ2_viommu_prio" "sim_blackhole")
+            l2_nightly_skus+=("bh_p100" "bh_p150b_civ2" "bh_p100a_civ2_viommu" "bh_p150b_civ2_viommu" "sim_blackhole")
           fi
           l2_nightly_skus_str=$(IFS=,; echo "${l2_nightly_skus[*]}")
           echo "l2-nightly-skus=$l2_nightly_skus_str" >> $GITHUB_OUTPUT
