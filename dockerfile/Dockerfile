@@ -19,7 +19,7 @@
 #   ./dockerfile/build-local.sh dev
 #   ./dockerfile/build-local.sh --help
 #
-# Available targets: ci-build, ci-test, dev, dev-light, release, release-models
+# Available targets: ci-build-light, ci-build, ci-test-light, ci-test, dev-light, dev, release, release-models
 # =============================================================================
 
 #############################################################
