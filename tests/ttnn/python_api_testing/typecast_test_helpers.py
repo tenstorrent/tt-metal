@@ -101,11 +101,4 @@ def assert_integer_typecast_equal(expected, actual):
 
 
 def uses_exact_integer_typecast_check(tt_input_dtype, tt_output_dtype):
-    if tt_output_dtype in (ttnn.int32, ttnn.uint32, ttnn.uint8):
-        return True
-    return tt_output_dtype == ttnn.uint16 and tt_input_dtype in (
-        ttnn.int32,
-        ttnn.uint16,
-        ttnn.uint32,
-        ttnn.uint8,
-    )
+    return tt_output_dtype in _INTEGER_OUTPUT_DTYPES

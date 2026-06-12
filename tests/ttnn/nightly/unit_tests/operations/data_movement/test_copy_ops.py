@@ -45,9 +45,12 @@ def _make_host_typecast_torch_input(shape, output_dtype, seed):
 
 
 def _host_typecast_golden(torch_tensor, output_dtype):
-    """Golden for host-resident typecast; fp32→uint8 clamps on host (not wrap)."""
+    """Golden for host-resident typecast; host paths differ from device for some dtypes."""
     if output_dtype == ttnn.uint8:
         return torch.clamp(torch_tensor, 0, 255).to(torch.uint8)
+    if output_dtype == ttnn.uint16:
+        # Host fp32→uint16 truncates; device float_to_uint16 rounds in float32 first.
+        return torch.clamp(torch_tensor.to(torch.int32), min=0, max=65535)
     return eltwise_typecast(torch_tensor, tt_input_dtype=ttnn.float32, tt_output_dtype=output_dtype)
 
 
@@ -511,9 +514,8 @@ def test_typecast_host_tensor(output_dtype, preferred_layout, device):
     """
     Test that typecast works on host tensors (fixes issue #16279).
 
-    Host-resident fp32→uint8 clamps to [0, 255] (not wrap); fp32→uint32 uses
-    non-negative inputs so relu-style golden matches. Other integer outputs use
-    widened bounds and eltwise_typecast goldens.
+    Host-resident fp32→uint8 clamps to [0, 255] (not wrap); fp32→uint16 truncates (device
+    rounds); fp32→uint32 uses non-negative inputs so relu-style golden matches.
     """
     shape = [32, 2048]
     torch_tensor = _make_host_typecast_torch_input(shape, output_dtype, seed=2005)
