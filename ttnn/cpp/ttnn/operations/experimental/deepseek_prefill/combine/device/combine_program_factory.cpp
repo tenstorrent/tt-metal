@@ -188,6 +188,25 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         min_y = std::min(min_y, (uint32_t)core.y);
         max_y = std::max(max_y, (uint32_t)core.y);
     }
+    // The sender/untilizer pipeline is laid out along a single line of cores, so the worker
+    // subdevice must be a single row (first/last row) or single column (first/last column).
+    // A subdevice spanning both multiple rows and multiple columns has no defined line layout.
+    // The legacy no-subdevice path passes the full device worker grid (also 2-D) and is handled
+    // by taking its first row, so that case is exempted.
+    if ((max_x > min_x) && (max_y > min_y)) {
+        auto compute_grid = mesh_device->compute_with_storage_grid_size();
+        const bool is_full_worker_grid = min_x == 0 && min_y == 0 && max_x == compute_grid.x - 1 &&
+                                         max_y == compute_grid.y - 1 &&
+                                         subdevice_cores.size() == compute_grid.x * compute_grid.y;
+        TT_FATAL(
+            is_full_worker_grid,
+            "Combine requires the worker subdevice to be a single row (first/last row) or single column "
+            "(first/last column); a 2-D subdevice core grid spanning x=[{}, {}] y=[{}, {}] is not supported.",
+            min_x,
+            max_x,
+            min_y,
+            max_y);
+    }
     const bool is_single_column = (min_x == max_x) && (max_y > min_y);
 
     std::vector<CoreCoord> all_row_cores;

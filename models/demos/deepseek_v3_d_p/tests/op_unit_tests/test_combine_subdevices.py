@@ -61,8 +61,10 @@ NUM_ROUTED_EXPERTS = 16
 NUM_EXPERTS_PER_TOK = 4
 DISPATCH_BUFFER_CAPACITY_FACTOR = 4
 
-# The five placements the combine op must support.
-SUBDEVICE_EDGES = ["none", "first_row", "last_row", "first_col", "last_col"]
+# The five placements the combine op must support, plus one it must reject: a 2-D subdevice
+# block (>1 row AND >1 column, smaller than the full grid) has no single-line core layout, so
+# combine must TT_FATAL on it.
+SUBDEVICE_EDGES = ["none", "first_row", "last_row", "first_col", "last_col", "grid_2d"]
 
 
 def _edge_core_range_set(grid_x, grid_y, edge):
@@ -83,6 +85,11 @@ def _edge_core_range_set(grid_x, grid_y, edge):
         return ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(grid_x - 1, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))}
         )
+    if edge == "grid_2d":
+        # Rejected case: a true 2-D block (rows 0..1 across every column, so >1 row AND >1
+        # column) that is strictly smaller than the full grid. The combine kernel has no
+        # single-line layout for this, so the op must TT_FATAL.
+        return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, 1))})
     raise ValueError(f"unknown edge: {edge}")
 
 
@@ -261,6 +268,45 @@ def test_combine_subdevice_placement(
     )
     torch_output = torch_combine(dispatched_buffer, dispatched_metadata, expert_token_counts, expert_region_offsets)
 
+    combine_kwargs = dict(
+        dispatch_group_size=dispatch_group_size,
+        experts_per_chip=experts_per_chip,
+        num_experts_per_tok=NUM_EXPERTS_PER_TOK,
+        seq_len_per_chip=SEQ_LEN_PER_CHIP,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        cluster_axis=sp_axis,
+        num_links=num_links,
+        topology=topology,
+        init_zeros=False,
+    )
+
+    # --- Rejected case: a 2-D subdevice block must make combine TT_FATAL ---
+    if subdevice_edge == "grid_2d":
+        if grid.y < 3:
+            pytest.skip(f"grid_2d needs a worker grid taller than 2 rows; got {grid.x}x{grid.y}")
+        edge_cores = _edge_core_range_set(grid.x, grid.y, "grid_2d")
+        xs = sorted({x for x, _ in _enumerate_cores(edge_cores)})
+        ys = sorted({y for _, y in _enumerate_cores(edge_cores)})
+        assert len(xs) > 1 and len(ys) > 1, f"grid_2d must span >1 row AND >1 column, got cols={xs} rows={ys}"
+        logger.info(f"[proof] subdevice='grid_2d' is a {len(xs)}x{len(ys)} block (cols={xs}, rows={ys})")
+        sd_manager = mesh_device.create_sub_device_manager([ttnn.SubDevice([edge_cores])], 0)
+        mesh_device.load_sub_device_manager(sd_manager)
+        try:
+            with pytest.raises(RuntimeError, match="2-D subdevice core grid"):
+                ttnn.experimental.deepseek_prefill.combine(
+                    tt_dispatched_buffer,
+                    tt_dispatched_metadata,
+                    tt_expert_token_counts,
+                    tt_expert_region_offsets,
+                    subdevice_id=ttnn.SubDeviceId(0),
+                    **combine_kwargs,
+                )
+        finally:
+            mesh_device.clear_loaded_sub_device_manager()
+            mesh_device.remove_sub_device_manager(sd_manager)
+        logger.info("✅ combine correctly rejected a 2-D subdevice core grid")
+        return
+
     # --- Build the edge subdevice (None == legacy first-row-of-full-grid path) ---
     sd_manager = None
     subdevice_id = None
@@ -283,16 +329,8 @@ def test_combine_subdevice_placement(
             tt_dispatched_metadata,
             tt_expert_token_counts,
             tt_expert_region_offsets,
-            dispatch_group_size=dispatch_group_size,
-            experts_per_chip=experts_per_chip,
-            num_experts_per_tok=NUM_EXPERTS_PER_TOK,
-            seq_len_per_chip=SEQ_LEN_PER_CHIP,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             subdevice_id=subdevice_id,
-            cluster_axis=sp_axis,
-            num_links=num_links,
-            topology=topology,
-            init_zeros=False,
+            **combine_kwargs,
         )
 
         mesh_composer = get_ep_mesh_composer(mesh_device)
