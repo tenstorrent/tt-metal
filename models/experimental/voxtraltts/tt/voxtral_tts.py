@@ -37,7 +37,10 @@ from models.experimental.voxtraltts.tt.voxtral_tt_args import (
     _load_safetensors_state_dict,
     voxtral_text_default_optimizations,
 )
-from models.experimental.voxtraltts.utils.debug_trace import VoxtralTTSDebugTrace
+from models.experimental.voxtraltts.utils.audio_tokenizer_optimizations import (
+    AudioTokenizerOptimizations,
+    voxtral_audio_tokenizer_default_optimizations,
+)
 from models.experimental.voxtraltts.utils.rng import acoustic_fm_noise_seed
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
@@ -152,6 +155,7 @@ class VoxtralTTSPipeline:
         text_optimizations=voxtral_text_default_optimizations,
         acoustic_dtype: ttnn.DataType = ttnn.bfloat16,
         tokenizer_dtype: ttnn.DataType = ttnn.bfloat16,
+        audio_tokenizer_optimizations: AudioTokenizerOptimizations | None = None,
         use_paged_kv_cache: bool = False,
         paged_block_size: int = 32,
     ) -> "VoxtralTTSPipeline":
@@ -213,6 +217,7 @@ class VoxtralTTSPipeline:
             tokenizer_cfg=cfg.audio_tokenizer_args,
             dtype=tokenizer_dtype,
             full_checkpoint=full,
+            optimizations=audio_tokenizer_optimizations or voxtral_audio_tokenizer_default_optimizations(),
         )
         return cls(
             mesh_device=mesh_device,
