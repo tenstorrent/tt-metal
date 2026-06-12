@@ -168,6 +168,14 @@ per-enqueue set comes entirely from `create_per_enqueue_args`). Worked example: 
 entry across seeds; different seed ⇒ different output). **Measure once more** and record before/after in
 the port report. If it still misses budget, the bottleneck is elsewhere — profile, don't tune.
 
+> **Note — which path each reference exercises.** `rand` is the **Advanced+++** reference: it fills
+> `spec` + `invariant_run_args` and supplies the dynamic set via `create_per_enqueue_args`, so its struct
+> `run_args` is empty and the cache-hit goes through `UpdateProgramRunArgs`. The **base / opt-out** path —
+> a spec-keyed op that fills the struct's `run_args` (tensors) and returns `std::nullopt`, so the hit
+> refreshes bindings via `UpdateTensorArgs` — is the common case and is runtime-exercised as the spec-keyed
+> ops migrate. (In the framework PR it is covered by the compile-time concept contracts in
+> `test_launch_operation.cpp`.)
+
 ## Required test coverage
 
 Correctness-vs-reference alone is **not** enough. The cache contract has its own failure modes — a stale

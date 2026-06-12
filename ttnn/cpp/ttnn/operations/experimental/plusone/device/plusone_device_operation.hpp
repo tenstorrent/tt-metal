@@ -24,7 +24,8 @@ struct PlusOneDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    // No compute_program_hash: MetalV2 ops use the default reflection key (op type + attrs + tensor spec),
+    // which already excludes the buffer address. The framework static_asserts against a custom hash.
 };
 
 }  // namespace ttnn::experimental::prim
