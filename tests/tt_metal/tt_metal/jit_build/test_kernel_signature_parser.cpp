@@ -70,6 +70,14 @@ TEST(KernelSignatureParser, StdUint32Accepted) {
     EXPECT_EQ(sig->fn_param_names, (std::vector<std::string>{"a"}));
 }
 
+// A const qualifier (leading or trailing) on a uint32_t parameter is accepted in Phase 1.
+TEST(KernelSignatureParser, ConstQualifiedUint32Accepted) {
+    const std::string src = "TT_KERNEL void k(const uint32_t a, uint32_t const b, std::uint32_t c) {}";
+    auto sig = parse_kernel_main_signature(src);
+    ASSERT_TRUE(sig.has_value());
+    EXPECT_EQ(sig->fn_param_names, (std::vector<std::string>{"a", "b", "c"}));
+}
+
 // A TT_KERNEL inside a comment or the #define line must not be mistaken for the marker.
 TEST(KernelSignatureParser, MarkerInCommentAndDefineIgnored) {
     const std::string src = R"(
