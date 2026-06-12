@@ -8,6 +8,7 @@ import torch
 from conftest import skip_for_coverage
 from helpers.bfp_format_utils import bfp4b_to_float16b, bfp8b_to_float16b
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.data_format_inference import VALID_QUASAR_SRC_REG_FORMATS
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import DestAccumulation, Tilize
 from helpers.logger import strip_ansi
@@ -155,8 +156,24 @@ def _tilized_index(h: int, w: int) -> int:
     return (face_r * 2 + face_c) * 256 + (h % 16) * 16 + (w % 16)
 
 
+def _tile_test_formats() -> list[DataFormat]:
+    """Formats test_dprint_tile can exercise on the current arch.
+
+    tile_slice unpacks the input into SrcA and packs from the default 16-bit
+    dest. On Quasar that requires a valid SrcA register format and rules out
+    32-bit formats (those need DestAccumulation.Yes). WH/BH accept all."""
+    formats = list(_BYTES_PER_ELT.keys())
+    if get_chip_architecture() == ChipArchitecture.QUASAR:
+        formats = [
+            f
+            for f in formats
+            if f in VALID_QUASAR_SRC_REG_FORMATS and not f.is_32_bit()
+        ]
+    return formats
+
+
 @parametrize(
-    formats=input_output_formats(list(_BYTES_PER_ELT.keys()), same=True),
+    formats=input_output_formats(_tile_test_formats(), same=True),
 )
 def test_dprint_tile(formats):
     formats = formats[0]
