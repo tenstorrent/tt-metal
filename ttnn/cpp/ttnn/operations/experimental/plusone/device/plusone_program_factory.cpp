@@ -11,7 +11,6 @@
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include "ttnn/metalv2_artifacts.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -70,11 +69,11 @@ PlusOneWorkGeometry compute_geometry(const PlusoneParams& attrs, const Tensor& i
 
 }  // namespace
 
-// create_program_spec — the immutable blueprint plus the enqueue-invariant work geometry (W/H) and the
-// per-call input tensor binding (run_args). Spec-keyed: the default reflection hash (op type + attrs +
-// tensor spec) is the cache key, so a custom compute_program_hash is neither needed nor allowed.
-ttnn::device_operation::ProgramArtifacts PlusOneProgramFactory::create_program_spec(
-    const PlusoneParams& attrs, const Tensor& input, Tensor& /*output*/) {
+// create_program_spec — the immutable blueprint only (DFB, reader kernel, tensor parameter, work unit).
+// Spec-keyed: the default reflection hash (op type + attrs + tensor spec) is the cache key, so a custom
+// compute_program_hash is neither needed nor allowed.
+m2::ProgramSpec PlusOneProgramFactory::create_program_spec(
+    const PlusoneParams& attrs, const Tensor& input, [[maybe_unused]] Tensor& output) {
     const auto g = compute_geometry(attrs, input);
 
     // Scratch CB for one stick. For a sharded input the CB is borrowed from the input buffer (the modify
@@ -104,9 +103,9 @@ ttnn::device_operation::ProgramArtifacts PlusOneProgramFactory::create_program_s
         .dfb_bindings =
             {m2::ProducerOf(m2::DFBSpecName{"plusone_scratch"}, "plusone_scratch"),
              m2::ConsumerOf(m2::DFBSpecName{"plusone_scratch"}, "plusone_scratch")},
-        .runtime_arg_schema = {.runtime_arg_names = {"W", "H"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"W", "H", "stick_size"}},
         .hw_config = m2::DataMovementHardwareConfig{.gen1_config = m2::DataMovementHardwareConfig::Gen1Config{}},
-        .advanced_options = m2::KernelAdvancedOptions{.enqueue_invariant_runtime_args = {"W", "H"}},
+        .advanced_options = m2::KernelAdvancedOptions{.enqueue_invariant_runtime_args = {"W", "H", "stick_size"}},
     };
     // The reader only uses the TensorAccessor (ta::input) on the DRAM path; a sharded input reaches the
     // kernel through the borrowed scratch CB instead, so no kernel-side tensor binding is needed there.
@@ -124,29 +123,34 @@ ttnn::device_operation::ProgramArtifacts PlusOneProgramFactory::create_program_s
     spec.work_units = {m2::WorkUnitSpec{
         .name = "plusone_work", .kernels = {m2::KernelSpecName{"reader"}}, .target_nodes = g.all_cores}};
 
-    // Enqueue-invariant: W/H per core (identical across cores; a pure function of shape, which is in the key).
+    return spec;
+}
+
+// create_invariant_run_args — the enqueue-invariant per-core work geometry (W/H/stick_size); identical
+// across cores and a pure function of shape, which is in the cache key. Set once on a miss and retained.
+m2::ProgramRunArgs PlusOneProgramFactory::create_invariant_run_args(
+    const PlusoneParams& attrs, const Tensor& input, [[maybe_unused]] Tensor& output) {
+    const auto g = compute_geometry(attrs, input);
     m2::ProgramRunArgs::KernelRunArgs reader_args{.kernel = m2::KernelSpecName{"reader"}};
     for (const auto& core : g.cores) {
-        reader_args.runtime_arg_values.push_back({core, {{"W", g.W}, {"H", g.H}}});
+        reader_args.runtime_arg_values.push_back({core, {{"W", g.W}, {"H", g.H}, {"stick_size", g.aligned_page_size}}});
     }
     m2::ProgramRunArgs invariant_args;
     invariant_args.kernel_run_args.push_back(std::move(reader_args));
+    return invariant_args;
+}
 
-    // Per-call dynamic: the input tensor binding. plusone is in-place, so input is both read and written;
-    // on a cache hit only this address is re-applied (UpdateTensorArgs), the rest stays baked.
+// create_per_enqueue_args — the per-call dynamic: the input tensor binding, re-applied via
+// UpdateProgramRunArgs on every dispatch. plusone is in-place, so the input is both read and written.
+m2::ProgramRunArgs PlusOneProgramFactory::create_per_enqueue_args(
+    [[maybe_unused]] const PlusoneParams& attrs,
+    const Tensor& input,
+    [[maybe_unused]] Tensor& output,
+    [[maybe_unused]] const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
     m2::ProgramRunArgs run_args;
     run_args.tensor_args.emplace(
         m2::TensorParamName{"input"}, m2::ProgramRunArgs::TensorArgument{std::cref(input.mesh_tensor())});
-
-    return ttnn::device_operation::ProgramArtifacts{
-        .spec = std::move(spec), .invariant_run_args = std::move(invariant_args), .run_args = std::move(run_args)};
-}
-
-// create_per_enqueue_args — opt out. plusone has nothing per-enqueue beyond which tensor is bound; the
-// input address is re-applied from run_args via UpdateTensorArgs on a cache hit, W/H are invariant.
-std::optional<m2::ProgramRunArgs> PlusOneProgramFactory::create_per_enqueue_args(
-    const PlusoneParams&, const Tensor&, Tensor&, const std::optional<ttnn::MeshCoordinate>&) {
-    return std::nullopt;
+    return run_args;
 }
 
 }  // namespace ttnn::experimental::prim

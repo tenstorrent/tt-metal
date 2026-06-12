@@ -14,7 +14,6 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/metalv2_artifacts.hpp"
 #include "rand_device_operation.hpp"
 
 namespace ttnn::operations::rand {
@@ -70,17 +69,16 @@ uint32_t units_for_core(const RandWorkSplit& ws, const CoreCoord& core) {
 // projection of the request: output layout + compute grid. Excludes seed/from/to (those are dynamic).
 RandDeviceOperation::RandProgramFactory::immutable_info_t
 RandDeviceOperation::RandProgramFactory::extract_immutable_info(
-    const operation_attributes_t& attrs, const tensor_args_t& /*tensor_args*/) {
+    const operation_attributes_t& attrs, [[maybe_unused]] const tensor_args_t& tensor_args) {
     TensorSpec output_spec(attrs.shape, TensorLayout(attrs.dtype, PageConfig(attrs.layout), attrs.memory_config));
     return immutable_info_t{
         .output_spec = std::move(output_spec), .grid = attrs.device->compute_with_storage_grid_size()};
 }
 
-// create_program_spec — the immutable blueprint + the enqueue-invariant per-core work split
-// (start_id / num_tiles), bundled as a ProgramArtifacts. Derives ONLY from the ImmutableInfo. The work
-// split is declared enqueue-invariant in the spec, so the hit path (create_per_enqueue_args) omits it.
-ttnn::device_operation::ProgramArtifacts RandDeviceOperation::RandProgramFactory::create_program_spec(
-    const immutable_info_t& info) {
+// create_program_spec — the immutable blueprint only (DFBs, kernels, work-units, schemas), derived from
+// the ImmutableInfo. The per-core work split it references is supplied as enqueue-invariant run-args by
+// create_invariant_run_args below.
+m2::ProgramSpec RandDeviceOperation::RandProgramFactory::create_program_spec(const immutable_info_t& info) {
     const uint32_t units = info.output_spec.padded_shape().volume() / constants::TILE_HW;
     const auto ws = compute_work_split(info.grid, units);
     const DataType output_dtype = info.output_spec.data_type();
@@ -147,8 +145,16 @@ ttnn::device_operation::ProgramArtifacts RandDeviceOperation::RandProgramFactory
         .kernels = {m2::KernelSpecName{"compute"}, m2::KernelSpecName{"writer"}},
         .target_nodes = ws.all_cores}};
 
-    // Enqueue-invariant run-args: the per-core work split, bundled into the artifacts. Applied once on
-    // cache miss and retained; create_per_enqueue_args carries the rest.
+    return spec;
+}
+
+// create_invariant_run_args — the enqueue-invariant per-core work split (start_id / num_tiles), declared
+// invariant in the spec so it is set once on a cache miss and retained across hits. Derives ONLY from the
+// ImmutableInfo (the same projection as the spec), so it can never see the seed.
+m2::ProgramRunArgs RandDeviceOperation::RandProgramFactory::create_invariant_run_args(const immutable_info_t& info) {
+    const uint32_t units = info.output_spec.padded_shape().volume() / constants::TILE_HW;
+    const auto ws = compute_work_split(info.grid, units);
+
     m2::ProgramRunArgs::KernelRunArgs compute_args{.kernel = m2::KernelSpecName{"compute"}};
     m2::ProgramRunArgs::KernelRunArgs writer_args{.kernel = m2::KernelSpecName{"writer"}};
     uint32_t tile_offset = 0;
@@ -161,18 +167,15 @@ ttnn::device_operation::ProgramArtifacts RandDeviceOperation::RandProgramFactory
     m2::ProgramRunArgs invariant_args;
     invariant_args.kernel_run_args.push_back(std::move(compute_args));
     invariant_args.kernel_run_args.push_back(std::move(writer_args));
-
-    // The seed is per-enqueue (built in create_per_enqueue_args), so run_args is empty here.
-    return ttnn::device_operation::ProgramArtifacts{
-        .spec = std::move(spec), .invariant_run_args = std::move(invariant_args), .run_args = {}};
+    return invariant_args;
 }
 
 // create_per_enqueue_args — the per-enqueue values: per-core seed + from/to range, and the output tensor.
 // Re-applied on every dispatch via UpdateProgramRunArgs. The per-coordinate seed offset gives distinct
-// streams across a sharded mesh. (rand always splits, so never returns nullopt.)
-std::optional<m2::ProgramRunArgs> RandDeviceOperation::RandProgramFactory::create_per_enqueue_args(
+// streams across a sharded mesh.
+m2::ProgramRunArgs RandDeviceOperation::RandProgramFactory::create_per_enqueue_args(
     const operation_attributes_t& attrs,
-    const tensor_args_t& /*tensor_args*/,
+    [[maybe_unused]] const tensor_args_t& tensor_args,
     tensor_return_value_t& output,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
     const uint32_t units = output.physical_volume() / constants::TILE_HW;

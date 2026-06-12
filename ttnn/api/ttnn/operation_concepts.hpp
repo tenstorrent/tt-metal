@@ -76,34 +76,41 @@ concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } |
 //  MetalV2 ProgramSpec factory concepts
 // ============================================================================
 //
-// A MetalV2 op factory produces a ProgramArtifacts: the immutable ProgramSpec (the "blueprint" —
-// kernels, DFBs, work-units, argument schemas) plus the ProgramRunArgs (the per-execution values).
+// A MetalV2 op factory is built from three methods, each with a single job:
+//
+//   - create_program_spec       -> ProgramSpec     : the immutable blueprint (kernels, DFBs, work-units,
+//                                                     argument schemas). Built once, on a cache miss.
+//   - create_invariant_run_args -> ProgramRunArgs  : the enqueue-invariant run-args (work splits, shape
+//                                                     scalars). Set once on a miss and retained across hits.
+//   - create_per_enqueue_args   -> ProgramRunArgs  : the per-enqueue run-args (tensor addresses, seeds).
+//                                                     Rebuilt on EVERY dispatch and re-applied via
+//                                                     UpdateProgramRunArgs.
+//
+// On a miss the framework merges the invariant + per-enqueue sets for the initial SetProgramRunArgs. On a
+// hit it rebuilds neither the spec nor the invariant args — it re-runs only create_per_enqueue_args and
+// re-applies it. Splitting the run-args across two methods is what forces the author to decide, per arg,
+// what is enqueue-invariant vs per-enqueue; the metal runtime then validates that every arg omitted from
+// the per-enqueue set was declared enqueue_invariant in the spec — a forgotten per-enqueue value is a hard
+// error, not silently-stale data.
+//
 // There are exactly TWO concepts, distinguished by ONE thing — the cache key:
 //
 //   - ProgramSpecFactoryConcept         — the cache key is the framework default: a reflection hash of
 //                                         (op type + attributes + tensor args).
-//   - AdvancedProgramSpecFactoryConcept — the cache key is a small hashable ImmutableInfo that the
-//                                         factory extracts up front (extract_immutable_info), which is
-//                                         also the SOLE input to create_program_spec. This lets the
-//                                         framework skip the spec rebuild on a cache hit, and structurally
-//                                         prevents a mutable value (e.g. an RNG seed) from leaking into
-//                                         the key or the spec — it isn't even visible to the builder.
+//   - AdvancedProgramSpecFactoryConcept — the cache key is a small hashable ImmutableInfo the factory
+//                                         extracts up front (extract_immutable_info), which is also the
+//                                         SOLE input to create_program_spec. Structurally keeps a mutable
+//                                         value (e.g. an RNG seed) out of both the key and the spec — it
+//                                         isn't even visible to the builder.
 //
-// The static/dynamic split is the default, not an opt-in: create_program_spec returns invariant_run_args
-// (enqueue-invariant) + run_args (the per-enqueue set for the miss). create_per_enqueue_args is
-// MANDATORY — on a cache hit it re-applies only the per-enqueue set (UpdateProgramRunArgs) without
-// re-running the factory. A factory with nothing per-enqueue returns std::nullopt from it to opt out
-// (the hit then just refreshes tensor bindings via UpdateTensorArgs). Requiring the method forces the
-// author to decide, per op, what is enqueue-invariant vs per-enqueue. The metal runtime validates that
-// every arg omitted from the per-enqueue set was declared enqueue_invariant in the spec — a forgotten
-// per-enqueue value is a hard error, not silently-stale data.
-//
-// NOTE: Each TensorArgument.tensor in ProgramRunArgs MUST reference a MeshTensor reachable from the
+// NOTE: Each TensorArgument.tensor in a ProgramRunArgs MUST reference a MeshTensor reachable from the
 // factory's tensor_args / tensor_return_value — the adapter matches by pointer identity.
 
 // --- method-surface building blocks ---
 template <typename T>
 concept HasCreateProgramSpec = requires { &T::create_program_spec; };
+template <typename T>
+concept HasCreateInvariantRunArgs = requires { &T::create_invariant_run_args; };
 template <typename T>
 concept HasCreatePerEnqueueArgs = requires { &T::create_per_enqueue_args; };
 template <typename T>
@@ -113,18 +120,19 @@ template <typename T>
 concept NotALegacyFactory =
     !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T> && !ProgramDescriptorFactoryConcept<T>;
 
-// Spec-keyed factory: create_program_spec(attrs, tensor_args, tensor_return_value) -> ProgramArtifacts;
-// the cache key is the default reflection hash (op type + attributes + tensor args).
+// All three build methods are mandatory; the cache key is the default reflection hash
+// (op type + attributes + tensor args).
 template <typename T>
 concept ProgramSpecFactoryConcept =
-    HasCreateProgramSpec<T> && HasCreatePerEnqueueArgs<T> && !HasImmutableInfoExtraction<T> && NotALegacyFactory<T>;
+    HasCreateProgramSpec<T> && HasCreateInvariantRunArgs<T> && HasCreatePerEnqueueArgs<T> &&
+    !HasImmutableInfoExtraction<T> && NotALegacyFactory<T>;
 
-// ImmutableInfo-keyed factory: extract_immutable_info -> ImmutableInfo, which is BOTH the cache key and
-// the sole input to create_program_spec — so a mutable value (e.g. an RNG seed) cannot leak into the key
-// or the spec, by construction.
+// ImmutableInfo-keyed factory: extract_immutable_info -> ImmutableInfo is BOTH the cache key and the sole
+// input to create_program_spec, so a mutable value (e.g. an RNG seed) cannot leak into the key or the spec.
 template <typename T>
 concept AdvancedProgramSpecFactoryConcept =
-    HasCreateProgramSpec<T> && HasCreatePerEnqueueArgs<T> && HasImmutableInfoExtraction<T> && NotALegacyFactory<T>;
+    HasCreateProgramSpec<T> && HasCreateInvariantRunArgs<T> && HasCreatePerEnqueueArgs<T> &&
+    HasImmutableInfoExtraction<T> && NotALegacyFactory<T>;
 
 // Umbrella: either MetalV2 spec factory shape (exactly one is satisfied by construction).
 template <typename T>

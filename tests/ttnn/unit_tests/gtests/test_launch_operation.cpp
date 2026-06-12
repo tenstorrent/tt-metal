@@ -9,7 +9,8 @@
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/mesh_device_operation_adapter.hpp"
 #include "ttnn/mesh_device_operation_utils.hpp"
-#include "ttnn/metalv2_artifacts.hpp"
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include "ttnn/operation_concepts.hpp"
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/examples/example/device/example_device_operation.hpp"
@@ -116,52 +117,74 @@ struct DescriptorFactory {
     }
 };
 
-// Spec-keyed factory: create_program_spec + the mandatory create_per_enqueue_args (nullopt = opt out).
+// Spec-keyed factory: the three mandatory build methods + the default reflection-hash key.
 struct SpecKeyedFactory {
-    static ttnn::device_operation::ProgramArtifacts create_program_spec(
+    static tt::tt_metal::experimental::ProgramSpec create_program_spec(
         const OperationAttributes&, const Tensor&, Tensor&) {
         return {};
     }
-    static std::optional<tt::tt_metal::experimental::ProgramRunArgs> create_per_enqueue_args(
+    static tt::tt_metal::experimental::ProgramRunArgs create_invariant_run_args(
+        const OperationAttributes&, const Tensor&, Tensor&) {
+        return {};
+    }
+    static tt::tt_metal::experimental::ProgramRunArgs create_per_enqueue_args(
         const OperationAttributes&, const Tensor&, Tensor&, const std::optional<ttnn::MeshCoordinate>&) {
-        return std::nullopt;
+        return {};
     }
 };
 
-// ImmutableInfo-keyed (Advanced) factory.
+// ImmutableInfo-keyed (Advanced) factory: the spec + invariant builders take the ImmutableInfo.
 struct ImmutableInfoFactory {
     struct immutable_info_t {};
     static immutable_info_t extract_immutable_info(const OperationAttributes&, const Tensor&) { return {}; }
-    static ttnn::device_operation::ProgramArtifacts create_program_spec(const immutable_info_t&) { return {}; }
-    static std::optional<tt::tt_metal::experimental::ProgramRunArgs> create_per_enqueue_args(
+    static tt::tt_metal::experimental::ProgramSpec create_program_spec(const immutable_info_t&) { return {}; }
+    static tt::tt_metal::experimental::ProgramRunArgs create_invariant_run_args(const immutable_info_t&) { return {}; }
+    static tt::tt_metal::experimental::ProgramRunArgs create_per_enqueue_args(
         const OperationAttributes&, const Tensor&, Tensor&, const std::optional<ttnn::MeshCoordinate>&) {
-        return std::nullopt;
+        return {};
     }
 };
 
-// create_per_enqueue_args is mandatory: a factory missing it is NOT a MetalV2 spec factory.
+// All three build methods are mandatory: a factory missing any one is NOT a MetalV2 spec factory.
 struct MissingPerEnqueueFactory {
-    static ttnn::device_operation::ProgramArtifacts create_program_spec(
+    static tt::tt_metal::experimental::ProgramSpec create_program_spec(
         const OperationAttributes&, const Tensor&, Tensor&) {
+        return {};
+    }
+    static tt::tt_metal::experimental::ProgramRunArgs create_invariant_run_args(
+        const OperationAttributes&, const Tensor&, Tensor&) {
+        return {};
+    }
+};
+struct MissingInvariantArgsFactory {
+    static tt::tt_metal::experimental::ProgramSpec create_program_spec(
+        const OperationAttributes&, const Tensor&, Tensor&) {
+        return {};
+    }
+    static tt::tt_metal::experimental::ProgramRunArgs create_per_enqueue_args(
+        const OperationAttributes&, const Tensor&, Tensor&, const std::optional<ttnn::MeshCoordinate>&) {
         return {};
     }
 };
 
 namespace concepts = ttnn::device_operation;
 
-// Each factory satisfies exactly one spec-factory concept, distinguished by the cache key; both carry the
-// mandatory create_per_enqueue_args (the static/dynamic split is the default).
+// Each factory satisfies exactly one spec-factory concept, distinguished by the cache key; both carry all
+// three mandatory build methods.
 static_assert(concepts::ProgramSpecFactoryConcept<SpecKeyedFactory>);
 static_assert(!concepts::AdvancedProgramSpecFactoryConcept<SpecKeyedFactory>);
 static_assert(!concepts::HasImmutableInfoExtraction<SpecKeyedFactory>);
 static_assert(concepts::AdvancedProgramSpecFactoryConcept<ImmutableInfoFactory>);
 static_assert(!concepts::ProgramSpecFactoryConcept<ImmutableInfoFactory>);
 static_assert(concepts::HasImmutableInfoExtraction<ImmutableInfoFactory>);
-static_assert(
-    concepts::HasCreatePerEnqueueArgs<SpecKeyedFactory> && concepts::HasCreatePerEnqueueArgs<ImmutableInfoFactory>);
 static_assert(concepts::MetalV2SpecFactoryConcept<SpecKeyedFactory>);
 static_assert(concepts::MetalV2SpecFactoryConcept<ImmutableInfoFactory>);
-static_assert(!concepts::MetalV2SpecFactoryConcept<MissingPerEnqueueFactory>);  // create_per_enqueue_args is required
+
+// All three build methods are required — missing any one means it is not a MetalV2 spec factory.
+static_assert(!concepts::MetalV2SpecFactoryConcept<MissingPerEnqueueFactory>);
+static_assert(!concepts::MetalV2SpecFactoryConcept<MissingInvariantArgsFactory>);
+static_assert(!concepts::HasCreatePerEnqueueArgs<MissingPerEnqueueFactory>);
+static_assert(!concepts::HasCreateInvariantRunArgs<MissingInvariantArgsFactory>);
 
 // A spec factory is none of the prior factory shapes (and vice versa).
 static_assert(!concepts::ProgramFactoryConcept<SpecKeyedFactory>);
@@ -175,12 +198,6 @@ static_assert(concepts::AllFactoriesValid<std::variant<SpecKeyedFactory, Immutab
 static_assert(concepts::AllFactoriesValid<std::variant<DescriptorFactory>>);                          // all prior
 static_assert(!concepts::AllFactoriesValid<std::variant<DescriptorFactory, ImmutableInfoFactory>>);   // mixed: rejected
 static_assert(!concepts::AllFactoriesValid<std::variant<NewInfraProgramFactory, SpecKeyedFactory>>);  // mixed: rejected
-
-// ProgramArtifacts carries the static + per-enqueue run-arg sets.
-static_assert(requires(concepts::ProgramArtifacts a) {
-    a.invariant_run_args;
-    a.run_args;
-});
 
 TEST(LaunchOperationTest, MeshDeviceOperationAdapterGetName) {
     using ::ttnn::operations::examples::ExampleDeviceOperation;

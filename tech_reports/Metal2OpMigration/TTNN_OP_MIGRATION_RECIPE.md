@@ -8,36 +8,37 @@
 
 ## Read this first
 
-A MetalV2 op factory produces a **`ProgramArtifacts`**: the immutable `ProgramSpec` (the blueprint) plus
-its `ProgramRunArgs` (the per-execution values). There are exactly **TWO concepts**, distinguished by ONE
-thing — the cache key:
+A MetalV2 op factory produces the immutable `ProgramSpec` (the blueprint) plus its `ProgramRunArgs` (the
+per-execution values, split into enqueue-invariant and per-enqueue sets). There are exactly **TWO
+concepts**, distinguished by ONE thing — the cache key:
 
 | concept | extra method | cache key | buys you |
 |---|---|---|---|
 | **`ProgramSpecFactoryConcept`** | — | default reflection hash of (op type + attributes + tensor args) | the default |
 | **`AdvancedProgramSpecFactoryConcept`** | `extract_immutable_info` | a small hashable `ImmutableInfo` | skips the spec rebuild on a hit; structurally excludes mutable values (e.g. a seed) from the key |
 
-Every MetalV2 factory writes **two** methods (in either concept):
+Every MetalV2 factory writes **three** methods, each with one job (in either concept):
 
-- **`create_program_spec`** → `ProgramArtifacts` = the `ProgramSpec` plus its run-args split by cadence:
-  `invariant_run_args` (enqueue-invariant — set once on a cache miss, retained across hits) and `run_args`
-  (the per-enqueue set for the miss dispatch). Cache-miss only.
-- **`create_per_enqueue_args`** → `std::optional<ProgramRunArgs>` — the per-enqueue set, rebuilt each
-  dispatch (takes the mesh coordinate, so per-device values like a sharded-mesh seed offset can vary).
-  **Mandatory**, but return `std::nullopt` to opt out.
+- **`create_program_spec`** → `ProgramSpec` — the immutable contract (kernels, DFBs, work-units, argument
+  schemas). Built once, on a cache miss.
+- **`create_invariant_run_args`** → `ProgramRunArgs` — the enqueue-invariant run-args (work splits, shape
+  scalars). Set once on a miss and retained across hits.
+- **`create_per_enqueue_args`** → `ProgramRunArgs` — the per-enqueue run-args (tensor addresses, seeds).
+  Rebuilt on **every** dispatch (takes the mesh coordinate, so per-device values like a sharded-mesh seed
+  offset can vary) and re-applied via `UpdateProgramRunArgs`.
 
-The split is the default, not an opt-in: requiring `create_per_enqueue_args` forces you to decide, per op,
-what is enqueue-invariant vs per-enqueue. What it buys on a **cache hit**:
+On a **miss** the framework merges the invariant + per-enqueue sets for the initial `SetProgramRunArgs`. On
+a **hit** it rebuilds neither the spec nor the invariant args — it re-runs only `create_per_enqueue_args`
+and re-applies it. Splitting the run-args across two methods is what forces you to decide, per arg, what is
+enqueue-invariant vs per-enqueue:
 
-| `create_per_enqueue_args` returns | when | cache-hit work |
+| put an arg in… | when | cache-hit cost |
 |---|---|---|
-| **a `ProgramRunArgs`** | a value changes per dispatch (seed, fill value, tensor addresses) | re-apply only that set (`UpdateProgramRunArgs`) — invariant set stays baked, no factory re-run |
-| **`std::nullopt`** | nothing per-enqueue beyond which tensors are bound | refresh tensor bindings only (`UpdateTensorArgs`) |
+| `create_invariant_run_args` | the value can't differ between two dispatches that share a cache entry (work splits, shape scalars) | none — set once on the miss, retained |
+| `create_per_enqueue_args` | the value changes per dispatch (tensor addresses, seed, fill value) | re-applied via `UpdateProgramRunArgs`, no factory re-run |
 
 The metal runtime validates that every arg **omitted** from the per-enqueue set was declared
 `enqueue_invariant` in the spec — a forgotten per-enqueue value is a hard error, not silently-stale data.
-Move only **enough** args into `invariant_run_args` to clear your perf target; leaving some in
-`create_per_enqueue_args` is fine.
 
 Detected by method surface: `extract_immutable_info` ⇒ Advanced (immutable-keyed). **No
 `select_program_factory`** for single-factory ops (auto-selected). **No `compute_program_hash` on any
@@ -73,21 +74,30 @@ MetalV2 op** — the `ProgramSpec` (spec-keyed) or `ImmutableInfo` (Advanced) is
 
 Do this without thinking about caching at all.
 
-1. Build the `ProgramSpec` and the full `ProgramRunArgs` exactly as the legacy factory built its
-   descriptor (per `port_op_to_metal2_recipe.md`: CBs → DFBs, positional args → named args, tensor
-   addresses → `TensorParameter` + binding). Keep kernels faithful — change *only* binding mechanisms
-   (`dfb::`, `ta::`, `args::`), never logic.
-2. Write the two methods. Put everything the spec needs into `create_program_spec`; if you can't yet tell
-   what's per-enqueue, return `std::nullopt` from `create_per_enqueue_args` — the simplest valid op (cache
-   hit just refreshes tensor bindings). Per-call tensors go in `run_args`, not `invariant_run_args`:
+1. Port the kernel to the spec binding namespaces (per `port_op_to_metal2_recipe.md`: CBs → DFBs, positional
+   args → named args, tensor addresses → `TensorParameter` + binding). Change **only** the binding
+   mechanisms (`dfb::`, `ta::`, `args::`); leave the device-side logic alone.
+
+   > **Do not reverse an existing device-side migration** (Borys's review of plusone). A kernel may already
+   > have been migrated to a newer device API (e.g. the `Noc` object / `CoreLocalMem` reads and writes
+   > instead of the free `noc_async_*_page` functions). The MetalV2 port swaps `get_arg_val` / positional
+   > `TensorAccessorArgs<N>` / compile-time-arg CB ids for `args::` / `ta::` / `dfb::` — and nothing else. If
+   > you find yourself rewriting NOC calls or loop structure, stop: that's logic, not a binding.
+
+2. Write the three methods. `create_program_spec` returns just the `ProgramSpec`; `create_invariant_run_args`
+   the enqueue-invariant args; `create_per_enqueue_args` the per-dispatch args (tensors, seeds). A value that
+   can't differ between two dispatches sharing a cache entry goes in the invariant set; anything per-call
+   goes in the per-enqueue set:
 
 ```cpp
 struct MyOpProgramFactory {
-    static ttnn::device_operation::ProgramArtifacts create_program_spec(
+    static tt::tt_metal::experimental::ProgramSpec create_program_spec(
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args, tensor_return_value_t& out);
-    static std::optional<tt::tt_metal::experimental::ProgramRunArgs> create_per_enqueue_args(
+    static tt::tt_metal::experimental::ProgramRunArgs create_invariant_run_args(
+        const operation_attributes_t& attrs, const tensor_args_t& tensor_args, tensor_return_value_t& out);
+    static tt::tt_metal::experimental::ProgramRunArgs create_per_enqueue_args(
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args, tensor_return_value_t& out,
-        const std::optional<ttnn::MeshCoordinate>& coord);  // std::nullopt to opt out
+        const std::optional<ttnn::MeshCoordinate>& coord);
 };
 using program_factory_t = std::variant<MyOpProgramFactory>;
 ```
@@ -95,8 +105,8 @@ using program_factory_t = std::variant<MyOpProgramFactory>;
 3. Delete any custom `compute_program_hash` — mandatory, the framework forbids it (the key is the spec).
    Migrate **every** variant of a multi-variant op here (no mixing). Delete pybind hooks for vanished
    legacy entry points.
-4. Validate correctness (op's test suite + cache regression if it has one). **Done. Most ops stop here**
-   (`create_per_enqueue_args` returning `std::nullopt`).
+4. Validate correctness (op's test suite + cache regression if it has one). **Done — most ops stop here**,
+   on the base `ProgramSpecFactoryConcept`.
 
 ## Step 1 — Measure before climbing (the gate, not a formality)
 
@@ -124,21 +134,19 @@ kernel JIT recompile. A cold-path or shape-churning op that never cache-hits won
 
 ## Step 2 — Decide the split (which args are per-enqueue)
 
-`create_per_enqueue_args` is mandatory, so this is the one design call every op makes — not an optional
-climb. Split by one question: *can the value differ between two dispatches that share a cache entry?*
+This is the one design call every op makes — `create_invariant_run_args` vs `create_per_enqueue_args`.
+Split by one question: *can the value differ between two dispatches that share a cache entry?*
 
-- **No** (work splits, shape scalars) → put it in `create_program_spec`'s `invariant_run_args` and declare
-  it invariant in the spec (`KernelAdvancedOptions::enqueue_invariant_runtime_args` / `_common_runtime_args`,
-  `TensorParameterAdvancedOptions::enqueue_invariant`). Set once on miss, retained across hits.
-- **Yes** (tensor addresses, RNG seed, fill value) → return it from `create_per_enqueue_args`. Rebuilt
-  every dispatch; takes the mesh coordinate (per-device values, e.g. a sharded-mesh seed offset). If
-  *nothing* qualifies, return `std::nullopt` — the hit just refreshes tensor bindings.
+- **No** (work splits, shape scalars) → `create_invariant_run_args`, and declare it invariant in the spec
+  (`KernelAdvancedOptions::enqueue_invariant_runtime_args` / `_common_runtime_args`,
+  `TensorParameterAdvancedOptions::enqueue_invariant`). Set once on a miss, retained across hits.
+- **Yes** (tensor addresses, RNG seed, fill value) → `create_per_enqueue_args`. Rebuilt every dispatch;
+  takes the mesh coordinate (per-device values, e.g. a sharded-mesh seed offset).
 
-Miss merges both (`MergeProgramRunArgs`) + `SetProgramRunArgs`; hit re-applies only the per-enqueue set
-(`UpdateProgramRunArgs`), or refreshes tensor bindings when you returned `std::nullopt`. The runtime
-validates that every omitted arg was declared invariant — a forgotten per-enqueue value is a hard error,
-not stale "random" data. Move only ENOUGH into `invariant_run_args` to clear your perf target — leaving
-some in `create_per_enqueue_args` is fine. Measure; stop when you hit budget.
+Miss merges both (`MergeProgramRunArgs`) + `SetProgramRunArgs`; a hit re-applies only the per-enqueue set
+(`UpdateProgramRunArgs`) and rebuilds nothing else. The runtime validates that every omitted arg was
+declared invariant — a forgotten per-enqueue value is a hard error, not stale "random" data. Move only
+ENOUGH into `create_invariant_run_args` to clear your perf target; leaving some per-enqueue is fine.
 
 ## Step 3 — `AdvancedProgramSpecFactoryConcept`: switch the key to ImmutableInfo
 
@@ -154,27 +162,26 @@ struct immutable_info_t {
     static constexpr auto attribute_names = std::forward_as_tuple("output_spec", "grid");
     auto attribute_values() const { return std::forward_as_tuple(output_spec, grid); }
 };
-static immutable_info_t              extract_immutable_info(const operation_attributes_t&, const tensor_args_t&);
-static ProgramArtifacts              create_program_spec(const immutable_info_t&);  // miss-only; spec + invariant_run_args
-static std::optional<ProgramRunArgs> create_per_enqueue_args(attrs, tensor_args, out, coord);  // mandatory; seed lives here
+static immutable_info_t extract_immutable_info(const operation_attributes_t&, const tensor_args_t&);
+static ProgramSpec      create_program_spec(const immutable_info_t&);        // miss-only; the contract
+static ProgramRunArgs   create_invariant_run_args(const immutable_info_t&);  // miss-only; enqueue-invariant
+static ProgramRunArgs   create_per_enqueue_args(attrs, tensor_args, out, coord);  // every dispatch; seed lives here
 ```
 
-ImmutableInfo is the cache key **and** the sole input to `create_program_spec` — a mutable value
-structurally cannot leak into the key or the spec. A consequence worth expecting: the builder *cannot see*
-the per-dispatch value (e.g. the seed), so that value rides `create_per_enqueue_args`, and the
-`ProgramArtifacts::run_args` returned by `create_program_spec` is typically **empty** for such an op (its
-per-enqueue set comes entirely from `create_per_enqueue_args`). Worked example: `rand`
+ImmutableInfo is the cache key **and** the sole input to `create_program_spec` and
+`create_invariant_run_args` — a mutable value structurally cannot leak into the key or the spec, because
+those builders never see anything but the ImmutableInfo. The per-dispatch value (e.g. the seed) rides
+`create_per_enqueue_args`, which takes the full attributes. Worked example: `rand`
 (`ttnn/cpp/ttnn/operations/rand/device/`), validated by `test_rand_different_seed_values` (one cache
 entry across seeds; different seed ⇒ different output). **Measure once more** and record before/after in
 the port report. If it still misses budget, the bottleneck is elsewhere — profile, don't tune.
 
-> **Note — which path each reference exercises.** `rand` is the **Advanced+++** reference: it fills
-> `spec` + `invariant_run_args` and supplies the dynamic set via `create_per_enqueue_args`, so its struct
-> `run_args` is empty and the cache-hit goes through `UpdateProgramRunArgs`. The **base / opt-out** path —
-> a spec-keyed op that fills the struct's `run_args` (tensors) and returns `std::nullopt`, so the hit
-> refreshes bindings via `UpdateTensorArgs` — is the common case and is runtime-exercised as the spec-keyed
-> ops migrate. (In the framework PR it is covered by the compile-time concept contracts in
-> `test_launch_operation.cpp`.)
+> **Note — two reference ops, two cache keys.** `rand` is the **Advanced** reference: it keys on an
+> `ImmutableInfo` that excludes the seed, so its `create_per_enqueue_args` carries the per-core seed +
+> output tensor. `plusone` (`ttnn/cpp/ttnn/operations/experimental/plusone/`) is the **base** reference: it
+> keys on the default reflection hash, which already excludes the buffer address, so a custom
+> `compute_program_hash` is deletable; its `create_per_enqueue_args` carries just the input tensor. Both go
+> through `UpdateProgramRunArgs` on a hit — the only difference is the cache key.
 
 ## Required test coverage
 
@@ -196,8 +203,8 @@ guards, with `device.enable_program_cache()` on. Model them on `test_rand.py`
 5. **Correctness vs reference** across representative dtypes / layouts / shapes (the op's existing suite).
 
 Tests 1–2 are the ones migrations keep regressing (PR #45350 hacked exactly this) — **mandatory, not
-optional.** An op with a `create_per_enqueue_args` that returns a value MUST carry tests 1–2; an op that
-opts out (`std::nullopt`) still needs 3–4 for its tensor-binding hit path.
+optional.** Any op whose `create_per_enqueue_args` carries a non-tensor per-call value (a seed, a fill
+value) MUST carry tests 1–2; every op needs 3–4 for its tensor-rebind hit path.
 
 ## Gotchas (learned the hard way)
 
@@ -228,7 +235,7 @@ Record any parked op in the audit.
 
 ```markdown
 ## TTNN Factory
-- Concept: ProgramSpecFactoryConcept | AdvancedProgramSpecFactoryConcept; create_per_enqueue_args: returns args | std::nullopt
+- Concept: ProgramSpecFactoryConcept | AdvancedProgramSpecFactoryConcept; what's in invariant vs per-enqueue args
 - Measurements (median/p10/p90, ≥1000 iters, realistic varying inputs): legacy = __µs; final = __µs
 - Climb justification: [why ImmutableInfo, or "default key is fine"]
 - Cache tests: [key-stability + hit-re-application + mesh — see "Required test coverage"]
