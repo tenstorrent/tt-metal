@@ -292,6 +292,28 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         "TT_MM_NUM_SLICES ({}) must be a power of 2 dividing grid.y ({})",
         num_slices,
         grid_size.y);
+
+    // Core-grid K-PARALLELISM (split-K, plan A2; env TT_MM_K_SLICES). Split the physical rows into
+    // `num_k_slices` OUTER bands; each band computes the FULL M/N output over a 1/num_k_slices slice of
+    // the K reduction, writing its partial into its own [num_k_slices * M, N] M-stripe (the host sums
+    // the bands). Fills cores that idle on output-starved shapes (M_tiles*N_tiles < num_cores), where
+    // M/N slicing cannot help. The num_slices N-slice groups nest INSIDE each K-band. num_k_slices=1
+    // reduces exactly to the existing partition. Env-only for now (sweepable alongside TT_MM_NUM_SLICES).
+    uint32_t num_k_slices = 1;
+    if (const char* s = std::getenv("TT_MM_K_SLICES"); s != nullptr && !fuse_op && !fuse_srs && !config.has_value()) {
+        num_k_slices = std::max(1u, static_cast<uint32_t>(std::atoi(s)));
+    }
+    TT_FATAL(
+        grid_size.y % (num_slices * num_k_slices) == 0 && (num_k_slices & (num_k_slices - 1)) == 0,
+        "TT_MM_K_SLICES ({}): must be a power of 2 and num_slices*num_k_slices ({}) must divide grid.y ({})",
+        num_k_slices,
+        num_slices * num_k_slices,
+        grid_size.y);
+    TT_FATAL(
+        K_tiles % num_k_slices == 0,
+        "TT_MM_K_SLICES ({}) must divide K_tiles ({}) [A2 split-K limitation]",
+        num_k_slices,
+        K_tiles);
     // Sub-grid K_block refinement: a sliced sub-grid has small per-core M/N, so the default K_block=8
     // makes the per-k-block work too coarse — finer K (4) pipelines read/forward/compute better.
     // Measured ~+8%/+6%/+3.6% on sliced 4864x4096x512 / 4864x4096x32 / 32x2048x2048. Only on the auto
@@ -304,7 +326,10 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     if (!config.has_value()) {
         K_block_tiles = std::min(K_block_tiles, std::max(1u, K_tiles));
     }
-    const uint32_t rows_per_group = grid_size.y / num_slices;   // small-dim parallelism (per group)
+    // Rows are partitioned as num_k_slices (K-bands, outer) x num_slices (N-slice groups) x
+    // rows_per_group (small-dim parallelism, innermost). K-bands do NOT add output parallelism (they
+    // reduce K and are summed), so x_axis_parallel keeps only the N-slice factor.
+    const uint32_t rows_per_group = grid_size.y / (num_slices * num_k_slices);  // small-dim parallelism (innermost)
     const uint32_t y_axis_parallel = rows_per_group;            // dim on grid.y is grouped
     const uint32_t x_axis_parallel = num_slices * grid_size.x;  // dim on grid.x is sliced (cols x slices)
 
@@ -325,7 +350,24 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
      */
     uint32_t padded_M_tiles = tt::round_up(M_tiles, in0_parallel_axis_cores);
     uint32_t padded_N_tiles = tt::round_up(N_tiles, in1_parallel_axis_cores);
-    uint32_t padded_K_tiles = tt::round_up(K_tiles, K_block_tiles);
+    // Split-K (A2) writes each band's full M x N partial into an M-stripe of the [num_k_slices * M, N]
+    // output, stacked by the LOGICAL M tiles. That is only correct without M-padding (otherwise a band
+    // writes padded_M_tiles rows and stripes would overlap). Require it for now; for the starved shapes
+    // K-par targets, choose num_k_slices so grid.y/(num_slices*num_k_slices) divides M_tiles (e.g. M=1
+    // tile with num_k_slices=grid.y). Padded-M support is a follow-up.
+    TT_FATAL(
+        num_k_slices == 1 || padded_M_tiles == M_tiles,
+        "TT_MM_K_SLICES ({}): M is padded ({} -> {} tiles by {}-way M parallelism); split-K stacking "
+        "requires no M-padding. Pick num_slices*num_k_slices so grid.y/(that) divides M_tiles.",
+        num_k_slices,
+        M_tiles,
+        padded_M_tiles,
+        in0_parallel_axis_cores);
+    // Per-K-band reduction depth: each band reduces K_tiles/num_k_slices. This drives the kernels'
+    // K-block COUNT (K_num_blocks) and the compute accumulation depth; in0/in1 STRIDING still uses the
+    // full K_tiles (passed separately), and each band's absolute K-block start is a per-core runtime arg.
+    const uint32_t K_tiles_per_band = K_tiles / num_k_slices;
+    uint32_t padded_K_tiles = tt::round_up(K_tiles_per_band, K_block_tiles);
 
     uint32_t M_tiles_per_core = padded_M_tiles / in0_parallel_axis_cores;
     uint32_t N_tiles_per_core = padded_N_tiles / in1_parallel_axis_cores;
@@ -486,7 +528,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     // unchanged (injector at col 0 of every row). At num_slices==1 the group-top set is just row 0,
     // so these specs match the original single-range sender/receiver cores.
     std::vector<CoreRange> rows_sender_ranges;
-    for (uint32_t g = 0; g < num_slices; g++) {
+    for (uint32_t g = 0; g < num_slices * num_k_slices; g++) {
         std::size_t r = static_cast<std::size_t>(g * rows_per_group);
         rows_sender_ranges.push_back(CoreRange(CoreCoord{0, r}, CoreCoord{grid_size.x - 1, r}));
     }
@@ -931,11 +973,19 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         // Slicing: group physical rows (grid.y). The dim on grid.y is grouped (parallel index = row
         // within group); the dim on grid.x is sliced (parallel index = group * grid.x + col). At
         // num_slices==1 this is exactly the original (group=0, y_idx=core.y, x_idx=core.x).
-        const uint32_t group = core.y / rows_per_group;
+        const uint32_t group = core.y / rows_per_group;   // innermost group: [0, num_slices*num_k_slices)
+        const uint32_t kband = group / num_slices;        // K-band index (outer)
+        const uint32_t slice_group = group % num_slices;  // N-slice group within the band
         const uint32_t y_idx = core.y % rows_per_group;
-        const uint32_t x_idx = group * grid_size.x + core.x;
+        // N-slice index uses ONLY slice_group (K-bands share the full N, they differ in K not output cols).
+        const uint32_t x_idx = slice_group * grid_size.x + core.x;
         uint32_t in0_idx = transpose_core_grid ? x_idx : y_idx;
         uint32_t in1_idx = transpose_core_grid ? y_idx : x_idx;
+        // Split-K per-core: which K-block this band starts at, and where its partial lands in the
+        // [num_k_slices * M, N] output (offset down by kband full-M stripes). num_k_slices=1 => all 0.
+        const uint32_t k_block_start = kband * (padded_K_tiles / K_block_tiles);
+        const uint32_t out_m_tile_offset = kband * M_tiles;
+        const uint32_t out_M_tiles_total = num_k_slices * M_tiles;
 
         // Injector identification by PHYSICAL position (not the sliced idx): the across-cols (small)
         // injector is at col 0 of every row; the down-rows (big) injector is at each group's top row.
@@ -1058,6 +1108,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             N_end_tile,
             defer_write_k_block,
             max_defer_write_k_block,
+            k_block_start,      // split-K: absolute first K-block this band reduces (0 unless K-par)
+            out_m_tile_offset,  // split-K: M-stripe offset of this band's partial in [Pk*M, N]
+            out_M_tiles_total,  // split-K: total M tiles of the [Pk*M, N] output (= num_k_slices * M)
         };
         // Add ternary addresses if present (after defer_write_k_block, before output addresses)
         if (use_fused_ternary) {
@@ -1123,6 +1176,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             N_end_tile,
             defer_write_k_block,
             max_defer_write_k_block,
+            k_block_start,      // split-K: absolute first K-block this band reduces (0 unless K-par)
+            out_m_tile_offset,  // split-K: M-stripe offset of this band's partial in [Pk*M, N]
+            out_M_tiles_total,  // split-K: total M tiles of the [Pk*M, N] output (= num_k_slices * M)
         };
         // Add ternary addresses if present (after defer_write_k_block, before output addresses)
         if (use_fused_ternary) {

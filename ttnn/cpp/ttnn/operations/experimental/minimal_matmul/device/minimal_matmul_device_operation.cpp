@@ -4,6 +4,8 @@
 
 #include "minimal_matmul_device_operation.hpp"
 #include "minimal_matmul_program_factory.hpp"
+#include <algorithm>
+#include <cstdlib>
 
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -229,10 +231,21 @@ MinimalMatmulDeviceOperation::spec_return_value_t MinimalMatmulDeviceOperation::
     std::vector<TensorSpec> output_specs;
     output_specs.reserve(chunks);
 
+    // Split-K (plan A2, env TT_MM_K_SLICES): the op writes K_slices partial M x N results stacked along
+    // M into a single [K_slices * M, N] buffer that the host sums. Only on the auto path (no config) and
+    // only for the regular (chunks == 1) op. K must divide evenly (validated in the factory).
+    uint32_t k_slices = 1;
+    if (chunks == 1 && !operation_attributes.config.has_value()) {
+        if (const char* ks = std::getenv("TT_MM_K_SLICES"); ks != nullptr) {
+            k_slices = std::max(1, std::atoi(ks));
+        }
+    }
+
     const uint32_t N_per_chunk = N / chunks;
     for (int32_t i = 0; i < chunks; ++i) {
         ttnn::Shape output_shape(in0_input_tensor_shape);
         output_shape[-1] = N_per_chunk;
+        output_shape[-2] = output_shape[-2] * k_slices;  // split-K partials stacked along M
         output_specs.push_back(TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config)));
     }
 

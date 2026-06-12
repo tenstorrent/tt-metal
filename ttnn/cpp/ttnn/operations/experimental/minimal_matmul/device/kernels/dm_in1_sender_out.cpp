@@ -45,6 +45,12 @@ void kernel_main() {
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
     const uint32_t max_defer_write_k_block = get_arg_val<uint32_t>(argidx++);
+    // Split-K (plan A2): absolute first K-block this band reduces; M-stripe offset of this band's
+    // partial in the [num_k_slices * M, N] output; and that output's total M-tile extent. All 0 / M_tiles
+    // when K-par is off.
+    const uint32_t k_block_start = get_arg_val<uint32_t>(argidx++);
+    const uint32_t out_m_tile_offset = get_arg_val<uint32_t>(argidx++);
+    const uint32_t out_M_tiles_total = get_arg_val<uint32_t>(argidx++);
 
 #ifdef FUSE_TERNARY
     // Fuse addcmul - read runtime addresses before setting out_addr_rt_arg_idx
@@ -93,7 +99,10 @@ void kernel_main() {
 #endif  // FUSE_TERNARY
 
     const TensorShape2D in1_shape(K_tiles, N_tiles, padded_K_tiles, padded_N_tiles);
-    const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);
+    // out_shape spans the full [num_k_slices * M, N] partial buffer so the logical_d0 guard in
+    // write_block_sync admits this band's M-stripe (rows out_m_tile_offset .. +M). num_k_slices=1 =>
+    // out_M_tiles_total == M_tiles (identical to before).
+    const TensorShape2D out_shape(out_M_tiles_total, N_tiles, out_M_tiles_total, padded_N_tiles);
     const TensorShape2D out0_shape(M_tiles, N_tiles_per_chunk, padded_M_tiles, N_tiles_per_chunk);
 
     constexpr uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
@@ -209,7 +218,7 @@ void kernel_main() {
                     cb_reserve_back(cb_id_in1, in1_block_num_tiles);
                     uint32_t wp = get_write_ptr(cb_id_in1);
                     {
-                        uint32_t kb = k_forward ? 0 : (K_num_blocks - 1);
+                        uint32_t kb = k_block_start + (k_forward ? 0 : (K_num_blocks - 1));
                         read_in1_block_sync<K_block_tiles, N_block_tiles, /*issue_only=*/true>(
                             in1_reader,
                             in1_shape,
@@ -230,7 +239,7 @@ void kernel_main() {
                             cb_reserve_back(cb_id_in1, in1_block_num_tiles);
                             wp = get_write_ptr(cb_id_in1);
                             uint32_t kn = k_block_iter + 1;
-                            uint32_t kb = k_forward ? kn : (K_num_blocks - 1) - kn;
+                            uint32_t kb = k_block_start + (k_forward ? kn : (K_num_blocks - 1) - kn);
                             read_in1_block_sync<K_block_tiles, N_block_tiles, /*issue_only=*/true>(
                                 in1_reader,
                                 in1_shape,
@@ -278,8 +287,8 @@ void kernel_main() {
                                     out_shape,
                                     out_read_ptr,
                                     out_tile_size,
-                                    defer_write_m_tile,
-                                    defer_write_m_tile_end,
+                                    defer_write_m_tile + out_m_tile_offset,
+                                    defer_write_m_tile_end + out_m_tile_offset,
                                     defer_write_n_tile,
                                     defer_write_n_tile_end);
                             } else {
@@ -297,7 +306,7 @@ void kernel_main() {
                         }
                     }
 
-                    uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
+                    uint32_t k_block = k_block_start + (k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter);
                     cb_reserve_back(cb_id_in1, in1_block_num_tiles);
 
                     uint32_t in1_start_address = get_write_ptr(cb_id_in1);
@@ -443,8 +452,8 @@ void kernel_main() {
                             out_shape,
                             cb_id_out,
                             out_tile_size,
-                            m_tile,
-                            m_tile_end,
+                            m_tile + out_m_tile_offset,
+                            m_tile_end + out_m_tile_offset,
                             n_tile,
                             n_tile_end);
                     } else {
