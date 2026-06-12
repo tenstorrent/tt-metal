@@ -169,7 +169,19 @@ m2::ProgramSpec SliceRmStrideProgramFactory::create_program_spec(
 }
 
 m2::ProgramRunArgs SliceRmStrideProgramFactory::create_invariant_run_args(
-    const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
+    const SliceParams& /*args*/, const SliceInputs& /*tensor_args*/, Tensor& /*output*/) {
+    // Nothing is enqueue-invariant here: the kernels carry varargs (which cannot be designated
+    // invariant — gap #6), so on a cache hit every kernel with varargs must appear in the
+    // per-enqueue UpdateProgramRunArgs. We therefore re-apply all run args per dispatch (the
+    // framework's "++ by default") and keep this empty.
+    return m2::ProgramRunArgs{};
+}
+
+m2::ProgramRunArgs SliceRmStrideProgramFactory::create_per_enqueue_args(
+    const SliceParams& args,
+    const SliceInputs& tensor_args,
+    Tensor& output,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     const auto g = rmstr_compute_geometry(args, tensor_args, output);
 
     m2::ProgramRunArgs::KernelRunArgs reader_args{.kernel = m2::KernelSpecName{"reader"}};
@@ -198,15 +210,6 @@ m2::ProgramRunArgs SliceRmStrideProgramFactory::create_invariant_run_args(
     m2::ProgramRunArgs run_args;
     run_args.kernel_run_args.push_back(std::move(reader_args));
     run_args.kernel_run_args.push_back(std::move(writer_args));
-    return run_args;
-}
-
-m2::ProgramRunArgs SliceRmStrideProgramFactory::create_per_enqueue_args(
-    const SliceParams& /*args*/,
-    const SliceInputs& tensor_args,
-    Tensor& output,
-    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    m2::ProgramRunArgs run_args;
     run_args.tensor_args.emplace(
         m2::TensorParamName{"src"}, m2::ProgramRunArgs::TensorArgument{std::cref(tensor_args.input.mesh_tensor())});
     run_args.tensor_args.emplace(
