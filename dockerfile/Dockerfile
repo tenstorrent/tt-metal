@@ -12,6 +12,9 @@
 #   docker buildx bake -f dockerfile/docker-bake.hcl dev
 #   docker buildx bake -f dockerfile/docker-bake.hcl dev-light
 #   docker buildx bake -f dockerfile/docker-bake.hcl ci-test
+#   docker buildx bake -f dockerfile/docker-bake.hcl ci-build-light
+#   docker buildx bake -f dockerfile/docker-bake.hcl ci-build
+#   docker buildx bake -f dockerfile/docker-bake.hcl ci-test-light
 #   UBUNTU_VERSION=24.04 PYTHON_VERSION=3.12 docker buildx bake -f dockerfile/docker-bake.hcl dev
 #   docker buildx bake -f dockerfile/docker-bake.hcl --print dev   # dry run
 #

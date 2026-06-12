@@ -110,7 +110,6 @@ fi
 EXISTS_OBJ="{}"
 for tool in $TOOLS; do
     exists=$(<"${TMPDIR_EXISTS}/${tool}")
-    JQ_ARGS+=(--arg "${tool}_exists" "$exists")
     EXISTS_OBJ=$(echo "$EXISTS_OBJ" | jq --arg k "${tool}_exists" --arg v "$exists" '. + {($k): $v}')
 done
 

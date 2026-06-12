@@ -11,6 +11,7 @@
 # Examples:
 #   get-target-tools.sh ci-build-light # => ccache mold doxygen clangbuildanalyzer gdb cmake yq zstd sfpi openmpi
 #   get-target-tools.sh dev-light     # => ccache mold doxygen clangbuildanalyzer gdb cmake yq zstd sfpi openmpi
+#   get-target-tools.sh dev           # => ccache mold doxygen clangbuildanalyzer gdb cmake yq zstd sfpi openmpi
 #   get-target-tools.sh basic-dev     # => ccache cmake openmpi sfpi
 #   get-target-tools.sh manylinux     # => ccache mold openmpi sfpi zstd
 #   get-target-tools.sh tools         # => ccache clangbuildanalyzer cmake doxygen gdb mold openmpi sfpi yq zstd

@@ -308,6 +308,9 @@ elif [ "$CHECK_EXISTS" = "true" ]; then
         ( manifest_exists "$DEV_LIGHT_TAG" && echo true || echo false ) > "${TMPDIR_CHECK}/dev_light" &
         PID_DEV_LIGHT=$!
 
+        # DEV_TAG is a canary: its content hash includes the ci_build and ci_test
+        # layer hashes, so a DEV_TAG hit implies ci_build/ci_test were built from
+        # identical layers in the same pipeline run — no need to probe their manifests.
         CI_BUILD_EXISTS=true
         CI_TEST_EXISTS=true
         CI_BUILD_VENV_EXISTS=unknown
