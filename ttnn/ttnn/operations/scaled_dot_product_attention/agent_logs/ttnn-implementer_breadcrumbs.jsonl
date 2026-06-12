@@ -2,3 +2,5 @@
 {"event":"tool_use","tool":"Agent","subagent":"Explore","description":"Find matmul_block compute kernel usage","ts":"2026-06-12T13:48:30+00:00"}
 {"event":"tool_use","tool":"Agent","subagent":"Explore","description":"Find SFPU Exp/Recip op structs","ts":"2026-06-12T13:48:30+00:00"}
 {"event":"test_run","result":"pass","classification":"acceptance","details":"24/24 pass in --dev and non-dev; flash attention online softmax, q_chunk_t=k_chunk_t=1","ts":"2026-06-12T14:06:53+00:00"}
+{"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-06-12T14:29:41+00:00"}
+{"event":"test_run","status":"pass","test":"test_scaled_dot_product_attention.py","detail":"24/24 bf16 default config pass after CB-format-from-dtype change (cb_qk/cb_p now fp32)","ts":"2026-06-12T14:34:41+00:00"}

@@ -69,7 +69,7 @@ INPUT_TAGGERS = {
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16],
+    "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT],
     "alignment": ["tile_aligned"],
     "attention_kind": ["self", "cross"],
@@ -176,7 +176,15 @@ def scaled_dot_product_attention(
     attn_mask: ttnn.Tensor = None,
     is_causal: bool = False,
     scale: float = None,
+    compute_kernel_config=None,
 ) -> ttnn.Tensor:
+    """Flash Attention.
+
+    `compute_kernel_config` is an optional `ttnn.*ComputeKernelConfig`
+    (Wormhole/Blackhole) controlling `math_fidelity`, `fp32_dest_acc_en`,
+    `math_approx_mode`, `dst_full_sync_en`. When omitted, defaults reproduce the
+    Phase-0 behavior exactly (HiFi2 + fp32 DEST accumulation).
+    """
     validate(query, key, value, attn_mask=attn_mask, is_causal=is_causal, scale=scale)
 
     if scale is None:
@@ -190,7 +198,9 @@ def scaled_dot_product_attention(
         query.memory_config(),
     )
 
-    program_descriptor = create_program_descriptor(query, key, value, attn_mask, output_tensor, scale=scale)
+    program_descriptor = create_program_descriptor(
+        query, key, value, attn_mask, output_tensor, scale=scale, compute_kernel_config=compute_kernel_config
+    )
 
     io_tensors = [query, key, value]
     if attn_mask is not None:
