@@ -20,6 +20,7 @@
 #include "tt_metal/distributed/mesh_device_view_impl.hpp"
 #include <tt_stl/concepts.hpp>
 #include <tt_stl/small_vector.hpp>
+#include "/home/maxim-artemov/workspace/debug_include.hpp"
 
 namespace tt::tt_metal {
 
@@ -93,6 +94,7 @@ MeshTensor enqueue_write_tensor(
     std::optional<TensorSpec> tensor_spec_overriden_memory_config;
     if (memory_config) {
         const auto& old_spec = host_tensor.tensor_spec();
+        py_log1_cout(old_spec.tensor_layout().get_alignment());
         tensor_spec_overriden_memory_config = TensorSpec(
             old_spec.logical_shape(),
             TensorLayout(
