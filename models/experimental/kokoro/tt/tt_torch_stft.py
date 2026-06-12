@@ -65,7 +65,6 @@ from loguru import logger
 
 import ttnn
 
-from models.experimental.kokoro.stft_xy_dump import dump_stft_xy_if_enabled, stft_xy_dump_dir, stft_xy_dump_enabled
 from models.experimental.kokoro.tt.tt_conv import dram_height_slice_config
 
 # iSTFT matrix bytes limit: if [K*F, output_length] float32 would exceed this, skip
@@ -508,35 +507,6 @@ class TTTorchSTFT:
         self._synth_imag_prep: Optional[ttnn.Tensor] = None
         self._synth_prep_key: Optional[tuple] = None
 
-    def _maybe_dump_stft_xy(
-        self,
-        X_real: ttnn.Tensor,
-        X_imag: ttnn.Tensor,
-        *,
-        tag: str,
-    ) -> None:
-        if not stft_xy_dump_enabled():
-            return
-        p = self.params
-        B = int(X_real.shape[0])
-        x_cpu = ttnn.to_torch(X_real).float().reshape(B, p.K, p.F)
-        y_cpu = ttnn.to_torch(X_imag).float().reshape(B, p.K, p.F)
-        dump_stft_xy_if_enabled(
-            x_cpu,
-            y_cpu,
-            tag=tag,
-            source="tt_torch_stft.TTTorchSTFT",
-            extra_meta={
-                "shape_bkf": [B, p.K, p.F],
-                "filter_length": p.filter_length,
-                "hop_length": p.hop_length,
-                "input_length": p.input_length,
-                "X_real_dtype": str(X_real.dtype),
-                "X_imag_dtype": str(X_imag.dtype),
-                "dump_dir": str(stft_xy_dump_dir()),
-            },
-        )
-
     def _transform_torch_fallback(self, x_bL: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """CPU float32 STFT transform using ``torch.stft`` (exact match to reference TorchSTFT).
 
@@ -562,17 +532,6 @@ class TTTorchSTFT:
                 window=window,
                 return_complex=True,
             )  # [B, K, F] complex float32
-        dump_stft_xy_if_enabled(
-            z.real,
-            z.imag,
-            tag="tt_torch_stft_fallback",
-            source="tt_torch_stft._transform_torch_fallback",
-            extra_meta={
-                "filter_length": p.filter_length,
-                "hop_length": p.hop_length,
-                "input_length": p.input_length,
-            },
-        )
         magnitude = torch.abs(z).contiguous()
         phase = torch.angle(z).contiguous()
         mc = ttnn.DRAM_MEMORY_CONFIG
@@ -623,7 +582,6 @@ class TTTorchSTFT:
         mc = ttnn.DRAM_MEMORY_CONFIG
         X_real, owns_r = _to_fp32_if_needed(X_real, mc)
         X_imag, owns_i = _to_fp32_if_needed(X_imag, mc)
-        self._maybe_dump_stft_xy(X_real, X_imag, tag="magnitude_phase_fp32")
         mag_sq = ttnn.add(
             ttnn.multiply(X_real, X_real, memory_config=mc),
             ttnn.multiply(X_imag, X_imag, memory_config=mc),

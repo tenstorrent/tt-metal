@@ -9,11 +9,18 @@ At ``upsample_scale=300`` the TTNN phase chain (downsample matmul → cumsum →
 pick up ~3×10⁻⁵ absolute error that is amplified by ``2π × 300 ≈ 1885`` into ~0.06–0.25 rad
 phase error — comparable to ``sine_amp=0.1`` and enough to destroy sine-wave PCC.
 
-This test captures per-stage PCC on the **same F0** and shows:
+This test captures per-stage PCC/MAE in device execution order on the **same F0** and shows:
 
-1. Pre-phase ops (``uv``, ``rad``, ``rad_down``) stay tight on TTNN.
-2. Phase-chain stages (``phase_up``, ``sin``, ``sine×amp``, final ``out``) degrade on TTNN.
+1. Pre-phase ops (``fn``, ``uv``, ``rad_frac`` modulo, ``rad_rand_ini``, ``rad_down``) stay tight on TTNN.
+2. Phase-chain stages (``phase_cumsum``, ``phase_up``, ``sin``, ``sine×amp``, final ``out``) degrade on TTNN.
 3. ``use_torch_phase_fallback=True`` restores phase-chain PCC > 0.99.
+
+Modulo / ``rad_frac`` behaviour on **real kmodel** ``f0_upsampled`` (path-faithful vs shared-input)
+is in ``test_sinegen_modulo_pcc_proof.py`` — this file uses synthetic F0 where ``rad_frac`` stays
+≈ 1.0 and cannot demonstrate modulo sensitivity.
+
+Full-pipeline audio PCC vs each fallback combination (none / stft-only / phase-only / stft+phase)
+is in ``test_tt_kmodel_pcc_degradation.py``.
 
 Run::
 
@@ -55,21 +62,62 @@ _SINE_AMP = 0.1
 _NOISE_STD = 0.003
 _VOICED_THRESHOLD = 0.0
 
-_SINEGEN_STAGE_OPS: dict[str, str] = {
-    "S1_uv": "ttnn.gt, typecast",
-    "S2_rad": "ttnn.multiply, remainder, add(rand_ini)",
-    "S3_rad_down": "ttnn.permute, matmul(interp_down)",
-    "S4_phase_cumsum": "ttnn.slice+add prefix cumsum",
-    "S6_phase_up_rad": "lerp segments, concat, ttnn.multiply(two_pi_scale)",
-    "S7_sin_raw": "ttnn.sin",
-    "S8_sine_x_amp": "ttnn.multiply(sine_amp)",
-    "S9_out_uv_noise": "ttnn.multiply(uv), add(noise)",
+# Input tensor key (not produced by SineGen ops — compared separately).
+_SINEGEN_INPUT_STAGE = "S0_f0_btd"
+
+# Internal capture keys in device execution order (see ``_run_tt_sinegen_stages``).
+_SINEGEN_STAGE_EXEC_ORDER = (
+    _SINEGEN_INPUT_STAGE,
+    "S1_uv",
+    "S0_fn",
+    "S2_rad_mod",
+    "S2_rad",
+    "S3_rad_down",
+    "S4_phase_cumsum",
+    "S6_phase_up_rad",
+    "S7_sin_raw",
+    "S8_sine_x_amp",
+    "S9_out_uv_noise",
+)
+
+_SINEGEN_STAGE_LABELS: dict[str, str] = {
+    _SINEGEN_INPUT_STAGE: "f0_input",
+    "S1_uv": "uv_mask",
+    "S0_fn": "fn_harmonics",
+    "S2_rad_mod": "rad_frac",
+    "S2_rad": "rad_rand_ini",
+    "S3_rad_down": "rad_down",
+    "S4_phase_cumsum": "phase_cumsum",
+    "S6_phase_up_rad": "phase_up",
+    "S7_sin_raw": "sin",
+    "S8_sine_x_amp": "sine_amp",
+    "S9_out_uv_noise": "sine_wavs",
 }
 
-_PRE_PHASE_STAGES = ("S1_uv", "S2_rad", "S3_rad_down")
-_PHASE_CHAIN_STAGES = ("S4_phase_cumsum", "S6_phase_up_rad", "S7_sin_raw", "S8_sine_x_amp", "S9_out_uv_noise")
+_SINEGEN_STAGE_OPS: dict[str, str] = {
+    _SINEGEN_INPUT_STAGE: "f0_btd upsampled F0 input [B,T,1]",
+    "S1_uv": "uv = f0 > threshold  [ttnn.gt, typecast]",
+    "S0_fn": "fn = f0 × harmonics  [ttnn.multiply]",
+    "S2_rad_mod": "rad = (fn / sr) % 1  [× inv_sr, remainder]",
+    "S2_rad": "rad += rand_ini @ t=0  [ttnn.add]",
+    "S3_rad_down": "rad_down = interp(rad)  [permute, matmul]",
+    "S4_phase_cumsum": "phase = cumsum(rad_down)  [slice+add]",
+    "S6_phase_up_rad": "phase_up = lerp(phase) × 2π  [concat, multiply]",
+    "S7_sin_raw": "sin(phase_up)  [ttnn.sin]",
+    "S8_sine_x_amp": "sine × amp  [ttnn.multiply]",
+    "S9_out_uv_noise": "uv × sine + noise  [multiply, add]",
+}
+
+_PRE_PHASE_STAGES = _SINEGEN_STAGE_EXEC_ORDER[1:6]
+_PHASE_CHAIN_STAGES = _SINEGEN_STAGE_EXEC_ORDER[6:]
 # In use_torch_phase_fallback, only the phase ACCUMULATION runs on CPU; sin/×amp/uv-mix stay on device.
 _TORCH_FALLBACK_STAGES = ("S3_rad_down", "S4_phase_cumsum", "S6_phase_up_rad")
+
+
+def sinegen_stage_display(stage_key: str) -> str:
+    """Human-readable step label with execution index (00–10)."""
+    idx = _SINEGEN_STAGE_EXEC_ORDER.index(stage_key)
+    return f"{idx:02d} {_SINEGEN_STAGE_LABELS[stage_key]}"
 
 
 @dataclass(frozen=True)
@@ -145,7 +193,8 @@ def _run_ref_sinegen_stages(
 
     uv = (f0_btd > _VOICED_THRESHOLD).float()
     fn = f0_btd * harmonics
-    rad = (fn / _SAMPLING_RATE) % 1.0
+    rad_mod = (fn / _SAMPLING_RATE) % 1.0
+    rad = rad_mod.clone()
     if rand_ini_b1d is not None:
         rad[:, 0:1, :] = rad[:, 0:1, :] + rand_ini_b1d
 
@@ -169,7 +218,9 @@ def _run_ref_sinegen_stages(
     out = sine_x_amp * uv + noise
 
     return {
+        "S0_fn": fn,
         "S1_uv": uv,
+        "S2_rad_mod": rad_mod,
         "S2_rad": rad,
         "S3_rad_down": rad_down,
         "S4_phase_cumsum": phase_cumsum,
@@ -200,7 +251,8 @@ def _run_torch_phase_stages(
     harmonics_cpu = ttnn.to_torch(p.harmonics).float().reshape(p.dim)
 
     fn = f0_cpu * harmonics_cpu
-    rad = (fn / p.sampling_rate) % 1.0
+    rad_mod = (fn / p.sampling_rate) % 1.0
+    rad = rad_mod.clone()
     if rand_ini_tt is not None:
         rand_ini_cpu = ttnn.to_torch(rand_ini_tt).float().reshape(B, 1, p.dim)
         rand_ini_cpu[..., 0] = 0.0
@@ -224,6 +276,8 @@ def _run_torch_phase_stages(
     sine_x_amp = sin_raw * sine_amp_float
 
     return {
+        "S0_fn": fn,
+        "S2_rad_mod": rad_mod,
         "S3_rad_down": rad_down,
         "S4_phase_cumsum": phase_cumsum,
         "S6_phase_up_rad": phase_up,
@@ -251,9 +305,11 @@ def _run_tt_sinegen_stages(
     caps["S1_uv"] = _tt_to_cpu(uv)
 
     fn = ttnn.multiply(f0_tt, p.harmonics, memory_config=memory_config)
+    caps["S0_fn"] = _tt_to_cpu(fn)
     rad = ttnn.multiply(fn, p.inv_sampling_rate, memory_config=memory_config)
     ttnn.deallocate(fn)
     rad = ttnn.remainder(rad, p.one, memory_config=memory_config)
+    caps["S2_rad_mod"] = _tt_to_cpu(rad)
 
     if rand_ini_tt is not None:
         rand_masked = ttnn.multiply(rand_ini_tt, p.fundamental_zero_mask, memory_config=memory_config)
@@ -461,6 +517,7 @@ def analyze_sinegen_phase_fallback(device) -> SinegenPhaseFallbackReport:
     for use_fb in (False, True):
         tt_mod, f0_tt, rng_tt = _build_modules(device, f0, use_torch_phase_fallback=use_fb)
         mc = ttnn.DRAM_MEMORY_CONFIG
+        f0_btd_tt = _tt_to_cpu(f0_tt)
         tt_caps = _run_tt_sinegen_stages(
             tt_mod,
             f0_tt,
@@ -472,6 +529,14 @@ def analyze_sinegen_phase_fallback(device) -> SinegenPhaseFallbackReport:
         deallocate_m_source_rng_tt(rng_tt)
 
         target = rows_ttnn if not use_fb else rows_fallback
+        target.append(
+            SinegenPhaseStageRow(
+                stage=_SINEGEN_INPUT_STAGE,
+                pcc=_pcc(f0, f0_btd_tt),
+                mae=_mae(f0, f0_btd_tt),
+                ttnn_ops=_SINEGEN_STAGE_OPS[_SINEGEN_INPUT_STAGE],
+            )
+        )
         for stage in _PRE_PHASE_STAGES + _PHASE_CHAIN_STAGES:
             if stage not in ref_caps or stage not in tt_caps:
                 continue
@@ -506,18 +571,18 @@ def _log_report(r: SinegenPhaseFallbackReport) -> None:
         f"  recovery delta  PCC={r.pcc_sine_fallback - r.pcc_sine_ttnn:+.6f}  MAE={r.mae_sine_fallback - r.mae_sine_ttnn:+.6e}\n"
     )
 
-    print("  Pure TTNN path (ref vs device):")
-    print(f"  {'Stage':<22} {'PCC':>10} {'MAE':>13}  TTNN ops")
-    print("  " + "-" * 72)
+    print("  Pure TTNN path (ref vs device, execution order):")
+    print(f"  {'step':<28} {'PCC':>10} {'MAE':>13}  ops")
+    print("  " + "-" * 88)
     for row in r.rows_ttnn:
-        print(f"  {row.stage:<22} {row.pcc:10.6f} {row.mae:13.6e}  {row.ttnn_ops}")
+        print(f"  {sinegen_stage_display(row.stage):<28} {row.pcc:10.6f} {row.mae:13.6e}  {row.ttnn_ops}")
 
-    print("\n  With use_torch_phase_fallback=True:")
-    print(f"  {'Stage':<22} {'PCC':>10} {'MAE':>13}  backend")
-    print("  " + "-" * 72)
+    print("\n  With use_torch_phase_fallback=True (execution order):")
+    print(f"  {'step':<28} {'PCC':>10} {'MAE':>13}  backend")
+    print("  " + "-" * 88)
     for row in r.rows_fallback:
         backend = "torch.cpu" if row.stage in _TORCH_FALLBACK_STAGES else "ttnn"
-        print(f"  {row.stage:<22} {row.pcc:10.6f} {row.mae:13.6e}  {backend}")
+        print(f"  {sinegen_stage_display(row.stage):<28} {row.pcc:10.6f} {row.mae:13.6e}  {backend}")
 
 
 def test_sinegen_phase_fallback_kokoro_scale_proof(device):

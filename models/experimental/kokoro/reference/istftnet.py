@@ -6,8 +6,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from models.experimental.kokoro.stft_xy_dump import dump_stft_xy_if_enabled
-
 
 # https://github.com/yl4579/StyleTTS2/blob/main/Modules/utils.py
 def init_weights(m, mean=0.0, std=0.01):
@@ -132,17 +130,6 @@ class TorchSTFT(nn.Module):
             self.win_length,
             window=self.window.to(input_data.device),
             return_complex=True,
-        )
-        dump_stft_xy_if_enabled(
-            forward_transform.real,
-            forward_transform.imag,
-            tag="ref_torch_stft",
-            source="reference.istftnet.TorchSTFT",
-            extra_meta={
-                "filter_length": self.filter_length,
-                "hop_length": self.hop_length,
-                "win_length": self.win_length,
-            },
         )
         return torch.abs(forward_transform), torch.angle(forward_transform)
 
