@@ -173,7 +173,10 @@ m2::ProgramSpec SliceTileTensorArgsProgramFactory::create_program_spec(
         .source = std::filesystem::path{TTA_READER_KERNEL},
         .dfb_bindings =
             {m2::ProducerOf(m2::DFBSpecName{"cb"}, "cb_in"),
-             m2::ProducerOf(m2::DFBSpecName{"cb_tensor"}, "cb_tensor")},
+             // The reader stages the start/end index tensors into cb_tensor and reads them back
+             // itself to compute the start offset — a self-loop, so it is both producer and consumer.
+             m2::ProducerOf(m2::DFBSpecName{"cb_tensor"}, "cb_tensor"),
+             m2::ConsumerOf(m2::DFBSpecName{"cb_tensor"}, "cb_tensor")},
         .tensor_bindings =
             {m2::TensorBinding{.tensor_parameter_name = m2::TensorParamName{"src"}, .accessor_name = "src"},
              m2::TensorBinding{.tensor_parameter_name = m2::TensorParamName{"starts"}, .accessor_name = "starts"},
