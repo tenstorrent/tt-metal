@@ -752,3 +752,32 @@ def test_ltx_video_decoder_2k(
     generic blockings — correct, but not yet perf-tuned. See conv3d.py.
     """
     _run_ltx_decoder_parity(mesh_device, h_axis, w_axis, num_links, num_frames, height, width, mean=mean, std=std)
+
+
+@pytest.mark.parametrize("num_frames, height, width", [(25, 256, 256)], ids=["25f_256x256"])
+@pytest.mark.parametrize(
+    "mesh_device, h_axis, w_axis, num_links",
+    [((2, 2), 1, 0, 2)],
+    ids=["2x2_h1_w0"],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize("device_params", _LTX_VAE_FABRIC_DEVICE_PARAMS, indirect=True)
+def test_ltx_video_decoder_qb_2x2(
+    mesh_device: ttnn.MeshDevice,
+    num_frames: int,
+    height: int,
+    width: int,
+    h_axis: int,
+    w_axis: int,
+    num_links: int,
+):
+    """Full LTXVideoDecoder on a BH QB 2x2 (4-chip) mesh — h_factor=w_factor=2.
+
+    The 2x2 mesh has no exact ``_BLOCKINGS`` sweep, so every decoder conv3d takes
+    the channel-keyed ``_DEFAULT_BLOCKINGS`` fallback. Regression guard for the
+    square-channel res convs ((1024,1024)/(512,512)/(256,256)/(128,1024)): without
+    a fallback entry they hit the hardcoded full-C_in default, whose vol2col/weight
+    CBs grow to ~3.7 MB and overflow the 1.5 MB L1 (see conv3d.py). Mesh axes match
+    the pipeline mapping (height on tp_axis=1, width on sp_axis=0).
+    """
+    _run_ltx_decoder_parity(mesh_device, h_axis, w_axis, num_links, num_frames, height, width)

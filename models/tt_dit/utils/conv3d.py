@@ -467,7 +467,16 @@ _DEFAULT_BLOCKINGS = {
     # LTX-2.3 22B VAE decoder + latent upsampler conservative fallbacks. These
     # channel combos all have swept exact _BLOCKINGS entries for 2x4/4x8 1080p;
     # they remain here as the cross-mesh/cross-resolution fallback (the hardcoded
-    # full-Cin default OOMs at these widths).
+    # full-Cin default OOMs at these widths). This set covers every (in,out) the
+    # decoder builds, so meshes without an exact _BLOCKINGS sweep (e.g. BH QB 2x2,
+    # h_factor=w_factor=2) still fit L1. C_in_block=128 keeps the two big conv3d
+    # CBs (vol2col_tiled + weight_tiled, each ~ matmul_K_t*tile = kernel_vol*C_in_block/32*tile)
+    # to ~221 KB apiece; the hardcoded full-Cin default makes the 1024-wide res
+    # conv's CBs ~1.77 MB each (3.7 MB total > 1.5 MB L1).
+    (128, 1024, (3, 3, 3)): (128, 32, 1, 4, 4),  # conv_in
+    (1024, 1024, (3, 3, 3)): (128, 32, 1, 4, 4),  # s0_res
+    (512, 512, (3, 3, 3)): (128, 32, 1, 4, 4),  # s1_res / s2_res
+    (256, 256, (3, 3, 3)): (128, 32, 1, 4, 4),  # s3_res
     (1024, 4096, (3, 3, 3)): (256, 32, 1, 1, 1),  # s0_up
     (512, 4096, (3, 3, 3)): (256, 32, 1, 1, 1),  # s1_up
     (256, 512, (3, 3, 3)): (256, 32, 1, 4, 4),  # s3_chg
