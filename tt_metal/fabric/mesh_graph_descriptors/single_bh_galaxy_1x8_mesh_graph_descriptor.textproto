@@ -1,0 +1,30 @@
+# A 1 (row) x 8 (col) MESH carved from the BH galaxy: a line of 8 physically
+# adjacent chips along the 8-wide axis. Purpose: exercise minimax_m2 at pure
+# TP=8 / SP=1 / EP=1 (the TP collective path) on real multi-device, without the
+# unfinished SP-prefill input path. Plain MESH only; use FABRIC_1D + Linear.
+
+# --- Meshes ---------------------------------------------------------------
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 1, 8 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+# --- Pinnings ---------------------------------------------------------------
+
+pinnings {
+  logical_fabric_node_id {
+    mesh_id: 0
+    chip_id: 0
+  }
+  physical_asic_position {
+    tray_id: 1
+    asic_location: 1
+  }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }

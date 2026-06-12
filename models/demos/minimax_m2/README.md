@@ -21,13 +21,22 @@ loaded from a downloaded checkpoint via `HF_MODEL`):
 | experts (SiLU SwiGLU) | 0.9990 |
 | full decoder layer | 0.99993 |
 
-Not yet validated (need the multi-card Blackhole box): TP/EP/SP collectives, paged
-KV read-back, full-model logits, real weights, bfp4 accuracy, decode, long context.
+### Validated on a Blackhole Galaxy (32 chips, 2026-06-12) — see PREFILL_PROPOSAL.md §14
+TP=8 attention PCC **0.9991** / experts **0.9989** vs HF at mesh `(1,8)`; full 62-layer
+assembly runs; **real M2.7 weights → first token == HF** (argmax + top-5 match, logit PCC
+0.953 w/ bfp4 experts); whole 230B model fits on 8 chips. This box is a plain MESH →
+`FABRIC_1D` + `Topology.Linear` (no torus); custom `single_bh_galaxy_{1x8,4x8}` MGDs.
+
+Not yet validated: EP (dispatch/combine) collectives, SP=4 sharding, paged-KV read-back /
+chunked attention, full `(4,8)` prefill, long context, decode (tt-blaze).
 
 ## Tests
 ```
 pip install -r requirements.txt          # transformers==4.57.1 (M2 is a trust_remote_code model)
-pytest models/demos/minimax_m2/tests/unit/
+pytest models/demos/minimax_m2/tests/unit/                 # single-card (1,1) PCC vs HF
+# On a Galaxy (see PREFILL_PROPOSAL.md §14 for env + MGD setup):
+pytest models/demos/minimax_m2/tests/unit/test_attention_vs_hf.py -k 1x8   # TP=8 vs HF
+python  models/demos/minimax_m2/tests/galaxy_first_token.py --prompt "..."  # real weights -> first token
 ```
 
 ## Layout

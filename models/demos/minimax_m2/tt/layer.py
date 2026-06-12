@@ -31,6 +31,8 @@ class DecoderLayer:
         use_throughput_experts=False,
         tokens_per_device=32,
         expert_weight_dtype=ttnn.bfloat4_b,
+        use_ep_moe=False,
+        ep_seq_len_per_chip=1024,
     ):
         self.input_layernorm = RMSNorm(
             mesh_device,
@@ -58,6 +60,8 @@ class DecoderLayer:
             use_throughput_experts=use_throughput_experts,
             tokens_per_device=tokens_per_device,
             expert_weight_dtype=expert_weight_dtype,
+            use_ep_moe=use_ep_moe,
+            ep_seq_len_per_chip=ep_seq_len_per_chip,
         )
 
         # MiniMax-M2 lists per-layer attention types in `attn_type_list` (all 1 =

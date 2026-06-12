@@ -110,6 +110,8 @@ class Model:
         max_local_batch_size=1,
         users_row_sharded=False,
         use_throughput_experts=False,
+        use_ep_moe=False,
+        ep_seq_len_per_chip=1024,
     ):
         """
         Initialize MiniMax-M2 model
@@ -188,6 +190,8 @@ class Model:
                 users_row_sharded=users_row_sharded,
                 use_throughput_experts=use_throughput_experts,
                 tokens_per_device=max_local_batch_size,
+                use_ep_moe=use_ep_moe,
+                ep_seq_len_per_chip=ep_seq_len_per_chip,
             )
             for layer_idx in range(hf_config.num_hidden_layers)
         ]

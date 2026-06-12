@@ -11,29 +11,63 @@
 
 ---
 
-## 0. Status (living) — last updated 2026-06-10
+## 0. Status (living) — last updated 2026-06-12
 
 **Model (validated, single Wormhole, TP=1/EP=1/SP=1, random weights, seq=128):**
 attention block 0.9991 · router (decomposed) · experts 0.9990 · **full decoder layer
 0.99993** vs HF. The M2 architecture deltas (partial RoPE, distributed QK-norm,
 sigmoid+bias router, SiLU-SwiGLU experts, no biases/sinks/sliding-window) are done.
 
-**Done:** code + docs are MiniMax-only (no external-model references); program-config
-classes + identifiers all MiniMax-named.
+**NEW — validated on a real Blackhole Galaxy (32 chips), 2026-06-12 (see §14 for how-to-run):**
+- **TP=8 collectives correct vs HF** — attention PCC **0.9991**, experts PCC **0.9989** at
+  mesh `(1,8)`/TP=8 (match the TP=1 baselines). First time the reduce-scatter / all-gather /
+  expert TP all-reduce paths have run multi-device.
+- **Full 62-layer model assembles + runs** end-to-end at TP=8 (random weights smoke).
+- **Real M2.7 weights → first token VERIFIED vs HF** — prompt "The capital of France is" →
+  first token `'The'`, **argmax == HF, top-5 identical**, full-vocab logit PCC **0.953**
+  (the gap from 0.999 is bfp4 expert quantization over 62 layers; exact argmax+top-5 ⇒
+  correct). Ground truth saved to `/data/vmelnykov/minimax_m2_ref/`.
+- **The whole 230B model FITS on 8 chips** at TP=8/EP=1/bfp4 (~16 GB/chip).
+- **EP=32 VERIFIED END-TO-END** — `(4,8)` DP-attention (4 prompts, one/row) + EP=32 shared MoE
+  (256 experts spread 8/chip) + real weights → prompt 0 first token `'The'` == HF oracle (MATCH).
+  EP MoE block also validated standalone (PCC 0.9803). EP gives ~3.3 GB/chip experts (vs 14 at EP=1).
+- **3 bugs fixed** in never-before-run paths: experts `Topology.Ring`→`ccl_manager.topology`
+  (plain-MESH Galaxy needs FABRIC_1D + Linear, no torus); stale `SamplingGenerator(
+  enable_internal_trace=)` kwarg; `load_state_dict` missing `trust_remote_code=True`.
 
-**In progress — serving skeleton (scaffold, see §4/§8):** prefill runner + pipeline +
-per-layer KV migration seam + chunked prefill. Tiering:
-- *Tier 1 (build + validate here):* **chunked/paged attention rewire** (OWNER: attention —
-  op confirmed GQA-capable + paged-required, see §6/§11.2; replaces the current dead
-  write-only KV fill), standalone runner.
-- *Tier 2 (seam/stub, cross-team / multi-card):* per-layer migration, P/D disaggregation.
-- *Tier 3 (defer, undefined):* EP=8 (`experts_throughput/` is the future home, untouched).
-  Note: our current EP=1 is a functional-first choice, NOT the end-state —
-  DeepSeek prefill does EP+SP+TP, and EP-in-prefill is the scaling target.
+**Done:** code + docs are MiniMax-only; program-config classes + identifiers all MiniMax-named.
 
-**Not validated anywhere yet:** TP>1 / EP / SP collectives, paged KV read-back, full
-model logits, real weights, bfp4 accuracy, decode path, long context. All need the
-multi-card Blackhole box.
+**In progress — Phase 2:** EP (expert-parallel) MoE, SP=4 + chunked/paged attention, serving.
+- *EP — SCOPED, reusable (was "Tier 3 undefined"):* the dispatch/combine machinery already
+  exists as compiled ops `ttnn.experimental.deepseek_prefill.{dispatch, routed_expert_ffn,
+  combine, ...}` and is generic. MiniMax MoE shape == DeepSeek V3 (256/top-8/sigmoid+bias)
+  but **no expert groups** (plain top-8) and **no shared expert**. Target on `(4,8)`: TP=8 +
+  experts spread 8/chip across 32 (= "EP=32") → ~3.3 GB/chip. Plan: wire into
+  `tt/experts_throughput/`. See §15.
+- *Tier 1:* **chunked/paged GQA attention rewire** (replaces dead write-only KV fill) + SP=4
+  input sharding — needed for full `(4,8)` long-context prefill.
+- *Tier 2 (cross-team):* per-layer KV migration, P/D disaggregation.
+
+### ⚠️ GAPS — what is NOT done yet (read this before assuming "it works")
+The token-correct runs above are **single-shot, short-seq, non-paged, prefill-only**. Real
+serving needs the following, **none of which exist/are validated yet**:
+- **Attention is the non-chunked path** (full-sequence SDPA on fresh Q/K/V). The **chunked/paged
+  GQA attention** (`chunked_scaled_dot_product_attention` + `chunk_start_idx` + page-table slicing)
+  is **NOT wired** → no long context, no chunked prefill.
+- **No real KV cache in use.** All token runs use `kv_cache=None`; the paged KV layout exists but
+  **paged-KV write→read-back is NOT validated** (the chunked SDPA above would exercise it).
+- **No prefill runner / pipeline / scheduler.** `prefill_runner.py`, `MiniMaxPrefillPipeline.prefill`,
+  `_prepare_input_tensor` are still `NotImplementedError`. No standalone loop, no SHM, no request loop.
+- **No KV migration** (prefill→decode disaggregation) — Tier-2, cross-team; endpoint is a NoOp stub.
+- **SP=4 (sequence parallel)** not done — needed for config (A) long-context single-prompt prefill.
+- **Decode is out of scope** (runs in tt-blaze) → this repo produces the **first token only**, not text.
+- **EP integration is TEST-grade:** the DP-row↔EP-dgs bridge in `mlp.py` is a **host round-trip**
+  (~2 hops/layer) — correctness-only; **production needs an on-device bridge**.
+- **bfp4 accuracy:** full-model logit PCC ~0.95 (argmax/top-5 correct). Fine for first-token;
+  long generation accuracy under bfp4 unmeasured.
+
+**Still not validated (one-liner):** chunked/paged attention, real paged-KV read-back, SP=4,
+runner/pipeline/scheduler, KV migration, long context, decode, on-device EP bridge, bfp4 long-gen.
 
 ---
 
@@ -554,3 +588,208 @@ WHAT WE OWN:
   - chunk_start_idx wiring into SDPA
   - chunk_page_table slicing
 ```
+
+---
+
+## 14. Running on a Blackhole Galaxy + verification scripts (2026-06-12)
+
+### 14.1 Environment
+
+```bash
+cd /data/vmelnykov/tt-metal
+export TT_METAL_HOME=/data/vmelnykov/tt-metal
+export PYTHONPATH=$TT_METAL_HOME
+source python_env/bin/activate              # ttnn is built here; /usr/bin/python3 has NO ttnn
+# venv has no pip — install with: uv pip install --python $TT_METAL_HOME/python_env/bin/python <pkg>
+# requires transformers==4.57.1 (M2.7 modeling code needs GenericForQuestionAnswering)
+```
+
+### 14.2 Mesh / fabric / MGD — the rules that bite
+
+This box is a **plain 8×4 MESH** (no torus / wrap-around links). Two hard rules (else hang/crash):
+1. **Mesh-open shape must equal the MGD `device_topology dims`.** Stock `single_bh_galaxy_*`
+   MGDs are `[8,4]`. We added `single_bh_galaxy_4x8` (`[4,8]`, transpose — for TP=8 on cols)
+   and `single_bh_galaxy_1x8` (line of 8 — pure TP=8) under `tt_metal/fabric/mesh_graph_descriptors/`.
+2. **Collectives need `FABRIC_1D` + `ttnn.Topology.Linear`.** `FABRIC_1D_RING` / torus MGDs do
+   NOT fit this box. The model's `CCLManager` defaults to `Ring`; pass `topology=Linear` here.
+
+```bash
+export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_1x8_mesh_graph_descriptor.textproto
+```
+
+Parallelism that actually maps to this hardware: DeepSeek uses `(8,4)`=SP8/TP4; we run
+TP=8 via the transposed `(4,8)` (cols=TP=8, rows=SP=4), or `(1,8)` for pure TP=8.
+
+### 14.3 Verification scripts (all under `tests/`)
+
+| Script | What it does | Mesh | Needs |
+|---|---|---|---|
+| `galaxy_mesh_smoke.py` | mesh opens + 1 collective round-trips (sanity that fabric works) | any | — |
+| `galaxy_layer_smoke.py` | one `DecoderLayer` fwd, random wts (TP collective path executes) | `(1,8)` | — |
+| `galaxy_model_smoke.py` | full 62-layer assembly fwd, random wts (no OOM/hang, valid first token) | `(1,8)` | — |
+| `galaxy_first_token.py` | **real weights** → prefill → first token (`--dump-logits` to save) | `(1,8)` | `HF_MODEL` |
+| `hf_reference_oracle.py` | HF CPU forward → saves argmax/top-5/logits ground truth | — (CPU) | `HF_MODEL` |
+| `tests/unit/test_attention_vs_hf.py -k 1x8` | attention PCC vs HF at TP=8 | `(1,8)` | `HF_MODEL` (modeling code only) |
+| `tests/unit/test_experts_vs_hf.py -k 1x8` | experts PCC vs HF at TP=8 | `(1,8)` | `HF_MODEL` (modeling code only) |
+| `test_ep_moe_vs_ref.py` | **EP MoE block** vs torch (256 exp 8/chip) — PASS 0.9803 | `(8,4)`/`(4,8)` | — |
+| `galaxy_ep_forward_smoke.py` | full model DP-attn + EP=32 fwd, random wts (runs/finite) | `(4,8)` | — |
+| `galaxy_first_token_ep.py` | **real weights, EP=32, 4 prompts → first tokens**; verifies prompt0 vs oracle (PASS: 758 'The') | `(4,8)` | `HF_MODEL` |
+
+### 14.3.1 Local-only vs pushable
+The `tests/unit/*.py` files **are committed** (they need only `HF_MODEL` = the small modeling
+code / a checkpoint). The standalone `galaxy_*.py` / `test_ep_moe_vs_ref.py` driver scripts are
+**committed too**, but they depend on artifacts that **cannot be pushed to origin** and stay LOCAL:
+- the **dequantized bf16 checkpoint** (`/data/vmelnykov/MiniMax-M2`, ~460 GB),
+- the **HF oracle** ground truth (`/data/vmelnykov/minimax_m2_ref/`),
+- the **per-config TTNN weight caches** (`…/tensor_cache_*`).
+So a teammate reproduces by: download `MiniMaxAI/MiniMax-M2.7` → `dequantize_hf_checkpoint.py`
+→ set `HF_MODEL` → run. The scripts + MGDs are in-repo; the weights are not.
+
+PCC tests need only the M2.7 **modeling code** (`*.py`+config, a few KB — they build random-weight
+references). The first-token run needs the full **dequantized bf16** checkpoint at `HF_MODEL`
+(download `MiniMaxAI/MiniMax-M2.7` fp8 — public, no token — then `dequantize_hf_checkpoint.py`;
+output dir must be named `MiniMax-M2` for the `model_config.py` assert).
+
+### 14.4 Regression against ground truth
+`/data/vmelnykov/minimax_m2_ref/` holds `ref_results.json` + HF/device logit `.npy`. After any
+change, re-run `galaxy_first_token.py --dump-logits …` and compare argmax + logit PCC.
+
+---
+
+## 15. EP (expert parallel) — Phase 2 plan (scoped 2026-06-12)
+
+EP is **no longer "undefined"** — the ops are compiled and generic, and the placement is verified.
+
+**Layout (DeepSeek scheme, our TP=8).** `(4,8)`: `num_dispatch_groups = cols = 8`,
+`dispatch_group_size = rows = 4` → `256 // 8 // 4 = 8` **whole experts/chip** across all 32 chips
+→ ~3.3 GB/chip bfp4 (vs EP=1's 14 GB — EP=1 replicates all experts across SP rows). Verified via
+`deepseek_v3_d_p` `ExpertMapping.create_dispatch_table`.
+
+**Reuse (do):** `ttnn.experimental.deepseek_prefill.{dispatch, routed_expert_ffn, combine}` +
+`TtDispatchModule`/`TtCombineModule` + `ExpertMapping`. **Do NOT reuse** DeepSeek attention (MLA ≠
+our GQA), `moe_grouped_topk` (M2 has no expert groups → plain top-8), or shared-expert (M2 has none).
+
+**Build order:**
+- **E2** wire MiniMax router top-8 `(indices, weights)` → `dispatch` → `routed_expert_ffn` →
+  `combine` → reduce, in `tt/experts_throughput/`; load 8 experts/chip expert-centric.
+- **E3** PCC-validate the EP MoE block in isolation (like `test_experts_vs_hf`, EP layout) —
+  doesn't need SP attention, so can start on `(1,8)` (dispatch correctness, 32 experts/chip).
+- **E4** integrate into layer/model on `(4,8)`; full-model logit PCC vs the saved oracle. Couples
+  with the SP=4 + chunked-attention Tier-1 work.
+
+---
+
+## 16. Parallelism strategy on 32 chips (proposal — for team review, 2026-06-12)
+
+How to lay MiniMax-M2 across the BH Galaxy's 32 chips. **Target architecture (confirmed):**
+**TP for attention / dense / lm_head; EP for the MoE experts.**
+
+### 16.1 Fixed: TP=8 across columns
+Every weight matrix (attention q/k/v/o, lm_head, embed) is sharded ÷8 across the 8 **columns**.
+One row of 8 chips = one complete TP-sharded copy of the dense weights. `num_kv_heads=8` → 1 KV
+head/chip (clean). Validated: attention PCC 0.9991 at TP=8.
+
+### 16.2 The 4 rows — three ways to use them (DP / SP / EP)
+
+| Axis on rows | Rows hold | Dense weights | Experts | Goal |
+|---|---|---|---|---|
+| **DP** | 4 different prompts | dup ×4 | (see EP below) | throughput |
+| **SP** | 1 prompt, seq÷4 | dup ×4 | (see EP below) | long context / latency |
+| **EP** | — (orthogonal) | — | experts spread, not duplicated | expert-memory efficiency |
+
+The dense (attention) weights are duplicated across the 4 rows in **both** DP and SP (each row needs
+full attention weights for its tokens). EP is about the **experts**: spread vs duplicated.
+
+### 16.3 Governing rules (the arithmetic)
+- `(distinct expert copies) = DP`, and `DP × (chips per expert copy) = 32`. So **EP=32 (one copy
+  over all 32 chips) ⟹ DP=1**; **DP=4 ⟹ EP=8 per replica (experts duplicated ×4)**.
+- **EP's `dispatch_group_size` = the mesh ROW axis = the SP/DP axis.** The dispatch routes tokens
+  *among the rows* to expert-owning chips, so it needs rows>1 with tokens distributed across them
+  (`dgs=1` breaks the routing op). EP and SP/DP-attention share the row axis by design.
+
+### 16.4 Two target configs
+
+**(A) SP=4 + EP=32** — one prompt, long context, min expert memory.
+Rows = seq-shards (seq÷4); experts spread 8/chip (no dup). **~3.3 GB/chip** experts (bfp4).
+Needs the SP-attention path (chunked/paged, Tier-1).
+
+**(B) DP-attention(=4) + shared EP=32** — 4 prompts at once, no SP needed.
+Each row = one prompt doing **full** attention (TP=8 only); one **shared** EP=32 expert pool;
+dispatch gathers all 4 prompts' tokens → experts → scatters back. Experts **not** duplicated
+(~3.3 GB/chip). This is the SOTA "DP-attention + shared-EP" serving pattern, and it's reachable
+**without** writing SP attention (uses the model's `users_row_sharded` path). Being brought up now.
+
+> Note: (B)'s "DP=4" is *attention* data-parallel with a **shared** expert pool — NOT 4 independent
+> replicas. The shared EP keeps experts at 32-way (no ×4 duplication); the dispatch juggles all
+> streams' tokens. Independent `DP=4` replicas would instead force EP=8 (experts ×4, ~14 GB/chip).
+
+### 16.5 Token flow through dispatch/combine (same for SP+EP and DP+EP)
+```
+(4×8): TP=8 cols. EP: dispatch_group_size=4 ROWS, num_dispatch_groups=8 COLS. 8 whole experts/chip.
+Column c owns experts [32c..32c+31] (8 per row). Rows = SP seq-shards OR DP prompts (identical mechanics).
+
+token T on row R1, router picked experts {5, 70, 200}:
+ ① after attention: T's emb TP-sharded across C0..C7 on R1
+ ② all-gather emb across COLS  → every chip on R1 has T's FULL emb (T replicated across cols)
+ ③ DISPATCH (all-to-all within each column, across the 4 rows):
+       C0 owns e0-31  → T→chip owning e5  in C0
+       C2 owns e64-95 → T→chip owning e70 in C2
+       C6 owns e192.. → T→chip owning e200 in C6
+ ④ ROUTED_EXPERT_FFN (local, WHOLE expert weights, dense matmul on routed tokens)
+ ⑤ COMBINE (all-to-all back) → results return to T's origin row R1
+ ⑥ REDUCE (weighted-sum over top-k by router weights + reduce-scatter across COLS)
+       out(T) = Σ w_e·e(T) → lands TP-sharded on R1 for the next layer
+```
+Experts are **stateless about which stream a token came from** — that's why the rows can be SP
+seq-shards or DP prompts with the *same* dispatch/combine machinery.
+
+### 16.6 Memory (experts dominate: 224B of 229B params; bfp4 ≈ 0.5 B/param)
+| Config | experts/chip | bfp4 GB/chip | notes |
+|---|---|---|---|
+| EP=1, TP=8 (current functional) | all 256 (÷8 TP), dup ×SP rows | ~14 | wasteful; fits |
+| **EP=32** (configs A & B) | **8 whole** | **~3.3** | target |
+| DP=4 independent replicas (EP=8) | 32 whole | ~14 | throughput, experts ×4 |
+
+### 16.7 Status
+TP=8 attention/experts validated vs HF (§0). EP MoE block (`TtMiniMaxMoE`) validated PCC 0.9803
+on `(8,4)`. Config **(B)** (DP-attention + EP) being brought up via `users_row_sharded` + `use_ep_moe`
+— the reachable full-forward EP path. Config **(A)** (SP=4 + EP) awaits the chunked/SP-attention
+Tier-1 work. Decode (EP=4 across rows) lives in tt-blaze.
+
+---
+
+## 17. Cleanup / tech-debt follow-up (2026-06-12)
+
+**Principle (important):** "dead code" here must be judged against the **full serving call
+graph**, not in-repo references. Many methods show **0 internal refs** yet are **live API
+surface** — the callers are the `tt_transformers` **Generator**, the prefill **pipeline /
+runner / scheduler**, and **migration** (mostly `NotImplementedError` scaffold *now*, so they
+don't show as refs yet but *will* call this surface), plus **vLLM** duck-typing the interface.
+A plain `grep` over `models/demos/minimax_m2/` will mislabel interface methods as dead.
+
+### Bucket A — KEEP (interface / load-bearing; do NOT delete)
+- `prepare_inputs_prefill` / `prepare_inputs_decode` / `process_output_prefill` /
+  `process_output_decode` / `prepare_prefill_inputs_trace` / `process_logits_after_prefill_trace`
+  — the **Generator interface** (`models/tt_transformers/tt/generator.py` calls all of these by
+  name). Needed by the serving layer.
+- `tt/experts_throughput/decode.py` — **prefill** imports `_apply_swiglu` from it (load-bearing
+  for prefill despite the name).
+- `tt/experts_throughput/fused_decode.py` — imported by `experts_throughput/__init__.py` and
+  called in `ThroughputExperts.forward`'s decode branch.
+
+### Bucket B — CONSOLIDATION CANDIDATE (deliberate refactor, separate PR, team sign-off)
+- Retire the **older EP scaffold `ThroughputExperts`** (the `use_throughput_experts` path) now
+  that **`TtMiniMaxMoE`** (`use_ep_moe`, validated PCC 0.9803) covers EP. That would remove
+  `decode.py` + `fused_decode.py` + the `use_throughput_experts` branch — but requires
+  re-pointing the MLP, relocating `_apply_swiglu`, and dropping the decode forwards. Not a quick
+  delete; a conscious consolidation.
+
+### Bucket C — SAFE-DELETE (trivially unreachable; verify + run unit tests after)
+- The unused `sinks` tensor in `tests/test_factory._generate_dummy_state_dict` (M2 has no sinks).
+- (sweep for other leftover debug/experimental bits during the cleanup pass.)
+
+### Decode-specific helpers note
+`prepare_inputs_decode` / `process_output_decode` / `_increment_decode_positions_device` are
+*vestigial for this prefill-only repo* (decode runs in tt-blaze), but are part of the Generator
+interface vLLM/serving may duck-type. **Leave them with a `# kept for Generator/serving interface`
+note rather than delete** — removing risks the serving integration.
