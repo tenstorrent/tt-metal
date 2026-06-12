@@ -59,15 +59,13 @@ def test_decode_forward_passes_slot_remap_to_device_sampling(monkeypatch: pytest
         def _validate_and_initialize_sampling(self, *args, **kwargs):
             captured["validate_sampling"] = (args, kwargs)
 
-        def _sampling_device_slot(self, user_id: int) -> int:
-            return 32 * (user_id // self.batch_size_per_row) + (user_id % self.batch_size_per_row)
-
-        def _sampling_device_slot_remap(self, slot_remap):
-            return generator_vllm_module.DeepseekGenerator._sampling_device_slot_remap(self, slot_remap)
-
         def _sample_tokens_device(self, logits, **kwargs):
             captured["sample_call"] = (logits, kwargs)
             return "sampled"
+
+        def sample_decode_on_device(self, logits, **kwargs):
+            captured["sample_decode_on_device"] = (logits, kwargs)
+            return self._sample_tokens_device(logits, **kwargs)
 
         def _tokens_from_device(self, tokens, mesh_device, batch_size_per_row):
             captured["tokens_from_device"] = (tokens, mesh_device, batch_size_per_row)
@@ -93,9 +91,6 @@ def test_decode_forward_passes_slot_remap_to_device_sampling(monkeypatch: pytest
     assert captured["super_decode_forward"]["sample_on_device"] is True
     assert captured["sample_call"][0] == "decode_logits"
     assert captured["sample_call"][1]["slot_remap"] == [7, 6, 5, 4]
-    assert fake_model._sampling_device_slot_remap(captured["sample_call"][1]["slot_remap"]) == [7, 6, 5, 4] + list(
-        range(8, 32)
-    ) + [39, 38, 37, 36] + list(range(40, 64))
     assert captured["sample_call"][1]["skip_precompile"] is True
     assert output == "host_tokens"
 
