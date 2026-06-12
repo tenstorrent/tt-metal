@@ -14,6 +14,9 @@ The current version is verified to work with the following models:
 | [Llama 3.2 90B Vision](https://huggingface.co/meta-llama/Llama-3.2-90B-Vision)                   | LoudBox / QuietBox          | ```meta-llama/Llama-3.2-90B-Vision```           |
 | [Mistral 7B Instruct v0.3](https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3)            | n150                        | ```mistralai/Mistral-7B-Instruct-v0.3```        |
 | [Mistral Small 3.1 24B Instruct](https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503) | T3K                   | ```mistralai/Mistral-Small-3.1-24B-Instruct-2503``` |
+| [Devstral 2 123B Instruct](https://huggingface.co/mistralai/Devstral-2-123B-Instruct-2512)[^devstral] | LoudBox (BH)          | ```mistralai/Devstral-2-123B-Instruct-2512```   |
+
+[^devstral]: Devstral-2-123B (`Ministral3ForCausalLM`, fp8 checkpoint) requires **`transformers>=5.10`** (ministral3 architecture + `FineGrainedFP8Config`), which is newer than this repo's pinned `transformers==4.53.0`; it loads only in an env upgraded to transformers 5.x. Validated on BH Loudbox 1×8: full-model logit PCC 0.974–0.999; decode 15.6 tok/s/user @ISL128 (TTFT 213 ms), degrading gracefully to 13.4 @ISL64k; chunked prefill validated to **64k context** (the practical ceiling on this mesh — native config is 256k, but 128k+ does not fit L1 on 1×8).
 | [Mixtral 8x7B Instruct v0.1](https://huggingface.co/mistralai/Mixtral-8x7B-Instruct-v0.1)        | LoudBox / QuietBox          | ```mistralai/Mixtral-8x7B-Instruct-v0.1```        |
 | [Qwen 2.5 7B](https://huggingface.co/Qwen/Qwen2.5-7B)                                            | n300                        | ```Qwen/Qwen2.5-7B```                           |
 | [Qwen 2.5 Coder 32B](https://huggingface.co/Qwen/Qwen2.5-Coder-32B)                              | LoudBox / QuietBox          | ```Qwen/Qwen2.5-Coder-32B```                    |
@@ -209,6 +212,7 @@ Huggingface models specify their architecture in the `config.json` file. The fol
 - Qwen3ForCausalLM
 - MistralForCausalLM
 - Mistral3ForConditionalGeneration
+- Ministral3ForCausalLM
 - Phi3ForCausalLM
 
 At the time of writing this covers the majority of popular HuggingFace text-generation models. If you find another architecture that works or extend TT-Transformers to support one we would love to accept a PR!
