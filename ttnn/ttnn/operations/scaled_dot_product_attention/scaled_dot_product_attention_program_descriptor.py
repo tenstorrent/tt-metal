@@ -177,36 +177,44 @@ def create_program_descriptor(
             format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=fmt, page_size=page)],
         )
 
-    cbs = [
-        cb(CB_Q_IN, 2 * D_t),  # Q block, held across KV loop (double-buffered)
-        cb(CB_K_IN, 2 * D_t),  # K block, streamed
-        cb(CB_V_IN, 2 * D_t),  # V block, streamed
+    # --- CB inventory as (index, num_pages, fmt) specs ---------------------
+    # The seven D_t-scaling CBs (cb_q/k/v_in, cb_o_acc, cb_pv, cb_o_tmp, cb_out)
+    # dominate the per-core L1 footprint: each is 2*D_t pages and, on the fp32
+    # path, 4 B/elem (4096 B/tile). At D=1024 (D_t=32) the double-buffered fp32
+    # set totals ~1.82 MB > the 1.5 MB L1 budget, so the 4 `Q1x1x128x1024` fp32
+    # golden cells throw `program.cpp:1450` (statically-allocated CBs beyond max
+    # L1). bf16/bf8b (half/quarter the bytes) and small-D fp32 fit double-
+    # buffered. See Refinement 5 / changelog.
+    cb_specs = [
+        (CB_Q_IN, 2 * D_t, input_fmt),  # Q block, held across KV loop (double-buffered)
+        (CB_K_IN, 2 * D_t, input_fmt),  # K block, streamed
+        (CB_V_IN, 2 * D_t, input_fmt),  # V block, streamed
         # Reduce scalers are bf16-packed by prepare_reduce_scaler — always bf16.
-        cb(CB_SCALE, 1, ttnn.bfloat16),
-        cb(CB_SCALER_MAX, 1, ttnn.bfloat16),
-        cb(CB_SCALER_SUM, 1, ttnn.bfloat16),
-        cb(CB_MAX, 2, accum_fmt),  # running max m_i (persists across KV loop)
-        cb(CB_MAX_PREV, 2, accum_fmt),
-        cb(CB_CORR, 2, accum_fmt),
-        cb(CB_L, 2, accum_fmt),  # running sum l_i (persists)
-        cb(CB_L_BLOCK, 2, accum_fmt),
-        cb(CB_M_BLK, 2, accum_fmt),
-        cb(CB_QK, 2, accum_fmt),  # score block S = Q.Kᵀ (precision lever)
-        cb(CB_P, 2, accum_fmt),  # prob block P = exp(S - m)
-        cb(CB_O_ACC, 2 * D_t, accum_fmt),  # running output O_i (persists)
-        cb(CB_PV, 2 * D_t, accum_fmt),
-        cb(CB_O_TMP, 2 * D_t, accum_fmt),
-        cb(CB_OUT, 2 * D_t, out_fmt),
+        (CB_SCALE, 1, ttnn.bfloat16),
+        (CB_SCALER_MAX, 1, ttnn.bfloat16),
+        (CB_SCALER_SUM, 1, ttnn.bfloat16),
+        (CB_MAX, 2, accum_fmt),  # running max m_i (persists across KV loop)
+        (CB_MAX_PREV, 2, accum_fmt),
+        (CB_CORR, 2, accum_fmt),
+        (CB_L, 2, accum_fmt),  # running sum l_i (persists)
+        (CB_L_BLOCK, 2, accum_fmt),
+        (CB_M_BLK, 2, accum_fmt),
+        (CB_QK, 2, accum_fmt),  # score block S = Q.Kᵀ (precision lever)
+        (CB_P, 2, accum_fmt),  # prob block P = exp(S - m)
+        (CB_O_ACC, 2 * D_t, accum_fmt),  # running output O_i (persists)
+        (CB_PV, 2 * D_t, accum_fmt),
+        (CB_O_TMP, 2 * D_t, accum_fmt),
+        (CB_OUT, 2 * D_t, out_fmt),
     ]
     if has_mask:
-        cbs.append(cb(CB_MASK_IN, 2))  # mask block: input dtype (see note above)
+        cb_specs.append((CB_MASK_IN, 2, input_fmt))  # mask block: input dtype (see note above)
     if kv_valid != 0:
         # On-device -inf column mask for the partial last KV tile. element
         # (r,c) = 0 if c < kv_valid else -inf (same for every row). Reader fills
         # it once; compute adds it to the score block on the last KV block
         # (j == S_kv_t-1), composing additively with the custom / causal masks.
         # bf16 is exact for {0,-inf} and mirrors cb_scale / cb_causal_mask.
-        cbs.append(cb(CB_KV_PAD_MASK, 1, ttnn.bfloat16))
+        cb_specs.append((CB_KV_PAD_MASK, 1, ttnn.bfloat16))
     if is_causal:
         # On-device triangular bias. q_chunk_t == k_chunk_t == 1 and causal
         # requires S_q == S_kv, so the diagonal-straddling block is always
@@ -216,7 +224,47 @@ def create_program_descriptor(
         # block only on the diagonal KV block. bf16 is exact for {0, -inf} and
         # mirrors the cb_scale format (a bf16 second operand to an fp32 score
         # block — same mixed-format add as the scale mul).
-        cbs.append(cb(CB_CAUSAL_MASK, 1, ttnn.bfloat16))
+        cb_specs.append((CB_CAUSAL_MASK, 1, ttnn.bfloat16))
+
+    # --- L1 budget fit: single-buffer D_t-scaling CBs on the large-D fp32 path
+    # (Refinement 5). Demoting a CB from 2*D_t -> 1*D_t pages halves its
+    # footprint. We demote in a SAFE priority order — least pipelining cost
+    # first — only as far as needed to fit, so shapes that already fit (all
+    # bf16/bf8b, small-D fp32) are left byte-identical to Refinement 4:
+    #   1. cb_o_acc / cb_pv / cb_o_tmp — compute->compute (intra-compute) CBs.
+    #      Producer and consumer are the same compute thread running
+    #      sequentially, so the "2 pages for pipelining" is fictitious (see
+    #      /memory-budget-metal §4.2): the consumer pops the block before the
+    #      next producer reserves it, so 1*D_t suffices with ZERO pipelining
+    #      loss. cb_o_tmp is pure scratch for the corr*O_i block-bcast.
+    #   2. cb_out — compute->writer. Single-buffering serializes one handoff
+    #      per work unit (modest, per-work-unit cost), not in the KV hot loop.
+    #   3. cb_q_in — reader->compute, held across the KV loop. Single-buffering
+    #      forgoes prefetching the NEXT work unit's Q during the current KV loop
+    #      (modest). Demoted last; for the supported shapes it is never reached.
+    # cb_k_in / cb_v_in are NEVER demoted: they stream per KV block in the hot
+    # loop, where double-buffering is real reader/compute pipelining.
+    L1_BUDGET = 1499136  # bytes; matches the program.cpp static-CB ceiling
+    SAFETY_MARGIN = 32 * 1024
+    SINGLE_BUFFER_PRIORITY = [CB_O_ACC, CB_PV, CB_O_TMP, CB_OUT, CB_Q_IN]
+    demoted = set()
+
+    def _footprint():
+        total = 0
+        for idx, num_pages, fmt in cb_specs:
+            pages = D_t if idx in demoted else num_pages
+            total += pages * ttnn.tile_size(fmt)
+        return total
+
+    for idx in SINGLE_BUFFER_PRIORITY:
+        if _footprint() <= L1_BUDGET - SAFETY_MARGIN:
+            break
+        demoted.add(idx)
+    # If still over budget after exhausting the priority list, the allocator
+    # raises program.cpp:1450 — the loud OOM signal is intentional (no silent
+    # EXCLUSION / shape-size bucketing per the Refinement 5 contract).
+
+    cbs = [cb(idx, (D_t if idx in demoted else num_pages), fmt) for idx, num_pages, fmt in cb_specs]
 
     # --- Reader CT args ---
     # h is H_q (Q/output heads); h_kv is the K/V head count. For GQA/MQA the
