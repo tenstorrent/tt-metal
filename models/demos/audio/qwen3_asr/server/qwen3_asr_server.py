@@ -141,11 +141,25 @@ SINGLE_CAP = 45.0          # <= this -> single-shot; longer -> chunk
 # the window (not just near TARGET) so cuts land at natural boundaries instead of hard-capping
 # mid-word at SEG_MAX. SEG_MAX stays <=45s (~1024 prefill).
 SEG_TARGET, SEG_MAX, SEG_MIN = 38.0, 45.0, 18.0
-SIL_RMS = 0.005
+SIL_RMS = 0.005          # per-frame silence detection for segment CUTTING (not speech gating)
+SPEECH_MIN = 0.008       # speech-presence gate on the 90th-pctile of short-window RMS
 
 
 def _rms(a):
     return float(np.sqrt(np.mean(a ** 2) + 1e-12))
+
+
+def _has_speech(a, win_s=0.2):
+    """True if the segment contains speech. Gates on the 90th-percentile of short-window
+    RMS (the loud parts), NOT the whole-segment mean — a short window with a little speech
+    + lots of silence has a low mean but a high peak, so mean-gating wrongly dropped it.
+    Near-silence: p90 ~ noise floor (<<SPEECH_MIN); speech windows: p90 ~0.015-0.05."""
+    w = int(win_s * SR)
+    if len(a) < w:
+        return _rms(a) >= SPEECH_MIN
+    n = len(a) // w
+    r = np.sqrt(np.maximum(1e-12, (a[:n * w].reshape(n, w) ** 2).mean(1)))
+    return float(np.percentile(r, 90)) >= SPEECH_MIN
 
 
 def _segment(w):
@@ -215,7 +229,7 @@ async def transcribe(file: UploadFile = File(...), model: str = Form("qwen3-asr"
         _ensure_warm()
         t0 = time.time()
         if dur <= SINGLE_CAP:
-            if _rms(wav) < SIL_RMS:               # non-speech upload -> empty (matches chunk path)
+            if not _has_speech(wav):              # non-speech upload -> empty (peak-energy gate)
                 text, langs, nseg = "", [], 1
             else:
                 text, lang, _ = _infer(wav, force)
@@ -228,7 +242,7 @@ async def transcribe(file: UploadFile = File(...), model: str = Form("qwen3-asr"
             parts, langs = [], []
             for a, b in segs:
                 win = wav[a:b]
-                if _rms(win) < SIL_RMS:            # skip non-speech windows
+                if not _has_speech(win):           # skip non-speech windows (peak-energy gate)
                     continue
                 tx, lg, _ = _infer(win, force)
                 if tx and not _hallucinated(tx):
@@ -276,7 +290,7 @@ async def stream(ws: WebSocket):
         return ("" if _hallucinated(tx) else tx), lg
 
     async def flush(seg, final=False):
-        if _rms(seg) < STREAM_SIL_RMS:
+        if not _has_speech(seg):
             return
         tx, lg = await loop.run_in_executor(None, run_infer, seg)
         if tx:
