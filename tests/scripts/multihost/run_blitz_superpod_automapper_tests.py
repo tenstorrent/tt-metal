@@ -72,7 +72,10 @@ from typing import Dict, List, Optional, Sequence, TextIO, Tuple
 import yaml
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parents[3]
+# This script lives at tests/scripts/multihost/, so the repo root is three levels up
+# (parents[2]). Prefer TT_METAL_HOME when set (the suite exports it), matching the shell
+# wrapper's "$SCRIPT_DIR/../../.." resolution.
+REPO_ROOT = Path(os.environ.get("TT_METAL_HOME") or SCRIPT_DIR.parents[2]).resolve()
 
 CANONICAL_REFERENCE_MAPPING = REPO_ROOT / "generated/blitz_superpod_automapper/canonical_reference_mapping.yaml"
 DEFAULT_RUN_LOG = REPO_ROOT / "generated/blitz_superpod_automapper/automapper_test.log"
@@ -688,6 +691,73 @@ def compare_asic_mapping_yaml_exact(generated_file: Path, reference_file: Path) 
     return mismatches
 
 
+def _index_by_asic_id(hostnames_node) -> Dict[int, Tuple[str, dict]]:
+    """Index chips by physical ``asic_id`` (stable identity across mock variations)."""
+    by_asic: Dict[int, Tuple[str, dict]] = {}
+    for hostname, chip in _iter_chip_entries(hostnames_node):
+        if "asic_id" in chip:
+            by_asic[int(chip["asic_id"])] = (hostname, chip)
+    return by_asic
+
+
+def compare_asic_mapping_topology_invariant(generated_file: Path, reference_file: Path) -> List[str]:
+    """Topology-invariant determinism compare for mock variations, keyed by physical ``asic_id``.
+
+    A mock variation shuffles the rank->descriptor binding and permutes the MGD ``mesh_id``
+    labels (a consistent relabel that leaves the connection graph unchanged). A deterministic
+    mapper must therefore select the *same physical chips* (identical ``asic_id`` set) and place
+    each chip identically -- hostname, tray_id, asic_location, and chip_id preserved per
+    ``asic_id`` -- with the only permitted difference being a *consistent, bijective* global
+    ``mesh_id`` relabeling. Any physical reassignment, dropped chip, or non-bijective mesh_id
+    relabel (i.e. real non-determinism) is reported as a mismatch.
+    """
+    gen = _index_by_asic_id(_load_hostnames_node(generated_file))
+    ref = _index_by_asic_id(_load_hostnames_node(reference_file))
+
+    mismatches: List[str] = []
+    if len(gen) != len(ref):
+        mismatches.append(f"asic_id entry count: generated={len(gen)}, reference={len(ref)}")
+    for asic in sorted(set(gen) - set(ref)):
+        mismatches.append(f"asic_id present in generated but missing in reference: {asic}")
+    for asic in sorted(set(ref) - set(gen)):
+        mismatches.append(f"asic_id present in reference but missing in generated: {asic}")
+
+    ref_to_gen_mesh: Dict[int, int] = {}
+    gen_to_ref_mesh: Dict[int, int] = {}
+    for asic in sorted(set(gen) & set(ref)):
+        gen_host, gen_chip = gen[asic]
+        ref_host, ref_chip = ref[asic]
+        field_mismatches: List[str] = []
+        if gen_host != ref_host:
+            field_mismatches.append(f'hostname: generated="{gen_host}", reference="{ref_host}"')
+        for field, yaml_key in (
+            ("tray_id", ("asic_position", "tray_id")),
+            ("asic_location", ("asic_position", "asic_location")),
+            ("chip_id", ("fabric_node_id", "chip_id")),
+        ):
+            gen_val = int(gen_chip[yaml_key[0]][yaml_key[1]])
+            ref_val = int(ref_chip[yaml_key[0]][yaml_key[1]])
+            if gen_val != ref_val:
+                field_mismatches.append(f"{field}: generated={gen_val}, reference={ref_val}")
+        gen_mesh = int(gen_chip["fabric_node_id"]["mesh_id"])
+        ref_mesh = int(ref_chip["fabric_node_id"]["mesh_id"])
+        if ref_to_gen_mesh.setdefault(ref_mesh, gen_mesh) != gen_mesh:
+            field_mismatches.append(
+                f"mesh_id relabel inconsistent: reference mesh {ref_mesh} maps to both "
+                f"{ref_to_gen_mesh[ref_mesh]} and {gen_mesh}"
+            )
+        if gen_to_ref_mesh.setdefault(gen_mesh, ref_mesh) != ref_mesh:
+            field_mismatches.append(
+                f"mesh_id relabel not bijective: generated mesh {gen_mesh} maps from both "
+                f"{gen_to_ref_mesh[gen_mesh]} and {ref_mesh}"
+            )
+        if field_mismatches:
+            ref_chip_id = int(ref_chip["fabric_node_id"]["chip_id"])
+            mismatches.append(f"asic_id {asic} (reference {ref_mesh}:{ref_chip_id}): " + ", ".join(field_mismatches))
+
+    return mismatches
+
+
 # --- SSH / tt-run launch ---------------------------------------------------------------------------
 
 # Open MPI uses this command for node->node rank launch.
@@ -745,7 +815,11 @@ def resolve_build_dir(explicit: Optional[Path]) -> Path:
 
 def default_mpi_args(*, hardware_mode: bool) -> list[str]:
     if not hardware_mode:
-        return ["--allow-run-as-root"]
+        # Mock / CPU simulation packs the full MPI world (one rank per mesh instance, e.g. 64
+        # for the superpod MGD) onto a single CI host. There is no real device work, so allow
+        # Open MPI to oversubscribe cores; otherwise it aborts with
+        # "All nodes which are allocated for this job are already filled."
+        return ["--allow-run-as-root", "--oversubscribe"]
     agent = MPI_PLM_RSH_AGENT if os.environ.get("SSH_AUTH_SOCK") else MPI_PLM_RSH_AGENT_NO_FORWARD
     return ["--mca", "plm_rsh_agent", agent]
 
@@ -1230,10 +1304,20 @@ def run_mapping_compare(
     run_label: str,
     mapping_artifact: Path,
     reference_mapping: Path,
+    topology_invariant: bool = False,
     log: Optional[AutomapperTestLog] = None,
 ) -> None:
-    """Compare mapping to reference; all fields must match (same rule for canonical and variations)."""
-    mismatches = compare_asic_mapping_yaml_exact(mapping_artifact, reference_mapping)
+    """Compare a mapping to the reference.
+
+    Exact compare (default) requires every field to match per ``fabric_node_id`` -- used for the
+    canonical run and for hardware variations (which only shuffle --hosts order, not mesh_id
+    labels). ``topology_invariant=True`` is used for mock variations, which permute MGD mesh_id
+    labels: it keys by physical ``asic_id`` and allows a consistent bijective mesh_id relabel.
+    """
+    if topology_invariant:
+        mismatches = compare_asic_mapping_topology_invariant(mapping_artifact, reference_mapping)
+    else:
+        mismatches = compare_asic_mapping_yaml_exact(mapping_artifact, reference_mapping)
     if log is not None:
         log.log_compare_result(
             run_label=run_label,
@@ -1488,6 +1572,7 @@ def run_automapper_tests(
                 run_label=f"variation_{index}",
                 mapping_artifact=variation_artifact,
                 reference_mapping=reference_mapping,
+                topology_invariant=True,
                 log=log,
             )
 
