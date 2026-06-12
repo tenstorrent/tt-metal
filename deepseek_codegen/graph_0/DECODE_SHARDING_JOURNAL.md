@@ -242,3 +242,19 @@ remaining attention cost is STRUCTURAL with the current op set — no clean leve
 RULED OUT this round: nlp_create_qkv_heads_decode (emits [batch,heads,1,hd], not absorbed [16,32,128]),
 a3 SDPA-L1 (compute-bound no-op), rope x-perm->transpose (no-op, tiny tensor). Attention is at its
 practical floor; further gains need a different MLA head-layout strategy (upstream/codegen), not op swaps.
+
+## MoE FLOOR ASSESSMENT (2026-06-12, after shared-FFN fusion)
+Investigated the MoE phase for further levers (the "L1-sharding" / knob-tuning candidates). Conclusion:
+MoE is at its practical floor with the current op set + bf4 precision.
+- **MoECompute 690us (38% of MoE, biggest single op)**: tried MOE_NUM_LINKS=2 (env, now stable post
+  #45764/#46544) -> MoECompute 690.5->695.8us (FLAT, noise); MoE phase 1802.6->1784.2 (within noise).
+  So the combine is NOT link-bound -> MoECompute is dominated by the **bf4 expert-weight DRAM reads**
+  (9 experts x 7168x2048x3 @ bf4 per token) = fundamental decode cost, already at the lowest precision.
+  Other knobs (bh_ring, ohsd) are combine-side too -> won't help. Not pursued further.
+- **AllGather 192us / AllBroadcast 147us / AllToAll 81us**: AllBroadcast is INTERNAL to composite_all_gather
+  + composite_all_to_all (composite_common.cpp:344/431) -- i.e. how the dispatch gather + stat gathers are
+  implemented. Structural to MoE expert parallelism; CCL count already minimized (router/shared-FFN fusions).
+- **ReduceScatter 84us / tail**: already optimized (BF16 weighted-k-sum -> FastReduceNC, reduce_scatter
+  fuses all_reduce+mesh_partition). Collar Tilize/Untilize = dispatch ROW_MAJOR conversions (structural).
+NET: after the shared-FFN CCL fusion (-5ms) the MoE has no remaining op-level lever. Further MoE gains need
+architecture/codegen changes (precision below bf4, fewer active experts, or a different dispatch/combine kernel).
