@@ -24,24 +24,21 @@
 # server hosts checkpoints in a layout that does not match the canonical hub cache.
 
 # ─── mistral-small-3.1-24b ──────────────────────────────────────────────────
-# TEMPORARILY DISABLED: bh_loudbox is being removed from CI (MINFRA-615). Mistral
-# still needs to be tested on QB2 (bh_quietbox_2) before this entry can be re-enabled
-# or migrated. Left commented (not deleted) so we don't lose track of it.
-#
-# - name: mistral-small-3.1-24b e2e tests
-#   cmd: |
-#     set -e
-#     export HF_HOME=/localdev/blackhole_demos/huggingface_data
-#     export HF_MODEL=mistralai/Mistral-Small-3.1-24B-Instruct-2503
-#     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/mistralai--Mistral-Small-3.1-24B-Instruct-2503
-#     export MESH_DEVICE=T3K
-#     pytest --timeout 600 models/experimental/mistral_24b/tests/pipeline_tests
-#   skus:
-#     bh_loudbox:
-#       timeout: 10
-#   owner_id: U03PUAKE719 # Miguel Tairum
-#   team: models
-#   model-name: mistral-small-3.1-24b
+
+- name: mistral-small-3.1-24b e2e tests
+  cmd: |
+    set -e
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    export HF_MODEL=mistralai/Mistral-Small-3.1-24B-Instruct-2503
+    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/mistralai--Mistral-Small-3.1-24B-Instruct-2503
+    export MESH_DEVICE=T3K
+    pytest --timeout 600 models/experimental/mistral_24b/tests/pipeline_tests
+  skus:
+    bh_quietbox_2:
+      timeout: 10
+  owner_id: U03PUAKE719 # Miguel Tairum
+  team: models
+  model-name: mistral-small-3.1-24b
 
 # ─── stable_diffusion_xl ────────────────────────────────────────────────────
 

@@ -17,7 +17,6 @@
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
-
 void kernel_main() {
     uint32_t rt_args_idx = 0;
     // in0 tensor args
