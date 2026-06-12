@@ -330,32 +330,36 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     uint32_t M_tiles_per_core = padded_M_tiles / in0_parallel_axis_cores;
     uint32_t N_tiles_per_core = padded_N_tiles / in1_parallel_axis_cores;
 
-    // Divisibility-aware default subblock selection (only when the caller did not pin a config).
-    // 8-tile (2x4 / 4x2) subblocks are a large win, but only when the subblock dimension evenly
-    // divides the per-core tile count — otherwise the partial last subblock (e.g. a 6-tile/core N
-    // dim split as 4+2 by subblock_w=4) is less efficient than a clean 2x2 and regresses perf.
-    // So pick each subblock dim as the largest of {4,2,1} that divides the per-core tile count,
-    // giving the wider budget to the larger output dimension and keeping the product within the
-    // HALF-SYNC DST depth (4 fp32 / 8 bf16 tiles). The kernel always runs half-sync (the factory
-    // never wires dst_full_sync_en to ComputeConfig), so exceeding these overflows DST and silently
-    // corrupts the output — fp32 is therefore effectively capped at 2x2.
+    // Default subblock selection (only when the caller did not pin a config). Maximize DST utilization:
+    // among power-of-2 (subblock_h, subblock_w) pairs where each dim divides its per-core tile count (so
+    // it also divides the default-8 block and any block the sizer below picks) and the product fits the
+    // HALF-SYNC DST depth (4 fp32 / 8 bf16 tiles), pick the largest area, tie-broken toward a balanced
+    // (squarer) subblock. The kernel always runs half-sync (the factory never wires dst_full_sync_en to
+    // ComputeConfig), so exceeding the DST depth silently corrupts the output — the product cap enforces
+    // safety. The earlier heuristic capped one dim at 2, which UNDER-filled the DST when the other dim
+    // was odd (e.g. M_pc=4, N_pc=9 -> 2x1 = 2 tiles instead of 4x1 = 4) and cost ~5% on those shapes; the
+    // balanced tiebreak keeps the well-utilized cases unchanged (e.g. M_pc=N_pc=16 stays 2x2, not 1x4).
     if (!config.has_value()) {
         const uint32_t max_dst = fp32_dest_acc_en ? 4u : 8u;
-        auto largest_divisor = [](uint32_t v, uint32_t cap) -> uint32_t {
-            for (uint32_t d : {4u, 2u, 1u}) {
-                if (d <= cap && v != 0 && (v % d) == 0) {
-                    return d;
+        uint32_t best_h = 1, best_w = 1;
+        for (uint32_t sh = 1; sh <= max_dst; sh <<= 1) {
+            if (M_tiles_per_core == 0 || M_tiles_per_core % sh != 0) {
+                continue;
+            }
+            for (uint32_t sw = 1; sh * sw <= max_dst; sw <<= 1) {
+                if (N_tiles_per_core == 0 || N_tiles_per_core % sw != 0) {
+                    continue;
+                }
+                const uint32_t area = sh * sw;
+                const uint32_t best_area = best_h * best_w;
+                if (area > best_area || (area == best_area && std::max(sh, sw) < std::max(best_h, best_w))) {
+                    best_h = sh;
+                    best_w = sw;
                 }
             }
-            return 1u;
-        };
-        if (N_tiles >= M_tiles) {  // wider subblock along N
-            subblock_h = largest_divisor(M_tiles_per_core, 2u);
-            subblock_w = largest_divisor(N_tiles_per_core, max_dst / subblock_h);
-        } else {  // wider subblock along M
-            subblock_w = largest_divisor(N_tiles_per_core, 2u);
-            subblock_h = largest_divisor(M_tiles_per_core, max_dst / subblock_w);
         }
+        subblock_h = best_h;
+        subblock_w = best_w;
     }
 
     // Auto-gate (productization): mcast+prefetch beats the unicast baseline when the skinny output
