@@ -466,11 +466,14 @@ def test_bench(mesh_device, model, tp, topology, op_override):
     rows: list[dict] = []
     for cfg in cfgs:
         logger.info(f"=== [{model}] {cfg.cid} rows={cfg.rows} feat={cfg.feat_local} heads={cfg.heads} hd={cfg.head_dim} ===")
-        rows.append(
-            {"cid": cfg.cid, "tp": cfg.tp, "rows": cfg.rows, "feat": cfg.feat_local,
-             "heads": cfg.heads, "hd": cfg.head_dim, "pattern": cfg.pattern,
-             **_bench_cfg(submesh, ccl, cfg, topology, op_override)}
-        )
+        row = {"cid": cfg.cid, "tp": cfg.tp, "rows": cfg.rows, "feat": cfg.feat_local,
+               "heads": cfg.heads, "hd": cfg.head_dim, "pattern": cfg.pattern}
+        try:  # a per-config crash (e.g. input alloc / device hiccup) must not lose the table
+            row.update(_bench_cfg(submesh, ccl, cfg, topology, op_override))
+        except Exception as e:  # noqa: BLE001
+            row["fused_err"] = row["baseline_err"] = type(e).__name__
+            logger.warning(f"{cfg.cid} CONFIG FAILED: {str(e)[:160]}")
+        rows.append(row)
     topo = "ring" if topology == ttnn.Topology.Ring else "line"
     _write_csv(rows, f"rms_bench_{model}_tp{tp}_{topo}.csv")
     _print_table(rows, f"{model.upper()} DistributedRMSNorm: baseline vs fused (TP={tp}, {topo})")
