@@ -2173,6 +2173,25 @@ std::optional<std::string> add_pinning_constraints(
         for (const auto& position : positions) {
             auto it = asic_positions_to_asic_ids.find(position);
             if (it == asic_positions_to_asic_ids.end()) {
+                // The pinned position is absent from this mesh's matched physical partition. This is expected
+                // for auto-generated Galaxy corner pins when a mesh is placed (e.g. in RELAXED mode, or as one
+                // mesh of a multi-mesh graph) onto physical ASICs that do not include that tray corner. When
+                // rank bindings are active, treat the pin as a best-effort orientation hint: drop the
+                // unresolved position and let the rank binding / connectivity constraints govern placement.
+                // This mirrors the unsatisfiable-constraint handling below. With rank bindings disabled,
+                // pinning is authoritative, so a missing position remains a hard error.
+                if (!config.disable_rank_bindings) {
+                    log_warning(
+                        tt::LogFabric,
+                        "Pinned ASIC position (tray_id: {}, asic_location: {}) for fabric node (mesh_id: {}, "
+                        "chip_id: {}) not found in this mesh's physical partition; dropping the pin and letting "
+                        "rank binding determine placement.",
+                        position.first.get(),
+                        position.second.get(),
+                        fabric_node.mesh_id.get(),
+                        fabric_node.chip_id);
+                    continue;
+                }
                 log_trace(
                     tt::LogFabric,
                     "Pinned ASIC position (tray_id: {}, asic_location: {}) to fabric node id (mesh_id: {}, chip_id: "
