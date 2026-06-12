@@ -16,7 +16,7 @@ from models.experimental.voxtraltts.tt.audio_tokenizer.model import extract_audi
 from models.experimental.voxtraltts.tt.audio_tokenizer.transformer import VoxtralTTAudioTokenizerDecoderTransformerBlock
 from models.experimental.voxtraltts.tt.voxtral_tt_args import _load_safetensors_state_dict
 from models.experimental.voxtraltts.utils.audio_tokenizer_optimizations import (
-    voxtral_audio_tokenizer_default_optimizations,
+    voxtral_audio_tokenizer_native_sdpa_optimizations,
 )
 
 _BLOCK_TO_WINDOW_IDX = {1: 0, 3: 1, 5: 2, 7: 3}
@@ -53,7 +53,7 @@ def test_audio_tokenizer_native_sdpa_decoder_layer_pcc(device, reset_seeds, time
             tokenizer_cfg=cfg,
             block_index=decoder_block_index,
             layer_index=layer_index,
-            optimizations=voxtral_audio_tokenizer_default_optimizations(),
+            optimizations=voxtral_audio_tokenizer_native_sdpa_optimizations(),
         )
     except KeyError as exc:
         pytest.skip(f"Missing decoder_blocks.{decoder_block_index} transformer weights: {exc}")
