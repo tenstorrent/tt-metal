@@ -62,20 +62,33 @@ def create_program_descriptor(
     device = query.device()
 
     # --- Resolve compute config ------------------------------------------------
-    # Defaults reproduce the Phase-0 hard-coded ComputeConfigDescriptor exactly:
-    # HiFi2 (NOT HiFi4 — known-bad with bf16 + fp32_dest_acc on Wormhole B0) and
-    # fp32 DEST accumulation for the online-softmax recurrence. A caller passing
-    # nothing sees byte-identical behavior to Phase 0.
+    # When no compute_kernel_config is passed we synthesize defaults below.
+    # fp32 DEST accumulation is always on by default (the online-softmax
+    # recurrence needs it). math_fidelity is dtype-aware (see the else branch):
+    # bf16/bf8b keep Phase-0 HiFi2 — so the pre-existing bf16 path is byte-
+    # identical to Phase 0 — while fp32 defaults to HiFi4. A caller passing a
+    # compute_kernel_config gets exactly what they specify.
     if compute_kernel_config is not None:
         math_fidelity = compute_kernel_config.math_fidelity
         fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en
         math_approx_mode = compute_kernel_config.math_approx_mode
         dst_full_sync_en = compute_kernel_config.dst_full_sync_en
     else:
-        math_fidelity = ttnn.MathFidelity.HiFi2
         fp32_dest_acc_en = True
         math_approx_mode = False
         dst_full_sync_en = False
+        # Default math_fidelity is dtype-aware:
+        #   * bf16 / bf8b -> HiFi2 (Phase-0 default; HiFi4 is known-bad with
+        #     bf16 + fp32_dest_acc on Wormhole B0, and block-float is
+        #     lower-precision regardless).
+        #   * fp32 -> HiFi4. fp32 matmul operands are truncated to TF32 in
+        #     srcA/srcB (the unavoidable FP32->TF32 drop), so at HiFi2 fp32 only
+        #     reaches ~bf16 precision and misses fp32's tight RMS target. HiFi4's
+        #     multi-pass matmul recovers the lost mantissa bits. This is a NEW
+        #     default for a newly-supported dtype — it does not change the
+        #     pre-existing bf16 behavior. A caller can still override via
+        #     compute_kernel_config.
+        math_fidelity = ttnn.MathFidelity.HiFi4 if query.dtype == ttnn.float32 else ttnn.MathFidelity.HiFi2
 
     b, h, s_q, d = (int(x) for x in query.shape)
     s_kv = int(key.shape[-2])

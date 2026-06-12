@@ -29,3 +29,10 @@
 {"source":"run_safe_pytest","pid":2306100,"started_at_ms":1781275256427,"wait_ms":2,"run_ms":13429,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention_precision_matrix.py::test_scaled_dot_product_attention_precision_matrix","exit_code":0}
 {"source":"run_safe_pytest","pid":2306628,"started_at_ms":1781275284732,"wait_ms":2,"run_ms":243251,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention_precision_matrix.py","exit_code":1}
 {"source":"run_safe_pytest","pid":2316322,"started_at_ms":1781275612650,"wait_ms":1,"run_ms":71589,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention_precision_matrix.py","exit_code":0}
+{"source":"run_safe_pytest","pid":2320038,"started_at_ms":1781275769271,"wait_ms":1,"run_ms":313121,"test_path":"eval/golden_tests/scaled_dot_product_attention/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":2332863,"started_at_ms":1781276093135,"wait_ms":2,"run_ms":49842,"test_path":"eval/golden_tests/scaled_dot_product_attention/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":2333341,"started_at_ms":1781276151594,"wait_ms":1,"run_ms":49480,"test_path":"eval/golden_tests/scaled_dot_product_attention/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":2333717,"started_at_ms":1781276214084,"wait_ms":1,"run_ms":5145,"test_path":"eval/golden_tests/scaled_dot_product_attention/test_golden.py::test_op","exit_code":3}
+{"source":"run_safe_pytest","pid":2333901,"started_at_ms":1781276223051,"wait_ms":2,"run_ms":5252,"test_path":"eval/golden_tests/scaled_dot_product_attention/test_golden.py::test_op","exit_code":1}
+{"source":"tt-probe","pid":2334459,"started_at_ms":1781276271954,"wait_ms":232,"run_ms":27537,"test_path":"scaled_dot_product_attention","exit_code":0}
+{"source":"run_safe_pytest","pid":2335168,"started_at_ms":1781276333170,"wait_ms":2,"run_ms":88591,"test_path":"eval/golden_tests/scaled_dot_product_attention/test_golden.py::test_op","exit_code":1}
