@@ -33,6 +33,28 @@ collective restructuring is blocked until the moe_compute combine L1 reservation
 (upstream). The dense MLP (mlp_0, layer 0, no moe_compute) would be #46208-safe but is only
 x3 layers (~low value).
 
-## BRANCH RESULT: attention collective fusion = 177.8 -> 168.8 ms (6.28x), PCC bit-identical
-Net deliverable: fuse the qkv-down 3-way reduction into 1 all_gather+sum (both attn layers).
-attn/layer 1.107 -> 0.976 (-131us). The MoE (the 59% bulk) is blocked by the combine hang.
+## MoE ROUTER collective fusion — WORKS (combine-safe, pre-dispatch) (2026-06-12)
+| step | change | result |
+|------|--------|--------|
+| s4 | router logits all-reduce: reduce_scatter_9(dim3,ax1)+all_gather_19(dim1,ax1) -> 1 all_gather(dim0,ax1)+local HiFi4 sum | **KEEP**. moe phase 1804.8->1764.8us (-40us). PCC vs HEAD: logits cos64 0.99999860, argmax 100%, non-MoE bit-identical. Commit b3e0f41. |
+
+KEY: unlike s3 (shared-FFN matmul_31, which is CONCURRENT with the combine and hung it), the router
+all-reduce sits BEFORE all_to_all_dispatch / moe_compute combine, so fusing it is combine-SAFE. CCL
+proof (moe phase): ReduceScatter 4->3 ops (291->229us, -1 CCL = reduce_scatter_9 gone); AllGather 4->4
+(177->183us, fused gather moves a bit more); Reduce 1->2 (+7.5us, the new local sum). Net CCL ~-48us.
+EST e2e 168.8 -> 166.4 ms (6.28x -> 6.36x); -40us x 58 MoE layers.
+
+HANG NOTE (profiling, not the model): the FIRST tracy-instrumented profile wedged at moe_start (~21min,
+combine deadlock — the documented DRAM-pressure #46208 sensitivity, amplified by profiler L1 buffers). But
+the EAGER run (main_pcc.py) completed the full graph incl. MoE TWICE with correct logits, and the profile
+RETRY (after glx_reset_auto) cleared the MoE phase in ~7s. So the hang was a flaky combine deadlock, NOT a
+deterministic property of the change. Discipline: kill -KILL + tt-smi -glx_reset_auto + rerun once cleared it.
+
+ENV NOTE (2026-06-12): runs must execute INSIDE the container `tt-xla-ird-mvasiljevic` (host
+/home/ubuntu/mvasiljevic bind-mounts to container /home/mvasiljevic; the venv's uv-python lives at
+/home/mvasiljevic/.local and only resolves in-container). Drive via `docker exec tt-xla-ird-mvasiljevic`.
+
+## BRANCH RESULT: attention + router collective fusion = 177.8 -> 166.4 ms (6.36x), PCC bit-identical
+Net deliverable: (1) fuse the qkv-down 3-way reduction into 1 all_gather+sum (both attn layers),
+attn/layer 1.107 -> 0.976 (-131us); (2) fuse the MoE router all-reduce into 1 all_gather+sum (-40us/MoE
+layer). The MoE expert/combine collectives (the 59% bulk) remain blocked by the combine L1 fragility.
