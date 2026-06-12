@@ -80,25 +80,13 @@ constexpr uint32_t kMaxMuxWorkersPerChip = 32u;
 // of compute per chip — at that point parallelism + packed bytes win.
 constexpr uint32_t kMuxRowsThreshold = 4u;
 
-// Pick num_workers for the MUX/packed path. Two regimes:
-//
-//  - SMALL (num_tile_rows ≤ kSmallShapeRowsLimit): per-worker compute is
-//    tiny, so prioritize compute parallelism. Use min(num_tile_rows,
-//    kMaxMuxWorkersPerChip) — one worker per tile-row. This wins for small
-//    shapes where the per-chunk fabric overhead is amortized by more cores.
-//
-//  - LARGE (num_tile_rows > kSmallShapeRowsLimit): per-worker compute is
-//    substantial. Use rows/2 workers so chunks pack 2 rows per fabric
-//    packet — halving the packet count per chip and reducing fabric
-//    overhead. Cap at kMaxMuxWorkersPerChip. This wins for multichunk
-//    shapes (N=512+ at H=64pd).
-//
-// Threshold = 16: measured on BH 2x4 LINE, cross_k_prompt_L512 (16 tile-rows,
-// H_per_device=1280) drops 53.3us -> 42.4us going from rows/2 (8 workers) to
-// one-per-row (16 workers). Shapes above 16 rows (N2368=74, N9472=296,
-// N18944=592) regress with one-per-row (more fabric packets), so they keep
-// the rows/2 packing. See PERF_LOG.md.
-constexpr uint32_t kSmallShapeRowsLimit = 16u;
+// Pick num_workers for the MUX/packed path: one worker per tile-row, capped at
+// kMaxMuxWorkersPerChip (the contention ceiling). A powers-of-2 sweep (rope +
+// non-rope) showed min(num_tile_rows, 32) is optimal at every sequence length —
+// superseding the old SMALL/LARGE two-regime rule (which under-parallelized
+// medium shapes via rows/2 and over-parallelized large ones). With chunk pinned
+// to 1, fabric/AG is negligible (~2us), so there's no packet-count reason to use
+// fewer workers. See the commit history / PERF_LOG.md.
 // Diagnostic override: WAN_RMSNORM_WORKER_CAP lets a perf sweep dial the
 // per-chip worker cap without rebuilding. Read once. Defaults to
 // kMaxMuxWorkersPerChip. Read inside the single-source-of-truth sizing path so
