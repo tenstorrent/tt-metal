@@ -2,7 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import re
+from typing import Optional, Tuple
 
 import torch
 
@@ -88,6 +90,32 @@ def _ensure_conv_device(heavy):
         _CONV_DEV = create_mesh_device(mesh_shape, l1_small_size=65536)
     _CONV_MODE = mode
     return _CONV_DEV
+
+
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    # A REPLICATED 1024x1024 conv runs the FULL convolution on every chip (no mesh
+    # sharding to split the work). A wide-output (oc>=16) one is ~1.5 TFLOP/chip and
+    # does not finish within the hang-detection window on T3K (not hung — just too
+    # slow to validate per-chip; the model ran it sharded on larger hardware). The
+    # oc=3 (RGB) replicated ones have a tiny output and finish fine on ETH, so keep
+    # them. Genuinely-sharded and stride-2 1024x1024 convs are unaffected.
+    def _i(v, d=0):
+        try:
+            return int(v)
+        except Exception:
+            return d
+
+    ih = _i(test_vector.get("input_height") or test_vector.get("input_h"))
+    iw = _i(test_vector.get("input_width") or test_vector.get("input_w"))
+    oc = _i(test_vector.get("out_channels"))
+    placement = str(test_vector.get("input_tensor_tensor_placement", ""))
+    replicated = "PlacementShard" not in placement
+    if replicated and ih * iw >= 1048576 and oc >= 16:
+        return (
+            True,
+            f"conv2d: replicated {ih}x{iw} oc={oc} conv too slow to validate per-chip on T3K (full conv on every chip)",
+        )
+    return False, None
 
 
 def mesh_device_fixture():
@@ -416,19 +444,27 @@ def run(
     input_width = int(kwargs.get("input_width") or kwargs.get("input_w") or 4)
     groups = int(kwargs.get("groups") or 1)
 
-    # Heavy (large-spatial) convs that are genuinely mesh-sharded need WORKER ROW
-    # + FABRIC_1D for their cross-mesh completion sync (it hangs on ETH). Heavy
-    # but REPLICATED convs have no cross-mesh sync, so they run on ETH (full
-    # 64-core grid, which they reshard to); everything small runs on ETH too.
-    _placement = str(kwargs.get("input_tensor_tensor_placement", ""))
-    _distributed = "PlacementShard" in _placement
-    _heavy = (input_height * input_width >= _HEAVY_CONV_HW) and _distributed
-    device = _ensure_conv_device(_heavy)
-
     kernel_h, kernel_w = _parse_list_param(kwargs.get("kernel_size"), (1, 1))
     stride_h, stride_w = _parse_list_param(kwargs.get("stride"), (1, 1))
     dilation_h, dilation_w = _parse_list_param(kwargs.get("dilation"), (1, 1))
     (pad_h, pad_w), full_padding = _parse_padding(kwargs.get("padding"))
+
+    # Dispatch selection for the large (>=512x512) flux-VAE convs (the smaller
+    # convs all run on ETH). On T3K the large ones split three ways:
+    #   * Shard + stride 1 + oc>=16: the conv genuinely shards across the mesh,
+    #     fits the 56-bank WORKER ROW grid, and needs FABRIC_1D for cross-mesh
+    #     sync (fast). On ETH it would run the FULL conv per chip and time out, so
+    #     it MUST use WORKER+fabric.
+    #   * Shard + (stride>1 OR tiny oc): per-chip it reshards to the full 64-core
+    #     grid ("num shards 64 > 56 banks" on WORKER) but its smaller output runs
+    #     fine on ETH's 64-core grid.
+    #   * Replicated heavy convs run the full conv per chip; oc>=16 ones are too
+    #     slow and are dropped in invalidate_vector (oc=3 ones are tiny -> ETH).
+    _placement = str(kwargs.get("input_tensor_tensor_placement", ""))
+    _distributed = "PlacementShard" in _placement
+    _heavy_spatial = input_height * input_width >= _HEAVY_CONV_HW
+    _use_worker_fabric = _heavy_spatial and _distributed and stride_h == 1 and out_channels >= 16
+    device = _ensure_conv_device(_use_worker_fabric)
 
     has_bias = bool(kwargs.get("bias_tensor_shape") and kwargs.get("bias_tensor_shape") not in (None, "None", ""))
 
