@@ -488,6 +488,8 @@ class LlamaGRPOCompleter(GRPOCompleter):
                     )
                     token_tensor = ttml.autograd.Tensor(token_tensor, False)
 
+            print(f"{i=}, {token_tensor.shape()=}")
+
             with py_zone("[C] mask"):
                 mask = self._create_causal_mask(processed, new_tokens, pad_lengths, B)
 
