@@ -24,6 +24,7 @@ Optional fields, used when the entry's substance requires them:
 ### Patterns
 
 - [Self-loop DFB binding (producer == consumer)](#pattern-self-loop-dfb-binding)
+- [Fake CB → self-loop DFB (interim workaround)](#pattern-fake-cb--self-loop-dfb-interim-workaround)
 - [Conditional / optional DFB bindings](#pattern-conditional--optional-dfb-bindings)
 - [Aliased DFBs (legacy aliased CBs)](#pattern-aliased-dfbs-legacy-aliased-cbs)
 - [Same-FIFO aliasing (one DFB, multiple kernel-side names)](#pattern-same-fifo-aliasing-one-dfb-multiple-kernel-side-names)
@@ -69,6 +70,46 @@ The two-distinct-names form (`acc_w` for PRODUCER, `acc_r` for CONSUMER, yieldin
 **Prerequisite** (shared-name form only): per-kernel accessor-name dedup relaxation, commit `332413412af` on `akertesz/misc-op-port-fixes`. The two-distinct-names form has always worked.
 
 **See also**: [Anti-pattern: Demoting per-group CTA to RTA](#anti-pattern-demoting-per-group-cta-to-rta) (separate pattern, but the same "host-side variation in `KernelSpec`" mental model).
+
+---
+
+## Pattern: Fake CB → self-loop DFB (interim workaround)
+
+**Category**: Pattern (interim workaround)
+
+**Recognition signal**: A **fake CB** — a CircularBuffer the kernel uses purely as an *address source* (a base-pointer grab via `get_read_ptr` / `get_pointer_to_cb_data`, then a direct memory read), with **no real producer–consumer pair**: nothing produces into it as a FIFO, nothing waits on it. The legacy idiom borrows a CB onto a resident tensor's buffer because, pre–Metal 2.0, that was the only way to hand a kernel a base pointer to resident memory. The audit flags these as **FYI-P** (it does not gate — this workaround keeps the port unblocked). The port-time problem: a Metal 2.0 DFB requires **≥1 PRODUCER and ≥1 CONSUMER** binding, but a fake CB is *one-ended* — there is no honest producer (or consumer) to declare, so the spec validator rejects it.
+
+**Decision**: Bind the fake CB as a **self-loop DFB** — declare *both* a PRODUCER and a CONSUMER binding, both on the **same kernel** (the one that reads it). This borrows the [Self-loop DFB binding](#pattern-self-loop-dfb-binding) mechanism purely to satisfy the validator's producer-and-consumer rule. It is a deliberate white lie: nothing is actually produced or consumed as a FIFO, but the binding is well-formed and the kernel reads the memory by base pointer exactly as before. (Contrast the self-loop pattern proper, where the producer *and* consumer are **real** — an accumulator. Here neither is.)
+
+**Correct port**:
+
+```cpp
+// Fake CB the compute kernel reads only as an address source.
+// Self-loop it on the single reading kernel so the validator is satisfied:
+KernelSpec compute{
+    // ...
+    .dfb_bindings = {
+        DFBBinding{.dfb_spec_name = RECIP, .accessor_name = "recip", .endpoint_type = DFBEndpointType::PRODUCER},
+        DFBBinding{.dfb_spec_name = RECIP, .accessor_name = "recip", .endpoint_type = DFBEndpointType::CONSUMER},
+    },
+};
+
+// Kernel side — unchanged from legacy; still a base-pointer read, no FIFO ops:
+experimental::DataflowBuffer dfb_recip(dfb::recip);
+// ... read via base pointer as before ...
+```
+
+(Shared `accessor_name` for both endpoints relies on the per-kernel accessor-name dedup relaxation noted under [Self-loop DFB binding](#pattern-self-loop-dfb-binding); the two-distinct-names form also works.)
+
+**Document the hack prominently in the port report.** This is an *interim* workaround, not the intended end state. Record each fake-CB self-loop binding in the report's [Open items for downstream](port_op_to_metal2_recipe.md#capture-the-port-report), stating plainly that the self-loop is a validator-satisfying device and **not** a real FIFO — so the eventual migration can find and replace every one.
+
+**Long-term direction** (why this is interim). Fake CBs split into two kinds, each with its own real fix coming:
+- **Scratchpad-shaped** — the kernel *reads and writes* the borrowed memory as scratch → the forthcoming **Metal 2.0 kernel scratchpad resource**.
+- **Tensor-local-view** — the kernel only *reads* a resident tensor's L1 by base pointer → a forthcoming **"local" `TensorAccessor`** variant. (An earlier attempt to repurpose Device 2.0's `CoreLocalMem` for this was rejected on review as too gross; the replacement is being redesigned.)
+
+Until those land, the self-loop binding is the sanctioned way to keep a fake-CB op portable.
+
+**See also**: [Self-loop DFB binding](#pattern-self-loop-dfb-binding) (the legitimate accumulator case whose mechanism this borrows — there the producer/consumer are real).
 
 ---
 
