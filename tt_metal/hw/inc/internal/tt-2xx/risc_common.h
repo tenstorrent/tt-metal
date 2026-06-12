@@ -384,6 +384,10 @@ inline __attribute__((interrupt, hot)) void handle_interrupt() {
 #endif
 }
 
+constexpr uint32_t SYNC_INTERRUPT_INDEX = 0;                  // sync interrupt index
+constexpr uint32_t MACHINE_EXTERNAL_INTERRUPT_OFFSET = 11;    // machine external interrupt offset
+constexpr uint32_t ROCC_INTERRUPT_INDEX = 13;     // ROCC interrupt index
+
 // Encodes a 21-bit byte offset into a RISC-V J-type immediate field
 inline __attribute__((always_inline)) uint32_t encode_j_immediate(int32_t offset) {
     // 1. Jumps must be 2-byte aligned (even numbers)
@@ -406,16 +410,19 @@ inline __attribute__((always_inline)) uint32_t encode_j_immediate(int32_t offset
     return instruction_bits;
 }
 
-inline __attribute__((always_inline)) void setup_isr_csrs() {
-    uint64_t isr_address = reinterpret_cast<uint64_t>(handle_interrupt);
+inline __attribute__((always_inline)) void register_handler_for_interrupt(uint32_t interrupt_index, void(*handler)()) {
+    uint64_t isr_address = reinterpret_cast<uint64_t>(handler);
     uint32_t encoded_offset = encode_j_immediate(int32_t(isr_address) - int32_t(MEM_INTERRUPT_TABLE_BASE));
-    uint32_t instruction = 0x0000006f | encoded_offset;
-    *(uint32_t*)MEM_INTERRUPT_TABLE_BASE = instruction;
-    isr_address = reinterpret_cast<uint64_t>(dfb_implicit_sync_handler);
-    encoded_offset = encode_j_immediate(int32_t(isr_address) - int32_t(MEM_INTERRUPT_TABLE_BASE));
-    instruction = 0x0000006f | encoded_offset;
-    *(uint32_t*)(MEM_INTERRUPT_TABLE_BASE + 4 * 13) = instruction;
-    asm volatile("csrw mtvec, %0" : : "r"(MEM_INTERRUPT_TABLE_BASE | 1));  // set the interrupt handler
+    uint32_t instruction = 0x0000006f | encoded_offset; // create a jump instruction to the handler
+    *((uint32_t*)(MEM_INTERRUPT_TABLE_BASE) + interrupt_index) = instruction;
+}
+
+inline __attribute__((always_inline)) void setup_isr_csrs() {
+    // Register handlers for interrupts in the interrupt table
+    register_handler_for_interrupt(SYNC_INTERRUPT_INDEX, handle_interrupt);
+    register_handler_for_interrupt(ROCC_INTERRUPT_INDEX, dfb_implicit_sync_handler);
+    // point mtvec to the interrupt table and verify it
+    asm volatile("csrw mtvec, %0" : : "r"(MEM_INTERRUPT_TABLE_BASE | 1));
     uintptr_t check;
     __asm__ volatile("csrr %0, mtvec" : "=r"(check));
     if ((check & ~0x3UL) != MEM_INTERRUPT_TABLE_BASE || (check & 0x3UL) != 0x1) {
