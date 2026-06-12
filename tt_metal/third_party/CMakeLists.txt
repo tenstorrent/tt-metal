@@ -27,15 +27,18 @@ if(NOT ENABLE_TRACY)
     return()
 endif()
 
-# This setup ensures that when someone links against TracyClient:
-#   Their code preserves frame pointers (-fno-omit-frame-pointer) → backtraces work.
-#   Their executable exports symbols (-rdynamic) → Tracy can map addresses to names.
+# These setup ensures that when someone links against TracyClient:
+# Their code preserves frame pointers (-fno-omit-frame-pointer) → backtraces work.
 target_compile_options(TracyClient PUBLIC -fno-omit-frame-pointer)
 # Tracy sources emit this warning under our global -Werror; keep suppression local to TracyClient.
 target_compile_options(TracyClient PRIVATE -Wno-unused-variable)
+# Their executable exports symbols (-rdynamic) → Tracy can map addresses to names.
 target_link_options(TracyClient PUBLIC -rdynamic)
 
 # Keep TracyClient in the standard lib output/install paths so wheel/CPack dependency discovery works.
+
+# (TODO:MO) as part of https://github.com/tenstorrent/tt-metal/issues/46870
+# remove the set_target and install calls as they might be redundant
 set_target_properties(
     TracyClient
     PROPERTIES
@@ -85,7 +88,6 @@ install(
 set(NO_FILESELECTOR ON)
 
 # Build Tracy CLI deps statically so the binaries run from packaged artifacts without build/_deps.
-set(_tt_tracy_saved_build_shared_libs "${BUILD_SHARED_LIBS}")
 set(BUILD_SHARED_LIBS OFF)
 
 # Disable Tracy's -march=native for portable CLI binaries in CI.
@@ -93,10 +95,6 @@ set(NO_ISA_EXTENSIONS ON)
 
 add_subdirectory(tracy/csvexport)
 add_subdirectory(tracy/capture)
-
-# Restore global shared-lib preference after Tracy CLI configuration.
-set(BUILD_SHARED_LIBS "${_tt_tracy_saved_build_shared_libs}")
-unset(_tt_tracy_saved_build_shared_libs)
 
 # Keep CLI output in the path used by Python tooling and CI packaging.
 set(TRACY_CLI_BIN_DIR "${CMAKE_BINARY_DIR}/tools/profiler/bin")
