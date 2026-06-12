@@ -769,6 +769,8 @@ class LTXTransformerModel(Module):
         video_1BNI: ttnn.Tensor,
         timestep: ttnn.Tensor,
         video_timestep: ttnn.Tensor | None = None,
+        video_ts_pair: ttnn.Tensor | None = None,
+        video_pin_mask: ttnn.Tensor | None = None,
         audio_1BNI: ttnn.Tensor | None = None,
         video_prompt_1BLP: ttnn.Tensor = None,
         video_rope_cos: ttnn.Tensor = None,
@@ -803,24 +805,61 @@ class LTXTransformerModel(Module):
         for the host-Euler path). Pass ``False`` to keep them SP-sharded so an on-device
         solver can step the latent without leaving the device (the traced WAN pattern)."""
         # Video modulation (6 or 9 params depending on cross_attention_adaln).
-        # I2V: feed the per-token timestep so each token gets its own AdaLN modulation.
         adaln_coeff = 9 if self.cross_attention_adaln else 6
-        video_ts = video_timestep if self.image_conditioning else timestep
-        video_modulation, video_emb_ts = self.adaln_single(video_ts)
-        # dim 2 is B (scalar) or B*N (per-token, B=1 -> N_local on the SP shard).
-        X = video_modulation.shape[2]
-        video_mod_CB1D = ttnn.reshape(video_modulation, (1, X, adaln_coeff, self.inner_dim))
-        if self.parallel_config.tensor_parallel.factor > 1:
-            video_mod_CB1D = ttnn.mesh_partition(
-                video_mod_CB1D, dim=3, cluster_axis=self.parallel_config.tensor_parallel.mesh_axis
-            )
-        # Move the coeff axis to dim 0 once per step so each block's chunk(dim=0) is free.
-        # Scalar: (1,B,coeff,D) -> (coeff,B,1,D). Per-token: (1,N,coeff,D) -> (coeff,1,N,D).
-        if self.image_conditioning:
-            video_mod_CB1D = ttnn.permute(video_mod_CB1D, (2, 0, 1, 3))
+        # I2V compact path: the per-token timestep takes only two distinct values (pinned frame-0
+        # tokens vs. everything else at sigma), supplied as a (1,1,2,1) pair plus a {0,1} per-token
+        # pin mask. Evaluate AdaLN on just those two timesteps and blend per token. This avoids
+        # materializing the dense (1,1,N,coeff*D) modulation and its tile-padded (1,N,coeff,D)
+        # reshape (coeff=9 pads up to a 32-row tile, a multi-GB allocation at full resolution).
+        compact_i2v = self.image_conditioning and video_ts_pair is not None and video_pin_mask is not None
+        if compact_i2v:
+            N = video_pin_mask.shape[2]
+            mod_pair, emb_pair = self.adaln_single(video_ts_pair)  # (1,1,2,coeff*D), (1,1,2,D)
+            mod_pair = ttnn.reshape(mod_pair, (1, 2, adaln_coeff, self.inner_dim))
+            if self.parallel_config.tensor_parallel.factor > 1:
+                mod_pair = ttnn.mesh_partition(
+                    mod_pair, dim=3, cluster_axis=self.parallel_config.tensor_parallel.mesh_axis
+                )
+            mod_pair = ttnn.permute(mod_pair, (2, 0, 1, 3))  # (coeff,1,2,Dloc)
+            mod_pin, mod_base = ttnn.chunk(mod_pair, 2, dim=2)  # each (coeff,1,1,Dloc)
+            ttnn.deallocate(mod_pair)
+            # video_mod = base + (pin - base) * mask, materialized per token via broadcast-safe ops.
+            mod_delta = ttnn.sub(mod_pin, mod_base)
+            mod_delta = ttnn.repeat(mod_delta, ttnn.Shape([1, 1, N, 1]))  # (coeff,1,N,Dloc)
+            mod_delta = ttnn.mul(mod_delta, video_pin_mask)  # mask broadcasts over coeff/Dloc
+            video_mod_CB1D = ttnn.add(mod_base, mod_delta)  # base broadcasts over N
+            ttnn.deallocate(mod_delta)
+            ttnn.deallocate(mod_pin)
+            ttnn.deallocate(mod_base)
+            # Embedded timestep (for norm_out), same per-token blend, kept full-D.
+            emb_pin, emb_base = ttnn.chunk(emb_pair, 2, dim=2)  # each (1,1,1,D)
+            ttnn.deallocate(emb_pair)
+            emb_delta = ttnn.sub(emb_pin, emb_base)
+            emb_delta = ttnn.repeat(emb_delta, ttnn.Shape([1, 1, N, 1]))  # (1,1,N,D)
+            emb_delta = ttnn.mul(emb_delta, video_pin_mask)
+            video_emb_ts = ttnn.add(emb_base, emb_delta)
+            ttnn.deallocate(emb_delta)
+            ttnn.deallocate(emb_pin)
+            ttnn.deallocate(emb_base)
+            B = 1
         else:
-            video_mod_CB1D = ttnn.permute(video_mod_CB1D, (2, 1, 0, 3))
-        B = 1 if self.image_conditioning else X
+            # I2V (dense): feed the per-token timestep so each token gets its own AdaLN modulation.
+            video_ts = video_timestep if self.image_conditioning else timestep
+            video_modulation, video_emb_ts = self.adaln_single(video_ts)
+            # dim 2 is B (scalar) or B*N (per-token, B=1 -> N_local on the SP shard).
+            X = video_modulation.shape[2]
+            video_mod_CB1D = ttnn.reshape(video_modulation, (1, X, adaln_coeff, self.inner_dim))
+            if self.parallel_config.tensor_parallel.factor > 1:
+                video_mod_CB1D = ttnn.mesh_partition(
+                    video_mod_CB1D, dim=3, cluster_axis=self.parallel_config.tensor_parallel.mesh_axis
+                )
+            # Move the coeff axis to dim 0 once per step so each block's chunk(dim=0) is free.
+            # Scalar: (1,B,coeff,D) -> (coeff,B,1,D). Per-token: (1,N,coeff,D) -> (coeff,1,N,D).
+            if self.image_conditioning:
+                video_mod_CB1D = ttnn.permute(video_mod_CB1D, (2, 0, 1, 3))
+            else:
+                video_mod_CB1D = ttnn.permute(video_mod_CB1D, (2, 1, 0, 3))
+            B = 1 if self.image_conditioning else X
 
         # Video prompt modulation (2 params, only for 9-output mode)
         video_prompt_2B1D = None
