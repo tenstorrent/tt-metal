@@ -47,7 +47,7 @@ TRANSCENDENTAL_OPS = [
     MathOperation.Hardsigmoid,
 ]
 
-# Ops that support FastMode (mirrors test_zzz_eltwise_unary_sfpu).
+# Ops that support FastMode.
 SUPPORTED_FAST_MODE_OPS = [
     MathOperation.Log1p,
     MathOperation.Exp,
@@ -79,7 +79,6 @@ ACCURACY_PARAMS = list(
 
 
 @skip_for_coverage
-@pytest.mark.nightly
 @pytest.mark.parametrize(
     "formats,approx_mode,mathop,fast_mode,dest_acc", ACCURACY_PARAMS
 )
@@ -90,7 +89,6 @@ def test_sfpu_accuracy_sweep(
     fast_mode: FastMode,
     dest_acc: DestAccumulation,
 ):
-    # Skip guards mirrored from test_zzz_eltwise_unary_sfpu.py.
     if mathop == MathOperation.Tanh and approx_mode == ApproximationMode.Yes:
         pytest.skip(reason="Metal tanh does not support approximation mode")
 

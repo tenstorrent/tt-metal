@@ -1,19 +1,5 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""
-Shared, pure per-element accuracy metrics for SFPU golden-vs-hardware results.
-
-Single source of truth for the ULP / finite math used by both the accuracy
-CSV harness and test_sfpu_plot.py. All functions are pure (numpy in, numpy
-out) and do not touch hardware.
-
-ULP semantics: ULP error normalizes the signed error by the local spacing of
-the *golden* value in the output format. ULP columns are NaN (never 0) when
-undefined — block-float output, non-finite golden/hw, golden == 0, or a
-degenerate local ULP of 0. abs/signed/rel error and the finite flags are
-always populated (rel_error is NaN only where golden == 0).
-"""
-
 from __future__ import annotations
 
 import numpy as np
@@ -27,13 +13,7 @@ _ULP_FORMATS = (DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32)
 
 
 def local_ulp(golden: np.ndarray, out_fmt: DataFormat) -> np.ndarray:
-    """Local ULP (spacing) of each golden value in *out_fmt*.
-
-    Returns an all-NaN array for formats without a torch float dtype
-    (e.g. the block-float Bfp8_b/Bfp4_b/Bfp2_b formats; Tf32 is also
-    treated as unsupported here). For supported formats, computes
-    nextafter(|golden|, +inf) - |golden| in the target dtype.
-    """
+    """Gap from each golden value to the next representable number in *out_fmt*."""
     golden = np.asarray(golden, dtype=np.float64)
     if out_fmt not in _ULP_FORMATS:
         return np.full(golden.shape, np.nan, dtype=np.float64)
@@ -50,17 +30,7 @@ def compute_pointwise_metrics(
     hw: np.ndarray,
     out_fmt: DataFormat,
 ) -> dict[str, np.ndarray]:
-    """Per-element error metrics for aligned (x, golden, hw) arrays.
-
-    ``x`` is accepted for caller convenience and interface symmetry with the
-    broader test harness; it is not consumed by this function.
-
-    Returns a dict of equal-length numpy arrays:
-        abs_error, signed_error, rel_error,
-        signed_ulp_error, abs_ulp_error,
-        is_finite_hw, is_finite_golden
-    See module docstring for NaN semantics.
-    """
+    """Compare hardware vs golden element-by-element and return the error columns."""
     golden = np.asarray(golden, dtype=np.float64)
     hw = np.asarray(hw, dtype=np.float64)
 
