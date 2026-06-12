@@ -5,7 +5,6 @@ import re
 
 import pytest
 import torch
-from conftest import skip_for_coverage
 from helpers.bfp_format_utils import bfp4b_to_float16b, bfp8b_to_float16b
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.data_format_inference import VALID_QUASAR_SRC_REG_FORMATS
@@ -22,6 +21,8 @@ from helpers.test_variant_parameters import (
     TILIZE,
     generate_input_dim,
 )
+
+from conftest import skip_for_coverage
 
 pytestmark = skip_for_coverage
 
@@ -159,16 +160,13 @@ def _tilized_index(h: int, w: int) -> int:
 def _tile_test_formats() -> list[DataFormat]:
     """Formats test_dprint_tile can exercise on the current arch.
 
-    tile_slice unpacks the input into SrcA and packs from the default 16-bit
-    dest. On Quasar that requires a valid SrcA register format and rules out
-    32-bit formats (those need DestAccumulation.Yes). WH/BH accept all."""
+    tile_slice unpacks the input into SrcA, so on Quasar a format must be a
+    valid SrcA register format (this drops UInt16/Bfp4_b/Bfp8_b/UInt32). 32-bit
+    formats are kept; test_dprint_tile runs them with DestAccumulation.Yes since
+    Quasar can't pack 32-bit out of a 16-bit dest. WH/BH accept all."""
     formats = list(_BYTES_PER_ELT.keys())
     if get_chip_architecture() == ChipArchitecture.QUASAR:
-        formats = [
-            f
-            for f in formats
-            if f in VALID_QUASAR_SRC_REG_FORMATS and not f.is_32_bit()
-        ]
+        formats = [f for f in formats if f in VALID_QUASAR_SRC_REG_FORMATS]
     return formats
 
 
@@ -177,6 +175,14 @@ def _tile_test_formats() -> list[DataFormat]:
 )
 def test_dprint_tile(formats):
     formats = formats[0]
+    # 32-bit formats can only be packed from a 32-bit dest (a hard requirement on
+    # Quasar, valid everywhere). The slice is read straight from L1, so dest width
+    # doesn't change the printed values.
+    dest_acc = (
+        DestAccumulation.Yes
+        if formats.input_format.is_32_bit()
+        else DestAccumulation.No
+    )
     src_A, tile_cnt_A, _, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=[32, 32],
@@ -196,6 +202,7 @@ def test_dprint_tile(formats):
             tile_count_B=tile_cnt_A,
             tile_count_res=tile_cnt_A,
         ),
+        dest_acc=dest_acc,
         requires_device_print=True,
     ).run()
     records = _records(outcome.device_print_lines)
