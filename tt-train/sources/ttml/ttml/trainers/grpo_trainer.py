@@ -145,6 +145,11 @@ def get_grpo_config(yaml_config: dict, output_dir: str = "") -> GRPOConfig:
     # configs have migrated to ``per_device_train_batch_size``.
     if "micro_batch_size" in fields:
         old_value = fields.pop("micro_batch_size")
+        if "per_device_train_batch_size" in fields and fields["per_device_train_batch_size"] != old_value:
+            raise ValueError(
+                "grpo_config: both 'micro_batch_size' (deprecated) and 'per_device_train_batch_size' are set with different values; "
+                "remove 'micro_batch_size' and keep only 'per_device_train_batch_size'."
+            )
         logging.warning(
             "grpo_config: 'micro_batch_size' is deprecated and will be removed; "
             "use 'per_device_train_batch_size' instead."
