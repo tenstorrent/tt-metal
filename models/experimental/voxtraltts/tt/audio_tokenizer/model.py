@@ -474,6 +474,30 @@ class VoxtralTTAudioTokenizer:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+    def _uses_native_sdpa_sliding_window(self) -> bool:
+        return self.optimizations is not None and self.optimizations.sdpa_native_sliding_window
+
+    def _decoder_transformer_stack_forward(
+        self,
+        x_b1td: ttnn.Tensor,
+        stack_forward,
+        *,
+        window: int,
+        use_cache: bool,
+    ) -> ttnn.Tensor:
+        """Run one decoder transformer stack (blocks 1/3/5/7) with dense or native SDPA."""
+        seq_len = int(x_b1td.shape[2])
+        if self._uses_native_sdpa_sliding_window():
+            return stack_forward(x_b1td, attn_mask=None, sliding_window=window)
+        if use_cache:
+            mask = self._decoder_sliding_window_attn_mask_tt(seq_len, window)
+            return stack_forward(x_b1td, attn_mask=mask, sliding_window=None)
+        mask = self._make_sliding_window_mask_temp(seq_len, window)
+        try:
+            return stack_forward(x_b1td, attn_mask=mask, sliding_window=None)
+        finally:
+            ttnn.deallocate(mask)
+
     def _decode_full_forward_inner(self, chunk_b1tc: ttnn.Tensor, *, use_cache: bool = True) -> ttnn.Tensor:
         """Core decoder forward for one (possibly chunked) segment.
 
@@ -503,37 +527,14 @@ class VoxtralTTAudioTokenizer:
             ttnn.deallocate(padded_stack_input)
 
         w = self._decoder_windows
-        if use_cache:
-            m = self._decoder_sliding_window_attn_mask_tt(int(x.shape[2]), w[0])
-            x = self.decoder_blocks_1_forward(x, attn_mask=m)
-            x = self.decoder_blocks_2_forward(x)
-            m = self._decoder_sliding_window_attn_mask_tt(int(x.shape[2]), w[1])
-            x = self.decoder_blocks_3_forward(x, attn_mask=m)
-            x = self.decoder_blocks_4_forward(x)
-            m = self._decoder_sliding_window_attn_mask_tt(int(x.shape[2]), w[2])
-            x = self.decoder_blocks_5_forward(x, attn_mask=m)
-            ttnn.synchronize_device(self.mesh_device)
-            x = self.decoder_blocks_6_forward(x)
-            m = self._decoder_sliding_window_attn_mask_tt(int(x.shape[2]), w[3])
-            x = self.decoder_blocks_7_forward(x, attn_mask=m)
-        else:
-            # Non-cached: create, use, free each mask immediately — only one mask live at a time.
-            m = self._make_sliding_window_mask_temp(int(x.shape[2]), w[0])
-            x = self.decoder_blocks_1_forward(x, attn_mask=m)
-            ttnn.deallocate(m)
-            x = self.decoder_blocks_2_forward(x)
-            m = self._make_sliding_window_mask_temp(int(x.shape[2]), w[1])
-            x = self.decoder_blocks_3_forward(x, attn_mask=m)
-            ttnn.deallocate(m)
-            x = self.decoder_blocks_4_forward(x)
-            m = self._make_sliding_window_mask_temp(int(x.shape[2]), w[2])
-            x = self.decoder_blocks_5_forward(x, attn_mask=m)
-            ttnn.deallocate(m)
-            ttnn.synchronize_device(self.mesh_device)
-            x = self.decoder_blocks_6_forward(x)
-            m = self._make_sliding_window_mask_temp(int(x.shape[2]), w[3])
-            x = self.decoder_blocks_7_forward(x, attn_mask=m)
-            ttnn.deallocate(m)
+        x = self._decoder_transformer_stack_forward(x, self.decoder_blocks_1_forward, window=w[0], use_cache=use_cache)
+        x = self.decoder_blocks_2_forward(x)
+        x = self._decoder_transformer_stack_forward(x, self.decoder_blocks_3_forward, window=w[1], use_cache=use_cache)
+        x = self.decoder_blocks_4_forward(x)
+        x = self._decoder_transformer_stack_forward(x, self.decoder_blocks_5_forward, window=w[2], use_cache=use_cache)
+        ttnn.synchronize_device(self.mesh_device)
+        x = self.decoder_blocks_6_forward(x)
+        x = self._decoder_transformer_stack_forward(x, self.decoder_blocks_7_forward, window=w[3], use_cache=use_cache)
 
         if input_t < decode_t:
             upsample = 1
@@ -727,39 +728,51 @@ class VoxtralTTAudioTokenizer:
         ttnn.deallocate(latent_bt)
         return ttnn.to_layout(latent_b1tc, ttnn.TILE_LAYOUT)
 
-    def decoder_blocks_1_layer0_forward(self, x_b1td: ttnn.Tensor, *, attn_mask: ttnn.Tensor | None) -> ttnn.Tensor:
+    def decoder_blocks_1_layer0_forward(
+        self, x_b1td: ttnn.Tensor, *, attn_mask: ttnn.Tensor | None, sliding_window: int | None = None
+    ) -> ttnn.Tensor:
         """First transformer layer inside ``decoder_blocks.1``."""
         if self.decoder_blocks_1_layer0 is None:
             raise RuntimeError("decoder_blocks.1.layers.0 is not loaded for this checkpoint.")
-        return self.decoder_blocks_1_layer0(x_b1td, attn_mask=attn_mask)
+        return self.decoder_blocks_1_layer0(x_b1td, attn_mask=attn_mask, sliding_window=sliding_window)
 
-    def decoder_blocks_1_layer1_forward(self, x_b1td: ttnn.Tensor, *, attn_mask: ttnn.Tensor | None) -> ttnn.Tensor:
+    def decoder_blocks_1_layer1_forward(
+        self, x_b1td: ttnn.Tensor, *, attn_mask: ttnn.Tensor | None, sliding_window: int | None = None
+    ) -> ttnn.Tensor:
         """Second transformer layer inside ``decoder_blocks.1``."""
         if self.decoder_blocks_1_layer1 is None:
             raise RuntimeError("decoder_blocks.1.layers.1 is not loaded for this checkpoint.")
-        return self.decoder_blocks_1_layer1(x_b1td, attn_mask=attn_mask)
+        return self.decoder_blocks_1_layer1(x_b1td, attn_mask=attn_mask, sliding_window=sliding_window)
 
-    def decoder_blocks_1_forward(self, x_b1td: ttnn.Tensor, *, attn_mask: ttnn.Tensor | None) -> ttnn.Tensor:
+    def decoder_blocks_1_forward(
+        self, x_b1td: ttnn.Tensor, *, attn_mask: ttnn.Tensor | None, sliding_window: int | None = None
+    ) -> ttnn.Tensor:
         """First decoder transformer stack (2 layers for the released config)."""
-        x_b1td = self.decoder_blocks_1_layer0_forward(x_b1td, attn_mask=attn_mask)
-        return self.decoder_blocks_1_layer1_forward(x_b1td, attn_mask=attn_mask)
+        x_b1td = self.decoder_blocks_1_layer0_forward(x_b1td, attn_mask=attn_mask, sliding_window=sliding_window)
+        return self.decoder_blocks_1_layer1_forward(x_b1td, attn_mask=attn_mask, sliding_window=sliding_window)
 
-    def decoder_blocks_3_layer0_forward(self, x_b1td: ttnn.Tensor, *, attn_mask: ttnn.Tensor | None) -> ttnn.Tensor:
+    def decoder_blocks_3_layer0_forward(
+        self, x_b1td: ttnn.Tensor, *, attn_mask: ttnn.Tensor | None, sliding_window: int | None = None
+    ) -> ttnn.Tensor:
         """First transformer layer inside ``decoder_blocks.3``."""
         if self.decoder_blocks_3_layer0 is None:
             raise RuntimeError("decoder_blocks.3.layers.0 is not loaded for this checkpoint.")
-        return self.decoder_blocks_3_layer0(x_b1td, attn_mask=attn_mask)
+        return self.decoder_blocks_3_layer0(x_b1td, attn_mask=attn_mask, sliding_window=sliding_window)
 
-    def decoder_blocks_3_layer1_forward(self, x_b1td: ttnn.Tensor, *, attn_mask: ttnn.Tensor | None) -> ttnn.Tensor:
+    def decoder_blocks_3_layer1_forward(
+        self, x_b1td: ttnn.Tensor, *, attn_mask: ttnn.Tensor | None, sliding_window: int | None = None
+    ) -> ttnn.Tensor:
         """Second transformer layer inside ``decoder_blocks.3``."""
         if self.decoder_blocks_3_layer1 is None:
             raise RuntimeError("decoder_blocks.3.layers.1 is not loaded for this checkpoint.")
-        return self.decoder_blocks_3_layer1(x_b1td, attn_mask=attn_mask)
+        return self.decoder_blocks_3_layer1(x_b1td, attn_mask=attn_mask, sliding_window=sliding_window)
 
-    def decoder_blocks_3_forward(self, x_b1td: ttnn.Tensor, *, attn_mask: ttnn.Tensor | None) -> ttnn.Tensor:
+    def decoder_blocks_3_forward(
+        self, x_b1td: ttnn.Tensor, *, attn_mask: ttnn.Tensor | None, sliding_window: int | None = None
+    ) -> ttnn.Tensor:
         """Decoder transformer stack after ``decoder_blocks.2`` transpose (2 layers)."""
-        x_b1td = self.decoder_blocks_3_layer0_forward(x_b1td, attn_mask=attn_mask)
-        return self.decoder_blocks_3_layer1_forward(x_b1td, attn_mask=attn_mask)
+        x_b1td = self.decoder_blocks_3_layer0_forward(x_b1td, attn_mask=attn_mask, sliding_window=sliding_window)
+        return self.decoder_blocks_3_layer1_forward(x_b1td, attn_mask=attn_mask, sliding_window=sliding_window)
 
     def decoder_blocks_2_forward(self, x_b1td: ttnn.Tensor) -> ttnn.Tensor:
         """First decoder upsample ``CausalConvTranspose1d`` (``decoder_blocks.2``)."""
@@ -773,20 +786,26 @@ class VoxtralTTAudioTokenizer:
             raise RuntimeError("decoder_blocks.4 conv transpose is not loaded for this checkpoint.")
         return self.decoder_blocks_4_conv_transpose(x_b1td)
 
-    def decoder_blocks_5_layer0_forward(self, x_b1td: ttnn.Tensor, *, attn_mask: ttnn.Tensor | None) -> ttnn.Tensor:
+    def decoder_blocks_5_layer0_forward(
+        self, x_b1td: ttnn.Tensor, *, attn_mask: ttnn.Tensor | None, sliding_window: int | None = None
+    ) -> ttnn.Tensor:
         if self.decoder_blocks_5_layer0 is None:
             raise RuntimeError("decoder_blocks.5.layers.0 is not loaded for this checkpoint.")
-        return self.decoder_blocks_5_layer0(x_b1td, attn_mask=attn_mask)
+        return self.decoder_blocks_5_layer0(x_b1td, attn_mask=attn_mask, sliding_window=sliding_window)
 
-    def decoder_blocks_5_layer1_forward(self, x_b1td: ttnn.Tensor, *, attn_mask: ttnn.Tensor | None) -> ttnn.Tensor:
+    def decoder_blocks_5_layer1_forward(
+        self, x_b1td: ttnn.Tensor, *, attn_mask: ttnn.Tensor | None, sliding_window: int | None = None
+    ) -> ttnn.Tensor:
         if self.decoder_blocks_5_layer1 is None:
             raise RuntimeError("decoder_blocks.5.layers.1 is not loaded for this checkpoint.")
-        return self.decoder_blocks_5_layer1(x_b1td, attn_mask=attn_mask)
+        return self.decoder_blocks_5_layer1(x_b1td, attn_mask=attn_mask, sliding_window=sliding_window)
 
-    def decoder_blocks_5_forward(self, x_b1td: ttnn.Tensor, *, attn_mask: ttnn.Tensor | None) -> ttnn.Tensor:
+    def decoder_blocks_5_forward(
+        self, x_b1td: ttnn.Tensor, *, attn_mask: ttnn.Tensor | None, sliding_window: int | None = None
+    ) -> ttnn.Tensor:
         """Decoder transformer stack after ``decoder_blocks.4`` transpose (2 layers)."""
-        x_b1td = self.decoder_blocks_5_layer0_forward(x_b1td, attn_mask=attn_mask)
-        return self.decoder_blocks_5_layer1_forward(x_b1td, attn_mask=attn_mask)
+        x_b1td = self.decoder_blocks_5_layer0_forward(x_b1td, attn_mask=attn_mask, sliding_window=sliding_window)
+        return self.decoder_blocks_5_layer1_forward(x_b1td, attn_mask=attn_mask, sliding_window=sliding_window)
 
     def decoder_blocks_6_forward(self, x_b1td: ttnn.Tensor) -> ttnn.Tensor:
         """Third decoder upsample ``CausalConvTranspose1d`` (``decoder_blocks.6``)."""
@@ -794,20 +813,26 @@ class VoxtralTTAudioTokenizer:
             raise RuntimeError("decoder_blocks.6 conv transpose is not loaded for this checkpoint.")
         return self.decoder_blocks_6_conv_transpose(x_b1td)
 
-    def decoder_blocks_7_layer0_forward(self, x_b1td: ttnn.Tensor, *, attn_mask: ttnn.Tensor | None) -> ttnn.Tensor:
+    def decoder_blocks_7_layer0_forward(
+        self, x_b1td: ttnn.Tensor, *, attn_mask: ttnn.Tensor | None, sliding_window: int | None = None
+    ) -> ttnn.Tensor:
         if self.decoder_blocks_7_layer0 is None:
             raise RuntimeError("decoder_blocks.7.layers.0 is not loaded for this checkpoint.")
-        return self.decoder_blocks_7_layer0(x_b1td, attn_mask=attn_mask)
+        return self.decoder_blocks_7_layer0(x_b1td, attn_mask=attn_mask, sliding_window=sliding_window)
 
-    def decoder_blocks_7_layer1_forward(self, x_b1td: ttnn.Tensor, *, attn_mask: ttnn.Tensor | None) -> ttnn.Tensor:
+    def decoder_blocks_7_layer1_forward(
+        self, x_b1td: ttnn.Tensor, *, attn_mask: ttnn.Tensor | None, sliding_window: int | None = None
+    ) -> ttnn.Tensor:
         if self.decoder_blocks_7_layer1 is None:
             raise RuntimeError("decoder_blocks.7.layers.1 is not loaded for this checkpoint.")
-        return self.decoder_blocks_7_layer1(x_b1td, attn_mask=attn_mask)
+        return self.decoder_blocks_7_layer1(x_b1td, attn_mask=attn_mask, sliding_window=sliding_window)
 
-    def decoder_blocks_7_forward(self, x_b1td: ttnn.Tensor, *, attn_mask: ttnn.Tensor | None) -> ttnn.Tensor:
+    def decoder_blocks_7_forward(
+        self, x_b1td: ttnn.Tensor, *, attn_mask: ttnn.Tensor | None, sliding_window: int | None = None
+    ) -> ttnn.Tensor:
         """Final decoder transformer stack (2 layers)."""
-        x_b1td = self.decoder_blocks_7_layer0_forward(x_b1td, attn_mask=attn_mask)
-        return self.decoder_blocks_7_layer1_forward(x_b1td, attn_mask=attn_mask)
+        x_b1td = self.decoder_blocks_7_layer0_forward(x_b1td, attn_mask=attn_mask, sliding_window=sliding_window)
+        return self.decoder_blocks_7_layer1_forward(x_b1td, attn_mask=attn_mask, sliding_window=sliding_window)
 
     def encoder_downsample_after_transformer_0_forward(self, x_b1tc: ttnn.Tensor) -> ttnn.Tensor:
         """First encoder strided conv after ``encoder_blocks.0``. Raises if encoder weights are absent."""

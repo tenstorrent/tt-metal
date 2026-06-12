@@ -124,6 +124,10 @@ class VoxtralTTAttention:
         attn_mask: ttnn.Tensor | None = None,
         qk_norm_mode: Mode | str | None = None,
         activation_memory_config=None,
+        wqkv_program_config=None,
+        wo_program_config=None,
+        sliding_window_size: int | None = None,
+        sdpa_program_config=None,
     ) -> ttnn.Tensor:
         seq_len = hidden_states.shape[-2]
         _qk_mode = self._qk_norm_mode if qk_norm_mode is None else qk_norm_mode
@@ -136,10 +140,13 @@ class VoxtralTTAttention:
         if self.compute_kernel_config is not None:
             _lin_kw["compute_kernel_config"] = self.compute_kernel_config
 
+        wqkv_prog = wqkv_program_config if wqkv_program_config is not None else self.wqkv_program_config
+        wo_prog = wo_program_config if wo_program_config is not None else self.wo_program_config
+
         # 1D-mcast configs (per_core_M=2) require ≥2 fused M-tiles after fuse_batch.
         # M-tiles = prod(batch_dims) × ceil(seq / TILE_SIZE). Auto-fall-back for bsz=1.
         _use_1d_mcast = True
-        if self.wqkv_program_config is not None:
+        if wqkv_program_config is None and self.wqkv_program_config is not None:
             _hs_shape = list(hidden_states.shape)
             _m_tiles = math.ceil(_hs_shape[-2] / ttnn.TILE_SIZE)
             for d in _hs_shape[:-2]:
@@ -148,8 +155,8 @@ class VoxtralTTAttention:
                 _use_1d_mcast = False
 
         _wqkv_kw = dict(_lin_kw)
-        if self.wqkv_program_config is not None and _use_1d_mcast:
-            _wqkv_kw["program_config"] = self.wqkv_program_config
+        if wqkv_prog is not None and (wqkv_program_config is not None or _use_1d_mcast):
+            _wqkv_kw["program_config"] = wqkv_prog
 
         if self.wqkv_in0_shard_mem_config is not None:
             # DS path: shard in0 K-wise; output is L1 WIDTH SHARDED.
@@ -218,6 +225,12 @@ class VoxtralTTAttention:
             else:
                 mask_tt = attention_mask
 
+        if mask_tt is not None and sliding_window_size is not None:
+            ttnn.deallocate(q)
+            ttnn.deallocate(k)
+            ttnn.deallocate(v)
+            raise ValueError("attn_mask and sliding_window_size are mutually exclusive.")
+
         if mask_tt is not None and self.is_causal:
             ttnn.deallocate(q)
             ttnn.deallocate(k)
@@ -278,17 +291,25 @@ class VoxtralTTAttention:
         # passed at num_key_value_heads directly. Materializing repeated KV heads here was
         # responsible for a large slice/repeat/tilize/untilize op cluster (~15% of device
         # time) with no functional benefit.
+        use_native_sliding_window = sliding_window_size is not None
         _sdpa_kw = {
-            "attn_mask": mask_tt,
-            "is_causal": self.is_causal if mask_tt is None else False,
             "scale": self.scale,
         }
+        if use_native_sliding_window:
+            _sdpa_kw["is_causal"] = True
+            _sdpa_kw["sliding_window_size"] = int(sliding_window_size)
+        else:
+            _sdpa_kw["attn_mask"] = mask_tt
+            _sdpa_kw["is_causal"] = self.is_causal if mask_tt is None else False
+        if sdpa_program_config is not None:
+            _sdpa_kw["program_config"] = sdpa_program_config
         if self.sdpa_compute_kernel_config is not None:
             _sdpa_kw["compute_kernel_config"] = self.sdpa_compute_kernel_config
+
         attn_out = ttnn.transformer.scaled_dot_product_attention(q, k, v, **_sdpa_kw)
-        # SDPA defaults to DRAM output; move to L1 so nlp_concat_heads reads from L1.
         attn_out = ttnn.to_memory_config(attn_out, act_mem)
-        if mask_owned and mask_tt is not None:
+
+        if mask_owned and mask_tt is not None and not use_native_sliding_window:
             ttnn.deallocate(mask_tt)
         ttnn.deallocate(q)
         ttnn.deallocate(k)
@@ -300,8 +321,8 @@ class VoxtralTTAttention:
         )
 
         _wo_kw = dict(_lin_kw)
-        if self.wo_program_config is not None and _use_1d_mcast:
-            _wo_kw["program_config"] = self.wo_program_config
+        if wo_prog is not None and (wo_program_config is not None or _use_1d_mcast):
+            _wo_kw["program_config"] = wo_prog
         out = ttnn.linear(attn_out, self.wo, **_wo_kw)
         ttnn.deallocate(attn_out)
         return out

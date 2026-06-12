@@ -74,39 +74,53 @@ class VoxtralTTMLP:
             memory_config=w3_mem_config or ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def __call__(self, x: ttnn.Tensor, *, activation_memory_config=None) -> ttnn.Tensor:
+    def __call__(
+        self,
+        x: ttnn.Tensor,
+        *,
+        activation_memory_config=None,
+        ff1_3_program_config=None,
+        ff2_program_config=None,
+    ) -> ttnn.Tensor:
         act_mem = activation_memory_config or self.activation_memory_config
 
-        _ff1_3_prg = self.ff1_3_program_config
-        _ff2_prg = self.ff2_program_config
+        ff1_3_prog = ff1_3_program_config if ff1_3_program_config is not None else self.ff1_3_program_config
+        ff2_prog = ff2_program_config if ff2_program_config is not None else self.ff2_program_config
 
         # 1D-mcast configs (per_core_M=2) require ≥2 fused M-tiles after fuse_batch.
         # M-tiles = prod(batch_dims) × ceil(seq / TILE_SIZE). Auto-fall-back for bsz=1.
-        if _ff1_3_prg is not None:
+        _use_1d_mcast = True
+        if ff1_3_program_config is None and self.ff1_3_program_config is not None:
             shape = list(x.shape)
             _m_tiles = math.ceil(shape[-2] / ttnn.TILE_SIZE)
             for d in shape[:-2]:
                 _m_tiles *= d
             if _m_tiles < 2:
-                _ff1_3_prg = None
-                _ff2_prg = None
+                _use_1d_mcast = False
 
-        # w1/w3: use width-sharded output when a 1D-mcast program config is provided so
-        # per-core work increases (fewer cores, better arithmetic intensity for M=1 tile).
-        has_ff1_3_prg = _ff1_3_prg is not None
-        ff1_3_out_mem = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if has_ff1_3_prg else act_mem
+        effective_ff1_3 = (
+            ff1_3_prog if ff1_3_prog is not None and (ff1_3_program_config is not None or _use_1d_mcast) else None
+        )
+        effective_ff2 = ff2_prog if ff2_prog is not None and (ff2_program_config is not None or _use_1d_mcast) else None
+
+        # Tier 1 call-time 2D configs use interleaved activations; instance 1D-mcast width-shards w1/w3 out.
+        if ff1_3_program_config is not None:
+            use_ff1_3_width_shard = False
+        else:
+            use_ff1_3_width_shard = effective_ff1_3 is not None
+        ff1_3_out_mem = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if use_ff1_3_width_shard else act_mem
 
         _ff1_3_kw = {"dtype": self.output_dtype, "memory_config": ff1_3_out_mem}
         if self.compute_kernel_config is not None:
             _ff1_3_kw["compute_kernel_config"] = self.compute_kernel_config
-        if has_ff1_3_prg:
-            _ff1_3_kw["program_config"] = _ff1_3_prg
+        if effective_ff1_3 is not None:
+            _ff1_3_kw["program_config"] = effective_ff1_3
 
         _ff2_kw = {"dtype": self.output_dtype, "memory_config": act_mem}
         if self.compute_kernel_config is not None:
             _ff2_kw["compute_kernel_config"] = self.compute_kernel_config
-        if _ff2_prg is not None:
-            _ff2_kw["program_config"] = _ff2_prg
+        if effective_ff2 is not None:
+            _ff2_kw["program_config"] = effective_ff2
 
         # For DS matmuls, in0 must be L1 K-width-sharded; shard x then discard the copy.
         if self.ff1_3_in0_shard_mem_config is not None:
@@ -142,7 +156,7 @@ class VoxtralTTMLP:
         ttnn.deallocate(w3_out)
 
         # De-shard to L1-interleaved before w2: mcast_in0 requires interleaved in0.
-        if has_ff1_3_prg:
+        if use_ff1_3_width_shard:
             w2_in_l1 = ttnn.to_memory_config(w2_in, act_mem)
             ttnn.deallocate(w2_in)
             w2_in = w2_in_l1
