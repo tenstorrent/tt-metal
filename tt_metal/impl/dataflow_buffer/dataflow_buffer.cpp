@@ -583,6 +583,21 @@ static std::pair<uint16_t, uint32_t> compute_capacity_and_stride(const DataflowB
                 dfb.id,
                 config.num_entries,
                 std::max(config.num_producers, config.num_consumers));
+            // BLOCKED-producer -> STRIDED-consumer: the producer reads block_size contiguous DRAM pages
+            // per block (entries_per_producer = num_entries/num_producers pages total), so each producer's
+            // share must hold a whole number of blocks, else num_blocks = entries_per_producer/block_size
+            // would silently truncate the last partial block. (consumer is STRIDED, so consumer_block_size
+            // is 0; the producer carries the block_size.)
+            if (config.producer_block_size > 0) {
+                TT_FATAL(
+                    config.num_entries % (config.producer_block_size * config.num_producers) == 0,
+                    "BLOCKED-producer -> STRIDED DFB {}: num_entries {} must be divisible by "
+                    "block_size * num_producers = {} * {} (each producer reads a whole number of blocks)",
+                    dfb.id,
+                    config.num_entries,
+                    config.producer_block_size,
+                    config.num_producers);
+            }
             capacity = config.num_entries / std::max(config.num_producers, config.num_consumers);
             stride_in_entries = std::max(config.num_producers, config.num_consumers);
             break;
