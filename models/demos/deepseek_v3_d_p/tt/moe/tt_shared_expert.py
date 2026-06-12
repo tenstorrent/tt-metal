@@ -30,39 +30,38 @@ COMPUTE_KERNEL_CONFIG_HIFI2 = ttnn.WormholeComputeKernelConfig(
 )
 
 
-def largest_divisible_out_subblock_w(per_core_n: int, max_width: int = 8) -> int:
-    """Pick the widest allowed output subblock that still divides the per-core N tile count."""
-    for out_subblock_w in range(min(per_core_n, max_width), 0, -1):
-        if per_core_n % out_subblock_w == 0:
-            return out_subblock_w
-    return 1
+def uses_tuned_shared_expert_gate_program_config(gate_n_tiles: int, tuned_out_subblock_w: int = 8) -> bool:
+    """Keep the hand-tuned gate/up matmul configs only on shapes they were tuned for."""
+    return gate_n_tiles % tuned_out_subblock_w == 0
 
 
 def get_bh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int):
     """Program configs for the gate / up / down matmuls on Blackhole."""
     grid = ttnn.CoreCoord(11, 9)
-    gate_out_subblock_w = largest_divisible_out_subblock_w(gate_n_tiles)
-    gate = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=grid,
-        in0_block_w=4,
-        out_subblock_h=1,
-        out_subblock_w=gate_out_subblock_w,
-        per_core_M=per_core_M,
-        per_core_N=gate_n_tiles,
-        fuse_batch=False,
-        mcast_in0=False,
-        fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
-    )
-    up = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=grid,
-        in0_block_w=4,
-        out_subblock_h=1,
-        out_subblock_w=gate_out_subblock_w,
-        per_core_M=per_core_M,
-        per_core_N=gate_n_tiles,
-        fuse_batch=False,
-        mcast_in0=False,
-    )
+    gate = None
+    up = None
+    if uses_tuned_shared_expert_gate_program_config(gate_n_tiles):
+        gate = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=grid,
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            per_core_M=per_core_M,
+            per_core_N=gate_n_tiles,
+            fuse_batch=False,
+            mcast_in0=False,
+            fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+        )
+        up = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=grid,
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            per_core_M=per_core_M,
+            per_core_N=gate_n_tiles,
+            fuse_batch=False,
+            mcast_in0=False,
+        )
     down = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=grid,
         in0_block_w=1,
@@ -79,28 +78,30 @@ def get_bh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int
 def get_wh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int):
     """Program configs for the gate / up / down matmuls on Wormhole."""
     grid = ttnn.CoreCoord(8, 7)
-    gate_out_subblock_w = largest_divisible_out_subblock_w(gate_n_tiles)
-    gate = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=grid,
-        in0_block_w=4,
-        out_subblock_h=1,
-        out_subblock_w=gate_out_subblock_w,
-        per_core_M=per_core_M,
-        per_core_N=gate_n_tiles,
-        fuse_batch=False,
-        mcast_in0=False,
-        fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
-    )
-    up = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=grid,
-        in0_block_w=4,
-        out_subblock_h=1,
-        out_subblock_w=gate_out_subblock_w,
-        per_core_M=per_core_M,
-        per_core_N=gate_n_tiles,
-        fuse_batch=False,
-        mcast_in0=False,
-    )
+    gate = None
+    up = None
+    if uses_tuned_shared_expert_gate_program_config(gate_n_tiles):
+        gate = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=grid,
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            per_core_M=per_core_M,
+            per_core_N=gate_n_tiles,
+            fuse_batch=False,
+            mcast_in0=False,
+            fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+        )
+        up = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=grid,
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            per_core_M=per_core_M,
+            per_core_N=gate_n_tiles,
+            fuse_batch=False,
+            mcast_in0=False,
+        )
     down = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=grid,
         in0_block_w=1,
@@ -454,20 +455,21 @@ class TtSharedExpert(LightweightModule):
             )
 
         # 1) Compute gate and up projections
-        gate_out = ttnn.matmul(
-            x,
-            self.gate_proj,
-            program_config=gate_program_config,
-            compute_kernel_config=self.compute_kernel_config,
-            sub_device_id=self.subdevice_id,
-        )
-        up_out = ttnn.matmul(
-            x,
-            self.up_proj,
-            program_config=up_program_config,
-            compute_kernel_config=self.compute_kernel_config,
-            sub_device_id=self.subdevice_id,
-        )
+        gate_matmul_kwargs = {
+            "compute_kernel_config": self.compute_kernel_config,
+            "sub_device_id": self.subdevice_id,
+        }
+        up_matmul_kwargs = {
+            "compute_kernel_config": self.compute_kernel_config,
+            "sub_device_id": self.subdevice_id,
+        }
+        if gate_program_config is not None:
+            gate_matmul_kwargs["program_config"] = gate_program_config
+        if up_program_config is not None:
+            up_matmul_kwargs["program_config"] = up_program_config
+
+        gate_out = ttnn.matmul(x, self.gate_proj, **gate_matmul_kwargs)
+        up_out = ttnn.matmul(x, self.up_proj, **up_matmul_kwargs)
 
         # 2) Multiply gate and up projection
         ttnn.multiply_(gate_out, up_out, sub_core_grids=self.subdevice_cores)
