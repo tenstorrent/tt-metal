@@ -67,12 +67,17 @@ MESH_DEVICE_MAP: Dict[Tuple[str, Tuple[int, int]], str] = {
     ("Wormhole", (1, 2)): "N300",
     ("Wormhole", (1, 4)): "N150x4",
     ("Wormhole", (1, 8)): "T3K",
+    # Galaxy is a 32-chip box; its canonical large-scale shape is [4,8]
+    # (see hardware.py). Both orientations map to the same device label so a
+    # request for the canonical (4,8) resolves directly instead of failing.
+    ("Wormhole", (4, 8)): "TG",
     ("Wormhole", (8, 4)): "TG",
     ("Blackhole", (1, 1)): "P150",
     ("Blackhole", (1, 2)): "P300",
     ("Blackhole", (1, 4)): "P150x4",
     ("Blackhole", (2, 2)): "P150x4_2x2",
     ("Blackhole", (1, 8)): "P150x8",
+    ("Blackhole", (4, 8)): "BHGLX",
     ("Blackhole", (8, 4)): "BHGLX",
 }
 
