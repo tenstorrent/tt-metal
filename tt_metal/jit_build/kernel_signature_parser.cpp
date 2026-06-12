@@ -52,6 +52,10 @@ std::string trim(const std::string& s) {
 // whitespace. That single property is what lets the scan below find the lone TT_KERNEL token and
 // bracket-match the template/parameter lists without ever matching a TT_KERNEL (or a stray
 // bracket/comma) hiding inside a comment, a string, or the `#define TT_KERNEL ...` line.
+//
+// Limitation: raw string literals (R"(...)") are not lexed specially — the opening `"` starts an
+// ordinary string literal, so an embedded unescaped `"` ends string-tracking early. Kernels don't
+// use raw strings, so a TT_KERNEL hidden inside one is an accepted blind spot.
 std::string strip_noise(const std::string& s) {
     std::string out(s.size(), ' ');
     enum class St { Normal, LineComment, BlockComment, String, Char, Preproc };
@@ -172,6 +176,23 @@ std::vector<std::string> split_top_level_commas(const std::string& s) {
     return out;
 }
 
+// Strip an optional leading or trailing `const` qualifier from a type spelling, so both
+// `const uint32_t x` and `uint32_t const x` are accepted in Phase 1. Only `const` is handled — it
+// is the one cv-qualifier a user is at all likely to write on a by-value kernel argument. A bare
+// `const` with no base type is left intact so it still fails the uint32_t check below.
+std::string strip_const(const std::string& type) {
+    constexpr std::string_view kw = "const";
+    std::string t = type;
+    if (t.size() > kw.size() && std::string_view(t).substr(0, kw.size()) == kw && is_ws(t[kw.size()])) {
+        t = trim(t.substr(kw.size()));
+    }
+    if (t.size() > kw.size() && std::string_view(t).substr(t.size() - kw.size()) == kw &&
+        is_ws(t[t.size() - kw.size() - 1])) {
+        t = trim(t.substr(0, t.size() - kw.size()));
+    }
+    return t;
+}
+
 // Parse one `uint32_t <name>` parameter entry; return its name. `kind` is used only for error
 // messages ("template parameter" / "function parameter").
 std::string extract_param_name(const std::string& raw_entry, const char* kind) {
@@ -183,7 +204,7 @@ std::string extract_param_name(const std::string& raw_entry, const char* kind) {
         --b;
     }
     const std::string name = entry.substr(b);
-    const std::string type = trim(entry.substr(0, b));
+    const std::string type = strip_const(trim(entry.substr(0, b)));
 
     if (!is_identifier(name)) {
         throw std::runtime_error(
