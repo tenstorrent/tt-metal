@@ -52,6 +52,11 @@ Optional:
     --mpi-if <interface>                Network interface for MPI TCP transport (default: ens5f0np0)
     --mpi-args <args>                   Extra arguments passed directly to mpirun (quoted string)
                                         e.g. --mpi-args "--tag-output"
+    --skip-reorder                      Use --hosts exactly as given; skip the canonical ring
+                                        reordering for the multi-host quad configs (8x4x4z, 4x32z,
+                                        <N>x32x4). Use this when the serpentine r<rack>u<unit>
+                                        ordering does not match your hosts' physical cabling and you
+                                        want to pass them in your own ring order.
     --help                              Display this help message and exit
 
 Example:
@@ -92,6 +97,7 @@ TEST_CONFIG_Z="tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_m
 FILTER=""
 MPI_IF="ens5f0np0"
 MPI_EXTRA_ARGS=()
+SKIP_REORDER=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -184,6 +190,10 @@ while [[ $# -gt 0 ]]; do
             read -ra _extra <<< "$2"
             MPI_EXTRA_ARGS+=("${_extra[@]}")
             shift 2
+            ;;
+        --skip-reorder)
+            SKIP_REORDER=true
+            shift
             ;;
         --help)
             show_help
@@ -332,7 +342,14 @@ sort_hosts_canonical_per_quad() {
 # single-host configs keep the user's --hosts order untouched. 8x4x4z/4x32z are
 # a single quad (one Z-ring) so they canonicalize the whole list; <N>x32x4 has
 # one quad per mesh, so it canonicalizes each group of 4 independently.
-if [[ "$CONFIG" == "8x4x4z" || "$CONFIG" == "4x32z" ]]; then
+# --skip-reorder bypasses this entirely: the serpentine r<rack>u<unit> heuristic
+# only matches the standard 2-racks-x-2-units galaxy layout, so for hosts cabled
+# differently the operator can pass their own ring order and keep it verbatim.
+if [[ "$SKIP_REORDER" == true ]]; then
+    if [[ "$CONFIG" == "8x4x4z" || "$CONFIG" == "4x32z" || -n "$NX32X4_NUM_MESHES" ]]; then
+        echo "Skipping canonical host reordering (--skip-reorder); using --hosts as given."
+    fi
+elif [[ "$CONFIG" == "8x4x4z" || "$CONFIG" == "4x32z" ]]; then
     HOSTS_ORIG="$HOSTS"
     HOSTS="$(sort_hosts_canonical "$HOSTS")"
     if [[ "$HOSTS" != "$HOSTS_ORIG" ]]; then
