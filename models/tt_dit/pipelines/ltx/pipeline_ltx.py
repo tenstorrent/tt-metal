@@ -1559,11 +1559,14 @@ class LTXPipeline:
         # Vocoder.forward_traced — warm caches on a prior eager decode, then capture with
         # prep_run=False so capture and every replay share the post-mel-VAE free-list. Gated by the
         # test_audio_decode_girl conv1d-vs-torch oracle, which now runs under trace.)
-        self.tt_vocoder_with_bwe.use_trace = self._traced
-        # BWE/VAE trace are env-toggleable for A/B. Both default OFF: at real frame counts the
-        # BWE and mel-VAE forwards are device-compute-bound, where trace-replay is net-negative
-        # (mel-VAE 0.86x; BWE 1.74s traced vs 1.17s eager on the 6s girl clip, bh 4x8). Trace only
-        # wins on short, host-dispatch-bound inputs. Set LTX_BWE_TRACE=1 / LTX_VAE_TRACE=1 to force.
+        # Main-vocoder trace defaults ON (wins on small/host-bound meshes — loudbox 2x4: 0.80s
+        # traced). On large/CCL-bound meshes it is net-negative (galaxy 4x8: 1.37s traced vs 1.07s
+        # eager — T-shard=8 AllGather/halo dominates, audio decode does not scale with chips), so
+        # set LTX_VOC_TRACE=0 there.
+        self.tt_vocoder_with_bwe.use_trace = self._traced and os.environ.get("LTX_VOC_TRACE", "1") != "0"
+        # BWE/VAE trace default OFF: device-compute-bound at real frame counts, trace-replay
+        # net-negative (mel-VAE 0.86x; BWE 1.74s traced vs 1.17s eager, bh 4x8). LTX_BWE_TRACE=1 /
+        # LTX_VAE_TRACE=1 to force on for short, host-dispatch-bound inputs.
         self.tt_vocoder_with_bwe.use_trace_bwe = self._traced and os.environ.get("LTX_BWE_TRACE", "0") == "1"
         self.tt_audio_decoder.use_trace = self._traced and os.environ.get("LTX_VAE_TRACE", "0") == "1"
         if isinstance(audio_parallel_config, AudioTCParallelConfig):
