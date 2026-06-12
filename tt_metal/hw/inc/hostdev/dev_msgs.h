@@ -162,6 +162,8 @@ struct kernel_config_msg_t {
     volatile uint8_t mode;     // dispatch mode host/dev
     volatile uint8_t pad2[3];  // CODEGEN:skip
     volatile uint32_t kernel_text_offset[MaxProcessorsPerCoreType];
+    volatile uint32_t kernel_text_size[MaxProcessorsPerCoreType];
+    volatile uint8_t pad4[(MaxProcessorsPerCoreType % 2) * 12]; // CODEGEN:skip
     volatile uint64_t local_cb_mask;
 
     volatile uint8_t brisc_noc_id;
@@ -195,6 +197,7 @@ static_assert(offsetof(kernel_config_msg_t, local_cb_offset) % sizeof(uint16_t) 
 static_assert(offsetof(kernel_config_msg_t, remote_cb_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, rta_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, kernel_text_offset) % sizeof(uint32_t) == 0);
+static_assert(offsetof(kernel_config_msg_t, kernel_text_size) % sizeof(uint32_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, local_cb_mask) % sizeof(uint64_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, host_assigned_id) % sizeof(uint32_t) == 0);
 
