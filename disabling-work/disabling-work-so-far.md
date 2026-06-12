@@ -1,6 +1,6 @@
 # CI Disable Work — Status Log
 
-**Last updated:** 2026-06-11T00:28Z
+**Last updated:** 2026-06-12T00:35Z
 
 > **Source of truth.** This file is the canonical record of automation-tracked PRs. Wiping it resets the automation to fresh-state view; stale GitHub PRs not listed here are intentionally invisible.
 
@@ -28,9 +28,12 @@
 |----|----------|-----------------|---------------------|-----------------|-------|
 | [#46551](https://github.com/tenstorrent/tt-metal/pull/46551) | single-card-demo-tests.yaml | closed | verified-pass | Closed | sdxl N150 wormhole — tests started passing on main, disable removed, PR closed |
 | [#46553](https://github.com/tenstorrent/tt-metal/pull/46553) | blackhole-post-commit.yaml | verified-pass | pass | Yes | deepseek blitz sampling+model |
-| [#46555](https://github.com/tenstorrent/tt-metal/pull/46555) | t3000-unit-tests.yaml | verifying | pending (re-dispatch) | No | t3k dits PCC failure — re-dispatched after inconclusive |
-| [#46696](https://github.com/tenstorrent/tt-metal/pull/46696) | single-card-demo-tests.yaml | verifying | pending | No | mnist test_demo_dataset matmul TT_FATAL |
-| [#46698](https://github.com/tenstorrent/tt-metal/pull/46698) | blackhole-demo-tests.yaml | verifying | pending | No | flux.1-dev bh_loudbox + bh_quietbox_2 mesh_trace TT_FATAL |
+| [#46555](https://github.com/tenstorrent/tt-metal/pull/46555) | t3000-unit-tests.yaml | closed | verified-pass | Closed | t3k dits PCC failure — test started passing on main, disable removed, PR closed 2026-06-12 |
+| [#46696](https://github.com/tenstorrent/tt-metal/pull/46696) | single-card-demo-tests.yaml | verified-pass | pass | Yes | mnist test_demo_dataset matmul TT_FATAL |
+| [#46698](https://github.com/tenstorrent/tt-metal/pull/46698) | blackhole-demo-tests.yaml | verified-pass | pass | Yes | flux.1-dev bh_loudbox + bh_quietbox_2 mesh_trace TT_FATAL |
+| [#46808](https://github.com/tenstorrent/tt-metal/pull/46808) | t3000-unit-tests.yaml | verifying | pending | No | TestValidateModuleConfigs 2 tests failing on wh_llmbox (EagerLLMExecutor missing methods) |
+| [#46812](https://github.com/tenstorrent/tt-metal/pull/46812) | blackhole-post-commit.yaml | verifying | pending | No | test_host_io_loopback DEVICE_PULL small-tensor failures on bh_p300-viommu |
+| [#46814](https://github.com/tenstorrent/tt-metal/pull/46814) | t3000-unit-tests.yaml | verifying | pending | No | 21 gtest failures: MultiHostSocketTestSplitT3K.SocketTests + IntermeshSplit2x2FabricFixture.RandomizedInterMeshUnicast on wh_llmbox |
 
 ---
 
@@ -38,9 +41,9 @@
 
 | Run | Pipeline | Branch | Started | Status | Notes |
 |-----|----------|--------|---------|--------|-------|
-| [27314954594](https://github.com/tenstorrent/tt-metal/actions/runs/27314954594) | t3000-unit-tests.yaml | ci-disable/t3000-unit-tests-dits-t3k-2026-06-10 | 2026-06-11T00:15Z | in_progress | fresh build, model=dits, re-dispatch after inconclusive |
-| [27315173882](https://github.com/tenstorrent/tt-metal/actions/runs/27315173882) | single-card-demo-tests.yaml | ci-disable/single-card-demo-tests-mnist-matmul-2026-06-11 | 2026-06-11T00:21Z | queued | fresh build, requested-models=["mnist"] |
-| [27315355354](https://github.com/tenstorrent/tt-metal/actions/runs/27315355354) | blackhole-demo-tests.yaml | ci-disable/blackhole-demo-tests-flux1-loudbox-quietbox-2026-06-11 | 2026-06-11T00:26Z | in_progress | fresh build, model=flux.1-dev |
+| [27386528492](https://github.com/tenstorrent/tt-metal/actions/runs/27386528492) | t3000-unit-tests.yaml | ci-disable/t3000-unit-tests-executor-parity-2026-06-12 | 2026-06-12T00:33Z | in_progress | fresh build, model=tttv2 modules |
+| [27386537661](https://github.com/tenstorrent/tt-metal/actions/runs/27386537661) | blackhole-post-commit.yaml | ci-disable/blackhole-post-commit-host-io-device-pull-2026-06-12 | 2026-06-12T00:33Z | in_progress | fresh build, run-blackhole-multi-card-fast-unit-tests=true only |
+| [27386543130](https://github.com/tenstorrent/tt-metal/actions/runs/27386543130) | t3000-unit-tests.yaml | ci-disable/t3000-unit-tests-multiprocess-socket-2026-06-12 | 2026-06-12T00:33Z | in_progress | fresh build, model=dits |
 
 **Policy:** Concurrent runs across PRs are allowed; each automation session may dispatch at most three new runs.
 
@@ -50,6 +53,9 @@
 
 | Run | Pipeline | Branch | Started | Ended | Result | Notes |
 |-----|----------|--------|---------|-------|--------|-------|
+| [27315355354](https://github.com/tenstorrent/tt-metal/actions/runs/27315355354) | blackhole-demo-tests.yaml | ci-disable/blackhole-demo-tests-flux1-loudbox-quietbox-2026-06-11 | 2026-06-11T00:26Z | 2026-06-11T01:10Z | verified-pass | All flux.1-dev jobs passed (bh_loudbox, bh_quietbox_2, bh_p300) |
+| [27315173882](https://github.com/tenstorrent/tt-metal/actions/runs/27315173882) | single-card-demo-tests.yaml | ci-disable/single-card-demo-tests-mnist-matmul-2026-06-11 | 2026-06-11T00:21Z | 2026-06-11T14:08Z | verified-pass | mnist-N150-func and mnist-N300-func passed |
+| [27314954594](https://github.com/tenstorrent/tt-metal/actions/runs/27314954594) | t3000-unit-tests.yaml | ci-disable/t3000-unit-tests-dits-t3k-2026-06-10 | 2026-06-11T00:15Z | 2026-06-11T00:44Z | verified-pass | t3k_dits_tests passed; test also started passing on main — disable removed, PR closed |
 | [27244540816](https://github.com/tenstorrent/tt-metal/actions/runs/27244540816) | t3000-unit-tests.yaml | ci-disable/t3000-unit-tests-dits-t3k-2026-06-10 | 2026-06-10T00:21Z | 2026-06-10T00:40Z | verification-inconclusive | Collection error: pytest.param([(2, 4), 1], marks=...) used list as single arg; fix committed as d5fc3fceeb1; re-dispatched as 27314954594 |
 | [27244463459](https://github.com/tenstorrent/tt-metal/actions/runs/27244463459) | blackhole-post-commit.yaml | ci-disable/blackhole-post-commit-deepseek-blitz-2026-06-10 | 2026-06-10T00:19Z | 2026-06-10T01:16Z | verified-pass | All ops-unit-tests (P150b) jobs passed |
 | [27244284837](https://github.com/tenstorrent/tt-metal/actions/runs/27244284837) | single-card-demo-tests.yaml | ci-disable/single-card-demo-tests-sdxl-wormhole-2026-06-10 | 2026-06-10T00:14Z | 2026-06-10T00:58Z | verified-pass | sdxl-N150-func passed; tests also started passing on main (disable removed, PR closed) |
@@ -66,6 +72,16 @@
 
 ## Recent Activity
 
+- 2026-06-12T00:33Z — Dispatched verification run 27386543130 for PR #46814 (t3000-unit-tests multiprocess socket, fresh build, model=dits)
+- 2026-06-12T00:33Z — Dispatched verification run 27386537661 for PR #46812 (blackhole-post-commit host_io DEVICE_PULL, fresh build, run-blackhole-multi-card-fast-unit-tests=true only)
+- 2026-06-12T00:33Z — Dispatched verification run 27386528492 for PR #46808 (t3000-unit-tests executor parity, fresh build, model=tttv2 modules)
+- 2026-06-12T00:30Z — Created PR #46814 for t3000-unit-tests MultiHostSocketTestSplitT3K.SocketTests + IntermeshSplit2x2FabricFixture.RandomizedInterMeshUnicast (issue #46813). Branch: ci-disable/t3000-unit-tests-multiprocess-socket-2026-06-12
+- 2026-06-12T00:26Z — Created PR #46812 for blackhole-post-commit test_host_io_loopback DEVICE_PULL (issue #46810). Branch: ci-disable/blackhole-post-commit-host-io-device-pull-2026-06-12
+- 2026-06-12T00:22Z — Created PR #46808 for t3000-unit-tests TestValidateModuleConfigs (issue #46807). Branch: ci-disable/t3000-unit-tests-executor-parity-2026-06-12
+- 2026-06-12T00:15Z — PR #46698: classified run 27315355354 as verified-pass. Rebased onto f690c41b978. Evidence refreshed to run 27326025746/jobs 80728202149+80728202166.
+- 2026-06-12T00:10Z — PR #46696: classified run 27315173882 as verified-pass. Rebased onto f690c41b978. Evidence refreshed to run 27299199420/jobs 80643160020+80643160256.
+- 2026-06-12T00:05Z — PR #46555: classified run 27314954594 as verified-pass. Test test_wan_time_text_image_embedding now passing on main (run 27381852093/job 80921398031). Removed disable, rebased, pushed, closed PR and issue #46554.
+- 2026-06-12T00:00Z — Session start. Checked 3 active runs (27314954594: verified-pass, 27315173882: verified-pass, 27315355354: verified-pass). Found dits test now passing on main.
 - 2026-06-11T00:28Z — Dispatched verification run 27315355354 for PR #46698 (blackhole-demo-tests flux.1-dev, fresh build, model=flux.1-dev)
 - 2026-06-11T00:26Z — Created PR #46698 for blackhole-demo-tests flux.1-dev bh_loudbox+bh_quietbox_2 (issue #46697). Branch: ci-disable/blackhole-demo-tests-flux1-loudbox-quietbox-2026-06-11
 - 2026-06-11T00:21Z — Dispatched verification run 27315173882 for PR #46696 (single-card-demo-tests mnist, fresh build, requested-models=["mnist"])
@@ -75,13 +91,7 @@
 - 2026-06-11T00:12Z — Rebased PR #46553 onto 21bdebf19057. Evidence refreshed to run 27311852391/job 80686030225. Transitioned to verified-pass.
 - 2026-06-11T00:10Z — PR #46551: tests now passing on main (run 27257893975, job 80497555974/80497556053). Removed disable from branch, closed PR, closed issue #46550.
 - 2026-06-11T00:05Z — Session start. Checked all 3 verification runs (27244284837: verified-pass, 27244463459: verified-pass, 27244540816: verification-inconclusive). Found sdxl tests now passing on main.
-- 2026-06-10T00:22Z — Dispatched verification run 27244540816 for PR #46555 (t3000-unit-tests, fresh build, model=dits)
-- 2026-06-10T00:21Z — Created PR #46555 for t3000-unit-tests t3k_dits_tests (issue #46554). Branch: ci-disable/t3000-unit-tests-dits-t3k-2026-06-10
-- 2026-06-10T00:19Z — Dispatched verification run 27244463459 for PR #46553 (blackhole-post-commit, fresh build, run-ops-unit-tests=true)
-- 2026-06-10T00:19Z — Created PR #46553 for blackhole-post-commit deepseek blitz tests (issue #46552). Branch: ci-disable/blackhole-post-commit-deepseek-blitz-2026-06-10
-- 2026-06-10T00:14Z — Dispatched verification run 27244284837 for PR #46551 (single-card-demo-tests, fresh build, model=sdxl)
-- 2026-06-10T00:13Z — Created PR #46551 for single-card-demo-tests sdxl N150 wormhole (issue #46550). Branch: ci-disable/single-card-demo-tests-sdxl-wormhole-2026-06-10
-- 2026-06-10T00:00Z — Session start. State log was fresh (cleared). Proceeding as fresh-start session. Surveyed blackhole-post-commit, single-card-demo-tests, t3000-unit-tests, blackhole-demo-tests, runtime-unit-tests. Identified 3 deterministic failures.
+- Older history truncated — see git history of this file.
 
 ---
 
@@ -144,33 +154,25 @@ Main-run evidence: see PR description.
 
 ---
 
-## PR #46555 — t3000-unit-tests (t3k dits PCC failure)
+## PR #46555 — t3000-unit-tests (t3k dits PCC failure) — CLOSED
 
 | Field | Value |
 |-------|-------|
 | PR | [#46555](https://github.com/tenstorrent/tt-metal/pull/46555) |
-| Disable issue | [#46554](https://github.com/tenstorrent/tt-metal/issues/46554) |
+| Disable issue | [#46554](https://github.com/tenstorrent/tt-metal/issues/46554) (closed) |
 | Timeout issue | n/a |
 | Branch | ci-disable/t3000-unit-tests-dits-t3k-2026-06-10 |
 | Workflow file | .github/workflows/t3000-unit-tests.yaml |
-| Lifecycle stage | verifying |
-| Last rebase | 2026-06-11T00:14Z (onto 21bdebf19057adf3824f9b540b939b8ac2324575) |
-| Last revalidation | 2026-06-11T00:14Z |
-| Verification run | [27314954594](https://github.com/tenstorrent/tt-metal/actions/runs/27314954594) (dispatched 2026-06-11T00:15Z, in_progress) |
-| Last touched by automation | 2026-06-11T00:15Z |
-| Readiness | Awaiting verification run completion |
-
-### Prior inconclusive run
-
-[27244540816](https://github.com/tenstorrent/tt-metal/actions/runs/27244540816) — collection error (pytest.param with list as single arg); fix applied as commit d5fc3fceeb1; re-dispatched as 27314954594.
+| Lifecycle stage | closed |
+| Last rebase | 2026-06-12T00:05Z (onto f690c41b9788a5179e9b2ba4d00440d1df6b87e3) |
+| Last revalidation | 2026-06-12T00:05Z |
+| Verification run | [27314954594](https://github.com/tenstorrent/tt-metal/actions/runs/27314954594) (verified-pass) |
+| Last touched by automation | 2026-06-12T00:05Z |
+| Readiness | Closed — test started passing on main, disable removed |
 
 ### Disables (with main evidence)
 
-Main-run evidence: see PR description.
-
-| Disabled test | Most recent failing job | Commit | Run completed at |
-|---|---|---|---|
-| models/tt_dit/tests/unit/test_embeddings.py::test_wan_time_text_image_embedding[wormhole_b0-device_params0-t3k-1-512-4096] [wh_llmbox] | https://github.com/tenstorrent/tt-metal/actions/runs/27310935727/job/80681874558 | [d77a9e7](https://github.com/tenstorrent/tt-metal/commit/d77a9e7293e7482419c5a4fd18d57a486e22dd32) | 2026-06-10 23:17 UTC |
+All disables removed — test started passing on main as of run [27381852093](https://github.com/tenstorrent/tt-metal/actions/runs/27381852093/job/80921398031) (2026-06-11 22:55 UTC). PR and issue closed.
 
 ---
 
@@ -183,12 +185,12 @@ Main-run evidence: see PR description.
 | Timeout issue | n/a |
 | Branch | ci-disable/single-card-demo-tests-mnist-matmul-2026-06-11 |
 | Workflow file | .github/workflows/single-card-demo-tests.yaml |
-| Lifecycle stage | verifying |
-| Last rebase | 2026-06-11T00:20Z (on 21bdebf19057adf3824f9b540b939b8ac2324575) |
-| Last revalidation | 2026-06-11T00:20Z |
-| Verification run | [27315173882](https://github.com/tenstorrent/tt-metal/actions/runs/27315173882) (dispatched 2026-06-11T00:21Z, queued) |
-| Last touched by automation | 2026-06-11T00:21Z |
-| Readiness | Awaiting verification run completion |
+| Lifecycle stage | verified-pass |
+| Last rebase | 2026-06-12T00:10Z (onto f690c41b9788a5179e9b2ba4d00440d1df6b87e3) |
+| Last revalidation | 2026-06-12T00:10Z |
+| Verification run | [27315173882](https://github.com/tenstorrent/tt-metal/actions/runs/27315173882) (verified-pass) |
+| Last touched by automation | 2026-06-12T00:10Z |
+| Readiness | verified-pass — ready to merge |
 
 ### Disables (with main evidence)
 
@@ -196,8 +198,8 @@ Main-run evidence: see PR description.
 
 | Disabled test | Most recent failing job | Commit | Run completed at |
 |---|---|---|---|
-| models/demos/vision/classification/mnist/demo/demo.py::test_demo_dataset[1-128-device_params0] [N150] | https://github.com/tenstorrent/tt-metal/actions/runs/27257893975/job/80497555974 | [f92eba0](https://github.com/tenstorrent/tt-metal/commit/f92eba08956d05a286d13101d1bb9a73bdd1aed5) | 2026-06-10 06:53 UTC |
-| models/demos/vision/classification/mnist/demo/demo.py::test_demo_dataset[1-128-device_params0] [N300] | https://github.com/tenstorrent/tt-metal/actions/runs/27257893975/job/80497556053 | [f92eba0](https://github.com/tenstorrent/tt-metal/commit/f92eba08956d05a286d13101d1bb9a73bdd1aed5) | 2026-06-10 15:32 UTC |
+| models/demos/vision/classification/mnist/demo/demo.py::test_demo_dataset[1-128-device_params0] [N150] | https://github.com/tenstorrent/tt-metal/actions/runs/27299199420/job/80643160020 | [b84fed5](https://github.com/tenstorrent/tt-metal/commit/b84fed5f1725b2d98575f3cbfb57564f2d1d7469) | 2026-06-10 19:21 UTC |
+| models/demos/vision/classification/mnist/demo/demo.py::test_demo_dataset[1-128-device_params0] [N300] | https://github.com/tenstorrent/tt-metal/actions/runs/27299199420/job/80643160256 | [b84fed5](https://github.com/tenstorrent/tt-metal/commit/b84fed5f1725b2d98575f3cbfb57564f2d1d7469) | 2026-06-11 11:17 UTC |
 
 ---
 
@@ -210,11 +212,38 @@ Main-run evidence: see PR description.
 | Timeout issue | n/a |
 | Branch | ci-disable/blackhole-demo-tests-flux1-loudbox-quietbox-2026-06-11 |
 | Workflow file | .github/workflows/blackhole-demo-tests.yaml |
+| Lifecycle stage | verified-pass |
+| Last rebase | 2026-06-12T00:15Z (onto f690c41b9788a5179e9b2ba4d00440d1df6b87e3) |
+| Last revalidation | 2026-06-12T00:15Z |
+| Verification run | [27315355354](https://github.com/tenstorrent/tt-metal/actions/runs/27315355354) (verified-pass) |
+| Last touched by automation | 2026-06-12T00:15Z |
+| Readiness | verified-pass — ready to merge |
+
+### Disables (with main evidence)
+
+Main-run evidence: see PR description.
+
+| Disabled test | Most recent failing job | Commit | Run completed at |
+|---|---|---|---|
+| models/tt_dit/tests/models/flux1/test_performance_flux1.py::test_flux1_pipeline_performance[blackhole-device_params0-bh_2x4sp0tp1-1024-1024-3.5-28] [bh_loudbox] | https://github.com/tenstorrent/tt-metal/actions/runs/27326025746/job/80728202149 | [798b264](https://github.com/tenstorrent/tt-metal/commit/798b264f40bb40c93fa4d2f1e161a774a8ce1420) | 2026-06-11 06:25 UTC |
+| models/tt_dit/tests/models/flux1/test_performance_flux1.py::test_flux1_pipeline_performance[blackhole-device_params0-2x2sp0tp1-1024-1024-3.5-28] [bh_quietbox_2] | https://github.com/tenstorrent/tt-metal/actions/runs/27326025746/job/80728202166 | [798b264](https://github.com/tenstorrent/tt-metal/commit/798b264f40bb40c93fa4d2f1e161a774a8ce1420) | 2026-06-11 06:25 UTC |
+
+---
+
+## PR #46808 — t3000-unit-tests (TestValidateModuleConfigs EagerLLMExecutor missing methods)
+
+| Field | Value |
+|-------|-------|
+| PR | [#46808](https://github.com/tenstorrent/tt-metal/pull/46808) |
+| Disable issue | [#46807](https://github.com/tenstorrent/tt-metal/issues/46807) |
+| Timeout issue | n/a |
+| Branch | ci-disable/t3000-unit-tests-executor-parity-2026-06-12 |
+| Workflow file | .github/workflows/t3000-unit-tests.yaml |
 | Lifecycle stage | verifying |
-| Last rebase | 2026-06-11T00:26Z (on 21bdebf19057adf3824f9b540b939b8ac2324575) |
-| Last revalidation | 2026-06-11T00:26Z |
-| Verification run | [27315355354](https://github.com/tenstorrent/tt-metal/actions/runs/27315355354) (dispatched 2026-06-11T00:26Z, in_progress) |
-| Last touched by automation | 2026-06-11T00:26Z |
+| Last rebase | 2026-06-12T00:22Z (onto f690c41b9788a5179e9b2ba4d00440d1df6b87e3) |
+| Last revalidation | 2026-06-12T00:22Z |
+| Verification run | [27386528492](https://github.com/tenstorrent/tt-metal/actions/runs/27386528492) (dispatched 2026-06-12T00:33Z, in_progress) |
+| Last touched by automation | 2026-06-12T00:33Z |
 | Readiness | Awaiting verification run completion |
 
 ### Disables (with main evidence)
@@ -223,5 +252,60 @@ Main-run evidence: see PR description.
 
 | Disabled test | Most recent failing job | Commit | Run completed at |
 |---|---|---|---|
-| models/tt_dit/tests/models/flux1/test_performance_flux1.py::test_flux1_pipeline_performance[blackhole-device_params0-bh_2x4sp0tp1-1024-1024-3.5-28] [bh_loudbox] | https://github.com/tenstorrent/tt-metal/actions/runs/27255332239/job/80489386807 | [f92eba0](https://github.com/tenstorrent/tt-metal/commit/f92eba08956d05a286d13101d1bb9a73bdd1aed5) | 2026-06-10 05:49 UTC |
-| models/tt_dit/tests/models/flux1/test_performance_flux1.py::test_flux1_pipeline_performance[blackhole-device_params0-2x2sp0tp1-1024-1024-3.5-28] [bh_quietbox_2] | https://github.com/tenstorrent/tt-metal/actions/runs/27255332239/job/80489386880 | [f92eba0](https://github.com/tenstorrent/tt-metal/commit/f92eba08956d05a286d13101d1bb9a73bdd1aed5) | 2026-06-10 05:47 UTC |
+| models/common/tests/test_executor_parity.py::TestValidateModuleConfigs::test_validate_module_configs_method_exists [wh_llmbox] | https://github.com/tenstorrent/tt-metal/actions/runs/27381852093/job/80921398083 | [3f40cae](https://github.com/tenstorrent/tt-metal/commit/3f40caef4e81a0b3aa075ef8e9a66f2946e08b3c) | 2026-06-11 23:16 UTC |
+| models/common/tests/test_executor_parity.py::TestValidateModuleConfigs::test_compile_accepts_validate_configs_flag [wh_llmbox] | https://github.com/tenstorrent/tt-metal/actions/runs/27381852093/job/80921398083 | [3f40cae](https://github.com/tenstorrent/tt-metal/commit/3f40caef4e81a0b3aa075ef8e9a66f2946e08b3c) | 2026-06-11 23:16 UTC |
+
+---
+
+## PR #46812 — blackhole-post-commit (test_host_io_loopback DEVICE_PULL small-tensor bh_p300-viommu)
+
+| Field | Value |
+|-------|-------|
+| PR | [#46812](https://github.com/tenstorrent/tt-metal/pull/46812) |
+| Disable issue | [#46810](https://github.com/tenstorrent/tt-metal/issues/46810) |
+| Timeout issue | n/a |
+| Branch | ci-disable/blackhole-post-commit-host-io-device-pull-2026-06-12 |
+| Workflow file | .github/workflows/blackhole-post-commit.yaml |
+| Lifecycle stage | verifying |
+| Last rebase | 2026-06-12T00:26Z (onto f690c41b9788a5179e9b2ba4d00440d1df6b87e3) |
+| Last revalidation | 2026-06-12T00:26Z |
+| Verification run | [27386537661](https://github.com/tenstorrent/tt-metal/actions/runs/27386537661) (dispatched 2026-06-12T00:33Z, in_progress) |
+| Last touched by automation | 2026-06-12T00:33Z |
+| Readiness | Awaiting verification run completion |
+
+### Disables (with main evidence)
+
+Main-run evidence: see PR description.
+
+| Disabled test | Most recent failing job | Commit | Run completed at |
+|---|---|---|---|
+| models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py::test_host_io_loopback[blackhole-H2DMode.DEVICE_PULL-64-128-512] [bh_p300-viommu] | https://github.com/tenstorrent/tt-metal/actions/runs/27376218193/job/80902882169 | [fd44a75](https://github.com/tenstorrent/tt-metal/commit/fd44a75e40c069958325691d0faead335b0100a1) | 2026-06-11 22:16 UTC |
+| models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py::test_host_io_loopback[blackhole-H2DMode.DEVICE_PULL-64-256-512] [bh_p300-viommu] | https://github.com/tenstorrent/tt-metal/actions/runs/27376218193/job/80902882169 | [fd44a75](https://github.com/tenstorrent/tt-metal/commit/fd44a75e40c069958325691d0faead335b0100a1) | 2026-06-11 22:16 UTC |
+| models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py::test_host_io_loopback[blackhole-H2DMode.DEVICE_PULL-64-512-512] [bh_p300-viommu] | https://github.com/tenstorrent/tt-metal/actions/runs/27376218193/job/80902882169 | [fd44a75](https://github.com/tenstorrent/tt-metal/commit/fd44a75e40c069958325691d0faead335b0100a1) | 2026-06-11 22:16 UTC |
+
+---
+
+## PR #46814 — t3000-unit-tests (MultiHostSocketTestSplitT3K.SocketTests + IntermeshSplit2x2FabricFixture.RandomizedInterMeshUnicast)
+
+| Field | Value |
+|-------|-------|
+| PR | [#46814](https://github.com/tenstorrent/tt-metal/pull/46814) |
+| Disable issue | [#46813](https://github.com/tenstorrent/tt-metal/issues/46813) |
+| Timeout issue | n/a |
+| Branch | ci-disable/t3000-unit-tests-multiprocess-socket-2026-06-12 |
+| Workflow file | .github/workflows/t3000-unit-tests.yaml |
+| Lifecycle stage | verifying |
+| Last rebase | 2026-06-12T00:29Z (onto f690c41b9788a5179e9b2ba4d00440d1df6b87e3) |
+| Last revalidation | 2026-06-12T00:29Z |
+| Verification run | [27386543130](https://github.com/tenstorrent/tt-metal/actions/runs/27386543130) (dispatched 2026-06-12T00:33Z, in_progress) |
+| Last touched by automation | 2026-06-12T00:33Z |
+| Readiness | Awaiting verification run completion |
+
+### Disables (with main evidence)
+
+Main-run evidence: see PR description. (21 tests total — 1 IntermeshSplit2x2FabricFixture + 20 MultiHostSocketTestsSplitT3K parametrizations)
+
+| Disabled test | Most recent failing job | Commit | Run completed at |
+|---|---|---|---|
+| IntermeshSplit2x2FabricFixture.RandomizedInterMeshUnicast [wh_llmbox] | https://github.com/tenstorrent/tt-metal/actions/runs/27381852093/job/80921398025 | [3f40cae](https://github.com/tenstorrent/tt-metal/commit/3f40caef4e81a0b3aa075ef8e9a66f2946e08b3c) | 2026-06-11 23:16 UTC |
+| MultiHostSocketTestsSplitT3K/MultiHostSocketTestSplitT3K.SocketTests/* (20 parametrizations) [wh_llmbox] | https://github.com/tenstorrent/tt-metal/actions/runs/27381852093/job/80921398025 | [3f40cae](https://github.com/tenstorrent/tt-metal/commit/3f40caef4e81a0b3aa075ef8e9a66f2946e08b3c) | 2026-06-11 23:16 UTC |
