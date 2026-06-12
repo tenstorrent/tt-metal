@@ -53,14 +53,25 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
         "Blackhole math datacopy init supports only PackMode::Default and PackMode::Tilize");
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
+    const std::uint32_t src_format = get_operand_src_format(operand_id);
     const std::uint32_t dst_format = get_operand_dst_format(operand_id);
 
     // For tilize operation, the init function needs to know the src format to determine the is_8bit_format to avoid the
     // tilize workaround. 8bit datums in input format do not require the tilize workaround on blackhole.
-    const std::uint32_t src_format = get_operand_src_format(operand_id);
     const bool is_input_8bit_format = IS_8BIT_FORMAT(src_format);
-    _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en, pack_mode>(
-        num_faces, dst_format, is_input_8bit_format);
+    constexpr bool can_infer_int_fpu = type == DataCopyType::A2D && src_b_bcast_type == BroadcastType::NONE;
+    if constexpr (can_infer_int_fpu && !is_int_fpu_en) {
+        if (masked_data_format(src_format) == to_underlying(DataFormat::Int8)) {
+            _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, true, pack_mode>(
+                num_faces, dst_format, is_input_8bit_format);
+        } else {
+            _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, false, pack_mode>(
+                num_faces, dst_format, is_input_8bit_format);
+        }
+    } else {
+        _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en, pack_mode>(
+            num_faces, dst_format, is_input_8bit_format);
+    }
 }
 
 template <BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>

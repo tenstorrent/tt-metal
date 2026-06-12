@@ -3,9 +3,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Faithful reproduction of the compute-API transpose_wh_tile i8 path
-// (tt_metal/hw/inc/api/compute/transpose_wh.h, the dedicated `else if (is_8bit_int)`
-// branch in transpose_wh_init / transpose_wh_init_short):
+// Faithful reproduction of the transpose_wh i8 path after the format-driven
+// A2D reconstruct decision moved into the LLK datacopy init boundary:
 // the full 32x32 transpose is performed in the UNPACKER (transpose_of_faces +
 // within_face_16x16_transpose / haloize), and the math thread only does the
 // A2D datacopy that reconstructs the Int8 register datum into DEST. There is no
@@ -60,27 +59,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 
-    // Int8/UInt8 both unpack into the Int8 register format and need the integer FPU datapath
-    // (is_int_fpu_en => ELWADD move) to reconstruct the integer value in DEST under FP32 dest mode.
-    const bool is_int8 = (masked_data_format(formats.math) == to_underlying(DataFormat::Int8));
-    if (is_int8)
-    {
-        _llk_math_eltwise_unary_datacopy_init_wrapper_<
-            DataCopyType::A2D,
-            is_fp32_dest_acc_en,
-            BroadcastType::NONE,
-            true /* is_int_fpu_en */,
-            PackMode::Default>(params.num_faces, formats.math);
-    }
-    else
-    {
-        _llk_math_eltwise_unary_datacopy_init_wrapper_<
-            DataCopyType::A2D,
-            is_fp32_dest_acc_en,
-            BroadcastType::NONE,
-            false /* is_int_fpu_en */,
-            PackMode::Default>(params.num_faces, formats.math);
-    }
+    // Mirror the LLK datacopy init inference boundary without hard-forcing
+    // is_int_fpu_en=true in the test source.
+    _llk_math_eltwise_unary_datacopy_init_inferred_wrapper_<
+        DataCopyType::A2D,
+        is_fp32_dest_acc_en,
+        BroadcastType::NONE,
+        false /* is_int_fpu_en */,
+        PackMode::Default>(params.num_faces, formats.unpack_A_src, formats.math);
 
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
