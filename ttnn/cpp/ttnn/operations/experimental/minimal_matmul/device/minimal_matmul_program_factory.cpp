@@ -339,7 +339,12 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         envov("TT_MM_KPAR_NWIDE", kp.nwide);
         envov("TT_MM_KPAR_MINKB", kp.min_kt);
 
-        if (num_slices > 1) {
+        // Safety gate: the budget split sets num_slices = grid.y / Pk, which is only guaranteed to be a
+        // valid power-of-2 slice count when grid.y is a power of 2 (true on WH 8x8). On a non-pow2 grid
+        // (e.g. BH grid.y=10) Pk=2 would give num_slices=5 — untested — so auto K-par stays OFF there
+        // until the heuristic is re-fit and validated for that grid. Explicit TT_MM_K_SLICES still works.
+        const bool grid_y_pow2 = (grid_size.y & (grid_size.y - 1)) == 0;
+        if (num_slices > 1 && grid_y_pow2) {
             const uint32_t cores = grid_size.x * grid_size.y;
             const uint32_t out_tiles = M_tiles * N_tiles;
             const double D = out_tiles ? static_cast<double>(K_tiles) * cores / out_tiles : 0.0;

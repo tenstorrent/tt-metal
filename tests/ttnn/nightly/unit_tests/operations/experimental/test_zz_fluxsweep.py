@@ -8,7 +8,10 @@ import torch
 
 import ttnn
 
-GX = GY = 8
+# Grid is configurable so this harness works on any arch (WH 8x8, BH 11x10, ...). Set FC_GRIDX/FC_GRIDY
+# to the compute grid before launching (defaults to WH 8x8).
+GX = int(os.environ.get("FC_GRIDX", "8"))
+GY = int(os.environ.get("FC_GRIDY", "8"))
 REPS = int(os.environ.get("FC_REPS", "20"))
 WARMUP = 3
 MANIFEST = os.environ.get("FC_MANIFEST", "/tmp/flux_manifest.json")
@@ -30,21 +33,23 @@ def auto_S(Mt, Nt):
 
 
 def combos_for(Mt, Kt):
-    out = [(None, 1)]  # auto = pure N-slice, Pk=1
-    kp, seen = [], set()
-    for spk in (8, 4):
-        rpg = GY // spk
-        if Mt % rpg != 0:  # no M-padding
+    # auto (pure N-slice, Pk=1) + valid K-par combos that FILL the row budget. Generic over grid.y:
+    # try total budgets {GY, GY/2}; for each, Pk is a power of 2 dividing the budget AND K_tiles, S =
+    # budget/Pk, and rows_per_group = GY/budget must divide Mt (no M-padding). On WH GY=8 this yields
+    # (4,2),(2,4),(1,8)[,(2,2),(1,4)]; on BH GY=10 it yields just (5,2).
+    out, seen = [(None, 1)], set()
+    for spk in sorted({GY, GY // 2}, reverse=True):
+        if spk < 2 or GY % spk != 0 or Mt % (GY // spk) != 0:
             continue
-        for Pk in (2, 4, 8):
-            if Pk > spk or Kt % Pk != 0:
-                continue
-            kp.append((spk // Pk, Pk))
-    for c in kp:
-        if c not in seen:
-            seen.add(c)
-            out.append(c)
-    return out[:5]
+        Pk = 2
+        while Pk <= spk:
+            if (Pk & (Pk - 1)) == 0 and spk % Pk == 0 and Kt % Pk == 0:
+                c = (spk // Pk, Pk)
+                if c not in seen:
+                    seen.add(c)
+                    out.append(c)
+            Pk *= 2
+    return out
 
 
 def load_shapes():
