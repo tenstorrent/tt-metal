@@ -53,20 +53,40 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 using namespace ckernel;
 
+template <bool is_fp32_dest_acc_en>
+void init_transpose_wh_a2d_datacopy(const std::uint32_t num_faces, const std::uint32_t src_format, const std::uint32_t dst_format)
+{
+    const bool needs_int_fpu = masked_data_format(src_format) == to_underlying(DataFormat::Int8);
+    if (needs_int_fpu)
+    {
+        _llk_math_eltwise_unary_datacopy_init_wrapper_<
+            DataCopyType::A2D,
+            is_fp32_dest_acc_en,
+            BroadcastType::NONE,
+            true /* is_int_fpu_en */,
+            PackMode::Default>(num_faces, dst_format);
+    }
+    else
+    {
+        _llk_math_eltwise_unary_datacopy_init_wrapper_<
+            DataCopyType::A2D,
+            is_fp32_dest_acc_en,
+            BroadcastType::NONE,
+            false /* is_int_fpu_en */,
+            PackMode::Default>(num_faces, dst_format);
+    }
+}
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
 
-    // Mirror the LLK datacopy init inference boundary without hard-forcing
-    // is_int_fpu_en=true in the test source.
-    _llk_math_eltwise_unary_datacopy_init_inferred_wrapper_<
-        DataCopyType::A2D,
-        is_fp32_dest_acc_en,
-        BroadcastType::NONE,
-        false /* is_int_fpu_en */,
-        PackMode::Default>(params.num_faces, formats.unpack_A_src, formats.math);
+    // Mirror the LLK API boundary locally so this test can keep passing explicit
+    // runtime formats without adding transpose_wh-specific inference helpers to
+    // the shared LLK test wrapper surface.
+    init_transpose_wh_a2d_datacopy<is_fp32_dest_acc_en>(params.num_faces, formats.unpack_A_src, formats.math);
 
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
