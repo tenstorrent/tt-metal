@@ -68,6 +68,8 @@
 - name: LLK FD blackhole
   cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='-LLKBlackholeSingleCardFixture.*:*MulReduceScalarTest*'
   skus:
+    bh_p150b_civ2_viommu:
+      timeout: 15
     bh_p150b_civ2_viommu_prio:
       timeout: 15
   team: llk
@@ -79,6 +81,8 @@
 - name: LLK FD blackhole
   cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='-LLKBlackholeSingleCardFixture.*:*MulReduceScalarTest*'
   skus:
+    bh_p150b_civ2_viommu:
+      timeout: 15
     bh_p150b_civ2_viommu_prio:
       timeout: 15
   team: llk
@@ -100,6 +104,8 @@
 - name: LLK SD blackhole (Quasar slice)
   cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='LLKMeshDeviceFixtureSlowDispatchOnly.*:LLKBlackholeSingleCardFixture.*:*MulReduceScalarTest*:LLKQuasarMeshDeviceSingleCardFixture.*:QuasarMeshDeviceSingleCardFixture.*-LLKBlackholeSingleCardFixture.TensixComputeUnpackTilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixComputePackUntilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixFp8e4m3ToFp8e4m3'
   skus:
+    bh_p150b_civ2_viommu:
+      timeout: 40
     bh_p150b_civ2_viommu_prio:
       timeout: 40
   team: llk
@@ -124,7 +130,7 @@
 - name: LLK SD blackhole (full suite, nightly)
   cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='-MeshDeviceFixture.Top32RmDevPipelineCompletes'
   skus:
-    bh_p150b_civ2:
+    bh_p150:
       timeout: 40
     bh_p100a_civ2_viommu:
       timeout: 40

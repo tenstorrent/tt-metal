@@ -456,6 +456,9 @@ jobs:
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       l2-only: false
+      # Prio runner pool is reserved for merge-queue traffic; any other trigger
+      # (pull_request, push, etc.) routes blackhole jobs to the non-prio viommu
+      # variant so PR runs don't starve the merge-group queue.
       enabled-skus: ${{
           (github.ref_name == 'main'
            || needs.find-changes.outputs.llk-common-changed == 'true'
@@ -464,10 +467,10 @@ jobs:
            || needs.find-changes.outputs.llk-ci-changed == 'true'
            || (needs.find-changes.outputs.llk-wormhole-changed == 'true'
                && needs.find-changes.outputs.llk-blackhole-changed == 'true'))
-          && 'wh_n150_civ2,bh_p150b_civ2_viommu_prio'
+          && (github.event_name == 'merge_group' && 'wh_n150_civ2,bh_p150b_civ2_viommu_prio' || 'wh_n150_civ2,bh_p150b_civ2_viommu')
           || (needs.find-changes.outputs.llk-wormhole-changed == 'true' && 'wh_n150_civ2')
-          || (needs.find-changes.outputs.llk-blackhole-changed == 'true' && 'bh_p150b_civ2_viommu_prio')
-          || 'wh_n150_civ2,bh_p150b_civ2_viommu_prio' }}
+          || (needs.find-changes.outputs.llk-blackhole-changed == 'true' && (github.event_name == 'merge_group' && 'bh_p150b_civ2_viommu_prio' || 'bh_p150b_civ2_viommu'))
+          || (github.event_name == 'merge_group' && 'wh_n150_civ2,bh_p150b_civ2_viommu_prio' || 'wh_n150_civ2,bh_p150b_civ2_viommu') }}
 
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
