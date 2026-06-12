@@ -438,29 +438,32 @@ def _reflect_pad_time_rm(
 
 
 def _zero_insert_time_rm(x_btc: ttnn.Tensor, *, stride: int, dtype, device) -> ttnn.Tensor:
-    """Insert ``stride - 1`` all-zero frames after each input frame on ``[B,T,C]``."""
+    """Insert ``stride - 1`` all-zero frames after each input frame on ``[B,T,C]`` RM.
+
+    Equivalent to the per-frame loop (``f0, 0, …, f1, 0, …, f_{T-1}``) but uses one
+    interleaved reshape+concat instead of ``T`` ``ttnn.slice`` ops per upsample stage.
+    """
     if stride == 1:
         return x_btc
     b, t, c = (int(x_btc.shape[i]) for i in range(3))
-    zero = ttnn.zeros(
-        (b, 1, c),
+    mem = ttnn.DRAM_MEMORY_CONFIG
+    # [B,T,C] → [B,T,1,C]; concat zeros on the small axis → [B,T,stride,C] → [B,T*stride,C].
+    x4 = ttnn.reshape(x_btc, (b, t, 1, c))
+    z = ttnn.zeros(
+        (b, t, stride - 1, c),
         dtype=dtype,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=mem,
     )
-    parts: list[ttnn.Tensor] = []
-    for idx in range(t):
-        frame = ttnn.slice(x_btc, [0, idx, 0], [b, idx + 1, c])
-        parts.append(frame)
-        if idx != t - 1:
-            for _ in range(stride - 1):
-                parts.append(zero)
-    out = ttnn.concat(parts, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(zero)
-    for p in parts:
-        if p is not zero:
-            ttnn.deallocate(p)
+    interleaved = ttnn.concat([x4, z], dim=2, memory_config=mem)
+    ttnn.deallocate(x4)
+    ttnn.deallocate(z)
+    flat = ttnn.reshape(interleaved, (b, t * stride, c))
+    ttnn.deallocate(interleaved)
+    out_len = t * stride - (stride - 1)
+    out = ttnn.slice(flat, [0, 0, 0], [b, out_len, c], memory_config=mem)
+    ttnn.deallocate(flat)
     return out
 
 
