@@ -632,6 +632,10 @@ CRITICAL REQUIREMENTS:
     a joint (that hides wiring bugs the e2e test exists to catch).
   - ALL graduated modules/components must be used in the pipeline.
   - The end-to-end pipeline must pass PCC >= {pcc}.
+  - ALWAYS print the achieved end-to-end PCC on EVERY run, pass OR fail — e.g.
+    `print(f"e2e PCC={{achieved_pcc}}")` on its own line immediately BEFORE the
+    final assert — so the measured number is visible in the test output
+    regardless of the verdict (not only surfaced in the assert message on fail).
   - GENERATIVE heads (reference is `model.generate()`): reproduce generate()'s
     real chain and compare the TT-generated output to it. To keep the on-device
     gate fast, CAP BOTH SIDES to the same small horizon N (e.g. 40): pass
