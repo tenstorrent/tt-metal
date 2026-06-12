@@ -24,7 +24,7 @@
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
-#include "ttnn/operations/matmul/matmul.hpp"
+// TODO(nuked-op matmul): removed #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 
@@ -338,33 +338,16 @@ Result conv2d_L1(
     tilize_with_optional_deallocation(input_tensor_post_tm, should_deallocate_act);
 
     // run conv as matmul
-    std::optional<ttnn::operations::matmul::MatmulProgramConfig> program_config = std::nullopt;
+    // TODO(nuked-op matmul): restore real call (program_config build + ttnn::linear)
     std::optional<MemoryConfig> mm_output_memory_config = std::nullopt;
 
     if (input_tensor_post_tm.is_sharded()) {
-        uint32_t num_cores_c = get_num_cores_channels_from_parallel_config(parallel_config);
-        program_config = determine_matmul_op_config_from_conv_op_config(
-            opt_conv_op_parallel_config,
-            opt_conv_op_block_config,
-            parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED,
-            conv_config.activation,
-            parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
-            num_cores_c);
         mm_output_memory_config = conv_out_memory_config;
     }
 
-    ttnn::Tensor matmul_output = ttnn::linear(
-        input_tensor_post_tm,
-        weight_tensor_on_device,
-        bias_tensor_on_device,
-        false,
-        false,
-        mm_output_memory_config,
-        output_dtype,
-        program_config,
-        // for sharded input, activation is set on program config
-        input_tensor_post_tm.is_sharded() ? std::nullopt : conv_config.activation,
-        compute_config);
+    // TODO(nuked-op matmul): restore real call — passthrough to satisfy the type system
+    ttnn::Tensor matmul_output = input_tensor_post_tm;
+    (void)mm_output_memory_config;
 
     if (should_deallocate_act) {
         input_tensor_post_tm.deallocate(/*force*/ true);

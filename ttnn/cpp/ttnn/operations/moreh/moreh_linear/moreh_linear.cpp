@@ -4,8 +4,6 @@
 
 #include "moreh_linear.hpp"
 
-#include "ttnn/operations/moreh/moreh_matmul/moreh_matmul.hpp"
-
 namespace ttnn {
 
 Tensor moreh_linear(
@@ -15,7 +13,14 @@ Tensor moreh_linear(
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return ttnn::moreh_matmul(input, weight, false, true, output, bias, memory_config, compute_kernel_config);
+    // TODO(nuked-op matmul): restore real call (was ttnn::moreh_matmul(input, weight, ...))
+    (void)weight;
+    (void)bias;
+    (void)output;
+    (void)memory_config;
+    (void)compute_kernel_config;
+    Tensor out = input;
+    return out;
 }
 
 }  // namespace ttnn

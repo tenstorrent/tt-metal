@@ -6,8 +6,8 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <variant>  // TODO(nuked-op matmul): std::monostate placeholder for MatmulProgramConfig
 
-#include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -133,7 +133,8 @@ Conv2dParallelizationConfig determine_conv_op_parallel_config_from_conv_output_m
     uint32_t num_cores_c_in,
     uint32_t num_cores_c_out);
 
-ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_conv_op_config(
+// TODO(nuked-op matmul): restore real return type (was ttnn::operations::matmul::MatmulProgramConfig)
+std::monostate determine_matmul_op_config_from_conv_op_config(
     Conv2dParallelizationConfig conv_parallelization_config,
     Conv2dBlockConfig conv_blocking_config,
     bool height_sharded,

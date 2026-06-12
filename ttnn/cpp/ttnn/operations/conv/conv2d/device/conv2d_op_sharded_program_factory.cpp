@@ -1034,6 +1034,18 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     writer_compile_time_args.insert(writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
     tt::tt_metal::TensorAccessorArgs(b.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias ? bias->buffer() : nullptr).append_to(writer_compile_time_args);
+    // mcast_pipe Round 4: the weights mcast sem ids are created once per program (CreateSemaphore →
+    // core-uniform), so they are compile-time-eligible and become template params on the SenderPipe/
+    // ReceiverPipe in the three weights mcast kernels. Appended at the END (after both TensorAccessorArgs)
+    // so no existing CT index or accessor offset shifts. Kernels read them via the accessor's
+    // next_compile_time_args_offset() (data_ready=receiver_sem, consumed=sender_sem).
+    // The 2D-sender's recipient count (= the old runtime `weights_mcast_num_dests` it passed to the
+    // Pipe ctor) must also be a SenderPipe template param. It is host-known + core-uniform per program,
+    // so it too is baked in here. Matches the per-program count the sender rt-args use:
+    // transpose -> num_cores_x-1, else num_cores_y-1 (block-sharded path; 0 otherwise, unread).
+    writer_compile_time_args.push_back(weights_mcast_sender_semaphore_id);
+    writer_compile_time_args.push_back(weights_mcast_receiver_semaphore_id);
+    writer_compile_time_args.push_back(block_sharded ? (transpose_mcast ? num_cores_x - 1 : num_cores_y - 1) : 0);
 
     const bool check_skip_compute = input_cores != output_cores;
 

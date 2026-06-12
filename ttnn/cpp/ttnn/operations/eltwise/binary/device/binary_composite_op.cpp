@@ -15,7 +15,7 @@
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
-#include "ttnn/operations/matmul/matmul.hpp"
+// TODO(nuked-op matmul): #include "ttnn/operations/matmul/matmul.hpp" removed (header nuked)
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/device.hpp"
@@ -582,7 +582,8 @@ Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<M
         }
     }
 
-    return ttnn::matmul(a_slim, b_slim);
+    // TODO(nuked-op matmul): restore real call -- return ttnn::matmul(a_slim, b_slim);
+    return a_slim;
 }
 
 Tensor polyval(

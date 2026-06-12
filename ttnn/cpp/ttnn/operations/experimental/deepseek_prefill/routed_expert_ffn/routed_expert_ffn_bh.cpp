@@ -8,7 +8,7 @@
 #include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
-#include "ttnn/operations/matmul/matmul.hpp"
+// TODO(nuked-op matmul): #include "ttnn/operations/matmul/matmul.hpp" removed (op deleted)
 
 namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn::detail {
 
@@ -19,6 +19,7 @@ ttnn::Tensor routed_expert_ffn_bh(
     const ttnn::Tensor& down_proj,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<ttnn::Tensor> output) {
+    (void)up_proj;  // TODO(nuked-op matmul): up_proj was only consumed by the nuked matmul call
     // Blackhole compute grid is fixed at 11x8 = 88 cores. All configs below
     // are tuned for this grid; bail loudly if the device can't supply it.
     // gate/up is output-sharded with per_core_N = div_up(N_gate, GRID_X),
@@ -58,49 +59,18 @@ ttnn::Tensor routed_expert_ffn_bh(
     // Choose (1, per_core_N) — matches the reference configuration.
     const uint32_t gate_up_sub_w = gate_up_per_core_N;
 
+    (void)gate_up_in0_bw;
+    (void)gate_up_sub_w;
     auto gate_up_grid = CoreRangeSet({CoreRange({0, 0}, {GRID_X - 1, gate_up_grid_y - 1})});
-
-    auto gate_up_config_no_act = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
-        .compute_with_storage_grid_size = {GRID_X, gate_up_grid_y},
-        .in0_block_w = gate_up_in0_bw,
-        .out_subblock_h = 1,
-        .out_subblock_w = gate_up_sub_w,
-        .out_block_h = gate_up_per_core_M,
-        .out_block_w = gate_up_per_core_N,
-        .per_core_M = gate_up_per_core_M,
-        .per_core_N = gate_up_per_core_N,
-        .transpose_mcast = false,
-        .fuse_batch = false,
-    };
 
     auto gate_up_shard = tt::tt_metal::ShardSpec(
         gate_up_grid, {gate_up_per_core_M * ttnn::TILE_SIZE, gate_up_per_core_N * ttnn::TILE_SIZE});
     auto gate_up_mem = MemoryConfig{TensorMemoryLayout::BLOCK_SHARDED, BufferType::L1, gate_up_shard};
 
-    // Gate matmul: leave silu un-fused here so we can fuse it into the
-    // downstream multiply (which lets us collapse silu + multiply + reshard
-    // into a single op).
-    auto gate_result = ttnn::matmul(
-        /*input_tensor_a=*/x,
-        /*input_tensor_b=*/gate_proj,
-        /*transpose_a=*/false,
-        /*transpose_b=*/false,
-        /*memory_config=*/gate_up_mem,
-        /*dtype=*/std::nullopt,
-        /*program_config=*/gate_up_config_no_act,
-        /*activation=*/std::nullopt,
-        /*compute_kernel_config=*/compute_kernel_config);
-
-    auto up_result = ttnn::matmul(
-        /*input_tensor_a=*/x,
-        /*input_tensor_b=*/up_proj,
-        /*transpose_a=*/false,
-        /*transpose_b=*/false,
-        /*memory_config=*/gate_up_mem,
-        /*dtype=*/std::nullopt,
-        /*program_config=*/gate_up_config_no_act,
-        /*activation=*/std::nullopt,
-        /*compute_kernel_config=*/compute_kernel_config);
+    // TODO(nuked-op matmul): restore real call (was ttnn::matmul(x, gate_proj, ...))
+    auto gate_result = x;
+    // TODO(nuked-op matmul): restore real call (was ttnn::matmul(x, up_proj, ...))
+    auto up_result = x;
 
     // Fused silu + multiply + reshard: multiply applies silu to lhs (gate)
     // before the elementwise product and writes the result directly into L1
@@ -146,33 +116,12 @@ ttnn::Tensor routed_expert_ffn_bh(
 
     // Cap subblock to fit dest register (h*w <= 8)
     const uint32_t down_sub_w = largest_divisor(down_per_core_N, 8);
+    (void)down_in0_bw;
+    (void)down_sub_w;
+    (void)output;
 
-    auto down_config = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
-        .compute_with_storage_grid_size = {GRID_X, down_grid_y},
-        .in0_block_w = down_in0_bw,
-        .out_subblock_h = 1,
-        .out_subblock_w = down_sub_w,
-        .out_block_h = down_per_core_M,
-        .out_block_w = down_per_core_N,
-        .per_core_M = down_per_core_M,
-        .per_core_N = down_per_core_N,
-        .transpose_mcast = false,
-        .fuse_batch = false,
-    };
-
-    return ttnn::matmul(
-        /*input_tensor_a=*/activated,
-        /*input_tensor_b=*/down_proj,
-        /*transpose_a=*/false,
-        /*transpose_b=*/false,
-        /*memory_config=*/std::nullopt,
-        /*dtype=*/std::nullopt,
-        /*program_config=*/down_config,
-        /*activation=*/std::nullopt,
-        /*compute_kernel_config=*/compute_kernel_config,
-        /*core_grid=*/std::nullopt,
-        /*output_tile=*/std::nullopt,
-        /*optional_output_tensor=*/std::move(output));
+    // TODO(nuked-op matmul): restore real call (was ttnn::matmul(activated, down_proj, ...))
+    return activated;
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn::detail

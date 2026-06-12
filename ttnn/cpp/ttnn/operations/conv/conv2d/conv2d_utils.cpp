@@ -909,44 +909,15 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
     return {input_tensor, parallel_config, output_parallel_config};
 }
 
-ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_conv_op_config(
-    Conv2dParallelizationConfig conv_parallelization_config,
-    Conv2dBlockConfig conv_blocking_config,
-    bool height_sharded,
-    const std::optional<ttnn::operations::unary::UnaryWithParam>& activation,
-    bool transpose_mcast,
+// TODO(nuked-op matmul): restore real body (built MatmulProgramConfig from conv config)
+std::monostate determine_matmul_op_config_from_conv_op_config(
+    Conv2dParallelizationConfig /*conv_parallelization_config*/,
+    Conv2dBlockConfig /*conv_blocking_config*/,
+    bool /*height_sharded*/,
+    const std::optional<ttnn::operations::unary::UnaryWithParam>& /*activation*/,
+    bool /*transpose_mcast*/,
     uint32_t /*grid_size_along_c*/) {
-    if (height_sharded) {
-        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig matmul_config = {
-            .compute_with_storage_grid_size = conv_parallelization_config.grid_size,
-            .in0_block_w = conv_blocking_config.act_block_w_ntiles,
-            .out_subblock_h = conv_blocking_config.out_subblock_h_ntiles,
-            .out_subblock_w = conv_blocking_config.out_subblock_w_ntiles,
-            .out_block_h = conv_parallelization_config.per_core_out_matrix_height_ntile,
-            .out_block_w = conv_parallelization_config.per_core_out_matrix_width_ntile,
-            .per_core_M = conv_parallelization_config.per_core_out_matrix_height_ntile,
-            .per_core_N = conv_parallelization_config.per_core_out_matrix_width_ntile,
-            .fuse_batch = true,
-            .mcast_in0 = false};
-        if (activation.has_value()) {
-            matmul_config.fused_activation = activation.value();
-        }
-        return matmul_config;
-    }
-    ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig matmul_config = {
-        .compute_with_storage_grid_size = conv_parallelization_config.grid_size,
-        .in0_block_w = conv_blocking_config.act_block_w_ntiles,
-        .out_subblock_h = conv_blocking_config.out_subblock_h_ntiles,
-        .out_subblock_w = conv_blocking_config.out_subblock_w_ntiles,
-        .out_block_h = conv_parallelization_config.per_core_out_matrix_height_ntile,
-        .out_block_w = conv_parallelization_config.per_core_out_matrix_width_ntile,
-        .per_core_M = conv_parallelization_config.per_core_out_matrix_height_ntile,
-        .per_core_N = conv_parallelization_config.per_core_out_matrix_width_ntile,
-        .transpose_mcast = transpose_mcast};
-    if (activation.has_value()) {
-        matmul_config.fused_activation = activation.value();
-    }
-    return matmul_config;
+    return {};
 }
 
 core_count_and_size calculate_L1_usage_for_conv_op(

@@ -36,7 +36,6 @@
 #include "ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/rmsnorm_distributed_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/dit_layernorm_pre_all_gather/dit_layernorm_pre_all_gather_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/dit_layernorm_post_all_gather/dit_layernorm_post_all_gather_nanobind.hpp"
-#include "ttnn/operations/experimental/transformer/dit_minimal_matmul_addcmul_fused/dit_minimal_matmul_addcmul_fused_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/dit_rms_norm_unary_fused/dit_rms_norm_unary_fused_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding/rotary_embedding_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_hf/rotary_embedding_hf_nanobind.hpp"
@@ -45,8 +44,6 @@
 #include "ttnn/operations/experimental/transformer/rotate_half/rotate_half_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_nanobind.hpp"
 #include "ttnn/operations/experimental/copy/typecast/typecast_nanobind.hpp"
-#include "ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_nanobind.hpp"
-#include "ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/ccl_experimental_nanobind.hpp"
 #include "ttnn/operations/experimental/plusone/plusone_nanobind.hpp"
 #include "ttnn/operations/experimental/dropout/dropout_nanobind.hpp"
@@ -59,12 +56,9 @@
 #include "ttnn/operations/experimental/dram_core_prefetcher/dram_core_prefetcher_nanobind.hpp"
 #include "ttnn/operations/experimental/test/hang_device/hang_device_operation_nanobind.hpp"
 #include "ttnn/operations/experimental/test/prefetcher_consumer/dram_prefetcher_consumer_nanobind.hpp"
-#include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/isin/isin_nanobind.hpp"
-#include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_split_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/moe/moe_gate_mm/moe_gate_mm_nanobind.hpp"
 #include "ttnn/operations/experimental/topk_router_gpt/topk_router_gpt_nanobind.hpp"
-#include "ttnn/operations/experimental/deepseek/mla/matmul_wo/matmul_wo_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/moe_gpt/moe_gpt_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine/combine_nanobind.hpp"
@@ -106,7 +100,6 @@ void py_module(nb::module_& mod) {
     transformer::bind_wan_fused_distributed_rmsnorm(mod);
     transformer::bind_dit_layernorm_pre_all_gather(mod);
     transformer::bind_dit_layernorm_post_all_gather(mod);
-    transformer::bind_dit_minimal_matmul_addcmul_fused(mod);
     transformer::bind_dit_rms_norm_unary_fused(mod);
     transformer::bind_rotary_embedding(mod);
     transformer::bind_rotary_embedding_hf(mod);
@@ -136,9 +129,6 @@ void py_module(nb::module_& mod) {
     copy::detail::bind_typecast(mod);
 
     paged_cache::detail::bind_experimental_paged_cache_operations(mod);
-    matmul::detail::bind_attn_matmul(mod);
-    matmul::detail::bind_attn_matmul_from_cache(mod);
-    matmul::detail::bind_group_attn_matmul(mod);
     deepseek_prefill::masked_bincount::detail::bind_experimental_masked_bincount_operation(mod);
     deepseek_prefill::offset_cumsum::detail::bind_experimental_offset_cumsum_operation(mod);
     deepseek_prefill::detail::bind_post_combine_reduce(mod);
@@ -161,14 +151,10 @@ void py_module(nb::module_& mod) {
     broadcast_to::detail::bind_broadcast_to(mod);
     multi_scale_deformable_attn::detail::bind_multi_scale_deformable_attn(mod);
 
-    minimal_matmul::detail::bind_minimal_matmul(mod);
-    minimal_matmul::detail::bind_minimal_matmul_split(mod);
-
     isin::detail::bind_isin_operation(mod);
     deepseek::moe::detail::bind_moe_gate_mm(mod);
     deepseek::moe::detail::bind_deepseek_moe_gate(mod);
     topk_router_gpt::detail::bind_topk_router_gpt(mod);
-    deepseek::mla::detail::bind_matmul_wo(mod);
     moe_gpt::detail::bind_moe_gpt(mod);
 
     // DeepSeek prefill MoE operations

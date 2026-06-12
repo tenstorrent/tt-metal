@@ -59,14 +59,17 @@ void kernel_main() {
     const uint32_t src_addr = cb_src_obj.get_read_ptr();
 
     // Sender is IN the rect -> the Pipe infers INCLUDE_SRC loopback (hardware writes the payload
-    // to self too). No pre-handshake (fresh single-use dest here). When num_active_cores==1 the
-    // degenerate guard collapses the self-only loopback to a local copy.
-    Pipe<Staging::Flag, /*PRE_HANDSHAKE=*/false, /*LINK=*/true> pipe(
-        noc,
-        McastRect{x0, y0, x1, y1},
+    // to self too). No pre-handshake (fresh single-use dest here). num_active_cores is the FULL
+    // count incl. the sender; when it == 1 the degenerate guard (ack_count==0) collapses the
+    // self-only loopback to a local copy. CONSUMED_SEM_ID is unused (PRE_HANDSHAKE=false) -> reuse
+    // data_ready_sem_id.
+    SenderPipe<
         num_active_cores,
-        Semaphore<>(data_ready_sem_id),
-        Semaphore<>(/*consumed unused*/ data_ready_sem_id));
+        data_ready_sem_id,
+        /*CONSUMED=*/data_ready_sem_id,
+        Staging::Flag,
+        /*PRE_HANDSHAKE=*/false>
+        pipe(noc, McastRect{x0, y0, x1, y1});
 
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
         pipe.send(src_addr, dst_addr, payload_bytes);

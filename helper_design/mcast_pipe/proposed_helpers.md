@@ -1,10 +1,12 @@
 # Step F — Helper Proposal: `Pipe` (`mcast_pipe`)
 
-> **⚠ SUPERSEDED by Round 2 (2026-06-05).** This proposal exposes `MCAST` (EXCLUDE/INCLUDE) as a
-> caller knob and a single `num_dests`. The shipped helper instead takes pure-geometry `McastRect`
-> + `num_active_cores` and **infers** the mode (`loopback iff sender_in_rect && num_active==area`).
-> One case is un-inferable (conv width-sharded partial-box self-gather → kept raw). Authoritative
-> Round-2 docs: `changelog.md`, `round2_active_cores_plan.md`, `loopback_inference_limitation.md`.
+> **⚠ SUPERSEDED — see `changelog.md` for the authoritative current API.** This Step-F proposal
+> exposes `MCAST` (EXCLUDE/INCLUDE) as a caller knob, a single `num_dests`, and ONE `Pipe` object.
+> Evolution since: Round 2 dropped `MCAST` and inferred the mode from `num_active_cores`; Round 3
+> moved loopback inference to `sender_in_rect && src!=dst`; **Round 4 (2026-06-13)** split the object
+> into `SenderPipe` / `ReceiverPipe`, made the count the FULL recipient set (`num_active_receiver_cores`,
+> incl. sender-if-receiver), moved semaphore construction+init into the ctors (pass IDs), and put the
+> data mcast + self-copy on the `Noc` object (noc 2.0). Authoritative running record: `changelog.md`.
 
 The deliverable. One fat, two-sided helper — `Pipe` — that wraps the NoC-multicast +
 semaphore-handshake block, built on the object API (`Noc` / `Semaphore<>` / `MulticastEndpoint`),

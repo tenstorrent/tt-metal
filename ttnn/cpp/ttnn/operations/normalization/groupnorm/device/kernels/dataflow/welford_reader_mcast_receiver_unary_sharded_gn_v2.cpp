@@ -41,20 +41,13 @@ void kernel_main() {
     constexpr uint32_t cb_out0_id = tt::CBIndex::c_16;
 
     Noc noc;
-    Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
-    Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
 
     // mcast_pipe: receiver side of the per-group welford reduce mcast. The mcast sender broadcasts the
     // combined global mean/var + a VALID flag; this core acks (consumed) then waits the flag. As with
     // the non-welford gn_v2 receiver the GN naming is flipped vs matmul: reduce_sender_sem is the S->R
-    // data-ready FLAG (cleared+waited here), reduce_receiver_sem is the R->S consumed COUNTER (up'd
-    // here). Degenerate 1x1 rect -> points back at the sender.
-    dataflow_kernel_lib::Pipe<> reduce_pipe(
-        noc,
-        dataflow_kernel_lib::McastRect::single_core(mcast_sender_noc_x, mcast_sender_noc_y),
-        /*num_active_cores=*/1,  // unused on the receive path (receivers never multicast)
-        reduce_sender_sem,       // data ready (S->R level flag)
-        reduce_receiver_sem);    // consumed (R->S counter)
+    // data-ready FLAG (cleared+waited here, the ReceiverPipe's DATA_READY_SEM_ID), reduce_receiver_sem
+    // is the R->S consumed COUNTER (the CONSUMED_SEM_ID). The sender coords go to receive().
+    dataflow_kernel_lib::ReceiverPipe<reduce_sender_semaphore_id, reduce_receiver_semaphore_id> reduce_pipe(noc);
 
     CircularBuffer cb_ex_partial(cb_ex_partial_id);
     CircularBuffer cb_ex_global(cb_ex_global_id);
@@ -117,7 +110,7 @@ void kernel_main() {
             p_global_vars[0] = local_result.variance;
 
             // mcast_pipe: ack sender (consumed) + wait global-result VALID flag + clear for next round.
-            reduce_pipe.receive();
+            reduce_pipe.receive(mcast_sender_noc_x, mcast_sender_noc_y);
 
             local_means_ptr += local_stride_per_group;
             local_vars_ptr += local_stride_per_group;

@@ -59,7 +59,19 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
-#include "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_fused_activation.hpp"
+
+// TODO(nuked-op matmul): bmm_fused_activation.hpp lived under the deleted
+// matmul op tree. The packer-fused activation path is never instantiated here
+// (matmul_phase is only ever called with apply_silu_on_final=false), so we
+// provide a minimal compiling stub for the dead `if constexpr` branch. Restore
+// the real header (#include ".../matmul/device/kernels/compute/bmm_fused_activation.hpp")
+// once the matmul op is recreated.
+enum class KernelActivation : uint32_t { NONE = 0, SILU = 1 };
+
+template <KernelActivation ACT, uint32_t PARAM0 = 0, uint32_t PARAM1 = 0>
+FORCE_INLINE void apply_activation_from_pack(uint32_t /*out_subblock_num_tiles*/) {
+    tile_regs_wait();
+}
 
 namespace {
 
