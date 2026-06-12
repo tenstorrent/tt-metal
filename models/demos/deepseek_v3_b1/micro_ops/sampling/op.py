@@ -335,8 +335,16 @@ class SamplingOp:
         topk_out_scores_cb = 13
         topk_out_indices_cb = 14
         mask_cb = 17
-        semaphore_id = 0
-        local_ready_semaphore_id = 1
+        device = scores_tensor.device()
+        full_grid = device.compute_with_storage_grid_size()
+        sem_core_range = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_grid.x - 1, full_grid.y - 1))]
+        )
+        receiver_global_sem = ttnn.create_global_semaphore(device, sem_core_range, 0)
+        local_ready_global_sem = ttnn.create_global_semaphore(device, sem_core_range, 0)
+        receiver_semaphore_addr = int(ttnn.get_global_semaphore_address(receiver_global_sem))
+        local_ready_semaphore_addr = int(ttnn.get_global_semaphore_address(local_ready_global_sem))
+
         l1_alignment = 16
         bf16_tile_size = 2 * 32 * 32  # 2048 bytes per bf16 32x32 tile
         uint32_tile_size = 4 * 32 * 32  # 4096 bytes per uint32 32x32 tile
@@ -366,8 +374,8 @@ class SamplingOp:
             ("sampling_num_senders", num_cores),
             ("sampling_expected_remote_incs", expected_remote_incs),
             ("sampling_winner_cb", winner_cb),
-            ("sampling_receiver_semaphore_id", semaphore_id),
-            ("sampling_local_ready_semaphore_id", local_ready_semaphore_id),
+            ("sampling_receiver_semaphore_addr", receiver_semaphore_addr),
+            ("sampling_local_ready_semaphore_addr", local_ready_semaphore_addr),
             ("sampling_mesh_mode", 0),
             ("sampling_stage1_sender", 0),
             ("sampling_stage1_receiver", 0),
@@ -450,7 +458,7 @@ class SamplingOp:
         ]
         brisc_named_compile_time_args = [
             ("sampling_winner_page_bytes", winner_page_bytes),
-            ("sampling_local_ready_semaphore_id", 1),
+            ("sampling_local_ready_semaphore_addr", local_ready_semaphore_addr),
             ("sampling_topk_k", k),
             ("sampling_softmax_out_cb", softmax_out_cb),
             ("sampling_rand_cb", rand_cb),
@@ -669,22 +677,6 @@ class SamplingOp:
             )
         )
 
-        receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=semaphore_id,
-            core_ranges=all_cores,
-            initial_value=0,
-        )
-
-        full_grid = scores_tensor.device().compute_with_storage_grid_size()
-        loop_mcast_bbox_grid = ttnn.CoreRangeSet(
-            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_grid.x - 1, full_grid.y - 1))]
-        )
-        local_ready_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=local_ready_semaphore_id,
-            core_ranges=loop_mcast_bbox_grid,
-            initial_value=0,
-        )
-
         program_descriptor = ttnn.ProgramDescriptor(
             kernels=unified_kernel.get_kernel_descriptors().kernels,
             cbs=[
@@ -701,7 +693,7 @@ class SamplingOp:
                 mask_cb_descriptor,
             ]
             + topk_cbs,
-            semaphores=[receiver_semaphore_descriptor, local_ready_semaphore_descriptor],
+            semaphores=[],
         )
 
         tensors = [scores_tensor, indices_tensor, output_index_tensor]
@@ -793,8 +785,15 @@ class SamplingOp:
         topk_out_scores_cb = 13
         topk_out_indices_cb = 14
         mask_cb = 17
-        semaphore_id = 0
-        local_ready_semaphore_id = 1
+        mesh_device = scores_tensor.device()
+        full_grid = mesh_device.compute_with_storage_grid_size()
+        sem_core_range = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_grid.x - 1, full_grid.y - 1))]
+        )
+        receiver_global_sem = ttnn.create_global_semaphore(mesh_device, sem_core_range, 0)
+        local_ready_global_sem = ttnn.create_global_semaphore(mesh_device, sem_core_range, 0)
+        receiver_semaphore_addr = int(ttnn.get_global_semaphore_address(receiver_global_sem))
+        local_ready_semaphore_addr = int(ttnn.get_global_semaphore_address(local_ready_global_sem))
 
         l1_alignment = 16
         bf16_tile_size = 2 * 32 * 32
@@ -889,8 +888,8 @@ class SamplingOp:
                     ("sampling_num_senders", num_cores),
                     ("sampling_expected_remote_incs", expected_remote_incs),
                     ("sampling_winner_cb", winner_cb),
-                    ("sampling_receiver_semaphore_id", semaphore_id),
-                    ("sampling_local_ready_semaphore_id", local_ready_semaphore_id),
+                    ("sampling_receiver_semaphore_addr", receiver_semaphore_addr),
+                    ("sampling_local_ready_semaphore_addr", local_ready_semaphore_addr),
                     ("sampling_mesh_mode", 1),
                     ("sampling_stage1_sender", 1 if is_stage1_sender else 0),
                     ("sampling_stage1_receiver", 1 if is_stage1_receiver else 0),
@@ -972,7 +971,7 @@ class SamplingOp:
                     rand_output_addr = int(rand_per_device[device_idx].buffer_address())
                 brisc_named_compile_time_args = [
                     ("sampling_winner_page_bytes", winner_page_bytes),
-                    ("sampling_local_ready_semaphore_id", local_ready_semaphore_id),
+                    ("sampling_local_ready_semaphore_addr", local_ready_semaphore_addr),
                     ("sampling_topk_k", k),
                     ("sampling_softmax_out_cb", softmax_out_cb if is_final_mesh_device else 0),
                     ("sampling_rand_cb", rand_cb if is_final_mesh_device else 0),
@@ -1110,16 +1109,7 @@ class SamplingOp:
                         )
                     ],
                 )
-                receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=semaphore_id,
-                    core_ranges=all_cores,
-                    initial_value=0,
-                )
-                local_ready_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=local_ready_semaphore_id,
-                    core_ranges=all_cores,
-                    initial_value=0,
-                )
+                # Semaphores are now global (created above)
                 cbs = [winner_cb_descriptor, topk_in_scores_cb_descriptor, topk_in_indices_cb_descriptor]
 
                 cbs.append(
@@ -1219,7 +1209,7 @@ class SamplingOp:
                 program = ttnn.ProgramDescriptor(
                     kernels=kernel_result.kernels,
                     cbs=cbs,
-                    semaphores=[receiver_semaphore_descriptor, local_ready_semaphore_descriptor],
+                    semaphores=[],
                 )
 
                 if is_mesh_sender_core:

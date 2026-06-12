@@ -76,6 +76,10 @@ struct DramCorePrefetcherTensorLayout {
     uint32_t sub_stride_bytes = 0;     // DRAM byte stride between sub-bands within a block
     uint32_t block_stride_bytes = 0;   // DRAM byte stride between ring-blocks
     uint32_t page_bytes_per_recv = 0;  // bytes per receiver per full block (fifo_page_size)
+    // Receiver-contiguous-layout fields. Zero/unused under KRowMajor.
+    uint32_t layout_mode = 0;             // 0=KRowMajor, 1=ReceiverContiguous (matches LayoutMode)
+    uint32_t target_per_visit_pages = 1;  // recv-contig per-receiver visit size ceiling (blocks)
+    uint32_t recv_stride_bytes = 0;       // GDDR byte stride between receiver slabs in a bank
     uint32_t block_count = 0;          // K-blocks for this tensor (per-tensor; was the shared GCB ring size)
 } __attribute__((packed));
 

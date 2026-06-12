@@ -8,15 +8,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "api/dataflow/circular_buffer.h"
 
-ALWI void ACQ() {
-    tile_regs_acquire();
-    tile_regs_wait();
-}
-ALWI void REL() {
-    tile_regs_commit();
-    tile_regs_release();
-}
-
 void kernel_main() {
     constexpr int onetile = 1;
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
@@ -29,19 +20,24 @@ void kernel_main() {
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
         bool last_out = block == (per_core_block_cnt - 1);
 
-        ACQ();
         cb_c0.wait_front(onetile);
         cb_c1.wait_front(onetile);
 
-        cb_c24.reserve_back(onetile);
+        tile_regs_acquire();
         mul_tiles_init(tt::CBIndex::c_0, tt::CBIndex::c_1);
         mul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0);
-        pack_tile(0, tt::CBIndex::c_24);
-        cb_c24.push_back(onetile);
+        tile_regs_commit();
 
         cb_c0.pop_front(onetile);
         cb_c1.pop_front(onetile);
-        REL();
+
+        cb_c24.reserve_back(onetile);
+
+        tile_regs_wait();
+        pack_tile(0, tt::CBIndex::c_24);
+        tile_regs_release();
+
+        cb_c24.push_back(onetile);
 
         // reduce-w
         if (last_out) {

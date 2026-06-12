@@ -24,13 +24,17 @@ void kernel_main() {
             cb_wait_front(tt::CBIndex::c_1, onetile);
             for (uint32_t ht = 0; ht < Ht_per_batch_b; ht += h_blk) {
                 tile_regs_acquire();
-                tile_regs_wait();
                 for (uint32_t htr = 0; htr < h_blk; htr++) {
                     uint32_t current_index = b_offset + (ht + htr) * Wt + wt;
                     BCAST_OP<BroadcastType::ROW>(tt::CBIndex::c_0, tt::CBIndex::c_1, current_index, 0, htr);
-                    pack_tile<true>(htr, tt::CBIndex::c_16, current_index);
                 }
                 tile_regs_commit();
+
+                tile_regs_wait();
+                for (uint32_t htr = 0; htr < h_blk; htr++) {
+                    uint32_t current_index = b_offset + (ht + htr) * Wt + wt;
+                    pack_tile<true>(htr, tt::CBIndex::c_16, current_index);
+                }
                 tile_regs_release();
             }
             cb_pop_front(tt::CBIndex::c_1, onetile);
