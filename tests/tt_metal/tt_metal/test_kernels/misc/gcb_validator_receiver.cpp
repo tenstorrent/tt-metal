@@ -42,20 +42,25 @@ void kernel_main() {
     constexpr auto tensor_args = TensorAccessorArgs<6>();
 
     // ---- Runtime args ----
+    // Host derives `n_col_start` (= ring_pos * n_per_recv_tiles) and
+    // `total_n_tiles` (= N / TILE_WIDTH) per-receiver based on the GCB topology
+    // and tensor logical shape, so this kernel is layout-agnostic — the legacy
+    // K-row-major and the receiver-contiguous DRAM-core layouts both reach
+    // here with the right starting tile column for their ring position.
     uint32_t rt_idx = 0;
-    const uint32_t bank_id = get_arg_val<uint32_t>(rt_idx++);           // sender's DRAM bank
-    const uint32_t recv_idx_in_bank = get_arg_val<uint32_t>(rt_idx++);  // 0 .. num_receivers_per_sender-1
+    const uint32_t bank_id = get_arg_val<uint32_t>(rt_idx++);           // sender's DRAM bank (diagnostic only)
+    const uint32_t recv_idx_in_bank = get_arg_val<uint32_t>(rt_idx++);  // 0 .. num_receivers_per_sender-1 (diagnostic)
     const uint32_t bank_base_addr = get_arg_val<uint32_t>(rt_idx++);    // source tensor base addr
     const uint32_t k_block_w_tiles = get_arg_val<uint32_t>(rt_idx++);
-    const uint32_t n_per_bank_tiles = get_arg_val<uint32_t>(rt_idx++);
+    const uint32_t total_n_tiles = get_arg_val<uint32_t>(rt_idx++);  // N / TILE_WIDTH (full tensor)
     const uint32_t n_per_recv_tiles = get_arg_val<uint32_t>(rt_idx++);
+    const uint32_t n_col_start = get_arg_val<uint32_t>(rt_idx++);  // ring_pos * n_per_recv_tiles
+    (void)num_senders;                                             // total_n_tiles now comes directly from the host
 
     const auto accessor = TensorAccessor(tensor_args, bank_base_addr);
     const uint32_t tile_bytes = accessor.get_aligned_page_size();
-    const uint32_t total_n_tiles = num_senders * n_per_bank_tiles;
     const uint32_t slice_bytes = n_per_recv_tiles * tile_bytes;
     const uint32_t page_bytes = k_block_w_tiles * slice_bytes;
-    const uint32_t n_col_start = bank_id * n_per_bank_tiles + recv_idx_in_bank * n_per_recv_tiles;
 
     const uint32_t scratch_addr = get_write_ptr(scratch_cb_id);
 
