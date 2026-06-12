@@ -61,8 +61,9 @@ This is the heart of it — one lap of the state machine, repeated until it exit
 flowchart TD
     ROUTE["ROUTE<br/>find slowest op group"] -->|"levers for that op"| SELECT
     SELECT["🤖 SELECT<br/>pick one lever"] --> PLAN
-    PLAN["🤖 PLAN<br/>localize the edit<br/>file / location / change"] --> APPLY
-    APPLY["🤖 APPLY<br/>git checkpoint + edit"] --> VERIFY
+    PLAN["🤖 PLAN<br/>emit exact edits<br/>old_string -> new_string"] --> APPLY
+    APPLY["APPLY<br/>git checkpoint +<br/>apply patch (deterministic)"] --> VERIFY
+    APPLY -->|"anchor miss"| RC
     VERIFY -->|"parses and imports"| GATE["GATE_PCC<br/>correctness"]
     VERIFY -->|"syntax / import error"| RC["🤖 REPAIR_CODE"]
     GATE -->|"PCC ok"| REM["REMEASURE<br/>median device_ms"]
@@ -83,7 +84,7 @@ flowchart TD
 
     classDef agent fill:#fde68a,stroke:#b45309,color:#000;
     classDef term fill:#bbf7d0,stroke:#15803d,color:#000;
-    class SELECT,PLAN,APPLY,RC,RP agent;
+    class SELECT,PLAN,RC,RP agent;
     class STOP term;
 ```
 
@@ -97,10 +98,13 @@ Walking the lap:
   that kind of op.
 - **SELECT** is the agent's one judgment call: given the candidate levers and
   what's already been tried, pick one.
-- **PLAN** turns that lever into a localized `{file, location, change}` spec
-  using the model map — so the edit step gets an exact target, not a vague hint.
-- **APPLY** records a clean git SHA (so any change is undoable), then an edit
-  sub-agent applies PLAN's spec — that single change to the model file.
+- **PLAN** turns that lever into exact `{file, old_string, new_string}` edits —
+  the lead reads the file once and copies the current code verbatim as the anchor
+  (no line numbers, which drift).
+- **APPLY** records a clean git SHA (so any change is undoable), then applies
+  PLAN's edits **deterministically** — a plain find-and-replace, no LLM. The anchor
+  must match exactly once; a stale/ambiguous anchor fails loudly and routes to
+  REPAIR_CODE (which re-edits from the real file).
 - **VERIFY** parses and imports the edit — cheap, no hardware. **GATE_PCC** runs
   the end-to-end correctness test and compares PCC to the model's threshold.
 - When something breaks, the **REPAIR** loop hands the captured error back to the
@@ -195,12 +199,13 @@ exactly these steps:
 - the **discovery sub-agent** in the Before Loop (explore the model dir, report
   what it found),
 - **SELECT** (which lever to try this iteration),
-- **PLAN** (turn the chosen lever into a localized `{file, location, change}` spec),
-- **APPLY** (the editor applies that spec to the model source),
-- **REPAIR** (fix a broken or correctness-failing edit).
+- **PLAN** (turn the chosen lever into exact `{file, old_string, new_string}` edits),
+- **REPAIR** (re-edit when an anchor doesn't match, or correctness regresses).
 
-The lead model (sonnet) does the reasoning in SELECT/PLAN; the editor runs on the
-cheaper sub tier (haiku) because APPLY is mechanical transcription of the spec.
+APPLY is **not** an LLM step: PLAN emits content-anchored edits and APPLY applies
+them with a plain, self-validating find-and-replace (no model, no line numbers). The
+lead (sonnet) reasons in SELECT/PLAN; the editor (haiku) appears only in REPAIR —
+re-editing from the real file when an anchor misses or PLAN produced no edits.
 Keeping the agent on the edges and the machinery in the middle is what makes runs
 reproducible, resumable, and cheap to test.
 
@@ -315,6 +320,7 @@ agent/
   clock.py         utc_ts() — the single UTC timestamp source
   router.py        playbook index + tag-based lever routing
   tracy_tool.py    profile -> tt-perf-report -> tagged buckets
+  patch.py         deterministic content-anchored edit apply (PLAN edits, no LLM)
   handlers/        one file per loop stage. REAL: ROUTE, SELECT, PLAN, APPLY,
                    VERIFY, REPAIR_CODE, REPAIR_PCC, GATE_PCC, REMEASURE, DECIDE,
                    LOG/CHECK_EXIT. MOCK (teammate's task): COMMIT, REVERT.

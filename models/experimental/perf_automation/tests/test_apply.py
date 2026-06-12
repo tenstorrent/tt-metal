@@ -93,3 +93,37 @@ def test_apply_reverts_when_no_edit_and_budget_exhausted(tmp_path):
     ctx.deps["edit_runner"] = lambda **k: {"files": [], "model": "m", "usage": None}
     assert apply(ctx) == states.REVERT
     assert ctx.state["last_decision"]["reason"] == "edit_failed"
+
+
+# --- deterministic content-anchored patch path (PLAN edits) ----------------
+def test_apply_patch_deterministic_no_llm(tmp_path):
+    """PLAN edits apply via plain string-replace — the editor LLM is never called."""
+    from pathlib import Path
+
+    run = _run(tmp_path)
+    s = json.loads(run.state_path.read_text())
+    s["edit_spec"] = {"summary": "tweak", "edits": [{"file": "model.py", "old_string": "x = 1", "new_string": "x = 2"}]}
+    run.state_path.write_text(json.dumps(s))
+    ctx = LoopContext.from_run(run, index=[])
+    called = {"n": 0}
+
+    def editor(**k):
+        called["n"] += 1
+        return {"files": [], "model": "m", "usage": None}
+
+    ctx.deps["edit_runner"] = editor
+    assert apply(ctx) == states.VERIFY
+    assert called["n"] == 0  # no LLM editor invoked on the fast path
+    assert "model.py" in ctx.state["last_edit"]["files"]
+    assert (Path(ctx.model_root()) / "model.py").read_text() == "x = 2\n"
+
+
+def test_apply_patch_miss_routes_to_repair(tmp_path):
+    """A stale/missing anchor fails loudly -> REPAIR_CODE (self-heal)."""
+    run = _run(tmp_path)
+    s = json.loads(run.state_path.read_text())
+    s["edit_spec"] = {"summary": "t", "edits": [{"file": "model.py", "old_string": "NOPE", "new_string": "x = 2"}]}
+    run.state_path.write_text(json.dumps(s))
+    ctx = LoopContext.from_run(run, index=[])
+    assert apply(ctx) == states.REPAIR_CODE
+    assert ctx.state["last_verdict"]["status"] == "patch_failed"

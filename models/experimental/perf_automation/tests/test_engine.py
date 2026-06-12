@@ -31,13 +31,27 @@ def _entry(anchor):
 MOCK_INDEX = [_entry("mlp-fidelity-walk"), _entry("subblock-unlock"), _entry("fuse-activation-matmul")]
 
 
+_U = {"tokens_in": 1, "tokens_out": 1, "cost_usd": 0.0, "latency_s": 0.0}
+
+
 def _fake_plan(*, lever, section, skeleton, cwd=None):
+    # anchor "x = 1" survives re-application across laps (new_string keeps it)
     return {
-        "file": "model.py",
-        "location": "x",
-        "change": "tweak",
+        "summary": "tweak",
+        "edits": [{"file": "model.py", "old_string": "x = 1", "new_string": "x = 1  # tuned"}],
         "model": "mock",
-        "usage": {"tokens_in": 1, "tokens_out": 1, "cost_usd": 0.0, "latency_s": 0.0},
+        "usage": _U,
+    }
+
+
+def _metric(target):
+    return {
+        "name": "device_ms",
+        "unit": "ms",
+        "direction": "min",
+        "baseline": 12.091,
+        "current": 12.091,
+        "target": target,
     }
 
 
@@ -246,12 +260,17 @@ def _role_count(run, role):
 
 
 def test_engine_repair_code_self_heals_syntax_error(tmp_path):
-    """APPLY lands a broken edit -> VERIFY parse_error -> REPAIR_CODE re-edits ->
-    VERIFY ok -> GATE_PCC ... -> DONE. Proves the real REPAIR_CODE handler + graph.
-    (Counters reset per-lever each iteration, so we count the persisted repair calls.)"""
-    run = _mk_run(tmp_path)
+    """PLAN lands a syntactically broken edit -> VERIFY parse_error -> REPAIR_CODE
+    editor fixes it -> VERIFY ok -> ... -> DONE. (single lap via target=11.5)"""
+    run = _mk_run(tmp_path, state_overrides={"metric": _metric(11.5)})
     ctx = _ctx(run)
-    ctx.deps["edit_runner"] = _scripted_editor(_writes("def (:\n"), _writes("x = 2\n"))
+    ctx.deps["plan_runner"] = lambda **k: {
+        "summary": "break",
+        "edits": [{"file": "model.py", "old_string": "x = 1", "new_string": "def (:"}],
+        "model": "mock",
+        "usage": _U,
+    }
+    ctx.deps["edit_runner"] = _scripted_editor(_writes("x = 2\n"))  # repair editor fixes it
     final = engine.run(ctx, build_handlers())
     assert final == states.DONE
     assert _role_count(run, "repair_code") == 1  # exactly one code self-heal ran
@@ -259,11 +278,10 @@ def test_engine_repair_code_self_heals_syntax_error(tmp_path):
 
 
 def test_engine_repair_pcc_recovers_low_pcc(tmp_path):
-    """GATE_PCC sees pcc_low -> REPAIR_PCC re-edits -> VERIFY -> GATE_PCC ok ->
-    REMEASURE -> DECIDE. Proves the real REPAIR_PCC handler + graph."""
-    run = _mk_run(tmp_path)
-    ctx = _ctx(run)
-    ctx.deps["edit_runner"] = _scripted_editor(_writes("x = 2\n"))  # always valid syntax
+    """Valid edit -> GATE_PCC pcc_low -> REPAIR_PCC -> GATE_PCC ok -> ... -> DONE."""
+    run = _mk_run(tmp_path, state_overrides={"metric": _metric(11.5)})
+    ctx = _ctx(run)  # _fake_plan emits a valid edit
+    ctx.deps["edit_runner"] = _scripted_editor(_writes("x = 1  # tuned\n"))  # repair editor (valid)
     pcc_calls = {"n": 0}
 
     def pcc_runner(c):
@@ -274,18 +292,23 @@ def test_engine_repair_pcc_recovers_low_pcc(tmp_path):
     final = engine.run(ctx, build_handlers())
     assert final == states.DONE
     assert _role_count(run, "repair_pcc") == 1  # exactly one PCC recovery ran
-    assert _role_count(run, "repair_code") == 0  # code path untouched
+    assert _role_count(run, "repair_code") == 0
     assert pcc_calls["n"] >= 2  # gate failed then passed
 
 
 def test_engine_repair_code_exhausts_budget_then_reverts(tmp_path):
-    """Editor can never fix the syntax error: REPAIR_CODE runs up to MAX_CODE_FIX
-    times for a lever, then the graph discards (edit_failed) -> REVERT."""
+    """Edit can never be fixed: REPAIR_CODE runs up to MAX_CODE_FIX, then discards
+    (edit_failed) -> REVERT."""
     run = _mk_run(tmp_path)
     ctx = _ctx(run)
+    ctx.deps["plan_runner"] = lambda **k: {
+        "summary": "break",
+        "edits": [{"file": "model.py", "old_string": "x = 1", "new_string": "def (:"}],
+        "model": "mock",
+        "usage": _U,
+    }
     ctx.deps["edit_runner"] = _scripted_editor(_writes("def (:\n"))  # always broken
     final = engine.run(ctx, build_handlers())
     assert final in states.TERMINAL
-    # at least one full budget exhaustion happened (>= MAX repairs) and ended in discard
     assert _role_count(run, "repair_code") >= states.MAX_CODE_FIX
     assert ctx.state["last_decision"]["reason"] == "edit_failed"

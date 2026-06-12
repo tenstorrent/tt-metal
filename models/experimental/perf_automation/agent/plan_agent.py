@@ -1,9 +1,10 @@
 """PLAN agent (PLAN 8.x) — the lead turns a chosen lever into a LOCALIZED edit spec.
 
 Reads the lever's playbook guidance + the model map, reads the target file(s)
-just-in-time (Read/Grep, no Edit), and emits {file, location, change} — a precise,
-minimal instruction the editor applies mechanically. If the optimization is
-already present, returns change="NOOP: ..." so the loop skips a wasted edit.
+just-in-time (Read/Grep, no Edit), and emits content-anchored edits
+{file, old_string, new_string} — exact find-and-replace the harness applies
+deterministically (no editor LLM, no line numbers). If the optimization is
+already present, returns edits=[] (summary "NOOP: ...") so the loop skips it.
 
 Deterministic parts (prompt, validation) are unit-tested; the live LEAD call is
 the same untested boundary as the other agents.
@@ -21,17 +22,19 @@ class PlanError(Exception):
 
 
 PROMPT_TEMPLATE = (
-    "You are planning ONE code edit to apply a performance optimization to a model.\n\n"
+    "You are planning ONE performance optimization edit to a model.\n\n"
     "Lever: {lever}\n\n"
     "Guidance (playbook section):\n{section}\n\n"
     "Model map — where the ops live (paths are relative to the model root):\n{skeleton}\n\n"
-    "Read the relevant file(s) to confirm the exact spot, then output EXACTLY ONE "
-    "JSON object and nothing else:\n"
-    '  {{"file": <repo-relative path to edit>, "location": <function + approx line, '
-    'e.g. "BgeM3MLP.forward, the FF1 ttnn.linear (~L107)">, "change": <a precise, '
-    "minimal instruction an engineer can apply directly>}}\n"
-    'If this optimization is ALREADY present in the code, set "change" to '
-    '"NOOP: already applied" (and still name the file/location).'
+    "Read the target file(s) to confirm the EXACT current code, then express the change "
+    "as one or more precise find-and-replace edits. For each edit:\n"
+    "  - old_string: copy the CURRENT code VERBATIM (exact whitespace/indentation), with "
+    "enough surrounding lines that it appears EXACTLY ONCE in the file.\n"
+    "  - new_string: the replacement (use an empty string to delete).\n"
+    "Do NOT use line numbers. Output EXACTLY ONE JSON object and nothing else:\n"
+    '  {{"summary": <one sentence>, "edits": [{{"file": <repo-relative path>, '
+    '"old_string": <exact current code>, "new_string": <replacement or empty string>}}]}}\n'
+    'If this optimization is ALREADY present, return {{"summary": "NOOP: already applied", "edits": []}}.'
 )
 
 
@@ -50,12 +53,20 @@ def _validate_spec(raw: Any) -> dict:
         raise PlanError(f"plan agent returned invalid JSON: {exc}") from exc
     if not isinstance(obj, dict):
         raise PlanError("edit spec must be a JSON object")
-    file, change = obj.get("file"), obj.get("change")
-    if not isinstance(file, str) or not file.strip():
-        raise PlanError("edit spec.file must be a non-empty path")
-    if not isinstance(change, str) or not change.strip():
-        raise PlanError("edit spec.change must be a non-empty instruction")
-    return {"file": file, "location": str(obj.get("location", "")), "change": change}
+    raw_edits = obj.get("edits")
+    if not isinstance(raw_edits, list):
+        raise PlanError("edit spec.edits must be a list (empty list = NOOP)")
+    edits = []
+    for i, e in enumerate(raw_edits):
+        if not isinstance(e, dict):
+            raise PlanError(f"edit[{i}] must be a JSON object")
+        f, old = e.get("file"), e.get("old_string")
+        if not isinstance(f, str) or not f.strip():
+            raise PlanError(f"edit[{i}].file must be a non-empty path")
+        if not isinstance(old, str) or old == "":
+            raise PlanError(f"edit[{i}].old_string must be a non-empty anchor")
+        edits.append({"file": f, "old_string": old, "new_string": str(e.get("new_string", ""))})
+    return {"summary": str(obj.get("summary", "")), "edits": edits}
 
 
 def make_plan_runner(

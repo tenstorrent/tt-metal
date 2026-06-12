@@ -1,7 +1,7 @@
 """PLAN handler (PLAN 8.x) — REAL. Lead turns the chosen lever into a localized spec.
 
 Reads the lever's playbook section + the op-class-filtered model map, lets the
-lead (Read/Grep, no Edit) confirm the spot, and emits {file, location, change}.
+lead (Read/Grep, no Edit) confirm the spot, and emits content-anchored edits.
 NOOP (already applied) -> discard cheaply, no edit/gate/measure wasted.
 Planner injectable via ctx.deps["plan_runner"].
 
@@ -43,14 +43,17 @@ def plan(ctx) -> str:
         prompt=spec.get("prompt"),
         response=spec.get("response"),
     )
-    ctx.state["edit_spec"] = {"file": spec.get("file"), "location": spec.get("location"), "change": spec.get("change")}
+    edits = spec.get("edits") or []
+    summary = str(spec.get("summary", ""))
+    ctx.state["edit_spec"] = {"summary": summary, "edits": edits}
 
-    if str(spec.get("change", "")).strip().upper().startswith("NOOP"):
+    # No edits (or an explicit NOOP) = the optimization is already present.
+    if not edits or summary.strip().upper().startswith("NOOP"):
         ctx.state["last_decision"] = {"result": "discard", "reason": "already_applied"}
-        ctx.log_event(states.PLAN, "info", f"NOOP: {lever} already applied ({spec.get('file')})")
+        ctx.log_event(states.PLAN, "info", f"NOOP: {lever} already applied")
         return states.REVERT
 
-    ctx.log_event(states.PLAN, "info", f"{spec.get('file')}: {str(spec.get('change'))[:80]}")
+    ctx.log_event(states.PLAN, "info", f"{len(edits)} edit(s): {summary[:80]}")
     return states.APPLY
 
 

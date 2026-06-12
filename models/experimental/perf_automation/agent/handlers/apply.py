@@ -1,6 +1,7 @@
 """APPLY handler (PLAN 8.5) — REAL, resilient.
 
-Record a clean git checkpoint, then the edit sub-agent applies the lever. We do
+Record a clean git checkpoint. If PLAN produced content-anchored edits, apply
+them deterministically (no LLM). Otherwise the edit sub-agent applies the lever. We do
 NOT blindly trust the agent's self-reported file list: edits land on disk before
 the agent's final message, so if the report is empty or the agent errored, we
 fall back to `git diff` for ground truth. If nothing actually changed -> route to
@@ -12,7 +13,7 @@ Out: ctx.state["git_sha_clean"], ["last_edit"]. -> VERIFY (or REPAIR_CODE/REVERT
 
 from __future__ import annotations
 
-from .. import gitio, router, states
+from .. import gitio, patch, router, states
 
 
 def apply(ctx) -> str:
@@ -21,6 +22,31 @@ def apply(ctx) -> str:
     clean = gitio.head_sha(repo)
     ctx.state["git_sha_clean"] = clean  # REVERT target, recorded BEFORE editing
 
+    spec = ctx.state.get("edit_spec")
+    edits = spec.get("edits") if isinstance(spec, dict) else None
+
+    # Fast path: PLAN gave content-anchored edits -> apply DETERMINISTICALLY, no LLM.
+    # Self-validating: a missing / non-unique anchor fails loudly and self-heals.
+    if edits:
+        changed, failures = patch.apply_edits(ctx.model_root(), edits)
+        if not failures:
+            ctx.state["last_edit"] = {
+                "files": changed,
+                "summary": spec.get("summary", ""),
+                "reported": changed,
+                "error": None,
+            }
+            ctx.log_event(states.APPLY, "info", f"patch applied: {len(edits)} edit(s) -> {changed}")
+            return states.VERIFY
+        reason = "; ".join(f"{f['file']}: {f['reason']}" for f in failures)
+        ctx.state["last_verdict"] = {"status": "patch_failed", "error": reason}
+        ctx.log_event(states.APPLY, "warn", f"patch did not apply cleanly: {reason}")
+        if ctx.state.get("code_fix_attempts", 0) < states.MAX_CODE_FIX:
+            return states.REPAIR_CODE
+        ctx.state["last_decision"] = {"result": "discard", "reason": "edit_failed"}
+        return states.REVERT
+
+    # Fallback: PLAN produced no structured edits (planning failed / improvise) -> LLM editor.
     try:
         section = router.read_section(lever) if lever else ""
     except KeyError:
