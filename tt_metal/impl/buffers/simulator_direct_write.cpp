@@ -7,6 +7,7 @@
 #if defined(TT_UMD_BUILD_SIMULATION)
 
 #include "llrt/rtoptions.hpp"
+#include "impl/allocator/allocator.hpp"
 #include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt_stl/span.hpp>
@@ -54,6 +55,13 @@ bool try_direct_write(
     const BufferRegion& region,
     const CoreRangeSet* logical_core_filter) {
     if (!is_direct_write_enabled(guard, src, region)) {
+        return false;
+    }
+    if (shard_view.buffer_type() == BufferType::TRACE) {
+        return false;
+    }
+    // Trace-enabled tests depend on normal CQ ordering/capture semantics even for tensor writes.
+    if (shard_view.device()->allocator_impl()->get_config().trace_region_size != 0) {
         return false;
     }
     write_shard(shard_view, src, region, logical_core_filter);
