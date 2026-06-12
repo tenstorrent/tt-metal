@@ -77,7 +77,7 @@ from models.experimental.ops.descriptors.fusion.common import (
 # to be exposed to Python before general use. Until then, construction is gated
 # behind an opt-in environment variable so accidental callers fail loudly rather
 # than silently depending on unfinished infrastructure.
-_ENABLE_ENV_VAR = "TTNN_ENABLE_PARALLEL_SEQUENTIAL"
+_ENABLE_ENV_VAR = "TT_METAL_ENABLE_PARALLEL_SEQUENTIAL"
 
 
 def _check_fusion_enabled() -> None:
