@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import re
 import shutil
@@ -10,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .bringup import REPO_ROOT
-from .discovery import safe_relative_to_root
+from .discovery import BRINGUP_ROOT, safe_relative_to_root
 from .family_backends import DEFAULT_TEMPLATE_PYTEST_EXCLUDE_K
 
 COMPONENT_SUBMODULE_HINTS: Dict[str, List[str]] = {
@@ -1761,6 +1762,29 @@ def {component_name_for_shim}(device, torch_module=None):
 '''
 
 
+def _resolve_canonical_class_from_target(tt_reuse_target: str) -> Optional[str]:
+    rel = tt_reuse_target.rstrip("/")
+    seen: List[Path] = []
+    p = Path(rel)
+    if p.is_file():
+        seen.append(p)
+    for root in (BRINGUP_ROOT(), REPO_ROOT):
+        rp = root / rel
+        if rp.is_file() and rp not in seen:
+            seen.append(rp)
+    for fp in seen:
+        try:
+            tree = ast.parse(fp.read_text(encoding="utf-8", errors="ignore"))
+        except Exception:
+            continue
+        classes = [n.name for n in tree.body if isinstance(n, ast.ClassDef)]
+        if not classes:
+            continue
+        tt_classes = [c for c in classes if c.startswith("Tt")]
+        return (tt_classes or classes)[0]
+    return None
+
+
 def _render_canonical_import_stub(
     *,
     component_name: str,
@@ -1797,7 +1821,11 @@ def _render_canonical_import_stub(
     # this via tt_class on the ReuseEntry. When unknown, default to the
     # component CamelCase (which works for common cases like RMSNorm,
     # MLP, Attention where the class name matches the component name).
-    canonical_import_target = canonical_class or class_name
+    canonical_import_target = canonical_class
+    if not canonical_import_target:
+        canonical_import_target = _resolve_canonical_class_from_target(tt_reuse_target)
+    if not canonical_import_target:
+        canonical_import_target = class_name
     return _CANONICAL_IMPORT_STUB_TEMPLATE.format(
         component_name=component_name,
         # Module-level shim name MUST equal the safe slug — the
