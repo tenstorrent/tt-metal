@@ -204,6 +204,17 @@ void kernel_main() {
         constexpr uint32_t pre_groups_per_row = (per_head_norm != 0) ? num_heads_per_device : 1u;
         constexpr uint32_t pre_group_width = (per_head_norm != 0) ? head_dim_tiles : num_tile_cols;
         {
+            // PERF NOTE (RMS_PRE = ~29% of the compute floor, ALL shapes): this phase
+            // is sum(x^2) per row = mul_tiles(x,x) (num_tile_cols FPU muls) then
+            // reduce<SUM,REDUCE_ROW>. Profiling flagged it as the top universal cost,
+            // but there is no cheaper path with current LLKs: the square is inherent
+            // (mul_tiles is the minimal square) and can't fold into the reduce matmul
+            // (which is linear, input * ones-scalar). A real speedup needs a NEW LLK
+            // that squares in the unpacker/math before the row-reduce (a "reduce of
+            // squares" primitive) -- kernel-dev scope, deferred. Init-hoisting was
+            // tried and does NOT help (the per-row reduce clobbers the math config, so
+            // mul_tiles_init must re-run each row; it's FPU-throughput-bound, not
+            // init-bound).
             DeviceZoneScopedN("RMS_PRE");
             if constexpr (streaming_low_l1) {
                 // Streamed whole-row PRE (rows_in_chunk == 1, one group). Input
