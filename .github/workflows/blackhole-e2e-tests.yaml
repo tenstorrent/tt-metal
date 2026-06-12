@@ -40,6 +40,7 @@ on:
           - sdpa
           - bh-sdpa-nightly-integration
           - bh-ring-sdpa-perf
+          - bh-lb-deepseek-prefill-perf
       build-type:
         required: false
         type: choice

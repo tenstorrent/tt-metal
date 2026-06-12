@@ -227,7 +227,7 @@
     exit $exit_code
   skus:
     bh_loudbox:
-      timeout: 75
+      timeout: 30  # baseline branch: row not selected, shrunk to free budget for perf
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: models
 
@@ -240,23 +240,27 @@
     exit $exit_code
   skus:
     bh_loudbox:
-      timeout: 55
+      timeout: 30  # baseline branch: row not selected, shrunk to free budget for perf
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
 
 - id: bh-lb-deepseek-prefill-perf
   name: bh_lb_DeepSeek_PREFILL_PERF
   model-name: deepseek_prefill
+  # Baseline capture: dispatch+combine only, 5x, never abort so all five
+  # measured-ns samples reach the log regardless of baseline pass/fail.
   cmd: |
-    exit_code=0
-    pytest models/demos/deepseek_v3_d_p/tests/perf/test_dispatch_combine_perf.py -m models_device_performance_bare_metal -vvv --tb=short --timeout=900 || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_perf.py -vvv --tb=short || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/perf/test_mla_perf.py -vvv --tb=short || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/perf/test_prefill_block_perf.py -k "block_2x4" -vvv --tb=short || exit_code=$?
-    exit $exit_code
+    for i in 1 2 3 4 5; do
+      echo "===== dispatch_combine baseline run $i/5 ====="
+      pytest models/demos/deepseek_v3_d_p/tests/perf/test_dispatch_combine_perf.py -m models_device_performance_bare_metal -vvv --tb=short --timeout=900 || true
+    done
+    # pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_perf.py -vvv --tb=short
+    # pytest models/demos/deepseek_v3_d_p/tests/perf/test_mla_perf.py -vvv --tb=short
+    # pytest models/demos/deepseek_v3_d_p/tests/perf/test_prefill_block_perf.py -k "block_2x4" -vvv --tb=short
+    exit 0
   skus:
     bh_loudbox:
-      timeout: 30
+      timeout: 90  # 5 sequential dispatch_combine runs
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: models
 
