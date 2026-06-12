@@ -84,16 +84,16 @@ struct D2DStreamConfig {
     //     transfer (a transfer is uninterruptible). The model graph calls
     //     wait_for_fabric_links() before a fabric op (block until the service is off
     //     the link) and release_fabric_links() after, once per transfer it wants.
-    //   false (default): OWN mode. The service opens its fabric connection at start
-    //     and never relinquishes it (standalone use with no competing fabric ops);
-    //     the lease API and the per-transfer handshake are compiled out. This is the
-    //     original V0 behavior and the safe default.
+    //   false: OWN mode. The service opens its fabric connection at start and never
+    //     relinquishes it (standalone use with no competing fabric ops); the lease
+    //     API and the per-transfer handshake are compiled out. This is the original
+    //     V0 behavior.
     //
-    // NOTE: in lease mode a service that is never granted a turn hangs waiting for
-    // its first transfer — correct for the model graph (it always grants), a trap
-    // for any caller that omits release_fabric_links(). Explicitly set true only
-    // when competing fabric ops share the same links.
-    bool share_fabric_links = false;
+    // FOOTGUN: in lease mode a service that is never granted a turn hangs waiting
+    // for its first transfer — correct for the model graph (it always grants), a
+    // trap for a naive standalone caller. Set false when there are no competing
+    // fabric ops.
+    bool share_fabric_links = true;
 };
 
 // Identifies the two endpoints of a MULTI-HOST D2D pair and the communicator the

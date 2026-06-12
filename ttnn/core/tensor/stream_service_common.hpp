@@ -108,12 +108,12 @@ inline uint32_t core_range_size(const CoreRange& range) {
     return (range.end_coord.x - range.start_coord.x + 1) * (range.end_coord.y - range.start_coord.y + 1);
 }
 
-// Per-coord worker-sync CT-arg block. `sem_addr` is the mesh-wide worker-grid
+// Per-coord worker-sync CT-arg block. `data_ready_sem_addr` is the mesh-wide worker-grid
 // GlobalSemaphore; `counter_addr` is the per-coord service-core L1 word.
 // All zero when disabled.
 struct WorkerSyncArgs {
     bool enabled = false;
-    uint32_t sem_addr = 0;
+    uint32_t data_ready_sem_addr = 0;
     uint32_t counter_addr = 0;
     uint32_t mcast_noc_x_start = 0;
     uint32_t mcast_noc_y_start = 0;
@@ -126,14 +126,14 @@ inline WorkerSyncArgs make_worker_sync_args(
     IDevice* device,
     const CoreRange& worker_cores,
     uint32_t num_workers,
-    uint32_t sem_addr,
+    uint32_t data_ready_sem_addr,
     uint32_t counter_addr,
     bool enabled) {
     WorkerSyncArgs ws;
     const auto start_phys = device->worker_core_from_logical_core(worker_cores.start_coord);
     const auto end_phys = device->worker_core_from_logical_core(worker_cores.end_coord);
     ws.enabled = enabled;
-    ws.sem_addr = sem_addr;
+    ws.data_ready_sem_addr = data_ready_sem_addr;
     ws.counter_addr = counter_addr;
     ws.mcast_noc_x_start = static_cast<uint32_t>(start_phys.x);
     ws.mcast_noc_y_start = static_cast<uint32_t>(start_phys.y);
@@ -148,7 +148,7 @@ inline WorkerSyncArgs make_worker_sync_args(
 // H2D + a D2D sender, or inbound + outbound D2D) share a device without
 // re-picking an already-taken core and TT_FATALing in claim(). `side` is a
 // human-readable label used in the error message only.
-inline std::map<distributed::MeshCoordinate, CoreCoord> claim_one_service_core_per_coord(
+inline std::map<distributed::MeshCoordinate, CoreCoord> claim_service_cores(
     const std::shared_ptr<distributed::MeshDevice>& mesh,
     const std::vector<distributed::MeshCoordinate>& coords,
     const char* side) {

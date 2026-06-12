@@ -41,9 +41,6 @@ namespace tt::tt_metal {
 
 namespace {
 
-// make_zero_host_tensor / ChunkPlan / derive_chunk_plan / core_range_size are
-// shared verbatim with the D2D service (d2d_stream_service.cpp) via
-// stream_service_common.hpp.
 using namespace stream_service_common;
 
 // Zero-copy wrap of caller-provided raw bytes into a host Tensor whose spec
@@ -93,9 +90,6 @@ Tensor make_borrowed_host_tensor(ttsl::Span<const std::byte> bytes, const Tensor
     }
     TT_THROW("Unreachable");
 }
-
-// WorkerSyncArgs is shared with the D2D service via stream_service_common.hpp.
-// The using-directive below pulls it in without the namespace prefix.
 
 // Metadata multicast CT-arg block. Populated when Config::metadata_size_bytes > 0;
 // all fields zero when disabled (the kernel's `if constexpr (metadata_enabled)`
@@ -163,7 +157,7 @@ Program build_persistent_h2d_program(
         // Worker-sync block (indices 8..15). All zero when disabled; the
         // kernel's `if constexpr (worker_sync_enabled)` guards every use.
         static_cast<uint32_t>(worker_sync.enabled ? 1u : 0u),
-        worker_sync.sem_addr,
+        worker_sync.data_ready_sem_addr,
         worker_sync.counter_addr,
         worker_sync.mcast_noc_x_start,
         worker_sync.mcast_noc_y_start,
@@ -245,10 +239,10 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
     // choice per coord and use it as the recv core for that coord's socket,
     // semaphore, and persistent program. H2DSocket auto-detects service cores
     // and allocates its config + data buffers from the service-core L1 region.
-    // claim_one_service_core_per_coord skips already-claimed cores, so an H2D +
+    // claim_service_cores skips already-claimed cores, so an H2D +
     // D2D (or two D2D directions) on the same device each get their own core.
     const auto& coords = topology.mesh_coords();
-    service_cores_ = claim_one_service_core_per_coord(mesh_device_, coords, "H2D");
+    service_cores_ = claim_service_cores(mesh_device_, coords, "H2D");
 
     // --- B4: create one socket per participating mesh coord -------------------
     // Iterating topology.mesh_coords() (not the full mesh shape) keeps replication-

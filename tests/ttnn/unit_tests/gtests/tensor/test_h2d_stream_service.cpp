@@ -518,9 +518,6 @@ void run_h2d_stream_service_case(
 
 using H2DStreamServiceTest = ::tt::tt_metal::GenericMeshDeviceFixture;
 
-// replicate_all() lives in stream_service_test_utils.hpp (shared with the D2D
-// stream-service tests).
-
 // A — Replicated sweep. Mirrors the row structure used by the sharded sweep
 // below: each row varies (per_row_size, N, scratch_cb, fifo) so the matrix
 // covers both axes simultaneously:
