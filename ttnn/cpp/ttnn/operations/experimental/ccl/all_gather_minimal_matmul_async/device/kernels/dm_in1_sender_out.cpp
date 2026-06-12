@@ -398,6 +398,8 @@ void kernel_main() {
                     const uint32_t local_k_start = my_rank * K_tiles_per_device;
                     const uint32_t local_k_end = local_k_start + K_tiles_per_device;
                     {
+                        Noc noc;
+                        CircularBuffer cb(cb_id_in1);
                         uint32_t write_ptr = in1_start_address;
                         // Left half (real data: local weight DRAM if this is our stripe, else PWB).
                         for (uint32_t k = 0; k < k_left_tiles; k++) {
@@ -428,7 +430,7 @@ void kernel_main() {
                                     continue;
                                 }
                                 if (global_k_tile >= K_tiles) {
-                                    fill_zeros_async(write_ptr, in1_tile_size);
+                                    fill_zeros_async(noc, cb, in1_tile_size, write_ptr - in1_start_address);
                                 } else if (local) {
                                     noc_async_read_tile(
                                         (global_k_tile - local_k_start) * N_tiles + n, local_weight_reader, write_ptr);
@@ -500,7 +502,8 @@ void kernel_main() {
                         if constexpr (fsdp_num_targets_backward == 0) {
                             // fsdp Dev 0 (chain head): long send via mux_backward + pkt_hdrs_forward
                             if constexpr (fsdp_num_targets_forward > 0) {
-                                if (in1_core_order_index == fsdp_backward_in1_core_order_index) {
+                                if (in1_core_order_index == fsdp_backward_in1_core_order_index &&
+                                    k_block_iter < (K_num_blocks - K_blocks_per_device)) {
                                     forward_in1_half_block_to_fabric_neighbor(
                                         k_block_left_tile,
                                         n_tile,
@@ -522,7 +525,8 @@ void kernel_main() {
                             }
                         } else {
                             // fsdp Dev k > 0: short send via mux_forward + pkt_hdrs_backward
-                            if (in1_core_order_index == fsdp_forward_in1_core_order_index) {
+                            if (in1_core_order_index == fsdp_forward_in1_core_order_index &&
+                                k_block_iter < (K_num_blocks - K_blocks_per_device)) {
                                 forward_in1_half_block_to_fabric_neighbor(
                                     k_block_left_tile,
                                     n_tile,
