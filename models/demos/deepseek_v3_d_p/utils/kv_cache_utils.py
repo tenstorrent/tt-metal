@@ -229,7 +229,8 @@ def create_kv_chunk_address_table_deepseek(
     """Block-cyclic-aware KV chunk address table for the DeepSeek non-balanced prefill cache.
 
     The DeepSeek prefill KV cache stores positions in BLOCK-CYCLIC order across the SP shards
-    (see tt.mla.utils.blockcyclic_positions / update_padded_kv_cache): natural position P lives on
+    (see models.demos.deepseek_v3_d_p.tt.mla.utils.blockcyclic_positions /
+    ttnn.experimental.deepseek_prefill.update_padded_kv_cache): natural position P lives on
     SP-row chip ``c = (P % chunk_size_global) // chunk_local`` at local row
     ``lr = (P // chunk_size_global) * chunk_local + (P % chunk_size_global) % chunk_local``,
     where ``chunk_local = chunk_size_global // sp``.
@@ -245,7 +246,9 @@ def create_kv_chunk_address_table_deepseek(
     offset = (linear // banks) * chunk_size_bytes), so a [0, N) migration moves exactly the
     prefilled KV. ``slot`` is the user index; cache batch index = slot * num_layers + layer.
     """
-    sp = mesh_shape[sp_axis]
+    if sp_axis != 0:
+        raise ValueError(f"DeepSeek block-cyclic KV cache assumes sp_axis=0 (mesh rows); got sp_axis={sp_axis}")
+    sp = mesh_shape[0]
     assert (
         seq_len % (sp * NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK) == 0
     ), f"seq_len {seq_len} must be divisible by sp({sp}) * {NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK}"

@@ -86,7 +86,8 @@ def build_and_serialize_kv_chunk_table(
     cfg.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     cfg.chunk_size_bytes = _CHUNK_SIZE_BYTES
     if layout == "deepseek":
-        assert chunk_size_global is not None, "layout='deepseek' requires chunk_size_global"
+        if chunk_size_global is None:
+            raise ValueError("layout='deepseek' requires chunk_size_global")
         table = create_kv_chunk_address_table_deepseek(
             config=cfg,
             mesh_device=mesh_device,
