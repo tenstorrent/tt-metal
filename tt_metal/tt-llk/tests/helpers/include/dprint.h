@@ -45,9 +45,9 @@ inline __attribute__((always_inline)) void invalidate_l1_cache()
 #error "LLK_DEVICE_PRINT_BUFFER_BASE and LLK_RUNTIME_ARGS_START must be defined by the build"
 #endif
 
-// On Quasar the LLK buffer base is handed to the build in the uncached L1 alias window
+// On Quasar the LLK buffer base is handed to the build in the uncached L1 alias region
 // (the upper 4 MB at MEM_L1_UNCACHED_BASE; see kernel_buffer_base in test_config.py),
-// so its numeric value carries that offset. Strip it to recover the physical L1 address
+// so its numeric value carries that offset. Strip it to get the physical L1 address
 // for the RUNTIME_ARGS overlap check below.
 #if defined(ARCH_QUASAR)
 constexpr uintptr_t llk_device_print_buffer_l1_base = LLK_DEVICE_PRINT_BUFFER_BASE - MEM_L1_UNCACHED_BASE;

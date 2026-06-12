@@ -7,7 +7,6 @@ import pytest
 import torch
 from helpers.bfp_format_utils import bfp4b_to_float16b, bfp8b_to_float16b
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.data_format_inference import VALID_QUASAR_SRC_REG_FORMATS
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import DestAccumulation, Tilize
 from helpers.logger import strip_ansi
@@ -157,21 +156,26 @@ def _tilized_index(h: int, w: int) -> int:
     return (face_r * 2 + face_c) * 256 + (h % 16) * 16 + (w % 16)
 
 
-def _tile_test_formats() -> list[DataFormat]:
-    """Formats test_dprint_tile can exercise on the current arch.
-
-    tile_slice unpacks the input into SrcA, so on Quasar a format must be a
-    valid SrcA register format (this drops UInt16/Bfp4_b/Bfp8_b/UInt32). 32-bit
-    formats are kept; test_dprint_tile runs them with DestAccumulation.Yes since
-    Quasar can't pack 32-bit out of a 16-bit dest. WH/BH accept all."""
-    formats = list(_BYTES_PER_ELT.keys())
-    if get_chip_architecture() == ChipArchitecture.QUASAR:
-        formats = [f for f in formats if f in VALID_QUASAR_SRC_REG_FORMATS]
-    return formats
+# Formats test_dprint_tile exercises. tile_slice unpacks the input into SrcA, so on
+# Quasar a format must be a valid SrcA register format; that leaves the 5 below
+# (UInt16/Bfp4_b/Bfp8_b/UInt32 aren't). The 32-bit formats run with
+# DestAccumulation.Yes since Quasar can't pack 32-bit out of a 16-bit dest. WH/BH
+# accept everything in _BYTES_PER_ELT.
+_TILE_TEST_FORMATS = (
+    [
+        DataFormat.Int8,
+        DataFormat.UInt8,
+        DataFormat.Float16_b,
+        DataFormat.Float32,
+        DataFormat.Int32,
+    ]
+    if get_chip_architecture() == ChipArchitecture.QUASAR
+    else list(_BYTES_PER_ELT.keys())
+)
 
 
 @parametrize(
-    formats=input_output_formats(_tile_test_formats(), same=True),
+    formats=input_output_formats(_TILE_TEST_FORMATS, same=True),
 )
 def test_dprint_tile(formats):
     formats = formats[0]

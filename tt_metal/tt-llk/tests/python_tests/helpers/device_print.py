@@ -344,15 +344,10 @@ class ElfStrings:
             self._info_record_size, self._info_unpack_fmt = _STRING_INFO_LAYOUT[
                 elf.elf.elfclass
             ]
-            # tt-exalens drifted ParsedElfFile.sections between a name-keyed dict
-            # (<=0.3.20, what main pins) and a list[ParsedElfFileSection] (0.3.17).
-            # The emulator box can ship the list-shape build, so normalize both to a
-            # dict here rather than depend on the installed version.
-            raw_sections = elf.sections
             sections = (
-                raw_sections
-                if isinstance(raw_sections, dict)
-                else {s.name: s for s in raw_sections}
+                elf.sections
+                if isinstance(elf.sections, dict)
+                else {s.name: s for s in elf.sections}
             )
             strings = sections.get(".device_print_strings")
             if strings is not None:
@@ -478,9 +473,8 @@ class ElfStrings:
 
 # DataFormat enum values from tt_metal/hw/inc/internal/tt-{1,2}xx/*/tensix_types.h.
 # These differ per arch (e.g. UInt8 is 30 on WH/BH but 17 on Quasar), and the
-# device stamps the *active* arch's value into typed-array / tile-slice headers,
-# so we resolve each format against the running arch to match the wire. Formats
-# absent on the current arch resolve to None and never match a real wire value.
+# device stamps its arch's value into array/tile headers. Formats absent on
+# the current arch simply resolve to None.
 _ARCH_DATA_FORMAT_ENUM = {
     ChipArchitecture.WORMHOLE: WORMHOLE_DATA_FORMAT_ENUM_VALUES,
     ChipArchitecture.BLACKHOLE: BLACKHOLE_DATA_FORMAT_ENUM_VALUES,

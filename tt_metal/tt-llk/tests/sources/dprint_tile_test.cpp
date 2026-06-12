@@ -12,7 +12,7 @@
 #include "build.h"
 #include "ckernel.h"
 #include "dprint.h"
-#include "sfpu_stub.h" // Provides the no-op SFPU run_kernel for the Quasar 4-TRISC build.
+#include "sfpu_stub.h"
 
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
