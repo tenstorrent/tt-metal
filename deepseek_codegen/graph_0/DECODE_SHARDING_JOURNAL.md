@@ -258,3 +258,21 @@ MoE is at its practical floor with the current op set + bf4 precision.
   fuses all_reduce+mesh_partition). Collar Tilize/Untilize = dispatch ROW_MAJOR conversions (structural).
 NET: after the shared-FFN CCL fusion (-5ms) the MoE has no remaining op-level lever. Further MoE gains need
 architecture/codegen changes (precision below bf4, fewer active experts, or a different dispatch/combine kernel).
+
+## EXPERIMENTAL MoE OPS SURVEY (2026-06-12) — exist but tied to tt_moe_decode architecture
+Surveyed ttnn for MoE-specific experimental ops the codegen does NOT use. Found a deepseek_moe_* family
+from the NEWER hand-written `models/common/modules/moe/tt_moe_decode` (which the codegen branch predates):
+- `deepseek_moe_reduce_scatter` (ccl): tuned tail reduce-scatter. NOT drop-in — validate requires
+  input_tensors.size()==ring_size(8) (a LIST of 8 per-ring tensors = the multi-output fast-reduce),
+  TILE + specific L1 shard specs. Replacing our tail (single DRAM `summed` -> FastReduceNC -> generic
+  reduce_scatter) needs adopting the whole tt_moe_decode tail (multi-tensor fast-reduce + L1 sharding).
+- `deepseek_moe_fast_reduce_nc_fused` (reduction): the fused NC-reduce+split that FEEDS the above (produces
+  the 8-tensor list). Only useful as part of that tail chain.
+- `moe_gate_mm` / `deepseek_moe_gate` (deepseek/moe): tuned gate matmul w/ preallocated output + layer/column
+  id (tied to tt_moe_decode state). Gate is tiny (~tens of us) -> low value.
+- `matmul_wo` (deepseek/mla): MLA output projection, preallocated output + layer_id (same state coupling).
+- `moe_ffn_swiglu`: only in tt-train (training), NOT a ttnn inference op -> unusable here.
+VERDICT: these are more optimized but tied to the tt_moe_decode module's L1-sharding/state — NOT drop-in
+swaps for the generic-op codegen, and they target already-optimized parts (tail/gate), not the dominant
+MoECompute bf4-weight cost. Using them = re-architecting the tail to tt_moe_decode patterns (codegen-level
+project, modest gain, integration risk). Not pursued as a tuning iteration.
