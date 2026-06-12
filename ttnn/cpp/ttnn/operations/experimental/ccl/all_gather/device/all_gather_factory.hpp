@@ -17,8 +17,7 @@ struct AllGatherFactory {
         std::vector<tt::tt_metal::CoreCoord> sender_worker_cores;
         tt::tt_metal::KernelHandle worker_sender_reader_kernel_id{};
         tt::tt_metal::KernelHandle worker_sender_writer_kernel_id{};
-        std::optional<tt::tt_metal::GlobalSemaphore> init_barrier_sem;
-        std::optional<tt::tt_metal::GlobalSemaphore> final_barrier_sem;
+        tt::tt_metal::GlobalSemaphore barrier_sem;
         uint32_t ring_index = 0;
     };
 
@@ -42,10 +41,9 @@ private:
     static cached_program_t create_at(
         const AllGatherParams& operation_attributes,
         const ttnn::MeshCoordinate& sender_device_coord,
-        const Tensor& input,
+        const AllGatherInputs& tensor_args,
         const Tensor& output_tensor,
-        const std::optional<tt::tt_metal::GlobalSemaphore>& init_barrier_sem,
-        const std::optional<tt::tt_metal::GlobalSemaphore>& final_barrier_sem);
+        const tt::tt_metal::GlobalSemaphore& barrier_sem);
 };
 
 }  // namespace ttnn::experimental::prim
