@@ -65,7 +65,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
 
     // work-unit knobs (elements -> tiles / heads)
     const auto& cfg = args.program_config;
-    const uint32_t QC = cfg.q_chunk_size / TILE_HEIGHT;
+    uint32_t QC = cfg.q_chunk_size / TILE_HEIGHT;
     const uint32_t KC = cfg.k_chunk_size / TILE_WIDTH;
     const uint32_t HB = resolve_head_group(cfg, Hi);
 
@@ -74,6 +74,68 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     constexpr uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;  // half-sync, as in sdpa_program_factory
     const auto [qk_subblock_h, qk_subblock_w] = ttnn::prim::detail::determine_largest_subblock_size(HB, 1, dst_size);
     TT_FATAL(HB % qk_subblock_h == 0, "head group {} must be divisible by qk_subblock_h={}", HB, qk_subblock_h);
+
+    // Auto-tune QC (q-tile-rows per work unit) up from the requested value to the largest divisor
+    // of Sqt whose resident CBs still fit L1. A unit's K chunk is read once but its matmul feeds
+    // all QC q-rows, so larger QC cuts the reader's K DRAM traffic ~QC-fold (K is otherwise
+    // re-read once per q-row-group, ~Sqt times over). The writer's strip path is already hidden
+    // under compute, so the reader is the only data-movement bottleneck.
+    //
+    // But QC>1 only helps when the op is *reader-bound*: per output tile the K traffic is
+    // ~Dt*k_tile bytes (independent of heads) while the matmul work is ~HB heads * fidelity
+    // passes, so K dominates exactly when k_tile is large relative to HB. When compute dominates
+    // (more resident heads), raising QC just adds the multi-row-group masking overhead and
+    // regresses. The k_tile > 51*HB*fidelity test (calibrated on BH: DRAM BW vs FPU throughput)
+    // fires for the 8-head shard but leaves the compute-bound 16/64-head cases at QC=1.
+    {
+        const bool sh = HB < Hi;
+        constexpr uint32_t fidelity_passes = 2;  // HiFi2 (math_fidelity below); LoFi would be 1
+        const uint32_t k_tile_bytes =
+            tile_size(k.dtype() == DataType::BFLOAT8_B ? DataFormat::Bfp8_b : DataFormat::Float16_b);
+        const bool reader_bound = k_tile_bytes > 51u * HB * fidelity_passes;
+        const uint32_t bf16_t = tile_size(DataFormat::Float16_b);
+        const uint32_t kfmt_t =
+            tile_size(k.dtype() == DataType::BFLOAT8_B ? DataFormat::Bfp8_b : DataFormat::Float16_b);
+        const uint32_t accf_t = fp32_dest_acc_en ? tile_size(DataFormat::Float32) : bf16_t;  // matches acc_fmt below
+        constexpr uint32_t qk_col_cap = 128;  // keep in sync with qk_col_tile_cap below
+        auto footprint = [&](uint32_t qc) -> uint64_t {
+            const uint32_t qbh = std::min<uint32_t>(HB, (qc == 1) ? HB : 32u);
+            const bool single = (qbh == Hi) && !sh;
+            const uint32_t qcb =
+                (KC >= 2 && single) ? std::min<uint32_t>(KC, std::max<uint32_t>(1u, qk_col_cap / qbh)) : 1u;
+            uint64_t b = 0;
+            b += (uint64_t)(sh ? 2 : 1) * HB * qc * Dt * bf16_t;  // cb_q
+            b += (uint64_t)2 * KC * Dt * kfmt_t;                  // cb_k
+            b += (uint64_t)Hi * qc * bf16_t;                      // cb_w
+            b += (uint64_t)2 * bf16_t;                            // cb_mask
+            b += (uint64_t)qcb * qbh * accf_t;                    // cb_qk
+            b += (uint64_t)2 * qc * KC * accf_t;                  // cb_acc
+            b += (uint64_t)2 * KC * bf16_t;                       // cb_out
+            b += (uint64_t)bf16_t;                                // cb_scratch
+            b += (uint64_t)2 * KC * bf16_t;                       // cb_out_strip
+            b += (uint64_t)2 * KC * accf_t;                       // cb_acc_strip
+            return b;
+        };
+        // Reserve headroom for kernel binaries/stack/semaphores and (under tracy) the per-RISC
+        // profiler L1 buffers, so the auto-tuned QC also builds when the perf test profiles it.
+        constexpr uint64_t l1_reserve = 320 * 1024;
+        const uint64_t l1_budget = (uint64_t)q.device()->l1_size_per_core() - l1_reserve;
+        const uint32_t Sqt_avail = Sq / TILE_HEIGHT;
+        // INDEXER_QC diagnostic override: force a specific QC (still must divide Sqt + fit L1),
+        // bypassing the reader-bound gate so any head count can be swept.
+        const char* qc_env = std::getenv("INDEXER_QC");
+        const uint32_t qc_force = qc_env != nullptr ? (uint32_t)std::atoi(qc_env) : 0u;
+        if (qc_force != 0 || reader_bound) {
+            for (uint32_t cand = QC + 1; cand <= Sqt_avail; ++cand) {
+                if (Sqt_avail % cand != 0 || cand % QC != 0 || footprint(cand) > l1_budget) {
+                    continue;
+                }
+                if (qc_force == 0 || cand == qc_force) {
+                    QC = cand;
+                }
+            }
+        }
+    }
 
     // total valid work units (groups is exact: validate guarantees QC divides Sqt).
     // units_in_group is the shared formula the kernels' WorkUnitSpan inverts.
