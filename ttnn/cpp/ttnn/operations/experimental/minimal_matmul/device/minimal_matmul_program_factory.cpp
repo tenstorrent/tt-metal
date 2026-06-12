@@ -8,6 +8,7 @@
 #include "ttnn/operations/cb_utils.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <string>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -259,6 +260,30 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     // S=1 reduces exactly to the un-sliced partition. (Step 1: partition only; S>1 also needs the
     // per-group forwarding change before it is correct. Auto-derivation of S is deferred to step 5.)
     uint32_t num_slices = 1;
+    // Auto-derive S from the M:N aspect ratio. Engage on the same delivery-bound condition as the
+    // prefetch gate — min(M,N) tiles-per-core <= 2 at S=1, i.e. min(M_tiles,N_tiles) <= 2*grid.y — and
+    // pick S = nearest power-of-two to sqrt(max/min) so each sub-grid is roughly square. Only when the
+    // caller didn't pin a config and there are no fused ops (matches the gate). Measured: this lifts
+    // skinny shapes by up to ~2.3x (see minimal-matmul-nslicing-plan); near-square shapes get S=1.
+    if (!config.has_value() && !fuse_op && !fuse_srs) {
+        const uint32_t mn = std::min(M_tiles, N_tiles);
+        const uint32_t mx = std::max(M_tiles, N_tiles);
+        const uint32_t min_tpc_s1 = (mn + grid_size.y - 1) / grid_size.y;  // ceil(min_tiles / grid.y), S=1
+        if (mn > 0 && min_tpc_s1 <= 2) {
+            const double r = std::sqrt(static_cast<double>(mx) / static_cast<double>(mn));
+            uint32_t best = 1;
+            double best_dist = std::abs(1.0 - r);
+            for (uint32_t c = 2; c <= grid_size.y; c *= 2) {
+                const double d = std::abs(static_cast<double>(c) - r);
+                if (d < best_dist) {
+                    best_dist = d;
+                    best = c;
+                }
+            }
+            num_slices = best;
+        }
+    }
+    // Env override (also enables forcing S for fused-off experiments / sweeps).
     if (const char* s = std::getenv("TT_MM_NUM_SLICES"); s != nullptr && !fuse_op && !fuse_srs) {
         num_slices = std::max(1u, static_cast<uint32_t>(std::atoi(s)));
     }
