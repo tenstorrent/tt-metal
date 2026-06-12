@@ -34,6 +34,15 @@ _HIFI4 = ttnn.WormholeComputeKernelConfig(
     packer_l1_acc=False,
 )
 
+# Without program_config, SDPA decode uses the full device grid; on Blackhole that
+# can exceed the 64-core/head tree-reduction cap (MAX_TREE_REDUCTION_ROUNDS=6).
+_SDPA_DECODE_CFG = ttnn.SDPAProgramConfig(
+    compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+    q_chunk_size=0,
+    k_chunk_size=0,
+    exp_approx_mode=False,
+)
+
 
 # ──────────────────────────────────────────────────────────────
 # Host-side weight preparation
@@ -510,6 +519,7 @@ class TTVibeVoiceLM:
                 kv_cache.values[layer_idx],
                 cur_pos=[start_pos],
                 scale=self.scale,
+                program_config=_SDPA_DECODE_CFG,
                 compute_kernel_config=_HIFI4,
             )  # [1, B, n_heads, hd]
             out = _reshape_tt(attn, [B, 1, S, n_heads * head_dim])
