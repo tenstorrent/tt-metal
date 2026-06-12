@@ -671,7 +671,13 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     //     (captures "per_core_N stranded" — SBM fell back to h==1,w==per_core_N) AND act_block_h_ntiles
     //     (per_core_M) divisible by relaxed.out_subblock_h.
     bool conv_tile_pack_row_major_pin = false;
-    {
+    // TileRowMajor + pin is DISABLED for the "dedicate partials" milestone (SubblockMajor only).
+    // The TRM relaxed-subblock lever depended on the pin scheme, which the dedicate-partials change
+    // removed from the kernel; re-enabling TRM is a later milestone (it must be rebuilt on the
+    // dedicated-partials FIFO, not pin). Gated on `false` to keep the eligibility logic for that
+    // future work without ever emitting CONV_TILE_PACK_ROW_MAJOR_PIN or re-deriving subblocks.
+    const bool kEnableTileRowMajorPin = false;
+    if (kEnableTileRowMajorPin) {
         const tt::DataFormat weights_df = tt::tt_metal::datatype_to_dataformat_converter(b.dtype());
         const bool weights_df_supported =
             (weights_df == tt::DataFormat::Float16_b || weights_df == tt::DataFormat::Float32);
@@ -1214,16 +1220,13 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         compute_kernel_args.push_back(static_cast<uint32_t>(split_reader_cb_shared));
     }
 
-    // No-l1_acc convs run main's VERBATIM hand-written kernel. The matmul-helper pin scheme
-    // requires packer_l1_acc for sound PACK→UNPACK ordering on its spill/reload (no FIFO counts
-    // to wait on otherwise) and the migration's measured win is l1_acc-only (GH#45995 bench:
-    // l1_acc OFF = neutral). Verbatim kernel takes one extra arg vs the helper layout — a
-    // TEMP_SUM CB index at position 25 it never reads on non-depthwise — pass 0. Depthwise has
-    // its own kernel (path set above) and never goes through the matmul helper.
-    if (!packer_l1_acc_en && !is_conv_1d_depthwise_conv) {
-        compute_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize_main.cpp";
-        compute_kernel_args.insert(compute_kernel_args.begin() + 25, 0u);
-    }
+    // "Dedicate partials, match matmul" (GH#45995): the verbatim-main-kernel routing for
+    // !packer_l1_acc convs is gone. The matmul-helper kernel (conv_bmm_tilize.cpp) now uses a
+    // DEDICATED one-block matmul_partials_cb (is_globally_allocated=false) instead of the bespoke
+    // pin scheme, so its non-pin FIFO wraps to a fixed base each K-block and packer_l1_acc lands at
+    // a fixed address for multi-output-block convs too — the very thing the pin scheme propped up.
+    // The non-l1_acc path likewise uses the helper's plain FIFO reserve/push/pop (no L1_ACC, so no
+    // per-address accumulation requirement at all). All convs route through the helper kernel.
 
     const tt::tt_metal::NOC writer_mcast_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     const tt::tt_metal::NOC reader_noc =

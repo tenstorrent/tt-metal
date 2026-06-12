@@ -73,7 +73,9 @@ std::vector<CBInfo> get_cb_info(
     std::vector<CBInfo> cb_info;
     cb_info.reserve(num_cbs);
 
-    const bool untilize_out = conv_config.output_layout == Layout::ROW_MAJOR;
+    // Partials are now dedicated unconditionally (see MATMUL_PARTIALS CB below), so this no
+    // longer gates the partials alias; kept maybe_unused for any future per-layout sizing.
+    [[maybe_unused]] const bool untilize_out = conv_config.output_layout == Layout::ROW_MAJOR;
 
     // Tile dimensions and data formats
 
@@ -208,11 +210,24 @@ std::vector<CBInfo> get_cb_info(
 
     // Matmul partials CB. 1D depthwise compute uses dest-reuse accumulation, so the CB is unused
     // for that path — emit a 0-page entry so allocate_cbs skips the device allocation.
+    //
+    // "Dedicate partials, match matmul" (GH#45995): size the partials CB to ONE output block and
+    // give it its OWN L1 region (is_globally_allocated=false, stop aliasing onto OUT). With a
+    // one-block region the helper's non-pin FIFO WRAPS back to the same base every K-block, so
+    // packer_l1_acc accumulates at a fixed L1 address for MULTI-output-block convs too — exactly
+    // how matmul's dedicated single-block interm0 already behaves. This is what removes the need
+    // for the bespoke pin scheme and the verbatim-main-kernel routing.
+    //
+    // One output block = act_block_h_ntiles * per_core_out_matrix_width_ntiles. This equals the
+    // kernel's out_block_num_tiles = out_subblock_num_tiles * in0_num_subblocks * in1_num_subblocks
+    // (in0_num_subblocks*out_subblock_h == act_block_h_ntiles; in1_num_subblocks*out_subblock_w ==
+    // per_core_out_matrix_width_ntiles), independent of how the block is split into subblocks.
+    const uint32_t out_block_num_tiles = block_config.act_block_h_ntiles * per_core_out_matrix_width_ntiles;
     cb_info.emplace_back(CBInfo{
         .name = Conv2dCb::MATMUL_PARTIALS,
-        .num_pages = is_1d_depthwise_conv ? 0 : per_core_out_ntiles,
+        .num_pages = is_1d_depthwise_conv ? 0 : out_block_num_tiles,
         .page_size = partial_tile_size,
-        .is_globally_allocated = (!untilize_out && partial_dtype == output_datatype && !is_1d_depthwise_conv),
+        .is_globally_allocated = false,
         .data_format = partial_df});
 
     const bool overlap_im2col_cb =
