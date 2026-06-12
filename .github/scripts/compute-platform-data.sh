@@ -124,13 +124,28 @@ write_bake_target_hash_input() {
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
 
+# Strip comment-only lines from Dockerfile content before hashing so pure
+# comment edits (e.g. updating the BUILD INSTRUCTIONS header) don't invalidate
+# image tags. Only whole-line comments (optional leading whitespace then '#')
+# are removed; lines like `ARG FOO=bar  # note` keep their inline comment since
+# the leading token is not '#'. BuildKit parser directives (`# syntax=`,
+# `# escape=`) are preserved because they are build-significant.
+strip_dockerfile_comments() {
+    awk '
+        /^#[[:space:]]*syntax=/ { print; next }
+        /^#[[:space:]]*escape=/ { print; next }
+        /^[[:space:]]*#/ { next }
+        { print }
+    '
+}
+
 write_dockerfile_prefix() {
     local stop_pattern="$1"
     local output="$2"
     awk -v stop_pattern="$stop_pattern" '
         $0 ~ stop_pattern { exit }
         { print }
-    ' dockerfile/Dockerfile > "$output"
+    ' dockerfile/Dockerfile | strip_dockerfile_comments > "$output"
     if [ ! -s "$output" ]; then
         echo "ERROR: Dockerfile split produced an empty file for stop pattern: $stop_pattern" >&2
         exit 1
@@ -145,7 +160,7 @@ write_dockerfile_stage() {
         $0 ~ start_pattern { in_stage = 1 }
         in_stage && $0 ~ stop_pattern { exit }
         in_stage { print }
-    ' dockerfile/Dockerfile > "$output"
+    ' dockerfile/Dockerfile | strip_dockerfile_comments > "$output"
     if [ ! -s "$output" ]; then
         echo "ERROR: Dockerfile stage extraction produced an empty file for start pattern: $start_pattern" >&2
         exit 1
