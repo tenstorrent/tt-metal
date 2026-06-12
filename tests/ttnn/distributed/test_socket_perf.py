@@ -138,7 +138,7 @@ def _run_mesh_socket_bandwidth_case(
     mesh_device,
     num_connections,
     socket_page_size,
-    total_tensor_size_bytes,
+    tensor_shape,
     bandwidth_csv_writer,
     transfer_mode="async",
 ) -> None:
@@ -168,8 +168,7 @@ def _run_mesh_socket_bandwidth_case(
     socket_config = ttnn.SocketConfig(socket_connections, socket_mem_config)
     send_socket, recv_socket = ttnn.create_socket_pair(sender_mesh_device, receiver_mesh_device, socket_config)
 
-    per_chip_shape = _per_chip_shape_for_bytes(total_tensor_size_bytes)
-    torch_input = torch.randn(per_chip_shape, dtype=torch.float32)
+    torch_input = torch.randn(tensor_shape, dtype=torch.float32)
     input_tensor = ttnn.from_torch(
         torch_input,
         device=sender_mesh_device,
@@ -199,7 +198,7 @@ def _run_mesh_socket_bandwidth_case(
     eq, msg = comp_equal(input_data, output_data)
     assert eq, msg
 
-    bytes_per_iter_per_chip = total_tensor_size_bytes
+    bytes_per_iter_per_chip = tensor_shape[0] * tensor_shape[1] * BFLOAT16_BYTES
     total_bytes = bytes_per_iter_per_chip * num_chips * NUM_MEASURED_ITERS
     per_chip_bw_gbps = (bytes_per_iter_per_chip * NUM_MEASURED_ITERS) / elapsed_s / 1e9
     aggregate_bw_gbps = total_bytes / elapsed_s / 1e9
@@ -208,7 +207,7 @@ def _run_mesh_socket_bandwidth_case(
         f"\n[MeshSocket BW] mode={transfer_mode} "
         f"num_connections={num_connections} "
         f"page_size={socket_page_size}B "
-        f"per_chip_size={total_tensor_size_bytes}B "
+        f"per_chip_size={bytes_per_iter_per_chip}B "
         f"chips={num_chips} iters={NUM_MEASURED_ITERS} "
         f"elapsed={elapsed_s * 1e3:.2f}ms | "
         f"per-chip={per_chip_bw_gbps:.3f} GB/s | "
@@ -220,7 +219,7 @@ def _run_mesh_socket_bandwidth_case(
             "transfer_mode": transfer_mode,
             "num_connections": num_connections,
             "socket_page_size_bytes": socket_page_size,
-            "per_chip_tensor_size_bytes": total_tensor_size_bytes,
+            "per_chip_tensor_size_bytes": bytes_per_iter_per_chip,
             "num_chips": num_chips,
             "num_iters": NUM_MEASURED_ITERS,
             "elapsed_ms": round(elapsed_s * 1e3, 4),
@@ -234,13 +233,13 @@ def _run_mesh_socket_bandwidth_case(
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)
 @pytest.mark.parametrize(
-    "total_tensor_size_bytes",
-    [1 << 20, 1 << 24],  # 1 MiB, 16 MiB, 256 MiB per chip
+    "tensor_shape",
+    [[968, 2048]],
     ids=lambda v: f"size{v}",
 )
 @pytest.mark.parametrize(
     "socket_page_size",
-    [1024, 4096, 8192, 16384],
+    [2048],
     ids=lambda v: f"page{v}",
 )
 @pytest.mark.parametrize(
@@ -258,7 +257,7 @@ def test_mesh_socket_bandwidth(
     transfer_mode,
     num_connections,
     socket_page_size,
-    total_tensor_size_bytes,
+    tensor_shape,
     bandwidth_csv_writer,
 ):
     """Measure ``MeshSocket`` send/recv bandwidth.
@@ -273,7 +272,7 @@ def test_mesh_socket_bandwidth(
         mesh_device,
         num_connections,
         socket_page_size,
-        total_tensor_size_bytes,
+        tensor_shape,
         bandwidth_csv_writer,
         transfer_mode=transfer_mode,
     )
