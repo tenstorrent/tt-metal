@@ -29,6 +29,38 @@
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/type_name.hpp>
 
+// Recursive, structural hashing for arbitrary objects.
+//
+// ttsl::hash::hash_objects_with_default_seed(a, b, ...) returns a hash_t for any
+// number of hashable objects; hash_objects(seed, ...) folds them into an existing
+// seed. Hashing is recursive: the hash of a composite — a container, tuple,
+// optional, or struct — is built by hashing each of its elements/members in turn,
+// all the way down to scalars. You only make the leaf types hashable; composites
+// compose for free.
+//
+// A type is hashable if it is (resolved in this order):
+//   - an integer, or anything with a std::hash<T> specialization;
+//   - a standard container/wrapper: tuple, pair, array, vector, span, set, map,
+//     unordered_map (hashed order-independently), optional, variant, or
+//     reference_wrapper — each hashed by recursing into its elements;
+//   - a type that opts in via a customization point below; or
+//   - an aggregate struct, whose members are hashed via reflection.
+//
+// Customizing hashing for your own type — pick one (resolved highest-priority first):
+//
+//   1. Specialize std::hash<YourType>.
+//
+//   2. Add a to_hash() method, when you want to compute the hash yourself:
+//          hash_t to_hash() const { return ...; }
+//
+//   3. Declare the attributes to hash (idiomatic — the same hook also drives
+//      printing/serialization). Give a static tuple of names and a method
+//      returning a tuple of the values; the values are hashed recursively:
+//          static constexpr auto attribute_names = std::forward_as_tuple("height", "width");
+//          auto attribute_values() const { return std::forward_as_tuple(height_, width_); }
+//
+//   4. Do nothing: a plain aggregate struct has its members hashed automatically
+//      via reflection.
 namespace ttsl::hash {
 
 using hash_t = std::uint64_t;
