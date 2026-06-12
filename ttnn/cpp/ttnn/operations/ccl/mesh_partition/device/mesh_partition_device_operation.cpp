@@ -44,7 +44,7 @@ void MeshPartitionDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(operation_attributes.dim < rank, "dim must be less than the rank of the input tensor");
 
     const uint32_t cluster_axis_size = detail::get_cluster_axis_size(input_tensor, operation_attributes.cluster_axis);
-    std::cout << "Cluster axis size: " << cluster_axis_size << std::endl;
+
     TT_FATAL(
         cluster_axis_size > 1,
         "Partition has only been tested with mesh axis size > 1, but has {} devices",
