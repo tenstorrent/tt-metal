@@ -424,7 +424,7 @@ void kernel_main() {
                         packed_local_addr,
                         page_size_bytes,
                         tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                            dram_dest_noc_addr, out_ready_sem_noc_addr_in_pkt, 1, false},
+                            dram_dest_noc_addr, out_ready_sem_noc_addr_in_pkt, 1, /*flush=*/true},
                         /*start_distance=*/1,
                         static_cast<uint8_t>(num_targets_forward));
 #endif
@@ -439,7 +439,7 @@ void kernel_main() {
                         packed_local_addr,
                         page_size_bytes,
                         tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                            dram_dest_noc_addr, out_ready_sem_noc_addr_in_pkt, 1, false},
+                            dram_dest_noc_addr, out_ready_sem_noc_addr_in_pkt, 1, /*flush=*/true},
                         /*start_distance=*/1,
                         static_cast<uint8_t>(num_targets_backward));
 #endif
