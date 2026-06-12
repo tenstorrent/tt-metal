@@ -183,6 +183,68 @@ TEST_F(ControlPlaneFixture, TestControlPlaneInitNoMGD) {
     EXPECT_NE(control_plane.get_mesh_graph().get_mesh_ids().size(), 0u);
 }
 
+// Verify that galaxy tray/ASIC corner pinnings are honored after control-plane init. Each galaxy
+// is a 2x2 arrangement of trays (ids 1..4); each tray is a 4x2 ASIC grid with asic_location==1 at
+// the outer corner. The NW corner (chip 0) of every galaxy mesh must land on a tray-corner ASIC
+// (asic_location==1) to prevent torus folding. A single 8x4 galaxy additionally pins all four
+// logical corners to all four tray corners (one per tray {1,2,3,4}).
+TEST_F(ControlPlaneFixture, TestGalaxyCornerPinnings) {
+    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto& topology_mapper = control_plane.get_topology_mapper();
+
+    auto mapped_position = [&](const FabricNodeId& fn, uint32_t& loc_out, uint32_t& tray_out) {
+        try {
+            (void)topology_mapper.get_asic_id_from_fabric_node_id(fn);
+            loc_out = *topology_mapper.get_asic_location_for_fabric_node_id(fn);
+            tray_out = *topology_mapper.get_tray_id_for_fabric_node_id(fn);
+        } catch (...) {
+            return false;
+        }
+        return true;
+    };
+    for (const auto& mesh_id : mesh_graph.get_mesh_ids()) {
+        const auto mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
+        if (mesh_shape.dims() != 2 || (mesh_shape.mesh_size() % 32u) != 0u) {
+            continue;
+        }
+        const uint32_t s0 = mesh_shape[0];
+        const uint32_t s1 = mesh_shape[1];
+        uint32_t loc = 0;
+        uint32_t tray = 0;
+
+        if (mapped_position(FabricNodeId(mesh_id, 0), loc, tray)) {
+            EXPECT_EQ(loc, 1u) << "NW corner (mesh=" << *mesh_id
+                               << ", chip=0) must be anchored to a tray-corner ASIC (asic_location==1) to "
+                                  "prevent torus folding (bottom half placed on top).";
+        }
+
+        if (mesh_shape.mesh_size() == 32u) {
+            const uint32_t corners[4] = {0u, s1 - 1u, s1 * (s0 - 1u), (s1 * s0) - 1u};
+            std::unordered_set<uint32_t> trays;
+            uint32_t present = 0;
+            for (uint32_t c : corners) {
+                if (!mapped_position(FabricNodeId(mesh_id, c), loc, tray)) {
+                    continue;
+                }
+                ++present;
+                EXPECT_EQ(loc, 1u) << "single-galaxy corner (mesh=" << *mesh_id << ", chip=" << c
+                                   << ") must be a tray-corner ASIC (asic_location==1).";
+                trays.insert(tray);
+            }
+            if (present == 4u) {
+                EXPECT_EQ(trays, (std::unordered_set<uint32_t>{1u, 2u, 3u, 4u}))
+                    << "single-galaxy corners must cover all four trays {1,2,3,4} (one corner per tray).";
+            }
+        }
+    }
+}
+
 TEST(MeshGraphValidation, TestT3kMeshGraphInit) {
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
@@ -1342,6 +1404,31 @@ void validate_sp5_blitz_decode_pipeline_stages(
             << coord_str(s.entry_node_coord);
     }
 
+    // 1b. Entry and exit on different columns: for 2D meshes coord[1] is the LINE axis (second MGD dim, width 2 in
+    // blitz decode 4x2); endpoints must not share the same column. Skip when an adjacent hop in the ring is
+    // intra-mesh (previous stage shares stage_index with this stage, or this stage shares stage_index with next):
+    // that leg completes on one logical mesh while the next hop stays on the same mesh (typical mesh-0 bookends),
+    // where LINE separation may be infeasible given hop/unclaimed constraints.
+    const std::size_t num_stages = stages.size();
+    for (std::size_t i = 0; i < num_stages; i++) {
+        const auto& s = stages[i];
+        if (s.entry_node_coord.dims() < 2) {
+            continue;
+        }
+        const std::size_t prev_i = (i + num_stages - 1) % num_stages;
+        const std::size_t next_i = (i + 1) % num_stages;
+        const bool incoming_intra_mesh = stages[prev_i].stage_index == s.stage_index;
+        const bool outgoing_intra_mesh = s.stage_index == stages[next_i].stage_index;
+        if (incoming_intra_mesh || outgoing_intra_mesh) {
+            continue;
+        }
+        EXPECT_NE(s.entry_node_coord[1], s.exit_node_coord[1])
+            << "Stage [" << i << "] (stage_index=" << s.stage_index
+            << ") entry and exit must use different mesh "
+               "columns (coord[1]): entry "
+            << coord_str(s.entry_node_coord) << " exit " << coord_str(s.exit_node_coord);
+    }
+
     // 2. No coord is reused across stages
     std::set<std::pair<std::size_t, std::pair<uint32_t, uint32_t>>> used_coords;
     for (std::size_t i = 0; i < stages.size(); i++) {
@@ -2179,6 +2266,57 @@ TEST_F(ControlPlaneFixture, TestBlitzDecodePipelineBuilder) {
         {static_cast<std::size_t>(*mesh_ids[0]),
          fn_to_coord(hops[num_meshes - 1].second),
          fn_to_coord(*loopback_exit_fn)});
+
+    const auto& topology_mapper = control_plane.get_topology_mapper();
+
+    for (std::size_t si = 0; si < stages.size(); si++) {
+        const auto& s = stages[si];
+        MeshId stage_mesh_id{static_cast<uint32_t>(s.stage_index)};
+        const FabricNodeId entry_fn(stage_mesh_id, mesh_graph.coordinate_to_chip(stage_mesh_id, s.entry_node_coord));
+        const FabricNodeId exit_fn(stage_mesh_id, mesh_graph.coordinate_to_chip(stage_mesh_id, s.exit_node_coord));
+
+        fmt::print(
+            "stage{}: stage_index={} entry_mesh_coord=[{}, {}] exit_mesh_coord=[{}, {}]\n",
+            si,
+            s.stage_index,
+            s.entry_node_coord[0],
+            s.entry_node_coord[1],
+            s.exit_node_coord[0],
+            s.exit_node_coord[1]);
+
+        auto print_endpoint = [&](std::string_view label, const MeshCoordinate& coord, const FabricNodeId& fn) {
+            const std::string hostname = topology_mapper.get_hostname_for_fabric_node_id(fn);
+            tt::tt_metal::TrayID tray_id = topology_mapper.get_tray_id_for_fabric_node_id(fn);
+            tt::tt_metal::ASICLocation asic_location = topology_mapper.get_asic_location_for_fabric_node_id(fn);
+            fmt::print(
+                "             {:9} mesh_coord=[{}, {}] fabric_node={} chip_id={} hostname={} mesh_id={} tray_id={} "
+                "asic_location={}\n",
+                label,
+                coord[0],
+                coord[1],
+                fn,
+                fn.chip_id,
+                hostname,
+                *fn.mesh_id,
+                *tray_id,
+                *asic_location);
+        };
+
+        for (const auto& [label, coord, fn] :
+             {std::tuple<std::string_view, const MeshCoordinate&, const FabricNodeId&>{
+                  "entry", s.entry_node_coord, entry_fn},
+              {"exit", s.exit_node_coord, exit_fn}}) {
+            print_endpoint(label, coord, fn);
+        }
+
+        for (const auto& coord : mesh_graph.get_coord_range(stage_mesh_id)) {
+            if (coord == s.entry_node_coord || coord == s.exit_node_coord) {
+                continue;
+            }
+            const FabricNodeId fn(stage_mesh_id, mesh_graph.coordinate_to_chip(stage_mesh_id, coord));
+            print_endpoint("other", coord, fn);
+        }
+    }
 
     validate_sp5_blitz_decode_pipeline_stages(control_plane, mesh_graph, mesh_ids, stages);
 }
