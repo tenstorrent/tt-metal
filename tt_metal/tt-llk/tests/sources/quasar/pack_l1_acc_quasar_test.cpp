@@ -78,19 +78,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
         const std::uint32_t num_blocks     = static_cast<std::uint32_t>(params.OUTPUT_NUM_BLOCKS);
 
         // ISSUE tt-llk #988: For unpack to dest cannot init the unpacker with 1 tile per unpack, because it will keep writing to dest_idx=0
-        _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, tiles_in_block /*num_tiles_per_unpack*/);
+        _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(
+            buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, tiles_in_block /*num_tiles_per_unpack*/);
         for (std::uint32_t block = 0; block < num_blocks; block++)
         {
-            _llk_unpack_unary_operand_<SELECTED_UNPACKER>(block * tiles_in_block);
+            _llk_unpack_unary_operand_<SELECTED_UNPACKER>(block * tiles_in_block, ckernel::DEFAULT_TENSOR_SHAPE);
             _llk_unpack_dest_dvalid_section_done_<dest_sync>();
         }
     }
     else
     {
-        _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, 1 /*num_tiles_per_unpack*/);
+        _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(
+            buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_unpack*/);
         for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
         {
-            _llk_unpack_unary_operand_<SELECTED_UNPACKER>(i);
+            _llk_unpack_unary_operand_<SELECTED_UNPACKER>(i, ckernel::DEFAULT_TENSOR_SHAPE);
         }
     }
 }

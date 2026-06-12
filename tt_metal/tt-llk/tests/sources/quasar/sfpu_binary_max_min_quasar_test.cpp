@@ -98,8 +98,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Configure unpacker → init for `num_tiles` consecutive tiles → unpack starting at L1 tile 0.
     // The single _llk_unpack_unary_operand_ call walks both tiles internally because init was
     // primed with num_tiles=2; tile 0 lands in Dest tile 0, tile 1 in Dest tile 1.
-    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, num_tiles);
-    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/);
+    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles);
+    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
 
     // Release the Dest section to the next consumer (SFPU on the unpack-to-dest path).
     // On the FPU path, T1's _llk_math_set_dvalid_<FPU> handles the release instead.
