@@ -14,7 +14,7 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     compute_kernel_ids,
     get_lib_dtype,
 )
-from models.common.utility_functions import is_watcher_enabled
+from models.common.utility_functions import is_wormhole_b0, is_blackhole
 
 
 def check_determinism(input_values_tensor, input_indices_tensor, k, p, seed, sub_core_grids, device, k_dtype):
@@ -199,6 +199,11 @@ def run_sampling(shape, k, p, seed, device, sub_core_grids=None, *, k_dtype):
 @pytest.mark.parametrize("seed", [2024, 11, 123])
 @pytest.mark.parametrize("k_dtype", [ttnn.uint32, ttnn.int32])
 def test_sampling_callback(shape, k, p, seed, k_dtype, device):
+    # UINT32 k is only supported on Wormhole/Blackhole; other archs (e.g. Quasar) run the
+    # INT32-only path, so skip the UINT32 cases there.
+    if k_dtype == ttnn.uint32 and not (is_wormhole_b0() or is_blackhole()):
+        pytest.skip("UINT32 dtype is only supported on Wormhole/Blackhole")
+
     torch.manual_seed(seed)
     for i in range(2):
         run_sampling(shape, k, p, seed, device, k_dtype=k_dtype)
@@ -231,9 +236,14 @@ def test_sampling_callback(shape, k, p, seed, k_dtype, device):
 )
 @pytest.mark.parametrize("Wt", [2])  # last dim = 32 * Wt; Wt must be a power of 2
 @pytest.mark.parametrize("seed", [2024])
-@pytest.mark.parametrize("k_dtype", [ttnn.uint32, ttnn.int32])
+# input_indices and k are the two int-typed inputs (both accept UINT32, as well as INT32 on WH/BH)
+@pytest.mark.parametrize("index_dtype", [ttnn.uint32, ttnn.int32])
 @pytest.mark.parametrize("grid_mode", ["explicit", "full_grid"], ids=["explicit_grid", "full_grid"])
-def test_sampling_sub_32_users(num_users, grid_rows, grid_cols, Wt, seed, k_dtype, grid_mode, device):
+def test_sampling_sub_32_users(num_users, grid_rows, grid_cols, Wt, seed, index_dtype, grid_mode, device):
+    # UINT32 indices/k are only supported on Wormhole/Blackhole; other archs (e.g. Quasar) only support INT32 path
+    if index_dtype == ttnn.uint32 and not (is_wormhole_b0() or is_blackhole()):
+        pytest.skip("UINT32 index dtype is only supported on Wormhole/Blackhole")
+
     torch.manual_seed(seed)
     shape = [1, 1, num_users, 32 * Wt]
 
@@ -254,10 +264,12 @@ def test_sampling_sub_32_users(num_users, grid_rows, grid_cols, Wt, seed, k_dtyp
     input_values = torch.randn(shape)
     input_indices = torch.arange(0, shape[-1], dtype=torch.int32).expand(shape)
     input_values_tensor = ttnn.from_torch(input_values, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    input_indices_tensor = ttnn.from_torch(input_indices, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    input_indices_tensor = ttnn.from_torch(
+        input_indices, device=device, dtype=index_dtype, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
 
     # k/p/temp carry one entry per user, so they are length `num_users`
-    k_tensor = ttnn.from_torch(torch.tensor(k), device=device, dtype=k_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+    k_tensor = ttnn.from_torch(torch.tensor(k), device=device, dtype=index_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
     p_tensor = ttnn.from_torch(torch.tensor(p), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     temp = ttnn.from_torch(torch.ones(num_users), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
@@ -306,6 +318,11 @@ def test_sampling_sub_32_users(num_users, grid_rows, grid_cols, Wt, seed, k_dtyp
     "sub_core_grids", [ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(8 - 1, 4 - 1))})]
 )
 def test_sampling_subcores_callback(shape, k, p, seed, k_dtype, device, sub_core_grids):
+    # UINT32 k is only supported on Wormhole/Blackhole; other archs (e.g. Quasar) run the
+    # INT32-only path, so skip the UINT32 cases there.
+    if k_dtype == ttnn.uint32 and not (is_wormhole_b0() or is_blackhole()):
+        pytest.skip("UINT32 dtype is only supported on Wormhole/Blackhole")
+
     torch.manual_seed(seed)
     for i in range(2):
         run_sampling(shape, k, p, seed, device, sub_core_grids, k_dtype=k_dtype)
