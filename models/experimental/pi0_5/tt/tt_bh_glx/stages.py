@@ -9,11 +9,11 @@ Physical placement on the 8x4 BH Galaxy parent mesh:
  row↓  0  V V V V    V = vision  shape (1,4) offset (0,0)  4 chips
        1  P P P D    P = prefill shape (6,3) offset (1,0) 18 chips
        2  P P P D    D = denoise shape (6,1) offset (1,3)  6 chips
-       3  P P P D    (row 7 col 0..2 = 3 chips spare)
+       3  P P P D    (row 7 = 4 spare chips)
        4  P P P D
        5  P P P D
        6  P P P D
-       7  . . . D
+       7  . . . .
 
 Vision chip roles (chip 0 of vision_per_chip is row=0,col=0):
     chip 0: patch_embed + pos_emb only (pure I/O)

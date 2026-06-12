@@ -371,9 +371,10 @@ per-chip slices instead of one device's full model.
 row↓  0  V V V V    V = vision   4 chips   shape (1,4) offset (0,0)
       1  P P P D    P = prefill  18 chips  shape (6,3) offset (1,0)
       2  P P P D    D = denoise  6 chips   shape (6,1) offset (1,3)
-      3  P P P D    (row 7 col 0..2 = 3 spare chips)
+      3  P P P D    (row 7 = 4 spare chips)
       …  P P P D
-      7  . . . D
+      6  P P P D
+      7  . . . .
 ```
 
 | Stage | Chips | Contents |
