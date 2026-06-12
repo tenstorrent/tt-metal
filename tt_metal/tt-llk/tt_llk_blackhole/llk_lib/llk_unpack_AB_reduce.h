@@ -56,7 +56,7 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape &tensor
 
     // MOP constants
     constexpr std::uint32_t outerloop = 1;
-    const std::uint32_t innerloop     = tensor_shape.total_num_faces();
+    const std::uint8_t innerloop      = tensor_shape.total_num_faces();
 
     // Padding should only be done when using tiny tiles otherwise the entire face overwrites the data read in Math
     if (tensor_shape.face_r_dim < FACE_R_DIM) // Using tiny faces

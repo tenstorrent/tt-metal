@@ -25,15 +25,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+    // in1/InB -> unpacker srcA, in0/InA -> unpacker srcB
+    const ckernel::TensorShape unpA_tensor_shape = ckernel::make_tensor_shape_from_legacy(
+        static_cast<std::uint8_t>(params.in1_tile_r_dim < FACE_R_DIM ? params.in1_tile_r_dim : FACE_R_DIM), static_cast<std::uint8_t>(params.num_faces_B));
+    const ckernel::TensorShape unpB_tensor_shape = ckernel::make_tensor_shape_from_legacy(
+        static_cast<std::uint8_t>(params.in0_tile_r_dim < FACE_R_DIM ? params.in0_tile_r_dim : FACE_R_DIM), static_cast<std::uint8_t>(params.num_faces_A));
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src,
         formats.unpack_B_src,
         formats.unpack_A_dst,
         formats.unpack_B_dst,
-        params.in1_tile_r_dim < FACE_R_DIM ? params.in1_tile_r_dim : FACE_R_DIM,
-        params.in0_tile_r_dim < FACE_R_DIM ? params.in0_tile_r_dim : FACE_R_DIM,
-        params.num_faces_B, // in1
-        params.num_faces_A, // in0
+        unpA_tensor_shape,
+        unpB_tensor_shape,
         params.TILE_SIZE_UNPACK_B,
         params.TILE_SIZE_UNPACK_A);
     _llk_unpack_configure_stoch_rnd_<STOCHASTIC_RND>();
@@ -42,12 +45,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         params.CT_DIM,
         params.RT_DIM,
         params.KT_DIM,
-        params.in1_tile_r_dim < FACE_R_DIM ? params.in1_tile_r_dim : FACE_R_DIM,
-        params.in0_tile_r_dim < FACE_R_DIM ? params.in0_tile_r_dim : FACE_R_DIM,
-        params.num_faces_B,     // in1
-        params.num_faces_A,     // in0
-        params.PARTIAL_FACE_B,  // in1
-        params.PARTIAL_FACE_A); // in0
+        unpA_tensor_shape,
+        unpB_tensor_shape,
+        params.PARTIAL_FACE_B,  // in1 -> unpacker srcA partial face
+        params.PARTIAL_FACE_A); // in0 -> unpacker srcB partial face
     for (std::uint32_t j = 0; j < params.KT_DIM; j++)
     {
         _llk_unpack_AB_matmul_<>(

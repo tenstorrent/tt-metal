@@ -30,10 +30,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // - srcA with transpose enabled
     // - srcB with column broadcast
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4 /* num_faces */, 4 /* num_faces */);
+        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, ckernel::DEFAULT_TENSOR_SHAPE, ckernel::DEFAULT_TENSOR_SHAPE);
 
     // Initialize unpack with column broadcast on srcB and transpose on srcA
-    const ckernel::TensorShape tensor_shape = {FACE_R_DIM, FACE_C_DIM, 2 /* num_faces_r_dim */, 2 /* num_faces_c_dim */};
+    const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE;
     _llk_unpack_AB_init_<BROADCAST_TYPE>(tensor_shape, params.UNPACK_TRANSPOSE_FACES ? ckernel::Transpose::Both : ckernel::Transpose::None);
 
     // Unpack tiles: srcA will be transposed, srcB will be column broadcasted

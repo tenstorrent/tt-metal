@@ -27,20 +27,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const ckernel::TensorShape tensor_shape = {
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape(
         static_cast<std::uint8_t>(params.in0_face_r_dim),
         static_cast<std::uint8_t>(params.in0_face_c_dim),
         static_cast<std::uint8_t>(params.num_faces_r_dim_A),
-        static_cast<std::uint8_t>(params.num_faces_c_dim_A)};
+        static_cast<std::uint8_t>(params.num_faces_c_dim_A));
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src,
         formats.unpack_B_src,
         formats.unpack_A_dst,
         formats.unpack_B_dst,
-        tensor_shape.face_r_dim,
-        tensor_shape.face_r_dim,
-        tensor_shape.total_num_faces(),
-        tensor_shape.total_num_faces(),
+        tensor_shape,
+        tensor_shape,
         params.TILE_SIZE_UNPACK_A,
         params.TILE_SIZE_UNPACK_B);
     _llk_unpack_AB_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en>(tensor_shape);
@@ -66,11 +64,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const bool is_int_fpu_en                = false;
     const bool enforce_fp32_accumulation    = is_fp32_dest_acc_en;
-    const ckernel::TensorShape tensor_shape = {
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape(
         static_cast<std::uint8_t>(params.in0_face_r_dim),
         static_cast<std::uint8_t>(params.in0_face_c_dim),
         static_cast<std::uint8_t>(params.num_faces_r_dim_A),
-        static_cast<std::uint8_t>(params.num_faces_c_dim_A)};
+        static_cast<std::uint8_t>(params.num_faces_c_dim_A));
 
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
@@ -115,14 +113,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const ckernel::TensorShape tensor_shape = {
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape(
         static_cast<std::uint8_t>(params.in0_face_r_dim),
         static_cast<std::uint8_t>(params.in0_face_c_dim),
         static_cast<std::uint8_t>(params.num_faces_r_dim_A),
-        static_cast<std::uint8_t>(params.num_faces_c_dim_A)};
+        static_cast<std::uint8_t>(params.num_faces_c_dim_A));
 
     const std::uint32_t tile_size = tensor_shape.total_tensor_size();
-    const std::uint32_t num_faces = tensor_shape.total_num_faces();
+    const std::uint8_t num_faces  = tensor_shape.total_num_faces();
     const bool partial_face       = tensor_shape.face_r_dim < FACE_R_DIM;
 
     const bool narrow_tile = tensor_shape.num_faces_c_dim == 1;

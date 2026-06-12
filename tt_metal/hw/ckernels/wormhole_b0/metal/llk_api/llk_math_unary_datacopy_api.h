@@ -54,10 +54,10 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand = 0
         "ignored on WH)");
     (void)pack_mode;
     const std::uint32_t operand_id = get_operand_id(operand);
-    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
+    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
     const std::uint32_t dst_format = get_operand_dst_format(operand_id);
     _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en>(
-        num_faces, dst_format);
+        tensor_shape, dst_format);
 }
 
 template <BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
@@ -88,7 +88,9 @@ inline void llk_math_fast_tilize_block_(
     LLK_ASSERT((dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "");
 
     const std::uint32_t operand_id = get_operand_id(operand);
-    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
+    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for fast tilize");
 
-    _llk_math_fast_tilize_block_(dst_index, unpack_dst_format[operand_id], unit_dim, num_units, num_faces);
+    _llk_math_fast_tilize_block_(
+        dst_index, unpack_dst_format[operand_id], unit_dim, num_units, tensor_shape.total_num_faces());
 }

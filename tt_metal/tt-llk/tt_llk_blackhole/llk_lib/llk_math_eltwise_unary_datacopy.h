@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "../../common/tensor_shape.h"
 #include "ckernel_globals.h"
 #include "ckernel_include.h"
 #include "ckernel_ops.h"
@@ -450,13 +451,16 @@ template <
     bool is_int_fpu_en             = false,
     PackMode pack_mode             = PackMode::Default>
 inline void _llk_math_eltwise_unary_datacopy_init_(
-    const std::uint32_t num_faces = 4, const std::uint32_t dst_format = 255, const bool skip_bh_tilize_workaround = false)
+    const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE,
+    const std::uint32_t dst_format           = 255,
+    const bool skip_bh_tilize_workaround     = false)
 {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Tilize,
         "Blackhole _llk_math_eltwise_unary_datacopy_init_ supports only PackMode::Default and PackMode::Tilize");
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for unary datacopy");
     constexpr bool tilize = (pack_mode == PackMode::Tilize);
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    const std::uint8_t num_faces = tensor_shape.total_num_faces();
     eltwise_unary_configure_addrmod<type, src_b_bcast_type>(dst_format);
 
     if constexpr (type == DataCopyType::A2D && src_b_bcast_type == BroadcastType::NONE)

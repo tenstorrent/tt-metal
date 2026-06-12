@@ -43,10 +43,8 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
 
     // unpA -> srcA
     // unpB -> srcB
-    const uint32_t unpA_num_faces = get_operand_num_faces(unpA_operand_id);
-    const uint32_t unpA_face_r_dim = get_operand_face_r_dim(unpA_operand_id);
-    const uint32_t unpB_num_faces = get_operand_num_faces(unpB_operand_id);
-    const uint32_t unpB_face_r_dim = get_operand_face_r_dim(unpB_operand_id);
+    const ckernel::TensorShape unpA_tensor_shape = get_operand_tensor_shape(unpA_operand_id);
+    const ckernel::TensorShape unpB_tensor_shape = get_operand_tensor_shape(unpB_operand_id);
 
     // Currently, there is a constraint that tile size is equal to the fifo page size
     // TODO NC: tile size should be computed in the LLK instead, as the part of #34495
@@ -58,10 +56,8 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
         unpack_src_format[unpB_operand_id],
         unpack_dst_format[unpA_operand_id],
         unpack_dst_format[unpB_operand_id],
-        unpA_face_r_dim,
-        unpB_face_r_dim,
-        unpA_num_faces,
-        unpB_num_faces,
+        unpA_tensor_shape,
+        unpB_tensor_shape,
         unpA_tile_size,
         unpB_tile_size);
 }
@@ -92,8 +88,9 @@ llk_unpack_hw_configure(
     const uint32_t unpA_operand_id = get_operand_id(unpA_operand);
     const uint32_t unpB_operand_id = get_operand_id(unpB_operand);
 
-    const uint32_t unpB_num_faces = get_operand_num_faces(unpB_operand_id);
-    const uint32_t unpB_face_r_dim = get_operand_face_r_dim(unpB_operand_id);
+    const ckernel::TensorShape unpA_tensor_shape = ckernel::make_tensor_shape_from_legacy(
+        static_cast<std::uint8_t>(unpA_face_r_dim), static_cast<std::uint8_t>(unpA_num_faces));
+    const ckernel::TensorShape unpB_tensor_shape = get_operand_tensor_shape(unpB_operand_id);
 
     // Currently, there is a constraint that tile size is equal to the fifo page size
     // TODO NC: tile size should be computed in the LLK instead, as the part of #34495
@@ -105,10 +102,8 @@ llk_unpack_hw_configure(
         unpack_src_format[unpB_operand_id],
         unpack_dst_format[unpA_operand_id],
         unpack_dst_format[unpB_operand_id],
-        unpA_face_r_dim,
-        unpB_face_r_dim,
-        unpA_num_faces,
-        unpB_num_faces,
+        unpA_tensor_shape,
+        unpB_tensor_shape,
         unpA_tile_size,
         unpB_tile_size);
 }

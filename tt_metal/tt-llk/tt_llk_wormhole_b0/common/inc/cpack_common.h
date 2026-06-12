@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "../../../common/tensor_shape.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_globals.h"
@@ -567,13 +568,14 @@ template <bool is_fp32_dest_acc_en>
 __attribute__((noinline)) inline void reconfig_packer_data_format(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
-    const std::uint32_t tile_size  = 0,
-    const std::uint32_t face_r_dim = FACE_R_DIM,
-    const std::uint32_t num_faces  = 4,
-    const bool partial_face        = false)
+    const std::uint32_t tile_size            = 0,
+    const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE,
+    const bool partial_face                  = false)
 {
     // Packer strides for standard tiled dest layout (PackMode::Default). Untilize uses configure_pack with PackMode::Untilize.
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for pack");
+    const std::uint8_t face_r_dim = tensor_shape.face_r_dim;
+    const std::uint8_t num_faces  = tensor_shape.total_num_faces();
     LLK_ASSERT(
         is_packer_to_L1_conversion_supported(static_cast<DataFormat>(pack_src_format), static_cast<DataFormat>(pack_dst_format)),
         "Unsupported packer to L1 conversion.");
@@ -676,17 +678,18 @@ template <bool is_fp32_dest_acc_en, PackMode pack_mode>
 inline void configure_pack(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
-    const std::uint32_t tile_size   = 0,
-    const std::uint32_t face_r_dim  = FACE_R_DIM,
-    const std::uint32_t num_faces   = 4,
-    const bool partial_face         = false,
-    const bool narrow_tile          = false,
-    const std::uint32_t relu_config = 0)
+    const std::uint32_t tile_size            = 0,
+    const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE,
+    const bool partial_face                  = false,
+    const bool narrow_tile                   = false,
+    const std::uint32_t relu_config          = 0)
 {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize,
         "Wormhole B0 pack hardware configuration supports only PackMode::Default and PackMode::Untilize");
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for pack");
+    const std::uint8_t face_r_dim = tensor_shape.face_r_dim;
+    const std::uint8_t num_faces  = tensor_shape.total_num_faces();
     LLK_ASSERT(
         is_packer_to_L1_conversion_supported(static_cast<DataFormat>(pack_src_format), static_cast<DataFormat>(pack_dst_format)),
         "Unsupported packer to L1 conversion.");

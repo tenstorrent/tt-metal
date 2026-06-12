@@ -26,26 +26,28 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+    const ckernel::TensorShape unpA_hw_tensor_shape =
+        ckernel::make_tensor_shape_from_legacy(static_cast<std::uint8_t>(FACE_R_DIM), static_cast<std::uint8_t>(params.num_faces_A));
+    const ckernel::TensorShape unpB_hw_tensor_shape =
+        ckernel::make_tensor_shape_from_legacy(static_cast<std::uint8_t>(FACE_R_DIM), static_cast<std::uint8_t>(params.num_faces_B));
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src,
         formats.unpack_B_src,
         formats.unpack_A_dst,
         formats.unpack_B_dst,
-        FACE_R_DIM,
-        FACE_R_DIM,
-        params.num_faces_A,
-        params.num_faces_B,
+        unpA_hw_tensor_shape,
+        unpB_hw_tensor_shape,
         params.TILE_SIZE_UNPACK_A,
         params.TILE_SIZE_UNPACK_B);
+    const ckernel::TensorShape unpA_tensor_shape = ckernel::make_tensor_shape_from_legacy(static_cast<std::uint8_t>(FACE_R_DIM), 4);
+    const ckernel::TensorShape unpB_tensor_shape = ckernel::make_tensor_shape_from_legacy(static_cast<std::uint8_t>(FACE_R_DIM), 4);
     _llk_unpack_AB_matmul_init_<>(
         0 /* transpose */,
         params.CT_DIM,
         params.RT_DIM,
         params.KT_DIM,
-        FACE_R_DIM,
-        FACE_R_DIM,
-        4 /* unpA_num_faces */,
-        4 /* unpB_num_faces */,
+        unpA_tensor_shape,
+        unpB_tensor_shape,
         false /* unpA_partial_face */,
         false /* unpB_partial_face */);
     for (std::uint32_t j = 0; j < params.KT_DIM; j++)

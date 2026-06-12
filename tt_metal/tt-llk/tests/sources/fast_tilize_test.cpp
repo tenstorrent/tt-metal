@@ -68,15 +68,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
+        const ckernel::TensorShape hw_tensor_shape =
+            ckernel::make_tensor_shape_from_legacy(static_cast<std::uint8_t>(FACE_R_DIM), static_cast<std::uint8_t>(num_faces));
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            formats.unpack_A_src,
-            formats.unpack_B_src,
-            formats.unpack_A_dst,
-            formats.unpack_B_dst,
-            FACE_R_DIM,
-            FACE_R_DIM,
-            num_faces,
-            num_faces /* num_faces */);
+            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, hw_tensor_shape, hw_tensor_shape);
         _llk_unpack_fast_tilize_init_(formats.unpack_A_dst, BLOCK_CT_DIM);
         PROFILER_SYNC();
     }
@@ -326,7 +321,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
 
-    _llk_pack_fast_tilize_uninit_<DstSync::SyncHalf, is_fp32_dest_acc_en>(formats.pack_dst, FACE_R_DIM, num_faces);
+    const ckernel::TensorShape tensor_shape =
+        ckernel::make_tensor_shape_from_legacy(static_cast<std::uint8_t>(FACE_R_DIM), static_cast<std::uint8_t>(num_faces));
+    _llk_pack_fast_tilize_uninit_<DstSync::SyncHalf, is_fp32_dest_acc_en>(formats.pack_dst, tensor_shape);
 }
 
 #endif

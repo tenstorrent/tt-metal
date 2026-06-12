@@ -30,7 +30,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t tile_size = GET_L1_HEADERLESS_TILE_SIZE(formats.unpack_A_dst);
 
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4 /* num_faces */, 4 /* num_faces */);
+        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, ckernel::DEFAULT_TENSOR_SHAPE, ckernel::DEFAULT_TENSOR_SHAPE);
     _llk_unpack_untilize_init_(formats.unpack_A_dst, tile_size, FACE_R_DIM);
 
     _llk_unpack_untilize_pass_<true>(L1_ADDRESS(params.buffer_A[0]), BLOCK_CT_DIM);

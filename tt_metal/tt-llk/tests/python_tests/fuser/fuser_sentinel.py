@@ -9,6 +9,7 @@ from helpers.chip_architecture import ChipArchitecture
 from helpers.data_format_inference import infer_data_formats
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.llk_params import EltwiseBinaryReuseDestType
+from helpers.tile_shape import cpp_tensor_shape
 
 if TYPE_CHECKING:
     from .compute_node import ComputeNode
@@ -174,24 +175,21 @@ class FuserSentinel:
 
         dest_acc = config.dest_acc.cpp_enum_value
 
-        face_r_dim_a = compute_node.src_a.tile_shape.face_r_dim
-        num_faces_a = compute_node.src_a.tile_shape.total_num_faces()
+        src_a_tensor_shape = cpp_tensor_shape(compute_node.src_a.tile_shape)
         tile_size_a = compute_node.src_a.tile_size
 
         if compute_node.src_b is not None:
-            face_r_dim_b = compute_node.src_b.tile_shape.face_r_dim
-            num_faces_b = compute_node.src_b.tile_shape.total_num_faces()
+            src_b_tensor_shape = cpp_tensor_shape(compute_node.src_b.tile_shape)
             tile_size_b = compute_node.src_b.tile_size
         else:
-            face_r_dim_b = face_r_dim_a
-            num_faces_b = num_faces_a
+            src_b_tensor_shape = src_a_tensor_shape
             tile_size_b = tile_size_a
 
         return (
             f"_llk_unpack_hw_configure_<{dest_acc}, false>(\n"
             f"    {self._fmt(fmt.unpack_A_src)}, {self._fmt(fmt.unpack_B_src)},\n"
             f"    {self._fmt(fmt.unpack_A_dst)}, {self._fmt(fmt.unpack_B_dst)},\n"
-            f"    {face_r_dim_a}, {face_r_dim_b}, {num_faces_a}, {num_faces_b},\n"
+            f"    {src_a_tensor_shape}, {src_b_tensor_shape},\n"
             f"    {tile_size_a}, {tile_size_b}\n"
             f");\n"
         )

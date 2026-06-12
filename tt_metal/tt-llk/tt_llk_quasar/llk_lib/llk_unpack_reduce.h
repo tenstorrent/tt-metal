@@ -27,8 +27,9 @@ template <ReduceDim REDUCE_DIMENSION>
 inline void _llk_unpack_reduce_mop_config_(
     const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1, const TensorShape& tensor_shape, const std::uint32_t num_tiles)
 {
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     const std::uint32_t MOP_OUTER_LOOP = num_tiles;
-    const std::uint32_t MOP_INNER_LOOP = tensor_shape.total_num_faces();
+    const std::uint8_t MOP_INNER_LOOP  = tensor_shape.total_num_faces();
 
     std::uint32_t unpack_srcA_face = TT_OP_UNPACR0_FACE_INC(0, 1 /*Src face Idx*/, 0, 0, buf_desc_id_0, 1 /*Set Dvalid*/);
     std::uint32_t unpack_srcB_face = TT_OP_UNPACR1_FACE_INC(0, 0, 0, 0, buf_desc_id_1, 1 /*Set Dvalid*/);
@@ -66,7 +67,6 @@ template <ReduceDim REDUCE_DIMENSION>
 inline void _llk_unpack_reduce_init_(
     const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1, const TensorShape& tensor_shape, const std::uint32_t num_tiles = NUM_TILES)
 {
-    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, (REDUCE_DIMENSION == ReduceDim::REDUCE_ROW));
     _llk_unpack_reduce_mop_config_<REDUCE_DIMENSION>(buf_desc_id_0, buf_desc_id_1, tensor_shape, num_tiles);
 }

@@ -11,6 +11,7 @@ from fuser.fused_loop import FusedLoop, LoopTileByTile
 from fuser.fused_operation import FusedOperation
 from fuser.fused_unpacker import Unpacker
 from fuser.fuser_config import GlobalConfig
+from helpers.tile_shape import cpp_tensor_shape
 
 
 class ReduceUnpacker(Unpacker):
@@ -79,10 +80,7 @@ class ReduceUnpacker(Unpacker):
             compute_unit.enforce_fp32_accumulation.cpp_enum_value
         )
 
-        tile_shape = compute_unit.src_a.tile_shape
-        tensor_shape_instantiation: str = (
-            f"ckernel::TensorShape{{{tile_shape.face_r_dim}, {tile_shape.face_c_dim}, {tile_shape.num_faces_r_dim}, {tile_shape.num_faces_c_dim}}}"
-        )
+        tensor_shape_instantiation = cpp_tensor_shape(compute_unit.src_a.tile_shape)
 
         return (
             f"_llk_unpack_AB_reduce_init_<{pool_type}, {reduce_dim}, {enforce_fp32_accumulation}>(\n"

@@ -22,36 +22,22 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const uint32_t operandA_id = get_operand_id(operandB);
     const uint32_t operandB_id = get_operand_id(operandA);
 
-    const uint32_t unpA_face_r_dim = get_operand_face_r_dim(operandA_id);
-    const uint32_t unpB_face_r_dim = get_operand_face_r_dim(operandB_id);
+    const ckernel::TensorShape operandA_shape = get_operand_tensor_shape(operandA_id);
+    const ckernel::TensorShape operandB_shape = get_operand_tensor_shape(operandB_id);
 
     const bool partial_face_a = get_operand_partial_face(operandA_id);
     const bool partial_face_b = get_operand_partial_face(operandB_id);
-
-    const uint32_t unpA_num_faces = get_operand_num_faces(operandA_id);
-    const uint32_t unpB_num_faces = get_operand_num_faces(operandB_id);  // if partial face -> unpack face by face
 
     LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly(
         unpack_src_format[operandA_id],
         unpack_dst_format[operandA_id],
         unpack_src_format[operandB_id],
         unpack_dst_format[operandB_id],
-        unpA_face_r_dim,
-        unpB_face_r_dim,
-        unpA_num_faces,
-        unpB_num_faces));
+        operandA_shape,
+        operandB_shape));
 
     _llk_unpack_AB_matmul_init_(
-        transpose,
-        ct_dim,
-        rt_dim,
-        kt_dim,
-        unpA_face_r_dim,
-        unpB_face_r_dim,
-        unpA_num_faces,
-        unpB_num_faces,
-        partial_face_a,
-        partial_face_b);
+        transpose, ct_dim, rt_dim, kt_dim, operandA_shape, operandB_shape, partial_face_a, partial_face_b);
 }
 
 inline void llk_unpack_AB_matmul(
@@ -67,6 +53,8 @@ inline void llk_unpack_AB_matmul(
 
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
+    const ckernel::TensorShape operandA_shape = get_operand_tensor_shape(operandA_id);
+    const ckernel::TensorShape operandB_shape = get_operand_tensor_shape(operandB_id);
 
     // TODO: remove partial_face flag, as this is easily to be confused with the partial face flag in math kernel
     const bool partial_face_a = get_operand_partial_face(operandB_id);  // In1/InB -> srcA
@@ -82,10 +70,8 @@ inline void llk_unpack_AB_matmul(
         unpack_dst_format[operandB_id],
         unpack_src_format[operandA_id],
         unpack_dst_format[operandA_id],
-        get_operand_face_r_dim(operandB_id),
-        get_operand_face_r_dim(operandA_id),
-        get_operand_num_faces(operandB_id),
-        get_operand_num_faces(operandA_id)));
+        operandB_shape,
+        operandA_shape));
 
     WAYPOINT("UPMW");
     _llk_unpack_AB_matmul_(

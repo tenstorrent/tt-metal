@@ -14,6 +14,7 @@
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_math_transpose_dest.h"
+#include "tensor_shape.h"
 
 using ckernel::PackMode;
 
@@ -36,7 +37,8 @@ inline void _llk_math_eltwise_unary_datacopy_init_wrapper_(
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize || pack_mode == PackMode::Tilize,
         "Wormhole B0 LLK tests: math datacopy init wrapper accepts PackMode::Default, PackMode::Untilize, or PackMode::Tilize (tilize is ignored on WH)");
-    _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en>(num_faces, dst_format);
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(ckernel::FACE_R_DIM, static_cast<std::uint8_t>(num_faces));
+    _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en>(tensor_shape, dst_format);
 }
 
 template <DataCopyType type, DstSync Dst, bool is_fp32_dest_acc_en, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
@@ -81,8 +83,9 @@ inline void _llk_math_eltwise_unary_datacopy_init_wrapper_(
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Tilize,
         "Blackhole LLK tests: math datacopy init wrapper supports PackMode::Default or PackMode::Tilize");
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(ckernel::FACE_R_DIM, static_cast<std::uint8_t>(num_faces));
     _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en, pack_mode>(
-        num_faces, dst_format, skip_bh_tilize_workaround);
+        tensor_shape, dst_format, skip_bh_tilize_workaround);
 }
 
 template <DataCopyType type, DstSync Dst, bool is_fp32_dest_acc_en, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>

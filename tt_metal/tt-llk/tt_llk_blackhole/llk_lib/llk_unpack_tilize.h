@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "../../common/tensor_shape.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_globals.h"
@@ -73,14 +74,15 @@ inline void _llk_unpack_tilize_mop_config_(const bool narrow_tile = false, const
  * @ref _llk_math_eltwise_unary_datacopy_init_ (A2D, PackMode::Tilize) is the matching init on the math thread.
  */
 inline void _llk_unpack_tilize_init_(
-    const std::uint32_t unpack_src_format = 0,
-    const std::uint32_t unpack_dst_format = 0,
-    const std::uint32_t ct_dim            = 0,
-    const std::uint32_t face_r_dim        = FACE_R_DIM,
-    const bool narrow_tile                = false,
-    const std::uint32_t num_faces         = 4)
+    const std::uint32_t unpack_src_format    = 0,
+    const std::uint32_t unpack_dst_format    = 0,
+    const std::uint32_t ct_dim               = 0,
+    const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE,
+    const bool narrow_tile                   = false)
 {
-    LLK_ASSERT(face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == 16, "face_r_dim must be 2, 4, 8, or 16 for tilize");
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for unpack tilize");
+    const std::uint8_t face_r_dim = tensor_shape.face_r_dim;
+    const std::uint8_t num_faces  = tensor_shape.total_num_faces();
     LLK_ASSERT(num_faces == 2 || num_faces == 4, "num_faces must be 2 or 4 for tilize");
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
 
@@ -157,12 +159,14 @@ inline void _llk_unpack_tilize_init_(
 inline void _llk_unpack_tilize_(
     const std::uint32_t base_address,
     const std::uint32_t tile_index,
-    std::uint32_t unpack_src_format = 0,
-    std::uint32_t unpack_dst_format = 0,
-    const std::uint32_t face_r_dim  = FACE_R_DIM,
-    const std::uint32_t num_faces   = 4,
-    const bool narrow_tile          = false)
+    std::uint32_t unpack_src_format          = 0,
+    std::uint32_t unpack_dst_format          = 0,
+    const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE,
+    const bool narrow_tile                   = false)
 {
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for unpack tilize");
+    const std::uint8_t face_r_dim = tensor_shape.face_r_dim;
+    const std::uint8_t num_faces  = tensor_shape.total_num_faces();
     LLK_ASSERT(num_faces == 2 || num_faces == 4, "num_faces must be 2 or 4 for tilize");
 
     volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer(); // get pointer to registers for current state ID
@@ -398,10 +402,13 @@ inline void _llk_unpack_tilizeA_B_init_(
     const std::uint32_t unpack_src_format,
     const std::uint32_t unpack_dst_format,
     const std::uint32_t ct_dim,
-    const std::uint32_t num_faces       = 4,
-    const std::uint32_t unpB_face_r_dim = FACE_R_DIM)
+    const ckernel::TensorShape& operandA_shape = ckernel::DEFAULT_TENSOR_SHAPE,
+    const ckernel::TensorShape& operandB_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(operandA_shape), "Invalid tensor shape for tilize operand A");
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(operandB_shape), "Invalid tensor shape for tilize operand B");
+    const std::uint8_t num_faces       = operandA_shape.total_num_faces();
+    const std::uint8_t unpB_face_r_dim = operandB_shape.face_r_dim;
     // Sets the block_c_dim for unpack to use to increment the L1 address
     const std::uint32_t c_dim_size = SCALE_DATUM_SIZE(unpack_src_format, ct_dim * ((num_faces == 1) ? FACE_C_DIM : TILE_C_DIM)) >> 4;
 
@@ -448,14 +455,15 @@ inline void _llk_unpack_tilizeA_B_init_(
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void _llk_unpack_tilizeA_B_(
     std::uint32_t unpA_src_format,
-    std::uint32_t face_r_dim,
+    const ckernel::TensorShape& operandA_shape,
     std::uint32_t base_address_a,
     std::uint32_t address_b,
     std::uint32_t tile_index_a,
-    std::uint32_t block_ct_dim,
-    std::uint32_t num_faces = 4)
+    std::uint32_t block_ct_dim)
 {
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(operandA_shape), "Invalid tensor shape for tilize operand A");
+    const std::uint8_t face_r_dim        = operandA_shape.face_r_dim;
+    const std::uint8_t num_faces         = operandA_shape.total_num_faces();
     const std::uint32_t offset_address_a = SCALE_DATUM_SIZE(unpA_src_format, tile_index_a) << 1;
     const std::uint32_t address_a        = base_address_a + offset_address_a;
 

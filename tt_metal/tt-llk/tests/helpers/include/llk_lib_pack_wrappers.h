@@ -27,6 +27,17 @@ inline constexpr PackMode llk_test_pack_mode_v = untilize ? PackMode::Untilize
 template <bool untilize>
 inline constexpr PackMode pack_exec_mode_v = untilize ? PackMode::Untilize : PackMode::Default;
 
+inline ckernel::TensorShape _llk_pack_tensor_shape_wrapper_(
+    const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t tile_c_dim = TILE_C_DIM, const std::uint32_t num_faces = 4, const bool narrow_tile = false)
+{
+    const std::uint8_t num_faces_c_dim = static_cast<std::uint8_t>(tile_c_dim / ckernel::MAX_FACE_C_DIM);
+    return ckernel::make_tensor_shape(
+        static_cast<std::uint8_t>(face_r_dim),
+        ckernel::MAX_FACE_C_DIM,
+        static_cast<std::uint8_t>(narrow_tile ? num_faces : num_faces / num_faces_c_dim),
+        static_cast<std::uint8_t>(narrow_tile ? 1 : num_faces_c_dim));
+}
+
 #ifdef ARCH_WORMHOLE
 
 inline bool _llk_pack_skip_bh_tilize_workaround_wrapper_([[maybe_unused]] const std::uint32_t pack_src_format)
@@ -54,8 +65,8 @@ inline void _llk_pack_hw_configure_wrapper_(
     const std::uint32_t relu_config                 = 0)
 {
     static_assert(pack_mode != PackMode::Tilize, "Wormhole B0 LLK tests: pack hw configure supports PackMode::Default or PackMode::Untilize only");
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, pack_mode>(
-        pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face, narrow_tile, relu_config);
+    const ckernel::TensorShape tensor_shape = _llk_pack_tensor_shape_wrapper_(face_r_dim, ckernel::TILE_C_DIM, num_faces, narrow_tile);
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, pack_mode>(pack_src_format, pack_dst_format, tile_size, tensor_shape, partial_face, narrow_tile, relu_config);
 }
 
 template <bool is_fp32_dest_acc_en, [[maybe_unused]] bool is_tile_dim_reconfig_en = false>
@@ -70,7 +81,8 @@ inline void _llk_pack_reconfig_data_format_wrapper_(
     const bool narrow_tile                          = false,
     [[maybe_unused]] const std::uint32_t num_tiles  = 1)
 {
-    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face, narrow_tile);
+    const ckernel::TensorShape tensor_shape = _llk_pack_tensor_shape_wrapper_(face_r_dim, ckernel::TILE_C_DIM, num_faces, narrow_tile);
+    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, tensor_shape, partial_face, narrow_tile);
 }
 
 template <PackMode pack_mode = PackMode::Default, bool zero_output = false>
@@ -84,7 +96,8 @@ inline void _llk_pack_init_wrapper_(
     const std::uint32_t num_tiles                   = 1)
 {
     static_assert(pack_mode != PackMode::Tilize, "Wormhole B0 LLK tests: pack init supports PackMode::Default or PackMode::Untilize only");
-    _llk_pack_init_<pack_mode, zero_output>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
+    const ckernel::TensorShape tensor_shape = _llk_pack_tensor_shape_wrapper_(face_r_dim, ckernel::TILE_C_DIM, num_faces, narrow_tile);
+    _llk_pack_init_<pack_mode, zero_output>(pack_dst_format, tensor_shape, partial_face, narrow_tile, num_tiles);
 }
 
 template <PackMode pack_mode = PackMode::Default, bool zero_output = false>
@@ -100,7 +113,8 @@ inline void _llk_pack_init_with_src_wrapper_(
     [[maybe_unused]] const bool skip_bh_tilize_workaround = false)
 {
     static_assert(pack_mode != PackMode::Tilize, "Wormhole B0 LLK tests: pack init supports PackMode::Default or PackMode::Untilize only");
-    _llk_pack_init_<pack_mode, zero_output>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
+    const ckernel::TensorShape tensor_shape = _llk_pack_tensor_shape_wrapper_(face_r_dim, ckernel::TILE_C_DIM, num_faces, narrow_tile);
+    _llk_pack_init_<pack_mode, zero_output>(pack_dst_format, tensor_shape, partial_face, narrow_tile, num_tiles);
 }
 
 template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
@@ -123,7 +137,8 @@ inline void _llk_pack_untilize_init_wrapper_(
     const std::uint32_t face_r_dim = FACE_R_DIM,
     const std::uint32_t num_faces  = 4)
 {
-    _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(pack_dst_format, face_r_dim, num_faces);
+    const ckernel::TensorShape tensor_shape = _llk_pack_tensor_shape_wrapper_(face_r_dim, ckernel::TILE_C_DIM, num_faces);
+    _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(pack_dst_format, tensor_shape);
 }
 
 template <
@@ -141,8 +156,9 @@ inline void _llk_pack_untilize_wrapper_(
     [[maybe_unused]] const std::uint32_t num_faces = 4,
     const std::uint32_t tile_dst_rt_offset         = 0)
 {
+    const ckernel::TensorShape tensor_shape = _llk_pack_tensor_shape_wrapper_(face_r_dim, ckernel::TILE_C_DIM, num_faces);
     _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset>(
-        address, pack_dst_format, face_r_dim, tile_dst_rt_offset);
+        address, pack_dst_format, tensor_shape, tile_dst_rt_offset);
 }
 
 inline void _llk_pack_untilize_uninit_wrapper_([[maybe_unused]] const std::uint32_t pack_src_format, const std::uint32_t face_r_dim = FACE_R_DIM)
@@ -175,8 +191,8 @@ inline void _llk_pack_hw_configure_wrapper_(
     [[maybe_unused]] const bool narrow_tile = false,
     const std::uint32_t relu_config         = 0)
 {
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, pack_mode>(
-        pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face, relu_config);
+    const ckernel::TensorShape tensor_shape = _llk_pack_tensor_shape_wrapper_(face_r_dim, tile_c_dim, num_faces, narrow_tile);
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, pack_mode>(pack_src_format, pack_dst_format, tile_size, tensor_shape, partial_face, relu_config);
 }
 
 template <bool is_fp32_dest_acc_en, [[maybe_unused]] bool is_tile_dim_reconfig_en = false>
@@ -191,7 +207,8 @@ inline void _llk_pack_reconfig_data_format_wrapper_(
     [[maybe_unused]] const bool narrow_tile         = false,
     [[maybe_unused]] const std::uint32_t num_tiles  = 1)
 {
-    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face);
+    const ckernel::TensorShape tensor_shape = _llk_pack_tensor_shape_wrapper_(face_r_dim, tile_c_dim, num_faces, narrow_tile);
+    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, tensor_shape, partial_face);
 }
 
 template <PackMode pack_mode = PackMode::Default, bool zero_output = false>
@@ -204,7 +221,8 @@ inline void _llk_pack_init_wrapper_(
     [[maybe_unused]] const bool narrow_tile  = false,
     const std::uint32_t num_tiles            = 1)
 {
-    _llk_pack_init_<pack_mode, zero_output>(face_r_dim, tile_c_dim, num_faces, num_tiles);
+    const ckernel::TensorShape tensor_shape = _llk_pack_tensor_shape_wrapper_(face_r_dim, tile_c_dim, num_faces, narrow_tile);
+    _llk_pack_init_<pack_mode, zero_output>(tensor_shape, num_tiles);
 }
 
 template <PackMode pack_mode = PackMode::Default, bool zero_output = false>
@@ -219,7 +237,8 @@ inline void _llk_pack_init_with_src_wrapper_(
     const std::uint32_t num_tiles            = 1,
     const bool skip_bh_tilize_workaround     = false)
 {
-    _llk_pack_init_<pack_mode, zero_output>(pack_src_format, face_r_dim, tile_c_dim, num_faces, num_tiles, skip_bh_tilize_workaround);
+    const ckernel::TensorShape tensor_shape = _llk_pack_tensor_shape_wrapper_(face_r_dim, tile_c_dim, num_faces, narrow_tile);
+    _llk_pack_init_<pack_mode, zero_output>(pack_src_format, tensor_shape, num_tiles, skip_bh_tilize_workaround);
 }
 
 template <DstSync Dst, bool is_fp32_dest_acc_en, [[maybe_unused]] PackMode pack_mode = PackMode::Default>
@@ -242,7 +261,8 @@ inline void _llk_pack_untilize_init_wrapper_(
     const std::uint32_t num_faces  = 4)
 {
     static_assert(!diagonal, "Blackhole pack untilize does not support diagonal mode");
-    _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense>(pack_src_format, pack_dst_format, face_r_dim, num_faces);
+    const ckernel::TensorShape tensor_shape = _llk_pack_tensor_shape_wrapper_(face_r_dim, ckernel::TILE_C_DIM, num_faces);
+    _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense>(pack_src_format, pack_dst_format, tensor_shape);
 }
 
 template <
@@ -261,7 +281,8 @@ inline void _llk_pack_untilize_wrapper_(
     const std::uint32_t tile_dst_rt_offset          = 0)
 {
     static_assert(!diagonal, "Blackhole pack untilize does not support diagonal mode");
-    _llk_pack_untilize_<block_ct_dim, full_ct_dim, narrow_row, tile_dst_ct_offset, dense>(address, num_faces, tile_dst_rt_offset);
+    const ckernel::TensorShape tensor_shape = _llk_pack_tensor_shape_wrapper_(face_r_dim, ckernel::TILE_C_DIM, num_faces);
+    _llk_pack_untilize_<block_ct_dim, full_ct_dim, narrow_row, tile_dst_ct_offset, dense>(address, tensor_shape, tile_dst_rt_offset);
 }
 
 inline void _llk_pack_untilize_uninit_wrapper_(const std::uint32_t pack_src_format, [[maybe_unused]] const std::uint32_t face_r_dim = FACE_R_DIM)

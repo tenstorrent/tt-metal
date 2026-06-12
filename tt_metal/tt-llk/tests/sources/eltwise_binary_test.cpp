@@ -34,7 +34,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint8_t face_c_dim           = static_cast<std::uint8_t>(params.TEST_FACE_C_DIM);
     const std::uint8_t num_faces_r_dim      = static_cast<std::uint8_t>(params.num_faces_r_dim_A);
     const std::uint8_t num_faces_c_dim      = static_cast<std::uint8_t>(params.num_faces_c_dim_A);
-    const ckernel::TensorShape tensor_shape = {face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim};
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape(face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim);
     const ckernel::Transpose transpose      = params.UNPACK_TRANSPOSE_FACES
                                                   ? (params.UNPACK_TRANSPOSE_WITHIN_FACE ? ckernel::Transpose::Both : ckernel::Transpose::InterFace)
                                                   : (params.UNPACK_TRANSPOSE_WITHIN_FACE ? ckernel::Transpose::IntraFace : ckernel::Transpose::None);
@@ -45,10 +45,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.unpack_B_src,
         formats.unpack_A_dst,
         formats.unpack_B_dst,
-        tensor_shape.face_r_dim,
-        tensor_shape.face_r_dim,
-        tensor_shape.total_num_faces(),
-        tensor_shape.total_num_faces(),
+        tensor_shape,
+        tensor_shape,
         params.TILE_SIZE_UNPACK_A,
         params.TILE_SIZE_UNPACK_B);
 
@@ -147,11 +145,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint8_t face_c_dim           = static_cast<std::uint8_t>(params.TEST_FACE_C_DIM);
     const std::uint8_t num_faces_r_dim      = static_cast<std::uint8_t>(params.num_faces_r_dim_A);
     const std::uint8_t num_faces_c_dim      = static_cast<std::uint8_t>(params.num_faces_c_dim_A);
-    const ckernel::TensorShape tensor_shape = {face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim};
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape(face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim);
 
     const std::uint32_t tile_size = tensor_shape.total_tensor_size();
 
-    const std::uint32_t num_faces = tensor_shape.total_num_faces();
+    const std::uint8_t num_faces  = tensor_shape.total_num_faces();
     const bool partial_face       = tensor_shape.face_r_dim < FACE_R_DIM;
 
     const bool narrow_tile = (tensor_shape.num_faces_c_dim == 1);

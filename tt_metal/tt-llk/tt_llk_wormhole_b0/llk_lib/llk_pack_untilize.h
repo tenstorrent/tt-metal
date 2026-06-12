@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "../../common/tensor_shape.h"
 #include "ckernel.h"
 #include "ckernel_globals.h"
 #include "ckernel_ops.h"
@@ -84,9 +85,11 @@ template <
     bool diagonal                = false,
     bool narrow_row              = false,
     std::uint32_t row_num_datums = TILE_C_DIM>
-inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
+inline void _llk_pack_untilize_mop_config_(const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for pack untilize");
+    const std::uint8_t face_r_dim            = tensor_shape.face_r_dim;
+    const std::uint8_t num_faces             = tensor_shape.total_num_faces();
     const std::uint32_t PACKCNT              = diagonal ? (num_faces > 2 ? num_faces / 2 : num_faces) : ((face_r_dim < FACE_R_DIM) ? 1 : num_faces);
     constexpr std::uint32_t MEGAROW          = 1;
     constexpr std::uint32_t ZERO_OUTPUT_FLAG = p_pacr::P_ZERO_OUTPUT_DISABLED;
@@ -175,12 +178,13 @@ template <
     bool diagonal                = false,
     bool narrow_row              = false,
     std::uint32_t row_num_datums = TILE_C_DIM>
-inline void _llk_pack_untilize_init_(const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
+inline void _llk_pack_untilize_init_(const std::uint32_t pack_dst_format, const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for pack untilize init");
+    const std::uint8_t num_faces = tensor_shape.total_num_faces();
     _llk_pack_untilize_configure_addrmod_<diagonal, narrow_row>();
 
-    _llk_pack_untilize_mop_config_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(face_r_dim, num_faces);
+    _llk_pack_untilize_mop_config_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(tensor_shape);
 
     if (block_ct_dim != full_ct_dim)
     {
@@ -244,9 +248,14 @@ template <
     std::uint32_t row_num_datums     = TILE_C_DIM,
     std::uint32_t tile_dst_ct_offset = 0>
 inline void _llk_pack_untilize_(
-    const std::uint32_t address, const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t tile_dst_rt_offset = 0)
+    const std::uint32_t address,
+    const std::uint32_t pack_dst_format,
+    const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE,
+    const std::uint32_t tile_dst_rt_offset   = 0)
 {
     static_assert(full_ct_dim % block_ct_dim == 0, "full_ct_dim must be divisible by block_ct_dim");
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for pack untilize");
+    const std::uint8_t face_r_dim = tensor_shape.face_r_dim;
 
     program_packer_untilized_destination<block_ct_dim, full_ct_dim, diagonal, row_num_datums>(address, pack_dst_format);
 

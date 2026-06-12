@@ -43,7 +43,7 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
 )
-from helpers.tile_constants import get_tile_params
+from helpers.tile_constants import ALL_TILE_SIZES, get_tile_params
 from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
 
@@ -63,9 +63,7 @@ supported_formats = [
 
 
 @parametrize(
-    # enable tiny tiles tests when they're added formally to the LLKs
-    # tile_dimensions=[[1, 32], [2, 32], [4, 32], [8, 32], [16, 32], [32, 32]],
-    tile_dimensions=[[32, 32]],
+    tile_dimensions=[list(tile_dimensions) for tile_dimensions in ALL_TILE_SIZES],
     formats=input_output_formats(supported_formats, same=True),
     broadcast_type=[
         BroadcastType.None_,

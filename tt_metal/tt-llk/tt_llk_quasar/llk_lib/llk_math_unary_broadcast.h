@@ -182,6 +182,9 @@ template <BroadcastType BROADCAST_TYPE, bool unpack_to_dest = false, bool is_fp3
 inline void _llk_math_eltwise_unary_broadcast_init_(const TileShape& tile_shape)
 {
     static_assert(!(unpack_to_dest && is_fp32_dest_acc_en), "Unary broadcast: unpack_to_dest with Float32 dest accumulation is not supported yet");
+    LLK_ASSERT(
+        tile_shape.face_r_dim == ckernel::FACE_R_DIM && tile_shape.face_c_dim == ckernel::FACE_C_DIM && tile_shape.num_faces == 4 && !tile_shape.narrow_tile,
+        "Quasar unary broadcast currently supports only 32x32 tiles because dst addressing uses DstTileShape::Tile32x32");
     _llk_math_eltwise_unary_broadcast_addrmod_<BROADCAST_TYPE, unpack_to_dest>(tile_shape);
     if constexpr (!unpack_to_dest)
     {

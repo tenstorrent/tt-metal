@@ -50,7 +50,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 {
     // Configure hardware for AB unpack (single tile per input)
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4 /* num_faces */, 4 /* num_faces */);
+        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, ckernel::DEFAULT_TENSOR_SHAPE, ckernel::DEFAULT_TENSOR_SHAPE);
 
     // Initialise unpacker state machine
     _llk_unpack_AB_reduce_init_<POOL_TYPE, REDUCE_DIM>(DEFAULT_TENSOR_SHAPE);
@@ -94,11 +94,11 @@ void run_kernel(RUNTIME_PARAMETERS /*params*/)
     const bool fp32_transpose = false; // No fp32 transpose on reduce path
 
     // Create a default 32x32 tile with 4 faces of 16x16
-    const ckernel::TensorShape DEFAULT_TENSOR_SHAPE = {FACE_R_DIM, FACE_C_DIM, MAX_NUM_FACES_R_DIM, MAX_NUM_FACES_C_DIM};
+    const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE;
 
     constexpr MathFidelity math_fid = MathFidelity::HiFi4;
     _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, math_fid>();
-    _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, math_fid, is_int_fpu_en, fp32_transpose>(0, DEFAULT_TENSOR_SHAPE);
+    _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, math_fid, is_int_fpu_en, fp32_transpose>(0, tensor_shape);
 
     //------------------------------------------------------------------
     // 2) SFPU unary directly on the reduced result in dest regs

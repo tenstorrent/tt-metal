@@ -29,10 +29,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     if constexpr (!tilize_en)
     {
+        const ckernel::TensorShape unpack_a_shape =
+            ckernel::make_tensor_shape_from_legacy(static_cast<std::uint8_t>(FACE_R_DIM), static_cast<std::uint8_t>(params.num_faces));
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, params.num_faces, params.num_faces);
+            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, unpack_a_shape, unpack_a_shape);
         _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-            0, 0, FACE_R_DIM, params.num_faces, formats.unpack_A_src, formats.unpack_A_dst);
+            0, 0, unpack_a_shape, formats.unpack_A_src, formats.unpack_A_dst);
 
         const int num_total_tiles = params.NUM_TILES_IN_BLOCK * params.NUM_BLOCKS;
 
@@ -44,9 +46,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     else
     {
+        const ckernel::TensorShape tensor_shape =
+            ckernel::make_tensor_shape_from_legacy(static_cast<std::uint8_t>(FACE_R_DIM), static_cast<std::uint8_t>(params.num_faces), false);
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, params.num_faces, params.num_faces);
-        _llk_unpack_tilize_init_(formats.unpack_A_src, formats.unpack_A_dst, params.BLOCK_CT_DIM, FACE_R_DIM, false);
+            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, tensor_shape, tensor_shape);
+        _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, params.BLOCK_CT_DIM, tensor_shape, false);
 
         for (std::uint32_t i = 0; i < params.BLOCK_RT_DIM; i++)
         {
@@ -54,14 +58,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t j = 0; j < params.BLOCK_CT_DIM; j++)
             {
                 _llk_unpack_tilize_wrapper_(
-                    L1_ADDRESS(params.buffer_A[read_offset]),
-                    j,
-                    formats.unpack_A_src,
-                    0 /* unpack_dst_format */,
-                    params.BLOCK_CT_DIM,
-                    FACE_R_DIM,
-                    4 /* num_faces */,
-                    false);
+                    L1_ADDRESS(params.buffer_A[read_offset]), j, formats.unpack_A_src, 0 /* unpack_dst_format */, params.BLOCK_CT_DIM, tensor_shape, false);
             }
         }
     }

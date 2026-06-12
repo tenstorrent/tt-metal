@@ -117,14 +117,14 @@ inline void eltwise_binary_configure_mop_standard(const std::uint32_t acc_to_des
         math_fidelity == MathFidelity::LoFi || eltwise_binary_type == EltwiseBinaryType::ELWMUL,
         "Math fidelity larger than LoFi only works with Eltwise multiply");
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
-    const std::uint32_t num_faces       = tensor_shape.total_num_faces();
-    const std::uint32_t num_faces_c_dim = tensor_shape.num_faces_c_dim;
+    const std::uint8_t num_faces        = tensor_shape.total_num_faces();
+    const std::uint8_t num_faces_c_dim  = tensor_shape.num_faces_c_dim;
     constexpr bool high_fidelity        = is_high_fidelity(math_fidelity);
     constexpr std::uint8_t addr_mod     = ADDR_MOD_0;
 
     // Inner loop: number of MAX_FPU_ROWS (8-row) operations per face
     // Even if face_r_dim < 16, we still process at least 1 inner loop iteration
-    const std::uint8_t innerloop = tensor_shape.face_r_dim > MAX_FPU_ROWS ? (tensor_shape.face_r_dim >> MAX_FPU_ROWS_LOG2) : 1;
+    const std::uint32_t innerloop = tensor_shape.face_r_dim > MAX_FPU_ROWS ? (tensor_shape.face_r_dim >> MAX_FPU_ROWS_LOG2) : 1;
 
     // Outer loop depends on broadcast type:
     // - COL broadcast: MOP processes num_faces_c_dim faces (one row of faces)
@@ -202,8 +202,6 @@ inline void eltwise_binary_configure_mop_standard(const std::uint32_t acc_to_des
 template <EltwiseBinaryType eltwise_binary_type, BroadcastType src_b_bcast_type, MathFidelity math_fidelity = MathFidelity::LoFi>
 inline void _llk_math_eltwise_binary_standard_init_(const ckernel::TensorShape &tensor_shape, const std::uint32_t acc_to_dest)
 {
-    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
-
     eltwise_binary_configure_addrmod<eltwise_binary_type, src_b_bcast_type, math_fidelity>();
     eltwise_binary_configure_mop_standard<eltwise_binary_type, src_b_bcast_type, math_fidelity>(acc_to_dest, tensor_shape);
 
@@ -240,7 +238,7 @@ inline void _llk_math_eltwise_binary_standard_(const ckernel::TensorShape &tenso
             (eltwise_binary_type == EltwiseBinaryType::ELWMUL),
         "eltwise_binary_type must be ELWADD, ELWSUB, or ELWMUL");
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
-    const std::uint32_t num_faces_r_dim = tensor_shape.num_faces_r_dim;
+    const std::uint8_t num_faces_r_dim  = tensor_shape.num_faces_r_dim;
     constexpr bool high_fidelity        = is_high_fidelity(math_fidelity);
 
     // Dest counter always jumps by 32x32 tile spacing regardless of actual tile size
@@ -276,7 +274,7 @@ inline void _llk_math_eltwise_binary_standard_(const ckernel::TensorShape &tenso
         {
             // COL broadcast: MOP processes fidelity phases for one face (HiFi) or all face columns (LoFi)
             // With high fidelity, call MOP once per face column per face row
-            const std::uint32_t num_faces_c_dim = tensor_shape.num_faces_c_dim;
+            const std::uint8_t num_faces_c_dim  = tensor_shape.num_faces_c_dim;
             const std::uint32_t fidelity_loop   = high_fidelity ? num_faces_c_dim : 1;
 #pragma GCC unroll 0
             for (std::uint32_t face_row = 0; face_row < num_faces_r_dim; face_row++)
@@ -301,7 +299,7 @@ inline void _llk_math_eltwise_binary_standard_(const ckernel::TensorShape &tenso
         else
         {
             // NONE/ROW/SCALAR: MOP handles all faces, fidelity requires multiple runs
-            const std::uint32_t num_faces     = tensor_shape.total_num_faces();
+            const std::uint8_t num_faces      = tensor_shape.total_num_faces();
             const std::uint32_t fidelity_loop = high_fidelity ? num_faces : 1;
 #pragma GCC unroll 0
             for (std::uint32_t i = 0; i < fidelity_loop; i++)
@@ -372,7 +370,7 @@ inline void eltwise_binary_configure_mop_with_dest_reuse(const std::uint32_t acc
     constexpr std::uint8_t addr_mod = ADDR_MOD_0;
 
     // Inner loop: number of MAX_FPU_ROWS (8-row) operations per face
-    const std::uint8_t innerloop = tensor_shape.face_r_dim > MAX_FPU_ROWS ? (tensor_shape.face_r_dim >> MAX_FPU_ROWS_LOG2) : 1;
+    const std::uint32_t innerloop = tensor_shape.face_r_dim > MAX_FPU_ROWS ? (tensor_shape.face_r_dim >> MAX_FPU_ROWS_LOG2) : 1;
 
     // For dest reuse: MOP processes 1 face at a time (outer loop = 1)
     // Runtime calls MOP multiple times with move_d2a/d2b + ZEROACC between calls
@@ -455,7 +453,6 @@ template <
 inline void _llk_math_eltwise_binary_with_dest_reuse_init_(const ckernel::TensorShape &tensor_shape, const std::uint32_t acc_to_dest)
 {
     static_assert(binary_reuse_dest != EltwiseBinaryReuseDestType::NONE, "Use _llk_math_eltwise_binary_standard_init_ for no dest reuse");
-    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
 
     eltwise_binary_configure_addrmod<eltwise_binary_type, src_b_bcast_type, math_fidelity>();
     eltwise_binary_configure_mop_with_dest_reuse<eltwise_binary_type, src_b_bcast_type, math_fidelity>(acc_to_dest, tensor_shape);
@@ -519,9 +516,9 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest>
 inline void _llk_math_eltwise_binary_with_dest_reuse_(const ckernel::TensorShape &tensor_shape, std::uint32_t dst_index, const bool clear_fp32_dst_acc)
 {
-    const std::uint32_t num_faces       = tensor_shape.total_num_faces();
-    const std::uint32_t num_faces_r_dim = tensor_shape.num_faces_r_dim;
-    const std::uint32_t num_faces_c_dim = tensor_shape.num_faces_c_dim;
+    const std::uint8_t num_faces       = tensor_shape.total_num_faces();
+    const std::uint8_t num_faces_r_dim = tensor_shape.num_faces_r_dim;
+    const std::uint8_t num_faces_c_dim = tensor_shape.num_faces_c_dim;
 
     static_assert(binary_reuse_dest != EltwiseBinaryReuseDestType::NONE, "Use _llk_math_eltwise_binary_standard_ for no dest reuse");
     static_assert(

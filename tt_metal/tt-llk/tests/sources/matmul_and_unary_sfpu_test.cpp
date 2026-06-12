@@ -38,10 +38,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats_array[run].unpack_B_src,
         formats_array[run].unpack_A_dst,
         formats_array[run].unpack_B_dst,
-        FACE_R_DIM,
-        FACE_R_DIM,
-        4 /* num_faces */,
-        4 /* num_faces */);
+        ckernel::DEFAULT_TENSOR_SHAPE,
+        ckernel::DEFAULT_TENSOR_SHAPE);
     _llk_unpack_AB_matmul_init_<>();
     _llk_unpack_AB_matmul_<>(L1_ADDRESS(params.buffer_A[0]), L1_ADDRESS(params.buffer_B[0]), 0, 0, params.TILE_SIZE_UNPACK_A, params.TILE_SIZE_UNPACK_B);
 
@@ -53,7 +51,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false>(
         formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, TILE_SIZE_PACK);
     _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-        0, 0, FACE_R_DIM, 4, formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst);
+        0, 0, ckernel::DEFAULT_TENSOR_SHAPE, formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst);
     _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
         L1_ADDRESS(buffer_A_tilized), formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst);
 }

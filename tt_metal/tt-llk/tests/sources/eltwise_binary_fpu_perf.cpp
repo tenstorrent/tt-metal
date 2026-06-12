@@ -45,10 +45,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_B_src,
             formats.unpack_A_dst,
             formats.unpack_B_dst,
-            FACE_R_DIM,
-            FACE_R_DIM,
-            /* num_faces */ 4,
-            /* num_faces */ 4);
+            ckernel::DEFAULT_TENSOR_SHAPE,
+            ckernel::DEFAULT_TENSOR_SHAPE);
         _llk_unpack_AB_init_<>(DEFAULT_TENSOR_SHAPE);
         PROFILER_SYNC();
     }

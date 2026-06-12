@@ -31,23 +31,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
     const std::uint32_t num_blocks         = params.NUM_BLOCKS;
 
+    const ckernel::TensorShape tensor_shape =
+        ckernel::make_tensor_shape_from_legacy(static_cast<std::uint8_t>(params.TEST_FACE_R_DIM), static_cast<std::uint8_t>(params.num_faces));
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en, disable_src_zero_flag>(
-        formats.unpack_A_src,
-        formats.unpack_B_src,
-        formats.unpack_A_dst,
-        formats.unpack_B_dst,
-        params.TEST_FACE_R_DIM,
-        params.TEST_FACE_R_DIM,
-        params.num_faces,
-        params.num_faces);
+        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, tensor_shape, tensor_shape);
     _llk_unpack_configure_stoch_rnd_<STOCHASTIC_RND>();
     _llk_unpack_A_init_<BROADCAST_TYPE, ACC_TO_DEST, REUSE_DEST_TYPE, unpack_to_dest>(
-        params.UNPACK_TRANSPOSE_FACES,
-        params.UNPACK_TRANSPOSE_WITHIN_FACE,
-        params.TEST_FACE_R_DIM,
-        params.num_faces,
-        formats.unpack_A_src,
-        formats.unpack_A_dst);
+        params.UNPACK_TRANSPOSE_FACES, params.UNPACK_TRANSPOSE_WITHIN_FACE, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
 
     for (std::uint32_t i = 0; i < num_tiles_in_block * num_blocks; ++i)
     {

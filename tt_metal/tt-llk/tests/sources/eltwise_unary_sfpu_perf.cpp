@@ -14,6 +14,7 @@
 #include "params.h"
 #include "perf.h"
 #include "profiler.h"
+#include "tensor_shape.h"
 
 // Globals
 std::uint32_t unp_cfg_context                          = 0;
@@ -48,11 +49,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         ZONE_SCOPED("INIT")
 
+        const ckernel::TensorShape tensor_shape =
+            ckernel::make_tensor_shape_from_legacy(static_cast<std::uint8_t>(FACE_R_DIM), static_cast<std::uint8_t>(num_faces));
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces);
-
+            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, tensor_shape, tensor_shape);
         _llk_unpack_A_init_<BROADCAST_TYPE, is_fp32_dest_acc_en, reuse_dest_type, unpack_to_dest>(
-            UNPACK_TRANSPOSE_FACES, UNPACK_TRANSPOSE_WITHIN_FACE, FACE_R_DIM, num_faces, formats.unpack_A_src, formats.unpack_A_dst);
+            UNPACK_TRANSPOSE_FACES, UNPACK_TRANSPOSE_WITHIN_FACE, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
         PROFILER_SYNC();
     }
     {
@@ -114,7 +116,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         ZONE_SCOPED("INIT")
 
-        _llk_math_eltwise_unary_datacopy_init_<data_copy_type, is_fp32_dest_acc_en>(num_faces, formats.math);
+        const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(ckernel::FACE_R_DIM, static_cast<std::uint8_t>(num_faces));
+        _llk_math_eltwise_unary_datacopy_init_<data_copy_type, is_fp32_dest_acc_en>(tensor_shape, formats.math);
         _llk_math_pack_sync_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
@@ -278,11 +281,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_faces   = params.num_faces;
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
 #endif
+    const ckernel::TensorShape tensor_shape =
+        ckernel::make_tensor_shape_from_legacy(static_cast<std::uint8_t>(FACE_R_DIM), static_cast<std::uint8_t>(num_faces));
     {
         ZONE_SCOPED("INIT")
 
         // Configure packer hardware
-        _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * num_faces);
+        _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(
+            formats.pack_src, formats.pack_dst, tensor_shape.total_tensor_size(), tensor_shape);
 
         _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, num_faces);
         // Initialize destination for packing

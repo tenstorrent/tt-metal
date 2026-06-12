@@ -282,6 +282,10 @@ template <
     bool EN_DI                            = false>
 inline void _llk_math_eltwise_binary_init_(const ckernel::TensorShape& tensor_shape, bool acc_to_dest = false)
 {
+    LLK_ASSERT(
+        tensor_shape.total_row_dim() == ckernel::MAX_TILE_R_DIM && tensor_shape.total_col_dim() == ckernel::MAX_TILE_C_DIM,
+        "Quasar eltwise binary currently supports only 32x32 tiles because dst addressing uses DstTileShape::Tile32x32");
+
     if constexpr (EN_DI)
     {
         _llk_math_eltwise_di_binary_addrmod_<MATH_FIDELITY_TYPE>();

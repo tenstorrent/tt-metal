@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "../../common/tensor_shape.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_instr_params.h"
@@ -62,10 +63,8 @@ static inline __attribute__((always_inline)) std::uint32_t store_then_load(volat
  * @param unpB_src_format: Source data format of operand B in L1.
  * @param unpA_dst_format: Destination data format operand A is converted to.
  * @param unpB_dst_format: Destination data format operand B is converted to.
- * @param unpA_face_r_dim: Rows per face for operand A.
- * @param unpB_face_r_dim: Rows per face for operand B.
- * @param unpA_num_faces: Number of faces for operand A, valid values = <1, 2, 4>.
- * @param unpB_num_faces: Number of faces for operand B, valid values = <1, 2, 4>.
+ * @param unpA_tensor_shape: Tensor shape for operand A (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim).
+ * @param unpB_tensor_shape: Tensor shape for operand B (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim).
  * @param unpA_tile_size: Tile size of operand A stored to the tile-size GPR.
  * @param unpB_tile_size: Tile size of operand B stored to the tile-size GPR.
  */
@@ -75,15 +74,20 @@ inline void _llk_unpack_hw_configure_(
     const std::uint32_t unpB_src_format,
     const std::uint32_t unpA_dst_format,
     const std::uint32_t unpB_dst_format,
-    const std::uint32_t unpA_face_r_dim,
-    const std::uint32_t unpB_face_r_dim,
-    const std::uint32_t unpA_num_faces,
-    const std::uint32_t unpB_num_faces,
-    const std::uint32_t unpA_tile_size = 0,
-    const std::uint32_t unpB_tile_size = 0)
+    const ckernel::TensorShape unpA_tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE,
+    const ckernel::TensorShape unpB_tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE,
+    const std::uint32_t unpA_tile_size           = 0,
+    const std::uint32_t unpB_tile_size           = 0)
 {
-    LLK_ASSERT(unpA_num_faces == 1 || unpA_num_faces == 2 || unpA_num_faces == 4, "unpA_num_faces must be 1, 2, or 4");
-    LLK_ASSERT(unpB_num_faces == 1 || unpB_num_faces == 2 || unpB_num_faces == 4, "unpB_num_faces must be 1, 2, or 4");
+    // TODO: Remove this assert after testing >4 num_faces because there is no reason to limit this for non-broadcast versions
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(unpA_tensor_shape), "Invalid tensor shape for tile-dependent op on operand A");
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(unpB_tensor_shape), "Invalid tensor shape for tile-dependent op on operand B");
+
+    const std::uint32_t unpA_face_r_dim = unpA_tensor_shape.face_r_dim;
+    const std::uint32_t unpB_face_r_dim = unpB_tensor_shape.face_r_dim;
+    const std::uint32_t unpA_num_faces  = unpA_tensor_shape.total_num_faces();
+    const std::uint32_t unpB_num_faces  = unpB_tensor_shape.total_num_faces();
+
     configure_unpack_AB<is_fp32_dest_acc_en, false, false, false, disable_src_zero_flag>(
         unpA_src_format, unpB_src_format, unpA_dst_format, unpB_dst_format, unpA_face_r_dim, unpB_face_r_dim, 0, unpA_num_faces, unpB_num_faces);
 

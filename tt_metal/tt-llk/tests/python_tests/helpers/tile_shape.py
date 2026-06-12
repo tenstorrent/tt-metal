@@ -86,3 +86,22 @@ def construct_tile_shape(tile_dimensions: Tuple[int, int] = (32, 32)) -> TileSha
         num_faces_r_dim=num_faces_r_dim,
         num_faces_c_dim=num_faces_c_dim,
     )
+
+
+def cpp_tensor_shape(tile_shape: TileShape) -> str:
+    """Emit the canonical C++ TensorShape helper call for generated LLK code."""
+    return (
+        f"ckernel::make_tensor_shape({tile_shape.face_r_dim}, {tile_shape.face_c_dim}, "
+        f"{tile_shape.num_faces_r_dim}, {tile_shape.num_faces_c_dim})"
+    )
+
+
+def cpp_tensor_shape_from_legacy(
+    face_r_dim: int, total_num_faces: int, narrow_tile: bool = False
+) -> str:
+    """Emit the canonical C++ helper call from legacy face-count parameters."""
+    narrow_tile_cpp = "true" if narrow_tile else "false"
+    return (
+        f"ckernel::make_tensor_shape_from_legacy({face_r_dim}, {total_num_faces}, "
+        f"{narrow_tile_cpp})"
+    )

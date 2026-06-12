@@ -164,10 +164,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             unpack_src_format,
                             unpack_dst_format,
                             unpack_dst_format,
-                            FACE_R_DIM,
-                            FACE_R_DIM,
-                            4 /* num_faces */,
-                            4 /* num_faces */);
+                            ckernel::DEFAULT_TENSOR_SHAPE,
+                            ckernel::DEFAULT_TENSOR_SHAPE);
                     }
                     else
                     {
@@ -181,8 +179,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
                         /* transpose_of_faces */ (current_iteration == 0) ? 1 : 0,
                         /* within_face_16x16_transpose */ (current_iteration == 0) ? 1 : 0,
-                        /* face_r_dim     */ FACE_R_DIM,
-                        /* num_faces      */ 4,
+                        ckernel::DEFAULT_TENSOR_SHAPE,
                         unpack_src_format,
                         unpack_dst_format);
 

@@ -54,11 +54,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_B_src,
             formats.unpack_A_dst,
             formats.unpack_B_dst,
-            FACE_R_DIM,
-            FACE_R_DIM,
-            4 /* num_faces */,
-            4 /* num_faces */);
-        _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, FACE_R_DIM, false /* narrow_tile */);
+            ckernel::DEFAULT_TENSOR_SHAPE,
+            ckernel::DEFAULT_TENSOR_SHAPE);
+        _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, ckernel::DEFAULT_TENSOR_SHAPE, false /* narrow_tile */);
         PROFILER_SYNC();
     }
 
@@ -82,8 +80,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         formats.unpack_A_src,
                         formats.unpack_A_dst,
                         0 /* block_ct_dim */,
-                        FACE_R_DIM,
-                        4 /* num_faces */,
+                        ckernel::DEFAULT_TENSOR_SHAPE,
                         false /* narrow_tile */);
                 }
             }

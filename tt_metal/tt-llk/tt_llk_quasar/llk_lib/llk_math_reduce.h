@@ -55,6 +55,7 @@ void tti_pool_instr_func()
 template <PoolType POOL_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_reduce_col_mop_config_(const TensorShape& tensor_shape)
 {
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     // So Face 0 reduce, dest counter += 16, Face 1 reduce, dest counter reset to 0
     // then Face 2 reduce (which includes Face 0 reduce result in dest), dest counter += 16, Face 3 reduce(which includes Face 1 reduce result in dest at index
     // 16)
@@ -233,6 +234,7 @@ inline void _llk_math_reduce_row_mop_config_(const TensorShape& tensor_shape)
 template <PoolType POOL_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_reduce_scalar_mop_config_(const TensorShape& tensor_shape)
 {
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     constexpr std::uint32_t MOP_OUTER_LOOP      = 1;
     constexpr std::uint32_t MOP_INNER_LOOP      = 1;
     constexpr std::uint32_t NUM_FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 0 : to_underlying(MATH_FIDELITY_TYPE) - 1;
@@ -352,7 +354,6 @@ inline void _llk_math_reduce_addrmod_()
 template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION, ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_reduce_init_(const TensorShape& tensor_shape)
 {
-    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     _llk_math_reduce_addrmod_<REDUCE_DIMENSION, MATH_FIDELITY_TYPE>();
 
     if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_COL)

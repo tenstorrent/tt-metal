@@ -54,15 +54,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
+        // In1/InB -> unpacker srcA, In0/InA -> unpacker srcB
+        const ckernel::TensorShape unpA_tensor_shape = ckernel::make_tensor_shape_from_legacy(
+            static_cast<std::uint8_t>(in1_tile_r_dim < FACE_R_DIM ? in1_tile_r_dim : FACE_R_DIM), static_cast<std::uint8_t>(num_faces_B));
+        const ckernel::TensorShape unpB_tensor_shape = ckernel::make_tensor_shape_from_legacy(
+            static_cast<std::uint8_t>(in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM), static_cast<std::uint8_t>(num_faces_A));
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             formats.unpack_A_src,
             formats.unpack_B_src,
             formats.unpack_A_dst,
             formats.unpack_B_dst,
-            in1_tile_r_dim < FACE_R_DIM ? in1_tile_r_dim : FACE_R_DIM,
-            in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM,
-            num_faces_B, // In1
-            num_faces_A, // In0
+            unpA_tensor_shape,
+            unpB_tensor_shape,
             TILE_SIZE_UNPACK_A,
             TILE_SIZE_UNPACK_B);
         _llk_unpack_AB_matmul_init_<>(
@@ -70,12 +73,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             CT_DIM,
             RT_DIM,
             KT_DIM,
-            in1_tile_r_dim < FACE_R_DIM ? in1_tile_r_dim : FACE_R_DIM,
-            in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM,
-            num_faces_B,     // In1
-            num_faces_A,     // In0
-            PARTIAL_FACE_B,  // In1
-            PARTIAL_FACE_A); // In0
+            unpA_tensor_shape,
+            unpB_tensor_shape,
+            PARTIAL_FACE_B,  // In1 -> unpacker srcA partial face
+            PARTIAL_FACE_A); // In0 -> unpacker srcB partial face
         PROFILER_SYNC();
     }
     {

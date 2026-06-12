@@ -27,8 +27,7 @@
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void llk_pack_untilize_hw_configure(const llk_pack_params_t* pack_params) {
     const std::uint32_t output_id = get_output_id(pack_params->pack_output);
-    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
-    const std::uint32_t num_faces = get_output_num_faces(output_id);
+    const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
     const bool partial_face = get_output_partial_face(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
@@ -38,13 +37,11 @@ inline void llk_pack_untilize_hw_configure(const llk_pack_params_t* pack_params)
         pack_src_format[output_id],
         pack_dst_format[output_id],
         tile_size,
-        face_r_dim,
-        num_faces,
+        tensor_shape,
         partial_face,
         narrow_tile,
         pack_params->relu_config.val);
 }
-
 /**
  * @deprecated Face geometry is now derived from the output CB metadata. Configure the output CB with the
  * desired face geometry and use the metadata-based llk_pack_untilize_hw_configure(const llk_pack_params_t*)
@@ -78,7 +75,6 @@ llk_pack_untilize_hw_configure(
         narrow_tile,
         pack_params->relu_config.val);
 }
-
 /**
  * @deprecated Face geometry is now derived from the output CB metadata. Configure the output CB with the
  * desired face geometry and use the metadata-based llk_pack_untilize_hw_configure(const llk_pack_params_t*)
@@ -140,13 +136,12 @@ template <
 inline void llk_pack_untilize_init(std::uint32_t output) {
     static_assert(dense == false, "Dense is only supported on BH");
     const std::uint32_t output_id = get_output_id(output);
-    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
-    const std::uint32_t num_faces = get_output_num_faces(output_id);
+    const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
 
     LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
 
     _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(
-        pack_dst_format[output_id], face_r_dim, num_faces);
+        pack_dst_format[output_id], tensor_shape);
 }
 
 /**
@@ -218,8 +213,8 @@ inline void llk_pack_untilize(
     const std::uint32_t tile_dst_rt_offset = 0) {
     static_assert(dense == false, "Dense is only supported on BH");
     const std::uint32_t output_id = get_output_id(output);
-    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
-    const std::uint32_t num_faces = get_output_num_faces(output_id);
+    const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
+    const std::uint8_t num_faces = tensor_shape.total_num_faces();
     std::uint32_t pack_tile_addr =
         get_local_cb_interface(output_id).fifo_wr_ptr - 1 +
         SCALE_DATUM_SIZE(
@@ -231,7 +226,7 @@ inline void llk_pack_untilize(
 
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
         _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset>(
-            pack_tile_addr, pack_dst_format[output_id], face_r_dim, block_rt * block_ct_dim + tile_dst_rt_offset);
+            pack_tile_addr, pack_dst_format[output_id], tensor_shape, block_rt * block_ct_dim + tile_dst_rt_offset);
 
         pack_tile_addr += full_ct_dim * get_local_cb_interface(output_id).fifo_page_size;
     }

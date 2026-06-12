@@ -36,6 +36,16 @@ inline void llk_math_matmul_init(
     const std::uint32_t operandB_id = get_operand_id(operandB);
     const DataFormat srcB_format = static_cast<DataFormat>(get_operand_dst_format(operandA_id));
     const DataFormat srcA_format = static_cast<DataFormat>(get_operand_dst_format(operandB_id));
+    const ckernel::TensorShape operandA_shape = get_operand_tensor_shape(operandA_id);
+    const ckernel::TensorShape operandB_shape = get_operand_tensor_shape(operandB_id);
+
+    LLK_ASSERT(
+        operandA_shape.total_row_dim() == ckernel::MAX_TILE_R_DIM &&
+            operandA_shape.total_col_dim() == ckernel::MAX_TILE_C_DIM &&
+            operandB_shape.total_row_dim() == ckernel::MAX_TILE_R_DIM &&
+            operandB_shape.total_col_dim() == ckernel::MAX_TILE_C_DIM,
+        "Quasar matmul currently supports only 32x32 input tiles because math dst addressing uses "
+        "DstTileShape::Tile32x32");
 
     _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, DST_ACCUM_MODE>(
         srcA_format, srcB_format);

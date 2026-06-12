@@ -27,9 +27,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
     const std::uint32_t num_faces = params.num_faces;
+    const ckernel::TensorShape tensor_shape =
+        ckernel::make_tensor_shape_from_legacy(static_cast<std::uint8_t>(FACE_R_DIM), static_cast<std::uint8_t>(num_faces), false /* narrow_tile */);
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces);
-    _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, params.BLOCK_CT_DIM, FACE_R_DIM, false /* narrow_tile */);
+        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, tensor_shape, tensor_shape);
+    _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, params.BLOCK_CT_DIM, tensor_shape, false /* narrow_tile */);
 
     std::uint32_t read_offset = 0;
 
@@ -40,14 +42,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t j = 0; j < params.BLOCK_CT_DIM; j++)
         {
             _llk_unpack_tilize_wrapper_(
-                L1_ADDRESS(params.buffer_A[read_offset]),
-                j,
-                formats.unpack_A_src,
-                formats.unpack_A_dst,
-                block_ct_dim,
-                FACE_R_DIM,
-                num_faces,
-                false /* narrow_tile */);
+                L1_ADDRESS(params.buffer_A[read_offset]), j, formats.unpack_A_src, formats.unpack_A_dst, block_ct_dim, tensor_shape, false /* narrow_tile */);
         }
         read_offset += params.BLOCK_CT_DIM;
     }

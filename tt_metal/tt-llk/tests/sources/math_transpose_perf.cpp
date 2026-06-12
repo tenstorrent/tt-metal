@@ -42,9 +42,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ZONE_SCOPED("INIT")
 
         _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-            UNPACK_TRANSPOSE_FACES, false, FACE_R_DIM, TILE_NUM_FACES, formats.unpack_A_src, formats.unpack_A_dst);
+            UNPACK_TRANSPOSE_FACES, false, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
+            formats.unpack_A_src,
+            formats.unpack_B_src,
+            formats.unpack_A_dst,
+            formats.unpack_B_dst,
+            ckernel::DEFAULT_TENSOR_SHAPE,
+            ckernel::DEFAULT_TENSOR_SHAPE);
         PROFILER_SYNC();
     }
 

@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "../../common/tensor_shape.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_globals.h"
@@ -180,10 +181,8 @@ inline void _llk_unpack_AB_matmul_mop_config_(
  * @param ct_dim: Number of column tiles in the output block.
  * @param rt_dim: Number of row tiles in the output block.
  * @param kt_dim: Number of tiles along the contraction (K) dimension.
- * @param unpA_face_r_dim: Rows per face for operand A.
- * @param unpB_face_r_dim: Rows per face for operand B.
- * @param unpA_num_faces: Number of faces for operand A, valid values = <1, 2, 4>.
- * @param unpB_num_faces: Number of faces for operand B, valid values = <1, 2, 4>.
+ * @param unpA_tensor_shape: Tensor shape for operand A (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim).
+ * @param unpB_tensor_shape: Tensor shape for operand B (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim).
  * @param unpA_partial_face: Whether operand A is unpacked face-by-face (partial faces).
  * @param unpB_partial_face: Whether operand B is unpacked face-by-face (partial faces).
  * @note Call @ref _llk_unpack_AB_matmul_uninit_ after this function to restore the modified datum-count state.
@@ -192,19 +191,24 @@ inline void _llk_unpack_AB_matmul_mop_config_(
  */
 template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0>
 __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
-    const std::uint32_t transpose       = 0,
-    const std::uint32_t ct_dim          = 1,
-    const std::uint32_t rt_dim          = 1,
-    const std::uint32_t kt_dim          = 1,
-    const std::uint32_t unpA_face_r_dim = FACE_R_DIM,
-    const std::uint32_t unpB_face_r_dim = FACE_R_DIM,
-    const std::uint32_t unpA_num_faces  = 4,
-    const std::uint32_t unpB_num_faces  = 4,
-    const bool unpA_partial_face        = false,
-    const bool unpB_partial_face        = false)
+    const std::uint32_t transpose                = 0,
+    const std::uint32_t ct_dim                   = 1,
+    const std::uint32_t rt_dim                   = 1,
+    const std::uint32_t kt_dim                   = 1,
+    const ckernel::TensorShape unpA_tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE,
+    const ckernel::TensorShape unpB_tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE,
+    const bool unpA_partial_face                 = false,
+    const bool unpB_partial_face                 = false)
 {
-    LLK_ASSERT(unpA_num_faces == 1 || unpA_num_faces == 2 || unpA_num_faces == 4, "unpA_num_faces must be 1, 2, or 4");
-    LLK_ASSERT(unpB_num_faces == 1 || unpB_num_faces == 2 || unpB_num_faces == 4, "unpB_num_faces must be 1, 2, or 4");
+    // TODO: Remove this assert after testing >4 num_faces because there is no reason to limit this for non-broadcast versions
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(unpA_tensor_shape), "Invalid tensor shape for tile-dependent op on operand A");
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(unpB_tensor_shape), "Invalid tensor shape for tile-dependent op on operand B");
+
+    const std::uint32_t unpA_face_r_dim = unpA_tensor_shape.face_r_dim;
+    const std::uint32_t unpB_face_r_dim = unpB_tensor_shape.face_r_dim;
+    const std::uint32_t unpA_num_faces  = unpA_tensor_shape.total_num_faces();
+    const std::uint32_t unpB_num_faces  = unpB_tensor_shape.total_num_faces();
+
     // 16x16 inputs not supported - no dedicated math path; falls to 32x32 default which is incorrect for < 4 faces
     LLK_ASSERT(!(unpA_num_faces == 1 && unpB_num_faces == 1), "16x16 by 16x16 matmul is not supported");
     // also turn on within_face_16x16_transpose if it was turned off by datacopy at runtime

@@ -38,7 +38,7 @@ inline void _llk_math_eltwise_binary_broadcast_mop_config_(const TensorShape& te
     constexpr std::uint32_t EN_DST_ACC = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
     static_assert(!(EN_DST_ACC && ELTWISE_BINARY_TYPE != EltwiseBinaryType::ELWMUL), "Math fidelity larger than LoFi only works with Eltwise MUL");
 
-    const std::uint32_t MOP_OUTER_LOOP = tensor_shape.total_num_faces();
+    const std::uint8_t MOP_OUTER_LOOP  = tensor_shape.total_num_faces();
     const std::uint32_t MOP_INNER_LOOP = num_eltwise_instrn_per_face;
 
     const std::uint32_t eltwise_binary_op = eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_NONE, SRCB_BROADCAST_TYPE, ADDR_MOD_0>(EN_DST_ACC);
@@ -163,6 +163,10 @@ inline void _llk_math_eltwise_binary_broadcast_addrmod_()
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, BroadcastType BROADCAST_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_eltwise_binary_broadcast_init_(const TensorShape& tensor_shape)
 {
+    LLK_ASSERT(
+        tensor_shape.total_row_dim() == ckernel::MAX_TILE_R_DIM && tensor_shape.total_col_dim() == ckernel::MAX_TILE_C_DIM,
+        "Quasar eltwise binary broadcast currently supports only 32x32 tiles because dst addressing uses DstTileShape::Tile32x32");
+
     _llk_math_eltwise_binary_broadcast_addrmod_<BROADCAST_TYPE, MATH_FIDELITY_TYPE>();
     _llk_math_eltwise_binary_broadcast_mop_config_<ELTWISE_BINARY_TYPE, BROADCAST_TYPE, MATH_FIDELITY_TYPE>(tensor_shape);
 

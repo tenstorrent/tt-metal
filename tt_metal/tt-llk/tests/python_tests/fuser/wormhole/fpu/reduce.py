@@ -13,6 +13,7 @@ from fuser.fused_operation import FusedOperation
 from fuser.fuser_config import GlobalConfig
 from helpers.golden_generators import ReduceGolden, get_golden_generator
 from helpers.llk_params import DataFormat, ReduceDimension, ReducePool
+from helpers.tile_shape import cpp_tensor_shape
 from helpers.tilize_untilize import tilize_block, untilize_block
 
 
@@ -139,11 +140,7 @@ class ReduceFpu(Fpu):
             else "false"
         )
 
-        # Create a temporary TensorShape object with Src_A tile dimensions
-        tile_shape = compute_unit.src_a.tile_shape
-        tensor_shape_instantiation: str = (
-            f"ckernel::TensorShape{{{tile_shape.face_r_dim}, {tile_shape.face_c_dim}, {tile_shape.num_faces_r_dim}, {tile_shape.num_faces_c_dim}}}"
-        )
+        tensor_shape_instantiation = cpp_tensor_shape(compute_unit.src_a.tile_shape)
 
         return (
             f"_llk_math_reduce_<{pool_type_cpp}, {reduce_dim_cpp}, {dest_acc}, {math_fidelity}, {is_int_fpu_en}, {enforce_fp32_accumulation}>(\n"

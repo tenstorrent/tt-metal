@@ -46,18 +46,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
+        const ckernel::TensorShape unpA_hw_tensor_shape =
+            ckernel::make_tensor_shape_from_legacy(static_cast<std::uint8_t>(FACE_R_DIM), static_cast<std::uint8_t>(num_faces_A));
+        const ckernel::TensorShape unpB_hw_tensor_shape =
+            ckernel::make_tensor_shape_from_legacy(static_cast<std::uint8_t>(FACE_R_DIM), static_cast<std::uint8_t>(num_faces_B));
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             formats.unpack_A_src,
             formats.unpack_B_src,
             formats.unpack_A_dst,
             formats.unpack_B_dst,
-            FACE_R_DIM,
-            FACE_R_DIM,
-            num_faces_A,
-            num_faces_B,
+            unpA_hw_tensor_shape,
+            unpB_hw_tensor_shape,
             TILE_SIZE_UNPACK_A,
             TILE_SIZE_UNPACK_B);
-        _llk_unpack_AB_matmul_init_<>(UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM, KT_DIM, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES, false, false);
+        const ckernel::TensorShape unpA_tensor_shape =
+            ckernel::make_tensor_shape_from_legacy(static_cast<std::uint8_t>(FACE_R_DIM), static_cast<std::uint8_t>(TILE_NUM_FACES));
+        const ckernel::TensorShape unpB_tensor_shape =
+            ckernel::make_tensor_shape_from_legacy(static_cast<std::uint8_t>(FACE_R_DIM), static_cast<std::uint8_t>(TILE_NUM_FACES));
+        _llk_unpack_AB_matmul_init_<>(UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM, KT_DIM, unpA_tensor_shape, unpB_tensor_shape, false, false);
         PROFILER_SYNC();
     }
     {

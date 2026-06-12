@@ -29,8 +29,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_faces  = DEFAULT_TENSOR_SHAPE.total_num_faces();
 
     // Configure hardware for unpacking AB (two inputs for binary elementwise operation)
+    const ckernel::TensorShape hw_tensor_shape =
+        ckernel::make_tensor_shape_from_legacy(static_cast<std::uint8_t>(face_r_dim), static_cast<std::uint8_t>(num_faces));
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, face_r_dim, face_r_dim, num_faces, num_faces);
+        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, hw_tensor_shape, hw_tensor_shape);
     _llk_unpack_AB_init_<>(DEFAULT_TENSOR_SHAPE);
 
     // Unpack one tile from each input buffer

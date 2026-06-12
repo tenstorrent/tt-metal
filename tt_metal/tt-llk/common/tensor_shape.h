@@ -77,6 +77,32 @@ static_assert(sizeof(TensorShape) == 4, "TensorShape must be 4 bytes");
 
 constexpr TensorShape DEFAULT_TENSOR_SHAPE = {MAX_FACE_R_DIM, MAX_FACE_C_DIM, MAX_NUM_FACES_R_DIM, MAX_NUM_FACES_C_DIM};
 
+constexpr TensorShape make_tensor_shape(
+    const std::uint8_t face_r_dim, const std::uint8_t face_c_dim, const std::uint8_t num_faces_r_dim, const std::uint8_t num_faces_c_dim)
+{
+    return TensorShape {face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim};
+}
+
+constexpr TensorShape make_tensor_shape_from_legacy(const std::uint8_t face_r_dim, const std::uint8_t total_num_faces, const bool narrow_tile = false)
+{
+    return make_tensor_shape(
+        face_r_dim,
+        MAX_FACE_C_DIM,
+        static_cast<std::uint8_t>(total_num_faces == MAX_NUM_FACES ? MAX_NUM_FACES_R_DIM : (narrow_tile ? total_num_faces : 1)),
+        static_cast<std::uint8_t>(total_num_faces == MAX_NUM_FACES ? MAX_NUM_FACES_C_DIM : (narrow_tile ? 1 : total_num_faces)));
+}
+
+constexpr bool is_narrow_tile(const TensorShape& tensor_shape)
+{
+    return tensor_shape.num_faces_c_dim == 1 && tensor_shape.total_col_dim() < MAX_TILE_C_DIM;
+}
+
+constexpr bool is_default_tensor_shape(const TensorShape& tensor_shape)
+{
+    return tensor_shape.face_r_dim == DEFAULT_TENSOR_SHAPE.face_r_dim && tensor_shape.face_c_dim == DEFAULT_TENSOR_SHAPE.face_c_dim &&
+           tensor_shape.num_faces_r_dim == DEFAULT_TENSOR_SHAPE.num_faces_r_dim && tensor_shape.num_faces_c_dim == DEFAULT_TENSOR_SHAPE.num_faces_c_dim;
+}
+
 /**
  * @brief Validates tensor shape for operations that depend on face positioning within a tile.
  * Will start relaxing this constraint once we test larger tensor shapes.

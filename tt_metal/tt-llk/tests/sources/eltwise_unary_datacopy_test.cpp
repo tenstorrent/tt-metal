@@ -29,10 +29,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     if constexpr (!tilize_en)
     {
+        const ckernel::TensorShape unpack_a_shape =
+            ckernel::make_tensor_shape_from_legacy(static_cast<std::uint8_t>(FACE_R_DIM), static_cast<std::uint8_t>(params.num_faces));
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, params.num_faces, params.num_faces);
+            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, unpack_a_shape, unpack_a_shape);
         _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-            0, 0, FACE_R_DIM, params.num_faces, formats.unpack_A_src, formats.unpack_A_dst);
+            0, 0, unpack_a_shape, formats.unpack_A_src, formats.unpack_A_dst);
 
         const std::uint32_t num_tiles = params.NUM_BLOCKS * params.NUM_TILES_IN_BLOCK;
 
@@ -44,9 +46,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     else
     {
+        const ckernel::TensorShape tensor_shape =
+            ckernel::make_tensor_shape_from_legacy(static_cast<std::uint8_t>(FACE_R_DIM), static_cast<std::uint8_t>(params.num_faces), false /* narrow_tile */);
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, params.num_faces, params.num_faces);
-        _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, FACE_R_DIM, false /* narrow_tile */);
+            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, tensor_shape, tensor_shape);
+        _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, tensor_shape, false /* narrow_tile */);
 
         for (std::uint32_t i = 0; i < BLOCK_RT_DIM; i++)
         {
@@ -59,8 +63,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     formats.unpack_A_src,
                     formats.unpack_A_dst,
                     0 /* block_ct_dim */,
-                    FACE_R_DIM,
-                    4 /* num_faces */,
+                    tensor_shape,
                     false /* narrow_tile */);
             }
         }

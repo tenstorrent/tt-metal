@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "../../../common/tensor_shape.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_globals.h"
@@ -488,11 +489,12 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t tile_size,
-    const std::uint32_t tile_c_dim,
-    const std::uint32_t num_faces,
+    const ckernel::TensorShape& tensor_shape,
     const bool partial_face)
 {
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for pack");
+    const std::uint8_t tile_c_dim              = tensor_shape.total_col_dim();
+    const std::uint8_t num_faces               = tensor_shape.total_num_faces();
     const std::uint32_t pack_output_src_format = masked_data_format(pack_src_format);
     const std::uint32_t pack_output_dst_format = masked_data_format(pack_dst_format);
     // Gasket converts Float16_b -> Float16 before the packer, so hardware in_data_format must be Float16 for Fp8 output.
@@ -577,13 +579,13 @@ inline void configure_pack(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t tile_size,
-    [[maybe_unused]] const std::uint32_t face_r_dim = FACE_R_DIM,
-    const std::uint32_t tile_c_dim                  = TILE_C_DIM,
-    const std::uint32_t num_faces                   = 4,
-    const bool partial_face                         = false,
-    const std::uint32_t relu_config                 = 0)
+    const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE,
+    const bool partial_face                  = false,
+    const std::uint32_t relu_config          = 0)
 {
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for pack");
+    const std::uint8_t tile_c_dim = tensor_shape.total_col_dim();
+    const std::uint8_t num_faces  = tensor_shape.total_num_faces();
     LLK_ASSERT(
         is_packer_to_L1_conversion_supported(static_cast<DataFormat>(pack_src_format & 0xF), static_cast<DataFormat>(pack_dst_format & 0xF)),
         "Unsupported packer to L1 conversion.");

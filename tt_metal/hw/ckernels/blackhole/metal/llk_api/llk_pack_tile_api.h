@@ -18,9 +18,7 @@ inline void llk_pack_init(
     const std::uint32_t pack_output = 16, std::uint32_t num_tiles = 1, const std::uint32_t input_operand = 0) {
     // TODO (https://github.com/tenstorrent/tt-metal/issues/18948): Revisit for narrow_tile
     const std::uint32_t output_id = get_output_id(pack_output);
-    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
-    const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
-    const std::uint32_t num_faces = get_output_num_faces(output_id);
+    const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
 
     if constexpr (!skip_addrmod_config) {
         LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
@@ -31,7 +29,7 @@ inline void llk_pack_init(
     const std::uint32_t src_format = static_cast<std::uint32_t>(unpack_src_format[input_operand]);
     const bool is_input_8bit_format = IS_8BIT_FORMAT(src_format);
     _llk_pack_init_<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
-        pack_src_format[output_id], face_r_dim, tile_c_dim, num_faces, num_tiles, is_input_8bit_format);
+        pack_src_format[output_id], tensor_shape, num_tiles, is_input_8bit_format);
 }
 
 template <bool is_fp32_dest_acc_en, bool out_of_order_output = false, PackMode pack_mode = PackMode::Default>

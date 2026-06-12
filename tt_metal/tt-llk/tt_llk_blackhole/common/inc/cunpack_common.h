@@ -10,6 +10,7 @@
 #include "ckernel.h"
 #include "ckernel_globals.h"
 #include "llk_assert.h"
+#include "tensor_shape.h"
 
 namespace ckernel::unpacker
 {
@@ -1043,18 +1044,18 @@ enum class UnpackerProgramType
  *
  * @param expected_src_format Expected input data format for the selected unpacker
  * @param expected_dst_format Expected output data format for the selected unpacker
- * @param expected_face_r_dim Expected face row dimension for the selected unpacker (default FACE_R_DIM)
- * @param expected_num_faces  Expected number of faces for the selected unpacker (default TILE_NUM_FACES)
+ * @param expected_tensor_shape Expected tile shape for the selected unpacker
  * @param nop_count           Number of nop operations to ensure configuration writes complete (default 10)
  */
 template <UnpackerProgramType program_type = UnpackerProgramType::ProgramByTile, bool check_unpacker_b = false>
 __attribute__((noinline)) void is_unpacker_A_configured_correctly(
     const std::uint32_t expected_src_format,
     const std::uint32_t expected_dst_format,
-    const std::uint32_t expected_face_r_dim = FACE_R_DIM,
-    const std::uint32_t expected_num_faces  = TILE_NUM_FACES,
-    const std::uint32_t nop_count           = 10)
+    const ckernel::TensorShape &expected_tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE,
+    const std::uint32_t nop_count                     = 10)
 {
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(expected_tensor_shape), "Invalid tensor shape for unpacker A");
+
     // Ensure configuration writes complete before subsequent operations
     tensix_sync();
     for (std::uint32_t i = 0; i < nop_count; i++)
@@ -1110,7 +1111,7 @@ __attribute__((noinline)) void is_unpacker_A_configured_correctly(
 
     if constexpr (program_type == UnpackerProgramType::ProgramByTile)
     {
-        const std::uint32_t face_dim = expected_face_r_dim * FACE_C_DIM;
+        const std::uint32_t face_dim = expected_tensor_shape.face_r_dim * FACE_C_DIM;
         if constexpr (check_unpacker_b)
         {
             if ((td_word0 >> 16) != face_dim)
@@ -1135,17 +1136,21 @@ __attribute__((noinline)) void is_unpacker_A_configured_correctly(
     {
         // tile_descriptor word 1: z_dim at bits [31:16]
         const std::uint32_t td_word1 = (cfg[tile_descriptor_addr + 1]) >> 16;
-        if (td_word1 != expected_num_faces)
+        if (td_word1 != expected_tensor_shape.total_num_faces())
         {
             if constexpr (check_unpacker_b)
             {
                 // DEVICE_PRINT("#1016 unp_B_num_faces mismatch. expected: {}, actual: {}\n", expected_num_faces, td_word1);
-                LLK_ASSERT((td_word1 == expected_num_faces), "unp_B_num_faces mismatch. Uncomment DEVICE_PRINT #1016 to inspect expected/actual.");
+                LLK_ASSERT(
+                    (td_word1 == expected_tensor_shape.total_num_faces()),
+                    "unp_B_num_faces mismatch. Uncomment DEVICE_PRINT #1016 to inspect expected/actual.");
             }
             else
             {
                 // DEVICE_PRINT("#1004 unp_A_num_faces mismatch. expected: {}, actual: {}\n", expected_num_faces, td_word1);
-                LLK_ASSERT((td_word1 == expected_num_faces), "unp_A_num_faces mismatch. Uncomment DEVICE_PRINT #1004 to inspect expected/actual.");
+                LLK_ASSERT(
+                    (td_word1 == expected_tensor_shape.total_num_faces()),
+                    "unp_A_num_faces mismatch. Uncomment DEVICE_PRINT #1004 to inspect expected/actual.");
             }
         }
     }

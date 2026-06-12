@@ -54,7 +54,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         ZONE_SCOPED("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4, 4);
+            formats.unpack_A_src,
+            formats.unpack_B_src,
+            formats.unpack_A_dst,
+            formats.unpack_B_dst,
+            ckernel::DEFAULT_TENSOR_SHAPE,
+            ckernel::DEFAULT_TENSOR_SHAPE);
         ckernel::_llk_unpack_fast_untilize_init_<DST_ACCUM_MODE>(
             formats.unpack_A_src, formats.unpack_A_dst, FAST_UNTILIZE_BFP_B_INPUT ? 1 : FAST_UNTILIZE_FIRST_UNIT_DIM);
         PROFILER_SYNC();

@@ -33,8 +33,7 @@ inline void llk_pack_set_fp32_dest_acc(bool enable) { _llk_pack_set_fp32_dest_ac
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_hw_configure(std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
-    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
-    const std::uint32_t num_faces = get_output_num_faces(output_id);
+    const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
     const bool partial_face = get_output_partial_face(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
@@ -44,8 +43,7 @@ inline void llk_pack_hw_configure(std::uint32_t pack_output) {
         pack_src_format[output_id],
         pack_dst_format[output_id],
         tile_size,
-        face_r_dim,
-        num_faces,
+        tensor_shape,
         partial_face,
         narrow_tile,
         0 /*relu_config*/);
@@ -132,10 +130,10 @@ inline void llk_pack_dest_section_done() {
 template <PackMode pack_mode = PackMode::Default, bool diagonal = false>
 inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_output = 16) {
     const std::uint32_t output_id = get_output_id(pack_output);
-    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
+    const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_init_packer_dest_offset_registers_<DST_SYNC_MODE, pack_mode, diagonal>(face_r_dim, narrow_tile);
+    _llk_init_packer_dest_offset_registers_<DST_SYNC_MODE, pack_mode, diagonal>(tensor_shape.face_r_dim, narrow_tile);
 }
 
 /**
@@ -150,10 +148,10 @@ inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_outpu
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void llk_pack_dest_init(const std::uint32_t pack_output = 16) {
     const std::uint32_t output_id = get_output_id(pack_output);
-    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
+    const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_pack_dest_init_<DST_SYNC_MODE, is_fp32_dest_acc_en, pack_mode>(face_r_dim, narrow_tile);
+    _llk_pack_dest_init_<DST_SYNC_MODE, is_fp32_dest_acc_en, pack_mode>(tensor_shape.face_r_dim, narrow_tile);
 }
 
 /**
@@ -168,8 +166,7 @@ inline void llk_pack_dest_init(const std::uint32_t pack_output = 16) {
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     const std::uint32_t output_id = get_output_id(new_output);
-    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
-    const std::uint32_t num_faces = get_output_num_faces(output_id);
+    const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
     const bool partial_face = get_output_partial_face(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
@@ -177,8 +174,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
         pack_src_format[output_id],
         pack_dst_format[output_id],
         get_local_cb_interface(output_id).fifo_page_size,
-        face_r_dim,
-        num_faces,
+        tensor_shape,
         partial_face,
         narrow_tile);
 }

@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "../../common/tensor_shape.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_globals.h"
@@ -216,8 +217,7 @@ inline void _llk_unpack_A_mop_config_(
  * @tparam unpack_to_dest: Unpack directly into the dest register (32-bit datums).
  * @param transpose_of_faces: Nonzero to reorder (transpose) faces during the unpack.
  * @param within_face_16x16_transpose: Nonzero to enable the 16x16 within-face transpose (haloize mode).
- * @param face_r_dim: Number of rows per face.
- * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
+ * @param tensor_shape: Shape describing face geometry for the tile.
  * @param unpack_src_format: Source data format of the operand in L1.
  * @param unpack_dst_format: Destination data format the operand is converted to.
  * @note Call @ref _llk_unpack_A_uninit_ after this function to restore the modified datum-count state.
@@ -232,15 +232,16 @@ template <
 inline void _llk_unpack_A_init_(
     const std::uint32_t transpose_of_faces          = 0,
     const std::uint32_t within_face_16x16_transpose = 0,
-    const std::uint32_t face_r_dim                  = FACE_R_DIM,
-    const std::uint32_t num_faces                   = 4,
+    const ckernel::TensorShape& tensor_shape        = ckernel::DEFAULT_TENSOR_SHAPE,
     const std::uint32_t unpack_src_format           = 0,
     const std::uint32_t unpack_dst_format           = 0)
 {
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    LLK_ASSERT(BType != BroadcastType::COL || num_faces == 4, "Unary Broadcast Column requires num_faces == 4 (32x32 only)");
-    LLK_ASSERT(transpose_of_faces == 0 || face_r_dim == 16, "Partial faces are not supported for transpose datacopy, face_r_dim must be 16 rows");
-    LLK_ASSERT(transpose_of_faces == 0 || num_faces == 4 || num_faces == 1, "Transpose requires num_faces == 4 or 1 (32x32 and 16x16 only)");
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for unpack A");
+    LLK_ASSERT(BType != BroadcastType::COL || tensor_shape.total_num_faces() == 4, "Unary Broadcast Column requires num_faces == 4 (32x32 only)");
+    LLK_ASSERT(transpose_of_faces == 0 || tensor_shape.face_r_dim == 16, "Partial faces are not supported for transpose datacopy, face_r_dim must be 16 rows");
+    LLK_ASSERT(
+        transpose_of_faces == 0 || tensor_shape.total_num_faces() == 4 || tensor_shape.total_num_faces() == 1,
+        "Transpose requires num_faces == 4 or 1 (32x32 and 16x16 only)");
     LLK_ASSERT(
         is_unpacker_format_conversion_supported_dest(static_cast<DataFormat>(unpack_src_format), static_cast<DataFormat>(unpack_dst_format), unpack_to_dest),
         "Unsupported unpacker format conversion.");
@@ -259,10 +260,11 @@ inline void _llk_unpack_A_init_(
     }
     else // base case is to upk the entire face
     {
-        config_unpacker_x_end<UNP_SEL>(face_r_dim);
+        config_unpacker_x_end<UNP_SEL>(tensor_shape.face_r_dim);
     }
 
-    _llk_unpack_A_mop_config_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(transpose_of_faces > 0, num_faces, unpack_src_format, unpack_dst_format);
+    _llk_unpack_A_mop_config_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
+        transpose_of_faces > 0, tensor_shape.total_num_faces(), unpack_src_format, unpack_dst_format);
 }
 
 /**

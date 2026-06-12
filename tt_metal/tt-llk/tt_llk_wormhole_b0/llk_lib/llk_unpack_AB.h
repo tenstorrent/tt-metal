@@ -34,8 +34,8 @@ using namespace ckernel::unpacker;
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const ckernel::TensorShape &tensor_shape)
 {
-    const std::uint32_t num_faces_r_dim = tensor_shape.num_faces_r_dim;
-    const std::uint32_t num_faces_c_dim = tensor_shape.num_faces_c_dim;
+    const std::uint8_t num_faces_r_dim = tensor_shape.num_faces_r_dim;
+    const std::uint8_t num_faces_c_dim = tensor_shape.num_faces_c_dim;
     // TODO: Remove this assert after testing >4 num_faces because there is no reason to limit this for non-broadcast versions
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
 

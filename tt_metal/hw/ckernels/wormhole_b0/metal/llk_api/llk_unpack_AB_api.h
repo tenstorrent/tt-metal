@@ -14,17 +14,17 @@ template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB_init(
     const std::uint32_t operandA, const std::uint32_t operandB, const ckernel::Transpose transpose) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
+    const std::uint32_t operandB_id = get_operand_id(operandB);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
+    const ckernel::TensorShape operandB_shape = get_operand_tensor_shape(operandB_id);
 
     LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly(
         unpack_src_format[operandA_id],
         unpack_dst_format[operandA_id],
-        unpack_src_format[get_operand_id(operandB)],
-        unpack_dst_format[get_operand_id(operandB)],
-        get_operand_face_r_dim(operandA_id),
-        get_operand_face_r_dim(get_operand_id(operandB)),
-        get_operand_num_faces(operandA_id),
-        get_operand_num_faces(get_operand_id(operandB))));
+        unpack_src_format[operandB_id],
+        unpack_dst_format[operandB_id],
+        tensor_shape,
+        operandB_shape));
 
     _llk_unpack_AB_init_<BType>(tensor_shape, transpose);
 }
@@ -58,10 +58,8 @@ inline void llk_unpack_AB(
         unpack_dst_format[operandA_id],
         unpack_src_format[operandB_id],
         unpack_dst_format[operandB_id],
-        get_operand_face_r_dim(operandA_id),
-        get_operand_face_r_dim(operandB_id),
-        get_operand_num_faces(operandA_id),
-        get_operand_num_faces(operandB_id)));
+        get_operand_tensor_shape(operandA_id),
+        get_operand_tensor_shape(operandB_id)));
 
     WAYPOINT("UABW");
     if constexpr (BType == BroadcastType::ROW) {

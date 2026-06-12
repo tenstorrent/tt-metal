@@ -26,14 +26,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+    const ckernel::TensorShape hw_tensor_shape =
+        ckernel::make_tensor_shape_from_legacy(static_cast<std::uint8_t>(FACE_R_DIM), static_cast<std::uint8_t>(params.num_faces));
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, params.num_faces, params.num_faces);
+        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, hw_tensor_shape, hw_tensor_shape);
     _llk_unpack_configure_stoch_rnd_<STOCHASTIC_RND>();
 
     const std::uint32_t num_faces = _llk_unpack_tilize_num_faces_wrapper_(params.num_faces);
 
     // Initialize tilize unpacker
-    _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, params.BLOCK_CT_DIM, FACE_R_DIM, params.NARROW_TILE, num_faces);
+    const ckernel::TensorShape tensor_shape =
+        ckernel::make_tensor_shape_from_legacy(static_cast<std::uint8_t>(FACE_R_DIM), static_cast<std::uint8_t>(num_faces), params.NARROW_TILE);
+    _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, params.BLOCK_CT_DIM, tensor_shape, params.NARROW_TILE);
 
     std::uint32_t read_offset = 0;
 
@@ -51,8 +55,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 formats.unpack_A_src,
                 formats.unpack_A_dst,
                 block_ct_dim,
-                FACE_R_DIM,
-                num_faces,
+                tensor_shape,
                 false // narrow_tile disabled for now
             );
         }

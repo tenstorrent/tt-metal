@@ -47,10 +47,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_B_src,
             formats.unpack_A_dst,
             formats.unpack_B_dst,
-            FACE_R_DIM,
-            FACE_R_DIM,
-            /* num_faces */ 4,
-            /* num_faces */ 4);
+            ckernel::DEFAULT_TENSOR_SHAPE,
+            ckernel::DEFAULT_TENSOR_SHAPE);
         _llk_unpack_AB_reduce_init_<POOL_TYPE, REDUCE_DIM>(DEFAULT_TENSOR_SHAPE);
         PROFILER_SYNC();
     }
@@ -100,7 +98,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr bool IS_INT_FPU       = false;
 
     // Create a default 32x32 tile with 4 faces of 16x16
-    const ckernel::TensorShape DEFAULT_TENSOR_SHAPE = {FACE_R_DIM, FACE_C_DIM, MAX_NUM_FACES_R_DIM, MAX_NUM_FACES_C_DIM};
+    const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE;
 
     {
         ZONE_SCOPED("INIT")
@@ -131,8 +129,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     LLK_ASSERT(
                         (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                         "block_tile exceeds max dest tiles");
-                    _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, IS_INT_FPU, ENFORCE_FP32_ACC>(
-                        block_tile, DEFAULT_TENSOR_SHAPE);
+                    _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, IS_INT_FPU, ENFORCE_FP32_ACC>(block_tile, tensor_shape);
                 }
             }
         }
@@ -148,8 +145,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     LLK_ASSERT(
                         (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                         "block_tile exceeds max dest tiles");
-                    _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, IS_INT_FPU, ENFORCE_FP32_ACC>(
-                        block_tile, DEFAULT_TENSOR_SHAPE);
+                    _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, IS_INT_FPU, ENFORCE_FP32_ACC>(block_tile, tensor_shape);
                 }
                 _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             }

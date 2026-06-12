@@ -95,6 +95,22 @@ SUPPORTED_TILE_SIZES = [
     (32, 16),
 ]
 
+# Common capability groups used by LLK tests. Keep these centralized so each
+# test states which geometry family it exercises instead of copying ad hoc
+# tile lists.
+TINY_TILE_SIZES_32_COL = [
+    (1, 32),
+    (2, 32),
+    (4, 32),
+    (8, 32),
+    (16, 32),
+]
+
+ALL_TILE_SIZES = [
+    *TINY_TILE_SIZES_32_COL,
+    (32, 32),
+]
+
 
 def validate_tile_dimensions(tile_dimensions):
     """
