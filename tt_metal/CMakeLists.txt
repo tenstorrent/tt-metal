@@ -206,7 +206,6 @@ if(TT_INSTALL)
         TARGETS
             reflect
             enchantum
-            TracyClient
             tt-logger
         EXPORT Metalium
         FILE_SET
@@ -214,4 +213,15 @@ if(TT_INSTALL)
             COMPONENT metalium-dev
             DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/metalium-thirdparty
     )
+    if(ENABLE_TRACY)
+        install(
+            TARGETS
+                TracyClient
+            EXPORT Metalium
+            FILE_SET
+            api
+                COMPONENT metalium-dev
+                DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/metalium-thirdparty
+        )
+    endif()
 endif()

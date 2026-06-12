@@ -9,18 +9,24 @@ endif()
 
 add_subdirectory(umd)
 
-if(NOT ENABLE_TRACY)
-    return()
-endif()
-
 # Propagate ENABLE_TRACY into Tracy's option before add_subdirectory(tracy).
 # Use CACHE FORCE so Tracy's option() cannot reset it under older CMake policy behavior.
-set(TRACY_ENABLE ON CACHE BOOL "Enable Tracy profiling instrumentation" FORCE)
+# Tracy's add_subdirectory must always run: it creates Tracy::TracyClient, which many
+# targets link against unconditionally. With TRACY_ENABLE=OFF it becomes a no-op stub.
+if(ENABLE_TRACY)
+    set(TRACY_ENABLE ON CACHE BOOL "Enable Tracy profiling instrumentation" FORCE)
+else()
+    set(TRACY_ENABLE OFF CACHE BOOL "Enable Tracy profiling instrumentation" FORCE)
+endif()
 
 # Avoid hard failures on hosts without invariant TSC.
 set(TRACY_TIMER_FALLBACK ON CACHE BOOL "Tracy: use lower-resolution timer fallback" FORCE)
 
 add_subdirectory(tracy)
+
+if(NOT ENABLE_TRACY)
+    return()
+endif()
 
 # Tracy symbols/backtraces must be available to TracyClient consumers.
 if(TARGET TracyClient)
