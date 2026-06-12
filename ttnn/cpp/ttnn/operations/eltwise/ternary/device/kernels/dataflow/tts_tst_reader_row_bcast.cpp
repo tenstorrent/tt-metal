@@ -49,9 +49,9 @@ void kernel_main() {
     CircularBuffer cb_src(cb_id_src);
     CircularBuffer cb_src_b(cb_id_src_b);
 
-    const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
+    const uint32_t src_tile_bytes = cb_src.get_tile_size();
     const auto src = TensorAccessor(src0_args, src0_addr);
-    const uint32_t src_tile_bytes_b = get_tile_size(cb_id_src_b);
+    const uint32_t src_tile_bytes_b = cb_src_b.get_tile_size();
     const auto src_b = TensorAccessor(src1_args, src1_addr);
 
     constexpr uint32_t onetile = 1;
@@ -122,10 +122,10 @@ void kernel_main() {
                             noc.async_read_barrier();
 #endif
 #if SRC_BCAST_A && !BCAST_LLK  // no sharding support for row bcast yet
-                            FILL_TILE_WITH_FIRST_ROW(cb_id_src);
+                            FILL_TILE_WITH_FIRST_ROW(cb_src.get_write_ptr());
 #endif
 #if SRC_BCAST_B && !BCAST_LLK  // no sharding support for row bcast yet
-                            FILL_TILE_WITH_FIRST_ROW_B(cb_id_src_b);
+                            FILL_TILE_WITH_FIRST_ROW_B(cb_src_b.get_write_ptr());
 #endif
 #if !SRC_SHARDED_A
                             cb_src.push_back(onetile);

@@ -109,6 +109,7 @@ jobs:
     steps:
       - name: Checkout test definitions
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: tests/pipeline_reorg
           sparse-checkout-cone-mode: true
@@ -277,15 +278,20 @@ jobs:
               sys.exit(1)
           PYEOF
 
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   # ── Build (only if at least one combo has tests) ─────────────────
   build-artifact:
-    needs: preflight
+    needs: [check-harbor, preflight]
     if: ${{ needs.preflight.outputs.has-any-tests == 'true' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
@@ -424,6 +430,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
 
       - name: Aggregate child matrices and results
         id: aggregate

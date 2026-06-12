@@ -89,6 +89,8 @@
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 #include "impl/allocator/allocator.hpp"
+#include <internal/service/service_core_manager.hpp>
+#include "impl/internal/service/service_core_manager_impl.hpp"
 
 namespace tt {
 class tt_hlk_desc;
@@ -111,7 +113,7 @@ size_t get_ringbuffer_size(IDevice* device, HalProgrammableCoreType programmable
     return MetalContext::instance().hal().get_dev_size(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
 }
 
-void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel> kernel) {
+void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel> kernel, tt::ChipId device_id) {
     // Placement rules:
     //  Fast dispatch (tensix):
     //      - tensix kernels cannot be on dispatch cores
@@ -126,14 +128,18 @@ void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel>
     if (not slow_dispatch and not force_slow_dispatch) {
         const std::vector<CoreCoord>& dispatch_cores =
             MetalContext::instance().get_dispatch_query_manager().get_logical_dispatch_cores_on_user_chips();
+        const auto& service_claims = MetalContext::instance().get_service_core_manager().impl();
         bool on_dispatch_core = std::any_of(
             dispatch_cores.begin(),
             dispatch_cores.end(),
-            [&kernel, &dispatch_core_type](const CoreCoord& dispatch_core) {
+            [&kernel, &dispatch_core_type, &service_claims, device_id](const CoreCoord& dispatch_core) {
                 if (kernel->get_kernel_core_type() != dispatch_core_type) {
                     return false;
                 }
-
+                // Claimed service cores are permitted to run user kernels in FD mode.
+                if (service_claims.is_service_core(device_id, dispatch_core)) {
+                    return false;
+                }
                 return kernel->is_on_logical_core(dispatch_core);
             });
 
@@ -463,7 +469,7 @@ std::shared_ptr<Kernel> detail::ProgramImpl::get_kernel(KernelHandle kernel_id) 
 // Metal 2.0 Name Registry Methods
 // ============================================================================
 
-void ProgramImpl::register_kernel_spec_name(const KernelSpecName& name, KernelHandle handle) {
+void ProgramImpl::register_kernel_spec_name(const std::string& name, KernelHandle handle) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
@@ -505,7 +511,7 @@ void ProgramImpl::set_dfb_alias(uint32_t primary_id, uint32_t secondary_id) {
     dataflow_buffers_[secondary_id]->alias_primary_id = primary_id;
 }
 
-void ProgramImpl::register_dfb_spec_name(const DFBSpecName& name, uint32_t dfb_id) {
+void ProgramImpl::register_dfb_spec_name(const std::string& name, uint32_t dfb_id) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
@@ -513,7 +519,7 @@ void ProgramImpl::register_dfb_spec_name(const DFBSpecName& name, uint32_t dfb_i
     TT_FATAL(inserted, "Duplicate DFB spec name: {}", name);
 }
 
-void ProgramImpl::register_semaphore_spec_name(const SemaphoreSpecName& name, uint32_t sem_id) {
+void ProgramImpl::register_semaphore_spec_name(const std::string& name, uint32_t sem_id) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
@@ -521,28 +527,28 @@ void ProgramImpl::register_semaphore_spec_name(const SemaphoreSpecName& name, ui
     TT_FATAL(inserted, "Duplicate semaphore spec name: {}", name);
 }
 
-KernelHandle ProgramImpl::get_kernel_handle(const KernelSpecName& name) const {
+KernelHandle ProgramImpl::get_kernel_handle(const std::string& name) const {
     TT_FATAL(metal2_registry_, "Metal 2.0 registry not initialized (program was not created from ProgramSpec)");
     auto it = metal2_registry_->kernel_handles.find(name);
     TT_FATAL(it != metal2_registry_->kernel_handles.end(), "Unknown kernel spec name: {}", name);
     return it->second;
 }
 
-uint32_t ProgramImpl::get_dfb_handle(const DFBSpecName& name) const {
+uint32_t ProgramImpl::get_dfb_handle(const std::string& name) const {
     TT_FATAL(metal2_registry_, "Metal 2.0 registry not initialized (program was not created from ProgramSpec)");
     auto it = metal2_registry_->dfb_handles.find(name);
     TT_FATAL(it != metal2_registry_->dfb_handles.end(), "Unknown DFB spec name: {}", name);
     return it->second;
 }
 
-uint32_t ProgramImpl::get_semaphore_handle(const SemaphoreSpecName& name) const {
+uint32_t ProgramImpl::get_semaphore_handle(const std::string& name) const {
     TT_FATAL(metal2_registry_, "Metal 2.0 registry not initialized (program was not created from ProgramSpec)");
     auto it = metal2_registry_->semaphore_handles.find(name);
     TT_FATAL(it != metal2_registry_->semaphore_handles.end(), "Unknown semaphore spec name: {}", name);
     return it->second;
 }
 
-void ProgramImpl::register_kernel_rta_schema(const KernelSpecName& name, const KernelRTASchema& schema) {
+void ProgramImpl::register_kernel_rta_schema(const std::string& name, const KernelRTASchema& schema) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
@@ -550,7 +556,7 @@ void ProgramImpl::register_kernel_rta_schema(const KernelSpecName& name, const K
     TT_FATAL(inserted, "Duplicate kernel RTA schema for: {}", name);
 }
 
-const ProgramImpl::KernelRTASchema* ProgramImpl::get_kernel_rta_schema(const KernelSpecName& name) const {
+const ProgramImpl::KernelRTASchema* ProgramImpl::get_kernel_rta_schema(const std::string& name) const {
     if (!metal2_registry_) {
         return nullptr;
     }
@@ -561,8 +567,8 @@ const ProgramImpl::KernelRTASchema* ProgramImpl::get_kernel_rta_schema(const Ker
     return &it->second;
 }
 
-std::vector<KernelSpecName> ProgramImpl::get_registered_kernel_names() const {
-    std::vector<KernelSpecName> names;
+std::vector<std::string> ProgramImpl::get_registered_kernel_names() const {
+    std::vector<std::string> names;
     if (metal2_registry_) {
         names.reserve(metal2_registry_->kernel_handles.size());
         for (const auto& [name, handle] : metal2_registry_->kernel_handles) {
@@ -573,12 +579,18 @@ std::vector<KernelSpecName> ProgramImpl::get_registered_kernel_names() const {
 }
 
 void ProgramImpl::register_tensor_parameter(
-    const std::string& name, const TensorSpec& spec, bool dynamic_tensor_shape, bool match_padded_shape_only) {
+    const std::string& name,
+    const TensorSpec& spec,
+    bool dynamic_tensor_shape,
+    bool match_padded_shape_only,
+    bool enqueue_invariant) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
     auto [it, inserted] = metal2_registry_->tensor_parameter_layouts.try_emplace(
-        name, Metal2NameRegistry::RegisteredTensorParameter{spec, dynamic_tensor_shape, match_padded_shape_only});
+        name,
+        Metal2NameRegistry::RegisteredTensorParameter{
+            spec, dynamic_tensor_shape, match_padded_shape_only, enqueue_invariant});
     TT_FATAL(inserted, "Duplicate tensor parameter name: {}", name);
 }
 
@@ -613,6 +625,17 @@ bool ProgramImpl::get_tensor_parameter_match_padded_shape_only(const std::string
         return false;
     }
     return it->second.match_padded_shape_only;
+}
+
+bool ProgramImpl::get_tensor_parameter_enqueue_invariant(const std::string& name) const {
+    if (!metal2_registry_) {
+        return false;
+    }
+    auto it = metal2_registry_->tensor_parameter_layouts.find(name);
+    if (it == metal2_registry_->tensor_parameter_layouts.end()) {
+        return false;
+    }
+    return it->second.enqueue_invariant;
 }
 
 std::vector<std::string> ProgramImpl::get_registered_tensor_parameter_names() const {
@@ -1436,6 +1459,20 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
         }
     }
 
+    // Flatten MeshDevice into constituent physical devices so ServiceCoreManager (keyed by ChipId) can be queried per
+    // core
+    const auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager().impl();
+    std::vector<const IDevice*> devices_for_svc_check;
+    if (svc.has_any_claims()) {
+        if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
+            for (IDevice* dev : mesh->get_devices()) {
+                devices_for_svc_check.push_back(dev);
+            }
+        } else {
+            devices_for_svc_check.push_back(device);
+        }
+    }
+
     for (const CircularBufferAllocator& cb_allocator : this->cb_allocators_) {
         if (cb_allocator.l1_regions.empty()) {
             continue;
@@ -1449,6 +1486,37 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
                 cb_region_end,
                 max_l1_size);
         }
+
+        // Service cores allocate L1 independently per core (not lock-step like workers), growing down
+        // from L1_END. CBs grow up from DEFAULT_UNRESERVED. Min frontier across the CB range catches
+        // the most constrained core - collision if any frontier sits below the CB region end
+        const bool on_service_core =
+            std::any_of(devices_for_svc_check.begin(), devices_for_svc_check.end(), [&](const IDevice* dev) {
+                return svc.is_service_core(dev->id(), cb_allocator.core_range.start_coord);
+            });
+
+        if (on_service_core) {
+            std::optional<DeviceAddr> svc_lowest;
+            for (const IDevice* dev : devices_for_svc_check) {
+                for (const auto& core : cb_allocator.core_range) {
+                    auto a = svc.lowest_allocated_address(dev->id(), core);
+                    if (a.has_value()) {
+                        svc_lowest = svc_lowest.has_value() ? std::make_optional(std::min(*svc_lowest, *a)) : a;
+                    }
+                }
+            }
+            if (svc_lowest.has_value() && svc_lowest.value() < cb_region_end) {
+                TT_THROW(
+                    "Circular buffers on service-core range {} in program {} clash with ServiceCoreManager-allocated "
+                    "L1 (lowest service allocation at {}, CB region ends at {})",
+                    cb_allocator.core_range.str(),
+                    this->id,
+                    svc_lowest.value(),
+                    cb_region_end);
+            }
+            continue;  // Worker-grid checks below are irrelevant for service cores.
+        }
+
         if (hybrid_mode) {
             // Per-core allocations (experimental_set_per_core_allocation) can land at different
             // addresses per core, so query only the banks this CB covers on each physical allocator.
@@ -1480,11 +1548,40 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
 
 void detail::ProgramImpl::validate_circular_buffer_core_ranges(const IDevice* device) {
     auto grid_size = device->compute_with_storage_grid_size();
+    // Flatten MeshDevice into constituent physical devices so ServiceCoreManager (keyed by ChipId) can be queried per
+    // core. Mirrors validate_circular_buffer_region.
+    const auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager().impl();
+    std::unordered_set<CoreCoord> claimed;
+    if (svc.has_any_claims()) {
+        if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
+            for (IDevice* dev : mesh->get_devices()) {
+                auto chip_claimed = svc.claimed_cores(dev->id());
+                claimed.insert(chip_claimed.begin(), chip_claimed.end());
+            }
+        } else {
+            claimed = svc.claimed_cores(device->id());
+        }
+    }
+    auto entirely_on_service_cores = [&](const CoreRange& cr) {
+        if (claimed.empty()) {
+            return false;
+        }
+        for (uint32_t x = cr.start_coord.x; x <= cr.end_coord.x; ++x) {
+            for (uint32_t y = cr.start_coord.y; y <= cr.end_coord.y; ++y) {
+                if (!claimed.contains(CoreCoord{x, y})) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    };
     for (const auto& cb : circular_buffers_) {
         for (const auto& cr : cb->core_ranges().ranges()) {
+            const bool in_worker_grid = cr.end_coord.x < grid_size.x && cr.end_coord.y < grid_size.y;
             TT_FATAL(
-                cr.end_coord.x < grid_size.x && cr.end_coord.y < grid_size.y,
-                "Circular buffer core range {} in program {} exceeds device compute grid ({}x{})",
+                in_worker_grid || entirely_on_service_cores(cr),
+                "Circular buffer core range {} in program {} exceeds device compute grid ({}x{}) and is "
+                "not entirely on cores claimed via ServiceCoreManager",
                 cr.str(),
                 this->id,
                 grid_size.x,
@@ -1649,10 +1746,11 @@ void detail::ProgramImpl::set_cb_data_fmt_and_tile(
         const auto& cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
         for (const auto& circular_buffer : cbs_on_core) {
             for (auto buffer_index : circular_buffer->buffer_indices()) {
-                build_options.set_cb_data_fmt_and_tile(
-                    static_cast<CBIndex>(buffer_index),
-                    circular_buffer->data_format(buffer_index),
-                    circular_buffer->tile(buffer_index));
+                const CBIndex cb_index = static_cast<CBIndex>(buffer_index);
+                const DataFormat data_format = circular_buffer->data_format(buffer_index);
+                const auto& tile_opt = circular_buffer->tile(buffer_index);
+                const auto& unpack_geom = circular_buffer->unpack_face_geometry(buffer_index);
+                build_options.set_cb_data_fmt_tile_and_face_geometry(cb_index, data_format, tile_opt, unpack_geom);
             }
         }
     }
@@ -2068,7 +2166,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
-                validate_kernel_placement(force_slow_dispatch, kernel);
+                validate_kernel_placement(force_slow_dispatch, kernel, device->id());
                 auto [build_options, kernel_hash] = prep_kernel(kernel);
                 coordinator.submit(kernel_hash, [&]() {
                     generate_kernel_source_files(device, build_options, kernel);
@@ -2090,7 +2188,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         // Local path: parallel build via thread pool.
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
-                validate_kernel_placement(force_slow_dispatch, kernel);
+                validate_kernel_placement(force_slow_dispatch, kernel, device->id());
                 launch_build_step(
                     [&, kernel] {
                         auto [build_options, kernel_hash] = prep_kernel(kernel);

@@ -92,7 +92,7 @@ void kernel_main() {
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
 
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
-    constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
+    [[maybe_unused]] constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
     constexpr auto activation_type =
         ttnn::experimental::prim::detail::MoEActivationFunction(get_named_compile_time_arg_val("activation_function"));
 
@@ -101,15 +101,15 @@ void kernel_main() {
 
     // Run-time arguments
     uint32_t argidx = 0;
-    const auto dram_bank_id = get_arg_val<uint32_t>(argidx++);
-    const auto vchannel = get_arg_val<uint32_t>(argidx++);
-    const auto w0_w1_addr = get_arg_val<uint32_t>(argidx++);
-    const auto w2_addr = get_arg_val<uint32_t>(argidx++);
-    const auto out_addr = get_arg_val<uint32_t>(argidx++);
-    const auto ring_semaphore_id = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto dram_bank_id = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto vchannel = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto w0_w1_addr = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto w2_addr = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto out_addr = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto ring_semaphore_id = get_arg_val<uint32_t>(argidx++);
     const auto ring_core_id = get_arg_val<uint32_t>(argidx++);
-    const auto ring_neighbor_physical_x = get_arg_val<uint32_t>(argidx++);
-    const auto ring_neighbor_physical_y = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto ring_neighbor_physical_x = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto ring_neighbor_physical_y = get_arg_val<uint32_t>(argidx++);
 
     // CBs
     constexpr auto cb_s2c_in = tt::CBIndex::c_0;     // tilize_output_cb_id
@@ -136,11 +136,11 @@ void kernel_main() {
     constexpr uint32_t num_w0_w1_tiles_h = Ht;
     constexpr uint32_t num_w2_tiles_h = Nt;
 
-    const uint32_t num_w0_w1_tiles_w = shard_tiles_lut[ring_core_id];
+    [[maybe_unused]] const uint32_t num_w0_w1_tiles_w = shard_tiles_lut[ring_core_id];
     const uint32_t num_w2_tiles_w = w2_shard_tiles_lut[ring_core_id];
 
-    const uint32_t num_in2_tiles = num_w2_tiles_w;
-    const uint32_t num_mm2_tiles = num_w2_tiles_w;
+    [[maybe_unused]] const uint32_t num_in2_tiles = num_w2_tiles_w;
+    [[maybe_unused]] const uint32_t num_mm2_tiles = num_w2_tiles_w;
 
     //-------------------------------------------------------------------------
     // W0 and W1 reading constants
@@ -154,14 +154,14 @@ void kernel_main() {
     // W2 reading constants (base-constant aliases only; derived values come from Cfg)
     constexpr auto w2_tiles_per_iter_w = moe_ring::W2_TILES_PER_A2A_ITER_W;
     constexpr uint32_t w2_tiles_per_block = moe_ring::W2_TILES_PER_TXN * moe_ring::W2_TXNS_PER_BLOCK;  // 14 * 2 = 28
-    constexpr uint32_t w2_tiles_per_iter_h = moe_ring::W2_TILES_PER_A2A_ITER_H;
+    [[maybe_unused]] constexpr uint32_t w2_tiles_per_iter_h = moe_ring::W2_TILES_PER_A2A_ITER_H;
 
     //-------------------------------------------------------------------------
     // Ring setup
     //-------------------------------------------------------------------------
     constexpr uint32_t w2_blocks_per_a2a_iter = Cfg::w2_blocks_per_expert / Cfg::num_a2a_iters;
 
-    constexpr uint32_t num_a2a_steps_per_iter = num_cores;
+    [[maybe_unused]] constexpr uint32_t num_a2a_steps_per_iter = num_cores;
 
     constexpr uint32_t tiles_per_step = Cfg::in2_tiles_per_step;
 

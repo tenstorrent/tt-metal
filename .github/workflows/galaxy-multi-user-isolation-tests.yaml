@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       galaxy-multi-user-isolation-tests:
-        description: 'Run Galaxy multi-host job (not actually used in logic yet)'
+        description: "Run Galaxy multi-host job (not actually used in logic yet)"
         required: false
         default: true
         type: boolean
@@ -36,15 +36,20 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
   schedule:
-    - cron: '0 0 * * *' # This cron schedule runs the workflow every day at 12am UTC
+    - cron: "0 0 * * *" # This cron schedule runs the workflow every day at 12am UTC
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
@@ -122,6 +127,7 @@ jobs:
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
       - name: ⬇️ Download Build
@@ -137,9 +143,9 @@ jobs:
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: '3.10'
+          python-version: "3.10"
       - name: Install Wheel
         run: |
           python3 -m pip install --force-reinstall ttnn-*.whl

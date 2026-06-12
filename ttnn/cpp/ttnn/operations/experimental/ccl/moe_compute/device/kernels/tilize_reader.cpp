@@ -33,9 +33,9 @@ template <
     uint32_t MeshCols,
     ReplicateGroup Axis>
 inline uint32_t get_device_idx_from_global_token_idx(const uint32_t t) {
-    constexpr uint32_t Replicate_Group = (Axis == ReplicateGroup::NONE)   ? MeshRows * MeshCols
-                                         : (Axis == ReplicateGroup::COLS) ? MeshRows
-                                                                          : MeshCols;
+    [[maybe_unused]] constexpr uint32_t Replicate_Group = (Axis == ReplicateGroup::NONE)   ? MeshRows * MeshCols
+                                                          : (Axis == ReplicateGroup::COLS) ? MeshRows
+                                                                                           : MeshCols;
     const uint32_t device_in_group = t / TokensPerDevice;
 
     if constexpr (Axis == ReplicateGroup::NONE) {
@@ -271,7 +271,7 @@ void kernel_main() {
     constexpr uint32_t mapping_pages = get_named_compile_time_arg_val("mapping_pages");
 
     // Page sizes
-    constexpr uint32_t indices_page_size = get_named_compile_time_arg_val("indices_page_size");
+    [[maybe_unused]] constexpr uint32_t indices_page_size = get_named_compile_time_arg_val("indices_page_size");
     constexpr uint32_t per_expert_total_tokens_output_page_size =
         get_named_compile_time_arg_val("per_expert_total_tokens_output_page_size");
     constexpr uint32_t expert_activation_output_page_size =
@@ -287,13 +287,15 @@ void kernel_main() {
     constexpr uint32_t tokens = get_named_compile_time_arg_val("tokens");
     constexpr uint32_t remote_counts_entry_size = get_named_compile_time_arg_val("remote_counts_entry_size");
     constexpr uint32_t experts = get_named_compile_time_arg_val("experts");
+    constexpr uint32_t experts_per_device = get_named_compile_time_arg_val("experts_per_device");
+
     constexpr uint32_t selected_experts_k = get_named_compile_time_arg_val("selected_experts_k");
 
     // Chunk info
     constexpr uint32_t tokens_per_chunk = get_named_compile_time_arg_val("tokens_per_chunk");
 
     // Mesh
-    constexpr uint32_t num_devices = get_named_compile_time_arg_val("num_devices");
+    [[maybe_unused]] constexpr uint32_t num_devices = get_named_compile_time_arg_val("num_devices");
     constexpr uint32_t mesh_rows = get_named_compile_time_arg_val("mesh_rows");
     constexpr uint32_t mesh_cols = get_named_compile_time_arg_val("mesh_cols");
     constexpr uint32_t linearized_mesh_coord = get_named_compile_time_arg_val("linearized_mesh_coord");
@@ -313,7 +315,7 @@ void kernel_main() {
     constexpr uint32_t tilize_bounding_box_num_cores = get_named_compile_time_arg_val("tilize_bounding_box_num_cores");
 
     // Multicast coordinates for signalling MM cores
-    constexpr uint32_t num_matmul_cores = get_named_compile_time_arg_val("num_matmul_cores");
+    [[maybe_unused]] constexpr uint32_t num_matmul_cores = get_named_compile_time_arg_val("num_matmul_cores");
 
     constexpr uint32_t matmul_mcast_start_x = get_named_compile_time_arg_val("matmul_mcast_start_x");
     constexpr uint32_t matmul_mcast_start_y = get_named_compile_time_arg_val("matmul_mcast_start_y");
@@ -394,7 +396,7 @@ void kernel_main() {
     // indices not used by reader
     // scores not used by reader
     const auto mapping_tensor_addr_gen = TensorAccessor(mapping_args, mapping_tensor_address);
-    const auto per_expert_total_tokens_output_tensor_addr_gen =
+    [[maybe_unused]] const auto per_expert_total_tokens_output_tensor_addr_gen =
         TensorAccessor(per_expert_total_tokens_output_args, per_expert_total_tokens_output_tensor_address);
     const auto expert_activation_output_tensor_addr_gen =
         TensorAccessor(expert_activation_output_args, expert_activation_output_address);
@@ -403,14 +405,12 @@ void kernel_main() {
     // Constants
     constexpr uint32_t one_page = 1;
 
-    constexpr uint32_t experts_per_device = (experts + num_devices - 1) / num_devices;
-
     // Size of e_t buffer for all experts (for multicast)
     constexpr uint32_t e_t_buffer_total_size = experts_per_device * (tokens + 1) * e_t_entry_size;
 
     constexpr ReplicateGroup axis = ReplicateGroup(cluster_axis);
     constexpr uint32_t dispatch_devices = axis == ReplicateGroup::COLS ? mesh_rows : mesh_cols;
-    constexpr uint32_t dispatch_index =
+    [[maybe_unused]] constexpr uint32_t dispatch_index =
         axis == ReplicateGroup::COLS ? linearized_mesh_coord / mesh_cols : linearized_mesh_coord % mesh_cols;
     constexpr uint32_t tokens_per_device = tokens / dispatch_devices;
 

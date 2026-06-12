@@ -381,10 +381,14 @@ def test_wan_transformer_inner_step(
     rope_cos_1HND, rope_sin_1HND, trans_mat = tt_model.prepare_rope_features(spatial_input)
     prompt_1BLP = tt_model.prepare_text_conditioning(prompt_input)
 
+    spatial_device = from_torch(
+        spatial_host, device=mesh_device, mesh_axes=[None, None, parallel_config.sequence_parallel.mesh_axis, None]
+    )
+
     # Run TT inner_step (returns on-device tensor)
-    logger.info(f"Running TT inner_step with spatial_host shape {spatial_host.shape}, N={N}")
+    logger.info(f"Running TT inner_step with spatial_device shape {spatial_device.shape}, N={N}")
     tt_output_1BNI_tt = tt_model.inner_step(
-        spatial_1BNI_torch=spatial_host,
+        spatial_1BNI=spatial_device,
         prompt_1BLP=prompt_1BLP,
         rope_cos_1HND=rope_cos_1HND,
         rope_sin_1HND=rope_sin_1HND,

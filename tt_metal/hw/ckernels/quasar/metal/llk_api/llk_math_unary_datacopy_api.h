@@ -45,6 +45,10 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand = 0
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
     const std::uint32_t num_rows = num_faces * face_r_dim;
 
+    const DataFormat srcA_format = static_cast<DataFormat>(get_operand_dst_format(operand_id));
+    const DataFormat srcB_format = static_cast<DataFormat>(get_operand_dst_format(operand_id));
+    _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, EN_32BIT_DEST>(srcA_format, srcB_format);
+
     if constexpr (src_b_bcast_type == BroadcastType::NONE) {
         _llk_math_eltwise_unary_datacopy_init_<type, EN_32BIT_DEST>(
             num_rows /*num_rows_per_matrix*/, 1 /*num_matrices*/);

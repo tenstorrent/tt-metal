@@ -46,6 +46,7 @@ jobs:
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: |
             .github
@@ -80,7 +81,7 @@ jobs:
     name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs_on }}
     container:
-      image: ${{ inputs.docker-image }}
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
@@ -106,6 +107,7 @@ jobs:
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           ref: ${{ inputs.ref || github.sha }}
           submodules: recursive

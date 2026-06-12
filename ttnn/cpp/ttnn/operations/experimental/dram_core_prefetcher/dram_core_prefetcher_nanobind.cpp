@@ -5,6 +5,7 @@
 #include "dram_core_prefetcher_nanobind.hpp"
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/vector.h>
 
@@ -15,42 +16,110 @@
 namespace ttnn::operations::experimental {
 
 void bind_dram_core_prefetcher(nb::module_& mod) {
+    ttnn::bind_function<"is_dram_core_prefetcher_supported", "ttnn.experimental.">(
+        mod,
+        R"doc(
+            Return True if the DRAM-core (DRISC) prefetcher is supported on `mesh_device`,
+            i.e. programmable DRAM cores are available (Blackhole with
+            TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1). When this returns False,
+            start_dram_core_prefetcher would raise, so callers can use this to skip instead.
+
+            Args:
+                mesh_device (ttnn.MeshDevice): the mesh device to query.
+
+            Returns:
+                bool
+        )doc",
+        &is_dram_core_prefetcher_supported,
+        nb::arg("mesh_device"));
+
     ttnn::bind_function<"start_dram_core_prefetcher", "ttnn.experimental.">(
         mod,
         R"doc(
-            Start the DRAM-core (DRISC) prefetcher on `mesh_device`. Returns immediately;
-            the kernel runs asynchronously on its DRISC core(s) for `num_layers` iterations,
-            pushing each tensor in `tensors` into the receivers configured in `global_cb`.
+            Start the queueable DRAM-core (DRISC) prefetcher on `mesh_device`. Returns
+            immediately; one DRISC kernel parks on a per-(device, sender-core) H2D socket
+            waiting for requests. Pair with queue_dram_core_prefetcher_request and
+            stop_dram_core_prefetcher.
 
-            Only one DRAM-core prefetcher may be active per mesh device at a time; calling
-            start again before stop will raise.
+            Only one DRAM-core prefetcher may be active per mesh device at a time.
+            Receiver count is per-GCB (read from each GCB's sender state block on every
+            request), so a single prefetcher can serve GCBs with different num_receivers
+            values.
 
             Args:
                 mesh_device (ttnn.MeshDevice): the mesh device to launch on.
-                tensors (List[ttnn.Tensor]): data tensors followed by a trailing tensor_addrs
-                    tensor. The addrs tensor is unused on the DRAM-core path but kept for
-                    shape parity with ttnn.dram_prefetcher.
-                num_layers (int): number of prefetch iterations the kernel will run.
-                global_cb (GlobalCircularBuffer): must be a DRAM-sender GCB
-                    (created via ttnn.experimental.create_global_circular_buffer_with_dram_senders).
+                dual_senders_per_bank (bool): if True, run two DRISC sender kernels per DRAM
+                    bank (the free subchannel plus the NOC1-endpoint subchannel, both on NOC0)
+                    and split each bank's receivers across them. Recv-contig layout only; the
+                    GCB must be created with the matching flag. Defaults to False.
+        )doc",
+        &start_dram_core_prefetcher,
+        nb::arg("mesh_device"),
+        nb::arg("dual_senders_per_bank") = false);
+
+    ttnn::bind_function<"queue_dram_core_prefetcher_request", "ttnn.experimental.">(
+        mod,
+        R"doc(
+            Queue one prefetch request. Non-blocking. Per-GCB ring-buffer state is
+            preserved across requests, so successive Queue calls against the same GCB
+            resume where the previous call left off. Successive Queue calls can target
+            different GCBs.
+
+            Args:
+                mesh_device (ttnn.MeshDevice): the mesh device whose prefetcher to queue on.
+                tensors (List[Tuple[ttnn.Tensor, int]]): the full, flattened list of
+                    (weight tensor, block_count) pairs to prefetch (at least one), streamed
+                    in list order. block_count is the number of K-blocks to divide that
+                    tensor's K dimension into (the consumer matmul waits on block_count
+                    pages per layer). Pass distinct tensors for distinct layers, or repeat
+                    a tensor to replay it.
+                global_cb (GlobalCircularBuffer): a DRAM-sender GCB (created via
+                    ttnn.experimental.create_global_circular_buffer_with_dram_senders).
+                device_subset (Optional[MeshCoordinateRangeSet]): subset of the mesh that
+                    processes this request. Defaults to the full mesh.
 
             Returns:
                 None
         )doc",
-        &start_dram_core_prefetcher,
+        &queue_dram_core_prefetcher_request,
         nb::arg("mesh_device"),
         nb::arg("tensors"),
-        nb::arg("num_layers"),
-        nb::arg("global_cb"));
+        nb::arg("global_cb"),
+        nb::kw_only(),
+        nb::arg("device_subset") = std::nullopt);
+
+    ttnn::bind_function<"wait_for_cq_on_dram_core_prefetcher", "ttnn.experimental.">(
+        mod,
+        R"doc(
+            Fence the DRAM-core prefetcher against work enqueued on a command queue.
+            Every prefetch request queued after this call waits until all work previously
+            enqueued on `cq_id` has completed on device before the prefetcher reads DRAM.
+            Use this to guarantee data written over `cq_id` has landed before the
+            prefetcher streams it.
+
+            Call synchronously on the host thread that issued the data writes — after those
+            writes, and before the queue_dram_core_prefetcher_request that consumes them.
+
+            Args:
+                mesh_device (ttnn.MeshDevice): the mesh device whose prefetcher to fence.
+                cq_id (int): the command queue to fence against.
+                device_subset (Optional[MeshCoordinateRangeSet]): subset of the mesh to
+                    fence. Defaults to the full mesh.
+
+            Returns:
+                None
+        )doc",
+        &wait_for_cq_on_dram_core_prefetcher,
+        nb::arg("mesh_device"),
+        nb::arg("cq_id") = 0,
+        nb::kw_only(),
+        nb::arg("device_subset") = std::nullopt);
 
     ttnn::bind_function<"stop_dram_core_prefetcher", "ttnn.experimental.">(
         mod,
         R"doc(
-            Block until the active DRAM-core prefetcher finishes its num_layers loop, then
-            release its resources. No-op if no prefetcher is active.
-
-            Callers invoke stop after enqueuing all consuming matmul programs; stop is what
-            drains the pipeline.
+            Push the stop sentinel to every socket, join the host worker thread, and wait
+            for the kernels to exit. No-op if no prefetcher is active.
 
             Args:
                 mesh_device (ttnn.MeshDevice): the mesh device whose prefetcher to stop.
@@ -72,52 +141,29 @@ void bind_dram_core_prefetcher(nb::module_& mod) {
                 bank_to_receivers: List of (bank_id, receivers) pairs.
                 size: Per-receiver fifo size in bytes.
                 buffer_type: Buffer type (L1 or L1_SMALL).
+                dual_senders_per_bank: If True, split each bank's receivers across two DRISC
+                    sender cores (recv-contig layout only); must match the prefetcher config.
         )doc",
         &ttnn::global_circular_buffer::create_global_circular_buffer_with_dram_senders,
         nb::keep_alive<0, 1>(),
         nb::arg("mesh_device"),
         nb::arg("bank_to_receivers"),
         nb::arg("size"),
-        nb::arg("buffer_type") = tt::tt_metal::BufferType::L1);
+        nb::arg("buffer_type") = tt::tt_metal::BufferType::L1,
+        nb::arg("dual_senders_per_bank") = false);
 
     ttnn::bind_function<"create_global_circular_buffer_for_matmul_1d", "ttnn.experimental.">(
         mod,
         R"doc(
             Build a DRAM-sender GlobalCircularBuffer sized to feed one or more 1D ring matmuls
-            (gather_in0=true) with their weight tensors. Size, page stride, and the
-            receiver-to-bank rectangle are derived from the matmul program configs so
-            host-side alignment checks fire as TT_FATAL at construction rather than as a
-            silent device hang during ttnn.linear.
-
-            One (program_config, weight) pair per matmul. The production pattern (e.g. llama 70B)
-            is to share a single GCB across XQKV/WO/FF1/FF2, where each consumer has a different
-            in1_block_size.
-
-            Validates per matmul:
-              * weight K is tile-aligned AND divisible by ring_size (no activation padding past K),
-              * weight N shards evenly across DRAM banks and per-bank N splits evenly across
-                num_global_cb_receivers,
-              * matmul per_core_N == weight per-receiver N.
-            All configs must agree on compute_with_storage_grid_size and num_global_cb_receivers.
-
-            Picking size (in bytes):
-              * Minimum = num_blocks * largest_in1_block_size (one full layer's pages).
-                The matmul does wait_front(num_blocks) per layer, so anything smaller deadlocks.
-              * Larger lets the DRISC prefetcher run further ahead. Past one full layer
-                worth more buffering doesn't add throughput; the DRISC just stalls on
-                remote_cb_reserve_back.
-              * The factory does not check L1 capacity. Callers must size the GCB to fit
-                alongside the matmul's in0/in1/out/interm CBs on the receiver cores.
+            (gather_in0=true) with their weight tensors. See impl notes in
+            tt_metal/impl/buffers/global_circular_buffer.cpp.
 
             Args:
                 mesh_device: The mesh device.
                 program_configs: List of 1D mcast matmul program configs (each gather_in0=True).
                 weights: List of DRAM-sharded in1 tensors, one per program_config.
-                bank_to_receivers: List of (bank_id, receivers) pairs. num_senders *
-                    num_global_cb_receivers must equal ring_size; every bank must own
-                    exactly num_global_cb_receivers receiver cores. The matmul op asserts
-                    at construction time that the receivers row-major-walk into the same
-                    order as its activation grid.
+                bank_to_receivers: List of (bank_id, receivers) pairs.
                 size: GCB size in bytes.
                 buffer_type: Buffer type (L1 or L1_SMALL).
         )doc",
@@ -129,6 +175,57 @@ void bind_dram_core_prefetcher(nb::module_& mod) {
         nb::arg("bank_to_receivers"),
         nb::arg("size"),
         nb::arg("buffer_type") = tt::tt_metal::BufferType::L1);
+
+    ttnn::bind_function<"dram_core_prefetcher_block_count_for_matmul_1d", "ttnn.experimental.">(
+        mod,
+        R"doc(
+            Compute and validate the block_count to pair with a receiver-contiguous DRAM weight
+            in queue_dram_core_prefetcher_request, for a gather_in0 1D matmul fed via global_cb.
+            Centralizes the recv-contig prefetcher/matmul cross-checks (num_shards == ring_size,
+            weight K divisible by ring_size, weight per-receiver N == per_core_N) so call sites
+            don't re-derive (and mis-derive) them. Returns the block_count (== ring_size); raises
+            on any mismatch.
+
+            Args:
+                program_config: The gather_in0 1D mcast matmul program config that will consume the weight.
+                weight: The receiver-contiguous (NdShardSpec) DRAM weight tensor.
+                global_cb: The DRAM-sender GCB the prefetcher and matmul share.
+
+            Returns:
+                int: the validated block_count.
+        )doc",
+        &ttnn::global_circular_buffer::dram_core_prefetcher_block_count_for_matmul_1d,
+        nb::arg("program_config"),
+        nb::arg("weight"),
+        nb::arg("global_cb"));
+
+    ttnn::bind_function<"create_global_circular_buffer_for_matmul_1d_recv_contig", "ttnn.experimental.">(
+        mod,
+        R"doc(
+            Receiver-contiguous counterpart of create_global_circular_buffer_for_matmul_1d: build a
+            DRAM-sender GlobalCircularBuffer sized to feed one or more gather_in0 1D ring matmuls from
+            NdShardSpec (receiver-contiguous) DRAM weights, validating the (program_config, weight,
+            bank_to_receivers) triple in one place. See impl notes in ttnn/core/global_circular_buffer.cpp.
+
+            Args:
+                mesh_device: The mesh device.
+                program_configs: List of 1D mcast matmul program configs (each gather_in0=True).
+                weights: List of NdShardSpec DRAM in1 tensors, one per program_config.
+                bank_to_receivers: List of (bank_id, receivers) pairs (strided round-robin placement).
+                size: GCB size in bytes (>= ring_size * largest per-receiver page).
+                buffer_type: Buffer type (L1 or L1_SMALL).
+                dual_senders_per_bank: If True, split each bank's receivers across two DRISC sender cores
+                    (must match the StartDramCorePrefetcher flag).
+        )doc",
+        &ttnn::global_circular_buffer::create_global_circular_buffer_for_matmul_1d_recv_contig,
+        nb::keep_alive<0, 1>(),
+        nb::arg("mesh_device"),
+        nb::arg("program_configs"),
+        nb::arg("weights"),
+        nb::arg("bank_to_receivers"),
+        nb::arg("size"),
+        nb::arg("buffer_type") = tt::tt_metal::BufferType::L1,
+        nb::arg("dual_senders_per_bank") = false);
 }
 
 }  // namespace ttnn::operations::experimental

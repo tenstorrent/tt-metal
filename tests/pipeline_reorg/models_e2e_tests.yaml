@@ -63,13 +63,19 @@
   team: models
 
 # TODO: Move DP tests to sweep pipelines when those come online
-- name: Llama 3.1-8B data-parallel e2e tests (T3K)
+- name: Llama 3.1-8B data-parallel e2e tests
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
     pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP-4 or performance-ci-b1-DP-8" --timeout 1000
   model: llama3.1-8b-dp
   skus:
     wh_llmbox_perf:
+      timeout: 20
+      tier: 2
+    # bh_quietbox_2 is 4-chip: the DP-8 case is auto-skipped when the chip count
+    # is below the DP factor, so it effectively runs the DP-4 case only.
+    # Migrated from the legacy blackhole_demo_tests.yaml DP entries.
+    bh_quietbox_2:
       timeout: 20
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
@@ -158,7 +164,7 @@
 - name: Llama 3.3-70B e2e tests (Galaxy)
   cmd: |
     export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG
-    pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "pcc-80L"
+    pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "ci-token-matching"
     pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat2"
   model: llama3.3-70b-galaxy
   skus:
@@ -360,11 +366,11 @@
   model: gemma-4-e2b
   skus:
     wh_n150:
-      timeout: 15
-      tier: 2
+      timeout: 5
+      tier: 3
     bh_p150:
-      timeout: 15
-      tier: 2
+      timeout: 5
+      tier: 3
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
@@ -381,13 +387,13 @@
     # wh_n300 disabled due to reduced N300 runner availability — re-enable when capacity returns.
     # wh_n300:
     #   timeout: 15
-    #   tier: 2
+    #   tier: 3
     bh_p300:
-      timeout: 15
-      tier: 2
+      timeout: 5
+      tier: 3
     bh_quietbox_2:
       timeout: 15
-      tier: 2
+      tier: 3
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
@@ -402,7 +408,7 @@
   model: gemma-4-26b-a4b
   skus:
     wh_llmbox_perf:
-      timeout: 15
+      timeout: 10
       tier: 2
     bh_quietbox_2:
       timeout: 25
@@ -429,7 +435,7 @@
   model: gemma-4-31b
   skus:
     wh_llmbox_perf:
-      timeout: 15
+      timeout: 10
       tier: 2
     bh_quietbox_2:
       timeout: 30
@@ -600,4 +606,19 @@
       timeout: 5
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+# ── UNet ───────────────────────────────────────────────────────────
+
+# Trace-perf (end-to-end) test. The correctness counterpart lives in
+# models_unit_tests.yaml as "Shallow UNet unit tests".
+- name: Shallow UNet e2e tests
+  cmd: |
+    pytest -sv --timeout 600 models/experimental/functional_unet/tests/test_unet_perf.py -k "test_unet_trace_perf and not test_unet_trace_perf_multi_device"
+  model: shallow-unet
+  skus:
+    bh_p150:
+      timeout: 5
+      tier: 2
+  owner_id: U06ECNVR0EN # Evan Smal
   team: models

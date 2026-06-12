@@ -406,6 +406,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     in0_sender_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
     tt::tt_metal::TensorAccessorArgs(in0_tensor).append_to(in0_sender_compile_time_args);
     tt::tt_metal::TensorAccessorArgs().append_to(in0_sender_compile_time_args);  // placeholder for sparsity
+    in0_sender_compile_time_args.push_back((std::uint32_t)0);  // num_batch_compute (unused, sparsity disabled)
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // READER
@@ -1344,6 +1345,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     in0_sender_compile_time_args.push_back((std::uint32_t)fuse_op);
     tt::tt_metal::TensorAccessorArgs(in0_tensor).append_to(in0_sender_compile_time_args);
     tt::tt_metal::TensorAccessorArgs().append_to(in0_sender_compile_time_args);  // placeholder for sparsity
+    in0_sender_compile_time_args.push_back((std::uint32_t)0);  // num_batch_compute (unused, sparsity disabled)
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // READER
@@ -2084,6 +2086,14 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
 
     if (in1_is_dram_sharded || in1_is_dram_interleaved) {
         in1_CB_tiles = 2 * in0_shard_width_in_tiles * per_core_N;  // Double buffered
+    } else if (use_global_cb) {
+        // in1 is fed via the remote GCB CB (created from global_cb->size() below), so this
+        // local in1_CB_size is dead. Skip reading the weight's legacy shard_spec — a
+        // receiver-contiguous weight is allocated with an NdShardSpec (no legacy shard_spec),
+        // and the per-receiver block geometry is fully described by per_core_N / the GCB page.
+        in1_shard_height_in_tiles = in0_block_w;
+        in1_shard_width_in_tiles = per_core_N;
+        in1_CB_tiles = in1_shard_height_in_tiles * in1_shard_width_in_tiles;
     } else {
         in1_shard_height_in_tiles = in1_tensor.shard_spec()->shape[0] / in1_tile.get_height();
         in1_shard_width_in_tiles = in1_tensor.shard_spec()->shape[1] / in1_tile.get_width() / num_global_cb_receivers;
@@ -3249,6 +3259,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
     in0_sender_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
     tt::tt_metal::TensorAccessorArgs(in0_tensor).append_to(in0_sender_compile_time_args);
     tt::tt_metal::TensorAccessorArgs().append_to(in0_sender_compile_time_args);  // placeholder for sparsity
+    in0_sender_compile_time_args.push_back((std::uint32_t)0);  // num_batch_compute (unused, sparsity disabled)
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // READER
@@ -4188,6 +4199,7 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     in0_sender_compile_time_args.push_back((std::uint32_t)fuse_op);
     tt::tt_metal::TensorAccessorArgs(in0_tensor).append_to(in0_sender_compile_time_args);
     tt::tt_metal::TensorAccessorArgs().append_to(in0_sender_compile_time_args);  // placeholder for sparsity
+    in0_sender_compile_time_args.push_back((std::uint32_t)0);  // num_batch_compute (unused, sparsity disabled)
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // READER

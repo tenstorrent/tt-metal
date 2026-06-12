@@ -45,6 +45,8 @@ FORCE_INLINE void update_pages_sent(
     bool posted,
     uint8_t cmd_buf) {
     uint32_t aligned_pages_sent_addr = sender_cb_interface.aligned_pages_sent_ptr;
+    uint32_t remote_pages_sent_addr =
+        remote_cb_remote_pages_sent_ptr(sender_cb_interface.num_receivers_and_remote_pages_sent_ptr);
     uint32_t remote_noc_xy_addr = sender_cb_interface.receiver_noc_xy_ptr;
     uint32_t num_receivers = remote_cb_num_receivers(sender_cb_interface.num_receivers_and_remote_pages_sent_ptr);
 
@@ -56,7 +58,7 @@ FORCE_INLINE void update_pages_sent(
         uint32_t remote_noc_xy = uint32_t(
             NOC_XY_ENCODING(DYNAMIC_NOC_X(noc, remote_noc_xy_ptr[0]), DYNAMIC_NOC_Y(noc, remote_noc_xy_ptr[1])));
         *pages_sent_ptr += aligned_page_adjustment;
-        uint64_t remote_ack_ptr_addr = get_noc_addr_helper(remote_noc_xy, (uint32_t)pages_sent_ptr);
+        uint64_t remote_ack_ptr_addr = get_noc_addr_helper(remote_noc_xy, remote_pages_sent_addr);
         noc_fast_atomic_increment<nm>(
             noc,
             cmd_buf,
@@ -68,6 +70,7 @@ FORCE_INLINE void update_pages_sent(
             posted /*posted*/,
             MEM_NOC_ATOMIC_RET_VAL_ADDR);
         pages_sent_ptr += REMOTE_CB_LOCAL_PAGES_STRIDE / sizeof(uint32_t);
+        remote_pages_sent_addr += 2 * L1_ALIGNMENT;
         remote_noc_xy_ptr += 2;
     }
 }

@@ -39,7 +39,7 @@ void kernel_main() {
         for (uint32_t mt_C = 0; mt_C < Mt; ++mt_C) {    // output tile of C
             for (uint32_t nt_C = 0; nt_C < Nt; ++nt_C)  // output tile index of C
             {
-                acquire_dst();
+                tile_regs_acquire();
                 for (uint32_t kt = 0; kt < Kt; kt++) {
                     in0_cb.wait_front(onetile);
                     in1_cb.wait_front(onetile);
@@ -50,11 +50,15 @@ void kernel_main() {
                     in1_cb.pop_front(onetile);
                 }
 
-                out_cb.reserve_back(onetile);
-                pack_tile(0, cb_out);
-                out_cb.push_back(onetile);
+                tile_regs_commit();
 
-                release_dst();
+                out_cb.reserve_back(onetile);
+
+                tile_regs_wait();
+                pack_tile(0, cb_out);
+                tile_regs_release();
+
+                out_cb.push_back(onetile);
             }
         }
     }
