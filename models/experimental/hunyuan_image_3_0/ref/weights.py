@@ -15,7 +15,7 @@ from torch import Tensor
 MODEL_DIR = Path(
     os.environ.get(
         "HUNYUAN_MODEL_DIR",
-        "/home/iguser/ign-sakthi/HunyuanImage-3.0/HunyuanImage-3",
+        "/home/iguser/Christy/HunyuanImage-3",
     )
 )
 

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 from .attention import (
@@ -13,6 +13,12 @@ from .attention import (
     build_causal_mask,
     build_hunyuan_mixed_mask,
 )
+from .ref_vae_decoder import (
+    Decoder,
+    decode_latent,
+    load_decoder,
+    tensor_to_preview_image,
+)
 
 __all__ = [
     "HunyuanRMSNorm",
@@ -25,4 +31,8 @@ __all__ = [
     "HunyuanImage3SDPAAttention",
     "build_causal_mask",
     "build_hunyuan_mixed_mask",
+    "Decoder",
+    "decode_latent",
+    "load_decoder",
+    "tensor_to_preview_image",
 ]
