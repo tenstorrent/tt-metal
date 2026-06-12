@@ -150,12 +150,23 @@ def main() -> int:
         help="Max AR steps ≈ max_length_times × prefill token length (HF default: 2)",
     )
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--text", default=None, help="Custom script path (overrides --demo text)")
+    ap.add_argument("--voice", default=None, help="Custom voice WAV for voice cloning")
     args = ap.parse_args()
 
-    demo_entry = get_golden_demo(args.demo) if args.demo else minimal_golden_demo()
-    demo_id = demo_entry.id
-    golden_wav = download_golden_demo(demo_id)
-    text_path = text_path_for_demo(demo_id)
+    if args.text:
+        text_path = Path(args.text)
+        if not text_path.is_file():
+            print(f"[demo_ttnn] ERROR: text file not found: {text_path}", file=sys.stderr)
+            return 1
+        demo_id = text_path.stem
+        demo_entry = None
+        golden_wav = None
+    else:
+        demo_entry = get_golden_demo(args.demo) if args.demo else minimal_golden_demo()
+        demo_id = demo_entry.id
+        golden_wav = download_golden_demo(demo_id)
+        text_path = text_path_for_demo(demo_id)
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -170,18 +181,30 @@ def main() -> int:
     script = load_script(text_path)
     paths = _demo_output_paths(out_dir, demo_id)
     paths["script"].write_text(script + "\n", encoding="utf-8")
-    shutil.copy2(golden_wav, paths["golden"])
+    if golden_wav is not None:
+        shutil.copy2(golden_wav, paths["golden"])
 
-    use_voice_cloning = not args.no_voice_cloning and demo_id in DEMO_VOICE_CLONES
+    use_voice_cloning = False
     voice_mapping: Optional[list[dict[str, str]]] = None
     voice_samples: Optional[list[str]] = None
-    if use_voice_cloning:
+    if args.voice:
+        voice_path = Path(args.voice)
+        if not voice_path.is_file():
+            print(f"[demo_ttnn] ERROR: voice file not found: {voice_path}", file=sys.stderr)
+            return 1
+        use_voice_cloning = not args.no_voice_cloning
+        voice_samples = [str(voice_path)]
+        voice_mapping = [{"speaker_id": "1", "name": voice_path.stem, "voice_file": voice_path.name}]
+    elif not args.no_voice_cloning and demo_id in DEMO_VOICE_CLONES:
+        use_voice_cloning = True
         voice_samples, voice_mapping = build_voice_samples(script, demo_id)
 
-    print(f"[demo_ttnn] demo={demo_id}  text={text_path.name}  golden={golden_wav.name}", flush=True)
-    print(f"[demo_ttnn] {demo_entry.website_title} ({demo_entry.website_section})", flush=True)
+    print(f"[demo_ttnn] demo={demo_id}  text={text_path.name}", flush=True)
+    if demo_entry is not None:
+        print(f"[demo_ttnn] {demo_entry.website_title} ({demo_entry.website_section})", flush=True)
     print(f"[demo_ttnn] output dir: {paths['dir']}", flush=True)
-    print(f"[demo_ttnn] golden reference → {paths['golden']}", flush=True)
+    if golden_wav is not None:
+        print(f"[demo_ttnn] golden reference → {paths['golden']}", flush=True)
     print("[demo_ttnn] TT-only inference (no HuggingFace reference model)", flush=True)
     if use_voice_cloning:
         print("[demo_ttnn] voice cloning enabled (on-device speech prefill):", flush=True)
@@ -256,13 +279,15 @@ def main() -> int:
     golden_out = paths["golden"]
     _write_wav(tt_path, tt_speech)
 
-    golden = _load_wav(golden_wav)
-    metrics = _compare_audio(golden, tt_speech)
+    metrics: dict = {}
+    if golden_wav is not None:
+        golden = _load_wav(golden_wav)
+        metrics = _compare_audio(golden, tt_speech)
 
     meta = {
         "demo_id": demo_id,
-        "website_title": demo_entry.website_title,
-        "website_section": demo_entry.website_section,
+        "website_title": demo_entry.website_title if demo_entry else None,
+        "website_section": demo_entry.website_section if demo_entry else None,
         "text_file": text_path.name,
         "voice_cloning": use_voice_cloning,
         "voice_mapping": voice_mapping,
@@ -277,24 +302,29 @@ def main() -> int:
     }
     paths["meta"].write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
 
-    mel_msg = (
-        f"log-mel L1={metrics['log_mel_l1']:.4f}"
-        if metrics["log_mel_l1"] == metrics["log_mel_l1"]
-        else f"prefix RMS={metrics['prefix_rms']:.4f}"
-    )
     print(
-        f"[demo_ttnn] TT:  {tt_gen.numel()} AR tokens, {metrics['tt_sec']:.2f}s → {tt_path}\n"
-        f"[demo_ttnn] Golden: {metrics['golden_sec']:.2f}s → {golden_out}\n"
-        f"[demo_ttnn] Compare (prefix {min(golden.numel(), tt_speech.numel())/SR:.2f}s): "
-        f"{mel_msg}  duration ratio={metrics['duration_ratio']:.3f}"
+        f"[demo_ttnn] TT: {tt_gen.numel()} AR tokens, {tt_speech.numel() / SR:.2f}s → {tt_path}",
+        flush=True,
     )
-    if abs(metrics["duration_ratio"] - 1.0) > 0.05:
-        print(
-            "[demo_ttnn] note: duration differs from golden — website audio used a fixed Microsoft "
-            "demo run; TT free-running LM may stop at a different EOS step."
+    if metrics:
+        mel_msg = (
+            f"log-mel L1={metrics['log_mel_l1']:.4f}"
+            if metrics["log_mel_l1"] == metrics["log_mel_l1"]
+            else f"prefix RMS={metrics['prefix_rms']:.4f}"
         )
-
-    print(f"[demo_ttnn] DONE → {tt_path.name}  vs  {golden_out.name}  under {paths['dir']}/", flush=True)
+        print(
+            f"[demo_ttnn] Golden: {metrics['golden_sec']:.2f}s → {golden_out}\n"
+            f"[demo_ttnn] Compare (prefix {min(golden.numel(), tt_speech.numel())/SR:.2f}s): "
+            f"{mel_msg}  duration ratio={metrics['duration_ratio']:.3f}"
+        )
+        if abs(metrics["duration_ratio"] - 1.0) > 0.05:
+            print(
+                "[demo_ttnn] note: duration differs from golden — website audio used a fixed Microsoft "
+                "demo run; TT free-running LM may stop at a different EOS step."
+            )
+        print(f"[demo_ttnn] DONE → {tt_path.name}  vs  {golden_out.name}  under {paths['dir']}/", flush=True)
+    else:
+        print(f"[demo_ttnn] DONE → {tt_path.name}  under {paths['dir']}/", flush=True)
     return 0
 
 
