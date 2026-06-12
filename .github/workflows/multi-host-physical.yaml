@@ -300,8 +300,7 @@ jobs:
       # A physical, multi-host WH Galaxy that's in service
       - multi-host-glx-4x
       - arch-wormhole_b0
-      - bare-metal
-      - in-service
+      - quad-testing-b23
     needs: build-artifact
     steps:
       - name: ⬇️ Checkout
