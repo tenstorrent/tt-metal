@@ -78,10 +78,11 @@ from models.experimental.ops.descriptors.fusion.common import (
 # behind an opt-in environment variable so accidental callers fail loudly rather
 # than silently depending on unfinished infrastructure.
 _ENABLE_ENV_VAR = "TT_METAL_ENABLE_PARALLEL_SEQUENTIAL"
+_ENABLE_TRUTHY_VALUES = frozenset({"1", "true", "yes", "on"})
 
 
 def _check_fusion_enabled() -> None:
-    if not os.environ.get(_ENABLE_ENV_VAR):
+    if os.environ.get(_ENABLE_ENV_VAR, "").strip().lower() not in _ENABLE_TRUTHY_VALUES:
         raise RuntimeError(
             "Sequential/Parallel fusion is not yet production-ready and requires ProgramSpec to be "
             f"exposed to Python before general use. Set {_ENABLE_ENV_VAR}=1 to opt in."
