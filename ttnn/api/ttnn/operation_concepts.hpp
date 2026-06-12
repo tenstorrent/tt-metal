@@ -102,9 +102,6 @@ concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } |
 //                                         SOLE input to create_program_spec. Structurally keeps a mutable
 //                                         value (e.g. an RNG seed) out of both the key and the spec — it
 //                                         isn't even visible to the builder.
-//
-// NOTE: Each TensorArgument.tensor in a ProgramRunArgs MUST reference a MeshTensor reachable from the
-// factory's tensor_args / tensor_return_value — the adapter matches by pointer identity.
 
 // --- method-surface building blocks ---
 template <typename T>
