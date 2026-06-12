@@ -86,8 +86,11 @@ class GRPOCompleter(ABC):
 @dataclass
 class GRPOConfig:
     epsilon: float
-    prompts_per_batch: int
-    completions_per_microbatch: int
+    # Number of completions resident on a single device within one micro-batch.
+    # The across-mesh micro-batch size is per_device_train_batch_size *
+    # num_devices, and the per-batch prompt count is derived from it (see
+    # GRPOTrainer.train).
+    per_device_train_batch_size: int
     num_iterations: int
     gradient_accumulation_steps: int
     logging_steps: int
@@ -97,8 +100,13 @@ class GRPOConfig:
     prompts_to_train: int
     temperature: float
     max_completion_length: int
-    completions_per_prompt: int
+    num_generations: int
     warmup_steps: int
+    # Deprecated/unused: the number of prompts per generation batch is now
+    # derived at runtime from per_device_train_batch_size, num_devices, and
+    # num_generations. Kept only so older configs that still set it construct
+    # without error; the trainer ignores any value provided here.
+    batch_size: Optional[int] = None
 
 
 def get_grpo_config(yaml_config: dict, output_dir: str = "") -> GRPOConfig:
@@ -386,29 +394,36 @@ class GRPOTrainer:
         dp_mapper: Any = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0) if ddp_enabled else None
         dp_composer: Any = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0) if ddp_enabled else None
 
-        # Validate the batch/micro-batch/device divisibility relationships up
-        # front so misconfigurations fail with a clear message instead of a
-        # cryptic shard assert deep in ``compute_nlog_probs`` (or a silently
-        # ragged final micro-batch).
-        gen_batch = grpo_cfg.prompts_per_batch * grpo_cfg.completions_per_prompt
-        if grpo_cfg.completions_per_microbatch <= 0:
-            raise ValueError(f"completions_per_microbatch must be positive, got {grpo_cfg.completions_per_microbatch}")
-        if gen_batch % grpo_cfg.completions_per_microbatch != 0:
+        # Derive the across-mesh micro-batch size (in completions) and the
+        # per-batch prompt count from ``per_device_train_batch_size`` up front,
+        # and validate the divisibility relationships so misconfigurations fail
+        # with a clear message instead of a cryptic shard assert deep in
+        # ``compute_nlog_probs`` (or a silently ragged final micro-batch).
+        #
+        # ``per_device_train_batch_size`` is the number of completions resident
+        # on a single device within one micro-batch, so the whole mesh handles
+        # ``completions_per_microbatch = per_device_train_batch_size *
+        # num_devices`` completions per micro-batch. The per-batch prompt count
+        # is then derived as ``completions_per_microbatch // num_generations``.
+        # By construction ``completions_per_microbatch`` is divisible by
+        # ``num_devices``, so each micro-batch always shards evenly along axis 0.
+        if grpo_cfg.per_device_train_batch_size <= 0:
             raise ValueError(
-                f"prompts_per_batch * completions_per_prompt ({grpo_cfg.prompts_per_batch} * "
-                f"{grpo_cfg.completions_per_prompt} = {gen_batch}) must be divisible by "
-                f"completions_per_microbatch ({grpo_cfg.completions_per_microbatch})"
+                f"per_device_train_batch_size must be positive, got {grpo_cfg.per_device_train_batch_size}"
             )
-        if grpo_cfg.completions_per_microbatch % num_devices != 0:
+        completions_per_microbatch = grpo_cfg.per_device_train_batch_size * num_devices
+        if completions_per_microbatch % grpo_cfg.num_generations != 0:
             raise ValueError(
-                f"completions_per_microbatch ({grpo_cfg.completions_per_microbatch}) must be divisible "
-                f"by the number of devices ({num_devices}) so each micro-batch shards evenly along axis 0"
+                f"per_device_train_batch_size * num_devices ({grpo_cfg.per_device_train_batch_size} * "
+                f"{num_devices} = {completions_per_microbatch}) must be divisible by "
+                f"num_generations ({grpo_cfg.num_generations}) so the per-batch prompt count is an integer"
             )
+        batch_size = completions_per_microbatch // grpo_cfg.num_generations
 
         total_prompts = min(grpo_cfg.prompts_to_train, len(self.dataset))
-        if total_prompts % grpo_cfg.prompts_per_batch != 0:
+        if total_prompts % batch_size != 0:
             raise ValueError(
-                f"prompts_to_train ({total_prompts}) must be divisible by prompts_per_batch ({grpo_cfg.prompts_per_batch}) "
+                f"prompts_to_train ({total_prompts}) must be divisible by the derived batch_size ({batch_size}) "
                 "to avoid a ragged final batch that can break micro-batch sharding"
             )
         dataset = self.dataset.select(range(total_prompts))
@@ -430,7 +445,7 @@ class GRPOTrainer:
             cb.on_train_begin(self)
 
         for prompts_batch, completions_batch, dataset_columns_dict, generation_time_s in iter_batched_completions(
-            completer, prompts, extra_columns, grpo_cfg.prompts_per_batch, grpo_cfg.completions_per_prompt
+            completer, prompts, extra_columns, batch_size, grpo_cfg.num_generations
         ):
             num_batches += 1
             accum_generation_time_s += generation_time_s
@@ -440,14 +455,14 @@ class GRPOTrainer:
             rewards = dispatch_reward(self.reward_func, completions_strs, prompts_strs, dataset_columns_dict)
             rewards_np = np.array(rewards, dtype=np.float32)
 
-            advantages_np = compute_advantages_host(rewards_np, grpo_cfg.completions_per_prompt)
+            advantages_np = compute_advantages_host(rewards_np, grpo_cfg.num_generations)
             accum_rewards.append(rewards_np)
             accum_completion_lens.extend(len(c) for c in completions_batch)
 
             probs_old_list = []
             tt_model.eval()
             with no_grad():
-                for p, c in iter_micro_batch(prompts_batch, completions_batch, grpo_cfg.completions_per_microbatch):
+                for p, c in iter_micro_batch(prompts_batch, completions_batch, completions_per_microbatch):
                     nlog_old, mask = completer.compute_nlog_probs(p, c)
                     nlog_old.set_requires_grad(False)
                     mask.set_requires_grad(False)
@@ -457,14 +472,14 @@ class GRPOTrainer:
                 tt_model.train()
 
                 for i, (p, c) in enumerate(
-                    iter_micro_batch(prompts_batch, completions_batch, grpo_cfg.completions_per_microbatch),
+                    iter_micro_batch(prompts_batch, completions_batch, completions_per_microbatch),
                 ):
                     B = len(c)
                     # The advantages and the micro-batch token tensors are both
                     # sharded along axis 0 over the identical host-order slice
                     # [start : start + B], so each device pairs a completion's
                     # log-probs with that same completion's advantage.
-                    start = i * grpo_cfg.completions_per_microbatch
+                    start = i * completions_per_microbatch
                     adv_micro_np = advantages_np[start : start + B]
                     adv_slice_val = upload_micro_advantages(adv_micro_np, dp_mapper, num_devices)
                     adv_ttml = ttml.autograd.create_tensor(adv_slice_val, requires_grad=False)
