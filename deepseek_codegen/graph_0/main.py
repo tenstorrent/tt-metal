@@ -4885,38 +4885,37 @@ def _main(activations, weights):
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
     ttnn.deallocate(ttnn_matmul_27, False)
-    ttnn_reduce_scatter_9 = ttnn.reduce_scatter(
+    # E_router_fuse_ccl: the router all-reduce was decomposed as reduce_scatter(dim=3,axis1)
+    # + all_gather(dim=1,axis1) to rebuild full [32,256] logits = 2 CCLs. Fuse into ONE
+    # all_gather of the [1,1,32,256] partials over axis1 + local sum (latency-bound CCL, the
+    # [32,256] logits are tiny). Pre-dispatch (router path) so combine-safe. Numerically the
+    # same all-reduce (HiFi4 fp32-acc sum), argmax-gated routing unchanged.
+    ttnn_rs9_ag = ttnn.all_gather(
         input_tensor=ttnn_reshape_121,
-        dim=3,
+        dim=0,
         cluster_axis=1,
         subdevice_id=None,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         num_links=None,
         topology=ttnn.Topology.Ring,
-        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        ),
     )
     ttnn.deallocate(ttnn_reshape_121, False)
-    ttnn_reshape_122 = ttnn.reshape(
-        ttnn_reduce_scatter_9,
-        [32, 32],
+    ttnn_rs9_red = ttnn.sum(
+        ttnn_rs9_ag,
+        [0],
+        False,
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+        ),
+    )
+    ttnn.deallocate(ttnn_rs9_ag, False)
+    ttnn_all_gather_19 = ttnn.reshape(
+        ttnn_rs9_red,
+        [32, 256],
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
-    ttnn.deallocate(ttnn_reduce_scatter_9, False)
-    ttnn_all_gather_19 = ttnn.all_gather(
-        input_tensor=ttnn_reshape_122,
-        dim=1,
-        cluster_axis=1,
-        subdevice_id=None,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
-        topology=ttnn.Topology.Ring,
-    )
-    ttnn.deallocate(ttnn_reshape_122, False)
+    ttnn.deallocate(ttnn_rs9_red, False)
     # === E_router_fuse: deepseek_grouped_gate replaces ~50-op router block ===
     # Inputs:
     #   ttnn_all_gather_19  - FP32 TILE [32, 256]   gate logits (pre-sigmoid)
