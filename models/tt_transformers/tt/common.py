@@ -300,6 +300,28 @@ def preprocess_inputs_prefill(
     )
 
 
+def _as_token_ids(encoded):
+    """Normalize a tokenizer/chat-template result to a plain list[int] of token ids.
+
+    Most HF tokenizers return list[int], but some backends (e.g. the mistral-common
+    ``TokenizersBackend`` used by Ministral3/Devstral on transformers>=5) return a
+    ``BatchEncoding`` (ids under ``.input_ids``) or a ``tokenizers.Encoding`` (ids under
+    ``.ids``), sometimes wrapped in a length-1 batch list. torch.tensor() can't infer a
+    dtype from those objects, so unwrap to a flat list of ints here.
+    """
+    # BatchEncoding -> its input_ids
+    if hasattr(encoded, "input_ids"):
+        encoded = encoded.input_ids
+    # tokenizers.Encoding -> its ids
+    if hasattr(encoded, "ids"):
+        return encoded.ids
+    # length-1 batch wrapping an Encoding or a list of ids
+    if isinstance(encoded, (list, tuple)) and len(encoded) == 1 and not isinstance(encoded[0], int):
+        inner = encoded[0]
+        return inner.ids if hasattr(inner, "ids") else inner
+    return encoded
+
+
 def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
     """See https://huggingface.co/docs/transformers/main/en/chat_templating"""
     chat = []

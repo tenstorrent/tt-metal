@@ -18,6 +18,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
 from models.tt_transformers.tt.common import (
     Mode,
+    _as_token_ids,
     calculate_hidden_dim,
     calculate_prefill_warmup_seq_lens,
     cap_seq_lens_to_max_prefill_chunk_size,
@@ -484,6 +485,8 @@ class ModelArgs:
         "Qwen2.5-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-32B-Instruct",
         "Meta-Llama-3-8B": "models/tt_transformers/model_params/Meta-Llama-3-8B",
         "Meta-Llama-3-8B-Instruct": "models/tt_transformers/model_params/Meta-Llama-3-8B",
+        "Devstral-2-123B-Instruct-2512": "models/tt_transformers/model_params/Devstral-2-123B-Instruct",
+        "Devstral-2-123B-Instruct": "models/tt_transformers/model_params/Devstral-2-123B-Instruct",
     }
 
     MAX_QKV_MM_SEQ_LEN = 2048
@@ -1873,11 +1876,20 @@ class ModelArgs:
                     do_per_core_N = (
                         self.dim // self.num_devices // ttnn.TILE_SIZE // (do_core_grid_size[0] * do_core_grid_size[1])
                     )
+                    # in0_block_w is the inner-loop K block. The full per-core K (dim/cores) can be
+                    # processed in smaller blocks; on Blackhole the gathered activation + a full-K in0
+                    # block overflow L1 at large dim (12288 -> in0_block_w 48), so cap to the largest
+                    # divisor <= 32 (32 = dim 8192, Qwen2.5-72B, the largest proven to fit BH L1 here).
+                    # Smaller blocks only add inner-loop iterations; the matmul result is unchanged.
+                    in0_block_w_full = self.dim // ttnn.TILE_SIZE // (do_core_grid_size[0] * do_core_grid_size[1])
+                    in0_block_w = (
+                        self.find_largest_divisor(in0_block_w_full, max_divisor=32)
+                        if (is_blackhole() and in0_block_w_full > 32)
+                        else in0_block_w_full
+                    )
                     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                         compute_with_storage_grid_size=do_core_grid_size,
-                        in0_block_w=self.dim
-                        // ttnn.TILE_SIZE
-                        // (do_core_grid_size[0] * do_core_grid_size[1]),  # [32 x 8k] x [8k x 1k] = [32 x 1k]
+                        in0_block_w=in0_block_w,  # [32 x 8k] x [8k x 1k] = [32 x 1k]
                         out_subblock_h=1,
                         out_subblock_w=get_out_subblock_w(
                             do_per_core_N, out_subblock_h=1
@@ -1952,13 +1964,22 @@ class ModelArgs:
                 if self.is_galaxy
                 else (self.n_heads * self.head_dim) // self.num_devices
             )
+            # The attention prefill chunks the WO input by prefill_len_cutoff (512 on Blackhole,
+            # 1024 on Wormhole), so the matmul sees at most that many rows per block — matching the
+            # MLP prefill and keeping the WO CB inside L1 at large dim.
+            # On Blackhole at large dim the default in0_block_w (e.g. 6) makes the weight CB
+            # (in0_block_w * per_core_N) overflow L1 during full-model prefill trace capture; a
+            # smaller K-block shrinks it (more inner-loop iterations, identical result).
+            wo_prefill_in0_block_w = (
+                1 if self.is_galaxy else (2 if (is_blackhole() and self.dim // self.num_devices > 1024) else None)
+            )
             return self.matmul_config(
-                m=min(seq_len, 1024),
+                m=min(seq_len, self.prefill_len_cutoff),
                 k=k_dim,
                 n=n_dim,
                 grid_size=self.find_prefill_grid(self.prefill_rows, k_dim // ttnn.TILE_SIZE),
-                in0_block_w=1 if self.is_galaxy else None,
-                fuse_batch=seq_len <= 1024,
+                in0_block_w=wo_prefill_in0_block_w,
+                fuse_batch=seq_len <= self.prefill_len_cutoff,
                 per_core_N=math.ceil(n_dim / (ttnn.TILE_SIZE * self.dram_shard_grid_width))
                 if dram_sharded_wo
                 else None,
@@ -2356,6 +2377,7 @@ class ModelArgs:
                 "Llama-3.2-90B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "Qwen2.5-7B": {"N150": 4, "N300": 32, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Devstral-2-123B": {"N150": None, "N300": None, "T3K": None, "TG": None, "P150x4": None, "P150x8": 4},
                 "Qwen2.5-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128, "P150x8": 128},
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 16, "TG": 128, "P150x4": 128, "P150x8": 128},
                 "Qwen2.5-VL-3B": {"N150": 128, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
@@ -2723,8 +2745,10 @@ class ModelArgs:
         # Sliding window attention
         self.sliding_window = text_config.get("sliding_window", None)
 
-        # RoPE params
-        self.rope_theta = text_config.get("rope_theta")
+        # RoPE params. transformers>=5 nests these under "rope_parameters" (a dict carrying
+        # rope_theta AND the scaling fields); 4.x used a flat "rope_theta" + "rope_scaling".
+        rope_parameters = text_config.get("rope_parameters") or {}
+        self.rope_theta = text_config.get("rope_theta") or rope_parameters.get("rope_theta")
         self.rope_theta_local = text_config.get("rope_local_base_freq", None)
         self.use_sliding_window = text_config.get("use_sliding_window", None)
         if (
@@ -2735,7 +2759,11 @@ class ModelArgs:
             self.rope_theta_local = self.rope_theta
 
         rope_scaling_params = text_config.get("rope_scaling", None)
-        self.original_max_context_len = text_config.get("original_max_position_embeddings", None)
+        if rope_scaling_params is None and (rope_parameters.get("rope_type") or rope_parameters.get("type")):
+            rope_scaling_params = rope_parameters  # transformers>=5 layout
+        self.original_max_context_len = text_config.get(
+            "original_max_position_embeddings", None
+        ) or rope_parameters.get("original_max_position_embeddings", None)
         self.rope_scaling = (
             rope_scaling_model_factory(rope_scaling_params, original_max_context_len=self.original_max_context_len)
             if rope_scaling_params
@@ -2996,16 +3024,47 @@ class ModelArgs:
         return self.model_config
 
     def get_hf_model_cls(self):
-        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoModelForVision2Seq
+        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
+
+        try:
+            from transformers import AutoModelForVision2Seq
+        except ImportError:  # removed in transformers>=5
+            AutoModelForVision2Seq = None
 
         if not self.is_multimodal:
             return AutoModelForCausalLM
 
         for model_cls in (AutoModelForVision2Seq, AutoModelForImageTextToText):
+            if model_cls is None:
+                continue
             if type(self.hf_config) in model_cls._model_mapping:
                 return model_cls
 
         raise ValueError(f"Unknown model for config {type(self.hf_config)}")
+
+    def _fp8_dequantize_config(self):
+        """Return a FineGrainedFP8Config(dequantize=True) for fp8 HF checkpoints, else None.
+
+        fp8 checkpoints (quant_method == "fp8") expose FP8Linear weights + scales in their
+        state_dict, which the bf16 weight-conversion path cannot consume. Requesting
+        dequantize=True makes transformers return plain (bf16) Linear weights at load time.
+        """
+        quant_cfg = getattr(self.hf_config, "quantization_config", None)
+        if quant_cfg is None and hasattr(self.hf_config, "text_config"):
+            quant_cfg = getattr(self.hf_config.text_config, "quantization_config", None)
+        if quant_cfg is None:
+            return None
+        quant_dict = quant_cfg if isinstance(quant_cfg, dict) else quant_cfg.to_dict()
+        if quant_dict.get("quant_method") != "fp8":
+            return None
+        from transformers import FineGrainedFP8Config
+
+        passthrough = {
+            k: quant_dict[k]
+            for k in ("activation_scheme", "weight_block_size", "modules_to_not_convert")
+            if k in quant_dict
+        }
+        return FineGrainedFP8Config(dequantize=True, **passthrough)
 
     # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
     def load_state_dict(self):
@@ -3054,15 +3113,21 @@ class ModelArgs:
         else:
             # Always HuggingFace since we only support HF_MODEL now
             model_cls = self.get_hf_model_cls()
-            model = model_cls.from_pretrained(
-                self.CKPT_DIR,
+            from_pretrained_kwargs = dict(
                 torch_dtype="auto",
                 trust_remote_code=self.trust_remote_code_hf,
-                local_files_only=os.getenv("CI") == "true"
+                local_files_only=os.getenv("CI") == "true",
                 # Note that the default setting is torch.dtype.float32, but model weights are
                 # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
                 # unnecessary cast.
             )
+            # fp8-quantized checkpoints (e.g. Devstral-2/Ministral3) ship FP8Linear weights + scales
+            # whose state_dict the bf16 convert path can't consume. Load with dequantize=True so
+            # transformers returns plain bf16 Linear weights. Generic: any fp8 HF checkpoint benefits.
+            fp8_dequant_cfg = self._fp8_dequantize_config()
+            if fp8_dequant_cfg is not None:
+                from_pretrained_kwargs["quantization_config"] = fp8_dequant_cfg
+            model = model_cls.from_pretrained(self.CKPT_DIR, **from_pretrained_kwargs)
             if self.cache_hf_flag:
                 self.cached_hf_model = model
             state_dict = model.state_dict()
@@ -3166,8 +3231,8 @@ class ModelArgs:
         """
         Find the number of rows and columns for a grid of cores such that
         the total number of tiles N can be evenly divided among the cores.
-        Each core will have the same integer number of tiles.
-        The grid size is limited to a maximum of 2 rows and 8 columns.
+        Each core will have the same integer number of tiles. The grid is bounded by the
+        device's usable worker grid (or an architecture default when no device is attached).
 
         Parameters:
             N (int): Total number of tiles to be distributed.
@@ -3178,8 +3243,17 @@ class ModelArgs:
         Raises:
             AssertionError: If it's not possible to find such a grid configuration.
         """
-        max_rows = 8 if is_wormhole_b0() else 10
-        max_cols = 8 if is_wormhole_b0() else 12
+        # Bound by the actual usable worker grid (excludes dispatch/eth cores). A hardcoded
+        # max (e.g. 12 cols) can exceed the real worker width on some Blackhole boards (P150x8
+        # is 8 wide), yielding a grid whose extra columns land on dispatch cores -> "Kernels
+        # cannot be placed on dispatch cores" at reshard time. The device grid is always correct.
+        # Fall back to the architecture default when no device is attached (config-only use).
+        if self.mesh_device is not None:
+            compute_grid = self.mesh_device.compute_with_storage_grid_size()
+            max_rows, max_cols = compute_grid.y, compute_grid.x
+        else:
+            max_rows = 8 if is_wormhole_b0() else 10
+            max_cols = 8 if is_wormhole_b0() else 12
         max_cores = max_rows * max_cols
 
         # Find all possible numbers of cores that divide N and are less than or equal to max_cores
@@ -3585,11 +3659,11 @@ class ModelArgs:
     def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True):
         if instruct:
             try:
-                return encode_prompt_hf(self.tokenizer, prompt_text, system_prompt_text)
+                return _as_token_ids(encode_prompt_hf(self.tokenizer, prompt_text, system_prompt_text))
             except ValueError as e:
                 logger.warning(f"Failed to encode chat prompt, are you sure this is an instruct model? Error: {e}")
                 logger.warning(f"Falling back to base model encoding with no chat template")
-        return self.tokenizer.encode(prompt_text, add_special_tokens=False)
+        return _as_token_ids(self.tokenizer.encode(prompt_text, add_special_tokens=False))
 
     def reference_lm_head(self):
         model = self.reference_transformer(wrap=False)
@@ -3798,8 +3872,8 @@ class ModelArgs:
 
     def reference_vision_model(self):
         model = self.reference_vision_transformer(wrap=False)
-        if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
-            # Mistral-Small-3.1-24B-Instruct-2503 has a different structure
+        if getattr(self.hf_config, "model_type", None) == "mistral3":
+            # Mistral3 VLMs (Mistral-Small-3.1-24B, Mistral-Small-4) nest the Pixtral tower directly
             layer = model.vision_tower
         else:
             layer = model.vision_tower.vision_model
@@ -3810,7 +3884,7 @@ class ModelArgs:
     def reference_vision_mlp(self, layer_idx=0):
         model = self.reference_vision_transformer(wrap=False)
         vision_tower = self._get_vision_tower(model)
-        if "Mistral-Small-3.1-24B" in self.model_name:
+        if getattr(self.hf_config, "model_type", None) == "mistral3":
             layer = vision_tower.transformer.layers[layer_idx].feed_forward
         else:
             layer = vision_tower.vision_model.encoder.layers[0].mlp
