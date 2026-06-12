@@ -40,16 +40,6 @@ ttml::ops::RotaryEmbeddingParams build_params(uint32_t seq_len, uint32_t qk_rope
     return ttml::ops::build_rope_params(seq_len, qk_rope_dim, /*theta=*/10000.0F);
 }
 
-void expect_allclose(
-    const xt::xarray<float>& actual,
-    const xt::xarray<float>& expected,
-    double rtol,
-    double atol,
-    const std::string& tag) {
-    ASSERT_EQ(actual.shape(), expected.shape()) << tag << ": shape mismatch";
-    EXPECT_TRUE(xt::allclose(actual, expected, rtol, atol)) << tag << ": value mismatch";
-}
-
 ttnn::Tensor slice_head_dim(
     const ttnn::Tensor& tensor, uint32_t B, uint32_t H, uint32_t S, uint32_t start_w, uint32_t end_w) {
     ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
@@ -109,18 +99,18 @@ TEST_P(QRopeParamTest, FusedMatchesReference) {
     const uint32_t S = shape.seq_len;
 
     // q_nope is a straight copy in the fused kernel -> bit-exact vs reference; q_pe is RoPE math -> BF16 tolerance.
-    expect_allclose(
-        ttml::core::to_xtensor(slice_head_dim(fused, B, H, S, 0U, shape.qk_nope_dim)),
-        ttml::core::to_xtensor(slice_head_dim(ref, B, H, S, 0U, shape.qk_nope_dim)),
-        0.0,
-        0.0,
-        shape.name + " q_nope");
-    expect_allclose(
-        ttml::core::to_xtensor(slice_head_dim(fused, B, H, S, shape.qk_nope_dim, qk_head)),
-        ttml::core::to_xtensor(slice_head_dim(ref, B, H, S, shape.qk_nope_dim, qk_head)),
-        1e-4,
-        1e-4,
-        shape.name + " q_pe");
+    {
+        const auto actual_q_nope = ttml::core::to_xtensor(slice_head_dim(fused, B, H, S, 0U, shape.qk_nope_dim));
+        const auto expected_q_nope = ttml::core::to_xtensor(slice_head_dim(ref, B, H, S, 0U, shape.qk_nope_dim));
+        ASSERT_EQ(actual_q_nope.shape(), expected_q_nope.shape()) << shape.name << " q_nope: shape mismatch";
+        EXPECT_TRUE(xt::allclose(actual_q_nope, expected_q_nope, 0.0, 0.0)) << shape.name << " q_nope: value mismatch";
+    }
+    {
+        const auto actual_q_pe = ttml::core::to_xtensor(slice_head_dim(fused, B, H, S, shape.qk_nope_dim, qk_head));
+        const auto expected_q_pe = ttml::core::to_xtensor(slice_head_dim(ref, B, H, S, shape.qk_nope_dim, qk_head));
+        ASSERT_EQ(actual_q_pe.shape(), expected_q_pe.shape()) << shape.name << " q_pe: shape mismatch";
+        EXPECT_TRUE(xt::allclose(actual_q_pe, expected_q_pe, 1e-4, 1e-4)) << shape.name << " q_pe: value mismatch";
+    }
 }
 
 INSTANTIATE_TEST_SUITE_P(
