@@ -115,8 +115,13 @@ void kernel_main() {
     constexpr auto q_args = TensorAccessorArgs<num_common_ct_args>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto w_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
-    // compute-ceiling toggle, appended last in the CT args (after the three TensorAccessors)
-    constexpr bool dma_off = get_compile_time_arg_val(w_args.next_compile_time_args_offset()) != 0;
+    // DMA-off bitmask, appended last in the CT args (after the three TensorAccessors):
+    // bit0=q, bit1=k, bit2=w. Each read still pushes its CB so compute runs; only the NoC
+    // read is skipped, isolating that input's contribution to the reader's exposed time.
+    constexpr uint32_t dma_mask = get_compile_time_arg_val(w_args.next_compile_time_args_offset());
+    constexpr bool q_off = (dma_mask & 0b001u) != 0;
+    constexpr bool k_off = (dma_mask & 0b010u) != 0;
+    constexpr bool w_off = (dma_mask & 0b100u) != 0;
     const auto q_acc = TensorAccessor(q_args, q_addr, tile_bytes);
     const auto k_acc = TensorAccessor(k_args, k_addr, k_tile_bytes);
     const auto w_acc = TensorAccessor(w_args, w_addr, tile_bytes);
@@ -131,19 +136,19 @@ void kernel_main() {
     bool need_group = true;
     for (uint32_t i = 0; i < flat_count; ++i) {
         if (need_group) {
-            read_w_group<dma_off>(noc, w_acc, span.q_tile_start());
+            read_w_group<w_off>(noc, w_acc, span.q_tile_start());
             if constexpr (!stream_heads) {
-                read_q_block<dma_off>(noc, q_acc, span.q_tile_start(), 0);
+                read_q_block<q_off>(noc, q_acc, span.q_tile_start(), 0);
             }
             need_group = false;
         }
-        read_k_chunk<dma_off>(noc, k_acc, span.k_tile_start(), span.k_tiles());
+        read_k_chunk<k_off>(noc, k_acc, span.k_tile_start(), span.k_tiles());
         if constexpr (stream_heads) {
             // one q-block per (r, c) output tile per head group; must match compute's
             // (r outer, c inner) tile order so each block lands in the tile that consumes it
             for (uint32_t tile_idx = 0; tile_idx < q_tiles_per_unit * span.k_tiles(); ++tile_idx) {
                 for (uint32_t first_head = 0; first_head < num_heads; first_head += heads_per_group) {
-                    read_q_block<dma_off>(noc, q_acc, span.q_tile_start(), first_head);
+                    read_q_block<q_off>(noc, q_acc, span.q_tile_start(), first_head);
                 }
             }
         }

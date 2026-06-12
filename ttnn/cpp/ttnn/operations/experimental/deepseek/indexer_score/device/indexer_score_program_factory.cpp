@@ -228,9 +228,21 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     // Appended LAST in each kernel's CT args so the TensorAccessor offsets above are unaffected.
     // INDEXER_DMA_OFF_READER / INDEXER_DMA_OFF_WRITER disable just one side, to isolate how much
     // of the DMA gap (full kernel vs compute ceiling) is reader-bound vs writer-bound.
-    const uint32_t dma_off = (std::getenv("INDEXER_DMA_OFF") != nullptr) ? 1u : 0u;
-    const uint32_t reader_dma_off = (dma_off || std::getenv("INDEXER_DMA_OFF_READER") != nullptr) ? 1u : 0u;
+    const bool dma_off = std::getenv("INDEXER_DMA_OFF") != nullptr;
+    const bool reader_off = dma_off || std::getenv("INDEXER_DMA_OFF_READER") != nullptr;
     const uint32_t writer_dma_off = (dma_off || std::getenv("INDEXER_DMA_OFF_WRITER") != nullptr) ? 1u : 0u;
+    // Reader flag is a bitmask: bit0=q, bit1=k, bit2=w. INDEXER_READ_{Q,K,W}_OFF skip just one
+    // input's NoC reads (still push the CB) to attribute the reader's exposed time per tensor.
+    uint32_t reader_dma_off = reader_off ? 0b111u : 0u;
+    if (std::getenv("INDEXER_READ_Q_OFF") != nullptr) {
+        reader_dma_off |= 0b001u;
+    }
+    if (std::getenv("INDEXER_READ_K_OFF") != nullptr) {
+        reader_dma_off |= 0b010u;
+    }
+    if (std::getenv("INDEXER_READ_W_OFF") != nullptr) {
+        reader_dma_off |= 0b100u;
+    }
 
     std::vector<uint32_t> reader_ct = common_ct;
     TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
