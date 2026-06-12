@@ -50,13 +50,15 @@ void kernel_main() {
                     in1_cb.pop_front(onetile);
                 }
 
-                out_cb.reserve_back(onetile);
                 tile_regs_commit();
+
+                out_cb.reserve_back(onetile);
+
                 tile_regs_wait();
                 pack_tile(0, cb_out);
-                out_cb.push_back(onetile);
-
                 tile_regs_release();
+
+                out_cb.push_back(onetile);
             }
         }
     }

@@ -425,6 +425,7 @@ def compute_constants(
     num_devices,
     dispatch_group_size,
     dispatch_buffer_capacity_factor,
+    experts_per_chip_override: int | None = None,
 ):
     """
     Compute derived constants for MoE configuration.
@@ -439,6 +440,11 @@ def compute_constants(
             buffer; callers must pick the smallest integer such that
             dgs*seq*factor is not smaller than the theoretical worst-case
             required buffer size.
+        experts_per_chip_override: If not None, bypass the
+            num_routed_experts // num_devices derivation and use this value.
+            Required when simulating one Galaxy column on a single-column LB
+            mesh: the table indexes 256 global expert IDs but only 8 of them
+            physically live on each chip (not 256/8=32).
 
     Returns:
         experts_per_chip: Number of experts per chip
@@ -450,7 +456,13 @@ def compute_constants(
         seq_len_per_chip % ttnn.TILE_SIZE == 0
     ), f"seq_len_per_chip ({seq_len_per_chip}) must be a multiple of TILE_SIZE ({ttnn.TILE_SIZE})"
 
-    experts_per_chip = num_routed_experts // num_devices
+    if experts_per_chip_override is not None:
+        assert (
+            experts_per_chip_override > 0
+        ), f"experts_per_chip_override must be positive, got {experts_per_chip_override}"
+        experts_per_chip = experts_per_chip_override
+    else:
+        experts_per_chip = num_routed_experts // num_devices
     metadata_len = 5  # chip, token, topk_idx, routed_expert, weight
 
     # TODO: For now, we are ignoring the num_experts_per_tok, but it will be needed once
@@ -604,6 +616,175 @@ def initialize_predictable_test_inputs(
     return x, weights, indices
 
 
+def load_captured_routing(
+    dispatch_group_size: int,
+    seq_len_per_chip: int,
+    num_routed_experts: int,
+    num_experts_per_tok: int,
+    layer: int,
+    col: int,
+    captured_indices_path: str = None,
+):
+    """Load real captured Galaxy gate indices, remapped to run one Galaxy column on LB 8x1.
+
+    What the capture contains
+    -------------------------
+    `expert_routing.safetensors[expert_ids_layer_<L>]` holds one tensor per MoE layer
+    of shape `(total_tokens=25600, top_k=8)` int32, with values in `[0, num_routed_experts=256)`.
+    Those are **Galaxy-global expert IDs**. We `view` it into the worker's expected
+    `(dispatch_group_size=8, seq_len_per_chip=3200, top_k=8)` layout.
+
+    Galaxy 8x4 owns 256 experts split across 4 dispatch columns × 8 chips:
+
+        col 0:  expert IDs [  0,  64), 8 experts per chip (chips 0..7 = ids 0..7, 8..15, ...)
+        col 1:  expert IDs [ 64, 128)
+        col 2:  expert IDs [128, 192)
+        col 3:  expert IDs [192, 256)
+
+    LB 8x1 has only one column, 8 chips, 8 experts/chip = 64 physical experts.
+    The LB combine kernel hard-codes `first_expert_id=0`, so every expert ID it
+    sees in metadata must fit in `[0, num_routed_experts_per_col=64)` or be a
+    skip-sentinel — anything in `[64, 256)` would index past the per-chip
+    `expert_token_counts` array and silently corrupt outputs.
+
+    The remap
+    ---------
+    For a chosen Galaxy column `k`, we transform every captured value `v`:
+
+        in-col routes (v in [k*64, (k+1)*64))   →  v - k*64      (shifts into [0, 64))
+        out-of-col routes (everything else)     →  255           (sentinel)
+
+    We then build the dispatch table.  `ExpertMapping.create_dispatch_table(256, 8, 4)`
+    returns the full Galaxy 4-row table of shape `(4, 256)`; we slice `[0:1]` to get a
+    `(1, 256)` tensor — one row, to match LB's single-col mesh.  The slice's contents:
+
+        table[0,  0..63]   = [0,0,0,0,0,0,0,0, 1,1,...,1, ..., 7,7,7,7,7,7,7,7]   (chip ids, 8 per chip)
+        table[0, 64..255]  = -1                                                    (kernel reads -1 → skip)
+        table[0, 255]      = -1                                                    (== sentinel target)
+
+    The chip-assignment function `chip_id = local_id // 8` is identical across every
+    Galaxy column's row, so using row 0 against remapped (in-col-shifted) indices
+    routes each expert to the same chip Galaxy would have:
+
+        Galaxy expert 135 (col 2 local 7)  →  Galaxy table[2, 135] = chip 0
+        After remap:        value becomes 7  →  LB table[0,   7]   = chip 0   (match)
+
+    Out-of-col routes (sentinel 255) hit `table[0, 255] = -1` and the kernel skips
+    them — preserving Galaxy col k's true per-col routing share 1:1 with no spurious
+    work on the other 192 globals.
+
+    Worked example: longbook L27 token 0, captured-col=2
+    ----------------------------------------------------
+    The 8 picks for chip 0 token 0 in longbook_qa_eng_25600 L27 are::
+
+        raw   :  [138, 147,  79,  30, 150, 120,  72, 154]
+        in-col:  [ ✓,   ✓,   ✗,   ✗,   ✓,   ✗,   ✗,   ✓ ]    (col 2 range = [128, 192))
+        remap :  [ 10,  19, 255, 255,  22, 255, 255,  26]
+        route :  [ch1, ch2, skip, skip, ch2, skip, skip, ch3]   (chip_id = remap_value // 8)
+
+    Verification — Galaxy would have routed the same picks via its col-2 row::
+
+        table[2, 138] = (138 - 128)//8 = chip 1   (same as our remapped 10 // 8)
+        table[2, 147] = (147 - 128)//8 = chip 2   (same as our remapped 19 // 8)
+        table[2,  79] = -1                         (col 1, Galaxy col 2 also skips)
+        ...
+
+    Args (beyond the existing shape/config args)
+    ---------------------------------------------
+        layer:                  int, MoE layer index (e.g. 27)
+        col:                    int, Galaxy column [0, 4) to simulate
+        captured_indices_path:  optional path override for the safetensors;
+                                defaults to LONGBOOK_QA_ENG_25600/expert_routing.safetensors
+
+    Returns
+    -------
+    (indices, expert_dispatch_table) where:
+        indices                 (dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
+                                int32, values in [0, 64) ∪ {255}.
+        expert_dispatch_table   (1, 256) int32 — col 0's row of the Galaxy 4-col table,
+                                with chip IDs [0, 8) for [0, 64) and -1 elsewhere.
+    """
+    from pathlib import Path
+
+    GALAXY_NUM_DISPATCH_GROUPS = 4
+
+    if not 0 <= col < GALAXY_NUM_DISPATCH_GROUPS:
+        raise ValueError(f"col must be in [0, {GALAXY_NUM_DISPATCH_GROUPS}), got {col}")
+    if num_routed_experts != 256:
+        raise ValueError(
+            f"Captured indices require num_routed_experts=256, got {num_routed_experts}. "
+            "Use a parametrize entry with the matching kernel config (perf_real_indices)."
+        )
+
+    if captured_indices_path:
+        path = Path(captured_indices_path)
+    else:
+        # Lazy import: transformer_helpers itself imports from this module in places.
+        from models.demos.deepseek_v3_d_p.utils.transformer_helpers import LONGBOOK_QA_ENG_25600
+
+        path = LONGBOOK_QA_ENG_25600 / "expert_routing.safetensors"
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Captured indices file not found at {path}. "
+            "Pass captured_indices_path to override, or configure DEEPSEEK_V3_TRACE_DIR."
+        )
+
+    from safetensors import safe_open
+
+    key = f"expert_ids_layer_{layer}"
+    with safe_open(str(path), framework="pt") as f:
+        available = list(f.keys())
+        if key not in available:
+            raise KeyError(f"Layer key {key!r} not in {path}. Available keys (first 5): {available[:5]}")
+        flat = f.get_tensor(key)
+
+    expected_numel = dispatch_group_size * seq_len_per_chip * num_experts_per_tok
+    if flat.numel() != expected_numel:
+        raise ValueError(
+            f"Captured indices for layer {layer} have shape={tuple(flat.shape)} numel={flat.numel()}; "
+            f"worker expects {expected_numel} "
+            f"(dispatch_group_size={dispatch_group_size}, seq_len_per_chip={seq_len_per_chip}, "
+            f"num_experts_per_tok={num_experts_per_tok})"
+        )
+    indices = flat.view(dispatch_group_size, seq_len_per_chip, num_experts_per_tok).to(torch.int32).contiguous()
+    max_idx = int(indices.max().item())
+    if max_idx >= num_routed_experts:
+        raise ValueError(f"Captured indices contain expert ID {max_idx} >= num_routed_experts={num_routed_experts}")
+
+    # Remap captured Galaxy-global expert IDs [0, 256) → LB-local [0, 64) ∪ {sentinel}.
+    # LB's combine kernel uses first_expert_id=0 on a single-col mesh, so metadata expert
+    # IDs must fit in [0, num_routed_experts_per_col=64). In-col routings get shifted to
+    # [0, 64); out-of-col routings get sentinel 255 which maps to -1 in col 0's dispatch
+    # table → kernel skips (preserving the per-col routing share 1:1 with Galaxy col k).
+    SENTINEL = 255
+    experts_per_col = num_routed_experts // GALAXY_NUM_DISPATCH_GROUPS
+    in_col_mask = (indices >= col * experts_per_col) & (indices < (col + 1) * experts_per_col)
+    in_col_share = in_col_mask.float().mean().item() * 100.0
+    indices = torch.where(
+        in_col_mask,
+        indices - col * experts_per_col,
+        torch.tensor(SENTINEL, dtype=indices.dtype),
+    ).contiguous()
+
+    # Always use col 0's row of the (4, 256) Galaxy dispatch table — chip IDs [0, 8) for
+    # experts [0, 64), and -1 for [64, 256). Combined with the remap above, this routes
+    # in-col indices correctly and skips out-of-col (sentinel) ones.
+    galaxy_table = ExpertMapping.create_dispatch_table(
+        num_routed_experts=num_routed_experts,
+        dispatch_group_size=dispatch_group_size,
+        num_dispatch_groups=GALAXY_NUM_DISPATCH_GROUPS,
+    )
+    expert_dispatch_table = galaxy_table[0:1].contiguous()
+
+    logger.info(
+        f"[captured_routing] layer={layer} col={col} src={path}: "
+        f"indices.shape={tuple(indices.shape)} in-col share={in_col_share:.1f}% "
+        f"(remapped to [0, {experts_per_col}) ∪ {{{SENTINEL}}})  "
+        f"expert_dispatch_table.shape={tuple(expert_dispatch_table.shape)}"
+    )
+    return indices, expert_dispatch_table
+
+
 def create_fabric_router_config(max_payload_size):
     """
     Helper to create FabricRouterConfig with custom max payload size.
@@ -716,21 +897,31 @@ def create_gate_weights(
     num_routed_experts: int,
     emb_dim: int,
     dtype: torch.dtype = torch.bfloat16,
+    seed: int | None = None,
 ) -> dict:
     """
     Create random gate weights with proper scaling for stable sigmoid routing.
+
+    Args:
+        seed: When provided, weights are drawn from a local ``torch.Generator``
+            seeded with this value, making the output a pure function of
+            ``(num_routed_experts, emb_dim, dtype, seed)`` and independent of the
+            global RNG state / call order. This is required when the result is
+            persisted to a shape-keyed weight cache so that the cached tensor
+            always matches the in-memory reference (see TtMoe cache builders).
 
     Returns dict matching MoEGate format:
         "weight": (n_routed_experts, dim)
         "e_score_correction_bias": (n_routed_experts,)
     """
 
-    weight = torch.randn(num_routed_experts, emb_dim, dtype=dtype)
+    gen = torch.Generator().manual_seed(seed) if seed is not None else None
+    weight = torch.randn(num_routed_experts, emb_dim, dtype=dtype, generator=gen)
     scale = 1.0 / (emb_dim**0.5)  # kaiming-like scale
     weight = weight * scale
     return {
         "weight": weight,
-        "e_score_correction_bias": torch.randn(num_routed_experts, dtype=dtype) * 0.01,
+        "e_score_correction_bias": torch.randn(num_routed_experts, dtype=dtype, generator=gen) * 0.01,
     }
 
 
@@ -784,6 +975,7 @@ def create_torch_expert_weights(
     num_experts: int,
     emb_dim: int,
     hidden_dim: int,
+    seed: int | None = None,
 ) -> list[dict]:
     """
     Create random weights for torch experts.
@@ -792,16 +984,20 @@ def create_torch_expert_weights(
         num_experts: Number of experts to create weights for
         emb_dim: Embedding dimension
         hidden_dim: Hidden/intermediate dimension
+        seed: When provided, weights are drawn from a local ``torch.Generator``
+            seeded with this value, making the output independent of the global
+            RNG state / call order (required for stable shape-keyed weight caches).
 
     Returns:
         List of dicts with gate_proj, up_proj, down_proj per expert
     """
+    gen = torch.Generator().manual_seed(seed) if seed is not None else None
     weights_list = []
     for _ in tqdm(range(num_experts), desc="Creating expert weights"):
         weights = {
-            "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
-            "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
-            "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32) * 0.02,
+            "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32, generator=gen) * 0.02,
+            "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32, generator=gen) * 0.02,
+            "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32, generator=gen) * 0.02,
         }
         weights_list.append(weights)
     return weights_list
@@ -810,6 +1006,7 @@ def create_torch_expert_weights(
 def create_shared_expert_weights(
     emb_dim: int,
     hidden_dim: int,
+    seed: int | None = None,
 ) -> dict:
     """
     Create random weights for shared expert in HF format.
@@ -817,14 +1014,18 @@ def create_shared_expert_weights(
     Args:
         emb_dim: Embedding dimension
         hidden_dim: Hidden/intermediate dimension
+        seed: When provided, weights are drawn from a local ``torch.Generator``
+            seeded with this value, making the output independent of the global
+            RNG state / call order (required for stable shape-keyed weight caches).
 
     Returns:
         Dict with gate_proj, up_proj, down_proj in HF format (out_features, in_features)
     """
+    gen = torch.Generator().manual_seed(seed) if seed is not None else None
     return {
-        "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
-        "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
-        "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32) * 0.02,
+        "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32, generator=gen) * 0.02,
+        "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32, generator=gen) * 0.02,
+        "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32, generator=gen) * 0.02,
     }
 
 

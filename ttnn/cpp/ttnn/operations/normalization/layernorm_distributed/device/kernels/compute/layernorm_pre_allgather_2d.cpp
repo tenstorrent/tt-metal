@@ -18,15 +18,6 @@ For rmsnorm it computes E(x**2) and returns it as a one tile wide output
 
 namespace pre_add = norm::kernel_util::compute::pre_add;
 
-ALWI void ACQ() {
-    tile_regs_acquire();
-    tile_regs_wait();
-}
-ALWI void REL() {
-    tile_regs_commit();
-    tile_regs_release();
-}
-
 void kernel_main() {
     constexpr uint32_t NCHt = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
@@ -66,14 +57,19 @@ void kernel_main() {
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_inp, wt + blk);  // cumulative wait
 
-            cb_reserve_back(cb_x2, blk);
-            ACQ();
-
+            tile_regs_acquire();
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
                 mul_tiles(cb_inp, cb_inp, wt + wtr, wt + wtr, wtr);
+            }
+            tile_regs_commit();
+
+            cb_reserve_back(cb_x2, blk);
+
+            tile_regs_wait();
+            for (uint32_t wtr = 0; wtr < blk; wtr++) {
                 pack_tile(wtr, cb_x2, wt + wtr);
             }
-            REL();
+            tile_regs_release();
 
             cb_push_back(cb_x2, blk);
         }
@@ -103,29 +99,27 @@ void kernel_main() {
         cb_wait_front(cb_x2_merge, num_cores_y);
         cb_wait_front(cb_zero, 1);
 
-        // Reserve output space
-        cb_reserve_back(cb_out_final, onetile);
-
         // Initialize accumulation
         binary_op_init_common(cb_x2_merge, cb_zero, cb_out_final);
         reconfig_data_format(cb_x2_merge, cb_zero);
         pack_reconfig_data_format(cb_out_final);
         add_tiles_init(cb_x2_merge, cb_zero, true);
 
-        // Acquire registers
-        ACQ();
-
+        tile_regs_acquire();
         // Add all 8 tiles together
         for (uint32_t i = 0; i < num_cores_y; i++) {
             add_tiles(cb_x2_merge, cb_zero, i, 0, dst0);
         }
+        tile_regs_commit();
 
-        // Pack result
-        pack_tile(dst0, cb_out_final);
-        REL();
-
-        // Push output and pop input
-        cb_push_back(cb_out_final, onetile);
         cb_pop_front(cb_x2_merge, num_cores_y);
+
+        cb_reserve_back(cb_out_final, onetile);
+
+        tile_regs_wait();
+        pack_tile(dst0, cb_out_final);
+        tile_regs_release();
+
+        cb_push_back(cb_out_final, onetile);
     }
 }

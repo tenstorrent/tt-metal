@@ -1501,6 +1501,37 @@ CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(uint32_t bank_id) const 
         num_subchannels);
 }
 
+std::vector<CoreCoord> MeshDeviceImpl::dram_sender_logical_cores(uint32_t bank_id) const {
+    const auto& soc_desc = MetalContext::instance(context_id_).get_cluster().get_soc_desc(reference_device()->id());
+
+    // Sender 0: the free non-endpoint subchannel.
+    const CoreCoord free_core = pick_unused_dram_logical_core(bank_id);
+
+    // Sender 1: the NOC1 worker-endpoint subchannel. Resolve its subchannel index by
+    // matching the endpoint's physical (TRANSLATED) coord against this bank's
+    // subchannels (mirrors the loop in pick_unused_dram_logical_core).
+    const CoreCoord noc1_endpoint_phys =
+        soc_desc.get_preferred_worker_core_for_dram_view(static_cast<int>(bank_id), /*noc=*/static_cast<uint8_t>(1));
+    const uint32_t num_subchannels = soc_desc.get_grid_size(tt::CoreType::DRAM).y;
+    const size_t channel = soc_desc.get_channel_for_dram_view(static_cast<int>(bank_id));
+    for (uint32_t sub = 0; sub < num_subchannels; ++sub) {
+        const tt::umd::CoreCoord coord = soc_desc.get_dram_core_for_channel(
+            static_cast<int>(channel), static_cast<int>(sub), tt::CoordSystem::TRANSLATED);
+        if (coord.x == noc1_endpoint_phys.x && coord.y == noc1_endpoint_phys.y) {
+            const CoreCoord noc1_core =
+                soc_desc.get_logical_dram_core_for_subchannel(static_cast<int>(bank_id), static_cast<int>(sub));
+            TT_FATAL(
+                noc1_core != free_core,
+                "DRAM bank {}: NOC1-endpoint subchannel collides with the free subchannel ({}, {})",
+                bank_id,
+                free_core.x,
+                free_core.y);
+            return {free_core, noc1_core};
+        }
+    }
+    TT_THROW("Could not resolve the NOC1 worker-endpoint subchannel for DRAM bank_id={}", bank_id);
+}
+
 program_cache::detail::ProgramCache& MeshDeviceImpl::get_program_cache() { return *program_cache_; }
 HalProgrammableCoreType MeshDeviceImpl::get_programmable_core_type(CoreCoord virtual_core) const {
     return reference_device()->get_programmable_core_type(virtual_core);

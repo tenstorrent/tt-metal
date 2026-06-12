@@ -45,8 +45,8 @@ void kernel_main() {
 
 #if SRC_SHARDED
 #if !SRC_BCAST
-    cb_reserve_back(cb_id_src, src_num_tiles);
-    cb_push_back(cb_id_src, src_num_tiles);
+    cb_src.reserve_back(src_num_tiles);
+    cb_src.push_back(src_num_tiles);
 #endif
 #else
     const uint32_t src_tile_bytes = cb_src.get_tile_size();
@@ -54,8 +54,8 @@ void kernel_main() {
 #endif
 #if SRC_SHARDED_B
 #if !SRC_BCAST_B
-    cb_reserve_back(cb_id_src_b, src_num_tiles_b);
-    cb_push_back(cb_id_src_b, src_num_tiles_b);
+    cb_src_b.reserve_back(src_num_tiles_b);
+    cb_src_b.push_back(src_num_tiles_b);
 #endif
 #else
     const uint32_t src_tile_bytes_b = cb_src_b.get_tile_size();

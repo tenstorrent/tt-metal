@@ -42,8 +42,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("sampling_winner_page_bytes"),
         get_named_compile_time_arg_val("sampling_num_senders"),
         get_named_compile_time_arg_val("sampling_expected_remote_incs"),
-        get_named_compile_time_arg_val("sampling_receiver_semaphore_id"),
-        get_named_compile_time_arg_val("sampling_local_ready_semaphore_id"),
+        get_named_compile_time_arg_val("sampling_receiver_semaphore_addr"),
+        get_named_compile_time_arg_val("sampling_local_ready_semaphore_addr"),
         get_named_compile_time_arg_val("sampling_mesh_mode"),
         get_named_compile_time_arg_val("sampling_stage1_sender"),
         get_named_compile_time_arg_val("sampling_stage1_receiver"),
@@ -102,7 +102,7 @@ void kernel_main() {
     uint32_t brisc_rt_arg_idx = 0;
     using SamplingWriterCTArgs = deepseek_b1_ops::TopKSampling::WriterCTArgs<
         get_named_compile_time_arg_val("sampling_winner_page_bytes"),
-        get_named_compile_time_arg_val("sampling_local_ready_semaphore_id"),
+        get_named_compile_time_arg_val("sampling_local_ready_semaphore_addr"),
         0,  // SocketMode
         0,  // SocketCBId
         0,  // SocketPageSizeBytes
@@ -202,8 +202,7 @@ void kernel_main() {
         // Single-device loop barrier: final core releases non-final cores for next iteration.
         // This prevents receiver semaphore increments from later iterations racing ahead.
         if constexpr (!SamplingReaderCTArgs::mesh_mode) {
-            const uint32_t local_ready_sem_addr =
-                get_semaphore(get_named_compile_time_arg_val("sampling_local_ready_semaphore_id"));
+            const uint32_t local_ready_sem_addr = get_named_compile_time_arg_val("sampling_local_ready_semaphore_addr");
             auto local_ready_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_ready_sem_addr);
             if constexpr (Core::is_final_core) {
                 constexpr uint32_t num_dests = get_named_compile_time_arg_val("sampling_loop_num_dests");
