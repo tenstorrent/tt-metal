@@ -206,5 +206,5 @@ ExternalProject_Add(
     CMAKE_ARGS
         -DCMAKE_TOOLCHAIN_FILE=${EMSCRIPTEN_TOOLCHAIN_FILE} -DCMAKE_BUILD_TYPE=MinSizeRel
     INSTALL_COMMAND
-        ""
+        "" # Suppress default cmake --install: artifacts stay in BINARY_DIR for CI packaging to pick up.
 )
