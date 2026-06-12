@@ -1101,7 +1101,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                         input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
                             (input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
                              input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM) ||
-                            // Receiver-contiguous DRAM-core prefetcher: in1 is an NdShardSpec DRAM
+                            // Receiver-contiguous Tensor prefetcher: in1 is an NdShardSpec DRAM
                             // weight (reported as ND_SHARDED) whose data is delivered via the
                             // global CB receivers, not read directly per its DRAM layout. The
                             // weight's own layout is irrelevant to the matmul in this case.
