@@ -176,10 +176,13 @@ void Inspector::program_kernel_compile_finished(
         kernel_data.watcher_kernel_id = kernel->get_watcher_kernel_id();
         kernel_data.name = kernel->name();
         kernel_data.path = build_options.path;
-        if (data->kernel_path_collection_enabled && device != nullptr) {
+        if (device != nullptr) {
             auto processor_elf_paths = kernel->elf_paths_by_processor_index(*device, binary_root);
-            std::lock_guard<std::mutex> path_lock(data->kernel_path_mutex);
-            data->kernel_id_to_processor_elf_paths[kernel->get_watcher_kernel_id()] = std::move(processor_elf_paths);
+            if (data->kernel_path_collection_enabled) {
+                std::lock_guard<std::mutex> path_lock(data->kernel_path_mutex);
+                data->kernel_id_to_processor_elf_paths[kernel->get_watcher_kernel_id()] = processor_elf_paths;
+            }
+            kernel_data.processor_elf_paths = std::move(processor_elf_paths);
         }
         kernel_data.source = kernel->kernel_source().source_;
         data->kernel_id_to_program_id[kernel->get_watcher_kernel_id()] = program->get_id();
