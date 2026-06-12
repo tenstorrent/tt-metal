@@ -77,6 +77,7 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
     // num_blocks = how many 32x32 tiles per input shard (one 256-expert block per tile). 256->1, 512->2.
     const uint32_t num_blocks = (input_shard.shape[0] / 32) * (input_shard.shape[1] / 32);
     TT_FATAL(num_blocks >= 1, "input shard must hold at least one 32x32 tile");
+    TT_FATAL(num_blocks <= 2, "generalized_moe_gate supports up to 2 blocks (<=512 experts), got {}", num_blocks);
 
     TT_FATAL(input_shard.shape == bias_shard.shape, "Input and bias shard shapes must match");
     TT_FATAL(input_shard.orientation == bias_shard.orientation, "Input and bias shard orientations must match");

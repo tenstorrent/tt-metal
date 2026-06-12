@@ -18,9 +18,10 @@ void GeneralizedMoeGateDeviceOperation::validate_on_program_cache_hit(
 }
 
 void GeneralizedMoeGateDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     using tt::tt_metal::DataType;
 
+    TT_FATAL(attrs.topk >= 1 && attrs.topk <= 8, "topk must be in [1, 8], got {}", attrs.topk);
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& bias_tensor = tensor_args.bias_tensor;
     const auto& input_indices_tensor = tensor_args.input_indices_tensor;

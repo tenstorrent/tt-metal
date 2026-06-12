@@ -13,22 +13,31 @@ void bind_generalized_moe_gate(nb::module_& mod) {
     ttnn::bind_function<"generalized_moe_gate", "ttnn.experimental.deepseek.moe.">(
         mod,
         R"doc(
-        DeepSeek V3 MoE gate routing (top-8 experts with normalized scores) on height-sharded tensors.
+        Generalized (ungrouped) MoE gate routing on height-sharded tensors. Generalizes the DeepSeek-V3
+        gate: scores the router logits (optionally via sigmoid), adds a selection bias, selects the
+        top-``topk`` experts per token, normalizes their scores (softmax or linear renormalization), and
+        applies ``scaling_factor``.
 
         Writes results into ``output_tensor`` and ``output_indices_tensor`` (same tensors are returned).
 
         Args:
-            input_tensor: Router logits per shard ([*, 16, 16] logical, tile 32x32).
-            bias_tensor: Score correction bias, same shard spec as logits.
-            input_indices_tensor: Transposed routing indices shard.
-            output_tensor: Preallocated BF16 buffer for normalized top-8 scores (shard 32x32).
-            output_indices_tensor: Preallocated UInt16 indices buffer (shard 32x32).
+            input_tensor: Router logits per shard ([*, 16, 16] logical = 256 experts, tile 32x32).
+            bias_tensor: Score-correction bias added for selection only (output scores stay unbiased),
+                same shard spec as logits.
+            input_indices_tensor: Transposed routing indices shard (the global expert id per slot).
+            output_tensor: Preallocated BF16 buffer for the normalized top-``topk`` scores (shard 32x32).
+            output_indices_tensor: Preallocated UInt16 buffer for the selected expert indices (shard 32x32).
             eps: Denominator stabilization for normalization (default: 1e-20).
             scaling_factor: Routed scaling factor applied after normalization (default: 2.5).
-            enable_sigmoid: Apply sigmoid to logits before bias add when True (default: False).
+            enable_sigmoid: Apply sigmoid to the logits before the bias add when True (sigmoid routing);
+                when False the raw logits are scored directly (default: False).
+            topk: Number of experts selected per token; supported values are 4, 6, 8 (default: 8).
+            output_softmax: Normalize the selected top-``topk`` scores with softmax when True; when False
+                they are linearly renormalized (divided by their sum) (default: False).
 
         Returns:
-            Tuple ``(output_tensor, output_indices_tensor)``.
+            Tuple ``(output_tensor, output_indices_tensor)`` — the normalized top-``topk`` scores and the
+            selected expert indices.
         )doc",
         &ttnn::experimental::deepseek::moe::generalized_moe_gate,
         nb::arg("input_tensor"),
