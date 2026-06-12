@@ -279,11 +279,16 @@ def preprocess_tt_generator(
         _strip_weight_norm(noise_conv)  # No-op for plain Conv1d
         noise_conv_p = _conv1d_to_tt_params(noise_conv, weights_dtype=conv_weights_dtype)
 
+        # ``noise_res`` consumes the harmonic source directly (``noise_conv`` preserves its dtype),
+        # so its Snake activations run at ``source_stft_dtype`` (fp32 by default). Match ``alpha`` to
+        # that dtype to keep the Snake multiplies non-mixed without a runtime cast. The main
+        # ``resblocks`` run on the post-conv-transpose (bf16) path, so they keep the bf16 default.
         noise_res_p = preprocess_tt_adain_resblock1(
             module.noise_res[i],
             device,
             weights_dtype=weights_dtype,
             conv_weights_dtype=conv_weights_dtype,
+            alpha_dtype=source_stft_dtype,
         )
 
         resblocks_p = tuple(
@@ -292,6 +297,7 @@ def preprocess_tt_generator(
                 device,
                 weights_dtype=weights_dtype,
                 conv_weights_dtype=conv_weights_dtype,
+                alpha_dtype=ttnn.bfloat16,
             )
             for j in range(num_kernels)
         )
