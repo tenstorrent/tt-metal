@@ -205,10 +205,13 @@ inline void _llk_pack_init_wrapper_(
     [[maybe_unused]] const bool narrow_tile  = false,
     const std::uint32_t num_tiles            = 1)
 {
-    // No-src wrapper: strides are owned by the preceding hw-configure/reconfig, so skip them here.
-    // The format arg is unused when strides are skipped; pass pack_dst_format as a placeholder.
-    _llk_pack_init_<pack_mode, zero_output, false /* skip_addrmod_config */, true /* skip_packer_strides */>(
-        pack_dst_format, face_r_dim, tile_c_dim, num_faces, num_tiles, false /* skip_bh_tilize_workaround */);
+    // No-src wrapper: the packer strides are owned by the preceding hw-configure/reconfig, so we skip
+    // them here. Because strides are the only consumer of pack_src_format, we call the internal init
+    // helper directly instead of the public _llk_pack_init_: that avoids fabricating a pack_src_format
+    // (the src format is never read once strides are skipped) and bypasses the public entry point's
+    // format-based num_tiles assert, which would otherwise validate against a placeholder value.
+    llk_pack_internal_bh::pack_init_apply<pack_mode, zero_output, false /* skip_addrmod_config */, true /* skip_packer_strides */>(
+        pack_dst_format /* pack_src_format: ignored when strides are skipped */, face_r_dim, tile_c_dim, num_faces, num_tiles);
 }
 
 template <PackMode pack_mode = PackMode::Default, bool zero_output = false>

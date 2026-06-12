@@ -105,7 +105,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, PackMode::Default>(
         int32_fmt, int32_fmt, 32 * 32 * 4 /* INT32 tile size in bytes */, FACE_R_DIM, 4 /* num_faces */);
 #ifdef ARCH_BLACKHOLE
-    // Blackhole init takes pack_src_format first; strides + X counter come from the hw-configure above.
+    // Blackhole init takes pack_src_format first; the packer strides come from the hw-configure above
+    // (so skip them). The X (datum) counter is not set by configure_pack; this init programs it.
     _llk_pack_init_<PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, true /* skip_packer_strides */>(
         int32_fmt, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
 #else
