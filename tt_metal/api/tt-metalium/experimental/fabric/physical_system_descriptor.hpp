@@ -60,9 +60,11 @@ struct EthConnection {
     uint8_t src_chan = 0;
     uint8_t dst_chan = 0;
     bool is_local = false;
+    PortType port_type = PortType::UNKNOWN;
 
     bool operator==(const EthConnection& other) const {
-        return src_chan == other.src_chan && dst_chan == other.dst_chan && other.is_local == is_local;
+        return src_chan == other.src_chan && dst_chan == other.dst_chan && other.is_local == is_local &&
+               port_type == other.port_type;
     }
     bool operator<(const EthConnection& other) const {
         if (src_chan != other.src_chan) {
@@ -119,6 +121,8 @@ struct hash<tt::tt_metal::ExitNodeConnection> {
         seed ^= std::hash<uint8_t>{}(min_chan) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
         seed ^= std::hash<uint8_t>{}(max_chan) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
         seed ^= std::hash<bool>{}(conn.eth_conn.is_local) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+        seed ^= std::hash<uint8_t>{}(static_cast<uint8_t>(conn.eth_conn.port_type)) + 0x9e3779b9 + (seed << 6) +
+                (seed >> 2);
         return seed;
     }
 };
@@ -176,6 +180,9 @@ public:
     // ASIC Topology Query APIs
     std::vector<AsicID> get_asic_neighbors(AsicID asic_id) const;
     std::vector<EthConnection> get_eth_connections(AsicID src_asic_id, AsicID dst_asic_id) const;
+    PortType get_port_type(AsicID src_asic, AsicID dst_asic, uint8_t src_chan) const;
+    std::vector<PortType> get_available_port_types(AsicID src_asic) const;
+    bool has_port_type(AsicID src_asic, AsicID dst_asic, PortType port_type) const;
     const AsicTopology& get_asic_topology(const std::string& hostname) const;
     TrayID get_tray_id(AsicID asic_id) const;
     ASICLocation get_asic_location(AsicID asic_id) const;
