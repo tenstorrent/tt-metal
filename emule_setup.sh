@@ -1,22 +1,26 @@
 # =============================================================================
-# setup.sh — emule + ASAN environment for ttnn test runs
+# emule_setup.sh — tt-emule + ASAN environment for emulated test runs
 #
-#   USAGE:  source setup.sh        (NOT ./setup.sh — env vars must persist)
+#   USAGE:  source emule_setup.sh        (NOT ./emule_setup.sh — exports must persist)
 #
-# After sourcing, run a hardened runner (./eltwise_tests.sh, ./data_mov_tests.sh,
-# ./base_func_tests.sh). Each one calls emule_preflight before and
-# emule_postflight after, so a misconfigured run can't masquerade as a clean one.
+# Routes tt-metal at the tt-emule software emulator (instead of a physical WH
+# card) and arms the host-side ASAN sanitizers. After sourcing, emule_preflight
+# runs automatically to confirm the build + environment are emule-ready.
+#
+# This file only configures emule. Activate your Python venv and set up the
+# normal tt-metal environment (e.g. via create_venv.sh) before sourcing it.
 # =============================================================================
 
 # Refuse to be executed instead of sourced (exports would be lost).
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
-    echo "ERROR: source this file, do not execute it:  source setup.sh"
+    echo "ERROR: source this file, do not execute it:  source emule_setup.sh"
     exit 1
 fi
 
+# Anchors the mock cluster descriptor path below.
 export TT_METAL_HOME="$(pwd)"
-export TT_METAL_RUNTIME_ROOT="$(pwd)"
-export PYTHONPATH="$(pwd)"
+
+# Architecture of the emulated target (matches the wormhole mock cluster below).
 export ARCH_NAME=wormhole_b0
 
 # --- Route to the tt-emule software emulator (NOT the physical WH card) -------
@@ -29,10 +33,7 @@ export TT_METAL_MOCK_CLUSTER_DESC_PATH="$TT_METAL_HOME/tt_metal/third_party/umd/
 # --- Arm the sanitizers -------------------------------------------------------
 export TT_METAL_EMULE_ASAN=1
 
-unset PYTHON_ENV_DIR
-source "$(pwd)/python_env/bin/activate"
-
-# --- Guards shared by the *_tests.sh runners ---------------------------------
+# --- emule sanity guards ------------------------------------------------------
 # Verifies the config BEFORE a run. Returns non-zero (does not exit) so it is
 # safe to call while sourced.
 emule_preflight() {
@@ -48,7 +49,7 @@ emule_preflight() {
     if [ "${sym_count:-0}" -eq 0 ]; then
         echo "[preflight] FATAL: libtt_metal.so is not an EMULE build (missing emule::execute_program_emulated)"; ok=0
     fi
-    [ "$ok" = "1" ] || { echo "[preflight] environment NOT ready — fix the above and re-source setup.sh"; return 1; }
+    [ "$ok" = "1" ] || { echo "[preflight] environment NOT ready — fix the above and re-source emule_setup.sh"; return 1; }
     echo "[preflight] OK: emule build + emule mode + slow dispatch + ASAN all set."
     return 0
 }
@@ -76,5 +77,5 @@ emule_postflight() {
 }
 export -f emule_preflight emule_postflight
 
-# Validate as soon as setup.sh is sourced.
+# Validate as soon as this file is sourced.
 emule_preflight

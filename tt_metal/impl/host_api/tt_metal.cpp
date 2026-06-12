@@ -1003,10 +1003,10 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
             // formula in program_dispatch::initialize_worker_config_buf_mgr.
             uint32_t window_size;
             if (pct == HalProgrammableCoreType::TENSIX) {
-                uint32_t kc_base = static_cast<uint32_t>(
-                    hal_for_check.get_dev_addr(pct, HalL1MemAddrType::KERNEL_CONFIG));
-                uint32_t unreserved_base = static_cast<uint32_t>(
-                    hal_for_check.get_dev_addr(pct, HalL1MemAddrType::DEFAULT_UNRESERVED));
+                uint32_t kc_base =
+                    static_cast<uint32_t>(hal_for_check.get_dev_addr(pct, HalL1MemAddrType::KERNEL_CONFIG));
+                uint32_t unreserved_base =
+                    static_cast<uint32_t>(hal_for_check.get_dev_addr(pct, HalL1MemAddrType::DEFAULT_UNRESERVED));
                 window_size = unreserved_base - kc_base;
             } else {
                 window_size = hal_for_check.get_dev_size(pct, HalL1MemAddrType::KERNEL_CONFIG);

@@ -33,7 +33,7 @@ TEST_F(MeshDeviceFixture, Local_L1_Alignment_SanityCheck) {
             // 0x5 is not 4-byte aligned.
             // This calls __emule_local_l1_to_ptr inside the emulator.
             volatile uint32_t* bad_ptr = (volatile uint32_t*)__emule_local_l1_to_ptr(0x5);
-            *bad_ptr = 0xDEADBEEF; 
+            *bad_ptr = 0xDEADBEEF;
         }
     )";
 
@@ -50,4 +50,4 @@ TEST_F(MeshDeviceFixture, Local_L1_Alignment_SanityCheck) {
     );
 }
 
-}
+}  // namespace tt::tt_metal

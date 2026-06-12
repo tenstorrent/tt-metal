@@ -3,8 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // To run:
-// $ROOT/tt-metal/build_emule/test/tt_metal/unit_tests_api
-// --gtest_filter="MeshDeviceFixture.NocRead_L1_Misaligned_SanityCheck:MeshDeviceFixture.NocWrite_L1_Misaligned_SanityCheck:MeshDeviceFixture.NocRead_DRAM_Misaligned_SanityCheck_WH:MeshDeviceFixture.NocWrite_DRAM_Misaligned_SanityCheck:MeshDeviceFixture.NocRead_DRAM_Aligned_NoViolation_WH"
+// $ROOT/tt-metal/build_emule/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.Noc*"
+
+// The NOC alignment check is ABSOLUTE per-side: each endpoint must meet its own
+// memory type's NoC alignment (L1 = 16 B, DRAM read = 32 B WH / 64 B BH, DRAM
+// write = 16 B) — NOT the old relative "low bits of src and dst must match"
+// rule. These four death tests each misalign exactly one endpoint:
+//   read  L1 destination (16 B),  write L1 source (16 B),
+//   read  DRAM source (32 B, WH), write DRAM destination (16 B).
 
 #include <gtest/gtest.h>
 #include <cstdint>
@@ -22,7 +28,8 @@ using namespace tt::tt_metal;
 
 namespace tt::tt_metal {
 
-// L1->L1 read: src_noc lower 4 bits (0) != dst_l1 lower 4 bits (1) -> abort
+// L1->L1 read: the L1 destination 0x30001 is not 16-byte aligned -> abort.
+// (The source 0x30000 IS 16-aligned, so only the destination branch fires.)
 TEST_F(MeshDeviceFixture, NocRead_L1_Misaligned_SanityCheck) {
     setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
@@ -33,9 +40,9 @@ TEST_F(MeshDeviceFixture, NocRead_L1_Misaligned_SanityCheck) {
     std::string kernel_src = R"(
         #include "api/dataflow/dataflow_api.h"
         void kernel_main() {
-            // src NOC addr offset = 0x30000, lower 4 bits = 0
+            // src NOC addr offset = 0x30000, 16-byte aligned (passes)
             uint64_t src = get_noc_addr(0x30000);
-            // dst lower 4 bits = 1 -- mismatches src
+            // dst L1 offset 0x30001 -- low 4 bits = 1, not 16-byte aligned
             uint32_t dst = 0x30001;
             noc_async_read(src, dst, 16);
         }
@@ -46,13 +53,14 @@ TEST_F(MeshDeviceFixture, NocRead_L1_Misaligned_SanityCheck) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     EXPECT_DEATH(
-        detail::LaunchProgram(device, program),
-        ".*NOC Transfer Alignment.*L1.*lower 4 bits must match.*");
+        detail::LaunchProgram(device, program), ".*NOC Transfer Alignment.*L1 destination.*must be 16-byte aligned.*");
 
     unsetenv("TT_METAL_EMULE_ASAN");
 }
 
-// L1->L1 write: src_l1 lower 4 bits (0) != dst_noc lower 4 bits (1) -> abort
+// L1->L1 write: the L1 source 0x30001 is not 16-byte aligned -> abort. Misaligns
+// the SOURCE (not the destination) so this exercises the write check's L1-source
+// branch, which no other death test covers.
 TEST_F(MeshDeviceFixture, NocWrite_L1_Misaligned_SanityCheck) {
     setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
@@ -63,10 +71,10 @@ TEST_F(MeshDeviceFixture, NocWrite_L1_Misaligned_SanityCheck) {
     std::string kernel_src = R"(
         #include "api/dataflow/dataflow_api.h"
         void kernel_main() {
-            // src lower 4 bits = 0
-            uint32_t src = 0x30000;
-            // dst NOC addr offset = 0x30001, lower 4 bits = 1 -- mismatches src
-            uint64_t dst = get_noc_addr(0x30001);
+            // src L1 offset 0x30001 -- low 4 bits = 1, not 16-byte aligned
+            uint32_t src = 0x30001;
+            // dst NOC addr offset = 0x30000, 16-byte aligned (passes)
+            uint64_t dst = get_noc_addr(0x30000);
             noc_async_write(src, dst, 16);
         }
     )";
@@ -76,19 +84,16 @@ TEST_F(MeshDeviceFixture, NocWrite_L1_Misaligned_SanityCheck) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     EXPECT_DEATH(
-        detail::LaunchProgram(device, program),
-        ".*NOC Transfer Alignment.*L1.*lower 4 bits must match.*");
+        detail::LaunchProgram(device, program), ".*NOC Transfer Alignment.*L1 source.*must be 16-byte aligned.*");
 
     unsetenv("TT_METAL_EMULE_ASAN");
 }
 
-// DRAM->L1 read (WH, 32-byte rule, mask 0x1F): DRAM src offset 0x10 is 16-byte
-// aligned but NOT 32-byte aligned, while L1 dst 0x30020 is 32-byte aligned.
-// Their lower 5 bits differ (0x10 != 0x00), so the read is misaligned for a
-// WH DRAM transfer and must abort. (Pre-fix this also tripped the bogus 0xFF
-// mask, but for the wrong reason; the corrected 0x1F mask catches the genuine
-// 32-byte misalignment.) Constructs the DRAM NOC address from the host-side
-// NOC XY of DRAM bank 0.
+// DRAM->L1 read (WH, 32-byte rule, mask 0x1F): the DRAM source offset 0x10 is
+// 16-byte aligned but NOT 32-byte aligned, so it fails the per-side DRAM-read
+// alignment (WH = 32 B) and must abort. The L1 destination 0x30020 IS 16-byte
+// aligned, so its branch passes and only the DRAM-source branch fires.
+// Constructs the DRAM NOC address from the host-side NOC XY of DRAM bank 0.
 TEST_F(MeshDeviceFixture, NocRead_DRAM_Misaligned_SanityCheck_WH) {
     setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
@@ -107,8 +112,8 @@ TEST_F(MeshDeviceFixture, NocRead_DRAM_Misaligned_SanityCheck_WH) {
     uint32_t dram_lo = static_cast<uint32_t>(dram_src & 0xFFFFFFFFU);
     uint32_t dram_hi = static_cast<uint32_t>(dram_src >> 32);
 
-    // L1 dst is 32-byte aligned (lower 5 bits = 0). DRAM src lower 5 bits = 0x10,
-    // so the 32-byte relative check (mask 0x1F) sees 0x10 != 0x00 -> abort.
+    // L1 dst is 16-byte aligned (passes). DRAM src offset 0x10 & 0x1F = 0x10 != 0,
+    // so the per-side WH DRAM-read check (mask 0x1F, 32 B) aborts.
     uint32_t l1_dst = 0x30020;
 
     std::string kernel_src = R"(
@@ -128,13 +133,14 @@ TEST_F(MeshDeviceFixture, NocRead_DRAM_Misaligned_SanityCheck_WH) {
     SetRuntimeArgs(program, kernel, logical_core, {dram_lo, dram_hi, l1_dst});
 
     EXPECT_DEATH(
-        detail::LaunchProgram(device, program),
-        ".*NOC Transfer Alignment.*DRAM.*lower bits must match.*");
+        detail::LaunchProgram(device, program), ".*NOC Transfer Alignment.*DRAM source.*must be 32-byte aligned.*");
 
     unsetenv("TT_METAL_EMULE_ASAN");
 }
 
-// L1->DRAM write (WH/BH): L1 lower 4 bits (0) != DRAM lower 4 bits (1) -> abort
+// L1->DRAM write (WH/BH): the DRAM destination offset 0x01 is not 16-byte aligned
+// (DRAM write alignment is 16 B on both arches) -> abort. The L1 source 0x30000
+// IS 16-aligned, so only the destination branch fires.
 TEST_F(MeshDeviceFixture, NocWrite_DRAM_Misaligned_SanityCheck) {
     setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
@@ -172,7 +178,7 @@ TEST_F(MeshDeviceFixture, NocWrite_DRAM_Misaligned_SanityCheck) {
 
     EXPECT_DEATH(
         detail::LaunchProgram(device, program),
-        ".*NOC Transfer Alignment.*DRAM.*lower 4 bits must match.*");
+        ".*NOC Transfer Alignment.*DRAM destination.*must be 16-byte aligned.*");
 
     unsetenv("TT_METAL_EMULE_ASAN");
 }
@@ -180,7 +186,7 @@ TEST_F(MeshDeviceFixture, NocWrite_DRAM_Misaligned_SanityCheck) {
 // Positive control (WH): a DRAM->L1 read where BOTH endpoints are 32-byte
 // aligned (lower 5 bits = 0) but differ in higher bits MUST NOT abort. This is
 // the exact pattern that the old, too-strict 0xFF mask (256-byte) wrongly
-// flagged across the ttnn sweeps (e.g. DRAM off 0x40 -> L1 off 0xa0: both
+// flagged across the TT-NN sweeps (e.g. DRAM off 0x40 -> L1 off 0xa0: both
 // 32-aligned, but 0x40 != 0xa0 under 0xFF). The corrected 0x1F mask compares
 // only the lower 5 bits (0 == 0) and lets it through.
 //

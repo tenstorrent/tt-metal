@@ -68,7 +68,7 @@ the offending kernel line.
 | Host L1 / DRAM Alignment | host | `[metal] host_sanitizers.hpp` + `host_api/tt_metal.cpp` | host poke address not aligned to the transfer's real requirement |
 | Metadata Overflow | host | `[metal] host_api/tt_metal.cpp` | program's static CB region overruns the reserved L1 window |
 | Out-of-Bounds Write (L1/DRAM) | kernel + runner | `[emule] jit_kernel_stubs.hpp` & `dataflow_api.h` (L1); `[metal] emulated_program_runner.cpp` (`__emule_dram_ptr`) | access lands in no live buffer extent |
-| Tensor Padding Violation | kernel | `[emule] jit_kernel_stubs.hpp` & `dataflow_api.h` | write into a buffer's `[logical_end, physical_end)` pad band |
+| Tensor Padding Violation *(test skipped — see §5)* | kernel | `[emule] jit_kernel_stubs.hpp` & `dataflow_api.h` | write into a buffer's `[logical_end, physical_end)` pad band |
 | Illegal Semaphore Access | kernel | `[emule] jit_kernel_stubs.hpp` & `dataflow_api.h` | scalar access into the reserved semaphore region |
 | CB Boundary Violation | kernel | `[emule] jit_kernel_stubs.hpp` & `dataflow_api.h` (counters in `api/cb_api.h`) | access to a CB page outside an **active** reserve/wait window |
 | CB Reservation Overflow | kernel | `[emule] include/jit_hw/api/cb_api.h` | `cb_reserve_back(n)` with `n` > the CB's total pages |
@@ -93,7 +93,8 @@ at the top of each host entry point (`WriteToBuffer`, `ReadFromBuffer`, `ReadSha
 the core-subset and shared-ptr overloads). Not allocated → abort. One boolean,
 before any access touches memory.
 *Diagnostic:* `Use-After-Free: <op> called on Buffer … not currently allocated`.
-*Exercised by:* `test_tensor_bad_acess.cpp`.
+*Exercised by:* `test_tensor_bad_acess.cpp` (five deallocated-Buffer death tests
+across every host entry point + a live-buffer round-trip positive control).
 
 ### 2. Host L1 / DRAM Alignment
 **Lives in:** `[metal] host_sanitizers.hpp` (`check_host_l1_alignment` /
@@ -110,8 +111,11 @@ alignment when a DMA engine backs the transfer, otherwise **1**. On emule
 the framework's own contract that host pokes accept any byte address; on a real
 DMA build it catches a genuinely misaligned DMA transfer.
 *Diagnostic:* `L1 Alignment: … must be N-byte aligned` / `DRAM Alignment: …`.
-*Exercised by:* no dedicated death test in this set (resolves to a no-op under
-emule). `test_alignment_writes.cpp` covers the *kernel*-side NOC alignment (§10).
+*Exercised by:* `test_host_alignment.cpp` — no death test is possible on emule
+(the requirement resolves to 1, so the check cannot fire); instead two
+positive-control round-trips (unaligned host→L1 and host→DRAM pokes that must
+NOT abort) guard the no-op contract against re-hardcoding a fixed alignment.
+`test_alignment_writes.cpp` covers the *kernel*-side NOC alignment (§10).
 
 ### 3. Metadata Overflow
 **Lives in:** `[metal] tt_metal/impl/host_api/tt_metal.cpp` (the
@@ -123,7 +127,8 @@ program's static CB region extent and compares it against the reserved L1 window
 an overrun throws, which the host turns into the `[ASAN ERROR] Metadata Overflow`
 abort.
 *Diagnostic:* `Metadata Overflow: Program metadata exceeds reserved L1 region`.
-*Exercised by:* `test_metadata_size.cpp`.
+*Exercised by:* `test_metadata_size.cpp` (an overrunning CB death test + a
+fitting-CB positive control).
 
 ---
 
@@ -151,7 +156,8 @@ sharded / CB / `l1_alloc` accesses arrive as absolute bridge pointers, not
 offsets, and a raw absolute value would never match a relative range — then checks
 that offset against the live extents. In none → abort.
 *Diagnostic:* `Out-of-Bounds Write: Attempted to access address 0x… which is not part of any allocated tensor`.
-*Exercised by:* `test_write_outside_tensor.cpp` (L1 + DRAM).
+*Exercised by:* `test_write_outside_tensor.cpp` (L1 + DRAM gap death tests +
+in-bounds L1 and DRAM positive controls).
 
 ### 5. Tensor Padding Violation
 **Lives in:** `__emule_local_l1_to_ptr` in `[emule] jit_kernel_stubs.hpp` &
@@ -165,6 +171,12 @@ those `(logical_end, physical_end)` pairs into the kernel. After the OOB check, 
 normalized offset is tested against each padding band — inside one → abort.
 *Diagnostic:* `Tensor Padding Violation: Attempted to write to a padded memory region at 0x…`.
 *Exercised by:* `test_padded_write.cpp`.
+**Status — currently skipped:** `test_padded_write.cpp` is `GTEST_SKIP`'d. The
+check as implemented (a flat `[logical_end, physical_end)` band test) is too
+coarse to be correct in general — real padding is laid out per-row / per-tile-face,
+not as one trailing block, so the simple band both misses interior pad bytes and
+risks false-positiving legitimate writes. The check needs to be reworked to model
+the actual (row-major / tiled face-aware) pad layout before the test is re-enabled.
 
 ### 6. Illegal Semaphore Access
 **Lives in:** `__emule_local_l1_to_ptr` in `[emule] jit_kernel_stubs.hpp` &
@@ -176,7 +188,8 @@ semaphore region (semaphores must go through the semaphore API).
 (`__emule_sem_l1_range_start/end`) to the kernel. It's the **first** test in
 `__emule_local_l1_to_ptr`: if the address is in that range, abort.
 *Diagnostic:* `Illegal Semaphore Access: Offset 0x… is inside the reserved Semaphore region [start, end)`.
-*Exercised by:* `test_semaphore_write.cpp`.
+*Exercised by:* `test_semaphore_write.cpp` (an in-region write death test + an
+outside-region positive control).
 
 ### 7. CB Boundary Violation
 **Lives in:** `__emule_local_l1_to_ptr` in `[emule] jit_kernel_stubs.hpp` &
@@ -194,7 +207,9 @@ no active handshake (globally-allocated/sharded CBs, single-buffered scratch,
 output CBs written then DMA'd) is not flagged. A write *past* the CB's allocated
 region is caught by the OOB check (§4) instead.
 *Diagnostic:* `CB Boundary Violation: Attempted to access CB <id> at offset 0x… outside the write/read window`.
-*Exercised by:* `test_write_beyond_res_pages.cpp` (write side, read side, wraparound, and a no-active-window control).
+*Exercised by:* `test_write_beyond_res_pages.cpp` (write side, read side, a
+wraparound positive control + a wraparound violation that confirms the modular
+window stays active through a wrap, and a no-active-window control).
 
 ### 8. CB Reservation Overflow  *(always on)*
 **Lives in:** `cb_reserve_back` in `[emule] include/jit_hw/api/cb_api.h`.
@@ -205,7 +220,9 @@ CB's `num_pages`; if it exceeds capacity, abort. **Always on** (not gated by the
 env var) because gating it would let an over-reserve *deadlock* on the space wait
 instead of reporting a clear error.
 *Diagnostic:* `CB Reservation Overflow: CB <id> has <N> total pages, …`.
-*Exercised by:* `test_cb_pages.cpp`.
+*Exercised by:* `test_cb_pages.cpp` (an over-reserve death test, an
+exact-capacity positive control for the `>` boundary, and an always-on death
+test with the master switch explicitly cleared).
 
 ### 9. NoC Read Pending on `cb_pop_front`
 **Lives in:** `cb_pop_front` in `[emule] include/jit_hw/api/cb_api.h`; the pending
@@ -221,7 +238,8 @@ read there is harmless.
 `__emule_pending_noc_reads`; the read barrier clears it. `cb_pop_front` aborts if
 that counter is still > 0 (a barrier was skipped before the pop).
 *Diagnostic:* `Race Condition: cb_pop_front(cb_id=…) called while a NoC read is still pending`.
-*Exercised by:* `test_noc_without_barrier.cpp`.
+*Exercised by:* `test_noc_without_barrier.cpp` (a missing-barrier death test + a
+barrier-present positive control confirming the barrier clears the counter).
 
 ### 10. NOC Transfer Alignment
 **Lives in:** `__emule_check_noc_read_alignment` / `__emule_check_noc_write_alignment`
@@ -250,27 +268,53 @@ their low bits differ.
 
 ### 11. Dirty CB Detected
 **Lives in:** `sweep_per_kernel_dirty_cbs` (abort in `abort_if_dirty_cb`) in
-`[metal] emulated_program_runner.cpp`. Reads the per-kernel thread-local page
-counters `__emule_cb_reserved_pages[]` / `__emule_cb_waited_pages[]` (maintained by
-`cb_reserve_back`/`cb_push_back` and `cb_wait_front`/`cb_pop_front` in
-`[emule] include/jit_hw/api/cb_api.h`).
-**What it catches:** a kernel that leaves a CB **un-flushed** — a `cb_reserve_back`
-that was never committed with a matching `cb_push_back`, or a `cb_wait_front` that
-was never released with a matching `cb_pop_front`. The producer claimed write space
-(or the consumer claimed read access) it never handed off, so the CB's write/read
-pointers desync from their committed state.
-**How it works:** `__emule_cb_reserved_pages[cb]` is bumped by `cb_reserve_back` and
-shrunk by `cb_push_back`; `__emule_cb_waited_pages[cb]` is set by `cb_wait_front` and
-shrunk by `cb_pop_front`. Either holding a non-zero **net unmatched** count when the
-kernel exits means an un-flushed reserve/wait. This is a per-kernel property (reserve
-pairs with push inside the producer, wait with pop inside the consumer), so it is
-checked at **each kernel's exit** (right after its variants run, before the
-thread-locals are cleared) — not post-join. Note this is **not** about leftover
-occupancy: a producer that reserves+pushes but is never consumed ends with pages
-occupied yet fully flushed (`reserved==0, waited==0`) and is correctly **not** flagged
-(globally-allocated/sharded output CBs, producer-only programs that DMA their result out).
-*Diagnostic:* `Dirty CB Detected: Core (x, y) CB <id> was not flushed! Kernel (processor P) exited with <N> page(s) reserved … without … cb_push_back, and <M> page(s) waited … without … cb_pop_front`.
-*Exercised by:* `test_cb_leak.cpp` (reserve-without-push, wait-without-pop, and a balanced no-violation control).
+`[metal] emulated_program_runner.cpp`. Reads the per-kernel thread-local
+*trailing-dangling* flags `__emule_cb_reserve_dangling[]` /
+`__emule_cb_wait_dangling[]` (maintained by `cb_reserve_back`/`cb_push_back` and
+`cb_wait_front`/`cb_pop_front` in `[emule] include/jit_hw/api/cb_api.h`).
+**What it catches:** a kernel that exits with a `cb_reserve_back` that **no**
+`cb_push_back` ever followed, or a `cb_wait_front` that **no** `cb_pop_front` ever
+followed — the producer/consumer claimed the handshake but never handed off, so on
+silicon the matching `cb_wait_front` hangs.
+**How it works:** `__emule_cb_reserve_dangling[cb]` is set by `cb_reserve_back` and
+cleared by **any** following `cb_push_back`; `__emule_cb_wait_dangling[cb]` is set by
+`cb_wait_front` and cleared by **any** following `cb_pop_front`. A flag still set at
+kernel exit is the leak; the page count reported is the window counter
+(`__emule_cb_reserved_pages[]` / `__emule_cb_waited_pages[]`) at exit, which for a
+genuine dangling reserve is the unpushed amount.
+**Why a flag, not a net count (the faithful-to-silicon fix):** on silicon
+`cb_reserve_back(n)` is a **non-cumulative free-space wait** — it claims nothing,
+moves no pointer, and creates no obligation to push exactly `n`. So a net
+`reserved − pushed` count (the original model) **false-positives** on legitimate
+**lookahead / double-buffer producers**: the DRAM-sharded matmul in1 reader
+(`reader_bmm_tile_layout_in1_sender_dram_sharded.cpp`) reserves 2 blocks of headroom
+but pushes 1 per iteration to cover the previous block's still-in-flight reads
+(invisible to the free-space count), yet pushes **every** block it produces — leaving
+a net residual of ≈ `num_blocks × in1_block_num_tiles` "unpushed" pages that are
+nothing but speculative headroom. The dangling flag is decoupled from the window
+counters precisely so the **CB Boundary** check (§7) can keep using the cumulative
+window while this check stops mis-reading it as a leak. **Trade-off:** a
+`reserve;reserve;push` (one *intermediate* push forgotten) clears the flag and is
+**not** caught here — that pattern overwrites the first block in place and surfaces
+via the Object-Intent (§12) / OOB (§4) checks or a PCC mismatch instead. This is a
+per-kernel property (reserve pairs with push inside the producer, wait with pop
+inside the consumer), so it is checked at **each kernel's exit** (right after its
+variants run, before the thread-locals are cleared) — not post-join. Note this is
+**not** about leftover occupancy: a producer that reserves+pushes but is never
+consumed ends with pages occupied yet fully handed off (dangling flag clear) and is
+correctly **not** flagged (globally-allocated/sharded output CBs, producer-only
+programs that DMA their result out).
+*Diagnostic:* `Dirty CB Detected: Core (x, y) CB <id> was not flushed! Kernel (processor P): <N> page(s) reserved via cb_reserve_back at <file:line> were never committed with cb_push_back. … <M> page(s) waited … were never released with cb_pop_front.`
+*Per-check opt-out:* set `TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB=1` (non-empty, not `0`)
+to suppress **only** this check while every other sanitizer stays active under the
+master switch. `sweep_per_kernel_dirty_cbs` returns early when
+`dirty_cb_check_skipped()` (host_sanitizers.hpp) is true. Use it to run a full
+regression past a kernel with a known un-flushed-CB bug without losing OOB /
+Padding / Object-Intent / CB-Boundary coverage. The `test_cb_leak.cpp` death tests
+`unsetenv` it so they still validate the check even when it is exported globally.
+*Exercised by:* `test_cb_leak.cpp` (reserve-without-push, wait-without-pop, a
+lookahead-reserve no-violation control that pins the false-positive fix, a balanced
+no-violation control, and the per-check opt-out env test).
 
 ### 12. Object Intent Violation
 **Lives in:** `[metal] tt_metal/impl/emulation/emulated_program_runner.cpp` (the
@@ -295,7 +339,12 @@ fused producers/consumers), even if it "belongs" to another kernel's context, so
 to it is legitimate. The base address passed as a runtime arg equals the buffer's start
 offset (same address space, no normalization), so the match is exact.
 *Diagnostic:* `Object Intent Violation: Attempted to modify memory belonging to an adjacent object context — L1 buffer [start, end) … changed but no pointer was resolved into it`.
-*Exercised by:* `test_valid_mem_wrong_alloc.cpp` (adjacent + non-adjacent violations + a control).
+*Exercised by:* `test_valid_mem_wrong_alloc.cpp` (adjacent + non-adjacent
+violations, a resolve-both control, and an I/O-arg-exemption positive control
+that confirms a buffer handed to the kernel via runtime args is NOT flagged).
+Note: a violation test must pass the victim's *byte offset*, never its absolute
+address — passing the address would exempt the victim as an I/O tensor and mask
+the violation.
 
 ---
 
@@ -307,11 +356,11 @@ offset (same address space, no normalization), so the match is exact.
 | Host L1/DRAM Alignment | `[metal] host_sanitizers.hpp` | `address % get_alignment_requirements(device, size)` (1 ⇒ no-op on emule) |
 | Metadata Overflow | `[metal] host_api/tt_metal.cpp` | static CB region vs lowest L1 alloc, at configure time |
 | Out-of-Bounds Write | `[emule] jit_kernel_stubs.hpp`/`dataflow_api.h`; `[metal] emulated_program_runner.cpp` | normalized offset ∉ any live `LiveL1Ranges`/`LiveDramRanges` extent |
-| Tensor Padding | `[emule] jit_kernel_stubs.hpp`/`dataflow_api.h` | offset ∈ `[logical_end, physical_end)` padding band |
+| Tensor Padding *(test skipped — see §5)* | `[emule] jit_kernel_stubs.hpp`/`dataflow_api.h` | offset ∈ `[logical_end, physical_end)` padding band |
 | Illegal Semaphore | `[emule] jit_kernel_stubs.hpp`/`dataflow_api.h` | offset ∈ reserved semaphore L1 range |
 | CB Boundary | `[emule] jit_kernel_stubs.hpp`/`dataflow_api.h` | accessed page outside an **active** reserve/wait window |
 | CB Reservation Overflow | `[emule] api/cb_api.h` | `cb_reserve_back(n)` with `n > num_pages` (always on) |
 | NoC pending on pop | `[emule] api/cb_api.h` + `dataflow_api.h` | `cb_pop_front` while `__emule_pending_noc_reads > 0` |
 | NOC Transfer Alignment | `[emule] api/dataflow/dataflow_api.h` | each endpoint vs its own absolute alignment (16 / 32 / 64 B) |
-| Dirty CB | `[metal] emulated_program_runner.cpp` (+ `[emule] api/cb_api.h`) | `reserved_pages > 0 \|\| waited_pages > 0` at kernel exit |
+| Dirty CB | `[metal] emulated_program_runner.cpp` (+ `[emule] api/cb_api.h`) | trailing-dangling flag: a `reserve_back` with no following `push_back` (or `wait_front` w/o `pop_front`) at kernel exit — decoupled from the cumulative window count so lookahead producers aren't false-flagged; opt out with `TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB=1` |
 | Object Intent | `[metal] emulated_program_runner.cpp` | post-launch `memcmp` of buffers never resolved into |
