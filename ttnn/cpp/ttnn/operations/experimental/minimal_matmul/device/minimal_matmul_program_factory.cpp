@@ -314,6 +314,15 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         "TT_MM_K_SLICES ({}) must divide K_tiles ({}) [A2 split-K limitation]",
         num_k_slices,
         K_tiles);
+    // Reduction mode: A2 (host-summed [K_slices*M, N] partials, default) vs B (fused on-device column
+    // reduction -> single [M, N]). B is under construction; guard so it cannot return wrong results.
+    const char* k_fused_env = std::getenv("TT_MM_K_FUSED");
+    const bool num_k_fused =
+        (k_fused_env != nullptr && std::atoi(k_fused_env) != 0) && !config.has_value() && !fuse_op && !fuse_srs;
+    TT_FATAL(
+        !(num_k_fused && num_k_slices > 1),
+        "TT_MM_K_FUSED (plan B, fused on-device K reduction) is not yet wired; use the A2 path "
+        "(TT_MM_K_SLICES without TT_MM_K_FUSED) for now.");
     // Sub-grid K_block refinement: a sliced sub-grid has small per-core M/N, so the default K_block=8
     // makes the per-k-block work too coarse — finer K (4) pipelines read/forward/compute better.
     // Measured ~+8%/+6%/+3.6% on sliced 4864x4096x512 / 4864x4096x32 / 32x2048x2048. Only on the auto
@@ -986,6 +995,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         const uint32_t k_block_start = kband * (padded_K_tiles / K_block_tiles);
         const uint32_t out_m_tile_offset = kband * M_tiles;
         const uint32_t out_M_tiles_total = num_k_slices * M_tiles;
+        // Split-K plan B: bottom K-band has no incoming running sum (emits its own partial). Consumed by
+        // the compute kernel only under REDUCE_K; harmless otherwise.
+        const uint32_t is_reduce_bottom = (kband == num_k_slices - 1) ? 1u : 0u;
 
         // Injector identification by PHYSICAL position (not the sliced idx): the across-cols (small)
         // injector is at col 0 of every row; the down-rows (big) injector is at each group's top row.
@@ -1233,6 +1245,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             M_end_tile,
             N_start_tile,
             N_end_tile,
+            is_reduce_bottom,  // split-K B (used by compute only under REDUCE_K)
         };
         if (use_fused_ternary) {
             compute_runtime_args.push_back(*reinterpret_cast<const uint32_t*>(&fused_ternary_scalar.value()));

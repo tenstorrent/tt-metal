@@ -234,18 +234,26 @@ MinimalMatmulDeviceOperation::spec_return_value_t MinimalMatmulDeviceOperation::
     // Split-K (plan A2, env TT_MM_K_SLICES): the op writes K_slices partial M x N results stacked along
     // M into a single [K_slices * M, N] buffer that the host sums. Only on the auto path (no config) and
     // only for the regular (chunks == 1) op. K must divide evenly (validated in the factory).
+    // Split-K (env TT_MM_K_SLICES). Two reduction modes:
+    //  - A2 (default): each band writes its partial; output is [K_slices * M, N] and the host sums.
+    //  - B (TT_MM_K_FUSED=1): bands reduce up the column on-device; output is the final [M, N].
     uint32_t k_slices = 1;
+    bool k_fused = false;
     if (chunks == 1 && !operation_attributes.config.has_value()) {
         if (const char* ks = std::getenv("TT_MM_K_SLICES"); ks != nullptr) {
             k_slices = std::max(1, std::atoi(ks));
         }
+        if (const char* kf = std::getenv("TT_MM_K_FUSED"); kf != nullptr && std::atoi(kf) != 0) {
+            k_fused = true;
+        }
     }
+    const uint32_t out_m_mult = (k_slices > 1 && !k_fused) ? k_slices : 1;  // A2 stacks partials along M
 
     const uint32_t N_per_chunk = N / chunks;
     for (int32_t i = 0; i < chunks; ++i) {
         ttnn::Shape output_shape(in0_input_tensor_shape);
         output_shape[-1] = N_per_chunk;
-        output_shape[-2] = output_shape[-2] * k_slices;  // split-K partials stacked along M
+        output_shape[-2] = output_shape[-2] * out_m_mult;
         output_specs.push_back(TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config)));
     }
 
