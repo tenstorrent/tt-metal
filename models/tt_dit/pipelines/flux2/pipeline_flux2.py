@@ -271,6 +271,11 @@ class Flux2Pipeline:
         encoder_parallel_config = EncoderParallelConfig(
             tensor_parallel=ParallelFactor(factor=int(mesh_device.shape[encoder_tp_axis]), mesh_axis=encoder_tp_axis)
         )
+        # Default H-parallel to the mesh axis opposite VAE TP so latents can flow
+        # SP-sharded from the DiT directly into the VAE (see __call__ all_gather skip).
+        if vae_h_axis is None and vae_tp_axis is not None:
+            vae_h_axis = 1 - vae_tp_axis
+
         vae_parallel = Flux2VaeParallelConfig.from_axes(
             mesh_device, tp_axis=vae_tp_axis, h_axis=vae_h_axis, w_axis=vae_w_axis
         )
@@ -448,6 +453,8 @@ class Flux2Pipeline:
                 ccl_manager=self._vae_ccl_manager,
                 pre_transfer_fn=float_to_uint8,
             )
+            if decoded_output.ndim == 3:
+                decoded_output = decoded_output.unsqueeze(0)
             output = [Image.fromarray(image.numpy()) for image in decoded_output]
 
         return output

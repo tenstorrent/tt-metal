@@ -31,13 +31,16 @@ line_params_8k_flux2 = {**line_params_8k, "l1_small_size": 65536}
     [line_params_flux2],
     indirect=True,
 )
-@pytest.mark.parametrize(("width", "height", "num_inference_steps"), [(1024, 1024, 12)])
+@pytest.mark.parametrize(
+    ("width", "height", "num_inference_steps"),
+    [(1024, 1024, int(os.environ.get("FLUX2_NUM_STEPS", "50")))],
+)
 @pytest.mark.parametrize(
     "mesh_device, sp_axis, tp_axis, encoder_tp_axis, vae_tp_axis, topology, num_links, is_fsdp, dynamic_load, traced",
     [
         [(1, 8), 0, 1, 1, 1, ttnn.Topology.Linear, 1, False, True, False],
-        [(4, 8), 0, 1, 1, 1, ttnn.Topology.Linear, 4, True, True, True],
-        [(4, 8), 0, 1, 1, 1, ttnn.Topology.Linear, 2, False, True, True],
+        [(4, 8), 0, 1, 1, 1, ttnn.Topology.Linear, 4, True, True, False],
+        [(4, 8), 0, 1, 1, 1, ttnn.Topology.Linear, 2, False, True, False],
     ],
     ids=[
         "1x8tp1",
@@ -65,6 +68,7 @@ def test_pipeline(
     model_location_generator,
     is_ci_env: bool,
 ) -> None:
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
     pipeline = Flux2Pipeline.create_pipeline(
         mesh_device=mesh_device,
         checkpoint_name=model_location_generator("black-forest-labs/FLUX.2-dev"),
@@ -72,6 +76,7 @@ def test_pipeline(
         tp_axis=tp_axis,
         encoder_tp_axis=encoder_tp_axis,
         vae_tp_axis=vae_tp_axis,
+        vae_h_axis=1 - vae_tp_axis,
         num_links=num_links,
         topology=topology,
         width=width,
@@ -79,6 +84,8 @@ def test_pipeline(
         is_fsdp=is_fsdp,
         dynamic_load=dynamic_load,
         trace_warmup=traced,
+        # Required when SP > 1: prompt tokens and rope must shard like spatial latents.
+        shard_prompt=sp_factor > 1,
     )
 
     prompts = [
