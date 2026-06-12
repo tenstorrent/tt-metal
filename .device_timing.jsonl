@@ -50,3 +50,6 @@
 {"event": "phase", "phase": "refinement_2", "state": "start", "at_ms": 1781277804601}
 {"source":"run_safe_pytest","pid":2366076,"started_at_ms":1781277944070,"wait_ms":2,"run_ms":32942,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention_gqa_mqa.py","exit_code":0}
 {"source":"run_safe_pytest","pid":2367562,"started_at_ms":1781277986636,"wait_ms":1,"run_ms":16468,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention.py","exit_code":0}
+{"source":"run_safe_pytest","pid":2369376,"started_at_ms":1781278031270,"wait_ms":1,"run_ms":251802,"test_path":"eval/golden_tests/scaled_dot_product_attention/","exit_code":1}
+{"source":"run_safe_pytest","pid":2378174,"started_at_ms":1781278299828,"wait_ms":1,"run_ms":63537,"test_path":"eval/golden_tests/scaled_dot_product_attention/","exit_code":1}
+{"source":"run_safe_pytest","pid":2378784,"started_at_ms":1781278363370,"wait_ms":1,"run_ms":62766,"test_path":"eval/golden_tests/scaled_dot_product_attention/","exit_code":1}

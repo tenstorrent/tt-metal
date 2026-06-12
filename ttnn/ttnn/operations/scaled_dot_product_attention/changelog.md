@@ -106,3 +106,41 @@
     precision simulation, authored by the expert-debugger — pinpoints exp as
     the S=8192 fp32 error source; preserved as a regression/analysis artifact).
   - Probes `probe_001`–`probe_004` (dtype sweep, HiFi sweep, S-sweep).
+
+## Refinement 2 — GQA / MQA (KV head broadcast)  [x] complete
+- **Date**: 2026-06-12
+- **What was done**:
+  - `SUPPORTED["kv_heads_mode"]` += `"gqa"`, `"mqa"` (was `["mha"]`).
+  - Reader (`scaled_dot_product_attention_reader.cpp`): single index remap —
+    each Q head `h` now reads K/V from head `h_kv = h / kv_group`, where
+    `kv_group = H_q / H_kv`. New CT arg (index 7) carries `H_kv`; `kv_base`
+    strides over `H_kv` heads instead of `H_q`. MHA is unchanged
+    (`H_kv == H_q` ⇒ `kv_group == 1` ⇒ identity remap, byte-identical to
+    Phase 0/R1). Output, Q, and mask indexing stay on `H_q` (mask broadcasts
+    over Q heads exactly as before). Accessor CT offsets bumped 7 → 8.
+  - Program descriptor: passes `h_kv = int(key.shape[1])` as reader CT arg 7.
+  - `validate()`: now rejects `H_q` not a multiple of `H_kv` with `ValueError`
+    (undefined head broadcast — matches the reference's `repeat_interleave`
+    contract). No new compute, no new CB.
+- **Accuracy achieved** (default config, randn inputs, GQA/MQA ratios 8:2,
+  32:8, 8:1, 32:1, 8:2 long, 2:1 multibatch):
+  - bf16: PCC ≥ 0.995. fp32: PCC ≥ 0.999. bf8b: PCC ≥ 0.99. All new
+    `test_scaled_dot_product_attention_gqa_mqa.py` cases pass (rtol/atol via
+    PCC gate per dtype).
+- **Golden test progress**: **647 / 1156 passing** (was 414 at Refinement 1),
+  492 xfailed, 1 skipped, 16 failed. The +233 are exactly the registry cells
+  carrying `kv_heads_mode ∈ {gqa, mqa}` (now all green) plus the 4
+  `test_gqa_mqa_forward` regression canaries (were failing `other` =
+  validate() rejection at R1, now pass). **Zero GQA/MQA failures.** The 16
+  remaining failures are all pre-existing, out-of-scope R1 deferrals:
+  4× `Q1x1x128x1024` fp32 L1 OOM (→ Refinement 5), 2× `Q1x1x8192x64` fp32
+  SFPU-exp precision floor (→ Refinement 6), 10× uniform/negative regression
+  canaries (relative-RMS metric artifacts on near-uniform softmax, documented
+  in R1). None touch the GQA/MQA path.
+- **Issues encountered**: None. The head remap was a clean reader-side change
+  as the verifier predicted; the existing `tag_kv_heads` tagger and
+  `validate()` routing required no change beyond the divisibility guard.
+- **Tests added**: `tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention_gqa_mqa.py`
+  — 20 cases: GQA/MQA over 6 head-ratio shapes × {bf16, fp32, bf8b},
+  MQA composed with a custom additive mask, and a non-divisible-heads
+  rejection check.

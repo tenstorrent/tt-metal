@@ -95,7 +95,7 @@ metrics and the expert-debugger root-cause.
 
 ---
 
-### [ ] Refinement 2 — GQA / MQA (KV head broadcast)
+### [x] Refinement 2 — GQA / MQA (KV head broadcast)
 
 **Goal**: add `"gqa"` and `"mqa"` to `SUPPORTED["kv_heads_mode"]`. The
 `tag_kv_heads` tagger and `validate()` routing already exist; the kernel change
