@@ -283,6 +283,16 @@ Branch: `skrstic/dsa_indexer_score_op_2` (cleanup) on `skrstic/dsa_indexer_score
       heads16→69.6%, heads64→72.1% math-util. Full analysis (breakdown, theoretical
       limits, why ~67% is the HiFi2 max, dead ends) in `INDEXER_COMPUTE_CEILING.md`;
       how to measure in `INDEXER_PROFILING.md`.
+- [x] perf: data-movement / DMA hiding. The **reader** (not the writer, whose
+      fast-strip path is already hidden) is the bottleneck, bandwidth-bound on
+      redundant **K** reads (re-read once per q-row-group). Factory **auto-tunes QC**
+      up to the largest L1-fitting divisor of Sqt, gated on the op being reader-bound
+      (`k_tile > 51·HB·fidelity`), so K is reused across QC q-rows: heads8 bfp8
+      0.729→0.523 ms (33→46% util, QC 1→4), heads16 bf16 1.324→0.892 (QC 1→2);
+      compute-bound 16/64-head bfp8 stay QC=1 (no regression). Per-input reader
+      DMA-off mask (`INDEXER_READ_{Q,K,W}_OFF`) for attribution. Next lever (analyzed,
+      not done): multicast the per-group-shared q/w. Full analysis in
+      `INDEXER_DATAMOVEMENT.md`.
 - [ ] row-major top-k (separate); negative-weights topk-safety test
 - [ ] perf: knob sweep for best GLX config; gate-mul is HiFi2-bound (the ~21%
       non-matmul remainder) — would need a fidelity change to cut further
