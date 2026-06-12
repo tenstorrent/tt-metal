@@ -137,7 +137,7 @@ extern "C" uint32_t _start1() {
     setup_isr_csrs();
     enable_cc_stack();
     DeviceProfilerInit();
-    DPRINT("TRISC-FW: initialized\n");
+    // DPRINT("TRISC-FW: initialized\n");
     while (1) {
         WAYPOINT("W");
         while (*trisc_run != RUN_SYNC_MSG_GO) {
@@ -208,9 +208,9 @@ extern "C" uint32_t _start1() {
         DEVICE_PRINT_KERNEL_FINISHED();
 
         // Signal completion
-        DPRINT("SIGNALING COMPLETION {:x}\n", (uint32_t)*trisc_run);
+        // DPRINT("SIGNALING COMPLETION {:x}\n", (uint32_t)*trisc_run);
         tensix_sync();
         *trisc_run = RUN_SYNC_MSG_DONE;
-        DPRINT("COMPLETION SIGNED OFF {:x}\n", (uint32_t)*trisc_run);
+        // DPRINT("COMPLETION SIGNED OFF {:x}\n", (uint32_t)*trisc_run);
     }
 }
