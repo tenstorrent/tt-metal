@@ -20,9 +20,9 @@ namespace ttnn::prim {
 
 namespace {
 
-constexpr const char* READER_KERNEL =
+constexpr const char* TILE_READER_KERNEL =
     "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_slice_tile_m2.cpp";
-constexpr const char* WRITER_KERNEL =
+constexpr const char* TILE_WRITER_KERNEL =
     "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_slice_tile_m2.cpp";
 
 // Enqueue-invariant work geometry: a pure function of shape + slice params (all in the cache key).
@@ -44,7 +44,7 @@ struct SliceTileGeometry {
     std::vector<uint32_t> writer_start_id;          // == cumulative num_tiles_written
 };
 
-SliceTileGeometry compute_geometry(const SliceParams& args, const SliceInputs& tensor_args, const Tensor& output) {
+SliceTileGeometry tile_compute_geometry(const SliceParams& args, const SliceInputs& tensor_args, const Tensor& output) {
     const auto& input = tensor_args.input;
     IDevice* device = input.device();
 
@@ -127,7 +127,7 @@ SliceTileGeometry compute_geometry(const SliceParams& args, const SliceInputs& t
     return g;
 }
 
-m2::NodeCoord node_of(const CoreCoord& c) {
+m2::NodeCoord tile_node_of(const CoreCoord& c) {
     return m2::NodeCoord{static_cast<std::size_t>(c.x), static_cast<std::size_t>(c.y)};
 }
 
@@ -135,7 +135,7 @@ m2::NodeCoord node_of(const CoreCoord& c) {
 
 m2::ProgramSpec SliceTileProgramFactory::create_program_spec(
     const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
-    const auto g = compute_geometry(args, tensor_args, output);
+    const auto g = tile_compute_geometry(args, tensor_args, output);
 
     m2::DataflowBufferSpec cb{
         .unique_id = m2::DFBSpecName{"cb"},
@@ -146,7 +146,7 @@ m2::ProgramSpec SliceTileProgramFactory::create_program_spec(
 
     m2::KernelSpec reader{
         .unique_id = m2::KernelSpecName{"reader"},
-        .source = std::filesystem::path{READER_KERNEL},
+        .source = std::filesystem::path{TILE_READER_KERNEL},
         .dfb_bindings = {m2::ProducerOf(m2::DFBSpecName{"cb"}, "cb_in")},
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = m2::TensorParamName{"src"}, .accessor_name = "src"}},
         .compile_time_args = {{"num_dims", g.num_dims}},
@@ -159,7 +159,7 @@ m2::ProgramSpec SliceTileProgramFactory::create_program_spec(
 
     m2::KernelSpec writer{
         .unique_id = m2::KernelSpecName{"writer"},
-        .source = std::filesystem::path{WRITER_KERNEL},
+        .source = std::filesystem::path{TILE_WRITER_KERNEL},
         .dfb_bindings = {m2::ConsumerOf(m2::DFBSpecName{"cb"}, "cb_out")},
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = m2::TensorParamName{"dst"}, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
@@ -182,7 +182,7 @@ m2::ProgramSpec SliceTileProgramFactory::create_program_spec(
 
 m2::ProgramRunArgs SliceTileProgramFactory::create_invariant_run_args(
     const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
-    const auto g = compute_geometry(args, tensor_args, output);
+    const auto g = tile_compute_geometry(args, tensor_args, output);
 
     m2::ProgramRunArgs::KernelRunArgs reader_args{.kernel = m2::KernelSpecName{"reader"}};
     m2::ProgramRunArgs::KernelRunArgs writer_args{.kernel = m2::KernelSpecName{"writer"}};
@@ -193,7 +193,7 @@ m2::ProgramRunArgs SliceTileProgramFactory::create_invariant_run_args(
     common.insert(common.end(), g.num_padded_per_dim.begin(), g.num_padded_per_dim.end());
 
     for (size_t i = 0; i < g.cores.size(); ++i) {
-        const auto node = node_of(g.cores[i]);
+        const auto node = tile_node_of(g.cores[i]);
         reader_args.runtime_arg_values.push_back(
             {node, {{"start_id", g.reader_start_id[i]}, {"num_tiles", g.reader_num_tiles[i]}}});
         reader_args.advanced_options.runtime_varargs.emplace(

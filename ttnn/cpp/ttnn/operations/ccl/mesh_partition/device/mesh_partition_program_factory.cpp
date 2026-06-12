@@ -11,6 +11,7 @@
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_descriptor_builders.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
 namespace ttnn::operations::ccl {
@@ -28,6 +29,27 @@ uint32_t get_cluster_axis_index(
 namespace {
 
 using SliceOp = ttnn::prim::SliceDeviceOperation;
+
+// The slice program factories migrated to Metal 2.0 (create_program_spec) and no longer expose
+// create_descriptor. mesh_partition reuses slice's ProgramDescriptor, so it dispatches to the
+// standalone descriptor builders (slice_descriptor_builders.hpp) by selected factory type.
+template <typename Factory>
+tt::tt_metal::ProgramDescriptor slice_descriptor_for(
+    const ttnn::prim::SliceParams& attrs, const ttnn::prim::SliceInputs& inputs, Tensor& output) {
+    using namespace ttnn::prim;
+    if constexpr (std::is_same_v<Factory, SliceTileProgramFactory>) {
+        return build_slice_tile_descriptor(attrs, inputs, output);
+    } else if constexpr (std::is_same_v<Factory, SliceRmProgramFactory>) {
+        return build_slice_rm_descriptor(attrs, inputs, output);
+    } else if constexpr (std::is_same_v<Factory, SliceRmStrideProgramFactory>) {
+        return build_slice_rm_stride_descriptor(attrs, inputs, output);
+    } else if constexpr (std::is_same_v<Factory, SliceRmShardedProgramFactory>) {
+        return build_slice_rm_sharded_descriptor(attrs, inputs, output);
+    } else {
+        static_assert(std::is_same_v<Factory, SliceTileTensorArgsProgramFactory>, "unhandled slice factory");
+        return build_slice_tile_tensor_args_descriptor(attrs, inputs, output);
+    }
+}
 
 // Helper function to compute slice parameters for a given mesh coordinate
 auto compute_slice_parameters(
@@ -127,7 +149,7 @@ MeshPartitionDeviceOperation::MeshPartition::create_at(
     Program program = std::visit(
         [&](auto&& factory) -> Program {
             using Factory = std::decay_t<decltype(factory)>;
-            auto descriptor = Factory::create_descriptor(slice_attrs, slice_tensor_args, tensor_return_value);
+            auto descriptor = slice_descriptor_for<Factory>(slice_attrs, slice_tensor_args, tensor_return_value);
             return Program{descriptor};
         },
         program_factory);
@@ -157,7 +179,7 @@ void MeshPartitionDeviceOperation::MeshPartition::override_runtime_arguments(
         std::visit(
             [&](auto&& program_factory) {
                 using Factory = std::decay_t<decltype(program_factory)>;
-                auto descriptor = Factory::create_descriptor(slice_attrs, slice_tensor_args, tensor_return_value);
+                auto descriptor = slice_descriptor_for<Factory>(slice_attrs, slice_tensor_args, tensor_return_value);
                 tt::tt_metal::apply_descriptor_runtime_args(program, descriptor);
             },
             shared_variables.slice_program_factory);

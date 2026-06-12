@@ -24,5 +24,13 @@ namespace ttnn::prim {
 
 tt::tt_metal::ProgramDescriptor build_slice_tile_descriptor(
     const SliceParams& args, const SliceInputs& tensor_args, Tensor& output);
+tt::tt_metal::ProgramDescriptor build_slice_rm_descriptor(
+    const SliceParams& args, const SliceInputs& tensor_args, Tensor& output);
+tt::tt_metal::ProgramDescriptor build_slice_rm_stride_descriptor(
+    const SliceParams& args, const SliceInputs& tensor_args, Tensor& output);
+tt::tt_metal::ProgramDescriptor build_slice_rm_sharded_descriptor(
+    const SliceParams& args, const SliceInputs& tensor_args, Tensor& output);
+tt::tt_metal::ProgramDescriptor build_slice_tile_tensor_args_descriptor(
+    const SliceParams& args, const SliceInputs& tensor_args, Tensor& output);
 
 }  // namespace ttnn::prim

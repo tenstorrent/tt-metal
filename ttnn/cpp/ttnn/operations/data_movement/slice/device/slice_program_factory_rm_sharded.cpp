@@ -21,11 +21,11 @@ namespace ttnn::prim {
 
 namespace {
 
-constexpr const char* READER_KERNEL =
+constexpr const char* RMSHD_READER_KERNEL =
     "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
     "slice_reader_unary_unpad_dims_rm_sharded_m2.cpp";
 
-m2::NodeCoord node_of(const CoreCoord& c) {
+m2::NodeCoord rmshd_node_of(const CoreCoord& c) {
     return m2::NodeCoord{static_cast<std::size_t>(c.x), static_cast<std::size_t>(c.y)};
 }
 
@@ -71,7 +71,7 @@ struct SliceRmShardedGeometry {
     std::vector<std::vector<uint32_t>> reader_args;
 };
 
-SliceRmShardedGeometry compute_geometry(const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
+SliceRmShardedGeometry rmshd_compute_geometry(const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
     const auto& input = tensor_args.input;
     IDevice* device = input.device();
 
@@ -249,7 +249,7 @@ SliceRmShardedGeometry compute_geometry(const SliceParams& args, const SliceInpu
 
 m2::ProgramSpec SliceRmShardedProgramFactory::create_program_spec(
     const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
-    const auto g = compute_geometry(args, tensor_args, output);
+    const auto g = rmshd_compute_geometry(args, tensor_args, output);
 
     // Both CBs are sharded -> borrowed-memory DFBs. The descriptor era pinned
     // CBDescriptor::buffer = input.buffer()/output.buffer(); here the backing L1 address is
@@ -280,7 +280,7 @@ m2::ProgramSpec SliceRmShardedProgramFactory::create_program_spec(
     // and consumer endpoint of each borrowed CB (matching the plusone sharded pattern).
     m2::KernelSpec reader{
         .unique_id = m2::KernelSpecName{"reader"},
-        .source = std::filesystem::path{READER_KERNEL},
+        .source = std::filesystem::path{RMSHD_READER_KERNEL},
         .dfb_bindings =
             {m2::ProducerOf(m2::DFBSpecName{"cb_in"}, "cb_in"),
              m2::ConsumerOf(m2::DFBSpecName{"cb_in"}, "cb_in"),
@@ -305,7 +305,7 @@ m2::ProgramSpec SliceRmShardedProgramFactory::create_program_spec(
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     for (size_t i = 0; i < g.cores.size(); ++i) {
         reader.advanced_options.num_runtime_varargs_per_node.emplace(
-            m2::Nodes{node_of(g.cores[i])}, static_cast<uint32_t>(g.reader_args[i].size()));
+            m2::Nodes{rmshd_node_of(g.cores[i])}, static_cast<uint32_t>(g.reader_args[i].size()));
     }
 #pragma GCC diagnostic pop
 
@@ -325,11 +325,11 @@ m2::ProgramSpec SliceRmShardedProgramFactory::create_program_spec(
 
 m2::ProgramRunArgs SliceRmShardedProgramFactory::create_invariant_run_args(
     const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
-    const auto g = compute_geometry(args, tensor_args, output);
+    const auto g = rmshd_compute_geometry(args, tensor_args, output);
 
     m2::ProgramRunArgs::KernelRunArgs reader_args{.kernel = m2::KernelSpecName{"reader"}};
     for (size_t i = 0; i < g.cores.size(); ++i) {
-        const auto node = node_of(g.cores[i]);
+        const auto node = rmshd_node_of(g.cores[i]);
         reader_args.advanced_options.runtime_varargs.emplace(
             node, m2::AdvancedKernelRunArgs::Varargs(g.reader_args[i].begin(), g.reader_args[i].end()));
     }

@@ -23,9 +23,9 @@ namespace ttnn::prim {
 namespace {
 
 // Always the nd kernels (they handle all ranks).
-constexpr const char* READER_KERNEL =
+constexpr const char* RMSTR_READER_KERNEL =
     "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_multicore_slice_nd_m2.cpp";
-constexpr const char* WRITER_KERNEL =
+constexpr const char* RMSTR_WRITER_KERNEL =
     "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_multicore_slice_nd_m2.cpp";
 
 // Enqueue-invariant work geometry: a pure function of shape + slice params (all in the cache key).
@@ -50,7 +50,7 @@ struct SliceRmStrideGeometry {
     std::vector<uint32_t> start_row;  // row_start_id
 };
 
-SliceRmStrideGeometry compute_geometry(
+SliceRmStrideGeometry rmstr_compute_geometry(
     const SliceParams& args, const SliceInputs& tensor_args, const Tensor& output) {
     const auto& input = tensor_args.input;
     IDevice* device = input.device();
@@ -113,7 +113,7 @@ SliceRmStrideGeometry compute_geometry(
     return g;
 }
 
-m2::NodeCoord node_of(const CoreCoord& c) {
+m2::NodeCoord rmstr_node_of(const CoreCoord& c) {
     return m2::NodeCoord{static_cast<std::size_t>(c.x), static_cast<std::size_t>(c.y)};
 }
 
@@ -121,7 +121,7 @@ m2::NodeCoord node_of(const CoreCoord& c) {
 
 m2::ProgramSpec SliceRmStrideProgramFactory::create_program_spec(
     const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
-    const auto g = compute_geometry(args, tensor_args, output);
+    const auto g = rmstr_compute_geometry(args, tensor_args, output);
 
     m2::DataflowBufferSpec cb{
         .unique_id = m2::DFBSpecName{"cb"},
@@ -132,7 +132,7 @@ m2::ProgramSpec SliceRmStrideProgramFactory::create_program_spec(
 
     m2::KernelSpec reader{
         .unique_id = m2::KernelSpecName{"reader"},
-        .source = std::filesystem::path{READER_KERNEL},
+        .source = std::filesystem::path{RMSTR_READER_KERNEL},
         .dfb_bindings = {m2::ProducerOf(m2::DFBSpecName{"cb"}, "cb_out")},
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = m2::TensorParamName{"src"}, .accessor_name = "src"}},
         .compile_time_args = {{"rank", g.rank}, {"element_size", g.element_size}},
@@ -144,7 +144,7 @@ m2::ProgramSpec SliceRmStrideProgramFactory::create_program_spec(
 
     m2::KernelSpec writer{
         .unique_id = m2::KernelSpecName{"writer"},
-        .source = std::filesystem::path{WRITER_KERNEL},
+        .source = std::filesystem::path{RMSTR_WRITER_KERNEL},
         .dfb_bindings = {m2::ConsumerOf(m2::DFBSpecName{"cb"}, "cb_in")},
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = m2::TensorParamName{"dst"}, .accessor_name = "dst"}},
         .compile_time_args = {{"rank", g.rank}, {"element_size", g.element_size}},
@@ -170,7 +170,7 @@ m2::ProgramSpec SliceRmStrideProgramFactory::create_program_spec(
 
 m2::ProgramRunArgs SliceRmStrideProgramFactory::create_invariant_run_args(
     const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
-    const auto g = compute_geometry(args, tensor_args, output);
+    const auto g = rmstr_compute_geometry(args, tensor_args, output);
 
     m2::ProgramRunArgs::KernelRunArgs reader_args{.kernel = m2::KernelSpecName{"reader"}};
     m2::ProgramRunArgs::KernelRunArgs writer_args{.kernel = m2::KernelSpecName{"writer"}};
@@ -188,7 +188,7 @@ m2::ProgramRunArgs SliceRmStrideProgramFactory::create_invariant_run_args(
     writer_common.insert(writer_common.end(), g.output_shape.begin(), g.output_shape.end());
 
     for (size_t i = 0; i < g.cores.size(); ++i) {
-        const auto node = node_of(g.cores[i]);
+        const auto node = rmstr_node_of(g.cores[i]);
         reader_args.runtime_arg_values.push_back(
             {node, {{"num_rows", g.num_rows[i]}, {"start_row", g.start_row[i]}}});
         writer_args.runtime_arg_values.push_back(
