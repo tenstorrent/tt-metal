@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 import shutil
 from pathlib import Path
 from typing import List
@@ -107,14 +108,29 @@ def variant_name(
     approx: ApproximationMode,
     fast: FastMode,
     dest: DestAccumulation,
+    distribution: DistributionKind = DistributionKind.RAMP,
+    seed: int = None,
+    points: int = DEFAULT_SWEEP_POINTS,
 ) -> str:
-    """Stable shard stem / `variant_name` CSV value for one matrix cell."""
-    return (
+    """Build the shard filename for one variant.
+
+    Includes every knob that changes the data (op, formats, config, distribution,
+    seed, points) so different sweeps never overwrite each other's shard.
+    """
+    dist = (
+        distribution.value if isinstance(distribution, DistributionKind) else "custom"
+    )
+    name = (
         f"{op.name.lower()}__{in_fmt.name}_{out_fmt.name}__"
         f"approx{int(approx == ApproximationMode.Yes)}_"
         f"fast{int(fast == FastMode.Yes)}_"
-        f"dest{int(dest == DestAccumulation.Yes)}"
+        f"dest{int(dest == DestAccumulation.Yes)}__{dist}"
     )
+    if seed is not None:
+        name += f"_seed{seed}"
+    if points != DEFAULT_SWEEP_POINTS:
+        name += f"_n{points}"
+    return name
 
 
 def build_sweep_spec(
@@ -214,10 +230,16 @@ def write_shard(df: "pd.DataFrame", variant: str) -> Path:
 
     *variant* is the unique shard stem (it is no longer a CSV column, so it is
     passed explicitly).
+
+    The write is atomic: data goes to a per-process temp file, then os.replace
+    swaps it into place in one step. So if two xdist workers ever target the
+    same shard, the reader never sees a half-written file — one clean copy wins.
     """
     SHARD_DIR.mkdir(parents=True, exist_ok=True)
     shard_path = SHARD_DIR / f"{variant}.csv"
-    df.to_csv(shard_path, index=False, float_format=FLOAT_FORMAT)
+    tmp_path = SHARD_DIR / f"{variant}.{os.getpid()}.tmp"
+    df.to_csv(tmp_path, index=False, float_format=FLOAT_FORMAT)
+    os.replace(tmp_path, shard_path)
     return shard_path
 
 
@@ -365,6 +387,9 @@ def run_case(
         approx_mode,
         fast_mode,
         dest_acc,
+        distribution,
+        seed,
+        points,
     )
     df = rows_dataframe(
         op_name=op.name.lower(),
