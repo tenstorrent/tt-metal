@@ -121,6 +121,25 @@ WH too), `512x6144x1536` 0.84 & `1216x4096x512` 0.92 (**sliced** — left untouc
 smarter K rule (4/8/16) and a BH-tuned sliced sub-grid chooser. Per-shape tables:
 `minimal_matmul_blackhole_results_v3_{big,ltx}.md`.
 
+## Follow-up: smarter K rule (and a proxy that lied)
+
+Mined per-K best times from the baseline sweep (it swept K∈{4,8,16,32}) for all 82 shapes. Pattern:
+non-sliced shapes with `min(per_core) >= 4` prefer K=4; `min(per_core) <= 3` (skinny, forwarding-bound)
+prefer K=8. A proxy (assume the branch achieves the baseline's best block at each K) said dropping the
+`Mpc*Npc<=128` area cap would also win K=4 on LARGE per-core shapes (scored 0.9986 of oracle vs 0.987).
+
+**It regressed them on silicon** (16384x2304x6144 1.04x->0.92x, 8192x6144x4608 1.07x->0.99x). The proxy
+was wrong: for large per-core the auto chooser's K=4 *blocking* is far worse than its K=8 blocking, so
+forcing K=4 broke shapes the branch was already winning at K=8. **The area cap is load-bearing** — it
+confines K=4 to the small/mid regime where the chooser tracks the optimum. Lesson: only trust the
+per-K-best proxy where the auto chooser actually reaches that block (small search space).
+
+Final K rule (shipped): `min(per_core) >= 4 && Mpc*Npc <= 128 -> K=4`. Raising the floor 2->4 (vs the
+original change-2) routes the `min==3` shapes back to K=8, fixing `1024x6144x768` 0.93x->0.99x and
+`4096x6144x768` 0.97x->1.00x while large shapes keep their K=8 wins. Net 82-shape: geomean 1.163x->1.164x,
+losses 5->4. Remaining losses are all structural (512x128x1536 overhead-bound, 8192x128x1536 K=128, and
+the two sliced shapes left for the deferred BH sliced-chooser).
+
 ## One-line summary
 On Blackhole the auto sizer loses because it inherits Wormhole's "big-block / fewest-blocks / K=8" reuse
 philosophy, but BH's larger grid → smaller per-core tiles → the win is in **even-dividing, smaller blocks

@@ -343,17 +343,24 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     uint32_t N_tiles_per_core = padded_N_tiles / in1_parallel_axis_cores;
 
     // Blackhole finer-K refinement (Change 2). On BH the per-core M/N tiles are small, so the default
-    // K_block=8 makes each per-k-block too coarse AND (by doubling the in0/in1/intermediate L1 footprint)
+    // K_block=8 makes each per-k-block too coarse and (by doubling the in0/in1/intermediate L1 footprint)
     // pushes the block sizer over its L1 budget, forcing uneven M/N splits. Dropping to K=4 pipelines
     // better and frees L1 for an even block — the same reasoning as the sliced sub-grid K=4 refinement
-    // above, generalized to the non-sliced BH path. Threshold (per-core output tiles <= 128) from the
-    // 82-shape BH sweep: small per-core compute wants K=4, large/square per-core keeps K=8. Must run
-    // BEFORE padded_K_tiles so the K padding uses the final K_block. (num_slices==1 here: the sliced
-    // path already clamped K to 4 above.)
-    // Exclude prefetch-gated shapes (min per-core tiles <= 2): they run the mcast/prefetch dataflow,
-    // which prefers the coarser K=8 (forcing K=4 there regressed e.g. 32x2048x32 1.48x->0.98x).
+    // above, generalized to the non-sliced BH path. Must run BEFORE padded_K_tiles so the K padding uses
+    // the final K_block. (num_slices==1 here: the sliced path already clamped K to 4 above.)
+    //
+    // Gate = min per-core tiles >= 4 AND per-core output tiles <= 128. Mined+measured on the 82-shape BH
+    // sweep:
+    //  - min(per_core) <= 3 prefers K=8 (skinny, mcast/forwarding-bound: 1024x6144x768 +6%, 4096x6144x768
+    //    +3.5% at K=8), so route those to K=8 (the >=4 floor).
+    //  - The Mpc*Npc <= 128 cap is LOAD-BEARING, not cosmetic: although the baseline sweep's best K=4 block
+    //    beats its best K=8 block on LARGE per-core shapes too, the AUTO chooser's K=4 blocking there is
+    //    much worse than its K=8 blocking, so forcing K=4 on large per-core regressed shapes the branch was
+    //    winning at K=8 (16384x2304x6144 1.04x->0.92x, 8192x6144x4608 1.07x->0.99x when the cap was
+    //    removed). Keep K=4 to the small/mid per-core regime where the chooser tracks the optimum.
+    // Must run BEFORE padded_K_tiles so the K padding uses the final K_block.
     if (is_blackhole && !config.has_value() && !fuse_op && !fuse_srs && num_slices == 1 &&
-        std::min(M_tiles_per_core, N_tiles_per_core) > 2 &&
+        std::min(M_tiles_per_core, N_tiles_per_core) >= 4 &&
         static_cast<uint64_t>(M_tiles_per_core) * N_tiles_per_core <= 128) {
         K_block_tiles = std::min(K_block_tiles, 4u);
     }
