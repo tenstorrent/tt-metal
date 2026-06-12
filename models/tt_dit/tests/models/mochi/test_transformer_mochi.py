@@ -11,6 +11,7 @@ from diffusers import MochiTransformer3DModel as TorchMochiTransformer3DModel
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import skip_for_wormhole_b0
 from models.tt_transformers.tt.common import get_rot_transformation_mat
 
 from ....models.transformers.transformer_mochi import MochiTransformer3DModel, MochiTransformerBlock
