@@ -115,40 +115,6 @@ def load_systems_config(systems_config_path):
     return by_sku
 
 
-def apply_event_fallback(sku_name, sku_config, event_name):
-    """
-    Resolve event-aware SKU substitution from sku_config's `fallback_sku:` rules.
-
-    Some SKUs (e.g. priority-pool runners) should only be used on specific
-    GitHub events; on any other event we fall back to a sibling SKU. The rule
-    is declared in sku_config.yaml so each workflow doesn't have to embed a
-    conditional.
-
-    Returns the effective SKU name to use (either the original or the fallback).
-    """
-    sku_entry = sku_config.get(sku_name) or {}
-    rule = sku_entry.get("fallback_sku")
-    if not rule:
-        return sku_name
-    allowed = rule.get("allowed_events") or []
-    if event_name in allowed:
-        return sku_name
-    fallback = rule.get("fallback")
-    if not fallback:
-        return sku_name
-    if fallback not in sku_config:
-        print(
-            f"::warning::fallback_sku '{fallback}' for '{sku_name}' is not defined in sku_config; "
-            f"keeping primary SKU."
-        )
-        return sku_name
-    print(
-        f"::notice::Substituting SKU '{sku_name}' -> '{fallback}' "
-        f"(GITHUB_EVENT_NAME='{event_name}' not in {allowed})."
-    )
-    return fallback
-
-
 def substitute_cmd_placeholders(entry):
     """
     Replace placeholders in entry["cmd"] with values from the same entry.
@@ -249,17 +215,11 @@ def build_test_matrix(tests, enabled_skus, sku_config, systems_by_sku=None):
             # Start from test copy so all keys (model, arch, etc.) are preserved
             entry = test.copy()
             entry.pop("skus", None)
-            # Event-aware SKU fallback (see sku_config.yaml `fallback_sku:` rules).
-            # The timeout is keyed off the SKU as declared in the test yaml (so
-            # the budget check is consistent regardless of event), but runs_on
-            # follows the effective SKU.
-            event_name = os.environ.get("GITHUB_EVENT_NAME", "")
-            effective_sku = apply_event_fallback(sku_name, sku_config, event_name)
-            entry["sku"] = effective_sku
+            entry["sku"] = sku_name
             entry["timeout"] = sku_test_config.get("timeout", 0)
-            entry["runs_on"] = sku_config[effective_sku].get("runs_on", [])
+            entry["runs_on"] = sku_config[sku_name].get("runs_on", [])
             if append_sku_to_name:
-                entry["name"] = f"{test_name} [{effective_sku}]"
+                entry["name"] = f"{test_name} [{sku_name}]"
             for key, value in sku_test_config.items():
                 if key != "timeout" and value is not None:
                     entry[key] = value
