@@ -60,6 +60,14 @@ variable "PYTHON_VERSION" {
   default = "3.10"
 }
 
+variable "TT_SMI_VERSION" {
+  # As of June 2026: this is where you set SMI version of Metal container image.
+  # Bake always passes this to the main targets, so it takes precedence over the
+  # ARG TT_SMI_VERSION default in dockerfile/Dockerfile (used only for standalone
+  # `docker build` without Bake). Keep the two in sync.
+  default = "5.2.0"
+}
+
 variable "UV_IMAGE" {
   # SINGLE SOURCE OF TRUTH for the uv image SHA256 digest.
   # When upgrading uv, update this value and the fallback defaults in:
@@ -208,6 +216,7 @@ target "_main-common" {
     UBUNTU_VERSION = UBUNTU_VERSION
     PYTHON_VERSION = PYTHON_VERSION
     UV_IMAGE       = UV_IMAGE
+    TT_SMI_VERSION = TT_SMI_VERSION
   }
   contexts = {
     # Tool layers (resolved from Dockerfile.tools targets locally)

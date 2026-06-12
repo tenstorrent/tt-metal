@@ -8,16 +8,19 @@
 
 namespace ttml::metal::ops::cross_entropy_bw::device {
 
-struct operation_attributes_t {
+struct CrossEntropyBackwardParams {
     const float scaler{1.0F};
 };
 
-struct tensor_args_t {
+struct CrossEntropyBackwardInputs {
     const ttnn::Tensor& input;
     const ttnn::Tensor& target;
 
     std::optional<ttnn::Tensor> preallocated_output;
 };
+
+using operation_attributes_t = CrossEntropyBackwardParams;
+using tensor_args_t = CrossEntropyBackwardInputs;
 
 using tensor_return_value_t = ttnn::Tensor;
 using spec_return_value_t = ttnn::TensorSpec;

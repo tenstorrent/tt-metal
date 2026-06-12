@@ -24,16 +24,19 @@ void kernel_main() {
     // - transpose_wh each tile
     for (uint32_t n = 0; n < num_tiles; n++) {
         cb_im0_obj.wait_front(1);
-        cb_out1_obj.reserve_back(1);
 
         tile_regs_acquire();
         transpose_wh_tile(cb_im0, 0, 0);
         tile_regs_commit();
+
+        cb_im0_obj.pop_front(1);
+
+        cb_out1_obj.reserve_back(1);
+
         tile_regs_wait();
         pack_tile(0, cb_out1);
         tile_regs_release();
 
         cb_out1_obj.push_back(1);
-        cb_im0_obj.pop_front(1);
     }
 }

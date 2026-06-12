@@ -13,6 +13,23 @@ _DEFAULT_MAX_PREFILL = 8192
 def pytest_addoption(parser):
     parser.addoption("--skip-model-load", action="store_true", default=False, help="Skip loading the model state dict")
     parser.addoption(
+        "--speculative",
+        action="store_true",
+        default=False,
+        help=(
+            "Run the text demo in speculative-decoding mode (it-assistant drafter "
+            "verified by the target). batch=1 only; the drafter defaults to "
+            "<HF_MODEL>-assistant unless GEMMA4_ASSISTANT_MODEL is set."
+        ),
+    )
+    parser.addoption(
+        "--spec-draft-len",
+        action="store",
+        type=int,
+        default=None,
+        help="Speculative draft length K (drafts proposed per verify). Default: 3 (or GEMMA4_SPEC_DRAFT_LEN).",
+    )
+    parser.addoption(
         "--max-prefill",
         action="store",
         type=int,

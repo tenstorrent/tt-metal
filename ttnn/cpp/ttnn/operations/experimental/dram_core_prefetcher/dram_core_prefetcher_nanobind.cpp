@@ -48,9 +48,14 @@ void bind_dram_core_prefetcher(nb::module_& mod) {
 
             Args:
                 mesh_device (ttnn.MeshDevice): the mesh device to launch on.
+                dual_senders_per_bank (bool): if True, run two DRISC sender kernels per DRAM
+                    bank (the free subchannel plus the NOC1-endpoint subchannel, both on NOC0)
+                    and split each bank's receivers across them. Recv-contig layout only; the
+                    GCB must be created with the matching flag. Defaults to False.
         )doc",
         &start_dram_core_prefetcher,
-        nb::arg("mesh_device"));
+        nb::arg("mesh_device"),
+        nb::arg("dual_senders_per_bank") = false);
 
     ttnn::bind_function<"queue_dram_core_prefetcher_request", "ttnn.experimental.">(
         mod,
@@ -136,13 +141,16 @@ void bind_dram_core_prefetcher(nb::module_& mod) {
                 bank_to_receivers: List of (bank_id, receivers) pairs.
                 size: Per-receiver fifo size in bytes.
                 buffer_type: Buffer type (L1 or L1_SMALL).
+                dual_senders_per_bank: If True, split each bank's receivers across two DRISC
+                    sender cores (recv-contig layout only); must match the prefetcher config.
         )doc",
         &ttnn::global_circular_buffer::create_global_circular_buffer_with_dram_senders,
         nb::keep_alive<0, 1>(),
         nb::arg("mesh_device"),
         nb::arg("bank_to_receivers"),
         nb::arg("size"),
-        nb::arg("buffer_type") = tt::tt_metal::BufferType::L1);
+        nb::arg("buffer_type") = tt::tt_metal::BufferType::L1,
+        nb::arg("dual_senders_per_bank") = false);
 
     ttnn::bind_function<"create_global_circular_buffer_for_matmul_1d", "ttnn.experimental.">(
         mod,
@@ -167,6 +175,57 @@ void bind_dram_core_prefetcher(nb::module_& mod) {
         nb::arg("bank_to_receivers"),
         nb::arg("size"),
         nb::arg("buffer_type") = tt::tt_metal::BufferType::L1);
+
+    ttnn::bind_function<"dram_core_prefetcher_block_count_for_matmul_1d", "ttnn.experimental.">(
+        mod,
+        R"doc(
+            Compute and validate the block_count to pair with a receiver-contiguous DRAM weight
+            in queue_dram_core_prefetcher_request, for a gather_in0 1D matmul fed via global_cb.
+            Centralizes the recv-contig prefetcher/matmul cross-checks (num_shards == ring_size,
+            weight K divisible by ring_size, weight per-receiver N == per_core_N) so call sites
+            don't re-derive (and mis-derive) them. Returns the block_count (== ring_size); raises
+            on any mismatch.
+
+            Args:
+                program_config: The gather_in0 1D mcast matmul program config that will consume the weight.
+                weight: The receiver-contiguous (NdShardSpec) DRAM weight tensor.
+                global_cb: The DRAM-sender GCB the prefetcher and matmul share.
+
+            Returns:
+                int: the validated block_count.
+        )doc",
+        &ttnn::global_circular_buffer::dram_core_prefetcher_block_count_for_matmul_1d,
+        nb::arg("program_config"),
+        nb::arg("weight"),
+        nb::arg("global_cb"));
+
+    ttnn::bind_function<"create_global_circular_buffer_for_matmul_1d_recv_contig", "ttnn.experimental.">(
+        mod,
+        R"doc(
+            Receiver-contiguous counterpart of create_global_circular_buffer_for_matmul_1d: build a
+            DRAM-sender GlobalCircularBuffer sized to feed one or more gather_in0 1D ring matmuls from
+            NdShardSpec (receiver-contiguous) DRAM weights, validating the (program_config, weight,
+            bank_to_receivers) triple in one place. See impl notes in ttnn/core/global_circular_buffer.cpp.
+
+            Args:
+                mesh_device: The mesh device.
+                program_configs: List of 1D mcast matmul program configs (each gather_in0=True).
+                weights: List of NdShardSpec DRAM in1 tensors, one per program_config.
+                bank_to_receivers: List of (bank_id, receivers) pairs (strided round-robin placement).
+                size: GCB size in bytes (>= ring_size * largest per-receiver page).
+                buffer_type: Buffer type (L1 or L1_SMALL).
+                dual_senders_per_bank: If True, split each bank's receivers across two DRISC sender cores
+                    (must match the StartDramCorePrefetcher flag).
+        )doc",
+        &ttnn::global_circular_buffer::create_global_circular_buffer_for_matmul_1d_recv_contig,
+        nb::keep_alive<0, 1>(),
+        nb::arg("mesh_device"),
+        nb::arg("program_configs"),
+        nb::arg("weights"),
+        nb::arg("bank_to_receivers"),
+        nb::arg("size"),
+        nb::arg("buffer_type") = tt::tt_metal::BufferType::L1,
+        nb::arg("dual_senders_per_bank") = false);
 }
 
 }  // namespace ttnn::operations::experimental
