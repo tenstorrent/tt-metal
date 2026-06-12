@@ -225,20 +225,16 @@ VariableMatmulDeviceOperation::tensor_return_value_t VariableMatmulDeviceOperati
 
 ttsl::hash::hash_t VariableMatmulDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    // Program hash. M and matmul-K are runtime args (no recompilation for different
-    // M or K within a transpose/offset variant). The hash keys on N, the transpose
-    // flags, use_offset / use_offset_in1 / has-output-tensor CTAs, and grid+block
-    // sizing. transpose_core_grid (parent_M vs N) is included so the M-vs-N grid
-    // orientation is stable across offset-read calls on the same parent.
+    // Program hash. M and matmul-K are runtime args, so they're omitted; the hash keys on N,
+    // the transpose flags, the use_offset / use_offset_in1 / has-output-tensor CTAs, grid+block
+    // sizing, and transpose_core_grid (so M-vs-N orientation is stable across offset-read calls).
     const auto& w = tensor_args.weight_tensor;
     const auto& a = tensor_args.input_tensor;
     const bool transpose_a = operation_attributes.transpose_a;
     const bool transpose_b = operation_attributes.transpose_b;
-    // use_offset is a compile-time kernel knob: when true, the address formula adds
-    // M-offset and K-offset to the respective axes. Splitting on this gives two cached
-    // programs (offset-enabled / disabled) but keeps the (offset=0) hot path at baseline.
-    // Parent-K mode: input has a larger K extent than the weight's. This sets use_offset
-    // even with k_offset=0, since the kernel needs the parent stride to read correctly.
+    // use_offset is a compile-time knob (offset-enabled vs disabled → two cached programs,
+    // keeping the offset=0 hot path at baseline). Parent-K mode (input K extent > weight's)
+    // also forces it on, since the kernel then needs the parent stride to read correctly.
     const uint32_t K_in_tiles =
         (transpose_a ? a.logical_shape()[-2] : a.logical_shape()[-1]) / tt::constants::TILE_WIDTH;
     const uint32_t K_w_tiles =

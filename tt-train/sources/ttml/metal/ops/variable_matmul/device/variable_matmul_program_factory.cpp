@@ -246,13 +246,9 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         tt::tt_metal::CreateCircularBuffer(program, core_grid, cb_ctrl_cfg);
     }
 
-    // Dataflow kernels always read offsets_tensor[start..start+2] and use the values to
-    // override the RT-derived offsets. For InputAndOutputRow the compute kernel also needs
-    // M values; dm_in0_sender publishes them via cb_ctrl.
     // One offset mode per role — kernel branches key off these. OFFSET_ROW_MODE drives the
     // input-row + output-row offsetting and the per-core M re-derivation; OFFSET_K_MODE drives
-    // the in0/in1 K-slice. (These replace the former 5 orthogonal flags, which only ever
-    // appeared in these two fixed combinations.)
+    // the in0/in1 K-slice.
     const auto role = operation_attributes.offsets_role;
     const bool offset_row_mode = role == OffsetsRole::InputAndOutputRow;
     const bool offset_k_mode = role == OffsetsRole::InputAndWeightK;

@@ -131,12 +131,8 @@ void matmul_blocks(
     }
 }
 
-// Write zero tiles to `out_cb` for a single M×N output block. Used in the K=0 path
-// (empty K-axis OffsetsRole expert): gradient wrt. weights is created even if
-// no tokens were routed to an expert.
-// In that case, no matmul is performed, but the gradient should naturally be zero.
-// Without this the M×N pack would copy uninitialized DST →
-// garbage gradients added to weights downstream.
+// Write zero tiles to `out_cb` for one M×N block. K=0 path (empty-expert dW): no matmul
+// runs, so without this the pack would copy uninitialized DST into the weight gradient.
 void zero_blocks(
     const uint32_t out_cb,
     const uint32_t M_block_tiles,
