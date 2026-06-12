@@ -89,9 +89,12 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
         validate_reduce_op_tensor(input_values_tensor, "Sampling", "input_values", &sampling_grid_opts);
     }
     if (args.sub_core_grids.has_value()) {
+        // The grid may be over-provisioned: only the first `num_users` cores are used, any extras
+        // are ignored. It must supply at least `num_users` cores (one per user).
         TT_FATAL(
-            args.sub_core_grids.value().num_cores() == input_shape[0] * input_shape[1] * input_shape[2],
-            "Subcore grid expects num_users cores, but found {}!",
+            args.sub_core_grids.value().num_cores() >= num_users,
+            "Subcore grid must supply at least num_users ({}) cores, but found {}!",
+            num_users,
             args.sub_core_grids.value().num_cores());
     }
     if (preallocated_output_tensor.has_value()) {

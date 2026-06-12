@@ -79,6 +79,18 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
     }
     auto cores = corerange_to_cores(core_grid, num_cores, true);
 
+    // `sub_core_grids` may be over-provisioned (more cores than users); only the first `num_cores`
+    // cores actually run. Confine CB allocation and the reader kernel to exactly those cores so we
+    // don't place a reader (with unset runtime args) on the unused cores.
+    if (core_grid.num_cores() != num_cores) {
+        std::vector<CoreRange> active_core_ranges;
+        active_core_ranges.reserve(cores.size());
+        for (const auto& core : cores) {
+            active_core_ranges.emplace_back(core);
+        }
+        core_grid = CoreRangeSet(active_core_ranges);
+    }
+
     validate_reduce_op_program_grid(
         "Sampling",
         core_grid,

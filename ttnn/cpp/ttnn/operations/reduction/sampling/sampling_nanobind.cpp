@@ -109,7 +109,8 @@ void bind_reduction_sampling_operation(nb::module_& mod) {
             - :attr:`k`: Must contain ``num_users`` values (one per user), in the range '(0,32]'.
             - :attr:`p`, :attr:`temp`: Must contain ``num_users`` values (one per user); :attr:`p`
               values must be in the range `[0.0, 1.0]`.
-            - :attr:`sub_core_grids` (if provided): number of cores must equal ``num_users`` (1 to 32).
+            - :attr:`sub_core_grids` (if provided): must supply at least ``num_users`` cores (1 to 32);
+              only the first ``num_users`` cores are used and any extras are ignored.
         )doc";
 
     ttnn::bind_function<"sampling">(

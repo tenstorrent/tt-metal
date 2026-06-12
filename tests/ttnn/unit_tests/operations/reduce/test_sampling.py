@@ -216,17 +216,18 @@ def test_sampling_callback(shape, k, p, seed, k_dtype, device):
 # Test to run with fewer than 32 users while still mapping one core per user. The kernels
 # still process a single padded 32-row tile, but only `num_users` core instances run, so the output
 # last dim is `num_users`. Each (num_users, grid) config is run with two sub_core_grids modes:
-#   - "explicit_grid": an explicit `grid_rows x grid_cols` CoreRangeSet with exactly `num_users`
-#     cores (one per user).
+#   - "explicit_grid": an explicit `grid_rows x grid_cols` CoreRangeSet with at least `num_users`
+#     cores. The grid may be over-provisioned (e.g. 13 users on a 3x5=15 core grid); only the first
+#     `num_users` cores are used and any extras are ignored.
 #   - "full_grid": sub_core_grids=None, so the op auto-selects `num_users` cores from the device grid.
 @pytest.mark.parametrize(
     "num_users, grid_rows, grid_cols",
     [
-        (2, 1, 2),  # 1x2 grid
-        (7, 1, 7),  # 1x7 grid
-        (15, 3, 5),  # 3x5 grid
+        (2, 1, 2),  # 1x2 grid, exactly sized
+        (7, 1, 7),  # 1x7 grid, exactly sized
+        (13, 3, 5),  # 3x5=15 core grid, over-provisioned for 13 users
     ],
-    ids=["2_users_1x2", "7_users_1x7", "15_users_3x5"],
+    ids=["2_users_1x2", "7_users_1x7", "13_users_3x5"],
 )
 @pytest.mark.parametrize("Wt", [2])  # last dim = 32 * Wt; Wt must be a power of 2
 @pytest.mark.parametrize("seed", [2024])
@@ -241,11 +242,11 @@ def test_sampling_sub_32_users(num_users, grid_rows, grid_cols, Wt, seed, k_dtyp
     p = [0.0] * num_users
 
     if grid_mode == "explicit":
-        # Exactly `num_users` cores laid out as grid_rows x grid_cols (one core per user).
+        # A grid_rows x grid_cols grid with at least `num_users` cores (may be over-provisioned).
         sub_core_grids = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_cols - 1, grid_rows - 1))}
         )
-        assert sub_core_grids.num_cores() == num_users
+        assert sub_core_grids.num_cores() >= num_users
     else:
         # Let the op auto-select `num_users` cores from the full device grid.
         sub_core_grids = None
