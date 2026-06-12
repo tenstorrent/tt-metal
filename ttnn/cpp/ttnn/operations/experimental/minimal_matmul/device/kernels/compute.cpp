@@ -36,6 +36,26 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_
     }
 }
 
+// Split-K plan B: out = a + b, full elementwise (both M_block_tiles x N_block_tiles). Used by the
+// column reduction to add this band's matmul partial (a) to the running sum forwarded up from the band
+// below (b). Pushes out_cb one M-row at a time, matching copy_block/add_bias_block.
+void reduce_add_block(uint32_t a_cb, uint32_t b_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
+    add_tiles_init(a_cb, b_cb);
+    reconfig_data_format(a_cb, b_cb);
+    pack_reconfig_data_format(out_cb);
+    uint32_t tile_id = 0;
+    for (uint32_t m = 0; m < M_block_tiles; m++) {
+        for (uint32_t n = 0; n < N_block_tiles; n++) {
+            acquire_dst();
+            add_tiles(a_cb, b_cb, tile_id, tile_id, 0 /*dst*/);
+            pack_tile(0, out_cb);
+            release_dst();
+            tile_id++;
+        }
+        cb_push_back(out_cb, N_block_tiles);
+    }
+}
+
 // For caller: if FUSE_TERNARY defined then out_cb == in_cb
 /**
  * Add bias to input block
@@ -332,6 +352,8 @@ void kernel_main() {
     const uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
+    // split-K plan B: 1 if this is the bottom K-band (no incoming running sum), else 0. Always present.
+    const uint32_t is_reduce_bottom = get_arg_val<uint32_t>(argidx++);
 
 #ifdef FUSE_TERNARY
     const uint32_t fused_ternary_scalar_uint = get_arg_val<uint32_t>(argidx++);
@@ -350,6 +372,7 @@ void kernel_main() {
     constexpr uint32_t in2_cb = tt::CBIndex::c_4;
     constexpr uint32_t ternary_a_cb = tt::CBIndex::c_5;
     constexpr uint32_t ternary_b_cb = tt::CBIndex::c_6;
+    constexpr uint32_t cb_reduce = tt::CBIndex::c_7;  // split-K B: running sum forwarded up from the band below
 
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
@@ -433,7 +456,20 @@ void kernel_main() {
             PACK((llk_pack_reconfig_l1_acc(0)));
 
             cb_reserve_back(out_cb, out_block_num_tiles);
-#ifndef FUSE_TERNARY
+#ifdef REDUCE_K
+            // Split-K plan B column reduction: bottom band emits its own matmul partial; every other band
+            // adds the running sum forwarded up from the band below. The DM then either forwards out_cb up
+            // (non-top bands) or writes it to DRAM (top band). K-par never fuses bias/ternary.
+            cb_wait_front(intermediate_cb, out_block_num_tiles);
+            if (is_reduce_bottom) {
+                copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
+            } else {
+                cb_wait_front(cb_reduce, out_block_num_tiles);
+                reduce_add_block(intermediate_cb, cb_reduce, out_cb, M_block_tiles, N_block_tiles);
+                cb_pop_front(cb_reduce, out_block_num_tiles);
+            }
+            cb_pop_front(intermediate_cb, out_block_num_tiles);
+#elif !defined(FUSE_TERNARY)
             cb_wait_front(intermediate_cb, out_block_num_tiles);
 #ifndef FUSE_BIAS
             copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);

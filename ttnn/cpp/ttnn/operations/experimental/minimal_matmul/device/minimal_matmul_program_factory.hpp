@@ -22,6 +22,12 @@ struct MinimalMatmulProgramFactory {
         bool transpose_core_grid{};
         bool read_local_slice_from_input{};
         uint32_t rows_per_group{1};  // core-grid slicing: physical rows per group (grid.y / num_slices)
+        // RT-arg index where the output buffer addresses begin in the in0/in1 sender+receiver arg vectors.
+        // override_runtime_arguments() uses these to rewrite output addresses on program-cache reuse; they
+        // are captured in create() so they stay correct as conditional args (split-K, reduce, ternary) are
+        // inserted before the outputs. Hardcoding them silently corrupted reuse once split-K added args.
+        uint32_t in0_out_addr_start_idx{};
+        uint32_t in1_out_addr_start_idx{};
     };
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 

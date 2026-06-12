@@ -45,6 +45,24 @@ void kernel_main() {
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
     const uint32_t max_defer_write_k_block = get_arg_val<uint32_t>(argidx++);
+    // Split-K (plan A2): absolute first K-block this band reduces; M-stripe offset of this band's
+    // partial in the [num_k_slices * M, N] output; and that output's total M-tile extent. All 0 / M_tiles
+    // when K-par is off.
+    const uint32_t k_block_start = get_arg_val<uint32_t>(argidx++);
+    const uint32_t out_m_tile_offset = get_arg_val<uint32_t>(argidx++);
+    const uint32_t out_M_tiles_total = get_arg_val<uint32_t>(argidx++);
+
+#ifdef REDUCE_K
+    // Split-K plan B: vertical running-sum reduction (see dm_in0_sender.cpp for the full description).
+    const uint32_t reduce_up_noc_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t reduce_up_noc_y = get_arg_val<uint32_t>(argidx++);
+    const uint32_t reduce_down_noc_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t reduce_down_noc_y = get_arg_val<uint32_t>(argidx++);
+    const uint32_t is_reduce_top = get_arg_val<uint32_t>(argidx++);
+    const uint32_t is_reduce_bottom = get_arg_val<uint32_t>(argidx++);
+    const uint32_t reduce_ready_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
+    const uint32_t reduce_recv_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
+#endif
 
 #ifdef FUSE_TERNARY
     // Fuse addcmul - read runtime addresses before setting out_addr_rt_arg_idx
@@ -93,7 +111,10 @@ void kernel_main() {
 #endif  // FUSE_TERNARY
 
     const TensorShape2D in1_shape(K_tiles, N_tiles, padded_K_tiles, padded_N_tiles);
-    const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);
+    // out_shape spans the full [num_k_slices * M, N] partial buffer so the logical_d0 guard in
+    // write_block_sync admits this band's M-stripe (rows out_m_tile_offset .. +M). num_k_slices=1 =>
+    // out_M_tiles_total == M_tiles (identical to before).
+    const TensorShape2D out_shape(out_M_tiles_total, N_tiles, out_M_tiles_total, padded_N_tiles);
     const TensorShape2D out0_shape(M_tiles, N_tiles_per_chunk, padded_M_tiles, N_tiles_per_chunk);
 
     constexpr uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
@@ -104,6 +125,17 @@ void kernel_main() {
     constexpr uint32_t cb_id_out = tt::CBIndex::c_2;
 #ifdef FUSE_BIAS
     constexpr uint32_t cb_id_in2 = tt::CBIndex::c_4;
+#endif
+#ifdef REDUCE_K
+    constexpr uint32_t cb_reduce = tt::CBIndex::c_7;  // running sum forwarded up from the band below
+    constexpr uint32_t reduce_block_bytes = out_block_num_tiles * out_tile_size;
+    volatile tt_l1_ptr uint32_t* reduce_ready_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_ready_semaphore_addr);
+    volatile tt_l1_ptr uint32_t* reduce_recv_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_recv_semaphore_addr);
+    const uint64_t reduce_down_ready_noc_addr =
+        get_noc_addr(reduce_down_noc_x, reduce_down_noc_y, reduce_ready_semaphore_addr);
+    const uint64_t reduce_up_recv_noc_addr = get_noc_addr(reduce_up_noc_x, reduce_up_noc_y, reduce_recv_semaphore_addr);
 #endif
 
 #ifdef FUSE_AG
@@ -209,7 +241,7 @@ void kernel_main() {
                     cb_reserve_back(cb_id_in1, in1_block_num_tiles);
                     uint32_t wp = get_write_ptr(cb_id_in1);
                     {
-                        uint32_t kb = k_forward ? 0 : (K_num_blocks - 1);
+                        uint32_t kb = k_block_start + (k_forward ? 0 : (K_num_blocks - 1));
                         read_in1_block_sync<K_block_tiles, N_block_tiles, /*issue_only=*/true>(
                             in1_reader,
                             in1_shape,
@@ -230,7 +262,7 @@ void kernel_main() {
                             cb_reserve_back(cb_id_in1, in1_block_num_tiles);
                             wp = get_write_ptr(cb_id_in1);
                             uint32_t kn = k_block_iter + 1;
-                            uint32_t kb = k_forward ? kn : (K_num_blocks - 1) - kn;
+                            uint32_t kb = k_block_start + (k_forward ? kn : (K_num_blocks - 1) - kn);
                             read_in1_block_sync<K_block_tiles, N_block_tiles, /*issue_only=*/true>(
                                 in1_reader,
                                 in1_shape,
@@ -278,8 +310,8 @@ void kernel_main() {
                                     out_shape,
                                     out_read_ptr,
                                     out_tile_size,
-                                    defer_write_m_tile,
-                                    defer_write_m_tile_end,
+                                    defer_write_m_tile + out_m_tile_offset,
+                                    defer_write_m_tile_end + out_m_tile_offset,
                                     defer_write_n_tile,
                                     defer_write_n_tile_end);
                             } else {
@@ -297,7 +329,7 @@ void kernel_main() {
                         }
                     }
 
-                    uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
+                    uint32_t k_block = k_block_start + (k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter);
                     cb_reserve_back(cb_id_in1, in1_block_num_tiles);
 
                     uint32_t in1_start_address = get_write_ptr(cb_id_in1);
@@ -433,6 +465,42 @@ void kernel_main() {
             defer_write = !is_last_block;
             defer_write = defer_write && !is_injector_core;
 
+#ifdef REDUCE_K
+            // Split-K plan B: fused L1 column reduction (see dm_in0_sender.cpp for the full description).
+            // Replaces the output write with a per-block running-sum handshake UP the K-band column.
+            defer_write = false;
+            if constexpr (is_output_writer) {
+                if (!is_reduce_bottom) {
+                    cb_reserve_back(cb_reduce, out_block_num_tiles);
+                    noc_semaphore_set(reduce_recv_semaphore_addr_ptr, INVALID);
+                    noc_semaphore_inc(reduce_down_ready_noc_addr, 1);
+                    noc_semaphore_wait(reduce_recv_semaphore_addr_ptr, VALID);
+                    cb_push_back(cb_reduce, out_block_num_tiles);
+                }
+                if (is_reduce_top) {
+                    write_block_sync_granular<M_block_tiles, N_block_tiles>(
+                        std::get<0>(outputs_tuple),
+                        out_shape,
+                        cb_id_out,
+                        out_tile_size,
+                        m_tile,  // out_m_tile_offset == 0 for plan B (single [M, N] target)
+                        m_tile_end,
+                        n_tile,
+                        n_tile_end);
+                } else {
+                    cb_wait_front(cb_id_out, out_block_num_tiles);
+                    uint32_t out_read_ptr = get_read_ptr(cb_id_out);
+                    noc_semaphore_wait(reduce_ready_semaphore_addr_ptr, 1);
+                    noc_semaphore_set(reduce_ready_semaphore_addr_ptr, 0);
+                    uint64_t reduce_dst_noc_addr =
+                        get_noc_addr(reduce_up_noc_x, reduce_up_noc_y, get_write_ptr(cb_reduce));
+                    noc_async_write(out_read_ptr, reduce_dst_noc_addr, reduce_block_bytes);
+                    noc_async_writes_flushed();
+                    noc_semaphore_set_remote(in1_valid_semaphore_addr, reduce_up_recv_noc_addr);
+                    cb_pop_front(cb_id_out, out_block_num_tiles);
+                }
+            }
+#else
             if (!defer_write) {
                 if constexpr (is_output_writer) {
                     // write_block_sync_granular_split is more generic (support multiple output tensors)
@@ -443,8 +511,8 @@ void kernel_main() {
                             out_shape,
                             cb_id_out,
                             out_tile_size,
-                            m_tile,
-                            m_tile_end,
+                            m_tile + out_m_tile_offset,
+                            m_tile_end + out_m_tile_offset,
                             n_tile,
                             n_tile_end);
                     } else {
@@ -466,6 +534,7 @@ void kernel_main() {
 #endif
                 }
             }
+#endif  // REDUCE_K
         }
     }
     noc_async_write_barrier();
