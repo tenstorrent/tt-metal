@@ -7,7 +7,18 @@
 // out of its H2D socket page via the same structs). Keep all structs packed so the
 // L1 byte layout matches on both sides.
 //
-// One request page is a fixed kRequestPageBytes payload region whose two halves grow
+// Every page starts with a DramCorePrefetcherRequestHeader: a one-byte command id
+// (DramCorePrefetcherBaseCmd) followed by a union of the per-command payloads,
+// modeled on the dispatch CQPrefetchCmd / CQDispatchCmd encoding in
+// tt_metal/impl/dispatch/kernels/cq_commands.hpp. The three commands are:
+//   * STOP      — no payload; the kernel exits its request loop. STOP == 0, so an
+//                 all-zero page is a valid stop sentinel.
+//   * PREFETCH  — the rest of the page holds the entry + layout tables described
+//                 below; the kernel streams those tensors into the target GCB.
+//   * WAIT_CQ   — no tables; the kernel spins until its per-CQ signal slot
+//                 [wait_cq.cq_index] reaches wait_cq.cq_wait_value (wrap-safe).
+//
+// For a PREFETCH page the payload region (kRequestPageBytes) has two halves that grow
 // toward each other:
 //
 //   [Header][Entry 0][Entry 1] ... [Entry K-1]  ... free ...  [Layout L-1] ... [Layout 0]
@@ -22,13 +33,13 @@
 //   at byte offset kRequestPageBytes - (i + 1) * sizeof(DramCorePrefetcherTensorLayout)
 //   (i.e. layout 0 is flush against the end of the payload).
 //
-// The kernel walks the entries in order; for each it reads the address from the entry
-// and the geometry from the referenced layout, then runs the per-tensor chunk loop. A
-// header with num_entries == 0 is the stop sentinel.
+// The kernel walks header.prefetch.num_entries entries in order; for each it reads the
+// address from the entry and the geometry from the referenced layout, then runs the
+// per-tensor chunk loop.
 //
 // When one Queue call has more tensors than fit in a single page, the host emits
-// multiple pages (each an independent request); the per-GCB fifo_wr_ptr persists in the
-// sender state block across requests, so the page split is invisible to the receiver.
+// multiple PREFETCH pages (each an independent request); the per-GCB fifo_wr_ptr persists
+// in the sender state block across requests, so the page split is invisible to the receiver.
 
 #pragma once
 
@@ -42,6 +53,11 @@ namespace tt::tt_metal {
 // Larger packs more tensors per page but grows the per-socket DRISC L1 FIFO by
 // kSocketFifoPages × this.
 inline constexpr uint32_t kRequestPageBytes = 1024;
+
+// Number of per-DRAM-core CQ signal slots (one uint32 counter per command queue).
+// WaitForCqOnDramCorePrefetcher writes an incrementing value into slot[cq_id] via
+// the dispatcher; a WAIT_CQ request makes the kernel spin until it is reached.
+constexpr uint32_t kNumCqSignalSlots = 2;
 
 // Address-independent per-tensor geometry handed to the DRAM-core prefetcher kernel.
 // All values are derived from the tensor shape + dtype + GCB ring topology + DRISC L1
@@ -60,6 +76,10 @@ struct DramCorePrefetcherTensorLayout {
     uint32_t sub_stride_bytes = 0;     // DRAM byte stride between sub-bands within a block
     uint32_t block_stride_bytes = 0;   // DRAM byte stride between ring-blocks
     uint32_t page_bytes_per_recv = 0;  // bytes per receiver per full block (fifo_page_size)
+    // Receiver-contiguous-layout fields. Zero/unused under KRowMajor.
+    uint32_t layout_mode = 0;             // 0=KRowMajor, 1=ReceiverContiguous (matches LayoutMode)
+    uint32_t target_per_visit_pages = 1;  // recv-contig per-receiver visit size ceiling (blocks)
+    uint32_t recv_stride_bytes = 0;       // GDDR byte stride between receiver slabs in a bank
     uint32_t block_count = 0;          // K-blocks for this tensor (per-tensor; was the shared GCB ring size)
 } __attribute__((packed));
 
@@ -71,14 +91,52 @@ struct DramCorePrefetcherEntry {
     uint32_t layout_index = 0;     // index into the page's DramCorePrefetcherTensorLayout table
 } __attribute__((packed));
 
-// Header at the start of each request page.
-struct DramCorePrefetcherRequestHeader {
-    uint32_t num_entries = 0;     // number of valid DramCorePrefetcherEntry entries; 0 = stop sentinel
-    uint32_t num_layouts = 0;     // number of valid DramCorePrefetcherTensorLayout table entries
-    uint32_t gcb_state_addr = 0;  // DRISC L1 base of the target GCB's sender state block
+// One-byte command id at the front of every request page.
+enum DramCorePrefetcherCmdId : uint8_t {
+    DRAM_PREFETCHER_CMD_STOP = 0,      // exit the request loop (no payload; all-zero page)
+    DRAM_PREFETCHER_CMD_PREFETCH = 1,  // entry + layout tables follow the header
+    DRAM_PREFETCHER_CMD_WAIT_CQ = 2,   // spin until cq slot[cq_index] >= cq_wait_value
+};
+
+struct DramCorePrefetcherBaseCmd {
+    DramCorePrefetcherCmdId cmd_id;  // 1 byte
 } __attribute__((packed));
 
-// A single tensor must fit in an otherwise-empty page (header + one layout + one entry).
+// PREFETCH payload. The leading pad keeps the 32-bit fields 4-byte aligned past the
+// one-byte base (mirrors the pad fields in cq_commands.hpp commands); the resulting
+// 12-byte header then keeps the entry table 4-byte aligned.
+struct DramCorePrefetcherPrefetchCmd {
+    uint8_t pad1;
+    uint16_t num_entries;     // number of valid DramCorePrefetcherEntry entries
+    uint32_t num_layouts;     // number of valid DramCorePrefetcherTensorLayout table entries
+    uint32_t gcb_state_addr;  // DRISC L1 base of the target GCB's sender state block
+} __attribute__((packed));
+
+// WAIT_CQ payload.
+struct DramCorePrefetcherWaitCqCmd {
+    uint8_t cq_index;  // which per-core CQ signal slot to wait on (0/1)
+    uint16_t pad1;
+    uint32_t cq_wait_value;  // wait until slot >= this value (wrap-safe int32 compare)
+} __attribute__((packed));
+
+// Header at the start of each request page: command id + per-command payload union.
+struct DramCorePrefetcherRequestHeader {
+    DramCorePrefetcherBaseCmd base;
+    union {
+        DramCorePrefetcherPrefetchCmd prefetch;
+        DramCorePrefetcherWaitCqCmd wait_cq;
+    } __attribute__((packed));
+} __attribute__((packed));
+
+// The host fills this header and the kernel parses it field-by-field, so its layout is a
+// host↔kernel wire contract. Pin the size (and pack the struct above) so a difference in
+// padding/alignment between host and JIT compiler settings can't silently shift cmd_id,
+// the payload union, or the layout-table offsets.
+static_assert(
+    sizeof(DramCorePrefetcherRequestHeader) == 12,
+    "DramCorePrefetcherRequestHeader must be 12 bytes (host↔kernel wire contract)");
+
+// A single tensor must fit in an otherwise-empty PREFETCH page (header + one layout + one entry).
 static_assert(
     sizeof(DramCorePrefetcherRequestHeader) + sizeof(DramCorePrefetcherTensorLayout) +
             sizeof(DramCorePrefetcherEntry) <=

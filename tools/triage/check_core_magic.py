@@ -19,8 +19,8 @@ Owner:
 
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
-from ttexalens.elf import ParsedElfFile
-from ttexalens.memory_access import MemoryAccess
+from ttexalens.elf import ElfFile
+from ttexalens.memory_access import MemoryAccess, create_l1_memory_access
 from dispatcher_data import run as get_dispatcher_data, DispatcherData, RunChecks
 from run_checks import run as get_run_checks
 from triage import ScriptConfig, log_check_location, run_script
@@ -104,7 +104,7 @@ def try_read_magic_with_dispatcher_data(
 
 def try_read_magic_with_elf(
     l1_mem_access: MemoryAccess,
-    fw_elf: ParsedElfFile,
+    fw_elf: ElfFile,
 ) -> int | None:
     """
     Attempt to read core_magic_number using the given firmware ELF.
@@ -159,7 +159,7 @@ def check_core_magic(
 
     found_type = None
     for type_name, other_elf in other_elfs_to_try:
-        l1_mem_access = MemoryAccess.create_l1(location)
+        l1_mem_access = create_l1_memory_access(location)
         other_magic = try_read_magic_with_elf(l1_mem_access, other_elf)
         if other_magic is not None:
             other_type_name = magic_values.get_name(other_magic)

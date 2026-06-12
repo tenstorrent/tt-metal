@@ -28,7 +28,7 @@ from elfs_cache import run as get_elfs_cache, ElfsCache
 from triage import triage_singleton, ScriptConfig, run_script, log_check_location
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.elf import ElfVariable
-from ttexalens.memory_access import MemoryAccess
+from ttexalens.memory_access import create_l1_memory_access
 from ttexalens.context import Context
 from triage import TTTriageError, triage_field, hex_serializer
 from run_checks import run as get_run_checks
@@ -81,6 +81,9 @@ class DispatcherCoreData:
     # Inspector/control-plane-sourced block type for this core. Used by callers to reason about
     # active-vs-idle ETH without re-consulting the cluster descriptor.
     block_type: BlockType | None = None
+    # Whether kernel_config.enables turned this specific risc on. False => idle by design (no kernel
+    # launched on it). None => unknown (read failed / corrupt), so callers must not hide the core.
+    risc_enabled_by_kernel: bool | None = None
     # Hint surfaced when find_kernel fails — explains the most likely cause (program cache off,
     # or workload destroyed despite cache being on) so callers can append it to "PC not in range" style errors.
     kernel_lookup_warning: str | None = None
@@ -303,6 +306,11 @@ class DispatcherData:
             return self.drisc_enabled()
         return True
 
+    def is_idle_in_default_view(self, location: OnChipCoordinate, risc_name: str) -> bool:
+        """Risc hidden unless --all-cores: finished (Go=DONE) or never enabled by the program."""
+        d = self.get_cached_core_data(location, risc_name)
+        return d.go_message == "DONE" or d.risc_enabled_by_kernel is False
+
     def get_cached_core_data(self, location: OnChipCoordinate, risc_name: str) -> DispatcherCoreData:
         key = (location, risc_name)
         with self.lock:
@@ -321,7 +329,7 @@ class DispatcherData:
 
     def read_mailboxes(self, location: OnChipCoordinate) -> ElfVariable:
         block_type = self._get_block_type(location)
-        l1_mem_access = MemoryAccess.create_l1(location)
+        l1_mem_access = create_l1_memory_access(location)
         match block_type:
             case "tensix":
                 fw_elf = self._brisc_elf
@@ -469,6 +477,7 @@ class DispatcherData:
         dispatch_mode = None
         brisc_noc_id = None
         enables = None
+        risc_enabled_by_kernel = None
         subordinate_sync = None
         watcher_enabled = None
 
@@ -520,6 +529,8 @@ class DispatcherData:
             enables = ""
             for i, sym in enumerate(symbols):
                 enables += sym if (enables_val & (1 << i)) else sym.lower()
+            # bit i set => processor i enabled; proc_type is this risc's processor index.
+            risc_enabled_by_kernel = bool(enables_val & (1 << proc_type))
         except Exception:
             log_check_location(
                 location,
@@ -662,6 +673,7 @@ class DispatcherData:
             subordinate_sync=subordinate_sync,
             watcher_enabled=watcher_enabled,
             block_type=block_type,
+            risc_enabled_by_kernel=risc_enabled_by_kernel,
             kernel_lookup_warning=kernel_lookup_warning,
         )
 

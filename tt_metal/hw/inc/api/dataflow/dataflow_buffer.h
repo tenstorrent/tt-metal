@@ -217,3 +217,12 @@ struct noc_traits_t<DataflowBuffer> {
 #else
 #include "internal/tt-1xx/dataflow_buffer.inl"
 #endif
+
+#ifndef COMPILE_FOR_TRISC
+#ifdef ARCH_QUASAR
+#include "internal/tt-2xx/noc_zero_l1.inl"
+#else
+#include "internal/tt-1xx/noc_zero_l1.inl"
+#endif
+#include "internal/noc_zero_dram.inl"
+#endif

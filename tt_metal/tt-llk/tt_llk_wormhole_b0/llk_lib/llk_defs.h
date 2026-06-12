@@ -127,25 +127,6 @@ struct ReluConfig
         return threshold;
     }
 
-    // Encoding written to the HW STACC_RELU_ApplyRelu (RELU_MODE) field.
-    // ZERO_RELU is folded into MIN_THRESHOLD_RELU (HW mode 2) with whatever threshold the
-    // ReluConfig was constructed with (always 0 via the public ::zero() factory). HW does
-    // support apply_relu=1 (sign-bit-exact ZERO_RELU) directly, but tt-sim does not yet
-    // model that path; see tenstorrent/ttsim#9 and tt-metal#45720 for the follow-up to
-    // route ZERO_RELU through HW mode 1 once tt-sim supports it.
-    constexpr std::uint32_t get_hw_mode() const
-    {
-        switch (mode)
-        {
-            case ReluType::NO_RELU:
-                return 0;
-            case ReluType::MAX_THRESHOLD_RELU:
-                return 3;
-            default:
-                return 2;
-        }
-    }
-
 private:
     constexpr ReluConfig(ReluType m, std::uint32_t t = 0) : mode(m), threshold(t)
     {

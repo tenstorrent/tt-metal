@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <memory>
 #include <tt_stl/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -37,9 +39,10 @@ GlobalCircularBuffer create_global_circular_buffer_with_dram_senders(
     MeshDevice* mesh_device,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t size,
-    BufferType buffer_type) {
+    BufferType buffer_type,
+    bool dual_senders_per_bank) {
     return tt::tt_metal::experimental::CreateGlobalCircularBufferWithDramSenders(
-        *mesh_device, bank_to_receivers, size, buffer_type);
+        *mesh_device, bank_to_receivers, size, buffer_type, dual_senders_per_bank);
 }
 
 GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d(
@@ -254,6 +257,182 @@ GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d(
 
     return tt::tt_metal::experimental::CreateGlobalCircularBufferWithDramSenders(
         *mesh_device, bank_to_receivers, size, buffer_type);
+}
+
+namespace {
+
+// Shared receiver-contiguous weight ↔ matmul cross-checks, parameterized on ring_size so both the
+// block_count helper (ring_size from the GCB) and the GCB factory (ring_size from bank_to_receivers /
+// the program-config grid) can call it. See the header docs on the two public functions for the
+// rationale behind each guard.
+void validate_recv_contig_weight_for_matmul_1d(
+    const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config,
+    const tt::tt_metal::Tensor& weight,
+    uint32_t ring_size) {
+    TT_FATAL(program_config.gather_in0, "receiver-contiguous DRAM-core prefetcher requires gather_in0=true");
+    TT_FATAL(ring_size > 0, "ring_size must be > 0");
+
+    // The receiver-contiguous weight is an NdShardSpec DRAM tensor: num_shards == ring_size, each shard
+    // (full K, N/ring_size). This is also exactly what the manager's detect_layout_mode keys on.
+    TT_FATAL(weight.buffer() != nullptr && weight.buffer()->is_dram(), "weight must live in DRAM");
+    const auto& nd_opt = weight.nd_shard_spec();
+    TT_FATAL(
+        nd_opt.has_value(),
+        "weight must be allocated with an NdShardSpec (ttnn.MemoryConfig(BufferType.DRAM, NdShardSpec(...))) "
+        "for the receiver-contiguous DRAM-core prefetcher path");
+    const auto& shard_shape = nd_opt->shard_shape;
+    TT_FATAL(
+        shard_shape.rank() == 2,
+        "receiver-contiguous NdShardSpec shard shape must be 2D (K, n_per_recv); got rank {}",
+        shard_shape.rank());
+
+    const auto& tile = weight.tensor_spec().tile();
+    const uint32_t tile_h = tile.get_height();
+    const uint32_t tile_w = tile.get_width();
+    const uint32_t shard_K = shard_shape[0];
+    const uint32_t shard_N = shard_shape[1];
+    TT_FATAL(
+        shard_K % tile_h == 0 && shard_N % tile_w == 0,
+        "receiver-contiguous shard shape ({}, {}) must be tile-aligned (tile {}x{})",
+        shard_K,
+        shard_N,
+        tile_h,
+        tile_w);
+
+    const auto& wp = weight.padded_shape();
+    TT_FATAL(wp.rank() >= 2, "weight must be at least 2D; got rank {}", wp.rank());
+    TT_FATAL(
+        shard_K == static_cast<uint32_t>(wp[-2]),
+        "receiver-contiguous shard K ({}) must equal full weight K ({}); each shard spans the full K dimension",
+        shard_K,
+        static_cast<uint32_t>(wp[-2]));
+
+    const auto& bds = weight.buffer()->buffer_distribution_spec();
+    TT_FATAL(bds.has_value(), "receiver-contiguous weight buffer must have a BufferDistributionSpec");
+    TT_FATAL(
+        static_cast<uint32_t>(bds->num_shards()) == ring_size,
+        "receiver-contiguous weight has {} shards but global_cb ring_size is {}; num_shards must equal "
+        "ring_size (one shard per receiver)",
+        bds->num_shards(),
+        ring_size);
+
+    // #1 silent-hang / over-read guard: K must divide evenly into ring_size blocks. Otherwise
+    // compute_tensor_layout_recv_contig ceil-rounds k_block_w_tiles and the kernel reads past the
+    // receiver's slab, and the matmul (which pads K to a multiple of ring_size) waits forever.
+    const uint32_t weight_K_tiles = shard_K / tile_h;
+    TT_FATAL(
+        weight_K_tiles % ring_size == 0,
+        "weight K ({} tiles) must be divisible by ring_size ({}) for the receiver-contiguous DRAM-core "
+        "prefetcher; remainder {}",
+        weight_K_tiles,
+        ring_size,
+        weight_K_tiles % ring_size);
+
+    // B1 page-size guard: the matmul sizes its in1 remote-CB page from per_core_N; the prefetcher pushes
+    // pages of n_per_recv tiles. A mismatch desyncs the page-credit accounting (wrong output / hang).
+    const uint32_t n_per_recv_tiles = shard_N / tile_w;
+    TT_FATAL(
+        n_per_recv_tiles == program_config.per_core_N,
+        "program_config.per_core_N ({}) must equal the weight's per-receiver N ({} tiles = shard N {} / tile_w {})",
+        program_config.per_core_N,
+        n_per_recv_tiles,
+        shard_N,
+        tile_w);
+}
+
+}  // namespace
+
+uint32_t dram_core_prefetcher_block_count_for_matmul_1d(
+    const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config,
+    const tt::tt_metal::Tensor& weight,
+    const GlobalCircularBuffer& gcb) {
+    // ring_size == total receivers == block_count (the matmul does wait_front(ring_size) per layer).
+    const uint32_t ring_size = gcb.receiver_cores().num_cores();
+    TT_FATAL(ring_size > 0, "global_cb has no receivers");
+    validate_recv_contig_weight_for_matmul_1d(program_config, weight, ring_size);
+    return ring_size;
+}
+
+GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d_recv_contig(
+    MeshDevice* mesh_device,
+    const std::vector<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>& program_configs,
+    const std::vector<tt::tt_metal::Tensor>& weights,
+    const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
+    uint32_t size,
+    BufferType buffer_type,
+    bool dual_senders_per_bank) {
+    TT_FATAL(!program_configs.empty(), "Must provide at least one program config");
+    TT_FATAL(
+        program_configs.size() == weights.size(),
+        "Expected one weight tensor per program config; got {} configs and {} weights",
+        program_configs.size(),
+        weights.size());
+    TT_FATAL(size > 0, "size must be > 0");
+    TT_FATAL(!bank_to_receivers.empty(), "bank_to_receivers must be non-empty");
+
+    // ring_size for the recv-contig layout is the total receiver count (= num_shards). Unlike the
+    // K-row-major builder we do NOT require a uniform per-bank receiver count or a contiguous
+    // bank->ring mapping — recv-contig uses a strided round-robin placement, and dual senders split
+    // a bank's receivers across two DRISC cores.
+    uint32_t ring_size = 0;
+    for (const auto& [_bank, receivers] : bank_to_receivers) {
+        ring_size += receivers.num_cores();
+    }
+    TT_FATAL(ring_size > 0, "bank_to_receivers has no receivers");
+
+    // All matmuls share the GCB receiver rectangle, so they must agree on the ring shape, and that
+    // ring must match bank_to_receivers' total receiver count.
+    uint32_t max_page_bytes = 0;
+    for (size_t i = 0; i < program_configs.size(); ++i) {
+        const auto& cfg = program_configs[i];
+        const auto& grid = cfg.compute_with_storage_grid_size;
+        const uint32_t cfg_ring_size = grid.x * grid.y;
+        TT_FATAL(
+            cfg_ring_size == ring_size,
+            "program_configs[{}] grid {}x{} = {} workers, but bank_to_receivers has {} total receivers; "
+            "they must match (one receiver per matmul worker)",
+            i,
+            grid.x,
+            grid.y,
+            cfg_ring_size,
+            ring_size);
+
+        // Per-(config, weight) recv-contig cross-checks (num_shards == ring_size, K % ring_size == 0,
+        // per_core_N == per-receiver N). Shared with dram_core_prefetcher_block_count_for_matmul_1d.
+        validate_recv_contig_weight_for_matmul_1d(cfg, weights[i], ring_size);
+
+        // page_bytes_per_recv = (K_tiles / ring_size) * per_core_N * tile_bytes — one K-block per receiver.
+        const auto& w = weights[i];
+        const auto& tile = w.tensor_spec().tile();
+        const uint32_t weight_K_tiles = static_cast<uint32_t>(w.padded_shape()[-2]) / tile.get_height();
+        const uint32_t k_block_w_tiles = weight_K_tiles / ring_size;
+        const uint32_t bytes_per_tile = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(w.dtype()));
+        const uint32_t page_bytes = k_block_w_tiles * cfg.per_core_N * bytes_per_tile;
+        TT_FATAL(page_bytes > 0, "program_configs[{}] page_bytes computed as 0", i);
+        max_page_bytes = std::max(max_page_bytes, page_bytes);
+    }
+
+    // The matmul does wait_front(ring_size) per layer, so the GCB must hold at least one full layer's
+    // worth of pages. Same cap as the K-row-major builder (see create_global_circular_buffer_for_matmul_1d
+    // for why kMaxCbPagesBytes exists); no L1 budget check — callers size to fit their own receiver L1.
+    constexpr uint32_t kMaxCbPagesBytes = 131072u * 16u;
+    const uint32_t min_size = max_page_bytes * ring_size;
+    TT_FATAL(
+        size >= min_size,
+        "GCB size ({} B) must be at least ring_size * largest page ({} * {} = {} B); the matmul does "
+        "wait_front(ring_size) so it needs that many pages buffered before it consumes.",
+        size,
+        ring_size,
+        max_page_bytes,
+        min_size);
+    TT_FATAL(
+        size <= kMaxCbPagesBytes,
+        "GCB size ({} B) exceeds the remote-CB page-count cap ({} B). Reduce size.",
+        size,
+        kMaxCbPagesBytes);
+
+    return tt::tt_metal::experimental::CreateGlobalCircularBufferWithDramSenders(
+        *mesh_device, bank_to_receivers, size, buffer_type, dual_senders_per_bank);
 }
 
 }  // namespace ttnn::global_circular_buffer

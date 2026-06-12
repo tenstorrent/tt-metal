@@ -38,7 +38,8 @@ from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
 from ttexalens.gdb.gdb_server import GdbServer, ServerSocket
 from ttexalens.gdb.gdb_client import get_gdb_callstack
-from ttexalens.hardware.risc_debug import CallstackEntry, ParsedElfFile
+from ttexalens.elf import ElfFile
+from ttexalens.hardware.risc_debug import CallstackEntry
 from ttexalens.tt_exalens_lib import top_callstack, callstack
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 from utils import WARN
@@ -79,7 +80,7 @@ def get_callstack(
     rewind_pc_for_ebreak: bool,
 ) -> KernelCallstackWithMessage:
     context = location._device._context
-    elfs: list[ParsedElfFile] = [elfs_cache[dispatcher_core_data.firmware_path]]
+    elfs: list[ElfFile] = [elfs_cache[dispatcher_core_data.firmware_path]]
     offsets: list[int | None] = [None]
     if dispatcher_core_data.kernel_path is not None:
         elfs.append(elfs_cache[dispatcher_core_data.kernel_path])
@@ -142,24 +143,23 @@ def _format_callstack(callstack: list[CallstackEntry]) -> list[str]:
             line += f"[blue]0x{frame.pc:08X}[/] in "
         if frame.function_name is not None:
             line += f"[yellow]{frame.function_name}[/] () "
-        if frame.file is not None:
+        if frame.file_info is not None:
+            fi = frame.file_info
             # Convert absolute path to relative path with ./ prefix
-            file_path = Path(frame.file)
+            file_path = Path(fi.file)
             try:
                 if file_path.is_absolute():
                     rel_path = file_path.relative_to(cwd)
                     display_path = f"./{rel_path}"
                 else:
-                    display_path = frame.file
+                    display_path = fi.file
             except ValueError:
                 # Path is not relative to cwd, keep as is
-                display_path = frame.file
+                display_path = fi.file
 
             line += f"at [green]{display_path}[/]"
-            if frame.line is not None:
-                line += f" [green]{frame.line}[/]"
-                if frame.column is not None:
-                    line += f"[green]:{frame.column}[/]"
+            line += f" [green]{fi.line}[/]"
+            line += f"[green]:{fi.column}[/]"
         result.append(line)
     return result
 

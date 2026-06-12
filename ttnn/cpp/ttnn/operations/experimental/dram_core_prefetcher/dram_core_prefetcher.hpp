@@ -43,12 +43,21 @@ namespace ttnn::operations::experimental {
 // when start_dram_core_prefetcher would otherwise raise.
 bool is_dram_core_prefetcher_supported(tt::tt_metal::distributed::MeshDevice* mesh_device);
 
-void start_dram_core_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device);
+void start_dram_core_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device, bool dual_senders_per_bank = false);
 
 void queue_dram_core_prefetcher_request(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const std::vector<std::pair<ttnn::Tensor, uint32_t>>& tensors,
     const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb,
+    const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset = std::nullopt);
+
+// Fence the prefetcher against command queue `cq_id`: every prefetch request queued
+// after this call waits until all work previously enqueued on `cq_id` has completed
+// on device before the prefetcher reads DRAM. Call after the data writes and before
+// the dependent queue_dram_core_prefetcher_request.
+void wait_for_cq_on_dram_core_prefetcher(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    uint8_t cq_id,
     const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset = std::nullopt);
 
 void stop_dram_core_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device);

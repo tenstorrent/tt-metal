@@ -9,13 +9,13 @@
 
 namespace ttml::metal::ops::sdpa_fw::device {
 
-struct operation_attributes_t {
+struct SDPAForwardParams {
     bool return_intermediates{false};
     AttentionMaskType mask_type{AttentionMaskType::Causal};
     float dropout_probability{0.0F};
 };
 
-struct tensor_args_t {
+struct SDPAForwardInputs {
     const ttnn::Tensor& query;
     const ttnn::Tensor& key;
     const ttnn::Tensor& value;
@@ -24,6 +24,9 @@ struct tensor_args_t {
     std::optional<ttnn::Tensor> preallocated_intermediate;
     std::optional<ttnn::Tensor> preallocated_output;
 };
+
+using operation_attributes_t = SDPAForwardParams;
+using tensor_args_t = SDPAForwardInputs;
 
 using tensor_return_value_t = std::vector<ttnn::Tensor>;
 

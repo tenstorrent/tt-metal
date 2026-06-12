@@ -329,7 +329,12 @@ def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: 
             index_file = model_path / "model.safetensors.index.json"
             if index_file.exists():
                 logger.info(f"Using existing model from {variant.env_var}: {model_path}")
-                return model_path.resolve()
+                # Keep the user path absolute but do NOT symlink-resolve it: resolve() would follow a
+                # dot-free symlink (e.g. Kimi-K2_6) back to a dotted real dir (Kimi-K2.6), and HF
+                # trust_remote_code cannot import a dynamic module whose name contains a '.'. The
+                # safetensors load works through the symlink either way; only the config import cares.
+                # This matches _resolve_config_only, which already loads config from the raw env path.
+                return model_path.absolute()
             else:
                 logger.warning(f"{variant.env_var} set but missing index file: {index_file}")
 

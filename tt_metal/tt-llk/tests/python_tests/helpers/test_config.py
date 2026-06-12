@@ -440,7 +440,7 @@ class TestConfig:
             "-Wfloat-equal -Wpointer-arith -Wnull-dereference -Wredundant-decls "
             "-Wuninitialized -Wmaybe-uninitialized "
             f"{no_wh_ebreak_fixup}"
-            f"-DTENSIX_FIRMWARE -DENV_LLK_INFRA -DENABLE_LLK_ASSERT {TestConfig.ARCH_DEFINE} "
+            f"-DTENSIX_FIRMWARE -DENV_LLK_INFRA -DKERNEL_BUILD -DENABLE_LLK_ASSERT {TestConfig.ARCH_DEFINE} "
             f"{'-DSPEED_OF_LIGHT' if TestConfig.SPEED_OF_LIGHT else ''}"
         )
         TestConfig.INCLUDES = [
@@ -553,6 +553,7 @@ class TestConfig:
         l1_acc: L1Accumulation = L1Accumulation.No,
         skip_build_header: bool = False,
         compile_time_formats: bool = False,
+        requires_device_print: bool = False,
     ):
         self.coverage_build = (
             CoverageBuild.Yes if TestConfig.WITH_COVERAGE else CoverageBuild.No
@@ -584,6 +585,7 @@ class TestConfig:
         self.skip_build_header = skip_build_header
         self.compile_time_formats = compile_time_formats
         self.dest_acc = dest_acc
+        self.requires_device_print = requires_device_print
 
         TILE_SIZES = {
             DataFormat.Bfp8_b: 68,
@@ -614,6 +616,9 @@ class TestConfig:
                 chip_arch=TestConfig.CHIP_ARCH,
                 disable_format_inference=self.disable_format_inference,
                 unpacking_to_srcs=self.unpack_to_srcs,
+                # `formats` may be an InputOutputFormat (carries the hint) or a
+                # FormatConfig (doesn't); fall back to None for the latter.
+                register_format_hint=getattr(formats, "register_format_hint", None),
             )
             self.pack_size = TILE_SIZES.get(self.formats_config[0].output_format, 128)
             self.unpack_size_a = TILE_SIZES.get(
@@ -858,9 +863,6 @@ class TestConfig:
 
         if self.profiler_build == ProfilerBuild.Yes:
             OPTIONS_COMPILE += "-DLLK_PROFILER "
-
-        if TestConfig.DEVICE_PRINT_ENABLED:
-            OPTIONS_COMPILE += "-DDEBUG_PRINT_ENABLED "
 
         if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
             OPTIONS_COMPILE += "-DDISABLE_SFPLOADMACRO "
@@ -1189,7 +1191,7 @@ class TestConfig:
                 )
                 trisc_define = "ISOLATE_SFPU" if name == "sfpu" else name.upper()
                 device_print_flags = ""
-                if TestConfig.DEVICE_PRINT_ENABLED:
+                if TestConfig.DEVICE_PRINT_ENABLED or self.requires_device_print:
                     risc_id, _ = TestConfig.RISC_INFO[name]
                     # Quasar: kernel addresses the buffer through the uncached alias
                     # (see device_print.h:get_lock_atomic).
@@ -1197,9 +1199,10 @@ class TestConfig:
                         0x400000 if TestConfig.ARCH == ChipArchitecture.QUASAR else 0
                     )
                     device_print_flags = (
+                        "-DDEBUG_PRINT_ENABLED "
                         f"-DLLK_DEVICE_PRINT_BUFFER_BASE={kernel_buffer_base:#x} "
                         f"-DLLK_RUNTIME_ARGS_START={TestConfig.DEVICE_PRINT_RUNTIME_ARGS_START:#x} "
-                        f"-DDPRINT_BUFFER_SIZE={TestConfig.DEVICE_PRINT_PER_THREAD_SIZE} "
+                        f"-DDEVICE_PRINT_BUFFER_SIZE={TestConfig.DEVICE_PRINT_BUFFER_SIZE} "
                         f"-DPROCESSOR_INDEX={risc_id} "
                     )
                 compile_command = (
@@ -1290,7 +1293,7 @@ class TestConfig:
 
         # Zero the device print buffer header before each kernel run so the
         # first DEVICE_PRINT() observes wpos=rpos=0 and a free lock.
-        if TestConfig.DEVICE_PRINT_ENABLED:
+        if TestConfig.DEVICE_PRINT_ENABLED or self.requires_device_print:
             write_words_to_device(
                 TestConfig.TENSIX_LOCATION,
                 TestConfig.DEVICE_PRINT_BUFFER_BASE,
@@ -1500,7 +1503,7 @@ class TestConfig:
         dprint_parser = None
         dprint_lines: list[str] = []
         wrapped_poll_callback = poll_callback
-        if TestConfig.DEVICE_PRINT_ENABLED:
+        if TestConfig.DEVICE_PRINT_ENABLED or self.requires_device_print:
             from .device_print import make_device_print_parser
 
             dprint_parser = make_device_print_parser(self)

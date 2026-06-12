@@ -1103,33 +1103,32 @@ def pytest_runtest_teardown(item, nextitem):
 
 
 def reset_tensix(tt_open_devices=None):
-    import shutil
-
     if is_galaxy():
         logger.info("Skipping reset for Galaxy systems, need a new reset.json scheme")
         return
 
-    # Check if tt-smi exists
-    if not shutil.which("tt-smi"):
-        logger.error("tt-smi command not found. Cannot reset devices. Please install tt-smi.")
+    try:
+        import tt_umd
+    except ImportError:
+        logger.error("tt_umd not found. Cannot reset devices. Please install tt-umd.")
         return
 
     if tt_open_devices is None:
-        logger.info(f"Running reset for all pci devices")
-        smi_reset_result = run_process_and_get_result(f"tt-smi -r")
+        logger.info("Running reset for all pci devices")
+        success = tt_umd.WarmReset.warm_reset()
     else:
-        tt_open_devices_str = ",".join([str(i) for i in tt_open_devices])
-        logger.info(f"Running reset for pci devices: {tt_open_devices_str}")
-        smi_reset_result = run_process_and_get_result(f"tt-smi -r {tt_open_devices_str}")
+        device_ids = list(tt_open_devices)
+        logger.info(f"Running reset for pci devices: {device_ids}")
+        success = tt_umd.WarmReset.warm_reset(pci_device_ids=device_ids)
 
-    if smi_reset_result.returncode != 0:
+    if not success:
         logger.warning(
-            f"tt-smi reset failed with status {smi_reset_result.returncode}. "
+            "UMD warm reset failed. "
             "The device may be in an inconsistent state. This can happen if device handles "
             "are still open (e.g., UMD connection held by the process). Subsequent tests may fail."
         )
     else:
-        logger.info("tt-smi reset completed successfully")
+        logger.info("UMD warm reset completed successfully")
 
 
 @pytest.fixture(autouse=True)
@@ -1179,14 +1178,32 @@ def ttnn_graph_report(request):
             logger.warning("Graph capture was already stopped (device may have been closed); skipping report.")
         else:
             report_path.mkdir(parents=True, exist_ok=True)
-            json_path = report_path / "graph_capture.json"
+            if ttnn.distributed_context_is_initialized():
+                rank = int(ttnn.distributed_context_get_rank())
+                world_size = int(ttnn.distributed_context_get_size())
+            else:
+                rank, world_size = 0, 1
+            if world_size > 1:
+                json_path = report_path / f"graph_capture_{rank+1}_of_{world_size}.json"
+            else:
+                json_path = report_path / "graph_capture.json"
             ttnn.graph.end_graph_capture_to_file(str(json_path))
-            if json_path.exists():
+            if ttnn.distributed_context_is_initialized():
+                ttnn.distributed_context_barrier()
+            if not ttnn.distributed_context_is_initialized() or int(ttnn.distributed_context_get_rank()) == 0:
                 from ttnn.graph_report import import_report
 
-                import_report(json_path, report_path)
+                import_report(report_path, report_path)
+                (report_path / "graph_capture.json").unlink(missing_ok=True)
+                for p in sorted(report_path.glob("graph_capture_*_of_*.json")):
+                    p.unlink(missing_ok=True)
+            if ttnn.distributed_context_is_initialized():
+                ttnn.distributed_context_barrier()
 
-            config_path = report_path / "config.json"
+            if world_size > 1:
+                config_path = report_path / f"config_{rank+1}_of_{world_size}.json"
+            else:
+                config_path = report_path / "config.json"
             ttnn.save_config_to_json_file(config_path)
 
         if enable_detailed_buffer_report:
