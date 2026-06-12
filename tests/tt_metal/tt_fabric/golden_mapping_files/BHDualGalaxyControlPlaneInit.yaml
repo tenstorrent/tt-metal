@@ -1,6 +1,6 @@
 asic_to_fabric_node_mapping:
   hostnames:
-    - hostname: slurm-login_0
+    - hostname: g08blx03_cluster_descriptor.yaml
       mesh:
         - mesh: 1
         - chips:
@@ -260,7 +260,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 1
                 chip_id: 2
               asic_id: 17527977821468111180
-    - hostname: slurm-login_1
+    - hostname: g08blx04_cluster_descriptor.yaml
       mesh:
         - mesh: 0
         - chips:

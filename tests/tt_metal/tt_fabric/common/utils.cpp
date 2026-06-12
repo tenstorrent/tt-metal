@@ -494,6 +494,19 @@ void check_asic_mapping_against_golden(const std::string& test_name, const std::
                << ". This indicates the ControlPlane initialization did not generate the expected mapping file.";
     }
 
+    // Regolden mode (TT_METAL_REGOLDEN=1): overwrite the golden with this run's generated mapping instead of
+    // comparing. Only rank 0 (which produces rank_1's file) writes the golden, since the golden is rank 1's view
+    // and all ranks must produce identical mappings. See golden_mapping_files/README.md.
+    if (const char* regolden_env = std::getenv("TT_METAL_REGOLDEN");
+        regolden_env != nullptr && regolden_env[0] != '\0') {
+        if (rank == 0) {
+            std::filesystem::create_directories(golden_file.parent_path());
+            std::filesystem::copy_file(generated_file, golden_file, std::filesystem::copy_options::overwrite_existing);
+            log_info(tt::LogTest, "Regoldened {} -> {}", generated_file.string(), golden_file.string());
+        }
+        return;
+    }
+
     // If golden file doesn't exist, the test must fail - we need a golden file to compare against
     // This check ensures all tests have corresponding golden files and will fail immediately if missing
     if (!std::filesystem::exists(golden_file)) {

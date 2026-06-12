@@ -8,6 +8,18 @@ These golden files are used to verify that the ASIC mapping generation remains c
 
 ## Generating Golden Files
 
+### Bulk regolden (TT_METAL_REGOLDEN)
+
+To regenerate every golden that a run exercises in one pass, set `TT_METAL_REGOLDEN=1`. In this mode
+`check_asic_mapping_against_golden` overwrites each golden with the run's generated rank-1 mapping
+instead of comparing. Example (the full cpu-only driver):
+
+```bash
+TT_METAL_REGOLDEN=1 ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh
+```
+
+Always review `git diff` afterward (see step 3) and follow the approval requirement below before committing.
+
 **IMPORTANT**: Before regenerating golden files:
 1. Verify this is an intentional change, not a regression
 2. Get approval from topology users and scaleout team + Umair Cheema, Aditya Saigal, Allan Liu, Joseph Chu, Ridvan Song
