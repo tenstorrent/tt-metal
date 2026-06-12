@@ -9,6 +9,8 @@ description: Sweep and select TTNN model weight, activation, KV-cache, and CCL d
 
 This skill starts from a working optimized TTNN full model and chooses the fastest practical precision configuration that still meets a stated full-model accuracy bar. It is normally used after optimized full model and before vLLM so the serving adapter inherits a settled weight, activation, CCL, and KV-cache dtype policy.
 
+The selected precision artifact must be complete enough for later stages to consume mechanically. Include weight dtype groups, layer exceptions, compute fidelities, activation/residual dtype, CCL communication dtype, KV-cache dtype, logits/sampling dtype assumptions, and any loader/runtime flags needed to construct that exact policy. A selected config that only says "BFP8 weights" is incomplete.
+
 The expensive source of truth is full-model top-1/top-5 accuracy. Decoder-layer PCC and component timing are useful only for ordering candidates and debugging surprises.
 
 If the user does not provide an accuracy bar, use:
@@ -51,11 +53,12 @@ Teacher-forcing decode performance is valid only when the measured path uses tra
 
 Use this coarse search first. It usually finds most of the available win with a small number of full-model runs.
 
-1. Try BFP8 KV cache as a yes/no switch.
-2. Try BFP8 CCL or residual-transfer activations as a yes/no switch.
-3. Try BFP4 for all eligible inner-layer BFP8 matmuls, excluding the first and last layer by default.
-4. If full-model accuracy fails, restore the highest-risk groups first until top-1 and top-5 pass.
-5. Once a passing inner-layer config is found, optionally try extending the surviving choices to the first and last layer. Keep that only if full-model accuracy still passes.
+1. Evaluate the closest canonical performance and accuracy policies, if any.
+2. Try BFP8 KV cache as a yes/no switch.
+3. Try BFP8 CCL or residual-transfer activations as a yes/no switch.
+4. Try BFP4 for eligible MLP/expert matmul groups, excluding the first and last layer by default unless the canonical policy says otherwise.
+5. If full-model accuracy fails, restore the highest-risk groups first until top-1 and top-5 pass.
+6. Once a passing inner-layer config is found, optionally try extending the surviving choices to the first and last layer. Keep that only if full-model accuracy still passes.
 
 Restore-order example for dense MLP or MoE-style blocks:
 
@@ -67,6 +70,8 @@ Restore-order example for dense MLP or MoE-style blocks:
 This order is a heuristic, not a law, with the typically most-sensitive parts of the model being tried first. Adjust it for the model architecture, profiler evidence, and observed failures. For MLA, shared experts, unusual norm placement, gated attention, or fused projections, map the groups to the nearest semantic operation and record the mapping.
 
 When backing out a failed BFP4 trial, restore to BFP8 first unless BFP8 itself is known to be the failing precision for that tensor group.
+
+Note sometimes different datatypes require small semantic changes to the code. KV cache is a common example of this - `paged_fill_cache` requires tensors that are the same datatype as the cache but `paged_update_cache` requires update tensors in BF16/FLOAT32 even when the destination cache is e.g. BFP8. So when changing datatypes first run a quick one-decoder smoketest to check it works correctly and get that right before using it or rejecting it in a full model pareto sweep.
 
 ## MoE Policy
 
@@ -87,11 +92,13 @@ Every kept candidate must be validated with full-model accuracy. For each evalua
 
 - config id and precision config path;
 - weight dtype groups and layer ranges;
-- activation, CCL, and KV-cache dtype choices;
+- activation, residual, CCL, logits/sampling, and KV-cache dtype choices;
 - top-1, top-5, top-100, token count, and reference path;
 - TTFT, trace-verified decode t/s/u, and the evidence that the teacher-forcing decode path was traced;
 - whether this config passed the user-specified accuracy bar;
 - exact command, branch/commit, hardware, mesh, and environment notes.
+
+Always use trace-verified teacher-forcing decode t/s/u to rank datatype candidates - a non-traced path is not useful. If fully-traced decode is not working, use the $autofix skill until it is.
 
 ## Plots
 
@@ -114,7 +121,9 @@ Select the fastest config that satisfies the acceptance bar. If two configs are 
 
 Before finishing:
 
-- confirm the selected config is the model's default with a simple config change to return to the safe baseline setting;
+- make the selected config the model's default construction path, or write a required config artifact that `build_generator`, full-model, and vLLM paths actually consume by default;
+- keep a simple config change or override to return to the safe baseline setting;
 - run qualitative generation if the dtype changes are large or top-1 is close to the threshold - if this is bad then back off more changes until it is good;
+- add a short propagation check proving `build_generator` and the vLLM adapter load the same selected weight/activation/CCL/KV policy used by the winning sweep result.
 
 If no lower-precision config passes, keep the baseline and leave evidence that the sweep actually tested the likely wins.

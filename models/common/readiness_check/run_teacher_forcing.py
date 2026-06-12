@@ -114,9 +114,35 @@ def _run_one_entry(
     )
     end_s = time.perf_counter()
 
+    _require_full_teacher_forcing(
+        acc=acc,
+        entry_idx=entry_idx,
+        expected_tokens=n_steps,
+        callback_count=int(timing["callback_count"]),
+    )
+
     stats = acc.compute_accuracy(user_idx=entry_idx)
     stats.update(_compute_perf_stats(timing=timing, end_s=end_s, token_count=stats["total"]))
     return stats
+
+
+def _require_full_teacher_forcing(
+    *,
+    acc: TokenAccuracy,
+    entry_idx: int,
+    expected_tokens: int,
+    callback_count: int,
+) -> None:
+    predicted_tokens = acc.num_pred_tokens(entry_idx)
+    if predicted_tokens == expected_tokens and callback_count == expected_tokens:
+        return
+
+    raise RuntimeError(
+        f"Teacher-forcing run for entry[{entry_idx}] produced {predicted_tokens}/{expected_tokens} "
+        f"predictions via {callback_count} next_input callback(s). The readiness reference covers the "
+        "full generated length, so generate() must call next_input once per requested token and must not "
+        "stop early during teacher forcing."
+    )
 
 
 def _require_explicit_generate_kwarg(generator: Generator, name: str) -> None:

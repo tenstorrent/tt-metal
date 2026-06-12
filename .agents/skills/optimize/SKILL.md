@@ -9,19 +9,23 @@ This skill assumes you have some runnable TTNN code already with passing correct
 
 This guide does not explain how to make more efficient multi-device mesh layout decisions (e.g. mixtures of TP/DP/EP) but if you have multi-device TTNN code it will make every device run as fast as it can given the existing multi-device weight layout choices.
 
-Read the advice in `tech_reports/LLMs/llms.md`, particularly section 4 "Best practices and optimizations". In this skill we will strive to optimize *on-device* performance. For decode it is required to always measure the performance of a traced execution run; untraced/eager decode performance is not acceptable optimized evidence. Teacher-forcing decode must also use the traced path. If there are significant op/host gaps you can note them but you should still follow the steps below to optimize on-device performance. Always perform optimization using real model shapes, do not use reduced shapes!
+Read the advice in `tech_reports/LLMs/llms.md`, particularly section 4 "Best practices and optimizations". In this skill we will strive to optimize *on-device* performance. For decode it is required to always measure the performance of a traced execution run; untraced/eager decode performance is not acceptable optimized evidence. Teacher-forcing decode must also use the traced path. For complete model or serving paths, avoidable host gaps are part of the optimization target and must be removed rather than merely noted. Always perform optimization using real model shapes, do not use reduced shapes!
 
-When direct traced generator decode is already fast but vLLM/serving decode is slower, treat the gap as orchestration overhead before retuning decoder math. First audit the adapter/generator path for async decode split, nonblocking trace replay, on-device traced sampling, host readbacks, page-table/input refreshes, and fallback sampling. Keep same-harness serving before/after metrics and compare to the canonical implementation on the same machine when one exists.
+When direct traced generator decode is already fast but vLLM/serving decode is slower, treat the gap as orchestration overhead before retuning decoder math. First fix the adapter/generator path: async decode split, nonblocking trace replay, on-device traced sampling, host readbacks, page-table/input refreshes, and fallback sampling. Keep same-harness serving before/after metrics and compare to the canonical implementation on the same machine when one exists.
 
-A note on the term "sharding" - tt-metal uses this to mean two things. On-device sharding (e.g. L1-sharded activations, DRAM-sharded weights) are sharded across the cores/dram banks of a single device (which is a grid of cores). You should absolutely consider these as in-scope for this stage! Multi-chip sharding (e.g. with a mesh mapper) is about distributing tensors across multiple devices in a mesh. Any time tt-perf-report mentions sharding it is probably talking about on-device sharding and is in-scope for you.
+A note on the term "sharding" - tt-metal uses this to mean two things. On-device sharding means sharding across the cores or DRAM banks of one device, such as L1-sharded activations or DRAM-sharded weights. Multi-chip sharding means distributing tensors across devices in a mesh. On-device sharding is in scope for this skill. When `tt-perf-report` mentions sharding, it usually means on-device sharding.
 
-Profile warmed prefill and decode separately. Use `tt-perf-report` as a conversation with the hardware, not as an oracle: classify bottlenecks, try applicable advice, keep changes that improve the target without unacceptable correctness or complexity cost, and record why rejected advice was rejected. We'd like to improve tt-perf-report and its advice to be more useful so please call out potential improvements in your final report.
+Profile warmed prefill and decode separately. Use `tt-perf-report` to find bottlenecks and suggestions. Try applicable advice. Keep changes that improve the target without unacceptable correctness or complexity cost. Record why rejected advice was rejected. If advice seems wrong, incomplete, or misleading, call that out as a candidate improvement to `tt-perf-report`.
 
-For decoder or module-level optimization, tune precision and fidelity one group at a time so regressions can be assigned. For precision tuning always use real weights and recorded input activations; synthetic weights and activations are not representative enough to be a good signal. A common starting point is BF16 activations and norms, BFP8 attention/MLP weights, BFP8 KV cache if PCC allows it, and selective BFP4 trials for MLP/expert weights. After that follow tt-perf-report, read the kernels, explore and be methodically creative until you are satisfied we've got everything out of the hardware that we can without rewriting the ttnn ops themselves!
+For decoder or module-level optimization, import the closest canonical precision/fidelity policy before inventing one. In tt-metal, first inspect `models/tt_transformers/PERF.md`, `models/tt_transformers/tt/model_config.py`, and any model-specific decoder config artifacts for the same model or nearest architecture. Use the canonical performance policy as a required starting candidate, including selective tensor groups, KV-cache dtype, activation/residual/CCL dtypes, compute fidelities, and layer exceptions. For example, if the reference keeps the final layer at higher precision while using BFP4 only for FF1/FF3 elsewhere, implement that contract rather than trying a blunt global dtype.
 
-When optimizing a complete full model in the repo-local autonomous bringup flow, optimize the parts of the model outside the decoder as above, but you do not need to perform full-model datatype frontier selection here. There's a separate $datatype-sweep skill/pass to do that against top-1/top-5 accuracy. Keep this pass focused on full-model parallelism, tracing, sharding, data movement, program configs, compute-kernel configs, and removing host boundaries. Hand off a clean optimized baseline to `$datatype-sweep`, which owns final datatype frontier and follow-on compute-fidelity selection and expects you to have a strong initial baseline.
+Then tune precision and fidelity one group at a time so regressions can be assigned. For precision tuning always use real weights and recorded input activations; synthetic weights and activations are not representative enough to veto a canonical policy. A common fallback starting point, when no canonical policy exists, is BF16 activations and norms, BFP8 attention/MLP weights, BFP8 KV cache if PCC allows it, and selective BFP4 trials for MLP/expert weights.
 
-Before you finish, take another look over a current tt-perf-report output. Is everything optimized that can be optimized, or were some things left deferred? If so, now is the time to take a breath and then systematically address them. After all, there *is* no "deferred". We are the optimization pass. If we defer something, it will forever be left unfinished. Now is the time to reach for our goal of a decoder that comes as close to full hardware performance as we can within the bounds of ttnn's capabilities! If there are specific ttnn op limitations preventing performance optimizations call these out in your report, we want to continue to improve it.
+If a canonical policy fails in the generated code, debug the mismatch before discarding it. Check loader grouping, tensor layout, KV-cache update math, scale/transpose handling, and whether the validation harness is exercising the same full-model policy. For KV-cache precision, compare the exact reference cache shape and mapper, not just dtype. Local-head replicated caches, global-head sharded caches, page-table distribution, and `paged_fill_cache`/`paged_update_cache` input dtype restrictions are different contracts. Lower-precision cache fill should cast the prefill K/V fill tensors to the cache dtype before `paged_fill_cache`; decode update tensors should stay BF16/FLOAT32 for `paged_update_cache`.
+
+When optimizing a complete full model in the repo-local autonomous bringup flow, keep the main focus on full-model parallelism, tracing, sharding, data movement, program configs, compute-kernel configs, and removing host boundaries. `$datatype-sweep` owns the final accuracy/performance frontier, but this pass must still try targeted precision/fidelity changes when the measured full-model decode is materially below a credible target and the decoder-layer roofline says reduced precision could be the difference. Do not reject such work as "datatype sweep" by default. Try small, evidence-backed policies such as MLP gate/up BFP4, selected layer exceptions, KV/cache/CCL dtype changes, or compute-fidelity changes, then validate on the same traced full-model token-out path. Leave broad Pareto exploration to `$datatype-sweep`.
+
+Before finishing, review a current `tt-perf-report` output. If an applicable optimization remains untried, try it. If it fails, debug the failure. If a TTNN op or runtime limitation blocks the optimization, keep a small repro or exact failure evidence. Do not leave a known optimization for a later stage unless another skill explicitly owns it.
 
 Sometimes you will encounter a ttnn limitation or a bug. If, for example, you try an optimization and find that L1 buffers overlap (insufficient L1 space) do not take this as an excuse to give up on that optimization entirely. Instead, dive in to the code of the op and its shapes and configs and understand how you can reduce the L1 requirements in this part of the model. Or perhaps your specific shapes is not supported by the op and you need another one. Or the op does not support padding -> change the model contract so the tensors are manually padded in torch before conversion - all these things are in scope. If the failure crosses several ops, kernels, layouts, or planner/runtime boundaries and you are not making progress, use `$autofix`; it will run `$autodebug` if needed, then verify or refute each proposed bug before keeping any fix. Solve problems. Be curious. Be tenacious. Be creative. Be brilliant!
 
@@ -33,7 +37,7 @@ Every optimized decode result must reconcile three numbers from the same run:
 2. Device-time decode: per-token device time from your own signposted `tt-perf-report` window.
 3. End-to-end decode: warmed measured ms/token from the host.
 
-Report all three and attribute the gaps: end-to-end = device time + dispatch gap + host work. Every non-device term must be either optimized away or attributed to a named ttnn/runtime/API limitation with evidence. "The device math is fast but the loop is slow" is an unfinished optimization, not a result; a large unexplained gap between device time and end-to-end usually means an untraced path, per-step synchronization, host readback, or input-refresh overhead.
+Report all three and use the gaps to drive implementation work: end-to-end = device time + dispatch gap + host work. Remove avoidable non-device terms before accepting the result. "The device math is fast but the loop is slow" is an unfinished optimization, not a result; a large unexplained gap between device time and end-to-end usually means an untraced path, per-step synchronization, host readback, or input-refresh overhead. Only name a ttnn/runtime/API limitation after you have tried the targeted fix and have evidence that the limitation blocks the optimized path.
 
 The roofline fraction achieved varies legitimately by architecture - modules built from many small ops sit lower - so the explanation, not a fixed percentage, is the requirement. Name the limitations precisely; they feed the ttnn improvement backlog.
 
@@ -50,7 +54,21 @@ When optimizing a complete model or serving path, also write `doc/<stage>/perf_s
 }
 ```
 
-Report TTFT honestly in `perf_summary.json` even when prefill optimization is deferred by project policy; deferred is a recorded state, not a hidden one.
+## Full-Model Decode Closure
+
+For optimized full-model work, first compute a target budget from the best decoder-layer evidence:
+
+- `layer_stack_ms = sum(layer_count[kind] * optimized_multichip_decode_ms[kind])`;
+- `layer_stack_tps = 1000 / layer_stack_ms` for batch-1 single-user decode;
+- `full_model_overhead_ms = measured_full_model_ms_per_token - layer_stack_ms`.
+
+If the layer-stack estimate is already slower than the target, return to decoder optimization before spending time on generator orchestration. If the layer-stack estimate can meet the target but the full model cannot, optimize the overhead explicitly before changing the mathematical core: final norm, LM head, logits movement, sampling trace, token/current-position/RoPE/page-table refresh, trace replay blocking, synchronizations, host readbacks, cache management, and CCL buffer lifetime. For token/current-position/RoPE/page-table refresh specifically, the optimized steady-state loop should use persistent device tensors, `tt_out_tok` feedback, device-side position advance for fixed-step decode, and page-table copies only when the page table changes.
+
+The same measured path must be used for before/after comparisons. A teacher-forcing or device-logit replay number is useful, but it does not prove a token-out generator or vLLM path is fast unless it includes the same sampling and token-feedback work. Record both when they differ.
+
+If a decoder optimization was disabled in the full model because the stacked model hit L1, semaphore, trace, or CCL limits, do not accept the fallback as final until you have tried to reduce or pool that resource. Examples include persistent CCL buffers, output buffers, ring buffers, semaphores, trace input tensors, and page-table buffers. If it still cannot fit, record the exact allocation or runtime failure and the measured cost of the fallback.
+
+Preserve the multichip decoder's data-layout contract across the stack. If the decoder was optimized around a sharded/fractured residual stream, do not insert a layer-to-layer all-gather merely to simplify the full-model wrapper. Try the canonical fused collective/matmul or sharded-output pattern first and find a way to make the performant solution work. $autofix can help you if you are running into bugs here.
 
 ## Evidence To Leave
 
@@ -76,9 +94,9 @@ Final optimized evidence checklist - these items MUST be completed:
 -[ ] Fused matmul-CCL ops used where possible (or profiled and discarded with evidence).
 -[ ] For MoE models: optimized the routed active-expert path with `ttnn.sparse_matmul` where the model/hardware fits, following the GPT-OSS experts pattern for sparse gate/up/down projections, routing-score weighting, expert reduction, and no dense all-expert runtime path.
 -[ ] Reduced precision/fidelity experiments appropriate to this module-level optimization stage have been carried out and documented using real weights and input activations. For complete full-model top-k tuning, final datatype frontier selection is deferred to `$datatype-sweep`.
--[ ] Performance accounting reconciled: roofline estimate, device-time decode, and end-to-end decode reported from the same run with every gap attributed or named as a ttnn limitation; `perf_summary.json` written when optimizing a complete model or serving path.
+-[ ] Performance accounting reconciled: roofline estimate, device-time decode, and end-to-end decode reported from the same run; avoidable gaps optimized away, and any remaining gap named as a ttnn/runtime/API limitation only after a targeted fix attempt; `perf_summary.json` written when optimizing a complete model or serving path.
 
-If this checklist is not completed, take this as a sign that you should go back and perform those optimization steps to improve on-device performance. For this stage that is what we are most interested in optimizing; op/host gap will be reduced by tracing.
+If this checklist is not completed, go back and perform those optimization steps. For decoder/module-level work the main focus is on-device performance. For complete model and serving work, host orchestration, synchronizations, readbacks, and input-refresh overhead are also in scope and must be driven out of the measured path where the runtime contract allows it.
 
 # Useful Optimization Knowledge
 
@@ -111,7 +129,7 @@ Use this reference while optimizing functional TTNN code. It captures repo-local
 
 - Decode matmuls with small activations and large weights are usually DRAM-bound. Use `ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig`.
 - Prefill matmuls with large M and N are usually compute-bound. Use `ttnn.MatmulMultiCoreReuseMultiCastProgramConfig` over a large 2D grid.
-- `in0_block_w` should be at least 2 when possible and must divide the tiled K dimension. Higher is usually better until L1 pressure or correctness fails. There can be a trade-off between the number of cores for shard spec and the value of `in0_block_w` - if you end up in the case where the only valid `in0_block_w` is `1` then definitely consider using a different number of cores to allow an `in0_block_w` of `2`, even if this means fewer cores. Note that for dram-sharded matmuls the number of compute cores is always fixed (12 on wormhole for example) regardless of the input/output shard spec core counts, which can give you more flexibility than you would otherwise assume. This setting is so important for matmul performance that it can even be worth padding the weights (although changing the shard spec is probably prefereable to that).
+- `in0_block_w` should be at least 2 when possible and must divide the tiled K dimension. Higher is usually better until L1 pressure or correctness fails. If the only valid `in0_block_w` is 1, try a different shard-spec core count that allows 2, even if it uses fewer cores. For DRAM-sharded matmuls, the compute core count is fixed by the op, so the input/output shard grid may be more flexible than it first appears. Padding weights can be worth trying when it enables a better block size, but changing the shard spec is usually preferable.
 - Output subblock size should usually be at least `2x1` or `1x2` when legal.
 - If any `in0_block_w` or output subblock sizes are <2 for a matmul that is a non-trivial percentage of the runtime, call them out explicity in your final output summary and list the exhaustive set of things you tried to enable a value >=2 and why they failed.
 - If an op runs out of L1, first try to increase the core count. If that's not possible, reduce `in0_block_w`, `out_subblock_h`, or `out_subblock_w` and see which combination preserves the most performance whilst avoiding the L1 OOM issue.
@@ -120,7 +138,7 @@ Use this reference while optimizing functional TTNN code. It captures repo-local
 ## Precision And Fidelity
 
 - Start optimized decoder with BF16 activations and BFP8 weights. Keep norms BF16.
-- Try BFP8 KV cache. Keep it if PCC remains above threshold and perf/memory improve.
+- Try BFP8 KV cache. Keep it if PCC remains above threshold and perf/memory improve. If it fails while a canonical implementation uses BFP8 KV correctly, inspect the prefill fill-cache dtype path first: cache-fill tensors should be explicitly typecast to the cache dtype, while decode `paged_update_cache` inputs should remain BF16/FLOAT32.
 - Try BFP4 for MLP FF1/FF3; these often tolerate BFP4 well.
 - Try BFP4 for FF2/down-projection, but expect it to be more sensitive. Fall back based on PCC evidence, not preference.
 - For BFP8 weights, HiFi2 is the normal starting point. LoFi may work but needs PCC evidence.
@@ -219,7 +237,7 @@ Check time units before computing latency. Filtered `tt-perf-report` CSVs may ex
 
 For every actionable `tt-perf-report` recommendation:
 
-- try it. If there is a good reason to reject it, call this out in your summary output - we want to improve tt-perf-report's recommendations;
+- try it. If there is a good reason to reject it, record the reason;
 - record before/after latency, PCC, and any watcher or correctness issue;
 - keep it if it improves the target metric without unacceptable PCC or complexity;
 - reject it only with evidence, then continue optimizing the rest of the decoder.
