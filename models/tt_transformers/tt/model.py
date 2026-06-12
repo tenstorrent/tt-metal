@@ -16,6 +16,7 @@ from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.embedding import Embedding, ScaledEmbedding
 from models.tt_transformers.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import TensorGroup
+from models.tt_transformers.tt.prefetcher import colocating_prefetcher
 from models.tt_transformers.tt.rope import HfRotarySetup, RotarySetup
 
 
@@ -65,7 +66,7 @@ class Transformer(LightweightModule):
         ActualRopeSetupClass = rope_setup_class if rope_setup_class is not None else DefaultRopeSetup
         # Only the worker-core backend co-locates rope on its grid; the DRAM-core backend uses
         # the default rope placement.
-        rope_prefetcher = prefetcher if (prefetcher is not None and prefetcher.colocate_ops) else None
+        rope_prefetcher = colocating_prefetcher(prefetcher)
         self.rope_setup = ActualRopeSetupClass(
             device=mesh_device,
             batch_size=args.max_batch_size,
@@ -932,7 +933,7 @@ class Transformer(LightweightModule):
         if get_last_token != -1:
             x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
 
-        lm_head_prefetcher = self.prefetcher if (self.prefetcher is not None and self.prefetcher.colocate_ops) else None
+        lm_head_prefetcher = colocating_prefetcher(self.prefetcher)
 
         # Output norm
         x = self.norm(x, mode=mode, norm_config=self.args.get_norm_config("lm_head", mode, lm_head_prefetcher))

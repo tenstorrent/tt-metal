@@ -96,6 +96,18 @@ def make_prefetcher(
     return Prefetcher(mesh_device, num_tensors, num_layers, num_receiver_cores=num_receiver_cores)
 
 
+def colocating_prefetcher(prefetcher):
+    """Return ``prefetcher`` only when it co-locates ops on the worker grid, else ``None``.
+
+    Backends that drive weights from a separate grid (DRAM-core) report
+    ``colocate_ops=False``; ops keyed off the returned value then fall back to their
+    default (non-prefetcher) placement. Single source for the "does this prefetcher
+    place ops on the worker grid" check that model.py / model_config.py / attention.py /
+    lm_head.py would otherwise each spell out inline.
+    """
+    return prefetcher if (prefetcher is not None and prefetcher.colocate_ops) else None
+
+
 def to_core_range_set(cores: List, return_list: bool = False) -> Union[ttnn.CoreRangeSet, List[ttnn.CoreRangeSet]]:
     """Convert cores (CoreCoord/CoreRange/CoreRangeSet, or a list thereof) to CoreRangeSet(s).
 

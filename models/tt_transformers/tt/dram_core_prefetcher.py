@@ -28,6 +28,18 @@ from models.tt_transformers.tt.recv_contig_layout import recv_contig_mem_config
 from models.tt_transformers.tt.recv_contig_layout import ring_pos_coord as _ring_pos_coord
 
 
+def gcb_block_bytes(k_tiles: int, per_core_n_tiles: int, ring_size: int, tile_bytes: int) -> int:
+    """Per-receiver GCB block footprint (bytes) for one gather_in0 matmul weight.
+
+    The matmul splits ``in0_block_w`` to ``k_tiles / ring_size``; each receiver holds one
+    ``(k_tiles/ring_size, per_core_N)`` tile block. The full GCB ring holds ``ring_size`` such
+    blocks. Single source for the arithmetic shared by the support gate
+    (:func:`is_dram_core_prefetcher_supported`) and the builder
+    (:meth:`DramCorePrefetcher._build_global_cb`), so the pre-check and the allocation can't drift.
+    """
+    return (k_tiles // ring_size) * per_core_n_tiles * tile_bytes
+
+
 def is_dram_core_prefetcher_supported(
     model_name: str, num_devices: int, num_dram_banks: int, recv_per_bank: int
 ) -> bool:
@@ -91,7 +103,7 @@ def is_dram_core_prefetcher_supported(
     # wo_in_per_dev). The op_shapes WO entry below uses (wo_in_per_dev, dim); divisibility holds
     # because BOTH dim and wo_in_per_dev are checked above, and the L1 footprint is symmetric in
     # K and N (k_tiles * n_total_tiles / ring), so the order is immaterial for this check. A
-    # multi-row mesh (cluster_shape[0] > 1) is not validated here; recv_contig_weight_mem_config's
+    # multi-row mesh (cluster_shape[0] > 1) is not validated here; weight_mem_config's
     # `n % ring_size == 0` assert and _build_global_cb's K-divisibility assert catch a mismatch
     # cleanly at allocation time rather than corrupting silently.
     op_shapes = [
@@ -103,10 +115,8 @@ def is_dram_core_prefetcher_supported(
     for k_dim, n_dim in op_shapes:
         k_tiles = k_dim // TILE
         n_tiles_per_recv = (n_dim // TILE) // ring_size  # already int-divisible by check above
-        # Same arithmetic as DramCorePrefetcher._build_global_cb:
-        # num_blocks=ring_size, in1_block=(k_tiles/ring) * n_tiles_per_recv * tile_bytes.
-        # Per-receiver footprint = num_blocks * in1_block.
-        per_recv_bytes = ring_size * (k_tiles // ring_size) * n_tiles_per_recv * BYTES_PER_TILE_BFP8
+        # Per-receiver footprint = num_blocks (=ring_size) * one block, bfloat8_b being the largest.
+        per_recv_bytes = ring_size * gcb_block_bytes(k_tiles, n_tiles_per_recv, ring_size, BYTES_PER_TILE_BFP8)
         if per_recv_bytes > L1_BUDGET:
             return False
     return True
@@ -371,21 +381,15 @@ class DramCorePrefetcher(LightweightModule):
         Returns the receiver-contiguous DRAM layout this backend requires, except on galaxy/TG
         meshes (the recv-contig path is not supported there) where it falls back to ``default``.
         Lets MLP/attention call ``prefetcher.weight_mem_config(...)`` without branching on backend.
+
+        The recv-contig layout allocates the weight as an NdShardSpec with ``num_shards =
+        ring_size`` (over-subscribed relative to the ``num_senders`` DRAM banks) distributed
+        round-robin, each shard ``(K, N // ring_size)``. Paired with the strided GCB topology,
+        shard r (columns [r*n_per_recv, (r+1)*n_per_recv)) is delivered to ring position r —
+        exactly the weight slice the gather_in0 matmul's ring core r consumes.
         """
         if is_galaxy:
             return default
-        return self.recv_contig_weight_mem_config(k, n)
-
-    def recv_contig_weight_mem_config(self, k: int, n: int) -> ttnn.MemoryConfig:
-        """Receiver-contiguous DRAM memory config for a prefetched (K, N) weight.
-
-        Allocates the weight as an NdShardSpec with ``num_shards = ring_size`` (over-subscribed
-        relative to the ``num_senders`` DRAM banks) distributed round-robin, each shard
-        ``(K, N // ring_size)``. Paired with the strided GCB topology, shard r (columns
-        [r*n_per_recv, (r+1)*n_per_recv)) is delivered to ring position r — exactly the weight
-        slice the gather_in0 matmul's ring core r consumes. Callers allocate prefetched weights
-        with this config when the DRAM-core backend is active (mlp.py / attention.py).
-        """
         return recv_contig_mem_config(k, n, self.ring_size, self.num_senders)
 
     def dynamic_worker_core_grid(self, num_cores: int) -> ttnn.CoreRangeSet:
@@ -435,15 +439,15 @@ class DramCorePrefetcher(LightweightModule):
         max_in1_block_size = 0
         for tensor, pc in zip(self.prefetched_tensors, self.prefetched_program_configs):
             tile_bytes = TILE_BYTES[tensor.dtype]
-            # gather_in0 matmul uses actual_in0_block_w = weight_K_tiles / ring_size, NOT pc.in0_block_w.
+            # gather_in0 matmul splits in0_block_w to weight_K_tiles / ring_size, NOT pc.in0_block_w
+            # (see gcb_block_bytes).
             weight_K = tensor.shape[-2]
             weight_K_tiles = weight_K // ttnn.TILE_SIZE
             assert weight_K_tiles % self.ring_size == 0, (
                 f"Weight K_tiles {weight_K_tiles} must be divisible by ring_size {self.ring_size}; "
                 "this should have been caught by is_dram_core_prefetcher_supported."
             )
-            actual_in0_block_w = weight_K_tiles // self.ring_size
-            in1_block_size = actual_in0_block_w * pc.per_core_N * tile_bytes
+            in1_block_size = gcb_block_bytes(weight_K_tiles, pc.per_core_N, self.ring_size, tile_bytes)
             max_in1_block_size = max(max_in1_block_size, in1_block_size)
             logger.info(
                 f"[DramCorePrefetcher] tensor K={weight_K} N_per_core={pc.per_core_N} tile_bytes={tile_bytes} "
