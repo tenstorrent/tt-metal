@@ -120,10 +120,20 @@ def test_pipeline_distilled(
 
     prompt = os.environ.get("PROMPT", DEFAULT_LTX_PROMPT)
 
+    image_path = os.environ.get("LTX_I2V_IMAGE")
+    images = None
+    if image_path:
+        if not os.path.exists(image_path):
+            pytest.skip(f"LTX_I2V_IMAGE set but file not found: {image_path}")
+        strength = float(os.environ.get("LTX_I2V_STRENGTH", "1.0"))
+        images = [(image_path, 0, strength)]
+
     def run(*, prompt, number, seed):
         output_filename = os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{number}.mp4")
         logger.info(f"Running LTX AV Fast: '{prompt[:80]}...'")
         logger.info(f"Config: {height}x{width}, {num_frames} frames")
+        if images:
+            logger.info(f"I2V: conditioning image {images[0][0]} (strength={images[0][2]})")
 
         if int(ttnn.distributed_context_get_rank()) != 0:
             logger.info(f"Skipping generation on rank {ttnn.distributed_context_get_rank()}")
@@ -132,6 +142,7 @@ def test_pipeline_distilled(
         pipeline.generate(
             prompt,
             output_path=output_filename,
+            images=images,
             num_frames=num_frames,
             height=height,
             width=width,
