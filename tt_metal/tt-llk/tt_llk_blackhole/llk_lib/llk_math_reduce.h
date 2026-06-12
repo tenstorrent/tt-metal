@@ -30,14 +30,33 @@ inline void reduce_row_perform_transpose()
 {
     if (enforce_fp32_accumulation)
     {
-        TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
         TTI_TRNSPSRCB;
-        TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
 
         TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 0, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 0);
         TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 4, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 4);
         TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 8, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 8);
         TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 12, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 12);
+
+        TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_0, 0);
+        TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_0, 4);
+        TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::FP32, ADDR_MOD_0, 8);
+        TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::FP32, ADDR_MOD_0, 12);
+
+        TTI_SFPSHFT(16, 0, p_sfpu::LREG4, 1);
+        TTI_SFPSHFT(16, 0, p_sfpu::LREG5, 1);
+        TTI_SFPSHFT(16, 0, p_sfpu::LREG6, 1);
+        TTI_SFPSHFT(16, 0, p_sfpu::LREG7, 1);
+
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_0, 0);
+        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_0, 4);
+        TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::FP32, ADDR_MOD_0, 8);
+        TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::FP32, ADDR_MOD_0, 12);
+
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
 
         TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
         TTI_TRNSPSRCB;
@@ -50,10 +69,10 @@ inline void reduce_row_perform_transpose()
 
         TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
 
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_0, 0);
-        TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_0, 4);
-        TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::FP32, ADDR_MOD_0, 8);
-        TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::FP32, ADDR_MOD_0, 12);
+        TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::FP32, ADDR_MOD_0, 0);
+        TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::FP32, ADDR_MOD_0, 4);
+        TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::FP32, ADDR_MOD_0, 8);
+        TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::FP32, ADDR_MOD_0, 12);
 
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
 
@@ -62,15 +81,20 @@ inline void reduce_row_perform_transpose()
 
         TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
 
-        TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, 0);
-        TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, 4);
-        TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, 8);
-        TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, 12);
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_0, 0);
+        TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_0, 4);
+        TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::FP32, ADDR_MOD_0, 8);
+        TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::FP32, ADDR_MOD_0, 12);
 
-        TTI_SFPSHFT(0xFEA, 0, p_sfpu::LREG4, 1);
-        TTI_SFPSHFT(0xFEA, 0, p_sfpu::LREG5, 1);
-        TTI_SFPSHFT(0xFEA, 0, p_sfpu::LREG6, 1);
-        TTI_SFPSHFT(0xFEA, 0, p_sfpu::LREG7, 1);
+        TTI_SFPSHFT(0xfe3, 0, p_sfpu::LREG4, 1);
+        TTI_SFPSHFT(0xfe3, 0, p_sfpu::LREG5, 1);
+        TTI_SFPSHFT(0xfe3, 0, p_sfpu::LREG6, 1);
+        TTI_SFPSHFT(0xfe3, 0, p_sfpu::LREG7, 1);
+
+        TTI_SFPSHFT(0xa, 0, p_sfpu::LREG4, 1);
+        TTI_SFPSHFT(0xa, 0, p_sfpu::LREG5, 1);
+        TTI_SFPSHFT(0xa, 0, p_sfpu::LREG6, 1);
+        TTI_SFPSHFT(0xa, 0, p_sfpu::LREG7, 1);
 
         TTI_SFPOR(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
         TTI_SFPOR(0, p_sfpu::LREG5, p_sfpu::LREG1, 0);
@@ -204,18 +228,6 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
         }
 
         TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_BD);
-
-        if constexpr (enforce_fp32_accumulation)
-        {
-            if (tensor_shape.num_faces_c_dim > 1)
-            {
-                TT_ZEROACC(p_zeroacc::CLR_16, 1, 0, ADDR_MOD_0, get_dest_index_in_faces(dst_index, 1));
-                if (tensor_shape.num_faces_r_dim > 1)
-                {
-                    TT_ZEROACC(p_zeroacc::CLR_16, 1, 0, ADDR_MOD_0, get_dest_index_in_faces(dst_index, 3));
-                }
-            }
-        }
     }
     else if constexpr (dim == ReduceDim::REDUCE_COL)
     {
