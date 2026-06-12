@@ -182,6 +182,8 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         }
     }
 
+    reconfig_data_format_srca(cb_interm_pre_add, cb_ex_welford);
+
     cb_ex_obj.wait_front(1);
     cb_ex2_obj.wait_front(1);
     if constexpr (welford_state_fp32_alias) {
@@ -190,10 +192,7 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     }
     tile_regs_acquire();
     // Final reload before welford_finalize_to_row: same fp32-via-Dst rationale as the
-    // per-block reload above. The per-block loop exits with SrcA configured for
-    // cb_interm_pre_add (the last transpose_wh_init_short input), so reconfigure SrcA
-    // for cb_ex_welford here to satisfy the unpacker's pre-init self-check.
-    reconfig_data_format_srca(cb_interm_pre_add, cb_ex_welford);
+    // per-block reload above.
     copy_tile_init(cb_ex_welford);
     copy_tile(cb_ex_welford, 0, mean_dst);
     copy_tile_to_dst_init_short_with_dt(cb_ex_welford, cb_ex2_welford);
