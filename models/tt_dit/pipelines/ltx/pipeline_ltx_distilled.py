@@ -29,6 +29,21 @@ class LTXDistilledPipeline(LTXPipeline):
     """Distilled 2-stage AV pipeline: half-res denoise → upsample → full-res refine."""
 
     HAS_UPSAMPLER = True
+    SUPPORTS_IMAGE_CONDITIONING = True
+
+    @staticmethod
+    def _pin_i2v_latent_tt(
+        video_lat: ttnn.Tensor,
+        denoise_mask: ttnn.Tensor,
+        clean_latent: ttnn.Tensor,
+    ) -> None:
+        """In-place frame-0 pin: ``lat = lat * mask + clean * (1 - mask)``."""
+        one_minus = ttnn.subtract(
+            ttnn.full_like(denoise_mask, 1.0, dtype=ttnn.bfloat16),
+            denoise_mask,
+        )
+        pinned = ttnn.add(ttnn.multiply(video_lat, denoise_mask), ttnn.multiply(clean_latent, one_minus))
+        ttnn.copy(pinned, video_lat)
 
     def warmup_buffers(
         self,
@@ -71,6 +86,7 @@ class LTXDistilledPipeline(LTXPipeline):
 
         if "s1" in stages:
             s1_h, s1_w = height // 2, width // 2
+
             logger.info(f"warmup stage 1: {s1_h}x{s1_w}, σ={s1_sigmas}")
             self._denoise_no_guidance(
                 v_p,
@@ -124,7 +140,14 @@ class LTXDistilledPipeline(LTXPipeline):
 
             self._prepare_transformer(0)
 
-        # Warm the encoder last: it coresident-evicts the DiT/VAE, so gen #0 then re-loads the DiT.
+        # Warm the encoders last: they coresident-evict the DiT/VAE, so gen #0 then re-loads the DiT.
+        # The VAE image encoder is warmed here (not before the denoise warmups) for the same reason:
+        # running it evicts the transformer weights, which the denoise steps above still need resident.
+        if self.vae_encoder is not None and os.environ.get("LTX_I2V_IMAGE"):
+            logger.info(f"warmup image encoder: {height // 2}x{width // 2} + {height}x{width}")
+            self._warmup_encode(height // 2, width // 2)
+            self._warmup_encode(height, width)
+
         # use_cache=False forces a real encode so the Gemma/connector kernels actually compile.
         self.gemma_encoder_pair.ensure_loaded()
         self.encode_prompts(["warmup"], use_cache=False)
@@ -232,6 +255,8 @@ class LTXDistilledPipeline(LTXPipeline):
         seed: int,
         initial_video_latent: torch.Tensor | None = None,
         initial_audio_latent: torch.Tensor | None = None,
+        image_cond_latent: torch.Tensor | None = None,
+        image_cond_strength: float = 1.0,
         traced: bool = False,
         trace_key: str | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -247,6 +272,23 @@ class LTXDistilledPipeline(LTXPipeline):
         audio_N = self._sp_pad_len(audio_N_real)
         sp_factor = self.parallel_config.sequence_parallel.factor
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
+
+        image_cond = image_cond_latent is not None
+        needs_video_ts = getattr(self.transformer, "image_conditioning", False)
+        denoise_mask = None
+        clean_latent = None
+        n_cond = 0
+        if image_cond or needs_video_ts:
+            denoise_mask = torch.ones(B, video_N_real, 1)
+            if image_cond:
+                cond = image_cond_latent.float()
+                cond_tokens = cond.permute(0, 2, 3, 4, 1).reshape(B, -1, self.in_channels)
+                n_cond = cond_tokens.shape[1]
+                assert n_cond <= video_N_real, f"image cond tokens {n_cond} exceed video tokens {video_N_real}"
+                clean_latent = torch.zeros(B, video_N_real, self.in_channels)
+                clean_latent[:, :n_cond, :] = cond_tokens
+                denoise_mask[:, :n_cond, :] = 1.0 - image_cond_strength
+                logger.info(f"I2V: pinning {n_cond} frame-0 tokens (strength={image_cond_strength})")
 
         logger.info(f"  shapes: vN={video_N}(real={video_N_real}), aN={audio_N}(real={audio_N_real}) [sp={sp_factor}]")
 
@@ -277,7 +319,21 @@ class LTXDistilledPipeline(LTXPipeline):
         sigmas = torch.tensor(sigma_values, dtype=torch.float32)
 
         # ----- Video latent init (always end up with shape (B, video_N, C)) -----
-        if initial_video_latent is not None:
+        if image_cond:
+            ns = sigmas[0].item()
+            torch.manual_seed(seed)
+            if initial_video_latent is not None:
+                base_v = initial_video_latent.float()
+                if base_v.dim() == 2:
+                    base_v = base_v.unsqueeze(0)
+                base_v = base_v.clone()
+            else:
+                base_v = torch.zeros(B, video_N_real, self.in_channels)
+            base_v[:, :n_cond, :] = clean_latent[:, :n_cond, :]
+            noise_v = torch.randn_like(base_v)
+            scaled_mask = denoise_mask * ns
+            video_lat_real = noise_v * scaled_mask + base_v * (1.0 - scaled_mask)
+        elif initial_video_latent is not None:
             # Stage-2 path: upsampled latent comes in at (B, video_N_real, C).
             video_lat_real = initial_video_latent.float()
             assert video_lat_real.shape[1] == video_N_real, (
@@ -324,17 +380,58 @@ class LTXDistilledPipeline(LTXPipeline):
             audio_lat.unsqueeze(0), traced, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device
         )
 
+        tt_i2v_mask = tt_i2v_clean = None
+        if image_cond:
+            mask_host = torch.ones(1, 1, video_N, self.in_channels)
+            mask_host[:, :, :video_N_real, :] = denoise_mask[0, :, 0].unsqueeze(-1).expand(-1, self.in_channels)
+            clean_host = torch.zeros(1, 1, video_N, self.in_channels)
+            clean_host[:, :, :video_N_real, :] = clean_latent
+            tt_i2v_mask = bf16_tensor(
+                mask_host,
+                device=self.mesh_device,
+                mesh_axis=sp_axis,
+                shard_dim=-2,
+            )
+            tt_i2v_clean = bf16_tensor(
+                clean_host,
+                device=self.mesh_device,
+                mesh_axis=sp_axis,
+                shard_dim=-2,
+            )
+
         for step_idx in range(num_steps):
             sigma = sigmas[step_idx].item()
             sigma_next = sigmas[step_idx + 1].item()
             state._tt_timestep.update(
                 torch.tensor([sigma]).reshape(1, 1, B, 1) * 1000.0, traced, device=self.mesh_device
             )
+            video_ts_pair_tt = video_pin_mask_tt = None
+            if needs_video_ts:
+                # The per-token video timestep has just two distinct values: pinned frame-0 tokens
+                # at pinned_ts, everything else at sigma. Pass the (2,) pair + a {0,1} pin mask so the
+                # transformer evaluates AdaLN on only those two timesteps and blends per token —
+                # this avoids the dense per-token modulation + its tile-padded reshape (OOM at full res).
+                pinned_scale = (1.0 - image_cond_strength) if (image_cond and n_cond > 0) else 1.0
+                ts_pair = torch.tensor([pinned_scale * sigma, sigma], dtype=torch.float32)
+                state._tt_video_ts_pair.update(ts_pair.reshape(1, 1, 2, 1) * 1000.0, traced, device=self.mesh_device)
+                pin_mask_host = torch.zeros(1, 1, video_N, 1)
+                if n_cond > 0:
+                    pin_mask_host[:, :, :n_cond, :] = 1.0
+                state._tt_video_pin_mask.update(
+                    pin_mask_host,
+                    traced,
+                    mesh_axes=[None, None, sp_axis, None],
+                    device=self.mesh_device,
+                )
+                video_ts_pair_tt = state.tt_video_ts_pair
+                video_pin_mask_tt = state.tt_video_pin_mask
             # video_N is the LOGICAL (unpadded) count, forwarded as logical_n so ring SDPA masks
             # padded K positions.
             v_out, a_out = self.transformer.inner_step(
                 video_1BNI=state.tt_video_lat,
                 timestep=state.tt_timestep,
+                video_ts_pair=video_ts_pair_tt,
+                video_pin_mask=video_pin_mask_tt,
                 audio_1BNI=state.tt_audio_lat,
                 video_prompt_1BLP=prompt_v,
                 video_rope_cos=state.tt_video_rope_cos,
@@ -369,6 +466,8 @@ class LTXDistilledPipeline(LTXPipeline):
             ttnn.multiply_(v_vel, dt)
             ttnn.add_(state.tt_video_lat, v_vel)
             ttnn.multiply_(state.tt_video_lat, state.tt_video_pad_mask)
+            if image_cond:
+                self._pin_i2v_latent_tt(state.tt_video_lat, tt_i2v_mask, tt_i2v_clean)
             a_vel = ttnn.typecast(a_out, ttnn.bfloat16)
             ttnn.multiply_(a_vel, state.tt_audio_pad_mask)
             ttnn.multiply_(a_vel, dt)
@@ -455,6 +554,8 @@ class LTXDistilledPipeline(LTXPipeline):
         prompt: str,
         *,
         output_path: str,
+        # I2V: list of (image_path, frame_idx, strength). Only frame_idx==0 is supported.
+        images: list[tuple[str, int, float]] | None = None,
         num_frames: int = 121,
         height: int = 512,
         width: int = 768,
@@ -483,6 +584,24 @@ class LTXDistilledPipeline(LTXPipeline):
         timings.append(("Encoder (cache)" if cached else "Encoder", t_encode))
         logger.info(f"Encoding ({'cache' if cached else 'device'}): {t_encode:.1f}s")
 
+        s1_cond_latent = full_cond_latent = None
+        cond_strength = 1.0
+        if images:
+            cond_imgs = [img for img in images if img[1] == 0]
+            if len(cond_imgs) != len(images):
+                logger.warning("Distilled I2V only supports frame_idx==0 conditioning; ignoring keyframe images")
+            if cond_imgs:
+                assert self.vae_encoder is not None, "checkpoint has no VAE encoder; cannot run I2V conditioning"
+                img_path, _, cond_strength = cond_imgs[0]
+                logger.info(f"I2V: encoding conditioning image {img_path} (strength={cond_strength})")
+                t0 = time.time()
+                img_s1 = self._load_conditioning_image(img_path, s1_height, s1_width)
+                img_full = self._load_conditioning_image(img_path, height, width)
+                s1_cond_latent = self.encode_image(img_s1)
+                full_cond_latent = self.encode_image(img_full)
+                timings.append(("Image encode", time.time() - t0))
+                logger.info(f"Image encode: {time.time() - t0:.1f}s")
+
         t0 = time.time()
         self._prepare_transformer(0)
         if self.dynamic_load:
@@ -498,6 +617,8 @@ class LTXDistilledPipeline(LTXPipeline):
             width=s1_width,
             sigma_values=DISTILLED_SIGMA_VALUES,
             seed=seed,
+            image_cond_latent=s1_cond_latent,
+            image_cond_strength=cond_strength,
             traced=self._traced,
             trace_key="s1",
         )
@@ -537,6 +658,8 @@ class LTXDistilledPipeline(LTXPipeline):
             seed=seed,
             initial_video_latent=upsampled_flat,
             initial_audio_latent=s1_audio.unsqueeze(0) if s1_audio.dim() == 2 else s1_audio,
+            image_cond_latent=full_cond_latent,
+            image_cond_strength=cond_strength,
             traced=self._traced,
             trace_key="s2",
         )
