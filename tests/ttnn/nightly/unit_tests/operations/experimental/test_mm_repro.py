@@ -88,10 +88,15 @@ def test_mm_repro(device):
     # baseline: pure unicast (== main). Disable the branch-only DRAM levers, then sweep blocks.
     os.environ["TT_MM_NO_LARGE_LEVERS"] = "1"
     Mt, Kt, Nt = math.ceil(M / 32), math.ceil(K / 32), math.ceil(N / 32)
-    # Per-core tile estimate for block seeding (M over rows=gy, N over cols=gx). Seeds only; the
-    # blocks-per-core sweep covers a range, so the exact axis assignment isn't critical.
-    M_pc = max(1, math.ceil(Mt / gy))
-    N_pc = max(1, math.ceil(Nt / gx))
+    # Per-core tile estimate for block seeding. The factory TRANSPOSES the core grid when M>N
+    # (program_factory.cpp): M is then parallelized over grid.x and N over grid.y (else M->gy, N->gx).
+    # On a square grid (WH 8x8) the swap is invisible, but on a non-square grid (Blackhole) seeding off
+    # the wrong axis mis-centers the candidate blocks for every M>N shape, so mirror the transpose here.
+    transpose = M > N
+    m_axis_cores = gx if transpose else gy
+    n_axis_cores = gy if transpose else gx
+    M_pc = max(1, math.ceil(Mt / m_axis_cores))
+    N_pc = max(1, math.ceil(Nt / n_axis_cores))
     bpc_m = [int(x) for x in os.environ.get("FC_BPCM", "1,2,4,8").split(",")]
     bpc_n = [int(x) for x in os.environ.get("FC_BPCN", "1,2,4,8").split(",")]
     kbs = [k for k in (int(x) for x in os.environ.get("FC_KBS", "4,8,16,32").split(",")) if k <= Kt]

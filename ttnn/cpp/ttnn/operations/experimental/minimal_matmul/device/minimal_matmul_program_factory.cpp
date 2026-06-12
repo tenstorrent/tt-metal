@@ -238,6 +238,12 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
      * Large input DM always runs on RISCV_0, NOC_0
      */
 
+    // Blackhole's larger grid (e.g. 11x10 = 110 cores vs WH 8x8 = 64) gives much smaller per-core M/N
+    // tile counts, which flips the block-sizing optimum from "reuse" (big blocks, K=8, fewest blocks —
+    // best on WH) to "pipelining" (even-dividing smaller blocks + finer K). The block sizer and K default
+    // below branch on this; see minimal_matmul_blackhole_heuristic_analysis.md.
+    const bool is_blackhole = device->arch() == tt::ARCH::BLACKHOLE;
+
     auto small_input_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     auto small_input_risc = tt::tt_metal::DataMovementProcessor::RISCV_1;
     auto large_input_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
@@ -273,7 +279,14 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             const double r = std::sqrt(static_cast<double>(mx) / static_cast<double>(mn));
             uint32_t best = 1;
             double best_dist = std::abs(1.0 - r);
+            // Only consider slice counts that are a power of 2 AND divide grid.y (the TT_FATAL below
+            // requires both). On a power-of-2 grid (WH 8x8) every power-of-2 c<=grid.y divides it, but on
+            // a non-power-of-2 grid (Blackhole grid.y=10) candidates like 4/8 don't divide grid.y and
+            // would trip the assert -> only 1,2 are legal. Skip the indivisible ones here.
             for (uint32_t c = 2; c <= grid_size.y; c *= 2) {
+                if (grid_size.y % c != 0) {
+                    continue;
+                }
                 const double d = std::abs(static_cast<double>(c) - r);
                 if (d < best_dist) {
                     best_dist = d;
@@ -325,10 +338,27 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
      */
     uint32_t padded_M_tiles = tt::round_up(M_tiles, in0_parallel_axis_cores);
     uint32_t padded_N_tiles = tt::round_up(N_tiles, in1_parallel_axis_cores);
-    uint32_t padded_K_tiles = tt::round_up(K_tiles, K_block_tiles);
 
     uint32_t M_tiles_per_core = padded_M_tiles / in0_parallel_axis_cores;
     uint32_t N_tiles_per_core = padded_N_tiles / in1_parallel_axis_cores;
+
+    // Blackhole finer-K refinement (Change 2). On BH the per-core M/N tiles are small, so the default
+    // K_block=8 makes each per-k-block too coarse AND (by doubling the in0/in1/intermediate L1 footprint)
+    // pushes the block sizer over its L1 budget, forcing uneven M/N splits. Dropping to K=4 pipelines
+    // better and frees L1 for an even block — the same reasoning as the sliced sub-grid K=4 refinement
+    // above, generalized to the non-sliced BH path. Threshold (per-core output tiles <= 128) from the
+    // 82-shape BH sweep: small per-core compute wants K=4, large/square per-core keeps K=8. Must run
+    // BEFORE padded_K_tiles so the K padding uses the final K_block. (num_slices==1 here: the sliced
+    // path already clamped K to 4 above.)
+    // Exclude prefetch-gated shapes (min per-core tiles <= 2): they run the mcast/prefetch dataflow,
+    // which prefers the coarser K=8 (forcing K=4 there regressed e.g. 32x2048x32 1.48x->0.98x).
+    if (is_blackhole && !config.has_value() && !fuse_op && !fuse_srs && num_slices == 1 &&
+        std::min(M_tiles_per_core, N_tiles_per_core) > 2 &&
+        static_cast<uint64_t>(M_tiles_per_core) * N_tiles_per_core <= 128) {
+        K_block_tiles = std::min(K_block_tiles, 4u);
+    }
+
+    uint32_t padded_K_tiles = tt::round_up(K_tiles, K_block_tiles);
 
     // Default subblock selection (only when the caller did not pin a config). Maximize DST utilization:
     // among power-of-2 (subblock_h, subblock_w) pairs where each dim divides its per-core tile count (so
@@ -412,9 +442,46 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             // default-8 fragmentation (e.g. N_pc=18 -> 10+8 instead of 8+8+2; M_pc=9 -> one block of 9
             // instead of 8+1) while staying within the subblock and L1 constraints.
             auto choose = [&](uint32_t per_core, uint32_t sb, uint32_t cur, auto fits) -> uint32_t {
-                // If the default block already tiles the per-core count evenly, leave it: there is no
-                // partial tail to remove, and merging into fewer-but-larger blocks only inflates the L1
-                // footprint without a throughput gain (measured: M_pc=64 grown 8->16 regressed ~12%).
+                sb = std::max(1u, sb);
+                // Blackhole even-split objective (Change 1), ONLY for the un-sliced path (num_slices==1).
+                // Sliced sub-grids already had a well-tuned blocking that wins big; the new chooser
+                // regressed them (576x6144x6144 1.45x->1.09x), so leave sliced shapes on the WH chooser.
+                if (is_blackhole && num_slices == 1) {
+                    // On BH the per-core counts are small and an uneven tail costs far more (measured +31%
+                    // from one uneven dim) than the reuse gained by a big block. Search the FULL set of
+                    // subblock-multiple blocks (NOT floored at the default 8) and rank by
+                    //   (1) padding waste = ceil(per_core/b)*b - per_core   (kill the uneven tail first),
+                    //   (2) |b - 8|                                         (target the reuse sweet-spot),
+                    //   (3) fewest blocks.
+                    // Waste is primary so a clean even split is never traded for an uneven one even when
+                    // the subblock constraint blocks the ideal divisor (per_core=12, sb=4 -> 12 not 8=8+4).
+                    // A floor of b>=3 plus the L1 `fits` cap keeps it prime-safe: when per_core is prime
+                    // (47) the only waste-0 blocks are 1 and per_core; the floor kills b=1 and L1 usually
+                    // excludes per_core, so it settles on the min-waste block near 8 (47 -> 8). Where
+                    // per_core % 8 == 0, b=8 is waste-0 and dist-0 -> returns 8, matching the WH path.
+                    const uint32_t lo = std::max(sb, 3u);
+                    uint32_t best = 0, best_waste = 0, best_dist = 0, best_blocks = 0;
+                    for (uint32_t b = (lo + sb - 1) / sb * sb; b <= per_core; b += sb) {
+                        if (!fits(b)) {
+                            continue;
+                        }
+                        const uint32_t blocks = (per_core + b - 1) / b;
+                        const uint32_t waste = blocks * b - per_core;
+                        const uint32_t dist = b > 8 ? b - 8 : 8 - b;
+                        if (best == 0 || waste < best_waste || (waste == best_waste && dist < best_dist) ||
+                            (waste == best_waste && dist == best_dist && blocks < best_blocks)) {
+                            best = b;
+                            best_waste = waste;
+                            best_dist = dist;
+                            best_blocks = blocks;
+                        }
+                    }
+                    return best == 0 ? std::min(per_core, sb) : best;
+                }
+                // Wormhole path (unchanged). If the default block already tiles the per-core count evenly,
+                // leave it: there is no partial tail to remove, and merging into fewer-but-larger blocks
+                // only inflates the L1 footprint without a throughput gain (measured: M_pc=64 grown
+                // 8->16 regressed ~12%).
                 if (per_core % cur == 0) {
                     return cur;
                 }
