@@ -132,3 +132,21 @@ gather x ~123 gathers (~-5.5ms); (4) CSE the loop-invariant RoPE cos/sin repeats
 expert/combine collectives (the 59% bulk) remain blocked by the combine L1 fragility.
 THEME: the biggest wins all came from recognizing PATTERNS repeated across the graph (per-matmul
 reductions, full-tile CCL padding, loop-invariant repeats) rather than single-op knobs.
+
+## INDEXER K_NORM BF16 — drop fp32 round-trip (2026-06-12, E_idxnorm)
+| step | change | result |
+|------|--------|--------|
+| E_idxnorm | indexer k_norm (both layers): slice(bf16)->typecast(fp32)->layer_norm->typecast(bf16) -> feed bf16 directly, layer_norm out bf16. Removes 4 typecasts/decode-step. | **KEEP**. Commit 55d3fe8. PCC vs ropecse golden: full-graph live-outs **BIT-IDENTICAL** (argmax 100%, logits to_layout_267 exact). |
+
+RATIONALE: layer_norm accumulates fp32 internally regardless of input dtype; the indexer is a top-k
+SELECTION signal (picks which KV to attend) so bf16 input is tolerable. Bit-identical proves the
+selection is unchanged by bf16 -> downstream attention identical.
+
+MEASURED (idxnorm_2026_06_12_09_49_16 vs ropecse, 2-layer graph): Typecast 23->19 ops, 57.3->48.2us
+(-4 ops, -9.15us exactly as designed). attn0 6->4 typecasts (-4.6us), attn1 3->1 (-4.4us); attn0 phase
+-8.6us, attn1 -16.5us. Full/lmhead totals were noise-dominated (+27.6/+63.8us on UNTOUCHED ops, ArgMax
+alone +75us run-to-run) -> keep rests on the deterministic typecast op-delta + bit-identical PCC, per
+the established noisy-totals methodology. EST e2e: ~-4.5us x 61 attn layers ~= -0.27ms (small, safe).
+
+NOTE: profiler windowing needs the full path to tt-perf-report (python_env/bin); run_profile.sh's bare
+`tt-perf-report` isn't on the docker login-shell PATH. Re-window the existing CSV if windows fail.
