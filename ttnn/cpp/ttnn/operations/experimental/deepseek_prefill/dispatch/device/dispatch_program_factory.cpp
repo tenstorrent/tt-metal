@@ -823,14 +823,41 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
                 // so traffic forwards across MULTIPLE hops (the legacy fixed-link array connection only
                 // forwards a single hop, deadlocking multi-hop FABRIC_2D — e.g. the 4-device column of a
                 // 4x2 mesh). The writer reads num_connections first, then builds the manager from the
-                // appended args. {core_link} (= core_idx % num_links) is one link index applied to all of
-                // this sender core's connections, spreading sender cores across links (matches the
-                // FABRIC_1D path & broadcast).
+                // appended args.
+                //
+                // Pick a VALID forwarding link PER neighbor: the set of routing planes that forward in a
+                // given direction is direction-specific (get_forwarding_link_indices resolves the
+                // forwarding direction first), so on a ring the wrap-direction neighbor may not share the
+                // same valid link index as the line direction. Broadcasting a single {core_link} to both
+                // connections lands the wrap connection on an EDM plane that never services it -> the
+                // worker hangs in open_finish. Index core_link into each neighbor's own valid-link set so
+                // the choice is always valid for that direction while still spreading sender cores across
+                // links where >1 plane exists.
+                std::vector<uint32_t> per_conn_links;
+                per_conn_links.reserve(dst_nodes.size());
+                for (const auto& dst_node : dst_nodes) {
+                    const auto links = tt::tt_fabric::get_forwarding_link_indices(src_fabric_node_id, dst_node);
+                    TT_FATAL(
+                        !links.empty(),
+                        "No forwarding links from {} to dispatch-axis neighbor {}",
+                        src_fabric_node_id,
+                        dst_node);
+                    log_debug(
+                        tt::LogOp,
+                        "FABRIC_2D dispatch link select: src={} dst={} dir={} core_link={} valid_links={} -> {}",
+                        src_fabric_node_id,
+                        dst_node,
+                        tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, dst_node).value(),
+                        core_link,
+                        links.size(),
+                        links[core_link % links.size()]);
+                    per_conn_links.push_back(links[core_link % links.size()]);
+                }
                 writer_runtime_args.push_back(static_cast<uint32_t>(dst_nodes.size()));
                 tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
                     src_fabric_node_id,
                     dst_nodes,
-                    {core_link},
+                    per_conn_links,
                     desc,
                     writer_kernel_id,
                     sender_core,
@@ -1310,14 +1337,26 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
                 // so traffic forwards across MULTIPLE hops (the legacy fixed-link array connection only
                 // forwards a single hop, deadlocking multi-hop FABRIC_2D — e.g. the 4-device column of a
                 // 4x2 mesh). The writer reads num_connections first, then builds the manager from the
-                // appended args. {core_link} (= core_idx % num_links) is one link index applied to all of
-                // this sender core's connections, spreading sender cores across links (matches the
-                // FABRIC_1D path & broadcast).
+                // appended args. Pick a VALID forwarding link PER neighbor (index core_link into each
+                // neighbor's own direction-specific valid-link set) rather than broadcasting one
+                // {core_link}: on a ring the wrap-direction neighbor may not share the line direction's
+                // valid link index, and a wrong index hangs the worker in open_finish.
+                std::vector<uint32_t> per_conn_links;
+                per_conn_links.reserve(dst_nodes.size());
+                for (const auto& dst_node : dst_nodes) {
+                    const auto links = tt::tt_fabric::get_forwarding_link_indices(src_fabric_node_id, dst_node);
+                    TT_FATAL(
+                        !links.empty(),
+                        "No forwarding links from {} to dispatch-axis neighbor {}",
+                        src_fabric_node_id,
+                        dst_node);
+                    per_conn_links.push_back(links[core_link % links.size()]);
+                }
                 writer_runtime_args.push_back(static_cast<uint32_t>(dst_nodes.size()));
                 tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
                     src_fabric_node_id,
                     dst_nodes,
-                    {core_link},
+                    per_conn_links,
                     desc,
                     writer_kernel_id,
                     sender_core,
