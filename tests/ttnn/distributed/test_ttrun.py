@@ -880,9 +880,7 @@ class TestRunPhase1GenerateRankBindings:
             mock_result.returncode = 0
             return mock_result
 
-        rb_out, rf_out = run_phase1_generate_rank_bindings(
-            mgd_path, hosts, output_dir, subprocess_run=mock_run, sleep_secs=0
-        )
+        rb_out, rf_out = run_phase1_generate_rank_bindings(mgd_path, hosts, output_dir, subprocess_run=mock_run)
         assert rb_out == mapping_path
         assert rf_out == rankfile_path
 

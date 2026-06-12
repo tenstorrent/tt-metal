@@ -262,10 +262,12 @@ inline void write_rankfile(
             return a.rank < b.rank;
         });
 
-    const std::string local_placement_host = mock_cluster_rankfile ? get_actual_hostname("localhost") : std::string{};
-
+    // For a fully-mocked cluster every rank runs on the launching node. Emit the literal "localhost" rather than
+    // resolving gethostname(): OpenMPI/PRRTE treats "localhost" as the local node and never launches via ssh, whereas
+    // a real hostname is treated as a (possibly remote) host and triggers an ssh launch when it is not resolvable on
+    // the launching machine (e.g. not in /etc/hosts or DNS), which breaks otherwise hardware-free mock runs.
     for (const auto& binding : sorted_bindings) {
-        std::string hostname = mock_cluster_rankfile ? local_placement_host : get_actual_hostname(binding.hostname);
+        std::string hostname = mock_cluster_rankfile ? std::string{"localhost"} : get_actual_hostname(binding.hostname);
         out_file << "rank " << binding.rank << "=" << hostname << " slot=" << binding.slot << "\n";
     }
 
