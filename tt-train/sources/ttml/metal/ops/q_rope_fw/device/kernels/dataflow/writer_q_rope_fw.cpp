@@ -22,9 +22,10 @@ void kernel_main() {
     constexpr uint32_t n_heads = get_compile_time_arg_val(2);
     constexpr uint32_t Ts = get_compile_time_arg_val(3);
     constexpr uint32_t tiles_per_head = get_compile_time_arg_val(4);
+    constexpr uint32_t kNopeChunkTiles = get_compile_time_arg_val(5);
     constexpr uint32_t Th = Tn + Tr;
 
-    constexpr auto q_out_args = TensorAccessorArgs<5>();
+    constexpr auto q_out_args = TensorAccessorArgs<6>();
     const auto q_out_gen = TensorAccessor(q_out_args, q_out_addr);
 
     const uint32_t tile_bytes = get_tile_size(cb_nope);
@@ -34,8 +35,8 @@ void kernel_main() {
     for (uint32_t block = 0U; block < num_blocks; ++block) {
         for (uint32_t h = 0U; h < n_heads; ++h) {
             const uint32_t head_q = q_block_base + h * tiles_per_head;
-            // q_nope: passthrough from reader (no compute).
-            write_tiles_by_row(cb_nope, q_out_gen, head_q, Tn, tile_bytes, Tn);
+            // q_nope: passthrough from reader (streamed in kNopeChunkTiles blocks).
+            write_full_row_tiles(cb_nope, q_out_gen, Tn, kNopeChunkTiles, tile_bytes, head_q);
             // q_pe: rotated by compute; interleave after nope in [nope | rope] head layout.
             write_tiles_by_row(cb_rope_out, q_out_gen, head_q + Tn, Tr, tile_bytes, Tr);
         }

@@ -31,9 +31,10 @@ void kernel_main() {
     constexpr uint32_t n_heads = get_compile_time_arg_val(2);
     constexpr uint32_t Ts = get_compile_time_arg_val(3);
     constexpr uint32_t tiles_per_head = get_compile_time_arg_val(4);
+    constexpr uint32_t kNopeChunkTiles = get_compile_time_arg_val(5);
     constexpr uint32_t Th = Tn + Tr;
 
-    constexpr auto q_args = TensorAccessorArgs<5>();
+    constexpr auto q_args = TensorAccessorArgs<6>();
     constexpr auto cos_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto sin_args = TensorAccessorArgs<cos_args.next_compile_time_args_offset()>();
     constexpr auto trans_args = TensorAccessorArgs<sin_args.next_compile_time_args_offset()>();
@@ -87,8 +88,8 @@ void kernel_main() {
 
         for (uint32_t h = 0U; h < n_heads; ++h) {
             const uint32_t head_q = q_block_base + h * tiles_per_head;
-            // q_nope bypasses compute: reader -> writer.
-            read_tiles_by_row(cb_nope, q_gen, head_q, Tn, tile_bytes, Tn);
+            // q_nope bypasses compute: reader -> writer (streamed in kNopeChunkTiles blocks).
+            read_full_row_tiles(cb_nope, q_gen, Tn, kNopeChunkTiles, tile_bytes, head_q);
             // q_pe -> compute.
             read_tiles_by_row(cb_q_pe, q_gen, head_q + Tn, Tr, tile_bytes, Tr);
         }

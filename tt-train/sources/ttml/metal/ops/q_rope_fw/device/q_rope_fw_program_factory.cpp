@@ -14,11 +14,12 @@
 
 // L1 budget: all circular buffers comfortably fit in the ~1.5 MB per-core L1.
 // Per core the op allocates (in tiles, with kCbDoubleBuffer = 2):
-//   cb_nope = 2*Tn   cb_q_pe = 2*Tr   cb_rope_out = 2*Tr   (q_nope bypasses compute)
+//   cb_nope = 2*nope_chunk_tiles (4 if fp32_dest_acc_en, else 8; streamed via read/write_full_row_tiles)
+//   cb_q_pe = 2*Tr   cb_rope_out = 2*Tr   (q_nope bypasses compute)
 //   cb_cos = 2*Tr    cb_sin = 2*Tr
 //   cb_trans = 1
 //   rotated_in + cos_interm + sin_interm = 3*Tr
-//   => total = 2*Tn + 9*Tr + 1 tiles.
+//   => total = 2*nope_chunk_tiles + 9*Tr + 1 tiles.
 //
 // q_nope is demuxed reader->writer; compute touches only Tr rope tiles (Tr <= 8).
 
@@ -51,6 +52,8 @@ constexpr auto kSinIntermCbIndex = tt::CBIndex::c_26;
 constexpr auto kRopeOutCbIndex = tt::CBIndex::c_16;
 
 constexpr uint32_t kCbDoubleBuffer = 2U;
+constexpr uint32_t kNopeChunkTilesFp32DestAcc = 4U;
+constexpr uint32_t kNopeChunkTilesDefault = 8U;
 
 }  // namespace
 
@@ -161,7 +164,8 @@ QRopeFwProgramFactory::cached_program_t QRopeFwProgramFactory::create(
     const tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(q_in.dtype());
     const uint32_t single_tile_size = tt::tile_size(data_format);
 
-    const uint32_t nope_cb_num_tiles = kCbDoubleBuffer * Tn;
+    const uint32_t nope_chunk_tiles = fp32_dest_acc_en ? kNopeChunkTilesFp32DestAcc : kNopeChunkTilesDefault;
+    const uint32_t nope_cb_num_tiles = kCbDoubleBuffer * nope_chunk_tiles;
     const uint32_t rope_cb_num_tiles = kCbDoubleBuffer * Tr;
     const uint32_t trig_cb_num_tiles = kCbDoubleBuffer * Tr;
 
@@ -190,13 +194,13 @@ QRopeFwProgramFactory::cached_program_t QRopeFwProgramFactory::create(
     auto* trans_buffer = tensor_args.trans_mat.buffer();
     auto* q_out_buffer = q_out.buffer();
 
-    std::vector<uint32_t> reader_compile_time_args = {Tn, Tr, H, Ts, tiles_per_head};
+    std::vector<uint32_t> reader_compile_time_args = {Tn, Tr, H, Ts, tiles_per_head, nope_chunk_tiles};
     tt::tt_metal::TensorAccessorArgs(q_in_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(cos_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(sin_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(trans_buffer).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {Tn, Tr, H, Ts, tiles_per_head};
+    std::vector<uint32_t> writer_compile_time_args = {Tn, Tr, H, Ts, tiles_per_head, nope_chunk_tiles};
     tt::tt_metal::TensorAccessorArgs(q_out_buffer).append_to(writer_compile_time_args);
 
     const std::vector<uint32_t> compute_compile_time_args = {
