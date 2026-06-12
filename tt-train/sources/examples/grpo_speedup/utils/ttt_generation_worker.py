@@ -58,6 +58,7 @@ import os
 import time
 from typing import Any, Callable, List, Optional, Sequence
 
+import numpy as np
 import ttnn
 
 from models.common.sampling import SamplingParams
@@ -297,18 +298,54 @@ class TttGenerationWorker:
         # decode_forward expects `tokens` shape [batch_size, 1].
         out_tok = prefilled_token.unsqueeze(1)
 
-        # Decode with on-device sampling. The captured trace closes the
-        # logits -> sample -> next-token-buffer loop on device, so each
-        # step is a single execute_trace with no PCIe roundtrip for
-        # logits/tokens. decode_forward returns (sampled_tokens,
-        # log_probs); sampled_tokens has shape [batch_size] (after the
-        # generator's process_output_decode(is_tokens=True) flatten),
-        # which we unsqueeze back to [batch_size, 1] for the next step.
+        ASYNC_READ_CHUNK = 4
+
         _t_decode = time.perf_counter()
         steps_executed = 0
         decode_active_tokens = 0
+
+        # Chunk bookkeeping: ``pending`` is the just-finished chunk
+        # whose host tensors get drained at the *next* boundary;
+        # ``current`` is the chunk being filled this step.
+        pending_hosts: List[Any] = []
+        pending_event: Any = None
+        current_hosts: List[Any] = []
+        current_event: Any = None
+
+        def _drain_chunk(host_chunks: List[Any]) -> None:
+            """Materialise an event-synced chunk's host token tensors
+            into per-user token IDs and fold them into completions /
+            user_done / decode_active_tokens, preserving the original
+            per-user 'first stop wins' semantics."""
+            nonlocal decode_active_tokens
+            if not host_chunks:
+                return
+            chunk_len = len(host_chunks)
+            chunk_arr = np.empty((batch_size, chunk_len), dtype=np.int64)
+            for j, host_outs in enumerate(host_chunks):
+                # data_parallel == 1 here, so host_outs has one entry,
+                # which is either (tokens_host, log_probs_host) or a
+                # bare tokens host tensor. process_output_decode does
+                # the canonical reshape + slice to [B] int tokens.
+                h0 = host_outs[0]
+                token_host = h0[0] if isinstance(h0, tuple) else h0
+                tok_torch = self.model.process_output_decode(token_host, self._max_batch_size, S=1, is_tokens=True)
+                chunk_arr[:, j] = tok_torch.to(torch.int64).numpy()
+
+            for j in range(chunk_len):
+                for u in range(batch_size):
+                    if user_done[u]:
+                        continue
+                    tok = int(chunk_arr[u, j])
+                    if stop_at_eos and tok in stop_ids:
+                        user_done[u] = True
+                    else:
+                        completions[u].append(tok)
+                        decode_active_tokens += 1
+
+        broke_on_stop = False
         for step in range(max_new_tokens - 1):
-            sampled_tokens, _ = self.generator.decode_forward(
+            tt_decode_output = self.generator.decode_forward(
                 out_tok,
                 current_pos,
                 page_table=self.page_table,
@@ -318,23 +355,38 @@ class TttGenerationWorker:
                 reset_batch=(step == 0),
                 prompt_tokens=input_tokens_prefill_pt,
                 output_tokens=out_tok,
+                read_from_device=False,
             )
-            out_tok = sampled_tokens.unsqueeze(1) if sampled_tokens.dim() == 1 else sampled_tokens
+            host_outs, event_list = self.generator.read_decode_output(tt_decode_output, async_read=True)
+            current_hosts.append(host_outs)
+            # cq=0 is in-order, so the most recent record_event covers
+            # every d2h enqueued earlier in the chunk. We only need to
+            # synchronize on this single event at the boundary.
+            current_event = event_list[-1]
             current_pos = current_pos + 1
             steps_executed += 1
 
-            for u in range(batch_size):
-                if user_done[u]:
-                    continue
-                tok = int(out_tok[u].item())
-                if stop_at_eos and tok in stop_ids:
-                    user_done[u] = True
-                else:
-                    completions[u].append(tok)
-                    decode_active_tokens += 1
+            if (step + 1) % ASYNC_READ_CHUNK == 0:
+                if pending_event is not None:
+                    ttnn.event_synchronize(mesh_event=pending_event)
+                    _drain_chunk(pending_hosts)
+                    if stop_at_eos and all(user_done):
+                        broke_on_stop = True
+                        break
+                pending_hosts, pending_event = current_hosts, current_event
+                current_hosts, current_event = [], None
 
-            if stop_at_eos and all(user_done):
-                break
+        # Final flush. Even when we broke early on EOS we still
+        # event_synchronize any in-flight events so the d2h DMAs
+        # complete before the host tensors fall out of scope.
+        if pending_event is not None:
+            ttnn.event_synchronize(mesh_event=pending_event)
+            if not broke_on_stop:
+                _drain_chunk(pending_hosts)
+        if current_event is not None:
+            ttnn.event_synchronize(mesh_event=current_event)
+            if not broke_on_stop:
+                _drain_chunk(current_hosts)
 
         active_completion_tokens += decode_active_tokens
         _decode_s = time.perf_counter() - _t_decode

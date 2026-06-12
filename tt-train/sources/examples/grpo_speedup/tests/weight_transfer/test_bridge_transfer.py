@@ -5,7 +5,7 @@
 
 Launched under tt-run with world_size == 2 (see ``runner.sh``). Rank 0
 (TTML) opens a ``[1, 2]`` mesh from
-``grpo_boolq_llama_2dev_ddp.yaml``. Rank 1 (TTT) opens a ``[1, 1]``
+``grpo_boolq_llama_2dev_ddp_gas_8.yaml``. Rank 1 (TTT) opens a ``[1, 1]``
 sub-mesh of the declared ``[1, 2]`` board.
 
 The TTML rank drives the whole flow:
@@ -71,7 +71,7 @@ PROMPT = "The capital of France is"
 MAX_NEW_TOKENS = 256
 TEMPERATURE = 0.0
 
-TTML_DEVICE_CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_2dev_ddp.yaml"
+TTML_DEVICE_CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_2dev_ddp_gas_8.yaml"
 TTT_MESH_SHAPE = (1, 1)
 
 TTT_MAX_BATCH_SIZE = 32
@@ -142,12 +142,12 @@ def _ttml_side() -> None:
 
         # --- step 3: post-push remote generate, 10x consistency ----- #
         completions = client.remote_generate(
-            [prompt_ids] * 10,
+            [prompt_ids] * 32,
             max_new_tokens=MAX_NEW_TOKENS,
             temperature=TEMPERATURE,
         )
 
-        for i in range(10):
+        for i in range(32):
             assert completions[i] == completions[0], (
                 f"post-push completion {i} diverged from completion 0: "
                 f"len {len(completions[i])} vs {len(completions[0])}"
@@ -199,10 +199,6 @@ def _ttt_side() -> None:
             optimizations=bf16_attn_bfp8_mlp_optimizations,
             stop_token_ids=stop_token_ids,
             pad_token_id=pad_token_id,
-            # On-device sampling baked into the decode trace at first
-            # call. temperature=0.0 is folded into (temp=1.0, top_k=1)
-            # inside format_sampling_params, i.e. pure argmax, making
-            # the 10x identical-completions assertion below deterministic.
             temperature=TEMPERATURE,
             top_k=0,
             top_p=1.0,
