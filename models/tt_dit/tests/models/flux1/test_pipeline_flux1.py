@@ -113,6 +113,7 @@ def test_flux1_pipeline(
     logger.info(f"Encoder parallel config: {encoder_parallel_config}")
     logger.info(f"VAE parallel config: {vae_parallel_config}")
     logger.info(f"T5 enabled: {enable_t5_text_encoder}")
+    logger.info(f"HF_HUB_OFFLINE: {os.environ.get('HF_HUB_OFFLINE', '<unset>')}")
 
     pipeline = Flux1Pipeline(
         device=mesh_device,
