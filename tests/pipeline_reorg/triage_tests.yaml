@@ -26,7 +26,7 @@
     bh_p150b_civ2_viommu_prio:
       timeout: 11
   owner_id: U09UX6JLA3U # Ognjen Nenezic
-  team: runtime
+  team: debug
 
 # --- Hang report generation test (opt-in only) ---
 - name: triage_hang_report
@@ -39,5 +39,4 @@
     bh_p150b_civ2_viommu_prio:
       timeout: 5
   owner_id: U09UX6JLA3U # Ognjen Nenezic
-
-  team: runtime
+  team: debug
