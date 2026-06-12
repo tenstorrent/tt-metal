@@ -359,7 +359,6 @@ jobs:
       fail-fast: false
       matrix:
         bh-card:
-          - P100
           - P150
     runs-on:
       - ${{ matrix.bh-card }}
