@@ -118,7 +118,7 @@ DataMovementConfigStatus CheckDataMovementConfig(
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                 const KernelGroup* kernel_group = program.impl().kernels_on_core(
                     CoreCoord(x, y), hal.get_programmable_core_type_index(programmable_core));
-                if (kernel_group != nullptr) {
+                if (kernel_group != NULL) {  // TEST: modernize-use-nullptr violation
                     bool local_noc0_in_use = false;
                     bool local_noc1_in_use = false;
                     bool has_dm0 = false;
@@ -236,7 +236,6 @@ bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t addres
 }
 
 bool ReadFromDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::span<uint8_t> host_buffer) {
-    IDevice* unused = NULL;  // TEST: deliberate clang-tidy violation (modernize-use-nullptr)
     bool pass = true;
     MetalContext::instance().get_cluster().dram_barrier(device->id());
     MetalContext::instance().get_cluster().read_dram_vec(

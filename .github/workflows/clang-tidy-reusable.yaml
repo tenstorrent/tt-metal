@@ -259,7 +259,7 @@ jobs:
           fi
 
       - name: Export PR-diff clang-tidy fix suggestions
-        if: ${{ inputs.post-pr-suggestions && github.event_name == 'pull_request' }}
+        if: ${{ inputs.post-pr-suggestions && github.event_name == 'pull_request' && !cancelled() }}
         shell: bash
         run: |
           git config --global --add safe.directory /work
@@ -289,7 +289,7 @@ jobs:
             -j"$(nproc)" < pr.diff || true
 
       - name: Post inline clang-tidy suggestions on PR
-        if: ${{ inputs.post-pr-suggestions && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false }}
+        if: ${{ inputs.post-pr-suggestions && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false && !cancelled() }}
         uses: platisd/clang-tidy-pr-comments@28cfb84edafa771c044bde7e4a2a3fae57463818
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
