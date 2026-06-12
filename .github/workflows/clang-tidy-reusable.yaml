@@ -284,7 +284,7 @@ jobs:
             exit 0
           fi
           git diff _pr_base -- $(cat common.txt) > pr.diff
-          pip install -q pyyaml
+          pip install --break-system-packages -q pyyaml
           clang-tidy-diff-20.py -p1 -path "$BUILD_DIR" \
             -export-fixes clang-tidy-result/fixes.yml \
             -j"$(nproc)" < pr.diff || true
