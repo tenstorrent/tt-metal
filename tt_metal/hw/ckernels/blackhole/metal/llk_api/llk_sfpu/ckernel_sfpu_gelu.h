@@ -10,7 +10,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_exp.h"  // For _sfpu_round_to_nearest_int32_
 #include "sfpu/ckernel_sfpu_polyval.h"
-#include "sfpu/ckernel_sfpu_recip.h"
+#include "ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_cdf.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
 #include "sfpi.h"
@@ -581,7 +581,7 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
         if constexpr (APPROXIMATION_MODE) {
             result = x_exp * INV_SQRT_2PI;
         } else {
-            sfpi::vFloat inv_x2 = _sfpu_reciprocal_<2>(x2);  // 1/x²
+            sfpi::vFloat inv_x2 = sfpu_reciprocal_iter<2>(x2);  // 1/x²
             sfpi::vFloat inv_x4 = inv_x2 * inv_x2;           // 1/x⁴
             sfpi::vFloat correction = 1.0f - inv_x2 + inv_x4;
             result = x_exp * INV_SQRT_2PI * correction;
@@ -610,11 +610,11 @@ inline void calculate_gelu_derivative_polynomial() {
 template <bool APPROXIMATION_MODE>
 inline void gelu_derivative_polynomial_init() {
     if constexpr (!APPROXIMATION_MODE) {
-        // Call _init_sfpu_reciprocal_ directly: gelu derivative uses _sfpu_reciprocal_<2>
+        // Call sfpu_reciprocal_init directly: gelu derivative uses sfpu_reciprocal_iter<2>
         // inline (not _calculate_reciprocal_internal_), so SFPLOADMACRO fast-path init is
-        // not needed. On BH, _init_reciprocal_ omits _init_sfpu_reciprocal_ (it only
+        // not needed. On BH, _init_reciprocal_ omits sfpu_reciprocal_init (it only
         // configures SFPLOADMACRO macros), so vConstFloatPrgm0=2.0f would be unset.
-        _init_sfpu_reciprocal_<false>();
+        sfpu_reciprocal_init<false>();
     }
 }
 

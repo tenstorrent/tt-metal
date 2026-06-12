@@ -9,7 +9,7 @@
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_sigmoid.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
-#include "sfpu/ckernel_sfpu_recip.h"
+#include "ckernel_sfpu_recip.h"
 
 namespace ckernel::sfpu {
 
@@ -76,7 +76,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_continued_fraction_(sfpi::vFloat val) {
     constexpr float denominator_coefs[] = {135135.f, 62370.f, 3150.f, 28.f};
     sfpi::vFloat denominator = PolynomialEvaluator::eval(x2, 135135.f, 62370.f, 3150.f, 28.f);
 
-    sfpi::vFloat result = numerator * ckernel::sfpu::_sfpu_reciprocal_<2>(denominator);
+    sfpi::vFloat result = numerator * ckernel::sfpu::sfpu_reciprocal_iter<2>(denominator);
 
     // For larger x, the continued fraction may exceed 1.0.
     // Since tanh(x) is bounded by [-1, 1], we clamp output to 1.0.

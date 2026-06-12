@@ -25,6 +25,7 @@
 #include "llk_sfpu/ckernel_sfpu_exp2.h"
 #include "llk_sfpu/ckernel_sfpu_gelu.h"
 #include "llk_sfpu/ckernel_sfpu_log1p.h"
+#include "llk_sfpu/ckernel_sfpu_recip.h"
 #include "llk_sfpu/ckernel_sfpu_rsqrt.h"
 #include "llk_sfpu/ckernel_sfpu_shift.h"
 #include "llk_sfpu/ckernel_sfpu_sqrt.h"
@@ -35,7 +36,6 @@
 #include "sfpu/ckernel_sfpu_fill.h"
 #include "sfpu/ckernel_sfpu_log.h"
 #include "sfpu/ckernel_sfpu_negative.h"
-#include "sfpu/ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_relu.h"
 #include "sfpu/ckernel_sfpu_silu.h"
 #include "sfpu/ckernel_sfpu_threshold.h"
@@ -106,7 +106,7 @@ void call_unary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::reciprocal)
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(_init_reciprocal_<APPROX_MODE, is_fp32_dest_acc_en>);
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(recip_init<APPROX_MODE, is_fp32_dest_acc_en>);
     }
     else if constexpr (OPERATION == SfpuType::rsqrt)
     {
@@ -319,7 +319,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::reciprocal)
     {
-        SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_reciprocal_, (APPROX_MODE, ITERATIONS, is_fp32_dest_acc_en), dst_index, vector_mode, ITERATIONS);
+        SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_reciprocal, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::rsqrt)
     {

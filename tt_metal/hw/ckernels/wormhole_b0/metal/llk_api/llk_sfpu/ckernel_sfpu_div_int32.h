@@ -7,7 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
-#include "sfpu/ckernel_sfpu_recip.h"
+#include "ckernel_sfpu_recip.h"
 
 namespace ckernel::sfpu {
 template <bool APPROXIMATION_MODE, int ITERATIONS>
@@ -25,7 +25,7 @@ inline void calculate_div_int32(const uint dst_index_in0, const uint dst_index_i
         v_if(in0 == 0 || in0 != in1) {
             sfpi::vFloat float_in0 = sfpi::convert<sfpi::vFloat>(in0, sfpi::RoundMode::NearestEven);
             sfpi::vFloat float_in1 = sfpi::convert<sfpi::vFloat>(in1, sfpi::RoundMode::NearestEven);
-            result = float_in0 * _sfpu_reciprocal_<2>(float_in1);
+            result = float_in0 * sfpu_reciprocal_iter<2>(float_in1);
         }
         v_endif;
 
@@ -39,7 +39,7 @@ inline void calculate_div_int32(const uint dst_index_in0, const uint dst_index_i
 
 template <bool APPROXIMATION_MODE>
 inline void div_init() {
-    _init_sfpu_reciprocal_<false>();
+    sfpu_reciprocal_init<false>();
 }
 
 }  // namespace ckernel::sfpu
