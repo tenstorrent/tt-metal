@@ -45,7 +45,8 @@ template <
     typename ShardShapeWrapper = ArrayDynamicWrapper,
     typename BankCoordsWrapper = ArrayDynamicWrapper,
     bool IsInterleaved = false,
-    bool IsDram = false>
+    bool IsDram = false,
+    bool IsBlock = false>
 struct DistributionSpec {
     static constexpr bool has_static_rank = RankCT != 0;
     static constexpr bool has_static_num_banks = NumBanksCT != 0;
@@ -56,6 +57,8 @@ struct DistributionSpec {
     static constexpr bool is_static = shapes_static && bank_coords_static;
     static constexpr bool is_interleaved = IsInterleaved;
     static constexpr bool is_dram = IsDram;
+    // Block-contiguous shard->bank placement (ShardDistributionStrategy::CONTIGUOUS_1D) vs. round-robin.
+    static constexpr bool is_block = IsBlock;
 
     static constexpr auto rank_ct = RankCT;
     static constexpr auto num_banks_ct = NumBanksCT;
@@ -271,6 +274,17 @@ struct DistributionSpec {
 
     // === Sharding Layout ===
     FORCE_INLINE constexpr const auto& shard_grid() const {getter_helper(shapes_static, shard_grid_ct, shard_grid_rt)}
+
+    // Total number of shards = product of the shard grid. Used by the block (CONTIGUOUS_1D)
+    // shard->bank math to derive shards_per_core = num_shards / num_banks.
+    FORCE_INLINE constexpr size_t num_shards() const {
+        size_t n = 1;
+        const auto& grid = shard_grid();
+        for (uint32_t i = 0; i < rank(); ++i) {
+            n *= grid[i];
+        }
+        return n;
+    }
 
     FORCE_INLINE constexpr const
         auto& shard_grid_strides() const {getter_helper(shapes_static, shard_grid_strides_ct, shard_grid_strides_rt)}

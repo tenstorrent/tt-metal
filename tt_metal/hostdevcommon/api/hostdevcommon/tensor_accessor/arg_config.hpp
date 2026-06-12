@@ -23,6 +23,9 @@ enum class ArgConfig : uint8_t {
     RuntimeTensorShape = 1 << 4,
     RuntimeShardShape = 1 << 5,
     RuntimeBankCoords = 1 << 6,
+    // Shards are distributed block-contiguously across banks (ShardDistributionStrategy::CONTIGUOUS_1D)
+    // rather than round-robin. Affects only the on-device shard->bank math; carries no extra args.
+    IsBlockDistribution = 1 << 7,
     Runtime = RuntimeRank | RuntimeNumBanks | RuntimeTensorShape | RuntimeShardShape | RuntimeBankCoords
 };
 

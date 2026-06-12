@@ -29,6 +29,9 @@ struct TensorAccessorArgs {
     static constexpr bool tensor_shape_is_crta = args_config.test(tensor_accessor::ArgConfig::RuntimeTensorShape);
     static constexpr bool shard_shape_is_crta = args_config.test(tensor_accessor::ArgConfig::RuntimeShardShape);
     static constexpr bool bank_coords_is_crta = args_config.test(tensor_accessor::ArgConfig::RuntimeBankCoords);
+    // Block-contiguous shard distribution (CONTIGUOUS_1D) vs. round-robin. Carries no extra args; only
+    // changes the shard->bank math in the accessor. Lives in args_config, so no CTA/CRTA offset impact.
+    static constexpr bool is_block_distribution = args_config.test(tensor_accessor::ArgConfig::IsBlockDistribution);
 
     // Impossible to have runtime rank without runtime tensor and shard shapes since then impossible to calculate CTA
     // offsets in compile time

@@ -142,6 +142,10 @@ void TensorAccessorArgs::update_args_config() {
 
     if (buffer_->buffer_distribution_spec().has_value()) {
         args_config_.set(tensor_accessor::ArgConfig::Sharded);
+        args_config_.set(
+            tensor_accessor::ArgConfig::IsBlockDistribution,
+            buffer_->buffer_distribution_spec()->shard_distribution_strategy() ==
+                ShardDistributionStrategy::CONTIGUOUS_1D);
     } else {
         args_config_ = tensor_accessor::ArgConfig::None;
     }
