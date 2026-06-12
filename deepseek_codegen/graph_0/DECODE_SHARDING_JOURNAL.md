@@ -223,3 +223,22 @@ EST e2e: ~-53us deterministic ReshapeView x 61 attn layers ~= -3.0ms (minus ~one
 GENERALIZES: convention-matched ops avoid format-bridging TM. rotary_embedding_hf (rotate_half) fits
 half-concat models; rotary_embedding_llama (adjacent-pair) needs the interleave permute. The main Q/K
 ropes (rope1/2/4/5) already feed interleaved-pair (no permute) so were left on rotary_embedding_llama.
+
+## ATTENTION TM — FLOOR ASSESSMENT after E_idxrope_hf (2026-06-12)
+After the indexer-rope HF swap, audited the remaining attn1 TM/CCL (idxrope profile). Conclusion:
+remaining attention cost is STRUCTURAL with the current op set — no clean lever left:
+- ReshapeView 199us: dominated by the head-split retiles (16 heads in a tiled dim -> 16->32 pad;
+  token-major [32,..] -> head-batch [16,32,128] forces a physical retile). Intrinsic to MLA's
+  per-head absorbed matmul (tile-alignment audit, prior). Rank-conversion reshapes are cheap views.
+- permute_29/38 (head-relayout [2,0,1,3], 33us/layer ~= 2ms x61): the ONLY sizable remaining lever,
+  but structural — the per-head absorbed matmul REQUIRES heads as batch-dim-0; [2,0,1,3] is a 3-cycle
+  (= 2 transposes, MORE ops, not fewer). Now combine-safe under #46544 but needs an upstream
+  layout change (produce head-major earlier) which just relocates the retile. Not pursued (high
+  risk / structural, the a7 lesson).
+- reduce_scatter_8 (80us): GENUINE reduce_scatter — output stays hidden-sharded, feeds the residual
+  add_22 directly (no following all_gather). NOT the fusable all-reduce pattern. AllBroadcast (78us)
+  is op-internal (no explicit call in _main). AllGather (66us) is the qkv/stat gather, already minimal.
+- Main Q/K ropes (rope1/2/4/5): already interleaved-pair (no permute) -> left on rotary_embedding_llama.
+RULED OUT this round: nlp_create_qkv_heads_decode (emits [batch,heads,1,hd], not absorbed [16,32,128]),
+a3 SDPA-L1 (compute-bound no-op), rope x-perm->transpose (no-op, tiny tensor). Attention is at its
+practical floor; further gains need a different MLA head-layout strategy (upstream/codegen), not op swaps.
