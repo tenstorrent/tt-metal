@@ -1133,9 +1133,12 @@ class Attention(LightweightModule):
         if batch_size > 1:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, 1, seq_len, -1])
 
-        # reshaping long sequence to matmul fit on device
-        if seq_len > 1024:
-            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])
+        # reshaping long sequence to matmul fit on device. Chunk by prefill_len_cutoff (512 on
+        # Blackhole, 1024 on Wormhole): the WO matmul's CB overflows L1 at m=1024 for large dim
+        # (e.g. 12288), and this mirrors the MLP prefill which already chunks by prefill_len_cutoff.
+        wo_prefill_chunk = self.args.prefill_len_cutoff
+        if seq_len > wo_prefill_chunk:
+            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // wo_prefill_chunk, wo_prefill_chunk, -1])
 
         # Non fused All Gather Matmul
         if self.use_fused_all_gather_matmul:  # is true for Ring topology
@@ -1162,7 +1165,7 @@ class Attention(LightweightModule):
             program_config=self.args.get_attn_wo_program_config(Mode.PREFILL, seq_len, None),
         )
 
-        if seq_len > 1024:
+        if seq_len > wo_prefill_chunk:
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
         ttnn.deallocate(attn_output_11SH)
 
