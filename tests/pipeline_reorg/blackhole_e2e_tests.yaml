@@ -217,7 +217,7 @@
   model-name: deepseek_prefill
   cmd: |
     exit_code=0
-    pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc and not perf-host-64 and not fabric2d-" --timeout 1800 || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc and not perf-host-64 and (fabric2d-mesh-4x2 or not (moe_gate_prefill2d or moe_routing_setup or ttnn_moe))" --timeout 1800 || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_ds_mla -k "2x4 and random and scaled_sl and check_pcc and line" -vvv --tb=short || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "maxedge-1u and cpu and 2x4 and fabric2d" -vvv --tb=short || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "balanced and not non_balanced and fabric2d" -vvv --tb=short --timeout=900 || exit_code=$?
@@ -262,7 +262,7 @@
   name: bh_qb_DeepSeek_PREFILL
   model-name: deepseek_prefill
   cmd: |
-    pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc and not perf-host-64 and not fabric2d-" --timeout 1800
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc and not perf-host-64 and (fabric2d-mesh-2x2 or not (moe_gate_prefill2d or moe_routing_setup or ttnn_moe))" --timeout 1800
     pytest models/demos/deepseek_v3_d_p/tests/cache/ -vvv --tb=short
   skus:
     bh_quietbox_2:
