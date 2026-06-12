@@ -1176,7 +1176,11 @@ static std::map<std::string, std::string> build_kernel_defines(
     }
     defines["EMULE_SEM_ALIGN"] = std::to_string(EMULE_SEM_ALIGN);
 
-    // Collect CB tile sizes from program for constexpr get_tile_size().
+    // Collect CB tile sizes + per-CB tile shape from program for the constexpr
+    // get_tile_size() / get_tile_r_dim() / get_tile_c_dim() metadata. The shape
+    // (height/width) is the ground truth for thin tiles (e.g. Tile([1,16])) —
+    // the emulated reduce/unpack primitives bound their iteration by it instead
+    // of assuming a full 32x32 tile. Default 32x32 when a CB has no Tile spec.
     const auto& core_range_set = kernel.core_range_set();
     if (!core_range_set.ranges().empty()) {
         auto first_core = core_range_set.ranges().begin()->start_coord;
@@ -1186,12 +1190,18 @@ static std::map<std::string, std::string> build_kernel_defines(
         // (which bakes unpack_src_format[]/pack_dst_format[] into chlkc_descriptors.h).
         // 255 == tt::DataFormat::Invalid marks unconfigured slots (mirrors the host's
         // std::optional<DataFormat> empty state); consumers fall back to the page_size
-        // heuristic for those.
+        // heuristic for those. tile_r_dim/tile_c_dim carry the per-CB tile shape
+        // (height/width) for thin tiles; default 32x32 when a CB has no Tile spec.
         uint8_t cb_formats[EMULE_NUM_CBS];
+        uint32_t tile_r_dim[EMULE_NUM_CBS];
+        uint32_t tile_c_dim[EMULE_NUM_CBS];
         for (uint32_t i = 0; i < EMULE_NUM_CBS; i++) {
             cb_formats[i] = static_cast<uint8_t>(tt::DataFormat::Invalid);
+            tile_r_dim[i] = tt::constants::TILE_HEIGHT;
+            tile_c_dim[i] = tt::constants::TILE_WIDTH;
         }
         for (auto& cb_impl : cb_impls) {
+            const auto& tiles = cb_impl->config().tiles();
             for (uint8_t idx : cb_impl->local_buffer_indices()) {
                 if (idx < EMULE_NUM_CBS) {
                     // Calculate tile size from the CB's data format.
@@ -1199,20 +1209,30 @@ static std::map<std::string, std::string> build_kernel_defines(
                     tile_sizes[idx] = tile.has_value() ? tile->get_tile_size(cb_impl->data_format(idx))
                                                        : Tile().get_tile_size(cb_impl->data_format(idx));
                     cb_formats[idx] = static_cast<uint8_t>(cb_impl->data_format(idx));
+                    if (tile.has_value()) {
+                        tile_r_dim[idx] = tile->get_height();
+                        tile_c_dim[idx] = tile->get_width();
+                    }
                 }
             }
         }
-        std::ostringstream ts, df;
+        std::ostringstream ts, df, tr, tc;
         for (uint32_t i = 0; i < EMULE_NUM_CBS; i++) {
             if (i) {
                 ts << ',';
                 df << ',';
+                tr << ',';
+                tc << ',';
             }
             ts << tile_sizes[i];
             df << static_cast<uint32_t>(cb_formats[i]);
+            tr << tile_r_dim[i];
+            tc << tile_c_dim[i];
         }
         defines["EMULE_TILE_SIZES"] = ts.str();
         defines["EMULE_CB_DATA_FORMATS"] = df.str();
+        defines["EMULE_TILE_R_DIM"] = tr.str();
+        defines["EMULE_TILE_C_DIM"] = tc.str();
     }
 
     // Thread the compute kernel's resolved fp32_dest_acc_en / dst_full_sync_en
