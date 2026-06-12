@@ -2524,6 +2524,7 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
         .unpack_to_dest_mode = unpack_modes,
         .bfp8_pack_precise = compute_config.bfp8_pack_precise,
         .math_approx_mode = compute_config.math_approx_mode,
+        .enable_2x_src_format = compute_config.enable_2x_src_format,
         .compile_args = {},  // Compile args are passed via named_compile_args
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),

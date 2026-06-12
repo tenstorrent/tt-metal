@@ -41,7 +41,7 @@ inline void llk_math_matmul_init(
         srcA_format, srcB_format);
     const bool src_2x = is_2x_format(srcA_format) && is_2x_format(srcB_format);
     if (src_2x) {
-        _llk_math_matmul_init_<math_fidelity, true /*EN_DI*/, true /*EN_X2*/>(ct_dim, rt_dim);
+        _llk_math_matmul_init_<math_fidelity, false /*EN_DI*/, true /*EN_X2*/>(ct_dim, rt_dim);
     } else {
         _llk_math_matmul_init_<math_fidelity, false /*EN_DI*/, false /*EN_X2*/>(ct_dim, rt_dim);
     }

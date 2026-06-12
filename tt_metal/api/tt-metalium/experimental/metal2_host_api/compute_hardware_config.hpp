@@ -52,6 +52,13 @@ struct ComputeHardwareConfig {
     // Select fast-and-approximate vs slow-and-precise variants of SFPU transcendentals
     bool math_approx_mode = false;
 
+    // Opt into the 2x-packed src-register format for 2x-capable inputs (Quasar-only).
+    // When true, the unpacker delivers MxFp4 DFBs into the SrcA/SrcB register files as the
+    // MxFp4_2x_B sub-datum-packed format (two FP4 elements per src datum). Only op_mmul-family
+    // ops (MVMUL/MVMULDI/GAPOOL) read this format correctly, so it is valid for matmul and
+    // column-reduce kernels. Ignored on non-Quasar architectures.
+    bool enable_2x_src_format = false;
+
     // Per-DFB choice of how the unpacker delivers data into the math stage:
     //   Default          — unpack via SrcA/B regs (~19-bit elements; full FPU access)
     //   UnpackToDestFp32 — unpack via Dest regs with full FP32 precision (SFPU only)
