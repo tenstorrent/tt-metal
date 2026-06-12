@@ -2,8 +2,16 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import os
+import pytest
 
-# Opt in to Sequential/Parallel fusion for this test suite.
-# See models/experimental/ops/descriptors/fusion/fusion.py for context.
-os.environ.setdefault("TTNN_ENABLE_PARALLEL_SEQUENTIAL", "1")
+
+@pytest.fixture(autouse=True)
+def _enable_parallel_sequential(monkeypatch):
+    """Opt this suite in to Sequential/Parallel fusion.
+
+    Sequential/Parallel are gated behind ``TTNN_ENABLE_PARALLEL_SEQUENTIAL`` until
+    ProgramSpec is exposed to Python (see fusion.py). This autouse fixture enables
+    them only for the duration of each test in this directory and reverts after,
+    so the guard stays active for every other test sharing the same process.
+    """
+    monkeypatch.setenv("TTNN_ENABLE_PARALLEL_SEQUENTIAL", "1")
