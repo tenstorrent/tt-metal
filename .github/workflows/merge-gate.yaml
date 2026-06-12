@@ -421,19 +421,13 @@ jobs:
 
   triage-tests:
     needs: [build, resolve-docker-pull-refs, find-changes, check-harbor]
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: ${{ github.event_name == 'merge_group'
-            && fromJSON('["N150-viommu","P150b-viommu-prio"]')
-            || fromJSON('["N150-viommu","P150b-viommu"]') }}
-    uses: ./.github/workflows/triage.yaml
+    secrets: inherit
+    uses: ./.github/workflows/triage-tests-impl.yaml
     with:
-      runner-label: ${{ matrix.platform }}
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
-      timeout: 11
+      enabled-skus: wh_n150_civ2,bh_p150b_civ2_viommu_prio
 
   load-llk-unit-test-matrix:
     needs: find-changes
