@@ -339,7 +339,6 @@ def main(argv: list[str] | None = None):
         tokenizer = MistralCommonBackend.from_pretrained(
             args.model_id,
             trust_remote_code=True,
-            cache_dir=os.getenv("HF_HOME") or None,
             local_files_only=os.getenv("CI") == "true",
         )
         if args.messages_json is not None:

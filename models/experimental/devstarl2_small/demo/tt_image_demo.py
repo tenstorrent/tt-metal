@@ -587,12 +587,13 @@ def run_tt(
             sampling.reset_sampling_params(formatted_sampling)
             sampling.seed_manager.reset_seed(formatted_sampling.seed, sampling_empty_slots)
 
-        tokenizer = MistralCommonBackend.from_pretrained(
-            model_id,
-            trust_remote_code=True,
-            cache_dir=os.getenv("HF_HOME") or None,
-            local_files_only=os.getenv("CI") == "true",
-        )
+        tokenizer = getattr(processor, "tokenizer", None)
+        if tokenizer is None:
+            tokenizer = MistralCommonBackend.from_pretrained(
+                model_id,
+                trust_remote_code=True,
+                local_files_only=os.getenv("CI") == "true",
+            )
         pad_token_id = getattr(tokenizer, "pad_token_id", None)
         if pad_token_id is None:
             pad_token_id = 0

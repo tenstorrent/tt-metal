@@ -29,6 +29,7 @@
   cmd: |
     set -e
     export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    export HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/hub
     export HF_MODEL=mistralai/Devstral-Small-2-24B-Instruct-2512
     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/mistralai--Devstral-Small-2-24B-Instruct-2512
     uv pip install mistral-common
