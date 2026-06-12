@@ -288,21 +288,10 @@ class Sampling1D(LightweightModule):
 
     def _argmax_all_gather(self, logits):
         """Multi-device: all-gather logits before argmax.
-
-        On ring-capable meshes (e.g. T3K 1×8) use the same trace-capture-safe configuration as a
-        model's own logits gather: Ring topology, no ``cluster_axis``, and crucially **no barrier
-        semaphore**. The Linear+barrier configuration cannot be captured — trace aborts with
-        "TT_FATAL: Event Synchronization / Writes are not supported during trace capture". The
-        likely cause (hypothesis: Ring+barrier was not isolated in testing, so the blocker is only
-        confirmed for Linear+barrier) is that the Linear all-gather's barrier issues a host-assisted
-        event-sync + per-device semaphore writes that are illegal inside capture; Ring is
-        self-synchronising and needs no barrier. This matches the model's own
-"""Multi-device: all-gather logits before argmax.
-
-On ring-capable meshes (e.g. T3K 1×8) use Ring topology with no barrier semaphore to match the
-model's logits gather and avoid trace-capture issues seen with some barrier-based configurations.
-For other meshes, fall back to the clamped Linear+barrier path.
-"""
+        
+        On ring-capable meshes (e.g. T3K 1×8) use Ring topology with no barrier semaphore to match the
+        model's logits gather and avoid trace-capture issues seen with some barrier-based configurations.
+        For other meshes, fall back to the clamped Linear+barrier path.
         """
         cfg = self.config
         if default_topology(cfg.mesh_device) == ttnn.Topology.Ring:
