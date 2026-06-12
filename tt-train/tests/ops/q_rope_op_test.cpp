@@ -9,7 +9,6 @@
 #include <vector>
 
 #include "autograd/auto_context.hpp"
-#include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 #include "ops/rope_op.hpp"
@@ -39,18 +38,6 @@ ttnn::Tensor make_bf16_4d(uint32_t d0, uint32_t d1, uint32_t d2, uint32_t d3, ui
 
 ttml::ops::RotaryEmbeddingParams build_params(uint32_t seq_len, uint32_t qk_rope_dim) {
     return ttml::ops::build_rope_params(seq_len, qk_rope_dim, /*theta=*/10000.0F);
-}
-
-// Rotary_embedding_llama allows to pass compute kernel config to enable fp32 dest acc for qk_rope_dim <= 128.
-// Q-RoPE by default enable fp32 dest acc for qk_rope_dim <= 128.
-bool fp32_dest_acc_en_for_rope_dim(uint32_t qk_rope_dim) {
-    return qk_rope_dim <= 128U;
-}
-
-ttnn::WormholeComputeKernelConfig rotary_compute_kernel_config(uint32_t qk_rope_dim) {
-    auto config = ttml::core::ComputeKernelConfig::precise();
-    config.fp32_dest_acc_en = fp32_dest_acc_en_for_rope_dim(qk_rope_dim);
-    return config;
 }
 
 void expect_allclose(
@@ -88,13 +75,7 @@ ttnn::Tensor reference_q_rope(
         q_in, ttsl::SmallVector<uint32_t>{0, 0, 0, qk_nope_dim}, ttsl::SmallVector<uint32_t>{B, H, S, qk_head}, step);
 
     auto q_pe_rot = ttnn::experimental::rotary_embedding_llama(
-        q_pe,
-        params.cos_cache,
-        params.sin_cache,
-        params.trans_mat,
-        /*is_decode_mode=*/false,
-        /*memory_config=*/std::nullopt,
-        rotary_compute_kernel_config(qk_rope_dim));
+        q_pe, params.cos_cache, params.sin_cache, params.trans_mat, /*is_decode_mode=*/false);
 
     return ttnn::concat(std::vector<ttnn::Tensor>{q_nope, q_pe_rot}, /*dim=*/3);
 }

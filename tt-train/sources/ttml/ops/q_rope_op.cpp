@@ -47,16 +47,16 @@ autograd::TensorPtr q_rope(
     const autograd::TensorPtr& q_full,
     const RotaryEmbeddingParams& rope_params,
     uint32_t qk_nope_dim,
-    uint32_t qk_rope_dim) {
-    const uint32_t S = q_full->get_value().logical_shape()[2];
-
+    uint32_t qk_rope_dim,
+    bool fp32_dest_acc_en) {
     auto q_out = ttml::metal::q_rope_fw(
         q_full->get_value(),
         rope_params.cos_cache,
         rope_params.sin_cache,
         rope_params.trans_mat,
         qk_nope_dim,
-        qk_rope_dim);
+        qk_rope_dim,
+        fp32_dest_acc_en);
 
     auto out = autograd::create_tensor(q_out);
 

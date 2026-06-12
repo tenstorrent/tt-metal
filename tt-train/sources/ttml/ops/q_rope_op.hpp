@@ -14,6 +14,7 @@ autograd::TensorPtr q_rope(
     const autograd::TensorPtr& q_full,
     const RotaryEmbeddingParams& rope_params,
     uint32_t qk_nope_dim,
-    uint32_t qk_rope_dim);
+    uint32_t qk_rope_dim,
+    bool fp32_dest_acc_en = false);
 
 }  // namespace ttml::ops

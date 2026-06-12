@@ -102,6 +102,11 @@ void QRopeFwDeviceOperation::validate_on_program_cache_miss(
         trans_shape);
 
     TT_FATAL(args.qk_rope_dim <= 256U, "QRopeFw: qk_rope_dim must be <= 256. Got {}", args.qk_rope_dim);
+
+    TT_FATAL(
+        !args.fp32_dest_acc_en || args.qk_rope_dim <= 128U,
+        "QRopeFw: fp32_dest_acc_en may only be true when qk_rope_dim <= 128. Got qk_rope_dim={}",
+        args.qk_rope_dim);
 }
 
 QRopeFwDeviceOperation::spec_return_value_t QRopeFwDeviceOperation::compute_output_specs(
@@ -139,12 +144,14 @@ ttml::metal::ops::q_rope_fw::device::QRopeFwDeviceOperation::tensor_return_value
     const ttnn::Tensor& sin_cache,
     const ttnn::Tensor& trans_mat,
     uint32_t qk_nope_dim,
-    uint32_t qk_rope_dim) {
+    uint32_t qk_rope_dim,
+    bool fp32_dest_acc_en) {
     using OperationType = ttml::metal::ops::q_rope_fw::device::QRopeFwDeviceOperation;
 
     auto attrs = OperationType::operation_attributes_t{
         .qk_nope_dim = qk_nope_dim,
         .qk_rope_dim = qk_rope_dim,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .q_in = q_in,

@@ -149,8 +149,7 @@ QRopeFwProgramFactory::cached_program_t QRopeFwProgramFactory::create(
 
     const uint32_t num_blocks = B * Ts;
 
-    // Match rotary_embedding_llama: fp32 dest acc only when qk_rope_dim <= 128.
-    const bool fp32_dest_acc_en = args.qk_rope_dim <= 128U;
+    const bool fp32_dest_acc_en = args.fp32_dest_acc_en;
     const uint32_t max_nope_dst_tiles = fp32_dest_acc_en ? kMaxNopeDstTilesFp32 : kMaxNopeDstTilesBf16;
     const bool use_chunked_nope = (Tn > max_nope_dst_tiles);
     TT_FATAL(

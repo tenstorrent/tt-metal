@@ -14,8 +14,10 @@ ttnn::Tensor q_rope_fw(
     const ttnn::Tensor& sin_cache,
     const ttnn::Tensor& trans_mat,
     uint32_t qk_nope_dim,
-    uint32_t qk_rope_dim) {
-    return ttnn::prim::ttml_q_rope_fw(q_in, cos_cache, sin_cache, trans_mat, qk_nope_dim, qk_rope_dim);
+    uint32_t qk_rope_dim,
+    bool fp32_dest_acc_en) {
+    return ttnn::prim::ttml_q_rope_fw(
+        q_in, cos_cache, sin_cache, trans_mat, qk_nope_dim, qk_rope_dim, fp32_dest_acc_en);
 }
 
 }  // namespace ttml::metal

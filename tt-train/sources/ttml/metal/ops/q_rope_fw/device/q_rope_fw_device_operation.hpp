@@ -38,6 +38,7 @@ ttml::metal::ops::q_rope_fw::device::QRopeFwDeviceOperation::tensor_return_value
     const ttnn::Tensor& sin_cache,
     const ttnn::Tensor& trans_mat,
     uint32_t qk_nope_dim,
-    uint32_t qk_rope_dim);
+    uint32_t qk_rope_dim,
+    bool fp32_dest_acc_en);
 
 }  // namespace ttnn::prim
