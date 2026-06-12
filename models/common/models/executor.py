@@ -74,15 +74,22 @@ def make_contiguous_page_table(
     return page_table
 
 
-def _build_decode_topk_param_tensors(mesh_device, sampling_params, batch_size):
+def _build_decode_topk_param_tensors(mesh_device, sampling_params, batch_size, allow_force_argmax=True):
     """Build replicated (k, p, temp) device tensors for ``Sampling1D``'s top-k path.
 
     Reuses ``format_sampling_params`` (so temperature inversion, top-p clamping and the
     ``temp==0 -> k=1`` rewrite match TTTv1 / PERF.md exactly), then mirrors TTSampling's
     1D layout: ROW_MAJOR, uint32 k / bfloat16 p / bfloat16 temp, replicated across the mesh.
 
-    Returns ``None`` when the formatted params reduce to force-argmax (all k==1, p==0,
-    temp==1) — the caller should then use the argmax path instead.
+    Returns ``None`` **only when force-argmax is allowed** and the formatted params reduce to
+    greedy (all k==1, p==0, temp==1) — the caller then uses the cheaper full-vocab argmax path.
+    When ``allow_force_argmax`` is False the model has no argmax path, so greedy params must
+    still build real tensors and route through the top-k op (k=1 top-k == argmax-via-topk),
+    exactly as TTTv1 does for the ``temp=0`` PERF.md recipe — never returning ``None``.
+
+    Note: ``format_sampling_params`` rewrites every ``temp==0`` row to ``(temp=1, k=1, p=0)``
+    (generator.py:512-517) — top_p is zeroed too — so the PERF.md ``temp=0, top_k=32, top_p=0.08``
+    recipe reduces to the greedy representation, not ``k=1/p=0.08/temp=1``.
     """
     from models.common.sampling import format_sampling_params
 
@@ -96,7 +103,7 @@ def _build_decode_topk_param_tensors(mesh_device, sampling_params, batch_size):
     p = list(fmt.top_p)[:batch_size]
     temp = list(fmt.temperature)[:batch_size]
 
-    if all(kk == 1 for kk in k) and all(pp == 0 for pp in p) and all(tt == 1 for tt in temp):
+    if allow_force_argmax and all(kk == 1 for kk in k) and all(pp == 0 for pp in p) and all(tt == 1 for tt in temp):
         return None
 
     mapper = ttnn.ReplicateTensorToMesh(mesh_device)
@@ -281,11 +288,15 @@ class EagerLLMExecutor:
     def _sampling_decode_forward(self, logits, sampling_params, tt_out_tok=None):
         """Run ``model.sampling`` on device, choosing the path that matches PERF.md.
 
-        Greedy params that reduce to (k==1, p==0, temp==1) take the force-argmax
-        full-vocab all-gather path (``decode_forward`` with no k/p/temp). Anything
-        else — including the PERF.md ``temp=0, top_k=32, top_p=0.08`` recipe, which
-        formats to k=1/p=0.08/temp=1 — takes the **top-k op path**: per-device
-        ``ttnn.topk`` → barrier-free all-gather of the ``[*,32]`` tuples → ``ttnn.sampling``.
+        Routing depends on the model's ``allow_force_argmax``:
+          * ``allow_force_argmax=True``  — greedy params reducing to (k==1, p==0, temp==1) take
+            the force-argmax full-vocab all-gather path (``decode_forward`` with no k/p/temp).
+          * ``allow_force_argmax=False`` (the 1B/7B recipe) — there is no argmax path, so *every*
+            recipe, greedy included, builds k/p/temp tensors and takes the **top-k op path**:
+            per-device ``ttnn.topk`` → barrier-free all-gather of the ``[*,32]`` tuples →
+            ``ttnn.sampling``. This mirrors TTTv1, whose ``temp=0`` PERF.md recipe always runs
+            ``ttnn.topk`` (``format_sampling_params`` rewrites ``temp=0`` to the greedy k=1/p=0/temp=1
+            representation, so k=1 top-k == argmax-via-topk).
 
         The k/p/temp tensors are built once and cached so the *same* persistent device
         tensors are referenced during trace warmup, capture and replay (greedy decode
@@ -302,7 +313,10 @@ class EagerLLMExecutor:
         if getattr(self, "_decode_sampling_kpt_built", False):
             return self._decode_sampling_kpt
         self._decode_sampling_kpt = _build_decode_topk_param_tensors(
-            self.mesh_device, sampling_params, self.model.sampling.config.max_batch_size
+            self.mesh_device,
+            sampling_params,
+            self.model.sampling.config.max_batch_size,
+            allow_force_argmax=self.model.sampling.config.allow_force_argmax,
         )
         self._decode_sampling_kpt_built = True
         return self._decode_sampling_kpt
