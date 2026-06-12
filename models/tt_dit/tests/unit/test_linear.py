@@ -12,11 +12,13 @@ from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear
 from ...parallel.manager import CCLManager
 from ...utils.check import assert_quality
 from ...utils.tensor import bf16_tensor
+from ...utils.test import mesh_device_config_to_string
 
 
 @pytest.mark.parametrize(
     "mesh_device",
     [(1, 1), (1, 2), (2, 1)],
+    ids=mesh_device_config_to_string,
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -76,8 +78,18 @@ def test_linear(
 
 
 @pytest.mark.parametrize(
-    "mesh_device",
-    [(1, 1), (1, 2), (2, 1), (2, 2), (2, 4), (4, 2)],
+    "mesh_device, device_params",
+    [
+        (
+            shape,
+            {
+                "fabric_config": None if shape == (1, 1) else ttnn.FabricConfig.FABRIC_1D,
+                "require_exact_physical_num_devices": False if shape == (1, 1) else True,
+            },
+        )
+        for shape in [(1, 1), (1, 2), (2, 1), (2, 2), (2, 4), (4, 2)]
+    ],
+    ids=mesh_device_config_to_string,
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -140,7 +152,6 @@ def test_linear(
         # False,
     ],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_col_parallel_linear(
     mesh_device: ttnn.MeshDevice,
     B: int,
@@ -192,8 +203,18 @@ def test_col_parallel_linear(
 
 
 @pytest.mark.parametrize(
-    "mesh_device",
-    [(1, 2), (2, 1), (2, 2), (2, 4), (4, 2)],
+    "mesh_device, device_params",
+    [
+        (
+            shape,
+            {
+                "fabric_config": None if shape == (1, 1) else ttnn.FabricConfig.FABRIC_1D,
+                "require_exact_physical_num_devices": False if shape == (1, 1) else True,
+            },
+        )
+        for shape in [(1, 1), (1, 2), (2, 1), (2, 2), (2, 4), (4, 2)]
+    ],
+    ids=mesh_device_config_to_string,
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -230,7 +251,6 @@ def test_col_parallel_linear(
         # False,
     ],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_row_parallel_linear(
     mesh_device: ttnn.MeshDevice,
     B: int,

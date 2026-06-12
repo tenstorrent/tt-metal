@@ -443,7 +443,8 @@ public:
     std::vector<TestConfig> build_tests(
         const std::vector<ParsedTestConfig>& raw_configs, CmdlineParser& cmdline_parser);
 
-    // Helper function to check if a test should be skipped based on architecture or cluster type.
+    // Helper function to check if a test should be skipped based on architecture, cluster type, or
+    // being on a multi-mesh system.
     bool should_skip_test_on_platform(const ParsedTestConfig& test_config) const;
 
     // Helper function to check if a test should be skipped based on topology incompatibilities.
@@ -524,10 +525,16 @@ private:
     void expand_unidirectional_linear_unicast_or_multicast(
         ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern);
 
-    void expand_neighbor_exchange(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern);
+    void expand_neighbor_exchange(
+        ParsedTestConfig& test,
+        const ParsedTrafficPatternConfig& base_pattern,
+        MeshTrafficScope mesh_scope = MeshTrafficScope::ALL);
 
     void expand_sequential_neighbor_exchange(
-        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, uint32_t iteration_idx);
+        ParsedTestConfig& test,
+        const ParsedTrafficPatternConfig& base_pattern,
+        uint32_t iteration_idx,
+        MeshTrafficScope mesh_scope = MeshTrafficScope::ALL);
 
     void expand_full_or_half_ring_unicast_or_multicast(
         ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type);
