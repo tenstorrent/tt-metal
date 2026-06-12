@@ -575,11 +575,6 @@ jobs:
         run: |
           # --target install is for the tarball that should get replaced by proper packaging later
           cmake --build build --target install
-          # WASM viewer is not part of install; build it explicitly when Tracy is enabled.
-          # CMake's EXCLUDE_FROM_ALL keeps it out of default builds (e.g. wheel) where emsdk is absent.
-          if [ "${{ inputs.tracy }}" = "true" ]; then
-            cmake --build build --target tracy_profiler_wasm
-          fi
 
       - name: 🛠️ Profile
         if: ${{ inputs.profile }}

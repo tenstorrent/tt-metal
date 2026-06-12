@@ -197,8 +197,6 @@ if(NOT EXISTS "${EMSCRIPTEN_TOOLCHAIN_FILE}")
 endif()
 
 # Keep output path aligned with Python tooling and CI packaging/tests.
-# EXCLUDE_FROM_ALL: WASM requires emsdk which is only available in Tracy CI environments.
-# Built explicitly via cmake --build --target tracy_profiler_wasm in CI.
 ExternalProject_Add(
     tracy_profiler_wasm
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/tracy/profiler
@@ -206,7 +204,24 @@ ExternalProject_Add(
     CMAKE_ARGS
         -DCMAKE_TOOLCHAIN_FILE=${EMSCRIPTEN_TOOLCHAIN_FILE} -DCMAKE_BUILD_TYPE=MinSizeRel
     BUILD_ALWAYS FALSE
-    EXCLUDE_FROM_ALL TRUE
     INSTALL_COMMAND
         ""
+)
+
+# Wire WASM into the install phase. Use baked-in absolute paths (no \$ escaping) since
+# CMAKE_BINARY_DIR is not available in cmake_install.cmake at install time. Guard on emsdk
+# presence so wheel builds and other non-Tracy environments skip silently.
+install(
+    CODE
+        "if(EXISTS \"${EMSCRIPTEN_TOOLCHAIN_FILE}\")
+        execute_process(
+            COMMAND ${CMAKE_COMMAND} --build \"${CMAKE_BINARY_DIR}\" --target tracy_profiler_wasm
+            RESULT_VARIABLE _wasm_rc
+        )
+        if(NOT _wasm_rc EQUAL 0)
+            message(FATAL_ERROR \"Tracy WASM build failed\")
+        endif()
+    else()
+        message(STATUS \"Skipping Tracy WASM build: emsdk not found at ${EMSCRIPTEN_TOOLCHAIN_FILE}\")
+    endif()"
 )
