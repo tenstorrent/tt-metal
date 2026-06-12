@@ -3111,18 +3111,15 @@ def _main(activations, weights):
     ttnn.deallocate(ttnn_mm0_red, False)
     # E_shard: indexer already reduced by the fused all_gather above -> skip its own
     # reshape_21/all_gather_3/sum_2; typecast the slice directly.
-    ttnn_typecast_38 = ttnn.typecast(
-        ttnn_slice_71,
-        ttnn.DataType.FLOAT32,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_slice_71, False)
+    # E_idxnorm: run the indexer k_norm in BF16 (drop the fp32 up/down-cast round-trip).
+    # slice_71 is BF16 (matmul_0 -> bf16); layer_norm accumulates in fp32 internally.
+    # The indexer is a top-k selection signal -> bf16-tolerant. argmax-gated.
     ttnn_reshape_22 = ttnn.reshape(
-        ttnn_typecast_38,
+        ttnn_slice_71,
         [32, 1, 128],
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
-    ttnn.deallocate(ttnn_typecast_38, False)
+    ttnn.deallocate(ttnn_slice_71, False)
     ttnn_layer_norm_0 = ttnn.layer_norm(
         ttnn_reshape_22,
         epsilon=9.9999999747524271e-07,
@@ -3133,14 +3130,8 @@ def _main(activations, weights):
         program_config=None,
     )
     ttnn.deallocate(ttnn_reshape_22, False)
-    ttnn_typecast_39 = ttnn.typecast(
-        ttnn_layer_norm_0,
-        ttnn.DataType.BFLOAT16,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_layer_norm_0, False)
     ttnn_slice_72 = ttnn.slice(
-        ttnn_typecast_39,
+        ttnn_layer_norm_0,
         [0, 0, 0],
         [32, 1, 64],
         [1, 1, 1],
@@ -3281,13 +3272,13 @@ def _main(activations, weights):
     )
     ttnn.deallocate(_rope0_out_perm, False)
     ttnn_slice_79 = ttnn.slice(
-        ttnn_typecast_39,
+        ttnn_layer_norm_0,
         [0, 0, 64],
         [32, 1, 128],
         [1, 1, 1],
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
-    ttnn.deallocate(ttnn_typecast_39, False)
+    ttnn.deallocate(ttnn_layer_norm_0, False)
     ttnn_reshape_26 = ttnn.reshape(
         ttnn_slice_79,
         [32, 64],
@@ -4206,18 +4197,13 @@ def _main(activations, weights):
     )
     ttnn.deallocate(ttnn_mm15_red, False)
     # E_shard: indexer already reduced by the fused all_gather -> typecast slice directly.
-    ttnn_typecast_64 = ttnn.typecast(
-        ttnn_slice_164,
-        ttnn.DataType.FLOAT32,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_slice_164, False)
+    # E_idxnorm: run the indexer k_norm in BF16 (drop the fp32 up/down-cast round-trip). Mirror of layer 0.
     ttnn_reshape_75 = ttnn.reshape(
-        ttnn_typecast_64,
+        ttnn_slice_164,
         [32, 1, 128],
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
-    ttnn.deallocate(ttnn_typecast_64, False)
+    ttnn.deallocate(ttnn_slice_164, False)
     ttnn_layer_norm_1 = ttnn.layer_norm(
         ttnn_reshape_75,
         epsilon=9.9999999747524271e-07,
@@ -4228,14 +4214,8 @@ def _main(activations, weights):
         program_config=None,
     )
     ttnn.deallocate(ttnn_reshape_75, False)
-    ttnn_typecast_65 = ttnn.typecast(
-        ttnn_layer_norm_1,
-        ttnn.DataType.BFLOAT16,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_layer_norm_1, False)
     ttnn_slice_165 = ttnn.slice(
-        ttnn_typecast_65,
+        ttnn_layer_norm_1,
         [0, 0, 0],
         [32, 1, 64],
         [1, 1, 1],
@@ -4294,13 +4274,13 @@ def _main(activations, weights):
     )
     ttnn.deallocate(_rope3_out_perm, False)
     ttnn_slice_170 = ttnn.slice(
-        ttnn_typecast_65,
+        ttnn_layer_norm_1,
         [0, 0, 64],
         [32, 1, 128],
         [1, 1, 1],
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
-    ttnn.deallocate(ttnn_typecast_65, False)
+    ttnn.deallocate(ttnn_layer_norm_1, False)
     ttnn_reshape_78 = ttnn.reshape(
         ttnn_slice_170,
         [32, 64],
