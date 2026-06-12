@@ -58,12 +58,19 @@ trainer = GRPOTrainer(
     completer=completer,
     dataset=dataset,
     config=GRPOConfig(
+        epsilon=0.2,
         per_device_train_batch_size=8,
-        num_generations=8,
-        max_completion_length=256,
+        num_iterations=1,
         gradient_accumulation_steps=4,
         logging_steps=1,
+        output_dir="generated/grpo_run",
+        checkpointing=True,
+        checkpoint_interval=5,
         prompts_to_train=1600,
+        temperature=0.7,
+        max_completion_length=256,
+        num_generations=8,
+        warmup_steps=0,
     ),
     reward_func=my_reward,
     optimizer_dict={"type": "MorehAdamW", "lr": 5e-6},
@@ -72,6 +79,19 @@ trainer = GRPOTrainer(
 )
 trainer.train()
 ```
+
+> `GRPOConfig` has no defaults for these fields, so all of them must be
+> supplied. Alternatively, load the config from a YAML file (see
+> `configs/training_configs/grpo_boolq_llama_1dev.yaml`):
+>
+> ```python
+> import yaml
+> from ttml.trainers import get_grpo_config
+>
+> with open("configs/training_configs/grpo_boolq_llama_1dev.yaml") as f:
+>     yaml_config = yaml.safe_load(f)
+> config = get_grpo_config(yaml_config, output_dir="generated/grpo_run")
+> ```
 
 ---
 
