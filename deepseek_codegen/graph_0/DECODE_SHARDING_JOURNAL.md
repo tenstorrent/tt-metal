@@ -179,3 +179,16 @@ costs ~80us, far more than the extra dim0-gather bytes (~19us) + a cheap FastRed
 REOPENS: (a) the 1 remaining MoE-phase reduce_scatter (84us); (b) dense-MLP reduce_scatter_3/4 +
 all_gather_10/11 (x3 layers); (c) broader MoE-phase L1-sharding (skill's last untapped lever) - all now
 combine-safe under #46544.
+
+## DENSE-MLP all-reduce fusion — FAILED (hangs, 2026-06-12, E_dense_ccl_fuse)
+| step | change | result |
+|------|--------|--------|
+| E_dense_ccl_fuse | dense MLP w1/w3 (matmul_12/13, [1,1,128,4608]): reduce_scatter(dim3,ax1)+all_gather(dim1,ax1) -> all_gather(dim0,ax1)+local sum, same fusion as the MoE shared-FFN | **FAILED — HANGS reproducibly** (2 runs, both wedged the device with no output; glx_reset_auto recovered each). Reverted (uncommitted). |
+
+The shared-FFN fusion ([32,2048]) works + wins, but the IDENTICAL fusion on the WIDER dense tensor
+([128,4608], 9x elements) hangs deterministically. The all_gather(dim0) produces [8,1,128,4608]
+(~9.4MB bf16) -> likely a CCL buffer/deadlock at this size (NOT the moe_compute combine -- dense layer
+has no moe_compute; the hang is the dim0 gather itself or its DRAM/L1 footprint). So the fusion pattern
+does NOT generalize to wide tensors. Bound: narrow reductions (shared-FFN [32,2048]) fuse safely;
+wide ones (dense [128,4608], lm_head [32,129280]) do not. Dense was only x3 layers (~0.1ms ceiling)
+so low loss. Decomposed reduce_scatter+all_gather (bandwidth-optimal all-reduce) stays for dense.
