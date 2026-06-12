@@ -26,12 +26,19 @@ Per-call sequence (sample_actions):
        f. velocity → host → x_t ← x_t + dt·velocity (fp32 on host)
     7. Slice x_t (1, 32, 32) → (1, action_horizon, action_dim) and return
 
-Simplifications vs single-chip ttnn_pi0_5_model.py:
+Differences vs single-chip ttnn_pi0_5_model.py:
     - batch_size = 1 only
-    - No PI0_UPSTREAM_MASKS (attention_mask = None, position_ids = None)
-    - No keep_padded / precomputed_mod fast paths
-    - Host-side Euler integration (no on-device fp32 accumulator)
-    - x_t re-uploaded each step from host
+    - No trace + 2CQ yet (runs eager; trace capture is scaffolded but not
+      working — see capture_trace / Phase B.3). This is the main perf gap.
+    - No keep_padded fast path in the denoise loop.
+
+Already at parity with the single-chip path:
+    - PI0_UPSTREAM_MASKS attention mask + position-aware RoPE (per-chip).
+    - Precomputed per-(step, chip) adarms_cond (Phase B.2).
+    - On-device fp32 Euler integration with an in-place x_t buffer (Phase B.1);
+      x_t is refreshed via copy_host_to_device_tensor, not re-uploaded.
+    - Per-op matmul/SDPA/dtype tuning is inherited from the shared ttnn_gemma /
+      ttnn_siglip / ttnn_common building blocks (same env flags apply per chip).
 """
 
 from __future__ import annotations
