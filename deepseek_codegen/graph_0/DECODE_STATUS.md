@@ -21,4 +21,8 @@ device perf = prologue + attn×61 + dense×3 + moe×58 + lm_head
 
 **Patterns worth automating in the compiler:** (a) fuse N reductions of slices of one matmul output → 1 reduction; (b) tile-aware gather dim (pack partials into a tile dim, not the leading dim); (c) CSE loop-invariant RoPE broadcasts across layers; (d) emit combine/reduce in the dtype that hits `FastReduceNC`.
 
+**Full detail (per-step PCC + device deltas):**
+- MoE-compute journal (1059→256→205→177.8 ms + combine-hang root cause): https://github.com/tenstorrent/tt-metal/blob/mvasiljevic/deepseek-decode-sharding/deepseek_codegen/graph_0/MOE_COMPUTE_JOURNAL.md
+- Decode-sharding journal (this update's fusion / tile-repack / RoPE-CSE work): https://github.com/tenstorrent/tt-metal/blob/mvasiljevic/deepseek-decode-sharding/deepseek_codegen/graph_0/DECODE_SHARDING_JOURNAL.md
+
 *speedup = how much faster that effort made it (relative to just before it). Full-model device perf projected to s/token (anchored to E47 = 1.02 s/token). Smaller follow-on wins (tile-packing, RoPE CSE) carry it the rest of the way to ~6.5 samp/s.*
