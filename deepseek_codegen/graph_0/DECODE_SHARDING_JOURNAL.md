@@ -82,6 +82,18 @@ already bandwidth-minimal; the dim=1 repack removes the remaining tile-padding w
 gather entirely needs a fundamental re-shard (replicate activations / column-parallel) that relocates
 cost to activation gathers/reshards — high risk on generated code, not pursued.
 
+## ROPE COS/SIN CSE — cross-layer redundancy (2026-06-12, "bigger patterns")
+| step | change | result |
+|------|--------|--------|
+| s6 | all 6 RoPE sites (both layers) repeat the SAME _rope_cos/sin_pos_4d to 2 shapes ([1,1,32,1] x4, [1,1,512,1] x2). Compute the 4 distinct broadcast tensors ONCE, alias every site, free at rope5 (before moe_start). | **KEEP**. Commit 9c666aa. Repeat 14 ops/85us -> 6 ops/40us; **attn1 Repeat 41us -> 0** (layer 1 reuses layer 0's tensors). PCC bit-identical (cos64 unchanged, argmax 100%). |
+
+PATTERN: the cos/sin tables depend only on the decode POSITION (same for all layers in one
+step), so the per-site repeats are loop-invariant. The codegen emitted a fresh repeat at each of
+the 6 sites. CSE -> 4 shared. rotary_embedding_llama only READS cos/sin (deallocated after) so
+sharing is safe. EST: each of 61 attn layers recomputes ~6 rope repeats (~41us); shared-once ->
+layers 1-60 reuse -> ~-41us x 60 = ~-2.4ms. ~161 -> ~158.5 ms (~6.68x). Combine-safe (freed
+before moe_start). Verified via the deterministic Repeat op-count/time delta, not the noisy totals.
+
 ## TILE-ALIGNMENT AUDIT (2026-06-12) — matmuls aligned; head-dim padding structural
 Audited the rfuse perf report (perf_reports/rfuse_2026_06_12_05_45_41) for tile (32x32) misalignment.
 
@@ -112,9 +124,11 @@ Remaining attention TMs are structurally necessary MLA format conversions (head 
 SDPA concat) — prior round eliminated the foldable ones. (This "audit" first concluded CONVERGED, but the
 user's "CCL sends full tiles" prompt then surfaced the stat-gather tile-padding win above — s5.)
 
-## BRANCH RESULT: collective fusion + stat-gather tile repack = 177.8 -> ~160.9 ms (~6.58x), PCC argmax-100%
+## BRANCH RESULT: collective fusion + tile repack + rope CSE = 177.8 -> ~158.5 ms (~6.68x), PCC argmax-100%
 Net deliverable: (1) fuse the qkv-down 3-way reduction into 1 all_gather+sum (both attn layers),
 attn/layer 1.107 -> 0.976 (-131us); (2) fuse the MoE router all-reduce into 1 all_gather+sum (-40us/MoE
 layer); (3) repack the 5 RMS-norm stat gathers dim=0->dim=1 (8 padded tiles -> 1 tile), -45us per stat
-gather x ~123 gathers (~-5.5ms). The MoE expert/combine collectives (the 59% bulk) remain blocked by the
-combine L1 fragility.
+gather x ~123 gathers (~-5.5ms); (4) CSE the loop-invariant RoPE cos/sin repeats (~-2.4ms). The MoE
+expert/combine collectives (the 59% bulk) remain blocked by the combine L1 fragility.
+THEME: the biggest wins all came from recognizing PATTERNS repeated across the graph (per-matmul
+reductions, full-tile CCL padding, loop-invariant repeats) rather than single-op knobs.
