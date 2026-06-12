@@ -92,16 +92,15 @@ def _ensure_warm():
     ww, _ = sf.read(wpath, dtype="float32")
     if ww.ndim > 1:
         ww = ww.mean(1)
-    # Warm at the real request shapes: 20s -> 512-pad prefill, 40s -> 1024-pad. Full
-    # generation (default max_new_tokens), exactly like a real request — warming with
-    # short clips (256-pad) and/or max_new_tokens=4 left the model corrupted; matching
-    # the real-request shape/length keeps it clean.
-    for sec in (20.0, 40.0):
-        if len(ww) >= int(sec * 16000):
-            try:
-                _infer(ww[:int(sec * 16000)], None)
-            except Exception as e:
-                print(f"[server] warmup {sec}s skipped: {e}", flush=True)
+    # Now that EVERY _infer runs at the fixed FIXED_INFER_SEC length, warmup is safe (single
+    # prefill shape — the earlier warmup corruption came from VARYING lengths) and it compiles
+    # the exact kernel all requests use, so the first real request / stream segment is warm
+    # (no cold-JIT burst). Two passes to also compile the decode loop.
+    try:
+        _infer(ww, None)
+        _infer(ww, None)
+    except Exception as e:
+        print(f"[server] warmup skipped: {e}", flush=True)
     print(f"[server] warm in {time.time()-tw:.1f}s", flush=True)
 
 
@@ -282,8 +281,12 @@ async def transcribe(file: UploadFile = File(...), model: str = Form("qwen3-asr"
 # Client streams raw PCM16 mono 16k chunks; server emits committed segments as JSON
 # {"text","language","seg_end_s"} as soon as each phrase ends (silence) or hits max_seg.
 # Single device -> inference runs in a thread executor so audio keeps being received.
-STREAM_MIN_SEG, STREAM_MAX_SEG = 6.0, 14.0
-STREAM_SIL_SEC, STREAM_SIL_RMS = 0.5, 0.01
+# Fine segmentation for LOW LATENCY: cut at the first pause after MIN_SEG, force at MAX_SEG.
+# Each segment is padded to FIXED_INFER_SEC(14s) inside _infer anyway (constant prefill -> stable),
+# and 14s-padded inference of a short segment is cheap (~0.5s << segment length), so shrinking the
+# window directly cuts time-to-caption (~3-6s here vs the old 6-14s) while staying real-time.
+STREAM_MIN_SEG, STREAM_MAX_SEG = 3.0, 6.0
+STREAM_SIL_SEC, STREAM_SIL_RMS = 0.35, 0.01
 
 
 @app.websocket("/v1/audio/stream")
