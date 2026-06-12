@@ -7,6 +7,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -60,8 +61,8 @@ AllGatherFactory::cached_mesh_workload_t AllGatherFactory::create_mesh_workload(
         if (sem_buffer_type != tt::tt_metal::BufferType::L1_SMALL) {
             log_warning(
                 tt::LogOp,
-                "Allocating semaphores in L1, which may cause memory fragmentation and lead to memory allocation "
-                "failures for subsequent operations. Configure an L1_SMALL region to avoid this.");
+                "Allocating semaphores in L1, which may fragment L1 and cause allocation failures for subsequent "
+                "operations. Configure an L1_SMALL region to avoid this.");
         }
 
         init_barrier_sem =
@@ -224,13 +225,23 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
     // the cb_read_ptr and cb_write_ptr cleanly.
     const uint32_t pages_per_packet = std::max(1u, packet_size / input_page_size);
     uint32_t cb_page_size = input_page_size * pages_per_packet;
+    uint32_t cb_depth = 3;  // NOTE: reader's txn ID push/pop scheme has only been tested with depth=3
 
-    // Perf hack: for tile layout, pack multiple pages into a single CB page to reduce
-    // CB sync frequency between reader and writer. Don't do this for RM because of all
-    // the careful handling of page sizes.
-    // TODO identify the multiplier based on available L1 space
+    // Perf hack: for tile layout, pack multiple pages into a single CB page to reduce CB sync
+    // frequency between reader and writer. Note this increases effective CB depth.
+    // Don't do this for row-major layout because of all the careful handling of page sizes.
     if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
-        cb_page_size *= 4;
+        constexpr uint32_t ideal_multiplier = 3;
+        // Find the largest multiplier in [1, ideal] that fits in available L1
+        const uint32_t max_l1_space = ttnn::operations::data_movement::get_max_l1_space(input_tensor);
+        const uint32_t multiplier = std::clamp(max_l1_space / (cb_depth * cb_page_size), 1u, ideal_multiplier);
+        if (multiplier < ideal_multiplier) {
+            log_warning(
+                tt::LogOp,
+                "CircularBuffer depth is reduced due to L1 pressure (only {} B available), performance may regress.",
+                max_l1_space);
+        }
+        cb_page_size *= multiplier;
     }
 
     // --- Stripe geometry ---
@@ -271,7 +282,7 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
     uint32_t cb0_id = tt::CB::c_in0;
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(3 * cb_page_size, {{cb0_id, df}}).set_page_size(cb0_id, cb_page_size);
+        tt::tt_metal::CircularBufferConfig(cb_depth * cb_page_size, {{cb0_id, df}}).set_page_size(cb0_id, cb_page_size);
 
     CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
 
