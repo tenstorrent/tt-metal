@@ -68,6 +68,7 @@ def main():
     ap.add_argument("--cols", type=int, default=8)
     ap.add_argument("--experts", type=int, default=32)
     ap.add_argument("--seq", type=int, default=128)
+    ap.add_argument("--ep", action="store_true", help="use TtMiniMaxMoE (expert-parallel) instead of EP=1 experts")
     args = ap.parse_args()
 
     from models.demos.minimax_m2.config import MeshConfig, ModeConfig
@@ -105,6 +106,8 @@ def main():
             max_local_batch_size=1,
             use_throughput_experts=False,
             expert_weight_dtype=ttnn.bfloat8_b,
+            use_ep_moe=args.ep,
+            ep_seq_len_per_chip=args.seq,
         )
         print("[layer-smoke] DecoderLayer built", flush=True)
 

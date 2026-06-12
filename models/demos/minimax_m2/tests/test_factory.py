@@ -4,7 +4,6 @@
 
 import json
 import os
-from typing import Dict
 
 import pytest
 import torch
@@ -85,56 +84,6 @@ class TestFactory:
             "config": config,
             "dtype": dtype,
             "tensor_cache_path": tensor_cache_path,
-        }
-
-    @staticmethod
-    def _generate_dummy_state_dict(config) -> Dict[str, torch.Tensor]:
-        """Generate dummy state dict - scales with any model size"""
-
-        # Extract dimensions from config (works for any model size)
-        num_experts = getattr(config, "num_local_experts", 128)
-        hidden_size = getattr(config, "hidden_size", 2048)
-        intermediate_size = getattr(config, "intermediate_size", 5632)
-        num_attention_heads = getattr(config, "num_attention_heads", 32)
-        num_kv_heads = getattr(config, "num_key_value_heads", 32)
-        head_dim = getattr(config, "head_dim", 64)
-        vocab_size = getattr(config, "vocab_size", 201088)
-
-        return {
-            # Expert weights - scales with model size
-            "gate_up_proj": torch.randn(num_experts, hidden_size, 2 * intermediate_size),
-            "gate_up_proj_bias": torch.randn(num_experts, 2 * intermediate_size),
-            "down_proj": torch.randn(num_experts, intermediate_size, hidden_size),
-            "down_proj_bias": torch.randn(num_experts, hidden_size),
-            # Router weights - scales with experts and hidden size
-            "router": {
-                "weight": torch.randn(num_experts, hidden_size),
-                "bias": torch.randn(num_experts),
-            },
-            # Attention weights - scales with hidden dimensions
-            "q_proj": {
-                "weight": torch.randn(hidden_size, hidden_size),
-                "bias": torch.randn(hidden_size),
-            },
-            "k_proj": {
-                "weight": torch.randn(hidden_size, num_kv_heads * head_dim),
-                "bias": torch.randn(num_kv_heads * head_dim),
-            },
-            "v_proj": {
-                "weight": torch.randn(hidden_size, num_kv_heads * head_dim),
-                "bias": torch.randn(num_kv_heads * head_dim),
-            },
-            "o_proj": {
-                "weight": torch.randn(hidden_size, hidden_size),
-                "bias": torch.randn(hidden_size),
-            },
-            # Norm weights - scales with hidden size
-            "weight": torch.ones(hidden_size),
-            # KV cache and attention - scales with num heads
-            "sinks": torch.randn(num_attention_heads),
-            # Additional embeddings for full model tests
-            "embed_tokens": {"weight": torch.randn(vocab_size, hidden_size)},
-            "lm_head": {"weight": torch.randn(vocab_size, hidden_size)},
         }
 
 
