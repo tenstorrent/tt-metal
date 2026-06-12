@@ -104,23 +104,36 @@ Beyond QC=2 the reader is **no longer K-bandwidth-bound**; the residual is q/w c
 redundancy + fixed per-read cost. So a k-stationary rewrite would *not* help — the next lever is
 sharing q/w, not cutting K further.
 
-## What's left — q/w sharing (attempted; needs the right transport)
+## Grid-aligned multicast — DONE (the K win), committed
 
-q (and w) for a q-row-group are read identically by all ~22 cores that share it (~22× redundant).
-Measured upper bound at QC=2 (full kernel with those reads skipped): Q off → 0.423, **Q+W off →
-0.407** — only 0.034 above the 0.373 ceiling. So q+w sharing would take heads8 bfp8 ~0.49 → ~0.41
-(another ~17%) and **nearly fully hide the reader**.
+The dense deal (`dense_schedule`) lands each q-row-group on exactly one **grid row** when QC =
+Sqt/grid_y and KC | (Tt/grid_x): core (x,y) owns q-rows `[QC·y, QC·y+QC)` × k-cols a contiguous
+`Tt/grid_x` band keyed by x. So the geometry that broke the earlier q/w-share attempts is now
+clean rectangles: cores in a grid **row** share q/w, cores in a grid **column** share the k-band.
 
-**Tried — parallel-pull unicast (env `INDEXER_QW_UNICAST`, reverted):** each group's first core
-(injector) reads q/w from DRAM and the group's other cores pull it from the injector's L1. It
-**regressed 3.7× (0.49→1.9 ms)**: the injector is `c_lo(g)`, the straddle core that first *receives*
-group g−1, so the per-group q-reads serialize into a chain across all groups instead of running in
-parallel. **Double-buffering cb_q/cb_w was inert** (0.490 vs 0.492 — the q/w cost is DRAM-bandwidth
-redundancy, not a boundary stall).
+The factory detects this alignment, verifies each row/column maps to a contiguous NoC rectangle,
+and assigns one **sender** per line (reads DRAM once) that multicasts to the line's **receivers**
+(L1→L1, SDPA `chain_link` 3-semaphore handshake). **K mcast down columns** and **Q/W mcast along
+rows** are independent; each falls back to per-core DRAM reads if its lines aren't clean rectangles
+(harvested grid) or the deal isn't grid-aligned (e.g. heads64 QC=1 → 20 groups ≠ grid_y). Env A/B:
+`INDEXER_NO_KMCAST` / `INDEXER_NO_QMCAST`.
 
-**Fix for a working version:** the injector must be a core *fully inside* g (e.g. `c_lo(g)+1`),
-which has no g−1 work and reads g's q/w at kernel start — so the groups pipeline. And the transport
-should be **multicast** (one broadcast) not parallel-pull (which also contends ~22-way on the
-injector's L1). The output-stationary flat deal lays a group's cores out as a contiguous row-major
-run (≈2 rows on the 11×10 grid) — not a clean rectangle — so mcast needs ≤3 rectangles, or a
-deal aligned to whole grid rows.
+Measured sp7 (tracy device-kernel min):
+
+| config       | dense baseline | + mcast   | win   |
+|--------------|----------------|-----------|-------|
+| heads8 bfp8  | 0.480          | **0.430** | 10.4% |
+| heads16 bf16 | 0.866          | **0.794** | 8.3%  |
+| heads16 bfp8 | 0.826          | **0.794** | 3.9%  |
+
+**K mcast is the entire win** (heads8: K-only 0.432, both 0.430). **Q/W mcast is net-neutral**: once
+K stops being the bandwidth bottleneck, the once-per-group q/w reads already hide under compute, so
+sharing them saves nothing measurable (Q/W-only = 0.481 ≈ baseline). It is kept (correct, decoupled)
+but is not the lever the earlier analysis predicted — the prediction assumed q/w were exposed, but
+post-K-mcast they are not. This supersedes the old "parallel-pull unicast regressed 3.7×" finding:
+the fix was the grid-aligned clean-rectangle geometry + true multicast, not parallel-pull.
+
+**Not done — unicast fallback for non-rectangle lines.** When a row/column isn't a contiguous NoC
+rectangle (harvested grid), the code falls back to per-core DRAM reads (correct, no sharing) rather
+than a unicast forwarding chain. On the BH board here the logical→physical map is contiguous, so
+mcast is always eligible and the unicast path is untestable; left as a documented gap.
