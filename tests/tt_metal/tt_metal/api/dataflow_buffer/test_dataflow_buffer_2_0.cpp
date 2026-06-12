@@ -1018,6 +1018,11 @@ static void run_single_dfb_program_2_0(
     const bool is_all = (p.cap == m2::DFBAccessPattern::ALL);
     const bool producer_blocked = (p.pap == m2::DFBAccessPattern::BLOCKED);
     const bool consumer_blocked = (p.cap == m2::DFBAccessPattern::BLOCKED);
+    // BLOCKED-producer -> STRIDED-consumer: reads block-contiguous DRAM but pushes per-tile so the
+    // STRIDED round-robin scatters each tile into the consumer's interleaved slot (see the dedicated
+    // producer kernels). DM uses dfb_blocked_strided_producer; Tensix reuses the plain per-tile
+    // producer (its block-ness was only credit cadence over a host-flat-prefilled ring).
+    const bool blocked_to_strided = producer_blocked && (p.cap == m2::DFBAccessPattern::STRIDED);
 
     const m2::DFBSpecName DFB{"dfb"};
     const m2::KernelSpecName PRODUCER{"producer"};
@@ -1053,8 +1058,9 @@ static void run_single_dfb_program_2_0(
     if (p.producer_type == M2PorCType::DM) {
         producer = make_dm_kernel(
             PRODUCER,
-            producer_blocked ? "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_producer_2_0.cpp"
-                             : "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer_2_0.cpp",
+            blocked_to_strided ? "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_strided_producer_2_0.cpp"
+            : producer_blocked ? "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_producer_2_0.cpp"
+                               : "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer_2_0.cpp",
             p.num_producers);
         producer.tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}};
         producer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
@@ -1064,8 +1070,11 @@ static void run_single_dfb_program_2_0(
         // BLOCKED posts credits block_size-at-a-time (host pre-fills the L1 ring either way).
         producer = make_compute_kernel(
             PRODUCER,
-            producer_blocked ? "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_blocked_producer_2_0.cpp"
-                             : "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_producer_2_0.cpp",
+            // BLOCKED->STRIDED: a Tensix producer only posts credits over the host-flat-prefilled ring,
+            // and a STRIDED consumer needs per-tile credits, so reuse the plain per-tile Tensix producer.
+            (producer_blocked && !blocked_to_strided)
+                ? "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_blocked_producer_2_0.cpp"
+                : "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_producer_2_0.cpp",
             static_cast<uint8_t>(p.num_producers));
     }
     producer.dfb_bindings = {
@@ -1389,6 +1398,56 @@ static void run_single_dfb_program_2_0(
                 }
             }
             EXPECT_EQ(expected, output) << "M2 DM→DM BLOCKED→ALL permutation mismatch";
+        } else if (
+            p.producer_type == M2PorCType::DM && p.consumer_type == M2PorCType::DM &&
+            p.pap == m2::DFBAccessPattern::BLOCKED && p.cap == m2::DFBAccessPattern::STRIDED) {
+            // BLOCKED-producer -> STRIDED-consumer (DM->DM). The producer reads block_size contiguous DRAM
+            // pages per block (block order) but PUSHES PER-TILE, so the STRIDED round-robin hands tile i to
+            // the producer's TC slot t = i % ntc, whose paired consumer is c = (p + t*P) % C; that consumer
+            // reads its interleaved slots in order, writing its k-th received tile to out page k*C + c. The
+            // k-th tile producer p sends to slot t is local push i = t + k*ntc, reading DRAM page
+            // (i/bs * P + p)*bs + i%bs:
+            //   output[k*C + c] = input[((t + k*ntc)/bs * P + p)*bs + (t + k*ntc)%bs]
+            // For P==1 (ntc=C, t=c) this collapses to identity; for P>1 it is a deterministic permutation.
+            // (First cut covers C >= P, i.e. ntc = C/P >= 1.)
+            const uint32_t wpe = p.entry_size / sizeof(uint32_t);
+            const uint32_t P = p.num_producers;
+            const uint32_t C = p.num_consumers;
+            const uint32_t bs = p.block_size;
+            const uint32_t epp = p.num_entries / P;  // entries per producer
+            const uint32_t ntc = C / P;              // producer fan-out width (C >= P)
+            std::vector<uint32_t> expected(input.size(), 0u);
+            for (uint32_t pp = 0; pp < P; ++pp) {
+                for (uint32_t t = 0; t < ntc; ++t) {
+                    const uint32_t c = (pp + t * P) % C;
+                    const uint32_t tiles_to_c = epp / ntc;  // == num_entries / C
+                    for (uint32_t k = 0; k < tiles_to_c; ++k) {
+                        const uint32_t i = t + k * ntc;  // producer pp's local push index
+                        const uint32_t src = (i / bs * P + pp) * bs + (i % bs);
+                        const uint32_t dst = k * C + c;
+                        std::copy(
+                            input.begin() + src * wpe, input.begin() + (src + 1) * wpe, expected.begin() + dst * wpe);
+                    }
+                }
+            }
+            if (expected != output) {
+                for (uint32_t t = 0; t < std::min<uint32_t>(entries_per_core, 16); ++t) {
+                    int match = -1;
+                    for (uint32_t src = 0; src < p.num_entries; ++src) {
+                        if (std::equal(
+                                input.begin() + src * wpe, input.begin() + (src + 1) * wpe, output.begin() + t * wpe)) {
+                            match = static_cast<int>(src);
+                            break;
+                        }
+                    }
+                    log_info(
+                        tt::LogTest,
+                        "  DM→DM BLOCKED→STRIDED output tile {} ← {}",
+                        t,
+                        match >= 0 ? ("input page " + std::to_string(match)) : std::string("UNKNOWN"));
+                }
+            }
+            EXPECT_EQ(expected, output) << "M2 DM→DM BLOCKED→STRIDED permutation mismatch";
         } else {
             EXPECT_EQ(input, output) << "M2 single-DFB identity mismatch";
         }
@@ -1876,6 +1935,69 @@ DFB_BLOCKED_ALL_TEST_2_0(DMTest1xDFB2Bx4A_blk4, 2, 4, 4, 16)
 DFB_BLOCKED_ALL_TEST_2_0(DMTest1xDFB2Bx2A_blk2, 2, 2, 2, 16)
 DFB_BLOCKED_ALL_TEST_2_0(DMTest1xDFB3Bx1A_blk4, 3, 1, 4, 24)
 DFB_BLOCKED_ALL_TEST_2_0(DMTest1xDFB3Bx3A_blk4, 3, 3, 4, 24)
+
+// --- BLOCKED-producer → STRIDED-consumer (DM→DM, explicit sync) ---
+// The producer reads block_size CONTIGUOUS DRAM pages per block (the fast blocked read) but PUSHES
+// PER-TILE, so the existing STRIDED round-robin scatters each tile into the next consumer's interleaved
+// ring slot — NO remapper, NO broadcast, NO credit-path change (cap=STRIDED drives the interleaved
+// layout and the per-consumer credit divide out of the box). Host: one program_spec guard relaxed to
+// admit BLOCKED→STRIDED + a block divisibility check in the STRIDED capacity case. Golden (DM→DM):
+// identity at P==1; a deterministic permutation at P>1 (the block read order does not cancel the
+// per-tile round-robin). First cut covers C ≥ P at an integer ratio; num_entries % (block_size*P)==0
+// and num_entries % max(P,C)==0.
+#define DFB_BLOCKED_STRIDED_TEST_2_0(suffix, num_p, num_c, blk, entries) \
+    TEST_F(MeshDeviceFixture, suffix##_2_0) {                            \
+        M2SingleDFBParams params{                                        \
+            .producer_type = M2PorCType::DM,                             \
+            .consumer_type = M2PorCType::DM,                             \
+            .num_producers = (num_p),                                    \
+            .num_consumers = (num_c),                                    \
+            .pap = m2::DFBAccessPattern::BLOCKED,                        \
+            .cap = m2::DFBAccessPattern::STRIDED,                        \
+            .implicit_sync = false,                                      \
+            .num_entries = (entries),                                    \
+            .block_size = (blk),                                         \
+        };                                                               \
+        run_single_dfb_program_2_0(this->devices_.at(0), params);        \
+    }
+// Single-producer (P==1): per-tile pushes walk the consumers' interleaved slots in order → identity,
+// regardless of C. Smallest case first (P=1,C=2,bs=2,entries=4) then deeper interleave / larger block.
+DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB1Bx2S_blk2_e4, 1, 2, 2, 4)
+DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB1Bx1S_blk4, 1, 1, 4, 16)
+DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB1Bx2S_blk4, 1, 2, 4, 16)
+DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB1Bx4S_blk4, 1, 4, 4, 16)
+// Multi-producer (P>1, C≥P integer ratio): a deterministic permutation (golden simulates the round-robin).
+DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB2Bx2S_blk4, 2, 2, 4, 16)
+DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB2Bx4S_blk4, 2, 4, 4, 16)
+
+// --- BLOCKED-producer → STRIDED-consumer (Trisc→DM, explicit sync) ---
+// A Tensix producer only POSTS credits over a host-flat-prefilled ring (ring[s]=input[s]); it never
+// reads DRAM, so its "block-ness" was only credit cadence — and a STRIDED consumer needs per-tile
+// credits, so we reuse the plain per-tile Tensix producer (dfb_t6_producer_2_0.cpp). The DM STRIDED
+// consumer reads its interleaved slots {c, c+C, ...} and writes out page k*C+c, which over a flat
+// prefill is IDENTITY for C≥P (handled by the identity golden branch) — independent of block_size and P.
+// Tensix compute threads ∈ {1,2,4}; C≥P integer ratio; num_entries % (block_size*P)==0.
+#define DFB_TRISC_BLOCKED_STRIDED_TEST_2_0(suffix, num_p, num_c, blk, entries) \
+    TEST_F(MeshDeviceFixture, suffix##_2_0) {                                  \
+        M2SingleDFBParams params{                                              \
+            .producer_type = M2PorCType::TENSIX,                               \
+            .consumer_type = M2PorCType::DM,                                   \
+            .num_producers = (num_p),                                          \
+            .num_consumers = (num_c),                                          \
+            .pap = m2::DFBAccessPattern::BLOCKED,                              \
+            .cap = m2::DFBAccessPattern::STRIDED,                              \
+            .implicit_sync = false,                                            \
+            .num_entries = (entries),                                          \
+            .block_size = (blk),                                               \
+        };                                                                     \
+        run_single_dfb_program_2_0(this->devices_.at(0), params);              \
+    }
+DFB_TRISC_BLOCKED_STRIDED_TEST_2_0(TensixDMTest1xDFB1Bx1S_blk4, 1, 1, 4, 16)
+DFB_TRISC_BLOCKED_STRIDED_TEST_2_0(TensixDMTest1xDFB1Bx2S_blk4, 1, 2, 4, 16)
+DFB_TRISC_BLOCKED_STRIDED_TEST_2_0(TensixDMTest1xDFB1Bx4S_blk4, 1, 4, 4, 16)
+DFB_TRISC_BLOCKED_STRIDED_TEST_2_0(TensixDMTest1xDFB2Bx2S_blk4, 2, 2, 4, 16)
+DFB_TRISC_BLOCKED_STRIDED_TEST_2_0(TensixDMTest1xDFB2Bx4S_blk4, 2, 4, 4, 16)
+DFB_TRISC_BLOCKED_STRIDED_TEST_2_0(TensixDMTest1xDFB4Bx4S_blk4, 4, 4, 4, 32)
 
 // --- STRIDED 1xX, Xx1 (DM-DM, DM-Tensix, Tensix-DM) ---
 DFB_TEST_2_0(DMTest1xDFB1Sx1S, DM, DM, 1, STRIDED, 1, STRIDED)
