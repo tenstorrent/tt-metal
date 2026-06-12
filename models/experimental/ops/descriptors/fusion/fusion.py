@@ -70,6 +70,25 @@ from models.experimental.ops.descriptors.fusion.common import (
 
 
 # =============================================================================
+# Production-readiness guard
+# =============================================================================
+
+# Sequential/Parallel fusion is not yet production-ready: it requires ProgramSpec
+# to be exposed to Python before general use. Until then, construction is gated
+# behind an opt-in environment variable so accidental callers fail loudly rather
+# than silently depending on unfinished infrastructure.
+_ENABLE_ENV_VAR = "TTNN_ENABLE_PARALLEL_SEQUENTIAL"
+
+
+def _check_fusion_enabled() -> None:
+    if not os.environ.get(_ENABLE_ENV_VAR):
+        raise RuntimeError(
+            "Sequential/Parallel fusion is not yet production-ready and requires ProgramSpec to be "
+            f"exposed to Python before general use. Set {_ENABLE_ENV_VAR}=1 to opt in."
+        )
+
+
+# =============================================================================
 # Fusion Build Cache — LRU-bounded
 # =============================================================================
 
@@ -870,13 +889,7 @@ class Sequential:
     """
 
     def __init__(self, *items, **named_items):
-        import os
-
-        if not os.environ.get("TTNN_ENABLE_PARALLEL_SEQUENTIAL"):
-            raise RuntimeError(
-                "Sequential/Parallel fusion is not yet production-ready and requires ProgramSpec to be "
-                "exposed to Python before general use. Set TTNN_ENABLE_PARALLEL_SEQUENTIAL=1 to opt in."
-            )
+        _check_fusion_enabled()
         all_items = list(items)
         for item in named_items.values():
             all_items.append(item)
@@ -1050,13 +1063,7 @@ class Parallel:
     """
 
     def __init__(self, *items, **named_items):
-        import os
-
-        if not os.environ.get("TTNN_ENABLE_PARALLEL_SEQUENTIAL"):
-            raise RuntimeError(
-                "Sequential/Parallel fusion is not yet production-ready and requires ProgramSpec to be "
-                "exposed to Python before general use. Set TTNN_ENABLE_PARALLEL_SEQUENTIAL=1 to opt in."
-            )
+        _check_fusion_enabled()
         all_items = list(items)
         for item in named_items.values():
             all_items.append(item)
