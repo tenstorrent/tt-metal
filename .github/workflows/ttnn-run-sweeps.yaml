@@ -1003,7 +1003,7 @@ jobs:
                 esac
                 python3 .github/scripts/utils/verify_sweep_budget.py \
                   .github/time_budget.yaml sweep \
-                  --sku "$sku" --job-count "$job_count" --timeout-minutes 60
+                  --sku "$sku" --job-count "$job_count" --timeout-minutes 30
               fi
             fi
           done

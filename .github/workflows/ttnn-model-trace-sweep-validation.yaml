@@ -182,7 +182,7 @@ jobs:
           for sku in wh_n150 wh_n300 bh_p150b wh_galaxy; do
             python3 .github/scripts/utils/verify_sweep_budget.py \
               .github/time_budget.yaml sweep_validation \
-              --sku "$sku" --job-count "$JOB_COUNT" --timeout-minutes 60 || true
+              --sku "$sku" --job-count "$JOB_COUNT" --timeout-minutes 30 || true
           done
 
   run-model-trace-sweep-validation:

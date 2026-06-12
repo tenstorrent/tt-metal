@@ -105,11 +105,11 @@ ttnn:
   # workflows. Each parallel sweep job has a 60-min timeout; the budget is
   # num_jobs * 60 rounded up with headroom.
   sweep:
-    wh_n150: 1800       # nightly + comprehensive
-    wh_n300: 1800
-    bh_p150b: 1800
-    wh_galaxy: 1800     # lead-models + model-traced Galaxy sweeps
-    bh_loudbox: 600
+    wh_n150: 900        # ~30 jobs × 30 min
+    wh_n300: 900
+    bh_p150b: 900
+    wh_galaxy: 900      # lead-models + model-traced Galaxy sweeps
+    bh_loudbox: 300
   sweep_validation:
     wh_n150: 120
     wh_n300: 120
