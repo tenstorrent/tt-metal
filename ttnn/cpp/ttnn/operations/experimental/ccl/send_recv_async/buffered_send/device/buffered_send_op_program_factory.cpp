@@ -174,6 +174,7 @@ BufferedSendMeshWorkloadFactory::create_at(
     auto info_buffer = tt::tt_metal::distributed::AnyBuffer::create(info_buffer_config);
     auto info_buffer_addr = static_cast<uint32_t>(info_buffer.get_buffer()->address());
 
+    log_info(tt::LogOp, "Writing zeros to info buffer");
     // Zero-initialize the info buffer (blocking, so the reset lands before the program runs).
     std::vector<uint32_t> zeros(num_cores * info_buffer_page_size / sizeof(uint32_t), 0);
     auto info_mesh_buffer = info_buffer.get_mesh_buffer();

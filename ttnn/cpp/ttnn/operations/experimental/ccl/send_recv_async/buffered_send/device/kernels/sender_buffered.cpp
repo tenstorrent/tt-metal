@@ -125,15 +125,21 @@ void kernel_main() {
 
     // Copy the whole OutputTensorInfo struct out of the landing zone exactly once, then work from
     // the local copy (the ring of receive-buffer base addresses lives in dest_info.base_addr).
-    OutputTensorInfo dest_info = *reinterpret_cast<tt_l1_ptr OutputTensorInfo*>(handshake_base_addr);
-    DPRINT("num_output_buffers = {}\n", dest_info.num_tensors);
-    uint32_t output_base_addr = dest_info.base_addr[0];
+    volatile OutputTensorInfo* dest_info = reinterpret_cast<volatile tt_l1_ptr OutputTensorInfo*>(handshake_base_addr);
+    DPRINT("num_output_buffers = {}\n", dest_info->num_tensors);
+    uint32_t output_base_addr = dest_info->base_addr[dest_info->write_index];
+
+    DPRINT("Writing to output tensor index {}\n", dest_info->write_index);
+
+    dest_info->write_index = (dest_info->write_index + 1) % dest_info->num_tensors;
+
+    DPRINT("Updated write index to {}\n", dest_info->write_index);
+
     auto output_addr_gen_args = TensorAccessorArgs<output_args_cta_idx, output_args_crta_idx>();
     auto output_addr_gen = TensorAccessor(output_addr_gen_args, output_base_addr, output_page_size);
     //////////////////////////////////////////////////
     // STEP 3: stream pages directly into the receiver's (first) output tensor
     //////////////////////////////////////////////////
-    DPRINT("Streaming pages directly into the receiver's (first) output tensor\n");
     uint32_t page_index = page_start_offset;
     if constexpr (num_pages_per_packet > 0) {
         // Small pages: each CB entry holds num_pages_per_packet whole pages at socket_page_size stride.
