@@ -16,15 +16,30 @@
 
 namespace ttnn::operations::experimental::deepseek::indexer {
 
-/** Causal-valid output k-tiles in q-tile-row q_row: columns [0, this) are computed. */
+// Dense schedule: deal the full [0, k_len_tiles) output rectangle for every q-row-group instead of
+// only its causal-valid prefix. Future tiles are then computed + masked to -inf in-band by compute
+// (the writer's per-group -inf tail-fill becomes a no-op, and the flat deal is perfectly uniform:
+// every group has the same unit count, so V = groups * ceil(Tt/KC) and base = V/cores with no
+// causal triangles to balance). Costs the future tiles' work -- negligible at high sp_rank (sp7 is
+// ~99.5% valid) but ~2x at sp~0, so the causal split (dense_schedule=false) is kept for early
+// chunks. A pure C++ constexpr (not a CT arg) so the host factory and the device kernels read the
+// SAME value from this single shared header -- flipping it can never desync the unit count.
+constexpr bool dense_schedule = true;
+
+/** Causal-valid output k-tiles in q-tile-row q_row: columns [0, this) are causally visible. */
 constexpr uint32_t valid_k_tiles_in_row(uint32_t q_row, uint32_t chunk_start_tiles, uint32_t k_len_tiles) {
     const uint32_t v = chunk_start_tiles + q_row + 1;
     return v < k_len_tiles ? v : k_len_tiles;
 }
 
-/** Valid k-tiles of a q-row-group = those of its last row (the widest in the group). */
+/** k-tiles scheduled for a q-row-group. Dense: the full rectangle (k_len_tiles); causal: the valid
+ *  k-tiles of its last (widest) row. This is the ONE place the schedule shape is decided -- both the
+ *  host (V/deal) and the device (WorkUnitSpan walk, writer tail) derive everything else from it. */
 constexpr uint32_t valid_k_tiles_in_group(
     uint32_t group, uint32_t q_tiles_per_unit, uint32_t chunk_start_tiles, uint32_t k_len_tiles) {
+    if (dense_schedule) {
+        return k_len_tiles;
+    }
     return valid_k_tiles_in_row((group + 1) * q_tiles_per_unit - 1, chunk_start_tiles, k_len_tiles);
 }
 
