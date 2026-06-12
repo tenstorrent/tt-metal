@@ -84,8 +84,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Configure unpacker → init unary operand path → unpack tile 0 from L1 into DEST.
     _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(td_val);
-    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, num_tiles);
-    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0);
+    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles);
+    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0, ckernel::DEFAULT_TENSOR_SHAPE);
 
     // Release DEST section to the SFPU consumer.
     _llk_unpack_dest_dvalid_section_done_<dest_sync>();
