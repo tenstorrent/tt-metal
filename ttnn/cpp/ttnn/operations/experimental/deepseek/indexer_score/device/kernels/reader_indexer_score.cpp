@@ -2,15 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Reader for indexer_score: walks this core's flat span of causal-valid work
-// units (q_tiles_per_unit q-tile-rows x up-to-k_tiles_per_unit k-tiles). On a
-// new q-row-group pushes the resident w group and, when all heads fit, the
-// resident q group. With heads_per_group < num_heads the q head-group blocks
-// stream per tile instead. Per unit pushes the k chunk. Builds the [diag,
-// full] -inf mask tiles once.
+// Reader for indexer_score: walks this core's flat span of work units
+// (q_tiles_per_unit q-tile-rows x up-to-k_tiles_per_unit k-tiles). On a new
+// q-row-group pushes the resident w group and (when all heads fit) the q group;
+// per unit pushes the k chunk. Builds the [diag, full] -inf mask tiles once.
+//
+// Grid-aligned multicast (INDEXER_DATAMOVEMENT.md): when the dense deal lands on
+// the physical grid, cores in a grid ROW share q/w and cores in a grid COLUMN
+// share the k-band. One core per row/column reads from DRAM and multicasts to its
+// peers (role 1 = sender), the rest receive L1->L1 (role 2), so each input is read
+// from DRAM once per line instead of once per core. role 0 = no mcast (DRAM read).
+// Q/W (row) and K (column) are independent; either may be off (then role 0).
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/dataflow_common.hpp"
@@ -25,10 +32,62 @@ constexpr uint32_t cb_mask = tt::CBIndex::c_3;
 constexpr uint32_t tile_bytes = get_tile_size(cb_q);    // q/w: bf16
 constexpr uint32_t k_tile_bytes = get_tile_size(cb_k);  // k: bf16 or bfp8_b (smaller tile)
 
-/**
- * Stamp the diag (strict-upper) and full -inf mask tiles (chunk_start is
- * tile-aligned, so one diagonal tile suffices). Pushed once, permanently fronted.
- */
+// Compile-time arg layout after the 8 common args: q/k/w TensorAccessors, reader_dma_off, then the
+// 8 multicast args. Hoisted to file scope so the semaphore ids are usable as template parameters.
+constexpr auto q_args = TensorAccessorArgs<num_common_ct_args>();
+constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
+constexpr auto w_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
+constexpr uint32_t dma_off_ct = w_args.next_compile_time_args_offset();  // reader_dma_off slot
+
+// ---- multicast compile-time config (semaphore ids; on/off per direction) ------------------
+constexpr uint32_t mc_ct_base = dma_off_ct + 1;
+constexpr uint32_t k_mcast_on = get_compile_time_arg_val(mc_ct_base + 0);
+constexpr uint32_t q_mcast_on = get_compile_time_arg_val(mc_ct_base + 1);
+constexpr uint32_t k_send_sem = get_compile_time_arg_val(mc_ct_base + 2);
+constexpr uint32_t k_recv_sem = get_compile_time_arg_val(mc_ct_base + 3);
+constexpr uint32_t k_valid_sem = get_compile_time_arg_val(mc_ct_base + 4);
+constexpr uint32_t q_send_sem = get_compile_time_arg_val(mc_ct_base + 5);
+constexpr uint32_t q_recv_sem = get_compile_time_arg_val(mc_ct_base + 6);
+constexpr uint32_t q_valid_sem = get_compile_time_arg_val(mc_ct_base + 7);
+
+// Receiver rectangle / sender coords for one mcast direction (physical NoC), set per core on host.
+struct McastDir {
+    uint32_t role;            // 0 none (DRAM read), 1 sender (read + mcast), 2 receiver (wait for mcast)
+    uint32_t xs, ys, xe, ye;  // receiver rectangle (sender excluded by default mcast opts)
+    uint32_t sx, sy;          // sender physical coord (receivers signal it ready)
+    uint32_t ndst;            // number of receivers
+};
+
+/** Sender: data already sits at `addr` (just read from DRAM); wait for all receivers to be ready,
+ *  multicast the block, then relay the valid flag into their recv semaphore. Mirrors chain_link. */
+template <uint32_t send_sem, uint32_t recv_sem, uint32_t valid_sem>
+inline void mcast_send(Noc noc, const McastDir& d, uint32_t addr, uint32_t bytes) {
+    Semaphore<> s(send_sem);
+    s.wait(d.ndst);  // every receiver reserved its slot and signaled ready
+    s.set(0);
+    noc.async_write_multicast(
+        CoreLocalMem<uint32_t>(addr),
+        MulticastEndpoint{},
+        bytes,
+        d.ndst,
+        {},
+        {.noc_x_start = d.xs, .noc_y_start = d.ys, .noc_x_end = d.xe, .noc_y_end = d.ye, .addr = addr},
+        /*linked=*/true);
+    // back-to-back after the linked data write (a flush/barrier between them would deadlock it)
+    Semaphore<>(valid_sem).relay_multicast(
+        noc, Semaphore<>(recv_sem), d.xs, d.ys, d.xe, d.ye, d.ndst, /*linked=*/false);
+    noc.async_writes_flushed();
+}
+
+/** Receiver: slot already reserved at `addr`; set recv=INVALID, signal sender ready, wait VALID. */
+template <uint32_t send_sem, uint32_t recv_sem>
+inline void mcast_recv(Noc noc, const McastDir& d) {
+    Semaphore<> r(recv_sem);
+    r.set(0);
+    Semaphore<>(send_sem).up(noc, d.sx, d.sy, 1);
+    r.wait(1);
+}
+
 inline void build_mask_tiles(Noc noc) {
     CircularBuffer cb(cb_mask);
     cb.reserve_back(2);
@@ -37,15 +96,22 @@ inline void build_mask_tiles(Noc noc) {
     cb.push_back(2);
 }
 
-/** Read the q head-group block starting at head first_head for the group at q-tile-row q_row_start:
- *  [q_tiles_per_unit][heads_per_group][head_dim_tiles] (heads contiguous per row so a DEST pass's
- *  head rows stride head_dim_tiles for matmul_block), tile id = h*q_len_tiles*head_dim_tiles + s*head_dim_tiles + d. */
+/** q head-group block [q_tiles_per_unit][heads_per_group][head_dim_tiles], page id
+ *  h*q_len_tiles*head_dim_tiles + (q_row_start+r)*head_dim_tiles + d. role-aware (q row mcast). */
 template <bool dma_off, typename QAcc>
-inline void read_q_block(Noc noc, const QAcc& q_acc, uint32_t q_row_start, uint32_t first_head) {
+inline void read_q_block(Noc noc, const QAcc& q_acc, uint32_t q_row_start, uint32_t first_head, const McastDir& qd) {
     CircularBuffer cb(cb_q);
     cb.reserve_back(q_group_tiles);
-    if constexpr (!dma_off) {  // compute-ceiling toggle: skip the NoC reads, still push the block
-        uint32_t ptr = cb.get_write_ptr();
+    const uint32_t addr = cb.get_write_ptr();
+    if constexpr (q_mcast_on) {
+        if (qd.role == 2) {  // receiver: wait for the row sender's mcast into this slot
+            mcast_recv<q_send_sem, q_recv_sem>(noc, qd);
+            cb.push_back(q_group_tiles);
+            return;
+        }
+    }
+    if constexpr (!dma_off) {
+        uint32_t ptr = addr;
         for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
             for (uint32_t h = first_head; h < first_head + heads_per_group; ++h) {
                 const uint32_t base = h * q_len_tiles * head_dim_tiles + (q_row_start + r) * head_dim_tiles;
@@ -57,16 +123,29 @@ inline void read_q_block(Noc noc, const QAcc& q_acc, uint32_t q_row_start, uint3
         }
         noc.async_read_barrier();
     }
+    if constexpr (q_mcast_on) {
+        if (qd.role == 1) {  // sender: broadcast the block to the rest of the row
+            mcast_send<q_send_sem, q_recv_sem, q_valid_sem>(noc, qd, addr, q_group_tiles * tile_bytes);
+        }
+    }
     cb.push_back(q_group_tiles);
 }
 
-/** Read the resident w group: [q_tiles_per_unit][num_heads], tile id = h*q_len_tiles + s. */
+/** resident w group [q_tiles_per_unit][num_heads], page id h*q_len_tiles + q_row_start + r. */
 template <bool dma_off, typename WAcc>
-inline void read_w_group(Noc noc, const WAcc& w_acc, uint32_t q_row_start) {
+inline void read_w_group(Noc noc, const WAcc& w_acc, uint32_t q_row_start, const McastDir& qd) {
     CircularBuffer cb(cb_w);
     cb.reserve_back(w_group_tiles);
-    if constexpr (!dma_off) {  // compute-ceiling toggle: skip the NoC reads, still push the group
-        uint32_t ptr = cb.get_write_ptr();
+    const uint32_t addr = cb.get_write_ptr();
+    if constexpr (q_mcast_on) {
+        if (qd.role == 2) {
+            mcast_recv<q_send_sem, q_recv_sem>(noc, qd);
+            cb.push_back(w_group_tiles);
+            return;
+        }
+    }
+    if constexpr (!dma_off) {
+        uint32_t ptr = addr;
         for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
             for (uint32_t h = 0; h < num_heads; ++h) {
                 noc.async_read(
@@ -76,19 +155,31 @@ inline void read_w_group(Noc noc, const WAcc& w_acc, uint32_t q_row_start) {
         }
         noc.async_read_barrier();
     }
+    if constexpr (q_mcast_on) {
+        if (qd.role == 1) {
+            mcast_send<q_send_sem, q_recv_sem, q_valid_sem>(noc, qd, addr, w_group_tiles * tile_bytes);
+        }
+    }
     cb.push_back(w_group_tiles);
 }
 
-/** Read k chunk [k_tiles_in_unit][head_dim_tiles] starting at k_tile_start, tile id = t*head_dim_tiles + d.
- *  Always reserves/pushes the full k_tiles_per_unit*head_dim_tiles so the 2-chunk ring stays
- *  half-aligned (a partial push would wrap mid-block and overflow the CB); the unread tail
- *  is never consumed. */
+/** k chunk [k_tiles_in_unit][head_dim_tiles], page id (k_tile_start+c)*head_dim_tiles + d. Always
+ *  reserves/pushes the full k_chunk_tiles so the 2-chunk ring stays half-aligned. role-aware (k col mcast). */
 template <bool dma_off, typename KAcc>
-inline void read_k_chunk(Noc noc, const KAcc& k_acc, uint32_t k_tile_start, uint32_t k_tiles_in_unit) {
+inline void read_k_chunk(
+    Noc noc, const KAcc& k_acc, uint32_t k_tile_start, uint32_t k_tiles_in_unit, const McastDir& kd) {
     CircularBuffer cb(cb_k);
     cb.reserve_back(k_chunk_tiles);
-    if constexpr (!dma_off) {  // compute-ceiling toggle: skip the NoC reads, still push the chunk
-        uint32_t ptr = cb.get_write_ptr();
+    const uint32_t addr = cb.get_write_ptr();
+    if constexpr (k_mcast_on) {
+        if (kd.role == 2) {  // receiver: wait for the column sender's mcast into this slot
+            mcast_recv<k_send_sem, k_recv_sem>(noc, kd);
+            cb.push_back(k_chunk_tiles);
+            return;
+        }
+    }
+    if constexpr (!dma_off) {
+        uint32_t ptr = addr;
         for (uint32_t c = 0; c < k_tiles_in_unit; ++c) {
             for (uint32_t d = 0; d < head_dim_tiles; ++d) {
                 noc.async_read(
@@ -102,6 +193,11 @@ inline void read_k_chunk(Noc noc, const KAcc& k_acc, uint32_t k_tile_start, uint
         }
         noc.async_read_barrier();
     }
+    if constexpr (k_mcast_on) {
+        if (kd.role == 1) {  // sender: broadcast the full chunk down the column
+            mcast_send<k_send_sem, k_recv_sem, k_valid_sem>(noc, kd, addr, k_chunk_tiles * k_tile_bytes);
+        }
+    }
     cb.push_back(k_chunk_tiles);
 }
 
@@ -111,14 +207,27 @@ void kernel_main() {
     const uint32_t w_addr = get_arg_val<uint32_t>(2);
     const uint32_t flat_start = get_arg_val<uint32_t>(3);
     const uint32_t flat_count = get_arg_val<uint32_t>(4);
+    const McastDir kd{
+        get_arg_val<uint32_t>(5),
+        get_arg_val<uint32_t>(6),
+        get_arg_val<uint32_t>(7),
+        get_arg_val<uint32_t>(8),
+        get_arg_val<uint32_t>(9),
+        get_arg_val<uint32_t>(10),
+        get_arg_val<uint32_t>(11),
+        get_arg_val<uint32_t>(12)};
+    const McastDir qd{
+        get_arg_val<uint32_t>(13),
+        get_arg_val<uint32_t>(14),
+        get_arg_val<uint32_t>(15),
+        get_arg_val<uint32_t>(16),
+        get_arg_val<uint32_t>(17),
+        get_arg_val<uint32_t>(18),
+        get_arg_val<uint32_t>(19),
+        get_arg_val<uint32_t>(20)};
 
-    constexpr auto q_args = TensorAccessorArgs<num_common_ct_args>();
-    constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
-    constexpr auto w_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
-    // DMA-off bitmask, appended last in the CT args (after the three TensorAccessors):
-    // bit0=q, bit1=k, bit2=w. Each read still pushes its CB so compute runs; only the NoC
-    // read is skipped, isolating that input's contribution to the reader's exposed time.
-    constexpr uint32_t dma_mask = get_compile_time_arg_val(w_args.next_compile_time_args_offset());
+    // DMA-off bitmask (bit0=q, bit1=k, bit2=w) sits right after the three TensorAccessors.
+    constexpr uint32_t dma_mask = get_compile_time_arg_val(dma_off_ct);
     constexpr bool q_off = (dma_mask & 0b001u) != 0;
     constexpr bool k_off = (dma_mask & 0b010u) != 0;
     constexpr bool w_off = (dma_mask & 0b100u) != 0;
@@ -136,19 +245,18 @@ void kernel_main() {
     bool need_group = true;
     for (uint32_t i = 0; i < flat_count; ++i) {
         if (need_group) {
-            read_w_group<w_off>(noc, w_acc, span.q_tile_start());
+            read_w_group<w_off>(noc, w_acc, span.q_tile_start(), qd);
             if constexpr (!stream_heads) {
-                read_q_block<q_off>(noc, q_acc, span.q_tile_start(), 0);
+                read_q_block<q_off>(noc, q_acc, span.q_tile_start(), 0, qd);
             }
             need_group = false;
         }
-        read_k_chunk<k_off>(noc, k_acc, span.k_tile_start(), span.k_tiles());
+        read_k_chunk<k_off>(noc, k_acc, span.k_tile_start(), span.k_tiles(), kd);
         if constexpr (stream_heads) {
-            // one q-block per (r, c) output tile per head group; must match compute's
-            // (r outer, c inner) tile order so each block lands in the tile that consumes it
+            // one q-block per (r, c) output tile per head group; must match compute's tile order
             for (uint32_t tile_idx = 0; tile_idx < q_tiles_per_unit * span.k_tiles(); ++tile_idx) {
                 for (uint32_t first_head = 0; first_head < num_heads; first_head += heads_per_group) {
-                    read_q_block<q_off>(noc, q_acc, span.q_tile_start(), first_head);
+                    read_q_block<q_off>(noc, q_acc, span.q_tile_start(), first_head, qd);
                 }
             }
         }

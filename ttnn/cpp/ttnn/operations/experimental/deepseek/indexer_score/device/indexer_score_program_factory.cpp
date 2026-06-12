@@ -97,6 +97,83 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     const uint32_t base = V / num_cores;
     const uint32_t rem = V % num_cores;
 
+    // ---- grid-aligned multicast (decoupled Q/W along rows, K down columns) -------------------
+    // When the dense deal lands exactly on the physical grid -- group g == grid row y, and the
+    // grid_x cores of a row split that group's k-chunks into contiguous bands -- cores in the same
+    // grid ROW share identical q/w (same q-rows) and cores in the same grid COLUMN share the
+    // identical k-band. So one core per row reads q/w once and multicasts along the row, and one
+    // core per column reads each k-chunk and multicasts down the column, killing the ~grid_x q/w
+    // re-reads and the ~grid_y k re-reads. Each direction is independent: enabled only if that
+    // direction's lines are contiguous NoC rectangles; otherwise that input falls back to per-core
+    // DRAM reads (harvested grid / non-grid-aligned deal). See INDEXER_DATAMOVEMENT.md.
+    const uint32_t units_per_group = groups > 0 ? (uint32_t)(V / groups) : 0;
+    const bool grid_aligned = ttnn::operations::experimental::deepseek::indexer::dense_schedule && groups == grid.y &&
+                              num_cores == (uint32_t)(grid.x * grid.y) && rem == 0 && units_per_group == grid.x * base;
+
+    std::vector<CoreCoord> phys(num_cores);
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        phys[i] = q.device()->worker_core_from_logical_core(cores[i]);
+    }
+    auto cidx = [&](uint32_t x, uint32_t y) { return y * grid.x + x; };
+
+    // Per-line contiguity: K columns must be vertical NoC rects (shared x, contiguous y); Q/W rows
+    // horizontal rects (shared y, contiguous x). Q/W also needs all heads resident (one q block).
+    bool k_cols_ok = grid_aligned;
+    bool q_rows_ok = grid_aligned && HB == Hi;
+    for (uint32_t x = 0; x < grid.x && k_cols_ok; ++x) {
+        const uint32_t px = phys[cidx(x, 0)].x;
+        uint32_t ymin = phys[cidx(x, 0)].y, ymax = ymin;
+        for (uint32_t y = 0; y < grid.y; ++y) {
+            const auto& p = phys[cidx(x, y)];
+            if (p.x != px) {
+                k_cols_ok = false;
+            }
+            ymin = std::min<uint32_t>(ymin, p.y);
+            ymax = std::max<uint32_t>(ymax, p.y);
+        }
+        if (ymax - ymin + 1 != grid.y) {
+            k_cols_ok = false;
+        }
+    }
+    for (uint32_t y = 0; y < grid.y && q_rows_ok; ++y) {
+        const uint32_t py = phys[cidx(0, y)].y;
+        uint32_t xmin = phys[cidx(0, y)].x, xmax = xmin;
+        for (uint32_t x = 0; x < grid.x; ++x) {
+            const auto& p = phys[cidx(x, y)];
+            if (p.y != py) {
+                q_rows_ok = false;
+            }
+            xmin = std::min<uint32_t>(xmin, p.x);
+            xmax = std::max<uint32_t>(xmax, p.x);
+        }
+        if (xmax - xmin + 1 != grid.x) {
+            q_rows_ok = false;
+        }
+    }
+    if (std::getenv("INDEXER_NO_KMCAST") != nullptr) {
+        k_cols_ok = false;
+    }
+    if (std::getenv("INDEXER_NO_QMCAST") != nullptr) {
+        q_rows_ok = false;
+    }
+    // The compute-ceiling diagnostic disables reader DRAM reads; disable mcast too so the ceiling
+    // stays pure (no NoC sharing traffic). Mcast is meaningless without the underlying reads.
+    if (std::getenv("INDEXER_DMA_OFF") != nullptr || std::getenv("INDEXER_DMA_OFF_READER") != nullptr) {
+        k_cols_ok = false;
+        q_rows_ok = false;
+    }
+    const uint32_t k_mcast_on = k_cols_ok ? 1u : 0u;
+    const uint32_t q_mcast_on = q_rows_ok ? 1u : 0u;
+
+    // 3 semaphores per active direction: send (receivers signal ready), recv (sender relays valid
+    // into it), valid (constant 1, the relay source). Mirrors SDPA chain_link's handshake.
+    const uint32_t k_send_sem = k_mcast_on ? CreateSemaphore(program, core_ranges, 0) : 0;
+    const uint32_t k_recv_sem = k_mcast_on ? CreateSemaphore(program, core_ranges, 0) : 0;
+    const uint32_t k_valid_sem = k_mcast_on ? CreateSemaphore(program, core_ranges, 1) : 0;
+    const uint32_t q_send_sem = q_mcast_on ? CreateSemaphore(program, core_ranges, 0) : 0;
+    const uint32_t q_recv_sem = q_mcast_on ? CreateSemaphore(program, core_ranges, 0) : 0;
+    const uint32_t q_valid_sem = q_mcast_on ? CreateSemaphore(program, core_ranges, 1) : 0;
+
     const uint32_t bf16_tile = tile_size(DataFormat::Float16_b);
     const uint32_t fp32_tile = tile_size(DataFormat::Float32);
 
@@ -208,6 +285,15 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     TensorAccessorArgs(*k.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*w.buffer()).append_to(reader_ct);
     reader_ct.push_back(reader_dma_off);
+    // multicast: on/off per direction + the 6 semaphore ids (read at fixed offsets after dma_off)
+    reader_ct.push_back(k_mcast_on);
+    reader_ct.push_back(q_mcast_on);
+    reader_ct.push_back(k_send_sem);
+    reader_ct.push_back(k_recv_sem);
+    reader_ct.push_back(k_valid_sem);
+    reader_ct.push_back(q_send_sem);
+    reader_ct.push_back(q_recv_sem);
+    reader_ct.push_back(q_valid_sem);
 
     std::vector<uint32_t> writer_ct = common_ct;
     constexpr uint32_t out_elem_bytes = 2;    // bf16 output (compute_output_specs)
@@ -238,11 +324,57 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     uint32_t flat = 0;
     for (uint32_t i = 0; i < num_cores; ++i) {
         const uint32_t count = base + (i < rem ? 1 : 0);
-        SetRuntimeArgs(
-            program,
-            reader_id,
-            cores[i],
-            {q.buffer()->address(), k.buffer()->address(), w.buffer()->address(), flat, count});
+        std::vector<uint32_t> r = {q.buffer()->address(), k.buffer()->address(), w.buffer()->address(), flat, count};
+        // Per-core multicast args (16): K column (8) then Q/W row (8). role 0=none(DRAM read),
+        // 1=sender, 2=receiver. rect (xs,ys,xe,ye) + sender (sx,sy) are physical NoC; ndst=#receivers.
+        const auto u32 = [](auto v) { return static_cast<uint32_t>(v); };
+        const auto push8 =
+            [&](uint32_t role, uint32_t xs, uint32_t ys, uint32_t xe, uint32_t ye, const CoreCoord& s, uint32_t ndst) {
+                r.push_back(role);
+                r.push_back(xs);
+                r.push_back(ys);
+                r.push_back(xe);
+                r.push_back(ye);
+                r.push_back(u32(s.x));
+                r.push_back(u32(s.y));
+                r.push_back(ndst);
+            };
+        if (grid_aligned) {
+            const uint32_t x = i % grid.x, y = i / grid.x;
+            // K column x: sender (x,0), receivers (x,1..); vertical rect spanning the column.
+            uint32_t kys = u32(phys[cidx(x, 0)].y), kye = kys;
+            for (uint32_t yy = 0; yy < grid.y; ++yy) {
+                kys = std::min<uint32_t>(kys, u32(phys[cidx(x, yy)].y));
+                kye = std::max<uint32_t>(kye, u32(phys[cidx(x, yy)].y));
+            }
+            push8(
+                k_mcast_on ? (y == 0 ? 1u : 2u) : 0u,
+                u32(phys[cidx(x, 0)].x),
+                kys,
+                u32(phys[cidx(x, 0)].x),
+                kye,
+                phys[cidx(x, 0)],
+                u32(grid.y) - 1);
+            // Q/W row y: sender (0,y), receivers (1..,y); horizontal rect spanning the row.
+            uint32_t qxs = u32(phys[cidx(0, y)].x), qxe = qxs;
+            for (uint32_t xx = 0; xx < grid.x; ++xx) {
+                qxs = std::min<uint32_t>(qxs, u32(phys[cidx(xx, y)].x));
+                qxe = std::max<uint32_t>(qxe, u32(phys[cidx(xx, y)].x));
+            }
+            push8(
+                q_mcast_on ? (x == 0 ? 1u : 2u) : 0u,
+                qxs,
+                u32(phys[cidx(0, y)].y),
+                qxe,
+                u32(phys[cidx(0, y)].y),
+                phys[cidx(0, y)],
+                u32(grid.x) - 1);
+        } else {
+            for (uint32_t z = 0; z < 16; ++z) {
+                r.push_back(0);
+            }
+        }
+        SetRuntimeArgs(program, reader_id, cores[i], r);
         SetRuntimeArgs(program, compute_id, cores[i], {flat, count});
         SetRuntimeArgs(program, writer_id, cores[i], {out.buffer()->address(), flat, count});
         flat += count;
