@@ -2,25 +2,34 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""DEPRECATED: superseded by :mod:`utils.llama_grpo_completer`.
+"""ttml-backed :class:`GRPOCompleter` that delegates generation over RPC.
 
-This module is kept around for the manual integration scripts
-(``manual_ttml_to_ttt_weight_transfer.py``,
-``test_ttml_to_ttt_weight_transfer.py``) which build a ttml-side
-completer in-process (no RPC) to inspect / push weights directly.
+The completer is intended to run on the ttml rank of a two-rank
+ttml -> tt-transformers setup. It owns the local ttml ``Llama`` model
+(used for :meth:`compute_nlog_probs`) and a :class:`TttInferenceClient`
+that proxies :meth:`generate` / :meth:`generate_str` to a remote
+:class:`TttGenerationWorker` on the ttt rank.
 
-New code that drives a GRPO training run should use
-:class:`utils.llama_grpo_completer.LlamaGRPOCompleter` instead -- it
-implements the same ``GRPOCompleter`` interface but delegates
-``generate`` and ``generate_str`` to a remote ``TttGenerationWorker``
-over :class:`utils.inference_bridge.TttInferenceClient`, while keeping
-``compute_nlog_probs`` local. See
-``boolq_training_example/boolq_training_example.py`` for the full
-launcher pattern.
+The split is:
+
+* ``compute_nlog_probs`` -- runs locally against the ttml model. This
+  is where the gradient flows during GRPO training.
+* ``generate`` / ``generate_str`` -- run remotely on the ttt rank via
+  :meth:`TttInferenceClient.remote_generate`. The ttt worker holds a
+  ``tt-transformers`` ``Transformer`` for fast prefill+decode.
+* :meth:`push_weights` -- exports the ttml model as an HF-keyed weight
+  dict and ships it across in a single ``TttInferenceClient.transfer_weights``
+  call. Use this once before :meth:`GRPOTrainer.train` (to overwrite
+  the worker's dummy boot weights) and after every optimizer step.
+
+The :class:`WeightSyncCallback` provided here is the standard glue for
+that post-step sync: register it in the trainer's ``callbacks=`` list
+to push fresh weights on every ``on_step_end``.
 """
 
 from __future__ import annotations
 
+import gc
 import logging
 import os
 from dataclasses import dataclass
@@ -31,30 +40,38 @@ import numpy as np
 import ttnn
 
 import ttml
+from huggingface_hub import snapshot_download
+from transformers import AutoTokenizer
 from ttml.common.config import TransformerConfig
 from ttml.common.utils import no_grad
 from ttml.models import RunnerType, WeightTyingType
 from ttml.models.llama import LlamaConfig, LlamaRopeScalingConfig, load_from_safetensors
-from huggingface_hub import snapshot_download
-from transformers import AutoTokenizer
-
+from ttml.trainers.callback import TrainerCallback
 from ttml.trainers.grpo_trainer import GRPOCompleter
+
+from .inference_bridge import TttInferenceClient
 from .llama_overrides import LlamaCompositeKV
 
 
 TILE_SIZE = 32
-SAMPLE_SEED = 42
-
-# Chunked async readback: every CHUNK decode steps the loop fires a
-# non-blocking d2h for the just-finished chunk, then on the next chunk
-# boundary host-synchronises that read and checks for stop tokens. The check
-# thus lags compute by CHUNK steps, which is the cost of avoiding any
-# per-step host sync.
-CHUNK = 32
 
 
 @dataclass
 class LlamaCompletionCtx:
+    """Generation parameters shared between the ttml model owner and the
+    remote ttt worker.
+
+    ``max_tokens_to_complete``, ``temperature``, and
+    ``completions_per_prompt`` mirror the fields the old in-process
+    ``LlamaCompleterTtml`` consumed. They are forwarded verbatim into
+    the remote ``generate`` request so the worker sees the same knobs
+    the trainer thinks it set.
+
+    ``_tokenizer`` and ``_pad_token`` are populated by
+    :class:`LlamaGRPOCompleter` after the HF tokenizer for
+    ``model_source`` loads; callers should not set them manually.
+    """
+
     max_tokens_to_complete: int
     temperature: float
     completions_per_prompt: int = 1
@@ -62,7 +79,12 @@ class LlamaCompletionCtx:
     _pad_token: Optional[int] = None
 
 
-def deallocate_tensors(tensors: Any) -> None:
+# ---------------------------------------------------------------------------
+# Local helpers (ported from the old LlamaCompleterTtml; ttml-internal)
+# ---------------------------------------------------------------------------
+
+
+def _deallocate_tensors(tensors: Any) -> None:
     if tensors is None:
         return
     if not isinstance(tensors, (list, tuple)):
@@ -76,7 +98,7 @@ def deallocate_tensors(tensors: Any) -> None:
             ttnn.deallocate(t, force=True)
 
 
-def load_checkpoint(model: Any, checkpoint_path: str, dp_mapper: Any = None) -> None:
+def _load_checkpoint(model: Any, checkpoint_path: str, dp_mapper: Any = None) -> None:
     from safetensors.numpy import load_file
     import ml_dtypes
 
@@ -104,18 +126,6 @@ def load_checkpoint(model: Any, checkpoint_path: str, dp_mapper: Any = None) -> 
             print(f"  - {n}")
 
 
-def _async_read_to_host(tensors: List[Any], mesh_device: Any) -> Tuple[List[Any], Any]:
-    """Issue non-blocking d2h reads for ``tensors`` on the single command queue.
-
-    Returns ``(host_tensors, event)``. The caller must call
-    ``event_synchronize(event)`` before consuming ``host_tensors``; deallocating
-    the source ``tensors`` before then races with the in-flight DMA.
-    """
-    hosts = [t.cpu(blocking=False) for t in tensors]
-    done = ttnn.record_event(mesh_device=mesh_device, cq_id=0)
-    return hosts, done
-
-
 def _round_up(x: int) -> int:
     return ((x + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
 
@@ -123,13 +133,8 @@ def _round_up(x: int) -> int:
 def _ensure_safetensors_dir(model_dir: str) -> str:
     """Make sure ``model_dir`` exposes at least one ``*.safetensors`` file.
 
-    ``ttml.models.llama.load_from_safetensors`` only knows how to read
-    ``*.safetensors``. Some HuggingFace repos (e.g.
-    ``TinyLlama/TinyLlama_v1.1_math_code``) ship only the legacy
-    ``pytorch_model.bin`` artefact, so we convert it once into
-    ``model.safetensors`` next to the ``.bin``. The conversion is bit-exact
-    (same tensors, different serialization format) and the result lives in
-    the HF cache snapshot, so subsequent runs re-use it for free.
+    Some HF repos ship only legacy ``pytorch_model.bin``; convert once
+    on first use so ``load_from_safetensors`` can read it.
     """
     p = Path(model_dir)
     if list(p.glob("*.safetensors")):
@@ -147,8 +152,6 @@ def _ensure_safetensors_dir(model_dir: str) -> str:
         logging.info("Converting legacy weights to safetensors: %s", bin_file)
         sd = torch.load(str(bin_file), map_location="cpu", weights_only=True)
         for k, v in sd.items():
-            # safetensors requires contiguous tensors; HF .bin shards
-            # occasionally contain views, so normalise here.
             state_dict[k] = v.contiguous()
 
     out_path = p / "model.safetensors"
@@ -157,8 +160,14 @@ def _ensure_safetensors_dir(model_dir: str) -> str:
     return model_dir
 
 
-class LlamaCompleterTtml(GRPOCompleter):
-    """Llama-specific completion engine (ttml ``Llama`` backend).
+# ---------------------------------------------------------------------------
+# LlamaGRPOCompleter
+# ---------------------------------------------------------------------------
+
+
+class LlamaGRPOCompleter(GRPOCompleter):
+    """ttml-side :class:`GRPOCompleter` that uses a remote ttt worker
+    for generation and a local ttml ``Llama`` for nlog-prob computation.
 
     The completer does NOT open or close any device. The caller must
     open the ttml ``AutoContext`` (via
@@ -166,24 +175,28 @@ class LlamaCompleterTtml(GRPOCompleter):
     equivalent) and pass the resulting ``ttnn.MeshDevice`` via the
     mandatory ``mesh_device`` kwarg. The caller also owns the
     corresponding ``close_device()`` after the completer is dropped.
-    This makes it possible to co-host this completer with other
-    completers on the same mesh without each one fighting for control
-    of ``AutoContext``.
 
     Args:
-        ctx: Generation parameters. ``_tokenizer`` and ``_pad_token`` are set
-            automatically from ``model_source``.
-        transformer_config: Model architecture config (a
-            :class:`ttml.common.config.TransformerConfig` instance, typically
-            built via ``get_model_config``).
-        mesh_device: An already-open ``ttnn.MeshDevice`` that the
-            ``AutoContext`` singleton has been pointed at. Mandatory.
-        model_source: HuggingFace model ID or path to a local directory
+        ctx: Generation parameters. ``_tokenizer`` and ``_pad_token``
+            are populated automatically from ``model_source``.
+        transformer_config: Model architecture config (typically
+            from ``get_model_config``).
+        mesh_device: An already-open ``ttnn.MeshDevice`` that
+            ``AutoContext`` has been pointed at. Mandatory.
+        model_source: HuggingFace model id (e.g.
+            ``meta-llama/Llama-3.2-1B-Instruct``) or a local directory
             containing ``model.safetensors``.
-        enable_ddp: If True, initialise the ``AutoContext`` parallelism
-            context with DDP enabled (TP disabled). Mirrors the
-            ``device_config.enable_ddp`` flag that the old constructor
-            consumed.
+        inference_client: Already-constructed :class:`TttInferenceClient`
+            connected to the remote worker. The completer does not
+            tear this client down.
+        top_p: Forwarded to ``inference_client.remote_generate``.
+            Defaults to 1.0 (no top-p filtering).
+        seed: Forwarded to ``inference_client.remote_generate``.
+            ``None`` lets the worker draw fresh randomness each call.
+        enable_ddp: Initialise the ``AutoContext`` parallelism context
+            with DDP enabled. Mirrors the
+            ``device_config.enable_ddp`` flag from the standard ttml
+            yaml device blocks.
     """
 
     def __init__(
@@ -193,6 +206,9 @@ class LlamaCompleterTtml(GRPOCompleter):
         *,
         mesh_device: Any,
         model_source: str,
+        inference_client: TttInferenceClient,
+        top_p: float = 1.0,
+        seed: Optional[int] = None,
         enable_ddp: bool = False,
     ) -> None:
         tf_config = transformer_config
@@ -239,9 +255,6 @@ class LlamaCompleterTtml(GRPOCompleter):
                 ttml.autograd.DistributedConfig(enable_ddp=True, enable_tp=False)
             )
 
-        # Resolve DDP state once after the parallelism context is (maybe)
-        # initialised so callers can use the cached mapper/composer/flags
-        # without re-querying ``AutoContext``.
         self._ddp_enabled: bool = (
             autograd_ctx.is_parallelism_context_initialized()
             and autograd_ctx.get_parallelism_context().is_ddp_enabled()
@@ -258,16 +271,13 @@ class LlamaCompleterTtml(GRPOCompleter):
         )
         if local_safetensors:
             logging.info("Loading model from local safetensors: %s", model_source)
-            load_checkpoint(tt_model, model_source, dp_mapper=self._dp_mapper)
+            _load_checkpoint(tt_model, model_source, dp_mapper=self._dp_mapper)
         else:
             logging.info("Downloading model from HuggingFace: %s", model_source)
             model_repo_path = snapshot_download(
                 repo_id=model_source,
                 allow_patterns=["*.safetensors", "*.bin", "*.json", "*.model", "*.txt"],
             )
-            # Some repos ship only legacy ``pytorch_model.bin`` (e.g.
-            # ``TinyLlama_v1.1_math_code``). Convert once on first use so
-            # ``load_from_safetensors`` can read it.
             model_repo_path = _ensure_safetensors_dir(model_repo_path)
             load_from_safetensors(tt_model, model_repo_path, llama_cfg)
 
@@ -279,8 +289,13 @@ class LlamaCompleterTtml(GRPOCompleter):
         self._model = tt_model
         self.transformer_config = tf_config
 
-        self._kv_cache: Any = None
-        self._kv_cache_B: int = 0
+        self._client = inference_client
+        self._top_p = float(top_p)
+        self._seed = seed
+
+    # ------------------------------------------------------------------ #
+    # GRPOCompleter abstract surface                                      #
+    # ------------------------------------------------------------------ #
 
     @property
     def tokenizer(self) -> Any:
@@ -288,39 +303,46 @@ class LlamaCompleterTtml(GRPOCompleter):
 
     @property
     def model(self) -> Any:
-        """The underlying tt model."""
+        """The underlying ttml model (NOT the remote tt-transformers worker)."""
         return self._model
 
     def generate(self, prompts: List[List[int]]) -> List[List[int]]:
-        """Generate completions for a batch of tokenised prompts.
+        """Generate completions remotely via the tt-transformers worker.
 
-        For N prompts, returns N * completions_per_prompt completions.
+        For N prompts, returns N * ``completions_per_prompt`` completions
+        (one per replicated prompt; the worker is responsible for
+        per-prompt fanout below).
         """
         ctx = self._ctx
-        max_len = max(len(row) for row in prompts)
-        pad_lengths = [max_len - len(row) for row in prompts for _ in range(ctx.completions_per_prompt)]
-        B = ctx.completions_per_prompt * len(prompts)
-        N = max_len
-
-        prompt_tokens_np = np.full((B, max_len), ctx._pad_token)
-        for i, row in enumerate(prompts):
-            start = i * ctx.completions_per_prompt
-            end = start + ctx.completions_per_prompt
-            prompt_tokens_np[start:end, max_len - len(row) :] = np.asarray(row)
-
-        self._model.eval()
-        with no_grad():
-            return self._completion_batched_impl(prompt_tokens_np, pad_lengths, B, N)
+        if ctx.completions_per_prompt > 1:
+            expanded = [list(p) for p in prompts for _ in range(ctx.completions_per_prompt)]
+        else:
+            expanded = [list(p) for p in prompts]
+        return self._client.remote_generate(
+            expanded,
+            max_new_tokens=int(ctx.max_tokens_to_complete),
+            temperature=float(ctx.temperature),
+            top_p=self._top_p,
+            seed=self._seed,
+        )
 
     def generate_str(self, prompt_strs: List[str]) -> List[str]:
-        """Generate completions from string prompts, returning decoded strings."""
-        prompts = [self._ctx._tokenizer.encode(s) for s in prompt_strs]
+        """Generate completions from strings; tokenises locally, ships IDs,
+        decodes the returned IDs locally."""
+        tok = self._ctx._tokenizer
+        prompts = [tok.encode(s) for s in prompt_strs]
         completions = self.generate(prompts)
-        return [self._ctx._tokenizer.decode(c, skip_special_tokens=False) for c in completions]
+        return [tok.decode(c, skip_special_tokens=False) for c in completions]
 
     def compute_nlog_probs(
         self, prompts: List[List[int]], completions: List[List[int]]
-    ) -> tuple[ttml.autograd.Tensor, ttml.autograd.Tensor]:
+    ) -> Tuple[ttml.autograd.Tensor, ttml.autograd.Tensor]:
+        """Local-only: cross-entropy of (prompt + completion) on ttml.
+
+        Identical to the old ``LlamaCompleterTtml.compute_nlog_probs``
+        body -- the trainer needs gradients on the ttml model, so this
+        path stays in-process.
+        """
         assert len(completions) == len(prompts)
 
         B = len(completions)
@@ -381,16 +403,42 @@ class LlamaCompleterTtml(GRPOCompleter):
 
         return nlog, loss_mask_tt
 
+    # ------------------------------------------------------------------ #
+    # Weight sync                                                         #
+    # ------------------------------------------------------------------ #
+
+    def push_weights(self) -> None:
+        """Ship the current ttml weights to the remote ttt worker.
+
+        Exports the local ttml model as an HF-keyed dict (already on
+        device, replicated, DRAM-interleaved, TILE, bfloat16 -- the
+        contract the :class:`WeightBridge` enforces) and runs a single
+        :meth:`TttInferenceClient.transfer_weights` round-trip.
+
+        Call this:
+
+        * Once before ``GRPOTrainer.train()`` to overwrite the worker's
+          dummy boot weights with real instruct weights.
+        * Periodically during training via :class:`WeightSyncCallback`
+          so the worker sees the latest policy.
+        """
+        hf_dict = self._model.export_to_hf_dict()
+        try:
+            self._client.transfer_weights(hf_dict)
+        finally:
+            del hf_dict
+            gc.collect()
+
+    # ------------------------------------------------------------------ #
+    # Internal helpers                                                    #
+    # ------------------------------------------------------------------ #
+
     def _forward(self, input_ids_np: np.ndarray, pad_lengths: List[int], B: int) -> ttml.autograd.Tensor:
         """Run a full forward pass (no KV cache) and return logits."""
         T = input_ids_np.shape[1]
         x_tt = self._tokens_to_tensor(input_ids_np, B)
         mask_tt = self._create_causal_mask(prompt_len=0, query_len=T, pad_lengths=pad_lengths, B=B)
         return self._model(x_tt, mask_tt)
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
 
     def _tokens_to_tensor(self, tokens_np: np.ndarray, B: int) -> ttml.autograd.Tensor:
         padded_len = _round_up(tokens_np.shape[1])
@@ -421,142 +469,49 @@ class LlamaCompleterTtml(GRPOCompleter):
 
         return ttml.autograd.Tensor.from_numpy(mask_4d, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, self._dp_mapper)
 
-    def _build_logits_mask(self, vocab_size: int, padded_vocab_size: int) -> ttml.autograd.Tensor:
-        logits_mask = np.zeros((1, 1, 1, padded_vocab_size), dtype=np.float32)
-        logits_mask[:, :, :, vocab_size:] = 1e4
-        return ttml.autograd.Tensor.from_numpy(logits_mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)
 
-    def _get_stop_ids(self) -> set[int]:
-        tokenizer = self._ctx._tokenizer
-        stop_ids: set[int] = set()
-        if tokenizer.eos_token_id is not None:
-            stop_ids.add(int(tokenizer.eos_token_id))
-        if tokenizer.pad_token_id is not None:
-            stop_ids.add(int(tokenizer.pad_token_id))
-        for tok in ["<|eot_id|>", "<|end_of_text|>", "<|eom_id|>"]:
-            tid = tokenizer.convert_tokens_to_ids(tok)
-            if tid is not None and tid >= 0 and tid != tokenizer.unk_token_id:
-                stop_ids.add(int(tid))
-        return stop_ids
+# ---------------------------------------------------------------------------
+# WeightSyncCallback
+# ---------------------------------------------------------------------------
 
-    def _get_kv_cache(self, B: int) -> ttml.models.KvCache:
-        cfg = self.transformer_config
-        head_dim = getattr(cfg, "head_dim", None) or (cfg.embedding_dim // cfg.num_heads)
-        if self._kv_cache is None or self._kv_cache_B != B:
-            self._kv_cache = ttml.models.KvCache(
-                cfg.num_blocks,
-                B,
-                cfg.num_groups,
-                cfg.max_sequence_length,
-                head_dim,
-            )
-            self._kv_cache_B = B
-        self._kv_cache.reset()
-        return self._kv_cache
 
-    def _completion_batched_impl(
-        self,
-        prompt_tokens_np: np.ndarray,
-        pad_lengths: List[int],
-        B: int,
-        N: int,
-    ) -> List[List[int]]:
-        ctx = self._ctx
-        assert prompt_tokens_np.shape == (B, N)
-        assert len(pad_lengths) == B
-        total_devices = self._num_devices
-        assert B % total_devices == 0
+class WeightSyncCallback(TrainerCallback):
+    """Push fresh ttml weights to the ttt worker every ``every`` steps.
 
-        B_local = B // total_devices
+    Registers on the trainer's ``on_step_end`` hook. Trigger condition:
+    ``(step + 1) % every == 0``. With the default ``every=1`` the
+    callback fires on every gradient step, which is what GRPO training
+    typically wants (the policy network on ttml has just been updated;
+    the remote worker is using stale weights for the next generate
+    call otherwise).
 
-        V = len(ctx._tokenizer)
-        padded_V = _round_up(V)
+    Note that the initial push -- the one that overwrites the worker's
+    dummy boot weights with real ones before the first ``trainer.train()``
+    generate -- is the user's responsibility. Call
+    ``completer.push_weights()`` explicitly once before constructing
+    the trainer (or before calling ``trainer.train()``).
+    """
 
-        kv_cache = self._get_kv_cache(B_local)
-        logits_mask_tensor = self._build_logits_mask(V, padded_V) if padded_V != V else None
+    def __init__(self, completer: LlamaGRPOCompleter, every: int = 1) -> None:
+        if every < 1:
+            raise ValueError(f"WeightSyncCallback: 'every' must be >= 1 (got {every})")
+        self._completer = completer
+        self._every = int(every)
 
-        tokens_to_complete = min(
-            ctx.max_tokens_to_complete,
-            self.transformer_config.max_sequence_length - N,
+    def on_step_end(self, trainer: Any, step: int, *args: Any, **kwargs: Any) -> None:
+        print(
+            f"[WeightSyncCallback] on_step_end called: step={step}, every={self._every}",
+            flush=True,
         )
+        if (int(step) + 1) % self._every == 0:
+            print(f"[WeightSyncCallback] step={step}: push_weights() start", flush=True)
+            import time as _t
 
-        mesh_device = self._mesh_device
-        composer = self._dp_composer
-        stop_ids = self._get_stop_ids()
-        stop_arr = np.fromiter(stop_ids, dtype=np.int32) if stop_ids else np.empty(0, dtype=np.int32)
-
-        generated_columns: List[Any] = []
-        chunk_columns: List[Any] = []
-        pending_hosts: List[Any] = []
-        pending_event: Any = None
-        done = np.zeros(B, dtype=bool)
-
-        def to_np(column_list: List[Any]) -> np.ndarray:
-            arr = np.empty((B, len(column_list)), dtype=np.int32)
-            for j, column in enumerate(column_list):
-                arr[:, j] = column.to_numpy(composer).reshape(B)
-            return arr
-
-        for i in range(tokens_to_complete):
-            if kv_cache.get_cache_position() == 0:
-                processed = 0
-                new_tokens = prompt_tokens_np.shape[1]
-                token_tensor = self._tokens_to_tensor(prompt_tokens_np, B)
-            else:
-                processed = N - 1
-                new_tokens = 1
-                token_tensor = ttnn.pad(
-                    last_token_column,
-                    [(0, 0), (0, 0), (0, 0), (0, TILE_SIZE - 1)],
-                    ctx._pad_token,
-                )
-                token_tensor = ttml.autograd.Tensor(token_tensor, False)
-
-            mask = self._create_causal_mask(processed, new_tokens, pad_lengths, B)
-            logits = self._model(token_tensor, mask, kv_cache=kv_cache, new_tokens=new_tokens)
-
-            next_token_tensor = ttml.ops.sample.sample_op(
-                logits, ctx.temperature, np.random.randint(low=1e7), logits_mask_tensor
+            _t0 = _t.perf_counter()
+            self._completer.push_weights()
+            print(
+                f"[WeightSyncCallback] step={step}: push_weights() done in " f"{_t.perf_counter() - _t0:.2f}s",
+                flush=True,
             )
-
-            last_token_column = ttnn.slice(
-                next_token_tensor.get_value(),
-                [0, 0, new_tokens - 1, 0],
-                [B_local, 1, new_tokens, 1],
-            )
-
-            generated_columns.append(last_token_column)
-            chunk_columns.append(last_token_column)
-            N += 1
-
-            deallocate_tensors([token_tensor, mask, logits, next_token_tensor])
-
-            if (i + 1) % CHUNK == 0:
-                if pending_event is not None:
-                    ttnn.event_synchronize(mesh_event=pending_event)
-                    chunk_np = np.stack(
-                        [h.to_numpy(mesh_composer=composer).reshape(B) for h in pending_hosts],
-                        axis=1,
-                    )
-                    done |= np.isin(chunk_np, stop_arr).any(axis=1)
-                    if done.all():
-                        break
-
-                pending_hosts, pending_event = _async_read_to_host(chunk_columns, mesh_device)
-                chunk_columns = []
-
-        completions_np = to_np(generated_columns)
-        deallocate_tensors(generated_columns)
-        deallocate_tensors([logits_mask_tensor])
-        kv_cache.reset()
-
-        completions: List[List[int]] = []
-        for i in range(B):
-            to = completions_np.shape[1]
-            for j, token in enumerate(completions_np[i]):
-                if token in stop_ids:
-                    to = j
-                    break
-            completions.append(completions_np[i, :to].tolist())
-
-        return completions
+        else:
+            print(f"[WeightSyncCallback] step={step}: skipped (not aligned with every={self._every})", flush=True)
