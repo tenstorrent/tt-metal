@@ -451,6 +451,8 @@ class GRPOTrainer:
         grad_accum = grpo_cfg.gradient_accumulation_steps
         if grad_accum <= 0:
             raise ValueError(f"gradient_accumulation_steps must be positive, got {grad_accum}")
+        if grpo_cfg.num_generations <= 0:
+            raise ValueError(f"num_generations must be positive, got {grpo_cfg.num_generations}")
         completions_per_microbatch = grpo_cfg.per_device_train_batch_size * num_devices
         if completions_per_microbatch % grpo_cfg.num_generations != 0:
             raise ValueError(
