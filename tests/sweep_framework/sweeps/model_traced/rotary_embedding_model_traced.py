@@ -93,6 +93,18 @@ def apply_rotary_pos_emb(x, cos_cached, sin_cached, token_idx=None):
 def mesh_device_fixture():
     mesh_shape = get_model_traced_mesh_shape()
     device = create_mesh_device(mesh_shape)
+    # ttnn.experimental.rotary_embedding bakes the decode token offset
+    # (token_idx -> cos/sin cache row) into the program's runtime args, but its
+    # program-cache key omits token_idx. With the cache on, every decode config
+    # after the first reuses the first config's token offset and produces a wrong
+    # result (~0 PCC for 944/956 N150 configs). The op has no runtime-arg override
+    # to refresh it on a cache hit, so disable the program cache for this suite:
+    # each config then compiles with its own token_idx. (Correctness verified by
+    # toggling the cache on/off for a fixed config.)
+    try:
+        device.disable_and_clear_program_cache()
+    except Exception:
+        pass
     device_name = ttnn.get_arch_name()
     yield (device, device_name)
     ttnn.close_mesh_device(device)
@@ -251,6 +263,14 @@ def run(
     mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
+
+    # In decode mode the op's output spec uses the input's PADDED shape, so for a
+    # non-tile-aligned seq (e.g. 2 or 8 -> padded to 32) the device output has more
+    # rows than the logical seq while the golden has the real seq. Slice the device
+    # output back to the golden's seq length so the comparison lines up (the padded
+    # rows are not real tokens). No-op when seqs already match (tile-aligned).
+    if output_tensor.ndim == torch_output_tensor.ndim and output_tensor.shape[-2] > torch_output_tensor.shape[-2]:
+        output_tensor = output_tensor[..., : torch_output_tensor.shape[-2], :]
 
     # --- Check Results ---
     # Use standard PCC threshold (0.999)
