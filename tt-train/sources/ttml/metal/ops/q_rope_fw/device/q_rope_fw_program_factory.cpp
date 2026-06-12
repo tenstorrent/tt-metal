@@ -17,7 +17,7 @@
 //   cb_q   = 2*Th   cb_out = 2*Th        (whole head rows, double-buffered)
 //   cb_cos = 2*Tr   cb_sin = 2*Tr        (one sequence-tile of trig, double-buffered)
 //   cb_trans = 1                          (constant rotation matrix)
-//   c_24 + c_25 + c_26 = 3*Tr             (rope intermediates)
+//   rotated_in + cos_interm + sin_interm = 3*Tr  (rope intermediates)
 //   => total = 4*Th + 7*Tr + 1 tiles.
 //
 // DST strategy: Tr <= 8 always (qk_rope_dim <= 256). When Tn <= 8, batch all nope tiles in DST;
@@ -52,6 +52,9 @@ constexpr auto kQCbIndex = tt::CBIndex::c_0;
 constexpr auto kCosCbIndex = tt::CBIndex::c_1;
 constexpr auto kSinCbIndex = tt::CBIndex::c_2;
 constexpr auto kTransCbIndex = tt::CBIndex::c_3;
+constexpr auto kRotatedInIntermCbIndex = tt::CBIndex::c_24;
+constexpr auto kCosIntermCbIndex = tt::CBIndex::c_25;
+constexpr auto kSinIntermCbIndex = tt::CBIndex::c_26;
 constexpr auto kOutCbIndex = tt::CBIndex::c_16;
 
 constexpr uint32_t kCbDoubleBuffer = 2U;
@@ -178,12 +181,16 @@ QRopeFwProgramFactory::cached_program_t QRopeFwProgramFactory::create(
         create_circular_buffer(program, all_cores, kCosCbIndex, data_format, single_tile_size, trig_cb_num_tiles);
     [[maybe_unused]] auto cb_sin =
         create_circular_buffer(program, all_cores, kSinCbIndex, data_format, single_tile_size, trig_cb_num_tiles);
-    create_circular_buffer(program, all_cores, kTransCbIndex, data_format, single_tile_size, 1U);
-
-    create_circular_buffer(program, all_cores, tt::CBIndex::c_24, data_format, single_tile_size, Tr);
-    create_circular_buffer(program, all_cores, tt::CBIndex::c_25, data_format, single_tile_size, Tr);
-    create_circular_buffer(program, all_cores, tt::CBIndex::c_26, data_format, single_tile_size, Tr);
-    create_circular_buffer(program, all_cores, kOutCbIndex, data_format, single_tile_size, q_cb_num_tiles);
+    [[maybe_unused]] auto cb_trans =
+        create_circular_buffer(program, all_cores, kTransCbIndex, data_format, single_tile_size, 1U);
+    [[maybe_unused]] auto cb_rotated_in =
+        create_circular_buffer(program, all_cores, kRotatedInIntermCbIndex, data_format, single_tile_size, Tr);
+    [[maybe_unused]] auto cb_cos_interm =
+        create_circular_buffer(program, all_cores, kCosIntermCbIndex, data_format, single_tile_size, Tr);
+    [[maybe_unused]] auto cb_sin_interm =
+        create_circular_buffer(program, all_cores, kSinIntermCbIndex, data_format, single_tile_size, Tr);
+    [[maybe_unused]] auto cb_out =
+        create_circular_buffer(program, all_cores, kOutCbIndex, data_format, single_tile_size, q_cb_num_tiles);
 
     auto* q_in_buffer = q_in.buffer();
     auto* cos_buffer = tensor_args.cos_cache.buffer();
@@ -205,9 +212,9 @@ QRopeFwProgramFactory::cached_program_t QRopeFwProgramFactory::create(
         (std::uint32_t)kCosCbIndex,
         (std::uint32_t)kSinCbIndex,
         (std::uint32_t)kTransCbIndex,
-        (std::uint32_t)tt::CBIndex::c_24,
-        (std::uint32_t)tt::CBIndex::c_25,
-        (std::uint32_t)tt::CBIndex::c_26,
+        (std::uint32_t)kRotatedInIntermCbIndex,
+        (std::uint32_t)kCosIntermCbIndex,
+        (std::uint32_t)kSinIntermCbIndex,
         (std::uint32_t)kOutCbIndex,
         Tn,
         Tr,
