@@ -4,6 +4,9 @@ End-to-end TTNN implementation of the **π₀.₅** (PI0.5) vision-language-acti
 
 This package is **self-contained** — it does not import from `models/experimental/pi0/`.
 
+There is also an experimental **28-chip Blackhole Galaxy** spatial pipeline that
+spreads the stages across a 32-chip mesh — see [BH Galaxy multi-chip pipeline](#bh-galaxy-multi-chip-pipeline-tttt_bh_glx).
+
 ---
 
 ## Architecture
@@ -128,7 +131,15 @@ pi0_5/
 │   ├── ttnn_prefix.py
 │   ├── ttnn_siglip.py
 │   ├── ttnn_suffix.py        # SuffixEmbeddingTTNN + Pi0_5SuffixEmbeddingTTNN
-│   └── ttnn_pi0_5_model.py   # Pi0_5ModelTTNN
+│   ├── ttnn_pi0_5_model.py   # Pi0_5ModelTTNN (single-chip)
+│   └── tt_bh_glx/            # experimental 28-chip BH Galaxy pipeline (see section below)
+│       ├── pipeline.py       #   Pi0_5GLXPipeline end-to-end driver
+│       ├── stages.py         #   chip layout (4 vision / 18 prefill / 6 denoise)
+│       ├── mesh_setup.py     #   open 8x4 mesh + carve submeshes (FABRIC_2D)
+│       ├── stage_{vision,prefill,denoise}.py + *_slice.py
+│       ├── transport.py      #   fabric mesh-socket cross-chip transport
+│       ├── kv_migration.py   #   layer-paired prefill→denoise KV migration
+│       └── _l1_migration.py  #   denoise DRAM→L1 weight migration (PI0_GLX_DENOISE_L1)
 ├── eval/
 │   └── libero_rollout.py     # LIBERO simulator → policy → success rate / videos
 ├── tests/
@@ -337,6 +348,131 @@ PYTHONPATH=$PWD python_env/bin/pytest -xvs \
 | trace capture (one-time) | ~410 ms |
 
 The SigLIP encoder runs entirely in **L1 block-sharded layout on a common 12×8 = 96-core grid** (ViT-BH tech report §5.3 pattern). Hidden states stay block-sharded across all 27 encoder layers — only re-tiling for SDPA, which uses the full 13×10 grid. The 12×8 grid is the largest divisor-clean choice given hidden=1152 (36 tiles, divisible by 12) and M=512 (16 tiles, divisible by 8); going wider (e.g. 13×10) would need >8% weight/compute padding to keep tile divisibility, which doesn't pay back. Runtime master switch: `PI0_SIGLIP_BS=0` reverts to the interleaved-LN baseline at ~65.1 ms with no rebuild.
+
+---
+
+## BH Galaxy multi-chip pipeline (`tt/tt_bh_glx/`)
+
+Everything above runs the model on a **single Blackhole chip**. `tt/tt_bh_glx/`
+is a separate, experimental **28-chip spatial pipeline** that spreads the three
+stages across a Blackhole **Galaxy** (8×4 = 32-chip parent mesh) and streams
+activations chip-to-chip over fabric sockets. It reuses the same TTNN building
+blocks (`ttnn_siglip`, `ttnn_gemma`, `ttnn_suffix`) but composes them as
+per-chip slices instead of one device's full model.
+
+> **Status (experimental).** The eager path is functional end-to-end (PCC 0.9957
+> vs torch). Trace capture (Phase B.3) is scaffolded but **not yet working** —
+> see `pipeline.py::capture_trace`. Use the eager path for now.
+
+### Chip layout (`stages.py`)
+
+```
+   col→  0 1 2 3
+row↓  0  V V V V    V = vision   4 chips   shape (1,4) offset (0,0)
+      1  P P P D    P = prefill  18 chips  shape (6,3) offset (1,0)
+      2  P P P D    D = denoise  6 chips   shape (6,1) offset (1,3)
+      3  P P P D    (row 7 col 0..2 = 3 spare chips)
+      …  P P P D
+      7  . . . D
+```
+
+| Stage | Chips | Contents |
+|---|---|---|
+| **vision** | 4 | chip0 = patch_embed + pos_emb; chips1–3 = SigLIP layers 0–8 / 9–17 / 18–26 + post_ln + mm_projector |
+| **prefill** | 18 | 1 Gemma-2B VLM block per chip; each chip keeps its layer's KV |
+| **denoise** | 6 | 3 AdaRMS Gemma-300M expert blocks per chip + replicated suffix MLP; runs the N-step Euler loop |
+
+**Per-call flow** (`Pi0_5GLXPipeline.sample_actions`): vision → socket → build
+prefix (reshape image embeds + embed lang tokens) → 18-chip VLM prefill →
+layer-paired KV migration (prefill chip `i` → denoise chip `i // 3`) → N-step
+denoise loop with on-device fp32 Euler integration → slice to `action_horizon`.
+
+**Transport.** Cross-chip handoff uses fabric **mesh sockets**
+(`ttnn.experimental.send_direct_async` / `recv_direct_async`, `FABRIC_2D`) — the
+sender writes directly into the receiver's pre-allocated buffer, no host bounce.
+Set `PI05_GLX_TRANSPORT=host` to fall back to the legacy host-bounce path for
+A/B testing without a rebuild.
+
+### Quickstart
+
+```python
+from models.experimental.pi0_5.common.checkpoint_meta import action_horizon_from_checkpoint
+from models.experimental.pi0_5.common.configs import Pi0_5ModelConfig
+from models.experimental.pi0_5.common.weight_loader import Pi0_5WeightLoader
+from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_galaxy_mesh
+from models.experimental.pi0_5.tt.tt_bh_glx.pipeline import Pi0_5GLXPipeline
+
+ckpt   = "/path/to/pi05_libero_upstream"
+cfg    = Pi0_5ModelConfig(action_horizon=action_horizon_from_checkpoint(ckpt), num_denoising_steps=5)
+loader = Pi0_5WeightLoader(ckpt)
+
+# open_galaxy_mesh carves the 8x4 parent into the 4/18/6 submeshes (FABRIC_2D),
+# and closes them parent-last on exit.
+with open_galaxy_mesh(l1_small_size=24576) as h:
+    pipeline = Pi0_5GLXPipeline(cfg, loader.categorized_weights, h)
+    actions, timings = pipeline.sample_actions(
+        images=[img0, img1, img2],                # list of (1, 3, 224, 224) torch tensors
+        img_masks=[m0, m1, m2],
+        lang_tokens=tokens,                       # (1, lang_len) int64
+        lang_masks=lang_masks,
+    )
+    # actions: (1, action_horizon, action_dim); timings: per-stage StageTimings (ms)
+```
+
+### Performance flags (in addition to the single-chip flags above)
+
+| Flag | Default | What it does |
+|---|---|---|
+| `PI0_GLX_DENOISE_L1` | `1` (ON) | Migrate the static denoise-stage weights/biases + per-call prefix KV from DRAM into L1 so the N-step Euler loop reads them on-chip instead of re-streaming ~93 MB/chip from DRAM each step. Set `0` to revert to DRAM. |
+| `PI05_GLX_TRANSPORT` | *(socket)* | `host` falls back to the legacy host-bounce transport. |
+| `PI0_ROPE_TABLES_L1` | *(off here)* | Keep upstream-compat RoPE tables in L1. |
+| `PI05_NUM_DENOISE_STEPS` | `5` (in the GLX tests) | Euler step count. |
+| `PI0_NUM_CAMERAS` | `3` | Image slots fed to vision (3 = training spec). |
+| `PI05_GLX_NUM_WARMUP` / `PI05_GLX_NUM_ITERS` | `1` / `3` (e2e), `5` (stages) | Perf-test warmup + timed-iteration counts. |
+
+**Denoise L1 residency.** The 3 expert layers/chip (~93 MB: bf8 matmuls +
+bf16 adaRMS mod) fit inside the ~180 MB usable L1 per Blackhole chip. Denoise is
+the easy case — the expert MLP (4096) is 4× smaller than the VLM MLP (16384), so
+the interleaved-L1 weights don't clash with the matmul kernel's static CB region.
+The migration runs once at `Pi0_5GLXPipeline.__init__` (see `_l1_migration.py`)
+and only touches the denoise stage; prefill/vision placement is unchanged.
+
+### Tests (require a 32-chip BH Galaxy + `PI05_CHECKPOINT_DIR`)
+
+```bash
+source _bench_runs/pi05_production.env   # checkpoint path + production knobs
+
+# Mesh-carve smoke + per-stage PCC (vision ≥0.997, prefill ≥0.99, denoise ≥0.95):
+PYTHONPATH=$PWD TT_METAL_HOME=$PWD python_env/bin/pytest -xvs \
+  models/experimental/pi0_5/tests/pcc/test_pcc_tt_bh_glx_stages.py
+
+# End-to-end PCC vs torch Pi0_5Model (target ≥0.95):
+PYTHONPATH=$PWD TT_METAL_HOME=$PWD python_env/bin/pytest -xvs \
+  models/experimental/pi0_5/tests/pcc/test_pcc_tt_bh_glx_e2e.py
+
+# Per-stage wall-clock + host-bounce microbench:
+PYTHONPATH=$PWD TT_METAL_HOME=$PWD python_env/bin/pytest -xvs \
+  models/experimental/pi0_5/tests/perf/test_perf_tt_bh_glx_stages.py
+
+# End-to-end wall-clock + per-stage StageTimings breakdown:
+PYTHONPATH=$PWD TT_METAL_HOME=$PWD python_env/bin/pytest -xvs \
+  models/experimental/pi0_5/tests/perf/test_perf_tt_bh_glx_e2e.py
+```
+
+### Latest measured (eager, 5 denoise steps, 3 cameras, sockets)
+
+| metric | value |
+|---|---|
+| E2E PCC vs torch | **0.9957** |
+| per-stage PCC | vision 0.9997 · prefill 0.997 · denoise-chain 0.961 |
+| per-call latency | **~276 ms** (3.62 chunks/s) |
+| stage breakdown (ms) | vision 37.1 · v→p 0.1 · prefill 31.4 · kv_mig 1.6 · **denoise 202.1** |
+
+Denoise dominates wall-clock; the `PI0_GLX_DENOISE_L1` path above targets it.
+The ~276 ms baseline was measured **before** the L1 change landed — re-run
+`test_perf_tt_bh_glx_e2e.py` with `PI0_GLX_DENOISE_L1=1` vs `=0` to measure the
+delta on your machine. The single-chip traced path (~65 ms) remains the fastest
+deployment today; the Galaxy pipeline is gated on getting trace capture working.
 
 ---
 
