@@ -73,7 +73,6 @@ struct QuasarComputeConfig {
     std::vector<UnpackToDestMode> unpack_to_dest_mode;
     bool bfp8_pack_precise = false;
     bool math_approx_mode = false;
-    // Opt into the 2x-packed src-register format for 2x-capable matmul inputs.
     bool enable_2x_src_format = false;
 
     std::vector<uint32_t> compile_args;

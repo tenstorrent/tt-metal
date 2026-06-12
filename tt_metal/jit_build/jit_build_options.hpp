@@ -44,7 +44,7 @@ public:
 
     bool dst_full_sync_en{};
 
-    // Quasar-only: when set, jit_build emits the 2x-packed src-register format as the
+    // When set, jit_build emits the 2x-packed src-register format as the
     // unpack_dst_format for 2x-capable inputs.
     bool enable_2x_src_format{};
 

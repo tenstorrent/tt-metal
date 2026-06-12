@@ -16,7 +16,6 @@
 #include <functional>
 #include <map>
 #include <memory>
-#include <random>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -515,20 +514,17 @@ void run_single_core_reduce_program(
     };
     experimental::SetProgramRunArgs(program_run, params);
 
-    // Stimulus: write the device input buffer in its native format, and build src_vec — the bf16,
-    // TILED_NFACES representation of the same values — to drive validate_reduce_result's golden.
-    vector<uint32_t> src_vec;
+    // Shared seeded stimulus (packed bf16, TILED_NFACES). For bf16 input this is written to the
+    // device as-is; for MxFp4 input it is quantized to MxFp4 for the device.
+    vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
+        dims.dram_buffer_size, test_config.data_gen_rand_max, test_config.data_gen_seed, test_config.data_gen_offset);
     if (test_config.input_format == tt::DataFormat::MxFp4) {
-        std::vector<float> in_floats(num_input_pages * TILE_HEIGHT * TILE_WIDTH);
-        std::mt19937 rng(static_cast<uint32_t>(test_config.data_gen_seed));
-        std::uniform_real_distribution<float> dist(0.0f, 4.0f);
-        for (float& v : in_floats) {
-            v = dist(rng);
-        }
+        std::vector<bfloat16> native = unpack_uint32_vec_into_bfloat16_vec(src_vec);
+        std::vector<float> in_floats(native.begin(), native.end());
         std::vector<uint32_t> mxfp4_packed =
             tt::tt_metal::pack_as_mxfp4_tiles(tt::stl::make_const_span(in_floats), /*row_major_input=*/true);
         tt_metal::detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), mxfp4_packed);
-        // Decode in tile/face order (TILED_NFACES) and repack as bf16 uint32 for the golden source.
+        // Decode the quantized values back (tile/face order) and repack as bf16 for the golden source.
         std::vector<float> quantized = tt::tt_metal::unpack_mxfp4_tiles_into_float_vec(
             tt::stl::make_const_span(mxfp4_packed), /*row_major_output=*/false);
         src_vec.resize(quantized.size() / 2);
@@ -536,11 +532,6 @@ void run_single_core_reduce_program(
             src_vec[i] = pack_two_bfloat16_into_uint32({bfloat16(quantized[2 * i]), bfloat16(quantized[2 * i + 1])});
         }
     } else {
-        src_vec = create_random_vector_of_bfloat16(
-            dims.dram_buffer_size,
-            test_config.data_gen_rand_max,
-            test_config.data_gen_seed,
-            test_config.data_gen_offset);
         tt_metal::detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), src_vec);
     }
 
@@ -864,7 +855,12 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeReduceColumnMxFp4X2) {
         .shape = {1, 1, TILE_HEIGHT, TILE_WIDTH},
         .reduce_dim = ReduceDim::H,
         .reduce_type = ReduceType::SUM,
+        // Broad signed stimulus spanning MxFp4's full E2M1 element grid: uniform [-6, 6), so the
+        // test exercises the sign bit and the largest representable element magnitude (6.0).
+        // (create_random_vector_of_bfloat16 generates U(0, rand_max) + offset.)
+        .data_gen_rand_max = 12.0f,
         .data_gen_seed = 1234,
+        .data_gen_offset = -6.0f,
         .atol = 0.1f,
         .rtol = 0.1f,
         .golden_function = ::unit_tests::compute::gold_reduce_h,

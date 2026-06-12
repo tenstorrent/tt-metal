@@ -276,9 +276,6 @@ ALWI void mm_block_init(
 #else
     LLK_ASSERT(transpose == 0, "Matmul transpose not yet implemented for Quasar");
 
-    // Use the jit_build-generated unpack_dst_format for the src registers. For an MxFp4 matmul that
-    // opted into ENABLE_2X_SRC_FORMAT, jit emits the 2x-packed MxFp4_2x_B format and
-    // llk_math_matmul_init runs the matching EN_X2 traversal off it (see mm_init).
     UNPACK((llk_unpack_hw_configure(in1_cb_id, in0_cb_id)));
     UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id, ct_dim, rt_dim, kt_dim)));
 
