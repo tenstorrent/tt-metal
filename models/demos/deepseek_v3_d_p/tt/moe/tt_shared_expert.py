@@ -28,6 +28,11 @@ COMPUTE_KERNEL_CONFIG_HIFI2 = ttnn.WormholeComputeKernelConfig(
     fp32_dest_acc_en=False,
     packer_l1_acc=True,
 )
+
+GPT_OSS_SHARED_EXPERT_EMB_DIM = 2880
+GPT_OSS_SHARED_EXPERT_HIDDEN_DIM = 2880
+
+
 def get_bh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int):
     """Program configs for the gate / up / down matmuls on Blackhole."""
     grid = ttnn.CoreCoord(11, 9)
@@ -432,7 +437,9 @@ class TtSharedExpert(LightweightModule):
 
         gate_n_tiles = self.gate_proj.padded_shape[-1] // TILE
         down_n_tiles = self.down_proj.padded_shape[-1] // TILE
-        use_default_matmul = gate_n_tiles % 8 != 0
+        use_default_matmul = (
+            self.emb_dim == GPT_OSS_SHARED_EXPERT_EMB_DIM and self.hidden_dim == GPT_OSS_SHARED_EXPERT_HIDDEN_DIM
+        )
         if is_blackhole():
             gate_program_config, up_program_config, down_program_config = get_bh_program_configs(
                 per_core_M, gate_n_tiles, down_n_tiles
