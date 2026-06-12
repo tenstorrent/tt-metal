@@ -17,6 +17,7 @@ on:
           - qwen3-32b-galaxy
           - gpt-oss-120b
           - whisper
+          - dit-common
           # llama3.3-70b-galaxy: disabled — see #42139
           - flux.1-schnell
       sku:

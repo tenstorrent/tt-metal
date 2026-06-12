@@ -405,6 +405,7 @@ void trisc_fused_softmax_top_p_sampling_block() {
         pack_tile(0, probs_cb);
         cb_push_back(probs_cb, 1);
         tile_regs_release();
+        reconfig_data_format_srca(exp_cb, probs_cb);
         cb_wait_front(probs_cb, 1);
         cb_wait_front(p_cb, 1);
         tile_regs_acquire();
@@ -792,8 +793,8 @@ struct TopKSampling {
         uint32_t WinnerPageBytes,
         uint32_t NumSenders,
         uint32_t ExpectedRemoteIncs,
-        uint32_t ReceiverSemaphoreId,
-        uint32_t LocalReadySemaphoreId,
+        uint32_t ReceiverSemaphoreAddr,
+        uint32_t LocalReadySemaphoreAddr,
         uint32_t MeshMode,
         uint32_t Stage1Sender,
         uint32_t Stage1Receiver,
@@ -839,8 +840,8 @@ struct TopKSampling {
         static constexpr uint32_t winner_page_bytes = WinnerPageBytes;
         static constexpr uint32_t num_senders = NumSenders;
         static constexpr uint32_t expected_remote_incs = ExpectedRemoteIncs;
-        static constexpr uint32_t receiver_semaphore_id = ReceiverSemaphoreId;
-        static constexpr uint32_t local_ready_semaphore_id = LocalReadySemaphoreId;
+        static constexpr uint32_t receiver_semaphore_addr = ReceiverSemaphoreAddr;
+        static constexpr uint32_t local_ready_semaphore_addr = LocalReadySemaphoreAddr;
         static constexpr bool mesh_mode = MeshMode == 1;
         static constexpr bool stage1_sender = Stage1Sender == 1;
         static constexpr bool stage1_receiver = Stage1Receiver == 1;
@@ -891,7 +892,7 @@ struct TopKSampling {
 
     template <
         uint32_t WinnerPageBytes,
-        uint32_t LocalReadySemaphoreId,
+        uint32_t LocalReadySemaphoreAddr,
         uint32_t SocketMode = 0,
         uint32_t SocketCBId = 0,
         uint32_t SocketPageSizeBytes = 0,
@@ -920,7 +921,7 @@ struct TopKSampling {
         uint32_t MaskAliasesScaler = 0>
     struct WriterCTArgs {
         static constexpr uint32_t winner_page_bytes = WinnerPageBytes;
-        static constexpr uint32_t local_ready_semaphore_id = LocalReadySemaphoreId;
+        static constexpr uint32_t local_ready_semaphore_addr = LocalReadySemaphoreAddr;
         static constexpr uint32_t socket_mode = SocketMode;
         static constexpr uint32_t socket_cb_id = SocketCBId;
         static constexpr uint32_t socket_page_size_bytes = SocketPageSizeBytes;
@@ -1220,8 +1221,7 @@ struct TopKSampling {
             uint32_t final_noc_x,
             uint32_t final_noc_y) {
             const uint64_t final_noc_base = get_noc_addr(final_noc_x, final_noc_y, 0);
-            const uint64_t dst_sem_noc_addr =
-                final_noc_base | static_cast<uint64_t>(get_semaphore(CTArgs::receiver_semaphore_id));
+            const uint64_t dst_sem_noc_addr = final_noc_base | static_cast<uint64_t>(CTArgs::receiver_semaphore_addr);
             noc_async_write_one_packet<true, true>(
                 local_scores_addr, final_noc_base | dst_scores_l1_addr, CTArgs::topk_scores_slot_bytes);
             noc_async_write_one_packet<true, true>(
@@ -1471,8 +1471,7 @@ struct TopKSampling {
             // Output goes to the winner CB in split layout [K scores | K indices].
             // The argmax is global_scores[0] / global_indices[0] (descending order).
             if constexpr (IsFinalCore) {
-                auto recv_sem_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CTArgs::receiver_semaphore_id));
+                auto recv_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::receiver_semaphore_addr);
                 {
                     DeviceZoneScopedN("SP-PHASE2WAIT");
                     wait_and_reset_semaphore(recv_sem_ptr, CTArgs::expected_remote_incs + 1);

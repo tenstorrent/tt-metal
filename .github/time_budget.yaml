@@ -103,11 +103,18 @@ ttnn:
     bh_p150b_civ2_viommu: 60
 
 train:
-  l2:
-    wh_n150: 40
-    wh_n300: 40
-    bh_p100: 40
-    bh_p150b_civ2: 40
+  smoke:
+    wh_n150_civ2: 10
+  unit:
+    wh_n150_civ2: 90
+    wh_n300_civ2: 90
+    bh_p100a_civ2_viommu: 90
+    bh_p150b_civ2: 90
+  perf:
+    wh_n150_civ2: 90
+    wh_n300_civ2: 90
+    bh_p100a_civ2_viommu: 90
+    bh_p150b_civ2: 240
 
 ttsim:
   l2:
@@ -164,6 +171,12 @@ runtime:
     wh_n300_civ2: 55
     bh_p150_perf: 40
 
+debug:
+  triage:
+    wh_n150_civ2: 16
+    bh_p150b_civ2_viommu_prio: 16
+    bh_p150b_civ2_viommu: 16
+
 llk:
   unit:
     wh_n150_civ2: 140
@@ -192,7 +205,7 @@ models:
     bh_p150b_civ2: 63
     bh_p300: 20
     bh_loudbox: 160
-    bh_quietbox_2: 30
+    bh_quietbox_2: 40
   # Per-tier e2e budgets, consumed by the tiered model pipelines;
   # The plain `e2e` key is used for the non-tiered pipelines (blackhole-e2e, t3000-e2e).
   e2e_tier1:
@@ -221,11 +234,11 @@ models:
   # key is used for the non-tiered pipelines (galaxy-unit, t3000-unit).
   unit_tier1:
     wh_llmbox: 61
-    wh_n150: 47
+    wh_n150: 110
     wh_galaxy: 45
     wh_galaxy_perf: 45
     bh_p150: 20
-    bh_quietbox_2: 60
+    bh_quietbox_2: 155
     bh_galaxy: 70
   unit_tier2:
     wh_llmbox: 114
@@ -279,3 +292,10 @@ models:
 umd:
   unit:
     wh_galaxy_perf: 35
+
+syseng:
+  integration:
+    wh_n150_civ2: 34
+    wh_n300_civ2: 36
+    bh_p100: 18
+    bh_p150b_civ2: 18
