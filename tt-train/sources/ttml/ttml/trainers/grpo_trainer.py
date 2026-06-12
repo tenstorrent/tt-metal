@@ -127,6 +127,20 @@ def get_grpo_config(yaml_config: dict, output_dir: str = "") -> GRPOConfig:
         raise ValueError("training_config must contain a 'grpo_config' section")
     fields = dict(grpo_section)
     fields.setdefault("output_dir", output_dir)
+
+    # Backwards-compatibility shim for the transition period.
+    # ``micro_batch_size`` was renamed to ``per_device_train_batch_size``. Accept
+    # the old name so existing configs keep working, mapping its value onto the
+    # new field. TODO: deprecated — remove this shim (and the warning) once all
+    # configs have migrated to ``per_device_train_batch_size``.
+    if "micro_batch_size" in fields:
+        old_value = fields.pop("micro_batch_size")
+        logging.warning(
+            "grpo_config: 'micro_batch_size' is deprecated and will be removed; "
+            "use 'per_device_train_batch_size' instead."
+        )
+        fields.setdefault("per_device_train_batch_size", old_value)
+
     return GRPOConfig(**fields)
 
 
