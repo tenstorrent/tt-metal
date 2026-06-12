@@ -8,6 +8,8 @@
 
 #include "ttnn/operations/reduction/topk/device/topk_device_operation_types.hpp"
 
+#include "ttnn/device_operation.hpp"
+#include "ttnn/metal2_artifacts.hpp"
 #include <tt-metalium/program_descriptors.hpp>
 
 #include <optional>
@@ -22,7 +24,7 @@ struct TopKDeviceOperation {
     using tensor_return_value_t = std::tuple<Tensor, Tensor>;
 
     struct TopKSingleCoreProgramFactory {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_spec(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
