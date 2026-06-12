@@ -74,26 +74,20 @@ void kernel_main() {
     CircularBuffer cb_topk(cb_topk_mask);
     CircularBuffer cb_expert(cb_expert_mask);
 
-    // Load expert mask before the input loop to avoid deadlock when Ht > 1.
-    // The compute kernel waits for the full expert mask before processing any input tiles,
-    // so loading it after the input would cause the reader and compute to block each other.
-    uint32_t tile_id_expert = 0;
-    cb_expert.reserve_back(Wt);
-    for (uint32_t j = 0; j < Wt; ++j) {
-        noc.async_read(
-            s2, cb_expert, tile_bytes_expert, {.page_id = tile_id_expert}, {.offset_bytes = j * tile_bytes_expert});
-        tile_id_expert++;
-    }
-    noc.async_read_barrier();
-    cb_expert.push_back(Wt);
-
-    // Stream in input tensor, buffer has four tiles as we double-buffer to continue streaming while waiting for compute
-    // and we need two tiles for the bitonic sort llk We could load in an entire row of tiles at a time but that would
-    // require substantially more memory (we would be double buffering four Wt sized CBs)
+    // Stream expert mask 2 tiles at a time alongside input tiles.
+    // This keeps the expert mask CB at a fixed 2-tile size regardless of W,
+    // avoiding deadlock for any input width.
     uint32_t tile_id = 0;
     for (uint32_t i = 0; i < Ht; ++i) {
-        // input: stream two tiles at a time (Wt is guaranteed to be a multiple of 2 for this kernel).
+        uint32_t tile_id_expert = 0;  // expert mask is the same for every row, re-read each time
         for (uint32_t j = 0; j < Wt; j += 2) {
+            cb_expert.reserve_back(2);
+            noc.async_read(s2, cb_expert, tile_bytes_expert, {.page_id = tile_id_expert}, {.offset_bytes = 0});
+            tile_id_expert++;
+            noc.async_read(
+                s2, cb_expert, tile_bytes_expert, {.page_id = tile_id_expert}, {.offset_bytes = tile_bytes_expert});
+            tile_id_expert++;
+
             cb_in0.reserve_back(2);
             noc.async_read(s0, cb_in0, tile_bytes_input, {.page_id = tile_id}, {.offset_bytes = 0});
             tile_id++;
@@ -102,6 +96,7 @@ void kernel_main() {
             tile_id++;
             generate_index_tile(cb_intermed_index, j + 1);
             noc.async_read_barrier();
+            cb_expert.push_back(2);
             cb_in0.push_back(2);
         }
     }

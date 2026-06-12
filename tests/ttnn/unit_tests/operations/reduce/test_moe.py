@@ -64,7 +64,7 @@ def run_moe_test(N, C, H, W, k, E, e, dtype, device):
 )
 @pytest.mark.parametrize(
     "N, C, H, W, k, E, e",
-    ((1, 1, 32, 64, 32, 8, 2),),  # Mixtral8x7B
+    ((1, 1, 32, 512, 32, 8, 2),),  # Mixtral8x7B
 )
 def test_moe(N, C, H, W, k, E, e, dtype, device):
     run_moe_test(N, C, H, W, k, E, e, dtype, device)

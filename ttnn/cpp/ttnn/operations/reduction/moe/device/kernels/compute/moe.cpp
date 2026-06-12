@@ -244,9 +244,6 @@ void mask_and_topk() {
         transpose_wh_init(input_cb_index, input_transposed_cb_index);
     }
 
-    // The expert mask is the same for all rows, so wait for all Wt tiles once before the loop.
-    expert_mask_cb.wait_front(Wt);
-
     for (uint32_t ht = 0; ht < Ht; ++ht) {
         bool ascending = false;
         input_transposed_cb.reserve_back(Wt);
@@ -254,26 +251,31 @@ void mask_and_topk() {
 
         // streaming in input and index tiles to transpose and bitonic local sort them, two tiles at a time
         for (uint32_t wt = 0; wt < Wt; wt += 2) {
+            // expert mask is streamed 2 tiles at a time alongside input, always at index 0 and 1
+            expert_mask_cb.wait_front(2);
             input_cb.wait_front(2);
             index_cb.wait_front(2);
 
             // Before transposing, add expert_mask to the two input tiles and store the result in masked_input_cb.
             // Cannot write back to input_cb as the reader kernel already writes into it.
-            acquire_dst();
+            tile_regs_acquire();
             reconfig_data_format(input_cb_index, expert_mask_cb_index);
             add_bcast_rows_init_short(input_cb_index, expert_mask_cb_index);
-            add_tiles_bcast_rows(input_cb_index, expert_mask_cb_index, 0, wt, 0);
-            add_tiles_bcast_rows(input_cb_index, expert_mask_cb_index, 1, wt + 1, 1);
+            add_tiles_bcast_rows(input_cb_index, expert_mask_cb_index, 0, 0, 0);
+            add_tiles_bcast_rows(input_cb_index, expert_mask_cb_index, 1, 1, 1);
             masked_input_cb.reserve_back(2);
+            tile_regs_commit();
+            tile_regs_wait();
             pack_reconfig_data_format(masked_input_cb_index);
             pack_tile(0, masked_input_cb_index);
             pack_tile(1, masked_input_cb_index);
             masked_input_cb.push_back(2);
             input_cb.pop_front(2);
-            release_dst();
+            expert_mask_cb.pop_front(2);
+            tile_regs_release();
 
             // Transpose masked input and index tiles, then locally sort into k groups.
-            acquire_dst();
+            tile_regs_acquire();
             masked_input_cb.wait_front(2);
             reconfig_data_format_srca(masked_input_cb_index);
             transpose_wh_init_short(masked_input_cb_index);
@@ -289,6 +291,8 @@ void mask_and_topk() {
             // llk_topk_sort -> inplace
             ckernel::topk_local_sort(0, (int)ascending, logk - 1);
 
+            tile_regs_commit();
+            tile_regs_wait();
             // pack value tiles into cb_intermed0
             pack_reconfig_data_format(input_transposed_cb_index);
             pack_tile(0, input_transposed_cb_index);
@@ -300,7 +304,7 @@ void mask_and_topk() {
             pack_tile(3, index_transposed_cb_index);
 
             index_cb.pop_front(2);
-            release_dst();
+            tile_regs_release();
         }
 
         input_transposed_cb.push_back(Wt);
@@ -396,7 +400,6 @@ void mask_and_topk() {
         index_transposed_cb.wait_front(Wt);
         index_transposed_cb.pop_front(Wt);
     }
-    expert_mask_cb.pop_front(Wt);
     // sfpu::_init_sfpu_config_reg();
 }
 
