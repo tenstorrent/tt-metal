@@ -203,3 +203,23 @@ Also found: ttnn.transpose has NO rank-5 path (only unsqueezes rank<4) -> the 5D
 ([2,0,1,3] 3-cycle, the #46208 trigger -- now combine-safe under #46544 but needs a restructure,
 not a simple transpose). NOTE: device hit a transient ethernet-core-26-25 init fault mid-session
 (after repeated resets); glx_reset_auto recovered it. Crashes during that window were device, not code.
+
+## INDEXER ROPE -> rotary_embedding_hf — ATTENTION TM WIN (2026-06-12, E_idxrope_hf)
+| step | change | result |
+|------|--------|--------|
+| E_idxrope_hf | indexer-K RoPE (both layers): rotary_embedding_llama (interleaved-pair, needs reshape->permute->reshape before+after) -> rotary_embedding_hf (native rotate_half on half-concat, fed [1,1,32,64] directly). Added HF concat-doubled cos/sin const tables + one-time seq=32 pipeline. | **KEEP**. Commit (E_idxrope_hf). PCC vs ropecse golden: argmax 100% bit-identical, logits cos64 0.999996, absolute golden 0.8989 (floor held). |
+
+ROOT CAUSE: rotary_embedding_llama's kernel does tile-local ADJACENT-PAIR rotation (cos/sin
+repeat_interleave-doubled, 32x32 trans_mat) -> the model's HALF-CONCAT rope layout had to be permuted
+to interleaved-pair (and back). Those reshapes ([32,1,64]->[32,1,2,32] etc) CROSS TILE BOUNDARIES ->
+expensive physical retiles. rotary_embedding_hf does native rotate_half (cat((-x2,x1)), midpoint on the
+32-tile boundary) -> takes half-concat directly, no permute, no tile-crossing reshape.
+
+MEASURED (idxrope_2026_06_12_12_22_02 vs ropecse): ReshapeView attn0 194->143us (-52us,-2ops),
+attn1 253->199us (-54us,-2ops); Permute -1 op/layer; UntilizeWithUnpadding flat (savings are real).
+attn1 phase -59.6us (clean layer); attn0 -9.3us (hosts the one-time HF cos/sin setup). full 2L -176us.
+EST e2e: ~-53us deterministic ReshapeView x 61 attn layers ~= -3.0ms (minus ~one-time HF setup).
+
+GENERALIZES: convention-matched ops avoid format-bridging TM. rotary_embedding_hf (rotate_half) fits
+half-concat models; rotary_embedding_llama (adjacent-pair) needs the interleave permute. The main Q/K
+ropes (rope1/2/4/5) already feed interleaved-pair (no permute) so were left on rotary_embedding_llama.

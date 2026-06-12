@@ -22,24 +22,24 @@ def main_const_eval_rope_cos_sin_doubled(arg_0, device=None):
     sin = freqs[..., 1]
     cos_doubled = cos.repeat_interleave(2, dim=-1)
     sin_doubled = sin.repeat_interleave(2, dim=-1)
+    # E_idxrope_hf: also emit HF/rotate_half CONCAT-doubled tables ([c0..c31, c0..c31]) for
+    # ttnn.experimental.rotary_embedding_hf, which does native rotate_half on the half-concat
+    # layout -> lets the indexer RoPE skip the half-concat<->interleaved-pair permute round-trip.
+    cos_hf = torch.cat([cos, cos], dim=-1)
+    sin_hf = torch.cat([sin, sin], dim=-1)
     mesh_mapper = ttnn.ReplicateTensorToMesh(device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
-    cos_t = ttnn.from_torch(
-        cos_doubled.unsqueeze(0).unsqueeze(0),  # [1, 1, 16384, 64]
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        mesh_mapper=mesh_mapper,
-    )
-    sin_t = ttnn.from_torch(
-        sin_doubled.unsqueeze(0).unsqueeze(0),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        mesh_mapper=mesh_mapper,
-    )
-    return [cos_t, sin_t]
+
+    def _mk(t):
+        return ttnn.from_torch(
+            t.unsqueeze(0).unsqueeze(0),  # [1, 1, 16384, 64]
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+            mesh_mapper=mesh_mapper,
+        )
+
+    return [_mk(cos_doubled), _mk(sin_doubled), _mk(cos_hf), _mk(sin_hf)]
 
 
 def main_const_eval_all_reduce_semaphores(device=None):
@@ -3137,27 +3137,14 @@ def _main(activations, weights):
         [1, 1, 1],
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
-    # E47 iter3: RoPE site 1 (layer 0 indexer-K rope-part) — build kernel input
-    # Convert half-concat [32,1,64] → interleaved-pair [1,1,32,64] BF16 for the kernel.
-    _rope0_x_split = ttnn.reshape(
-        ttnn_slice_72,
-        [32, 1, 2, 32],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1, None),
-    )
-    ttnn.deallocate(ttnn_slice_72, False)
-    _rope0_x_perm = ttnn.permute(
-        _rope0_x_split,
-        [0, 1, 3, 2],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1, None),
-        pad_value=0.0,
-    )
-    ttnn.deallocate(_rope0_x_split, False)
+    # E_idxrope_hf: RoPE site 1 (layer 0 indexer-K rope-part) via rotary_embedding_hf (native
+    # rotate_half) — feed the half-concat [32,1,64] directly as [1,1,32,64], NO interleave permute.
     _rope0_x = ttnn.reshape(
-        _rope0_x_perm,
+        ttnn_slice_72,
         [1, 1, 32, 64],
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1, None),
     )
-    ttnn.deallocate(_rope0_x_perm, False)
+    ttnn.deallocate(ttnn_slice_72, False)
     ttnn_typecast_42 = ttnn.add(
         ttnn_to_layout_104,
         ce_cache__main["main_const_eval_52"],
@@ -3217,7 +3204,7 @@ def _main(activations, weights):
     # E_attn iter2: removed dead legacy cos/sin embedding chain (embedding_1 →
     # reshape_24 → slice_74/76 → typecast_45/46). All 6 RoPE sites use the doubled
     # _rope_cos_pos/_rope_sin_pos tables; typecast_45/46 had no consumer.
-    ttnn.deallocate(ttnn_to_layout_107, False)
+    # (ttnn_to_layout_107 kept alive: also indexes the HF cos/sin embeddings below; freed after.)
     # [1, 64] → [1, 1, 1, 64] for per-site repeat to whatever seq_len each site needs.
     _rope_cos_pos_4d = ttnn.reshape(
         _rope_cos_pos,
@@ -3238,39 +3225,54 @@ def _main(activations, weights):
     _rope_sin32 = ttnn.repeat(_rope_sin_pos_4d, ttnn.Shape([1, 1, 32, 1]))
     _rope_cos512 = ttnn.repeat(_rope_cos_pos_4d, ttnn.Shape([1, 1, 512, 1]))
     _rope_sin512 = ttnn.repeat(_rope_sin_pos_4d, ttnn.Shape([1, 1, 512, 1]))
-    # Per-site repeat for site 1 (seq_len=32).
-    _rope0_cos_tiled = _rope_cos32
-    _rope0_sin_tiled = _rope_sin32
-    # Run the kernel (prefill mode, DRAM-interleaved I/O).
-    _rope0_out = ttnn.experimental.rotary_embedding_llama(
+    # E_idxrope_hf: HF/rotate_half concat-doubled cos/sin (one position lookup, seq=32) for the
+    # indexer RoPE via rotary_embedding_hf. Shared across both layers' indexer ropes (CSE).
+    _rope_cos_hf_pos = ttnn.embedding(
+        ttnn_to_layout_107,
+        ce_cache__main["main_const_eval_rope_cos_hf"],
+        padding_idx=None,
+        layout=ttnn.Layout.TILE,
+        dtype=ttnn.DataType.BFLOAT16,
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+    )
+    _rope_sin_hf_pos = ttnn.embedding(
+        ttnn_to_layout_107,
+        ce_cache__main["main_const_eval_rope_sin_hf"],
+        padding_idx=None,
+        layout=ttnn.Layout.TILE,
+        dtype=ttnn.DataType.BFLOAT16,
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+    )
+    ttnn.deallocate(ttnn_to_layout_107, False)
+    _rope_cos_hf_4d = ttnn.reshape(
+        _rope_cos_hf_pos,
+        [1, 1, 1, 64],
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+    )
+    ttnn.deallocate(_rope_cos_hf_pos, False)
+    _rope_sin_hf_4d = ttnn.reshape(
+        _rope_sin_hf_pos,
+        [1, 1, 1, 64],
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+    )
+    ttnn.deallocate(_rope_sin_hf_pos, False)
+    _rope_cos_hf32 = ttnn.repeat(_rope_cos_hf_4d, ttnn.Shape([1, 1, 32, 1]))
+    _rope_sin_hf32 = ttnn.repeat(_rope_sin_hf_4d, ttnn.Shape([1, 1, 32, 1]))
+    # E_idxrope_hf: native rotate_half on half-concat -> output is already half-concat, NO
+    # de-interleave permute. cos/sin are the HF concat-doubled tables (seq=32), shared w/ rope3.
+    _rope0_out = ttnn.experimental.rotary_embedding_hf(
         _rope0_x,
-        _rope0_cos_tiled,
-        _rope0_sin_tiled,
-        ce_cache__main["main_const_eval_rope_trans_mat"],
+        _rope_cos_hf32,
+        _rope_sin_hf32,
         is_decode_mode=False,
     )
     ttnn.deallocate(_rope0_x, False)
-    # _rope0_cos/sin_tiled are shared (E_rope_cse) — freed at rope5
-    # Output [1, 1, 32, 64] BF16 interleaved-pair → convert back to half-concat [32, 64].
-    _rope0_out_5d = ttnn.reshape(
-        _rope0_out,
-        [32, 1, 1, 32, 2],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1, None),
-    )
-    ttnn.deallocate(_rope0_out, False)
-    _rope0_out_perm = ttnn.permute(
-        _rope0_out_5d,
-        [0, 1, 2, 4, 3],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1, None),
-        pad_value=0.0,
-    )
-    ttnn.deallocate(_rope0_out_5d, False)
     ttnn_typecast_47 = ttnn.reshape(
-        _rope0_out_perm,
+        _rope0_out,
         [32, 64],
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
-    ttnn.deallocate(_rope0_out_perm, False)
+    ttnn.deallocate(_rope0_out, False)
     ttnn_slice_79 = ttnn.slice(
         ttnn_layer_norm_0,
         [0, 0, 64],
@@ -4221,58 +4223,27 @@ def _main(activations, weights):
         [1, 1, 1],
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
-    # E47 iter7: RoPE site 4 (layer 1 indexer-K rope-part) — mirror of site 1.
-    # slice_165 [32, 1, 64] BF16 half-concat → reshape+permute→ [1, 1, 32, 64] interleaved-pair.
-    _rope3_x_split = ttnn.reshape(
-        ttnn_slice_165,
-        [32, 1, 2, 32],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1, None),
-    )
-    ttnn.deallocate(ttnn_slice_165, False)
-    _rope3_x_perm = ttnn.permute(
-        _rope3_x_split,
-        [0, 1, 3, 2],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1, None),
-        pad_value=0.0,
-    )
-    ttnn.deallocate(_rope3_x_split, False)
+    # E_idxrope_hf: RoPE site 4 (layer 1 indexer-K) via rotary_embedding_hf — mirror of site 1.
+    # slice_165 [32,1,64] half-concat fed directly as [1,1,32,64], NO interleave permute.
     _rope3_x = ttnn.reshape(
-        _rope3_x_perm,
+        ttnn_slice_165,
         [1, 1, 32, 64],
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1, None),
     )
-    ttnn.deallocate(_rope3_x_perm, False)
-    _rope3_cos = _rope_cos32
-    _rope3_sin = _rope_sin32
-    _rope3_out = ttnn.experimental.rotary_embedding_llama(
+    ttnn.deallocate(ttnn_slice_165, False)
+    _rope3_out = ttnn.experimental.rotary_embedding_hf(
         _rope3_x,
-        _rope3_cos,
-        _rope3_sin,
-        ce_cache__main["main_const_eval_rope_trans_mat"],
+        _rope_cos_hf32,
+        _rope_sin_hf32,
         is_decode_mode=False,
     )
     ttnn.deallocate(_rope3_x, False)
-    # _rope3_cos/sin are shared (E_rope_cse) — freed at rope5
-    # Output [1, 1, 32, 64] interleaved-pair → convert back to half-concat [32, 64].
-    _rope3_out_5d = ttnn.reshape(
-        _rope3_out,
-        [32, 1, 1, 32, 2],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1, None),
-    )
-    ttnn.deallocate(_rope3_out, False)
-    _rope3_out_perm = ttnn.permute(
-        _rope3_out_5d,
-        [0, 1, 2, 4, 3],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1, None),
-        pad_value=0.0,
-    )
-    ttnn.deallocate(_rope3_out_5d, False)
     ttnn_typecast_67 = ttnn.reshape(
-        _rope3_out_perm,
+        _rope3_out,
         [32, 64],
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
-    ttnn.deallocate(_rope3_out_perm, False)
+    ttnn.deallocate(_rope3_out, False)
     ttnn_slice_170 = ttnn.slice(
         ttnn_layer_norm_1,
         [0, 0, 64],
@@ -4553,6 +4524,11 @@ def _main(activations, weights):
     ttnn.deallocate(_rope_sin32, False)
     ttnn.deallocate(_rope_cos512, False)
     ttnn.deallocate(_rope_sin512, False)
+    # E_idxrope_hf: HF cos/sin tables (indexer ropes, both layers) freed here too
+    ttnn.deallocate(_rope_cos_hf32, False)
+    ttnn.deallocate(_rope_sin_hf32, False)
+    ttnn.deallocate(_rope_cos_hf_4d, False)
+    ttnn.deallocate(_rope_sin_hf_4d, False)
     ttnn_reshape_104 = ttnn.reshape(
         _rope5_out,
         [1, 32, 1, 64],
@@ -5343,6 +5319,9 @@ def consteval__main(ce_cache, weights):
         )
         ce_cache["main_const_eval_rope_cos_doubled"] = main_const_eval_rope_cos_sin_doubled_0[0]
         ce_cache["main_const_eval_rope_sin_doubled"] = main_const_eval_rope_cos_sin_doubled_0[1]
+        # E_idxrope_hf: HF/rotate_half concat-doubled cos/sin for the indexer RoPE
+        ce_cache["main_const_eval_rope_cos_hf"] = main_const_eval_rope_cos_sin_doubled_0[2]
+        ce_cache["main_const_eval_rope_sin_hf"] = main_const_eval_rope_cos_sin_doubled_0[3]
         main_const_eval_0_0 = main_const_eval_0()
         ce_cache["main_const_eval_0"] = main_const_eval_0_0[0]
         main_const_eval_1_0 = main_const_eval_1()
