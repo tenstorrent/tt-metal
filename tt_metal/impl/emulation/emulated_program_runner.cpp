@@ -895,9 +895,8 @@ static void populate_bank_mapping(
     auto dram_channels = soc.get_dram_cores();
     num_dram_channels_out = static_cast<uint32_t>(dram_channels.size());
 
-    if (!dram_channels.empty() && !dram_channels[0].empty()) {
-        auto& dc = dram_channels[0][0];
-        dram_core_out = sw_emu->get_core(tt_xy_pair(dc.x, dc.y));
+    if (num_dram_channels_out > 0) {
+        dram_core_out = sw_emu->get_dram_channel_backing(0);
     }
 
     // Populate bank mapping arrays using metal_SocDescriptor (matches host write path).
@@ -1526,23 +1525,30 @@ static std::unordered_map<uint64_t, tt_emule::Core*>* build_core_map(
         }
         // Add DRAM cores (UMD SoC descriptor coords)
         auto& umd_soc = sw_emu->get_soc_descriptor();
-        for (auto& dc_vec : umd_soc.get_dram_cores()) {
-            for (auto& dc : dc_vec) {
-                auto* core = sw_emu->get_core(tt_xy_pair(dc.x, dc.y));
+        auto dram_cores = umd_soc.get_dram_cores();
+        for (uint32_t ch = 0; ch < dram_cores.size(); ch++) {
+            auto* core = sw_emu->get_dram_channel_backing(ch);
+            for (auto& dc : dram_cores[ch]) {
                 uint64_t key = (uint64_t(dc.x) << 32) | dc.y;
                 (*core_map)[key] = core;
             }
         }
-        // Add DRAM cores (metal_SocDescriptor preferred worker coords)
-        // Register BOTH NOC0 and NOC1 preferred coords — on Wormhole they
-        // differ per channel (e.g. ch0 NOC0=[2,2], NOC1=[1,1]); both must
-        // be in the core_map so __emule_resolve_noc_addr can route either.
+        // Add DRAM cores (metal_SocDescriptor preferred worker coords). Register BOTH
+        // NOC0 and NOC1 preferred coords (on Wormhole they differ per view) so
+        // __emule_resolve_noc_addr can route either. Key the backing by the coord's
+        // umd LOGICAL channel (the physical DRAM channel) — not the metal dram-view
+        // index: several views alias one physical channel (at different offsets), and
+        // the host write path resolves the same LOGICAL channel. Keying by view index
+        // would split one channel across multiple backings → host/kernel read mismatch.
         {
+            auto& umd = sw_emu->get_soc_descriptor();
             auto& msoc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
-            for (uint32_t ch = 0; ch < msoc.get_num_dram_views() && ch < MAX_NUM_BANKS; ch++) {
+            for (uint32_t view = 0; view < msoc.get_num_dram_views() && view < MAX_NUM_BANKS; view++) {
                 for (uint32_t noc = 0; noc < NUM_NOCS; noc++) {
-                    auto dc = msoc.get_preferred_worker_core_for_dram_view(ch, noc);
-                    auto* core = sw_emu->get_core(tt_xy_pair(dc.x, dc.y));
+                    auto dc = msoc.get_preferred_worker_core_for_dram_view(view, noc);
+                    auto lg = umd.translate_coord_to(
+                        tt_xy_pair(dc.x, dc.y), CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
+                    auto* core = sw_emu->get_dram_channel_backing(static_cast<uint32_t>(lg.x));
                     uint64_t key = (uint64_t(dc.x) << 32) | dc.y;
                     (*core_map)[key] = core;
                 }
