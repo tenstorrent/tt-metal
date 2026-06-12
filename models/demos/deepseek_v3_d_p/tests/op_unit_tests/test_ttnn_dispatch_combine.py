@@ -416,8 +416,8 @@ def test_ttnn_dispatch_combine_ds(
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
 @pytest.mark.parametrize(
     "dispatched_buffer_layout",
-    [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-    ids=["dispatched_buffer_tile", "dispatched_buffer_row_major"],
+    [ttnn.TILE_LAYOUT],
+    ids=["dispatched_buffer_tile"],
 )
 def test_ttnn_dispatch_combine_glm(
     mesh_device,
@@ -459,8 +459,8 @@ def test_ttnn_dispatch_combine_glm(
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
 @pytest.mark.parametrize(
     "dispatched_buffer_layout",
-    [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-    ids=["dispatched_buffer_tile", "dispatched_buffer_row_major"],
+    [ttnn.TILE_LAYOUT],
+    ids=["dispatched_buffer_tile"],
 )
 def test_ttnn_dispatch_combine_minimax(
     mesh_device,

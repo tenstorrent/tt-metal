@@ -113,6 +113,10 @@ def run_dispatch(
     if num_devices >= 8 and not run_pcc_check and use_predictable_data:
         pytest.skip("8-chip perf only runs with random data")
 
+    # ROW_MAJOR dispatch is exercised for correctness (PCC) only; perf tracks the TILE path.
+    if input_layout == ttnn.ROW_MAJOR_LAYOUT and not run_pcc_check:
+        pytest.skip("ROW_MAJOR dispatch only runs in the PCC test, not perf")
+
     # Predictable inputs are torch.arange(...), which produces values up to ~1.8M and
     # overflows fp8_e4m3fn's ±448 range — overflow encodes as NaN, breaking PCC.
     # Only exercise the fp8 path with random (N(0,1)) data that fits in range.
@@ -476,8 +480,8 @@ def test_ttnn_dispatch_ds(
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
 @pytest.mark.parametrize(
     "input_layout",
-    [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-    ids=["tile", "row_major"],
+    [ttnn.TILE_LAYOUT],
+    ids=["tile"],
 )
 @pytest.mark.parametrize("use_fp8_output", [False, True], ids=["bf16_out", "fp8_out"])
 @pytest.mark.parametrize("verbose", [False])
@@ -549,8 +553,8 @@ def test_ttnn_dispatch_glm(
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
 @pytest.mark.parametrize(
     "input_layout",
-    [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-    ids=["tile", "row_major"],
+    [ttnn.TILE_LAYOUT],
+    ids=["tile"],
 )
 @pytest.mark.parametrize("use_fp8_output", [False, True], ids=["bf16_out", "fp8_out"])
 @pytest.mark.parametrize("verbose", [False])
