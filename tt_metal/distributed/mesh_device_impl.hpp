@@ -321,6 +321,17 @@ public:
     // safe for a DRISC kernel to occupy. Throws if no free subchannel exists, or
     // TT_FATALs if bank_id is out of range. Used by the DRAM-sender GCB factory.
     CoreCoord pick_unused_dram_logical_core(uint32_t bank_id) const;
+
+    // Returns the ordered list of DRISC logical cores that drive a bank's DRAM-sender
+    // prefetcher: element 0 is the free non-endpoint subchannel
+    // (pick_unused_dram_logical_core), element 1 is the bank's NOC1 worker-endpoint
+    // subchannel (idle for NOC0 during matmul). Both run their kernels on NOC0; the
+    // pair lets two DRISC cores share a bank's receiver set. Indices are derived
+    // per-bank from the SOC descriptor (they are not fixed across banks). Used by both
+    // the DRAM-sender GCB factory and the DramCorePrefetcherManager so their sender
+    // cores always agree.
+    std::vector<CoreCoord> dram_sender_logical_cores(uint32_t bank_id) const;
+
     bool close() override;
     bool close_impl(MeshDevice* pimpl_wrapper);
     void enable_program_cache() override;
