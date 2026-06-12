@@ -106,6 +106,8 @@ def _lookup_model_entry(table, model_key):
         if entry_key.lower() == key_lower:
             return entry
     return {}
+
+
 @lru_cache(maxsize=1)
 def _model_key_candidates():
     """Return possible threshold-table keys for the active HF_MODEL.
