@@ -465,32 +465,8 @@ from ttnn.operations.matmul import (
     create_matmul_attributes,
 )
 
-from ttnn.operations.normalization import (
-    SoftmaxProgramConfig,
-    SoftmaxDefaultProgramConfig,
-    SoftmaxShardedMultiCoreProgramConfig,
-    LayerNormDefaultProgramConfig,
-    LayerNormShardedMultiCoreProgramConfig,
-    LayerNormType,
-    DistributedLayerNormStage,
-    LayerNormParams,
-    LayerNormInputs,
-    LayerNormDeviceOperation,
-    LayerNormMultiCoreProgramFactory,
-    LayerNormShardedProgramFactory,
-    create_group_norm_input_mask,
-    create_group_norm_input_negative_mask,
-    create_group_norm_weight_bias_rm,
-    create_group_norm_reciprocals,
-    create_layer_norm_reciprocals,
-    determine_expected_group_norm_sharded_config_and_grid_size,
-    determine_expected_group_norm_dram_grid_size,
-    get_group_norm_cores_across_channel,
-    dram_group_norm_params_from_torch,
-    layernorm_default_compute_config,
-    rmsnorm_default_compute_config,
-    create_layernorm_program_config,
-)
+# normalization ops (softmax/layer_norm/rms_norm/group_norm) nuked for agent
+# evaluation — their Python configs/helpers are reimplemented with the op.
 
 from ttnn.operations.embedding import (
     EmbeddingsType,
@@ -506,39 +482,17 @@ from ttnn.operations.reduction import (
 
 from ttnn.operations.ccl import Topology, DispatchAlgorithm, WorkerMode
 
-from ttnn.operations.conv2d import (
-    Conv2dConfig,
-    PaddingMode,
-    get_conv_output_dim,
-    Conv2dSliceConfig,
-    Conv2dDRAMSliceHeight,
-    Conv2dDRAMSliceWidth,
-    Conv2dL1Full,
-    Conv2dL1FullSliceConfig,
-    prepare_conv_weights,
-    prepare_conv_bias,
-    prepare_conv_transpose2d_weights,
-    prepare_conv_transpose2d_bias,
-    SlidingWindowParallelConfig,
-    Op2DSliceConfig,
-    Op2DDRAMSliceHeight,
-    Op2DDRAMSliceWidth,
-    Op2DL1Full,
-    Op2DL1FullSliceConfig,
-)
+# conv2d nuked for agent evaluation — Conv2d*/Conv1dConfig Python API removed.
 
 from ttnn.operations.pool import (
     prepare_grid_sample_grid,
 )
 
-from ttnn._ttnn.operations.experimental import Conv3dConfig
 from ttnn._ttnn.operations.experimental import disaggregation
 from ttnn._ttnn.operations.experimental import MinimalMatmulConfig
 
 # Expose disaggregation in experimental namespace
 experimental.disaggregation = disaggregation
-
-Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
 from ttnn.operations.transformer import SDPAProgramConfig
 

@@ -20,7 +20,6 @@ file(
     generic/device/kernels/*
     grid_sample/device/kernels/*
     rotate/device/kernels/*
-    upsample/device/kernels/*
 )
 
 target_sources(
