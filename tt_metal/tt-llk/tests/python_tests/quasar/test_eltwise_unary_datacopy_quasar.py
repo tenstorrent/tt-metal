@@ -117,7 +117,14 @@ ALL_DATACOPY_COMBINATIONS = generate_eltwise_unary_datacopy_combinations(
 @pytest.mark.quasar
 @parametrize(
     formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices=ALL_DATACOPY_COMBINATIONS,
-    implied_math_format=[ImpliedMathFormat.Yes, ImpliedMathFormat.No],
+    # don't generate the No variant for them. combo[0] is the InputOutputFormat (input/output pair).
+    implied_math_format=lambda formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices: (
+        [ImpliedMathFormat.Yes]
+        if formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices[
+            0
+        ].input_format.is_mx_format()
+        else [ImpliedMathFormat.Yes, ImpliedMathFormat.No]
+    ),
 )
 def test_eltwise_unary_datacopy_quasar(
     formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices,
@@ -131,13 +138,6 @@ def test_eltwise_unary_datacopy_quasar(
         dest_sync_mode,
         dest_index,
     ) = formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices
-
-    # MX formats REQUIRE implied_math_format=Yes on Quasar (bypass format inference pipeline)
-    if (
-        formats.input_format.is_mx_format()
-        and implied_math_format == ImpliedMathFormat.No
-    ):
-        pytest.skip("MX formats require implied_math_format=Yes on Quasar")
 
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,

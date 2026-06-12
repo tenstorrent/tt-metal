@@ -7,6 +7,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/reflection.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -17,6 +18,8 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_metal.hpp>
+
+#include <unordered_map>
 
 namespace ttnn::operations::experimental::test {
 
@@ -36,14 +39,6 @@ void DramPrefetcherValidatorDeviceOperation::validate_on_program_cache_miss(
 
     const auto& sr_mapping = attrs.global_cb->sender_receiver_core_mapping();
     TT_FATAL(!sr_mapping.empty(), "GCB has no senders");
-    const uint32_t num_receivers_per_sender = sr_mapping.front().second.num_cores();
-    for (const auto& [_, recv] : sr_mapping) {
-        TT_FATAL(
-            recv.num_cores() == num_receivers_per_sender,
-            "GCB has non-uniform receivers per sender ({} vs {}); validator requires uniform fanout",
-            recv.num_cores(),
-            num_receivers_per_sender);
-    }
 }
 
 void DramPrefetcherValidatorDeviceOperation::validate_on_program_cache_hit(
@@ -89,40 +84,71 @@ DramPrefetcherValidatorDeviceOperation::ProgramFactory::create_at(
     // Derive ring topology from the GCB (matches both worker-sender and DRAM-sender paths).
     const auto& sr_mapping = global_cb.sender_receiver_core_mapping();
     const uint32_t num_senders = static_cast<uint32_t>(sr_mapping.size());
-    const uint32_t num_receivers_per_sender = sr_mapping.front().second.num_cores();
-    const uint32_t num_blocks = num_senders * num_receivers_per_sender;
+    uint32_t num_blocks = 0;
+    uint32_t max_bank_id = 0;
+    for (const auto& [sender_logical, receivers] : sr_mapping) {
+        const uint32_t bank_id = static_cast<uint32_t>(sender_logical.x);
+        max_bank_id = bank_id > max_bank_id ? bank_id : max_bank_id;
+        num_blocks += receivers.num_cores();
+    }
+    const uint32_t num_dram_banks = max_bank_id + 1;
+    TT_FATAL(
+        num_dram_banks > 0 && num_blocks % num_dram_banks == 0,
+        "Validator: total receiver count ({}) must divide evenly across {} DRAM banks",
+        num_blocks,
+        num_dram_banks);
+    const uint32_t receivers_per_bank = num_blocks / num_dram_banks;
 
     // Per-tensor geometry (single-tensor path; see prefetcher_matmul_design.md §3).
+    // Read shape from the tensor's logical (padded) shape so this works for
+    // both legacy WIDTH_SHARDED (one shard per bank) and ND_SHARDED
+    // (num_shards = ring_size, receiver-contiguous) layouts. The
+    // per-(ring_pos, block) tile mapping is layout-mode-invariant; only the
+    // ring_pos -> (bank, recv_idx) formula differs.
     Buffer* tensor_buffer = source_tensor.buffer();
-    const auto shard_shape = tensor_buffer->shard_spec().shape();
+    const auto& padded_shape = source_tensor.padded_shape();
+    TT_FATAL(
+        padded_shape.rank() >= 2,
+        "Validator: source tensor padded shape must be at least rank 2; got rank {}",
+        padded_shape.rank());
     const auto& tile_spec = source_tensor.tensor_spec().tile();
     const auto tile_shape = tile_spec.get_tile_shape();
     const uint32_t tile_h = tile_shape[0];
     const uint32_t tile_w = tile_shape[1];
+    const uint32_t K_elems = padded_shape[-2];
+    const uint32_t N_elems = padded_shape[-1];
     TT_FATAL(
-        shard_shape[0] % tile_h == 0 && shard_shape[1] % tile_w == 0,
-        "shard_shape ({}, {}) must be tile-aligned (tile {}x{})",
-        shard_shape[0],
-        shard_shape[1],
+        K_elems % tile_h == 0 && N_elems % tile_w == 0,
+        "Validator: tensor padded shape ({}, {}) must be tile-aligned (tile {}x{})",
+        K_elems,
+        N_elems,
         tile_h,
         tile_w);
-    const uint32_t k_tiles = shard_shape[0] / tile_h;
-    const uint32_t n_per_bank_tiles = shard_shape[1] / tile_w;
+    const uint32_t k_tiles = K_elems / tile_h;
+    const uint32_t total_n_tiles = N_elems / tile_w;
     TT_FATAL(
-        k_tiles % num_blocks == 0,
-        "k_tiles ({}) must be divisible by num_blocks ({}) for the validator's expected layout",
-        k_tiles,
-        num_blocks);
+        k_tiles % num_blocks == 0, "Validator: k_tiles ({}) must be divisible by num_blocks ({})", k_tiles, num_blocks);
+    const uint32_t ring_size = num_blocks;
     TT_FATAL(
-        n_per_bank_tiles % num_receivers_per_sender == 0,
-        "n_per_bank_tiles ({}) must be divisible by num_receivers_per_sender ({})",
-        n_per_bank_tiles,
-        num_receivers_per_sender);
+        total_n_tiles % ring_size == 0,
+        "Validator: total_n_tiles ({}) must be divisible by ring_size ({})",
+        total_n_tiles,
+        ring_size);
+    const uint32_t n_per_recv_tiles = total_n_tiles / ring_size;
     const uint32_t k_block_w_tiles = k_tiles / num_blocks;
-    const uint32_t n_per_recv_tiles = n_per_bank_tiles / num_receivers_per_sender;
     const tt::DataFormat tensor_dataformat = datatype_to_dataformat_converter(source_tensor.dtype());
     const uint32_t tile_bytes = tile_spec.get_tile_size(tensor_dataformat);
     const uint32_t page_bytes_per_recv = k_block_w_tiles * n_per_recv_tiles * tile_bytes;
+
+    // Layout detection: ND_SHARDED tensors with `num_shards == ring_size` are
+    // the receiver-contiguous DRAM-core layout. Under ROUND_ROBIN_1D shard
+    // distribution, the natural GCB pairing is strided (bank b feeds ring
+    // positions b, b + num_senders, ...). Legacy WIDTH_SHARDED keeps the
+    // row-major GCB (bank b -> contiguous block of ring positions).
+    const bool is_recv_contig =
+        source_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED &&
+        tensor_buffer->buffer_distribution_spec().has_value() &&
+        tensor_buffer->buffer_distribution_spec()->num_shards() == ring_size;
 
     const CoreRangeSet receiver_cores = global_cb.receiver_cores();
 
@@ -160,24 +186,37 @@ DramPrefetcherValidatorDeviceOperation::ProgramFactory::create_at(
     // Receiver enumeration order within a sender's CoreRangeSet must match the order the
     // sender uses to address them in its internal noc_xy table (row-major).
     const uint32_t bank_base_addr = static_cast<uint32_t>(tensor_buffer->address());
+    std::unordered_map<uint32_t, uint32_t> receivers_seen_by_bank;
     for (uint32_t s = 0; s < num_senders; ++s) {
         const auto& [sender_logical, receivers_set] = sr_mapping[s];
         const uint32_t bank_id = sender_logical.x;
         const auto recv_cores = corerange_to_cores(receivers_set, std::nullopt, /*row_wise=*/true);
-        TT_FATAL(
-            recv_cores.size() == num_receivers_per_sender,
-            "Sender {} has {} receivers but expected {}",
-            s,
-            recv_cores.size(),
-            num_receivers_per_sender);
+        const uint32_t recv_index_base = receivers_seen_by_bank[bank_id];
+        receivers_seen_by_bank[bank_id] = recv_index_base + static_cast<uint32_t>(recv_cores.size());
         for (uint32_t r = 0; r < recv_cores.size(); ++r) {
+            const uint32_t bank_local_recv = recv_index_base + r;
+            TT_FATAL(
+                bank_local_recv < receivers_per_bank,
+                "Sender {} on bank {} maps receiver {} past receivers_per_bank {}",
+                s,
+                bank_id,
+                bank_local_recv,
+                receivers_per_bank);
+            // ring_pos formula differs by layout:
+            //   legacy K-row-major: bank b's slot k -> ring_pos = b * receivers_per_bank + k
+            //   recv-contig + strided GCB: bank b's slot k -> ring_pos = b + k * num_dram_banks
+            // With dual senders, k is the bank-local receiver index across both senders.
+            const uint32_t ring_pos = is_recv_contig ? (bank_id + bank_local_recv * num_dram_banks)
+                                                     : (bank_id * receivers_per_bank + bank_local_recv);
+            const uint32_t n_col_start = ring_pos * n_per_recv_tiles;
             std::vector<uint32_t> rt_args = {
                 bank_id,
-                r,
+                bank_local_recv,
                 bank_base_addr,
                 k_block_w_tiles,
-                n_per_bank_tiles,
+                total_n_tiles,
                 n_per_recv_tiles,
+                n_col_start,
             };
             SetRuntimeArgs(program, kernel_id, recv_cores[r], rt_args);
         }
