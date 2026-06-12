@@ -157,6 +157,8 @@ Add a focused split-sampling trace test before marking the stage complete:
 
 Build the fast probe before any repeated debugging loop: a reduced full-model variant (one layer of each kind, short generation, real tensor/cache/page-table shapes, and the real terminal path) with a documented runtime of a couple of minutes or less. Repeating a multi-minute all-layer pass to answer single-bit questions wastes the budget the debugging loop needs; the probe pays for itself within a few iterations. This probe is for debugging only. Final correctness and performance evidence still comes from the complete all-layer model.
 
+Generate the main reference fresh by default. Reuse a reference only when metadata under the current autoport directory proves the same HF model id and revision, tokenizer, prompt source, chat-template flag, generation length, top-k, and generation command. If any of that is missing or mismatched, regenerate the reference rather than carrying forward a possibly contaminated artifact.
+
 Free-running comparison must be strong enough to catch feedback bugs; teacher forcing cannot see them by construction (it overrides the token-feedback path every step). Use several prompts and the longest feasible generation - at least 64-128 tokens when runtime allows - not a single short continuation. Then run:
 
 ```bash
@@ -165,6 +167,15 @@ python models/common/readiness_check/check_degenerate_output.py \
 ```
 
 and include its verdict in the stage evidence. Mechanical degeneracy - doubled tokens, single-token collapse - is a decode-loop bug, never a model property. The runner-side stage gate runs the same check.
+
+Add a focused split-sampling trace test before marking the stage complete:
+
+- capture/replay two or more decode steps with different token and current-position values;
+- assert the exact persistent trace input tensors consumed by decode changed as expected;
+- assert the sampled token from step N is the token input for step N+1 without host reconstruction;
+- cover unchanged and changed page-table cases;
+- prove the delivered path is not rebuilding tokens, positions, RoPE indices, masks, or page tables on the host every token; if a per-token host refresh remains, the stage is incomplete;
+- alternate greedy and non-greedy-capable sampling params if the generator caches trace ids by sampling mode.
 
 Build the fast probe before any repeated debugging loop: a reduced variant (one layer of each kind, short generation, real shapes) with a documented runtime of a couple of minutes or less. Repeating a multi-minute full-model pass to answer single-bit questions wastes the budget the debugging loop needs; the probe pays for itself within a few iterations.
 

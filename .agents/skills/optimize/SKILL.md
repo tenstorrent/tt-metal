@@ -171,7 +171,7 @@ Every optimized decode result must reconcile three numbers from the same run:
 2. Device-time decode: per-token device time from your own signposted `tt-perf-report` window.
 3. End-to-end decode: warmed measured ms/token from the host.
 
-Report all three and attribute the gaps: end-to-end = device time + dispatch gap + host work. Every non-device term must be either optimized away or attributed to a named ttnn/runtime/API limitation with evidence. "The device math is fast but the loop is slow" is an unfinished optimization, not a result; a large unexplained gap between device time and end-to-end usually means an untraced path, per-step synchronization, host readback, or input-refresh overhead.
+Report all three and use the gaps to drive implementation work: end-to-end = device time + dispatch gap + host work. Remove avoidable non-device terms before accepting the result. "The device math is fast but the loop is slow" is an unfinished optimization, not a result; a large unexplained gap between device time and end-to-end usually means an untraced path, per-step synchronization, host readback, or input-refresh overhead. Only name a ttnn/runtime/API limitation after you have tried the targeted fix and have evidence that the limitation blocks the optimized path.
 
 The roofline fraction achieved varies legitimately by architecture - modules built from many small ops sit lower - so the explanation, not a fixed percentage, is the requirement. Name the limitations precisely; they feed the ttnn improvement backlog.
 
@@ -188,7 +188,21 @@ When optimizing a complete model or serving path, also write `doc/<stage>/perf_s
 }
 ```
 
-Report TTFT honestly in `perf_summary.json` even when prefill optimization is deferred by project policy; deferred is a recorded state, not a hidden one.
+## Full-Model Decode Closure
+
+For optimized full-model work, first compute a target budget from the best decoder-layer evidence:
+
+- `layer_stack_ms = sum(layer_count[kind] * optimized_multichip_decode_ms[kind])`;
+- `layer_stack_tps = 1000 / layer_stack_ms` for batch-1 single-user decode;
+- `full_model_overhead_ms = measured_full_model_ms_per_token - layer_stack_ms`.
+
+If the layer-stack estimate is already slower than the target, return to decoder optimization before spending time on generator orchestration. If the layer-stack estimate can meet the target but the full model cannot, optimize the overhead explicitly before changing the mathematical core: final norm, LM head, logits movement, sampling trace, token/current-position/RoPE/page-table refresh, trace replay blocking, synchronizations, host readbacks, cache management, and CCL buffer lifetime. For token/current-position/RoPE/page-table refresh specifically, the optimized steady-state loop should use persistent device tensors, `tt_out_tok` feedback, device-side position advance for fixed-step decode, and page-table copies only when the page table changes.
+
+The same measured path must be used for before/after comparisons. A teacher-forcing or device-logit replay number is useful, but it does not prove a token-out generator or vLLM path is fast unless it includes the same sampling and token-feedback work. Record both when they differ.
+
+If a decoder optimization was disabled in the full model because the stacked model hit L1, semaphore, trace, or CCL limits, do not accept the fallback as final until you have tried to reduce or pool that resource. Examples include persistent CCL buffers, output buffers, ring buffers, semaphores, trace input tensors, and page-table buffers. If it still cannot fit, record the exact allocation or runtime failure and the measured cost of the fallback.
+
+Preserve the multichip decoder's data-layout contract across the stack. If the decoder was optimized around a sharded/fractured residual stream, do not insert a layer-to-layer all-gather merely to simplify the full-model wrapper. Try the canonical fused collective/matmul or sharded-output pattern first and find a way to make the performant solution work. $autofix can help you if you are running into bugs here.
 
 ## Evidence To Leave
 
