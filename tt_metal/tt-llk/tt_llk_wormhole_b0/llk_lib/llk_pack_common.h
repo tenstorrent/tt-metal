@@ -201,8 +201,8 @@ TT_ALWAYS_INLINE void _llk_pack_relu_config_(const ckernel::ReluConfig& relu_con
 {
     const std::uint32_t mode = static_cast<std::uint32_t>(relu_config.get_mode());
     const std::uint32_t val  = (relu_config.get_threshold() << STACC_RELU_ReluThreshold_SHAMT) | (mode << STACC_RELU_ApplyRelu_SHAMT);
-    TTI_SETDMAREG(0, val & 0xffff, 0, LO_16(p_gpr_pack::TMP0));
-    TTI_SETDMAREG(0, val >> 16, 0, HI_16(p_gpr_pack::TMP0));
+    TT_SETDMAREG(0, val & 0xffff, 0, LO_16(p_gpr_pack::TMP0));
+    TT_SETDMAREG(0, val >> 16, 0, HI_16(p_gpr_pack::TMP0));
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
     TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, STACC_RELU_ApplyRelu_ADDR32);
     TTI_NOP;
