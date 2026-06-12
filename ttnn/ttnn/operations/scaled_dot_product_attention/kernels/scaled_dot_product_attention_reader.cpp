@@ -28,12 +28,18 @@ void kernel_main() {
     constexpr uint32_t D_t = get_compile_time_arg_val(0);
     constexpr uint32_t S_q_t = get_compile_time_arg_val(1);
     constexpr uint32_t S_kv_t = get_compile_time_arg_val(2);
-    constexpr uint32_t H = get_compile_time_arg_val(3);
+    constexpr uint32_t H = get_compile_time_arg_val(3);  // H_q (Q/output heads)
     constexpr uint32_t mask_H = get_compile_time_arg_val(4);
     constexpr bool has_mask = get_compile_time_arg_val(5) != 0;
     constexpr uint32_t scale_bits = get_compile_time_arg_val(6);
+    constexpr uint32_t H_kv = get_compile_time_arg_val(7);  // K/V heads (== H for MHA)
 
-    constexpr auto q_args = TensorAccessorArgs<7>();
+    // GQA/MQA head broadcast: each Q head h maps to KV head h / group, where
+    // group = H_q / H_kv (== 1 for MHA, == H_q for MQA). H % H_kv == 0 is
+    // enforced in validate(), so this is exact integer division.
+    constexpr uint32_t kv_group = H / H_kv;
+
+    constexpr auto q_args = TensorAccessorArgs<8>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -88,8 +94,10 @@ void kernel_main() {
             cb_push_back(cb_q_in, D_t);
         }
 
+        const uint32_t h_kv = h / kv_group;  // K/V head feeding this Q head
+
         for (uint32_t j = 0; j < S_kv_t; ++j) {
-            const uint32_t kv_base = ((b * H + h) * S_kv_t + j) * D_t;
+            const uint32_t kv_base = ((b * H_kv + h_kv) * S_kv_t + j) * D_t;
 
             // K block
             {

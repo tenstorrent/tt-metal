@@ -73,7 +73,7 @@ SUPPORTED = {
     "layout": [ttnn.TILE_LAYOUT],
     "alignment": ["tile_aligned"],
     "attention_kind": ["self", "cross"],
-    "kv_heads_mode": ["mha"],
+    "kv_heads_mode": ["mha", "gqa", "mqa"],
     "mask_mode": ["none", "custom"],
     "scale_mode": ["auto", "explicit"],
 }
@@ -113,6 +113,13 @@ def validate(query, key, value, *, attn_mask=None, is_causal=False, scale=None):
         )
     if k_shape[1] != v_shape[1]:
         raise ValueError(f"scaled_dot_product_attention: K/V num_heads mismatch K.H={k_shape[1]} V.H={v_shape[1]}")
+    # GQA/MQA head broadcast requires H_q to be an integer multiple of H_kv
+    # (each KV head is shared by exactly H_q / H_kv query heads).
+    if q_shape[1] % k_shape[1] != 0:
+        raise ValueError(
+            f"scaled_dot_product_attention: Q num_heads ({q_shape[1]}) must be a multiple of "
+            f"K/V num_heads ({k_shape[1]}) for grouped/multi-query attention"
+        )
 
     if is_causal and attn_mask is not None:
         raise ValueError("scaled_dot_product_attention: is_causal and attn_mask are mutually exclusive")

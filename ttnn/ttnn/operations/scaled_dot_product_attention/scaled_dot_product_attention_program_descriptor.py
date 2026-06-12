@@ -91,6 +91,7 @@ def create_program_descriptor(
         math_fidelity = ttnn.MathFidelity.HiFi4 if query.dtype == ttnn.float32 else ttnn.MathFidelity.HiFi2
 
     b, h, s_q, d = (int(x) for x in query.shape)
+    h_kv = int(key.shape[1])  # K/V heads (GQA/MQA: < h; MHA: == h)
     s_kv = int(key.shape[-2])
     mask_h = int(attn_mask.shape[1]) if attn_mask is not None else 1
     has_mask = attn_mask is not None
@@ -180,7 +181,9 @@ def create_program_descriptor(
         cbs.append(cb(CB_MASK_IN, 2))  # mask block: input dtype (see note above)
 
     # --- Reader CT args ---
-    reader_ct = [D_t, S_q_t, S_kv_t, h, mask_h, 1 if has_mask else 0, _f32_bits(scale)]
+    # h is H_q (Q/output heads); h_kv is the K/V head count. For GQA/MQA the
+    # reader remaps each Q head to KV head h_q // (H_q / h_kv). MHA → h_kv == h.
+    reader_ct = [D_t, S_q_t, S_kv_t, h, mask_h, 1 if has_mask else 0, _f32_bits(scale), h_kv]
     reader_ct.extend(ttnn.TensorAccessorArgs(query).get_compile_time_args())
     reader_ct.extend(ttnn.TensorAccessorArgs(key).get_compile_time_args())
     reader_ct.extend(ttnn.TensorAccessorArgs(value).get_compile_time_args())
