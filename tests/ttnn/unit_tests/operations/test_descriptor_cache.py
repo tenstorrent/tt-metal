@@ -220,3 +220,46 @@ def test_concat_cache(cache_device):
     for _ in range(3):
         _run()
     assert cache_device.num_program_cache_entries() == base, "concat over-caching"
+
+
+# ---------------------------------------------------------------------------
+# WORK-CORE-SET GROWTH (the freeze that batch_norm-training hit). For tiled-interleaved ops
+# the hash omits shape, so a single-tile shape (1 work core) and a multi-tile shape share one
+# cache entry. Cores that were noops at build time become work cores on the larger shape; their
+# address slots were baked as 0 (only build-time work cores got Buffer* bindings), so get_dynamic
+# must re-apply the buffer addresses for EVERY current work core or those cores read from null.
+# Caching the SINGLE-TILE shape FIRST is what triggers it — the earlier data-only tests (fixed
+# shape) never exercised a growing work-core set, which is why this class of freeze slipped through.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("ttnn_function", [ttnn.gelu, ttnn.square, ttnn.exp])
+def test_unary_workcore_growth_cache(cache_device, ttnn_function):
+    torch.manual_seed(0)
+    golden_function = ttnn.get_golden_function(ttnn_function)
+
+    def _run(shape):
+        x = torch.rand(shape, dtype=torch.bfloat16)
+        xt = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=cache_device)
+        out = ttnn.to_torch(ttnn_function(xt)).float()
+        ref = golden_function(x.float()).float()
+        assert torch.allclose(out, ref, atol=0.1, rtol=0.1), f"{ttnn_function} stale at shape={shape}"
+
+    # Single tile FIRST (1 work core), then shapes needing many work cores: ex-noop cores must
+    # get live addresses, not the frozen 0 baked for the single-tile build.
+    for shape in [(1, 1, 32, 32), (1, 64, 32, 32), (3, 5, 64, 120), (1, 1, 32, 32)]:
+        _run(shape)
+
+
+def test_binary_broadcast_workcore_growth_cache(cache_device):
+    torch.manual_seed(0)
+
+    def _run(shape):
+        a = torch.rand(shape, dtype=torch.bfloat16)
+        b = torch.rand((1, shape[1], 1, 1), dtype=torch.bfloat16)  # full per-channel broadcast
+        at = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=cache_device)
+        bt = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, device=cache_device)
+        out = ttnn.to_torch(ttnn.subtract(at, bt)).float()
+        ref = (a.float() - b.float()).float()
+        assert torch.allclose(out, ref, atol=0.1, rtol=0.1), f"subtract-broadcast stale at shape={shape}"
+
+    for shape in [(1, 1, 32, 32), (1, 128, 14, 14), (3, 5, 64, 120), (1, 1, 32, 32)]:
+        _run(shape)
