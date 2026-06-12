@@ -40,4 +40,23 @@ struct KernelMainSignature {
 // unnamed, variadic, pointer/reference, or otherwise unsupported parameter.
 std::optional<KernelMainSignature> parse_kernel_main_signature(const std::string& source);
 
+// Cross-check a parsed TT_KERNEL signature against the host-registered argument schema, by name.
+//
+// The kernel's template parameters must name exactly the registered compile-time args (CTAs), and
+// its function parameters must name exactly the registered runtime args — the union of per-core
+// RTAs and common CRTAs, since the kernel can't (and shouldn't) tell the two apart. Resource
+// bindings (tensor/DFB/semaphore accessors) are reached through their own namespaces, not passed
+// as parameters, so they are deliberately not part of this check. The comparison is set-based:
+// the generated shim binds every argument by name, so declaration order is irrelevant.
+//
+// Throws std::runtime_error naming the offending arguments when either set doesn't match. This
+// converts two otherwise-poor failure modes into one clear, early error: a kernel parameter the
+// host never registered (otherwise a compile error inside generated code), and a registered
+// argument the kernel never takes (otherwise silently generated-but-unused).
+void validate_signature_against_schema(
+    const KernelMainSignature& sig,
+    const std::vector<std::string>& cta_names,
+    const std::vector<std::string>& rta_names,
+    const std::vector<std::string>& crta_names);
+
 }  // namespace tt::tt_metal
