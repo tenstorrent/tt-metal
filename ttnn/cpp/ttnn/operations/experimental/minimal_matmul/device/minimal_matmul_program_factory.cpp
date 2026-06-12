@@ -299,6 +299,11 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     if (num_slices > 1 && !config.has_value()) {
         K_block_tiles = std::min(K_block_tiles, 4u);
     }
+    // Small-K: never let K_block exceed K_tiles — otherwise round_up pads K (e.g. K=128 -> 4 tiles
+    // padded to K_block=8 = 2x wasted K work). Pure win; only reduces K_block when K is tiny.
+    if (!config.has_value()) {
+        K_block_tiles = std::min(K_block_tiles, std::max(1u, K_tiles));
+    }
     const uint32_t rows_per_group = grid_size.y / num_slices;   // small-dim parallelism (per group)
     const uint32_t y_axis_parallel = rows_per_group;            // dim on grid.y is grouped
     const uint32_t x_axis_parallel = num_slices * grid_size.x;  // dim on grid.x is sliced (cols x slices)
@@ -370,6 +375,71 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     if (prefetch_gate) {
         M_block_tiles = std::min(M_block_tiles, M_tiles_per_core);
         N_block_tiles = std::min(N_block_tiles, N_tiles_per_core);
+    }
+
+    // Default block sizer (no pinned config / no fused ops). The fixed default block (8) fragments
+    // large per-core dims — e.g. N_tiles_per_core=18 split as 8+8+2 — which costs ~10-30% on large
+    // shapes vs a per-core-sized block (measured: 1024x6144x4608 956->830us). Clamp each block to its
+    // per-core count (never useful to exceed it), then re-pick N (the free dim, most fragmentation-
+    // sensitive) and M via choose() below, bounded by an L1 circular-buffer budget. K is fixed
+    // (K_block_tiles already = min(default, K_tiles)). Reproduces the swept-best blocks on the large
+    // non-gated shapes (e.g. 4096x6144x4608 -> 4/8/18, matching the hand-tuned optimum); geomean over a
+    // 65-shape sweep improved 1.25x -> 1.35x vs main, losses (vs swept-best) cut from 20 to 3.
+    if (!config.has_value() && !fuse_op && !fuse_srs) {
+        M_block_tiles = std::min(M_block_tiles, std::max(1u, M_tiles_per_core));
+        N_block_tiles = std::min(N_block_tiles, std::max(1u, N_tiles_per_core));
+        if (!prefetch_gate) {
+            // CB footprint in bytes: in0/in1/out double-buffered, intermediate (fp32 partials) single.
+            auto footprint = [&](uint32_t mb, uint32_t nb) -> uint64_t {
+                return (uint64_t)mb * K_block_tiles * 2 * in0_tile_size +
+                       (uint64_t)K_block_tiles * nb * 2 * in1_tile_size + (uint64_t)mb * nb * 2 * out_tile_size +
+                       (uint64_t)mb * nb * intermediate_tile_size;
+            };
+            // ~1.25 MiB. The default 8/8/8 fp32 block uses 1.0 MiB; the largest block this admits
+            // (e.g. 4/8/18 = 1.31 MiB) is proven safe on-device with headroom for kernels/args/sems.
+            const uint64_t L1_CB_BUDGET = 1310720;
+            // Pick the block that best amortizes the fixed default-8 fragmentation. CONSTRAINT (hard, for
+            // correctness): the block must be a multiple of its subblock — the kernel requires
+            // block % subblock == 0 (the host validator asserts this for explicit configs; the auto path
+            // skips that check, so a non-multiple silently corrupts the output). Among multiples of the
+            // subblock that are <= the per-core count and fit the L1 budget, choose the one with the
+            // FEWEST blocks (ceil(per_core/block)), tie-broken toward an even split (block divides
+            // per_core, avoiding a tiny tail like 24=10+10+4) and then a larger block. Removes the
+            // default-8 fragmentation (e.g. N_pc=18 -> 10+8 instead of 8+8+2; M_pc=9 -> one block of 9
+            // instead of 8+1) while staying within the subblock and L1 constraints.
+            auto choose = [&](uint32_t per_core, uint32_t sb, uint32_t cur, auto fits) -> uint32_t {
+                // If the default block already tiles the per-core count evenly, leave it: there is no
+                // partial tail to remove, and merging into fewer-but-larger blocks only inflates the L1
+                // footprint without a throughput gain (measured: M_pc=64 grown 8->16 regressed ~12%).
+                if (per_core % cur == 0) {
+                    return cur;
+                }
+                uint32_t best = cur;
+                uint32_t best_blocks = (per_core + cur - 1) / cur;
+                for (uint32_t b = (per_core / sb) * sb; b > cur; b -= sb) {
+                    if (!fits(b)) {
+                        continue;
+                    }
+                    uint32_t blocks = (per_core + b - 1) / b;
+                    bool even = (per_core % b) == 0;
+                    bool best_even = (per_core % best) == 0;
+                    if (blocks < best_blocks || (blocks == best_blocks && even && !best_even) ||
+                        (blocks == best_blocks && even == best_even && b > best)) {
+                        best = b;
+                        best_blocks = blocks;
+                    }
+                }
+                return best;
+            };
+            const uint32_t sbw = std::max(1u, subblock_w);
+            const uint32_t sbh = std::max(1u, subblock_h);
+            N_block_tiles = choose(N_tiles_per_core, sbw, N_block_tiles, [&](uint32_t nb) {
+                return footprint(M_block_tiles, nb) <= L1_CB_BUDGET;
+            });
+            M_block_tiles = choose(M_tiles_per_core, sbh, M_block_tiles, [&](uint32_t mb) {
+                return footprint(mb, N_block_tiles) <= L1_CB_BUDGET;
+            });
+        }
     }
 
     uint32_t K_blocks = padded_K_tiles / K_block_tiles;
