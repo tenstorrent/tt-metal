@@ -2,6 +2,24 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+"""DEPRECATED: superseded by :mod:`utils.ttt_generation_worker`.
+
+This module is kept around because the in-process unit tests under
+``tests/`` (via ``_completer_utils.build_completer`` /
+``_completer_utils.open_completer``) and the manual scripts
+(``manual_ttml_to_ttt_weight_transfer.py``,
+``test_ttml_to_ttt_weight_transfer.py``) still construct a
+``LlamaCompleterTtt`` directly to inspect the underlying
+``Transformer``.
+
+New code should use :class:`utils.ttt_generation_worker.TttGenerationWorker`
+instead -- it bakes in ``dummy_weights=True`` + ``disable_disk_cache=True``,
+holds no tokenizer, and exposes the generic ``generate`` /
+``update_weights`` callbacks that :class:`utils.inference_bridge.TttInferenceServer`
+expects. Family-specific defaults (Llama stop strings, the bf16/bfp8
+optimisation preset) live in :mod:`utils.llama_ttt_presets`.
+"""
+
 from __future__ import annotations
 
 import os
