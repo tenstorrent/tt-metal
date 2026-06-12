@@ -397,7 +397,7 @@ TEST(TableHashTest, DifferentSizeChangesHash) {
 
 TEST(TableHashTest, HashIsOrderIndependent) {
     // Two tables that compare equal but were built in opposite order must hash equally:
-    // to_hash() folds the per-entry hashes in sorted order, so insertion order drops out
+    // std::hash<Table> folds the per-entry hashes in sorted order, so insertion order drops out
     // (consistent with operator==, which ignores order).
     StrIntTable a;
     a["x"] = 1;

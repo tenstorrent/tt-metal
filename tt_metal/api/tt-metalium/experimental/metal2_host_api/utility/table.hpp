@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <initializer_list>
 #include <iterator>
 #include <numeric>
@@ -19,10 +20,10 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/optional_reference.hpp>
 
-// Forward declarations of the ttsl::hash entry points used by Table::to_hash(), so this header
-// need not pull in the (heavy) <tt_stl/reflection.hpp>. The definitions live there; any
-// translation unit that actually hashes a Table must include reflection.hpp so to_hash() can be
-// instantiated. These signatures must stay in sync with reflection.hpp.
+// Forward declarations of the ttsl::hash entry points used by the std::hash<Table> specialization
+// below, so this header need not pull in the (heavy) <tt_stl/reflection.hpp>. The definitions live
+// there; any translation unit that actually hashes a Table must include reflection.hpp so the
+// specialization can be instantiated. These signatures must stay in sync with reflection.hpp.
 namespace ttsl::hash {
 
 using hash_t = std::uint64_t;
@@ -236,13 +237,24 @@ public:
         return true;
     }
 
-    ttsl::hash::hash_t to_hash() const {
+private:
+    Storage entries_;
+};
+
+}  // namespace tt::tt_metal::experimental
+
+// Makes Table hashable via std::hash, and therefore via ttsl::hash, which dispatches to it. Like
+// operator==, the result ignores the entries' storage order. A translation unit that hashes a Table
+// must include <tt_stl/reflection.hpp> so this specialization can be instantiated.
+template <typename K, typename V>
+struct std::hash<tt::tt_metal::experimental::Table<K, V>> {
+    std::size_t operator()(const tt::tt_metal::experimental::Table<K, V>& table) const {
         using ttsl::hash::hash_t;
 
         // Hash each entry on its own, recursing through K and V via ttsl::hash.
         std::vector<hash_t> entry_hashes;
-        entry_hashes.reserve(entries_.size());
-        for (const auto& entry : entries_) {
+        entry_hashes.reserve(table.size());
+        for (const auto& entry : table) {
             entry_hashes.push_back(ttsl::hash::hash_objects(hash_t{0}, entry));
         }
 
@@ -255,9 +267,4 @@ public:
                 return seed;
             });
     }
-
-private:
-    Storage entries_;
 };
-
-}  // namespace tt::tt_metal::experimental
