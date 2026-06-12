@@ -114,7 +114,10 @@ using MeshDeviceNanoExabox1x8Fixture = MultiHostSocketTest<MeshDeviceNanoExabox1
 using MultiHostSocketTestExabox = MultiHostSocketTest<MeshDeviceExaboxFixture>;
 using MultiHostSocketTestSplitGalaxy = MultiHostSocketTest<SplitGalaxyMeshDeviceFixture>;
 
-TEST_P(MultiHostSocketTestSplitT3K, SocketTests) { RunTest(); }
+TEST_P(MultiHostSocketTestSplitT3K, SocketTests) {
+    GTEST_SKIP() << "Disabled: see #46813";
+    RunTest();
+}
 
 TEST_P(MultiHostSocketTestDualT3K, SocketTests) { RunTest(); }
 

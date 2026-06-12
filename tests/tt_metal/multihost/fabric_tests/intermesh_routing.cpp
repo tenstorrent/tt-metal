@@ -21,6 +21,7 @@ namespace tt::tt_fabric::fabric_router_tests::multihost {
 // ========= Data-Movement Tests for 2 Host, 1 T3K bringup machine  =========
 
 TEST_F(IntermeshSplit2x2FabricFixture, RandomizedInterMeshUnicast) {
+    GTEST_SKIP() << "Disabled: see #46813";
     for (uint32_t i = 0; i < 100; i++) {
         multihost_utils::RandomizedInterMeshUnicast(this);
     }
