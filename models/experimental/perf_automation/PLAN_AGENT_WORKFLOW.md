@@ -71,7 +71,7 @@ entry, `looplog.py` (one terse line per stage). Resume-from-midstate covered.
     (false-positive on package imports — GATE_PCC catches runtime errors).
   - **REPAIR_CODE / REPAIR_PCC** — ⬜ still MOCK (registry uses `mocks.*`); real self-heal
     (re-edit with the error, ≤5/≤2) is the next build.
-  - editor on a dedicated **`edit` model role** (inherits lead/sonnet, never the cheap sub tier);
+  - editor on a dedicated **`edit` model role** (inherits the SUB/haiku tier from `.env`; it transcribes the lead's localized PLAN spec, so it needs no lead-class reasoning);
     **prompt logging** persists every agentic call's prompt+response to `runs/<id>/prompts/`.
 - **M6 gates** — partial: **GATE_PCC** real (single-stage e2e verdict ok/pcc_low/crash; `parse_pcc`
 verified live = 0.9999), **REMEASURE** real (median device_ms + run spread + iter profile;
@@ -874,7 +874,7 @@ and zero API spend**; the real wiring is swapped in only at integration.
 `experiments/walk_to_decide.py`. Suite 170 passed.
 
 **Architecture decisions made while building:**
-- **Editor model** = dedicated `edit` role, inherits LEAD (sonnet), never the cheap `sub` tier.
+- **Editor model** = dedicated `edit` role, inherits SUB (haiku) from `.env`; applies the lead's localized PLAN spec verbatim (the reasoning/localization lives in PLAN, run on the lead).
   Editing a model to apply a lever is design+coding, not transcription — haiku produced edits
   that didn't import. (`sub`/haiku stays for discovery only.)
 - **PLAN stage** (§8.4.5) + **model map** (§3 of the localization design): the lead emits a

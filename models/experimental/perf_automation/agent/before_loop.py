@@ -23,11 +23,13 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .checkpoint import Checkpoint
+from .clock import utc_ts
+from .events import write_event
 from .environment import environment_check
 from .model_files import read_model_files
 from .router import build_index, cache_playbook
 from .run import Run
-from .tracy_tool import stack_report, tracy_tool
+from .tracy_tool import profile_model, stack_report
 
 PKG_ROOT = Path(__file__).parent.parent
 DEFAULT_PLAYBOOK = PKG_ROOT / "GUIDELINES"
@@ -36,7 +38,7 @@ DEFAULT_CACHE = PKG_ROOT / ".cache" / "playbook_index.json"
 FIXTURES = PKG_ROOT / "tests" / "fixtures"
 
 METRIC_UNITS = {"device_ms": "ms", "wall_ms": "ms", "fps": "fps", "throughput_tok_s": "tok/s"}
-N_STAGES = 6
+N_STAGES = 7
 
 
 class _Stages:
@@ -63,12 +65,14 @@ class _Stages:
     def _event(self, kind: str, detail: str, dt: float | None = None) -> None:
         if self.events_path is None:
             return
-        self.events_path.parent.mkdir(parents=True, exist_ok=True)
-        row = {"ts": time.time(), "stage": self._n, "name": self._name, "event": kind, "detail": detail}
-        if dt is not None:
-            row["seconds"] = round(dt, 2)
-        with open(self.events_path, "a") as fh:
-            fh.write(json.dumps(row) + "\n")
+        write_event(
+            self.events_path,
+            phase="before_loop",
+            stage=self._name,
+            event=kind,
+            detail=detail,
+            seconds=round(dt, 2) if dt is not None else None,
+        )
 
 
 def check_dependencies() -> list[str]:
@@ -210,7 +214,7 @@ def before_loop(
     def record_agent_call(stage: str, role: str, model: str, usage: dict | None) -> str:
         """Append one row per query(); accumulate totals; return event suffix."""
         usage = usage or {}
-        row = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "stage": stage, "role": role, "model": model, **usage}
+        row = {"ts": utc_ts(), "stage": stage, "role": role, "model": model, **usage}
         with open(agent_calls_path, "a") as fh:
             fh.write(json.dumps(row, sort_keys=True) + "\n")
         for k in ("tokens_in", "tokens_out"):
@@ -273,6 +277,17 @@ def before_loop(
     n_selected = preflight(tt_root, perf_rel, case, env=sub_env)
     stages.done(f"{n_selected} test(s) selected")
 
+    stages.start("resolve_signposts", f"scan {model_root.name}/tests/ for tracy signposts")
+    from .probes import resolve_signposts
+
+    sp = resolve_signposts(model_root / "tests")
+    config.setdefault("start_signpost", sp["start_signpost"])
+    config.setdefault("end_signpost", sp["end_signpost"])
+    if sp.get("warning"):
+        pathmap.setdefault("warnings", []).append({"code": "signpost", "detail": sp["warning"]})
+        print(f"      WARN signpost: {sp['warning']}", file=sys.stderr, flush=True)
+    stages.done(f"start={config['start_signpost']!r} end={config['end_signpost']!r} found={sp['found']}")
+
     # Manifest BEFORE the long profile run: a failed tracy still leaves the
     # full discovery + review record for post-mortem.
     manifest = {
@@ -286,16 +301,11 @@ def before_loop(
     run.manifest.write(manifest)
 
     stages.start("tracy_baseline", f"runs={config.get('runs', 1)} · tail -f {run.profiles_dir}/run0_tracy.log")
-    profile = tracy_tool(
-        pcc_path=perf_rel,
-        batch_size=config.get("batch_size", 1),
-        seq_len=config.get("seq_len", 0),
-        runs=config.get("runs", 1),
+    profile = profile_model(
+        perf_test=perf_rel,
+        config=config,
+        env=env,
         profiles_dir=run.profiles_dir,
-        start_signpost=config.get("start_signpost", "start"),
-        end_signpost=config.get("end_signpost", "stop"),
-        arch=env["arch"],
-        available_cores=env["worker_cores"],
         run_profiled=run_profiled_factory(perf_rel, case),
     )
     # Persist the tagged buckets for the loop: ROUTE reads this, not the CSVs.

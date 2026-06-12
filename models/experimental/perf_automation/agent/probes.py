@@ -126,7 +126,7 @@ def sdk_model_files_runner(
     model = get_model("sub", resolved)
 
     def runner(prompt: str) -> str:
-        import asyncio
+        pass
 
         from claude_agent_sdk import (
             AssistantMessage,
@@ -159,7 +159,9 @@ def sdk_model_files_runner(
                 elif isinstance(msg, ResultMessage):
                     runner.last_usage = _usage_summary(msg)
 
-        asyncio.run(_go())
+        from .sdk_retry import run_with_retry
+
+        run_with_retry(_go, lambda: chunks.clear())
         return _extract_json_object("\n".join(chunks))
 
     runner.last_usage = None
@@ -395,7 +397,6 @@ def lead_review_gate(
 
     Returns {"decision", "reasoning", "model"}; raises DiscoveryRejected on stop.
     No tools — pure judgment over the structured findings."""
-    import asyncio
 
     from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ResultMessage, TextBlock, query
 
@@ -424,7 +425,9 @@ def lead_review_gate(
             elif isinstance(msg, ResultMessage):
                 usage["summary"] = _usage_summary(msg)
 
-    asyncio.run(_go())
+    from .sdk_retry import run_with_retry
+
+    run_with_retry(_go, lambda: (chunks.clear(), usage.clear()))
     try:
         verdict = json.loads(_extract_json_object("\n".join(chunks)))
     except json.JSONDecodeError as exc:
@@ -480,3 +483,47 @@ def match_input_to_case(user_input: str, params: list[str]) -> str:
             f"input {user_input!r} is ambiguous — matches {matched}. " f"Use -k with the exact case id."
         )
     return matched[0]
+
+
+def resolve_signposts(tests_dir, default_start="start", default_end="stop"):
+    """Resolve tracy start/end signpost names by scanning <model_root>/tests/.
+
+    Scoped to tests/ ONLY (perf + pcc tests both live there). Captures the first
+    arg of signpost(...) and keeps it only if it is a string literal; constant /
+    expression args (e.g. signpost(WARMUP_SIGNPOST)) are skipped and surface via
+    the warning. Returns {"start_signpost","end_signpost","found":[...],"warning"}.
+
+    Fallback is the conventional "start"/"stop" even when none are found:
+    tt-perf-report tolerates absent signpost names (full capture) -- the
+    proven-working behavior. NEVER fall back to no-signpost (None truncates).
+    """
+    import re
+    from pathlib import Path
+
+    call = re.compile(r"signpost\(\s*(?:header\s*=\s*)?([^)]*)\)")
+    found = []
+    tdir = Path(tests_dir)
+    if tdir.is_dir():
+        for py in sorted(tdir.rglob("*.py")):
+            try:
+                text = py.read_text(errors="ignore")
+            except OSError:
+                continue
+            for arg in call.findall(text):
+                arg = arg.strip().split(",")[0].strip()
+                if len(arg) >= 2 and arg[0] in "\"'" and arg[-1] == arg[0]:
+                    found.append(arg[1:-1])
+    found = sorted(set(found))
+    warning = None
+    if "start" in found and "stop" in found:
+        start, end = "start", "stop"
+    elif not found:
+        start, end = default_start, default_end
+        warning = "no tracy signposts in %s/ -- using default %r/%r (full capture)" % (tdir, start, end)
+    else:
+        start, end = default_start, default_end
+        warning = (
+            "custom signposts %s but no 'start'/'stop' -- using default %r/%r; set start_signpost/end_signpost to override"
+            % (found, start, end)
+        )
+    return {"start_signpost": start, "end_signpost": end, "found": found, "warning": warning}

@@ -9,12 +9,13 @@ so the inter-stage contract is `ctx.state[...]` with the schema fixed in the PLA
 from __future__ import annotations
 
 import json
-import time
 from pathlib import Path
 from typing import Any
 
 from . import router
 from .checkpoint import Checkpoint
+from .clock import utc_ts
+from .events import write_event
 from .ledger import Ledger
 from .run import Run
 
@@ -104,7 +105,7 @@ class LoopContext:
         import hashlib
 
         usage = usage or {}
-        row = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "stage": stage, "role": role, "model": model, **usage}
+        row = {"ts": utc_ts(), "stage": stage, "role": role, "model": model, **usage}
         if prompt is not None or response is not None:
             pdir = self.run.dir / "prompts"
             pdir.mkdir(exist_ok=True)
@@ -124,12 +125,11 @@ class LoopContext:
         self.state["tokens_out"] = self.state.get("tokens_out", 0) + (usage.get("tokens_out") or 0)
 
     def log_event(self, stage: str, status: str, detail: str = "") -> None:
-        row = {
-            "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "stage": stage,
-            "status": status,
-            "detail": detail,
-            "iteration": self.state.get("iteration"),
-        }
-        with open(self._events, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row) + "\n")
+        write_event(
+            self._events,
+            phase="loop",
+            stage=stage,
+            event=status,
+            detail=detail,
+            iteration=self.state.get("iteration"),
+        )

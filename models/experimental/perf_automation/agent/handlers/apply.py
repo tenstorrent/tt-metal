@@ -30,7 +30,13 @@ def apply(ctx) -> str:
     reported, summary, model, usage, err = [], "", "?", None, None
     prompt_text, response_text = None, None
     try:
-        result = runner(lever=lever, section=section, model_files=ctx.model_files(), spec=ctx.state.get("edit_spec"))
+        result = runner(
+            lever=lever,
+            section=section,
+            model_files=ctx.model_files(),
+            spec=ctx.state.get("edit_spec"),
+            cwd=str(ctx.model_root()),
+        )
         reported = result.get("files") or []
         summary = result.get("summary", "")
         model, usage = result.get("model", "?"), result.get("usage")

@@ -16,10 +16,22 @@ from __future__ import annotations
 from .. import states
 
 _NOISE_FLOOR = 0.05  # PLACEHOLDER — not a measurement; see progress.txt
+_SUSPICIOUS_GAIN = 0.5  # >50% improvement from ONE lever -> flag for verification
 
 
 def decide(ctx) -> str:
     d = ctx.state.get("last_decision") or {}
+
+    # Measurement-validity guard: never KEEP on a capture we can't trust.
+    # REMEASURE flags structurally-incomparable profiles (op-count collapse /
+    # dominant bucket vanished) -- e.g. the false 22x from a 27-op tracy capture.
+    if d.get("measurement_ok") is False:
+        d["result"] = "discard"
+        d["reason"] = d.get("measurement_reason") or "measurement_invalid"
+        ctx.state["last_decision"] = d
+        ctx.log_event(states.DECIDE, "warn", f"discard (untrusted measurement): {d['reason']}")
+        return states.REVERT
+
     before, after = d.get("before"), d.get("after")
     direction = ctx.state["metric"].get("direction", "min")
 
@@ -34,6 +46,13 @@ def decide(ctx) -> str:
     d["result"] = "keep" if improved else "discard"
     if not improved:
         d["reason"] = "no_gain"
+    elif before:
+        gain = abs(after - before) / abs(before)
+        if gain > _SUSPICIOUS_GAIN:
+            d["suspicious_gain"] = round(gain, 3)
+            ctx.log_event(
+                states.DECIDE, "warn", f"SUSPICIOUS {gain:.0%} gain ({before} -> {after}); comparable but verify"
+            )
     ctx.state["last_decision"] = d
     ctx.log_event(states.DECIDE, "info", f"{d['result']} ({before} -> {after}, dir={direction})")
     return states.COMMIT if improved else states.REVERT

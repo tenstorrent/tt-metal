@@ -325,3 +325,24 @@ def tracy_tool(
         "stack_report": stack_report(buckets),
         "artifacts": {"raw_csv": str(raw_dest), "report_csv": str(report_csv)},
     }
+
+
+def profile_model(*, perf_test, config, env, profiles_dir, run_profiled):
+    """The SINGLE measurement path — used by before_loop (baseline) AND REMEASURE.
+
+    Both callers go through here so they can never drift: identical signpost
+    defaults, runs, and arch/cores resolution. This is the Before-Loop
+    methodology verbatim; REMEASURE no longer reinvents the tracy_tool call.
+    """
+    return tracy_tool(
+        pcc_path=perf_test,
+        batch_size=config.get("batch_size", 1),
+        seq_len=config.get("seq_len", 0),
+        runs=config.get("runs", 1),
+        profiles_dir=profiles_dir,
+        start_signpost=config.get("start_signpost", "start"),
+        end_signpost=config.get("end_signpost", "stop"),
+        arch=env.get("arch"),
+        available_cores=env.get("worker_cores", 64),
+        run_profiled=run_profiled,
+    )

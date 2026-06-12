@@ -68,7 +68,7 @@ def make_plan_runner(
     model = get_model("lead", resolved)
 
     def runner(*, lever: str, section: str, skeleton: str, cwd: str | None = None) -> dict:
-        import asyncio
+        pass
 
         from claude_agent_sdk import (
             AssistantMessage,
@@ -104,7 +104,9 @@ def make_plan_runner(
                 elif isinstance(msg, ResultMessage):
                     usage["u"] = _usage_summary(msg)
 
-        asyncio.run(_go())
+        from .sdk_retry import run_with_retry
+
+        run_with_retry(_go, lambda: (chunks.clear(), usage.clear()))
         spec = _validate_spec(_extract_json_object("\n".join(chunks)))
         spec["model"] = model
         spec["usage"] = usage.get("u")

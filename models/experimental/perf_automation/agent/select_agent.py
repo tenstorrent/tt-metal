@@ -69,7 +69,7 @@ def make_select_runner(
     model = get_model("lead", resolved)
 
     def runner(*, brief: str, candidates: list[str], tried: list[str]) -> dict:
-        import asyncio
+        pass
 
         from claude_agent_sdk import (
             AssistantMessage,
@@ -102,7 +102,9 @@ def make_select_runner(
                 elif isinstance(msg, ResultMessage):
                     usage["u"] = _usage_summary(msg)
 
-        asyncio.run(_go())
+        from .sdk_retry import run_with_retry
+
+        run_with_retry(_go, lambda: (chunks.clear(), usage.clear()))
         result = _validate_choice(_extract_json_object("\n".join(chunks)), candidates, tried)
         result["model"] = model
         result["usage"] = usage.get("u")

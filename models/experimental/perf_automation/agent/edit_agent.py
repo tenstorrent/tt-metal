@@ -57,7 +57,7 @@ def build_repair_prompt(lever: str, section: str, model_files: list, error: str)
 SPEC_TEMPLATE = (
     "Apply this specific change to a model:\n\n"
     "File: {file}\nLocation: {location}\nChange: {change}\n\n"
-    "Read the file first, then make ONLY this change. Preserve the model's numerical "
+    "The File path is relative to your working directory — Read exactly that one file (do NOT search the repository), then make ONLY this change. Preserve the model's numerical "
     "behavior; do not refactor unrelated code. When done, output exactly ONE JSON "
     'object: {{"files": [<repo-relative paths you changed>], "summary": <one sentence>}}'
 )
@@ -107,9 +107,15 @@ def make_edit_runner(
     model = get_model("edit", resolved)
 
     def runner(
-        *, lever: str, section: str, model_files: list, error: str | None = None, spec: dict | None = None
+        *,
+        lever: str,
+        section: str,
+        model_files: list,
+        error: str | None = None,
+        spec: dict | None = None,
+        cwd: str | None = None,
     ) -> dict:
-        import asyncio
+        pass
 
         from claude_agent_sdk import (
             AssistantMessage,
@@ -128,17 +134,21 @@ def make_edit_runner(
             prompt = build_spec_prompt(spec, files)
         else:
             prompt = build_edit_prompt(lever, section, files)
-        options = ClaudeAgentOptions(
+        opts: dict = dict(
             model=model,
             system_prompt=(
                 "You apply exactly one optimization to model source using Read and "
-                "Edit. Your FINAL message must be one JSON object, no prose."
+                "Edit. Your FINAL message must be one JSON object, no prose. Stay "
+                "inside the working directory; do NOT search the wider repository."
             ),
             allowed_tools=["Read", "Edit", "Glob", "Grep"],
             permission_mode="bypassPermissions",
             setting_sources=[],
             max_turns=max_turns,
         )
+        if cwd:
+            opts["cwd"] = cwd
+        options = ClaudeAgentOptions(**opts)
         chunks: list[str] = []
         usage: dict = {}
 
@@ -151,7 +161,9 @@ def make_edit_runner(
                 elif isinstance(msg, ResultMessage):
                     usage["u"] = _usage_summary(msg)
 
-        asyncio.run(_go())
+        from .sdk_retry import run_with_retry
+
+        run_with_retry(_go, lambda: (chunks.clear(), usage.clear()))
         result = _validate_edit_result(_extract_json_object("\n".join(chunks)))
         result["model"] = model
         result["usage"] = usage.get("u")

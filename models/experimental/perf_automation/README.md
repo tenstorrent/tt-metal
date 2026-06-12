@@ -11,10 +11,11 @@ bookkeeping around it are plain deterministic Python. That split is the whole
 design philosophy, and it's why the thing is reproducible and crash-resumable.
 
 ```bash
+# run in tmux, with your tt-metal env active (see §4):
 python -m agent.before_loop \
     /localdev/gtobar/tt-metal/models/demos/wormhole/bge_m3 \
-    --metric device_ms --target 11 --input 128     # 1. build a baseline
-python -m agent.loop                               # 2. optimize it
+    --metric device_ms --input 128                 # 1. build a baseline
+python -m agent.loop --until DECIDE                # 2. optimize it (one lap)
 ```
 
 ---
@@ -128,71 +129,95 @@ the reference for total speedup.)
 
 ## 4. Running it
 
+LiteLLM credentials and the model roles are read **only** from
+`perf_automation/.env.agent` (never the shell env): `LITELLM_BASE_URL`,
+`LITELLM_API_KEY`, and `AGENT_MODEL_LEAD` (sonnet) / `AGENT_MODEL_SUB` (haiku) /
+`AGENT_MODEL_EDIT` (haiku — the editor is mechanical).
+
+**Run in tmux.** The Claude Agent SDK spawns a CLI subprocess that gets SIGHUP'd
+(exit 129) if its parent shell hangs up; a tmux session keeps it alive:
+
 ```bash
-# Stage 1 — profile a baseline and discover the model (writes runs/<id>/).
+tmux new-session -s perf
+cd /localdev/gtobar/tt-metal/models/experimental/perf_automation
+
+# Stage 1 - profile a baseline + discover the model (writes runs/<id>/, sets runs/latest).
 python -m agent.before_loop \
     /localdev/gtobar/tt-metal/models/demos/wormhole/bge_m3 \
-    --metric device_ms --target 11 --input 128
+    --metric device_ms --input 128 --devices single
 
-# Stage 2 — optimize, picking up from runs/latest.
-python -m agent.loop
+# Stage 2 - optimize, picking up from runs/latest. --until DECIDE = one full lap.
+python -m agent.loop --until DECIDE
 ```
 
 | command | what it does |
 |---|---|
-| `python -m agent.before_loop <model_dir> --metric device_ms --target 11 --input 128` | profile a baseline + discover the model |
-| `python -m agent.loop [runs_root]` | run the optimization loop from `runs/latest` |
-| `python -m agent.before_loop --help` | full flag reference — `--input` matching, `--devices`, `--metric`, mock toggles |
+| `python -m agent.before_loop <model_dir> --metric device_ms --input 128` | profile a baseline + discover the model (7 stages, incl. signpost resolution) |
+| `python -m agent.loop` | run the loop from `runs/latest` until DONE / budget / max-iter |
+| `python -m agent.loop --until DECIDE` | stop after the first keep/discard (one lap; runs the slow hardware stages) |
+| `python -m agent.loop --until ROUTE` | just build the route brief — no API key, no device |
+| `python -m agent.before_loop --help` | full flag reference (`--input`, `--devices`, `--target`, …) |
 
-`--input` is human-friendly: `--input 128` matches the sequence-length-128 test
-case; an image model would take `--input 224x224`. If it can't match exactly it
-stops rather than silently run the wrong case. Run `--help` for the rest.
+Two gotchas:
+- **The loop consumes `runs/latest`** — it ends parked at `COMMIT`/`REVERT`, not
+  `BEFORE_LOOP_DONE`, so re-run `before_loop` before each fresh lap.
+- **COMMIT/REVERT are still mock** (§6), so a kept/discarded edit is left in the
+  model tree. Reset between runs:
+  `git -C /localdev/gtobar/tt-metal checkout -- models/demos/wormhole/bge_m3/`.
 
-> **Heads up:** stage 2 currently runs a *walking skeleton* — the state machine is
-> fully wired and runs end to end, but several stages are still stand-ins (see
-> §6). It will march to `DONE` without touching the device yet. Real stages are
-> being filled in one at a time.
+`--input` is human-friendly: `--input 128` matches the seq-len-128 case; an image
+model takes `--input 224x224`. No exact match → it stops rather than run the wrong case.
+
+> **Status:** the loop runs **real, end to end on hardware** — ROUTE → SELECT →
+> PLAN → APPLY → VERIFY → GATE_PCC → REMEASURE → DECIDE all live. Still mock (§6):
+> **COMMIT, REVERT, REPAIR_CODE, REPAIR_PCC**.
 
 ## 5. What's an agent, and what isn't
 
 The harness is deliberately mostly **not** an LLM. Profiling, routing, the PCC
 gate, the keep/revert decision, every bit of state and bookkeeping — all
 deterministic functions, all unit-tested, all free. The model is invoked at
-exactly three kinds of step:
+exactly these steps:
 
 - the **discovery sub-agent** in the Before Loop (explore the model dir, report
   what it found),
 - **SELECT** (which lever to try this iteration),
+- **PLAN** (turn the chosen lever into a localized `{file, location, change}` spec),
+- **APPLY** (the editor applies that spec to the model source),
 - **REPAIR** (fix a broken or correctness-failing edit).
 
+The lead model (sonnet) does the reasoning in SELECT/PLAN; the editor runs on the
+cheaper sub tier (haiku) because APPLY is mechanical transcription of the spec.
 Keeping the agent on the edges and the machinery in the middle is what makes runs
 reproducible, resumable, and cheap to test.
 
 ## 6. Extending it — claim a stage
 
-The loop is built as a **walking skeleton**: it runs today using stand-in "mock"
-handlers where real work will go, so you integrate by swapping one mock for the
-real thing and watching the test stay green — never a big-bang merge.
+The loop runs **real, end to end on hardware** today. The remaining work is
+swapping the last few **mock** handlers for real ones, one at a time, watching the
+test stay green — never a big-bang merge.
 
 Each stage is a handler: a function `handler(ctx) -> "NEXT_STATE"`. The engine
 (`agent/engine.py`) just calls the current state's handler and goes wherever it
-returns. `ROUTE` (`handlers/route.py`) and `LOG`/`CHECK_EXIT`
-(`handlers/log_exit.py`) are real and are your templates; the rest live in
-`handlers/mocks.py` with the routing already correct.
+returns. **Real today:** ROUTE, SELECT, PLAN, APPLY, VERIFY, GATE_PCC, REMEASURE,
+DECIDE, LOG, CHECK_EXIT. **Still mock — the open tasks:**
 
-**To make a stage real** — say `GATE_PCC`:
+| stage | new file | what the leaf should do |
+|---|---|---|
+| `COMMIT` | `handlers/commit.py` | persist a KEPT edit: path-scoped `git commit` of the model dir; promote `iter_<N>_profile.json` to `state.current_profile` |
+| `REVERT` | `handlers/revert.py` | roll back a discarded/failed edit: `git checkout` scoped to the model dir, back to `state.git_sha_clean` |
+| `REPAIR_CODE` | `handlers/repair_code.py` | re-invoke the editor with the error to self-heal a failed edit (≤5; budget `state.code_fix_attempts`) |
+| `REPAIR_PCC` | `handlers/repair_pcc.py` | re-edit to recover a PCC drop (≤2; budget `state.pcc_fix_attempts`) |
 
-1. In `mocks.py`, find `gate_pcc`. The routing (the `return states.X` lines) is
-   done; only the leaf `_measure_pcc(ctx)` is fake.
-2. Write the real leaf in your own file `handlers/gate_pcc.py`. The test path and
-   threshold are already on `ctx` from discovery:
-   ```python
-   pcc = ctx.manifest["pathmap"]["pcc"]["end_to_end"]   # {"path": ".../test_e2e", "threshold": 0.99}
-   ```
-   Return `{"status": "ok"|"pcc_low"|"crash", "pcc": <value>}`.
-3. Swap one line in `handlers/__init__.py`: `states.GATE_PCC: gate_pcc.gate_pcc`.
-4. `pytest tests/test_engine.py -q -o addopts=` — still green, now with your real
-   gate in the path.
+**To make a stage real** — say `COMMIT`:
+
+1. In `handlers/mocks.py`, find `commit`. The routing (the `return states.X` lines)
+   is already correct; only the leaf is fake.
+2. Write the real handler in your own file `handlers/commit.py`. Use `ctx` for all
+   state, and `agent/gitio.py` for git (`head_sha`, `reset_hard`, `changed_files` —
+   all path-scopeable to the model dir via a pathspec).
+3. Swap one line in `handlers/__init__.py`: `states.COMMIT: commit.commit`.
+4. `pytest tests/ -q -o addopts=` — still green, now with your real stage in the path.
 
 Four rules keep parallel work painless: **(1)** handler signature is always
 `handler(ctx) -> next_state`; **(2)** fill the leaf, never the routing; **(3)**
@@ -211,7 +236,7 @@ never mixed — that separation is deliberate.
 | `manifest.json` | write-once, immutable | the run's fixed context: hardware (`env` — card, grid, DRAM bandwidth), the discovered `pathmap` (perf test + case, PCC gate path **and its threshold**, components, model files), the lead agent's discovery-review verdict, and the config (metric, target, budget). Written at the start, never touched again. |
 | `state.json` | mutable checkpoint (atomic) | the single live file, and the one resume reads. Current `state`, `iteration`, the `metric` block (name / unit / direction / baseline / current / target), counters (`cost_usd`, tokens, `code_fix_attempts`, `pcc_fix_attempts`), and the working set (`candidates`, `tried`, `selected_lever`, `git_sha_clean`). Rewritten atomically after every transition. |
 | `ledger.jsonl` | append-only | one row per experiment — the **story**: which lever, before/after, delta, PCC, kept or discarded and why, plus the agent's `hypothesis`. This is what a human (or a warm restart days later) reads to understand the run. |
-| `events.jsonl` | append-only | one row per stage entry/exit — the **execution trace**: timestamp, stage, status, detail, iteration. For debugging the run's mechanics. |
+| `events.jsonl` | append-only | one row per stage entry/exit — the **execution trace**, one unified schema for both phases: `ts` (UTC ISO-8601 Z), `phase` (before_loop/loop), `stage`, `event` (start/done/info/warn), `detail`, `seconds`, `iteration`. |
 | `agent_calls.jsonl` | append-only | one row per LLM call — the **bill**: stage, role (discovery / select / repair), model, tokens in/out, cached tokens, cost, latency. Feeds the budget gate. |
 | `profiles/baseline_profile.json` | write-once | the tagged op buckets (op_class, fidelity, grid, rank, …) + device_ms / wall_ms of the **original** model. The fixed reference for total speedup — NOT what ROUTE routes on after iteration 0. |
 | `profiles/iter_<N>_profile.json` | write-once per iteration | the re-bucketed profile of the model as edited in iteration N. When DECIDE keeps the change, COMMIT promotes this to the *current* profile (`state.current_profile`), and the next ROUTE routes on it. |
@@ -245,7 +270,7 @@ agent/
   loop.py          `python -m agent.loop` entry point
   router.py        playbook index + tag-based lever routing
   tracy_tool.py    profile -> tt-perf-report -> tagged buckets
-  handlers/        one file per loop stage (route + log_exit real; rest mock)
+  handlers/        one file per loop stage (most real; COMMIT/REVERT/REPAIR_* still mock)
 runs/<id>/         one run: state.json, manifest.json, ledger.jsonl, profiles/
 GUIDELINES/        the optimization playbook (tagged sections the router reads)
 tests/             unit tests + the walking-skeleton engine test

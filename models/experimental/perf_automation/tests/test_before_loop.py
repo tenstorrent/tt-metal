@@ -60,12 +60,13 @@ def test_before_loop_all_mocks_produces_manifest_and_baseline(tmp_path, model_ro
     assert (run_dir / "profiles" / "iter_baseline_report.csv").is_file()
     assert (run_dir / "events.jsonl").is_file()
     events = [json.loads(l) for l in (run_dir / "events.jsonl").read_text().splitlines()]
-    assert [e["name"] for e in events if e["event"] == "start"] == [
+    assert [e["stage"] for e in events if e["event"] == "start"] == [
         "environment_check",
         "cache_playbook",
         "discover",
         "lead_review",
         "preflight",
+        "resolve_signposts",
         "tracy_baseline",
     ]
     manifest2 = json.loads((run_dir / "manifest.json").read_text())

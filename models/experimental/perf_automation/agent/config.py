@@ -31,7 +31,7 @@ MODEL_ENV_KEYS = {"lead": "AGENT_MODEL_LEAD", "sub": "AGENT_MODEL_SUB", "edit": 
 MODEL_DEFAULTS = {
     "sub": "anthropic/claude-sonnet-4-6",
     "lead": "anthropic/claude-sonnet-4-6",  # TBD(model-lead)
-    "edit": "anthropic/claude-sonnet-4-6",  # editing/repair is lead-class, NEVER the cheap sub tier
+    "edit": "anthropic/claude-haiku-4-5-20251001",  # editing inherits the SUB (haiku) tier; it applies the lead's PLAN spec verbatim
 }
 
 
@@ -83,8 +83,11 @@ def get_model(role: str, config: dict[str, str] | None = None) -> str:
     if override:
         return override
     if role == "edit":
-        # editing/repair inherits the lead model unless AGENT_MODEL_EDIT is set explicitly
-        return config.get(MODEL_ENV_KEYS["lead"]) or MODEL_DEFAULTS["edit"]
+        # Editing is a MECHANICAL task: the editor applies the lead's localized
+        # PLAN spec verbatim, so it inherits the SUB (haiku) model from .env
+        # unless AGENT_MODEL_EDIT is set explicitly. The reasoning/localization
+        # lives in PLAN (lead) — the editor only transcribes.
+        return config.get(MODEL_ENV_KEYS["edit"]) or config.get(MODEL_ENV_KEYS["sub"]) or MODEL_DEFAULTS["edit"]
     return MODEL_DEFAULTS[role]
 
 

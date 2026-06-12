@@ -13,7 +13,7 @@ from . import gitio
 
 def measure_runs(ctx) -> list[dict]:
     from .probes import make_run_profiled
-    from .tracy_tool import tracy_tool
+    from .tracy_tool import profile_model
 
     m = ctx.manifest
     perf = m["perf_test_resolved"]["path"]
@@ -34,16 +34,11 @@ def measure_runs(ctx) -> list[dict]:
         timeout_s=cfg.get("timeout", 1800),
         extra_env=xenv,
     )
-    profile = tracy_tool(
-        pcc_path=perf,
-        batch_size=cfg.get("batch_size", 1),
-        seq_len=cfg.get("seq_len", 0),
-        runs=cfg.get("runs", 3),
+    profile = profile_model(
+        perf_test=perf,
+        config=cfg,
+        env=env_facts,
         profiles_dir=str(ctx.run.profiles_dir),
-        start_signpost=cfg.get("start_signpost"),
-        end_signpost=cfg.get("end_signpost"),
-        arch=env_facts.get("arch"),
-        available_cores=env_facts.get("worker_cores", 64),
         run_profiled=factory,
     )
     return [profile]
