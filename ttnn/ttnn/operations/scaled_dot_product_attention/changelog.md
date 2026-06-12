@@ -203,3 +203,68 @@
   vs auto scale, a deterministic diagonal-block correctness check, the
   causal+cross EXCLUSION (NotImplementedError), and is_causal+attn_mask
   mutual-exclusion (ValueError).
+
+## Refinement 4 — Non-tile-aligned sequence / head dim  [x] complete
+- **Date**: 2026-06-12
+- **What was done**:
+  - `SUPPORTED["alignment"]` += `"w_non_aligned"`, `"h_non_aligned"` (was
+    `["tile_aligned"]`).
+  - `EXCLUSIONS` += `{dtype: bfloat8_b, alignment: w_non_aligned}` and
+    `{dtype: bfloat8_b, alignment: h_non_aligned}` — the canonical bf8b ×
+    non-aligned EXCLUSION flagged in Refinement 1. Block-float shares one
+    exponent per 16x16 face; from_torch's tilization computes that exponent
+    over the (non-zero) garbage padding, so the live mantissa is crushed and
+    the reader's post-read zeroing cannot repair an already-packed tile.
+  - **Root cause (probe-confirmed).** from_torch's TILE padding of a partial
+    last tile is NOT zero (probe: bf16 non-aligned out-of-box PCC 0.03–0.75,
+    one nan). Two independent edges, both at the data-access boundary (math
+    stays on full tiles):
+    1. **D % 32 (w_non_aligned).** QKᵀ contracts over D, so Q/K's padded D
+       columns must be ZEROED (0·x = 0) or garbage pollutes the dot product.
+    2. **S_kv % 32.** The partial last KV tile's padded key columns would
+       otherwise enter the online-softmax (score ≈ 0, not −inf) and inflate the
+       running max / sum.
+    S_q % 32 (partial query rows) needs nothing — rows are independent in every
+    tile op and padded output rows are dropped on readback.
+  - **Reader** (`..._reader.cpp`): new `zero_tile_tail()` (honors the 4-face
+    16x16 tile layout, bf16/fp32 via `elem_bytes`) zeros (a) Q/K's padded D
+    columns of the last D tile (`cols >= D%32`) and (b) K/V's padded S_kv rows
+    of the last KV block (`rows >= S_kv%32`, overflow/nan safety so a masked
+    P·V term is 0·0). Also generates a constant `cb_kv_pad_mask` once: a
+    {0,−inf} bf16 column tile (`c < S_kv%32 ? 0 : −inf`).
+  - **Compute** (`..._compute.cpp`): adds `cb_kv_pad_mask` (HeldStream) to the
+    score block on the last KV block (`j == num_kv_blocks-1`) when S_kv
+    non-aligned — composes additively with the custom / causal masks. The
+    padded keys become −inf → softmax weight 0 → drop out of max/sum and P·V.
+  - **Descriptor**: ceil-div tile counts (`D_t`, `S_q_t`, `S_kv_t`); new CT
+    args `d_valid` / `kv_valid` / `elem_bytes` (reader) and `kv_valid`
+    (compute); allocates `cb_kv_pad_mask` (CB index 6, 1 bf16 page) when
+    `S_kv % 32 != 0`. The tile-aligned path is unchanged: `d_valid == kv_valid
+    == 0` makes every new code path an `if constexpr (0 != 0)` (compiled out),
+    and ceil-div == floor-div for aligned dims — bf16/fp32/bf8b aligned cells
+    are byte-identical to Refinement 3.
+- **Accuracy achieved** (randn inputs, default config):
+  - bf16: PCC ≥ 0.9999, max_abs ≤ 0.052 across all 10 non-aligned shapes
+    (w/h/both, self/cross, mha/gqa/mqa, multi-head, multi-batch).
+  - fp32: PCC ≥ 0.999 on all non-aligned golden cells.
+  - No NaN in any output (padding fully neutralized).
+- **Golden test progress**: **996 / 1156 passing** (was 880 at Refinement 3),
+  112 xfailed, 1 skipped, **8 failed**. **+116 newly passing** = exactly the
+  `alignment ∈ {w_non_aligned, h_non_aligned}` registry cells across bf16/fp32
+  × {none, custom, causal} × {mha, gqa, mqa, cross}. **Zero non-aligned
+  failures; zero XPASS drift.** The 8 failures are ALL pre-existing,
+  out-of-scope fp32 `tile_aligned` deferrals, unchanged by this refinement:
+  - 6× `Q1x1x128x1024` fp32 → L1 OOM (`program.cpp`) → Refinement 5.
+  - 2× `Q1x1x8192x64` fp32 → SFPU-exp precision floor (rms 0.0284 vs 0.02) →
+    Refinement 6.
+  bf8b × non-aligned (24 cells) and causal × cross non-aligned are correctly
+  xfailed via EXCLUSIONS.
+- **Issues encountered**: None blocking. The two-edge masking (D-zero +
+  kv-pad −inf) passed on the first kernel implementation; both --dev and
+  non-dev pass (no race conditions).
+- **Tests added**: `tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention_non_aligned.py`
+  — 70 cases: non-aligned (w/h/both, self/cross, gqa/mqa, multi-head/batch) ×
+  {bf16, fp32} × {none, custom mask, causal} × scale modes, with NaN-free +
+  PCC + shape assertions, plus the bf8b × non-aligned EXCLUSION
+  (NotImplementedError). Probes 005–008 (from_torch padding inspection, before/
+  after the fix on the non-aligned shape set).

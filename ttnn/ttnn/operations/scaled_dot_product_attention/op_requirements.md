@@ -146,7 +146,7 @@ EXCLUDED (raise the support-refusal, observed as xfail_expected).
 
 ---
 
-### [ ] Refinement 4 — Non-tile-aligned sequence / head dim
+### [x] Refinement 4 — Non-tile-aligned sequence / head dim
 
 **Goal**: add `"h_non_aligned"` (S_q not a multiple of 32) and `"w_non_aligned"`
 (D not a multiple of 32) to `SUPPORTED["alignment"]`, natively in-kernel. The
