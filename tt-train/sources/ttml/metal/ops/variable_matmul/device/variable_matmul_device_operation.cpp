@@ -55,6 +55,15 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
     const auto& w_logical = weight_tensor.logical_shape();
     TT_FATAL(a_logical.rank() >= 2 && w_logical.rank() >= 2, "variable_matmul expects rank >= 2 tensors");
 
+    // Batched input not supported
+    auto leading_dims_volume = [](const ttnn::Shape& s) { return s.volume() / (static_cast<uint64_t>(s[-2]) * s[-1]); };
+    TT_FATAL(
+        leading_dims_volume(a_logical) == 1,
+        "variable_matmul: input leading dims must all be 1 (op is scoped to a 2D matmul over the last two dims)");
+    TT_FATAL(
+        leading_dims_volume(w_logical) == 1,
+        "variable_matmul: weight leading dims must all be 1 (op is scoped to a 2D matmul over the last two dims)");
+
     // With transpose_a, the input is stored as [K, M], so M is at [-1] and K at [-2].
     const uint32_t M_parent = operation_attributes.transpose_a ? a_logical[-1] : a_logical[-2];
     const uint32_t K_in = operation_attributes.transpose_a ? a_logical[-2] : a_logical[-1];
