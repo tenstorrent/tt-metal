@@ -8,7 +8,8 @@ Why this file uses CPU fallbacks
 --------------------------------
 Kokoro's vocoder is dominated by two BH-BF16 precision failure points; the prosody stack
 (PLBERT → DurationEncoder → predictor → TextEncoder) is precise on-device and needs **no**
-fallback (stages 1–5 PCC > 0.998, verified by ``kmodel_pcc_stage_diagnostic.py``).
+fallback (stages 1–5 PCC > 0.998, verified by
+``test_tt_kmodel_max_input_length_prosody_stages_pcc`` below and the per-module prosody tests).
 
 The two precision failure points are:
 
@@ -21,7 +22,8 @@ The two precision failure points are:
    BF16 in both the conv2d and atan2 SFPU; cos(phase) PCC tops out at ~0.64 on harmonic input.
 
 Empirical fallback sweep — single-text full pipeline (``"Hello from Tenstorrent."``)
-measured by ``kmodel_fallback_comparison.py`` on Blackhole:
+measured across fallback configs on Blackhole (the three-config recovery is asserted by
+``test_tt_kmodel_pcc_degradation.py``):
 
    Config                                              Full-pipeline PCC   Δ vs baseline
    -------------------------------------------------------------------------------------
@@ -43,7 +45,7 @@ Interpretation
   SineGen). It restores cos(phase) PCC from ~0.64 → > 0.99 on the STFT transform output.
 * The ``use_torch_phase_fallback`` flag is **subsumed by** ``use_torch_sinegen_fallback``
   (D ≡ B); we keep both flags wired through the public API so each fallback can be enabled
-  in isolation when measuring decoder-only sub-paths in ``kmodel_pcc_stage_diagnostic.py``.
+  in isolation when measuring decoder-only sub-paths.
 * ``conv+atan2`` per-op STFT (F) is slightly weaker than full ``torch.stft`` (E) because the
   full fallback also bypasses BH-BF16 padding/window accumulation, not just atan2.
 * The remaining ~0.6 gap to 1.0 is the BH-BF16 ceiling on the on-device iSTFT matmul and
@@ -73,7 +75,7 @@ if str(_TT_METAL_ROOT) not in sys.path:
 
 from models.common.utility_functions import comp_pcc
 from models.experimental.kokoro.reference.model import KModel
-from models.experimental.kokoro.tests.kmodel_pcc_stage_diagnostic import (
+from models.experimental.kokoro.tests.kokoro_checkpoint import (
     STFT_PHASE_FALLBACK_KWARGS,
     _pcc_row,
     _run_ref_stages,
@@ -284,7 +286,7 @@ def test_tt_kmodel_generator_no_torch_fallback_pcc(device):
     historical no-fallback floor. Prosody path always uses fp32 boundaries.
 
     Documents the BH-BF16 no-fallback floor. Stages 1–5 (prosody) are PCC > 0.998 here
-    (see ``kmodel_pcc_stage_diagnostic.py``); the entire 0.7 deficit lives in the vocoder,
+    (see the prosody-stage PCC test below); the entire 0.7 deficit lives in the vocoder,
     primarily H3 SineGen sine_wavs (~0.21 PCC) and H7b STFT cos(phase) (~0.12 PCC).
     Floor (> 0.25) is set just below the measured value to catch real regressions while
     tolerating run-to-run jitter on phonemized text input.
@@ -446,7 +448,7 @@ def test_tt_kmodel_stft_and_phase_fallback_pcc(device):
     These CPU fallbacks address the two dominant BH-BF16 precision failure points in the
     vocoder. Each is justified by a per-op test under ``test_tt_torch_stft_pcc.py`` /
     ``test_tt_source_module_hn_nsf_pcc.py`` and quantified end-to-end by
-    ``kmodel_fallback_comparison.py`` (see module docstring).
+    ``test_tt_kmodel_pcc_degradation.py`` (sweep table in this module's docstring).
 
     1. **STFT transform** (``use_torch_stft_fallback=True``)
        BH BF16 atan2 SFPU gives ~0.64 cos(phase) PCC on Kokoro harmonic input (near-zero
@@ -461,8 +463,8 @@ def test_tt_kmodel_stft_and_phase_fallback_pcc(device):
 
     3. **Phase** (``use_torch_phase_fallback=True``) — kept for explicitness but **redundant**
        when ``use_torch_sinegen_fallback=True``. The full-SineGen fallback overrides the
-       phase-only fallback (D ≡ B = 0.388 in the sweep). We pass both flags because
-       ``kmodel_pcc_stage_diagnostic.py`` toggles them independently to isolate sub-paths.
+       phase-only fallback (D ≡ B = 0.388 in the sweep). We pass both flags because the
+       public API toggles them independently to isolate sub-paths.
 
     Also enables ``use_torch_linear_fallback`` and ``use_torch_tanh_fallback`` so the
     m_source merge matches ref after CPU f0 upsample + SineGen (see ``DECODE_STACK_NOTES.md``).
@@ -496,7 +498,7 @@ def test_tt_kmodel_stft_and_phase_fallback_pcc(device):
     )
     assert pcc > 0.84, (
         f"PCC {pcc:.6f} below floor (0.84) with config E fallbacks; "
-        "run kmodel_pcc_stage_diagnostic.py --stft-phase-fallback --write-report"
+        "see test_tt_kmodel_pcc_degradation.py for the per-config recovery breakdown"
     )
 
 
@@ -697,7 +699,7 @@ def test_tt_kmodel_max_input_length_stft_phase_fallback_pcc(device):
     if rel_len_err < 0.05:
         assert pcc > 0.80, (
             f"PCC {pcc:.6f} below floor (0.80) at max input length; "
-            "run kmodel_pcc_stage_diagnostic.py with a long-text phoneme string"
+            "compare against _run_ref_stages on a long-text phoneme string to localize"
         )
     else:
         print(

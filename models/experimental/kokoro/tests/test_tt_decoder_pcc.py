@@ -264,7 +264,7 @@ def _build_tt_walk_cat_in_bct(
     F0_curve: torch.Tensor,
     N_curve: torch.Tensor,
 ) -> torch.Tensor:
-    """``D2_cat_in`` as built in ``kmodel_decode_stack_diagnostic`` (TT F0/N conv + ref ASR)."""
+    """``D2_cat_in`` (TT F0/N conv + ref ASR) compared against the reference decode stack."""
     mc = ttnn.DRAM_MEMORY_CONFIG
     ck = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -329,7 +329,7 @@ def _pcc_flat_torch(ref: torch.Tensor, tt: torch.Tensor) -> float:
 def _load_captured_prosody(ckpt_path: Path):
     """ASR/F0/N/s_style from the decode-stack diagnostic phoneme string."""
     from models.experimental.kokoro.reference.model import KModel
-    from models.experimental.kokoro.tests.kmodel_decode_stack_diagnostic import (
+    from models.experimental.kokoro.tests.kokoro_checkpoint import (
         _phonemize,
         _ref_prosody,
         _zero_noise,
@@ -415,7 +415,7 @@ def test_tt_decoder_encode_pcc_captured_cat_in(device):
 
     try:
         from models.experimental.kokoro.reference.model import KModel
-        from models.experimental.kokoro.tests.kmodel_decode_stack_diagnostic import (
+        from models.experimental.kokoro.tests.kokoro_checkpoint import (
             _phonemize,
             _ref_prosody,
             _zero_noise,

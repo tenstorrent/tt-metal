@@ -52,6 +52,17 @@ _REF_TAG = "ref_torch_stft"
 _TT_TAG = "magnitude_phase_fp32"
 
 
+def _skip_input_asserts() -> bool:
+    """``STFT_XY_SKIP_INPUT_ASSERTS=1`` — skip the identical-input-only ``>0.99`` checks.
+
+    Use when the dumps come from the full kmodel pipeline (``test_tt_kmodel_stft_and_phase_fallback_pcc``
+    with ``KOKORO_DUMP_STFT_XY=1``): there ``xref``/``xtt`` are STFTs of *different* har_source signals
+    (reference vs TT SineGen), so input correlation is not ~1.0.  The ``ttnn.atan2`` fidelity
+    invariants still hold and are still asserted.
+    """
+    return os.getenv("STFT_XY_SKIP_INPUT_ASSERTS", "").strip().lower() in ("1", "true", "yes")
+
+
 @dataclass(frozen=True)
 class Atan2StftCorrelationReport:
     pcc_xref_xtt: float
@@ -104,7 +115,7 @@ def _dump_ref_tt_xy(device, x: torch.Tensor) -> None:
     params = preprocess_tt_torch_stft(
         filter_length=_N_FFT, hop_length=_HOP, win_length=_WIN, input_length=x.shape[-1], device=device
     )
-    tt_mod = TTTorchSTFT(device, params, use_torch_stft_fallback=False, use_torch_atan2_fallback=False)
+    tt_mod = TTTorchSTFT(device, params, use_torch_stft_fallback=False)
 
     with torch.no_grad():
         ref.transform(x)
@@ -226,16 +237,31 @@ def test_stft_atan2_correlation_from_dump(device, monkeypatch):
 
 
 def test_stft_atan2_correlation_from_existing_dump(device):
-    """Re-analyze dumps from ``/tmp/pytest-of-ubuntu/kokoro_stft_xy`` (or ``STFT_XY_DUMP_DIR``)."""
+    """Re-analyze existing dumps; loads from ``KOKORO_DUMP_STFT_XY_DIR`` (default fixed dir).
+
+    Set ``STFT_XY_SKIP_INPUT_ASSERTS=1`` to analyze full-pipeline dumps
+    (``test_tt_kmodel_stft_and_phase_fallback_pcc`` with ``KOKORO_DUMP_STFT_XY=1``), where
+    ``xref``/``xtt`` are STFTs of different har_source signals so input correlation is not ~1.0.
+
+    NOTE: ``load_ref_tt_xy`` resolves paths via ``stft_xy_dump_dir()`` (``KOKORO_DUMP_STFT_XY_DIR``),
+    so set that env to point at a non-default dump dir.
+    """
     dump_dir = Path(os.getenv("STFT_XY_DUMP_DIR", str(stft_xy_dump_dir())))
     xref, yref, xtt, ytt = load_ref_tt_xy(dump_dir)
     r = analyze_atan2_stft_correlation(device, xref, yref, xtt, ytt)
-    _log_report(r, dump_dir=str(dump_dir))
+    _log_report(r, dump_dir=str(stft_xy_dump_dir()))
 
+    # ttnn.atan2 fidelity invariants — hold for ANY inputs (this is the actual proof):
+    assert r.pcc_ttnn_atan2_same_on_tt > 0.99, "ttnn.atan2 must match torch.atan2 on identical (xtt,ytt)"
+    gap = abs(r.pcc_ttnn_atan2_cross - r.pcc_torch_atan2_cross)
+    assert gap < 0.05, f"ttnn cross PCC should match torch cross; gap={gap:.4f}"
+
+    if _skip_input_asserts():
+        print("STFT_XY_SKIP_INPUT_ASSERTS set — skipping identical-input-only (>0.99) asserts")
+        return
+
+    # Identical-input case (synthetic 200 Hz dump): inputs ~1.0, atan2 outputs decorrelate.
     assert r.pcc_xref_xtt > 0.99
     assert r.pcc_yref_ytt > 0.99
     assert r.pcc_torch_atan2_cross < r.pcc_xref_xtt
-    assert r.pcc_ttnn_atan2_same_on_tt > 0.99
     assert r.pcc_ttnn_atan2_cross < r.pcc_xref_xtt
-    gap = abs(r.pcc_ttnn_atan2_cross - r.pcc_torch_atan2_cross)
-    assert gap < 0.05

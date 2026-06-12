@@ -30,8 +30,7 @@ if str(_TT_METAL_ROOT) not in sys.path:
 import ttnn
 
 from models.experimental.kokoro.reference.model import KModel
-from models.experimental.kokoro.tests.kmodel_pcc_stage_diagnostic import STFT_PHASE_FALLBACK_KWARGS
-from models.experimental.kokoro.tests.kokoro_checkpoint import find_checkpoint
+from models.experimental.kokoro.tests.kokoro_checkpoint import STFT_PHASE_FALLBACK_KWARGS, find_checkpoint
 from models.experimental.kokoro.tt.tt_kmodel import KokoroConfig, TTKModel, preprocess_tt_kmodel
 
 ASR_WER_TARGET = 0.30
