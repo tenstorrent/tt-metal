@@ -423,21 +423,6 @@ def run_standalone_chunked_prefill_loop(pipeline: TtDeepSeekPrefillPipeline) -> 
         f"[standalone-chunked] ALL {len(slot_ids)} slot(s) PASSED (min PCC {min(slot_min_pcc.values()):.6f})"
     )
 
-    # Migration KV validation: with PREFILL_VALIDATE_MIGRATION=1, after prefilling the
-    # src slot above, validate the KV cache BEFORE (src) and AFTER (dst) the slot->slot
-    # migration that tt-llm-engine (the prefill scheduler/driver) drives over the
-    # migration layer. Requires the src slot to have been prefilled (include it in
-    # slot_ids, e.g. ALL_SLOTS=1 or PREFILL_STANDALONE_CHUNKED_SLOT=<src>) and the
-    # engine to have migrated src->dst into the same live cache before this runs.
-    if os.environ.get("PREFILL_VALIDATE_MIGRATION", "0") == "1":
-        mig_src = int(os.environ.get("PREFILL_MIGRATE_SRC_SLOT", "0")) % NUM_USERS
-        mig_dst = int(os.environ.get("PREFILL_MIGRATE_DST_SLOT", "1")) % NUM_USERS
-        logger.info(
-            f"[kv-migrate-validate] PREFILL_VALIDATE_MIGRATION=1 — validating "
-            f"src_slot={mig_src} -> dst_slot={mig_dst} (migration driven by tt-llm-engine)"
-        )
-        validate_migration_kv(pipeline, mig_src, mig_dst, n_chunks)
-
 
 def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DStreamService) -> None:
     """Request loop: token IDs + per-iter control metadata arrive over the H2D
@@ -519,10 +504,34 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DS
     logger.info(f"[request] loop exited after {i} requests")
 
     if pcc_mode:
-        # Drain the device, then PCC the KV cache filled over the socket against the golden trace.
+        # Drain the device, then validate the KV cache against the golden trace.
         ttnn.synchronize_device(pipeline.mesh_device)
-        logger.info(f"[request] running KV-cache PCC check (slot={last_slot_id}, n_chunks={i})")
-        _kv_cache_pcc_check(pipeline, last_slot_id, i)
+
+        if os.environ.get("PREFILL_VALIDATE_MIGRATION", "0") == "1":
+            # Migration mode: tt-llm-engine (the prefill scheduler/driver) migrates
+            # slot src -> dst over the migration layer and writes a DONE sentinel when
+            # prefill + migration finish. Wait for that sentinel (so the migrated KV
+            # has landed in the dst slot), then validate BOTH slots ONCE: src (BEFORE)
+            # and dst (AFTER) against the same golden trace.
+            done_file = os.environ.get("MIGRATION_DONE_FILE", "/tmp/migration_done.sentinel")
+            wait_s = int(os.environ.get("PREFILL_MIGRATE_WAIT_S", "1200"))
+            src_slot = int(os.environ.get("PREFILL_MIGRATE_SRC_SLOT", "0")) % NUM_USERS
+            dst_slot = int(os.environ.get("PREFILL_MIGRATE_DST_SLOT", "1")) % NUM_USERS
+            logger.info(f"[kv-migrate-validate] waiting for DONE sentinel {done_file} (<= {wait_s}s)")
+            deadline = _time.time() + wait_s
+            while not os.path.exists(done_file):
+                if _time.time() >= deadline:
+                    raise TimeoutError(
+                        f"[kv-migrate-validate] sentinel {done_file} never appeared after {wait_s}s "
+                        "(did the prefill driver finish prefill + migration?)"
+                    )
+                _time.sleep(0.5)
+            logger.success(f"[kv-migrate-validate] sentinel found — validating slot {src_slot} -> {dst_slot}")
+            ttnn.synchronize_device(pipeline.mesh_device)
+            validate_migration_kv(pipeline, src_slot, dst_slot, i)
+        else:
+            logger.info(f"[request] running KV-cache PCC check (slot={last_slot_id}, n_chunks={i})")
+            _kv_cache_pcc_check(pipeline, last_slot_id, i)
 
 
 def _print_config() -> None:
