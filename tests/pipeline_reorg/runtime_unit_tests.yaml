@@ -308,7 +308,7 @@
   team: runtime
 
 # =============================================================================
-# Multi-Card Unit Tests (BH + Galaxy)
+# Multi-Card Unit Tests (Galaxy)
 # =============================================================================
 
 # --- BH Multi-Card: Debug Tools (mesh filters + single AERISC) ---
@@ -319,8 +319,6 @@
     TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='WatcherAssertTest.TestWatcherAssert'
     TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='MeshWatcherFixture.ActiveEthTestWatcherSanitizeEth'
   skus:
-    bh_quietbox:
-      timeout: 5
     bh_loudbox:
       timeout: 5
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
@@ -332,8 +330,6 @@
     TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='UnitMeshRandomProgramFixture.ActiveEthTestPrograms'
     TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='UnitMeshRandomProgramTraceFixture.ActiveEthTestProgramsTrace'
   skus:
-    bh_quietbox:
-      timeout: 10
     bh_loudbox:
       timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
@@ -391,8 +387,6 @@
     bh_p150b_civ2:
       timeout: 5
     bh_p100a_civ2_viommu:
-      timeout: 5
-    bh_quietbox:
       timeout: 5
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime

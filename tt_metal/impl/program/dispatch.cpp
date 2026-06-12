@@ -397,6 +397,7 @@ uint32_t finalize_kernel_bins(
                 for (uint32_t processor_index : processor_indices) {
                     kg->kernel_text_offsets[processor_index] = kernel_text_offset;
                     kernel_config.kernel_text_offset()[processor_index] = kernel_text_offset;
+                    kernel_config.kernel_text_size()[processor_index] = binaries[i]->get_packed_size();
                     hal.set_iram_text_size(
                         kg->launch_msg.view(),
                         programmable_core_type,

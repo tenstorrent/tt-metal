@@ -24,6 +24,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_levelized_graph.cpp
     test_graph_capture_arguments_morehdot.cpp
     test_graph_capture_arguments_transpose.cpp
+    test_graph_capture_arguments_untilize_with_unpadding.cpp
     test_graph_query_op_constraints.cpp
     test_graph_query_op_runtime.cpp
     test_launch_operation.cpp

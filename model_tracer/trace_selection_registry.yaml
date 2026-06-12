@@ -53,7 +53,7 @@ targets:
         - qwenimage
         - mochi
         - sentence_bert
-      trace: [9, 13, 15, 16, 23, 26, 27, 29, 30, 31, 33]
+      trace: [9, 13, 15, 16, 23, 27, 29, 30, 31, 33, 127]
 
   model_traced:
     - model:
@@ -1640,4 +1640,18 @@ registry:
     pytest_args: '-k 2x4'
     tt_kmd: "TT-KMD 2.4.1"
     tt_smi: "5.2.0"
+    tt_firmware: "18.12.1.0"
+
+  - trace_id: 127
+    status: draft
+    models: [llama3_70b_galaxy]
+    hardware: {board_type: Wormhole, device_series: tt-galaxy-wh, card_count: 32}
+    trace_uid: 3884a085-22c5-4a81-bb2b-f1e4ba4b30f0
+    tt_metal_sha: 0eb131ca29c880a86acdec2254780e55045723c2
+    config_count: 647
+    loaded_at: '2026-06-10'
+    notes: ''
+    pytest_args: '-k batch-32 and not non-uniform and not log-probs'
+    tt_kmd: "TT-KMD 2.4.1"
+    tt_smi: "3.0.38"
     tt_firmware: "18.12.1.0"
