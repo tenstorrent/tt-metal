@@ -84,6 +84,20 @@ TEST(KernelSignatureParser, MarkerInCommentAndDefineIgnored) {
     EXPECT_EQ(sig->fn_param_names, (std::vector<std::string>{"a"}));
 }
 
+// A // comment continued across a trailing backslash-newline stays a comment, so a TT_KERNEL on
+// the continued line is not a real marker. Without continuation handling this would see two
+// markers (the decoy + the real one) and throw.
+TEST(KernelSignatureParser, LineCommentContinuationIgnored) {
+    const std::string src =
+        "// this comment continues onto the next line \\\n"
+        "TT_KERNEL void decoy(uint32_t x) {}\n"
+        "TT_KERNEL void only_real(uint32_t a) {}\n";
+    auto sig = parse_kernel_main_signature(src);
+    ASSERT_TRUE(sig.has_value());
+    EXPECT_EQ(sig->name, "only_real");
+    EXPECT_EQ(sig->fn_param_names, (std::vector<std::string>{"a"}));
+}
+
 // Two real markers -> error.
 TEST(KernelSignatureParser, MultipleMarkersThrow) {
     const std::string src = "TT_KERNEL void a(uint32_t x) {}\nTT_KERNEL void b(uint32_t y) {}";
