@@ -164,14 +164,6 @@ bool perhead_chunk_clamp_disabled() {
     static const bool v = (std::getenv("WAN_RMSNORM_NO_PERHEAD_CLAMP") != nullptr);
     return v;
 }
-// WAN_RMSNORM_RING_SPLIT=1: on Ring topology, split a link's MUX workers into
-// fwd-only and bwd-only halves. Each worker then does ONE full-wrap (ring_size-1
-// hops) mcast instead of two arc mcasts, and each MUX serves half the channels
-// (faster channel loop). Off by default (every worker mcasts both directions).
-bool ring_split_senders() {
-    static const bool v = (std::getenv("WAN_RMSNORM_RING_SPLIT") != nullptr);
-    return v;
-}
 // Input-read push+barrier granularity (in tiles). A WH-Galaxy sweep
 // (WAN_BARRIER_TILES) showed the optimum here is governed by compute-overlap
 // (how finely PRE is fed), NOT by the DRAM-contention model of the reference
@@ -558,30 +550,6 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
 
     const bool fwd_mux_valid = use_mux && forward_fabric_node_id.has_value();
     const bool bwd_mux_valid = use_mux && backward_fabric_node_id.has_value();
-
-    // RING split-sender mode (WAN_RMSNORM_RING_SPLIT): instead of every worker
-    // mcasting BOTH directions (fwd arc + bwd arc), partition a link's workers into
-    // fwd-only and bwd-only halves. Each worker then does ONE full-wrap mcast
-    // (ring_size-1 hops, reaching all peers the short+long way around) and each MUX
-    // serves half the channels. Requires both neighbors (true ring) and an even
-    // workers-per-link count; we re-round num_workers DOWN to keep the halves equal.
-    bool split_active = false;
-    uint32_t split_half = 0u;  // fwd workers per link == bwd workers per link
-    if (ring_split_senders() && use_mux && fwd_mux_valid && bwd_mux_valid &&
-        args.topology == ttnn::ccl::Topology::Ring) {
-        const uint32_t nwpl = num_workers / num_links_eff;
-        if (nwpl >= 2) {
-            const uint32_t nwpl_even = (nwpl / 2u) * 2u;
-            num_workers = nwpl_even * num_links_eff;
-            split_active = true;
-            split_half = nwpl_even / 2u;
-            // Each worker sends a single full-wrap mcast covering all ring_size-1
-            // peers; the per-worker connection_valid flags pick the direction.
-            num_targets_forward = args.ring_size - 1;
-            num_targets_backward = args.ring_size - 1;
-        }
-    }
-
     const uint32_t num_mux_per_direction = use_mux ? num_links_eff : 0u;
     const uint32_t num_mux_cores =
         (fwd_mux_valid ? num_mux_per_direction : 0u) + (bwd_mux_valid ? num_mux_per_direction : 0u);
@@ -999,12 +967,10 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const size_t mux_base_l1_address = mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     const uint32_t num_workers_per_link = use_mux ? (num_workers / num_links_eff) : 0u;
-    // In split mode each MUX serves only its half of the link's workers.
-    const uint32_t mux_clients_per_link = split_active ? split_half : num_workers_per_link;
     std::unique_ptr<tt::tt_fabric::FabricMuxConfig> mux_kernel_config;
     if (use_mux) {
         mux_kernel_config = std::make_unique<tt::tt_fabric::FabricMuxConfig>(
-            /*num_full_size_channels=*/static_cast<uint8_t>(mux_clients_per_link),
+            /*num_full_size_channels=*/static_cast<uint8_t>(num_workers_per_link),
             /*num_header_only_channels=*/0,
             /*num_buffers_full_size_channel=*/1,
             /*num_buffers_header_only_channel=*/0,
@@ -1072,12 +1038,11 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
             head_dim_tiles,
             num_tile_rows,
         };
-        // Each link's MUX has mux_clients_per_link clients; the writer kernel's
+        // Each link's MUX has num_workers_per_link clients; the writer kernel's
         // num_mux_clients CT arg uses this per-link count (termination master
-        // waits for mux_clients_per_link - 1 incs on its sem). In split mode this
-        // is half the link's workers (the fwd or bwd half).
+        // waits for num_workers_per_link - 1 incs on its sem).
         ttnn::ccl::fabric_mux_connection_ct_args(
-            mux_clients_per_link,
+            num_workers_per_link,
             tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
             *mux_kernel_config,
             writer_compile_args);
@@ -1246,17 +1211,6 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
             link_master_virtual[lnk] = mesh_device->worker_core_from_logical_core(link_master_logical[lnk]);
         }
     }
-    // Split mode: the bwd MUX's term master is the first BACKWARD worker on each
-    // link (channel_id_in_link == split_half, i.e. worker i = lnk + split_half*L).
-    // The fwd MUX keeps link_master_virtual (channel 0). Non-split: both directions
-    // share link_master_virtual (the channel-0 worker terminates both MUXes).
-    std::vector<CoreCoord> bwd_link_master_virtual(split_active ? num_links_eff : 0u);
-    if (split_active) {
-        for (uint32_t lnk = 0; lnk < num_links_eff; lnk++) {
-            bwd_link_master_virtual[lnk] =
-                mesh_device->worker_core_from_logical_core(worker_cores[lnk + split_half * num_links_eff]);
-        }
-    }
 
     std::vector<CoreCoord> fwd_mux_virtual(num_mux_per_direction, CoreCoord{0, 0});
     std::vector<CoreCoord> bwd_mux_virtual(num_mux_per_direction, CoreCoord{0, 0});
@@ -1342,22 +1296,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
             // channel_id within the assigned MUX is i / num_links_eff.
             const uint32_t link = i % num_links_eff;
             const uint32_t channel_id_in_link = i / num_links_eff;
-            // Direction assignment. Non-split: every worker connects to BOTH MUXes
-            // (channel == channel_id_in_link; channel-0 worker is term master of both).
-            // Split (ring): channels [0, split_half) are fwd-only, [split_half, 2*half)
-            // are bwd-only; each MUX renumbers its half to channel [0, split_half) and
-            // has its own term master (the first worker in that half).
-            const bool is_fwd_worker = !split_active || (channel_id_in_link < split_half);
-            const bool is_bwd_worker = !split_active || (channel_id_in_link >= split_half);
-            const uint32_t fwd_channel = channel_id_in_link;
-            const uint32_t bwd_channel = split_active ? (channel_id_in_link - split_half) : channel_id_in_link;
-            const bool fwd_conn = fwd_mux_valid && is_fwd_worker;
-            const bool bwd_conn = bwd_mux_valid && is_bwd_worker;
-            // Non-split preserves the original flag exactly (channel-0 worker is master
-            // of both MUXes, regardless of validity). Split: per-direction first worker.
-            const bool fwd_term = split_active ? (fwd_conn && fwd_channel == 0) : (channel_id_in_link == 0);
-            const bool bwd_term = split_active ? (bwd_conn && bwd_channel == 0) : (channel_id_in_link == 0);
-            const CoreCoord bwd_master = split_active ? bwd_link_master_virtual[link] : link_master_virtual[link];
+            const bool is_term_master_of_link = (channel_id_in_link == 0);
             writer_rt_args.push_back(out_ready_sem_bank_addr);
             // Packed-page DRAM scratch base address + this worker's first
             // chunk index on the chip. DRAM page idx for a (device, chunk)
@@ -1373,26 +1312,26 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
             // override_runtime_arguments. 0 when no RoPE (writer won't read it).
             writer_rt_args.push_back(fuse_rope ? trans_mat.value().buffer()->address() : 0u);
             ttnn::ccl::fabric_mux_connection_rt_args(
-                /*mux_connection_valid=*/fwd_conn,
-                /*is_termination_master=*/fwd_term,
+                /*mux_connection_valid=*/fwd_mux_valid,
+                /*is_termination_master=*/is_term_master_of_link,
                 tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                fwd_conn ? fwd_mux_virtual[link] : CoreCoord{0, 0},
-                /*worker_id=*/fwd_channel,
+                fwd_mux_valid ? fwd_mux_virtual[link] : CoreCoord{0, 0},
+                /*worker_id=*/channel_id_in_link,
                 core,
                 *mux_kernel_config,
                 program,
                 link_master_virtual[link],
                 writer_rt_args);
             ttnn::ccl::fabric_mux_connection_rt_args(
-                /*mux_connection_valid=*/bwd_conn,
-                /*is_termination_master=*/bwd_term,
+                /*mux_connection_valid=*/bwd_mux_valid,
+                /*is_termination_master=*/is_term_master_of_link,
                 tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                bwd_conn ? bwd_mux_virtual[link] : CoreCoord{0, 0},
-                /*worker_id=*/bwd_channel,
+                bwd_mux_valid ? bwd_mux_virtual[link] : CoreCoord{0, 0},
+                /*worker_id=*/channel_id_in_link,
                 core,
                 *mux_kernel_config,
                 program,
-                bwd_master,
+                link_master_virtual[link],
                 writer_rt_args);
         } else if (!is_tp_1) {
             // TP>1 single-worker path: append out_ready_sem + direct fabric
