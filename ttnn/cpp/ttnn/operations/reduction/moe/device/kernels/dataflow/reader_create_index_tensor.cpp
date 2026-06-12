@@ -74,20 +74,17 @@ void kernel_main() {
     CircularBuffer cb_topk(cb_topk_mask);
     CircularBuffer cb_expert(cb_expert_mask);
 
-    // Stream expert mask 2 tiles at a time alongside input tiles.
-    // This keeps the expert mask CB at a fixed 2-tile size regardless of W,
-    // avoiding deadlock for any input width.
+    // Expert mask tiles are loaded only for ht=0 (2 tiles at a time) and held in the CB for all rows.
+    // For ht>0, the expert CB still contains the same data — no re-read needed.
     uint32_t tile_id = 0;
     for (uint32_t i = 0; i < Ht; ++i) {
-        uint32_t tile_id_expert = 0;  // expert mask is the same for every row, re-read each time
         for (uint32_t j = 0; j < Wt; j += 2) {
-            cb_expert.reserve_back(2);
-            noc.async_read(s2, cb_expert, tile_bytes_expert, {.page_id = tile_id_expert}, {.offset_bytes = 0});
-            tile_id_expert++;
-            noc.async_read(
-                s2, cb_expert, tile_bytes_expert, {.page_id = tile_id_expert}, {.offset_bytes = tile_bytes_expert});
-            tile_id_expert++;
-
+            if (i == 0) {
+                cb_expert.reserve_back(2);
+                noc.async_read(s2, cb_expert, tile_bytes_expert, {.page_id = j}, {.offset_bytes = 0});
+                noc.async_read(
+                    s2, cb_expert, tile_bytes_expert, {.page_id = j + 1}, {.offset_bytes = tile_bytes_expert});
+            }
             cb_in0.reserve_back(2);
             noc.async_read(s0, cb_in0, tile_bytes_input, {.page_id = tile_id}, {.offset_bytes = 0});
             tile_id++;
@@ -96,7 +93,9 @@ void kernel_main() {
             tile_id++;
             generate_index_tile(cb_intermed_index, j + 1);
             noc.async_read_barrier();
-            cb_expert.push_back(2);
+            if (i == 0) {
+                cb_expert.push_back(2);
+            }
             cb_in0.push_back(2);
         }
     }

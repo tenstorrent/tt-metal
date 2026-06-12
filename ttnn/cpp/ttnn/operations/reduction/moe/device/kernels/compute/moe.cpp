@@ -251,7 +251,7 @@ void mask_and_topk() {
 
         // streaming in input and index tiles to transpose and bitonic local sort them, two tiles at a time
         for (uint32_t wt = 0; wt < Wt; wt += 2) {
-            // expert mask is streamed 2 tiles at a time alongside input, always at index 0 and 1
+            // Expert mask CB holds all Wt tiles (loaded once). Wait for the next 2 to be available.
             expert_mask_cb.wait_front(2);
             input_cb.wait_front(2);
             index_cb.wait_front(2);
@@ -261,8 +261,8 @@ void mask_and_topk() {
             tile_regs_acquire();
             reconfig_data_format(input_cb_index, expert_mask_cb_index);
             add_bcast_rows_init_short(input_cb_index, expert_mask_cb_index);
-            add_tiles_bcast_rows(input_cb_index, expert_mask_cb_index, 0, 0, 0);
-            add_tiles_bcast_rows(input_cb_index, expert_mask_cb_index, 1, 1, 1);
+            add_tiles_bcast_rows(input_cb_index, expert_mask_cb_index, 0, wt, 0);
+            add_tiles_bcast_rows(input_cb_index, expert_mask_cb_index, 1, wt + 1, 1);
             masked_input_cb.reserve_back(2);
             tile_regs_commit();
             tile_regs_wait();
@@ -271,7 +271,6 @@ void mask_and_topk() {
             pack_tile(1, masked_input_cb_index);
             masked_input_cb.push_back(2);
             input_cb.pop_front(2);
-            expert_mask_cb.pop_front(2);
             tile_regs_release();
 
             // Transpose masked input and index tiles, then locally sort into k groups.
@@ -400,6 +399,8 @@ void mask_and_topk() {
         index_transposed_cb.wait_front(Wt);
         index_transposed_cb.pop_front(Wt);
     }
+    // Expert mask was loaded once and held for all Ht rows — free it now.
+    expert_mask_cb.pop_front(Wt);
     // sfpu::_init_sfpu_config_reg();
 }
 

@@ -64,7 +64,14 @@ def run_moe_test(N, C, H, W, k, E, e, dtype, device):
 )
 @pytest.mark.parametrize(
     "N, C, H, W, k, E, e",
-    ((1, 1, 32, 512, 32, 8, 2),),  # Mixtral8x7B
+    [
+        # ((1, 1, 32, 512, 32, 8, 2),),  # Mixtral8x7B
+        pytest.param(1, 1, 32, 64, 32, 8, 2, id="Ht1_Wt2"),  # baseline
+        pytest.param(1, 1, 64, 64, 32, 8, 2, id="Ht2_Wt2"),  # expert reuse across 2 rows
+        pytest.param(1, 1, 512, 64, 32, 8, 2, id="Ht16_Wt2"),  # expert reuse across 16 rows
+        pytest.param(1, 1, 32, 512, 32, 8, 2, id="Ht1_Wt16"),  # large W
+        pytest.param(1, 1, 64, 512, 32, 8, 2, id="Ht2_Wt16"),  # large W + multi-row
+    ],
 )
 def test_moe(N, C, H, W, k, E, e, dtype, device):
     run_moe_test(N, C, H, W, k, E, e, dtype, device)
