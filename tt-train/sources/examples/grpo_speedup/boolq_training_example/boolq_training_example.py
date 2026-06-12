@@ -116,7 +116,7 @@ from utils.inference_bridge import TTML_RANK, TTT_RANK  # noqa: E402
 
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
-TTML_DEVICE_CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_2dev_ddp.yaml"
+TTML_DEVICE_CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_2dev_ddp_gas_8.yaml"
 TTT_MESH_SHAPE = (1, 1)
 
 # Worker memory budget. 32 is comfortably below the [1, 1] N300 chip
