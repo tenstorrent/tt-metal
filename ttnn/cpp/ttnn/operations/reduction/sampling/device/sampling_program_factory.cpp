@@ -62,9 +62,14 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
     auto input_shape = input_values_tensor.logical_shape();
     const uint32_t tile_height = input_values_tensor.tensor_spec().tile().get_height();
     const uint32_t tile_width = input_values_tensor.tensor_spec().tile().get_width();
-    uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tile_height;
+    // `num_users` is the logical user count (rows) in the range [1, 32], so the data still
+    // occupies a single padded row-tile (Ht == 1); only `num_users` cores actually run. Decoupling
+    // num_cores from Ht*tile_height is what lets <32 users work: the old `(.../tile_height)` would
+    // integer-divide to Ht == 0 (and num_cores == 0) for fewer than tile_height users.
+    const uint32_t num_users = input_shape[0] * input_shape[1] * input_shape[2];
+    uint32_t Ht = (num_users + tile_height - 1) / tile_height;  // == 1 for 1..32 users
     uint32_t Wt = input_shape[3] / tile_width;
-    auto num_cores = Ht * tile_height;
+    auto num_cores = num_users;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     CoreRangeSet core_grid = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size, true);
@@ -332,7 +337,8 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
         Wt,
         aligned_final_indices_rm_unit_size,
         tile_height,
-        static_cast<uint32_t>(use_32bit_index)};
+        static_cast<uint32_t>(use_32bit_index),
+        num_users};
     tt::tt_metal::TensorAccessorArgs(input_values_tensor).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(input_indices_tensor).append_to(reader_compile_time_args);
 
@@ -383,6 +389,7 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
                 tile_width,
                 num_cores,
                 static_cast<uint32_t>(use_32bit_index),
+                num_users,
             });
 
         KernelDescriptor writer_desc;

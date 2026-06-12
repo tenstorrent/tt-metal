@@ -213,6 +213,84 @@ def test_sampling_callback(shape, k, p, seed, k_dtype, device):
     assert device.cache_entries_counter.total > 0
 
 
+# Test to run with fewer than 32 users while still mapping one core per user. The kernels
+# still process a single padded 32-row tile, but only `num_users` core instances run, so the output
+# last dim is `num_users`. Each (num_users, grid) config is run with two sub_core_grids modes:
+#   - "explicit_grid": an explicit `grid_rows x grid_cols` CoreRangeSet with exactly `num_users`
+#     cores (one per user).
+#   - "full_grid": sub_core_grids=None, so the op auto-selects `num_users` cores from the device grid.
+@pytest.mark.parametrize(
+    "num_users, grid_rows, grid_cols",
+    [
+        (2, 1, 2),  # 1x2 grid
+        (7, 1, 7),  # 1x7 grid
+        (15, 3, 5),  # 3x5 grid
+    ],
+    ids=["2_users_1x2", "7_users_1x7", "15_users_3x5"],
+)
+@pytest.mark.parametrize("Wt", [2])  # last dim = 32 * Wt; Wt must be a power of 2
+@pytest.mark.parametrize("seed", [2024])
+@pytest.mark.parametrize("k_dtype", [ttnn.uint32, ttnn.int32])
+@pytest.mark.parametrize("grid_mode", ["explicit", "full_grid"], ids=["explicit_grid", "full_grid"])
+def test_sampling_sub_32_users(num_users, grid_rows, grid_cols, Wt, seed, k_dtype, grid_mode, device):
+    torch.manual_seed(seed)
+    shape = [1, 1, num_users, 32 * Wt]
+
+    # per-user k; p == 0 -> pure top-k, which lets us validate top-k membership of each pick.
+    k = [10 + 5 * (i % 5) for i in range(num_users)]
+    p = [0.0] * num_users
+
+    if grid_mode == "explicit":
+        # Exactly `num_users` cores laid out as grid_rows x grid_cols (one core per user).
+        sub_core_grids = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_cols - 1, grid_rows - 1))}
+        )
+        assert sub_core_grids.num_cores() == num_users
+    else:
+        # Let the op auto-select `num_users` cores from the full device grid.
+        sub_core_grids = None
+
+    input_values = torch.randn(shape)
+    input_indices = torch.arange(0, shape[-1], dtype=torch.int32).expand(shape)
+    input_values_tensor = ttnn.from_torch(input_values, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    input_indices_tensor = ttnn.from_torch(input_indices, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    # k/p/temp carry one entry per user, so they are length `num_users`
+    k_tensor = ttnn.from_torch(torch.tensor(k), device=device, dtype=k_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+    p_tensor = ttnn.from_torch(torch.tensor(p), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    temp = ttnn.from_torch(torch.ones(num_users), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    output = ttnn.to_torch(
+        ttnn.sampling(
+            input_values_tensor,
+            input_indices_tensor,
+            k=k_tensor,
+            p=p_tensor,
+            temp=temp,
+            seed=seed,
+            sub_core_grids=sub_core_grids,
+        )
+    )
+    assert output.shape[-1] == num_users, f"Expected output last dim = {num_users}, got {output.shape}"
+
+    # Same seed -> identical output.
+    output_rerun = ttnn.to_torch(
+        ttnn.sampling(
+            input_values_tensor,
+            input_indices_tensor,
+            k=k_tensor,
+            p=p_tensor,
+            temp=temp,
+            seed=seed,
+            sub_core_grids=sub_core_grids,
+        )
+    )
+    assert torch.allclose(output, output_rerun), "Output is not deterministic for the same seed"
+
+    # With p == 0 this is pure top-k, so each user's pick must lie within its top-k set.
+    validate_statistics(input_values, output, k, p)
+
+
 @pytest.mark.parametrize(
     "shape",
     [

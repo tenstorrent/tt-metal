@@ -97,7 +97,8 @@ void bind_reduction_sampling_operation(nb::module_& mod) {
 
         Limitations:
             - Inputs must be 4D tensors with shape [N, C, H, W], and must be located on the device.
-            - The input tensors must represent exactly `32 users` based on their shape (i.e. N*C*H = 32).
+            - The input tensors represent ``num_users = N*C*H`` users, which must be in the range
+              ``[1, 32]``. The op runs one core per user, so ``num_users`` cores are used.
             - The last dimension of:attr:`input_values_tensor` must be padded to a multiple of 32
             - The number of tiles along the last dimension, ``Wt = W / 32``, must be a power of 2
               (i.e. ``W`` must be a power-of-2 multiple of 32: 32, 64, 128, 256, ...). The internal
@@ -105,9 +106,10 @@ void bind_reduction_sampling_operation(nb::module_& mod) {
               non-power-of-2 ``Wt`` is rejected. Pad ``W`` up to the next power-of-2 multiple of 32
               (e.g. with ``-inf`` values and dummy indices) if needed.
             - The overall shape of :attr:`input_values_tensor` must match that of :attr:`input_indices_tensor`.
-            - :attr:`k`: Must contain 32 values, in the range  '(0,32]'.
-            - :attr:`p`, :attr:`temp`: Must contain 32 values in the range `[0.0, 1.0]`.
-            - :attr:`sub_core_grids` (if provided): number of cores must equal the number of users (which is constrained to 32).
+            - :attr:`k`: Must contain ``num_users`` values (one per user), in the range '(0,32]'.
+            - :attr:`p`, :attr:`temp`: Must contain ``num_users`` values (one per user); :attr:`p`
+              values must be in the range `[0.0, 1.0]`.
+            - :attr:`sub_core_grids` (if provided): number of cores must equal ``num_users`` (1 to 32).
         )doc";
 
     ttnn::bind_function<"sampling">(
