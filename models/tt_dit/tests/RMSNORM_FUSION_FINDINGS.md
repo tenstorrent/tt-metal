@@ -123,9 +123,14 @@ and more fragile under traced replay. Dual-direction arc AG is the only path.
   clamps; `chunk_size_rows=1` is forced for per-head RoPE (keeps cos/sin resident, fits feat
   1024) and the streaming-low-L1 fallback. Applied identically in `compute_sizing` and the
   factory so the buffer matches; **Wan is byte-identically unaffected**.
-- **Open limit — feat-2048 per-head RoPE** (TP=2 video self-attn / A↔V video) exceeds L1
-  even at chunk-1 → clean compile-time OOM; would need cos/sin streaming (a kernel change).
-  This is why TP=2 isn't tabulated above (TP=4 is the shipping config).
+- **Open limit — feat-2048 per-head RoPE → compile-time L1 OOM:** the TP=2 video self-attn
+  QK norms (`tp2_v_selfattn_qk_s1/s2`; video dim 4096 → feat/dev **2048**, head_dim 128, 16
+  heads/dev). Per-head RoPE forces chunk-1 (cos/sin must stay resident), and at feat 2048 the
+  resident cos/sin + post intermediates don't fit L1 → clean compile-time OOM (not a hang, not
+  corruption). Would need cos/sin streaming (a kernel change). The TP=2 *audio* / A↔V per-head
+  configs are feat 1024 (audio dim 2048) and do fit — they're the ones the matmul→pack hang fix
+  above unblocked. This (plus that the per-head TP=2 path is unvalidated post-fix) is why TP=2
+  isn't tabulated above; TP=4 is the shipping config.
 - **Underlying — per-head RoPE chunk≥2** compute path is avoided by pinning chunk=1; the
   deeper chunk≥2 deadlock isn't separately fixed (no need at chunk=1).
 
