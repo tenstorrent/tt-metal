@@ -2204,18 +2204,14 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
 namespace {
 constexpr tt::DataFormat kDfbBenchDataFormat = tt::DataFormat::Float16_b;
 
-experimental::DataflowBufferSpec MakeBenchDfbSpec(const char* id, uint32_t entry_size, uint32_t num_entries) {
+experimental::DataflowBufferSpec MakeBenchDfbSpec(
+    experimental::DFBSpecName id, uint32_t entry_size, uint32_t num_entries) {
     return experimental::DataflowBufferSpec{
         .unique_id = id,
         .entry_size = entry_size,
         .num_entries = num_entries,
         .data_format_metadata = kDfbBenchDataFormat,
     };
-}
-
-experimental::DataflowBufferSpec MakeBenchDfbSpec(
-    const std::string& id, uint32_t entry_size, uint32_t num_entries) {
-    return MakeBenchDfbSpec(id.c_str(), entry_size, num_entries);
 }
 
 constexpr const char* kDfbInitTimingSlotNames[::dfb::DFB_INIT_TIMING_NUM_SLOTS] = {
@@ -2355,10 +2351,10 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseBase) {
     constexpr uint32_t NUM_ENTRIES_PER_PRODUCER = NUM_ENTRIES;
     constexpr uint32_t NUM_ENTRIES_PER_CONSUMER = NUM_ENTRIES;
 
-    constexpr const char* DFB = "dfb";
-    constexpr const char* PRODUCER = "producer";
-    constexpr const char* CONSUMER = "consumer";
-    constexpr const char* IN_TENSOR = "in_tensor";
+    const experimental::DFBSpecName DFB{"dfb"};
+    const experimental::KernelSpecName PRODUCER{"producer"};
+    const experimental::KernelSpecName CONSUMER{"consumer"};
+    const experimental::TensorParamName IN_TENSOR{"in_tensor"};
 
     const experimental::DataMovementHardwareConfig dm_producer_cfg{
         .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
@@ -2392,12 +2388,7 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseBase) {
         .unique_id = CONSUMER,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_consumer.cpp",
         .num_threads = NUM_CONSUMERS,
-        .dfb_bindings = {{
-            .dfb_spec_name = DFB,
-            .accessor_name = "in",
-            .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-            .access_pattern = experimental::DFBAccessPattern::STRIDED,
-        }},
+        .dfb_bindings = {experimental::StridedConsumerOf(DFB, "in")},
         .compile_time_args = {{"num_entries_per_consumer", NUM_ENTRIES_PER_CONSUMER}},
         .hw_config = experimental::ComputeHardwareConfig{},
     };
@@ -2419,17 +2410,18 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseBase) {
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     experimental::ProgramRunArgs run_args;
-    run_args.kernel_run_args = {{
-        .kernel_spec_name = PRODUCER,
-        .runtime_arg_values = {{
-            experimental::ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs{
-                experimental::NodeCoord{0, 0},
-                {{"chunk_offset", 0u}, {"entries_per_core", NUM_ENTRIES}},
-            },
-        }},
+    experimental::ProgramRunArgs::KernelRunArgs producer_params{};
+    producer_params.kernel = PRODUCER;
+    producer_params.runtime_arg_values = {{
+        experimental::ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs{
+            experimental::NodeCoord{0, 0},
+            {{"chunk_offset", 0u}, {"entries_per_core", NUM_ENTRIES}},
+        },
     }};
-    run_args.kernel_run_args.push_back({.kernel_spec_name = CONSUMER});
-    run_args.tensor_args = {{.tensor_parameter_name = IN_TENSOR, .tensor = std::cref(in_tensor)}};
+    experimental::ProgramRunArgs::KernelRunArgs consumer_params{};
+    consumer_params.kernel = CONSUMER;
+    run_args.kernel_run_args = {producer_params, consumer_params};
+    run_args.tensor_args.emplace(IN_TENSOR, experimental::TensorArgument{in_tensor});
     experimental::SetProgramRunArgs(program, run_args);
 
     detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
@@ -2458,12 +2450,12 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseTwo) {
     constexpr uint8_t  NUM_IN_THREADS = 4;
     constexpr uint8_t  NUM_OUT_THREADS = 2;
 
-    constexpr const char* DFB_SS  = "dfb_ss";   // 4Sx4S DM→Tensix
-    constexpr const char* DFB_SA  = "dfb_sa";   // 4Sx4A DM→Tensix
-    constexpr const char* DFB_T6  = "dfb_t6";   // 4Sx4S Tensix→DM
-    constexpr const char* READER  = "reader_dm";
-    constexpr const char* COMPUTE = "compute";
-    constexpr const char* WRITER  = "writer_dm";
+    const experimental::DFBSpecName DFB_SS{"dfb_ss"};   // 4Sx4S DM→Tensix
+    const experimental::DFBSpecName DFB_SA{"dfb_sa"};   // 4Sx4A DM→Tensix
+    const experimental::DFBSpecName DFB_T6{"dfb_t6"};   // 4Sx4S Tensix→DM
+    const experimental::KernelSpecName READER{"reader_dm"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
+    const experimental::KernelSpecName WRITER{"writer_dm"};
 
     const experimental::DataMovementHardwareConfig gen2_dm_hw{
         .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
@@ -2525,9 +2517,9 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseTwo) {
 
     experimental::ProgramRunArgs run_args;
     run_args.kernel_run_args = {
-        {.kernel_spec_name = READER},
-        {.kernel_spec_name = COMPUTE},
-        {.kernel_spec_name = WRITER},
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = READER},
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = WRITER},
     };
     experimental::SetProgramRunArgs(program, run_args);
 
@@ -2565,17 +2557,15 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseFour) {
     constexpr uint8_t  NUM_PRODUCERS = 4;  // DM STRIDED producers per DFB
     constexpr uint8_t  NUM_CONSUMERS = 4;  // Tensix ALL consumers per DFB
 
-    constexpr const char* DFB0    = "dfb0";
-    constexpr const char* DFB1    = "dfb1";
-    constexpr const char* DFB2    = "dfb2";
-    constexpr const char* READER  = "reader_dm";
-    constexpr const char* COMPUTE = "compute";
+    const experimental::DFBSpecName DFB0{"dfb0"};
+    const experimental::DFBSpecName DFB1{"dfb1"};
+    const experimental::DFBSpecName DFB2{"dfb2"};
+    const experimental::KernelSpecName READER{"reader_dm"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
 
     const experimental::DataMovementHardwareConfig gen2_dm_hw{
         .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
     };
-
-    auto make_dfb_spec = [&](const char* id) { return MakeBenchDfbSpec(id, ENTRY_SIZE, NUM_ENTRIES); };
 
     // Reader DM: 4 STRIDED producers on all three DFBs
     experimental::KernelSpec reader_spec{
@@ -2612,7 +2602,11 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseFour) {
     experimental::ProgramSpec spec{
         .name = "bench_worst",
         .kernels = {reader_spec, compute_spec},
-        .dataflow_buffers = {make_dfb_spec(DFB0), make_dfb_spec(DFB1), make_dfb_spec(DFB2)},
+        .dataflow_buffers = {
+            MakeBenchDfbSpec(DFB0, ENTRY_SIZE, NUM_ENTRIES),
+            MakeBenchDfbSpec(DFB1, ENTRY_SIZE, NUM_ENTRIES),
+            MakeBenchDfbSpec(DFB2, ENTRY_SIZE, NUM_ENTRIES),
+        },
         .work_units = {wu},
     };
 
@@ -2620,8 +2614,8 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseFour) {
 
     experimental::ProgramRunArgs run_args;
     run_args.kernel_run_args = {
-        {.kernel_spec_name = READER},
-        {.kernel_spec_name = COMPUTE},
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = READER},
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     experimental::SetProgramRunArgs(program, run_args);
 
@@ -2661,17 +2655,15 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseThree) {
     constexpr uint8_t  NUM_PRODUCERS = 4;  // DM STRIDED producers per DFB
     constexpr uint8_t  NUM_CONSUMERS = 4;  // Tensix STRIDED consumers per DFB
 
-    constexpr const char* DFB0    = "avg2_dfb0";
-    constexpr const char* DFB1    = "avg2_dfb1";
-    constexpr const char* DFB2    = "avg2_dfb2";
-    constexpr const char* READER  = "reader_dm";
-    constexpr const char* COMPUTE = "compute";
+    const experimental::DFBSpecName DFB0{"avg2_dfb0"};
+    const experimental::DFBSpecName DFB1{"avg2_dfb1"};
+    const experimental::DFBSpecName DFB2{"avg2_dfb2"};
+    const experimental::KernelSpecName READER{"reader_dm"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
 
     const experimental::DataMovementHardwareConfig gen2_dm_hw{
         .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
     };
-
-    auto make_dfb_spec = [&](const char* id) { return MakeBenchDfbSpec(id, ENTRY_SIZE, NUM_ENTRIES); };
 
     // Reader DM: 4 STRIDED producers on all three DFBs.
     // Reuses dfb_bench_worst_reader_dm.cpp: same kernel structure, per_txn=2.
@@ -2710,7 +2702,11 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseThree) {
     experimental::ProgramSpec spec{
         .name = "bench_avg2",
         .kernels = {reader_spec, compute_spec},
-        .dataflow_buffers = {make_dfb_spec(DFB0), make_dfb_spec(DFB1), make_dfb_spec(DFB2)},
+        .dataflow_buffers = {
+            MakeBenchDfbSpec(DFB0, ENTRY_SIZE, NUM_ENTRIES),
+            MakeBenchDfbSpec(DFB1, ENTRY_SIZE, NUM_ENTRIES),
+            MakeBenchDfbSpec(DFB2, ENTRY_SIZE, NUM_ENTRIES),
+        },
         .work_units = {wu},
     };
 
@@ -2718,8 +2714,8 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseThree) {
 
     experimental::ProgramRunArgs run_args;
     run_args.kernel_run_args = {
-        {.kernel_spec_name = READER},
-        {.kernel_spec_name = COMPUTE},
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = READER},
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     experimental::SetProgramRunArgs(program, run_args);
 
@@ -2762,16 +2758,12 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseFive) {
     constexpr uint32_t ENTRY_SIZE  = 1024;
     constexpr uint32_t NUM_ENTRIES = 16;
 
-    auto dfb_id = [](char group, int i) -> std::string {
-        return std::string("dfb_") + group + std::to_string(i);
+    auto dfb_id = [](char group, int i) -> experimental::DFBSpecName {
+        return experimental::DFBSpecName{std::string("dfb_") + group + std::to_string(i)};
     };
 
     const experimental::DataMovementHardwareConfig gen2_dm_hw{
         .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
-    };
-
-    auto make_dfb_spec = [&](const std::string& id) {
-        return MakeBenchDfbSpec(id, ENTRY_SIZE, NUM_ENTRIES);
     };
 
     // Each reader: single DM, 1Sx4A, needs per_txn=8 reads (not 2 like WC1).
@@ -2805,7 +2797,7 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseFive) {
     std::vector<experimental::KernelSpec> kernels;
     for (char g : {'a', 'b', 'c', 'd'}) {
         kernels.push_back({
-            .unique_id = std::string("reader_") + g,
+            .unique_id = experimental::KernelSpecName{std::string("reader_") + g},
             .source = READER_SRC,
             .num_threads = 1,
             .dfb_bindings = make_reader_bindings(g),
@@ -2813,7 +2805,7 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseFive) {
         });
     }
     kernels.push_back({
-        .unique_id = "compute_all",
+        .unique_id = experimental::KernelSpecName{"compute_all"},
         .source = COMPUTE_SRC,
         .num_threads = 4,
         .dfb_bindings = compute_bindings,
@@ -2824,12 +2816,17 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseFive) {
     std::vector<experimental::DataflowBufferSpec> dfb_specs;
     for (char g : {'a', 'b', 'c', 'd'}) {
         for (int i = 0; i < 3; i++) {
-            dfb_specs.push_back(make_dfb_spec(dfb_id(g, i)));
+            dfb_specs.push_back(MakeBenchDfbSpec(dfb_id(g, i), ENTRY_SIZE, NUM_ENTRIES));
         }
     }
 
-    std::vector<std::string> all_kernel_ids = {
-        "reader_a", "reader_b", "reader_c", "reader_d", "compute_all"};
+    std::vector<experimental::KernelSpecName> all_kernel_ids = {
+        experimental::KernelSpecName{"reader_a"},
+        experimental::KernelSpecName{"reader_b"},
+        experimental::KernelSpecName{"reader_c"},
+        experimental::KernelSpecName{"reader_d"},
+        experimental::KernelSpecName{"compute_all"},
+    };
 
     experimental::WorkUnitSpec wu{
         .name = "bench_worst2_wu",
@@ -2848,7 +2845,7 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseFive) {
 
     experimental::ProgramRunArgs run_args;
     for (const auto& kid : all_kernel_ids) {
-        run_args.kernel_run_args.push_back({.kernel_spec_name = kid});
+        run_args.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{.kernel = kid});
     }
     experimental::SetProgramRunArgs(program, run_args);
 

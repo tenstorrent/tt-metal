@@ -243,7 +243,7 @@ TEST_F(MeshDeviceFixture, DMTensixTest1xDFB1Sx1SConfig) {
     validate_dfb_tile_counters(program, logical_core, config, expectation);
 }
 
-// Host-only: validates Quasar L1 packing (64B header + dfb_byte_offset[] + blobs + layouts).
+// Host-only: validates Quasar L1 packing (96B header + per-hart blobs + producer-ready region).
 TEST_F(MeshDeviceFixture, DfbSerializeGlobalHeader1Sx1S) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
@@ -264,56 +264,60 @@ TEST_F(MeshDeviceFixture, DfbSerializeGlobalHeader1Sx1S) {
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
     program.impl().finalize_dataflow_buffer_configs();
-    // serialize_dfb_config_for_core looks up per-core group config via core_lookup_, filled on allocate.
     program.impl().allocate_dataflow_buffers(this->devices_.at(0)->get_devices()[0]);
 
     const auto& dfbs = program.impl().dataflow_buffers_on_core(logical_core);
     ASSERT_EQ(dfbs.size(), 1u);
 
-    std::vector<uint8_t> buf(4096, 0);
+    std::vector<uint8_t> buf(8192, 0);
     const size_t nbytes = experimental::dfb::detail::serialize_dfb_config_for_core(logical_core, dfbs, buf);
     ASSERT_GT(nbytes, 0u);
 
     const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(buf.data());
     EXPECT_EQ(ghdr->num_dfbs, 1u);
-    EXPECT_EQ(sizeof(dfb_global_header_t), 64u);
-    const uint32_t prefix_size = dfb_config_prefix_size(ghdr->num_dfbs);
-    EXPECT_EQ(prefix_size, 92u);
-    EXPECT_EQ(ghdr->dm1_remapper_blob_offset, prefix_size);
-    EXPECT_GE(ghdr->dm0_isr_blob_offset, ghdr->dm1_remapper_blob_offset);
-    EXPECT_GE(ghdr->per_dfb_layout_offset, ghdr->dm0_isr_blob_offset);
+    EXPECT_EQ(sizeof(dfb_global_header_t), 96u);  // new 96B header
+    EXPECT_EQ(dfb_config_header_size(), 96u);
 
-    EXPECT_EQ(ghdr->dm0_isr_blob_offset, prefix_size + sizeof(dfb_dm1_remapper_entry_header_t));
-    EXPECT_EQ(
-        ghdr->per_dfb_layout_offset,
-        ghdr->dm0_isr_blob_offset +
-            experimental::dfb::detail::dm0_isr_blob_region_size(dfbs));
-    EXPECT_EQ(ghdr->dm0_isr_ready, 0u);
+    // Header is at offset 0; DM1 blob starts immediately after.
+    EXPECT_EQ(ghdr->dm1_remapper_blob_offset, dfb_config_header_size());
+    EXPECT_GE(ghdr->dm0_isr_blob_offset, ghdr->dm1_remapper_blob_offset);
+    // No implicit sync → has_dm0_isr=0, dm0_isr_blob_region_size=0.
     EXPECT_EQ(experimental::dfb::detail::dm0_isr_blob_region_size(dfbs), 0u);
-    EXPECT_EQ(ghdr->dm0_isr_blob_offset, ghdr->per_dfb_layout_offset);
+    EXPECT_EQ(ghdr->has_dm0_isr, 0u);
+    EXPECT_EQ(ghdr->dm0_isr_ready, 0u);
     EXPECT_EQ(sizeof(dfb_dm0_isr_txn_threshold_t), 2u);
 
-    const uint16_t* offset_table =
-        reinterpret_cast<const uint16_t*>(buf.data() + dfb_byte_offset_table_byte_offset());
-    EXPECT_EQ(offset_table[0], ghdr->per_dfb_layout_offset);
+    // hart_blob_offset[] must be set for the two participating harts (0=producer, 4=consumer).
+    EXPECT_GT(ghdr->hart_blob_offset[0], 0u);
+    EXPECT_GT(ghdr->hart_blob_offset[4], 0u);
+    // Non-participating harts must also have a valid (minimal) blob offset.
+    for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; ++h) {
+        EXPECT_GT(ghdr->hart_blob_offset[h], 0u) << "hart " << static_cast<int>(h);
+    }
 
-    const uint16_t* per_risc_offset_table = reinterpret_cast<const uint16_t*>(
-        buf.data() + dfb_per_risc_byte_offset_table_byte_offset(ghdr->num_dfbs));
-    EXPECT_EQ(
-        per_risc_offset_table[dfb_per_risc_byte_offset_table_index(0, 0)],
-        static_cast<uint16_t>(ghdr->per_dfb_layout_offset + sizeof(dfb_initializer_t)));
-    EXPECT_EQ(
-        per_risc_offset_table[dfb_per_risc_byte_offset_table_index(0, 4)],
-        static_cast<uint16_t>(ghdr->per_dfb_layout_offset + sizeof(dfb_initializer_t) + sizeof(dfb_initializer_per_risc_t)));
-    experimental::dfb::detail::verify_dfb_per_risc_byte_offsets(buf, dfbs);
+    // producer_ready_region: exactly 1 byte (1 producer).
+    EXPECT_GT(ghdr->producer_ready_region_off, 0u);
+    EXPECT_LT(static_cast<size_t>(ghdr->producer_ready_region_off), nbytes);
+    EXPECT_EQ(buf[ghdr->producer_ready_region_off], 0u);  // zeroed by host
 
-    const uint32_t payload_size =
-        static_cast<uint32_t>(offset_table[0]) + dfbs[0]->serialized_size();
-    EXPECT_EQ(nbytes, experimental::dfb::detail::compute_dfb_config_serialized_size(dfbs));
-    EXPECT_GE(nbytes, payload_size);
-
+    // DFB 0 init entry for hart 0 (producer): participation_mask bit set, one init entry.
     EXPECT_EQ(ghdr->participation_mask[0], 1u);
+    const auto* entry0 = reinterpret_cast<const dfb_hart_init_entry_t*>(
+        buf.data() + ghdr->hart_blob_offset[0]);
+    EXPECT_EQ(entry0->logical_dfb_id, 0u);
+    EXPECT_NE(entry0->flags & DFB_HART_FLAG_IS_PRODUCER, 0);
+    EXPECT_EQ(entry0->entry_size, 1024u);
+    EXPECT_EQ(entry0->producer_ready_off, 0u);  // first producer
+
+    // DFB 0 init entry for hart 4 (consumer): no IS_PRODUCER flag.
     EXPECT_EQ(ghdr->participation_mask[4], 1u);
+    const auto* entry4 = reinterpret_cast<const dfb_hart_init_entry_t*>(
+        buf.data() + ghdr->hart_blob_offset[4]);
+    EXPECT_EQ(entry4->logical_dfb_id, 0u);
+    EXPECT_EQ(entry4->flags & DFB_HART_FLAG_IS_PRODUCER, 0);
+    EXPECT_EQ(entry4->producer_ready_off, 0xFFu);  // consumer
+
+    // participation_mask drives device init entry count; non-participating harts are zero.
     for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; ++h) {
         if (h != 0 && h != 4) {
             EXPECT_EQ(ghdr->participation_mask[h], 0u) << "hart " << static_cast<int>(h);
@@ -321,6 +325,9 @@ TEST_F(MeshDeviceFixture, DfbSerializeGlobalHeader1Sx1S) {
     }
 
     experimental::dfb::detail::verify_dfb_global_header_participation(*ghdr, dfbs);
+    experimental::dfb::detail::verify_dfb_hart_blobs(
+        std::span<const uint8_t>(buf.data(), nbytes), dfbs);
+    EXPECT_EQ(nbytes, experimental::dfb::detail::compute_dfb_config_serialized_size(dfbs));
 }
 
 TEST_F(MeshDeviceFixture, DfbSerializeTxnCentricImplicitSync1Sx1S) {
@@ -355,7 +362,9 @@ TEST_F(MeshDeviceFixture, DfbSerializeTxnCentricImplicitSync1Sx1S) {
     const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(buf.data());
     const uint32_t dm0_region = experimental::dfb::detail::dm0_isr_blob_region_size(dfbs);
     ASSERT_GT(dm0_region, 0u);
-    EXPECT_EQ(ghdr->per_dfb_layout_offset, ghdr->dm0_isr_blob_offset + dm0_region);
+    EXPECT_EQ(ghdr->has_dm0_isr, 1u);
+    // producer_ready_region_off is after per-hart blobs, which are after the DM0 blob.
+    EXPECT_GT(ghdr->producer_ready_region_off, ghdr->dm0_isr_blob_offset + dm0_region);
 
     const auto* dm0_core_hdr = reinterpret_cast<const dfb_dm0_isr_blob_core_header_t*>(
         buf.data() + ghdr->dm0_isr_blob_offset);
@@ -373,7 +382,9 @@ TEST_F(MeshDeviceFixture, DfbSerializeTxnCentricImplicitSync1Sx1S) {
     const uint32_t txn_hw_off = ghdr->dm0_isr_blob_offset + sizeof(dfb_dm0_isr_blob_core_header_t);
     const uint32_t txn_hw_bytes = dm0_isr_txn_hw_pool_byte_size(expected_prod_mask, expected_cons_mask);
     const uint32_t desc_pool_bytes = dm0_isr_txn_desc_pool_byte_size(expected_prod_mask, expected_cons_mask);
-    EXPECT_EQ(txn_hw_off + txn_hw_bytes + desc_pool_bytes, ghdr->per_dfb_layout_offset);
+    // DM0 blob ends before hart blobs; verify txn pool + desc pool fits inside the DM0 blob region.
+    EXPECT_EQ(txn_hw_off + txn_hw_bytes + desc_pool_bytes,
+              ghdr->dm0_isr_blob_offset + dm0_region);
 
     const auto* txn_threshold_table =
         reinterpret_cast<const dfb_dm0_isr_txn_threshold_t*>(buf.data() + txn_hw_off);

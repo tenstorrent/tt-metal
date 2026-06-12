@@ -107,10 +107,13 @@ struct DataflowBufferImpl {
     }
 
     uint32_t total_size() const { return config.entry_size * config.num_entries; }
-    uint32_t serialized_size() const;                  // shared per-DFB layout (dfb_initializer_t + per_risc entries)
-    uint32_t dm1_remapper_blob_serialized_size() const; // DM1 blob only: entry header + remapper slots
-    std::vector<uint8_t> serialize_for_core(const CoreCoord& core) const;                       // shared layout only
-    std::vector<uint8_t> serialize_dm1_remapper_blob_for_core(const CoreCoord& core) const;     // DM1 remapper blob only
+    uint32_t dm1_remapper_blob_serialized_size() const;  // DM1 blob: entry header + remapper slots
+    std::vector<uint8_t> serialize_for_core(const CoreCoord& core) const;  // WH/BH only (4-word CB format)
+    std::vector<uint8_t> serialize_dm1_remapper_blob_for_core(const CoreCoord& core) const;
+
+    // Returns per-core DFBRiscConfig with base_addr/limit resolved for core's alloc_addr.
+    // Used by serialize_dfb_config_for_core to build per-hart init blobs.
+    std::vector<DFBRiscConfig> compute_per_core_risc_configs(const CoreCoord& core) const;
 
     // Returns the L1 data-buffer base address, which is identical for every core in the
     // DFB's core range (guaranteed by finalize_dataflow_buffer_configs).
@@ -128,7 +131,8 @@ void populate_dfb_global_header_participation(
 void verify_dfb_global_header_participation(
     const dfb_global_header_t& ghdr, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
 
-void verify_dfb_per_risc_byte_offsets(
+// Verifies that each hart's blob in the serialized config is internally consistent.
+void verify_dfb_hart_blobs(
     std::span<const uint8_t> config_bytes, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
 
 // Packed Quasar config size for [prefix | DM1 blobs | DM0 blobs | layouts], including L1 transfer padding.

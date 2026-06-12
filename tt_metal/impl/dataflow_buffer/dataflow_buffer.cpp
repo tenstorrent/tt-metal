@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstring>
 #include <limits>
+#include <string>
 #include <string_view>
 
 #include "impl/context/metal_context.hpp"
@@ -178,20 +179,50 @@ uint32_t dm0_isr_blob_region_size(const std::vector<std::shared_ptr<DataflowBuff
     return static_cast<uint32_t>(sizeof(dfb_dm0_isr_blob_core_header_t)) + txn_hw_bytes + pool_bytes;
 }
 
+// Returns the serialized byte size of one hart's init+wait blob.
+// Accounts for per-entry variable TC arrays, fixed-size wait entries, and 4B end-padding.
+static uint32_t hart_blob_byte_size(
+    uint8_t hartid, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core) {
+    uint32_t sz = 0u;
+    uint8_t n = 0;
+    for (const auto& dfb : dfbs_on_core) {
+        if (!(dfb->risc_mask & (1u << hartid))) { continue; }
+        n++;
+        // Find num_tcs for this hart in this DFB (use first group; all groups share same hw_risc_configs shape).
+        uint8_t num_tcs = 1;
+        for (const auto& rc : dfb->groups[0].hw_risc_configs) {
+            if (rc.risc_id == hartid) { num_tcs = rc.config.num_tcs_to_rr; break; }
+        }
+        sz += dfb_hart_init_entry_byte_size(num_tcs);
+        sz += static_cast<uint32_t>(sizeof(dfb_hart_wait_entry_t));
+    }
+    if (n == 0) {
+        sz = 4u;  // minimal {0,0,0,0} blob for non-participating hart
+    }
+    return (sz + 3u) & ~3u;  // 4B-aligned
+}
+
 uint32_t compute_dfb_config_serialized_size(
     const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core) {
-    if (dfbs_on_core.empty()) {
-        return 0;
-    }
+    if (dfbs_on_core.empty()) { return 0; }
     const auto& hal = MetalContext::instance().hal();
     TT_FATAL(hal.has_tile_counter_registers(), "compute_dfb_config_serialized_size requires Quasar");
 
-    uint32_t payload_bytes = dfb_config_prefix_size(static_cast<uint8_t>(dfbs_on_core.size()));
+    uint32_t payload = dfb_config_header_size();
     for (const auto& dfb : dfbs_on_core) {
-        payload_bytes += dfb->serialized_size() + dfb->dm1_remapper_blob_serialized_size();
+        payload += dfb->dm1_remapper_blob_serialized_size();
     }
-    payload_bytes += dm0_isr_blob_region_size(dfbs_on_core);
-    return align_dfb_config_transfer_size(payload_bytes);
+    payload += dm0_isr_blob_region_size(dfbs_on_core);
+    for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; h++) {
+        payload += hart_blob_byte_size(h, dfbs_on_core);
+    }
+    // producer_ready region: one byte per (DFB, producer hart)
+    for (const auto& dfb : dfbs_on_core) {
+        for (const auto& rc : dfb->groups[0].hw_risc_configs) {
+            if (rc.is_producer) { payload++; }
+        }
+    }
+    return align_dfb_config_transfer_size(payload);
 }
 
 void populate_dfb_global_header_participation(
@@ -222,57 +253,60 @@ void populate_dfb_global_header_participation(
         id_mask);
 }
 
-uint8_t dfb_risc_index_for_hart(uint16_t risc_mask, uint8_t hartid) {
-    const uint16_t prefix_mask = (hartid >= 16) ? 0u : static_cast<uint16_t>((1u << hartid) - 1u);
-    return static_cast<uint8_t>(__builtin_popcount(risc_mask & prefix_mask));
-}
-
-void verify_dfb_per_risc_byte_offsets(
+void verify_dfb_hart_blobs(
     std::span<const uint8_t> config_bytes, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core) {
-    TT_FATAL(config_bytes.size() >= sizeof(dfb_global_header_t), "DFB config too small for per_risc offset verify");
+    (void)dfbs_on_core;
+    TT_FATAL(config_bytes.size() >= sizeof(dfb_global_header_t), "DFB config too small for hart blob verify");
     const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(config_bytes.data());
-    const uint16_t* dfb_byte_offset_table =
-        reinterpret_cast<const uint16_t*>(config_bytes.data() + dfb_byte_offset_table_byte_offset());
-    const uint16_t* per_risc_byte_offset_table = reinterpret_cast<const uint16_t*>(
-        config_bytes.data() + dfb_per_risc_byte_offset_table_byte_offset(ghdr->num_dfbs));
 
-    for (const auto& dfb : dfbs_on_core) {
-        const uint32_t layout_off = dfb_byte_offset_table[dfb->id];
-        const uint16_t risc_mask = dfb->risc_mask;
-        for (uint8_t hartid = 0; hartid < ::dfb::NUM_PARTICIPATING_HARTIDS; ++hartid) {
-            const uint32_t table_idx = dfb_per_risc_byte_offset_table_index(dfb->id, hartid);
-            const uint16_t stored = per_risc_byte_offset_table[table_idx];
-            if ((risc_mask & (1u << hartid)) == 0) {
-                TT_FATAL(
-                    stored == 0,
-                    "DFB {} per_risc_byte_offset[{}][{}] expected 0, got {}",
-                    dfb->id,
-                    dfb->id,
-                    hartid,
-                    stored);
-                continue;
-            }
-            const uint8_t risc_index = dfb_risc_index_for_hart(risc_mask, hartid);
-            const uint32_t expected = layout_off + sizeof(dfb_initializer_t) +
-                                      static_cast<uint32_t>(risc_index) * sizeof(dfb_initializer_per_risc_t);
+    for (uint8_t hartid = 0; hartid < ::dfb::NUM_PARTICIPATING_HARTIDS; ++hartid) {
+        const uint32_t blob_off = ghdr->hart_blob_offset[hartid];
+        const uint8_t num_entries = dfb_hart_participation_count(ghdr->participation_mask[hartid]);
+        TT_FATAL(
+            blob_off <= config_bytes.size(),
+            "hart_blob_offset[{}]={} out of range (config size {})",
+            hartid, blob_off, config_bytes.size());
+
+        if (num_entries == 0) {
             TT_FATAL(
-                stored == expected,
-                "DFB {} per_risc_byte_offset[{}][{}] expected {} (risc_index {}), got {}",
-                dfb->id,
-                dfb->id,
-                hartid,
-                expected,
-                risc_index,
-                stored);
-            TT_FATAL(
-                stored + sizeof(dfb_initializer_per_risc_t) <= config_bytes.size(),
-                "DFB {} per_risc_byte_offset[{}][{}]={} overflows config size {}",
-                dfb->id,
-                dfb->id,
-                hartid,
-                stored,
-                config_bytes.size());
+                blob_off + 4u <= config_bytes.size(),
+                "hart {} minimal blob overflows config",
+                hartid);
+            continue;
         }
+
+        TT_FATAL(
+            blob_off % 4u == 0u,
+            "hart {} blob offset {} is not 4B-aligned",
+            hartid,
+            blob_off);
+
+        const uint8_t* blob = config_bytes.data() + blob_off;
+
+        // Walk init entries and verify they are self-consistent with DFB data.
+        uint32_t cursor = 0u;
+        for (uint8_t e = 0; e < num_entries; e++) {
+            TT_FATAL(
+                blob_off + cursor + sizeof(dfb_hart_init_entry_t) <= config_bytes.size(),
+                "hart {} init entry {} header overflows config", hartid, e);
+            const auto* entry = reinterpret_cast<const dfb_hart_init_entry_t*>(blob + cursor);
+            const uint32_t entry_sz = dfb_hart_init_entry_byte_size(entry->num_tcs);
+            TT_FATAL(
+                blob_off + cursor + entry_sz <= config_bytes.size(),
+                "hart {} init entry {} (num_tcs={}) TC arrays overflow config", hartid, e, entry->num_tcs);
+            TT_FATAL(
+                entry->logical_dfb_id < ghdr->num_dfbs,
+                "hart {} init entry {} logical_dfb_id={} >= num_dfbs={}",
+                hartid, e, entry->logical_dfb_id, ghdr->num_dfbs);
+            TT_FATAL(
+                (ghdr->participation_mask[hartid] & (1u << entry->logical_dfb_id)) != 0,
+                "hart {} init entry {} logical_dfb_id={} not in participation_mask=0x{:x}",
+                hartid, e, entry->logical_dfb_id, ghdr->participation_mask[hartid]);
+            cursor += entry_sz;
+        }
+        TT_FATAL(
+            blob_off + cursor + num_entries * sizeof(dfb_hart_wait_entry_t) <= config_bytes.size(),
+            "hart {} wait entries overflow config", hartid);
     }
 }
 
@@ -306,207 +340,277 @@ size_t serialize_dfb_config_for_core(
     const CoreCoord& core,
     const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core,
     std::span<uint8_t> out) {
-    if (dfbs_on_core.empty()) {
-        return 0;
-    }
-
+    if (dfbs_on_core.empty()) { return 0; }
     const auto& hal = MetalContext::instance().hal();
     TT_FATAL(hal.has_tile_counter_registers(), "serialize_dfb_config_for_core requires Quasar");
 
-    uint32_t total_dm1_blob_size = 0;
+    // ---------------------------------------------------------------------------
+    // 1. Collect per-core risc configs for every DFB (base/limit resolved per core).
+    //    Also assign producer_ready_off: one byte per (DFB, producer hart) in order.
+    // ---------------------------------------------------------------------------
+    // per_core_configs[dfb_idx] = per-risc configs with base_addr/limit resolved.
+    std::vector<std::vector<DFBRiscConfig>> per_core_configs;
+    per_core_configs.reserve(dfbs_on_core.size());
     for (const auto& dfb : dfbs_on_core) {
-        total_dm1_blob_size += dfb->dm1_remapper_blob_serialized_size();
+        per_core_configs.push_back(dfb->compute_per_core_risc_configs(core));
     }
-    const uint32_t total_dm0_isr_blob_size = dm0_isr_blob_region_size(dfbs_on_core);
 
+    // producer_ready_off[dfb_idx][hart] = byte index in producer_ready region.
+    std::vector<std::array<uint8_t, ::dfb::NUM_PARTICIPATING_HARTIDS>> producer_ready_off(dfbs_on_core.size());
+    for (auto& arr : producer_ready_off) { arr.fill(0xFFu); }
+    uint8_t next_ready_off = 0;
+    for (size_t di = 0; di < dfbs_on_core.size(); di++) {
+        const auto& dfb = dfbs_on_core[di];
+        for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; h++) {
+            if (!(dfb->risc_mask & (1u << h))) continue;
+            const auto& rcs = per_core_configs[di];
+            for (const auto& rc : rcs) {
+                if (rc.risc_id == h && rc.is_producer) {
+                    producer_ready_off[di][h] = next_ready_off++;
+                    break;
+                }
+            }
+        }
+    }
+    const uint32_t total_ready_bytes = next_ready_off;
+
+    // ---------------------------------------------------------------------------
+    // 2. Build the header (all offsets computed after blob sizes are known).
+    // ---------------------------------------------------------------------------
     dfb_global_header_t ghdr = {};
     populate_dfb_global_header_participation(ghdr, dfbs_on_core);
     verify_dfb_global_header_participation(ghdr, dfbs_on_core);
 
-    const uint32_t prefix_size = dfb_config_prefix_size(ghdr.num_dfbs);
-    ghdr.dm1_remapper_blob_offset = prefix_size;
-    ghdr.dm0_isr_blob_offset = ghdr.dm1_remapper_blob_offset + total_dm1_blob_size;
-    ghdr.per_dfb_layout_offset = ghdr.dm0_isr_blob_offset + total_dm0_isr_blob_size;
+    // has_dm0_isr: any DFB with implicit-sync txns?
+    ghdr.has_dm0_isr = (dm0_isr_blob_region_size(dfbs_on_core) > 0) ? 1u : 0u;
+    ghdr.dm0_isr_ready = 0;
 
-    uint32_t offset = 0;
-    TT_FATAL(out.size() >= prefix_size, "DFB config buffer too small for prefix (need {}, have {})", prefix_size, out.size());
-    std::memcpy(out.data() + offset, &ghdr, sizeof(ghdr));
-    offset += sizeof(ghdr);
-    std::memset(out.data() + offset, 0, ghdr.num_dfbs * sizeof(uint16_t));
-    offset += ghdr.num_dfbs * sizeof(uint16_t);
-    if (offset < prefix_size) {
-        std::memset(out.data() + offset, 0, prefix_size - offset);
-        offset = prefix_size;
+    const uint32_t header_size = dfb_config_header_size();  // 96B
+    uint32_t total_dm1_blob_size = 0;
+    for (const auto& dfb : dfbs_on_core) { total_dm1_blob_size += dfb->dm1_remapper_blob_serialized_size(); }
+    const uint32_t total_dm0_isr_blob_size = dm0_isr_blob_region_size(dfbs_on_core);
+
+    ghdr.dm1_remapper_blob_offset = header_size;
+    ghdr.dm0_isr_blob_offset      = ghdr.dm1_remapper_blob_offset + total_dm1_blob_size;
+    const uint32_t hart_blobs_base = ghdr.dm0_isr_blob_offset + total_dm0_isr_blob_size;
+
+    // Pre-compute per-hart blob sizes to fill hart_blob_offset[].
+    std::array<uint32_t, ::dfb::NUM_PARTICIPATING_HARTIDS> hart_blob_sizes{};
+    uint32_t running = hart_blobs_base;
+    for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; h++) {
+        uint32_t sz = hart_blob_byte_size(h, dfbs_on_core);
+        ghdr.hart_blob_offset[h] = static_cast<uint16_t>(running);
+        hart_blob_sizes[h] = sz;
+        running += sz;
     }
+    ghdr.producer_ready_region_off = running;
 
-    uint16_t* dfb_byte_offset_table = reinterpret_cast<uint16_t*>(out.data() + dfb_byte_offset_table_byte_offset());
-    uint16_t* per_risc_byte_offset_table = reinterpret_cast<uint16_t*>(
-        out.data() + dfb_per_risc_byte_offset_table_byte_offset(ghdr.num_dfbs));
+    // ---------------------------------------------------------------------------
+    // 3. Emit header.
+    // ---------------------------------------------------------------------------
+    uint32_t offset = 0;
+    TT_FATAL(out.size() >= header_size, "DFB config buffer too small for header");
+    std::memcpy(out.data(), &ghdr, sizeof(ghdr));
+    offset = header_size;
 
+    // ---------------------------------------------------------------------------
+    // 4. Emit DM1 remapper blobs (unchanged).
+    // ---------------------------------------------------------------------------
     for (const auto& dfb : dfbs_on_core) {
         auto blob = dfb->serialize_dm1_remapper_blob_for_core(core);
-        TT_FATAL(offset + blob.size() <= out.size(), "DFB config buffer overflow (DM1 blob)");
+        TT_FATAL(offset + blob.size() <= out.size(), "DFB config overflow (DM1 blob)");
         std::memcpy(out.data() + offset, blob.data(), blob.size());
-        offset += blob.size();
+        offset += static_cast<uint32_t>(blob.size());
     }
+
+    // ---------------------------------------------------------------------------
+    // 5. Emit DM0 ISR blob (unchanged).
+    // ---------------------------------------------------------------------------
     if (total_dm0_isr_blob_size > 0) {
         const auto [producer_mask, consumer_mask] = compute_dm0_isr_blob_core_masks(dfbs_on_core);
         dfb_dm0_isr_blob_core_header_t core_hdr = {
             .producer_txn_id_mask = producer_mask,
             .consumer_txn_id_mask = consumer_mask,
         };
-        TT_FATAL(
-            offset + sizeof(core_hdr) <= out.size(), "DFB config buffer overflow (DM0 ISR core header)");
+        TT_FATAL(offset + sizeof(core_hdr) <= out.size(), "DFB config overflow (DM0 ISR core hdr)");
         std::memcpy(out.data() + offset, &core_hdr, sizeof(core_hdr));
         offset += sizeof(core_hdr);
 
         auto txn_hw_pool = serialize_dm0_isr_txn_hw_pool_for_core(dfbs_on_core, producer_mask, consumer_mask);
-        TT_FATAL(offset + txn_hw_pool.size() <= out.size(), "DFB config buffer overflow (DM0 ISR txn hw pool)");
         if (!txn_hw_pool.empty()) {
+            TT_FATAL(offset + txn_hw_pool.size() <= out.size(), "DFB config overflow (DM0 txn hw pool)");
             std::memcpy(out.data() + offset, txn_hw_pool.data(), txn_hw_pool.size());
-            offset += txn_hw_pool.size();
+            offset += static_cast<uint32_t>(txn_hw_pool.size());
         }
 
         auto desc_pool = serialize_dm0_isr_txn_desc_pool_for_core(core, dfbs_on_core, producer_mask, consumer_mask);
-        TT_FATAL(offset + desc_pool.size() <= out.size(), "DFB config buffer overflow (DM0 ISR txn desc pool)");
         if (!desc_pool.empty()) {
+            TT_FATAL(offset + desc_pool.size() <= out.size(), "DFB config overflow (DM0 txn desc pool)");
             std::memcpy(out.data() + offset, desc_pool.data(), desc_pool.size());
-            offset += desc_pool.size();
+            offset += static_cast<uint32_t>(desc_pool.size());
         }
     }
-
     TT_FATAL(
-        offset == ghdr.per_dfb_layout_offset,
-        "DFB layout offset mismatch before per-DFB serialize (offset {} vs per_dfb_layout_offset {})",
-        offset,
-        ghdr.per_dfb_layout_offset);
+        offset == hart_blobs_base,
+        "DFB config: offset {} != hart_blobs_base {} after DM0/DM1 blobs", offset, hart_blobs_base);
 
-    for (const auto& dfb : dfbs_on_core) {
+    // ---------------------------------------------------------------------------
+    // 6. Emit per-hart sequential init+wait blobs.
+    //    Layout of each blob:
+    //      [dfb_hart_init_entry_t × num_entries] (variable, 4B-aligned each)
+    //      [dfb_hart_wait_entry_t × num_entries] (8B each)
+    //      (4B-padded end)
+    //    num_entries = popcount(participation_mask[h]); not stored in the blob.
+    // ---------------------------------------------------------------------------
+    for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; h++) {
+        const uint32_t blob_start = offset;
         TT_FATAL(
-            offset <= std::numeric_limits<uint16_t>::max(),
-            "DFB {} layout offset {} exceeds uint16_t range",
-            dfb->id,
-            offset);
-        const uint32_t layout_off = offset;
-        dfb_byte_offset_table[dfb->id] = static_cast<uint16_t>(layout_off);
-        const uint16_t risc_mask = dfb->risc_mask;
-        for (uint8_t hartid = 0; hartid < ::dfb::NUM_PARTICIPATING_HARTIDS; ++hartid) {
-            const uint32_t table_idx = dfb_per_risc_byte_offset_table_index(dfb->id, hartid);
-            if ((risc_mask & (1u << hartid)) == 0) {
-                per_risc_byte_offset_table[table_idx] = 0;
-                continue;
-            }
-            const uint8_t risc_index = dfb_risc_index_for_hart(risc_mask, hartid);
-            const uint32_t per_risc_off = layout_off + sizeof(dfb_initializer_t) +
-                                          static_cast<uint32_t>(risc_index) * sizeof(dfb_initializer_per_risc_t);
-            TT_FATAL(
-                per_risc_off <= std::numeric_limits<uint16_t>::max(),
-                "DFB {} per_risc offset {} for hart {} exceeds uint16_t range",
-                dfb->id,
-                per_risc_off,
-                hartid);
-            per_risc_byte_offset_table[table_idx] = static_cast<uint16_t>(per_risc_off);
+            static_cast<uint16_t>(blob_start) == ghdr.hart_blob_offset[h],
+            "hart {} blob offset mismatch: offset {} vs header {}", h, blob_start, ghdr.hart_blob_offset[h]);
+
+        // Count participating DFBs for this hart.
+        uint8_t num_entries = 0;
+        for (const auto& dfb : dfbs_on_core) {
+            if (dfb->risc_mask & (1u << h)) num_entries++;
         }
-        auto serialized = dfb->serialize_for_core(core);
-        TT_FATAL(offset + serialized.size() <= out.size(), "DFB config buffer overflow (layout)");
-        std::memcpy(out.data() + offset, serialized.data(), serialized.size());
-        offset += serialized.size();
-    }
 
-    verify_dfb_per_risc_byte_offsets(std::span<const uint8_t>(out.data(), offset), dfbs_on_core);
+        if (num_entries == 0) {
+            // Minimal 4-byte blob: {0, 0, 0, 0}
+            TT_FATAL(offset + 4u <= out.size(), "DFB config overflow (minimal hart blob h={})", h);
+            std::memset(out.data() + offset, 0, 4u);
+            offset += 4u;
+            continue;
+        }
 
-    if (ghdr.num_dfbs > 0) {
         TT_FATAL(
-            dfb_byte_offset_table[0] == static_cast<uint16_t>(ghdr.per_dfb_layout_offset),
-            "DFB 0 byte offset {} != per_dfb_layout_offset {}",
-            dfb_byte_offset_table[0],
-            ghdr.per_dfb_layout_offset);
+            blob_start % 4u == 0u,
+            "hart {} blob offset {} is not 4B-aligned",
+            h,
+            blob_start);
+
+        // Init entries: one per participating DFB, variable size.
+        for (size_t di = 0; di < dfbs_on_core.size(); di++) {
+            const auto& dfb = dfbs_on_core[di];
+            if (!(dfb->risc_mask & (1u << h))) continue;
+
+            const auto& rcs = per_core_configs[di];
+            const DFBRiscConfig* rc_ptr = nullptr;
+            for (const auto& rc : rcs) {
+                if (rc.risc_id == h) { rc_ptr = &rc; break; }
+            }
+            TT_FATAL(rc_ptr != nullptr,
+                "DFB {}: no risc_config for hart {} on core ({},{})", dfb->id, h, core.x, core.y);
+            const DFBRiscConfig& rc = *rc_ptr;
+            const uint8_t num_tcs = rc.config.num_tcs_to_rr;
+            const uint32_t entry_sz = dfb_hart_init_entry_byte_size(num_tcs);
+            TT_FATAL(offset + entry_sz <= out.size(),
+                "DFB config overflow (init entry dfb={} hart={})", dfb->id, h);
+
+            // Header (24B fixed).
+            dfb_hart_init_entry_t entry = {};
+            entry.logical_dfb_id = static_cast<uint8_t>(dfb->id);
+            entry.num_tcs        = num_tcs;
+            entry.capacity       = rc.is_producer ? static_cast<uint8_t>(dfb->capacity) : 0u;
+            entry.entry_size     = dfb->entry_size;
+            entry.stride_in_entries = dfb->stride_in_entries;
+            entry.stride_size_tiles = static_cast<uint8_t>(dfb->stride_in_entries);
+
+            uint8_t flags = 0;
+            if (rc.is_producer)         flags |= DFB_HART_FLAG_IS_PRODUCER;
+            if (dfb->use_remapper)      flags |= DFB_HART_FLAG_REMAPPER_EN;
+            if (rc.config.broadcast_tc) flags |= DFB_HART_FLAG_BROADCAST_TC;
+            flags |= static_cast<uint8_t>(dfb->tensix_trisc_mask & DFB_HART_FLAG_TRISC_MASK);
+            entry.flags = flags;
+
+            // Txn descriptor (DM harts 0-7 only; TRISC leaves zero).
+            if (h < ::dfb::TENSIX_RISC_OFFSET) {
+                const dfb_txn_id_descriptor_t& txn =
+                    rc.is_producer ? dfb->producer_txn_descriptor : dfb->consumer_txn_descriptor;
+                entry.num_txn_ids               = txn.num_txn_ids;
+                entry.threshold                 = txn.num_entries_to_process_threshold;
+                entry.num_entries_per_txn_id    = txn.num_entries_per_txn_id;
+                entry.num_entries_per_txn_id_per_tc = txn.num_entries_per_txn_id_per_tc;
+                for (uint8_t t = 0; t < txn.num_txn_ids && t < ::dfb::NUM_TXN_IDS; t++) {
+                    entry.txn_ids[t] = txn.txn_ids[t];
+                }
+            }
+            entry.producer_ready_off = producer_ready_off[di][h];
+
+            // Zero the full entry region first (covers padding between packed_tc and next 4B boundary).
+            std::memset(out.data() + offset, 0, entry_sz);
+
+            // Write fixed header.
+            std::memcpy(out.data() + offset, &entry, sizeof(entry));
+
+            // Write TC arrays immediately after header (header is 24B = 4B-aligned).
+            uint32_t tc_off = offset + static_cast<uint32_t>(sizeof(entry));
+            for (uint8_t t = 0; t < num_tcs; t++) {
+                std::memcpy(out.data() + tc_off, &rc.config.base_addr[t], sizeof(uint32_t));
+                tc_off += sizeof(uint32_t);
+            }
+            for (uint8_t t = 0; t < num_tcs; t++) {
+                std::memcpy(out.data() + tc_off, &rc.config.limit[t], sizeof(uint32_t));
+                tc_off += sizeof(uint32_t);
+            }
+            for (uint8_t t = 0; t < num_tcs; t++) {
+                out[tc_off++] = rc.config.packed_tile_counter[t];
+            }
+            // (padding already zeroed by memset above)
+
+            offset += entry_sz;
+        }
+
+        // Wait entries.
+        for (size_t di = 0; di < dfbs_on_core.size(); di++) {
+            const auto& dfb = dfbs_on_core[di];
+            if (!(dfb->risc_mask & (1u << h))) continue;
+
+            dfb_hart_wait_entry_t we = {};
+            uint8_t nprods = 0;
+            for (uint8_t ph = 0; ph < ::dfb::NUM_PARTICIPATING_HARTIDS; ph++) {
+                if (!(dfb->risc_mask & (1u << ph))) continue;
+                if (producer_ready_off[di][ph] == 0xFFu) continue;  // consumer
+                if (nprods < ::dfb::MAX_NUM_TILE_COUNTERS_TO_RR) {
+                    we.ready_offs[nprods++] = producer_ready_off[di][ph];
+                }
+            }
+            we.num_producers = nprods;
+            TT_FATAL(offset + sizeof(we) <= out.size(),
+                "DFB config overflow (wait entry dfb={} hart={})", dfb->id, h);
+            std::memcpy(out.data() + offset, &we, sizeof(we));
+            offset += sizeof(we);
+        }
+
+        // Pad blob to 4B boundary.
+        const uint32_t blob_end_padded = (offset + 3u) & ~3u;
+        if (blob_end_padded > offset) {
+            std::memset(out.data() + offset, 0, blob_end_padded - offset);
+            offset = blob_end_padded;
+        }
     }
+
+    // ---------------------------------------------------------------------------
+    // 7. Emit producer-ready region (zeroed; device writes 1 via uncached alias).
+    // ---------------------------------------------------------------------------
+    TT_FATAL(
+        offset == ghdr.producer_ready_region_off,
+        "DFB config: offset {} != producer_ready_region_off {}", offset, ghdr.producer_ready_region_off);
+    if (total_ready_bytes > 0) {
+        TT_FATAL(offset + total_ready_bytes <= out.size(), "DFB config overflow (ready region)");
+        std::memset(out.data() + offset, 0, total_ready_bytes);
+        offset += total_ready_bytes;
+    }
+
+    // ---------------------------------------------------------------------------
+    // 8. Verify and pad to transfer alignment.
+    // ---------------------------------------------------------------------------
+    verify_dfb_hart_blobs(std::span<const uint8_t>(out.data(), offset), dfbs_on_core);
 
     const uint32_t aligned_size = align_dfb_config_transfer_size(offset);
-    TT_FATAL(out.size() >= aligned_size, "DFB config buffer too small for aligned size (need {}, have {})", aligned_size, out.size());
-    if (aligned_size > offset) {
-        std::memset(out.data() + offset, 0, aligned_size - offset);
-    }
+    TT_FATAL(out.size() >= aligned_size, "DFB config buffer too small for aligned payload");
+    if (aligned_size > offset) { std::memset(out.data() + offset, 0, aligned_size - offset); }
     return aligned_size;
 }
-
-namespace {
-
-uint16_t packed_risc_mask(const dfb_initializer_t& init) {
-    return static_cast<uint16_t>(init.risc_mask_bits.dm_mask) |
-           (static_cast<uint16_t>(init.risc_mask_bits.tensix_mask) << 8);
-}
-
-uint16_t risc_mask_storage_u16(const uint8_t* init_bytes) {
-    return *reinterpret_cast<const uint16_t*>(init_bytes + offsetof(dfb_initializer_t, risc_mask_bits));
-}
-
-void log_dfb_initializer(uint8_t dfb_id, uint32_t byte_off, const dfb_initializer_t& init) {
-    const auto* init_bytes = reinterpret_cast<const uint8_t*>(&init);
-    log_info(
-        tt::LogMetal,
-        "    DFB{} init @{}: entry_size={} stride={} cap={} risc_mask=0x{:03x} (dm|tensix<<8) storage_u16=0x{:03x} "
-        "dm={} tensix_neo={} tensix_trisc={} num_prod={}",
-        dfb_id,
-        byte_off,
-        init.entry_size,
-        init.stride_in_entries,
-        init.capacity,
-        packed_risc_mask(init),
-        risc_mask_storage_u16(init_bytes),
-        init.risc_mask_bits.dm_mask,
-        init.risc_mask_bits.tensix_mask,
-        init.risc_mask_bits.tensix_trisc_mask,
-        init.num_producers);
-    log_info(
-        tt::LogMetal,
-        "      prod_txn: ids={} thr={} per_txn={} per_tc={} txn_ids=[{},{},{},{}]",
-        init.producer_txn_descriptor.num_txn_ids,
-        init.producer_txn_descriptor.num_entries_to_process_threshold,
-        init.producer_txn_descriptor.num_entries_per_txn_id,
-        init.producer_txn_descriptor.num_entries_per_txn_id_per_tc,
-        init.producer_txn_descriptor.txn_ids[0],
-        init.producer_txn_descriptor.txn_ids[1],
-        init.producer_txn_descriptor.txn_ids[2],
-        init.producer_txn_descriptor.txn_ids[3]);
-    log_info(
-        tt::LogMetal,
-        "      cons_txn: ids={} thr={} per_txn={} per_tc={} txn_ids=[{},{},{},{}]",
-        init.consumer_txn_descriptor.num_txn_ids,
-        init.consumer_txn_descriptor.num_entries_to_process_threshold,
-        init.consumer_txn_descriptor.num_entries_per_txn_id,
-        init.consumer_txn_descriptor.num_entries_per_txn_id_per_tc,
-        init.consumer_txn_descriptor.txn_ids[0],
-        init.consumer_txn_descriptor.txn_ids[1],
-        init.consumer_txn_descriptor.txn_ids[2],
-        init.consumer_txn_descriptor.txn_ids[3]);
-}
-
-void log_dfb_per_risc(uint8_t risc_idx, const dfb_initializer_per_risc_t& pr) {
-    log_info(
-        tt::LogMetal,
-        "      per_risc[{}]: num_tcs={} tc_init_done={} broadcast_tc={} remapper_en={} is_producer={}",
-        risc_idx,
-        pr.num_tcs_and_init.num_tcs_to_rr,
-        pr.num_tcs_and_init.tc_init_done,
-        pr.num_tcs_and_init.broadcast_tc,
-        pr.flags.remapper_en,
-        pr.flags.is_producer);
-    for (uint8_t tc = 0; tc < pr.num_tcs_and_init.num_tcs_to_rr; ++tc) {
-        log_info(
-            tt::LogMetal,
-            "        tc[{}]: base=0x{:x} limit=0x{:x} ptc=0x{:02x} (tensix={} tc_id={})",
-            tc,
-            pr.tc_addrs[tc].base_addr,
-            pr.tc_addrs[tc].limit,
-            pr.packed_tile_counter[tc],
-            ::dfb::get_tensix_id(pr.packed_tile_counter[tc]),
-            ::dfb::get_counter_id(pr.packed_tile_counter[tc]));
-    }
-}
-
-}  // namespace
 
 void log_dfb_config_vec_dump(const CoreCoord& core, std::string_view label, std::span<const uint8_t> config_bytes) {
     if (config_bytes.empty()) {
@@ -516,143 +620,69 @@ void log_dfb_config_vec_dump(const CoreCoord& core, std::string_view label, std:
 
     const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(config_bytes.data());
     const uint8_t num_dfbs = ghdr->num_dfbs;
-    const uint16_t* offset_table =
-        reinterpret_cast<const uint16_t*>(config_bytes.data() + dfb_byte_offset_table_byte_offset());
 
     log_info(
         tt::LogMetal,
-        "DFB config dump [{}] core {} size={} dm1_off={} dm0_off={} layout_off={} num_dfbs={}",
-        label,
-        core.str(),
-        config_bytes.size(),
-        ghdr->dm1_remapper_blob_offset,
-        ghdr->dm0_isr_blob_offset,
-        ghdr->per_dfb_layout_offset,
-        num_dfbs);
-
-    log_info(
-        tt::LogMetal,
-        "  dfb_global_header_t: dm1_remapper_blob_offset={} dm0_isr_blob_offset={} per_dfb_layout_offset={} "
-        "num_dfbs={} dm0_isr_ready={}",
-        ghdr->dm1_remapper_blob_offset,
-        ghdr->dm0_isr_blob_offset,
-        ghdr->per_dfb_layout_offset,
-        ghdr->num_dfbs,
-        ghdr->dm0_isr_ready);
+        "DFB config dump [{}] core {} size={} dm1_off={} dm0_off={} ready_off={} num_dfbs={} has_dm0_isr={}",
+        label, core.str(), config_bytes.size(),
+        ghdr->dm1_remapper_blob_offset, ghdr->dm0_isr_blob_offset,
+        ghdr->producer_ready_region_off, num_dfbs, ghdr->has_dm0_isr);
 
     for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; ++h) {
-        log_info(tt::LogMetal, "  participation_mask[{}]=0x{:x}", h, ghdr->participation_mask[h]);
-    }
-
-    std::string offsets_str;
-    for (uint8_t i = 0; i < num_dfbs; ++i) {
-        if (!offsets_str.empty()) {
-            offsets_str += ", ";
-        }
-        offsets_str += fmt::format("{}:{}", i, offset_table[i]);
-    }
-    log_info(tt::LogMetal, "  dfb_byte_offset_table: {}", offsets_str);
-
-    uint32_t dm1_off = ghdr->dm1_remapper_blob_offset;
-    for (uint8_t dfb_id = 0; dfb_id < num_dfbs; ++dfb_id) {
-        TT_FATAL(dm1_off + sizeof(dfb_dm1_remapper_entry_header_t) <= config_bytes.size(), "DM1 blob truncated");
-        const auto* dm1_hdr = reinterpret_cast<const dfb_dm1_remapper_entry_header_t*>(config_bytes.data() + dm1_off);
         log_info(
             tt::LogMetal,
-            "  DFB{} dfb_dm1_remapper_entry_header_t @{}: num_remapper_slots={}",
-            dfb_id,
-            dm1_off,
-            dm1_hdr->num_remapper_slots);
+            "  hart[{}] participation_mask=0x{:x} blob_offset={}",
+            h, ghdr->participation_mask[h], ghdr->hart_blob_offset[h]);
+    }
+
+    // DM1 remapper blobs (unchanged format).
+    uint32_t dm1_off = ghdr->dm1_remapper_blob_offset;
+    for (uint8_t dfb_id = 0; dfb_id < num_dfbs; ++dfb_id) {
+        if (dm1_off + sizeof(dfb_dm1_remapper_entry_header_t) > config_bytes.size()) break;
+        const auto* dm1_hdr =
+            reinterpret_cast<const dfb_dm1_remapper_entry_header_t*>(config_bytes.data() + dm1_off);
+        log_info(tt::LogMetal, "  DFB{} DM1 @{}: num_remapper_slots={}",
+                 dfb_id, dm1_off, dm1_hdr->num_remapper_slots);
         dm1_off += sizeof(dfb_dm1_remapper_entry_header_t);
         for (uint8_t s = 0; s < dm1_hdr->num_remapper_slots; ++s) {
-            TT_FATAL(dm1_off + sizeof(dfb_dm0_remapper_slot_t) <= config_bytes.size(), "DM1 slot truncated");
-            const auto* slot = reinterpret_cast<const dfb_dm0_remapper_slot_t*>(config_bytes.data() + dm1_off);
-            log_info(
-                tt::LogMetal,
-                "    slot[{}] dfb_dm0_remapper_slot_t @{}: pair_index={} clientR=0x{:08x} clientL=0x{:08x}",
-                s,
-                dm1_off,
-                slot->pair_index,
-                slot->clientR_val,
-                slot->clientL_val);
+            if (dm1_off + sizeof(dfb_dm0_remapper_slot_t) > config_bytes.size()) break;
+            const auto* slot =
+                reinterpret_cast<const dfb_dm0_remapper_slot_t*>(config_bytes.data() + dm1_off);
+            log_info(tt::LogMetal,
+                     "    slot[{}] @{}: pair_index={} clientR=0x{:08x} clientL=0x{:08x}",
+                     s, dm1_off, slot->pair_index, slot->clientR_val, slot->clientL_val);
             dm1_off += sizeof(dfb_dm0_remapper_slot_t);
         }
     }
 
-    uint32_t dm0_off = ghdr->dm0_isr_blob_offset;
-    uint32_t dm0_producer_txn_mask = 0;
-    uint32_t dm0_consumer_txn_mask = 0;
-    const bool has_dm0_blob = ghdr->per_dfb_layout_offset > ghdr->dm0_isr_blob_offset;
-    if (has_dm0_blob && dm0_off + sizeof(dfb_dm0_isr_blob_core_header_t) <= config_bytes.size()) {
-        const auto* core_hdr =
-            reinterpret_cast<const dfb_dm0_isr_blob_core_header_t*>(config_bytes.data() + dm0_off);
-        dm0_producer_txn_mask = core_hdr->producer_txn_id_mask;
-        dm0_consumer_txn_mask = core_hdr->consumer_txn_id_mask;
-        log_info(
-            tt::LogMetal,
-            "  dfb_dm0_isr_blob_core_header_t @{}: producer_mask=0x{:x} consumer_mask=0x{:x}",
-            dm0_off,
-            dm0_producer_txn_mask,
-            dm0_consumer_txn_mask);
-        dm0_off += sizeof(dfb_dm0_isr_blob_core_header_t);
+    // DM0 ISR blob (unchanged format).
+    if (ghdr->has_dm0_isr) {
+        uint32_t dm0_off = ghdr->dm0_isr_blob_offset;
+        if (dm0_off + sizeof(dfb_dm0_isr_blob_core_header_t) <= config_bytes.size()) {
+            const auto* core_hdr =
+                reinterpret_cast<const dfb_dm0_isr_blob_core_header_t*>(config_bytes.data() + dm0_off);
+            log_info(tt::LogMetal, "  DM0 ISR @{}: producer_mask=0x{:x} consumer_mask=0x{:x}",
+                     dm0_off, core_hdr->producer_txn_id_mask, core_hdr->consumer_txn_id_mask);
+        }
     }
-    const uint32_t dm0_hw_bytes =
-        compute_dm0_isr_txn_hw_pool_byte_size(dm0_producer_txn_mask, dm0_consumer_txn_mask);
-    const uint32_t dm0_pool_bytes =
-        compute_dm0_isr_txn_desc_pool_byte_size(dm0_producer_txn_mask, dm0_consumer_txn_mask);
-    const uint32_t dm0_pool_off = ghdr->per_dfb_layout_offset - dm0_pool_bytes;
-    if (dm0_hw_bytes > 0) {
-        const auto* txn_threshold_table =
-            reinterpret_cast<const dfb_dm0_isr_txn_threshold_t*>(config_bytes.data() + dm0_off);
-        const uint32_t txn_span = dm0_hw_bytes / sizeof(dfb_dm0_isr_txn_threshold_t);
-        for (uint32_t txn_id = 0; txn_id < txn_span; ++txn_id) {
-            const uint32_t txn_bit = 1u << txn_id;
-            if ((dm0_producer_txn_mask & txn_bit) == 0 && (dm0_consumer_txn_mask & txn_bit) == 0) {
-                continue;
-            }
-            const bool is_producer = (dm0_producer_txn_mask & txn_bit) != 0;
-            const auto& entry = txn_threshold_table[txn_id];
-            const auto* desc = reinterpret_cast<const dfb_dm0_txn_descriptor_image_t*>(
-                config_bytes.data() + dm0_pool_off + txn_id * sizeof(dfb_dm0_txn_descriptor_image_t));
+
+    // Per-hart init blobs: log entry count and first entry header per hart.
+    for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; ++h) {
+        const uint32_t blob_off = ghdr->hart_blob_offset[h];
+        if (blob_off >= config_bytes.size()) continue;
+        const uint8_t num_entries = dfb_hart_participation_count(ghdr->participation_mask[h]);
+        if (num_entries == 0) continue;
+        log_info(tt::LogMetal, "  hart[{}] blob @{} num_entries={}", h, blob_off, num_entries);
+        uint32_t cursor = blob_off;
+        for (uint8_t e = 0; e < num_entries && cursor + sizeof(dfb_hart_init_entry_t) <= config_bytes.size(); ++e) {
+            const auto* entry =
+                reinterpret_cast<const dfb_hart_init_entry_t*>(config_bytes.data() + cursor);
             log_info(
                 tt::LogMetal,
-                "    txn[{}] dfb_dm0_isr_txn_threshold_t @{}: tiles={} thr={} prod={} num_tcs={} ptc=[{:02x},{:02x},"
-                "{:02x},{:02x},{:02x},{:02x},{:02x},{:02x}]",
-                txn_id,
-                dm0_off + txn_id * sizeof(dfb_dm0_isr_txn_threshold_t),
-                desc->tiles_to_post_or_ack,
-                entry.threshold,
-                is_producer,
-                desc->num_counters,
-                desc->tile_counters[0],
-                desc->tile_counters[1],
-                desc->tile_counters[2],
-                desc->tile_counters[3],
-                desc->tile_counters[4],
-                desc->tile_counters[5],
-                desc->tile_counters[6],
-                desc->tile_counters[7]);
-        }
-        dm0_off += dm0_hw_bytes;
-    }
-    if (dm0_pool_bytes > 0) {
-        dm0_off += dm0_pool_bytes;
-    }
-
-    for (uint8_t dfb_id = 0; dfb_id < num_dfbs; ++dfb_id) {
-        const uint32_t layout_off = offset_table[dfb_id];
-        TT_FATAL(layout_off + sizeof(dfb_initializer_t) <= config_bytes.size(), "DFB layout truncated");
-        const auto* init = reinterpret_cast<const dfb_initializer_t*>(config_bytes.data() + layout_off);
-        log_dfb_initializer(dfb_id, layout_off, *init);
-
-        const uint16_t risc_mask = packed_risc_mask(*init);
-        const uint8_t num_riscs = static_cast<uint8_t>(__builtin_popcount(risc_mask));
-        uint32_t pr_off = layout_off + sizeof(dfb_initializer_t);
-        for (uint8_t r = 0; r < num_riscs; ++r) {
-            TT_FATAL(pr_off + sizeof(dfb_initializer_per_risc_t) <= config_bytes.size(), "per_risc truncated");
-            const auto* pr = reinterpret_cast<const dfb_initializer_per_risc_t*>(config_bytes.data() + pr_off);
-            log_dfb_per_risc(r, *pr);
-            pr_off += sizeof(dfb_initializer_per_risc_t);
+                "    entry[{}] dfb_id={} num_tcs={} flags=0x{:02x} cap={} entry_size={} ready_off={}",
+                e, entry->logical_dfb_id, entry->num_tcs, entry->flags,
+                entry->capacity, entry->entry_size, entry->producer_ready_off);
+            cursor += dfb_hart_init_entry_byte_size(entry->num_tcs);
         }
     }
 }
@@ -669,40 +699,25 @@ void log_dfb_config_readback(
 
     const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(readback_bytes.data());
     const uint8_t num_dfbs = ghdr->num_dfbs;
-    const uint16_t* offset_table =
-        reinterpret_cast<const uint16_t*>(readback_bytes.data() + dfb_byte_offset_table_byte_offset());
 
     log_info(
         tt::LogMetal,
-        "DFB readback core {} L1=0x{:x} size={} dm1_off={} dm0_off={} layout_off={} num_dfbs={}",
-        core.str(),
-        l1_addr,
-        readback_bytes.size(),
-        ghdr->dm1_remapper_blob_offset,
-        ghdr->dm0_isr_blob_offset,
-        ghdr->per_dfb_layout_offset,
-        num_dfbs);
+        "DFB readback core {} L1=0x{:x} size={} dm1_off={} dm0_off={} ready_off={} num_dfbs={} has_dm0_isr={}",
+        core.str(), l1_addr, readback_bytes.size(),
+        ghdr->dm1_remapper_blob_offset, ghdr->dm0_isr_blob_offset,
+        ghdr->producer_ready_region_off, num_dfbs, ghdr->has_dm0_isr);
 
     for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; ++h) {
-        log_info(tt::LogMetal, "  participation_mask[{}]=0x{:x}", h, ghdr->participation_mask[h]);
+        log_info(tt::LogMetal, "  hart[{}] participation_mask=0x{:x} blob_off={}",
+                 h, ghdr->participation_mask[h], ghdr->hart_blob_offset[h]);
     }
-
-    std::string offsets_str;
-    for (uint8_t i = 0; i < num_dfbs; ++i) {
-        if (!offsets_str.empty()) {
-            offsets_str += ", ";
-        }
-        offsets_str += fmt::format("{}:{}", i, offset_table[i]);
-    }
-    log_info(tt::LogMetal, "  dfb_byte_offset: {}", offsets_str);
 
     if (ghdr->dm1_remapper_blob_offset < readback_bytes.size()) {
         const auto* dm1_hdr = reinterpret_cast<const dfb_dm1_remapper_entry_header_t*>(
             readback_bytes.data() + ghdr->dm1_remapper_blob_offset);
         log_info(tt::LogMetal, "  dm1_blob[0].num_remapper_slots={}", dm1_hdr->num_remapper_slots);
     }
-    if (ghdr->per_dfb_layout_offset > ghdr->dm0_isr_blob_offset &&
-        ghdr->dm0_isr_blob_offset < readback_bytes.size()) {
+    if (ghdr->has_dm0_isr && ghdr->dm0_isr_blob_offset < readback_bytes.size()) {
         const auto* core_hdr = reinterpret_cast<const dfb_dm0_isr_blob_core_header_t*>(
             readback_bytes.data() + ghdr->dm0_isr_blob_offset);
         log_info(
@@ -1068,17 +1083,8 @@ struct TileCounterGroup {
     std::vector<::dfb::PackedTileCounter> consumer_tcs;
 };
 
-uint32_t DataflowBufferImpl::serialized_size() const {
-    // On WH/BH: one 4-word CB-format config entry per DFB (identical to a circular buffer config)
-    if (!MetalContext::instance().hal().has_tile_counter_registers()) {
-        return 4 * sizeof(uint32_t);
-    }
-    // On Quasar: shared per-DFB layout only (dfb_initializer_t + per_risc entries).
-    // The DM0 blob is serialized separately via serialize_dm0_blob_for_core / dm0_blob_serialized_size.
-    TT_FATAL(!groups.empty(), "DFB {} has no groups (configs not finalized?)", id);
-    return sizeof(dfb_initializer_t) +
-           (groups[0].hw_risc_configs.size() * sizeof(dfb_initializer_per_risc_t));
-}
+// WH/BH: one 4-word CB-format config per DFB.  Quasar: per-DFB layout folded into per-hart blobs.
+static uint32_t dfb_wh_bh_serialized_size() { return 4u * sizeof(uint32_t); }
 
 uint32_t DataflowBufferImpl::dm1_remapper_blob_serialized_size() const {
     if (!MetalContext::instance().hal().has_tile_counter_registers()) return 0;
@@ -1088,34 +1094,36 @@ uint32_t DataflowBufferImpl::dm1_remapper_blob_serialized_size() const {
         num_rmp * sizeof(dfb_dm0_remapper_slot_t));
 }
 
+// WH/BH only: emit the 4-word CB-format config for the legacy firmware path.
 std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& core) const {
     TT_FATAL(this->configs_finalized, "DFB {} configs not finalized before serialization", this->id);
+    TT_FATAL(
+        !MetalContext::instance().hal().has_tile_counter_registers(),
+        "serialize_for_core is only used on WH/BH; Quasar uses serialize_dfb_config_for_core");
 
-    // On WH/BH: emit the same 4-word format used for circular buffers so the existing
-    // setup_local_cb_read_write_interfaces firmware path can initialise the DFB slot.
-    // Layout: [base_addr, total_size_bytes, num_pages, page_size_bytes]
-    if (!MetalContext::instance().hal().has_tile_counter_registers()) {
-        auto it = this->core_lookup_.find(core);
-        TT_FATAL(
-            it != this->core_lookup_.end(), "DFB {} has no config for core ({}, {})", this->id, core.x, core.y);
-        const uint32_t alloc_addr = it->second.second;
-        TT_FATAL(
-            !this->borrows_memory() || alloc_addr != 0,
-            "DFB {} uses borrowed memory but set_borrowed_memory_base_addr() was not called before serialization",
-            this->id);
+    auto it = this->core_lookup_.find(core);
+    TT_FATAL(it != this->core_lookup_.end(), "DFB {} has no config for core ({}, {})", this->id, core.x, core.y);
+    const uint32_t alloc_addr = it->second.second;
+    TT_FATAL(
+        !this->borrows_memory() || alloc_addr != 0,
+        "DFB {} uses borrowed memory but set_borrowed_memory_base_addr() was not called before serialization",
+        this->id);
 
-        std::vector<uint8_t> data;
-        data.reserve(4 * sizeof(uint32_t));
-        const uint32_t words[4] = {
-            alloc_addr,                                     // fifo_addr (base)
-            this->config.entry_size * this->config.num_entries,  // fifo_size
-            this->config.num_entries,                       // fifo_num_pages
-            this->config.entry_size,                        // fifo_page_size
-        };
-        const auto* bytes = reinterpret_cast<const uint8_t*>(words);
-        data.insert(data.end(), bytes, bytes + sizeof(words));
-        return data;
-    }
+    std::vector<uint8_t> data;
+    data.reserve(dfb_wh_bh_serialized_size());
+    const uint32_t words[4] = {
+        alloc_addr,
+        this->config.entry_size * this->config.num_entries,
+        this->config.num_entries,
+        this->config.entry_size,
+    };
+    const auto* bytes = reinterpret_cast<const uint8_t*>(words);
+    data.insert(data.end(), bytes, bytes + sizeof(words));
+    return data;
+}
+
+std::vector<DFBRiscConfig> DataflowBufferImpl::compute_per_core_risc_configs(const CoreCoord& core) const {
+    TT_FATAL(this->configs_finalized, "DFB {} configs not finalized before computing per-core risc configs", this->id);
 
     auto it = this->core_lookup_.find(core);
     TT_FATAL(it != this->core_lookup_.end(), "DFB {} has no config for core ({}, {})", this->id, core.x, core.y);
@@ -1124,75 +1132,24 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
         !this->borrows_memory() || alloc_addr != 0,
         "DFB {} uses borrowed memory but set_borrowed_memory_base_addr() was not called before serialization",
         this->id);
-    const DfbGroup* core_group = &this->groups[group_idx];
 
-    const auto& hw_risc_configs = core_group->hw_risc_configs;
-
-    std::vector<uint8_t> data;
-    data.reserve(serialized_size());
-
-    dfb_initializer_t init = {};
-    init.entry_size = this->entry_size;
-    init.stride_in_entries = this->stride_in_entries;
-    init.capacity = this->capacity;
-    init.risc_mask_bits.dm_mask = this->risc_mask & 0xFF;
-    init.risc_mask_bits.tensix_mask = (this->risc_mask >> 8) & 0x0F;
-    init.risc_mask_bits.tensix_trisc_mask = this->tensix_trisc_mask & 0x0F;
-    init.num_producers = this->config.num_producers;
-    init.producer_txn_descriptor = this->producer_txn_descriptor;
-    init.consumer_txn_descriptor = this->consumer_txn_descriptor;
+    const auto& hw_risc_configs = this->groups[group_idx].hw_risc_configs;
 
     log_debug(
         tt::LogMetal,
-        "Serializing DFB {} for core ({},{}) with {} producers and {} consumers. risc_mask: 0x{:x} use_remapper: {}",
-        this->id,
-        core.x,
-        core.y,
-        this->config.num_producers,
-        this->config.num_consumers,
-        this->risc_mask,
-        this->use_remapper);
+        "DFB {} core ({},{}) {} producers {} consumers risc_mask=0x{:x} use_remapper={}",
+        this->id, core.x, core.y,
+        this->config.num_producers, this->config.num_consumers,
+        this->risc_mask, this->use_remapper);
 
-    log_debug(tt::LogMetal, "Entry size: {}", this->entry_size);
-    log_debug(tt::LogMetal, "Stride in entries: {}", this->stride_in_entries);
-    log_debug(tt::LogMetal, "Capacity: {}", this->capacity);
-    log_debug(tt::LogMetal, "Risc mask: 0x{:x}", this->risc_mask);
-    log_debug(tt::LogMetal, "Producer txn descriptor: num_txn_ids={} threshold={} per_txn={} per_tc={}",
-        this->producer_txn_descriptor.num_txn_ids,
-        this->producer_txn_descriptor.num_entries_to_process_threshold,
-        this->producer_txn_descriptor.num_entries_per_txn_id,
-        this->producer_txn_descriptor.num_entries_per_txn_id_per_tc);
-    log_debug(tt::LogMetal, "Consumer txn descriptor: num_txn_ids={} threshold={} per_txn={} per_tc={}",
-        this->consumer_txn_descriptor.num_txn_ids,
-        this->consumer_txn_descriptor.num_entries_to_process_threshold,
-        this->consumer_txn_descriptor.num_entries_per_txn_id,
-        this->consumer_txn_descriptor.num_entries_per_txn_id_per_tc);
-
-    const auto* init_bytes = reinterpret_cast<const uint8_t*>(&init);
-    data.insert(data.end(), init_bytes, init_bytes + sizeof(init));
-
-    const uint32_t entry_size = this->config.entry_size;
-    // const uint32_t max_prod_cons = std::max(this->config.num_producers, this->config.num_consumers);
-
-    // Find num_producer_tcs and num_consumer_tcs from the HW config.
-    uint8_t num_producer_tcs = 0;
-    uint8_t num_consumer_tcs = 0;
+    uint8_t num_producer_tcs = 0, num_consumer_tcs = 0;
     for (const auto& rc : hw_risc_configs) {
-        if (rc.is_producer) {
-            num_producer_tcs = std::max(num_producer_tcs, rc.config.num_tcs_to_rr);
-        } else {
-            num_consumer_tcs = std::max(num_consumer_tcs, rc.config.num_tcs_to_rr);
-        }
+        if (rc.is_producer) num_producer_tcs = std::max(num_producer_tcs, rc.config.num_tcs_to_rr);
+        else                num_consumer_tcs = std::max(num_consumer_tcs, rc.config.num_tcs_to_rr);
     }
 
-    // Address arithmetic for L1 base/limit/step:
-    //   - STRIDED (stride_in_entries = max_prod_cons): interleaved layout.
-    //     Each producer occupies 1 slot per round → base step = entry_size.
-    //   - ALL (stride_in_entries = 1): contiguous block per producer/TC.
-    //     Each producer occupies `capacity` consecutive slots → base step = capacity * entry_size.
-    //     This applies to both DM-DM ALL (broadcast_tc) and Tensix-involved ALL (remapper).
-    //     The hardware derives the per-pop stride from (limit - base - entry_size) / (capacity - 1),
-    //     which equals entry_size for ALL and max_prod_cons * entry_size for STRIDED.
+    // Address arithmetic: see inline comments in old serialize_for_core for rationale.
+    const uint32_t entry_size      = this->config.entry_size;
     const uint32_t effective_stride = this->stride_in_entries;
     const uint32_t base_step = (effective_stride > 1) ? entry_size : (this->capacity * entry_size);
 
@@ -1203,9 +1160,7 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
             if (rc.is_producer && tc < rc.config.num_tcs_to_rr) {
                 rc.config.base_addr[tc] = base;
                 rc.config.limit[tc] =
-                    rc.config.base_addr[tc] + ((entry_size * effective_stride) * (this->capacity - 1)) + entry_size;
-                // Always advance base so each producer/TC gets its own L1 slot range.
-                // broadcast_tc only governs device-side credit posting, not L1 addressing.
+                    base + ((entry_size * effective_stride) * (this->capacity - 1)) + entry_size;
                 base += base_step;
             }
         }
@@ -1213,76 +1168,21 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
     base = alloc_addr;
     for (uint8_t tc = 0; tc < num_consumer_tcs; tc++) {
         for (auto& rc : per_core_rc) {
-            if (rc.is_producer) {
-                continue;
-            }
+            if (rc.is_producer) continue;
             rc.config.base_addr[tc] = base;
             rc.config.limit[tc] =
-                rc.config.base_addr[tc] + ((entry_size * effective_stride) * (this->capacity - 1)) + entry_size;
-            // In strided case each consumer maps to a different producer region, so advance base per consumer.
+                base + ((entry_size * effective_stride) * (this->capacity - 1)) + entry_size;
             if (this->config.cap == dfb::AccessPattern::STRIDED && tc < rc.config.num_tcs_to_rr) {
                 base += base_step;
             }
         }
-        // In ALL case all consumers share the producer address regions as they see every producer's data.
         if (this->config.cap == dfb::AccessPattern::ALL && this->config.num_producers > 1 &&
             tc < num_consumer_tcs) {
             base += base_step;
         }
     }
 
-    // Write one dfb_initializer_per_risc_t per risc, in risc_mask order
-    for (int bit = 0; bit < 16; bit++) {
-        if (!(this->risc_mask & (1 << bit))) {
-            continue;
-        }
-        const DFBRiscConfig* rc = nullptr;
-        for (const auto& c : per_core_rc) {
-            if (c.risc_id == static_cast<uint8_t>(bit)) {
-                rc = &c;
-                break;
-            }
-        }
-        TT_FATAL(rc != nullptr, "DFB {}: no risc_config for risc_id {} on core ({},{})", this->id, bit, core.x, core.y);
-
-        log_debug(tt::LogMetal, "New risc config (risc_id={}, is_producer={})", rc->risc_id, rc->is_producer);
-        dfb_initializer_per_risc_t per_risc = {};
-
-        per_risc.num_tcs_and_init.num_tcs_to_rr = rc->config.num_tcs_to_rr;
-        per_risc.num_tcs_and_init.tc_init_done = 0;  // set by device when this producer finishes TC init
-        per_risc.num_tcs_and_init.broadcast_tc = rc->config.broadcast_tc;
-        log_debug(tt::LogMetal, "Num tcs to rr: {}", rc->config.num_tcs_to_rr);
-        // Copy per-risc arrays
-        for (int i = 0; i < rc->config.num_tcs_to_rr; i++) {
-            per_risc.tc_addrs[i].base_addr = rc->config.base_addr[i];
-            per_risc.tc_addrs[i].limit = rc->config.limit[i];
-            per_risc.packed_tile_counter[i] = rc->config.packed_tile_counter[i];
-            log_trace(tt::LogMetal, "Base addr {}: {}", i, static_cast<uint32_t>(per_risc.tc_addrs[i].base_addr));
-            log_trace(tt::LogMetal, "Limit {}: {}", i, static_cast<uint32_t>(per_risc.tc_addrs[i].limit));
-            log_trace(tt::LogMetal, "Packed tile counter {}: {}", i, (uint32_t)per_risc.packed_tile_counter[i]);
-        }
-        per_risc.flags.remapper_en = this->use_remapper;
-        per_risc.flags.is_producer = rc->is_producer;
-        log_debug(tt::LogMetal, "Is producer: {}", rc->is_producer);
-        log_debug(tt::LogMetal, "Remapper en: {}", this->use_remapper);
-        if (this->use_remapper && rc->is_producer) {
-            log_debug(
-                tt::LogMetal,
-                "Producer remapper: pair_idx={}, clientL={}, consumer_ids_mask=0x{:02x} (in DM0 blob)",
-                rc->config.remapper_pair_index,
-                rc->config.producer_client_type,
-                rc->config.remapper_consumer_ids_mask);
-        }
-
-        const auto* cfg_bytes = reinterpret_cast<const uint8_t*>(&per_risc);
-        data.insert(data.end(), cfg_bytes, cfg_bytes + sizeof(per_risc));
-    }
-
-    // RTL-sim correlation map (log_info): links this DFB to the identifiers visible in
-    // the simulation trace at the two benchmark markers:
-    //   - ISR side  (handle_interrupt fence):  filter by prod_txns to find this DFB's interrupt.
-    //   - wait_front side (wait_front_impl fence): filter by cons_tcs (tensix_id, tc_id) to find
-    //     the TC that unblocked the Tensix.
+    // RTL-sim correlation: log producer/consumer TC and txn-id assignments.
     {
         auto fmt_tcs = [](const DFBRiscConfig& rc) {
             std::string s;
@@ -1295,7 +1195,6 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
             }
             return s;
         };
-
         auto fmt_txn_ids = [](const dfb_txn_id_descriptor_t& desc) -> std::string {
             if (desc.num_txn_ids == 0) return "-";
             std::string s;
@@ -1305,7 +1204,6 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
             }
             return s;
         };
-
         std::string prod_part, cons_part;
         for (const auto& rc : per_core_rc) {
             if (rc.is_producer) {
@@ -1318,20 +1216,15 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
                 cons_part += fmt::format("r{}:[{}]", rc.risc_id, fmt_tcs(rc));
             }
         }
-
         log_info(
             tt::LogMetal,
             "DFB {} corr: prod_txns=[{}] prod_tcs={{ {} }} | cons_txns=[{}] cons_tcs={{ {} }}",
             this->id,
-            fmt_txn_ids(this->producer_txn_descriptor),
-            prod_part.empty() ? "-" : prod_part,
-            fmt_txn_ids(this->consumer_txn_descriptor),
-            cons_part.empty() ? "-" : cons_part);
+            fmt_txn_ids(this->producer_txn_descriptor), prod_part.empty() ? "-" : prod_part,
+            fmt_txn_ids(this->consumer_txn_descriptor), cons_part.empty() ? "-" : cons_part);
     }
 
-    log_debug(tt::LogMetal, "Serialized DFB {} for core ({},{}) size: {}", this->id, core.x, core.y, data.size());
-
-    return data;
+    return per_core_rc;
 }
 
 
@@ -1424,23 +1317,21 @@ uint32_t finalize_dfbs(
         auto kernel_config = kg->launch_msg.view().kernel_config();
         kernel_config.local_cb_offset() = base_offset;
 
-        // Fixed header + variable dfb_byte_offset[num_dfbs] + DM1 blobs + DM0 blobs + shared layouts.
-        const uint8_t num_dfbs = static_cast<uint8_t>(dataflow_buffers.size());
-        uint32_t kg_dfb_size =
-            hal.has_tile_counter_registers() ? dfb_config_prefix_size(num_dfbs) : 0;
         bool kg_has_dfb = false;
         for (const auto& dfb : dataflow_buffers) {
             TT_ASSERT(dfb->configs_finalized, "DFB {} configs not finalized before serialization", dfb->id);
             for (const CoreRange& kg_range : kg->core_ranges.ranges()) {
-                if (dfb->core_ranges.intersects(kg_range)) {
-                    kg_dfb_size += dfb->serialized_size() + dfb->dm1_remapper_blob_serialized_size();
-                    kg_has_dfb = true;
-                    break;
-                }
+                if (dfb->core_ranges.intersects(kg_range)) { kg_has_dfb = true; break; }
             }
         }
-        if (kg_has_dfb && hal.has_tile_counter_registers()) {
-            kg_dfb_size += dm0_isr_blob_region_size(dataflow_buffers);
+        // compute_dfb_config_serialized_size covers the full layout: header + DM1/DM0 blobs +
+        // per-hart sequential blobs + producer-ready region + alignment padding.
+        uint32_t kg_dfb_size = (kg_has_dfb && hal.has_tile_counter_registers())
+                                   ? compute_dfb_config_serialized_size(dataflow_buffers)
+                                   : 0u;
+        if (!hal.has_tile_counter_registers() && kg_has_dfb) {
+            // WH/BH: one 4-word CB-format entry per DFB.
+            kg_dfb_size = static_cast<uint32_t>(dataflow_buffers.size()) * dfb_wh_bh_serialized_size();
         }
 
         if (hal.has_tile_counter_registers() && kg_dfb_size > 0) {

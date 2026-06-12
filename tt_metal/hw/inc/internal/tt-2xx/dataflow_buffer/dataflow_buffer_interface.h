@@ -78,24 +78,15 @@ static_assert(sizeof(LocalDFBInterface) == 86, "LocalDFBInterface (unpack TRISC)
 #else
 
 // Per–tile-counter slot (DM).
-// 20 bytes (multiple of 4, naturally aligned): no __attribute__((packed)), so the compiler
-// uses lw/sw for all uint32_t fields instead of 10-instruction byte-by-byte sequences.
-// _pad[3] brings the total to 20 bytes so every element in the tc_slots array stays
-// 4-byte aligned regardless of where tc_slots starts in LocalDFBInterface.
-// packed_tile_counter (uint8_t) is always a single lbu/sb — retained here unchanged.
 struct DFBTCSlot {
     uint32_t rd_ptr;
     uint32_t wr_ptr;
     uint32_t base_addr;
     uint32_t limit;
     dfb::PackedTileCounter packed_tile_counter;
-    uint8_t _pad[3];
-};
+} __attribute__((packed));
 
 // on WH/BH arrays will be sized to 1
-// No __attribute__((packed)): all fields naturally aligned. The header region is 20 bytes
-// (entry_size through _pad) so tc_slots[6] starts at offset 20 (4-byte aligned), enabling
-// lw/sw for rd_ptr/wr_ptr/base_addr/limit on every push/pop in the kernel hot path.
 struct LocalDFBInterface {
     uint32_t entry_size;
     uint32_t stride_size;
@@ -109,13 +100,12 @@ struct LocalDFBInterface {
     uint8_t num_entries_per_txn_id_per_tc;
     uint8_t num_txn_ids;
     uint8_t broadcast_tc;  // DM-DM ALL producer: post to all TCs instead of round-robin
-    uint8_t _pad;          // offset 19 → 20: aligns tc_slots to a 4-byte boundary
 
     DFBTCSlot tc_slots[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
-};
+} __attribute__((packed));
 
-static_assert(sizeof(DFBTCSlot) == 20, "DFBTCSlot size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 140, "LocalDFBInterface size is incorrect");
+static_assert(sizeof(DFBTCSlot) == 17, "DFBTCSlot size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 121, "LocalDFBInterface size is incorrect");
 
 #endif
 

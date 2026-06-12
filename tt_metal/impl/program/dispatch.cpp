@@ -1169,7 +1169,6 @@ public:
                     size_t dfb_byte_offset =
                         static_cast<size_t>(dfb->id) * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
                     auto serialized = dfb->serialize_for_core(logical_representative);
-                    TT_ASSERT(serialized.size() == dfb->serialized_size());
                     TT_ASSERT(dfb_byte_offset + serialized.size() <= payload.size());
                     std::copy(serialized.begin(), serialized.end(), payload.begin() + dfb_byte_offset);
                     max_byte_end = std::max(max_byte_end, dfb_byte_offset + serialized.size());
