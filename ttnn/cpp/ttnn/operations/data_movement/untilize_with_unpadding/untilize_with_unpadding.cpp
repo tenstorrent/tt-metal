@@ -36,20 +36,27 @@ using MassagedUntilizeVal = MassagedOperation<ttnn::Tensor, const ttnn::Tensor&>
 using MassagedUntilizeValParams = MassagedOperationParams<ttnn::Tensor, const ttnn::Tensor&>;
 
 MassagedUntilizeVal build_ndiml_untilize_val(
-    BaseUntilizeValType base_untilize, const std::optional<CoreRangeSet>& sub_core_grids) {
-    auto original_shape = std::make_shared<Shape>();
+    BaseUntilizeValType base_untilize,
+    const Shape& output_tensor_end,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    auto output_shape = std::make_shared<Shape>();
 
     return MassagedUntilizeVal(MassagedUntilizeValParams{
         .predicate = [](const ttnn::Tensor& input_tensor) -> bool { return input_tensor.logical_shape().rank() > 4; },
         .pre_transform = [=](const ttnn::Tensor& input_tensor) -> OwnedUntilizeValArgs {
-            *original_shape = input_tensor.logical_shape();
+            ttnn::SmallVector<uint32_t> output_shape_vector;
+            output_shape_vector.reserve(output_tensor_end.rank());
+            for (auto index = 0; index < output_tensor_end.rank(); ++index) {
+                output_shape_vector.push_back(output_tensor_end[index] + 1);
+            }
+            *output_shape = ttnn::Shape(std::move(output_shape_vector));
             ttnn::Tensor squeezed_tensor = squeeze_from_ND_to_4D(input_tensor, sub_core_grids);
             return std::make_tuple(squeezed_tensor);
         },
         .post_transform = [=](const ttnn::Tensor& output) -> ttnn::Tensor {
             auto unsqueezed_tensor = ttnn::reshape(
                 output,
-                *original_shape,
+                *output_shape,
                 std::nullopt,              /*Memory Config*/
                 std::nullopt,              /*Pad value*/
                 TileReshapeMapMode::CACHE, /*Reshape map mode*/
@@ -75,15 +82,13 @@ Tensor untilize_with_unpadding(
     ttsl::SmallVector<uint32_t> output_end_vector;
     ttnn::Shape output_end;
     const auto& input_shape = input_tensor.logical_shape();
+    for (auto index = 0; index < input_shape.rank(); ++index) {
+        output_end_vector.push_back(output_tensor_end[index]);
+    }
+
     if (input_shape.rank() > 4) {
-        for (auto index = 0; index < input_shape.rank(); ++index) {
-            output_end_vector.push_back(input_shape[index] - 1);
-        }
         output_end = squeeze_vector_shape(ttnn::Shape(std::move(output_end_vector)));
     } else {
-        for (auto index = 0; index < input_tensor.logical_shape().rank(); ++index) {
-            output_end_vector.push_back(output_tensor_end[index]);
-        }
         output_end = ttnn::Shape(std::move(output_end_vector));
     }
 
@@ -107,7 +112,8 @@ Tensor untilize_with_unpadding(
             sub_core_grids);
     };
 
-    return ttnn::operations::data_movement::build_ndiml_untilize_val(base_untilize, sub_core_grids)(input_tensor);
+    return ttnn::operations::data_movement::build_ndiml_untilize_val(
+        base_untilize, output_tensor_end, sub_core_grids)(input_tensor);
 }
 
 }  // namespace ttnn
