@@ -48,15 +48,21 @@ def predict_SPk(Mt, Nt, Kt):
             Pk = 1
         while Pk > 1 and (GY % Pk != 0 or Kt % Pk != 0 or Kt // Pk < 8):
             Pk //= 2
-        # no-M-padding guard (mirrors the factory): transpose puts M on cols (m_axis=S*GX), else rows
-        # (m_axis=GY/(S*Pk)=1). Disable K-par if M_tiles isn't a multiple of its parallel axis.
+        # M-padding handling (mirrors the factory): transpose puts M on cols (axis=S*GX), else rows
+        # (axis=GY/(S*Pk)=1, never pads). Output-starved transpose with deep-enough K engages at S=1
+        # (free column padding on idle cores); otherwise disable K-par.
         transpose = Mt > Nt
-        while Pk > 1:
-            S = GY // Pk
-            m_axis = (S * GX) if transpose else (GY // (S * Pk))
-            if Mt % m_axis == 0:
-                break
-            Pk //= 2
+
+        def m_pads(pk):
+            s = GY // pk
+            axis = (s * GX) if transpose else (GY // (s * pk))
+            return Mt % axis != 0
+
+        if Pk > 1 and m_pads(Pk):
+            pk_s1 = GY
+            while pk_s1 > 1 and (Kt % pk_s1 != 0 or Kt // pk_s1 < 8):
+                pk_s1 //= 2
+            Pk = pk_s1 if (transpose and out < cores and pk_s1 == GY and D >= 280) else 1
         S = GY // Pk if Pk > 1 else S0
     return S, Pk
 

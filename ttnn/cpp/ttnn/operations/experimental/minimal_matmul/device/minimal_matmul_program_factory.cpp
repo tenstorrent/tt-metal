@@ -363,20 +363,28 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             while (Pk > 1 && (K_tiles % Pk != 0 || K_tiles / Pk < kp.min_kt)) {
                 Pk /= 2;  // deep-K availability
             }
-            // No-M-padding guard. Fused split-K stacks/reduces along M, which must map to its parallel
-            // axis WITHOUT padding (the factory TT_FATALs otherwise). With S*Pk=grid.y the M axis is:
-            //   non-transpose (M<=N, M on rows): rows_per_group = grid.y/(S*Pk) = 1   -> always divides;
-            //   transpose     (M>N,  M on cols): num_slices*grid.x = (grid.y/Pk)*grid.x -> needs
-            //     M_tiles % that == 0. Skewed transpose shapes (M_tiles not a multiple) would pad and
-            //     crash. Lowering Pk only grows the col factor (worse), so this loop just walks Pk down
-            //     to 1 there = disable K-par and fall back to the (padding-tolerant) auto N-slice.
-            while (Pk > 1) {
-                const uint32_t S = grid_size.y / Pk;
-                const uint32_t m_axis = transpose_core_grid ? (S * grid_size.x) : (grid_size.y / (S * Pk));
-                if (M_tiles % m_axis == 0) {
-                    break;  // no M-padding at this Pk
+            // M-padding handling. The fused reduction sums along M, which maps to rows_per_group=1 for
+            // non-transpose (M on rows -> never pads) or num_slices*grid.x for transpose (M on cols).
+            //   * no padding              -> keep Pk.
+            //   * output-STARVED transpose -> the padded columns are otherwise-idle cores, so padding is
+            //     ~free: engage with S=1 (all row budget to K, M maps to exactly grid.x columns) when K
+            //     is deep enough for the full Pk=grid.y split. The padded fused reduction is PCC-verified
+            //     (padded rows are computed/summed then dropped by the writer's logical_d0 guard).
+            //   * non-starved transpose (padding would steal useful cores) or K too shallow -> disable.
+            auto m_pads = [&](uint32_t pk) {
+                const uint32_t S = grid_size.y / pk;
+                const uint32_t axis = transpose_core_grid ? (S * grid_size.x) : (grid_size.y / (S * pk));
+                return M_tiles % axis != 0;
+            };
+            if (Pk > 1 && m_pads(Pk)) {
+                uint32_t pk_s1 = grid_size.y;  // S=1: max K-par, M -> grid.x columns
+                while (pk_s1 > 1 && (K_tiles % pk_s1 != 0 || K_tiles / pk_s1 < kp.min_kt)) {
+                    pk_s1 /= 2;
                 }
-                Pk /= 2;
+                // Only force the S=1 padded split when D itself wants maximal K-par (D>=d8). On mildly
+                // starved / moderate-K shapes D wants a smaller Pk; forcing Pk=grid.y there over-splits
+                // K and the reduction overhead regresses (measured), so disable instead.
+                Pk = (transpose_core_grid && out_tiles < cores && pk_s1 == grid_size.y && D >= kp.d8) ? pk_s1 : 1u;
             }
             if (Pk > 1) {
                 num_slices = grid_size.y / Pk;  // S*Pk = grid.y (rows_per_group = 1)
@@ -445,8 +453,12 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     // writes padded_M_tiles rows and stripes would overlap). Require it for now; for the starved shapes
     // K-par targets, choose num_k_slices so grid.y/(num_slices*num_k_slices) divides M_tiles (e.g. M=1
     // tile with num_k_slices=grid.y). Padded-M support is a follow-up.
+    // A2 (host-summed [Pk*M,N]) stacks bands by LOGICAL M, so M-padding would overlap stripes — forbid
+    // it there. Fused B (single [M,N], offset 0) tolerates M-padding: padded rows are computed/summed
+    // then dropped by the writer's logical_d0 guard (PCC-verified), which lets output-starved transpose
+    // shapes engage K-par on their otherwise-idle columns.
     TT_FATAL(
-        num_k_slices == 1 || padded_M_tiles == M_tiles,
+        num_k_slices == 1 || padded_M_tiles == M_tiles || num_k_fused,
         "TT_MM_K_SLICES ({}): M is padded ({} -> {} tiles by {}-way M parallelism); split-K stacking "
         "requires no M-padding. Pick num_slices*num_k_slices so grid.y/(that) divides M_tiles.",
         num_k_slices,
