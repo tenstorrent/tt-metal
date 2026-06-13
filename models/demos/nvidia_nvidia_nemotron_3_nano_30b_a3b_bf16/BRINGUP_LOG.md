@@ -4,7 +4,7 @@
 **Slug:** `nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-13T22:50:54Z
-**Updated:** 2026-06-13T23:12:33Z
+**Updated:** 2026-06-13T23:22:05Z
 
 ## Block Status
 
@@ -25,7 +25,7 @@
 | RoPE | debug | n/a | — | 0 |  |
 | RoPE | optimization | pending | — | 0 |  |
 | RoPE | real_weights | pending | — | 0 |  |
-| Mamba2Layer | reference | blocked | — | 0 | dep LayerNorm was pending |
+| Mamba2Layer | reference | pending | — | 0 | unblocked: LayerNorm done |
 | Mamba2Layer | ttnn | pending | — | 0 |  |
 | Mamba2Layer | debug | n/a | — | 0 |  |
 | Mamba2Layer | optimization | pending | — | 0 |  |
@@ -35,7 +35,7 @@
 | DenseAttention | debug | n/a | — | 0 |  |
 | DenseAttention | optimization | pending | — | 0 |  |
 | DenseAttention | real_weights | pending | — | 0 |  |
-| DenseMLP | reference | pending | — | 0 | DenseAttention was pending |
+| DenseMLP | reference | done | 0.999999 | 0 | relu2 activation (no SwiGLU). Used shared_expert weights (no '-' layers in this model's pattern). |
 | DenseMLP | ttnn | pending | — | 0 |  |
 | DenseMLP | debug | n/a | — | 0 |  |
 | DenseMLP | optimization | pending | — | 0 |  |
@@ -45,17 +45,17 @@
 | MoEAttention | debug | n/a | — | 0 |  |
 | MoEAttention | optimization | pending | — | 0 |  |
 | MoEAttention | real_weights | pending | — | 0 |  |
-| MoEGate | reference | pending | — | 0 | MoEAttention was pending |
+| MoEGate | reference | done | 0.999999 | 1 | NemotronHTopkRouter: float32 proj, sigmoid, top-6 of 128, norm_topk_prob, scale=2.5. |
 | MoEGate | ttnn | pending | — | 0 |  |
 | MoEGate | debug | n/a | — | 0 |  |
 | MoEGate | optimization | pending | — | 0 |  |
 | MoEGate | real_weights | pending | — | 0 |  |
-| MoEExperts | reference | pending | — | 0 |  |
+| MoEExperts | reference | pending | — | 0 | MoEGate was pending |
 | MoEExperts | ttnn | pending | — | 0 |  |
 | MoEExperts | debug | n/a | — | 0 |  |
 | MoEExperts | optimization | pending | — | 0 |  |
 | MoEExperts | real_weights | pending | — | 0 |  |
-| SharedExpert | reference | pending | — | 0 |  |
+| SharedExpert | reference | pending | — | 0 | MoEGate was pending |
 | SharedExpert | ttnn | pending | — | 0 |  |
 | SharedExpert | debug | n/a | — | 0 |  |
 | SharedExpert | optimization | pending | — | 0 |  |
@@ -79,6 +79,9 @@
 - tick 3 (2026-06-13T23:05:58Z): reference[Embedding/LayerNorm/RoPE/Mamba2Layer] — 3ok+1blocked
 - tick 4 (2026-06-13T23:30:00Z): reference[MoEAttention] — ok
 - tick 5 (2026-06-13T23:12:33Z): reference[DenseAttention/DenseMLP/MoEAttention/MoEGate] — 2ok+2blocked
+- tick 6 (2026-06-13T23:45:00Z): reference[MoEGate] — ok
+- tick 7 (2026-06-13T23:19:35Z): reference[DenseMLP/MoEGate/MoEExperts/SharedExpert] — 2ok+2blocked
+- tick 8 (2026-06-13T23:22:05Z): unblock Mamba2Layer (LayerNorm done) — reset to pending
 
 ## Host-Resident Exceptions
 

@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-13T22:50:54Z",
-  "updated_at": "2026-06-13T23:12:33Z",
+  "updated_at": "2026-06-13T23:22:05Z",
   "components": [
     {
       "name": "Embedding",
@@ -122,10 +122,10 @@
         "reference_link": null
       },
       "reference": {
-        "status": "blocked",
+        "status": "pending",
         "attempts": 0,
         "last_error": "dep LayerNorm was pending",
-        "notes": "re-eligible now LayerNorm done"
+        "notes": "unblocked: LayerNorm done"
       },
       "ttnn": {
         "status": "pending",
@@ -194,9 +194,11 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
+        "status": "done",
         "attempts": 0,
-        "notes": "DenseAttention was pending"
+        "artifacts": [],
+        "notes": "relu2 activation (no SwiGLU). Used shared_expert weights (no '-' layers in this model's pattern).",
+        "pcc": 0.9999989
       },
       "ttnn": {
         "status": "pending",
@@ -267,9 +269,11 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0,
-        "notes": "MoEAttention was pending"
+        "status": "done",
+        "attempts": 1,
+        "artifacts": [],
+        "notes": "NemotronHTopkRouter: float32 proj, sigmoid, top-6 of 128, norm_topk_prob, scale=2.5.",
+        "pcc": 0.9999993
       },
       "ttnn": {
         "status": "pending",
@@ -302,7 +306,8 @@
       },
       "reference": {
         "status": "pending",
-        "attempts": 0
+        "attempts": 0,
+        "notes": "MoEGate was pending"
       },
       "ttnn": {
         "status": "pending",
@@ -335,7 +340,8 @@
       },
       "reference": {
         "status": "pending",
-        "attempts": 0
+        "attempts": 0,
+        "notes": "MoEGate was pending"
       },
       "ttnn": {
         "status": "pending",
@@ -462,6 +468,25 @@
       "ts": "2026-06-13T23:12:33Z",
       "action": "reference[DenseAttention/DenseMLP/MoEAttention/MoEGate]",
       "result": "2ok+2blocked"
+    },
+    {
+      "tick": 6,
+      "ts": "2026-06-13T23:45:00Z",
+      "action": "reference[MoEGate]",
+      "result": "ok",
+      "pcc": 0.99999928
+    },
+    {
+      "tick": 7,
+      "ts": "2026-06-13T23:19:35Z",
+      "action": "reference[DenseMLP/MoEGate/MoEExperts/SharedExpert]",
+      "result": "2ok+2blocked"
+    },
+    {
+      "tick": 8,
+      "ts": "2026-06-13T23:22:05Z",
+      "action": "unblock Mamba2Layer (LayerNorm done)",
+      "result": "reset to pending"
     }
   ],
   "config": {
