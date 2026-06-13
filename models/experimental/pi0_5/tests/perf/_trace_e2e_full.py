@@ -646,6 +646,49 @@ def main():
             f"mean={actions.float().mean():.4f} std={actions.float().std():.4f}"
         )
 
+        # ===================== full e2e perf loop (opt-in) =====================
+        # PI05_E2E_PERF=1 replays all 3 traces + re-runs the hand-offs for a full
+        # per-inference latency number (NWARM warmup + NITER timed). Uses the host
+        # vision->prefix path (on-device vision hangs on socket re-send) + on-device
+        # KV migration. prefix_m is refreshed in-place; the KV migrate writes into
+        # fresh recv buffers so denoise replays on the captured past_k (timing is
+        # representative — trace replay time is data-independent; correctness is
+        # validated separately by PI05_E2E_PCC).
+        if os.environ.get("PI05_E2E_PERF", "").lower() in ("1", "true", "yes", "on"):
+            # Per-inference latency = sum of the warm traced-stage replays + the
+            # cross-stage hand-offs. The 3 trace replays are timed in a 2+20 loop
+            # (execute_trace is pure replay — no device allocation, so it loops
+            # cleanly). The hand-offs ALLOCATE device buffers (recv bufs, host
+            # bounce), which is unsafe to do repeatedly with active traces
+            # (allocator.cpp:108), so they're measured single-shot inline above
+            # (vision->prefix and KV migration logs) and added here.
+            NWARM = int(os.environ.get("PI05_E2E_PERF_WARMUP", "2"))
+            NITER = int(os.environ.get("PI05_E2E_PERF_ITERS", "20"))
+
+            def _b(fn):
+                for _ in range(NWARM):
+                    fn()
+                _t = time.perf_counter()
+                for _ in range(NITER):
+                    fn()
+                return 1e3 * (time.perf_counter() - _t) / NITER
+
+            t_vis = _b(lambda: ttnn.execute_trace(vblk, vtid, cq_id=0, blocking=True))
+            t_pre = _b(lambda: ttnn.execute_trace(prefill, ptid, cq_id=0, blocking=True))
+
+            def _den():
+                ttnn.copy_host_to_device_tensor(nh, x_t)  # reset noise in-place (no alloc)
+                ttnn.execute_trace(denoise, dtid, cq_id=0, blocking=True)
+
+            t_den = _b(_den)
+            log(
+                f"PERF traced replays ({NITER}it/{NWARM}wu): vision={t_vis:.2f} prefill={t_pre:.2f} denoise={t_den:.2f} ms"
+            )
+            log("PERF hand-offs (single-shot, logged above): see VISION->PREFIX and KV migration lines")
+            log(
+                f"FULL E2E (replays + hand-offs): vision({t_vis:.1f}) + prefill({t_pre:.1f}) + denoise({t_den:.1f}) + hand-offs ~= per-inference latency [{N_STEPS} denoise steps]"
+            )
+
         # ===================== numerical validation vs torch (opt-in) =====================
         # PI05_E2E_PCC=1 runs the torch Pi0_5Model.sample_actions reference with
         # matched inputs/seed and reports PCC. Same noise contract as the eager
