@@ -28,45 +28,45 @@
 void kernel_main() {
     uint32_t neo_id = ckernel::csr_read<ckernel::CSR::NEO_ID>();
 
-    // auto wait_pop_finish = [](uint16_t id) {
-    //     DataflowBuffer dfb(id);
-    //     dfb.wait_front(1);
-    //     dfb.pop_front(1);
-    //     // dfb.finish();
-    // };
+    auto wait_pop_finish = [](uint16_t id) {
+        DataflowBuffer dfb(id);
+        // dfb.wait_front(1);
+        // dfb.pop_front(1);
+        // dfb.finish();
+    };
 
-    // if (neo_id == 0) {
-    //     // 1Sx2A: DFBs 0–7 shared with Neo2 (DM2 and DM3 → {Neo0, Neo2})
-    //     wait_pop_finish(0);  wait_pop_finish(1);
-    //     wait_pop_finish(2);  wait_pop_finish(3);
-    //     wait_pop_finish(4);  wait_pop_finish(5);
-    //     wait_pop_finish(6);  wait_pop_finish(7);
-    //     // 1Sx1A: DFBs 22–23 (DM0 → Neo0, 1-to-1 remapper)
-    //     wait_pop_finish(22); wait_pop_finish(23);
-    // } else if (neo_id == 1) {
-    //     // 1Sx2A: DFBs 8–15 shared with Neo3 (DM0 and DM1 → {Neo1, Neo3})
-    //     wait_pop_finish(8);  wait_pop_finish(9);
-    //     wait_pop_finish(10); wait_pop_finish(11);
-    //     wait_pop_finish(12); wait_pop_finish(13);
-    //     wait_pop_finish(14); wait_pop_finish(15);
-    //     // 1Sx1A: DFBs 16–17 (DM2 → Neo1) and DFBs 18–19 (DM3 → Neo1)
-    //     wait_pop_finish(16); wait_pop_finish(17);
-    //     wait_pop_finish(18); wait_pop_finish(19);
-    // } else if (neo_id == 2) {
-    //     // 1Sx2A: DFBs 0–7 shared with Neo0 (DM2 and DM3 → {Neo0, Neo2})
-    //     wait_pop_finish(0);  wait_pop_finish(1);
-    //     wait_pop_finish(2);  wait_pop_finish(3);
-    //     wait_pop_finish(4);  wait_pop_finish(5);
-    //     wait_pop_finish(6);  wait_pop_finish(7);
-    //     // No 1Sx1A DFBs for Neo2.
-    // } else {
-    //     // neo_id == 3
-    //     // 1Sx2A: DFBs 8–15 shared with Neo1 (DM0 and DM1 → {Neo1, Neo3})
-    //     wait_pop_finish(8);  wait_pop_finish(9);
-    //     wait_pop_finish(10); wait_pop_finish(11);
-    //     wait_pop_finish(12); wait_pop_finish(13);
-    //     wait_pop_finish(14); wait_pop_finish(15);
-    //     // 1Sx1A: DFBs 20–21 (DM2 → Neo3)
-    //     wait_pop_finish(20); wait_pop_finish(21);
-    // }
+    if (neo_id == 0) {
+        // 1Sx2A: DFBs 0–7 shared with Neo2 (DM2 and DM3 → {Neo0, Neo2})
+        wait_pop_finish(0);  wait_pop_finish(1);
+        wait_pop_finish(2);  wait_pop_finish(3);
+        wait_pop_finish(4);  wait_pop_finish(5);
+        wait_pop_finish(6);  wait_pop_finish(7);
+        // 1Sx1A: DFBs 22–23 (DM0 → Neo0, 1-to-1 remapper)
+        wait_pop_finish(22); wait_pop_finish(23);
+    } else if (neo_id == 1) {
+        // 1Sx2A: DFBs 8–15 shared with Neo3 (DM0 and DM1 → {Neo1, Neo3})
+        wait_pop_finish(8);  wait_pop_finish(9);
+        wait_pop_finish(10); wait_pop_finish(11);
+        wait_pop_finish(12); wait_pop_finish(13);
+        wait_pop_finish(14); wait_pop_finish(15);
+        // 1Sx1A: DFBs 16–17 (DM2 → Neo1) and DFBs 18–19 (DM3 → Neo1)
+        wait_pop_finish(16); wait_pop_finish(17);
+        wait_pop_finish(18); wait_pop_finish(19);
+    } else if (neo_id == 2) {
+        // 1Sx2A: DFBs 0–7 shared with Neo0 (DM2 and DM3 → {Neo0, Neo2})
+        wait_pop_finish(0);  wait_pop_finish(1);
+        wait_pop_finish(2);  wait_pop_finish(3);
+        wait_pop_finish(4);  wait_pop_finish(5);
+        wait_pop_finish(6);  wait_pop_finish(7);
+        // No 1Sx1A DFBs for Neo2.
+    } else {
+        // neo_id == 3
+        // 1Sx2A: DFBs 8–15 shared with Neo1 (DM0 and DM1 → {Neo1, Neo3})
+        wait_pop_finish(8);  wait_pop_finish(9);
+        wait_pop_finish(10); wait_pop_finish(11);
+        wait_pop_finish(12); wait_pop_finish(13);
+        wait_pop_finish(14); wait_pop_finish(15);
+        // 1Sx1A: DFBs 20–21 (DM2 → Neo3)
+        wait_pop_finish(20); wait_pop_finish(21);
+    }
 }

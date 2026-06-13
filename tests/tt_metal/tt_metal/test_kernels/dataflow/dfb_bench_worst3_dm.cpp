@@ -48,38 +48,38 @@ void kernel_main() {
 
     Noc noc;
 
-    // auto issue_and_finish = [&](uint16_t id) {
-    //     DataflowBuffer dfb(id);
-    //     dfb_issue_implicit_read(noc, dfb);
-    //     // dfb.finish();
-    // };
+    auto issue_and_finish = [&](uint16_t id) {
+        DataflowBuffer dfb(id);
+        // dfb_issue_implicit_read(noc, dfb);
+        // dfb.finish();
+    };
 
-    // if (dm_id == 4) {
-    //     // 1Sx1S DFBs 0–3 (→ Neo0) and 8–11 (→ Neo2)
-    //     issue_and_finish(0);  issue_and_finish(1);
-    //     issue_and_finish(2);  issue_and_finish(3);
-    //     issue_and_finish(8);  issue_and_finish(9);
-    //     issue_and_finish(10); issue_and_finish(11);
-    //     // 1Sx2A DFBs 24–27 (→ {Neo1, Neo3})
-    //     issue_and_finish(24); issue_and_finish(25);
-    //     issue_and_finish(26); issue_and_finish(27);
-    // } else if (dm_id == 5) {
-    //     // 1Sx1S DFBs 4–7 (→ Neo1) and 12–15 (→ Neo3)
-    //     issue_and_finish(4);  issue_and_finish(5);
-    //     issue_and_finish(6);  issue_and_finish(7);
-    //     issue_and_finish(12); issue_and_finish(13);
-    //     issue_and_finish(14); issue_and_finish(15);
-    //     // 1Sx2A DFBs 28–31 (→ {Neo1, Neo3})
-    //     issue_and_finish(28); issue_and_finish(29);
-    //     issue_and_finish(30); issue_and_finish(31);
-    // } else if (dm_id == 2) {
-    //     // 1Sx2A DFBs 16–19 (→ {Neo0, Neo2})
-    //     issue_and_finish(16); issue_and_finish(17);
-    //     issue_and_finish(18); issue_and_finish(19);
-    // } else if (dm_id == 3) {
-    //     // 1Sx2A DFBs 20–23 (→ {Neo0, Neo2})
-    //     issue_and_finish(20); issue_and_finish(21);
-    //     issue_and_finish(22); issue_and_finish(23);
-    // }
+    if (dm_id == 4) {
+        // 1Sx1S DFBs 0–3 (→ Neo0) and 8–11 (→ Neo2)
+        issue_and_finish(0);  issue_and_finish(1);
+        issue_and_finish(2);  issue_and_finish(3);
+        issue_and_finish(8);  issue_and_finish(9);
+        issue_and_finish(10); issue_and_finish(11);
+        // 1Sx2A DFBs 24–27 (→ {Neo1, Neo3})
+        issue_and_finish(24); issue_and_finish(25);
+        issue_and_finish(26); issue_and_finish(27);
+    } else if (dm_id == 5) {
+        // 1Sx1S DFBs 4–7 (→ Neo1) and 12–15 (→ Neo3)
+        issue_and_finish(4);  issue_and_finish(5);
+        issue_and_finish(6);  issue_and_finish(7);
+        issue_and_finish(12); issue_and_finish(13);
+        issue_and_finish(14); issue_and_finish(15);
+        // 1Sx2A DFBs 28–31 (→ {Neo1, Neo3})
+        issue_and_finish(28); issue_and_finish(29);
+        issue_and_finish(30); issue_and_finish(31);
+    } else if (dm_id == 2) {
+        // 1Sx2A DFBs 16–19 (→ {Neo0, Neo2})
+        issue_and_finish(16); issue_and_finish(17);
+        issue_and_finish(18); issue_and_finish(19);
+    } else if (dm_id == 3) {
+        // 1Sx2A DFBs 20–23 (→ {Neo0, Neo2})
+        issue_and_finish(20); issue_and_finish(21);
+        issue_and_finish(22); issue_and_finish(23);
+    }
     // DM0/DM1 coordinators; DM6–DM7 unused.
 }

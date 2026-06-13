@@ -179,8 +179,8 @@ uint32_t dm0_isr_blob_region_size(const std::vector<std::shared_ptr<DataflowBuff
     return static_cast<uint32_t>(sizeof(dfb_dm0_isr_blob_core_header_t)) + txn_hw_bytes + pool_bytes;
 }
 
-// Returns the serialized byte size of one hart's init+wait blob.
-// Accounts for per-entry variable TC arrays, fixed-size wait entries, and 4B end-padding.
+// Returns the serialized byte size of one hart's init blob (init entries only, no wait entries).
+// Accounts for per-entry variable TC arrays and 4B end-padding.
 static uint32_t hart_blob_byte_size(
     uint8_t hartid, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core) {
     uint32_t sz = 0u;
@@ -194,7 +194,6 @@ static uint32_t hart_blob_byte_size(
             if (rc.risc_id == hartid) { num_tcs = rc.config.num_tcs_to_rr; break; }
         }
         sz += dfb_hart_init_entry_byte_size(num_tcs);
-        sz += static_cast<uint32_t>(sizeof(dfb_hart_wait_entry_t));
     }
     if (n == 0) {
         sz = 4u;  // minimal {0,0,0,0} blob for non-participating hart
@@ -216,12 +215,9 @@ uint32_t compute_dfb_config_serialized_size(
     for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; h++) {
         payload += hart_blob_byte_size(h, dfbs_on_core);
     }
-    // producer_ready region: one byte per (DFB, producer hart)
-    for (const auto& dfb : dfbs_on_core) {
-        for (const auto& rc : dfb->groups[0].hw_risc_configs) {
-            if (rc.is_producer) { payload++; }
-        }
-    }
+    // Signal region: per-producer byte slots (NUM_DFBS * MAX_PRODUCERS_PER_DFB) + uint32_t expected per DFB.
+    payload += static_cast<uint32_t>(::dfb::NUM_DFBS) * static_cast<uint32_t>(::dfb::MAX_NUM_TILE_COUNTERS_TO_RR)
+             + static_cast<uint32_t>(::dfb::NUM_DFBS) * static_cast<uint32_t>(sizeof(uint32_t));
     return align_dfb_config_transfer_size(payload);
 }
 
@@ -304,9 +300,6 @@ void verify_dfb_hart_blobs(
                 hartid, e, entry->logical_dfb_id, ghdr->participation_mask[hartid]);
             cursor += entry_sz;
         }
-        TT_FATAL(
-            blob_off + cursor + num_entries * sizeof(dfb_hart_wait_entry_t) <= config_bytes.size(),
-            "hart {} wait entries overflow config", hartid);
     }
 }
 
@@ -346,7 +339,7 @@ size_t serialize_dfb_config_for_core(
 
     // ---------------------------------------------------------------------------
     // 1. Collect per-core risc configs for every DFB (base/limit resolved per core).
-    //    Also assign producer_ready_off: one byte per (DFB, producer hart) in order.
+    //    Assign producer_signal_bit: per-producer bit position in dfb_signal[logical_dfb_id].
     // ---------------------------------------------------------------------------
     // per_core_configs[dfb_idx] = per-risc configs with base_addr/limit resolved.
     std::vector<std::vector<DFBRiscConfig>> per_core_configs;
@@ -355,24 +348,30 @@ size_t serialize_dfb_config_for_core(
         per_core_configs.push_back(dfb->compute_per_core_risc_configs(core));
     }
 
-    // producer_ready_off[dfb_idx][hart] = byte index in producer_ready region.
-    std::vector<std::array<uint8_t, ::dfb::NUM_PARTICIPATING_HARTIDS>> producer_ready_off(dfbs_on_core.size());
-    for (auto& arr : producer_ready_off) { arr.fill(0xFFu); }
-    uint8_t next_ready_off = 0;
+    // producer_signal_bit[dfb_idx][hart] = bit position (0-based) in dfb_signal[logical_dfb_id]; 0xFF if consumer.
+    // dfb_expected_signal_vals[logical_dfb_id] = OR of all producer bits for that DFB.
+    std::vector<std::array<uint8_t, ::dfb::NUM_PARTICIPATING_HARTIDS>> producer_signal_bit(dfbs_on_core.size());
+    for (auto& arr : producer_signal_bit) { arr.fill(0xFFu); }
+    std::array<uint32_t, ::dfb::NUM_DFBS> dfb_expected_signal_vals{};
+    dfb_expected_signal_vals.fill(0u);
+    std::array<uint8_t, ::dfb::NUM_DFBS> next_producer_bit{};
+    next_producer_bit.fill(0u);
     for (size_t di = 0; di < dfbs_on_core.size(); di++) {
         const auto& dfb = dfbs_on_core[di];
+        const uint8_t logical_dfb_id = static_cast<uint8_t>(dfb->id);
         for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; h++) {
-            if (!(dfb->risc_mask & (1u << h))) continue;
+            if (!(dfb->risc_mask & (1u << h))) { continue; }
             const auto& rcs = per_core_configs[di];
             for (const auto& rc : rcs) {
                 if (rc.risc_id == h && rc.is_producer) {
-                    producer_ready_off[di][h] = next_ready_off++;
+                    const uint8_t bit = next_producer_bit[logical_dfb_id]++;
+                    producer_signal_bit[di][h] = bit;
+                    dfb_expected_signal_vals[logical_dfb_id] |= (1u << bit);
                     break;
                 }
             }
         }
     }
-    const uint32_t total_ready_bytes = next_ready_off;
 
     // ---------------------------------------------------------------------------
     // 2. Build the header (all offsets computed after blob sizes are known).
@@ -403,7 +402,7 @@ size_t serialize_dfb_config_for_core(
         hart_blob_sizes[h] = sz;
         running += sz;
     }
-    ghdr.producer_ready_region_off = running;
+    ghdr.dfb_signal_region_off = running;
 
     // ---------------------------------------------------------------------------
     // 3. Emit header.
@@ -455,10 +454,9 @@ size_t serialize_dfb_config_for_core(
         "DFB config: offset {} != hart_blobs_base {} after DM0/DM1 blobs", offset, hart_blobs_base);
 
     // ---------------------------------------------------------------------------
-    // 6. Emit per-hart sequential init+wait blobs.
+    // 6. Emit per-hart sequential init blobs (init entries only; no wait entries).
     //    Layout of each blob:
     //      [dfb_hart_init_entry_t × num_entries] (variable, 4B-aligned each)
-    //      [dfb_hart_wait_entry_t × num_entries] (8B each)
     //      (4B-padded end)
     //    num_entries = popcount(participation_mask[h]); not stored in the blob.
     // ---------------------------------------------------------------------------
@@ -534,7 +532,7 @@ size_t serialize_dfb_config_for_core(
                     entry.txn_ids[t] = txn.txn_ids[t];
                 }
             }
-            entry.producer_ready_off = producer_ready_off[di][h];
+            entry.producer_signal_bit = producer_signal_bit[di][h];
 
             // Zero the full entry region first (covers padding between packed_tc and next 4B boundary).
             std::memset(out.data() + offset, 0, entry_sz);
@@ -560,27 +558,6 @@ size_t serialize_dfb_config_for_core(
             offset += entry_sz;
         }
 
-        // Wait entries.
-        for (size_t di = 0; di < dfbs_on_core.size(); di++) {
-            const auto& dfb = dfbs_on_core[di];
-            if (!(dfb->risc_mask & (1u << h))) continue;
-
-            dfb_hart_wait_entry_t we = {};
-            uint8_t nprods = 0;
-            for (uint8_t ph = 0; ph < ::dfb::NUM_PARTICIPATING_HARTIDS; ph++) {
-                if (!(dfb->risc_mask & (1u << ph))) continue;
-                if (producer_ready_off[di][ph] == 0xFFu) continue;  // consumer
-                if (nprods < ::dfb::MAX_NUM_TILE_COUNTERS_TO_RR) {
-                    we.ready_offs[nprods++] = producer_ready_off[di][ph];
-                }
-            }
-            we.num_producers = nprods;
-            TT_FATAL(offset + sizeof(we) <= out.size(),
-                "DFB config overflow (wait entry dfb={} hart={})", dfb->id, h);
-            std::memcpy(out.data() + offset, &we, sizeof(we));
-            offset += sizeof(we);
-        }
-
         // Pad blob to 4B boundary.
         const uint32_t blob_end_padded = (offset + 3u) & ~3u;
         if (blob_end_padded > offset) {
@@ -590,15 +567,29 @@ size_t serialize_dfb_config_for_core(
     }
 
     // ---------------------------------------------------------------------------
-    // 7. Emit producer-ready region (zeroed; device writes 1 via uncached alias).
+    // 7. Emit signal region:
+    //    [dfb_signal[NUM_DFBS * MAX_PRODUCERS_PER_DFB]] (byte slots, zeroed)
+    //    [dfb_expected_signal[NUM_DFBS]] (uint32_t bitmasks, host-computed)
+    //
+    //    Producer i of DFB d writes byte 1 to slot [d * MAX_PRODUCERS + i] at runtime.
+    //    Consumer polls each set bit in dfb_expected_signal[d].
     // ---------------------------------------------------------------------------
     TT_FATAL(
-        offset == ghdr.producer_ready_region_off,
-        "DFB config: offset {} != producer_ready_region_off {}", offset, ghdr.producer_ready_region_off);
-    if (total_ready_bytes > 0) {
-        TT_FATAL(offset + total_ready_bytes <= out.size(), "DFB config overflow (ready region)");
-        std::memset(out.data() + offset, 0, total_ready_bytes);
-        offset += total_ready_bytes;
+        offset == ghdr.dfb_signal_region_off,
+        "DFB config: offset {} != dfb_signal_region_off {}", offset, ghdr.dfb_signal_region_off);
+    {
+        constexpr uint32_t kMaxProd = static_cast<uint32_t>(::dfb::MAX_NUM_TILE_COUNTERS_TO_RR);
+        constexpr uint32_t kSlotBytes = static_cast<uint32_t>(::dfb::NUM_DFBS) * kMaxProd;
+        constexpr uint32_t kExpectedBytes = static_cast<uint32_t>(::dfb::NUM_DFBS) * sizeof(uint32_t);
+        TT_FATAL(offset + kSlotBytes + kExpectedBytes <= out.size(), "DFB config overflow (signal region)");
+        // Per-producer byte slots — zeroed; each producer writes 1 via uncached alias at runtime.
+        std::memset(out.data() + offset, 0, kSlotBytes);
+        offset += kSlotBytes;
+        // dfb_expected_signal[NUM_DFBS] — host-computed bitmask of active producer bits per DFB.
+        for (uint32_t i = 0; i < static_cast<uint32_t>(::dfb::NUM_DFBS); i++) {
+            std::memcpy(out.data() + offset, &dfb_expected_signal_vals[i], sizeof(uint32_t));
+            offset += sizeof(uint32_t);
+        }
     }
 
     // ---------------------------------------------------------------------------
@@ -623,10 +614,10 @@ void log_dfb_config_vec_dump(const CoreCoord& core, std::string_view label, std:
 
     log_info(
         tt::LogMetal,
-        "DFB config dump [{}] core {} size={} dm1_off={} dm0_off={} ready_off={} num_dfbs={} has_dm0_isr={}",
+        "DFB config dump [{}] core {} size={} dm1_off={} dm0_off={} signal_off={} num_dfbs={} has_dm0_isr={}",
         label, core.str(), config_bytes.size(),
         ghdr->dm1_remapper_blob_offset, ghdr->dm0_isr_blob_offset,
-        ghdr->producer_ready_region_off, num_dfbs, ghdr->has_dm0_isr);
+        ghdr->dfb_signal_region_off, num_dfbs, ghdr->has_dm0_isr);
 
     for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; ++h) {
         log_info(
@@ -679,9 +670,9 @@ void log_dfb_config_vec_dump(const CoreCoord& core, std::string_view label, std:
                 reinterpret_cast<const dfb_hart_init_entry_t*>(config_bytes.data() + cursor);
             log_info(
                 tt::LogMetal,
-                "    entry[{}] dfb_id={} num_tcs={} flags=0x{:02x} cap={} entry_size={} ready_off={}",
+                "    entry[{}] dfb_id={} num_tcs={} flags=0x{:02x} cap={} entry_size={} signal_bit={}",
                 e, entry->logical_dfb_id, entry->num_tcs, entry->flags,
-                entry->capacity, entry->entry_size, entry->producer_ready_off);
+                entry->capacity, entry->entry_size, entry->producer_signal_bit);
             cursor += dfb_hart_init_entry_byte_size(entry->num_tcs);
         }
     }
@@ -702,10 +693,10 @@ void log_dfb_config_readback(
 
     log_info(
         tt::LogMetal,
-        "DFB readback core {} L1=0x{:x} size={} dm1_off={} dm0_off={} ready_off={} num_dfbs={} has_dm0_isr={}",
+        "DFB readback core {} L1=0x{:x} size={} dm1_off={} dm0_off={} signal_off={} num_dfbs={} has_dm0_isr={}",
         core.str(), l1_addr, readback_bytes.size(),
         ghdr->dm1_remapper_blob_offset, ghdr->dm0_isr_blob_offset,
-        ghdr->producer_ready_region_off, num_dfbs, ghdr->has_dm0_isr);
+        ghdr->dfb_signal_region_off, num_dfbs, ghdr->has_dm0_isr);
 
     for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; ++h) {
         log_info(tt::LogMetal, "  hart[{}] participation_mask=0x{:x} blob_off={}",
