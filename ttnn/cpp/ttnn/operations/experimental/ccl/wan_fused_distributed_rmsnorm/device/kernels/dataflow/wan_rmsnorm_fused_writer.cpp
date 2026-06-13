@@ -114,10 +114,16 @@ void kernel_main() {
 
         fabric_connection.open_finish();
 
-        // Reserve the full chunk's worth of gathered-stats slots up front.
-        // chunk_size_rows == num_tile_rows per the program factory's
-        // single-chunk-per-core decision; one cb_push_back at the end signals
-        // compute to start the post phase.
+        // Reserve the worker's FULL gathered-stats region up front so the absolute
+        // slot addresses base + (r*ring_size + device) are valid for every row
+        // (the multicast targets that same L1 address on each ring chip). But
+        // RELEASE (push) each row's ring_size slots to compute as soon as that row's
+        // gather completes, instead of one push at the end. The compute interleaves
+        // PRE/POST per chunk (1 row): it pushes stats_local[r] in chunk r's PRE, then
+        // BLOCKS in chunk r's POST on stats_gathered[r]. Pushing only at the end
+        // deadlocks at ring_size>1 with >1 tile-row — we'd wait for stats_local[r+1]
+        // that compute can't produce until it gets stats_gathered[r] (the LTX-audio
+        // TP=2 small-shape hang).
         const uint32_t total_stats_tiles = num_tile_rows * ring_size;
         cb_reserve_back(stats_gathered_cb, total_stats_tiles);
         const uint32_t stats_gathered_base = get_write_ptr(stats_gathered_cb);
@@ -128,11 +134,12 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* out_ready_sem_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr);
 
-        // For each row this core owns: fabric-mcast its stats tile + local
-        // write to my slot. fused_write_atomic_and_advance_local_read_address_for_fabric_write
-        // does both: local noc_async_write to dest noc xy AND fabric mcast
-        // write+atomic_inc to remote chips. It advances l1_read_addr by
-        // payload_size_bytes after sending.
+        // For each row this core owns: fabric-mcast its stats tile + local write to my
+        // slot, then wait for that row's incs and release the row's gathered slots.
+        // fused_write_atomic_and_advance_local_read_address_for_fabric_write does both
+        // the local noc_async_write and the fabric mcast write+atomic_inc to remote
+        // chips, advancing l1_read_addr afterwards.
+        uint32_t cumulative_incs = 0;
         for (uint32_t r = 0; r < num_tile_rows; r++) {
             cb_wait_front(stats_local_cb, 1);
             size_t l1_read_addr = get_read_ptr(stats_local_cb);
@@ -141,6 +148,9 @@ void kernel_main() {
             const uint32_t my_slot_addr = stats_gathered_base + my_slot_offset;
             const uint64_t noc0_dest_noc_addr = safe_get_noc_addr(my_x[0], my_y[0], my_slot_addr, 0);
 
+            // flush=true: order the payload write before the atomic_inc at the receiver,
+            // so a satisfied semaphore guarantees the remote slot is committed (matches
+            // the MUX writer fix — without it the sem-gated read can see a stale slot).
             fused_write_atomic_and_advance_local_read_address_for_fabric_write(
                 noc0_dest_noc_addr,
                 pkt_hdr_forward,
@@ -150,31 +160,26 @@ void kernel_main() {
                 stats_tile_bytes,
                 out_ready_sem_noc_addr_in_pkt,
                 /*val=*/1,
-                /*flush=*/false);
+                /*flush=*/true);
 
             cb_pop_front(stats_local_cb, 1);
-        }
 
-        fabric_connection.close_start();
-
-        // Wait for the (ring_size - 1) remote chips to have each atomic_inc'd
-        // num_tile_rows times for our rows. The local writes did NOT inc the
-        // sem (the fused fabric helper only inc's remote dests), so the
-        // expected count is num_tile_rows * (ring_size - 1).
-        const uint32_t expected_incs = num_tile_rows * (ring_size - 1);
-        if (expected_incs > 0) {
-            noc_semaphore_wait_min(out_ready_sem_ptr, expected_incs);
+            // Wait for this row's incs (cumulative across rows so far): each of the
+            // (ring_size-1) remote chips atomic_inc's once per row. The remote runs the
+            // identical per-row loop, so both chips stay in lockstep — no deadlock.
+            cumulative_incs += (ring_size - 1);
+            if (cumulative_incs > 0) {
+                noc_semaphore_wait_min(out_ready_sem_ptr, cumulative_incs);
+            }
+            // Local write of my own slot for row r must land before compute reads it.
+            noc_async_write_barrier();
+            // Release this row's ring_size gathered slots so compute's chunk r can run.
+            cb_push_back(stats_gathered_cb, ring_size);
         }
         // Reset for any subsequent invocations of this op.
         noc_semaphore_set(out_ready_sem_ptr, 0);
 
-        // Wait for the local async writes (to my own slots) to land before
-        // letting compute consume the stats.
-        noc_async_write_barrier();
-
-        // All slots are now populated — release the chunk to compute.
-        cb_push_back(stats_gathered_cb, total_stats_tiles);
-
+        fabric_connection.close_start();
         fabric_connection.close_finish();
     }
 
