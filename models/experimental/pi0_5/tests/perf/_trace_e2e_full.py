@@ -2,15 +2,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Fully-traced e2e pipeline assembly: vision -> prefill -> denoise -> actions,
-all three stages traced (FABRIC_1D, collinear layout), host-bounce cross-stage
-hand-offs. First milestone: runs e2e and produces finite actions of the right
-shape (numerical-vs-torch with upstream masks is a follow-up; here mask=None).
+all three stages traced (FABRIC_1D, collinear layout). Matches torch
+Pi0_5Model.sample_actions at PCC ~0.9988 (PI05_E2E_PCC=1).
 
-Stages (each reuses the validated prototype logic):
-  vision : real images -> eager embed -> traced 27-block core -> eager post_ln+projector
-  prefix : reshape vision feats + host lang-embed + concat  (host-side)
+Cross-stage KV migration is fully on-device (in-mesh p2p-gather + adjacent
+FABRIC_1D socket). The vision->prefix hand-off is host-bounce by default, or
+fully on-device under PI05_VISION_SOCKET=1 (projector+lang-embed+concat on vblk,
+socket (6,2)->(5,2) + p2p to prefill (0,0)); the latter makes the whole pipeline
+on-device but needs the ~1GB embed table resident on the vision mesh.
+
+Stages:
+  vision : real images -> eager embed -> traced 27-block core -> post_ln+projector
+  prefix : vision feats + lang-embed + concat (host, or on-device under VISION_SOCKET)
   prefill: traced 18 VLM blocks (snake) -> per-layer KV
-  KVmig  : host-bounce KV -> denoise mesh (chip c = layers 3c..3c+2)
+  KVmig  : on-device p2p-gather + adjacent socket -> denoise (chip c = layers 3c..3c+2)
   denoise: traced Euler loop (suffix embed + KV cross-attn + final proj) -> actions
 """
 
@@ -220,46 +225,119 @@ def main():
         vbo = vchain(emb_v)
         ttnn.end_trace_capture(vblk, vtid, cq_id=0)
         ttnn.execute_trace(vblk, vtid, cq_id=0, blocking=True)
-        # chip (0,2) holds the last 9 SigLIP layers; ConcatMeshToTensor interleaves
-        # device-batch, so chip 2's lane is rows [2*N_CAMS : 3*N_CAMS] -> (N_CAMS,256,1152).
-        vblk_out = ttnn.to_torch(vbo, mesh_composer=ttnn.ConcatMeshToTensor(vblk, dim=0))[2 * N_CAMS : 3 * N_CAMS]
-        # post_ln + projector (eager) on embed_chip
         post_w = vw.get("post_layernorm.weight") or vw.get("vision_model.post_layernorm.weight")
         post_b = vw.get("post_layernorm.bias") or vw.get("vision_model.post_layernorm.bias")
-        plw = tensor_1d_to_2d_ttnn(post_w, embed_chip, dtype=ttnn.bfloat16, memory_config=get_ln_weight_memory_config())
-        plb = (
-            tensor_1d_to_2d_ttnn(post_b, embed_chip, dtype=ttnn.bfloat16, memory_config=get_ln_weight_memory_config())
-            if post_b is not None
-            else None
-        )
-        projector = MultiModalProjectorTTNN(pw, embed_chip)
-        vblk_m = ttnn.from_torch(
-            vblk_out.reshape(N_CAMS, npatch, scfg.hidden_size),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=embed_chip,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        feats = ttnn.to_torch(
-            projector.forward(
-                ttnn.layer_norm(
-                    vblk_m, weight=plw, bias=plb, epsilon=scfg.layer_norm_eps, memory_config=ttnn.L1_MEMORY_CONFIG
-                )
-            )
-        )
-        log(f"VISION done: feats {tuple(feats.shape)} finite={torch.isfinite(feats).all().item()}")
-
-        # ===================== PREFIX (host) =====================
         embed_tok = lw_all.get("model.embed_tokens.weight")
         if embed_tok is None:
             embed_tok = lw_all["lm_head.weight"]  # tied embeddings
         scale = float(vcfg.width) ** 0.5
-        lang_emb = (embed_tok[lang_tokens[0].long()] * scale).unsqueeze(0)  # (1, LANG_LEN, 2048)
-        vis_flat = feats.reshape(1, N_CAMS * npatch, vcfg.width).float()
-        prefix = torch.cat([vis_flat, lang_emb.float()], dim=1)  # (1, prefix_len, 2048)
-        if prefix_pad > prefix_len:
-            prefix = torch.nn.functional.pad(prefix, (0, 0, 0, prefix_pad - prefix_len))
-        log(f"PREFIX built {tuple(prefix.shape)}")
+        _vsock = os.environ.get("PI05_VISION_SOCKET", "").lower() in ("1", "true", "yes", "on")
+
+        # prefix_m is the prefill (6,3) input; only chip (0,0) needs the real prefix
+        # (the snake propagates from there). Built host-side (_repl) by default, or
+        # fully on-device + socketed when PI05_VISION_SOCKET=1.
+        prefix_m = None
+        if _vsock:
+            # ---- on-device prefix build on vblk + collinear adjacent socket ----
+            # post_ln + projector + lang-embed + concat run SPMD on vblk; only chip
+            # (0,2)=global(6,2) (which holds the real vision output) is correct.
+            plw = tensor_1d_to_2d_ttnn(post_w, vblk, dtype=ttnn.bfloat16, memory_config=get_ln_weight_memory_config())
+            plb = (
+                tensor_1d_to_2d_ttnn(post_b, vblk, dtype=ttnn.bfloat16, memory_config=get_ln_weight_memory_config())
+                if post_b is not None
+                else None
+            )
+            projector = MultiModalProjectorTTNN(pw, vblk)
+            ln = ttnn.layer_norm(vbo, weight=plw, bias=plb, epsilon=scfg.layer_norm_eps)
+            feats_tt = projector.forward(ln)  # (N_CAMS, npatch, width) per chip
+            vis_flat = ttnn.reshape(feats_tt, (1, N_CAMS * npatch, vcfg.width))
+            # lang embed on vblk (table replicated across the 3 vision chips)
+            emb_tt = _repl(embed_tok, vblk)
+            lt = ttnn.from_torch(
+                lang_tokens.to(torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=vblk,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(vblk),
+            )
+            lang_emb = ttnn.embedding(lt, emb_tt)
+            if lang_emb.layout != ttnn.TILE_LAYOUT:
+                lang_emb = ttnn.to_layout(lang_emb, ttnn.TILE_LAYOUT)
+            lang_emb = ttnn.mul(lang_emb, scale)  # (1, LANG_LEN, width) per chip
+            prefix_t = ttnn.concat([vis_flat, lang_emb], dim=1)  # (1, prefix_len, width)
+            if prefix_pad > prefix_len:
+                prefix_t = ttnn.pad(prefix_t, [(0, 0), (0, prefix_pad - prefix_len), (0, 0)], value=0.0)
+            # p2p-safe: bf16 DRAM-interleaved TILE
+            if prefix_t.dtype != ttnn.bfloat16:
+                prefix_t = ttnn.typecast(prefix_t, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            prefix_t = ttnn.to_memory_config(ttnn.to_layout(prefix_t, ttnn.TILE_LAYOUT), ttnn.DRAM_MEMORY_CONFIG)
+            log(f"VISION+PREFIX on-device {tuple(prefix_t.shape)}")
+            # socket vblk (6,2) -> prefill (5,2) [adjacent, col 2], then in-mesh
+            # p2p (5,2)->(5,0)->(0,0) [collinear hops] to reach the prefill head.
+            conn = ttnn.SocketConnection(
+                ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 2), ttnn.CoreCoord(0, 0)),  # vblk local (0,2)=global (6,2)
+                ttnn.MeshCoreCoord(ttnn.MeshCoordinate(5, 2), ttnn.CoreCoord(0, 1)),  # prefill local (5,2)
+            )
+            sp = ttnn.create_socket_pair(
+                vblk, prefill, ttnn.SocketConfig([conn], ttnn.SocketMemoryConfig(ttnn.BufferType.L1, 4096 * 4))
+            )
+            prefix_m = _repl(torch.zeros(1, prefix_pad, vcfg.width), prefill)
+            ttnn.experimental.send_direct_async(prefix_t, sp[0])
+            ttnn.experimental.recv_direct_async(prefix_m, sp[1])
+            ttnn.synchronize_device(prefill)
+            ttnn.point_to_point(
+                prefix_m,
+                ttnn.MeshCoordinate(5, 2),
+                ttnn.MeshCoordinate(5, 0),
+                topology=ttnn.Topology.Linear,
+                output_tensor=prefix_m,
+            )
+            ttnn.point_to_point(
+                prefix_m,
+                ttnn.MeshCoordinate(5, 0),
+                ttnn.MeshCoordinate(0, 0),
+                topology=ttnn.Topology.Linear,
+                output_tensor=prefix_m,
+            )
+            ttnn.synchronize_device(prefill)
+            log("VISION->PREFIX migrated on-device (socket + p2p to prefill (0,0))")
+        else:
+            # ---- host path (validated default) ----
+            # chip (0,2) holds the last 9 SigLIP layers; ConcatMeshToTensor interleaves
+            # device-batch, so chip 2's lane is rows [2*N_CAMS:3*N_CAMS] -> (N_CAMS,256,1152).
+            vblk_out = ttnn.to_torch(vbo, mesh_composer=ttnn.ConcatMeshToTensor(vblk, dim=0))[2 * N_CAMS : 3 * N_CAMS]
+            plw = tensor_1d_to_2d_ttnn(
+                post_w, embed_chip, dtype=ttnn.bfloat16, memory_config=get_ln_weight_memory_config()
+            )
+            plb = (
+                tensor_1d_to_2d_ttnn(
+                    post_b, embed_chip, dtype=ttnn.bfloat16, memory_config=get_ln_weight_memory_config()
+                )
+                if post_b is not None
+                else None
+            )
+            projector = MultiModalProjectorTTNN(pw, embed_chip)
+            vblk_m = ttnn.from_torch(
+                vblk_out.reshape(N_CAMS, npatch, scfg.hidden_size),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=embed_chip,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            feats = ttnn.to_torch(
+                projector.forward(
+                    ttnn.layer_norm(
+                        vblk_m, weight=plw, bias=plb, epsilon=scfg.layer_norm_eps, memory_config=ttnn.L1_MEMORY_CONFIG
+                    )
+                )
+            )
+            log(f"VISION done: feats {tuple(feats.shape)} finite={torch.isfinite(feats).all().item()}")
+            lang_emb = (embed_tok[lang_tokens[0].long()] * scale).unsqueeze(0)  # (1, LANG_LEN, 2048)
+            vis_flat = feats.reshape(1, N_CAMS * npatch, vcfg.width).float()
+            prefix = torch.cat([vis_flat, lang_emb.float()], dim=1)  # (1, prefix_len, 2048)
+            if prefix_pad > prefix_len:
+                prefix = torch.nn.functional.pad(prefix, (0, 0, 0, prefix_pad - prefix_len))
+            log(f"PREFIX built {tuple(prefix.shape)}")
 
         # ===================== PREFILL (traced snake + KV) =====================
         snake = stages.prefill_snake_order(6, 3)
@@ -285,7 +363,8 @@ def main():
             pshard[k] = _shard(torch.stack(order, 0), *pmeta[k], prefill)
         pblock = GemmaBlockTTNN(vcfg, pshard, 0, prefill, None, None)
         pcos, psin = precompute_freqs_cis_meta_format(vcfg.head_dim, prefix_pad, prefill, base=vcfg.rope_base)
-        prefix_m = _repl(prefix.to(torch.float32), prefill)
+        if prefix_m is None:  # host path; on-device path already built prefix_m via socket
+            prefix_m = _repl(prefix.to(torch.float32), prefill)
 
         def pchain(h):
             cur, kvs = h, []
@@ -395,8 +474,9 @@ def main():
                     fn()
                 return 1e3 * (time.perf_counter() - t0) / N
 
-            def _v_d2h():
-                ttnn.execute_trace(vblk, vtid, cq_id=0, blocking=True)
+            ttnn.execute_trace(vblk, vtid, cq_id=0, blocking=True)  # one exec; data persists
+
+            def _v_d2h():  # PURE transfer: to_torch of vision output (no trace re-exec)
                 ttnn.to_torch(vbo, mesh_composer=ttnn.ConcatMeshToTensor(vblk, dim=0))[2 * N_CAMS : 3 * N_CAMS]
 
             def _prefix_h2d():
@@ -434,13 +514,14 @@ def main():
                 migrate_side(0, _recv_bufs())
                 migrate_side(1, _recv_bufs())
 
-            v_d2h = _bench(_v_d2h)
-            prefix_h2d = _bench(_prefix_h2d)
+            if not _vsock:  # vision->prefix host-bounce timing (host path only; `prefix` is host-side)
+                v_d2h = _bench(_v_d2h)
+                prefix_h2d = _bench(_prefix_h2d)
+                log(
+                    f"TIMING vision->prefix host-bounce: d2h={v_d2h:.2f}ms + h2d={prefix_h2d:.2f}ms = {v_d2h+prefix_h2d:.2f}ms"
+                )
             kv_host = _bench(_kv_host)
             kv_sock = _bench(_kv_socket)
-            log(
-                f"TIMING vision->prefix host-bounce: d2h={v_d2h:.2f}ms + h2d={prefix_h2d:.2f}ms = {v_d2h+prefix_h2d:.2f}ms"
-            )
             log(
                 f"TIMING KV migration: host-bounce={kv_host:.2f}ms  on-device p2p+socket={kv_sock:.2f}ms  speedup={kv_host/kv_sock:.1f}x"
             )
