@@ -1281,6 +1281,90 @@ class TT_CCL:
         # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
         return ttnn_tensor_out, w3_out
 
+    def all_gather_matmul(
+        self,
+        input_tensor_mesh,
+        weight,
+        dim=3,
+        cluster_axis=1,
+        num_links=1,
+        ag_memory_config=None,
+        mm_memory_config=None,
+        program_config=None,
+        compute_kernel_config=None,
+        dtype=None,
+        global_cb=None,
+        buffer_key=None,
+    ):
+        """Fused all-gather + matmul wrapper around
+        ``ttnn.experimental.llama_all_gather_matmul_async``.
+
+        Gathers ``input_tensor_mesh`` along ``dim`` across ``cluster_axis`` and
+        immediately matmuls the gathered activation against ``weight``, returning
+        the matmul output. The (all-gather) interim buffer and the cross-device
+        semaphore are sourced from tt_ccl's EXISTING pools (NEVER hand-built):
+
+          * cross-device semaphore: ``self.gather_semaphore_handles[cluster_axis]
+            [self.gather_idx[cluster_axis]]`` (the same pool every other wrapper
+            uses), cycled via ``gather_idx`` after the call.
+          * interim buffer: a persistent width-sharded L1 tensor of the GATHERED
+            activation shape, cached in ``self.all_gather_buffers`` keyed by
+            ``buffer_key`` so it is allocated once and reused (mirrors how the
+            ff2_qwen reference test pre-allocates its own ``tt_intermediate``).
+            Its shard spec is taken from ``ag_memory_config`` (the all-gather
+            output memcfg) — the hang-prone part is this buffer matching the AG
+            output layout exactly, which by construction it does.
+          * sub-device / topology: ``self.worker_sub_device_id`` /
+            ``self.model_config["CCL_TOPOLOGY"]``.
+
+        Callers therefore never touch raw CCL primitives.
+        """
+        # --- source/allocate the persistent interim (all-gather) buffer from the pool ---
+        interim_key = buffer_key if buffer_key is not None else "AG_MM_DEFAULT"
+        intermediate_buffer = self.all_gather_buffers.get(interim_key, None)
+        if intermediate_buffer is None:
+            # Gathered activation shape, mirroring the ff2_qwen reference test's
+            # ``intermediate_tensor``: per-device width = input width, then the
+            # mesh's cluster_axis dim carries the ring so the gathered result is
+            # ``per_device_width * ring_size`` wide.  Build a full
+            # ``[*cluster_shape, M, per_device_width * ring_size]`` host tensor and
+            # 2D-shard it (dims=(0,1)) so each device owns the AG-output layout
+            # exactly described by ``ag_memory_config``.
+            ring_size = self.cluster_shape[cluster_axis]
+            per_device_width = input_tensor_mesh.shape[dim]
+            M = input_tensor_mesh.shape[-2]
+            intermediate_shape = [*self.cluster_shape, M, per_device_width * ring_size]
+            intermediate_buffer = ttnn.from_torch(
+                torch.zeros(intermediate_shape),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=input_tensor_mesh.dtype,
+                memory_config=ag_memory_config,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=self.cluster_shape),
+            )
+            self.all_gather_buffers[interim_key] = intermediate_buffer
+
+        mm_out = ttnn.experimental.llama_all_gather_matmul_async(
+            input_tensor_mesh,
+            weight,
+            intermediate_buffer,
+            dim=dim,
+            cluster_axis=cluster_axis,
+            mesh_device=self.mesh_device,
+            multi_device_global_semaphore=self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
+            ag_memory_config=ag_memory_config,
+            mm_memory_config=mm_memory_config,
+            topology=self.model_config["CCL_TOPOLOGY"],
+            num_links=num_links,
+            subdevice_id=self.worker_sub_device_id,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            dtype=dtype,
+            global_cb=global_cb,
+        )
+        self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+        return mm_out
+
     def matmul_line_reduce_scatter(
         self,
         # Matmul
