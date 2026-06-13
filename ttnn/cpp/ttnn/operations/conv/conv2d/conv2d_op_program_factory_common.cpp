@@ -248,13 +248,41 @@ std::vector<CBInfo> get_cb_info(
     // Narrowing the headroom to !enable_bias keeps the bias path at one block. The plain-TILE l1_acc-OFF
     // path (untilize_out=false) likewise stays one block — it never reserves a row-group on top of spills.
     const bool needs_software_reload_headroom = untilize_out && !packer_l1_acc && !enable_bias;
+    //
+    // M5 — recover the L1 that M1's unconditional dedicate cost on the fp32_accum extreme shapes
+    // (GH#45995 OOM regression). The dedicate is REQUIRED only for MULTI-output-block convs: there the
+    // helper's non-pin FIFO must wrap to a fixed base every K-block for per-address L1_ACC, which a
+    // dedicated one-block region guarantees but an aliased multi-block OUT region would NOT (the FIFO
+    // would advance across the output blocks → the M1 multi-block mis-accumulation the resnet50
+    // bias+l1_acc canary catches). For a SINGLE-output-block conv (per_core_out_ntiles ==
+    // out_block_num_tiles — the whole per-core output IS one block, which the huge-act_block_h extreme
+    // shapes are) aliasing partials back ONTO OUT is SAFE non-pin: there is exactly one outer iter, and
+    // the one (= whole-output) block makes the helper's normal FIFO wrap within it to the output base,
+    // so L1_ACC accumulates at a fixed base correctly (matmul's in-place model). That alias costs 0
+    // extra L1 (shares the OUT buffer), exactly as the conv did pre-M1.
+    //
+    // The kernel is alias-agnostic: conv_bmm_tilize.cpp resets matmul_partials_cb rd/wr to the
+    // kernel-entry base each outer iter unconditionally (its partials_cb_uses_output compile arg is
+    // [[maybe_unused]] — there is NO pin path keyed on it). So re-enabling the alias does not resurrect
+    // any pin machinery; it only redirects the CB onto the output buffer in allocate_cbs.
+    //
+    // Alias preconditions match the pre-M1 conv: partial_dtype == output_datatype (the aliased CB must
+    // share OUT's data format / tile size), !untilize_out (ROW_MAJOR output keeps partials as a TILE
+    // staging buffer the untilize phase reads — cannot alias onto the RM output), and !is_1d_depthwise
+    // (dest-reuse path, no partials CB).
+    const bool single_output_block = (per_core_out_ntiles == out_block_num_tiles);
+    const bool can_alias_partials_onto_out =
+        single_output_block && (partial_dtype == output_datatype) && !untilize_out && !is_1d_depthwise_conv;
     const uint32_t matmul_partials_num_pages =
-        is_1d_depthwise_conv ? 0 : (needs_software_reload_headroom ? 2 * out_block_num_tiles : out_block_num_tiles);
+        is_1d_depthwise_conv ? 0
+        : can_alias_partials_onto_out
+            ? per_core_out_ntiles  // aliased onto OUT (== one block here), 0 extra L1
+            : (needs_software_reload_headroom ? 2 * out_block_num_tiles : out_block_num_tiles);
     cb_info.emplace_back(CBInfo{
         .name = Conv2dCb::MATMUL_PARTIALS,
         .num_pages = matmul_partials_num_pages,
         .page_size = partial_tile_size,
-        .is_globally_allocated = false,
+        .is_globally_allocated = can_alias_partials_onto_out,
         .data_format = partial_df});
 
     const bool overlap_im2col_cb =
