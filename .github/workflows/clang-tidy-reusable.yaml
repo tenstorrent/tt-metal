@@ -179,8 +179,8 @@ jobs:
       - name: 🔧 CMake configure
         run: |
           cmake --preset clang-tidy-fix-parallel \
-            -DCMAKE_CXX_CLANG_TIDY="$(pwd)/cmake/clang-tidy-export-fixes-wrapper.sh;$(pwd)/.build/clang-tidy-fix-parallel/fixes;--warnings-as-errors=*" \
-            -DCMAKE_C_CLANG_TIDY="$(pwd)/cmake/clang-tidy-export-fixes-wrapper.sh;$(pwd)/.build/clang-tidy-fix-parallel/fixes;--warnings-as-errors=*"
+            -DCMAKE_CXX_CLANG_TIDY="$(pwd)/cmake/clang-tidy-export-fixes-wrapper.sh;$(pwd)/.build/clang-tidy/fixes;--warnings-as-errors=*" \
+            -DCMAKE_C_CLANG_TIDY="$(pwd)/cmake/clang-tidy-export-fixes-wrapper.sh;$(pwd)/.build/clang-tidy/fixes;--warnings-as-errors=*"
 
       - name: Pack CPM cache
         if: steps.cpm-cache.outputs.cache-hit != 'true'
@@ -229,7 +229,7 @@ jobs:
       - name: Apply clang-tidy fixes to working tree
         if: ${{ inputs.post-pr-suggestions && github.event_name == 'pull_request' && !cancelled() }}
         run: |
-          FIXES_DIR=".build/clang-tidy-fix-parallel/fixes"
+          FIXES_DIR=".build/clang-tidy/fixes"
           if ls "$FIXES_DIR"/*.yaml 2>/dev/null | grep -q .; then
             if command -v clang-apply-replacements-20 &>/dev/null; then
               clang-apply-replacements-20 "$FIXES_DIR"
