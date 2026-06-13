@@ -642,13 +642,22 @@ void kernel_main() {
                         reconfig_data_format(intermediate_cb, rope_cos_cb);
                         pack_reconfig_data_format(output_cb);
                         for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-                            const uint32_t rope_tiles_needed =
-                                (per_head_rope != 0)
-                                    ? ((col_tile + block_size <= num_tile_cols) ? (col_tile + block_size)
-                                                                                : num_tile_cols)
-                                    : head_dim_tiles;
-                            cb_wait_front(rope_cos_cb, rope_tiles_needed);
-                            cb_wait_front(rope_sin_cb, rope_tiles_needed);
+                            const uint32_t tiles_in_block =
+                                (col_tile + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col_tile);
+                            // Per-head RoPE: cos/sin are STREAMED — the reader pushes this
+                            // block's tiles (block_size groups) and we pop them at block end,
+                            // so only a few blocks are ever resident (O(block_size), not the
+                            // full per-device width num_heads*head_dim — which overflows L1 at
+                            // TP=2 feat-2048). Index is block-relative (front of CB).
+                            // Broadcast RoPE: a small head_dim_tiles cos/sin buffer is held
+                            // across the whole row and indexed cyclically; popped at end of row.
+                            if constexpr (per_head_rope != 0) {
+                                cb_wait_front(rope_cos_cb, tiles_in_block);
+                                cb_wait_front(rope_sin_cb, tiles_in_block);
+                            } else {
+                                cb_wait_front(rope_cos_cb, head_dim_tiles);
+                                cb_wait_front(rope_sin_cb, head_dim_tiles);
+                            }
                             cb_wait_front(intermediate_cb, block_size);
                             cb_wait_front(rotated_input_cb, block_size);
                             cb_reserve_back(output_cb, block_size);
@@ -658,7 +667,7 @@ void kernel_main() {
                             binary_tiles_init<true, EltwiseBinaryType::ELWMUL>(intermediate_cb, rope_cos_cb, false);
                             for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
                                 const uint32_t rope_idx =
-                                    (per_head_rope != 0) ? (col_tile + i) : ((rope_base + i) % head_dim_tiles);
+                                    (per_head_rope != 0) ? i : ((rope_base + i) % head_dim_tiles);
                                 mul_tiles(intermediate_cb, rope_cos_cb, i, rope_idx, i);
                             }
                             // rotate(x)*sin + dst -> dst (FPU accumulate: acc_to_dest=true).
@@ -670,7 +679,7 @@ void kernel_main() {
                             uint32_t valid = 0;
                             for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
                                 const uint32_t rope_idx =
-                                    (per_head_rope != 0) ? (col_tile + i) : ((rope_base + i) % head_dim_tiles);
+                                    (per_head_rope != 0) ? i : ((rope_base + i) % head_dim_tiles);
                                 mul_tiles(rotated_input_cb, rope_sin_cb, i, rope_idx, i);
                                 valid++;
                             }
@@ -686,16 +695,22 @@ void kernel_main() {
                             cb_push_back(output_cb, block_size);
                             cb_pop_front(intermediate_cb, block_size);
                             cb_pop_front(rotated_input_cb, block_size);
+                            // Per-head: drain this block's streamed cos/sin now (matches the
+                            // reader's per-block push). Broadcast keeps them for cyclic reuse.
+                            if constexpr (per_head_rope != 0) {
+                                cb_pop_front(rope_cos_cb, tiles_in_block);
+                                cb_pop_front(rope_sin_cb, tiles_in_block);
+                            }
                         }
                     }  // P_ROPE
                 }
 
-                if constexpr (fuse_rope) {
-                    // Pop matches per-row push count: num_tile_cols for per-head
-                    // RoPE, head_dim_tiles for broadcast RoPE.
-                    constexpr uint32_t rope_pop_per_row = (per_head_rope != 0) ? num_tile_cols : head_dim_tiles;
-                    cb_pop_front(rope_cos_cb, rope_pop_per_row);
-                    cb_pop_front(rope_sin_cb, rope_pop_per_row);
+                if constexpr (fuse_rope && per_head_rope == 0) {
+                    // Broadcast RoPE holds its head_dim_tiles cos/sin across the row;
+                    // pop once here. Per-head streamed cos/sin were popped per block above
+                    // (sum over blocks == num_tile_cols, the reader's per-row push count).
+                    cb_pop_front(rope_cos_cb, head_dim_tiles);
+                    cb_pop_front(rope_sin_cb, head_dim_tiles);
                 }
 
                 // Per-token weight/bias: pop the row's slice now so the next

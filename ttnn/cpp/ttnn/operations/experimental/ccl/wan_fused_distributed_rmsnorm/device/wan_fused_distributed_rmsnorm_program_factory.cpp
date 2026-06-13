@@ -164,6 +164,26 @@ bool perhead_chunk_clamp_disabled() {
     static const bool v = (std::getenv("WAN_RMSNORM_NO_PERHEAD_CLAMP") != nullptr);
     return v;
 }
+// Depth (in block_size groups) of the STREAMED per-head cos/sin CBs. Per-head
+// RoPE has a distinct cos/sin per head, so the whole-row resident footprint is
+// O(num_heads*head_dim) and overflows L1 at wide shards (TP=2 feat-2048). The
+// reader already pushes block_size groups and the compute pops per block, so the
+// CB only needs a couple of blocks of look-ahead. Smaller = less L1; larger =
+// more reader prefetch. Default 2 (one block in flight + one filling). Broadcast
+// RoPE is unaffected (its tiny head_dim_tiles buffer stays fully resident).
+uint32_t rope_stream_blocks() {
+    static const uint32_t v = [] {
+        const char* env = std::getenv("WAN_RMSNORM_ROPE_STREAM_BLOCKS");
+        if (env != nullptr) {
+            const long n = std::strtol(env, nullptr, 10);
+            if (n > 0) {
+                return static_cast<uint32_t>(n);
+            }
+        }
+        return 2u;
+    }();
+    return v;
+}
 // Input-read push+barrier granularity (in tiles). A WH-Galaxy sweep
 // (WAN_BARRIER_TILES) showed the optimum here is governed by compute-overlap
 // (how finely PRE is fed), NOT by the DRAM-contention model of the reference
@@ -829,7 +849,14 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         // both follow this format automatically.
         const tt::DataFormat rope_format = datatype_to_dataformat_converter(rope_cos->dtype());
         const uint32_t rope_tile_size = tt::tile_size(rope_format);
-        const uint32_t rope_cb_tiles = chunk_size_rows * rope_tiles_per_row;
+        const uint32_t rope_resident_tiles = chunk_size_rows * rope_tiles_per_row;
+        // Per-head cos/sin are STREAMED (compute pops per block) so cap the CB at a
+        // few block_size groups instead of the full per-device width — this is what
+        // lets TP=2 feat-2048 per-head RoPE fit L1. Broadcast cos/sin stay fully
+        // resident (head_dim_tiles, reused cyclically across the row). The cap never
+        // grows the CB (min with resident), so narrower shards are unaffected.
+        const uint32_t rope_cb_tiles =
+            per_head_rope ? std::min(rope_resident_tiles, rope_stream_blocks() * block_size) : rope_resident_tiles;
         create_cb(rope_cos_cb_id, program, worker_core_set, rope_tile_size, rope_cb_tiles, rope_format);
         create_cb(rope_sin_cb_id, program, worker_core_set, rope_tile_size, rope_cb_tiles, rope_format);
     } else {
