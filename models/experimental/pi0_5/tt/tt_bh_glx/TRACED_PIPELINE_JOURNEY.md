@@ -102,17 +102,32 @@ The trace *forces* every stage op onto **all** chips of the stage mesh.
 
 ## 3. Sockets vs p2p: which goes where, and why
 
+> **Correction (proven):** sockets are NOT untraceable. A socket
+> (`send_direct_async`/`recv_direct_async`) captured in a trace **on the same mesh
+> the socket endpoint lives on** replays cleanly — confirmed by
+> `tests/perf/_socket_in_trace_repro.py` (2 chips, 3 replays) and
+> `tests/perf/_socket_chain_32_trace.py` (**32 1×1 submeshes, 31 sockets, 5 replays,
+> data intact, no deadlock**). The socket kernels even reset their own semaphores for
+> reuse. The original `capture_trace` hang was NOT a socket-replay problem — it was
+> capturing on the **parent** while ops ran on **1×1 children** (empty trace +
+> full-mesh-finish deadlock at capture time). An earlier note here claimed
+> "sockets break trace replay"; that was wrong.
+
 | Location | Mechanism | Why |
 |---|---|---|
-| **Inside a traced stage** | `point_to_point` | self-contained op, no cross-call state → **trace-safe** |
-| **Between stages (eager)** | `send_direct_async` sockets | faster kernel + multi-core; but carries socket flow-control state |
+| **Inside a traced stage** | `point_to_point` | in-mesh op; the natural intra-mesh hand-off |
+| **Between stages (eager)** | `send_direct_async` sockets | cross-mesh; faster kernel + multi-core |
 
-- **`send_direct_async` cannot replace `point_to_point` inside a trace:** sockets keep
-  credit/semaphore flow-control state that **trace replay does not reset** → the 2nd
-  replay deadlocks (observed empirically — re-sending on the same socket hangs unless a
-  fresh recv buffer is allocated, which a trace can't do).
-- So: **multi-core `point_to_point` inside traces; multi-connection `send_direct_async`
-  for the eager cross-stage hand-offs.**
+So why per-stage `point_to_point` and not per-chip sockets, given both are traceable?
+- **Trace count / host dispatch.** Per-chip sockets ⇒ one trace per chip ⇒ ~32
+  `execute_trace` calls per inference. Per-stage multi-chip meshes ⇒ **3 traces**. Far
+  less host dispatch — which is the whole point of tracing.
+- **Mesh boundaries.** A trace is per-mesh-device. A *cross-stage* socket spans two
+  different stage meshes, so it can't live inside one stage's trace anyway; in-mesh
+  `point_to_point` (multi-core, fast) is the natural intra-stage hand-off.
+- So: **multi-core `point_to_point` inside the per-stage traces; multi-connection
+  `send_direct_async` for the eager cross-stage hand-offs** — a choice for efficiency,
+  not because sockets can't be traced.
 
 ---
 
