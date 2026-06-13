@@ -39,9 +39,10 @@ def predict_SPk(Mt, Nt, Kt):
             c *= 2
     S, Pk = S0, 1
     grid_pow2 = (GY & (GY - 1)) == 0
-    if S0 > 1 and grid_pow2:
-        out = Mt * Nt
-        D = Kt * (GX * GY) / out if out else 0
+    out = Mt * Nt
+    cores = GX * GY
+    if (S0 > 1 or out < cores) and grid_pow2:
+        D = Kt * cores / out if out else 0
         Pk = 8 if D >= 280 else 4 if D >= 40 else 2 if D >= 20 else 1
         if Nt >= 256:
             Pk = 1

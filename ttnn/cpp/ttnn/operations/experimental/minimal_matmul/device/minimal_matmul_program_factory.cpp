@@ -344,9 +344,14 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         // (e.g. BH grid.y=10) Pk=2 would give num_slices=5 — untested — so auto K-par stays OFF there
         // until the heuristic is re-fit and validated for that grid. Explicit TT_MM_K_SLICES still works.
         const bool grid_y_pow2 = (grid_size.y & (grid_size.y - 1)) == 0;
-        if (num_slices > 1 && grid_y_pow2) {
-            const uint32_t cores = grid_size.x * grid_size.y;
-            const uint32_t out_tiles = M_tiles * N_tiles;
+        const uint32_t cores = grid_size.x * grid_size.y;
+        const uint32_t out_tiles = M_tiles * N_tiles;
+        // Engage the K-par heuristic when the shape is skewed (the N-slicer already split it, num_slices>1)
+        // OR simply output-starved (out_tiles < cores). The latter is the key addition: square-ish
+        // tiny-output deep-K shapes (e.g. 32x6144x32, out=1 tile) have no aspect skew so num_slices stays
+        // 1, yet are the textbook K-par case — otherwise one core grinds the whole K reduction. The
+        // D-score + deep-K cap still decide whether and how much K-par actually helps.
+        if ((num_slices > 1 || out_tiles < cores) && grid_y_pow2) {
             const double D = out_tiles ? static_cast<double>(K_tiles) * cores / out_tiles : 0.0;
             uint32_t Pk = D >= kp.d8 ? 8u : D >= kp.d4 ? 4u : D >= kp.d2 ? 2u : 1u;
             if (N_tiles >= kp.nwide) {
