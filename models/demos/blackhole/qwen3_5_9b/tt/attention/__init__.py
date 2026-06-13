@@ -30,7 +30,7 @@ from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.common.lightweightmodule import LightweightModule
 
 
-class TPAttention(LightweightModule):
+class Qwen35Attention(LightweightModule):
     """Standalone TP full-attention with internal per-head KV caches (decode)."""
 
     def __init__(self, mesh_device, state_dict, args, tt_ccl, create_kv_cache=False, tensor_cache_path=None):
