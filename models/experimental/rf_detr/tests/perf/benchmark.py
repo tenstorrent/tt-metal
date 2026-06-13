@@ -27,6 +27,11 @@ from models.experimental.rf_detr.tt.ttnn_rf_detr import TtRfDetr
 
 IMAGE = "/home/ttuser/experiments/rf-detr/assets/cats_000000039769.jpg"
 
+# Device deployment config (fixed). trace_region_size enables metal-trace optimization;
+# l1_small_size / num_command_queues are standard perf knobs. These are deployment
+# parameters, not measurement logic.
+DEVICE_PARAMS = dict(l1_small_size=32768, trace_region_size=90000000, num_command_queues=1)
+
 
 def _pcc_value(golden, calc):
     _, msg = comp_pcc(golden, calc, 0.99)
@@ -116,7 +121,7 @@ def main():
     with torch.no_grad():
         golden = ref(pixel_values, collect_intermediates=False)
 
-    device = ttnn.open_device(device_id=args.device_id)
+    device = ttnn.open_device(device_id=args.device_id, **DEVICE_PARAMS)
     try:
         model = TtRfDetr(ref, device)
 
