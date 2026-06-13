@@ -47,6 +47,15 @@ def predict_SPk(Mt, Nt, Kt):
             Pk = 1
         while Pk > 1 and (GY % Pk != 0 or Kt % Pk != 0 or Kt // Pk < 8):
             Pk //= 2
+        # no-M-padding guard (mirrors the factory): transpose puts M on cols (m_axis=S*GX), else rows
+        # (m_axis=GY/(S*Pk)=1). Disable K-par if M_tiles isn't a multiple of its parallel axis.
+        transpose = Mt > Nt
+        while Pk > 1:
+            S = GY // Pk
+            m_axis = (S * GX) if transpose else (GY // (S * Pk))
+            if Mt % m_axis == 0:
+                break
+            Pk //= 2
         S = GY // Pk if Pk > 1 else S0
     return S, Pk
 
@@ -61,7 +70,10 @@ def test_grid(device):
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
     )
-    shapes = [(mt * 32, kt * 32, nt * 32) for mt in M_TILES for kt in K_TILES for nt in N_TILES]
+    if os.environ.get("FC_SHAPELIST"):  # explicit [[M,K,N],...] json (e.g. re-run a failed subset)
+        shapes = [tuple(s) for s in json.load(open(os.environ["FC_SHAPELIST"]))]
+    else:
+        shapes = [(mt * 32, kt * 32, nt * 32) for mt in M_TILES for kt in K_TILES for nt in N_TILES]
     manifest = []
     print(f"GRID sweep: {len(shapes)} shapes (grid {GX}x{GY}, reps={REPS})", flush=True)
     for idx, (M, K, N) in enumerate(shapes):
