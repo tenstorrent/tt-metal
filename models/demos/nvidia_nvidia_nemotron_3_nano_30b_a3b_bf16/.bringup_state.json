@@ -5,16 +5,418 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-13T22:50:54Z",
-  "updated_at": "2026-06-13T22:50:54Z",
-  "components": [],
-  "use_cases": [],
+  "updated_at": "2026-06-13T22:58:19Z",
+  "components": [
+    {
+      "name": "Embedding",
+      "kind": "embedding",
+      "depends_on": [],
+      "reference_impl": "models/tt_transformers/tt/embedding.py",
+      "host_resident": {
+        "allowed": false,
+        "justification": null,
+        "reference_link": null
+      },
+      "reference": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "ttnn": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "debug": {
+        "status": "n/a",
+        "attempts": 0
+      },
+      "optimization": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "real_weights": {
+        "status": "pending",
+        "attempts": 0
+      }
+    },
+    {
+      "name": "LayerNorm",
+      "kind": "norm",
+      "depends_on": [],
+      "reference_impl": "models/tt_transformers/tt/distributed_norm.py",
+      "host_resident": {
+        "allowed": false,
+        "justification": null,
+        "reference_link": null
+      },
+      "reference": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "ttnn": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "debug": {
+        "status": "n/a",
+        "attempts": 0
+      },
+      "optimization": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "real_weights": {
+        "status": "pending",
+        "attempts": 0
+      }
+    },
+    {
+      "name": "RoPE",
+      "kind": "other",
+      "depends_on": [],
+      "reference_impl": "models/tt_transformers/tt/rope.py",
+      "host_resident": {
+        "allowed": false,
+        "justification": null,
+        "reference_link": null
+      },
+      "reference": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "ttnn": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "debug": {
+        "status": "n/a",
+        "attempts": 0
+      },
+      "optimization": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "real_weights": {
+        "status": "pending",
+        "attempts": 0
+      }
+    },
+    {
+      "name": "Mamba2Layer",
+      "kind": "other",
+      "depends_on": [
+        "LayerNorm"
+      ],
+      "reference_impl": "models/demos/wormhole/mamba/tt/",
+      "host_resident": {
+        "allowed": false,
+        "justification": null,
+        "reference_link": null
+      },
+      "reference": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "ttnn": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "debug": {
+        "status": "n/a",
+        "attempts": 0
+      },
+      "optimization": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "real_weights": {
+        "status": "pending",
+        "attempts": 0
+      }
+    },
+    {
+      "name": "DenseAttention",
+      "kind": "attention",
+      "depends_on": [
+        "LayerNorm",
+        "RoPE"
+      ],
+      "reference_impl": "models/tt_transformers/tt/attention.py",
+      "host_resident": {
+        "allowed": false,
+        "justification": null,
+        "reference_link": null
+      },
+      "reference": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "ttnn": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "debug": {
+        "status": "n/a",
+        "attempts": 0
+      },
+      "optimization": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "real_weights": {
+        "status": "pending",
+        "attempts": 0
+      }
+    },
+    {
+      "name": "DenseMLP",
+      "kind": "mlp",
+      "depends_on": [
+        "DenseAttention"
+      ],
+      "reference_impl": "models/tt_transformers/tt/mlp.py",
+      "host_resident": {
+        "allowed": false,
+        "justification": null,
+        "reference_link": null
+      },
+      "reference": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "ttnn": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "debug": {
+        "status": "n/a",
+        "attempts": 0
+      },
+      "optimization": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "real_weights": {
+        "status": "pending",
+        "attempts": 0
+      }
+    },
+    {
+      "name": "MoEAttention",
+      "kind": "attention",
+      "depends_on": [
+        "LayerNorm",
+        "RoPE"
+      ],
+      "reference_impl": "models/tt_transformers/tt/attention.py",
+      "host_resident": {
+        "allowed": false,
+        "justification": null,
+        "reference_link": null
+      },
+      "reference": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "ttnn": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "debug": {
+        "status": "n/a",
+        "attempts": 0
+      },
+      "optimization": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "real_weights": {
+        "status": "pending",
+        "attempts": 0
+      }
+    },
+    {
+      "name": "MoEGate",
+      "kind": "other",
+      "depends_on": [
+        "MoEAttention"
+      ],
+      "reference_impl": "models/demos/deepseek_v3/tt/moe_gate.py",
+      "host_resident": {
+        "allowed": false,
+        "justification": null,
+        "reference_link": null
+      },
+      "reference": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "ttnn": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "debug": {
+        "status": "n/a",
+        "attempts": 0
+      },
+      "optimization": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "real_weights": {
+        "status": "pending",
+        "attempts": 0
+      }
+    },
+    {
+      "name": "MoEExperts",
+      "kind": "mlp",
+      "depends_on": [
+        "MoEGate"
+      ],
+      "reference_impl": "models/demos/deepseek_v3/tt/experts.py",
+      "host_resident": {
+        "allowed": false,
+        "justification": null,
+        "reference_link": null
+      },
+      "reference": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "ttnn": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "debug": {
+        "status": "n/a",
+        "attempts": 0
+      },
+      "optimization": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "real_weights": {
+        "status": "pending",
+        "attempts": 0
+      }
+    },
+    {
+      "name": "SharedExpert",
+      "kind": "mlp",
+      "depends_on": [
+        "MoEGate"
+      ],
+      "reference_impl": "models/demos/deepseek_v3/tt/mlp/shared_expert.py",
+      "host_resident": {
+        "allowed": false,
+        "justification": null,
+        "reference_link": null
+      },
+      "reference": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "ttnn": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "debug": {
+        "status": "n/a",
+        "attempts": 0
+      },
+      "optimization": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "real_weights": {
+        "status": "pending",
+        "attempts": 0
+      }
+    },
+    {
+      "name": "LMHead",
+      "kind": "linear",
+      "depends_on": [
+        "Embedding"
+      ],
+      "reference_impl": "models/tt_transformers/tt/lm_head.py",
+      "host_resident": {
+        "allowed": false,
+        "justification": null,
+        "reference_link": null
+      },
+      "reference": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "ttnn": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "debug": {
+        "status": "n/a",
+        "attempts": 0
+      },
+      "optimization": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "real_weights": {
+        "status": "pending",
+        "attempts": 0
+      }
+    }
+  ],
+  "use_cases": [
+    {
+      "name": "text_generation",
+      "description": "Autoregressive causal language modeling: generate text tokens given a text prompt, using the hybrid Mamba-2/MoE-Transformer decoder.",
+      "input_modality": "text",
+      "output_modality": "text",
+      "components_used": [
+        "Embedding",
+        "LayerNorm",
+        "RoPE",
+        "Mamba2Layer",
+        "DenseAttention",
+        "DenseMLP",
+        "MoEAttention",
+        "MoEGate",
+        "MoEExperts",
+        "SharedExpert",
+        "LMHead"
+      ],
+      "needs_ar": true,
+      "needs_audio_out": false,
+      "decode_strategy": "kv_cache",
+      "hf_class": "NemotronHForCausalLM",
+      "validation_metric": "bleu",
+      "validation_threshold": "HF - 1.0",
+      "hybrid_notes": "KV cache covers only the 6 dense-attention layers and 23 MoE-attention layers. Mamba-2 layers maintain a recurrent SSM hidden state (not KV pairs) \u2014 that state must be managed separately in decode mode. The hybrid_override_pattern (MEMEM*EMEMEM*...) determines per-layer dispatch.",
+      "generation": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "perf": {
+        "status": "pending",
+        "attempts": 0
+      }
+    }
+  ],
   "locks": {
     "device": {
       "held_by": null,
       "held_since": null
     }
   },
-  "tick_log": [],
+  "tick_log": [
+    {
+      "tick": 1,
+      "ts": "2026-06-13T22:58:19Z",
+      "action": "architecture[all]",
+      "result": "ok"
+    }
+  ],
   "config": {
     "max_parallel_reference": 4,
     "max_attempts_per_phase": 10,
