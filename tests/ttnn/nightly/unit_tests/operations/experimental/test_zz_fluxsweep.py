@@ -53,6 +53,10 @@ def combos_for(Mt, Kt):
 
 
 def load_shapes():
+    if os.environ.get("FC_SHAPELIST"):  # explicit [[M,K,N],...] json, no auto_S filter
+        import json as _json
+
+        return [tuple(s) for s in _json.load(open(os.environ["FC_SHAPELIST"]))]
     shapes = []
     for line in open(SHAPES_FILE):
         line = line.strip()
