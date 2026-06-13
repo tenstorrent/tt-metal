@@ -54,12 +54,16 @@ class Attention(Module):
         (False, 8, 4): {-1: (256, 256)},
         (True, 2, 2): {-1: (128, 512)},
         (True, 4, 8): {
-            -1: (256, 512),
-            4096: (128, 512),
-            4096 * 4: (256, 512),
-            4096 * 16: (256, 512),
-        },  # 4096*16=65536 is 4096-res; (256,512) unswept estimate
-        (True, 8, 4): {-1: (256, 512)},
+            -1: (256, 512),  # default
+            4096: (128, 512),  # 1024×1024  — 18.0% util (ring_sdpa_sweep.md)
+            4096 * 4: (256, 512),  # 2048×2048  — 55.4% util (ring_sdpa_sweep_2048.md)
+            4096 * 16: (192, 512),  # 4096×4096  — 67.4% util (ring_sdpa_sweep_4096.md)
+        },
+        (True, 8, 4): {
+            -1: (256, 512),  # default
+            16384: (320, 384),  # 2048×2048  — 43.3% util (ring_sdpa_sweep_8x4_2048.md)
+            65536: (256, 512),  # 4096×4096  — 65.7% util (ring_sdpa_sweep_8x4_4096.md)
+        },
     }
     default_ring_sdpa_chunk_size: tuple[int, int] = {-1: (256, 256)}
 
