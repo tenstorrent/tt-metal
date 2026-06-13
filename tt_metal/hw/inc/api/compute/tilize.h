@@ -571,6 +571,13 @@ ALWI void fast_tilize_block(
 // clang-format on
 ALWI void unpack_tilizeA_B_uninit(uint32_t icb) { UNPACK((llk_unpack_tilizeA_B_uninit(icb))); }
 
+#else
+
+ALWI void tilize_uninit(uint32_t icb, uint32_t ocb) {
+    (void)icb;
+    (void)ocb;
+}
+
 #endif  // !ARCH_QUASAR
 
 }  // namespace ckernel

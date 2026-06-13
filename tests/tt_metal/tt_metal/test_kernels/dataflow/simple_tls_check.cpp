@@ -35,7 +35,8 @@ void kernel_main() {
         }
     }
 
-    volatile tt_l1_ptr std::uint32_t* signal_addr = (tt_l1_ptr uint32_t*)((uintptr_t)signal_address);
+    volatile tt_l1_ptr std::uint32_t* signal_addr =
+        (tt_l1_ptr uint32_t*)((uintptr_t)signal_address + MEM_L1_UNCACHED_BASE);
     while (*signal_addr != hartid);
 
     uint32_t global_start = shared_global;
