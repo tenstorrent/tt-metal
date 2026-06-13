@@ -25,12 +25,14 @@ import ttnn
 from models.experimental.pi0_5.common.checkpoint_meta import action_horizon_from_checkpoint
 from models.experimental.pi0_5.common.configs import Pi0_5ModelConfig
 from models.experimental.pi0_5.common.weight_loader import Pi0_5WeightLoader
+from models.experimental.pi0_5.tt.tt_bh_glx.kv_migration import migrate_layer_paired
 from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_galaxy_mesh
 from models.experimental.pi0_5.tt.tt_bh_glx.pipeline import Pi0_5GLXPipeline, use_upstream_masks
 
 CKPT = os.environ["PI05_CHECKPOINT_DIR"]
 N_CAMS = int(os.environ.get("PI0_NUM_CAMERAS", "3"))
 N_STEPS = int(os.environ.get("PI05_NUM_DENOISE_STEPS", "5"))
+SCOPE = os.environ.get("TRACE_SCOPE", "full")  # full | denoise
 SEED = 42
 
 
@@ -66,7 +68,65 @@ def main():
             prefix_len = npatch * len(images) + int(lang_tokens.shape[-1])
             pipe._build_and_upload_upstream_artifacts(img_masks, lang_masks, prefix_len)
             upstream = pipe._upstream_per_chip
-        log(f"buffers staged; upstream_masks={upstream is not None}")
+        log(f"buffers staged; upstream_masks={upstream is not None}; scope={SCOPE}")
+
+        # FIX UNDER TEST: the denoise loop reuses the SAME cached socket recv buffer
+        # every Euler step -> under trace replay the N steps race on it. Give each
+        # send call a UNIQUE tag so it gets its own recv buffer (no reuse race). The
+        # trace then captures distinct buffers per step. Keeps sockets (no p2p).
+        if os.environ.get("USE_UNIQUE_TAGS", "").lower() in ("1", "true", "yes"):
+            _orig_send = pipe.transport.send
+            _ctr = [0]
+
+            def _tagged_send(src, dst, *, out_buf=None, tag=None):
+                _ctr[0] += 1
+                return _orig_send(src, dst, out_buf=out_buf, tag=f"{tag}:{_ctr[0]}")
+
+            pipe.transport.send = _tagged_send
+            log("transport.send monkey-patched to unique-per-call tags (distinct recv buffers)")
+
+        if SCOPE == "denoise":
+            # Localize: run vision+prefill+KV EAGER (populate cached KV), then trace
+            # ONLY the denoise loop on denoise_per_chip (persistent x_t + cached KV +
+            # transient per-step intermediates + socket velocity-wrap).
+            vis = pipe.stage_vision.run(pipe.pixel_values_buf)
+            vis_p0 = pipe.transport.send(vis, h.prefill_per_chip[0], tag="v2p")
+            prefix_embs = pipe._build_prefix(vis_p0, pipe.lang_tokens_buf)
+            _, per_layer_kv = pipe.stage_prefill.run(
+                prefix_embs,
+                attention_mask=None,
+                position_ids=None,
+                per_chip_attn_mask=(upstream["prefix_attn_mask"] if upstream else None),
+                per_chip_cos=(upstream["prefix_cos"] if upstream else None),
+                per_chip_sin=(upstream["prefix_sin"] if upstream else None),
+            )
+            prefix_kv = migrate_layer_paired(
+                per_layer_kv, h.denoise_per_chip, transport=pipe.transport, to_l1=pipe._denoise_l1
+            )
+            ttnn.synchronize_device(h.denoise_per_chip[0])
+            pipe._refresh_noise_buffer()
+            eager = ttnn.to_torch(pipe.x_t_fp32, mesh_composer=ttnn.ConcatMeshToTensor(h.denoise_per_chip[0], dim=0))
+            pipe._run_denoise_loop_device(prefix_kv, upstream)
+            eager = ttnn.to_torch(pipe.x_t_fp32, mesh_composer=ttnn.ConcatMeshToTensor(h.denoise_per_chip[0], dim=0))[0]
+            log(f"eager denoise done: actions {tuple(eager.shape)}")
+            subs = list(h.denoise_per_chip)
+            pipe._refresh_noise_buffer()
+            tids = [ttnn.begin_trace_capture(sm, cq_id=0) for sm in subs]
+            pipe._run_denoise_loop_device(prefix_kv, upstream)
+            for sm, tid in zip(subs, tids):
+                ttnn.end_trace_capture(sm, tid, cq_id=0)
+            log("captured denoise-only per-submesh traces")
+            for rnd in (1, 2, 3):
+                pipe._refresh_noise_buffer()
+                for sm, tid in zip(subs, tids):
+                    ttnn.execute_trace(sm, tid, cq_id=0, blocking=False)
+                ttnn.synchronize_device(h.denoise_per_chip[0])
+                traced = ttnn.to_torch(
+                    pipe.x_t_fp32, mesh_composer=ttnn.ConcatMeshToTensor(h.denoise_per_chip[0], dim=0)
+                )[0]
+                log(f"[denoise-only] replay {rnd}: PCC vs eager = {_pcc(traced, eager):.6f}")
+            log("DONE (denoise-only scope)")
+            return
 
         # --- eager warmup (also the reference actions) ---
         eager = ttnn.to_torch(
