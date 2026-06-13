@@ -31,8 +31,16 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     const auto [packet_size_bytes, num_pages_per_packet, num_page_segments, total_packets] =
         detail::compute_aligned_packet_dims(
             output_tensor.dtype(), output_page_size_bytes, output_num_pages, l1_alignment);
-    // distribute work
-    const CoreCoord use_cores = {1, 1};
+    // Multi-core / multi-link (mirror of send_program_factory): one worker core
+    // per available fabric link toward the sender. Uses the SAME split as the
+    // sender, so cores are coord-matched for the semaphore handshake.
+    const auto& topology = operation_attributes.topology;
+    const auto this_fabric_id = mesh_device->get_fabric_node_id(receive_coord);
+    const auto [num_hops, sender_is_forward, next_fabric_id] =
+        detail::fabric_1d_routing(mesh_device, receive_coord, send_coord, topology);
+    const auto link_indices = tt::tt_fabric::get_forwarding_link_indices(this_fabric_id, next_fabric_id);
+    const size_t num_links = std::max<size_t>(static_cast<size_t>(1), link_indices.size());
+    const CoreCoord use_cores = {1, num_links};
 
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_packets_per_core_group_1, num_packets_per_core_group_2] =
@@ -70,11 +78,6 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
             .set_page_size(receiver_cb_id, output_page_size_bytes);
     CreateCircularBuffer(program, all_cores, cb_receiver_config);
 
-    const auto& topology = operation_attributes.topology;
-    const auto this_fabric_id = mesh_device->get_fabric_node_id(receive_coord);
-    const auto [num_hops, sender_is_forward, next_fabric_id] =
-        detail::fabric_1d_routing(mesh_device, receive_coord, send_coord, topology);
-
     std::vector<uint32_t> reader_ct_args = {packet_header_cb_id, packet_cb_id, receiver_cb_id, l1_alignment};
     tt::tt_metal::TensorAccessorArgs(output_tensors.at(0).buffer()).append_to(reader_ct_args);
     tt::tt_metal::KernelHandle receive_unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -92,7 +95,6 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
 
-    constexpr auto link_idx = 0;  // for single link implementation
     uint32_t page_idx_start = 0, page_idx_end = 0;
     std::vector<CoreCoord> receiver_cores;
     for (auto c : corerange_to_cores(all_cores, std::nullopt)) {
@@ -118,6 +120,9 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
             semaphore.address(),
             num_hops,
             sender_is_forward};
+
+        // round-robin this core onto one of the available fabric links
+        const uint32_t link_idx = link_indices.empty() ? 0 : link_indices[receiver_cores.size() % num_links];
 
         if (sender_is_forward) {
             tt::tt_fabric::append_fabric_connection_rt_args(

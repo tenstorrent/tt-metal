@@ -32,8 +32,18 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     const auto [packet_size_bytes, num_pages_per_packet, num_page_segments, total_packets] =
         detail::compute_aligned_packet_dims(input_tensor.dtype(), input_page_size_bytes, input_num_pages, l1_alignment);
 
-    // eventually add more cores for multi-link
-    const CoreCoord use_cores = {1, 1};
+    // Multi-core / multi-link: use one worker core per available fabric link
+    // between the two chips (round-robined across links in the per-core loop
+    // below). split_work_to_cores splits the packets across these cores. The
+    // sender/receiver use the SAME split, so cores are coord-matched, and the
+    // semaphore handshake (get_noc_addr resolves to the local core) signals the
+    // matching peer core -> no kernel changes needed.
+    const auto this_fabric_id = mesh_device->get_fabric_node_id(send_coord);
+    const auto [num_hops, dst_is_forward, next_fabric_id] =
+        detail::fabric_1d_routing(mesh_device, send_coord, receive_coord, topology);
+    const auto link_indices = tt::tt_fabric::get_forwarding_link_indices(this_fabric_id, next_fabric_id);
+    const size_t num_links = std::max<size_t>(static_cast<size_t>(1), link_indices.size());
+    const CoreCoord use_cores = {1, num_links};
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_packets_per_core_group_1, num_packets_per_core_group_2] =
             tt::tt_metal::split_work_to_cores(use_cores, total_packets);
@@ -80,11 +90,6 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
-    const auto this_fabric_id = mesh_device->get_fabric_node_id(send_coord);
-
-    const auto [num_hops, dst_is_forward, next_fabric_id] =
-        detail::fabric_1d_routing(mesh_device, send_coord, receive_coord, topology);
-
     std::vector<uint32_t> writer_ct_args = {sender_cb_id, packet_header_cb_id, packet_cb_id, l1_alignment};
     tt::tt_metal::TensorAccessorArgs(output_tensors.at(0).buffer()).append_to(writer_ct_args);
 
@@ -93,8 +98,6 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
         "ttnn/cpp/ttnn/operations/point_to_point/device/kernels/dataflow/writer_send.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
-
-    constexpr auto link_idx = 0;  // for single link implementation
 
     uint32_t page_idx_start = 0, page_idx_end = 0;
     std::vector<CoreCoord> sender_cores;
@@ -126,6 +129,9 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
             semaphore.address(),
             dst_is_forward,
         };
+
+        // round-robin this core onto one of the available fabric links
+        const uint32_t link_idx = link_indices.empty() ? 0 : link_indices[sender_cores.size() % num_links];
 
         if (dst_is_forward) {
             tt::tt_fabric::append_fabric_connection_rt_args(

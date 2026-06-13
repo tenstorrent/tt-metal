@@ -258,30 +258,31 @@ void PointToPointOp::SendReceive::override_runtime_arguments(
             const auto& send_unary_reader_kernel_id = shared_variables.send_unary_reader_kernel_id;
             const auto& send_unary_writer_kernel_id = shared_variables.send_unary_writer_kernel_id;
 
-            // change this when we use more cores for multi-link
-            const auto& core = shared_variables.sender_cores.at(0);
+            // update per-call addresses on every multi-link worker core (page
+            // ranges + fabric-connection args are fixed at capture time)
+            for (const auto& core : shared_variables.sender_cores) {
+                auto& reader_runtime_args = GetRuntimeArgs(program, send_unary_reader_kernel_id, core);
+                reader_runtime_args.at(0) = tensor_args.input_tensor.buffer()->address();
 
-            auto& reader_runtime_args = GetRuntimeArgs(program, send_unary_reader_kernel_id, core);
-            reader_runtime_args.at(0) = tensor_args.input_tensor.buffer()->address();
-
-            auto& writer_runtime_args = GetRuntimeArgs(program, send_unary_writer_kernel_id, core);
-            writer_runtime_args.at(0) = tensor_return_value.at(0).buffer()->address();
-            writer_runtime_args.at(8) = shared_variables.semaphore.address();
+                auto& writer_runtime_args = GetRuntimeArgs(program, send_unary_writer_kernel_id, core);
+                writer_runtime_args.at(0) = tensor_return_value.at(0).buffer()->address();
+                writer_runtime_args.at(8) = shared_variables.semaphore.address();
+            }
         }
 
         if (coord == receive_coord) {
             const auto& receive_unary_reader_kernel_id = shared_variables.receive_unary_reader_kernel_id;
             const auto& receive_unary_writer_kernel_id = shared_variables.receive_unary_writer_kernel_id;
 
-            // change this when we use more cores for multi-link
-            const auto& core = shared_variables.receiver_cores.at(0);
+            // update per-call addresses on every multi-link worker core
+            for (const auto& core : shared_variables.receiver_cores) {
+                auto& reader_runtime_args = GetRuntimeArgs(program, receive_unary_reader_kernel_id, core);
+                reader_runtime_args.at(3) = tensor_return_value.at(0).buffer()->address();
+                reader_runtime_args.at(7) = shared_variables.semaphore.address();
 
-            auto& reader_runtime_args = GetRuntimeArgs(program, receive_unary_reader_kernel_id, core);
-            reader_runtime_args.at(3) = tensor_return_value.at(0).buffer()->address();
-            reader_runtime_args.at(7) = shared_variables.semaphore.address();
-
-            auto& writer_runtime_args = GetRuntimeArgs(program, receive_unary_writer_kernel_id, core);
-            writer_runtime_args.at(0) = tensor_return_value.at(1).buffer()->address();
+                auto& writer_runtime_args = GetRuntimeArgs(program, receive_unary_writer_kernel_id, core);
+                writer_runtime_args.at(0) = tensor_return_value.at(1).buffer()->address();
+            }
         }
     }
 };
