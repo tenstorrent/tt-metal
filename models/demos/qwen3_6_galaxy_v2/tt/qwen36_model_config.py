@@ -670,6 +670,112 @@ class TtQwen36ModelArgs(TtModelArgs):
         )
 
         # ------------------------------------------------------------------
+        # Decode FF1/FF3/FF2 RING-40 (lower-waste fused-FF2 config set).
+        # SEPARATE from the ring-24 keys above — does NOT touch the global
+        # RING_SIZE=24 (pervasive in attention QKVG). A clean ring forces
+        # padding because native intermediate 2176 (=68 tiles) shares no ring
+        # divisor with K=dim_per_tp=1280 (=40 tiles). Ring-40 divides K cleanly
+        # (1280/40 = 32 = 1 tile/core, NO pad) and pads N only 2176->2560
+        # (vs ring-24's 3840, -76% waste).
+        #   FF1/FF3 ring-40: M=32, K=1280, N=2560  (per_core_N=2, in0_block_w=1)
+        #   FF2     ring-40: M=32, K=2560, N=1280  (per_core_N=1, in0_block_w=2)
+        # num_to_coregrid(40) = CoreGrid(y=5, x=8) = 40 cores -> grid (8,5).
+        # ------------------------------------------------------------------
+        RING40_SIZE = 40
+        ff_n_ring40 = 2560  # intermediate_per_tp 2176 padded to 40-core ring
+        # 40-core ring placement for the FUSED all_gather_matmul (ring-40 FF2).
+        #
+        # CRITICAL (fused-op core placement): the fused
+        # `llama_all_gather_matmul_async` places its all-gather interim /
+        # `worker_receiver` CCL cores on a dedicated column (col 3, rows 0-3 —
+        # `RING40_AG_INTERIM_CRS` below, mirroring the proven ff2_qwen
+        # `intermediate_core_range_set = CoreRange((3,0),(3,3))`). The 40 matmul
+        # cores MUST be DISJOINT from (a) col 0 (dispatch cores) and (b) col 3
+        # (the AG-interim column) or the matmul's `in0_ring_all_gather` reader
+        # collides with `worker_receiver` (TT_FATAL Core Overlap at (3,0)).
+        #
+        # The plain `num_cores_to_corerangeset_in_subcoregrids(start_core, 40,
+        # sub_core_grids)` spills onto col 3, so we carve the 40 cores from a
+        # sub-grid that EXCLUDES col 0 and col 3: cols {1,2} ∪ {4,5} × rows 0-9
+        # = 40 cores. (The matmul's `compute_with_storage_grid_size` bounding box
+        # need not contain these cores — for `gather_in0=True` ring matmuls
+        # placement follows the sharded memcfg core range set, exactly as
+        # ff2_qwen places 24 cores at y∈[0,9] under an (8,3) storage grid.)
+        RING40_MM_SUBGRID = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 9)),  # cols 1,2
+                ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(5, 9)),  # cols 4,5
+            ]
+        )
+        ring40_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+            ttnn.CoreCoord(1, 0), RING40_SIZE, RING40_MM_SUBGRID, row_wise=True
+        )
+        # Dedicated AG-interim column (4 cores = cluster_axis=1 ring size), DISJOINT
+        # from the 40 matmul cores above and from col 0 (dispatch). Callers pass the
+        # ag_memory_config built on this set so the fused op's interim/worker_receiver
+        # land here, not on a matmul core.
+        self.model_config["RING40_AG_INTERIM_CRS"] = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 3))]
+        )
+        self.model_config["RING40_MM_CRS"] = ring40_core_range_set
+
+        self.model_config["W1W3_RING40_MEMCFG"] = self.create_dram_sharded_mem_config(
+            k=self.dim_per_tp,  # 1280
+            n=ff_n_ring40,  # 2560
+        )
+        self.model_config["W2_RING40_MEMCFG"] = self.create_dram_sharded_mem_config(
+            k=self.intermediate_dim_per_tp,  # 2176 (native per-device tensor height;
+            # only N is padded — the ring matmul tolerates the K-side zero pad, same
+            # convention as W2_RING_MEMCFG above)
+            n=self.dim_per_tp,  # 1280
+        )
+        self.model_config["FF1_3_RING40_PROGCFG"] = self.matmul_1d_ring_config(
+            1,
+            32,
+            self.dim_per_tp,  # K = 1280
+            ff_n_ring40,  # N = 2560
+            RING40_SIZE,
+            prefetch=self.use_prefetcher,
+        )
+        self.model_config["FF2_RING40_PROGCFG"] = self.matmul_1d_ring_config(
+            1,
+            32,
+            ff_n_ring40,  # K = 2560
+            self.dim_per_tp,  # N = 1280
+            RING40_SIZE,
+            prefetch=self.use_prefetcher,
+        )
+        # Sharded L1 memcfgs (40-core ring widths).
+        self.model_config["SHARDED_FF12_RING40_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, self.dim_per_tp // RING40_SIZE),  # (32, 32) FF12 input (K=1280)
+            core_grid=ring40_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        self.model_config["SHARDED_FF12_OUT_RING40_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, ff_n_ring40 // RING40_SIZE),  # (32, 64) FF12 out (N=2560)
+            core_grid=ring40_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        self.model_config["FF2_IN_RING40_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, ff_n_ring40 // RING40_SIZE),  # (32, 64) FF2 in (2560)
+            core_grid=ring40_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        self.model_config["REDUCE_SCATTER_OUT_RING40_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, self.dim_per_tp // RING40_SIZE),  # (32, 32) FF2 out (N=1280)
+            core_grid=ring40_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        # ------------------------------------------------------------------
         # Attention-input sharded memcfg (post-RMSNorm decode input).
         # ------------------------------------------------------------------
         # 60-core full grid: derive an N-core band that holds dim_per_tp.

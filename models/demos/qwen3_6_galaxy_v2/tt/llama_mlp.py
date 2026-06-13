@@ -51,6 +51,9 @@ class TtLlamaMLP(LightweightModule):
         self.model_config = model_config
         self.prefetcher_setup = prefetcher_setup
         self.tt_ccl = tt_ccl
+        self.layer_num = layer_num
+        _pat = getattr(args, "linear_attention_pattern", None)
+        self.is_full_attn_layer = _pat is not None and layer_num < len(_pat) and _pat[layer_num] == "full_attention"
         state_dict_prefix = state_dict_prefix or args.get_state_dict_prefix(self.__class__.__name__, layer_num)
         torch_weight = lambda name: torch.transpose(self.state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
         if args.dummy_weights:
@@ -116,7 +119,32 @@ class TtLlamaMLP(LightweightModule):
             "w3_interleaved", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
         )
 
+        # Decode-only ring-40 weights (lower-waste fused-FF2 path; Task 2).
+        # Built the SAME way as the ring-24 sharded weights above but with the
+        # ring-40 DRAM-sharded memcfgs (N padded 2176->2560 instead of 3840,
+        # K=1280 divides 40 cores cleanly). Prefill keeps self.w1/w2/w3 +
+        # *_interleaved untouched. Only allocated in decode mode (the ring-40
+        # config keys only exist for decode).
         if tt_ccl.mode == "decode":
+            w1_w3_ring40_mem_config = self.model_config["W1W3_RING40_MEMCFG"]
+            w2_ring40_mem_config = self.model_config["W2_RING40_MEMCFG"]
+            as_sharded_tensor_ring40 = lambda name, type, dim, mem_config: ttnn.as_tensor(
+                torch_weight(name[:2]).unsqueeze(0).unsqueeze(0),  # Grab only the wX part of the name
+                dtype=ttnn.bfloat16 if _mlp_force_bf16 else type,
+                device=self.mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dim, mesh_shape=args.cluster_shape),
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=mem_config,
+                cache_file_name=cache_name(name + "_ring40"),
+            )
+            self.w1_ring40 = as_sharded_tensor_ring40(
+                "w1_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, w1_dim, w1_w3_ring40_mem_config
+            )
+            self.w3_ring40 = as_sharded_tensor_ring40(
+                "w3_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, w1_dim, w1_w3_ring40_mem_config
+            )
+            self.w2_ring40 = as_sharded_tensor_ring40("w2_sharded", ttnn.bfloat8_b, w2_dim, w2_ring40_mem_config)
+
             self.prefetch(prefetcher_setup, tt_ccl)
 
     def prefetch(self, prefetcher_setup, tt_ccl):
@@ -138,6 +166,16 @@ class TtLlamaMLP(LightweightModule):
             self.args.compute_kernel_config_lofi if self.four_bit_mlp else self.args.compute_kernel_config_hifi2
         )
 
+        # BH fused matmul+reduce_scatter (llama_rs_matmul). The prefetcher's global_cb
+        # is NOT required on BH — unit-test verified (llama_rs_matmul PASS, all_gather_matmul
+        # PCC 0.99999) at num_links=2, global_cb=None. Gated default-OFF until 64L coherence
+        # is confirmed (the w2-LAR precedent broke 64L coherence even with single-layer PCC
+        # passing — validate at full depth). Set QWEN36_FUSE_RS_MATMUL=1 to enable.
+        _fuse_bh_rs = (not self.model_config["USE_PREFETCHER"]) and os.environ.get("QWEN36_FUSE_RS_MATMUL", "0") == "1"
+        # FA-only probe: only fuse on full-attention layers (no recurrent in-layer).
+        if _fuse_bh_rs and os.environ.get("QWEN36_FUSE_RS_FA_ONLY", "0") == "1":
+            _fuse_bh_rs = self.is_full_attn_layer
+
         if self.model_config["USE_PREFETCHER"]:
             w1_out_reduced, w3_out = self.tt_ccl.double_matmul_line_reduce_scatter(
                 x,
@@ -155,6 +193,38 @@ class TtLlamaMLP(LightweightModule):
                 use_noc1_only=False,
             )
             ttnn.deallocate(x)
+        elif _fuse_bh_rs:
+            # BH fused path: keep matmul+reduce_scatter fused (llama_rs_matmul) but at a
+            # LOWER single-program L1 peak than double_matmul (2 matmuls + RS in one program),
+            # which overflowed col-0 L1 (896B) and clashed with the next layer's origin-anchored
+            # recurrent. Here: plain matmul w1 (program A), then fuse w3's matmul with w1's
+            # reduce-scatter (program B = 1 matmul + 1 RS). w3's RS is the shared code below.
+            w1_out = ttnn.linear(
+                x,
+                self.w1,
+                compute_kernel_config=compute_kernel,
+                dtype=ttnn.bfloat8_b,
+                program_config=pc_1_3,
+                memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+                sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
+            )
+            w1_out_reduced, w3_out = self.tt_ccl.matmul_line_reduce_scatter(
+                x,
+                self.w3,
+                w1_out,
+                cluster_axis=1,
+                num_links=self.model_config["GALAXY_NUM_LINKS"],
+                RS_memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
+                compute_kernel_config=compute_kernel,
+                dtype=ttnn.bfloat8_b,
+                program_config=pc_1_3,
+                memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+                global_cb=None,
+                sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
+                use_noc1_only=False,
+            )
+            ttnn.deallocate(x)
+            ttnn.deallocate(w1_out)
         else:
             # BH path: no global_cb, so use separate matmuls + reduce-scatter
             # double_matmul_line_reduce_scatter fails on BH because it passes 3 tensors
