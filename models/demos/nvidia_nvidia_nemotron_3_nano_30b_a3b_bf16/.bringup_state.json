@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "model_id": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+  "model_slug": "nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16",
+  "device": "qb",
+  "arch_name": "blackhole",
+  "started_at": "2026-06-13T22:50:54Z",
+  "updated_at": "2026-06-13T22:50:54Z",
+  "components": [],
+  "use_cases": [],
+  "locks": {
+    "device": {
+      "held_by": null,
+      "held_since": null
+    }
+  },
+  "tick_log": [],
+  "config": {
+    "max_parallel_reference": 4,
+    "max_attempts_per_phase": 10,
+    "tick_interval_sec": 60
+  }
+}
