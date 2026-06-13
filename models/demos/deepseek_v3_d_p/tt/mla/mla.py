@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -635,7 +636,13 @@ class ttMLA:
         # read-only ring_mla) so the scheduler / migration worker can consume the layer's KV as early
         # as possible. Mirrors the non-chunked path's post-fill_cache_for_user_ callback.
         if on_layer_complete is not None:
-            ttnn.synchronize_device(self.mesh_device)
+            # Timing experiment (PREFILL_SKIP_ACK_SYNC=1): keep the ack inject but DROP the per-layer
+            # synchronize_device. The runner fires on_layer_complete per layer (61 syncs/chunk) while
+            # the test passes on_layer_complete=None (0 syncs) — this isolates whether those 61 syncs,
+            # not the inject, are the per-chunk asymmetry. Unsafe for real migration (ack races the KV
+            # write) but the no-PCC perf runner does not migrate.
+            if os.environ.get("PREFILL_SKIP_ACK_SYNC", "0") != "1":
+                ttnn.synchronize_device(self.mesh_device)
             on_layer_complete(self.layer_idx)
 
         # K and V are the single latent kvpe cache (V = first kv_lora_rank columns, materialized

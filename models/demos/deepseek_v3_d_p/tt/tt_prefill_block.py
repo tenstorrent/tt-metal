@@ -10,6 +10,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.deepseek_v3_d_p.tt import perf_probe
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import compute_constants, extract_mesh_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
@@ -385,17 +386,18 @@ class TtPrefillBlock(LightweightModule):
         """
         # --- Attention ---
         attn_norm_out = self.attn_norm(x)
-        mla_out = self.mla.forward(
-            attn_norm_out,
-            rope_tensors,
-            kvpe_cache,
-            cache_layer_idx=cache_layer_idx,
-            on_layer_complete=on_layer_complete,
-            actual_isl=actual_isl,
-            kv_actual_isl=kv_actual_isl,
-            cache_user_id=cache_user_id,
-            return_kv_intermediates=return_kv_intermediates,
-        )
+        with perf_probe.section("mla", self.mesh_device):
+            mla_out = self.mla.forward(
+                attn_norm_out,
+                rope_tensors,
+                kvpe_cache,
+                cache_layer_idx=cache_layer_idx,
+                on_layer_complete=on_layer_complete,
+                actual_isl=actual_isl,
+                kv_actual_isl=kv_actual_isl,
+                cache_user_id=cache_user_id,
+                return_kv_intermediates=return_kv_intermediates,
+            )
         kv_intermediates = None
         if return_kv_intermediates:
             mla_out, kv_intermediates = mla_out
@@ -412,10 +414,11 @@ class TtPrefillBlock(LightweightModule):
             # "post_attn_norm" = post_attention_layernorm output (the FFN norm), TP-sharded on hidden.
             kv_intermediates["post_attn_norm"] = ttnn.clone(ffn_norm_out)
 
-        if self.is_moe:
-            ffn_out = self._moe_path(ffn_norm_out, return_intermediates=return_intermediates)
-        else:
-            ffn_out = self._dense_ffn_path(ffn_norm_out)
+        with perf_probe.section("moe" if self.is_moe else "dense", self.mesh_device):
+            if self.is_moe:
+                ffn_out = self._moe_path(ffn_norm_out, return_intermediates=return_intermediates)
+            else:
+                ffn_out = self._dense_ffn_path(ffn_norm_out)
 
         ttnn.deallocate(ffn_norm_out)
         x = ttnn.add(x, ffn_out)

@@ -22,6 +22,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.deepseek_v3_d_p.tt import perf_probe
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import create_balanced_chunk_order, reverse_reorder_tensor_chunks
@@ -232,6 +233,7 @@ class TtPrefillTransformer(LightweightModule):
         self.chunk_order = create_balanced_chunk_order(mesh_device.shape[sp_axis]) if is_balanced else None
 
         logger.info(f"TtPrefillTransformer construction complete ({num_layers} layers)")
+        perf_probe.dump_construction(self)  # one-shot, gated by PREFILL_DUMP_CONSTRUCTION
 
     def _to_host(self, tt_tensor):
         """Bring SP+TP sharded tensor to host as [1, seq, emb] bfloat16."""
@@ -374,8 +376,10 @@ class TtPrefillTransformer(LightweightModule):
             (h, layer_outputs_dict_or_None) where h is the chunk hidden after the last layer.
         """
         assert self.is_chunked, "forward_chunk requires the transformer to be built with is_chunked=True"
-        h = self.embed(token_ids)  # [1, chunk_per_chip, emb_dim/tp]
-        h = ttnn.unsqueeze_to_4D(h)  # [1, 1, chunk_per_chip, emb_dim/tp]
+        perf_probe.dump_first_chunk_inputs(token_ids, kvpe_cache, kv_actual_isl, cache_user_id)
+        with perf_probe.section("embed", self.mesh_device):
+            h = self.embed(token_ids)  # [1, chunk_per_chip, emb_dim/tp]
+            h = ttnn.unsqueeze_to_4D(h)  # [1, 1, chunk_per_chip, emb_dim/tp]
 
         layer_outputs = {} if return_layer_outputs else None
         for i, layer in enumerate(self.layers):
@@ -392,6 +396,7 @@ class TtPrefillTransformer(LightweightModule):
             signpost(f"forward_chunk_layer_{i}_end")
             if return_layer_outputs:
                 layer_outputs[f"layer_{i}"] = ttnn.clone(h)
+        perf_probe.flush_sections()  # per-chunk section breakdown, gated by PREFILL_SECTION_TIMING
         return h, layer_outputs
 
     def _lm_head_and_extract(
