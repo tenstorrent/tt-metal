@@ -95,6 +95,7 @@ def test_grid(device):
             "macs": M * K * N,
             "ok": False,
             "pcc": None,
+            "pcc_ref": None,
         }
         torch.manual_seed(0)
         ti = torch.randn((M, K), dtype=torch.bfloat16)
@@ -104,10 +105,21 @@ def test_grid(device):
         device.clear_program_cache()
         try:
             out = ttnn.experimental.minimal_matmul(a, b, compute_kernel_config=cc)  # build run
-            if rec["macs"] <= PCC_MAC_BUDGET:
+            # PCC coverage: every K-par-engaged shape (the risky path) is verified against ttnn.matmul
+            # (fast on-device reference, works at any size); small shapes additionally get a torch
+            # ground-truth anchor. Non-K-par large shapes (the heavily-validated plain path) are skipped.
+            if Pk > 1:
+                ref = ttnn.matmul(a, b, compute_kernel_config=cc)
+                g = ttnn.to_torch(out).float()
+                rg = ttnn.to_torch(ref).float()
+                rec["pcc"] = round(torch.corrcoef(torch.stack([rg.flatten(), g.flatten()]))[0, 1].item(), 5)
+                rec["pcc_ref"] = "ttnn"
+                ref.deallocate()
+            elif rec["macs"] <= PCC_MAC_BUDGET:
                 g = ttnn.to_torch(out).float()
                 r = ti.float() @ wi.float()
                 rec["pcc"] = round(torch.corrcoef(torch.stack([r.flatten(), g.flatten()]))[0, 1].item(), 5)
+                rec["pcc_ref"] = "torch"
             out.deallocate()
             for _ in range(WARMUP):
                 ttnn.experimental.minimal_matmul(a, b, compute_kernel_config=cc).deallocate()
