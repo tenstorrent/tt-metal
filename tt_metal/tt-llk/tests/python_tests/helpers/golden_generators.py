@@ -1443,7 +1443,8 @@ class BroadcastGolden:
         if broadcast_type not in self.broadcast_handlers:
             raise ValueError(f"Unsupported broadcast type: {broadcast_type}")
 
-        torch_format = format_dict[data_format]
+        format_for_quant = input_format or data_format
+        torch_format = format_dict[format_for_quant]
 
         # Convert input to tensor
         if isinstance(operand, torch.Tensor):
@@ -1454,7 +1455,6 @@ class BroadcastGolden:
         # Quantize input tile-by-tile BEFORE extracting broadcast values.
         # The hardware unpacks src_B from its L1 encoding before applying the broadcast,
         # so quantization must be based on the original (non-broadcast) tile rows.
-        format_for_quant = input_format or data_format
         if format_for_quant == DataFormat.Bfp2_b:
             input_flat = _bfp2b_to_float16b(input_flat)
         elif format_for_quant == DataFormat.Bfp4_b:
@@ -2061,6 +2061,9 @@ class UnarySFPUGolden:
         if not skip_tilize:
             result = tilize_block(result, dimensions, input_format).flatten()
 
+        if data_format.is_mx_format():
+            result = result.float()
+
         start = ELEMENTS_PER_TILE * dest_idx
         elements_to_process = TILE_SIZE * iterations
 
@@ -2085,7 +2088,8 @@ class UnarySFPUGolden:
 
         op_dtype = (
             torch.float32
-            if data_format in (DataFormat.Bfp4_b, DataFormat.Bfp2_b)
+            if data_format.is_mx_format()
+            or data_format in (DataFormat.Bfp4_b, DataFormat.Bfp2_b)
             else format_dict[dst_format]
         )
         result[
@@ -2094,7 +2098,10 @@ class UnarySFPUGolden:
         ] = torch.tensor(op_res, dtype=op_dtype)
 
         if not skip_tilize:
-            result = untilize_block(result, input_format, dimensions).flatten()
+            untilize_format = (
+                DataFormat.Float32 if data_format.is_mx_format() else input_format
+            )
+            result = untilize_block(result, untilize_format, dimensions).flatten()
 
         if self.data_format == DataFormat.Bfp8_b:
             check_bfp8_b(result)
@@ -2134,7 +2141,7 @@ class UnarySFPUGolden:
             result = converter(tilized, dimensions)
 
         if data_format.is_mx_format():
-            result = quantize_mx_tensor_chunked(result.to(torch.bfloat16), data_format)
+            result = quantize_mx_tensor_chunked(result, data_format)
 
         # depending on `data_format`, `inf` values may get converted when unpacked to L1.
         # Cast to the target data_format dtype before replacing inf so that
@@ -2411,19 +2418,30 @@ class EltwiseBinaryGolden(FidelityMasking):
             t1 = t1.to(torch.float32)
             t2 = t2.to(torch.float32)
 
+        def _compute_phase(phase_t1, phase_t2):
+            if not keep_float32:
+                return self.ops[op](phase_t1, phase_t2)
+            phase_t1 = phase_t1.to(torch.float32)
+            phase_t2 = phase_t2.to(torch.float32)
+            if op == MathOperation.Elwmul:
+                return phase_t1 * phase_t2
+            if op == MathOperation.Elwsub:
+                return phase_t1 - phase_t2
+            return phase_t1 + phase_t2
+
         if op == MathOperation.Elwmul:
             result = None
             for fidelity_iter in range(fidelity_iter_count + 1):
-                t1, t2 = self._apply_fidelity_masking(
+                phase_t1, phase_t2 = self._apply_fidelity_masking(
                     math_format_for_fidelity, t1, t2, fidelity_iter
                 )
-                phase_result = self.ops[op](t1, t2)
+                phase_result = _compute_phase(phase_t1, phase_t2)
                 if fidelity_iter == 0:
                     result = phase_result
                 else:
                     result += phase_result
         else:
-            result = self.ops[op](t1, t2)
+            result = _compute_phase(t1, t2)
 
         return result
 
@@ -2439,6 +2457,7 @@ class EltwiseBinaryGolden(FidelityMasking):
         acc_to_dest=False,
         tile_shape=None,
         num_tiles_per_accumulation=1,
+        dest_acc=DestAccumulation.No,
     ):
         if tile_shape is None:
             tile_shape = construct_tile_shape()
@@ -2457,10 +2476,15 @@ class EltwiseBinaryGolden(FidelityMasking):
         # For MX-output paths we preserve that precision through the golden
         # so multi-tile accumulation rounds the same way as HW.
         out_is_mx = data_format.is_mx_format()
+        fp32_dest = dest_acc == DestAccumulation.Yes
         hw_dest_dtype = (
-            torch.float16
-            if (out_is_mx and input_format == DataFormat.Float16)
-            else torch.bfloat16
+            torch.float32
+            if fp32_dest
+            else (
+                torch.float16
+                if (out_is_mx and input_format == DataFormat.Float16)
+                else torch.bfloat16
+            )
         )
         # Step 1: Quantize each input independently to match what hardware sees
         # after unpacking from L1. Each operand uses its own format.
@@ -2536,6 +2560,7 @@ class EltwiseBinaryGolden(FidelityMasking):
                 t2,
                 math_format_for_fidelity,
                 math_fidelity,
+                keep_float32=fp32_dest,
             )
 
         # Quantize output to match what hardware packs back into L1.
@@ -3278,7 +3303,9 @@ class UntilizeGolden:
     ):
         from helpers.tilize_untilize import untilize_block
 
-        operand = quantize_input_to_unpack_format(operand, input_format)
+        operand = quantize_input_to_unpack_format(
+            operand, input_format, all_mx_formats=True
+        )
 
         result = untilize_block(
             operand, stimuli_format=data_format, dimensions=dimensions
