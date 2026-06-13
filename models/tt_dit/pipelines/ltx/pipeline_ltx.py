@@ -331,11 +331,16 @@ class LTXPipeline:
         self.tt_audio_decoder = None
         self.tt_vocoder_with_bwe = None
 
+        # decode_audio only touches the audio decoder + vocoder, so audio_only skips building
+        # AND priming the 22B transformer / video VAE / upsampler — that prime is the bulk of a
+        # cold run (~100s of 22B weight push) and is pure waste for the audio test.
+        self.audio_only = audio_only
+
         if self.checkpoint_name is not None:
             self._load_config_from_checkpoint()
-            self._instantiate_modules(extra_transformer_variants or [])
+            self._instantiate_modules(extra_transformer_variants or [], audio_only=audio_only)
             self._register_coresident_exclusions()
-            self._prime_caches()
+            self._prime_caches(audio_only=audio_only)
             # Tracing (prep_run=False) requires precompiled kernels + pre-allocated trace I/O,
             # so warmup is mandatory when traced. audio_only skips the (video) warmup entirely:
             # decode_audio compiles + captures its own trace lazily on the first call, so the
@@ -580,9 +585,17 @@ class LTXPipeline:
             num_frames=latent_frames,
         )
 
-    def _instantiate_modules(self, extra_variants: list[tuple[str, list[LoraSpec]]]) -> None:
+    def _instantiate_modules(
+        self, extra_variants: list[tuple[str, list[LoraSpec]]], *, audio_only: bool = False
+    ) -> None:
         """Build every TT Module the pipeline will use. No DRAM weights yet —
-        ``_prime_caches`` (next) attaches them."""
+        ``_prime_caches`` (next) attaches them. ``audio_only`` builds just the
+        audio decoder shell; the transformer/VAE/upsampler are never used by
+        ``decode_audio``."""
+        if audio_only:
+            if self.checkpoint_name is not None:
+                self._new_audio_decoder()
+            return
         self.transformer = self._new_transformer()
         self.transformer_states.append(
             TransformerState(
@@ -659,9 +672,14 @@ class LTXPipeline:
         # even with the fp32 vocoder's conv3d activations live. Excluding them only
         # forces a redundant audio reload at decode (~6s warm) for no memory gain.
 
-    def _prime_caches(self) -> None:
+    def _prime_caches(self, *, audio_only: bool = False) -> None:
         """Load every module in reverse use order so variant 0 is resident in
-        DRAM after ``__init__`` (matches Wan's reverse-use-order priming)."""
+        DRAM after ``__init__`` (matches Wan's reverse-use-order priming).
+        ``audio_only`` primes just the audio decoder — the 22B transformer push
+        dominates a cold run and decode_audio never touches it."""
+        if audio_only:
+            self._prepare_audio_decoder()
+            return
         for idx in range(len(self.transformer_states) - 1, 0, -1):
             self._prepare_transformer(idx)
         # Each _prepare_* no-ops when its module isn't present (None), so no call-site guards.
