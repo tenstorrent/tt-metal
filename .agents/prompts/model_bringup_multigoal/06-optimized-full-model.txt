@@ -6,11 +6,12 @@ This goal creates the optimized-full-model state. Start from the completed full 
 
 Goal completion requirements:
 - Parallelize/optimize the full path, not just the decoder: embeddings, norms, LM head, logits, sampling, cache, trace replay, collectives, residual layouts, host boundaries, and generator orchestration.
-- Preserve canonical split-sampling token-out from $full-model/$tt-enable-tracing, including greedy and top-k/top-p-capable sampling, `tt_out_tok` feedback, device-side position/RoPE advance, changed-only page tables, and greedy force-argmax.
+- Preserve canonical split-sampling token-out from $full-model/$tt-enable-tracing, including greedy and top-k/top-p-capable sampling, `tt_out_tok` feedback, device-side position/RoPE advance, and changed-only page tables. Greedy decode must stay on device, but force-argmax is not mandatory; benchmark the available on-device sampler strategies and keep the fastest correct one for the target mesh.
 - Preserve the decoder stack's selected dtype/fidelity/KV-cache/activation/CCL policy, rejection ledger, and inter-layer residual layout. Do not switch to a faster rejected policy or replicated stream.
 - Refresh AIME24 chat-template prefill, teacher-forcing decode, and autoregressive evidence. run_prefill_check and run_teacher_forcing meet top-5 >= 98% and top-100 = 100%.
 - Measure before/after warmed batch-1 TTFT and trace-verified decode t/s/u and report them at the top of README.md. Keep traced teacher-forcing decode and token-out decode as separate numbers when sampling/token feedback/readback are included.
 - Compute the decoder-layer stack lower bound from optimized multichip layer latencies. Token-out decode uses persistent token/position/RoPE/page-table inputs, `tt_out_tok` feedback, device-side position advance, changed-only page tables, nonblocking trace replay, no per-token host sync/readback, and enabled CCL/persistent-buffer optimizations.
+- If token-out decode is more than 10-15% slower than the decoder-stack lower bound plus measured terminal work, split the gap into decoder stack, final norm, LM head, sampler all-gather/top-k/argmax, trace replay, host-device communication, synchronizations/readbacks, and host orchestration. Close the largest avoidable gap before moving on.
 - Leave tt-perf-report tables plus CSV/provenance logs for the full-model path.
 - Applicable optimization opportunities in the $multichip and $optimize checklists have evidence.
 - Apply $multichip and $optimize guidance to full-model-only pieces: sharding/replication, async CCLs, fused matmul-CCLs, DRAM-sharded matmuls, program configs, and compute-kernel configs.
