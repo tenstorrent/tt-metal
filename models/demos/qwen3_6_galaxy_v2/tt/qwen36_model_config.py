@@ -719,6 +719,34 @@ class TtQwen36ModelArgs(TtModelArgs):
         )
         self.model_config["RING40_MM_CRS"] = ring40_core_range_set
 
+        # ---- RING40 rs-matmul fusion placement ----------------------------
+        # matmul_line_reduce_scatter runs the w3-matmul AND the w1 reduce-scatter
+        # CONCURRENTLY. The RS packet workers live on PACKET_WORKER_CRS (cols 1-3,
+        # rows 1-3). If the matmul lands on those cores the fused op DEADLOCKS
+        # (confirmed: RING40_MM_CRS cols 1,2,4,5 overlaps cols 1,2). So place the
+        # rs-matmul's matmul on a 40-core block clear of PACKET_WORKER_CRS (cols 1-3)
+        # AND dispatch (col 0): cols 4-11 x rows 0-4 = 40 cores. (Same disjoint-core
+        # recipe as the FF2 all_gather_matmul fix.) The matmul prog config's storage
+        # grid is a bounding box; actual placement follows these sharded memcfgs.
+        RING40_RSMM_MM_CRS = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(11, 4))]  # cols 4-11 x rows 0-4 = 40
+        )
+        self.model_config["RING40_RSMM_MM_CRS"] = RING40_RSMM_MM_CRS
+        self.model_config["SHARDED_FF12_RSMM_IN_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, self.dim_per_tp // RING40_SIZE),  # (32,32) K=1280/40, ring_in
+            core_grid=RING40_RSMM_MM_CRS,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        self.model_config["SHARDED_FF12_RSMM_OUT_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, ff_n_ring40 // RING40_SIZE),  # (32,64) N=2560/40, matmul out
+            core_grid=RING40_RSMM_MM_CRS,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
         self.model_config["W1W3_RING40_MEMCFG"] = self.create_dram_sharded_mem_config(
             k=self.dim_per_tp,  # 1280
             n=ff_n_ring40,  # 2560

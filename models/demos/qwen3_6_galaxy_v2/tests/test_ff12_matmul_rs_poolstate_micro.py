@@ -93,9 +93,15 @@ def test_ff12_matmul_rs_poolstate_micro(bh_glx_mesh):
     paged_attention_config = PagedAttentionConfig(block_size=_PAGED_BLOCK_SIZE, max_num_blocks=_PAGED_MAX_NUM_BLOCKS)
     model, args = _build_tt_model_paged_kv(mesh_device, state_dict, ["linear_attention"], 1, paged_attention_config)
 
+    # matmul_line_reduce_scatter pulls its interim from reduce_scatter_buffers,
+    # which is only allocated in DECODE-mode tt_ccl. _build_tt_model_paged_kv
+    # leaves the model in prefill setup, so switch to decode (re-points each
+    # layer's tt_ccl to the decode instance) — the state the real decode uses.
+    model.switch_mode("decode")
     mlp = model.layers[0].feed_forward
     mc = model.model_config
     tt_ccl = mlp.tt_ccl
+    assert getattr(tt_ccl, "reduce_scatter_buffers", None) is not None, "decode tt_ccl must have reduce_scatter_buffers"
     fused_ck = args.compute_kernel_config_hifi2
     wsd = tt_ccl.worker_sub_device_id
 
