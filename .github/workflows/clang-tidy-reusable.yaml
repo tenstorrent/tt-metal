@@ -113,6 +113,10 @@ jobs:
             echo "HTTPS_PROXY=http://proxy.restricted-proxy.svc.cluster.local:3128"
           } >> "$GITHUB_ENV"
           echo "ctcache S3 folder: ct${CT_VERSION}"
+          # Pre-resolve the ctcache binary once so the per-TU wrapper script
+          # skips a repeated PATH scan across thousands of invocations.
+          CTCACHE_BIN=$(command -v clang-tidy-cache || true)
+          echo "CTCACHE_BIN=${CTCACHE_BIN}" >> "$GITHUB_ENV"
 
           # Diagnose connectivity at the HTTP level before boto3
           # 403 from curl is expected (Garage rejects unsigned requests) — confirms proxy reaches Garage
@@ -175,6 +179,9 @@ jobs:
       - name: Unpack CPM cache
         run: |
           [ -f .cpmcache.tar.zst ] && tar -I 'zstd -T0' -xf .cpmcache.tar.zst || true
+
+      - name: Pre-create fixes dir
+        run: mkdir -p .build/clang-tidy/fixes
 
       - name: 🔧 CMake configure
         run: |
