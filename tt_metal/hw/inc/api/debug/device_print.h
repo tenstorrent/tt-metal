@@ -675,6 +675,15 @@ struct device_print_type_info {
     uint32_t size_in_bytes;
 };
 
+// Store an 8-byte value into the print buffer as two 32-bit stores. This is a workaround for riscs
+// that have 8-byte registers. Problem is that our implementation keeps alignment to 4 bytes,
+// so 8-byte arguments are not guaranteed to be 8-byte aligned in the buffer.
+inline void store_64bit_value(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, uint64_t value) {
+    auto* dst = reinterpret_cast<device_print_buffer_ptr<uint32_t>>(device_print_buffer + offset);
+    dst[0] = static_cast<uint32_t>(value);
+    dst[1] = static_cast<uint32_t>(value >> 32);
+}
+
 // Type-to-info mapping for format strings and serialization
 template <typename T, typename = void>
 struct device_print_type {
@@ -731,14 +740,14 @@ template <>
 struct device_print_type<std::int64_t> {
     static constexpr device_print_type_info value = {'q', sizeof(std::int64_t)};
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, int64_t argument) {
-        *reinterpret_cast<device_print_buffer_ptr<int64_t>>(device_print_buffer + offset) = argument;
+        store_64bit_value(device_print_buffer, offset, static_cast<uint64_t>(argument));
     }
 };
 template <>
 struct device_print_type<std::uint64_t> {
     static constexpr device_print_type_info value = {'Q', sizeof(std::uint64_t)};
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, uint64_t argument) {
-        *reinterpret_cast<device_print_buffer_ptr<uint64_t>>(device_print_buffer + offset) = argument;
+        store_64bit_value(device_print_buffer, offset, argument);
     }
 };
 template <>
@@ -752,7 +761,7 @@ template <>
 struct device_print_type<double> {
     static constexpr device_print_type_info value = {'d', sizeof(double)};
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, double argument) {
-        *reinterpret_cast<device_print_buffer_ptr<double>>(device_print_buffer + offset) = argument;
+        store_64bit_value(device_print_buffer, offset, __builtin_bit_cast(uint64_t, argument));
     }
 };
 template <>
@@ -834,8 +843,7 @@ struct device_print_type<T*> {
             *reinterpret_cast<device_print_buffer_ptr<uint32_t>>(device_print_buffer + offset) =
                 reinterpret_cast<uint32_t>(argument);
         } else if constexpr (sizeof(T*) == 8) {
-            *reinterpret_cast<device_print_buffer_ptr<uint64_t>>(device_print_buffer + offset) =
-                reinterpret_cast<uint64_t>(argument);
+            store_64bit_value(device_print_buffer, offset, reinterpret_cast<uint64_t>(argument));
         } else {
             static_assert(sizeof(T*) == 4 || sizeof(T*) == 8, "Unsupported pointer size");
         }
@@ -845,16 +853,24 @@ template <>
 struct device_print_type<char*> {
     static constexpr device_print_type_info value = {'s', sizeof(char*)};
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, char* argument) {
-        *reinterpret_cast<device_print_buffer_ptr<std::uintptr_t>>(device_print_buffer + offset) =
-            reinterpret_cast<std::uintptr_t>(argument);
+        if constexpr (sizeof(std::uintptr_t) == 8) {
+            store_64bit_value(device_print_buffer, offset, reinterpret_cast<std::uintptr_t>(argument));
+        } else {
+            *reinterpret_cast<device_print_buffer_ptr<std::uintptr_t>>(device_print_buffer + offset) =
+                reinterpret_cast<std::uintptr_t>(argument);
+        }
     }
 };
 template <>
 struct device_print_type<const char*> {
     static constexpr device_print_type_info value = {'s', sizeof(const char*)};
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, const char* argument) {
-        *reinterpret_cast<device_print_buffer_ptr<std::uintptr_t>>(device_print_buffer + offset) =
-            reinterpret_cast<std::uintptr_t>(argument);
+        if constexpr (sizeof(std::uintptr_t) == 8) {
+            store_64bit_value(device_print_buffer, offset, reinterpret_cast<std::uintptr_t>(argument));
+        } else {
+            *reinterpret_cast<device_print_buffer_ptr<std::uintptr_t>>(device_print_buffer + offset) =
+                reinterpret_cast<std::uintptr_t>(argument);
+        }
     }
 };
 
@@ -864,8 +880,12 @@ template <>
 struct device_print_type<ct_string> {
     static constexpr device_print_type_info value = {'s', sizeof(const char*)};
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, ct_string argument) {
-        *reinterpret_cast<device_print_buffer_ptr<std::uintptr_t>>(device_print_buffer + offset) =
-            reinterpret_cast<std::uintptr_t>(argument.ptr);
+        if constexpr (sizeof(std::uintptr_t) == 8) {
+            store_64bit_value(device_print_buffer, offset, reinterpret_cast<std::uintptr_t>(argument.ptr));
+        } else {
+            *reinterpret_cast<device_print_buffer_ptr<std::uintptr_t>>(device_print_buffer + offset) =
+                reinterpret_cast<std::uintptr_t>(argument.ptr);
+        }
     }
 };
 
