@@ -38,6 +38,7 @@ from ....pipelines.flux1.pipeline_flux1 import Flux1Pipeline, Flux1PipelineConfi
         ("schnell", 1024, 1024, 4),
         ("dev", 1024, 1024, 28),
     ],
+    ids=["schnell", "dev"],
 )
 @pytest.mark.parametrize(
     ("mesh_device", "sp", "tp", "encoder_tp", "vae_tp", "topology", "num_links", "mesh_test_id"),
@@ -96,13 +97,8 @@ def test_flux1_pipeline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Setup CI environment
-    if is_ci_env:
-        if use_cache:
-            monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
-        else:
-            pytest.skip("Skipping. No use cache is implicitly tested with the configured non persistent cache path.")
-        if traced:
-            pytest.skip("Skipping traced test in CI environment. Use Performance test for detailed timing analysis.")
+    if is_ci_env and traced:
+        pytest.skip("Skipping traced test in CI environment. Use Performance test for detailed timing analysis.")
 
     parallel_config = DiTParallelConfig.from_tuples(cfg=(1, 0), sp=sp, tp=tp)
     encoder_parallel_config = EncoderParallelConfig.from_tuple(encoder_tp)
