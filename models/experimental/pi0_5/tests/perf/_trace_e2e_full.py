@@ -387,6 +387,38 @@ def main():
                     )
             return cur, kvs
 
+        if os.environ.get("PI05_PREFILL_PROFILE", "").lower() in ("1", "true", "yes", "on"):
+            # eager per-op breakdown (synchronize per op; relative split is the signal)
+            for _w in range(2):
+                pchain(prefix_m)
+            ttnn.synchronize_device(prefill)
+            tb = tcv = tp2p = 0.0
+            cur = prefix_m
+            for k in range(18):
+                _s = time.perf_counter()
+                cur, _ = pblock.forward(cur, pcos, psin, None, None, None, True)
+                ttnn.synchronize_device(prefill)
+                tb += time.perf_counter() - _s
+                if k < 17:
+                    _s = time.perf_counter()
+                    cur = ttnn.to_memory_config(ttnn.to_layout(cur, ttnn.TILE_LAYOUT), ttnn.DRAM_MEMORY_CONFIG)
+                    ttnn.synchronize_device(prefill)
+                    tcv += time.perf_counter() - _s
+                    _s = time.perf_counter()
+                    cur = ttnn.point_to_point(
+                        cur,
+                        ttnn.MeshCoordinate(*snake[k]),
+                        ttnn.MeshCoordinate(*snake[k + 1]),
+                        topology=ttnn.Topology.Linear,
+                        output_tensor=cur,
+                    )
+                    ttnn.synchronize_device(prefill)
+                    tp2p += time.perf_counter() - _s
+            log(
+                f"PREFILL PROFILE (eager, +sync): 18 block_fwd={1e3*tb:.1f}ms  "
+                f"17 layout_conv={1e3*tcv:.1f}ms  17 p2p={1e3*tp2p:.1f}ms"
+            )
+
         pchain(prefix_m)
         ttnn.synchronize_device(prefill)
         ptid = ttnn.begin_trace_capture(prefill, cq_id=0)
