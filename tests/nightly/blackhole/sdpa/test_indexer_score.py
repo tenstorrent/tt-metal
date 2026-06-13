@@ -131,8 +131,12 @@ def production_config(heads):
       (sp7 bfp8 0.73 -> 0.48 ms). At 64 heads, QC=2 with all heads resident overflows L1 (cb_q
       alone ~1 MB), so QC stays 1 (32); the 64-head case is compute-bound and gains nothing from
       QC=2 anyway.
-    - k_chunk=256 (KC=8) over 512: KC=8 load-balances the work units slightly better on heads8
-      (0.48 vs 0.49 ms sp7) and stays small enough to leave L1 room for QC=2; KC>=32 is too large.
+    - k_chunk=512 (KC=16) on heads8: the compute-ceiling optimum after the unit-batched fast untilize
+      + sync-gap resync fixes (QC=2/KC=16 = 67.7% vs KC=8 = 67.0%; KC saturates by 16, see
+      INDEXER_QCKC_CEILING.md). This is a deliberate compute-first choice: DMA-*on* heads8 is reader-
+      bound and KC=16 is ~2% slower there than KC=8 (0.422 vs 0.414 ms sp7), a regression to be
+      recovered by data-movement work, not by shrinking KC. heads16/64 stay KC=8 (matmul-bound; KC=16
+      with 16 heads resident risks L1 and is not part of the heads8 ceiling study). KC>=32 is too large.
     """
     # Sweep override (compute-ceiling investigation): INDEXER_SWEEP_QC / _KC are in TILES.
     sweep_qc = int(os.environ.get("INDEXER_SWEEP_QC", "0"))
@@ -145,7 +149,7 @@ def production_config(heads):
         )
     return ttnn.IndexerScoreProgramConfig(
         q_chunk_size=64 if heads <= 16 else 32,
-        k_chunk_size=256,
+        k_chunk_size=512 if heads <= 8 else 256,
         head_group_size=0,
     )
 
