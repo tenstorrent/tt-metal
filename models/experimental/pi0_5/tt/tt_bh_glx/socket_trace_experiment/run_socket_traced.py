@@ -61,6 +61,20 @@ def main():
 
         # --- replicate capture_trace setup steps 1-3 (persistent buffers + upstream) ---
         pipe._ensure_persistent_input_buffers(images, lang_tokens)
+
+        # CRITICAL: the real _refresh_noise_buffer() draws FRESH torch.randn noise on
+        # every call (no seed). The eager reference and the trace replay would then see
+        # DIFFERENT initial noise, so "PCC vs eager" compares two different inferences and
+        # looks degraded even when the trace is correct. Pin it to ONE fixed noise so the
+        # replay reproduces the eager reference exactly (denoise is deterministic in x_t).
+        if os.environ.get("FIXED_NOISE", "1").lower() in ("1", "true", "yes"):
+            _ah, _ahp = pipe.action_horizon, pipe._action_horizon_padded
+            _np = torch.zeros(1, _ahp, pipe.action_dim, dtype=torch.float32)
+            _np[:, :_ah, :] = torch.randn(1, _ah, pipe.action_dim)
+            _fixed_noise = ttnn.from_torch(_np, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+            pipe._refresh_noise_buffer = lambda: ttnn.copy_host_to_device_tensor(_fixed_noise, pipe.x_t_fp32)
+            log("FIXED_NOISE: _refresh_noise_buffer pinned (eager == replay input)")
+
         pipe._refresh_noise_buffer()
         upstream = None
         if use_upstream_masks():
@@ -103,6 +117,36 @@ def main():
             pipe.transport.send = _persist_send
             log("transport.send monkey-patched to persistent+distinct send-source buffers")
 
+        # FIX UNDER TEST #3: the transport caches ONE socket pair per (src,dst), so
+        # all N Euler steps share the same socket FIFO/credit state. p2p works at
+        # N=5 but sockets don't, and buffer-only patches were byte-identical -> the
+        # shared SOCKET (not the buffer) is the suspect. Give each send call its OWN
+        # fresh socket pair so no step shares FIFO/credit state with another.
+        if os.environ.get("USE_PERSTEP_SOCKET", "").lower() in ("1", "true", "yes"):
+            _held_socks = []
+
+            def _fresh_pair(src_mesh, dst_mesh):
+                conn = ttnn.SocketConnection(
+                    ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(0, 0)),
+                    ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(0, 1)),
+                )
+                mem = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, 4096 * 4)
+                p = ttnn.create_socket_pair(src_mesh, dst_mesh, ttnn.SocketConfig([conn], mem))
+                _held_socks.append(p)
+                return p
+
+            pipe.transport._pair = _fresh_pair
+            # also force a unique recv buffer per call so nothing is shared across steps
+            _orig_send3 = pipe.transport.send
+            _ctr3 = [0]
+
+            def _send3(src, dst, *, out_buf=None, tag=None):
+                _ctr3[0] += 1
+                return _orig_send3(src, dst, out_buf=out_buf, tag=f"{tag}:ps{_ctr3[0]}")
+
+            pipe.transport.send = _send3
+            log("transport patched: FRESH socket pair + distinct recv buffer per send call")
+
         if SCOPE == "vp":
             # SigLIP(vision) + prefill ONLY (single-pass, no denoise loop). Trace
             # vision_per_chip + prefill_per_chip via sockets; compare the prefill
@@ -140,6 +184,10 @@ def main():
             log("DONE (vision+prefill scope)")
             return
 
+        if os.environ.get("NO_DEALLOC", "").lower() in ("1", "true", "yes"):
+            ttnn.deallocate = lambda *a, **k: None
+            log("ttnn.deallocate patched to NO-OP (transient addresses frozen)")
+
         if SCOPE == "denoise":
             # Localize: run vision+prefill+KV EAGER (populate cached KV), then trace
             # ONLY the denoise loop on denoise_per_chip (persistent x_t + cached KV +
@@ -171,11 +219,16 @@ def main():
             for sm, tid in zip(subs, tids):
                 ttnn.end_trace_capture(sm, tid, cq_id=0)
             log("captured denoise-only per-submesh traces")
+            _sync_all = os.environ.get("SYNC_ALL", "").lower() in ("1", "true", "yes")
             for rnd in (1, 2, 3):
                 pipe._refresh_noise_buffer()
                 for sm, tid in zip(subs, tids):
                     ttnn.execute_trace(sm, tid, cq_id=0, blocking=False)
-                ttnn.synchronize_device(h.denoise_per_chip[0])
+                if _sync_all:
+                    for sm in subs:
+                        ttnn.synchronize_device(sm)
+                else:
+                    ttnn.synchronize_device(h.denoise_per_chip[0])
                 traced = ttnn.to_torch(
                     pipe.x_t_fp32, mesh_composer=ttnn.ConcatMeshToTensor(h.denoise_per_chip[0], dim=0)
                 )[0]
@@ -204,9 +257,12 @@ def main():
         log("captured per-submesh traces")
 
         # --- replay (execute in stage dependency order: vision -> prefill -> denoise) ---
+        import time
+
+        nperf = int(os.environ.get("PERF_ITERS", "20"))
+        ordered = list(zip(all_subs, tids))
         for rnd in (1, 2, 3):
             pipe._refresh_noise_buffer()
-            ordered = list(zip(all_subs, tids))
             for sm, tid in ordered:
                 ttnn.execute_trace(sm, tid, cq_id=0, blocking=False)
             ttnn.synchronize_device(h.denoise_per_chip[0])
@@ -214,6 +270,18 @@ def main():
                 0
             ]
             log(f"replay {rnd}: actions {tuple(traced.shape)} PCC vs eager = {_pcc(traced, eager):.6f}")
+
+        # --- perf: time the traced replay (execute all submesh traces + drain) ---
+        ttnn.synchronize_device(h.denoise_per_chip[0])
+        t0 = time.perf_counter()
+        for _ in range(nperf):
+            for sm, tid in ordered:
+                ttnn.execute_trace(sm, tid, cq_id=0, blocking=False)
+            ttnn.synchronize_device(h.denoise_per_chip[0])
+        dt_ms = (time.perf_counter() - t0) * 1000.0 / nperf
+        log(
+            f"PERF: traced all-socket e2e replay = {dt_ms:.2f} ms/inference (avg of {nperf}); {1000.0/dt_ms:.1f} infer/s"
+        )
         log("DONE — per-submesh socket-pipeline trace replayed")
 
 
