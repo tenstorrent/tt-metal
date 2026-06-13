@@ -34,7 +34,7 @@ models/autoports/<model>/doc/datatype_sweep/top1_perf_pareto.png
 models/autoports/<model>/doc/datatype_sweep/top5_perf_pareto.png
 ```
 
-The README should lead with the selected config, top-1, top-5, top-100, TTFT, trace-verified teacher-forcing decode t/s/u, and the exact acceptance thresholds.
+The README should lead with the selected config, top-1, top-5, top-100, TTFT, trace-verified teacher-forcing decode t/s/u, post-selection token-out decode t/s/u when available, and the exact acceptance thresholds. Label each performance number with its measurement regime and workload shape.
 
 ## Baseline
 
@@ -100,6 +100,8 @@ Every kept candidate must be validated with full-model accuracy. For each evalua
 
 Always use trace-verified teacher-forcing decode t/s/u to rank datatype candidates - a non-traced path is not useful. If fully-traced decode is not working, use the $autofix skill until it is.
 
+Teacher-forcing is the selection metric, not necessarily the serving headline. After selecting the winning config, run the same warmed token-out no-readback benchmark used by optimized full model, using the selected config through the normal construction path. Record this separately as post-selection token-out performance. If the model cannot run that benchmark, state why instead of presenting teacher-forcing performance as token-out performance.
+
 ## Plots
 
 Use matplotlib/pyplot to generate two elegant, delightful Pareto charts:
@@ -123,6 +125,7 @@ Before finishing:
 
 - make the selected config the model's default construction path, or write a required config artifact that `build_generator`, full-model, and vLLM paths actually consume by default;
 - keep a simple config change or override to return to the safe baseline setting;
+- run a post-selection token-out no-readback performance check with the selected config and record the workload shape, trace status, TTFT, decode t/s/u, and runtime counters;
 - run qualitative generation if the dtype changes are large or top-1 is close to the threshold - if this is bad then back off more changes until it is good;
 - add a short propagation check proving `build_generator` and the vLLM adapter load the same selected weight/activation/CCL/KV policy used by the winning sweep result.
 

@@ -161,7 +161,7 @@ Done means all of these are true and recorded:
 - Plugin registration path and architecture name.
 - Exact successful `run_vllm_server` invocation.
 - Capability flags with evidence: no unproven `supports_async_decode=True`, explicit `tt_async_decode_allows_overlap` value with proof if true, no prefix-caching claim without tests, and on-device sampling verified for the measured mode.
-- Evidence that serving uses the full-model split-sampling contract: internal sampling trace, `tt_out_tok` feedback into the persistent decode token input, greedy force-argmax for greedy benchmarks, and stale-token/current-position smoke coverage.
+- Evidence that serving uses the full-model split-sampling contract: internal sampling trace, `tt_out_tok` feedback into the persistent decode token input, greedy benchmarks using the fastest correct on-device sampling strategy measured for this mesh, and stale-token/current-position smoke coverage.
 - Logit-determinism evidence through vLLM, with run-to-run and cross-batch-position reproducibility checks and standalone baseline comparison.
 - Sampling test results, with any reproducibility-only failures separated from real failures.
 - Qualitative greedy and sampled serving-output verdict.

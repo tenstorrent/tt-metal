@@ -39,7 +39,7 @@ The full-model stage owns sampling. A full model is complete only when token-out
 - sampling receives `tt_out_tok` pointing at the persistent decode token input tensor, so the sampled token becomes the next decode input on device;
 - current-position/RoPE position state advances coherently with token feedback on device inside the trace for fixed-step decode loops; do not refresh positions from host every token;
 - page-table trace inputs are refreshed only when the page table changes, with no per-token page-table copy in the unchanged-page-table case;
-- greedy decode uses the force-argmax sampling path, not generic `TopKDeviceOperation`.
+- greedy decode stays on device and uses the fastest correct on-device sampling strategy for the target mesh. Force-argmax is optional. Benchmark it against the normal top-k/top-p-capable sampling path when terminal sampling is material.
 
 The same path supports top-k/top-p sampling. Do not complete the full model with a one-off greedy-only path and leave sampled serving to be invented in vLLM.
 
@@ -162,13 +162,13 @@ Measure the reported batch-1 TTFT and trace-verified decode t/s/u with the same 
 
 If performance regresses badly from block-level evidence, inspect data movement between embeddings, blocks, final norm, LM head, and sampling before changing precision.
 
-For greedy decode, the perf report must not show generic `TopKDeviceOperation` as the dominant token-out cost. If it does, fix the force-argmax/split-sampling path before treating dtype, CCL, or LM-head tuning as the primary optimization target.
+For greedy decode, the perf report must not show avoidable sampler work as the dominant token-out cost. If `ArgMaxDeviceOperation`, full-vocab all-gather, generic `TopKDeviceOperation`, or another sampling op dominates token-out decode, benchmark the alternate on-device sampler strategy before treating dtype, CCL, or LM-head tuning as the primary optimization target.
 
 Compare full-model decode against the best decoder-layer stack lower bound before declaring the result good enough:
 
 - multiply each optimized multichip decoder-layer decode latency by that layer kind's count;
 - compare the summed layer-stack ms/token with the measured full-model token-out ms/token;
-- optimize the named full-model-only costs before accepting the result: final norm, LM head, sampling, trace replay, host input refresh, page-table refresh, RoPE/current-position refresh, synchronizations, token readback, and disabled CCL/persistent-buffer optimizations.
+- optimize the named full-model-only costs before accepting the result: final norm, LM head, sampling strategy, sampler all-gather/top-k/argmax work, trace replay, host input refresh, page-table refresh, RoPE/current-position refresh, synchronizations, token readback, and disabled CCL/persistent-buffer optimizations.
 
 If the lower bound says the requested target is plausible but the full model misses it, the optimized-full-model pass must close that specific gap. If the lower bound itself misses the target, return to decoder/multichip optimization or a targeted precision/fidelity policy rather than spending the budget on generator code.
 

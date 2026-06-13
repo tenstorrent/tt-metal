@@ -197,7 +197,7 @@ Leave compact evidence that the traced path is real:
 - Repeated replay determinism across several executions.
 - Updated-input replay test proving outputs change when trace inputs are refreshed.
 - For vLLM decode: stale-input validation for token/current-position/page-table refresh, explicit async-overlap setting and proof if enabled, on-device sampling trace evidence, and a passing server smoke run with decode trace enabled.
-- Split-sampling evidence for token-out decode: internal sampling trace enabled, `tt_out_tok` wired to the persistent decode token input, and greedy force-argmax used for greedy benchmarks.
+- Split-sampling evidence for token-out decode: internal sampling trace enabled, `tt_out_tok` wired to the persistent decode token input, and greedy benchmarks using the fastest correct on-device sampling strategy measured for this mesh.
 - No host fallback in the captured path.
 - Warmed trace replay timing, with prefill and decode measured separately where applicable.
 - Host-work counters for the replay loop: trace replay count, token refresh count, current-position/RoPE refresh count, page-table refresh count, synchronizations/readbacks, and whether positions/tokens are advanced on device.
