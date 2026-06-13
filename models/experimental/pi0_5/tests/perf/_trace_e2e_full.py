@@ -17,6 +17,36 @@ Stages (each reuses the validated prototype logic):
 import os
 import sys
 
+# Bake in the validated production perf flags (single source of truth:
+# _bench_runs/pi05_production.env, 97.2% LIBERO). setdefault => an explicit
+# value in the caller's environment still wins. Set BEFORE the pi0_5 imports
+# so the building blocks (ttnn_gemma/siglip/common) read them at import time.
+_PROD_PERF_FLAGS = {
+    # matmul / kernel tuning (no PCC impact)
+    "PI0_EXPERT_MM_LOFI": "1",
+    "PI0_ROPE_TABLES_L1": "1",
+    "PI0_MM_SWEEP_V2": "1",
+    "PI0_DENOISE_MM_TUNE": "1",
+    "PI0_PREFILL_MM_TUNE": "1",
+    # attention / mask handling
+    "PI0_UPSTREAM_MASKS": "1",
+    "QWEN_NLP_CONCAT_HEADS_HEAD_SPLIT": "1",
+    "QWEN_NLP_CREATE_HEADS_HEAD_SPLIT": "1",
+    "PI0_MQA_HEAD_SPLIT": "1",
+    "PI0_SDPA_DENOISE_K_FORCE": "96",
+    # VLM single-pass at bs=3 (training-spec correct)
+    "PI0_NUM_CAMERAS": "3",
+    "PI0_VLM_CHUNK_SIZE": "1024",
+    "PI0_VLM_MLP_BF8_OUT": "1",
+    "PI0_VLM_MLP_MINIMAL": "1",
+    "PI0_VLM_MINIMAL_CFG": "4,8,8,1,8",
+    "PI0_SIGLIP_USE_FOLD": "1",
+    # denoise steps (5 = perf-tuned default, 97.2% LIBERO)
+    "PI05_NUM_DENOISE_STEPS": "5",
+}
+for _k, _v in _PROD_PERF_FLAGS.items():
+    os.environ.setdefault(_k, _v)
+
 import torch
 import ttnn
 
@@ -30,6 +60,7 @@ from models.experimental.pi0_5.tt.ttnn_gemma import (
     ada_rms_norm_no_gate_ttnn,
     precompute_freqs_cis_meta_format,
 )
+from models.experimental.pi0_5.tt.ttnn_pi0_5_model import _MASK_VAL, _precompute_rope_table_torch
 from models.experimental.pi0_5.tt.ttnn_siglip import MultiModalProjectorTTNN, SigLIPBlockTTNN
 from models.experimental.pi0_5.tt.tt_bh_glx import stages
 from models.experimental.pi0_5.tt.tt_bh_glx.expert_slice import _inject_adarms_weights_to_submesh
@@ -41,9 +72,9 @@ CKPT = os.environ.get(
     "PI05_CHECKPOINT_DIR",
     "/home/tt-admin/sdawle/tt-metal/models/experimental/pi0_5/weights/pi05_libero_upstream",
 )
-N_CAMS = 1
+N_CAMS = int(os.environ["PI0_NUM_CAMERAS"])  # 3 -> prefix = 3*256 + 256 lang = 1024 (the VLM block)
 LANG_LEN = 256
-N_STEPS = 5
+N_STEPS = int(os.environ["PI05_NUM_DENOISE_STEPS"])
 SEED = 42
 SV_ATTRS = [
     ("ln1_weight", ""),
@@ -95,7 +126,7 @@ def main():
     def log(m):
         print(f"[e2e] {m}", flush=True)
 
-    cfg = Pi0_5ModelConfig(action_horizon=action_horizon_from_checkpoint(CKPT))
+    cfg = Pi0_5ModelConfig(action_horizon=action_horizon_from_checkpoint(CKPT), num_denoising_steps=N_STEPS)
     scfg, vcfg, ecfg = cfg.siglip_config, cfg.vlm_config, cfg.expert_config
     ah = cfg.action_horizon
     ah_pad = ((ah + 31) // 32) * 32
@@ -188,9 +219,9 @@ def main():
         vbo = vchain(emb_v)
         ttnn.end_trace_capture(vblk, vtid, cq_id=0)
         ttnn.execute_trace(vblk, vtid, cq_id=0, blocking=True)
-        vblk_out = ttnn.to_torch(vbo, mesh_composer=ttnn.ConcatMeshToTensor(vblk, dim=0))[
-            2
-        ]  # (N_CAMS,256,1152)? chip(0,2)
+        # chip (0,2) holds the last 9 SigLIP layers; ConcatMeshToTensor interleaves
+        # device-batch, so chip 2's lane is rows [2*N_CAMS : 3*N_CAMS] -> (N_CAMS,256,1152).
+        vblk_out = ttnn.to_torch(vbo, mesh_composer=ttnn.ConcatMeshToTensor(vblk, dim=0))[2 * N_CAMS : 3 * N_CAMS]
         # post_ln + projector (eager) on embed_chip
         post_w = vw.get("post_layernorm.weight") or vw.get("vision_model.post_layernorm.weight")
         post_b = vw.get("post_layernorm.bias") or vw.get("vision_model.post_layernorm.bias")
@@ -318,7 +349,23 @@ def main():
             return AdaRMSGemmaBlockTTNN(ecfg, sh, local, denoise, None, None)
 
         eblocks = [eblock(L) for L in range(3)]
-        ecos, esin = precompute_freqs_cis_meta_format(ecfg.head_dim, ah_pad, denoise, base=ecfg.rope_base)
+        # Upstream-compat denoise artifacts (all-real masks here):
+        #  - suffix RoPE is OFFSET by prefix_real_count (not sequential from 0)
+        #  - expert cross-attn mask blocks the padded suffix rows/cols beyond
+        #    action_horizon (and any prefix padding; none here since all-real).
+        prefix_real_count = prefix_len  # all img+lang tokens real
+        cos_exp, sin_exp = _precompute_rope_table_torch(ecfg.head_dim, cfg.max_seq_len)
+        spos = (torch.arange(ah_pad, dtype=torch.int64) + prefix_real_count).clamp(max=cfg.max_seq_len - 1)
+        ecos = _repl(cos_exp[spos].unsqueeze(0).unsqueeze(0), denoise)
+        esin = _repl(sin_exp[spos].unsqueeze(0).unsqueeze(0), denoise)
+        kv_total = prefix_pad + ah_pad
+        em = torch.zeros(ah_pad, kv_total, dtype=torch.bfloat16)
+        if prefix_pad > prefix_len:
+            em[:, prefix_len:prefix_pad] = _MASK_VAL
+        if ah_pad > ah:
+            em[:, prefix_pad + ah : kv_total] = _MASK_VAL  # padded suffix KV cols
+            em[ah:ah_pad, :] = _MASK_VAL  # padded suffix query rows
+        emask = _repl(em.unsqueeze(0).unsqueeze(0), denoise)
         scfg_s = SuffixConfig(action_dim=adim, action_horizon=ah, expert_width=ecfg.width, pi05=True)
         suffix = SuffixSlice(scfg_s, pi0proj, denoise)
         hw = _repl(ew["model.norm.dense.weight"].T.contiguous(), denoise)
@@ -346,7 +393,7 @@ def main():
                 cur = suffix.embed_actions(ttnn.typecast(x_t, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG))
                 for c in range(6):
                     for L in range(3):
-                        cur, _ = eblocks[L].forward(cur, ecos, esin, cond, None, None, (past_k[L], past_v[L]), False)
+                        cur, _ = eblocks[L].forward(cur, ecos, esin, cond, emask, None, (past_k[L], past_v[L]), False)
                     if c < 5:
                         cur = ttnn.to_memory_config(ttnn.to_layout(cur, ttnn.TILE_LAYOUT), ttnn.DRAM_MEMORY_CONFIG)
                         cur = ttnn.point_to_point(
@@ -388,6 +435,38 @@ def main():
             f"DENOISE done: actions {tuple(actions.shape)} finite={torch.isfinite(actions).all().item()} "
             f"mean={actions.float().mean():.4f} std={actions.float().std():.4f}"
         )
+
+        # ===================== numerical validation vs torch (opt-in) =====================
+        # PI05_E2E_PCC=1 runs the torch Pi0_5Model.sample_actions reference with
+        # matched inputs/seed and reports PCC. Same noise contract as the eager
+        # PCC test: reseed SEED+1 right before sample_actions (its first randn IS
+        # the denoise noise -> identical to x_t above). Inputs match because the
+        # per-camera list flattens to the same RNG draw as randn(N_CAMS,...).
+        if os.environ.get("PI05_E2E_PCC", "").lower() in ("1", "true", "yes", "on"):
+            from models.experimental.pi0_5.reference.torch_pi0_5_model import Pi0_5Model as TorchPi0_5Model
+
+            t_images = [images[i : i + 1] for i in range(N_CAMS)]
+            t_img_masks = [torch.ones(1, dtype=torch.bool) for _ in range(N_CAMS)]
+            t_lang_masks = torch.ones(1, LANG_LEN, dtype=torch.bool)
+            torch.manual_seed(SEED)
+            ref = TorchPi0_5Model(cfg, loader)
+            with torch.no_grad():
+                torch.manual_seed(SEED + 1)
+                ref_actions = ref.sample_actions(
+                    images=t_images,
+                    img_masks=t_img_masks,
+                    lang_tokens=lang_tokens,
+                    lang_masks=t_lang_masks,
+                    state=None,
+                )[0].float()
+            a, b = actions.flatten().float(), ref_actions.flatten().float()
+            pcc = torch.corrcoef(torch.stack([a, b]))[0, 1].item()
+            mae = (actions.float() - ref_actions).abs().mean().item()
+            log(
+                f"PCC vs torch: {pcc:.6f}  MAE={mae:.5f}  ref(mean={ref_actions.mean():.4f} std={ref_actions.std():.4f})"
+            )
+            log(f"PCC {'>=' if pcc >= 0.95 else '<'} 0.95 target")
+
         log("SUCCESS — fully-traced e2e pipeline ran (vision+prefill+denoise all traced)")
     finally:
         for sm in reversed(subs):
