@@ -126,11 +126,9 @@
 <p><a class="reference internal" href="#migration-patterns"><span class="std std-ref">Migration Patterns</span></a></p>
 <ul class="simple">
 <li><p><a class="reference internal" href="#noc-operations"><span class="std std-ref">NoC Operations</span></a></p></li>
-<li><p><a class="reference internal" href="#nocoptvals-struct"><span class="std std-ref">NocOptVals Struct</span></a></p></li>
 <li><p><a class="reference internal" href="#circular-buffer-operations"><span class="std std-ref">Circular Buffer Operations</span></a></p></li>
 <li><p><a class="reference internal" href="#semaphore-operations"><span class="std std-ref">Semaphore Operations</span></a></p></li>
 <li><p><a class="reference internal" href="#memory-access"><span class="std std-ref">Memory Access</span></a></p></li>
-<li><p><a class="reference internal" href="#zeroing-memory"><span class="std std-ref">Zeroing Memory</span></a></p></li>
 </ul>
 </li>
 <li><p><a class="reference internal" href="#complete-migration-examples"><span class="std std-ref">Complete Migration Examples</span></a></p></li>
@@ -292,78 +290,9 @@
 </pre></div>
 </div>
 </section>
-<section id="async-read-with-state-optimized-repeated-reads">
-<h4>Async Read with State (Optimized Repeated Reads)<a class="headerlink" href="#async-read-with-state-optimized-repeated-reads" title="Permalink to this heading"></a>
-</h4>
-<p>Use <code class="docutils literal notranslate"><span class="pre">set_async_read_state</span></code> to pre-program the source location, page size, (and optionally the transaction id and/or virtual channel) into hardware registers once, then call <code class="docutils literal notranslate"><span class="pre">async_read_with_state</span></code> in a tight loop — the hardware retains state between calls.</p>
-<p><strong>Legacy API:</strong></p>
-<div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">src_noc_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_noc_addr</span><span class="p">(</span><span class="n">noc_x</span><span class="p">,</span><span class="w"> </span><span class="n">noc_y</span><span class="p">,</span><span class="w"> </span><span class="n">base_addr</span><span class="p">);</span>
-<span class="n">noc_async_read_set_state</span><span class="p">(</span><span class="n">src_noc_addr</span><span class="p">,</span><span class="w"> </span><span class="n">page_size</span><span class="p">);</span>
-<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">num_pages</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="n">noc_async_read_with_state</span><span class="p">(</span><span class="n">src_base</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">page_size</span><span class="p">,</span><span class="w"> </span><span class="n">dst_base</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">page_size</span><span class="p">,</span><span class="w"> </span><span class="n">page_size</span><span class="p">);</span>
-<span class="p">}</span>
-<span class="n">noc_async_read_barrier</span><span class="p">();</span>
-</pre></div>
-</div>
-<p><strong>New API (default options):</strong></p>
-<div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
-<span class="n">UnicastEndpoint</span><span class="w"> </span><span class="n">src</span><span class="p">;</span>
-<span class="n">CoreLocalMem</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">dst</span><span class="p">(</span><span class="n">dst_l1_addr</span><span class="p">);</span>
-
-<span class="n">noc</span><span class="p">.</span><span class="n">set_async_read_state</span><span class="p">(</span>
-<span class="w">    </span><span class="n">src</span><span class="p">,</span><span class="w"> </span><span class="n">page_size</span><span class="p">,</span><span class="w"> </span><span class="p">{.</span><span class="n">noc_x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">noc_y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">base_addr</span><span class="p">}</span>
-<span class="p">);</span>
-<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">num_pages</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="n">noc</span><span class="p">.</span><span class="n">async_read_with_state</span><span class="p">(</span>
-<span class="w">        </span><span class="n">src</span><span class="p">,</span><span class="w"> </span><span class="n">dst</span><span class="p">,</span><span class="w"> </span><span class="n">page_size</span><span class="p">,</span>
-<span class="w">        </span><span class="p">{.</span><span class="n">addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">src_base</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">page_size</span><span class="p">},</span>
-<span class="w">        </span><span class="p">{.</span><span class="n">addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dst_base</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">page_size</span><span class="p">}</span>
-<span class="w">    </span><span class="p">);</span>
-<span class="p">}</span>
-<span class="n">noc</span><span class="p">.</span><span class="n">async_read_barrier</span><span class="p">();</span>
-</pre></div>
-</div>
-<p><strong>New API (custom virtual channel via <code class="docutils literal notranslate"><span class="pre">NocOptVals</span></code>):</strong></p>
-<div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">noc</span><span class="p">.</span><span class="n">set_async_read_state</span><span class="o">&lt;</span><span class="n">NocOptions</span><span class="o">::</span><span class="n">CUSTOM_VC</span><span class="o">&gt;</span><span class="p">(</span>
-<span class="w">    </span><span class="n">src</span><span class="p">,</span><span class="w"> </span><span class="n">page_size</span><span class="p">,</span><span class="w"> </span><span class="p">{.</span><span class="n">noc_x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">noc_y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">base_addr</span><span class="p">},</span>
-<span class="w">    </span><span class="n">NocOptVals</span><span class="p">{.</span><span class="n">vc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">my_vc</span><span class="p">}</span>
-<span class="p">);</span>
-<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">num_pages</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="n">noc</span><span class="p">.</span><span class="n">async_read_with_state</span><span class="o">&lt;</span><span class="n">NocOptions</span><span class="o">::</span><span class="n">CUSTOM_VC</span><span class="o">&gt;</span><span class="p">(</span>
-<span class="w">        </span><span class="n">src</span><span class="p">,</span><span class="w"> </span><span class="n">dst</span><span class="p">,</span><span class="w"> </span><span class="n">page_size</span><span class="p">,</span>
-<span class="w">        </span><span class="p">{.</span><span class="n">addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">src_base</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">page_size</span><span class="p">},</span>
-<span class="w">        </span><span class="p">{.</span><span class="n">addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dst_base</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">page_size</span><span class="p">},</span>
-<span class="w">        </span><span class="n">NocOptVals</span><span class="p">{.</span><span class="n">vc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">my_vc</span><span class="p">}</span>
-<span class="w">    </span><span class="p">);</span>
-<span class="p">}</span>
-<span class="n">noc</span><span class="p">.</span><span class="n">async_read_barrier</span><span class="p">();</span>
-</pre></div>
-</div>
-<p><strong>New API (transaction ID via <code class="docutils literal notranslate"><span class="pre">NocOptVals</span></code>):</strong></p>
-<div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">noc</span><span class="p">.</span><span class="n">set_async_read_state</span><span class="o">&lt;</span><span class="n">NocOptions</span><span class="o">::</span><span class="n">TXN_ID</span><span class="o">&gt;</span><span class="p">(</span>
-<span class="w">    </span><span class="n">src</span><span class="p">,</span><span class="w"> </span><span class="n">page_size</span><span class="p">,</span><span class="w"> </span><span class="p">{.</span><span class="n">noc_x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">noc_y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">base_addr</span><span class="p">},</span>
-<span class="w">    </span><span class="n">NocOptVals</span><span class="p">{.</span><span class="n">trid</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">curr_trid</span><span class="p">}</span>
-<span class="p">);</span>
-<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">num_pages</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="n">noc</span><span class="p">.</span><span class="n">async_read_with_state</span><span class="o">&lt;</span><span class="n">NocOptions</span><span class="o">::</span><span class="n">TXN_ID</span><span class="o">&gt;</span><span class="p">(</span>
-<span class="w">        </span><span class="n">src</span><span class="p">,</span><span class="w"> </span><span class="n">dst</span><span class="p">,</span><span class="w"> </span><span class="n">page_size</span><span class="p">,</span>
-<span class="w">        </span><span class="p">{.</span><span class="n">addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">src_base</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">page_size</span><span class="p">},</span>
-<span class="w">        </span><span class="p">{.</span><span class="n">addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dst_base</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">page_size</span><span class="p">},</span>
-<span class="w">        </span><span class="n">NocOptVals</span><span class="p">{.</span><span class="n">trid</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">curr_trid</span><span class="p">}</span>
-<span class="w">    </span><span class="p">);</span>
-<span class="p">}</span>
-<span class="n">noc</span><span class="p">.</span><span class="n">async_read_barrier</span><span class="o">&lt;</span><span class="n">NocOptions</span><span class="o">::</span><span class="n">TXN_ID</span><span class="o">&gt;</span><span class="p">({.</span><span class="n">trid</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">curr_trid</span><span class="p">});</span>
-</pre></div>
-</div>
-</section>
 <section id="async-write-with-state-optimized-repeated-writes">
 <h4>Async Write with State (Optimized Repeated Writes)<a class="headerlink" href="#async-write-with-state-optimized-repeated-writes" title="Permalink to this heading"></a>
 </h4>
-<p>Use <code class="docutils literal notranslate"><span class="pre">set_async_write_state</span></code> to program the destination location, page size, and virtual channel into hardware registers once, then call <code class="docutils literal notranslate"><span class="pre">async_write_with_state</span></code> in a tight loop.</p>
 <p><strong>Legacy API:</strong></p>
 <div class="highlight-cpp notranslate">
 <div class="highlight"><pre><span></span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">dst_noc_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_noc_addr</span><span class="p">(</span><span class="n">noc_x</span><span class="p">,</span><span class="w"> </span><span class="n">noc_y</span><span class="p">,</span><span class="w"> </span><span class="n">base_addr</span><span class="p">);</span>
@@ -373,32 +302,18 @@
 <span class="p">}</span>
 </pre></div>
 </div>
-<p><strong>New API (default options):</strong></p>
+<p><strong>New API:</strong></p>
 <div class="highlight-cpp notranslate">
 <div class="highlight"><pre><span></span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
 <span class="n">UnicastEndpoint</span><span class="w"> </span><span class="n">dst</span><span class="p">;</span>
 <span class="n">CoreLocalMem</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">src</span><span class="p">(</span><span class="n">src_addr</span><span class="p">);</span>
 
-<span class="n">noc</span><span class="p">.</span><span class="n">set_async_write_state</span><span class="p">(</span>
+<span class="n">noc</span><span class="p">.</span><span class="n">set_async_write_state</span><span class="o">&lt;</span><span class="n">Noc</span><span class="o">::</span><span class="n">ResponseMode</span><span class="o">::</span><span class="n">NON_POSTED</span><span class="o">&gt;</span><span class="p">(</span>
 <span class="w">    </span><span class="n">dst</span><span class="p">,</span><span class="w"> </span><span class="n">size_bytes</span><span class="p">,</span><span class="w"> </span><span class="p">{.</span><span class="n">noc_x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">noc_y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">base_addr</span><span class="p">}</span>
 <span class="p">);</span>
 <span class="k">for</span><span class="w"> </span><span class="p">(...)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="n">noc</span><span class="p">.</span><span class="n">async_write_with_state</span><span class="p">(</span>
+<span class="w">    </span><span class="n">noc</span><span class="p">.</span><span class="n">async_write_with_state</span><span class="o">&lt;</span><span class="n">Noc</span><span class="o">::</span><span class="n">ResponseMode</span><span class="o">::</span><span class="n">NON_POSTED</span><span class="o">&gt;</span><span class="p">(</span>
 <span class="w">        </span><span class="n">src</span><span class="p">,</span><span class="w"> </span><span class="n">dst</span><span class="p">,</span><span class="w"> </span><span class="n">size_bytes</span><span class="p">,</span><span class="w"> </span><span class="p">{.</span><span class="n">offset_bytes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">src_offset</span><span class="p">},</span><span class="w"> </span><span class="p">{.</span><span class="n">addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dst_offset</span><span class="p">}</span>
-<span class="w">    </span><span class="p">);</span>
-<span class="p">}</span>
-</pre></div>
-</div>
-<p><strong>New API (custom virtual channel via <code class="docutils literal notranslate"><span class="pre">NocOptVals</span></code>):</strong></p>
-<div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">noc</span><span class="p">.</span><span class="n">set_async_write_state</span><span class="o">&lt;</span><span class="n">NocOptions</span><span class="o">::</span><span class="n">CUSTOM_VC</span><span class="o">&gt;</span><span class="p">(</span>
-<span class="w">    </span><span class="n">dst</span><span class="p">,</span><span class="w"> </span><span class="n">size_bytes</span><span class="p">,</span><span class="w"> </span><span class="p">{.</span><span class="n">noc_x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">noc_y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">base_addr</span><span class="p">},</span>
-<span class="w">    </span><span class="n">NocOptVals</span><span class="p">{.</span><span class="n">vc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">my_vc</span><span class="p">}</span>
-<span class="p">);</span>
-<span class="k">for</span><span class="w"> </span><span class="p">(...)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="n">noc</span><span class="p">.</span><span class="n">async_write_with_state</span><span class="o">&lt;</span><span class="n">NocOptions</span><span class="o">::</span><span class="n">CUSTOM_VC</span><span class="o">&gt;</span><span class="p">(</span>
-<span class="w">        </span><span class="n">src</span><span class="p">,</span><span class="w"> </span><span class="n">dst</span><span class="p">,</span><span class="w"> </span><span class="n">size_bytes</span><span class="p">,</span><span class="w"> </span><span class="p">{.</span><span class="n">offset_bytes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">src_offset</span><span class="p">},</span><span class="w"> </span><span class="p">{.</span><span class="n">addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dst_offset</span><span class="p">},</span>
-<span class="w">        </span><span class="n">NocOptVals</span><span class="p">{.</span><span class="n">vc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">my_vc</span><span class="p">}</span>
 <span class="w">    </span><span class="p">);</span>
 <span class="p">}</span>
 </pre></div>
@@ -419,7 +334,7 @@
 <span class="n">CoreLocalMem</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">src</span><span class="p">(</span><span class="n">src_l1_addr</span><span class="p">);</span>
 <span class="n">CircularBuffer</span><span class="w"> </span><span class="nf">cb</span><span class="p">(</span><span class="n">cb_id</span><span class="p">);</span><span class="w">  </span><span class="c1">// Or any destination with mcast traits</span>
 
-<span class="n">noc</span><span class="p">.</span><span class="n">async_write_multicast</span><span class="p">(</span>
+<span class="n">noc</span><span class="p">.</span><span class="n">async_write_multicast</span><span class="o">&lt;</span><span class="n">Noc</span><span class="o">::</span><span class="n">McastMode</span><span class="o">::</span><span class="n">EXCLUDE_SRC</span><span class="o">&gt;</span><span class="p">(</span>
 <span class="w">    </span><span class="n">src</span><span class="p">,</span>
 <span class="w">    </span><span class="n">cb</span><span class="p">,</span>
 <span class="w">    </span><span class="n">size_bytes</span><span class="p">,</span>
@@ -437,65 +352,21 @@
 <p><strong>New API (Transaction IDs):</strong></p>
 <div class="highlight-cpp notranslate">
 <div class="highlight"><pre><span></span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
-<span class="k">constexpr</span><span class="w"> </span><span class="kt">uint8_t</span><span class="w"> </span><span class="n">trid</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">trid</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 
 <span class="c1">// Write with transaction ID</span>
-<span class="n">noc</span><span class="p">.</span><span class="n">async_write</span><span class="o">&lt;</span><span class="n">NocOptions</span><span class="o">::</span><span class="n">TXN_ID</span><span class="o">&gt;</span><span class="p">(</span>
+<span class="n">noc</span><span class="p">.</span><span class="n">async_write</span><span class="o">&lt;</span><span class="n">Noc</span><span class="o">::</span><span class="n">TxnIdMode</span><span class="o">::</span><span class="n">ENABLED</span><span class="o">&gt;</span><span class="p">(</span>
 <span class="w">    </span><span class="n">src</span><span class="p">,</span><span class="w"> </span><span class="n">dst</span><span class="p">,</span><span class="w"> </span><span class="n">size_bytes</span><span class="p">,</span><span class="w"> </span><span class="n">src_args</span><span class="p">,</span><span class="w"> </span><span class="n">dst_args</span><span class="p">,</span>
-<span class="w">    </span><span class="n">NocOptVals</span><span class="p">{.</span><span class="n">trid</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">trid</span><span class="p">}</span>
+<span class="w">    </span><span class="n">NOC_UNICAST_WRITE_VC</span><span class="p">,</span><span class="w"> </span><span class="n">trid</span>
 <span class="p">);</span>
 
 <span class="c1">// Barrier on specific transaction ID</span>
-<span class="n">noc</span><span class="p">.</span><span class="n">async_write_barrier</span><span class="o">&lt;</span><span class="n">NocOptions</span><span class="o">::</span><span class="n">TXN_ID</span><span class="o">&gt;</span><span class="p">({.</span><span class="n">trid</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">trid</span><span class="p">});</span>
+<span class="n">noc</span><span class="p">.</span><span class="n">async_write_barrier</span><span class="o">&lt;</span><span class="n">Noc</span><span class="o">::</span><span class="n">BarrierMode</span><span class="o">::</span><span class="n">TXN_ID</span><span class="o">&gt;</span><span class="p">(</span><span class="n">trid</span><span class="p">);</span>
 </pre></div>
 </div>
 </section>
 </section>
 <hr class="docutils">
-<section id="nocoptvals-struct">
-<h3>NocOptVals Struct<a class="headerlink" href="#nocoptvals-struct" title="Permalink to this heading"></a>
-</h3>
-<p><code class="docutils literal notranslate"><span class="pre">NocOptVals</span></code> is an aggregate struct that carries the runtime values for optional <code class="docutils literal notranslate"><span class="pre">NocOptions</span></code> flags. It is accepted as the last argument of all stateful and trid-aware <code class="docutils literal notranslate"><span class="pre">Noc</span></code> APIs. Fields are only inspected when the matching flag is set in the template <code class="docutils literal notranslate"><span class="pre">opts</span></code> parameter.</p>
-<div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">NocOptVals</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">vc</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="n">NOC_UNICAST_WRITE_VC</span><span class="p">;</span><span class="w">  </span><span class="c1">// used when NocOptions::CUSTOM_VC</span>
-<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">trid</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w">                     </span><span class="c1">// used when NocOptions::TXN_ID</span>
-<span class="p">};</span>
-</pre></div>
-</div>
-<p><strong>Usage summary:</strong></p>
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd">
-<th class="head"><p>Scenario</p></th>
-<th class="head"><p>Template <code class="docutils literal notranslate"><span class="pre">opts</span></code></p></th>
-<th class="head"><p><code class="docutils literal notranslate"><span class="pre">NocOptVals</span></code> arg</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even">
-<td><p>Default vc, no trid</p></td>
-<td><p>omit / <code class="docutils literal notranslate"><span class="pre">NocOptions::DEFAULT</span></code></p></td>
-<td><p>omit / <code class="docutils literal notranslate"><span class="pre">{}</span></code></p></td>
-</tr>
-<tr class="row-odd">
-<td><p>Custom vc</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">NocOptions::CUSTOM_VC</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">NocOptVals{.vc</span> <span class="pre">=</span> <span class="pre">v}</span></code></p></td>
-</tr>
-<tr class="row-even">
-<td><p>Transaction ID barrier/read/write</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">NocOptions::TXN_ID</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">NocOptVals{.trid</span> <span class="pre">=</span> <span class="pre">t}</span></code></p></td>
-</tr>
-<tr class="row-odd">
-<td><p>Custom vc + trid</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">NocOptions::TXN_ID</span> <span class="pre">|</span> <span class="pre">NocOptions::CUSTOM_VC</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">NocOptVals{.vc</span> <span class="pre">=</span> <span class="pre">v,</span> <span class="pre">.trid</span> <span class="pre">=</span> <span class="pre">t}</span></code></p></td>
-</tr>
-</tbody>
-</table>
-</section>
 <section id="circular-buffer-operations">
 <h3>Circular Buffer Operations<a class="headerlink" href="#circular-buffer-operations" title="Permalink to this heading"></a>
 </h3>
@@ -628,12 +499,12 @@
 <div class="highlight-cpp notranslate">
 <div class="highlight"><pre><span></span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
 <span class="n">Semaphore</span><span class="o">&lt;&gt;</span><span class="w"> </span><span class="n">sem</span><span class="p">(</span><span class="n">sem_id</span><span class="p">);</span>
-<span class="n">sem</span><span class="p">.</span><span class="n">set_multicast</span><span class="o">&lt;</span><span class="n">NocOptions</span><span class="o">::</span><span class="n">DEFAULT</span><span class="o">&gt;</span><span class="p">(</span>
+<span class="n">sem</span><span class="p">.</span><span class="n">set_multicast</span><span class="o">&lt;</span><span class="n">Noc</span><span class="o">::</span><span class="n">McastMode</span><span class="o">::</span><span class="n">EXCLUDE_SRC</span><span class="o">&gt;</span><span class="p">(</span>
 <span class="w">    </span><span class="n">noc</span><span class="p">,</span><span class="w"> </span><span class="n">x0</span><span class="p">,</span><span class="w"> </span><span class="n">y0</span><span class="p">,</span><span class="w"> </span><span class="n">x1</span><span class="p">,</span><span class="w"> </span><span class="n">y1</span><span class="p">,</span><span class="w"> </span><span class="n">num_dests</span>
 <span class="p">);</span>
 
 <span class="c1">// Include source in multicast:</span>
-<span class="n">sem</span><span class="p">.</span><span class="n">set_multicast</span><span class="o">&lt;</span><span class="n">NocOptions</span><span class="o">::</span><span class="n">MCAST_INCL_SRC</span><span class="o">&gt;</span><span class="p">(</span>
+<span class="n">sem</span><span class="p">.</span><span class="n">set_multicast</span><span class="o">&lt;</span><span class="n">Noc</span><span class="o">::</span><span class="n">McastMode</span><span class="o">::</span><span class="n">INCLUDE_SRC</span><span class="o">&gt;</span><span class="p">(</span>
 <span class="w">    </span><span class="n">noc</span><span class="p">,</span><span class="w"> </span><span class="n">x0</span><span class="p">,</span><span class="w"> </span><span class="n">y0</span><span class="p">,</span><span class="w"> </span><span class="n">x1</span><span class="p">,</span><span class="w"> </span><span class="n">y1</span><span class="p">,</span><span class="w"> </span><span class="n">num_dests</span>
 <span class="p">);</span>
 </pre></div>
@@ -695,97 +566,6 @@
 <span class="p">}</span>
 </pre></div>
 </div>
-</section>
-</section>
-<hr class="docutils">
-<section id="zeroing-memory">
-<h3>Zeroing Memory<a class="headerlink" href="#zeroing-memory" title="Permalink to this heading"></a>
-</h3>
-<section id="zero-a-local-l1-buffer">
-<h4>Zero a local-L1 buffer<a class="headerlink" href="#zero-a-local-l1-buffer" title="Permalink to this heading"></a>
-</h4>
-<p><strong>Legacy API</strong> (manual loopback from the hardware zeros region):</p>
-<div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">n</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">bytes_to_zero</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">MEM_ZEROS_SIZE</span><span class="p">;</span>
-<span class="kt">uint64_t</span><span class="w"> </span><span class="n">zeros</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_noc_addr</span><span class="p">(</span><span class="n">my_x</span><span class="p">[</span><span class="n">noc_index</span><span class="p">],</span><span class="w"> </span><span class="n">my_y</span><span class="p">[</span><span class="n">noc_index</span><span class="p">],</span><span class="w"> </span><span class="n">MEM_ZEROS_BASE</span><span class="p">);</span>
-<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">n</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="n">noc_async_read</span><span class="p">(</span><span class="n">zeros</span><span class="p">,</span><span class="w"> </span><span class="n">write_addr</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">MEM_ZEROS_SIZE</span><span class="p">,</span><span class="w"> </span><span class="n">MEM_ZEROS_SIZE</span><span class="p">);</span>
-<span class="p">}</span>
-<span class="n">noc_async_read_barrier</span><span class="p">();</span>
-</pre></div>
-</div>
-<p><strong>New API:</strong></p>
-<div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
-<span class="n">DataflowBuffer</span><span class="w"> </span><span class="nf">dfb</span><span class="p">(</span><span class="n">dfb_id</span><span class="p">);</span><span class="w">                </span><span class="c1">// or CircularBuffer</span>
-<span class="n">dfb</span><span class="p">.</span><span class="n">reserve_back</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
-<span class="n">noc</span><span class="p">.</span><span class="n">async_write_zeros</span><span class="p">(</span>
-<span class="w">    </span><span class="n">dfb</span><span class="p">,</span><span class="w">                                   </span><span class="c1">// Destination (DataflowBuffer or CircularBuffer)</span>
-<span class="w">    </span><span class="n">size_bytes</span><span class="p">,</span><span class="w">                            </span><span class="c1">// Number of bytes to zero</span>
-<span class="w">    </span><span class="p">{.</span><span class="n">offset_bytes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">}</span><span class="w">                    </span><span class="c1">// Offset within the destination entry (optional; default {})</span>
-<span class="p">);</span>
-<span class="n">noc</span><span class="p">.</span><span class="n">write_zeros_l1_barrier</span><span class="p">();</span><span class="w">              </span><span class="c1">// wait for completion before consuming</span>
-<span class="n">dfb</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
-</pre></div>
-</div>
-<p><code class="docutils literal notranslate"><span class="pre">async_write_zeros(dst,</span> <span class="pre">size_bytes,</span> <span class="pre">{.offset_bytes</span> <span class="pre">=</span> <span class="pre">off})</span></code> zeroes <code class="docutils literal notranslate"><span class="pre">size_bytes</span></code> starting at <code class="docutils literal notranslate"><span class="pre">dst.get_write_ptr()</span> <span class="pre">+</span> <span class="pre">off</span></code> (<code class="docutils literal notranslate"><span class="pre">off</span></code> defaults to <code class="docutils literal notranslate"><span class="pre">0</span></code>). <code class="docutils literal notranslate"><span class="pre">dst</span></code> must be a <code class="docutils literal notranslate"><span class="pre">CircularBuffer</span></code> or <code class="docutils literal notranslate"><span class="pre">DataflowBuffer</span></code>.</p>
-<p>Zeroing a CB/DFB entry is the common case: legacy kernels obtained the zero target’s address from a CB (e.g. <code class="docutils literal notranslate"><span class="pre">get_write_ptr(cb_id)</span></code>), so the migrated form zeroes that same CB/DFB entry directly.</p>
-</section>
-<section id="zero-pages-of-a-dram-tensor">
-<h4>Zero pages of a DRAM tensor<a class="headerlink" href="#zero-pages-of-a-dram-tensor" title="Permalink to this heading"></a>
-</h4>
-<p>The DRAM overload streams zeros from a pre-zeroed L1 source, read from its <strong>front (read) pointer</strong>. A CB/DFB is required to source the zeros (the reserved L1 zeros region is reclaimed on Quasar). <strong>Reuse a <code class="docutils literal notranslate"><span class="pre">DataflowBuffer</span></code> (or <code class="docutils literal notranslate"><span class="pre">CircularBuffer</span></code>) the kernel already has</strong> — do not allocate one solely for this if possible, since CB/DFB consumes Quasar tile counter resources. Zero one entry, <code class="docutils literal notranslate"><span class="pre">push_back</span></code>/<code class="docutils literal notranslate"><span class="pre">wait_front</span></code> it to the front before streaming, then <code class="docutils literal notranslate"><span class="pre">pop_front</span></code> to release:</p>
-<div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
-<span class="n">DataflowBuffer</span><span class="w"> </span><span class="nf">dfb</span><span class="p">(</span><span class="n">dfb_id</span><span class="p">);</span><span class="w">              </span><span class="c1">// a DFB the kernel already owns</span>
-
-<span class="c1">// 1. Pre-zero the DFB entry once</span>
-<span class="n">dfb</span><span class="p">.</span><span class="n">reserve_back</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
-<span class="n">noc</span><span class="p">.</span><span class="n">async_write_zeros</span><span class="p">(</span><span class="n">dfb</span><span class="p">,</span><span class="w"> </span><span class="n">zero_bytes</span><span class="p">);</span>
-<span class="n">noc</span><span class="p">.</span><span class="n">write_zeros_l1_barrier</span><span class="p">();</span>
-<span class="n">dfb</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
-
-<span class="c1">// 2. Stream zeros to DRAM pages from the (front of the) DFB</span>
-<span class="n">dfb</span><span class="p">.</span><span class="n">wait_front</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span><span class="w">                       </span><span class="c1">// the zeroed entry is now the front</span>
-<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">page_start</span><span class="p">;</span><span class="w"> </span><span class="n">p</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">page_end</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">p</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="n">noc</span><span class="p">.</span><span class="n">async_write_zeros</span><span class="p">(</span>
-<span class="w">        </span><span class="n">dram_accessor</span><span class="p">,</span><span class="w">                   </span><span class="c1">// Destination DRAM tensor accessor</span>
-<span class="w">        </span><span class="n">page_size</span><span class="p">,</span><span class="w">                       </span><span class="c1">// Number of bytes to zero (per page)</span>
-<span class="w">        </span><span class="p">{.</span><span class="n">page_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">p</span><span class="p">},</span><span class="w">                  </span><span class="c1">// Destination page args (page_id, optional offset_bytes)</span>
-<span class="w">        </span><span class="n">dfb</span><span class="w">                              </span><span class="c1">// Pre-zeroed L1 source of zeros</span>
-<span class="w">    </span><span class="p">);</span>
-<span class="p">}</span>
-<span class="n">noc</span><span class="p">.</span><span class="n">write_zeros_dram_barrier</span><span class="p">();</span>
-<span class="n">dfb</span><span class="p">.</span><span class="n">pop_front</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span><span class="w">                        </span><span class="c1">// release; the buffer is left as it was</span>
-</pre></div>
-</div>
-<p><strong>Each call zeroes within a single page:</strong> <code class="docutils literal notranslate"><span class="pre">offset_bytes</span> <span class="pre">+</span> <span class="pre">size_bytes</span></code> must not exceed the tensor’s aligned page size. Zero a multi-page region by looping over <code class="docutils literal notranslate"><span class="pre">page_id</span></code>.</p>
-<p>Any buffer the kernel already owns can be reused (i.e. it needn’t be one dedicated to zeroing). The pre-zeroed prefix must cover at least <code class="docutils literal notranslate"><span class="pre">min(page_size,</span> <span class="pre">NOC_MAX_BURST_SIZE)</span></code> bytes. This overload pairs with <code class="docutils literal notranslate"><span class="pre">write_zeros_dram_barrier()</span></code>.</p>
-</section>
-<section id="barriers-and-the-quasar-command-buffer-contract">
-<h4>Barriers and the Quasar command-buffer contract<a class="headerlink" href="#barriers-and-the-quasar-command-buffer-contract" title="Permalink to this heading"></a>
-</h4>
-<p><code class="docutils literal notranslate"><span class="pre">async_write_zeros</span></code> is asynchronous; pair each overload with its barrier:</p>
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd">
-<th class="head"><p>Overload</p></th>
-<th class="head"><p>Barrier</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even">
-<td><p>L1</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">noc.write_zeros_l1_barrier()</span></code></p></td>
-</tr>
-<tr class="row-odd">
-<td><p>DRAM</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">noc.write_zeros_dram_barrier()</span></code></p></td>
-</tr>
-</tbody>
-</table>
-<p><strong>Quasar contract:</strong> the L1 zero borrows the overlay write command buffer (cmd buffer 0) and switches it to iDMA “zero mode”; it is restored to normal write mode only by <code class="docutils literal notranslate"><span class="pre">write_zeros_l1_barrier()</span></code>. <strong>Do not issue any other NoC write (<code class="docutils literal notranslate"><span class="pre">noc.async_write</span></code> / <code class="docutils literal notranslate"><span class="pre">noc_async_write</span></code>, which also use cmd buffer 0) on the same RISC between <code class="docutils literal notranslate"><span class="pre">async_write_zeros</span></code> and <code class="docutils literal notranslate"><span class="pre">write_zeros_l1_barrier()</span></code></strong>: such a write would execute in zero mode and silently write zeros instead of its data. The rule is <strong>zero → barrier → reuse</strong>. NoC <em>reads</em> use a separate command buffer and are unaffected, so reads may be interleaved. On Wormhole/Blackhole there is no command-buffer borrow (the zero is a read loopback and the barrier is a plain read barrier).</p>
-<p>For performance, issue one barrier after a batch of zeros rather than per-call, subject to the no-intervening-write rule above on Quasar.</p>
 </section>
 </section>
 </section>

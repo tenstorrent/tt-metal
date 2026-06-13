@@ -1,8 +1,0 @@
-﻿ttnn.copy\_host\_to\_device\_tensor\_partial
-============================================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.copy_host_to_device_tensor_partial:
-
-.. autooperation:: ttnn.copy_host_to_device_tensor_partial
