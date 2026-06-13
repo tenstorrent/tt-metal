@@ -3019,6 +3019,67 @@ void kernel_main() {
 }
 
 // ============================================================================
+// TT_KERNEL ("1st world arguments") compute-path shim — JIT compile smoke test
+// ============================================================================
+//
+// Compiles a TT_KERNEL compute kernel through genfiles + the RISC-V compiler on a MOCK Wormhole
+// device (no silicon, no dispatch) via detail::CompileProgram. This is the only no-hardware
+// coverage that the generated kernel_main() shim is emitted on the COMPUTE (TRISC) compile path
+// and actually compiles: the on-hardware compute test (TtKernelNamedArgsLoopbackCompute) skips in
+// CI, and the shim unit tests only check the generated string, not its genfiles wiring.
+//
+// (A Quasar variant would also exercise the 4th TRISC, isolate_sfpu, but mock-Quasar JIT-compile
+// isn't wired up in this checkout — the Quasar TRISC firmware objects aren't built, so the link
+// step fails. The fix is arch-correct by construction regardless: the shim is appended to the same
+// source for every TRISC, and run_kernel() calls kernel_main() on Quasar too.)
+
+// Minimal TT_KERNEL compute entry: CTAs as template params, RTA/CRTA as function params, producing
+// into a DFB. The point is solely that the kernel_main() shim is generated on the TRISC path and
+// the whole thing compiles; the body avoids any arch-specific raw-L1 pokes.
+constexpr const char* kTtKernelComputeShimSource = R"(
+#include "api/compute/common.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
+template <uint32_t magic, uint32_t entry_size>                             // CTAs
+TT_KERNEL void compute_entry(uint32_t input_offset, uint32_t num_tiles) {  // RTA, CRTA
+    DataflowBuffer out(dfb::out_dfb);
+    out.reserve_back(num_tiles);
+    out.push_back(num_tiles);
+    volatile uint32_t sink = magic ^ entry_size ^ input_offset;
+    (void)sink;
+}
+)";
+
+TEST_F(ProgramSpecTestGen1, TtKernelComputeShimCompiles) {
+    const NodeCoord node{0, 0};
+    constexpr uint32_t entry_size = 1024;
+
+    // Compute kernel authored in TT_KERNEL form, producing into a DFB drained by a trivial consumer.
+    auto compute = MakeMinimalComputeKernel("compute");
+    compute.source = KernelSpec::SourceCode{kTtKernelComputeShimSource};
+    compute.runtime_arg_schema.runtime_arg_names = {"input_offset"};
+    compute.runtime_arg_schema.common_runtime_arg_names = {"num_tiles"};
+    compute.compile_time_args = {{"magic", 0xCAFE0001u}, {"entry_size", entry_size}};
+
+    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);  // trivial drain kernel
+
+    auto out_dfb = MakeMinimalDFB("out_dfb", entry_size, 4);
+    out_dfb.data_format_metadata = tt::DataFormat::Float16_b;  // required for a compute DFB endpoint
+    compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{"out_dfb"}, "out_dfb"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"out_dfb"}, "out_dfb"));
+
+    ProgramSpec spec;
+    spec.name = "tt_kernel_compute_shim_compile";
+    spec.kernels = {compute, consumer};
+    spec.dataflow_buffers = {out_dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("wu", node, {"compute", "consumer"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+// ============================================================================
 // Kernel hash sensitivity to TensorParameter spec
 // ============================================================================
 //
