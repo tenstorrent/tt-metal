@@ -4,11 +4,13 @@
 
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <tuple>
 #include <variant>
 #include <vector>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
 #include "ttnn/device_operation.hpp"
@@ -72,6 +74,45 @@ struct RotateDeviceOperation {
         tensor_return_value_t& tensor_return_value,
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
+
+// Per-core runtime layout for one rotate dispatch, derived purely from (operation_attributes, input,
+// output). This is the SINGLE SOURCE OF TRUTH shared by both program factories' create_descriptor()
+// (cache miss) and get_dynamic_runtime_args() (cache-hit re-apply): the factories build reader/writer
+// runtime args from it, and get_dynamic_runtime_args() re-emits the angle-derived reader args from the
+// same values. compute_program_hash() excludes angle/center/fill, so those scalar args must be
+// re-applied on every cache hit (the tensor base addresses ride on patchable Buffer* bindings instead).
+struct RotatePerCoreArgs {
+    // Work cores in factory iteration order. Reader runtime args [1]=num_sticks, [2]=start_stick_id are
+    // per-core; the angle-derived slots [3..7] are identical for every core and stored once below.
+    std::vector<tt::tt_metal::CoreCoord> cores;
+    std::vector<uint32_t> num_sticks;      // indexed by position in `cores`
+    std::vector<uint32_t> start_stick_id;  // indexed by position in `cores`
+
+    // Angle/center/fill-derived reader args (Q16.16 fixed point, fill as raw bits). Constant across cores.
+    uint32_t cos_angle_q16 = 0;
+    uint32_t sin_angle_q16 = 0;
+    uint32_t center_x_q16 = 0;
+    uint32_t center_y_q16 = 0;
+    uint32_t fill_value_bits = 0;
+
+    // Reader is kernel index 0 in both factories. These are the reader runtime-arg slots holding the
+    // angle-derived values above; arg [0] (input buffer base address) rides on a patchable Buffer* and
+    // is NOT listed here. Used by get_dynamic_runtime_args() to re-apply the hash-excluded scalars.
+    static constexpr uint32_t kReaderKernelIdx = 0;
+    static constexpr uint32_t kCosArgIdx = 3;
+    static constexpr uint32_t kSinArgIdx = 4;
+    static constexpr uint32_t kCenterXArgIdx = 5;
+    static constexpr uint32_t kCenterYArgIdx = 6;
+    static constexpr uint32_t kFillArgIdx = 7;
+};
+
+// Derives the shared per-core layout. `is_bilinear` selects the work-core derivation (and fill-bit
+// encoding) that matches the corresponding program factory.
+RotatePerCoreArgs compute_rotate_per_core_args(
+    const RotateDeviceOperation::operation_attributes_t& operation_attributes,
+    const Tensor& input,
+    const Tensor& output,
+    bool is_bilinear);
 
 }  // namespace ttnn::operations::rotate
 

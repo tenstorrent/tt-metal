@@ -33,11 +33,6 @@ constexpr uint32_t MAX_ROWS_FOR_REDUCTION = 16;
 constexpr bool ONE_SCALAR_PER_CORE = false;
 constexpr uint32_t DUMMY_CB_ID = 32;
 
-static uint16_t float_to_bfloat16(float value) {
-    bfloat16 bf16_value(value);
-    return std::bit_cast<uint16_t>(bf16_value);
-}
-
 ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -58,26 +53,9 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
     const uint32_t input_width = input_shape[2];
     const uint32_t input_channels = input_shape[3];
 
-    const float angle_rad = operation_attributes.angle * M_PI / 180.0f;
-    const float cos_angle = std::cos(angle_rad);
-    const float sin_angle = std::sin(angle_rad);
-
-    float center_x, center_y;
-    if (operation_attributes.center.has_value()) {
-        center_x = std::get<0>(operation_attributes.center.value()) - 0.5f;
-        center_y = std::get<1>(operation_attributes.center.value()) - 0.5f;
-    } else {
-        center_x = (static_cast<float>(input_width) - 1.0f) / 2.0f;
-        center_y = (static_cast<float>(input_height) - 1.0f) / 2.0f;
-    }
-
-    const bool is_bfloat16 = input_tensor.dtype() == DataType::BFLOAT16;
-    uint32_t fill_value_bits;
-    if (is_bfloat16) {
-        fill_value_bits = float_to_bfloat16(operation_attributes.fill);
-    } else {
-        fill_value_bits = std::bit_cast<uint32_t>(operation_attributes.fill);
-    }
+    // Single source of truth for per-core runtime args (shared with get_dynamic_runtime_args).
+    const RotatePerCoreArgs per_core_args =
+        compute_rotate_per_core_args(operation_attributes, input_tensor, output_tensor, /*is_bilinear=*/true);
 
     const uint32_t total_output_sticks = input_batch * input_height * input_width;
     const bool is_input_sharded = input_tensor.is_sharded();
@@ -85,52 +63,37 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
 
     const auto compute_grid_size = device->compute_with_storage_grid_size();
 
+    // Work-core grid and CB / compute-kernel sizing quantities. The per-core runtime-arg layout (core
+    // list, num_sticks, start_stick_id) comes from per_core_args above; this block only derives the
+    // grid-level values the CBs / compute-kernel groups are sized against.
     tt::tt_metal::CoreRangeSet all_cores, core_group_1, core_group_2;
-    uint32_t num_cores = 0;
     uint32_t num_sticks_per_core_group_1 = 0, num_sticks_per_core_group_2 = 0;
     uint32_t input_nsticks_per_core = 0;
     uint32_t output_nsticks_per_core = 0;
-    std::vector<CoreCoord> logical_cores;
-    bool is_block_sharded = false;
-    bool is_width_sharded = false;
-    uint32_t num_cores_x = 0;
 
     if (is_input_sharded) {
         const auto input_shard_spec = input_tensor.shard_spec().value();
         all_cores = input_shard_spec.grid;
-        num_cores = input_shard_spec.num_cores();
         input_nsticks_per_core = input_shard_spec.shape[0];
         output_nsticks_per_core =
             is_output_sharded ? output_tensor.shard_spec().value().shape[0] : input_nsticks_per_core;
-        logical_cores = corerange_to_cores(
-            all_cores, num_cores, input_shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
-        is_block_sharded =
-            input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED;
-        is_width_sharded =
-            input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED;
-        num_cores_x = input_shard_spec.grid.bounding_box().grid_size().x;
         num_sticks_per_core_group_1 = input_nsticks_per_core;
         core_group_1 = all_cores;
     } else if (is_output_sharded) {
         const auto output_shard_spec = output_tensor.shard_spec().value();
         output_nsticks_per_core = output_shard_spec.shape[0];
-        num_cores = (total_output_sticks + output_nsticks_per_core - 1) / output_nsticks_per_core;
         all_cores = output_shard_spec.grid;
-        logical_cores = corerange_to_cores(
-            all_cores, num_cores, output_shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
         num_sticks_per_core_group_1 = output_nsticks_per_core;
         core_group_1 = all_cores;
     } else {
         auto [num_cores_used, all_cores_range, core_group_1_range, core_group_2_range, num_sticks_1, num_sticks_2] =
             tt::tt_metal::split_work_to_cores(compute_grid_size, total_output_sticks);
 
-        num_cores = num_cores_used;
         all_cores = all_cores_range;
         core_group_1 = core_group_1_range;
         core_group_2 = core_group_2_range;
         num_sticks_per_core_group_1 = num_sticks_1;
         num_sticks_per_core_group_2 = num_sticks_2;
-        logical_cores = corerange_to_cores(all_cores, num_cores, true);
     }
 
     const bool any_sharded = is_input_sharded || is_output_sharded;
@@ -214,7 +177,7 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
         .buffer = any_sharded ? output_tensor.buffer() : nullptr,
     });
 
-    const bool fill_is_zero = (fill_value_bits == 0);
+    const bool fill_is_zero = (per_core_args.fill_value_bits == 0);
 
     std::vector<uint32_t> reader_compile_time_args = {
         input_cb_index,
@@ -332,47 +295,25 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
         writer_desc = std::move(wd);
     }
 
-    const int32_t cos_angle_q16 = fixed_point_arithmetic::float_to_fixed(cos_angle);
-    const int32_t sin_angle_q16 = fixed_point_arithmetic::float_to_fixed(sin_angle);
-    const int32_t center_x_q16 = fixed_point_arithmetic::float_to_fixed(center_x);
-    const int32_t center_y_q16 = fixed_point_arithmetic::float_to_fixed(center_y);
+    // Emit per-core runtime args from the shared layout. The input/output buffer base addresses are
+    // bound as Buffer* (patchable on a cache hit); the angle-derived scalars are re-applied on every
+    // hit by get_dynamic_runtime_args.
+    for (uint32_t i = 0; i < per_core_args.cores.size(); i++) {
+        const CoreCoord& core = per_core_args.cores[i];
+        const uint32_t num_sticks = per_core_args.num_sticks[i];
+        const uint32_t start_stick_id = per_core_args.start_stick_id[i];
 
-    uint32_t sticks_processed = 0;
-    for (uint32_t i = 0; i < num_cores; i++) {
-        const CoreCoord& core = logical_cores[i];
-        uint32_t num_sticks;
-        uint32_t start_stick_id;
-
-        if (is_input_sharded) {
-            num_sticks = input_nsticks_per_core;
-            if (is_width_sharded) {
-                start_stick_id = 0;
-            } else if (is_block_sharded) {
-                uint32_t core_y = i / num_cores_x;
-                start_stick_id = core_y * input_nsticks_per_core;
-            } else {
-                start_stick_id = i * input_nsticks_per_core;
-            }
-        } else if (is_output_sharded) {
-            num_sticks = output_nsticks_per_core;
-            start_stick_id = sticks_processed;
-        } else {
-            num_sticks = core_group_1.contains(core) ? num_sticks_per_core_group_1 : num_sticks_per_core_group_2;
-            start_stick_id = sticks_processed;
-        }
-
-        // input base address bound as Buffer* for cache-hit patching
         reader_desc.emplace_runtime_args(
             core,
             {
                 input_tensor.buffer(),
                 num_sticks,
                 start_stick_id,
-                static_cast<uint32_t>(cos_angle_q16),
-                static_cast<uint32_t>(sin_angle_q16),
-                static_cast<uint32_t>(center_x_q16),
-                static_cast<uint32_t>(center_y_q16),
-                static_cast<uint32_t>(fill_value_bits),
+                per_core_args.cos_angle_q16,
+                per_core_args.sin_angle_q16,
+                per_core_args.center_x_q16,
+                per_core_args.center_y_q16,
+                per_core_args.fill_value_bits,
             });
 
         if (!any_sharded && writer_desc.has_value()) {
@@ -385,8 +326,6 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
                     start_stick_id,
                 });
         }
-
-        sticks_processed += num_sticks;
     }
 
     desc.kernels.push_back(std::move(reader_desc));

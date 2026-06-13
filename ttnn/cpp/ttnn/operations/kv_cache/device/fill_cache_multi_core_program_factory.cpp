@@ -21,15 +21,12 @@ namespace ttnn::prim {
 
 using namespace tt::constants;
 
-ProgramDescriptor FillCacheMultiCoreProgramFactory::create_descriptor(
-    const KvCacheParams& operation_attributes, const KvCacheInputs& tensor_args, Tensor& /*tensor_return_value*/) {
+FillCachePerCoreArgs compute_fill_cache_per_core_args(
+    const KvCacheParams& operation_attributes, const KvCacheInputs& tensor_args) {
     const auto& cache_tensor = tensor_args.cache;
     const auto& input_tensor = tensor_args.input;
     const auto batch_idx = operation_attributes.batch_idx;
     const auto update_idx = operation_attributes.update_idx;
-
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     // TODO: For interleaved and kv_heads > 1, we assert that each core only gets 1 tile along seq_len
     // For sharded, each core gets shard_shape[0] number of tiles along seq_len.
@@ -43,20 +40,17 @@ ProgramDescriptor FillCacheMultiCoreProgramFactory::create_descriptor(
     uint32_t cache_CHtWt = cache_tensor.padded_shape()[1] * cache_HtWt;
     uint32_t update_idxt = update_idx / TILE_HEIGHT;
     uint32_t start_idx = (batch_idx * cache_CHtWt) + (update_idxt * Wt);
-    tt::tt_metal::IDevice* device = input_tensor.device();
 
+    tt::tt_metal::IDevice* device = input_tensor.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     bool row_major;
     uint32_t num_cores, num_blocks_per_core_group_1, num_blocks_per_core_group_2;
-
     CoreRangeSet all_cores, core_group_1, core_group_2;
 
     const std::optional<ShardSpec>& shard_spec = input_tensor.shard_spec();
-
-    uint32_t num_input_tiles;
     if (shard_spec.has_value()) {
         row_major = shard_spec.value().orientation == ShardOrientation::ROW_MAJOR;
         all_cores = shard_spec.value().grid;
@@ -65,12 +59,87 @@ ProgramDescriptor FillCacheMultiCoreProgramFactory::create_descriptor(
         core_group_2 = CoreRangeSet();
         num_blocks_per_core_group_1 = shard_spec.value().shape[0] / TILE_HEIGHT;
         num_blocks_per_core_group_2 = 0;
-        num_input_tiles = shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW;
         auto bbox = all_cores.bounding_box();
         num_cores_x = bbox.end_coord.x + 1;
         num_cores_y = bbox.end_coord.y + 1;
     } else {
         row_major = true;
+        std::tie(
+            num_cores,
+            all_cores,
+            core_group_1,
+            core_group_2,
+            num_blocks_per_core_group_1,
+            num_blocks_per_core_group_2) =
+            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_blocks_of_work, row_major);
+    }
+
+    auto* src_buffer = input_tensor.buffer();
+    auto* dst_buffer = cache_tensor.buffer();
+
+    uint32_t g1_numcores = core_group_1.num_cores();
+
+    FillCachePerCoreArgs result;
+    result.reader_dynamic_indices = {0u};      // src address
+    result.writer_dynamic_indices = {0u, 2u};  // dst address, cache_start_id
+    result.cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
+    result.reader_args.reserve(num_cores);
+    result.writer_args.reserve(num_cores);
+
+    for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
+        uint32_t num_blocks_per_core = (i < g1_numcores) ? num_blocks_per_core_group_1 : num_blocks_per_core_group_2;
+
+        result.reader_args.push_back({
+            src_buffer->address(),
+            num_blocks_per_core * Wt,
+            num_blocks_written * Wt,
+        });
+
+        const uint32_t cache_start_id = start_idx                                       // user batch start
+                                        + (num_blocks_written / input_Ht * cache_HtWt)  // cache head offset
+                                        + ((num_blocks_written % input_Ht) * Wt);       // seq_len offset
+
+        result.writer_args.push_back({
+            dst_buffer->address(),
+            num_blocks_per_core * Wt,
+            cache_start_id,
+        });
+        num_blocks_written += num_blocks_per_core;
+    }
+
+    return result;
+}
+
+ProgramDescriptor FillCacheMultiCoreProgramFactory::create_descriptor(
+    const KvCacheParams& operation_attributes, const KvCacheInputs& tensor_args, Tensor& /*tensor_return_value*/) {
+    const auto& cache_tensor = tensor_args.cache;
+    const auto& input_tensor = tensor_args.input;
+
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
+
+    // TODO: For interleaved and kv_heads > 1, we assert that each core only gets 1 tile along seq_len
+    // For sharded, each core gets shard_shape[0] number of tiles along seq_len.
+    // For either case, assume that work doesn't spill over to next head, so we just increment by Wt within
+    // reader/writer
+    uint32_t num_blocks_of_work = input_tensor.padded_shape()[1] * input_tensor.padded_shape()[-2] / TILE_HEIGHT;
+
+    tt::tt_metal::IDevice* device = input_tensor.device();
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+
+    const std::optional<ShardSpec>& shard_spec = input_tensor.shard_spec();
+
+    // Only the all_cores set (kernel/CB core ranges) and num_input_tiles (CB sizing) are needed here;
+    // the per-core runtime-arg work-split lives in compute_fill_cache_per_core_args().
+    CoreRangeSet all_cores;
+    uint32_t num_input_tiles;
+    if (shard_spec.has_value()) {
+        all_cores = shard_spec.value().grid;
+        num_input_tiles = shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW;
+    } else {
+        bool row_major = true;
+        uint32_t num_cores, num_blocks_per_core_group_1, num_blocks_per_core_group_2;
+        CoreRangeSet core_group_1, core_group_2;
         std::tie(
             num_cores,
             all_cores,
@@ -140,45 +209,15 @@ ProgramDescriptor FillCacheMultiCoreProgramFactory::create_descriptor(
     writer_desc.compile_time_args = writer_compile_time_args;
     writer_desc.config = WriterConfigDescriptor{};
 
-    uint32_t g1_numcores = core_group_1.num_cores();
-
-    const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
-
-    // Per-core runtime args. We push raw buffer addresses (uint32_t) rather than Buffer*,
-    // and the per-core cache_start_id derives from operation_attributes (batch_idx,
-    // update_idx) which UpdateKVCacheOperation::compute_program_hash deliberately excludes
-    // from the program-cache key. UpdateKVCacheOperation::get_dynamic_runtime_args re-applies
-    // the address- and batch_idx/update_idx-derived slots on every cache hit (fast path), so
-    // they stay correct without a descriptor rebuild. Keep arg ORDER/INDICES in sync with it.
-    for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
-        const CoreCoord& core = cores.at(i);
-        uint32_t num_blocks_per_core = 0;
-        if (i < g1_numcores) {
-            num_blocks_per_core = num_blocks_per_core_group_1;
-        } else {
-            num_blocks_per_core = num_blocks_per_core_group_2;
-        }
-
-        reader_desc.emplace_runtime_args(
-            core,
-            {
-                src_buffer->address(),
-                num_blocks_per_core * Wt,
-                num_blocks_written * Wt,
-            });
-
-        const uint32_t cache_start_id = start_idx                                       // user batch start
-                                        + (num_blocks_written / input_Ht * cache_HtWt)  // cache head offset
-                                        + ((num_blocks_written % input_Ht) * Wt);       // seq_len offset
-
-        writer_desc.emplace_runtime_args(
-            core,
-            {
-                dst_buffer->address(),
-                num_blocks_per_core * Wt,
-                cache_start_id,
-            });
-        num_blocks_written += num_blocks_per_core;
+    // Per-core runtime args come from the single source of truth shared with
+    // get_dynamic_runtime_args() (cache-hit re-apply). Address slots already hold the live buffer
+    // address; the per-core cache_start_id derives from operation_attributes (batch_idx,
+    // update_idx) which UpdateKVCacheOperation::compute_program_hash deliberately excludes from
+    // the program-cache key, so get_dynamic_runtime_args() re-applies those slots on every hit.
+    const auto per_core = compute_fill_cache_per_core_args(operation_attributes, tensor_args);
+    for (uint32_t i = 0; i < per_core.cores.size(); i++) {
+        reader_desc.runtime_args.emplace_back(per_core.cores[i], per_core.reader_args[i]);
+        writer_desc.runtime_args.emplace_back(per_core.cores[i], per_core.writer_args[i]);
     }
 
     desc.kernels.push_back(std::move(reader_desc));

@@ -200,6 +200,50 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_cb_size(
 
 }  // namespace
 
+// Single source of truth for the row-major slice per-core runtime args. Performs the work-split and
+// derives every core's reader/writer arg vector via get_slice_runtime_args_rm() — the same derivation
+// for the cache-miss build (create_descriptor) and the cache-hit re-apply (get_dynamic_runtime_args).
+SliceRmPerCoreArgs compute_slice_rm_per_core_args(
+    const ttnn::prim::SliceParams& args, const Tensor& input, Tensor& output) {
+    tt::tt_metal::IDevice* device = input.device();
+    const uint32_t num_unpadded_sticks = output.physical_volume() / output.padded_shape()[-1];
+
+    const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
+        args.sub_core_grids.has_value()
+            ? tt::tt_metal::split_work_to_cores(args.sub_core_grids.value(), num_unpadded_sticks)
+            : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
+
+    auto all_cores_vec = corerange_to_cores(all_cores);
+    auto per_core = get_slice_runtime_args_rm(
+        input,
+        output,
+        args.slice_start,
+        num_cores,
+        all_cores_vec,
+        core_group_1,
+        core_group_2,
+        num_sticks_per_core_group_1,
+        num_sticks_per_core_group_2,
+        MAX_READ_SIZE);
+
+    SliceRmPerCoreArgs result;
+    result.all_cores = all_cores;
+    result.cores = std::move(all_cores_vec);
+    result.reader_args.reserve(per_core.size());
+    result.writer_args.reserve(per_core.size());
+    for (auto& [reader_args, writer_args] : per_core) {
+        result.reader_args.push_back(std::move(reader_args));
+        result.writer_args.push_back(std::move(writer_args));
+    }
+    // Reader arg 0 = start_addr + begins_bytes - misalignment; writer arg 0 = output buffer address.
+    result.reader_addr_index = 0;
+    result.writer_addr_index = 0;
+    result.num_sticks_per_core_group_1 = num_sticks_per_core_group_1;
+    result.num_sticks_per_core_group_2 = num_sticks_per_core_group_2;
+    return result;
+}
+
 }  // namespace ttnn::operations::data_movement
 
 namespace ttnn::prim {
@@ -207,16 +251,15 @@ namespace ttnn::prim {
 tt::tt_metal::ProgramDescriptor SliceRmProgramFactory::create_descriptor(
     const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
     const auto& input = tensor_args.input;
-    tt::tt_metal::IDevice* device = input.device();
     ProgramDescriptor desc;
 
-    uint32_t num_unpadded_sticks = output.physical_volume() / output.padded_shape()[-1];
-
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
-        args.sub_core_grids.has_value()
-            ? tt::tt_metal::split_work_to_cores(args.sub_core_grids.value(), num_unpadded_sticks)
-            : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
+    // Single source of truth: the work-split and per-core reader/writer args are derived here and
+    // re-derived identically on a cache hit by SliceDeviceOperation::get_dynamic_runtime_args().
+    auto per_core = ttnn::operations::data_movement::compute_slice_rm_per_core_args(args, input, output);
+    const auto& all_cores = per_core.all_cores;
+    const auto& all_cores_vec = per_core.cores;
+    const auto num_sticks_per_core_group_1 = per_core.num_sticks_per_core_group_1;
+    const auto num_sticks_per_core_group_2 = per_core.num_sticks_per_core_group_2;
 
     tt::tt_metal::Buffer* src0_buffer = input.buffer();
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
@@ -265,24 +308,11 @@ tt::tt_metal::ProgramDescriptor SliceRmProgramFactory::create_descriptor(
     writer_desc.compile_time_args = std::move(writer_compile_time_args_vec);
     writer_desc.config = WriterConfigDescriptor{};
 
-    auto all_cores_vec = corerange_to_cores(all_cores);
-    auto all_runtime_args = ttnn::operations::data_movement::get_slice_runtime_args_rm(
-        input,
-        output,
-        args.slice_start,
-        num_cores,
-        all_cores_vec,
-        core_group_1,
-        core_group_2,
-        num_sticks_per_core_group_1,
-        num_sticks_per_core_group_2,
-        ttnn::operations::data_movement::MAX_READ_SIZE);
-
     reader_desc.runtime_args.reserve(all_cores_vec.size());
     writer_desc.runtime_args.reserve(all_cores_vec.size());
     for (size_t i = 0; i < all_cores_vec.size(); ++i) {
-        reader_desc.runtime_args.emplace_back(all_cores_vec[i], std::move(all_runtime_args[i].first));
-        writer_desc.runtime_args.emplace_back(all_cores_vec[i], std::move(all_runtime_args[i].second));
+        reader_desc.runtime_args.emplace_back(all_cores_vec[i], std::move(per_core.reader_args[i]));
+        writer_desc.runtime_args.emplace_back(all_cores_vec[i], std::move(per_core.writer_args[i]));
     }
 
     desc.kernels.push_back(std::move(reader_desc));

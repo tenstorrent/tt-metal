@@ -5,6 +5,7 @@
 #include "concat_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "concat_program_factory.hpp"
+#include "concat_s2i_program_factory.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
@@ -12,7 +13,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
-#include <tt-metalium/work_split.hpp>
 
 using namespace tt::tt_metal;
 
@@ -252,19 +252,19 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> ConcatDeviceOperation::get_dynamic_
         return dynamic_args;
     }
 
-    // ConcatS2IProgramFactory: re-apply the writer's raw output address (kernel 1, per-core arg 0) on every
-    // core, recomputed from the live output buffer. Reproduce the factory's exact core ordering.
+    // ConcatS2IProgramFactory: re-apply the writer's raw output address on every core, recomputed from the
+    // live output buffer. Derive cores and per-core args from the SAME helper create_descriptor() uses
+    // (single source of truth); emit the live output address into each core's writer address slot(s).
     Tensor& output = tensor_return_value;
     const uint32_t output_addr = output.buffer()->address();
-
-    const auto& all_cores = input_tensors[0].shard_spec().value().grid;
-    const bool row_wise = input_tensors[0].shard_spec().value().orientation == ShardOrientation::ROW_MAJOR;
-    const auto cores = corerange_to_cores(all_cores, std::nullopt, row_wise);
+    const ConcatS2IPerCoreArgs per_core = compute_concat_s2i_per_core_args(tensor_args, output);
 
     constexpr uint32_t kWriterKernelIdx = 1;
-    dynamic_args.reserve(cores.size());
-    for (const auto& core : cores) {
-        dynamic_args.push_back({kWriterKernelIdx, core, 0u, output_addr});
+    dynamic_args.reserve(per_core.cores.size() * per_core.writer_addr_indices.size());
+    for (const auto& core : per_core.cores) {
+        for (const uint32_t addr_idx : per_core.writer_addr_indices) {
+            dynamic_args.push_back({kWriterKernelIdx, core, addr_idx, output_addr});
+        }
     }
     return dynamic_args;
 }

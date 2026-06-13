@@ -52,6 +52,27 @@ struct NlpCreateHeadsBoltzDeviceOperation {
 
     using program_factory_t = std::variant<Interleaved, Sharded>;
 
+    // Per-core runtime args for the Sharded factory, derived purely from
+    // (operation_attributes, tensor_args, tensor_return_value). This is the SINGLE SOURCE OF TRUTH
+    // for both Sharded::create_descriptor() (cache miss) and get_dynamic_runtime_args() (cache-hit
+    // re-apply). The reader/writer arg vectors are the complete per-core vectors create_descriptor()
+    // emplaces; addr_indices records the slots that hold raw buffer-derived addresses (q_base,
+    // q_start, k/v_base, k/v_start), which are the only slots that change across dispatches and so
+    // are re-applied dynamically on every cache hit.
+    struct ShardedPerCoreArgs {
+        std::vector<CoreCoord> cores;
+        std::vector<tt::tt_metal::KernelDescriptor::CoreRuntimeArgs> reader_args;
+        std::vector<tt::tt_metal::KernelDescriptor::CoreRuntimeArgs> writer_args;
+        // Address-derived rt-arg indices, identical for the reader and writer arg vectors:
+        //   [6]=q_base_addr, [7]=q_start_addr, [15]=k/v_base_addr, [16]=k/v_start_addr.
+        std::vector<uint32_t> addr_indices;
+    };
+
+    static ShardedPerCoreArgs compute_sharded_per_core_args(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
+
     // Mandatory methods
 
     // Select the program factory based on the operation attributes and tensor args

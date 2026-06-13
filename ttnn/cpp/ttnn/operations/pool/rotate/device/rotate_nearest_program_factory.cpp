@@ -26,12 +26,6 @@ constexpr uint32_t NEAREST_BUFFERING_FACTOR = 2;
 constexpr uint32_t NUM_TILES_DEST = 8;
 constexpr uint32_t MAX_BURST_SIZE = 5;
 
-// Helper to convert float to bfloat16 representation using tie-to-even rounding (matches PyTorch)
-static uint16_t nearest_float_to_bfloat16(float value) {
-    bfloat16 bf16_value(value);
-    return std::bit_cast<uint16_t>(bf16_value);
-}
-
 ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -52,35 +46,23 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
     const uint32_t input_width = input_shape[2];
     const uint32_t input_channels = input_shape[3];
 
-    const float angle_rad = operation_attributes.angle * M_PI / 180.0f;
-    const float cos_angle = std::cos(angle_rad);
-    const float sin_angle = std::sin(angle_rad);
+    // Single source of truth for per-core runtime args (shared with get_dynamic_runtime_args).
+    const RotatePerCoreArgs per_core_args =
+        compute_rotate_per_core_args(operation_attributes, input_tensor, output_tensor, /*is_bilinear=*/false);
 
-    float center_x, center_y;
-    if (operation_attributes.center.has_value()) {
-        center_x = std::get<0>(operation_attributes.center.value()) - 0.5f;
-        center_y = std::get<1>(operation_attributes.center.value()) - 0.5f;
-    } else {
-        center_x = (static_cast<float>(input_width) - 1.0f) / 2.0f;
-        center_y = (static_cast<float>(input_height) - 1.0f) / 2.0f;
-    }
-
-    const uint16_t fill_value_bf16 = nearest_float_to_bfloat16(operation_attributes.fill);
     const uint32_t total_output_sticks = input_batch * input_height * input_width;
 
     const uint32_t element_size = input_tensor.element_size();
     const uint32_t input_stick_nbytes = input_channels * element_size;
 
+    // Work-core grid and CB-sizing quantities. The per-core runtime-arg layout (core list, num_sticks,
+    // start_stick_id) comes from per_core_args above; this block only derives the grid-level values the
+    // CBs / kernels are sized against.
     tt::tt_metal::CoreRangeSet all_cores;
-    tt::tt_metal::CoreRangeSet core_group_1, core_group_2;
-    uint32_t num_cores = 0;
     uint32_t num_sticks_per_core_group_1 = 0, num_sticks_per_core_group_2 = 0;
-    std::vector<CoreCoord> logical_cores;
     uint32_t input_nsticks_per_core = 0;
     uint32_t output_nsticks_per_core = 0;
-    bool is_block_sharded = false;
     bool is_width_sharded = false;
-    uint32_t num_cores_x = 0;
     uint32_t shard_width = 0;
 
     const bool is_nd_sharded = input_tensor.memory_config().nd_shard_spec().has_value();
@@ -88,37 +70,26 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
     if (is_sharded && !is_nd_sharded) {
         const auto input_shard_spec = input_tensor.shard_spec().value();
         all_cores = input_shard_spec.grid;
-        num_cores = input_shard_spec.num_cores();
         input_nsticks_per_core = input_shard_spec.shape[0];
         output_nsticks_per_core = output_tensor.shard_spec().value().shape[0];
-        logical_cores = corerange_to_cores(
-            all_cores, num_cores, input_shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
-        is_block_sharded =
-            input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED;
         is_width_sharded =
             input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED;
         TT_FATAL(!is_width_sharded, "Width sharding is not supported for rotate operation");
-        num_cores_x = input_shard_spec.grid.bounding_box().grid_size().x;
         shard_width = input_shard_spec.shape[1];
     } else if (is_nd_sharded) {
         const auto& nd_shard_spec = input_tensor.memory_config().nd_shard_spec().value();
         all_cores = nd_shard_spec.grid;
-        num_cores = nd_shard_spec.grid.num_cores();
         const auto& shard_shape = nd_shard_spec.shard_shape;
         input_nsticks_per_core = shard_shape[-3] * shard_shape[-2];
         output_nsticks_per_core = input_nsticks_per_core;
-        logical_cores = corerange_to_cores(
-            all_cores, num_cores, nd_shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
         shard_width = shard_shape[-1];
     } else {
         const auto compute_grid_size = device->compute_with_storage_grid_size();
         auto [num_cores_used, all_cores_range, core_group_1_range, core_group_2_range, num_sticks_1, num_sticks_2] =
             tt::tt_metal::split_work_to_cores(compute_grid_size, total_output_sticks);
-        std::tie(num_cores, all_cores, core_group_1, core_group_2) =
-            std::make_tuple(num_cores_used, all_cores_range, core_group_1_range, core_group_2_range);
+        all_cores = all_cores_range;
         num_sticks_per_core_group_1 = num_sticks_1;
         num_sticks_per_core_group_2 = num_sticks_2;
-        logical_cores = corerange_to_cores(all_cores, num_cores, true);
     }
 
     const bool any_sharded = is_sharded || is_nd_sharded;
@@ -187,7 +158,7 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
         .buffer = any_sharded ? output_tensor.buffer() : nullptr,
     });
 
-    const bool fill_is_zero = (fill_value_bf16 == 0);
+    const bool fill_is_zero = (per_core_args.fill_value_bits == 0);
 
     const uint32_t effective_stick_nbytes = any_sharded ? effective_channels * element_size : input_stick_nbytes;
 
@@ -238,55 +209,26 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_desc.config = WriterConfigDescriptor{};
 
-    if (any_sharded) {
-        for (uint32_t i = 0; i < num_cores; i++) {
-            const CoreCoord& core = logical_cores[i];
+    // Emit per-core runtime args from the shared layout. The input/output buffer base addresses are
+    // bound as Buffer* (patchable on a cache hit); the angle-derived scalars are re-applied on every
+    // hit by get_dynamic_runtime_args.
+    for (uint32_t i = 0; i < per_core_args.cores.size(); i++) {
+        const CoreCoord& core = per_core_args.cores[i];
+        const uint32_t num_sticks = per_core_args.num_sticks[i];
+        const uint32_t start_stick_id = per_core_args.start_stick_id[i];
 
-            uint32_t start_stick_id;
-            if (is_width_sharded) {
-                start_stick_id = 0;
-            } else if (is_block_sharded) {
-                uint32_t core_y = i / num_cores_x;
-                start_stick_id = core_y * input_nsticks_per_core;
-            } else {
-                start_stick_id = i * input_nsticks_per_core;
-            }
+        reader_desc.emplace_runtime_args(
+            core,
+            {input_tensor.buffer(),
+             num_sticks,
+             start_stick_id,
+             per_core_args.cos_angle_q16,
+             per_core_args.sin_angle_q16,
+             per_core_args.center_x_q16,
+             per_core_args.center_y_q16,
+             per_core_args.fill_value_bits});
 
-            reader_desc.emplace_runtime_args(
-                core,
-                {input_tensor.buffer(),
-                 input_nsticks_per_core,
-                 start_stick_id,
-                 static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(cos_angle)),
-                 static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(sin_angle)),
-                 static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_x)),
-                 static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_y)),
-                 static_cast<uint32_t>(fill_value_bf16)});
-
-            writer_desc.emplace_runtime_args(core, {output_tensor.buffer(), input_nsticks_per_core, start_stick_id});
-        }
-    } else {
-        uint32_t sticks_processed = 0;
-        for (uint32_t i = 0; i < num_cores; i++) {
-            const CoreCoord& core = logical_cores[i];
-            const uint32_t num_sticks =
-                core_group_1.contains(core) ? num_sticks_per_core_group_1 : num_sticks_per_core_group_2;
-
-            reader_desc.emplace_runtime_args(
-                core,
-                {input_tensor.buffer(),
-                 num_sticks,
-                 sticks_processed,
-                 static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(cos_angle)),
-                 static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(sin_angle)),
-                 static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_x)),
-                 static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_y)),
-                 static_cast<uint32_t>(fill_value_bf16)});
-
-            writer_desc.emplace_runtime_args(core, {output_tensor.buffer(), num_sticks, sticks_processed});
-
-            sticks_processed += num_sticks;
-        }
+        writer_desc.emplace_runtime_args(core, {output_tensor.buffer(), num_sticks, start_stick_id});
     }
 
     desc.kernels.push_back(std::move(reader_desc));

@@ -19,6 +19,26 @@
 
 namespace ttnn::operations::experimental::transformer {
 
+struct NlpCreateHeadsDeviceOperation;
+
+// Per-core runtime args for the Sharded factory, derived once and consumed by BOTH
+// Sharded::create_descriptor() (cache-miss build) and get_dynamic_runtime_args() (cache-hit re-apply).
+// This is the SINGLE SOURCE OF TRUTH for the per-core address state machine: the reader/writer rt-arg
+// vectors are identical except for the slots the factory mutates between the two emplaces. The address
+// slots (q_base/q_start/k_base|v_base/k_start|v_start) are the ones that change across dispatches when the
+// input (or optional kv) buffer is re-allocated; their positions are recorded in addr_indices so
+// get_dynamic_runtime_args() can re-apply exactly those.
+struct NlpCreateQkvHeadsShardedPerCoreArgs {
+    std::vector<tt::tt_metal::CoreCoord> cores;
+    // Indexed by position in `cores`; full reader/writer rt-arg vectors for each work core.
+    std::vector<std::vector<uint32_t>> reader_args;
+    std::vector<std::vector<uint32_t>> writer_args;
+    std::vector<bool> is_work_core;  // every core in this op's loop is a work core (kept for symmetry)
+    // Buffer-address arg positions, identical for the reader and writer arg vectors:
+    //   [6]=q_base_addr, [7]=q_start_addr, [15]=k_base_addr/v_base_addr, [16]=k_start_addr/v_start_addr.
+    std::vector<uint32_t> addr_indices;
+};
+
 struct NlpCreateHeadsDeviceOperation {
     struct operation_attributes_t {
         uint32_t num_q_heads;
@@ -79,6 +99,12 @@ struct NlpCreateHeadsDeviceOperation {
         tensor_return_value_t&,
         const std::optional<ttnn::MeshCoordinate>& = std::nullopt);
 };
+
+// Derive the Sharded per-core reader/writer rt-args once (single source of truth, see struct doc above).
+NlpCreateQkvHeadsShardedPerCoreArgs compute_nlp_create_qkv_heads_sharded_per_core_args(
+    const NlpCreateHeadsDeviceOperation::operation_attributes_t& operation_attributes,
+    const NlpCreateHeadsDeviceOperation::tensor_args_t& tensor_args,
+    NlpCreateHeadsDeviceOperation::tensor_return_value_t& tensor_return_value);
 
 }  // namespace ttnn::operations::experimental::transformer
 

@@ -314,57 +314,32 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> SliceDeviceOperation::get_dynamic_r
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
 
-    // Only SliceRmProgramFactory bakes address-derived rt-args. Mirror select_program_factory: every other
-    // factory already fast-paths via Buffer*/CB bindings, so opt them into the CB/Buffer*-patch fast path
-    // by returning {} (the framework patches their bindings).
+    // Only SliceRmProgramFactory bakes address-derived rt-args. Every other factory already fast-paths
+    // via Buffer*/CB bindings, so return {} and let the framework patch their bindings.
     const auto& input = tensor_args.input;
     if (args.use_tensor_args) {
-        return dynamic_args;  // SliceTileTensorArgsProgramFactory (class-1 bound)
+        return dynamic_args;  // SliceTileTensorArgsProgramFactory
     }
     const bool has_step = std::any_of(args.step.cbegin(), args.step.cend(), [](uint32_t s) { return s != 1; });
     if (input.layout() != Layout::ROW_MAJOR || input.is_sharded() || has_step) {
         return dynamic_args;  // tile / rm_sharded / rm_stride (all already bound)
     }
 
-    // SliceRmProgramFactory: re-derive the address-derived runtime args from the CURRENT buffers.
-    // Reader (kernel 0) per-core arg 0 = start_addr + begins_bytes - misalignment.
-    // Writer (kernel 1) per-core arg 0 = raw output buffer address.
+    // SliceRmProgramFactory: re-derive the buffer-address slots from the CURRENT buffers via the SAME
+    // helper create_descriptor() uses, then re-apply them on every core. The work-core set can grow on a
+    // cache hit, so a build-time noop core may now read its (frozen) address slot — re-apply all of them.
     Tensor& output = tensor_return_value;
-    tt::tt_metal::Buffer* src0_buffer = input.buffer();
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
-
-    const uint32_t begins_bytes = args.slice_start[-1] * input.element_size();
-    const auto src_buffer_alignment = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM
-                                          ? ::hal::get_dram_alignment()
-                                          : ::hal::get_l1_alignment();
-    const uint32_t misalignment = begins_bytes % src_buffer_alignment;
-    const uint32_t reader_arg0 = src0_buffer->address() + begins_bytes - misalignment;
-    const uint32_t writer_arg0 = dst_buffer->address();
-
-    // Reproduce the factory's core split EXACTLY so we patch the same per-core arg layout. The factory
-    // emits reader/writer arg 0 on every core in all_cores (including no-op cores, which still carry a
-    // full copy of the common reader args / a zeroed-out writer-arg slot 0), so iterate all of them.
-    tt::tt_metal::IDevice* device = input.device();
-    const uint32_t num_unpadded_sticks = output.physical_volume() / output.padded_shape()[-1];
-    const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    auto [num_cores, all_cores, core_group_1, core_group_2, n1, n2] =
-        args.sub_core_grids.has_value()
-            ? tt::tt_metal::split_work_to_cores(args.sub_core_grids.value(), num_unpadded_sticks)
-            : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
-    // Only `all_cores` (the full set the factory emitted rt-args on) is needed for arg layout.
-    (void)num_cores;
-    (void)core_group_1;
-    (void)core_group_2;
-    (void)n1;
-    (void)n2;
+    const auto per_core = ttnn::operations::data_movement::compute_slice_rm_per_core_args(args, input, output);
 
     constexpr uint32_t kReaderKernelIdx = 0;
     constexpr uint32_t kWriterKernelIdx = 1;
-    const auto all_cores_vec = corerange_to_cores(all_cores);
-    dynamic_args.reserve(all_cores_vec.size() * 2);
-    for (const auto& core : all_cores_vec) {
-        dynamic_args.push_back({kReaderKernelIdx, core, 0u, reader_arg0});
-        dynamic_args.push_back({kWriterKernelIdx, core, 0u, writer_arg0});
+    dynamic_args.reserve(per_core.cores.size() * 2);
+    for (size_t i = 0; i < per_core.cores.size(); ++i) {
+        const auto& core = per_core.cores[i];
+        dynamic_args.push_back(
+            {kReaderKernelIdx, core, per_core.reader_addr_index, per_core.reader_args[i][per_core.reader_addr_index]});
+        dynamic_args.push_back(
+            {kWriterKernelIdx, core, per_core.writer_addr_index, per_core.writer_args[i][per_core.writer_addr_index]});
     }
     return dynamic_args;
 }
