@@ -20,6 +20,41 @@ Compute ceiling (math-util), before → after this session's work:
 
 Full kernel (DMA **on**) also improved: heads8 bfp8 sp7 **0.827 → 0.723 ms**.
 
+## UPDATE — blocked bcast-col gate-mul broke the gate-mul ceiling (75.8%)
+
+The "practical ceiling ≈ 77%" above assumed the gate-mul's per-tile overhead was irreducible
+under the standard API. It is not. Re-profiling QC2/KC16 (device zones IDX_MM/IDX_MUL) showed
+the matmul runs **93% efficient in its window** but the gate-mul phase is **unpack-context-bound**:
+the standard `mul_tiles_bcast_cols` issues one `llk_unpack_AB` context (wait_for_next_context +
+semaphore handshake + MOP) **per (column, head)** = 128 contexts/row, and re-unpacks the gate
+`w[h]` once per column even though it is column-independent. bfp8 cb_qk (bandwidth) and LoFi mul
+(fidelity replay) were both **neutral** — confirming the limiter is unpack *issue/sync count*, not
+bandwidth or math passes.
+
+Fix: a **blocked bcast-col MUL** primitive (`tt-llk .../experimental/llk_math_eltwise_binary_custom.h`
+`_llk_math_mul_bcast_cols_reduce_custom_`, mirrored on the SDPA blocked-sub scaffold; compute-API
+wrapper `api/compute/experimental/indexer_mul_custom.h`). One unpack context loads `w[h]` **once** +
+`ct_dim` qk columns and MAC-reduces head h onto `ct_dim` dest tiles — so contexts drop from per
+(col,head) to **per head** (8/row, ct_dim=8) and `w[h]` is unpacked once per head. Requires cb_qk
+**head-major** (head h's columns contiguous as the streamed SrcA); the matmul output is repacked
+head-major via `llk_matmul_pack<…, out_of_order=true>` (the generic `llk_pack`/`pack_tile` misreads
+the matmul DEST layout — that was a 0.328-PCC trap during bring-up). ELWMUL accumulates in dest by
+default (dest_accum_en=0), so heads MAC into the same dest with one pack per column.
+
+Compute ceiling (math-util, DMA off, sp7), after the blocked-mul:
+
+| config        | prev (this doc) | blocked-mul |
+|---------------|-----------------|-------------|
+| heads8  bfp8  | 67.0% (QC2/KC16 67.7%) | **75.8%** |
+| heads16 bfp8  | 69.6%           | **77.7%** |
+| heads64 bfp8  | 72.1%           | **76.6%** |
+
+heads8 QC2/KC16 full kernel (DMA **on**) **0.416 → 0.384 ms** (58.1% → 62.9% util). Correctness:
+25/25 indexer accuracy tests pass (production heads16/64, bfp8_k, knobs, corner_shapes,
+multicore_qc2, glx_chunked), rank0 and rank7. The custom op is LoFi single-pass per face; the q.kᵀ
+matmul stays HiFi2 (the precision math_util credits). Repro: `INDEXER_DMA_OFF=1 ...
+test_indexer_score_sp7_math_util[heads8_k_bfp8]`.
+
 ## What landed (5 commits, all numerics-preserving — HiFi2 + bfp8 k + bf16 q/w/out)
 
 1. **`INDEXER_DMA_OFF` ceiling toggle** — env→compile-time flag; reader/writer skip

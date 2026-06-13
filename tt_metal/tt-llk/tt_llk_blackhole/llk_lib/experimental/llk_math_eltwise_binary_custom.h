@@ -54,6 +54,64 @@ inline void _llk_math_eltwise_binary_uninit_custom_()
     // No state to restore - all states are transient or default
 }
 
+// MUL variant of the blocked bcast-col reuse path (indexer_score gate reduction). Identical face
+// addressing/srcB-reuse scaffold as the SUB path, but ELWMUL: the FPU multiply MACs onto the
+// existing dest tile by default (the dest_accum_en opcode field is 0, matching the standard ELWMUL
+// MOP -- dest accumulate is inherent to ELWMUL, the per-call overwrite only comes from a prior
+// tile_regs_acquire ZEROACC). The caller does ONE tile_regs_acquire for the ct_dim-column batch,
+// then loops the heads -- each head one call into the SAME ct_dim dest tiles -- so dest[col] ends as
+// sum_h qk[col,h]*w[h], one pack per column. LoFi single-pass per face (no fidelity replay).
+inline void _llk_math_mul_bcast_cols_reduce_custom_(const std::uint32_t ct_dim = 1)
+{
+    addr_mod_t {
+        .srca = {.incr = 8},
+        .srcb = {.incr = 8},
+        .dest = {.incr = 8},
+    }
+        .set(ADDR_MOD_7);
+
+    addr_mod_t {
+        .srca = {.incr = 8},
+        .srcb = {.incr = 24},
+        .dest = {.incr = 8},
+    }
+        .set(ADDR_MOD_6);
+
+    addr_mod_t {
+        .srca = {.incr = 8},
+        .srcb = {.incr = 0x3F & -8}, // decrement srcB by 8
+        .dest = {.incr = 8},
+    }
+        .set(ADDR_MOD_5);
+
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_AB); // reset both src counters to 0
+
+    for (std::uint32_t i = 0; i < ct_dim; i++)
+    {
+        // F0 * F0
+        TTI_ELWMUL(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_7, 0); // 0 -> 8
+        TTI_ELWMUL(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_5, 0); // 8 -> 0
+
+        // F1 * F0
+        TTI_ELWMUL(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_7, 0); // 0 -> 8
+        TTI_ELWMUL(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_6, 0); // 8 -> 32
+
+        // F2 * F2
+        TTI_ELWMUL(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_7, 0); // 32 -> 40
+        TTI_ELWMUL(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_5, 0); // 40 -> 32
+
+        // F3 * F2
+        TTI_ELWMUL(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_7, 0); // 32 -> 40
+        TTI_ELWMUL(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_6, 0); // 40 -> 64, no CLR_A
+
+        // Reset srcB to 0 for next tile, but keep srcA advancing
+        TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_AB); // reset only srcB counter to 0
+    }
+
+    // Final cleanup: reset both counters
+    TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_AB);
+}
+
 inline void _llk_math_sub_bcast_cols_reuse_custom_(const std::uint32_t ct_dim = 1)
 {
     addr_mod_t {
