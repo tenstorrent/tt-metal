@@ -32,6 +32,37 @@ def denoise_l1_enabled() -> bool:
     return os.environ.get("PI0_GLX_DENOISE_L1", "1").lower() in ("1", "true", "yes", "on")
 
 
+def siglip_mlp_l1_enabled() -> bool:
+    """Whether to place SigLIP MLP (fc1+fc2) weights in L1. Default OFF.
+
+    ⚠ INTERLEAVED-L1 DOES NOT WORK FOR SIGLIP (verified 2026-06-13). Per-chip
+    capacity fits (9 × 10.8 MB ≈ 97 MB of 168 MB usable), but enabling this
+    flag trips the matmul kernel's static-CB-vs-interleaved-L1-buffer clash:
+        TT_THROW: Statically allocated circular buffers in program N clash
+        with L1 buffers on core range [0-0 - 11-1]. L1 buffer allocated at
+        591616 and static circular buffer region ends at 733696
+    SigLIP intermediate (4608) crosses the same threshold the existing comment
+    at the top of this file flags for VLM (16384) — the matmul kernel's CB
+    footprint stops fitting alongside interleaved L1 weights on the same cores.
+
+    To actually land SigLIP weights on L1 you need WIDTH-SHARDED layout +
+    a matmul kernel that consumes width-sharded weights (same blocker
+    PI0_GLX_PREFILL_MLP_L1 has). The flag + migrator stay in place as an
+    opt-in for future width-sharded experiments — do not turn on with the
+    interleaved migrator below."""
+    return os.environ.get("PI0_GLX_SIGLIP_MLP_L1", "0").lower() in ("1", "true", "yes", "on")
+
+
+def siglip_attn_l1_enabled() -> bool:
+    """Whether to ALSO place SigLIP attention (wqkv + wo) weights in L1.
+
+    Default OFF. Stacking attn on top of MLP brings per-chip footprint to
+    ~163 MB ≈ 97% of usable L1 — leaves no headroom for matmul CBs +
+    activations. Only enable if you've verified L1 isn't exhausted on the
+    target chip layout."""
+    return os.environ.get("PI0_GLX_SIGLIP_ATTN_L1", "0").lower() in ("1", "true", "yes", "on")
+
+
 def prefill_mlp_l1_enabled() -> bool:
     """Whether to width-shard the prefill VLM MLP weights into L1. Default OFF.
 
@@ -43,9 +74,16 @@ def prefill_mlp_l1_enabled() -> bool:
 
 def prefill_mlp_l1_projs() -> tuple:
     """Which MLP projections to place in L1. Env PI0_GLX_PREFILL_MLP_L1_PROJ
-    (comma list), default all three. Use 'gate_proj,up_proj' to keep down_proj
-    in DRAM — frees ~304 KB/core, which clears the normal-matmul CB clash."""
-    raw = os.environ.get("PI0_GLX_PREFILL_MLP_L1_PROJ", "gate_proj,up_proj,down_proj")
+    (comma list).
+
+    Verified safe (2026-06-13, layout='interleaved'):
+      - down_proj alone:        works (N=2048, small CB despite K=16384)
+    Verified crashes (N=16384 → static CB region too large):
+      - up_proj or gate_proj    (any combination including either)
+
+    Default is 'down_proj' only — the largest weight that fits with the normal
+    matmul kernel. Use 'gate_proj,up_proj,down_proj' for width-shard layout."""
+    raw = os.environ.get("PI0_GLX_PREFILL_MLP_L1_PROJ", "down_proj")
     return tuple(p.strip() for p in raw.split(",") if p.strip())
 
 
@@ -127,6 +165,100 @@ def migrate_denoise_weights_to_l1(stage_denoise, suffix_slices, denoise_head) ->
 
     denoise_head.mod_weight = _to_l1(denoise_head.mod_weight)
     denoise_head.mod_bias = _to_l1(denoise_head.mod_bias)
+
+
+_SIGLIP_VALID = {"fc1", "fc2", "wqkv", "wo"}
+_VLM_ATTN_VALID = {"wqkv", "o_proj"}
+
+
+def migrate_siglip_weights_to_l1(stage_vision, tensors=None, include_attn=None) -> None:
+    """Move a subset of SigLIP weights (per-tensor allowlist) from DRAM to L1.
+
+    tensors: iterable from {"fc1", "fc2", "wqkv", "wo"}. None → no-op.
+    include_attn: legacy bool; True → adds {"wqkv", "wo"} to the set.
+
+    Verified (2026-06-13, e2e perf test):
+      - wo + fc2 (N=1152):     PASS (small kernel CB, weights fit alongside)
+      - fc1 alone (N=4608):    CRASH ("Statically allocated CBs ... clash with
+                               L1 buffers ... CB region ends at 464384")
+      - wqkv alone (N=4608):   CRASH (same threshold as fc1)
+
+    The safe-stack default in pipeline.py is wo+fc2. fc1/wqkv require a
+    width-shard-aware matmul to ever land on L1.
+    """
+    if include_attn:
+        tensors = set(tensors or []) | {"wqkv", "wo"}
+    tensors = set(tensors or [])
+    bad = tensors - _SIGLIP_VALID
+    if bad:
+        raise ValueError(f"unknown SigLIP tensors {bad}; valid: {_SIGLIP_VALID}")
+    if not tensors:
+        return
+    for name in ("layer_slice_a", "layer_slice_b", "tail_slice"):
+        sl = getattr(stage_vision, name, None)
+        if sl is None or not hasattr(sl, "blocks"):
+            continue
+        for block in sl.blocks:
+            mlp = getattr(block, "mlp", None)
+            attn = getattr(block, "attention", None)
+            if "fc1" in tensors and mlp is not None:
+                mlp.fc1_weight = _to_l1(mlp.fc1_weight)
+                mlp.fc1_bias = _to_l1(mlp.fc1_bias)
+            if "fc2" in tensors and mlp is not None:
+                mlp.fc2_weight = _to_l1(mlp.fc2_weight)
+                mlp.fc2_bias = _to_l1(mlp.fc2_bias)
+            if "wqkv" in tensors and attn is not None:
+                attn.wqkv = _to_l1(attn.wqkv)
+                attn.bqkv = _to_l1(getattr(attn, "bqkv", None))
+            if "wo" in tensors and attn is not None:
+                attn.wo = _to_l1(attn.wo)
+                attn.bo = _to_l1(getattr(attn, "bo", None))
+
+
+def vlm_attn_l1_enabled() -> bool:
+    """Move VLM PaliGemma attention weights (wqkv + o_proj) to L1. Default OFF.
+
+    Per-chip footprint (1 layer/chip across 18 chips): wqkv 5.4 MB + o_proj
+    4.3 MB = 9.7 MB. Tiny vs 168 MB usable L1. Verified PASS (2026-06-13) —
+    N=2560 wqkv and N=2048 o_proj kernel CBs fit alongside L1 weights."""
+    return os.environ.get("PI0_GLX_VLM_ATTN_L1", "0").lower() in ("1", "true", "yes", "on")
+
+
+def vlm_attn_l1_tensors() -> tuple:
+    """Which VLM attn weights to migrate. Env PI0_GLX_VLM_ATTN_L1_TENSORS=wqkv,o_proj.
+    Default both."""
+    raw = os.environ.get("PI0_GLX_VLM_ATTN_L1_TENSORS", "wqkv,o_proj")
+    return tuple(p.strip() for p in raw.split(",") if p.strip())
+
+
+def siglip_l1_tensors() -> tuple:
+    """SigLIP per-tensor allowlist. Env PI0_GLX_SIGLIP_L1_TENSORS=wo,fc2 (or
+    any subset of {wo, fc2, wqkv, fc1}). Empty/unset → no migration."""
+    raw = os.environ.get("PI0_GLX_SIGLIP_L1_TENSORS", "")
+    return tuple(p.strip() for p in raw.split(",") if p.strip())
+
+
+def migrate_vlm_attn_to_l1(stage_prefill, tensors=("wqkv", "o_proj")) -> None:
+    """Move VLM attention weights (wqkv, o_proj) from DRAM to L1.
+
+    Each prefill chip holds one VLMBlockSlice whose .block.attention is a
+    GemmaAttentionTTNN with attributes wqkv (1[1]×N=2560) and o_proj (N=2048).
+    Both are small-N — the matmul kernel CB region fits alongside interleaved
+    L1 weights on the same cores (unlike the gate/up/down MLPs at N=16384)."""
+    bad = set(tensors) - _VLM_ATTN_VALID
+    if bad:
+        raise ValueError(f"unknown VLM tensors {bad}; valid: {_VLM_ATTN_VALID}")
+    if not tensors:
+        return
+    for slc in getattr(stage_prefill, "slices", []) or []:
+        block = getattr(slc, "block", None)
+        attn = getattr(block, "attention", None) if block else None
+        if attn is None:
+            continue
+        if "wqkv" in tensors:
+            attn.wqkv = _to_l1(attn.wqkv)
+        if "o_proj" in tensors:
+            attn.o_proj = _to_l1(attn.o_proj)
 
 
 # ---------------------------------------------------------------------------- #
