@@ -51,6 +51,43 @@ def _stage_decode(pipeline, latent, num_frames):
     return (t1 - t0) * 1000, (t2 - t1) * 1000, (t2 - t0) * 1000, wav
 
 
+def _probe_split(pipeline, latent, num_frames, reps, label):
+    """Split the vocoder+bwe wall into (main-vocoder) vs (bwe-half) with device syncs around
+    each, to settle the dispatch paradox: the main vocoder is the part that runs traced in the
+    TRACED leg. If its wall does NOT shrink when traced (host dispatch removed), the stage is
+    device-bound and op-count reduction — not trace — is the durable lever."""
+    vwb = pipeline.tt_vocoder_with_bwe
+    z = pipeline.tt_audio_decoder.z_channels
+    audio_spatial = latent.reshape(1, latent.shape[1], z, latent.shape[2] // z).permute(0, 2, 1, 3).float()
+    mel = pipeline._decode_mel(audio_spatial)
+    voc_ms, bwe_ms = [], []
+    for _ in range(reps):
+        md = mel.float()
+        ttnn.synchronize_device(pipeline.mesh_device)
+        t0 = time.perf_counter()
+        x = vwb.vocoder.forward_traced(md) if vwb.use_trace else vwb.vocoder(md)
+        ttnn.synchronize_device(pipeline.mesh_device)
+        t1 = time.perf_counter()
+        B, C, low = x.shape
+        out_len = low * vwb.output_sampling_rate // vwb.input_sampling_rate
+        _ = vwb._bwe_from_waveform(x, input_dtype=md.dtype, output_length=out_len)
+        ttnn.synchronize_device(pipeline.mesh_device)
+        t2 = time.perf_counter()
+        voc_ms.append((t1 - t0) * 1000)
+        bwe_ms.append((t2 - t1) * 1000)
+
+    def _med(xs):
+        return sorted(xs)[len(xs) // 2]
+
+    print(
+        f"\nWARM_HARNESS PROBE {label} reps={reps} "
+        f"main_vocoder={_med(voc_ms):.1f}ms bwe_half={_med(bwe_ms):.1f}ms "
+        f"(voc_min={min(voc_ms):.1f} voc_max={max(voc_ms):.1f})",
+        flush=True,
+    )
+    return _med(voc_ms), _med(bwe_ms)
+
+
 def _avg_leg(pipeline, latent, num_frames, reps, warmups, label):
     for _ in range(warmups):
         _stage_decode(pipeline, latent, num_frames)
@@ -137,9 +174,13 @@ def test_warm_harness(
     cold_ms = (time.perf_counter() - t0) * 1000
     print(f"\nWARM_HARNESS cold={cold_ms:.1f}ms", flush=True)
 
+    probe = os.environ.get("PROBE_SPLIT") == "1"
+
     # ---- EAGER leg ----
     pipeline._traced = False
     eager_total, _ = _avg_leg(pipeline, latent, num_frames, eager_reps, warmups, "EAGER")
+    if probe:
+        _probe_split(pipeline, latent, num_frames, max(eager_reps, 3), "EAGER")
 
     # ---- TRACED leg ---- (in-process switch: release any traces, flip flag, re-prime flags)
     if traced_reps > 0:
@@ -149,6 +190,8 @@ def test_warm_harness(
         # lazily captures the vocoder/VAE trace per LTX_VOC_TRACE/LTX_BWE_TRACE/LTX_VAE_TRACE.
         # Use extra warmups so the lazy capture cost isn't counted in the timed reps.
         traced_total, _ = _avg_leg(pipeline, latent, num_frames, traced_reps, max(warmups, 2), "TRACED")
+        if probe:
+            _probe_split(pipeline, latent, num_frames, max(traced_reps, 3), "TRACED")
         delta = traced_total - eager_total
         print(
             f"\nWARM_HARNESS EAGER_vs_TRACED eager_total={eager_total:.1f}ms "
