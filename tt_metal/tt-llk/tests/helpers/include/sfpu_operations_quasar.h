@@ -116,7 +116,7 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index)
     }
     else
     {
-        LLK_ASSERT(false, "Unsupported Quasar unary SFPU operation");
+        static_assert(OPERATION != OPERATION, "Unsupported Quasar unary SFPU operation");
     }
 }
 
