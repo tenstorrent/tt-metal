@@ -21,6 +21,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 )
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import (
     build_op_kwargs,
+    check_with_pcc_safe,
     extract_named_tensor_kwargs,
     parse_dict_value,
 )
@@ -318,6 +319,6 @@ def run(
         output_tensor = output_tensor[tuple(slice(0, s) for s in torch_output_tensor.shape)]
 
     # Check with PCC
-    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    pcc = check_with_pcc_safe(torch_output_tensor, output_tensor, 0.999)
 
     return [pcc, e2e_perf]

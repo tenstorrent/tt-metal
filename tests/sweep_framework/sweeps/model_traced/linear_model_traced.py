@@ -93,7 +93,7 @@ def _close_vector_device():
     _CUR_SHAPE = None
 
 
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, check_with_pcc_safe
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 
 
@@ -378,7 +378,7 @@ def _run_gather_in0_ring_matmul(
         reduced = partials.sum(dim=k_axis)  # all-reduce over the K-shards
         recon = reduced.permute(1, 0, 2).reshape(M, global_N)
         e2e_perf = stop_measuring_time(start_time)
-        return [check_with_pcc(golden, recon, 0.99), e2e_perf]
+        return [check_with_pcc_safe(golden, recon, 0.99), e2e_perf]
     finally:
         try:
             ttnn.close_mesh_device(dev)
@@ -607,7 +607,7 @@ def _run_batched_dram_sharded_matmul(
         ttnn.deallocate(a_tt)
         ttnn.deallocate(b_tt)
         ttnn.deallocate(out)
-        return [check_with_pcc(golden, o_rb, 0.99), e2e_perf]
+        return [check_with_pcc_safe(golden, o_rb, 0.99), e2e_perf]
     finally:
         try:
             ttnn.close_mesh_device(dev)
@@ -706,7 +706,7 @@ def _run_kshard_replicated_matmul(
     out = ttnn.linear(ta, tb, **linear_kwargs)
     res = mesh_tensor_to_torch(out, dev if is_mesh else None)
     e2e_perf = stop_measuring_time(start_time)
-    return [check_with_pcc(golden, res, 0.99), e2e_perf]
+    return [check_with_pcc_safe(golden, res, 0.99), e2e_perf]
 
 
 # Override the default timeout in seconds for hang detection.
@@ -1512,6 +1512,6 @@ def run(
         torch_output_tensor = reconcile_golden_to_actual(
             torch_output_tensor, output_tensor, input_a_tensor_placement, input_b_tensor_placement
         )
-    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
+    pcc = check_with_pcc_safe(torch_output_tensor, output_tensor, 0.99)
 
     return [pcc, e2e_perf]

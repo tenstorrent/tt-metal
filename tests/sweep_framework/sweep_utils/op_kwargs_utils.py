@@ -530,3 +530,73 @@ def extract_named_tensor_kwargs(kwargs: Dict[str, Any], tensor_name: str) -> Opt
         "memory_config": kwargs.get(f"{tensor_name}_memory_config"),
         "tensor_placement": kwargs.get(f"{tensor_name}_tensor_placement"),
     }
+
+
+def comp_pcc_chunked(golden, calculated, pcc_threshold=0.99, chunk=8 * 1024 * 1024):
+    """Exact Pearson PCC via single-pass streaming float64 sums — O(chunk) memory.
+
+    The standard comp_pcc clones both tensors, builds several full-size NaN/Inf
+    boolean masks, and runs a float64 corrcoef; for ~1e9-element tensors that
+    exhausts host RAM (the device op itself is fine). This accumulates the same
+    correlation statistics in fixed-size chunks without materializing full-size
+    intermediates, so it validates arbitrarily large outputs.
+    """
+    import math
+
+    import torch
+
+    g = golden.reshape(-1)
+    c = calculated.reshape(-1)
+    if c.dtype != g.dtype:
+        try:
+            c = c.to(g.dtype)
+        except Exception:
+            pass
+    n = int(g.numel())
+    Sg = Sc = Sgg = Scc = Sgc = 0.0
+    cnt = 0
+    for i in range(0, n, chunk):
+        gg = g[i : i + chunk].to(torch.float64)
+        cc = c[i : i + chunk].to(torch.float64)
+        m = torch.isfinite(gg) & torch.isfinite(cc)
+        if not bool(m.all()):
+            gg = gg[m]
+            cc = cc[m]
+        Sg += float(gg.sum())
+        Sc += float(cc.sum())
+        Sgg += float((gg * gg).sum())
+        Scc += float((cc * cc).sum())
+        Sgc += float((gg * cc).sum())
+        cnt += int(gg.numel())
+    if cnt == 0:
+        return True, 1.0
+    cov = cnt * Sgc - Sg * Sc
+    vg = cnt * Sgg - Sg * Sg
+    vc = cnt * Scc - Sc * Sc
+    if vg <= 0.0 or vc <= 0.0:
+        both_const = vg <= 0.0 and vc <= 0.0
+        return both_const, (1.0 if both_const else 0.0)
+    p = cov / math.sqrt(vg * vc)
+    p = max(-1.0, min(1.0, p))
+    return (p >= pcc_threshold), p
+
+
+def check_with_pcc_safe(expected, actual, pcc=0.99, large_numel=100_000_000):
+    """Drop-in for check_with_pcc that avoids host OOM on very large tensors.
+
+    Below `large_numel` elements it defers to the standard check_with_pcc; above
+    it, it uses the streaming comp_pcc_chunked (which the ~1e9-element linear /
+    multiply outputs need — the full-tensor PCC OOMs/crashes the host).
+    """
+    from tests.ttnn.utils_for_testing import check_with_pcc
+
+    if tuple(expected.shape) != tuple(actual.shape):
+        return (
+            False,
+            f"list(expected_pytorch_result.shape)={list(expected.shape)} vs "
+            f"list(actual_pytorch_result.shape)={list(actual.shape)}",
+        )
+    if expected.numel() <= large_numel:
+        return check_with_pcc(expected, actual, pcc)
+    ok, p = comp_pcc_chunked(expected, actual, pcc)
+    return (ok, f"PCC: {p}")
