@@ -4,6 +4,7 @@
 
 import torch
 import torch.nn.functional as F
+
 import ttnn
 
 
@@ -96,7 +97,7 @@ def tt_vit_attention(
 
     head_dim = tt_q.shape[-1]
     L = tt_q.shape[-2]
-    scale = head_dim ** -0.5
+    scale = head_dim**-0.5
 
     if L >= 512 and (L % 32) == 0:
         # Tune SDPA program config: enable approximate exp in softmax (cheaper).
@@ -109,7 +110,11 @@ def tt_vit_attention(
             exp_approx_mode=True,
         )
         tt_attn_out = ttnn.transformer.scaled_dot_product_attention(
-            tt_q, tt_k, tt_v, is_causal=False, scale=scale,
+            tt_q,
+            tt_k,
+            tt_v,
+            is_causal=False,
+            scale=scale,
             program_config=sdpa_pc,
         )
     else:
@@ -228,27 +233,11 @@ def tt_vit_block(
 # ---------------------------------------------------------------------------
 
 
-def tt_vit_backbone(pixel_values, backbone_params, device):
-    """Full SAM3 ViT backbone forward pass.
+def _run_device_blocks(tt_x, backbone_params, device):
+    """Run pos_embed + ln_pre + all 32 transformer blocks on device.
 
-    Args:
-        pixel_values: torch tensor (B, 3, 1008, 1008) - input images.
-        backbone_params: dict from preprocess_vit_backbone_weights().
-        device: ttnn device.
-
-    Returns:
-        List of torch tensors [feats] where feats is (B, 1024, 72, 72) in NCHW format.
+    Input/output are ttnn tensors on device — no host roundtrips.
     """
-    # Patch embed + pos_embed + ln_pre + all 32 blocks all run on-device.
-    # Single host→device hop (pixel_values in tt_patch_embed), single device→host
-    # hop (final to_torch). No intermediate roundtrips.
-    tt_x = tt_patch_embed(
-        pixel_values,
-        backbone_params["patch_embed"]["weight"],
-        backbone_params["patch_embed"]["bias"],
-        device,
-    )  # (1, 72, 72, 1024) ttnn TILE_LAYOUT
-
     if backbone_params.get("pos_embed_tt") is not None:
         tt_x = ttnn.add(tt_x, backbone_params["pos_embed_tt"])
 
@@ -260,10 +249,6 @@ def tt_vit_backbone(pixel_values, backbone_params, device):
             epsilon=1e-5,
         )
 
-    # Blocks operate flat. Partition once when entering a run of consecutive
-    # windowed blocks, and unpartition once when leaving — saves the
-    # reshape+permute+reshape per block (28 windowed blocks → 4 group
-    # boundaries instead of 28 individual partitions/unpartitions).
     B, H, W, C = tt_x.shape
     tt_x = ttnn.reshape(tt_x, [B, H * W, C])
     current_window = 0
@@ -283,12 +268,99 @@ def tt_vit_backbone(pixel_values, backbone_params, device):
         )
     if current_window != 0:
         tt_x = tt_window_unpartition(tt_x, B, H, W, C, current_window)
-    tt_x = ttnn.reshape(tt_x, [B, H, W, C])
+    return ttnn.reshape(tt_x, [B, H, W, C])
 
-    # Single device→host hop; return NCHW feature map.
+
+def tt_vit_backbone(pixel_values, backbone_params, device):
+    """Full SAM3 ViT backbone forward pass.
+
+    Args:
+        pixel_values: torch tensor (B, 3, 1008, 1008) - input images.
+        backbone_params: dict from preprocess_vit_backbone_weights().
+        device: ttnn device.
+
+    Returns:
+        List of torch tensors [feats] where feats is (B, 1024, 72, 72) in NCHW format.
+    """
+    tt_x = tt_patch_embed(
+        pixel_values,
+        backbone_params["patch_embed"]["weight"],
+        backbone_params["patch_embed"]["bias"],
+        device,
+    )
+
+    tt_x = _run_device_blocks(tt_x, backbone_params, device)
+
     x = ttnn.to_torch(tt_x).float()
     feats = x.permute(0, 3, 1, 2)  # NHWC → NCHW
     return [feats]
+
+
+class TracedViTBackbone:
+    """ViT backbone with trace capture for minimal dispatch overhead.
+
+    Usage:
+        traced = TracedViTBackbone(backbone_params, device)
+        # First call compiles + captures the trace:
+        feats = traced(pixel_values)
+        # Subsequent calls replay the trace:
+        feats = traced(pixel_values)
+        # Cleanup:
+        traced.release()
+    """
+
+    def __init__(self, backbone_params, device):
+        self.backbone_params = backbone_params
+        self.device = device
+        self.trace_id = None
+        self.trace_input = None
+        self.trace_output = None
+        self.patch_weight = backbone_params["patch_embed"]["weight"]
+        self.patch_bias = backbone_params["patch_embed"]["bias"]
+
+    def _prepare_host_input(self, pixel_values):
+        """Run patch embed on CPU, return host tensor ready for device copy."""
+        with torch.no_grad():
+            conv_out = F.conv2d(pixel_values, self.patch_weight, bias=self.patch_bias, stride=14, padding=0)
+        nhwc = conv_out.permute(0, 2, 3, 1).contiguous()
+        return ttnn.from_torch(nhwc, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    def _capture_trace(self, pixel_values):
+        """Compile the model, then capture an execution trace."""
+        host_input = self._prepare_host_input(pixel_values)
+
+        # Compilation pass — JIT-compiles all kernels.
+        compile_input = ttnn.to_device(host_input, self.device)
+        compile_out = _run_device_blocks(compile_input, self.backbone_params, self.device)
+        ttnn.deallocate(compile_out, force=True)
+        if compile_input.is_allocated():
+            ttnn.deallocate(compile_input, force=True)
+
+        # Trace capture pass — fresh input, record ops.
+        self.trace_input = ttnn.to_device(host_input, self.device)
+
+        self.trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+        self.trace_output = _run_device_blocks(self.trace_input, self.backbone_params, self.device)
+        ttnn.end_trace_capture(self.device, self.trace_id, cq_id=0)
+
+    def __call__(self, pixel_values):
+        """Run ViT backbone. First call captures trace, subsequent calls replay."""
+        if self.trace_id is None:
+            self._capture_trace(pixel_values)
+
+        host_input = self._prepare_host_input(pixel_values)
+        ttnn.copy_host_to_device_tensor(host_input, self.trace_input)
+        ttnn.execute_trace(self.device, self.trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(self.device)
+
+        x = ttnn.to_torch(self.trace_output).float()
+        feats = x.permute(0, 3, 1, 2)
+        return [feats]
+
+    def release(self):
+        if self.trace_id is not None:
+            ttnn.release_trace(self.device, self.trace_id)
+            self.trace_id = None
 
 
 # ---------------------------------------------------------------------------
@@ -335,7 +407,7 @@ def preprocess_vit_attention_weights(attn_module, num_heads=16, head_dim=64):
     qkv_w = attn_module.qkv.weight.data  # (dim*3, dim)
     qkv_w = _permute_qkv_for_rope(qkv_w, num_heads, head_dim)
     qkv_w = qkv_w.T.contiguous()  # (dim, dim*3) for ttnn linear
-    qkv_w_tt = ttnn.from_torch(qkv_w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    qkv_w_tt = ttnn.from_torch(qkv_w, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
 
     qkv_b = attn_module.qkv.bias.data  # (dim*3,)
     qkv_b = _permute_qkv_for_rope(qkv_b, num_heads, head_dim)
@@ -343,7 +415,7 @@ def preprocess_vit_attention_weights(attn_module, num_heads=16, head_dim=64):
     qkv_b_tt = ttnn.from_torch(qkv_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
     proj_w = attn_module.proj.weight.data.T.contiguous()
-    proj_w_tt = ttnn.from_torch(proj_w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    proj_w_tt = ttnn.from_torch(proj_w, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
 
     proj_b = attn_module.proj.bias.data.reshape(1, 1, -1)
     proj_b_tt = ttnn.from_torch(proj_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
@@ -377,32 +449,24 @@ def preprocess_vit_block_weights(block):
             'tt_params': dict of preprocessed ttnn/torch tensors for tt_vit_block
     """
     from models.demos.vision.segmentation.sam3.common.tt.ttnn_sam3_common import (
-        preprocess_linear_weight,
         preprocess_linear_bias,
+        preprocess_linear_weight,
     )
 
     # Attention weights
     attn_params = preprocess_vit_attention_weights(block.attn)
 
     # MLP weights
-    fc1_w = preprocess_linear_weight(block.mlp.fc1.weight.data)
+    fc1_w = preprocess_linear_weight(block.mlp.fc1.weight.data, dtype=ttnn.bfloat8_b)
     fc1_b = preprocess_linear_bias(block.mlp.fc1.bias.data)
-    fc2_w = preprocess_linear_weight(block.mlp.fc2.weight.data)
+    fc2_w = preprocess_linear_weight(block.mlp.fc2.weight.data, dtype=ttnn.bfloat8_b)
     fc2_b = preprocess_linear_bias(block.mlp.fc2.bias.data)
 
     # LN params as ttnn tensors for on-device LN.
-    norm1_w_tt = ttnn.from_torch(
-        block.norm1.weight.data.reshape(1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-    )
-    norm1_b_tt = ttnn.from_torch(
-        block.norm1.bias.data.reshape(1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-    )
-    norm2_w_tt = ttnn.from_torch(
-        block.norm2.weight.data.reshape(1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-    )
-    norm2_b_tt = ttnn.from_torch(
-        block.norm2.bias.data.reshape(1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-    )
+    norm1_w_tt = ttnn.from_torch(block.norm1.weight.data.reshape(1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    norm1_b_tt = ttnn.from_torch(block.norm1.bias.data.reshape(1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    norm2_w_tt = ttnn.from_torch(block.norm2.weight.data.reshape(1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    norm2_b_tt = ttnn.from_torch(block.norm2.bias.data.reshape(1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
     tt_params = {
         # Attention (ttnn tensors, not on device yet)
@@ -441,13 +505,20 @@ def move_block_params_to_device(block_params, device):
     """
     tt_params = block_params["tt_params"]
     for key in [
-        "attn_qkv_weight", "attn_qkv_bias",
-        "attn_proj_weight", "attn_proj_bias",
-        "rope_cos", "rope_sin",
-        "norm1_weight_tt", "norm1_bias_tt",
-        "norm2_weight_tt", "norm2_bias_tt",
-        "mlp_fc1_weight", "mlp_fc1_bias",
-        "mlp_fc2_weight", "mlp_fc2_bias",
+        "attn_qkv_weight",
+        "attn_qkv_bias",
+        "attn_proj_weight",
+        "attn_proj_bias",
+        "rope_cos",
+        "rope_sin",
+        "norm1_weight_tt",
+        "norm1_bias_tt",
+        "norm2_weight_tt",
+        "norm2_bias_tt",
+        "mlp_fc1_weight",
+        "mlp_fc1_bias",
+        "mlp_fc2_weight",
+        "mlp_fc2_bias",
     ]:
         if tt_params.get(key) is not None and isinstance(tt_params[key], ttnn.Tensor):
             tt_params[key] = ttnn.to_device(tt_params[key], device)
@@ -468,11 +539,7 @@ def preprocess_vit_backbone_weights(vit_model):
     # Patch embedding (kept as torch tensors for CPU conv)
     params["patch_embed"] = {
         "weight": vit_model.patch_embed.proj.weight.data.clone(),
-        "bias": (
-            vit_model.patch_embed.proj.bias.data.clone()
-            if vit_model.patch_embed.proj.bias is not None
-            else None
-        ),
+        "bias": (vit_model.patch_embed.proj.bias.data.clone() if vit_model.patch_embed.proj.bias is not None else None),
     }
 
     # Position embeddings (torch tensor)
@@ -512,6 +579,7 @@ def move_backbone_params_to_device(backbone_params, device, grid_hw=(72, 72)):
     # Precompute pos_embed_2d (fixed grid_hw) and upload.
     if backbone_params.get("pos_embed") is not None:
         from sam3.model.vitdet import get_abs_pos
+
         pe = get_abs_pos(
             backbone_params["pos_embed"],
             backbone_params.get("pretrain_use_cls_token", True),
@@ -529,11 +597,15 @@ def move_backbone_params_to_device(backbone_params, device, grid_hw=(72, 72)):
     if backbone_params.get("ln_pre_weight") is not None:
         backbone_params["ln_pre_weight_tt"] = ttnn.from_torch(
             backbone_params["ln_pre_weight"].reshape(1, -1),
-            dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
         )
         backbone_params["ln_pre_bias_tt"] = ttnn.from_torch(
             backbone_params["ln_pre_bias"].reshape(1, -1),
-            dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
         )
     else:
         backbone_params["ln_pre_weight_tt"] = None
