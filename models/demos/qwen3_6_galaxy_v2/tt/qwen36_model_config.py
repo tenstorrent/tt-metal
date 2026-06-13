@@ -729,6 +729,46 @@ class TtQwen36ModelArgs(TtModelArgs):
             # convention as W2_RING_MEMCFG above)
             n=self.dim_per_tp,  # 1280
         )
+        # ------------------------------------------------------------------
+        # L1 WIDTH-SHARDED ring-40 weight memcfgs (the fused-FF12/FF2 fix).
+        #
+        # The non-prefetcher ``gather_in0`` ring matmul reads its in1 weight as a
+        # WIDTH-SHARDED L1 tensor laid out CONTIGUOUSLY over the 40 ring cores
+        # (``[K, N/40]`` per core) — EXACTLY like the proven ff2_qwen / ring-40
+        # all_gather_matmul wrapper test's ``in1_sharded_mem_config``. The
+        # DRAM-sharded ``W1W3_RING40_MEMCFG`` / ``W2_RING40_MEMCFG`` layouts above
+        # (8 DRAM banks, ``create_dram_sharded_mem_config`` N-pad to a multiple of
+        # ``tile_size*dram_cores`` = 256) do NOT align with the 40-core × ``per_core_N``
+        # ring blocking, so the matmul reads scrambled / out-of-range columns and the
+        # output is garbage past the first few cores (FF12 micro-test: per-64-col
+        # windows PCC 0.9999 but the aggregate 0.30 — a column-order scramble).
+        # Building the weight L1 width-sharded over RING40_MM_CRS (N zero-padded to
+        # the ring width) restores PCC 0.9999 across all 32 devices.
+        #
+        # FF12 (w1/w3): K=1280, N=2560 -> [1280, 64] per core × 40 = 2560.
+        # FF2  (w2):    K=2560, N=1280 -> [2560, 32] per core × 40 = 1280. The native
+        #               w2 K is 2176; it is zero-padded to 2560 at load (the FF2 input
+        #               gathered K is likewise 2560-padded, so the K-tail zeros cancel).
+        self.model_config["W1W3_RING40_L1_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ring40_core_range_set,
+                [self.dim_per_tp, ff_n_ring40 // RING40_SIZE],  # [1280, 64]
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+        self.model_config["W2_RING40_L1_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ring40_core_range_set,
+                [ff_n_ring40, self.dim_per_tp // RING40_SIZE],  # [2560, 32]
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+        # Ring-40 padded N (FF12) / K (FF2) for the L1 weight load zero-pad.
+        self.model_config["FF_N_RING40"] = ff_n_ring40  # 2560
         self.model_config["FF1_3_RING40_PROGCFG"] = self.matmul_1d_ring_config(
             1,
             32,
@@ -773,6 +813,19 @@ class TtQwen36ModelArgs(TtModelArgs):
             strategy=ttnn.ShardStrategy.WIDTH,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
+        )
+        # FF12 ring-40 reduce-scatter output: the w1/w3 partial sum (N=2560) is
+        # reduce-scattered across cluster_axis=1 (4 cols), landing at 2560/4 = 640
+        # wide per device. Mirrors the ring-24 ``REDUCE_SCATTER_OUT_MEMCFG`` (a
+        # 30-core band, shard [32,32] = 960 = 3840/4) but for the ring-40 FF12
+        # width: a 20-core band, shard [32,32] = 640. (20×32 = 640 ✓, tile-aligned.)
+        FF12_RS_OUT_RING40_CRS = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+            self.start_core, 20, self.sub_core_grids, row_wise=True
+        )
+        self.model_config["REDUCE_SCATTER_OUT_RING40_FF12_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(FF12_RS_OUT_RING40_CRS, [32, 32], ttnn.ShardOrientation.ROW_MAJOR),
         )
 
         # ------------------------------------------------------------------

@@ -126,24 +126,62 @@ class TtLlamaMLP(LightweightModule):
         # *_interleaved untouched. Only allocated in decode mode (the ring-40
         # config keys only exist for decode).
         if tt_ccl.mode == "decode":
-            w1_w3_ring40_mem_config = self.model_config["W1W3_RING40_MEMCFG"]
-            w2_ring40_mem_config = self.model_config["W2_RING40_MEMCFG"]
-            as_sharded_tensor_ring40 = lambda name, type, dim, mem_config: ttnn.as_tensor(
-                torch_weight(name[:2]).unsqueeze(0).unsqueeze(0),  # Grab only the wX part of the name
+            # The non-prefetcher gather_in0 ring matmul needs its in1 weight L1
+            # WIDTH-SHARDED contiguously over the 40 ring cores (NOT DRAM-sharded;
+            # the DRAM bank layout scrambles columns for this kernel — see FF12
+            # micro-test: per-64-col windows PCC 0.9999 but aggregate 0.30). Build the
+            # ring-40 weights by loading the NATIVE per-device weight DRAM-INTERLEAVED
+            # (preserves logical column order under ShardTensor2dMesh, unlike the
+            # DRAM-bank-sharded layout), then resharding to L1 WIDTH-SHARDED over
+            # RING40_MM_CRS — the reshard zero-pads N (w1/w3) / K (w2) from the native
+            # 2176 up to the ring-40 width (2560). This is the exact in1 layout the
+            # proven ring-40 all_gather_matmul wrapper test uses.
+            # The non-prefetcher gather_in0 ring matmul reads its in1 weight L1
+            # WIDTH-SHARDED contiguously over the 40 ring cores (the
+            # DRAM-BANK-sharded W1W3_RING40_MEMCFG layout scrambles columns for this
+            # kernel — FF12 micro-test: per-64-col windows PCC 0.9999, aggregate 0.30).
+            # But keeping the ring-40 weights L1-RESIDENT clashes with the prefill
+            # matmul circular buffers (L1 OOM). So store the ring-40 weights
+            # DRAM-INTERLEAVED here (DRAM-interleaved preserves logical column order
+            # under ShardTensor2dMesh, unlike bank-sharded), N/K zero-padded to the
+            # ring-40 width 2560, and reshard them to L1 width-sharded JUST-IN-TIME
+            # inside ``_mlp_decode_qwen36`` (fused branch only).
+            _ring40_w = self.model_config["FF_N_RING40"]  # 2560 (per-device ring width)
+            _ax0 = args.cluster_shape[0]  # 8 (mesh row axis; dims[0] of ShardTensor2dMesh)
+
+            def _pad_ring40(name, dim):
+                # ``torch_weight`` returns the transposed weight ``[in(K), out(N)]``.
+                # ShardTensor2dMesh dims=(d0,d1): d0 -> mesh axis-0 (8 rows). The
+                # per-device matmul dim (N for w1/w3, K for w2) is split across axis-0,
+                # native 2176 per device. Pad the FULL tensor on that axis by
+                # ``(2560 - 2176) * 8`` so each device lands at 2560.
+                w = torch_weight(name[:2])
+                d0 = dim[0]
+                native_per_dev = w.shape[d0] // _ax0
+                if native_per_dev < _ring40_w:
+                    pad_full = (_ring40_w - native_per_dev) * _ax0
+                    if d0 == -1:
+                        w = torch.nn.functional.pad(w, (0, pad_full))
+                    else:  # d0 == -2
+                        w = torch.nn.functional.pad(w, (0, 0, 0, pad_full))
+                return w.unsqueeze(0).unsqueeze(0)
+
+            as_interleaved_ring40 = lambda name, type, dim: ttnn.as_tensor(
+                _pad_ring40(name, dim),
                 dtype=ttnn.bfloat16 if _mlp_force_bf16 else type,
                 device=self.mesh_device,
                 mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dim, mesh_shape=args.cluster_shape),
                 layout=ttnn.TILE_LAYOUT,
-                memory_config=mem_config,
-                cache_file_name=cache_name(name + "_ring40"),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cache_file_name=cache_name(name + "_ring40_ildram2560"),
             )
-            self.w1_ring40 = as_sharded_tensor_ring40(
-                "w1_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, w1_dim, w1_w3_ring40_mem_config
+            self.w1_ring40 = as_interleaved_ring40(
+                "w1_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, w1_dim
             )
-            self.w3_ring40 = as_sharded_tensor_ring40(
-                "w3_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, w1_dim, w1_w3_ring40_mem_config
+            self.w3_ring40 = as_interleaved_ring40(
+                "w3_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, w1_dim
             )
-            self.w2_ring40 = as_sharded_tensor_ring40("w2_sharded", ttnn.bfloat8_b, w2_dim, w2_ring40_mem_config)
+            self.w2_ring40 = as_interleaved_ring40("w2_sharded", ttnn.bfloat8_b, w2_dim)
 
             self.prefetch(prefetcher_setup, tt_ccl)
 

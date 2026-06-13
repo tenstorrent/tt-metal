@@ -213,41 +213,242 @@ class TtTransformerBlock(LightweightModule):
         # matches our prefill MLP's effective HiFi4 path — kept as the safe
         # default to remove one variable from future bisection.
         compute_kernel = self.args.compute_kernel_config_hifi4
-        # 1. gate_proj (w1) and up_proj (w3): [B, 1, T, H/4] × [H/4, hidden_per_tp]
-        w1_out = ttnn.linear(
-            ff_in_sharded,
-            mlp.w1_interleaved,
-            compute_kernel_config=compute_kernel,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        w3_out = ttnn.linear(
-            ff_in_sharded,
-            mlp.w3_interleaved,
-            compute_kernel_config=compute_kernel,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        # 2. Reduce-scatter across cols (cluster_axis=1, partial sum on K dim).
-        #    Skip the persistent FFx prefill buffer (seqlen=1 not in support).
-        w1_red = mlp.tt_ccl.line_reduce_scatter(
-            w1_out,
-            cluster_axis=1,
-            num_links=min(3, self.model_config["GALAXY_NUM_LINKS"]),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            dim=3,
-            batch_size=batch_size,
-        )
-        w1_out.deallocate(True)
-        w3_red = mlp.tt_ccl.line_reduce_scatter(
-            w3_out,
-            cluster_axis=1,
-            num_links=min(3, self.model_config["GALAXY_NUM_LINKS"]),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            dim=3,
-            batch_size=batch_size,
-        )
-        w3_out.deallocate(True)
+        import os as _os_fuse
+
+        _fuse_rs = (not self.model_config.get("USE_PREFETCHER", False)) and _os_fuse.environ.get(
+            "QWEN36_FUSE_RS_MATMUL", "0"
+        ) == "1"
+
+        if _fuse_rs:
+            # ============================================================
+            # RING-40 fused decode MLP (QWEN36_FUSE_RS_MATMUL=1, default OFF).
+            #
+            # FF12: w1/w3 matmul + reduce_scatter on a 40-core ring (M=32,
+            #   K=1280, N=2560). Each col holds a partial K-sum; the RS along
+            #   cluster_axis=1 (4 cols) yields the complete 2560 split to
+            #   2560/4 = 640 wide per device.
+            # SwiGLU on the 640-wide tensors.
+            # FF2: ONE fused all_gather_matmul (cluster_axis=1) gathers the 640
+            #   col-shards back to 2560 and matmuls mlp.w2_ring40 (K=2560,
+            #   N=1280) in a single op (PCC 0.99999 ring-40 validated wrapper).
+            # Final: line_all_reduce(cluster_axis=0) over rows -> complete
+            #   col-sharded dim_per_tp output, then to DRAM (mirrors the
+            #   unfused else-branch's final FF2 all_reduce exactly).
+            #
+            # The ring program config (out_subblock>1) requires NON-fp32-dest-acc
+            # regs, so use HiFi2 (matches the proven ring-40 wrapper test's
+            # compute_kernel_config: HiFi2 + fp32_dest_acc_en=True is the
+            # validated choice) instead of this path's default HiFi4.
+            # ============================================================
+            fused_ck = self.args.compute_kernel_config_hifi2
+            mc = self.model_config
+            wsd = mlp.tt_ccl.worker_sub_device_id
+
+            # DIAGNOSTIC (QWEN36_FUSE_SYNC_DBG=1): fence after each CCL op so the
+            # log itself bisects which collective deadlocks (the "before X" line
+            # prints but "after X" never does for the stuck op). Also a candidate
+            # FIX: if fencing makes the fused sequence complete, the root cause is
+            # the ops being issued without synchronization stepping on shared
+            # tt_ccl semaphores/buffers.
+            _sync_dbg = _os_fuse.environ.get("QWEN36_FUSE_SYNC_DBG", "0") == "1"
+
+            def _sync(tag):
+                if _sync_dbg:
+                    print(f"[fuse-sync] before {tag}", flush=True)
+                    ttnn.synchronize_device(mlp.tt_ccl.mesh_device, sub_device_ids=[wsd])
+                    print(f"[fuse-sync] after {tag}", flush=True)
+
+            # ring-40 FF12 input layout: K=1280 width-sharded over 40 ring cores.
+            ring_in = ttnn.to_memory_config(ff_in_sharded, mc["SHARDED_FF12_RING40_MEMCFG"])
+            # JIT-reshard the DRAM-interleaved (column-order-preserving), N/K-padded
+            # ring-40 weights to L1 WIDTH-SHARDED over the 40 ring cores — the layout
+            # the gather_in0 ring matmul requires (FF12 micro-test: PCC 0.9999). They
+            # are NOT kept L1-resident (that clashes with the prefill matmul CBs); the
+            # reshard is per-decode-call and the L1 copies are freed at branch exit.
+            w1_ring40_l1 = ttnn.to_memory_config(mlp.w1_ring40, mc["W1W3_RING40_L1_MEMCFG"])
+            w3_ring40_l1 = ttnn.to_memory_config(mlp.w3_ring40, mc["W1W3_RING40_L1_MEMCFG"])
+            w2_ring40_l1 = ttnn.to_memory_config(mlp.w2_ring40, mc["W2_RING40_L1_MEMCFG"])
+            # FF12 = UNFUSED at ring-40: plain w1/w3 ring matmuls (N=2560 partial-K)
+            # + two line_reduce_scatter. The fused matmul_line_reduce_scatter
+            # DEADLOCKS in the full-forward context (it pulls its interim from the
+            # shared reduce_scatter_buffers pool, whose state the attention layer's
+            # CCL ops have advanced — passes only with fresh pools, e.g. the FF12
+            # micro-test). line_reduce_scatter is the proven decode RS op (used by
+            # the unfused else-branch in full forward, and validated at ring-40 640
+            # in the FF12 micro-test for w3). FF2 stays fused (all_gather_matmul) —
+            # that is the headline ~32% AllGather win; the FF12 RS fusion was minor.
+            w1_raw = ttnn.linear(
+                ring_in,
+                w1_ring40_l1,
+                compute_kernel_config=fused_ck,
+                dtype=ttnn.bfloat8_b,
+                program_config=mc["FF1_3_RING40_PROGCFG"],
+                memory_config=mc["SHARDED_FF12_OUT_RING40_MEMCFG"],
+                sub_device_id=wsd,
+            )
+            w3_raw = ttnn.linear(
+                ring_in,
+                w3_ring40_l1,
+                compute_kernel_config=fused_ck,
+                dtype=ttnn.bfloat8_b,
+                program_config=mc["FF1_3_RING40_PROGCFG"],
+                memory_config=mc["SHARDED_FF12_OUT_RING40_MEMCFG"],
+                sub_device_id=wsd,
+            )
+            ring_in.deallocate(True)
+            w1_ring40_l1.deallocate(True)
+            w3_ring40_l1.deallocate(True)
+            w1_red_s = mlp.tt_ccl.line_reduce_scatter(
+                w1_raw,
+                cluster_axis=1,
+                num_links=mc["GALAXY_NUM_LINKS"],
+                memory_config=mc["REDUCE_SCATTER_OUT_RING40_FF12_MEMCFG"],
+                use_noc1_only=False,
+            )
+            w1_raw.deallocate(True)
+            _sync("FF12_w1_line_reduce_scatter")
+            w3_red_s = mlp.tt_ccl.line_reduce_scatter(
+                w3_raw,
+                cluster_axis=1,
+                num_links=mc["GALAXY_NUM_LINKS"],
+                memory_config=mc["REDUCE_SCATTER_OUT_RING40_FF12_MEMCFG"],
+                use_noc1_only=False,
+            )
+            w3_raw.deallocate(True)
+            _sync("FF12_w3_line_reduce_scatter")
+            # SwiGLU silu(w1) * w3 on the 640-wide (post-RS) tensors.
+            ff_ring = ttnn.mul(
+                w1_red_s,
+                w3_red_s,
+                input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+                dtype=ttnn.bfloat8_b,
+                memory_config=mc["REDUCE_SCATTER_OUT_RING40_FF12_MEMCFG"],
+            )
+            w1_red_s.deallocate(True)
+            w3_red_s.deallocate(True)
+
+            # ---- FF2: single fused all_gather_matmul (ring-40, PCC-validated) ----
+            # Match the proven ring-40 wrapper test's config choices EXACTLY:
+            #   * AG input layout = 30-core WIDTH_SHARDED [M=32, 32] over the
+            #     test's _SUB_DEVICE_CRS-derived band (build it inline; reshard
+            #     the 640-wide SwiGLU output to it so the wrapper sees the
+            #     validated input layout).
+            #   * AG output (interim) = 4-core [M=32, 640] on RING40_AG_INTERIM_CRS.
+            #   * mm output = REDUCE_SCATTER_OUT_RING40_MEMCFG ([M=32, 32] on the
+            #     40 RING40_MM_CRS cores), program_config = FF2_RING40_PROGCFG.
+            ag_in_crs = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                ttnn.CoreCoord(1, 0),
+                30,
+                ttnn.CoreRangeSet(
+                    [
+                        ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                        ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+                    ]
+                ),
+                row_wise=True,
+            )
+            ag_in_memcfg = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(ag_in_crs, [32, 32], ttnn.ShardOrientation.ROW_MAJOR),
+            )
+            ag_out_memcfg = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(mc["RING40_AG_INTERIM_CRS"], [32, 640], ttnn.ShardOrientation.ROW_MAJOR),
+            )
+            ff_ag_in = ttnn.to_memory_config(ff_ring, ag_in_memcfg)
+            ff_ring.deallocate(True)
+            w2_out_ring = mlp.tt_ccl.all_gather_matmul(
+                ff_ag_in,
+                w2_ring40_l1,
+                dim=3,
+                cluster_axis=1,
+                num_links=mc["GALAXY_NUM_LINKS"],
+                ag_memory_config=ag_out_memcfg,
+                mm_memory_config=mc["REDUCE_SCATTER_OUT_RING40_MEMCFG"],
+                program_config=mc["FF2_RING40_PROGCFG"],
+                compute_kernel_config=fused_ck,
+                dtype=ttnn.bfloat8_b,
+                global_cb=None,
+                buffer_key="FF2_AG_MM_DECODE",
+            )
+            ff_ag_in.deallocate(True)
+            w2_ring40_l1.deallocate(True)
+            _sync("FF2_all_gather_matmul")
+            # Final FF2 collective: all_reduce over rows (cluster_axis=0), then
+            # to DRAM. Mirror the unfused else-branch's final all_reduce EXACTLY
+            # (DRAM memcfg, buffer_key="FF2", same batch_size/num_links).
+            import os as _os_far
+
+            try:
+                _w2_num_links = int(
+                    _os_far.environ.get(
+                        "QWEN36_CCL_NUM_LINKS_MLP_W2",
+                        _os_far.environ.get("QWEN36_CCL_NUM_LINKS", "1"),
+                    )
+                )
+            except ValueError:
+                _w2_num_links = 1
+            _w2_links = min(3, _w2_num_links)
+            # The all_gather_matmul output ``w2_out_ring`` is L1 WIDTH-SHARDED
+            # (REDUCE_SCATTER_OUT_RING40_MEMCFG). A SHARDED input routes
+            # line_all_reduce(decode) through the persistent-buffer
+            # all_reduce_async path, which does not support a DRAM-INTERLEAVED
+            # output (TT_FATAL: Unsupported memory layout ... INTERLEAVED). The
+            # proven unfused else-branch feeds the all-reduce a DRAM-INTERLEAVED
+            # ``w2_out`` (which takes the DRAM RS+AG decode decomposition, the
+            # same math as the coherent inline demo). Mirror that here: convert
+            # to DRAM-interleaved BEFORE the all-reduce.
+            w2_dram = ttnn.to_memory_config(w2_out_ring, ttnn.DRAM_MEMORY_CONFIG)
+            w2_out_ring.deallocate(True)
+            w2_red = mlp.tt_ccl.line_all_reduce(
+                w2_dram,
+                cluster_axis=0,
+                num_links=_w2_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                buffer_key="FF2",
+                batch_size=batch_size,
+            )
+            w2_dram.deallocate(True)
+            _sync("FF2_line_all_reduce")
+            return w2_red
+        else:
+            # 1. gate_proj (w1) and up_proj (w3): [B, 1, T, H/4] × [H/4, hidden_per_tp]
+            w1_out = ttnn.linear(
+                ff_in_sharded,
+                mlp.w1_interleaved,
+                compute_kernel_config=compute_kernel,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            w3_out = ttnn.linear(
+                ff_in_sharded,
+                mlp.w3_interleaved,
+                compute_kernel_config=compute_kernel,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            # 2. Reduce-scatter across cols (cluster_axis=1, partial sum on K dim).
+            #    Skip the persistent FFx prefill buffer (seqlen=1 not in support).
+            w1_red = mlp.tt_ccl.line_reduce_scatter(
+                w1_out,
+                cluster_axis=1,
+                num_links=min(3, self.model_config["GALAXY_NUM_LINKS"]),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dim=3,
+                batch_size=batch_size,
+            )
+            w1_out.deallocate(True)
+            w3_red = mlp.tt_ccl.line_reduce_scatter(
+                w3_out,
+                cluster_axis=1,
+                num_links=min(3, self.model_config["GALAXY_NUM_LINKS"]),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dim=3,
+                batch_size=batch_size,
+            )
+            w3_out.deallocate(True)
         # 3. SwiGLU: silu(w1) * w3
         ff = ttnn.mul(
             w1_red,
@@ -482,7 +683,12 @@ class TtTransformerBlock(LightweightModule):
                 _ais = ttnn.to_memory_config(attn_in_sharded, ttnn.DRAM_MEMORY_CONFIG)
                 attn_in_sharded.deallocate(True)
                 _B_n, _, _T_n, _H_n = list(_ais.shape)
-                if _T_n != 1:
+                # BATCH-32: the norm ran at 32 rows (rms_allgather). At batch-1 all 32 rows hold the
+                # same token, so we drop to row 0 (the attention is single-user). At batch>1 the N
+                # users live in the row slot and MUST survive — the GDN/full-attn decode now extract
+                # the B users from the R-row slot (forward_decode asserts R>=max_batch_size), so keep
+                # all 32 rows. Guarded on batch_size==1 -> single-user path byte-identical.
+                if _T_n != 1 and batch_size == 1:
                     _ais_r0 = ttnn.slice(_ais, [0, 0, 0, 0], [_B_n, 1, 1, _H_n], memory_config=ttnn.DRAM_MEMORY_CONFIG)
                     _ais.deallocate(True)
                     _ais = _ais_r0
@@ -508,7 +714,11 @@ class TtTransformerBlock(LightweightModule):
                 if len(list(attn_out.shape)) == 3:
                     _B_a, _T_a, _H_a = list(attn_out.shape)
                     attn_out = ttnn.reshape(attn_out, ttnn.Shape([_B_a, 1, _T_a, _H_a]))
-                if mode == "decode":
+                # BATCH-32 GDN decode: at batch>1 the N users live in dim-2 and MUST survive to the
+                # residual add (forward_decode returns the [1,1,B,H] packed layout). Only collapse to
+                # T=1 in the single-user path (mirrors the full-attn guard below). batch_size==1 ->
+                # byte-identical.
+                if mode == "decode" and batch_size == 1:
                     _B_a, _, _T_a, _H_a = list(attn_out.shape)
                     if _T_a != 1:
                         attn_out_t1 = ttnn.slice(

@@ -101,6 +101,14 @@ def test_ring40_mlp_config_shapes(bh_glx_mesh):
     # reduce-scatter out: FF2 N=1280 over 40 cores -> width 32
     assert rs_out.shard_spec.shape == [32, _FF2_RING40_N // 40], rs_out.shard_spec.shape
 
+    # FF12 reduce-scatter out (NEW): w1/w3 partial sum N=2560 reduce-scattered
+    # across cluster_axis=1 (4 cols) -> 640 wide, on a 20-core band, shard [32,32]
+    # (20 x 32 = 640, tile-aligned).
+    ff12_rs_out = mc["REDUCE_SCATTER_OUT_RING40_FF12_MEMCFG"]
+    assert ff12_rs_out.shard_spec.shape == [32, 32], ff12_rs_out.shard_spec.shape
+    assert ff12_rs_out.shard_spec.num_cores() == 20, ff12_rs_out.shard_spec.num_cores()
+    assert ff12_rs_out.shard_spec.shape[1] * 20 == _FF_RING40_N // 4 == 640, ff12_rs_out.shard_spec.shape
+
     print(
         f"[ring40_cfg] OK grids ff13=({ff13.compute_with_storage_grid_size.x},{ff13.compute_with_storage_grid_size.y}) "
         f"ff2=({ff2.compute_with_storage_grid_size.x},{ff2.compute_with_storage_grid_size.y}) "
