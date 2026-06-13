@@ -65,7 +65,7 @@ struct dfb_init_entry_hdr_t {
     uint8_t threshold;
     uint8_t num_entries_per_txn_id;
     uint8_t num_entries_per_txn_id_per_tc;
-    uint8_t producer_ready_off;
+    uint8_t producer_signal_bit;  // bit position in dfb_signal[dfb_id]; 0xFF if consumer
 };
 
 FORCE_INLINE dfb_init_entry_hdr_t dfb_read_init_entry_header(uintptr_t entry_addr) {
@@ -81,15 +81,8 @@ FORCE_INLINE dfb_init_entry_hdr_t dfb_read_init_entry_header(uintptr_t entry_add
     h.threshold = dfb_read_blob_u8(entry_addr, 14);
     h.num_entries_per_txn_id = dfb_read_blob_u8(entry_addr, 15);
     h.num_entries_per_txn_id_per_tc = dfb_read_blob_u8(entry_addr, 16);
-    h.producer_ready_off = dfb_read_blob_u8(entry_addr, 17);
+    h.producer_signal_bit = dfb_read_blob_u8(entry_addr, 17);
     return h;
-}
-
-FORCE_INLINE void dfb_read_wait_entry(uintptr_t wait_entry_addr, uint8_t* num_producers, uint8_t* ready_offs) {
-    *num_producers = dfb_read_blob_u8(wait_entry_addr, 0);
-    for (uint8_t r = 0; r < dfb::MAX_NUM_TILE_COUNTERS_TO_RR; r++) {
-        ready_offs[r] = dfb_read_blob_u8(wait_entry_addr, 1u + r);
-    }
 }
 
 FORCE_INLINE volatile uint32_t* dfb_init_timing_slot_words(uint8_t slot) {
@@ -165,76 +158,61 @@ FORCE_INLINE void copy_txn_descriptor_32(
     d[7] = s[7];
 }
 
-// Poll until all producers in this hart's wait blob have written their ready byte.
-// wait_blob_ptr points to the first wait entry immediately after the init entries.
-// num_wait = popcount(participation_mask[hart_u8]). Uses uncached reads for ready/ISR flags.
-FORCE_INLINE void wait_all_tcs_initialized(
-    uint32_t tt_l1_ptr* dfb_config_base,
-    uint8_t hart_u8,
-    const volatile uint8_t* wait_blob_ptr) {
-    WAYPOINT("TCIW");
+// Poll until all producers for DFB `dfb_id` have published their signal byte and
+// (for DMs with implicit sync) DM0 has armed the ISR.
+//
+// Signal region layout at dfb_signal_region_off:
+//   uint8_t  dfb_signal[NUM_DFBS * MAX_NUM_TILE_COUNTERS_TO_RR]  — per-producer byte slots (192B)
+//   uint32_t dfb_expected_signal[NUM_DFBS]                        — host-computed bitmask (128B)
+//
+// Producer i of DFB d writes byte 1 to slot [d * MAX_PRODUCERS + i] (plain volatile, no AMO).
+// Consumer reads dfb_expected_signal[d] (bitmask), then polls each set bit's byte slot.
+//
+// Runs for DMs unconditionally, and for TRISCs only when compiling for unpack or pack.
+// Math (TRISC1) and TRISC3 compile this to an empty function so they never spin on
+// uninitialised config data and never block DM0's wait_subordinates().
+FORCE_INLINE void dfb_ensure_ready(uintptr_t config_cached, uint8_t dfb_id) {
+#if defined(COMPILE_FOR_TRISC) && !defined(UCK_CHLKC_UNPACK) && !defined(UCK_CHLKC_PACK)
+    return;
+#endif
+    const uint32_t sig_off = *dfb_l1_uncached_u32_ptr(
+        config_cached + offsetof(dfb_global_header_t, dfb_signal_region_off));
 
-    const uintptr_t config_cached = reinterpret_cast<uintptr_t>(dfb_config_base);
-    const uint32_t participation_mask = dfb_read_participation_mask(config_cached, hart_u8);
+    // dfb_expected_signal[dfb_id] sits after all producer byte slots.
+    constexpr uint32_t kSlotStride = static_cast<uint32_t>(::dfb::MAX_NUM_TILE_COUNTERS_TO_RR);
+    constexpr uint32_t kExpectedBase = static_cast<uint32_t>(::dfb::NUM_DFBS) * kSlotStride;
+    const volatile uint32_t* exp_ptr = reinterpret_cast<const volatile uint32_t*>(
+        dfb_l1_uncached_byte_ptr(
+            config_cached + sig_off + kExpectedBase + static_cast<uint32_t>(dfb_id) * sizeof(uint32_t)));
 
-    const bool need_isr_gate =
+    const uint32_t expected = *exp_ptr;
+    if (expected == 0) { return; }
+
 #ifndef COMPILE_FOR_TRISC
+    const bool need_isr_gate =
         (*dfb_l1_uncached_byte_ptr(config_cached + offsetof(dfb_global_header_t, has_dm0_isr)) != 0);
-#else
-        false;
+    const volatile uint8_t* isr_ready_ptr =
+        dfb_l1_uncached_byte_ptr(config_cached + offsetof(dfb_global_header_t, dm0_isr_ready));
 #endif
 
-    const uint8_t num_wait = dfb_hart_participation_count(participation_mask);
-    const uintptr_t wait_base_addr = reinterpret_cast<uintptr_t>(wait_blob_ptr);
-
-    // One slot per possible DFB on this core (case-five has 12; spec allows up to NUM_DFBS).
-    constexpr uint8_t kMaxWaitEntries = dfb::NUM_DFBS;
-    uint8_t wait_np[kMaxWaitEntries] = {};
-    uint8_t wait_ready_offs[kMaxWaitEntries][dfb::MAX_NUM_TILE_COUNTERS_TO_RR] = {};
-    for (uint8_t w = 0; w < num_wait && w < kMaxWaitEntries; w++) {
-        const uintptr_t we_addr =
-            wait_base_addr + static_cast<uintptr_t>(w) * sizeof(dfb_hart_wait_entry_t);
-        dfb_read_wait_entry(we_addr, &wait_np[w], wait_ready_offs[w]);
-    }
-
-    // Producer-ready bytes: one byte per (DFB, producer_hart), written via uncached alias.
-    const uint32_t producer_ready_region_off = *dfb_l1_uncached_u32_ptr(
-        config_cached + offsetof(dfb_global_header_t, producer_ready_region_off));
-    const volatile uint8_t* ready_base = dfb_l1_uncached_byte_ptr(
-        config_cached + producer_ready_region_off);
-    const volatile uint8_t* isr_ready_ptr = dfb_l1_uncached_byte_ptr(
-        config_cached + offsetof(dfb_global_header_t, dm0_isr_ready));
-
-    uint32_t ready_mask = 0;
-    const uint32_t all_mask = num_wait >= 32u ? ~0u : ((1u << num_wait) - 1u);
-
-    while (true) {
-        uint32_t pending = all_mask & ~ready_mask;
-        while (pending) {
-            const uint8_t w = static_cast<uint8_t>(__builtin_ctz(pending));
-            pending &= pending - 1u;
-            const uint8_t np = wait_np[w];
-            bool all_ready = false;
-            if (np > 0 && np <= dfb::MAX_NUM_TILE_COUNTERS_TO_RR) {
-                all_ready = true;
-                for (uint8_t r = 0; r < np; r++) {
-                    if (ready_base[wait_ready_offs[w][r]] == 0) {
-                        all_ready = false;
-                        break;
-                    }
-                }
-            }
-            if (all_ready) {
-                ready_mask |= (1u << w);
-                WAYPOINT("PDI");
-            } else {
-                WAYPOINT("PND");
-            }
+    WAYPOINT("DFW");
+    // Poll each producer's byte slot; remove from remaining when non-zero.
+    uint32_t remaining = expected;
+    while (remaining != 0u) {
+        const uint8_t bit = static_cast<uint8_t>(__builtin_ctz(remaining));
+        const volatile uint8_t* slot = dfb_l1_uncached_byte_ptr(
+            config_cached + sig_off +
+            static_cast<uint32_t>(dfb_id) * kSlotStride + bit);
+        if (*slot != 0u) {
+            remaining &= remaining - 1u;
         }
-        const bool isr_ready = !need_isr_gate || *isr_ready_ptr == 1u;
-        if (ready_mask == all_mask && isr_ready) { break; }
     }
-    WAYPOINT("TCID");
+#ifndef COMPILE_FOR_TRISC
+    if (need_isr_gate) {
+        while (*isr_ready_ptr != 1u) {}
+    }
+#endif
+    WAYPOINT("DFD");
 }
 
 inline uint32_t rdcycle() {
@@ -486,7 +464,8 @@ FORCE_INLINE void setup_dfb_remapper(uint32_t tt_l1_ptr* dfb_config_base, uint32
 #endif  // !COMPILE_FOR_TRISC
 
 // DM0/DM1 coordinators run setup_dfb_implicit_sync / setup_dfb_remapper from DM firmware (no TC wait).
-// DM2-7 + TRISC: walk this hart's pre-computed sequential init blob, then wait_all_tcs_initialized.
+// DM2-7 + TRISC: walk this hart's pre-computed sequential init blob; TC readiness is published
+// via atomic OR into dfb_signal[dfb_id] and consumers poll in DataflowBuffer::DataflowBuffer().
 FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base, uint32_t /*local_dfb_mask*/) {
     const uint32_t start_time = rdcycle();
 
@@ -500,9 +479,11 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
 #endif
 
     const uintptr_t config_cached = reinterpret_cast<uintptr_t>(dfb_config_base);
+    g_dfb_config_base_addr = config_cached;
+
     const uint32_t participation_mask = dfb_read_participation_mask(config_cached, hart_u8);
-    const uint32_t producer_ready_region_off = *dfb_l1_uncached_u32_ptr(
-        config_cached + offsetof(dfb_global_header_t, producer_ready_region_off));
+    const uint32_t dfb_signal_region_off = *dfb_l1_uncached_u32_ptr(
+        config_cached + offsetof(dfb_global_header_t, dfb_signal_region_off));
 
     // One load: this hart's blob offset from the header — no dependent table arithmetic.
     const volatile uint8_t* p = reinterpret_cast<const volatile uint8_t*>(
@@ -644,21 +625,25 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
             }
             total_tc_hw += rdcycle() - tc_hw_start;
 
-            volatile uint8_t* ready_byte = dfb_l1_uncached_byte_ptr(
-                config_cached + producer_ready_region_off + eh.producer_ready_off);
-            *ready_byte = 1u;
-            asm volatile("fence w, w" ::: "memory");
+            // Publish readiness: write byte 1 into this producer's unique slot.
+            // Each producer owns its own byte slot so no atomics are needed.
+            // TC HW init above goes through RoCC (co-processor); the consumer reads TC state
+            // via its own RoCC reads, not through L1 — no hardware memory fence is required.
+            // A compiler barrier suffices to prevent the signal write from being hoisted
+            // before the TC init instructions.
+            volatile uint8_t* sig_slot = dfb_l1_uncached_byte_ptr(
+                config_cached + dfb_signal_region_off +
+                static_cast<uint32_t>(eh.logical_dfb_id) * ::dfb::MAX_NUM_TILE_COUNTERS_TO_RR +
+                static_cast<uint32_t>(eh.producer_signal_bit));
+            asm volatile("" ::: "memory");  // compiler barrier only; no hardware fence needed
+            *sig_slot = 1u;
         }
 #endif  // !COMPILE_FOR_TRISC || UCK_CHLKC_PACK
 
         WAYPOINT("L5");
     }
 
-    // p now points at the first wait entry in this hart's blob.
     const uint32_t t_after_merged_loop = rdcycle();
-    const uint32_t t_before_wait_all   = rdcycle();
-    wait_all_tcs_initialized(dfb_config_base, hart_u8, p);
-    const uint32_t t_after_wait_all    = rdcycle();
 
     WAYPOINT("L12");
     const uint32_t end_time = rdcycle();
@@ -677,7 +662,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
         t_after_merged_loop - start_time,
         total_remapper_spin,
         total_tc_hw,
-        t_after_wait_all - t_before_wait_all,
+        0,  // METRIC_D: producer-ready wait is deferred to DataflowBuffer ctor (dfb_ensure_ready)
         total_tc_reset_hw,
         total_tc_capacity_hw,
         start_time,

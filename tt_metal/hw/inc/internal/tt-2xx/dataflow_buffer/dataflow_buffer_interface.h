@@ -22,6 +22,10 @@ extern thread_local uint8_t g_dfb_logical_to_compact[dfb::NUM_DFBS];
 #else
 extern thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS];
 #endif
+
+// Cached L1 byte address of the DFB config region; set once during setup_local_dfb_interfaces
+// so DataflowBuffer::DataflowBuffer() can call dfb_ensure_ready without a separate parameter.
+extern thread_local uintptr_t g_dfb_config_base_addr;
 #ifndef COMPILE_FOR_TRISC
 extern volatile TxnDFBDescriptor g_txn_dfb_descriptor[32];
 extern overlay::RemapperAPI g_remapper_configurator;

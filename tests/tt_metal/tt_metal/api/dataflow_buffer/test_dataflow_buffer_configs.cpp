@@ -295,10 +295,17 @@ TEST_F(MeshDeviceFixture, DfbSerializeGlobalHeader1Sx1S) {
         EXPECT_GT(ghdr->hart_blob_offset[h], 0u) << "hart " << static_cast<int>(h);
     }
 
-    // producer_ready_region: exactly 1 byte (1 producer).
-    EXPECT_GT(ghdr->producer_ready_region_off, 0u);
-    EXPECT_LT(static_cast<size_t>(ghdr->producer_ready_region_off), nbytes);
-    EXPECT_EQ(buf[ghdr->producer_ready_region_off], 0u);  // zeroed by host
+    // Signal region: per-producer byte slots (zeroed) then dfb_expected_signal[NUM_DFBS].
+    EXPECT_GT(ghdr->dfb_signal_region_off, 0u);
+    EXPECT_LT(static_cast<size_t>(ghdr->dfb_signal_region_off), nbytes);
+    // Slot for producer 0 of DFB 0 must be zero (not yet written by producer at runtime).
+    constexpr uint32_t kMaxProd = ::dfb::MAX_NUM_TILE_COUNTERS_TO_RR;
+    EXPECT_EQ(buf[ghdr->dfb_signal_region_off + 0 * kMaxProd + 0], 0u);
+    // dfb_expected_signal[0] must be 1 (single producer, bit 0).
+    constexpr uint32_t kExpectedOff = ::dfb::NUM_DFBS * kMaxProd;
+    const auto* dfb_expected = reinterpret_cast<const uint32_t*>(
+        buf.data() + ghdr->dfb_signal_region_off + kExpectedOff);
+    EXPECT_EQ(dfb_expected[0], 1u);
 
     // DFB 0 init entry for hart 0 (producer): participation_mask bit set, one init entry.
     EXPECT_EQ(ghdr->participation_mask[0], 1u);
@@ -307,7 +314,7 @@ TEST_F(MeshDeviceFixture, DfbSerializeGlobalHeader1Sx1S) {
     EXPECT_EQ(entry0->logical_dfb_id, 0u);
     EXPECT_NE(entry0->flags & DFB_HART_FLAG_IS_PRODUCER, 0);
     EXPECT_EQ(entry0->entry_size, 1024u);
-    EXPECT_EQ(entry0->producer_ready_off, 0u);  // first producer
+    EXPECT_EQ(entry0->producer_signal_bit, 0u);  // first producer, bit 0
 
     // DFB 0 init entry for hart 4 (consumer): no IS_PRODUCER flag.
     EXPECT_EQ(ghdr->participation_mask[4], 1u);
@@ -315,7 +322,7 @@ TEST_F(MeshDeviceFixture, DfbSerializeGlobalHeader1Sx1S) {
         buf.data() + ghdr->hart_blob_offset[4]);
     EXPECT_EQ(entry4->logical_dfb_id, 0u);
     EXPECT_EQ(entry4->flags & DFB_HART_FLAG_IS_PRODUCER, 0);
-    EXPECT_EQ(entry4->producer_ready_off, 0xFFu);  // consumer
+    EXPECT_EQ(entry4->producer_signal_bit, 0xFFu);  // consumer
 
     // participation_mask drives device init entry count; non-participating harts are zero.
     for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; ++h) {
@@ -363,8 +370,8 @@ TEST_F(MeshDeviceFixture, DfbSerializeTxnCentricImplicitSync1Sx1S) {
     const uint32_t dm0_region = experimental::dfb::detail::dm0_isr_blob_region_size(dfbs);
     ASSERT_GT(dm0_region, 0u);
     EXPECT_EQ(ghdr->has_dm0_isr, 1u);
-    // producer_ready_region_off is after per-hart blobs, which are after the DM0 blob.
-    EXPECT_GT(ghdr->producer_ready_region_off, ghdr->dm0_isr_blob_offset + dm0_region);
+    // dfb_signal_region_off is after per-hart blobs, which are after the DM0 blob.
+    EXPECT_GT(ghdr->dfb_signal_region_off, ghdr->dm0_isr_blob_offset + dm0_region);
 
     const auto* dm0_core_hdr = reinterpret_cast<const dfb_dm0_isr_blob_core_header_t*>(
         buf.data() + ghdr->dm0_isr_blob_offset);

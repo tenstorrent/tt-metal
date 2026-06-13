@@ -109,6 +109,7 @@ void deassert_trisc() {
 }
 
 thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((used));
+thread_local uintptr_t g_dfb_config_base_addr __attribute__((used));
 overlay::RemapperAPI g_remapper_configurator __attribute__((used));
 volatile TxnDFBDescriptor g_txn_dfb_descriptor[32] __attribute__((used));
 volatile KernelBarrier g_kernel_barrier __attribute__((used));
@@ -373,7 +374,7 @@ extern "C" uint32_t _start1() {
     // Subordinates run this
     while (1) {
         // WAYPOINT("GW");
-        WAYPOINT("W1");
+        // WAYPOINT("W1");
         while (true) {
             if (*((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) == RUN_SYNC_MSG_GO ||
                 *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) == RUN_SYNC_MSG_LOAD) {
@@ -406,7 +407,7 @@ extern "C" uint32_t _start1() {
         my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
         overlay_cmd_buff_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
 
-        WAYPOINT("R1");
+        // WAYPOINT("R1");
         while (*((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) != RUN_SYNC_MSG_GO) {
             asm("nop; nop; nop; nop; nop");
         }
@@ -416,7 +417,7 @@ extern "C" uint32_t _start1() {
         auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
 
         record_stack_usage(stack_free);
-        WAYPOINT("D1");
+        // WAYPOINT("D1");
         DEVICE_PRINT_KERNEL_FINISHED();
 
         *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) = RUN_SYNC_MSG_DONE;

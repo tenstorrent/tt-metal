@@ -79,32 +79,34 @@ inline __attribute__((always_inline)) constexpr uint8_t get_counter_id(PackedTil
         ...
 
     [dfb_config_base + ghdr->hart_blob_offset[h]]:
-      Per-hart sequential init+wait blob (one per participating hartid):
+      Per-hart sequential init blob (one per participating hartid):
         dfb_hart_init_entry_t[num_entries]  — one per DFB this hart participates in
-        dfb_hart_wait_entry_t[num_entries]  — num_entries = popcount(participation_mask[h])
         (4B-padded end)
       Entry count is NOT stored in the blob; device derives it from participation_mask[h].
       hart_blob_offset[h] points at the first init entry (4B-aligned).
       Non-participating harts have a minimal 4-byte {0,0,0,0} blob.
 
-    [dfb_config_base + producer_ready_region_off]:
-      uint8_t ready[total_producers_on_core]     — one byte per (DFB, producer hart).
-      Zeroed by host; each producer writes 1 via uncached alias when TC init done.
-      Consumers poll via uncached alias in wait_all.
+    [dfb_config_base + dfb_signal_region_off]:
+      uint8_t  dfb_signal[NUM_DFBS * MAX_NUM_TILE_COUNTERS_TO_RR]  — 192B; producer i of DFB d writes
+                                                                       byte 1 to slot [d*MAX_PRODUCERS+i].
+      uint32_t dfb_expected_signal[NUM_DFBS]                        — 128B; host-computed bitmask of which
+                                                                       producer bits are active per DFB.
+      Producers use a plain volatile store + fence (no AMO). Consumers iterate over bits in
+      dfb_expected_signal[d] and poll each producer's byte slot in dfb_signal.
 
     DM1 reads linearly through only remapper slot data (unchanged).
     DM0 reads linearly through only ISR txn data (unchanged).
     DM2-7 + TRISC each walk their own sequential init blob — no pointer-table indirection.
 
     Memory (worst case 4Sx4A, 5 riscs, 4 rmp slots, 8 DFBs):
-      96 + (4+4*16)*8 + (4+20)*8 + per_hart_blobs(~3.2KB) + ready_region(~32B) ≈ 3.6KB
+      96 + (4+4*16)*8 + (4+20)*8 + per_hart_blobs(~3.2KB) + signal_region(256B) ≈ 3.8KB
 */
 
 // Fixed header at the start of the DFB config region.
 struct dfb_global_header_t {
-    uint32_t dm1_remapper_blob_offset;   // → DM1 remapper blob
-    uint32_t dm0_isr_blob_offset;        // → DM0 ISR blob (core header + txn pools)
-    uint32_t producer_ready_region_off;  // → compact producer-ready byte array
+    uint32_t dm1_remapper_blob_offset;  // → DM1 remapper blob
+    uint32_t dm0_isr_blob_offset;       // → DM0 ISR blob (core header + txn pools)
+    uint32_t dfb_signal_region_off;     // → signal region: per-producer byte slots then dfb_expected_signal[NUM_DFBS]
     uint8_t  num_dfbs;
     uint8_t  dm0_isr_ready;             // cleared by host; set by DM0 when ISR is armed
     uint8_t  has_dm0_isr;               // 1 if any DFB uses implicit sync (replaces per_dfb_layout_offset > dm0 check)
@@ -150,7 +152,7 @@ struct dfb_hart_init_entry_t {
     uint8_t  threshold;                      // DM only
     uint8_t  num_entries_per_txn_id;         // DM only
     uint8_t  num_entries_per_txn_id_per_tc;  // DM only
-    uint8_t  producer_ready_off;             // index into producer_ready region; 0xFF if consumer
+    uint8_t  producer_signal_bit;            // index into this DFB's producer slot row (0-based); 0xFF if consumer
     uint8_t  txn_ids[dfb::NUM_TXN_IDS];     // DM only; unused slots zero
     uint8_t  _pad[2];                        // pad header to 24B → 4B-aligned TC arrays follow
 } __attribute__((packed));
@@ -163,13 +165,6 @@ inline uint32_t dfb_hart_init_entry_byte_size(uint8_t num_tcs) {
     return static_cast<uint32_t>(sizeof(dfb_hart_init_entry_t)) + ((tail + 3u) & ~3u);
 }
 
-// Per-(hart, DFB) wait entry: pre-computed list of producer-ready byte offsets to poll.
-struct dfb_hart_wait_entry_t {
-    uint8_t num_producers;
-    uint8_t ready_offs[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];  // indices into producer_ready region
-    uint8_t _pad;
-} __attribute__((packed));
-static_assert(sizeof(dfb_hart_wait_entry_t) == 8, "dfb_hart_wait_entry_t must be 8B");
 struct dfb_txn_id_descriptor_t {
     uint8_t txn_ids[dfb::NUM_TXN_IDS];
     uint8_t num_entries_to_process_threshold; // entries each txn ID tracks before posting/acking
@@ -330,7 +325,6 @@ static_assert(sizeof(dfb_initializer_t) == 32, "dfb_initializer_t size is incorr
 static_assert(sizeof(dfb_initializer_per_risc_t) == 64, "dfb_initializer_per_risc_t size is incorrect");
 static_assert(sizeof(dfb_initializer_intra_tensix_t) == 24, "dfb_initializer_intra_tensix_t size is incorrect");
 static_assert(sizeof(dfb_hart_init_entry_t) == 24, "dfb_hart_init_entry_t must be 24B");
-static_assert(sizeof(dfb_hart_wait_entry_t) == 8, "dfb_hart_wait_entry_t must be 8B");
 
 namespace dfb {
 
