@@ -827,7 +827,14 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const uint32_t per_row_stats_count = args.per_head_norm ? args.num_heads_per_device : args.ring_size;
     const uint32_t stats_local_tiles = (args.ring_size > 1 && !args.per_head_norm) ? chunk_size_rows : 1;
     create_cb(stats_local_cb_id, program, worker_core_set, fp32_tile_size, stats_local_tiles, fp32_format);
-    const uint32_t stats_gathered_tiles = chunk_size_rows * per_row_stats_count;
+    // The MUX writer scatters one chunk's gathered stats at a time; the legacy
+    // single-worker writer (!is_tp_1 && !use_mux) instead all-gathers the worker's
+    // WHOLE row range, addressing slots as base + (r*ring_size + device). Size
+    // stats_gathered for num_tile_rows rows on that path — otherwise its
+    // cb_reserve_back(num_tile_rows*ring_size) blocks forever on a chunk-sized CB
+    // (the TP=2 small-shape hang). is_tp_1 / MUX push per chunk, so chunk-sized is fine.
+    const uint32_t stats_gathered_rows = (!is_tp_1 && !use_mux) ? num_tile_rows : chunk_size_rows;
+    const uint32_t stats_gathered_tiles = stats_gathered_rows * per_row_stats_count;
     create_cb(stats_gathered_cb_id, program, worker_core_set, fp32_tile_size, stats_gathered_tiles, fp32_format);
 
     // Phase 9 packed-page AG: dedicated CBs only when the MUX writer runs.
