@@ -1,127 +1,242 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Gated full-attention for Qwen3.5-9B, split into config/weights/prefill/decode."""
+"""Tensor-parallel (TP>1) full-attention path for Qwen3.5.
+
+Ported from models/demos/qwen35_27b/tt/attention.py forward_decode.
+
+Long-context (64k+) correctness choices, validated at 64k on Qwen3.5-27B-FP8 and Qwen3.6-27B:
+  - HYBRID q/k-norm scaling: PREFILL uses the HF-correct (1+weight) scale (sharp attention,
+    required for retrieval — without it long-context attention is uniform and retrieval is zero);
+    DECODE uses the raw weights (flat attention, robust to the small per-step decode noise that
+    sharp attention amplifies into loops). See load_attention_weights_tp / forward_decode.
+  - Q stays bf16 into the chunked SDPA (forward_prefill), NOT bf8. Casting Q to bf8 was
+    the real long-context degeneration cause (bf16-Q → coherent 64k/256k summary; bf8-Q →
+    loops/gibberish), matching the 9B's deliberately-bf16 path (ttnn_gated_attention.py:277).
+    env QWEN_SDPA_BF8_Q=1 restores the old bf8 cast for comparison.
+  - weights are kept INTERLEAVED per device (no DRAM-width-sharding) and matmuls
+    use ttnn's auto program config — same robust pattern validated for the MLP.
+
+Decode input/output use the framework layout: x [1,1,B,dim] replicated in; output
+fractured along dim=3 (reduce-scatter). Column-parallel q/k/v, row-parallel wo.
+"""
+import os
 
 import ttnn
-
-from models.demos.blackhole.qwen3_5_9b.tt.attention.config import AttentionConfig
-from models.demos.blackhole.qwen3_5_9b.tt.attention.decode import decode_forward
-from models.demos.blackhole.qwen3_5_9b.tt.attention.prefill import prefill_forward
+from models.demos.blackhole.qwen3_5_9b.tt.attention.kv_cache import init_kv_cache
+from models.demos.blackhole.qwen3_5_9b.tt.attention.rope_tp import apply_partial_rope_decode, apply_partial_rope_prefill
 from models.demos.blackhole.qwen3_5_9b.tt.attention.weights import load_attention_weights
+from models.demos.blackhole.qwen3_5_9b.tt.rms_norm import qwen35_rms_norm
+from models.tt_transformers.tt.ccl import tt_all_reduce
+from models.common.lightweightmodule import LightweightModule
 
-__all__ = ["Qwen35GatedAttention", "AttentionConfig"]
 
+class TPAttention(LightweightModule):
+    """Standalone TP full-attention with internal per-head KV caches (decode)."""
 
-class Qwen35GatedAttention:
-    """Gated Full Attention layer for Qwen3.5-9B with KV cache.
-
-    Uses softmax SDPA with GQA (16 Q heads, 4 KV heads, head_dim=256)
-    plus a sigmoid output gate derived from the 2× wide q_proj.
-    Q and K are normalized with zero-centered RMSNorm before attention.
-    """
-
-    def __init__(self, mesh_device, config: AttentionConfig, state_dict, tensor_cache_path=None):
-        self.device = mesh_device
-        self.config = config
-
-        self.weights = load_attention_weights(mesh_device, state_dict, tensor_cache_path)
-
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        )
-        self.compute_kernel_config_decode = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
+    def __init__(self, mesh_device, state_dict, args, tt_ccl, create_kv_cache=False, tensor_cache_path=None):
+        self.mesh = mesh_device
+        self.args = args
+        self.tt_ccl = tt_ccl
+        self.weights = load_attention_weights(
+            mesh_device=mesh_device, state_dict=state_dict, args=args, tensor_cache_path=tensor_cache_path
         )
 
-        # KV cache state (concat-based prefill)
-        self.past_key = None
-        self.past_value = None
-        # Paged attention state (for vLLM integration)
-        self.paged_kv_cache_key = None
-        self.paged_kv_cache_value = None
-        self.use_paged_attention = False
-
-    def forward(
-        self,
-        x,
-        cos,
-        sin,
-        position_tensor=None,
-        page_table=None,
-        chunk_page_table=None,
-        chunk_start_idx=None,
-        chunk_start_idx_tensor=None,
-    ):
-        T = x.shape[1]
-        mc = ttnn.L1_MEMORY_CONFIG if T == 1 else None
-        ckc = self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config
-
-        # Branches are mutually exclusive on T; decode (T==1) is checked first to keep the hot path short.
-        if self.use_paged_attention and T == 1:
-            # Branch B — paged decode
-            return decode_forward(
-                x=x,
-                cos=cos,
-                sin=sin,
-                weights=self.weights,
-                config=self.config,
-                device=self.device,
-                ckc=ckc,
-                mc=mc,
-                position_tensor=position_tensor,
-                page_table=page_table,
-                paged_kv_cache_key=self.paged_kv_cache_key,
-                paged_kv_cache_value=self.paged_kv_cache_value,
-            )
-        elif self.use_paged_attention and T > 1 and chunk_page_table is not None:
-            # Branch A — paged prefill
-            return prefill_forward(
-                x=x,
-                cos=cos,
-                sin=sin,
-                weights=self.weights,
-                config=self.config,
-                device=self.device,
-                ckc=ckc,
-                mc=mc,
-                paged_kv_cache_key=self.paged_kv_cache_key,
-                paged_kv_cache_value=self.paged_kv_cache_value,
-                page_table=page_table,
-                chunk_page_table=chunk_page_table,
-                chunk_start_idx=chunk_start_idx,
-                chunk_start_idx_tensor=chunk_start_idx_tensor,
-                use_paged_attention=True,
+        # Single KV-cache slot holding the [k_cache, v_cache] list straight from init_kv_cache
+        # (mirrors gemma4's self.kv_cache). One attribute keeps the demo (contiguous) and vLLM
+        # (paged) caches in the same handle; callers unpack k_cache, v_cache = self.kv_cache.
+        if create_kv_cache:
+            self.kv_cache = init_kv_cache(
+                mesh_device=mesh_device,
+                args=args,
+                max_batch_size=args.max_batch_size,
+                max_seq_len=args.max_seq_len,
+                paged_attention_config=None,
+                cache_dtype=ttnn.bfloat16,
+                tensor_cache_path=tensor_cache_path,
             )
         else:
-            # Branch C — concat prefill
-            output, new_key, new_value = prefill_forward(
-                x=x,
-                cos=cos,
-                sin=sin,
-                weights=self.weights,
-                config=self.config,
-                device=self.device,
-                ckc=ckc,
-                mc=mc,
-                past_key=self.past_key,
-                past_value=self.past_value,
-                use_paged_attention=False,
-            )
-            self.past_key = new_key
-            self.past_value = new_value
-            return output
+            self.kv_cache = None
 
-    def reset_cache(self):
-        """Clear the concat KV cache for a new sequence."""
-        self.past_key = None
-        self.past_value = None
+        self.B = args.max_batch_size
+        self.NH = args.n_local_heads
+        self.NKV = args.n_local_kv_heads
+        self.HD = args.head_dim
+        self.scale = self.HD**-0.5
+        self.rope_dim = args.rope_head_dim
+        self.eps = args.norm_eps
 
     def set_paged_kv_cache(self, k_cache, v_cache):
-        """Attach externally-allocated paged KV cache (called once after allocate_kv_cache)."""
-        self.paged_kv_cache_key = k_cache
-        self.paged_kv_cache_value = v_cache
-        self.use_paged_attention = True
+        """Bind an externally-allocated paged KV cache into the single cache slot.
+
+        Overwrites self.kv_cache (the [k_cache, v_cache] list) — the same slot forward_decode
+        and forward_prefill_paged read. The internal contiguous cache and the external paged
+        cache are mutually exclusive per deployment, so one slot serves both; the op variant
+        is selected by page_table at call time, not by which cache is bound (mirrors gemma4).
+        One call after allocate_kv_caches.
+        """
+        self.kv_cache = [k_cache, v_cache]
+
+    def forward_prefill(
+        self,
+        hidden_states,
+        cos_tt,
+        sin_tt,
+        page_table=None,
+        user_id=0,
+    ):
+        weights = self.weights
+        NH, NKV, HD = self.NH, self.NKV, self.HD
+        S = hidden_states.shape[-2]
+
+        q = ttnn.linear(hidden_states, weights.wq)
+        gate = ttnn.linear(hidden_states, weights.wg)
+        k = ttnn.linear(hidden_states, weights.wk)
+        v = ttnn.linear(hidden_states, weights.wv)
+
+        q = ttnn.transpose(ttnn.reshape(q, (1, S, NH, HD)), 1, 2)
+        gate = ttnn.transpose(ttnn.reshape(gate, (1, S, NH, HD)), 1, 2)
+        k = ttnn.transpose(
+            ttnn.reshape(k, (1, S, NKV, HD)), 1, 2
+        )  # [1,S,NKV,HD] -> [1,NKV,S,HD] -> transpose -> [1,NKV,S,HD]
+        v = ttnn.transpose(
+            ttnn.reshape(v, (1, S, NKV, HD)), 1, 2
+        )  # [1,S,NKV,HD] -> [1,NKV,S,HD] -> transpose -> [1,NKV,S,HD]
+
+        q = qwen35_rms_norm(q, weight=weights.w_q_norm, eps=self.eps, scale=True)
+        k = qwen35_rms_norm(k, weight=weights.w_k_norm, eps=self.eps, scale=True)
+
+        q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH, self.rope_dim)
+        k = apply_partial_rope_prefill(k, cos_tt, sin_tt, NKV, self.rope_dim)
+
+        # Fill the KV cache with the prompt's (post-RoPE) K/V so decode continues from
+        # position S, only when caches are allocated (stateful demo path). self.kv_cache is the
+        # [k_cache, v_cache] list, each a single [B, n_local_kv_heads, max_seq, HD] tensor
+        # (init_kv_cache), and k/v are already [1, NKV, S, HD], so ONE fill_cache writes every
+        # local head at once — the gemma4 single-write pattern, replacing the old per-head loop.
+        # batch_idx=0: prefill fills a single user.
+        if self.kv_cache is not None:
+            k_cache, v_cache = self.kv_cache  # unpack the single [k_cache, v_cache] slot
+            if page_table is not None:
+                ttnn.experimental.paged_fill_cache(k_cache, k, page_table, batch_idx=user_id)
+                ttnn.experimental.paged_fill_cache(v_cache, v, page_table, batch_idx=user_id)
+            else:
+                ttnn.fill_cache(k_cache, k, batch_idx=user_id)
+                ttnn.fill_cache(v_cache, v, batch_idx=user_id)
+
+        attn = ttnn.transformer.scaled_dot_product_attention(
+            q, k, v, is_causal=True, scale=self.scale, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+        gated = attn * ttnn.sigmoid(gate)  # [1,NH,S,HD]
+
+        # [1,NH,S,HD] -> [1,S,NH,HD] -> [1,1,S,NH*HD]
+        gated = ttnn.transpose(gated, 1, 2)
+        gated = ttnn.reshape(gated, (1, 1, S, NH * HD))
+        out = ttnn.linear(gated, weights.wo)
+
+        return tt_all_reduce(
+            out,
+            self.mesh,
+            self.tt_ccl,
+            cluster_axis=0,
+            dim=3,
+            topology=self.args.ccl_topology(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def forward_decode(self, hidden_states, cur_pos_tt, cos_tt, sin_tt, page_table=None):
+        assert self.kv_cache is not None, "forward_decode requires allocated KV caches"
+        k_cache, v_cache = self.kv_cache
+
+        weights = self.weights
+        B, NH, NKV, HD = self.B, self.NH, self.NKV, self.HD
+
+        # q_and_gate = ttnn.linear(hidden_states, weights.wq)
+        q = ttnn.linear(hidden_states, weights.wq)
+        gate = ttnn.linear(hidden_states, weights.wg)
+        k = ttnn.linear(hidden_states, weights.wk)
+        v = ttnn.linear(hidden_states, weights.wv)
+
+        q = ttnn.reshape(q, (1, B, NH, HD))
+        gate = ttnn.reshape(gate, (1, B, NH, HD))
+
+        k = ttnn.reshape(k, (1, B, NKV, HD))
+        v = ttnn.reshape(v, (1, B, NKV, HD))
+
+        q = qwen35_rms_norm(q, weight=weights.w_q_norm, eps=self.eps, scale=True)
+        k = qwen35_rms_norm(k, weight=weights.w_k_norm, eps=self.eps, scale=True)
+
+        q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH, B, self.rope_dim)
+        k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim)
+
+        # Single KV-cache slot; the op variant is chosen by page_table, not by a separate
+        # cache attribute (mirrors gemma4 decode.py). The demo path binds an internal
+        # contiguous cache (init_kv_cache); the vLLM path binds an external paged cache
+        # (set_paged_kv_cache). Both are [B, n_local_kv_heads, max_seq, HD] handles here, so
+        # the pad-to-32 (TILE_SIZE) + height-sharded update is identical — only the SDPA op
+        # differs (paged variant takes the page_table). ONE in-place update of all local
+        # heads at cur_pos, then SDPA-decode straight off the cache.
+        k = ttnn.pad(k, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
+        v = ttnn.pad(v, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
+
+        k = ttnn.to_memory_config(k, self.args.kv_update_shard_cfg)
+        v = ttnn.to_memory_config(v, self.args.kv_update_shard_cfg)
+
+        # The cache update is identical for both paths: paged_update_cache's page_table
+        # kwarg defaults to None, so passing page_table=None is exactly the contiguous
+        # (demo) update. SDPA cannot merge the same way — the paged op is a separate ttnn
+        # entry point that takes page_table_tensor as a REQUIRED positional, so the op
+        # choice stays a one-line fork on whether a page table was supplied.
+        ttnn.experimental.paged_update_cache(k_cache, k, update_idxs_tensor=cur_pos_tt, page_table=page_table)
+        ttnn.experimental.paged_update_cache(v_cache, v, update_idxs_tensor=cur_pos_tt, page_table=page_table)
+
+        # SDPA-decode needs an explicit program config. With program_config=None the op falls
+        # back to the full device grid, whose static circular buffers (a) clash with the
+        # height-sharded K/V still resident in L1 from the cache update above, and (b) exceed
+        # the 64-cores/head reduction-tree cap (MAX_TREE_REDUCTION_ROUNDS=6) when n_local_kv_heads
+        # is small (1 at TP=4). SDPAProgramConfig's default max_cores_per_head_batch=16 caps the
+        # tree; the q/k chunk sizes mirror gemma4's validated decode path. Output to DRAM since
+        # the caches it reads are DRAM-resident.
+        sdpa_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self.mesh.compute_with_storage_grid_size(),
+            q_chunk_size=32,
+            k_chunk_size=64,
+            exp_approx_mode=False,
+        )
+
+        if page_table is not None:
+            attn_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+                q,
+                k_cache,
+                v_cache,
+                page_table_tensor=page_table,
+                cur_pos_tensor=cur_pos_tt,
+                scale=self.scale,
+                program_config=sdpa_program_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            attn_out = ttnn.transformer.scaled_dot_product_attention_decode(
+                q,
+                k_cache,
+                v_cache,
+                cur_pos_tensor=cur_pos_tt,
+                scale=self.scale,
+                program_config=sdpa_program_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        gated = attn_out * ttnn.sigmoid(gate)
+        gated = ttnn.reshape(gated, (1, B, NH * HD))
+        wo_partial = ttnn.linear(gated, weights.wo)
+        wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
+
+        return tt_all_reduce(
+            wo_partial,
+            self.mesh,
+            self.tt_ccl,
+            cluster_axis=0,
+            dim=3,
+            topology=self.args.ccl_topology(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )

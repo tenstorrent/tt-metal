@@ -113,7 +113,7 @@ class Qwen35ModelArgs(ModelArgs):
         # configs ported from models/demos/qwen35_27b. See tt/tp_common.py.
         # ------------------------------------------------------------------
         self.num_devices = mesh_device.get_num_devices() if mesh_device is not None else 1
-        if mesh_device is not None and self.num_devices > 1:
+        if mesh_device is not None and self.num_devices >= 1:
             self._init_tp_config(mesh_device)
 
     def _init_tp_config(self, mesh_device):
