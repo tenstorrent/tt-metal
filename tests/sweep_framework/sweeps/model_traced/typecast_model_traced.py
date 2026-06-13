@@ -128,7 +128,7 @@ def run(
         # Casting to an unsigned type wraps negatives (2's complement) on device,
         # which a clamp-to-0 golden can't match. Models only typecast non-negative
         # data (token ids/indices) to uint, so generate a non-negative input there.
-        _low = 0 if output_dtype in (ttnn.uint16, ttnn.uint32) else -100
+        _low = 0 if output_dtype in (ttnn.uint8, ttnn.uint16, ttnn.uint32) else -100
         torch_input_tensor_a = gen_func_with_cast_tt(
             partial(torch_random, low=_low, high=100, dtype=torch.float32), input_a_dtype
         )(shape)
@@ -139,6 +139,8 @@ def run(
         torch_output_tensor = torch_input_tensor_a.to(torch.bfloat16).to(torch.float32)
     elif output_dtype == ttnn.bfloat8_b:
         torch_output_tensor = torch_input_tensor_a.to(torch.float32)
+    elif output_dtype == ttnn.uint8:
+        torch_output_tensor = torch_input_tensor_a.clamp(0, 255).to(torch.int32)
     elif output_dtype == ttnn.uint16:
         torch_output_tensor = torch_input_tensor_a.clamp(0, 65535).to(torch.int32)
     elif output_dtype == ttnn.uint32:
