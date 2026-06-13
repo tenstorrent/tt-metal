@@ -358,8 +358,23 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             while (Pk > 1 && (K_tiles % Pk != 0 || K_tiles / Pk < kp.min_kt)) {
                 Pk /= 2;  // deep-K availability
             }
+            // No-M-padding guard. Fused split-K stacks/reduces along M, which must map to its parallel
+            // axis WITHOUT padding (the factory TT_FATALs otherwise). With S*Pk=grid.y the M axis is:
+            //   non-transpose (M<=N, M on rows): rows_per_group = grid.y/(S*Pk) = 1   -> always divides;
+            //   transpose     (M>N,  M on cols): num_slices*grid.x = (grid.y/Pk)*grid.x -> needs
+            //     M_tiles % that == 0. Skewed transpose shapes (M_tiles not a multiple) would pad and
+            //     crash. Lowering Pk only grows the col factor (worse), so this loop just walks Pk down
+            //     to 1 there = disable K-par and fall back to the (padding-tolerant) auto N-slice.
+            while (Pk > 1) {
+                const uint32_t S = grid_size.y / Pk;
+                const uint32_t m_axis = transpose_core_grid ? (S * grid_size.x) : (grid_size.y / (S * Pk));
+                if (M_tiles % m_axis == 0) {
+                    break;  // no M-padding at this Pk
+                }
+                Pk /= 2;
+            }
             if (Pk > 1) {
-                num_slices = grid_size.y / Pk;  // rows_per_group = 1 (no M-padding); S*Pk = grid.y
+                num_slices = grid_size.y / Pk;  // S*Pk = grid.y (rows_per_group = 1)
                 num_k_slices = Pk;
                 num_k_fused = true;
                 log_debug(
