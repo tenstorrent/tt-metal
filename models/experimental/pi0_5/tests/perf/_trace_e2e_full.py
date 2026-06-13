@@ -282,25 +282,30 @@ def main():
                 vblk, prefill, ttnn.SocketConfig([conn], ttnn.SocketMemoryConfig(ttnn.BufferType.L1, 4096 * 4))
             )
             prefix_m = _repl(torch.zeros(1, prefix_pad, vcfg.width), prefill)
-            ttnn.experimental.send_direct_async(prefix_t, sp[0])
-            ttnn.experimental.recv_direct_async(prefix_m, sp[1])
-            ttnn.synchronize_device(prefill)
-            ttnn.point_to_point(
-                prefix_m,
-                ttnn.MeshCoordinate(5, 2),
-                ttnn.MeshCoordinate(5, 0),
-                topology=ttnn.Topology.Linear,
-                output_tensor=prefix_m,
-            )
-            ttnn.point_to_point(
-                prefix_m,
-                ttnn.MeshCoordinate(5, 0),
-                ttnn.MeshCoordinate(0, 0),
-                topology=ttnn.Topology.Linear,
-                output_tensor=prefix_m,
-            )
-            ttnn.synchronize_device(prefill)
-            log("VISION->PREFIX migrated on-device (socket + p2p to prefill (0,0))")
+
+            def _vis_xfer():  # pure transfer: socket (6,2)->(5,2) + p2p (5,2)->(5,0)->(0,0)
+                ttnn.experimental.send_direct_async(prefix_t, sp[0])
+                ttnn.experimental.recv_direct_async(prefix_m, sp[1])
+                ttnn.synchronize_device(prefill)
+                ttnn.point_to_point(
+                    prefix_m,
+                    ttnn.MeshCoordinate(5, 2),
+                    ttnn.MeshCoordinate(5, 0),
+                    topology=ttnn.Topology.Linear,
+                    output_tensor=prefix_m,
+                )
+                ttnn.point_to_point(
+                    prefix_m,
+                    ttnn.MeshCoordinate(5, 0),
+                    ttnn.MeshCoordinate(0, 0),
+                    topology=ttnn.Topology.Linear,
+                    output_tensor=prefix_m,
+                )
+                ttnn.synchronize_device(prefill)
+
+            _t = time.perf_counter()
+            _vis_xfer()
+            log(f"VISION->PREFIX migrated on-device (socket+p2p): {1e3*(time.perf_counter()-_t):.2f}ms (single-shot)")
         else:
             # ---- host path (validated default) ----
             # chip (0,2) holds the last 9 SigLIP layers; ConcatMeshToTensor interleaves
@@ -452,8 +457,10 @@ def main():
             ttnn.synchronize_device(denoise)
 
         past_k, past_v = _recv_bufs(), _recv_bufs()
+        _t = time.perf_counter()
         migrate_side(0, past_k)
         migrate_side(1, past_v)
+        log(f"KV migration on-device (p2p+socket): {1e3*(time.perf_counter()-_t):.2f}ms (single-shot)")
         # expert cross-attn concat needs bf8_b (matches per-step k_rope dtype)
         past_k = [ttnn.typecast(t, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in past_k]
         past_v = [ttnn.typecast(t, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in past_v]
@@ -465,7 +472,7 @@ def main():
         # excludes one-time projector construction / first-call compilation). N reps,
         # report mean. This is the latency the socket+p2p redesign would remove.
         if os.environ.get("PI05_E2E_TIMING", "").lower() in ("1", "true", "yes", "on"):
-            N = 10
+            N = 5
 
             def _bench(fn):
                 fn()  # warm
@@ -514,7 +521,9 @@ def main():
                 migrate_side(0, _recv_bufs())
                 migrate_side(1, _recv_bufs())
 
-            if not _vsock:  # vision->prefix host-bounce timing (host path only; `prefix` is host-side)
+            # vision->prefix on-device transfer is timed single-shot inline above
+            # (re-running the same socket pair hangs). Host path timed here.
+            if not _vsock:
                 v_d2h = _bench(_v_d2h)
                 prefix_h2d = _bench(_prefix_h2d)
                 log(
