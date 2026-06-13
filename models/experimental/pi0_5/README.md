@@ -360,9 +360,17 @@ activations chip-to-chip over fabric sockets. It reuses the same TTNN building
 blocks (`ttnn_siglip`, `ttnn_gemma`, `ttnn_suffix`) but composes them as
 per-chip slices instead of one device's full model.
 
-> **Status (experimental).** The eager path is functional end-to-end (PCC 0.9957
-> vs torch). Trace capture (Phase B.3) is scaffolded but **not yet working** —
-> see `pipeline.py::capture_trace`. Use the eager path for now.
+> **Status (experimental).** Two paths exist:
+> - **Eager socket pipeline** (`pipeline.py`; FABRIC_2D, per-chip 1×1 submeshes) —
+>   functional end-to-end (PCC 0.9957 vs torch). Its parent-rooted trace capture
+>   (`pipeline.py::capture_trace`) does **not** work — it records an empty trace and
+>   deadlocks in `end_trace_capture` (ops live on the 1×1 children, not the parent).
+> - **Fully-traced per-stage pipeline** (`tests/perf/_trace_e2e_full.py`; FABRIC_1D,
+>   per-stage single-mesh + `point_to_point`, on-device KV migration) — all three
+>   stages traced, **PCC 0.9988 vs torch, ~82 ms/inference**. This is the working
+>   traced path. See **`tt/tt_bh_glx/TRACED_PIPELINE_JOURNEY.md`** (design + diagrams)
+>   and **`tests/perf/TRACED_E2E_PERF.md`** (numbers), and the "Traced pipeline"
+>   subsection below.
 
 ### Chip layout (`stages.py`)
 
@@ -472,8 +480,130 @@ PYTHONPATH=$PWD TT_METAL_HOME=$PWD python_env/bin/pytest -xvs \
 Denoise dominates wall-clock; the `PI0_GLX_DENOISE_L1` path above targets it.
 The ~276 ms baseline was measured **before** the L1 change landed — re-run
 `test_perf_tt_bh_glx_e2e.py` with `PI0_GLX_DENOISE_L1=1` vs `=0` to measure the
-delta on your machine. The single-chip traced path (~65 ms) remains the fastest
-deployment today; the Galaxy pipeline is gated on getting trace capture working.
+delta on your machine.
+
+---
+
+## Traced pipeline (`tt/tt_bh_glx/` — the working trace path)
+
+The fully-traced pipeline captures **all three stages** and matches torch at
+**PCC 0.9988** at **~82 ms / inference** (5 denoise steps). Full design rationale +
+ASCII diagrams: **`tt/tt_bh_glx/TRACED_PIPELINE_JOURNEY.md`**; perf numbers:
+**`tests/perf/TRACED_E2E_PERF.md`**.
+
+### Why it differs from the eager socket pipeline
+
+- A TTNN mesh trace only records ops on **that mesh's** command queue. The eager
+  pipeline issues ops on per-chip **1×1 submeshes** but captures on the **parent** →
+  empty trace + full-mesh-finish **deadlock**. (Capturing *per-submesh* fixes this —
+  validated by `tests/perf/_socket_trace_2x2.py`.)
+- Fix: run **each stage as one single-mesh SPMD computation** with in-mesh
+  `point_to_point` hand-offs, captured as **one trace per stage**, under **FABRIC_1D**
+  (`point_to_point` traces+replays under 1D; hangs under 2D).
+- Sockets are kept only for the **eager, one-shot cross-stage hand-offs**
+  (`send_direct_async`); they're not used inside a trace.
+
+### Traced chip layout (collinear, distinct from the eager layout above)
+
+```
+          col 0      col 1      col 2      col 3
+ row 0..5  prefill    prefill    prefill    denoise     prefill (6,3)@(0,0) SNAKE; denoise (6,1)@(0,3)
+ row 6     vision     vision     vision     embed       vision (1,3)@(6,0); embed (1,1)@(6,3)
+ row 7     scratch     --         --         --
+```
+
+Chips are placed so every cross-stage hand-off is **adjacent + collinear** (FABRIC_1D
+sockets are adjacent-only): prefill uses a boustrophedon **snake** so consecutive
+layers stay collinear; vision tail `(6,2)`→prefill `(5,2)`; prefill row `r` `(r,2)`→
+denoise `(r,3)`.
+
+### Fabric optimizations (committed)
+
+- **Multi-core/multi-link `point_to_point`** (C++): 2.7 → 5.3 GB/s (2 cores/2 links;
+  trace-safe). Used inside the traced stages.
+- **Multi-connection sockets** (`PI05_SOCK_CONN=2`): up to 15.5 GB/s. Used for the
+  eager cross-stage hand-offs.
+- **On-device KV migration** (p2p-gather + adjacent socket): ~265 ms host-bounce →
+  ~11 ms.
+
+> Build note: the C++ `point_to_point` change is in source, but `cmake --build build`
+> writes to `build_Release/ttnn/` while Python loads `ttnn/ttnn/_ttnn.so` +
+> `build_Release/lib/_ttnncpp.so`. After building, sync them:
+> `cp -f build_Release/ttnn/_ttnncpp.so build_Release/lib/_ttnncpp.so && cp -f build_Release/ttnn/_ttnn.so ttnn/ttnn/_ttnn.so`.
+
+### How to run — per-stage trace validations
+
+These are standalone scripts (not pytest). All need a 32-chip BH Galaxy +
+`PI05_CHECKPOINT_DIR`; the full 8×4 mesh must be opened (a bare 2×2 can't train
+fabric on the Galaxy). Reset between runs with `tt-smi -glx_reset`.
+
+```bash
+export PI05_CHECKPOINT_DIR=/path/to/pi05_libero_upstream
+P=python_env/bin/python
+
+# --- per-stage traced compute (each captures one trace, validates vs torch) ---
+tt-smi -glx_reset; $P models/experimental/pi0_5/tests/perf/_trace_e2e_vision.py        # vision: PCC ~0.9997
+tt-smi -glx_reset; REPRO_PREFIX=1024 $P models/experimental/pi0_5/tests/perf/_trace_prefill_stage_repro.py  # prefill snake (source the prod env first for the matmul tuning)
+tt-smi -glx_reset; $P models/experimental/pi0_5/tests/perf/_trace_denoise_stage_repro.py   # denoise Euler loop
+tt-smi -glx_reset; $P models/experimental/pi0_5/tests/perf/_trace_siglip_stage_repro.py    # SigLIP block chain
+
+# --- fabric mechanism repros ---
+tt-smi -glx_reset; $P models/experimental/pi0_5/tests/perf/_socket_multimesh_repro.py   # multi-chip-mesh collinear socket
+tt-smi -glx_reset; $P models/experimental/pi0_5/tests/perf/_kv_socket_repro.py          # KV p2p-gather + adjacent socket
+tt-smi -glx_reset; $P models/experimental/pi0_5/tests/perf/_p2p_microbench.py           # point_to_point bandwidth sweep
+tt-smi -glx_reset; $P models/experimental/pi0_5/tests/perf/_p2p_multicore_probe.py      # link count + multi-core socket BW
+tt-smi -glx_reset; $P models/experimental/pi0_5/tests/perf/_socket_trace_2x2.py         # socket-in-1x1-trace replay (2-chip)
+```
+
+### How to run — full traced e2e (`_trace_e2e_full.py`)
+
+Production perf flags are **baked in** via `os.environ.setdefault` (no need to source
+the env). Modes are selected by env var:
+
+```bash
+export PI05_CHECKPOINT_DIR=/path/to/pi05_libero_upstream
+P=python_env/bin/python; T=models/experimental/pi0_5/tests/perf/_trace_e2e_full.py
+
+tt-smi -glx_reset; $P $T                       # run once: finite actions, shapes
+tt-smi -glx_reset; PI05_E2E_PCC=1   $P $T       # + torch-reference PCC (target ≥0.95; gets ~0.9988)
+tt-smi -glx_reset; PI05_E2E_PERF=1  $P $T       # + 2-warmup/20-iter traced-replay latency table
+tt-smi -glx_reset; PI05_E2E_TIMING=1 $P $T      # + host-bounce vs on-device KV migration timing
+tt-smi -glx_reset; PI05_PREFILL_PROFILE=1 $P $T # + prefill snake block/p2p/layout split
+tt-smi -glx_reset; PI05_VISION_SOCKET=1 PI05_E2E_PCC=1 $P $T   # fully on-device vision->prefix (else host-bounce)
+```
+
+| Env var | Default | Effect |
+|---|---|---|
+| `PI05_E2E_PCC` | off | run torch `Pi0_5Model.sample_actions` reference + report PCC |
+| `PI05_E2E_PERF` | off | 2-warmup + 20-iter traced-replay latency (override `PI05_E2E_PERF_WARMUP`/`_ITERS`) |
+| `PI05_E2E_TIMING` | off | host-bounce vs on-device KV-migration timing |
+| `PI05_PREFILL_PROFILE` | off | eager prefill block-fwd / layout-conv / p2p split |
+| `PI05_VISION_SOCKET` | off (host) | build prefix on-device + socket vision→prefill (needs ~1 GB embed table on vision mesh) |
+| `PI05_SOCK_CONN` | `2` | socket connections (= worker cores) per cross-stage hand-off |
+
+### How to run — PCC & perf pytest (eager pipeline)
+
+The pytest suite below targets the **eager** socket pipeline (the traced path is the
+standalone scripts above):
+
+```bash
+source _bench_runs/pi05_production.env   # checkpoint + production knobs
+PP="PYTHONPATH=$PWD TT_METAL_HOME=$PWD python_env/bin/pytest -xvs"
+
+$PP models/experimental/pi0_5/tests/pcc/test_pcc_tt_bh_glx_stages.py   # per-stage PCC
+$PP models/experimental/pi0_5/tests/pcc/test_pcc_tt_bh_glx_e2e.py      # e2e PCC vs torch (≥0.95)
+$PP models/experimental/pi0_5/tests/perf/test_perf_tt_bh_glx_stages.py # per-stage wall-clock
+$PP models/experimental/pi0_5/tests/perf/test_perf_tt_bh_glx_e2e.py    # e2e wall-clock + StageTimings
+```
+
+### Latest measured (traced, 5 denoise steps, 3 cameras)
+
+| metric | value |
+|---|---|
+| E2E PCC vs torch | **0.9988** |
+| per-inference latency (warm) | **~82 ms** |
+| traced replays | vision 8.0 · prefill 32.5 · denoise 26.1 ms |
+| KV migration | ~265 ms host-bounce → **~11 ms** on-device |
 
 ---
 
