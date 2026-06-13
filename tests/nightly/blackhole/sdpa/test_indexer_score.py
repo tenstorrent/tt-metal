@@ -134,6 +134,15 @@ def production_config(heads):
     - k_chunk=256 (KC=8) over 512: KC=8 load-balances the work units slightly better on heads8
       (0.48 vs 0.49 ms sp7) and stays small enough to leave L1 room for QC=2; KC>=32 is too large.
     """
+    # Sweep override (compute-ceiling investigation): INDEXER_SWEEP_QC / _KC are in TILES.
+    sweep_qc = int(os.environ.get("INDEXER_SWEEP_QC", "0"))
+    sweep_kc = int(os.environ.get("INDEXER_SWEEP_KC", "0"))
+    if sweep_qc or sweep_kc:
+        return ttnn.IndexerScoreProgramConfig(
+            q_chunk_size=(sweep_qc if sweep_qc else (2 if heads <= 16 else 1)) * 32,
+            k_chunk_size=(sweep_kc if sweep_kc else 8) * 32,
+            head_group_size=0,
+        )
     return ttnn.IndexerScoreProgramConfig(
         q_chunk_size=64 if heads <= 16 else 32,
         k_chunk_size=256,

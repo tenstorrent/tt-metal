@@ -135,10 +135,11 @@ void kernel_main() {
         const uint32_t k_tile0 = span.k_tile_start();
         for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
             const uint32_t q_row_abs = span.q_tile_start() + r;
-            // Mirror compute: a full-width unmasked row arrives as one strip in cb_out_strip;
-            // every other row arrives as per-tile (r, c) tiles in cb_out.
+            // Mirror compute: every row of a FULL unit arrives as one strip in cb_out_strip (its
+            // masked suffix, if any, was stamped into the strip by compute); only a partial edge
+            // unit or KC==1 arrives as per-tile (r, c) tiles in cb_out.
             if constexpr (use_fast_strip) {
-                if (row_valid_prefix(q_row_abs, k_tile0, k_tiles_in_unit) == k_tiles_per_unit) {
+                if (k_tiles_in_unit == k_tiles_per_unit) {
                     write_strip<dma_off>(noc, out_acc, q_row_abs, k_tile0, k_tiles_per_unit);
                     continue;
                 }

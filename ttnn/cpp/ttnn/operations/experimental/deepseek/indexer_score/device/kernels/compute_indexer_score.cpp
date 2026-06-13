@@ -185,6 +185,29 @@ void add_mask(uint32_t idx) {
     cb_push_back(acc_cb, 1);
 }
 
+/** Stamp the causal mask onto a strip's masked suffix slots [valid, k_tiles_per_unit) via packer
+ *  L1-accumulate (the SDPA apply_causal_mask_lightweight idiom): the head reduction already packed a
+ *  finite score into every slot, so each masked tile is one copy_tile + one accumulating pack -- add
+ *  the diagonal strict-upper -inf tile on the diagonal slot (its lower triangle keeps the score) and
+ *  the full -inf tile on every slot past it. The whole row then stays on the fast pack_untilize strip
+ *  instead of dropping to the per-tile W=1 untilize + eltwise add_mask path (which also forced the
+ *  valid prefix slow and stacked on the grid-tail cores). Mask idx: 0 = diag strict-upper, 1 = full. */
+template <uint32_t acc_cb, uint32_t mask_cb>
+inline void stamp_strip_mask(uint32_t valid, uint32_t k_tile0, uint32_t diag_tile) {
+    copy_tile_to_dst_init_short(mask_cb);
+    pack_reconfig_l1_acc(1);  // add the mask tile onto the slot's computed score (preserves -inf)
+    for (uint32_t c = valid; c < k_tiles_per_unit; ++c) {
+        const uint32_t midx = (k_tile0 + c == diag_tile) ? 0u : 1u;
+        tile_regs_acquire();
+        copy_tile(mask_cb, midx, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile<true>(0, acc_cb, c);
+        tile_regs_release();
+    }
+    pack_reconfig_l1_acc(0);
+}
+
 /** Untilize a unit's n finished acc tiles into row-major out as one num_blocks=n call: the helper
  *  does the pack_untilize init/uninit bracket ONCE and loops n single-tile blocks internally (no
  *  per-tile reconfig), instead of paying the bracket per tile. Per-tile (W=1) path, used for the
@@ -203,7 +226,7 @@ inline void untilize_acc_strip(uint32_t n) {
  *  parity drifts across the many units a multi-core run packs and the diagonal -inf mask bleeds into
  *  valid tiles. A full mm_block_init after the untilize re-establishes the kernel's sync contract
  *  (llk_math_pack_sync_init + llk_pack_dest_init) before the next unit's matmul. */
-inline void produce_full_strip(uint32_t r) {
+inline void produce_full_strip(uint32_t r, uint32_t valid, uint32_t k_tile0, uint32_t diag_tile) {
     cb_reserve_back(cb_acc_strip, k_tiles_per_unit);
     if constexpr (qk_col_batch > 1) {
         // Batched mode-switch path: the gate w is column-independent and the unit's whole head
@@ -230,6 +253,12 @@ inline void produce_full_strip(uint32_t r) {
         for (uint32_t c = 0; c < k_tiles_per_unit; ++c) {
             accumulate_heads<cb_acc_strip>(r, c, c);  // head reduction -> cb_acc_strip slot c
         }
+    }
+    // Stamp the diagonal/-inf mask onto this row's masked suffix in-place (no path change), so the
+    // whole strip still untilizes via the fast W=KC pack_untilize. valid == k_tiles_per_unit means a
+    // fully causal-valid row -> nothing to mask.
+    if (valid < k_tiles_per_unit) {
+        stamp_strip_mask<cb_acc_strip, cb_mask>(valid, k_tile0, diag_tile);
     }
     cb_push_back(cb_acc_strip, k_tiles_per_unit);
     compute_kernel_lib::untilize<k_tiles_per_unit, cb_acc_strip, cb_out_strip>(1);
@@ -274,10 +303,13 @@ void kernel_main() {
             const uint32_t k_tile0 = span.k_tile_start();
             const uint32_t valid = row_valid_prefix(span.q_tile_start() + r, k_tile0, k_tiles_in_unit);
 
-            // A full-width unmasked row is one fast-untilize strip; the writer mirrors this branch.
+            // Every row of a FULL unit goes through the fast-untilize strip; the masked suffix (if
+            // any) is stamped onto the strip slots via packer L1-acc inside produce_full_strip. Only
+            // a partial edge unit (k_tiles_in_unit < KC, dense schedule never splits Tt unevenly at
+            // sp7) or KC==1 falls to the per-tile path below. The writer mirrors this same branch.
             if constexpr (use_fast_strip) {
-                if (valid == k_tiles_per_unit) {
-                    produce_full_strip(r);
+                if (k_tiles_in_unit == k_tiles_per_unit) {
+                    produce_full_strip(r, valid, k_tile0, diag_tile);
                     continue;
                 }
             }
