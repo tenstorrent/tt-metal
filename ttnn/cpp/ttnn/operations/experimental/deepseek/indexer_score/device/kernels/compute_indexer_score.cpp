@@ -217,10 +217,24 @@ inline void untilize_acc_strip(uint32_t n) {
     compute_kernel_lib::untilize<1, acc_cb, out_cb>(n);
 }
 
+/** Restore the half-sync math<->pack DEST contract that the BH fast pack_untilize leaves unrestored
+ *  in this (half-sync) kernel: its uninit's math re-sync _llk_math_pack_sync_init_ is compiled out by
+ *  `if constexpr (DST_SYNC_MODE != FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE)` (exactly true here,
+ *  dst_full_sync_en=false). This re-seeds BOTH sides of the math<->pack semaphore -- the same pair the
+ *  full mm_block_init used (llk_math_pack_sync_init + llk_pack_dest_init, matmul.h) -- but drops the
+ *  unpack/math/pack hw_configure + matmul/pack init that the next unit's set_matmul_mode re-derives
+ *  anyway. Both halves are required: seeding only the math side leaves the pack side's view stale, so
+ *  the math thread stalls on the semaphore every resync (a -7pt hit at QC=1/KC=4 where resyncs are
+ *  densest). With both, it is the minimal correct resync -- far cheaper than a full block init. */
+inline void resync_fast_untilize_dest() {
+    MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>()));
+}
+
 /** Accumulate one full-width row's k_tiles_per_unit output tiles into cb_acc_strip slots
  *  [slot_base, slot_base + k_tiles_per_unit) and stamp its causal mask -- but do NOT untilize.
  *  The caller reserves the whole unit's q_tiles_per_unit*KC strip region up front and untilizes all
- *  rows in ONE fast pack_untilize bracket + one mm_block_init resync (see produce_full_unit). This
+ *  rows in ONE fast pack_untilize bracket + one math-sync resync (see produce_full_unit). This
  *  amortizes that fixed per-strip cost over the unit's QC rows instead of paying it per row, so the
  *  compute ceiling tracks the unit area QC*KC rather than KC alone (Proposal 1). */
 inline void accumulate_full_strip_row(
@@ -262,9 +276,9 @@ inline void accumulate_full_strip_row(
  *  untilize. Accumulate every row's strip into a contiguous q_tiles_per_unit*KC region of cb_acc_strip
  *  (uniform single push so the fast packer's reads never wrap the ring), then untilize all QC strips
  *  with num_blocks=q_tiles_per_unit -- the pack_untilize init/uninit bracket runs ONCE for the whole
- *  unit, and a single mm_block_init resyncs the half-sync DEST contract afterwards (the fast untilize's
- *  uninit does not restore math<->pack sync; without the resync dest_offset_id parity drifts and the
- *  -inf mask bleeds into valid tiles). The writer mirrors this: it pops the QC strips in row order. */
+ *  unit, and a single resync_fast_untilize_dest() restores the half-sync math<->pack contract
+ *  afterwards (without it dest_offset_id parity drifts and the -inf mask bleeds into valid tiles).
+ *  The writer mirrors this: it pops the QC strips in row order. */
 inline void produce_full_unit(const WorkUnitSpan& span, uint32_t k_tiles_in_unit) {
     constexpr uint32_t unit_strip = q_tiles_per_unit * k_tiles_per_unit;
     cb_reserve_back(cb_acc_strip, unit_strip);
@@ -276,8 +290,7 @@ inline void produce_full_unit(const WorkUnitSpan& span, uint32_t k_tiles_in_unit
     }
     cb_push_back(cb_acc_strip, unit_strip);
     compute_kernel_lib::untilize<k_tiles_per_unit, cb_acc_strip, cb_out_strip>(q_tiles_per_unit);
-    mm_block_init(
-        cb_q, cb_k, cb_qk, 1 /*transpose k*/, 1 /*ct_dim*/, heads_per_dest_pass /*rt_dim*/, head_dim_tiles /*kt_dim*/);
+    resync_fast_untilize_dest();  // fill the exact math-sync gap the fast-untilize uninit leaves
 }
 
 void kernel_main() {
@@ -308,7 +321,7 @@ void kernel_main() {
 
         // A FULL unit (every row spans all KC k-tiles) goes through the batched fast-untilize:
         // accumulate all q_tiles_per_unit rows' strips into cb_acc_strip, then untilize the whole
-        // unit under ONE pack_untilize bracket + one mm_block_init resync (the fixed per-strip cost
+        // unit under ONE pack_untilize bracket + one math-sync resync (the fixed per-strip cost
         // we amortize over QC*KC, not KC). Masked suffixes are stamped onto the strip slots in-place.
         // Only a partial edge unit (k_tiles_in_unit < KC; the dense schedule never splits Tt unevenly
         // at sp7) or KC==1 falls to the per-tile path below. The writer mirrors this same branch.

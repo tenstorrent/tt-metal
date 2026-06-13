@@ -170,15 +170,48 @@ extra L1**. Past KC=16 the gain saturates: QC=2/KC=20 = 67.2 % (−0.4 vs KC=16)
 (88 k-units over 110 cores deals worse than KC=16's 110) now that amortization is exhausted.
 Correctness: 15/15 accuracy tests pass (knobs QC=2/KC=4/diag-mid-group, multicore QC=2, bfp8, corner).
 
+## FIX 3 LANDED — shrink the post-untilize resync to the exact sync gap (Proposal 2)
+
+The remaining fixed cost per unit was the half-sync resync. We had used a full `mm_block_init` after
+the fast untilize, but that re-derives unpack/math/pack **config** that the next unit's
+`set_matmul_mode` re-inits anyway. The actual gap is narrow: `fast_untilize_uninit` already restores
+the **pack** side (`llk_init_packer_dest_offset_registers<Default>` + `llk_pack_reconfig` +
+`llk_pack_init`, `fast_untilize.h`), and its **math** re-sync `_llk_math_pack_sync_init_` is the only
+thing compiled out — by `if constexpr (DST_SYNC_MODE != FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE)`, which
+is exactly true in this half-sync kernel.
+
+Fix: `resync_fast_untilize_dest()` re-seeds **both halves of the math↔pack semaphore** —
+`llk_math_pack_sync_init` + `llk_pack_dest_init`, the same pair `mm_block_init` used — and drops the
+rest. Kernel-side, no shared-LLK change.
+
+**Both halves are required.** Seeding only the math side (the literal "only gap") leaves the pack
+side's view stale, so the math thread **stalls on the semaphore every resync** — a −7 pt cliff at
+QC=1/KC=4 (57.2 % vs 64.1 %), where resyncs are densest, while other cells looked fine. Re-adding
+`llk_pack_dest_init` removes the stall. Accuracy is unaffected either way (15/15); this was a pure
+perf trap, and the lesson is that a one-sided semaphore re-seed is worse than none.
+
+Results (heads8 bfp8 sp7, DMA off; Δ vs Proposal 1):
+
+| QC \ KC | 4           | 8           | 16          |
+|---------|-------------|-------------|-------------|
+| **1**   | 64.7 (+0.6) | 66.6 (+0.3) | 67.7 (+0.4) |
+| **2**   | 65.8 (+0.4) | 67.0 (+0.2) | 67.7 (+0.1) |
+| **4**   | 66.2 (+0.2) | 67.2 (+0.1) | L1 overflow |
+
+Every cell improves; the gain is biggest where resyncs are densest (low KC). Production **QC=2/KC=8:
+66.8 → 67.0 %**. End-to-end across all three fixes the production compute ceiling is **65.7 → 67.0 %
+(+1.3)**, and the grid best is **67.7 %** (QC=1 or 2, KC=16) — all at zero extra L1 for QC≤2.
+
 ## One-line summary
 
-- **avg per-core work** = f(flush frequency). Pre-Proposal-1 the kernel flushed (untilize + resync)
-  once per row, so flush frequency = tiles/KC and KC was the only lever; QC was flat.
-- **Proposal 1**: flush once per *unit* → fixed cost amortizes over **QC*KC**, so QC now helps too
-  and you can reach the big-KC ceiling at small KC by raising QC (until QC*KC costs L1 at QC≥3).
-- Compute-ceiling sweet spot now: **QC=2, KC=16 (67.6 %)**; KC saturates by 16. Production QC=2/KC=8
-  gets the +1.1-pt amortization win for free. The remaining fixed cost is the `mm_block_init` resync
-  (the BH fast-untilize half-sync gap) — killing that at its root (Proposal 2) lifts every cell.
+- **avg per-core work** = f(flush frequency) × C_fixed. Pre-Proposal-1 the kernel flushed
+  (untilize + resync) once per row, so flush frequency = tiles/KC and KC was the only lever; QC flat.
+- **Proposal 1**: flush once per *unit* → fixed cost amortizes over **QC*KC**, so QC now helps too and
+  you reach the big-KC ceiling at small KC by raising QC (until QC*KC costs L1 at QC≥3).
+- **Proposal 2**: shrink C_fixed itself — the post-untilize resync is just the math↔pack semaphore
+  re-seed (both halves), not a full block init. +0.1–0.6 pt across the board, free.
+- Compute-ceiling sweet spot: **KC=16, QC=1 or 2 (67.7 %)**; KC saturates by 16. Production QC=2/KC=8
+  now 67.0 % (was 65.7 % before any fix), all at zero extra L1.
 
 ## Reproduce
 
