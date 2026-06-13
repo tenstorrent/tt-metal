@@ -62,6 +62,15 @@ TEST(KernelSignatureParser, NoFunctionParams) {
     EXPECT_TRUE(sig->fn_param_names.empty());
 }
 
+// An explicit `(void)` parameter list parses as no parameters (not a parameter named "void").
+TEST(KernelSignatureParser, ExplicitVoidParamListIsEmpty) {
+    const std::string src = "TT_KERNEL void k(void) {}";
+    auto sig = parse_kernel_main_signature(src);
+    ASSERT_TRUE(sig.has_value());
+    EXPECT_EQ(sig->name, "k");
+    EXPECT_TRUE(sig->fn_param_names.empty());
+}
+
 // std::uint32_t is accepted as a synonym for uint32_t.
 TEST(KernelSignatureParser, StdUint32Accepted) {
     const std::string src = "TT_KERNEL void k(std::uint32_t a) {}";
@@ -104,6 +113,21 @@ TEST(KernelSignatureParser, LineCommentContinuationIgnored) {
     ASSERT_TRUE(sig.has_value());
     EXPECT_EQ(sig->name, "only_real");
     EXPECT_EQ(sig->fn_param_names, (std::vector<std::string>{"a"}));
+}
+
+// A C++14 digit separator (1'024) must not be mistaken for a char-literal opener in strip_noise.
+// Without the guard the ' opens char-mode and blanks the buried TT_KERNEL marker to EOF, so the
+// kernel would parse as nullopt (legacy).
+TEST(KernelSignatureParser, DigitSeparatorNotMistakenForCharLiteral) {
+    const std::string src =
+        "constexpr uint32_t kSize = 1'024;\n"
+        "template <uint32_t a>\n"
+        "TT_KERNEL void k(uint32_t b) {}\n";
+    auto sig = parse_kernel_main_signature(src);
+    ASSERT_TRUE(sig.has_value());
+    EXPECT_EQ(sig->name, "k");
+    EXPECT_EQ(sig->template_param_names, (std::vector<std::string>{"a"}));
+    EXPECT_EQ(sig->fn_param_names, (std::vector<std::string>{"b"}));
 }
 
 // Two real markers -> error.
