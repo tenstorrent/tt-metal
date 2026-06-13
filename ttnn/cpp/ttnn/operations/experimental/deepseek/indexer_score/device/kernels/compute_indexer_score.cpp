@@ -42,6 +42,13 @@ constexpr uint32_t qk_batch_heads = get_compile_time_arg_val(num_common_ct_args 
 // k-columns batched per matmul<->mul mode switch in the full-strip path (1 = per-column, no batching).
 constexpr uint32_t qk_col_batch = get_compile_time_arg_val(num_common_ct_args + 2);
 
+// k-columns whose head reductions share ONE DEST acquire in the full-strip mul phase: each column
+// accumulates into its own DEST tile (acc_to_dest), so the per-column acquire/commit/wait/pack
+// handshake is paid once per batch instead of once per column, and the FPU runs a long MAC burst
+// that keeps the unpacker streaming (the mul phase is per-tile-sync-bound, not unpacker-bandwidth-
+// bound). Capped by the DEST tile budget the matmul already uses (heads_per_dest_pass <= dst_size).
+constexpr uint32_t mul_col_batch = (k_tiles_per_unit < heads_per_dest_pass) ? k_tiles_per_unit : heads_per_dest_pass;
+
 // The per-(r,c) head reduction runs as two phases per head group: matmul_phase fills cb_qk
 // with the group's relu(q.kT) tiles, then mul_accum_phase multiplies by the gates and packs
 // each head onto the single accumulator tile via L1-accumulation. Splitting the phases lets
@@ -129,6 +136,34 @@ void mul_accum_chunk(uint32_t w_base, uint32_t n, bool first, uint32_t acc_slot)
     pack_tile<true>(0, acc_cb, acc_slot);  // one pack for the whole chunk's head sum
     tile_regs_release();
     cb_pop_front(qk_cb, n);
+}
+
+/** Mul+accumulate a batch of `ncols` k-columns in ONE DEST acquire (full-strip path): column j's
+ *  `nheads` heads MAC into DEST tile j (acc_to_dest; the freshly acquired DEST section is ZEROACC-
+ *  cleared so head 0 seeds tile j), then all ncols finished tiles pack to acc_cb[slot_base + j]. This
+ *  amortizes the per-column acquire/commit/wait/pack DEST handshake over the whole batch, and the
+ *  single long MAC burst keeps the FPU consuming so the unpacker stalls less on the SrcA double
+ *  buffer. qk_cb is laid out [col][head]; caller guarantees ncols <= DEST depth and l1_acc already 0. */
+template <uint32_t qk_cb, uint32_t w_cb, uint32_t acc_cb>
+inline void mul_accum_cols_batched(uint32_t w_base, uint32_t ncols, uint32_t nheads, uint32_t slot_base) {
+    cb_wait_front(qk_cb, ncols * nheads);
+    tile_regs_acquire();
+    // head-outer / column-inner: consecutive MACs target DIFFERENT DEST tiles (dst0..ncols-1), so the
+    // acc_to_dest read-modify-write chain on each tile is spaced `ncols` instructions apart -- the FPU
+    // pipelines independent columns instead of stalling on the per-tile MAC latency (the same dst RAW
+    // hazard that serialized the column-outer order). Each dst[j] still sums all nheads (commutative).
+    for (uint32_t h = 0; h < nheads; ++h) {
+        for (uint32_t j = 0; j < ncols; ++j) {
+            mul_tiles_bcast_cols(qk_cb, w_cb, j * nheads + h, w_base + h, j);  // dst[j] += relu(qk[col j,h]) * w[h]
+        }
+    }
+    tile_regs_commit();
+    tile_regs_wait();
+    for (uint32_t j = 0; j < ncols; ++j) {
+        pack_tile<true>(j, acc_cb, slot_base + j);  // each column's head sum to its strip slot
+    }
+    tile_regs_release();
+    cb_pop_front(qk_cb, ncols * nheads);
 }
 
 /** Head reduction for one output tile (r, c): acc front = sum_h relu(q[h,r].k[c]^T) * w[h,r],
@@ -254,9 +289,13 @@ inline void accumulate_full_strip_row(
                 }
             }
             set_mul_mode<cb_qk, cb_w, cb_acc_strip>();
-            for (uint32_t cc = 0; cc < cols; ++cc) {
-                // single chunk -> each column's head sum is one MAC pass that seeds its own slot
-                mul_accum_chunk<cb_qk, cb_w, cb_acc_strip>(w_base, qk_batch_heads, /*first=*/true, slot_base + c0 + cc);
+            // Reduce the head sums mul_col_batch columns at a time, each column into its own DEST
+            // tile, so the DEST acquire/pack handshake is amortized over the batch instead of paid
+            // per column (the mul phase is per-tile-sync-bound). l1_acc is already 0 here.
+            pack_reconfig_l1_acc(0);
+            for (uint32_t cc = 0; cc < cols; cc += mul_col_batch) {
+                const uint32_t nb = (cc + mul_col_batch <= cols) ? mul_col_batch : (cols - cc);
+                mul_accum_cols_batched<cb_qk, cb_w, cb_acc_strip>(w_base, nb, qk_batch_heads, slot_base + c0 + cc);
             }
         }
         pack_reconfig_l1_acc(0);  // done; the unit untilize below packs overwrite
