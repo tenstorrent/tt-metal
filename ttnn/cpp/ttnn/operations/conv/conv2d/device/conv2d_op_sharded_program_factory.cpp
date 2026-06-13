@@ -658,13 +658,13 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     //     (copy_subblock_row_strided) mirrors the strided spill for the l1_acc-on Out path. Supported for
     //     BOTH l1_acc on and off.
     //   • ROW_MAJOR (untilize_out, Interm target): TileRowMajor packs the interm row-major, then plain
-    //     `untilize` reads it (no reblock gather). Supported only WITH packer_l1_acc. With l1_acc OFF the
-    //     software spill/reload would need to drain the prior K-block's full output block (= the entire
-    //     dedicated one-block interm region) AND reserve the next M-row-group in the SAME CB; a row-strided
-    //     pack can't interleave that at sub-block granularity the way SubblockMajor's pop-then-reserve does,
-    //     so the one-block interm overflows → reserve_back self-deadlock. This is a consequence of M1's
-    //     dedicate-one-block sizing, not pin. The l1_acc-off ROW_MAJOR conv therefore degrades to byte-
-    //     identical SubblockMajor (the untilize-out Interm reload path the SBM kernel already runs).
+    //     `untilize` reads it (no reblock gather). Supported for BOTH l1_acc on and off (M3). With l1_acc
+    //     ON the helper accumulates per-address across K-blocks. With l1_acc OFF the software spill/reload
+    //     drains the prior K-block's full output block AND reserves the next M-row-group in the SAME
+    //     matmul_partials_cb; the last-block reserve_back lands one M-row-group ON TOP of a still-fronted
+    //     full block of spills (the reload pop is sequenced after the reserve), so the dedicated partials
+    //     CB is sized to 2*out_block_num_tiles for the l1_acc-OFF case (get_cb_info MATMUL_PARTIALS) — that
+    //     headroom clears the otherwise-deadlocking reserve_back (was Watcher UPAW). No degrade to SBM.
     // The kernel keys all of this off the CONV_TILE_PACK_ROW_MAJOR compute define (see conv_bmm_tilize.cpp).
     // When ineligible we emit byte-identical SubblockMajor.
     //
@@ -673,8 +673,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     //   • !has_bias                      (TileRowMajor + bias deadlocks the partials CB — see kernel note)
     //   • weights bf16 or fp32           (the lever is inert on bf8 — same packed-tile layout either way)
     //   • not 1d-depthwise               (0-page partials; the lever does not apply)
-    //   • packer_l1_acc_en OR !untilize_out  (l1_acc-off ROW_MAJOR/untilize is the one-block reserve
-    //     deadlock above; TILE output and all l1_acc-on convs are fine)
+    //   • (no acc/layout gate — M3 sized the l1_acc-OFF partials CB for the ROW_MAJOR reload, so all four
+    //     {l1_acc on,off}×{TILE,ROW_MAJOR} quadrants are supported)
     //   • the relaxed subblock differs from the SBM subblock AND is larger: relaxed.out_subblock_h > 1
     //     (captures "per_core_N stranded" — SBM fell back to h==1,w==per_core_N) AND act_block_h_ntiles
     //     (per_core_M) divisible by relaxed.out_subblock_h.
@@ -684,11 +684,10 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         const tt::DataFormat weights_df = tt::tt_metal::datatype_to_dataformat_converter(b.dtype());
         const bool weights_df_supported =
             (weights_df == tt::DataFormat::Float16_b || weights_df == tt::DataFormat::Float32);
-        // l1_acc-off + ROW_MAJOR (untilize_out) Interm-target reload overflows the dedicated one-block
-        // interm CB (see the per-layout note above); keep that quadrant on SubblockMajor.
-        const bool trm_supported_for_acc_layout = packer_l1_acc_en || !untilize_out;
-        if (height_sharded && !has_bias && weights_df_supported && !is_conv_1d_depthwise_conv &&
-            trm_supported_for_acc_layout) {
+        // M3: the l1_acc-OFF + ROW_MAJOR (untilize_out) Interm-target reload is now sized for in
+        // get_cb_info (matmul_partials_cb = 2*out_block_num_tiles when !packer_l1_acc), so it no longer
+        // overflows the partials CB. All four {l1_acc on,off}×{TILE,ROW_MAJOR} quadrants emit TileRowMajor.
+        if (height_sharded && !has_bias && weights_df_supported && !is_conv_1d_depthwise_conv) {
             // Recompute the tuner's choice both ways: SBM (subblock_w_eq_per_core_n_required=true, what the
             // host block_config already used) vs relaxed (=false, what TileRowMajor permits). Synthesize the
             // compute config from fp32_dest_acc_en so DST capacity matches the kernel (dst_full_sync_en=false

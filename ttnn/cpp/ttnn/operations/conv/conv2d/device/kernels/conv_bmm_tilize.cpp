@@ -355,10 +355,14 @@ void kernel_main() {
     // out_subblock_w == per_core_N constraint, and folds a LARGER (relaxed) out_subblock into the
     // compile args. TRM lifts that constraint, so a relaxed subblock with out_subblock_h > 1 (fewer
     // matmul_block_init / pack passes per output block) becomes legal. With the define:
-    //   • the matmul helper packs the interm/out row-major (pack_subblock_row_strided) instead of
-    //     subblock-major, on the SAME non-pin dedicated-partials FIFO. l1_acc ON accumulates
-    //     per-address across K-blocks; l1_acc OFF spills/reloads (the helper's strided reload mirrors
-    //     the strided spill — see matmul_block_helpers.inl copy_subblock_row_strided).
+    //   • the matmul helper packs the LAST K-block row-major (pack_subblock_row_strided) instead of
+    //     subblock-major, on the SAME non-pin dedicated-partials FIFO. l1_acc ON accumulates per-address
+    //     across K-blocks (spill_row_grouped=true: non-last spills land row-strided, last-block reload
+    //     gathers via copy_subblock_row_strided). l1_acc OFF software-spills/reloads: non-last spills are
+    //     subblock-major and the reload is contiguous (copy_block_matmul_partials), but the LAST block's
+    //     reserve_back lands one M-row-group on top of a still-fronted full block of spills, so the factory
+    //     sizes matmul_partials_cb to 2*out_block_num_tiles for l1_acc-OFF (M3) — that headroom is what
+    //     keeps the ROW_MAJOR/untilize Interm-target path from self-deadlocking on reserve_back.
     //   • the untilize phase (ROW_MAJOR output) reads the row-major interm via plain `untilize` (the
     //     row strip is already contiguous tile-row order), NOT reblock_and_untilize (SubblockMajor only).
     //   • TILE output packs the last K-block straight to out_cb in row-major tile order (== the tiled

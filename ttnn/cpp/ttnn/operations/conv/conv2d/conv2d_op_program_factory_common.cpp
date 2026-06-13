@@ -223,9 +223,36 @@ std::vector<CBInfo> get_cb_info(
     // (in0_num_subblocks*out_subblock_h == act_block_h_ntiles; in1_num_subblocks*out_subblock_w ==
     // per_core_out_matrix_width_ntiles), independent of how the block is split into subblocks.
     const uint32_t out_block_num_tiles = block_config.act_block_h_ntiles * per_core_out_matrix_width_ntiles;
+    //
+    // M3 — close the last TileRowMajor quadrant (l1_acc OFF + ROW_MAJOR/untilize, multi-K). The one-block
+    // sizing above is REQUIRED ONLY for packer_l1_acc=TRUE: per-address L1_ACC accumulation needs the
+    // helper's non-pin FIFO to WRAP to a fixed base every K-block, which a one-block region guarantees.
+    // Do NOT grow the l1_acc-ON region — a multi-block region would let the FIFO advance and reintroduce
+    // the M1 multi-output-block L1_ACC mis-accumulation that the resnet50 bias+l1_acc canary catches.
+    //
+    // The ONE quadrant that needs more than one block is TileRowMajor + l1_acc-OFF + ROW_MAJOR/untilize
+    // (the factory's TRM eligibility: HEIGHT_SHARDED, no-bias, untilize_out, !packer_l1_acc). There the
+    // SOFTWARE spill/reload is a NORMAL FIFO (no fixed-base wrap requirement), and the last K-block must
+    // reserve_back one M-row-group in matmul_partials_cb WHILE a full output block of subblock-major spills
+    // from the prior K-block is still fronted (the reload pop is sequenced after the reserve) — peak
+    // occupancy out_block_num_tiles + row_group_tiles. A one-block region overflows → reserve_back self-
+    // deadlock (Watcher UPAW). Give that quadrant headroom of one extra block (2*out_block_num_tiles ≥
+    // out_block_num_tiles + row_group_tiles for any subblock split, since row_group_tiles =
+    // out_block_num_tiles/in0_num_subblocks ≤ out_block_num_tiles, and the relaxed subblock_h isn't visible
+    // here). OOM cost on L1-tight convs is accepted (features over perf; user directive on GH#45995).
+    //
+    // Every OTHER path keeps the one-block region byte-identical. In particular the SubblockMajor
+    // bias+untilize l1_acc-OFF path manually rewinds matmul_partials_cb rd/wr to the kernel-entry base after
+    // bias-add so the untilize reads the freshly-written block from that base; that rewind assumes the
+    // one-block geometry, so growing its CB corrupts the output (the resnet-style bias canary catches it).
+    // Narrowing the headroom to !enable_bias keeps the bias path at one block. The plain-TILE l1_acc-OFF
+    // path (untilize_out=false) likewise stays one block — it never reserves a row-group on top of spills.
+    const bool needs_software_reload_headroom = untilize_out && !packer_l1_acc && !enable_bias;
+    const uint32_t matmul_partials_num_pages =
+        is_1d_depthwise_conv ? 0 : (needs_software_reload_headroom ? 2 * out_block_num_tiles : out_block_num_tiles);
     cb_info.emplace_back(CBInfo{
         .name = Conv2dCb::MATMUL_PARTIALS,
-        .num_pages = is_1d_depthwise_conv ? 0 : out_block_num_tiles,
+        .num_pages = matmul_partials_num_pages,
         .page_size = partial_tile_size,
         .is_globally_allocated = false,
         .data_format = partial_df});
