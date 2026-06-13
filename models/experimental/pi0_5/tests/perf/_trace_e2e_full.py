@@ -16,6 +16,7 @@ Stages (each reuses the validated prototype logic):
 
 import os
 import sys
+import time
 
 # Bake in the validated production perf flags (single source of truth:
 # _bench_runs/pi05_production.env, 97.2% LIBERO). setdefault => an explicit
@@ -266,6 +267,9 @@ def main():
         def c2l(r, c):
             return 3 * r + (c if r % 2 == 0 else 2 - c)
 
+        def snake_col_e2e(r, j):  # prefill column holding layer 3r+j (inverse of c2l)
+            return j if r % 2 == 0 else 2 - j
+
         ppl, pmeta = [], {}
         for L in range(18):
             bw = _load_block_weights_to_submesh(lw_all, L, scratch)
@@ -305,25 +309,141 @@ def main():
         _, pkvs = pchain(prefix_m)
         ttnn.end_trace_capture(prefill, ptid, cq_id=0)
         ttnn.execute_trace(prefill, ptid, cq_id=0, blocking=True)
-        # extract layer k's KV (chip coord(k)'s lane)
-        kvK, kvV = [], []
-        for k in range(18):
-            r, c = snake[k]
-            idx = r * 3 + c
-            kvK.append(ttnn.to_torch(pkvs[k][0], mesh_composer=ttnn.ConcatMeshToTensor(prefill, dim=0))[idx])
-            kvV.append(ttnn.to_torch(pkvs[k][1], mesh_composer=ttnn.ConcatMeshToTensor(prefill, dim=0))[idx])
-        log(f"PREFILL done: 18 KV, K[0] {tuple(kvK[0].shape)} finite={torch.isfinite(kvK[0]).all().item()}")
+        log(f"PREFILL done: 18 KV, K[0] {tuple(pkvs[0][0].shape)}")
 
-        # ===================== KV migration -> denoise (host-bounce) =====================
-        # denoise chip c needs layers 3c..3c+2's KV. shard so chip c = those 3 layers.
-        def shard_kv(kvlist, local):
-            layers = [c * 3 + local for c in range(6)]
-            stacked = torch.cat([kvlist[L].reshape(1, 1, -1, ecfg.head_dim) for L in layers], dim=0)  # (6,1,P,hd)
-            return _shard(stacked, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, denoise)
+        # ===================== KV migration -> denoise (on-device p2p + socket) =====================
+        # Per row r, in-mesh point_to_point gathers layer-(3r+j) KV onto the col-2
+        # chip (r,2), then ONE adjacent FABRIC_1D socket (r,2)->(r,3) lands it on
+        # denoise chip r as past_k[j] (chip r = layer 3r+j). Fully on-device,
+        # replacing the 36x full-mesh-gather host bounce (~314ms; see PI05_E2E_TIMING).
+        # FABRIC_1D sockets are adjacent-only, hence the p2p-to-col-2 first; pkvs and
+        # past_k share per-chip shape (1,1,P,hd) so shards move directly. Expert
+        # cross-attn concat needs bf8_b, so normalize the per-layer KV first.
+        _SOCK_PAGE = 4096
+        _row_sock = {}
 
-        past_k = [shard_kv(kvK, L) for L in range(3)]
-        past_v = [shard_kv(kvV, L) for L in range(3)]
-        log("KV migrated to denoise (sharded 3 layers/chip)")
+        def _sock_for_row(r):
+            if r not in _row_sock:
+                conn = ttnn.SocketConnection(
+                    ttnn.MeshCoreCoord(ttnn.MeshCoordinate(r, 2), ttnn.CoreCoord(0, 0)),
+                    ttnn.MeshCoreCoord(ttnn.MeshCoordinate(r, 0), ttnn.CoreCoord(0, 1)),
+                )
+                mem = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, _SOCK_PAGE * 4)
+                _row_sock[r] = ttnn.create_socket_pair(prefill, denoise, ttnn.SocketConfig([conn], mem))
+            return _row_sock[r]
+
+        def _kv_norm(side):
+            # bf16 DRAM-interleaved TILE per-layer KV on prefill: p2p does NOT
+            # support bf8_b ("datum for bfp8 is invalid"), and DRAM-interleaved is
+            # the p2p-safe layout. pkvs[k][side] per-chip = (1,1,P,hd). Typecast to
+            # bf8_b happens AFTER the socket, on the denoise side.
+            out = []
+            for k in range(18):
+                t = pkvs[k][side]
+                if t.dtype != ttnn.bfloat16:
+                    t = ttnn.typecast(t, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                out.append(ttnn.to_memory_config(ttnn.to_layout(t, ttnn.TILE_LAYOUT), ttnn.DRAM_MEMORY_CONFIG))
+            return out
+
+        def _recv_bufs():
+            return [
+                _shard(torch.zeros(6, 1, prefix_pad, ecfg.head_dim), ttnn.bfloat16, ttnn.TILE_LAYOUT, denoise)
+                for _ in range(3)
+            ]
+
+        def migrate_side(side, out):
+            layers = _kv_norm(side)
+            for j in range(3):
+                for r in range(6):
+                    sc = snake_col_e2e(r, j)
+                    if sc != 2:  # arg order: (input, FROM_source, TO_dest)
+                        ttnn.point_to_point(
+                            layers[3 * r + j],
+                            ttnn.MeshCoordinate(r, sc),
+                            ttnn.MeshCoordinate(r, 2),
+                            topology=ttnn.Topology.Linear,
+                            output_tensor=layers[3 * r + j],
+                        )
+            ttnn.synchronize_device(prefill)
+            for j in range(3):
+                for r in range(6):
+                    s_sock, r_sock = _sock_for_row(r)
+                    ttnn.experimental.send_direct_async(layers[3 * r + j], s_sock)
+                    ttnn.experimental.recv_direct_async(out[j], r_sock)
+            ttnn.synchronize_device(denoise)
+
+        past_k, past_v = _recv_bufs(), _recv_bufs()
+        migrate_side(0, past_k)
+        migrate_side(1, past_v)
+        # expert cross-attn concat needs bf8_b (matches per-step k_rope dtype)
+        past_k = [ttnn.typecast(t, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in past_k]
+        past_v = [ttnn.typecast(t, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in past_v]
+        log("KV migrated to denoise (on-device p2p+socket, 3 layers/chip)")
+
+        # ===================== steady-state host-bounce timing (opt-in) =====================
+        # PI05_E2E_TIMING=1 measures the PURE per-inference transfer cost of the two
+        # cross-stage host bounces, with all ops already built+JIT-warmed (so this
+        # excludes one-time projector construction / first-call compilation). N reps,
+        # report mean. This is the latency the socket+p2p redesign would remove.
+        if os.environ.get("PI05_E2E_TIMING", "").lower() in ("1", "true", "yes", "on"):
+            N = 10
+
+            def _bench(fn):
+                fn()  # warm
+                t0 = time.perf_counter()
+                for _ in range(N):
+                    fn()
+                return 1e3 * (time.perf_counter() - t0) / N
+
+            def _v_d2h():
+                ttnn.execute_trace(vblk, vtid, cq_id=0, blocking=True)
+                ttnn.to_torch(vbo, mesh_composer=ttnn.ConcatMeshToTensor(vblk, dim=0))[2 * N_CAMS : 3 * N_CAMS]
+
+            def _prefix_h2d():
+                _repl(prefix.to(torch.float32), prefill)
+
+            def _kv_host():  # OLD host-bounce: 36 full-mesh gathers + 6 reshards
+                kk = [
+                    ttnn.to_torch(pkvs[k][0], mesh_composer=ttnn.ConcatMeshToTensor(prefill, dim=0))[
+                        snake[k][0] * 3 + snake[k][1]
+                    ]
+                    for k in range(18)
+                ]
+                vv = [
+                    ttnn.to_torch(pkvs[k][1], mesh_composer=ttnn.ConcatMeshToTensor(prefill, dim=0))[
+                        snake[k][0] * 3 + snake[k][1]
+                    ]
+                    for k in range(18)
+                ]
+                for j in range(3):
+                    ly = [c * 3 + j for c in range(6)]
+                    _shard(
+                        torch.cat([kk[L].reshape(1, 1, -1, ecfg.head_dim) for L in ly], 0),
+                        ttnn.bfloat8_b,
+                        ttnn.TILE_LAYOUT,
+                        denoise,
+                    )
+                    _shard(
+                        torch.cat([vv[L].reshape(1, 1, -1, ecfg.head_dim) for L in ly], 0),
+                        ttnn.bfloat8_b,
+                        ttnn.TILE_LAYOUT,
+                        denoise,
+                    )
+
+            def _kv_socket():  # NEW on-device p2p + adjacent socket
+                migrate_side(0, _recv_bufs())
+                migrate_side(1, _recv_bufs())
+
+            v_d2h = _bench(_v_d2h)
+            prefix_h2d = _bench(_prefix_h2d)
+            kv_host = _bench(_kv_host)
+            kv_sock = _bench(_kv_socket)
+            log(
+                f"TIMING vision->prefix host-bounce: d2h={v_d2h:.2f}ms + h2d={prefix_h2d:.2f}ms = {v_d2h+prefix_h2d:.2f}ms"
+            )
+            log(
+                f"TIMING KV migration: host-bounce={kv_host:.2f}ms  on-device p2p+socket={kv_sock:.2f}ms  speedup={kv_host/kv_sock:.1f}x"
+            )
 
         # ===================== DENOISE (traced Euler) =====================
         elt = []
