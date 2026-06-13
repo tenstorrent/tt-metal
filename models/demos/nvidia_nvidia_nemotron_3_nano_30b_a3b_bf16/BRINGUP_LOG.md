@@ -4,28 +4,28 @@
 **Slug:** `nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-13T22:50:54Z
-**Updated:** 2026-06-13T22:58:19Z
+**Updated:** 2026-06-13T23:05:58Z
 
 ## Block Status
 
 | Block | Phase | Status | PCC | Attempts | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| Embedding | reference | pending | — | 0 |  |
+| Embedding | reference | done | 1.000000 | 0 |  |
 | Embedding | ttnn | pending | — | 0 |  |
 | Embedding | debug | n/a | — | 0 |  |
 | Embedding | optimization | pending | — | 0 |  |
 | Embedding | real_weights | pending | — | 0 |  |
-| LayerNorm | reference | pending | — | 0 |  |
+| LayerNorm | reference | done | 1.000000 | 1 |  |
 | LayerNorm | ttnn | pending | — | 0 |  |
 | LayerNorm | debug | n/a | — | 0 |  |
 | LayerNorm | optimization | pending | — | 0 |  |
 | LayerNorm | real_weights | pending | — | 0 |  |
-| RoPE | reference | pending | — | 0 |  |
+| RoPE | reference | done | 1.000000 | 0 |  |
 | RoPE | ttnn | pending | — | 0 |  |
 | RoPE | debug | n/a | — | 0 |  |
 | RoPE | optimization | pending | — | 0 |  |
 | RoPE | real_weights | pending | — | 0 |  |
-| Mamba2Layer | reference | pending | — | 0 |  |
+| Mamba2Layer | reference | blocked | — | 0 | dep LayerNorm was pending |
 | Mamba2Layer | ttnn | pending | — | 0 |  |
 | Mamba2Layer | debug | n/a | — | 0 |  |
 | Mamba2Layer | optimization | pending | — | 0 |  |
@@ -75,6 +75,8 @@
 ## Recent Ticks
 
 - tick 1 (2026-06-13T22:58:19Z): architecture[all] — ok
+- tick 2 (2026-06-13T23:10:00Z): reference[LayerNorm] — ok
+- tick 3 (2026-06-13T23:05:58Z): reference[Embedding/LayerNorm/RoPE/Mamba2Layer] — 3ok+1blocked
 
 ## Host-Resident Exceptions
 

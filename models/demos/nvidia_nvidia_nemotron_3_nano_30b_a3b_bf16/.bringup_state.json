@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-13T22:50:54Z",
-  "updated_at": "2026-06-13T23:10:00Z",
+  "updated_at": "2026-06-13T23:05:58Z",
   "components": [
     {
       "name": "Embedding",
@@ -18,8 +18,11 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [],
+        "notes": "",
+        "pcc": 1.0
       },
       "ttnn": {
         "status": "pending",
@@ -49,14 +52,11 @@
         "reference_link": null
       },
       "reference": {
-        "status": "ok",
+        "status": "done",
         "attempts": 1,
-        "pcc": 1.0,
-        "artifacts": [
-          "models/demos/nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16/reference/functional.py",
-          "models/demos/nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16/reference/golden/LayerNorm.pt"
-        ],
-        "notes": "NemotronHRMSNorm (RMSNorm variant, no bias). PCC=1.0 vs HF module with random weight and bfloat16 input [1,32,2688]."
+        "artifacts": [],
+        "notes": "",
+        "pcc": 1.0
       },
       "ttnn": {
         "status": "pending",
@@ -86,8 +86,11 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [],
+        "notes": "",
+        "pcc": 1.0
       },
       "ttnn": {
         "status": "pending",
@@ -119,8 +122,10 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "blocked",
+        "attempts": 0,
+        "last_error": "dep LayerNorm was pending",
+        "notes": "re-eligible now LayerNorm done"
       },
       "ttnn": {
         "status": "pending",
@@ -428,6 +433,12 @@
       "action": "reference[LayerNorm]",
       "result": "ok",
       "pcc": 1.0
+    },
+    {
+      "tick": 3,
+      "ts": "2026-06-13T23:05:58Z",
+      "action": "reference[Embedding/LayerNorm/RoPE/Mamba2Layer]",
+      "result": "3ok+1blocked"
     }
   ],
   "config": {
