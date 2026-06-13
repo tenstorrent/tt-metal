@@ -69,6 +69,7 @@ def test_prof_girl_decode(mesh_device, mesh_shape, device_params):
         is_fsdp=False,
         run_warmup=False,
         traced=False,
+        audio_only=True,  # skip the 22B transformer/VAE build+prime decode_audio never uses
         num_frames=num_frames,
         height=1088,
         width=1920,
@@ -77,8 +78,13 @@ def test_prof_girl_decode(mesh_device, mesh_shape, device_params):
     lat = os.environ.get("AUDIO_LATENT") or os.path.join(os.path.dirname(__file__), "fixtures", "girl_audio_latent.npy")
     latent = torch.from_numpy(np.load(lat)).float()
 
-    # Single decode (cold: weight load + compile is host-side, so per-op DEVICE times are
-    # valid). One decode halves the captured zone count vs cold+warm → faster post-processing.
+    # PROF_WARM=1 (default): an untimed cold decode does the one-time device-side mesh-workload
+    # assembly first, then ReadDeviceProfiler drains those zones, so the profiled decode below
+    # captures WARM steady-state op times + clean OP-TO-OP gaps (not assembly overhead).
+    # PROF_WARM=0 profiles the cold decode (per-op DEVICE times still valid; fewer zones to drain).
+    if os.environ.get("PROF_WARM", "1") != "0":
+        pipeline.decode_audio(latent, num_frames, fps=24.0)
+        ttnn.ReadDeviceProfiler(mesh)  # discard cold-assembly zones
     pipeline.decode_audio(latent, num_frames, fps=24.0)
     ttnn.ReadDeviceProfiler(mesh)
     pipeline.release_traces()
