@@ -59,4 +59,13 @@ void validate_signature_against_schema(
     const std::vector<std::string>& rta_names,
     const std::vector<std::string>& crta_names);
 
+// Generate the kernel_main() shim text for a parsed TT_KERNEL entry: a void kernel_main() that
+// calls the user entry, passing every argument by name through get_arg(args::<name>) — template
+// parameters (CTAs) in the angle brackets (constexpr), function parameters (RTAs/CRTAs) in the
+// parentheses (runtime L1 reads). The args:: accessors come from the generated
+// kernel_args_generated.h, so the shim must be emitted after that header and after the user
+// source. Parameter declaration order is preserved exactly — it is load-bearing, since the call
+// binds positionally to the entry's parameters.
+std::string generate_kernel_main_shim(const KernelMainSignature& sig);
+
 }  // namespace tt::tt_metal

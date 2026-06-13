@@ -278,28 +278,49 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     write_file(path, content.str());
 }
 
-// Generate the kernel_main() shim for a TT_KERNEL entry. It calls the user entry function,
-// passing every argument by name through get_arg(args::<name>): template parameters (CTAs) go
-// in the angle brackets (constexpr), function parameters (RTAs/CRTAs) go in the parentheses
-// (runtime L1 reads). The args:: accessors come from the generated kernel_args_generated.h, so
-// this shim is emitted after that header and after the user source.
-std::string generate_kernel_main_shim(const KernelMainSignature& sig) {
-    std::ostringstream os;
-    os << "\n// AUTO-GENERATED — do not edit. kernel_main() shim for the TT_KERNEL entry.\n";
-    os << "void kernel_main() {\n    " << sig.name;
-    if (!sig.template_param_names.empty()) {
-        os << "<";
-        for (size_t i = 0; i < sig.template_param_names.size(); ++i) {
-            os << (i ? ", " : "") << "get_arg(args::" << sig.template_param_names[i] << ")";
+// Scan a kernel source for a TT_KERNEL entry and, if present, return the generated kernel_main()
+// shim text (validated against the host-registered arg schema). Returns "" when the source has no
+// TT_KERNEL marker (a legacy / hand-written kernel_main() — fully backward compatible). Fail-fasts
+// if a TT_KERNEL entry appears in a non-Metal 2.0 kernel: it would have no kernel_main() and fail
+// to link with a confusing error (TT_KERNEL is defined only in the Metal 2.0 header
+// experimental/kernel_args.h). Shared by the data-movement/eth path and the compute (TRISC) path
+// so both author styles behave identically — the compute entry symbol is kernel_main() too
+// (run_kernel() calls it), which is exactly what the shim defines.
+std::string generate_tt_kernel_shim_if_present(
+    const JitBuildSettings& settings, const KernelSource& kernel_src, bool is_metal2) {
+    auto sig = parse_kernel_main_signature(kernel_src.get_content());
+    if (!sig) {
+        return {};
+    }
+    const std::string source_desc =
+        kernel_src.source_type_ == KernelSource::FILE_PATH ? kernel_src.path_.string() : std::string("<inline>");
+    log_debug(
+        tt::LogBuildKernels,
+        "TT_KERNEL entry '{}': CTAs=[{}] runtime=[{}] (source: {})",
+        sig->name,
+        fmt::join(sig->template_param_names, ", "),
+        fmt::join(sig->fn_param_names, ", "),
+        source_desc);
+    if (!is_metal2) {
+        TT_FATAL(
+            false,
+            "TT_KERNEL entry '{}' found in a non-Metal 2.0 kernel. Named kernel arguments (the TT_KERNEL "
+            "marker with template/function parameters) require the Metal 2.0 host API.",
+            sig->name);
+    }
+    // Cross-check the kernel's declared parameters against the host-registered schema before
+    // generating the shim, so a name typo or schema drift fails here with a clear message rather
+    // than as a compile error buried in generated code (kernel param the host never registered) or
+    // a silently-unused arg (registered name the kernel never takes).
+    std::vector<std::string> cta_names;
+    settings.process_named_compile_time_args([&cta_names](const std::unordered_map<std::string, uint32_t>& named) {
+        for (const auto& entry : named) {
+            cta_names.push_back(entry.first);
         }
-        os << ">";
-    }
-    os << "(";
-    for (size_t i = 0; i < sig.fn_param_names.size(); ++i) {
-        os << (i ? ", " : "") << "get_arg(args::" << sig.fn_param_names[i] << ")";
-    }
-    os << ");\n}\n";
-    return os.str();
+    });
+    validate_signature_against_schema(
+        *sig, cta_names, settings.get_runtime_arg_names(), settings.get_common_runtime_arg_names());
+    return generate_kernel_main_shim(*sig);
 }
 
 }  // namespace
@@ -308,11 +329,6 @@ void jit_build_genfiles_kernel_include(
     const JitBuildEnv& env, const JitBuildSettings& settings, const KernelSource& kernel_src) {
     // Note: assumes dirs (and descriptors) already created
     log_trace(tt::LogBuildKernels, "Generating defines for BRISC/NCRISC/ERISC user kernel");
-
-    // Phase 1 (kernel-args-as-parameters): before JIT compile, scan the kernel source for a
-    // TT_KERNEL marker and parse the entry signature. Kernels without a marker parse to nullopt
-    // and are unaffected.
-    auto sig = parse_kernel_main_signature(kernel_src.get_content());
 
     string out_dir = env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";
 
@@ -328,46 +344,10 @@ void jit_build_genfiles_kernel_include(
     }
     kernel_header_content += get_kernel_source_to_include(kernel_src);
 
-    // For a TT_KERNEL-tagged entry, generate the kernel_main() shim that fetches every arg by
-    // name and calls the user entry. It must follow the user source (so the entry is declared)
-    // and the args:: header (emitted above for Metal 2.0).
-    if (sig) {
-        const std::string source_desc =
-            kernel_src.source_type_ == KernelSource::FILE_PATH ? kernel_src.path_.string() : std::string("<inline>");
-        log_debug(
-            tt::LogBuildKernels,
-            "TT_KERNEL entry '{}': CTAs=[{}] runtime=[{}] (source: {})",
-            sig->name,
-            fmt::join(sig->template_param_names, ", "),
-            fmt::join(sig->fn_param_names, ", "),
-            source_desc);
-        if (is_metal2) {
-            // Cross-check the kernel's declared parameters against the host-registered schema
-            // before generating the shim, so a name typo or schema drift fails here with a clear
-            // message rather than as a compile error buried in generated code (kernel param the
-            // host never registered) or a silently-unused arg (registered name the kernel never
-            // takes).
-            std::vector<std::string> cta_names;
-            settings.process_named_compile_time_args(
-                [&cta_names](const std::unordered_map<std::string, uint32_t>& named) {
-                    for (const auto& entry : named) {
-                        cta_names.push_back(entry.first);
-                    }
-                });
-            validate_signature_against_schema(
-                *sig, cta_names, settings.get_runtime_arg_names(), settings.get_common_runtime_arg_names());
-            kernel_header_content += generate_kernel_main_shim(*sig);
-        } else {
-            // A TT_KERNEL entry has no hand-written kernel_main(), so without the generated
-            // shim the kernel would fail to link, probably with a confusing error.
-            // Catch the issue here instead, with a clear message.
-            TT_FATAL(
-                false,
-                "TT_KERNEL entry '{}' found in a non-Metal 2.0 kernel. Named kernel arguments (the TT_KERNEL "
-                "marker with template/function parameters) require the Metal 2.0 host API.",
-                sig->name);
-        }
-    }
+    // For a TT_KERNEL-tagged entry, append the generated kernel_main() shim that fetches every arg
+    // by name and calls the user entry. It must follow the user source (so the entry is declared)
+    // and the args:: header (emitted above for Metal 2.0). Empty for legacy kernels.
+    kernel_header_content += generate_tt_kernel_shim_if_present(settings, kernel_src, is_metal2);
 
     string kernel_header = out_dir + "kernel_includes.hpp";
     write_file(kernel_header, kernel_header_content);
@@ -401,11 +381,18 @@ void jit_build_genfiles_triscs_src(
     // All TRISCs get the same kernel source (differentiated by TRISC_* defines)
     const string kernel_src_to_include = get_kernel_source_to_include(kernel_src);
 
+    // For a TT_KERNEL-tagged compute entry, append the generated kernel_main() shim after the user
+    // source (same as the data-movement path). The compute entry symbol is kernel_main() —
+    // run_kernel() calls it — so the generated shim is compiled into each TRISC just like a
+    // hand-written kernel_main(). Computed once and reused for all TRISC variants; empty for legacy
+    // kernels and for kernels that don't use the named-arg entry syntax.
+    const string tt_kernel_shim = generate_tt_kernel_shim_if_present(settings, kernel_src, is_metal2);
+
     // Generate the four TRISC source files (fourth only used on Quasar)
-    write_file(unpack_cpp, unpack_prolog + kernel_src_to_include);
-    write_file(math_cpp, math_prolog + kernel_src_to_include);
-    write_file(pack_cpp, pack_prolog + kernel_src_to_include);
-    write_file(isolate_sfpu_cpp, isolate_sfpu_prolog + kernel_src_to_include);
+    write_file(unpack_cpp, unpack_prolog + kernel_src_to_include + tt_kernel_shim);
+    write_file(math_cpp, math_prolog + kernel_src_to_include + tt_kernel_shim);
+    write_file(pack_cpp, pack_prolog + kernel_src_to_include + tt_kernel_shim);
+    write_file(isolate_sfpu_cpp, isolate_sfpu_prolog + kernel_src_to_include + tt_kernel_shim);
     // Here we generate an auxiliary header with defines added via add_define() call
     // this header is then included from the kernel
     // We also append the include path to generated dir to hlkc cmldline.

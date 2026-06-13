@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -422,6 +423,25 @@ void validate_signature_against_schema(
     runtime_names.insert(runtime_names.end(), rta_names.begin(), rta_names.end());
     runtime_names.insert(runtime_names.end(), crta_names.begin(), crta_names.end());
     check_name_sets(sig.fn_param_names, runtime_names, "function parameter", "runtime argument", sig.name);
+}
+
+std::string generate_kernel_main_shim(const KernelMainSignature& sig) {
+    std::ostringstream os;
+    os << "\n// AUTO-GENERATED — do not edit. kernel_main() shim for the TT_KERNEL entry.\n";
+    os << "void kernel_main() {\n    " << sig.name;
+    if (!sig.template_param_names.empty()) {
+        os << "<";
+        for (size_t i = 0; i < sig.template_param_names.size(); ++i) {
+            os << (i ? ", " : "") << "get_arg(args::" << sig.template_param_names[i] << ")";
+        }
+        os << ">";
+    }
+    os << "(";
+    for (size_t i = 0; i < sig.fn_param_names.size(); ++i) {
+        os << (i ? ", " : "") << "get_arg(args::" << sig.fn_param_names[i] << ")";
+    }
+    os << ");\n}\n";
+    return os.str();
 }
 
 }  // namespace tt::tt_metal
