@@ -242,7 +242,9 @@ def test_audio_decode_girl(mesh_device, mesh_shape, sp_axis, tp_axis, num_links,
     # One untimed decode to absorb a late first-replay cost (the BWE trace captures on the
     # first post-cold call, not during the cold decode), so warm_ms is true steady state.
     pipeline.decode_audio(latent, num_frames, fps=24.0)
-    N = 5
+    # WARM_REPS shrinks the steady-state loop for fast dev iteration (the PCC oracle below is
+    # unaffected); default 5 keeps warm_ms a stable average for reported timings.
+    N = int(os.environ.get("WARM_REPS", "5"))
     t0 = time.perf_counter()
     for _ in range(N):
         audio = pipeline.decode_audio(latent, num_frames, fps=24.0)
