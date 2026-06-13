@@ -28,6 +28,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
+    create_kv_chunk_address_table_deepseek,
     create_kv_chunk_address_table_kimi,
 )
 
@@ -51,30 +52,66 @@ def _serialize_table_to_path(table, path: str) -> None:
 
 
 def build_and_serialize_kv_chunk_table(
-    *, mesh_device, kvpe_cache, seq_len, num_layers, mesh_shape, sp_axis, num_users, path
+    *,
+    mesh_device,
+    kvpe_cache,
+    seq_len,
+    num_layers,
+    mesh_shape,
+    sp_axis,
+    num_users,
+    path,
+    layout="deepseek",
+    chunk_size_global=None,
 ) -> str:
-    """Build the KV chunk address table from the device KV layout (via the shared
-    kv_cache_utils.create_kv_chunk_address_table_kimi) and serialize it to ``path`` for
-    the inference server to forward via SET_TABLE. Returns the path on success.
+    """Build the KV chunk address table from the device KV layout and serialize it to ``path``
+    for the inference server to forward via SET_TABLE. Returns the path on success.
 
-    Uses the kimi (non-balanced, sequential-layout) builder, which lays out one slot per
-    user — matching the user-major KV cache batch (slot = user*num_layers + layer)."""
+    ``layout`` selects the storage-layout builder (both lay out one slot per user, matching the
+    user-major KV cache batch slot = user*num_layers + layer):
+
+    - ``"deepseek"`` (default): the DeepSeek non-balanced prefill cache stores positions
+      BLOCK-CYCLIC across the SP shards, so each natural position must map to its true
+      block-cyclic storage chip + offset — otherwise a partial migration copies the wrong
+      (un-prefilled) storage chunks and the migrated KV fails its PCC check. Requires
+      ``chunk_size_global`` = the prefill chunk size (the block-cyclic period; same value
+      passed to blockcyclic_positions).
+    - ``"kimi"``: the Kimi-K2.6 contiguous/sequential-layout builder (position P on chip
+      P // seq_len_local). ``chunk_size_global`` is ignored.
+    """
     cfg = _disaggregation().KvChunkAddressTableConfig()
     cfg.num_layers = num_layers
     cfg.max_sequence_length = seq_len
     cfg.num_slots = num_users
     cfg.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     cfg.chunk_size_bytes = _CHUNK_SIZE_BYTES
-    table = create_kv_chunk_address_table_kimi(
-        config=cfg,
-        mesh_device=mesh_device,
-        mesh_shape=mesh_shape,
-        seq_len=seq_len,
-        sp_axis=sp_axis,
-        tt_kvpe_cache=kvpe_cache,
-        chunk_size_bytes=_CHUNK_SIZE_BYTES,
-        num_users=num_users,
-    )
+    if layout == "deepseek":
+        if chunk_size_global is None:
+            raise ValueError("layout='deepseek' requires chunk_size_global")
+        table = create_kv_chunk_address_table_deepseek(
+            config=cfg,
+            mesh_device=mesh_device,
+            mesh_shape=mesh_shape,
+            seq_len=seq_len,
+            sp_axis=sp_axis,
+            tt_kvpe_cache=kvpe_cache,
+            chunk_size_bytes=_CHUNK_SIZE_BYTES,
+            num_users=num_users,
+            chunk_size_global=chunk_size_global,
+        )
+    elif layout == "kimi":
+        table = create_kv_chunk_address_table_kimi(
+            config=cfg,
+            mesh_device=mesh_device,
+            mesh_shape=mesh_shape,
+            seq_len=seq_len,
+            sp_axis=sp_axis,
+            tt_kvpe_cache=kvpe_cache,
+            chunk_size_bytes=_CHUNK_SIZE_BYTES,
+            num_users=num_users,
+        )
+    else:
+        raise ValueError(f"unknown KV chunk table layout {layout!r} (expected 'deepseek' or 'kimi')")
     _serialize_table_to_path(table, path)
     logger.info(f"[migration] KV chunk address table serialized to {path} (entries={table.total_entries()})")
     return path
