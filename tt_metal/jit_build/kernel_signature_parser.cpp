@@ -82,7 +82,10 @@ std::string strip_noise(const std::string& s) {
                 } else if (c == '"') {
                     st = St::String;
                     ++i;
-                } else if (c == '\'') {
+                } else if (c == '\'' && !(i > 0 && is_ident_char(s[i - 1]))) {
+                    // A ' immediately after a digit/identifier char is a C++14 digit separator
+                    // (e.g. 1'024), not a char-literal opener (x'a' is a syntax error) — let it
+                    // fall through to the ordinary-char copy below rather than entering Char mode.
                     st = St::Char;
                     ++i;
                 } else {
@@ -222,6 +225,11 @@ std::string extract_param_name(const std::string& raw_entry, const char* kind) {
 
 std::vector<std::string> extract_param_names(const std::string& list_body, const char* kind) {
     std::vector<std::string> names;
+    // An explicit `(void)` parameter list means "no parameters". (void can't be a real parameter
+    // name — it's a keyword — and `void* p` doesn't trim to "void", so this is unambiguous.)
+    if (trim(list_body) == "void") {
+        return names;
+    }
     for (const std::string& piece : split_top_level_commas(list_body)) {
         if (trim(piece).empty()) {
             continue;  // empty list, or a trailing comma
