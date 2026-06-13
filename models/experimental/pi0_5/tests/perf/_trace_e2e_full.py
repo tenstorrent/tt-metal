@@ -80,6 +80,10 @@ CKPT = os.environ.get(
 )
 N_CAMS = int(os.environ["PI0_NUM_CAMERAS"])  # 3 -> prefix = 3*256 + 256 lang = 1024 (the VLM block)
 LANG_LEN = 256
+# send_direct_async splits pages across one worker core per SocketConnection,
+# round-robined over the fabric links. Adjacent BH-Galaxy chips have 2 links, so
+# 2 connections -> 2 cores -> ~2x socket bandwidth (8.3 -> 15.5 GB/s).
+N_SOCK_CONN = int(os.environ.get("PI05_SOCK_CONN", "2"))
 N_STEPS = int(os.environ["PI05_NUM_DENOISE_STEPS"])
 SEED = 42
 SV_ATTRS = [
@@ -274,12 +278,15 @@ def main():
             log(f"VISION+PREFIX on-device {tuple(prefix_t.shape)}")
             # socket vblk (6,2) -> prefill (5,2) [adjacent, col 2], then in-mesh
             # p2p (5,2)->(5,0)->(0,0) [collinear hops] to reach the prefill head.
-            conn = ttnn.SocketConnection(
-                ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 2), ttnn.CoreCoord(0, 0)),  # vblk local (0,2)=global (6,2)
-                ttnn.MeshCoreCoord(ttnn.MeshCoordinate(5, 2), ttnn.CoreCoord(0, 1)),  # prefill local (5,2)
-            )
+            conns = [
+                ttnn.SocketConnection(
+                    ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 2), ttnn.CoreCoord(i, 0)),  # vblk local (0,2)=glob (6,2)
+                    ttnn.MeshCoreCoord(ttnn.MeshCoordinate(5, 2), ttnn.CoreCoord(i, 1)),  # prefill local (5,2)
+                )
+                for i in range(N_SOCK_CONN)
+            ]
             sp = ttnn.create_socket_pair(
-                vblk, prefill, ttnn.SocketConfig([conn], ttnn.SocketMemoryConfig(ttnn.BufferType.L1, 4096 * 4))
+                vblk, prefill, ttnn.SocketConfig(conns, ttnn.SocketMemoryConfig(ttnn.BufferType.L1, 4096 * 4))
             )
             prefix_m = _repl(torch.zeros(1, prefix_pad, vcfg.width), prefill)
 
@@ -440,12 +447,15 @@ def main():
 
         def _sock_for_row(r):
             if r not in _row_sock:
-                conn = ttnn.SocketConnection(
-                    ttnn.MeshCoreCoord(ttnn.MeshCoordinate(r, 2), ttnn.CoreCoord(0, 0)),
-                    ttnn.MeshCoreCoord(ttnn.MeshCoordinate(r, 0), ttnn.CoreCoord(0, 1)),
-                )
+                conns = [
+                    ttnn.SocketConnection(
+                        ttnn.MeshCoreCoord(ttnn.MeshCoordinate(r, 2), ttnn.CoreCoord(i, 0)),
+                        ttnn.MeshCoreCoord(ttnn.MeshCoordinate(r, 0), ttnn.CoreCoord(i, 1)),
+                    )
+                    for i in range(N_SOCK_CONN)
+                ]
                 mem = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, _SOCK_PAGE * 4)
-                _row_sock[r] = ttnn.create_socket_pair(prefill, denoise, ttnn.SocketConfig([conn], mem))
+                _row_sock[r] = ttnn.create_socket_pair(prefill, denoise, ttnn.SocketConfig(conns, mem))
             return _row_sock[r]
 
         def _kv_norm(side):
