@@ -241,7 +241,12 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     // KC-tile reads contiguous (mixing KC and 1-tile pushes on one ring wraps it mid-strip). Only
     // meaningful for KC >= 2; for KC == 1 the strip path is compiled out (the tiny CBs go unused).
     make_cb(cb_out_strip, 2 * KC, DataFormat::Float16_b, bf16_tile);
-    make_cb(cb_acc_strip, 2 * KC, acc_fmt, acc_tile);
+    // Proposal 1 (compute-ceiling): the full-strip path accumulates a whole unit's QC rows into
+    // cb_acc_strip, then untilizes all QC strips under ONE pack_untilize bracket + one mm_block_init
+    // resync -- so the fixed per-strip cost amortizes over QC*KC tiles, not KC. The accumulator must
+    // hold the whole unit's QC*KC strip; max(2*KC, .) keeps the QC<=2 double buffer and stays a whole
+    // multiple of the QC*KC batch so a uniform single push never wraps the ring mid-unit.
+    make_cb(cb_acc_strip, std::max(2u * KC, QC * KC), acc_fmt, acc_tile);
 
     // Reject an oversized config up front instead of failing CB allocation cryptically. The reserve
     // covers kernel binaries/stack/semaphores and (under tracy) the per-RISC profiler L1 buffers.

@@ -134,13 +134,51 @@ heads16/64 (matmul-bound, unchanged). Note QC=2/KC=8 stays the production config
 grid-aligned K multicast that wins the DMA-on, reader-bound kernel); the fix just removes its compute
 penalty.
 
+## FIX 2 LANDED — batch the fast untilize over the whole unit (Proposal 1)
+
+After the mask-stamp fix, KC was the ceiling's only real lever (avg per-core work = f(KC)) and
+QC was flat. Both came down to the **fixed per-strip cost**: each full-width row paid one
+`pack_untilize` init/uninit bracket + one `mm_block_init` half-sync resync, and the kernel paid it
+**once per row** (matmul → untilize → matmul). Total fixed overhead = `(tiles_per_core / KC) ×
+C_fixed`, so it fell only as KC grew — KC was standing in for *flush frequency*.
+
+Fix: stop untilizing per row. `produce_full_unit` accumulates **all `q_tiles_per_unit` rows** of a
+full unit into a contiguous `QC*KC` region of `cb_acc_strip`, then untilizes the whole unit in ONE
+`compute_kernel_lib::untilize<KC>(QC)` call (the bracket runs once, `num_blocks=QC` internally) +
+ONE `mm_block_init` resync. The matmuls all run back-to-back with no untilize between them, so there
+is a single matmul→untilize→matmul boundary per unit instead of per row. The fixed cost now
+amortizes over the unit **area QC*KC**, not KC alone. `cb_acc_strip` grows from `2*KC` to
+`max(2*KC, QC*KC)` — **no change for QC≤2** (the 2 strips already fit the double buffer), `4*KC` at
+QC=4. The writer is unchanged: it still pops KC per row, and the QC blocks arrive in row order.
+
+Results (heads8 bfp8 sp7, DMA off, 3-run avg, all reps identical to the ns):
+
+math_util (%), after Proposal 1 (Δ vs FIX 1 above):
+
+| QC \ KC | 4            | 8            | 16           |
+|---------|--------------|--------------|--------------|
+| **1**   | 64.1 (−0.1)  | 66.3 (+0.4)  | 67.3 (+0.1)  |
+| **2**   | 65.4 (+1.6)  | 66.8 (+1.1)  | **67.6 (+0.7)** |
+| **4**   | 66.0 (+2.4)  | 67.1 (+1.6)  | L1 overflow  |
+
+The QC trend **flipped**: QC was flat/negative, now QC *helps* at fixed KC (KC=4: 64.1→65.4→66.0).
+The ceiling tracks QC*KC: **QC=4/KC=8 (67.1 %) ≈ QC=1/KC=16 (67.3 %)** — small KC reaches the
+big-KC ceiling by spending QC. KC and QC are not perfectly equal (QC=4/KC=4 = 66.0 < QC=1/KC=16 =
+67.3, both area 16) because bigger KC widens each untilize block while bigger QC adds blocks, and the
+shared bracket is what QC amortizes. Production **QC=2/KC=8 rose 65.7 → 66.8 % (+1.1)** at **zero
+extra L1**. Past KC=16 the gain saturates: QC=2/KC=20 = 67.2 % (−0.4 vs KC=16), a load-balance dip
+(88 k-units over 110 cores deals worse than KC=16's 110) now that amortization is exhausted.
+Correctness: 15/15 accuracy tests pass (knobs QC=2/KC=4/diag-mid-group, multicore QC=2, bfp8, corner).
+
 ## One-line summary
 
-- **avg per-core work** = f(KC), independent of QC → raise KC.
-- **slowest-core excess** = QC × (per-row diagonal slow-work), via grid-tail stacking →
-  keep QC=1 for the ceiling.
-- Compute-ceiling optimum: **QC=1, KC=32 (65.7 %)**. Production ships QC=2/KC=8 only because
-  the DMA-on kernel is reader-bound, where QC=2's K-reuse outweighs the −3.6-pt ceiling hit.
+- **avg per-core work** = f(flush frequency). Pre-Proposal-1 the kernel flushed (untilize + resync)
+  once per row, so flush frequency = tiles/KC and KC was the only lever; QC was flat.
+- **Proposal 1**: flush once per *unit* → fixed cost amortizes over **QC*KC**, so QC now helps too
+  and you can reach the big-KC ceiling at small KC by raising QC (until QC*KC costs L1 at QC≥3).
+- Compute-ceiling sweet spot now: **QC=2, KC=16 (67.6 %)**; KC saturates by 16. Production QC=2/KC=8
+  gets the +1.1-pt amortization win for free. The remaining fixed cost is the `mm_block_init` resync
+  (the BH fast-untilize half-sync gap) — killing that at its root (Proposal 2) lifts every cell.
 
 ## Reproduce
 

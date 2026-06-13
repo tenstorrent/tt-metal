@@ -193,7 +193,7 @@ void add_mask(uint32_t idx) {
  *  instead of dropping to the per-tile W=1 untilize + eltwise add_mask path (which also forced the
  *  valid prefix slow and stacked on the grid-tail cores). Mask idx: 0 = diag strict-upper, 1 = full. */
 template <uint32_t acc_cb, uint32_t mask_cb>
-inline void stamp_strip_mask(uint32_t valid, uint32_t k_tile0, uint32_t diag_tile) {
+inline void stamp_strip_mask(uint32_t slot_base, uint32_t valid, uint32_t k_tile0, uint32_t diag_tile) {
     copy_tile_to_dst_init_short(mask_cb);
     pack_reconfig_l1_acc(1);  // add the mask tile onto the slot's computed score (preserves -inf)
     for (uint32_t c = valid; c < k_tiles_per_unit; ++c) {
@@ -202,7 +202,7 @@ inline void stamp_strip_mask(uint32_t valid, uint32_t k_tile0, uint32_t diag_til
         copy_tile(mask_cb, midx, 0);
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile<true>(0, acc_cb, c);
+        pack_tile<true>(0, acc_cb, slot_base + c);
         tile_regs_release();
     }
     pack_reconfig_l1_acc(0);
@@ -217,17 +217,14 @@ inline void untilize_acc_strip(uint32_t n) {
     compute_kernel_lib::untilize<1, acc_cb, out_cb>(n);
 }
 
-/** Produce one full-width unmasked row as a single W=k_tiles_per_unit fast-untilize strip.
- *  Accumulate the KC output tiles into contiguous cb_acc_strip slots (uniform KC push so the
- *  fast packer's KC-tile read never wraps the ring), then untilize the whole strip into
- *  cb_out_strip with the BH fast-untilize LLK (~3x faster than the W=1 path at low head count).
- *  The fast untilize runs in its own private half-sync DEST contract and (since this kernel is
- *  already half-sync) its uninit does NOT restore the math<->pack sync; without that, dest_offset_id
- *  parity drifts across the many units a multi-core run packs and the diagonal -inf mask bleeds into
- *  valid tiles. A full mm_block_init after the untilize re-establishes the kernel's sync contract
- *  (llk_math_pack_sync_init + llk_pack_dest_init) before the next unit's matmul. */
-inline void produce_full_strip(uint32_t r, uint32_t valid, uint32_t k_tile0, uint32_t diag_tile) {
-    cb_reserve_back(cb_acc_strip, k_tiles_per_unit);
+/** Accumulate one full-width row's k_tiles_per_unit output tiles into cb_acc_strip slots
+ *  [slot_base, slot_base + k_tiles_per_unit) and stamp its causal mask -- but do NOT untilize.
+ *  The caller reserves the whole unit's q_tiles_per_unit*KC strip region up front and untilizes all
+ *  rows in ONE fast pack_untilize bracket + one mm_block_init resync (see produce_full_unit). This
+ *  amortizes that fixed per-strip cost over the unit's QC rows instead of paying it per row, so the
+ *  compute ceiling tracks the unit area QC*KC rather than KC alone (Proposal 1). */
+inline void accumulate_full_strip_row(
+    uint32_t r, uint32_t slot_base, uint32_t valid, uint32_t k_tile0, uint32_t diag_tile) {
     if constexpr (qk_col_batch > 1) {
         // Batched mode-switch path: the gate w is column-independent and the unit's whole head
         // group is one resident chunk, so a batch of qk_col_batch k-columns runs all its matmuls
@@ -245,23 +242,40 @@ inline void produce_full_strip(uint32_t r, uint32_t valid, uint32_t k_tile0, uin
             set_mul_mode<cb_qk, cb_w, cb_acc_strip>();
             for (uint32_t cc = 0; cc < cols; ++cc) {
                 // single chunk -> each column's head sum is one MAC pass that seeds its own slot
-                mul_accum_chunk<cb_qk, cb_w, cb_acc_strip>(w_base, qk_batch_heads, /*first=*/true, c0 + cc);
+                mul_accum_chunk<cb_qk, cb_w, cb_acc_strip>(w_base, qk_batch_heads, /*first=*/true, slot_base + c0 + cc);
             }
         }
-        pack_reconfig_l1_acc(0);  // done; the untilize below packs overwrite
+        pack_reconfig_l1_acc(0);  // done; the unit untilize below packs overwrite
     } else {
         for (uint32_t c = 0; c < k_tiles_per_unit; ++c) {
-            accumulate_heads<cb_acc_strip>(r, c, c);  // head reduction -> cb_acc_strip slot c
+            accumulate_heads<cb_acc_strip>(r, c, slot_base + c);  // head reduction -> cb_acc_strip slot
         }
     }
-    // Stamp the diagonal/-inf mask onto this row's masked suffix in-place (no path change), so the
-    // whole strip still untilizes via the fast W=KC pack_untilize. valid == k_tiles_per_unit means a
-    // fully causal-valid row -> nothing to mask.
+    // Stamp the diagonal/-inf mask onto this row's masked suffix in-place, so the whole strip still
+    // untilizes via the fast W=KC pack_untilize. valid == k_tiles_per_unit -> fully valid, nothing to mask.
     if (valid < k_tiles_per_unit) {
-        stamp_strip_mask<cb_acc_strip, cb_mask>(valid, k_tile0, diag_tile);
+        stamp_strip_mask<cb_acc_strip, cb_mask>(slot_base, valid, k_tile0, diag_tile);
     }
-    cb_push_back(cb_acc_strip, k_tiles_per_unit);
-    compute_kernel_lib::untilize<k_tiles_per_unit, cb_acc_strip, cb_out_strip>(1);
+}
+
+/** Produce a whole FULL unit (q_tiles_per_unit rows x k_tiles_per_unit cols) as ONE batched fast
+ *  untilize. Accumulate every row's strip into a contiguous q_tiles_per_unit*KC region of cb_acc_strip
+ *  (uniform single push so the fast packer's reads never wrap the ring), then untilize all QC strips
+ *  with num_blocks=q_tiles_per_unit -- the pack_untilize init/uninit bracket runs ONCE for the whole
+ *  unit, and a single mm_block_init resyncs the half-sync DEST contract afterwards (the fast untilize's
+ *  uninit does not restore math<->pack sync; without the resync dest_offset_id parity drifts and the
+ *  -inf mask bleeds into valid tiles). The writer mirrors this: it pops the QC strips in row order. */
+inline void produce_full_unit(const WorkUnitSpan& span, uint32_t k_tiles_in_unit) {
+    constexpr uint32_t unit_strip = q_tiles_per_unit * k_tiles_per_unit;
+    cb_reserve_back(cb_acc_strip, unit_strip);
+    for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
+        const uint32_t diag_tile = chunk_start_tiles + span.q_tile_start() + r;
+        const uint32_t k_tile0 = span.k_tile_start();
+        const uint32_t valid = row_valid_prefix(span.q_tile_start() + r, k_tile0, k_tiles_in_unit);
+        accumulate_full_strip_row(r, r * k_tiles_per_unit, valid, k_tile0, diag_tile);
+    }
+    cb_push_back(cb_acc_strip, unit_strip);
+    compute_kernel_lib::untilize<k_tiles_per_unit, cb_acc_strip, cb_out_strip>(q_tiles_per_unit);
     mm_block_init(
         cb_q, cb_k, cb_qk, 1 /*transpose k*/, 1 /*ct_dim*/, heads_per_dest_pass /*rt_dim*/, head_dim_tiles /*kt_dim*/);
 }
@@ -292,46 +306,47 @@ void kernel_main() {
         const uint32_t k_tiles_in_unit = span.k_tiles();
         cb_wait_front(cb_k, k_chunk_tiles);  // full chunk pushed even on edge units (ring alignment)
 
-        // k_tile rises with c, so the causal split is a prefix/suffix: tiles c in [0, m) are
-        // fully valid (k_tile < diag_tile), tiles [m, k) are masked (diagonal then future). The
-        // valid prefix needs no mask, so produce it then batch-untilize the strip with one
-        // pack_untilize init/uninit (the head-count-independent fixed cost we are cutting). The
-        // masked suffix is rare (<=1 tile/row at high sp_rank) and uses the immediate add_mask
-        // path -- add_mask reorders cb_acc, so it must see one tile at a time.
-        for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
-            const uint32_t diag_tile = chunk_start_tiles + span.q_tile_start() + r;
-            const uint32_t k_tile0 = span.k_tile_start();
-            const uint32_t valid = row_valid_prefix(span.q_tile_start() + r, k_tile0, k_tiles_in_unit);
+        // A FULL unit (every row spans all KC k-tiles) goes through the batched fast-untilize:
+        // accumulate all q_tiles_per_unit rows' strips into cb_acc_strip, then untilize the whole
+        // unit under ONE pack_untilize bracket + one mm_block_init resync (the fixed per-strip cost
+        // we amortize over QC*KC, not KC). Masked suffixes are stamped onto the strip slots in-place.
+        // Only a partial edge unit (k_tiles_in_unit < KC; the dense schedule never splits Tt unevenly
+        // at sp7) or KC==1 falls to the per-tile path below. The writer mirrors this same branch.
+        bool produced_full_unit = false;
+        if constexpr (use_fast_strip) {
+            if (k_tiles_in_unit == k_tiles_per_unit) {
+                produce_full_unit(span, k_tiles_in_unit);
+                produced_full_unit = true;
+            }
+        }
 
-            // Every row of a FULL unit goes through the fast-untilize strip; the masked suffix (if
-            // any) is stamped onto the strip slots via packer L1-acc inside produce_full_strip. Only
-            // a partial edge unit (k_tiles_in_unit < KC, dense schedule never splits Tt unevenly at
-            // sp7) or KC==1 falls to the per-tile path below. The writer mirrors this same branch.
-            if constexpr (use_fast_strip) {
-                if (k_tiles_in_unit == k_tiles_per_unit) {
-                    produce_full_strip(r, valid, k_tile0, diag_tile);
-                    continue;
+        if (!produced_full_unit) {
+            // k_tile rises with c, so the causal split is a prefix/suffix: tiles c in [0, m) are
+            // fully valid (k_tile < diag_tile), tiles [m, k) are masked (diagonal then future). The
+            // valid prefix needs no mask, so produce it then batch-untilize W=1; the masked suffix
+            // is rare and uses the immediate add_mask path (add_mask reorders cb_acc one tile alone).
+            for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
+                const uint32_t diag_tile = chunk_start_tiles + span.q_tile_start() + r;
+                const uint32_t k_tile0 = span.k_tile_start();
+                const uint32_t valid = row_valid_prefix(span.q_tile_start() + r, k_tile0, k_tiles_in_unit);
+
+                for (uint32_t c = 0; c < valid; ++c) {
+                    cb_reserve_back(cb_acc, 1);
+                    accumulate_heads<cb_acc>(r, c, 0);
+                    cb_push_back(cb_acc, 1);
                 }
-            }
+                if (valid > 0) {
+                    untilize_acc_strip<cb_acc, cb_out>(valid);
+                }
 
-            // Per-tile path: unmasked prefix [0, valid) batch-untilized W=1, then the masked
-            // suffix one tile at a time (add_mask reorders cb_acc, so it must see one tile alone).
-            for (uint32_t c = 0; c < valid; ++c) {
-                cb_reserve_back(cb_acc, 1);
-                accumulate_heads<cb_acc>(r, c, 0);
-                cb_push_back(cb_acc, 1);
-            }
-            if (valid > 0) {
-                untilize_acc_strip<cb_acc, cb_out>(valid);
-            }
-
-            for (uint32_t c = valid; c < k_tiles_in_unit; ++c) {
-                const uint32_t k_tile = k_tile0 + c;
-                cb_reserve_back(cb_acc, 1);
-                accumulate_heads<cb_acc>(r, c, 0);
-                cb_push_back(cb_acc, 1);
-                add_mask<cb_acc, cb_mask>(k_tile == diag_tile ? 0 : 1);
-                compute_kernel_lib::untilize<1, cb_acc, cb_out>(1);
+                for (uint32_t c = valid; c < k_tiles_in_unit; ++c) {
+                    const uint32_t k_tile = k_tile0 + c;
+                    cb_reserve_back(cb_acc, 1);
+                    accumulate_heads<cb_acc>(r, c, 0);
+                    cb_push_back(cb_acc, 1);
+                    add_mask<cb_acc, cb_mask>(k_tile == diag_tile ? 0 : 1);
+                    compute_kernel_lib::untilize<1, cb_acc, cb_out>(1);
+                }
             }
         }
         cb_pop_front(cb_k, k_chunk_tiles);
