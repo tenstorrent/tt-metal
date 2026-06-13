@@ -111,58 +111,23 @@ class TtDinoBackbone:
         x = ttnn.add(h, residual)
         return x
 
-    STAGE_LAYERS = (1, 4, 7, 10)
-
-    def _layers_core(self, x):
-        """Run the 12 layers, returning cloned device tensors at the 4 out-stages."""
-        outs = []
-        for i, p in enumerate(self.layers):
-            x = self._layer(x, p)
-            if i in self.STAGE_LAYERS:
-                outs.append(ttnn.clone(x))
-        return outs
-
     def run_layers(self, embed_windowed_torch):
-        """Non-traced path (used by PCC tests). Returns dict idx->torch hidden after layers 1,4,7,10."""
+        """embed_windowed_torch: [16, 101, 384]. Returns dict idx->ttnn hidden after layers 1,4,7,10."""
         x = ttnn.from_torch(
             embed_windowed_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
         )
-        outs = self._layers_core(x)
-        return {idx: ttnn.to_torch(outs[k]).float() for k, idx in enumerate(self.STAGE_LAYERS)}
+        out = {}
+        for i, p in enumerate(self.layers):
+            x = self._layer(x, p)
+            if i in (1, 4, 7, 10):
+                out[i] = ttnn.to_torch(x).float()
+        return out
 
-    def _setup_trace(self, embed):
-        self._input_dev = ttnn.from_torch(
-            embed, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        warm = self._layers_core(self._input_dev)  # warmup -> compile kernels into program cache
-        for t in warm:
-            ttnn.deallocate(t)
-        self._tid = ttnn.begin_trace_capture(self.device, cq_id=0)
-        self._stage_outs = self._layers_core(self._input_dev)
-        ttnn.end_trace_capture(self.device, self._tid, cq_id=0)
-        self._traced = True
-
-    def run_layers_traced(self, embed_windowed_torch):
-        if getattr(self, "_traced", None) is None:  # trace disabled (unavailable) -> fallback
-            return self.run_layers(embed_windowed_torch)
-        if not getattr(self, "_traced", False):
-            try:
-                self._setup_trace(embed_windowed_torch)
-            except Exception as e:  # no trace region / capture failed -> permanent fallback
-                print(f"[backbone] trace unavailable ({type(e).__name__}: {e}); using eager path")
-                self._traced = None
-                return self.run_layers(embed_windowed_torch)
-        host_t = ttnn.from_torch(embed_windowed_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        ttnn.copy_host_to_device_tensor(host_t, self._input_dev)
-        ttnn.execute_trace(self.device, self._tid, cq_id=0, blocking=False)
-        return {idx: ttnn.to_torch(self._stage_outs[k]).float() for k, idx in enumerate(self.STAGE_LAYERS)}
-
-    def feature_maps(self, pixel_values, use_trace=False):
+    def feature_maps(self, pixel_values):
         """Full backbone: host embeddings -> device layers -> host feature shaping.
         Returns list of 4 torch tensors [1,384,40,40]."""
         embed = self.wb.embeddings(pixel_values)  # [16,101,384] host
-        hidden = self.run_layers_traced(embed) if use_trace else self.run_layers(embed)
+        hidden = self.run_layers(embed)
         _, _, H, W = pixel_values.shape
         feats = []
         for i in (1, 4, 7, 10):

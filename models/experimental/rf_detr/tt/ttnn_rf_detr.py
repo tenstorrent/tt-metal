@@ -23,8 +23,8 @@ class TtRfDetr:
         self.backbone = TtDinoBackbone(ref_model, device)
 
     def backbone_feature_maps(self, pixel_values):
-        """Device backbone (metal-traced) -> 4 torch feature maps [1,384,40,40]."""
-        return self.backbone.feature_maps(pixel_values, use_trace=True)
+        """Device backbone -> 4 torch feature maps [1,384,40,40]."""
+        return self.backbone.feature_maps(pixel_values)
 
     @torch.no_grad()
     def _tail_host(self, feature_maps, pixel_values):
