@@ -87,8 +87,8 @@ ttnn:
     wh_n300: 970
     bh_p100: 795
     bh_p150b_civ2: 940
-    wh_n150_civ2: 20
-    wh_n300_civ2: 20
+    wh_n150_civ2: 250
+    wh_n300_civ2: 250
     bh_p100a_civ2_viommu: 20
     bh_p150b_civ2_viommu: 20
   # Profiler budgets are kept under their own subheading for now while team /
