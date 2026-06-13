@@ -54,6 +54,8 @@ def create_fabric_router_config(max_payload_size):
 def test_host_io_loopback(mesh_device, tensor_size_bytes, fifo_size, num_iterations, h2d_mode):
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
+    if h2d_mode == ttnn.H2DMode.DEVICE_PULL and tensor_size_bytes == 512 and fifo_size == 1024:
+        pytest.skip(reason="Disabled on blackhole P300-viommu (DEVICE_PULL mode, TT_THROW for 512-byte tensor): see #46929")
 
     ttnn.enable_asynchronous_slow_dispatch(mesh_device)
 
