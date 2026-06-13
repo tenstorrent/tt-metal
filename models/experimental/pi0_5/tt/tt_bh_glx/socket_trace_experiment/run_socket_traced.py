@@ -152,6 +152,62 @@ def main():
             pipe.transport.send = _send3
             log("transport patched: FRESH socket pair + distinct recv buffer per send call")
 
+        # EAGER profiling mode: NO trace capture/replay — run the full pipeline
+        # eagerly for 1 warmup + 1 iter, with tracy SIGNPOSTS marking each phase so
+        # the ops CSV can be split into warm-up / init_one_time / prefix_setup / etc.
+        # Device kernel durations are then the true per-op compute (no trace-replay
+        # socket-WAIT inflation). Run under:
+        #   EAGER=1 python -m tracy -p -r -v --op-support-count 100000
+        if os.environ.get("EAGER", "").lower() in ("1", "true", "yes"):
+            import time
+
+            from tracy import signpost
+
+            def _full_pipeline_manual(mark=False):
+                """Replicates pipeline._sample_actions_device, optionally signposting phases."""
+                if mark:
+                    signpost("PHASE_prefix_vision")
+                vis = pipe.stage_vision.run(pipe.pixel_values_buf)
+                vis_p0 = pipe.transport.send(vis, h.prefill_per_chip[0], tag="v2p")
+                if mark:
+                    signpost("PHASE_prefix_build")
+                prefix_embs = pipe._build_prefix(vis_p0, pipe.lang_tokens_buf)
+                if mark:
+                    signpost("PHASE_prefix_prefill")
+                _fh, per_layer_kv = pipe.stage_prefill.run(
+                    prefix_embs,
+                    attention_mask=None,
+                    position_ids=None,
+                    per_chip_attn_mask=(upstream["prefix_attn_mask"] if upstream else None),
+                    per_chip_cos=(upstream["prefix_cos"] if upstream else None),
+                    per_chip_sin=(upstream["prefix_sin"] if upstream else None),
+                )
+                if mark:
+                    signpost("PHASE_kv_migration")
+                prefix_kv = migrate_layer_paired(
+                    per_layer_kv, h.denoise_per_chip, transport=pipe.transport, to_l1=pipe._denoise_l1
+                )
+                if mark:
+                    signpost("PHASE_denoise")
+                pipe._run_denoise_loop_device(prefix_kv, upstream)
+
+            log("EAGER mode (NO TRACE): init_one_time done; 1 warmup + 1 signposted iter")
+            # Everything dispatched BEFORE this signpost (pipeline build, weight upload,
+            # buffer staging, upstream artifacts) is the one-time init.
+            signpost("PHASE_warmup")
+            pipe._refresh_noise_buffer()
+            _full_pipeline_manual(mark=False)  # warmup: programs compile / cache fills
+            ttnn.synchronize_device(h.denoise_per_chip[0])
+
+            pipe._refresh_noise_buffer()
+            t0 = time.perf_counter()
+            _full_pipeline_manual(mark=True)  # the profiled iter, per-phase signposted
+            ttnn.synchronize_device(h.denoise_per_chip[0])
+            signpost("PHASE_end")
+            log(f"EAGER profiled iter = {(time.perf_counter()-t0)*1000.0:.2f} ms")
+            log("DONE — EAGER 1+1 (no trace), signposted")
+            return
+
         if SCOPE == "vp":
             # SigLIP(vision) + prefill ONLY (single-pass, no denoise loop). Trace
             # vision_per_chip + prefill_per_chip via sockets; compare the prefill
@@ -266,6 +322,25 @@ def main():
 
         nperf = int(os.environ.get("PERF_ITERS", "20"))
         ordered = list(zip(all_subs, tids))
+
+        # TRACY profiling mode: exactly 1 warmup + 1 profiled replay, then stop. Keeps
+        # the device profiler log small (the full multi-iter e2e log ballooned to ~27GB).
+        # Run under: python -m tracy -p -r -v --op-support-count 100000 --device-trace-profiler
+        if os.environ.get("TRACY", "").lower() in ("1", "true", "yes"):
+            log("TRACY mode: 1 warmup + 1 profiled replay")
+            pipe._refresh_noise_buffer()  # warmup
+            for sm, tid in ordered:
+                ttnn.execute_trace(sm, tid, cq_id=0, blocking=False)
+            ttnn.synchronize_device(h.denoise_per_chip[0])
+            pipe._refresh_noise_buffer()  # the 1 profiled iter
+            t0 = time.perf_counter()
+            for sm, tid in ordered:
+                ttnn.execute_trace(sm, tid, cq_id=0, blocking=False)
+            ttnn.synchronize_device(h.denoise_per_chip[0])
+            log(f"TRACY profiled iter = {(time.perf_counter()-t0)*1000.0:.2f} ms")
+            log("DONE — TRACY 1+1 replay")
+            return
+
         for rnd in (1, 2, 3):
             pipe._refresh_noise_buffer()
             for sm, tid in ordered:
