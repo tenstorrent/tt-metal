@@ -537,8 +537,6 @@ def test_corr_det(mesh_device, model, tp, topology, op_override, tp_axis):
     10x bit-exact determinism check. CORR_FRESH_POB=1 allocates a fresh stats buffer
     per run (surfaces uninitialized-DRAM reads); CORR_LOCALIZE=1 prints divergent tokens."""
     submesh = _resolve_submesh(mesh_device, tp, tp_axis)
-    ccl = CCLManager(mesh_device=submesh, num_links=(op_override or 1), topology=topology)
-    ag = ccl.get_ag_ping_pong_semaphore(tp_axis)
     fresh_pob = _os.getenv("CORR_FRESH_POB") == "1"
     links = _fused_links(op_override)
     flagged = []
@@ -547,6 +545,12 @@ def test_corr_det(mesh_device, model, tp, topology, op_override, tp_axis):
         logger.info(f"=== [{model}] {cfg.cid} rows={cfg.rows} feat={cfg.feat_local} heads={cfg.heads} "
                     f"hd={cfg.head_dim} rope={cfg.rope} ===")
         try:  # isolate per-config so an OOM/hang on one shape characterizes it without losing the rest
+            # Fresh CCL + AG semaphore per config: the fused op resets out_ready_sem at
+            # end-of-op, so a config that throws mid-op can leave a shared semaphore in a
+            # bad state and poison every later config in the sweep (the TP=2 nan cascade).
+            # A per-config CCLManager/semaphore gives each shape independent AG state.
+            ccl = CCLManager(mesh_device=submesh, num_links=(op_override or 1), topology=topology)
+            ag = ccl.get_ag_ping_pong_semaphore(tp_axis)
             inp = _build(submesh, cfg, tp_axis)
             pob = _make_pob(inp, submesh, cfg, links, tp_axis)
             ref = _torch_ref(cfg)
