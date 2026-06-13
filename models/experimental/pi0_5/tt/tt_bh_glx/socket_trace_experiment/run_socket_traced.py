@@ -69,11 +69,16 @@ def main():
         # replay reproduces the eager reference exactly (denoise is deterministic in x_t).
         if os.environ.get("FIXED_NOISE", "1").lower() in ("1", "true", "yes"):
             _ah, _ahp = pipe.action_horizon, pipe._action_horizon_padded
+            # Match the torch reference noise contract EXACTLY: seed SEED+1, then the
+            # first randn(1, ah, adim) IS the denoise noise (same as _trace_e2e_full's
+            # x_t and TorchPi0_5Model.sample_actions' internal first draw). This makes the
+            # PI05_E2E_PCC torch comparison valid AND pins eager==replay for trace fidelity.
+            torch.manual_seed(SEED + 1)
             _np = torch.zeros(1, _ahp, pipe.action_dim, dtype=torch.float32)
             _np[:, :_ah, :] = torch.randn(1, _ah, pipe.action_dim)
             _fixed_noise = ttnn.from_torch(_np, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
             pipe._refresh_noise_buffer = lambda: ttnn.copy_host_to_device_tensor(_fixed_noise, pipe.x_t_fp32)
-            log("FIXED_NOISE: _refresh_noise_buffer pinned (eager == replay input)")
+            log("FIXED_NOISE: _refresh_noise_buffer pinned to torch-matched seed-(SEED+1) noise")
 
         pipe._refresh_noise_buffer()
         upstream = None
@@ -282,6 +287,39 @@ def main():
         log(
             f"PERF: traced all-socket e2e replay = {dt_ms:.2f} ms/inference (avg of {nperf}); {1000.0/dt_ms:.1f} infer/s"
         )
+
+        # ===================== numerical validation vs torch (opt-in) =====================
+        # PI05_E2E_PCC=1 compares the all-socket eager actions against the torch
+        # Pi0_5Model.sample_actions reference. Same input + noise contract as
+        # _trace_e2e_full.py: inputs drawn at SEED, noise drawn at SEED+1 (FIXED_NOISE
+        # above already pins x_t to that exact seed-(SEED+1) draw), torch reseeds SEED+1
+        # internally so its first randn matches. Compare on the logical action_horizon.
+        if os.environ.get("PI05_E2E_PCC", "").lower() in ("1", "true", "yes", "on"):
+            from models.experimental.pi0_5.reference.torch_pi0_5_model import Pi0_5Model as TorchPi0_5Model
+
+            ah = pipe.action_horizon
+            t_images = [images[i] for i in range(N_CAMS)]  # each already (1,3,S,S)
+            t_img_masks = [torch.ones(1, dtype=torch.bool) for _ in range(N_CAMS)]
+            t_lang_masks = torch.ones(1, lang_tokens.shape[-1], dtype=torch.bool)
+            torch.manual_seed(SEED)
+            ref = TorchPi0_5Model(cfg, loader)
+            with torch.no_grad():
+                torch.manual_seed(SEED + 1)
+                ref_actions = ref.sample_actions(
+                    images=t_images,
+                    img_masks=t_img_masks,
+                    lang_tokens=lang_tokens,
+                    lang_masks=t_lang_masks,
+                    state=None,
+                )[0].float()
+            sock_actions = eager[:ah].float()  # eager is (ah_pad, adim); slice logical ah
+            pcc = _pcc(sock_actions, ref_actions)
+            mae = (sock_actions - ref_actions).abs().mean().item()
+            log(
+                f"PCC vs torch: {pcc:.6f}  MAE={mae:.5f}  ref(mean={ref_actions.mean():.4f} std={ref_actions.std():.4f})"
+            )
+            log(f"PCC {'>=' if pcc >= 0.95 else '<'} 0.95 target")
+
         log("DONE — per-submesh socket-pipeline trace replayed")
 
 
