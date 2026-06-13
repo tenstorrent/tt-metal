@@ -350,19 +350,14 @@ def validate_migration_kv(pipeline: TtDeepSeekPrefillPipeline, src_slot: int, ds
     return src_pcc, dst_pcc
 
 
-def validate_migrations_pairwise(pipeline: TtDeepSeekPrefillPipeline, pairs, golden_src_slots=()):
-    """Validate N concurrent slot->slot migrations of ARBITRARY (distinct) prompts.
+def validate_migrations_pairwise(pipeline: TtDeepSeekPrefillPipeline, pairs):
+    """Validate N concurrent slot->slot migrations of distinct prompts.
 
-    With N separate prompts there is no single golden to PCC each dst against, so instead we assert
-    each dst slot's KV matches ITS OWN src slot's KV — i.e. the migration copied that user's KV
-    faithfully. This (a) works for any prompts, (b) catches cross-talk between concurrent migrations
-    (a dst receiving another pair's data), and (c) is cheap: it pulls the device KV cache ONCE and
-    compares slots in host memory (no per-pair device read). The compare is on the raw stored cache
-    (storage->storage copy), so no block-cyclic un-rotate is needed.
-
-    For any src in `golden_src_slots` (the slot prefilled with the real golden prompt) it ALSO PCCs
-    src + dst against the golden trace, anchoring that the prefill itself is model-correct (not just
-    self-consistent). Emits `[kv-migrate-validate]` lines; raises AssertionError on any failure.
+    Asserts each dst slot's KV equals its own src slot's (migration fidelity + cross-talk detection),
+    via one host-side compare of the raw stored cache. Then golden-anchors the slots configured by
+    PREFILL_MIGRATE_GOLDEN_PTS: a positional comma list of .pt paths indexed by slot (same order as
+    the driver's --token-json; empty entry skips that slot), confirming each prefill is model-correct.
+    Raises AssertionError on any failure.
     """
     import torch
 
@@ -398,20 +393,29 @@ def validate_migrations_pairwise(pipeline: TtDeepSeekPrefillPipeline, pairs, gol
         raise AssertionError(f"[kv-migrate-validate] {len(failures)} pair(s) dst!=src below {thr}: {msg}")
     logger.success(f"[kv-migrate-validate] ALL {len(pairs)} pair(s) dst==src PASSED (>= {thr})")
 
-    # Golden anchor (optional): confirm the prefill itself is model-correct for the golden-prompt slot.
+    # Golden anchor config. One knob: PREFILL_MIGRATE_GOLDEN_PTS = positional comma list of .pt
+    # paths (entry i anchors slot i, same order as --token-json; empty entry skips that slot).
+    # Back-compat: PREFILL_MIGRATE_GOLDEN_SLOT + per-slot PREFILL_MIGRATE_GOLDEN_PT_<slot>.
+    golden_pt = {}
+    pts = os.environ.get("PREFILL_MIGRATE_GOLDEN_PTS", "").strip()
+    if pts:
+        for slot, path in enumerate(pts.split(",")):
+            if path.strip():
+                golden_pt[slot] = path.strip()
+    else:
+        for tok in os.environ.get("PREFILL_MIGRATE_GOLDEN_SLOT", "").split(","):
+            if tok.strip().isdigit():
+                golden_pt[int(tok)] = os.environ.get(f"PREFILL_MIGRATE_GOLDEN_PT_{int(tok)}", "").strip() or None
+
     n_pairs = max(1, len(pairs))
     gchunks = max(1, int(os.environ.get("PREFILL_STANDALONE_CHUNKED_NCHUNKS", "1")) // n_pairs)
-    # Per-slot golden: each slot anchors its OWN prompt's .pt (env PREFILL_MIGRATE_GOLDEN_PT_<slot>),
-    # so N DISTINCT prompts are ALL golden-verified in ONE concurrent run. Falls back to the global
-    # DEEPSEEK_PREFILL_TRACE_PT/_DIR when no per-slot .pt is given.
-    for s in golden_src_slots:
+    for s in sorted(golden_pt):
         d = next((dd for ss, dd in pairs if ss == s), None)
-        gpt = os.environ.get(f"PREFILL_MIGRATE_GOLDEN_PT_{s}", "").strip() or None
+        gpt = golden_pt[s]
         logger.info(f"[kv-migrate-validate] golden anchor: src slot {s} (n_chunks={gchunks}) pt={gpt or 'global'}")
         sp = _kv_cache_pcc_check(pipeline, s, gchunks, pt_path_override=gpt)
         print(f"[kv-migrate-validate] GOLDEN src_slot={s} min_pcc={sp:.6f}")
         if d is not None:
-            logger.info(f"[kv-migrate-validate] golden anchor: dst slot {d} (pt={gpt or 'global'})")
             dp = _kv_cache_pcc_check(pipeline, d, gchunks, pt_path_override=gpt)
             print(f"[kv-migrate-validate] GOLDEN dst_slot={d} min_pcc={dp:.6f}")
 
@@ -682,14 +686,8 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DS
             logger.success(f"[kv-migrate-validate] sentinel found — validating {len(pairs)} pair(s): {pairs}")
             ttnn.synchronize_device(pipeline.mesh_device)
             if os.environ.get("PREFILL_MIGRATE_PAIRWISE", "0") == "1":
-                # N separate prompts: validate each dst == its src (migration fidelity, catches
-                # cross-talk); golden-anchor the slot(s) given by PREFILL_MIGRATE_GOLDEN_SLOT.
-                golden_src = [
-                    int(x) % NUM_USERS
-                    for x in os.environ.get("PREFILL_MIGRATE_GOLDEN_SLOT", "").split(",")
-                    if x.strip().isdigit()
-                ]
-                validate_migrations_pairwise(pipeline, pairs, golden_src_slots=golden_src)
+                # N distinct prompts: dst==src fidelity + optional per-slot golden anchor.
+                validate_migrations_pairwise(pipeline, pairs)
             else:
                 # Same prompt across slots: PCC each (src, dst) against the shared golden.
                 for src_slot, dst_slot in pairs:
