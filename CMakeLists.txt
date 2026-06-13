@@ -1,7 +1,12 @@
 cmake_minimum_required(VERSION 3.24...4.2)
 
 # Forgetting to clone submodules is a common omission and results in a poor error message
-if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/third_party/umd/CMakeLists.txt")
+if(
+    NOT EXISTS
+        "${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/third_party/umd/CMakeLists.txt"
+    OR NOT EXISTS
+        "${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/third_party/exalens/CMakeLists.txt"
+)
     message(FATAL_ERROR "Missing submodules.  Run: git submodule update --init --recursive")
 endif()
 

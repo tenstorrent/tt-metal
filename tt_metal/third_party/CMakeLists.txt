@@ -8,3 +8,4 @@ if(TT_METAL_USE_EMULE)
 endif()
 
 add_subdirectory(umd)
+add_subdirectory(exalens/ttexalens/cpp/elf)
