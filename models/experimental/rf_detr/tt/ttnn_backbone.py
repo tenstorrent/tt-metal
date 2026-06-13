@@ -14,11 +14,15 @@ Global layers (2,5,8,11) attend over the merged [1, 1616, 384] sequence.
 import torch
 import ttnn
 
+# Matmul weights in bfloat8_b halve weight read bandwidth (backbone is execution/BW-bound).
+# Activations stay bf16; norms/layerscales stay bf16.
+WEIGHT_DTYPE = ttnn.bfloat8_b
 
-def _lin(linear, device):
+
+def _lin(linear, device, dtype=WEIGHT_DTYPE):
     """torch nn.Linear -> (ttnn weight [in,out], ttnn bias [1,out] or None)."""
     w = ttnn.from_torch(
-        linear.weight.detach().t().contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        linear.weight.detach().t().contiguous(), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
     )
     b = None
     if linear.bias is not None:
@@ -50,7 +54,7 @@ class TtDinoBackbone:
             qkv_w = torch.cat([att.query.weight, att.key.weight, att.value.weight], dim=0)  # [3*384,384]
             qkv_b = torch.cat([att.query.bias, att.key.bias, att.value.bias], dim=0)
             qkv_w_tt = ttnn.from_torch(
-                qkv_w.detach().t().contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+                qkv_w.detach().t().contiguous(), dtype=WEIGHT_DTYPE, layout=ttnn.TILE_LAYOUT, device=device
             )
             qkv_b_tt = ttnn.from_torch(
                 qkv_b.detach().reshape(1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
