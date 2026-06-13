@@ -84,6 +84,7 @@
 #include "ttnn/operations/experimental/deepseek_prefill/zero_padded_kv_cache/zero_padded_kv_cache_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/rotary_embedding_indexed_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/moe/deepseek_moe_gate/deepseek_moe_gate_nanobind.hpp"
+#include "ttnn/operations/experimental/transformer/nemotron3_mamba2_decode_owned/nemotron3_mamba2_decode_owned_nanobind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -189,6 +190,7 @@ void py_module(nb::module_& mod) {
 
     deepseek_moe_post_combine_tilize::detail::bind_deepseek_moe_post_combine_tilize(mod);
     fusion::detail::bind_fusion_dispatch_op(mod);
+    nemotron3_mamba2_decode_owned::detail::bind_nemotron3_mamba2_decode_owned(mod);
 }
 
 }  // namespace ttnn::operations::experimental

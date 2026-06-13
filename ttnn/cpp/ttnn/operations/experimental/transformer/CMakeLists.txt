@@ -38,6 +38,7 @@ file(
     split_query_key_value_and_split_heads/device/kernels/*
     dit_layernorm_pre_all_gather/device/kernels/*
     dit_layernorm_post_all_gather/device/kernels/*
+    nemotron3_mamba2_decode_owned/device/kernels/*
 )
 target_sources(
     ttnn_op_experimental_transformer

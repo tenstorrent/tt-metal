@@ -196,6 +196,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/rotary_embedding_indexed_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/per_token_cast_to_fp8_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_back/per_token_cast_back_nanobind.cpp
+    cpp/ttnn/operations/experimental/transformer/nemotron3_mamba2_decode_owned/nemotron3_mamba2_decode_owned_nanobind.cpp
     cpp/ttnn/operations/experimental/plusone/plusone_nanobind.cpp
     cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.cpp
     cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.cpp

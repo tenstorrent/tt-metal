@@ -36,8 +36,10 @@
     {
       "name": "Mamba2Layer",
       "kind": "other",
-      "depends_on": ["LayerNorm"],
-      "reference_impl": "models/demos/wormhole/mamba/tt/",
+      "depends_on": [
+        "LayerNorm"
+      ],
+      "reference_impl": "ttnn/cpp/ttnn/operations/experimental/transformer/nemotron3_mamba2_decode_owned",
       "host_resident": {
         "allowed": false,
         "justification": null,
@@ -47,7 +49,10 @@
     {
       "name": "DenseAttention",
       "kind": "attention",
-      "depends_on": ["LayerNorm", "RoPE"],
+      "depends_on": [
+        "LayerNorm",
+        "RoPE"
+      ],
       "reference_impl": "models/tt_transformers/tt/attention.py",
       "host_resident": {
         "allowed": false,
@@ -58,7 +63,9 @@
     {
       "name": "DenseMLP",
       "kind": "mlp",
-      "depends_on": ["DenseAttention"],
+      "depends_on": [
+        "DenseAttention"
+      ],
       "reference_impl": "models/tt_transformers/tt/mlp.py",
       "host_resident": {
         "allowed": false,
@@ -69,7 +76,10 @@
     {
       "name": "MoEAttention",
       "kind": "attention",
-      "depends_on": ["LayerNorm", "RoPE"],
+      "depends_on": [
+        "LayerNorm",
+        "RoPE"
+      ],
       "reference_impl": "models/tt_transformers/tt/attention.py",
       "host_resident": {
         "allowed": false,
@@ -80,7 +90,9 @@
     {
       "name": "MoEGate",
       "kind": "other",
-      "depends_on": ["MoEAttention"],
+      "depends_on": [
+        "MoEAttention"
+      ],
       "reference_impl": "models/demos/deepseek_v3/tt/moe_gate.py",
       "host_resident": {
         "allowed": false,
@@ -91,7 +103,9 @@
     {
       "name": "MoEExperts",
       "kind": "mlp",
-      "depends_on": ["MoEGate"],
+      "depends_on": [
+        "MoEGate"
+      ],
       "reference_impl": "models/demos/deepseek_v3/tt/experts.py",
       "host_resident": {
         "allowed": false,
@@ -102,7 +116,9 @@
     {
       "name": "SharedExpert",
       "kind": "mlp",
-      "depends_on": ["MoEGate"],
+      "depends_on": [
+        "MoEGate"
+      ],
       "reference_impl": "models/demos/deepseek_v3/tt/mlp/shared_expert.py",
       "host_resident": {
         "allowed": false,
@@ -113,7 +129,9 @@
     {
       "name": "LMHead",
       "kind": "linear",
-      "depends_on": ["Embedding"],
+      "depends_on": [
+        "Embedding"
+      ],
       "reference_impl": "models/tt_transformers/tt/lm_head.py",
       "host_resident": {
         "allowed": false,
@@ -147,7 +165,7 @@
       "hf_class": "NemotronHForCausalLM",
       "validation_metric": "bleu",
       "validation_threshold": "HF - 1.0",
-      "hybrid_notes": "KV cache covers only the 6 dense-attention layers and 23 MoE-attention layers. Mamba-2 layers maintain a recurrent SSM hidden state (not KV pairs) — that state must be managed separately in decode mode. The hybrid_override_pattern (MEMEM*EMEMEM*...) determines per-layer dispatch."
+      "hybrid_notes": "KV cache covers only the 6 dense-attention layers and 23 MoE-attention layers. Mamba-2 layers maintain a recurrent SSM hidden state (not KV pairs) \u2014 that state must be managed separately in decode mode. The hybrid_override_pattern (MEMEM*EMEMEM*...) determines per-layer dispatch."
     }
   ]
 }

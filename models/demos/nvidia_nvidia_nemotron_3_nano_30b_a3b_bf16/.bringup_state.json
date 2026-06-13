@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-13T22:50:54Z",
-  "updated_at": "2026-06-13T22:58:19Z",
+  "updated_at": "2026-06-13T23:10:00Z",
   "components": [
     {
       "name": "Embedding",
@@ -49,8 +49,14 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "ok",
+        "attempts": 1,
+        "pcc": 1.0,
+        "artifacts": [
+          "models/demos/nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16/reference/functional.py",
+          "models/demos/nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16/reference/golden/LayerNorm.pt"
+        ],
+        "notes": "NemotronHRMSNorm (RMSNorm variant, no bias). PCC=1.0 vs HF module with random weight and bfloat16 input [1,32,2688]."
       },
       "ttnn": {
         "status": "pending",
@@ -106,7 +112,7 @@
       "depends_on": [
         "LayerNorm"
       ],
-      "reference_impl": "models/demos/wormhole/mamba/tt/",
+      "reference_impl": "ttnn/cpp/ttnn/operations/experimental/transformer/nemotron3_mamba2_decode_owned",
       "host_resident": {
         "allowed": false,
         "justification": null,
@@ -415,6 +421,13 @@
       "ts": "2026-06-13T22:58:19Z",
       "action": "architecture[all]",
       "result": "ok"
+    },
+    {
+      "tick": 2,
+      "ts": "2026-06-13T23:10:00Z",
+      "action": "reference[LayerNorm]",
+      "result": "ok",
+      "pcc": 1.0
     }
   ],
   "config": {

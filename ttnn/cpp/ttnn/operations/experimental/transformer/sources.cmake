@@ -83,6 +83,9 @@ set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_SRCS
     rotary_embedding_hf/device/rotary_embedding_hf_multi_core_program_factory.cpp
     rotary_embedding_hf/device/rotary_embedding_hf_sharded_program_factory.cpp
     rotary_embedding_hf/rotary_embedding_hf.cpp
+    nemotron3_mamba2_decode_owned/nemotron3_mamba2_decode_owned.cpp
+    nemotron3_mamba2_decode_owned/device/nemotron3_mamba2_decode_owned_device_operation.cpp
+    nemotron3_mamba2_decode_owned/device/nemotron3_mamba2_decode_owned_program_factory.cpp
 )
 
 set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_API_HEADERS
@@ -91,4 +94,5 @@ set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_API_HEADERS
     nlp_create_qkv_heads/nlp_create_qkv_heads.hpp
     nlp_kv_cache_load_slice/nlp_kv_cache_load_slice.hpp
     rotary_embedding_llama/rotary_embedding_llama.hpp
+    nemotron3_mamba2_decode_owned/nemotron3_mamba2_decode_owned.hpp
 )
