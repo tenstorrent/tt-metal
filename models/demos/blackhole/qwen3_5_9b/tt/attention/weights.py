@@ -23,25 +23,18 @@ def load_attention_weights(mesh_device, state_dict, args, tensor_cache_path=None
     if tensor_cache_path is not None:
         os.makedirs(tensor_cache_path, exist_ok=True)
 
-    # Cache key per weight. get_cache_file_name returns a proper "{dir}/{name}" STRING when a
-    # cache dir is given, else None (caching disabled). Passing the raw (tensor_cache_path, name)
-    # TUPLE to shard_w/as_tensor instead was a bug: with the default tensor_cache_path=None the
-    # tuple (None, "wq") is truthy, so caching turned ON with a stringified "(None, 'wq')" file in
-    # the cwd — and that mesh-sharded cache reloads CORRUPT in a fresh process (garbage per-device
-    # shards → PCC≈0 attention output). The generating run looked fine, so it only bit on re-runs.
     def split_q_and_gate(w):
-        # q_proj fuses Q and the attention gate: its weight is [NH*2*HD, in]. HF
-        # (modeling_qwen3_5.py:658-660) views the output as [..., NH, 2*HD] and chunks the
-        # last axis -> first HD channels per head are Q, last HD are the gate. The output
-        # dim is already axis 0 of the [out, in] weight, so:
-        #   * reshape w DIRECTLY into [NH, 2*HD, in] (no transpose -- transposing first
-        #     reshapes [in, out] and scrambles the head/channel split into garbage rows)
-        #   * return [out, in], matching wk/wv -- shard_w does the [out,in]->[in,out]
-        #     transpose itself, so a trailing .T here would double-transpose.
-        # NH*HD == hidden == 4096 makes the weight square, so getting either wrong is a
-        # silent value bug, not a shape error.
-        NH = args.n_local_heads
-        HD = args.head_dim
+        """
+        HF checkpoint / state_dict ships query and gate projections fused into a single tensor.
+        This function splits them into two separate weight tensors wq and wg, each with shape [hidden_size, num_heads * head_dim], that the TPAttention expects.
+            w: [hidden_size, 2 * num_heads * head_dim]
+
+        Returns:
+            wq: [hidden_size, num_heads * head_dim]
+            wg: [hidden_size, num_heads * head_dim]
+        """
+
+        NH, HD = args.n_heads, args.head_dim
         w_q_and_gate = w.reshape(NH, 2 * HD, -1)
         wq = w_q_and_gate[:, :HD, :].reshape(NH * HD, -1)
         wg = w_q_and_gate[:, HD:, :].reshape(NH * HD, -1)
