@@ -260,13 +260,22 @@ class TtTransformerBlock(LightweightModule):
 
             # ring-40 FF12 input layout: K=1280 width-sharded over 40 ring cores.
             ring_in = ttnn.to_memory_config(ff_in_sharded, mc["SHARDED_FF12_RING40_MEMCFG"])
-            # JIT-reshard the DRAM-interleaved (column-order-preserving), N/K-padded
-            # ring-40 weights to L1 WIDTH-SHARDED over the 40 ring cores — the layout
-            # the gather_in0 ring matmul requires (FF12 micro-test: PCC 0.9999). They
-            # are NOT kept L1-resident (that clashes with the prefill matmul CBs); the
-            # reshard is per-decode-call and the L1 copies are freed at branch exit.
-            w1_ring40_l1 = ttnn.to_memory_config(mlp.w1_ring40, mc["W1W3_RING40_L1_MEMCFG"])
-            w3_ring40_l1 = ttnn.to_memory_config(mlp.w3_ring40, mc["W1W3_RING40_L1_MEMCFG"])
+            # Feed the ring-40 weights STRAIGHT FROM DRAM-INTERLEAVED — no per-token
+            # L1 reshard. The gather_in0 ring matmul reads a DRAM-interleaved
+            # (column-order-preserving) weight directly at full PCC 0.99997
+            # (== the L1-resharded path; test_ff12_dram_weight_direct_micro). The
+            # old per-token InterleavedToSharded reshard (×3 weights × 64 layers)
+            # cost ~73 us/step and cancelled the FF2 fusion's device-kernel saving;
+            # dropping it makes the fusion a net win. (DRAM-BANK-sharded weights
+            # scramble columns for this kernel — that variant FAILs PCC — so the
+            # weights must be DRAM-INTERLEAVED, which is how mlp.w*_ring40 are built.)
+            # FF12 plain ring matmul (gather_in0) reads DRAM-interleaved weights
+            # directly (unit-proven PCC 0.99997) — no reshard.
+            w1_ring40_l1 = mlp.w1_ring40
+            w3_ring40_l1 = mlp.w3_ring40
+            # FF2 all_gather_matmul REQUIRES an L1-sharded weight (it reads
+            # shard_spec; a DRAM-interleaved w2 -> "bad optional access"). So w2
+            # still needs the per-token L1 reshard (freed after the FF2 matmul).
             w2_ring40_l1 = ttnn.to_memory_config(mlp.w2_ring40, mc["W2_RING40_L1_MEMCFG"])
             # FF12 = UNFUSED at ring-40: plain w1/w3 ring matmuls (N=2560 partial-K)
             # + two line_reduce_scatter. The fused matmul_line_reduce_scatter
@@ -296,8 +305,8 @@ class TtTransformerBlock(LightweightModule):
                 sub_device_id=wsd,
             )
             ring_in.deallocate(True)
-            w1_ring40_l1.deallocate(True)
-            w3_ring40_l1.deallocate(True)
+            # NOTE: w1/w3_ring40_l1 alias the persistent mlp.w*_ring40 (DRAM,
+            # fed directly) — do NOT deallocate them.
             w1_red_s = mlp.tt_ccl.line_reduce_scatter(
                 w1_raw,
                 cluster_axis=1,
@@ -374,7 +383,7 @@ class TtTransformerBlock(LightweightModule):
                 buffer_key="FF2_AG_MM_DECODE",
             )
             ff_ag_in.deallocate(True)
-            w2_ring40_l1.deallocate(True)
+            w2_ring40_l1.deallocate(True)  # temp L1 reshard of w2 (FF2 needs sharded)
             _sync("FF2_all_gather_matmul")
             # Final FF2 collective: all_reduce over rows (cluster_axis=0), then
             # to DRAM. Mirror the unfused else-branch's final all_reduce EXACTLY
