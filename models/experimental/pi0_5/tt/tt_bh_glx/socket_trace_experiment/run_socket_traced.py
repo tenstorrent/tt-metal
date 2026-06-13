@@ -85,6 +85,24 @@ def main():
             pipe.transport.send = _tagged_send
             log("transport.send monkey-patched to unique-per-call tags (distinct recv buffers)")
 
+        # FIX UNDER TEST #2: send_direct_async is ASYNC and reads the SEND SOURCE
+        # buffer; in the multi-step loop the next step's compute overwrites that
+        # (reused transient) source before the in-flight fabric read completes ->
+        # corruption under trace replay (no per-step host sync). Copy each send
+        # source into a PERSISTENT, HELD, distinct-per-call buffer so it is never
+        # overwritten mid-transfer. Keeps sockets.
+        if os.environ.get("USE_PERSIST_SRC", "").lower() in ("1", "true", "yes"):
+            _orig_send2 = pipe.transport.send
+            _held = []
+
+            def _persist_send(src, dst, *, out_buf=None, tag=None):
+                psrc = ttnn.clone(src)  # fresh buffer; held below so it is not freed/reused
+                _held.append(psrc)
+                return _orig_send2(psrc, dst, out_buf=out_buf, tag=f"{tag}:p{len(_held)}")
+
+            pipe.transport.send = _persist_send
+            log("transport.send monkey-patched to persistent+distinct send-source buffers")
+
         if SCOPE == "vp":
             # SigLIP(vision) + prefill ONLY (single-pass, no denoise loop). Trace
             # vision_per_chip + prefill_per_chip via sockets; compare the prefill
