@@ -454,6 +454,213 @@ def dense_attention(
 
 
 # ---------------------------------------------------------------------------
+# MoEGate  (NemotronHTopkRouter)
+# ---------------------------------------------------------------------------
+# NemotronH uses NemotronHTopkRouter as the MoE gate in every MoE layer.
+#
+# Config for NemotronH-30B (from config.json):
+#   n_routed_experts    = 128
+#   num_experts_per_tok = 6    (top-6 routing)
+#   n_group             = 1
+#   topk_group          = 1
+#   norm_topk_prob      = True
+#   routed_scaling_factor = 2.5
+#   hidden_size         = 2688
+#
+# Weight layout (backbone.layers.{i}.mixer.gate.*):
+#   weight               : [n_routed_experts, hidden_size] = [128, 2688], float32
+#   e_score_correction_bias : [n_routed_experts] = [128], float32
+#
+# Forward pass (NemotronHTopkRouter.forward):
+#   1. hidden = hidden_states.view(-1, hidden_size)         [tokens, hidden_size]
+#   2. router_logits = hidden @ weight.T                    [tokens, 128]
+#   3. scores = sigmoid(router_logits)                      [tokens, 128]
+#   4. topk_indices = get_topk_indices(scores)              [tokens, 6]
+#   5. topk_weights = scores.gather(1, topk_indices)        [tokens, 6]
+#   6. if norm_topk_prob:
+#          topk_weights /= (topk_weights.sum(-1, keepdim=True) + 1e-20)
+#   7. topk_weights *= routed_scaling_factor
+#
+# get_topk_indices (with n_group=1, topk_group=1 for NemotronH-30B):
+#   With n_group=1 the group machinery collapses to a trivial identity:
+#   - scores_for_choice = scores + e_score_correction_bias   [tokens, 128]
+#   - group_scores      = top2-sum per group => sum of top-2 of all 128      [tokens, 1]
+#   - group_idx         = topk(group_scores, 1) = [0]                         [tokens, 1]
+#   - group_mask        = ones_like(group_scores)                              [tokens, 1]
+#   - score_mask        = ones  (all experts unmasked)                        [tokens, 128]
+#   - topk_indices      = topk(scores_for_choice, 6)                          [tokens, 6]
+#
+# Output: (topk_indices [tokens, top_k], topk_weights [tokens, top_k])
+# ---------------------------------------------------------------------------
+
+
+def moe_gate(
+    hidden_states: torch.Tensor,
+    weight: torch.Tensor,
+    e_score_correction_bias: torch.Tensor,
+    n_routed_experts: int = 128,
+    num_experts_per_tok: int = 6,
+    n_group: int = 1,
+    topk_group: int = 1,
+    norm_topk_prob: bool = True,
+    routed_scaling_factor: float = 2.5,
+) -> tuple:
+    """Pure-PyTorch MoE gate replicating NemotronHTopkRouter.forward().
+
+    All computation is done in float32.  hidden_states may be bfloat16;
+    it is cast to float32 internally as the HuggingFace reference does.
+
+    Args:
+        hidden_states:           Input tensor of shape [..., hidden_size].
+                                 Leading dimensions are flattened to tokens.
+        weight:                  Gate projection weight [n_routed_experts, hidden_size],
+                                 float32.  Loaded from
+                                 ``backbone.layers.{i}.mixer.gate.weight``.
+        e_score_correction_bias: Correction bias [n_routed_experts], float32.
+                                 Loaded from
+                                 ``backbone.layers.{i}.mixer.gate.e_score_correction_bias``.
+        n_routed_experts:        Total number of experts (128 for NemotronH-30B).
+        num_experts_per_tok:     Number of experts per token (6).
+        n_group:                 Number of expert groups (1 for NemotronH-30B).
+        topk_group:              Number of groups to keep (1).
+        norm_topk_prob:          Normalize routing weights to sum to 1 (True).
+        routed_scaling_factor:   Scale applied after normalisation (2.5).
+
+    Returns:
+        Tuple (topk_indices, topk_weights) each of shape [tokens, num_experts_per_tok].
+        topk_indices: torch.int64
+        topk_weights: torch.float32
+    """
+    # Flatten batch/sequence dimensions -> [tokens, hidden_size]
+    tokens = hidden_states.view(-1, hidden_states.shape[-1])
+    tokens_f32 = tokens.to(torch.float32)
+
+    # 1. Router logits: [tokens, n_routed_experts]
+    router_logits = F.linear(tokens_f32, weight.to(torch.float32))
+
+    # 2. Sigmoid scores
+    scores = router_logits.sigmoid()  # [tokens, n_routed_experts]
+
+    # 3. get_topk_indices — implements the grouped top-k selection
+    scores_for_choice = scores + e_score_correction_bias.to(torch.float32).unsqueeze(0)
+    # [tokens, n_group, experts_per_group]
+    scores_3d = scores_for_choice.view(-1, n_group, n_routed_experts // n_group)
+    group_scores = scores_3d.topk(2, dim=-1)[0].sum(dim=-1)  # [tokens, n_group]
+    group_idx = torch.topk(group_scores, k=topk_group, dim=-1, sorted=False)[1]  # [tokens, topk_group]
+    group_mask = torch.zeros_like(group_scores)  # [tokens, n_group]
+    group_mask.scatter_(1, group_idx, 1)
+    # Expand mask back to per-expert: [tokens, n_group, experts_per_group] -> [tokens, n_routed_experts]
+    score_mask = group_mask.unsqueeze(-1).expand(-1, n_group, n_routed_experts // n_group).reshape(-1, n_routed_experts)
+    scores_for_choice = scores_for_choice.masked_fill(~score_mask.bool(), 0.0)
+    topk_indices = torch.topk(scores_for_choice, k=num_experts_per_tok, dim=-1, sorted=False)[1]
+
+    # 4. Gather routing weights from the *unbiased* scores
+    topk_weights = scores.gather(1, topk_indices)  # [tokens, num_experts_per_tok]
+
+    # 5. Normalise
+    if norm_topk_prob:
+        denominator = topk_weights.sum(dim=-1, keepdim=True) + 1e-20
+        topk_weights = topk_weights / denominator
+
+    # 6. Scale
+    topk_weights = topk_weights * routed_scaling_factor
+
+    return topk_indices, topk_weights
+
+
+# ---------------------------------------------------------------------------
+# DenseMLP  (NemotronHMLP inside NemotronHBlock with block_type='mlp')
+# ---------------------------------------------------------------------------
+# In NemotronH the "dense MLP" block is a NemotronHBlock whose mixer is a
+# NemotronHMLP module (block_type == 'mlp', i.e. hybrid_override_pattern '-').
+# Although the 30B-A3B checkpoint does not contain any '-' layers (its pattern
+# only has M / E / *), the component appears in the architecture inventory as a
+# separate bring-up target and the identical MLP structure is reused in the
+# shared-expert of every MoE layer.
+#
+# NemotronHMLP forward:
+#   out = down_proj( act_fn( up_proj(x) ) )
+# where act_fn = ACT2FN["relu2"] = ReLUSquaredActivation = relu(x)^2
+#
+# NemotronHBlock forward (mlp path):
+#   residual      = hidden_states
+#   hidden_states = norm(hidden_states)          RMSNorm, same as LayerNorm
+#   hidden_states = mixer(hidden_states)         NemotronHMLP
+#   hidden_states = residual + hidden_states
+#
+# Weight layout (backbone.layers.{i}.mixer.*):
+#   up_proj.weight   : [intermediate_size, hidden_size] = [1856, 2688]  bfloat16
+#   down_proj.weight : [hidden_size, intermediate_size] = [2688, 1856]  bfloat16
+#   norm weight      : backbone.layers.{i}.norm.weight  [hidden_size]   bfloat16
+# No bias (mlp_bias = False).
+#
+# Config values for NemotronH-30B:
+#   hidden_size       = 2688
+#   intermediate_size = 1856   (dense MLP)
+# ---------------------------------------------------------------------------
+
+
+def dense_mlp(
+    hidden_states: torch.Tensor,
+    norm_weight: torch.Tensor,
+    w_up: torch.Tensor,
+    w_down: torch.Tensor,
+    norm_eps: float = 1e-5,
+) -> torch.Tensor:
+    """Pure-PyTorch DenseMLP block for Nemotron-3 Nano 30B.
+
+    Replicates the NemotronHBlock (block_type='mlp') forward pass, which
+    wraps a NemotronHMLP mixer with pre-block RMSNorm and a residual
+    connection.
+
+    Activation is ``relu2`` (squared ReLU): ``relu(x) ** 2``, as defined by
+    ``ReLUSquaredActivation`` in ``transformers.activations``.
+
+    NOTE: This model's 30B-A3B checkpoint has no '-' layers in its
+    ``hybrid_override_pattern``, so the identical MLP structure appears as
+    the *shared expert* in MoE blocks (``backbone.layers.{i}.mixer.shared_experts.*``).
+    The reference function is intentionally decoupled from any specific layer
+    index so it can be validated with synthetic weights.
+
+    Args:
+        hidden_states:  Input tensor of shape [batch, seq_len, hidden_size].
+                        Expected dtype: bfloat16.
+        norm_weight:    RMSNorm scale vector of shape [hidden_size], bfloat16
+                        or float32.  Loaded from
+                        ``backbone.layers.{i}.norm.weight``.
+        w_up:           Up-projection weight of shape
+                        [intermediate_size, hidden_size] (as stored in the
+                        checkpoint; ``F.linear`` transposes internally).
+                        Loaded from
+                        ``backbone.layers.{i}.mixer.up_proj.weight``.
+        w_down:         Down-projection weight of shape
+                        [hidden_size, intermediate_size].  Loaded from
+                        ``backbone.layers.{i}.mixer.down_proj.weight``.
+        norm_eps:       RMSNorm epsilon (1e-5 for NemotronH-30B).
+
+    Returns:
+        Tensor of shape [batch, seq_len, hidden_size] in the same dtype as
+        ``hidden_states`` — the post-residual block output.
+    """
+    residual = hidden_states
+
+    # 1. Pre-norm (RMSNorm — same as layer_norm() above)
+    normed = layer_norm(hidden_states, norm_weight, eps=norm_eps)
+
+    # 2. Up projection
+    up = F.linear(normed, w_up)  # [B, S, intermediate_size]
+
+    # 3. Squared-ReLU activation (relu2 = relu(x)^2)
+    activated = F.relu(up) ** 2  # [B, S, intermediate_size]
+
+    # 4. Down projection
+    down = F.linear(activated, w_down)  # [B, S, hidden_size]
+
+    # 5. Residual
+    return residual + down
+
+
+# ---------------------------------------------------------------------------
 # Convenience nn.Module wrapper (not used by TTNN, but useful for golden gen)
 # ---------------------------------------------------------------------------
 
@@ -470,3 +677,136 @@ class NemotronHRMSNorm(nn.Module):
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         return layer_norm(hidden_states, self.weight, self.variance_epsilon)
+
+
+# ---------------------------------------------------------------------------
+# SharedExpert  (NemotronHMLP inside NemotronHMOE as shared_experts)
+# ---------------------------------------------------------------------------
+# In each MoE layer, ALL tokens pass through a shared (non-routed) expert
+# implemented as NemotronHMLP with moe_shared_expert_intermediate_size=3712.
+#
+# NemotronHMOE.forward() (simplified):
+#   residuals = hidden_states            # already pre-normed by the block
+#   topk_indices, topk_weights = gate(hidden_states)
+#   hidden_states = moe(hidden_states, ...)   # routed expert outputs
+#   hidden_states = hidden_states + shared_experts(residuals)
+#
+# So shared_experts receives the pre-normed hidden states (the same tensor
+# passed to the MoE gate and routed experts).
+#
+# NemotronHMLP forward:
+#   out = down_proj( relu(up_proj(x))^2 )
+# activation = relu2 (squared ReLU), no bias.
+#
+# Config values for NemotronH-30B:
+#   hidden_size                       = 2688
+#   moe_shared_expert_intermediate_size = 3712  (distinct from moe_intermediate_size=1856)
+#
+# Weight layout (backbone.layers.{i}.mixer.shared_experts.*):
+#   up_proj.weight   : [moe_shared_expert_intermediate_size, hidden_size] = [3712, 2688]
+#   down_proj.weight : [hidden_size, moe_shared_expert_intermediate_size] = [2688, 3712]
+# No bias (mlp_bias = False).
+# ---------------------------------------------------------------------------
+
+
+def shared_expert(
+    hidden_states: torch.Tensor,
+    w_up: torch.Tensor,
+    w_down: torch.Tensor,
+) -> torch.Tensor:
+    """Pure-PyTorch SharedExpert (shared MLP) for Nemotron-3 Nano 30B MoE layers.
+
+    Replicates ``NemotronHMLP.forward()`` when used as the shared (non-routed)
+    expert inside ``NemotronHMOE``.  All tokens pass through this expert
+    regardless of routing decisions.
+
+    The caller is responsible for supplying **pre-normed** hidden states — i.e.
+    the same tensor that the block's pre-norm has already processed and that
+    ``NemotronHMOE.forward()`` stores as ``residuals`` before routing.
+
+    Activation is ``relu2`` (squared ReLU): ``relu(x) ** 2``, matching all
+    NemotronHMLP variants in this model.
+
+    Args:
+        hidden_states:  Pre-normed input of shape [batch, seq_len, hidden_size].
+                        Expected dtype: bfloat16.
+        w_up:           Up-projection weight of shape
+                        [moe_shared_expert_intermediate_size, hidden_size]
+                        = [3712, 2688].  Loaded from
+                        ``backbone.layers.{i}.mixer.shared_experts.up_proj.weight``.
+        w_down:         Down-projection weight of shape
+                        [hidden_size, moe_shared_expert_intermediate_size]
+                        = [2688, 3712].  Loaded from
+                        ``backbone.layers.{i}.mixer.shared_experts.down_proj.weight``.
+
+    Returns:
+        Tensor of shape [batch, seq_len, hidden_size] in the same dtype as
+        ``hidden_states``.  This is the shared-expert contribution to be
+        added to the routed-MoE output before the block residual.
+    """
+    # Up projection: [B, S, hidden_size] -> [B, S, moe_shared_expert_intermediate_size]
+    up = F.linear(hidden_states, w_up)
+
+    # relu2 activation: relu(x)^2
+    activated = F.relu(up) ** 2
+
+    # Down projection: [B, S, moe_shared_expert_intermediate_size] -> [B, S, hidden_size]
+    return F.linear(activated, w_down)
+
+
+# ---------------------------------------------------------------------------
+# LMHead  (final RMSNorm + vocabulary projection)
+# ---------------------------------------------------------------------------
+# In NemotronHForCausalLM the last step after all transformer layers is:
+#   hidden_states = self.model.backbone.norm_f(hidden_states)  # final RMSNorm
+#   logits        = self.lm_head(hidden_states)                # nn.Linear, no bias
+#
+# Weights (both in model-00013-of-00013.safetensors, the last shard):
+#   backbone.norm_f.weight : [hidden_size=2688]                    bfloat16
+#   lm_head.weight         : [vocab_size=131072, hidden_size=2688] bfloat16
+#
+# tie_word_embeddings = False — lm_head.weight is *not* shared with the
+# token embedding; it is an independent parameter.
+#
+# The norm_f RMSNorm is identical to the per-layer NemotronHRMSNorm:
+#   h = h.float()
+#   h = h * rsqrt(mean(h^2, dim=-1, keepdim=True) + eps)
+#   h = (weight.float() * h).to(input_dtype)
+# ---------------------------------------------------------------------------
+
+
+def lm_head(
+    hidden_states: torch.Tensor,  # [B, S, 2688] final layer output
+    norm_f_weight: torch.Tensor,  # [2688] final RMSNorm weight
+    lm_head_weight: torch.Tensor,  # [131072, 2688]
+    norm_eps: float = 1e-5,
+) -> torch.Tensor:  # [B, S, 131072] logits
+    """Final RMSNorm + vocabulary projection for NemotronH-30B.
+
+    Replicates the tail of ``NemotronHForCausalLM.forward()``:
+        hidden_states = model.backbone.norm_f(hidden_states)
+        logits        = lm_head(hidden_states)
+
+    Args:
+        hidden_states:  [batch, seq_len, hidden_size] — output of the last
+                        transformer layer.  Expected dtype: bfloat16.
+        norm_f_weight:  Final RMSNorm scale vector of shape [hidden_size].
+                        Loaded from ``backbone.norm_f.weight``.
+        lm_head_weight: Vocabulary projection weight of shape
+                        [vocab_size, hidden_size].  Loaded from
+                        ``lm_head.weight``.  ``F.linear`` transposes it
+                        internally, so no manual transpose is needed.
+                        ``tie_word_embeddings=False`` — this weight is
+                        independent of the token embedding.
+        norm_eps:       RMSNorm epsilon (1e-5 for NemotronH-30B).
+
+    Returns:
+        Logits tensor of shape [batch, seq_len, vocab_size] in bfloat16.
+    """
+    # 1. Final RMSNorm (reuses layer_norm defined above)
+    normed = layer_norm(hidden_states, norm_f_weight, eps=norm_eps)  # [B, S, 2688]
+
+    # 2. Vocabulary projection — F.linear computes normed @ lm_head_weight.T
+    logits = F.linear(normed.float(), lm_head_weight.float()).bfloat16()  # [B, S, 131072]
+
+    return logits

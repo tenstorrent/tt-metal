@@ -4,7 +4,7 @@
 **Slug:** `nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-13T22:50:54Z
-**Updated:** 2026-06-13T23:22:05Z
+**Updated:** 2026-06-13T23:29:03Z
 
 ## Block Status
 
@@ -25,7 +25,7 @@
 | RoPE | debug | n/a | — | 0 |  |
 | RoPE | optimization | pending | — | 0 |  |
 | RoPE | real_weights | pending | — | 0 |  |
-| Mamba2Layer | reference | pending | — | 0 | unblocked: LayerNorm done |
+| Mamba2Layer | reference | done | 0.999970 | 0 | sequential-step SSD loop; gated RMSNorm n_groups=8; conv1d prefill path; pre-norm + residual included |
 | Mamba2Layer | ttnn | pending | — | 0 |  |
 | Mamba2Layer | debug | n/a | — | 0 |  |
 | Mamba2Layer | optimization | pending | — | 0 |  |
@@ -50,17 +50,17 @@
 | MoEGate | debug | n/a | — | 0 |  |
 | MoEGate | optimization | pending | — | 0 |  |
 | MoEGate | real_weights | pending | — | 0 |  |
-| MoEExperts | reference | pending | — | 0 | MoEGate was pending |
+| MoEExperts | reference | done | 1.000000 | 0 | 128 experts, top-6 routing with NemotronHTopkRouter, relu2 activation, moe_intermediate_size=1856 |
 | MoEExperts | ttnn | pending | — | 0 |  |
 | MoEExperts | debug | n/a | — | 0 |  |
 | MoEExperts | optimization | pending | — | 0 |  |
 | MoEExperts | real_weights | pending | — | 0 |  |
-| SharedExpert | reference | pending | — | 0 | MoEGate was pending |
+| SharedExpert | reference | done | 0.999997 | 0 | moe_shared_expert_intermediate_size=3712, relu2, takes pre-normed input |
 | SharedExpert | ttnn | pending | — | 0 |  |
 | SharedExpert | debug | n/a | — | 0 |  |
 | SharedExpert | optimization | pending | — | 0 |  |
 | SharedExpert | real_weights | pending | — | 0 |  |
-| LMHead | reference | pending | — | 0 |  |
+| LMHead | reference | done | 1.000000 | 0 | final RMSNorm + linear projection, tie_word_embeddings=False, vocab_size=131072 |
 | LMHead | ttnn | pending | — | 0 |  |
 | LMHead | debug | n/a | — | 0 |  |
 | LMHead | optimization | pending | — | 0 |  |
@@ -82,6 +82,7 @@
 - tick 6 (2026-06-13T23:45:00Z): reference[MoEGate] — ok
 - tick 7 (2026-06-13T23:19:35Z): reference[DenseMLP/MoEGate/MoEExperts/SharedExpert] — 2ok+2blocked
 - tick 8 (2026-06-13T23:22:05Z): unblock Mamba2Layer (LayerNorm done) — reset to pending
+- tick 9 (2026-06-13T23:29:03Z): reference[Mamba2Layer/MoEExperts/SharedExpert/LMHead] — 4ok
 
 ## Host-Resident Exceptions
 

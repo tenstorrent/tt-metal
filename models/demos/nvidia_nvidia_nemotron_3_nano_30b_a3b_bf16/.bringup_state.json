@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-13T22:50:54Z",
-  "updated_at": "2026-06-13T23:22:05Z",
+  "updated_at": "2026-06-13T23:29:03Z",
   "components": [
     {
       "name": "Embedding",
@@ -122,10 +122,13 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
+        "status": "done",
         "attempts": 0,
-        "last_error": "dep LayerNorm was pending",
-        "notes": "unblocked: LayerNorm done"
+        "artifacts": [
+          "reference/golden/Mamba2Layer.pt"
+        ],
+        "pcc": 0.99997,
+        "notes": "sequential-step SSD loop; gated RMSNorm n_groups=8; conv1d prefill path; pre-norm + residual included"
       },
       "ttnn": {
         "status": "pending",
@@ -305,9 +308,13 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
+        "status": "done",
         "attempts": 0,
-        "notes": "MoEGate was pending"
+        "artifacts": [
+          "reference/golden/MoEExperts.pt"
+        ],
+        "pcc": 0.9999998,
+        "notes": "128 experts, top-6 routing with NemotronHTopkRouter, relu2 activation, moe_intermediate_size=1856"
       },
       "ttnn": {
         "status": "pending",
@@ -339,9 +346,13 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
+        "status": "done",
         "attempts": 0,
-        "notes": "MoEGate was pending"
+        "artifacts": [
+          "reference/golden/SharedExpert.pt"
+        ],
+        "pcc": 0.999997,
+        "notes": "moe_shared_expert_intermediate_size=3712, relu2, takes pre-normed input"
       },
       "ttnn": {
         "status": "pending",
@@ -373,8 +384,13 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "reference/golden/LMHead.pt"
+        ],
+        "pcc": 1.0,
+        "notes": "final RMSNorm + linear projection, tie_word_embeddings=False, vocab_size=131072"
       },
       "ttnn": {
         "status": "pending",
@@ -487,6 +503,12 @@
       "ts": "2026-06-13T23:22:05Z",
       "action": "unblock Mamba2Layer (LayerNorm done)",
       "result": "reset to pending"
+    },
+    {
+      "tick": 9,
+      "ts": "2026-06-13T23:29:03Z",
+      "action": "reference[Mamba2Layer/MoEExperts/SharedExpert/LMHead]",
+      "result": "4ok"
     }
   ],
   "config": {
