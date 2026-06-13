@@ -210,6 +210,7 @@ void kernel_main() {
         // ---------------------------------------------------------------------------
 
         cb_ex_obj.wait_front(num_tiles_per_worker * num_tiles_scaler);
+        cb_partial_obj.pop_front(block_h * num_tiles_scaler);
 
         if constexpr (num_all_to_all_workers_first_stage > 1) {
             reduce_receiver_sem.wait(num_all_to_all_workers_first_stage - 1);

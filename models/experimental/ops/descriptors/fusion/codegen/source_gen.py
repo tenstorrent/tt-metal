@@ -512,7 +512,7 @@ def _generate_fused_source(
     has_trailing = False
     if needs_barrier:
         last_phase_idx = dispatch_phases[-1]
-        has_trailing = last_phase_idx in multi_barrier.transition_map
+        has_trailing = last_phase_idx in multi_barrier.transition_map or len(dispatch_phases) > 1
 
     for count, phase_idx in enumerate(dispatch_phases):
         pname = phase_names.get(phase_idx, "")
@@ -592,7 +592,7 @@ def _generate_coordinator_only_source(
     lines.append("void kernel_main() {")
     lines.append("    barrier::init();")
     lines.append("")
-    has_trailing = all_phase_indices[-1] in multi_barrier.transition_map
+    has_trailing = all_phase_indices[-1] in multi_barrier.transition_map or len(all_phase_indices) > 1
     for count, phase_idx in enumerate(all_phase_indices):
         pname = phase_names.get(phase_idx, "")
         label = f"Phase {phase_idx}: {pname}" if pname else f"Phase {phase_idx}"

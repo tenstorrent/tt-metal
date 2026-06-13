@@ -364,7 +364,7 @@ jobs:
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
 
-  tt-train:
+  tt-train-smoke-tests:
     needs: [build, find-changes]
     if: ${{ github.event_name == 'workflow_dispatch' ||
             github.ref_name == 'main' ||
@@ -374,8 +374,10 @@ jobs:
             needs.find-changes.outputs.tt-nn-changed == 'true'
         }}
     secrets: inherit
-    uses: ./.github/workflows/tt-train-build-and-test.yaml
+    uses: ./.github/workflows/tt-train-tests.yaml
     with:
+      test-category: smoke
+      enabled-skus: "wh_n150_civ2"
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
 
@@ -421,19 +423,13 @@ jobs:
 
   triage-tests:
     needs: [build, resolve-docker-pull-refs, find-changes, check-harbor]
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: ${{ github.event_name == 'merge_group'
-            && fromJSON('["N150-viommu","P150b-viommu-prio"]')
-            || fromJSON('["N150-viommu","P150b-viommu"]') }}
-    uses: ./.github/workflows/triage.yaml
+    secrets: inherit
+    uses: ./.github/workflows/triage-tests-impl.yaml
     with:
-      runner-label: ${{ matrix.platform }}
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
-      timeout: 11
+      enabled-skus: ${{ github.event_name == 'merge_group' && 'wh_n150_civ2,bh_p150b_civ2_viommu_prio' || 'wh_n150_civ2,bh_p150b_civ2_viommu' }}
 
   load-llk-unit-test-matrix:
     needs: find-changes
@@ -553,14 +549,14 @@ jobs:
         contains(join(needs.*.result, ','), 'success') ||
         contains(join(needs.*.result, ','), 'failure')
       }}
-    needs: [static-checks, docker-images, find-changes, build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, tt-cnn-unit-tests, tt-train, triage-tests, fabric-unit-tests, fabric-cpu-only-unit-tests, load-llk-unit-test-matrix, llk-unit-tests]
+    needs: [static-checks, docker-images, find-changes, build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, tt-cnn-unit-tests, tt-train-smoke-tests, triage-tests, fabric-unit-tests, fabric-cpu-only-unit-tests, load-llk-unit-test-matrix, llk-unit-tests]
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "static-checks, find-changes"
-          optional-jobs: "build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, tt-cnn-unit-tests, tt-train, triage-tests, fabric-unit-tests, fabric-cpu-only-unit-tests, load-llk-unit-test-matrix, llk-unit-tests"
+          optional-jobs: "build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, tt-cnn-unit-tests, tt-train-smoke-tests, triage-tests, fabric-unit-tests, fabric-cpu-only-unit-tests, load-llk-unit-test-matrix, llk-unit-tests"
         env:
           NEEDS_CONTEXT: "${{ toJSON(needs) }}"
       - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.event_name == 'merge_group')
