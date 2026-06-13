@@ -1091,6 +1091,37 @@ static std::map<std::string, std::string> build_kernel_defines(
         defines["EMULE_WAIT_TIMEOUT"] = "1";
     }
 
+    // Opt-in deep-SFPU override. TT_EMULE_DEEP_SFPU=sqrt,sigmoid promotes those
+    // shadowed SFPU ops from their layer-1 libm shadow to the deep path (the real
+    // silicon ckernel_sfpu_<op>.h run on emule's faithful sfpi backend — see
+    // tt-emule docs/sfpu-deep-path.md). Each comma-separated name becomes an
+    // EMULE_DEEP_SFPU_<UPPER> define. Routed through the defines map so it lands
+    // in the JIT cache key (toggling invalidates stale cached .so). Ops with no
+    // layer-1 shadow take the deep path automatically and need no opt-in.
+    if (const char* deep = std::getenv("TT_EMULE_DEEP_SFPU")) {
+        const std::string list(deep);
+        size_t start = 0;
+        while (start <= list.size()) {
+            const size_t comma = list.find(',', start);
+            const size_t end = (comma == std::string::npos) ? list.size() : comma;
+            std::string op;
+            for (size_t i = start; i < end; ++i) {
+                const char c = list[i];
+                if (c == ' ' || c == '\t') {
+                    continue;  // trim whitespace
+                }
+                op.push_back((c >= 'a' && c <= 'z') ? static_cast<char>(c - 'a' + 'A') : c);
+            }
+            if (!op.empty()) {
+                defines["EMULE_DEEP_SFPU_" + op] = "1";
+            }
+            if (comma == std::string::npos) {
+                break;
+            }
+            start = comma + 1;
+        }
+    }
+
     auto arch = MetalContext::instance().get_cluster().arch();
     if (arch == ARCH::QUASAR) {
         defines["ARCH_QUASAR"] = "1";
