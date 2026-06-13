@@ -45,7 +45,7 @@ def init_kv_cache(
     tp = mesh_device.get_num_devices()
 
     # When KV heads < TP, each device gets 1 KV head (GQA-assigned, not all heads)
-    num_local_kv_heads = 1 if args.n_local_kv_heads < tp else args.n_kv_heads // tp
+    num_local_kv_heads = args.n_local_kv_heads
     head_dim = args.head_dim
 
     if paged_attention_config:
