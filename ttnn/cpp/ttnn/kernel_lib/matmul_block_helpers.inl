@@ -63,6 +63,36 @@ ALWI void pack_subblock_row_strided(
     }
 }
 
+/**
+ * Reload a (h × w) sub-block that was SPILLED row-strided (by pack_subblock_row_strided)
+ * from the source CB into DST, packing it CONTIGUOUSLY in DST. The read mirror of
+ * pack_subblock_row_strided: each row's w tiles live at source-CB offset
+ * (r * row_stride + col_base) relative to the CB's current fifo_rd_ptr, but they land
+ * at the contiguous DST slot dst_start_idx + r * w so the subsequent matmul/pack sees
+ * the sub-block laid out row-major exactly as the contiguous (SubblockMajor) reload does.
+ *
+ * One copy_block_matmul_partials(src, src_base, dst_base, w) call per row — the LLK reads
+ * w contiguous tiles at fifo_rd_ptr + src_base, so this does NOT advance fifo_rd_ptr.
+ * The caller is responsible for cb_wait_front covering the whole fronted row group
+ * (col_base + (h-1)*row_stride + w tiles) and for cb_pop_front when the region is done.
+ *
+ * src_cb_id    Source CB id (the interm spill buffer).
+ * col_base     Column offset within the fronted row group (in tiles) — the in1 sub-block's
+ *              start column, matching the col_base pack_subblock_row_strided wrote with.
+ * row_stride   Row stride in tiles (= out_row_width), matching the spill.
+ * h, w         Sub-block height / width in tiles.
+ */
+ALWI void copy_subblock_row_strided(
+    uint32_t src_cb_id,
+    uint32_t col_base,
+    uint32_t row_stride,
+    uint32_t h,
+    uint32_t w) {
+    for (uint32_t r = 0; r < h; r++) {
+        copy_block_matmul_partials(src_cb_id, r * row_stride + col_base, r * w, w);
+    }
+}
+
 template <
     bool transpose,
     bool packer_l1_acc,
@@ -438,6 +468,27 @@ ALWI void matmul_block(
                             // single push_back at exit.
                             copy_block_matmul_partials(
                                 interm_cb_id, subblock_pin_offset, 0, out_num_tiles);
+                        } else if constexpr (spill_row_grouped) {
+                            // TileRowMajor + L1_ACC, non-pin (Out / OutWithRelu target): the non-last
+                            // K-block spills landed ROW-STRIDED (pack_subblock_row_strided into interm,
+                            // pushed one M-row-group at a time). A contiguous reload would read the
+                            // wrong tiles and use the wrong FIFO increment. Front the whole row group on
+                            // the first in1 sub-block, gather THIS sub-block's row-strided slice into
+                            // contiguous DST (col_base = in1_subblock's start column), and pop the row
+                            // group once the last in1 sub-block has consumed it — matching the producer's
+                            // per-row-group reserve/push so the CB increments stay balanced.
+                            if (in1_subblock == 0) {
+                                interm_buf.wait_front(row_group_tiles);
+                            }
+                            copy_subblock_row_strided(
+                                interm_cb_id,
+                                in1_subblock * shape.out_subblock_w,
+                                out_row_width,
+                                shape.out_subblock_h,
+                                shape.out_subblock_w);
+                            if (in1_subblock == shape.in1_num_subblocks - 1) {
+                                interm_buf.pop_front(row_group_tiles);
+                            }
                         } else {
                             interm_buf.wait_front(out_num_tiles);
                             copy_block_matmul_partials(interm_cb_id, 0, 0, out_num_tiles);

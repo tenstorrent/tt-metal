@@ -345,10 +345,35 @@ void kernel_main() {
     // "Dedicate partials, match matmul" (GH#45995): the factory now sizes matmul_partials_cb to ONE
     // output block and gives it its own L1 region (is_globally_allocated=false → partials_cb_uses_output
     // is always false here). With a one-block dedicated region the helper's NON-pin FIFO wraps back to
-    // the same base every K-block, so packer_l1_acc accumulates at a fixed L1 address for multi-output-
-    // block convs too — exactly how matmul's dedicated single-block interm0 behaves. This removes the
-    // bespoke pin scheme and the TileRowMajor+pin path entirely; conv runs pure SubblockMajor non-pin.
-    constexpr auto conv_output_layout = compute_kernel_lib::OutputCBLayout::SubblockMajor;
+    // the same base every K-block, so packer_l1_acc (and the software spill/reload when l1_acc is off)
+    // operates at a fixed L1 base for multi-output-block convs too — exactly how matmul's dedicated
+    // single-block interm0 behaves. There is NO pin anywhere on this path.
+    //
+    // M2 — re-enable TileRowMajor (TRM) on the NON-pin dedicated-partials base. The factory
+    // (conv2d_op_sharded_program_factory.cpp) emits CONV_TILE_PACK_ROW_MAJOR for eligible
+    // HEIGHT_SHARDED no-bias convs whose per_core_N is stranded by the SubblockMajor
+    // out_subblock_w == per_core_N constraint, and folds a LARGER (relaxed) out_subblock into the
+    // compile args. TRM lifts that constraint, so a relaxed subblock with out_subblock_h > 1 (fewer
+    // matmul_block_init / pack passes per output block) becomes legal. With the define:
+    //   • the matmul helper packs the interm/out row-major (pack_subblock_row_strided) instead of
+    //     subblock-major, on the SAME non-pin dedicated-partials FIFO. l1_acc ON accumulates
+    //     per-address across K-blocks; l1_acc OFF spills/reloads (the helper's strided reload mirrors
+    //     the strided spill — see matmul_block_helpers.inl copy_subblock_row_strided).
+    //   • the untilize phase (ROW_MAJOR output) reads the row-major interm via plain `untilize` (the
+    //     row strip is already contiguous tile-row order), NOT reblock_and_untilize (SubblockMajor only).
+    //   • TILE output packs the last K-block straight to out_cb in row-major tile order (== the tiled
+    //     shard layout), no reblock.
+    // Without the define this is byte-identical to the SBM path. TRM + fuse_bias degrades to
+    // SubblockMajor (TileRowMajor + bias deadlocks the shared partials CB); the factory's eligibility
+    // forbids bias on this path, so the degrade is defensive and never reached in production.
+#ifdef CONV_TILE_PACK_ROW_MAJOR
+    constexpr bool tile_pack_row_major = true;
+#else
+    constexpr bool tile_pack_row_major = false;
+#endif
+    constexpr auto conv_output_layout = (tile_pack_row_major && !fuse_bias)
+                                            ? compute_kernel_lib::OutputCBLayout::TileRowMajor
+                                            : compute_kernel_lib::OutputCBLayout::SubblockMajor;
 
     constexpr uint32_t out_block_w = in1_block_w;
 
@@ -589,11 +614,11 @@ void kernel_main() {
                 if constexpr (pack_relu) {
                     PACK((llk_pack_relu_config(ReluConfig::none())));
                 }
-                if constexpr (packer_untilize) {
-                    // Narrow SubblockMajor output: gather subblock-major matmul output into row-major and
-                    // untilize via pack_untilize_dest. One call — reblock_and_untilize loops over all
-                    // in0_num_subblocks internally and owns the data-format reconfig (srcA=matmul_partials,
-                    // pack=out) + the pack_untilize init/uninit.
+                if constexpr (packer_untilize && !tile_pack_row_major) {
+                    // Narrow SubblockMajor output (define-absent path): gather subblock-major matmul
+                    // output into row-major and untilize via pack_untilize_dest. One call —
+                    // reblock_and_untilize loops over all in0_num_subblocks internally and owns the
+                    // data-format reconfig (srcA=matmul_partials, pack=out) + the pack_untilize init/uninit.
                     compute_kernel_lib::reblock_and_untilize<out_subblock_w, out_block_w>(
                         in0_num_subblocks,
                         in1_num_subblocks,
@@ -602,8 +627,11 @@ void kernel_main() {
                         cb_matmul_partials,
                         cb_out);
                 } else {
-                    // Wide SubblockMajor output (packer_untilize=false): plain untilize reads the row strip
-                    // sequentially and converts to row-major. srcA reconfig to matmul_partials is handled
+                    // Wide SubblockMajor output (packer_untilize=false, !tile_pack_row_major): plain
+                    // untilize reads the row strip sequentially and converts to row-major. ALSO the
+                    // tile_pack_row_major path (M2 TRM, ROW_MAJOR output): the matmul already packed the
+                    // interm row-major (contiguous tile-row order), so no reblock gather is needed — plain
+                    // untilize reads the row strip sequentially. srcA reconfig to matmul_partials is handled
                     // externally here because untilize is invoked with NoReconfigure (the pack format came
                     // from the packer_l1_acc reconfig above).
                     if constexpr (!fuse_bias) {

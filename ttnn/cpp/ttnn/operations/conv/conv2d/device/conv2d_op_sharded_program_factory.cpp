@@ -235,9 +235,9 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     const uint32_t act_block_w_ntiles = block_config.act_block_w_ntiles;
     const uint32_t weight_block_w_ntiles = parallelization_config.per_core_out_matrix_width_ntile;
     const uint32_t out_block_h_ntiles = parallelization_config.per_core_out_matrix_height_ntile;
-    // Non-const: an eligible HEIGHT_SHARDED ROW_MAJOR conv may override these with a larger (relaxed)
-    // subblock for the TileRowMajor + pin path — see the CONV_TILE_PACK_ROW_MAJOR_PIN eligibility block
-    // below (after packer_l1_acc_en is known). The override re-derives all subblock-dependent quantities.
+    // Non-const: an eligible HEIGHT_SHARDED no-bias conv may override these with a larger (relaxed)
+    // subblock for the TileRowMajor (non-pin) path — see the CONV_TILE_PACK_ROW_MAJOR eligibility block
+    // below. The override re-derives all subblock-dependent quantities.
     uint32_t out_subblock_h_ntiles = block_config.out_subblock_h_ntiles;
     uint32_t out_subblock_w_ntiles = block_config.out_subblock_w_ntiles;
 
@@ -511,7 +511,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         act_block_h_ntiles,
         out_subblock_h_ntiles);
 
-    // Non-const: re-derived by the CONV_TILE_PACK_ROW_MAJOR_PIN override below if the conv is eligible.
+    // Non-const: re-derived by the CONV_TILE_PACK_ROW_MAJOR override below if the conv is eligible.
     uint32_t act_num_subblocks = act_block_h_ntiles / out_subblock_h_ntiles;
     const uint32_t act_block_num_tiles = act_block_h_ntiles * act_block_w_ntiles;
     uint32_t act_subblock_h_ntiles = out_subblock_h_ntiles;
@@ -644,49 +644,51 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     // For bias, last iteration of l1 acc remains in intermediate buffer, does not spill and reload
     const bool packer_l1_acc_en = determine_packer_l1_acc(packer_l1_acc, has_bias, in0_num_blocks_w);
 
-    // ── TileRowMajor + pin eligibility (ROW_MAJOR + TILE output, production auto-select) ───────────────
-    // The matmul helper supports packing the interm row-major (TileRowMajor) + pinned to fixed row-strided
-    // L1 offsets when packer_l1_acc accumulates per-address. TileRowMajor lifts the SubblockMajor
+    // ── TileRowMajor eligibility (NON-pin dedicated-partials base — M2) ────────────────────────────────
+    // The matmul helper can pack the interm/out row-major (TileRowMajor, pack_subblock_row_strided) on the
+    // SAME non-pin dedicated-partials FIFO the SubblockMajor path uses (M1 dedicated matmul_partials_cb to
+    // one output block; its FIFO wraps to base per output block). TileRowMajor lifts the SubblockMajor
     // constraint out_subblock_w == per_core_N, letting the tuner pick a LARGER (relaxed) subblock when
-    // per_core_N exceeds DST capacity (so SubblockMajor was stranded at out_subblock_h == 1). A larger
-    // subblock means fewer matmul_block_init / pack passes per output block. Per output layout:
-    //   • ROW_MAJOR (untilize_out): TileRowMajor + pin + Interm target; the untilize phase reads the
-    //     row-major interm with plain `untilize` (no reblock gather).
-    //   • TILE: TileRowMajor + pin + Out target; row-major tile order IS the tiled shard layout, so the
-    //     last K-block packs straight into out_cb (no reblock, no untilize) while spills stay pinned in
-    //     the aliasing matmul_partials_cb at the same per-address offsets (L1_ACC integrates per address).
-    //     This requires the alias to actually hold (partials_cb_uses_output): !untilize_out &&
-    //     partial_dtype == output dtype — with packer_l1_acc that means output bf16 (or fp32 with
-    //     fp32_dest_acc). bf8 output stays SubblockMajor.
-    // The kernel keys all of this off the CONV_TILE_PACK_ROW_MAJOR_PIN compute define (see
-    // conv_bmm_tilize.cpp). When ineligible we emit byte-identical SubblockMajor + pin.
+    // per_core_N exceeds DST capacity (so SubblockMajor was stranded at out_subblock_h == 1, e.g.
+    // per_core_N 9/11/13). A larger subblock means fewer matmul_block_init / pack passes per output block.
+    // Per output layout (NO pin, NO partials alias — partials is always dedicated since M1):
+    //   • TILE (Out / OutWithRelu target): TileRowMajor packs straight into out_cb — row-major tile order
+    //     IS the tiled shard layout, so no reblock, no untilize. Software spill/reload (l1_acc off) and
+    //     per-address L1_ACC (l1_acc on) both work on the dedicated FIFO; the helper's strided reload
+    //     (copy_subblock_row_strided) mirrors the strided spill for the l1_acc-on Out path. Supported for
+    //     BOTH l1_acc on and off.
+    //   • ROW_MAJOR (untilize_out, Interm target): TileRowMajor packs the interm row-major, then plain
+    //     `untilize` reads it (no reblock gather). Supported only WITH packer_l1_acc. With l1_acc OFF the
+    //     software spill/reload would need to drain the prior K-block's full output block (= the entire
+    //     dedicated one-block interm region) AND reserve the next M-row-group in the SAME CB; a row-strided
+    //     pack can't interleave that at sub-block granularity the way SubblockMajor's pop-then-reserve does,
+    //     so the one-block interm overflows → reserve_back self-deadlock. This is a consequence of M1's
+    //     dedicate-one-block sizing, not pin. The l1_acc-off ROW_MAJOR conv therefore degrades to byte-
+    //     identical SubblockMajor (the untilize-out Interm reload path the SBM kernel already runs).
+    // The kernel keys all of this off the CONV_TILE_PACK_ROW_MAJOR compute define (see conv_bmm_tilize.cpp).
+    // When ineligible we emit byte-identical SubblockMajor.
     //
     // Eligible iff ALL hold:
-    //   • HEIGHT_SHARDED                 (the pinned-partials scheme this kernel implements)
-    //   • ROW_MAJOR out, or TILE out with the partials alias (see above)
+    //   • HEIGHT_SHARDED                 (width-sharded keeps SubblockMajor)
     //   • !has_bias                      (TileRowMajor + bias deadlocks the partials CB — see kernel note)
-    //   • packer_l1_acc_en               (per-address L1 accumulation; required by the helper static_assert)
     //   • weights bf16 or fp32           (the lever is inert on bf8 — same packed-tile layout either way)
+    //   • not 1d-depthwise               (0-page partials; the lever does not apply)
+    //   • packer_l1_acc_en OR !untilize_out  (l1_acc-off ROW_MAJOR/untilize is the one-block reserve
+    //     deadlock above; TILE output and all l1_acc-on convs are fine)
     //   • the relaxed subblock differs from the SBM subblock AND is larger: relaxed.out_subblock_h > 1
     //     (captures "per_core_N stranded" — SBM fell back to h==1,w==per_core_N) AND act_block_h_ntiles
     //     (per_core_M) divisible by relaxed.out_subblock_h.
-    bool conv_tile_pack_row_major_pin = false;
-    // TileRowMajor + pin is DISABLED for the "dedicate partials" milestone (SubblockMajor only).
-    // The TRM relaxed-subblock lever depended on the pin scheme, which the dedicate-partials change
-    // removed from the kernel; re-enabling TRM is a later milestone (it must be rebuilt on the
-    // dedicated-partials FIFO, not pin). Gated on `false` to keep the eligibility logic for that
-    // future work without ever emitting CONV_TILE_PACK_ROW_MAJOR_PIN or re-deriving subblocks.
-    const bool kEnableTileRowMajorPin = false;
-    if (kEnableTileRowMajorPin) {
+    bool conv_tile_pack_row_major = false;
+    const bool kEnableTileRowMajor = true;
+    if (kEnableTileRowMajor) {
         const tt::DataFormat weights_df = tt::tt_metal::datatype_to_dataformat_converter(b.dtype());
         const bool weights_df_supported =
             (weights_df == tt::DataFormat::Float16_b || weights_df == tt::DataFormat::Float32);
-        // Mirrors partial_dtype in conv2d_op_program_factory_common.cpp (packer_l1_acc_en is true here).
-        const tt::tt_metal::DataType partial_dtype =
-            fp32_dest_acc_en ? tt::tt_metal::DataType::FLOAT32 : tt::tt_metal::DataType::BFLOAT16;
-        const bool tile_out_partials_alias = !untilize_out && partial_dtype == output.dtype();
-        if (height_sharded && (untilize_out || tile_out_partials_alias) && !has_bias && packer_l1_acc_en &&
-            weights_df_supported && !is_conv_1d_depthwise_conv) {
+        // l1_acc-off + ROW_MAJOR (untilize_out) Interm-target reload overflows the dedicated one-block
+        // interm CB (see the per-layout note above); keep that quadrant on SubblockMajor.
+        const bool trm_supported_for_acc_layout = packer_l1_acc_en || !untilize_out;
+        if (height_sharded && !has_bias && weights_df_supported && !is_conv_1d_depthwise_conv &&
+            trm_supported_for_acc_layout) {
             // Recompute the tuner's choice both ways: SBM (subblock_w_eq_per_core_n_required=true, what the
             // host block_config already used) vs relaxed (=false, what TileRowMajor permits). Synthesize the
             // compute config from fp32_dest_acc_en so DST capacity matches the kernel (dst_full_sync_en=false
@@ -709,7 +711,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
             const bool larger_volume =
                 (relaxed.out_subblock_h * relaxed.out_subblock_w) > (sbm.out_subblock_h * sbm.out_subblock_w);
             if (relaxed.out_subblock_h > 1 && larger_volume && act_block_h_ntiles % relaxed.out_subblock_h == 0) {
-                conv_tile_pack_row_major_pin = true;
+                conv_tile_pack_row_major = true;
                 out_subblock_h_ntiles = relaxed.out_subblock_h;
                 out_subblock_w_ntiles = relaxed.out_subblock_w;
                 // Re-derive every subblock-dependent quantity from the relaxed shape. These were computed
@@ -723,12 +725,13 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
                 act_subblock_num_tiles = act_subblock_h_ntiles * act_block_w_ntiles;
                 log_info(
                     tt::LogOp,
-                    "conv2d TileRowMajor+pin ELIGIBLE: per_core_M={} per_core_N={} fp32_accum={} out_layout={} | SBM "
-                    "subblock={}x{} relaxed subblock={}x{} (auto-selected TileRowMajor; no bias, "
-                    "packer_l1_acc, weights bf16/fp32)",
+                    "conv2d TileRowMajor (non-pin) ELIGIBLE: per_core_M={} per_core_N={} fp32_accum={} "
+                    "packer_l1_acc={} out_layout={} | SBM subblock={}x{} relaxed subblock={}x{} "
+                    "(auto-selected TileRowMajor; no bias, weights bf16/fp32)",
                     act_block_h_ntiles,
                     weight_block_w_ntiles,
                     fp32_dest_acc_en,
+                    packer_l1_acc_en,
                     untilize_out ? "ROW_MAJOR" : "TILE",
                     sbm.out_subblock_h,
                     sbm.out_subblock_w,
@@ -1036,11 +1039,12 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         writer_defines["ACTIVATION_REUSE"] = "1";
     }
 
-    // TileRowMajor + pin path: the compute kernel packs the interm row-major (pinned, per-address L1 acc)
-    // and untilizes it with plain `untilize` instead of reblock_and_untilize. Eligibility decided above;
-    // the relaxed out_subblock_{h,w} were already folded into the compute compile args.
-    if (conv_tile_pack_row_major_pin) {
-        compute_defines["CONV_TILE_PACK_ROW_MAJOR_PIN"] = "1";
+    // TileRowMajor (non-pin) path: the compute kernel packs the interm/out row-major
+    // (pack_subblock_row_strided) on the dedicated-partials FIFO, and (ROW_MAJOR output) untilizes it with
+    // plain `untilize` instead of reblock_and_untilize. Eligibility decided above; the relaxed
+    // out_subblock_{h,w} were already folded into the compute compile args.
+    if (conv_tile_pack_row_major) {
+        compute_defines["CONV_TILE_PACK_ROW_MAJOR"] = "1";
     }
 
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
