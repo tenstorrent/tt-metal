@@ -545,3 +545,13 @@ tt-train/tests/**/CMakeLists.txt @mdragulaTT @vmelnykovTT @dyurshevichTT @zbacze
 # Tech reports
 tech_reports/LLMs/vLLM_integration.md @viktorpusTT @tchedaTT @tenstorrent/codeowner-bypass
 models/experimental/yunet @tvardhineniTT @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
+
+# Codeowner Expectations files — each owned by the same codeowners as the area they cover
+.github/codeowner-expectations/README.md @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+.github/codeowner-expectations/template.md @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+.github/codeowner-expectations/ci-cd.md @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+.github/codeowner-expectations/tt-metalium-api.md @tenstorrent/metalium-api-owners @tenstorrent/codeowner-bypass
+.github/codeowner-expectations/fabric.md @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @tenstorrent/codeowner-bypass
+.github/codeowner-expectations/distributed.md @cfjchu @aliuTT @tt-asaigal @jbaumanTT @tenstorrent/codeowner-bypass
+.github/codeowner-expectations/tt-stl.md @ayerofieiev-tt @akerteszTT @riverwuTT @tenstorrent/codeowner-bypass
+.github/codeowner-expectations/hw.md @abhullar-tt @jbaumanTT @nathan-TT @kstevensTT @tenstorrent/codeowner-bypass
