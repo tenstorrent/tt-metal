@@ -300,11 +300,12 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     if (const char* s = std::getenv("TT_MM_NUM_SLICES"); s != nullptr && !fuse_op && !fuse_srs) {
         num_slices = std::max(1u, static_cast<uint32_t>(std::atoi(s)));
     }
-    TT_FATAL(
-        grid_size.y % num_slices == 0 && (num_slices & (num_slices - 1)) == 0,
-        "TT_MM_NUM_SLICES ({}) must be a power of 2 dividing grid.y ({})",
-        num_slices,
-        grid_size.y);
+    // num_slices need only DIVIDE grid.y; it need not be a power of 2. The pow2 restriction was a holdover
+    // from the original N-slicer (which only produced pow2 S); composing with K-par on a non-pow2 grid
+    // requires non-pow2 slice counts (e.g. BH grid.y=10 -> S=5, Pk=2). The real partition validity
+    // (grid.y % (num_slices*num_k_slices) == 0, num_k_slices a power of 2) is enforced by the TT_FATAL
+    // below. Partition correctness at non-pow2 S verified by PCC on BH.
+    TT_FATAL(grid_size.y % num_slices == 0, "TT_MM_NUM_SLICES ({}) must divide grid.y ({})", num_slices, grid_size.y);
 
     // Core-grid K-PARALLELISM (split-K): split the physical rows into `num_k_slices` (Pk) OUTER bands,
     // each computing the FULL M/N output over a 1/Pk slice of the K reduction. Two ways to engage:
@@ -1261,18 +1262,23 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         // for the big input is rows_per_group-1 (== 0 when a group is a single row → no big-input mcast,
         // the kernel skips it). At num_slices==1 (base_row=0, rows_per_group=grid.y) this is the original.
         const std::size_t grp_last_row = base_row + rows_per_group - 1;
+        // First down-receiver row = base_row+1, clamped to grp_last_row: when rows_per_group==1 the group
+        // is a single (injector-only) row with no receivers (num_*_recv==0, kernel skips the mcast), and an
+        // unclamped base_row+1 would index off-grid (e.g. BH grid.y=10 with S*Pk==grid.y -> rows_per_group=1,
+        // last group base_row=9 -> row 10 -> "No core coordinate" crash at program build). Clamp keeps the
+        // (unused) coord valid; for rows_per_group>=2 it is a no-op (base_row+1 <= grp_last_row).
         if (!transpose_core_grid) {
             in0_inj_l = {(std::size_t)0, (std::size_t)core.y};  // small: across cols
             in0_rf_l = {(std::size_t)1, (std::size_t)core.y};
             in0_rl_l = {(std::size_t)grid_size.x - 1, (std::size_t)core.y};
             num_in0_recv = grid_size.x - 1;
             in1_inj_l = {(std::size_t)core.x, (std::size_t)base_row};  // big: down group rows
-            in1_rf_l = {(std::size_t)core.x, (std::size_t)(base_row + 1)};
+            in1_rf_l = {(std::size_t)core.x, std::min<std::size_t>(base_row + 1, grp_last_row)};
             in1_rl_l = {(std::size_t)core.x, grp_last_row};
             num_in1_recv = rows_per_group - 1;
         } else {
             in0_inj_l = {(std::size_t)core.x, (std::size_t)base_row};  // big: down group rows
-            in0_rf_l = {(std::size_t)core.x, (std::size_t)(base_row + 1)};
+            in0_rf_l = {(std::size_t)core.x, std::min<std::size_t>(base_row + 1, grp_last_row)};
             in0_rl_l = {(std::size_t)core.x, grp_last_row};
             num_in0_recv = rows_per_group - 1;
             in1_inj_l = {(std::size_t)0, (std::size_t)core.y};  // small: across cols
