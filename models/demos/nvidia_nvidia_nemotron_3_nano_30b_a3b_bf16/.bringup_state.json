@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-13T22:50:54Z",
-  "updated_at": "2026-06-13T23:05:58Z",
+  "updated_at": "2026-06-13T23:12:33Z",
   "components": [
     {
       "name": "Embedding",
@@ -158,8 +158,11 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [],
+        "notes": "GQA 32Q/2KV, no RoPE (HF has it commented out with TODO). Layer 5 weights.",
+        "pcc": 0.999988
       },
       "ttnn": {
         "status": "pending",
@@ -192,7 +195,8 @@
       },
       "reference": {
         "status": "pending",
-        "attempts": 0
+        "attempts": 0,
+        "notes": "DenseAttention was pending"
       },
       "ttnn": {
         "status": "pending",
@@ -225,8 +229,13 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 1,
+        "artifacts": [
+          "models/demos/nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16/reference/golden/MoEAttention.pt"
+        ],
+        "notes": "GQA attention (32Q/2KV heads, head_dim=128, RoPE theta=10000). Architecturally identical to DenseAttention. PCC=1.0 vs inline HF-style reference (bit-exact, max_diff=0).",
+        "pcc": 1.0
       },
       "ttnn": {
         "status": "pending",
@@ -259,7 +268,8 @@
       },
       "reference": {
         "status": "pending",
-        "attempts": 0
+        "attempts": 0,
+        "notes": "MoEAttention was pending"
       },
       "ttnn": {
         "status": "pending",
@@ -439,6 +449,19 @@
       "ts": "2026-06-13T23:05:58Z",
       "action": "reference[Embedding/LayerNorm/RoPE/Mamba2Layer]",
       "result": "3ok+1blocked"
+    },
+    {
+      "tick": 4,
+      "ts": "2026-06-13T23:30:00Z",
+      "action": "reference[MoEAttention]",
+      "result": "ok",
+      "pcc": 1.0
+    },
+    {
+      "tick": 5,
+      "ts": "2026-06-13T23:12:33Z",
+      "action": "reference[DenseAttention/DenseMLP/MoEAttention/MoEGate]",
+      "result": "2ok+2blocked"
     }
   ],
   "config": {

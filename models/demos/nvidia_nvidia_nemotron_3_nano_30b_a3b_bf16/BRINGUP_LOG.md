@@ -4,7 +4,7 @@
 **Slug:** `nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-13T22:50:54Z
-**Updated:** 2026-06-13T23:05:58Z
+**Updated:** 2026-06-13T23:12:33Z
 
 ## Block Status
 
@@ -30,22 +30,22 @@
 | Mamba2Layer | debug | n/a | — | 0 |  |
 | Mamba2Layer | optimization | pending | — | 0 |  |
 | Mamba2Layer | real_weights | pending | — | 0 |  |
-| DenseAttention | reference | pending | — | 0 |  |
+| DenseAttention | reference | done | 0.999988 | 0 | GQA 32Q/2KV, no RoPE (HF has it commented out with TODO). Layer 5 weights. |
 | DenseAttention | ttnn | pending | — | 0 |  |
 | DenseAttention | debug | n/a | — | 0 |  |
 | DenseAttention | optimization | pending | — | 0 |  |
 | DenseAttention | real_weights | pending | — | 0 |  |
-| DenseMLP | reference | pending | — | 0 |  |
+| DenseMLP | reference | pending | — | 0 | DenseAttention was pending |
 | DenseMLP | ttnn | pending | — | 0 |  |
 | DenseMLP | debug | n/a | — | 0 |  |
 | DenseMLP | optimization | pending | — | 0 |  |
 | DenseMLP | real_weights | pending | — | 0 |  |
-| MoEAttention | reference | pending | — | 0 |  |
+| MoEAttention | reference | done | 1.000000 | 1 | GQA attention (32Q/2KV heads, head_dim=128, RoPE theta=10000). Architecturally identical to DenseAttention. PCC=1.0 vs inline HF-style reference (bit-exact, max_diff=0). |
 | MoEAttention | ttnn | pending | — | 0 |  |
 | MoEAttention | debug | n/a | — | 0 |  |
 | MoEAttention | optimization | pending | — | 0 |  |
 | MoEAttention | real_weights | pending | — | 0 |  |
-| MoEGate | reference | pending | — | 0 |  |
+| MoEGate | reference | pending | — | 0 | MoEAttention was pending |
 | MoEGate | ttnn | pending | — | 0 |  |
 | MoEGate | debug | n/a | — | 0 |  |
 | MoEGate | optimization | pending | — | 0 |  |
@@ -77,6 +77,8 @@
 - tick 1 (2026-06-13T22:58:19Z): architecture[all] — ok
 - tick 2 (2026-06-13T23:10:00Z): reference[LayerNorm] — ok
 - tick 3 (2026-06-13T23:05:58Z): reference[Embedding/LayerNorm/RoPE/Mamba2Layer] — 3ok+1blocked
+- tick 4 (2026-06-13T23:30:00Z): reference[MoEAttention] — ok
+- tick 5 (2026-06-13T23:12:33Z): reference[DenseAttention/DenseMLP/MoEAttention/MoEGate] — 2ok+2blocked
 
 ## Host-Resident Exceptions
 
