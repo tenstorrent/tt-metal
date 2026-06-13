@@ -9,7 +9,7 @@ jobs:
     name: Parse Comment
     if: >-
       github.event.issue.pull_request &&
-      startsWith(github.event.comment.body, '/bug-check') &&
+      (startsWith(github.event.comment.body, '/bug-check') || startsWith(github.event.comment.body, '/review')) &&
       (
         github.event.comment.author_association == 'MEMBER' ||
         github.event.comment.author_association == 'OWNER'
@@ -41,19 +41,22 @@ jobs:
         run: |
           echo "pr-number=$ISSUE_NUM" >> "$GITHUB_OUTPUT"
 
-          CMD_LINE=$(printf '%s\n' "$COMMENT_BODY" | grep -E '^/bug-check' | head -1)
+          # Accept both /bug-check and /review as the command prefix
+          CMD_LINE=$(printf '%s\n' "$COMMENT_BODY" | grep -E '^/(bug-check|review)' | head -1)
+          # Normalize to a prefix-free subcommand by stripping the command word
+          CMD_ARGS=$(echo "$CMD_LINE" | sed -E 's|^/(bug-check|review)\s*||')
 
-          if echo "$CMD_LINE" | grep -qE '^/bug-check\s+run(\s|$)'; then
+          if echo "$CMD_ARGS" | grep -qE '^run(\s|$)'; then
             echo "subcommand=run" >> "$GITHUB_OUTPUT"
             echo "rule-id=" >> "$GITHUB_OUTPUT"
-          elif echo "$CMD_LINE" | grep -qE '^/bug-check\s+list-rules(\s|$)'; then
+          elif echo "$CMD_ARGS" | grep -qE '^list-rules(\s|$)'; then
             echo "subcommand=list-rules" >> "$GITHUB_OUTPUT"
             echo "rule-id=" >> "$GITHUB_OUTPUT"
-          elif echo "$CMD_LINE" | grep -qE '^/bug-check\s+check-rule\s+'; then
-            RULE_ID=$(echo "$CMD_LINE" | sed -E 's|^/bug-check\s+check-rule\s+(\S+).*|\1|')
+          elif echo "$CMD_ARGS" | grep -qE '^check-rule\s+'; then
+            RULE_ID=$(echo "$CMD_ARGS" | sed -E 's|^check-rule\s+(\S+).*|\1|')
             echo "subcommand=check-rule" >> "$GITHUB_OUTPUT"
             echo "rule-id=$RULE_ID" >> "$GITHUB_OUTPUT"
-          elif echo "$CMD_LINE" | grep -qE '^/bug-check\s+dry-run(\s|$)'; then
+          elif echo "$CMD_ARGS" | grep -qE '^dry-run(\s|$)'; then
             echo "subcommand=dry-run" >> "$GITHUB_OUTPUT"
             echo "rule-id=" >> "$GITHUB_OUTPUT"
           else
@@ -68,26 +71,28 @@ jobs:
           PR_NUMBER: ${{ steps.parse.outputs.pr-number }}
           REPO: ${{ github.repository }}
           HELP_BODY: |
-            ## Bug Checker
+            ## Bug Checker / Review
 
-            LLM-powered bug pattern detection for tt-metal PRs. Scans your diff against a
-            library of known bug patterns using Claude, then reports findings as inline PR
-            comments and SARIF for Code Scanning.
+            LLM-powered review for tt-metal PRs. Scans your diff against known bug patterns
+            and codeowner expectations, then reports findings as inline PR comments and SARIF
+            for Code Scanning.
 
             ### Commands
 
+            `/review` and `/bug-check` are aliases — both trigger the same tool.
+
             | Command | Description |
             |---------|-------------|
-            | `/bug-check run` | Scan the PR diff against all matching rules |
-            | `/bug-check list-rules` | Show all available rules with their severity, path globs, and labels |
-            | `/bug-check check-rule <id>` | Run a single named rule against this PR |
-            | `/bug-check dry-run` | Show which rules would match and what diff sections each would analyze (no LLM calls) |
+            | `/review run` | Scan the PR diff against all matching rules and expectations |
+            | `/review list-rules` | Show all available rules with their severity, path globs, and labels |
+            | `/review check-rule <id>` | Run a single named rule against this PR |
+            | `/review dry-run` | Show which rules would match and what diff sections each would analyze (no LLM calls) |
 
             Rules are matched by **file path globs** and **PR labels** — only rules relevant
             to your changes will run. Each rule is an independent LLM analysis; no state is
             shared between rules.
 
-            Rules are defined in [`.github/bug_checker/rules/`](https://github.com/tenstorrent/tt-metal/tree/main/.github/bug_checker/rules)
+            Bug patterns are defined in [`.github/bug_checker/rules/`](https://github.com/tenstorrent/tt-metal/tree/main/.github/bug_checker/rules)
             and registered in [`.github/bug_checker/manifest.yaml`](https://github.com/tenstorrent/tt-metal/blob/main/.github/bug_checker/manifest.yaml).
         run: |
           gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$HELP_BODY"
