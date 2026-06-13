@@ -247,4 +247,53 @@ TEST(KernelSignatureSchema, EmptyMatches) {
     EXPECT_NO_THROW(validate_signature_against_schema(sig, {}, {}, {}));
 }
 
+// --- generate_kernel_main_shim ---------------------------------------------------------------
+//
+// The shim is the feature's actual output: a void kernel_main() that calls the user entry,
+// passing template params (CTAs) in the angle brackets and function params (RTAs/CRTAs) in the
+// parentheses, each as get_arg(args::<name>). These tests pin the exact emitted text — the
+// bracket-vs-paren placement, the comma joining, and the empty-list branches.
+
+// CTAs in <>, runtime args in (), in declaration order.
+TEST(KernelMainShim, CtasAndRuntimeArgs) {
+    KernelMainSignature sig;
+    sig.name = "my_kernel";
+    sig.template_param_names = {"block_h", "block_w"};
+    sig.fn_param_names = {"src_addr", "num_tiles"};
+    const std::string shim = generate_kernel_main_shim(sig);
+    EXPECT_NE(shim.find("void kernel_main() {"), std::string::npos);
+    EXPECT_NE(
+        shim.find("my_kernel<get_arg(args::block_h), get_arg(args::block_w)>("
+                  "get_arg(args::src_addr), get_arg(args::num_tiles));"),
+        std::string::npos);
+}
+
+// No template params -> no angle brackets at all, just the runtime args in ().
+TEST(KernelMainShim, RuntimeArgsOnly) {
+    KernelMainSignature sig;
+    sig.name = "k";
+    sig.fn_param_names = {"a", "b"};
+    const std::string shim = generate_kernel_main_shim(sig);
+    EXPECT_NE(shim.find("k(get_arg(args::a), get_arg(args::b));"), std::string::npos);
+    EXPECT_EQ(shim.find('<'), std::string::npos);  // no template-argument list emitted
+}
+
+// Template params only -> empty parentheses.
+TEST(KernelMainShim, CtasOnly) {
+    KernelMainSignature sig;
+    sig.name = "k";
+    sig.template_param_names = {"z"};
+    const std::string shim = generate_kernel_main_shim(sig);
+    EXPECT_NE(shim.find("k<get_arg(args::z)>();"), std::string::npos);
+}
+
+// No args at all -> bare call.
+TEST(KernelMainShim, NoArgs) {
+    KernelMainSignature sig;
+    sig.name = "k";
+    const std::string shim = generate_kernel_main_shim(sig);
+    EXPECT_NE(shim.find("k();"), std::string::npos);
+    EXPECT_EQ(shim.find('<'), std::string::npos);
+}
+
 }  // namespace tt::tt_metal
