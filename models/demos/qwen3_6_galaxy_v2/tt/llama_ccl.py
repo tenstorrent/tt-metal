@@ -1321,7 +1321,20 @@ class TT_CCL:
         """
         # --- source/allocate the persistent interim (all-gather) buffer from the pool ---
         interim_key = buffer_key if buffer_key is not None else "AG_MM_DEFAULT"
+        ring_size = self.cluster_shape[cluster_axis]
+        per_device_width = input_tensor_mesh.shape[dim]
+        M = input_tensor_mesh.shape[-2]
+        gathered_width = per_device_width * ring_size
         intermediate_buffer = self.all_gather_buffers.get(interim_key, None)
+        if intermediate_buffer is not None:
+            # Guard against a stale-shaped cached buffer: the interim is sized from
+            # the FIRST call's dims, so reusing a key with different M/gathered-width
+            # would silently feed a mismatched buffer to the fused op (hang-prone).
+            assert intermediate_buffer.shape[-2] == M and intermediate_buffer.shape[-1] == gathered_width, (
+                f"all_gather_matmul interim buffer key {interim_key!r} reused with different dims: "
+                f"cached {tuple(intermediate_buffer.shape)} vs needed (..,{M},{gathered_width}); "
+                f"pass a distinct buffer_key per geometry."
+            )
         if intermediate_buffer is None:
             # Gathered activation shape, mirroring the ff2_qwen reference test's
             # ``intermediate_tensor``: per-device width = input width, then the
@@ -1330,10 +1343,7 @@ class TT_CCL:
             # ``[*cluster_shape, M, per_device_width * ring_size]`` host tensor and
             # 2D-shard it (dims=(0,1)) so each device owns the AG-output layout
             # exactly described by ``ag_memory_config``.
-            ring_size = self.cluster_shape[cluster_axis]
-            per_device_width = input_tensor_mesh.shape[dim]
-            M = input_tensor_mesh.shape[-2]
-            intermediate_shape = [*self.cluster_shape, M, per_device_width * ring_size]
+            intermediate_shape = [*self.cluster_shape, M, gathered_width]
             intermediate_buffer = ttnn.from_torch(
                 torch.zeros(intermediate_shape),
                 device=self.mesh_device,
