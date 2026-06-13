@@ -182,6 +182,19 @@ inline void log_operation(
 
 #endif
 
+// A WorkloadFactory may opt into a blocking enqueue by defining `static constexpr bool enqueue_blocking
+// = true;`. The Metal 2.0 stepping-stone adapter does, so its op-owned workspace — reallocated on every
+// dispatch — is never freed out from under an in-flight dispatch. Defaults to false: every other factory
+// keeps the default asynchronous enqueue.
+template <typename WorkloadFactory>
+constexpr bool workload_factory_enqueue_blocking() {
+    if constexpr (requires { WorkloadFactory::enqueue_blocking; }) {
+        return WorkloadFactory::enqueue_blocking;
+    } else {
+        return false;
+    }
+}
+
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void enqueue_mesh_workload(
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
@@ -189,7 +202,8 @@ void enqueue_mesh_workload(
     [[maybe_unused]] typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
     distributed::MeshDevice* mesh_device,
     tt::tt_metal::distributed::MeshWorkload& workload,
-    [[maybe_unused]] bool program_cache_hit = false) {
+    [[maybe_unused]] bool program_cache_hit = false,
+    bool blocking = false) {
     // Generate and set runtime_id for all programs (always, for dispatcher)
     auto runtime_id = ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();
     for (auto& [_, program] : workload.get_programs()) {
@@ -218,7 +232,7 @@ void enqueue_mesh_workload(
         return;
     }
 
-    tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, blocking);
 
     TracyOpMeshWorkload(
         mesh_device,
@@ -231,7 +245,8 @@ void enqueue_mesh_workload(
 }
 
 // Dispatches `fn` to `program_factory` through either the `MeshWorkloadFactoryConcept` directly, or through the adapted
-// path for `ProgramFactoryConcept` / `ProgramDescriptorFactoryConcept` / `ProgramSpecFactoryConcept` factories.
+// path for `ProgramFactoryConcept` / `ProgramDescriptorFactoryConcept` / `IntermediateStepMetalV2FactoryConcept`
+// factories.
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t, typename ProgramFactory, typename Fn>
 void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, const Fn& fn) {
     std::visit(
@@ -245,9 +260,9 @@ void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, co
                 using AdaptedMeshWorkloadFactory = mesh_device_operation_t::template DescriptorMeshWorkloadAdapter<T>;
                 fn.template operator()<AdaptedMeshWorkloadFactory>();
             },
-            [&]<ProgramSpecFactoryConcept T>(const T&) {
+            [&]<IntermediateStepMetalV2FactoryConcept T>(const T&) {
                 using AdaptedMeshWorkloadFactory =
-                    mesh_device_operation_t::template ProgramSpecMeshWorkloadFactoryAdapter<T>;
+                    mesh_device_operation_t::template IntermediateMetalV2StepMeshWorkloadFactoryAdapter<T>;
                 fn.template operator()<AdaptedMeshWorkloadFactory>();
             },
             [&]<MeshWorkloadFactoryConcept WorkloadFactory>(const WorkloadFactory&) {
@@ -290,7 +305,13 @@ void handle_mesh_adapter_cache_hit(
         }
 
         enqueue_mesh_workload<mesh_device_operation_t>(
-            operation_attributes, tensor_args, tensor_return_value, mesh_device, cached_mesh_workload.workload, true);
+            operation_attributes,
+            tensor_args,
+            tensor_return_value,
+            mesh_device,
+            cached_mesh_workload.workload,
+            /*program_cache_hit=*/true,
+            /*blocking=*/workload_factory_enqueue_blocking<WorkloadFactory>());
     });
 }
 
@@ -354,14 +375,18 @@ void create_and_cache_mesh_workload(
                     tensor_args,
                     tensor_return_value,
                     mesh_device,
-                    workload);
+                    workload,
+                    /*program_cache_hit=*/false,
+                    /*blocking=*/workload_factory_enqueue_blocking<WorkloadFactory>());
             } else {
                 enqueue_mesh_workload<mesh_device_operation_t>(
                     operation_attributes,
                     tensor_args,
                     tensor_return_value,
                     mesh_device,
-                    cached_workload.workload);
+                    cached_workload.workload,
+                    /*program_cache_hit=*/false,
+                    /*blocking=*/workload_factory_enqueue_blocking<WorkloadFactory>());
             }
         });
 }
