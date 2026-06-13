@@ -2214,6 +2214,20 @@ experimental::DataflowBufferSpec MakeBenchDfbSpec(
     };
 }
 
+// Approach A variant: same as MakeBenchDfbSpec but enables primary-producer-only sync.
+// Only the first producer initializes TCs and publishes the readiness signal; consumers
+// poll a single bit (expected = 0x1) instead of a full producer bitmask.
+experimental::DataflowBufferSpec MakeBenchDfbSpecApproachA(
+    experimental::DFBSpecName id, uint32_t entry_size, uint32_t num_entries) {
+    return experimental::DataflowBufferSpec{
+        .unique_id = id,
+        .entry_size = entry_size,
+        .num_entries = num_entries,
+        .data_format_metadata = kDfbBenchDataFormat,
+        .primary_producer_sync = true,
+    };
+}
+
 constexpr const char* kDfbInitTimingSlotNames[::dfb::DFB_INIT_TIMING_NUM_SLOTS] = {
     "DM0",
     "DM1",
@@ -2428,6 +2442,101 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseBase) {
     LogDfbInitTimingFromL1(device, CoreCoord(0, 0), "BenchmarkCaseBase");
 }
 
+// Approach A variant of BenchmarkCaseBase (1 DFB, 1 producer).
+// 1 producer = primary = only producer, so A == B. Included for completeness.
+TEST_F(MeshDeviceFixture, BenchmarkCaseBaseApproachA) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB init benchmarks require Quasar";
+    }
+
+    auto mesh_device = this->devices_.at(0);
+    IDevice* device = mesh_device->get_devices()[0];
+    CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+
+    constexpr uint32_t ENTRY_SIZE = 1024;
+    constexpr uint32_t NUM_ENTRIES = 16;
+    constexpr uint8_t NUM_PRODUCERS = 1;
+    constexpr uint8_t NUM_CONSUMERS = 1;
+    constexpr uint32_t NUM_ENTRIES_PER_PRODUCER = NUM_ENTRIES;
+    constexpr uint32_t NUM_ENTRIES_PER_CONSUMER = NUM_ENTRIES;
+
+    const experimental::DFBSpecName DFB{"dfb"};
+    const experimental::KernelSpecName PRODUCER{"producer"};
+    const experimental::KernelSpecName CONSUMER{"consumer"};
+    const experimental::TensorParamName IN_TENSOR{"in_tensor"};
+
+    const experimental::DataMovementHardwareConfig dm_producer_cfg{
+        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
+    };
+
+    auto in_tensor = MeshTensor::allocate_on_device(
+        *mesh_device, make_flat_dram_tensor_spec(ENTRY_SIZE, NUM_ENTRIES), TensorTopology{});
+
+    experimental::DataflowBufferSpec dfb_spec = MakeBenchDfbSpecApproachA(DFB, ENTRY_SIZE, NUM_ENTRIES);
+
+    experimental::KernelSpec producer_spec{
+        .unique_id = PRODUCER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
+        .num_threads = NUM_PRODUCERS,
+        .dfb_bindings = {experimental::ProducerOf(DFB, "out")},
+        .tensor_bindings = {{
+            .tensor_parameter_name = IN_TENSOR,
+            .accessor_name = "src_tensor",
+        }},
+        .compile_time_args =
+            {
+                {"num_entries_per_producer", NUM_ENTRIES_PER_PRODUCER},
+                {"implicit_sync", 1u},
+                {"num_producers", static_cast<uint32_t>(NUM_PRODUCERS)},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}},
+        .hw_config = dm_producer_cfg,
+    };
+
+    experimental::KernelSpec consumer_spec{
+        .unique_id = CONSUMER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_consumer.cpp",
+        .num_threads = NUM_CONSUMERS,
+        .dfb_bindings = {experimental::StridedConsumerOf(DFB, "in")},
+        .compile_time_args = {{"num_entries_per_consumer", NUM_ENTRIES_PER_CONSUMER}},
+        .hw_config = experimental::ComputeHardwareConfig{},
+    };
+
+    experimental::WorkUnitSpec wu{
+        .name = "bench_base_wu",
+        .kernels = {PRODUCER, CONSUMER},
+        .target_nodes = core_range_set,
+    };
+
+    experimental::ProgramSpec spec{
+        .name = "bench_base_approach_a",
+        .kernels = {producer_spec, consumer_spec},
+        .dataflow_buffers = {dfb_spec},
+        .tensor_parameters = {{.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()}},
+        .work_units = {wu},
+    };
+
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+
+    experimental::ProgramRunArgs run_args;
+    experimental::ProgramRunArgs::KernelRunArgs producer_params{};
+    producer_params.kernel = PRODUCER;
+    producer_params.runtime_arg_values = {{
+        experimental::ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs{
+            experimental::NodeCoord{0, 0},
+            {{"chunk_offset", 0u}, {"entries_per_core", NUM_ENTRIES}},
+        },
+    }};
+    experimental::ProgramRunArgs::KernelRunArgs consumer_params{};
+    consumer_params.kernel = CONSUMER;
+    run_args.kernel_run_args = {producer_params, consumer_params};
+    run_args.tensor_args.emplace(IN_TENSOR, experimental::TensorArgument{in_tensor});
+    experimental::SetProgramRunArgs(program, run_args);
+
+    detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
+    LogDfbInitTimingFromL1(device, CoreCoord(0, 0), "BenchmarkCaseBaseApproachA");
+}
+
 // Average-case DFB init benchmark.
 //
 // Three DFBs on one core:
@@ -2527,6 +2636,106 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseTwo) {
     LogDfbInitTimingFromL1(device, CoreCoord(0, 0), "BenchmarkCaseTwo");
 }
 
+// Approach A variant of BenchmarkCaseTwo.
+//
+// Identical configuration to BenchmarkCaseTwo (3 DFBs, 4 DM readers, 4 Neos, 2 DM writers)
+// but uses Approach A (primary-producer) synchronization: only the first DM producer per
+// DFB initializes TCs and publishes the readiness signal. The remaining 3 producers skip
+// TC HW init and signal write entirely. Consumers poll a single bit (expected=0x1).
+//
+// Compared with BenchmarkCaseTwo (Approach B), the expected difference is:
+//   - Non-primary DM producers: zero tc_hw, zero tc_reset_hw, zero tc_capacity_hw
+//   - Consumer wait_all (dfb_ensure_ready): shorter — only 1 L1 read per DFB
+//   - DM2 (primary): same cost as Approach B (still does TC init + signal write)
+//   - Overall e2e: lower for non-primary DMs, potentially higher for consumers if
+//     primary finishes before non-primaries (race), but benchmark kernel is a no-op.
+TEST_F(MeshDeviceFixture, BenchmarkCaseTwoApproachA) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB init benchmarks require Quasar";
+    }
+
+    IDevice* device = this->devices_.at(0)->get_devices()[0];
+    CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+
+    constexpr uint32_t ENTRY_SIZE  = 1024;
+    constexpr uint32_t NUM_ENTRIES = 16;
+    constexpr uint8_t  NUM_IN_THREADS = 4;
+    constexpr uint8_t  NUM_OUT_THREADS = 2;
+
+    const experimental::DFBSpecName DFB_SS{"dfb_ss"};
+    const experimental::DFBSpecName DFB_SA{"dfb_sa"};
+    const experimental::DFBSpecName DFB_T6{"dfb_t6"};
+    const experimental::KernelSpecName READER{"reader_dm"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
+    const experimental::KernelSpecName WRITER{"writer_dm"};
+
+    const experimental::DataMovementHardwareConfig gen2_dm_hw{
+        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
+    };
+
+    experimental::DataflowBufferSpec dfb_ss_spec = MakeBenchDfbSpecApproachA(DFB_SS, ENTRY_SIZE, NUM_ENTRIES);
+    experimental::DataflowBufferSpec dfb_sa_spec = MakeBenchDfbSpecApproachA(DFB_SA, ENTRY_SIZE, NUM_ENTRIES);
+    experimental::DataflowBufferSpec dfb_t6_spec = MakeBenchDfbSpecApproachA(DFB_T6, ENTRY_SIZE, NUM_ENTRIES);
+
+    experimental::KernelSpec reader_spec{
+        .unique_id = READER,
+        .source =
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_avg_reader_dm.cpp",
+        .num_threads = NUM_IN_THREADS,
+        .dfb_bindings = {
+            experimental::ProducerOf(DFB_SS, "ss_out"),
+            experimental::ProducerOf(DFB_SA, "sa_out"),
+        },
+        .hw_config = gen2_dm_hw,
+    };
+
+    experimental::KernelSpec compute_spec{
+        .unique_id = COMPUTE,
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_avg_compute.cpp",
+        .num_threads = NUM_IN_THREADS,
+        .dfb_bindings = {
+            experimental::StridedConsumerOf(DFB_SS, "ss_in"),
+            experimental::AllConsumerOf(DFB_SA, "sa_in"),
+            experimental::ProducerOf(DFB_T6, "t6_out"),
+        },
+        .hw_config = experimental::ComputeHardwareConfig{},
+    };
+
+    experimental::KernelSpec writer_spec{
+        .unique_id = WRITER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_avg_writer_dm.cpp",
+        .num_threads = NUM_OUT_THREADS,
+        .dfb_bindings = {experimental::StridedConsumerOf(DFB_T6, "t6_in")},
+        .hw_config = gen2_dm_hw,
+    };
+
+    experimental::WorkUnitSpec wu{
+        .name = "bench_avg_wu",
+        .kernels = {READER, COMPUTE, WRITER},
+        .target_nodes = core_range_set,
+    };
+
+    experimental::ProgramSpec spec{
+        .name = "bench_avg_approach_a",
+        .kernels = {reader_spec, compute_spec, writer_spec},
+        .dataflow_buffers = {dfb_ss_spec, dfb_sa_spec, dfb_t6_spec},
+        .work_units = {wu},
+    };
+
+    Program program = experimental::MakeProgramFromSpec(*this->devices_.at(0), spec);
+
+    experimental::ProgramRunArgs run_args;
+    run_args.kernel_run_args = {
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = READER},
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = WRITER},
+    };
+    experimental::SetProgramRunArgs(program, run_args);
+
+    detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
+    LogDfbInitTimingFromL1(device, CoreCoord(0, 0), "BenchmarkCaseTwoApproachA");
+}
+
 // Worst-case DFB init benchmark.
 //
 // Three concurrent 4Sx4A DM→Tensix DFBs are the hardware worst case for
@@ -2621,6 +2830,85 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseFour) {
 
     detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
     LogDfbInitTimingFromL1(device, CoreCoord(0, 0), "BenchmarkCaseFour");
+}
+
+// Approach A variant of BenchmarkCaseFour (3× 4Sx4A DM→Tensix, worst-case remapper).
+// Only the first DM producer per DFB does TC init + signal write; the other 3 skip.
+TEST_F(MeshDeviceFixture, BenchmarkCaseFourApproachA) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB init benchmarks require Quasar";
+    }
+
+    IDevice* device = this->devices_.at(0)->get_devices()[0];
+    CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+
+    constexpr uint32_t ENTRY_SIZE    = 1024;
+    constexpr uint32_t NUM_ENTRIES   = 16;
+    constexpr uint8_t  NUM_PRODUCERS = 4;
+    constexpr uint8_t  NUM_CONSUMERS = 4;
+
+    const experimental::DFBSpecName DFB0{"dfb0"};
+    const experimental::DFBSpecName DFB1{"dfb1"};
+    const experimental::DFBSpecName DFB2{"dfb2"};
+    const experimental::KernelSpecName READER{"reader_dm"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
+
+    const experimental::DataMovementHardwareConfig gen2_dm_hw{
+        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
+    };
+
+    experimental::KernelSpec reader_spec{
+        .unique_id = READER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_worst_reader_dm.cpp",
+        .num_threads = NUM_PRODUCERS,
+        .dfb_bindings = {
+            experimental::ProducerOf(DFB0, "out0"),
+            experimental::ProducerOf(DFB1, "out1"),
+            experimental::ProducerOf(DFB2, "out2"),
+        },
+        .hw_config = gen2_dm_hw,
+    };
+
+    experimental::KernelSpec compute_spec{
+        .unique_id = COMPUTE,
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_worst_compute.cpp",
+        .num_threads = NUM_CONSUMERS,
+        .dfb_bindings = {
+            experimental::AllConsumerOf(DFB0, "in0"),
+            experimental::AllConsumerOf(DFB1, "in1"),
+            experimental::AllConsumerOf(DFB2, "in2"),
+        },
+        .hw_config = experimental::ComputeHardwareConfig{},
+    };
+
+    experimental::WorkUnitSpec wu{
+        .name = "bench_worst_wu",
+        .kernels = {READER, COMPUTE},
+        .target_nodes = core_range_set,
+    };
+
+    experimental::ProgramSpec spec{
+        .name = "bench_worst_approach_a",
+        .kernels = {reader_spec, compute_spec},
+        .dataflow_buffers = {
+            MakeBenchDfbSpecApproachA(DFB0, ENTRY_SIZE, NUM_ENTRIES),
+            MakeBenchDfbSpecApproachA(DFB1, ENTRY_SIZE, NUM_ENTRIES),
+            MakeBenchDfbSpecApproachA(DFB2, ENTRY_SIZE, NUM_ENTRIES),
+        },
+        .work_units = {wu},
+    };
+
+    Program program = experimental::MakeProgramFromSpec(*this->devices_.at(0), spec);
+
+    experimental::ProgramRunArgs run_args;
+    run_args.kernel_run_args = {
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = READER},
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+    };
+    experimental::SetProgramRunArgs(program, run_args);
+
+    detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
+    LogDfbInitTimingFromL1(device, CoreCoord(0, 0), "BenchmarkCaseFourApproachA");
 }
 
 
@@ -2721,6 +3009,85 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseThree) {
 
     detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
     LogDfbInitTimingFromL1(device, CoreCoord(0, 0), "BenchmarkCaseThree");
+}
+
+// Approach A variant of BenchmarkCaseThree (3× 4Sx4S, no remapper).
+// 4 DM STRIDED producers per DFB → only the first DM does TC init + signal write.
+TEST_F(MeshDeviceFixture, BenchmarkCaseThreeApproachA) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB init benchmarks require Quasar";
+    }
+
+    IDevice* device = this->devices_.at(0)->get_devices()[0];
+    CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+
+    constexpr uint32_t ENTRY_SIZE    = 1024;
+    constexpr uint32_t NUM_ENTRIES   = 16;
+    constexpr uint8_t  NUM_PRODUCERS = 4;
+    constexpr uint8_t  NUM_CONSUMERS = 4;
+
+    const experimental::DFBSpecName DFB0{"avg2_dfb0"};
+    const experimental::DFBSpecName DFB1{"avg2_dfb1"};
+    const experimental::DFBSpecName DFB2{"avg2_dfb2"};
+    const experimental::KernelSpecName READER{"reader_dm"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
+
+    const experimental::DataMovementHardwareConfig gen2_dm_hw{
+        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
+    };
+
+    experimental::KernelSpec reader_spec{
+        .unique_id = READER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_worst_reader_dm.cpp",
+        .num_threads = NUM_PRODUCERS,
+        .dfb_bindings = {
+            experimental::ProducerOf(DFB0, "out0"),
+            experimental::ProducerOf(DFB1, "out1"),
+            experimental::ProducerOf(DFB2, "out2"),
+        },
+        .hw_config = gen2_dm_hw,
+    };
+
+    experimental::KernelSpec compute_spec{
+        .unique_id = COMPUTE,
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_worst_compute.cpp",
+        .num_threads = NUM_CONSUMERS,
+        .dfb_bindings = {
+            experimental::StridedConsumerOf(DFB0, "in0"),
+            experimental::StridedConsumerOf(DFB1, "in1"),
+            experimental::StridedConsumerOf(DFB2, "in2"),
+        },
+        .hw_config = experimental::ComputeHardwareConfig{},
+    };
+
+    experimental::WorkUnitSpec wu{
+        .name = "bench_avg2_wu",
+        .kernels = {READER, COMPUTE},
+        .target_nodes = core_range_set,
+    };
+
+    experimental::ProgramSpec spec{
+        .name = "bench_avg2_approach_a",
+        .kernels = {reader_spec, compute_spec},
+        .dataflow_buffers = {
+            MakeBenchDfbSpecApproachA(DFB0, ENTRY_SIZE, NUM_ENTRIES),
+            MakeBenchDfbSpecApproachA(DFB1, ENTRY_SIZE, NUM_ENTRIES),
+            MakeBenchDfbSpecApproachA(DFB2, ENTRY_SIZE, NUM_ENTRIES),
+        },
+        .work_units = {wu},
+    };
+
+    Program program = experimental::MakeProgramFromSpec(*this->devices_.at(0), spec);
+
+    experimental::ProgramRunArgs run_args;
+    run_args.kernel_run_args = {
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = READER},
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+    };
+    experimental::SetProgramRunArgs(program, run_args);
+
+    detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
+    LogDfbInitTimingFromL1(device, CoreCoord(0, 0), "BenchmarkCaseThreeApproachA");
 }
 
 
@@ -2851,6 +3218,110 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseFive) {
 
     detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
     LogDfbInitTimingFromL1(device, CoreCoord(0, 0), "BenchmarkCaseFive");
+}
+
+// Approach A variant of BenchmarkCaseFive (12× 1Sx4A, 1 DM producer each).
+// Each DFB has only 1 producer so A == B: primary IS the only producer.
+// Included to confirm no overhead is added when A collapses to B.
+TEST_F(MeshDeviceFixture, BenchmarkCaseFiveApproachA) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB init benchmarks require Quasar";
+    }
+
+    IDevice* device = this->devices_.at(0)->get_devices()[0];
+    CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+
+    constexpr uint32_t ENTRY_SIZE  = 1024;
+    constexpr uint32_t NUM_ENTRIES = 16;
+
+    auto dfb_id = [](char group, int i) -> experimental::DFBSpecName {
+        return experimental::DFBSpecName{std::string("dfb_") + group + std::to_string(i)};
+    };
+
+    const experimental::DataMovementHardwareConfig gen2_dm_hw{
+        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
+    };
+
+    const char* READER_SRC =
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_worst2_reader_dm.cpp";
+    const char* COMPUTE_SRC =
+        "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_worst2_compute.cpp";
+
+    auto make_reader_bindings = [&](char group) -> std::vector<experimental::DFBBinding> {
+        std::vector<experimental::DFBBinding> bindings;
+        for (int i = 0; i < 3; i++) {
+            bindings.push_back(experimental::ProducerOf(dfb_id(group, i), "out" + std::to_string(i)));
+        }
+        return bindings;
+    };
+
+    std::vector<experimental::DFBBinding> compute_bindings;
+    {
+        int in_idx = 0;
+        for (char g : {'a', 'b', 'c', 'd'}) {
+            for (int i = 0; i < 3; i++) {
+                compute_bindings.push_back(
+                    experimental::AllConsumerOf(dfb_id(g, i), "in" + std::to_string(in_idx++)));
+            }
+        }
+    }
+
+    std::vector<experimental::KernelSpec> kernels;
+    for (char g : {'a', 'b', 'c', 'd'}) {
+        kernels.push_back({
+            .unique_id = experimental::KernelSpecName{std::string("reader_") + g},
+            .source = READER_SRC,
+            .num_threads = 1,
+            .dfb_bindings = make_reader_bindings(g),
+            .hw_config = gen2_dm_hw,
+        });
+    }
+    kernels.push_back({
+        .unique_id = experimental::KernelSpecName{"compute_all"},
+        .source = COMPUTE_SRC,
+        .num_threads = 4,
+        .dfb_bindings = compute_bindings,
+        .hw_config = experimental::ComputeHardwareConfig{},
+    });
+
+    std::vector<experimental::DataflowBufferSpec> dfb_specs;
+    for (char g : {'a', 'b', 'c', 'd'}) {
+        for (int i = 0; i < 3; i++) {
+            dfb_specs.push_back(MakeBenchDfbSpecApproachA(dfb_id(g, i), ENTRY_SIZE, NUM_ENTRIES));
+        }
+    }
+
+    std::vector<experimental::KernelSpecName> all_kernel_ids = {
+        experimental::KernelSpecName{"reader_a"},
+        experimental::KernelSpecName{"reader_b"},
+        experimental::KernelSpecName{"reader_c"},
+        experimental::KernelSpecName{"reader_d"},
+        experimental::KernelSpecName{"compute_all"},
+    };
+
+    experimental::WorkUnitSpec wu{
+        .name = "bench_worst2_wu",
+        .kernels = all_kernel_ids,
+        .target_nodes = core_range_set,
+    };
+
+    experimental::ProgramSpec spec{
+        .name = "bench_worst2_approach_a",
+        .kernels = kernels,
+        .dataflow_buffers = dfb_specs,
+        .work_units = {wu},
+    };
+
+    Program program = experimental::MakeProgramFromSpec(*this->devices_.at(0), spec);
+
+    experimental::ProgramRunArgs run_args;
+    for (const auto& kid : all_kernel_ids) {
+        run_args.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{.kernel = kid});
+    }
+    experimental::SetProgramRunArgs(program, run_args);
+
+    detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
+    LogDfbInitTimingFromL1(device, CoreCoord(0, 0), "BenchmarkCaseFiveApproachA");
 }
 
 
@@ -3022,6 +3493,113 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseSeven) {
     LogDfbInitTimingFromL1(device, CoreCoord(0, 0), "BenchmarkCaseSeven");
 }
 
+// Approach A variant of BenchmarkCaseSeven (32× 1Sx1S/1Sx2A, 1 DM producer each).
+// Each DFB has only 1 producer so A == B. Included for completeness.
+TEST_F(MeshDeviceFixture, BenchmarkCaseSevenApproachA) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB init benchmarks require Quasar";
+    }
+
+    IDevice* device = this->devices_.at(0)->get_devices()[0];
+    CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+
+    constexpr uint32_t ENTRY_SIZE  = 1024;
+    constexpr uint32_t NUM_ENTRIES = 1;
+
+    constexpr uint16_t DM2  = (1u << 2);
+    constexpr uint16_t DM3  = (1u << 3);
+    constexpr uint16_t DM4  = (1u << 4);
+    constexpr uint16_t DM5  = (1u << 5);
+    constexpr uint16_t NEO0 = (1u << 8);
+    constexpr uint16_t NEO1 = (1u << 9);
+    constexpr uint16_t NEO2 = (1u << 10);
+    constexpr uint16_t NEO3 = (1u << 11);
+
+    Program program = CreateProgram();
+
+    auto make_1sx1s = [&](uint16_t producer_dm, uint16_t consumer_neo) {
+        return experimental::dfb::DataflowBufferConfig{
+            .entry_size          = ENTRY_SIZE,
+            .num_entries         = NUM_ENTRIES,
+            .producer_risc_mask  = producer_dm,
+            .num_producers       = 1,
+            .pap                 = dfb::AccessPattern::STRIDED,
+            .consumer_risc_mask  = consumer_neo,
+            .num_consumers       = 1,
+            .cap                 = dfb::AccessPattern::STRIDED,
+            .enable_producer_implicit_sync = true,
+            .enable_consumer_implicit_sync = true,
+            .primary_producer_sync = true,
+        };
+    };
+
+    for (int i = 0; i < 4; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx1s(DM4, NEO0));
+    }
+    for (int i = 0; i < 4; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx1s(DM5, NEO1));
+    }
+    for (int i = 0; i < 4; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx1s(DM4, NEO2));
+    }
+    for (int i = 0; i < 4; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx1s(DM5, NEO3));
+    }
+
+    auto make_1sx2a = [&](uint16_t producer_dm, uint16_t consumer_neos) {
+        return experimental::dfb::DataflowBufferConfig{
+            .entry_size          = ENTRY_SIZE,
+            .num_entries         = NUM_ENTRIES,
+            .producer_risc_mask  = producer_dm,
+            .num_producers       = 1,
+            .pap                 = dfb::AccessPattern::STRIDED,
+            .consumer_risc_mask  = consumer_neos,
+            .num_consumers       = 2,
+            .cap                 = dfb::AccessPattern::ALL,
+            .enable_producer_implicit_sync = true,
+            .enable_consumer_implicit_sync = true,
+            .primary_producer_sync = true,
+        };
+    };
+
+    for (int i = 0; i < 4; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx2a(DM2, NEO0 | NEO2));
+    }
+    for (int i = 0; i < 4; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx2a(DM3, NEO0 | NEO2));
+    }
+    for (int i = 0; i < 4; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx2a(DM4, NEO1 | NEO3));
+    }
+    for (int i = 0; i < 4; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx2a(DM5, NEO1 | NEO3));
+    }
+
+    constexpr const char* DM_KERNEL_SRC =
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_worst3_dm.cpp";
+    constexpr const char* COMPUTE_KERNEL_SRC =
+        "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_worst3_compute.cpp";
+
+    experimental::quasar::CreateKernel(
+        program,
+        DM_KERNEL_SRC,
+        core_range_set,
+        experimental::quasar::QuasarDataMovementConfig{
+            .num_threads_per_cluster = 6,
+        });
+
+    experimental::quasar::CreateKernel(
+        program,
+        COMPUTE_KERNEL_SRC,
+        core_range_set,
+        experimental::quasar::QuasarComputeConfig{
+            .num_threads_per_cluster = 4,
+        });
+
+    detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
+    LogDfbInitTimingFromL1(device, CoreCoord(0, 0), "BenchmarkCaseSevenApproachA");
+}
+
 // BenchmarkWorstCaseFour — exhausts all 16 one-to-many remapper slots AND exercises
 // 8 of the 48 one-to-one remapper slots simultaneously, for 24 total remapper entries.
 //
@@ -3175,6 +3753,113 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseSix) {
 
     detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
     LogDfbInitTimingFromL1(device, CoreCoord(0, 0), "BenchmarkCaseSix");
+}
+
+// Approach A variant of BenchmarkCaseSix (24× 1Sx2A/1Sx1A, 1 DM producer each).
+// Each DFB has only 1 producer so A == B. Included for completeness.
+TEST_F(MeshDeviceFixture, BenchmarkCaseSixApproachA) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB init benchmarks require Quasar";
+    }
+
+    IDevice* device = this->devices_.at(0)->get_devices()[0];
+    CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+
+    constexpr uint32_t ENTRY_SIZE  = 1024;
+    constexpr uint32_t NUM_ENTRIES = 1;
+
+    constexpr uint16_t DM2  = (1u << 2);
+    constexpr uint16_t DM3  = (1u << 3);
+    constexpr uint16_t DM4  = (1u << 4);
+    constexpr uint16_t DM5  = (1u << 5);
+    constexpr uint16_t NEO0 = (1u << 8);
+    constexpr uint16_t NEO1 = (1u << 9);
+    constexpr uint16_t NEO2 = (1u << 10);
+    constexpr uint16_t NEO3 = (1u << 11);
+
+    Program program = CreateProgram();
+
+    auto make_1sx2a = [&](uint16_t producer_dm, uint16_t consumer_neos) {
+        return experimental::dfb::DataflowBufferConfig{
+            .entry_size          = ENTRY_SIZE,
+            .num_entries         = NUM_ENTRIES,
+            .producer_risc_mask  = producer_dm,
+            .num_producers       = 1,
+            .pap                 = dfb::AccessPattern::STRIDED,
+            .consumer_risc_mask  = consumer_neos,
+            .num_consumers       = 2,
+            .cap                 = dfb::AccessPattern::ALL,
+            .enable_producer_implicit_sync = true,
+            .enable_consumer_implicit_sync = true,
+            .primary_producer_sync = true,
+        };
+    };
+
+    for (int i = 0; i < 4; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx2a(DM2, NEO0 | NEO2));
+    }
+    for (int i = 0; i < 4; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx2a(DM3, NEO0 | NEO2));
+    }
+    for (int i = 0; i < 4; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx2a(DM4, NEO1 | NEO3));
+    }
+    for (int i = 0; i < 4; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx2a(DM5, NEO1 | NEO3));
+    }
+
+    auto make_1sx1a = [&](uint16_t producer_dm, uint16_t consumer_neo) {
+        return experimental::dfb::DataflowBufferConfig{
+            .entry_size          = ENTRY_SIZE,
+            .num_entries         = NUM_ENTRIES,
+            .producer_risc_mask  = producer_dm,
+            .num_producers       = 1,
+            .pap                 = dfb::AccessPattern::STRIDED,
+            .consumer_risc_mask  = consumer_neo,
+            .num_consumers       = 1,
+            .cap                 = dfb::AccessPattern::ALL,
+            .enable_producer_implicit_sync = true,
+            .enable_consumer_implicit_sync = true,
+            .primary_producer_sync = true,
+        };
+    };
+
+    for (int i = 0; i < 2; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx1a(DM2, NEO1));
+    }
+    for (int i = 0; i < 2; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx1a(DM3, NEO1));
+    }
+    for (int i = 0; i < 2; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx1a(DM2, NEO3));
+    }
+    for (int i = 0; i < 2; i++) {
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx1a(DM4, NEO0));
+    }
+
+    constexpr const char* DM_KERNEL_SRC =
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_worst4_dm.cpp";
+    constexpr const char* COMPUTE_KERNEL_SRC =
+        "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_worst4_compute.cpp";
+
+    experimental::quasar::CreateKernel(
+        program,
+        DM_KERNEL_SRC,
+        core_range_set,
+        experimental::quasar::QuasarDataMovementConfig{
+            .num_threads_per_cluster = 6,
+        });
+
+    experimental::quasar::CreateKernel(
+        program,
+        COMPUTE_KERNEL_SRC,
+        core_range_set,
+        experimental::quasar::QuasarComputeConfig{
+            .num_threads_per_cluster = 4,
+        });
+
+    detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
+    LogDfbInitTimingFromL1(device, CoreCoord(0, 0), "BenchmarkCaseSixApproachA");
 }
 
 

@@ -126,6 +126,13 @@ struct DataflowBufferSpec {
     // (TODO: this should become std::variant<TensorParamName, BufferParameterName>.)
     std::optional<TensorParamName> borrowed_from = std::nullopt;
 
+    // Approach A (primary producer) synchronization.
+    // When true, only the first producer initializes TCs and publishes the readiness signal;
+    // all other producers skip TC HW init and signal write.  Consumers wait for a single
+    // signal bit rather than a full producer bitmask.  Default (false) uses Approach B where
+    // every producer contributes its own bit to the bitmask.
+    bool primary_producer_sync = false;
+
     //////////////////////////////
     // Advanced options (see advanced_options.hpp)
     //////////////////////////////

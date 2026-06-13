@@ -66,6 +66,12 @@ struct DataflowBufferConfig {
     // instead of allocating its own L1 region. The actual base address must be
     // supplied before launch via DataflowBufferImpl::set_borrowed_memory_base_addr.
     bool borrows_memory = false;
+    // Approach A (primary producer): only the first producer initializes TCs and publishes
+    // the readiness signal; all other producers skip TC HW init and signal write.
+    // Consumers wait for just 1 signal bit (expected = 0x1) instead of N bits.
+    // Default (false) is Approach B: every producer initializes its own TCs and contributes
+    // a bit to the bitmask; consumers wait for all producers.
+    bool primary_producer_sync = false;
 };
 
 // Note: This API and the DataflowBufferConfig are placeholder only, the final DataflowBuffer APIs will conform with

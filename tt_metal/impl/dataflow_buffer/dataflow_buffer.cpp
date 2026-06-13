@@ -350,6 +350,12 @@ size_t serialize_dfb_config_for_core(
 
     // producer_signal_bit[dfb_idx][hart] = bit position (0-based) in dfb_signal[logical_dfb_id]; 0xFF if consumer.
     // dfb_expected_signal_vals[logical_dfb_id] = OR of all producer bits for that DFB.
+    //
+    // Approach A (primary_producer_sync): only the first producer encountered per DFB gets bit 0;
+    // all other producers stay 0xFF (no signal slot) and do not get DFB_HART_FLAG_IS_PRODUCER.
+    // Consumer polls expected = 0x1 (bit 0 only).
+    //
+    // Approach B (default): every producer gets a unique bit; expected = OR of all bits.
     std::vector<std::array<uint8_t, ::dfb::NUM_PARTICIPATING_HARTIDS>> producer_signal_bit(dfbs_on_core.size());
     for (auto& arr : producer_signal_bit) { arr.fill(0xFFu); }
     std::array<uint32_t, ::dfb::NUM_DFBS> dfb_expected_signal_vals{};
@@ -358,15 +364,26 @@ size_t serialize_dfb_config_for_core(
     next_producer_bit.fill(0u);
     for (size_t di = 0; di < dfbs_on_core.size(); di++) {
         const auto& dfb = dfbs_on_core[di];
+        const bool approach_a = dfb->config.primary_producer_sync;
         const uint8_t logical_dfb_id = static_cast<uint8_t>(dfb->id);
         for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; h++) {
             if (!(dfb->risc_mask & (1u << h))) { continue; }
             const auto& rcs = per_core_configs[di];
             for (const auto& rc : rcs) {
                 if (rc.risc_id == h && rc.is_producer) {
-                    const uint8_t bit = next_producer_bit[logical_dfb_id]++;
-                    producer_signal_bit[di][h] = bit;
-                    dfb_expected_signal_vals[logical_dfb_id] |= (1u << bit);
+                    if (approach_a) {
+                        if (next_producer_bit[logical_dfb_id] == 0u) {
+                            // Primary producer: assign slot 0, expected = 0x1.
+                            producer_signal_bit[di][h] = 0u;
+                            dfb_expected_signal_vals[logical_dfb_id] = 0x1u;
+                            next_producer_bit[logical_dfb_id] = 1u;
+                        }
+                        // Non-primary: stays 0xFF — no signal slot, no TC HW init.
+                    } else {
+                        const uint8_t bit = next_producer_bit[logical_dfb_id]++;
+                        producer_signal_bit[di][h] = bit;
+                        dfb_expected_signal_vals[logical_dfb_id] |= (1u << bit);
+                    }
                     break;
                 }
             }
@@ -514,7 +531,13 @@ size_t serialize_dfb_config_for_core(
             entry.stride_size_tiles = static_cast<uint8_t>(dfb->stride_in_entries);
 
             uint8_t flags = 0;
-            if (rc.is_producer)         flags |= DFB_HART_FLAG_IS_PRODUCER;
+            // Approach A: only the primary producer (signal bit 0) gets IS_PRODUCER — it is the sole
+            // hart responsible for TC HW init + signal write. Non-primaries populate their local
+            // interface but skip TC reset/capacity and signal publication.
+            // Approach B (default): every producer gets IS_PRODUCER.
+            const bool is_tc_init_producer = rc.is_producer &&
+                (!dfb->config.primary_producer_sync || producer_signal_bit[di][h] == 0u);
+            if (is_tc_init_producer)    flags |= DFB_HART_FLAG_IS_PRODUCER;
             if (dfb->use_remapper)      flags |= DFB_HART_FLAG_REMAPPER_EN;
             if (rc.config.broadcast_tc) flags |= DFB_HART_FLAG_BROADCAST_TC;
             flags |= static_cast<uint8_t>(dfb->tensix_trisc_mask & DFB_HART_FLAG_TRISC_MASK);
