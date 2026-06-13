@@ -26,6 +26,7 @@ from models.demos.blackhole.qwen3_5_9b.tt.attention.kv_cache import init_kv_cach
 from models.demos.blackhole.qwen3_5_9b.tt.attention.rope_tp import apply_partial_rope_decode, apply_partial_rope_prefill
 from models.demos.blackhole.qwen3_5_9b.tt.attention.weights import load_attention_weights
 from models.demos.blackhole.qwen3_5_9b.tt.rms_norm import qwen35_rms_norm
+from models.demos.blackhole.qwen3_5_9b.tt.attention.operations import apply_qkvg_projection
 from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.common.lightweightmodule import LightweightModule
 
@@ -34,7 +35,7 @@ class Qwen35Attention(LightweightModule):
     """Standalone TP full-attention with internal per-head KV caches (decode)."""
 
     def __init__(self, mesh_device, state_dict, args, tt_ccl, create_kv_cache=False, tensor_cache_path=None):
-        self.mesh = mesh_device
+        self.mesh_device = mesh_device
         self.args = args
         self.tt_ccl = tt_ccl
         self.weights = load_attention_weights(
@@ -88,32 +89,25 @@ class Qwen35Attention(LightweightModule):
         NH, NKV, HD = self.NH, self.NKV, self.HD
         S = hidden_states.shape[-2]
 
-        q = ttnn.linear(hidden_states, weights.wq)
-        gate = ttnn.linear(hidden_states, weights.wg)
-        k = ttnn.linear(hidden_states, weights.wk)
-        v = ttnn.linear(hidden_states, weights.wv)
+        # 1. apply q/k/v/g projections
+        q, k, v, gate = apply_qkvg_projection(hidden_states, weights)
 
+        # 2. reshape to heads format / shape for attention
+        # reshape from [1, 1, S, NH * HD] -> [1, NH, S, HD] for q and gate
+        # reshape from [1, 1, S, NKV * HD] -> [1, NKV, S, HD] for k and v
         q = ttnn.transpose(ttnn.reshape(q, (1, S, NH, HD)), 1, 2)
         gate = ttnn.transpose(ttnn.reshape(gate, (1, S, NH, HD)), 1, 2)
-        k = ttnn.transpose(
-            ttnn.reshape(k, (1, S, NKV, HD)), 1, 2
-        )  # [1,S,NKV,HD] -> [1,NKV,S,HD] -> transpose -> [1,NKV,S,HD]
-        v = ttnn.transpose(
-            ttnn.reshape(v, (1, S, NKV, HD)), 1, 2
-        )  # [1,S,NKV,HD] -> [1,NKV,S,HD] -> transpose -> [1,NKV,S,HD]
+        k = ttnn.transpose(ttnn.reshape(k, (1, S, NKV, HD)), 1, 2)
+        v = ttnn.transpose(ttnn.reshape(v, (1, S, NKV, HD)), 1, 2)
 
+        # 3. apply RMS norms
         q = qwen35_rms_norm(q, weight=weights.w_q_norm, eps=self.eps, scale=True)
         k = qwen35_rms_norm(k, weight=weights.w_k_norm, eps=self.eps, scale=True)
 
+        # 4. apply RoPE
         q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH, self.rope_dim)
         k = apply_partial_rope_prefill(k, cos_tt, sin_tt, NKV, self.rope_dim)
 
-        # Fill the KV cache with the prompt's (post-RoPE) K/V so decode continues from
-        # position S, only when caches are allocated (stateful demo path). self.kv_cache is the
-        # [k_cache, v_cache] list, each a single [B, n_local_kv_heads, max_seq, HD] tensor
-        # (init_kv_cache), and k/v are already [1, NKV, S, HD], so ONE fill_cache writes every
-        # local head at once — the gemma4 single-write pattern, replacing the old per-head loop.
-        # batch_idx=0: prefill fills a single user.
         if self.kv_cache is not None:
             k_cache, v_cache = self.kv_cache  # unpack the single [k_cache, v_cache] slot
             if page_table is not None:
@@ -136,7 +130,7 @@ class Qwen35Attention(LightweightModule):
 
         return tt_all_reduce(
             out,
-            self.mesh,
+            self.mesh_device,
             self.tt_ccl,
             cluster_axis=0,
             dim=3,
@@ -151,11 +145,7 @@ class Qwen35Attention(LightweightModule):
         weights = self.weights
         B, NH, NKV, HD = self.B, self.NH, self.NKV, self.HD
 
-        # q_and_gate = ttnn.linear(hidden_states, weights.wq)
-        q = ttnn.linear(hidden_states, weights.wq)
-        gate = ttnn.linear(hidden_states, weights.wg)
-        k = ttnn.linear(hidden_states, weights.wk)
-        v = ttnn.linear(hidden_states, weights.wv)
+        q, k, v, gate = apply_qkvg_projection(hidden_states, weights)
 
         q = ttnn.reshape(q, (1, B, NH, HD))
         gate = ttnn.reshape(gate, (1, B, NH, HD))
@@ -198,7 +188,7 @@ class Qwen35Attention(LightweightModule):
         # tree; the q/k chunk sizes mirror gemma4's validated decode path. Output to DRAM since
         # the caches it reads are DRAM-resident.
         sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.mesh.compute_with_storage_grid_size(),
+            compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
             q_chunk_size=32,
             k_chunk_size=64,
             exp_approx_mode=False,
@@ -233,7 +223,7 @@ class Qwen35Attention(LightweightModule):
 
         return tt_all_reduce(
             wo_partial,
-            self.mesh,
+            self.mesh_device,
             self.tt_ccl,
             cluster_axis=0,
             dim=3,
