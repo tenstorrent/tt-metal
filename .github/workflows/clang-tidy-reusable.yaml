@@ -245,13 +245,10 @@ jobs:
         env:
           REVIEWDOG_GITHUB_API_TOKEN: ${{ github.token }}
         run: |
-          # action-suggester runs git diff in $GITHUB_WORKSPACE (/__w/...) which isn't mounted
-          # in the container — the git repo lives at /work (defaults.run.working-directory).
-          # Running reviewdog directly in a run: step avoids the path mismatch.
-          mkdir -p /tmp/reviewdog/bin
+          # /tmp is noexec (--tmpfs /tmp). Install reviewdog to /usr/local/bin instead.
           curl -sfL https://raw.githubusercontent.com/reviewdog/reviewdog/master/install.sh \
-            | sh -s -- -b /tmp/reviewdog/bin v0.21.0
-          git diff | /tmp/reviewdog/bin/reviewdog \
+            | sh -s -- -b /usr/local/bin v0.21.0
+          git diff | reviewdog \
             -f diff \
             -name clang-tidy \
             -reporter github-pr-review \
