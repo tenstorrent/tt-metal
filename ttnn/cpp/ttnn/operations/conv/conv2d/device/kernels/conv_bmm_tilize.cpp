@@ -536,12 +536,11 @@ void kernel_main() {
             // per-K-block srcA/srcB reconfig matches the old functor restore, and the per-K-block
             // pack reconfig to interm is the same one the pre-loop path used to issue once.
             //
-            // pin_interm_to_captured_base=false: matmul_partials_cb is now a DEDICATED one-block
-            // region (the factory dropped the out_cb alias + sized it to one output block). The
-            // helper's non-pin FIFO reserves/pushes/pops in one-block increments, which wrap back
-            // to the per-iter base (reset at the top of this loop) every K-block — so packer_l1_acc
-            // accumulates at a fixed address across K-blocks for multi-output-block convs too,
-            // matching matmul's dedicated single-block interm0. No software pin offset is needed.
+            // matmul_partials_cb is a DEDICATED one-block region (the factory dropped the out_cb
+            // alias + sized it to one output block). The helper's FIFO reserves/pushes/pops in
+            // one-block increments, which wrap back to the per-iter base (reset at the top of this
+            // loop) every K-block — so packer_l1_acc accumulates at a fixed address across K-blocks
+            // for multi-output-block convs too, matching matmul's dedicated single-block interm0.
             compute_kernel_lib::matmul_block<
                 /*transpose=*/false,
                 packer_l1_acc,
@@ -551,9 +550,7 @@ void kernel_main() {
                 compute_kernel_lib::InputPolicy::WaitAndPopPerKBlock,
                 compute_kernel_lib::InputPolicy::WaitAndPopPerKBlock,
                 MatmulPostFn,
-                PreKBlockFn,
-                /*pin_interm_to_captured_base=*/false>(
-                cb_mm_in0, cb_in1, matmul_out_buf, cb_matmul_partials, shape, MatmulPostFn{}, pre_k_block);
+                PreKBlockFn>(cb_mm_in0, cb_in1, matmul_out_buf, cb_matmul_partials, shape, MatmulPostFn{}, pre_k_block);
 
             if constexpr (check_skip_compute) {
                 if (skip_compute) {

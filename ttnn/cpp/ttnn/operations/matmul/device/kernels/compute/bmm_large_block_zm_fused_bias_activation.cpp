@@ -338,7 +338,6 @@ void kernel_main() {
                         InputPolicy::WaitAndPopPerKBlock,  // in1_policy
                         NoPostCompute,                     // PostComputeFn (math-thread; unused)
                         decltype(xpose),                   // PreKBlockFn
-                        false,                             // pin_interm_to_captured_base
                         NoPostKBlock,                      // PostKBlockFn
                         0,                                 // untilize_block_ct_dim
                         NoKBlockInnerDimFn,                // KBlockInnerDimFn
@@ -366,7 +365,6 @@ void kernel_main() {
                         InputPolicy::WaitAndPopPerKBlock,
                         NoPostCompute,
                         NoPreKBlock,
-                        false,
                         NoPostKBlock,
                         0,
                         NoKBlockInnerDimFn,
