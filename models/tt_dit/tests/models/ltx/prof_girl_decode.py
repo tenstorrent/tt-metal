@@ -57,6 +57,11 @@ def test_prof_girl_decode(mesh_device, mesh_shape, device_params):
         _flush_after(ConvTranspose1dViaConv3d, mesh)  # upsample inner-convs
 
     num_frames = int(os.environ.get("NUM_FRAMES", "145"))
+    # PROF_TRACED=1 captures the TRACED vocoder graph instead of eager. Used to settle the
+    # dispatch paradox: compare the per-op device-active sum eager-vs-traced at constant op
+    # count. If traced RAISES device-active, the wall-vs-device gap is device-side (per-op
+    # sync / scheduling) and the durable fix is op-count reduction, not host-dispatch removal.
+    prof_traced = os.environ.get("PROF_TRACED") == "1"
     pipeline = LTXDistilledPipeline.create_pipeline(
         mesh_device=mesh,
         checkpoint_name=default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors"),
@@ -68,7 +73,7 @@ def test_prof_girl_decode(mesh_device, mesh_shape, device_params):
         topology=ttnn.Topology.Linear,
         is_fsdp=False,
         run_warmup=False,
-        traced=False,
+        traced=prof_traced,
         audio_only=True,  # skip the 22B transformer/VAE build+prime decode_audio never uses
         num_frames=num_frames,
         height=1088,
