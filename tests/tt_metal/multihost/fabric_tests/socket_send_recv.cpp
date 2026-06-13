@@ -115,7 +115,6 @@ using MultiHostSocketTestExabox = MultiHostSocketTest<MeshDeviceExaboxFixture>;
 using MultiHostSocketTestSplitGalaxy = MultiHostSocketTest<SplitGalaxyMeshDeviceFixture>;
 
 TEST_P(MultiHostSocketTestSplitT3K, SocketTests) {
-    GTEST_SKIP() << "Disabled: see #46813";
     RunTest();
 }
 
