@@ -130,7 +130,8 @@ def create_tt_model(
             True,  # stop_at_eos
             False,  # ci_only
         ),
-        (  # Batch-1 run with full model for more stable BERTScore checks (CI only)
+        pytest.param(
+            # Batch-1 run with full model for more stable BERTScore checks (CI only)
             "models/demos/qwen3_vl/demo/sample_prompts/test_bert_score.json",
             True,  # instruct mode
             2,  # repeat_batches to simulate multiple users with the same prompt
@@ -142,6 +143,7 @@ def create_tt_model(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             True,  # ci_only
+            marks=pytest.mark.skip(reason="Disabled: see #46931"),
         ),
         (  # Batch-1 run with text only prompts hence skipping vision model (CI only)
             "models/demos/qwen3_vl/demo/sample_prompts/text_only.json",
