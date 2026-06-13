@@ -165,9 +165,12 @@ class AMPBlock1(Module):
             ]
         )
 
-    def forward(self, x_BTC: ttnn.Tensor, set_tail=None) -> ttnn.Tensor:
+    def forward(self, x_BTC: ttnn.Tensor, set_tail=None, x_rep=None) -> ttnn.Tensor:
         # set_tail(xd, mode) materializes the tile-align pad image to each op's boundary when
         # T-sharded (acts replicate the real boundary, convs zero it); identity when unsharded.
+        # x_rep, when given, is x_BTC already replicate-tailed: the three blocks of a stage share
+        # one input, so the caller computes that tail-set once and passes it here for acts1[0]
+        # (read-only — the block never deallocates it).
         st = set_tail if set_tail is not None else (lambda xd, mode: xd)
 
         def _apply(op, x, mode):
@@ -178,7 +181,10 @@ class AMPBlock1(Module):
             return y
 
         for i in range(self.num_branches):
-            xt = _apply(self.acts1[i], x_BTC, "replicate")
+            if i == 0 and x_rep is not None:
+                xt = self.acts1[0](x_rep)
+            else:
+                xt = _apply(self.acts1[i], x_BTC, "replicate")
             nxt = _apply(self.convs1[i], xt, "zeros")
             ttnn.deallocate(xt)
             xt = _apply(self.acts2[i], nxt, "replicate")
@@ -469,8 +475,13 @@ class Vocoder(Module):
             # Mean over the num_kernels parallel AMP branches. Each block sets its own op
             # boundaries (acts replicate, convs zeros) via stage_set_tail.
             block_outputs = []
+            # All three blocks read the same stage input; their acts1[0] each replicate-tail it
+            # identically, so do that tail-set once and share it (read-only) across the blocks.
+            x_rep = stage_set_tail(x_dev, "replicate")
             for idx in range(start, start + self.num_kernels):
-                block_outputs.append(self.resblocks[idx](x_dev, set_tail=stage_set_tail))
+                block_outputs.append(self.resblocks[idx](x_dev, set_tail=stage_set_tail, x_rep=x_rep))
+            if x_rep is not x_dev:
+                ttnn.deallocate(x_rep)
             ttnn.deallocate(x_dev)
             acc = block_outputs[0]
             for k in range(1, self.num_kernels):
