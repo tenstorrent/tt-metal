@@ -184,6 +184,13 @@ uint32_t rope_stream_blocks() {
     }();
     return v;
 }
+// WAN_RMSNORM_FORCE_FUSE_MM_ROPE=1: force the block-major (fused matmul+rope) POST
+// for per-head RoPE even when the resident path would fit. Used to validate the
+// fused path's correctness/perf on configs (e.g. TP=4) that have a clean reference.
+bool force_fuse_mm_rope() {
+    static const bool v = (std::getenv("WAN_RMSNORM_FORCE_FUSE_MM_ROPE") != nullptr);
+    return v;
+}
 // Input-read push+barrier granularity (in tiles). A WH-Galaxy sweep
 // (WAN_BARRIER_TILES) showed the optimum here is governed by compute-overlap
 // (how finely PRE is fed), NOT by the DRAM-contention model of the reference
@@ -315,6 +322,35 @@ bool decide_streaming_low_l1(
     constexpr uint64_t kResidentL1BudgetBytes = 1572864ull;  // static-CB cap per core
     const uint64_t total = input_bytes + intermediate_bytes + output_bytes + weight_bytes + kFixedOverheadBytes;
     return total > kResidentL1BudgetBytes;
+}
+// The POST phase is sub-phase-major (mul-rms -> weight -> matmul -> rope, each
+// across the whole row) — the fast layout, but it keeps intermediate_cb AND
+// rotated_input_cb resident for a full row. At wide PER-HEAD shards (LTX TP=2
+// feat-2048: 64 tile-cols) the resident rotated_input_cb (whole row, fp32)
+// pushes total static CBs past L1. When that happens we fuse the matmul + RoPE
+// finalize per block (block-major for those two sub-phases) so rotated_input_cb
+// is block-local — fits L1 at the cost of per-block reconfigs. Estimate mirrors
+// the big-CB allocations below; calibrated against the measured feat-2048
+// overflow (1,593,632 B) vs the feat-1024 TP=4 case (fits). Trigger with margin
+// below the real L1 cap so a borderline shard fuses rather than OOM-ing.
+bool post_rotated_overflows_l1(
+    uint32_t num_tile_cols,
+    uint32_t block_size,
+    uint32_t input_tile_bytes,
+    uint32_t intermediate_tile_bytes,
+    uint32_t output_tile_bytes,
+    uint32_t rope_cb_tiles,
+    uint32_t rope_tile_bytes,
+    bool has_weight) {
+    const uint32_t padded = ((num_tile_cols + block_size - 1u) / block_size) * block_size;
+    uint64_t total = static_cast<uint64_t>(num_tile_cols) * input_tile_bytes;  // input_cb (chunk=1)
+    total += 2ull * padded * intermediate_tile_bytes;                          // intermediate + rotated (whole row)
+    total += 2ull * padded * output_tile_bytes;                                // output_cb (2 rows)
+    total += has_weight ? static_cast<uint64_t>(num_tile_cols) * 2048ull : 0ull;  // weight_cb
+    total += 2ull * rope_cb_tiles * rope_tile_bytes;                           // streamed cos + sin
+    constexpr uint64_t kPostFixedOverheadBytes = 491520ull;                    // stats/packed-AG/pre-interm/scalars/trans/headers
+    constexpr uint64_t kFuseTriggerBytes = 1400000ull;                         // margin below the ~1.43 MB L1 cap
+    return total + kPostFixedOverheadBytes > kFuseTriggerBytes;
 }
 uint32_t pick_num_workers_tp_gt_1(uint32_t num_tile_rows) {
     const uint32_t cap = mux_worker_cap();
@@ -832,6 +868,10 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     create_cb(pre_intermediate_cb_id, program, worker_core_set, fp32_tile_size, 1, fp32_format);
     create_cb(transformation_mat_cb_id, program, worker_core_set, bf16_tile_size, 1, bf16_format);
 
+    // Block-major POST: fuse the matmul + RoPE finalize per block so
+    // rotated_input_cb is block-local instead of whole-row (set below once the
+    // streamed rope CB size is known). Off unless the resident POST overflows L1.
+    bool fuse_mm_rope = false;
     if (fuse_rope) {
         // Size rope CBs to hold a whole chunk's worth — reader pushes
         // rope_tiles_per_row per row eagerly, compute pops them only at end
@@ -850,13 +890,20 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         const tt::DataFormat rope_format = datatype_to_dataformat_converter(rope_cos->dtype());
         const uint32_t rope_tile_size = tt::tile_size(rope_format);
         const uint32_t rope_resident_tiles = chunk_size_rows * rope_tiles_per_row;
-        // Per-head cos/sin are STREAMED (compute pops per block) so cap the CB at a
-        // few block_size groups instead of the full per-device width — this is what
-        // lets TP=2 feat-2048 per-head RoPE fit L1. Broadcast cos/sin stay fully
-        // resident (head_dim_tiles, reused cyclically across the row). The cap never
-        // grows the CB (min with resident), so narrower shards are unaffected.
-        const uint32_t rope_cb_tiles =
-            per_head_rope ? std::min(rope_resident_tiles, rope_stream_blocks() * block_size) : rope_resident_tiles;
+        // Decide block-major POST FIRST, using the RESIDENT (whole-row) cos/sin + rotated
+        // footprint — so we only leave the fast resident layout when it would actually
+        // overflow L1 (TP=2 feat-2048). All TP=4 per-head shards fit, so they stay resident.
+        fuse_mm_rope = per_head_rope && (force_fuse_mm_rope() ||
+                                         post_rotated_overflows_l1(
+                                             num_tile_cols, block_size, input_tile_size, intermediate_tile_size,
+                                             output_tile_size, rope_resident_tiles, rope_tile_size, has_weight));
+        // Stream per-head cos/sin (cap the CB at a few block_size groups, compute pops
+        // per block) ONLY in the block-major path — that's where we need the L1 back.
+        // The resident path keeps the WHOLE-ROW cos/sin so it isn't slowed (a shrunk
+        // cos/sin CB regressed TP=4 video self-attn ~10-27% by starving prefetch).
+        const uint32_t rope_cb_tiles = (per_head_rope && fuse_mm_rope)
+                                           ? std::min(rope_resident_tiles, rope_stream_blocks() * block_size)
+                                           : rope_resident_tiles;
         create_cb(rope_cos_cb_id, program, worker_core_set, rope_tile_size, rope_cb_tiles, rope_format);
         create_cb(rope_sin_cb_id, program, worker_core_set, rope_tile_size, rope_cb_tiles, rope_format);
     } else {
@@ -888,12 +935,17 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         intermediate_tile_size,
         intermediate_cb_tiles,
         intermediate_format);
+    // Block-major POST fuses matmul+rope per block, so rotated_input_cb only needs
+    // to hold a block (double-buffered for matmul->rope pipelining) instead of a
+    // whole row — this is what reclaims the L1 for wide per-head shards. The
+    // resident sub-phase-major path (everything else) keeps the whole-row buffer.
+    const uint32_t rotated_cb_tiles = fuse_mm_rope ? (2u * block_size) : intermediate_cb_tiles;
     create_cb(
         rotated_input_cb_id,
         program,
         worker_core_set,
         intermediate_tile_size,
-        intermediate_cb_tiles,
+        rotated_cb_tiles,
         intermediate_format);
     // output_cb sized to 2 full padded rows so the writer can deep-drain a
     // whole row under ONE noc_async_writes_flushed() (instead of flushing every
@@ -1144,6 +1196,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         static_cast<uint32_t>(per_token_bias),
         float_to_u32(args.epsilon),  // eps_bits: fp32 scalar for fused +eps in reduce post-op
         static_cast<uint32_t>(streaming_low_l1),
+        static_cast<uint32_t>(fuse_mm_rope),  // block-major POST: fuse matmul+rope per block (rotated block-local)
     };
 
     // Float32 input requires fp32 dest accumulation; otherwise the unpacker
