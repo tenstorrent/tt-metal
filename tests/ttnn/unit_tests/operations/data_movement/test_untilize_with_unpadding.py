@@ -3,10 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import math
+
 import pytest
 import torch
+
 import ttnn
-import math
 from tests.ttnn.utils_for_testing import assert_equal
 
 TTNN_TO_TORCH_DTYPE = {
@@ -113,6 +115,62 @@ def test_untilize_with_unpadding_reuses_cache_when_only_width_l1_heuristic_chang
 
     assert_equal(ttnn.to_torch(output_tensor), torch_input)
     assert device.cache_entries_counter.total == 1
+
+
+def test_untilize_with_unpadding_distinguishes_block_plan_l1_budget(device, isolate_program_cache):
+    """
+    Regression test for the remaining #46533 mechanism.
+
+    This shape always routes through the block interleaved path, but unrelated resident
+    L1 allocations change the block-planning budget. The cached attrs must distinguish
+    that frozen budget so the second run does not alias the first program entry.
+    """
+    torch.manual_seed(0)
+
+    input_shape = [1, 1, 32, 16384]
+    output_end = [0, 0, 31, 16383]
+    torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    assert device.num_program_cache_entries() == 0, "Program cache should be empty before the test"
+
+    output_tensor = ttnn.untilize_with_unpadding(
+        input_tensor, output_tensor_end=output_end, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    assert_equal(ttnn.to_torch(output_tensor), torch_input)
+    first_entries = device.num_program_cache_entries()
+    assert first_entries == 1
+
+    ttnn.synchronize_device(device)
+
+    hog_shape = [1, 1, 32, 16384]
+    hog_tensors = [
+        ttnn.allocate_tensor_on_device(
+            ttnn.Shape(hog_shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG
+        )
+        for _ in range(3)
+    ]
+    assert len(hog_tensors) == 3
+
+    output_tensor = ttnn.untilize_with_unpadding(
+        input_tensor, output_tensor_end=output_end, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    assert_equal(ttnn.to_torch(output_tensor), torch_input)
+    second_entries = device.num_program_cache_entries()
+    assert second_entries == first_entries + 1
+
+    output_tensor = ttnn.untilize_with_unpadding(
+        input_tensor, output_tensor_end=output_end, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    assert_equal(ttnn.to_torch(output_tensor), torch_input)
+    assert device.num_program_cache_entries() == second_entries
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -664,7 +722,7 @@ def test_untilize_with_unpadding_multicore_nd_shard_to_nd_shard_spec_different_s
         ttnn.Shape([3, 96, 96]),
     ],
 )
-@pytest.mark.parametrize("output_end", [(ttnn.Shape([3, 127, 127]))])
+@pytest.mark.parametrize("output_end", [ttnn.Shape([3, 127, 127])])
 @pytest.mark.parametrize(
     "output_memory_layout",
     [

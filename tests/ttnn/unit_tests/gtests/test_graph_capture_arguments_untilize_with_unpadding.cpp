@@ -33,11 +33,7 @@ TEST_F(TestGraphCaptureArgumentsUntilizeWithUnpadding, UntilizeWithUnpadding) {
 
     ttnn::graph::GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NORMAL);
     ttnn::untilize_with_unpadding(
-        input_tensor,
-        ttnn::Shape({0, 10239, 31}),
-        ttnn::DRAM_MEMORY_CONFIG,
-        true,
-        std::nullopt);
+        input_tensor, ttnn::Shape({0, 10239, 31}), ttnn::DRAM_MEMORY_CONFIG, true, std::nullopt);
     auto trace = ttnn::graph::GraphProcessor::end_graph_capture();
     auto operations = ttnn::graph::extract_arguments(trace);
 
@@ -55,10 +51,11 @@ TEST_F(TestGraphCaptureArgumentsUntilizeWithUnpadding, UntilizeWithUnpadding) {
     EXPECT_TRUE(op_attrs.find("TensorMemoryLayout::INTERLEAVED") != std::string::npos);
     EXPECT_TRUE(op_attrs.find("BufferType::DRAM") != std::string::npos);
 
-    // The host-side op identity now carries one space heuristic bit (height) instead of
-    // separate width and height bits.
-    EXPECT_TRUE(op_attrs.find(", 1, 0, 1, std::nullopt)") != std::string::npos);
-    EXPECT_TRUE(op_attrs.find(", 1, 0, 0, 1, std::nullopt)") == std::string::npos);
+    // The captured attrs now freeze the final factory branch choice and the block-planning
+    // budget instead of transient width/height heuristic bits. This shape stays on the
+    // non-block path, so the branch bit is false and the frozen block budget is zero.
+    EXPECT_TRUE(op_attrs.find(", 1, 0, 0, 0, std::nullopt)") != std::string::npos);
+    EXPECT_TRUE(op_attrs.find(", 1, 0, 1, std::nullopt)") == std::string::npos);
 
     const auto& tensor_args = operation.arguments[1];
     EXPECT_TRUE(tensor_args.find("Tensor(") != std::string::npos);

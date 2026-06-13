@@ -14,7 +14,6 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"
-#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -75,12 +74,11 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreBlockInterleavedPr
     CoreRangeSet default_grid(default_cores);
     CoreRangeSet available_grid = sub_core_grids.has_value() ? sub_core_grids.value() : default_grid;
 
-    uint32_t max_l1_size = operations::data_movement::get_max_l1_space(a);
     uint32_t num_tiles_per_row = a.padded_shape()[-1] / TILE_WIDTH;
     uint32_t num_tiles_per_col = a.padded_shape()[-2] / TILE_HEIGHT;
 
     uint32_t num_blocks = (a.padded_shape()[-1] * a.padded_shape()[-2]) / (TILE_HEIGHT * TILE_WIDTH);
-    uint32_t cb_block_size_limit = max_l1_size / (input_single_tile_size + output_single_tile_size);
+    uint32_t cb_block_size_limit = operation_attributes.cb_block_size_limit;
 
     auto
         [ncores,
