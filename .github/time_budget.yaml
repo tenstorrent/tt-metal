@@ -86,7 +86,7 @@ ttnn:
     wh_n150: 970
     wh_n300: 970
     bh_p100: 795
-    bh_p150b_civ2: 940
+    bh_p150b_civ2: 1050
     wh_n150_civ2: 250
     wh_n300_civ2: 250
     bh_p100a_civ2_viommu: 20
