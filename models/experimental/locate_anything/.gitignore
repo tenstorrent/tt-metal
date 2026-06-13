@@ -1,0 +1,5 @@
+# generated artifacts (not source)
+reference/golden.pt
+reference/*.pt
+**/__pycache__/
+*.pyc
