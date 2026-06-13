@@ -108,12 +108,6 @@ inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape &tensor_shape
     // Validate tensor shape for tile-dependent operations
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
 
-    if constexpr (enforce_fp32_accumulation)
-    {
-        // Set necessary config regs for MOVB2D hi16/lo16 to work
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
-    }
-
     // Enable transpose (haloize mode) if reducing along rows
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(reduce_dim == ReduceDim::REDUCE_ROW);
 

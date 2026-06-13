@@ -13,11 +13,13 @@
 #include "cmath_common.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"
+#include "llk_math_transpose_dest.h"
 #include "tensor_shape.h"
 
 using namespace ckernel;
 
 // local function declarations
+template <PoolType type, MathFidelity math_fidelity>
 inline void reduce_configure_addrmod();
 
 template <ReduceDim dim, MathFidelity math_fidelity>
@@ -32,95 +34,37 @@ inline void reduce_configure_mop();
  * @tparam enforce_fp32_accumulation: Transpose in two 16-bit halves to preserve FP32 accumulation.
  * @tparam is_int_fpu_en: Cast int32 dest datums to int8 (via SFPU) before moving to SrcB.
  */
-template <bool enforce_fp32_accumulation, bool is_int_fpu_en>
+template <bool is_int_fpu_en>
 inline void reduce_row_perform_transpose()
 {
-    // The MOVB2D/MOVD2B/ELWADD below read the Src zero-substitution flag (FlushDenormals = !flag).
-    // A datum whose low byte is zero (e.g. bf16 0x4400 = 768.0) would be flushed to 0 mid-reduction,
-    // corrupting the sum. Disable the flag (via the math state tracker) around the transpose+add, then
-    // return it to the operand-driven baseline. WH does the same in its fp32 transpose.
-    math::_configure_mov_ops_zero_flag_state_();
-    if (enforce_fp32_accumulation)
+    if constexpr (is_int_fpu_en)
     {
-        // needs to be disabled for MOVD2B/B2D on BH (Issue ##449)
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
-        // move back to B and transpose in 2 parts, first hi16 bits then lo16 bits
-
-        // move hi16 bits D2B
-        // we avoid clobbering weights in src B by moving to rows 16 - 31
-        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-        // note: transpose on src B on works on rows 16 - 31
-        TTI_TRNSPSRCB;
-        // move row D2B again for cases of reducing across multiple tiles
-        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-
-        // move hi16 bits B2D
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
-
-        // move lo16 bits D2B
-        TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-        // transpose face
-        TTI_TRNSPSRCB;
-        // move row again for cases of reducing multiple tiles
-        TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-
-        // move lo16 bits B2D
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
+        TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 0);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT8, ADDR_MOD_0, 0);
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 2);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT8, ADDR_MOD_0, 2);
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
+        TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x1);
     }
-    else
+
+    // Move pooled result to SrcB rows 16–31 and transpose
+    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, 0, 0, p_setrwc::SET_AB);
+    TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+    TTI_TRNSPSRCB;
+    TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+
+    if constexpr (is_int_fpu_en)
     {
-        // Datums stored in int32 dest cannot be moved to SrcB which is configured for int8 inputs
-        // Cast int32 datums to int8 using SFPU instructions (load int32, store int8) before moving data to srcB
-        // Besides SFPU instructions to do cast we also need to set chicken bit FP16A_FORCE_Enable to force dest
-        // view to be fp16a as int8 datums are stored in src registers as fp16a
-        if constexpr (is_int_fpu_en)
-        {
-            TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
-            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 0 /*DEST offset*/);
-            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT8, ADDR_MOD_0, 0 /*DEST offset*/);
-            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 2 /*DEST offset*/);
-            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT8, ADDR_MOD_0, 2 /*DEST offset*/);
-            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
-            TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x1);
-        }
-
-        // Move back to B and transpose
-        // we avoid clobbering weights in src B by moving to rows 16 - 31
-        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, 0, 0, p_setrwc::SET_AB);
-        /*
-        if constexpr (is_fp32_dest_acc_en) {
-            if (0 == (((std::uint32_t)unpack_dst_format[0]>>2)&0x1)) { // fp32 to fp16_a conversion
-                TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
-                TTI_SFPLOAD(0, 0, 3, 0);
-                TTI_SFP_STOCH_RND(0,0,0,0,0,8);
-                TTI_SFPSTORE(0,1,3,0);
-            }
-        }
-        */
-        TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-        // Note: transpose on src B on works on rows 16 - 31
-        TTI_TRNSPSRCB;
-        TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-        if constexpr (is_int_fpu_en)
-        {
-            TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x0);
-        }
-
-        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
-        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
-        TTI_ZEROSRC(0, 1, 0, 1); // Clear src A
-        TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
-        TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
+        TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x0);
     }
-    // Restore the operand-driven baseline for the currently-configured formats.
-    math::_configure_default_zero_flag_state_(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt);
+
+    // Add transposed SrcB into Dest through a zeroed SrcA
+    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
+    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
+    TTI_ZEROSRC(0, 1, 0, 1);
+    TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
+    TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
 }
 
 /**
@@ -153,6 +97,39 @@ inline void reduce_pool_op()
     {
         TTI_GAPOOL(clear_mode, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, index);
     }
+}
+
+/**
+ * @brief Pool one row of faces, clearing SrcA/B between faces and keeping the final result.
+ *
+ * @tparam type: Pooling op, values = <SUM/AVG/MAX>
+ * @tparam high_fidelity: Run the multi-phase fidelity MOP instead of a single GAPOOL.
+ * @param num_faces_c_dim: Number of column-faces in the row.
+ */
+template <PoolType type, bool high_fidelity>
+inline void reduce_row_pool_all_faces(const std::uint32_t num_faces_c_dim)
+{
+    for (std::uint32_t col_num = 0; col_num < num_faces_c_dim - 1; col_num++)
+    {
+        reduce_pool_op<type, high_fidelity, p_setrwc::CLR_AB, 0>();
+    }
+    reduce_pool_op<type, high_fidelity, p_setrwc::CLR_NONE, 0>();
+}
+
+/**
+ * @brief Advance the dest write pointer to the next face row and clear SrcA/B.
+ *
+ * @param is_narrow_tile: True when the tile has fewer column-faces than row-faces.
+ */
+inline void reduce_row_advance_dest(const bool is_narrow_tile)
+{
+    if (!is_narrow_tile)
+    {
+        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+    }
+    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+    TTI_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_BD);
 }
 
 /**
@@ -193,33 +170,48 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
 
     if constexpr (dim == ReduceDim::REDUCE_ROW)
     {
-        // Reduce all faces in a row and perform transpose
-        for (std::uint32_t col_num = 0; col_num < static_cast<std::uint32_t>(tensor_shape.num_faces_c_dim - 1); col_num++)
+        const bool is_narrow_tile = tensor_shape.num_faces_c_dim < tensor_shape.num_faces_r_dim;
+
+        reduce_row_pool_all_faces<type, high_fidelity>(tensor_shape.num_faces_c_dim);
+
+        if constexpr (enforce_fp32_accumulation)
         {
-            reduce_pool_op<type, high_fidelity, p_setrwc::CLR_AB, 0>();
+            // transpose_dest_32b operates on a full 4-face tile; use it only for full tiles
+            if (tensor_shape.total_num_faces() == 4)
+            {
+                if (tensor_shape.num_faces_r_dim > 1)
+                {
+                    reduce_row_advance_dest(is_narrow_tile);
+                    reduce_row_pool_all_faces<type, high_fidelity>(tensor_shape.num_faces_c_dim);
+                }
+
+                math::reset_counters(p_setrwc::SET_ABD_F);
+                transpose_dest_configure_addrmod<true>();
+                transpose_dest_configure_mop<false, true>();
+                transpose_dest_32b<false>();
+
+                reduce_configure_addrmod<type, math_fidelity>();
+                if constexpr (high_fidelity)
+                {
+                    reduce_configure_mop<dim, math_fidelity>();
+                }
+                cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+            }
+            else
+            {
+                reduce_row_perform_transpose<is_int_fpu_en>();
+            }
         }
-        reduce_pool_op<type, high_fidelity, p_setrwc::CLR_NONE, 0>();
-        reduce_row_perform_transpose<enforce_fp32_accumulation, is_int_fpu_en>();
-
-        // If there is only 1 row of faces, then we are done
-        if (tensor_shape.num_faces_r_dim > 1)
+        else
         {
-            // Increment dest by 32 or 16 if narrow tile for the next accumulation
-            if (!(tensor_shape.num_faces_c_dim < tensor_shape.num_faces_r_dim) /* narrow_tile */)
-            {
-                TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-                TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-            }
-            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-            TTI_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_BD);
+            reduce_row_perform_transpose<is_int_fpu_en>();
 
-            // Reduce all faces in a row and perform transpose
-            for (std::uint32_t col_num = 0; col_num < static_cast<std::uint32_t>(tensor_shape.num_faces_c_dim - 1); col_num++)
+            if (tensor_shape.num_faces_r_dim > 1)
             {
-                reduce_pool_op<type, high_fidelity, p_setrwc::CLR_AB, 0>();
+                reduce_row_advance_dest(is_narrow_tile);
+                reduce_row_pool_all_faces<type, high_fidelity>(tensor_shape.num_faces_c_dim);
+                reduce_row_perform_transpose<is_int_fpu_en>();
             }
-            reduce_pool_op<type, high_fidelity, p_setrwc::CLR_NONE, 0>();
-            reduce_row_perform_transpose<enforce_fp32_accumulation, is_int_fpu_en>();
         }
 
         TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_BD);
@@ -374,6 +366,7 @@ inline void _llk_math_reduce_init_()
     if constexpr (enforce_fp32_accumulation)
     {
         static_assert(is_fp32_dest_acc_en, "FP32 Dest must be enabled for FP32 accumulation");
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
     }
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 
@@ -391,9 +384,6 @@ inline void _llk_math_reduce_uninit_()
 {
     if constexpr (enforce_fp32_accumulation)
     {
-        // Clear bit 11 (restore from workaround for tt-metal#46219)
-        // Uses helper from llk_math_common.h which includes tensix_sync()
-        _llk_math_dbg_feature_enable_();
-        // Note: BH doesn't need format restoration (init doesn't change it)
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
     }
 }

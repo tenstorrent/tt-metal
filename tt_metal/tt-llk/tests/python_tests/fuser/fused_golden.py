@@ -37,6 +37,7 @@ class FusedGolden:
         master_golden = master_golden.flatten()
 
         logger.info(f"L1 golden check for {output.name}:")
+
         l1_passed = passed_test(
             l1_golden,
             res_tensor,
