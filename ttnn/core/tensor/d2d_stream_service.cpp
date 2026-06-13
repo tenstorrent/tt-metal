@@ -1174,8 +1174,8 @@ D2DStreamService::create_pair(
     // Claim one service core per coord on each side.
     auto sender_service_cores = CMAKE_UNIQUE_NAMESPACE::claim_service_cores(sender_mesh, mo.coords, "sender");
     auto receiver_service_cores = CMAKE_UNIQUE_NAMESPACE::claim_service_cores(receiver_mesh, mo.coords, "receiver");
-    log_info(tt::LogMetal, "D2DStreamService: sender service cores: {}", sender_service_cores);
-    log_info(tt::LogMetal, "D2DStreamService: receiver service cores: {}", receiver_service_cores);
+    log_debug(tt::LogMetal, "D2DStreamService: sender service cores: {}", sender_service_cores);
+    log_debug(tt::LogMetal, "D2DStreamService: receiver service cores: {}", receiver_service_cores);
 
     // Release the claimed cores if we throw before the handles take ownership (the
     // claims live in a process-global manager; leaking them cascades into later
@@ -1238,7 +1238,7 @@ std::unique_ptr<D2DStreamServiceSender> D2DStreamService::create_sender(
     auto mo = CMAKE_UNIQUE_NAMESPACE::run_mapper(cfg);
     Tensor sender_backing = create_device_tensor(mo.per_shard_spec, sender_mesh.get(), mo.topology);
     auto sender_service_cores = CMAKE_UNIQUE_NAMESPACE::claim_service_cores(sender_mesh, mo.coords, "sender");
-    log_info(tt::LogMetal, "D2DStreamService: sender service cores: {}", sender_service_cores);
+    log_debug(tt::LogMetal, "D2DStreamService: sender service cores: {}", sender_service_cores);
 
     bool committed = false;
     CMAKE_UNIQUE_NAMESPACE::ServiceCoreReleaseGuard sender_guard{sender_mesh, sender_service_cores, committed};
@@ -1298,7 +1298,7 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::create_receiver(
     auto mo = CMAKE_UNIQUE_NAMESPACE::run_mapper(cfg);
     Tensor receiver_backing = create_device_tensor(mo.per_shard_spec, receiver_mesh.get(), mo.topology);
     auto receiver_service_cores = CMAKE_UNIQUE_NAMESPACE::claim_service_cores(receiver_mesh, mo.coords, "receiver");
-    log_info(tt::LogMetal, "D2DStreamService: receiver service cores: {}", receiver_service_cores);
+    log_debug(tt::LogMetal, "D2DStreamService: receiver service cores: {}", receiver_service_cores);
 
     bool committed = false;
     CMAKE_UNIQUE_NAMESPACE::ServiceCoreReleaseGuard receiver_guard{receiver_mesh, receiver_service_cores, committed};

@@ -88,6 +88,7 @@
 
 #include <ttnn/api/ttnn/distributed/distributed_configs.hpp>
 #include "ttnn/distributed/distributed_tensor.hpp"
+#include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/d2d_stream_service.hpp"
 #include "ttnn/tensor/socket_services.hpp"
 #include "ttnn/tensor/storage.hpp"
@@ -103,6 +104,7 @@ using ::tt::tt_metal::BufferType;
 using ::tt::tt_metal::CircularBufferConfig;
 using ::tt::tt_metal::CoreCoord;
 using ::tt::tt_metal::CoreRange;
+using ::tt::tt_metal::CoreRangeSet;
 using ::tt::tt_metal::create_device_tensor;
 using ::tt::tt_metal::CreateCircularBuffer;
 using ::tt::tt_metal::CreateKernel;
@@ -115,6 +117,7 @@ using ::tt::tt_metal::D2DStreamServiceSender;
 using ::tt::tt_metal::DataMovementConfig;
 using ::tt::tt_metal::DataMovementProcessor;
 using ::tt::tt_metal::DataType;
+using ::tt::tt_metal::GlobalSemaphore;
 using ::tt::tt_metal::H2DStreamService;
 using ::tt::tt_metal::Layout;
 using ::tt::tt_metal::MemoryConfig;
@@ -142,6 +145,10 @@ using ::tt::tt_metal::distributed::multihost::Rank;
 using CrossProcessD2DFixture = tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture;
 
 const CoreRange kWorkerCores{CoreCoord{0, 0}, CoreCoord{0, 0}};  // single worker core
+// ForwardChainStress uses a multi-core grid so the num_workers machinery is actually
+// exercised (consumed_sem mcast to N cores, data_ready reaching N acks, page split).
+const CoreRange kStressWorkerCores{CoreCoord{0, 0}, CoreCoord{1, 1}};  // 2x2 = 4 worker cores
+constexpr uint32_t kStressIncsPerConn = 4u;  // atomic-inc packets sent per fabric connection per iter
 constexpr uint32_t kFillBase = 1u;  // stage-0 source iota base; end stage verifies kFillBase + iter
 
 // --- small helpers (mirrors test_d2d_stream_service.cpp / test_stream_pipeline.cpp) ---
@@ -178,7 +185,10 @@ std::vector<uint32_t> make_iota_u32(size_t n, uint32_t base) {
 // Fresh config per call (the mapper is moved into each create_* call; a middle rank
 // builds two services so it needs two mappers). UINT32 ROW_MAJOR DRAM, replicated on
 // the local mesh, L1 socket FIFO, LEASE mode (the host drives the per-transfer grant).
-D2DStreamConfig make_cfg(const std::shared_ptr<MeshDevice>& mesh, const ttnn::Shape& global_shape) {
+D2DStreamConfig make_cfg(
+    const std::shared_ptr<MeshDevice>& mesh,
+    const ttnn::Shape& global_shape,
+    const CoreRange& worker_cores = kWorkerCores) {
     const TensorSpec global_spec(
         global_shape,
         TensorLayout(
@@ -189,8 +199,8 @@ D2DStreamConfig make_cfg(const std::shared_ptr<MeshDevice>& mesh, const ttnn::Sh
         .global_spec = global_spec,
         .mapper = create_mesh_mapper(*mesh, MeshMapperConfig{.placements = replicate_all(*mesh)}),
         .socket_mem_config = SocketMemoryConfig{BufferType::L1, /*fifo_size=*/4096u},
-        .sender_worker_cores = kWorkerCores,
-        .receiver_worker_cores = kWorkerCores,
+        .sender_worker_cores = worker_cores,
+        .receiver_worker_cores = worker_cores,
         .share_fabric_links = true,  // LEASE mode (host-driven per-transfer grants)
     };
 }
@@ -212,7 +222,9 @@ uint32_t fifo_bytes_for(const TensorSpec& spec) {
 // socket FIFO, worker-sync handshake on kWorkerCores so the stage-0 relay can drain
 // it (same data_ready-sem + consumed-counter shape as a D2D receiver). Metadata off.
 std::unique_ptr<H2DStreamService> make_h2d_service(
-    const std::shared_ptr<MeshDevice>& mesh, const TensorSpec& global_spec) {
+    const std::shared_ptr<MeshDevice>& mesh,
+    const TensorSpec& global_spec,
+    const CoreRange& worker_cores = kWorkerCores) {
     const uint32_t fifo_bytes = fifo_bytes_for(global_spec);
     H2DStreamService::Config cfg{
         .global_spec = global_spec,
@@ -220,7 +232,7 @@ std::unique_ptr<H2DStreamService> make_h2d_service(
         .socket_buffer_type = BufferType::L1,
         .fifo_size_bytes = fifo_bytes,
         .scratch_cb_size_bytes = fifo_bytes,
-        .worker_cores = kWorkerCores,
+        .worker_cores = worker_cores,
         .metadata_size_bytes = 0,
     };
     return std::make_unique<H2DStreamService>(mesh, std::move(cfg));
@@ -335,6 +347,117 @@ MeshWorkload make_relay_like_workload(
     return workload;
 }
 
+// ForwardChainStress COMPUTE pass (d2d_stress_relay, STRESS_MODE=0): like the relay above
+// but (1) mutates every element by +1 so the end value tracks every hop, (2) FUSES the
+// overwrite-gate (waits the outbound consumed_sem unless skip_gate, or no gate at all on
+// the last stage), and (3) does NOT signal data_ready — that's the separate SIGNAL pass
+// after the lease release. Multi-core: pages split across the worker grid. Upstream-
+// agnostic (H2D on stage 0, D2D receiver elsewhere); outbound_for_gate is the sender
+// whose consumed_sem gates the overwrite (null on the last stage).
+template <typename Upstream>
+MeshWorkload make_stress_compute_workload(
+    Upstream* inbound,
+    const std::shared_ptr<MeshDevice>& mesh,
+    uint32_t dest_addr,
+    D2DStreamServiceSender* outbound_for_gate,
+    uint32_t skip_gate) {
+    const auto& coords = inbound->get_backing_tensor().tensor_topology().mesh_coords();
+    const auto* up_buf = inbound->get_backing_tensor().buffer();
+    const uint32_t page_size = up_buf->aligned_page_size();
+    const uint32_t num_pages = up_buf->num_pages();
+    const CoreRange worker_cores = inbound->get_worker_cores();
+    const uint32_t num_workers = core_range_volume(worker_cores);
+    constexpr auto kScratchCb = CBIndex::c_0;
+    const uint32_t has_gate = outbound_for_gate != nullptr ? 1u : 0u;
+    const uint32_t consumed_sem_addr =
+        has_gate ? static_cast<uint32_t>(outbound_for_gate->get_consumed_sem_addr()) : 0u;
+
+    MeshWorkload workload;
+    for (const auto& coord : coords) {
+        auto program = CreateProgram();
+        auto cb_cfg = CircularBufferConfig(page_size, {{kScratchCb, tt::DataFormat::UInt32}})
+                          .set_page_size(kScratchCb, page_size);
+        CreateCircularBuffer(program, worker_cores, cb_cfg);
+
+        const auto* up_dbuf = inbound->get_backing_tensor().mesh_buffer().get_device_buffer(coord);
+        auto accessor_ct = TensorAccessorArgs(*up_dbuf).get_compile_time_args();
+        std::vector<uint32_t> ct_args = {
+            has_gate,
+            consumed_sem_addr,
+            static_cast<uint32_t>(inbound->get_data_ready_sem_addr()),
+            static_cast<uint32_t>(up_buf->address()),
+            dest_addr,
+            page_size,
+            static_cast<uint32_t>(kScratchCb),
+            /*fill_delta=*/1u,
+        };
+        ct_args.insert(ct_args.end(), accessor_ct.begin(), accessor_ct.end());
+
+        auto kernel = CreateKernel(
+            program,
+            "tests/ttnn/unit_tests/gtests/tensor/kernels/d2d_stress_relay.cpp",
+            worker_cores,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = ct_args,
+                .defines = {{"STRESS_MODE", "0"}}});
+
+        auto* device = mesh->get_device(coord);
+        const auto up_svc_phys = device->worker_core_from_logical_core(inbound->get_service_core(coord));
+        for (const auto& wc : worker_cores) {
+            const auto [start_page, end_page] =
+                worker_page_range(worker_index(wc, worker_cores), num_workers, num_pages);
+            const std::vector<uint32_t> rt_args = {
+                start_page,
+                end_page,
+                static_cast<uint32_t>(inbound->get_consumed_counter_addr(coord)),
+                static_cast<uint32_t>(up_svc_phys.x),
+                static_cast<uint32_t>(up_svc_phys.y),
+                skip_gate,
+            };
+            SetRuntimeArgs(program, kernel, wc, rt_args);
+        }
+        workload.add_program(MeshCoordinateRange(coord), std::move(program));
+    }
+    return workload;
+}
+
+// ForwardChainStress SIGNAL pass (d2d_stress_relay, STRESS_MODE=1): every worker core
+// atomic-incs the outbound data_ready_counter -> num_workers acks -> the sender forwards
+// this iter's output. Run AFTER the lease release so the forward fires last.
+MeshWorkload make_stress_signal_workload(D2DStreamServiceSender* outbound, const std::shared_ptr<MeshDevice>& mesh) {
+    const auto& coords = outbound->get_backing_tensor().tensor_topology().mesh_coords();
+    const CoreRange worker_cores = outbound->get_worker_cores();
+
+    MeshWorkload workload;
+    for (const auto& coord : coords) {
+        auto program = CreateProgram();
+        auto kernel = CreateKernel(
+            program,
+            "tests/ttnn/unit_tests/gtests/tensor/kernels/d2d_stress_relay.cpp",
+            worker_cores,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .defines = {{"STRESS_MODE", "1"}}});
+
+        auto* device = mesh->get_device(coord);
+        const auto down_svc_phys = device->worker_core_from_logical_core(outbound->get_service_core(coord));
+        const uint32_t down_counter_addr = static_cast<uint32_t>(outbound->get_data_ready_counter_addr(coord));
+        for (const auto& wc : worker_cores) {
+            const std::vector<uint32_t> rt_args = {
+                down_counter_addr,
+                static_cast<uint32_t>(down_svc_phys.x),
+                static_cast<uint32_t>(down_svc_phys.y),
+            };
+            SetRuntimeArgs(program, kernel, wc, rt_args);
+        }
+        workload.add_program(MeshCoordinateRange(coord), std::move(program));
+    }
+    return workload;
+}
+
 // The standalone outbound overwrite-gate (d2d_sync): runs on the sender's worker
 // grid and waits the sender's consumed_sem (prev iter forwarded). Separate from the
 // op — the unbundled split that mirrors a real graph.
@@ -398,6 +521,90 @@ MeshWorkload make_stub_fabric_workload(
         tt::tt_fabric::append_fabric_connection_rt_args(
             sender_node, downstream_node, links.front(), program, stub_core, rt_args);
         SetRuntimeArgs(program, kernel, stub_core, rt_args);
+        workload.add_program(MeshCoordinateRange(coord), std::move(program));
+    }
+    return workload;
+}
+
+// ForwardChainStress competing fabric op (d2d_stress_fabric): on ONE core per chip, opens
+// a connection on EVERY link toward EVERY intra-mesh neighbor (so the D2D sender's
+// first-hop link is necessarily among them on interior chips -> the lease serializes the
+// overlap) and sends incs_per_conn atomic-incs to each neighbor's fabric-test
+// GlobalSemaphore. Each chip then spins (in-kernel) on its own GlobalSemaphore to the
+// cumulative target -> a dropped inc hangs that launch's Finish. Intra-mesh only (every
+// chip of the rank runs it in the same launch), so the exchange is deadlock-free. Runs on
+// every stage; bracketed by the loop's wait/release of whatever leases the stage holds.
+MeshWorkload make_stress_fabric_workload(
+    const std::shared_ptr<MeshDevice>& mesh,
+    const CoreRange& worker_cores,
+    const GlobalSemaphore& fabric_sem,
+    uint32_t incs_per_conn) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const CoreCoord fabric_core = worker_cores.start_coord;
+    const CoreRange fabric_core_range{fabric_core, fabric_core};
+    const uint32_t sem_addr = static_cast<uint32_t>(fabric_sem.address());
+
+    MeshWorkload workload;
+    for (const auto& coord : MeshCoordinateRange(mesh->shape())) {
+        auto program = CreateProgram();
+        auto* device = mesh->get_device(coord);
+        const auto sender_node = mesh->get_fabric_node_id(coord);
+        const auto fabric_core_phys = device->worker_core_from_logical_core(fabric_core);
+
+        // Every link toward every intra-mesh neighbor, one connection each. Key subtlety:
+        // get_intra_chip_neighbors returns the neighbor LOGICAL chip id once PER LINK in that
+        // direction, so the span repeats the same chip (e.g. [D1, D1] for 2 links). Take it
+        // once (front) and enumerate the links via get_forwarding_link_indices — iterating
+        // BOTH the span and the link list double-counts (2 links * 2 span entries = 4 dupes
+        // per direction), which is what blew the semaphore budget. neighbor FabricNodeId is
+        // FabricNodeId(this mesh_id, chip) (mirrors fabric.cpp). Worst case is 4 dirs * 2
+        // links = 8 connections; append_fabric_connection_rt_args allocates 2 WORKER
+        // semaphores per connection, so 16 total = exactly the per-core cap. Opening both
+        // links (not just link 0) means we hold whichever link the D2D sender forwards on,
+        // so the lease contention is guaranteed regardless of the sender's link choice.
+        std::vector<std::pair<tt::tt_fabric::FabricNodeId, uint32_t>> conns;
+        for (auto dir :
+             {tt::tt_fabric::RoutingDirection::N,
+              tt::tt_fabric::RoutingDirection::E,
+              tt::tt_fabric::RoutingDirection::S,
+              tt::tt_fabric::RoutingDirection::W}) {
+            const auto neighbors = control_plane.get_intra_chip_neighbors(sender_node, dir);
+            if (neighbors.empty()) {
+                continue;
+            }
+            const tt::tt_fabric::FabricNodeId neighbor_node(sender_node.mesh_id, neighbors.front());
+            for (auto link : tt::tt_fabric::get_forwarding_link_indices(sender_node, neighbor_node)) {
+                conns.emplace_back(neighbor_node, link);
+            }
+        }
+        const uint32_t num_connections = static_cast<uint32_t>(conns.size());
+
+        // Symmetric mesh: the neighbor relation is mutual (if A's E points to B over a link,
+        // B's W points to A over a link), so a chip's incoming connection count equals its
+        // outgoing one. Its per-iter spin target is therefore num_connections * incs_per_conn.
+        // The kernel resets the sem at the end of each iter, so this is per-iter, not cumulative.
+        const uint32_t expected_per_iter = num_connections * incs_per_conn;
+
+        auto kernel = CreateKernel(
+            program,
+            "tests/ttnn/unit_tests/gtests/tensor/kernels/d2d_stress_fabric.cpp",
+            fabric_core_range,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+
+        std::vector<uint32_t> rt = {
+            num_connections,
+            sem_addr,
+            static_cast<uint32_t>(fabric_core_phys.x),
+            static_cast<uint32_t>(fabric_core_phys.y),
+            incs_per_conn,
+            expected_per_iter,
+        };
+        for (const auto& [neighbor_node, link] : conns) {
+            tt::tt_fabric::append_fabric_connection_rt_args(sender_node, neighbor_node, link, program, fabric_core, rt);
+            rt.push_back(static_cast<uint32_t>(neighbor_node.chip_id));
+            rt.push_back(static_cast<uint32_t>(*neighbor_node.mesh_id));
+        }
+        SetRuntimeArgs(program, kernel, fabric_core, rt);
         workload.add_program(MeshCoordinateRange(coord), std::move(program));
     }
     return workload;
@@ -565,6 +772,189 @@ TEST_F(CrossProcessD2DFixture, ForwardChain) {
 
     Synchronize(mesh_device_.get(), std::nullopt);
     ctx->barrier();  // [B2]
+}
+
+// One (grid, tensor-size, iters) point of the ForwardChainStress sweep.
+struct StressCombo {
+    CoreRange worker_cores;
+    ttnn::Shape global_shape;
+    uint32_t num_iters;
+    const char* label;
+};
+
+// The sweep matrix. page = last_dim * 4 B (one row); pages = height; total = pages * page.
+// All pages stay <= the 4 KB socket FIFO. The combos span: a single-worker grid, the
+// multi-core baseline, a wide grid with more pages, and a 4x4 grid whose 2 MB tensor
+// EXCEEDS L1 (1.5 MB) — proving the chain streams a > L1 transfer through the bounded FIFO
+// page-by-page (the backing is DRAM, the relay's scratch CB is one page, so L1 use never
+// scales with tensor size). The big combo runs fewer iters to bound HW time.
+const std::vector<StressCombo> kStressCombos = {
+    {kWorkerCores,
+     ttnn::Shape({1, 1, 32, 64}),
+     10u,
+     "1x1 grid / 256B page / 32 pages / 8KB (single worker, multi-page)"},
+    {kStressWorkerCores, ttnn::Shape({1, 1, 32, 64}), 10u, "2x2 grid / 256B page / 32 pages / 8KB (baseline)"},
+    {CoreRange{CoreCoord{0, 0}, CoreCoord{3, 1}},
+     ttnn::Shape({1, 1, 256, 128}),
+     10u,
+     "4x2 grid / 512B page / 256 pages / 128KB (wide grid)"},
+    {CoreRange{CoreCoord{0, 0}, CoreCoord{3, 3}},
+     ttnn::Shape({1, 1, 2048, 256}),
+     4u,
+     "4x4 grid / 1KB page / 2048 pages / 2MB (exceeds L1)"},
+};
+
+// Beefed-up regression variant of ForwardChain, one run of the sweep. For a given worker
+// grid + tensor size: each stage's COMPUTE op mutates its slice (+1) so the end value is a
+// function of every hop, the data_ready signal is a separate SIGNAL pass after the lease
+// release, the overwrite-gate is fused into COMPUTE, and the competing fabric op opens
+// every intra-mesh link (the lease + in-kernel drop test). The full-tensor element-wise
+// verify catches a dropped/stale transfer or a stage/worker that skipped its op — any of
+// those shifts the value off the expected iota + world_size. Extracted so the TEST_F can
+// sweep the matrix; each call stands up its own services (the create_* rendezvous +
+// [B1]/[B2] barriers keep all ranks in lockstep) and tears them down at scope exit.
+void run_forward_chain_stress(
+    const std::shared_ptr<MeshDevice>& mesh_device_,
+    const ttnn::Shape& global_shape,
+    const CoreRange& worker_cores,
+    uint32_t num_iters) {
+    const auto& ctx = DistributedContext::get_current_world();
+    const int world_size = *ctx->size();
+    const int rank = *ctx->rank();
+
+    const int stage = rank;
+    const bool is_stage0 = stage == 0;
+    const bool has_inbound = stage > 0;
+    const bool has_outbound = stage + 1 < world_size;
+
+    std::unique_ptr<D2DStreamServiceReceiver> inbound;
+    std::unique_ptr<D2DStreamServiceSender> outbound;
+    std::unique_ptr<H2DStreamService> h2d_service;
+    if (has_inbound) {
+        inbound = D2DStreamService::create_receiver(
+            mesh_device_,
+            make_cfg(mesh_device_, global_shape, worker_cores),
+            D2DEndpointConfig{.sender_rank = Rank{rank - 1}, .receiver_rank = Rank{rank}, .distributed_context = ctx});
+    } else {
+        h2d_service = make_h2d_service(
+            mesh_device_, make_cfg(mesh_device_, global_shape, worker_cores).global_spec, worker_cores);
+    }
+    if (has_outbound) {
+        outbound = D2DStreamService::create_sender(
+            mesh_device_,
+            make_cfg(mesh_device_, global_shape, worker_cores),
+            D2DEndpointConfig{.sender_rank = Rank{rank}, .receiver_rank = Rank{rank + 1}, .distributed_context = ctx});
+    }
+
+    ctx->barrier();  // [B1]
+
+    std::thread h2d_feeder;
+    if (is_stage0) {
+        h2d_feeder = std::thread([&] { run_h2d_feed_loop(*h2d_service, global_shape, num_iters); });
+    }
+
+    Tensor output;
+    if (has_inbound && !has_outbound) {
+        output = create_device_tensor(
+            inbound->get_per_shard_spec(), mesh_device_.get(), inbound->get_backing_tensor().tensor_topology());
+    }
+
+    const bool produce = has_outbound;
+    const uint32_t dest_addr = produce ? static_cast<uint32_t>(outbound->get_backing_tensor().buffer()->address())
+                                       : static_cast<uint32_t>(output.buffer()->address());
+    D2DStreamServiceSender* const gate_sender = has_outbound ? outbound.get() : nullptr;
+
+    // Mesh-wide fabric-test GlobalSemaphore on the single fabric core; neighbors atomic-inc
+    // it over fabric and each chip spins on its own copy (the in-kernel drop detector).
+    // Created once — it accumulates across iters, so the spin target is cumulative.
+    auto fabric_sem = ttnn::global_semaphore::create_global_semaphore(
+        mesh_device_.get(),
+        CoreRangeSet(CoreRange{worker_cores.start_coord, worker_cores.start_coord}),
+        /*initial_value=*/0,
+        BufferType::L1);
+
+    if (has_inbound) {
+        inbound->release_fabric_links();
+    }
+
+    auto& cq = mesh_device_->mesh_command_queue();
+    for (uint32_t iter = 0; iter < num_iters; ++iter) {
+        // (a) COMPUTE (all cores): fused gate (skipped iter 0 / no outbound) + wait inbound
+        //     + mutate (+1) this worker's slice + ack inbound consumed. No data_ready yet.
+        const uint32_t skip_gate = iter == 0 ? 1u : 0u;
+        MeshWorkload compute =
+            is_stage0 ? make_stress_compute_workload(h2d_service.get(), mesh_device_, dest_addr, gate_sender, skip_gate)
+                      : make_stress_compute_workload(inbound.get(), mesh_device_, dest_addr, gate_sender, skip_gate);
+        EnqueueMeshWorkload(cq, compute, /*blocking=*/false);
+        Finish(cq);
+
+        // (b) Wait BOTH services off their links (inbound receive done; prev forward done).
+        if (has_inbound) {
+            inbound->wait_for_fabric_links();
+        }
+        if (has_outbound) {
+            outbound->wait_for_fabric_links();
+        }
+
+        // (c) Intra-mesh fabric stress op: opens all links to all neighbors (the D2D
+        //     first-hop link is among them on interior chips -> exercises the lease) +
+        //     an atomic-inc handshake (in-kernel drop detector). Runs on EVERY stage,
+        //     bracketed by the wait (b) above and the release (d) below.
+        {
+            auto fabric = make_stress_fabric_workload(mesh_device_, worker_cores, fabric_sem, kStressIncsPerConn);
+            EnqueueMeshWorkload(cq, fabric, /*blocking=*/false);
+            Finish(cq);
+        }
+
+        // (d) Hand the links back: outbound = this forward, inbound = next receive (skip last).
+        if (has_outbound) {
+            outbound->release_fabric_links();
+        }
+        if (has_inbound && iter + 1 < num_iters) {
+            inbound->release_fabric_links();
+        }
+
+        // (e) SIGNAL (all cores): inc outbound data_ready -> the sender forwards this iter's
+        //     output. After the release, so the forward fires last.
+        if (has_outbound) {
+            auto signal = make_stress_signal_workload(outbound.get(), mesh_device_);
+            EnqueueMeshWorkload(cq, signal, /*blocking=*/false);
+            Finish(cq);
+        }
+    }
+
+    if (h2d_feeder.joinable()) {
+        h2d_feeder.join();
+    }
+
+    // Every one of the world_size stages added 1 to the final iter's iota, so the end
+    // value is kFillBase + (num_iters-1) + i + world_size on every element and coord.
+    if (has_inbound && !has_outbound) {
+        expect_output_tensor_iota(output, mesh_device_, kFillBase + num_iters - 1 + static_cast<uint32_t>(world_size));
+    }
+
+    Synchronize(mesh_device_.get(), std::nullopt);
+    ctx->barrier();  // [B2]
+}
+
+TEST_F(CrossProcessD2DFixture, ForwardChainStress) {
+    const auto& ctx = DistributedContext::get_current_world();
+    const int world_size = *ctx->size();
+    if (world_size < 2) {
+        GTEST_SKIP() << "D2D forward chain needs >= 2 ranks; got " << world_size;
+    }
+    const int rank = *ctx->rank();
+
+    int case_idx = 0;
+    for (const auto& combo : kStressCombos) {
+        // Per-case trace (printed on failure) + live progress line (so a hang's combo is
+        // obvious from any rank under --tag-output). The combo order is identical on every
+        // rank, so the per-combo rendezvous/barriers stay in lockstep.
+        SCOPED_TRACE(::testing::Message() << "rank=" << rank << " case=" << case_idx << " " << combo.label);
+        log_info(tt::LogMetal, "[xproc-d2d-stress] rank={} case={} {}", rank, case_idx, combo.label);
+        ++case_idx;
+        run_forward_chain_stress(mesh_device_, combo.global_shape, combo.worker_cores, combo.num_iters);
+    }
 }
 
 }  // namespace
