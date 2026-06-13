@@ -142,6 +142,12 @@ FORCE_INLINE uint8_t dfb_init_timing_trisc_slot_index() {
 }
 #endif
 
+inline uint32_t rdcycle() {
+    uint32_t c;
+    asm volatile("rdcycle %0" : "=r"(c));
+    return c;
+}
+
 // (load_dfb_risc_mask removed — device no longer walks the risc_mask in wait_all)
 
 FORCE_INLINE void copy_txn_descriptor_32(
@@ -213,12 +219,6 @@ FORCE_INLINE void dfb_ensure_ready(uintptr_t config_cached, uint8_t dfb_id) {
     }
 #endif
     WAYPOINT("DFD");
-}
-
-inline uint32_t rdcycle() {
-    uint32_t c;
-    asm volatile("rdcycle %0" : "=r"(c));
-    return c;
 }
 
 #ifndef COMPILE_FOR_TRISC
