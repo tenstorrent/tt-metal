@@ -40,19 +40,21 @@ def _flush_after(cls, mesh):
 
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, device_params",
-    [[(2, 4), (2, 4), line_params], [(4, 8), (4, 8), line_params]],
-    ids=["bh_2x4sp1tp0", "bh_4x8sp1tp0"],
+    [[(1, 4), (1, 4), line_params], [(2, 4), (2, 4), line_params], [(4, 8), (4, 8), line_params]],
+    ids=["bh_1x4sp1tp0", "bh_2x4sp1tp0", "bh_4x8sp1tp0"],
     indirect=["mesh_device", "device_params"],
 )
 def test_prof_girl_decode(mesh_device, mesh_shape, device_params):
     parent = mesh_device
     mesh = parent.create_submesh(ttnn.MeshShape(*mesh_shape))
 
-    # Flush per conv wrapper (every conv in mel-VAE / vocoder / BWE goes through one of these).
-    # Per-block was borderline — a window occasionally exceeded the 1000-zone buffer and dropped an op.
-    _flush_after(Conv1dViaConv3d, mesh)  # _AlignedOutConv1d inherits this forward
-    _flush_after(Conv2dViaConv3d, mesh)  # mel-VAE
-    _flush_after(ConvTranspose1dViaConv3d, mesh)  # upsample inner-convs
+    # Per-conv ReadDeviceProfiler flushes bound the device zone buffer, but on a 32-chip mesh each
+    # is a full mesh sync (poisons OP-TO-OP LATENCY and writes a huge device log). Set
+    # LTX_PROF_NOFLUSH=1 and rely on a large --op-support-count for a clean streaming capture.
+    if os.environ.get("LTX_PROF_NOFLUSH") != "1":
+        _flush_after(Conv1dViaConv3d, mesh)  # _AlignedOutConv1d inherits this forward
+        _flush_after(Conv2dViaConv3d, mesh)  # mel-VAE
+        _flush_after(ConvTranspose1dViaConv3d, mesh)  # upsample inner-convs
 
     num_frames = int(os.environ.get("NUM_FRAMES", "145"))
     pipeline = LTXDistilledPipeline.create_pipeline(
