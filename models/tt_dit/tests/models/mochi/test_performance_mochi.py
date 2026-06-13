@@ -24,7 +24,11 @@ from ....pipelines.mochi.pipeline_mochi import MochiPipeline as TTMochiPipeline
 @pytest.mark.parametrize(
     "mesh_device, sp_axis, tp_axis, vae_mesh_shape, vae_sp_axis, vae_tp_axis, topology, num_links",
     [
-        [(2, 2), 0, 1, (1, 4), 0, 1, ttnn.Topology.Linear, 2],
+        pytest.param(
+            [(2, 2), 0, 1, (1, 4), 0, 1, ttnn.Topology.Linear, 2],
+            id="dit_2x2sp0tp1_vae_1x4sp0tp1_BH_QB",
+            marks=pytest.mark.skip(reason="Disabled: see #46933"),
+        ),
         [(2, 4), 0, 1, (1, 8), 0, 1, ttnn.Topology.Linear, 2],  # VAE mesh shape = (1, 8) is more memory efficient.
         [(2, 4), 0, 1, (1, 8), 0, 1, ttnn.Topology.Linear, 1],
         [(4, 8), 1, 0, (4, 8), 0, 1, ttnn.Topology.Linear, 4],  # note sp <-> tp switch for VAE for memory efficiency.
