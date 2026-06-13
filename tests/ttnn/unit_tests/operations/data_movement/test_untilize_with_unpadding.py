@@ -685,7 +685,7 @@ def test_untilize_with_unpadding_multicore_nd_shard_to_nd_shard_spec_different_s
         ttnn.Shape([3, 96, 96]),
     ],
 )
-@pytest.mark.parametrize("output_end", [ttnn.Shape([3, 127, 127])])
+@pytest.mark.parametrize("output_end", [(ttnn.Shape([3, 127, 127]))])
 @pytest.mark.parametrize(
     "output_memory_layout",
     [
