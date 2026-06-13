@@ -277,6 +277,26 @@ class LTXPipeline:
             self.vae_ccl_manager = CCLManager(
                 mesh_device, num_links=ccl_manager.num_links, topology=ttnn.Topology.Linear
             )
+
+        # Audio decode is torch-in/torch-out and self-contained on its own modules, so it can
+        # run on a SUBMESH of the full device while the video pipeline keeps the whole mesh.
+        # Fewer T-shards = fewer cross-chip causal-halo barriers (the audio vocoder's dominant
+        # device-side cost): T-shard=4 on a 1x4/2x4 slice beats T-shard=8 on the full 4x8.
+        # Defaults to the full mesh; LTX_AUDIO_SUBMESH=RxC slices an RxC submesh for audio.
+        self.audio_mesh_device = mesh_device
+        self.audio_ccl_manager = self.vae_ccl_manager
+        self._owned_audio_submesh = None
+        _audio_submesh = os.environ.get("LTX_AUDIO_SUBMESH")
+        if _audio_submesh:
+            r, c = (int(v) for v in _audio_submesh.lower().split("x"))
+            full = tuple(mesh_device.shape)
+            if r <= full[0] and c <= full[1] and (r, c) != full:
+                self.audio_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(r, c))
+                self._owned_audio_submesh = self.audio_mesh_device
+                self.audio_ccl_manager = CCLManager(
+                    self.audio_mesh_device, num_links=ccl_manager.num_links, topology=ttnn.Topology.Linear
+                )
+                logger.info(f"Audio decode routed onto {r}x{c} submesh of {full[0]}x{full[1]}")
         if vae_parallel_config is None:
             vae_parallel_config = VaeHWParallelConfig(
                 height_parallel=parallel_config.tensor_parallel,
@@ -368,6 +388,23 @@ class LTXPipeline:
         self._trace_state.clear()
         self._prompt_v = StateTensor()
         self._prompt_a = StateTensor()
+
+    def release_audio_submesh(self) -> None:
+        """Drop the pipeline's references to the audio decode submesh (LTX_AUDIO_SUBMESH).
+
+        The submesh shares the parent mesh's command queue. ttnn forbids closing a
+        cq-sharing child while the parent is alive (close hangs) and forbids closing
+        the parent while the child is alive ("cq in use by child submesh"), so the
+        submesh's lifetime is bound to the parent: it is reclaimed when the parent mesh
+        closes at process teardown. This only frees the audio device tensors. No-op when
+        audio runs on the full mesh.
+        """
+        if self._owned_audio_submesh is not None:
+            ttnn.synchronize_device(self._owned_audio_submesh)
+            self.tt_audio_decoder = None
+            self.tt_vocoder_with_bwe = None
+            self.audio_ccl_manager = self.vae_ccl_manager
+            self.audio_mesh_device = self.mesh_device
 
     @staticmethod
     def _resolve_checkpoint_file(checkpoint: str, default_filename: str = "ltx-2.3-22b-dev.safetensors") -> str:
@@ -1479,7 +1516,7 @@ class LTXPipeline:
         voc_cfg = config["vocoder"]["vocoder"]
         bwe_cfg = config["vocoder"]["bwe"]
 
-        mesh_shape = tuple(self.mesh_device.shape)
+        mesh_shape = tuple(self.audio_mesh_device.shape)
         t_axis = 0 if mesh_shape[0] >= mesh_shape[1] else 1
         t_factor = mesh_shape[t_axis]
         c_axis = 1 - t_axis
@@ -1497,7 +1534,7 @@ class LTXPipeline:
             audio_parallel_config = ParallelFactor(factor=t_factor, mesh_axis=t_axis)
         else:
             audio_parallel_config = None
-        audio_ccl = self.vae_ccl_manager if audio_parallel_config is not None else None
+        audio_ccl = self.audio_ccl_manager if audio_parallel_config is not None else None
 
         self.tt_audio_decoder = AudioDecoder(
             ch=ddconfig.get("ch", 128),
@@ -1512,7 +1549,7 @@ class LTXPipeline:
             mel_hop_length=stft_cfg.get("hop_length", 160),
             is_causal=stft_cfg.get("causal", True),
             mel_bins=mel_bins,
-            mesh_device=self.mesh_device,
+            mesh_device=self.audio_mesh_device,
             dtype=ttnn.bfloat16,
         )
 
@@ -1534,7 +1571,7 @@ class LTXPipeline:
             return Vocoder(
                 **{k: cfg[k] for k in voc_keys if k in cfg},
                 apply_final_activation=apply_final_activation,
-                mesh_device=self.mesh_device,
+                mesh_device=self.audio_mesh_device,
                 dtype=ttnn.float32,
                 parallel_config=parallel_config,
                 ccl_manager=audio_ccl,
@@ -1558,7 +1595,7 @@ class LTXPipeline:
             hop_length=bwe_cfg["hop_length"],
             win_length=bwe_cfg["n_fft"],
             n_mel_channels=bwe_cfg["num_mels"],
-            mesh_device=self.mesh_device,
+            mesh_device=self.audio_mesh_device,
             dtype=ttnn.float32,
         )
         self.tt_vocoder_with_bwe = VocoderWithBWE(
@@ -1568,7 +1605,7 @@ class LTXPipeline:
             input_sampling_rate=bwe_cfg["input_sampling_rate"],
             output_sampling_rate=bwe_cfg["output_sampling_rate"],
             hop_length=bwe_cfg["hop_length"],
-            mesh_device=self.mesh_device,
+            mesh_device=self.audio_mesh_device,
             dtype=ttnn.float32,
         )
         # Capture-once/replay the main vocoder device graph when the pipeline runs traced.
@@ -1640,7 +1677,7 @@ class LTXPipeline:
                 model_name=model_name,
                 subfolder=dec_subfolder,
                 parallel_config=self.parallel_config,
-                mesh_shape=tuple(self.mesh_device.shape),
+                mesh_shape=tuple(self.audio_mesh_device.shape),
                 get_torch_state_dict=self._audio_decoder_state_provider,
             )
 
@@ -1653,7 +1690,7 @@ class LTXPipeline:
                 model_name=model_name,
                 subfolder=voc_subfolder,
                 parallel_config=self.parallel_config,
-                mesh_shape=tuple(self.mesh_device.shape),
+                mesh_shape=tuple(self.audio_mesh_device.shape),
                 get_torch_state_dict=self._vocoder_state_provider,
             )
 
@@ -1715,13 +1752,13 @@ class LTXPipeline:
         if _time_stages:
             import time as _t
 
-            ttnn.synchronize_device(self.mesh_device)
+            ttnn.synchronize_device(self.audio_mesh_device)
             _t0 = _t.perf_counter()
             mel = self._decode_mel(audio_spatial)
-            ttnn.synchronize_device(self.mesh_device)
+            ttnn.synchronize_device(self.audio_mesh_device)
             _t_vae = _t.perf_counter()
             waveform = self.tt_vocoder_with_bwe(mel).squeeze(0).float()
-            ttnn.synchronize_device(self.mesh_device)
+            ttnn.synchronize_device(self.audio_mesh_device)
             _t_voc = _t.perf_counter()
             logger.info(
                 f"STAGE_SPLIT mel_vae={(_t_vae - _t0) * 1000:.1f}ms " f"vocoder+bwe={(_t_voc - _t_vae) * 1000:.1f}ms"

@@ -40,13 +40,13 @@ def _stage_decode(pipeline, latent, num_frames):
     but measured here so it works regardless of LTX_TIME_STAGES."""
     z = pipeline.tt_audio_decoder.z_channels
     audio_spatial = latent.reshape(1, latent.shape[1], z, latent.shape[2] // z).permute(0, 2, 1, 3).float()
-    ttnn.synchronize_device(pipeline.mesh_device)
+    ttnn.synchronize_device(pipeline.audio_mesh_device)
     t0 = time.perf_counter()
     mel = pipeline._decode_mel(audio_spatial)
-    ttnn.synchronize_device(pipeline.mesh_device)
+    ttnn.synchronize_device(pipeline.audio_mesh_device)
     t1 = time.perf_counter()
     wav = pipeline.tt_vocoder_with_bwe(mel).squeeze(0).float()
-    ttnn.synchronize_device(pipeline.mesh_device)
+    ttnn.synchronize_device(pipeline.audio_mesh_device)
     t2 = time.perf_counter()
     return (t1 - t0) * 1000, (t2 - t1) * 1000, (t2 - t0) * 1000, wav
 
@@ -63,15 +63,15 @@ def _probe_split(pipeline, latent, num_frames, reps, label):
     voc_ms, bwe_ms = [], []
     for _ in range(reps):
         md = mel.float()
-        ttnn.synchronize_device(pipeline.mesh_device)
+        ttnn.synchronize_device(pipeline.audio_mesh_device)
         t0 = time.perf_counter()
         x = vwb.vocoder.forward_traced(md) if vwb.use_trace else vwb.vocoder(md)
-        ttnn.synchronize_device(pipeline.mesh_device)
+        ttnn.synchronize_device(pipeline.audio_mesh_device)
         t1 = time.perf_counter()
         B, C, low = x.shape
         out_len = low * vwb.output_sampling_rate // vwb.input_sampling_rate
         _ = vwb._bwe_from_waveform(x, input_dtype=md.dtype, output_length=out_len)
-        ttnn.synchronize_device(pipeline.mesh_device)
+        ttnn.synchronize_device(pipeline.audio_mesh_device)
         t2 = time.perf_counter()
         voc_ms.append((t1 - t0) * 1000)
         bwe_ms.append((t2 - t1) * 1000)
@@ -113,11 +113,16 @@ def _avg_leg(pipeline, latent, num_frames, reps, warmups, label):
 
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
+    # mesh_device (fixture param) always opens the FULL (4,8) galaxy — opening a 2x4/1x4
+    # SUBSET of mmio devices standalone fails fabric router sync on this machine. The
+    # SUBMESH to actually run the audio decode on is `mesh_shape` (sliced from the full
+    # parent via create_submesh), so this directly measures submesh-routed audio decode.
     [
-        [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
+        [(4, 8), (1, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
+        [(4, 8), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
         [(4, 8), (4, 8), 1, 0, 2, False, line_trace_params, ttnn.Topology.Linear, False],
     ],
-    ids=["bh_2x4sp1tp0", "bh_4x8sp1tp0"],
+    ids=["bh_1x4sp1tp0", "bh_2x4sp1tp0", "bh_4x8sp1tp0"],
     indirect=["mesh_device", "device_params"],
 )
 def test_warm_harness(
@@ -201,3 +206,4 @@ def test_warm_harness(
         )
 
     pipeline.release_traces()
+    pipeline.release_audio_submesh()
