@@ -7,6 +7,13 @@ import torch.nn.functional as F
 
 import ttnn
 
+COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi2,
+    math_approx_mode=True,
+    fp32_dest_acc_en=False,
+    packer_l1_acc=True,
+)
+
 
 def tt_patch_embed(pixel_values, weight, bias, device):
     """Patch embedding via Conv2d projection.
@@ -85,7 +92,7 @@ def tt_vit_attention(
     (see _permute_qkv_for_rope in preprocessing). RoPE cos/sin are precomputed
     per attention layer with shape (1, 1, L, head_dim).
     """
-    qkv = ttnn.linear(x, qkv_weight, bias=qkv_bias)  # (B, L, dim*3)
+    qkv = ttnn.linear(x, qkv_weight, bias=qkv_bias, compute_kernel_config=COMPUTE_CONFIG)  # (B, L, dim*3)
 
     tt_q, tt_k, tt_v = ttnn.transformer.split_query_key_value_and_split_heads(
         qkv, num_heads=num_heads, transpose_key=False
@@ -116,6 +123,7 @@ def tt_vit_attention(
             is_causal=False,
             scale=scale,
             program_config=sdpa_pc,
+            compute_kernel_config=COMPUTE_CONFIG,
         )
     else:
         tt_kt = ttnn.transpose(tt_k, -2, -1)
@@ -125,7 +133,7 @@ def tt_vit_attention(
         tt_attn_out = ttnn.matmul(tt_attn, tt_v)
 
     tt_attn_out = ttnn.transformer.concatenate_heads(tt_attn_out)  # (B, L, dim)
-    output = ttnn.linear(tt_attn_out, proj_weight, bias=proj_bias)
+    output = ttnn.linear(tt_attn_out, proj_weight, bias=proj_bias, compute_kernel_config=COMPUTE_CONFIG)
     return output
 
 
@@ -148,8 +156,8 @@ def tt_vit_mlp(x, fc1_weight, fc1_bias, fc2_weight, fc2_bias, device=None):
     Returns:
         ttnn tensor (B, L, dim) in TILE_LAYOUT on device.
     """
-    hidden = ttnn.linear(x, fc1_weight, bias=fc1_bias, activation="gelu")
-    output = ttnn.linear(hidden, fc2_weight, bias=fc2_bias)
+    hidden = ttnn.linear(x, fc1_weight, bias=fc1_bias, activation="gelu", compute_kernel_config=COMPUTE_CONFIG)
+    output = ttnn.linear(hidden, fc2_weight, bias=fc2_bias, compute_kernel_config=COMPUTE_CONFIG)
     return output
 
 
@@ -193,6 +201,7 @@ def tt_vit_block(
         weight=block_params["norm1_weight_tt"],
         bias=block_params["norm1_bias_tt"],
         epsilon=1e-5,
+        compute_kernel_config=COMPUTE_CONFIG,
     )
 
     tt_attn_out = tt_vit_attention(
@@ -214,6 +223,7 @@ def tt_vit_block(
         weight=block_params["norm2_weight_tt"],
         bias=block_params["norm2_bias_tt"],
         epsilon=1e-5,
+        compute_kernel_config=COMPUTE_CONFIG,
     )
 
     tt_mlp_out = tt_vit_mlp(
