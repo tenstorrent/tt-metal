@@ -85,6 +85,43 @@ def main():
             pipe.transport.send = _tagged_send
             log("transport.send monkey-patched to unique-per-call tags (distinct recv buffers)")
 
+        if SCOPE == "vp":
+            # SigLIP(vision) + prefill ONLY (single-pass, no denoise loop). Trace
+            # vision_per_chip + prefill_per_chip via sockets; compare the prefill
+            # per-layer KV (layer 0's K) eager vs traced across replays.
+            def _vp_run():
+                vis = pipe.stage_vision.run(pipe.pixel_values_buf)
+                vis_p0 = pipe.transport.send(vis, h.prefill_per_chip[0], tag="v2p")
+                prefix_embs = pipe._build_prefix(vis_p0, pipe.lang_tokens_buf)
+                _, per_layer_kv = pipe.stage_prefill.run(
+                    prefix_embs,
+                    attention_mask=None,
+                    position_ids=None,
+                    per_chip_attn_mask=(upstream["prefix_attn_mask"] if upstream else None),
+                    per_chip_cos=(upstream["prefix_cos"] if upstream else None),
+                    per_chip_sin=(upstream["prefix_sin"] if upstream else None),
+                )
+                return per_layer_kv
+
+            kv = _vp_run()
+            ttnn.synchronize_device(h.prefill_per_chip[-1])
+            eager = ttnn.to_torch(kv[0][0], mesh_composer=ttnn.ConcatMeshToTensor(h.prefill_per_chip[0], dim=0))
+            log(f"eager vision+prefill done: K0 {tuple(eager.shape)}")
+            subs = list(h.vision_per_chip) + list(h.prefill_per_chip)
+            tids = [ttnn.begin_trace_capture(sm, cq_id=0) for sm in subs]
+            kv_t = _vp_run()
+            for sm, tid in zip(subs, tids):
+                ttnn.end_trace_capture(sm, tid, cq_id=0)
+            log("captured vision+prefill per-submesh traces")
+            for rnd in (1, 2, 3):
+                for sm, tid in zip(subs, tids):
+                    ttnn.execute_trace(sm, tid, cq_id=0, blocking=False)
+                ttnn.synchronize_device(h.prefill_per_chip[-1])
+                traced = ttnn.to_torch(kv_t[0][0], mesh_composer=ttnn.ConcatMeshToTensor(h.prefill_per_chip[0], dim=0))
+                log(f"[vision+prefill] replay {rnd}: K0 PCC vs eager = {_pcc(traced, eager):.6f}")
+            log("DONE (vision+prefill scope)")
+            return
+
         if SCOPE == "denoise":
             # Localize: run vision+prefill+KV EAGER (populate cached KV), then trace
             # ONLY the denoise loop on denoise_per_chip (persistent x_t + cached KV +
