@@ -21,6 +21,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     mesh_tensor_to_torch,
     reconcile_golden_to_actual,
     shard_grid_bounds,
+    was_replicated_for_validation,
 )
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import (
     build_op_kwargs,
@@ -140,6 +141,12 @@ def run(
 
     # Extract kwargs - arg1 is now a named param, use it as scalar fallback
     scalar = kwargs.get("scalar", arg1)
+    # The scalar may be a float (e.g. masking value -FLT_MAX ≈ -3.4e38) that the
+    # tracer serialized as a huge Python int; passing that to ttnn.add tries to
+    # cast to unsigned ("can't convert negative int to unsigned"). Coerce numeric
+    # (non-bool) int scalars to float so the op gets a real float scalar.
+    if scalar is not None and not isinstance(scalar, bool) and isinstance(scalar, int):
+        scalar = float(scalar)
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
 
@@ -342,7 +349,15 @@ def run(
 
         output_tensor = ttnn.add(input_tensor_a, input_tensor_b, **op_kwargs)
 
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    # On <=8-chip meshes create_tensor_on_mesh stores a shard-placement tensor as
+    # a full per-chip replica, so each chip computed the full output. Read a single
+    # device's copy instead of relying on the byte-identity auto-detect in
+    # mesh_tensor_to_torch, which can miss (e.g. INT32 dim-0-sharded N300 configs
+    # fell through to a concat -> doubled rows -> PCC ~0.49). Mirrors chunked_sdpa.
+    _replicated = is_mesh_device and was_replicated_for_validation(device, input_a_tensor_placement)
+    output_tensor = mesh_tensor_to_torch(
+        output_tensor, device if is_mesh_device else None, force_single_device=_replicated
+    )
     e2e_perf = stop_measuring_time(start_time)
 
     # V2 traced configs store per-chip input shapes; when both inputs share that
