@@ -105,4 +105,31 @@ def test_m4_mla_projections(mesh_device, reset_seeds):
         passing, msg = comp_pcc(ref, tt, pcc_required)
         logger.info(f"MLA projection {name}: {msg}")
         all_pass = all_pass and passing
-    assert all_pass, "MLA projection-chain PCC below threshold"
+
+    # --- SDPA + o_proj, fed the reference post-RoPE q/k/v (decoupled from RoPE assembly) ---
+    # q/k/v goldens are [B, n_heads, S, head_dim]; ttnn SDPA expects [b, nqh/nkv, s, dh].
+    def _bhsd(t):
+        return ttnn.from_torch(
+            t.to(torch.bfloat16),
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+    head_dim = g["q_states"].shape[-1]
+    qd, kd, vd = _bhsd(g["q_states"]), _bhsd(g["k_states"]), _bhsd(g["value_states"])
+    attn = ttnn.transformer.scaled_dot_product_attention(qd, kd, vd, is_causal=True, scale=head_dim ** (-0.5))
+    # [B, nh, S, vd] -> [B, S, nh*vd]
+    attn = ttnn.transpose(attn, 1, 2)
+    attn = ttnn.reshape(attn, (B, attn.shape[1], -1))
+    o_in_tt = _to_host(attn, mesh_device, B)
+    p_oin, m_oin = comp_pcc(g["o_proj_in"], o_in_tt, pcc_required)
+    logger.info(f"MLA sdpa->o_proj_in: {m_oin}")
+
+    w_o = _lin_w(sa.o_proj.weight, mesh_device)
+    mla_out_tt = _to_host(ttnn.linear(attn, w_o), mesh_device, B)
+    p_out, m_out = comp_pcc(g["mla_out"], mla_out_tt, pcc_required)
+    logger.info(f"MLA o_proj->mla_out: {m_out}")
+    all_pass = all_pass and p_oin and p_out
+
+    assert all_pass, "MLA PCC below threshold"

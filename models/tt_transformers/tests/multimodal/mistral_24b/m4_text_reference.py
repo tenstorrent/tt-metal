@@ -81,6 +81,24 @@ def capture_golden(model, input_ids, layer_idx=0):
 
         return hook
 
+    # Capture the post-RoPE query/key/value states (locals inside Mistral4Attention) by wrapping
+    # the module's attention interface — lets the TT SDPA+o_proj be PCC'd independently of RoPE.
+    import transformers.models.mistral4.modeling_mistral4 as _mm
+
+    _orig_eager = _mm.eager_attention_forward
+
+    def _cap_attn(module, q, k, v, *a, **kw):
+        if module is model.model.layers[layer_idx].self_attn:
+            acts["q_states"] = q.detach().float().cpu()
+            acts["k_states"] = k.detach().float().cpu()
+            acts["value_states"] = v.detach().float().cpu()
+        return _orig_eager(module, q, k, v, *a, **kw)
+
+    _mm.eager_attention_forward = _cap_attn
+    model.config._attn_implementation = "eager"
+    for _l in model.model.layers:
+        _l.self_attn.config._attn_implementation = "eager"
+
     sa = layer.self_attn
     handles = [
         layer.register_forward_hook(grab_in("hidden_in"), with_kwargs=True),
@@ -99,6 +117,7 @@ def capture_golden(model, input_ids, layer_idx=0):
         out = model(input_ids)
     for h in handles:
         h.remove()
+    _mm.eager_attention_forward = _orig_eager  # restore
     acts["logits"] = out.logits.detach().float().cpu()
     return acts
 
