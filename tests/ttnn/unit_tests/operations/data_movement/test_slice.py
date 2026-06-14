@@ -3,13 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
-from tests.ttnn.unit_tests.operations.test_utils import round_up
-import math
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
 
 
 def random_torch_tensor(dtype, shape):
@@ -1309,6 +1306,60 @@ def test_slice_sharded_auto_shard_spec_recomputation(
     tt_output_torch = ttnn.to_torch(tt_output_cpu)
     torch_expected = torch_input[begins[0] : ends[0], begins[1] : ends[1], begins[2] : ends[2], begins[3] : ends[3]]
 
+    assert_equal(torch_expected, tt_output_torch)
+
+
+@pytest.mark.parametrize(
+    "input_shape, input_nd_shard_shape, begins, ends",
+    [
+        ([1, 1, 128, 64], [1, 1, 64, 64], [0, 0, 0, 0], [1, 1, 64, 64]),
+        ([1, 1, 128, 64], [1, 1, 96, 64], [0, 0, 32, 0], [1, 1, 96, 64]),
+    ],
+)
+@pytest.mark.parametrize(
+    "shard_orientation",
+    [
+        ttnn.ShardOrientation.ROW_MAJOR,
+        ttnn.ShardOrientation.COL_MAJOR,
+    ],
+)
+def test_slice_nd_sharded_auto_shard_spec_recomputation(
+    input_shape, input_nd_shard_shape, begins, ends, shard_orientation, device
+):
+    torch.manual_seed(2005)
+
+    torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+    input_nd_shard_spec = ttnn.NdShardSpec(input_nd_shard_shape, shard_grid, orientation=shard_orientation)
+    input_mem_config = ttnn.MemoryConfig(ttnn.BufferType.L1, input_nd_shard_spec)
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=input_mem_config,
+    )
+
+    tt_output = ttnn.slice(tt_input, begins, ends)
+
+    expected_shape = [ends[i] - begins[i] for i in range(len(begins))]
+    assert list(tt_output.shape) == expected_shape
+
+    output_mem_config = tt_output.memory_config()
+    assert output_mem_config.is_sharded()
+    assert output_mem_config.created_with_nd_shard_spec
+    assert output_mem_config.nd_shard_spec is not None
+
+    output_nd_shard_shape = list(output_mem_config.nd_shard_spec.shard_shape)
+    expected_nd_shard_shape = list(input_nd_shard_shape)
+    expected_nd_shard_shape[-2] = min(expected_nd_shard_shape[-2], expected_shape[-2])
+    expected_nd_shard_shape[-1] = min(expected_nd_shard_shape[-1], expected_shape[-1])
+    assert output_nd_shard_shape == expected_nd_shard_shape
+
+    tt_output_cpu = ttnn.to_memory_config(tt_output, ttnn.DRAM_MEMORY_CONFIG)
+    tt_output_torch = ttnn.to_torch(tt_output_cpu)
+    torch_expected = torch_input[begins[0] : ends[0], begins[1] : ends[1], begins[2] : ends[2], begins[3] : ends[3]]
     assert_equal(torch_expected, tt_output_torch)
 
 
