@@ -5,7 +5,7 @@
   "device": "bh_galaxy",
   "arch_name": "blackhole",
   "started_at": "2026-06-14T11:31:00Z",
-  "updated_at": "2026-06-14T12:18:12Z",
+  "updated_at": "2026-06-14T12:24:19Z",
   "components": [
     {
       "name": "rms_norm",
@@ -190,7 +190,8 @@
       "real_weights": {
         "status": "pending",
         "attempts": 0
-      }
+      },
+      "ttnn_plan": "ttnn-compose: host-built 3-axis cos/sin table + rotary_embedding_llama; head_dim 80 pad-to-96 (qwen3_vl workaround)"
     },
     {
       "name": "patch_embedding",
@@ -349,7 +350,8 @@
       "real_weights": {
         "status": "pending",
         "attempts": 0
-      }
+      },
+      "ttnn_plan": "tt-lang authored kernel (indexer+block-mask) -> ttnn SDPA-with-mask; dense-GQA fallback exact for seq<=2048"
     },
     {
       "name": "vision_attention",
@@ -1125,6 +1127,12 @@
       "ts": "2026-06-14T12:18:12Z",
       "action": "reference[vision_encoder,final_norm,lm_head,mtp_head]",
       "result": "ok(3)+blocked(1)"
+    },
+    {
+      "tick": 8,
+      "ts": "2026-06-14T12:24:19Z",
+      "action": "missing_op_discovery",
+      "result": "ok: 1 tt-lang (sparse_lightning_attention), 1 compose (vision_rope_3d), 21 compose"
     }
   ],
   "config": {
