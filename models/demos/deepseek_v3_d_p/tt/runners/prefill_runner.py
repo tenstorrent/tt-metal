@@ -370,12 +370,17 @@ def run_standalone_chunked_prefill_loop(pipeline: TtDeepSeekPrefillPipeline) -> 
             logger.info(
                 f"[standalone-chunked] ==== PROFILE_KV={pk} pass {it + 1}/{chunked_iters} ({'WARM' if it > 0 else 'cold/compile'}) ===="
             )
+            _pt0 = _time.perf_counter()
             pipeline.prefill(
                 prepare_prefill_input_tensor(
                     chunk_tokens, mesh_device, cfg.sp_factor, cfg.is_balanced, cfg.mesh_shape, cfg.sp_axis
                 ),
                 slot_id=slot_id,
                 kv_actual_isl=pk,
+            )
+            ttnn.synchronize_device(mesh_device)
+            logger.info(
+                f"[profile-kv-timing] PROFILE_KV={pk} pass {it + 1} wall = {(_time.perf_counter() - _pt0) * 1000.0:.2f} ms"
             )
             ttnn.synchronize_device(mesh_device)
             logger.info(f"[standalone-chunked] PROFILE_KV={pk} pass {it + 1} done (logical_n={pk + chunk_size})")
