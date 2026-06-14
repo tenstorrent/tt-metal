@@ -42,7 +42,6 @@ Contract:
 
 from __future__ import annotations
 
-import os
 import warnings
 from enum import Enum
 from typing import Any, Callable, List, Literal, Optional, Tuple, Union
@@ -150,26 +149,12 @@ class FSDPState:
     def add_managed_param(self, parameter: Parameter, shard_dim: int) -> None:
         self.managed.append((parameter, shard_dim))
 
-    def _trace(self, action: str) -> None:
-        if not _FSDP_TRACE:
-            return
-        try:
-            shapes = [list(p.shape()) for p, _ in self.managed[:2]]
-        except Exception:  # noqa: BLE001
-            shapes = []
-        print(
-            f"[fsdp] {action:<14} module={self._name} state={self.sharded_state.name} "
-            f"nparams={len(self.managed)} shapes(head)={shapes}",
-            flush=True,
-        )
-
     # -- forward hooks -------------------------------------------------------
 
     def pre_forward(self) -> None:
         """Gather sharded parameters into their full form (idempotent)."""
         if self.sharded_state == _ShardedState.UNSHARDED:
             return
-        self._trace("pre_forward")
         self._gather_all_params()
         self.sharded_state = _ShardedState.UNSHARDED
 
@@ -183,7 +168,6 @@ class FSDPState:
             return
         if self.sharded_state == _ShardedState.SHARDED:
             return
-        self._trace("post_forward")
         self._reshard_all_params()
         self.sharded_state = _ShardedState.SHARDED
 
@@ -209,14 +193,11 @@ class FSDPState:
            so we all-gather the shard grad here.
 
         """
-        self._trace("backward_pre")
         if self.sharded_state == _ShardedState.SHARDED:
             self._gather_all_params()
             self.sharded_state = _ShardedState.UNSHARDED
 
         self._gather_accumulated_grads()
-        if _FSDP_TRACE:
-            print(f"[fsdp] backward_pre   done module={self._name} (closures run next)", flush=True)
 
     def backward_post(self) -> None:
         """Called after all of the module's internal backward closures have run.
@@ -274,16 +255,8 @@ class FSDPState:
             param_tensor = parameter.tensor
             current = param_tensor.get_value()
             self._cached_shards[id(param_tensor)] = current
-            if _FSDP_TRACE:
-                print(
-                    f"[fsdp]   gather[{idx}] module={self._name} shard_dim={shard_dim} "
-                    f"shard_shape={list(param_tensor.shape())}",
-                    flush=True,
-                )
             gathered = ttml.core.distributed.all_gather(current, shard_dim, self.axis_index)
             param_tensor.set_value(gathered)
-            if _FSDP_TRACE:
-                print(f"[fsdp]   gather[{idx}] done full_shape={list(param_tensor.shape())}", flush=True)
 
     def _gather_accumulated_grads(self) -> None:
         """All-gather any managed param ``m_grad`` that survived from a prior

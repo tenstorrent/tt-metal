@@ -29,19 +29,19 @@ training_config:
 
   grpo_config:
     epsilon: 0.2
-    batch_size: 32
-    micro_batch_size: 32
+    batch_size: 2 # 32
+    micro_batch_size: 16 # 256
     num_iterations: 1
-    gradient_accumulation_steps: 1
+    gradient_accumulation_steps: 8
     logging_steps: 1
     checkpointing: false
     checkpoint_interval: 5
     prompts_to_train: 1600 # 64
     temperature: 1.5
-    max_completion_length: 1024 # 32
+    max_completion_length: 256 # 32
     num_generations: 8
     warmup_steps: 0
 
 device_config:
-  enable_fsdp: true
-  mesh_shape: [32, 1]
+  enable_fsdp: false
+  mesh_shape: [1, 1]

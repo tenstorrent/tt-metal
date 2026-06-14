@@ -23,6 +23,51 @@ from safetensors.numpy import save_file
 from ttml.common.utils import create_optimizer, no_grad
 
 
+def _debug_grad_stats(model: Any, composer: Any = None) -> str:
+    """Cheap gradient-flow sanity probe (for GRPO_QWEN_DEBUG).
+
+    Reports how many parameters carry an initialized grad and the aggregate L2
+    norm of the (replicated) norm-weight grads as a liveness/finiteness check.
+    Norm weights aren't FSDP-sharded, so reading them with the mesh composer is
+    safe. A count of 0, or an L2 of 0.0 / nan, indicates the backward isn't
+    producing usable gradients.
+
+    ``composer`` must be the mesh->tensor composer used elsewhere in the trainer;
+    without it, ``to_numpy`` cannot collapse a multi-device tensor and throws.
+    """
+    n_grad = 0
+    n_total = 0
+    n_sampled = 0
+    total_sq = 0.0
+    try:
+        params = model.parameters().items()
+    except Exception:  # noqa: BLE001
+        return "grad stats unavailable"
+    for name, p in params:
+        t = getattr(p, "tensor", p)
+        n_total += 1
+        try:
+            if not t.is_grad_initialized():
+                continue
+        except Exception:  # noqa: BLE001
+            continue
+        n_grad += 1
+        # Only sample replicated norm/ln weights -- they aren't FSDP-sharded, so
+        # the dim-0 concat composer reconstructs them cleanly (as 32 stacked
+        # copies, which is fine for a zero/nan/healthy check).
+        if "norm" in name or "ln" in name:
+            try:
+                grad_tensor = t.get_grad_tensor()
+                if grad_tensor is not None:
+                    arr = grad_tensor.to_numpy(ttnn.DataType.FLOAT32, composer).astype(np.float64)
+                    total_sq += float(np.sum(arr * arr))
+                    n_sampled += 1
+            except Exception:  # noqa: BLE001
+                pass
+    l2 = float(np.sqrt(total_sq))
+    return f"{n_grad}/{n_total} params have grads; {n_sampled} norm-weight grads sampled, aggregate L2={l2:.4e}"
+
+
 class GRPOCompleter(ABC):
     """Abstract base for model-specific completion engines used in GRPO training.
 
@@ -494,6 +539,12 @@ class GRPOTrainer:
                         ttml.sync_gradients(tt_model.parameters(), axis_names=fsdp_sync_axes)
                     elif ddp_enabled:
                         ttml.core.distributed.synchronize_gradients(tt_model.parameters())
+
+                    if _dbg:
+                        print(
+                            f"[grpo] step {num_steps + 1} grad check: {_debug_grad_stats(tt_model, dp_composer)}",
+                            flush=True,
+                        )
 
                     for cb in self.callbacks:
                         cb.on_before_optimizer_step(self)

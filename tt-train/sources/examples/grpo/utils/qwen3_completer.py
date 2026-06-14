@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
 
@@ -37,8 +38,15 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 from ttml.trainers.grpo_trainer import GRPOCompleter
 from .qwen3_support import build_mesh, load_weights_from_hf
+from .qwen3_kv_cache import Qwen3KVCache
 
 TILE_SIZE = 32
+
+# Chunked async readback during decode: instead of a blocking device->host sync
+# every token, sampled token columns are read back non-blocking every CHUNK
+# steps for stop-token detection. The check thus lags compute by CHUNK steps,
+# which is the cost of keeping the device pipeline full.
+CHUNK = 32
 
 
 @dataclass
@@ -66,6 +74,18 @@ def deallocate_tensors(tensors: Any) -> None:
             ttnn.deallocate(t.get_value(), force=True)
         elif isinstance(t, ttnn.Tensor):
             ttnn.deallocate(t, force=True)
+
+
+def _async_read_to_host(tensors: List[Any], mesh_device: Any) -> Tuple[List[Any], Any]:
+    """Issue non-blocking d2h reads for ``tensors`` on the single command queue.
+
+    Returns ``(host_tensors, event)``. The caller must ``event_synchronize(event)``
+    before consuming ``host_tensors``; deallocating the source ``tensors`` before
+    then races with the in-flight DMA.
+    """
+    hosts = [t.cpu(blocking=False) for t in tensors]
+    done = ttnn.record_event(mesh_device=mesh_device, cq_id=0)
+    return hosts, done
 
 
 class Qwen3GRPOCompleter(GRPOCompleter):
@@ -121,7 +141,18 @@ class Qwen3GRPOCompleter(GRPOCompleter):
 
         max_seq_len = int(getattr(transformer_config, "max_sequence_length", 2048) or 2048)
         hf_config = AutoConfig.from_pretrained(model_source, trust_remote_code=True)
-        qwen_config = create_qwen3_config_from_hf(hf_config, max_seq_len, runner_type=RunnerType.Default)
+        # MemoryEfficient = gradient checkpointing: per-block activations are
+        # recomputed in the backward pass instead of being retained, which keeps
+        # the training forward (compute_nlog_probs) within DRAM at large
+        # micro-batch / sequence lengths. Matches the Llama GRPO path, which uses
+        # memory_efficient. Set GRPO_QWEN_RUNNER=default to opt back into the
+        # retain-activations runner (faster backward, much higher peak memory).
+        runner_type = (
+            RunnerType.Default
+            if os.environ.get("GRPO_QWEN_RUNNER", "memory_efficient").lower() == "default"
+            else RunnerType.MemoryEfficient
+        )
+        qwen_config = create_qwen3_config_from_hf(hf_config, max_seq_len, runner_type=runner_type)
         tie = bool(getattr(hf_config, "tie_word_embeddings", False))
 
         logging.info(
@@ -199,7 +230,27 @@ class Qwen3GRPOCompleter(GRPOCompleter):
     # ------------------------------------------------------------------
 
     def _causal_mask(self, seq_len: int) -> ttml.autograd.Tensor:
+        """Square broadcast causal mask ``[1, 1, seq_len, seq_len]`` (1 = attend).
+
+        Broadcast over batch/heads so the prefill (``q==k``) hits the fused SDPA
+        kernel. Prompts are left-aligned (right-padded) and the per-row prediction
+        position is read at ``len_b - 1``, so plain causal masking suffices --
+        right-pad columns are after each row's last real token and are excluded by
+        causality. This mirrors the validated examples/qwen3/generate.py path.
+        """
         mask = np.tril(np.ones((1, 1, seq_len, seq_len), dtype=np.float32))
+        return ttml.autograd.Tensor.from_numpy(mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)
+
+    def _decode_causal_mask(self, cur_pos: int, width: int) -> ttml.autograd.Tensor:
+        """Single-query decode mask ``[1, 1, 1, width]`` (broadcast over batch).
+
+        The new query at absolute position ``cur_pos`` attends to cache columns
+        ``[0, cur_pos]`` (causal). Mirrors ``KVCache.get_attn_mask`` in
+        examples/qwen3/utils/kv_cache.py (a row of the full causal mask).
+        """
+        mask = np.zeros((1, 1, 1, width), dtype=np.float32)
+        hi = min(cur_pos, width - 1)
+        mask[0, 0, 0, : hi + 1] = 1.0
         return ttml.autograd.Tensor.from_numpy(mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)
 
     def _tokens_to_tensor(self, tokens_np: np.ndarray, B: int) -> ttml.autograd.Tensor:
@@ -228,70 +279,166 @@ class Qwen3GRPOCompleter(GRPOCompleter):
     # ------------------------------------------------------------------
 
     def generate(self, prompts: List[List[int]]) -> List[List[int]]:
+        """KV-cache generation following the validated examples/qwen3/generate.py
+        recipe: left-ALIGNED (right-padded) prompts, a plain broadcast causal
+        mask (so prefill uses the fused SDPA), and a per-row prediction position
+        (``len_b - 1``). Prefill once, then decode one token per step against the
+        shared KV cache. Decode keeps the speed wins (device-resident token feed +
+        chunked async stop readback) but uses the same plain broadcast masks.
+        """
         ctx = self._ctx
         G = ctx.completions_per_prompt
         rows: List[List[int]] = [list(p) for p in prompts for _ in range(G)]
         B = len(rows)
         assert B % self._num_devices == 0, f"batch {B} must be divisible by num_devices {self._num_devices}"
 
-        max_prompt_len = max(len(r) for r in rows)
-        tokens_to_complete = min(ctx.max_tokens_to_complete, self._max_seq_len - max_prompt_len)
+        lengths = [len(r) for r in rows]
+        max_prompt_len = max(lengths)
+        # Tile-aligned prompt window; prompts are left-aligned within it (real
+        # tokens at [0, len_b), pad after). Per-row prediction at len_b - 1.
+        Np = _round_up(max_prompt_len)
+        pred_pos = [length - 1 for length in lengths]
+
+        tokens_to_complete = min(ctx.max_tokens_to_complete, self._max_seq_len - Np)
         tokens_to_complete = max(tokens_to_complete, 0)
-        horizon = _round_up(min(max_prompt_len + tokens_to_complete, self._max_seq_len))
 
         stop_ids = self._get_stop_ids()
-        causal_mask = self._causal_mask(horizon)
-
-        generated: List[List[int]] = [[] for _ in range(B)]
-        done = [False] * B
 
         _dbg = os.environ.get("GRPO_QWEN_DEBUG")
         if _dbg:
             print(
-                f"[qwen3] generate B={B} prompts={len(prompts)} horizon={horizon} "
-                f"tokens_to_complete={tokens_to_complete}",
+                f"[qwen3] generate B={B} prompts={len(prompts)} Np={Np} " f"tokens_to_complete={tokens_to_complete}",
                 flush=True,
             )
+            # Decode prompt[0] to confirm the chat-templated input is sane (not
+            # itself garbage) -- rules the prompt in/out as a gibberish source.
+            try:
+                preview = self._ctx._tokenizer.decode(rows[0], skip_special_tokens=False)
+                print(f"[qwen3] prompt[0] ({len(rows[0])} toks) = {preview[:300]!r}", flush=True)
+            except Exception:  # noqa: BLE001
+                pass
+
+        if tokens_to_complete <= 0:
+            return [[] for _ in range(B)]
+
+        # Fixed cache length (model max) keeps the decode cache / mask / SDPA
+        # shapes constant across GRPO steps (no per-step kernel recompilation).
+        # Freed after each generate(); generation is no_grad + memory-efficient,
+        # so the full-size allocation only coexists with generation activations.
+        cache_len = self._max_seq_len
+        kv = Qwen3KVCache(self._config.num_hidden_layers, cache_len)
+
+        B_local = B // self._num_devices
+        composer = self._dp_composer
+        mesh_device = self._mesh_device
+        stop_arr = np.fromiter(stop_ids, dtype=np.int32) if stop_ids else np.empty(0, dtype=np.int32)
+
+        # Decode token columns stay resident on device (each [B_local, 1, 1, 1]);
+        # read back to host in chunks for stop detection and once at the end. This
+        # avoids a blocking d2h sync per token.
+        generated_columns: List[Any] = []
+        chunk_columns: List[Any] = []
+        pending_hosts: List[Any] = []
+        pending_event: Any = None
+        done = np.zeros(B, dtype=bool)
+        first_tokens = np.zeros(B, dtype=np.int64)
+
+        def _columns_to_np(column_list: List[Any]) -> np.ndarray:
+            if not column_list:
+                return np.empty((B, 0), dtype=np.int32)
+            arr = np.empty((B, len(column_list)), dtype=np.int32)
+            for j, column in enumerate(column_list):
+                arr[:, j] = column.to_numpy(mesh_composer=composer).reshape(B)
+            return arr
 
         self._model.eval()
-        with no_grad():
-            for _ in range(tokens_to_complete):
-                tokens_np = np.full((B, horizon), ctx._pad_token, dtype=np.uint32)
-                pred_pos = [0] * B
+        try:
+            with no_grad():
+                # --- Prefill: left-aligned prompt, plain causal mask (fused
+                #     SDPA), sample each row at its own last position len_b - 1. ---
+                prompt_np = np.full((B, Np), ctx._pad_token, dtype=np.uint32)
                 for b in range(B):
                     seq = rows[b]
-                    tokens_np[b, : len(seq)] = np.asarray(seq, dtype=np.uint32)
-                    pred_pos[b] = len(seq) - 1
+                    prompt_np[b, : len(seq)] = np.asarray(seq, dtype=np.uint32)
 
-                input_tensor = self._tokens_to_tensor(tokens_np, B)
-                logits = self._model(input_tensor, causal_mask)
+                input_tensor = self._tokens_to_tensor(prompt_np, B)
+                prefill_mask = self._causal_mask(Np)
+                logits = self._model(input_tensor, prefill_mask, past_key_values=kv)
 
                 seed = int(np.random.randint(low=1, high=int(1e7)))
                 sampled = ttml.ops.sample.sample_op(logits, ctx.temperature, seed, None)
-                sampled_host = ttnn.to_torch(sampled.get_value(), mesh_composer=self._dp_composer)
-                sampled_np = sampled_host.reshape(B, 1, horizon, 1).to(int).numpy()
-
-                deallocate_tensors([input_tensor, logits, sampled])
-
+                # Per-row prediction position: read the whole sampled column once
+                # on host and pick row b's token at pred_pos[b].
+                sampled_host = ttnn.to_torch(sampled.get_value(), mesh_composer=composer)
+                sampled_host = sampled_host.reshape(B, 1, Np, 1).to(int).numpy()
                 for b in range(B):
-                    if done[b]:
-                        continue
-                    tok = int(sampled_np[b, 0, pred_pos[b], 0])
-                    generated[b].append(tok)
-                    rows[b].append(tok)
+                    tok = int(sampled_host[b, 0, pred_pos[b], 0])
+                    first_tokens[b] = tok
                     if tok in stop_ids:
                         done[b] = True
-
+                deallocate_tensors([input_tensor, prefill_mask, logits, sampled])
                 ttml.autograd.AutoContext.get_instance().reset_graph()
-                if all(done):
-                    break
 
-        deallocate_tensors(causal_mask)
+                # --- Decode: feed one token per step. The first decode input is
+                #     the prefill token (uploaded once); thereafter the sampled
+                #     token is reused straight from device. ---
+                last_input = self._tokens_to_tensor(first_tokens.reshape(B, 1).astype(np.uint32), B)
+                decode_t0 = time.perf_counter()
+                for i in range(tokens_to_complete - 1):
+                    if done.all():
+                        break
 
-        # Trim trailing stop token(s).
+                    cur_pos = kv.get_seq_length()
+                    decode_mask = self._decode_causal_mask(cur_pos, cache_len)
+                    logits = self._model(last_input, decode_mask, past_key_values=kv)
+
+                    seed = int(np.random.randint(low=1, high=int(1e7)))
+                    sampled = ttml.ops.sample.sample_op(logits, ctx.temperature, seed, None)
+                    # Clone so the column is independent of the deallocated sampled.
+                    last_token_column = ttnn.clone(ttnn.slice(sampled.get_value(), [0, 0, 0, 0], [B_local, 1, 1, 1]))
+                    generated_columns.append(last_token_column)
+                    chunk_columns.append(last_token_column)
+                    # Do NOT deallocate ``last_input``: after step 0 it wraps the
+                    # previous step's still-referenced column.
+                    deallocate_tensors([decode_mask, logits, sampled])
+                    last_input = ttml.autograd.Tensor(last_token_column, False)
+
+                    # Chunked async stop detection.
+                    if (i + 1) % CHUNK == 0:
+                        if pending_event is not None:
+                            ttnn.event_synchronize(mesh_event=pending_event)
+                            chunk_np = np.stack(
+                                [h.to_numpy(mesh_composer=composer).reshape(B) for h in pending_hosts],
+                                axis=1,
+                            )
+                            done |= np.isin(chunk_np, stop_arr).any(axis=1)
+                            if done.all():
+                                break
+                        pending_hosts, pending_event = _async_read_to_host(chunk_columns, mesh_device)
+                        chunk_columns = []
+
+                        if _dbg:
+                            n_done = i + 1
+                            elapsed = time.perf_counter() - decode_t0
+                            rate = n_done / elapsed if elapsed > 0 else 0.0
+                            print(
+                                f"[qwen3] decode {n_done}/{tokens_to_complete - 1} "
+                                f"cache_pos={kv.get_seq_length()} done={int(done.sum())}/{B} "
+                                f"{rate:.1f} tok/s ({elapsed:.0f}s)",
+                                flush=True,
+                            )
+
+                decode_np = _columns_to_np(generated_columns)
+        finally:
+            # Free the K/V DRAM and token columns before the trainer's next forward.
+            deallocate_tensors(generated_columns)
+            kv.clear()
+            ttml.autograd.AutoContext.get_instance().reset_graph()
+
+        # Assemble [first token + decode tokens] per row, trim at first stop.
         completions: List[List[int]] = []
         for b in range(B):
-            seq = generated[b]
+            seq = [int(first_tokens[b])] + [int(t) for t in decode_np[b]]
             cut = len(seq)
             for j, tok in enumerate(seq):
                 if tok in stop_ids:

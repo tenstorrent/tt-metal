@@ -184,7 +184,12 @@ def load_weights_from_hf(ttml_model, hf_state_dict: dict, config, tie_word_embed
     mapping, transforms = build_weight_mapping_single(config, root_prefix, tie_word_embeddings)
     ttml_shapes = {name: list(ttml_params[name].shape()) for name in ttml_params}
 
-    def _prepare_and_transfer(hf_name, ttml_name):
+    def _prepare(hf_name, ttml_name):
+        # CPU-only prep (float cast, permutation, padding). The device transfer
+        # (torch_to_ttml -> ttnn.to_device/tilize) is done serially in the main
+        # loop below: running those device ops concurrently across worker threads
+        # races on the program-cache binary commit (TT_FATAL "Expected Program
+        # Binaries to be committed to DRAM").
         if hf_name not in hf_state_dict or ttml_name not in ttml_shapes:
             return None
 
@@ -217,22 +222,21 @@ def load_weights_from_hf(ttml_model, hf_state_dict: dict, config, tie_word_embed
                 weight = padded
             weight = weight.unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
-        return torch_to_ttml(weight)
+        return weight
 
     items = list(mapping.items())
     loaded = 0
     skipped: List[str] = []
 
     with ThreadPoolExecutor(max_workers=4) as pool:
-        futures = [
-            (hf_name, ttml_name, pool.submit(_prepare_and_transfer, hf_name, ttml_name)) for hf_name, ttml_name in items
-        ]
+        futures = [(hf_name, ttml_name, pool.submit(_prepare, hf_name, ttml_name)) for hf_name, ttml_name in items]
         for hf_name, ttml_name, future in futures:
-            new_tensor = future.result()
-            if new_tensor is None:
+            weight = future.result()
+            if weight is None:
                 skipped.append(hf_name)
                 continue
-            ttml_params[ttml_name].assign(new_tensor)
+            # Device transfer runs serially in the main thread (see _prepare).
+            ttml_params[ttml_name].assign(torch_to_ttml(weight))
             loaded += 1
 
     print(f"  Qwen3 weight loading: {loaded} loaded, {len(skipped)} skipped")

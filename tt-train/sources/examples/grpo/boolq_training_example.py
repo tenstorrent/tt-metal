@@ -18,6 +18,11 @@ from utils.llama_completer import LlamaGRPOCompleter
 from utils.qwen3_completer import Qwen3CompletionCtx
 from utils.qwen3_completer import Qwen3GRPOCompleter
 
+import random
+import numpy as np
+import torch
+
+
 try:
     import wandb
 
@@ -74,11 +79,37 @@ class GRPOMonitor(TrainerCallback):
 
 def boolq_reward(completions, answer, **kwargs):
     rewards = []
+    correct_flags = []
+    brevities = []
+    char_lens = []
     for text, ground_truth in zip(completions, answer):
         clean = text.strip().lower()
-        accuracy = 2.0 if clean.startswith(ground_truth.lower()) else -1.0
+        correct = clean.startswith(ground_truth.lower())
+        accuracy = 2.0 if correct else -1.0
         brevity = -0.1 * (len(text) / 20) ** 2
         rewards.append(accuracy + brevity)
+        correct_flags.append(1.0 if correct else 0.0)
+        brevities.append(brevity)
+        char_lens.append(len(text))
+
+    # Decompose what GRPO is actually optimizing: task correctness (frac_correct
+    # -- THE metric that says the model is learning the task) vs verbosity
+    # (mean_brevity / mean_chars). frac_correct rising over steps == real learning,
+    # regardless of whether token length drops.
+    n = max(len(rewards), 1)
+    frac_correct = sum(correct_flags) / n
+    print(
+        f"[reward] frac_correct={frac_correct:.3f} "
+        f"mean_brevity={sum(brevities) / n:.2f} mean_chars={sum(char_lens) / n:.1f} "
+        f"mean_reward={sum(rewards) / n:.2f}",
+        flush=True,
+    )
+    # One decoded sample so completion quality/coherence is visible. Gated to
+    # avoid log spam when not debugging.
+    if os.environ.get("GRPO_QWEN_DEBUG") and completions:
+        preview = completions[0].strip().replace("\n", " ")[:200]
+        print(f"[reward] sample gt={answer[0]!r} completion={preview!r}", flush=True)
+
     return rewards
 
 
@@ -141,6 +172,11 @@ if __name__ == "__main__":
         help="Max sequence length for the qwen3 path (bounds the generation horizon).",
     )
     args = parser.parse_args()
+
+    SEED = 42
+    random.seed(SEED)
+    np.random.seed(SEED)
+    torch.manual_seed(SEED)
 
     is_qwen3 = args.model == "qwen3"
 
