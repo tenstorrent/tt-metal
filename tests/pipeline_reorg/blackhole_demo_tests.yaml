@@ -104,6 +104,21 @@
   team: models
   model-name: devstral-small-2-24b
 
+- name: devstral-small-2-24b vision PCC
+  cmd: |
+    set -e
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    export HF_MODEL=mistralai/Devstral-Small-2-24B-Instruct-2512
+    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/mistralai--Devstral-Small-2-24B-Instruct-2512
+    export MESH_DEVICE=P150x4
+    pytest --timeout 1200 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_tower.py models/tt_transformers/tests/multimodal/mistral_24b/test_vision_model.py
+  skus:
+    bh_quietbox_2:
+      timeout: 15
+  owner_id: U09SQ3SP5HV # Moritz Thüning (@moritztng), maintainer of this model
+  team: models
+  model-name: devstral-small-2-24b
+
 # ─── Mochi ──────────────────────────────────────────────────────────────────
 
 - name: Mochi pipeline performance
