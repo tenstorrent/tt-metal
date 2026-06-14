@@ -20,9 +20,26 @@ from ...utils.tensor import bf16_tensor
 from ...utils.video import export_video_audio
 from .pipeline_ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, LTXPipeline, LTXTransformerState, latent_grid
 
-# Distilled sigma schedules for the two stages.
-DISTILLED_SIGMA_VALUES = [1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0]
-STAGE_2_DISTILLED_SIGMA_VALUES = [0.909375, 0.725, 0.421875, 0.0]
+# Distilled sigma schedules for the two stages. The defaults are the shipped 8-step (stage 1)
+# and 3-step (stage 2) schedules. LTX_S1_SIGMAS / LTX_S2_SIGMAS override with a comma-separated
+# list to A/B fewer-step schedules (L2 step cut). Unset = byte-identical to the shipped baseline.
+_DEFAULT_S1_SIGMAS = [1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0]
+_DEFAULT_S2_SIGMAS = [0.909375, 0.725, 0.421875, 0.0]
+
+
+def _sigma_override(env_name: str, default: list[float]) -> list[float]:
+    raw = os.environ.get(env_name, "").strip()
+    if not raw:
+        return list(default)
+    vals = [float(x) for x in raw.split(",") if x.strip() != ""]
+    assert len(vals) >= 2, f"{env_name} needs >=2 sigmas (got {vals})"
+    assert vals[-1] == 0.0, f"{env_name} must end at 0.0 (got {vals[-1]})"
+    assert all(a > b for a, b in zip(vals, vals[1:])), f"{env_name} must be strictly decreasing: {vals}"
+    return vals
+
+
+DISTILLED_SIGMA_VALUES = _sigma_override("LTX_S1_SIGMAS", _DEFAULT_S1_SIGMAS)
+STAGE_2_DISTILLED_SIGMA_VALUES = _sigma_override("LTX_S2_SIGMAS", _DEFAULT_S2_SIGMAS)
 
 
 class LTXDistilledPipeline(LTXPipeline):
