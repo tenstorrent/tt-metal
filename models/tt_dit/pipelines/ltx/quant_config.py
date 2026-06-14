@@ -169,28 +169,18 @@ def _quantize_linear_weights(linear, lc: LinearQuantConfig) -> None:
 # ---------------------------------------------------------------------------
 
 
-def apply_quant_config(model, config: QuantConfig) -> None:
-    """Apply quantization config to an LTXTransformerModel.
+def apply_quant_config_to_block(block, config: QuantConfig, arch, has_audio: bool) -> None:
+    """Quantize a single ``LTXTransformerBlock`` in place (weights + compute configs).
 
-    Safe whether or not weights are loaded: weight typecasts no-op when ``_data is None``,
-    and the compute-config attributes are always (re)set. With ``dynamic_load=True`` the
-    pipeline evicts/reloads transformer weights, so this must run again after each reload
-    (see ``set_quant_config``).
+    Factored out so the transformer-block PCC test can apply the exact same quant path the
+    pipeline uses against the diffusers torch oracle. ``arch`` is the device arch enum.
 
-    LTX attribute mapping (per block):
-    - Self-attn QKV / out:  block.attn1.to_qkv, block.attn1.to_out
-    - Self-attn matmul fidelity:  block.attn1.mm_compute_kernel_config
+    Per-block attribute mapping:
+    - Self-attn QKV / out:  block.attn1.to_qkv, block.attn1.to_out (mm/sdpa compute on attn1)
     - Cross-attn Q / KV / out:  block.attn2.to_q, block.attn2.to_kv, block.attn2.to_out
-    - Cross-attn matmul fidelity:  block.attn2.mm_compute_kernel_config
     - FFN:  block.ffn.ff1, block.ffn.ff2, block.ff_compute_kernel_config
-    - Ring SDPA fidelity:  block.attn1.sdpa_compute_kernel_config
     Audio block linears (audio_attn1/2, audio_ff, a2v/v2a cross) mirror the video ones.
     """
-    arch = model.mesh_device.arch()
-    blocks = model.transformer_blocks
-    n_blocks = len(blocks)
-    logger.info(f"Applying LTX quant config to {n_blocks} transformer blocks (has_audio={model.has_audio})")
-
     qkv_compute = _make_compute_config(arch, config.self_attn_qkv.math_fidelity, config.self_attn_qkv.fp32_dest_acc)
     cross_compute = _make_compute_config(arch, config.cross_attn_q.math_fidelity, config.cross_attn_q.fp32_dest_acc)
     ffn_compute = _make_compute_config(arch, config.ffn_ff1.math_fidelity, config.ffn_ff1.fp32_dest_acc)
@@ -219,25 +209,40 @@ def apply_quant_config(model, config: QuantConfig) -> None:
         _quantize_linear_weights(attn.to_out, config.cross_attn_out)
         attn.mm_compute_kernel_config = cross_compute
 
-    for block in blocks:
-        _quant_self_attn(block.attn1)
-        _quant_cross_attn(block.attn2)
-        _quantize_linear_weights(block.ffn.ff1, config.ffn_ff1)
-        _quantize_linear_weights(block.ffn.ff2, config.ffn_ff2)
-        block.ff_compute_kernel_config = ffn_compute
+    _quant_self_attn(block.attn1)
+    _quant_cross_attn(block.attn2)
+    _quantize_linear_weights(block.ffn.ff1, config.ffn_ff1)
+    _quantize_linear_weights(block.ffn.ff2, config.ffn_ff2)
+    block.ff_compute_kernel_config = ffn_compute
 
-        if model.has_audio:
-            _quant_self_attn(getattr(block, "audio_attn1", None))
-            _quant_cross_attn(getattr(block, "audio_attn2", None))
-            # A2V / V2A cross-attn use a separate (non-fused) addcmul on their outputs, so their
-            # to_out could be bf8; keep them on cross_attn_out (bf16 carve-out) conservatively —
-            # audio is already optimized and these are small relative to the video GEMMs.
-            _quant_cross_attn(getattr(block, "audio_to_video_attn", None))
-            _quant_cross_attn(getattr(block, "video_to_audio_attn", None))
-            audio_ff = getattr(block, "audio_ff", None)
-            if audio_ff is not None:
-                _quantize_linear_weights(audio_ff.ff1, config.ffn_ff1)
-                _quantize_linear_weights(audio_ff.ff2, config.ffn_ff2)
+    if has_audio:
+        _quant_self_attn(getattr(block, "audio_attn1", None))
+        _quant_cross_attn(getattr(block, "audio_attn2", None))
+        # A2V / V2A cross-attn use a separate (non-fused) addcmul on their outputs, so their
+        # to_out could be bf8; keep them on cross_attn_out (bf16 carve-out) conservatively —
+        # audio is already optimized and these are small relative to the video GEMMs.
+        _quant_cross_attn(getattr(block, "audio_to_video_attn", None))
+        _quant_cross_attn(getattr(block, "video_to_audio_attn", None))
+        audio_ff = getattr(block, "audio_ff", None)
+        if audio_ff is not None:
+            _quantize_linear_weights(audio_ff.ff1, config.ffn_ff1)
+            _quantize_linear_weights(audio_ff.ff2, config.ffn_ff2)
+
+
+def apply_quant_config(model, config: QuantConfig) -> None:
+    """Apply quantization config to an LTXTransformerModel.
+
+    Safe whether or not weights are loaded: weight typecasts no-op when ``_data is None``,
+    and the compute-config attributes are always (re)set. With ``dynamic_load=True`` the
+    pipeline evicts/reloads transformer weights, so this must run again after each reload
+    (see ``set_quant_config``).
+    """
+    arch = model.mesh_device.arch()
+    blocks = model.transformer_blocks
+    logger.info(f"Applying LTX quant config to {len(blocks)} transformer blocks (has_audio={model.has_audio})")
+
+    for block in blocks:
+        apply_quant_config_to_block(block, config, arch, model.has_audio)
 
     weight_dtypes = {
         config.self_attn_qkv.weight_dtype,
