@@ -5,7 +5,7 @@
   "device": "bh_galaxy",
   "arch_name": "blackhole",
   "started_at": "2026-06-14T11:31:00Z",
-  "updated_at": "2026-06-14T11:51:59Z",
+  "updated_at": "2026-06-14T11:56:39Z",
   "components": [
     {
       "name": "rms_norm",
@@ -166,8 +166,14 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "pcc": 0.9999999999999959,
+        "artifacts": [
+          "reference/functional.py",
+          "reference/golden/vision_rope_3d.pt"
+        ],
+        "notes": "3D rope head_dim80, 78 rotated(3x26)+2 passthrough, band [T|H|W|T|H|W], smerge2 coords, NeoX half-split -- TT-LANG SPEC"
       },
       "ttnn": {
         "status": "pending",
@@ -197,8 +203,14 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "pcc": 0.9999999999999991,
+        "artifacts": [
+          "reference/functional.py",
+          "reference/golden/patch_embedding.pt"
+        ],
+        "notes": "Conv3d [1280,3,2,14,14] kernel=stride no bias; ==linear on flat patch"
       },
       "ttnn": {
         "status": "pending",
@@ -230,8 +242,14 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "pcc": 0.9999999999999989,
+        "artifacts": [
+          "reference/functional.py",
+          "reference/golden/qk_norm.pt"
+        ],
+        "notes": "per-head Gemma RMS weight[128], pre-rope, reuses rms_norm_forward"
       },
       "ttnn": {
         "status": "pending",
@@ -265,8 +283,14 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "pcc": 1.0000114440917969,
+        "artifacts": [
+          "reference/functional.py",
+          "reference/golden/gqa_attention.pt"
+        ],
+        "notes": "qkv->view->qknorm->rope(partial64)->repeat_kv4->64->SDPA causal 1/sqrt128->o_proj; q[8192,6144] kv[512,6144] o[6144,8192]"
       },
       "ttnn": {
         "status": "pending",
@@ -977,6 +1001,12 @@
       "tick": 2,
       "ts": "2026-06-14T11:51:59Z",
       "action": "reference[rms_norm,embedding,rope,vision_layernorm]",
+      "result": "ok"
+    },
+    {
+      "tick": 3,
+      "ts": "2026-06-14T11:56:39Z",
+      "action": "reference[vision_rope_3d,patch_embedding,qk_norm,gqa_attention]",
       "result": "ok"
     }
   ],

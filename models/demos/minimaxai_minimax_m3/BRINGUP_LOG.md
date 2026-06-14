@@ -4,7 +4,7 @@
 **Slug:** `minimaxai_minimax_m3`
 **Target Device:** bh_galaxy (blackhole)
 **Started:** 2026-06-14T11:31:00Z
-**Updated:** 2026-06-14T11:51:59Z
+**Updated:** 2026-06-14T11:56:39Z
 
 ## Block Status
 
@@ -30,22 +30,22 @@
 | rope | debug | n/a | — | 0 |  |
 | rope | optimization | pending | — | 0 |  |
 | rope | real_weights | pending | — | 0 |  |
-| vision_rope_3d | reference | pending | — | 0 |  |
+| vision_rope_3d | reference | done | 1.000000 | 0 | 3D rope head_dim80, 78 rotated(3x26)+2 passthrough, band [T\|H\|W\|T\|H\|W], smerge2 coords, NeoX half-split -- TT-LANG SPEC |
 | vision_rope_3d | ttnn | pending | — | 0 |  |
 | vision_rope_3d | debug | n/a | — | 0 |  |
 | vision_rope_3d | optimization | pending | — | 0 |  |
 | vision_rope_3d | real_weights | pending | — | 0 |  |
-| patch_embedding | reference | pending | — | 0 |  |
+| patch_embedding | reference | done | 1.000000 | 0 | Conv3d [1280,3,2,14,14] kernel=stride no bias; ==linear on flat patch |
 | patch_embedding | ttnn | pending | — | 0 |  |
 | patch_embedding | debug | n/a | — | 0 |  |
 | patch_embedding | optimization | pending | — | 0 |  |
 | patch_embedding | real_weights | pending | — | 0 |  |
-| qk_norm | reference | pending | — | 0 |  |
+| qk_norm | reference | done | 1.000000 | 0 | per-head Gemma RMS weight[128], pre-rope, reuses rms_norm_forward |
 | qk_norm | ttnn | pending | — | 0 |  |
 | qk_norm | debug | n/a | — | 0 |  |
 | qk_norm | optimization | pending | — | 0 |  |
 | qk_norm | real_weights | pending | — | 0 |  |
-| gqa_attention | reference | pending | — | 0 |  |
+| gqa_attention | reference | done | 1.000011 | 0 | qkv->view->qknorm->rope(partial64)->repeat_kv4->64->SDPA causal 1/sqrt128->o_proj; q[8192,6144] kv[512,6144] o[6144,8192] |
 | gqa_attention | ttnn | pending | — | 0 |  |
 | gqa_attention | debug | n/a | — | 0 |  |
 | gqa_attention | optimization | pending | — | 0 |  |
@@ -143,6 +143,7 @@
 
 - tick 1 (2026-06-14T11:38:24Z): architecture[all] — ok
 - tick 2 (2026-06-14T11:51:59Z): reference[rms_norm,embedding,rope,vision_layernorm] — ok
+- tick 3 (2026-06-14T11:56:39Z): reference[vision_rope_3d,patch_embedding,qk_norm,gqa_attention] — ok
 
 ## Host-Resident Exceptions
 
