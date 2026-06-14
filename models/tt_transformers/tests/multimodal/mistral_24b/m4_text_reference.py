@@ -21,6 +21,45 @@ from models.tt_transformers.tt.load_checkpoints import dequantize_fp8_state_dict
 _LM_PREFIX = "language_model."
 
 
+def load_m4_weights(ckpt_dir, n_layers):
+    """Load TT-side text weights DIRECTLY from the checkpoint (no HF model build/forward).
+
+    Returns a state_dict with standalone keys (model.layers.N.*, model.embed_tokens.weight,
+    model.norm.weight, lm_head.weight), fp8-dequantized to bf16. Fast — just the filtered
+    safetensors read + dequant — so the TT test never waits on the ~40-min HF reference forward.
+    """
+    prefixes = [
+        f"{_LM_PREFIX}model.embed_tokens.",
+        f"{_LM_PREFIX}model.norm.",
+        f"{_LM_PREFIX}lm_head.",
+    ] + [f"{_LM_PREFIX}model.layers.{i}." for i in range(n_layers)]
+    raw = load_hf_state_dict_filtered(ckpt_dir, prefixes)
+    raw = {k[len(_LM_PREFIX) :]: v for k, v in raw.items()}
+    return dequantize_fp8_state_dict(raw)
+
+
+def get_cached_golden(ckpt_dir, n_layers, seed, seq_len, cache_dir="/tmp"):
+    """Golden activations/logits, cached to disk — the HF reference (load + CPU forward) is built
+    ONCE per (n_layers, seed, seq_len) and reused. Avoids paying the ~40-min 36-layer reference on
+    every TT-side iteration. Bump CACHE_VER if capture_golden's contents change."""
+    import os
+
+    CACHE_VER = 1
+    path = os.path.join(cache_dir, f"m4_golden_v{CACHE_VER}_{n_layers}L_s{seed}_q{seq_len}.pt")
+    if os.path.exists(path):
+        logger.info(f"golden cache HIT: {path}")
+        return torch.load(path)
+    logger.info(f"golden cache MISS: building {n_layers}-layer reference (slow, one-time)")
+    model, cfg, _ = load_m4_text_reference(ckpt_dir, n_layers=n_layers)
+    torch.manual_seed(seed)
+    ids = torch.randint(0, cfg.vocab_size, (1, seq_len))
+    g = capture_golden(model, ids)
+    g["input_ids"] = ids
+    torch.save(g, path)
+    logger.info(f"golden cached -> {path}")
+    return g
+
+
 def load_m4_text_reference(ckpt_dir, n_layers=1, dtype=torch.bfloat16):
     """Return an n_layer Mistral4ForCausalLM with real weights for layers [0, n_layers).
 
@@ -41,7 +80,16 @@ def load_m4_text_reference(ckpt_dir, n_layers=1, dtype=torch.bfloat16):
     sd = dequantize_fp8_state_dict(raw)
     logger.info(f"m4 text reference: {len(sd)} tensors after dequant (n_layers={n_layers})")
 
-    model = Mistral4ForCausalLM(text_cfg).to(dtype).eval()
+    # Construct in bf16 (default fp32 would allocate ~476 GB for the 36-layer reference and is
+    # slow); we overwrite params with the loaded bf16 weights anyway and feed the reference's own
+    # cos/sin to the TT side, so this is self-consistent.
+    _prev = torch.get_default_dtype()
+    torch.set_default_dtype(dtype)
+    try:
+        model = Mistral4ForCausalLM(text_cfg)
+    finally:
+        torch.set_default_dtype(_prev)
+    model = model.eval()
     missing, unexpected = model.load_state_dict(sd, strict=False)
     # `missing` is expected to be empty for the loaded layers; tied lm_head may show up
     real_missing = [m for m in missing if "rotary_emb" not in m]

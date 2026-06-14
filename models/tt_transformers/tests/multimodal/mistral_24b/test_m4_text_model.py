@@ -16,12 +16,13 @@ from transformers import AutoConfig
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.tt_transformers.tests.multimodal.mistral_24b.m4_text_reference import capture_golden, load_m4_text_reference
+from models.tt_transformers.tests.multimodal.mistral_24b.m4_text_reference import get_cached_golden, load_m4_weights
 from models.tt_transformers.tt.multimodal.mistral_24b.mistral4_text import TtMistral4TextModel
 
 N_LAYERS = int(os.environ.get("M4_N_LAYERS", "2"))
 SHARD = os.environ.get("M4_SHARD", "0") == "1"
-EXPERT_DTYPE = {"bf16": None, "bfp8": "bfp8_b"}.get(os.environ.get("M4_EXPERT_DTYPE", "bf16"))
+EXPERT_DTYPE = {"bf16": "bfloat16", "bfp8": "bfloat8_b"}[os.environ.get("M4_EXPERT_DTYPE", "bf16")]
+SEED, SEQ = 0, 32
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
@@ -35,21 +36,21 @@ def test_m4_text_model_logits(mesh_device, reset_seeds):
     ckpt = os.environ["HF_MODEL"]
     cfg = AutoConfig.from_pretrained(ckpt).text_config
 
-    model, _, _ = load_m4_text_reference(ckpt, n_layers=N_LAYERS)
-    torch.manual_seed(0)
-    ids = torch.randint(0, cfg.vocab_size, (1, 32))
-    g = capture_golden(model, ids)
-    sd = {k: v for k, v in model.named_parameters()}  # model.* + lm_head.*
+    # golden: cached HF reference (built once); weights: loaded directly from checkpoint (fast,
+    # no HF model build/forward) — decoupled so TT iterations never pay the ~40-min reference.
+    g = get_cached_golden(ckpt, N_LAYERS, SEED, SEQ)
+    sd = load_m4_weights(ckpt, N_LAYERS)
+    ids = g["input_ids"]
     B, S, rope = ids.shape[0], ids.shape[1], cfg.qk_rope_head_dim
 
-    edtype = getattr(ttnn, EXPERT_DTYPE) if EXPERT_DTYPE else ttnn.bfloat16
+    edtype = getattr(ttnn, EXPERT_DTYPE)
     tt_model = TtMistral4TextModel(
         mesh_device, sd, cfg, N_LAYERS, cfg.rms_norm_eps, shard_experts=SHARD, expert_dtype=edtype
     )
     logger.info(f"text model: N_LAYERS={N_LAYERS} shard_experts={SHARD} expert_dtype={edtype}")
 
     # embedding: host row-gather (trivial lookup) -> device
-    embed = model.model.embed_tokens.weight.detach()[ids]  # [B,S,hidden]
+    embed = sd["model.embed_tokens.weight"].detach()[ids]  # [B,S,hidden]
 
     def _from(t, shape=None):
         return ttnn.from_torch(
