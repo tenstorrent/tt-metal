@@ -24,10 +24,12 @@ disaggregation/migration — see its main.cpp / control_thread.cpp):
     send_device_map([(fabric_mesh_id, fabric_chip_id, umd_chip_id), ...])
     entries and registers each DeviceDram under its REAL FabricNodeId. The
     table's device groups therefore carry real fabric node ids — no remap.
-  * Hostnames registered as "host-0": the worker's placeholder
-    SubordinateInfo hostname for rank 0 (control_thread.cpp
-    build_local_grouping). Single-host only — multi-host needs per-host
-    hostname tagging once the worker distributes per-rank device-map slices.
+  * Fabric-node host tags: each fnid is tagged "host-<crc32(gethostname)hex>",
+    the join key the worker's build_local_grouping (control_thread.cpp) uses to
+    partition the table per rank. Multi-host: the worker does NO master->
+    subordinate device-map forwarding, so each host's representative model rank
+    delivers its host's device map directly to that host's internal A/B worker
+    queues (/ep_<pid>_{a,b}_*); the head publishes the single global table.
 
 The MigrationLayerClient python module comes from the tt-llm-engine build —
 set TT_MIGRATION_PYTHON_DIR to
@@ -369,6 +371,44 @@ def _attach_migration_client(cmd_q: str, table_q: str, resp_q: str, timeout_s: f
             time.sleep(0.25)
 
 
+def _deliver_device_map_to_local_workers(entries, attach_timeout: float = 60.0):
+    """Deliver THIS host's device map to the local endpoint's per-rank internal A+B worker
+    queues (/ep_<pid>_{a,b}_*) — the same queues run_migration_verify.sh's deliver_maps targets.
+
+    A single multi-rank endpoint has one worker rank per host (an A + B loopback pair); the model
+    publishes the table once on the master but EACH rank's device map must reach that rank's
+    workers directly (the worker does no master->subordinate devmap forwarding — main delivers
+    per-rank). We discover this host's worker queues by globbing /dev/shm, so we need no
+    orchestrator-PID / rank bookkeeping. `entries` is a list of (mesh, fnid_chip, umd_chip)
+    3-tuples (no chip-offset: the model's real fnids match the worker grouping's host partition)."""
+    import glob
+
+    deadline = time.monotonic() + attach_timeout
+    while True:
+        found = {}
+        for w in ("a", "b"):
+            cmds = sorted(
+                (f for f in glob.glob(f"/dev/shm/ep_*_{w}_cmd*") if not f.endswith(".lock")),
+                key=os.path.getmtime,
+            )
+            if cmds:
+                found[w] = "/" + os.path.basename(cmds[-1])  # /ep_<pid>_<w>_cmd<sfx>
+        if len(found) == 2:
+            break
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"[migration-hook] local endpoint internal worker queues (/ep_*_{{a,b}}_*) not found "
+                f"in /dev/shm (found {found}) — is the multi-rank migration endpoint up on this host?"
+            )
+        time.sleep(0.25)
+    for w, cmd in found.items():
+        tbl = cmd.replace(f"_{w}_cmd", f"_{w}_table", 1)
+        resp = cmd.replace(f"_{w}_cmd", f"_{w}_resp", 1)
+        client = _attach_migration_client(cmd, tbl, resp)
+        client.send_device_map(entries)
+        logger.info("[migration-hook] delivered {} device-map entries to {}", len(entries), cmd)
+
+
 def validate_kv_migration(
     pipeline,
     mesh_device,
@@ -510,84 +550,100 @@ def make_on_kv_cache_ready(
                 )
             layer_to_rank[lid] = r
 
-        # Publisher = rank 0 (the head node / first pipeline stage). It builds
-        # and sends the table even though it owns no KV — using the geometry
-        # gathered from the first KV rank — so the migration endpoint can live
-        # on the head node, co-located with stage 0's H2D/D2H sockets and the
-        # scheduler. The table content is identical to what kv_ranks[0] (the
-        # former publisher) would have produced; only the sending rank moves.
-        # The endpoint MUST run on rank 0's host (its shmem queues are local).
+        # SINGLE multi-rank endpoint across all hosts (master rank 0 on the head + one worker rank
+        # per other host). Two distinct deliveries, mirroring run_migration_verify.sh:
+        #   (a) DEVICE MAP — per rank. Each host's representative model rank delivers ITS host's
+        #       real device map straight to that host's internal A+B worker queues. The worker does
+        #       no master->subordinate devmap forwarding (main delivers per-rank), so this is how a
+        #       subordinate rank learns its fnid->chip mapping and can resolve its table split.
+        #   (b) TABLE — once. The head publishes the global table on the master's outward queue; the
+        #       master splits it by host (build_local_grouping's host_key_for partition) and forwards
+        #       each rank its slice over MPI. The outward device map is EMPTY (real maps already in
+        #       place from (a)).
         master_rank = 0
-        if my_rank != master_rank:
+        ag = ttnn.distributed_context_allgather_int
+        world = len(all_host_tags)
+
+        # (a) Per-host device-map delivery — done by the lowest-ranked model rank on each host.
+        my_tag = all_host_tags[my_rank]
+        same_host_ranks = [r for r in range(world) if all_host_tags[r] == my_tag]
+        if my_rank == min(same_host_ranks):
+            seen = set()
+            host_device_map = []
+            for r in kv_ranks:
+                if all_host_tags[r] != my_tag:
+                    continue
+                for umd, mesh, fchip in all_rank_devices[r]:
+                    key = (mesh, fchip, umd)
+                    if key not in seen:
+                        seen.add(key)
+                        host_device_map.append(key)
             logger.info(
-                "[migration-hook] rank {} done (publisher is rank {}; kv_ranks={})", my_rank, master_rank, kv_ranks
+                "[migration-hook] rank {} (host {:08x}) delivering {} device-map entries to local workers: {}",
+                my_rank,
+                my_tag,
+                len(host_device_map),
+                host_device_map,
             )
-            return
+            _deliver_device_map_to_local_workers(host_device_map)
 
-        # Author from the first KV rank's geometry (identical across layers).
-        geom = all_geom[kv_ranks[0]]
-        if geom.tokens_per_kv_tile == 0 or geom.mesh_cols == 0 or geom.per_device_seq_len == 0:
-            raise RuntimeError(
-                f"[migration-hook] publisher rank {my_rank} gathered invalid geometry from kv_rank "
-                f"{kv_ranks[0]}: {tuple(geom)} — gather/order bug"
-            )
+        # Barrier: every host's device map must be in place before the master sets the table —
+        # WORKER_READY gates on every rank's dev_map_applied_.
+        list(ag(1))
 
-        logger.info(
-            "[migration-hook] publisher rank {} building table from kv_rank {} geom={}: layers={} addrs={}",
-            my_rank,
-            kv_ranks[0],
-            tuple(geom),
-            sorted(layer_to_rank.items()),
-            {r: hex(all_addrs[r]) for r in kv_ranks},
-        )
-
-        # Derive global max_seq_len when not given: the sequence is striped
-        # across sp rows, so global = per-device seq len × sp_dim.
-        effective_max_seq = max_seq_len
-        if effective_max_seq is None:
-            from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
-
-            sp_dim = FlashMLADecode.ProgramConfig(k_chunk_size=128).sp_dim
-            effective_max_seq = geom.per_device_seq_len * sp_dim
+        # (b) Master (head) publishes the global table once, then an EMPTY outward device map.
+        if my_rank == master_rank:
+            # Author from the first KV rank's geometry (identical across layers).
+            geom = all_geom[kv_ranks[0]]
+            if geom.tokens_per_kv_tile == 0 or geom.mesh_cols == 0 or geom.per_device_seq_len == 0:
+                raise RuntimeError(
+                    f"[migration-hook] publisher rank {my_rank} gathered invalid geometry from kv_rank "
+                    f"{kv_ranks[0]}: {tuple(geom)} — gather/order bug"
+                )
             logger.info(
-                "[migration-hook] derived max_seq_len={} (per_device={} × sp_dim={})",
-                effective_max_seq,
-                geom.per_device_seq_len,
-                sp_dim,
+                "[migration-hook] publisher rank {} building table from kv_rank {} geom={}: layers={} addrs={}",
+                my_rank,
+                kv_ranks[0],
+                tuple(geom),
+                sorted(layer_to_rank.items()),
+                {r: hex(all_addrs[r]) for r in kv_ranks},
+            )
+            # Derive global max_seq_len when not given: the sequence is striped across sp rows,
+            # so global = per-device seq len × sp_dim.
+            effective_max_seq = max_seq_len
+            if effective_max_seq is None:
+                from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
+
+                sp_dim = FlashMLADecode.ProgramConfig(k_chunk_size=128).sp_dim
+                effective_max_seq = geom.per_device_seq_len * sp_dim
+                logger.info(
+                    "[migration-hook] derived max_seq_len={} (per_device={} × sp_dim={})",
+                    effective_max_seq,
+                    geom.per_device_seq_len,
+                    sp_dim,
+                )
+            table = _build_table_gathered(
+                geom,
+                layer_to_rank=layer_to_rank,
+                all_rank_devices=all_rank_devices,
+                all_addrs=all_addrs,
+                all_host_tags=all_host_tags,
+                max_seq_len=effective_max_seq,
+                num_slots=num_slots,
+            )
+            ttnn.experimental.disaggregation.export_kv_chunk_table_to_protobuf_file(table, table_path)
+            logger.info("[migration-hook] table exported to {}", table_path)
+
+            client = _attach_migration_client(cmd_queue, table_queue, resp_queue)
+            client.send_kv_chunk_table(table_path)
+            client.send_device_map([])  # real per-rank maps already delivered in (a)
+            client.wait_ready(120000)
+            logger.info(
+                "[migration-hook] migration endpoint WORKER_READY — global table + per-rank device maps in place"
             )
 
-        table = _build_table_gathered(
-            geom,
-            layer_to_rank=layer_to_rank,
-            all_rank_devices=all_rank_devices,
-            all_addrs=all_addrs,
-            all_host_tags=all_host_tags,
-            max_seq_len=effective_max_seq,
-            num_slots=num_slots,
-        )
-        ttnn.experimental.disaggregation.export_kv_chunk_table_to_protobuf_file(table, table_path)
-        logger.info("[migration-hook] table exported to {}", table_path)
-
-        # Device map: (fabric_mesh_id, fabric_chip_id, umd_physical_chip_id, host_tag)
-        # for every KV-owning rank's chips. The worker slices by host_tag and each
-        # worker rank opens only its own host's entries.
-        device_map = [
-            (mesh, fchip, umd, all_host_tags[r]) for r in kv_ranks for (umd, mesh, fchip) in all_rank_devices[r]
-        ]
-
-        for mesh, fchip, umd, tag in device_map:
-            logger.info("[migration-hook] devmap entry: mesh={} fchip={} umd={} host={:08x}", mesh, fchip, umd, tag)
-
-        client = _attach_migration_client(cmd_queue, table_queue, resp_queue)
-        client.send_kv_chunk_table(table_path)
-        client.send_device_map(device_map)
-        # WORKER_READY now gates on the worker opening every mapped UMD chip —
-        # give it well beyond the 5s binding default.
-        client.wait_ready(120000)
-        logger.info(
-            "[migration-hook] migration endpoint WORKER_READY — table + device map ({} entries) delivered",
-            len(device_map),
-        )
+        # Barrier: keep all model ranks in lockstep until the endpoint is fully ready.
+        list(ag(2))
         # Client detaches at scope exit; shmem queues persist for the scheduler.
 
     return on_kv_cache_ready
