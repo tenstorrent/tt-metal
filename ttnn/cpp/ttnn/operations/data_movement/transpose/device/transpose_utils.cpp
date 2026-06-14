@@ -129,8 +129,9 @@ std::optional<ShardSpec> adjust_shard_spec_to_shape(
     return ret;
 }
 
-// Build a sharded spec over the full compute grid (used when no input shard_spec is available
-// to scale from, e.g. interleaved input + sharded output request).
+// Build a sharded spec over the full compute grid. When a sharded input already carries an
+// orientation contract but its shard geometry can't be scaled to the output shape, preserve that
+// orientation on the fresh spec. Interleaved inputs still fall back to ROW_MAJOR.
 ShardSpec generate_transpose_shard_spec(
     const Tensor& input_tensor, const ttnn::Shape& padded_out_shape, TensorMemoryLayout memory_layout) {
     auto* device = input_tensor.device();
@@ -166,8 +167,10 @@ ShardSpec generate_transpose_shard_spec(
             tt::round_up(tt::div_up(tensor_width, static_cast<uint64_t>(grid_size.x)), tt::constants::TILE_WIDTH);
         shard_shape = {static_cast<uint32_t>(shard_height), static_cast<uint32_t>(shard_width)};
     }
+    const auto orientation =
+        input_tensor.shard_spec().has_value() ? input_tensor.shard_spec()->orientation : ShardOrientation::ROW_MAJOR;
     log_debug(tt::LogOp, "Transpose: generated shard spec over full compute grid ({} cores)", num_cores);
-    return ShardSpec(all_cores, shard_shape, ShardOrientation::ROW_MAJOR);
+    return ShardSpec(all_cores, shard_shape, orientation);
 }
 
 }  // namespace ttnn::operations::data_movement::transpose

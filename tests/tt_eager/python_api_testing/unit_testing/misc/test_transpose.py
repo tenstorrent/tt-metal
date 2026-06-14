@@ -7,7 +7,6 @@ import torch
 import numpy as np
 
 import ttnn
-
 from loguru import logger
 from models.common.utility_functions import is_blackhole, torch_random
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
@@ -1398,6 +1397,34 @@ def test_transpose_hc_mem_config(device, n, c, h, w):
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
 
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
+
+
+def test_transpose_preserves_col_major_orientation_on_fallback_generated_shard_spec(device):
+    torch.manual_seed(2005)
+    torch_input_tensor = torch.rand((1, 1, 224, 32), dtype=torch.bfloat16)
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    input_memory_config = ttnn.create_sharded_memory_config(
+        (32, 32),
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 6))}),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.COL_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
+
+    tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, input_memory_config)
+    tt_output_tensor = ttnn.transpose(tt_input_tensor, 2, 3, memory_config=output_memory_config)
+
+    output_shard_spec = tt_output_tensor.memory_config().shard_spec()
+    assert output_shard_spec is not None
+    assert output_shard_spec.orientation == ttnn.ShardOrientation.COL_MAJOR
 
 
 @pytest.mark.parametrize(["dim0", "dim1"], [(2, 3), (2, 1), (0, 1)], ids=["wh", "hc", "cn"])
