@@ -76,4 +76,33 @@ def test_m4_moe_router_and_shared(mesh_device, reset_seeds):
     p_s, m_s = comp_pcc(g["shared_out"].view(B, -1, cfg.hidden_size), _to_host(shared, mesh_device, B), pcc_required)
     logger.info(f"MoE shared_expert: {m_s}")
 
-    assert p_r and p_s, "MoE router/shared PCC below threshold"
+    # --- routed experts (dense, correctness-first) + combine ---
+    # routing weights W[T, n_experts] from router logits (host; router already PCC'd above).
+    # softmax -> top-4 -> normalize -> scatter to dense. ttnn-side routing comes in the module refactor.
+    T = g["router_logits"].view(-1, cfg.n_routed_experts).shape[0]
+    probs = g["router_logits"].view(-1, cfg.n_routed_experts).float().softmax(-1)
+    tw, ti = probs.topk(cfg.num_experts_per_tok, dim=-1)
+    tw = tw / (tw.sum(-1, keepdim=True) + 1e-20)  # routed_scaling_factor == 1.0 (no-op)
+    W = torch.zeros(T, cfg.n_routed_experts).scatter_(1, ti, tw)
+    W_tt = _from(W.view(B, T, cfg.n_routed_experts), mesh_device)
+
+    interm = cfg.moe_intermediate_size
+    gup, down = mlp.experts.gate_up_proj, mlp.experts.down_proj  # [E,2*interm,hid], [E,hid,interm]
+    acc = None
+    for e in range(cfg.n_routed_experts):
+        gu = ttnn.linear(x, _lin_w(gup[e], mesh_device))  # [B,T,2*interm]
+        gate_e = ttnn.slice(gu, [0, 0, 0], [B, T, interm])
+        up_e = ttnn.slice(gu, [0, 0, interm], [B, T, 2 * interm])
+        y = ttnn.linear(ttnn.mul(ttnn.silu(gate_e), up_e), _lin_w(down[e], mesh_device))  # [B,T,hid]
+        w_e = ttnn.slice(W_tt, [0, 0, e], [B, T, e + 1])  # [B,T,1] broadcast
+        contrib = ttnn.mul(y, w_e)
+        acc = contrib if acc is None else ttnn.add(acc, contrib)
+
+    p_e, m_e = comp_pcc(g["experts_out"].view(B, T, cfg.hidden_size), _to_host(acc, mesh_device, B), pcc_required)
+    logger.info(f"MoE experts_out: {m_e}")
+
+    moe_out = ttnn.add(acc, shared)
+    p_m, m_m = comp_pcc(g["moe_out"].view(B, T, cfg.hidden_size), _to_host(moe_out, mesh_device, B), pcc_required)
+    logger.info(f"MoE moe_in->moe_out: {m_m}")
+
+    assert p_r and p_s and p_e and p_m, "MoE PCC below threshold"
