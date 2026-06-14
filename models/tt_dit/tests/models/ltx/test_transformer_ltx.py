@@ -843,6 +843,18 @@ def test_ltx_transformer_block(
             video_padding_mask=v_pad_sp,
         )
 
+    # L1 quality gate: LTX_QUANT names a QuantConfig preset (e.g. all_bf8_lofi) to apply the
+    # exact pipeline quant path (weight typecast + compute configs) to this block, then PCC it
+    # against the bf16 diffusers oracle. Off by default — baseline runs bf16/HiFi2.
+    _quant_preset = os.environ.get("LTX_QUANT", "").strip()
+    if _quant_preset:
+        from models.tt_dit.pipelines.ltx.quant_config import QuantConfig, apply_quant_config_to_block
+
+        _factory = getattr(QuantConfig, _quant_preset, None)
+        assert callable(_factory), f"LTX_QUANT='{_quant_preset}' is not a QuantConfig preset"
+        logger.info(f"LTX_QUANT='{_quant_preset}': quantizing block for PCC gate")
+        apply_quant_config_to_block(tt_block, _factory(), mesh_device.arch(), has_audio)
+
     tt_out = tt_block(**forward_kwargs)
     if has_audio:
         tt_v, tt_a = tt_out
