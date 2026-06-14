@@ -39,7 +39,9 @@ void kernel_main() {
     }
 
 #ifndef FAST_TILIZE
+#ifndef ARCH_QUASAR
     tilize_uninit(dfb::in, dfb::out);
+#endif
 #else
     fast_tilize_uninit(dfb::in, dfb::out, per_core_block_tile_cnt);
 #endif
