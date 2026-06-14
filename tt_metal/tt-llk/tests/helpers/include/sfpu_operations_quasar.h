@@ -32,14 +32,6 @@ namespace test_utils
 using namespace ckernel;
 using namespace ckernel::sfpu;
 
-// Template-dependent `false` for the unsupported-op `static_assert` in the
-// `if constexpr` chains below. A non-dependent `static_assert(false, ...)` would
-// fire even on discarded branches, and `OPERATION != OPERATION` trips
-// -Werror=tautological-compare; depending on the template parameter defers the
-// assert to the actually-selected (unsupported) branch.
-template <auto>
-inline constexpr bool dependent_false = false;
-
 /**
  * @brief Run the per-operation init step for a Quasar unary SFPU op.
  *
@@ -124,7 +116,7 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index)
     }
     else
     {
-        static_assert(dependent_false<OPERATION>, "Unsupported Quasar unary SFPU operation");
+        LLK_ASSERT(false, "Unsupported Quasar unary SFPU operation");
     }
 }
 
