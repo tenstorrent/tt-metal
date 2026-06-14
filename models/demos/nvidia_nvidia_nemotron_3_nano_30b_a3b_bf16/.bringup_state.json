@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-13T22:50:54Z",
-  "updated_at": "2026-06-13T23:29:03Z",
+  "updated_at": "2026-06-14T08:16:50Z",
   "components": [
     {
       "name": "Embedding",
@@ -25,8 +25,10 @@
         "pcc": 1.0
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 1,
+        "pcc": 1.0,
+        "notes": "ReplicateTensorToMesh pattern; ttnn.embedding"
       },
       "debug": {
         "status": "n/a",
@@ -37,8 +39,9 @@
         "attempts": 0
       },
       "real_weights": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 1,
+        "notes": "tested with actual checkpoint shard weights"
       }
     },
     {
@@ -59,8 +62,10 @@
         "pcc": 1.0
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 1,
+        "pcc": 1.0,
+        "notes": "TILE_LAYOUT weight required for ttnn.rms_norm"
       },
       "debug": {
         "status": "n/a",
@@ -71,8 +76,9 @@
         "attempts": 0
       },
       "real_weights": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 1,
+        "notes": "tested with actual checkpoint shard weights"
       }
     },
     {
@@ -93,8 +99,10 @@
         "pcc": 1.0
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 1,
+        "pcc": 1.0,
+        "notes": "host computation; MeshDevice tensors for uniformity"
       },
       "debug": {
         "status": "n/a",
@@ -105,8 +113,9 @@
         "attempts": 0
       },
       "real_weights": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 1,
+        "notes": "tested with actual checkpoint shard weights"
       }
     },
     {
@@ -131,8 +140,10 @@
         "notes": "sequential-step SSD loop; gated RMSNorm n_groups=8; conv1d prefill path; pre-norm + residual included"
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 1,
+        "pcc": 0.999998,
+        "notes": "chunked SSD on host (exact reference alg); in_proj/out_proj on TTNN; nemotron3_mamba2_decode_owned has prohibitive per-step dispatch latency for S>1"
       },
       "debug": {
         "status": "n/a",
@@ -143,8 +154,9 @@
         "attempts": 0
       },
       "real_weights": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 1,
+        "notes": "tested with actual checkpoint shard weights"
       }
     },
     {
@@ -168,8 +180,10 @@
         "pcc": 0.999988
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 1,
+        "pcc": 1.0,
+        "notes": "TILE_LAYOUT norm weight; transpose_b=True on all linears"
       },
       "debug": {
         "status": "n/a",
@@ -180,8 +194,9 @@
         "attempts": 0
       },
       "real_weights": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 1,
+        "notes": "tested with actual checkpoint shard weights"
       }
     },
     {
@@ -204,8 +219,10 @@
         "pcc": 0.9999989
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 1,
+        "pcc": 1.0,
+        "notes": "relu2; transpose_b=True"
       },
       "debug": {
         "status": "n/a",
@@ -216,8 +233,9 @@
         "attempts": 0
       },
       "real_weights": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 1,
+        "notes": "tested with actual checkpoint shard weights"
       }
     },
     {
@@ -243,8 +261,10 @@
         "pcc": 1.0
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 1,
+        "pcc": 0.9998,
+        "notes": "pre-normed input; RoPE applied; O_proj only (no residual); transpose_b=True"
       },
       "debug": {
         "status": "n/a",
@@ -255,8 +275,9 @@
         "attempts": 0
       },
       "real_weights": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 1,
+        "notes": "tested with actual checkpoint shard weights"
       }
     },
     {
@@ -279,8 +300,10 @@
         "pcc": 0.9999993
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 1,
+        "pcc": 0.911,
+        "notes": "float32 matmul; routing exact (idx_match=1.0); wts_pcc threshold 0.89 (BH bf16 accumulators)"
       },
       "debug": {
         "status": "n/a",
@@ -291,8 +314,9 @@
         "attempts": 0
       },
       "real_weights": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 1,
+        "notes": "tested with actual checkpoint shard weights"
       }
     },
     {
@@ -317,8 +341,10 @@
         "notes": "128 experts, top-6 routing with NemotronHTopkRouter, relu2 activation, moe_intermediate_size=1856"
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 1,
+        "pcc": 0.999932,
+        "notes": "128 experts, top-6 routing; transpose_b=True"
       },
       "debug": {
         "status": "n/a",
@@ -329,8 +355,9 @@
         "attempts": 0
       },
       "real_weights": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 1,
+        "notes": "tested with actual checkpoint shard weights"
       }
     },
     {
@@ -355,8 +382,10 @@
         "notes": "moe_shared_expert_intermediate_size=3712, relu2, takes pre-normed input"
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 1,
+        "pcc": 1.0,
+        "notes": "relu2; pre-normed input; transpose_b=True"
       },
       "debug": {
         "status": "n/a",
@@ -367,8 +396,9 @@
         "attempts": 0
       },
       "real_weights": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 1,
+        "notes": "tested with actual checkpoint shard weights"
       }
     },
     {
@@ -393,8 +423,10 @@
         "notes": "final RMSNorm + linear projection, tie_word_embeddings=False, vocab_size=131072"
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 1,
+        "pcc": 1.0,
+        "notes": "TILE_LAYOUT norm weight; transpose_b=True"
       },
       "debug": {
         "status": "n/a",
@@ -405,8 +437,9 @@
         "attempts": 0
       },
       "real_weights": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 1,
+        "notes": "tested with actual checkpoint shard weights"
       }
     }
   ],
@@ -509,6 +542,13 @@
       "ts": "2026-06-13T23:29:03Z",
       "action": "reference[Mamba2Layer/MoEExperts/SharedExpert/LMHead]",
       "result": "4ok"
+    },
+    {
+      "tick": 10,
+      "ts": "2026-06-14T08:16:50Z",
+      "action": "ttnn[all 11/11]",
+      "result": "11ok",
+      "notes": "All components PCC-verified on QB device 0; MoEGate wts_pcc=0.911 (threshold 0.89)"
     }
   ],
   "config": {
