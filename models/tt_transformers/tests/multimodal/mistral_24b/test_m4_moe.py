@@ -84,6 +84,17 @@ def test_m4_moe_router_and_shared(mesh_device, reset_seeds):
     tw, ti = probs.topk(cfg.num_experts_per_tok, dim=-1)
     tw = tw / (tw.sum(-1, keepdim=True) + 1e-20)  # routed_scaling_factor == 1.0 (no-op)
     W = torch.zeros(T, cfg.n_routed_experts).scatter_(1, ti, tw)
+
+    # on-device routing (no scatter): softmax -> kth-largest threshold mask -> normalize.
+    k = cfg.num_experts_per_tok
+    probs_tt = ttnn.softmax(logits, dim=-1)
+    topk_vals = ttnn.topk(probs_tt, k, dim=-1)[0]  # descending; [B,T,k]
+    kth = ttnn.slice(topk_vals, [0, 0, k - 1], [B, topk_vals.shape[1], k])  # [B,T,1]
+    masked = ttnn.mul(probs_tt, ttnn.ge(probs_tt, kth))
+    W_dev = ttnn.div(masked, ttnn.sum(masked, dim=-1, keepdim=True))
+    p_w, m_w = comp_pcc(W.view(B, T, cfg.n_routed_experts), _to_host(W_dev, mesh_device, B), pcc_required)
+    logger.info(f"MoE on-device routing W: {m_w}")
+
     W_tt = _from(W.view(B, T, cfg.n_routed_experts), mesh_device)
 
     interm = cfg.moe_intermediate_size
@@ -105,4 +116,4 @@ def test_m4_moe_router_and_shared(mesh_device, reset_seeds):
     p_m, m_m = comp_pcc(g["moe_out"].view(B, T, cfg.hidden_size), _to_host(moe_out, mesh_device, B), pcc_required)
     logger.info(f"MoE moe_in->moe_out: {m_m}")
 
-    assert p_r and p_s and p_e and p_m, "MoE PCC below threshold"
+    assert p_r and p_s and p_e and p_m and p_w, "MoE PCC below threshold"
