@@ -78,7 +78,7 @@ std::ostream& operator<<(std::ostream& os, const GlobalSemaphore& global_semapho
 
 DeviceAddr GlobalSemaphore::address() const { return buffer_.get_buffer()->address(); }
 
-void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const {
+void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value, uint8_t cq_id) const {
     // Blocking write here to ensure that Global Semaphore reset value lands on
     // each physical device before the next program runs.
     // This is to ensure that cross-chip writes to the Global Semaphore are not
@@ -89,7 +89,7 @@ void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const {
     bool using_simulator = MetalContext::instance().rtoptions().get_simulator_enabled();
     if (using_fast_dispatch && !using_simulator) {
         distributed::EnqueueWriteMeshBuffer(
-            mesh_buffer->device()->mesh_command_queue(), mesh_buffer, host_buffer, true);
+            mesh_buffer->device()->mesh_command_queue(cq_id), mesh_buffer, host_buffer, true);
     } else {
         auto* mesh_device = mesh_buffer->device();
         for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {

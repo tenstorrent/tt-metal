@@ -112,13 +112,14 @@ std::vector<tt::tt_metal::DeviceAddr> get_global_semaphore_address(const MultiDe
     return addresses;
 }
 
-void reset_global_semaphore_value(const GlobalSemaphore& global_semaphore, uint32_t reset_value) {
-    global_semaphore.reset_semaphore_value(reset_value);
+void reset_global_semaphore_value(const GlobalSemaphore& global_semaphore, uint32_t reset_value, uint8_t cq_id) {
+    global_semaphore.reset_semaphore_value(reset_value, cq_id);
 }
 
-void reset_global_semaphore_value(const MultiDeviceGlobalSemaphore& global_semaphore, uint32_t reset_value) {
+void reset_global_semaphore_value(
+    const MultiDeviceGlobalSemaphore& global_semaphore, uint32_t reset_value, uint8_t cq_id) {
     for (const auto& global_semaphore : global_semaphore.global_semaphores) {
-        reset_global_semaphore_value(global_semaphore, reset_value);
+        reset_global_semaphore_value(global_semaphore, reset_value, cq_id);
     }
 }
 

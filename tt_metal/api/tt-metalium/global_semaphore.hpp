@@ -51,7 +51,7 @@ public:
 
     DeviceAddr address() const;
 
-    void reset_semaphore_value(uint32_t reset_value) const;
+    void reset_semaphore_value(uint32_t reset_value, uint8_t cq_id = 0) const;
 
     static constexpr auto attribute_names = std::forward_as_tuple("cores", "buffer_type");
     auto attribute_values() const { return std::make_tuple(this->cores_, this->buffer_.get_buffer()->buffer_type()); }

@@ -68,9 +68,10 @@ void py_module(nb::module_& mod) {
 
     mod.def(
         "reset_global_semaphore_value",
-        nb::overload_cast<const GlobalSemaphore&, uint32_t>(&reset_global_semaphore_value),
+        nb::overload_cast<const GlobalSemaphore&, uint32_t, uint8_t>(&reset_global_semaphore_value),
         nb::arg("global_semaphore"),
         nb::arg("reset_value"),
+        nb::arg("cq_id") = (uint8_t)0,
         R"doc(
             Reset the value of the global semaphore.
 
