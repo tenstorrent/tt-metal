@@ -2,8 +2,8 @@ name: "Code analysis"
 
 on:
   schedule:
-    # Run hourly to keep ccache/ctcache warm for code-analysis PR runs (Ubuntu 24.04)
-    - cron: "0 * * * *"
+    # Run every 6 hours to keep ccache/ctcache warm for code-analysis PR runs (Ubuntu 24.04)
+    - cron: "0 */6 * * *"
   workflow_call:
     inputs:
       platform:
