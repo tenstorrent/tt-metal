@@ -3771,7 +3771,16 @@ class ModelArgs:
         if hasattr(model, "language_model"):
             model.model = model.language_model
             # We keep language_model because transformers don't let us change or delete it
-        model.model.layers = model.model.layers[: self.n_layers]
+            text_model = model.model
+        elif hasattr(model.model, "language_model"):
+            # Mistral3 VLMs (Mistral-Small-3.1-24B / Devstral-Small-2-24B) nest the text decoder
+            # under model.model.language_model. Keep the full ForConditionalGeneration so
+            # forward(inputs_embeds=...) still routes through lm_head (text-only input skips the
+            # vision tower); only truncate the text decoder's layers for the unit test.
+            text_model = model.model.language_model
+        else:
+            text_model = model.model
+        text_model.layers = text_model.layers[: self.n_layers]
         if wrap:
             wrapper = HfModelWrapper(model, self.head_dim, config=self.hf_config, use_hf_rope=self.use_hf_rope)
             return wrapper
@@ -4000,11 +4009,15 @@ class ModelArgs:
         return layer
 
     def reference_embedding(self, reference_model=None):
+        # Mistral3 VLMs nest the text decoder (with embed_tokens) under model.model.language_model;
+        # text-only models expose embed_tokens directly on model.model. getattr handles both.
         if reference_model is None:
             model = self.reference_transformer(wrap=False)
-            layer = model.model.embed_tokens
+            text_model = getattr(model.model, "language_model", model.model)
+            layer = text_model.embed_tokens
         else:
-            layer = reference_model.model.model.embed_tokens
+            text_model = getattr(reference_model.model.model, "language_model", reference_model.model.model)
+            layer = text_model.embed_tokens
 
         layer._load_state_dict = layer.load_state_dict
         if self.use_hf_rope:
