@@ -116,23 +116,39 @@ and more fragile under traced replay. Dual-direction arc AG is the only path.
 - **stats-buffer / kernel sizing mismatch (FIXED):** `create_stats_buffer` and the program
   factory must agree on the `num_links` worker rounding and chunk size; the buffer is
   otherwise chip-global (num_workers-independent). Pass weight/RoPE + `num_links` to the buffer.
-- **TP=2 multi-chunk POST hang (FIXED, `11bc6a0e056`):** the matmul stats-reduce wedged the
-  packer at `ring_size>1` × multi-chunk; replaced with an FPU eltwise-add (requires even
-  `ring_size` = TP, always 2/4/8). Detailed root-cause notes are in commit `11bc6a0e056`.
+- **TP=2 multi-chunk hang — two fixes:**
+  - *Compute/MUX side (FIXED, `11bc6a0e056`):* the matmul stats-reduce wedged the packer at
+    `ring_size>1` × multi-chunk; replaced with an FPU eltwise-add (requires even `ring_size`
+    = TP, always 2/4/8).
+  - *Legacy single-worker writer side (FIXED, `34c606ef7fe`):* small TP=2 shapes
+    (≤2 tile-rows → `num_workers=1` → legacy direct-fabric writer) hit a second hang. Two
+    coupled bugs: (a) `stats_gathered_cb` was sized `chunk_size_rows*ring_size` but the legacy
+    writer reserves `num_tile_rows*ring_size` → `cb_reserve_back` blocked; (b) it forwarded all
+    rows then pushed gathered stats once at the end, deadlocking against the compute's
+    per-chunk PRE/POST interleave. Now sized for `num_tile_rows` on the legacy path and the
+    writer releases each row's slots as its gather completes (+ `flush=true`).
 - **Host L1/chunk-sizing bugs (FIXED):** LTX's wider features + per-head RoPE exposed two
   clamps; `chunk_size_rows=1` is forced for per-head RoPE (keeps cos/sin resident, fits feat
   1024) and the streaming-low-L1 fallback. Applied identically in `compute_sizing` and the
   factory so the buffer matches; **Wan is byte-identically unaffected**.
-- **Open limit — feat-2048 per-head RoPE → compile-time L1 OOM:** the TP=2 video self-attn
-  QK norms (`tp2_v_selfattn_qk_s1/s2`; video dim 4096 → feat/dev **2048**, head_dim 128, 16
-  heads/dev). Per-head RoPE forces chunk-1 (cos/sin must stay resident), and at feat 2048 the
-  resident cos/sin + post intermediates don't fit L1 → clean compile-time OOM (not a hang, not
-  corruption). Would need cos/sin streaming (a kernel change). The TP=2 *audio* / A↔V per-head
-  configs are feat 1024 (audio dim 2048) and do fit — they're the ones the matmul→pack hang fix
-  above unblocked. This (plus that the per-head TP=2 path is unvalidated post-fix) is why TP=2
-  isn't tabulated above; TP=4 is the shipping config.
+- **feat-2048 per-head RoPE → L1 OOM (FIXED, `222870958b5` + `df735764a5b`):** the TP=2 video
+  self-attn QK norms (`tp2_v_selfattn_qk_s1/s2`; video dim 4096 → feat/dev **2048**, head_dim
+  128, 16 heads/dev). The sub-phase-major POST keeps `intermediate_cb` + `rotated_input_cb`
+  resident for a whole row, which overflowed L1 (1,593,632 B > 1,499,136 B). Fix: when the
+  resident estimate would overflow (per-head only), use a **conditional block-major POST** —
+  fuse the matmul-rotate + RoPE finalize per block so `rotated_input_cb` is block-local — and
+  **stream cos/sin** (cap the CB at a few `block_size` groups). Both gated on the overflow
+  estimate, so the resident fast path (all TP=4 shapes) is untouched. `WAN_RMSNORM_FORCE_FUSE_MM_ROPE`
+  / `WAN_RMSNORM_ROPE_STREAM_BLOCKS` are the knobs.
 - **Underlying — per-head RoPE chunk≥2** compute path is avoided by pinning chunk=1; the
   deeper chunk≥2 deadlock isn't separately fixed (no need at chunk=1).
+
+**TP=2 status: now fully correct.** With the fixes above, the entire LTX TP=2 (SP=4) sweep
+passes — **14/14 `det=OK`, PCC 99.99–100% vs PyTorch**, incl. the previously-OOM video
+self-attn (`v_selfattn_qk`) and the previously-hanging small-audio configs (`a_block`,
+`a_selfattn_qk`, `a_textcross_q`). Wan TP=2 is 7/7. Only *correctness/determinism* is
+validated at TP=2; perf isn't benchmarked there (TP=4 is the shipping config, so the speedup
+tables above stay TP=4-only).
 
 The fused op's per-head-rope correctness also has a standalone regression test:
 `test_wan_fused_distributed_rmsnorm_device_op.py::...tp1_rope`.
