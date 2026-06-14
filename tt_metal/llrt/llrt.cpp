@@ -535,9 +535,24 @@ void return_to_base_firmware_and_wait_for_heartbeat(
 
     tt_cxy_pair target{static_cast<size_t>(device_id), virtual_core};
     const auto heartbeat_addr = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::HEARTBEAT);
+    const auto postcode_addr = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::POSTCODE);
 
     uint32_t heartbeat_val = 0;
     tt::tt_metal::MetalContext::instance().get_cluster().read_reg(&heartbeat_val, target, heartbeat_addr);
+
+    // BH firmware >=19.8 base FW sets a static heartbeat (0xABCD signature) after eth_init
+    // completes and then stops incrementing in idle mode (only increments when metal FW runs).
+    // If we're already in base FW idle state (postcode=ETH_INIT_PASS, heartbeat has 0xABCD
+    // signature), skip the wait — there is no running metal FW to stop.
+    constexpr uint32_t k_base_fw_heartbeat_sig = 0xABCD;
+    constexpr uint32_t k_postcode_eth_init_pass = 0xC0DEA000;
+    if ((heartbeat_val >> 16) == k_base_fw_heartbeat_sig) {
+        uint32_t postcode = 0;
+        tt::tt_metal::MetalContext::instance().get_cluster().read_reg(&postcode, target, postcode_addr);
+        if (postcode == k_postcode_eth_init_pass) {
+            return;
+        }
+    }
 
     constexpr auto k_sleep_time = std::chrono::nanoseconds{5};
     std::this_thread::sleep_for(k_sleep_time);
