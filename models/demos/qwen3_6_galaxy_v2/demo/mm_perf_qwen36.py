@@ -46,6 +46,63 @@ _PATTERN = (["linear_attention"] * 3 + ["full_attention"]) * 16
 _DECODE_STEPS = int(os.environ.get("QWEN36_MM_DECODE_STEPS", "32"))
 _IMAGE_PATH = os.environ.get("QWEN36_MM_IMAGE", "models/demos/multimodal/gemma3/dog.jpg")
 _PROMPT = os.environ.get("QWEN36_MM_PROMPT", "<|vision_start|><|image_pad|><|vision_end|>What is in this image?")
+# VIDEO branch (opt-in): set QWEN36_MM_VIDEO=<path to .mp4>. When unset the harness runs the
+# existing IMAGE path, byte-for-byte unchanged. Video runs the SAME prefill + traced-decode flow.
+_VIDEO_PATH = os.environ.get("QWEN36_MM_VIDEO", "")
+_VIDEO_PROMPT = os.environ.get(
+    "QWEN36_MM_VIDEO_PROMPT", "<|vision_start|><|video_pad|><|vision_end|>Describe this video."
+)
+
+
+def _load_video_frames(path: str):
+    """Decode a video file -> (frames [T, C, H, W] uint8 tensor, source_fps).
+
+    Channels-first is the layout the HF Qwen3VLVideoProcessor expects for tensor
+    inputs; it then uniformly samples to its stock 2 fps default using the metadata
+    we attach, so the on-device frame count matches HF exactly. (Copied from the
+    mm_demo_qwen36.py video branch so the perf harness decodes clips identically.)
+    """
+    import av
+    import numpy as np
+
+    container = av.open(path)
+    stream = container.streams.video[0]
+    src_fps = float(stream.average_rate) if stream.average_rate else 24.0
+    frames = []
+    for frame in container.decode(video=0):
+        frames.append(frame.to_ndarray(format="rgb24"))  # [H, W, 3]
+    container.close()
+    if not frames:
+        raise ValueError(f"no frames decoded from {path}")
+    arr = np.stack(frames, axis=0)  # [T, H, W, 3] uint8
+    arr = np.transpose(arr, (0, 3, 1, 2))  # [T, C, H, W]
+    return torch.from_numpy(np.ascontiguousarray(arr)), src_fps
+
+
+def _make_synthetic_clip(path: str, n_frames: int = 8, hw: int = 256, fps: int = 4) -> None:
+    """Write a tiny moving-gradient mp4 (256x256) so the harness is self-contained
+    when no real clip is supplied. Kept short so prompt+video tokens stay in the
+    4096 prefill bucket."""
+    import av
+    import numpy as np
+
+    container = av.open(path, mode="w")
+    stream = container.add_stream("libx264", rate=fps)
+    stream.width = hw
+    stream.height = hw
+    stream.pix_fmt = "yuv420p"
+    for t in range(n_frames):
+        img = np.zeros((hw, hw, 3), dtype=np.uint8)
+        x = np.linspace(0, 255, hw, dtype=np.uint8)
+        img[:, :, 0] = (x[None, :] + t * 16) % 256  # horizontal sweep, moves with t
+        img[:, :, 1] = (x[:, None] + t * 8) % 256  # vertical sweep
+        img[:, :, 2] = (t * 32) % 256
+        frame = av.VideoFrame.from_ndarray(img, format="rgb24")
+        for pkt in stream.encode(frame):
+            container.mux(pkt)
+    for pkt in stream.encode():
+        container.mux(pkt)
+    container.close()
 
 
 @pytest.mark.hardware
@@ -58,6 +115,14 @@ def test_mm_perf_qwen36(bh_glx_mesh):  # noqa: F811
     from models.demos.qwen3_6_galaxy_v2.tt.qwen36_mm_generator import Qwen36MMGenerator
     from models.demos.qwen3_6_galaxy_v2.tt.vision_model_args import Qwen36VisionModelArgs
     from models.tt_dit.parallel.manager import CCLManager
+
+    # Tracy signposts bracket the three stages so aggregate_tracy_csv.py can split
+    # the per-op device-kernel breakdown into vision / prefill / decode. No-op when
+    # not running under `python -m tracy`.
+    try:
+        from tracy import signpost
+    except ImportError:
+        signpost = lambda *_a, **_k: None  # noqa: E731
 
     for _k, _v in {
         "QWEN36_FORCE_SWITCH_DECODE": "1",
@@ -101,20 +166,58 @@ def test_mm_perf_qwen36(bh_glx_mesh):  # noqa: F811
     )
     tok = mmgen.tokenizer
 
-    img = Image.open(_IMAGE_PATH).convert("RGB").resize((224, 224))
-    prompt = _PROMPT
-    # Optional chat-template wrapping (instruct-model assistant-turn priming + vision markers).
-    if os.environ.get("QWEN36_MM_CHAT_TEMPLATE", "0") == "1":
-        _question = os.environ.get("QWEN36_MM_QUESTION", "What is in this image?")
-        messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": _question}]}]
-        prompt = mmgen.pipeline.preprocessor.apply_chat_template(messages)
-        logger.info(f"[mm-perf] chat-templated prompt: {prompt!r}")
-    mmgen.prepare_inputs(prompt, images=[img])  # warmup (compile vision kernels)
+    # --- Build the modality-specific prepare_inputs callable. IMAGE by default;
+    # VIDEO when QWEN36_MM_VIDEO is set. Both run the identical prefill + traced-
+    # decode flow below; only the vision-token source differs.
+    if _VIDEO_PATH:
+        from transformers.video_utils import VideoMetadata
+
+        video_path = _VIDEO_PATH
+        if video_path == "synthetic":
+            video_path = os.path.join(os.getcwd(), "generated", "qwen36_mm_synthetic_clip.mp4")
+            os.makedirs(os.path.dirname(video_path), exist_ok=True)
+            _make_synthetic_clip(video_path)
+            logger.info(f"[mm-perf] generated synthetic clip at {video_path}")
+        frames, src_fps = _load_video_frames(video_path)  # [T, C, H, W] uint8, source fps
+        T_src = int(frames.shape[0])
+        metadata = VideoMetadata(
+            total_num_frames=T_src,
+            fps=src_fps,
+            width=int(frames.shape[3]),
+            height=int(frames.shape[2]),
+            duration=T_src / src_fps,
+            video_backend="pyav",
+            frames_indices=list(range(T_src)),
+        )
+        prompt = _VIDEO_PROMPT
+        modality = "VIDEO"
+        _prepare = lambda: mmgen.prepare_inputs(prompt, videos=[frames], video_metadata=[metadata])  # noqa: E731
+        logger.info(f"[mm-perf] VIDEO branch: {video_path} ({T_src} src frames @ {src_fps:.2f} fps)")
+    else:
+        img = Image.open(_IMAGE_PATH).convert("RGB").resize((224, 224))
+        prompt = _PROMPT
+        modality = "IMAGE"
+        # Optional chat-template wrapping (instruct-model assistant-turn priming + vision markers).
+        if os.environ.get("QWEN36_MM_CHAT_TEMPLATE", "0") == "1":
+            _question = os.environ.get("QWEN36_MM_QUESTION", "What is in this image?")
+            messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": _question}]}]
+            prompt = mmgen.pipeline.preprocessor.apply_chat_template(messages)
+            logger.info(f"[mm-perf] chat-templated prompt: {prompt!r}")
+        _prepare = lambda: mmgen.prepare_inputs(prompt, images=[img])  # noqa: E731
+        logger.info(f"[mm-perf] IMAGE branch: {_IMAGE_PATH}")
+
+    _prepare()  # warmup (compile vision kernels) — NOT signposted
     ttnn.synchronize_device(bh_glx_mesh)
+    # Stage 1 of 3: vision encoder + preprocessing (HF processor + seq-parallel encoder
+    # on device + HOST splice). NOTE: the host splice + a device->host->device roundtrip
+    # are INCLUDED in t_vision (the on-device splice exists but is not wired into this
+    # harness yet) — this inflates the vision-stage wall-clock; see PERF.md VL-PERF note.
+    signpost("start")
     _t = time.perf_counter()
-    inputs, fused_unpadded = mmgen.prepare_inputs(prompt, images=[img])
+    inputs, fused_unpadded = _prepare()
     ttnn.synchronize_device(bh_glx_mesh)
     t_vision = time.perf_counter() - _t
+    signpost("vision_done")
 
     S_unpadded = fused_unpadded.shape[1]
     S = get_padded_prefill_len(S_unpadded)
@@ -166,6 +269,7 @@ def test_mm_perf_qwen36(bh_glx_mesh):  # noqa: F811
     )
     ttnn.synchronize_device(bh_glx_mesh)
     t_prefill_cold = time.perf_counter() - _t
+    signpost("prefill_done")  # vision_done->prefill_done = prefill stage (single-pass COLD)
     first_tok = int(torch.as_tensor(prefill_logits).float().reshape(-1)[: args.vocab_size].argmax().item())
     logger.info(
         f"[mm-perf] first token = {first_tok} ({tok.decode([first_tok])!r}); prefill(cold)={t_prefill_cold*1e3:.1f} ms"
@@ -251,10 +355,11 @@ def test_mm_perf_qwen36(bh_glx_mesh):  # noqa: F811
     ttnn.event_synchronize(read_events.pop(0)[0])
     _tt_tok, _ = generator.process_decode_output_host(tt_out_toks.pop(0))
     gen_ids.append(int(torch.as_tensor(_tt_tok).reshape(-1)[0].item()))
+    signpost("stop")  # prefill_done->stop = decode stage (traced, on-device sampling)
     decoded_text = tok.decode(gen_ids, skip_special_tokens=True)
     logger.info(f"[mm-perf] generator-decode OUTPUT: {decoded_text!r}")
 
-    # --- Warm prefill (re-run AFTER decode; output discarded — kernels now warm) ---
+    # --- Warm prefill (re-run AFTER decode, OUTSIDE the signpost window; discarded) ---
     ttnn.synchronize_device(bh_glx_mesh)
     _t = time.perf_counter()
     generator.prefill_forward_text_embeds(
@@ -269,7 +374,7 @@ def test_mm_perf_qwen36(bh_glx_mesh):  # noqa: F811
     t_prefill_warm = time.perf_counter() - _t
 
     logger.info("=" * 72)
-    logger.info("[mm-perf] QWEN3.6-27B VL SERVER-PATH PERF (BH_GLX, batch=1)")
+    logger.info(f"[mm-perf] QWEN3.6-27B VL SERVER-PATH PERF (BH_GLX, batch=1, {modality})")
     logger.info(f"  prompt tokens (incl. vision)   : {S_unpadded}  (prefill bucket {S})")
     logger.info(f"  vision encoder + preproc (warm): {t_vision*1e3:9.1f} ms")
     logger.info(f"  prefill TTFT (cold, w/ compile): {t_prefill_cold*1e3:9.1f} ms")

@@ -2954,3 +2954,106 @@ A productive **V2-CCL-followup-2** would require either:
   `QWEN36_FULLATTN_WO_TUNED` / `QWEN36_DELTA_OP_TUNED` aliases that
   were previously only auto-on via their underlying LAR names.
 - `PERF.md` (this section).
+
+---
+
+## VL-PERF — Qwen3.6-27B VLM video-path per-stage profiling (2026-06-14)
+
+Three-stage profiling of the **VLM video path** (server/Generator path) on
+BH_GLX, batch=1, with on-device sampling: **(1) vision pipeline** (HF preproc +
+seq-parallel 27-layer vision encoder + host splice), **(2) prefill** (TTFT), and
+**(3) traced decode** (ms/tok + tok/s).
+
+### Harness
+
+`demo/mm_perf_qwen36.py::test_mm_perf_qwen36` — the existing server-path perf
+harness, now with an additive **`QWEN36_MM_VIDEO`** branch (image path unchanged).
+It runs the identical prefill + traced-decode flow on a video clip and emits Tracy
+signposts (`start` → `vision_done` → `prefill_done` → `stop`) so
+`aggregate_tracy_csv.py` produces a **three-stage** per-op device-kernel breakdown
+(vision / prefill / decode). Backward-compatible: text 2-stage runs (no
+`vision_done`) still bucket into prefill/decode.
+
+Wall-clock run (sampling on, `QWEN36_SAMPLE=1 TOP_K=20 TOP_P=0.95 TEMP=1.0`):
+
+```bash
+export TT_METAL_HOME="$(pwd)" PYTHONPATH="$(pwd)"; source python_env/bin/activate
+export HF_MODEL=Qwen/Qwen3.6-27B MESH_DEVICE=BH_GLX
+export QWEN36_FORCE_SWITCH_DECODE=1 QWEN36_DECODE_L1_RESIDUAL=1 QWEN36_RESIDUAL_BUF_BF16=1 QWEN36_LM_HEAD_PLAIN_DECODE=1
+export QWEN36_SEQ_CORES_PER_HEAD=4 QWEN36_FULLATTN_WO_TUNED=1 QWEN36_DELTA_OP_TUNED=1 QWEN36_CCL_NUM_LINKS_DELTA=2
+export QWEN36_SAMPLE=1 QWEN36_TOP_K=20 QWEN36_TOP_P=0.95 QWEN36_TEMP=1.0
+# short clip (or "synthetic" to auto-generate a 256x256 8-frame mp4 in generated/):
+export QWEN36_MM_VIDEO=synthetic      # or /path/to/clip.mp4
+python -m pytest --noconftest models/demos/qwen3_6_galaxy_v2/demo/mm_perf_qwen36.py -v -s
+```
+
+Tracy device-kernel profiling (traced; per the profiling rules):
+
+```bash
+python -m tracy -p -v -r --op-support-count 20000 -m pytest --noconftest \
+  models/demos/qwen3_6_galaxy_v2/demo/mm_perf_qwen36.py::test_mm_perf_qwen36 -v -s
+# then aggregate (auto-detects the latest report, or pass a CSV path explicitly):
+python models/demos/qwen3_6_galaxy_v2/demo/aggregate_tracy_csv.py
+```
+
+CSV/xlsx artifacts land under `generated/profiler/reports/<timestamp>/`
+(`ops_perf_results_*.csv`); the aggregator falls back to the raw
+`generated/profiler/.logs/` artifacts when post-process trips on dropped markers.
+
+### Host-splice roundtrip caveat (IMPORTANT — motivates wiring the on-device splice)
+
+The vision-stage wall-clock (`t_vision`) **includes a host splice + a
+device→host→device roundtrip**: the vision encoder runs seq-parallel on device,
+the features are pulled to host, spliced into the text-token embedding stream on
+CPU (`Qwen36MMGenerator` host splice), and the fused `[1, S, 5120]` embeds are
+re-uploaded for prefill. An **on-device splice exists but is not yet wired into
+`mm_perf_qwen36.py`** — so the reported vision-stage latency is an upper bound that
+over-counts host transfer + CPU splice. The Tracy *device-kernel* vision breakdown
+(VISION section) excludes this host time (it only sees on-device ops), so the
+device-kernel vision total will be **smaller** than `t_vision`; the gap is the
+host-splice roundtrip. **Wiring the on-device splice is the first VL latency lever.**
+
+### Numbers
+
+**BLOCKED on hardware (2026-06-14):** the BH Galaxy box would not initialize —
+`tt-smi -s` reported `ETH core heartbeat check failed`, and `tt-smi -glx_reset`
+(the `-r` path warned CPLD FW < v1.16, so `-glx_reset` was used) repeatedly came
+back with **ARC Status: In Progress, 0 out of 1 initialized** across 4 attempts
+(incl. 45s and 90s settles). This is a box-level fault requiring a sysadmin /
+CPLD update — it is the known-unstable-fabric box from prior sessions. The harness
+and aggregator changes are complete and validated offline (3-stage split unit-
+tested on a synthetic CSV; 2-stage backward-compat verified on a real report CSV).
+
+| stage | wall-clock | dominant device-kernel op | notes |
+|---|---|---|---|
+| vision (encoder+preproc+host splice) | PENDING | PENDING (expect vision-attn SDPA vs MLP matmul) | includes host-splice roundtrip (see caveat) |
+| prefill TTFT (cold, w/ compile)      | PENDING | PENDING (expect Matmul-bound; CCL secondary) | single-pass → COLD; prefill tracing disabled (GDN CB clash) |
+| prefill TTFT (warm)                  | PENDING | (warm = re-run after decode, untraced)        | |
+| decode (traced, on-dev sample)       | PENDING ms/tok = PENDING tok/s | PENDING (expect CCL count / all-reduce dominant) | VL decode == text decode post-prefill |
+
+**Expected anchors** (from prior text-path profiling, this repo):
+- **Decode**: VL decode is identical to text decode after prefill (axes-equal
+  positions degenerate M-RoPE → the model's 1D partial-RoPE). Text-path baseline =
+  **27.72 tok/s/user (36.08 ms/tok)** (`text_demo_qwen36.py` Generator path). Decode
+  is **CCL-count bound** (~73% of decode device time is collectives; MLP w2 RS+AG
+  ~58 µs/layer is the lever), not matmul-bound. → expect the DECODE Tracy table to be
+  dominated by `ReduceScatter*`/`AllGather*`/`AllReduce*` CCL ops.
+- **Prefill**: expect Matmul-dominant (the fused-embeds prefill is the same backbone
+  as text prefill at the 4096 bucket); CCL secondary.
+- **Vision**: per-image block-diagonal attention; expect vision MLP matmul + attention
+  SDPA to dominate the on-device VISION section.
+
+### GPU reference
+
+No in-repo GPU reference for the Qwen3.6-VL video path. To be measured against an
+H100/A100 `vllm`/`transformers` Qwen3-VL run at a matched ISL (≤4096) and decode
+batch=1 when the box recovers. (Prior VL work did not capture a GPU number.)
+
+### Files
+
+- `demo/mm_perf_qwen36.py` — additive `QWEN36_MM_VIDEO` branch (`_load_video_frames`,
+  `_make_synthetic_clip`, modality-branch input prep) + Tracy 3-stage signposts
+  (`start`/`vision_done`/`prefill_done`/`stop`). Image path unchanged.
+- `demo/aggregate_tracy_csv.py` — 3-stage (vision/prefill/decode) split via the new
+  `vision_done` signpost (2-stage text runs still supported); `_TT_METAL` now honors
+  `$TT_METAL_HOME` instead of a hardcoded path.

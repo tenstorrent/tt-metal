@@ -35,6 +35,7 @@ with no argument it auto-detects whichever artifacts are available.
 from __future__ import annotations
 
 import csv
+import os
 import pathlib
 import re
 import sys
@@ -42,7 +43,10 @@ from collections import defaultdict
 
 # --- Schema ---
 
-_TT_METAL = pathlib.Path("/home/tt-admin/ssinghal/tt-metal")
+
+# Profiler artifacts land under $TT_METAL_HOME/generated/profiler (cwd when run from
+# the repo root). Fall back to the cwd so this works across worktrees.
+_TT_METAL = pathlib.Path(os.environ.get("TT_METAL_HOME", os.getcwd()))
 _PROFILER_DIR = _TT_METAL / "generated/profiler"
 _LOGS_DIR = _PROFILER_DIR / ".logs"
 _REPORTS_DIR = _PROFILER_DIR / "reports"
@@ -56,6 +60,57 @@ _CCL_OPS = {
     "ReduceScatterAsyncDeviceOperation",
     "AllReduceDeviceOperation",
 }
+
+
+# --- Section / signpost handling ---
+#
+# Three-stage VL split (mm_perf_qwen36.py):
+#     start -> [vision] -> vision_done -> [prefill] -> prefill_done -> [decode] -> stop
+# Two-stage text split (tracy_perf_*.py) is still supported (no vision_done):
+#     start -> [prefill] -> prefill_done -> [decode] -> stop
+
+
+def _section_after(signpost_name: str, _prev):
+    """Map a signpost name to the section that FOLLOWS it.
+
+    After `start` the section is the provisional `s1`: ops there belong to VISION
+    if a `vision_done` signpost follows, or to PREFILL otherwise (2-stage text
+    runs). The `_bucket` helper resolves `s1` at `vision_done`/`prefill_done` time.
+    """
+    if signpost_name == "start":
+        return "s1"
+    if signpost_name == "vision_done":
+        return "prefill"
+    if signpost_name == "prefill_done":
+        return "decode"
+    if signpost_name == "stop":
+        return None
+    return _prev
+
+
+# Ops seen in the provisional `s1` window are held here until we learn (from the
+# next signpost) whether s1 was VISION (vision_done follows) or PREFILL (prefill_done).
+_S1_PENDING: list = []
+
+
+def _bucket(section, op_code, ns, vis_pairs, pf_pairs, dec_pairs):
+    if section == "s1":
+        _S1_PENDING.append((op_code, ns))
+    elif section == "prefill":
+        pf_pairs.append((op_code, ns))
+    elif section == "decode":
+        dec_pairs.append((op_code, ns))
+
+
+def _resolve_s1(signpost_name: str, vis_pairs, pf_pairs):
+    """Flush the provisional s1 buffer once we know what it was."""
+    if not _S1_PENDING:
+        return
+    if signpost_name == "vision_done":
+        vis_pairs.extend(_S1_PENDING)
+    elif signpost_name == "prefill_done":
+        pf_pairs.extend(_S1_PENDING)  # 2-stage run: s1 was prefill
+    _S1_PENDING.clear()
 
 
 # --- Aggregation helpers ---
@@ -114,7 +169,7 @@ def _try_processed_csv():
     if not candidates:
         return None
     csv_path = candidates[-1]
-    pf_pairs, dec_pairs, signposts, n_rows = [], [], [], 0
+    vis_pairs, pf_pairs, dec_pairs, signposts, n_rows = [], [], [], [], 0
     section = None
     with open(csv_path, newline="") as f:
         for row in csv.DictReader(f):
@@ -123,12 +178,8 @@ def _try_processed_csv():
             op_code = (row.get("OP CODE") or "").strip()
             if op_type == "signpost":
                 signposts.append(op_code)
-                if op_code == "start":
-                    section = "prefill"
-                elif op_code == "prefill_done":
-                    section = "decode"
-                elif op_code == "stop":
-                    section = None
+                _resolve_s1(op_code, vis_pairs, pf_pairs)
+                section = _section_after(op_code, section)
                 continue
             if section is None:
                 continue
@@ -137,9 +188,10 @@ def _try_processed_csv():
                 ns = float(dur)
             except ValueError:
                 continue
-            (pf_pairs if section == "prefill" else dec_pairs).append((op_code, ns))
+            _bucket(section, op_code, ns, vis_pairs, pf_pairs, dec_pairs)
     return {
         "csv_path": csv_path,
+        "vis_pairs": vis_pairs,
         "pf_pairs": pf_pairs,
         "dec_pairs": dec_pairs,
         "signposts": signposts,
@@ -213,8 +265,12 @@ def _try_fallback_from_logs():
     start_ts = signposts_ts["start"]
     pf_ts = signposts_ts["prefill_done"]
     stop_ts = signposts_ts["stop"]
+    # VL 3-stage: ops with host_ts in [start, vision_done) are VISION; [vision_done,
+    # prefill_done) are PREFILL. Text 2-stage (no vision_done): [start, prefill_done)
+    # is all PREFILL (vis_ts == start_ts -> empty vision bucket).
+    vis_ts = signposts_ts.get("vision_done", start_ts)
 
-    pf_pairs, dec_pairs = [], []
+    vis_pairs, pf_pairs, dec_pairs = [], [], []
     rows_total = 0
     rows_no_meta = 0
     rows_no_dur = 0
@@ -246,20 +302,23 @@ def _try_fallback_from_logs():
             if host_ts < start_ts or host_ts > stop_ts:
                 rows_outside += 1
                 continue
-            if host_ts <= pf_ts:
+            if host_ts < vis_ts:
+                vis_pairs.append((op_name, ns))
+            elif host_ts <= pf_ts:
                 pf_pairs.append((op_name, ns))
             else:
                 dec_pairs.append((op_name, ns))
 
     print(
         f"[fallback] device rows: {rows_total:,} total / "
-        f"{len(pf_pairs):,} prefill / {len(dec_pairs):,} decode / "
+        f"{len(vis_pairs):,} vision / {len(pf_pairs):,} prefill / {len(dec_pairs):,} decode / "
         f"{rows_no_meta:,} no_op_meta / {rows_no_dur:,} no_dur / "
         f"{rows_outside:,} outside_window",
         file=sys.stderr,
     )
     return {
         "csv_path": f"fallback (cpp_device_perf_report.csv + tracy_ops_data.csv signposts/meta)",
+        "vis_pairs": vis_pairs,
         "pf_pairs": pf_pairs,
         "dec_pairs": dec_pairs,
         "signposts": list(signposts_ts.keys()),
@@ -271,7 +330,7 @@ def main() -> None:
     if len(sys.argv) > 1:
         # Force a specific CSV
         csv_path = pathlib.Path(sys.argv[1])
-        pf_pairs, dec_pairs, signposts, n_rows = [], [], [], 0
+        vis_pairs, pf_pairs, dec_pairs, signposts, n_rows = [], [], [], [], 0
         section = None
         with open(csv_path, newline="") as f:
             for row in csv.DictReader(f):
@@ -280,12 +339,8 @@ def main() -> None:
                 op_code = (row.get("OP CODE") or "").strip()
                 if op_type == "signpost":
                     signposts.append(op_code)
-                    if op_code == "start":
-                        section = "prefill"
-                    elif op_code == "prefill_done":
-                        section = "decode"
-                    elif op_code == "stop":
-                        section = None
+                    _resolve_s1(op_code, vis_pairs, pf_pairs)
+                    section = _section_after(op_code, section)
                     continue
                 if section is None:
                     continue
@@ -294,9 +349,10 @@ def main() -> None:
                     ns = float(dur)
                 except ValueError:
                     continue
-                (pf_pairs if section == "prefill" else dec_pairs).append((op_code, ns))
+                _bucket(section, op_code, ns, vis_pairs, pf_pairs, dec_pairs)
         result = {
             "csv_path": csv_path,
+            "vis_pairs": vis_pairs,
             "pf_pairs": pf_pairs,
             "dec_pairs": dec_pairs,
             "signposts": signposts,
@@ -315,22 +371,35 @@ def main() -> None:
     print(f"signpost events seen: {result['signposts']}")
     print(f"rows scanned        : {result['n_rows']:,}")
 
+    vis_entries, vis_total = _aggregate_pairs(result.get("vis_pairs", []))
     pf_entries, pf_total = _aggregate_pairs(result["pf_pairs"])
     dec_entries, dec_total = _aggregate_pairs(result["dec_pairs"])
 
+    vis_n_rows = sum(c for _, c, _, _, _ in vis_entries)
     pf_n_rows = sum(c for _, c, _, _, _ in pf_entries)
     dec_n_rows = sum(c for _, c, _, _, _ in dec_entries)
+    if vis_n_rows:
+        print(f"vision  rows : {vis_n_rows:,}  ({vis_total/1000.0:,.1f} ms total dev work)")
     print(f"prefill rows : {pf_n_rows:,}  ({pf_total/1000.0:,.1f} ms total dev work)")
     print(f"decode  rows : {dec_n_rows:,}  ({dec_total/1000.0:,.1f} ms total dev work)")
 
+    if vis_n_rows:
+        _print_table("VISION", vis_entries, vis_total)
     _print_table("PREFILL", pf_entries, pf_total)
     _print_table("DECODE", dec_entries, dec_total)
 
+    vis_categ = _summarize_categories(vis_entries)
     pf_categ = _summarize_categories(pf_entries)
     dec_categ = _summarize_categories(dec_entries)
     print("\n### Category split\n")
     print("| section | total_dev_us | matmul % | CCL % | other % |")
     print("|---|---:|---:|---:|---:|")
+    if vis_n_rows:
+        print(
+            f"| vision  | {vis_categ['total_us']:>11,.1f} | "
+            f"{vis_categ['matmul_pct']:.1f} | {vis_categ['ccl_pct']:.1f} | "
+            f"{vis_categ['other_pct']:.1f} |"
+        )
     print(
         f"| prefill | {pf_categ['total_us']:>11,.1f} | "
         f"{pf_categ['matmul_pct']:.1f} | {pf_categ['ccl_pct']:.1f} | "

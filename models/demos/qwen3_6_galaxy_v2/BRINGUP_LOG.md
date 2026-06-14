@@ -623,3 +623,21 @@ PREFILL/TTFT lever: large prefill matmuls (GDN chunk batch=192 -> 5x, likely pre
 WH-under-gridded on BH. NET: decode perf levers done (RS-async +1.9% promotable, LM-head +1.56x-on-op banked,
 decode is small-op bound). NEXT if perf focus = TTFT: retune the PREFILL matmul grids (256k=270s, VL=2150ms;
 5x on prefill GDN/matmuls could cut TTFT substantially).
+
+## 2026-06-14 — VL video-path per-stage perf harness + 3-stage Tracy split (HW BLOCKED)
+
+Added a `QWEN36_MM_VIDEO` branch to `demo/mm_perf_qwen36.py` (server/Generator path:
+vision+preproc → prefill TTFT cold/warm → traced on-device-sampled decode), additive
+to the image path. Emits Tracy signposts `start`/`vision_done`/`prefill_done`/`stop`;
+`demo/aggregate_tracy_csv.py` now produces a 3-stage (vision/prefill/decode) per-op
+device-kernel breakdown (text 2-stage runs still work; `_TT_METAL` honors
+`$TT_METAL_HOME`). 3-stage split unit-tested offline on a synthetic CSV; 2-stage
+backward-compat verified on a real report CSV.
+
+**HW BLOCKED:** BH Galaxy box would not init — `tt-smi -s` = `ETH core heartbeat check
+failed`; `tt-smi -glx_reset` (×4, incl. 45s/90s settles) stuck at `ARC Status 0/1
+initialized`. Box-level fault (known unstable-fabric box) — needs sysadmin/CPLD update.
+No on-HW numbers captured. Expected decode anchor = text decode ~27.7 tok/s/user
+(CCL-count bound); see PERF.md "VL-PERF" section for the full methodology + host-splice
+roundtrip caveat (vision-stage wall-clock over-counts a device→host→device splice; the
+on-device splice exists but isn't wired into mm_perf yet — first VL latency lever).
