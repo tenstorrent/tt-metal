@@ -31,9 +31,11 @@ from .moe_gate import moe_gate_forward
 from .shared_expert import shared_expert_forward
 from .tp import _rep
 
-# Per-layer cache for pre-stacked expert weight tensors on device.
-# Populated lazily on first forward call for each E-layer.
-_EXPERT_DEVICE_CACHE: dict = {}  # layer_idx -> (up_tt, down_tt)
+# Two persistent template tensors reused for all 23 E-layers.
+# On first E-layer: allocated via _rep (1218 MiB each on device).
+# On subsequent E-layers: updated in-place via copy_host_to_device_tensor.
+# Total device DRAM for expert weights: ~2.4 GiB regardless of layer count.
+_EXPERT_TEMPLATE: dict = {}  # mesh_id -> (up_tt, down_tt)
 
 SNAP = (
     "/home/ttuser/.cache/huggingface/hub/"
@@ -70,16 +72,20 @@ class WeightCache:
 
 
 def _get_stacked_expert_weights(mesh_device, layer_idx: int, wc: "WeightCache"):
-    """Return (up_tt, down_tt) stacked device tensors for layer_idx, caching after first build.
+    """Load expert weights for layer_idx into the two shared template device tensors.
 
     up_tt:   [1, 128, 2688, 1856]  — hidden × intermediate, for up projection
     down_tt: [1, 128, 1856, 2688]  — intermediate × hidden, for down projection
 
-    HF checkpoint stores weights as [out, in] so we transpose to [in, out] when stacking.
-    """
-    if layer_idx in _EXPERT_DEVICE_CACHE:
-        return _EXPERT_DEVICE_CACHE[layer_idx]
+    On the first E-layer call the templates are allocated via _rep (one-time DRAM cost
+    ~2.4 GiB for both).  Every subsequent call tilizes the new layer's weights on the
+    HOST and copies them into the templates in-place via copy_host_to_device_tensor.
+    This keeps peak device DRAM for expert weights constant at ~2.4 GiB regardless of
+    the number of E-layers (vs ~56 GiB if all 23 layers were kept live simultaneously).
 
+    copy_host_to_device_tensor issues a DMA command that is captured in TTNN traces,
+    so trace replay correctly streams each layer's weights into the template in order.
+    """
     p = f"backbone.layers.{layer_idx}"
     up_cpu = (
         torch.stack([wc[f"{p}.mixer.experts.{e}.up_proj.weight"] for e in range(128)])
@@ -95,9 +101,21 @@ def _get_stacked_expert_weights(mesh_device, layer_idx: int, wc: "WeightCache"):
         .bfloat16()
         .contiguous()
     )
-    up_tt = _rep(up_cpu, mesh_device)
-    down_tt = _rep(down_cpu, mesh_device)
-    _EXPERT_DEVICE_CACHE[layer_idx] = (up_tt, down_tt)
+
+    mesh_id = id(mesh_device)
+    if mesh_id not in _EXPERT_TEMPLATE:
+        # First call: allocate the two persistent template tensors on device.
+        up_tt = _rep(up_cpu, mesh_device)
+        down_tt = _rep(down_cpu, mesh_device)
+        _EXPERT_TEMPLATE[mesh_id] = (up_tt, down_tt)
+    else:
+        up_tt, down_tt = _EXPERT_TEMPLATE[mesh_id]
+        # Tilize on host (avoids device-side tilize DRAM overhead), then DMA into templates.
+        up_host = ttnn.from_torch(up_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        down_host = ttnn.from_torch(down_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        ttnn.copy_host_to_device_tensor(up_host, up_tt)
+        ttnn.copy_host_to_device_tensor(down_host, down_tt)
+
     return up_tt, down_tt
 
 

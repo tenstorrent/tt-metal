@@ -26,6 +26,8 @@ for p in (f"{_root}/ttnn", f"{_root}/tools", _root):
 import pytest
 import torch
 
+import ttnn
+
 PATTERN = "MEMEM*EMEMEM*EMEMEM*EMEMEM*EMEMEM*EMEMEMEM*EMEMEMEME"
 N_LAYERS = 52
 PCC_THRESHOLD = 0.99
@@ -208,3 +210,69 @@ def test_decode_latency(mesh_device, weight_cache):
     # Sanity: result is finite, correct shape
     assert logits.shape == (1, 1, 131072)
     assert torch.isfinite(logits).all(), "logits contain NaN/Inf"
+
+
+@pytest.mark.timeout(0)
+def test_decode_traced(mesh_device, weight_cache):
+    """Traced decode: B=1, S=1 through all 52 layers + LM head on TP=4.
+
+    Captures a TTNN trace on a fixed token, then times N_TIMED replay
+    executions.  MoE routing is deterministic for a fixed input so the
+    trace correctly represents one complete decode step.
+    """
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.model import nemotron_h_forward_device
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.tp import _host_rep
+
+    N_TRACED = 10
+
+    torch.manual_seed(7)
+    token_cpu = torch.randint(0, 131072, (1, 1), dtype=torch.int32)
+
+    # Pre-allocate the persistent device input tensor (trace input).
+    ids_tt = ttnn.from_torch(
+        token_cpu,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    wc = weight_cache
+
+    print("\nTrace warm-up (1 eager run to compile device kernels)...")
+    _ = nemotron_h_forward_device(mesh_device, ids_tt, wc)
+    ttnn.synchronize_device(mesh_device)
+
+    print("Capturing trace...")
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    logits_tt = nemotron_h_forward_device(mesh_device, ids_tt, wc)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+    print("Trace captured.")
+
+    # Verify shape before timing loop.
+    logits_cpu = _host_rep(logits_tt, mesh_device, 1)
+    assert logits_cpu.shape == (1, 1, 131072), f"unexpected logits shape {logits_cpu.shape}"
+    assert torch.isfinite(logits_cpu).all(), "logits contain NaN/Inf after trace capture"
+
+    print(f"Timing {N_TRACED} traced executions (same token)...")
+    latencies = []
+    ids_host = ttnn.from_torch(
+        token_cpu,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+    for i in range(N_TRACED):
+        ttnn.copy_host_to_device_tensor(ids_host, ids_tt)
+        t0 = time.perf_counter()
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+        t1 = time.perf_counter()
+        latencies.append((t1 - t0) * 1000)
+        print(f"  run {i + 1}: {latencies[-1]:.1f} ms")
+
+    ttnn.release_trace(mesh_device, trace_id)
+
+    avg_ms = sum(latencies) / len(latencies)
+    min_ms = min(latencies)
+    print(f"\nTraced decode B=1 S=1 (52 layers + LM head, TP=4):")
+    print(f"  avg: {avg_ms:.1f} ms  min: {min_ms:.1f} ms  throughput: {1000 / avg_ms:.2f} tok/s")
