@@ -15,8 +15,8 @@ from transformers import AutoConfig
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.tt_transformers.tests.multimodal.mistral_24b.m4_text_reference import capture_golden, load_m4_text_reference
-from models.tt_transformers.tt.multimodal.mistral_24b.mistral4_text import TtMistral4DecoderLayer
+from models.demos.mistral4.tests.m4_text_reference import capture_golden, load_m4_text_reference
+from models.demos.mistral4.tt.mistral4_text import TtMistral4DecoderLayer
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)

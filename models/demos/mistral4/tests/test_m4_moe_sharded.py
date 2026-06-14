@@ -18,7 +18,7 @@ from transformers import AutoConfig
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.tt_transformers.tests.multimodal.mistral_24b.m4_text_reference import capture_golden, load_m4_text_reference
+from models.demos.mistral4.tests.m4_text_reference import capture_golden, load_m4_text_reference
 
 
 def _repl(t, mesh):

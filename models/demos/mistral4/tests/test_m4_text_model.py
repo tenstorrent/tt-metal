@@ -16,8 +16,8 @@ from transformers import AutoConfig
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.tt_transformers.tests.multimodal.mistral_24b.m4_text_reference import get_cached_golden, load_m4_weights
-from models.tt_transformers.tt.multimodal.mistral_24b.mistral4_text import TtMistral4TextModel
+from models.demos.mistral4.tests.m4_text_reference import get_cached_golden, load_m4_weights
+from models.demos.mistral4.tt.mistral4_text import TtMistral4TextModel
 
 N_LAYERS = int(os.environ.get("M4_N_LAYERS", "2"))
 SHARD = os.environ.get("M4_SHARD", "0") == "1"
