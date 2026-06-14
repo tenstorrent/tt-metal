@@ -25,6 +25,51 @@ def _pos(positions, mesh):
     )
 
 
+def _host(t, mesh, layout):
+    return ttnn.from_torch(
+        t.to(torch.bfloat16), device=None, layout=layout, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh)
+    )
+
+
+class TracedDecode:
+    """Captures TtMistral4TextModel.forward_decode as a replayable trace over persistent device
+    input buffers (x, cos, sin, position). Each decode step copies the new inputs into those buffers
+    and replays the trace — the whole decode graph runs without per-op host dispatch.
+
+    The capture pass writes the (zero) warmup input at position 0; the first real step writes
+    position 0 again with real k/v, so no cache reset is needed before replay.
+    """
+
+    def __init__(self, model, mesh, B, hidden, rope, kv_caches):
+        self.model, self.mesh, self.B, self.kv = model, mesh, B, kv_caches
+        self.tt_x = _repl(torch.zeros(B, 1, hidden), mesh)
+        self.tt_cos = _repl(torch.zeros(B, 1, 1, rope), mesh)
+        self.tt_sin = _repl(torch.zeros(B, 1, 1, rope), mesh)
+        self.tt_pos = ttnn.from_torch(
+            torch.zeros(B, dtype=torch.int32), device=mesh, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh)
+        )
+        # warmup (compile kernels) then capture the graph
+        self.model.forward_decode(self.tt_x, self.tt_pos, self.tt_cos, self.tt_sin, self.kv)
+        self.tid = ttnn.begin_trace_capture(mesh, cq_id=0)
+        self.out = self.model.forward_decode(self.tt_x, self.tt_pos, self.tt_cos, self.tt_sin, self.kv)
+        ttnn.end_trace_capture(mesh, self.tid, cq_id=0)
+
+    def step(self, x, cos, sin, positions):
+        ttnn.copy_host_to_device_tensor(_host(x, self.mesh, ttnn.TILE_LAYOUT), self.tt_x)
+        ttnn.copy_host_to_device_tensor(_host(cos, self.mesh, ttnn.TILE_LAYOUT), self.tt_cos)
+        ttnn.copy_host_to_device_tensor(_host(sin, self.mesh, ttnn.TILE_LAYOUT), self.tt_sin)
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(
+                torch.tensor(positions, dtype=torch.int32),
+                device=None,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            ),
+            self.tt_pos,
+        )
+        ttnn.execute_trace(self.mesh, self.tid, cq_id=0, blocking=True)
+        return self.out
+
+
 class Mistral4Generator:
     """Greedy generator over a TtMistral4TextModel. cos_full/sin_full hold per-position RoPE
     [B, max_pos, rope_dim] for the whole horizon (prompt + generated)."""
