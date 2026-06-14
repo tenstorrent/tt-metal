@@ -119,10 +119,11 @@ def _peak_dram_bytes(mesh_device):
 )
 @pytest.mark.parametrize(
     "optimizations",
-    # performance preset (BFP4 MLP) keeps decode-MLP circular buffers small enough
-    # to fit L1 on a single p150a; accuracy preset (BFP8 MLP) clashes in L1 at decode.
-    [lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name)],
-    ids=["performance"],
+    # accuracy preset = BF16 attention + BFP8 MLP weights (>=99% prefill PCC).
+    # Decode w1/w3 outputs are forced to BFP8 in mlp.py so the BFP8 weight-stream
+    # CB fits L1 at decode on a single p150a.
+    [lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name)],
+    ids=["accuracy"],
 )
 @pytest.mark.parametrize(
     "device_params",

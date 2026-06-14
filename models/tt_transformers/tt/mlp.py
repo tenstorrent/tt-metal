@@ -155,6 +155,11 @@ class MLP(LightweightModule):
             if self.prefetcher is not None and mode == Mode.DECODE
             else None,
         )
+        if mode == Mode.DECODE and not TG and self.prefetcher is None:
+            # Single-chip decode: spill w1_out to DRAM before w3's matmul so the
+            # resident L1-width-sharded outputs don't clash with w3's circular
+            # buffers (BFP8 MLP weights overflow L1 otherwise on a single p150a).
+            w1_out = ttnn.to_memory_config(w1_out, ttnn.DRAM_MEMORY_CONFIG)
         w3_out = ttnn.linear(
             x,
             self.w3,
@@ -168,6 +173,8 @@ class MLP(LightweightModule):
             if self.prefetcher is not None and mode == Mode.DECODE
             else None,
         )
+        if mode == Mode.DECODE and not TG and self.prefetcher is None:
+            w3_out = ttnn.to_memory_config(w3_out, ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(x)
 
         if TG:
