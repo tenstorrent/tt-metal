@@ -3,119 +3,135 @@
 """MoEExperts — TP=4 on QB 4-chip Blackhole.
 
 128 routed NemotronHMLP experts, top-6 per token (top-k=6), intermediate=1856.
-With top-6 of 128, on average only ~4.7% of experts process any token;
-the loop skips all inactive experts immediately.
 
-Decode fast path (n_tokens == 1): all active experts process the same single
-token, so hidden_states stays on device throughout — no D2H/H2D round trips.
-Routing logic (which experts are active) still runs on CPU.
+Device-side implementation using ttnn.sparse_matmul, mirroring the pattern in
+models/demos/gpt_oss/tt/experts/decode.py.  All expert weights are pre-stacked
+as [1, 128, hidden, intermediate] device tensors (loaded once per layer at
+first call, cached in the caller).  The routing-weight sparsity tensor comes
+from moe_gate_forward as a dense [tokens, 128] device tensor with zeros for
+inactive experts.
 
-Prefill path (n_tokens > 1): original CPU-accumulation approach; activations
-are brought to CPU once, each expert's slice is run on device, results
-accumulated on CPU, and the final tensor is uploaded back to device.
-
-Boundary: activations enter as ttnn.Tensor, result is returned as ttnn.Tensor.
+Activation: relu2 = relu(x)^2   (NemotronH uses this instead of SwiGLU)
 """
 
-import torch
+import math
 
 import ttnn
 from ttnn import MeshDevice
-
-from .tp import _host_rep, _rep
 
 N_EXPERTS = 128
 TOP_K = 6
 HIDDEN_SIZE = 2688
 MOE_INTERMEDIATE = 1856
 
+# Blackhole BH has an 8×8 usable Tensix grid.  These core-grid choices and
+# in0_block_w values are derived from the dimensions:
+#   up:   [tokens, 2688] × [2688, 1856]  →  Nt=58, Kt=84
+#   down: [tokens, 1856] × [1856, 2688]  →  Nt=84, Kt=58
+_UP_CORES = (5, 6)  # 30 cores  →  per_core_N = ceil(58/30) = 2
+_DOWN_CORES = (5, 6)  # 30 cores  →  per_core_N = ceil(84/30) = 3
+_UP_IN0_BLOCK_W = 7  # divides Kt=84
+_DOWN_IN0_BLOCK_W = 2  # divides Kt=58
+
+
+def _mm_config(cores_x, cores_y, m, n, k, in0_block_w, out_subblock_w=1):
+    Nt = math.ceil(n / 32)
+    num_cores = cores_x * cores_y
+    per_core_N = math.ceil(Nt / num_cores)
+    per_core_M = max(32, m) // 32
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(cores_x, cores_y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=out_subblock_w,
+        out_block_h=1,
+        out_block_w=1,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
 
 def moe_experts_forward(
     mesh_device: MeshDevice,
     hidden_states: ttnn.Tensor,  # [tokens, 2688] bf16 on device
-    topk_indices: torch.Tensor,  # [tokens, 6] int64 CPU (from moe_gate)
-    topk_weights: torch.Tensor,  # [tokens, 6] float32 CPU (from moe_gate)
-    expert_up_weights: list,  # 128 × [1856, 2688] bf16 CPU
-    expert_down_weights: list,  # 128 × [2688, 1856] bf16 CPU
+    routing_weights: ttnn.Tensor,  # [tokens, 128] bf16 on device — dense sparsity mask
+    up_weights_tt: ttnn.Tensor,  # [1, 128, 2688, 1856] bf16 on device (pre-stacked)
+    down_weights_tt: ttnn.Tensor,  # [1, 128, 1856, 2688] bf16 on device (pre-stacked)
 ) -> ttnn.Tensor:
     """Returns [tokens, 2688] bfloat16 on device (replicated).
 
-    Activation: relu2 = relu(x)^2
+    Follows the gpt_oss sparse_matmul pattern:
+      sparse_matmul(h, up_W, sparsity)  → [tokens, 128, intermediate]
+      relu²                              → same shape
+      sparse_matmul(act, down_W, sparsity, is_input_a_sparse=True)
+                                        → [tokens, 128, hidden]
+      mul routing_weights + sum experts → [tokens, hidden]
     """
-    n_tokens = hidden_states.shape[0]
+    tokens = hidden_states.shape[0]
+    output_tile = ttnn.Tile([32, 32])
 
-    if n_tokens == 1:
-        return _decode_experts_forward(
-            mesh_device,
-            hidden_states,
-            topk_indices,
-            topk_weights,
-            expert_up_weights,
-            expert_down_weights,
-        )
+    # sparsity tensor: sparse_matmul expects [tokens, num_experts] ROW_MAJOR
+    sparsity = ttnn.to_layout(ttnn.unsqueeze_to_4D(routing_weights), ttnn.ROW_MAJOR_LAYOUT)
 
-    # --- Prefill: multi-token path (original logic) ---
-    flat_cpu = _host_rep(hidden_states, mesh_device, n_tokens).float()  # [tokens, 2688]
+    up_cfg = _mm_config(
+        *_UP_CORES, m=tokens, n=MOE_INTERMEDIATE, k=HIDDEN_SIZE, in0_block_w=_UP_IN0_BLOCK_W, out_subblock_w=2
+    )
+    # hidden_states: [tokens, 2688] → needs 4D for sparse_matmul
+    h4d = ttnn.unsqueeze_to_4D(hidden_states)  # [1, 1, tokens, 2688]
 
-    final = torch.zeros(n_tokens, HIDDEN_SIZE, dtype=torch.float32)
+    # Up projection: [1, 1, tokens, 2688] × [1, 128, 2688, 1856] → [1, tokens, 128, 1856]
+    up = ttnn.sparse_matmul(
+        h4d,
+        up_weights_tt,
+        sparsity=sparsity,
+        nnz=None,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        output_tile=output_tile,
+        program_config=up_cfg,
+        dtype=ttnn.bfloat16,
+    )
+    # Reshape to [tokens, 128, intermediate]
+    up = ttnn.reshape(up, (tokens, N_EXPERTS, MOE_INTERMEDIATE))
 
-    for e in range(N_EXPERTS):
-        token_idx, weight_idx = torch.where(topk_indices == e)
-        if token_idx.numel() == 0:
-            continue
+    # relu²
+    act = ttnn.pow(ttnn.relu(up), 2)
 
-        ne = token_idx.numel()
-        x_e = flat_cpu[token_idx]  # [ne, 2688] CPU
+    # Prepare down input: [128, tokens, intermediate] → [1, 128, tokens, intermediate]
+    act = ttnn.transpose(act, 0, 1)
+    act = ttnn.reshape(act, (1, N_EXPERTS, tokens, MOE_INTERMEDIATE))
 
-        x_e_tt = _rep(x_e.bfloat16(), mesh_device)
-        wu_tt = _rep(expert_up_weights[e].bfloat16(), mesh_device)
-        up_tt = ttnn.linear(x_e_tt, wu_tt, transpose_b=True)  # [ne, 1856]
-        act_tt = ttnn.pow(ttnn.relu(up_tt), 2)
-        wd_tt = _rep(expert_down_weights[e].bfloat16(), mesh_device)
-        out_tt = ttnn.linear(act_tt, wd_tt, transpose_b=True)  # [ne, 2688]
+    down_cfg = _mm_config(
+        *_DOWN_CORES, m=tokens, n=HIDDEN_SIZE, k=MOE_INTERMEDIATE, in0_block_w=_DOWN_IN0_BLOCK_W, out_subblock_w=1
+    )
 
-        out = _host_rep(out_tt, mesh_device, ne).float()  # [ne, 2688]
-        weights = topk_weights[token_idx, weight_idx].unsqueeze(-1).float()
-        final.index_add_(0, token_idx, out * weights)
+    # Down projection: [1, 128, tokens, intermediate] × [1, 128, intermediate, hidden]
+    down = ttnn.sparse_matmul(
+        act,
+        down_weights_tt,
+        sparsity=sparsity,
+        nnz=None,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        output_tile=output_tile,
+        program_config=down_cfg,
+        is_input_a_sparse=True,
+        dtype=ttnn.bfloat16,
+    )
+    act.deallocate(True)
+    sparsity.deallocate(True)
 
-    return _rep(final.bfloat16(), mesh_device)
+    # down: [1, 128, tokens, 2688] → [tokens, 128, 2688]
+    down = ttnn.reshape(down, (N_EXPERTS, tokens, HIDDEN_SIZE))
+    down = ttnn.transpose(down, 0, 1)  # [tokens, 128, 2688]
 
+    # Scale by routing weights and sum over expert dimension.
+    rw = ttnn.reshape(routing_weights, (tokens, N_EXPERTS, 1))  # [tokens, 128, 1]
+    down = ttnn.mul(down, rw, output_tensor=down)
+    rw.deallocate(True)
 
-def _decode_experts_forward(
-    mesh_device: MeshDevice,
-    hidden_states: ttnn.Tensor,  # [1, 2688] bf16 on device
-    topk_indices: torch.Tensor,  # [1, 6] int64 CPU
-    topk_weights: torch.Tensor,  # [1, 6] float32 CPU
-    expert_up_weights: list,
-    expert_down_weights: list,
-) -> ttnn.Tensor:
-    """Decode fast path: single token — all experts process the same input.
+    out = ttnn.sum(down, dim=1)  # [tokens, 2688]
+    down.deallocate(True)
 
-    No D2H/H2D for activations.  Routing (which experts, what weights) is
-    determined on CPU; only weight uploads and device compute are issued.
-    """
-    result_tt = None
-
-    for e in range(N_EXPERTS):
-        token_idx, weight_idx = torch.where(topk_indices == e)
-        if token_idx.numel() == 0:
-            continue
-
-        # S=1: token_idx is always [0] — input is always the full hidden_states.
-        w = topk_weights[0, weight_idx[0]].item()
-
-        wu_tt = _rep(expert_up_weights[e].bfloat16(), mesh_device)
-        up_tt = ttnn.linear(hidden_states, wu_tt, transpose_b=True)  # [1, 1856]
-        act_tt = ttnn.pow(ttnn.relu(up_tt), 2)
-        wd_tt = _rep(expert_down_weights[e].bfloat16(), mesh_device)
-        out_tt = ttnn.linear(act_tt, wd_tt, transpose_b=True)  # [1, 2688]
-
-        # Scale by routing weight — multiply by Python float (no extra tensor).
-        out_tt = ttnn.multiply(out_tt, w)
-
-        if result_tt is None:
-            result_tt = out_tt
-        else:
-            result_tt = ttnn.add(result_tt, out_tt)
-
-    return result_tt
+    return out

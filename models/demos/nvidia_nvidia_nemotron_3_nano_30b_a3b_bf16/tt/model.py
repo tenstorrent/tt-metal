@@ -22,13 +22,18 @@ import torch
 import ttnn
 
 from .dense_attention import dense_attention_forward
-from .embedding import embedding_forward
+from .embedding import embedding_forward, embedding_forward_tt
 from .layer_norm import layer_norm_forward
-from .lm_head import lm_head_forward
+from .lm_head import lm_head_forward, lm_head_forward_device
 from .mamba2_layer import mamba2_layer_forward
 from .moe_experts import moe_experts_forward
 from .moe_gate import moe_gate_forward
 from .shared_expert import shared_expert_forward
+from .tp import _rep
+
+# Per-layer cache for pre-stacked expert weight tensors on device.
+# Populated lazily on first forward call for each E-layer.
+_EXPERT_DEVICE_CACHE: dict = {}  # layer_idx -> (up_tt, down_tt)
 
 SNAP = (
     "/home/ttuser/.cache/huggingface/hub/"
@@ -64,17 +69,48 @@ class WeightCache:
         return key in self._idx
 
 
+def _get_stacked_expert_weights(mesh_device, layer_idx: int, wc: "WeightCache"):
+    """Return (up_tt, down_tt) stacked device tensors for layer_idx, caching after first build.
+
+    up_tt:   [1, 128, 2688, 1856]  — hidden × intermediate, for up projection
+    down_tt: [1, 128, 1856, 2688]  — intermediate × hidden, for down projection
+
+    HF checkpoint stores weights as [out, in] so we transpose to [in, out] when stacking.
+    """
+    if layer_idx in _EXPERT_DEVICE_CACHE:
+        return _EXPERT_DEVICE_CACHE[layer_idx]
+
+    p = f"backbone.layers.{layer_idx}"
+    up_cpu = (
+        torch.stack([wc[f"{p}.mixer.experts.{e}.up_proj.weight"] for e in range(128)])
+        .transpose(-1, -2)  # [128, 1856, 2688] → [128, 2688, 1856]
+        .unsqueeze(0)  # [1, 128, 2688, 1856]
+        .bfloat16()
+        .contiguous()
+    )
+    down_cpu = (
+        torch.stack([wc[f"{p}.mixer.experts.{e}.down_proj.weight"] for e in range(128)])
+        .transpose(-1, -2)  # [128, 2688, 1856] → [128, 1856, 2688]
+        .unsqueeze(0)  # [1, 128, 1856, 2688]
+        .bfloat16()
+        .contiguous()
+    )
+    up_tt = _rep(up_cpu, mesh_device)
+    down_tt = _rep(down_cpu, mesh_device)
+    _EXPERT_DEVICE_CACHE[layer_idx] = (up_tt, down_tt)
+    return up_tt, down_tt
+
+
 def _moe_layer_forward(
     mesh_device,
     hidden_states: ttnn.Tensor,  # [B, S, 2688] bf16 on device
     layer_idx: int,
-    wc: WeightCache,
+    wc: "WeightCache",
 ) -> ttnn.Tensor:
     """E-type block: pre-norm → gate + experts + shared_expert → residual."""
     residual = hidden_states
     p = f"backbone.layers.{layer_idx}"
 
-    # Pre-norm (returns ttnn.Tensor)
     normed_tt = layer_norm_forward(mesh_device, hidden_states, wc[f"{p}.norm.weight"])
 
     B = normed_tt.shape[0]
@@ -84,20 +120,21 @@ def _moe_layer_forward(
     # Flatten for gate/experts: [B, S, H] → [B*S, H]
     flat_tt = ttnn.reshape(normed_tt, [B * S, H])
 
-    # Gate routing (returns CPU indices/weights — logits are tiny)
-    topk_idx, topk_wts = moe_gate_forward(
+    # Gate: returns dense [B*S, 128] routing-weight tensor on device.
+    routing_weights_tt = moe_gate_forward(
         mesh_device,
         flat_tt,
         wc[f"{p}.mixer.gate.weight"],
         wc[f"{p}.mixer.gate.e_score_correction_bias"],
     )
 
-    # Routed experts (returns ttnn.Tensor [B*S, 2688])
-    experts_up = [wc[f"{p}.mixer.experts.{e}.up_proj.weight"] for e in range(128)]
-    experts_down = [wc[f"{p}.mixer.experts.{e}.down_proj.weight"] for e in range(128)]
-    expert_out_tt = moe_experts_forward(mesh_device, flat_tt, topk_idx, topk_wts, experts_up, experts_down)
+    # Lazily build and cache pre-stacked expert weight tensors on device.
+    up_tt, down_tt = _get_stacked_expert_weights(mesh_device, layer_idx, wc)
 
-    # Shared expert (returns ttnn.Tensor [B, S, 2688])
+    # Routed experts via sparse_matmul (returns [B*S, 2688] on device).
+    expert_out_tt = moe_experts_forward(mesh_device, flat_tt, routing_weights_tt, up_tt, down_tt)
+
+    # Shared expert
     shared_out_tt = shared_expert_forward(
         mesh_device,
         normed_tt,
@@ -105,10 +142,44 @@ def _moe_layer_forward(
         w_down=wc[f"{p}.mixer.shared_experts.down_proj.weight"],
     )
 
-    # Combine: reshape expert_out back and add shared_out, then residual
     expert_out_reshaped = ttnn.reshape(expert_out_tt, [B, S, H])
     moe_out_tt = ttnn.add(expert_out_reshaped, shared_out_tt)
     return ttnn.add(residual, moe_out_tt)
+
+
+def _layer_stack_forward(mesh_device, hidden_states: ttnn.Tensor, wc: WeightCache, num_layers: int) -> ttnn.Tensor:
+    """Shared layer loop used by both forward variants."""
+    for li in range(min(num_layers, N_LAYERS)):
+        layer_type = PATTERN[li]
+        p = f"backbone.layers.{li}"
+
+        if layer_type == "M":
+            hidden_states = mamba2_layer_forward(
+                mesh_device,
+                hidden_states,
+                norm_weight=wc[f"{p}.norm.weight"],
+                in_proj_weight=wc[f"{p}.mixer.in_proj.weight"],
+                conv1d_weight=wc[f"{p}.mixer.conv1d.weight"],
+                conv1d_bias=wc[f"{p}.mixer.conv1d.bias"],
+                dt_bias=wc[f"{p}.mixer.dt_bias"],
+                A_log=wc[f"{p}.mixer.A_log"],
+                norm_mixer_weight=wc[f"{p}.mixer.norm.weight"],
+                D=wc[f"{p}.mixer.D"],
+                out_proj_weight=wc[f"{p}.mixer.out_proj.weight"],
+            )
+        elif layer_type == "E":
+            hidden_states = _moe_layer_forward(mesh_device, hidden_states, li, wc)
+        else:
+            hidden_states = dense_attention_forward(
+                mesh_device,
+                hidden_states,
+                norm_weight=wc[f"{p}.norm.weight"],
+                wq=wc[f"{p}.mixer.q_proj.weight"],
+                wk=wc[f"{p}.mixer.k_proj.weight"],
+                wv=wc[f"{p}.mixer.v_proj.weight"],
+                wo=wc[f"{p}.mixer.o_proj.weight"],
+            )
+    return hidden_states
 
 
 def nemotron_h_forward(
@@ -131,45 +202,39 @@ def nemotron_h_forward(
     if wc is None:
         wc = WeightCache()
 
-    # 1. Embedding — returns ttnn.Tensor on device
     hidden_states = embedding_forward(mesh_device, input_ids, wc["backbone.embeddings.weight"])
+    hidden_states = _layer_stack_forward(mesh_device, hidden_states, wc, num_layers)
 
-    # 2. Layer stack — all layers pass ttnn.Tensor between them
-    for li in range(min(num_layers, N_LAYERS)):
-        layer_type = PATTERN[li]
-        p = f"backbone.layers.{li}"
-
-        if layer_type == "M":
-            hidden_states = mamba2_layer_forward(
-                mesh_device,
-                hidden_states,
-                norm_weight=wc[f"{p}.norm.weight"],
-                in_proj_weight=wc[f"{p}.mixer.in_proj.weight"],
-                conv1d_weight=wc[f"{p}.mixer.conv1d.weight"],
-                conv1d_bias=wc[f"{p}.mixer.conv1d.bias"],
-                dt_bias=wc[f"{p}.mixer.dt_bias"],
-                A_log=wc[f"{p}.mixer.A_log"],
-                norm_mixer_weight=wc[f"{p}.mixer.norm.weight"],
-                D=wc[f"{p}.mixer.D"],
-                out_proj_weight=wc[f"{p}.mixer.out_proj.weight"],
-            )
-
-        elif layer_type == "E":
-            hidden_states = _moe_layer_forward(mesh_device, hidden_states, li, wc)
-
-        else:  # '*' — dense attention (no RoPE in HF source)
-            hidden_states = dense_attention_forward(
-                mesh_device,
-                hidden_states,
-                norm_weight=wc[f"{p}.norm.weight"],
-                wq=wc[f"{p}.mixer.q_proj.weight"],
-                wk=wc[f"{p}.mixer.k_proj.weight"],
-                wv=wc[f"{p}.mixer.v_proj.weight"],
-                wo=wc[f"{p}.mixer.o_proj.weight"],
-            )
-
-    # 3. LM head — single CPU boundary at the output
     return lm_head_forward(
+        mesh_device,
+        hidden_states,
+        norm_f_weight=wc["backbone.norm_f.weight"],
+        lm_head_weight=wc["lm_head.weight"],
+    )
+
+
+def nemotron_h_forward_device(
+    mesh_device,
+    ids_tt: ttnn.Tensor,  # pre-allocated uint32 device tensor [B, S]
+    wc: WeightCache | None = None,
+    num_layers: int = N_LAYERS,
+) -> ttnn.Tensor:
+    """Full NemotronH forward returning logits as ttnn.Tensor (no D2H).
+
+    Accepts a pre-allocated device tensor for the token IDs so that the
+    caller can update it via ttnn.copy_host_to_device_tensor and replay
+    the captured trace without re-tracing.
+
+    Returns:
+        Logits [B, S, 131072] bfloat16 on device.
+    """
+    if wc is None:
+        wc = WeightCache()
+
+    hidden_states = embedding_forward_tt(mesh_device, ids_tt, wc["backbone.embeddings.weight"])
+    hidden_states = _layer_stack_forward(mesh_device, hidden_states, wc, num_layers)
+
+    return lm_head_forward_device(
         mesh_device,
         hidden_states,
         norm_f_weight=wc["backbone.norm_f.weight"],
