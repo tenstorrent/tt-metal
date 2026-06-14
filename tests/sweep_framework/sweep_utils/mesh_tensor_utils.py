@@ -221,6 +221,27 @@ def create_mesh_device(
          op's masters all need the same axis.
       3. Default to COL.
     """
+    # Blackhole does not support the WORKER ROW/COL dispatch-core axes that the
+    # wormhole logic below selects: opening with one raises "ROW dispatch core
+    # axis is not supported for blackhole arch unless fabric tensix MUX is
+    # enabled" (~all blackhole p100a/p150b/p300a model_traced fails were this).
+    # The whole ROW/COL/ETH selection dance is wormhole-specific (Galaxy 8x9 /
+    # 7x10 grids); on blackhole just open with the default dispatch core config
+    # — which blackhole supports — and skip it entirely. This also overrides any
+    # explicit dispatch_core_axis a caller passes, since blackhole can't honor it.
+    _arch = os.environ.get("ARCH_NAME", "").lower()
+    if not _arch:
+        try:
+            _arch = ttnn.get_arch_name().lower()
+        except Exception:
+            _arch = ""
+    if "blackhole" in _arch:
+        return ttnn.open_mesh_device(
+            mesh_shape=ttnn.MeshShape(*mesh_shape),
+            l1_small_size=l1_small_size,
+            dispatch_core_config=ttnn.DispatchCoreConfig(),
+        )
+
     # Prefer ETH dispatch on single-host clusters, for EVERY caller (explicit
     # axis or auto-detect). On a single Wormhole chip, WORKER dispatch (either
     # axis) reserves a worker row/col and leaves only 8x7 / 7x8 = 56 compute
