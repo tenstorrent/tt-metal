@@ -138,7 +138,8 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
     tile_regs_acquire();
     cb_wait_front(cb_scaled_dy_gamma_sum_idx, onetile);
 
-    reconfig_data_format(cb_scaled_dy_gamma_sum_idx, cb_scaler_idx);
+    // matmul reverses operands (in0 -> SrcB, in1 -> SrcA), so reconfig in reversed (in1, in0) order.
+    reconfig_data_format(cb_scaler_idx, cb_scaled_dy_gamma_sum_idx);
     matmul_init(cb_scaled_dy_gamma_sum_idx, cb_scaler_idx, 0);
     matmul_tiles(
         cb_scaled_dy_gamma_sum_idx,
@@ -216,7 +217,8 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
     tile_regs_acquire();
     cb_wait_front(cb_scaled_dy_gamma_xnorm_sum_idx, onetile);
 
-    reconfig_data_format(cb_scaled_dy_gamma_xnorm_sum_idx, cb_scaler_idx);
+    // matmul reverses operands (in0 -> SrcB, in1 -> SrcA), so reconfig in reversed (in1, in0) order.
+    reconfig_data_format(cb_scaler_idx, cb_scaled_dy_gamma_xnorm_sum_idx);
     matmul_init(cb_scaled_dy_gamma_xnorm_sum_idx, cb_scaler_idx, 0);
     matmul_tiles(
         cb_scaled_dy_gamma_xnorm_sum_idx,
@@ -296,7 +298,8 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
     tile_regs_acquire();
     cb_wait_front(cb_scaled_dy_gamma_sum_idx, onetile);
 
-    reconfig_data_format(cb_scaled_dy_gamma_sum_idx, cb_scaler_idx);
+    // matmul reverses operands (in0 -> SrcB, in1 -> SrcA), so reconfig in reversed (in1, in0) order.
+    reconfig_data_format(cb_scaler_idx, cb_scaled_dy_gamma_sum_idx);
     matmul_init(cb_scaled_dy_gamma_sum_idx, cb_scaler_idx, 0);
     matmul_tiles(
         cb_scaled_dy_gamma_sum_idx,
@@ -390,7 +393,8 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
     tile_regs_acquire();
     cb_wait_front(cb_scaled_dy_gamma_xnorm_sum_idx, onetile);
 
-    reconfig_data_format(cb_scaled_dy_gamma_xnorm_sum_idx, cb_scaler_idx);
+    // matmul reverses operands (in0 -> SrcB, in1 -> SrcA), so reconfig in reversed (in1, in0) order.
+    reconfig_data_format(cb_scaler_idx, cb_scaled_dy_gamma_xnorm_sum_idx);
     matmul_init(cb_scaled_dy_gamma_xnorm_sum_idx, cb_scaler_idx, 0);
     matmul_tiles(
         cb_scaled_dy_gamma_xnorm_sum_idx,
