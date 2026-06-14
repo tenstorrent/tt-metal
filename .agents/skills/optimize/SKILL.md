@@ -9,19 +9,23 @@ This skill assumes you have some runnable TTNN code already with passing correct
 
 This guide does not explain how to make more efficient multi-device mesh layout decisions (e.g. mixtures of TP/DP/EP) but if you have multi-device TTNN code it will make every device run as fast as it can given the existing multi-device weight layout choices.
 
-Read the advice in `tech_reports/LLMs/llms.md`, particularly section 4 "Best practices and optimizations". In this skill we will strive to optimize *on-device* performance. For decode it is required to always measure the performance of a traced execution run; untraced/eager decode performance is not acceptable optimized evidence. Teacher-forcing decode must also use the traced path. For complete model or serving paths, avoidable host gaps are part of the optimization target and must be removed rather than merely noted. Always perform optimization using real model shapes, do not use reduced shapes!
+Read the advice in `tech_reports/LLMs/llms.md`, particularly section 4 "Best practices and optimizations". In this skill we will strive to optimize *on-device* performance. For decode it is required to always measure the performance of a traced execution run; untraced/eager decode performance is not acceptable optimized evidence. Teacher-forcing decode must also use the traced path. For complete model or serving paths, avoidable host gaps are part of the optimization target and must be removed rather than merely noted. Always perform optimization using real tensor shapes, sequence shapes, batch size, sharding, and dtypes. Do not shrink hidden sizes, head counts, sequence lengths, or weight shapes just to make evidence easier to collect.
 
-When direct traced generator decode is already fast but vLLM/serving decode is slower, treat the gap as orchestration overhead before retuning decoder math. First fix the adapter/generator path: async decode split, nonblocking trace replay, on-device traced sampling, host readbacks, page-table/input refreshes, and fallback sampling. Keep same-harness serving before/after metrics and compare to the canonical implementation on the same machine when one exists.
+When direct traced generator decode is already fast but vLLM/serving decode is slower, treat the gap as orchestration overhead before retuning decoder math. First fix the adapter/generator path: async decode split, nonblocking trace replay, on-device traced sampling, host readbacks, page-table/input refreshes, and fallback sampling. Keep same-harness serving before/after metrics.
 
 A note on the term "sharding" - tt-metal uses this to mean two things. On-device sharding means sharding across the cores or DRAM banks of one device, such as L1-sharded activations or DRAM-sharded weights. Multi-chip sharding means distributing tensors across devices in a mesh. On-device sharding is in scope for this skill. When `tt-perf-report` mentions sharding, it usually means on-device sharding.
 
 Profile warmed prefill and decode separately. Use `tt-perf-report` to find bottlenecks and suggestions. Try applicable advice. Keep changes that improve the target without unacceptable correctness or complexity cost. Record why rejected advice was rejected. If advice seems wrong, incomplete, or misleading, call that out as a candidate improvement to `tt-perf-report`.
 
-For decoder or module-level optimization, import the closest canonical precision/fidelity policy before inventing one. In tt-metal, first inspect `models/tt_transformers/PERF.md`, `models/tt_transformers/tt/model_config.py`, and any model-specific decoder config artifacts for the same model or nearest architecture. Use the canonical performance policy as a required starting candidate, including selective tensor groups, KV-cache dtype, activation/residual/CCL dtypes, compute fidelities, and layer exceptions. For example, if the reference keeps the final layer at higher precision while using BFP4 only for FF1/FF3 elsewhere, implement that contract rather than trying a blunt global dtype.
+Do not run Tracy or device-profiler collection on a full-model stack with every layer present. Full-stack profiling can create multi-GB profiler dumps, overflow device-profiler buffers, and distort the measurement. For full-model profiling, build a reduced profiling variant with one real layer of each layer kind and the real surrounding path: embeddings or input projection, the representative layers, final norm, LM head, sampling or token feedback when relevant, real KV-cache/page-table shapes, and the same trace path. Capture one warmed traced decode replay, or the smallest signposted prefill/decode window that answers the question. Use this reduced-layer profile for `tt-perf-report`; use the complete model only for end-to-end timing and correctness.
 
-Then tune precision and fidelity one group at a time so regressions can be assigned. For precision tuning always use real weights and recorded input activations; synthetic weights and activations are not representative enough to veto a canonical policy. A common fallback starting point, when no canonical policy exists, is BF16 activations and norms, BFP8 attention/MLP weights, BFP8 KV cache if PCC allows it, and selective BFP4 trials for MLP/expert weights.
+Run watcher and profiler evidence as separate hardware runs. Do not combine `TT_METAL_WATCHER` with device-profiler collection, and do not escalate missing serving profiler CSVs into repeated watcher/profiler/reset loops. On T3K, the dangerous pattern seen in Phi-3.5 Mini experiments was: a vLLM/serving profiler failure or watcher failure, followed by a full in-process 32-layer serving-adapter profile under device-profiler env such as `TT_METAL_DEVICE_PROFILER=1`, `TT_METAL_PROFILER_CPP_POST_PROCESS=1`, `TT_METAL_PROFILER_MID_RUN_DUMP=1`, `TT_METAL_PROFILER_TRACE_TRACKING=1`, and `TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=5000`, then explicit `ttnn.ReadDeviceProfiler(mesh)` readback. With signatures such as `Timeout waiting for Ethernet core service remote IO request`, `ETH core heartbeat check failed`, `Unexpected ERISC Response Flags`, `Read 0xffffffff from ARC scratch`, or ARC lock/readback waits, this can leave the T3K undiscoverable: `tt-smi -ls --local` hangs and `tt-smi -r` may hang. If this happens, stop profiler collection, preserve the logs, mark the evidence `hardware-profiler-limited`, and ask the monitor/operator to reboot the physical Docker host. A direct host `sudo /sbin/reboot` recovered `wh-lb-90`; `ird reboot --force` reported success there but did not reset host uptime or fix `tt-smi`.
 
-If a canonical policy fails in the generated code, debug the mismatch before discarding it. Check loader grouping, tensor layout, KV-cache update math, scale/transpose handling, and whether the validation harness is exercising the same full-model policy. For KV-cache precision, compare the exact reference cache shape and mapper, not just dtype. Local-head replicated caches, global-head sharded caches, page-table distribution, and `paged_fill_cache`/`paged_update_cache` input dtype restrictions are different contracts. Lower-precision cache fill should cast the prefill K/V fill tensors to the cache dtype before `paged_fill_cache`; decode update tensors should stay BF16/FLOAT32 for `paged_update_cache`.
+For decoder or module-level optimization, do not use a blunt global dtype policy. Start with a named precision/fidelity policy and tune tensor groups separately: attention weights, MLP/expert weights, KV cache, activations/residuals, CCL communication, norms, logits, and layer exceptions. Use the fallback policy below as the starting point unless an earlier stage has already selected a faster correct policy. Move one tensor group at a time.
+
+Then tune precision and fidelity one group at a time so regressions can be assigned. For precision tuning always use real weights and recorded input activations; synthetic weights and activations are not representative enough to veto a policy. A common fallback starting point, when no prior policy exists, is BF16 activations and norms, BFP8 attention/MLP weights, BFP8 KV cache if PCC allows it, and selective BFP4 trials for MLP/expert weights.
+
+If a prior-good policy fails in the generated code, debug the mismatch before discarding it. Check loader grouping, tensor layout, KV-cache update math, scale/transpose handling, and whether the validation harness is exercising the same full-model policy. For KV-cache precision, compare cache shape and mapper as well as dtype. Local-head replicated caches, global-head sharded caches, page-table distribution, and `paged_fill_cache`/`paged_update_cache` input dtype restrictions are different contracts. Lower-precision cache fill should cast the prefill K/V fill tensors to the cache dtype before `paged_fill_cache`; decode update tensors should stay BF16/FLOAT32 for `paged_update_cache`.
 
 When optimizing a complete full model in the repo-local autonomous bringup flow, keep the main focus on full-model parallelism, tracing, sharding, data movement, program configs, compute-kernel configs, and removing host boundaries. `$datatype-sweep` owns the final accuracy/performance frontier, but this pass must still try targeted precision/fidelity changes when the measured full-model decode is materially below a credible target and the decoder-layer roofline says reduced precision could be the difference. Do not reject such work as "datatype sweep" by default. Try small, evidence-backed policies such as MLP gate/up BFP4, selected layer exceptions, KV/cache/CCL dtype changes, or compute-fidelity changes, then validate on the same traced full-model token-out path. Leave broad Pareto exploration to `$datatype-sweep`.
 
@@ -64,11 +68,30 @@ For optimized full-model work, first compute a target budget from the best decod
 
 If the layer-stack estimate is already slower than the target, return to decoder optimization before spending time on generator orchestration. If the layer-stack estimate can meet the target but the full model cannot, optimize the overhead explicitly before changing the mathematical core: final norm, LM head, logits movement, sampling trace, token/current-position/RoPE/page-table refresh, trace replay blocking, synchronizations, host readbacks, cache management, and CCL buffer lifetime. For token/current-position/RoPE/page-table refresh specifically, the optimized steady-state loop should use persistent device tensors, `tt_out_tok` feedback, device-side position advance for fixed-step decode, and page-table copies only when the page table changes.
 
+### LM Head And Sampling
+
+For models with an LM head and token sampling, treat the terminal path as part of optimized decode. A fast decoder layer stack is not enough if final norm, LM head, logits movement, sampling, or token feedback add avoidable per-token work.
+
+Before accepting full-model or serving decode performance:
+
+- Profile a reduced full-model token-out trace that includes final norm, LM head, logits movement, sampling, and token feedback. Measure these terms separately from the decoder-layer stack.
+- Treat the LM head as a real decode matmul, not as small postprocessing. It is a hidden-size by vocab-size projection and is usually DRAM-bound.
+- Keep the hidden stream in the optimized sharded layout through final norm and into the LM head when possible. Do not gather a full hidden vector or full logits tensor merely because it simplifies the wrapper.
+- Split the LM head over the mesh and vocab dimension when running on more than one device. Each device should compute a shard of the vocabulary rather than every device computing replicated full-vocab logits.
+- Use `models.common.modules.lm_head.LMHead1D` if you can. It is already well optimized for 1D mesh LM heads. If, after debugging shapes, sharding, and weight loading, you cannot make it support the target model, use it as the template for how to optimize your implementation.
+- Use the intended LM-head weight dtype, DRAM-sharded or ring matmul program configs, and output memory config for decode. Avoid a single replicated full-vocab BF16 matmul as the default terminal implementation.
+- Put logits into the layout the sampler expects. Design the LM-head and sampling boundary so full-vocab all-gather is not in the hot path.
+- Use `models.common.sampling.SamplingGenerator` for token-out decode. Enable its internal trace. Pass `tt_out_tok=<persistent decode token input tensor>` so the sampled token becomes the next token input on device.
+- Keep sampling trace keys distinct for greedy, penalties, and log-prob modes. Warm and capture the active mode before measuring.
+- For greedy decode, benchmark the available on-device sampler strategies on the target mesh. Force-argmax is a candidate, not a rule. Keep the fastest correct path.
+- If `ArgMaxDeviceOperation`, full-vocab all-gather, generic `TopKDeviceOperation`, or sampling trace replay dominates token-out decode, fix the LM-head/sampling contract before retuning decoder dtypes or CCLs. Do not mark the optimization complete with this bottleneck still in the measured path.
+- Make vLLM reuse the same optimized terminal path. Do not add adapter-side host argmax, full-logits readback, or a separate fallback sampler for serving.
+
 The same measured path must be used for before/after comparisons. A teacher-forcing or device-logit replay number is useful, but it does not prove a token-out generator or vLLM path is fast unless it includes the same sampling and token-feedback work. Record both when they differ.
 
 If a decoder optimization was disabled in the full model because the stacked model hit L1, semaphore, trace, or CCL limits, do not accept the fallback as final until you have tried to reduce or pool that resource. Examples include persistent CCL buffers, output buffers, ring buffers, semaphores, trace input tensors, and page-table buffers. If it still cannot fit, record the exact allocation or runtime failure and the measured cost of the fallback.
 
-Preserve the multichip decoder's data-layout contract across the stack. If the decoder was optimized around a sharded/fractured residual stream, do not insert a layer-to-layer all-gather merely to simplify the full-model wrapper. Try the canonical fused collective/matmul or sharded-output pattern first and find a way to make the performant solution work. $autofix can help you if you are running into bugs here.
+Preserve the multichip decoder's data-layout contract across the stack. If the decoder was optimized around a sharded/fractured residual stream, do not insert a layer-to-layer all-gather merely to simplify the full-model wrapper. Try fused collective/matmul or sharded-output patterns first and find a way to make the performant solution work. $autofix can help you if you are running into bugs here.
 
 ## Evidence To Leave
 
@@ -80,9 +103,9 @@ Final optimized evidence checklist - these items MUST be completed:
 - Runtime fallback audit remains clean.
 - Stress or repeated-run coverage appropriate to the risk of the changes.
 - Warmed prefill and decode latency before/after optimization.
-- `tt-perf-report` output with advice enabled and the main performance conclusions.
-- Watcher still clean. Watcher should be run by setting TT_METAL_WATCHER=10, don't skip asserts or anything.
-- For vLLM decode-serving optimization: same-harness vLLM before/after metrics, canonical same-machine comparison when available, and proof the measured path used on-device sampling without host greedy argmax or full-logits readback.
+- `tt-perf-report` output with advice enabled and the main performance conclusions, collected from representative decoder/module tests or a reduced full-model profiling variant, not a full all-layer model trace.
+- Watcher still clean. Watcher should be run by setting `TT_METAL_WATCHER=10`, don't skip asserts or anything. Keep watcher runs separate from device-profiler runs. If watcher/profiler collection produces remote Ethernet, ARC, or ERISC errors and `tt-smi` starts hanging, do not retry more profiler collection; preserve evidence and request host reboot recovery.
+- For vLLM decode-serving optimization: same-harness vLLM before/after metrics and proof the measured path used on-device sampling without host greedy argmax or full-logits readback.
 - Optimization checklist:
 -[ ] Decoder path fully traced with no host fallbacks
 -[ ] Decode activations generally width-sharded in L1 across norm, attention, residual, MLP, and output projection boundaries.
@@ -93,6 +116,8 @@ Final optimized evidence checklist - these items MUST be completed:
 -[ ] DRAM-sharded decode matmuls.
 -[ ] Fused matmul-CCL ops used where possible (or profiled and discarded with evidence).
 -[ ] For MoE models: optimized the routed active-expert path with `ttnn.sparse_matmul` where the model/hardware fits, following the GPT-OSS experts pattern for sparse gate/up/down projections, routing-score weighting, expert reduction, and no dense all-expert runtime path.
+-[ ] For models with an LM head and sampling: final norm, LM head, logits movement, sampling, and token feedback are included in the optimized token-out path; terminal costs are profiled separately; avoidable `ArgMaxDeviceOperation`, full-vocab all-gather, generic `TopKDeviceOperation`, host argmax, and full-logits readback have been removed. If a TTNN/runtime limitation blocks removal, the stage remains incomplete until there is a minimal repro or a lower-level fix.
+-[ ] LM Head is optimized for DRAM-sharded matmuls if present.
 -[ ] Reduced precision/fidelity experiments appropriate to this module-level optimization stage have been carried out and documented using real weights and input activations. For complete full-model top-k tuning, final datatype frontier selection is deferred to `$datatype-sweep`.
 -[ ] Performance accounting reconciled: roofline estimate, device-time decode, and end-to-end decode reported from the same run; avoidable gaps optimized away, and any remaining gap named as a ttnn/runtime/API limitation only after a targeted fix attempt; `perf_summary.json` written when optimizing a complete model or serving path.
 
@@ -104,12 +129,13 @@ Use this reference while optimizing functional TTNN code. It captures repo-local
 
 ## Code Paths Worth Reading
 
-- `models/tt_transformers/tt/model_config.py`: precision/fidelity settings, sharded activation configs, DRAM-sharded matmul helpers, prefill and decode program configs.
-- `models/tt_transformers/PERF.md`: empirical precision/performance tradeoffs for Llama/Qwen/Mistral/Phi/Mixtral families.
 - `tech_reports/LLMs/llms.md`: LLM memory configs, matmul variants, DRAM-sharded matmul guidance, and perf-report interpretation.
 - `models/common/modules/attention/attention_1d.py`: reusable attention configs with BFP8 attention weights, BFP8 KV cache, DRAM-sharded decode matmuls, SDPA configs, and L1-sharded decode residual paths.
 - `models/common/modules/mlp/mlp_1d.py`: decode/prefill MLP split, DRAM-sharded decode matmuls, sharded outputs, and precision knobs.
+- `models/common/modules/lm_head/lm_head_1d.py`: reusable LM-head output projection with vocab splitting, LM-head dtype, DRAM-sharded weight memory config, input/output memory configs, and decode program config.
+- `models/common/tests/modules/lm_head/test_lm_head_1d.py`: expected LM-head construction, weight splitting, memory config, and PCC checks.
 - `models/common/tensor_utils.py`: helpers to serialize program and compute-kernel configs for artifact reporting.
+- `models/common/sampling/generator.py`: reusable on-device sampling, internal trace capture/replay, force-argmax trace keying, and `tt_out_tok` feedback.
 - `models/demos/gpt_oss/tt/experts/README.md`, `models/demos/gpt_oss/tt/experts/decode.py`, `models/demos/gpt_oss/tt/experts/prefill.py`, `models/demos/gpt_oss/tt/experts/weights.py`, `models/demos/gpt_oss/tt/experts/config.py`, and `models/demos/gpt_oss/tt/topk.py`: default routed MoE active-expert path using `ttnn.sparse_matmul`.
 - `models/demos/gpt_oss/tt/`, `models/demos/gemma4/tt/`, and `models/demos/deepseek_v3/tt/`: model-specific examples where common modules do not fully fit.
 
@@ -138,7 +164,7 @@ Use this reference while optimizing functional TTNN code. It captures repo-local
 ## Precision And Fidelity
 
 - Start optimized decoder with BF16 activations and BFP8 weights. Keep norms BF16.
-- Try BFP8 KV cache. Keep it if PCC remains above threshold and perf/memory improve. If it fails while a canonical implementation uses BFP8 KV correctly, inspect the prefill fill-cache dtype path first: cache-fill tensors should be explicitly typecast to the cache dtype, while decode `paged_update_cache` inputs should remain BF16/FLOAT32.
+- Try BFP8 KV cache. Keep it if PCC remains above threshold and perf/memory improve. If BFP8 KV fails, inspect the prefill fill-cache dtype path before concluding the dtype is invalid: cache-fill tensors should be explicitly typecast to the cache dtype, while decode `paged_update_cache` inputs should remain BF16/FLOAT32.
 - Try BFP4 for MLP FF1/FF3; these often tolerate BFP4 well.
 - Try BFP4 for FF2/down-projection, but expect it to be more sensitive. Fall back based on PCC evidence, not preference.
 - For BFP8 weights, HiFi2 is the normal starting point. LoFi may work but needs PCC evidence.
@@ -146,7 +172,7 @@ Use this reference while optimizing functional TTNN code. It captures repo-local
 - For BF16 weights or numerically sensitive operations, use HiFi4 or FP32 accumulation where PCC demands it.
 - Evaluate precision changes one group at a time so regressions can be assigned to the right tensor group.
 - Activation size matters for CCLs. Try using BFP8 activations and see if PCC (and final top-1/top-5/benchmark eval scores if run) remain high enough.
-- Prefer fused CCL + matmuls where possible, models/demos/tt_transformers has some good examples of these.
+- Prefer fused CCL + matmuls where possible.
 - Otherwise use async CCLs but be careful to ensure there are sufficient semaphores - other models have some good examples of CCL helper classes that track these.
 - Always test with watcher when using async CCLs, it's easy to make mistakes that end up in data corruption or hangs.
 
@@ -203,8 +229,8 @@ python tools/tracy/process_ops_logs.py --date
 
 Known tooling-failure signatures and prescribed actions - do not burn hours rediscovering these:
 
-- Tracy enrichment failing with "too many source locations" or dropped device markers on large models: profile a reduced-layer probe (one layer per kind) instead of the full stack.
-- Device-profiler-enabled serving dying at EngineCore startup with Ethernet-core IO or ARC timeouts: known profiler/serving conflict; `tt-smi -r`, retry once, then record the documented fallback timing.
+- Tracy enrichment failing with "too many source locations" or dropped device markers on large models: the profile was too broad. Stop it, preserve the log, and rerun a reduced-layer probe with one layer per kind instead of the full stack. Do this reduced probe up front for full-model profiling rather than waiting for the full-stack profile to fail.
+- Device-profiler-enabled serving dying at EngineCore startup with Ethernet-core IO or ARC timeouts: known profiler/serving conflict. Kill leftover `EngineCore`/server processes, try one bounded `tt-smi -r`, and record fallback timing if the device remains healthy. If `tt-smi -ls --local` or reset hangs, or if logs show remote Ethernet/ARC/ERISC failures (`Timeout waiting for Ethernet core service remote IO request`, `ETH core heartbeat check failed`, `Unexpected ERISC Response Flags`, `Read 0xffffffff from ARC scratch`, ARC lock/readback waits), stop. Do not run a full serving-adapter profile followed by `ttnn.ReadDeviceProfiler(mesh)`. Preserve the logs as `hardware-profiler-limited`; recovery may require a physical Docker host reboot.
 - Watcher overflowing the ACTIVE_ETH kernel config buffer: retry with `TT_METAL_WATCHER_DISABLE_ETH=1` and record the scoped limitation.
 - Transient CCL/fabric link errors immediately after a failed multi-device run: reset devices and retry once before treating it as hardware evidence.
 
