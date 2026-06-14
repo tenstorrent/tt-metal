@@ -167,6 +167,13 @@ def _qwen36_qknorm_flat_to_heads(
     # weight broadcast over the B/T/n rows) BEFORE the permute. At ``T == 1`` this
     # is byte-identical to the old fast path (verified), so N=1 decode is
     # unchanged.
+    # NOTE: an L1-resident SHARDED qk_norm (width-shard onto n_heads cores -> per-head rms_norm, 2.3x /
+    # net 1.59x in ISOLATION, test_head_path_l1_vs_dram) was prototyped + validated via the GENERATOR
+    # decode path (profile_decode_eager FA, which — unlike test_decode_eager_pcc — does NOT hit the
+    # gated_delta_attn_seq prefill CB clash). Result: it runs clean but is NET WORSE in the real decode —
+    # LayerNorm stays ~12.5us (no speedup) and it adds ~13us of DRAM<->L1 conversions, because the decode
+    # x_flat is DRAM (so the shard conversions are expensive DRAM<->L1, not cheap L1<->L1). The isolated
+    # 1.59x required the chain already L1-resident. Net-negative -> kept on DRAM.
     x_thd = ttnn.reshape(x_flat, [B, T, n_heads, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
     x_normed = ttnn.rms_norm(
         x_thd,
