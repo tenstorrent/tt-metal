@@ -4,7 +4,7 @@
 **Slug:** `minimaxai_minimax_m3`
 **Target Device:** bh_galaxy (blackhole)
 **Started:** 2026-06-14T11:31:00Z
-**Updated:** 2026-06-14T12:01:58Z
+**Updated:** 2026-06-14T12:08:01Z
 
 ## Block Status
 
@@ -70,22 +70,22 @@
 | moe_gate | debug | n/a | — | 0 |  |
 | moe_gate | optimization | pending | — | 0 |  |
 | moe_gate | real_weights | pending | — | 0 |  |
-| moe_experts | reference | pending | — | 0 |  |
+| moe_experts | reference | done | 1.000000 | 0 | ckpt experts.{i}.{w1=gate,w3=up,w2=down}; HF stacks gate_up_proj[128,2*3072,6144] chunk2 + down_proj[128,6144,3072]; routed-only; x2.0 folded in gate weights |
 | moe_experts | ttnn | pending | — | 0 |  |
 | moe_experts | debug | n/a | — | 0 |  |
 | moe_experts | optimization | pending | — | 0 |  |
 | moe_experts | real_weights | pending | — | 0 |  |
-| shared_expert | reference | pending | — | 0 |  |
+| shared_expert | reference | done | 1.000000 | 0 | bare SwiGLU-OAI inter3072; NO gate/scale on shared output; keys block_sparse_moe.shared_experts.{gate,up,down}_proj |
 | shared_expert | ttnn | pending | — | 0 |  |
 | shared_expert | debug | n/a | — | 0 |  |
 | shared_expert | optimization | pending | — | 0 |  |
 | shared_expert | real_weights | pending | — | 0 |  |
-| vision_mlp | reference | pending | — | 0 |  |
+| vision_mlp | reference | done | 1.000000 | 0 | fc1(1280->5120)->erf GELU->fc2; both bias; ACT2FN[gelu]=exact erf |
 | vision_mlp | ttnn | pending | — | 0 |  |
 | vision_mlp | debug | n/a | — | 0 |  |
 | vision_mlp | optimization | pending | — | 0 |  |
 | vision_mlp | real_weights | pending | — | 0 |  |
-| dense_decoder_layer | reference | pending | — | 0 |  |
+| dense_decoder_layer | reference | done | 1.000000 | 0 | pre-norm no residual scaling; both norms gemma RMS; dense inter 12288; HF eager needs explicit causal mask (None=bidirectional) |
 | dense_decoder_layer | ttnn | pending | — | 0 |  |
 | dense_decoder_layer | debug | n/a | — | 0 |  |
 | dense_decoder_layer | optimization | pending | — | 0 |  |
@@ -145,6 +145,7 @@
 - tick 2 (2026-06-14T11:51:59Z): reference[rms_norm,embedding,rope,vision_layernorm] — ok
 - tick 3 (2026-06-14T11:56:39Z): reference[vision_rope_3d,patch_embedding,qk_norm,gqa_attention] — ok
 - tick 4 (2026-06-14T12:01:58Z): reference[sparse_lightning_attention,vision_attention,swigluoai_mlp,moe_gate] — ok
+- tick 5 (2026-06-14T12:08:01Z): reference[moe_experts,shared_expert,vision_mlp,dense_decoder_layer] — ok
 
 ## Host-Resident Exceptions
 

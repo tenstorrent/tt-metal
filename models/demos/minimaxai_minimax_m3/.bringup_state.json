@@ -5,7 +5,7 @@
   "device": "bh_galaxy",
   "arch_name": "blackhole",
   "started_at": "2026-06-14T11:31:00Z",
-  "updated_at": "2026-06-14T12:01:58Z",
+  "updated_at": "2026-06-14T12:08:01Z",
   "components": [
     {
       "name": "rms_norm",
@@ -479,8 +479,14 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "pcc": 1.0,
+        "artifacts": [
+          "reference/functional.py",
+          "reference/golden/moe_experts.pt"
+        ],
+        "notes": "ckpt experts.{i}.{w1=gate,w3=up,w2=down}; HF stacks gate_up_proj[128,2*3072,6144] chunk2 + down_proj[128,6144,3072]; routed-only; x2.0 folded in gate weights"
       },
       "ttnn": {
         "status": "pending",
@@ -512,8 +518,14 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "pcc": 0.9999999403953552,
+        "artifacts": [
+          "reference/functional.py",
+          "reference/golden/shared_expert.pt"
+        ],
+        "notes": "bare SwiGLU-OAI inter3072; NO gate/scale on shared output; keys block_sparse_moe.shared_experts.{gate,up,down}_proj"
       },
       "ttnn": {
         "status": "pending",
@@ -545,8 +557,14 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "pcc": 1.0,
+        "artifacts": [
+          "reference/functional.py",
+          "reference/golden/vision_mlp.pt"
+        ],
+        "notes": "fc1(1280->5120)->erf GELU->fc2; both bias; ACT2FN[gelu]=exact erf"
       },
       "ttnn": {
         "status": "pending",
@@ -580,8 +598,14 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "pcc": 1.0,
+        "artifacts": [
+          "reference/functional.py",
+          "reference/golden/dense_decoder_layer.pt"
+        ],
+        "notes": "pre-norm no residual scaling; both norms gemma RMS; dense inter 12288; HF eager needs explicit causal mask (None=bidirectional)"
       },
       "ttnn": {
         "status": "pending",
@@ -1037,6 +1061,12 @@
       "tick": 4,
       "ts": "2026-06-14T12:01:58Z",
       "action": "reference[sparse_lightning_attention,vision_attention,swigluoai_mlp,moe_gate]",
+      "result": "ok"
+    },
+    {
+      "tick": 5,
+      "ts": "2026-06-14T12:08:01Z",
+      "action": "reference[moe_experts,shared_expert,vision_mlp,dense_decoder_layer]",
       "result": "ok"
     }
   ],

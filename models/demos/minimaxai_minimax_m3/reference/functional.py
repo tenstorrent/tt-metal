@@ -948,3 +948,253 @@ def sparse_lightning_attention_forward(
     attn_output = attn_output.transpose(1, 2).reshape(B, S, -1).contiguous()
     out = torch.nn.functional.linear(attn_output, weights_dict["o_proj"])
     return out, block_indices
+
+
+def vision_mlp_forward(
+    x: torch.Tensor,
+    fc1_w: torch.Tensor,
+    fc1_b: torch.Tensor,
+    fc2_w: torch.Tensor,
+    fc2_b: torch.Tensor,
+) -> torch.Tensor:
+    """CLIP vision FFN matching MiniMaxM3VLVisionMLP.forward.
+
+    The standard CLIP vision-tower MLP: a 1280 -> 5120 up-projection (fc1),
+    a GELU non-linearity, then a 5120 -> 1280 down-projection (fc2). BOTH
+    ``fc1`` and ``fc2`` are ``nn.Linear`` WITH bias (the HF module uses the
+    default ``bias=True``).
+
+    Activation: ``hidden_act = "gelu"`` in vision_config maps via
+    ``ACT2FN["gelu"]`` to ``transformers.activations.GELUActivation``, which is
+    the EXACT / erf-based GELU (``nn.functional.gelu(..., approximate="none")``),
+    i.e. ``0.5 * x * (1 + erf(x / sqrt(2)))`` -- NOT the tanh approximation.
+
+    Exact HF pipeline order:
+      1. hidden = fc1(x)              # Linear 1280 -> 5120, +bias
+      2. hidden = gelu(hidden)        # erf GELU
+      3. hidden = fc2(hidden)         # Linear 5120 -> 1280, +bias
+
+    Args:
+        x: hidden states [..., hidden_size (1280)].
+        fc1_w: fc1 weight [intermediate_size (5120), hidden_size (1280)].
+        fc1_b: fc1 bias [intermediate_size (5120)].
+        fc2_w: fc2 weight [hidden_size (1280), intermediate_size (5120)].
+        fc2_b: fc2 bias [hidden_size (1280)].
+
+    Returns:
+        MLP output [..., hidden_size (1280)], x's dtype.
+    """
+    h = torch.nn.functional.linear(x, fc1_w, fc1_b)
+    h = torch.nn.functional.gelu(h, approximate="none")
+    h = torch.nn.functional.linear(h, fc2_w, fc2_b)
+    return h
+
+
+def shared_expert_forward(
+    x: torch.Tensor,
+    gate_w: torch.Tensor,
+    up_w: torch.Tensor,
+    down_w: torch.Tensor,
+    alpha: float = 1.702,
+    limit: float = 7.0,
+) -> torch.Tensor:
+    """MiniMax-M3 always-on SHARED expert (n_shared_experts=1, SwiGLU-OAI).
+
+    Mirrors HF (transformers 5.12.0) ``MiniMaxM3VLSparseMoeBlock``: the shared
+    expert is a ``MiniMaxM3VLDenseMLP(intermediate_size=shared_intermediate_size)``
+    (text_config: hidden 6144, shared_intermediate_size 3072, swiglu_alpha 1.702,
+    swiglu_limit 7.0). It runs on ALL tokens (no routing).
+
+    HF block forward::
+
+        shared_output = self.shared_experts(hidden_states)      # this function
+        hidden_states = self.experts(...) * routed_scaling_factor
+        hidden_states = hidden_states + shared_output           # plain add
+
+    IMPORTANT -- no extra gating/scaling on the shared output:
+      * The shared expert output is added DIRECTLY to the routed output.
+      * ``routed_scaling_factor`` (2.0) is applied ONLY to the routed-expert
+        output, NOT to the shared output.
+      * Unlike DeepSeek/Qwen "shared-expert-gate" variants, there is NO sigmoid
+        gate on the shared output here -- it is a bare DenseMLP.
+
+    Weight-storage note: the HF *module* fuses gate+up into a single
+    ``gate_up_proj`` ``[2*inter, hidden]`` and chunks it ``gate, up``. The
+    MiniMax-M3 *checkpoint* stores SEPARATE
+    ``...block_sparse_moe.shared_experts.{gate,up,down}_proj.weight`` (gate/up
+    each ``[3072, 6144]``, down ``[6144, 3072]``). Passing the separate gate_w
+    and up_w to ``swigluoai_mlp_forward`` reproduces the fused-chunk behaviour
+    exactly (chunk's first half == gate_proj, second half == up_proj).
+
+    Args:
+        x: Input activations ``[..., hidden_size]`` (hidden 6144).
+        gate_w: ``shared_experts.gate_proj.weight`` ``[3072, 6144]``.
+        up_w: ``shared_experts.up_proj.weight`` ``[3072, 6144]``.
+        down_w: ``shared_experts.down_proj.weight`` ``[6144, 3072]``.
+        alpha: ``swiglu_alpha`` (sigmoid temperature), default 1.702.
+        limit: ``swiglu_limit`` clamp bound, default 7.0.
+
+    Returns:
+        Tensor ``[..., hidden_size]`` -- the shared-expert contribution to add
+        to the routed-expert output.
+    """
+    return swigluoai_mlp_forward(x, gate_w, up_w, down_w, alpha=alpha, limit=limit)
+
+
+def dense_decoder_layer_forward(
+    x: torch.Tensor,
+    weights_dict: dict,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    num_attention_heads: int = 64,
+    num_key_value_heads: int = 4,
+    head_dim: int = 128,
+    eps: float = 1e-6,
+    swiglu_alpha: float = 1.702,
+    swiglu_limit: float = 7.0,
+    attention_mask: torch.Tensor = None,
+) -> torch.Tensor:
+    """Full DENSE decoder layer matching MiniMaxM3VLDecoderLayer (layers 0-2).
+
+    Composes the existing reference helpers in the EXACT HF order for a dense
+    layer (``mlp_layer_types[layer_idx] != "sparse"`` and ``layer_types[layer_idx]
+    != "minimax_m3_sparse"`` -> full GQA attention + dense SwiGLU-OAI MLP). The
+    HF ``MiniMaxM3VLDecoderLayer.forward`` is plain PRE-NORM with NO residual
+    scaling::
+
+        residual = x
+        h = input_layernorm(x)                # Gemma RMSNorm, (1+w) scale, eps 1e-6
+        h, _ = self_attn(h)                   # full GQA (q/k-norm + partial rope)
+        x = residual + h
+        residual = x
+        h = post_attention_layernorm(x)       # Gemma RMSNorm
+        h = mlp(h)                            # dense SwiGLU-OAI, dense_intermediate 12288
+        x = residual + h
+
+    Both norms are the same Gemma-style :func:`rms_norm_forward` (``(1+w)`` scale,
+    fp32 reduce). The attention path is :func:`gqa_attention_forward` and the MLP
+    path is :func:`swigluoai_mlp_forward` (separate gate/up weights, the
+    ``(up + 1.0) * glu`` GPT-OSS form, clamp limit 7.0, sigmoid temp 1.702).
+    There is NO residual scaling anywhere in this layer. The dense intermediate
+    size is 12288 (``dense_intermediate_size``), vs the MoE expert intermediate
+    of 3072.
+
+    Args:
+        x: hidden states [B, S, hidden_size (6144)].
+        weights_dict: keys ``input_layernorm`` and ``post_attention_layernorm``
+            (norm gammas [hidden]); attention ``q_proj/k_proj/v_proj/o_proj/
+            q_norm/k_norm``; MLP ``gate_proj/up_proj/down_proj`` (each a
+            ``.weight`` tensor).
+        cos, sin: partial-rope tables [B, S, rotary_dim (64)] from
+            build_rope_cos_sin(theta=5e6, rotary_dim=64).
+        num_attention_heads, num_key_value_heads, head_dim, eps: config.
+        swiglu_alpha, swiglu_limit: dense MLP SwiGLU-OAI params.
+        attention_mask: optional additive mask [B,1,S,S]; None -> internal causal.
+
+    Returns:
+        Decoder layer output [B, S, hidden_size], x's dtype.
+    """
+    residual = x
+    h = rms_norm_forward(x, weights_dict["input_layernorm"], eps=eps)
+    h = gqa_attention_forward(
+        h,
+        weights_dict,
+        cos,
+        sin,
+        num_attention_heads=num_attention_heads,
+        num_key_value_heads=num_key_value_heads,
+        head_dim=head_dim,
+        eps=eps,
+        attention_mask=attention_mask,
+    )
+    x = residual + h
+
+    residual = x
+    h = rms_norm_forward(x, weights_dict["post_attention_layernorm"], eps=eps)
+    h = swigluoai_mlp_forward(
+        h,
+        weights_dict["gate_proj"],
+        weights_dict["up_proj"],
+        weights_dict["down_proj"],
+        alpha=swiglu_alpha,
+        limit=swiglu_limit,
+    )
+    x = residual + h
+    return x
+
+
+def moe_experts_forward(
+    x: torch.Tensor,
+    topk_indices: torch.Tensor,
+    topk_weights: torch.Tensor,
+    expert_weights: dict,
+    moe_intermediate: int = 3072,
+    alpha: float = 1.702,
+    limit: float = 7.0,
+) -> torch.Tensor:
+    """MiniMax-M3 routed sparse-MoE experts (128 experts, top-4, SwiGLU-OAI).
+
+    This is the ROUTED-experts contribution ONLY of
+    ``MiniMaxM3VLSparseMoeBlock`` (the always-on ``shared_experts`` DenseMLP is a
+    SEPARATE block and is NOT included here).
+
+    Mirrors HF ``MiniMaxM3VLExperts.forward`` (transformers 5.12.0): for each
+    token, run its ``top_k`` selected experts (each a SwiGLU-OAI MLP with
+    ``moe_intermediate_size`` 3072), weight each expert output by its routing
+    weight, and sum. Each expert is exactly ``swigluoai_mlp_forward`` with the
+    fused ``gate_up_proj`` split into separate gate/up:
+
+    Weight-layout note (checkpoint vs HF module):
+      * The MiniMax-M3 *checkpoint* stores SEPARATE per-expert tensors
+        ``...experts.{i}.{w1,w2,w3}.weight`` (Mixtral/DeepSeek convention):
+          - ``w1`` -> gate  ``[moe_inter, hidden]``  (3072, 6144)
+          - ``w3`` -> up     ``[moe_inter, hidden]``  (3072, 6144)
+          - ``w2`` -> down  ``[hidden, moe_inter]``  (6144, 3072)
+      * The HF *module* (``MiniMaxM3VLExperts``) stores STACKED 3D parameters
+        ``gate_up_proj`` ``[num_experts, 2*moe_inter, hidden]`` and ``down_proj``
+        ``[num_experts, hidden, moe_inter]``, where ``gate_up_proj[i]`` ==
+        ``cat([w1_i, w3_i], dim=0)`` (gate first, up second; NOT interleaved,
+        consumed via ``chunk(2, dim=-1)`` in ``_apply_gate``).
+    This decomposition matches the gpt_oss MoE experts lineage
+    (``models/demos/gpt_oss/tt/experts``, ``mlp.py``, ``topk.py``): a top-k
+    router selects experts, per-expert SwiGLU-OAI MLPs are run on the gathered
+    tokens, scaled by the routing weight, and scatter-added back.
+
+    Scaling: ``topk_weights`` already include the ``routed_scaling_factor`` (2.0)
+    folded in by ``moe_gate_forward`` (which HF applies as
+    ``hidden = experts(...) * routed_scaling_factor`` in the SparseMoeBlock).
+    Therefore this function does NOT scale again.
+
+    Args:
+        x: hidden states ``[..., hidden_size]``; flattened to ``[tokens, hidden]``.
+        topk_indices: ``[tokens, top_k]`` long, selected expert ids (from gate).
+        topk_weights: ``[tokens, top_k]`` fp32, routing weights (scaling folded in).
+        expert_weights: dict ``{expert_id: {"gate_w": w1 [inter,hidden],
+            "up_w": w3 [inter,hidden], "down_w": w2 [hidden,inter]}}``. Only the
+            experts actually selected by ``topk_indices`` need be present.
+        moe_intermediate: SwiGLU-OAI intermediate size (3072).
+        alpha, limit: SwiGLU-OAI ``swiglu_alpha`` / ``swiglu_limit``.
+
+    Returns:
+        Routed-expert output, same shape as ``x`` (``[..., hidden_size]``).
+    """
+    orig_shape = x.shape
+    hidden_dim = orig_shape[-1]
+    hidden_states = x.reshape(-1, hidden_dim)
+    tokens, top_k = topk_indices.shape
+
+    final = torch.zeros_like(hidden_states)
+    for t in range(tokens):
+        for j in range(top_k):
+            eid = int(topk_indices[t, j].item())
+            w = expert_weights[eid]
+            expert_out = swigluoai_mlp_forward(
+                hidden_states[t : t + 1],
+                gate_w=w["gate_w"],
+                up_w=w["up_w"],
+                down_w=w["down_w"],
+                alpha=alpha,
+                limit=limit,
+            )
+            final[t] += (expert_out * topk_weights[t, j]).squeeze(0).to(final.dtype)
+    return final.reshape(orig_shape)
