@@ -137,7 +137,11 @@ def open_mesh_device(mesh_shape: tuple, model_cfg: type) -> ttnn.MeshDevice:
         ttnn.FabricManagerMode.DEFAULT,
         fabric_router_config,
     )
-    return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*mesh_shape))
+    # PERF EXPERIMENT (PREFILL_NUM_CQ): the H2D service imposes a per-op-launch dispatch tax on the
+    # request loop (tracy: on-device time identical, op-to-op latency +33%). Opening >1 command queue
+    # lets the service claim its own CQ so the model's CQ0 dispatch is uncontended. Default 1 (upstream).
+    _num_cq = int(os.environ.get("PREFILL_NUM_CQ", "1"))
+    return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*mesh_shape), num_command_queues=_num_cq)
 
 
 def resolve_weight_cache_path(variant: RunnerVariant, mesh_shape: tuple) -> Optional[Path]:

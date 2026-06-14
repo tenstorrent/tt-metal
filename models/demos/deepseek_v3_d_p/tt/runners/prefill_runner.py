@@ -351,22 +351,33 @@ def run_standalone_chunked_prefill_loop(pipeline: TtDeepSeekPrefillPipeline) -> 
     ), f"trace metadata has {len(token_ids_full)} tokens but need {total_len}; lower PREFILL_STANDALONE_CHUNKED_NCHUNKS"
 
     # --- Drive chunked prefill: one CHUNK_SIZE chunk per pipeline.prefill, advancing kv_actual. ---
+    # PREFILL_STANDALONE_CHUNKED_ITERS>1 repeats the WHOLE chunk sequence so later passes reuse each
+    # chunk's already-compiled program (each chunk has a unique logical_n -> compiled on first use). For
+    # tracy perf measurement, pass 0 is the cold/compile pass and the LAST pass is fully WARM (steady
+    # state) — measure the last pass to avoid one-time compile dominating op-to-op latency.
+    chunked_iters = int(os.environ.get("PREFILL_STANDALONE_CHUNKED_ITERS", "1"))
     _t0 = _time.perf_counter()
-    for c in range(n_chunks):
-        kv_actual = c * chunk_size
-        pipeline.prefill(
-            prepare_prefill_input_tensor(
-                token_ids_full[kv_actual : kv_actual + chunk_size],
-                mesh_device,
-                cfg.sp_factor,
-                cfg.is_balanced,
-                cfg.mesh_shape,
-                cfg.sp_axis,
-            ),
-            slot_id=slot_id,
-            kv_actual_isl=kv_actual,
+    for it in range(chunked_iters):
+        logger.info(
+            f"[standalone-chunked] ==== pass {it + 1}/{chunked_iters} ({'WARM' if it > 0 else 'cold/compile'}) ===="
         )
-        logger.info(f"[standalone-chunked] prefilled chunk {c + 1}/{n_chunks} (kv_actual={kv_actual})")
+        for c in range(n_chunks):
+            kv_actual = c * chunk_size
+            pipeline.prefill(
+                prepare_prefill_input_tensor(
+                    token_ids_full[kv_actual : kv_actual + chunk_size],
+                    mesh_device,
+                    cfg.sp_factor,
+                    cfg.is_balanced,
+                    cfg.mesh_shape,
+                    cfg.sp_axis,
+                ),
+                slot_id=slot_id,
+                kv_actual_isl=kv_actual,
+            )
+            logger.info(
+                f"[standalone-chunked] pass {it + 1} prefilled chunk {c + 1}/{n_chunks} (kv_actual={kv_actual})"
+            )
     ttnn.synchronize_device(mesh_device)
     dt_ms = (_time.perf_counter() - _t0) * 1000.0
     logger.info(f"[standalone-chunked] {n_chunks} chunks prefilled in {dt_ms:.2f} ms")
