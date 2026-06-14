@@ -52,13 +52,13 @@ def bh_glx_mesh():
 
 
 @pytest.mark.xfail(
-    reason="BLOCKED: dram_prefetcher STREAMS ok on the ring-40 global_cb, but the gather_in0 "
-    "ring matmul fails 'Specified cores are not contained in associated GlobalCircularBuffer'. "
-    "MatmulMultiCoreReuseMultiCast1DProgramConfig.compute_with_storage_grid_size is origin-based "
-    "(cols 0..x-1 x rows 0..y-1); for the prefetched matmul those cores must be covered by the "
-    "global_cb (senders+receivers). The custom 4-bank x 10 ring-40 receiver placement (cols 1-10, "
-    "rows 1/3/7/9) does NOT satisfy the grid<->receiver mapping that PrefetcherCoreConfig's standard "
-    "8-bank placements do. Needs study of the matmul grid->global_cb-receiver mapping.",
+    reason="BLOCKED (NOT ring-size-specific — ring-24 fails identically, see "
+    "test_prefetcher_bh_ring24_matmul): dram_prefetcher STREAMS ok, but the gather_in0 ring matmul "
+    "fails 'Specified cores are not contained in associated GlobalCircularBuffer'. The matmul's "
+    "weight-read CB cores are not a subset of this global_cb's cores. Our get_bh_prefetcher_core_ranges "
+    "receiver placement does NOT match the placement the working tt_transformers.Prefetcher class uses "
+    "(which test_prefetcher_BH passes at ring-24). FIX: mirror Prefetcher's exact decode receiver / "
+    "global_cb / matmul-core construction, not get_bh_prefetcher_core_ranges' allocation-only layout.",
     strict=False,
 )
 @pytest.mark.hardware
