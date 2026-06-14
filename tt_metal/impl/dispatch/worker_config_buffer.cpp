@@ -7,6 +7,7 @@
 #include <tt_stl/assert.hpp>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <algorithm>
 #include <utility>
 #include <vector>
@@ -16,7 +17,13 @@
 namespace tt::tt_metal {
 enum class HalProgrammableCoreType;
 
-constexpr uint32_t kernel_config_entry_count = 8;
+constexpr uint32_t kernel_config_entry_count = 32;
+
+// DIAGNOSTIC (TT_DISPATCH_SYNC_DEBUG=1): log which managed buffer (idx) forces a per-op kernel-config
+// sync and via which path (byte-wrap vs table-exhaustion). Pins whether the per-op dispatch stall is the
+// launch-message ring (idx for launch_msg_buffer_num_entries-1) or the go buffer (size 1) or the kernel
+// config ring. No effect unless the env var is set.
+static const bool g_dispatch_sync_dbg = (std::getenv("TT_DISPATCH_SYNC_DEBUG") != nullptr);
 
 WorkerConfigBufferMgr::WorkerConfigBufferMgr() { entries_.resize(kernel_config_entry_count); }
 
@@ -123,6 +130,14 @@ std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> WorkerConfigBufferM
                 }
 
                 sync_info.need_sync = true;
+                if (g_dispatch_sync_dbg) {
+                    log_info(
+                        tt::LogDispatch,
+                        "[sync-dbg] need_sync BYTE-WRAP idx={} size={} buf_bytes={}",
+                        idx,
+                        size,
+                        this->end_addrs_[idx] - this->base_addrs_[idx]);
+                }
                 if (had_sync) {
                     sync_info.sync_count = std::max(sync_info.sync_count, this->entries_[free_index][idx].sync_count);
                 } else {
@@ -132,6 +147,9 @@ std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> WorkerConfigBufferM
                 alloc_index + 1 == free_index || (alloc_index + 1 == kernel_config_entry_count && free_index == 0)) {
                 // We need a sync because the table of entries is too small
                 sync_info.need_sync = true;
+                if (g_dispatch_sync_dbg) {
+                    log_info(tt::LogDispatch, "[sync-dbg] need_sync TABLE-FULL idx={} size={}", idx, size);
+                }
                 if (had_sync) {
                     sync_info.sync_count = std::max(sync_info.sync_count, this->entries_[free_index][idx].sync_count);
                 } else {
