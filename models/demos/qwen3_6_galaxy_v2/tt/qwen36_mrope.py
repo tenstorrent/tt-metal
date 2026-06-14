@@ -53,20 +53,35 @@ def get_rope_index(
     input_ids: torch.Tensor,
     *,
     image_grid_thw: torch.Tensor | None = None,
+    video_grid_thw: torch.Tensor | None = None,
     image_token_id: int = 248056,
+    video_token_id: int = 248057,
+    vision_start_token_id: int = 248053,
     spatial_merge_size: int = 2,
+    attention_mask: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Build 3D position_ids `[3, B, S]` for a multimodal input sequence.
 
-    Simplified port of HF's `Qwen3VLModel.get_rope_index` covering the
-    text + image case (video deferred to a follow-up). For each batch:
+    Faithful port of HF's `Qwen3VLModel.get_rope_index` covering the
+    text + image + video case. For each batch:
       - Text tokens get (t, h, w) = (k, k, k) where k advances monotonically.
-      - Each image_pad token range gets replaced by a 3D grid of patch
-        coordinates (t, h, w) offset by the running position.
-      - After each image, the running position advances by max(t,h,w)+1.
+      - Each image/video placeholder range gets replaced by a 3D grid of patch
+        coordinates (t, h, w) offset by the running position (`st_idx`).
+      - After each vision segment, the running position advances to
+        `max(position_id) + 1`.
 
-    qwen3.6 vision_config: spatial_merge_size=2. Image inserts `llm_grid_h *
-    llm_grid_w = (h/2)*(w/2)` patch tokens per frame.
+    qwen3.6 vision_config: spatial_merge_size=2. Each vision frame inserts
+    `llm_grid_t * llm_grid_h * llm_grid_w = t * (h/2) * (w/2)` placeholder tokens.
+
+    Video handling mirrors HF: qwen3.6 uses timestamps (not absolute temporal
+    position ids), so `video_grid_thw` is `repeat_interleave`'d by its temporal
+    dim and the temporal dim is then set to 1 — i.e. each video frame becomes an
+    independent `[1, h, w]` vision segment delimited in the token stream by its
+    own `<|vision_start|><|video_pad|>...<|vision_end|>` block (the HF processor
+    inserts these per temporal group).
+
+    The image-only path is byte-identical to HF (and to the previous
+    image-only implementation, verified via `torch.equal`).
 
     Returns:
       position_ids: `[3, B, S]` torch.long.
@@ -74,63 +89,86 @@ def get_rope_index(
         the offset between the running token count and the max(position_id+1).
     """
     assert input_ids.ndim == 2, f"input_ids must be [B, S], got {input_ids.shape}"
-    B, S = input_ids.shape
-    position_ids = torch.zeros(3, B, S, dtype=torch.long, device=input_ids.device)
+
+    # HF splits each video's temporal frames into independent [1, h, w] grids
+    # (timestamps encode time, so llm_grid_t is always 1 per segment).
+    if video_grid_thw is not None:
+        video_grid_thw = torch.repeat_interleave(video_grid_thw, video_grid_thw[:, 0], dim=0)
+        video_grid_thw = video_grid_thw.clone()
+        video_grid_thw[:, 0] = 1
+
+    total_input_ids = input_ids
+    if attention_mask is None:
+        attention_mask = torch.ones_like(total_input_ids)
+    attention_mask = attention_mask.to(total_input_ids.device)
+
+    position_ids = torch.ones(
+        3,
+        input_ids.shape[0],
+        input_ids.shape[1],
+        dtype=torch.long,
+        device=input_ids.device,
+    )
     mrope_deltas: list[int] = []
+    image_index, video_index = 0, 0
 
-    for b in range(B):
-        tokens = input_ids[b].tolist()
-        image_indices_in_grid = 0
-        running = 0
+    for i in range(total_input_ids.shape[0]):
+        ids_row = total_input_ids[i][attention_mask[i] == 1]
+        vision_start_indices = torch.argwhere(ids_row == vision_start_token_id).squeeze(1)
+        vision_tokens = ids_row[vision_start_indices + 1]
+        image_nums = int((vision_tokens == image_token_id).sum())
+        video_nums = int((vision_tokens == video_token_id).sum())
+        input_tokens = ids_row.tolist()
+
+        llm_pos_ids_list: list[torch.Tensor] = []
         st = 0
-        out_t: list[torch.Tensor] = []
-        out_h: list[torch.Tensor] = []
-        out_w: list[torch.Tensor] = []
+        remain_images, remain_videos = image_nums, video_nums
+        for _ in range(image_nums + video_nums):
+            if image_token_id in input_tokens and remain_images > 0:
+                ed_image = input_tokens.index(image_token_id, st)
+            else:
+                ed_image = len(input_tokens) + 1
+            if video_token_id in input_tokens and remain_videos > 0:
+                ed_video = input_tokens.index(video_token_id, st)
+            else:
+                ed_video = len(input_tokens) + 1
+            if ed_image < ed_video:
+                if image_grid_thw is None:
+                    raise ValueError(f"image_token_id={image_token_id} found in input but no image_grid_thw provided")
+                t, h, w = image_grid_thw[image_index].tolist()
+                image_index += 1
+                remain_images -= 1
+                ed = ed_image
+            else:
+                if video_grid_thw is None:
+                    raise ValueError(f"video_token_id={video_token_id} found in input but no video_grid_thw provided")
+                t, h, w = video_grid_thw[video_index].tolist()
+                video_index += 1
+                remain_videos -= 1
+                ed = ed_video
 
-        # Walk through the sequence finding image_pad ranges.
-        while st < S:
-            try:
-                ed = tokens.index(image_token_id, st)
-            except ValueError:
-                ed = S  # no more images; rest is text
-            # Text segment [st, ed)
-            text_len = ed - st
-            if text_len > 0:
-                ramp = torch.arange(text_len, dtype=torch.long) + running
-                out_t.append(ramp)
-                out_h.append(ramp)
-                out_w.append(ramp)
-                running += text_len
-            if ed >= S:
-                break
-            # Image segment: image_grid_thw[image_indices_in_grid] tells us (T, H, W)
-            if image_grid_thw is None:
-                raise ValueError(f"image_token_id={image_token_id} found in input but no image_grid_thw provided")
-            t, h, w = image_grid_thw[image_indices_in_grid].tolist()
-            image_indices_in_grid += 1
             llm_grid_t = t
             llm_grid_h = h // spatial_merge_size
             llm_grid_w = w // spatial_merge_size
-            n_image_tokens = llm_grid_t * llm_grid_h * llm_grid_w
+            text_len = ed - st
+
+            st_idx = int(llm_pos_ids_list[-1].max().item()) + 1 if len(llm_pos_ids_list) > 0 else 0
+            llm_pos_ids_list.append(torch.arange(text_len, dtype=torch.long).view(1, -1).expand(3, -1) + st_idx)
+
             t_idx = torch.arange(llm_grid_t).view(-1, 1).expand(-1, llm_grid_h * llm_grid_w).flatten()
             h_idx = torch.arange(llm_grid_h).view(1, -1, 1).expand(llm_grid_t, -1, llm_grid_w).flatten()
             w_idx = torch.arange(llm_grid_w).view(1, 1, -1).expand(llm_grid_t, llm_grid_h, -1).flatten()
-            out_t.append(t_idx + running)
-            out_h.append(h_idx + running)
-            out_w.append(w_idx + running)
-            # Running position advances past the image's max (h_idx and w_idx
-            # peak at llm_grid_h-1 and llm_grid_w-1; the max+1 is the bigger
-            # of the two for grid_t=1).
-            running += max(llm_grid_t, llm_grid_h, llm_grid_w)
-            st = ed + n_image_tokens
+            llm_pos_ids_list.append(torch.stack([t_idx, h_idx, w_idx]) + text_len + st_idx)
+            st = ed + llm_grid_t * llm_grid_h * llm_grid_w
 
-        pos_t = torch.cat(out_t)[:S]
-        pos_h = torch.cat(out_h)[:S]
-        pos_w = torch.cat(out_w)[:S]
-        position_ids[0, b, : pos_t.shape[0]] = pos_t
-        position_ids[1, b, : pos_h.shape[0]] = pos_h
-        position_ids[2, b, : pos_w.shape[0]] = pos_w
-        mrope_deltas.append(int(pos_t.max().item()) + 1 - S)
+        if st < len(input_tokens):
+            st_idx = int(llm_pos_ids_list[-1].max().item()) + 1 if len(llm_pos_ids_list) > 0 else 0
+            text_len = len(input_tokens) - st
+            llm_pos_ids_list.append(torch.arange(text_len, dtype=torch.long).view(1, -1).expand(3, -1) + st_idx)
+
+        llm_positions = torch.cat(llm_pos_ids_list, dim=1).reshape(3, -1)
+        position_ids[..., i, attention_mask[i] == 1] = llm_positions.to(position_ids.device)
+        mrope_deltas.append(int(llm_positions.max().item()) + 1 - int(total_input_ids[i].shape[0]))
 
     return position_ids, torch.tensor(mrope_deltas, dtype=torch.long).unsqueeze(1)
 

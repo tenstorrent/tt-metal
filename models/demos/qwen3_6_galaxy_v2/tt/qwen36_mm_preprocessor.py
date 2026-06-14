@@ -40,6 +40,8 @@ class Qwen36MMInputs:
     image_grid_thw: torch.Tensor | None  # [num_images, 3] or None
     position_ids_3d: torch.Tensor  # [3, B, S], dtype=torch.long
     mrope_deltas: torch.Tensor  # [B, 1], dtype=torch.long
+    pixel_values_videos: torch.Tensor | None = None  # [N_video_patches, 1536] or None
+    video_grid_thw: torch.Tensor | None = None  # [num_videos, 3] or None
 
 
 class Qwen36MMPreprocessor:
@@ -54,49 +56,71 @@ class Qwen36MMPreprocessor:
         hf_model_path: str,
         *,
         image_token_id: int = 248056,
+        video_token_id: int = 248057,
+        vision_start_token_id: int = 248053,
         spatial_merge_size: int = 2,
     ) -> None:
         self.image_token_id = image_token_id
+        self.video_token_id = video_token_id
+        self.vision_start_token_id = vision_start_token_id
         self.spatial_merge_size = spatial_merge_size
         # AutoProcessor uses the processor_class declared in preprocessor_config.json
         # (Qwen3VLProcessor for qwen3.6). Doesn't depend on the model class.
         self.processor = AutoProcessor.from_pretrained(hf_model_path, trust_remote_code=False)
 
+        # Verify the video placeholder token id from the tokenizer rather than
+        # trusting the arch-note default. The processor expands a single
+        # <|video_pad|> into per-frame placeholder runs at call time.
+        tok_video_id = self.processor.tokenizer.convert_tokens_to_ids("<|video_pad|>")
+        if tok_video_id is not None and tok_video_id != self.video_token_id:
+            self.video_token_id = tok_video_id
+
     def __call__(
         self,
         prompt: str,
         images: list[Image] | None = None,
+        videos: list | None = None,
     ) -> Qwen36MMInputs:
-        """Process a text prompt + optional images into TT-ready tensors.
+        """Process a text prompt + optional images/videos into TT-ready tensors.
 
         For now, `prompt` should be the raw text (no chat-template wrapping).
         The caller is responsible for applying the chat template if desired.
-        Image tokens in the prompt are passed through verbatim — the HF
-        processor expands them into `n_image_tokens` `<|image_pad|>` placeholders
-        per image based on each image's grid_thw.
+        Image/video tokens in the prompt are passed through verbatim — the HF
+        processor expands `<|image_pad|>` per image (by its grid_thw) and
+        `<|video_pad|>` into per-frame placeholder runs (by its grid_thw).
+
+        `videos` is a list of clips; each clip is a `[num_frames, H, W, 3]`
+        uint8 array (or anything the HF `Qwen3VLVideoProcessor` accepts).
         """
-        # HF processor: accepts text + images, produces input_ids, attention_mask,
-        # pixel_values, image_grid_thw, etc. The `text` is the prompt; `images` is
-        # the list of PIL images (or None for text-only).
-        proc_out = self.processor(text=prompt, images=images, return_tensors="pt", padding=True)
+        # HF processor: accepts text + images + videos, produces input_ids,
+        # attention_mask, pixel_values(_videos), image/video_grid_thw, etc.
+        proc_out = self.processor(text=prompt, images=images, videos=videos, return_tensors="pt", padding=True)
 
         input_ids = proc_out["input_ids"]
         attention_mask = proc_out["attention_mask"]
         pixel_values = proc_out.get("pixel_values")
         image_grid_thw = proc_out.get("image_grid_thw")
+        pixel_values_videos = proc_out.get("pixel_values_videos")
+        video_grid_thw = proc_out.get("video_grid_thw")
 
         # HF flattens pixel_values to [batch, num_patches, 1536]; we collapse
         # the batch dim away (qwen3.6 has no batch in the patch tokens — they're
-        # all delimited by image_grid_thw). For text-only inputs pixel_values is None.
+        # all delimited by grid_thw). For text-only inputs these are None.
         if pixel_values is not None and pixel_values.ndim == 3:
             pixel_values = pixel_values.reshape(-1, pixel_values.shape[-1])
+        if pixel_values_videos is not None and pixel_values_videos.ndim == 3:
+            pixel_values_videos = pixel_values_videos.reshape(-1, pixel_values_videos.shape[-1])
 
         # Build 3D position_ids
         position_ids_3d, mrope_deltas = get_rope_index(
             input_ids,
             image_grid_thw=image_grid_thw,
+            video_grid_thw=video_grid_thw,
             image_token_id=self.image_token_id,
+            video_token_id=self.video_token_id,
+            vision_start_token_id=self.vision_start_token_id,
             spatial_merge_size=self.spatial_merge_size,
+            attention_mask=attention_mask,
         )
 
         return Qwen36MMInputs(
@@ -106,6 +130,8 @@ class Qwen36MMPreprocessor:
             image_grid_thw=image_grid_thw,
             position_ids_3d=position_ids_3d,
             mrope_deltas=mrope_deltas,
+            pixel_values_videos=pixel_values_videos,
+            video_grid_thw=video_grid_thw,
         )
 
     def apply_chat_template(self, messages: list[dict]) -> str:

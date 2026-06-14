@@ -143,28 +143,34 @@ def test_get_rope_index_text_only():
 
 @torch.no_grad()
 def test_get_rope_index_text_image_text():
-    """Text + image + text: image_pad positions get 3D grid coords."""
+    """Text + image + text: image_pad positions get 3D grid coords.
+
+    Mirrors real HF processor output: a `<|vision_start|>` token (248053)
+    immediately precedes the `<|image_pad|>` run — `get_rope_index` counts
+    vision segments off vision_start (matching HF `Qwen3VLModel.get_rope_index`).
+    """
     IMG = 248056
-    # 2 text tokens, image (grid_thw=[[1,4,4]] → 2x2=4 patch tokens after merger), 2 text tokens
+    VSTART = 248053
+    # 1 text token, vision_start, image (grid_thw=[[1,4,4]] → 2x2=4 patch tokens), 2 text tokens
     n_img = (4 // 2) * (4 // 2)  # 2*2 = 4
-    input_ids = torch.tensor([[100, 101] + [IMG] * n_img + [200, 201]], dtype=torch.long)
+    input_ids = torch.tensor([[100, VSTART] + [IMG] * n_img + [200, 201]], dtype=torch.long)
     image_grid_thw = torch.tensor([[1, 4, 4]], dtype=torch.long)
     pos_ids, deltas = get_rope_index(input_ids, image_grid_thw=image_grid_thw)
     S = input_ids.shape[1]
     assert pos_ids.shape == (3, 1, S)
 
-    # First 2 tokens: text [0, 1] on all axes
+    # First 2 tokens (text 100 + vision_start): [0, 1] on all axes
     torch.testing.assert_close(pos_ids[0, 0, :2], torch.tensor([0, 1]))
     torch.testing.assert_close(pos_ids[1, 0, :2], torch.tensor([0, 1]))
     torch.testing.assert_close(pos_ids[2, 0, :2], torch.tensor([0, 1]))
 
-    # Image: running starts at 2. grid_t=1, grid_h=2, grid_w=2.
+    # Image: st_idx starts at 2. grid_t=1, grid_h=2, grid_w=2.
     # t_idx = [0,0,0,0], h_idx = [0,0,1,1], w_idx = [0,1,0,1], each +2
     torch.testing.assert_close(pos_ids[0, 0, 2:6], torch.tensor([2, 2, 2, 2]))
     torch.testing.assert_close(pos_ids[1, 0, 2:6], torch.tensor([2, 2, 3, 3]))
     torch.testing.assert_close(pos_ids[2, 0, 2:6], torch.tensor([2, 3, 2, 3]))
 
-    # After image, running advances by max(1, 2, 2) = 2 → running = 4.
+    # After image, running advances to max(grid coords) + 1 = 3 + 1 = 4.
     # Next 2 text tokens: [4, 5] all axes.
     torch.testing.assert_close(pos_ids[0, 0, 6:8], torch.tensor([4, 5]))
     torch.testing.assert_close(pos_ids[1, 0, 6:8], torch.tensor([4, 5]))
