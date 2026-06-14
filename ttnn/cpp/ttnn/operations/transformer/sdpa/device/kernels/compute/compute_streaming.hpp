@@ -1651,7 +1651,8 @@ void sdpa_standard_v2(
     const LightweightMaskContext& lw_mask = {},
     const uint32_t q_num_chunks = 0,
     const bool use_zigzag_balancing = false) {
-    init_sdpa_streaming_semaphores();
+    // Test-only: disabled for XLA ViT regression isolation.
+    // init_sdpa_streaming_semaphores();
 
     // use_padded_mask + is_causal_sdpa is handled at the host level (mutually exclusive).
     static_assert(
@@ -1985,7 +1986,8 @@ void sdpa_ring_v2(
     const bool use_zigzag_balancing = false,
     const ChunkedContext& chunked = {},
     const bool is_first_active_iter = true) {
-    init_sdpa_streaming_semaphores();
+    // Test-only: disabled for XLA ViT regression isolation.
+    // init_sdpa_streaming_semaphores();
 
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
     // is_causal: diagonal stamp only on iter 0 (K is local-frame). Chunked: every iter (absolute coords).
