@@ -41,6 +41,11 @@ on:
         type: boolean
         default: false
         description: "Force a full scan even if no C++ changes are detected"
+      post-pr-suggestions:
+        required: false
+        type: boolean
+        default: false
+        description: "Post inline clang-tidy fix suggestions on PR diffs"
   workflow_dispatch:
     inputs:
       architecture:
@@ -168,6 +173,7 @@ jobs:
       ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
       prereq-targets: ''
       scan-targets: ''
+      post-pr-suggestions: ${{ inputs.post-pr-suggestions }}
 
   # Incremental scan: parallel jobs for different targets
   clang-tidy-incremental-tt-metal:
@@ -185,6 +191,7 @@ jobs:
       ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
       prereq-targets: ''
       scan-targets: 'tt_metal'
+      post-pr-suggestions: ${{ inputs.post-pr-suggestions }}
 
   clang-tidy-incremental-ttnn:
     name: 🤖 Clang Tidy (TTNN)
@@ -201,6 +208,7 @@ jobs:
       ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
       prereq-targets: 'tt_metal'
       scan-targets: 'ttnn'
+      post-pr-suggestions: ${{ inputs.post-pr-suggestions }}
 
   clang-tidy-incremental-tt-train:
     name: 🤖 Clang Tidy (tt-train)
@@ -217,6 +225,7 @@ jobs:
       ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
       prereq-targets: 'tt_metal ttnn'
       scan-targets: 'tt-train'
+      post-pr-suggestions: ${{ inputs.post-pr-suggestions }}
 
   clang-tidy-incremental-catchall:
     name: 🤖 Clang Tidy (catchall)
@@ -233,3 +242,4 @@ jobs:
       ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
       prereq-targets: 'tt_metal ttnn'
       scan-targets: ''
+      post-pr-suggestions: ${{ inputs.post-pr-suggestions }}
