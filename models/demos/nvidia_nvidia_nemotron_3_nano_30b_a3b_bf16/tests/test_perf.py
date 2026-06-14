@@ -25,7 +25,6 @@ for p in (f"{_root}/ttnn", f"{_root}/tools", _root):
 
 import pytest
 import torch
-import torch.nn.functional as F
 
 PATTERN = "MEMEM*EMEMEM*EMEMEM*EMEMEM*EMEMEM*EMEMEMEM*EMEMEMEME"
 N_LAYERS = 52
@@ -71,7 +70,7 @@ def _ref_forward_52(input_ids: torch.Tensor, wc) -> torch.Tensor:
     )
 
     B, S = input_ids.shape
-    h = F.embedding(input_ids, wc["backbone.embeddings.weight"])
+    h = torch.nn.functional.embedding(input_ids, wc["backbone.embeddings.weight"])
 
     for li in range(N_LAYERS):
         lt = PATTERN[li]
@@ -124,7 +123,7 @@ def test_full_52layer_pcc(mesh_device, weight_cache):
     """Hidden-state PCC for all 52 layers (TTNN TP=4 vs pure-PyTorch reference)."""
 
     torch.manual_seed(42)
-    input_ids = torch.randint(0, 131072, (1, 8), dtype=torch.long)
+    input_ids = torch.randint(0, 131072, (1, 1), dtype=torch.long)  # S=1: Mamba2 decode kernel
 
     print(f"\nRunning reference forward (52 layers)...")
     ref_h = _ref_forward_52(input_ids, weight_cache)
@@ -168,7 +167,13 @@ def test_full_52layer_pcc(mesh_device, weight_cache):
                 wo=wc[f"{p}.mixer.o_proj.weight"],
             )
 
-    score = pcc(h, ref_h)
+    # h is ttnn.Tensor — bring to CPU for PCC comparison
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.tp import _host_rep
+
+    B = input_ids.shape[0]
+    h_cpu = _host_rep(h, mesh_device, B)
+
+    score = pcc(h_cpu, ref_h)
     print(f"\nFull-model hidden-state PCC (52 layers): {score:.6f}")
     assert score >= PCC_THRESHOLD, f"PCC {score:.6f} < {PCC_THRESHOLD}"
 

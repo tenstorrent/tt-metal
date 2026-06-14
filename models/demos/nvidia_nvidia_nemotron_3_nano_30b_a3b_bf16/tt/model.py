@@ -7,6 +7,9 @@ Layer pattern (52 layers):
   E = MoE MLP block  (norm + gate + 128 routed experts + shared expert + residual)
   * = Dense attention (norm + GQA attention + residual, no RoPE in HF source)
 
+hidden_states is a ttnn.Tensor on device throughout (embedding → lm_head).
+Only lm_head.forward brings the final result to CPU (logits).
+
 Weight loading is lazy: weights are fetched from safetensors shards on first
 access and cached in a dict so each shard is opened at most once.
 """
@@ -15,6 +18,8 @@ import json
 import os
 
 import torch
+
+import ttnn
 
 from .dense_attention import dense_attention_forward
 from .embedding import embedding_forward
@@ -61,39 +66,49 @@ class WeightCache:
 
 def _moe_layer_forward(
     mesh_device,
-    hidden_states: torch.Tensor,
+    hidden_states: ttnn.Tensor,  # [B, S, 2688] bf16 on device
     layer_idx: int,
     wc: WeightCache,
-) -> torch.Tensor:
+) -> ttnn.Tensor:
     """E-type block: pre-norm → gate + experts + shared_expert → residual."""
     residual = hidden_states
     p = f"backbone.layers.{layer_idx}"
 
-    norm_w = wc[f"{p}.norm.weight"]
-    normed = layer_norm_forward(mesh_device, hidden_states, norm_w)  # [B, S, 2688]
+    # Pre-norm (returns ttnn.Tensor)
+    normed_tt = layer_norm_forward(mesh_device, hidden_states, wc[f"{p}.norm.weight"])
 
-    B, S, H = normed.shape
-    flat = normed.reshape(B * S, H)  # [tokens, 2688]
+    B = normed_tt.shape[0]
+    S = normed_tt.shape[1]
+    H = normed_tt.shape[2]
 
-    gate_w = wc[f"{p}.mixer.gate.weight"]
-    gate_b = wc[f"{p}.mixer.gate.e_score_correction_bias"]
-    topk_idx, topk_wts = moe_gate_forward(mesh_device, flat, gate_w, gate_b)
+    # Flatten for gate/experts: [B, S, H] → [B*S, H]
+    flat_tt = ttnn.reshape(normed_tt, [B * S, H])
 
+    # Gate routing (returns CPU indices/weights — logits are tiny)
+    topk_idx, topk_wts = moe_gate_forward(
+        mesh_device,
+        flat_tt,
+        wc[f"{p}.mixer.gate.weight"],
+        wc[f"{p}.mixer.gate.e_score_correction_bias"],
+    )
+
+    # Routed experts (returns ttnn.Tensor [B*S, 2688])
     experts_up = [wc[f"{p}.mixer.experts.{e}.up_proj.weight"] for e in range(128)]
     experts_down = [wc[f"{p}.mixer.experts.{e}.down_proj.weight"] for e in range(128)]
-    expert_out = moe_experts_forward(mesh_device, flat, topk_idx, topk_wts, experts_up, experts_down)
-    # expert_out: [tokens, 2688]
+    expert_out_tt = moe_experts_forward(mesh_device, flat_tt, topk_idx, topk_wts, experts_up, experts_down)
 
-    shared_out = shared_expert_forward(
+    # Shared expert (returns ttnn.Tensor [B, S, 2688])
+    shared_out_tt = shared_expert_forward(
         mesh_device,
-        normed,
+        normed_tt,
         w_up=wc[f"{p}.mixer.shared_experts.up_proj.weight"],
         w_down=wc[f"{p}.mixer.shared_experts.down_proj.weight"],
     )
-    # shared_out: [B, S, 2688]
 
-    moe_out = expert_out.reshape(B, S, H) + shared_out
-    return (residual + moe_out).bfloat16()
+    # Combine: reshape expert_out back and add shared_out, then residual
+    expert_out_reshaped = ttnn.reshape(expert_out_tt, [B, S, H])
+    moe_out_tt = ttnn.add(expert_out_reshaped, shared_out_tt)
+    return ttnn.add(residual, moe_out_tt)
 
 
 def nemotron_h_forward(
@@ -102,7 +117,7 @@ def nemotron_h_forward(
     wc: WeightCache | None = None,
     num_layers: int = N_LAYERS,
 ) -> torch.Tensor:
-    """Full NemotronH forward returning logits [B, S, vocab_size].
+    """Full NemotronH forward returning logits [B, S, vocab_size] on CPU.
 
     Args:
         mesh_device:  Open TTNN MeshDevice.
@@ -116,14 +131,10 @@ def nemotron_h_forward(
     if wc is None:
         wc = WeightCache()
 
-    B, S = input_ids.shape
-    position_ids = torch.arange(S, dtype=torch.long).unsqueeze(0).expand(B, -1)
+    # 1. Embedding — returns ttnn.Tensor on device
+    hidden_states = embedding_forward(mesh_device, input_ids, wc["backbone.embeddings.weight"])
 
-    # 1. Embedding
-    emb_w = wc["backbone.embeddings.weight"]
-    hidden_states = embedding_forward(mesh_device, input_ids, emb_w)  # [B, S, 2688]
-
-    # 2. Layer stack
+    # 2. Layer stack — all layers pass ttnn.Tensor between them
     for li in range(min(num_layers, N_LAYERS)):
         layer_type = PATTERN[li]
         p = f"backbone.layers.{li}"
@@ -157,11 +168,10 @@ def nemotron_h_forward(
                 wo=wc[f"{p}.mixer.o_proj.weight"],
             )
 
-    # 3. LM head
-    logits = lm_head_forward(
+    # 3. LM head — single CPU boundary at the output
+    return lm_head_forward(
         mesh_device,
         hidden_states,
         norm_f_weight=wc["backbone.norm_f.weight"],
         lm_head_weight=wc["lm_head.weight"],
     )
-    return logits

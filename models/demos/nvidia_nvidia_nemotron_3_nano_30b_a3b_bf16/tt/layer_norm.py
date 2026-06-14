@@ -7,19 +7,17 @@ import torch
 import ttnn
 from ttnn import MeshDevice
 
-from .tp import _host_rep, _rep
+from .tp import _rep
 
 NORM_EPS = 1e-5
 
 
 def layer_norm_forward(
     mesh_device: MeshDevice,
-    hidden_states: torch.Tensor,  # [B, S, hidden_size]
-    weight: torch.Tensor,  # [hidden_size]
+    hidden_states: ttnn.Tensor,  # [B, S, hidden_size] bf16 already on device
+    weight: torch.Tensor,  # [hidden_size] bf16 CPU
     eps: float = NORM_EPS,
-) -> torch.Tensor:
-    B = hidden_states.shape[0]
-    h_tt = _rep(hidden_states, mesh_device)
+) -> ttnn.Tensor:
+    """Returns [B, S, hidden_size] bfloat16 on device (replicated)."""
     w_tt = _rep(weight.unsqueeze(0), mesh_device)
-    out_tt = ttnn.rms_norm(h_tt, epsilon=eps, weight=w_tt)
-    return _host_rep(out_tt, mesh_device, B)
+    return ttnn.rms_norm(hidden_states, epsilon=eps, weight=w_tt)
