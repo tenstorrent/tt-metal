@@ -470,8 +470,10 @@
       "validation_threshold": "HF - 1.0",
       "hybrid_notes": "KV cache covers only the 6 dense-attention layers and 23 MoE-attention layers. Mamba-2 layers maintain a recurrent SSM hidden state (not KV pairs) \u2014 that state must be managed separately in decode mode. The hybrid_override_pattern (MEMEM*EMEMEM*...) determines per-layer dispatch.",
       "generation": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 1,
+        "pcc": 0.999833,
+        "notes": "first 6 layers (MEMEM*) hidden-state PCC vs pure-PyTorch reference on QB device 0; all 3 layer types covered"
       },
       "perf": {
         "status": "pending",
@@ -549,6 +551,14 @@
       "action": "ttnn[all 11/11]",
       "result": "11ok",
       "notes": "All components PCC-verified on QB device 0; MoEGate wts_pcc=0.911 (threshold 0.89)"
+    },
+    {
+      "tick": 11,
+      "ts": "2026-06-14T08:27:00Z",
+      "action": "generation[text_generation first 6 layers MEMEM*]",
+      "result": "ok",
+      "pcc": 0.999833,
+      "notes": "hidden-state PCC on QB device 0; covers M/E/* layer types with real weights"
     }
   ],
   "config": {
