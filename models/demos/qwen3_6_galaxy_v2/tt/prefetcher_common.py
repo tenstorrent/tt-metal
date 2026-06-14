@@ -170,18 +170,13 @@ class TtLlamaPrefetcherSetup(LightweightModule):
             # logger.info(f"GlobalCB size {self.global_cb_size}")
             self.global_circular_buffer = None  # Global CB will only be allocated before decode runs
             self.prefetcher_sub_device = ttnn.SubDevice([self.sender_core_range_set])
-            # On BH (13x10 grid), extend worker cores to include cols 7-12 in addition to WH's cols 1-3, 5-6.
-            # WH uses cols 0 and 4 for prefetcher senders; those stay in prefetcher_sub_device on BH too.
-            if is_blackhole():
-                bh_worker_cores_range_set = ttnn.CoreRangeSet(
-                    [
-                        ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, grid_size.y - 1)),
-                        ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)),
-                    ]
-                )
-                self.worker_sub_device = ttnn.SubDevice([bh_worker_cores_range_set])
-            else:
-                self.worker_sub_device = ttnn.SubDevice([self.worker_cores_range_set])
+            # The worker sub-device MUST be disjoint from the prefetcher (sender)
+            # sub-device. BH senders are on cols 0 AND 7 (not WH's 0/4), so the
+            # worker grid from get_bh_prefetcher_core_ranges is cols 1-6 + 8-11 —
+            # it already carves out both sender columns. (The old hardcoded BH
+            # range spanned cols 5-11, which collided with the col-7 senders ->
+            # "SubDevices ... intersect".)
+            self.worker_sub_device = ttnn.SubDevice([self.worker_cores_range_set])
             self.prefetcher_sub_device_id = ttnn.SubDeviceId(0)
             self.worker_sub_device_id = ttnn.SubDeviceId(1)
             if mesh_sub_device_manager_id_decode is None:

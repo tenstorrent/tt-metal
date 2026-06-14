@@ -99,6 +99,20 @@ def test_bh_prefetcher_core_ranges_contract():
     assert isinstance(worker_cores_range_set, ttnn.CoreRangeSet)
     assert _crs_size(worker_cores_range_set) > 0
 
+    # The worker sub-device MUST be disjoint from the prefetcher (sender)
+    # sub-device, else create_sub_device_manager raises "SubDevices ... intersect".
+    # BH senders sit on cols 0 and 7 -> the worker grid must exclude both.
+    worker_set = set()
+    for cr in worker_cores_range_set.ranges():
+        for x in range(cr.start.x, cr.end.x + 1):
+            for y in range(cr.start.y, cr.end.y + 1):
+                worker_set.add((x, y))
+    assert worker_set.isdisjoint(sender_set), f"worker grid overlaps senders: {sorted(worker_set & sender_set)}"
+    worker_cols = {x for (x, _) in worker_set}
+    assert not (
+        {0, 7} & worker_cols
+    ), f"sender cols 0/7 must not be in the worker grid, found {sorted({0, 7} & worker_cols)}"
+
 
 if __name__ == "__main__":
     import pytest
