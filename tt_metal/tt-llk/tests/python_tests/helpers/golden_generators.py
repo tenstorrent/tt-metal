@@ -2417,12 +2417,18 @@ class EltwiseBinaryGolden(FidelityMasking):
                 t1, t2 = self._apply_fidelity_masking(
                     math_format_for_fidelity, t1, t2, fidelity_iter
                 )
+                if keep_float32:
+                    t1 = t1.to(torch.float32)
+                    t2 = t2.to(torch.float32)
                 phase_result = self.ops[op](t1, t2)
                 if fidelity_iter == 0:
                     result = phase_result
                 else:
                     result += phase_result
         else:
+            if keep_float32:
+                t1 = t1.to(torch.float32)
+                t2 = t2.to(torch.float32)
             result = self.ops[op](t1, t2)
 
         return result
@@ -2437,6 +2443,7 @@ class EltwiseBinaryGolden(FidelityMasking):
         input_format=None,
         input_format_B=_UNSET,
         acc_to_dest=False,
+        dest_acc=None,
         tile_shape=None,
         num_tiles_per_accumulation=1,
     ):
@@ -2457,10 +2464,15 @@ class EltwiseBinaryGolden(FidelityMasking):
         # For MX-output paths we preserve that precision through the golden
         # so multi-tile accumulation rounds the same way as HW.
         out_is_mx = data_format.is_mx_format()
+        mx_pack_from_fp32_dest = out_is_mx and dest_acc == DestAccumulation.Yes
         hw_dest_dtype = (
-            torch.float16
-            if (out_is_mx and input_format == DataFormat.Float16)
-            else torch.bfloat16
+            torch.float32
+            if mx_pack_from_fp32_dest
+            else (
+                torch.float16
+                if (out_is_mx and input_format == DataFormat.Float16)
+                else torch.bfloat16
+            )
         )
         # Step 1: Quantize each input independently to match what hardware sees
         # after unpacking from L1. Each operand uses its own format.
@@ -2536,6 +2548,7 @@ class EltwiseBinaryGolden(FidelityMasking):
                 t2,
                 math_format_for_fidelity,
                 math_fidelity,
+                keep_float32=mx_pack_from_fp32_dest,
             )
 
         # Quantize output to match what hardware packs back into L1.
