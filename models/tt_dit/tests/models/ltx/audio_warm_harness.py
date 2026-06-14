@@ -118,11 +118,13 @@ def _avg_leg(pipeline, latent, num_frames, reps, warmups, label):
     # SUBMESH to actually run the audio decode on is `mesh_shape` (sliced from the full
     # parent via create_submesh), so this directly measures submesh-routed audio decode.
     [
+        [(4, 8), (1, 1), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
+        [(4, 8), (1, 2), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
         [(4, 8), (1, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
         [(4, 8), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
         [(4, 8), (4, 8), 1, 0, 2, False, line_trace_params, ttnn.Topology.Linear, False],
     ],
-    ids=["bh_1x4sp1tp0", "bh_2x4sp1tp0", "bh_4x8sp1tp0"],
+    ids=["bh_1x1sp1tp0", "bh_1x2sp1tp0", "bh_1x4sp1tp0", "bh_2x4sp1tp0", "bh_4x8sp1tp0"],
     indirect=["mesh_device", "device_params"],
 )
 def test_warm_harness(
