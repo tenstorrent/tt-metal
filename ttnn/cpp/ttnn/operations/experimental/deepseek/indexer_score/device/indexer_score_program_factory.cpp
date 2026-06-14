@@ -164,6 +164,18 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     }
     const uint32_t k_mcast_on = k_cols_ok ? 1u : 0u;
     const uint32_t q_mcast_on = q_rows_ok ? 1u : 0u;
+    // q and w share the row mcast (same semaphores) but do independent handshakes, so each can be
+    // forwarded or not on its own. These per-input forward flags keep the mcast STRUCTURE
+    // (semaphores/roles) live while letting a diagnostic force just q or just w onto the per-core
+    // DRAM path -- to attribute the row mcast's benefit to q vs w separately. Default = q_mcast_on.
+    const uint32_t q_fwd_on = (q_mcast_on && std::getenv("INDEXER_NO_QFWD") == nullptr) ? 1u : 0u;
+    const uint32_t w_fwd_on = (q_mcast_on && std::getenv("INDEXER_NO_WFWD") == nullptr) ? 1u : 0u;
+    // The q/w row-mcast sender defaults to logical x==0, so every row's injector stacks in physical
+    // column 0 -- all of them hammer DRAM over NoC0 at startup. INDEXER_QDIAG places row y's sender at
+    // column y (the diagonal) so the row injectors spread across distinct columns. Safe because the
+    // grid-aligned dense deal gives every core in a physical row the same q-row-group (same q block),
+    // so any core in the row can be the sender. grid.y <= grid.x here, so column y always exists.
+    const bool q_diag = std::getenv("INDEXER_QDIAG") != nullptr;
 
     // 3 semaphores per active direction: send (receivers signal ready), recv (sender relays valid
     // into it), valid (constant 1, the relay source). Mirrors SDPA chain_link's handshake.
@@ -299,6 +311,10 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     reader_ct.push_back(q_send_sem);
     reader_ct.push_back(q_recv_sem);
     reader_ct.push_back(q_valid_sem);
+    // Appended after the fixed mcast block so existing CT offsets are unchanged: per-input forward
+    // flags (q/w share the row mcast structure but can be forwarded independently).
+    reader_ct.push_back(q_fwd_on);
+    reader_ct.push_back(w_fwd_on);
 
     std::vector<uint32_t> writer_ct = common_ct;
     constexpr uint32_t out_elem_bytes = 2;    // bf16 output (compute_output_specs)
@@ -360,19 +376,21 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
                 kye,
                 phys[cidx(x, 0)],
                 u32(grid.y) - 1);
-            // Q/W row y: sender (0,y), receivers (1..,y); horizontal rect spanning the row.
+            // Q/W row y: sender at column q_sx (default 0, diagonal=y), receivers the rest of the row;
+            // horizontal rect spanning the whole row (sender inside it, hardware excludes the source).
+            const uint32_t q_sx = q_diag ? y : 0u;
             uint32_t qxs = u32(phys[cidx(0, y)].x), qxe = qxs;
             for (uint32_t xx = 0; xx < grid.x; ++xx) {
                 qxs = std::min<uint32_t>(qxs, u32(phys[cidx(xx, y)].x));
                 qxe = std::max<uint32_t>(qxe, u32(phys[cidx(xx, y)].x));
             }
             push8(
-                q_mcast_on ? (x == 0 ? 1u : 2u) : 0u,
+                q_mcast_on ? (x == q_sx ? 1u : 2u) : 0u,
                 qxs,
-                u32(phys[cidx(0, y)].y),
+                u32(phys[cidx(q_sx, y)].y),
                 qxe,
-                u32(phys[cidx(0, y)].y),
-                phys[cidx(0, y)],
+                u32(phys[cidx(q_sx, y)].y),
+                phys[cidx(q_sx, y)],
                 u32(grid.x) - 1);
         } else {
             for (uint32_t z = 0; z < 16; ++z) {

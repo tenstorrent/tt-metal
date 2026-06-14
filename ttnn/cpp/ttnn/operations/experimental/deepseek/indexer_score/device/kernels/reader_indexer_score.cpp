@@ -49,6 +49,10 @@ constexpr uint32_t k_valid_sem = get_compile_time_arg_val(mc_ct_base + 4);
 constexpr uint32_t q_send_sem = get_compile_time_arg_val(mc_ct_base + 5);
 constexpr uint32_t q_recv_sem = get_compile_time_arg_val(mc_ct_base + 6);
 constexpr uint32_t q_valid_sem = get_compile_time_arg_val(mc_ct_base + 7);
+// q and w share the row mcast but handshake independently, so each can be forwarded on its own
+// (diagnostic: INDEXER_NO_QFWD / INDEXER_NO_WFWD force just that input onto the per-core DRAM path).
+constexpr uint32_t q_fwd_on = get_compile_time_arg_val(mc_ct_base + 8);
+constexpr uint32_t w_fwd_on = get_compile_time_arg_val(mc_ct_base + 9);
 
 // Receiver rectangle / sender coords for one mcast direction (physical NoC), set per core on host.
 struct McastDir {
@@ -106,7 +110,7 @@ inline void read_q_block(Noc noc, const QAcc& q_acc, uint32_t q_row_start, uint3
     CircularBuffer cb(cb_q);
     cb.reserve_back(q_group_tiles);
     const uint32_t addr = cb.get_write_ptr();
-    if constexpr (q_mcast_on) {
+    if constexpr (q_fwd_on) {
         if (qd.role == 2) {  // receiver: wait for the row sender's mcast into this slot
             mcast_recv<q_send_sem, q_recv_sem>(noc, qd);
             cb.push_back(q_group_tiles);
@@ -126,12 +130,53 @@ inline void read_q_block(Noc noc, const QAcc& q_acc, uint32_t q_row_start, uint3
         }
         noc.async_read_barrier();
     }
-    if constexpr (q_mcast_on) {
+    if constexpr (q_fwd_on) {
         if (qd.role == 1) {  // sender: broadcast the whole block to the rest of the grid row
             mcast_send<q_send_sem, q_recv_sem, q_valid_sem>(noc, qd, addr, q_group_tiles * tile_bytes);
         }
     }
     cb.push_back(q_group_tiles);
+}
+
+/** Resident-heads q, read/mcast ONE q-row at a time (q_tiles_per_unit pushes of heads_per_group*Dt
+ *  tiles each) instead of the whole block in one shot. The first matmul needs only row 0's tiles, so
+ *  pushing row 0 the moment it lands lets compute start its row-0 matmuls while row 1 is still draining
+ *  from DRAM. Costs one mcast rendezvous PER ROW (QC total) vs the whole-block's one -- QC=2 -> 2, still
+ *  near the 3-rendezvous startup optimum (per-tile streaming's 19 was the regression). For QC==1 this is
+ *  byte-identical to read_q_block (one row == the whole block). first_head is always 0 here (resident). */
+template <bool dma_off, typename QAcc>
+inline void read_q_rows(Noc noc, const QAcc& q_acc, uint32_t q_row_start, const McastDir& qd) {
+    constexpr uint32_t row_tiles = heads_per_group * head_dim_tiles;  // one q-row across all resident heads
+    CircularBuffer cb(cb_q);
+    cb.reserve_back(q_group_tiles);
+    const uint32_t base = cb.get_write_ptr();
+    for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
+        const uint32_t row_addr = base + r * row_tiles * tile_bytes;
+        if constexpr (q_fwd_on) {
+            if (qd.role == 2) {  // receiver: one mcast handshake per row, data lands at row_addr
+                mcast_recv<q_send_sem, q_recv_sem>(noc, qd);
+                cb.push_back(row_tiles);
+                continue;
+            }
+        }
+        if constexpr (!dma_off) {
+            uint32_t ptr = row_addr;
+            for (uint32_t h = 0; h < heads_per_group; ++h) {
+                const uint32_t pbase = h * q_len_tiles * head_dim_tiles + (q_row_start + r) * head_dim_tiles;
+                for (uint32_t d = 0; d < head_dim_tiles; ++d) {
+                    noc.async_read(q_acc, CoreLocalMem<uint32_t>(ptr), tile_bytes, {.page_id = pbase + d}, {});
+                    ptr += tile_bytes;
+                }
+            }
+            noc.async_read_barrier();
+        }
+        if constexpr (q_fwd_on) {
+            if (qd.role == 1) {  // sender: broadcast this row to the rest of the grid row
+                mcast_send<q_send_sem, q_recv_sem, q_valid_sem>(noc, qd, row_addr, row_tiles * tile_bytes);
+            }
+        }
+        cb.push_back(row_tiles);
+    }
 }
 
 /** resident w group [q_tiles_per_unit][num_heads], page id h*q_len_tiles + q_row_start + r. */
@@ -140,7 +185,7 @@ inline void read_w_group(Noc noc, const WAcc& w_acc, uint32_t q_row_start, const
     CircularBuffer cb(cb_w);
     cb.reserve_back(w_group_tiles);
     const uint32_t addr = cb.get_write_ptr();
-    if constexpr (q_mcast_on) {
+    if constexpr (w_fwd_on) {
         if (qd.role == 2) {
             mcast_recv<q_send_sem, q_recv_sem>(noc, qd);
             cb.push_back(w_group_tiles);
@@ -158,7 +203,7 @@ inline void read_w_group(Noc noc, const WAcc& w_acc, uint32_t q_row_start, const
         }
         noc.async_read_barrier();
     }
-    if constexpr (q_mcast_on) {
+    if constexpr (w_fwd_on) {
         if (qd.role == 1) {
             mcast_send<q_send_sem, q_recv_sem, q_valid_sem>(noc, qd, addr, w_group_tiles * tile_bytes);
         }
@@ -262,10 +307,13 @@ void kernel_main() {
         if (group_start && stream_heads) {
             read_w_group<w_off>(noc, w_acc, span.q_tile_start(), qd);  // gates before the streamed q
         }
-        if (group_start && !stream_heads) {
-            read_q_block<q_off>(noc, q_acc, span.q_tile_start(), 0, qd);
-        }
+        // k FIRST on the resident path: the first matmul needs k AND q-row0, and compute waits the whole
+        // k chunk before any row. Reading k ahead of q means it is ready when q-row0 lands, so the split
+        // q-row0 push actually unblocks the first matmul (otherwise the k wait would re-serialize it).
         read_k_chunk<k_off>(noc, k_acc, span.k_tile_start(), span.k_tiles(), kd);
+        if (group_start && !stream_heads) {
+            read_q_rows<q_off>(noc, q_acc, span.q_tile_start(), qd);  // per-row: compute starts on row 0
+        }
         if constexpr (stream_heads) {
             // one q-block per (r, c) output tile per head group; must match compute's tile order
             for (uint32_t tile_idx = 0; tile_idx < q_tiles_per_unit * span.k_tiles(); ++tile_idx) {

@@ -358,8 +358,15 @@ inline void accumulate_full_strip_row(
  *  The writer mirrors this: it pops the QC strips in row order. */
 inline void produce_full_unit(const WorkUnitSpan& span, uint32_t k_tiles_in_unit) {
     constexpr uint32_t unit_strip = q_tiles_per_unit * k_tiles_per_unit;
+    constexpr uint32_t q_row_tiles = q_group_tiles / q_tiles_per_unit;  // heads_per_group * head_dim_tiles
     cb_reserve_back(cb_acc_strip, unit_strip);
     for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
+        // Wait only for q rows 0..r (the reader pushes per row). Row r's matmul reads only its own row's
+        // tiles, so this lets row 0's matmuls run while row 1 is still arriving. Cumulative + non-consuming,
+        // so for units 1..N (q already fully resident) every wait returns immediately.
+        if constexpr (!stream_heads) {
+            cb_wait_front(cb_q, (r + 1) * q_row_tiles);
+        }
         const uint32_t diag_tile = chunk_start_tiles + span.q_tile_start() + r;
         const uint32_t k_tile0 = span.k_tile_start();
         const uint32_t valid = row_valid_prefix(span.q_tile_start() + r, k_tile0, k_tiles_in_unit);
@@ -387,9 +394,9 @@ void kernel_main() {
     bool have_group = false;
     for (uint32_t i = 0; i < flat_count; ++i) {
         if (!have_group) {
-            if constexpr (!stream_heads) {
-                cb_wait_front(cb_q, q_group_tiles);  // all heads one resident block (heads_per_group == num_heads)
-            }
+            // Resident q is now waited PER ROW inside produce_full_unit (the reader pushes q one row at a
+            // time so compute can start row 0 while row 1 drains). The per-tile fallback waits the whole
+            // block itself. So no whole-block q wait here. (stream_heads streams q later, also no wait.)
             have_group = true;
             // NOTE: cb_w is deliberately NOT waited here -- the gates are consumed only in the later
             // mul phase, so the reader reads w after the latency-critical q/k and compute waits it
@@ -413,9 +420,12 @@ void kernel_main() {
         }
 
         if (!produced_full_unit) {
-            // Per-tile path (partial edge unit / KC==1): accumulate_heads reads the gates by index
-            // without waiting, so block on cb_w here (deferred from the group header; q was already
-            // waited there for the resident-heads path, streamed-q for the head-streaming path).
+            // Per-tile path (partial edge unit / KC==1): accumulate_heads reads q (resident) and the gates
+            // by index without waiting, so block on the whole q block + cb_w here. (produce_full_unit waits
+            // q per row; this path consumes all rows by index so it needs the full block.)
+            if constexpr (!stream_heads) {
+                cb_wait_front(cb_q, q_group_tiles);
+            }
             cb_wait_front(cb_w, w_group_tiles);
             // k_tile rises with c, so the causal split is a prefix/suffix: tiles c in [0, m) are
             // fully valid (k_tile < diag_tile), tiles [m, k) are masked (diagonal then future). The
