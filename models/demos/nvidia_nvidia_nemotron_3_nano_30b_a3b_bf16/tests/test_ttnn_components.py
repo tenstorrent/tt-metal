@@ -231,16 +231,39 @@ def test_moe_gate_pcc(mesh_device):
     from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.moe_gate import moe_gate_forward
 
     g = load_golden("MoEGate")
-    # input is [1, 8, 2688] → flatten to [8, 2688] for gate
-    inp = g["input"].view(-1, 2688)
-    out_idx, out_wts = moe_gate_forward(
+    # input is [1, 8, 2688] → flatten to [tokens, 2688] for gate
+    inp_cpu = g["input"].view(-1, 2688).bfloat16()  # [tokens, 2688]
+    tokens = inp_cpu.shape[0]
+
+    # New API: hidden_states must be a device tensor
+    inp_tt = ttnn.from_torch(
+        inp_cpu,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    # Returns dense [1, 1, tokens, 128] device tensor; zeros for inactive experts
+    dense_tt = moe_gate_forward(
         mesh_device,
-        inp,
+        inp_tt,
         weight=g["gate_weight"],
         e_score_correction_bias=g["e_score_correction_bias"],
     )
-    ref_idx = g["topk_indices"]  # [8, 6]
-    ref_wts = g["topk_weights"]  # [8, 6]
+
+    # Bring to CPU: ConcatMeshToTensor(dim=0) stacks all replicas; take the first
+    dense_cpu = ttnn.to_torch(dense_tt, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    # dense_cpu shape: [n_devices, 1, tokens, 128]; take first replica → [tokens, 128]
+    n_devices = dense_cpu.shape[0]
+    dense_cpu = dense_cpu[0].squeeze(0)  # [tokens, 128]
+
+    ref_idx = g["topk_indices"].long()  # [tokens, 6]
+    ref_wts = g["topk_weights"].float()  # [tokens, 6]
+
+    # Extract top-6 indices from the dense routing (all non-zero positions are active)
+    out_idx = torch.topk(dense_cpu.float(), k=6, dim=-1)[1]  # [tokens, 6]
+    out_wts = dense_cpu.float().gather(1, out_idx)  # [tokens, 6]
 
     # Sort per-token for order-independent comparison
     ref_sorted = ref_idx.sort(-1)[0]
@@ -249,40 +272,54 @@ def test_moe_gate_pcc(mesh_device):
     wts_pcc = pcc(out_wts, ref_wts)
     print(f"\nMoEGate index exact_match={idx_match:.4f} weights_pcc={wts_pcc:.6f}")
     assert idx_match >= 0.99
-    # Weight PCC threshold relaxed to 0.89: float32 TTNN matmul on BH uses bf16 accumulators
-    # internally, causing small logit differences that are amplified by sigmoid normalization.
-    # Routing (index_match) is the operationally critical metric.
+    # Weight PCC threshold relaxed to 0.89: bfloat16 gate matmul accumulates small
+    # logit errors amplified by sigmoid normalization.
     assert wts_pcc >= 0.89
 
 
 # ---------------------------------------------------------------------------
-# MoEExperts  golden keys: hidden_states[4,2688], topk_indices[4,6],
-#                           topk_weights[4,6], output[4,2688]
+# MoEExperts  golden keys: hidden_states[tokens,2688], topk_indices[tokens,6],
+#                           topk_weights[tokens,6], output[tokens,2688]
 # ---------------------------------------------------------------------------
 
 
 def test_moe_experts_pcc(mesh_device):
+    import torch as _torch
+
     from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.moe_experts import moe_experts_forward
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.tp import _upload
 
     g = load_golden("MoEExperts")
     li = g.get("layer_idx", 1)
+    tokens = g["hidden_states"].shape[0]
 
-    experts_up, experts_down = [], []
+    # Upload hidden_states to device [tokens, 2688]
+    hs_tt = _upload(
+        g["hidden_states"].bfloat16(), mesh_device, shard_dim=None, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+    )
+
+    # Build dense routing from topk_indices/topk_weights; current API takes a
+    # single [tokens, 128] routing tensor (zeros for inactive experts)
+    routing_dense = _torch.zeros(tokens, 128, dtype=_torch.bfloat16)
+    routing_dense.scatter_(1, g["topk_indices"].long(), g["topk_weights"].bfloat16())
+    rw_tt = _upload(routing_dense, mesh_device, shard_dim=None, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+
+    # Stack expert weights into [1, 128, H, I] bfloat4_b on device
+    up_list, down_list = [], []
     for e in range(128):
         eu = get_weight(f"backbone.layers.{li}.mixer.experts.{e}.up_proj.weight")
         ed = get_weight(f"backbone.layers.{li}.mixer.experts.{e}.down_proj.weight")
-        experts_up.append(eu)
-        experts_down.append(ed)
+        up_list.append(eu)
+        down_list.append(ed)
+    up_cpu = _torch.stack(up_list).transpose(-1, -2).unsqueeze(0).bfloat16().contiguous()
+    down_cpu = _torch.stack(down_list).transpose(-1, -2).unsqueeze(0).bfloat16().contiguous()
+    up_tt = _upload(up_cpu, mesh_device, shard_dim=None, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat4_b)
+    down_tt = _upload(down_cpu, mesh_device, shard_dim=None, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat4_b)
 
-    out = moe_experts_forward(
-        mesh_device,
-        g["hidden_states"],
-        g["topk_indices"],
-        g["topk_weights"],
-        experts_up,
-        experts_down,
-    )
-    score = pcc(out, g["output"])
+    out_tt = moe_experts_forward(mesh_device, hs_tt, rw_tt, up_tt, down_tt)
+
+    out_cpu = ttnn.to_torch(out_tt, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0].float()
+    score = pcc(out_cpu, g["output"].float())
     print(f"\nMoEExperts PCC = {score:.6f}")
     assert score >= PCC_THRESHOLD
 
