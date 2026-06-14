@@ -98,45 +98,6 @@ inline void reduce_pool_op()
 }
 
 /**
- * @brief Pool one face for swapped REDUCE_ROW (data in SrcB), iterating over all 16 SrcB rows.
- *
- * GAPOOL processes one SrcB row per invocation. With swapped operands (data→SrcB, scaler→SrcA),
- * we must call GAPOOL once per SrcB row (×fidelity phases for HiFi) and advance SrcB/Dest counters
- * between rows via ADDR_MOD_1 (srcb+1, dest+1, fidelity clear).
- *
- * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
- * @tparam clear_mode: Source-clear mode applied after pooling the last row.
- */
-template <MathFidelity math_fidelity, std::uint32_t clear_mode>
-inline void reduce_row_swapped_pool_face()
-{
-    constexpr bool high_fidelity     = is_high_fidelity(math_fidelity);
-    constexpr std::uint32_t num_rows = FACE_R_DIM;
-
-    for (std::uint32_t row = 0; row < num_rows - 1; row++)
-    {
-        if constexpr (high_fidelity)
-        {
-            for (std::uint32_t f = 0; f < to_underlying(math_fidelity) - 1; f++)
-            {
-                TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_3, p_gpool::INDEX_DIS, 0);
-            }
-        }
-        // Last fidelity phase for this row: advance SrcB+1, Dest+1, clear fidelity
-        TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, 0);
-    }
-    // Last row: run fidelity phases, then apply the caller's clear_mode
-    if constexpr (high_fidelity)
-    {
-        for (std::uint32_t f = 0; f < to_underlying(math_fidelity) - 1; f++)
-        {
-            TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_3, p_gpool::INDEX_DIS, 0);
-        }
-    }
-    TTI_GAPOOL(clear_mode, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
-}
-
-/**
  * @brief Pool one row of faces, clearing SrcA/B between faces and keeping the final result.
  *
  * @tparam type: Pooling op, values = <SUM/AVG/MAX>
@@ -153,31 +114,6 @@ inline void reduce_row_pool_all_faces(const std::uint32_t num_faces_c_dim)
     reduce_pool_op<type, high_fidelity, p_setrwc::CLR_NONE, 0>();
 }
 
-/**
- * @brief Pool one row of faces for swapped REDUCE_ROW, clearing SrcA/B and resetting Dest between faces.
- *
- * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
- * @param num_faces_c_dim: Number of column-faces in the row.
- */
-template <MathFidelity math_fidelity>
-inline void reduce_row_swapped_pool_all_faces(const std::uint32_t num_faces_c_dim)
-{
-    for (std::uint32_t col_num = 0; col_num < num_faces_c_dim - 1; col_num++)
-    {
-        reduce_row_swapped_pool_face<math_fidelity, p_setrwc::CLR_AB>();
-        // SrcB=15, Dest=15 after 16 rows. Reset both to 0 so next face accumulates into same Dest positions.
-        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_BD);
-    }
-    reduce_row_swapped_pool_face<math_fidelity, p_setrwc::CLR_AB>();
-    // Reset SrcB and Dest to 0 after last face too (Dest must be at 0 for advance_dest arithmetic)
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_BD);
-}
-
-/**
- * @brief Advance the dest write pointer to the next face row and clear SrcA/B.
- *
- * @param is_narrow_tile: True when the tile has fewer column-faces than row-faces.
- */
 inline void reduce_row_advance_dest(const bool is_narrow_tile)
 {
     if (!is_narrow_tile)
@@ -187,6 +123,39 @@ inline void reduce_row_advance_dest(const bool is_narrow_tile)
     }
     TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
     TTI_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_BD);
+}
+
+template <MathFidelity math_fidelity, std::uint32_t clear_mode, std::uint32_t dst>
+inline void reduce_row_sum_gapool_group()
+{
+    if constexpr (math_fidelity == MathFidelity::HiFi4)
+    {
+        TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_3, p_gpool::INDEX_DIS, dst);
+        TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_3, p_gpool::INDEX_DIS, dst);
+        TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_3, p_gpool::INDEX_DIS, dst);
+    }
+    else if constexpr (math_fidelity == MathFidelity::HiFi3)
+    {
+        TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_3, p_gpool::INDEX_DIS, dst);
+        TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_3, p_gpool::INDEX_DIS, dst);
+    }
+    else if constexpr (math_fidelity == MathFidelity::HiFi2)
+    {
+        TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_3, p_gpool::INDEX_DIS, dst);
+    }
+    TTI_GAPOOL(clear_mode, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, dst);
+}
+
+template <MathFidelity math_fidelity, std::uint32_t clear_mode>
+inline void reduce_row_sum_pool_face()
+{
+    reduce_row_sum_gapool_group<math_fidelity, p_setrwc::CLR_NONE, 0>();
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 4, 0, p_setrwc::SET_B);
+    reduce_row_sum_gapool_group<math_fidelity, p_setrwc::CLR_NONE, 4>();
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 8, 0, p_setrwc::SET_B);
+    reduce_row_sum_gapool_group<math_fidelity, p_setrwc::CLR_NONE, 8>();
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 12, 0, p_setrwc::SET_B);
+    reduce_row_sum_gapool_group<math_fidelity, clear_mode, 12>();
 }
 
 /**
@@ -229,15 +198,10 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
 
     if constexpr (dim == ReduceDim::REDUCE_ROW)
     {
-        // Stall math until SrcA/SrcB banks are available and packer is idle
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD | p_stall::PACK);
-
         const bool is_narrow_tile = tensor_shape.num_faces_c_dim < tensor_shape.num_faces_r_dim;
 
         if constexpr (type == PoolType::MAX)
         {
-            // GMPOOL does column-wise max of SrcA only — cannot swap operands.
-            // Data is transposed at unpack (haloize), pool produces 1×16 row, transpose back to column.
             reduce_row_pool_all_faces<type, high_fidelity>(tensor_shape.num_faces_c_dim);
             reduce_row_perform_transpose<is_int_fpu_en>();
 
@@ -250,12 +214,23 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
         }
         else
         {
-            reduce_row_pool_all_faces<type, high_fidelity>(tensor_shape.num_faces_c_dim);
+            reduce_row_sum_pool_face<math_fidelity, p_setrwc::CLR_AB>();
+            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_B);
+            reduce_row_sum_pool_face<math_fidelity, p_setrwc::CLR_NONE>();
 
             if (tensor_shape.num_faces_r_dim > 1)
             {
-                reduce_row_advance_dest(is_narrow_tile);
-                reduce_row_pool_all_faces<type, high_fidelity>(tensor_shape.num_faces_c_dim);
+                if (!is_narrow_tile)
+                {
+                    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+                    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+                }
+                TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+                TTI_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_BD);
+
+                reduce_row_sum_pool_face<math_fidelity, p_setrwc::CLR_AB>();
+                TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_B);
+                reduce_row_sum_pool_face<math_fidelity, p_setrwc::CLR_NONE>();
             }
         }
 
@@ -326,19 +301,18 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
     }
 }
 
-/**
- * @brief Program the address-mod slots for a reduce: no-op/fidelity-clear, single-row, 8-row, and (high fidelity) fidelity-step.
- *
- * @tparam type: Pooling op, values = <SUM/AVG/MAX>
- * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
- */
 template <PoolType type, MathFidelity math_fidelity>
 inline void reduce_configure_addrmod()
 {
     constexpr bool high_fidelity               = is_high_fidelity(math_fidelity);
     constexpr std::uint32_t fidelity_increment = high_fidelity ? 1 : 0;
 
-    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}, .fidelity = {.incr = 0, .clr = 1}}.set(ADDR_MOD_0);
+    addr_mod_t {
+		.srca = {.incr = 0},
+		.srcb = {.incr = 0},
+		.dest = {.incr = 0},
+		.fidelity = {.incr = 0, .clr = 1}
+	}.set(ADDR_MOD_0);
 
     addr_mod_t {
         .srca     = {.incr = 0},
@@ -357,7 +331,12 @@ inline void reduce_configure_addrmod()
 
     if constexpr (high_fidelity)
     {
-        addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}, .fidelity = {.incr = fidelity_increment}}.set(ADDR_MOD_3);
+        addr_mod_t {
+			.srca = {.incr = 0},
+			.srcb = {.incr = 0},
+			.dest = {.incr = 0},
+			.fidelity = {.incr = fidelity_increment}
+		}.set(ADDR_MOD_3);
     }
 }
 
