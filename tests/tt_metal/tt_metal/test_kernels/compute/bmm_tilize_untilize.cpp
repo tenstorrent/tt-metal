@@ -157,9 +157,11 @@ void kernel_main() {
     uint32_t bias_ntiles_w = get_compile_time_arg_val(16);
     constexpr uint32_t bias_cb_id = tt::CBIndex::c_2;
     constexpr uint32_t out_for_bias_cb_id = tt::CBIndex::c_28;
-    init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(out_for_bias_cb_id, bias_cb_id, out_cb_id);
 #endif
 
+    // compute_kernel_hw_startup must be the first compute API call. The bias broadcast-add is
+    // initialized by add_bcast_rows_init_short right before it in the loop, so the full init_bcast
+    // here is redundant and was removed.
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, out_cb_id);
     matmul_init(in0_cb_id, in1_cb_id);
     for (uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {

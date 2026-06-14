@@ -352,11 +352,13 @@ void kernel_main() {
     constexpr uint32_t ternary_a_cb = tt::CBIndex::c_5;
     constexpr uint32_t ternary_b_cb = tt::CBIndex::c_6;
 
+    // compute_kernel_hw_startup must be the first compute API call (before SFPU/op inits).
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb, in1_cb, intermediate_cb);
+
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
 #endif
 
-    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb, in1_cb, intermediate_cb);
     matmul_init(in0_cb, in1_cb);
 
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;

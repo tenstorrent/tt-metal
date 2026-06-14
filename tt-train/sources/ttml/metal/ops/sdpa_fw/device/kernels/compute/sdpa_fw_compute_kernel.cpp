@@ -14,7 +14,6 @@
 #include "api/compute/bcast.h"
 #include "api/compute/common.h"
 #include "api/compute/compute_kernel_api.h"
-#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
@@ -328,7 +327,8 @@ void kernel_main() {
 
     init_sfpu(cb_query, cb_output);
     binary_op_init_common(cb_query, cb_key, cb_value);
-    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_query, cb_key, cb_attention_weights);
+    // binary_op_init_common above does the one-time HW config; each matmul site below
+    // re-establishes its state with reconfig_data_format + matmul_init.
     matmul_init(cb_query, cb_key);
 
     cb_wait_front(cb_reduction_scaler, onetile);

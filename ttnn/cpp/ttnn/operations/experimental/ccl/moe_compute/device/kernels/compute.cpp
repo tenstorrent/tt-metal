@@ -225,6 +225,10 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // Compute
     //-------------------------------------------------------------------------
+    // compute_kernel_hw_startup must be the first compute API call; the has_bias block below
+    // issues compute work, so the startup is hoisted above it (otherwise it would be mid-kernel).
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2);
+
     if constexpr (has_bias) {
         // Create a ones-tile for bias addition (matmul with ones × bias_row = bias).
         // Same sequence as moe_gpt compute.cpp for GPT-OSS compatibility.
@@ -243,8 +247,6 @@ void kernel_main() {
         // matmul_block read. The tile is never popped so one cb_wait_front suffices.
         cb_wait_front(cb_c2c_ones_tile, 1);
     }
-
-    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2);
 
     // Pack is always configured to Float16_b
     pack_reconfig_data_format(cb_s2c_in2);
