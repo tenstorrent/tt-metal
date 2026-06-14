@@ -1,0 +1,160 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Model-local TTNN modules for the Mistral-Small-4 (mistral4) text core: MLA + MoE + decoder layer.
+
+Built from generic ttnn ops (no new kernels, no deepseek framework). The recipes here are the
+ones PCC-verified bottom-up in tests/multimodal/mistral_24b/test_m4_mla.py and test_m4_moe.py:
+  - MLA: q/kv low-rank projections + RMSNorms, interleaved RoPE applied as a permutation-matrix
+    matmul (de-interleave) then standard rotate_half, MQA k_rot expand, SDPA, o_proj.
+  - MoE: router (linear -> softmax -> top-4/128 kth-threshold mask -> normalize), dense weighted
+    SwiGLU experts, plus a shared SwiGLU expert.
+Correctness-first: weights replicated across the mesh; experts computed densely. Sharding /
+sparse dispatch / flash-MLA / paged / trace are follow-up optimizations.
+"""
+import torch
+
+import ttnn
+from models.common.lightweightmodule import LightweightModule
+
+
+def _lin(weight, mesh):
+    # HF nn.Linear weight [out, in] -> ttnn [in, out] for x @ W; replicated across the mesh.
+    return ttnn.as_tensor(
+        weight.transpose(0, 1).contiguous().to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+    )
+
+
+def _norm(weight, mesh):
+    return ttnn.as_tensor(
+        weight.reshape(1, -1).to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+    )
+
+
+def _rotate_half(x):
+    d = x.shape[-1]
+    x1 = ttnn.slice(x, [0, 0, 0, 0], [x.shape[0], x.shape[1], x.shape[2], d // 2])
+    x2 = ttnn.slice(x, [0, 0, 0, d // 2], [x.shape[0], x.shape[1], x.shape[2], d])
+    return ttnn.concat([ttnn.neg(x2), x1], dim=-1)
+
+
+class TtMistral4MLA(LightweightModule):
+    """Multi-head Latent Attention. forward(x, cos, sin) -> [B, S, hidden]."""
+
+    def __init__(self, mesh, sd, cfg, eps):
+        super().__init__()
+        self.mesh = mesh
+        self.eps = eps
+        self.H = cfg.num_attention_heads
+        self.qk = cfg.qk_head_dim
+        self.nope = cfg.qk_nope_head_dim
+        self.rope = cfg.qk_rope_head_dim
+        self.vd = cfg.v_head_dim
+        self.kvl = cfg.kv_lora_rank
+        self.scale = self.qk ** (-0.5)
+
+        self.w_qa = _lin(sd["self_attn.q_a_proj.weight"], mesh)
+        self.w_qan = _norm(sd["self_attn.q_a_layernorm.weight"], mesh)
+        self.w_qb = _lin(sd["self_attn.q_b_proj.weight"], mesh)
+        self.w_kva = _lin(sd["self_attn.kv_a_proj_with_mqa.weight"], mesh)
+        self.w_kvan = _norm(sd["self_attn.kv_a_layernorm.weight"], mesh)
+        self.w_kvb = _lin(sd["self_attn.kv_b_proj.weight"], mesh)
+        self.w_o = _lin(sd["self_attn.o_proj.weight"], mesh)
+
+        # de-interleave permutation matrix for interleaved RoPE: out[i]=x[2i] (i<d/2) else x[2(i-d/2)+1]
+        perm = [2 * i for i in range(self.rope // 2)] + [2 * i + 1 for i in range(self.rope // 2)]
+        P = torch.zeros(self.rope, self.rope)
+        for i, p in enumerate(perm):
+            P[p, i] = 1.0
+        self.P = _lin(P.T, mesh)  # _lin transposes; we want the matrix itself, so pass P.T
+
+    def _rope(self, x, cos, sin):
+        xd = ttnn.matmul(x, self.P)  # de-interleave
+        return ttnn.add(ttnn.mul(xd, cos), ttnn.mul(_rotate_half(xd), sin))
+
+    def forward(self, x, cos, sin):
+        B, S = x.shape[0], x.shape[1]
+        q = ttnn.linear(ttnn.rms_norm(ttnn.linear(x, self.w_qa), epsilon=self.eps, weight=self.w_qan), self.w_qb)
+        qh = ttnn.transpose(ttnn.reshape(q, (B, S, self.H, self.qk)), 1, 2)
+        q_nope = ttnn.slice(qh, [0, 0, 0, 0], [B, self.H, S, self.nope])
+        q_rot = ttnn.slice(qh, [0, 0, 0, self.nope], [B, self.H, S, self.qk])
+        q_states = ttnn.concat([q_nope, self._rope(q_rot, cos, sin)], dim=-1)
+
+        kv_a = ttnn.linear(x, self.w_kva)
+        kv_pass = ttnn.rms_norm(ttnn.slice(kv_a, [0, 0, 0], [B, S, self.kvl]), epsilon=self.eps, weight=self.w_kvan)
+        kv_b = ttnn.linear(kv_pass, self.w_kvb)
+        kh = ttnn.transpose(ttnn.reshape(kv_b, (B, S, self.H, self.nope + self.vd)), 1, 2)
+        k_nope = ttnn.slice(kh, [0, 0, 0, 0], [B, self.H, S, self.nope])
+        value = ttnn.slice(kh, [0, 0, 0, self.nope], [B, self.H, S, self.nope + self.vd])
+        k_rot = ttnn.reshape(ttnn.slice(kv_a, [0, 0, self.kvl], [B, S, self.kvl + self.rope]), (B, 1, S, self.rope))
+        k_rot = ttnn.repeat(self._rope(k_rot, cos, sin), ttnn.Shape([1, self.H, 1, 1]))
+        k_states = ttnn.concat([k_nope, k_rot], dim=-1)
+
+        attn = ttnn.transformer.scaled_dot_product_attention(
+            q_states, k_states, value, is_causal=True, scale=self.scale
+        )
+        attn = ttnn.reshape(ttnn.transpose(attn, 1, 2), (B, S, -1))
+        return ttnn.linear(attn, self.w_o)
+
+
+class TtMistral4MoE(LightweightModule):
+    """Ungrouped top-4/128 MoE + shared SwiGLU expert. forward(x) -> [B, S, hidden]."""
+
+    def __init__(self, mesh, sd, cfg):
+        super().__init__()
+        self.mesh = mesh
+        self.E = cfg.n_routed_experts
+        self.k = cfg.num_experts_per_tok
+        self.interm = cfg.moe_intermediate_size
+        self.w_gate = _lin(sd["mlp.gate.weight"], mesh)
+        gup, down = sd["mlp.experts.gate_up_proj"], sd["mlp.experts.down_proj"]  # [E,2I,H],[E,H,I]
+        self.w_gup = [_lin(gup[e], mesh) for e in range(self.E)]
+        self.w_down = [_lin(down[e], mesh) for e in range(self.E)]
+        self.w_sg = _lin(sd["mlp.shared_experts.gate_proj.weight"], mesh)
+        self.w_su = _lin(sd["mlp.shared_experts.up_proj.weight"], mesh)
+        self.w_sd = _lin(sd["mlp.shared_experts.down_proj.weight"], mesh)
+
+    def forward(self, x):
+        B, S = x.shape[0], x.shape[1]
+        # routing: softmax -> kth-largest threshold mask -> normalize (no scatter)
+        probs = ttnn.softmax(ttnn.linear(x, self.w_gate), dim=-1)
+        kth = ttnn.slice(ttnn.topk(probs, self.k, dim=-1)[0], [0, 0, self.k - 1], [B, S, self.k])
+        masked = ttnn.mul(probs, ttnn.ge(probs, kth))
+        W = ttnn.div(masked, ttnn.sum(masked, dim=-1, keepdim=True))
+        # dense weighted experts (SwiGLU)
+        acc = None
+        for e in range(self.E):
+            gu = ttnn.linear(x, self.w_gup[e])
+            g = ttnn.slice(gu, [0, 0, 0], [B, S, self.interm])
+            u = ttnn.slice(gu, [0, 0, self.interm], [B, S, 2 * self.interm])
+            y = ttnn.linear(ttnn.mul(ttnn.silu(g), u), self.w_down[e])
+            contrib = ttnn.mul(y, ttnn.slice(W, [0, 0, e], [B, S, e + 1]))
+            acc = contrib if acc is None else ttnn.add(acc, contrib)
+        # shared expert
+        sh = ttnn.linear(ttnn.mul(ttnn.silu(ttnn.linear(x, self.w_sg)), ttnn.linear(x, self.w_su)), self.w_sd)
+        return ttnn.add(acc, sh)
+
+
+class TtMistral4DecoderLayer(LightweightModule):
+    """input_layernorm -> MLA -> +residual -> post_attention_layernorm -> MoE -> +residual."""
+
+    def __init__(self, mesh, sd, cfg, eps):
+        super().__init__()
+        self.eps = eps
+        self.w_in = _norm(sd["input_layernorm.weight"], mesh)
+        self.w_post = _norm(sd["post_attention_layernorm.weight"], mesh)
+        self.mla = TtMistral4MLA(mesh, sd, cfg, eps)
+        self.moe = TtMistral4MoE(mesh, sd, cfg)
+
+    def forward(self, x, cos, sin):
+        h = ttnn.add(x, self.mla(ttnn.rms_norm(x, epsilon=self.eps, weight=self.w_in), cos, sin))
+        return ttnn.add(h, self.moe(ttnn.rms_norm(h, epsilon=self.eps, weight=self.w_post)))

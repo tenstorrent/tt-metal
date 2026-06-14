@@ -102,6 +102,7 @@ def capture_golden(model, input_ids, layer_idx=0):
     sa = layer.self_attn
     handles = [
         layer.register_forward_hook(grab_in("hidden_in"), with_kwargs=True),
+        layer.register_forward_hook(grab_out("layer_out"), with_kwargs=True),
         sa.register_forward_hook(grab_in("mla_in", capture_pos_emb=True), with_kwargs=True),
         sa.register_forward_hook(grab_out("mla_out"), with_kwargs=True),
         layer.mlp.register_forward_hook(grab_in("moe_in"), with_kwargs=True),
