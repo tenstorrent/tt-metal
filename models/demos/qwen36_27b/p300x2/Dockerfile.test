@@ -1,0 +1,24 @@
+# Qwen3.6-27B P300x2 testing container.
+# Base = tt-metalium dev image (build toolchain + ttnn runtime python deps).
+# The tt-metal source tree (with our built build_Release/) is bind-mounted at run
+# time, so code edits are live and no rebuild/copy is needed here. This image only
+# pins the extra python deps the dev venv is missing and fixes the broken scipy.
+FROM ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest
+
+# scipy 1.15.x in the base image is ABI-broken against its numpy 1.26 (sph_legendre_p
+# MultiUFunc crash) and is pulled in transitively via tools/tracy -> seaborn on ttnn
+# import. Pin <1.15. graphviz: needed by ttnn.graph. transformers/safetensors/
+# huggingface_hub: tokenizer + weight loading for the demo.
+RUN uv pip install --python /opt/venv/bin/python3 --no-cache \
+        'scipy==1.14.1' \
+        graphviz \
+        'transformers==4.57.6' \
+        safetensors \
+        huggingface_hub
+
+ENV TT_METAL_HOME=/home/ttuser/ttwork/tt-metal-qwen36 \
+    PYTHONPATH=/home/ttuser/ttwork/tt-metal-qwen36/ttnn:/home/ttuser/ttwork/tt-metal-qwen36:/home/ttuser/ttwork/tt-metal-qwen36/tools \
+    ARCH_NAME=blackhole \
+    HF_HOME=/home/ttuser/.cache/huggingface
+
+WORKDIR /home/ttuser/ttwork/tt-metal-qwen36

@@ -153,136 +153,32 @@ void kernel_main() {
     //    qkv_proj: [1,1,1,conv_dim] TILE — element c in tile c/32
     // -----------------------------------------------------------------------
     {
-        // Scratch area: read conv_state(4) + conv_weight(4) + qkv(4) tiles
-        cb_reserve_back(cb_conv_scratch, 12);
-        uint32_t scratch_base = get_write_ptr(cb_conv_scratch);
-
-        // Also reserve conv_state_out for all 12 tiles (q+k+v updated state)
-        cb_reserve_back(cb_conv_state_out, 12);
-        uint32_t conv_out_base = get_write_ptr(cb_conv_state_out);
-
-        // Component tile starts: [conv_state_start, qkv_start, output_cb, num_tiles]
-        uint32_t comp_conv_tiles[3] = {conv_q_state_tile, conv_k_state_tile, conv_v_state_tile};
-        uint32_t comp_qkv_tiles[3]  = {qkv_q_tile, qkv_k_tile, qkv_v_tile};
-        uint32_t comp_cb[3]         = {cb_q, cb_k, cb_v};
-
+        // PASS-THROUGH: qkv_proj already holds conv1d+SiLU+l2norm (computed host-side via
+        // vectorized ttnn ops). DMA q/k/v tiles straight to their CBs. conv_state is managed
+        // host-side; pass it through to cb_conv_state_out to satisfy the writer.
+        uint32_t comp_qkv[3] = {qkv_q_tile, qkv_k_tile, qkv_v_tile};
+        uint32_t comp_cb[3]  = {cb_q, cb_k, cb_v};
         for (uint32_t comp = 0; comp < 3; comp++) {
-            uint32_t cs_start = comp_conv_tiles[comp];
-            uint32_t qkv_start = comp_qkv_tiles[comp];
-
-            // Read 4 conv_state tiles into scratch [0..3]
-            uint32_t cs_l1 = scratch_base;
-            for (uint32_t t = 0; t < TILES_PER_COMPONENT; t++) {
-                noc_async_read_tile(cs_start + t, conv_state_acc, cs_l1);
-                cs_l1 += tile_bytes;
-            }
-
-            // Read 4 conv_weight tiles into scratch [4..7]
-            uint32_t cw_l1 = scratch_base + 4 * tile_bytes;
-            for (uint32_t t = 0; t < TILES_PER_COMPONENT; t++) {
-                noc_async_read_tile(cs_start + t, conv_w_acc, cw_l1);
-                cw_l1 += tile_bytes;
-            }
-
-            // Read 4 qkv_proj tiles into scratch [8..11]
-            uint32_t qkv_l1 = scratch_base + 8 * tile_bytes;
-            for (uint32_t t = 0; t < TILES_PER_COMPONENT; t++) {
-                noc_async_read_tile(qkv_start + t, qkv_acc, qkv_l1);
-                qkv_l1 += tile_bytes;
-            }
-
-            noc_async_read_barrier();
-
-            // Reserve output CB for this component
             cb_reserve_back(comp_cb[comp], TILES_PER_COMPONENT);
             uint32_t out_l1 = get_write_ptr(comp_cb[comp]);
-
-            // Zero output tiles
             for (uint32_t t = 0; t < TILES_PER_COMPONENT; t++) {
-                volatile tt_l1_ptr uint16_t* dst = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(out_l1 + t * tile_bytes);
-                for (uint32_t i = 0; i < 1024; i++) { dst[i] = 0; }
+                noc_async_read_tile(comp_qkv[comp] + t, qkv_acc, out_l1);
+                out_l1 += tile_bytes;
             }
-
-            // Process each tile (32 channels each)
-            for (uint32_t t = 0; t < TILES_PER_COMPONENT; t++) {
-                uint32_t cs_tile_addr = scratch_base + t * tile_bytes;
-                uint32_t cw_tile_addr = scratch_base + (4 + t) * tile_bytes;
-                uint32_t qkv_tile_addr = scratch_base + (8 + t) * tile_bytes;
-                uint32_t out_tile_addr = out_l1 + t * tile_bytes;
-
-                volatile tt_l1_ptr uint16_t* cs_tile = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cs_tile_addr);
-                volatile tt_l1_ptr uint16_t* cw_tile = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cw_tile_addr);
-
-                for (uint32_t c = 0; c < 32; c++) {
-                    // Extract conv_state[c, 0..3] and weight[c, 0..3]
-                    uint32_t off0 = conv_tile_offset(c, 0);
-                    float s0 = bf16_to_f32(cs_tile[off0]);
-                    float s1 = bf16_to_f32(cs_tile[off0 + 1]);
-                    float s2 = bf16_to_f32(cs_tile[off0 + 2]);
-                    float s3 = bf16_to_f32(cs_tile[off0 + 3]);
-
-                    float w0 = bf16_to_f32(cw_tile[off0]);
-                    float w1 = bf16_to_f32(cw_tile[off0 + 1]);
-                    float w2 = bf16_to_f32(cw_tile[off0 + 2]);
-                    float w3 = bf16_to_f32(cw_tile[off0 + 3]);
-
-                    // New qkv value for this channel
-                    float new_val = extract_bf16_element_1d(qkv_tile_addr, c);
-
-                    // Conv1d: roll(-1) + insert + dot product
-                    // new_state = [s1, s2, s3, new_val]
-                    float dot = s1 * w0 + s2 * w1 + s3 * w2 + new_val * w3;
-
-                    // SiLU activation
-                    float result = silu_f32(dot);
-
-                    // Write result to output CB tile
-                    write_bf16_element_1d(out_tile_addr, c, f32_to_bf16(result));
-
-                    // Update conv_state tile in-place for writeback
-                    cs_tile[off0]     = f32_to_bf16(s1);
-                    cs_tile[off0 + 1] = f32_to_bf16(s2);
-                    cs_tile[off0 + 2] = f32_to_bf16(s3);
-                    cs_tile[off0 + 3] = f32_to_bf16(new_val);
-                }
-            }
-
-            // L2-normalize q (comp=0) and k (comp=1) in-place before pushing
-            if (comp < 2) {
-                float sum_sq = 0.0f;
-                for (uint32_t t = 0; t < TILES_PER_COMPONENT; t++) {
-                    uint32_t addr = out_l1 + t * tile_bytes;
-                    for (uint32_t c = 0; c < 32; c++) {
-                        float v = extract_bf16_element_1d(addr, c);
-                        sum_sq += v * v;
-                    }
-                }
-                constexpr float l2_eps = 1e-6f;
-                float inv_norm = 1.0f / sqrtf(sum_sq + l2_eps);
-                if (comp == 0) {
-                    constexpr float scale = 1.0f / sqrtf(static_cast<float>(Dk));
-                    inv_norm *= scale;
-                }
-                for (uint32_t t = 0; t < TILES_PER_COMPONENT; t++) {
-                    uint32_t addr = out_l1 + t * tile_bytes;
-                    for (uint32_t c = 0; c < 32; c++) {
-                        float v = extract_bf16_element_1d(addr, c);
-                        write_bf16_element_1d(addr, c, f32_to_bf16(v * inv_norm));
-                    }
-                }
-            }
-
+            noc_async_read_barrier();
             cb_push_back(comp_cb[comp], TILES_PER_COMPONENT);
-
-            // Copy updated conv_state tiles to conv_state_out CB
-            uint32_t conv_out_addr = conv_out_base + comp * TILES_PER_COMPONENT * tile_bytes;
-            volatile tt_l1_ptr uint8_t* dst_bytes = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(conv_out_addr);
-            volatile tt_l1_ptr uint8_t* src_bytes = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(scratch_base);
-            for (uint32_t b = 0; b < TILES_PER_COMPONENT * tile_bytes; b++) {
-                dst_bytes[b] = src_bytes[b];
+        }
+        // pass conv_state through (host ignores the written-back conv_state)
+        cb_reserve_back(cb_conv_state_out, 12);
+        uint32_t cso = get_write_ptr(cb_conv_state_out);
+        uint32_t comp_cs[3] = {conv_q_state_tile, conv_k_state_tile, conv_v_state_tile};
+        for (uint32_t comp = 0; comp < 3; comp++) {
+            for (uint32_t t = 0; t < TILES_PER_COMPONENT; t++) {
+                noc_async_read_tile(comp_cs[comp] + t, conv_state_acc, cso);
+                cso += tile_bytes;
             }
         }
-
+        noc_async_read_barrier();
         cb_push_back(cb_conv_state_out, 12);
     }
 

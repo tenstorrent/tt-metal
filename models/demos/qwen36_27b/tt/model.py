@@ -92,7 +92,21 @@ class TtQwen36Model(LightweightModule):
             new_kv_caches: updated KV caches
         """
         hidden_states = self.embed(token_ids)
-        cos, sin = self.get_rope(position_ids)
+        return self.forward_from_embedding(
+            hidden_states, position_ids, deltanet_state, kv_caches=kv_caches, mode=mode
+        )
+
+    def forward_from_embedding(self, hidden_states, position_ids, deltanet_state, kv_caches=None, mode="decode"):
+        """Forward starting from an on-device embedding tensor (trace entry point).
+
+        Identical to forward() minus the host-side embedding lookup, so a captured
+        decode trace can replay with zero host dispatch.
+        """
+        if getattr(self, "trace_decode", False):
+            # device rope buffers (updated each step via copy_host_to_device)
+            cos, sin = self.trace_cos, self.trace_sin
+        else:
+            cos, sin = self.get_rope(position_ids)
 
         new_kv_caches = {} if kv_caches is None else dict(kv_caches)
 

@@ -13,10 +13,14 @@ Two forward paths:
 """
 
 import math
+import os
 
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+
+# Use the fully on-device decode path (trace-friendly, no host round-trips).
+ONDEVICE_ATTN = os.environ.get("QWEN_ONDEVICE_ATTN", "0") == "1"
 
 
 class TtGatedAttention(LightweightModule):
@@ -66,6 +70,16 @@ class TtGatedAttention(LightweightModule):
 
     def forward(self, hidden_states, cos, sin, kv_cache=None, mode="decode"):
         if mode == "decode":
+            if getattr(self, "trace_decode", False):
+                # trace path: fixed preallocated KV cache + device cur_pos; cos/sin are device buffers
+                k_cache, v_cache = kv_cache
+                out = self._decode_ondevice_cached(
+                    hidden_states, cos, sin, k_cache, v_cache, self.cur_pos_tt
+                )
+                return out, None  # cache updated in place
+            if ONDEVICE_ATTN:
+                past_k, past_v = kv_cache if kv_cache is not None else (None, None)
+                return self._decode_ondevice(hidden_states, cos, sin, past_k, past_v)
             return self._decode(hidden_states, cos, sin, kv_cache)
         return self._prefill(hidden_states, cos, sin, kv_cache)
 
@@ -147,6 +161,141 @@ class TtGatedAttention(LightweightModule):
         )
         output = ttnn.linear(attn_output_tt, self.o_proj_w)
         return output, new_kv_cache
+
+    # ------------------------------------------------------------------
+    # On-device decode (trace-friendly: no host round-trips)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _rotate_half_tt(x):
+        d = int(x.shape[-1])
+        b, s, h = int(x.shape[0]), int(x.shape[1]), int(x.shape[2])
+        x1 = ttnn.slice(x, [0, 0, 0, 0], [b, s, h, d // 2])
+        x2 = ttnn.slice(x, [0, 0, 0, d // 2], [b, s, h, d])
+        return ttnn.concat([ttnn.neg(x2), x1], dim=-1)
+
+    def _apply_partial_rope_tt(self, x, cos_tt, sin_tt):
+        """Rotate only the first rotary_dim of the last (head) dim. cos/sin: [1,1,1,rotary_dim]."""
+        d = self.rotary_dim
+        b, s, h = int(x.shape[0]), int(x.shape[1]), int(x.shape[2])
+        x_rot = ttnn.slice(x, [0, 0, 0, 0], [b, s, h, d])
+        x_pass = ttnn.slice(x, [0, 0, 0, d], [b, s, h, self.head_dim])
+        rotated = ttnn.add(ttnn.mul(x_rot, cos_tt), ttnn.mul(self._rotate_half_tt(x_rot), sin_tt))
+        return ttnn.concat([rotated, x_pass], dim=-1)
+
+    def _decode_ondevice(self, hidden_states, cos_tt, sin_tt, past_k=None, past_v=None):
+        """
+        Fully on-device single-token decode. No to_torch/from_torch — trace-capturable.
+
+        hidden_states: [1, 1, 1, hidden]
+        cos_tt, sin_tt: [1, 1, 1, rotary_dim] device tensors for the current position
+        past_k, past_v: device tensors [1, num_kv_heads, past_len, head_dim] or None
+        Returns (output [1,1,1,hidden], (new_k, new_v)) where new_k/v include the current token.
+        """
+        nh, nkv, hd = self.num_heads, self.num_kv_heads, self.head_dim
+
+        # Accept torch cos/sin (from model.get_rope) and torch past KV (from the CPU
+        # prefill path on the first decode step); move them to device once.
+        def _to_dev(t):
+            return ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+        if isinstance(cos_tt, torch.Tensor):
+            cos_tt = _to_dev(cos_tt)
+        if isinstance(sin_tt, torch.Tensor):
+            sin_tt = _to_dev(sin_tt)
+        if past_k is not None and isinstance(past_k, torch.Tensor):
+            past_k = _to_dev(past_k)
+            past_v = _to_dev(past_v)
+
+        q_proj = ttnn.linear(hidden_states, self.q_proj_w)
+        k_proj = ttnn.linear(hidden_states, self.k_proj_w)
+        v_proj = ttnn.linear(hidden_states, self.v_proj_w)
+
+        q2 = ttnn.reshape(q_proj, [1, 1, nh, hd * 2])
+        query = ttnn.slice(q2, [0, 0, 0, 0], [1, 1, nh, hd])
+        gate = ttnn.slice(q2, [0, 0, 0, hd], [1, 1, nh, hd * 2])
+        key = ttnn.reshape(k_proj, [1, 1, nkv, hd])
+        value = ttnn.reshape(v_proj, [1, 1, nkv, hd])
+
+        query = ttnn.rms_norm(query, epsilon=1e-6, weight=self.q_norm_w_tt)
+        key = ttnn.rms_norm(key, epsilon=1e-6, weight=self.k_norm_w_tt)
+
+        query = self._apply_partial_rope_tt(query, cos_tt, sin_tt)
+        key = self._apply_partial_rope_tt(key, cos_tt, sin_tt)
+
+        # [1,1,heads,hd] -> [1,heads,1,hd]
+        query = ttnn.permute(query, [0, 2, 1, 3])
+        key = ttnn.permute(key, [0, 2, 1, 3])
+        value = ttnn.permute(value, [0, 2, 1, 3])
+
+        if past_k is not None:
+            key = ttnn.concat([past_k, key], dim=2)
+            value = ttnn.concat([past_v, value], dim=2)
+        new_k, new_v = key, value
+
+        if self.num_kv_groups > 1:
+            key = ttnn.repeat_interleave(key, self.num_kv_groups, dim=1)
+            value = ttnn.repeat_interleave(value, self.num_kv_groups, dim=1)
+
+        attn = ttnn.transformer.scaled_dot_product_attention(
+            query, key, value, is_causal=False, scale=self.scaling
+        )  # [1, nh, 1, hd]
+
+        attn = ttnn.permute(attn, [0, 2, 1, 3])  # [1,1,nh,hd]
+        attn = ttnn.reshape(attn, [1, 1, 1, nh * hd])
+        gate = ttnn.reshape(gate, [1, 1, 1, nh * hd])
+        attn = ttnn.mul(attn, ttnn.sigmoid(gate))
+        output = ttnn.linear(attn, self.o_proj_w)
+        return output, (new_k, new_v)
+
+    def _decode_ondevice_cached(self, hidden_states, cos_tt, sin_tt, k_cache, v_cache, cur_pos_tt):
+        """
+        Trace-friendly on-device decode: fixed-shape preallocated KV cache updated in
+        place via paged_update_cache, attention via scaled_dot_product_attention_decode.
+        No growing tensors / concat — capturable in a decode trace.
+
+        hidden_states: [1,1,1,hidden]; cos_tt/sin_tt: [1,1,1,rotary_dim] (device)
+        k_cache/v_cache: [1, num_kv_heads, max_seq, head_dim] (device, preallocated)
+        cur_pos_tt: device int32 tensor [1] = current position to write/attend up to.
+        """
+        nh, nkv, hd = self.num_heads, self.num_kv_heads, self.head_dim
+
+        q_proj = ttnn.linear(hidden_states, self.q_proj_w)
+        k_proj = ttnn.linear(hidden_states, self.k_proj_w)
+        v_proj = ttnn.linear(hidden_states, self.v_proj_w)
+
+        q2 = ttnn.reshape(q_proj, [1, 1, nh, hd * 2])
+        query = ttnn.slice(q2, [0, 0, 0, 0], [1, 1, nh, hd])
+        gate = ttnn.slice(q2, [0, 0, 0, hd], [1, 1, nh, hd * 2])
+        key = ttnn.reshape(k_proj, [1, 1, nkv, hd])
+        value = ttnn.reshape(v_proj, [1, 1, nkv, hd])
+
+        query = ttnn.rms_norm(query, epsilon=1e-6, weight=self.q_norm_w_tt)
+        key = ttnn.rms_norm(key, epsilon=1e-6, weight=self.k_norm_w_tt)
+        query = self._apply_partial_rope_tt(query, cos_tt, sin_tt)
+        key = self._apply_partial_rope_tt(key, cos_tt, sin_tt)
+
+        # write current K/V into the cache at cur_pos (input layout [1, B, n_kv, hd]).
+        # paged_update_cache requires the *input* to be height-sharded (shard width ==
+        # head_dim). Shard k/v onto a single core before the in-place update.
+        shard_cfg = ttnn.create_sharded_memory_config(
+            shape=(32, hd),
+            core_grid=ttnn.CoreGrid(y=1, x=1),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        key_s = ttnn.to_memory_config(key, shard_cfg)
+        value_s = ttnn.to_memory_config(value, shard_cfg)
+        ttnn.experimental.paged_update_cache(k_cache, key_s, update_idxs_tensor=cur_pos_tt)
+        ttnn.experimental.paged_update_cache(v_cache, value_s, update_idxs_tensor=cur_pos_tt)
+
+        attn = ttnn.transformer.scaled_dot_product_attention_decode(
+            query, k_cache, v_cache, cur_pos_tensor=cur_pos_tt, scale=self.scaling
+        )  # [1, 1, nh, hd]
+
+        attn = ttnn.reshape(attn, [1, 1, 1, nh * hd])
+        gate = ttnn.reshape(gate, [1, 1, 1, nh * hd])
+        attn = ttnn.mul(attn, ttnn.sigmoid(gate))
+        return ttnn.linear(attn, self.o_proj_w)
 
     def _prefill(self, hidden_states, cos, sin, kv_cache):
         """CPU fallback for prefill (S > 1)."""

@@ -29,6 +29,11 @@ class TtDeltaNetState:
         self.device = device
         self.conv_states = {}
         self.recurrent_states = {}
+        # When True (during trace capture/replay), the decode step writes the new
+        # recurrent/conv state in-place into the persistent buffers (via ttnn.copy)
+        # instead of rebinding to fresh tensors, so the state advances across
+        # repeated executions of a captured trace.
+        self.trace_mode = False
 
         for i in range(num_layers):
             if layer_types[i] == "linear_attention":
@@ -555,8 +560,13 @@ class TtGatedDeltaNet(LightweightModule):
             head_expand_ratio=self.head_expand_ratio,
         )
 
-        deltanet_state.set_recurrent_state(self.layer_idx, new_state)
-        deltanet_state.set_conv_state(self.layer_idx, new_conv_state)
+        if getattr(deltanet_state, "trace_mode", False):
+            # Advance state in-place so a captured trace keeps using the same buffers.
+            ttnn.copy(new_state, state)
+            ttnn.copy(new_conv_state, conv_state)
+        else:
+            deltanet_state.set_recurrent_state(self.layer_idx, new_state)
+            deltanet_state.set_conv_state(self.layer_idx, new_conv_state)
 
         return ttnn.linear(output_tt, self.out_proj_w)
 
