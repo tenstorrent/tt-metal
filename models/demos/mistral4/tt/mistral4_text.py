@@ -244,6 +244,13 @@ class TtMistral4DecoderLayer(LightweightModule):
         h = ttnn.add(x, self.mla(ttnn.rms_norm(x, epsilon=self.eps, weight=self.w_in), cos, sin))
         return ttnn.add(h, self.moe(ttnn.rms_norm(h, epsilon=self.eps, weight=self.w_post)))
 
+    def forward_decode(self, x, cur_pos, cos, sin, kv_cache):
+        h = ttnn.add(
+            x,
+            self.mla.forward_decode(ttnn.rms_norm(x, epsilon=self.eps, weight=self.w_in), cur_pos, cos, sin, kv_cache),
+        )
+        return ttnn.add(h, self.moe(ttnn.rms_norm(h, epsilon=self.eps, weight=self.w_post)))
+
 
 class TtMistral4TextModel(LightweightModule):
     """Stacked decoder layers + final norm + LM head. forward(embedded_hidden, cos, sin) -> logits.
@@ -269,6 +276,15 @@ class TtMistral4TextModel(LightweightModule):
     def forward(self, hidden, cos, sin):
         for layer in self.layers:
             hidden = layer(hidden, cos, sin)
+        hidden = ttnn.rms_norm(hidden, epsilon=self.eps, weight=self.w_norm)
+        return ttnn.linear(hidden, self.w_lm)
+
+    def init_kv_caches(self, batch, max_seq):
+        return [layer.mla.init_kv_cache(batch, max_seq) for layer in self.layers]
+
+    def forward_decode(self, hidden, cur_pos, cos, sin, kv_caches):
+        for layer, kv in zip(self.layers, kv_caches):
+            hidden = layer.forward_decode(hidden, cur_pos, cos, sin, kv)
         hidden = ttnn.rms_norm(hidden, epsilon=self.eps, weight=self.w_norm)
         return ttnn.linear(hidden, self.w_lm)
 
