@@ -80,6 +80,7 @@ class Qwen36MMPreprocessor:
         prompt: str,
         images: list[Image] | None = None,
         videos: list | None = None,
+        video_metadata: list | None = None,
     ) -> Qwen36MMInputs:
         """Process a text prompt + optional images/videos into TT-ready tensors.
 
@@ -94,7 +95,12 @@ class Qwen36MMPreprocessor:
         """
         # HF processor: accepts text + images + videos, produces input_ids,
         # attention_mask, pixel_values(_videos), image/video_grid_thw, etc.
-        proc_out = self.processor(text=prompt, images=images, videos=videos, return_tensors="pt", padding=True)
+        proc_kwargs = {}
+        if video_metadata is not None:
+            proc_kwargs["video_metadata"] = video_metadata
+        proc_out = self.processor(
+            text=prompt, images=images, videos=videos, return_tensors="pt", padding=True, **proc_kwargs
+        )
 
         input_ids = proc_out["input_ids"]
         attention_mask = proc_out["attention_mask"]

@@ -126,9 +126,11 @@ class Qwen36MMGenerator:
         self,
         prompt: str,
         images: list[Image] | None = None,
+        videos: list | None = None,
+        video_metadata: list | None = None,
     ):
-        """CPU side: produce (Qwen36MMInputs, fused_embeddings)."""
-        return self.pipeline.prepare_decoder_inputs(prompt, images=images)
+        """CPU side: produce (Qwen36MMInputs, fused_embeddings) for images and/or videos."""
+        return self.pipeline.prepare_decoder_inputs(prompt, images=images, videos=videos, video_metadata=video_metadata)
 
     def build_rope_tensors(self, position_ids_3d: torch.Tensor):
         """Build M-RoPE cos/sin TT tensors for the given 3D position_ids.

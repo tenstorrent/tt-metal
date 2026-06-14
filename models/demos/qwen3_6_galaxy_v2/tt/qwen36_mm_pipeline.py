@@ -54,20 +54,56 @@ def splice_vision_into_embeddings(
     Returns:
         `[B, S, H]` fused embeddings.
     """
+    return splice_modalities_into_embeddings(
+        text_embeddings,
+        input_ids,
+        image_features=vision_features,
+        image_token_id=image_token_id,
+    )
+
+
+def splice_modalities_into_embeddings(
+    text_embeddings: torch.Tensor,
+    input_ids: torch.Tensor,
+    *,
+    image_features: torch.Tensor | None = None,
+    video_features: torch.Tensor | None = None,
+    image_token_id: int = 248056,
+    video_token_id: int = 248057,
+) -> torch.Tensor:
+    """Splice image and/or video features into text embeddings at their token positions.
+
+    A request may carry image features, video features, or both. Each modality's
+    features are placed (row-major across the batch) at the positions where
+    `input_ids` equals that modality's placeholder token id.
+
+    Args:
+        text_embeddings: `[B, S, H]`.
+        input_ids: `[B, S]`.
+        image_features: `[N_image_tokens_total, H]` or None.
+        video_features: `[N_video_tokens_total, H]` or None.
+
+    Returns:
+        `[B, S, H]` fused embeddings.
+    """
     B, S, H = text_embeddings.shape
     assert input_ids.shape == (B, S), f"input_ids shape mismatch: {input_ids.shape} vs {(B, S)}"
-    assert (
-        vision_features.shape[1] == H
-    ), f"vision_features last-dim {vision_features.shape[1]} != text_embeddings H {H}"
 
     fused = text_embeddings.clone()
-    image_mask = input_ids == image_token_id  # [B, S]
-    n_image_positions_total = int(image_mask.sum().item())
-    assert n_image_positions_total == vision_features.shape[0], (
-        f"#image_pad positions ({n_image_positions_total}) != #vision_features rows " f"({vision_features.shape[0]})"
-    )
-    # Place vision_features at the True positions in row-major order across the batch.
-    fused[image_mask] = vision_features.to(dtype=fused.dtype)
+    for feats, tok_id, name in (
+        (image_features, image_token_id, "image"),
+        (video_features, video_token_id, "video"),
+    ):
+        if feats is None:
+            continue
+        assert feats.shape[1] == H, f"{name}_features last-dim {feats.shape[1]} != text_embeddings H {H}"
+        mask = input_ids == tok_id  # [B, S]
+        n_positions = int(mask.sum().item())
+        assert (
+            n_positions == feats.shape[0]
+        ), f"#{name}_pad positions ({n_positions}) != #{name}_features rows ({feats.shape[0]})"
+        # Place features at the True positions in row-major order across the batch.
+        fused[mask] = feats.to(dtype=fused.dtype)
     return fused
 
 
@@ -120,28 +156,37 @@ class Qwen36MMPipeline:
         self,
         prompt: str,
         images: list[Image] | None = None,
+        videos: list | None = None,
         *,
+        video_metadata: list | None = None,
         text_embed_weight: torch.Tensor | None = None,
     ) -> tuple[Qwen36MMInputs, torch.Tensor]:
-        """Run the full vision-side pipeline.
+        """Run the full vision-side pipeline (images and/or videos).
+
+        The vision encoder is modality-agnostic: it is run on the image patches
+        (pixel_values + image_grid_thw) and/or the video patches
+        (pixel_values_videos + video_grid_thw). Image features are spliced at
+        image-token positions and video features at video-token positions.
 
         Returns:
           (inputs, fused_embeddings) where
             - inputs: `Qwen36MMInputs` from preprocessor (input_ids, pixel_values,
-              image_grid_thw, position_ids_3d, etc.) — all metadata needed
-              alongside the embeddings.
+              image_grid_thw, video grids, position_ids_3d, etc.) — all metadata
+              needed alongside the embeddings.
             - fused_embeddings: `[B, S, hidden_size=5120]` torch tensor with
-              vision_features spliced in at image_token_id positions.
+              vision features spliced in at image/video token positions.
         """
         # 1. Preprocess
-        inputs = self.preprocessor(prompt, images=images)
+        inputs = self.preprocessor(prompt, images=images, videos=videos, video_metadata=video_metadata)
 
-        # 2. Run vision encoder (only if there are images)
+        # 2. Run vision encoder per present modality (it's modality-agnostic;
+        #    its cu_seqlens block-diagonal mask handles per-frame video segments).
+        image_features = None
         if inputs.pixel_values is not None and inputs.image_grid_thw is not None:
-            vision_features = self.vision_encoder.forward(inputs.pixel_values, inputs.image_grid_thw)
-        else:
-            # Text-only: skip vision pipeline
-            vision_features = None
+            image_features = self.vision_encoder.forward(inputs.pixel_values, inputs.image_grid_thw)
+        video_features = None
+        if inputs.pixel_values_videos is not None and inputs.video_grid_thw is not None:
+            video_features = self.vision_encoder.forward(inputs.pixel_values_videos, inputs.video_grid_thw)
 
         # 3. Build text embeddings (CPU lookup via the provided weight table)
         embed_weight = text_embed_weight if text_embed_weight is not None else self.text_embed_weight
@@ -153,13 +198,15 @@ class Qwen36MMPipeline:
         text_embeddings = torch.nn.functional.embedding(inputs.input_ids, embed_weight)
         # shape: [B, S, hidden_size]
 
-        # 4. Splice vision features in at image_pad positions
-        if vision_features is not None:
-            fused_embeddings = splice_vision_into_embeddings(
+        # 4. Splice image/video features in at their respective placeholder positions
+        if image_features is not None or video_features is not None:
+            fused_embeddings = splice_modalities_into_embeddings(
                 text_embeddings,
-                vision_features,
                 inputs.input_ids,
+                image_features=image_features,
+                video_features=video_features,
                 image_token_id=self.preprocessor.image_token_id,
+                video_token_id=self.preprocessor.video_token_id,
             )
         else:
             fused_embeddings = text_embeddings

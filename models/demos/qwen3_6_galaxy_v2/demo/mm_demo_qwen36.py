@@ -46,7 +46,38 @@ _N_LAYERS = 64
 _PATTERN = (["linear_attention"] * 3 + ["full_attention"]) * 16
 _DECODE_STEPS = int(os.environ.get("QWEN36_MM_DECODE_STEPS", "40"))
 _IMAGE_PATH = os.environ.get("QWEN36_MM_IMAGE", "models/demos/multimodal/gemma3/dog.jpg")
-_PROMPT = os.environ.get("QWEN36_MM_PROMPT", "<|vision_start|><|image_pad|><|vision_end|>What is in this image?")
+# Video branch (opt-in): QWEN36_MM_VIDEO=<path to .mp4>. When unset the demo runs the
+# existing image test, untouched.
+_VIDEO_PATH = os.environ.get("QWEN36_MM_VIDEO", "")
+_IMAGE_PROMPT = os.environ.get("QWEN36_MM_PROMPT", "<|vision_start|><|image_pad|><|vision_end|>What is in this image?")
+_VIDEO_PROMPT = os.environ.get(
+    "QWEN36_MM_VIDEO_PROMPT", "<|vision_start|><|video_pad|><|vision_end|>Describe this video."
+)
+
+
+def _load_video_frames(path: str):
+    """Decode a video file into (frames [T, C, H, W] uint8 tensor, source_fps).
+
+    Returns the FULL decoded frame sequence channels-first (the layout the HF
+    Qwen3VLVideoProcessor expects for tensor inputs) + the source fps; the
+    processor then uniformly samples to its stock 2 fps default (using the
+    metadata we attach), so the on-device frame count matches HF exactly.
+    """
+    import av
+    import numpy as np
+
+    container = av.open(path)
+    stream = container.streams.video[0]
+    src_fps = float(stream.average_rate) if stream.average_rate else 24.0
+    frames = []
+    for frame in container.decode(video=0):
+        frames.append(frame.to_ndarray(format="rgb24"))  # [H, W, 3]
+    container.close()
+    if not frames:
+        raise ValueError(f"no frames decoded from {path}")
+    arr = np.stack(frames, axis=0)  # [T, H, W, 3] uint8
+    arr = np.transpose(arr, (0, 3, 1, 2))  # [T, C, H, W]
+    return torch.from_numpy(np.ascontiguousarray(arr)), src_fps
 
 
 def _build_mrope_prefill_cos_sin(mesh, position_ids_3d: torch.Tensor):
@@ -108,14 +139,39 @@ def test_mm_demo_qwen36(bh_glx_mesh):  # noqa: F811  (direct-open mesh fixture f
     )
     tok = gen.tokenizer
 
-    img = Image.open(_IMAGE_PATH).convert("RGB").resize((224, 224))
+    # --- Build the modality-specific prepare_inputs call (image by default; video
+    # when QWEN36_MM_VIDEO is set). Both run the SAME prefill + sampled-decode flow.
+    if _VIDEO_PATH:
+        from transformers.video_utils import VideoMetadata
+
+        frames, src_fps = _load_video_frames(_VIDEO_PATH)  # [T, C, H, W] uint8, source fps
+        T_src = int(frames.shape[0])
+        metadata = VideoMetadata(
+            total_num_frames=T_src,
+            fps=src_fps,
+            width=int(frames.shape[3]),
+            height=int(frames.shape[2]),
+            duration=T_src / src_fps,
+            video_backend="pyav",
+            frames_indices=list(range(T_src)),
+        )
+        # HF processor samples to its stock 2 fps default using this metadata.
+        prompt = _VIDEO_PROMPT
+        _prepare = lambda: gen.prepare_inputs(prompt, videos=[frames], video_metadata=[metadata])  # noqa: E731
+        logger.info(f"[mm-demo] VIDEO branch: {_VIDEO_PATH} ({T_src} src frames @ {src_fps:.2f} fps)")
+    else:
+        img = Image.open(_IMAGE_PATH).convert("RGB").resize((224, 224))
+        prompt = _IMAGE_PROMPT
+        _prepare = lambda: gen.prepare_inputs(prompt, images=[img])  # noqa: E731
+        logger.info(f"[mm-demo] IMAGE branch: {_IMAGE_PATH}")
+
     # --- TIMING: vision encoder + preprocessing (HF processor + 27-layer seq-parallel
     # vision encoder on device + CPU splice). Run twice; report the 2nd (warm, kernels
     # compiled) so the number reflects steady-state vision-feature extraction.
-    gen.prepare_inputs(_PROMPT, images=[img])  # warmup (compile vision kernels)
+    _prepare()  # warmup (compile vision kernels)
     ttnn.synchronize_device(bh_glx_mesh)
     _t = time.perf_counter()
-    inputs, fused_unpadded = gen.prepare_inputs(_PROMPT, images=[img])  # fused: [1, S_unpadded, 5120]
+    inputs, fused_unpadded = _prepare()  # fused: [1, S_unpadded, 5120]
     ttnn.synchronize_device(bh_glx_mesh)
     t_vision = time.perf_counter() - _t
     S_unpadded = fused_unpadded.shape[1]
