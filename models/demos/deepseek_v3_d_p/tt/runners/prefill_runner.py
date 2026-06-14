@@ -27,7 +27,18 @@ from models.demos.deepseek_v3_d_p.tt.tt_deepseek_prefill_pipeline import (
 
 # Sync-op worker core. Single core suffices: the kernel only copies the
 # backing tensor's pages into a fresh output, no per-core parallelism needed.
-H2D_SYNC_WORKER_CORES = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
+# The H2D service launches a PERSISTENT receiver kernel on this core for the whole prefill. Diagnostic
+# knob: PREFILL_H2D_WORKER_{COL,ROW} relocates it. NOTE (2026-06-14): moving it to the free col 11
+# (off the model's 0-10 compute grid) did NOT change per-chunk time (~3190 vs ~3201 ms at col 0), so the
+# ~1.2s/chunk request-loop slowdown is NOT the kernel occupying a compute core — it is a deeper
+# dispatch / command-queue / sub-device-coexistence cost of the service's mere presence (confirmed by
+# PREFILL_FORCE_BUILD_SERVICE: building the unused service slows standalone ~1878->~3177ms). Pin with
+# tracy before attempting a fix. Default stays (0,0) to match upstream behavior.
+_H2D_WORKER_COL = int(os.environ.get("PREFILL_H2D_WORKER_COL", "0"))
+_H2D_WORKER_ROW = int(os.environ.get("PREFILL_H2D_WORKER_ROW", "0"))
+H2D_SYNC_WORKER_CORES = ttnn.CoreRange(
+    ttnn.CoreCoord(_H2D_WORKER_COL, _H2D_WORKER_ROW), ttnn.CoreCoord(_H2D_WORKER_COL, _H2D_WORKER_ROW)
+)
 
 # Inline metadata payload — packed by the producer per-iter, surfaced by the
 # kernel via h2d_socket_sync's optional metadata output. Matches the prefill
