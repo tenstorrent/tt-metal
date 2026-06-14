@@ -655,6 +655,31 @@ def test_qwen36_demo_generator_batch1(bh_glx_mesh):
     tok = AutoTokenizer.from_pretrained(str(_SNAPSHOT), trust_remote_code=True)
     _prompt_override = os.environ.get("QWEN36_PROMPT_OVERRIDE")
     prompt = _prompt_override if _prompt_override is not None else _load_prompt_for_isl(_T_PREFILL)
+    # QWEN36_APPLY_CHAT_TEMPLATE=1: wrap the prompt as a Qwen3.6 chat turn
+    # (<|im_start|>user ...<|im_end|>\n<|im_start|>assistant\n) the way HF / vLLM
+    # actually invoke the model. Without it the model is fed RAW text and at long
+    # ISL simply CONTINUES the context (e.g. the Gutenberg book) instead of answering
+    # the instruction. We tokenize the raw body first and truncate it leaving room
+    # for the template markers, so the trailing assistant generation-prompt is never
+    # chopped by the _T_PREFILL cap below.
+    if os.environ.get("QWEN36_APPLY_CHAT_TEMPLATE", "0") == "1":
+        _ct_overhead = 64  # tokens reserved for role markers + assistant prompt
+        body_ids = tok(prompt, return_tensors="pt").input_ids[0]
+        _budget = _T_PREFILL - _ct_overhead
+        if body_ids.shape[-1] > _budget:
+            # The long-context prompts are ```<book>```\n\n<instruction> — the instruction
+            # is at the TAIL. A plain head-truncation would DROP the instruction (the model
+            # would then have no task and just continue/respond to raw book text). Keep the
+            # book HEAD + the instruction TAIL, dropping the middle of the book, so the model
+            # is actually asked the question at long context.
+            _tail = int(os.environ.get("QWEN36_INSTR_TAIL_TOKENS", "120"))
+            _head = max(1, _budget - _tail)
+            body_ids = torch.cat([body_ids[:_head], body_ids[-_tail:]])
+            prompt = tok.decode(body_ids, skip_special_tokens=True)
+        prompt = tok.apply_chat_template(
+            [{"role": "user", "content": prompt}], tokenize=False, add_generation_prompt=True
+        )
+        print(f"[gen-demo] chat template applied (tail): {prompt[-120:]!r}")
     ids = tok(prompt, return_tensors="pt").input_ids
     T_prompt = int(ids.shape[-1])
     if T_prompt > _T_PREFILL:
@@ -837,7 +862,17 @@ def test_qwen36_demo_generator_batch1(bh_glx_mesh):
         _mean_s = _loop_dt / _n
         _step_times = []  # not used on the fast path
 
-    text = tok.decode(generated_ids, skip_special_tokens=False)
+    # Coherence eyeball: trim at the FIRST EOS the model emits (HF eos_token_id =
+    # [248046 <|im_end|>, 248044]). The decode loop runs a fixed step count and does
+    # NOT stop on EOS, so anything after the model's stop token is post-EOS garbage
+    # that misrepresents coherence. Report where it stopped.
+    _EOS = {248046, 248044}
+    _eos_at = next((i for i, t in enumerate(generated_ids) if t in _EOS), None)
+    _coherent_ids = generated_ids[:_eos_at] if _eos_at is not None else generated_ids
+    if _eos_at is not None:
+        print(f"[gen-demo] model emitted EOS at generated-token index {_eos_at} (decode loop ignored it)")
+    text_full = tok.decode(generated_ids, skip_special_tokens=False)
+    text = tok.decode(_coherent_ids, skip_special_tokens=False) if _coherent_ids else text_full
     if _host_sample and len(_step_times) > 1:
         _warm = _step_times[1:]
         _mean_s = sum(_warm) / len(_warm)
@@ -849,7 +884,9 @@ def test_qwen36_demo_generator_batch1(bh_glx_mesh):
             f"{_tok_s:.2f} tok/s/user  (n={_STEPS - 1})"
         )
     print("=" * 80)
-    print(f"[gen-demo] GENERATED ({len(generated_ids)} tokens): {text!r}")
+    print(f"[gen-demo] GENERATED ({len(generated_ids)} tokens, EOS-trimmed): {text!r}")
+    if _eos_at is not None:
+        print(f"[gen-demo] FULL (untrimmed, {len(generated_ids)} tokens): {text_full!r}")
     print("=" * 80)
 
     # Correctness gate vs the inline demo: the first decode token is the prefill
@@ -858,8 +895,10 @@ def test_qwen36_demo_generator_batch1(bh_glx_mesh):
     assert first_decode_token >= 0
     assert len(set(generated_ids)) > 1, f"degenerate (all-same) decode: {generated_ids}"
 
-    n_alpha = sum(c.isalpha() for c in text)
-    assert n_alpha >= 5, f"generated text has <5 alpha chars (incoherent decode): {text!r}"
+    # Alpha check on the FULL generation (a legitimately short EOS-trimmed answer
+    # like "Here" is coherent, not a failure — the model chose to stop early).
+    n_alpha = sum(c.isalpha() for c in text_full)
+    assert n_alpha >= 5, f"generated text has <5 alpha chars (incoherent decode): {text_full!r}"
 
 
 def test_qwen36_xreq_prefill_probe(bh_glx_mesh):
