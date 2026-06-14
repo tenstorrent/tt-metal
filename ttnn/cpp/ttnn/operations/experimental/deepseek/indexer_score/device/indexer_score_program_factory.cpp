@@ -5,6 +5,8 @@
 #include "indexer_score_program_factory.hpp"
 
 #include <cstdlib>
+#include <algorithm>
+#include <vector>
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
@@ -135,19 +137,16 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
             k_cols_ok = false;
         }
     }
+    // Q/W row-mcast needs every core in a logical row to sit on ONE physical NoC row (so the mcast is
+    // a single horizontal rect = the row's bounding box). It does NOT require x-contiguity: the row is
+    // multicast as one bounding-box rect by the diagonal sender below, and the NoC routes it to the
+    // grid.x worker receivers. Only a row that spans multiple physical NoC rows disables row-mcast.
     for (uint32_t y = 0; y < grid.y && q_rows_ok; ++y) {
         const uint32_t py = phys[cidx(0, y)].y;
-        uint32_t xmin = phys[cidx(0, y)].x, xmax = xmin;
         for (uint32_t x = 0; x < grid.x; ++x) {
-            const auto& p = phys[cidx(x, y)];
-            if (p.y != py) {
+            if (phys[cidx(x, y)].y != py) {
                 q_rows_ok = false;
             }
-            xmin = std::min<uint32_t>(xmin, p.x);
-            xmax = std::max<uint32_t>(xmax, p.x);
-        }
-        if (xmax - xmin + 1 != grid.x) {
-            q_rows_ok = false;
         }
     }
     if (std::getenv("INDEXER_NO_KMCAST") != nullptr) {
@@ -170,12 +169,6 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     // DRAM path -- to attribute the row mcast's benefit to q vs w separately. Default = q_mcast_on.
     const uint32_t q_fwd_on = (q_mcast_on && std::getenv("INDEXER_NO_QFWD") == nullptr) ? 1u : 0u;
     const uint32_t w_fwd_on = (q_mcast_on && std::getenv("INDEXER_NO_WFWD") == nullptr) ? 1u : 0u;
-    // The q/w row-mcast sender defaults to logical x==0, so every row's injector stacks in physical
-    // column 0 -- all of them hammer DRAM over NoC0 at startup. INDEXER_QDIAG places row y's sender at
-    // column y (the diagonal) so the row injectors spread across distinct columns. Safe because the
-    // grid-aligned dense deal gives every core in a physical row the same q-row-group (same q block),
-    // so any core in the row can be the sender. grid.y <= grid.x here, so column y always exists.
-    const bool q_diag = std::getenv("INDEXER_QDIAG") != nullptr;
 
     // 3 semaphores per active direction: send (receivers signal ready), recv (sender relays valid
     // into it), valid (constant 1, the relay source). Mirrors SDPA chain_link's handshake.
@@ -376,22 +369,19 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
                 kye,
                 phys[cidx(x, 0)],
                 u32(grid.y) - 1);
-            // Q/W row y: sender at column q_sx (default 0, diagonal=y), receivers the rest of the row;
-            // horizontal rect spanning the whole row (sender inside it, hardware excludes the source).
-            const uint32_t q_sx = q_diag ? y : 0u;
+            // Q/W row y: ONE sender per row on the grid DIAGONAL (logical x == y), multicasting the
+            // WHOLE logical row in a single rect (its physical bounding box [min x, max x] x py). Every
+            // core in the row shares the same q-rows + w (the dense deal keys on y), so any core can be
+            // the sender; the diagonal fans the row senders across distinct columns (vs all stacking in
+            // column 0). Receivers = the rest of the row (ndst = grid.x - 1). The sender is inside the
+            // rect; the hardware excludes the source.
             uint32_t qxs = u32(phys[cidx(0, y)].x), qxe = qxs;
             for (uint32_t xx = 0; xx < grid.x; ++xx) {
                 qxs = std::min<uint32_t>(qxs, u32(phys[cidx(xx, y)].x));
                 qxe = std::max<uint32_t>(qxe, u32(phys[cidx(xx, y)].x));
             }
-            push8(
-                q_mcast_on ? (x == q_sx ? 1u : 2u) : 0u,
-                qxs,
-                u32(phys[cidx(q_sx, y)].y),
-                qxe,
-                u32(phys[cidx(q_sx, y)].y),
-                phys[cidx(q_sx, y)],
-                u32(grid.x) - 1);
+            const uint32_t py = u32(phys[cidx(y, y)].y);  // diagonal sender's row (== every core's py)
+            push8(q_mcast_on ? (x == y ? 1u : 2u) : 0u, qxs, py, qxe, py, phys[cidx(y, y)], u32(grid.x) - 1);
         } else {
             for (uint32_t z = 0; z < 16; ++z) {
                 r.push_back(0);
