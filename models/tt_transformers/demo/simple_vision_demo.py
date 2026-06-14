@@ -29,6 +29,10 @@ from models.tt_transformers.tt.common import get_base_model_name
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 
 _MISTRAL_SMALL_31_24B_BASE = "Mistral-Small-3.1-24B"
+_DEVSTRAL_SMALL_2_24B_BASE = "Devstral-Small-2-24B"
+# Mistral3 VLMs (Pixtral vision tower + multimodal projector + Mistral/Ministral text core).
+# Both route to MistralTransformer and share the same processor/seq-len handling.
+_MISTRAL3_VLM_BASES = (_MISTRAL_SMALL_31_24B_BASE, _DEVSTRAL_SMALL_2_24B_BASE)
 _MISTRAL_VISION_MAX_SEQ_LEN_FLOOR = 4096
 _BERTSCORE_MODEL_TYPE = "microsoft/deberta-xlarge-mnli"
 _BERTSCORE_MIN_F1 = 0.55
@@ -172,7 +176,7 @@ def create_multimodal_model(
     from models.tt_transformers.tt.multimodal.mistral_24b.mistral_e2e_model import MistralTransformer
 
     hf_tail = os.environ.get("HF_MODEL", "").strip("/").split("/")[-1]
-    if get_base_model_name(hf_tail) == _MISTRAL_SMALL_31_24B_BASE:
+    if get_base_model_name(hf_tail) in _MISTRAL3_VLM_BASES:
         max_seq_len = max(max_seq_len, _MISTRAL_VISION_MAX_SEQ_LEN_FLOOR)
 
     tt_model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len)
@@ -186,7 +190,7 @@ def create_multimodal_model(
     if checkpoint is None:
         checkpoint = tt_model_args.load_state_dict()
 
-    if tt_model_args.base_model_name == _MISTRAL_SMALL_31_24B_BASE:
+    if tt_model_args.base_model_name in _MISTRAL3_VLM_BASES:
         model = MistralTransformer(
             mesh_device=mesh_device,
             state_dict=checkpoint,
@@ -365,7 +369,7 @@ def test_multimodal_demo_text(
         max_seq_len=max_seq_len,
     )
 
-    is_mistral = model_args[0].base_model_name == _MISTRAL_SMALL_31_24B_BASE
+    is_mistral = model_args[0].base_model_name in _MISTRAL3_VLM_BASES
 
     processor = AutoProcessor.from_pretrained(
         model_args[0].CKPT_DIR if is_mistral else ckpt_dir,

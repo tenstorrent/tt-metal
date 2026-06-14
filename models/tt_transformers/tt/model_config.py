@@ -487,6 +487,8 @@ class ModelArgs:
         "Meta-Llama-3-8B-Instruct": "models/tt_transformers/model_params/Meta-Llama-3-8B",
         "Devstral-2-123B-Instruct-2512": "models/tt_transformers/model_params/Devstral-2-123B-Instruct",
         "Devstral-2-123B-Instruct": "models/tt_transformers/model_params/Devstral-2-123B-Instruct",
+        "Devstral-Small-2-24B-Instruct-2512": "models/tt_transformers/model_params/Devstral-Small-2-24B-Instruct",
+        "Devstral-Small-2-24B-Instruct": "models/tt_transformers/model_params/Devstral-Small-2-24B-Instruct",
     }
 
     MAX_QKV_MM_SEQ_LEN = 2048
@@ -1151,7 +1153,7 @@ class ModelArgs:
                 if seq_len > 1024:
                     to_warmup_seq_lens = to_warmup_seq_lens[: to_warmup_seq_lens.index(seq_len)]
                     break
-        if self.base_model_name == "Mistral-Small-3.1-24B":
+        if self.is_mistral3_vlm():
             to_warmup_seq_lens = [s for s in to_warmup_seq_lens if s <= self.max_seq_len]
         return to_warmup_seq_lens
 
@@ -2378,6 +2380,7 @@ class ModelArgs:
                 "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "Qwen2.5-7B": {"N150": 4, "N300": 32, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Devstral-2-123B": {"N150": None, "N300": None, "T3K": None, "TG": None, "P150x4": None, "P150x8": 4},
+                "Devstral-Small-2-24B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128, "P150x8": 128},
                 "Qwen2.5-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128, "P150x8": 128},
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 16, "TG": 128, "P150x4": 128, "P150x8": 128},
                 "Qwen2.5-VL-3B": {"N150": 128, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
@@ -2761,9 +2764,9 @@ class ModelArgs:
         rope_scaling_params = text_config.get("rope_scaling", None)
         if rope_scaling_params is None and (rope_parameters.get("rope_type") or rope_parameters.get("type")):
             rope_scaling_params = rope_parameters  # transformers>=5 layout
-        self.original_max_context_len = text_config.get("original_max_position_embeddings", None) or rope_parameters.get(
+        self.original_max_context_len = text_config.get(
             "original_max_position_embeddings", None
-        )
+        ) or rope_parameters.get("original_max_position_embeddings", None)
         self.rope_scaling = (
             rope_scaling_model_factory(rope_scaling_params, original_max_context_len=self.original_max_context_len)
             if rope_scaling_params
@@ -2904,7 +2907,7 @@ class ModelArgs:
             merged_text_config = merge_text_config(config)
             self._set_params_from_dict(merged_text_config)
 
-            if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
+            if self.is_mistral3_vlm():
                 self._set_vision_params(config["vision_config"])
             else:
                 if "vision_config" in config:
@@ -2966,15 +2969,17 @@ class ModelArgs:
     def is_llama_vision(self):
         return self.CKPT_DIR is not None and ("llama" in self.CKPT_DIR.lower()) and ("vision" in self.CKPT_DIR.lower())
 
+    def is_mistral3_vlm(self):
+        """True for Mistral3ForConditionalGeneration VLMs (top-level HF model_type "mistral3"):
+        a Pixtral vision tower + multimodal projector on top of a Mistral/Ministral text decoder.
+        These share the same checkpoint structure (model.vision_tower / model.multi_modal_projector)
+        and the same TT vision path, so Mistral-Small-3.1-24B and Devstral-Small-2-24B route together.
+        Keyed on model_type (not the checkpoint name) so future Mistral3 VLMs are picked up too."""
+        return getattr(self.hf_config, "model_type", None) == "mistral3"
+
     def is_vision(self):
-        """Check if this is a vision-capable model (Llama vision or Mistral multimodal)"""
-        return self.is_llama_vision() or (
-            "mistral" in self.model_name.lower()
-            and (
-                (self.CKPT_DIR is not None and "vision" in self.CKPT_DIR.lower())
-                or "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name
-            )
-        )
+        """Check if this is a vision-capable model (Llama vision or a Mistral3 VLM)"""
+        return self.is_llama_vision() or self.is_mistral3_vlm()
 
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
         # Llama vision models use "text_model." prefix for text keys
@@ -3025,6 +3030,7 @@ class ModelArgs:
 
     def get_hf_model_cls(self):
         from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
+
         try:
             from transformers import AutoModelForVision2Seq
         except ImportError:  # removed in transformers>=5
@@ -3560,6 +3566,7 @@ class ModelArgs:
             "Llama-3.2-90B": "meta-llama/Llama-3.2-90B-Vision-Instruct",
             "Mistral-7B": "mistralai/Mistral-7B-Instruct-v0.3",
             "Mistral-Small-3.1-24B": "mistralai/Mistral-Small-3.1-24B-Instruct-2503",
+            "Devstral-Small-2-24B": "mistralai/Devstral-Small-2-24B-Instruct-2512",
             "Phi-3-mini-128k-instruct": "microsoft/Phi-3-mini-128k-instruct",
             "gemma-3-4b": "google/gemma-3-4b-it",
             "gemma-3-27b": "google/gemma-3-27b-it",
@@ -3854,8 +3861,8 @@ class ModelArgs:
 
     def reference_vision_model(self):
         model = self.reference_vision_transformer(wrap=False)
-        if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
-            # Mistral-Small-3.1-24B-Instruct-2503 has a different structure
+        if self.is_mistral3_vlm():
+            # Mistral3 VLMs (Mistral-Small-3.1-24B, Devstral-Small-2-24B) nest the Pixtral tower here
             layer = model.vision_tower
         else:
             layer = model.vision_tower.vision_model
@@ -3866,7 +3873,7 @@ class ModelArgs:
     def reference_vision_mlp(self, layer_idx=0):
         model = self.reference_vision_transformer(wrap=False)
         vision_tower = self._get_vision_tower(model)
-        if "Mistral-Small-3.1-24B" in self.model_name:
+        if self.is_mistral3_vlm():
             layer = vision_tower.transformer.layers[layer_idx].feed_forward
         else:
             layer = vision_tower.vision_model.encoder.layers[0].mlp
@@ -3910,7 +3917,7 @@ class ModelArgs:
     def reference_vision_attention(self, layer_idx=0):
         model = self.reference_vision_transformer(wrap=False)
         vision_tower = self._get_vision_tower(model)
-        if "Mistral-Small-3.1-24B" in self.model_name:
+        if self.is_mistral3_vlm():
             layer = vision_tower.transformer.layers[layer_idx].attention
         else:
             layer = vision_tower.vision_model.encoder.layers[0].self_attn
@@ -3935,7 +3942,7 @@ class ModelArgs:
     def reference_vision_encoder(self):
         model = self.reference_vision_transformer(wrap=False)
         vision_tower = self._get_vision_tower(model)
-        if "Mistral-Small-3.1-24B" in self.model_name:
+        if self.is_mistral3_vlm():
             layer = vision_tower.transformer
         else:
             layer = vision_tower.vision_model.encoder
@@ -3970,7 +3977,7 @@ class ModelArgs:
     def reference_vision_rot_emb(self):
         model = self.reference_vision_transformer(wrap=False)
         vision_tower = self._get_vision_tower(model)
-        if "Mistral-Small-3.1-24B" in self.model_name:
+        if self.is_mistral3_vlm():
             layer = vision_tower.patch_positional_embedding
         else:
             raise NotImplementedError(f"reference_vision_rot_emb not implemented for {self.model_name}")
