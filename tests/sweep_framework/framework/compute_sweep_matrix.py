@@ -26,7 +26,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-from constants import get_mesh_shape_string, parse_hardware_suffix, strip_grouping_suffix
+from constants import get_mesh_shape_string, parse_hardware_suffix, strip_grouping_suffix, strip_mesh_suffix
 from matrix_runner_config import (
     DEFAULT_MODEL_TRACED_GROUPING_MODE,
     GENERATION_MANIFEST_FILENAME,
@@ -134,7 +134,14 @@ def _group_modules_by_preference(modules, grouping_mode):
 
     for module in modules:
         mesh = get_mesh_shape_string(module)
-        hw = parse_hardware_suffix(module)
+        # Strip the trailing .mesh_NxM before parsing the hardware suffix: vector
+        # files carry BOTH suffixes (e.g. .hw_blackhole_p300a_2c.mesh_1x2), and
+        # parse_hardware_suffix returns None when the .mesh_* tail is still present.
+        # Without this, every hw-suffixed file falls through to mesh routing —
+        # harmless for wormhole (mesh shape maps to its own lane) but it sends
+        # blackhole files (mesh 1x1/1x2) to the wormhole n150/n300 lanes where they
+        # are dropped, so the blackhole lanes never run. Mirrors vector_source.py.
+        hw = parse_hardware_suffix(strip_mesh_suffix(module))
 
         if grouping_mode == "mesh":
             if mesh:
