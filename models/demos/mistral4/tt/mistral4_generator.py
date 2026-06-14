@@ -18,6 +18,13 @@ def _repl(t, mesh):
     )
 
 
+def _pos(positions, mesh):
+    # int32 device tensor [B] of current cache positions (one per user) for paged_update_cache / SDPA decode
+    return ttnn.from_torch(
+        torch.tensor(positions, dtype=torch.int32), device=mesh, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh)
+    )
+
+
 class Mistral4Generator:
     """Greedy generator over a TtMistral4TextModel. cos_full/sin_full hold per-position RoPE
     [B, max_pos, rope_dim] for the whole horizon (prompt + generated)."""
@@ -51,7 +58,7 @@ class Mistral4Generator:
             h = _repl(self.embed[nxt].reshape(B, 1, -1), self.mesh)
             c = _repl(cos_full[:, cur : cur + 1].reshape(B, 1, 1, rope), self.mesh)
             s = _repl(sin_full[:, cur : cur + 1].reshape(B, 1, 1, rope), self.mesh)
-            logits = self.model.forward_decode(h, cur, c, s, kv)  # [B,1,vocab]
+            logits = self.model.forward_decode(h, _pos([cur] * B, self.mesh), c, s, kv)  # [B,1,vocab]
             nxt = self._argmax_ids(logits, B)
             out.append(nxt)
             cur += 1

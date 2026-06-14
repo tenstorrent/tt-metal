@@ -26,6 +26,12 @@ def _repl(t, mesh):
     )
 
 
+def _pos(p, B, mesh):
+    return ttnn.from_torch(
+        torch.tensor([p] * B, dtype=torch.int32), device=mesh, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh)
+    )
+
+
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
@@ -51,7 +57,7 @@ def test_m4_forward_decode(mesh_device, reset_seeds):
         x_i = _repl(mla_in[:, i : i + 1, :], mesh_device)
         c_i = _repl(cos[:, i : i + 1, :].reshape(B, 1, 1, rope), mesh_device)
         s_i = _repl(sin[:, i : i + 1, :].reshape(B, 1, 1, rope), mesh_device)
-        o = mla.forward_decode(x_i, i, c_i, s_i, kv)
+        o = mla.forward_decode(x_i, _pos(i, B, mesh_device), c_i, s_i, kv)
         outs.append(ttnn.to_torch(o, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).float()[:B])
     out = torch.cat(outs, dim=1)  # [B, S, hidden]
     passing, msg = comp_pcc(mla_out, out, pcc_required)

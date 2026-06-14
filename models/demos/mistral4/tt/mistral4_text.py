@@ -40,6 +40,16 @@ def _norm(weight, mesh):
     )
 
 
+def _to_decode_shard(t, mesh):
+    """[1,B,H,dh] -> height-sharded on B cores ([H,dh] per core), the layout paged_update_cache
+    requires for the decode KV write (one batch element per core)."""
+    _, B, H, dh = t.shape
+    cores = ttnn.num_cores_to_corerangeset(B, mesh.compute_with_storage_grid_size(), row_wise=True)
+    spec = ttnn.ShardSpec(cores, [H, dh], ttnn.ShardOrientation.ROW_MAJOR)
+    mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, spec)
+    return ttnn.to_memory_config(t, mem)
+
+
 def _rotate_half(x):
     d = x.shape[-1]
     x1 = ttnn.slice(x, [0, 0, 0, 0], [x.shape[0], x.shape[1], x.shape[2], d // 2])
@@ -134,22 +144,21 @@ class TtMistral4MLA(LightweightModule):
         attn = ttnn.reshape(ttnn.transpose(attn, 1, 2), (B, S, -1))
         return ttnn.linear(attn, self.w_o)
 
-    def forward_decode(self, x, cur_pos, cos, sin, kv_cache):
-        """Single-token decode: x [B,1,hidden], cur_pos int. Writes k/v to kv_cache at cur_pos and
-        runs flash-decode over the cached sequence. Expanded-k/v cache => standard decode op."""
+    def forward_decode(self, x, pos_t, cos, sin, kv_cache):
+        """Single-token decode: x [B,1,hidden], pos_t an int32 device tensor [B] of cur positions.
+        Writes k/v to kv_cache at pos_t (tensor-indexed -> trace-compatible) and runs flash-decode
+        over the cached sequence. Expanded-k/v cache => standard decode op."""
         B = x.shape[0]
         q_states, k_states, value = self._qkv(x, cos, sin)  # [B,H,1,*]
-        # write the new token's k/v at cur_pos (input [B,H,1,dh])
-        ttnn.update_cache(kv_cache[0], k_states, cur_pos)
-        ttnn.update_cache(kv_cache[1], value, cur_pos)
+        # tensor-indexed cache write (paged_update_cache, input [1,B,H,dh]) keeps the position out
+        # of the graph so the decode step can be captured as a trace and replayed.
+        k_1BKD = _to_decode_shard(ttnn.permute(k_states, (2, 0, 1, 3)), self.mesh)  # [B,H,1,qk]->[1,B,H,qk] sharded
+        v_1BKD = _to_decode_shard(ttnn.permute(value, (2, 0, 1, 3)), self.mesh)
+        ttnn.experimental.paged_update_cache(kv_cache[0], k_1BKD, update_idxs_tensor=pos_t)
+        ttnn.experimental.paged_update_cache(kv_cache[1], v_1BKD, update_idxs_tensor=pos_t)
         q_dec = ttnn.permute(q_states, (2, 0, 1, 3))  # [B,H,1,qk] -> [1,B,H,qk]
-        cur = ttnn.from_torch(
-            torch.tensor([cur_pos] * B, dtype=torch.int32),
-            device=self.mesh,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
-        )
         attn = ttnn.transformer.scaled_dot_product_attention_decode(
-            q_dec, kv_cache[0], kv_cache[1], cur_pos_tensor=cur, scale=self.scale
+            q_dec, kv_cache[0], kv_cache[1], cur_pos_tensor=pos_t, scale=self.scale
         )
         attn = ttnn.reshape(ttnn.permute(attn, (1, 0, 2, 3)), (B, 1, self.H * self.qk))
         return ttnn.linear(attn, self.w_o)
@@ -260,10 +269,10 @@ class TtMistral4DecoderLayer(LightweightModule):
         h = ttnn.add(x, self.mla(ttnn.rms_norm(x, epsilon=self.eps, weight=self.w_in), cos, sin))
         return ttnn.add(h, self.moe(ttnn.rms_norm(h, epsilon=self.eps, weight=self.w_post)))
 
-    def forward_decode(self, x, cur_pos, cos, sin, kv_cache):
+    def forward_decode(self, x, pos_t, cos, sin, kv_cache):
         h = ttnn.add(
             x,
-            self.mla.forward_decode(ttnn.rms_norm(x, epsilon=self.eps, weight=self.w_in), cur_pos, cos, sin, kv_cache),
+            self.mla.forward_decode(ttnn.rms_norm(x, epsilon=self.eps, weight=self.w_in), pos_t, cos, sin, kv_cache),
         )
         return ttnn.add(h, self.moe(ttnn.rms_norm(h, epsilon=self.eps, weight=self.w_post)))
 
@@ -310,9 +319,9 @@ class TtMistral4TextModel(LightweightModule):
         hidden = ttnn.rms_norm(hidden, epsilon=self.eps, weight=self.w_norm)
         return ttnn.linear(hidden, self.w_lm)
 
-    def forward_decode(self, hidden, cur_pos, cos, sin, kv_caches):
+    def forward_decode(self, hidden, pos_t, cos, sin, kv_caches):
         for layer, kv in zip(self.layers, kv_caches):
-            hidden = layer.forward_decode(hidden, cur_pos, cos, sin, kv)
+            hidden = layer.forward_decode(hidden, pos_t, cos, sin, kv)
         hidden = ttnn.rms_norm(hidden, epsilon=self.eps, weight=self.w_norm)
         return ttnn.linear(hidden, self.w_lm)
 
