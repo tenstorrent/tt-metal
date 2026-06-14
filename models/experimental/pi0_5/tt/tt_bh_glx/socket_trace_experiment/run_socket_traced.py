@@ -9,8 +9,8 @@ capturing a trace on EACH per-chip submesh (not the parent). Reuses the pipeline
 own pure-device body (_sample_actions_device) unchanged; only wraps it with
 begin/end_trace_capture per submesh.
 
-Run:
-  source _bench_runs/pi05_production.env
+Run (production perf flags are auto-applied from _bench_runs/pi05_production.env;
+no manual `source` needed — set any flag explicitly to override):
   export PI05_CHECKPOINT_DIR=/path/to/pi05_libero_upstream
   tt-smi -glx_reset
   python_env/bin/python models/experimental/pi0_5/tt/tt_bh_glx/socket_trace_experiment/run_socket_traced.py
@@ -18,6 +18,37 @@ Run:
 
 import os
 import sys
+
+
+def _apply_production_env_defaults():
+    """Source _bench_runs/pi05_production.env as DEFAULTS so this test runs the
+    validated production flag set without a manual `source`. Uses setdefault, so an
+    explicitly-set env var still wins. PI05_CHECKPOINT_DIR is intentionally skipped
+    (machine-specific; the env file's path is stale on this box). Must run before
+    ttnn / pipeline import so every flag is in place when modules read it."""
+    import re
+
+    root = os.environ.get("TT_METAL_HOME") or os.path.abspath(
+        os.path.join(os.path.dirname(__file__), *([os.pardir] * 6))
+    )
+    envf = os.path.join(root, "_bench_runs", "pi05_production.env")
+    if not os.path.exists(envf):
+        print(f"[sock-traced] WARN: {envf} not found; production flags NOT applied", flush=True)
+        return
+    applied = []
+    with open(envf) as f:
+        for line in f:
+            m = re.match(r"\s*export\s+([A-Z0-9_]+)=(\S+)", line)
+            if not m or m.group(1) == "PI05_CHECKPOINT_DIR":
+                continue
+            k, v = m.group(1), m.group(2)
+            if k not in os.environ:
+                os.environ[k] = v
+                applied.append(f"{k}={v}")
+    print(f"[sock-traced] production env defaults applied ({len(applied)}): {', '.join(applied)}", flush=True)
+
+
+_apply_production_env_defaults()
 
 import torch
 import ttnn
