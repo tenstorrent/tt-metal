@@ -14,8 +14,15 @@
 
 ## IMPORTANT scope note (read first)
 
+**CRITICAL — this model REQUIRES sampling, never greedy/argmax.** Confirmed 2026-06-14: with greedy
+argmax the image demo emits pad/`<|im_end|>` → "empty generation". With `QWEN36_SAMPLE=1`
+(top_k=20, top_p=0.95, temp=1.0) it produces coherent output ("This is an AI-generated image…"),
+PASSED. The top logit is fragile and flips run-to-run. ALL coherence validation (demo + server
+parity) MUST use sampling — the same on-device sampling the server uses. See memory
+`qwen36-requires-sampling-not-argmax`.
+
 The spec assumed "the demo already does image **and** video." Verification on 2026-06-14 found:
-- **Image: wired end-to-end in the demo** (`mm_demo_qwen36.py` runs single-image prefill + decode). Confirmed runnable on HW.
+- **Image: wired end-to-end in the demo AND confirmed coherent on HW with sampling** (`mm_demo_qwen36.py` + `QWEN36_SAMPLE=1`). This is the image parity baseline.
 - **Video: encoder-level only.** `test_vision_encoder_seqp_pcc.py` validates the vision encoder on a synthetic 2-frame `grid_thw` vs HF (PCC), but **no end-to-end path accepts a video**: `Qwen36MMPreprocessor` only calls `self.processor(text, images=...)` — there is no `videos=` kwarg, no frame sampling, no video M-RoPE/splice exercised.
 
 Therefore **Phase A extends the demo to a video end-to-end path and establishes a parity baseline** before the server work. Without it there is no demo ground-truth to validate server video against. Image serving (Phases B–E) does not depend on Phase A and can proceed in parallel.
@@ -26,6 +33,7 @@ export TT_METAL_HOME="$(pwd)" PYTHONPATH="$(pwd)"; source python_env/bin/activat
 export HF_MODEL=Qwen/Qwen3.6-27B MESH_DEVICE=BH_GLX
 export QWEN36_FORCE_SWITCH_DECODE=1 QWEN36_DECODE_L1_RESIDUAL=1 QWEN36_RESIDUAL_BUF_BF16=1 QWEN36_LM_HEAD_PLAIN_DECODE=1
 export QWEN36_SEQ_CORES_PER_HEAD=4 QWEN36_FULLATTN_WO_TUNED=1 QWEN36_DELTA_OP_TUNED=1 QWEN36_CCL_NUM_LINKS_DELTA=2
+export QWEN36_SAMPLE=1 QWEN36_TOP_K=20 QWEN36_TOP_P=0.95 QWEN36_TEMP=1.0   # MANDATORY: never validate with greedy/argmax
 ```
 
 ## File structure (what each file owns)
@@ -400,7 +408,7 @@ def test_token_expansion_matches_demo_preprocessor():
 
 - [ ] **Step 2: Run** `python -m pytest models/demos/qwen3_6_galaxy_v2/tests/test_server_mm_parity.py -v`. Expected: PASS. If FAIL on config compat → fix `TT_Qwen36VLProcessingInfo` token-id/grid overrides (the spec's primary risk).
 
-- [ ] **Step 3: Prefill parity (HW)** — server `Qwen3_6VLForConditionalGeneration.prefill_forward` first-token argmax == demo `prefill_multimodal` for dog.jpg and the Phase-A video. (Marked `@pytest.mark.hardware`.)
+- [ ] **Step 3: Prefill parity (HW)** — compare server `Qwen3_6VLForConditionalGeneration.prefill_forward` logits vs demo `prefill_multimodal` for dog.jpg and the Phase-A video via **logit/top-k distribution PCC at the last prefill position** (NOT first-token argmax — this model's top logit is fragile and flips run-to-run; greedy argmax is meaningless here, see memory `qwen36-requires-sampling-not-argmax`). End-to-end coherence is checked with **sampling** (`QWEN36_SAMPLE=1`, top_k=20/top_p=0.95/temp=1.0), the same on-device sampling the server uses. (Marked `@pytest.mark.hardware`.)
 
 - [ ] **Step 4: Commit**
 
