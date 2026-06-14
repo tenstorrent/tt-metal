@@ -500,7 +500,8 @@ void kernel_main() {
             in1_policy_const,                  // in1_policy
             NoPostCompute,                     // PostComputeFn (math-thread; unused)
             PreFn,                             // PreKBlockFn
-            PostFnRing,                        // PostKBlockFn
+            /*pin_interm_to_captured_base=*/false,
+            PostFnRing,  // PostKBlockFn
             /*untilize_block_ct_dim=*/out_subblock_num_tiles,
             InnerDimFn,   // KBlockInnerDimFn
             In0SrcFn,     // In0SourceFn

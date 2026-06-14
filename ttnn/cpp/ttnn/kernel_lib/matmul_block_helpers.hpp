@@ -493,6 +493,28 @@ struct NoIn1BaseOffset {
  *   PreKBlockFn       Functor called at the start of each K-block iteration, before
  *                     input CB waits. Receives (block, num_k_blocks, is_last).
  *                     Use for per-K-block preprocessing such as in0_transpose.
+ *   pin_interm_to_captured_base
+ *                     Default false (non-pin — the FIFO spill/reload path every matmul /
+ *                     SDPA / CCL caller uses; do not change). OPT-IN perf feature for a
+ *                     caller whose interm_buf is a DEDICATED single-output-block L1 region
+ *                     (conv2d's matmul_partials_cb): instead of the per-K-block
+ *                     reserve / push / wait_front / pop_front FIFO choreography, the helper
+ *                     reserves the whole out_block on interm ONCE at K-loop entry, packs
+ *                     each K-block's subblock partials to FIXED subblock-contiguous tile
+ *                     offsets within that reservation (pack_tile<true>), skips the per-K-block
+ *                     interm drain entirely, and pushes the full block ONCE at exit. This
+ *                     recovers the packer_l1_acc drain-skip win (no per-K-block CB
+ *                     bookkeeping; L1_ACC integrates per-address across K-blocks at the fixed
+ *                     offsets). Requires packer_l1_acc (the drain-skip only exists with L1
+ *                     accumulation) and tile_order == SubblockMajor; supports BOTH
+ *                     last_block_target == Interm (one pinned region, exit push makes it
+ *                     visible) and Out / OutWithRelu (non-last spills pinned + accumulated,
+ *                     last block reloads the accumulated partial from the fixed offset and
+ *                     packs sequentially to out_buf). Caller MUST size interm_buf to exactly
+ *                     ONE output block and reset its rd/wr ptrs to a fixed base each outer
+ *                     iteration so each output block reuses the same region (conv2d does
+ *                     this). No pin_base_tile_offset is needed — the dedicated one-block
+ *                     region wraps to the caller-reset base per output block. batch must be 1.
  *   PostKBlockFn      Functor called at the very end of each K-block iteration, after
  *                     input pop_front and after the L1_ACC partial drain. Receives
  *                     (block, num_k_blocks, is_last). Symmetric counterpart to
@@ -777,6 +799,7 @@ template <
     InputPolicy in1_policy = InputPolicy::WaitAndPopPerKBlock,
     typename PostComputeFn = NoPostCompute,
     typename PreKBlockFn = NoPreKBlock,
+    bool pin_interm_to_captured_base = false,
     typename PostKBlockFn = NoPostKBlock,
     uint32_t untilize_block_ct_dim = 0,
     typename KBlockInnerDimFn = NoKBlockInnerDimFn,

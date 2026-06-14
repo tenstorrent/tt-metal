@@ -65,6 +65,11 @@ std::optional<std::pair<uint32_t, uint32_t>> conv2d_bench_subblock_override();
 // would stay SubblockMajor (e.g. relaxed shape == SBM shape, or no volume gain).
 bool conv2d_bench_force_trm();
 
+// TT_CONV_BENCH_NO_PIN=1 (bench A/B helper): force conv_pin OFF in the unified kernel so the harness can
+// measure the NON-pin FIFO path against the pin path on the same board/session. Production-inert (only
+// read when emitting compute defines; the production default keeps pin on for the eligible class).
+bool conv2d_bench_no_pin();
+
 uint32_t get_input_channels_alignment(
     TensorMemoryLayout input_tensor_memory_layout,
     Layout input_tensor_layout,

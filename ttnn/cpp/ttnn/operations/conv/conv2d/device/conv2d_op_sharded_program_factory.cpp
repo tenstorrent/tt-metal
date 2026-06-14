@@ -912,6 +912,17 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         !is_conv_1d_depthwise_conv && get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).is_globally_allocated;
     log_debug(tt::LogOp, "partials_cb_uses_output: {}", partials_cb_uses_output);
 
+    // PIN engagement (GH#45995 perf recovery): mirror the kernel-side conv_pin gate so the CONV_BENCH
+    // dispatch log can report it. pin engages for packer_l1_acc SubblockMajor convs; the INTERM target
+    // (fuse_bias || untilize_out) works on both dedicated and aliased-single-block partials, while the
+    // OUT target (no bias, no untilize) requires DEDICATED partials (aliased OUT would double-reserve a
+    // one-block CB — see the kernel's conv_pin note). This is the deep-K BLOCK_SHARDED + l1_acc class the
+    // unify regressed. TT_CONV_BENCH_NO_PIN forces it off (bench A/B).
+    const bool pin_interm_target = has_bias || untilize_out;
+    const bool conv_pin_engaged = packer_l1_acc_en && !conv_tile_pack_row_major &&
+                                  (pin_interm_target || !partials_cb_uses_output) &&
+                                  !ttnn::operations::conv::conv2d_bench_no_pin();
+
     std::string reader_kernel;
     std::string compute_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize.cpp";
     std::string writer_mcast_sender_kernel =
@@ -1083,6 +1094,13 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         compute_defines["CONV_TILE_PACK_ROW_MAJOR"] = "1";
     }
 
+    // conv_bench A/B helper (TT_CONV_BENCH_NO_PIN=1): force the unified kernel's conv_pin OFF so the
+    // harness can measure the NON-pin FIFO path against the pin path on the same board/session.
+    // Production-inert (the env is unset in production → pin stays ON for the eligible class).
+    if (ttnn::operations::conv::conv2d_bench_no_pin()) {
+        compute_defines["CONV_DISABLE_PIN"] = "1";
+    }
+
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device->arch(), output_cores.num_cores(), compute_defines, ttnn::get_throttle_level(compute_kernel_config));
 
@@ -1105,7 +1123,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         log_info(
             tt::LogOp,
             "CONV_BENCH[{}] height_sharded={} untilize_out={} per_core_N={} USING out_subblock={}x{} "
-            "weight_num_subblocks={} in0_num_blocks_w={} packer_l1_acc_en={} trm={} trm_forced={} "
+            "weight_num_subblocks={} in0_num_blocks_w={} num_blocks_act_h={} packer_l1_acc_en={} "
+            "partials_alias={} pin={} trm={} trm_forced={} "
             "trm_fallback_sbm={} (real per-conv settings; USING = compute-arg subblock — relaxed when trm)",
             ttnn::operations::conv::conv2d_bench_mode_name(bench_mode),
             height_sharded,
@@ -1115,7 +1134,10 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
             out_subblock_w_ntiles,
             weight_num_subblocks,
             in0_num_blocks_w,
+            num_blocks_act_h_per_core,
             packer_l1_acc_en,
+            partials_cb_uses_output,
+            conv_pin_engaged,
             conv_tile_pack_row_major,
             bench_force_trm,
             bench_trm_fallback_sbm);

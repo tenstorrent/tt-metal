@@ -379,6 +379,54 @@ void kernel_main() {
                                             ? compute_kernel_lib::OutputCBLayout::TileRowMajor
                                             : compute_kernel_lib::OutputCBLayout::SubblockMajor;
 
+    // ── PIN (opt-in perf feature; GH#45995 perf recovery) ─────────────────────────────────────────
+    // pin_interm_to_captured_base recovers the packer_l1_acc per-K-block DRAIN-SKIP win on the
+    // DEDICATED one-block matmul_partials_cb: the helper reserves the whole out_block ONCE at K-loop
+    // entry, packs each K-block's subblock partials to FIXED offsets (L1_ACC integrates per-address),
+    // skips the per-K-block interm reserve/push/wait/pop, and pushes once at exit. The kernel already
+    // resets matmul_partials_cb's rd/wr to the per-iter base each outer iteration, so each output
+    // block reuses the same one-block region (no pin_base_tile_offset needed).
+    //
+    // Engage ONLY when:
+    //   • packer_l1_acc                 — the drain-skip win exists ONLY with L1 accumulation.
+    //   • SubblockMajor                 — the fixed-offset pin layout is subblock-contiguous (TRM stays
+    //                                     non-pin: its eligible convs are no-bias and perf-neutral).
+    //   • !partials_cb_uses_output      — partials must be DEDICATED, not aliased onto OUT. The M5 OOM
+    //                                     fix aliases partials→OUT for single-output-block convs; pin's
+    //                                     fixed offsets would land in the OUT buffer there (the old
+    //                                     aliasing hazard pin needed pin_base_tile_offset for). Those
+    //                                     are tiny single-block convs anyway — keep them non-pin.
+    // This selects exactly the deep-K BLOCK_SHARDED + packer_l1_acc class the unify regressed
+    // (rn50 DS2 / L3a / L3b / L4a / L4b bias+l1_acc, vu_512_30x40_BS no-bias+l1_acc).
+    // pin engages for packer_l1_acc SubblockMajor convs whose matmul_partials_cb is a SINGLE
+    // output-block region with a fixed per-iter base. The INTERM target (fuse_bias / untilize_out)
+    // works on BOTH:
+    //   • the dedicated one-block partials (M1; multi-output-block convs reset rd/wr to base each
+    //     outer iter so the helper's one-block reserve wraps to that base), and
+    //   • the aliased single-output-block partials (M5 OOM fix: per_core_out_ntiles ==
+    //     out_block_num_tiles, exactly one outer iter, partials==out holds the one accumulated block
+    //     in place; the downstream bias/untilize consumer drains it pop-then-reserve in place — the
+    //     pre-M1 conv model). The matmul pushes exactly ONE block at exit either way, so the
+    //     consumer sees an identical post-state to non-pin.
+    // The OUT target (no bias, no untilize) packs the last block SEQUENTIALLY to out_buf, which on
+    // the ALIASED case is the SAME buffer as the pinned interm → the entry whole-block reserve plus
+    // the per-subblock out reserve would double-reserve a one-block CB and deadlock. So pin on the
+    // OUT target requires DEDICATED partials (!partials_cb_uses_output); aliased OUT stays non-pin.
+    // The only one-block-violating sizing is the M3 2*out_block_num_tiles TRM l1_acc-OFF headroom,
+    // which requires !packer_l1_acc and so never coincides with pin.
+    // Mirror the last_block_target Interm decision (defined below) from the raw flags so conv_pin can
+    // be computed here: the matmul packs to interm whenever fuse_bias OR untilize_out (the only Out /
+    // OutWithRelu cases are no-bias + no-untilize).
+    constexpr bool conv_pin_interm_target = fuse_bias || untilize_out;
+#ifdef CONV_DISABLE_PIN
+    // conv_bench A/B: force non-pin to measure the FIFO path against pin on the same board.
+    constexpr bool conv_pin = false;
+#else
+    constexpr bool conv_pin = packer_l1_acc &&
+                              (conv_output_layout == compute_kernel_lib::OutputCBLayout::SubblockMajor) &&
+                              (conv_pin_interm_target || !partials_cb_uses_output);
+#endif
+
     constexpr uint32_t out_block_w = in1_block_w;
 
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? matmul_partials_cb : out_cb_id;
@@ -550,7 +598,9 @@ void kernel_main() {
                 compute_kernel_lib::InputPolicy::WaitAndPopPerKBlock,
                 compute_kernel_lib::InputPolicy::WaitAndPopPerKBlock,
                 MatmulPostFn,
-                PreKBlockFn>(cb_mm_in0, cb_in1, matmul_out_buf, cb_matmul_partials, shape, MatmulPostFn{}, pre_k_block);
+                PreKBlockFn,
+                /*pin_interm_to_captured_base=*/conv_pin>(
+                cb_mm_in0, cb_in1, matmul_out_buf, cb_matmul_partials, shape, MatmulPostFn{}, pre_k_block);
 
             if constexpr (check_skip_compute) {
                 if (skip_compute) {

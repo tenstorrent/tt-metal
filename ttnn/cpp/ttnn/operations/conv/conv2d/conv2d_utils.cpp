@@ -449,6 +449,14 @@ bool conv2d_bench_force_trm() {
     return force;
 }
 
+bool conv2d_bench_no_pin() {
+    static const bool no_pin = [] {
+        const char* env = std::getenv("TT_CONV_BENCH_NO_PIN");
+        return env != nullptr && std::string_view(env) == "1";
+    }();
+    return no_pin;
+}
+
 std::optional<std::pair<uint32_t, uint32_t>> conv2d_bench_subblock_override() {
     static const std::optional<std::pair<uint32_t, uint32_t>> ov =
         []() -> std::optional<std::pair<uint32_t, uint32_t>> {

@@ -398,6 +398,7 @@ void kernel_main() {
             in1_policy_const,
             PostComputeFnT,
             PreFn,
+            /*pin_interm_to_captured_base=*/false,
             PostFnRing,
             /*untilize_block_ct_dim=*/out_subblock_num_tiles,
             NoKBlockInnerDimFn,

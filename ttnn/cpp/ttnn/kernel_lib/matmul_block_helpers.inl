@@ -98,6 +98,7 @@ template <
     InputPolicy in1_policy,
     typename PostComputeFn,
     typename PreKBlockFn,
+    bool pin_interm_to_captured_base,
     typename PostKBlockFn,
     uint32_t untilize_block_ct_dim,
     typename KBlockInnerDimFn,
@@ -136,6 +137,24 @@ ALWI void matmul_block(
     static_assert(
         last_block_target != LastBlockTarget::OutWithUntilize || untilize_block_ct_dim > 0,
         "OutWithUntilize requires untilize_block_ct_dim > 0 (= shape.out_subblock_h * shape.out_subblock_w)");
+    // pin_interm_to_captured_base packs every K-block's subblock partials to FIXED
+    // subblock-contiguous tile offsets within a single one-shot interm reservation, skips the
+    // per-K-block interm drain, and lets L1_ACC integrate per-address — that is the whole
+    // perf win (drain-skip + reserve/push elision). It requires:
+    //   • packer_l1_acc      — the drain-skip only exists with L1 accumulation; without it the
+    //                          last K-block needs a software reload from a FIFO-advanced interm,
+    //                          which the fixed-offset pin scheme does not provide.
+    //   • SubblockMajor      — the fixed-offset layout is subblock-contiguous; the TileRowMajor
+    //                          row-strided pin variant has no caller on this branch (conv2d's
+    //                          eligible TRM convs are no-bias + perf-neutral, kept non-pin).
+    //   • not OutWithUntilize — pack_untilize_dest packs from DST offset 0 of the current
+    //                          reservation, incompatible with absolute-offset pin packs.
+    static_assert(
+        !pin_interm_to_captured_base || (packer_l1_acc && tile_order == OutputCBLayout::SubblockMajor),
+        "pin_interm_to_captured_base requires packer_l1_acc and tile_order == SubblockMajor");
+    static_assert(
+        !pin_interm_to_captured_base || last_block_target != LastBlockTarget::OutWithUntilize,
+        "pin_interm_to_captured_base + OutWithUntilize is unsupported; use Interm + reblock_and_untilize");
     // NoWaitNoPop is in1-only: cross-chip global-CB receivers and L1-sharded weight CBs
     // are in1-side patterns; in0 has no analogous external-management case.
     static_assert(
@@ -175,6 +194,13 @@ ALWI void matmul_block(
     ASSERT(in0_cb_id != out_cb_id);
     ASSERT(in1_cb_id != out_cb_id);
     ASSERT(shape.out_subblock_h * shape.out_subblock_w <= compute_kernel_lib::DEST_AUTO_LIMIT);
+    // pin reserves interm ONCE at entry (outside the batch loop) and packs every K-block to
+    // fixed offsets within that one reservation. With batch > 1 the second batch's spills would
+    // L1_ACC-accumulate onto the first batch's at the same offsets — not what callers want.
+    // conv2d (the only pin caller) always passes batch=1; assert to keep that contract explicit.
+    if constexpr (pin_interm_to_captured_base) {
+        ASSERT(shape.batch == 1);
+    }
 
     // Data-format reconfig and init are two independent switches, mirroring the
     // tilize_helpers / reduce_helpers / binary_op_helpers pattern. Each side fires
@@ -232,6 +258,18 @@ ALWI void matmul_block(
     const uint32_t in1_block_num_tiles = in1_per_core_w * shape.in0_block_k;
     const uint32_t out_block_num_tiles = out_num_tiles * shape.in0_num_subblocks * shape.in1_num_subblocks;
     const uint32_t row_group_tiles = shape.out_subblock_h * out_row_width;
+
+    // pin_interm_to_captured_base: reserve the full out_block on the DEDICATED one-block interm
+    // exactly ONCE at entry, then pack each K-block's partials to fixed subblock-contiguous tile
+    // offsets within that reservation via pack_tile<true> (no per-K-block reserve/push), and reload
+    // (Out target) via copy_block_matmul_partials with start_in_tile_index pointing at the subblock's
+    // fixed offset. Because we never push_back during the K-loop the CB position stays at the captured
+    // base; for the Interm target the consumer (bias-add / untilize) gets one push_back at exit. The
+    // caller reset interm's rd/wr to a fixed base this outer iter, so the next output block reuses the
+    // same one-block region (no pin_base_tile_offset needed — the dedicated region wraps to that base).
+    if constexpr (pin_interm_to_captured_base) {
+        interm_buf.reserve_back(out_block_num_tiles);
+    }
 
     for (uint32_t b = 0; b < shape.batch; b++) {
         bool enable_reload = false;
@@ -321,7 +359,12 @@ ALWI void matmul_block(
             // factory layout). Single reserve here keeps all wait_front /
             // reserve_back increments identical across the K-loop, as the
             // CB-API contract requires. Skipped when caller owns pack lifecycle.
-            if constexpr (tile_order == OutputCBLayout::SubblockMajor && !caller_owns_pack_target) {
+            // Also skipped in pin mode: the one-shot interm reservation at helper
+            // entry already covers the spill region (and the Out target's last block
+            // does its own sequential out_buf reserve below).
+            if constexpr (
+                tile_order == OutputCBLayout::SubblockMajor && !caller_owns_pack_target &&
+                !pin_interm_to_captured_base) {
                 if (block == 0 && !last_out) {
                     out_buf.reserve_back(out_block_num_tiles);
                 }
@@ -356,6 +399,14 @@ ALWI void matmul_block(
                 for (uint32_t in1_subblock = 0; in1_subblock < shape.in1_num_subblocks; in1_subblock++) {
                     tile_regs_acquire();
 
+                    // Subblock tile offset within the pinned interm region (SubblockMajor layout).
+                    // Each subblock's partial reads/writes at a fixed position so the CB ptrs never
+                    // advance during the K-loop. Computed unconditionally — the compiler DCEs it
+                    // when pin=false. No pin_base_tile_offset: the dedicated one-block interm wraps
+                    // to the caller-reset base per output block, so the base is always 0 here.
+                    const uint32_t subblock_pin_offset =
+                        (in0_subblock * shape.in1_num_subblocks + in1_subblock) * out_num_tiles;
+
                     // shape.last_in1_subblock_w_valid narrowing: on the last in1 subblock, if the
                     // caller set the override, narrow the matmul FMA's ct_dim so the unpacker
                     // touches only the columns the reader actually pushed. The dst/pack region
@@ -368,7 +419,16 @@ ALWI void matmul_block(
 
                     if (enable_reload) {
                         copy_tile_to_dst_init_short_with_dt(in1_cb_id, interm_cb_id);
-                        if constexpr (spill_row_grouped) {
+                        if constexpr (pin_interm_to_captured_base) {
+                            // Pin (Out / OutWithRelu target): the K-1 non-last blocks accumulated
+                            // (L1_ACC) at this subblock's FIXED tile offset in the one-shot interm
+                            // reservation. Read it back into DST at that offset via
+                            // copy_block_matmul_partials's start_in_tile_index (relative to the
+                            // CB's current rd_ptr — which never advanced in pin mode). No
+                            // wait_front / pop_front: the entry reserve covers the full block and
+                            // nothing is consumer-visible until the last block packs to out_buf.
+                            copy_block_matmul_partials(interm_cb_id, subblock_pin_offset, 0, out_num_tiles);
+                        } else if constexpr (spill_row_grouped) {
                             // TileRowMajor + L1_ACC (Out / OutWithRelu target): the non-last
                             // K-block spills landed ROW-STRIDED (pack_subblock_row_strided into interm,
                             // pushed one M-row-group at a time). A contiguous reload would read the
@@ -443,7 +503,15 @@ ALWI void matmul_block(
                         }
 
                         tile_regs_commit();
-                        if constexpr (tile_order == OutputCBLayout::SubblockMajor && !caller_owns_pack_target) {
+                        if constexpr (
+                            tile_order == OutputCBLayout::SubblockMajor && !caller_owns_pack_target &&
+                            !(pin_interm_to_captured_base && pack_last_to_interm)) {
+                            // pin suppresses the per-subblock reserve ONLY for the Interm target,
+                            // whose one-shot interm reservation (helper entry) + exit push cover the
+                            // whole block. For the Out target (!pack_last_to_interm) the last block
+                            // packs to out_buf, which was never pre-reserved → it keeps the sequential
+                            // per-subblock reserve/push so multi-output-block convs advance out_buf's
+                            // FIFO instead of overwriting the same offsets every block.
                             pack_target_buf.reserve_back(out_num_tiles);
                         }
                         // Pack-side sync: apply_activation_from_pack runs SFPU on the
@@ -488,6 +556,17 @@ ALWI void matmul_block(
                                 0, pack_target_id, col_base, out_row_width, shape.out_subblock_h, shape.out_subblock_w);
                         } else if constexpr (last_block_target == LastBlockTarget::OutWithUntilize) {
                             pack_untilize_dest<untilize_block_ct_dim>(pack_target_id);
+                        } else if constexpr (pin_interm_to_captured_base && pack_last_to_interm) {
+                            // Pinned SubblockMajor pack to INTERM (Interm target only): write each
+                            // tile at its fixed position in the one-shot interm reservation; the
+                            // entry reserve + exit push make the full accumulated block visible to
+                            // the downstream consumer (bias-add / untilize). The Out target falls
+                            // through to the sequential pack below — its offset would be relative to
+                            // out_buf's wr_ptr, which advances one block per output block, so it must
+                            // pack sequentially into its own per-subblock reserve.
+                            for (uint32_t t = 0; t < out_num_tiles; t++) {
+                                pack_tile<true>(t, pack_target_id, subblock_pin_offset + t);
+                            }
                         } else {
                             pack_tile_block(0, pack_target_id, out_num_tiles);
                         }
@@ -496,7 +575,9 @@ ALWI void matmul_block(
                         if constexpr (last_block_target == LastBlockTarget::OutWithUntilize) {
                             pack_untilize_uninit(pack_target_id);
                         }
-                        if constexpr (tile_order == OutputCBLayout::SubblockMajor && !caller_owns_pack_target) {
+                        if constexpr (
+                            tile_order == OutputCBLayout::SubblockMajor && !caller_owns_pack_target &&
+                            !(pin_interm_to_captured_base && pack_last_to_interm)) {
                             pack_target_buf.push_back(out_num_tiles);
                         }
 
@@ -507,7 +588,9 @@ ALWI void matmul_block(
                         // accumulate into the same interm_buf buffer) or keep legacy subblock-
                         // major (compatible with software reload's per-subblock read).
                         tile_regs_commit();
-                        if constexpr (!spill_row_grouped && !caller_owns_pack_target) {
+                        // pin mode skips the per-K-block reserve: the one-shot entry reservation
+                        // covers the whole out_block and the spills land at fixed subblock offsets.
+                        if constexpr (!spill_row_grouped && !caller_owns_pack_target && !pin_interm_to_captured_base) {
                             interm_buf.reserve_back(out_num_tiles);
                         }
                         tile_regs_wait();
@@ -524,7 +607,15 @@ ALWI void matmul_block(
                             PACK((llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1)));
                         }
 
-                        if constexpr (spill_row_grouped) {
+                        if constexpr (pin_interm_to_captured_base) {
+                            // Pinned SubblockMajor spill: per-tile pack at the subblock's fixed
+                            // tile offset within the one-shot reservation. Matches the reload's
+                            // start_in_tile_index = subblock_pin_offset. L1_ACC integrates each
+                            // K-block's contribution at that fixed address.
+                            for (uint32_t t = 0; t < out_num_tiles; t++) {
+                                pack_tile<true>(t, interm_cb_id, subblock_pin_offset + t);
+                            }
+                        } else if constexpr (spill_row_grouped) {
                             const uint32_t col_base = in1_subblock * shape.out_subblock_w;
                             pack_subblock_row_strided(
                                 0, interm_cb_id, col_base, out_row_width, shape.out_subblock_h, shape.out_subblock_w);
@@ -532,7 +623,7 @@ ALWI void matmul_block(
                             pack_tile_block(0, interm_cb_id, out_num_tiles);
                         }
                         tile_regs_release();
-                        if constexpr (!spill_row_grouped && !caller_owns_pack_target) {
+                        if constexpr (!spill_row_grouped && !caller_owns_pack_target && !pin_interm_to_captured_base) {
                             interm_buf.push_back(out_num_tiles);
                         }
                     }
@@ -561,7 +652,10 @@ ALWI void matmul_block(
                 if constexpr (pack_last_to_interm) {
                     // No software reload on this path: Interm accumulates in place. The reload's
                     // SBM-contiguous read offsets wouldn't match the row-strided spill layout anyway.
-                    if constexpr (!caller_owns_pack_target) {
+                    // pin mode skips the drain entirely: nothing was pushed during the K-block (the
+                    // spills landed at fixed offsets in the one-shot reservation), so there is
+                    // nothing to wait/pop — L1_ACC still integrates per-address in hardware.
+                    if constexpr (!caller_owns_pack_target && !pin_interm_to_captured_base) {
                         if (block < shape.num_k_blocks - 1) {
                             for (uint32_t s = 0; s < out_block_num_tiles; s += drain_step) {
                                 interm_buf.wait_front(drain_step);
@@ -571,7 +665,7 @@ ALWI void matmul_block(
                     }
                     enable_reload = false;
                 } else {
-                    if constexpr (!caller_owns_pack_target) {
+                    if constexpr (!caller_owns_pack_target && !pin_interm_to_captured_base) {
                         if (shape.num_k_blocks >= 2 && block < shape.num_k_blocks - 2) {
                             for (uint32_t s = 0; s < out_block_num_tiles; s += drain_step) {
                                 interm_buf.wait_front(drain_step);
@@ -620,6 +714,15 @@ ALWI void matmul_block(
             // can advance ring CB rd_ptrs (or other per-K-block bookkeeping) only
             // once the consumer has finished reading.
             post_k_block(block, shape.num_k_blocks, last_out);
+        }
+
+        // pin + Interm target: push the one-shot interm reservation so the downstream consumer
+        // (bias-add / untilize) sees the full accumulated out_block at the captured base. The
+        // Out target needs no end push on interm — its spills were only scratch for the last
+        // block's reload, never consumer-visible; the reservation is released when the helper
+        // returns (the caller resets interm's rd/wr to base next outer iter).
+        if constexpr (pin_interm_to_captured_base && pack_last_to_interm) {
+            interm_buf.push_back(out_block_num_tiles);
         }
     }
 }
