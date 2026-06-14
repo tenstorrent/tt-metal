@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "model_id": "MiniMaxAI/MiniMax-M3",
+  "model_slug": "minimaxai_minimax_m3",
+  "device": "bh_galaxy",
+  "arch_name": "blackhole",
+  "started_at": "2026-06-14T11:31:00Z",
+  "updated_at": "2026-06-14T11:31:00Z",
+  "components": [],
+  "use_cases": [],
+  "locks": {
+    "device": {
+      "held_by": null,
+      "held_since": null
+    }
+  },
+  "tick_log": [],
+  "config": {
+    "max_parallel_reference": 4,
+    "max_attempts_per_phase": 10,
+    "tick_interval_sec": 60
+  }
+}
