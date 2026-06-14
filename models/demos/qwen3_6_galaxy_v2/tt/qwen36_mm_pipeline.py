@@ -107,6 +107,72 @@ def splice_modalities_into_embeddings(
     return fused
 
 
+def splice_modalities_ttnn(
+    input_embeds: "ttnn.Tensor",
+    input_ids: torch.Tensor,
+    *,
+    mesh_device: "ttnn.MeshDevice",
+    image_features: "ttnn.Tensor | None" = None,
+    video_features: "ttnn.Tensor | None" = None,
+    image_token_id: int = 248056,
+    video_token_id: int = 248057,
+) -> "ttnn.Tensor":
+    """On-device equivalent of `splice_modalities_into_embeddings`.
+
+    Places image and/or video features into the text embeddings at their
+    placeholder-token positions, entirely with TTNN ops on device. The host is
+    used ONLY to derive the scatter index list from `input_ids` (a small int
+    INPUT tensor — trace-safe), mirroring `merge_vision_tokens_ttnn` in
+    `models/demos/qwen3_vl/tt/common.py`. There is no deepstack in qwen3.6.
+
+    Args:
+        input_embeds: device `[B, S, H]` text embeddings.
+        input_ids: host `[B, S]` token ids.
+        mesh_device: the mesh the tensors live on (for the index tensor).
+        image_features: device `[N_image_tokens_total, H]` or None.
+        video_features: device `[N_video_tokens_total, H]` or None.
+
+    Returns:
+        device `[B, S, H]` fused embeddings.
+
+    Semantics match the host golden: for each modality, features are written
+    (row-major across the batch) at the positions where `input_ids` equals that
+    modality's placeholder token id. `ttnn.scatter` along dim 0 of the flattened
+    `[B*S, H]` embeddings replaces those rows with the feature rows.
+    """
+    B, S, H = input_embeds.shape
+    flat_ids = input_ids.reshape(-1)  # [B*S]
+
+    fused = ttnn.reshape(input_embeds, (B * S, H))
+    for feats, tok_id, name in (
+        (image_features, image_token_id, "image"),
+        (video_features, video_token_id, "video"),
+    ):
+        if feats is None:
+            continue
+        n_feat = feats.shape[0]
+        mask_indices = torch.where(flat_ids == tok_id)[0]
+        assert len(mask_indices) == n_feat, (
+            f"#{name}_pad positions ({len(mask_indices)}) != " f"#{name}_features rows ({n_feat})"
+        )
+        if n_feat == 0:
+            continue
+        # scatter needs the index tensor broadcast across the hidden dim: one
+        # row index per feature row, repeated H times (the column of dim 0).
+        idx = mask_indices.view(n_feat, 1).expand(n_feat, H).contiguous()
+        idx_tt = ttnn.from_torch(
+            idx,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        fused = ttnn.scatter(fused, 0, idx_tt, feats)
+
+    fused = ttnn.reshape(fused, (B, S, H))
+    return fused
+
+
 class Qwen36MMPipeline:
     """End-to-end vision pipeline producing decoder-ready inputs.
 
