@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Mamba2Layer — bringup on QB (device 0).
+"""Mamba2Layer — TP=4 on QB 4-chip Blackhole.
 
 SSM recurrence (chunked SSD) runs on host (PyTorch reference) for the PCC
-bringup test; in_proj and out_proj run on TTNN.
+bringup test; in_proj and out_proj run on TTNN (replicated across all 4 devices).
 
 The nemotron3_mamba2_decode_owned kernel has prohibitive per-step dispatch
 latency for S=32 sequential calls; it is validated separately via
@@ -27,8 +27,7 @@ import torch.nn.functional as F
 import ttnn
 from ttnn import MeshDevice
 
-_R = ttnn.ReplicateTensorToMesh
-_C = ttnn.ConcatMeshToTensor
+from .tp import _host_rep, _rep
 
 NUM_HEADS = 64
 HEAD_DIM = 64
@@ -187,24 +186,18 @@ def mamba2_layer_forward(
 
     def to_dev(t, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16):
         t_cast = t.bfloat16() if dtype == ttnn.bfloat16 else t.float()
-        return ttnn.from_torch(t_cast, dtype=dtype, layout=layout, device=mesh_device, mesh_mapper=_R(mesh_device))
+        return _rep(t_cast, mesh_device, layout=layout, dtype=dtype)
 
-    def to_host(t, cast=torch.bfloat16):
-        return ttnn.to_torch(t, mesh_composer=_C(mesh_device, dim=0)).to(cast)
+    def to_host(t):
+        return _host_rep(t, mesh_device, B).bfloat16()
 
-    # 1. Pre-block RMSNorm (TTNN)
+    # 1. Pre-block RMSNorm (TTNN, replicated)
     h_tt = to_dev(hidden_states)
-    w_tt = ttnn.from_torch(
-        norm_weight.bfloat16().unsqueeze(0),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        mesh_mapper=_R(mesh_device),
-    )
+    w_tt = _rep(norm_weight.bfloat16().unsqueeze(0), mesh_device)
     normed_tt = ttnn.rms_norm(h_tt, epsilon=norm_eps, weight=w_tt)
     normed = to_host(normed_tt)  # [B, S, 2688]
 
-    # 2. in_proj (TTNN): [B, S, 2688] → [B, S, 10304]
+    # 2. in_proj (TTNN, replicated): [B, S, 2688] → [B, S, 10304]
     ip_tt = to_dev(in_proj_weight)
     n_tt = to_dev(normed)
     proj_tt = ttnn.linear(n_tt, ip_tt, transpose_b=True)
@@ -232,7 +225,7 @@ def mamba2_layer_forward(
     group_size = INTERMEDIATE_SIZE // N_GROUPS  # 512
     scan_output = _mamba_rms_norm_gated(y, gate, norm_mixer_weight, eps=norm_eps, group_size=group_size)
 
-    # 6. out_proj (TTNN)
+    # 6. out_proj (TTNN, replicated)
     op_tt = to_dev(out_proj_weight)
     ys_tt = to_dev(scan_output)
     out_tt = ttnn.linear(ys_tt, op_tt, transpose_b=True)

@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""MoEGate (NemotronHTopkRouter) — bringup on QB (device 0).
+"""MoEGate (NemotronHTopkRouter) — TP=4 on QB 4-chip Blackhole.
 
-Gate is [128, 2688] float32. Router logit matmul on device 0,
+Gate is [128, 2688] float32. Router logit matmul on device (replicated),
 topk selection on host (host logic is cheap for 128 experts).
 """
 
@@ -11,14 +11,13 @@ import torch
 import ttnn
 from ttnn import MeshDevice
 
+from .tp import _host_rep, _rep
+
 N_ROUTED_EXPERTS = 128
 NUM_EXPERTS_PER_TOK = 6
 N_GROUP = 1
 TOPK_GROUP = 1
 ROUTED_SCALING_FACTOR = 2.5
-
-_R = ttnn.ReplicateTensorToMesh
-_C = ttnn.ConcatMeshToTensor
 
 
 def moe_gate_forward(
@@ -36,18 +35,11 @@ def moe_gate_forward(
     """Returns (topk_indices [tokens, k] int64, topk_weights [tokens, k] float32)."""
     tokens = hidden_states.shape[0]
 
-    h_tt = ttnn.from_torch(
-        hidden_states.float(),
-        dtype=ttnn.float32,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        mesh_mapper=_R(mesh_device),
-    )
-    w_tt = ttnn.from_torch(
-        weight.float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=_R(mesh_device)
-    )
+    h_tt = _rep(hidden_states.float(), mesh_device, dtype=ttnn.float32)
+    w_tt = _rep(weight.float(), mesh_device, dtype=ttnn.float32)
     logits_tt = ttnn.linear(h_tt, w_tt, transpose_b=True)
-    logits = ttnn.to_torch(logits_tt, mesh_composer=_C(mesh_device, dim=0)).float()  # [tokens, 128]
+    # Replicated op: ConcatMeshToTensor(dim=0) gives [4*tokens, 128]; take [:tokens]
+    logits = _host_rep(logits_tt, mesh_device, tokens).float()  # [tokens, 128]
 
     scores = torch.sigmoid(logits)
     bias = e_score_correction_bias.float()

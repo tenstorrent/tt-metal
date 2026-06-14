@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Generation bringup test for NemotronH-30B on QB device 0.
+"""Generation bringup test for NemotronH-30B on QB TP=4 (4× Blackhole).
 
-Runs the first NUM_TEST_LAYERS layers (MEMEM*) using our TTNN components and
+Runs the first NUM_TEST_LAYERS layers (MEMEM*) using TTNN TP=4 components and
 compares hidden-state PCC against the pure-PyTorch reference implementation.
 
 Usage:
@@ -24,8 +24,6 @@ for p in (f"{_root}/ttnn", f"{_root}/tools", _root):
 import pytest
 import torch
 import torch.nn.functional as F
-
-import ttnn
 
 DEMO_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
 SNAP = (
@@ -50,12 +48,11 @@ def pcc(a: torch.Tensor, b: torch.Tensor) -> float:
 
 @pytest.fixture(scope="module")
 def mesh_device():
-    from skills.orchestrator.lib.device import prepare_device
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.tp import close_device_tp4, open_device_tp4
 
-    prepare_device("qb")
-    dev = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), physical_device_ids=[0])
+    dev = open_device_tp4()
     yield dev
-    ttnn.close_mesh_device(dev)
+    close_device_tp4(dev)
 
 
 @pytest.fixture(scope="module")

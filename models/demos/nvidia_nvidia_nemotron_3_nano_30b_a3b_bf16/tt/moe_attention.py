@@ -1,11 +1,21 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""MoEAttention — attention core used in MoE transformer layers of NemotronH-30B.
+"""MoEAttention — TP=4 column/row-parallel on QB 4-chip Blackhole.
 
 Unlike DenseAttention, this function:
   - Takes PRE-NORMED hidden_states (no pre-norm applied here)
   - Applies RoPE to Q and K
   - Returns the O_proj output only (no pre-norm, no residual)
+
+TP strategy:
+  wq [4096, 2688]: column-parallel → [1024, 2688]/device
+  wk [256,  2688]: replicated (2 KV heads < TP=4, cannot shard)
+  wv [256,  2688]: replicated
+  Q col-sharded → host gather on dim=2 → [B, S, 4096]
+  K, V replicated → host slice [:B] → [B, S, 256]
+  RoPE + GQA SDPA on host
+  wo [2688, 4096]: row-parallel → [2688, 1024]/device
+  all_reduce after wo projection
 """
 
 import torch
@@ -14,12 +24,11 @@ import torch.nn.functional as F
 import ttnn
 from ttnn import MeshDevice
 
+from .tp import _col, _host_rep, _host_sharded, _rep, _row, _shard_act, all_reduce
+
 NUM_HEADS = 32
 NUM_KV_HEADS = 2
 HEAD_DIM = 128
-
-_R = ttnn.ReplicateTensorToMesh
-_C = ttnn.ConcatMeshToTensor
 
 
 def _rotate_half(x: torch.Tensor) -> torch.Tensor:
@@ -60,54 +69,53 @@ def moe_attention_forward(
     B, S, _ = hidden_states.shape
     num_groups = num_heads // num_kv_heads
 
-    def to_dev(t):
-        return ttnn.from_torch(
-            t.bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=_R(mesh_device)
-        )
+    # 1. Load input onto all devices (replicated)
+    h_tt = _rep(hidden_states, mesh_device)
 
-    def to_host(t):
-        return ttnn.to_torch(t, mesh_composer=_C(mesh_device, dim=0)).bfloat16()
+    # 2. Q: column-parallel → [B, S, 1024]/device
+    q_tt = ttnn.linear(h_tt, _col(wq, mesh_device), transpose_b=True)
 
-    # QKV projections on device
-    h_tt = to_dev(hidden_states)
-    q_tt = ttnn.linear(h_tt, to_dev(wq), transpose_b=True)  # [B, S, 4096]
-    k_tt = ttnn.linear(h_tt, to_dev(wk), transpose_b=True)  # [B, S, 256]
-    v_tt = ttnn.linear(h_tt, to_dev(wv), transpose_b=True)  # [B, S, 256]
+    # 3. K, V: replicated (2 KV heads < TP=4)
+    k_tt = ttnn.linear(h_tt, _rep(wk, mesh_device), transpose_b=True)
+    v_tt = ttnn.linear(h_tt, _rep(wv, mesh_device), transpose_b=True)
 
-    q = to_host(q_tt).view(B, S, num_heads, head_dim).transpose(1, 2).float()  # [B,nH,S,D]
-    k = to_host(k_tt).view(B, S, num_kv_heads, head_dim).transpose(1, 2).float()  # [B,nKV,S,D]
-    v = to_host(v_tt).view(B, S, num_kv_heads, head_dim).transpose(1, 2).float()  # [B,nKV,S,D]
+    # 4. Gather Q shards along dim=2 → [B, S, 4096]; slice K, V replicas
+    q_host = _host_sharded(q_tt, mesh_device, concat_dim=2)  # [B, S, 4096]
+    k_host = _host_rep(k_tt, mesh_device, B)  # [B, S, 256]
+    v_host = _host_rep(v_tt, mesh_device, B)  # [B, S, 256]
 
-    # RoPE
+    # 5. Reshape to [B, nH, S, D]
+    q = q_host.view(B, S, num_heads, head_dim).transpose(1, 2).float()
+    k = k_host.view(B, S, num_kv_heads, head_dim).transpose(1, 2).float()
+    v = v_host.view(B, S, num_kv_heads, head_dim).transpose(1, 2).float()
+
+    # 6. RoPE
     cos, sin = _rope_cos_sin(
         position_ids, head_dim, rope_theta, partial_rotary_factor, attention_scaling, dtype=torch.float32
     )
-    cos = cos.unsqueeze(1)  # [B, 1, S, rot_dim]
+    cos = cos.unsqueeze(1)
     sin = sin.unsqueeze(1)
     rot_dim = cos.shape[-1]
     q = torch.cat([(q[..., :rot_dim] * cos) + (_rotate_half(q[..., :rot_dim]) * sin), q[..., rot_dim:]], dim=-1)
     k = torch.cat([(k[..., :rot_dim] * cos) + (_rotate_half(k[..., :rot_dim]) * sin), k[..., rot_dim:]], dim=-1)
 
-    # GQA expand KV
+    # 7. GQA expand KV
     k = k.unsqueeze(2).expand(-1, -1, num_groups, -1, -1).reshape(B, num_heads, S, head_dim)
     v = v.unsqueeze(2).expand(-1, -1, num_groups, -1, -1).reshape(B, num_heads, S, head_dim)
 
-    # SDPA causal on host
+    # 8. SDPA causal on host
+    is_causal = S > 1
     attn_out = (
-        F.scaled_dot_product_attention(
-            q,
-            k,
-            v,
-            attn_mask=None,
-            is_causal=True,
-            scale=head_dim**-0.5,
-        )
+        F.scaled_dot_product_attention(q, k, v, is_causal=is_causal, scale=head_dim**-0.5)
         .transpose(1, 2)
         .contiguous()
         .view(B, S, num_heads * head_dim)
         .bfloat16()
-    )
+    )  # [B, S, 4096]
 
-    # O projection on device
-    out_tt = ttnn.linear(to_dev(attn_out), to_dev(wo), transpose_b=True)
-    return to_host(out_tt)
+    # 9. O projection: row-parallel → partial [B, S, 2688]/device → all_reduce
+    attn_shard_tt = _shard_act(attn_out, mesh_device, dim=2)
+    out_tt = ttnn.linear(attn_shard_tt, _row(wo, mesh_device), transpose_b=True)
+    result_tt = all_reduce(out_tt)
+
+    return _host_rep(result_tt, mesh_device, B)
