@@ -4,9 +4,12 @@
 
 #include <sys/types.h>
 #include <cstdint>
+#include <cstdlib>
 #include <optional>
 #include <shared_mutex>
+#include <string_view>
 #include <tuple>
+#include <utility>
 
 #include "conv2d_utils.hpp"
 #include <tt-metalium/buffer_types.hpp>
@@ -396,27 +399,158 @@ Conv2dParallelizationConfig determine_conv_op_parallel_config_from_conv_output_m
     };
 }
 
+// ── conv_bench profiling harness (pure test scaffolding) ─────────────────────────────────────
+Conv2dBenchMode conv2d_bench_mode() {
+    static const Conv2dBenchMode mode = [] {
+        const char* env = std::getenv("TT_CONV_BENCH_MODE");
+        if (env == nullptr) {
+            return Conv2dBenchMode::None;
+        }
+        const std::string_view v(env);
+        if (v == "main") {
+            return Conv2dBenchMode::Main;
+        }
+        if (v == "helper_sbm") {
+            return Conv2dBenchMode::HelperSubblock;
+        }
+        if (v == "helper_trm") {
+            return Conv2dBenchMode::HelperRowMajor;
+        }
+        TT_FATAL(
+            false,
+            "TT_CONV_BENCH_MODE='{}' is not recognized. Use one of: main | helper_sbm | helper_trm (or leave it "
+            "unset for normal conv).",
+            env);
+        return Conv2dBenchMode::None;
+    }();
+    return mode;
+}
+
+const char* conv2d_bench_mode_name(Conv2dBenchMode mode) {
+    switch (mode) {
+        case Conv2dBenchMode::Main: return "main";
+        case Conv2dBenchMode::HelperSubblock: return "helper_sbm";
+        case Conv2dBenchMode::HelperRowMajor: return "helper_trm";
+        default: return "none";
+    }
+}
+
+bool conv2d_bench_force_trm() {
+    static const bool force = [] {
+        const char* env = std::getenv("TT_CONV_BENCH_FORCE_TRM");
+        const bool set = env != nullptr && std::string_view(env) == "1";
+        TT_FATAL(
+            !set || conv2d_bench_mode() == Conv2dBenchMode::HelperRowMajor,
+            "TT_CONV_BENCH_FORCE_TRM=1 only makes sense with TT_CONV_BENCH_MODE=helper_trm (it skips the "
+            "TileRowMajor auto-select ROI gate); current mode is '{}'. Unset it or switch the mode.",
+            conv2d_bench_mode_name(conv2d_bench_mode()));
+        return set;
+    }();
+    return force;
+}
+
+std::optional<std::pair<uint32_t, uint32_t>> conv2d_bench_subblock_override() {
+    static const std::optional<std::pair<uint32_t, uint32_t>> ov =
+        []() -> std::optional<std::pair<uint32_t, uint32_t>> {
+        const char* h = std::getenv("TT_CONV_BENCH_SUBBLOCK_H");
+        const char* w = std::getenv("TT_CONV_BENCH_SUBBLOCK_W");
+        if (h == nullptr && w == nullptr) {
+            return std::nullopt;
+        }
+        TT_FATAL(
+            h != nullptr && w != nullptr,
+            "Set BOTH TT_CONV_BENCH_SUBBLOCK_H and TT_CONV_BENCH_SUBBLOCK_W (to force out_subblock h x w), or "
+            "neither (to let the tuner choose).");
+        const int hv = std::atoi(h);
+        const int wv = std::atoi(w);
+        TT_FATAL(hv > 0 && wv > 0, "TT_CONV_BENCH_SUBBLOCK_H/_W must be positive integers; got '{}' x '{}'.", h, w);
+        return std::make_pair(static_cast<uint32_t>(hv), static_cast<uint32_t>(wv));
+    }();
+    return ov;
+}
+
 static std::pair<uint32_t, uint32_t> determine_largest_subblock_size(
     uint32_t block_height, uint32_t block_width, bool fp32_accum) {
-    // Conv kernels emit OutputCBLayout::SubblockMajor at every matmul_block /
-    // add_bias_bcast_rows call site (conv_bmm_tilize.cpp), which requires
-    // out_subblock_w == per_core_N OR out_subblock_h == 1. Synthesize a kernel
-    // config from fp32_accum so the tuner derives DST capacity via
-    // ttnn::get_dest_reg_count — preserves the legacy fp32 ? 4 : 8 cap when
-    // dst_full_sync_en=false (the default for conv2d compute kernels).
+    // SubblockMajor (conv default) requires out_subblock_w == per_core_N OR out_subblock_h == 1.
+    // Synthesize a kernel config from fp32_accum so the tuner derives DST capacity via
+    // ttnn::get_dest_reg_count — preserves the legacy fp32 ? 4 : 8 cap when dst_full_sync_en=false.
     ttnn::DeviceComputeKernelConfig synth_config{};
     synth_config.fp32_dest_acc_en = fp32_accum;
     synth_config.dst_full_sync_en = false;
 
     namespace auto_tune = ttnn::operations::matmul::auto_tune;
-    const auto choice = auto_tune::determine_largest_subblock({
-        .per_core_M = block_height,
-        .per_core_N = block_width,
-        .compute_kernel_config = synth_config,
-        .subblock_w_eq_per_core_n_required = true,
-        .prefer_fast_path = true,
-    });
-    return {choice.out_subblock_h, choice.out_subblock_w};
+    const auto pick = [&](bool subblock_w_eq_per_core_n_required) {
+        return auto_tune::determine_largest_subblock({
+            .per_core_M = block_height,
+            .per_core_N = block_width,
+            .compute_kernel_config = synth_config,
+            .subblock_w_eq_per_core_n_required = subblock_w_eq_per_core_n_required,
+            .prefer_fast_path = true,
+        });
+    };
+
+    const Conv2dBenchMode mode = conv2d_bench_mode();
+    if (mode == Conv2dBenchMode::None) {
+        const auto choice = pick(true);  // unchanged from main
+        return {choice.out_subblock_h, choice.out_subblock_w};
+    }
+
+    // ── bench mode ── host block config stays SBM-shaped in EVERY mode (helper_trm included): the
+    // TileRowMajor relaxed subblock is derived inside the sharded factory's eligibility block and folded
+    // into the compute compile args only, exactly like production. tuner_trm is computed for the log.
+    const auto tuner_sbm = pick(true);   // host block config (all modes) — what main / helper_sbm run
+    const auto tuner_trm = pick(false);  // what the factory's TileRowMajor path will fold into compute args
+
+    std::pair<uint32_t, uint32_t> used = {tuner_sbm.out_subblock_h, tuner_sbm.out_subblock_w};
+    const auto manual = conv2d_bench_subblock_override();
+    if (manual.has_value()) {
+        used = *manual;
+        const uint32_t dst_cap = fp32_accum ? 4 : 8;  // conv2d default (dst_full_sync_en=false)
+        TT_FATAL(
+            block_height % used.first == 0 && block_width % used.second == 0,
+            "TT_CONV_BENCH_SUBBLOCK {}x{} must divide per_core_M={} and per_core_N={}.",
+            used.first,
+            used.second,
+            block_height,
+            block_width);
+        TT_FATAL(
+            used.first * used.second <= dst_cap,
+            "TT_CONV_BENCH_SUBBLOCK {}x{} (volume {}) exceeds DST capacity {} (fp32_accum={}).",
+            used.first,
+            used.second,
+            used.first * used.second,
+            dst_cap,
+            fp32_accum);
+        // Manual override shapes the HOST block config, which is SBM in every mode (the TileRowMajor relaxed
+        // subblock is factory-derived and not manually overridable).
+        TT_FATAL(
+            used.second == block_width || used.first == 1,
+            "TT_CONV_BENCH_SUBBLOCK {}x{} is illegal for the SubblockMajor host block config (every bench "
+            "mode): it requires out_subblock_w == per_core_N({}) OR out_subblock_h == 1. The helper_trm "
+            "relaxed subblock is tuner-derived in the factory and cannot be set manually.",
+            used.first,
+            used.second,
+            block_width);
+    }
+
+    log_info(
+        tt::LogOp,
+        "CONV_BENCH[{}] per_core_M={} per_core_N={} fp32_accum={} | tuner picks: SubblockMajor={}x{} "
+        "TileRowMajor={}x{} | host block config out_subblock={}x{} ({}; helper_trm folds the relaxed shape "
+        "into compute args in the factory — USING comes from the factory dispatch log)",
+        conv2d_bench_mode_name(mode),
+        block_height,
+        block_width,
+        fp32_accum,
+        tuner_sbm.out_subblock_h,
+        tuner_sbm.out_subblock_w,
+        tuner_trm.out_subblock_h,
+        tuner_trm.out_subblock_w,
+        used.first,
+        used.second,
+        manual.has_value() ? "MANUAL override" : "tuner");
+
+    return used;
 }
 
 Conv2dBlockConfig determine_per_core_conv_block_config(

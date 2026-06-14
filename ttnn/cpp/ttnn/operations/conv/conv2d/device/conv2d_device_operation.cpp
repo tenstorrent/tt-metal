@@ -109,6 +109,15 @@ void Conv2dDeviceOperation::validate_on_program_cache_miss(
         uint32_t per_core_out_matrix_width_ntiles = args.parallelization_config.per_core_out_matrix_width_ntile;
         uint32_t out_width_ntiles =
             compute_output_specs(args, tensor_args).padded_shape()[-1] / tt::constants::TILE_WIDTH;
+        // The "out_subblock_w == out_width || out_subblock_h == 1" gate exists for SubblockMajor output:
+        // reblock_and_untilize (the SubblockMajor untilize gather) is only correct under it. The production
+        // TileRowMajor auto-select never trips it — the host block_config stays SBM-shaped and the relaxed
+        // subblock is folded into the compute compile args inside the factory, so this relax is DORMANT
+        // today (the bench manual override TT_FATALs on SBM-illegal shapes in every mode). Kept keyed to
+        // helper_trm as defense for future bench tweaks that let a relaxed shape reach the host block
+        // config; every other conv keeps the constraint.
+        const bool relax_subblock =
+            ttnn::operations::conv::conv2d_bench_mode() == ttnn::operations::conv::Conv2dBenchMode::HelperRowMajor;
         if (args.memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
             TT_FATAL(
                 per_core_out_matrix_width_ntiles == out_width_ntiles,
@@ -117,7 +126,7 @@ void Conv2dDeviceOperation::validate_on_program_cache_miss(
                 per_core_out_matrix_width_ntiles,
                 out_width_ntiles);
             TT_FATAL(
-                args.block_config.out_subblock_w_ntiles == out_width_ntiles ||
+                relax_subblock || args.block_config.out_subblock_w_ntiles == out_width_ntiles ||
                     args.block_config.out_subblock_h_ntiles == 1,
                 "Error");
         } else if (args.memory_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
@@ -129,12 +138,12 @@ void Conv2dDeviceOperation::validate_on_program_cache_miss(
                 out_width_ntiles = tt::div_up(out_width_ntiles, args.parallelization_config.grid_size.x);
             }
             TT_FATAL(
-                args.block_config.out_subblock_w_ntiles == out_width_ntiles ||
+                relax_subblock || args.block_config.out_subblock_w_ntiles == out_width_ntiles ||
                     args.block_config.out_subblock_h_ntiles == 1,
                 "Error");
         } else {
             TT_FATAL(
-                args.block_config.out_subblock_w_ntiles == per_core_out_matrix_width_ntiles ||
+                relax_subblock || args.block_config.out_subblock_w_ntiles == per_core_out_matrix_width_ntiles ||
                     args.block_config.out_subblock_h_ntiles == 1,
                 "Error");
         }

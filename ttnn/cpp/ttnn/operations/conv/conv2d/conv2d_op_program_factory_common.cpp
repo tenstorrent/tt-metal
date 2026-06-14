@@ -285,6 +285,12 @@ std::vector<CBInfo> get_cb_info(
         .is_globally_allocated = can_alias_partials_onto_out,
         .data_format = partial_df});
 
+    // conv_bench main mode: main's verbatim no-helper kernel takes a TEMP_SUM CB index arg (which it does
+    // not actually read for non-depthwise). Emit a 0-page entry so get_cb_info_by_name(TEMP_SUM) resolves
+    // for main's arg block; allocate_cbs skips 0-page CBs, so this is a no-op for every other mode.
+    cb_info.emplace_back(
+        CBInfo{.name = Conv2dCb::TEMP_SUM, .num_pages = 0, .page_size = output_tile_size, .data_format = output_df});
+
     const bool overlap_im2col_cb =
         sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED && conv_input_df == output_df && !skip_act_cb_create;
     {

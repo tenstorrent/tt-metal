@@ -1,0 +1,23 @@
+#!/bin/bash
+WT=/localdev/wransom/tt-metal/.claude/worktrees/agent-a48fa14207415d0cb
+cd "$WT"
+# vanilla_unet REAL config: bf16 weights, bf16 out, LoFi, fp32_accum=False, l1_acc ON, NO bias, TILE out, auto abh
+VU="CB_WEIGHTS_DTYPE=bfloat16 CB_OUT_DTYPE=bfloat16 CB_IN_DTYPE=bfloat16 CB_FP32_ACCUM=false CB_FIDELITY=LoFi CB_L1_ACC=true CB_OUT_LAYOUT=tile CB_BIAS=false CB_ABH=none CB_BATCH=1 CB_FILTER=3 CB_PAD=1,1,1,1"
+run () { echo ">>> $1"; env MODEL=vanilla_unet LABEL="$1" $VU $2 bash "$WT/conv_bench_tools/cb_bench.sh" 2 main helper_sbm helper_trm; }
+run "vu_32<-3_480x640_HS"     "CB_IN_CH=3   CB_OUT_CH=32  CB_H=480 CB_W=640 CB_SHARD=HS"
+run "vu_32<-32_480x640_HS"    "CB_IN_CH=32  CB_OUT_CH=32  CB_H=480 CB_W=640 CB_SHARD=HS"
+run "vu_64<-32_240x320_HS"    "CB_IN_CH=32  CB_OUT_CH=64  CB_H=240 CB_W=320 CB_SHARD=HS"
+run "vu_64<-64_240x320_HS"    "CB_IN_CH=64  CB_OUT_CH=64  CB_H=240 CB_W=320 CB_SHARD=HS"
+run "vu_128<-64_120x160_HS"   "CB_IN_CH=64  CB_OUT_CH=128 CB_H=120 CB_W=160 CB_SHARD=HS"
+run "vu_128<-128_120x160_HS"  "CB_IN_CH=128 CB_OUT_CH=128 CB_H=120 CB_W=160 CB_SHARD=HS"
+run "vu_256<-128_60x80_HS"    "CB_IN_CH=128 CB_OUT_CH=256 CB_H=60  CB_W=80  CB_SHARD=HS"
+run "vu_256<-256_60x80_HS"    "CB_IN_CH=256 CB_OUT_CH=256 CB_H=60  CB_W=80  CB_SHARD=HS"
+run "vu_288<-288_60x80_HS"    "CB_IN_CH=288 CB_OUT_CH=288 CB_H=60  CB_W=80  CB_SHARD=HS"
+run "vu_512<-256_30x40_HS"    "CB_IN_CH=256 CB_OUT_CH=512 CB_H=30  CB_W=40  CB_SHARD=HS"
+run "vu_512<-512_30x40_BS"    "CB_IN_CH=512 CB_OUT_CH=512 CB_H=30  CB_W=40  CB_SHARD=BS"
+run "vu_256<-512_60x80_BS"    "CB_IN_CH=512 CB_OUT_CH=256 CB_H=60  CB_W=80  CB_SHARD=BS"
+run "vu_128<-256_120x160_HS"  "CB_IN_CH=256 CB_OUT_CH=128 CB_H=120 CB_W=160 CB_SHARD=HS"
+run "vu_64<-128_240x320_HS"   "CB_IN_CH=128 CB_OUT_CH=64  CB_H=240 CB_W=320 CB_SHARD=HS"
+run "vu_32<-64_256x256_HS"    "CB_IN_CH=64  CB_OUT_CH=32  CB_H=256 CB_W=256 CB_SHARD=HS"
+run "vu_1<-32_480x640_1x1_HS" "CB_IN_CH=32  CB_OUT_CH=1   CB_H=480 CB_W=640 CB_SHARD=HS CB_FILTER=1 CB_PAD=0,0,0,0"
+echo "=== VANILLA UNET COLLECTION COMPLETE ==="
