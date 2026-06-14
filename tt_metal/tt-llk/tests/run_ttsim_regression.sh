@@ -205,6 +205,7 @@ fi
 
 # ttsim does not implement SFPLOADMACRO; default to disabling unless caller set it.
 export DISABLE_SFPLOADMACRO="${DISABLE_SFPLOADMACRO:-1}"
+export TT_METAL_DISABLE_SFPLOADMACRO="${DISABLE_SFPLOADMACRO:-1}"
 
 mkdir -p "$RESULTS_DIR"
 
