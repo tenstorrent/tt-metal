@@ -83,9 +83,22 @@ def dense_attention_forward(
     # 6. Attention — paged Flash-Decode or prefill SDPA.
     if paged:
         k_cache, v_cache = kv_cache
-        # Reformat K/V from [B, n_kv, S, D] → [S, B, n_kv, D] for paged_update_cache.
+        # Reformat K/V: [B, n_kv, S, D] → [S, B, n_kv, D] for paged_update_cache.
         k_upd = ttnn.permute(k_4d, [2, 0, 1, 3])  # [1, B, 2, 128]
         v_upd = ttnn.permute(v_4d, [2, 0, 1, 3])
+        # paged_update_cache requires L1 HEIGHT_SHARDED with num_cores == B and
+        # tile-aligned shard height.  n_kv_heads=2 → ceil(2/32)*32 = 32.
+        _TILE = 32
+        upd_shard_h = ((-(-NUM_KV_HEADS // _TILE)) * _TILE) // B  # ceil-div then per-core
+        upd_mem = ttnn.create_sharded_memory_config(
+            [upd_shard_h, HEAD_DIM],
+            ttnn.CoreGrid(x=1, y=B),
+            ttnn.ShardStrategy.HEIGHT,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        k_upd = ttnn.to_memory_config(k_upd, upd_mem)
+        v_upd = ttnn.to_memory_config(v_upd, upd_mem)
         ttnn.experimental.paged_update_cache(k_cache, k_upd, update_idxs_tensor=current_pos, page_table=page_table)
         ttnn.experimental.paged_update_cache(v_cache, v_upd, update_idxs_tensor=current_pos, page_table=page_table)
         # Q: [B, n_q, S, D] → [S, B, n_q, D] = [1, B, 8, 128]
