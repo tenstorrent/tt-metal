@@ -149,3 +149,14 @@ Next: tracy-profile exp 10 (standalone+FORCE_BUILD_SERVICE) vs 01a (no service) 
 time vs inter-op gaps — to decide between (a) separate command queue for the service, (b) sub-device
 placement that avoids per-launch re-coordination, (c) suspend the service program during forward_chunk.
 Some are H2DStreamService (C++) changes. Diagnostic knob PREFILL_H2D_WORKER_{COL,ROW} committed.
+
+### FINAL (2026-06-14): dispatch tax confirmed warm; fix is C++ (H2DStreamService)
+tracy at NUM_LAYERS=1: warm (post-compile) ops show on-device DEVICE FW time IDENTICAL with/without the
+service (~55us median) but OP-TO-OP LATENCY ~3x (135us -> 429us median). So the H2D service imposes a
+per-op-launch DISPATCH tax, not on-device contention, not compile. Two Python fixes failed: service
+worker-core relocation off the model grid (no change), and 2 command queues PREFILL_NUM_CQ=2 (no change).
+=> Fix must be in H2DStreamService (C++): give its resident receiver program its own dispatch domain /
+sub-device so it's excluded from other programs' fast-dispatch launch coordination, or idle it during
+forward_chunk. Evidence: kimi_perf_overnight/devperf_{noservice,service}.csv. Diagnostic env knobs added
+(default-safe): PREFILL_FORCE_BUILD_SERVICE, PREFILL_H2D_WORKER_COL/ROW, PREFILL_NUM_CQ,
+PREFILL_STANDALONE_CHUNKED_ITERS.
