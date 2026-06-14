@@ -152,7 +152,7 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.sampling">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">sampling</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_values_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_indices_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">k</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">p</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">temp</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seed</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_core_grids</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.CoreRangeSet</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">optional_output_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.sampling" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">sampling</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_values_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_indices_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">k</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">p</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">temp</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seed</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_core_grids</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.CoreRangeSet</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.sampling" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>Samples from the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_values_tensor</span></code> based on provided top-k and top-p constraints.</p>
@@ -178,7 +178,7 @@ When combining top-k and top-p sampling, the op first applies the top-k filter a
 <li><p><strong>temp</strong> (<em>ttnn.Tensor</em>) – Temperature tensor for scaling (1/T).</p></li>
 <li><p><strong>seed</strong> (<em>int</em><em>, </em><em>optional</em>) – Seed for sampling randomness. Defaults to <cite>0</cite>.</p></li>
 <li><p><strong>sub_core_grids</strong> (<em>ttnn.CoreRangeSet</em><em>, </em><em>optional</em>) – Core range set for multicore execution. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>optional_output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Preallocated output tensor. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Preallocated output tensor. Defaults to <cite>None</cite>.</p></li>
 </ul>
 </dd>
 </dl>
@@ -204,7 +204,7 @@ When combining top-k and top-p sampling, the op first applies the top-k filter a
 </table>
 <table class="docutils align-default" id="id3">
 <caption>
-<span class="caption-text">input_indices_tensor</span><a class="headerlink" href="#id3" title="Permalink to this table"></a>
+<span class="caption-text">input_indices_tensor, k</span><a class="headerlink" href="#id3" title="Permalink to this table"></a>
 </caption>
 <thead>
 <tr class="row-odd">
@@ -214,31 +214,14 @@ When combining top-k and top-p sampling, the op first applies the top-k filter a
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>UINT32, INT32</p></td>
+<td><p>UINT32 (only on Wormhole/Blackhole), INT32</p></td>
 <td><p>ROW_MAJOR</p></td>
 </tr>
 </tbody>
 </table>
 <table class="docutils align-default" id="id4">
 <caption>
-<span class="caption-text">k</span><a class="headerlink" href="#id4" title="Permalink to this table"></a>
-</caption>
-<thead>
-<tr class="row-odd">
-<th class="head"><p>dtype</p></th>
-<th class="head"><p>layout</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even">
-<td><p>UINT32</p></td>
-<td><p>ROW_MAJOR</p></td>
-</tr>
-</tbody>
-</table>
-<table class="docutils align-default" id="id5">
-<caption>
-<span class="caption-text">p, temp</span><a class="headerlink" href="#id5" title="Permalink to this table"></a>
+<span class="caption-text">p, temp</span><a class="headerlink" href="#id4" title="Permalink to this table"></a>
 </caption>
 <thead>
 <tr class="row-odd">
@@ -253,10 +236,9 @@ When combining top-k and top-p sampling, the op first applies the top-k filter a
 </tr>
 </tbody>
 </table>
-<p>If no <code class="xref py py-attr docutils literal notranslate"><span class="pre">output_tensor</span></code> is provided, the return tensor will be as follows:</p>
-<table class="docutils align-default" id="id6">
+<table class="docutils align-default" id="id5">
 <caption>
-<span class="caption-text">output_tensor (default)</span><a class="headerlink" href="#id6" title="Permalink to this table"></a>
+<span class="caption-text">output_tensor (optional)</span><a class="headerlink" href="#id5" title="Permalink to this table"></a>
 </caption>
 <thead>
 <tr class="row-odd">
@@ -266,34 +248,25 @@ When combining top-k and top-p sampling, the op first applies the top-k filter a
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>UINT32</p></td>
+<td><p>UINT32 (only on Wormhole/Blackhole), INT32</p></td>
 <td><p>ROW_MAJOR</p></td>
 </tr>
 </tbody>
 </table>
-<p>If <code class="xref py py-attr docutils literal notranslate"><span class="pre">output_tensor</span></code> is provided, the supported data types and layout are:</p>
-<table class="docutils align-default" id="id7">
-<caption>
-<span class="caption-text">output_tensor (if provided)</span><a class="headerlink" href="#id7" title="Permalink to this table"></a>
-</caption>
-<thead>
-<tr class="row-odd">
-<th class="head"><p>dtype</p></th>
-<th class="head"><p>layout</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even">
-<td><p>INT32, UINT32</p></td>
-<td><p>ROW_MAJOR</p></td>
-</tr>
-</tbody>
-</table>
-<dl class="simple">
-<dt>Returns:</dt>
-<dd>
-<p>ttnn.Tensor: The output tensor containing sampled indices.</p>
+<p>On Wormhole and Blackhole, both UINT32 and INT32 are supported for
+<code class="xref py py-attr docutils literal notranslate"><span class="pre">input_indices_tensor</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">k</span></code>, and the output tensor. Otherwise (e.g. on
+Quasar, which does not support UINT32/UINT16 tile formats), only INT32 is supported.</p>
+<p>When <code class="xref py py-attr docutils literal notranslate"><span class="pre">output_tensor</span></code> is not provided, the default output dtype is architecture-dependent:
+UINT32 on Wormhole/Blackhole, and INT32 otherwise.</p>
+</div>
+<dl class="field-list simple">
+<dt class="field-odd">Returns<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<p><em>ttnn.Tensor</em> – The output tensor containing sampled indices.</p>
 </dd>
+</dl>
+<dl class="simple">
 <dt>Memory Support:</dt>
 <dd>
 <ul class="simple">
@@ -306,6 +279,11 @@ When combining top-k and top-p sampling, the op first applies the top-k filter a
 <li><p>Inputs must be 4D tensors with shape [N, C, H, W], and must be located on the device.</p></li>
 <li><p>The input tensors must represent exactly <cite>32 users</cite> based on their shape (i.e. N*C*H = 32).</p></li>
 <li><p>The last dimension of:attr:<cite>input_values_tensor</cite> must be padded to a multiple of 32</p></li>
+<li><p>The number of tiles along the last dimension, <code class="docutils literal notranslate"><span class="pre">Wt</span> <span class="pre">=</span> <span class="pre">W</span> <span class="pre">/</span> <span class="pre">32</span></code>, must be a power of 2
+(i.e. <code class="docutils literal notranslate"><span class="pre">W</span></code> must be a power-of-2 multiple of 32: 32, 64, 128, 256, …). The internal
+top-k stage uses a bitonic merge tree that assumes a power-of-2 tile count; a
+non-power-of-2 <code class="docutils literal notranslate"><span class="pre">Wt</span></code> is rejected. Pad <code class="docutils literal notranslate"><span class="pre">W</span></code> up to the next power-of-2 multiple of 32
+(e.g. with <code class="docutils literal notranslate"><span class="pre">-inf</span></code> values and dummy indices) if needed.</p></li>
 <li><p>The overall shape of <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_values_tensor</span></code> must match that of <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_indices_tensor</span></code>.</p></li>
 <li><p><code class="xref py py-attr docutils literal notranslate"><span class="pre">k</span></code>: Must contain 32 values, in the range  ‘(0,32]’.</p></li>
 <li><p><code class="xref py py-attr docutils literal notranslate"><span class="pre">p</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">temp</span></code>: Must contain 32 values in the range <cite>[0.0, 1.0]</cite>.</p></li>
@@ -313,7 +291,6 @@ When combining top-k and top-p sampling, the op first applies the top-k filter a
 </ul>
 </dd>
 </dl>
-</div>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
 <div class="highlight-python notranslate">
