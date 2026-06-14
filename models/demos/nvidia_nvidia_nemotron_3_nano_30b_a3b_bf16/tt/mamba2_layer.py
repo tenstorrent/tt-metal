@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Mamba2Layer — TP=4 on QB 4-chip Blackhole, S=1 decode path only.
 
-Uses ttnn.experimental.nemotron3_mamba2_decode_owned for the SSM recurrence.
-Kernel boundary: POST conv1d/silu/split, PRE MambaRMSNormGated/out_proj.
+SSM recurrence implemented via standard TTNN ops (softplus, exp, mul, matmul).
+nemotron3_mamba2_decode_owned hangs on 4-chip MeshDevice (investigated with
+both FABRIC_1D and FABRIC_1D_RING); this path is fully device-resident and
+trace-compatible.
 
 For S=1 with zero initial state, causal conv1d simplifies to:
   out[c] = conv_weight[c, 0, -1] * hBC[c] + conv_bias[c]  (elementwise, no padding needed)
@@ -86,14 +88,12 @@ def mamba2_layer_forward(
     )
     c_flat_tt = ttnn.slice(hBC_silu_tt, [0, 0, INTERMEDIATE_SIZE + N_GROUPS * SSM_STATE_SIZE], [B, 1, CONV_DIM])
 
-    # 7. Reshape inputs for decode kernel
+    # 7. Reshape for SSM decode
     #    x:    [B, 1, 4096] → [B, 64, 64]
-    #    z:    gate [B, 1, 4096] → [B, 64, 64]  (gating tensor, passed through by kernel)
     #    B_in: [B, 1, 1024] → [B, 8, 128]
     #    C_in: [B, 1, 1024] → [B, 8, 128]
     #    dt:   [B, 1, 64]   → [B, 64]
     x_tt = ttnn.reshape(x_flat_tt, [B, NUM_HEADS, HEAD_DIM])
-    z_tt = ttnn.reshape(gate_tt, [B, NUM_HEADS, HEAD_DIM])
     B_in_tt = ttnn.reshape(b_flat_tt, [B, N_GROUPS, SSM_STATE_SIZE])
     C_in_tt = ttnn.reshape(c_flat_tt, [B, N_GROUPS, SSM_STATE_SIZE])
     dt_tt = ttnn.reshape(dt_slice_tt, [B, NUM_HEADS])
@@ -103,19 +103,59 @@ def mamba2_layer_forward(
     A_log_tt = _rep(A_log.float().bfloat16().unsqueeze(0), mesh_device)  # [1, 64]
     D_tt = _rep(D.float().bfloat16().unsqueeze(0), mesh_device)  # [1, 64]
 
-    # 9. Zero initial SSM state [B, num_heads, head_dim, state_size] fp32
-    ssm_state = ttnn.from_torch(
-        torch.zeros(B, NUM_HEADS, HEAD_DIM, SSM_STATE_SIZE),
-        dtype=ttnn.float32,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
+    # 9–10. S=1 SSM decode using standard TTNN ops.
+    #
+    # nemotron3_mamba2_decode_owned hangs on 4-chip MeshDevice (investigated:
+    # reproducible with both FABRIC_1D and FABRIC_1D_RING — pure local-compute
+    # kernel, root cause unknown at time of writing, likely multi-chip dispatch
+    # incompatibility).  This TTNN-native path produces identical math and is
+    # fully trace-compatible.
+    #
+    # Mamba2 S=1 recurrence (zero initial state):
+    #   dt_eff     = softplus(dt + dt_bias)              [B, H]
+    #   decay      = exp(-exp(A_log) * dt_eff)           [B, H]
+    #   x_dt       = x * dt_eff                          [B, H, D]
+    #   B_exp/C_exp = repeat B/C groups → full heads     [B, H, N]
+    #   state_new  = outer(x_dt, B_exp)                  [B, H, D, N]  (zero-init state)
+    #   y_ssm      = state_new @ C_exp                   [B, H, D]
+    #   y          = y_ssm + D_scalar * x                [B, H, D]
+    HEADS_PER_GROUP = NUM_HEADS // N_GROUPS  # 8
 
-    # 10. Decode kernel → (ssm_state_out [discarded], y [B, 64, 64])
-    _, y_tt = ttnn.experimental.nemotron3_mamba2_decode_owned(
-        x_tt, z_tt, dt_tt, dt_bias_tt, A_log_tt, D_tt, B_in_tt, C_in_tt, ssm_state
-    )
+    # dt_eff [B, H]
+    dt_eff_tt = ttnn.softplus(ttnn.add(dt_tt, dt_bias_tt))
+
+    # decay  [B, H]
+    A_neg_tt = ttnn.neg(ttnn.exp(A_log_tt))
+    decay_tt = ttnn.exp(ttnn.mul(A_neg_tt, dt_eff_tt))
+
+    # x_dt [B, H, D]: scale x by dt_eff (broadcast over head_dim)
+    dt_eff_3d = ttnn.reshape(dt_eff_tt, [B, NUM_HEADS, 1])
+    x_dt_tt = ttnn.mul(x_tt, dt_eff_3d)
+
+    # Expand B and C from N_GROUPS to NUM_HEADS by replicating each group slice
+    B_slices, C_slices = [], []
+    for g in range(N_GROUPS):
+        b_g = ttnn.slice(B_in_tt, [0, g, 0], [B, g + 1, SSM_STATE_SIZE])
+        c_g = ttnn.slice(C_in_tt, [0, g, 0], [B, g + 1, SSM_STATE_SIZE])
+        for _ in range(HEADS_PER_GROUP):
+            B_slices.append(b_g)
+            C_slices.append(c_g)
+    B_exp_tt = ttnn.concat(B_slices, dim=1)  # [B, H, N]
+    C_exp_tt = ttnn.concat(C_slices, dim=1)  # [B, H, N]
+
+    # Outer product state update (zero initial state → state_new = outer(x_dt, B_exp))
+    x_dt_4d = ttnn.reshape(x_dt_tt, [B, NUM_HEADS, HEAD_DIM, 1])
+    B_exp_4d = ttnn.reshape(B_exp_tt, [B, NUM_HEADS, 1, SSM_STATE_SIZE])
+    state_new_tt = ttnn.mul(x_dt_4d, B_exp_4d)  # [B, H, D, N]
+
+    # y_ssm = state_new @ C_exp  (matmul over state_size dim)
+    C_exp_4d = ttnn.reshape(C_exp_tt, [B, NUM_HEADS, SSM_STATE_SIZE, 1])
+    y_4d_tt = ttnn.matmul(state_new_tt, C_exp_4d)  # [B, H, D, 1]
+    y_ssm_tt = ttnn.reshape(y_4d_tt, [B, NUM_HEADS, HEAD_DIM])  # [B, H, D]
+
+    # D skip: y = y_ssm + D * x
+    D_3d_tt = ttnn.reshape(D_tt, [1, NUM_HEADS, 1])
+    y_tt = ttnn.add(y_ssm_tt, ttnn.mul(D_3d_tt, x_tt))  # [B, H, D]
 
     # 11. MambaRMSNormGated — gate-first, per-group RMS, scale
     #     y:    [B, 64, 64] → [B, 1, 4096]

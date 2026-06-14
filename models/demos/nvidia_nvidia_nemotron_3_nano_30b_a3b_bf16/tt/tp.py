@@ -5,7 +5,7 @@
 All component forwards accept/return CPU torch tensors and handle
 device sharding internally via these helpers.
 
-Topology: FABRIC_1D_RING + Topology.Linear (4-chip linear chain on QB).
+Topology: FABRIC_1D + Topology.Linear (4-chip linear chain on QB).
 """
 
 import weakref
@@ -13,7 +13,7 @@ import weakref
 import ttnn
 
 TP = 4
-FABRIC = ttnn.FabricConfig.FABRIC_1D_RING
+FABRIC = ttnn.FabricConfig.FABRIC_1D
 TOPOLOGY = ttnn.Topology.Linear
 
 _R = ttnn.ReplicateTensorToMesh
@@ -40,7 +40,7 @@ def clear_device_weight_cache() -> None:
 
 
 def open_device_tp4() -> ttnn.MeshDevice:
-    """Open the 4-chip QB mesh with FABRIC_1D_RING fabric."""
+    """Open the 4-chip QB mesh with FABRIC_1D fabric."""
     ttnn.set_fabric_config(FABRIC)
     return ttnn.open_mesh_device(ttnn.MeshShape(1, TP), physical_device_ids=list(range(TP)))
 

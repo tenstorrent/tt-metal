@@ -24,4 +24,20 @@ def embedding_forward(
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
     w_tt = _upload(weight, mesh_device, None, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16)
-    return ttnn.embedding(ids_tt, w_tt)
+    out = ttnn.embedding(ids_tt, w_tt)
+    return ttnn.to_layout(out, ttnn.TILE_LAYOUT)
+
+
+def embedding_forward_tt(
+    mesh_device: MeshDevice,
+    ids_tt: ttnn.Tensor,  # [B, S] uint32 already on device (pre-allocated for trace)
+    weight: torch.Tensor,  # [vocab_size, hidden_size] bf16 CPU
+) -> ttnn.Tensor:
+    """Returns [B, S, hidden_size] bfloat16 replicated on all devices.
+
+    Accepts pre-allocated device tensor for trace compatibility — caller must
+    update it via ttnn.copy_host_to_device_tensor before each execute_trace.
+    """
+    w_tt = _upload(weight, mesh_device, None, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16)
+    out = ttnn.embedding(ids_tt, w_tt)
+    return ttnn.to_layout(out, ttnn.TILE_LAYOUT)
