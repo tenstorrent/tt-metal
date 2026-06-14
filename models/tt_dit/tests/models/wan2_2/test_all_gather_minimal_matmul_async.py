@@ -1048,7 +1048,12 @@ def run_test_linear_fsdp(
 @pytest.mark.parametrize(
     "M, K, N, use_bias, activation, chunks, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
     [
-        (12288, 5120, 15360, True, None, 1, 14, 5, 10, 2, 2),
+        (12288, 5120, 15360, True, None, 1, 12, 5, 10, 2, 2),
+        (12288, 5120, 5120, True, None, 1, 12, 5, 6, 2, 2),
+        (12288, 5120, 13824, True, None, 1, 12, 3, 14, 2, 2),
+        (65536, 5120, 15360, True, None, 1, 14, 5, 10, 2, 2),
+        (65536, 5120, 5120, True, None, 1, 14, 8, 6, 2, 2),
+        (65536, 5120, 13824, True, None, 1, 10, 5, 14, 2, 2),
     ],
     ids=["1xqkv"],
 )
