@@ -1501,3 +1501,158 @@ def patch_merge_mlp_forward(
     hidden = torch.nn.functional.gelu(hidden, approximate="none")
     hidden = torch.nn.functional.linear(hidden, w2["weight"], w2["bias"])
     return hidden
+
+
+def final_norm_forward(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    """Text backbone final RMSNorm (``language_model.model.norm``).
+
+    This is the SAME Gemma-style RMSNorm as the per-layer ``input_layernorm`` /
+    ``post_attention_layernorm`` (MiniMaxM3VLRMSNorm): fp32 normalize, scale by
+    ``(1.0 + weight)``, eps ``config.rms_norm_eps`` (1e-6). It is a thin wrapper
+    over ``rms_norm_forward`` for clarity at the model-assembly call site.
+
+    Args:
+        x: Input tensor of shape [..., hidden_size] (hidden_size=6144).
+        weight: Gamma weight of shape [hidden_size].
+        eps: Variance epsilon (config.rms_norm_eps, default 1e-6).
+
+    Returns:
+        Tensor with the same dtype/shape as ``x``.
+    """
+    return rms_norm_forward(x, weight, eps=eps)
+
+
+def lm_head_forward(h: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+    """Final LM head projection matching MiniMaxM3VL's ``self.lm_head``.
+
+    The HF model declares ``self.lm_head = nn.Linear(hidden_size, vocab_size,
+    bias=False)`` and computes ``logits = self.lm_head(hidden_states)``. This is
+    a plain (bias-free) linear, i.e. ``logits = h @ weight.T``, mapping the
+    text hidden dim (6144) to vocab logits (200064). There is NO scaling and NO
+    softmax (raw logits).
+
+    ``tie_word_embeddings`` is False for MiniMax-M3 (config.text_config), so the
+    checkpoint ships a DISTINCT ``language_model.lm_head.weight`` ([vocab,
+    hidden] = [200064, 6144]) rather than reusing the embedding matrix. (The HF
+    class lists ``_tied_weights_keys`` for the tied case, but it is inactive
+    here because the weight is present in the checkpoint and tie is False.)
+
+    Args:
+        h: hidden states [..., hidden_size (6144)].
+        weight: lm_head weight [vocab_size (200064), hidden_size (6144)],
+            checkpoint key ``language_model.lm_head.weight``.
+
+    Returns:
+        Logits [..., vocab_size (200064)] in h's dtype (no bias).
+    """
+    return torch.nn.functional.linear(h, weight)
+
+
+def vision_encoder_forward(
+    pixel_values: torch.Tensor,
+    grid_thw,
+    weights_dict: dict,
+    num_hidden_layers: int = 32,
+    num_attention_heads: int = 16,
+    head_dim: int = 80,
+    hidden_size: int = 1280,
+    in_channels: int = 3,
+    temporal_patch_size: int = 2,
+    patch_size: int = 14,
+    spatial_merge_size: int = 2,
+    rope_theta: float = 1e4,
+    layer_norm_eps: float = 1e-5,
+) -> torch.Tensor:
+    """Full MiniMax-M3 vision tower + multimodal projector (composite).
+
+    Composes the standalone vision helpers in the EXACT order of HF
+    ``MiniMaxM3VLModel.get_image_features`` (transformers 5.12.0), which is
+    ``vision_tower(...)`` (``MiniMaxM3VLVisionModel.forward``) followed by
+    ``multi_modal_projector(last_hidden_state.squeeze(0))``. The end-to-end
+    pipeline that produces the text-space image tokens is::
+
+        # ---- MiniMaxM3VLVisionModel.forward ----
+        embeds  = embeddings(pixel_values)            # Conv3d patchify, NO bias
+        cos,sin = rotary_emb(grid_thw)                # 3D RoPE, theta 1e4, smerge 2
+        h       = pre_layrnorm(embeds).unsqueeze(0)    # LayerNorm (+bias) eps 1e-5
+        for layer in 32 x VisionEncoderLayer:         # pre-norm CLIP block, 3D RoPE
+            h = layer(h, position_embeddings=(cos,sin), attention_mask=None)
+        # last_hidden_state = h   (NO post layernorm in this tower)
+        # ---- MiniMaxM3VLMultiModalProjector.forward ----
+        h = linear_2(gelu(linear_1(h.squeeze(0))))    # per-patch 1280->6144->6144
+        h = h.reshape(N // smerge**2, -1)             # group 4 patches -> 24576
+        out = merge_linear_2(gelu(merge_linear_1(h))) # 24576->6144->6144 (text dim)
+
+    Tower structure (verified against HF source):
+      * PRE layernorm IS present (``pre_layrnorm``, true LayerNorm + bias, eps 1e-5).
+      * There is NO post layernorm / NO class (CLS) token / NO learned position
+        embedding -- position info comes solely from the 3D RoPE.
+      * The 3D RoPE cos/sin tables are driven by ``grid_thw`` (per-image (t,h,w))
+        via :func:`build_vision_rope_3d` (shared across all 32 layers).
+      * The patch-merge (spatial 2x2) + projection lives in the multimodal
+        PROJECTOR, applied AFTER the tower (not inside it): the per-patch GELU MLP
+        (``multimodal_projector_forward``) then the 4-patch merge GELU MLP
+        (``patch_merge_mlp_forward``).
+
+    Args:
+        pixel_values: pre-patchified pixels ``[num_patches, C*tps*p*p]`` (or any
+            tensor whose numel is a multiple of that), fed to the Conv3d patchify.
+        grid_thw: Long tensor / list ``[num_images, 3]`` rows ``(t, h, w)``; total
+            ``sum(t*h*w)`` must equal ``num_patches``.
+        weights_dict: nested dict with keys:
+            ``patch_embedding`` (Conv3d weight ``[1280,3,2,14,14]``),
+            ``pre_layrnorm`` -> {``weight``,``bias``},
+            ``layers`` -> list of per-layer dicts (each with the
+              ``layer_norm1/2``, ``q/k/v/out_proj``, ``fc1/fc2`` weights+biases
+              expected by :func:`vision_encoder_layer_forward`),
+            ``projector`` -> {``linear_1``:{weight,bias}, ``linear_2``:{weight,bias}},
+            ``patch_merge`` -> {``linear_1``:{weight,bias}, ``linear_2``:{weight,bias}}.
+
+    Returns:
+        Image tokens in the text hidden space, shape
+        ``[num_patches // spatial_merge_size**2, text_hidden (6144)]``.
+    """
+    # --- patch embedding (Conv3d, no bias) ---
+    embeds = patch_embedding_forward(
+        pixel_values,
+        weights_dict["patch_embedding"],
+        bias=None,
+        in_channels=in_channels,
+        temporal_patch_size=temporal_patch_size,
+        patch_size=patch_size,
+    )  # [num_patches, hidden]
+
+    # --- 3D RoPE tables from the grid (shared across layers) ---
+    cos, sin = build_vision_rope_3d(
+        grid_thw,
+        head_dim=head_dim,
+        theta=rope_theta,
+        spatial_merge_size=spatial_merge_size,
+    )
+    cos = cos.to(embeds.dtype)
+    sin = sin.to(embeds.dtype)
+
+    # --- pre layernorm, then add the batch dim (HF .unsqueeze(0)) ---
+    pre = weights_dict["pre_layrnorm"]
+    h = vision_layernorm_forward(embeds, pre["weight"], pre["bias"], eps=layer_norm_eps)
+    h = h.unsqueeze(0)  # [1, num_patches, hidden]
+
+    # --- 32 pre-norm CLIP encoder layers (3D RoPE, non-causal) ---
+    for layer_w in weights_dict["layers"][:num_hidden_layers]:
+        h = vision_encoder_layer_forward(
+            h,
+            layer_w,
+            cos,
+            sin,
+            num_attention_heads=num_attention_heads,
+            head_dim=head_dim,
+            eps=layer_norm_eps,
+        )
+
+    # last_hidden_state (no post layernorm). Drop the batch dim like HF does.
+    last_hidden_state = h.squeeze(0)  # [num_patches, hidden]
+
+    # --- multimodal projector: per-patch GELU MLP -> 4-patch merge GELU MLP ---
+    projected = multimodal_projector_forward(last_hidden_state, weights_dict["projector"])
+    out = patch_merge_mlp_forward(projected, weights_dict["patch_merge"], spatial_merge_size=spatial_merge_size)
+    return out

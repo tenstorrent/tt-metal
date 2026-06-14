@@ -4,7 +4,7 @@
 **Slug:** `minimaxai_minimax_m3`
 **Target Device:** bh_galaxy (blackhole)
 **Started:** 2026-06-14T11:31:00Z
-**Updated:** 2026-06-14T12:12:19Z
+**Updated:** 2026-06-14T12:18:12Z
 
 ## Block Status
 
@@ -110,22 +110,22 @@
 | multimodal_projector | debug | n/a | — | 0 |  |
 | multimodal_projector | optimization | pending | — | 0 |  |
 | multimodal_projector | real_weights | pending | — | 0 |  |
-| vision_encoder | reference | pending | — | 0 |  |
+| vision_encoder | reference | done | 1.000000 | 0 | tower: conv3d patch_embed->pre_layrnorm->32x encoder layers; no post-norm/CLS/pos-emb; 3d rope from grid_thw; merger/projector outside tower |
 | vision_encoder | ttnn | pending | — | 0 |  |
 | vision_encoder | debug | n/a | — | 0 |  |
 | vision_encoder | optimization | pending | — | 0 |  |
 | vision_encoder | real_weights | pending | — | 0 |  |
-| final_norm | reference | pending | — | 0 |  |
+| final_norm | reference | done | 1.000000 | 0 | gemma RMS, thin wrapper over rms_norm_forward |
 | final_norm | ttnn | pending | — | 0 |  |
 | final_norm | debug | n/a | — | 0 |  |
 | final_norm | optimization | pending | — | 0 |  |
 | final_norm | real_weights | pending | — | 0 |  |
-| lm_head | reference | pending | — | 0 |  |
+| lm_head | reference | done | 1.000000 | 0 | bias-free linear 6144->200064, untied; key language_model.lm_head.weight |
 | lm_head | ttnn | pending | — | 0 |  |
 | lm_head | debug | n/a | — | 0 |  |
 | lm_head | optimization | pending | — | 0 |  |
 | lm_head | real_weights | pending | — | 0 |  |
-| mtp_head | reference | pending | — | 0 |  |
+| mtp_head | reference | blocked | — | 0 | MTP weights absent from release (0 of 23416 keys); not buildable |
 | mtp_head | ttnn | pending | — | 0 |  |
 | mtp_head | debug | n/a | — | 0 |  |
 | mtp_head | optimization | pending | — | 0 |  |
@@ -147,6 +147,7 @@
 - tick 4 (2026-06-14T12:01:58Z): reference[sparse_lightning_attention,vision_attention,swigluoai_mlp,moe_gate] — ok
 - tick 5 (2026-06-14T12:08:01Z): reference[moe_experts,shared_expert,vision_mlp,dense_decoder_layer] — ok
 - tick 6 (2026-06-14T12:12:19Z): reference[moe_decoder_layer,vision_encoder_layer,patch_merge_mlp,multimodal_projector] — ok
+- tick 7 (2026-06-14T12:18:12Z): reference[vision_encoder,final_norm,lm_head,mtp_head] — ok(3)+blocked(1)
 
 ## Host-Resident Exceptions
 

@@ -5,7 +5,7 @@
   "device": "bh_galaxy",
   "arch_name": "blackhole",
   "started_at": "2026-06-14T11:31:00Z",
-  "updated_at": "2026-06-14T12:12:19Z",
+  "updated_at": "2026-06-14T12:18:12Z",
   "components": [
     {
       "name": "rms_norm",
@@ -803,8 +803,14 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "pcc": 0.9999999999976751,
+        "artifacts": [
+          "reference/functional.py",
+          "reference/golden/vision_encoder.pt"
+        ],
+        "notes": "tower: conv3d patch_embed->pre_layrnorm->32x encoder layers; no post-norm/CLS/pos-emb; 3d rope from grid_thw; merger/projector outside tower"
       },
       "ttnn": {
         "status": "pending",
@@ -836,8 +842,14 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "pcc": 1.0,
+        "artifacts": [
+          "reference/functional.py",
+          "reference/golden/final_norm.pt"
+        ],
+        "notes": "gemma RMS, thin wrapper over rms_norm_forward"
       },
       "ttnn": {
         "status": "pending",
@@ -869,8 +881,14 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "pcc": 1.0,
+        "artifacts": [
+          "reference/functional.py",
+          "reference/golden/lm_head.pt"
+        ],
+        "notes": "bias-free linear 6144->200064, untied; key language_model.lm_head.weight"
       },
       "ttnn": {
         "status": "pending",
@@ -904,8 +922,11 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "blocked",
+        "attempts": 0,
+        "pcc": null,
+        "last_error": "MTP weights absent from release (0 of 23416 keys); not buildable",
+        "notes": "config declares 7 MTP modules but no checkpoint weights; dropped (not required for correctness)"
       },
       "ttnn": {
         "status": "pending",
@@ -1098,6 +1119,12 @@
       "ts": "2026-06-14T12:12:19Z",
       "action": "reference[moe_decoder_layer,vision_encoder_layer,patch_merge_mlp,multimodal_projector]",
       "result": "ok"
+    },
+    {
+      "tick": 7,
+      "ts": "2026-06-14T12:18:12Z",
+      "action": "reference[vision_encoder,final_norm,lm_head,mtp_head]",
+      "result": "ok(3)+blocked(1)"
     }
   ],
   "config": {
