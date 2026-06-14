@@ -1,19 +1,24 @@
 #!/usr/bin/env python3
-# Resumable joint (S,Pk,blocking) sweep over the full WH grid. Runs test_zz_jointsweep in batches under
-# tracy, joins per-config device kernel duration, and appends rows to a persistent JSONL. Re-running
-# skips shapes already in done.json (survives /tmp wipes, reboots, device hangs).
-#   python tools/mm_sweep/joint_orchestrate.py [batch_size] [max_shapes]
+# Resumable, SHARDED joint (S,Pk,blocking) sweep over the full WH grid. Runs test_zz_jointsweep in
+# batches under tracy, joins per-config device kernel duration, appends to a per-shard JSONL.
+#   python tools/mm_sweep/joint_orchestrate.py [batch_size] [shard_id] [num_shards]
+# Shard k processes grid shapes where index % num_shards == k (interleaved -> balanced small/large mix),
+# writing results_shard{k}.jsonl + done_shard{k}.json. Excludes done_global.json (shapes finished by the
+# pre-shard single-card run). Each shard MUST use its own TT_METAL_CACHE (set in the launch env) to avoid
+# JIT-cache races. Merge offline: results_main.jsonl + results_shard*.jsonl.
 import csv, json, math, os, subprocess, sys, time
 
 REPO = "/localdev/cglagovich/tt-metal"
 OUT = "/localdev/cglagovich/mm_jointsweep"  # PERSISTENT (not /tmp)
-RESULTS = os.path.join(OUT, "results.jsonl")
-DONE = os.path.join(OUT, "done.json")
+BATCH = int(sys.argv[1]) if len(sys.argv) > 1 else 25
+SHARD = int(sys.argv[2]) if len(sys.argv) > 2 else 0
+NSHARD = int(sys.argv[3]) if len(sys.argv) > 3 else 1
+RESULTS = os.path.join(OUT, f"results_shard{SHARD}.jsonl")
+DONE = os.path.join(OUT, f"done_shard{SHARD}.json")
+GLOBAL_DONE = os.path.join(OUT, "done_global.json")
 T = "tests/ttnn/nightly/unit_tests/operations/experimental/test_zz_jointsweep.py::test_jointsweep"
 REPS, WARMUP = 8, 2
 CHUNK = 1 + WARMUP + REPS  # minimal-matmul rows per ok config (to_torch adds none)
-BATCH = int(sys.argv[1]) if len(sys.argv) > 1 else 25
-MAXSHAPES = int(sys.argv[2]) if len(sys.argv) > 2 else 10**9
 
 M_TILES = [1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256]
 K_TILES = [1, 2, 4, 8, 16, 32, 64, 96, 128, 192, 256]
@@ -21,17 +26,19 @@ N_TILES = M_TILES
 ALL = [(mt * 32, kt * 32, nt * 32) for mt in M_TILES for kt in K_TILES for nt in N_TILES]
 
 os.makedirs(OUT, exist_ok=True)
+exclude = set(json.load(open(GLOBAL_DONE))) if os.path.exists(GLOBAL_DONE) else set()
+exclude |= set(json.load(open(DONE))) if os.path.exists(DONE) else set()
 done = set(json.load(open(DONE))) if os.path.exists(DONE) else set()
-todo = [s for s in ALL if f"{s[0]}x{s[1]}x{s[2]}" not in done][:MAXSHAPES]
-print(f"total={len(ALL)} done={len(done)} todo={len(todo)} batch={BATCH}", flush=True)
+todo = [s for i, s in enumerate(ALL) if i % NSHARD == SHARD and f"{s[0]}x{s[1]}x{s[2]}" not in exclude]
+print(f"shard {SHARD}/{NSHARD} total={len(ALL)} excluded={len(exclude)} todo={len(todo)} batch={BATCH}", flush=True)
 
 t0 = time.time()
 ncfg = 0
 for bi in range(0, len(todo), BATCH):
     batch = todo[bi : bi + BATCH]
-    rundir = f"/tmp/joint_b{bi}"
-    manf = f"/tmp/joint_b{bi}_man.json"
-    shp = f"/tmp/joint_b{bi}_shapes.json"
+    rundir = f"/tmp/joint_s{SHARD}_b{bi}"
+    manf = f"/tmp/joint_s{SHARD}_b{bi}_man.json"
+    shp = f"/tmp/joint_s{SHARD}_b{bi}_shapes.json"
     subprocess.run(["rm", "-rf", rundir])
     json.dump([list(s) for s in batch], open(shp, "w"))
     env = dict(os.environ, FC_SHAPELIST=shp, FC_MANIFEST=manf, FC_REPS=str(REPS))
