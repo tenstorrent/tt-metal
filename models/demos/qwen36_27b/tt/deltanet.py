@@ -121,11 +121,21 @@ except AttributeError:
 
 try:
     _deltanet_prefill_full_op = ttnn.experimental.deltanet_prefill_full
-    USE_PREFILL_FUSED_KERNEL = True
+    _PREFILL_FUSED_OP_AVAILABLE = True
 except AttributeError:
-    USE_PREFILL_FUSED_KERNEL = False
+    _deltanet_prefill_full_op = None
+    _PREFILL_FUSED_OP_AVAILABLE = False
 
 import os
+# NOTE: the fused prefill kernel (deltanet_prefill_full) is currently numerically
+# broken — it produces a wrong recurrent state, so prompt context is lost
+# (decode output becomes fluent but prompt-INDEPENDENT) and it can wedge the
+# board on short sequences. Keep it OFF by default and use the CPU prefill path
+# (which is verified correct and matches the PyTorch reference). The full-fused
+# *decode* kernel (deltanet_decode_full) is correct and stays on.
+# Opt in with ENABLE_PREFILL_FUSED_KERNEL=1 only when working on fixing the kernel.
+USE_PREFILL_FUSED_KERNEL = _PREFILL_FUSED_OP_AVAILABLE and os.environ.get("ENABLE_PREFILL_FUSED_KERNEL") == "1"
+
 if os.environ.get("DISABLE_FUSED_KERNEL"):
     USE_FUSED_KERNEL = False
     USE_FULL_FUSED_KERNEL = False

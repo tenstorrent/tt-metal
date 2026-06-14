@@ -9,6 +9,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen36_27b.tt.decoder import TtHybridDecoderLayer
 from models.demos.qwen36_27b.tt.deltanet import TtDeltaNetState
+from models.demos.qwen36_27b.tt.attention import _device_attention_enabled
 from models.demos.qwen36_27b.tt.model_config import Qwen36ModelConfig
 
 
@@ -78,7 +79,7 @@ class TtQwen36Model(LightweightModule):
     def rms_norm(self, x, weight, eps=1e-6):
         return ttnn.rms_norm(x, epsilon=eps, weight=weight)
 
-    def forward(self, token_ids, position_ids, deltanet_state, kv_caches=None, mode="decode"):
+    def forward(self, token_ids, position_ids, deltanet_state, kv_caches=None, mode="decode", compute_logits=True):
         """
         Args:
             token_ids: [B, S] tensor of token IDs (CPU)
@@ -94,6 +95,19 @@ class TtQwen36Model(LightweightModule):
         hidden_states = self.embed(token_ids)
         cos, sin = self.get_rope(position_ids)
 
+        # Absolute position for device-attention KV-cache updates (decode only).
+        current_pos = position_ids if isinstance(position_ids, int) else None
+
+        # Decode + device attention: move cos/sin to device ONCE per step (shared
+        # by all 16 attention layers via broadcast), instead of a host->device
+        # transfer inside each layer.
+        if current_pos is not None and _device_attention_enabled():
+            d = self.config.rotary_dim
+            cos = ttnn.from_torch(cos.reshape(1, 1, 1, d).to(torch.bfloat16),
+                                  dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+            sin = ttnn.from_torch(sin.reshape(1, 1, 1, d).to(torch.bfloat16),
+                                  dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+
         new_kv_caches = {} if kv_caches is None else dict(kv_caches)
 
         for i, layer in enumerate(self.layers):
@@ -106,10 +120,16 @@ class TtQwen36Model(LightweightModule):
                 cos=cos, sin=sin,
                 kv_cache=kv_cache,
                 mode=mode,
+                current_pos=current_pos,
             )
 
             if new_kv is not None:
                 new_kv_caches[i] = new_kv
+
+        # Skip the final norm + (large) lm_head when logits aren't needed — e.g.
+        # intermediate tokens during sequential device prefill.
+        if not compute_logits:
+            return None, new_kv_caches
 
         if mode == "prefill" and hidden_states.shape[2] > 1:
             last_hidden = ttnn.to_torch(hidden_states)[:, :, -1:, :]
@@ -126,3 +146,10 @@ class TtQwen36Model(LightweightModule):
         return TtDeltaNetState(
             self.num_layers, self.config.layer_types, self.device, self.config
         )
+
+    def reset_attention_cache(self):
+        """Drop on-device KV caches in all attention layers (device-attention mode)."""
+        for layer in self.layers:
+            mixer = getattr(layer, "token_mixer", None)
+            if mixer is not None and hasattr(mixer, "reset"):
+                mixer.reset()

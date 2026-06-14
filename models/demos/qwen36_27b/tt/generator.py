@@ -17,6 +17,7 @@ import ttnn
 
 from models.demos.qwen36_27b.tt.model import TtQwen36Model
 from models.demos.qwen36_27b.tt.model_config import Qwen36ModelConfig
+from models.demos.qwen36_27b.tt.attention import _device_attention_enabled
 
 USE_TRACE = os.environ.get("QWEN_USE_TRACE", "0") == "1"
 
@@ -37,6 +38,25 @@ class Qwen36Generator:
     def prefill(self, token_ids: torch.Tensor):
         B, S = token_ids.shape
         assert B == 1, "Only batch_size=1 supported"
+
+        if _device_attention_enabled():
+            # Sequential on-device prefill: run the (validated, all-device) decode
+            # path over each prompt token. Builds the DeltaNet state + on-device
+            # attention KV cache incrementally, and skips the large lm_head for all
+            # but the last token. Much faster than the CPU prefill fallbacks, and
+            # correct (same kernels as decode; matches CPU prefill next-token).
+            logits = None
+            for t in range(S):
+                logits, self.kv_caches = self.model(
+                    token_ids[:, t:t + 1],
+                    t,
+                    self.deltanet_state,
+                    self.kv_caches,
+                    mode="decode",
+                    compute_logits=(t == S - 1),
+                )
+            self.position = S
+            return logits
 
         position_ids = torch.arange(S)
         logits, self.kv_caches = self.model(
@@ -63,9 +83,15 @@ class Qwen36Generator:
         )
         self.position += 1
 
-        logits_cpu = ttnn.to_torch(logits).float()
-        logits_cpu = logits_cpu.reshape(-1, logits_cpu.shape[-1])
-        next_token = torch.argmax(logits_cpu, dim=-1, keepdim=True)
+        # Greedy: argmax on device so we only transfer the token id (not the
+        # full ~248k-wide logits vector) each step. Fall back to CPU argmax.
+        try:
+            tok_tt = ttnn.argmax(logits, dim=-1)
+            next_token = ttnn.to_torch(tok_tt).reshape(-1)[:1].long().reshape(1, 1)
+        except Exception:
+            logits_cpu = ttnn.to_torch(logits).float()
+            logits_cpu = logits_cpu.reshape(-1, logits_cpu.shape[-1])
+            next_token = torch.argmax(logits_cpu[:, : self.config.vocab_size], dim=-1, keepdim=True)
 
         return logits, next_token
 
@@ -155,6 +181,8 @@ class Qwen36Generator:
             self.trace_id = None
             self.trace_output = None
             self.trace_input_buf = None
+        if hasattr(self.model, "reset_attention_cache"):
+            self.model.reset_attention_cache()
         self.deltanet_state = self.model.create_deltanet_state()
         self.kv_caches = {}
         self.position = 0

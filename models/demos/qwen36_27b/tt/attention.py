@@ -13,10 +13,19 @@ Two forward paths:
 """
 
 import math
+import os
 
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+
+
+def _device_attention_enabled():
+    # On-device decode attention is validated correct (matches the CPU path) and
+    # ~1.7x faster with an O(1) KV-cache update (vs the CPU torch.cat that slows
+    # with sequence length). Default ON; opt out with USE_DEVICE_ATTENTION=0.
+    # Read at call time so tests can toggle via env before constructing.
+    return os.environ.get("USE_DEVICE_ATTENTION", "1") != "0"
 
 
 class TtGatedAttention(LightweightModule):
@@ -64,8 +73,44 @@ class TtGatedAttention(LightweightModule):
         self.q_norm_w_tt = ttnn.from_torch(q_norm_w, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
         self.k_norm_w_tt = ttnn.from_torch(k_norm_w, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
-    def forward(self, hidden_states, cos, sin, kv_cache=None, mode="decode"):
+        # On-device KV cache (allocated lazily on first device-mode decode).
+        self.k_cache = None
+        self.v_cache = None
+        self._rope_dev = {}  # position -> (cos_dev, sin_dev) memo for device rope
+
+        # SDPA-decode program config: head_dim=256 + long max_seq overflows L1 with
+        # the default chunking, so cap k_chunk_size. q_chunk unused in decode.
+        try:
+            grid = device.compute_with_storage_grid_size()
+            gx, gy = grid.x, grid.y
+        except Exception:
+            gx, gy = 8, 8
+        # k_chunk_size must divide the cache seq length (max_seq_len). Pick the
+        # largest tile-aligned chunk in {128,64,32} that divides it.
+        k_chunk = 32
+        for c in (128, 64, 32):
+            if self.max_seq_len % c == 0:
+                k_chunk = c
+                break
+        self.sdpa_decode_prog_cfg = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(gx, gy),
+            q_chunk_size=32,
+            k_chunk_size=k_chunk,
+            exp_approx_mode=False,
+        )
+
+    def reset(self):
+        """Drop the on-device KV cache (call between independent sequences)."""
+        if self.k_cache is not None:
+            ttnn.deallocate(self.k_cache)
+            ttnn.deallocate(self.v_cache)
+        self.k_cache = None
+        self.v_cache = None
+
+    def forward(self, hidden_states, cos, sin, kv_cache=None, mode="decode", current_pos=None):
         if mode == "decode":
+            if _device_attention_enabled():
+                return self._decode_device(hidden_states, cos, sin, current_pos, kv_cache)
             return self._decode(hidden_states, cos, sin, kv_cache)
         return self._prefill(hidden_states, cos, sin, kv_cache)
 
@@ -222,3 +267,99 @@ class TtGatedAttention(LightweightModule):
     def _rotate_half(x):
         x1, x2 = x.chunk(2, dim=-1)
         return torch.cat((-x2, x1), dim=-1)
+
+    # ------------------------------------------------------------------
+    # On-device decode path (USE_DEVICE_ATTENTION=1).
+    # First cut — validate/iterate with tests/test_attention_decode.py on a
+    # healthy board. Layout choices follow tt_transformers/tt/attention.py:
+    #   q for SDPA:  [1, b, n_heads, head_dim]
+    #   kv cache:    [b, n_kv_heads, max_seq, head_dim]
+    # ------------------------------------------------------------------
+    def _make_rope_dev(self, cos, sin):
+        """Return device cos/sin [1,1,1,rotary_dim] (bf16, tile). Accepts torch or ttnn.
+        Built ONCE per decode step (shared across all heads/layers via broadcast)."""
+        d = self.rotary_dim
+        if isinstance(cos, torch.Tensor):
+            cos = ttnn.from_torch(cos.reshape(1, 1, 1, d).to(torch.bfloat16),
+                                  dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+        if isinstance(sin, torch.Tensor):
+            sin = ttnn.from_torch(sin.reshape(1, 1, 1, d).to(torch.bfloat16),
+                                  dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+        return cos, sin
+
+    def _device_partial_rope(self, x, cos_dev, sin_dev, n_heads):
+        """Partial RoPE on device. x: [1,1,n_heads,head_dim]; rotates first rotary_dim dims.
+        cos_dev/sin_dev: device [1,1,1,rotary_dim], broadcast over the head dim."""
+        d = self.rotary_dim
+        half = d // 2
+        x_rot = ttnn.slice(x, [0, 0, 0, 0], [1, 1, n_heads, d])
+        x_pass = ttnn.slice(x, [0, 0, 0, d], [1, 1, n_heads, self.head_dim])
+        # rotate_half over the rotary block: concat(-x2, x1)
+        x1 = ttnn.slice(x_rot, [0, 0, 0, 0], [1, 1, n_heads, half])
+        x2 = ttnn.slice(x_rot, [0, 0, 0, half], [1, 1, n_heads, d])
+        rh = ttnn.concat([ttnn.neg(x2), x1], dim=-1)
+        # ttnn binary ops broadcast the size-1 head dim of cos/sin over n_heads.
+        x_rot_new = ttnn.add(ttnn.mul(x_rot, cos_dev), ttnn.mul(rh, sin_dev))
+        return ttnn.concat([x_rot_new, x_pass], dim=-1)
+
+    def _decode_device(self, hidden_states, cos, sin, current_pos, kv_cache=None):
+        assert current_pos is not None, "device attention decode needs current_pos"
+        cos_cpu = cos if isinstance(cos, torch.Tensor) else ttnn.to_torch(cos)
+        sin_cpu = sin if isinstance(sin, torch.Tensor) else ttnn.to_torch(sin)
+
+        q_proj = ttnn.linear(hidden_states, self.q_proj_w)
+        k_proj = ttnn.linear(hidden_states, self.k_proj_w)
+        v_proj = ttnn.linear(hidden_states, self.v_proj_w)
+
+        q_2d = ttnn.reshape(q_proj, [1, 1, self.num_heads, self.head_dim * 2])
+        query = ttnn.slice(q_2d, [0, 0, 0, 0], [1, 1, self.num_heads, self.head_dim])
+        gate = ttnn.slice(q_2d, [0, 0, 0, self.head_dim], [1, 1, self.num_heads, self.head_dim * 2])
+        key = ttnn.reshape(k_proj, [1, 1, self.num_kv_heads, self.head_dim])
+        value = ttnn.reshape(v_proj, [1, 1, self.num_kv_heads, self.head_dim])
+
+        # per-head RMSNorm
+        query = ttnn.rms_norm(query, epsilon=1e-6, weight=self.q_norm_w_tt)
+        key = ttnn.rms_norm(key, epsilon=1e-6, weight=self.k_norm_w_tt)
+
+        # partial RoPE (build device cos/sin once, shared by q and k via broadcast)
+        cos_dev, sin_dev = self._make_rope_dev(cos_cpu, sin_cpu)
+        query = self._device_partial_rope(query, cos_dev, sin_dev, self.num_heads)
+        key = self._device_partial_rope(key, cos_dev, sin_dev, self.num_kv_heads)
+
+        # allocate KV cache lazily: [b=1, n_kv_heads, max_seq, head_dim].
+        # Seed from the CPU prefill kv_cache (post-rope keys/values for positions
+        # 0..S-1) so device decode continues the prompt context correctly.
+        if self.k_cache is None:
+            k_host = torch.zeros(1, self.num_kv_heads, self.max_seq_len, self.head_dim, dtype=torch.bfloat16)
+            v_host = torch.zeros(1, self.num_kv_heads, self.max_seq_len, self.head_dim, dtype=torch.bfloat16)
+            if kv_cache is not None:
+                k_prev, v_prev = kv_cache  # [1, n_kv_heads, S, head_dim]
+                S = k_prev.shape[2]
+                k_host[:, :, :S, :] = k_prev.to(torch.bfloat16)
+                v_host[:, :, :S, :] = v_prev.to(torch.bfloat16)
+            self.k_cache = ttnn.from_torch(k_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+            self.v_cache = ttnn.from_torch(v_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+
+        # update cache at current_pos. update_cache requires input dim[1] == cache dim[1]
+        # (= n_kv_heads). tt_transformers layout is [seqlen=1, n_kv_heads, batch, head_dim],
+        # so permute [1,1,n_kv,hd] -> [1, n_kv, 1, hd].
+        k_upd = ttnn.permute(key, (0, 2, 1, 3))
+        v_upd = ttnn.permute(value, (0, 2, 1, 3))
+        ttnn.update_cache(self.k_cache, k_upd, current_pos)
+        ttnn.update_cache(self.v_cache, v_upd, current_pos)
+
+        # SDPA decode: q [1, b, n_heads, head_dim]
+        q_sdpa = ttnn.reshape(query, [1, 1, self.num_heads, self.head_dim])
+        pos_tensor = ttnn.from_torch(torch.tensor([current_pos], dtype=torch.int32),
+                                     dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
+        attn = ttnn.transformer.scaled_dot_product_attention_decode(
+            q_sdpa, self.k_cache, self.v_cache, cur_pos_tensor=pos_tensor, scale=self.scaling,
+            program_config=self.sdpa_decode_prog_cfg,
+        )
+        # attn: [1, b, n_heads, head_dim] -> [1,1,1, n_heads*head_dim]
+        attn = ttnn.reshape(attn, [1, 1, 1, self.num_heads * self.head_dim])
+
+        gate_flat = ttnn.reshape(gate, [1, 1, 1, self.num_heads * self.head_dim])
+        attn = ttnn.mul(attn, ttnn.sigmoid(gate_flat))
+        output = ttnn.linear(attn, self.o_proj_w)
+        return output, (self.k_cache, self.v_cache)

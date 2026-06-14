@@ -52,7 +52,7 @@ class TtHybridDecoderLayer(LightweightModule):
             eps=config.rms_norm_eps, dtype=dtype,
         )
 
-    def forward(self, hidden_states, deltanet_state=None, cos=None, sin=None, kv_cache=None, mode="decode"):
+    def forward(self, hidden_states, deltanet_state=None, cos=None, sin=None, kv_cache=None, mode="decode", current_pos=None):
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
 
@@ -60,7 +60,7 @@ class TtHybridDecoderLayer(LightweightModule):
         if self.layer_type == "linear_attention":
             hidden_states = self.token_mixer(hidden_states, deltanet_state, mode=mode)
         else:
-            hidden_states, new_kv_cache = self.token_mixer(hidden_states, cos, sin, kv_cache, mode=mode)
+            hidden_states, new_kv_cache = self.token_mixer(hidden_states, cos, sin, kv_cache, mode=mode, current_pos=current_pos)
 
         hidden_states = ttnn.add(residual, hidden_states)
 
