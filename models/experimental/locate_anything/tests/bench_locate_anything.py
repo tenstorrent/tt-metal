@@ -26,7 +26,9 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.qwen25_vl.tt.common import PagedAttentionConfig, merge_vision_tokens, preprocess_inputs_prefill
+from models.experimental.locate_anything.reference import la_inputs
 from models.experimental.locate_anything.tt.model_la import LATransformer
+from models.experimental.locate_anything.tt.vision import MoonViT
 from models.tt_transformers.tt.common import Mode, sample_host
 from models.tt_transformers.tt.generator import Generator as TTTGenerator
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
@@ -181,13 +183,23 @@ def test_locate_anything_baseline(
     golden = torch.load(GOLDEN_PATH, weights_only=False)
     input_ids = golden["input_ids"]  # [1, S]
     attention_mask = golden["attention_mask"]  # [1, S]
-    vit_proj = golden["vit_proj"].to(torch.float32)  # [N_img, hidden]
     golden_prefill_logits = golden["prefill_logits"].to(torch.float32)  # [1, S, vocab]
     image_token_index = int(golden.get("image_token_index", IMAGE_TOKEN_INDEX))
     n_img_tokens = int(golden["n_img_tokens"])
     real_seq_len = input_ids.shape[1]
     last_token_idx = real_seq_len - 1
     logger.info(f"golden seq_len={real_seq_len}, n_img_tokens={n_img_tokens}")
+
+    # --- Vision: on-device MoonViT (default) or CPU golden (LA_VISION=golden, isolates LLM PCC) ---
+    vision_mode = os.environ.get("LA_VISION", "device")
+    if vision_mode == "device":
+        logger.info("Running MoonViT vision encoder + projector on device (chip 2)...")
+        vis = MoonViT(mesh_device, la_inputs.find_model_path(), golden["grid_hw"], dtype=ttnn.bfloat16)
+        vit_proj = vis.forward(golden["pixel_values"].float()).to(torch.float32)  # [N_img, hidden]
+        vpass, vmsg = comp_pcc(golden["vit_proj"].to(torch.float32), vit_proj, pcc=0.99)
+        logger.info(f"Device vision vit_proj PCC vs golden: {vmsg}")
+    else:
+        vit_proj = golden["vit_proj"].to(torch.float32)  # CPU golden
 
     # --- Build pre-merged image+text embeddings on host ---
     logger.info("Loading HF embed_tokens and merging vision embeddings...")
