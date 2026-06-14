@@ -567,6 +567,23 @@ def main() -> None:
         if os.environ.get("PREFILL_FORCE_PRECLEAR", "0") == "1":
             logger.info("[perf-exp] PREFILL_FORCE_PRECLEAR=1 — clearing sub-device manager before standalone loop")
             mesh_device.clear_loaded_sub_device_manager()
+        # Perf experiment (PREFILL_FORCE_BUILD_SERVICE=1): build the H2D stream service in this otherwise
+        # service-free path (it is NOT used to feed input — tokens still come from the local trace) to
+        # directly confirm whether the service's mere presence is what slows forward_chunk in request
+        # mode. If standalone slows from ~1.9s to ~3.1s/chunk with this set, the H2D service is the cause.
+        if os.environ.get("PREFILL_FORCE_BUILD_SERVICE", "0") == "1":
+            logger.info(
+                "[perf-exp] PREFILL_FORCE_BUILD_SERVICE=1 — building (unused) H2D service to test its contention"
+            )
+            mesh_device.clear_loaded_sub_device_manager()
+            _unused_h2d_service = build_h2d_service(
+                mesh_device,
+                mesh_shape=GLOBAL_MESH_SHAPE,
+                max_seq_len=CHUNK_SIZE,
+                mapper_config=H2D_MAPPER_CONFIG,
+                worker_cores=H2D_SYNC_WORKER_CORES,
+                metadata_size_bytes=H2D_METADATA_SIZE_BYTES,
+            )
         logger.info("Setup complete, running standalone chunked-prefill loop (golden KV-cache PCC check)")
         run_standalone_chunked_prefill_loop(pipeline)
     elif os.environ.get("PREFILL_STANDALONE", "0") == "1":
