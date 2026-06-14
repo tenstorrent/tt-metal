@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-13T22:50:54Z",
-  "updated_at": "2026-06-14T08:54:17Z",
+  "updated_at": "2026-06-14T09:09:52Z",
   "components": [
     {
       "name": "Embedding",
@@ -476,8 +476,12 @@
         "notes": "first 6 layers (MEMEM*) hidden-state PCC vs pure-PyTorch reference on QB TP=4 MeshShape(1,4) FABRIC_1D_RING; all 3 layer types covered; call time 9.53s"
       },
       "perf": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 1,
+        "decode_latency_ms": 4865,
+        "decode_toks_per_sec": 0.21,
+        "full_52layer_pcc": 0.995189,
+        "notes": "baseline: per-call from_torch weight uploads dominate; optimization phase will add persistent device weight buffers; B=1 S=1 decode, 5 timed runs avg 4865ms"
       }
     }
   ],
@@ -567,6 +571,14 @@
       "result": "ok",
       "pcc": 0.999839,
       "notes": "TP=4 on QB 4-chip Blackhole; col-parallel Q/up/vocab, replicated K/V/norm, row-parallel O/down, all_reduce; Mamba2 replicated (SSM on host); MoEExperts pure-host; call 9.53s setup 6.76s"
+    },
+    {
+      "tick": 13,
+      "ts": "2026-06-14T09:09:52Z",
+      "action": "perf[full 52-layer PCC + decode latency]",
+      "result": "ok",
+      "pcc": 0.995189,
+      "notes": "52-layer hidden-state PCC=0.995189; decode B=1 S=1 avg 4865ms 0.21 tok/s; baseline limited by per-call weight upload"
     }
   ],
   "config": {
