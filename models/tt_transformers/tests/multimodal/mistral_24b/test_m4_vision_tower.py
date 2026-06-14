@@ -51,11 +51,23 @@ def test_m4_vision_tower(mesh_device, reset_seeds):
         ref_out = ref(inp, image_sizes=[(H, W)]).last_hidden_state
 
     # --- TT MistralVisionTower ---
+    # The HF reference consumes raw HF vision keys; the TT tower expects them mapped to the
+    # meta layout (patch_conv -> patch_conv._linear, etc.) — the same conversion the full
+    # load_state_dict() applies for the multimodal path. Apply it to the vision-only subset
+    # so we never materialize the 226 GB fp8 text core.
+    from models.tt_transformers.tt.load_checkpoints import (
+        convert_vision_hf_to_meta,
+        convert_vision_hf_to_meta_no_qkv_permute,
+    )
+
+    convert = convert_vision_hf_to_meta_no_qkv_permute if args.use_hf_rope else convert_vision_hf_to_meta
+    tt_sd = convert(dict(sd), args.head_dim)
+
     tt_ccl = TT_CCL(mesh_device)
     vm = MistralVisionTower(
         mesh_device=mesh_device,
         tt_ccl=tt_ccl,
-        state_dict=sd,
+        state_dict=tt_sd,
         state_dict_prefix=prefix,
         dtype=ttnn.bfloat16,
         configuration=args,
