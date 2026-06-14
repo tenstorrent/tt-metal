@@ -7,7 +7,7 @@ import torch
 import ttnn
 from ttnn import MeshDevice
 
-from .tp import _rep
+from .tp import _rep_keyed
 
 NORM_EPS = 1e-5
 
@@ -19,5 +19,5 @@ def layer_norm_forward(
     eps: float = NORM_EPS,
 ) -> ttnn.Tensor:
     """Returns [B, S, hidden_size] bfloat16 on device (replicated)."""
-    w_tt = _rep(weight.unsqueeze(0), mesh_device)
+    w_tt = _rep_keyed(id(weight), weight.bfloat16().unsqueeze(0), mesh_device)
     return ttnn.rms_norm(hidden_states, epsilon=eps, weight=w_tt)

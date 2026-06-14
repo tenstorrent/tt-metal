@@ -10,6 +10,8 @@ Topology: FABRIC_1D + Topology.Linear (4-chip linear chain on QB).
 
 import weakref
 
+import torch
+
 import ttnn
 
 TP = 4
@@ -34,9 +36,16 @@ _C = ttnn.ConcatMeshToTensor
 # ---------------------------------------------------------------------------
 _DEVICE_CACHE: dict = {}
 
+# Cache for derived (unsqueezed/converted/sliced) weight tensors.
+# Key: (arbitrary_hashable_key, layout, dtype, id(mesh)).
+# Use _rep_keyed() when the CPU source is re-derived each call (unsqueeze, cast,
+# slice) so id(derived) is unstable — caller provides a stable key instead.
+_DERIVED_CACHE: dict = {}
+
 
 def clear_device_weight_cache() -> None:
     _DEVICE_CACHE.clear()
+    _DERIVED_CACHE.clear()
 
 
 def open_device_tp4() -> ttnn.MeshDevice:
@@ -89,6 +98,28 @@ def _upload(t, mesh, shard_dim, layout, dtype):
 def _rep(t, mesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16):
     """Load tensor replicated on all TP devices (cached after first upload)."""
     return _upload(t, mesh, None, layout, dtype)
+
+
+def _rep_keyed(stable_key, derived_cpu, mesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16):
+    """Replicate derived_cpu; cached under stable_key, NOT id(derived_cpu).
+
+    Use when derived_cpu is re-computed each forward (e.g. t.unsqueeze(0),
+    t.bfloat16().unsqueeze(0)) so its id() is unstable.  stable_key must be
+    a hashable value that uniquely identifies this particular derived tensor
+    for the lifetime of the model (e.g. (id(parent_weight), 'tag')).
+    """
+    key = (stable_key, layout, dtype, id(mesh))
+    if key in _DERIVED_CACHE:
+        return _DERIVED_CACHE[key]
+    dev = ttnn.from_torch(
+        derived_cpu.bfloat16() if dtype == ttnn.bfloat16 and derived_cpu.dtype != torch.bfloat16 else derived_cpu,
+        dtype=dtype,
+        layout=layout,
+        device=mesh,
+        mesh_mapper=_R(mesh),
+    )
+    _DERIVED_CACHE[key] = dev
+    return dev
 
 
 def _col(t, mesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16):

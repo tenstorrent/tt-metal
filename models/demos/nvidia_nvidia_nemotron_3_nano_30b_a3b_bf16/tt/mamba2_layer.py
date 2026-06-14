@@ -27,7 +27,7 @@ import torch
 import ttnn
 from ttnn import MeshDevice
 
-from .tp import _rep
+from .tp import _rep, _rep_keyed
 
 NUM_HEADS = 64
 HEAD_DIM = 64
@@ -57,7 +57,7 @@ def mamba2_layer_forward(
     B = hidden_states.shape[0]
 
     # 1. Pre-block RMSNorm
-    w_tt = _rep(norm_weight.unsqueeze(0), mesh_device)
+    w_tt = _rep_keyed(id(norm_weight), norm_weight.bfloat16().unsqueeze(0), mesh_device)
     normed_tt = ttnn.rms_norm(hidden_states, epsilon=norm_eps, weight=w_tt)
 
     # 2. in_proj: [B, 1, 2688] → [B, 1, 10304]
@@ -74,8 +74,10 @@ def mamba2_layer_forward(
     # 4. Causal conv1d for S=1 with zero state:
     #    out[c] = weight[c, 0, -1] * hBC[c] + bias[c]  (elementwise)
     conv_w_last = conv1d_weight[:, 0, -1].contiguous().bfloat16()  # [6144] CPU
-    conv_w_tt = _rep(conv_w_last.unsqueeze(0).unsqueeze(0), mesh_device)  # [1, 1, 6144]
-    conv_b_tt = _rep(conv1d_bias.bfloat16().unsqueeze(0).unsqueeze(0), mesh_device)  # [1, 1, 6144]
+    conv_w_tt = _rep_keyed(
+        ("conv_w", id(conv1d_weight)), conv_w_last.bfloat16().unsqueeze(0).unsqueeze(0).contiguous(), mesh_device
+    )
+    conv_b_tt = _rep_keyed(id(conv1d_bias), conv1d_bias.bfloat16().unsqueeze(0).unsqueeze(0).contiguous(), mesh_device)
     hBC_conv_tt = ttnn.add(ttnn.mul(hBC_tt, conv_w_tt), conv_b_tt)
 
     # 5. Silu activation
@@ -99,9 +101,9 @@ def mamba2_layer_forward(
     dt_tt = ttnn.reshape(dt_slice_tt, [B, NUM_HEADS])
 
     # 8. SSM scalar weights — upload as [1, N] for tile compatibility
-    dt_bias_tt = _rep(dt_bias.bfloat16().unsqueeze(0), mesh_device)  # [1, 64]
-    A_log_tt = _rep(A_log.float().bfloat16().unsqueeze(0), mesh_device)  # [1, 64]
-    D_tt = _rep(D.float().bfloat16().unsqueeze(0), mesh_device)  # [1, 64]
+    dt_bias_tt = _rep_keyed(id(dt_bias), dt_bias.bfloat16().unsqueeze(0), mesh_device)
+    A_log_tt = _rep_keyed(id(A_log), A_log.float().bfloat16().unsqueeze(0), mesh_device)
+    D_tt = _rep_keyed(id(D), D.float().bfloat16().unsqueeze(0), mesh_device)
 
     # 9–10. S=1 SSM decode using standard TTNN ops.
     #
@@ -172,7 +174,7 @@ def mamba2_layer_forward(
     xg_normed_tt = ttnn.mul(xg_grouped_tt, ttnn.rsqrt(ttnn.add(var_tt, norm_eps)))
     xg_normed_flat_tt = ttnn.reshape(xg_normed_tt, [B, 1, INTERMEDIATE_SIZE])
 
-    norm_w_tt = _rep(norm_mixer_weight.unsqueeze(0).unsqueeze(0), mesh_device)  # [1, 1, 4096]
+    norm_w_tt = _rep_keyed(id(norm_mixer_weight), norm_mixer_weight.bfloat16().unsqueeze(0).unsqueeze(0), mesh_device)
     scan_out_tt = ttnn.mul(xg_normed_flat_tt, norm_w_tt)  # [B, 1, 4096]
 
     # 12. out_proj: [B, 1, 4096] → [B, 1, 2688]

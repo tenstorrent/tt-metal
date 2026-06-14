@@ -21,7 +21,7 @@ import torch
 import ttnn
 from ttnn import MeshDevice
 
-from .tp import _col, _rep, _row, all_reduce
+from .tp import _col, _rep_keyed, _row, all_reduce
 
 NUM_HEADS = 32
 NUM_KV_HEADS = 2
@@ -47,7 +47,7 @@ def dense_attention_forward(
     S = hidden_states.shape[1]
 
     # 1. Pre-norm (weight replicated, input already on device)
-    w_tt = _rep(norm_weight.unsqueeze(0), mesh_device)
+    w_tt = _rep_keyed(id(norm_weight), norm_weight.bfloat16().unsqueeze(0), mesh_device)
     normed_tt = ttnn.rms_norm(hidden_states, epsilon=norm_eps, weight=w_tt)
 
     # 2. Q: column-parallel → [B, S, 1024]/device (8 heads/device)

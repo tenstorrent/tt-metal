@@ -15,7 +15,7 @@ import torch
 import ttnn
 from ttnn import MeshDevice
 
-from .tp import _col, _host_rep, _rep, all_gather
+from .tp import _col, _host_rep, _rep_keyed, all_gather
 
 NORM_EPS = 1e-5
 
@@ -30,7 +30,7 @@ def lm_head_forward(
     """Returns [B, S, 131072] bfloat16 CPU (final output boundary)."""
     B = hidden_states.shape[0]
 
-    w_tt = _rep(norm_f_weight.unsqueeze(0), mesh_device)
+    w_tt = _rep_keyed(id(norm_f_weight), norm_f_weight.bfloat16().unsqueeze(0), mesh_device)
     normed_tt = ttnn.rms_norm(hidden_states, epsilon=norm_eps, weight=w_tt)
 
     wl_tt = _col(lm_head_weight, mesh_device)  # [32768, 2688]/device
@@ -49,7 +49,7 @@ def lm_head_forward_device(
     norm_eps: float = NORM_EPS,
 ) -> ttnn.Tensor:
     """Returns [B, S, 131072] bfloat16 on device (no D2H; for trace capture)."""
-    w_tt = _rep(norm_f_weight.unsqueeze(0), mesh_device)
+    w_tt = _rep_keyed(id(norm_f_weight), norm_f_weight.bfloat16().unsqueeze(0), mesh_device)
     normed_tt = ttnn.rms_norm(hidden_states, epsilon=norm_eps, weight=w_tt)
 
     wl_tt = _col(lm_head_weight, mesh_device)  # [32768, 2688]/device
