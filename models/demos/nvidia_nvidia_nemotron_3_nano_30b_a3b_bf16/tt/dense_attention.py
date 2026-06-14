@@ -21,7 +21,7 @@ import torch
 import ttnn
 from ttnn import MeshDevice
 
-from .tp import _col, _rep_keyed, _row, all_reduce
+from .tp import _col, _rep, _rep_keyed, _row, all_reduce
 
 NUM_HEADS = 32
 NUM_KV_HEADS = 2
