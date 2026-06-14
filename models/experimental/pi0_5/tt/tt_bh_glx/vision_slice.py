@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from typing import Dict, Tuple
 
+import os
 import torch
 import ttnn
 
@@ -30,7 +31,44 @@ from models.experimental.pi0_5.tt.ttnn_siglip import (
     MultiModalProjectorTTNN,
     PatchEmbeddingTTNN,
     SigLIPBlockTTNN,
+    _make_bs_memcfg,
+    _SIGLIP_BS_GRID,
+    _SIGLIP_INTERMEDIATE_PADDED,
 )
+
+
+def _glx_siglip_bs_enabled() -> bool:
+    """Opt-in block-sharded fast path for the GLX vision slices.
+
+    Each slice owns a contiguous run of layers on ONE chip, so BS can be
+    entered once at slice start and exited once before the host-bounce send.
+    The 'doesn't survive host bounce' concern in v1 only applies BETWEEN
+    slices; WITHIN a slice the 9-layer loop stays on-chip. Default OFF.
+    """
+    return os.environ.get("PI0_GLX_SIGLIP_BS", "").lower() in ("1", "true", "yes", "on")
+
+
+def _run_blocks_bs(blocks, hidden, config):
+    """Enter BS once, run all blocks via forward_bs, exit BS to L1 interleaved.
+
+    hidden: (B, num_patches, hidden) interleaved (as produced by embed slice
+    or a host-bounce recv). Returns the same 3D interleaved shape so the
+    downstream transport.send / post_ln see the v1 layout.
+    """
+    gx, gy = _SIGLIP_BS_GRID
+    b, num_patches, hidden_dim = (int(d) for d in hidden.shape)
+    total_m = b * num_patches
+    mc_hidden = _make_bs_memcfg(1, total_m, hidden_dim, gx, gy)
+    mc_qkv = _make_bs_memcfg(1, total_m, 144 * 32, gx, gy)
+    mc_attn = _make_bs_memcfg(1, total_m, 48 * 32, gx, gy)
+    mc_inter = _make_bs_memcfg(1, total_m, _SIGLIP_INTERMEDIATE_PADDED, gx, gy)
+
+    x = ttnn.reshape(hidden, (1, 1, total_m, hidden_dim))
+    x = ttnn.to_memory_config(x, mc_hidden, dtype=ttnn.bfloat16)
+    for block in blocks:
+        x = block.forward_bs(x, mc_hidden, mc_qkv, mc_attn, mc_inter, n_batch=b, n_seq=num_patches)
+    x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
+    return ttnn.reshape(x, (b, num_patches, hidden_dim))
 
 
 def _layer_weights(weights: Dict[str, torch.Tensor], layer_idx: int) -> Dict[str, torch.Tensor]:
@@ -76,7 +114,33 @@ class SigLIPEmbedSlice:
         )
 
     def forward(self, pixel_values) -> "ttnn.Tensor":
-        """pixel_values: torch (B,3,H,W) or pre-folded ttnn tensor accepted by patch_embed."""
+        """pixel_values: torch (B,3,H,W) or pre-folded ttnn tensor accepted by patch_embed.
+
+        When PI0_SIGLIP_USE_FOLD=1 and PI0_SIGLIP_FOLD_HOST_PREP=1 and a torch
+        (B,3,H,W) tensor is passed, we host-permute+reshape to the fold FAST
+        PATH layout (B, H, W/patch, C*patch) ROW_MAJOR before upload. This
+        moves the BCHW->BHWC permute + pixel untilize/reshape (tracy-measured
+        ~1.8ms on the embed chip) off-device onto the host, where it is a
+        cheap torch op overlapped with prior-stage compute.
+        """
+        if (
+            getattr(self.patch_embed, "_use_fold", False)
+            and os.environ.get("PI0_SIGLIP_FOLD_HOST_PREP", "").lower() in ("1", "true", "yes", "on")
+            and isinstance(pixel_values, torch.Tensor)
+            and pixel_values.dim() == 4
+            and int(pixel_values.shape[1]) == self.patch_embed._fold_in_channels
+        ):
+            ps = self.config.patch_size
+            B, C, H, W = (int(d) for d in pixel_values.shape)
+            # (B,C,H,W) -> (B,H,W,C) -> (B, H, W/ps, C*ps) matching _forward_fold fast path (b)
+            x = pixel_values.permute(0, 2, 3, 1).contiguous().reshape(B, H, W // ps, C * ps)
+            pixel_values = ttnn.from_torch(
+                x,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.submesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         hidden = self.patch_embed.forward(pixel_values)
         pos = ttnn.embedding(self.position_ids, self.pos_emb_weights, layout=ttnn.TILE_LAYOUT)
         return ttnn.add(hidden, pos, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -99,6 +163,8 @@ class SigLIPLayerSlice:
         self.blocks = [SigLIPBlockTTNN(config, _layer_weights(vision_weights, i), submesh) for i in range(lo, hi)]
 
     def forward(self, hidden: "ttnn.Tensor") -> "ttnn.Tensor":
+        if _glx_siglip_bs_enabled():
+            return _run_blocks_bs(self.blocks, hidden, self.config)
         for block in self.blocks:
             hidden = block.forward(hidden)
         return hidden
@@ -137,8 +203,11 @@ class SigLIPTailSlice:
         self.mm_projector = MultiModalProjectorTTNN(projector_weights, submesh)
 
     def forward(self, hidden: "ttnn.Tensor") -> "ttnn.Tensor":
-        for block in self.blocks:
-            hidden = block.forward(hidden)
+        if _glx_siglip_bs_enabled():
+            hidden = _run_blocks_bs(self.blocks, hidden, self.config)
+        else:
+            for block in self.blocks:
+                hidden = block.forward(hidden)
         hidden = ttnn.layer_norm(
             hidden,
             weight=self.post_ln_weight,

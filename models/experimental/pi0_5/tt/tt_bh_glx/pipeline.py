@@ -62,10 +62,15 @@ from ._l1_migration import (
     denoise_l1_enabled,
     migrate_denoise_weights_to_l1,
     migrate_prefill_mlp_weights_to_l1,
+    migrate_prefill_vlm_weights_to_l1,
+    migrate_siglip_weights_to_l1,
     prefill_mlp_l1_enabled,
     prefill_mlp_l1_grid,
     prefill_mlp_l1_layout,
     prefill_mlp_l1_projs,
+    prefill_vlm_l1_enabled,
+    prefill_vlm_l1_projs,
+    siglip_l1_enabled,
 )
 from .kv_migration import migrate_layer_paired
 from .stage_denoise import StageDenoise
@@ -251,6 +256,14 @@ class Pi0_5GLXPipeline:
         self._trace_id = None
         self._captured_actions = None
         self._rope_l1 = os.environ.get("PI0_ROPE_TABLES_L1", "").lower() in ("1", "true", "yes", "on")
+
+        # Opt-in: move SigLIP and VLM matmul weights to L1. These stages run once
+        # per sample (not per denoise step), so they stay gated while we measure
+        # L1 pressure and stage-latency impact.
+        if siglip_l1_enabled():
+            migrate_siglip_weights_to_l1(self.stage_vision)
+        if prefill_vlm_l1_enabled():
+            migrate_prefill_vlm_weights_to_l1(self.stage_prefill, prefill_vlm_l1_projs())
 
         # Move the static denoise-stage weights from DRAM into L1 so the N-step
         # Euler loop reads them on-chip instead of re-streaming ~93 MB/chip from

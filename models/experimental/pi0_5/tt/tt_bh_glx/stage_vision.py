@@ -65,7 +65,16 @@ class StageVision:
         copy_host_to_device_tensor on CQ 1 between calls). Torch tensor
         input is supported for eager testing; we upload it inline.
         """
-        if isinstance(pixel_values, torch.Tensor):
+        import os as _os
+
+        _fold_host_prep = getattr(self.embed_slice.patch_embed, "_use_fold", False) and _os.environ.get(
+            "PI0_SIGLIP_FOLD_HOST_PREP", ""
+        ).lower() in ("1", "true", "yes", "on")
+        if isinstance(pixel_values, torch.Tensor) and not _fold_host_prep:
+            # Default: upload as TILE BCHW; the embed slice does the on-device
+            # patch extraction. With fold host-prep active we pass the torch
+            # tensor straight through so the slice can host-permute+reshape
+            # into the fold fast-path layout before upload.
             pixel_values = ttnn.from_torch(
                 pixel_values,
                 dtype=ttnn.bfloat16,

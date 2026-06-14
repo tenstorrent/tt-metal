@@ -32,6 +32,27 @@ def denoise_l1_enabled() -> bool:
     return os.environ.get("PI0_GLX_DENOISE_L1", "1").lower() in ("1", "true", "yes", "on")
 
 
+def siglip_l1_enabled() -> bool:
+    """Whether to place GLX SigLIP matmul weights in L1. Default OFF."""
+    return os.environ.get("PI0_GLX_SIGLIP_L1", "0").lower() in ("1", "true", "yes", "on")
+
+
+def prefill_vlm_l1_enabled() -> bool:
+    """Whether to place GLX VLM block matmul weights in L1. Default OFF."""
+    return os.environ.get("PI0_GLX_PREFILL_VLM_L1", "0").lower() in ("1", "true", "yes", "on")
+
+
+def prefill_vlm_l1_projs() -> tuple:
+    """Which VLM matmul projections to place in L1.
+
+    Env PI0_GLX_PREFILL_VLM_L1_PROJ is a comma list. Defaults to every VLM
+    block matmul weight: fused attention QKV, attention output projection, and
+    MLP gate/up/down.
+    """
+    raw = os.environ.get("PI0_GLX_PREFILL_VLM_L1_PROJ", "wqkv,o_proj,gate_proj,up_proj,down_proj")
+    return tuple(p.strip() for p in raw.split(",") if p.strip())
+
+
 def prefill_mlp_l1_enabled() -> bool:
     """Whether to width-shard the prefill VLM MLP weights into L1. Default OFF.
 
@@ -99,6 +120,69 @@ def _migrate_expert_block(block) -> None:
         mlp.down_proj = _to_l1(mlp.down_proj)
     block.mod_weight = _to_l1(block.mod_weight)
     block.mod_bias = _to_l1(block.mod_bias)
+
+
+def _migrate_gemma_block_matmuls(block, projs: tuple = ("wqkv", "o_proj", "gate_proj", "up_proj", "down_proj")) -> None:
+    """Move GemmaBlockTTNN matmul weights selected by projection name to L1."""
+    attn = getattr(block, "attention", None)
+    if attn is not None:
+        if "wqkv" in projs:
+            attn.wqkv = _to_l1(attn.wqkv)
+        if "o_proj" in projs:
+            attn.o_proj = _to_l1(attn.o_proj)
+    mlp = getattr(block, "mlp", None)
+    if mlp is not None:
+        for name in ("gate_proj", "up_proj", "down_proj"):
+            if name in projs:
+                setattr(mlp, name, _to_l1(getattr(mlp, name)))
+
+
+def _migrate_siglip_block_matmuls(block) -> None:
+    """Move SigLIPBlockTTNN matmul weights and their biases to L1."""
+    attn = getattr(block, "attention", None)
+    if attn is not None:
+        attn.wqkv = _to_l1(attn.wqkv)
+        attn.bqkv = _to_l1(getattr(attn, "bqkv", None))
+        attn.wo = _to_l1(attn.wo)
+        attn.bo = _to_l1(getattr(attn, "bo", None))
+    mlp = getattr(block, "mlp", None)
+    if mlp is not None:
+        for name in ("fc1_weight", "fc1_bias", "fc2_weight", "fc2_bias"):
+            setattr(mlp, name, _to_l1(getattr(mlp, name, None)))
+
+
+def migrate_siglip_weights_to_l1(stage_vision) -> None:
+    """Move GLX SigLIP matmul weights owned by vision slices to L1.
+
+    Covers patch embedding, every SigLIP block QKV/O/MLP matmul weight, and the
+    multimodal projector. Position embeddings and layernorm tensors are not
+    matmul weights and are intentionally left unchanged.
+    """
+    embed = getattr(stage_vision, "embed_slice", None)
+    patch = getattr(embed, "patch_embed", None)
+    if patch is not None:
+        patch._linear_weight = _to_l1(getattr(patch, "_linear_weight", None))
+        patch._linear_bias = _to_l1(getattr(patch, "_linear_bias", None))
+        if getattr(patch, "_use_fold", False):
+            patch._fold_weight = _to_l1(getattr(patch, "_fold_weight", None))
+            patch._fold_bias = _to_l1(getattr(patch, "_fold_bias", None))
+
+    for slice_name in ("layer_slice_a", "layer_slice_b", "tail_slice"):
+        sl = getattr(stage_vision, slice_name, None)
+        for block in getattr(sl, "blocks", []):
+            _migrate_siglip_block_matmuls(block)
+
+    tail = getattr(stage_vision, "tail_slice", None)
+    projector = getattr(tail, "mm_projector", None)
+    if projector is not None:
+        projector.weight = _to_l1(getattr(projector, "weight", None))
+        projector.bias = _to_l1(getattr(projector, "bias", None))
+
+
+def migrate_prefill_vlm_weights_to_l1(stage_prefill, projs: tuple) -> None:
+    """Move selected GLX VLM block matmul weights into interleaved L1."""
+    for sl in getattr(stage_prefill, "slices", []):
+        _migrate_gemma_block_matmuls(sl.block, projs)
 
 
 def migrate_denoise_weights_to_l1(stage_denoise, suffix_slices, denoise_head) -> None:

@@ -79,6 +79,46 @@ def _siglip_bs_enabled() -> bool:
     return v.strip().lower() in ("1", "true", "yes", "on")
 
 
+def _fidelity_from_env(*keys: str, default: str = "2") -> "ttnn.MathFidelity":
+    """Resolve a MathFidelity from the first set env var in `keys`.
+
+    0 -> LoFi, 2 -> HiFi2, 4 -> HiFi4. bf8_b matmuls run 1 math phase at LoFi
+    vs 2 at HiFi2 (~halves matmul math); SigLIP matmul is ~51% of device time
+    (tracy-verified) so this is the top latency lever. Per-region keys let us
+    keep precision-sensitive matmuls higher while speeding robust ones.
+    """
+    val = None
+    for k in keys:
+        v = os.environ.get(k)
+        if v is not None and v.strip() != "":
+            val = v.strip()
+            break
+    if val is None:
+        val = default
+    if val == "0":
+        return ttnn.MathFidelity.LoFi
+    if val == "4":
+        return ttnn.MathFidelity.HiFi4
+    return ttnn.MathFidelity.HiFi2
+
+
+def _siglip_mm_fp32_dest() -> bool:
+    """fp32 dest accumulation for SigLIP matmuls. Default True (current).
+    PI0_SIGLIP_MM_FP32_DEST=0 disables — cheaper accumulation, viable for
+    bf8_b inputs where the extra precision rarely matters."""
+    return os.environ.get("PI0_SIGLIP_MM_FP32_DEST", "1").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _siglip_attn_fidelity() -> "ttnn.MathFidelity":
+    """QKV + O-proj matmul fidelity. PI0_SIGLIP_ATTN_HIFI overrides PI0_SIGLIP_MM_HIFI."""
+    return _fidelity_from_env("PI0_SIGLIP_ATTN_HIFI", "PI0_SIGLIP_MM_HIFI", default="2")
+
+
+def _siglip_mlp_fidelity() -> "ttnn.MathFidelity":
+    """FC1 + FC2 matmul fidelity. PI0_SIGLIP_MLP_HIFI overrides PI0_SIGLIP_MM_HIFI."""
+    return _fidelity_from_env("PI0_SIGLIP_MLP_HIFI", "PI0_SIGLIP_MM_HIFI", default="2")
+
+
 def _make_bs_memcfg(b: int, m: int, hidden: int, grid_x: int, grid_y: int) -> "ttnn.MemoryConfig":
     """Build a block-sharded L1 memcfg for an encoder-data-path tensor."""
     return ttnn.create_sharded_memory_config(
@@ -553,9 +593,9 @@ class SigLIPAttentionTTNN:
         # Compute kernel configs — HiFi2 for QKV/O linears matches tt_transformers
         # inference defaults and saves cycles on the SigLIP attention path.
         self.compute_kernel_config_hifi4 = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=_siglip_attn_fidelity(),
             math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=_siglip_mm_fp32_dest(),
             packer_l1_acc=True,
         )
         # SDPA compute kernel — env-controllable for A/B testing. See ttnn_common.py.
@@ -639,6 +679,14 @@ class SigLIPAttentionTTNN:
         # both wrong semantically and not consistent with the chunked
         # attention's intended granularity.
         q_chunk, k_chunk = sdpa_prefill_chunk_sizes(n_seq, n_seq)
+        # PI0_SIGLIP_SDPA_QCHUNK overrides q_chunk for the SigLIP prefill SDPA
+        # (Sq=Skv=256). Pure scheduling knob (no precision impact): q=64 loops
+        # 4x over query chunks; q=128/256 cuts q-loop iterations. The shared
+        # picker keeps q=64 conservative (a regression was seen at S=512), but
+        # SigLIP is S=256 — a different regime, A/B here.
+        _qc = os.environ.get("PI0_SIGLIP_SDPA_QCHUNK", "").strip()
+        if _qc.isdigit():
+            q_chunk = min(int(_qc), ((n_seq + 31) // 32) * 32)
         sdpa_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.grid_size,
             q_chunk_size=q_chunk,
@@ -918,9 +966,9 @@ class SigLIPMLPTTNN:
 
         # Compute kernel config — HiFi2 sufficient for SigLIP MLP (bf8_b weights anyway).
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=_siglip_mlp_fidelity(),
             math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=_siglip_mm_fp32_dest(),
             packer_l1_acc=True,
         )
 
