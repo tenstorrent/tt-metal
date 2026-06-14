@@ -139,3 +139,13 @@ positive confirmation.)
 the model; shrink/relocate H2D_SYNC_WORKER_CORES off the model's compute grid; or make the service's
 background sync passive/event-driven so it doesn't steal dispatch cycles during forward_chunk. Profile
 with tracy to pin which (cores vs CQ vs host dispatch thread).
+
+### Fix attempt (2026-06-14): core relocation — NEGATIVE
+Moved the H2D service's persistent receiver kernel off the model compute grid (worker core (0,0) ->
+(11,0); BH grid is 12x10, col 11 free): per-chunk UNCHANGED (~3190 vs ~3201 ms at col 0). So the
+slowdown is NOT the kernel occupying a compute core. The overhead is ~proportional to op count across
+both mla and moe => a per-dispatch / sub-device-coexistence cost of the resident service program.
+Next: tracy-profile exp 10 (standalone+FORCE_BUILD_SERVICE) vs 01a (no service) — diff per-op device
+time vs inter-op gaps — to decide between (a) separate command queue for the service, (b) sub-device
+placement that avoids per-launch re-coordination, (c) suspend the service program during forward_chunk.
+Some are H2DStreamService (C++) changes. Diagnostic knob PREFILL_H2D_WORKER_{COL,ROW} committed.
