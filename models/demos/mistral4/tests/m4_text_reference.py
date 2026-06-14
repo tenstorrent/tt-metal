@@ -60,6 +60,91 @@ def get_cached_golden(ckpt_dir, n_layers, seed, seq_len, cache_dir="/tmp"):
     return g
 
 
+def get_cached_vlm_golden(ckpt_dir, n_layers=2, seed=0, cache_dir="/tmp"):
+    """Golden for the end-to-end VLM (Mistral3ForConditionalGeneration), cached to disk.
+
+    Builds a reduced n_layer VLM (vision tower + projector + n text layers, fp8-dequantized,
+    key-remapped to the wrapper's nesting), runs it on a synthetic image+text, returns
+    {ids, px, isz, logits, merged (post-scatter text embeds), cos, sin, n_img, H, W}. Built once.
+    """
+    import os
+
+    CACHE_VER = 1
+    path = os.path.join(cache_dir, f"m4_vlm_golden_v{CACHE_VER}_{n_layers}L_s{seed}.pt")
+    if os.path.exists(path):
+        logger.info(f"VLM golden cache HIT: {path}")
+        return torch.load(path)
+    from transformers.models.mistral3.modeling_mistral3 import Mistral3ForConditionalGeneration
+
+    cfg = AutoConfig.from_pretrained(ckpt_dir)
+    cfg.text_config.num_hidden_layers = n_layers
+    pre = [
+        "vision_tower.",
+        "multi_modal_projector.",
+        "language_model.model.embed_tokens.",
+        "language_model.model.norm.",
+        "language_model.lm_head.",
+    ] + [f"language_model.model.layers.{i}." for i in range(n_layers)]
+    raw = dequantize_fp8_state_dict(load_hf_state_dict_filtered(ckpt_dir, pre))
+
+    def remap(k):  # checkpoint nesting -> Mistral3ForConditionalGeneration runtime nesting
+        if k.startswith("language_model.model."):
+            return "model.language_model." + k[len("language_model.model.") :]
+        if k.startswith("language_model.lm_head."):
+            return "lm_head." + k[len("language_model.lm_head.") :]
+        if k.startswith("vision_tower.") or k.startswith("multi_modal_projector."):
+            return "model." + k
+        return k
+
+    sd = {remap(k): v for k, v in raw.items()}
+    _prev = torch.get_default_dtype()
+    torch.set_default_dtype(torch.bfloat16)
+    try:
+        m = Mistral3ForConditionalGeneration(cfg).eval()
+    finally:
+        torch.set_default_dtype(_prev)
+    missing, _ = m.load_state_dict(sd, strict=False)
+    assert not [x for x in missing if "rotary" not in x and "inv_freq" not in x], "VLM ref missing real weights"
+
+    patch = cfg.vision_config.patch_size
+    H = W = patch * 32
+    n_img = (H // patch) * (W // patch) // (cfg.spatial_merge_size**2)
+    itok = cfg.image_token_index
+    torch.manual_seed(seed)
+    px = torch.rand(1, 3, H, W, dtype=torch.bfloat16)
+    isz = torch.tensor([[H, W]])
+    ids = torch.cat([torch.tensor([[1, 5, 9]]), torch.full((1, n_img), itok), torch.tensor([[7, 3]])], dim=1)
+    cap = {}
+    tl = m.model.language_model
+    tl.register_forward_hook(
+        lambda mod, a, kw, o: cap.__setitem__("merged", kw["inputs_embeds"].detach().float().cpu()), with_kwargs=True
+    )
+
+    def rope_hook(mod, a, kw, o):
+        if "position_embeddings" in kw:
+            c, s = kw["position_embeddings"]
+            cap["cos"], cap["sin"] = c.detach().float().cpu(), s.detach().float().cpu()
+
+    tl.layers[0].self_attn.register_forward_hook(rope_hook, with_kwargs=True)
+    with torch.no_grad():
+        out = m(input_ids=ids, pixel_values=px, image_sizes=isz)
+    golden = {
+        "ids": ids,
+        "px": px,
+        "isz": isz,
+        "logits": out.logits.detach().float().cpu(),
+        "merged": cap["merged"],
+        "cos": cap["cos"],
+        "sin": cap["sin"],
+        "n_img": n_img,
+        "H": H,
+        "W": W,
+    }
+    torch.save(golden, path)
+    logger.info(f"VLM golden cached -> {path}")
+    return golden
+
+
 def load_m4_text_reference(ckpt_dir, n_layers=1, dtype=torch.bfloat16):
     """Return an n_layer Mistral4ForCausalLM with real weights for layers [0, n_layers).
 
