@@ -3789,7 +3789,9 @@ class ModelArgs:
 
     def reference_vision_multi_modal(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.multi_modal_projector
+        # Mistral3 VLMs nest multi_modal_projector under model.model on transformers>=5 (flat on older).
+        mm_parent = model if hasattr(model, "multi_modal_projector") else model.model
+        layer = mm_parent.multi_modal_projector
         layer._load_state_dict = layer.load_state_dict
         layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
@@ -3871,8 +3873,9 @@ class ModelArgs:
     def reference_vision_model(self):
         model = self.reference_vision_transformer(wrap=False)
         if self.is_mistral3_vlm():
-            # Mistral3 VLMs (Mistral-Small-3.1-24B, Devstral-Small-2-24B) nest the Pixtral tower here
-            layer = model.vision_tower
+            # Mistral3 VLMs (Mistral-Small-3.1-24B, Devstral-Small-2-24B): Pixtral tower, nested
+            # under model.model.vision_tower on transformers>=5 (flat on older). _get_vision_tower handles both.
+            layer = self._get_vision_tower(model)
         else:
             layer = model.vision_tower.vision_model
         layer._load_state_dict = layer.load_state_dict
