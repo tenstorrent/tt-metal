@@ -323,7 +323,12 @@ jobs:
     if: ${{ !cancelled() && needs.resolve-artifacts.result == 'success' }}
     uses: ./.github/workflows/resolve-docker-pull-refs.yaml
     with:
-      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      # BH runners cannot resolve harbor.ci.tenstorrent.net via systemd-resolved.
+      # check-harbor runs on tt-ubuntu-light (different runner, working DNS) so it
+      # always reports healthy even when BH P100/P150 runners can't reach harbor.
+      # Use empty prefix so test jobs pull directly from GHCR.
+      # Tracking: MINFRA-830, MINFRA-831, GH#46994, GH#46995
+      harbor-prefix: ""
       dev-docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
 
   profiler-tests:
