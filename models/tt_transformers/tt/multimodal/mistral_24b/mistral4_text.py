@@ -107,53 +107,97 @@ class TtMistral4MLA(LightweightModule):
 
 
 class TtMistral4MoE(LightweightModule):
-    """Ungrouped top-4/128 MoE + shared SwiGLU expert. forward(x) -> [B, S, hidden]."""
+    """Ungrouped top-4/128 MoE + shared SwiGLU expert. forward(x) -> [B, S, hidden].
 
-    def __init__(self, mesh, sd, cfg):
+    shard_experts=True shards the 128 experts across the mesh (E/n_dev per device) so the full
+    36-layer model fits in DRAM; partial sums are combined with ttnn.all_reduce(Sum). The expert
+    compute (the heavy weights) stays on device; only the tiny routing matrix W is round-tripped
+    to host to expert-shard it (negligible; an all-to-all dispatch is the perf path — see #14).
+    """
+
+    def __init__(self, mesh, sd, cfg, shard_experts=False, expert_dtype=ttnn.bfloat16):
         super().__init__()
         self.mesh = mesh
         self.E = cfg.n_routed_experts
         self.k = cfg.num_experts_per_tok
         self.interm = cfg.moe_intermediate_size
+        self.hidden = cfg.hidden_size
+        self.shard = shard_experts
         self.w_gate = _lin(sd["mlp.gate.weight"], mesh)
         gup, down = sd["mlp.experts.gate_up_proj"], sd["mlp.experts.down_proj"]  # [E,2I,H],[E,H,I]
-        self.w_gup = [_lin(gup[e], mesh) for e in range(self.E)]
-        self.w_down = [_lin(down[e], mesh) for e in range(self.E)]
+        if shard_experts:
+            self.per = self.E // mesh.get_num_devices()
+            self.gup_sh = ttnn.as_tensor(
+                gup.transpose(1, 2).contiguous().to(torch.bfloat16),
+                dtype=expert_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+            )  # [per,H,2I]/device
+            self.down_sh = ttnn.as_tensor(
+                down.transpose(1, 2).contiguous().to(torch.bfloat16),
+                dtype=expert_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+            )  # [per,I,H]/device
+        else:
+            self.w_gup = [_lin(gup[e], mesh) for e in range(self.E)]
+            self.w_down = [_lin(down[e], mesh) for e in range(self.E)]
         self.w_sg = _lin(sd["mlp.shared_experts.gate_proj.weight"], mesh)
         self.w_su = _lin(sd["mlp.shared_experts.up_proj.weight"], mesh)
         self.w_sd = _lin(sd["mlp.shared_experts.down_proj.weight"], mesh)
 
-    def forward(self, x):
-        B, S = x.shape[0], x.shape[1]
-        # routing: softmax -> kth-largest threshold mask -> normalize (no scatter)
+    def _route(self, x, B, S):
+        # softmax -> kth-largest threshold mask -> normalize (no scatter); W replicated [B,S,E]
         probs = ttnn.softmax(ttnn.linear(x, self.w_gate), dim=-1)
         kth = ttnn.slice(ttnn.topk(probs, self.k, dim=-1)[0], [0, 0, self.k - 1], [B, S, self.k])
         masked = ttnn.mul(probs, ttnn.ge(probs, kth))
-        W = ttnn.div(masked, ttnn.sum(masked, dim=-1, keepdim=True))
-        # dense weighted experts (SwiGLU)
-        acc = None
-        for e in range(self.E):
-            gu = ttnn.linear(x, self.w_gup[e])
-            g = ttnn.slice(gu, [0, 0, 0], [B, S, self.interm])
-            u = ttnn.slice(gu, [0, 0, self.interm], [B, S, 2 * self.interm])
-            y = ttnn.linear(ttnn.mul(ttnn.silu(g), u), self.w_down[e])
-            contrib = ttnn.mul(y, ttnn.slice(W, [0, 0, e], [B, S, e + 1]))
-            acc = contrib if acc is None else ttnn.add(acc, contrib)
-        # shared expert
+        return ttnn.div(masked, ttnn.sum(masked, dim=-1, keepdim=True))
+
+    def forward(self, x):
+        B, S, I, H = x.shape[0], x.shape[1], self.interm, self.hidden
+        W = self._route(x, B, S)
+        if self.shard:
+            # expert-shard the tiny routing matrix (host round-trip; see class docstring / #14)
+            W_host = ttnn.to_torch(W, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0))[:B]
+            W_sh = ttnn.from_torch(
+                W_host, layout=ttnn.TILE_LAYOUT, device=self.mesh, mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=-1)
+            )
+            acc = None
+            for i in range(self.per):
+                gu = ttnn.linear(x, ttnn.reshape(ttnn.slice(self.gup_sh, [i, 0, 0], [i + 1, H, 2 * I]), (H, 2 * I)))
+                h = ttnn.mul(ttnn.silu(ttnn.slice(gu, [0, 0, 0], [B, S, I])), ttnn.slice(gu, [0, 0, I], [B, S, 2 * I]))
+                y = ttnn.linear(h, ttnn.reshape(ttnn.slice(self.down_sh, [i, 0, 0], [i + 1, I, H]), (I, H)))
+                contrib = ttnn.mul(y, ttnn.slice(W_sh, [0, 0, i], [B, S, i + 1]))
+                acc = contrib if acc is None else ttnn.add(acc, contrib)
+            experts = ttnn.all_reduce(acc)
+        else:
+            acc = None
+            for e in range(self.E):
+                gu = ttnn.linear(x, self.w_gup[e])
+                g = ttnn.slice(gu, [0, 0, 0], [B, S, I])
+                u = ttnn.slice(gu, [0, 0, I], [B, S, 2 * I])
+                y = ttnn.linear(ttnn.mul(ttnn.silu(g), u), self.w_down[e])
+                contrib = ttnn.mul(y, ttnn.slice(W, [0, 0, e], [B, S, e + 1]))
+                acc = contrib if acc is None else ttnn.add(acc, contrib)
+            experts = acc
         sh = ttnn.linear(ttnn.mul(ttnn.silu(ttnn.linear(x, self.w_sg)), ttnn.linear(x, self.w_su)), self.w_sd)
-        return ttnn.add(acc, sh)
+        return ttnn.add(experts, sh)
 
 
 class TtMistral4DecoderLayer(LightweightModule):
     """input_layernorm -> MLA -> +residual -> post_attention_layernorm -> MoE -> +residual."""
 
-    def __init__(self, mesh, sd, cfg, eps):
+    def __init__(self, mesh, sd, cfg, eps, shard_experts=False):
         super().__init__()
         self.eps = eps
         self.w_in = _norm(sd["input_layernorm.weight"], mesh)
         self.w_post = _norm(sd["post_attention_layernorm.weight"], mesh)
         self.mla = TtMistral4MLA(mesh, sd, cfg, eps)
-        self.moe = TtMistral4MoE(mesh, sd, cfg)
+        self.moe = TtMistral4MoE(mesh, sd, cfg, shard_experts=shard_experts)
 
     def forward(self, x, cos, sin):
         h = ttnn.add(x, self.mla(ttnn.rms_norm(x, epsilon=self.eps, weight=self.w_in), cos, sin))
@@ -168,14 +212,14 @@ class TtMistral4TextModel(LightweightModule):
     (``model.layers.{i}.*``, ``model.norm.weight``, ``lm_head.weight``).
     """
 
-    def __init__(self, mesh, sd, cfg, n_layers, eps):
+    def __init__(self, mesh, sd, cfg, n_layers, eps, shard_experts=False):
         super().__init__()
         self.eps = eps
         self.layers = []
         for i in range(n_layers):
             pfx = f"model.layers.{i}."
             layer_sd = {k[len(pfx) :]: v for k, v in sd.items() if k.startswith(pfx)}
-            self.layers.append(TtMistral4DecoderLayer(mesh, layer_sd, cfg, eps))
+            self.layers.append(TtMistral4DecoderLayer(mesh, layer_sd, cfg, eps, shard_experts=shard_experts))
         self.w_norm = _norm(sd["model.norm.weight"], mesh)
         self.w_lm = _lin(sd["lm_head.weight"], mesh)
 

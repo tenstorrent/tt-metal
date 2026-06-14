@@ -19,7 +19,8 @@ from models.common.utility_functions import comp_pcc
 from models.tt_transformers.tests.multimodal.mistral_24b.m4_text_reference import capture_golden, load_m4_text_reference
 from models.tt_transformers.tt.multimodal.mistral_24b.mistral4_text import TtMistral4TextModel
 
-N_LAYERS = 2
+N_LAYERS = int(os.environ.get("M4_N_LAYERS", "2"))
+SHARD = os.environ.get("M4_SHARD", "0") == "1"
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
@@ -40,7 +41,8 @@ def test_m4_text_model_logits(mesh_device, reset_seeds):
     sd = {k: v for k, v in model.named_parameters()}  # model.* + lm_head.*
     B, S, rope = ids.shape[0], ids.shape[1], cfg.qk_rope_head_dim
 
-    tt_model = TtMistral4TextModel(mesh_device, sd, cfg, N_LAYERS, cfg.rms_norm_eps)
+    tt_model = TtMistral4TextModel(mesh_device, sd, cfg, N_LAYERS, cfg.rms_norm_eps, shard_experts=SHARD)
+    logger.info(f"text model: N_LAYERS={N_LAYERS} shard_experts={SHARD}")
 
     # embedding: host row-gather (trivial lookup) -> device
     embed = model.model.embed_tokens.weight.detach()[ids]  # [B,S,hidden]
