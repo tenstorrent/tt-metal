@@ -118,6 +118,22 @@ class TtMistral4MLA(LightweightModule):
         )
         return [mk(), mk()]  # [k_cache, v_cache]
 
+    def forward_prefill(self, x, cos, sin, kv_cache):
+        """Prefill: full causal attention over the prompt AND populate the KV cache (positions
+        0..S-1) so decode can continue. Same math as forward(); adds the cache fill per user."""
+        B, S = x.shape[0], x.shape[1]
+        q_states, k_states, value = self._qkv(x, cos, sin)  # [B,H,S,qk]
+        for b in range(B):
+            kf = k_states if B == 1 else ttnn.slice(k_states, [b, 0, 0, 0], [b + 1, self.H, S, self.qk])
+            vf = value if B == 1 else ttnn.slice(value, [b, 0, 0, 0], [b + 1, self.H, S, self.qk])
+            ttnn.fill_cache(kv_cache[0], kf, b)
+            ttnn.fill_cache(kv_cache[1], vf, b)
+        attn = ttnn.transformer.scaled_dot_product_attention(
+            q_states, k_states, value, is_causal=True, scale=self.scale
+        )
+        attn = ttnn.reshape(ttnn.transpose(attn, 1, 2), (B, S, -1))
+        return ttnn.linear(attn, self.w_o)
+
     def forward_decode(self, x, cur_pos, cos, sin, kv_cache):
         """Single-token decode: x [B,1,hidden], cur_pos int. Writes k/v to kv_cache at cur_pos and
         runs flash-decode over the cached sequence. Expanded-k/v cache => standard decode op."""
@@ -251,6 +267,12 @@ class TtMistral4DecoderLayer(LightweightModule):
         )
         return ttnn.add(h, self.moe(ttnn.rms_norm(h, epsilon=self.eps, weight=self.w_post)))
 
+    def forward_prefill(self, x, cos, sin, kv_cache):
+        h = ttnn.add(
+            x, self.mla.forward_prefill(ttnn.rms_norm(x, epsilon=self.eps, weight=self.w_in), cos, sin, kv_cache)
+        )
+        return ttnn.add(h, self.moe(ttnn.rms_norm(h, epsilon=self.eps, weight=self.w_post)))
+
 
 class TtMistral4TextModel(LightweightModule):
     """Stacked decoder layers + final norm + LM head. forward(embedded_hidden, cos, sin) -> logits.
@@ -281,6 +303,12 @@ class TtMistral4TextModel(LightweightModule):
 
     def init_kv_caches(self, batch, max_seq):
         return [layer.mla.init_kv_cache(batch, max_seq) for layer in self.layers]
+
+    def forward_prefill(self, hidden, cos, sin, kv_caches):
+        for layer, kv in zip(self.layers, kv_caches):
+            hidden = layer.forward_prefill(hidden, cos, sin, kv)
+        hidden = ttnn.rms_norm(hidden, epsilon=self.eps, weight=self.w_norm)
+        return ttnn.linear(hidden, self.w_lm)
 
     def forward_decode(self, hidden, cur_pos, cos, sin, kv_caches):
         for layer, kv in zip(self.layers, kv_caches):
