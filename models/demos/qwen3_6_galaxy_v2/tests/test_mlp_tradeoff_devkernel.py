@@ -82,9 +82,10 @@ def test_mlp_tradeoff_devkernel(bh_glx_mesh):
         # actual current implementation, not a hand-rebuild. FUSE_RS_MATMUL=1 is set above.
         os.environ["QWEN36_FUSE_RS_MATMUL"] = "1"
         block = model.layers[0]
-        # ff_in: col-sharded [1,1,32,dim_per_tp=1280] DRAM (what the decoder feeds _mlp_decode_qwen36;
-        # the branch reshards it to the ring layout internally).
-        x = torch.randn(1, 1, M, args.dim_per_tp) * 0.5
+        # ff_in: col-sharded so each chip holds dim_per_tp=1280 (= dim 5120 / 4 cols). Feed the
+        # full dim=5120 and shard the last dim across the 4 cols -> 1280/chip (what the decoder
+        # feeds _mlp_decode_qwen36; the branch reshards it to the ring layout internally).
+        x = torch.randn(1, 1, M, args.dim) * 0.5
         x_t = ttnn.from_torch(
             x,
             device=mesh,
