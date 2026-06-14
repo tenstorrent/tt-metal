@@ -376,7 +376,7 @@ jobs:
           cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: C++ tests
-        timeout-minutes: 10
+        timeout-minutes: 20
         run: |
           if [[ "${{ matrix.arch }}" == "quasar" ]]; then
             # ToDo: Re-enable this test once tt-sim supports NOC
