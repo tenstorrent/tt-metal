@@ -460,6 +460,21 @@ git commit -m "Qwen3.6 VLM serving: server-vs-demo MM parity tests (token expans
 - [ ] **Step 4: Text-only request** still returns " Paris." (regression guard).
 - [ ] **Step 5: Confirm** `tt-smi -r` not needed between requests. Document curl commands + outputs in `QWEN36_SERVING.md`.
 
+## Phase F — Profiling (video pipeline + prefill + decode) [user-requested]
+
+Profile the three VL stages now that the demo works (CLAUDE.md Phase 5). Tracy MUST be traced;
+use `--op-support-count 20000` and a `1e9` wrap cutoff (memory `qwen36-profiling-must-be-traced`).
+Harness: extend `demo/mm_perf_qwen36.py` (server-path perf) to accept video, then Tracy + `aggregate_tracy_csv.py`.
+
+### Task F1: Video perf harness (wall-clock stage timing)
+- [ ] Extend `mm_perf_qwen36.py` with a `QWEN36_MM_VIDEO` branch (reuse `mmgen.prepare_inputs(prompt, videos=[...])` from the now-working video path). Report the same three timings for video: **vision encoder + preproc** (`t_vision`), **prefill TTFT** (cold + warm), **decode** (traced, on-device sample → ms/tok + tok/s).
+- [ ] Run on HW with sampling; record the numbers. Commit.
+
+### Task F2: Tracy device-kernel profiling per stage
+- [ ] Run `mm_perf_qwen36.py` (video) under `python -m tracy -p -v -r ... --op-support-count 20000` (traced), for each stage: (a) **vision pipeline** (27-layer encoder + patch merger), (b) **prefill**, (c) **decode**. Produce per-op device-kernel CSV via `aggregate_tracy_csv.py` → xlsx.
+- [ ] Identify the **dominant bottleneck per stage** (e.g. vision attn vs MLP; prefill matmul vs CCL; decode CCL count per `qwen36-decode-ccl-count-lever`). Note the host-splice roundtrip cost (motivates the on-device splice already prototyped).
+- [ ] Document in `PERF.md` (a `VL-PERF` section) + `BRINGUP_LOG.md`: per-stage latency, tok/s, dominant ops, and a GPU/reference comparison if available.
+
 ### Task E3: Eval suite + docs
 
 - [ ] **Step 1: Run** the VLM/multi-video eval suite (mirror the molmo2 `evals/eval_config.py` image/video entries) and record accuracy.
