@@ -119,7 +119,7 @@ void kernel_main() {
             invalidate_l1_cache();
         } while (dest_info_ptr->num_tensors == 0);
         DPRINT("Received destination tensor info from receiver\n");
-
+        update_socket_config(sender_socket);
     } else {
         DPRINT("Destination tensor info already received from receiver\n");
     }
@@ -128,13 +128,13 @@ void kernel_main() {
     // the local copy (the ring of receive-buffer base addresses lives in dest_info.base_addr).
     volatile OutputTensorInfo* dest_info = reinterpret_cast<volatile tt_l1_ptr OutputTensorInfo*>(handshake_base_addr);
     DPRINT("num_output_buffers = {}\n", dest_info->num_tensors);
-    uint32_t output_base_addr = dest_info->base_addr[dest_info->write_index];
+    uint32_t output_base_addr = dest_info->base_addr[dest_info->write_index[0]];
 
-    DPRINT("Writing to output tensor index {}\n", dest_info->write_index);
+    DPRINT("Writing to output tensor index {}\n", dest_info->write_index[0]);
 
-    dest_info->write_index = (dest_info->write_index + 1) % dest_info->num_tensors;
+    dest_info->write_index[0] = (dest_info->write_index[0] + 1) % dest_info->num_tensors;
 
-    DPRINT("Updated write index to {}\n", dest_info->write_index);
+    DPRINT("Updated write index to {}\n", dest_info->write_index[0]);
 
     auto output_addr_gen_args = TensorAccessorArgs<output_args_cta_idx, output_args_crta_idx>();
     auto output_addr_gen = TensorAccessor(output_addr_gen_args, output_base_addr, output_page_size);
@@ -192,14 +192,21 @@ void kernel_main() {
         }
     }
     DPRINT("Streamed pages directly into the receiver's (first) output tensor\n");
+    dest_info->read_index[0] = dest_info->read_index[0] % dest_info->num_tensors;
+    DPRINT("On sender: Write Index = {}, Read Index = {}\n", dest_info->write_index[0], dest_info->read_index[0]);
+
     //////////////////////////////////////////////////
     // STEP 4: push a single completion page onto the socket
     //////////////////////////////////////////////////
-    socket_reserve_pages(sender_socket, 1);
-    socket_push_pages(sender_socket, 1);
-    fabric_socket_notify_receiver(sender_socket, fabric_connection, socket_packet_header_addr);
-    DPRINT("Sent completion page to receiver\n");
-    update_socket_config(sender_socket);
+    uint32_t write_l1_addr = dest_info->receiver_config_l1_addr + offsetof(OutputTensorInfo, write_index);
+    DPRINT("Incrementing addr {}\n", write_l1_addr);
+    uint64_t write_noc_addr =
+        get_noc_addr(downstream_enc.d2d.downstream_noc_x, downstream_enc.d2d.downstream_noc_y, write_l1_addr);
+    fabric_set_unicast_route(socket_packet_header_addr, downstream_enc);
+    socket_packet_header_addr->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{write_noc_addr, 1});
+    fabric_connection.wait_for_empty_write_slot();
+    fabric_connection.send_payload_flush_blocking_from_address(
+        (uint32_t)socket_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
     fabric_connection.close();
     DPRINT("Closed fabric connection\n");
 }

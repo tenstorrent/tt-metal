@@ -160,7 +160,7 @@ BufferedSendMeshWorkloadFactory::create_at(
     // reuse and is not aliased by the data CBs, which the buffered ring relies on. Sharded one page
     // per sender core (HEIGHT_SHARDED) so every sender core sees the struct at the same L1 address,
     // mirroring how GlobalSemaphore allocates its persistent L1_SMALL buffer.
-    uint32_t info_buffer_page_size = 2 * handshake_page_size;
+    uint32_t info_buffer_page_size = 16 * sizeof(uint32_t);
     auto info_shard_parameters = tt::tt_metal::ShardSpecBuffer(
         sender_core_range_set, {1, 1}, tt::tt_metal::ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
     tt::tt_metal::ShardedBufferConfig info_buffer_config = {

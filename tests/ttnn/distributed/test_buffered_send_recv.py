@@ -79,19 +79,18 @@ def _run_buffered_send_recv_case(
     output_tensors = [
         ttnn.allocate_tensor_on_device(input_tensor.spec, receiver_mesh_device) for _ in range(num_buffers)
     ]
-
-    for x in range(10):
-        print("Running buffered_send")
+    ttnn.experimental.buffered_send(input_tensor, send_socket)
+    output_tensor = ttnn.experimental.buffered_recv(output_tensors, recv_socket)
+    ttnn.synchronize_device(sender_mesh_device)
+    ttnn.synchronize_device(receiver_mesh_device)
+    print("Synchronized devices")
+    for x in range(3):
         ttnn.experimental.buffered_send(input_tensor, send_socket)
-        print("Running buffered_recv")
-        # buffered_recv returns a single tensor (the receive buffer that holds the data). Buffer
-        # availability is coordinated by an internal, zero-initialized persistent L1_SMALL buffer.
-        output_tensor = ttnn.experimental.buffered_recv(output_tensors, recv_socket)
-        print("Synchronizing devices")
         ttnn.synchronize_device(sender_mesh_device)
-        print("Finished synchronizing sender")
+    for x in range(3):
+        output_tensor = ttnn.experimental.buffered_recv(output_tensors, recv_socket)
         ttnn.synchronize_device(receiver_mesh_device)
-        print("Finished synchronizing receiver")
+        print("Synchronized devices")
     input_data = ttnn.to_torch(input_tensor, mesh_composer=ttnn.ConcatMeshToTensor(sender_mesh_device, dim=0))
     # SKELETON: only the first receive buffer is wired up for now.
     output_data = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(receiver_mesh_device, dim=0))

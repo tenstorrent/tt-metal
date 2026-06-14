@@ -104,10 +104,10 @@ void kernel_main() {
         output_tensor_info->num_tensors = num_output_tensors;
         output_tensor_info->page_size = output_page_size;
         output_tensor_info->num_pages = num_pages;
-        output_tensor_info->write_index = 0;
-        output_tensor_info->read_index = 0;
-        output_tensor_info->sender_config_l1_addr[0] = sender_handshake_addr;
-        output_tensor_info->receiver_config_l1_addr[0] = coordination_buffer_addr;
+        output_tensor_info->write_index[0] = 0;
+        output_tensor_info->read_index[0] = 0;
+        output_tensor_info->sender_config_l1_addr = sender_handshake_addr;
+        output_tensor_info->receiver_config_l1_addr = coordination_buffer_addr;
         for (uint32_t i = 0; i < num_output_tensors; ++i) {
             output_tensor_info->base_addr[i] = output_base_addrs[i];
         }
@@ -123,15 +123,33 @@ void kernel_main() {
             (uint32_t)socket_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
 
         DPRINT("Wrote destination tensor info to sender's handshake buffer at address {}\n", sender_handshake_addr);
+        update_socket_config(receiver_socket);
     }
     //////////////////////////////////////////////////
     // STEP 3: wait for the completion token from the sender
     //////////////////////////////////////////////////
-    socket_wait_for_pages(receiver_socket, 1);
-    socket_pop_pages(receiver_socket, 1);
-    fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
-    DPRINT("Received completion token from sender\n");
-    update_socket_config(receiver_socket);
+    DPRINT(
+        "Write Index addr = {}, Read Index addr = {}\n",
+        (uint32_t)output_tensor_info->write_index,
+        (uint32_t)output_tensor_info->read_index);
+    DPRINT(
+        "On receiver: Write Index = {}, Read Index = {}\n",
+        output_tensor_info->write_index[0],
+        output_tensor_info->read_index[0]);
+    do {
+        invalidate_l1_cache();
+    } while (output_tensor_info->read_index[0] == output_tensor_info->write_index[0]);
+    output_tensor_info->read_index[0] = (output_tensor_info->read_index[0] + 1) % output_tensor_info->num_tensors;
+    output_tensor_info->write_index[0] = output_tensor_info->write_index[0] % output_tensor_info->num_tensors;
+
+    uint32_t write_l1_addr = output_tensor_info->sender_config_l1_addr + offsetof(OutputTensorInfo, read_index);
+    uint64_t write_noc_addr =
+        get_noc_addr(receiver_socket.d2d.upstream_noc_x, receiver_socket.d2d.upstream_noc_y, write_l1_addr);
+    fabric_set_unicast_route(socket_packet_header_addr, receiver_socket);
+    socket_packet_header_addr->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{write_noc_addr, 1});
+    fabric_connection.wait_for_empty_write_slot();
+    fabric_connection.send_payload_flush_blocking_from_address(
+        (uint32_t)socket_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
     fabric_connection.close();
     DPRINT("Closed fabric connection\n");
 }
