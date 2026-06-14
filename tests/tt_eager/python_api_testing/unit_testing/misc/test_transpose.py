@@ -1423,8 +1423,9 @@ def test_transpose_preserves_col_major_orientation_on_fallback_generated_shard_s
     tt_output_tensor = ttnn.transpose(tt_input_tensor, 2, 3, memory_config=output_memory_config)
 
     output_shard_spec = tt_output_tensor.memory_config().shard_spec()
+    expected_orientation = input_memory_config.shard_spec().orientation
     assert output_shard_spec is not None
-    assert output_shard_spec.orientation == ttnn.ShardOrientation.COL_MAJOR
+    assert output_shard_spec.orientation == expected_orientation
 
 
 @pytest.mark.parametrize(["dim0", "dim1"], [(2, 3), (2, 1), (0, 1)], ids=["wh", "hc", "cn"])
