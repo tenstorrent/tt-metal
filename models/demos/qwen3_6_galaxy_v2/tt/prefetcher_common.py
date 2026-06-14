@@ -12,6 +12,41 @@ from models.demos.llama3_70b_galaxy.tt.model_config import get_core_ranges
 global_tt_tensor_address = None
 
 
+def get_bh_ring40_prefetcher_mapping():
+    """Receiver-mapping override for a RING-40 prefetcher on Blackhole.
+
+    qwen3.6's decode MLP uses a 40-core ring (K=1280=40 tiles -> 1 tile/core,
+    N=2176->2560, +18% pad — vs ring-24's K 1280->1536 AND N 2176->3840). The BH
+    prefetcher's default layout can't do ring-40 as 8 banks * 5 receivers (5 not
+    legal; receiver cols spill off the 12-wide grid). It IS reachable as
+    **4 banks * 10 receivers** (10 is legal): use the 4 LEFT DRAM-bank senders
+    (col 0, rows from bank_ordered_y_coords.left) and place 10 receivers along
+    each sender's row across cols 1-10. 40 distinct in-grid cores, disjoint from
+    the col-0 senders, uniform 10/sender (global_cb requires uniform).
+
+    Returns {(sender_x, sender_y): [(rx, ry), ...]} for create_global_cb /
+    PrefetcherCoreConfig(receiver_mapping_override=...).
+
+    NOTE: only the 4 left DRAM banks act as readers (half the bank parallelism);
+    whether 4-bank streaming still hides the weight read behind the 40-core matmul
+    is a device-kernel question. Geometry is verified (CPU); the ring-matmul over
+    these 40 cores (mm_optimised_ring_cores order) is the device-validation step.
+    """
+    from models.tt_transformers.tt.prefetcher import ARCH_CONFIG
+
+    cfg = ARCH_CONFIG["blackhole"]
+    GX = 12  # BH compute grid is 12 wide (cols 0-11)
+    NUM_BANKS, NUM_RECV = 4, 10  # 4 * 10 = ring-40
+    left_col = cfg["sender_cols"]["left"]  # 0
+    left_rows = cfg["bank_ordered_y_coords"]["left"][:NUM_BANKS]  # [9,1,7,3]
+    recv_cols = [x for x in range(GX) if x != left_col][:NUM_RECV]  # cols 1..10
+
+    mapping = {}
+    for sy in left_rows:
+        mapping[(left_col, sy)] = [(cx, sy) for cx in recv_cols]
+    return mapping
+
+
 def get_bh_prefetcher_core_ranges(num_global_cb_receivers=2):
     """Blackhole 8-DRAM-bank prefetcher core layout.
 
