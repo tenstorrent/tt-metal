@@ -417,10 +417,21 @@ def validate_kv_migration(
     pairs: list[tuple[int, int]] | None = None,
     positions: int = 32,
     result_file: str | None = None,
+    golden_pt: str | None = None,
+    golden_pcc: float = 0.88,
 ) -> bool | None:
-    """Pull the KV cache to host and byte-compare src_slot vs dst_slot over
-    positions [0, positions). Returns True on MATCH, False on MISMATCH, None
-    on non-KV ranks.
+    """Pull the KV cache to host and validate it. Returns True on PASS, False on
+    FAIL, None on non-KV ranks.
+
+    Two modes:
+      * default (golden_pt None) — byte-compare src_slot vs dst_slot over
+        positions [0, positions) for each (src, dst) in `pairs` (loopback test).
+      * golden_pt set — a comma-separated list of .pt files, ONE per user/slot in
+        slot order. Each KV-owning rank PCC-compares slot s's KV (this rank's layer)
+        against golden[s]'s `ref_kvpe_list[layer]`, nope/pe separately (layer score =
+        min), and writes per-(layer,slot) lines to <done_file>.golden_layer<L>.result.
+        get_kv_cache_host() returns NATURAL order + the migration is position-aligned,
+        so no de-permute is applied here (see memory project_kv_golden_validation).
 
     MUST be called AFTER pipeline teardown (persistent slow-dispatch kernels
     stopped) — get_kv_cache_host needs a fast-dispatch context which is only
@@ -437,6 +448,56 @@ def validate_kv_migration(
         logger.error("[migration-validate] get_kv_cache_host returned None")
         return False
     import torch
+
+    # ---- Golden-PCC mode: this rank's migrated KV vs the on-disk golden -----------
+    if golden_pt is not None:
+        from models.common.utility_functions import comp_pcc
+
+        layer = pipeline.layer_idx()
+        if layer is None:
+            # owns KV but reports no decoder layer index — can't map to a golden layer.
+            logger.warning("[migration-validate-golden] KV rank has no layer_idx; skipping golden compare")
+            return None
+        golden_paths = [p for p in golden_pt.split(",") if p]
+        kvpe = int(kv.shape[3])
+        kv_lora = kvpe - 64  # qk_rope_head_dim = 64; nope = kv_lora_rank (512 for DeepSeek)
+        all_ok = True
+        result_lines = []
+        for s, gp in enumerate(golden_paths):
+            try:
+                ref_list = torch.load(gp, map_location="cpu", weights_only=True, mmap=True)["ref_kvpe_list"]
+            except Exception as e:  # noqa: BLE001 — surface any load/format error as a FAIL
+                logger.error("[migration-validate-golden] slot{} failed to load golden {}: {}", s, gp, e)
+                all_ok = False
+                continue
+            if layer >= len(ref_list):
+                logger.error("[migration-validate-golden] layer {} >= golden layers {} ({})", layer, len(ref_list), gp)
+                all_ok = False
+                continue
+            ref_layer = ref_list[layer]
+            n = min(int(positions), int(kv.shape[2]), int(ref_layer.shape[2]))
+            # NATURAL order both sides (get_kv_cache_host de-permutes; the kvpe channel dim is
+            # untouched). pe (RoPE, [kv_lora:]) compared DIRECTLY — no HF->Meta re-interleave: the
+            # .pt is already in the device rotary basis and the migration byte-copies it (see
+            # memory project_kv_golden_validation). bf8_b on device -> PCC; nope/pe min = score.
+            dev = kv[s, 0, :n, :].to(torch.float32)
+            ref = ref_layer[0, 0, :n, :].to(torch.float32)
+            _, pcc_nope = comp_pcc(ref[:, :kv_lora], dev[:, :kv_lora], pcc=golden_pcc)
+            _, pcc_pe = comp_pcc(ref[:, kv_lora:], dev[:, kv_lora:], pcc=golden_pcc)
+            pcc_nope, pcc_pe = float(pcc_nope), float(pcc_pe)
+            layer_pcc = min(pcc_nope, pcc_pe)
+            ok = layer_pcc >= golden_pcc
+            all_ok = all_ok and ok
+            msg = (
+                f"layer{layer} slot{s} positions[0,{n}): {'PASS' if ok else 'FAIL'} "
+                f"pcc_nope={pcc_nope:.6f} pcc_pe={pcc_pe:.6f} min={layer_pcc:.6f} threshold={golden_pcc}"
+            )
+            logger.info("[migration-validate-golden] {}", msg)
+            result_lines.append(msg)
+        golden_out = result_file or f"{done_file}.golden_layer{layer}.result"
+        with open(golden_out, "w") as f:
+            f.write("\n".join(result_lines) + "\n")
+        return all_ok
 
     # Per-slot stats over the compared window.
     for s in range(kv.shape[0]):

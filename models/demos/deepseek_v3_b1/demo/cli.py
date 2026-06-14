@@ -223,6 +223,21 @@ def create_parser() -> argparse.ArgumentParser:
         "test after its slot 0->1 migration) and then pulls the KV cache to host and "
         "byte-compares slot 0 vs slot 1. Result written to <file>.result.",
     )
+    parser.add_argument(
+        "--migration-validate-golden-pt",
+        type=str,
+        default=None,
+        help="When set (with --migration-done-file), validate the migrated KV against on-disk "
+        "golden .pt(s) instead of slot-vs-slot. Comma-separated list, ONE .pt per user/slot in slot "
+        "order; each KV-owning rank PCC-compares slot s's KV vs golden[s]'s ref_kvpe_list[layer] over "
+        "positions [0, --migration-validate-positions). Per-(layer,slot) result: <file>.golden_layer<L>.result.",
+    )
+    parser.add_argument(
+        "--migration-validate-golden-pcc",
+        type=float,
+        default=0.88,
+        help="Per-layer PCC pass threshold for golden validation (default 0.88; KV is bf8_b on device).",
+    )
 
     return parser
 
@@ -260,9 +275,22 @@ def run_demo(
     num_decoder_stages: int = 1,
     migration_done_file: str | None = None,
     migration_validate_positions: int = 32,
+    migration_validate_golden_pt: str | None = None,
+    migration_validate_golden_pcc: float = 0.88,
 ) -> None:
     """Run the pod pipeline. Requires 4, 16, or 64 distributed processes."""
     configure_runtime_env(enable_sram_hot_experts=enable_sram_hot_experts)
+
+    # Clear any STALE migration DONE sentinel up front — BEFORE the pipeline is built /
+    # WORKER_READY, so it cannot race a fresh sentinel the scheduler driver writes later.
+    # Otherwise the launch-only wait below short-circuits on a leftover from a prior run and
+    # the model tears down + validates immediately (before any migration has happened).
+    if migration_done_file:
+        try:
+            os.remove(migration_done_file)
+            logger.info("Cleared stale migration DONE sentinel {}", migration_done_file)
+        except FileNotFoundError:
+            pass
 
     from models.demos.deepseek_v3_b1.demo.mesh_device_context import open_mesh_device
     from models.demos.deepseek_v3_b1.demo.model_pipeline import ModelPipeline
@@ -361,6 +389,8 @@ def run_demo(
                 mesh_device,
                 done_file=migration_done_file,
                 positions=migration_validate_positions,
+                golden_pt=migration_validate_golden_pt,
+                golden_pcc=migration_validate_golden_pcc,
             )
         else:
             logger.info("Pod pipeline complete - terminating now...")
@@ -449,6 +479,8 @@ def main(argv: list[str] | None = None) -> int:
         on_kv_cache_ready=on_kv_cache_ready,
         migration_done_file=args.migration_done_file,
         migration_validate_positions=args.migration_validate_positions,
+        migration_validate_golden_pt=args.migration_validate_golden_pt,
+        migration_validate_golden_pcc=args.migration_validate_golden_pcc,
     )
     print(end="", file=sys.stdout, flush=True)
     return 0
