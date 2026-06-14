@@ -24,12 +24,17 @@ TOP_K = 6
 HIDDEN_SIZE = 2688
 MOE_INTERMEDIATE = 1856
 
-# Blackhole BH has an 8×8 usable Tensix grid.  These core-grid choices and
-# in0_block_w values are derived from the dimensions:
+# Blackhole BH has an 8×8 usable Tensix grid.  Core-grid constraints for
+# MatmulMultiCoreReuseMultiCast1DProgramConfig (decode S=1):
+#   The kernel asserts num_cores_with_work == in0_mcast_receiver_num_cores, so
+#   ceil(Nt / per_core_N) == num_cores must hold exactly.
+#
 #   up:   [tokens, 2688] × [2688, 1856]  →  Nt=58, Kt=84
+#     (5,4)=20 cores → per_core_N=ceil(58/20)=3, ceil(58/3)=20 ✓
 #   down: [tokens, 1856] × [1856, 2688]  →  Nt=84, Kt=58
-_UP_CORES = (5, 6)  # 30 cores  →  per_core_N = ceil(58/30) = 2
-_DOWN_CORES = (5, 6)  # 30 cores  →  per_core_N = ceil(84/30) = 3
+#     (7,6)=42 cores → per_core_N=ceil(84/42)=2, ceil(84/2)=42 ✓
+_UP_CORES = (5, 4)  # 20 cores
+_DOWN_CORES = (7, 6)  # 42 cores
 _UP_IN0_BLOCK_W = 7  # divides Kt=84
 _DOWN_IN0_BLOCK_W = 2  # divides Kt=58
 
@@ -77,7 +82,7 @@ def moe_experts_forward(
     sparsity = ttnn.to_layout(ttnn.unsqueeze_to_4D(routing_weights), ttnn.ROW_MAJOR_LAYOUT)
 
     up_cfg = _mm_config(
-        *_UP_CORES, m=tokens, n=MOE_INTERMEDIATE, k=HIDDEN_SIZE, in0_block_w=_UP_IN0_BLOCK_W, out_subblock_w=2
+        *_UP_CORES, m=tokens, n=MOE_INTERMEDIATE, k=HIDDEN_SIZE, in0_block_w=_UP_IN0_BLOCK_W, out_subblock_w=1
     )
     # hidden_states: [tokens, 2688] → needs 4D for sparse_matmul
     h4d = ttnn.unsqueeze_to_4D(hidden_states)  # [1, 1, tokens, 2688]
