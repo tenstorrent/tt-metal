@@ -356,6 +356,32 @@ def run_standalone_chunked_prefill_loop(pipeline: TtDeepSeekPrefillPipeline) -> 
     # tracy perf measurement, pass 0 is the cold/compile pass and the LAST pass is fully WARM (steady
     # state) — measure the last pass to avoid one-time compile dominating op-to-op latency.
     chunked_iters = int(os.environ.get("PREFILL_STANDALONE_CHUNKED_ITERS", "1"))
+
+    # PREFILL_PROFILE_KV: profile a SINGLE chunk at a chosen kv_actual (=> logical_n = kv_actual+chunk),
+    # run chunked_iters times so the last pass is WARM (post-compile). Used to tracy-profile one layer's
+    # 1st chunk (kv_actual=0, logical_n=chunk) vs last chunk (e.g. kv_actual=51200, logical_n=56320)
+    # cheaply (1 forward_chunk/pass) without filling all prior chunks. Token content is irrelevant for
+    # timing (RECORD_ONLY). Each pass emits the forward_chunk_layer_* signposts for the profiler.
+    _profile_kv = os.environ.get("PREFILL_PROFILE_KV", "")
+    if _profile_kv != "":
+        pk = int(_profile_kv)
+        chunk_tokens = token_ids_full[:chunk_size]
+        for it in range(chunked_iters):
+            logger.info(
+                f"[standalone-chunked] ==== PROFILE_KV={pk} pass {it + 1}/{chunked_iters} ({'WARM' if it > 0 else 'cold/compile'}) ===="
+            )
+            pipeline.prefill(
+                prepare_prefill_input_tensor(
+                    chunk_tokens, mesh_device, cfg.sp_factor, cfg.is_balanced, cfg.mesh_shape, cfg.sp_axis
+                ),
+                slot_id=slot_id,
+                kv_actual_isl=pk,
+            )
+            ttnn.synchronize_device(mesh_device)
+            logger.info(f"[standalone-chunked] PROFILE_KV={pk} pass {it + 1} done (logical_n={pk + chunk_size})")
+        logger.info(f"[standalone-chunked] PROFILE_KV done; skipping normal chunk loop + PCC")
+        return
+
     _t0 = _time.perf_counter()
     for it in range(chunked_iters):
         logger.info(
