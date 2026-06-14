@@ -81,6 +81,7 @@ The initial release of the 3-tier model CI includes models owned by the models-t
 | Mamba-2.8B | WH N150 |
 | Phi-3-mini | WH N150 |
 | Devstral-2-123B | BH LoudBox |
+| Devstral-Small-2-24B | BH QuietBox |
 
 
 # Pipelines

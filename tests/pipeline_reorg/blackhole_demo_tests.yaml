@@ -72,6 +72,38 @@
   team: models
   model-name: devstral-2-123b
 
+# ─── devstral-small-2-24b ───────────────────────────────────────────────────
+
+- name: devstral-small-2-24b e2e vision demo
+  cmd: |
+    set -e
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    export HF_MODEL=mistralai/Devstral-Small-2-24B-Instruct-2512
+    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/mistralai--Devstral-Small-2-24B-Instruct-2512
+    export MESH_DEVICE=P150x4
+    pytest --timeout 1800 "models/tt_transformers/demo/simple_vision_demo.py::test_multimodal_demo_text" -k "batch1-trace and normal"
+  skus:
+    bh_quietbox_2:
+      timeout: 25
+  owner_id: U09SQ3SP5HV # Moritz Thüning (@moritztng), maintainer of this model
+  team: models
+  model-name: devstral-small-2-24b
+
+- name: devstral-small-2-24b full-depth logit PCC
+  cmd: |
+    set -e
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    export HF_MODEL=mistralai/Devstral-Small-2-24B-Instruct-2512
+    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/mistralai--Devstral-Small-2-24B-Instruct-2512
+    export MESH_DEVICE=P150x4
+    pytest --timeout 2400 "models/tt_transformers/tests/test_model.py::test_model_inference" -k "full and accuracy"
+  skus:
+    bh_quietbox_2:
+      timeout: 30
+  owner_id: U09SQ3SP5HV # Moritz Thüning (@moritztng), maintainer of this model
+  team: models
+  model-name: devstral-small-2-24b
+
 # ─── Mochi ──────────────────────────────────────────────────────────────────
 
 - name: Mochi pipeline performance
