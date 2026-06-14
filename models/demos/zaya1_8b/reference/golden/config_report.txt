@@ -1,0 +1,47 @@
+=== ZAYA1-8B config resolution ===
+model_type = zaya
+hidden_size = 2048
+num_hidden_layers = 80
+num_attention_heads = 8
+num_key_value_heads = 2
+head_dim = 128
+kv_channels = 128
+partial_rotary_factor = 0.5
+rope_theta = 5000000
+moe_router_topk = 1
+ffn_hidden_size = 4096
+vocab_size = 262272
+zaya_use_mod = True
+zaya_use_eda = True
+scale_residual_merge = True
+residual_in_fp32 = True
+tie_word_embeddings = True
+zaya_layers (len 80) = ['a', 16, 'a', 16, 'a', 16, 'a', 16] ...
+cca_num_q_heads (len 80) = [8, 0, 8, 0, 8, 0, 8, 0] ...
+num_query_groups_list (len 80) = [2, 0, 2, 0, 2, 0, 2, 0] ...
+ffn_hidden_size_list (len 80) = [0, 4096, 0, 4096, 0, 4096, 0, 4096] ...
+zaya_mlp_expansion = 256
+[patch] expanded zaya_mlp_expansion scalar 256 -> list len 80
+[patch] num_attention_heads 8 -> 16 (to match head_dim=128)
+
+=== runtime attention geometry (layers[0].self_attn) ===
+num_heads=16 head_dim=128 num_key_value_heads=2 num_key_value_groups=8
+cca: num_q_heads=8 num_kv_heads=2 cca_head_dim=128 latent_q=1024 latent_k=256
+
+=== layer types (first 6) ===
+layers[0] = ZayaDecoderATTLayer
+layers[1] = ZayaDecoderMLPLayer
+layers[2] = ZayaDecoderATTLayer
+layers[3] = ZayaDecoderMLPLayer
+layers[4] = ZayaDecoderATTLayer
+layers[5] = ZayaDecoderMLPLayer
+lm_head.weight is embed_tokens.weight: True
+
+input_ids shape (1, 6): [[2, 818, 5279, 529, 7001, 563]]
+
+logits shape (1, 6, 262272)
+last-token top5 ids: [9079, 3224, 496, 506, 1390]
+last-token top5 decoded: [' Paris', ' known', ' a', ' the', '...']
+[done] saved hidden_states: 81 entries, each (1, 6, 2048)
+
+[done] dumped 20 module IO files to /home/yito/work/tt-metal-zaya1/models/demos/zaya1_8b/reference/golden

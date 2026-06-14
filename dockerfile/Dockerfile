@@ -123,7 +123,7 @@ RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
 
 # Numpy needed for tt-train to build
 # bundle uv with the venv for portable usage
-RUN umask 000 && uv pip install --no-cache-dir uv build numpy setuptools==80.10.2
+RUN umask 000 && uv pip install --no-cache-dir uv build numpy setuptools==80
 
 RUN git config --global --add safe.directory '*'
 
