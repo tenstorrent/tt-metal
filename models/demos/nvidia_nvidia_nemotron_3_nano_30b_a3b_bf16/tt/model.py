@@ -32,10 +32,11 @@ from .shared_expert import shared_expert_forward
 from .tp import _upload
 
 # Per-layer cache for pre-stacked expert weight tensors on device.
-# Weights are sharded along the expert dimension across TP devices so that
-# the per-device footprint is N_EXPERTS/TP = 128/4 = 32 experts × 1218 MiB/4
-# = ~305 MiB per matrix, totalling ~14 GiB for all 23 E-layers — fits in
-# the 32 GiB device DRAM with headroom for other model weights.
+# Weights stored as bfloat4_b (4-bit) replicated on all TP devices:
+# [1, 128, 2688, 1856] bfloat4_b = ~305 MiB per matrix, 46 matrices ≈ 14 GiB
+# total — fits in 32 GiB device DRAM.  Replicated (not sharded) because
+# 4-way expert-dim sharding deadlocks sparse_matmul when a device receives
+# 0 active experts (noc_semaphore_wait hang, tt-metal#45943).
 _EXPERT_DEVICE_CACHE: dict = {}  # layer_idx -> (up_tt, down_tt)
 
 SNAP = (
@@ -75,14 +76,12 @@ class WeightCache:
 def _get_stacked_expert_weights(mesh_device, layer_idx: int, wc: "WeightCache"):
     """Return (up_tt, down_tt) stacked expert-weight tensors for layer_idx.
 
-    up_tt:   [1, 32, 2688, 1856] per device — sharded along expert dim (TP=4)
-    down_tt: [1, 32, 1856, 2688] per device — sharded along expert dim (TP=4)
+    up_tt:   [1, 128, 2688, 1856] bfloat4_b, replicated on all TP devices
+    down_tt: [1, 128, 1856, 2688] bfloat4_b, replicated on all TP devices
 
-    Weights are sharded 4-way across devices so the per-device footprint is
-    ~305 MiB per matrix (vs ~1218 MiB if replicated).  All 23 E-layers'
-    sharded tensors together consume ~14 GiB — fits in 32 GiB device DRAM.
-    The cache ensures no H2D uploads happen during TTNN trace capture (which
-    blocks device writes); the warmup call pre-populates the cache.
+    bfloat4_b (4-bit) reduces per-matrix footprint from ~1218 MiB (bf16) to
+    ~305 MiB.  All 23 E-layers' tensors together consume ~14 GiB — fits in
+    32 GiB device DRAM.  The cache ensures no H2D uploads during trace capture.
     """
     if layer_idx in _EXPERT_DEVICE_CACHE:
         return _EXPERT_DEVICE_CACHE[layer_idx]
@@ -102,9 +101,12 @@ def _get_stacked_expert_weights(mesh_device, layer_idx: int, wc: "WeightCache"):
         .bfloat16()
         .contiguous()
     )
-    # Shard along expert dim (dim=1): each of the 4 devices holds 32 experts.
-    up_tt = _upload(up_cpu, mesh_device, shard_dim=1, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-    down_tt = _upload(down_cpu, mesh_device, shard_dim=1, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    # Replicate weights on all TP devices; use bfloat4_b (4× smaller than bf16) so all
+    # 23 E-layers × 2 matrices × 305 MiB ≈ 14 GiB fits in 32 GiB device DRAM.
+    # 4-way expert-dim sharding deadlocks sparse_matmul when a device receives 0 active
+    # experts (sender sends 0 tiles, receiver loops waiting → noc_semaphore_wait hang).
+    up_tt = _upload(up_cpu, mesh_device, shard_dim=None, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat4_b)
+    down_tt = _upload(down_cpu, mesh_device, shard_dim=None, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat4_b)
     _EXPERT_DEVICE_CACHE[layer_idx] = (up_tt, down_tt)
     return up_tt, down_tt
 

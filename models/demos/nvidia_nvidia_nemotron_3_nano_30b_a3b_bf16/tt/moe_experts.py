@@ -19,8 +19,6 @@ import math
 import ttnn
 from ttnn import MeshDevice
 
-from .tp import all_reduce
-
 N_EXPERTS = 128
 TOP_K = 6
 HIDDEN_SIZE = 2688
@@ -64,20 +62,18 @@ def _mm_config(cores_x, cores_y, m, n, k, in0_block_w, out_subblock_w=1):
 def moe_experts_forward(
     mesh_device: MeshDevice,
     hidden_states: ttnn.Tensor,  # [tokens, 2688] bf16 on device (replicated)
-    routing_weights: ttnn.Tensor,  # [tokens, N/TP] bf16 per device — sharded sparsity mask
-    up_weights_tt: ttnn.Tensor,  # [1, N/TP, 2688, 1856] bf16 per device — sharded experts
-    down_weights_tt: ttnn.Tensor,  # [1, N/TP, 1856, 2688] bf16 per device — sharded experts
+    routing_weights: ttnn.Tensor,  # [tokens, 128] bf16 on device — replicated sparsity mask
+    up_weights_tt: ttnn.Tensor,  # [1, 128, 2688, 1856] bfloat4_b on device — replicated
+    down_weights_tt: ttnn.Tensor,  # [1, 128, 1856, 2688] bfloat4_b on device — replicated
 ) -> ttnn.Tensor:
     """Returns [tokens, 2688] bfloat16 on device (replicated).
 
-    Expert weights and routing are sharded N/TP per device (N=128, TP=4 → 32 per device).
-    Each device computes its local expert outputs, then all_reduce sums partial results:
-      sparse_matmul(h, up_W_local, sparsity_local)   → [tokens, N/TP, intermediate]
-      relu²                                           → same shape
-      sparse_matmul(act, down_W_local, sparsity_local, is_input_a_sparse=True)
-                                                      → [tokens, N/TP, hidden]
-      mul routing_local + sum local experts           → [tokens, hidden]  (partial)
-      all_reduce                                      → [tokens, hidden]  (full)
+    Expert weights are replicated on all TP devices (each device runs the full computation).
+      sparse_matmul(h, up_W, sparsity)   → [tokens, 128, intermediate] (sparse over 128)
+      relu²                              → same shape
+      sparse_matmul(act, down_W, ...)    → [tokens, 128, hidden]
+      mul routing + sum over experts     → [tokens, hidden]
+    No CCL needed — all devices produce identical output.
     """
     tokens = hidden_states.shape[0]
     # Number of experts handled by this device (N_EXPERTS // TP, e.g. 32 for TP=4).
@@ -138,8 +134,7 @@ def moe_experts_forward(
     down = ttnn.mul(down, rw, output_tensor=down)
     rw.deallocate(True)
 
-    partial = ttnn.sum(down, dim=1)  # [tokens, 2688] partial sum over local experts
+    partial = ttnn.sum(down, dim=1)  # [tokens, 2688] sum over 128 experts
     down.deallocate(True)
 
-    # Sum partial results from all TP devices → full expert output.
-    return all_reduce(partial)
+    return partial

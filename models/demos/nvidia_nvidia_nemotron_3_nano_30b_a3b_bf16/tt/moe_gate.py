@@ -63,6 +63,6 @@ def moe_gate_forward(
     routing_dense = torch.zeros(tokens, n_routed_experts, dtype=torch.float32)
     routing_dense.scatter_(1, topk_indices, topk_weights)
 
-    # Shard along expert dim so each device holds [tokens, N/TP] routing weights,
-    # matching the sharded expert weight tensors in moe_experts_forward.
-    return _upload(routing_dense.bfloat16(), mesh_device, shard_dim=1, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    # Replicate the routing-weight tensor on all TP devices — expert weights are
+    # replicated (not sharded), so each device needs the full [tokens, 128] sparsity mask.
+    return _upload(routing_dense.bfloat16(), mesh_device, shard_dim=None, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
