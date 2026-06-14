@@ -56,7 +56,7 @@ Build decode around persistent device state:
 
 If TTNN or the runtime API blocks one of these items, keep the stage incomplete until it is fixed or you have the smallest repro for the blocked item. Do not treat a full-model decode result as complete while it still has avoidable host work between trace replays.
 
-Use `$multichip` and `$optimize` for full-model pieces added around the decoder stack. Match the decoder's multi-chip sharding and keep the full model optimized. For optimization debugging, it is acceptable to build a reduced profiling variant with one layer of each kind, such as one sliding-attention layer and one full-attention layer. Use real shapes. This keeps profiling fast and avoids Tracy buffer limits. Final evidence should include a `tt-perf-report` for the reduced-layer profiling variant.
+Use `$multichip` and `$optimize` for full-model pieces added around the decoder stack. Match the decoder's multi-chip sharding and keep the full model optimized. For profiling, build a reduced variant with one real layer of each kind, such as one sliding-attention layer and one full-attention layer. Keep real tensor shapes, sequence shapes, sharding, dtypes, KV-cache/page-table shapes, final norm, LM head, sampling, and trace behavior. Do not run Tracy or device-profiler collection on the full all-layer model stack. This keeps profiling fast and avoids multi-GB profiler dumps and Tracy buffer limits. Final evidence should include a `tt-perf-report` for the reduced-layer profiling variant.
 
 The generator should expose two conceptual levels:
 
@@ -190,4 +190,4 @@ Done means all of these are true and recorded:
 - layer-stack lower-bound accounting and the full-model-only costs;
 - trace-loop host-work counters, including token/current-position/RoPE/page-table refreshes and sync/readback counts;
 - sequence limits and remaining risks;
-- tt-perf-report output for a minmal set of the unique layers in the model.
+- tt-perf-report output for the reduced profiling variant with one real layer of each unique layer kind.
