@@ -97,7 +97,10 @@ inline void build_mask_tiles(Noc noc) {
 }
 
 /** q head-group block [q_tiles_per_unit][heads_per_group][head_dim_tiles], page id
- *  h*q_len_tiles*head_dim_tiles + (q_row_start+r)*head_dim_tiles + d. role-aware (q row mcast). */
+ *  h*q_len_tiles*head_dim_tiles + (q_row_start+r)*head_dim_tiles + d. role-aware (q row mcast).
+ *  Read as ONE block / ONE mcast handshake: the startup (unit 0, nothing to overlap) is bound by the
+ *  COUNT of mcast rendezvous on the critical path (each ~a few us of cross-core sync), so the whole
+ *  block in one handshake beats per-row streaming (which multiplies the rendezvous count). */
 template <bool dma_off, typename QAcc>
 inline void read_q_block(Noc noc, const QAcc& q_acc, uint32_t q_row_start, uint32_t first_head, const McastDir& qd) {
     CircularBuffer cb(cb_q);
@@ -124,7 +127,7 @@ inline void read_q_block(Noc noc, const QAcc& q_acc, uint32_t q_row_start, uint3
         noc.async_read_barrier();
     }
     if constexpr (q_mcast_on) {
-        if (qd.role == 1) {  // sender: broadcast the block to the rest of the row
+        if (qd.role == 1) {  // sender: broadcast the whole block to the rest of the grid row
             mcast_send<q_send_sem, q_recv_sem, q_valid_sem>(noc, qd, addr, q_group_tiles * tile_bytes);
         }
     }
@@ -164,7 +167,8 @@ inline void read_w_group(Noc noc, const WAcc& w_acc, uint32_t q_row_start, const
 }
 
 /** k chunk [k_tiles_in_unit][head_dim_tiles], page id (k_tile_start+c)*head_dim_tiles + d. Always
- *  reserves/pushes the full k_chunk_tiles so the 2-chunk ring stays half-aligned. role-aware (k col mcast). */
+ *  reserves/pushes the full k_chunk_tiles so the 2-chunk ring stays half-aligned. role-aware (k col
+ *  mcast). Read as ONE chunk / ONE mcast handshake (see read_q_block: minimize startup rendezvous). */
 template <bool dma_off, typename KAcc>
 inline void read_k_chunk(
     Noc noc, const KAcc& k_acc, uint32_t k_tile_start, uint32_t k_tiles_in_unit, const McastDir& kd) {
@@ -242,14 +246,24 @@ void kernel_main() {
     WorkUnitSpan span;
     span.start(flat_start);
 
+    // Order per group (resident-heads path): q -> k -> w. The gates w are consumed only in the mul
+    // phase (after the unit's matmuls), so they are read LAST -- behind the latency-critical q/k that
+    // gate the first matmul -- and compute waits w at the mul phase rather than at unit start. (Finer
+    // per-row/per-col streaming was tried and reverted: the unit-0 startup is bound by the COUNT of
+    // mcast rendezvous, which streaming multiplies; whole-block q + whole-chunk k = the two minimal.)
+    //
+    // Head-STREAMING path (heads_per_group < num_heads): q is streamed per output tile and compute's
+    // mul consumes those q tiles, so w MUST be available before compute starts draining the streamed q
+    // (otherwise compute blocks on w while the reader blocks on the full q CB -> deadlock). So w is
+    // read FIRST for that path; the deferral applies only to the resident-heads (production) path.
     bool need_group = true;
     for (uint32_t i = 0; i < flat_count; ++i) {
-        if (need_group) {
-            read_w_group<w_off>(noc, w_acc, span.q_tile_start(), qd);
-            if constexpr (!stream_heads) {
-                read_q_block<q_off>(noc, q_acc, span.q_tile_start(), 0, qd);
-            }
-            need_group = false;
+        const bool group_start = need_group;
+        if (group_start && stream_heads) {
+            read_w_group<w_off>(noc, w_acc, span.q_tile_start(), qd);  // gates before the streamed q
+        }
+        if (group_start && !stream_heads) {
+            read_q_block<q_off>(noc, q_acc, span.q_tile_start(), 0, qd);
         }
         read_k_chunk<k_off>(noc, k_acc, span.k_tile_start(), span.k_tiles(), kd);
         if constexpr (stream_heads) {
@@ -259,6 +273,9 @@ void kernel_main() {
                     read_q_block<q_off>(noc, q_acc, span.q_tile_start(), first_head, qd);
                 }
             }
+        }
+        if (group_start && !stream_heads) {
+            read_w_group<w_off>(noc, w_acc, span.q_tile_start(), qd);  // gates deferred behind q/k
         }
         need_group = span.advance();
     }

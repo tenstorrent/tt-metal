@@ -305,6 +305,9 @@ inline void accumulate_full_strip_row(
                 }
             }
             cb_push_back(cb_qk, batch_tiles);
+            // Gates are consumed only here -- wait for them now (after the batch's matmuls), not at
+            // unit start, so the reader reads w after the latency-critical q/k. Cheap once resident.
+            cb_wait_front(cb_w, w_group_tiles);
             // Mul phase: blocked bcast-col MUL. Per ct_dim-column sub-batch, ONE dest acquire holds the
             // column accumulators; each head is ONE unpack context (w[h] once + ct_dim qk columns) that
             // MACs head h onto dest[0..nb). So the per-tile unpack-context sync drops from per (col,head)
@@ -332,6 +335,9 @@ inline void accumulate_full_strip_row(
         }
         pack_reconfig_l1_acc(0);  // done; the unit untilize below packs overwrite
     } else {
+        // Non-batched fallback (qk_col_batch == 1): accumulate_heads reads cb_w by index without
+        // waiting, so block on the gates here (k is already waited whole in kernel_main).
+        cb_wait_front(cb_w, w_group_tiles);
         for (uint32_t c = 0; c < k_tiles_per_unit; ++c) {
             accumulate_heads<cb_acc_strip>(r, c, slot_base + c);  // head reduction -> cb_acc_strip slot
         }
@@ -381,11 +387,13 @@ void kernel_main() {
     bool have_group = false;
     for (uint32_t i = 0; i < flat_count; ++i) {
         if (!have_group) {
-            cb_wait_front(cb_w, w_group_tiles);
             if constexpr (!stream_heads) {
-                cb_wait_front(cb_q, q_group_tiles);  // all heads form one resident block (heads_per_group == num_heads)
+                cb_wait_front(cb_q, q_group_tiles);  // all heads one resident block (heads_per_group == num_heads)
             }
             have_group = true;
+            // NOTE: cb_w is deliberately NOT waited here -- the gates are consumed only in the later
+            // mul phase, so the reader reads w after the latency-critical q/k and compute waits it
+            // there. This keeps w off the per-unit critical path (small but free).
         }
         const uint32_t k_tiles_in_unit = span.k_tiles();
         cb_wait_front(cb_k, k_chunk_tiles);  // full chunk pushed even on edge units (ring alignment)
@@ -405,6 +413,10 @@ void kernel_main() {
         }
 
         if (!produced_full_unit) {
+            // Per-tile path (partial edge unit / KC==1): accumulate_heads reads the gates by index
+            // without waiting, so block on cb_w here (deferred from the group header; q was already
+            // waited there for the resident-heads path, streamed-q for the head-streaming path).
+            cb_wait_front(cb_w, w_group_tiles);
             // k_tile rises with c, so the causal split is a prefix/suffix: tiles c in [0, m) are
             // fully valid (k_tile < diag_tile), tiles [m, k) are masked (diagonal then future). The
             // valid prefix needs no mask, so produce it then batch-untilize W=1; the masked suffix
