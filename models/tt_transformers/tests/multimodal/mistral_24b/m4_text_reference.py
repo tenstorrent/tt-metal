@@ -106,6 +106,10 @@ def capture_golden(model, input_ids, layer_idx=0):
         sa.register_forward_hook(grab_out("mla_out"), with_kwargs=True),
         layer.mlp.register_forward_hook(grab_in("moe_in"), with_kwargs=True),
         layer.mlp.register_forward_hook(grab_out("moe_out"), with_kwargs=True),
+        # MoE-internal boundaries: router logits, routed-experts output, shared-expert output
+        layer.mlp.gate.register_forward_hook(grab_out("router_logits"), with_kwargs=True),
+        layer.mlp.experts.register_forward_hook(grab_out("experts_out"), with_kwargs=True),
+        layer.mlp.shared_experts.register_forward_hook(grab_out("shared_out"), with_kwargs=True),
         # MLA-internal module boundaries — let the TT MLA be PCC-gated sub-block by sub-block:
         # q projection chain, kv compress, kv expand, and the output projection (in = post-SDPA).
         sa.q_b_proj.register_forward_hook(grab_out("q_b_out"), with_kwargs=True),
