@@ -81,12 +81,19 @@ def capture_golden(model, input_ids, layer_idx=0):
 
         return hook
 
+    sa = layer.self_attn
     handles = [
         layer.register_forward_hook(grab_in("hidden_in"), with_kwargs=True),
-        layer.self_attn.register_forward_hook(grab_in("mla_in", capture_pos_emb=True), with_kwargs=True),
-        layer.self_attn.register_forward_hook(grab_out("mla_out"), with_kwargs=True),
+        sa.register_forward_hook(grab_in("mla_in", capture_pos_emb=True), with_kwargs=True),
+        sa.register_forward_hook(grab_out("mla_out"), with_kwargs=True),
         layer.mlp.register_forward_hook(grab_in("moe_in"), with_kwargs=True),
         layer.mlp.register_forward_hook(grab_out("moe_out"), with_kwargs=True),
+        # MLA-internal module boundaries — let the TT MLA be PCC-gated sub-block by sub-block:
+        # q projection chain, kv compress, kv expand, and the output projection (in = post-SDPA).
+        sa.q_b_proj.register_forward_hook(grab_out("q_b_out"), with_kwargs=True),
+        sa.kv_a_proj_with_mqa.register_forward_hook(grab_out("kv_a_out"), with_kwargs=True),
+        sa.kv_b_proj.register_forward_hook(grab_out("kv_b_out"), with_kwargs=True),
+        sa.o_proj.register_forward_hook(grab_in("o_proj_in"), with_kwargs=True),
     ]
     with torch.no_grad():
         out = model(input_ids)
