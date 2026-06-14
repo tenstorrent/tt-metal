@@ -5,7 +5,7 @@
   "device": "bh_galaxy",
   "arch_name": "blackhole",
   "started_at": "2026-06-14T11:31:00Z",
-  "updated_at": "2026-06-14T12:33:06Z",
+  "updated_at": "2026-06-14T12:38:44Z",
   "components": [
     {
       "name": "rms_norm",
@@ -28,8 +28,14 @@
         "notes": "gemma +1, fp32; key language_model.model.layers.0.input_layernorm.weight"
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "failing",
+        "attempts": 0,
+        "pcc_single_chip": 0.99999851,
+        "artifacts": [
+          "tt/rms_norm.py"
+        ],
+        "last_error": "mesh (1,32) FABRIC_1D unavailable: 32->16 downgrade, ethernet handshake failed; code validated single-chip pending fabric",
+        "notes": "code-ready; re-validate on (1,32) after galaxy fabric reset"
       },
       "debug": {
         "status": "n/a",
@@ -102,8 +108,14 @@
         "notes": "plain lookup no scaling; tie_word_embeddings=False"
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "failing",
+        "attempts": 0,
+        "pcc_single_chip": 1.0,
+        "artifacts": [
+          "tt/embedding.py"
+        ],
+        "last_error": "mesh (1,32) FABRIC_1D unavailable: 32->16 downgrade, ethernet handshake failed; code validated single-chip pending fabric",
+        "notes": "code-ready; re-validate on (1,32) after galaxy fabric reset"
       },
       "debug": {
         "status": "n/a",
@@ -139,8 +151,14 @@
         "notes": "partial rope 64/64 half-split rotate_half; theta 5e6; bitwise exact"
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "failing",
+        "attempts": 0,
+        "pcc_single_chip": 0.99999759,
+        "artifacts": [
+          "tt/rope.py"
+        ],
+        "last_error": "mesh (1,32) FABRIC_1D unavailable: 32->16 downgrade, ethernet handshake failed; code validated single-chip pending fabric",
+        "notes": "code-ready; re-validate on (1,32) after galaxy fabric reset"
       },
       "debug": {
         "status": "n/a",
@@ -253,8 +271,14 @@
         "notes": "per-head Gemma RMS weight[128], pre-rope, reuses rms_norm_forward"
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "failing",
+        "attempts": 0,
+        "pcc_single_chip": 0.99999511,
+        "artifacts": [
+          "tt/qk_norm.py"
+        ],
+        "last_error": "mesh (1,32) FABRIC_1D unavailable: 32->16 downgrade, ethernet handshake failed; code validated single-chip pending fabric",
+        "notes": "code-ready; re-validate on (1,32) after galaxy fabric reset"
       },
       "debug": {
         "status": "n/a",
@@ -865,8 +889,14 @@
         "notes": "gemma RMS, thin wrapper over rms_norm_forward"
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "failing",
+        "attempts": 0,
+        "pcc_single_chip": 0.99999444,
+        "artifacts": [
+          "tt/final_norm.py"
+        ],
+        "last_error": "mesh (1,32) FABRIC_1D unavailable: 32->16 downgrade, ethernet handshake failed; code validated single-chip pending fabric",
+        "notes": "code-ready; re-validate on (1,32) after galaxy fabric reset"
       },
       "debug": {
         "status": "n/a",
@@ -1092,8 +1122,8 @@
   ],
   "locks": {
     "device": {
-      "held_by": "ttnn-foundation",
-      "held_since": "2026-06-14T12:28:35Z"
+      "held_by": null,
+      "held_since": null
     }
   },
   "tick_log": [
@@ -1150,11 +1180,18 @@
       "ts": "2026-06-14T12:33:06Z",
       "action": "ttlang[sparse_lightning_attention]",
       "result": "ok sim_pcc=1.0"
+    },
+    {
+      "tick": 10,
+      "ts": "2026-06-14T12:38:44Z",
+      "action": "ttnn[foundation+leaves]",
+      "result": "partial: code ok, fabric fault on mesh open"
     }
   ],
   "config": {
     "max_parallel_reference": 4,
     "max_attempts_per_phase": 10,
     "tick_interval_sec": 60
-  }
+  },
+  "pending_smoke_check": "rms_norm"
 }

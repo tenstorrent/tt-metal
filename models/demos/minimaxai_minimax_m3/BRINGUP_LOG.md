@@ -4,14 +4,14 @@
 **Slug:** `minimaxai_minimax_m3`
 **Target Device:** bh_galaxy (blackhole)
 **Started:** 2026-06-14T11:31:00Z
-**Updated:** 2026-06-14T12:33:06Z
+**Updated:** 2026-06-14T12:38:44Z
 
 ## Block Status
 
 | Block | Phase | Status | PCC | Attempts | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | rms_norm | reference | done | 1.000009 | 0 | gemma +1, fp32; key language_model.model.layers.0.input_layernorm.weight |
-| rms_norm | ttnn | pending | — | 0 |  |
+| rms_norm | ttnn | failing | — | 0 | mesh (1,32) FABRIC_1D unavailable: 32->16 downgrade, ethernet handshake failed; code validated single-chip pending fabric |
 | rms_norm | debug | n/a | — | 0 |  |
 | rms_norm | optimization | pending | — | 0 |  |
 | rms_norm | real_weights | pending | — | 0 |  |
@@ -21,12 +21,12 @@
 | vision_layernorm | optimization | pending | — | 0 |  |
 | vision_layernorm | real_weights | pending | — | 0 |  |
 | embedding | reference | done | 1.000000 | 0 | plain lookup no scaling; tie_word_embeddings=False |
-| embedding | ttnn | pending | — | 0 |  |
+| embedding | ttnn | failing | — | 0 | mesh (1,32) FABRIC_1D unavailable: 32->16 downgrade, ethernet handshake failed; code validated single-chip pending fabric |
 | embedding | debug | n/a | — | 0 |  |
 | embedding | optimization | pending | — | 0 |  |
 | embedding | real_weights | pending | — | 0 |  |
 | rope | reference | done | 1.000000 | 0 | partial rope 64/64 half-split rotate_half; theta 5e6; bitwise exact |
-| rope | ttnn | pending | — | 0 |  |
+| rope | ttnn | failing | — | 0 | mesh (1,32) FABRIC_1D unavailable: 32->16 downgrade, ethernet handshake failed; code validated single-chip pending fabric |
 | rope | debug | n/a | — | 0 |  |
 | rope | optimization | pending | — | 0 |  |
 | rope | real_weights | pending | — | 0 |  |
@@ -41,7 +41,7 @@
 | patch_embedding | optimization | pending | — | 0 |  |
 | patch_embedding | real_weights | pending | — | 0 |  |
 | qk_norm | reference | done | 1.000000 | 0 | per-head Gemma RMS weight[128], pre-rope, reuses rms_norm_forward |
-| qk_norm | ttnn | pending | — | 0 |  |
+| qk_norm | ttnn | failing | — | 0 | mesh (1,32) FABRIC_1D unavailable: 32->16 downgrade, ethernet handshake failed; code validated single-chip pending fabric |
 | qk_norm | debug | n/a | — | 0 |  |
 | qk_norm | optimization | pending | — | 0 |  |
 | qk_norm | real_weights | pending | — | 0 |  |
@@ -116,7 +116,7 @@
 | vision_encoder | optimization | pending | — | 0 |  |
 | vision_encoder | real_weights | pending | — | 0 |  |
 | final_norm | reference | done | 1.000000 | 0 | gemma RMS, thin wrapper over rms_norm_forward |
-| final_norm | ttnn | pending | — | 0 |  |
+| final_norm | ttnn | failing | — | 0 | mesh (1,32) FABRIC_1D unavailable: 32->16 downgrade, ethernet handshake failed; code validated single-chip pending fabric |
 | final_norm | debug | n/a | — | 0 |  |
 | final_norm | optimization | pending | — | 0 |  |
 | final_norm | real_weights | pending | — | 0 |  |
@@ -150,6 +150,7 @@
 - tick 7 (2026-06-14T12:18:12Z): reference[vision_encoder,final_norm,lm_head,mtp_head] — ok(3)+blocked(1)
 - tick 8 (2026-06-14T12:24:19Z): missing_op_discovery — ok: 1 tt-lang (sparse_lightning_attention), 1 compose (vision_rope_3d), 21 compose
 - tick 9 (2026-06-14T12:33:06Z): ttlang[sparse_lightning_attention] — ok sim_pcc=1.0
+- tick 10 (2026-06-14T12:38:44Z): ttnn[foundation+leaves] — partial: code ok, fabric fault on mesh open
 
 ## Host-Resident Exceptions
 
