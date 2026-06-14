@@ -19,6 +19,8 @@ import math
 import ttnn
 from ttnn import MeshDevice
 
+from .tp import all_reduce
+
 N_EXPERTS = 128
 TOP_K = 6
 HIDDEN_SIZE = 2688
@@ -61,33 +63,36 @@ def _mm_config(cores_x, cores_y, m, n, k, in0_block_w, out_subblock_w=1):
 
 def moe_experts_forward(
     mesh_device: MeshDevice,
-    hidden_states: ttnn.Tensor,  # [tokens, 2688] bf16 on device
-    routing_weights: ttnn.Tensor,  # [tokens, 128] bf16 on device — dense sparsity mask
-    up_weights_tt: ttnn.Tensor,  # [1, 128, 2688, 1856] bf16 on device (pre-stacked)
-    down_weights_tt: ttnn.Tensor,  # [1, 128, 1856, 2688] bf16 on device (pre-stacked)
+    hidden_states: ttnn.Tensor,  # [tokens, 2688] bf16 on device (replicated)
+    routing_weights: ttnn.Tensor,  # [tokens, N/TP] bf16 per device — sharded sparsity mask
+    up_weights_tt: ttnn.Tensor,  # [1, N/TP, 2688, 1856] bf16 per device — sharded experts
+    down_weights_tt: ttnn.Tensor,  # [1, N/TP, 1856, 2688] bf16 per device — sharded experts
 ) -> ttnn.Tensor:
     """Returns [tokens, 2688] bfloat16 on device (replicated).
 
-    Follows the gpt_oss sparse_matmul pattern:
-      sparse_matmul(h, up_W, sparsity)  → [tokens, 128, intermediate]
-      relu²                              → same shape
-      sparse_matmul(act, down_W, sparsity, is_input_a_sparse=True)
-                                        → [tokens, 128, hidden]
-      mul routing_weights + sum experts → [tokens, hidden]
+    Expert weights and routing are sharded N/TP per device (N=128, TP=4 → 32 per device).
+    Each device computes its local expert outputs, then all_reduce sums partial results:
+      sparse_matmul(h, up_W_local, sparsity_local)   → [tokens, N/TP, intermediate]
+      relu²                                           → same shape
+      sparse_matmul(act, down_W_local, sparsity_local, is_input_a_sparse=True)
+                                                      → [tokens, N/TP, hidden]
+      mul routing_local + sum local experts           → [tokens, hidden]  (partial)
+      all_reduce                                      → [tokens, hidden]  (full)
     """
     tokens = hidden_states.shape[0]
+    # Number of experts handled by this device (N_EXPERTS // TP, e.g. 32 for TP=4).
+    n_local = routing_weights.shape[-1]
     output_tile = ttnn.Tile([32, 32])
 
-    # sparsity tensor: sparse_matmul expects [tokens, num_experts] ROW_MAJOR
+    # sparsity tensor: sparse_matmul expects ROW_MAJOR [tokens, n_local_experts]
     sparsity = ttnn.to_layout(ttnn.unsqueeze_to_4D(routing_weights), ttnn.ROW_MAJOR_LAYOUT)
 
     up_cfg = _mm_config(
         *_UP_CORES, m=tokens, n=MOE_INTERMEDIATE, k=HIDDEN_SIZE, in0_block_w=_UP_IN0_BLOCK_W, out_subblock_w=1
     )
-    # hidden_states: [tokens, 2688] → needs 4D for sparse_matmul
     h4d = ttnn.unsqueeze_to_4D(hidden_states)  # [1, 1, tokens, 2688]
 
-    # Up projection: [1, 1, tokens, 2688] × [1, 128, 2688, 1856] → [1, tokens, 128, 1856]
+    # Up: [1, 1, tokens, 2688] × [1, n_local, 2688, 1856] → [1, tokens, n_local, 1856]
     up = ttnn.sparse_matmul(
         h4d,
         up_weights_tt,
@@ -98,21 +103,18 @@ def moe_experts_forward(
         program_config=up_cfg,
         dtype=ttnn.bfloat16,
     )
-    # Reshape to [tokens, 128, intermediate]
-    up = ttnn.reshape(up, (tokens, N_EXPERTS, MOE_INTERMEDIATE))
+    up = ttnn.reshape(up, (tokens, n_local, MOE_INTERMEDIATE))
 
-    # relu²
     act = ttnn.pow(ttnn.relu(up), 2)
 
-    # Prepare down input: [128, tokens, intermediate] → [1, 128, tokens, intermediate]
     act = ttnn.transpose(act, 0, 1)
-    act = ttnn.reshape(act, (1, N_EXPERTS, tokens, MOE_INTERMEDIATE))
+    act = ttnn.reshape(act, (1, n_local, tokens, MOE_INTERMEDIATE))
 
     down_cfg = _mm_config(
         *_DOWN_CORES, m=tokens, n=HIDDEN_SIZE, k=MOE_INTERMEDIATE, in0_block_w=_DOWN_IN0_BLOCK_W, out_subblock_w=1
     )
 
-    # Down projection: [1, 128, tokens, intermediate] × [1, 128, intermediate, hidden]
+    # Down: [1, n_local, tokens, intermediate] × [1, n_local, intermediate, hidden]
     down = ttnn.sparse_matmul(
         act,
         down_weights_tt,
@@ -127,16 +129,17 @@ def moe_experts_forward(
     act.deallocate(True)
     sparsity.deallocate(True)
 
-    # down: [1, 128, tokens, 2688] → [tokens, 128, 2688]
-    down = ttnn.reshape(down, (N_EXPERTS, tokens, HIDDEN_SIZE))
-    down = ttnn.transpose(down, 0, 1)  # [tokens, 128, 2688]
+    # down: [1, n_local, tokens, 2688] → [tokens, n_local, 2688]
+    down = ttnn.reshape(down, (n_local, tokens, HIDDEN_SIZE))
+    down = ttnn.transpose(down, 0, 1)
 
-    # Scale by routing weights and sum over expert dimension.
-    rw = ttnn.reshape(routing_weights, (tokens, N_EXPERTS, 1))  # [tokens, 128, 1]
+    # Scale by local routing weights and sum over local expert dimension.
+    rw = ttnn.reshape(routing_weights, (tokens, n_local, 1))
     down = ttnn.mul(down, rw, output_tensor=down)
     rw.deallocate(True)
 
-    out = ttnn.sum(down, dim=1)  # [tokens, 2688]
+    partial = ttnn.sum(down, dim=1)  # [tokens, 2688] partial sum over local experts
     down.deallocate(True)
 
-    return out
+    # Sum partial results from all TP devices → full expert output.
+    return all_reduce(partial)

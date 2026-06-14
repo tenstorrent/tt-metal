@@ -16,7 +16,7 @@ import torch
 import ttnn
 from ttnn import MeshDevice
 
-from .tp import _host_rep, _rep
+from .tp import _host_rep, _upload
 
 N_ROUTED_EXPERTS = 128
 NUM_EXPERTS_PER_TOK = 6
@@ -43,7 +43,7 @@ def moe_gate_forward(
     """
     tokens = hidden_states.shape[0]
 
-    w_tt = _rep(weight.bfloat16(), mesh_device)
+    w_tt = _upload(weight.bfloat16(), mesh_device, shard_dim=None, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
     logits_tt = ttnn.linear(hidden_states, w_tt, transpose_b=True)
     logits = _host_rep(logits_tt, mesh_device, tokens).float()  # [tokens, 128]
 
@@ -63,4 +63,6 @@ def moe_gate_forward(
     routing_dense = torch.zeros(tokens, n_routed_experts, dtype=torch.float32)
     routing_dense.scatter_(1, topk_indices, topk_weights)
 
-    return _rep(routing_dense.bfloat16(), mesh_device)
+    # Shard along expert dim so each device holds [tokens, N/TP] routing weights,
+    # matching the sharded expert weight tensors in moe_experts_forward.
+    return _upload(routing_dense.bfloat16(), mesh_device, shard_dim=1, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
