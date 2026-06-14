@@ -1,0 +1,225 @@
+{
+  "model_id": "MiniMaxAI/MiniMax-M3",
+  "model_slug": "minimaxai_minimax_m3",
+  "model_type": "minimax_m3_vl",
+  "top_class": "MiniMaxM3SparseForConditionalGeneration",
+  "device": "bh_galaxy",
+  "arch_name": "blackhole",
+  "mesh_shape": [1, 32],
+  "num_devices": 32,
+  "notes": "Multimodal sparse-MoE VLM. 869 GB bf16 checkpoint (59 shards). NO modeling_*.py in snapshot; auto_map only declares AutoConfig (configuration_minimax_m3_vl.MiniMaxM3VLConfig). Forward reconstructed from config + published MiniMax-M3 / DeepSeek-V3-style architecture. MTP modules (num_mtp_modules=7) are declared in config but NO mtp/nextn weights are present in the safetensors index, so MTP is config-only / not shippable from this checkpoint. Param budget: model 869 GB >> aggregate DRAM 32x34.2=1095 GB but per-chip 34.2 GB << model, so EVERYTHING must shard (planner fits_replicated=false). MoE dominates at ~846 GB (~14.5 GB experts/MoE-layer => expert-parallel ~4 experts/chip).",
+  "components": [
+    {
+      "name": "rms_norm",
+      "kind": "norm",
+      "depends_on": [],
+      "reference_impl": "models/demos/deepseek_v3/tt/rms_norm",
+      "host_resident": {"allowed": false, "justification": "Elementwise RMSNorm (eps 1e-6, gemma-style use_gemma_norm i.e. (1+w) scale) runs on device per token; cheap and per-token cadence.", "reference_link": null}
+    },
+    {
+      "name": "vision_layernorm",
+      "kind": "norm",
+      "depends_on": [],
+      "reference_impl": "models/demos/qwen3_vl/tt/vision_layernorm.py",
+      "host_resident": {"allowed": false, "justification": "CLIP-style LayerNorm (with bias, eps 1e-5) inside the vision tower; device-resident in the sharded encoder.", "reference_link": null}
+    },
+    {
+      "name": "embedding",
+      "kind": "embedding",
+      "depends_on": [],
+      "reference_impl": "models/demos/deepseek_v3/tt/embedding",
+      "host_resident": {"allowed": false, "justification": "vocab 200064 x hidden 6144 token embedding; 2.46 GB bf16, sharded per-token over 32 chips.", "reference_link": null}
+    },
+    {
+      "name": "rope",
+      "kind": "other",
+      "depends_on": [],
+      "reference_impl": "models/demos/deepseek_v3/tt/rope.py",
+      "host_resident": {"allowed": false, "justification": "Partial rotary (rotary_dim 64, partial_rotary_factor 0.5, theta 5e6) applied to half of head_dim; deepseek MLA rope handles partial-rope split. Cos/sin tables computed on device per token.", "reference_link": null}
+    },
+    {
+      "name": "vision_rope_3d",
+      "kind": "other",
+      "depends_on": [],
+      "reference_impl": null,
+      "host_resident": {"allowed": false, "justification": "BLOCKED: 3D RoPE (rope_mode='3d', theta 1e4) over temporal/height/width axes for the CLIP vision tower. qwen3_vl/qwen25_vl have 2D/mrope vision RoPE but no temporal 3D axis matching MiniMax patch-merge (spatial_merge_size 2, temporal_patch_size 2); needs a new primitive. No defensible existing ttnn reference.", "reference_link": null}
+    },
+    {
+      "name": "patch_embedding",
+      "kind": "conv",
+      "depends_on": [],
+      "reference_impl": "models/demos/qwen3_vl/tt/patch_merger.py",
+      "host_resident": {"allowed": true, "justification": "Conv2d patch embedding (patch 14, 3 ch -> 1280) on run-once per_input vision path; tiny (vpatch ~0.0015 GB). May run host-side as image preprocessing if conv2d patchify is not yet performant on device, then handed to the device encoder.", "reference_link": null}
+    },
+    {
+      "name": "qk_norm",
+      "kind": "norm",
+      "depends_on": ["rms_norm"],
+      "reference_impl": "models/demos/deepseek_v3/tt/rms_norm",
+      "host_resident": {"allowed": false, "justification": "Per-head QK-norm (use_qk_norm, qk_norm_type='per_head'): RMSNorm applied to each head's q and k before SDPA. Device-resident; reuses rms_norm primitive at per-head granularity.", "reference_link": null}
+    },
+    {
+      "name": "gqa_attention",
+      "kind": "attention",
+      "depends_on": ["rms_norm", "qk_norm", "rope"],
+      "reference_impl": "models/demos/llama3_70b_galaxy/tt/llama_attention.py",
+      "host_resident": {"allowed": false, "justification": "Full GQA used by the first 3 DENSE layers: 64 q heads / 4 kv heads, head_dim 128, partial rope, per-head QK-norm. q_heads 64 shard 2-ways per chip across 32 chips; kv_heads 4 < 32 => replicate each KV head x8 so SDPA stays chip-local. KV cache device-resident.", "reference_link": null}
+    },
+    {
+      "name": "sparse_lightning_attention",
+      "kind": "attention",
+      "depends_on": ["rms_norm", "qk_norm", "rope", "gqa_attention"],
+      "reference_impl": null,
+      "host_resident": {"allowed": false, "justification": "BLOCKED: lightning / block-sparse attention used on layers 3..59 (sparse_attention_freq matches moe_layer_freq). Indexer heads index_q_proj/index_k_proj (sparse_num_index_heads 4, sparse_index_dim 128) with their own index_q_norm/index_k_norm select top-k blocks (sparse_topk_blocks 16, sparse_block_size 128, score='max', init_block 0, local_block 1), then GQA SDPA runs only over selected blocks. No existing ttnn block-sparse / lightning-attention reference with a learned indexer; novel primitive.", "reference_link": null}
+    },
+    {
+      "name": "vision_attention",
+      "kind": "attention",
+      "depends_on": ["vision_layernorm", "vision_rope_3d"],
+      "reference_impl": "models/demos/qwen3_vl/tt/vision_attention.py",
+      "host_resident": {"allowed": false, "justification": "CLIP vision MHA: 16 heads, hidden 1280, with q/k/v/out bias. Bidirectional (no causal mask, no KV cache). Reuse qwen3_vl vision_attention; only the 3D RoPE injection differs (see vision_rope_3d, blocked).", "reference_link": null}
+    },
+    {
+      "name": "swigluoai_mlp",
+      "kind": "mlp",
+      "depends_on": [],
+      "reference_impl": "models/demos/gpt_oss/tt/mlp.py",
+      "host_resident": {"allowed": false, "justification": "SwiGLU-OAI activation: gate=clamp(gate,max=limit); up=clamp(up,-limit,limit); out=down((gate*sigmoid(alpha*gate))*(up+1)) with alpha 1.702, limit 7.0. gpt_oss implements this exact gated-clamped GLU. Used by dense MLP (intermediate 12288) and shared expert (3072) and routed experts (3072).", "reference_link": null}
+    },
+    {
+      "name": "moe_gate",
+      "kind": "linear",
+      "depends_on": [],
+      "reference_impl": "models/demos/deepseek_v3/tt/moe_gate.py",
+      "host_resident": {"allowed": false, "justification": "Router: linear gate (6144->128) -> sigmoid scoring (scoring_func='sigmoid', enable_sigmoid=True) + e_score_correction_bias (use_routing_bias) -> top-4 (num_experts_per_tok 4) -> routed_scaling_factor 2.0. deepseek_v3 moe_gate is sigmoid+correction-bias+routed_scaling, the same router family (DeepSeek-V3 uses scaling 2.5 vs MiniMax 2.0 — value-only diff).", "reference_link": null}
+    },
+    {
+      "name": "moe_experts",
+      "kind": "mlp",
+      "depends_on": ["swigluoai_mlp", "moe_gate"],
+      "reference_impl": "models/demos/gpt_oss/tt/experts",
+      "host_resident": {"allowed": false, "justification": "128 routed experts/MoE-layer, each a SwiGLU-OAI MLP (w1 gate, w3 up, w2 down; intermediate 3072). ~14.5 GB experts per MoE layer -> expert-parallel placement ~4 experts/chip over 32 chips. gpt_oss experts already do swiglu-oai expert compute + expert/tensor-parallel allreduce; deepseek_v3 experts.py is the alt sharding reference. down_proj (w2) is row-parallel -> needs reduce-scatter/all-reduce.", "reference_link": null}
+    },
+    {
+      "name": "shared_expert",
+      "kind": "mlp",
+      "depends_on": ["swigluoai_mlp"],
+      "reference_impl": "models/demos/deepseek_v3/tt/mlp",
+      "host_resident": {"allowed": false, "justification": "n_shared_experts=1 always-on SwiGLU-OAI MLP (shared_intermediate 3072) summed with the routed output. deepseek_v3 has the shared-expert path.", "reference_link": null}
+    },
+    {
+      "name": "vision_mlp",
+      "kind": "mlp",
+      "depends_on": ["vision_layernorm"],
+      "reference_impl": "models/demos/qwen3_vl/tt/vision_mlp.py",
+      "host_resident": {"allowed": false, "justification": "CLIP MLP: fc1 (1280->5120) gelu fc2 (5120->1280) with bias. Standard gelu MLP; reuse qwen3_vl vision_mlp.", "reference_link": null}
+    },
+    {
+      "name": "dense_decoder_layer",
+      "kind": "decoder_layer",
+      "depends_on": ["rms_norm", "gqa_attention", "swigluoai_mlp"],
+      "reference_impl": "models/demos/llama3_70b_galaxy/tt/llama_decoder.py",
+      "host_resident": {"allowed": false, "justification": "First 3 layers (moe_layer_freq[0:3]=0): pre-norm full-GQA attention + dense SwiGLU-OAI MLP (intermediate 12288). Pre-norm (input_layernorm) + post_attention_layernorm. Sharded per-token; o_proj + down_proj row-parallel -> all-reduce over fabric.", "reference_link": null}
+    },
+    {
+      "name": "moe_decoder_layer",
+      "kind": "decoder_layer",
+      "depends_on": ["rms_norm", "sparse_lightning_attention", "moe_gate", "moe_experts", "shared_expert"],
+      "reference_impl": "models/demos/deepseek_v3/tt/decoder_block",
+      "host_resident": {"allowed": false, "justification": "Layers 3..59 (57 layers): pre-norm block-sparse/lightning attention + block_sparse_moe (gate + 128 routed experts + 1 shared expert). deepseek_v3 moe_decoder_block is the closest reference, BUT the attention sub-block is BLOCKED (sparse_lightning_attention). Sharded per-token; expert-parallel for experts, row-parallel reductions need fabric all-reduce.", "reference_link": null}
+    },
+    {
+      "name": "vision_encoder_layer",
+      "kind": "decoder_layer",
+      "depends_on": ["vision_layernorm", "vision_attention", "vision_mlp"],
+      "reference_impl": "models/demos/qwen3_vl/tt/vision_block.py",
+      "host_resident": {"allowed": false, "justification": "32 pre-norm CLIP encoder layers (layer_norm1 -> attn -> layer_norm2 -> mlp). Run-once per_input but FORCED to shard because the full model exceeds per-chip DRAM (planner). Reuse qwen3_vl vision_block; 3D rope injection blocked.", "reference_link": null}
+    },
+    {
+      "name": "patch_merge_mlp",
+      "kind": "mlp",
+      "depends_on": ["vision_encoder_layer"],
+      "reference_impl": "models/demos/qwen3_vl/tt/patch_merger.py",
+      "host_resident": {"allowed": true, "justification": "patch_merge compression (spatial_merge_size 2, temporal_patch_size 2) followed by a 2-layer MLP (patch_merge_mlp.linear_1/linear_2, gelu). Tiny, run-once; reuse qwen3_vl patch_merger. May stay host-side if reshape/merge is awkward on device.", "reference_link": null}
+    },
+    {
+      "name": "multimodal_projector",
+      "kind": "mlp",
+      "depends_on": ["patch_merge_mlp"],
+      "reference_impl": "models/demos/qwen3_vl/tt/patch_merger.py",
+      "host_resident": {"allowed": true, "justification": "multi_modal_projector: linear_1 -> gelu -> linear_2 (projector_hidden_act gelu, projector_hidden_size 6144, projection_dim 6144, with bias) mapping vision features into the 6144 text hidden space. Tiny, run-once per image; host-side acceptable.", "reference_link": null}
+    },
+    {
+      "name": "vision_encoder",
+      "kind": "other",
+      "depends_on": ["patch_embedding", "vision_rope_3d", "vision_encoder_layer", "patch_merge_mlp", "multimodal_projector"],
+      "reference_impl": null,
+      "host_resident": {"allowed": false, "justification": "BLOCKED end-to-end: composite run-once vision tower = patch_embedding + 32 vision_encoder_layers + patch_merge + projector. Individually most sub-blocks reuse qwen3_vl, but the 3D-RoPE primitive (vision_rope_3d) is blocked, so the assembled tower cannot be pointed at a single existing ttnn reference. Sharded (planner: model exceeds per-chip DRAM).", "reference_link": null}
+    },
+    {
+      "name": "final_norm",
+      "kind": "norm",
+      "depends_on": ["rms_norm"],
+      "reference_impl": "models/demos/deepseek_v3/tt/rms_norm",
+      "host_resident": {"allowed": false, "justification": "model.norm final RMSNorm before the LM head (eps 1e-6, gemma-style).", "reference_link": null}
+    },
+    {
+      "name": "lm_head",
+      "kind": "linear",
+      "depends_on": ["final_norm"],
+      "reference_impl": "models/demos/deepseek_v3/tt/lm_head1d.py",
+      "host_resident": {"allowed": false, "justification": "Untied LM head (tie_word_embeddings=false), 6144 -> 200064. 2.46 GB bf16, column-parallel sharded over 32 chips with all-gather of logits; per-token cadence.", "reference_link": null}
+    },
+    {
+      "name": "mtp_head",
+      "kind": "decoder_layer",
+      "depends_on": ["moe_decoder_layer", "final_norm", "lm_head"],
+      "reference_impl": null,
+      "host_resident": {"allowed": false, "justification": "BLOCKED + ABSENT: config declares num_mtp_modules=7 / num_nextn_predict_layers=1 (DeepSeek-V3-style multi-token prediction), but NO mtp/nextn weights exist in this checkpoint's safetensors index. deepseek_v3/tt/mtp.py is the architectural reference, but with no weights this head is not buildable from this snapshot — out of scope for bring-up unless weights are sourced.", "reference_link": null}
+    }
+  ],
+  "use_cases": [
+    {
+      "name": "text_generation",
+      "description": "Autoregressive text generation from a text-only prompt using the 60-layer sparse-MoE decoder.",
+      "input_modality": "text",
+      "output_modality": "text",
+      "components_used": ["embedding", "rms_norm", "rope", "qk_norm", "gqa_attention", "sparse_lightning_attention", "swigluoai_mlp", "moe_gate", "moe_experts", "shared_expert", "dense_decoder_layer", "moe_decoder_layer", "final_norm", "lm_head"],
+      "needs_ar": true,
+      "needs_audio_out": false,
+      "decode_strategy": "kv_cache",
+      "hf_class": "MiniMaxM3SparseForConditionalGeneration",
+      "validation_metric": "perplexity",
+      "validation_threshold": "HF + 0.10",
+      "hybrid_notes": "Tokenization stays on the HF host. Block-sparse/lightning attention and MTP are blocked primitives; initial bring-up may fall back to full GQA on the sparse layers for parity, accepting reduced long-context efficiency."
+    },
+    {
+      "name": "image_text_to_text",
+      "description": "Vision-language generation: an image plus a text prompt are encoded and the decoder autoregressively generates a text response.",
+      "input_modality": "image",
+      "output_modality": "text",
+      "components_used": ["patch_embedding", "vision_rope_3d", "vision_layernorm", "vision_attention", "vision_mlp", "vision_encoder_layer", "patch_merge_mlp", "multimodal_projector", "vision_encoder", "embedding", "rms_norm", "rope", "qk_norm", "gqa_attention", "sparse_lightning_attention", "swigluoai_mlp", "moe_gate", "moe_experts", "shared_expert", "dense_decoder_layer", "moe_decoder_layer", "final_norm", "lm_head"],
+      "needs_ar": true,
+      "needs_audio_out": false,
+      "decode_strategy": "kv_cache",
+      "hf_class": "MiniMaxM3SparseForConditionalGeneration",
+      "validation_metric": "perplexity",
+      "validation_threshold": "HF + 0.10",
+      "hybrid_notes": "Image preprocessing (dynamic_res tiling per image_grid_pinpoints, image_seq_length 576), patch_embedding and the projector may stay on the HF host. Vision 3D-RoPE is a blocked primitive."
+    },
+    {
+      "name": "video_text_to_text",
+      "description": "Video-language generation: multi-frame video (temporal_patch_size 2, vision_segment_max_frames 4) plus text prompt produce a text response.",
+      "input_modality": "video",
+      "output_modality": "text",
+      "components_used": ["patch_embedding", "vision_rope_3d", "vision_layernorm", "vision_attention", "vision_mlp", "vision_encoder_layer", "patch_merge_mlp", "multimodal_projector", "vision_encoder", "embedding", "rms_norm", "rope", "qk_norm", "gqa_attention", "sparse_lightning_attention", "swigluoai_mlp", "moe_gate", "moe_experts", "shared_expert", "dense_decoder_layer", "moe_decoder_layer", "final_norm", "lm_head"],
+      "needs_ar": true,
+      "needs_audio_out": false,
+      "decode_strategy": "kv_cache",
+      "hf_class": "MiniMaxM3SparseForConditionalGeneration",
+      "validation_metric": "perplexity",
+      "validation_threshold": "HF + 0.10",
+      "hybrid_notes": "Same vision pipeline as image_text_to_text but with the temporal patch axis active (3D RoPE temporal dimension); video_token_index 200026. Frame sampling/preprocessing stays on the HF host."
+    }
+  ]
+}
