@@ -103,7 +103,11 @@ RUNNER_PROFILES = {
     },
     "p300a": {
         "arch": "blackhole",
-        "runs_on": "P300-viommu",
+        # A bare "P300-viommu" label does not match a schedulable runner (no
+        # in-service qualifier), so jobs sit queued forever. Mirror the proven
+        # runs-on used by tm-fabric-tests-impl.yaml's P300 job (and our own
+        # t3k/galaxy profiles): the in-service + arch-blackhole + label triple.
+        "runs_on": ["in-service", "arch-blackhole", "P300-viommu"],
         "runner_label": "P300",
         "tt_smi_cmd": "tt-smi -r",
         "matrix_output_key": "p150b",
