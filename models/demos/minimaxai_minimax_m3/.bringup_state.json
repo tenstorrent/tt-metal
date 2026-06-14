@@ -5,7 +5,7 @@
   "device": "bh_galaxy",
   "arch_name": "blackhole",
   "started_at": "2026-06-14T11:31:00Z",
-  "updated_at": "2026-06-14T12:08:01Z",
+  "updated_at": "2026-06-14T12:12:19Z",
   "components": [
     {
       "name": "rms_norm",
@@ -641,8 +641,14 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "pcc": 0.9999797940254211,
+        "artifacts": [
+          "reference/functional.py",
+          "reference/golden/moe_decoder_layer.pt"
+        ],
+        "notes": "pre-norm no scaling; sparse_lightning_attn + (routed experts x2.0-folded + bare shared); both norms gemma RMS; composed helpers; 80/128 experts at S=256"
       },
       "ttnn": {
         "status": "pending",
@@ -676,8 +682,14 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "pcc": 1.0,
+        "artifacts": [
+          "reference/functional.py",
+          "reference/golden/vision_encoder_layer.pt"
+        ],
+        "notes": "CLIP pre-norm, true LayerNorm, no residual scaling; ln1->3d-rope attn->res->ln2->mlp->res"
       },
       "ttnn": {
         "status": "pending",
@@ -709,8 +721,14 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "pcc": 1.0,
+        "artifacts": [
+          "reference/functional.py",
+          "reference/golden/patch_merge_mlp.pt"
+        ],
+        "notes": "reshape [N,6144]->[N/4,24576] row-major; linear_1 24576->6144 ->erf gelu-> linear_2 6144->6144; both bias; no LN; ckpt patch_merge_mlp.linear_{1,2}=HF merge_linear"
       },
       "ttnn": {
         "status": "pending",
@@ -742,8 +760,14 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "pcc": 0.9999998807907104,
+        "artifacts": [
+          "reference/functional.py",
+          "reference/golden/multimodal_projector.pt"
+        ],
+        "notes": "linear_1 1280->6144 ->erf gelu-> linear_2 6144->6144; bias; merge_linear weights absent (that's patch_merge_mlp)"
       },
       "ttnn": {
         "status": "pending",
@@ -1067,6 +1091,12 @@
       "tick": 5,
       "ts": "2026-06-14T12:08:01Z",
       "action": "reference[moe_experts,shared_expert,vision_mlp,dense_decoder_layer]",
+      "result": "ok"
+    },
+    {
+      "tick": 6,
+      "ts": "2026-06-14T12:12:19Z",
+      "action": "reference[moe_decoder_layer,vision_encoder_layer,patch_merge_mlp,multimodal_projector]",
       "result": "ok"
     }
   ],

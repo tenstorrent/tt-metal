@@ -4,7 +4,7 @@
 **Slug:** `minimaxai_minimax_m3`
 **Target Device:** bh_galaxy (blackhole)
 **Started:** 2026-06-14T11:31:00Z
-**Updated:** 2026-06-14T12:08:01Z
+**Updated:** 2026-06-14T12:12:19Z
 
 ## Block Status
 
@@ -90,22 +90,22 @@
 | dense_decoder_layer | debug | n/a | — | 0 |  |
 | dense_decoder_layer | optimization | pending | — | 0 |  |
 | dense_decoder_layer | real_weights | pending | — | 0 |  |
-| moe_decoder_layer | reference | pending | — | 0 |  |
+| moe_decoder_layer | reference | done | 0.999980 | 0 | pre-norm no scaling; sparse_lightning_attn + (routed experts x2.0-folded + bare shared); both norms gemma RMS; composed helpers; 80/128 experts at S=256 |
 | moe_decoder_layer | ttnn | pending | — | 0 |  |
 | moe_decoder_layer | debug | n/a | — | 0 |  |
 | moe_decoder_layer | optimization | pending | — | 0 |  |
 | moe_decoder_layer | real_weights | pending | — | 0 |  |
-| vision_encoder_layer | reference | pending | — | 0 |  |
+| vision_encoder_layer | reference | done | 1.000000 | 0 | CLIP pre-norm, true LayerNorm, no residual scaling; ln1->3d-rope attn->res->ln2->mlp->res |
 | vision_encoder_layer | ttnn | pending | — | 0 |  |
 | vision_encoder_layer | debug | n/a | — | 0 |  |
 | vision_encoder_layer | optimization | pending | — | 0 |  |
 | vision_encoder_layer | real_weights | pending | — | 0 |  |
-| patch_merge_mlp | reference | pending | — | 0 |  |
+| patch_merge_mlp | reference | done | 1.000000 | 0 | reshape [N,6144]->[N/4,24576] row-major; linear_1 24576->6144 ->erf gelu-> linear_2 6144->6144; both bias; no LN; ckpt patch_merge_mlp.linear_{1,2}=HF merge_linear |
 | patch_merge_mlp | ttnn | pending | — | 0 |  |
 | patch_merge_mlp | debug | n/a | — | 0 |  |
 | patch_merge_mlp | optimization | pending | — | 0 |  |
 | patch_merge_mlp | real_weights | pending | — | 0 |  |
-| multimodal_projector | reference | pending | — | 0 |  |
+| multimodal_projector | reference | done | 1.000000 | 0 | linear_1 1280->6144 ->erf gelu-> linear_2 6144->6144; bias; merge_linear weights absent (that's patch_merge_mlp) |
 | multimodal_projector | ttnn | pending | — | 0 |  |
 | multimodal_projector | debug | n/a | — | 0 |  |
 | multimodal_projector | optimization | pending | — | 0 |  |
@@ -146,6 +146,7 @@
 - tick 3 (2026-06-14T11:56:39Z): reference[vision_rope_3d,patch_embedding,qk_norm,gqa_attention] — ok
 - tick 4 (2026-06-14T12:01:58Z): reference[sparse_lightning_attention,vision_attention,swigluoai_mlp,moe_gate] — ok
 - tick 5 (2026-06-14T12:08:01Z): reference[moe_experts,shared_expert,vision_mlp,dense_decoder_layer] — ok
+- tick 6 (2026-06-14T12:12:19Z): reference[moe_decoder_layer,vision_encoder_layer,patch_merge_mlp,multimodal_projector] — ok
 
 ## Host-Resident Exceptions
 

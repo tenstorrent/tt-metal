@@ -1198,3 +1198,306 @@ def moe_experts_forward(
             )
             final[t] += (expert_out * topk_weights[t, j]).squeeze(0).to(final.dtype)
     return final.reshape(orig_shape)
+
+
+def moe_decoder_layer_forward(
+    x: torch.Tensor,
+    weights_dict: dict,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    expert_weights: dict,
+    position_ids: torch.Tensor = None,
+    num_attention_heads: int = 64,
+    num_key_value_heads: int = 4,
+    head_dim: int = 128,
+    index_head_dim: int = 128,
+    index_n_heads: int = 4,
+    block_size: int = 128,
+    topk_blocks: int = 16,
+    local_blocks: int = 1,
+    init_blocks: int = 0,
+    top_k: int = 4,
+    routed_scaling_factor: float = 2.0,
+    moe_intermediate: int = 3072,
+    eps: float = 1e-6,
+    swiglu_alpha: float = 1.702,
+    swiglu_limit: float = 7.0,
+):
+    """Full SPARSE+MoE decoder layer matching MiniMaxM3VLDecoderLayer (layers 3-59).
+
+    Composes the existing reference helpers in the EXACT HF order for a sparse
+    layer (``mlp_layer_types[layer_idx] == "sparse"`` and
+    ``layer_types[layer_idx] == "minimax_m3_sparse"`` -> block-sparse lightning
+    attention + a block-sparse MoE MLP). The HF
+    ``MiniMaxM3VLDecoderLayer.forward`` is plain PRE-NORM with NO residual
+    scaling::
+
+        residual = x
+        h = input_layernorm(x)                 # Gemma RMSNorm, (1+w) scale, eps 1e-6
+        h, _ = self_attn(h)                    # sparse lightning attention
+        x = residual + h
+        residual = x
+        h = post_attention_layernorm(x)        # Gemma RMSNorm
+        h = block_sparse_moe(h)                # MoE block (below)
+        x = residual + h
+
+    MoE block (``MiniMaxM3VLSparseMoeBlock.forward``)::
+
+        shared_output = shared_experts(h)                      # bare DenseMLP, NO scaling
+        idx, w = gate(h)                                       # top-4 of 128, sigmoid scoring
+        routed = experts(h, idx, w) * routed_scaling_factor    # 2.0 scaling
+        h = routed + shared_output
+
+    Here the ``routed_scaling_factor`` (2.0) is folded into the gating weights by
+    :func:`moe_gate_forward`, so :func:`moe_experts_forward` ALREADY includes the
+    ×2.0 and we add the bare :func:`shared_expert_forward` output (no scaling).
+    Both norms are the same Gemma-style :func:`rms_norm_forward` ((1+w) scale,
+    fp32 reduce). The attention path is :func:`sparse_lightning_attention_forward`
+    (lightning indexer block selection + block-sparse GQA SDPA); it returns
+    ``(out, block_indices)`` and we use only ``out``.
+
+    Args:
+        x: hidden states [B, S, hidden_size (6144)].
+        weights_dict: keys ``input_layernorm`` / ``post_attention_layernorm``
+            (norm gammas [hidden]); attention ``q_proj/k_proj/v_proj/o_proj/
+            q_norm/k_norm`` + indexer ``index_q_proj/index_k_proj/index_q_norm/
+            index_k_norm``; MoE router ``gate`` ([num_experts, hidden]) and
+            ``e_score_correction_bias`` ([num_experts]); shared expert
+            ``shared_gate/shared_up/shared_down`` (each a ``.weight`` tensor).
+        cos, sin: partial-rope tables [B, S, rotary_dim (64)] from
+            build_rope_cos_sin(theta=5e6, rotary_dim=64).
+        expert_weights: dict {expert_id: {"gate_w","up_w","down_w"}} for the
+            ROUTED experts (only the selected experts need be present).
+        position_ids: [B, S] content positions; defaults to arange(S) internally.
+        remaining args: config dims / MoE + SwiGLU-OAI params.
+
+    Returns:
+        Decoder layer output [B, S, hidden_size], x's dtype.
+    """
+    residual = x
+    h = rms_norm_forward(x, weights_dict["input_layernorm"], eps=eps)
+    h, _block_indices = sparse_lightning_attention_forward(
+        h,
+        weights_dict,
+        cos,
+        sin,
+        position_ids=position_ids,
+        num_attention_heads=num_attention_heads,
+        num_key_value_heads=num_key_value_heads,
+        head_dim=head_dim,
+        index_head_dim=index_head_dim,
+        index_n_heads=index_n_heads,
+        block_size=block_size,
+        topk_blocks=topk_blocks,
+        local_blocks=local_blocks,
+        init_blocks=init_blocks,
+        eps=eps,
+    )
+    x = residual + h
+
+    residual = x
+    h = rms_norm_forward(x, weights_dict["post_attention_layernorm"], eps=eps)
+
+    # --- block_sparse_moe = routed experts (×2.0 folded in gate) + shared (no scale) ---
+    topk_indices, topk_weights = moe_gate_forward(
+        h,
+        weights_dict["gate"],
+        weights_dict["e_score_correction_bias"],
+        top_k=top_k,
+        routed_scaling_factor=routed_scaling_factor,
+    )
+    routed = moe_experts_forward(
+        h,
+        topk_indices,
+        topk_weights,
+        expert_weights,
+        moe_intermediate=moe_intermediate,
+        alpha=swiglu_alpha,
+        limit=swiglu_limit,
+    )
+    shared = shared_expert_forward(
+        h,
+        weights_dict["shared_gate"],
+        weights_dict["shared_up"],
+        weights_dict["shared_down"],
+        alpha=swiglu_alpha,
+        limit=swiglu_limit,
+    )
+    moe_out = routed + shared
+    x = residual + moe_out
+    return x
+
+
+def vision_encoder_layer_forward(
+    x: torch.Tensor,
+    weights_dict: dict,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    num_attention_heads: int = 16,
+    head_dim: int = 80,
+    eps: float = 1e-5,
+) -> torch.Tensor:
+    """Full CLIP vision encoder layer matching MiniMaxM3VLVisionEncoderLayer.
+
+    Composes the existing reference helpers in the EXACT HF order. The HF
+    ``MiniMaxM3VLVisionEncoderLayer.forward`` is a plain CLIP PRE-NORM block
+    with NO residual scaling and NON-CAUSAL (bidirectional) attention carrying
+    the tower's 3D RoPE::
+
+        residual = x
+        h = layer_norm1(x)               # nn.LayerNorm (mean-sub + bias), eps 1e-5
+        h, _ = self_attn(h, cos, sin)    # CLIP MHA, 3D RoPE, non-causal, q/k/v/out +bias
+        x = residual + h
+        residual = x
+        h = layer_norm2(x)               # nn.LayerNorm
+        h = mlp(h)                       # fc1 -> erf-GELU -> fc2, both +bias
+        x = residual + h
+
+    Both norms are the SAME true LayerNorm (:func:`vision_layernorm_forward`:
+    subtract mean, divide by sqrt(var+eps), scale by weight, ADD bias) -- NOT
+    the text-side Gemma RMSNorm. The attention path is
+    :func:`vision_attention_forward` (16 heads, head_dim 80, no qk-norm, no GQA,
+    3D RoPE on q/k, scale head_dim**-0.5, ``is_causal=False``) and the MLP path
+    is :func:`vision_mlp_forward` (1280 -> 5120 -> 1280, erf GELU). There is NO
+    residual scaling anywhere in this layer.
+
+    Args:
+        x: hidden states [B, S, hidden_size (1280)].
+        weights_dict: keys
+            ``layer_norm1``/``layer_norm1_bias``, ``layer_norm2``/``layer_norm2_bias``
+            (norm weight+bias [hidden]); attention
+            ``q_proj``/``q_proj_bias``, ``k_proj``/``k_proj_bias``,
+            ``v_proj``/``v_proj_bias``, ``out_proj``/``out_proj_bias``;
+            MLP ``fc1``/``fc1_bias``, ``fc2``/``fc2_bias`` (each a tensor).
+        cos, sin: 3D-rope tables [S, rot_dim] from
+            build_vision_rope_3d(grid_thw, head_dim=80, theta=1e4, spatial_merge_size=2).
+        num_attention_heads: 16. head_dim: 80. eps: layer_norm_eps (1e-5).
+
+    Returns:
+        Encoder layer output [B, S, hidden_size], x's dtype.
+    """
+    residual = x
+    h = vision_layernorm_forward(x, weights_dict["layer_norm1"], weights_dict["layer_norm1_bias"], eps=eps)
+    h = vision_attention_forward(
+        h,
+        {
+            "q_proj": weights_dict["q_proj"],
+            "q_proj_bias": weights_dict.get("q_proj_bias"),
+            "k_proj": weights_dict["k_proj"],
+            "k_proj_bias": weights_dict.get("k_proj_bias"),
+            "v_proj": weights_dict["v_proj"],
+            "v_proj_bias": weights_dict.get("v_proj_bias"),
+            "out_proj": weights_dict["out_proj"],
+            "out_proj_bias": weights_dict.get("out_proj_bias"),
+        },
+        cos,
+        sin,
+        num_attention_heads=num_attention_heads,
+        head_dim=head_dim,
+    )
+    x = residual + h
+
+    residual = x
+    h = vision_layernorm_forward(x, weights_dict["layer_norm2"], weights_dict["layer_norm2_bias"], eps=eps)
+    h = vision_mlp_forward(
+        h,
+        weights_dict["fc1"],
+        weights_dict["fc1_bias"],
+        weights_dict["fc2"],
+        weights_dict["fc2_bias"],
+    )
+    x = residual + h
+    return x
+
+
+def multimodal_projector_forward(x: torch.Tensor, weights_dict: dict) -> torch.Tensor:
+    """MiniMax-M3 multimodal projector (vision features -> text embedding space).
+
+    Mirrors the FIRST (per-patch) MLP path of HF MiniMaxM3VLMultiModalProjector
+    (transformers 5.12.0), i.e. linear_2(act(linear_1(image_features))):
+
+      1. linear_1: vision_config.hidden_size (1280) -> projector_hidden_size (6144), with bias
+      2. act:      erf GELU  (projector_hidden_act = "gelu" -> ACT2FN["gelu"] ->
+                   GELUActivation == F.gelu(..., approximate="none"))
+      3. linear_2: projector_hidden_size (6144) -> text_config.hidden_size (6144), with bias
+
+    Checkpoint vs HF-module note: the HF MiniMaxM3VLMultiModalProjector class ALSO
+    declares merge_linear_1/merge_linear_2 and a spatial_merge_size**2 reshape
+    in its forward. Those merge linears are NOT present in the MiniMax-M3 checkpoint
+    (index ships only multi_modal_projector.linear_{1,2}.{weight,bias}); the spatial
+    merge / fuse stage is a SEPARATE top-level block (patch_merge_mlp.linear_{1,2}),
+    owned by the patch_merge_mlp bring-up block. So THIS block is exactly the
+    linear_1 -> gelu -> linear_2 per-patch projection into the 6144 text hidden space,
+    matching the architecture inventory. multimodal_projector_bias = True.
+
+    Args:
+        x: merged vision features [..., vision_hidden (1280)].
+        weights_dict: keys linear_1 and linear_2, each a dict with
+            weight [out, in] and bias [out] tensors.
+
+    Returns:
+        Projected features [..., text_hidden (6144)], x's dtype.
+    """
+    h = torch.nn.functional.linear(x, weights_dict["linear_1"]["weight"], weights_dict["linear_1"]["bias"])
+    h = torch.nn.functional.gelu(h, approximate="none")
+    h = torch.nn.functional.linear(h, weights_dict["linear_2"]["weight"], weights_dict["linear_2"]["bias"])
+    return h
+
+
+def patch_merge_mlp_forward(
+    x: torch.Tensor,
+    weights_dict: dict,
+    spatial_merge_size: int = 2,
+) -> torch.Tensor:
+    """Spatial patch-merge + projection matching the merge half of
+    MiniMaxM3VLMultiModalProjector.forward (transformers 5.12.0).
+
+    The full HF projector first runs a per-patch GELU MLP
+    (``linear_1 -> gelu -> linear_2``: 1280 -> 6144 -> 6144) on every vision
+    patch, then this block fuses each ``spatial_merge_size**2`` (=4) group of
+    neighbouring projected patches into a single text token via a second GELU
+    MLP. This function implements ONLY that second (merge) MLP, whose
+    checkpoint keys are ``patch_merge_mlp.linear_{1,2}`` (HF registers them as
+    ``multi_modal_projector.merge_linear_{1,2}``).
+
+    Exact HF pipeline (the last two lines of the projector forward)::
+
+        hidden = hidden.reshape(N // (spatial_merge_size**2), -1)   # [N,6144]->[N/4,24576]
+        out    = merge_linear_2(gelu(merge_linear_1(hidden)))       # [N/4,24576]->[N/4,6144]
+
+    Grouping / reshape order: a plain row-major ``reshape`` of the
+    ``[N, projector_hidden(6144)]`` patch sequence into
+    ``[N/4, 4*projector_hidden(=merged_hidden 24576)]``. This concatenates 4
+    CONSECUTIVE patches along the channel dim (the patch sequence is already
+    laid out by the image processor so that each spatial 2x2 window occupies 4
+    consecutive positions); there is NO transpose/interleave. There is NO
+    layernorm in this block -- it is purely ``Linear -> gelu -> Linear``, both
+    linears WITH bias.
+
+    Activation: ``ACT2FN["gelu"]`` -> ``GELUActivation`` = EXACT / erf-based
+    GELU (``approximate="none"``), NOT the tanh approximation.
+
+    MLP shape: linear_1 ``[6144, 24576]`` (in 24576 -> out 6144), linear_2
+    ``[6144, 6144]`` (in 6144 -> out 6144 = text hidden_size).
+
+    Args:
+        x: per-patch projected features ``[N, projector_hidden_size (6144)]``
+            (the output of the projector's first GELU MLP). ``N`` must be
+            divisible by ``spatial_merge_size**2``.
+        weights_dict: keys ``linear_1`` and ``linear_2``, each a dict with
+            ``weight`` (``[out, in]``) and ``bias`` (``[out]``) tensors,
+            corresponding to checkpoint ``patch_merge_mlp.linear_{1,2}``.
+        spatial_merge_size: spatial merge factor (2 -> groups of 4 patches).
+
+    Returns:
+        Merged tokens ``[N // (spatial_merge_size**2), text_hidden (6144)]``,
+        in x's dtype.
+    """
+    merge = spatial_merge_size**2
+    hidden = x.reshape(x.shape[0] // merge, -1)
+    w1 = weights_dict["linear_1"]
+    w2 = weights_dict["linear_2"]
+    hidden = torch.nn.functional.linear(hidden, w1["weight"], w1["bias"])
+    hidden = torch.nn.functional.gelu(hidden, approximate="none")
+    hidden = torch.nn.functional.linear(hidden, w2["weight"], w2["bias"])
+    return hidden
