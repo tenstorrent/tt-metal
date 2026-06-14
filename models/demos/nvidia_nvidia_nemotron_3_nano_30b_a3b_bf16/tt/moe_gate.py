@@ -38,6 +38,61 @@ def _get_bias_tt(bias_cpu: torch.Tensor, mesh_device: MeshDevice) -> ttnn.Tensor
     return bias_tt
 
 
+def moe_gate_forward_cpu(
+    mesh_device: MeshDevice,
+    hidden_states: ttnn.Tensor,  # [tokens, 2688] bf16 on device
+    weight: torch.Tensor,  # [128, 2688] float32 CPU
+    e_score_correction_bias: torch.Tensor,  # [128] float32 CPU
+    n_routed_experts: int = N_ROUTED_EXPERTS,
+    num_experts_per_tok: int = NUM_EXPERTS_PER_TOK,
+    norm_topk_prob: bool = True,
+    routed_scaling_factor: float = ROUTED_SCALING_FACTOR,
+) -> ttnn.Tensor:
+    """CPU float32 gate — exactly matches HF NemotronHTopkRouter (n_group=1, topk_group=1).
+
+    D2H the hidden state, compute in float32, H2D the dense routing tensor.
+    Correct routing at the cost of D2H + H2D per E-layer (not trace-compatible).
+    """
+    import torch.nn.functional as F
+
+    from .tp import _R
+
+    # D2H: take shard 0 (all shards identical — hidden is replicated).
+    # Use [0:1] not [0] to preserve the batch dimension.
+    h_cpu = ttnn.to_torch(
+        hidden_states,
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+    )[
+        0:1
+    ].float()  # [1, 2688] or [T, 2688]  float32
+
+    T = h_cpu.shape[0]
+    w_f32 = weight.float()
+    b_f32 = e_score_correction_bias.float()
+
+    logits = F.linear(h_cpu, w_f32)  # [T, 128]
+    scores = torch.sigmoid(logits)  # [T, 128]
+    scores_biased = scores + b_f32  # [T, 128]
+    top_k_indices = torch.topk(scores_biased, k=num_experts_per_tok, dim=-1, sorted=False)[1]  # [T, 6]
+    top_k_vals = scores.gather(1, top_k_indices)  # [T, 6]
+    if norm_topk_prob:
+        denom = top_k_vals.sum(dim=-1, keepdim=True) + 1e-20
+        top_k_vals = top_k_vals / denom
+    top_k_vals = top_k_vals * routed_scaling_factor
+
+    dense = torch.zeros(T, n_routed_experts, dtype=torch.bfloat16)
+    dense.scatter_(1, top_k_indices, top_k_vals.bfloat16())
+    dense_4d = dense.reshape(1, 1, T, n_routed_experts)
+
+    return ttnn.from_torch(
+        dense_4d,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=_R(mesh_device),
+    )
+
+
 def moe_gate_forward(
     mesh_device: MeshDevice,
     hidden_states: ttnn.Tensor,  # [tokens, 2688] bf16 on device
