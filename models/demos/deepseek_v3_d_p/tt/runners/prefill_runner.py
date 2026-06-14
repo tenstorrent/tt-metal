@@ -559,6 +559,14 @@ def main() -> None:
 
     if os.environ.get("PREFILL_STANDALONE_CHUNKED", "0") == "1":
         # Standalone validation: golden longbook_qa input, chunked prefill, KV-cache PCC vs trace.
+        # Perf experiment (PREFILL_FORCE_PRECLEAR=1): mimic the request-mode-only
+        # clear_loaded_sub_device_manager() (see the `else` branch below) in the standalone path, to
+        # test whether reverting compile()'s custom CCL/MoE sub-device manager to the whole-chip default
+        # is what slows the request loop (~3.1s vs standalone ~1.9s/chunk). If standalone slows to ~3.1s
+        # with this set, the line-578 clear is the cause; if it stays ~1.9s, the H2D service is.
+        if os.environ.get("PREFILL_FORCE_PRECLEAR", "0") == "1":
+            logger.info("[perf-exp] PREFILL_FORCE_PRECLEAR=1 — clearing sub-device manager before standalone loop")
+            mesh_device.clear_loaded_sub_device_manager()
         logger.info("Setup complete, running standalone chunked-prefill loop (golden KV-cache PCC check)")
         run_standalone_chunked_prefill_loop(pipeline)
     elif os.environ.get("PREFILL_STANDALONE", "0") == "1":
