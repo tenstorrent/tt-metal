@@ -72,13 +72,28 @@ template <typename T>
 concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } || WorkloadDescriptorConcept<T>) &&
                                           !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T>;
 
-// Metal 2.0 "stepping stone" concept
-// A factory that creates a ProgramSpec and ProgramRunArgs directly, in a single create_everything call.
-// This concept exists purely as a stepping stone to de-risk a Metal 2.0 port.
-// It is used to verify correctness, no more. It will ALWAYS take the slow path path.
+///////////////////////////////////////////////////////////////////////////////////////////////////
+// Metal 2.0 "stepping stone" factory concept
+///////////////////////////////////////////////////////////////////////////////////////////////////
+// A "stepping stone" factory is a single-program concept with a single create_everything method,
+// which returns a struct containing:
+//  - the ProgramSpec
+//  - the ProgramRunArgs
+//  - (optional) any op-owned tensors
+//
+// This concept exists PURELY as a stepping stone towards a complete Metal 2.0 port.
+// Its SOLE purpose is to simplify the initial port, and to verify correctness.
+// Any single-program op can use this stepping stone, including those with op-owned tensors.
+//
+// WARNING: This concept is NOT intended for production use!
+// A factory written against this method will ALWAYS take the slow path, ignoring the ProgramCache.
+// Furthermore, it enqueues work to the device with a BLOCKING call. This makes it EXTREMELY SLOW!
+// A Metal 2.0 op port is not complete until the factory is refactored to target one of the "real"
+// Metal 2.0 concepts (ProgramSpecFactoryConcept or AdvancedProgramSpecFactoryConcept).
 template <typename T>
 concept IntermediateStepMetalV2FactoryConcept = requires { &T::create_everything; } && !ProgramFactoryConcept<T> &&
                                                 !MeshWorkloadFactoryConcept<T> && !ProgramDescriptorFactoryConcept<T>;
+///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // Detect operations that put create_descriptor directly on the operation struct
 // (no program_factory_t wrapper needed for single-descriptor operations).
