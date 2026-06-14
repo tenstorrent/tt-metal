@@ -305,15 +305,20 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     //     1.30x, 0 regressions, 96.4% of oracle-best (see minimal_matmul_nslice_kpar_flux.md).
     const bool num_slices_pinned = std::getenv("TT_MM_NUM_SLICES") != nullptr;
     const bool k_slices_pinned = std::getenv("TT_MM_K_SLICES") != nullptr;
-    const bool kpar_auto_ok = !config.has_value() && !fuse_op && !fuse_srs;
+    // The fused reduction reuses the store-and-forward semaphore protocol, so it's incompatible only with
+    // fused ops. EXPLICIT env K-par works with OR without a pinned blocking config, so blocking and S/Pk
+    // can be swept jointly (they interact). The AUTO heuristic stays on the no-config path (it also owns
+    // the auto block sizer, which a pinned config replaces).
+    const bool no_fuse_ops = !fuse_op && !fuse_srs;
 
     uint32_t num_k_slices = 1;
     bool num_k_fused = false;
-    if (k_slices_pinned && kpar_auto_ok) {
+    if (k_slices_pinned && no_fuse_ops) {
         num_k_slices = std::max(1u, static_cast<uint32_t>(std::atoi(std::getenv("TT_MM_K_SLICES"))));
         const char* kf = std::getenv("TT_MM_K_FUSED");
         num_k_fused = (kf != nullptr && std::atoi(kf) != 0);
-    } else if (kpar_auto_ok && !num_slices_pinned && std::getenv("TT_MM_NO_AUTO_KPAR") == nullptr) {
+    } else if (
+        no_fuse_ops && !config.has_value() && !num_slices_pinned && std::getenv("TT_MM_NO_AUTO_KPAR") == nullptr) {
         // Joint (S, Pk) auto heuristic. Fires only where the N-slicer already engages (num_slices>1) —
         // the delivery-bound/skewed regime the heuristic was fit on. K-dominance score
         //   D = K_tiles * num_cores / out_tiles

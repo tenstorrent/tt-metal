@@ -237,9 +237,11 @@ MinimalMatmulDeviceOperation::spec_return_value_t MinimalMatmulDeviceOperation::
     // Split-K (env TT_MM_K_SLICES). Two reduction modes:
     //  - A2 (default): each band writes its partial; output is [K_slices * M, N] and the host sums.
     //  - B (TT_MM_K_FUSED=1): bands reduce up the column on-device; output is the final [M, N].
+    // Env split-K applies with OR without a pinned blocking config (so blocking and S/Pk sweep jointly);
+    // the factory honors the same env. Fused (k_fused) -> [M,N]; A2 -> [k_slices*M, N].
     uint32_t k_slices = 1;
     bool k_fused = false;
-    if (chunks == 1 && !operation_attributes.config.has_value()) {
+    if (chunks == 1) {
         if (const char* ks = std::getenv("TT_MM_K_SLICES"); ks != nullptr) {
             k_slices = std::max(1, std::atoi(ks));
         }
