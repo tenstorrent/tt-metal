@@ -30,13 +30,14 @@ def _pos(p, B, mesh):
     )
 
 
+@pytest.mark.parametrize("shard_experts", [False, True], ids=["replicated", "sharded"])
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90000000, "num_command_queues": 1}],
     indirect=True,
 )
-def test_m4_trace(mesh_device, reset_seeds):
+def test_m4_trace(mesh_device, reset_seeds, shard_experts):
     ckpt = os.environ["HF_MODEL"]
     cfg = AutoConfig.from_pretrained(ckpt).text_config
     g = get_cached_golden(ckpt, N_LAYERS, 0, 32)
@@ -45,10 +46,10 @@ def test_m4_trace(mesh_device, reset_seeds):
     embed = load_m4_weights(ckpt, N_LAYERS)
 
     tsd = embed
-    # shard_experts=False (replicated experts, no all_reduce) isolates the trace mechanism from
-    # CCL-in-trace; the sharded production path is traced separately (CCL needs persistent buffers).
+    # Both expert layouts must trace: replicated isolates the core mechanism; sharded is the
+    # production path (on-device router selector + async all-reduce, no host round-trip).
     tt = TtMistral4TextModel(
-        mesh_device, tsd, cfg, N_LAYERS, cfg.rms_norm_eps, shard_experts=False, expert_dtype=ttnn.bfloat8_b
+        mesh_device, tsd, cfg, N_LAYERS, cfg.rms_norm_eps, shard_experts=shard_experts, expert_dtype=ttnn.bfloat8_b
     )
     emb = tsd["model.embed_tokens.weight"][ids]  # [B,S,hidden]
 

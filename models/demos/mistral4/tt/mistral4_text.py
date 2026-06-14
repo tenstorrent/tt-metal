@@ -168,9 +168,10 @@ class TtMistral4MoE(LightweightModule):
     """Ungrouped top-4/128 MoE + shared SwiGLU expert. forward(x) -> [B, S, hidden].
 
     shard_experts=True shards the 128 experts across the mesh (E/n_dev per device) so the full
-    36-layer model fits in DRAM; partial sums are combined with ttnn.all_reduce(Sum). The expert
-    compute (the heavy weights) stays on device; only the tiny routing matrix W is round-tripped
-    to host to expert-shard it (negligible; an all-to-all dispatch is the perf path — see #14).
+    36-layer model fits in DRAM; partial sums are combined with all_reduce_async(Sum). Each device
+    extracts its local experts' routing weights on-device via a precomputed sharded column selector
+    (W_full @ select_d -> W_local), so the whole MoE stays on device and the decode step is fully
+    trace-capturable (no host round-trip). Sparse dispatch is the further perf path — see #14.
     """
 
     def __init__(self, mesh, sd, cfg, shard_experts=False, expert_dtype=ttnn.bfloat16):
@@ -201,6 +202,21 @@ class TtMistral4MoE(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
             )  # [per,I,H]/device
+            # sharded column selector: device d holds [E,per] selecting its experts' routing weights
+            # (W_full @ select_d -> W_local), replacing the host round-trip with an on-device matmul.
+            nd = mesh.get_num_devices()
+            sel = torch.zeros(nd, self.E, self.per)
+            for d in range(nd):
+                for j in range(self.per):
+                    sel[d, d * self.per + j, j] = 1.0
+            self.expert_select = ttnn.from_torch(
+                sel.to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+            )
         else:
             self.w_gup = [_lin(gup[e], mesh) for e in range(self.E)]
             self.w_down = [_lin(down[e], mesh) for e in range(self.E)]
@@ -223,11 +239,9 @@ class TtMistral4MoE(LightweightModule):
         B, S, I, H = x.shape[0], x.shape[1], self.interm, self.hidden
         W = self._route(x, B, S)
         if self.shard:
-            # expert-shard the tiny routing matrix (host round-trip; see class docstring / #14)
-            W_host = ttnn.to_torch(W, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0))[:B]
-            W_sh = ttnn.from_torch(
-                W_host, layout=ttnn.TILE_LAYOUT, device=self.mesh, mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=-1)
-            )
+            # extract each device's local experts' routing weights on-device (no host round-trip):
+            # W_full [B,S,E] @ select_d [E,per] -> W_local [B,S,per]. Keeps the MoE trace-capturable.
+            W_sh = ttnn.matmul(W, self.expert_select)
             # BATCHED experts: the per local experts in 2 batched matmuls (not `per` sequential
             # linears) — the dominant decode/forward speedup. Stacked weights gup_sh [per,H,2I],
             # down_sh [per,I,H]; broadcast x over the expert (batch) dim.
@@ -239,7 +253,17 @@ class TtMistral4MoE(LightweightModule):
             y = ttnn.matmul(h, self.down_sh)  # [per,S,H]
             w = ttnn.permute(W_sh, (2, 1, 0))  # [B,S,per] -> [per,S,B]
             acc = ttnn.reshape(ttnn.sum(ttnn.mul(y, w), dim=0), (B, S, H))  # weighted sum over local experts
-            experts = ttnn.all_reduce(acc)  # sum across devices
+            # trace-safe collective: async all-reduce over the 8 expert-sharded devices (cluster
+            # axis 1 of the 1x8 mesh) sums each device's local-expert contribution.
+            experts = ttnn.experimental.all_reduce_async(
+                acc,
+                cluster_axis=1,
+                mesh_device=self.mesh,
+                num_links=1,
+                math_op=ttnn.ReduceType.Sum,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=ttnn.Topology.Linear,
+            )
         else:
             acc = None
             for e in range(self.E):
