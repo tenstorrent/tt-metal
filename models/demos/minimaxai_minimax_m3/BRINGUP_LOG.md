@@ -4,28 +4,28 @@
 **Slug:** `minimaxai_minimax_m3`
 **Target Device:** bh_galaxy (blackhole)
 **Started:** 2026-06-14T11:31:00Z
-**Updated:** 2026-06-14T11:38:24Z
+**Updated:** 2026-06-14T11:51:59Z
 
 ## Block Status
 
 | Block | Phase | Status | PCC | Attempts | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| rms_norm | reference | pending | — | 0 |  |
+| rms_norm | reference | done | 1.000009 | 0 | gemma +1, fp32; key language_model.model.layers.0.input_layernorm.weight |
 | rms_norm | ttnn | pending | — | 0 |  |
 | rms_norm | debug | n/a | — | 0 |  |
 | rms_norm | optimization | pending | — | 0 |  |
 | rms_norm | real_weights | pending | — | 0 |  |
-| vision_layernorm | reference | pending | — | 0 |  |
+| vision_layernorm | reference | done | 1.000000 | 0 | true LayerNorm + bias eps 1e-5; vision_tower.* keys |
 | vision_layernorm | ttnn | pending | — | 0 |  |
 | vision_layernorm | debug | n/a | — | 0 |  |
 | vision_layernorm | optimization | pending | — | 0 |  |
 | vision_layernorm | real_weights | pending | — | 0 |  |
-| embedding | reference | pending | — | 0 |  |
+| embedding | reference | done | 1.000000 | 0 | plain lookup no scaling; tie_word_embeddings=False |
 | embedding | ttnn | pending | — | 0 |  |
 | embedding | debug | n/a | — | 0 |  |
 | embedding | optimization | pending | — | 0 |  |
 | embedding | real_weights | pending | — | 0 |  |
-| rope | reference | pending | — | 0 |  |
+| rope | reference | done | 1.000000 | 0 | partial rope 64/64 half-split rotate_half; theta 5e6; bitwise exact |
 | rope | ttnn | pending | — | 0 |  |
 | rope | debug | n/a | — | 0 |  |
 | rope | optimization | pending | — | 0 |  |
@@ -142,6 +142,7 @@
 ## Recent Ticks
 
 - tick 1 (2026-06-14T11:38:24Z): architecture[all] — ok
+- tick 2 (2026-06-14T11:51:59Z): reference[rms_norm,embedding,rope,vision_layernorm] — ok
 
 ## Host-Resident Exceptions
 

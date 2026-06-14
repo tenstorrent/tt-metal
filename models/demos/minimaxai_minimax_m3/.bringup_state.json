@@ -5,7 +5,7 @@
   "device": "bh_galaxy",
   "arch_name": "blackhole",
   "started_at": "2026-06-14T11:31:00Z",
-  "updated_at": "2026-06-14T11:38:24Z",
+  "updated_at": "2026-06-14T11:51:59Z",
   "components": [
     {
       "name": "rms_norm",
@@ -18,8 +18,14 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "pcc": 1.0000094175338745,
+        "artifacts": [
+          "reference/functional.py",
+          "reference/golden/rms_norm.pt"
+        ],
+        "notes": "gemma +1, fp32; key language_model.model.layers.0.input_layernorm.weight"
       },
       "ttnn": {
         "status": "pending",
@@ -49,8 +55,14 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "pcc": 0.9999999999999976,
+        "artifacts": [
+          "reference/functional.py",
+          "reference/golden/vision_layernorm.pt"
+        ],
+        "notes": "true LayerNorm + bias eps 1e-5; vision_tower.* keys"
       },
       "ttnn": {
         "status": "pending",
@@ -80,8 +92,14 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "pcc": 0.9999996423721313,
+        "artifacts": [
+          "reference/functional.py",
+          "reference/golden/embedding.pt"
+        ],
+        "notes": "plain lookup no scaling; tie_word_embeddings=False"
       },
       "ttnn": {
         "status": "pending",
@@ -111,8 +129,14 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "pcc": 0.9999999999999979,
+        "artifacts": [
+          "reference/functional.py",
+          "reference/golden/rope.pt"
+        ],
+        "notes": "partial rope 64/64 half-split rotate_half; theta 5e6; bitwise exact"
       },
       "ttnn": {
         "status": "pending",
@@ -947,6 +971,12 @@
       "tick": 1,
       "ts": "2026-06-14T11:38:24Z",
       "action": "architecture[all]",
+      "result": "ok"
+    },
+    {
+      "tick": 2,
+      "ts": "2026-06-14T11:51:59Z",
+      "action": "reference[rms_norm,embedding,rope,vision_layernorm]",
       "result": "ok"
     }
   ],
