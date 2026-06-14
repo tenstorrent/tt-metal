@@ -47,7 +47,7 @@ def get_bh_ring40_prefetcher_mapping():
     return mapping
 
 
-def get_bh_prefetcher_core_ranges(num_global_cb_receivers=2):
+def get_bh_prefetcher_core_ranges(num_global_cb_receivers=2, ring40=False):
     """Blackhole 8-DRAM-bank prefetcher core layout.
 
     Returns the same 8-tuple shape that ``llama3_70b_galaxy.get_core_ranges``
@@ -60,12 +60,42 @@ def get_bh_prefetcher_core_ranges(num_global_cb_receivers=2):
     CPU-only (PrefetcherCoreConfig uses only the yaml cfg, not the device).
     ``num_global_cb_receivers`` <= 3 uses the default (no override) layout.
 
+    ``ring40=True`` returns the RING-40 layout instead (4 left DRAM banks x 10
+    receivers/sender = 40 cores) so qwen3.6's decode MLP keeps its low-padding
+    ring-40 while gaining the prefetcher. See get_bh_ring40_prefetcher_mapping.
+
     NOTE: ``mm_optimised_ring_cores`` / ``hop_grid`` are returned empty here —
     they configure the prefetched-weight ring MATMUL (G2+), not the global_cb
     allocation (G1). They must be populated (from the receiver grid) before the
     decode ring matmul runs through the prefetcher.
     """
     from models.tt_transformers.tt.prefetcher import ARCH_CONFIG, PrefetcherCoreConfig
+
+    if ring40:
+        # RING-40: 4 left banks x 10 receivers (8 banks x 5 is illegal/off-grid).
+        bh = ARCH_CONFIG["blackhole"]
+        mapping = get_bh_ring40_prefetcher_mapping()
+        all_sender_cores = [ttnn.CoreCoord(sx, sy) for (sx, sy) in mapping.keys()]
+        active_sender_cores = list(all_sender_cores)
+        # The 4 left DRAM banks (read by the 4 left-col senders).
+        dram_cores = [ttnn.CoreCoord(x, 0) for x in bh["dram_banks"][:4]]
+        all_receiver_cores = [
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(rx, ry), ttnn.CoreCoord(rx, ry)) for (rx, ry) in recvs])
+            for recvs in mapping.values()
+        ]
+        active_receiver_cores_list = [rc for recvs in mapping.values() for rc in recvs]
+        # Worker grid = everything except the col-0 senders (contains all 40 receivers).
+        worker_cores_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(11, 9))])
+        return (
+            active_sender_cores,
+            dram_cores,
+            all_sender_cores,
+            active_receiver_cores_list,
+            all_receiver_cores,
+            worker_cores_range_set,
+            [],  # mm_optimised_ring_cores (G2: ring-matmul order over the 40 cores)
+            [],  # hop_grid
+        )
 
     cfg = PrefetcherCoreConfig(
         num_receiver_cores=num_global_cb_receivers,
@@ -124,11 +154,15 @@ class TtLlamaPrefetcherSetup(LightweightModule):
         mesh_sub_device_manager_id_decode=None,
         save_tensor_addresses=False,
         is_qwen=False,
+        ring40=False,
     ):
         """
         - sub devices
         - global cb
         - helper functions to get the weight addresses
+
+        ``ring40=True`` (BH only) builds a RING-40 prefetcher (4 left banks x 10
+        receivers) so qwen3.6's low-padding ring-40 decode MLP can use the prefetcher.
         """
         logger.info("Running TtLlamaPrefetcherSetup")
 
@@ -137,7 +171,20 @@ class TtLlamaPrefetcherSetup(LightweightModule):
         self.n_layers = n_layers
 
         ###### Set up GlobalCB ######
-        if is_blackhole():
+        if is_blackhole() and ring40:
+            # RING-40: 4 left DRAM banks * 10 receivers = 40-core ring (matches the
+            # qwen3.6 decode MLP ring; 8 banks * 5 would be illegal/off-grid).
+            (
+                self.active_sender_cores,
+                self.dram_cores,
+                self.all_sender_cores,
+                self.active_receiver_cores_list,
+                self.all_receiver_cores,
+                self.worker_cores_range_set,
+                self.mm_optimised_ring_cores,
+                self.hop_grid,
+            ) = get_bh_prefetcher_core_ranges(ring40=True)
+        elif is_blackhole():
             # BH GLX: 8 DRAM banks at X=[1,3,2,0,5,7,6,4], senders cols 0/7. The
             # WH get_core_ranges hardcodes 12 banks -> "bank x=8" on BH.
             # qwen3.6 uses a 24-core ring; ring_size = num_senders * num_receivers.
