@@ -151,7 +151,11 @@ class TtMistral4MoE(LightweightModule):
         self.w_sd = _lin(sd["mlp.shared_experts.down_proj.weight"], mesh)
 
     def _route(self, x, B, S):
-        # softmax -> kth-largest threshold mask -> normalize (no scatter); W replicated [B,S,E]
+        # softmax -> kth-largest threshold mask -> normalize (no scatter); W replicated [B,S,E].
+        # NB: routing precision is bf16-bounded — ttnn.topk requires bf16/bfp8 input, so top-k
+        # selection can't be done in fp32 on device (a borderline expert can flip vs the fp32
+        # reference; this is the main source of the full-depth logit-PCC gap, ~0.982). An exact
+        # selection would need a host fp32 top-k round-trip per layer (not worth the perf cost).
         probs = ttnn.softmax(ttnn.linear(x, self.w_gate), dim=-1)
         kth = ttnn.slice(ttnn.topk(probs, self.k, dim=-1)[0], [0, 0, self.k - 1], [B, S, self.k])
         masked = ttnn.mul(probs, ttnn.ge(probs, kth))
