@@ -41,10 +41,10 @@ template <DataCopyType type, DstSync Dst, bool is_fp32_dest_acc_en, BroadcastTyp
 inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, const std::uint32_t src_format, const std::uint32_t dst_format)
 {
     // NOTE: the Src zero-substitution flag baseline is the operand-driven DEFAULT state established by
-    // hw_configure/reconfig. Eltwise-unary / SFPU ops that need -0.0 preserved (tt-metal #18346) select
+    // hw_configure/reconfig. Eltwise-unary / SFPU ops that need -0.0 preserved select
     // UNARY_PRESERVE in unary_op_init_common; the 32b unpack-to-dest path below selects MOV_OPS for its
     // hi16/lo16 MOVB2D. A plain datacopy must NOT force the flag, or it perturbs float copies in
-    // reduce-based ops (layernorm/group_norm) - tt-llk #960/#966.
+    // reduce-based ops (layernorm/group_norm).
     if (unpack_to_dest && is_32bit_input(src_format, dst_format))
     {
         math_unpack_to_dest_math_ready();
@@ -58,7 +58,7 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(1);
 
         // The 32b hi16/lo16 MOVB2D below must not flush datums with a zero low byte; own the Src
-        // zero-substitution flag via the math state tracker (tt-llk #960/#966).
+        // zero-substitution flag via the math state tracker.
         math::_configure_mov_ops_zero_flag_state_();
 
         if constexpr (src_b_bcast_type == BroadcastType::ROW)
@@ -184,7 +184,7 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
             TTI_CLEARDVALID(0b10, 0);
         }
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(0);
-        // Src zero-substitution flag is left in the datacopy init's UNARY_PRESERVE state (tt-llk #960/#966).
+        // Src zero-substitution flag is left in the datacopy init's UNARY_PRESERVE state.
     }
     else
     {

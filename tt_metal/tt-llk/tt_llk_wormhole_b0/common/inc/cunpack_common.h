@@ -804,7 +804,7 @@ inline void configure_unpack_AB(
 
     // NOTE: ALU_ACC_CTRL_Zero_Flag_disabled_src is no longer configured here. It is a math-ALU
     // concern (only MOVA2D/MOVB2D/ELW/MVMUL read it) and is owned by the math-side data-format
-    // state tracker; see ckernel::math::_configure_*_zero_flag_state_ (tt-llk #960/#966).
+    // state tracker; see ckernel::math::_configure_*_zero_flag_state_.
 
     t6_mutex_release(mutex::REG_RMW);
 

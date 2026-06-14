@@ -35,7 +35,7 @@ namespace ckernel
  * @return true when either operand is UInt16, in which case the flag must be disabled.
  *
  * @note ISA: WormholeB0/TensixTile/TensixCoprocessor/MOVA2D.md (FlushDenormals branch) and
- *       SrcASrcB.md (the "Integer 16" note). Rationale tracked in tt-llk #960.
+ *       SrcASrcB.md (the "Integer 16" note).
  */
 inline bool requires_disabled_src_zero_flag(const std::uint32_t srca_dst_format, const std::uint32_t srcb_dst_format)
 {

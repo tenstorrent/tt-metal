@@ -89,7 +89,7 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
         _llk_math_dbg_feature_disable_();
     }
 
-    // Establish the operand-driven baseline for the Src zero-substitution flag (tt-llk #960/#966).
+    // Establish the operand-driven baseline for the Src zero-substitution flag.
     _configure_default_zero_flag_state_(srca_data_format, srcb_data_format);
 }
 

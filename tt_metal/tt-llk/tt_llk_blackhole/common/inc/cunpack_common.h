@@ -814,7 +814,7 @@ inline void configure_unpack_AB(
 
     // NOTE: ALU_ACC_CTRL_Zero_Flag_disabled_src is no longer configured here. It is a math-ALU
     // concern (only MOVA2D/MOVB2D/ELW/MVMUL read it) and is owned by the math-side data-format
-    // state tracker; see ckernel::math::_configure_*_zero_flag_state_ (tt-llk #960/#966).
+    // state tracker; see ckernel::math::_configure_*_zero_flag_state_.
 
     // Set FP8 E4M3 mode, bit is accessible by unpacker/packer
     cfg_reg_rmw_tensix<THCON_SEC0_REG1_Unp_LF8_4b_exp_RMW>(((unpA_src_format & 0x1F) == (std::uint32_t)DataFormat::Fp8_e4m3) ? 1 : 0);

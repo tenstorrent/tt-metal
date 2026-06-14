@@ -30,9 +30,9 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb, uint32_t call_line = 
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
-    // Eltwise unary / SFPU ops keep the Src zero-substitution flag disabled to preserve bf16 -0.0
-    // (tt-metal #18346). Asserted after hw_configure (which sets the operand-driven DEFAULT) so it is
-    // the last writer before the op runs; skip-if-set keeps it cheap (tt-llk #960/#966).
+    // Eltwise unary / SFPU ops keep the Src zero-substitution flag disabled to preserve bf16 -0.0.
+    // Asserted after hw_configure (which sets the operand-driven DEFAULT) so it is the last writer
+    // before the op runs; skip-if-set keeps it cheap.
     MATH((ckernel::math::_configure_unary_preserve_zero_flag_state_()));
 #else
     UNPACK((llk_unpack_hw_configure(icb)));

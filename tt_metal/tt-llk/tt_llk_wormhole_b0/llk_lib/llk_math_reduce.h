@@ -44,7 +44,7 @@ inline void reduce_row_perform_transpose()
 
         // Enable SrcA format override to control MOVB2D hi16/lo16 addressing, and disable the Src
         // zero-substitution flag (via the math state tracker) to prevent mantissa flushing during
-        // the MOV operations (tt-llk #960/#966).
+        // the MOV operations.
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(1);
         math::_configure_mov_ops_zero_flag_state_();
 
@@ -84,7 +84,7 @@ inline void reduce_row_perform_transpose()
         TTI_MOVA2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 8);
 
         // Restore: disable SrcA format override and return the Src zero-substitution flag to the
-        // operand-driven baseline for the currently-configured formats (tt-llk #960/#966).
+        // operand-driven baseline for the currently-configured formats.
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(0);
         math::_configure_default_zero_flag_state_(src_zero_flag_srca_fmt, src_zero_flag_srcb_fmt);
     }

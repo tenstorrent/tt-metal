@@ -260,7 +260,7 @@ inline void llk_unpack_reconfig_data_format(
     const std::uint32_t srca_new_operand, const std::uint32_t srcb_new_operand) {
     llk_unpack_reconfig_data_format_srca<is_fp32_dest_acc_en, dim_stride_target, to_from_int8>(srca_new_operand);
     llk_unpack_reconfig_data_format_srcb<is_fp32_dest_acc_en, dim_stride_target, to_from_int8>(srcb_new_operand);
-    // The Src zero-substitution flag is owned by the math-side data-format state tracker (tt-llk #960/#966).
+    // The Src zero-substitution flag is owned by the math-side data-format state tracker.
 }
 
 /**
@@ -286,7 +286,7 @@ inline void llk_unpack_reconfig_data_format(
         srca_old_operand, srca_new_operand);
     llk_unpack_reconfig_data_format_srcb<is_fp32_dest_acc_en, dim_stride_target, to_from_int8>(
         srcb_old_operand, srcb_new_operand);
-    // The Src zero-substitution flag is owned by the math-side data-format state tracker (tt-llk #960/#966).
+    // The Src zero-substitution flag is owned by the math-side data-format state tracker.
 }
 
 /**

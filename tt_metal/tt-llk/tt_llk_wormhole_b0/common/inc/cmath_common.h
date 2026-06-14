@@ -35,14 +35,14 @@ constexpr std::uint32_t replay_buf_offset = 16; // split replay buffer usage bet
 //
 // The flag is a math-ALU concern: it is only read by MOVA2D/MOVB2D/ELW/MVMUL (the math thread),
 // so the math thread owns it via a small state machine, modeled on the Quasar ALU data-format
-// config-state tracker (tt-metal PR #43540). The recorded state lets format reconfigs and op
-// inits compose instead of clobbering each other (tt-llk #960/#966):
+// config-state tracker. The recorded state lets format reconfigs and op
+// inits compose instead of clobbering each other:
 //
 //   DEFAULT        : flag follows the operand formats (UInt16 -> 1, else 0). Established by the
 //                    format-aware math config (_llk_math_hw_configure_ / reconfig), which also
 //                    clears any stale op-state before the next FP matmul/binary/reduce.
 //   UNARY_PRESERVE : flag = 1. Selected by eltwise unary / SFPU / datacopy inits to preserve
-//                    bf16 -0.0 (tt-metal #18346) and 16-bit-integer datums.
+//                    bf16 -0.0 and 16-bit-integer datums.
 //   MOV_OPS        : flag = 1. Selected by transpose_dest / 32b hi16-lo16 MOV sequences.
 //
 // Each configurator early-returns when already in its state (DEFAULT additionally re-applies when

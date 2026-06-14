@@ -47,7 +47,7 @@ inline void transpose_dest_32b()
 
     // The 32b hi16/lo16 MOV sequence must not flush datums with a zero low byte; own the Src
     // zero-substitution flag via the math state tracker. Asserted here (execute) so it survives any
-    // llk_math_hw_configure that ran after the init; skip-if-set keeps it cheap (tt-llk #960/#966).
+    // llk_math_hw_configure that ran after the init; skip-if-set keeps it cheap.
     math::_configure_mov_ops_zero_flag_state_();
 
     // Transpose all the low 16 bit elements of all faces and put them in SrcA.
@@ -139,7 +139,7 @@ inline void transpose_dest_32b()
     }
 
     // Restore config state (the Src zero-substitution flag stays in the MOV_OPS state set at init;
-    // the next op's init/reconfig re-establishes its own state - tt-llk #960/#966).
+    // the next op's init/reconfig re-establishes its own state).
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(0);
 }
 

@@ -42,7 +42,7 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __b
                                        (dst_format == (std::uint32_t)DataFormat::UInt32) ||
                                        (dst_format == (std::uint32_t)DataFormat::Int32);
     // The Src zero-substitution flag for the int32 / 32b transpose path is owned by the math-side
-    // transpose_dest MOV_OPS state (tt-llk #960/#966), so a single plain hw_configure suffices.
+    // transpose_dest MOV_OPS state, so a single plain hw_configure suffices.
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb)));
 
     if (enable_unpack_to_dest) {
