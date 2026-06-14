@@ -184,7 +184,8 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
             TTI_CLEARDVALID(0b10, 0);
         }
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(0);
-        // Src zero-substitution flag is left in the datacopy init's UNARY_PRESERVE state.
+        // Src zero-substitution flag is left in the MOV_OPS state set above for the 32b MOVB2D
+        // sequence; the next op's init/reconfig re-establishes its own state.
     }
     else
     {

@@ -248,10 +248,6 @@ inline void _llk_unpack_A_init_(
     // Set transpose register to prevent state pollution
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose);
 
-    // NOTE: the Src zero-substitution flag (ALU_ACC_CTRL_Zero_Flag_disabled_src) is owned by the
-    // math-side data-format state tracker (ckernel::math::_configure_*_zero_flag_state_), not the
-    // unpacker - it is only read by MOVA2D/MOVB2D/ELW/MVMUL.
-
     // x-start/x-end is per-unpacker state, so program it on exactly the unpacker(s) the MOP issues a
     // real (non-ZEROSRC) UNPACR against; a zeroed source does not read L1, so its X counter is unused.
     // The unpack-to-dest (SrcA) path is only taken when the input is actually 32-bit; otherwise the MOP

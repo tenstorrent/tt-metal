@@ -48,7 +48,7 @@ inline void _llk_math_eltwise_unary_datacopy_(
     // hw_configure/reconfig. Eltwise-unary / SFPU ops that need -0.0 preserved select
     // UNARY_PRESERVE in unary_op_init_common. A plain datacopy must NOT force the flag, or it perturbs
     // float copies in reduce-based ops (layernorm/group_norm). The 32b unpack-to-dest path below manages
-    // the flag itself as part of the #449 Fp32_enabled dance.
+    // the flag itself as part of the tt-llk#449 Fp32_enabled dance.
 
     // For 32bit data, each half of DEST can take 16 tiles. Since dest offset is returned as if 16bit data are used, we need to
     // adjust it to offset in faces for 32bit data.
@@ -207,7 +207,7 @@ inline void _llk_math_eltwise_unary_datacopy_(
             cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
             TTI_CLEARDVALID(0b10, 0);
         }
-        // The 32b path manipulated the flag directly above (#449 Fp32_enabled dance); invalidate the
+        // The 32b path manipulated the flag directly above (tt-llk#449 Fp32_enabled dance); invalidate the
         // tracked state so the next op re-applies the Src zero-substitution flag.
         math::_invalidate_src_zero_flag_state_();
     }

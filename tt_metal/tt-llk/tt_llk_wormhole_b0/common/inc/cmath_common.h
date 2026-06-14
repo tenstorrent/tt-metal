@@ -34,8 +34,7 @@ constexpr std::uint32_t replay_buf_offset = 16; // split replay buffer usage bet
 // Src zero-substitution flag (ALU_ACC_CTRL_Zero_Flag_disabled_src) state tracker.
 //
 // The flag is a math-ALU concern: it is only read by MOVA2D/MOVB2D/ELW/MVMUL (the math thread),
-// so the math thread owns it via a small state machine, modeled on the Quasar ALU data-format
-// config-state tracker. The recorded state lets format reconfigs and op
+// so the math thread owns it via a small state machine. The recorded state lets format reconfigs and op
 // inits compose instead of clobbering each other:
 //
 //   DEFAULT        : flag follows the operand formats (UInt16 -> 1, else 0). Established by the
@@ -61,7 +60,7 @@ static SrcZeroFlagState src_zero_flag_state    = SrcZeroFlagState::UNCONFIGURED;
 static std::uint32_t    src_zero_flag_srca_fmt = 0xff;
 static std::uint32_t    src_zero_flag_srcb_fmt = 0xff;
 
-inline void _set_src_zero_flag_(const bool disable)
+inline void _configure_src_zero_flag_(const bool disable)
 {
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(disable ? 1 : 0);
@@ -77,7 +76,7 @@ inline void _configure_default_zero_flag_state_(const std::uint32_t srca_dst_for
     src_zero_flag_srca_fmt = srca_dst_format;
     src_zero_flag_srcb_fmt = srcb_dst_format;
     src_zero_flag_state    = SrcZeroFlagState::DEFAULT;
-    _set_src_zero_flag_(requires_disabled_src_zero_flag(srca_dst_format, srcb_dst_format));
+    _configure_src_zero_flag_(requires_disabled_src_zero_flag(srca_dst_format, srcb_dst_format));
 }
 
 // UNARY_PRESERVE: unary / SFPU / datacopy ops keep the flag disabled (preserve -0.0 and 16b ints).
@@ -88,7 +87,7 @@ inline void _configure_unary_preserve_zero_flag_state_()
         return;
     }
     src_zero_flag_state = SrcZeroFlagState::UNARY_PRESERVE;
-    _set_src_zero_flag_(true);
+    _configure_src_zero_flag_(true);
 }
 
 // MOV_OPS: transpose_dest / 32b hi16-lo16 MOV sequences keep the flag disabled.
@@ -99,7 +98,7 @@ inline void _configure_mov_ops_zero_flag_state_()
         return;
     }
     src_zero_flag_state = SrcZeroFlagState::MOV_OPS;
-    _set_src_zero_flag_(true);
+    _configure_src_zero_flag_(true);
 }
 
 // Invalidate the tracked state after code path that writes the flag directly (bypassing the

@@ -34,7 +34,7 @@ namespace ckernel
  * @param srcb_dst_format Destination data format of SrcB.
  * @return true when either operand is UInt16, in which case the flag must be disabled.
  *
- * @note ISA: Blackhole/TensixTile/TensixCoprocessor/MOVA2D.md (FlushDenormals branch) and
+ * @note ISA (paths are in the tt-isa-documentation repo): Blackhole/TensixTile/TensixCoprocessor/MOVA2D.md (FlushDenormals branch) and
  *       SrcASrcB.md (the "Integer 16" note).
  */
 inline bool requires_disabled_src_zero_flag(const std::uint32_t srca_dst_format, const std::uint32_t srcb_dst_format)

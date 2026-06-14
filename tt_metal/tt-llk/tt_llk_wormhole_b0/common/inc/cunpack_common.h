@@ -802,10 +802,6 @@ inline void configure_unpack_AB(
 
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, alu_mask>(alu_payload.val);
 
-    // NOTE: ALU_ACC_CTRL_Zero_Flag_disabled_src is no longer configured here. It is a math-ALU
-    // concern (only MOVA2D/MOVB2D/ELW/MVMUL read it) and is owned by the math-side data-format
-    // state tracker; see ckernel::math::_configure_*_zero_flag_state_.
-
     t6_mutex_release(mutex::REG_RMW);
 
     // Set tile descriptor
