@@ -466,3 +466,15 @@ if(TT_METAL_USE_EMULE)
         EXCLUDE_FROM_ALL YES
     )
 endif()
+
+############################################################################################################################
+# tt-exalens (only native ELF/DWARF parser)
+############################################################################################################################
+CPMAddPackage(
+    NAME ttexalens
+    GITHUB_REPOSITORY tenstorrent/tt-exalens
+    GIT_TAG d5f2a8ea12faaa3e96b0e725dfa4d3463c2e87f4
+    SOURCE_SUBDIR ttexalens/cpp/elf
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+)
