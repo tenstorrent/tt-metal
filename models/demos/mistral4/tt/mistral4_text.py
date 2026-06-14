@@ -81,7 +81,8 @@ class TtMistral4MLA(LightweightModule):
         xd = ttnn.matmul(x, self.P)  # de-interleave
         return ttnn.add(ttnn.mul(xd, cos), ttnn.mul(_rotate_half(xd), sin))
 
-    def forward(self, x, cos, sin):
+    def _qkv(self, x, cos, sin):
+        """x [B,S,hidden] -> q_states/k_states [B,H,S,qk_head_dim], value [B,H,S,v_head_dim]."""
         B, S = x.shape[0], x.shape[1]
         q = ttnn.linear(ttnn.rms_norm(ttnn.linear(x, self.w_qa), epsilon=self.eps, weight=self.w_qan), self.w_qb)
         qh = ttnn.transpose(ttnn.reshape(q, (B, S, self.H, self.qk)), 1, 2)
@@ -98,11 +99,43 @@ class TtMistral4MLA(LightweightModule):
         k_rot = ttnn.reshape(ttnn.slice(kv_a, [0, 0, self.kvl], [B, S, self.kvl + self.rope]), (B, 1, S, self.rope))
         k_rot = ttnn.repeat(self._rope(k_rot, cos, sin), ttnn.Shape([1, self.H, 1, 1]))
         k_states = ttnn.concat([k_nope, k_rot], dim=-1)
+        return q_states, k_states, value
 
+    def forward(self, x, cos, sin):
+        B, S = x.shape[0], x.shape[1]
+        q_states, k_states, value = self._qkv(x, cos, sin)
         attn = ttnn.transformer.scaled_dot_product_attention(
             q_states, k_states, value, is_causal=True, scale=self.scale
         )
         attn = ttnn.reshape(ttnn.transpose(attn, 1, 2), (B, S, -1))
+        return ttnn.linear(attn, self.w_o)
+
+    def init_kv_cache(self, batch, max_seq):
+        """Allocate the standard expanded-k/v KV cache [batch, n_heads, max_seq, qk_head_dim]."""
+        z = torch.zeros(batch, self.H, max_seq, self.qk, dtype=torch.bfloat16)
+        mk = lambda: ttnn.from_torch(
+            z, layout=ttnn.TILE_LAYOUT, device=self.mesh, mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh)
+        )
+        return [mk(), mk()]  # [k_cache, v_cache]
+
+    def forward_decode(self, x, cur_pos, cos, sin, kv_cache):
+        """Single-token decode: x [B,1,hidden], cur_pos int. Writes k/v to kv_cache at cur_pos and
+        runs flash-decode over the cached sequence. Expanded-k/v cache => standard decode op."""
+        B = x.shape[0]
+        q_states, k_states, value = self._qkv(x, cos, sin)  # [B,H,1,*]
+        # write the new token's k/v at cur_pos (input [B,H,1,dh])
+        ttnn.update_cache(kv_cache[0], k_states, cur_pos)
+        ttnn.update_cache(kv_cache[1], value, cur_pos)
+        q_dec = ttnn.permute(q_states, (2, 0, 1, 3))  # [B,H,1,qk] -> [1,B,H,qk]
+        cur = ttnn.from_torch(
+            torch.tensor([cur_pos] * B, dtype=torch.int32),
+            device=self.mesh,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        )
+        attn = ttnn.transformer.scaled_dot_product_attention_decode(
+            q_dec, kv_cache[0], kv_cache[1], cur_pos_tensor=cur, scale=self.scale
+        )
+        attn = ttnn.reshape(ttnn.permute(attn, (1, 0, 2, 3)), (B, 1, self.H * self.qk))
         return ttnn.linear(attn, self.w_o)
 
 
