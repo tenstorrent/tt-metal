@@ -14,6 +14,17 @@
 
 ## IMPORTANT scope note (read first)
 
+**CRITICAL — TRACE-SAFETY INVARIANT (perf).** A device trace cannot capture host/CPU ops, so any
+CPU op inside a traced region prevents trace capture — and trace is the perf mechanism. Therefore:
+the per-step **decode loop must be 100% on-device** (NO `to_torch`/host-argmax/per-step cos-sin
+rebuild/`get_rope_index`/splice inside it); use **on-device sampling**, advance rope on-device
+(`ttnn.plus_one`), set the MM rope offset ONCE via `set_decode_rope_offset()`. All host work
+(HF processor, `get_rope_index`, cos/sin build, splice) lives in the **one-time, untraced prefill
+setup** — prefill tracing is disabled for qwen3.6 (GDN/DeltaNet CB clash), so prefill host ops are
+trace-safe. Reference: `mm_perf_qwen36.py` (prefill_forward_text_embeds + decode_forward(enable_trace=True)
++ on-device sampler + async one-deep `process_decode_output_host` readback outside the trace).
+See memory `qwen36-cpu-ops-break-trace`. (Task A1's CPU code is prefill-only → trace-safe.)
+
 **CRITICAL — this model REQUIRES sampling, never greedy/argmax.** Confirmed 2026-06-14: with greedy
 argmax the image demo emits pad/`<|im_end|>` → "empty generation". With `QWEN36_SAMPLE=1`
 (top_k=20, top_p=0.95, temp=1.0) it produces coherent output ("This is an AI-generated image…"),
@@ -26,6 +37,30 @@ The spec assumed "the demo already does image **and** video." Verification on 20
 - **Video: encoder-level only.** `test_vision_encoder_seqp_pcc.py` validates the vision encoder on a synthetic 2-frame `grid_thw` vs HF (PCC), but **no end-to-end path accepts a video**: `Qwen36MMPreprocessor` only calls `self.processor(text, images=...)` — there is no `videos=` kwarg, no frame sampling, no video M-RoPE/splice exercised.
 
 Therefore **Phase A extends the demo to a video end-to-end path and establishes a parity baseline** before the server work. Without it there is no demo ground-truth to validate server video against. Image serving (Phases B–E) does not depend on Phase A and can proceed in parallel.
+
+### ON-DEVICE-FROM-THE-START directive (user, 2026-06-14)
+
+The forward path must be **100% on-device for BOTH prefill and decode** — because prefill will be
+traced later, and any CPU op in the forward would force a rework when that happens (CLAUDE.md: no
+shortcuts that need reverting). Do **NOT** port the demo's host `get_rope_index` + host splice +
+host cos/sin into the server forward.
+
+**molmo2 precedent** (`models/demos/molmo2/tt/generator_vllm.py` @ `fa9e266d40`, read 2026-06-14):
+its `prefill_forward` passes `input_ids` + `pixel_values`/`pixel_values_videos` + a cheap host-built
+`token_type_ids` mask into ONE on-device `model.forward_prefill(...)` that does vision encode + splice
+on-device. molmo2 uses **1D RoPE** (`arange`) so it has no 3D-position computation. qwen3.6's M-RoPE
+is the only extra: its 3D positions (from `grid_thw`) must be produced on-device too.
+
+**Consequence for this plan:**
+- Task A1's host `get_rope_index` (committed `09c32e344c0`) is **repurposed as the golden CPU
+  reference** for tests only — NOT used in the server forward.
+- New on-device units (replace the demo-host approach in the server path):
+  (i) on-device M-RoPE 3D positions from `grid_thw` + vision-token mask, PCC-validated vs the host
+      `get_rope_index` golden;
+  (ii) on-device vision/text splice (`merge_vision_tokens_ttnn`-style), not host splice;
+  (iii) one on-device `forward_prefill(input_ids, pixel_values/videos, grid_thw, …)` wiring encode +
+      splice + M-RoPE so prefill traces cleanly later.
+- Host is reduced to vLLM's pixel decode/patchify (+ at most a position/type index input tensor).
 
 Run env (every HW command). `tt-smi`/`ARCH_NAME` per box; this model is **Blackhole Galaxy, `MESH_DEVICE=BH_GLX`**:
 ```bash
