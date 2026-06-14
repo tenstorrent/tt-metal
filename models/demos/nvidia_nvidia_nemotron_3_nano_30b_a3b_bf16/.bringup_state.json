@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-13T22:50:54Z",
-  "updated_at": "2026-06-14T09:09:52Z",
+  "updated_at": "2026-06-14T09:22:00Z",
   "components": [
     {
       "name": "Embedding",
@@ -477,11 +477,11 @@
       },
       "perf": {
         "status": "done",
-        "attempts": 1,
-        "decode_latency_ms": 4865,
-        "decode_toks_per_sec": 0.21,
+        "attempts": 2,
+        "decode_latency_ms": 3850,
+        "decode_toks_per_sec": 0.26,
         "full_52layer_pcc": 0.995189,
-        "notes": "baseline: per-call from_torch weight uploads dominate; optimization phase will add persistent device weight buffers; B=1 S=1 decode, 5 timed runs avg 4865ms"
+        "notes": "after weakref device weight cache: 4865ms→3850ms (20% faster); remaining bottleneck is activation host↔device round-trips (52 layers × ~5 from_torch/to_torch each); B=1 S=1 decode on TP=4"
       }
     }
   ],
@@ -579,6 +579,13 @@
       "result": "ok",
       "pcc": 0.995189,
       "notes": "52-layer hidden-state PCC=0.995189; decode B=1 S=1 avg 4865ms 0.21 tok/s; baseline limited by per-call weight upload"
+    },
+    {
+      "tick": 14,
+      "ts": "2026-06-14T09:22:00Z",
+      "action": "optimization[weakref device weight cache]",
+      "result": "ok",
+      "notes": "tp.py _DEVICE_CACHE with weakref liveness; weights cached after first forward; 4865ms→3850ms decode; bottleneck now activation host↔device round-trips"
     }
   ],
   "config": {
