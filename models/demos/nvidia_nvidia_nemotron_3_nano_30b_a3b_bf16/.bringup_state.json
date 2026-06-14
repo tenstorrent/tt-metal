@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-13T22:50:54Z",
-  "updated_at": "2026-06-14T08:16:50Z",
+  "updated_at": "2026-06-14T08:54:17Z",
   "components": [
     {
       "name": "Embedding",
@@ -471,9 +471,9 @@
       "hybrid_notes": "KV cache covers only the 6 dense-attention layers and 23 MoE-attention layers. Mamba-2 layers maintain a recurrent SSM hidden state (not KV pairs) \u2014 that state must be managed separately in decode mode. The hybrid_override_pattern (MEMEM*EMEMEM*...) determines per-layer dispatch.",
       "generation": {
         "status": "done",
-        "attempts": 1,
-        "pcc": 0.999833,
-        "notes": "first 6 layers (MEMEM*) hidden-state PCC vs pure-PyTorch reference on QB device 0; all 3 layer types covered"
+        "attempts": 2,
+        "pcc": 0.999839,
+        "notes": "first 6 layers (MEMEM*) hidden-state PCC vs pure-PyTorch reference on QB TP=4 MeshShape(1,4) FABRIC_1D_RING; all 3 layer types covered; call time 9.53s"
       },
       "perf": {
         "status": "pending",
@@ -558,7 +558,15 @@
       "action": "generation[text_generation first 6 layers MEMEM*]",
       "result": "ok",
       "pcc": 0.999833,
-      "notes": "hidden-state PCC on QB device 0; covers M/E/* layer types with real weights"
+      "notes": "hidden-state PCC on QB device 0 (TP=1); covers M/E/* layer types with real weights"
+    },
+    {
+      "tick": 12,
+      "ts": "2026-06-14T08:54:17Z",
+      "action": "tp4[rewrite all 10 TTNN components for MeshShape(1,4) + FABRIC_1D_RING; generation re-run]",
+      "result": "ok",
+      "pcc": 0.999839,
+      "notes": "TP=4 on QB 4-chip Blackhole; col-parallel Q/up/vocab, replicated K/V/norm, row-parallel O/down, all_reduce; Mamba2 replicated (SSM on host); MoEExperts pure-host; call 9.53s setup 6.76s"
     }
   ],
   "config": {
