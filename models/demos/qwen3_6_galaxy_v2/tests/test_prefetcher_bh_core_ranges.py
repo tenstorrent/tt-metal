@@ -29,7 +29,9 @@ import ttnn
 
 # Expected BH 8-bank coords (from prefetcher_config.yaml blackhole.dram_banks), row 0.
 _BH_DRAM_BANK_X = [1, 3, 2, 0, 5, 7, 6, 4]
-_NUM_RECEIVERS = 2
+# qwen3.6 uses a 24-core ring; ring_size = num_senders(8) * num_receivers.
+# So BH uses 3 receivers/sender (8*3=24), matching the decode MLP ring config.
+_NUM_RECEIVERS = 3
 
 
 def _crs_size(crs: ttnn.CoreRangeSet) -> int:

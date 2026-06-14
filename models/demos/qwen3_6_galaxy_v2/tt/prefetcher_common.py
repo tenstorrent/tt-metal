@@ -102,11 +102,12 @@ class TtLlamaPrefetcherSetup(LightweightModule):
         self.n_layers = n_layers
 
         ###### Set up GlobalCB ######
-        num_global_cb_receivers = 2
-
         if is_blackhole():
             # BH GLX: 8 DRAM banks at X=[1,3,2,0,5,7,6,4], senders cols 0/7. The
             # WH get_core_ranges hardcodes 12 banks -> "bank x=8" on BH.
+            # qwen3.6 uses a 24-core ring; ring_size = num_senders * num_receivers.
+            # WH hits 24 via 12 banks * 2; BH must hit 24 via 8 banks * 3 receivers.
+            num_global_cb_receivers = 3
             (
                 self.active_sender_cores,
                 self.dram_cores,
@@ -118,7 +119,9 @@ class TtLlamaPrefetcherSetup(LightweightModule):
                 self.hop_grid,
             ) = get_bh_prefetcher_core_ranges(num_global_cb_receivers=num_global_cb_receivers)
         else:
+            # WH TG: 12 banks * 2 receivers = 24-core ring.
             num_reader_cores = 12
+            num_global_cb_receivers = 2
             (
                 self.active_sender_cores,
                 self.dram_cores,
