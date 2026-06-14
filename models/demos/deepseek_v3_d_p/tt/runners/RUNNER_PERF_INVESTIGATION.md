@@ -109,3 +109,33 @@ not cost 1.4 s. Open suspicion: a per-chunk fixed cost tied to the allocated KV 
 ## Local logs on bh-glx-d04u02 (NOT reachable off-box — numbers above are the durable record)
 `/tmp/kimi_runner_nopcc.log`, `/tmp/kimi_runner_exp.log` (sync+noack+1user),
 `/tmp/kimi_runner_2pass.log`, `/tmp/kimi_runner_presync.log` and matching `*producer*` logs.
+
+## RESOLVED (2026-06-14) — root cause: the H2D stream service
+
+Overnight automated experiment sweep (harness: /home/ppopovic/kimi_perf_overnight, branch
+ppopovic/investigation). Per-chunk means (5120 tok, 61 layers, DEVICE_FP32):
+- request-loop runner: ~3090 ms/chunk
+- standalone-chunked (same pipeline, NO H2D service): ~1878 ms/chunk
+- no-PCC transformer test: ~1940 ms/chunk
+
+The ~1.2 s/chunk gap is **request-loop machinery, NOT forward_chunk compute**. Eliminated, each by a
+dedicated env-gated experiment:
+- mla_seq_len / KV-buffer size (H3): sweep MAX_SEQ_LEN 56320/61440/81920/102400 = 3089/3094/3215/3273 ms
+  — only a weak ~6% secondary effect, not the gap.
+- per-layer LayerAck synchronize_device: PREFILL_SKIP_ACK_SYNC and DISABLE_LAYER_ACK both ≈ baseline;
+  section timing with ack off still fully elevated.
+- construction/config: construction-dump byte-identical between request and standalone paths.
+- request-mode-only clear_loaded_sub_device_manager (prefill_runner.py line ~586): PREFILL_FORCE_PRECLEAR
+  added that clear to the standalone path → stayed ~1879 ms (INNOCENT).
+
+By elimination (and corroborated by the request-without-ack run staying elevated in BOTH mla and moe
+sections), the cause is the **H2D stream service** (`build_h2d_service`) running in-process for the whole
+prefill: its presence (reserved worker cores / resident init program / background socket-sync on the
+shared command queue / host dispatch contention) slows every forward_chunk op ~40%, uniformly across
+mla and moe. (PREFILL_FORCE_BUILD_SERVICE builds the unused service in the standalone path as a direct
+positive confirmation.)
+
+**Fix is runner-side, not model-side.** Options: run the H2D service on a separate command queue from
+the model; shrink/relocate H2D_SYNC_WORKER_CORES off the model's compute grid; or make the service's
+background sync passive/event-driven so it doesn't steal dispatch cycles during forward_chunk. Profile
+with tracy to pin which (cores vs CQ vs host dispatch thread).
