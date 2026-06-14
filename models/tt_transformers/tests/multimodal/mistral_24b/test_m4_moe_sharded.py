@@ -85,17 +85,14 @@ def test_m4_moe_sharded(mesh_device, reset_seeds):
     gup_sh = _shard(gup_T, mesh_device, dim=0)  # [per,H,2I]/device
     down_sh = _shard(down_T, mesh_device, dim=0)  # [per,I,H]/device
 
-    x = _repl(g["moe_in"], mesh_device)
-    acc = None
-    for i in range(per):
-        gup_i = ttnn.reshape(ttnn.slice(gup_sh, [i, 0, 0], [i + 1, H, 2 * I]), (H, 2 * I))
-        gu = ttnn.linear(x, gup_i)
-        h = ttnn.mul(ttnn.silu(ttnn.slice(gu, [0, 0, 0], [B, S, I])), ttnn.slice(gu, [0, 0, I], [B, S, 2 * I]))
-        down_i = ttnn.reshape(ttnn.slice(down_sh, [i, 0, 0], [i + 1, I, H]), (I, H))
-        y = ttnn.linear(h, down_i)
-        w_i = ttnn.slice(W_sh, [0, 0, i], [B, S, i + 1])
-        contrib = ttnn.mul(y, w_i)
-        acc = contrib if acc is None else ttnn.add(acc, contrib)
+    x = _repl(g["moe_in"], mesh_device)  # [B,S,H]
+    # BATCHED experts: do all `per` local experts in 2 batched matmuls (vs per sequential linears).
+    xb = ttnn.repeat(x, ttnn.Shape([per, 1, 1]))  # [per,S,H]
+    gu = ttnn.matmul(xb, gup_sh)  # [per,S,H]x[per,H,2I] -> [per,S,2I]
+    h = ttnn.mul(ttnn.silu(ttnn.slice(gu, [0, 0, 0], [per, S, I])), ttnn.slice(gu, [0, 0, I], [per, S, 2 * I]))
+    y = ttnn.matmul(h, down_sh)  # [per,S,I]x[per,I,H] -> [per,S,H]
+    w = ttnn.permute(W_sh, (2, 1, 0))  # [B,S,per] -> [per,S,B]
+    acc = ttnn.reshape(ttnn.sum(ttnn.mul(y, w), dim=0), (B, S, H))  # weighted sum over local experts
     experts_full = ttnn.all_reduce(acc)  # sum across the 8 devices -> replicated [B,S,H]
 
     sh = mlp.shared_experts

@@ -166,14 +166,18 @@ class TtMistral4MoE(LightweightModule):
             W_sh = ttnn.from_torch(
                 W_host, layout=ttnn.TILE_LAYOUT, device=self.mesh, mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=-1)
             )
-            acc = None
-            for i in range(self.per):
-                gu = ttnn.linear(x, ttnn.reshape(ttnn.slice(self.gup_sh, [i, 0, 0], [i + 1, H, 2 * I]), (H, 2 * I)))
-                h = ttnn.mul(ttnn.silu(ttnn.slice(gu, [0, 0, 0], [B, S, I])), ttnn.slice(gu, [0, 0, I], [B, S, 2 * I]))
-                y = ttnn.linear(h, ttnn.reshape(ttnn.slice(self.down_sh, [i, 0, 0], [i + 1, I, H]), (I, H)))
-                contrib = ttnn.mul(y, ttnn.slice(W_sh, [0, 0, i], [B, S, i + 1]))
-                acc = contrib if acc is None else ttnn.add(acc, contrib)
-            experts = ttnn.all_reduce(acc)
+            # BATCHED experts: the per local experts in 2 batched matmuls (not `per` sequential
+            # linears) — the dominant decode/forward speedup. Stacked weights gup_sh [per,H,2I],
+            # down_sh [per,I,H]; broadcast x over the expert (batch) dim.
+            xb = ttnn.repeat(x, ttnn.Shape([self.per, 1, 1]))  # [per,S,H]
+            gu = ttnn.matmul(xb, self.gup_sh)  # [per,S,2I]
+            h = ttnn.mul(
+                ttnn.silu(ttnn.slice(gu, [0, 0, 0], [self.per, S, I])), ttnn.slice(gu, [0, 0, I], [self.per, S, 2 * I])
+            )
+            y = ttnn.matmul(h, self.down_sh)  # [per,S,H]
+            w = ttnn.permute(W_sh, (2, 1, 0))  # [B,S,per] -> [per,S,B]
+            acc = ttnn.reshape(ttnn.sum(ttnn.mul(y, w), dim=0), (B, S, H))  # weighted sum over local experts
+            experts = ttnn.all_reduce(acc)  # sum across devices
         else:
             acc = None
             for e in range(self.E):
