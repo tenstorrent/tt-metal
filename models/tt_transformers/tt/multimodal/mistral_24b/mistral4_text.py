@@ -158,3 +158,29 @@ class TtMistral4DecoderLayer(LightweightModule):
     def forward(self, x, cos, sin):
         h = ttnn.add(x, self.mla(ttnn.rms_norm(x, epsilon=self.eps, weight=self.w_in), cos, sin))
         return ttnn.add(h, self.moe(ttnn.rms_norm(h, epsilon=self.eps, weight=self.w_post)))
+
+
+class TtMistral4TextModel(LightweightModule):
+    """Stacked decoder layers + final norm + LM head. forward(embedded_hidden, cos, sin) -> logits.
+
+    Embedding is the caller's responsibility (a trivial row gather); this keeps the module a pure
+    device forward over the decoder stack. `sd` is the model's named_parameters dict with HF keys
+    (``model.layers.{i}.*``, ``model.norm.weight``, ``lm_head.weight``).
+    """
+
+    def __init__(self, mesh, sd, cfg, n_layers, eps):
+        super().__init__()
+        self.eps = eps
+        self.layers = []
+        for i in range(n_layers):
+            pfx = f"model.layers.{i}."
+            layer_sd = {k[len(pfx) :]: v for k, v in sd.items() if k.startswith(pfx)}
+            self.layers.append(TtMistral4DecoderLayer(mesh, layer_sd, cfg, eps))
+        self.w_norm = _norm(sd["model.norm.weight"], mesh)
+        self.w_lm = _lin(sd["lm_head.weight"], mesh)
+
+    def forward(self, hidden, cos, sin):
+        for layer in self.layers:
+            hidden = layer(hidden, cos, sin)
+        hidden = ttnn.rms_norm(hidden, epsilon=self.eps, weight=self.w_norm)
+        return ttnn.linear(hidden, self.w_lm)
