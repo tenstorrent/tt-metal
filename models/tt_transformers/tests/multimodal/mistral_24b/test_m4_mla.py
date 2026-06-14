@@ -132,4 +132,72 @@ def test_m4_mla_projections(mesh_device, reset_seeds):
     logger.info(f"MLA o_proj->mla_out: {m_out}")
     all_pass = all_pass and p_oin and p_out
 
+    # --- assembly: projections -> q_states / k_states / value (reshape, split, interleaved RoPE) ---
+    cfg_t = AutoConfig.from_pretrained(ckpt).text_config
+    H, qk, nope, rope_d, vd, kvl = (
+        cfg_t.num_attention_heads,
+        cfg_t.qk_head_dim,
+        cfg_t.qk_nope_head_dim,
+        cfg_t.qk_rope_head_dim,
+        cfg_t.v_head_dim,
+        cfg_t.kv_lora_rank,
+    )
+    S = q_b.shape[1]
+    # de-interleave permutation matrix P (out[i]=x[2i] for i<d/2 else x[2(i-d/2)+1]) -> matmul-friendly
+    perm = [2 * i for i in range(rope_d // 2)] + [2 * i + 1 for i in range(rope_d // 2)]
+    P = torch.zeros(rope_d, rope_d)
+    for i, p in enumerate(perm):
+        P[p, i] = 1.0
+    P_tt = ttnn.from_torch(
+        P.to(torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    cos = ttnn.reshape(_bhsd(g["rope_cos"]), (B, 1, S, rope_d))
+    sin = ttnn.reshape(_bhsd(g["rope_sin"]), (B, 1, S, rope_d))
+
+    def rotate_half(x):
+        d = x.shape[-1]
+        x1 = ttnn.slice(x, [0, 0, 0, 0], [x.shape[0], x.shape[1], x.shape[2], d // 2])
+        x2 = ttnn.slice(x, [0, 0, 0, d // 2], [x.shape[0], x.shape[1], x.shape[2], d])
+        return ttnn.concat([ttnn.neg(x2), x1], dim=-1)
+
+    def apply_rope(x):  # x: [.., S, rope_d]; de-interleave then standard rope
+        xd = ttnn.matmul(x, P_tt)
+        return ttnn.add(ttnn.mul(xd, cos), ttnn.mul(rotate_half(xd), sin))
+
+    # q: (B,S,H*qk) -> (B,H,S,qk) -> split
+    qh = ttnn.transpose(ttnn.reshape(q_b, (B, S, H, qk)), 1, 2)
+    q_nope = ttnn.slice(qh, [0, 0, 0, 0], [B, H, S, nope])
+    q_rot = ttnn.slice(qh, [0, 0, 0, nope], [B, H, S, qk])
+    q_states_tt = ttnn.concat([q_nope, apply_rope(q_rot)], dim=-1)
+
+    # k/v: kv_b (B,S,H*(nope+vd)) -> (B,H,S,nope+vd) -> split; k_rot from kv_a tail (MQA, expand)
+    kh = ttnn.transpose(ttnn.reshape(kv_b, (B, S, H, nope + vd)), 1, 2)
+    k_nope = ttnn.slice(kh, [0, 0, 0, 0], [B, H, S, nope])
+    value_tt2 = ttnn.slice(kh, [0, 0, 0, nope], [B, H, S, nope + vd])
+    k_rot = ttnn.reshape(ttnn.slice(kv_a, [0, 0, kvl], [B, S, kvl + rope_d]), (B, 1, S, rope_d))
+    k_rot = ttnn.repeat(apply_rope(k_rot), ttnn.Shape([1, H, 1, 1]))
+    k_states_tt = ttnn.concat([k_nope, k_rot], dim=-1)
+
+    for name, tt, ref in [
+        ("q_states", q_states_tt, g["q_states"]),
+        ("k_states", k_states_tt, g["k_states"]),
+        ("value", value_tt2, g["value_states"]),
+    ]:
+        passing, msg = comp_pcc(ref, _to_host(tt, mesh_device, B), pcc_required)
+        logger.info(f"MLA assembly {name}: {msg}")
+        all_pass = all_pass and passing
+
+    # --- end-to-end: my q/k/v -> sdpa -> o_proj -> mla_out ---
+    e2e = ttnn.transformer.scaled_dot_product_attention(
+        q_states_tt, k_states_tt, value_tt2, is_causal=True, scale=qk ** (-0.5)
+    )
+    e2e = ttnn.reshape(ttnn.transpose(e2e, 1, 2), (B, S, -1))
+    e2e_out = _to_host(ttnn.linear(e2e, w_o), mesh_device, B)
+    p_e2e, m_e2e = comp_pcc(g["mla_out"], e2e_out, pcc_required)
+    logger.info(f"MLA end-to-end mla_in->mla_out: {m_e2e}")
+    all_pass = all_pass and p_e2e
+
     assert all_pass, "MLA PCC below threshold"
