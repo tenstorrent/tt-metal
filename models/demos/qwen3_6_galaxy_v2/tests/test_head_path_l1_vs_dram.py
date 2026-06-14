@@ -68,8 +68,8 @@ def test_head_path_mem(bh_glx_mesh):
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
-    elif _MEM == "l1":
-        mc = ttnn.L1_MEMORY_CONFIG
+    elif _MEM in ("l1", "l1resident"):
+        mc = ttnn.L1_MEMORY_CONFIG  # l1resident: x_t L1-interleaved so the shard conversion is L1<->L1
     else:
         mc = ttnn.DRAM_MEMORY_CONFIG
 
@@ -95,7 +95,30 @@ def test_head_path_mem(bh_glx_mesh):
     )
     ck = ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True)
 
+    # L1-RESIDENT (qwen3-32B pattern): whole chain in L1 — rms_norm SHARDED, manipulation L1-interleaved,
+    # conversions L1<->L1 (cheap) not DRAM<->L1. Decisive test vs the all-DRAM chain.
+    shard_mc = ttnn.create_sharded_memory_config(
+        shape=(_M, _HD),
+        core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 0))]),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
     def dance():
+        if _MEM == "l1resident":
+            xs = ttnn.to_memory_config(x_t, shard_mc)  # L1-interleaved -> L1-shard
+            n = ttnn.rms_norm(xs, weight=None, epsilon=1e-6, memory_config=shard_mc, compute_kernel_config=ck)
+            xs.deallocate(True)
+            ni = ttnn.to_memory_config(n, ttnn.L1_MEMORY_CONFIG)  # L1-shard -> L1-interleaved (cheap)
+            n.deallocate(True)
+            a = ttnn.slice(ni, [0, 0, 0, 0], [1, 1, _M, _W // 2], memory_config=ttnn.L1_MEMORY_CONFIG)
+            b = ttnn.slice(ni, [0, 0, 0, _W // 2], [1, 1, _M, _W], memory_config=ttnn.L1_MEMORY_CONFIG)
+            c = ttnn.concat([b, a], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ni.deallocate(True)
+            a.deallocate(True)
+            b.deallocate(True)
+            return c
         # qk_norm rms_norm (the COMPUTE op) — always measured.
         n = ttnn.rms_norm(x_t, weight=None, epsilon=1e-6, memory_config=mc, compute_kernel_config=ck)
         if _MEM == "l1shard":
