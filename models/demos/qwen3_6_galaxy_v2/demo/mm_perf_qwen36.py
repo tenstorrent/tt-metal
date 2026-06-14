@@ -93,10 +93,11 @@ def _make_synthetic_clip(path: str, n_frames: int = 8, hw: int = 256, fps: int =
     stream.pix_fmt = "yuv420p"
     for t in range(n_frames):
         img = np.zeros((hw, hw, 3), dtype=np.uint8)
-        x = np.linspace(0, 255, hw, dtype=np.uint8)
-        img[:, :, 0] = (x[None, :] + t * 16) % 256  # horizontal sweep, moves with t
-        img[:, :, 1] = (x[:, None] + t * 8) % 256  # vertical sweep
-        img[:, :, 2] = (t * 32) % 256
+        # Arithmetic in int (not uint8) — numpy 2.x raises OverflowError on `uint8 % 256`.
+        x = np.linspace(0, 255, hw, dtype=np.int32)
+        img[:, :, 0] = ((x[None, :] + t * 16) % 256).astype(np.uint8)  # horizontal sweep, moves with t
+        img[:, :, 1] = ((x[:, None] + t * 8) % 256).astype(np.uint8)  # vertical sweep
+        img[:, :, 2] = np.uint8((t * 32) % 256)
         frame = av.VideoFrame.from_ndarray(img, format="rgb24")
         for pkt in stream.encode(frame):
             container.mux(pkt)
