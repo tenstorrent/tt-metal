@@ -23,6 +23,7 @@ import ttnn
 
 from .dense_attention import dense_attention_forward
 from .embedding import embedding_forward, embedding_forward_tt
+from .kv_cache import DecoderState
 from .layer_norm import layer_norm_forward
 from .lm_head import lm_head_forward, lm_head_forward_device
 from .mamba2_layer import mamba2_layer_forward
@@ -157,14 +158,29 @@ def _moe_layer_forward(
     return ttnn.add(residual, moe_out_tt)
 
 
-def _layer_stack_forward(mesh_device, hidden_states: ttnn.Tensor, wc: WeightCache, num_layers: int) -> ttnn.Tensor:
-    """Shared layer loop used by both forward variants."""
+def _layer_stack_forward(
+    mesh_device,
+    hidden_states: ttnn.Tensor,
+    wc: WeightCache,
+    num_layers: int,
+    decoder_state: "DecoderState | None" = None,
+) -> ttnn.Tensor:
+    """Layer loop — stateless (decoder_state=None) or stateful (decoder_state provided).
+
+    When stateful:
+      - M-layers receive their SSM state and write new state into ssm_state_outs.
+      - D-layers use paged KV cache and update it in-place via paged_update_cache.
+    """
+    m_idx = 0  # index within M_LAYER_INDICES
+    d_idx = 0  # index within D_LAYER_INDICES
+
     for li in range(min(num_layers, N_LAYERS)):
         layer_type = PATTERN[li]
         p = f"backbone.layers.{li}"
 
         if layer_type == "M":
-            hidden_states = mamba2_layer_forward(
+            ssm_state = decoder_state.ssm_states[m_idx] if decoder_state else None
+            hidden_states, state_new = mamba2_layer_forward(
                 mesh_device,
                 hidden_states,
                 norm_weight=wc[f"{p}.norm.weight"],
@@ -176,10 +192,17 @@ def _layer_stack_forward(mesh_device, hidden_states: ttnn.Tensor, wc: WeightCach
                 norm_mixer_weight=wc[f"{p}.mixer.norm.weight"],
                 D=wc[f"{p}.mixer.D"],
                 out_proj_weight=wc[f"{p}.mixer.out_proj.weight"],
+                ssm_state=ssm_state,
             )
+            if decoder_state:
+                decoder_state.ssm_state_outs[m_idx] = state_new
+            m_idx += 1
         elif layer_type == "E":
             hidden_states = _moe_layer_forward(mesh_device, hidden_states, li, wc)
         else:
+            kv_cache = decoder_state.kv_caches[d_idx] if decoder_state else None
+            page_table = decoder_state.page_tables[d_idx] if decoder_state else None
+            current_pos = decoder_state.current_pos if decoder_state else None
             hidden_states = dense_attention_forward(
                 mesh_device,
                 hidden_states,
@@ -188,7 +211,11 @@ def _layer_stack_forward(mesh_device, hidden_states: ttnn.Tensor, wc: WeightCach
                 wk=wc[f"{p}.mixer.k_proj.weight"],
                 wv=wc[f"{p}.mixer.v_proj.weight"],
                 wo=wc[f"{p}.mixer.o_proj.weight"],
+                kv_cache=kv_cache,
+                page_table=page_table,
+                current_pos=current_pos,
             )
+            d_idx += 1
     return hidden_states
 
 
@@ -231,9 +258,7 @@ def nemotron_h_forward_device(
 ) -> ttnn.Tensor:
     """Full NemotronH forward returning logits as ttnn.Tensor (no D2H).
 
-    Accepts a pre-allocated device tensor for the token IDs so that the
-    caller can update it via ttnn.copy_host_to_device_tensor and replay
-    the captured trace without re-tracing.
+    Stateless variant — used by test_decode_traced and benchmarks.
 
     Returns:
         Logits [B, S, 131072] bfloat16 on device.
@@ -244,6 +269,36 @@ def nemotron_h_forward_device(
     hidden_states = embedding_forward_tt(mesh_device, ids_tt, wc["backbone.embeddings.weight"])
     hidden_states = _layer_stack_forward(mesh_device, hidden_states, wc, num_layers)
 
+    return lm_head_forward_device(
+        mesh_device,
+        hidden_states,
+        norm_f_weight=wc["backbone.norm_f.weight"],
+        lm_head_weight=wc["lm_head.weight"],
+    )
+
+
+def nemotron_h_forward_stateful(
+    mesh_device,
+    ids_tt: ttnn.Tensor,  # pre-allocated uint32 device tensor [B, S]
+    wc: WeightCache,
+    decoder_state: DecoderState,
+    num_layers: int = N_LAYERS,
+) -> ttnn.Tensor:
+    """Stateful NemotronH forward for generation.
+
+    Threads SSM states and paged KV caches through all layers.
+    After this call:
+      - decoder_state.ssm_state_outs[i] holds the new SSM state for M-layer i
+      - decoder_state.kv_caches[j] have been updated in-place at current_pos
+
+    Call decoder_state.advance() after each forward to copy ssm_state_outs →
+    ssm_states for the next step (KV caches are already updated in-place).
+
+    Returns:
+        Logits [B, S, 131072] bfloat16 on device.
+    """
+    hidden_states = embedding_forward_tt(mesh_device, ids_tt, wc["backbone.embeddings.weight"])
+    hidden_states = _layer_stack_forward(mesh_device, hidden_states, wc, num_layers, decoder_state)
     return lm_head_forward_device(
         mesh_device,
         hidden_states,

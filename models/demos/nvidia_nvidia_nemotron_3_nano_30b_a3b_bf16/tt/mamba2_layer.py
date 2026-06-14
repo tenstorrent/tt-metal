@@ -51,8 +51,13 @@ def mamba2_layer_forward(
     D: torch.Tensor,  # [64] fp32 CPU
     out_proj_weight: torch.Tensor,  # [2688, 4096] bf16 CPU
     norm_eps: float = NORM_EPS,
-) -> ttnn.Tensor:
-    """S=1 decode path. Returns [B, 1, 2688] bfloat16 on device."""
+    ssm_state: ttnn.Tensor | None = None,  # [B, H, D, N] bf16 on device, None → zero-init
+) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """S=1 decode path. Returns (output [B,1,2688], state_new [B,H,D,N]) bf16 on device.
+
+    ssm_state=None uses zero initial state (first token / non-stateful mode).
+    Pass a pre-allocated device tensor for persistent multi-step generation.
+    """
     residual = hidden_states
     B = hidden_states.shape[0]
 
@@ -145,10 +150,17 @@ def mamba2_layer_forward(
     B_exp_tt = ttnn.concat(B_slices, dim=1)  # [B, H, N]
     C_exp_tt = ttnn.concat(C_slices, dim=1)  # [B, H, N]
 
-    # Outer product state update (zero initial state → state_new = outer(x_dt, B_exp))
+    # Outer product state update: new_contrib = outer(x_dt, B_exp) [B, H, D, N]
     x_dt_4d = ttnn.reshape(x_dt_tt, [B, NUM_HEADS, HEAD_DIM, 1])
     B_exp_4d = ttnn.reshape(B_exp_tt, [B, NUM_HEADS, 1, SSM_STATE_SIZE])
-    state_new_tt = ttnn.mul(x_dt_4d, B_exp_4d)  # [B, H, D, N]
+    new_contrib_tt = ttnn.mul(x_dt_4d, B_exp_4d)  # [B, H, D, N]
+
+    # Full recurrence: state_new = decay * state_prev + new_contrib
+    if ssm_state is not None:
+        decay_4d_tt = ttnn.reshape(decay_tt, [B, NUM_HEADS, 1, 1])  # broadcast over D, N
+        state_new_tt = ttnn.add(ttnn.mul(decay_4d_tt, ssm_state), new_contrib_tt)
+    else:
+        state_new_tt = new_contrib_tt  # zero initial state
 
     # y_ssm = state_new @ C_exp  (matmul over state_size dim)
     C_exp_4d = ttnn.reshape(C_exp_tt, [B, NUM_HEADS, SSM_STATE_SIZE, 1])
@@ -182,4 +194,4 @@ def mamba2_layer_forward(
     out_tt = ttnn.linear(scan_out_tt, op_tt, transpose_b=True)
 
     # 13. Residual
-    return ttnn.add(residual, out_tt)
+    return ttnn.add(residual, out_tt), state_new_tt

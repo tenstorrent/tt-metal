@@ -40,13 +40,21 @@ def dense_attention_forward(
     wv: torch.Tensor,  # [256,  2688] bf16 CPU
     wo: torch.Tensor,  # [2688, 4096] bf16 CPU
     norm_eps: float = NORM_EPS,
+    kv_cache: tuple | None = None,  # (k_cache, v_cache) [num_blocks, n_kv, block_size, head_dim]
+    page_table: ttnn.Tensor | None = None,  # [B, max_blocks_per_seq]
+    current_pos: ttnn.Tensor | None = None,  # [B] device tensor (current seq position)
 ) -> ttnn.Tensor:
-    """Returns [B, S, 2688] bfloat16 on device (replicated) with residual applied."""
+    """Returns [B, S, 2688] bfloat16 on device (replicated) with residual applied.
+
+    When kv_cache/page_table/current_pos are all provided, uses paged Flash-Decode.
+    Otherwise falls back to prefill SDPA (S can be >1).
+    """
     residual = hidden_states
     B = hidden_states.shape[0]
     S = hidden_states.shape[1]
+    paged = kv_cache is not None and page_table is not None and current_pos is not None
 
-    # 1. Pre-norm (weight replicated, input already on device)
+    # 1. Pre-norm
     w_tt = _rep_keyed(id(norm_weight), norm_weight.bfloat16().unsqueeze(0), mesh_device)
     normed_tt = ttnn.rms_norm(hidden_states, epsilon=norm_eps, weight=w_tt)
 
@@ -72,15 +80,34 @@ def dense_attention_forward(
     v_4d = ttnn.reshape(v_tt, [B, S, NUM_KV_HEADS, HEAD_DIM])  # [B, S, 2, 128]
     v_4d = ttnn.permute(v_4d, [0, 2, 1, 3])  # [B, 2, S, 128]
 
-    # 6. Prefill SDPA — handles GQA (8 Q heads, 2 KV heads) automatically.
-    #    For production decode with KV cache use scaled_dot_product_attention_decode.
-    is_causal = S > 1
-    attn_out = ttnn.transformer.scaled_dot_product_attention(
-        q_4d, k_4d, v_4d, is_causal=is_causal
-    )  # [B, 8, S, 128]/device
+    # 6. Attention — paged Flash-Decode or prefill SDPA.
+    if paged:
+        k_cache, v_cache = kv_cache
+        # Reformat K/V from [B, n_kv, S, D] → [S, B, n_kv, D] for paged_update_cache.
+        k_upd = ttnn.permute(k_4d, [2, 0, 1, 3])  # [1, B, 2, 128]
+        v_upd = ttnn.permute(v_4d, [2, 0, 1, 3])
+        ttnn.experimental.paged_update_cache(k_cache, k_upd, update_idxs_tensor=current_pos, page_table=page_table)
+        ttnn.experimental.paged_update_cache(v_cache, v_upd, update_idxs_tensor=current_pos, page_table=page_table)
+        # Q: [B, n_q, S, D] → [S, B, n_q, D] = [1, B, 8, 128]
+        q_sdpa = ttnn.permute(q_4d, [2, 0, 1, 3])
+        attn_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+            q_sdpa,
+            k_cache,
+            v_cache,
+            page_table_tensor=page_table,
+            cur_pos_tensor=current_pos,
+        )  # [1, B, 8, 128]
+        # Permute back: [S, B, n_q, D] → [B, S, n_q, D]
+        attn_out = ttnn.permute(attn_out, [1, 0, 2, 3])
+    else:
+        is_causal = S > 1
+        attn_out = ttnn.transformer.scaled_dot_product_attention(
+            q_4d, k_4d, v_4d, is_causal=is_causal
+        )  # [B, 8, S, 128]/device
+        # Permute: [B, n_q, S, D] → [B, S, n_q, D]
+        attn_out = ttnn.permute(attn_out, [0, 2, 1, 3])
 
-    # 7. Reshape back to [B, S, 1024] for row-parallel O projection
-    attn_out = ttnn.permute(attn_out, [0, 2, 1, 3])  # [B, S, 8, 128]
+    # 7. Reshape to [B, S, 1024] for row-parallel O projection
     attn_out = ttnn.reshape(attn_out, [B, S, (NUM_HEADS // TP) * HEAD_DIM])  # [B, S, 1024]
 
     # 8. O projection: row-parallel → partial [B, S, 2688]/device
