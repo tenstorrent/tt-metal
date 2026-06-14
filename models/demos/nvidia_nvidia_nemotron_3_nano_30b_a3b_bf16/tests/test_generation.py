@@ -31,8 +31,10 @@ SNAP = (
     "cbd3fa9f933d55ef16a84236559f4ee2a0526848"
 )
 PATTERN = "MEMEM*EMEMEM*EMEMEM*EMEMEM*EMEMEM*EMEMEMEM*EMEMEMEME"
-# Test first 6 layers (MEMEM*): covers all 3 layer types
+# test_generation_first_6_layers_pcc tests MEMEM* (6 layers covering all 3 types).
+# test_generation_all_layers_pcc tests all 52 layers to confirm end-to-end accuracy.
 NUM_TEST_LAYERS = 6
+NUM_ALL_LAYERS = 52
 PCC_THRESHOLD = 0.99
 
 
@@ -157,7 +159,7 @@ def test_generation_first_6_layers_pcc(mesh_device, weight_cache):
                 out_proj_weight=wc[f"{p}.mixer.out_proj.weight"],
             )
         elif lt == "E":
-            h = _moe_layer_forward(mesh_device, h, li, wc)
+            h = _moe_layer_forward(mesh_device, h, li, wc, cpu_gate=True)
         else:
             h = dense_attention_forward(
                 mesh_device,
@@ -178,3 +180,147 @@ def test_generation_first_6_layers_pcc(mesh_device, weight_cache):
     score = pcc(h_cpu, ref_h)
     print(f"\nHidden-state PCC after {NUM_TEST_LAYERS} layers ({PATTERN[:NUM_TEST_LAYERS]}): {score:.6f}")
     assert score >= PCC_THRESHOLD, f"PCC {score:.6f} < {PCC_THRESHOLD}"
+
+
+def _ref_forward_n_layers_with_checkpoints(
+    input_ids: torch.Tensor,
+    report_at: set,
+    wc,
+) -> dict:
+    """Reference forward through all layers, saving hidden state at report_at indices."""
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.reference.functional import (
+        dense_attention,
+        layer_norm,
+        mamba2_layer,
+        moe_experts,
+        moe_gate,
+        shared_expert,
+    )
+
+    B, S = input_ids.shape
+    emb_w = wc["backbone.embeddings.weight"]
+    h = torch.nn.functional.embedding(input_ids, emb_w)
+    checkpoints = {}
+
+    for li in range(NUM_ALL_LAYERS):
+        lt = PATTERN[li]
+        p = f"backbone.layers.{li}"
+
+        if lt == "M":
+            h = mamba2_layer(
+                hidden_states=h,
+                norm_weight=wc[f"{p}.norm.weight"],
+                in_proj_weight=wc[f"{p}.mixer.in_proj.weight"],
+                conv1d_weight=wc[f"{p}.mixer.conv1d.weight"],
+                conv1d_bias=wc[f"{p}.mixer.conv1d.bias"],
+                dt_bias=wc[f"{p}.mixer.dt_bias"],
+                A_log=wc[f"{p}.mixer.A_log"],
+                norm_mixer_weight=wc[f"{p}.mixer.norm.weight"],
+                D=wc[f"{p}.mixer.D"],
+                out_proj_weight=wc[f"{p}.mixer.out_proj.weight"],
+            )
+        elif lt == "E":
+            residual = h
+            normed = layer_norm(h, wc[f"{p}.norm.weight"])
+            flat = normed.reshape(B * S, -1)
+            topk_idx, topk_wts = moe_gate(
+                flat,
+                wc[f"{p}.mixer.gate.weight"],
+                wc[f"{p}.mixer.gate.e_score_correction_bias"],
+            )
+            eu = [wc[f"{p}.mixer.experts.{e}.up_proj.weight"] for e in range(128)]
+            ed = [wc[f"{p}.mixer.experts.{e}.down_proj.weight"] for e in range(128)]
+            ex_out = moe_experts(flat, topk_idx, topk_wts, eu, ed).reshape(B, S, -1)
+            sh_out = shared_expert(
+                normed, wc[f"{p}.mixer.shared_experts.up_proj.weight"], wc[f"{p}.mixer.shared_experts.down_proj.weight"]
+            )
+            h = (residual + ex_out + sh_out).bfloat16()
+        else:
+            h = dense_attention(
+                h,
+                norm_weight=wc[f"{p}.norm.weight"],
+                wq=wc[f"{p}.mixer.q_proj.weight"],
+                wk=wc[f"{p}.mixer.k_proj.weight"],
+                wv=wc[f"{p}.mixer.v_proj.weight"],
+                wo=wc[f"{p}.mixer.o_proj.weight"],
+            )
+
+        if li in report_at:
+            checkpoints[li] = h.clone()
+
+    return checkpoints
+
+
+def test_generation_all_layers_pcc(mesh_device, weight_cache):
+    """Run all 52 layers on TTNN and compare per-layer hidden-state PCC to reference.
+
+    Reports PCC after each * (dense attention) layer and the final layer.
+    Uses cpu_gate=True for E-layers to match the float32 reference gate.
+    Both reference and TTNN run in a single pass; reference checkpoints are
+    captured once at report layers.
+    """
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.dense_attention import dense_attention_forward
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.embedding import embedding_forward
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.mamba2_layer import mamba2_layer_forward
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.model import _moe_layer_forward
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.tp import _host_rep
+
+    torch.manual_seed(42)
+    input_ids = torch.randint(0, 131072, (1, 1), dtype=torch.long)
+
+    # D-layers are at PATTERN positions where type=='*'; also report final layer.
+    report_at = {i for i, t in enumerate(PATTERN) if t == "*"} | {NUM_ALL_LAYERS - 1}
+
+    print(f"\nBuilding reference checkpoints for {NUM_ALL_LAYERS} layers (single pass)...")
+    ref_checkpoints = _ref_forward_n_layers_with_checkpoints(input_ids, report_at, weight_cache)
+
+    print(f"Running TTNN forward for all {NUM_ALL_LAYERS} layers...")
+    wc = weight_cache
+    h = embedding_forward(mesh_device, input_ids, wc["backbone.embeddings.weight"])
+    scores = {}
+
+    for li in range(NUM_ALL_LAYERS):
+        lt = PATTERN[li]
+        p = f"backbone.layers.{li}"
+        if lt == "M":
+            h, _ = mamba2_layer_forward(
+                mesh_device,
+                h,
+                norm_weight=wc[f"{p}.norm.weight"],
+                in_proj_weight=wc[f"{p}.mixer.in_proj.weight"],
+                conv1d_weight=wc[f"{p}.mixer.conv1d.weight"],
+                conv1d_bias=wc[f"{p}.mixer.conv1d.bias"],
+                dt_bias=wc[f"{p}.mixer.dt_bias"],
+                A_log=wc[f"{p}.mixer.A_log"],
+                norm_mixer_weight=wc[f"{p}.mixer.norm.weight"],
+                D=wc[f"{p}.mixer.D"],
+                out_proj_weight=wc[f"{p}.mixer.out_proj.weight"],
+            )
+        elif lt == "E":
+            h = _moe_layer_forward(mesh_device, h, li, wc, cpu_gate=True)
+        else:
+            h = dense_attention_forward(
+                mesh_device,
+                h,
+                norm_weight=wc[f"{p}.norm.weight"],
+                wq=wc[f"{p}.mixer.q_proj.weight"],
+                wk=wc[f"{p}.mixer.k_proj.weight"],
+                wv=wc[f"{p}.mixer.v_proj.weight"],
+                wo=wc[f"{p}.mixer.o_proj.weight"],
+            )
+
+        if li in report_at:
+            h_cpu = _host_rep(h, mesh_device, 1)
+            s = pcc(h_cpu, ref_checkpoints[li])
+            scores[li] = s
+            print(f"  Layer {li:2d} ({lt}): PCC = {s:.6f}  {'PASS' if s >= PCC_THRESHOLD else 'FAIL'}")
+
+    print(f"\n{'='*55}")
+    print(f"All-layers PCC summary ({NUM_ALL_LAYERS} layers):")
+    for li, s in sorted(scores.items()):
+        status = "PASS" if s >= PCC_THRESHOLD else "FAIL"
+        print(f"  After layer {li:2d} ({PATTERN[li]}): {s:.6f}  [{status}]")
+    print(f"{'='*55}")
+
+    final_score = scores[NUM_ALL_LAYERS - 1]
+    assert final_score >= PCC_THRESHOLD, f"Final PCC {final_score:.6f} < {PCC_THRESHOLD}"

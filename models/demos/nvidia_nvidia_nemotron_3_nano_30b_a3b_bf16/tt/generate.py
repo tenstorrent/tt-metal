@@ -104,6 +104,7 @@ def generate(
     temperature: float = 0.0,
     top_p: float = 0.9,
     verbose: bool = True,
+    cpu_gate: bool = True,
 ) -> str:
     """Generate text continuation for `prompt`.
 
@@ -117,6 +118,11 @@ def generate(
         temperature:    Sampling temperature; 0 = greedy.
         top_p:          Nucleus sampling threshold.
         verbose:        Print progress.
+        cpu_gate:       If True (default), compute MoE gate on CPU in float32 —
+                        exact HF routing, correct output, but not trace-compatible
+                        (trace is skipped; each decode step calls forward directly).
+                        If False, use on-device bfloat16 gate — trace-compatible
+                        but ~11% routing accuracy (garbled output).
 
     Returns:
         The full generated text (prompt + new tokens).
@@ -142,7 +148,7 @@ def generate(
     for pos, tok in enumerate(input_ids):
         _update_ids(ids_tt, tok)
         _update_pos(state.current_pos, pos)
-        logits_tt = nemotron_h_forward_stateful(mesh_device, ids_tt, wc, state)
+        logits_tt = nemotron_h_forward_stateful(mesh_device, ids_tt, wc, state, cpu_gate=cpu_gate)
         ttnn.synchronize_device(mesh_device)
         state.advance()
     elapsed_prefill = time.perf_counter() - t_prefill
@@ -157,71 +163,86 @@ def generate(
         tok_str = tokenizer.decode([next_token])
         print(f"First decoded token: {repr(tok_str)}")
 
-    # --- Decode: capture trace on the first generated token ---
     decode_pos = len(input_ids)
-    _update_ids(ids_tt, next_token)
-    _update_pos(state.current_pos, decode_pos)
 
-    if verbose:
-        print("Capturing decode trace...")
-    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    logits_tt = nemotron_h_forward_stateful(mesh_device, ids_tt, wc, state)
-    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-    ttnn.synchronize_device(mesh_device)
-    if verbose:
-        print("Trace captured.")
+    if cpu_gate:
+        # cpu_gate=True: D2H inside forward makes trace incompatible — run eager decode loop.
+        if verbose:
+            print("Decode mode: eager (cpu_gate=True, no trace)")
+        t_decode = time.perf_counter()
+        for step in range(max_new_tokens - 1):
+            decode_pos += 1
+            _update_ids(ids_tt, next_token)
+            _update_pos(state.current_pos, decode_pos - 1)
+            logits_tt = nemotron_h_forward_stateful(mesh_device, ids_tt, wc, state, cpu_gate=True)
+            ttnn.synchronize_device(mesh_device)
+            state.advance()
 
-    # Advance state once more so we start the loop with the correct state.
-    state.advance()
-    decode_pos += 1
+            logits_cpu = _host_rep(logits_tt, mesh_device, 1)
+            next_token = _sample_token(logits_cpu, temperature, top_p)
+            generated.append(next_token)
 
-    # --- Traced generation loop ---
-    ids_host = ttnn.from_torch(
-        torch.zeros(1, 1, dtype=torch.int32),
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-    )
-    pos_host = ttnn.from_torch(
-        torch.zeros(1, dtype=torch.int32),
-        dtype=ttnn.int32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-    )
+            if tokenizer.eos_token_id is not None and next_token == tokenizer.eos_token_id:
+                break
+            if decode_pos >= max_seq_len:
+                break
 
-    t_decode = time.perf_counter()
-    for step in range(max_new_tokens - 1):
-        # Prepare inputs (outside trace — allowed between executions).
-        ids_host = ttnn.from_torch(
-            torch.tensor([[next_token]], dtype=torch.int32),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-        pos_host_cpu = torch.tensor([decode_pos], dtype=torch.int32)
-        pos_host = ttnn.from_torch(pos_host_cpu, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.copy_host_to_device_tensor(ids_host, ids_tt)
-        ttnn.copy_host_to_device_tensor(pos_host, state.current_pos)
+        elapsed_decode = time.perf_counter() - t_decode
+        n_gen = len(generated)
+        if verbose and n_gen > 1:
+            print(f"Generated {n_gen} tokens in {elapsed_decode:.2f}s ({n_gen / elapsed_decode:.2f} tok/s)")
+    else:
+        # cpu_gate=False: on-device gate is trace-compatible — use traced decode.
+        _update_ids(ids_tt, next_token)
+        _update_pos(state.current_pos, decode_pos)
 
-        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+        if verbose:
+            print("Capturing decode trace...")
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        logits_tt = nemotron_h_forward_stateful(mesh_device, ids_tt, wc, state, cpu_gate=False)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+        if verbose:
+            print("Trace captured.")
 
-        # Copy new SSM states back to inputs.
         state.advance()
         decode_pos += 1
 
-        # Sample next token.
-        logits_cpu = _host_rep(logits_tt, mesh_device, 1)
-        next_token = _sample_token(logits_cpu, temperature, top_p)
-        generated.append(next_token)
+        t_decode = time.perf_counter()
+        for step in range(max_new_tokens - 1):
+            ids_host = ttnn.from_torch(
+                torch.tensor([[next_token]], dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            pos_host = ttnn.from_torch(
+                torch.tensor([decode_pos], dtype=torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            ttnn.copy_host_to_device_tensor(ids_host, ids_tt)
+            ttnn.copy_host_to_device_tensor(pos_host, state.current_pos)
 
-        if tokenizer.eos_token_id is not None and next_token == tokenizer.eos_token_id:
-            break
-        if decode_pos >= max_seq_len:
-            break
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
 
-    elapsed_decode = time.perf_counter() - t_decode
-    n_gen = len(generated)
-    if verbose and n_gen > 1:
-        print(f"Generated {n_gen} tokens in {elapsed_decode:.2f}s ({n_gen / elapsed_decode:.2f} tok/s)")
+            state.advance()
+            decode_pos += 1
 
-    ttnn.release_trace(mesh_device, trace_id)
+            logits_cpu = _host_rep(logits_tt, mesh_device, 1)
+            next_token = _sample_token(logits_cpu, temperature, top_p)
+            generated.append(next_token)
+
+            if tokenizer.eos_token_id is not None and next_token == tokenizer.eos_token_id:
+                break
+            if decode_pos >= max_seq_len:
+                break
+
+        elapsed_decode = time.perf_counter() - t_decode
+        n_gen = len(generated)
+        if verbose and n_gen > 1:
+            print(f"Generated {n_gen} tokens in {elapsed_decode:.2f}s ({n_gen / elapsed_decode:.2f} tok/s)")
+
+        ttnn.release_trace(mesh_device, trace_id)
 
     full_ids = input_ids + generated
     return tokenizer.decode(full_ids, skip_special_tokens=True)
