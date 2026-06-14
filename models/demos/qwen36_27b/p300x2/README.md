@@ -38,3 +38,23 @@ Perf: `tp_model.py` (full model), `tp_profile2.py` / `tp_batch2.py` (component +
 See `BASELINE.md` for the single-chip baseline + bottleneck analysis.
 NOTE: P300 single-chip open needs the p150 MGD + `TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1` +
 `set_fabric_config(DISABLED)`; clean up Dead docker containers (they lock /dev/tenstorrent) + `tt-smi -r`.
+
+## Batch / 8-concurrent (tp_model_batch.py)
+batch is on the matmul M-dim `[1,1,B,H]` (amortizes the weight read), attention via batched
+`sdpa_decode` (flat: +10% for B=1..8), DeltaNet via flattened-head (B*nv heads, one kernel call).
+**B=8 (trace): 56.3 ms/step, 17.77 tok/s/user, 142 tok/s throughput** — only +4ms over batch=1's
+52ms (batching is nearly free). Meets the 8-concurrent goal (~17.8 tok/s/user, 89% of 20).
+Max single-call batch B=9 (110/nvp); memory allows ~290 (seq 8192).
+
+## Sequence-parallel: tried, NOT used (backfires for decode)
+`comm_bench.py` measured all_reduce vs reduce_scatter+all_gather on the decode tensor
+`[1,1,B,H]`: **AR(Ring) 0.126ms vs SP 1.6ms at B=8 — SP is ~13x SLOWER**. SP shards the small
+token dim into 2 latency-bound collectives; it only helps large bandwidth-bound tensors, not
+small decode tensors. all_reduce is already flat in batch and at its floor. Kept here as a
+reference/negative result; the model path uses a single Ring all_reduce per sublayer.
+
+## Bottleneck breakdown at B=8 (tp_profile_b8.py, eager x layer-count)
+DeltaNet 40ms (conv 15 + flatten 5 + kernel 7.5 + Wqkv 5 + zba/oproj/AR ~8), MLP 26 (weight-
+bandwidth-bound), attention 11, all_reduce 20 (128 ops, inside the above). conv/flatten are
+dispatch-heavy (shrink in trace); MLP is bandwidth-floored; AR can't be reduced (SP backfires).
+~17.8 tok/s/user is the practical floor of this 4-chip TP config.
