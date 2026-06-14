@@ -106,6 +106,19 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
             "fsdp_cluster_axis is set but fsdp_ring_size is {} (expected > 1)",
             attributes.fsdp_ring_size);
         TT_FATAL(
+            attributes.topology == ttnn::ccl::Topology::Linear,
+            "FSDP-fused all_gather_minimal_matmul_async requires TP topology Linear (got {})",
+            static_cast<uint32_t>(attributes.topology));
+        TT_FATAL(
+            attributes.fsdp_topology == ttnn::ccl::Topology::Linear,
+            "FSDP-fused all_gather_minimal_matmul_async requires FSDP topology Linear (got {})",
+            static_cast<uint32_t>(attributes.fsdp_topology));
+        TT_FATAL(
+            attributes.ring_size == attributes.fsdp_ring_size,
+            "FSDP-fused all_gather_minimal_matmul_async requires ring_size == fsdp_ring_size (got {} vs {})",
+            attributes.ring_size,
+            attributes.fsdp_ring_size);
+        TT_FATAL(
             !attributes.cluster_axis.has_value() ||
                 attributes.cluster_axis.value() != attributes.fsdp_cluster_axis.value(),
             "fsdp_cluster_axis ({}) must not equal cluster_axis ({})",
@@ -131,6 +144,7 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
             "persistent_weight_buffer must be on device and allocated");
         TT_FATAL(pwb.layout() == Layout::TILE, "persistent_weight_buffer must be TILE layout");
         const auto& pwb_logical = pwb.logical_shape();
+        TT_FATAL(pwb.dtype() == weight_tensor.dtype(), "persistent_weight_buffer dtype must match weight_tensor dtype");
         TT_FATAL(
             pwb_logical[-2] == K && pwb_logical[-1] == N,
             "persistent_weight_buffer shape must be [..., K={}, N={}], got [..., {}, {}]",
