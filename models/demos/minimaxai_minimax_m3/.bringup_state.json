@@ -5,7 +5,7 @@
   "device": "bh_galaxy",
   "arch_name": "blackhole",
   "started_at": "2026-06-14T11:31:00Z",
-  "updated_at": "2026-06-14T12:24:19Z",
+  "updated_at": "2026-06-14T12:33:06Z",
   "components": [
     {
       "name": "rms_norm",
@@ -351,7 +351,18 @@
         "status": "pending",
         "attempts": 0
       },
-      "ttnn_plan": "tt-lang authored kernel (indexer+block-mask) -> ttnn SDPA-with-mask; dense-GQA fallback exact for seq<=2048"
+      "ttnn_plan": "ttnn-compose using tt-lang-validated spec: idx_q/k proj+norm+partial-rope -> block_scores (matmul+reduce_max) -> ttnn.topk(16) + local-block -> additive mask -> ttnn SDPA-with-mask; dense-GQA fallback exact for seq<=2048",
+      "ttlang": {
+        "status": "done",
+        "sim_pcc": 1.0,
+        "block_index_match": true,
+        "artifacts": [
+          "ttlang/sparse_lightning_attention.py",
+          "ttlang/test_sparse_lightning_attention_sim.py",
+          "ttlang/NOTES.md"
+        ],
+        "notes": "indexer block-scoring validated bit-exact in tt-lang sim (PCC 1.0). SIM GAP: no topk/scatter in sim -> selection host-side. ttnn plan: compose block_scores matmul+reduce_max + ttnn.topk + mask + SDPA-with-mask (ttnn HAS topk). moe_decoder_layer now unblocked."
+      }
     },
     {
       "name": "vision_attention",
@@ -1081,8 +1092,8 @@
   ],
   "locks": {
     "device": {
-      "held_by": null,
-      "held_since": null
+      "held_by": "ttnn-foundation",
+      "held_since": "2026-06-14T12:28:35Z"
     }
   },
   "tick_log": [
@@ -1133,6 +1144,12 @@
       "ts": "2026-06-14T12:24:19Z",
       "action": "missing_op_discovery",
       "result": "ok: 1 tt-lang (sparse_lightning_attention), 1 compose (vision_rope_3d), 21 compose"
+    },
+    {
+      "tick": 9,
+      "ts": "2026-06-14T12:33:06Z",
+      "action": "ttlang[sparse_lightning_attention]",
+      "result": "ok sim_pcc=1.0"
     }
   ],
   "config": {

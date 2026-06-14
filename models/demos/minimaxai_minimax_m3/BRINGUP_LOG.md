@@ -4,7 +4,7 @@
 **Slug:** `minimaxai_minimax_m3`
 **Target Device:** bh_galaxy (blackhole)
 **Started:** 2026-06-14T11:31:00Z
-**Updated:** 2026-06-14T12:24:19Z
+**Updated:** 2026-06-14T12:33:06Z
 
 ## Block Status
 
@@ -149,6 +149,7 @@
 - tick 6 (2026-06-14T12:12:19Z): reference[moe_decoder_layer,vision_encoder_layer,patch_merge_mlp,multimodal_projector] — ok
 - tick 7 (2026-06-14T12:18:12Z): reference[vision_encoder,final_norm,lm_head,mtp_head] — ok(3)+blocked(1)
 - tick 8 (2026-06-14T12:24:19Z): missing_op_discovery — ok: 1 tt-lang (sparse_lightning_attention), 1 compose (vision_rope_3d), 21 compose
+- tick 9 (2026-06-14T12:33:06Z): ttlang[sparse_lightning_attention] — ok sim_pcc=1.0
 
 ## Host-Resident Exceptions
 
