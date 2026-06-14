@@ -1,0 +1,50 @@
+{
+  "layer_idx": 3,
+  "seq_len": 2560,
+  "n_blocks": 20,
+  "topk": 16,
+  "block_size": 128,
+  "index_n_heads": 4,
+  "index_head_dim": 128,
+  "local_blocks": 1,
+  "init_blocks": 0,
+  "score_type": "max",
+  "sparsity_exercised": true,
+  "block_indices_match_hf": true,
+  "selected_block_pattern_example": {
+    "last_query_pos": 2559,
+    "last_query_blocks": [
+      0,
+      1,
+      2,
+      3,
+      6,
+      7,
+      9,
+      10,
+      11,
+      12,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19
+    ],
+    "mid_query_pos": 1280,
+    "mid_query_blocks": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10
+    ]
+  },
+  "pcc": 1.002698302268982
+}

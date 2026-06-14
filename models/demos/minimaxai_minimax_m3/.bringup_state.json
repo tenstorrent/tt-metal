@@ -5,7 +5,7 @@
   "device": "bh_galaxy",
   "arch_name": "blackhole",
   "started_at": "2026-06-14T11:31:00Z",
-  "updated_at": "2026-06-14T11:56:39Z",
+  "updated_at": "2026-06-14T12:01:58Z",
   "components": [
     {
       "name": "rms_norm",
@@ -325,8 +325,14 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "pcc": 1.0,
+        "artifacts": [
+          "reference/functional.py",
+          "reference/golden/sparse_lightning_attention.pt"
+        ],
+        "notes": "lightning indexer block-sparse; FULL tt-lang spec in git notes; block-granular selection + token-granular causality; idxq/k proj+norm, partial rope clamp, max block-score, local+topk select, S=2560 sparsity exercised; PCC 1.0 bit-exact"
       },
       "ttnn": {
         "status": "pending",
@@ -359,8 +365,14 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "pcc": 1.000003695487976,
+        "artifacts": [
+          "reference/functional.py",
+          "reference/golden/vision_attention.pt"
+        ],
+        "notes": "MHA no GQA, no qk-norm, non-causal, biases, out_proj, reuses vision_rope_3d_forward"
       },
       "ttnn": {
         "status": "pending",
@@ -390,8 +402,14 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "pcc": 1.0000008344650269,
+        "artifacts": [
+          "reference/functional.py",
+          "reference/golden/swigluoai_mlp.pt"
+        ],
+        "notes": "out=down((up+1)*gate*sigmoid(gate*1.702)); gate.clamp(max=7) up.clamp(+-7); fused gate_up in module"
       },
       "ttnn": {
         "status": "pending",
@@ -421,8 +439,14 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "pcc": 1.0,
+        "artifacts": [
+          "reference/functional.py",
+          "reference/golden/moe_gate.pt"
+        ],
+        "notes": "sigmoid+bias-for-selection-only, normalize top4 to sum1 then x2.0; gate under block_sparse_moe.gate; no grouped routing; exact index match"
       },
       "ttnn": {
         "status": "pending",
@@ -1007,6 +1031,12 @@
       "tick": 3,
       "ts": "2026-06-14T11:56:39Z",
       "action": "reference[vision_rope_3d,patch_embedding,qk_norm,gqa_attention]",
+      "result": "ok"
+    },
+    {
+      "tick": 4,
+      "ts": "2026-06-14T12:01:58Z",
+      "action": "reference[sparse_lightning_attention,vision_attention,swigluoai_mlp,moe_gate]",
       "result": "ok"
     }
   ],

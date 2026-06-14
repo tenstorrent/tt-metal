@@ -4,7 +4,7 @@
 **Slug:** `minimaxai_minimax_m3`
 **Target Device:** bh_galaxy (blackhole)
 **Started:** 2026-06-14T11:31:00Z
-**Updated:** 2026-06-14T11:56:39Z
+**Updated:** 2026-06-14T12:01:58Z
 
 ## Block Status
 
@@ -50,22 +50,22 @@
 | gqa_attention | debug | n/a | — | 0 |  |
 | gqa_attention | optimization | pending | — | 0 |  |
 | gqa_attention | real_weights | pending | — | 0 |  |
-| sparse_lightning_attention | reference | pending | — | 0 |  |
+| sparse_lightning_attention | reference | done | 1.000000 | 0 | lightning indexer block-sparse; FULL tt-lang spec in git notes; block-granular selection + token-granular causality; idxq/k proj+norm, partial rope clamp, max block-score, local+topk select, S=2560 sparsity exercised; PCC 1.0 bit-exact |
 | sparse_lightning_attention | ttnn | pending | — | 0 |  |
 | sparse_lightning_attention | debug | n/a | — | 0 |  |
 | sparse_lightning_attention | optimization | pending | — | 0 |  |
 | sparse_lightning_attention | real_weights | pending | — | 0 |  |
-| vision_attention | reference | pending | — | 0 |  |
+| vision_attention | reference | done | 1.000004 | 0 | MHA no GQA, no qk-norm, non-causal, biases, out_proj, reuses vision_rope_3d_forward |
 | vision_attention | ttnn | pending | — | 0 |  |
 | vision_attention | debug | n/a | — | 0 |  |
 | vision_attention | optimization | pending | — | 0 |  |
 | vision_attention | real_weights | pending | — | 0 |  |
-| swigluoai_mlp | reference | pending | — | 0 |  |
+| swigluoai_mlp | reference | done | 1.000001 | 0 | out=down((up+1)*gate*sigmoid(gate*1.702)); gate.clamp(max=7) up.clamp(+-7); fused gate_up in module |
 | swigluoai_mlp | ttnn | pending | — | 0 |  |
 | swigluoai_mlp | debug | n/a | — | 0 |  |
 | swigluoai_mlp | optimization | pending | — | 0 |  |
 | swigluoai_mlp | real_weights | pending | — | 0 |  |
-| moe_gate | reference | pending | — | 0 |  |
+| moe_gate | reference | done | 1.000000 | 0 | sigmoid+bias-for-selection-only, normalize top4 to sum1 then x2.0; gate under block_sparse_moe.gate; no grouped routing; exact index match |
 | moe_gate | ttnn | pending | — | 0 |  |
 | moe_gate | debug | n/a | — | 0 |  |
 | moe_gate | optimization | pending | — | 0 |  |
@@ -144,6 +144,7 @@
 - tick 1 (2026-06-14T11:38:24Z): architecture[all] — ok
 - tick 2 (2026-06-14T11:51:59Z): reference[rms_norm,embedding,rope,vision_layernorm] — ok
 - tick 3 (2026-06-14T11:56:39Z): reference[vision_rope_3d,patch_embedding,qk_norm,gqa_attention] — ok
+- tick 4 (2026-06-14T12:01:58Z): reference[sparse_lightning_attention,vision_attention,swigluoai_mlp,moe_gate] — ok
 
 ## Host-Resident Exceptions
 

@@ -498,3 +498,453 @@ def gqa_attention_forward(
     attn_output = attn_output.transpose(1, 2).reshape(B, S, -1).contiguous()  # [B, S, 8192]
     out = torch.nn.functional.linear(attn_output, weights_dict["o_proj"])  # [B, S, hidden]
     return out
+
+
+def vision_attention_forward(
+    x: torch.Tensor,
+    weights_dict: dict,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    num_attention_heads: int = 16,
+    head_dim: int = 80,
+):
+    """CLIP vision self-attention matching MiniMaxM3VLVisionAttention.forward.
+
+    BIDIRECTIONAL (non-causal) multi-head self-attention over visual tokens, with
+    a 3D RoPE applied to q/k. This is plain MHA -- 16 query heads == 16 key/value
+    heads, NO grouped-query attention (``num_key_value_groups = 1``) -- and there
+    is NO qk-norm in the vision tower (unlike the language GQA blocks). All four
+    projections (q/k/v/out) are ``nn.Linear`` WITH bias.
+
+    Exact HF pipeline order:
+
+      1. q = q_proj(x).view(B, S, num_heads, head_dim)   # 1280 -> 16*80
+         k = k_proj(x).view(B, S, num_heads, head_dim)
+         v = v_proj(x).view(B, S, num_heads, head_dim).transpose(1, 2)
+      2. 3D RoPE on q,k via apply_rotary_pos_emb_vision (cos/sin [S, rot_dim]),
+         applied in [B, S, H, D] layout, then transpose q,k -> [B, H, S, D].
+         (Here we reuse vision_rope_3d_forward, which expects [B, H, S, D]; the
+         per-token math is identical, so we transpose BEFORE the rope call.)
+      3. scaled_dot_product_attention, NON-causal, scale = head_dim**-0.5 = 1/sqrt(80)
+      4. attn.transpose(1,2).reshape(B, S, hidden) -> out_proj.
+
+    Args:
+        x: hidden states [B, S, hidden_size (1280)].
+        weights_dict: dict with keys q_proj,k_proj,v_proj,out_proj (the .weight
+            tensors, [out,in]) and q_proj_bias,k_proj_bias,v_proj_bias,out_proj_bias
+            (the .bias tensors, [out]).
+        cos, sin: 3D-rope tables [S, rot_dim] from build_vision_rope_3d(grid_thw,
+            head_dim=80, theta=10000.0, spatial_merge_size=2).
+        num_attention_heads: 16. head_dim: 80.
+
+    Returns:
+        Attention block output [B, S, hidden_size] (post out_proj), x's dtype.
+    """
+    B, S, _ = x.shape
+    scale = head_dim**-0.5
+
+    q = torch.nn.functional.linear(x, weights_dict["q_proj"], weights_dict.get("q_proj_bias"))
+    k = torch.nn.functional.linear(x, weights_dict["k_proj"], weights_dict.get("k_proj_bias"))
+    v = torch.nn.functional.linear(x, weights_dict["v_proj"], weights_dict.get("v_proj_bias"))
+
+    q = q.view(B, S, num_attention_heads, head_dim).transpose(1, 2)  # [B, H, S, D]
+    k = k.view(B, S, num_attention_heads, head_dim).transpose(1, 2)  # [B, H, S, D]
+    v = v.view(B, S, num_attention_heads, head_dim).transpose(1, 2)  # [B, H, S, D]
+
+    # 3D RoPE on q,k only (reuse the shared vision rope; tail dims pass through).
+    q, k = vision_rope_3d_forward(q, k, cos, sin)
+
+    # Non-causal full self-attention.
+    attn = torch.nn.functional.scaled_dot_product_attention(
+        q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=scale
+    )
+
+    attn = attn.transpose(1, 2).reshape(B, S, -1).contiguous()
+    out = torch.nn.functional.linear(attn, weights_dict["out_proj"], weights_dict.get("out_proj_bias"))
+    return out
+
+
+def swigluoai_mlp_forward(
+    x: torch.Tensor,
+    gate_w: torch.Tensor,
+    up_w: torch.Tensor,
+    down_w: torch.Tensor,
+    alpha: float = 1.702,
+    limit: float = 7.0,
+) -> torch.Tensor:
+    """SwiGLU-OAI gated MLP matching MiniMaxM3VLDenseMLP (GPT-OSS lineage).
+
+    Exact HF forward (transformers 5.12.0, ``MiniMaxM3VLDenseMLP.forward``)::
+
+        gate_up = gate_up_proj(x)
+        gate, up = gate_up.chunk(2, dim=-1)
+        gate = gate.clamp(max=limit)              # upper clamp ONLY on gate
+        up   = up.clamp(min=-limit, max=limit)    # symmetric clamp on up
+        glu  = gate * sigmoid(gate * alpha)       # alpha multiplies gate inside sigmoid
+        out  = down_proj((up + 1.0) * glu)        # NOTE the (up + 1.0) bias term
+
+    Weight-storage note: the HF *module* uses a single fused
+    ``gate_up_proj`` of shape ``[2*inter, hidden]`` and splits it with
+    ``chunk(2, dim=-1)`` so the FIRST half is ``gate`` and the second is
+    ``up``. The MiniMax-M3 *checkpoint*, however, stores SEPARATE
+    ``layers.N.mlp.gate_proj.weight`` and ``...up_proj.weight`` tensors (each
+    ``[inter, hidden]``); concatenating them ``cat([gate_w, up_w], dim=0)``
+    reproduces the fused weight.
+
+    This function accepts either layout:
+      * Separate: pass ``gate_w`` and ``up_w`` (each ``[inter, hidden]``).
+      * Fused: pass the fused weight as ``gate_w`` (``[2*inter, hidden]``)
+        and ``up_w=None``.
+
+    Args:
+        x: Input activations, shape ``[..., hidden_size]``.
+        gate_w: Gate projection weight ``[inter, hidden]`` (or fused
+            ``[2*inter, hidden]`` if ``up_w is None``).
+        up_w: Up projection weight ``[inter, hidden]``, or ``None`` for fused.
+        down_w: Down projection weight ``[hidden, inter]``.
+        alpha: ``swiglu_alpha`` (sigmoid temperature), default 1.702.
+        limit: ``swiglu_limit`` clamp bound, default 7.0.
+
+    Returns:
+        Tensor of shape ``[..., hidden_size]``.
+    """
+    if up_w is None:
+        gate_up = torch.nn.functional.linear(x, gate_w)
+        gate, up = gate_up.chunk(2, dim=-1)
+    else:
+        gate = torch.nn.functional.linear(x, gate_w)
+        up = torch.nn.functional.linear(x, up_w)
+    gate = gate.clamp(max=limit)
+    up = up.clamp(min=-limit, max=limit)
+    glu = gate * torch.sigmoid(gate * alpha)
+    return torch.nn.functional.linear((up + 1.0) * glu, down_w)
+
+
+def moe_gate_forward(
+    x: torch.Tensor,
+    gate_weight: torch.Tensor,
+    e_score_correction_bias: torch.Tensor,
+    top_k: int = 4,
+    routed_scaling_factor: float = 2.0,
+):
+    """MiniMax-M3 MoE router (DeepSeek-V3 lineage, sigmoid scoring).
+
+    Mirrors HF ``MiniMaxM3VLTopKRouter.forward`` (transformers 5.12.0). Exact
+    routing for ``text_config``: num_local_experts=128, num_experts_per_tok=4,
+    scoring_func="sigmoid", use_routing_bias=True, routed_scaling_factor=2.0.
+    There is NO grouped / node-limited routing (no n_group / topk_group in this
+    config) -- plain top-4 of 128.
+
+    HF order (router):
+      1. router_logits = x @ gate_weight.T                          (fp32)
+      2. routing_weights = sigmoid(router_logits)                   (fp32 scores)
+      3. scores_for_choice = routing_weights + e_score_correction_bias
+         -> top-k *selection* uses the BIASED scores
+      4. top_k_index = topk(scores_for_choice, k)                   (selection only)
+      5. top_k_weights = routing_weights.gather(top_k_index)        (ORIGINAL sigmoid
+         scores, i.e. the bias is NOT included in the gating weight)
+      6. top_k_weights /= top_k_weights.sum(-1, keepdim=True)       (normalize to 1)
+
+    The ``routed_scaling_factor`` (2.0) is applied in HF on the *expert output*
+    in ``MiniMaxM3VLSparseMoeBlock`` (``hidden = experts(...) * routed_scaling_factor``),
+    NOT inside the router. Here we fold that same factor into the returned gating
+    weights so the full effective per-expert weight is captured in one place; the
+    downstream MoE op must therefore NOT scale again. Set routed_scaling_factor=1.0
+    to obtain the bare HF router weights.
+
+    Args:
+        x: hidden states, [..., hidden_size]; flattened to [tokens, hidden].
+        gate_weight: router weight [num_experts, hidden_size] (HF Linear layout).
+        e_score_correction_bias: [num_experts]; added to scores for SELECTION ONLY.
+        top_k: experts per token (4).
+        routed_scaling_factor: factor folded into the returned weights (2.0).
+
+    Returns:
+        (topk_indices, topk_weights):
+          topk_indices: [tokens, top_k] long, selected expert ids (sorted=False).
+          topk_weights: [tokens, top_k] fp32, normalized sigmoid scores * factor.
+    """
+    hidden_dim = gate_weight.shape[-1]
+    hidden_states = x.reshape(-1, hidden_dim)
+    router_logits = torch.nn.functional.linear(hidden_states.to(gate_weight.dtype), gate_weight)
+    routing_weights = torch.sigmoid(router_logits.float())
+    scores_for_choice = routing_weights + e_score_correction_bias.float()
+    _, topk_indices = torch.topk(scores_for_choice, top_k, dim=-1, sorted=False)
+    topk_weights = routing_weights.gather(1, topk_indices)
+    topk_weights = topk_weights / topk_weights.sum(dim=-1, keepdim=True)
+    topk_weights = topk_weights * routed_scaling_factor
+    return topk_indices, topk_weights
+
+
+def _lightning_indexer_block_indices(
+    x: torch.Tensor,
+    weights_dict: dict,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    position_ids: torch.Tensor,
+    index_head_dim: int = 128,
+    index_n_heads: int = 4,
+    block_size: int = 128,
+    topk_blocks: int = 16,
+    local_blocks: int = 1,
+    eps: float = 1e-6,
+):
+    """Lightning indexer selection branch matching MiniMaxM3VLIndexer.forward.
+
+    Pure-PyTorch port of the M3 "lightning indexer" that produces the per-query
+    selected key-block indices. This is a SELECTION-ONLY branch: it has no value
+    projection and contributes no residual output (the upstream checkpoint
+    disables the index-value path on every sparse layer via
+    ``sparse_disable_index_value``).
+
+    EXACT indexer math (confirmed against HF ``MiniMaxM3VLIndexer.forward``):
+
+      idx_q = q_norm(index_q_proj(x).view(B, S, H_idx, D_idx)).transpose(1,2)   # [B, H_idx, S, D_idx]
+      idx_k = k_norm(index_k_proj(x).view(B, S, 1,    D_idx)).transpose(1,2)    # [B, 1,     S, D_idx]
+      # partial RoPE on the index q/k using cos[..., :D_idx], sin[..., :D_idx].
+      # Note: cos/sin last dim == rotary_dim == 64 < D_idx(128), so the slice is a
+      # no-op clamp and only the first 64 channels are rotated (same partial rope
+      # as the main path); channels [64:128] pass through.
+      idx_q, idx_k = apply_rotary_pos_emb(idx_q, idx_k, cos[..., :D_idx], sin[..., :D_idx])
+
+    Block-score reduction (score_type == "max"):
+
+      scores = (idx_q.float() @ idx_k.float().transpose(-1,-2))               # [B, H_idx, S_q, S_k]
+      token_future = key_pos[None,None,None,:] > position_ids[:,None,:,None]  # strict causal per content pos
+      scores = scores.masked_fill(token_future, -inf)
+      scores = pad(scores, (0, pad), value=-inf)                             # pad S_k up to a block multiple
+      scores = scores.view(B, H_idx, S_q, num_key_blocks, block_size)
+      block_scores = scores.amax(dim=-1).amax(dim=1)                          # max over keys-in-block, then over index heads
+                                                                              # -> [B, S_q, num_key_blocks]
+
+    Selection rule (init + local + topk, dedup):
+
+      q_block = position_ids // block_size                                    # [B, S_q]
+      # local/sliding boost: force the local_blocks blocks ENDING at the query's
+      # own block (q_block, q_block-1, ...) to +inf so they always win a slot.
+      local_idx = (q_block[...,None] - arange(local_blocks)).clamp(min=0)
+      block_scores.scatter_(-1, local_idx, +inf)
+      # NOTE: with this config sparse_init_block == 0, so NO init-block boost is
+      # applied (block 0 is only kept if it wins on score or is a local block).
+      # If sparse_init_block were > 0 the first init blocks would likewise be
+      # forced to +inf the same way (HF has no separate init scatter here because
+      # config.index has init folded out; we honor init_block via init_blocks arg).
+      topk = min(topk_blocks, num_key_blocks)
+      topk_scores, topk_indices = block_scores.topk(topk, dim=-1)             # [B, S_q, topk]
+      # future/empty blocks keep -inf and sort to the end; tag them -1 (left-packed).
+      return topk_indices.masked_fill(topk_scores == -inf, -1)
+
+    The +inf local boost guarantees the local blocks appear exactly once (topk
+    over distinct block columns), so the returned indices are deduplicated.
+
+    Args:
+        x: hidden states [B, S, hidden_size].
+        weights_dict: needs keys ``index_q_proj``, ``index_k_proj``,
+            ``index_q_norm``, ``index_k_norm`` (each a ``.weight`` tensor).
+        cos, sin: partial-rope tables [B, S, rotary_dim] (rotary_dim 64).
+        position_ids: [B, S] content positions (causal anchor).
+        index_head_dim, index_n_heads, block_size, topk_blocks, local_blocks: config.
+        eps: RMSNorm eps.
+
+    Returns:
+        block_indices [B, S_q, topk] long tensor; valid entries left-packed,
+        ``-1`` right-pads unused/future/empty slots.
+    """
+    B, S, _ = x.shape
+    D = index_head_dim
+    H = index_n_heads
+
+    idx_q = torch.nn.functional.linear(x, weights_dict["index_q_proj"]).view(B, S, H, D)
+    idx_q = rms_norm_forward(idx_q, weights_dict["index_q_norm"], eps=eps).transpose(1, 2)  # [B,H,S,D]
+    idx_k = torch.nn.functional.linear(x, weights_dict["index_k_proj"]).view(B, S, 1, D)
+    idx_k = rms_norm_forward(idx_k, weights_dict["index_k_norm"], eps=eps).transpose(1, 2)  # [B,1,S,D]
+
+    # Partial rope on index q/k. cos/sin last dim (64) < D (128); slicing to D is a
+    # clamp to the available rotary dim, so first 64 channels rotate, [64:] pass.
+    rot = min(cos.shape[-1], D)
+    idx_q, idx_k = rope_forward(idx_q, idx_k, cos[..., :rot], sin[..., :rot], unsqueeze_dim=1)
+
+    k_len = idx_k.shape[2]
+    num_key_blocks = -(-k_len // block_size)  # ceil-div
+    pad = num_key_blocks * block_size - k_len
+
+    scores = torch.matmul(idx_q.float(), idx_k.float().transpose(-1, -2))  # [B,H,S_q,S_k]
+    k_positions = torch.arange(k_len, device=x.device)
+    token_future = k_positions[None, None, None, :] > position_ids[:, None, :, None]
+    scores = scores.masked_fill(token_future, float("-inf"))
+    if pad:
+        scores = torch.nn.functional.pad(scores, (0, pad), value=float("-inf"))
+    scores = scores.view(B, H, S, num_key_blocks, block_size)
+    block_scores = scores.amax(dim=-1).amax(dim=1)  # [B, S_q, num_key_blocks]
+
+    q_block = position_ids // block_size  # [B, S_q]
+
+    if local_blocks > 0:
+        local = torch.arange(local_blocks, device=x.device)
+        local_idx = (q_block[..., None] - local.view(1, 1, -1)).clamp(min=0)  # [B, S_q, local]
+        block_scores.scatter_(-1, local_idx, float("inf"))
+
+    topk = min(topk_blocks, num_key_blocks)
+    topk_scores, topk_indices = block_scores.topk(topk, dim=-1)
+    return topk_indices.masked_fill(topk_scores == float("-inf"), -1)
+
+
+def _build_block_mask(
+    block_indices: torch.Tensor,
+    key_length: int,
+    position_ids: torch.Tensor,
+    block_size: int,
+    dtype: torch.dtype,
+    device,
+):
+    """Expand selected block indices into a dense additive attention mask.
+
+    Pure-PyTorch port of ``MiniMaxM3VLIndexer.build_block_mask`` (eager/SDPA path).
+    Builds the full 4D additive mask ``[B, 1, S_q, S_k]`` where allowed
+    (query, key) pairs are ``0`` and disallowed pairs are ``finfo(dtype).min``.
+
+    Combine rule (block-selection AND causality):
+
+      safe = block_indices.masked_fill(block_indices < 0, num_key_blocks)  # park -1 in throwaway col
+      bias = full([B, S_q, num_key_blocks+1], -inf); bias.scatter_(-1, safe, 0.0)
+      bias = bias[..., :num_key_blocks]                                    # drop throwaway col
+      block_keep = (bias == 0).repeat_interleave(block_size, -1)[..., :key_length].unsqueeze(1)
+      # combine with strict causal (token_future) since attention_mask is None here:
+      token_future = key_pos[None,None,None,:] > position_ids[:,None,:,None]
+      keep = block_keep & ~token_future
+      mask = zeros(keep.shape).masked_fill(~keep, finfo(dtype).min)
+
+    So a key is attended iff its BLOCK was selected by the indexer AND it is not
+    in the future of the query (block granularity selection, token granularity
+    causality). The init/local boosting in the indexer guarantees the local
+    blocks (and, when configured, the init blocks) are always present.
+
+    Args:
+        block_indices: [B, S_q, topk] from the indexer (-1 padded).
+        key_length: S_k.
+        position_ids: [B, S_q] content positions.
+        block_size: keys per block.
+        dtype, device: output mask dtype/device.
+
+    Returns:
+        Additive mask [B, 1, S_q, S_k].
+    """
+    B, S_q, _ = block_indices.shape
+    num_key_blocks = -(-key_length // block_size)
+
+    safe = block_indices.masked_fill(block_indices < 0, num_key_blocks)
+    bias = block_indices.new_full((B, S_q, num_key_blocks + 1), float("-inf"), dtype=dtype)
+    bias.scatter_(-1, safe, 0.0)
+    bias = bias[..., :num_key_blocks]
+
+    block_keep = (bias == 0.0).repeat_interleave(block_size, dim=-1)[..., :key_length].unsqueeze(1)
+
+    k_positions = torch.arange(key_length, device=device)
+    token_future = k_positions[None, None, None, :] > position_ids[:, None, :, None]
+    keep = block_keep & ~token_future
+
+    min_dtype = torch.finfo(dtype).min
+    return torch.zeros(keep.shape, dtype=dtype, device=device).masked_fill(~keep, min_dtype)
+
+
+def sparse_lightning_attention_forward(
+    x: torch.Tensor,
+    weights_dict: dict,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    position_ids: torch.Tensor = None,
+    num_attention_heads: int = 64,
+    num_key_value_heads: int = 4,
+    head_dim: int = 128,
+    index_head_dim: int = 128,
+    index_n_heads: int = 4,
+    block_size: int = 128,
+    topk_blocks: int = 16,
+    local_blocks: int = 1,
+    init_blocks: int = 0,
+    eps: float = 1e-6,
+):
+    """Sparse lightning attention matching MiniMaxM3VLAttention.forward (sparse layers 3-59).
+
+    Composes the lightning indexer selection branch + a block-sparse dense GQA
+    attention. EXACT HF pipeline (``layer_types[layer_idx] == "minimax_m3_sparse"``):
+
+      1. Main q/k/v projections + PER-HEAD Gemma QK-norm (q_norm/k_norm over
+         head_dim, BEFORE transpose; v not normed), transpose to [B,H,S,D].
+      2. Partial rope (rotary_dim 64) on main q,k (qk_norm BEFORE rope).
+      3. INDEXER (run on raw ``hidden_states`` x, NOT on the main q/k):
+           block_indices = lightning_indexer(x, ...)            # [B, S_q, topk], -1 padded
+           attention_mask = build_block_mask(block_indices, ...) # [B,1,S_q,S_k] additive
+         The indexer projects x to a low-dim index space (index_head_dim 128,
+         index_n_heads 4), applies its own qk_norm + partial rope, scores
+         q.k per index head, max-pools per key-block (amax over block_size then
+         over index heads), boosts local blocks to +inf, and keeps top-``topk``
+         blocks per query (left-packed, -1 right-pad). The mask keeps a key iff
+         its block was selected AND key is causal w.r.t. the query.
+      4. repeat_kv (4 -> 64), SDPA with scale head_dim**-0.5 and the block-sparse
+         additive mask (which already encodes causality), softmax fp32.
+      5. attn.transpose + reshape -> o_proj.
+
+    The ONLY difference from ``gqa_attention_forward`` is that the additive mask
+    is the block-sparse-AND-causal mask from the indexer instead of a plain
+    causal mask. When every block is selected (e.g. num_key_blocks <= topk) the
+    mask reduces EXACTLY to the dense causal mask and this equals dense GQA.
+
+    Args:
+        x: hidden states [B, S, hidden_size].
+        weights_dict: q_proj/k_proj/v_proj/o_proj/q_norm/k_norm (main) and
+            index_q_proj/index_k_proj/index_q_norm/index_k_norm (indexer), each a
+            ``.weight`` tensor.
+        cos, sin: partial-rope tables [B, S, rotary_dim] (rotary_dim 64).
+        position_ids: [B, S] content positions; defaults to arange(S).
+        config dims as named; ``init_blocks`` (sparse_init_block, 0 here) reserved
+            for parity -- with 0 it is a no-op (HF folds it out of this config).
+
+    Returns:
+        Attention block output [B, S, hidden_size] (post o_proj).
+    """
+    B, S, _ = x.shape
+    n_rep = num_attention_heads // num_key_value_heads
+    if position_ids is None:
+        position_ids = torch.arange(S, device=x.device).unsqueeze(0).expand(B, -1)
+
+    # --- main projections + qk_norm + rope ---
+    q = torch.nn.functional.linear(x, weights_dict["q_proj"]).view(B, S, num_attention_heads, head_dim)
+    k = torch.nn.functional.linear(x, weights_dict["k_proj"]).view(B, S, num_key_value_heads, head_dim)
+    v = torch.nn.functional.linear(x, weights_dict["v_proj"]).view(B, S, num_key_value_heads, head_dim)
+
+    q = rms_norm_forward(q, weights_dict["q_norm"], eps=eps).transpose(1, 2)
+    k = rms_norm_forward(k, weights_dict["k_norm"], eps=eps).transpose(1, 2)
+    v = v.transpose(1, 2)
+
+    q, k = rope_forward(q, k, cos, sin, unsqueeze_dim=1)
+
+    # --- indexer selection branch (on raw hidden states x) ---
+    block_indices = _lightning_indexer_block_indices(
+        x,
+        weights_dict,
+        cos,
+        sin,
+        position_ids,
+        index_head_dim=index_head_dim,
+        index_n_heads=index_n_heads,
+        block_size=block_size,
+        topk_blocks=topk_blocks,
+        local_blocks=local_blocks,
+        eps=eps,
+    )
+    attention_mask = _build_block_mask(block_indices, k.shape[2], position_ids, block_size, q.dtype, x.device)
+
+    # --- block-sparse GQA SDPA ---
+    k = _repeat_kv(k, n_rep)
+    v = _repeat_kv(v, n_rep)
+
+    scaling = head_dim**-0.5
+    attn_weights = torch.matmul(q, k.transpose(2, 3)) * scaling
+    attn_weights = attn_weights + attention_mask
+    attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(q.dtype)
+    attn_output = torch.matmul(attn_weights, v)
+
+    attn_output = attn_output.transpose(1, 2).reshape(B, S, -1).contiguous()
+    out = torch.nn.functional.linear(attn_output, weights_dict["o_proj"])
+    return out, block_indices
