@@ -65,14 +65,16 @@ void kernel_main() {
     // SKELETON: the coordination buffer address is plumbed through for the upcoming N-buffer ring
     // coordination but is not yet used while only the first receive buffer is wired up.
     DPRINT("coordination_buffer_addr = {}\n", coordination_buffer_addr);
-    auto* coordination_buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(coordination_buffer_addr);
+    auto* output_tensor_info = reinterpret_cast<volatile tt_l1_ptr OutputTensorInfo*>(coordination_buffer_addr);
+
+    DPRINT("Output tensor info size = {}\n", sizeof(OutputTensorInfo));
 
     // Create Socket Interface
     SocketReceiverInterface receiver_socket = create_receiver_socket_interface(socket_config_addr);
     set_receiver_socket_page_size(receiver_socket, handshake_page_size);
 
     invalidate_l1_cache();
-    if (*coordination_buffer == 0) {
+    if (output_tensor_info->num_tensors == 0) {
         DPRINT("Coordination buffer is zero-initialized\n");
 
         DPRINT("Num output tensors: {}\n", num_output_tensors);
@@ -99,12 +101,13 @@ void kernel_main() {
 
         // Stage the OutputTensorInfo struct in its dedicated CB (L1) so it can be used directly as the
         // source of the NoC payload write back to the sender.
-        auto* output_tensor_info = reinterpret_cast<volatile tt_l1_ptr OutputTensorInfo*>(coordination_buffer_addr);
         output_tensor_info->num_tensors = num_output_tensors;
         output_tensor_info->page_size = output_page_size;
         output_tensor_info->num_pages = num_pages;
         output_tensor_info->write_index = 0;
         output_tensor_info->read_index = 0;
+        output_tensor_info->sender_config_l1_addr[0] = sender_handshake_addr;
+        output_tensor_info->receiver_config_l1_addr[0] = coordination_buffer_addr;
         for (uint32_t i = 0; i < num_output_tensors; ++i) {
             output_tensor_info->base_addr[i] = output_base_addrs[i];
         }

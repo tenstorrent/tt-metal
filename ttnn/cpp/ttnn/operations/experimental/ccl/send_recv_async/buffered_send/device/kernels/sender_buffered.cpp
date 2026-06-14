@@ -82,6 +82,7 @@ void kernel_main() {
     // observe a stale completion.
     auto* dest_info_ptr = reinterpret_cast<volatile tt_l1_ptr OutputTensorInfo*>(handshake_base_addr);
 
+    DPRINT("Output tensor info size = {}\n", sizeof(OutputTensorInfo));
     //////////////////////////////////////////////////
     // STEP 1: advertise the handshake-buffer address over the socket
     //////////////////////////////////////////////////
