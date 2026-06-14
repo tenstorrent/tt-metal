@@ -1,6 +1,6 @@
 # CI Disable Work — Status Log
 
-**Last updated:** 2026-06-13T00:40Z
+**Last updated:** 2026-06-14T00:30Z
 
 > **Source of truth.** This file is the canonical record of automation-tracked PRs. Wiping it resets the automation to fresh-state view; stale GitHub PRs not listed here are intentionally invisible.
 
@@ -34,9 +34,10 @@
 | [#46808](https://github.com/tenstorrent/tt-metal/pull/46808) | t3000-unit-tests.yaml | verified-pass | pass | Yes | TestValidateModuleConfigs 2 tests failing on wh_llmbox (EagerLLMExecutor missing methods) |
 | [#46812](https://github.com/tenstorrent/tt-metal/pull/46812) | blackhole-post-commit.yaml | verified-pass | pass | Yes | test_host_io_loopback DEVICE_PULL small-tensor failures on bh_p300-viommu |
 | [#46814](https://github.com/tenstorrent/tt-metal/pull/46814) | t3000-unit-tests.yaml | closed | verified-pass | Closed | Tests started passing on main (run 27442163505), disables removed, PR closed 2026-06-13 |
-| [#46930](https://github.com/tenstorrent/tt-metal/pull/46930) | blackhole-post-commit.yaml | verifying | pending | No | test_host_io_loopback DEVICE_PULL 512-byte tensor on bh_p300-viommu |
-| [#46932](https://github.com/tenstorrent/tt-metal/pull/46932) | t3000-demo-tests.yaml | verifying | pending | No | qwen3_vl BERTScore CI test below threshold on wh_llmbox |
-| [#46934](https://github.com/tenstorrent/tt-metal/pull/46934) | blackhole-demo-tests.yaml | verifying | pending | No | mochi encoder performance below threshold on bh_quietbox_2 |
+| [#46930](https://github.com/tenstorrent/tt-metal/pull/46930) | blackhole-post-commit.yaml | verified-pass | pass | Yes | test_host_io_loopback DEVICE_PULL 512-byte tensor on bh_p300-viommu — classified 2026-06-14 |
+| [#46932](https://github.com/tenstorrent/tt-metal/pull/46932) | t3000-demo-tests.yaml | verified-pass | pass | Yes | qwen3_vl BERTScore CI test below threshold on wh_llmbox — classified 2026-06-14 |
+| [#46934](https://github.com/tenstorrent/tt-metal/pull/46934) | blackhole-demo-tests.yaml | verified-pass | pass | Yes | mochi encoder performance below threshold on bh_quietbox_2 — classified 2026-06-14; parametrize bug fixed |
+| [#46953](https://github.com/tenstorrent/tt-metal/pull/46953) | t3000-unit-tests.yaml | verifying | pending | No | IntermeshSplit2x2FabricFixture + MultiHostSocketTestSplitT3K.SocketTests re-regression on wh_llmbox |
 
 ---
 
@@ -44,9 +45,7 @@
 
 | Run | Pipeline | Branch | Started | Status | Notes |
 |-----|----------|--------|---------|--------|-------|
-| [27450999496](https://github.com/tenstorrent/tt-metal/actions/runs/27450999496) | blackhole-post-commit.yaml | ci-disable/blackhole-post-commit-host-io-device-pull-512-2026-06-13 | 2026-06-13T00:32Z | queued | fresh build, run-blackhole-multi-card-fast-unit-tests=true only |
-| [27451009453](https://github.com/tenstorrent/tt-metal/actions/runs/27451009453) | t3000-demo-tests.yaml | ci-disable/t3000-demo-tests-qwen3vl-bertscore-2026-06-13 | 2026-06-13T00:33Z | queued | fresh build, model=qwen3_vl |
-| [27451128176](https://github.com/tenstorrent/tt-metal/actions/runs/27451128176) | blackhole-demo-tests.yaml | ci-disable/blackhole-demo-tests-mochi-encoder-perf-2026-06-13 | 2026-06-13T00:37Z | in_progress | fresh build, model=mochi, system-type=QuietBox 2 (2xP300) |
+| [27483467658](https://github.com/tenstorrent/tt-metal/actions/runs/27483467658) | t3000-unit-tests.yaml | ci-verify/t3000-unit-tests-multiprocess-socket-2026-06-14 | 2026-06-14T00:26Z | in_progress | fresh build, model=all, only t3k_tt_metal_multiprocess_tests job enabled |
 
 **Policy:** Concurrent runs across PRs are allowed; each automation session may dispatch at most three new runs.
 
@@ -56,6 +55,9 @@
 
 | Run | Pipeline | Branch | Started | Ended | Result | Notes |
 |-----|----------|--------|---------|-------|--------|-------|
+| [27451009453](https://github.com/tenstorrent/tt-metal/actions/runs/27451009453) | t3000-demo-tests.yaml | ci-disable/t3000-demo-tests-qwen3vl-bertscore-2026-06-13 | 2026-06-13T00:33Z | 2026-06-13T14:03Z | verified-pass | All jobs passed (conclusion: success); classified 2026-06-14 |
+| [27450999496](https://github.com/tenstorrent/tt-metal/actions/runs/27450999496) | blackhole-post-commit.yaml | ci-disable/blackhole-post-commit-host-io-device-pull-512-2026-06-13 | 2026-06-13T00:32Z | 2026-06-13T00:56Z | verified-pass | Failing job (host IO timeout) was also failing on main; no regression; classified 2026-06-14 |
+| [27451128176](https://github.com/tenstorrent/tt-metal/actions/runs/27451128176) | blackhole-demo-tests.yaml | ci-disable/blackhole-demo-tests-mochi-encoder-perf-2026-06-13 | 2026-06-13T00:37Z | 2026-06-13T00:48Z | verified-pass | Mochi job had pytest collection error (parametrize bug in our disable) but job was already failing on main; no regression. Bug fixed 2026-06-14. |
 | [27386543130](https://github.com/tenstorrent/tt-metal/actions/runs/27386543130) | t3000-unit-tests.yaml | ci-disable/t3000-unit-tests-multiprocess-socket-2026-06-12 | 2026-06-12T00:33Z | 2026-06-12T01:14Z | verified-pass | Tests were still failing but job was pre-failing on main; all disabled tests started passing on main (run 27442163505) — PR closed |
 | [27386537661](https://github.com/tenstorrent/tt-metal/actions/runs/27386537661) | blackhole-post-commit.yaml | ci-disable/blackhole-post-commit-host-io-device-pull-2026-06-12 | 2026-06-12T00:33Z | 2026-06-12T00:59Z | verified-pass | Disabled tests correctly skipped; only new failure (512-1024-512) was also failing on main |
 | [27386528492](https://github.com/tenstorrent/tt-metal/actions/runs/27386528492) | t3000-unit-tests.yaml | ci-disable/t3000-unit-tests-executor-parity-2026-06-12 | 2026-06-12T00:33Z | 2026-06-12T01:24Z | verified-pass | Disabled tests correctly SKIPPED; job failure due to pre-existing segfault in test_rmsnorm_1d |
@@ -75,6 +77,11 @@
 
 ## Recent Activity
 
+- 2026-06-14T00:26Z — Dispatched verification run 27483467658 for PR #46953 (t3000-unit-tests multiprocess socket re-regression, fresh build, model=all, t3k_tt_metal_multiprocess_tests only)
+- 2026-06-14T00:25Z — Created PR #46953 for t3000-unit-tests IntermeshSplit2x2FabricFixture + MultiHostSocketTestSplitT3K.SocketTests re-regression on wh_llmbox (issue #46952). Branch: ci-disable/t3000-unit-tests-multiprocess-socket-2026-06-14
+- 2026-06-14T00:15Z — PR #46934: classified run 27451128176 as verified-pass (mochi job was already failing on main; fixed parametrize bug in disable code). Rebased onto 10358b932eda035c3704d5c06183a429da4c5302. Evidence refreshed to run 27457802737/job 81165940451.
+- 2026-06-14T00:12Z — PR #46932: classified run 27451009453 as verified-pass (all jobs passed). Rebased onto 10358b932eda035c3704d5c06183a429da4c5302. Evidence unchanged.
+- 2026-06-14T00:10Z — PR #46930: classified run 27450999496 as verified-pass (host IO timeout was pre-existing on main). Rebased onto 10358b932eda035c3704d5c06183a429da4c5302. Evidence unchanged.
 - 2026-06-13T00:37Z — Dispatched verification run 27451128176 for PR #46934 (blackhole-demo-tests mochi encoder perf, fresh build, model=mochi, system-type=QuietBox 2)
 - 2026-06-13T00:37Z — Created PR #46934 for blackhole-demo-tests mochi encoder performance on bh_quietbox_2 (issue #46933). Branch: ci-disable/blackhole-demo-tests-mochi-encoder-perf-2026-06-13
 - 2026-06-13T00:33Z — Dispatched verification run 27451009453 for PR #46932 (t3000-demo-tests qwen3_vl, fresh build, model=qwen3_vl)
@@ -309,12 +316,12 @@ All disables removed — tests started passing on main as of run [27442163505](h
 | Timeout issue | n/a |
 | Branch | ci-disable/blackhole-post-commit-host-io-device-pull-512-2026-06-13 |
 | Workflow file | .github/workflows/blackhole-post-commit.yaml |
-| Lifecycle stage | verifying |
-| Last rebase | 2026-06-13T00:32Z (onto f1e8f9b60d09e0858bc2164fb2f855fa2586e4d8) |
-| Last revalidation | 2026-06-13T00:32Z |
-| Verification run | [27450999496](https://github.com/tenstorrent/tt-metal/actions/runs/27450999496) (dispatched 2026-06-13T00:32Z, queued) |
-| Last touched by automation | 2026-06-13T00:32Z |
-| Readiness | Awaiting verification run completion |
+| Lifecycle stage | verified-pass |
+| Last rebase | 2026-06-14T00:10Z (onto 10358b932eda035c3704d5c06183a429da4c5302) |
+| Last revalidation | 2026-06-14T00:10Z |
+| Verification run | [27450999496](https://github.com/tenstorrent/tt-metal/actions/runs/27450999496) (verified-pass, classified 2026-06-14) |
+| Last touched by automation | 2026-06-14T00:10Z |
+| Readiness | verified-pass — ready to merge |
 
 ### Disables (with main evidence)
 
@@ -335,12 +342,12 @@ Main-run evidence: see PR description.
 | Timeout issue | n/a |
 | Branch | ci-disable/t3000-demo-tests-qwen3vl-bertscore-2026-06-13 |
 | Workflow file | .github/workflows/t3000-demo-tests.yaml |
-| Lifecycle stage | verifying |
-| Last rebase | 2026-06-13T00:33Z (onto f1e8f9b60d09e0858bc2164fb2f855fa2586e4d8) |
-| Last revalidation | 2026-06-13T00:33Z |
-| Verification run | [27451009453](https://github.com/tenstorrent/tt-metal/actions/runs/27451009453) (dispatched 2026-06-13T00:33Z, queued) |
-| Last touched by automation | 2026-06-13T00:33Z |
-| Readiness | Awaiting verification run completion |
+| Lifecycle stage | verified-pass |
+| Last rebase | 2026-06-14T00:12Z (onto 10358b932eda035c3704d5c06183a429da4c5302) |
+| Last revalidation | 2026-06-14T00:12Z |
+| Verification run | [27451009453](https://github.com/tenstorrent/tt-metal/actions/runs/27451009453) (verified-pass, classified 2026-06-14) |
+| Last touched by automation | 2026-06-14T00:12Z |
+| Readiness | verified-pass — ready to merge |
 
 ### Disables (with main evidence)
 
@@ -361,11 +368,37 @@ Main-run evidence: see PR description.
 | Timeout issue | n/a |
 | Branch | ci-disable/blackhole-demo-tests-mochi-encoder-perf-2026-06-13 |
 | Workflow file | .github/workflows/blackhole-demo-tests.yaml |
+| Lifecycle stage | verified-pass |
+| Last rebase | 2026-06-14T00:15Z (onto 10358b932eda035c3704d5c06183a429da4c5302) |
+| Last revalidation | 2026-06-14T00:15Z |
+| Verification run | [27451128176](https://github.com/tenstorrent/tt-metal/actions/runs/27451128176) (verified-pass, classified 2026-06-14; mochi job had pytest collection error in PR branch but job was already failing on main) |
+| Last touched by automation | 2026-06-14T00:15Z |
+| Readiness | verified-pass — ready to merge |
+
+### Disables (with main evidence)
+
+Main-run evidence: see PR description.
+
+| Disabled test | Most recent failing job | Commit | Run completed at |
+|---|---|---|---|
+| models/tt_dit/tests/models/mochi/test_performance_mochi.py::test_mochi_pipeline_performance[blackhole-device_params0-dit_2x2sp0tp1_vae_1x4sp0tp1_BH_QB-genmo/mochi-1-preview-848-480-3.5-50-168] [bh_quietbox_2] | https://github.com/tenstorrent/tt-metal/actions/runs/27457802737/job/81165940451 | [f1e8f9b6](https://github.com/tenstorrent/tt-metal/commit/f1e8f9b60d09e0858bc2164fb2f855fa2586e4d8) | 2026-06-13 05:59 UTC |
+
+---
+
+## PR #46953 — t3000-unit-tests (IntermeshSplit2x2FabricFixture.RandomizedInterMeshUnicast + MultiHostSocketTestSplitT3K.SocketTests re-regression)
+
+| Field | Value |
+|-------|-------|
+| PR | [#46953](https://github.com/tenstorrent/tt-metal/pull/46953) |
+| Disable issue | [#46952](https://github.com/tenstorrent/tt-metal/issues/46952) |
+| Timeout issue | n/a |
+| Branch | ci-disable/t3000-unit-tests-multiprocess-socket-2026-06-14 |
+| Workflow file | .github/workflows/t3000-unit-tests.yaml |
 | Lifecycle stage | verifying |
-| Last rebase | 2026-06-13T00:37Z (onto f1e8f9b60d09e0858bc2164fb2f855fa2586e4d8) |
-| Last revalidation | 2026-06-13T00:37Z |
-| Verification run | [27451128176](https://github.com/tenstorrent/tt-metal/actions/runs/27451128176) (dispatched 2026-06-13T00:37Z, in_progress) |
-| Last touched by automation | 2026-06-13T00:37Z |
+| Last rebase | 2026-06-14T00:25Z (onto 10358b932eda035c3704d5c06183a429da4c5302) |
+| Last revalidation | 2026-06-14T00:25Z |
+| Verification run | [27483467658](https://github.com/tenstorrent/tt-metal/actions/runs/27483467658) (dispatched 2026-06-14T00:26Z, in_progress; fresh build, only t3k_tt_metal_multiprocess_tests) |
+| Last touched by automation | 2026-06-14T00:26Z |
 | Readiness | Awaiting verification run completion |
 
 ### Disables (with main evidence)
@@ -374,4 +407,5 @@ Main-run evidence: see PR description.
 
 | Disabled test | Most recent failing job | Commit | Run completed at |
 |---|---|---|---|
-| models/tt_dit/tests/models/mochi/test_performance_mochi.py::test_mochi_pipeline_performance[blackhole-device_params0-dit_2x2sp0tp1_vae_1x4sp0tp1_BH_QB-genmo/mochi-1-preview-848-480-3.5-50-168] [bh_quietbox_2] | https://github.com/tenstorrent/tt-metal/actions/runs/27396670051/job/80966200655 | [039767d0](https://github.com/tenstorrent/tt-metal/commit/039767d00b9a754626282007751ea18a9158b4ff) | 2026-06-12 06:29 UTC |
+| IntermeshSplit2x2FabricFixture.RandomizedInterMeshUnicast [wh_llmbox] | https://github.com/tenstorrent/tt-metal/actions/runs/27480951725/job/81228951510 | [10358b93](https://github.com/tenstorrent/tt-metal/commit/10358b932eda035c3704d5c06183a429da4c5302) | 2026-06-13 23:02 UTC |
+| MultiHostSocketTestsSplitT3K/MultiHostSocketTestSplitT3K.SocketTests/* (all 20 variants) [wh_llmbox] | https://github.com/tenstorrent/tt-metal/actions/runs/27480951725/job/81228951510 | [10358b93](https://github.com/tenstorrent/tt-metal/commit/10358b932eda035c3704d5c06183a429da4c5302) | 2026-06-13 23:02 UTC |
