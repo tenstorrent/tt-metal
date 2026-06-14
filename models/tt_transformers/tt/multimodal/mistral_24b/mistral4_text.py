@@ -191,13 +191,13 @@ class TtMistral4MoE(LightweightModule):
 class TtMistral4DecoderLayer(LightweightModule):
     """input_layernorm -> MLA -> +residual -> post_attention_layernorm -> MoE -> +residual."""
 
-    def __init__(self, mesh, sd, cfg, eps, shard_experts=False):
+    def __init__(self, mesh, sd, cfg, eps, shard_experts=False, expert_dtype=ttnn.bfloat16):
         super().__init__()
         self.eps = eps
         self.w_in = _norm(sd["input_layernorm.weight"], mesh)
         self.w_post = _norm(sd["post_attention_layernorm.weight"], mesh)
         self.mla = TtMistral4MLA(mesh, sd, cfg, eps)
-        self.moe = TtMistral4MoE(mesh, sd, cfg, shard_experts=shard_experts)
+        self.moe = TtMistral4MoE(mesh, sd, cfg, shard_experts=shard_experts, expert_dtype=expert_dtype)
 
     def forward(self, x, cos, sin):
         h = ttnn.add(x, self.mla(ttnn.rms_norm(x, epsilon=self.eps, weight=self.w_in), cos, sin))
@@ -212,14 +212,16 @@ class TtMistral4TextModel(LightweightModule):
     (``model.layers.{i}.*``, ``model.norm.weight``, ``lm_head.weight``).
     """
 
-    def __init__(self, mesh, sd, cfg, n_layers, eps, shard_experts=False):
+    def __init__(self, mesh, sd, cfg, n_layers, eps, shard_experts=False, expert_dtype=ttnn.bfloat16):
         super().__init__()
         self.eps = eps
         self.layers = []
         for i in range(n_layers):
             pfx = f"model.layers.{i}."
             layer_sd = {k[len(pfx) :]: v for k, v in sd.items() if k.startswith(pfx)}
-            self.layers.append(TtMistral4DecoderLayer(mesh, layer_sd, cfg, eps, shard_experts=shard_experts))
+            self.layers.append(
+                TtMistral4DecoderLayer(mesh, layer_sd, cfg, eps, shard_experts=shard_experts, expert_dtype=expert_dtype)
+            )
         self.w_norm = _norm(sd["model.norm.weight"], mesh)
         self.w_lm = _lin(sd["lm_head.weight"], mesh)
 
