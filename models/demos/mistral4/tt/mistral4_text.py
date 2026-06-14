@@ -234,3 +234,48 @@ class TtMistral4TextModel(LightweightModule):
             hidden = layer(hidden, cos, sin)
         hidden = ttnn.rms_norm(hidden, epsilon=self.eps, weight=self.w_norm)
         return ttnn.linear(hidden, self.w_lm)
+
+
+class TtMistral4Projector(LightweightModule):
+    """Mistral3 multi-modal projector: vision features -> text-hidden image embeds.
+
+    norm(RMSNorm) -> 2x2 spatial patch-merge -> merging_layer -> linear_1 -> gelu -> linear_2.
+    The 2x2 merge (channel-major, == HF F.unfold) is a one-time-per-image spatial rearrange done
+    host-side here (negligible vs decode; an on-device reshape/permute is a perf follow-up); the
+    norm + all linears run on device. `sd` keys are relative to multi_modal_projector. (norm.weight,
+    patch_merger.merging_layer.weight, linear_1.weight, linear_2.weight).
+    """
+
+    def __init__(self, mesh, sd, cfg):
+        super().__init__()
+        self.mesh = mesh
+        self.eps = cfg.text_config.rms_norm_eps
+        self.sm = cfg.spatial_merge_size
+        self.patch = cfg.vision_config.patch_size
+        self.vh = cfg.vision_config.hidden_size
+        self.w_norm = _norm(sd["norm.weight"], mesh)
+        self.w_merge = _lin(sd["patch_merger.merging_layer.weight"], mesh)  # Linear(vh*sm^2 -> vh)
+        self.w_l1 = _lin(sd["linear_1.weight"], mesh)  # Linear(vh -> text_hidden)
+        self.w_l2 = _lin(sd["linear_2.weight"], mesh)  # Linear(text_hidden -> text_hidden)
+
+    def _unfold_host(self, x, image_sizes):
+        # x [n, vh] (single image) -> [n/sm^2, vh*sm^2], channel-major (== HF F.unfold). Host-side.
+        sm, d = self.sm, x.shape[-1]
+        h, w = image_sizes[0][0] // self.patch, image_sizes[0][1] // self.patch
+        g = x.view(h, w, d).permute(2, 0, 1)  # [d,h,w]
+        g = g.view(d, h // sm, sm, w // sm, sm).permute(0, 2, 4, 1, 3).reshape(d * sm * sm, -1).t()
+        return g.contiguous()
+
+    def forward(self, feats, image_sizes):
+        n = feats.shape[0]
+        x = ttnn.rms_norm(feats, epsilon=self.eps, weight=self.w_norm)  # [n, vh]
+        x_host = ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0))[:n].float()
+        merged = ttnn.from_torch(
+            self._unfold_host(x_host, image_sizes).to(torch.bfloat16),
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        )  # [n/sm^2, vh*sm^2]
+        m = ttnn.linear(merged, self.w_merge)  # [n/sm^2, vh]
+        h = ttnn.gelu(ttnn.linear(m, self.w_l1))  # [n/sm^2, text_hidden]
+        return ttnn.linear(h, self.w_l2)  # [n/sm^2, text_hidden]
