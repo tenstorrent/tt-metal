@@ -360,6 +360,11 @@ class LTXPipeline:
             self._load_config_from_checkpoint()
             self._instantiate_modules(extra_transformer_variants or [], audio_only=audio_only)
             self._register_coresident_exclusions()
+            # LTX_QUANT selects a DiT-linear quant preset (e.g. all_bf8_lofi). Installed before
+            # _prime_caches so the patched _prepare_transformer typecasts weights as they load and
+            # re-typecasts after every dynamic_load reload. Off by default (baseline bf16/HiFi2).
+            if not audio_only:
+                self._maybe_apply_quant_config()
             self._prime_caches(audio_only=audio_only)
             # Tracing (prep_run=False) requires precompiled kernels + pre-allocated trace I/O,
             # so warmup is mandatory when traced. audio_only skips the (video) warmup entirely:
@@ -724,6 +729,20 @@ class LTXPipeline:
         self._prepare_upsampler()
         self._prepare_audio_decoder()
         self._prepare_transformer(0)
+
+    def _maybe_apply_quant_config(self) -> None:
+        """Install a DiT-linear quant preset when LTX_QUANT names one. No-op (baseline) otherwise."""
+        preset = os.environ.get("LTX_QUANT", "").strip()
+        if not preset:
+            return
+        from .quant_config import QuantConfig, set_quant_config
+
+        factory = getattr(QuantConfig, preset, None)
+        if factory is None or not callable(factory):
+            logger.warning(f"LTX_QUANT='{preset}' is not a QuantConfig preset; running baseline (bf16/HiFi2)")
+            return
+        logger.info(f"LTX_QUANT='{preset}': applying DiT-linear quant config")
+        set_quant_config(self, factory())
 
     def _prepare_transformer(self, idx: int = 0) -> None:
         state = self.transformer_states[idx]
