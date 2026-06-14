@@ -810,3 +810,420 @@ def lm_head(
     logits = F.linear(normed.float(), lm_head_weight.float()).bfloat16()  # [B, S, 131072]
 
     return logits
+
+
+# ---------------------------------------------------------------------------
+# MoEExperts  (routed expert computation inside NemotronHMoE)
+# ---------------------------------------------------------------------------
+# In NemotronH each MoE layer (hybrid_override_pattern 'E') contains a
+# NemotronHMoE module whose core is a bank of 128 NemotronHMLP experts.
+# After the gate produces (topk_indices, topk_weights), only the top-6
+# experts per token are computed; their outputs are weighted and summed.
+#
+# NemotronHMLP forward (each expert):
+#   out = down_proj( relu(up_proj(x))^2 )   -- activation is relu2
+# where:
+#   up_proj.weight   : [moe_intermediate=1856, hidden=2688]  bfloat16
+#   down_proj.weight : [hidden=2688, moe_intermediate=1856]  bfloat16
+#
+# The full MoEExperts computation:
+#   final = zeros_like(hidden_states)
+#   for each expert e in 0..127:
+#       find all tokens routed to expert e
+#       expert_out = down_proj_e( relu(up_proj_e(tokens))^2 )
+#       weighted_out = expert_out * topk_weights[token, weight_slot]
+#       final.index_add_(0, token_indices, weighted_out)
+#
+# Config values for NemotronH-30B:
+#   n_routed_experts    = 128
+#   num_experts_per_tok = 6      (top-6 routing)
+#   hidden_size         = 2688
+#   moe_intermediate    = 1856   (per-expert intermediate dimension)
+# ---------------------------------------------------------------------------
+
+
+def moe_experts(
+    hidden_states: torch.Tensor,
+    topk_indices: torch.Tensor,
+    topk_weights: torch.Tensor,
+    expert_up_weights: list,
+    expert_down_weights: list,
+) -> torch.Tensor:
+    """Pure-PyTorch routed MoE expert computation for NemotronH-30B.
+
+    Replicates the routed-expert portion of ``NemotronHMoE.forward()`` —
+    the loop over 128 NemotronHMLP experts, weighted by the gate output.
+    This does NOT include the shared expert; it corresponds exactly to the
+    ``y`` tensor computed before ``y += shared_expert_output`` in the HF code.
+
+    Activation is ``relu2`` (squared ReLU): ``relu(x) ** 2``, matching
+    ``mlp_hidden_act = "relu2"`` in config.json.
+
+    Args:
+        hidden_states:       [N_tokens, hidden_size] -- post-norm token features,
+                             typically bfloat16.
+        topk_indices:        [N_tokens, top_k] int64 -- expert indices from gate.
+        topk_weights:        [N_tokens, top_k] float -- normalised routing weights
+                             from gate (already scaled by routed_scaling_factor).
+        expert_up_weights:   List of 128 tensors, each [moe_intermediate, hidden_size]
+                             (as stored in the checkpoint; F.linear transposes).
+                             Loaded from
+                             ``backbone.layers.{i}.mixer.experts.{j}.up_proj.weight``.
+        expert_down_weights: List of 128 tensors, each [hidden_size, moe_intermediate].
+                             Loaded from
+                             ``backbone.layers.{i}.mixer.experts.{j}.down_proj.weight``.
+
+    Returns:
+        Tensor of shape [N_tokens, hidden_size] -- sum of weighted expert outputs,
+        same dtype as ``hidden_states``.
+    """
+    n_tokens, hidden_size = hidden_states.shape
+    n_experts = len(expert_up_weights)
+
+    # Accumulator in the same dtype as the input
+    final = torch.zeros_like(hidden_states)
+
+    # Build a [n_experts, n_tokens, top_k] one-hot style mask to avoid
+    # repeated scans: for each expert, find which (token, slot) pairs route to it.
+    # topk_indices: [N_tokens, top_k] -> one_hot: [N_tokens, top_k, n_experts]
+    # -> permute: [n_experts, N_tokens, top_k]
+    one_hot = F.one_hot(topk_indices, num_classes=n_experts).permute(2, 0, 1)
+    # one_hot[e]: [N_tokens, top_k] boolean mask for expert e
+
+    for e in range(n_experts):
+        # token_idx: which tokens go to expert e
+        # weight_idx: which slot (0..top_k-1) carries that assignment
+        token_idx, weight_idx = torch.where(one_hot[e])  # each shape [num_assigned]
+        if token_idx.numel() == 0:
+            continue
+
+        # Gather the tokens assigned to this expert
+        x_e = hidden_states[token_idx]  # [num_assigned, hidden_size]
+
+        # Expert forward: relu2 MLP
+        up = F.linear(x_e, expert_up_weights[e])  # [num_assigned, moe_intermediate]
+        activated = F.relu(up) ** 2  # relu2 activation
+        out = F.linear(activated, expert_down_weights[e])  # [num_assigned, hidden_size]
+
+        # Gather the scalar routing weights for these (token, slot) pairs
+        weights = topk_weights[token_idx, weight_idx].unsqueeze(-1)  # [num_assigned, 1]
+
+        # Weighted accumulation into the output; cast to match final dtype (bfloat16)
+        final.index_add_(0, token_idx, (out * weights).to(final.dtype))
+
+    return final
+
+
+# ---------------------------------------------------------------------------
+# Mamba2Layer  (NemotronHBlock with block_type='mamba2')
+# ---------------------------------------------------------------------------
+# NemotronH layer 0 is a Mamba2 block (hybrid_override_pattern[0] == 'M').
+# The full block forward is:
+#   residual      = hidden_states
+#   hidden_states = pre_norm(hidden_states)              RMSNorm
+#   hidden_states = mixer.torch_forward(hidden_states)   NemotronHMamba2Mixer
+#   hidden_states = residual + hidden_states
+#
+# Config for NemotronH-30B:
+#   hidden_size      = 2688
+#   num_heads        = 64    (mamba_num_heads)
+#   head_dim         = 64    (mamba_head_dim)
+#   intermediate_size= 4096  (= num_heads * head_dim)
+#   n_groups         = 8
+#   ssm_state_size   = 128
+#   conv_kernel      = 4
+#   chunk_size       = 128
+#   time_step_limit  = (0.0, inf)   -> clamp is a no-op
+#
+# Weight layout (backbone.layers.0.mixer.*):
+#   in_proj.weight       : [10304, 2688]   (10304 = 4096+6144+64), no bias
+#   conv1d.weight        : [6144, 1, 4]
+#   conv1d.bias          : [6144]
+#   dt_bias              : [64]
+#   A_log                : [64]
+#   norm.weight          : [4096]          MambaRMSNormGated
+#   D                    : [64]
+#   out_proj.weight      : [2688, 4096]    no bias
+#
+# Pre-block norm weight: backbone.layers.0.norm.weight [2688]
+# ---------------------------------------------------------------------------
+
+
+def _pad_tensor_by_size(input_tensor: torch.Tensor, pad_size: int) -> torch.Tensor:
+    """Pad sequence dimension (dim=1) with zeros."""
+    if pad_size == 0:
+        return input_tensor
+    if input_tensor.ndim == 4:
+        pad_shape = (0, 0, 0, 0, 0, pad_size, 0, 0)
+    else:  # ndim == 3
+        pad_shape = (0, 0, 0, pad_size, 0, 0)
+    return F.pad(input_tensor, pad_shape, mode="constant", value=0)
+
+
+def _reshape_into_chunks(
+    input_tensor: torch.Tensor,
+    pad_size: int,
+    chunk_size: int,
+) -> torch.Tensor:
+    """Pad + reshape sequence dimension into chunks."""
+    t = _pad_tensor_by_size(input_tensor, pad_size)
+    if t.ndim == 3:
+        # [B, S_padded, D] -> [B, num_chunks, chunk_size, D]
+        return t.reshape(t.shape[0], -1, chunk_size, t.shape[2])
+    else:
+        # [B, S_padded, H, D] -> [B, num_chunks, chunk_size, H, D]
+        return t.reshape(t.shape[0], -1, chunk_size, t.shape[2], t.shape[3])
+
+
+def _segment_sum(input_tensor: torch.Tensor) -> torch.Tensor:
+    """Compute causal segment sums for SSD chunking.
+
+    Mirrors segment_sum() from modeling_nemotron_h.py.
+    """
+    cs = input_tensor.size(-1)
+    # [..., cs] -> [..., cs, cs]
+    t = input_tensor[..., None].expand(*input_tensor.size(), cs)
+    mask_lower = torch.tril(torch.ones(cs, cs, device=input_tensor.device, dtype=torch.bool), diagonal=-1)
+    t = t.masked_fill(~mask_lower, 0)
+    seg = torch.cumsum(t, dim=-2)
+    mask_diag = torch.tril(torch.ones(cs, cs, device=input_tensor.device, dtype=torch.bool), diagonal=0)
+    seg = seg.masked_fill(~mask_diag, float("-inf"))
+    return seg
+
+
+def _mamba_rms_norm_gated(
+    x: torch.Tensor,
+    z: torch.Tensor,
+    weight: torch.Tensor,
+    eps: float = 1e-5,
+    group_size: int = 512,
+) -> torch.Tensor:
+    """MambaRMSNormGated: element-wise gate then per-group RMSNorm then scale.
+
+    Mirrors MambaRMSNormGated.forward(hidden_states=x, gate=z) calling
+    rmsnorm_fn with norm_before_gate=False (NemotronH convention).
+
+    With norm_before_gate=False:
+      1. gate = silu(z)
+      2. xg   = x * gate
+      3. per-group RMSNorm on xg  (group_size = intermediate_size // n_groups)
+      4. scale by weight
+
+    Args:
+        x:          [B, S, D]  -- scan output
+        z:          [B, S, D]  -- gate from in_proj split
+        weight:     [D]        -- learnable scale
+        eps:        variance epsilon
+        group_size: features per RMSNorm group (4096//8 = 512 for NemotronH-30B)
+
+    Returns:
+        Tensor [B, S, D] in the same dtype as x.
+    """
+    input_dtype = x.dtype
+    B, S, D = x.shape
+
+    # Gate first (norm_before_gate=False)
+    gate = F.silu(z.float())
+    xg = x.float() * gate  # [B, S, D]
+
+    # Per-group RMSNorm
+    xg_grouped = xg.view(B, S, -1, group_size)
+    var = xg_grouped.pow(2).mean(-1, keepdim=True)
+    xg_normed = xg_grouped * torch.rsqrt(var + eps)
+    xg_normed = xg_normed.view(B, S, D)
+
+    out = weight.float() * xg_normed
+    return out.to(input_dtype)
+
+
+def mamba2_layer(
+    hidden_states: torch.Tensor,
+    norm_weight: torch.Tensor,
+    in_proj_weight: torch.Tensor,
+    conv1d_weight: torch.Tensor,
+    conv1d_bias: torch.Tensor,
+    dt_bias: torch.Tensor,
+    A_log: torch.Tensor,
+    norm_mixer_weight: torch.Tensor,
+    D: torch.Tensor,
+    out_proj_weight: torch.Tensor,
+    norm_eps: float = 1e-5,
+    num_heads: int = 64,
+    head_dim: int = 64,
+    n_groups: int = 8,
+    ssm_state_size: int = 128,
+    chunk_size: int = 128,
+) -> torch.Tensor:
+    """Full Mamba2 block (pre-norm + NemotronHMamba2Mixer + residual) for
+    NemotronH-30B, prefill path (full-sequence SSD scan, no cache).
+
+    Replicates NemotronHBlock.forward() -> NemotronHMamba2Mixer.torch_forward()
+    with cache_params=None (the 'else' branch = chunked SSD naive implementation).
+
+    Args:
+        hidden_states:      Input [B, S, hidden_size] -- typically bfloat16.
+        norm_weight:        Pre-block RMSNorm scale [hidden_size].
+                            Loaded from 'backbone.layers.0.norm.weight'.
+        in_proj_weight:     [proj_size, hidden_size] where
+                            proj_size = intermediate_size + conv_dim + num_heads
+                                      = 4096 + 6144 + 64 = 10304.
+                            Loaded from 'backbone.layers.0.mixer.in_proj.weight'.
+        conv1d_weight:      Depthwise conv weight [conv_dim, 1, conv_kernel].
+                            Loaded from 'backbone.layers.0.mixer.conv1d.weight'.
+        conv1d_bias:        Depthwise conv bias [conv_dim].
+                            Loaded from 'backbone.layers.0.mixer.conv1d.bias'.
+        dt_bias:            Time-step bias [num_heads].
+                            Loaded from 'backbone.layers.0.mixer.dt_bias'.
+        A_log:              Log of A [num_heads] (positive -> A < 1).
+                            Loaded from 'backbone.layers.0.mixer.A_log'.
+        norm_mixer_weight:  MambaRMSNormGated scale [intermediate_size].
+                            Loaded from 'backbone.layers.0.mixer.norm.weight'.
+        D:                  Skip-connection scale [num_heads].
+                            Loaded from 'backbone.layers.0.mixer.D'.
+        out_proj_weight:    Output projection [hidden_size, intermediate_size].
+                            Loaded from 'backbone.layers.0.mixer.out_proj.weight'.
+        norm_eps:           RMSNorm epsilon (1e-5 for NemotronH-30B).
+        num_heads:          Number of Mamba2 heads (64 for NemotronH-30B).
+        head_dim:           Head dimension (64 for NemotronH-30B).
+        n_groups:           Number of SSM groups (8 for NemotronH-30B).
+        ssm_state_size:     SSM state size (128 for NemotronH-30B).
+        chunk_size:         Chunk size for SSD algorithm (128 for NemotronH-30B).
+
+    Returns:
+        Tensor [B, S, hidden_size] -- post-residual output, same dtype as
+        'hidden_states'.
+    """
+    residual = hidden_states
+    intermediate_size = num_heads * head_dim  # 4096
+    conv_dim = intermediate_size + 2 * n_groups * ssm_state_size  # 6144
+
+    # -------------------------------------------------------------------------
+    # 1. Pre-block RMSNorm
+    # -------------------------------------------------------------------------
+    normed = layer_norm(hidden_states, norm_weight, eps=norm_eps)
+
+    # -------------------------------------------------------------------------
+    # 2. in_proj: split into [gate, hidden_states_B_C, dt]
+    #    d_mlp = (10304 - 2*4096 - 2*8*128 - 64) // 2 = 0  for NemotronH-30B
+    # -------------------------------------------------------------------------
+    projected = F.linear(normed, in_proj_weight)  # [B, S, 10304]
+    gate = projected[..., :intermediate_size]  # [B, S, 4096]
+    hidden_states_B_C = projected[..., intermediate_size : intermediate_size + conv_dim]  # [B, S, 6144]
+    dt = projected[..., intermediate_size + conv_dim :]  # [B, S, 64]
+
+    # -------------------------------------------------------------------------
+    # 3. Depthwise conv1d (causal, prefill path -- full sequence)
+    # -------------------------------------------------------------------------
+    batch_size, seq_len, _ = normed.shape
+    conv_kernel = conv1d_weight.shape[-1]  # 4
+    hBC_t = hidden_states_B_C.transpose(1, 2)  # [B, conv_dim, S]
+    hBC_conv = F.conv1d(
+        hBC_t,
+        conv1d_weight,
+        bias=conv1d_bias,
+        padding=conv_kernel - 1,
+        groups=conv_dim,
+    )[
+        ..., :seq_len
+    ]  # [B, conv_dim, S]
+    hBC_conv = F.silu(hBC_conv).transpose(1, 2)  # [B, S, conv_dim]
+
+    # Split into x (hidden_states), B, C
+    x = hBC_conv[..., :intermediate_size]  # [B, S, 4096]
+    B_vec = hBC_conv[..., intermediate_size : intermediate_size + n_groups * ssm_state_size]  # [B, S, 1024]
+    C_vec = hBC_conv[..., intermediate_size + n_groups * ssm_state_size :]  # [B, S, 1024]
+
+    # -------------------------------------------------------------------------
+    # 4. SSM transformation -- chunked SSD naive (no cache)
+    #    Mirrors modeling_nemotron_h.py torch_forward lines 619-692.
+    # -------------------------------------------------------------------------
+    A = -torch.exp(A_log.float())  # [num_heads]
+
+    # dt: softplus(dt + dt_bias), clamp(0, inf) is identity for this model
+    dt_f = F.softplus(dt + dt_bias)  # [B, S, 64]
+
+    # Reshape and cast to float32
+    x_f = x.reshape(batch_size, seq_len, num_heads, head_dim).float()  # [B, S, 64, 64]
+    B_f = B_vec.reshape(batch_size, seq_len, n_groups, ssm_state_size).float()  # [B, S, 8, 128]
+    C_f = C_vec.reshape(batch_size, seq_len, n_groups, ssm_state_size).float()  # [B, S, 8, 128]
+
+    # Repeat B and C groups to match num_heads: [B, S, 8, 128] -> [B, S, 64, 128]
+    reps = num_heads // n_groups  # 8
+    B_f = B_f.repeat_interleave(reps, dim=2)  # [B, S, 64, 128]
+    C_f = C_f.repeat_interleave(reps, dim=2)  # [B, S, 64, 128]
+
+    pad_size = (chunk_size - seq_len % chunk_size) % chunk_size
+
+    # D_residual: skip connection using padded x (zeros for pad positions)
+    D_residual = D[..., None].float() * _pad_tensor_by_size(x_f, pad_size)  # [B, S+pad, 64, 64]
+
+    # Discretize x and A
+    x_f = x_f * dt_f[..., None]  # [B, S, 64, 64]  x <- x * dt
+    A_dt = A.to(x_f.dtype) * dt_f  # [B, S, 64]      A_dt = A * dt
+
+    # Reshape into chunks
+    x_c = _reshape_into_chunks(x_f, pad_size, chunk_size)  # [B, nc, cs, 64, 64]
+    A_c = _reshape_into_chunks(A_dt, pad_size, chunk_size)  # [B, nc, cs, 64]
+    B_c = _reshape_into_chunks(B_f, pad_size, chunk_size)  # [B, nc, cs, 64, 128]
+    C_c = _reshape_into_chunks(C_f, pad_size, chunk_size)  # [B, nc, cs, 64, 128]
+
+    # Permute A: [B, nc, cs, 64] -> [B, 64, nc, cs]
+    A_c = A_c.permute(0, 3, 1, 2)
+    A_cumsum = torch.cumsum(A_c, dim=-1)  # [B, 64, nc, cs]
+
+    # 1. Intra-chunk diagonal blocks
+    L = torch.exp(_segment_sum(A_c))  # [B, 64, nc, cs, cs]
+
+    # G: causal attention-weight analog  [B, nc, cs, cs, 64]
+    G_inter = C_c[:, :, :, None, :, :] * B_c[:, :, None, :, :, :]  # [B, nc, cs, cs, 64, 128]
+    G = G_inter.sum(dim=-1)  # [B, nc, cs, cs, 64]
+
+    # M: gated by causal decay  [B, nc, cs, cs, 64]
+    M_inter = G[..., None] * L.permute(0, 2, 3, 4, 1)[..., None]
+    M = M_inter.sum(dim=-1)  # [B, nc, cs, cs, 64]
+
+    # Y_diag: intra-chunk output  [B, nc, cs, 64, 64]
+    Y_diag = (M[..., None] * x_c[:, :, None]).sum(dim=3)
+
+    # 2. States for inter-chunk recurrence
+    decay_states = torch.exp(A_cumsum[:, :, :, -1:] - A_cumsum)  # [B, 64, nc, cs]
+    B_decay = B_c * decay_states.permute(0, -2, -1, 1)[..., None]  # [B, nc, cs, 64, 128]
+    states = (B_decay[..., None, :] * x_c[..., None]).sum(dim=2)  # [B, nc, 64, 64, 128]
+
+    # 3. Inter-chunk SSM recurrence (no previous cache state -> zero init)
+    previous_states = torch.zeros_like(states[:, :1])  # [B, 1, 64, 64, 128]
+    states = torch.cat([previous_states, states], dim=1)  # [B, nc+1, 64, 64, 128]
+    A_cumsum_last = A_cumsum[:, :, :, -1]  # [B, 64, nc]
+    decay_chunk = torch.exp(_segment_sum(F.pad(A_cumsum_last, (1, 0))))  # [B, 64, nc+1, nc+1]
+    decay_chunk = decay_chunk.transpose(1, 3)  # [B, nc+1, nc+1, 64]
+    new_states = (decay_chunk[..., None, None] * states[:, :, None, ...]).sum(dim=1)
+    # new_states: [B, nc+1, 64, 64, 128]
+    states, _ssm_state = new_states[:, :-1], new_states[:, -1]  # [B, nc, 64, 64, 128]
+
+    # 4. State -> output per chunk (off-diagonal blocks)
+    state_decay_out = torch.exp(A_cumsum)  # [B, 64, nc, cs]
+    C_times_states = C_c[..., None, :] * states[:, :, None, ...]  # [B, nc, cs, 64, 64, 128]
+    state_decay_out_perm = state_decay_out.permute(0, 2, 3, 1)  # [B, nc, cs, 64]
+    Y_off = C_times_states.sum(-1) * state_decay_out_perm[..., None]  # [B, nc, cs, 64, 64]
+
+    # Combine intra + inter chunk outputs
+    y = Y_diag + Y_off  # [B, nc, cs, 64, 64]
+    y = y.reshape(batch_size, -1, num_heads, head_dim)  # [B, S_pad, 64, 64]
+
+    y = y + D_residual  # add D skip connection
+    if pad_size > 0:
+        y = y[:, :seq_len, :, :]
+    y = y.reshape(batch_size, seq_len, -1)  # [B, S, 4096]
+
+    # -------------------------------------------------------------------------
+    # 5. MambaRMSNormGated + output projection
+    # -------------------------------------------------------------------------
+    group_size = intermediate_size // n_groups  # 512
+    scan_output = _mamba_rms_norm_gated(y, gate, norm_mixer_weight, eps=norm_eps, group_size=group_size)
+
+    out = F.linear(scan_output.to(hidden_states.dtype), out_proj_weight)  # [B, S, 2688]
+
+    # -------------------------------------------------------------------------
+    # 6. Residual connection
+    # -------------------------------------------------------------------------
+    return residual + out
