@@ -61,7 +61,7 @@ VECTOR_LOAD_FILTER_POLICIES = {
 # Multiple logical test groups may point at the same profile, which avoids
 # repeating ``runs_on``, ``runner_label``, ``tt_smi_cmd``, and ``arch``.
 
-MATRIX_OUTPUT_KEYS = ("n150", "n300", "p150b", "t3k", "galaxy")
+MATRIX_OUTPUT_KEYS = ("n150", "n300", "p150b", "p100a", "p300a", "t3k", "galaxy")
 
 RUNNER_PROFILES = {
     "n150": {
@@ -93,13 +93,11 @@ RUNNER_PROFILES = {
         "matrix_output_key": "p150b",
     },
     "p100a": {
-        # Shares the "p150b" matrix bucket so the ttnn-sweeps-p150b job picks
-        # up p100a-tagged matrix entries; runs_on dispatches to the p100a runner.
         "arch": "blackhole",
         "runs_on": "tt-ubuntu-2204-p100a-viommu-stable",
         "runner_label": "p100a",
         "tt_smi_cmd": "tt-smi -r",
-        "matrix_output_key": "p150b",
+        "matrix_output_key": "p100a",
     },
     "p300a": {
         "arch": "blackhole",
@@ -110,7 +108,7 @@ RUNNER_PROFILES = {
         "runs_on": ["in-service", "arch-blackhole", "P300-viommu"],
         "runner_label": "P300",
         "tt_smi_cmd": "tt-smi -r",
-        "matrix_output_key": "p150b",
+        "matrix_output_key": "p300a",
     },
     "t3k": {
         "arch": "wormhole_b0",
