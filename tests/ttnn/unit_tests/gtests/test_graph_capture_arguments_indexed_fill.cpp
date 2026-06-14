@@ -64,6 +64,14 @@ TEST_F(TestGraphCaptureArgumentsIndexedFill, IndexedFillPreservesNdOutputMemoryC
     EXPECT_TRUE(op_attrs.find("created_with_nd_shard_spec=1") != std::string::npos) << op_attrs;
     EXPECT_TRUE(op_attrs.find("shard_spec=std::nullopt") != std::string::npos) << op_attrs;
     EXPECT_TRUE(op_attrs.find("nd_shard_spec={\"shard_shape\":[1, 1, 32, 32]") != std::string::npos) << op_attrs;
+    EXPECT_TRUE(
+        op_attrs.find("\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":2,\"y\":3}}]") != std::string::npos)
+        << op_attrs;
+    EXPECT_TRUE(op_attrs.find("\"orientation\":\"ShardOrientation::ROW_MAJOR\"") != std::string::npos) << op_attrs;
+    EXPECT_TRUE(
+        op_attrs.find("\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"") !=
+        std::string::npos)
+        << op_attrs;
 
     const auto& tensor_args = operation.arguments[1];
     EXPECT_TRUE(tensor_args.find("Tensor(") != std::string::npos);
