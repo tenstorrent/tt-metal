@@ -31,9 +31,7 @@ split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t ntiles_h, uint
     // each batch needs to be padded independently
     switch (nbatch) {
         case 1:
-            ncores_h = 1;
             nbatch_per_core_h = 1;
-            ntiles_per_core_h = 1;
             switch (ntiles_h) {
                 case 2:
                     ncores_h = 2;
@@ -57,10 +55,7 @@ split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t ntiles_h, uint
             break;
 
         case 2:
-            ncores_h = 1;
-            ncores_per_batch_h = 1;
             nbatch_per_core_h = 1;
-            ntiles_per_core_h = 1;
             switch (ntiles_h) {
                 case 2:
                     ncores_per_batch_h = 2;
