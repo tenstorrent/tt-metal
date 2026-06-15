@@ -476,14 +476,17 @@ def create_moe_runtime(*, device: Any, hparams: Glm4MoeLiteHParams) -> Glm4MoeLi
     # - We previously (incorrectly) scaled `per_core_M` with experts-per-device, which can yield
     #   invalid configs for `M=32` (1 tile) and produce garbage outputs for inactive experts.
     per_core_M = 1
-    gate_up_program_config = _make_sparse_matmul_program_config(
-        device=device,
-        out_features=int(hparams.moe_intermediate_size),
-        in0_block_w=8,
+    # Decode sparse_matmul sweep winners (test_sparse_matmul_sweep.py, Blackhole p300c
+    # 11x10, M=32 per_core_M=1, pcN=2 ob_w=2 osb_w=2).  The tight rectangular grids beat
+    # the auto-config (_make_sparse_matmul_program_config) which leaves core_y=max_y:
+    #   gate_up       (K=2048 N=1536): 3x8 → 159us  (1.05x vs auto 168us)
+    #   gate_up_fused (K=2048 N=3072): 8x6 → 226us  (1.85x vs auto 418us)
+    #   down          (K=1536 N=2048): 4x8 → 130us  (1.06x vs auto 138us)
+    gate_up_program_config = _tuned_prefill_sparse_matmul_pc(
+        grid_x=3,
+        grid_y=8,
         per_core_M=per_core_M,
     )
-    # Wide output block (out_block_w=2, out_subblock_w=2) sweep winner for down
-    # (K=1536, N=2048) at per_core_M=1; grid 4x8 → 32 work blocks for per_core_N=2.
     down_program_config = _tuned_prefill_sparse_matmul_pc(
         grid_x=4,
         grid_y=8,
@@ -496,12 +499,12 @@ def create_moe_runtime(*, device: Any, hparams: Glm4MoeLiteHParams) -> Glm4MoeLi
     fuse_gate_up = _env_bool("GLM4_MOE_LITE_FUSE_EXPERTS_GATE_UP", default=False)
     gate_up_fused_program_config = None
     if fuse_gate_up:
-        gate_up_fused_program_config = _make_sparse_matmul_program_config(
-            device=device,
-            out_features=int(hparams.moe_intermediate_size) * 2,
-            in0_block_w=8,
-            out_subblock_w=2,
-            out_block_w=2,
+        # Sweep winner (K=2048 N=3072): 8x6 pcN2 ob_w2 osb_w2 → 226us, 1.85x vs the
+        # auto-config's 8x10 grid (418us).  The tight 48-core rectangle (8*6=ceil(96/2))
+        # avoids the partial-row waste of leaving core_y=max_y=10.
+        gate_up_fused_program_config = _tuned_prefill_sparse_matmul_pc(
+            grid_x=8,
+            grid_y=6,
             per_core_M=per_core_M,
         )
 
@@ -1924,7 +1927,15 @@ def moe_sparse_experts_forward_tt(
             w3_out = ttnn.clone(up_view, memory_config=sparse_mc)
             ttnn.deallocate(w1w3_out, force=False)
 
-        x_ff = ttnn.mul(w1_out, w3_out, memory_config=sparse_mc, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
+        # Output BFP8 directly: the down sparse_matmul consumes BFP8, so prepare_sparse_moe_matmul_in0
+        # below hits its dtype==bfloat8_b early-return and the standalone Typecast op is fused away.
+        x_ff = ttnn.mul(
+            w1_out,
+            w3_out,
+            memory_config=sparse_mc,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+            dtype=ttnn.bfloat8_b,
+        )
         ttnn.deallocate(w1_out, force=False)
         ttnn.deallocate(w3_out, force=False)
         # Deferred w1w3_out deallocation: silu/mul consumed the slice views.
@@ -1961,7 +1972,14 @@ def moe_sparse_experts_forward_tt(
         )
         ttnn.deallocate(expert_input, force=False)
 
-        x_ff = ttnn.mul(w1_out, w3_out, memory_config=sparse_mc, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
+        # Output BFP8 directly (see fused branch above): fuses the down-input Typecast away.
+        x_ff = ttnn.mul(
+            w1_out,
+            w3_out,
+            memory_config=sparse_mc,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+            dtype=ttnn.bfloat8_b,
+        )
         ttnn.deallocate(w1_out, force=False)
         ttnn.deallocate(w3_out, force=False)
 
