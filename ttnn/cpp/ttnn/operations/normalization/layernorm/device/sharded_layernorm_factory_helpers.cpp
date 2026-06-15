@@ -851,12 +851,11 @@ void add_kernel_descriptors(
         // layernorm_sharded_welford.cpp) so the named arg can stay present unconditionally.
         {"cb_x_welford", tt::CBIndex::c_29},
         {"welford_fp32_alias", static_cast<uint8_t>(kernel_config.welford_fp32_alias ? 1 : 0)},
-        // Column mask + valid-column count for the legacy non-tile-aligned path. CB 7 and CB 14 are
-        // LayerNorm-only; CB 19 is shared with RMSNorm.
+        // Column mask for the legacy non-tile-aligned path. CB 7 and CB 14 are LayerNorm-only; CB 19
+        // is shared with RMSNorm.
         {"cb_col_mask", tt::CBIndex::c_7},
         {"cb_mask_scratch", tt::CBIndex::c_14},
         {"cb_col_mask_packed", tt::CBIndex::c_19},
-        {"last_tile_valid_w", kernel_config.last_tile_valid_w},
     };
 
     // Reader sender kernel
