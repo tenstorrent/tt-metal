@@ -92,12 +92,13 @@ class TtDinoBackbone:
         normed = ttnn.layer_norm(x, weight=p["norm1_w"], bias=p["norm1_b"], epsilon=self.eps)
         qkv = ttnn.linear(normed, p["qkv_w"], bias=p["qkv_b"])
         q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
-            qkv, num_heads=self.num_heads, transpose_key=True
+            qkv, num_heads=self.num_heads, transpose_key=False
         )
-        scores = ttnn.matmul(q, k)
-        scores = ttnn.multiply(scores, self.head_dim ** -0.5)
-        probs = ttnn.softmax(scores, dim=-1)
-        ctx = ttnn.matmul(probs, v)  # [b,h,s,d]
+        # Fused scaled-dot-product attention: one kernel instead of matmul+scale+softmax+matmul,
+        # and the [.,h,s,s] scores are never materialized to DRAM.
+        ctx = ttnn.transformer.scaled_dot_product_attention(
+            q, k, v, is_causal=False, scale=self.head_dim ** -0.5
+        )  # [b,h,s,d]
         ctx = ttnn.transformer.concatenate_heads(ctx)  # [b,s,384]
         ttnn.deallocate(qkv)
         attn_out = ttnn.linear(ctx, p["proj_w"], bias=p["proj_b"])
