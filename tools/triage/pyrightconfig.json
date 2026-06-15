@@ -1,0 +1,11 @@
+{
+    "include": ["."],
+    "exclude": ["**/__pycache__", "**/.mypy_cache", "**/.venv"],
+    "pythonVersion": "3.10",
+    "typeCheckingMode": "standard",
+    "reportMissingModuleSource": "none",
+    "reportUnnecessaryComparison": "error",
+    "reportUnnecessaryIsInstance": "error",
+    "reportMatchNotExhaustive": "error",
+    "reportUnusedVariable": "error"
+}
