@@ -325,14 +325,47 @@ class TtMistral4TextModel(LightweightModule):
             self.layers.append(
                 TtMistral4DecoderLayer(mesh, layer_sd, cfg, eps, shard_experts=shard_experts, expert_dtype=expert_dtype)
             )
+        self.mesh = mesh
+        # framework CCL helper — persistent global-semaphore pools (trace-safe) for the LM-head
+        # all-gather; reused as-is, not modified. (The tt_all_gather *wrapper* no-ops on a 1xN mesh
+        # via a `1 in shape` guard, so we call the raw op with cluster_axis=1 + these semaphores.)
+        from models.tt_transformers.tt.ccl import TT_CCL
+
+        self.ccl = TT_CCL(mesh)
         self.w_norm = _norm(sd["model.norm.weight"], mesh)
-        self.w_lm = _lin(sd["lm_head.weight"], mesh)
+        # Sharded LM head: the [hidden, vocab=131072] weight is sharded along vocab across the 8
+        # devices (16384/device, ~128MB vs 1.07GB replicated) and the per-device logit slices are
+        # gathered with all_gather_async (trace-safe). bf16 + HiFi here deliberately (accuracy-
+        # critical final projection), distinct from the bfp8 experts.
+        self.w_lm = ttnn.as_tensor(
+            sd["lm_head.weight"].transpose(0, 1).contiguous().to(torch.bfloat16),  # [hidden, vocab]
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=-1),
+        )
+
+    def _lm_head(self, hidden):
+        B, S = hidden.shape[0], hidden.shape[1]
+        local = ttnn.linear(hidden, self.w_lm)  # [B,S,vocab/n_dev] (a distinct vocab slice/device)
+        local = ttnn.reshape(local, (B, 1, S, local.shape[-1]))  # 4D for the line-all-gather (dim=3)
+        full = ttnn.experimental.all_gather_async(
+            local,
+            dim=3,
+            multi_device_global_semaphore=self.ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=1),
+            barrier_semaphore=self.ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
+            num_links=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Linear,
+            cluster_axis=1,
+        )
+        return ttnn.reshape(full, (B, S, full.shape[-1]))  # [B,S,vocab]
 
     def forward(self, hidden, cos, sin):
         for layer in self.layers:
             hidden = layer(hidden, cos, sin)
-        hidden = ttnn.rms_norm(hidden, epsilon=self.eps, weight=self.w_norm)
-        return ttnn.linear(hidden, self.w_lm)
+        return self._lm_head(ttnn.rms_norm(hidden, epsilon=self.eps, weight=self.w_norm))
 
     def init_kv_caches(self, batch, max_seq):
         return [layer.mla.init_kv_cache(batch, max_seq) for layer in self.layers]
@@ -340,14 +373,12 @@ class TtMistral4TextModel(LightweightModule):
     def forward_prefill(self, hidden, cos, sin, kv_caches):
         for layer, kv in zip(self.layers, kv_caches):
             hidden = layer.forward_prefill(hidden, cos, sin, kv)
-        hidden = ttnn.rms_norm(hidden, epsilon=self.eps, weight=self.w_norm)
-        return ttnn.linear(hidden, self.w_lm)
+        return self._lm_head(ttnn.rms_norm(hidden, epsilon=self.eps, weight=self.w_norm))
 
     def forward_decode(self, hidden, pos_t, cos, sin, kv_caches):
         for layer, kv in zip(self.layers, kv_caches):
             hidden = layer.forward_decode(hidden, pos_t, cos, sin, kv)
-        hidden = ttnn.rms_norm(hidden, epsilon=self.eps, weight=self.w_norm)
-        return ttnn.linear(hidden, self.w_lm)
+        return self._lm_head(ttnn.rms_norm(hidden, epsilon=self.eps, weight=self.w_norm))
 
 
 class TtMistral4Projector(LightweightModule):
