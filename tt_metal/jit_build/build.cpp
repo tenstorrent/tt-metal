@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -862,8 +863,27 @@ void launch_build_step(const std::function<void()>& build_func, std::vector<std:
 }
 
 void sync_build_steps(std::vector<std::shared_future<void>>& events) {
+    // Join EVERY build step before returning, even when one throws.
+    //
+    // A build_func runs asynchronously and captures locals BY REFERENCE — e.g.
+    // jit_build_subset's `[&build, settings]` over the by-value `build_subset`, and
+    // JitBuildState::compile's `[this, &out_dir, ...]`. Those locals are destroyed as soon as
+    // the enclosing scope unwinds. If we let the first exception propagate straight out of this
+    // loop, the remaining in-flight tasks keep running against references that are about to be
+    // freed (shared_future's destructor does not wait) — a use-after-scope. So we wait on all
+    // futures first, stash the first exception, and rethrow it only once nothing is still running.
+    std::exception_ptr first_error;
     for (auto& event : events) {
-        event.get();
+        try {
+            event.get();
+        } catch (...) {
+            if (!first_error) {
+                first_error = std::current_exception();
+            }
+        }
+    }
+    if (first_error) {
+        std::rethrow_exception(first_error);
     }
 }
 
