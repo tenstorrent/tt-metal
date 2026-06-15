@@ -200,10 +200,10 @@ embedding `(V, H)` / gamma `(H,)` shapes from §2 exactly.
   live as long as the ttml model lives.
 
 - **Single-device only.** All on-device parameter tensors are assumed
-  to be replicated (no DDP / TP shard mapper). The grpo_speedup
-  single-device config (`mesh_shape: [1, 1]`, `enable_ddp: False`)
-  satisfies this. For DDP / TP, callers would need to compose shards
-  back to a replicated view before exporting (not yet implemented).
+  to be replicated (no DDP / TP shard mapper). The grpo single-device
+  config (`mesh_shape: [1, 1]`, `enable_ddp: False`) satisfies this.
+  For DDP / TP, callers would need to compose shards back to a
+  replicated view before exporting (not yet implemented).
 
 ### 3.5 Minimal usage
 
