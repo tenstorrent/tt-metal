@@ -34,7 +34,6 @@ enum class Conv2dCb {
     L1_ARRAY,
     MATMUL_PARTIALS,
     OUT,
-    TEMP_SUM,  // conv_bench main mode only: vestigial arg slot for main's verbatim no-helper kernel (0 pages)
     COUNT
 };
 struct CBInfo {

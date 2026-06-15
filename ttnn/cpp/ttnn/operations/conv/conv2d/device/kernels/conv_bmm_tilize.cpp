@@ -417,14 +417,9 @@ void kernel_main() {
     // be computed here: the matmul packs to interm whenever fuse_bias OR untilize_out (the only Out /
     // OutWithRelu cases are no-bias + no-untilize).
     constexpr bool conv_pin_interm_target = fuse_bias || untilize_out;
-#ifdef CONV_DISABLE_PIN
-    // conv_bench A/B: force non-pin to measure the FIFO path against pin on the same board.
-    constexpr bool conv_pin = false;
-#else
     constexpr bool conv_pin = packer_l1_acc &&
                               (conv_output_layout == compute_kernel_lib::OutputCBLayout::SubblockMajor) &&
                               (conv_pin_interm_target || !partials_cb_uses_output);
-#endif
 
     constexpr uint32_t out_block_w = in1_block_w;
 
@@ -541,8 +536,7 @@ void kernel_main() {
             // base each outer iter so every output block's L1_ACC accumulation lands at the same
             // fixed L1 address. Within the K-loop the helper's non-pin FIFO reserves/pushes/pops in
             // one-block increments, which — because the region holds exactly one output block —
-            // wraps back to this base each K-block. (This is what main does for a dedicated partials
-            // region; matches conv_bmm_tilize_main.cpp's !partials_cb_uses_output reset.)
+            // wraps back to this base each K-block (matmul's dedicated-partials reset model).
             UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr;)
             PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr;)
 

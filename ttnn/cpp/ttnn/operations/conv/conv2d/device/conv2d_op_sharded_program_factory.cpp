@@ -679,22 +679,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     //     (captures "per_core_N stranded" — SBM fell back to h==1,w==per_core_N) AND act_block_h_ntiles
     //     (per_core_M) divisible by relaxed.out_subblock_h.
     bool conv_tile_pack_row_major = false;
-    const bool kEnableTileRowMajor = true;
-    // ── conv_bench gating (TT_CONV_BENCH_MODE; production unchanged when unset) ───────────────────────────
-    //   main / helper_sbm → TileRowMajor auto-select forced OFF so both run pure SubblockMajor baselines.
-    //   helper_trm        → auto-select runs on the conv's REAL layout/settings; TT_CONV_BENCH_FORCE_TRM=1
-    //                       additionally skips the ROI gate (relaxed h>1 + larger volume) so every
-    //                       hard-eligible benched conv engages TileRowMajor even where production would stay
-    //                       SubblockMajor. Hard-ineligible convs (bias, bf8 weights, BLOCK_SHARDED, 1d-
-    //                       depthwise, indivisible relaxed shape) fall back to the SBM kernel — flagged in
-    //                       the CONV_BENCH dispatch log below (helper_trm row == helper_sbm = FALLBACK).
-    const auto bench_mode = ttnn::operations::conv::conv2d_bench_mode();
-    const bool bench_disable_trm = bench_mode == ttnn::operations::conv::Conv2dBenchMode::Main ||
-                                   bench_mode == ttnn::operations::conv::Conv2dBenchMode::HelperSubblock;
-    const bool bench_force_trm = bench_mode == ttnn::operations::conv::Conv2dBenchMode::HelperRowMajor &&
-                                 ttnn::operations::conv::conv2d_bench_force_trm();
-    bool bench_trm_fallback_sbm = false;  // helper_trm only: conv ran SBM because TileRowMajor was ineligible
-    if (kEnableTileRowMajor && !bench_disable_trm) {
+    {
         const tt::DataFormat weights_df = tt::tt_metal::datatype_to_dataformat_converter(b.dtype());
         const bool weights_df_supported =
             (weights_df == tt::DataFormat::Float16_b || weights_df == tt::DataFormat::Float32);
@@ -724,13 +709,12 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
             const auto relaxed = pick(false);
             const bool larger_volume =
                 (relaxed.out_subblock_h * relaxed.out_subblock_w) > (sbm.out_subblock_h * sbm.out_subblock_w);
-            // ROI gate (production heuristic) vs hard divisibility: TT_CONV_BENCH_FORCE_TRM skips only the
-            // ROI half — divisibility is a correctness requirement on every path (tuner guarantees it, so the
-            // force can never engage an invalid shape; relaxed==SBM shape under force just benches the TRM
-            // pack structure at equal volume).
+            // ROI gate (production heuristic): TileRowMajor only earns its keep when the relaxed subblock is
+            // both taller than the SBM-stranded h==1 fallback AND a larger volume. Divisibility is a
+            // correctness requirement on every path (the tuner guarantees it).
             const bool roi_ok = relaxed.out_subblock_h > 1 && larger_volume;
             const bool divisible = act_block_h_ntiles % relaxed.out_subblock_h == 0;
-            if (divisible && (roi_ok || bench_force_trm)) {
+            if (divisible && roi_ok) {
                 conv_tile_pack_row_major = true;
                 out_subblock_h_ntiles = relaxed.out_subblock_h;
                 out_subblock_w_ntiles = relaxed.out_subblock_w;
@@ -757,23 +741,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
                     sbm.out_subblock_w,
                     relaxed.out_subblock_h,
                     relaxed.out_subblock_w);
-            } else {
-                bench_trm_fallback_sbm = bench_mode == ttnn::operations::conv::Conv2dBenchMode::HelperRowMajor;
             }
-        } else {
-            bench_trm_fallback_sbm = bench_mode == ttnn::operations::conv::Conv2dBenchMode::HelperRowMajor;
-        }
-        if (bench_trm_fallback_sbm) {
-            log_warning(
-                tt::LogOp,
-                "CONV_BENCH[helper_trm] FALLBACK to SBM (kernel == helper_sbm for this conv): TileRowMajor "
-                "ineligible — height_sharded={} has_bias={} weights_bf16_or_fp32={} 1d_depthwise={} "
-                "force_trm={}",
-                height_sharded,
-                has_bias,
-                weights_df_supported,
-                is_conv_1d_depthwise_conv,
-                bench_force_trm);
         }
     }
 
@@ -911,17 +879,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     const bool partials_cb_uses_output =
         !is_conv_1d_depthwise_conv && get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).is_globally_allocated;
     log_debug(tt::LogOp, "partials_cb_uses_output: {}", partials_cb_uses_output);
-
-    // PIN engagement (GH#45995 perf recovery): mirror the kernel-side conv_pin gate so the CONV_BENCH
-    // dispatch log can report it. pin engages for packer_l1_acc SubblockMajor convs; the INTERM target
-    // (fuse_bias || untilize_out) works on both dedicated and aliased-single-block partials, while the
-    // OUT target (no bias, no untilize) requires DEDICATED partials (aliased OUT would double-reserve a
-    // one-block CB — see the kernel's conv_pin note). This is the deep-K BLOCK_SHARDED + l1_acc class the
-    // unify regressed. TT_CONV_BENCH_NO_PIN forces it off (bench A/B).
-    const bool pin_interm_target = has_bias || untilize_out;
-    const bool conv_pin_engaged = packer_l1_acc_en && !conv_tile_pack_row_major &&
-                                  (pin_interm_target || !partials_cb_uses_output) &&
-                                  !ttnn::operations::conv::conv2d_bench_no_pin();
 
     std::string reader_kernel;
     std::string compute_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize.cpp";
@@ -1094,53 +1051,11 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         compute_defines["CONV_TILE_PACK_ROW_MAJOR"] = "1";
     }
 
-    // conv_bench A/B helper (TT_CONV_BENCH_NO_PIN=1): force the unified kernel's conv_pin OFF so the
-    // harness can measure the NON-pin FIFO path against the pin path on the same board/session.
-    // Production-inert (the env is unset in production → pin stays ON for the eligible class).
-    if (ttnn::operations::conv::conv2d_bench_no_pin()) {
-        compute_defines["CONV_DISABLE_PIN"] = "1";
-    }
-
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device->arch(), output_cores.num_cores(), compute_defines, ttnn::get_throttle_level(compute_kernel_config));
 
     for (auto elem : compute_defines) {
         log_trace(tt::LogOp, "compute_defines: {} = {}", elem.first, elem.second);
-    }
-
-    // ── conv_bench dispatch log (TT_CONV_BENCH_MODE; pure test scaffolding) ──────────────────────────────
-    //   main       → main's verbatim no-helper kernel (compute_kernel swap + TEMP_SUM insert below).
-    //   helper_sbm → unified kernel, TileRowMajor auto-select forced OFF (pure SBM non-pin).
-    //   helper_trm → unified kernel with the TileRowMajor (non-pin) auto-select; real ROW_MAJOR or TILE
-    //                output, l1_acc on/off (4/4 quadrants). TT_CONV_BENCH_FORCE_TRM=1 skips the ROI gate.
-    //                Hard-ineligible convs already fell back to SBM (bench_trm_fallback_sbm above). No
-    //                TT_FATALs (other than the depthwise guard) — fallback keeps multi-conv sweeps running.
-    if (bench_mode != ttnn::operations::conv::Conv2dBenchMode::None) {
-        TT_FATAL(
-            !is_conv_1d_depthwise_conv,
-            "conv_bench (TT_CONV_BENCH_MODE) does not support 1D-depthwise conv (different compute kernel). "
-            "Use a non-depthwise height/block-sharded conv.");
-        log_info(
-            tt::LogOp,
-            "CONV_BENCH[{}] height_sharded={} untilize_out={} per_core_N={} USING out_subblock={}x{} "
-            "weight_num_subblocks={} in0_num_blocks_w={} num_blocks_act_h={} packer_l1_acc_en={} "
-            "partials_alias={} pin={} trm={} trm_forced={} "
-            "trm_fallback_sbm={} (real per-conv settings; USING = compute-arg subblock — relaxed when trm)",
-            ttnn::operations::conv::conv2d_bench_mode_name(bench_mode),
-            height_sharded,
-            untilize_out,
-            weight_block_w_ntiles,
-            out_subblock_h_ntiles,
-            out_subblock_w_ntiles,
-            weight_num_subblocks,
-            in0_num_blocks_w,
-            num_blocks_act_h_per_core,
-            packer_l1_acc_en,
-            partials_cb_uses_output,
-            conv_pin_engaged,
-            conv_tile_pack_row_major,
-            bench_force_trm,
-            bench_trm_fallback_sbm);
     }
 
     std::vector<uint32_t> writer_compile_time_args = {
@@ -1313,27 +1228,11 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         compute_kernel_args.push_back(static_cast<uint32_t>(split_reader_cb_shared));
     }
 
-    // conv_bench main mode: run main's VERBATIM no-helper conv kernel. Its compile-arg layout is the
-    // unified helper layout with one extra arg — a TEMP_SUM CB index right after the OUT index (OUT is at
-    // slot 24, partials_cb_uses_output at 25). Insert TEMP_SUM at slot 25 (shifting args 25+ by one) so the
-    // indices line up with conv_bmm_tilize_main.cpp exactly (it reads OUT@24, skips 25, partials_cb_uses_output
-    // @26, ... split_reader_cb_shared@39). Then point the compute kernel at the verbatim file. Bench main is
-    // always non-depthwise (guarded in the dispatch-log block above), so compute_kernel_args is the non-
-    // depthwise vector built just above. helper_sbm/helper_trm deliberately keep the unified kernel.
-    if (bench_mode == ttnn::operations::conv::Conv2dBenchMode::Main) {
-        compute_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize_main.cpp";
-        compute_kernel_args.insert(
-            compute_kernel_args.begin() + 25,
-            static_cast<uint32_t>(get_cb_info_by_name(cb_info, Conv2dCb::TEMP_SUM).index));
-    }
-
-    // "Dedicate partials, match matmul" (GH#45995): the verbatim-main-kernel routing for
-    // !packer_l1_acc convs is gone. The matmul-helper kernel (conv_bmm_tilize.cpp) now uses a
-    // DEDICATED one-block matmul_partials_cb (is_globally_allocated=false) instead of the bespoke
-    // pin scheme, so its non-pin FIFO wraps to a fixed base each K-block and packer_l1_acc lands at
-    // a fixed address for multi-output-block convs too — the very thing the pin scheme propped up.
-    // The non-l1_acc path likewise uses the helper's plain FIFO reserve/push/pop (no L1_ACC, so no
-    // per-address accumulation requirement at all). All convs route through the helper kernel.
+    // "Dedicate partials, match matmul" (GH#45995): every conv routes through the matmul-helper kernel
+    // (conv_bmm_tilize.cpp). It uses a DEDICATED one-block matmul_partials_cb (is_globally_allocated=false)
+    // instead of a bespoke pin scheme, so its non-pin FIFO wraps to a fixed base each K-block and
+    // packer_l1_acc lands at a fixed address for multi-output-block convs too. The non-l1_acc path likewise
+    // uses the helper's plain FIFO reserve/push/pop (no L1_ACC, so no per-address accumulation requirement).
 
     const tt::tt_metal::NOC writer_mcast_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     const tt::tt_metal::NOC reader_noc =
