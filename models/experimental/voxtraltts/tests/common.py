@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 
 import pytest
 import torch
@@ -34,9 +35,36 @@ def ensure_voxtral_device_available() -> None:
 
 
 def voxtral_single_device_mesh_shape() -> ttnn.MeshShape:
-    """1×1 mesh — one effective device for single-card Voxtral workloads (tokenizer, acoustic step)."""
+    """1×1 compute mesh — Voxtral acoustic/audio path requires a single effective device."""
     ensure_voxtral_device_available()
     return ttnn.MeshShape(1, 1)
+
+
+def voxtral_host_mesh_shape() -> ttnn.MeshShape | None:
+    """Host mesh for BH QuietBox 2 (1×4). ``None`` on single-card P150."""
+    ensure_voxtral_device_available()
+    if ttnn.device.is_blackhole() and ttnn.get_num_devices() == 4:
+        return ttnn.MeshShape(1, 4)
+    return None
+
+
+@dataclass
+class VoxtralRuntimeMesh:
+    """Device handle returned by :func:`open_voxtral_runtime_mesh`."""
+
+    compute_device: ttnn.Device | ttnn.MeshDevice
+    fabric: dict
+    previous_default: ttnn.Device | None
+    physical_device_id: int
+    parent_mesh: ttnn.MeshDevice | None = None
+    host_mesh_shape: tuple[int, int] | None = None
+    compute_mesh_shape: tuple[int, int] = (1, 1)
+
+    @property
+    def physical_device_ids(self) -> list[int]:
+        if self.parent_mesh is not None:
+            return list(ttnn.get_pcie_device_ids())
+        return [ttnn.GetPCIeDeviceID(self.physical_device_id)]
 
 
 def prepare_voxtral_open_mesh_kwargs(device_params: dict | None) -> tuple[dict, dict]:
@@ -56,6 +84,127 @@ def prepare_voxtral_open_mesh_kwargs(device_params: dict | None) -> tuple[dict, 
         "fabric_router_config": updated.pop("fabric_router_config", None),
     }
     return updated, fabric
+
+
+def voxtral_resolve_physical_device_id(device_id: int | None = None) -> int:
+    """Pick one PCIe device for single-card Voxtral (P150 or one rank on BH QB2 1×4)."""
+    if device_id is not None:
+        return int(device_id)
+    env_id = os.getenv("VOXTRAL_DEVICE_ID")
+    if env_id is not None and env_id.strip() != "":
+        return int(env_id)
+    if ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.TG:
+        from conftest import first_available_tg_device
+
+        return first_available_tg_device()
+    return 0
+
+
+def open_voxtral_runtime_mesh(
+    device_params: dict | None = None,
+    *,
+    device_id: int | None = None,
+) -> VoxtralRuntimeMesh:
+    """Open the Voxtral runtime device with host-aware mesh selection.
+
+    * **P150 (1 card):** ``CreateDevice(0)`` — unchanged single-card path.
+    * **BH QB2 (4 cards):** ``open_mesh_device(1×4)`` for the host fabric topology, then a
+      ``1×1`` submesh for compute. The full 1×4 mesh is present on the host; Voxtral runs on
+      the 1×1 submesh so ``cluster_shape=(1,1)`` and audio quality are unchanged (running on
+      the bare 1×4 mesh would shard the text model and break acoustic decode).
+    """
+    from conftest import set_fabric
+
+    physical_device_id = voxtral_resolve_physical_device_id(device_id)
+    open_kwargs, fabric = prepare_voxtral_open_mesh_kwargs(device_params)
+    previous_default = ttnn.GetDefaultDevice()
+    host_shape = voxtral_host_mesh_shape()
+
+    if host_shape is not None:
+        set_fabric(
+            fabric["fabric_config"],
+            fabric["reliability_mode"],
+            fabric["fabric_tensix_config"],
+            fabric["fabric_manager"],
+            fabric["fabric_router_config"],
+        )
+        parent_mesh = ttnn.open_mesh_device(mesh_shape=host_shape, **open_kwargs)
+        compute_device = parent_mesh.create_submesh(voxtral_single_device_mesh_shape())
+        ttnn.SetDefaultDevice(compute_device)
+        logger.info(
+            "voxtral runtime mesh: host={} compute={} arch={} host_devices={}",
+            tuple(parent_mesh.shape),
+            tuple(compute_device.shape),
+            ttnn.get_arch_name(),
+            parent_mesh.get_num_devices(),
+        )
+        return VoxtralRuntimeMesh(
+            compute_device=compute_device,
+            fabric=fabric,
+            previous_default=previous_default,
+            physical_device_id=physical_device_id,
+            parent_mesh=parent_mesh,
+            host_mesh_shape=tuple(parent_mesh.shape),
+            compute_mesh_shape=tuple(compute_device.shape),
+        )
+
+    device = ttnn.CreateDevice(device_id=physical_device_id, **open_kwargs)
+    ttnn.SetDefaultDevice(device)
+    logger.info(
+        "voxtral runtime device: arch={} physical_device_id={} host_devices={}",
+        ttnn.get_arch_name(),
+        physical_device_id,
+        ttnn.get_num_devices(),
+    )
+    return VoxtralRuntimeMesh(
+        compute_device=device,
+        fabric=fabric,
+        previous_default=previous_default,
+        physical_device_id=physical_device_id,
+        parent_mesh=None,
+        host_mesh_shape=None,
+        compute_mesh_shape=(1, 1),
+    )
+
+
+def close_voxtral_runtime_mesh(runtime: VoxtralRuntimeMesh) -> None:
+    """Tear down resources opened by :func:`open_voxtral_runtime_mesh`."""
+    from conftest import reset_fabric
+
+    if runtime.previous_default is not None:
+        ttnn.SetDefaultDevice(runtime.previous_default)
+
+    if runtime.parent_mesh is not None:
+        for submesh in runtime.parent_mesh.get_submeshes():
+            ttnn.close_mesh_device(submesh)
+        ttnn.close_mesh_device(runtime.parent_mesh)
+        reset_fabric(runtime.fabric["fabric_config"])
+    else:
+        ttnn.close_device(runtime.compute_device)
+
+
+VOXTRAL_PRESET_VOICES: tuple[str, ...] = (
+    "casual_male",
+    "casual_female",
+    "cheerful_female",
+    "neutral_male",
+    "neutral_female",
+    "ar_male",
+    "de_male",
+    "de_female",
+    "es_male",
+    "es_female",
+    "fr_male",
+    "fr_female",
+    "hi_male",
+    "hi_female",
+    "it_male",
+    "it_female",
+    "nl_male",
+    "nl_female",
+    "pt_male",
+    "pt_female",
+)
 
 
 def resolve_voxtral_model_name_or_skip() -> str:
