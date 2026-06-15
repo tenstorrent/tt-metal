@@ -288,15 +288,11 @@ class TtTransformer:
         hidden = self._layer_norm(ttnn.add(hidden, ffn), p["norm3"])
         return hidden
 
-    def __call__(self, source):
-        """source: ttnn channels-last [1,1600,256]. Returns (logits, pred_boxes) as torch."""
-        device = self.device
-        if not isinstance(source, ttnn.Tensor):
-            source = ttnn.from_torch(source, dtype=ACT_DTYPE, layout=ttnn.TILE_LAYOUT, device=device)
-        source = ttnn.to_layout(source, ttnn.TILE_LAYOUT)
-        if source.dtype != ACT_DTYPE:
-            source = ttnn.typecast(source, ACT_DTYPE)
+    def forward_device(self, source):
+        """source: ttnn channels-last [1,1600,256] (TILE, ACT_DTYPE). Returns device (logits, pred_boxes).
 
+        Pure-device forward (no host ops) so the whole region is metal-trace-able.
+        """
         # ---- two-stage proposal heads ----
         object_query = self._layer_norm(self._linear(source, self.enc_output), self.enc_output_norm)
         enc_class = self._linear(object_query, self.enc_out_class_embed)  # [1,1600,91]
@@ -341,7 +337,17 @@ class TtTransformer:
         logits = self._linear(last_intermediate, self.class_embed)  # [1,300,91]
         boxes_delta = self._mlp_fwd(last_intermediate, self.bbox_embed)  # [1,300,4]
         pred_boxes = self._refine_bboxes(init_reference_points, boxes_delta)  # [1,300,4]
+        return logits, pred_boxes
 
+    def __call__(self, source):
+        """source: ttnn channels-last [1,1600,256]. Returns (logits, pred_boxes) as torch."""
+        device = self.device
+        if not isinstance(source, ttnn.Tensor):
+            source = ttnn.from_torch(source, dtype=ACT_DTYPE, layout=ttnn.TILE_LAYOUT, device=device)
+        source = ttnn.to_layout(source, ttnn.TILE_LAYOUT)
+        if source.dtype != ACT_DTYPE:
+            source = ttnn.typecast(source, ACT_DTYPE)
+        logits, pred_boxes = self.forward_device(source)
         logits_t = ttnn.to_torch(logits).float().reshape(1, N_QUERIES, NUM_CLASSES)
         pred_boxes_t = ttnn.to_torch(pred_boxes).float().reshape(1, N_QUERIES, 4)
         return logits_t, pred_boxes_t
