@@ -1533,6 +1533,27 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 sm_bs = sampling_module.seed_manager.max_batch_size
                 rank_remap = slot_remap[i * sm_bs : (i + 1) * sm_bs]
                 sampling_module.seed_manager.apply_slot_remap(rank_remap)
+            # Register each request's explicit seed into the seed manager and
+            # tie its RNG counter to the absolute decode position before
+            # advancing. Without registration the per-request seed never reaches
+            # the device (the seed manager stays unseeded), so sampling falls
+            # back to per-slot boot RNG and two requests sharing a seed diverge.
+            # Position alignment then keeps the stream reproducible even when
+            # vLLM evicts a running request and re-admits it in a different slot
+            # under async scheduling. Mirrors the llama3_70b_galaxy decode path.
+            if active_seed_slots:
+                seed_bs = sampling_module.tt_sampling.max_batch_size
+                if len(model_chunks) == 1:
+                    seed_values = format_sampling_params(model_chunks[0], seed_bs).seed
+                else:
+                    seed_values = []
+                    for chunk in model_chunks:
+                        s = format_sampling_params(chunk, seed_bs).seed
+                        seed_values += s if isinstance(s, list) else [s] * seed_bs
+                sampling_module.seed_manager.reset_seed_from_slots_if_needed(seed_values, active_seed_slots)
+                sampling_module.seed_manager.align_seed_counters_to_positions(
+                    seed_values, active_seed_slots, start_values
+                )
             sampling_module.seed_manager.get_new_values(active_seed_slots)
 
         sampled_outputs = []
