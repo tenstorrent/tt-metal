@@ -372,7 +372,8 @@ static void run_a1_blocked_pipeline(
     m2::DFBAccessPattern cap_in,
     uint32_t P,
     uint32_t block_size,
-    uint32_t num_entries) {
+    uint32_t num_entries,
+    bool implicit = false) {
     if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "M2 path is Quasar-only (Gen2Config)";
     }
@@ -419,7 +420,9 @@ static void run_a1_blocked_pipeline(
          .block_size = block_size}};
     producer.tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}};
     producer.compile_time_args = {
-        {"num_entries_per_producer", num_entries / P}, {"block_size", block_size}, {"implicit_sync", 0u}};
+        {"num_entries_per_producer", num_entries / P},
+        {"block_size", block_size},
+        {"implicit_sync", implicit ? 1u : 0u}};
     producer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
 
     // Middle: single Tensix thread consumes DFB_IN (cap_in) and copies through to DFB_OUT (STRIDED).
@@ -448,11 +451,14 @@ static void run_a1_blocked_pipeline(
          .access_pattern = m2::DFBAccessPattern::STRIDED}};
     consumer.tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}};
     consumer.compile_time_args = {
-        {"num_entries_per_consumer", num_entries}, {"blocked_consumer", 0u}, {"implicit_sync", 0u}};
+        {"num_entries_per_consumer", num_entries}, {"blocked_consumer", 0u}, {"implicit_sync", implicit ? 1u : 0u}};
     consumer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
 
-    disable_implicit_sync_for(producer, DFB_IN);
-    disable_implicit_sync_for(consumer, DFB_OUT);
+    // Explicit sync disables the implicit-sync ISR/txn metadata per DM endpoint; for implicit, leave it on.
+    if (!implicit) {
+        disable_implicit_sync_for(producer, DFB_IN);
+        disable_implicit_sync_for(consumer, DFB_OUT);
+    }
 
     m2::WorkUnitSpec wu{.name = "wu", .kernels = {PRODUCER, CONSUMER, COMPUTE}, .target_nodes = node};
     m2::ProgramSpec spec{
@@ -573,6 +579,193 @@ TEST_F(MeshDeviceFixture, A1Blocked_2_0_DMTensixDM_ALL_2B_blk4) {
 }
 TEST_F(MeshDeviceFixture, A1Blocked_2_0_DMTensixDM_ALL_4B_blk4) {
     run_a1_blocked_pipeline(this->devices_.at(0), m2::DFBAccessPattern::ALL, 4, 4, 16);
+}
+// IMPLICIT-sync variants (same goldens — the golden is sync-agnostic). The DM producer/consumer use the
+// implicit-sync ISR/txn path; the Tensix consumer posts explicit credits (ISR path is DM-only). Closes the
+// "DM→Trisc data-verify is explicit-only" gap for the single-Tensix-thread (fan-in) cases.
+TEST_F(MeshDeviceFixture, A1Blocked_2_0_DMTensixDM_BLOCKED_1B_blk4_impl) {
+    run_a1_blocked_pipeline(this->devices_.at(0), m2::DFBAccessPattern::BLOCKED, 1, 4, 16, /*implicit=*/true);
+}
+TEST_F(MeshDeviceFixture, A1Blocked_2_0_DMTensixDM_STRIDED_1B_blk4_impl) {
+    run_a1_blocked_pipeline(this->devices_.at(0), m2::DFBAccessPattern::STRIDED, 1, 4, 16, /*implicit=*/true);
+}
+TEST_F(MeshDeviceFixture, A1Blocked_2_0_DMTensixDM_ALL_1B_blk4_impl) {
+    run_a1_blocked_pipeline(this->devices_.at(0), m2::DFBAccessPattern::ALL, 1, 4, 16, /*implicit=*/true);
+}
+// Implicit-PRODUCER asymmetric BLOCKED (P=2 DM producers → 1 Tensix consumer): VERIFIED to work. The
+// device guard (dataflow_buffer.cpp) only forbids an implicit CONSUMER + asymmetric (the consumer drain
+// misroutes per-entry); an implicit producer with an explicit consumer — exactly the DM→Trisc case, since
+// a Tensix consumer is always explicit — is supported. Data-verified via the A1 DRAM pipeline.
+TEST_F(MeshDeviceFixture, A1Blocked_2_0_DMTensixDM_BLOCKED_2B_blk4_impl) {
+    run_a1_blocked_pipeline(this->devices_.at(0), m2::DFBAccessPattern::BLOCKED, 2, 4, 16, /*implicit=*/true);
+}
+TEST_F(MeshDeviceFixture, A1Blocked_2_0_DMTensixDM_ALL_2B_blk4_impl) {
+    run_a1_blocked_pipeline(this->devices_.at(0), m2::DFBAccessPattern::ALL, 2, 4, 16, /*implicit=*/true);
+}
+
+// =====================================================================================
+// A1-FANOUT: data-verify MULTI-THREAD (C>1) Tensix consumers via a fan-out pipeline.
+//
+//   1 DM BLOCKED producer → DFB_IN(BLOCKED) → C Tensix consumers (copy) → DFB_OUT(STRIDED)
+//   → 1 DM consumer → DRAM.  Only 2 DM cores (1 producer + 1 consumer), so it fits the 6-DM-core
+//   Quasar budget for ANY C — unlike a symmetric C×C pipeline (2C DM cores, capped at C=2). This is
+//   how we data-verify C>1 Tensix consumers (the run-only path exercised them; this checks the DATA).
+//
+// MUST RUN WITH TT_METAL_WATCHER=1: multi-thread Tensix consumers hit the same PACK/UNPACK L1
+// write-coherence race that gated the intra 4-thread test (passes with the watcher, fails without).
+//
+// Golden: the BLOCKED producer block-bursts block b to consumer (b%C); consumer c reads its blocks in
+// order (its m-th tile = page (c + ⌊m/bs⌋·C)·bs + m%bs); the STRIDED DFB_OUT DM consumer reads the C
+// Tensix outputs round-robin, so DRAM_out[r] = consumer (r%C)'s (⌊r/C⌋)-th tile:
+//   expected[r] = input[((r%C) + (⌊⌊r/C⌋/bs⌋)·C)·bs + (⌊r/C⌋ % bs)]   (identity at C==1).
+static void run_a1_fanout_blocked_pipeline(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    uint32_t C,
+    uint32_t block_size,
+    uint32_t num_entries) {
+    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "M2 path is Quasar-only (Gen2Config)";
+    }
+    IDevice* device = mesh_device->get_devices()[0];
+    constexpr uint32_t entry_size = 2 * 32 * 32;  // bf16 tile = 2048 B
+    const m2::NodeCoord node{0, 0};
+
+    const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, num_entries, DataType::BFLOAT16);
+    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
+    auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
+
+    const m2::DFBSpecName DFB_IN{"dfb_in"};
+    const m2::DFBSpecName DFB_OUT{"dfb_out"};
+    const m2::KernelSpecName PRODUCER{"producer"};
+    const m2::KernelSpecName CONSUMER{"consumer"};
+    const m2::KernelSpecName COMPUTE{"compute"};
+    const m2::TensorParamName IN_TENSOR{"in_tensor"};
+    const m2::TensorParamName OUT_TENSOR{"out_tensor"};
+
+    m2::DataflowBufferSpec dfb_in{
+        .unique_id = DFB_IN,
+        .entry_size = entry_size,
+        .num_entries = num_entries,
+        .data_format_metadata = tt::DataFormat::Float16_b};
+    m2::DataflowBufferSpec dfb_out{
+        .unique_id = DFB_OUT,
+        .entry_size = entry_size,
+        .num_entries = num_entries,
+        .data_format_metadata = tt::DataFormat::Float16_b};
+
+    auto producer = make_dm_kernel(
+        PRODUCER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_producer_2_0.cpp", /*num_threads=*/1);
+    producer.dfb_bindings = {
+        {.dfb_spec_name = DFB_IN,
+         .accessor_name = "out",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
+         .access_pattern = m2::DFBAccessPattern::BLOCKED,
+         .block_size = block_size}};
+    producer.tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}};
+    producer.compile_time_args = {
+        {"num_entries_per_producer", num_entries}, {"block_size", block_size}, {"implicit_sync", 0u}};
+    producer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
+
+    auto compute = make_compute_kernel(
+        COMPUTE, "tests/tt_metal/tt_metal/test_kernels/compute/dfb_eltwise_copy_2_0.cpp", static_cast<uint8_t>(C));
+    compute.dfb_bindings = {
+        {.dfb_spec_name = DFB_IN,
+         .accessor_name = "in",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
+         .access_pattern = m2::DFBAccessPattern::BLOCKED,
+         .block_size = block_size},
+        {.dfb_spec_name = DFB_OUT,
+         .accessor_name = "out",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED},
+    };
+    compute.compile_time_args = {{"per_core_tile_cnt", num_entries / C}};
+
+    auto consumer = make_dm_kernel(
+        CONSUMER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer_2_0.cpp", /*num_threads=*/1);
+    consumer.dfb_bindings = {
+        {.dfb_spec_name = DFB_OUT,
+         .accessor_name = "in",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED}};
+    consumer.tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}};
+    consumer.compile_time_args = {
+        {"num_entries_per_consumer", num_entries}, {"blocked_consumer", 0u}, {"implicit_sync", 0u}};
+    consumer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
+
+    disable_implicit_sync_for(producer, DFB_IN);
+    disable_implicit_sync_for(consumer, DFB_OUT);
+
+    m2::WorkUnitSpec wu{.name = "wu", .kernels = {PRODUCER, CONSUMER, COMPUTE}, .target_nodes = node};
+    m2::ProgramSpec spec{
+        .name = "a1_sym_2_0",
+        .kernels = {producer, consumer, compute},
+        .dataflow_buffers = {dfb_in, dfb_out},
+        .tensor_parameters =
+            {{.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()},
+             {.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()}},
+        .work_units = {wu},
+    };
+    Program program = m2::MakeProgramFromSpec(*mesh_device, spec);
+
+    m2::ProgramRunArgs params;
+    params.kernel_run_args = {
+        m2::ProgramRunArgs::KernelRunArgs{
+            .kernel = PRODUCER,
+            .runtime_arg_values = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}}},
+        m2::ProgramRunArgs::KernelRunArgs{
+            .kernel = CONSUMER,
+            .runtime_arg_values = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}}},
+        m2::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+    };
+    params.tensor_args = {{IN_TENSOR, std::cref(in_tensor)}, {OUT_TENSOR, std::cref(out_tensor)}};
+    m2::SetProgramRunArgs(program, params);
+
+    const uint32_t total_bytes = entry_size * num_entries;
+    auto input = create_random_vector_of_bfloat16(total_bytes, 2.0f, 0xA1C1);
+    detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), input);
+    m2_writeshard_barrier_uint32(device, in_tensor, input);
+
+    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
+
+    std::vector<uint32_t> output;
+    detail::ReadFromBuffer(*out_tensor.mesh_buffer().get_reference_buffer(), output);
+
+    const uint32_t wpe = entry_size / sizeof(uint32_t);
+    const uint32_t bs = block_size;
+    std::vector<uint32_t> expected(input.size(), 0u);
+    for (uint32_t r = 0; r < num_entries; ++r) {
+        const uint32_t c = r % C;
+        const uint32_t m = r / C;
+        const uint32_t src = (c + (m / bs) * C) * bs + (m % bs);
+        std::copy(input.begin() + src * wpe, input.begin() + (src + 1) * wpe, expected.begin() + r * wpe);
+    }
+    if (expected != output) {
+        for (uint32_t t = 0; t < std::min<uint32_t>(num_entries, 16); ++t) {
+            int match = -1;
+            for (uint32_t src = 0; src < num_entries; ++src) {
+                if (std::equal(input.begin() + src * wpe, input.begin() + (src + 1) * wpe, output.begin() + t * wpe)) {
+                    match = static_cast<int>(src);
+                    break;
+                }
+            }
+            log_info(
+                tt::LogTest,
+                "  A1-fanout BLOCKED C={} output tile {} ← {}",
+                C,
+                t,
+                match >= 0 ? ("input page " + std::to_string(match)) : std::string("UNKNOWN"));
+        }
+    }
+    EXPECT_EQ(expected, output) << "A1-fanout multi-Tensix-consumer BLOCKED data mismatch (C=" << C << ")";
+}
+
+// C>1 Tensix consumers (BLOCKED), data-verified. RUN WITH TT_METAL_WATCHER=1 (multi-thread coherence race).
+TEST_F(MeshDeviceFixture, A1Fanout_2_0_DMTensixDM_BLOCKED_1Bx2_blk4) {
+    run_a1_fanout_blocked_pipeline(this->devices_.at(0), 2, 4, 16);
+}
+TEST_F(MeshDeviceFixture, A1Fanout_2_0_DMTensixDM_BLOCKED_1Bx4_blk4) {
+    run_a1_fanout_blocked_pipeline(this->devices_.at(0), 4, 4, 16);
 }
 
 // =====================================================================================
@@ -1635,22 +1828,43 @@ static void run_single_dfb_program_2_0(
             // (i/bs * P + p)*bs + i%bs:
             //   output[k*C + c] = input[((t + k*ntc)/bs * P + p)*bs + (t + k*ntc)%bs]
             // For P==1 (ntc=C, t=c) this collapses to identity; for P>1 it is a deterministic permutation.
-            // (First cut covers C >= P, i.e. ntc = C/P >= 1.)
             const uint32_t wpe = p.entry_size / sizeof(uint32_t);
             const uint32_t P = p.num_producers;
             const uint32_t C = p.num_consumers;
             const uint32_t bs = p.block_size;
-            const uint32_t epp = p.num_entries / P;  // entries per producer
-            const uint32_t ntc = C / P;              // producer fan-out width (C >= P)
             std::vector<uint32_t> expected(input.size(), 0u);
-            for (uint32_t pp = 0; pp < P; ++pp) {
-                for (uint32_t t = 0; t < ntc; ++t) {
-                    const uint32_t c = (pp + t * P) % C;
-                    const uint32_t tiles_to_c = epp / ntc;  // == num_entries / C
-                    for (uint32_t k = 0; k < tiles_to_c; ++k) {
-                        const uint32_t i = t + k * ntc;  // producer pp's local push index
-                        const uint32_t src = (i / bs * P + pp) * bs + (i % bs);
-                        const uint32_t dst = k * C + c;
+            if (C >= P) {
+                // Fan-out: producer pp round-robins ntc = C/P consumer TCs (its push i -> slot t = i%ntc,
+                // consumer c = (pp + t*P)%C). Producer pp's k-th push to slot t is local push i = t + k*ntc.
+                const uint32_t epp = p.num_entries / P;  // entries per producer
+                const uint32_t ntc = C / P;
+                for (uint32_t pp = 0; pp < P; ++pp) {
+                    for (uint32_t t = 0; t < ntc; ++t) {
+                        const uint32_t c = (pp + t * P) % C;
+                        const uint32_t tiles_to_c = epp / ntc;  // == num_entries / C
+                        for (uint32_t k = 0; k < tiles_to_c; ++k) {
+                            const uint32_t i = t + k * ntc;  // producer pp's local push index
+                            const uint32_t src = (i / bs * P + pp) * bs + (i % bs);
+                            const uint32_t dst = k * C + c;
+                            std::copy(
+                                input.begin() + src * wpe,
+                                input.begin() + (src + 1) * wpe,
+                                expected.begin() + dst * wpe);
+                        }
+                    }
+                }
+            } else {
+                // Fan-in (P>C): each producer has 1 TC -> feeds consumer (pp%C); consumer c is fed by the
+                // ntc_c = P/C producers {c, c+C, ...} via ntc_c TCs, read round-robin. Consumer c's read m
+                // takes TC t = m%ntc_c -> producer pp = c + t*C, that producer's (m/ntc_c)-th push.
+                const uint32_t ntc_c = P / C;
+                for (uint32_t c = 0; c < C; ++c) {
+                    for (uint32_t m = 0; m < p.num_entries / C; ++m) {
+                        const uint32_t t = m % ntc_c;
+                        const uint32_t pp = c + t * C;
+                        const uint32_t k = m / ntc_c;  // producer pp's local push index
+                        const uint32_t src = (k / bs * P + pp) * bs + (k % bs);
+                        const uint32_t dst = m * C + c;
                         std::copy(
                             input.begin() + src * wpe, input.begin() + (src + 1) * wpe, expected.begin() + dst * wpe);
                     }
@@ -1674,6 +1888,49 @@ static void run_single_dfb_program_2_0(
                 }
             }
             EXPECT_EQ(expected, output) << "M2 DM→DM BLOCKED→STRIDED permutation mismatch";
+        } else if (
+            p.producer_type == M2PorCType::TENSIX && p.consumer_type == M2PorCType::DM &&
+            p.pap == m2::DFBAccessPattern::BLOCKED && p.cap == m2::DFBAccessPattern::STRIDED) {
+            // Trisc→DM BLOCKED→STRIDED. The Tensix producer flat-prefills the ring (ring[s]=input[s]) — it
+            // never scatters — so the golden is block_size-INDEPENDENT and is purely the STRIDED consumer's
+            // read of a flat ring. For C≥P (stride=C, one TC/consumer) it is identity. For P>C, stride=P and
+            // consumer c round-robins its ntc_c=P/C TCs (TC t base = slot c*ntc_c + t, advancing by P):
+            //   expected[m*C + c] = input[(c*(P/C) + (m % (P/C))) + (m / (P/C)) * P]   (identity at C≥P).
+            const uint32_t wpe = p.entry_size / sizeof(uint32_t);
+            const uint32_t P = p.num_producers;
+            const uint32_t C = p.num_consumers;
+            std::vector<uint32_t> expected(input.size(), 0u);
+            if (C >= P) {
+                expected = input;  // identity
+            } else {
+                const uint32_t ntc_c = P / C;
+                for (uint32_t c = 0; c < C; ++c) {
+                    for (uint32_t m = 0; m < p.num_entries / C; ++m) {
+                        const uint32_t slot = (c * ntc_c + (m % ntc_c)) + (m / ntc_c) * P;
+                        const uint32_t dst = m * C + c;
+                        std::copy(
+                            input.begin() + slot * wpe, input.begin() + (slot + 1) * wpe, expected.begin() + dst * wpe);
+                    }
+                }
+            }
+            if (expected != output) {
+                for (uint32_t t = 0; t < std::min<uint32_t>(entries_per_core, 16); ++t) {
+                    int match = -1;
+                    for (uint32_t src = 0; src < p.num_entries; ++src) {
+                        if (std::equal(
+                                input.begin() + src * wpe, input.begin() + (src + 1) * wpe, output.begin() + t * wpe)) {
+                            match = static_cast<int>(src);
+                            break;
+                        }
+                    }
+                    log_info(
+                        tt::LogTest,
+                        "  Trisc→DM BLOCKED→STRIDED output tile {} ← {}",
+                        t,
+                        match >= 0 ? ("input page " + std::to_string(match)) : std::string("UNKNOWN"));
+                }
+            }
+            EXPECT_EQ(expected, output) << "M2 Trisc→DM BLOCKED→STRIDED data mismatch (P=" << P << ",C=" << C << ")";
         } else {
             EXPECT_EQ(input, output) << "M2 single-DFB identity mismatch";
         }
@@ -1993,6 +2250,12 @@ DFB_BLOCKED_TEST_2_0(DMTest1xDFB3Bx3B_blk4_impl, DM, DM, 3, 3, 4, 24, true)
 DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk2_impl, DM, DM, 1, 1, 2, 16, true)
 DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk8_impl, DM, DM, 1, 1, 8, 16, true)
 
+// VERIFIED LIMIT (do not add): implicit-sync ASYMMETRIC BLOCKED with an IMPLICIT CONSUMER (e.g. DM→DM
+// 2Bx1B / 1Bx2B implicit) corrupts data on emu-quasar-1x3 — the implicit consumer drain round-robins the
+// tile-counter per-entry, not per-block, so credits misroute across the unequal side. The device guard
+// (dataflow_buffer.cpp BLOCKED case) FATALs on it. An implicit PRODUCER with an explicit consumer IS
+// supported (see the DM→Trisc A1 implicit P=2 case above, which passes).
+
 // --- BLOCKED→BLOCKED (DM-DM, explicit) extra coverage: larger ring / non-pow2 block, multi-thread ---
 // 2Bx2B blk2 on a 32-entry ring → capacity 16/thread → 8 blocks of 2 per thread (more blocks/thread than
 // the 16-entry cases; NOT ring-pressure — that needs a Tensix producer with entries_per_core>num_entries).
@@ -2210,6 +2473,11 @@ DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB1Bx4S_blk4, 1, 4, 4, 16)
 // Multi-producer (P>1, C≥P integer ratio): a deterministic permutation (golden simulates the round-robin).
 DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB2Bx2S_blk4, 2, 2, 4, 16)
 DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB2Bx4S_blk4, 2, 4, 4, 16)
+// Fan-in (P>C, integer ratio): the golden now handles P>C (each producer feeds one consumer; the consumer
+// round-robins its P/C feeding producers). Closes the P>C BLOCKED→STRIDED gap for DM→DM.
+DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB2Bx1S_blk4, 2, 1, 4, 16)
+DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB4Bx1S_blk4, 4, 1, 4, 16)
+DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB4Bx2S_blk4, 4, 2, 4, 16)
 
 // --- BLOCKED-producer → STRIDED-consumer (Trisc→DM, explicit sync) ---
 // A Tensix producer only POSTS credits over a host-flat-prefilled ring (ring[s]=input[s]); it never
@@ -2239,6 +2507,11 @@ DFB_TRISC_BLOCKED_STRIDED_TEST_2_0(TensixDMTest1xDFB1Bx4S_blk4, 1, 4, 4, 16)
 DFB_TRISC_BLOCKED_STRIDED_TEST_2_0(TensixDMTest1xDFB2Bx2S_blk4, 2, 2, 4, 16)
 DFB_TRISC_BLOCKED_STRIDED_TEST_2_0(TensixDMTest1xDFB2Bx4S_blk4, 2, 4, 4, 16)
 DFB_TRISC_BLOCKED_STRIDED_TEST_2_0(TensixDMTest1xDFB4Bx4S_blk4, 4, 4, 4, 32)
+// Fan-in (P>C): Tensix producer flat-prefill, DM STRIDED consumer round-robins P/C stride-P TCs (golden
+// above). Closes the P>C BLOCKED→STRIDED gap for Trisc→DM. Tensix producer threads ∈ {2,4}.
+DFB_TRISC_BLOCKED_STRIDED_TEST_2_0(TensixDMTest1xDFB2Bx1S_blk4, 2, 1, 4, 16)
+DFB_TRISC_BLOCKED_STRIDED_TEST_2_0(TensixDMTest1xDFB4Bx1S_blk4, 4, 1, 4, 16)
+DFB_TRISC_BLOCKED_STRIDED_TEST_2_0(TensixDMTest1xDFB4Bx2S_blk4, 4, 2, 4, 16)
 
 // --- STRIDED 1xX, Xx1 (DM-DM, DM-Tensix, Tensix-DM) ---
 DFB_TEST_2_0(DMTest1xDFB1Sx1S, DM, DM, 1, STRIDED, 1, STRIDED)

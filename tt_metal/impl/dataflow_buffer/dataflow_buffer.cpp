@@ -638,16 +638,23 @@ static std::pair<uint16_t, uint32_t> compute_capacity_and_stride(const DataflowB
             // (num_tcs_to_rr, see calculate_num_tile_counters) fans blocks across the unequal side
             // exactly as STRIDED does, while stride_in_entries stays 1 so the contiguous-burst invariant
             // holds. The thread-count ratio must be an integer (enforced downstream by
-            // calculate_num_tile_counters). Implicit-sync asymmetric BLOCKED is NOT yet supported
-            // (commit_implicit_read/write round-robin the TC once per entry, not per block), so require
-            // explicit sync when the counts differ.
+            // calculate_num_tile_counters).
+            //
+            // Implicit sync + asymmetric BLOCKED: ONLY the CONSUMER side is the problem. An implicit
+            // consumer's drain (commit_implicit_write) round-robins the tile-counter PER ENTRY, not per
+            // block, which misroutes credits across the unequal side — VERIFIED to corrupt data on
+            // emu-quasar-1x3 (DM→DM 2Bx1B / 1Bx2B implicit fail an identity check). An implicit PRODUCER
+            // with an explicit consumer is FINE (verified: DM-producer→Tensix-consumer asymmetric implicit
+            // BLOCKED passes — the A1 pipeline). So require an explicit-sync CONSUMER when the counts differ,
+            // but allow an implicit producer.
             const uint32_t threads = std::max(config.num_producers, config.num_consumers);
             const uint32_t block = std::max<uint32_t>(config.consumer_block_size, 1u);
             TT_FATAL(
-                config.num_producers == config.num_consumers ||
-                    (!config.enable_producer_implicit_sync && !config.enable_consumer_implicit_sync),
-                "BLOCKED DFB {}: asymmetric thread counts ({} producers vs {} consumers) require explicit "
-                "sync; implicit-sync asymmetric BLOCKED is not yet supported",
+                config.num_producers == config.num_consumers || !config.enable_consumer_implicit_sync,
+                "BLOCKED DFB {}: asymmetric thread counts ({} producers vs {} consumers) require an "
+                "explicit-sync CONSUMER; an implicit-sync consumer drain round-robins the tile-counter "
+                "per-entry (not per-block) and misroutes for asymmetric BLOCKED. (An implicit producer with "
+                "an explicit consumer is supported.)",
                 dfb.id,
                 config.num_producers,
                 config.num_consumers);
