@@ -288,7 +288,7 @@ class Sampling1D(LightweightModule):
 
     def _argmax_all_gather(self, logits):
         """Multi-device: all-gather logits before argmax.
-        
+
         On ring-capable meshes (e.g. T3K 1×8) use Ring topology with no barrier semaphore to match the
         model's logits gather and avoid trace-capture issues seen with some barrier-based configurations.
         For other meshes, fall back to the clamped Linear+barrier path.
