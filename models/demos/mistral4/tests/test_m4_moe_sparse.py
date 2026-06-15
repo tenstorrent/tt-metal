@@ -69,4 +69,14 @@ def test_m4_moe_sparse(mesh_device, reset_seeds):
 
     passing, msg = comp_pcc(dense, sparse, pcc_required)
     logger.info(f"Mistral-Small-4 sparse-dispatch MoE (sharded) vs dense (B={BATCH}): {msg}")
+
+    # replicated-in/out wrapper (the actual model path): mesh_partition -> sparse -> all_gather
+    wrapped = ttnn.to_torch(
+        moe.forward_sparse(x_repl, sub_device_id=ttnn.SubDeviceId(0)),
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+    ).float()[:BATCH]
+    pw, mw = comp_pcc(dense, wrapped, pcc_required)
+    logger.info(f"Mistral-Small-4 forward_sparse (replicated mesh_partition/all_gather) vs dense (B={BATCH}): {mw}")
+
     assert passing, f"sparse MoE PCC below {pcc_required}: {msg}"
+    assert pw, f"forward_sparse wrapper PCC below {pcc_required}: {mw}"

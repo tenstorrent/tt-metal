@@ -504,6 +504,16 @@ class TtMistral4MoE(LightweightModule):
         experts = ttnn.reshape(ttnn.sum(ttnn.mul(comb, w), dim=0), (bpd, 1, H))
         return ttnn.add(experts, self._shared(x))
 
+    def forward_sparse(self, x, sub_device_id=None):
+        """Replicated-in / replicated-out sparse MoE for batched decode (x replicated [B,1,H], B>=n_dev):
+        ttnn.mesh_partition shards the batch 1/device (device-side, the inverse of all_gather, trace-safe),
+        runs the validated sparse dispatch path, then all-gathers back to replicated for the residual.
+        Matches the dense forward at PCC ~0.999; the throughput win is computing only top-k experts/token
+        (vs all `per` local experts dense). Requires shard_experts + a loaded sub-device manager."""
+        xs = ttnn.mesh_partition(x, dim=0, cluster_axis=1)  # [B,1,H] replicated -> [B/n_dev,1,H] sharded
+        out = self._forward_sparse(xs, sub_device_id=sub_device_id)  # [B/n_dev,1,H] sharded
+        return ttnn.all_gather(out, dim=0, cluster_axis=1)  # -> [B,1,H] replicated
+
 
 class TtMistral4DecoderLayer(LightweightModule):
     """input_layernorm -> MLA -> +residual -> post_attention_layernorm -> MoE -> +residual."""
@@ -520,12 +530,15 @@ class TtMistral4DecoderLayer(LightweightModule):
         h = ttnn.add(x, self.mla(ttnn.rms_norm(x, epsilon=self.eps, weight=self.w_in), cos, sin))
         return ttnn.add(h, self.moe(ttnn.rms_norm(h, epsilon=self.eps, weight=self.w_post)))
 
-    def forward_decode(self, x, pos_t, cos, sin, kv_cache):
+    def forward_decode(self, x, pos_t, cos, sin, kv_cache, use_sparse=False, sub_device_id=None):
         h = ttnn.add(
             x,
             self.mla.forward_decode(ttnn.rms_norm(x, epsilon=self.eps, weight=self.w_in), pos_t, cos, sin, kv_cache),
         )
-        return ttnn.add(h, self.moe(ttnn.rms_norm(h, epsilon=self.eps, weight=self.w_post)))
+        mn = ttnn.rms_norm(h, epsilon=self.eps, weight=self.w_post)
+        # B>=n_dev: sparse top-k expert dispatch (computes only routed experts vs all `per` local dense).
+        moe = self.moe.forward_sparse(mn, sub_device_id=sub_device_id) if use_sparse else self.moe(mn)
+        return ttnn.add(h, moe)
 
     def forward_decode_mla(self, x, pos_t, cos, sin, cache, page_table):
         h = ttnn.add(
@@ -642,9 +655,11 @@ class TtMistral4TextModel(LightweightModule):
             hidden = layer.forward_prefill_chunked(hidden, cos, sin, paged_kv, pt, chunk, block_size)
         return self._lm_head(ttnn.rms_norm(hidden, epsilon=self.eps, weight=self.w_norm))
 
-    def forward_decode(self, hidden, pos_t, cos, sin, kv_caches):
+    def forward_decode(self, hidden, pos_t, cos, sin, kv_caches, use_sparse=False, sub_device_id=None):
         for layer, kv in zip(self.layers, kv_caches):
-            hidden = layer.forward_decode(hidden, pos_t, cos, sin, kv)
+            hidden = layer.forward_decode(
+                hidden, pos_t, cos, sin, kv, use_sparse=use_sparse, sub_device_id=sub_device_id
+            )
         return self._lm_head(ttnn.rms_norm(hidden, epsilon=self.eps, weight=self.w_norm))
 
 
