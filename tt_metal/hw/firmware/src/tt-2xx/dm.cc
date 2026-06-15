@@ -221,7 +221,7 @@ extern "C" uint32_t _start1() {
         thread_sync_init();
 
         // Initialize wait for trisc FW
-        for (uint32_t i = NUM_DM_CORES; i < MaxNumKernels; i++) {
+        for (uint32_t i = MaxDMProcessorsPerCoreType; i < MaxNumKernels; i++) {
             mailboxes->fw_shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
         }
         deassert_trisc();
