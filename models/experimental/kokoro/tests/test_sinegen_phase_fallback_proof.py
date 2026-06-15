@@ -16,7 +16,7 @@ This test captures per-stage PCC/MAE in device execution order on the **same F0*
 3. ``use_torch_phase_fallback=True`` restores phase-chain PCC > 0.99.
 
 Modulo / ``rad_frac`` behaviour on **real kmodel** ``f0_upsampled`` (path-faithful vs shared-input)
-is in ``test_sinegen_modulo_pcc_proof.py`` — this file uses synthetic F0 where ``rad_frac`` stays
+is in ``test_sinegen_voicing_input_not_op_proof.py`` — this file uses synthetic F0 where ``rad_frac`` stays
 ≈ 1.0 and cannot demonstrate modulo sensitivity.
 
 Full-pipeline audio PCC vs each fallback combination (none / stft-only / phase-only / stft+phase)

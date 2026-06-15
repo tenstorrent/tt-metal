@@ -61,7 +61,6 @@ from typing import Optional
 
 import numpy as np
 import torch
-from loguru import logger
 
 import ttnn
 
@@ -70,16 +69,6 @@ from models.experimental.kokoro.tt.tt_conv import dram_height_slice_config
 # iSTFT matrix bytes limit: if [K*F, output_length] float32 would exceed this, skip
 # precomputing the matrices and use conv_transpose2d OLA instead.
 _ISTFT_MATRIX_BYTES_LIMIT = 1_073_741_824  # 1 GiB
-
-# Long-sequence STFT/iSTFT run in a single device pass — no chunking, no CPU fallback.  The two
-# things that would otherwise overflow BH L1 (1.5 MiB/bank) at large length are handled directly:
-#   * The strided conv2d / conv_transpose2d OLA stream the signal through bounded L1 circular
-#     buffers via ``dram_height_slice_config`` (DRAM height slicing).  Measured to fit the full
-#     Kokoro range — forward input_height 635k and iSTFT F 127k — at the default 256-slice budget.
-#   * Reshapes of the form ``[B, L] -> [B, 1, L, 1]`` and ``[B, W, 1] -> [B, W]`` are routed through
-#     TILE layout.  The 2D ROW_MAJOR reshape kernel allocates an L1 circular buffer scaled to the
-#     full width (~16 B/sample) and overflows above ~95k–131k samples, whereas the TILE reshape is
-#     tile-local and bounded; tilizing first keeps these on device at any length.
 
 
 def _to_fp32_if_needed(x: ttnn.Tensor, memory_config: ttnn.MemoryConfig) -> tuple[ttnn.Tensor, bool]:
@@ -299,12 +288,6 @@ def preprocess_tt_torch_stft(
 
     matrix_bytes = K * F * output_length * 4  # float32 bytes for one matrix
     if matrix_bytes > _ISTFT_MATRIX_BYTES_LIMIT:
-        logger.info(
-            "TTTorchSTFT skipping iSTFT matrix precompute "
-            f"({matrix_bytes} bytes > {_ISTFT_MATRIX_BYTES_LIMIT}); "
-            f"F={F}, output_length={output_length} — "
-            "single-pass DRAM-sliced conv_transpose2d OLA iSTFT at runtime (device-only)"
-        )
         istft_real_t: Optional[ttnn.Tensor] = None
         istft_imag_t: Optional[ttnn.Tensor] = None
     else:
@@ -487,8 +470,6 @@ class TTTorchSTFT:
         self.device = device
         self.params = params
         self.eps = 1e-11
-        # Phase is undefined for near-zero bins. In no-fallback TT STFT those bins are most
-        # sensitive to BF16 rounding; clamp their phase to 0 to reduce random phase jitter.
         self.phase_zero_floor = float(os.getenv("KOKORO_STFT_PHASE_ZERO_FLOOR", "1e-8"))
         self._use_torch_stft_fallback = use_torch_stft_fallback
         self._use_torch_stft_conv_fallback = use_torch_stft_conv_fallback and not use_torch_stft_fallback
@@ -502,7 +483,6 @@ class TTTorchSTFT:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
-        # Conv-transpose weight cache: prepared once per (B, F) to avoid re-upload.
         self._synth_real_prep: Optional[ttnn.Tensor] = None
         self._synth_imag_prep: Optional[ttnn.Tensor] = None
         self._synth_prep_key: Optional[tuple] = None

@@ -260,10 +260,3 @@ class TTTextEncoder:
         return ttnn.permute(x, (0, 2, 1))
 
     __call__ = forward
-
-
-# --- Legacy names (predictor / older tests) ---------------------------------
-
-TextEncoderParams = TTTextEncoderParams
-preprocess_text_encoder = preprocess_tt_text_encoder
-TtKokoroTextEncoder = TTTextEncoder

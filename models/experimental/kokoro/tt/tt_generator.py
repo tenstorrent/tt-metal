@@ -375,9 +375,6 @@ class TTGenerator:
     ) -> None:
         self.device = device
         self.params = params
-        # HiFi4 (with fp32_dest_acc_en) measured better than HiFi3 for the STFT precision
-        # bottleneck (cos(phase) PCC 0.78 vs 0.77; near-zero sign match 0.70 vs 0.69). Apply the
-        # same setting to the surrounding convs / resblocks so the chain stays consistent.
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -390,8 +387,6 @@ class TTGenerator:
             params.m_source,
             use_torch_phase_fallback=use_torch_phase_fallback,
         )
-        # The params type selects the STFT implementation: ``TTCustomSTFT`` (no fallback) for the
-        # istftnet ``disable_complex=True`` port, else the ``TorchSTFT`` port with its CPU fallbacks.
         if isinstance(params.stft, TTCustomSTFTParams):
             self._stft = TTCustomSTFT(device, params.stft)
         else:
@@ -400,8 +395,6 @@ class TTGenerator:
                 params.stft,
                 use_torch_stft_fallback=use_torch_stft_fallback,
             )
-        # Keep the full harmonic-source path (SineGen + Source linear + STFT) on the same
-        # precision profile as the rest of the generator to avoid mixed-fidelity phase drift.
         self._m_source.compute_kernel_config = self.compute_kernel_config
         self._m_source._sinegen.compute_kernel_config = self.compute_kernel_config
         self._noise_res = tuple(TTAdaINResBlock1(device, sp.noise_res) for sp in params.stages)
@@ -423,19 +416,15 @@ class TTGenerator:
         """
         p = self.params
 
-        # ``f0`` in: ``[B, T_f0]`` or ``[B, T_f0, 1]``. We need ``[B, T_har, 1]``.
         f_shape = list(f0.shape)
         if len(f_shape) == 2:
             f0_b_t_1 = ttnn.unsqueeze(f0, 2)
         else:
             f0_b_t_1 = f0
-        # Upcast to fp32 so the small downstream sine source survives ``atan2`` in :class:`TTTorchSTFT`
-        # (trained Kokoro ``sine_merge`` has per-sample RMS ≈ 0.06; bf16 phase is then ~random).
         f0_fp32 = ttnn.typecast(f0_b_t_1, ttnn.float32, memory_config=memory_config)
         if len(f_shape) == 2:
             ttnn.deallocate(f0_b_t_1)
         f0_b_t_1 = f0_fp32
-        # On-device nearest upsample (matches ``nn.Upsample(scale_factor=upsample_scale_full)``).
         f0_har = _upsample_nearest_axis1(
             f0_b_t_1,
             scale=p.upsample_scale_full,
@@ -443,7 +432,6 @@ class TTGenerator:
         )
         ttnn.deallocate(f0_b_t_1)
 
-        # m_source -> har_source ``[B, T_har, 1]``
         har_source, _noise_out, _uv = self._m_source.forward(
             f0_har,
             sinegen_rand_ini=sinegen_rand_ini,
@@ -455,14 +443,9 @@ class TTGenerator:
         ttnn.deallocate(_noise_out)
         ttnn.deallocate(_uv)
 
-        # ``har_source.transpose(1, 2).squeeze(1)`` in the reference -> ``[B, T_har]``.
-        # Drop the trailing singleton channel so STFT sees ``[B, T_har]`` like the Torch path.
         har_flat = ttnn.squeeze(har_source, 2)
         ttnn.deallocate(har_source)
 
-        # STFT: ``transform`` returns ``(mag, phase)`` each ``[B, K, F]`` (BCT-style). Cast to
-        # the configured ``activation_dtype`` of the source module (fp32 by default — see the
-        # rationale in :func:`preprocess_tt_generator`).
         if har_flat.dtype != p.m_source.sinegen.activation_dtype:
             har_flat_cast = ttnn.typecast(
                 har_flat,
@@ -474,7 +457,6 @@ class TTGenerator:
         mag, phase = self._stft.transform(har_flat)
         ttnn.deallocate(har_flat)
 
-        # ``cat([mag, phase], dim=1)`` -> ``[B, 2K, F]`` (BCT). Permute to NLC ``[B, F, 2K]``.
         har_bct = ttnn.concat([mag, phase], dim=1, memory_config=memory_config)
         ttnn.deallocate(mag)
         ttnn.deallocate(phase)
@@ -504,13 +486,6 @@ class TTGenerator:
         """
         p = self.params
         ck = self.compute_kernel_config
-        # The L1-activation optimization (pick_l1_activation_mc) is sized from the *initial* input
-        # shape, but the generator activations grow ~prod(upsample_rates)× along the time axis after
-        # the ConvTranspose ups stages.  An L1 memory config selected for the small [B, T_x, C_in]
-        # input is then reused for those upsampled activations, and the conv1d/conv_transpose ops on
-        # L1-interleaved tensors at these shapes return corrupt output (full-forward PCC collapses to
-        # ~0, vs ~0.89 on DRAM).  Keep the conv-heavy generator hot path on the caller's (DRAM)
-        # config; pick_l1_activation_mc remains for the sweep-validated matmul call sites elsewhere.
         activ_mc = memory_config
 
         har_nlc = self._harmonic_source_path(
@@ -520,10 +495,7 @@ class TTGenerator:
             source_noise_raw=source_noise_raw,
             memory_config=activ_mc,
         )
-        # ``har_nlc`` shape: [B, F, 2K]
 
-        # Propagate the harmonic source's dtype (fp32 by default) through the network so the
-        # downstream convs don't bf16-quantize the STFT outputs before noise_conv reads them.
         target_dtype = har_nlc.dtype
         if x_nlc.dtype != target_dtype:
             x_cast = ttnn.typecast(x_nlc, target_dtype, memory_config=activ_mc)

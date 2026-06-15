@@ -2,24 +2,45 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Prove ``ttnn.remainder`` (modulo) is faithful; low ``rad_frac`` PCC is upstream error.
+"""Prove the low ``rad_frac`` / voicing PCC is the F0 **input** divergence, not any SineGen op.
+
+In end-to-end diagnostics ``rad_frac = (fn / sr) % 1`` shows a low PCC (~0.54). The natural
+suspicion is that an op amplifies a small F0 error. This test rules out **both** candidate ops
+and pins the drop on the input:
+
+  1. **Not the modulo.** ``% 1`` is discontinuous at integer boundaries, but at Kokoro scale
+     ``fn / sr ≈ 200/24000 ≈ 0.008`` is nowhere near a wrap point, so the modulo is a near-identity.
+  2. **Not the voicing threshold op.** The genuinely discontinuous op is the boolean
+     ``uv = f0 > 0`` (it flips 0↔1 on frames near the voicing boundary), but running that exact
+     threshold in **torch** instead of on device (``ttnn.gt``) gives a bit-for-bit identical PCC —
+     so the op backend is irrelevant.
+
+What's left is the **input**: a sub-Hz disagreement between the ref and TT prosody paths'
+``f0_upsampled``. The discontinuous ``> 0`` turns that into mask flips regardless of backend, and
+``rad_frac`` (≈0 on unvoiced frames, small-positive on voiced) merely inherits the flipped mask.
 
 ``test_sinegen_phase_fallback_proof.py`` feeds the **same** synthetic F0 to ref and TT, so
-``rad_frac`` stays at PCC ≈ 1.0 and that test cannot show modulo behaviour on real kmodel input.
+``rad_frac`` stays at PCC ≈ 1.0 and that test cannot show this behaviour on real kmodel input.
 
 This test uses the real config-E kmodel ``f0_upsampled`` pair (ref ``f0u_ref`` vs on-device
-``f0u_tt`` from ``"Hello from Tenstorrent."``) and compares per-op PCC two ways:
+``f0u_tt`` from ``"Hello from Tenstorrent."``) and runs three checks:
 
   A. **Path-faithful** — ref stages vs TT stages on each path's own upsampled F0.
-     ``fn_harmonics`` stays tight; ``uv_mask`` drops first (~0.57); ``rad_frac`` inherits that
-     drop (~0.54) without adding a new cliff at the modulo op.
+     ``fn_harmonics`` stays tight (~1.0); ``uv_mask`` drops first (~0.57) where voicing flips;
+     ``rad_frac`` inherits that drop (~0.54) without adding a new cliff at the modulo op.
 
   B. **Shared-input** — both paths fed ``f0u_ref``.
-     ``rad_frac`` stays at PCC ≈ 1.0 (MAE ~1e-5 from BF16 ``ttnn.remainder`` only).
+     ``rad_frac`` stays at PCC ≈ 1.0 (MAE ~1e-5 from BF16 ``ttnn.remainder`` only) — proving
+     the modulo op itself is faithful.
+
+  C. **Voicing threshold: torch vs device** — build ``uv = f0 > 0`` on the TT-path F0 both in
+     torch and via ``ttnn.gt``. ``PCC(uv_torch, uv_device) ≈ 1.0`` and both score the *same*
+     ~0.57 against ``uv_ref`` — running the threshold in torch recovers nothing, so the drop is
+     the input, not the op.
 
 Run::
 
-    pytest -s models/experimental/kokoro/tests/test_sinegen_modulo_pcc_proof.py
+    pytest -s models/experimental/kokoro/tests/test_sinegen_voicing_input_not_op_proof.py
 """
 
 from __future__ import annotations
@@ -184,8 +205,13 @@ def _kmodel_f0_upsampled_pair(device) -> tuple[torch.Tensor, torch.Tensor, int, 
     return f0u_ref, f0u_tt, scale, harmonic_num
 
 
-def analyze_modulo_pcc(device) -> tuple[list[ModuloStageRow], list[ModuloStageRow]]:
-    f0u_ref, f0u_tt, scale, harmonic_num = _kmodel_f0_upsampled_pair(device)
+def analyze_modulo_pcc(
+    f0u_ref: torch.Tensor,
+    f0u_tt: torch.Tensor,
+    scale: int,
+    harmonic_num: int,
+    device,
+) -> tuple[list[ModuloStageRow], list[ModuloStageRow]]:
     dim = harmonic_num + 1
     rng_cpu = make_zero_m_source_rng(1, int(f0u_ref.shape[1]), dim)
     rand_ini = rng_cpu.rand_ini.reshape(1, 1, dim)
@@ -279,20 +305,79 @@ def _log_modulo_report(path_rows: list[ModuloStageRow], shared_rows: list[Modulo
     )
 
 
+# How close the torch-threshold PCC must be to the on-device-threshold PCC to count as "the same".
+_SAME_PCC_TOL = 0.02
+
+
+@dataclass(frozen=True)
+class VoicingGtReport:
+    pcc_ref_vs_device: float
+    pcc_ref_vs_torch: float
+    pcc_device_vs_torch: float
+    mae_device_vs_torch: float
+
+
+def analyze_voicing_gt(f0u_ref: torch.Tensor, f0u_tt: torch.Tensor, device) -> VoicingGtReport:
+    """Build ``uv = f0 > 0`` on the TT-path F0 via torch and via ``ttnn.gt``; compare vs ``uv_ref``."""
+    uv_ref = (f0u_ref > _VOICED_THRESHOLD).float()
+    uv_torch = (f0u_tt > _VOICED_THRESHOLD).float()
+
+    mc = ttnn.DRAM_MEMORY_CONFIG
+    f0_tt = ttnn.from_torch(f0u_tt, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc)
+    uv_bool = ttnn.gt(f0_tt, _VOICED_THRESHOLD, memory_config=mc)
+    uv_dev_tt = ttnn.typecast(uv_bool, ttnn.float32, memory_config=mc)
+    uv_device = ttnn.to_torch(uv_dev_tt).float().reshape(uv_torch.shape)
+    ttnn.deallocate(uv_bool)
+    ttnn.deallocate(uv_dev_tt)
+    ttnn.deallocate(f0_tt)
+
+    pcc_rd, _, _ = _pcc_mae(uv_ref, uv_device)
+    pcc_rt, _, _ = _pcc_mae(uv_ref, uv_torch)
+    pcc_dt, mae_dt, _ = _pcc_mae(uv_device, uv_torch)
+    return VoicingGtReport(
+        pcc_ref_vs_device=pcc_rd,
+        pcc_ref_vs_torch=pcc_rt,
+        pcc_device_vs_torch=pcc_dt,
+        mae_device_vs_torch=mae_dt,
+    )
+
+
+def _log_voicing_gt_report(r: VoicingGtReport) -> None:
+    print("\n  C. Voicing threshold (uv = f0 > 0) torch vs device:")
+    print(f"     PCC(uv_device, uv_torch)  = {r.pcc_device_vs_torch:.6f}   MAE = {r.mae_device_vs_torch:.6e}")
+    print(f"     PCC(uv_ref,    uv_device) = {r.pcc_ref_vs_device:.6f}   (threshold on device, ttnn.gt)")
+    print(f"     PCC(uv_ref,    uv_torch)  = {r.pcc_ref_vs_torch:.6f}   (threshold in torch)")
+    print(f"     change from moving gt to torch = {r.pcc_ref_vs_torch - r.pcc_ref_vs_device:+.6f}")
+    print(
+        "     -> running the threshold in torch does NOT change the PCC; the ~0.57 drop is the "
+        "input F0 divergence, not ttnn.gt."
+    )
+
+
 @pytest.mark.timeout(600)
-def test_sinegen_modulo_pcc_proof(device):
-    """Modulo is faithful on matched input; path-faithful rad_frac drop is inherited upstream."""
+def test_sinegen_voicing_input_not_op_proof(device):
+    """The low rad_frac / voicing PCC is the F0 input divergence, not the modulo OR the gt op.
+
+    A (path-faithful): fn stays tight, uv_mask drops first, rad_frac inherits it — no new cliff
+    at the modulo.  B (shared-input): modulo is faithful (rad_frac PCC ≈ 1.0).  C (gt torch vs
+    device): the voicing threshold scores the same PCC on either backend — the drop is the input.
+    """
     ckpt = _find_checkpoint()
     if ckpt is None:
         pytest.skip("Kokoro-82M checkpoint not found locally.")
 
-    path_rows, shared_rows = analyze_modulo_pcc(device)
+    # Load the real kmodel f0_upsampled pair ONCE and feed it to all three checks.
+    f0u_ref, f0u_tt, scale, harmonic_num = _kmodel_f0_upsampled_pair(device)
+
+    path_rows, shared_rows = analyze_modulo_pcc(f0u_ref, f0u_tt, scale, harmonic_num, device)
     _log_modulo_report(path_rows, shared_rows)
+    gt = analyze_voicing_gt(f0u_ref, f0u_tt, device)
+    _log_voicing_gt_report(gt)
 
     path_by = {r.stage: r for r in path_rows}
     shared_by = {r.stage: r for r in shared_rows}
 
-    # Matched f0u: modulo (and other pre-phase ops through rad_rand_ini) stay tight.
+    # A/B — modulo. Matched f0u: modulo (and other pre-phase ops through rad_rand_ini) stay tight.
     assert (
         shared_by["S2_rad_mod"].pcc > 0.99
     ), f"shared-input rad_frac should be faithful (got {shared_by['S2_rad_mod'].pcc:.6f})"
@@ -309,4 +394,20 @@ def test_sinegen_modulo_pcc_proof(device):
     assert abs(path_by["S2_rad_mod"].pcc - path_by["S1_uv"].pcc) < 0.05, (
         f"rad_frac PCC {path_by['S2_rad_mod'].pcc:.4f} should track uv_mask "
         f"{path_by['S1_uv'].pcc:.4f} — modulo does not add a separate cliff"
+    )
+
+    # C — voicing threshold op. ttnn.gt is bit-faithful on identical input...
+    assert (
+        gt.pcc_device_vs_torch > 0.999
+    ), f"ttnn.gt should match torch '>' on identical input (got {gt.pcc_device_vs_torch:.6f})"
+    # ...both thresholds drop against the reference...
+    assert gt.pcc_ref_vs_device < 0.7, f"on-device voicing PCC should drop (got {gt.pcc_ref_vs_device:.6f})"
+    assert gt.pcc_ref_vs_torch < 0.7, (
+        f"torch threshold PCC {gt.pcc_ref_vs_torch:.6f} also dropped — "
+        "running gt in torch should not recover the voicing mask"
+    )
+    # ...and they agree, so the op backend is irrelevant; the input F0 divergence is the cause.
+    assert abs(gt.pcc_ref_vs_torch - gt.pcc_ref_vs_device) < _SAME_PCC_TOL, (
+        f"torch ({gt.pcc_ref_vs_torch:.6f}) and device ({gt.pcc_ref_vs_device:.6f}) voicing PCC differ "
+        f"by more than {_SAME_PCC_TOL} — the threshold op, not the input, would then be the cause"
     )

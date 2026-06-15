@@ -65,7 +65,7 @@ pytest models/experimental/kokoro/tests/ -v --timeout=600
 pytest -s \
   models/experimental/kokoro/tests/test_sinegen_phase_fallback_proof.py \
   models/experimental/kokoro/tests/test_tt_kmodel_pcc_degradation.py \
-  models/experimental/kokoro/tests/test_sinegen_modulo_pcc_proof.py \
+  models/experimental/kokoro/tests/test_sinegen_voicing_input_not_op_proof.py \
   models/experimental/kokoro/tests/test_stft_atan2_sensitivity_proof.py
 ```
 
@@ -158,39 +158,45 @@ stft-on-top-of-phase increment     = +0.038   (STFT adds the final touch)
 
 ---
 
-### Proof 3 — The `rad_frac` drop is inherited from voicing (`uv`), not the modulo (`test_sinegen_modulo_pcc_proof.py`)
+### Proof 3 — A low `rad_frac` score is the F0 input, not any op (`test_sinegen_voicing_input_not_op_proof.py`)
 
-**The question it settles:** in end-to-end diagnostics `rad_frac = (fn / sr) % 1` shows a low PCC (~0.54). Is `ttnn.remainder` the culprit — i.e. is the **modulo amplifying a small F0 error into a large one**? **No.** The modulo is faithful; the low PCC is *inherited* from an upstream **voicing-mask** disagreement and the modulo passes it through unchanged.
+**Vocabulary** (SineGen turns the pitch contour into a sine wave):
 
-**Why one might suspect the modulo:** `% 1` *is* discontinuous at integer boundaries — `0.999` and `1.001` wrap to opposite ends, so a tiny input error near a wrap point could in principle explode. But at Kokoro scale `fn / sr ≈ 200 / 24000 ≈ 0.008` — nowhere near an integer boundary — so the modulo runs in its smooth, near-identity region and cannot amplify. The genuinely discontinuous op on this path is the boolean threshold `uv = f0 > 0`, not the modulo.
+| name | meaning |
+|------|---------|
+| `f0` | per-sample pitch in Hz; `0` = unvoiced (silence) |
+| `uv` | voiced/unvoiced mask, the boolean `f0 > 0` |
+| `fn` | `f0 × harmonic numbers` |
+| `rad_frac` | `(fn / sample_rate) % 1` — per-sample phase step, wrapped to `[0, 1)` |
+| PCC | correlation of the on-device tensor vs the CPU-float32 reference; `1.0` = identical |
 
-**Method — two experiments on the real kmodel `f0_upsampled`** (text `"Hello from Tenstorrent."`):
+**What it proves:** `rad_frac` shows a low PCC (~0.54) end-to-end, which looks like a broken `% 1` (modulo) or `> 0` (threshold) op. Both ops are faithful — the drop is a sub-Hz disagreement in the **input** `f0_upsampled` that the discontinuous `> 0` turns into voicing-mask flips, which `rad_frac` then inherits.
 
-**A. Path-faithful** — ref stages on `f0u_ref`, TT stages on `f0u_tt` (each path's own F0):
+**Method — three checks on the real kmodel `f0_upsampled`** (text `"Hello from Tenstorrent."`):
+
+**A. Path-faithful** (ref stages on `f0u_ref`, TT stages on `f0u_tt`) — locates where the drop appears:
 
 | step | PCC | what happens |
 |------|-----|--------------|
-| `f0_input` | 0.99995 | ref vs TT upsampled F0 correlate tightly (sub-Hz absolute disagreement) |
-| `fn_harmonics` | 0.99996 | `fn = f0 × harmonics` stays tight — the F0 error has **not** been amplified yet |
-| `uv_mask` | **0.57** ← drop | `uv = f0 > 0` flips 0↔1 on frames near the voicing boundary (infinite-gain step) |
-| `rad_frac` | **0.54** | **inherits** the `uv` drop — no *new* cliff appears at the modulo |
+| `f0_input` | 0.99995 | ref vs TT F0 correlate tightly (sub-Hz disagreement) |
+| `fn_harmonics` | 0.99996 | smooth op — the F0 error is not amplified |
+| `uv_mask` | **0.57** | `f0 > 0` flips near the voicing boundary (a discontinuous step) |
+| `rad_frac` | **0.54** | inherits the `uv` drop — no new cliff at the modulo |
 
-**B. Shared-input** — both paths fed the **same** `f0u_ref` (isolates the op itself):
+**B. Shared-input** (both paths fed `f0u_ref`) — isolates the modulo: `rad_frac` PCC = **1.0000** (MAE ~1e-5). On matched input `ttnn.remainder` is bit-faithful; at Kokoro scale `fn/sr ≈ 0.008` sits far from any wrap point, so `% 1` is a near-identity.
 
-| step | PCC | what happens |
-|------|-----|--------------|
-| `rad_frac` | **1.0000** | modulo is bit-faithful (MAE ~1e-5, pure BF16 `ttnn.remainder` noise) |
+**C. Threshold torch vs device** — isolates `ttnn.gt`. Building `uv = f0 > 0` on the same `f0u_tt` both ways gives `PCC(uv_device, uv_torch) = 1.0`, and both score the **same 0.567506** against `uv_ref`:
 
-Every pre-phase op through `rad_rand_ini` also stays at PCC ≈ 1.0 in the shared-input run.
+| mask | built with | PCC vs `uv_ref` |
+|------|------------|-----------------|
+| `uv_device` | `ttnn.gt(f0u_tt, 0)` (on device) | **0.567506** |
+| `uv_torch` | `f0u_tt > 0` (torch) | **0.567506** |
 
-**Where the amplification really is:** the sub-Hz F0 disagreement (`f0_input` PCC 0.99995) is harmless through the *smooth* ops (`fn` stays 0.99996), but the **boolean `f0 > 0` near the voicing threshold flips the mask** — an effectively infinite-gain step on a binary signal — collapsing `uv_mask` to ~0.57. `rad_frac` is ~0 on unvoiced frames and small-positive on voiced ones, so it carries the same voiced/unvoiced structure and tracks `uv_mask` (within 0.05). The modulo passes that structure through; it adds no cliff of its own.
+Moving `>` to torch changes the score by `+0.000000` — the op backend is irrelevant.
 
-**Key assertions:**
-- shared-input `rad_frac` PCC > 0.99, MAE < 1e-3 (modulo is faithful on matched input)
-- path-faithful `fn` stays tight (> 0.99) but `uv_mask` PCC < 0.7 (the threshold is the amplifier)
-- path-faithful `rad_frac` PCC tracks `uv_mask` within 0.05 — modulo does not add a separate cliff
+**Interpretation:** a low `rad_frac` PCC points upstream to F0 / voicing disagreements, not to `ttnn.remainder` or `ttnn.gt`. Both ops are faithful at Kokoro values, so a torch fallback for either recovers nothing — which is why the only fallbacks that move full-pipeline PCC are the SineGen **phase** and **STFT** ones (Proofs 1, 2, 4), not anything around `uv` / `rad_frac`.
 
-**Interpretation:** when you see low `rad_frac` PCC in end-to-end diagnostics, look upstream at F0 / voicing (`uv`) disagreements, not at `ttnn.remainder`. The modulo is faithful at Kokoro operating values; the boolean voicing threshold is the op that turns a sub-Hz F0 error into a large PCC drop.
+**What it would take to recover this contribution:** the input divergence is seeded by the on-device prosody predictor — `f0_upsampled` is the upsampled predicted F0 (`_device_forward_prosody_stages`), computed in BF16, so it differs sub-Hz from the float32 reference. Since the SineGen ops downstream are exact, the *only* way to shrink this specific contribution is a **CPU fallback on the F0 prediction in the prosody predictor** (so `f0_upsampled` matches the reference), not any change around `uv` / `rad_frac`. This is a **secondary** lever, though: the prosody stages are individually high-PCC (> 0.998) and the dominant full-pipeline recovery comes from the phase and STFT fallbacks (Proof 2) — an F0 fallback would only tighten the residual harmonic-source gap, not move the headline number.
 
 ---
 
