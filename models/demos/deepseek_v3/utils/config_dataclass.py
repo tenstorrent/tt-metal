@@ -524,7 +524,7 @@ class DeepseekMoEPostCombineTilizeConfig(OpConfigBase):
                 shard_shape=[32, 1024],
                 grid=ttnn.CoreRangeSet(
                     {
-                        ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 7)),
+                        ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 8)),  # select_experts_k + shared expert
                     }
                 ),
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,

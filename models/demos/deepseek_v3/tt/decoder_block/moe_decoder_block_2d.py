@@ -168,8 +168,9 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         # SharedExpert now always expects collective ops to be handled by caller
         shared_expert_out = SharedExpert.forward_prefill(x_gathered, cfg["shared_expert"])
 
-        mlp_out = ttnn.sum(mlp_out, dim=0, keepdim=True, memory_config=cfg["moe"]["sum_experts_output_memory_config"])
-        combined_out = ttnn.add(mlp_out, shared_expert_out)
+        combined_out = ttnn.add(
+            mlp_out, shared_expert_out, memory_config=cfg["moe"]["sum_experts_output_memory_config"]
+        )
         ttnn.deallocate(mlp_out)
         ttnn.deallocate(shared_expert_out)
 
@@ -218,7 +219,7 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
             fabric_config=cfg["moe"]["fabric_config"],
             mesh_device=cfg["moe"]["mesh_device"],
         )
-        mlp_out = moe_cls.forward_decode(x_gathered, cfg["moe"])
+        mlp_out, tt_moe_indices_rm, tt_moe_scores_rm = moe_cls.forward_decode(x_gathered, cfg["moe"])
         # SharedExpert now always expects collective ops to be handled by caller
         shared_expert_out = SharedExpert.forward_decode(x_gathered, cfg["shared_expert"])
 
@@ -235,30 +236,60 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         if x_dim == hidden_size // tp_size:
             # Single reduce_scatter on combined output using MoE's config for consistency
 
-            if (
+            if combined_out.shape[2] == ttnn.TILE_SIZE:
+                combined_out = ttnn.experimental.deepseek_moe_post_combine_tilize(
+                    combined_out,
+                    **cfg["moe"]["quad_ring_deepseek_moe_post_combine_tilize_config"],
+                )
+            else:
+                output_shape = list(combined_out.shape)
+                output_shape[2] = ((output_shape[2] + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+                combined_out = ttnn.tilize_with_val_padding(
+                    combined_out,
+                    output_tensor_shape=output_shape,
+                    pad_value=0.0,
+                    memory_config=cfg["moe"]["quad_ring_deepseek_moe_post_combine_tilize_config"][
+                        "output_memory_config"
+                    ],
+                )
+
+            # conditionally set up for optimized or standard RS pathway
+            deepseek_moe_reduce_scatter = (
                 cfg["moe"]["fabric_config"] == ttnn.FabricConfig.FABRIC_1D_RING
                 and tp_size == 8
                 and num_tokens_per_row == ttnn.TILE_SIZE
-            ):
-                summed_experts = ttnn.experimental.deepseek_moe_fast_reduce_nc(
-                    combined_out,
-                    dim=0,
-                    split_size=combined_out.shape[-1] // tp_size,
-                    output_memory_config=cfg["moe"]["ring_sum_experts_output_memory_config"],
-                )
-                ttnn.deallocate(combined_out)
+            )
+
+            if deepseek_moe_reduce_scatter:
+                reduce_mem_config = cfg["moe"]["ring_sum_experts_output_memory_config"]
+                reduce_split_size = combined_out.shape[-1] // tp_size
+            else:
+                reduce_mem_config = ttnn.L1_MEMORY_CONFIG
+                reduce_split_size = combined_out.shape[-1]
+
+            summed_experts = ttnn.experimental.deepseek_moe_fast_reduce_nc_fused(
+                combined_out,
+                tt_moe_indices_rm,
+                cfg["moe"]["expert_mapping_tensor"],
+                reduce_dim=0,
+                cluster_axis=0,
+                split_size=reduce_split_size,
+                output_memory_config=reduce_mem_config,
+                scores_tensor=tt_moe_scores_rm,
+                num_shared_experts=1,
+            )
+            ttnn.deallocate(combined_out)
+            ttnn.deallocate(tt_moe_scores_rm)
+            ttnn.deallocate(tt_moe_indices_rm)
+
+            if deepseek_moe_reduce_scatter:
                 output = ttnn.experimental.deepseek_moe_reduce_scatter(
                     summed_experts, **cfg["moe"]["ring_final_output_reduce_scatter"]
                 )
             else:
                 ccl_moe = cfg["moe"]["ccl"]
-
-                summed_experts = ttnn.sum(
-                    combined_out, dim=0, keepdim=True, memory_config=cfg["moe"]["sum_experts_output_memory_config"]
-                )
-                ttnn.deallocate(combined_out)
                 output = ttnn.experimental.reduce_scatter_minimal_async(
-                    summed_experts,
+                    summed_experts[0],
                     **ccl_moe.populate_reduce_scatter_runtime_args(cfg["moe"]["final_output_reduce_scatter"]),
                 )
 

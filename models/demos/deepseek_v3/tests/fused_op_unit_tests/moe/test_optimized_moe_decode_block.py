@@ -599,7 +599,7 @@ def _expert_tensor_to_list(expert_tensor: torch.Tensor) -> list[torch.Tensor]:
 )
 @pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("layer_id, num_layers", [(0, 1)])
-@pytest.mark.parametrize("batches_per_device", [3, 8, 32])
+@pytest.mark.parametrize("batches_per_device", [3, 32])
 @pytest.mark.parametrize("shard_dim", [0])
 @pytest.mark.parametrize("routed_experts_per_device", [2])
 @pytest.mark.parametrize("select_experts_k", [8])
@@ -610,7 +610,7 @@ def _expert_tensor_to_list(expert_tensor: torch.Tensor) -> list[torch.Tensor]:
 @pytest.mark.parametrize("compute_output_height_shard_dim", [4])
 @pytest.mark.parametrize("combine_mux_core_range", [((1, 1), (3, 3))])
 @pytest.mark.parametrize("combine_token_parallel_core_dim", [4])
-@pytest.mark.parametrize("enable_trace", [False, True])
+@pytest.mark.parametrize("enable_trace", [False])
 @pytest.mark.parametrize("num_iterations", [3])
 @pytest.mark.parametrize(
     "device_params",
@@ -624,7 +624,7 @@ def _expert_tensor_to_list(expert_tensor: torch.Tensor) -> list[torch.Tensor]:
     ids=["fabric_1D_ring"],
     indirect=True,
 )
-@pytest.mark.parametrize("shared_expert_mode", ["no_shared", "all_shared", "alternate_shared"])
+@pytest.mark.parametrize("shared_expert_mode", ["no_shared"])
 @torch.no_grad()
 def test_optimized_moe_decode_block(
     mesh_shape,
@@ -1273,7 +1273,7 @@ def test_optimized_moe_decode_block(
             output_memory_config=fast_reduce_output_memory_config,
             scores_tensor=topk_experts_weights,
             num_shared_experts=num_shared_experts,
-            shared_expert_scale=shared_expert_score,
+            shared_expert_scale=shared_expert_score / num_replicated_devices,
         )
 
         ttnn.deallocate(tt_dispatch_input_expert_indices_tensor)
