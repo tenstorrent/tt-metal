@@ -140,6 +140,7 @@ CPMAddPackage(
         "YAML_CPP_BUILD_TOOLS OFF"
         "YAML_BUILD_SHARED_LIBS OFF"
     CUSTOM_CACHE_KEY "0_8_0_upstream_patched"
+    FIND_PACKAGE_ARGUMENTS GLOBAL
 )
 
 ############################################################################################################################
@@ -154,6 +155,7 @@ CPMAddPackage(
     OPTIONS
         "INSTALL_GTEST OFF"
         "BUILD_SHARED_LIBS OFF"
+    FIND_PACKAGE_ARGUMENTS GLOBAL
 )
 CPMRegisterPackage("googletest" "1.13.0")
 
@@ -196,7 +198,13 @@ CPMAddPackage(
 # fmt : https://github.com/fmtlib/fmt
 ############################################################################################################################
 
-CPMAddPackage(NAME fmt GITHUB_REPOSITORY fmtlib/fmt GIT_TAG 11.1.4 OPTIONS "CMAKE_MESSAGE_LOG_LEVEL NOTICE")
+CPMAddPackage(
+    NAME fmt
+    GITHUB_REPOSITORY fmtlib/fmt
+    GIT_TAG 11.1.4
+    OPTIONS "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+    FIND_PACKAGE_ARGUMENTS GLOBAL
+)
 
 ############################################################################################################################
 # range-v3 : https://github.com/ericniebler/range-v3
@@ -218,6 +226,18 @@ CPMAddPackage(
 # nanobind : https://github.com/wjakob/nanobind
 ############################################################################################################################
 
+if(CPM_USE_LOCAL_PACKAGES OR CPM_LOCAL_PACKAGES_ONLY)
+    # When using local packages, CPM uses "find_package".
+    # nanobind wants python included before CPM calls "find_package".
+    find_package(
+        Python
+        COMPONENTS
+            Interpreter
+            Development
+        REQUIRED
+    )
+endif()
+
 CPMAddPackage(
     NAME nanobind
     GITHUB_REPOSITORY wjakob/nanobind
@@ -226,6 +246,7 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "NB_USE_SUBMODULE_DEPS ON"
+    FIND_PACKAGE_ARGUMENTS GLOBAL
 )
 
 ############################################################################################################################
@@ -241,6 +262,7 @@ CPMAddPackage(
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "JSON_Install ON"
         "JSON_BuildTests OFF"
+    FIND_PACKAGE_ARGUMENTS GLOBAL
 )
 set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
 
@@ -310,6 +332,7 @@ CPMAddPackage(
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "BENCHMARK_USE_LIBCXX ${ENABLE_LIBCXX}"
         "BENCHMARK_ENABLE_TESTING OFF"
+    FIND_PACKAGE_ARGUMENTS GLOBAL
 )
 
 if(benchmark_ADDED)
@@ -333,6 +356,7 @@ CPMAddPackage(
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE" # Taskflow's CMakeLists.txt is super noisy
         "TF_BUILD_TESTS OFF"
         "TF_BUILD_EXAMPLES OFF"
+    FIND_PACKAGE_ARGUMENTS GLOBAL
 )
 if(Taskflow_ADDED AND NOT TARGET Taskflow::Taskflow)
     target_compile_options(
@@ -357,6 +381,7 @@ CPMAddPackage(
         "FLATBUFFERS_BUILD_TESTS OFF"
         "FLATBUFFERS_SKIP_MONSTER_EXTRA ON"
         "FLATBUFFERS_STRICT_MODE OFF"
+    FIND_PACKAGE_ARGUMENTS GLOBAL
 )
 
 ############################################################################################################################
@@ -384,6 +409,7 @@ CPMAddPackage(
         "SPDLOG_FMT_EXTERNAL_HO ON"
         "SPDLOG_INSTALL ON"
         "BUILD_SHARED_LIBS OFF"
+    FIND_PACKAGE_ARGUMENTS GLOBAL
 )
 set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
 
@@ -397,6 +423,7 @@ CPMAddPackage(
     OPTIONS
         "TT_LOGGER_INSTALL ON"
         "TT_LOGGER_BUILD_TESTING OFF"
+    FIND_PACKAGE_ARGUMENTS GLOBAL
 )
 
 ####################################################################################################################
@@ -414,6 +441,7 @@ CPMAddPackage(
         "PIC_ALWAYS ON"
         "BUILD_TESTING OFF"
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+    FIND_PACKAGE_ARGUMENTS GLOBAL
 )
 
 ####################################################################################################################
@@ -458,7 +486,7 @@ set_target_properties(
 # Cap'n Proto : https://github.com/capnproto/capnproto
 ####################################################################################################################
 CPMAddPackage(
-    NAME capnproto
+    NAME CapnProto
     GITHUB_REPOSITORY capnproto/capnproto
     GIT_TAG
         d135c9ca5e15219eaf131dfce1a41afdbaea9aab # v1.2.0
@@ -470,6 +498,7 @@ CPMAddPackage(
     PATCHES
         capnproto_capture_this.patch
         capnproto_pthread.patch
+    FIND_PACKAGE_ARGUMENTS GLOBAL
 )
 
 ############################################################################################################################
