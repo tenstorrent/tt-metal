@@ -63,13 +63,28 @@ class VoxtralTTMLP:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def __call__(self, x: ttnn.Tensor, *, activation_memory_config=None) -> ttnn.Tensor:
+    def __call__(
+        self,
+        x: ttnn.Tensor,
+        *,
+        activation_memory_config=None,
+        ff1_3_program_config=None,
+        ff2_program_config=None,
+    ) -> ttnn.Tensor:
         act_mem = activation_memory_config or self.activation_memory_config
         _lin_kw = {"dtype": self.output_dtype, "memory_config": act_mem}
         if self.compute_kernel_config is not None:
             _lin_kw["compute_kernel_config"] = self.compute_kernel_config
-        w1_out = ttnn.linear(x, self.w1, **_lin_kw)
-        w3_out = ttnn.linear(x, self.w3, **_lin_kw)
+
+        _ff1_3_kw = dict(_lin_kw)
+        if ff1_3_program_config is not None:
+            _ff1_3_kw["program_config"] = ff1_3_program_config
+        _ff2_kw = dict(_lin_kw)
+        if ff2_program_config is not None:
+            _ff2_kw["program_config"] = ff2_program_config
+
+        w1_out = ttnn.linear(x, self.w1, **_ff1_3_kw)
+        w3_out = ttnn.linear(x, self.w3, **_ff1_3_kw)
 
         if self.exact_silu:
             w1_act = ttnn.silu(w1_out, memory_config=act_mem)
@@ -92,6 +107,6 @@ class VoxtralTTMLP:
             ttnn.deallocate(w1_out)
         ttnn.deallocate(w3_out)
 
-        out = ttnn.linear(w2_in, self.w2, **_lin_kw)
+        out = ttnn.linear(w2_in, self.w2, **_ff2_kw)
         ttnn.deallocate(w2_in)
         return out
