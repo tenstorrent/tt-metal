@@ -79,15 +79,20 @@ class TtVoxtralAudioTower(LightweightModule):
             prefix="encoder",
             device=mesh_device,
         )
-        self.w1 = preprocess_linear_weight(
-            state_dict["multi_modal_projector.linear_1.weight"],
+        # Projector weights on device (transpose for ttnn.linear), matching the validated projector test.
+        self.w1 = ttnn.from_torch(
+            state_dict["multi_modal_projector.linear_1.weight"].t().contiguous(),
             dtype=ttnn.bfloat16,
-            weights_mesh_mapper=weights_mesh_mapper,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
-        self.w2 = preprocess_linear_weight(
-            state_dict["multi_modal_projector.linear_2.weight"],
+        self.w2 = ttnn.from_torch(
+            state_dict["multi_modal_projector.linear_2.weight"].t().contiguous(),
             dtype=ttnn.bfloat16,
-            weights_mesh_mapper=weights_mesh_mapper,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
     def forward(self, input_features):
