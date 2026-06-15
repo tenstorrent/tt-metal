@@ -130,6 +130,19 @@ TEST(KernelSignatureParser, DigitSeparatorNotMistakenForCharLiteral) {
     EXPECT_EQ(sig->fn_param_names, (std::vector<std::string>{"b"}));
 }
 
+// A char literal containing a double-quote must be tracked as a char literal: otherwise the " would
+// open string-mode in strip_noise and swallow the real marker to EOF. Exercises the St::Char branch
+// (the digit-separator test above exercises only the guard that *avoids* entering it).
+TEST(KernelSignatureParser, CharLiteralWithQuoteNotTreatedAsString) {
+    const std::string src =
+        "char q = '\"';\n"
+        "TT_KERNEL void k(uint32_t a) {}\n";
+    auto sig = parse_kernel_main_signature(src);
+    ASSERT_TRUE(sig.has_value());
+    EXPECT_EQ(sig->name, "k");
+    EXPECT_EQ(sig->fn_param_names, (std::vector<std::string>{"a"}));
+}
+
 // Two real markers -> error.
 TEST(KernelSignatureParser, MultipleMarkersThrow) {
     const std::string src = "TT_KERNEL void a(uint32_t x) {}\nTT_KERNEL void b(uint32_t y) {}";
@@ -182,6 +195,40 @@ TEST(KernelSignatureParser, TemplateHelperBeforeEntryNotMistaken) {
     EXPECT_EQ(sig->name, "k");
     EXPECT_TRUE(sig->template_param_names.empty());
     EXPECT_EQ(sig->fn_param_names, (std::vector<std::string>{"a"}));
+}
+
+// --- structural signature errors --------------------------------------------------------------
+// Each of these would also fail JIT compile, but the parser throws first with a precise
+// Metalium-level message rather than letting a confusing compiler error land on the generated shim.
+
+// A '>' adjacent to the marker with no matching '<' -> unbalanced angle brackets.
+TEST(KernelSignatureParser, UnbalancedTemplateAnglesThrow) {
+    const std::string src = "a > TT_KERNEL void k() {}";
+    EXPECT_THROW(parse_kernel_main_signature(src), std::runtime_error);
+}
+
+// A '<...>' adjacent to the marker that isn't introduced by `template` -> error.
+TEST(KernelSignatureParser, AngleBracketsWithoutTemplateKeywordThrow) {
+    const std::string src = "foo<int> TT_KERNEL void k() {}";
+    EXPECT_THROW(parse_kernel_main_signature(src), std::runtime_error);
+}
+
+// `void` immediately followed by '(' -> no entry-function name.
+TEST(KernelSignatureParser, MissingFunctionNameThrows) {
+    const std::string src = "TT_KERNEL void (uint32_t a) {}";
+    EXPECT_THROW(parse_kernel_main_signature(src), std::runtime_error);
+}
+
+// No '(' after the entry name -> error.
+TEST(KernelSignatureParser, MissingOpenParenThrows) {
+    const std::string src = "TT_KERNEL void k uint32_t a {}";
+    EXPECT_THROW(parse_kernel_main_signature(src), std::runtime_error);
+}
+
+// '(' with no matching ')' -> unbalanced parentheses.
+TEST(KernelSignatureParser, UnbalancedParensThrow) {
+    const std::string src = "TT_KERNEL void k(uint32_t a {}";
+    EXPECT_THROW(parse_kernel_main_signature(src), std::runtime_error);
 }
 
 // Build a large "fake" kernel source: many functions, big comment blocks, string literals,
