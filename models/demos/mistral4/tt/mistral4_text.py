@@ -456,8 +456,7 @@ class TtMistral4MoE(LightweightModule):
                 contrib = ttnn.mul(y, ttnn.slice(W, [0, 0, e], [B, S, e + 1]))
                 acc = contrib if acc is None else ttnn.add(acc, contrib)
             experts = acc
-        sh = ttnn.linear(ttnn.mul(ttnn.silu(ttnn.linear(x, self.w_sg)), ttnn.linear(x, self.w_su)), self.w_sd)
-        return ttnn.add(experts, sh)
+        return ttnn.add(experts, self._shared(x))
 
     def _shared(self, x):
         return ttnn.linear(ttnn.mul(ttnn.silu(ttnn.linear(x, self.w_sg)), ttnn.linear(x, self.w_su)), self.w_sd)

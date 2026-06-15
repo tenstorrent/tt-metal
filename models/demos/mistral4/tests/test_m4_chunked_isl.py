@@ -17,11 +17,11 @@ from models.demos.mistral4.tests.m4_text_reference import load_m4_text_reference
 from models.demos.mistral4.tt.mistral4_generator import _repl
 from models.demos.mistral4.tt.mistral4_text import TtMistral4TextModel
 
-N_LAYERS = 2
+N_LAYERS = int(os.environ.get("M4_CHUNK_LAYERS", "2"))  # set 36 for the full-depth TTFT numbers
 B = 1
 CHUNK = 2048  # query window per iteration (fits L1 like the 4K single-shot); paging block stays 128
 BLOCK = 128
-ISLS = [4096, 8192, 16384]
+ISLS = [int(s) for s in os.environ.get("M4_CHUNK_ISLS", "4096,8192,16384").split(",")]
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
@@ -61,4 +61,4 @@ def test_m4_chunked_isl(mesh_device, reset_seeds):
             ttnn.deallocate(paged_kv[0])
             ttnn.deallocate(paged_kv[1])
     logger.info(f"A6 chunked-prefill largest ISL that RAN: {largest} (single-shot prefill L1-caps ~4K)")
-    assert largest >= 16384, f"chunked prefill did not reach 16K, only {largest}"
+    assert largest >= max(ISLS), f"chunked prefill did not reach {max(ISLS)}, only {largest}"

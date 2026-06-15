@@ -31,7 +31,7 @@ PER = EXPERTS // DEVICES  # 16 local experts/device
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30000000}], indirect=True
 )
-def test_m4_moe_roundtrip_2x4(mesh_device, reset_seeds):
+def test_m4_moe_roundtrip(mesh_device, reset_seeds):
     torch.manual_seed(0)
     x = torch.randn(BATCH, HIDDEN) * 0.1
     gup_w = torch.randn(EXPERTS, HIDDEN, 2 * INTERM) * 0.02  # [E,H,2I]
