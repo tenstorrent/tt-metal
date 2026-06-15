@@ -516,6 +516,10 @@ def _run_perf_benchmark(model, mesh_device, expected, batch_size, case_name):
         page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, max_num_blocks_per_user)
 
         prompts = load_input_prompts(batch_size)
+        # Natural-length tokenization (matches TTTv1 preprocess_inputs_prefill): each prompt is
+        # encoded at its real length and the executor buckets it via get_padded_prefill_len. The
+        # max_seq_len-reserve clip is a cap for over-long prompts, never a pad-up target — these
+        # sample prompts are ~90-125 tokens -> 128 bucket -> traced.
         input_tokens, prompt_lens = preprocess_qwen_chat_prompts(
             prompts, tokenizer, max_seq_len=max_seq_len, reserve_decode_tokens=128
         )
