@@ -1978,8 +1978,13 @@ void sdpa_standard_v2(
             // With sliding-window loop narrowing, the loop's last chunk may not be the tensor's final K chunk.
             // A user-provided mask processes the full Sk_chunk_t (padded cols are neginf in the dense
             // mask), so it never takes the partial-tile narrowing.
-            const bool is_padded =
-                !is_causal_sdpa && !use_provided_mask && (k_chunk == k_num_chunks - 1) && (padded_k_tiles_inner > 0);
+            // The non-causal last K chunk needs the lightweight padding mask when it carries either
+            // fully-padded tiles (padded_k_tiles_inner > 0) OR only a partial boundary tile
+            // (global_n_partial_col > 0). The partial-only case — Sk % TILE != 0 with no fully-padded
+            // tile, e.g. ViT seq 197 with a single K chunk — still leaves padded columns in the final
+            // tile that must be neginf-masked; gating solely on padded_k_tiles_inner skipped them.
+            const bool is_padded = !is_causal_sdpa && !use_provided_mask && (k_chunk == k_num_chunks - 1) &&
+                                   (padded_k_tiles_inner > 0 || lw_mask.global_n_partial_col > 0);
             uint32_t chunk_active_Sk = is_padded ? last_chunk_Sk : Sk_chunk_t;
             bool chunk_reduce_trigger = is_padded ? can_reduce_trigger_padded : can_reduce_trigger;
             uint32_t chunk_sbw = is_padded ? padded_sbw : full_sbw;
