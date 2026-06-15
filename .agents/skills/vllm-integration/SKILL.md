@@ -110,6 +110,14 @@ python -m models.common.readiness_check.run_vllm_server \
 
 The runner enforces on-device sampling (`sample_on_device_mode: all` in the TT plugin config). The full-model stage must already provide traced token-out split sampling. If it does not, return to `$full-model`; this stage should only adapt that contract to vLLM.
 
+## No Tracy Or Perf-Report In vLLM Stages
+
+Do not collect Tracy, `tt-perf-report`, or `TT_METAL_DEVICE_PROFILER` metrics from vLLM integration or optimized-vLLM serving runs. Do not set profiler env vars for the live server, do not run `python -m tracy` around `run_vllm_server`, do not run a serving-adapter profile just to produce a profiler table, and do not call `ttnn.ReadDeviceProfiler(mesh)` as part of vLLM-stage closure.
+
+The vLLM stages have repeatedly wedged T3K machines during profiler/device-health closure. The useful vLLM evidence is the serving-path evidence produced by `run_vllm_server`: sampling results, qualitative outputs, degenerate-output checks, server logs, and benchmark JSON with TTFT, ITL, aggregate output throughput, and mean per-user decode t/s/u. Use existing full-model or reduced non-serving profiles from earlier stages for device-op/root-cause context. If those profiles are missing, record that limitation; do not recreate them inside the vLLM stage.
+
+For optimized-vLLM, optimize with same-harness serving before/after metrics and contract checks: async split, nonblocking trace replay, stale input coverage, on-device sampling, no host greedy argmax, no full-logits readback, and no unnecessary page-table/token/current-position refresh. A vLLM stage is not incomplete merely because it lacks Tracy, `tt-perf-report`, or live-serving device-profiler artifacts.
+
 Check stages:
 
 - `sampling`: runs the canonical TT plugin pytest suite against the live server. `--sampling-profile full` runs the whole suite; `--sampling-profile smoke` runs a small integration sanity subset for slow bring-up loops.
@@ -130,9 +138,7 @@ Reproducibility-only sampling failures are out of scope when they are the only f
 
 If vLLM crashes mid-run, kill leftover `EngineCore` or `vllm.entrypoints` processes before retrying; they can hold chip locks after `tt-smi -r`.
 
-Device-profiler-enabled serving (`TT_METAL_DEVICE_PROFILER=1`) can conflict with the serving runtime. If it dies at EngineCore startup with Ethernet-core IO or ARC startup timeouts, treat that as a profiler limitation first, not as a serving regression. Kill leftover server processes, run one bounded `tt-smi -r`, and retry once only if `tt-smi -ls --local` still returns normally.
-
-Do not escalate a failed serving profiler run into repeated watcher/profiler/reset attempts. The dangerous T3K pattern seen in Phi-3.5 Mini was: vLLM/serving profiler or watcher failure, then a full in-process 32-layer `Phi3ForCausalLM` serving-adapter profile under device-profiler env such as `TT_METAL_DEVICE_PROFILER=1`, `TT_METAL_PROFILER_CPP_POST_PROCESS=1`, `TT_METAL_PROFILER_MID_RUN_DUMP=1`, `TT_METAL_PROFILER_TRACE_TRACKING=1`, and `TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=5000`, then explicit `ttnn.ReadDeviceProfiler(mesh)`. With remote Ethernet/ARC/ERISC signatures such as `Timeout waiting for Ethernet core service remote IO request`, `ETH core heartbeat check failed`, `Unexpected ERISC Response Flags`, `Read 0xffffffff from ARC scratch`, or ARC lock/readback waits, this can leave the machine undiscoverable: `tt-smi -ls --local` hangs and reset may hang. In that state, stop the stage, preserve the profiler/watcher/server logs, mark the result `hardware-profiler-limited`, and ask the monitor to reboot the physical Docker host. On `wh-lb-90`, direct `sudo /sbin/reboot` on the host restored all 8 devices and full 2x4 mesh open; `ird reboot --force` had reported success but did not reset host uptime or recover `tt-smi`.
+If a profiler run is accidentally started and fails, do not escalate it into repeated watcher/profiler/reset attempts. Kill leftover server processes. If `tt-smi -ls --local` or reset hangs, or if logs show remote Ethernet/ARC/ERISC failures such as `Timeout waiting for Ethernet core service remote IO request`, `ETH core heartbeat check failed`, `Unexpected ERISC Response Flags`, `Read 0xffffffff from ARC scratch`, or ARC lock/readback waits, stop the stage, preserve the logs, mark the result `hardware-profiler-limited`, and ask the monitor to reboot the physical Docker host. On `wh-lb-90`, direct `sudo /sbin/reboot` on the host restored all 8 devices and full 2x4 mesh open; `ird reboot --force` had reported success but did not reset host uptime or recover `tt-smi`.
 
 Transient CCL/fabric link errors immediately after a failed multi-device run still need a device reset and one retry before being treated as hardware evidence, as long as `tt-smi` remains responsive and the failure is not part of the profiler/watcher pattern above.
 
