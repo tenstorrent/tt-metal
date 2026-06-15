@@ -270,6 +270,13 @@ occupancy: a producer that reserves+pushes but is never consumed ends with pages
 occupied yet fully flushed (`reserved==0, waited==0`) and is correctly **not** flagged
 (globally-allocated/sharded output CBs, producer-only programs that DMA their result out).
 *Diagnostic:* `Dirty CB Detected: Core (x, y) CB <id> was not flushed! Kernel (processor P) exited with <N> page(s) reserved … without … cb_push_back, and <M> page(s) waited … without … cb_pop_front`.
+*Per-check opt-out:* set `TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB=1` (non-empty, not `0`)
+to suppress **only** this check while every other sanitizer stays active under the
+master switch. `sweep_per_kernel_dirty_cbs` returns early when
+`dirty_cb_check_skipped()` (host_sanitizers.hpp) is true. Use it to run a full
+regression past a kernel with a known un-flushed-CB bug without losing OOB /
+Padding / Object-Intent / CB-Boundary coverage. The `test_cb_leak.cpp` death tests
+`unsetenv` it so they still validate the check even when it is exported globally.
 *Exercised by:* `test_cb_leak.cpp` (reserve-without-push, wait-without-pop, and a balanced no-violation control).
 
 ### 12. Object Intent Violation
@@ -313,5 +320,5 @@ offset (same address space, no normalization), so the match is exact.
 | CB Reservation Overflow | `[emule] api/cb_api.h` | `cb_reserve_back(n)` with `n > num_pages` (always on) |
 | NoC pending on pop | `[emule] api/cb_api.h` + `dataflow_api.h` | `cb_pop_front` while `__emule_pending_noc_reads > 0` |
 | NOC Transfer Alignment | `[emule] api/dataflow/dataflow_api.h` | each endpoint vs its own absolute alignment (16 / 32 / 64 B) |
-| Dirty CB | `[metal] emulated_program_runner.cpp` (+ `[emule] api/cb_api.h`) | `reserved_pages > 0 \|\| waited_pages > 0` at kernel exit |
+| Dirty CB | `[metal] emulated_program_runner.cpp` (+ `[emule] api/cb_api.h`) | `reserved_pages > 0 \|\| waited_pages > 0` at kernel exit — opt out with `TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB=1` |
 | Object Intent | `[metal] emulated_program_runner.cpp` | post-launch `memcmp` of buffers never resolved into |

@@ -2307,6 +2307,12 @@ inline void sweep_per_kernel_dirty_cbs(
     if (!oob.asan_enabled || cb_array == nullptr) {
         return;
     }
+    // Per-check opt-out: TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB suppresses only this
+    // check so a regression run can proceed past a known un-flushed-CB bug while
+    // every other sanitizer stays active. See host_sanitizers.hpp.
+    if (dirty_cb_check_skipped()) {
+        return;
+    }
     for (uint32_t cb_id = 0; cb_id < EMULE_NUM_CBS; ++cb_id) {
         if (cb_array[cb_id].num_pages == 0) {
             continue;

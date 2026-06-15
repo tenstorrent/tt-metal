@@ -25,6 +25,18 @@ inline bool emule_asan_enabled() {
     return v != nullptr && v[0] != '\0' && v[0] != '0';
 }
 
+// Per-check opt-out for the Dirty CB (per-kernel-exit) sanitizer. When set
+// (non-empty, not "0"), the runner skips `sweep_per_kernel_dirty_cbs` while
+// every other sanitizer stays active under the master switch. This lets a full
+// regression run proceed past kernels with a known un-flushed-CB bug without
+// disabling OOB / Padding / Object-Intent / CB-Boundary / etc. Re-read every
+// call (same rationale as the master switch — a static cache would stick to the
+// first observed value across combined gtest runs).
+inline bool dirty_cb_check_skipped() {
+    const char* v = std::getenv("TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB");
+    return v != nullptr && v[0] != '\0' && v[0] != '0';
+}
+
 inline void check_buffer_allocated(const tt::tt_metal::Buffer& buffer, const char* op) {
     if (!emule_asan_enabled()) {
         return;
