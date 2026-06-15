@@ -104,7 +104,7 @@ ttnn:
 
 train:
   smoke:
-    wh_n150_civ2: 10
+    wh_n150_civ2: 20
   unit:
     wh_n150_civ2: 90
     wh_n300_civ2: 90
