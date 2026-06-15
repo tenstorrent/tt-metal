@@ -318,6 +318,7 @@ private:
         const std::shared_ptr<distributed::MeshDevice>& mesh,
         distributed::MeshSocket socket,
         std::map<distributed::MeshCoordinate, CoreCoord> service_cores,
+        std::map<distributed::MeshCoordinate, DeviceAddr> receiver_tensor_addrs,
         Tensor backing,
         const D2DStreamConfig& cfg);
     static std::unique_ptr<D2DStreamServiceReceiver> finalize_receiver(

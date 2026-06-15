@@ -88,25 +88,49 @@ std::vector<distributed::SocketConnection> build_connections(
     return connections;
 }
 
+// Per-coord base address of a backing tensor's device buffer. The sender uses the
+// receiver's map as the direct fabric-write destination per coord.
+std::map<distributed::MeshCoordinate, DeviceAddr> collect_backing_addrs(
+    const Tensor& backing, const std::vector<distributed::MeshCoordinate>& coords) {
+    std::map<distributed::MeshCoordinate, DeviceAddr> addrs;
+    for (const auto& coord : coords) {
+        const Buffer* buf = backing.mesh_buffer().get_device_buffer(coord);
+        TT_FATAL(buf != nullptr, "D2DStreamService: backing device buffer missing for coord {}", coord);
+        addrs.emplace(coord, buf->address());
+    }
+    return addrs;
+}
+
 // DistributedContext tag for the multi-host service-core exchange. Distinct from
 // any MeshSocket descriptor-exchange tag; the exchange is fully sequential before
 // the handshake, so there is no concurrent (source, tag) collision.
 constexpr int kServiceCoreExchangeTag = 0x44324443;  // 'D2DC'
 
-// Multi-host pre-handshake: trade the locally-claimed service cores with the peer
-// process so each side can build the identical SocketConnection list. The payload
-// is [tensor_page_size, num_pages, socket_page_size, num_socket_pages,
-//     metadata_size_bytes, share_fabric_links, x0, y0, x1, y1, ...] in `coords`
-// order. The six fingerprint fields catch any peer mismatch (global_spec, mapper,
-// fifo_size, metadata, share_fabric_links) before the fabric hangs silently.
-// Returns the peer's per-coord service cores. is_sender orders send/recv to
-// avoid a symmetric-blocking deadlock.
-std::map<distributed::MeshCoordinate, CoreCoord> exchange_service_cores(
+// Result of the pre-handshake exchange: the peer's per-coord service cores and
+// per-coord backing tensor base addresses. The sender uses the receiver's backing
+// addresses as the direct fabric-write destinations — Step 1 lands data straight in
+// the receiver DRAM tensor (no L1 FIFO copy). The receiver ignores the sender's.
+struct ExchangedEndpoint {
+    std::map<distributed::MeshCoordinate, CoreCoord> service_cores;
+    std::map<distributed::MeshCoordinate, DeviceAddr> backing_addrs;
+};
+
+// Multi-host pre-handshake: trade the locally-claimed service cores AND the local
+// backing tensor base addresses with the peer process so each side can build the
+// identical SocketConnection list and the sender can target the receiver's DRAM
+// tensor directly. The payload is [tensor_page_size, num_pages, socket_page_size,
+//     num_socket_pages, metadata_size_bytes, share_fabric_links,
+//     x0, y0, addr0, x1, y1, addr1, ...] in `coords` order. The six fingerprint
+// fields catch any peer mismatch (global_spec, mapper, fifo_size, metadata,
+// share_fabric_links) before the fabric hangs silently. is_sender orders send/recv
+// to avoid a symmetric-blocking deadlock.
+ExchangedEndpoint exchange_service_cores(
     const std::shared_ptr<distributed::multihost::DistributedContext>& ctx,
     bool is_sender,
     distributed::multihost::Rank peer_rank,
     const std::vector<distributed::MeshCoordinate>& coords,
     const std::map<distributed::MeshCoordinate, CoreCoord>& local_cores,
+    const std::map<distributed::MeshCoordinate, DeviceAddr>& local_backing_addrs,
     uint32_t tensor_page_size,
     uint32_t num_pages,
     uint32_t socket_page_size,
@@ -114,7 +138,7 @@ std::map<distributed::MeshCoordinate, CoreCoord> exchange_service_cores(
     uint32_t metadata_size_bytes,
     bool share_fabric_links) {
     std::vector<uint32_t> out;
-    out.reserve(6 + 2 * coords.size());
+    out.reserve(6 + 3 * coords.size());
     out.push_back(tensor_page_size);
     out.push_back(num_pages);
     out.push_back(socket_page_size);
@@ -125,6 +149,7 @@ std::map<distributed::MeshCoordinate, CoreCoord> exchange_service_cores(
         const auto core = local_cores.at(c);
         out.push_back(static_cast<uint32_t>(core.x));
         out.push_back(static_cast<uint32_t>(core.y));
+        out.push_back(static_cast<uint32_t>(local_backing_addrs.at(c)));
     }
     std::vector<uint32_t> in(out.size(), 0u);
 
@@ -174,9 +199,10 @@ std::map<distributed::MeshCoordinate, CoreCoord> exchange_service_cores(
         in_metadata_size_bytes,
         in_share_fabric_links);
 
-    std::map<distributed::MeshCoordinate, CoreCoord> peer;
+    ExchangedEndpoint peer;
     for (size_t i = 0; i < coords.size(); ++i) {
-        peer.emplace(coords[i], CoreCoord{in[6 + 2 * i], in[6 + 2 * i + 1]});
+        peer.service_cores.emplace(coords[i], CoreCoord{in[6 + 3 * i], in[6 + 3 * i + 1]});
+        peer.backing_addrs.emplace(coords[i], static_cast<DeviceAddr>(in[6 + 3 * i + 2]));
     }
     return peer;
 }
@@ -748,6 +774,7 @@ Program build_sender_program(
     uint32_t sender_metadata_l1_addr,
     bool share_fabric_links,
     uint32_t link_grant_addr,
+    uint32_t receiver_tensor_addr,
     const tt::tt_fabric::FabricNodeId& sender_node,
     const tt::tt_fabric::FabricNodeId& receiver_node,
     uint32_t link_index) {
@@ -804,12 +831,14 @@ Program build_sender_program(
         });
 
     // The sender writes bulk data downstream, so its fabric connection runs
-    // sender -> receiver. The receiver NoC coords come from the socket's
-    // downstream encoding at runtime, so the fabric-connection args are the only
-    // runtime args.
+    // sender -> receiver. The fabric-connection args come first (the kernel's
+    // build_from_args consumes them), followed by the per-coord receiver backing
+    // tensor base address (the direct fabric-write destination — varies per device
+    // because each receiver device allocates its own tensor).
     std::vector<uint32_t> rt_args;
     tt::tt_fabric::append_fabric_connection_rt_args(
         sender_node, receiver_node, link_index, program, service_core, rt_args);
+    rt_args.push_back(receiver_tensor_addr);
     SetRuntimeArgs(program, kernel, service_core, rt_args);
     return program;
 }
@@ -838,6 +867,7 @@ SenderSideResources build_sender_side(
     const std::shared_ptr<distributed::MeshDevice>& mesh,
     const distributed::MeshSocket& sender_socket,
     const std::map<distributed::MeshCoordinate, CoreCoord>& service_cores,
+    const std::map<distributed::MeshCoordinate, DeviceAddr>& receiver_tensor_addrs,
     const Tensor& backing,
     const std::vector<distributed::MeshCoordinate>& coords,
     const CommonPlan& common,
@@ -924,6 +954,7 @@ SenderSideResources build_sender_side(
                 common.metadata_enabled ? static_cast<uint32_t>(metadata_addrs.at(coord)) : 0u,
                 cfg.share_fabric_links,
                 cfg.share_fabric_links ? static_cast<uint32_t>(link_grant_addrs.at(coord)) : 0u,
+                static_cast<uint32_t>(receiver_tensor_addrs.at(coord)),
                 sender_node,
                 receiver_node,
                 links.front()));
@@ -1069,6 +1100,7 @@ std::unique_ptr<D2DStreamServiceSender> D2DStreamService::finalize_sender(
     const std::shared_ptr<distributed::MeshDevice>& mesh,
     distributed::MeshSocket socket,
     std::map<distributed::MeshCoordinate, CoreCoord> service_cores,
+    std::map<distributed::MeshCoordinate, DeviceAddr> receiver_tensor_addrs,
     Tensor backing,
     const D2DStreamConfig& cfg) {
     // Release the claimed cores if we throw before the handle owns them; on success
@@ -1078,7 +1110,8 @@ std::unique_ptr<D2DStreamServiceSender> D2DStreamService::finalize_sender(
 
     const auto common = CMAKE_UNIQUE_NAMESPACE::derive_common_plan(cfg, backing);
     const auto& coords = backing.tensor_topology().mesh_coords();
-    auto res = CMAKE_UNIQUE_NAMESPACE::build_sender_side(mesh, socket, service_cores, backing, coords, common, cfg);
+    auto res = CMAKE_UNIQUE_NAMESPACE::build_sender_side(
+        mesh, socket, service_cores, receiver_tensor_addrs, backing, coords, common, cfg);
 
     auto impl = std::make_unique<D2DStreamServiceSender::Impl>(D2DStreamServiceSender::Impl{
         .mesh_device = mesh,
@@ -1198,9 +1231,16 @@ D2DStreamService::create_pair(
     // Build + assemble each side from its socket endpoint. finalize_* is shared
     // with the multi-host factories and does NOT launch (so we control the order
     // below). The service cores move into the handle Impls here, emptying the maps
-    // the guards above reference.
-    auto sender_handle =
-        finalize_sender(sender_mesh, std::move(sender_socket), std::move(sender_service_cores), sender_backing, cfg);
+    // the guards above reference. Single-host knows the receiver tensor addresses
+    // directly (both meshes are local) — no exchange needed.
+    auto receiver_tensor_addrs = CMAKE_UNIQUE_NAMESPACE::collect_backing_addrs(receiver_backing, mo.coords);
+    auto sender_handle = finalize_sender(
+        sender_mesh,
+        std::move(sender_socket),
+        std::move(sender_service_cores),
+        std::move(receiver_tensor_addrs),
+        sender_backing,
+        cfg);
     auto receiver_handle = finalize_receiver(
         receiver_mesh, std::move(receiver_socket), std::move(receiver_service_cores), receiver_backing, cfg);
 
@@ -1245,20 +1285,26 @@ std::unique_ptr<D2DStreamServiceSender> D2DStreamService::create_sender(
 
     const auto common = CMAKE_UNIQUE_NAMESPACE::derive_common_plan(cfg, sender_backing);
 
-    // Trade claimed service cores with the receiver process so both sides build the
-    // identical SocketConnection list (the MeshSocket handshake asserts they match).
-    auto receiver_service_cores = CMAKE_UNIQUE_NAMESPACE::exchange_service_cores(
+    // Trade claimed service cores AND backing tensor addresses with the receiver
+    // process so both sides build the identical SocketConnection list (the MeshSocket
+    // handshake asserts they match) and the sender learns the receiver's per-coord
+    // DRAM tensor addresses (its direct fabric-write destinations).
+    auto sender_backing_addrs = CMAKE_UNIQUE_NAMESPACE::collect_backing_addrs(sender_backing, mo.coords);
+    auto peer = CMAKE_UNIQUE_NAMESPACE::exchange_service_cores(
         ctx,
         /*is_sender=*/true,
         endpoints.receiver_rank,
         mo.coords,
         sender_service_cores,
+        sender_backing_addrs,
         common.tensor_page_size,
         sender_backing.buffer()->num_pages(),
         common.plan.socket_page_size,
         common.plan.num_socket_pages,
         common.metadata_size_bytes,
         cfg.share_fabric_links);
+    auto receiver_service_cores = std::move(peer.service_cores);
+    auto receiver_tensor_addrs = std::move(peer.backing_addrs);
 
     // Build the SENDER endpoint. The per-endpoint MeshSocket ctor derives the
     // sender/receiver mesh-ids from the ranks, detects this process as the sender,
@@ -1272,8 +1318,13 @@ std::unique_ptr<D2DStreamServiceSender> D2DStreamService::create_sender(
 
     // Build + assemble (shared with create_pair). The service cores move into the
     // handle Impl here, emptying the map sender_guard references.
-    auto sender_handle =
-        finalize_sender(sender_mesh, std::move(sender_socket), std::move(sender_service_cores), sender_backing, cfg);
+    auto sender_handle = finalize_sender(
+        sender_mesh,
+        std::move(sender_socket),
+        std::move(sender_service_cores),
+        std::move(receiver_tensor_addrs),
+        sender_backing,
+        cfg);
     EnqueueMeshWorkload(
         sender_handle->impl_->mesh_device->mesh_command_queue(), *sender_handle->impl_->workload, /*blocking=*/false);
     sender_handle->impl_->launched = true;
@@ -1305,18 +1356,24 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::create_receiver(
 
     const auto common = CMAKE_UNIQUE_NAMESPACE::derive_common_plan(cfg, receiver_backing);
 
-    auto sender_service_cores = CMAKE_UNIQUE_NAMESPACE::exchange_service_cores(
+    // Trade service cores + backing addresses. The receiver sends its own backing
+    // addresses (the sender needs them as fabric-write destinations) and ignores the
+    // sender's in return.
+    auto receiver_backing_addrs = CMAKE_UNIQUE_NAMESPACE::collect_backing_addrs(receiver_backing, mo.coords);
+    auto peer = CMAKE_UNIQUE_NAMESPACE::exchange_service_cores(
         ctx,
         /*is_sender=*/false,
         endpoints.sender_rank,
         mo.coords,
         receiver_service_cores,
+        receiver_backing_addrs,
         common.tensor_page_size,
         receiver_backing.buffer()->num_pages(),
         common.plan.socket_page_size,
         common.plan.num_socket_pages,
         common.metadata_size_bytes,
         cfg.share_fabric_links);
+    auto sender_service_cores = std::move(peer.service_cores);
 
     auto connections =
         CMAKE_UNIQUE_NAMESPACE::build_connections(mo.coords, sender_service_cores, receiver_service_cores);

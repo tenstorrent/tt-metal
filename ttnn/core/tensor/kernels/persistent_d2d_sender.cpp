@@ -10,18 +10,37 @@
 // service kernel drains it over tt-fabric into the downstream receiver's socket
 // FIFO.
 //
-// Each outer-loop iteration:
-//   1. waits for the sender worker grid (data_ready_counter reaches
-//      num_workers more increments) — termination-aware,
-//   2. drains one full tensor's worth of data: num_socket_pages socket pages,
-//      each = pages_per_chunk tensor pages staged DRAM -> scratch CB then
-//      fabric-written CB -> receiver FIFO (socket_reserve / push /
-//      fabric_socket_notify_receiver per page),
-//   3. multicast-incs consumed_sem on the sender worker grid so the workers can
-//      overwrite the backing tensor with the next iteration.
+// Step 1 (direct-DRAM): the data lands STRAIGHT in the receiver's DRAM backing
+// tensor — there is no receiver-side L1 socket FIFO copy. The MeshSocket is kept
+// only for the cross-process rendezvous/routing and for its two config words,
+// which are repurposed as monotonic per-transfer counters:
+//   * bytes_sent  (receiver config): the sender Flush-atomic-incs it once per
+//     transfer = "the full tensor (+ optional metadata) has landed in your DRAM".
+//     The Flush flag makes the receiver EDM router drain this link's payload
+//     writes to DRAM before applying the inc, so the inc implies every page is
+//     present.
+//   * bytes_acked (sender config): the receiver atomic-incs it once per transfer
+//     after its workers have consumed = "you may overwrite the receiver tensor".
 //
-// Single RISC (RISCV_0). The fabric connection is opened once at entry and held
-// for the kernel's lifetime; never reopened mid-loop.
+// Each outer-loop iteration:
+//   1. idle-waits until granted the link (lease), the sender worker grid has
+//      produced (data_ready_counter += num_workers), AND the receiver has consumed
+//      the previous transfer (outstanding = sent - acked < buffer depth, computed as
+//      a wrap-safe unsigned diff since both counters wrap) — termination-aware. This
+//      bytes_acked gate is the single-buffer overwrite guard (Step 3 double-buffers
+//      the receiver tensor to remove this serialization).
+//   2. writes one full tensor's worth of data directly to the receiver DRAM tensor:
+//      num_socket_pages chunks, each = pages_per_chunk tensor pages staged
+//      DRAM -> scratch CB then fabric-written per page to its DRAM home
+//      (output_tensor_accessor.get_noc_addr(page)). No socket_reserve/push.
+//   3. (optional) fabric-writes the metadata blob to the receiver's vestigial
+//      socket-FIFO L1 (the receiver mcasts it to its worker grid).
+//   4. Flush-atomic-incs the receiver bytes_sent counter (data-landed signal).
+//   5. multicast-incs consumed_sem on the sender worker grid so the workers can
+//      overwrite the SENDER backing tensor with the next iteration.
+//
+// Single RISC (RISCV_0). Fabric connection: OWN mode opens once at entry; LEASE
+// mode opens per granted transfer and closes after.
 
 #include <cstdint>
 
@@ -68,16 +87,18 @@ constexpr uint32_t share_fabric_links = get_compile_time_arg_val(21);
 constexpr uint32_t link_grant_addr = get_compile_time_arg_val(22);
 constexpr auto input_tensor_accessor_args = TensorAccessorArgs<23>();
 
-// Emit one socket page (socket_page_size bytes) from a contiguous L1 source to
-// the downstream FIFO over fabric, split into <= fabric_max_payload_size
-// packets. Adapted from send_async's sender_writer.cpp::write_data_to_remote_core
+// Emit `size` bytes from a contiguous L1 source to a single remote NoC address
+// over fabric, split into <= fabric_max_payload_size packets. Used for both a
+// tensor page (its DRAM home in the receiver backing tensor) and the optional
+// metadata blob. Adapted from send_async's sender_writer.cpp::write_data_to_remote_core
 // (CB push/pop dropped — the persistent kernel owns the single-slot scratch CB).
-FORCE_INLINE void fabric_write_socket_page(
+FORCE_INLINE void fabric_write_bytes(
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
     uint64_t dst_addr,
     uint32_t l1_src_addr,
+    uint32_t size,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* data_packet_header_addr) {
-    uint32_t remaining = socket_page_size;
+    uint32_t remaining = size;
     while (remaining > 0) {
         const uint32_t packet_size = remaining > fabric_max_payload_size ? fabric_max_payload_size : remaining;
         data_packet_header_addr->to_noc_unicast_write(NocUnicastCommandHeader{dst_addr}, packet_size);
@@ -95,6 +116,11 @@ void kernel_main() {
     size_t rt_args_idx = 0;
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+
+    // Per-coord base address of the receiver's DRAM backing tensor (the direct
+    // fabric-write destination). Appended after the fabric-connection args by
+    // build_sender_program; varies per device.
+    const uint32_t receiver_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
 
     // Two fabric headers in the packet-header CB: one for the data writes, one for
     // the socket control-flow notify. Set up before any open — all L1 writes, no
@@ -117,11 +143,18 @@ void kernel_main() {
     // into the packet-header CB once here and reused across every (re-)open of the
     // fabric connection — no fabric connection is required to set it.
     sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
+    // Both headers route to the same downstream chip: the data header carries the
+    // bulk page writes, the socket header carries the data-landed atomic-inc.
     fabric_set_unicast_route(data_packet_header_addr, downstream_enc);
+    fabric_set_unicast_route(socket_packet_header_addr, downstream_enc);
     const uint32_t receiver_noc_x = downstream_enc.d2d.downstream_noc_x;
     const uint32_t receiver_noc_y = downstream_enc.d2d.downstream_noc_y;
 
+    // The sender backing tensor (read source) and the receiver backing tensor
+    // (fabric-write destination) share the per-shard spec, so one set of accessor
+    // args serves both — only the base address differs.
     auto input_tensor_accessor = TensorAccessor(input_tensor_accessor_args, input_tensor_addr);
+    auto output_tensor_accessor = TensorAccessor(input_tensor_accessor_args, receiver_tensor_addr);
     const uint32_t cb_l1_addr = get_write_ptr(scratch_cb_index);
 
     volatile tt_l1_ptr uint32_t* termination_semaphore =
@@ -129,6 +162,15 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* data_ready_counter =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(data_ready_counter_addr);
     volatile tt_l1_ptr uint32_t* link_grant = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(link_grant_addr);
+
+    // bytes_acked (this sender's config word): the receiver atomic-incs it per
+    // consumed transfer = "you may overwrite the receiver tensor". The overwrite
+    // gate below spins on it. bytes_sent lives on the RECEIVER; the sender Flush-
+    // atomic-incs it after a transfer lands (data-landed signal).
+    volatile tt_l1_ptr uint32_t* bytes_acked =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_socket.bytes_acked_base_addr);
+    const uint64_t recv_bytes_sent_noc_addr =
+        get_noc_addr(receiver_noc_x, receiver_noc_y, sender_socket.downstream_bytes_sent_addr);
 
     // OWN mode: hold the fabric connection for the kernel's whole life (open now).
     // LEASE mode: hold nothing until granted a turn — opened per transfer below.
@@ -149,15 +191,25 @@ void kernel_main() {
     }
 
     uint32_t last_data_ready = 0;
+    // Monotonic count of transfers issued. It (and the receiver's bytes_acked) wraps
+    // over the service's persistent lifetime, so every comparison against it uses a
+    // wrap-safe unsigned DIFFERENCE — never a direct `<`/`>`, which mis-orders across
+    // the 2^32 wrap.
+    uint32_t my_sent = 0;
+    // Max transfers that may be outstanding (sent but not yet consumed by the
+    // receiver). Single buffer in Step 1; Step 3 (double-buffer) raises this.
+    constexpr uint32_t kBufferDepth = 1;
     bool terminated = false;
     while (!terminated) {
-        // 1. Idle wait. Gate on (a) the fabric-link grant (LEASE mode only) and
-        //    (b) the sender worker grid (num_workers more data_ready increments),
-        //    or break on host termination. Both are checked here at the iteration
-        //    boundary — no transfer is in flight and the kernel holds no connection
-        //    (LEASE mode) — so the lease is honoured at a clean point. While not
-        //    granted the kernel holds no link; while granted-but-waiting-for-data it
-        //    holds the turn but still no connection (opened only once data is ready).
+        // 1. Idle wait. Proceed only when ALL hold (checked at the iteration
+        //    boundary — no transfer in flight, no connection held in LEASE mode):
+        //      (a) LEASE: we've been granted the link (link_grant == 1),
+        //      (b) the sender worker grid has produced (num_workers more data_ready),
+        //      (c) OVERWRITE GATE: fewer than kBufferDepth transfers are outstanding
+        //          (sent - acked, wrap-safe unsigned diff), so overwriting the receiver
+        //          DRAM is safe. Single-buffer ⇒ wait until nothing is outstanding;
+        //          iter 0 passes immediately. Step 3 raises kBufferDepth.
+        //    or break on host termination.
         bool ready = false;
         while (!ready) {
             invalidate_l1_cache();
@@ -170,6 +222,12 @@ void kernel_main() {
                     // Not our turn — links belong to the model graph; keep waiting.
                     continue;
                 }
+            }
+            // Outstanding = sent - acked in wrap-safe unsigned arithmetic (both
+            // counters wrap over the persistent lifetime). Hold off while at least
+            // kBufferDepth transfers are still unconsumed.
+            if (static_cast<uint32_t>(my_sent - *bytes_acked) >= kBufferDepth) {
+                continue;
             }
             const uint32_t cur = *data_ready_counter;
             if ((cur - last_data_ready) == num_workers) {
@@ -190,11 +248,11 @@ void kernel_main() {
             fabric_open = true;
         }
 
-        // 3. Drain one full tensor's worth of data to the receiver via fabric.
+        // 3. Write one full tensor's worth of data DIRECTLY to the receiver's DRAM
+        //    backing tensor (no receiver L1 FIFO copy). Stage each chunk
+        //    DRAM -> scratch CB, then fabric-write each staged page to its DRAM home
+        //    on the receiver (output_tensor_accessor.get_noc_addr(page)).
         for (uint32_t chunk = 0; chunk < num_socket_pages; ++chunk) {
-            socket_reserve_pages(sender_socket, 1);
-
-            // Stage pages_per_chunk DRAM tensor pages into the scratch CB.
             const uint32_t base_page = chunk * pages_per_chunk;
             uint32_t dst = cb_l1_addr;
             for (uint32_t i = 0; i < pages_per_chunk; ++i) {
@@ -203,32 +261,39 @@ void kernel_main() {
             }
             noc_async_read_barrier();
 
-            const uint64_t fifo_dst_addr = get_noc_addr(
-                receiver_noc_x, receiver_noc_y, sender_socket.write_ptr + sender_socket.downstream_fifo_addr);
-            fabric_write_socket_page(fabric_connection, fifo_dst_addr, cb_l1_addr, data_packet_header_addr);
-
-            socket_push_pages(sender_socket, 1);
-            fabric_socket_notify_receiver(sender_socket, fabric_connection, socket_packet_header_addr);
+            uint32_t src = cb_l1_addr;
+            for (uint32_t i = 0; i < pages_per_chunk; ++i) {
+                const uint64_t page_dst = output_tensor_accessor.get_noc_addr(base_page + i);
+                fabric_write_bytes(fabric_connection, page_dst, src, tensor_page_size, data_packet_header_addr);
+                src += tensor_page_size;
+            }
         }
 
-        // 2b. Optional trailing metadata page. The designated worker wrote the
-        //     blob into this service core's L1 at sender_metadata_l1_addr before
-        //     acking (and the kernel only got here after num_workers acks), so the
-        //     blob is present.
-        //     Data from sender_metadata_l1_addr is sent directly to the receiver over fabric with
-        //     intermediate storage in the scratch CB.
+        // 3b. Optional metadata. The designated worker wrote the blob into this
+        //     service core's L1 at sender_metadata_l1_addr before acking. Fabric-write
+        //     it to the receiver's vestigial socket-FIFO L1 base (write_ptr is never
+        //     advanced, so the base is a fixed single-slot staging buffer); the
+        //     receiver mcasts it to its worker grid after the data-landed signal.
         if constexpr (metadata_enabled) {
-            socket_reserve_pages(sender_socket, 1);
-            const uint64_t md_fifo_dst_addr = get_noc_addr(
-                receiver_noc_x, receiver_noc_y, sender_socket.write_ptr + sender_socket.downstream_fifo_addr);
-            fabric_write_socket_page(
-                fabric_connection, md_fifo_dst_addr, sender_metadata_l1_addr, data_packet_header_addr);
-            socket_push_pages(sender_socket, 1);
-            fabric_socket_notify_receiver(sender_socket, fabric_connection, socket_packet_header_addr);
+            const uint64_t md_dst = get_noc_addr(receiver_noc_x, receiver_noc_y, sender_socket.downstream_fifo_addr);
+            fabric_write_bytes(
+                fabric_connection, md_dst, sender_metadata_l1_addr, socket_page_size, data_packet_header_addr);
         }
 
-        // 4. Release the sender worker grid (consumed_sem) so it can overwrite
-        //    the backing tensor with the next iteration's slice.
+        // 3c. Data-landed signal: Flush-atomic-inc the receiver's bytes_sent counter.
+        //     The Flush flag makes the receiver EDM router drain this link's payload
+        //     writes (the DRAM pages + the metadata L1 write) to their destinations
+        //     before applying the inc, so when the receiver observes the inc the whole
+        //     transfer is present. Commutative inc — sets up multi-link (Step 2).
+        my_sent += 1;
+        socket_packet_header_addr->to_noc_unicast_atomic_inc(
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{recv_bytes_sent_noc_addr, 1, /*flush=*/true});
+        fabric_connection.wait_for_empty_write_slot();
+        fabric_connection.send_payload_flush_blocking_from_address(
+            (uint32_t)socket_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+
+        // 4. Release the sender worker grid (consumed_sem) so it can overwrite the
+        //    SENDER backing tensor with the next iteration's slice.
         if constexpr (worker_sync_enabled) {
             noc_semaphore_inc_multicast(consumed_mcast_addr, /*incr=*/1, /*num_dests=*/num_workers);
         }

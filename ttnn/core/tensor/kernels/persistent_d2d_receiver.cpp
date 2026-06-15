@@ -4,24 +4,26 @@
 //
 // Persistent fixed-shape D2D receiver for D2DStreamService.
 //
-// The D2D analog of persistent_h2d_receiver.cpp: instead of draining a
-// PCIe-pinned host FIFO, this kernel drains the receiver-side MeshSocket data
-// FIFO (filled over tt-fabric by the persistent sender kernel on the upstream
-// mesh) into the receiver backing tensor (DRAM).
+// Step 1 (direct-DRAM): the sender writes the full tensor STRAIGHT into this mesh's
+// DRAM backing tensor over fabric — there is NO receiver-side L1 FIFO copy. This
+// kernel therefore moves no bulk data; it only runs the per-transfer handshake via
+// the two MeshSocket config words repurposed as monotonic counters:
+//   * bytes_sent  (this receiver's config word): the sender Flush-atomic-incs it
+//     once per transfer = "the full tensor (+ optional metadata) has landed in your
+//     DRAM". The Flush guarantees every page is present when we observe the inc.
+//   * bytes_acked (the sender's config word): we atomic-inc it once per transfer,
+//     AFTER our workers consume = "you may overwrite the receiver tensor".
 //
-// Each outer-loop iteration drains exactly ONE full tensor's worth of data:
-// num_socket_pages socket pages, each fanned out to pages_per_chunk tensor
-// pages. The socket data lives in this core's L1 FIFO, so the page is written
-// straight from receiver_socket.read_ptr to DRAM (no scratch read needed) —
-// mirrors recv_async's receiver_inplace_writer.cpp.
+// Each outer-loop iteration:
+//   1. waits for the data-landed signal (bytes_sent advances) — termination-aware,
+//   2. (optional) multicasts the metadata blob (the sender staged it in our
+//      vestigial socket-FIFO L1) to the worker grid,
+//   3. multicast-incs data_ready_sem so the receiver workers consume the slice,
+//   4. waits num_workers acks on consumed_counter,
+//   5. atomic-incs the sender's bytes_acked (overwrite-OK) over fabric.
 //
-// The outer loop exits cleanly when the host sets `termination_semaphore` to 1.
-// The check happens inside the socket-wait poll (and the consumed_counter poll)
-// so shutdown stays responsive even when no sender / no workers are online.
-//
-// Single RISC (RISCV_0). The receiver opens a fabric connection at entry purely
-// to return socket credits to the sender (fabric_socket_notify_sender); it
-// never moves bulk data over fabric.
+// Single RISC (RISCV_0). The receiver holds a fabric connection only to send the
+// per-transfer overwrite-OK inc upstream; it never moves bulk data over fabric.
 
 #include <cstdint>
 
@@ -63,18 +65,10 @@ constexpr uint32_t metadata_l1_addr = get_compile_time_arg_val(18);
 // D2DStreamServiceReceiver::wait_for_fabric_links() / release_fabric_links().
 constexpr uint32_t share_fabric_links = get_compile_time_arg_val(19);
 constexpr uint32_t link_grant_addr = get_compile_time_arg_val(20);
+// Accessor args for the receiver backing tensor still occupy CT indices 21+ (the
+// host CT layout is unchanged), but the receiver no longer reads/writes the tensor
+// itself — the sender writes it directly over fabric — so no accessor is built.
 constexpr auto output_tensor_accessor_args = TensorAccessorArgs<21>();
-
-FORCE_INLINE bool socket_wait_for_pages_with_termination(
-    const SocketReceiverInterface& socket, uint32_t num_pages, volatile tt_l1_ptr uint32_t* termination_semaphore) {
-    while (!socket_wait_for_pages(socket, num_pages, 1000)) {
-        invalidate_l1_cache();
-        if (termination_semaphore[0] == 1) {
-            return false;
-        }
-    }
-    return true;
-}
 
 void kernel_main() {
     size_t rt_args_idx = 0;
@@ -82,14 +76,27 @@ void kernel_main() {
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
     // The socket packet header lives in the fabric packet-header CB; it's used
-    // only by fabric_socket_notify_sender for the credit return.
+    // only for the per-transfer overwrite-OK atomic-inc sent upstream to the sender.
     volatile tt_l1_ptr PACKET_HEADER_TYPE* socket_packet_header_addr =
         reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(get_write_ptr(fabric_packet_header_cb_index));
 
-    auto output_tensor_accessor = TensorAccessor(output_tensor_accessor_args, output_tensor_addr);
-
     SocketReceiverInterface receiver_socket = create_receiver_socket_interface(socket_config_addr);
     set_receiver_socket_page_size(receiver_socket, socket_page_size);
+
+    // The overwrite-OK inc routes upstream (to the sender chip); set the route once
+    // (an L1 write to the header, no fabric connection needed).
+    fabric_set_unicast_route(socket_packet_header_addr, receiver_socket);
+    const uint64_t sender_bytes_acked_noc_addr = get_noc_addr(
+        receiver_socket.d2d.upstream_noc_x,
+        receiver_socket.d2d.upstream_noc_y,
+        receiver_socket.d2d.upstream_bytes_acked_addr);
+
+    // bytes_sent (this receiver's config word): the sender Flush-atomic-incs it per
+    // landed transfer. Step 1 single-link increments by 1 per transfer; multi-link
+    // (Step 2) will increment by num_links, so wait for an advance of kIncsPerTransfer.
+    constexpr uint32_t kIncsPerTransfer = 1;
+    volatile tt_l1_ptr uint32_t* bytes_sent_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_socket.bytes_sent_addr);
 
     volatile tt_l1_ptr uint32_t* termination_semaphore =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
@@ -130,13 +137,15 @@ void kernel_main() {
             metadata_l1_addr);
     }
 
+    // Last observed value of the receiver's bytes_sent counter (the sender's
+    // data-landed signal); advances by kIncsPerTransfer each transfer.
+    uint32_t last_seen_sent = 0;
     bool terminated = false;
     while (!terminated) {
-        // LEASE mode: wait for a grant before draining a transfer (the drain returns
-        // socket credits over fabric, so it needs the link). Termination-aware. While
-        // not granted the kernel holds no connection — the links are the model
-        // graph's. Granted at the iteration boundary only (no transfer in flight), so
-        // the lease is honoured cleanly.
+        // LEASE mode: wait for a grant before the transfer's overwrite-OK inc (which
+        // is sent over fabric, so it needs the link). Termination-aware. While not
+        // granted the kernel holds no connection — the links are the model graph's.
+        // Granted at the iteration boundary only, so the lease is honoured cleanly.
         if constexpr (share_fabric_links) {
             bool granted = false;
             while (!granted) {
@@ -157,87 +166,49 @@ void kernel_main() {
             fabric_open = true;
         }
 
-        // Drain exactly one full tensor's worth of data: num_socket_pages chunks.
-        for (uint32_t chunk = 0; chunk < num_socket_pages; ++chunk) {
-            // Termination-aware socket wait: poll for one page with a bounded
-            // early-exit count, re-checking the termination word between polls
-            // so shutdown stays responsive when no sender is online.
-            while (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
+        // 1. Wait for the data-landed signal: the sender Flush-atomic-incs bytes_sent
+        //    once per transfer after writing the full tensor to our DRAM. Because the
+        //    inc is Flushed, every page is already present in DRAM when we observe it —
+        //    there is nothing to drain here. Termination-aware.
+        bool got_data = false;
+        while (!got_data) {
+            invalidate_l1_cache();
+            if (termination_semaphore[0] == 1) {
                 terminated = true;
                 break;
             }
-
-            // The socket page sits in this core's L1 FIFO; write its
-            // pages_per_chunk tensor pages straight out to DRAM.
-            uint32_t l1_read_addr = receiver_socket.read_ptr;
-            const uint32_t base_page = chunk * pages_per_chunk;
-            for (uint32_t i = 0; i < pages_per_chunk; ++i) {
-                const uint64_t noc_dst = output_tensor_accessor.get_noc_addr(base_page + i);
-                noc_async_write<tensor_page_size>(l1_read_addr, noc_dst, tensor_page_size);
-                l1_read_addr += tensor_page_size;
+            if ((*bytes_sent_ptr - last_seen_sent) >= kIncsPerTransfer) {
+                last_seen_sent += kIncsPerTransfer;
+                got_data = true;
             }
-            noc_async_writes_flushed();
-
-            // Free the FIFO slot and return the credit to the sender over fabric.
-            socket_pop_pages(receiver_socket, 1);
-            fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
         }
-
-        // Termination short-circuit: if the inner loop exited via the
-        // termination poll, no transfer completed — skip the worker handshake
-        // (workers aren't running during teardown).
         if (terminated) {
             break;
         }
 
-        // Optional inline-metadata: drain ONE trailing socket page carrying the
-        // metadata blob, then multicast its first metadata_size_bytes to every
-        // receiver worker core's L1. The barrier must complete BEFORE the
-        // data_ready_sem mcast below so workers observing data_ready see
-        // consistent (DRAM + metadata-L1) state. The wait is termination-aware so
-        // teardown stays responsive if no trailing page is coming.
+        // 2. Optional inline-metadata: the sender staged the blob in our vestigial
+        //    socket-FIFO L1 (covered by the same Flush'd data-landed inc, so it is
+        //    present). Multicast its first metadata_size_bytes to every receiver worker
+        //    core's L1. The barrier must complete BEFORE the data_ready_sem mcast below
+        //    so workers observing data_ready see consistent (DRAM + metadata-L1) state.
         if constexpr (metadata_enabled) {
-            bool got_md = true;
-            while (!socket_wait_for_pages(receiver_socket, 1, /*early_exit_iter_count=*/1000)) {
-                invalidate_l1_cache();
-                if (termination_semaphore[0] == 1) {
-                    got_md = false;
-                    break;
-                }
-            }
-            terminated = !got_md;
-            if (got_md) {
-                // The metadata page sits in this core's L1 FIFO at read_ptr (an
-                // allocated buffer address — a valid NoC multicast source, unlike a
-                // stack-local). Multicast it straight to the worker grid.
-                noc_async_write_multicast(
-                    receiver_socket.read_ptr,
-                    metadata_mcast_addr,
-                    metadata_size_bytes,
-                    /*num_dests=*/num_workers);
-                noc_async_write_barrier();
-                socket_pop_pages(receiver_socket, 1);
-                fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
-            }
-        }
-
-        if (terminated) {
-            break;
-        }
-
-        // Receiver-side worker handshake. Compile-time-gated.
-        if constexpr (worker_sync_enabled) {
-            // Ensure the backing-tensor writes are globally visible before we
-            // release the workers — they read the slice as soon as they observe
-            // data_ready_sem.
+            noc_async_write_multicast(
+                receiver_socket.read_ptr,
+                metadata_mcast_addr,
+                metadata_size_bytes,
+                /*num_dests=*/num_workers);
             noc_async_write_barrier();
+        }
 
-            // 1. Multicast atomic-inc of data_ready to every receiver worker.
+        // 3. Receiver-side worker handshake. Compile-time-gated.
+        if constexpr (worker_sync_enabled) {
+            // 1. Multicast atomic-inc of data_ready to every receiver worker. The
+            //    backing-tensor writes already landed (the sender's Flush'd inc), so
+            //    the workers reading the slice on data_ready see consistent DRAM.
             noc_semaphore_inc_multicast(worker_mcast_addr, /*incr=*/1, /*num_dests=*/num_workers);
             // 2. Wait for exactly num_workers acks on the consumed counter, or for
             //    host-signalled termination (teardown can land here when no real
-            //    workers are running, e.g. a host-driven transfer with no
-            //    consumer op).
+            //    workers are running, e.g. a host-driven transfer with no consumer op).
             while (true) {
                 invalidate_l1_cache();
                 if (termination_semaphore[0] == 1) {
@@ -255,10 +226,20 @@ void kernel_main() {
             }
         }
 
-        // LEASE mode: this drain (+ worker handshake) is done — drop the credit-
-        // return connection and hand the links back to the model graph
-        // (link_grant = 0). The host polls for 0 in wait_for_fabric_links() and only
-        // writes 1 again after seeing 0, so the two never write concurrently.
+        // 4. Overwrite-OK: atomic-inc the sender's bytes_acked over fabric. Our workers
+        //    have consumed this transfer (gated above), so the sender may overwrite the
+        //    receiver tensor with the next one. Non-Flush — there is no fabric payload
+        //    to order before it (the worker reads were local and have completed).
+        socket_packet_header_addr->to_noc_unicast_atomic_inc(
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sender_bytes_acked_noc_addr, 1, /*flush=*/false});
+        fabric_connection.wait_for_empty_write_slot();
+        fabric_connection.send_payload_flush_blocking_from_address(
+            (uint32_t)socket_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+
+        // 5. LEASE mode: this transfer is done — drop the credit-return connection and
+        //    hand the links back to the model graph (link_grant = 0). The host polls
+        //    for 0 in wait_for_fabric_links() and only writes 1 again after seeing 0,
+        //    so the two never write concurrently.
         if constexpr (share_fabric_links) {
             fabric_connection.close();
             fabric_open = false;

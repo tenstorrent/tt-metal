@@ -4,6 +4,10 @@ A persistent device-to-device streaming service backed by a fixed device tensor 
 
 The data path is **purely device-side after construction**. Host involvement is limited to building the pair and tearing it down — no host writes, no host reads, no host barrier API. One persistent kernel per side per participating coord is launched at construction and runs for the lifetime of the service.
 
+> **Status note (post-V0).** The implementation has moved past the V0 described below on three axes: (1) multi-host / cross-process pairs via `create_sender` / `create_receiver` + `D2DEndpointConfig`; (2) inline metadata; (3) a fabric-link **lease** mode (`share_fabric_links`) so the service and model-graph CCLs take turns on the EDM channel.
+>
+> **Step 1 (direct-DRAM data path).** The receiver-side L1 socket FIFO + the FIFO→DRAM copy are **gone**. The sender now fabric-writes each tensor page **straight into the receiver's DRAM backing tensor** (`output_tensor_accessor.get_noc_addr(page)`, the receiver tensor base address exchanged at construction), exactly as the CCL writers do. The MeshSocket is kept only for the cross-process rendezvous/routing and for its two config words, repurposed as monotonic per-transfer counters: the sender Flush-atomic-incs the receiver's `bytes_sent` ("transfer landed in your DRAM" — the Flush guarantees every page is present), and the receiver atomic-incs the sender's `bytes_acked` after its workers consume ("you may overwrite the receiver tensor"). The latter is the single-buffer overwrite gate; it serializes a transfer against the previous consume (Step 3 / double-buffering removes that serialization). Metadata still rides the now-vestigial socket FIFO L1 as a fixed staging slot, covered by the same Flush'd data-landed inc. **Precondition:** the sender assumes a uniform DRAM bank→NoC mapping across sender/receiver chips (same-arch Galaxy); harvesting differences are not compensated. The sections below still describe the original FIFO-drain V0.
+
 ## Topology
 
 The full hop sequence for one transfer, from sender-side worker compute to receiver-side worker compute, runs entirely on device:
