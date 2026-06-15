@@ -1,0 +1,180 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+import os
+import time
+import queue
+import multiprocessing as mp
+
+from utils.logger import setup_logger
+
+
+def setup_sdxl_worker_environment(worker_id: int, config):
+    """
+    Set worker-specific environment variables for SDXL.
+
+    Topology and descriptor wiring are driven by `config.board` via
+    device_specs.BOARD_SPECS — every supported board sets
+    TT_MESH_GRAPH_DESC_PATH unconditionally so the runtime never falls back
+    to a CUSTOM cluster type missing its descriptor.
+    """
+    from device_specs import descriptor_path, get_board_spec
+
+    os.environ["TT_METAL_HOME"] = os.getcwd()
+    os.environ["PYTHONPATH"] = os.getcwd()
+
+    # Set device visibility EARLY (before any ttnn operations)
+    device_ids_str = ",".join(map(str, config.device_ids))
+    os.environ["TT_VISIBLE_DEVICES"] = device_ids_str
+    os.environ["TT_METAL_VISIBLE_DEVICES"] = device_ids_str
+
+    # Mesh-graph descriptor — required by tt-metal whenever the cluster
+    # falls back to CUSTOM (Blackhole P-series, partial-pop boards).
+    os.environ["TT_MESH_GRAPH_DESC_PATH"] = descriptor_path(config.board)
+
+    # Per-board extras (e.g. Galaxy's TT_MM_THROTTLE_PERF=5).
+    os.environ.update(get_board_spec(config.board).extra_env_vars)
+
+
+def setup_wan_worker_environment(worker_id: int, config):
+    """Wan2.2: a single worker owns the full mesh. Topology is board-derived
+    via device_specs (descriptor_path + extra_env_vars).
+    """
+    from device_specs import descriptor_path, get_board_spec
+
+    os.environ["TT_METAL_HOME"] = os.getcwd()
+    os.environ["PYTHONPATH"] = os.getcwd()
+
+    device_ids_str = ",".join(map(str, config.device_ids))
+    os.environ["TT_VISIBLE_DEVICES"] = device_ids_str
+    os.environ["TT_METAL_VISIBLE_DEVICES"] = device_ids_str
+
+    os.environ["TT_MESH_GRAPH_DESC_PATH"] = descriptor_path(config.board)
+    os.environ.update(get_board_spec(config.board).extra_env_vars)
+
+
+def setup_sd35_worker_environment(worker_id: int, config):
+    """
+    Set worker-specific environment variables for SD3.5 (LoudBox, single worker
+    owns the full 2x4 mesh).
+
+    All 8 device IDs are made visible so the mesh device can be opened with
+    the full 2x4 topology. No per-device isolation needed.
+    """
+    os.environ["TT_METAL_HOME"] = os.getcwd()
+    os.environ["PYTHONPATH"] = os.getcwd()
+
+    # SD3.5 needs the full 2x4 mesh (all 8 chips: 4 PCIe L + 4 ethernet R).
+    # Do NOT restrict TT_VISIBLE_DEVICES — let UMD discover the full topology.
+    # The shell may have set TT_VISIBLE_DEVICES to PCIe-only IDs; clear it here
+    # so the system mesh auto-discovers all 8 chips correctly.
+    os.environ.pop("TT_VISIBLE_DEVICES", None)
+    os.environ.pop("TT_METAL_VISIBLE_DEVICES", None)
+
+
+def device_worker_process(
+    worker_id: int,
+    task_queue: mp.Queue,
+    result_queue: mp.Queue,
+    warmup_signal_queue: mp.Queue,
+    kernel_ready_queue: mp.Queue,
+    error_queue: mp.Queue,
+    config,
+):
+    """
+    Main worker process function that handles image generation inference tasks.
+
+    Supports both SDXL and SD3.5 via config type dispatch:
+    - SD35Config  → SD35Runner  (2x4 mesh, single worker)
+    - SDXLConfig  → SDXLRunner  (1x1 mesh, one worker per device)
+
+    All runner/ttnn imports are deferred to this function so the main server
+    process never initializes ttnn (which would conflict with the child
+    processes' device ownership).
+
+    Args:
+        worker_id: Worker process ID
+        task_queue: Queue for incoming tasks — each item is (task_id, request_dict)
+        result_queue: Queue for results — each item is a dict with task_id/images/inference_time
+        warmup_signal_queue: Queue to signal warmup completion to the server
+        kernel_ready_queue: Queue to signal kernel compilation complete (overlapped startup)
+        error_queue: Queue for error reporting to the server
+        config: SDXLConfig or SD35Config instance
+    """
+    logger = setup_logger(f"Worker-{worker_id}")
+    logger.info(f"Worker {worker_id} starting...")
+
+    try:
+        # Determine model type and set up environment + runner
+        # Imports are deferred here to avoid ttnn initialization in the main process
+        from sd35_config import SD35Config
+        from wan_config import WanConfig
+
+        if isinstance(config, WanConfig):
+            setup_wan_worker_environment(worker_id, config)
+            from wan_runner import WanRunner
+
+            runner = WanRunner(worker_id, config)
+        elif isinstance(config, SD35Config):
+            setup_sd35_worker_environment(worker_id, config)
+            from sd35_runner import SD35Runner
+
+            runner = SD35Runner(worker_id, config)
+        else:
+            setup_sdxl_worker_environment(worker_id, config)
+            from sdxl_runner import SDXLRunner
+
+            runner = SDXLRunner(worker_id, config)
+
+        # Initialize device and load model with optional overlapped startup signal
+        runner.initialize_device()
+        runner.load_model(kernel_ready_queue=kernel_ready_queue)
+
+        # Signal to server that this worker has completed full warmup
+        warmup_signal_queue.put(worker_id)
+        logger.info(f"Worker {worker_id} ready for inference")
+
+        # Main processing loop
+        while True:
+            try:
+                # Block with timeout so we can detect shutdown cleanly
+                task = task_queue.get(timeout=1)
+
+                if task is None:  # Shutdown signal
+                    logger.info(f"Worker {worker_id} received shutdown signal")
+                    break
+
+                task_id, request = task
+                logger.info(f"Worker {worker_id} processing task {task_id}")
+
+                # Run inference and measure wall-clock time
+                start_time = time.time()
+                images = runner.run_inference([request])
+                inference_time = time.time() - start_time
+
+                # Return result to server
+                result_queue.put({"task_id": task_id, "images": images, "inference_time": inference_time})
+
+                logger.info(f"Task {task_id} completed in {inference_time:.2f}s")
+
+            except queue.Empty:
+                # Normal timeout — no task available, loop again
+                continue
+            except Exception as e:
+                import traceback
+
+                logger.error(f"Error processing task: {e}")
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                error_queue.put({"worker_id": worker_id, "error": str(e)})
+
+        # Cleanup
+        runner.close_device()
+        logger.info(f"Worker {worker_id} shutdown complete")
+
+    except Exception as e:
+        import traceback
+
+        logger.error(f"Worker {worker_id} fatal error: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        error_queue.put({"worker_id": worker_id, "error": f"Fatal: {str(e)}"})
