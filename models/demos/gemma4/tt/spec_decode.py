@@ -851,6 +851,29 @@ class SpeculativeDecoder:
             (generated_token_ids, num_accept_per_iter) — the latter for accept-rate stats.
         """
         greedy = not temperature or temperature <= 0
+        if self._use_trace:
+            if greedy:
+                return self.generate_fused(anchor_token, anchor_pos, max_new_tokens)
+
+            from loguru import logger as _lg
+
+            _lg.warning(
+                "Disabling speculative trace for sampling mode; separate draft/verify trace interleaving is unsafe"
+            )
+            self._use_trace = False
+            try:
+                return self.generate(
+                    anchor_token,
+                    anchor_pos,
+                    max_new_tokens,
+                    anchor_hidden=anchor_hidden,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                )
+            finally:
+                self._use_trace = True
+
         traced = self._use_trace
         out = []
         accepts = []

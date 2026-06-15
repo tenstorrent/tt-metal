@@ -7,6 +7,10 @@
       "test_full_model[blackhole-1x1]": 0.84,
       "test_full_model_parity_warmup_then_inference[wormhole_b0-pli-all-kv-shared-steps4-1x1]": 0.98,
       "test_full_model_parity_warmup_then_inference[blackhole-pli-all-kv-shared-steps4-1x1]": 0.98
+    },
+    "1x4": {
+      "test_attention_prefill[blackhole-seq4096-global-1x4]": 0.98,
+      "test_full_model_parity_warmup_then_inference[blackhole-pli-all-kv-shared-steps4-1x4]": 0.98
     }
   },
   "gemma-4-E4B-it": {
@@ -30,7 +34,24 @@
       "test_full_model[blackhole-1x4]": 0.96
     }
   },
+  "gemma-4-12B-it": {
+    "1x1": {
+      "test_attention_decode_paged[blackhole-cache512-global-1x1]": 0.98,
+      "test_attention_decode_bounded_vs_unbounded_parity[blackhole-cache1500-1x1]": 0.97,
+      "test_attention_prefill[blackhole-seq4096-global-1x1]": 0.98
+    },
+    "1x4": {
+      "test_attention_prefill[blackhole-seq1024-global-1x4]": 0.98,
+      "test_attention_prefill[blackhole-seq4096-global-1x4]": 0.98
+    }
+  },
   "gemma-4-26B-A4B-it": {
+    "1x1": {
+      "test_attention_prefill[blackhole-seq4096-global-1x1]": 0.97,
+      "test_attention_paged_decode_via_harness[blackhole-sliding-1x1]": 0.98,
+      "test_layer_forward[blackhole-prefill_1024-sliding-1x1]": 0.97,
+      "test_layer_forward[blackhole-prefill_4096-sliding-1x1]": 0.97
+    },
     "1x4": {
       "test_attention_prefill[blackhole-seq4096-global-1x4]": 0.97,
       "test_attention_paged_decode_via_harness[blackhole-sliding-1x4]": 0.98,

@@ -30,6 +30,15 @@ from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 from ..test_factory import TestFactory, compare_tensors, find_layer_idx, get_pcc_threshold, parametrize_mesh_with_fabric
 from ..vllm_harness import Gemma4VllmLayout, Gemma4VllmRequestPool, allocate_vllm_kv_cache
 
+
+def _skip_full_model_parity_if_mesh_too_small(mesh_device):
+    """Skip multi-layer parity shapes that overflow L1 on single-device 31B."""
+    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
+    hf_config = TestFactory.create_hf_config()
+    if getattr(hf_config, "hidden_size", 0) > 4096 and tp < 2:
+        pytest.skip(f"Full-model vLLM parity overflows L1 on single device (hidden={hf_config.hidden_size})")
+
+
 # ── Pure-Python layout tests (no device) ─────────────────────────────────
 
 
@@ -696,6 +705,8 @@ def test_full_model_parity_uniform_vs_vllm(mesh_device, reset_seeds, request):
     per-layer routing) — exactly the class of bug uniform-shape tests
     miss.
     """
+    _skip_full_model_parity_if_mesh_too_small(mesh_device)
+
     from ...tests.test_factory import num_layers_for_full_attention_group
     from ..unit.test_model import _create_hf_model, _create_hf_text_config, _hf_model_state_to_tt_state
 
@@ -1024,6 +1035,8 @@ def test_full_model_parity_decode_uniform_vs_vllm(layer_set, decode_steps, mesh_
     and feed that token into both for the next step (so the test
     measures parity, not "do they pick the same EOS").
     """
+    _skip_full_model_parity_if_mesh_too_small(mesh_device)
+
     from models.tt_transformers.tt.common import PagedAttentionConfig
 
     from ...tests.test_factory import num_layers_for_full_attention_group
@@ -1310,6 +1323,8 @@ def test_full_model_parity_decode_with_pli(layer_set, decode_steps, mesh_device,
     bug should surface here (likely on ``all-kv-shared`` where every
     layer in the kv-share map sees PLI).
     """
+    _skip_full_model_parity_if_mesh_too_small(mesh_device)
+
     from models.tt_transformers.tt.common import PagedAttentionConfig
 
     from ...tests.test_factory import num_layers_for_full_attention_group
@@ -1515,6 +1530,8 @@ def test_full_model_parity_decode_trace(layer_set, decode_steps, pli, mesh_devic
     the :class:`Gemma4Model._decode_pli_combined` issue I fixed
     earlier, it should surface here as a PCC drop at decode step 2+.
     """
+    _skip_full_model_parity_if_mesh_too_small(mesh_device)
+
     import torch.nn.functional as F
 
     from models.demos.gemma4.tt.generator import Gemma4Generator
@@ -1769,6 +1786,8 @@ def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, m
     PCC against the uniform baseline at every replay step. If we are
     going to reproduce the chat garble in a unit test, this is where.
     """
+    _skip_full_model_parity_if_mesh_too_small(mesh_device)
+
     import torch.nn.functional as F
 
     from models.demos.gemma4.tt.generator import Gemma4Generator

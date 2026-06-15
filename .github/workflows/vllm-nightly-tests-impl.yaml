@@ -127,6 +127,19 @@ jobs:
               "owner_id": "U08TJ70UFRT"
             },
             {
+              "name": "[BH-QB-2] Gemma4-12B",
+              "model": "google/gemma-4-12B-it",
+              "server-timeout": 20,
+              "benchmark-timeout": 5,
+              "runner-label": "BH-Quietbox-2",
+              "arch": "arch-blackhole",
+              "mesh-device": "P150x4",
+              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 100000000}",
+              "additional-server-args": "--max_num_seqs 1 --async-scheduling",
+              "multimodal": false,
+              "owner_id": "U08TJ70UFRT"
+            },
+            {
               "name": "[WH-T3K] Gemma4-26B-A4B",
               "model": "google/gemma-4-26B-A4B-it",
               "server-timeout": 30,
@@ -135,7 +148,7 @@ jobs:
               "arch": "arch-wormhole_b0",
               "mesh-device": "T3K",
               "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
-              "additional-server-args": "--async-scheduling",
+              "additional-server-args": "--max_num_seqs 1 --async-scheduling",
               "multimodal": false,
               "owner_id": "U08TJ70UFRT"
             },
@@ -148,7 +161,7 @@ jobs:
               "arch": "arch-blackhole",
               "mesh-device": "P150x4",
               "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 100000000}",
-              "additional-server-args": "--async-scheduling",
+              "additional-server-args": "--max_num_seqs 1 --async-scheduling",
               "multimodal": false,
               "owner_id": "U08TJ70UFRT"
             },
