@@ -9,6 +9,36 @@
 #   args:     List of arguments passed to the configured executable or script
 
 models:
+# C++ Models
+  - name: "NanoGPT Shakespeare (C++)"
+    filename: "nanogpt_shakespeare_cpp"
+    binary: "${TT_METAL_RUNTIME_ROOT}/build/tt-train/sources/examples/nano_gpt/nano_gpt"
+    args:
+      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanogpt_char.yaml"
+      - "--track_memory"
+
+  - name: "NanoLlama3 Shakespeare (C++)"
+    filename: "nanollama_shakespeare_cpp"
+    binary: "${TT_METAL_RUNTIME_ROOT}/build/tt-train/sources/examples/nano_gpt/nano_gpt"
+    args:
+      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanollama3_char.yaml"
+      - "--track_memory"
+
+  - name: "TinyLlama Shakespeare (C++)"
+    filename: "tinyllama_shakespeare_cpp"
+    binary: "${TT_METAL_RUNTIME_ROOT}/build/tt-train/sources/examples/nano_gpt/nano_gpt"
+    args:
+      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_tinyllama.yaml"
+      - "--track_memory"
+    skip-card:
+      - "n150"
+      - "n300"
+      - "p100"
+    tokenize:
+      text_file: "data/shakespeare.txt"
+      hf_tokenizer: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+      output_file: "data/tokenized_shakespeare_tinyllama"
+
 # Python Models
   - name: "NanoGPT Shakespeare"
     filename: "nanogpt_shakespeare"

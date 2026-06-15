@@ -106,7 +106,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model_config",
         type=str,
-        default=f"{tt_metal_runtime_root}/tt-train/scripts/run_models_config.yaml",
+        default=f"{tt_metal_runtime_root}/tt-train/scripts/run_models_configs/single_cards.yaml",
         help="Path to run_models_config.yaml",
     )
     parser.add_argument(
