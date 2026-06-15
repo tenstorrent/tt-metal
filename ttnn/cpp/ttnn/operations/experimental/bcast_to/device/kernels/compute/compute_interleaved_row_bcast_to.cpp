@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "api/compute/bcast.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
@@ -25,7 +26,9 @@ void kernel_main() {
 
     constexpr auto cb_id_src = get_compile_time_arg_val(0);
     constexpr auto cb_id_dst = get_compile_time_arg_val(1);
-    unary_bcast_init<BroadcastType::ROW>(cb_id_src, cb_id_dst);
+    // Standard BIG init only; the chain's UnaryBcast::init supplies the per-Dim bcast MOP
+    // each call (the boot unary_bcast_init's MOP was redundant with it).
+    compute_kernel_hw_startup(cb_id_src, cb_id_dst);
 
     uint32_t HtWt = Ht * Wt;
     uint32_t num_tiles_read = 0;
