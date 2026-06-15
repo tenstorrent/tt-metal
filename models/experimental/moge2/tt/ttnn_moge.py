@@ -35,6 +35,22 @@ class TtMoGe:
         for h in ["points_head", "normal_head", "mask_head"]:
             if hasattr(ref_moge_model, h):
                 self.heads[h] = TtConvStack(getattr(ref_moge_model, h), device, self.cc)
+        self._uv_cache = {}   # (base_h, base_w) -> [None, uv1_cl, uv2_cl, uv3_cl, uv4_cl]
+
+    def _uv_features(self, base_h, base_w, aspect_ratio, dtype):
+        """UV coordinate maps are fixed per (geometry) — cache the uploaded device
+        tensors for levels 1..4 (the expensive high-res uploads). Level 0's UV is
+        concatenated with the per-image encoder feature on host (cheap)."""
+        key = (base_h, base_w)
+        if key not in self._uv_cache:
+            cached = [None, None, None, None, None]
+            for level in range(1, 5):
+                uv = normalized_view_plane_uv(width=base_w * 2 ** level, height=base_h * 2 ** level,
+                                              aspect_ratio=aspect_ratio, dtype=dtype, device="cpu")
+                uv = uv.permute(2, 0, 1).unsqueeze(0)
+                cached[level] = _to_cl(uv, self.device)
+            self._uv_cache[key] = cached
+        return self._uv_cache[key]
 
     @torch.inference_mode()
     def __call__(self, image, num_tokens):
@@ -48,14 +64,11 @@ class TtMoGe:
         # ---- encoder (device transformer) ----
         x, cls_token = self.encoder(image, base_h, base_w)   # x: torch [B,1024,bh,bw]
 
-        # ---- build 5 input features on host (x + UV maps) ----
-        features = [x, None, None, None, None]
-        for level in range(5):
-            uv = normalized_view_plane_uv(width=base_w * 2 ** level, height=base_h * 2 ** level,
-                                          aspect_ratio=aspect_ratio, dtype=dtype, device=x.device)
-            uv = uv.permute(2, 0, 1).unsqueeze(0).expand(B, -1, -1, -1)
-            features[level] = uv if features[level] is None else torch.cat([features[level], uv], dim=1)
-        in_feats = [_to_cl(f, self.device) for f in features]
+        # ---- input features: level 0 = [encoder x ; UV] (host, cheap); levels 1..4 cached UV ----
+        uv0 = normalized_view_plane_uv(width=base_w, height=base_h, aspect_ratio=aspect_ratio,
+                                       dtype=dtype, device=x.device).permute(2, 0, 1).unsqueeze(0).expand(B, -1, -1, -1)
+        in_feats = [_to_cl(torch.cat([x, uv0], dim=1), self.device)]
+        in_feats += self._uv_features(base_h, base_w, aspect_ratio, dtype)[1:]
 
         # ---- neck + heads on device ----
         neck_out = self.neck(in_feats)
