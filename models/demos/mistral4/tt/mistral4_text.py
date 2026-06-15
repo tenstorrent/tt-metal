@@ -87,8 +87,12 @@ class TtMistral4MLA(LightweightModule):
             P[p, i] = 1.0
         self.P = _lin(P.T, mesh)  # _lin transposes; we want the matrix itself, so pass P.T
 
-        # Compressed-latent (paged flash-MLA) weights: split kv_b into wkv_b1 (absorb into q) +
-        # wkv_b2 (output). kv_b weight [H*(nope+vd), kvl] -> [H, nope+vd, kvl]. (A6)
+        # === A6 compressed-latent paged flash-MLA (XFAIL / NOT in the production path) ===
+        # The op (paged_flash_multi_latent_attention_decode) is compile/device-state NONDETERMINISTIC on
+        # this BH build (test_m4_mla_compressed_decode xfail); forward_decode_mla + these weights are kept
+        # for the (proven-correct) recipe but UNUSED by the verified expanded-kv decode. Cheap to build
+        # (wkv_b1/wkv_b2 are small per-head splits of kv_b), so left unconditional rather than flag-gated.
+        # Split kv_b -> wkv_b1 (absorb into q) + wkv_b2 (output). kv_b [H*(nope+vd), kvl] -> [H, nope+vd, kvl].
         def _batched(w):  # [H, m, n] per-head batched-matmul weight, replicated, TILE
             return ttnn.from_torch(
                 w.contiguous().to(torch.bfloat16),
