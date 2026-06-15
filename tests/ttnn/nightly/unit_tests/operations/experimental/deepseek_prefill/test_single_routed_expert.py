@@ -19,10 +19,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
-
-# GPT-OSS 120B is intentionally not exercised here yet; re-enable the import together with the
-# commented gpt_oss test entrypoints below.
-# from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
+from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
@@ -223,18 +220,16 @@ def test_single_routed_expert_v4_flash(mesh_device, device_params, num_tokens: i
 
 
 # GPT-OSS 120B dims (emb 2880, hidden = MOE_INTERMEDIATE_SIZE 2880) across the token sweep.
-# Intentionally disabled (kept here for parity with the other models); re-enable together with the
-# GptOss120BConfig import above.
-# @pytest.mark.parametrize(
-#     "num_tokens, emb_dim, hidden_dim",
-#     [(n, GptOss120BConfig.EMB_SIZE, GptOss120BConfig.MOE_INTERMEDIATE_SIZE) for n, _ in _TOKEN_SWEEP],
-#     ids=[f"gpt_oss-{tag}" for _, tag in _TOKEN_SWEEP],
-# )
-# @pytest.mark.parametrize(
-#     "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
-# )
-# def test_single_routed_expert_gpt_oss(mesh_device, device_params, num_tokens: int, emb_dim: int, hidden_dim: int):
-#     run_single_routed_expert(mesh_device, device_params, num_tokens, emb_dim, hidden_dim)
+@pytest.mark.parametrize(
+    "num_tokens, emb_dim, hidden_dim",
+    [(n, GptOss120BConfig.EMB_SIZE, GptOss120BConfig.MOE_INTERMEDIATE_SIZE) for n, _ in _TOKEN_SWEEP],
+    ids=[f"gpt_oss-{tag}" for _, tag in _TOKEN_SWEEP],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+def test_single_routed_expert_gpt_oss(mesh_device, device_params, num_tokens: int, emb_dim: int, hidden_dim: int):
+    run_single_routed_expert(mesh_device, device_params, num_tokens, emb_dim, hidden_dim)
 
 
 # (allocated_tokens, active_tokens, id) sweep for the count-aware sparsity test, applied per
@@ -443,23 +438,21 @@ def test_single_routed_expert_faked_token_count_v4_flash(
 
 
 # GPT-OSS 120B dims (emb 2880, hidden = MOE_INTERMEDIATE_SIZE 2880) across the alloc/active sweep.
-# Intentionally disabled (kept here for parity with the other models); re-enable together with the
-# GptOss120BConfig import above.
-# @pytest.mark.parametrize(
-#     "allocated_tokens, active_tokens, emb_dim, hidden_dim",
-#     [
-#         (alloc, active, GptOss120BConfig.EMB_SIZE, GptOss120BConfig.MOE_INTERMEDIATE_SIZE)
-#         for alloc, active, _ in _FAKED_SWEEP
-#     ],
-#     ids=[f"gpt_oss-{tag}" for _, _, tag in _FAKED_SWEEP],
-# )
-# @pytest.mark.parametrize(
-#     "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
-# )
-# @pytest.mark.skipif(not is_blackhole(), reason="device-side count-aware sparsity is Blackhole-only")
-# def test_single_routed_expert_faked_token_count_gpt_oss(
-#     mesh_device, device_params, allocated_tokens: int, active_tokens: int, emb_dim: int, hidden_dim: int
-# ):
-#     run_single_routed_expert_faked_token_count(
-#         mesh_device, device_params, allocated_tokens, active_tokens, emb_dim, hidden_dim
-#     )
+@pytest.mark.parametrize(
+    "allocated_tokens, active_tokens, emb_dim, hidden_dim",
+    [
+        (alloc, active, GptOss120BConfig.EMB_SIZE, GptOss120BConfig.MOE_INTERMEDIATE_SIZE)
+        for alloc, active, _ in _FAKED_SWEEP
+    ],
+    ids=[f"gpt_oss-{tag}" for _, _, tag in _FAKED_SWEEP],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+@pytest.mark.skipif(not is_blackhole(), reason="device-side count-aware sparsity is Blackhole-only")
+def test_single_routed_expert_faked_token_count_gpt_oss(
+    mesh_device, device_params, allocated_tokens: int, active_tokens: int, emb_dim: int, hidden_dim: int
+):
+    run_single_routed_expert_faked_token_count(
+        mesh_device, device_params, allocated_tokens, active_tokens, emb_dim, hidden_dim
+    )
