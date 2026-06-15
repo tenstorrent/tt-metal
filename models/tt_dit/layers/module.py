@@ -15,6 +15,7 @@ from typing_extensions import deprecated
 import ttnn
 
 from ..utils import tensor
+from ..utils.progress import Watchdog as _Watchdog
 from ..utils.substate import pop_substate
 
 if TYPE_CHECKING:
@@ -178,13 +179,14 @@ class Module(ABC):
         missing_keys = []
         unexpected_keys = []
         self.evict_coresident_exclusions()
-        self._load_torch_state_dict_inner(
-            state_dict,
-            module_key_prefix="",
-            missing_keys=missing_keys,
-            unexpected_keys=unexpected_keys,
-            progress=_LoadProgress(self._num_parameters(), "converting weights to device"),
-        )
+        with _Watchdog(f"convert {type(self).__name__}"):
+            self._load_torch_state_dict_inner(
+                state_dict,
+                module_key_prefix="",
+                missing_keys=missing_keys,
+                unexpected_keys=unexpected_keys,
+                progress=_LoadProgress(self._num_parameters(), "converting weights to device"),
+            )
 
         if strict and (missing_keys or unexpected_keys):
             parts = []
@@ -214,25 +216,31 @@ class Module(ABC):
     def load(self, directory: str | Path, /, *, prefix: str = "") -> None:
         directory = Path(directory)
 
-        # Top-level only: announce the cache load so it doesn't sit silent. Signature is
-        # left untouched — subclasses (Mochi/Wan) override this method.
+        # Top-level only: announce the cache load and arm a timer watchdog so a slow/stalled
+        # module load is never silent. Signature is left untouched — subclasses (Mochi/Wan)
+        # override this method.
+        watchdog = None
         if prefix == "":
             logger.info(f"loading {self._num_parameters()} cached weight tensors from '{directory}'...")
+            watchdog = _Watchdog(f"load-cache {type(self).__name__}").__enter__()
+        try:
+            self.evict_coresident_exclusions()
 
-        self.evict_coresident_exclusions()
+            for name, child in self.named_children():
+                child.load(directory, prefix=f"{prefix}{name}.")
 
-        for name, child in self.named_children():
-            child.load(directory, prefix=f"{prefix}{name}.")
+            for name, parameter in self.named_parameters():
+                path = directory / f"{prefix}{name}.tensorbin"
+                try:
+                    parameter.load(path)
+                except LoadingError as err:
+                    msg = f"{err} while loading '{path}'"
+                    raise LoadingError(msg) from err
 
-        for name, parameter in self.named_parameters():
-            path = directory / f"{prefix}{name}.tensorbin"
-            try:
-                parameter.load(path)
-            except LoadingError as err:
-                msg = f"{err} while loading '{path}'"
-                raise LoadingError(msg) from err
-
-        self._is_loaded = True
+            self._is_loaded = True
+        finally:
+            if watchdog is not None:
+                watchdog.__exit__()
 
     def deallocate_weights(self) -> None:
         """Deallocate all parameter weights from device memory recursively."""
