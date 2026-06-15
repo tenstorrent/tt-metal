@@ -6,7 +6,7 @@ import math
 import os
 import shutil
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 import pandas as pd
@@ -101,6 +101,13 @@ MERGE_SORT_COLS = [
 DEFAULT_SWEEP_POINTS = 2048
 
 
+def _distribution_label(distribution: DistributionKind) -> str:
+    """Short label for a distribution: its enum value, or 'custom' for a callable."""
+    return (
+        distribution.value if isinstance(distribution, DistributionKind) else "custom"
+    )
+
+
 def variant_name(
     op: MathOperation,
     in_fmt: DataFormat,
@@ -109,7 +116,7 @@ def variant_name(
     fast: FastMode,
     dest: DestAccumulation,
     distribution: DistributionKind = DistributionKind.RAMP,
-    seed: int = None,
+    seed: Optional[int] = None,
     points: int = DEFAULT_SWEEP_POINTS,
 ) -> str:
     """Build the shard filename for one variant.
@@ -117,9 +124,7 @@ def variant_name(
     Includes every knob that changes the data (op, formats, config, distribution,
     seed, points) so different sweeps never overwrite each other's shard.
     """
-    dist = (
-        distribution.value if isinstance(distribution, DistributionKind) else "custom"
-    )
+    dist = _distribution_label(distribution)
     name = (
         f"{op.name.lower()}__{in_fmt.name}_{out_fmt.name}__"
         f"approx{int(approx == ApproximationMode.Yes)}_"
@@ -137,7 +142,7 @@ def build_sweep_spec(
     op: MathOperation,
     in_fmt: DataFormat,
     distribution: DistributionKind = DistributionKind.RAMP,
-    seed: int = None,
+    seed: Optional[int] = None,
 ) -> StimuliSpec:
     """Build the input sweep over the op's defined domain.
 
@@ -249,6 +254,9 @@ def merge_shards() -> List[Path]:
     Reads only the shards present in SHARD_DIR, groups by op, sorts by
     MERGE_SORT_COLS, and overwrites OUTPUT_DIR/{op}.csv from scratch. Never
     reads a pre-existing final CSV.
+
+    Only ops present in the current run are rewritten. Other per-op CSVs are
+    left as-is. Delete OUTPUT_DIR first for a completely fresh set.
     """
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     shard_files = sorted(SHARD_DIR.glob("*.csv")) if SHARD_DIR.exists() else []
@@ -268,7 +276,12 @@ def merge_shards() -> List[Path]:
 
 
 def clear_shards() -> None:
-    """Remove the shard dir so a run starts with no stale shards."""
+    """Remove the shard dir so a run starts with no stale shards.
+
+    Only the intermediate shards are cleared — the merged per-op CSVs in
+    OUTPUT_DIR are intentionally left (so partial runs accumulate, and a crash
+    can't lose the existing corpus). See merge_shards for the full trade-off.
+    """
     if SHARD_DIR.exists():
         shutil.rmtree(SHARD_DIR)
     SHARD_DIR.mkdir(parents=True, exist_ok=True)
@@ -283,7 +296,7 @@ def run_case(
     *,
     points: int = DEFAULT_SWEEP_POINTS,
     distribution: DistributionKind = DistributionKind.RAMP,
-    seed: int = None,
+    seed: Optional[int] = None,
 ) -> Path:
     """Measure one (op, format, config) on hardware and write its shard CSV.
 
@@ -296,7 +309,9 @@ def run_case(
 
     Returns the shard path.
     """
-    torch.manual_seed(0)
+    # Seed the global RNG too (not just spec.seed) so it's consistent with the
+    # param: 0 when unseeded (reproducible baseline), else the requested seed.
+    torch.manual_seed(0 if seed is None else seed)
 
     spec = build_sweep_spec(op, formats.input_format, distribution, seed)
     input_dimensions = sweep_input_dimensions(points)
@@ -373,7 +388,7 @@ def run_case(
     hw_np = res_tensor.to(torch.float32).numpy()
 
     # Sanity asserts (no threshold gating).
-    assert not np.all(~np.isfinite(hw_np)), f"{op.name}: all HW outputs non-finite"
+    assert np.any(np.isfinite(hw_np)), f"{op.name}: all HW outputs non-finite"
     golden_has_signal = np.any(np.isfinite(golden_np) & (golden_np != 0.0))
     if golden_has_signal:
         assert np.any(hw_np != 0.0), f"{op.name}: HW returned all zeros (no-op?)"
@@ -396,11 +411,7 @@ def run_case(
         in_fmt=formats.input_format.name,
         out_fmt=formats.output_format.name,
         chip_arch=str(TestConfig.CHIP_ARCH.name).lower(),
-        distribution=(
-            distribution.value
-            if isinstance(distribution, DistributionKind)
-            else "custom"
-        ),
+        distribution=_distribution_label(distribution),
         intervals=intervals_str,
         seed="" if seed is None else str(seed),
         approx=str(int(approx_mode == ApproximationMode.Yes)),

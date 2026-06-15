@@ -103,16 +103,4 @@ def test_sfpu_accuracy_sweep(
     ):
         pytest.skip(reason="This combination is not supported on BH architecture")
 
-    if (
-        approx_mode == ApproximationMode.Yes
-        and mathop in [MathOperation.Exp, MathOperation.Exp2, MathOperation.Elu]
-        and (
-            formats.input_format == DataFormat.Bfp8_b
-            or formats.output_format == DataFormat.Bfp8_b
-        )
-    ):
-        pytest.skip(
-            reason="Exp-related ops unsupported for bf8_b in approximation mode"
-        )
-
     run_case(mathop, formats, approx_mode, fast_mode, dest_acc)
