@@ -3,19 +3,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Regression test for NOC VC state leak in reader_bmm_tile_layout_in1_sender_dram_sharded.cpp.
+Regression test: a 1D-config matmul (modeling Llama lm_head) runs ~20% slower when it executes
+immediately after a DRAM-sharded-config matmul, because of a NOC virtual-channel (VC) state leak
+between the two kernels.  Both matmuls are individually correct and fast; only the back-to-back
+ordering is affected, which is why a single-op test would never catch this.
 
-The DRAM-sharded matmul kernel calls set_async_read_state<NocOptions::CUSTOM_VC, ...> to write
-a per-bank virtual channel into NCRISC_RD_CMD_BUF NOC_CTRL without restoring it at kernel end.
-Subsequent kernels that rely on NOC_CTRL being at the firmware default (VC=1, set in noc_init)
--- such as reader_bmm_tile_layout_in1_sender_writer_padding.cpp in DM_DEDICATED_NOC mode --
-inherit the stale VC and achieve ~20% lower DRAM read bandwidth.
+Root cause: the DRAM-sharded matmul reader (reader_bmm_tile_layout_in1_sender_dram_sharded.cpp)
+calls set_async_read_state<NocOptions::CUSTOM_VC, ...> to write a per-bank virtual channel into
+NCRISC_RD_CMD_BUF NOC_CTRL without restoring it at kernel end.  Subsequent kernels that rely on
+NOC_CTRL being at the firmware default (VC=1, set in noc_init) -- such as the 1D matmul's reader
+reader_bmm_tile_layout_in1_sender_writer_padding.cpp in DM_DEDICATED_NOC mode -- inherit the
+stale VC and achieve ~20% lower DRAM read bandwidth.
 
 Fix: reset NOC_CTRL to VC=1 at the end of reader_bmm_tile_layout_in1_sender_dram_sharded.cpp.
-
-This test intentionally does not use OpTestBase: the assertion requires comparing execution
-time of lm_head across two separate phases (solo vs. after DS), which cannot be expressed
-within OpTestBase's single-operation-per-iteration loop model.
 
 This test measures lm_head execution time solo vs immediately after a DRAM-sharded matmul
 and asserts the ratio does not exceed DEGRADATION_THRESHOLD.
