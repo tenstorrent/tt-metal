@@ -38,10 +38,11 @@ def tt_patch_embed(pixel_values, weight, bias, device):
         output = F.conv2d(pixel_values, weight, bias=bias, stride=14, padding=0)
 
     # Permute from NCHW (B, 1024, 72, 72) to NHWC (B, 72, 72, 1024)
-    output = output.permute(0, 2, 3, 1).contiguous()
+    output = output.permute(0, 2, 3, 1).contiguous().to(torch.bfloat16)
 
-    # Convert to ttnn tensor on device in TILE_LAYOUT
-    tt_output = ttnn.from_torch(output, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    # Send as ROW_MAJOR (fast CPU→device copy) then tilize on device
+    tt_output = ttnn.from_torch(output, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_output = ttnn.to_layout(tt_output, ttnn.TILE_LAYOUT)
     return tt_output
 
 
