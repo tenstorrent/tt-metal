@@ -45,7 +45,8 @@ N_POINTS = 2
 NUM_POS_FEATS = D_MODEL // 2  # 128
 FFN_DIM = 2048
 
-WEIGHT_DTYPE = ttnn.bfloat8_b
+WEIGHT_DTYPE = ttnn.bfloat16  # bf16 weights preserve box-head precision (bf8 dropped detection IoU); full fp32 unsupported by ttnn topk/embedding
+ACT_DTYPE = ttnn.bfloat16
 
 
 def _lin(linear, device, weight_dtype=WEIGHT_DTYPE):
@@ -56,15 +57,15 @@ def _lin(linear, device, weight_dtype=WEIGHT_DTYPE):
     b = None
     if linear.bias is not None:
         b = ttnn.from_torch(
-            linear.bias.detach().reshape(1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            linear.bias.detach().reshape(1, -1), dtype=ACT_DTYPE, layout=ttnn.TILE_LAYOUT, device=device
         )
     return {"w": w, "b": b}
 
 
 def _ln(layernorm, device):
     return {
-        "w": ttnn.from_torch(layernorm.weight.detach().reshape(1, 1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device),
-        "b": ttnn.from_torch(layernorm.bias.detach().reshape(1, 1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device),
+        "w": ttnn.from_torch(layernorm.weight.detach().reshape(1, 1, -1), dtype=ACT_DTYPE, layout=ttnn.TILE_LAYOUT, device=device),
+        "b": ttnn.from_torch(layernorm.bias.detach().reshape(1, 1, -1), dtype=ACT_DTYPE, layout=ttnn.TILE_LAYOUT, device=device),
         "eps": float(layernorm.eps),
     }
 
@@ -104,17 +105,17 @@ class TtTransformer:
         )
         assert not bool(invalid_mask.any()), "invalid_mask must be all-False at 40x40"
         self.output_proposals = ttnn.from_torch(
-            output_proposals, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            output_proposals, dtype=ACT_DTYPE, layout=ttnn.TILE_LAYOUT, device=device
         )
 
         # refpoint_embed[:300] [300,4], query_feat[:300] [300,256]
         refpoint = ref.refpoint_embed.weight[:N_QUERIES].detach()  # [300,4]
         self.refpoint_embed = ttnn.from_torch(
-            refpoint.reshape(1, N_QUERIES, 4), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            refpoint.reshape(1, N_QUERIES, 4), dtype=ACT_DTYPE, layout=ttnn.TILE_LAYOUT, device=device
         )
         query_feat = ref.query_feat.weight[:N_QUERIES].detach()  # [300,256]
         self.target = ttnn.from_torch(
-            query_feat.reshape(1, N_QUERIES, D_MODEL), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            query_feat.reshape(1, N_QUERIES, D_MODEL), dtype=ACT_DTYPE, layout=ttnn.TILE_LAYOUT, device=device
         )
 
         # sine embedding: inv_dim_t [1,1,128] and even/odd selection masks.
@@ -122,16 +123,16 @@ class TtTransformer:
         dim_t = 10000 ** (2 * torch.div(dim_t, 2, rounding_mode="floor") / NUM_POS_FEATS)
         inv_dim_t = (2 * math.pi) / dim_t  # [128]
         self.inv_dim_t = ttnn.from_torch(
-            inv_dim_t.reshape(1, 1, NUM_POS_FEATS), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            inv_dim_t.reshape(1, 1, NUM_POS_FEATS), dtype=ACT_DTYPE, layout=ttnn.TILE_LAYOUT, device=device
         )
         even = torch.zeros(NUM_POS_FEATS)
         even[0::2] = 1.0
         odd = 1.0 - even
         self.sine_even = ttnn.from_torch(
-            even.reshape(1, 1, NUM_POS_FEATS), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            even.reshape(1, 1, NUM_POS_FEATS), dtype=ACT_DTYPE, layout=ttnn.TILE_LAYOUT, device=device
         )
         self.sine_odd = ttnn.from_torch(
-            odd.reshape(1, 1, NUM_POS_FEATS), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            odd.reshape(1, 1, NUM_POS_FEATS), dtype=ACT_DTYPE, layout=ttnn.TILE_LAYOUT, device=device
         )
 
         self.compute_config = ttnn.init_device_compute_kernel_config(
@@ -147,7 +148,7 @@ class TtTransformer:
         def _mk(w, b):
             return {
                 "w": ttnn.from_torch(w.t().contiguous(), dtype=WEIGHT_DTYPE, layout=ttnn.TILE_LAYOUT, device=device),
-                "b": ttnn.from_torch(b.reshape(1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device),
+                "b": ttnn.from_torch(b.reshape(1, -1), dtype=ACT_DTYPE, layout=ttnn.TILE_LAYOUT, device=device),
             }
 
         ca = layer.cross_attn
@@ -291,8 +292,10 @@ class TtTransformer:
         """source: ttnn channels-last [1,1600,256]. Returns (logits, pred_boxes) as torch."""
         device = self.device
         if not isinstance(source, ttnn.Tensor):
-            source = ttnn.from_torch(source, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            source = ttnn.from_torch(source, dtype=ACT_DTYPE, layout=ttnn.TILE_LAYOUT, device=device)
         source = ttnn.to_layout(source, ttnn.TILE_LAYOUT)
+        if source.dtype != ACT_DTYPE:
+            source = ttnn.typecast(source, ACT_DTYPE)
 
         # ---- two-stage proposal heads ----
         object_query = self._layer_norm(self._linear(source, self.enc_output), self.enc_output_norm)
@@ -303,6 +306,8 @@ class TtTransformer:
         # scores = enc_class.max(-1) -> [1,1600]; topk 300
         scores = ttnn.max(enc_class, dim=-1)  # [1,1600]
         scores = ttnn.reshape(scores, (1, HW))
+        if scores.dtype != ttnn.bfloat16:  # topk requires bf16/bf8 input (ranking only)
+            scores = ttnn.typecast(scores, ttnn.bfloat16)
         _, topk_idx = ttnn.topk(scores, N_QUERIES, dim=-1)  # idx [1,300] uint16
         topk_idx = ttnn.typecast(topk_idx, ttnn.uint32)
 

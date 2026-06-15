@@ -14,9 +14,10 @@ Global layers (2,5,8,11) attend over the merged [1, 1616, 384] sequence.
 import torch
 import ttnn
 
-# Matmul weights in bfloat8_b halve weight read bandwidth (backbone is execution/BW-bound).
-# Activations stay bf16; norms/layerscales stay bf16.
-WEIGHT_DTYPE = ttnn.bfloat8_b
+# Backbone matmul weights: bf16 for accuracy. (bf8 saved DRAM but, once the projector +
+# transformer also run on-device in bf16, the accumulated error pushed detection accuracy
+# below the 99% gate — so the deepest stage keeps bf16.)
+WEIGHT_DTYPE = ttnn.bfloat16
 
 
 def _lin(linear, device, dtype=WEIGHT_DTYPE):
