@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>DSA sparse attention — today vs. ring target</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2430; --ink:#e6edf3; --muted:#9aa7b4;
+    --line:#30363d; --accent:#58a6ff; --good:#3fb950; --warn:#f0883e; --bad:#f85149;
+    --host:#f85149; --dev:#3fb950; --slab1:#58a6ff; --slab2:#bc8cff; --slab3:#f0883e; --slab4:#3fb950;
+    --mono:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  body.paused *{animation-play-state:paused !important}
+  a{color:var(--accent);text-decoration:none}
+  header{padding:48px 24px 24px;text-align:center;border-bottom:1px solid var(--line);
+    background:radial-gradient(1200px 400px at 50% -120px,#1b2740,transparent);}
+  h1{margin:0 0 6px;font-size:30px;letter-spacing:-.5px}
+  header .sub{color:var(--muted);font-size:15px}
+  .badge{display:inline-block;margin-top:14px;padding:4px 12px;border:1px solid var(--line);
+    border-radius:999px;color:var(--muted);font-size:12px;background:var(--panel)}
+  main{max-width:1080px;margin:0 auto;padding:0 20px 100px}
+  section{margin:54px 0;scroll-margin-top:70px}
+  h2{font-size:23px;margin:0 0 4px;letter-spacing:-.3px}
+  h2 .n{color:var(--accent);font-variant-numeric:tabular-nums;margin-right:10px}
+  .lead{color:var(--muted);margin:0 0 22px;max-width:760px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px;margin:18px 0}
+  .panel h3{margin:0 0 4px;font-size:16px}
+  .panel .cap{color:var(--muted);font-size:13px;margin:0 0 16px}
+  code,.mono{font-family:var(--mono);font-size:.9em}
+  code{background:#1f6feb22;color:#9ecbff;padding:1px 6px;border-radius:5px}
+  .tag{display:inline-block;font:600 11px/1 var(--mono);padding:4px 8px;border-radius:6px;vertical-align:middle}
+  .tag.host{background:#f8514922;color:#ff9d96;border:1px solid #f8514955}
+  .tag.dev{background:#3fb95022;color:#84e29a;border:1px solid #3fb95055}
+  /* sticky controls */
+  nav{position:sticky;top:0;z-index:40;background:#0d1117ee;backdrop-filter:blur(8px);
+    border-bottom:1px solid var(--line);padding:9px 16px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  nav a{color:var(--muted);font-size:13px;padding:5px 9px;border-radius:7px}
+  nav a:hover{background:var(--panel2);color:var(--ink)}
+  nav .spacer{flex:1}
+  .btn{cursor:pointer;border:1px solid var(--line);background:var(--panel2);color:var(--ink);
+    font:600 12px/1 var(--mono);padding:7px 12px;border-radius:8px;user-select:none}
+  .btn:hover{border-color:var(--accent)}
+  /* tabs */
+  .tabs{display:flex;gap:6px;margin:8px 0 0}
+  .tabs button{flex:0 0 auto;cursor:pointer;border:1px solid var(--line);background:var(--panel);
+    color:var(--muted);padding:9px 16px;border-radius:10px 10px 0 0;font:600 13px var(--mono)}
+  .tabs button.active{color:var(--ink);background:var(--panel2);border-bottom-color:var(--panel2);
+    box-shadow:inset 0 2px 0 var(--accent)}
+  .tabwrap{border:1px solid var(--line);border-radius:0 12px 12px 12px;background:var(--panel2);padding:22px}
+  .tabpane{display:none}
+  .tabpane.active{display:block;animation:fade .4s ease}
+  @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+  /* ---- generic pipeline ---- */
+  .pipe{display:flex;align-items:stretch;gap:0;flex-wrap:wrap;justify-content:center}
+  .stage{position:relative;min-width:118px;max-width:150px;flex:1;padding:14px 10px;margin:6px 0;
+    border:1.5px solid var(--line);border-radius:11px;background:var(--panel);text-align:center}
+  .stage .t{font:600 12px var(--mono);margin-bottom:5px}
+  .stage .d{font-size:11px;color:var(--muted);line-height:1.4}
+  .stage.dev{border-color:#3fb95066;box-shadow:0 0 0 1px #3fb95022 inset}
+  .stage.host{border-color:#f8514966;box-shadow:0 0 0 1px #f8514922 inset;animation:hostpulse 2s ease-in-out infinite}
+  @keyframes hostpulse{0%,100%{box-shadow:0 0 0 1px #f8514922 inset,0 0 0 0 #f8514900}
+    50%{box-shadow:0 0 0 1px #f8514955 inset,0 0 22px 0 #f8514955}}
+  .stage .where{position:absolute;top:-9px;left:50%;transform:translateX(-50%);
+    font:700 9px var(--mono);padding:2px 7px;border-radius:999px;white-space:nowrap}
+  .stage.dev .where{background:#15301d;color:#84e29a;border:1px solid #3fb95066}
+  .stage.host .where{background:#3a1513;color:#ff9d96;border:1px solid #f8514966}
+  .arrow{align-self:center;width:34px;height:26px;position:relative;flex:0 0 auto}
+  .arrow svg{width:100%;height:100%;overflow:visible}
+  .arrow .dot{fill:var(--accent)}
+  .arrow.bad .ln{stroke:var(--bad)} .arrow.bad .hd{fill:var(--bad)} .arrow.bad .dot{fill:var(--bad)}
+  .flowdot{animation:flow 1.6s linear infinite}
+  @keyframes flow{0%{transform:translateX(-14px);opacity:0}15%{opacity:1}85%{opacity:1}100%{transform:translateX(14px);opacity:0}}
+  .roundtrip{margin:14px auto 0;max-width:560px;text-align:center;color:#ff9d96;font:600 12px var(--mono);
+    border:1px dashed #f8514966;border-radius:10px;padding:8px}
+
+  /* ---- chips + slabs (concepts) ---- */
+  .chiprow{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin:8px 0}
+  .chip{width:128px;border:1.5px solid var(--line);border-radius:12px;background:var(--panel);padding:10px 8px;text-align:center}
+  .chip .lbl{font:700 11px var(--mono);color:var(--muted);margin-bottom:8px}
+  .rows{display:flex;flex-direction:column;gap:3px}
+  .row{height:13px;border-radius:3px;background:#283040}
+  .key{height:13px;border-radius:3px}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;justify-content:center;color:var(--muted);font-size:12px;margin-top:12px}
+  .legend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+  .toggle{display:flex;gap:8px;justify-content:center;margin:4px 0 14px}
+
+  /* ---- ring ---- */
+  .ringwrap{position:relative;width:340px;height:340px;margin:10px auto 0}
+  .ringcore{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;
+    text-align:center;color:var(--muted);font:600 12px var(--mono)}
+  .compchip{position:absolute;width:84px;height:62px;border:1.5px solid var(--line);border-radius:10px;
+    background:var(--panel);display:flex;align-items:center;justify-content:center;flex-direction:column;
+    font:700 11px var(--mono);text-align:center}
+  .compchip small{color:var(--muted);font-weight:400;font-size:9px}
+  .slabring{position:absolute;inset:0;animation:spin 8s steps(4) infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .slab{position:absolute;width:64px;height:46px;border-radius:9px;display:flex;align-items:center;justify-content:center;
+    font:700 11px var(--mono);color:#0d1117}
+  .slab span{animation:spin-rev 8s steps(4) infinite}
+  @keyframes spin-rev{to{transform:rotate(-360deg)}}
+
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:13.5px}
+  th,td{border:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);font-weight:600}
+  td .tag{margin-right:0}
+  .rec{border-left:3px solid var(--good);background:#3fb9501a;border-radius:0 10px 10px 0;padding:14px 18px;margin:16px 0}
+  .rec b{color:#84e29a}
+  .foot{color:var(--muted);font-size:12.5px;border-top:1px solid var(--line);margin-top:60px;padding-top:18px}
+  .kbd{font:600 11px var(--mono);border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;padding:1px 5px;background:var(--panel2)}
+  .pill{display:inline-flex;gap:6px;align-items:center;font:600 12px var(--mono);
+    border:1px solid var(--line);border-radius:999px;padding:4px 11px;margin:2px;background:var(--panel)}
+  .pill.host{border-color:#f8514955;color:#ff9d96}
+  .pill.dev{border-color:#3fb95055;color:#84e29a}
+</style>
+</head>
+<body>
+<nav>
+  <a href="#concepts">Concepts</a>
+  <a href="#today">Today</a>
+  <a href="#target">Target</a>
+  <a href="#tiers">Tiers</a>
+  <a href="#rec">Verdict</a>
+  <span class="spacer"></span>
+  <span class="pill dev"><i>●</i>on device</span>
+  <span class="pill host"><i>●</i>host hop</span>
+  <span class="btn" id="pausebtn">⏸ pause animations</span>
+</nav>
+
+<header>
+  <h1>DSA sparse attention — what runs today, where the ring takes us</h1>
+  <div class="sub">Removing the chunked path's host round-trip by following v3's ring-attention model.</div>
+  <div class="badge">DeepSeek V3.2 · design explainer · companion to <span class="mono">sparse_chunked_ring_attention.md</span></div>
+</header>
+
+<main>
+
+<!-- ============ CONCEPTS ============ -->
+<section id="concepts">
+  <h2><span class="n">0</span>Two layouts you have to picture first</h2>
+  <p class="lead">The whole question is <em>how the KV sequence is arranged across the SP (sequence-parallel) devices</em>.
+  Let <code>T</code> = total keys, <code>sp</code> = devices on the SP axis (here <code>sp=4</code>), each KV row 576-wide bf16.</p>
+
+  <div class="toggle">
+    <span class="btn" data-layout="shard">slab (SP-sharded)</span>
+    <span class="btn" data-layout="full">full-T replicated</span>
+    <span class="btn" data-layout="bc">block-cyclic</span>
+  </div>
+
+  <div class="panel">
+    <h3 id="clayout-title">Slab — one SP device's shard of the sequence</h3>
+    <p class="cap" id="clayout-cap">Each chip physically holds only <code>T/sp</code> rows. That piece is its <b>slab</b>
+      (<code>seq_len_local</code>). ~1.2&nbsp;MB/chip at T=4096.</p>
+    <div class="chiprow" id="clayout"></div>
+    <div class="legend">
+      <span><i style="background:var(--slab1)"></i>chip 0 keys</span>
+      <span><i style="background:var(--slab2)"></i>chip 1 keys</span>
+      <span><i style="background:var(--slab3)"></i>chip 2 keys</span>
+      <span><i style="background:var(--slab4)"></i>chip 3 keys</span>
+      <span><i style="background:#283040"></i>empty</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>The index ⇒ page assumption (why layout matters at all)</h3>
+    <p class="cap">The single-chip op <code>ttnn.transformer.sparse_sdpa</code> gathers each query's top-k keys with
+      <code>page_id = index</code> — i.e. it assumes <b>index <code>g</code> = row <code>g</code> in natural order</b>
+      (<span class="mono">sparse_sdpa_reader.cpp:117</span>). A query's top-k can point <em>anywhere</em> in <code>[0,T)</code>,
+      so the <b>entire sequence must be resident on the chip</b> as one natural-order buffer. The op has no notion of
+      shards, rings, or positions. Everything below is about feeding it that buffer — cheaply.</p>
+  </div>
+</section>
+
+<!-- ============ TODAY ============ -->
+<section id="today">
+  <h2><span class="n">1</span>Today — the compute is on device, the KVPE still round-trips host</h2>
+  <p class="lead">Step 6 moved attention onto <code>sparse_sdpa</code>, but the op only eats a natural-order
+    full-T buffer, so the KVPE is shuttled through host to produce one. Two variants:</p>
+
+  <div class="tabs" data-group="today">
+    <button class="active" data-pane="t-nc">Non-chunked (single-shot)</button>
+    <button data-pane="t-ch">Chunked prefill</button>
+  </div>
+  <div class="tabwrap">
+    <!-- non-chunked -->
+    <div class="tabpane active" id="t-nc">
+      <h3>Non-chunked — the host hop is pure leftover</h3>
+      <p class="cap"><code>kvpe</code> is already gathered to a full-T <b>device</b> tensor; it's copied to host only because
+        the old fallback wanted torch — then re-uploaded. A wasteful device→host→device loop.</p>
+      <div class="pipe">
+        <div class="stage dev"><span class="where">device</span><div class="t">kvpe</div><div class="d">SP-sharded<br>[1,1,T/sp,576]</div></div>
+        <div class="arrow"><svg viewBox="0 0 34 26"><line class="ln" x1="2" y1="13" x2="28" y2="13" stroke="#58a6ff" stroke-width="2"/><polygon class="hd" points="28,7 34,13 28,19" fill="#58a6ff"/><circle class="dot flowdot" cx="13" cy="13" r="3"/></svg></div>
+        <div class="stage dev"><span class="where">device</span><div class="t">_sp_all_gather</div><div class="d">→ full-T<br>replicated</div></div>
+        <div class="arrow bad"><svg viewBox="0 0 34 26"><line class="ln" x1="2" y1="13" x2="28" y2="13" stroke="#f85149" stroke-width="2"/><polygon class="hd" points="28,7 34,13 28,19"/><circle class="dot flowdot" cx="13" cy="13" r="3"/></svg></div>
+        <div class="stage host"><span class="where">⚠ host</span><div class="t">to_torch</div><div class="d">device → host<br>[T,576]</div></div>
+        <div class="arrow bad"><svg viewBox="0 0 34 26"><line class="ln" x1="2" y1="13" x2="28" y2="13" stroke="#f85149" stroke-width="2"/><polygon class="hd" points="28,7 34,13 28,19"/><circle class="dot flowdot" cx="13" cy="13" r="3"/></svg></div>
+        <div class="stage host"><span class="where">⚠ host</span><div class="t">from_torch</div><div class="d">host → device<br>(re-upload)</div></div>
+        <div class="arrow"><svg viewBox="0 0 34 26"><line class="ln" x1="2" y1="13" x2="28" y2="13" stroke="#58a6ff" stroke-width="2"/><polygon class="hd" points="28,7 34,13 28,19" fill="#58a6ff"/><circle class="dot flowdot" cx="13" cy="13" r="3"/></svg></div>
+        <div class="stage dev"><span class="where">device</span><div class="t">sparse_sdpa</div><div class="d">gather + flash<br>SDPA</div></div>
+      </div>
+      <div class="roundtrip">↩ the full-T buffer already existed on device — the to_torch/from_torch loop is removable today (backlog 9)</div>
+    </div>
+    <!-- chunked -->
+    <div class="tabpane" id="t-ch">
+      <h3>Chunked — host hop <em>plus</em> an un-rotation</h3>
+      <p class="cap">The cache is written <b>block-cyclic</b> across SP. The op needs natural order, so the cache is read to
+        host and re-ordered with <code>blockcyclic_positions</code> (<span class="mono">mla.py:355-369</span>) before re-upload.</p>
+      <div class="pipe">
+        <div class="stage dev"><span class="where">device</span><div class="t">kvpe chunk</div><div class="d">[1,1,S/sp,576]</div></div>
+        <div class="arrow"><svg viewBox="0 0 34 26"><line x1="2" y1="13" x2="28" y2="13" stroke="#58a6ff" stroke-width="2"/><polygon points="28,7 34,13 28,19" fill="#58a6ff"/><circle class="dot flowdot" cx="13" cy="13" r="3"/></svg></div>
+        <div class="stage dev"><span class="where">device</span><div class="t">update_padded<br>_kv_cache</div><div class="d">block-cyclic<br>write</div></div>
+        <div class="arrow bad"><svg viewBox="0 0 34 26"><line x1="2" y1="13" x2="28" y2="13" stroke="#f85149" stroke-width="2"/><polygon points="28,7 34,13 28,19" fill="#f85149"/><circle class="dot flowdot" cx="13" cy="13" r="3"/></svg></div>
+        <div class="stage host"><span class="where">⚠ host</span><div class="t">to_torch</div><div class="d">ConcatMesh<br>device → host</div></div>
+        <div class="arrow bad"><svg viewBox="0 0 34 26"><line x1="2" y1="13" x2="28" y2="13" stroke="#f85149" stroke-width="2"/><polygon points="28,7 34,13 28,19" fill="#f85149"/><circle class="dot flowdot" cx="13" cy="13" r="3"/></svg></div>
+        <div class="stage host"><span class="where">⚠ host</span><div class="t">un-rotate</div><div class="d">nat[p]=cache<br>→ natural order</div></div>
+        <div class="arrow bad"><svg viewBox="0 0 34 26"><line x1="2" y1="13" x2="28" y2="13" stroke="#f85149" stroke-width="2"/><polygon points="28,7 34,13 28,19" fill="#f85149"/><circle class="dot flowdot" cx="13" cy="13" r="3"/></svg></div>
+        <div class="stage host"><span class="where">⚠ host</span><div class="t">from_torch</div><div class="d">host → device</div></div>
+        <div class="arrow"><svg viewBox="0 0 34 26"><line x1="2" y1="13" x2="28" y2="13" stroke="#58a6ff" stroke-width="2"/><polygon points="28,7 34,13 28,19" fill="#58a6ff"/><circle class="dot flowdot" cx="13" cy="13" r="3"/></svg></div>
+        <div class="stage dev"><span class="where">device</span><div class="t">sparse_sdpa</div><div class="d">gather + flash</div></div>
+      </div>
+      <div class="roundtrip">⚠ the un-rotation exists <em>only</em> because the op assumes index = natural-order page</div>
+
+      <!-- block-cyclic visual -->
+      <div class="panel" style="margin-top:22px;background:var(--panel)">
+        <h3>What "block-cyclic" means</h3>
+        <p class="cap">The cache stores interleaved blocks, not a contiguous range. Global position <code>g</code> lives on chip
+          <code>(g % chunk_global) // chunk_local</code> — so chip <code>c</code>'s slab is blocks <code>c, c+sp, c+2·sp, …</code>.
+          Natural order (what the op wants) vs. how it's actually stored:</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center;font:700 11px var(--mono)" id="bc-natural"></div>
+        <div style="text-align:center;color:var(--muted);margin:8px">↓ block-cyclic reorder across 4 chips ↓</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center;font:700 11px var(--mono)" id="bc-shuffled"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ TARGET ============ -->
+<section id="target">
+  <h2><span class="n">2</span>Where we want to go — keep it all on device</h2>
+  <p class="lead">Two ways to stop touching host. Tier&nbsp;0 still materializes full-T on each chip; Tier&nbsp;1 follows v3's
+    ring so KV stays sharded and only one slab is ever held at a time.</p>
+
+  <div class="tabs" data-group="target">
+    <button class="active" data-pane="g-t0">Tier 0 — device-resident gather</button>
+    <button data-pane="g-t1">Tier 1 — true ring (sparse_ring_mla)</button>
+  </div>
+  <div class="tabwrap">
+    <!-- tier 0 -->
+    <div class="tabpane active" id="g-t0">
+      <h3>Tier 0 — assemble full-T on device, reuse <code>sparse_sdpa</code></h3>
+      <p class="cap">Device all-gather the slabs into a replicated full-T buffer (the slabs concatenated <em>are</em> block-cyclic
+        full-T — no un-rotation), and make the gather block-cyclic-aware (remap the index, or ~10 lines in the reader). No host. ~1 day.</p>
+      <div class="pipe">
+        <div class="stage dev"><span class="where">device</span><div class="t">kvpe / cache</div><div class="d">SP-sharded slabs</div></div>
+        <div class="arrow"><svg viewBox="0 0 34 26"><line x1="2" y1="13" x2="28" y2="13" stroke="#3fb950" stroke-width="2"/><polygon points="28,7 34,13 28,19" fill="#3fb950"/><circle class="dot flowdot" cx="13" cy="13" r="3" style="fill:#3fb950"/></svg></div>
+        <div class="stage dev"><span class="where">device</span><div class="t">all_gather</div><div class="d">→ full-T<br>(block-cyclic)</div></div>
+        <div class="arrow"><svg viewBox="0 0 34 26"><line x1="2" y1="13" x2="28" y2="13" stroke="#3fb950" stroke-width="2"/><polygon points="28,7 34,13 28,19" fill="#3fb950"/><circle class="dot flowdot" cx="13" cy="13" r="3" style="fill:#3fb950"/></svg></div>
+        <div class="stage dev"><span class="where">device</span><div class="t">index remap</div><div class="d">owner·local<br>(or reader-aware)</div></div>
+        <div class="arrow"><svg viewBox="0 0 34 26"><line x1="2" y1="13" x2="28" y2="13" stroke="#3fb950" stroke-width="2"/><polygon points="28,7 34,13 28,19" fill="#3fb950"/><circle class="dot flowdot" cx="13" cy="13" r="3" style="fill:#3fb950"/></svg></div>
+        <div class="stage dev"><span class="where">device</span><div class="t">sparse_sdpa</div><div class="d">unchanged</div></div>
+      </div>
+      <div class="rec" style="margin-top:18px"><b>Cost:</b> materializes full-T on <em>every</em> chip (~4.7&nbsp;MB at T=4096, ~57&nbsp;MB at 50k) — fine for the 576-wide latent. Also fixes the non-chunked re-upload in the same change.</div>
+    </div>
+    <!-- tier 1 -->
+    <div class="tabpane" id="g-t1">
+      <h3>Tier 1 — ring the slabs, gather-by-index per step</h3>
+      <p class="cap">Model on v3's <code>ttnn.transformer.ring_mla</code>: KV stays SP-sharded; slabs rotate around the SP ring
+        (one step per device). Each step gathers <em>only</em> the selected indices whose <code>owner(g)</code> = the slab it
+        currently holds, and online-softmax accumulates across steps. Only one slab held at a time.</p>
+
+      <div class="ringwrap">
+        <div class="ringcore">ring step<br><span id="ringstep" style="font-size:20px;color:var(--accent)">0 / 4</span><br>online-softmax<br>accumulates</div>
+        <!-- fixed compute chips -->
+        <div class="compchip" style="top:0;left:128px">chip 0<br><small>queries</small></div>
+        <div class="compchip" style="top:139px;left:256px">chip 1<br><small>queries</small></div>
+        <div class="compchip" style="top:278px;left:128px">chip 2<br><small>queries</small></div>
+        <div class="compchip" style="top:139px;left:0">chip 3<br><small>queries</small></div>
+        <!-- rotating slabs -->
+        <div class="slabring">
+          <div class="slab" style="top:30px;left:138px;background:var(--slab1)"><span>slab&nbsp;0</span></div>
+          <div class="slab" style="top:147px;left:246px;background:var(--slab2)"><span>slab&nbsp;1</span></div>
+          <div class="slab" style="top:264px;left:138px;background:var(--slab3)"><span>slab&nbsp;2</span></div>
+          <div class="slab" style="top:147px;left:30px;background:var(--slab4)"><span>slab&nbsp;3</span></div>
+        </div>
+      </div>
+      <p class="cap" style="text-align:center;margin-top:14px">slabs rotate past fixed compute chips → after <code>sp</code> steps every query has seen every slab</p>
+
+      <table style="margin-top:18px">
+        <tr><th>Reused from <code>ring_mla</code></th><th>Reused from <code>sparse_sdpa</code></th><th>New work</th></tr>
+        <tr>
+          <td>RingAllGatherAsync + RingIdSequencer, semaphores / fabric / topology, cross-step online-softmax (LSE merge in scratch DRAM), latent-V materialize, <code>kv_actual_isl</code>/<code>logical_n</code> rotation</td>
+          <td>per-token index read + sentinel binary-search, indexed K-row gather w/ trid congestion ring, the FlashAttention compute (already accumulates across chunks)</td>
+          <td><b>per-step index filter</b> (keep only <code>owner(g)==ring_id</code>, map to local row), online-softmax across <em>ring steps</em> too, slab-sized receive buffer</td>
+        </tr>
+      </table>
+      <div class="rec" style="margin-top:8px"><b>Memory win:</b> never holds full-T — only a double-buffered <em>slab</em> (~1.2&nbsp;MB) as slabs ring through. <b>Cost:</b> a new fused C++ op, ~1–2 weeks.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ TIERS TABLE ============ -->
+<section id="tiers">
+  <h2><span class="n">3</span>The three tiers at a glance</h2>
+  <table>
+    <tr><th>Tier</th><th>Idea</th><th>Host hop?</th><th>KV on chip</th><th>New C++</th><th>Effort</th></tr>
+    <tr>
+      <td><b>0</b></td>
+      <td>Device all-gather → full-T (block-cyclic) → block-cyclic-aware gather → existing <code>sparse_sdpa</code></td>
+      <td><span class="tag dev">gone</span></td>
+      <td>full-T replicated (~57&nbsp;MB @50k)</td>
+      <td>~10 lines (reader) / index remap</td>
+      <td>~1 day</td>
+    </tr>
+    <tr>
+      <td><b>1</b></td>
+      <td>New <code>sparse_ring_mla</code>: ring slabs, gather-by-index per step, online-softmax across steps</td>
+      <td><span class="tag dev">gone</span></td>
+      <td>one slab at a time (~1.2&nbsp;MB)</td>
+      <td>full new op (factory + 3 kernels)</td>
+      <td>~1–2 wks</td>
+    </tr>
+    <tr>
+      <td><b>2</b></td>
+      <td>Add an <code>indices</code> input to v3's <code>ring_mla</code> itself</td>
+      <td><span class="tag dev">gone</span></td>
+      <td>one slab at a time</td>
+      <td>edits a shared v3 production op</td>
+      <td>—  <span class="tag host">not advised</span></td>
+    </tr>
+  </table>
+</section>
+
+<!-- ============ VERDICT ============ -->
+<section id="rec">
+  <h2><span class="n">4</span>Verdict</h2>
+  <div class="rec">
+    <b>Do Tier 0 now</b> to kill the host hop (and the backlog-9 re-upload) — it's contained and reuses the validated op.
+    The ring's payoff in v3.2 is <b>weak</b>: the KV here is the narrow 576-wide <em>latent</em> (single head), so full-T at 50k
+    is only ~57&nbsp;MB/chip and compute is already bounded by top-k=2048. <b>Build Tier 1</b> only when <code>T</code> grows enough
+    that the per-chip full-T or the all-gather bandwidth actually hurts. Nothing is <em>blocking</em> Tier 1 — every primitive
+    exists; it's purely kernel engineering (cross-step LSE merge + per-step sparse gather under ring sync).
+  </div>
+  <p class="cap">Full prose, exact APIs, the block-cyclic <code>owner(g)/lr(g)</code> math, and the file:line reference list
+    live in <span class="mono">sparse_chunked_ring_attention.md</span> in this folder.</p>
+</section>
+
+<div class="foot">
+  Generated as a companion to the markdown design report · DeepSeek V3.2 DSA · use the
+  <span class="kbd">⏸ pause</span> control if the motion is distracting.
+</div>
+</main>
+
+<script>
+(function(){
+  // pause toggle
+  var pb=document.getElementById('pausebtn');
+  pb.addEventListener('click',function(){
+    document.body.classList.toggle('paused');
+    pb.textContent=document.body.classList.contains('paused')?'▶ play animations':'⏸ pause animations';
+  });
+
+  // tabs (grouped)
+  document.querySelectorAll('.tabs').forEach(function(tabs){
+    tabs.querySelectorAll('button').forEach(function(btn){
+      btn.addEventListener('click',function(){
+        tabs.querySelectorAll('button').forEach(b=>b.classList.remove('active'));
+        btn.classList.add('active');
+        var wrap=tabs.nextElementSibling;
+        wrap.querySelectorAll('.tabpane').forEach(p=>p.classList.remove('active'));
+        wrap.querySelector('#'+btn.dataset.pane).classList.add('active');
+      });
+    });
+  });
+
+  // ---- concept layout renderer ----
+  var SP=4, ROWS=8, COL=['var(--slab1)','var(--slab2)','var(--slab3)','var(--slab4)'];
+  var clayout=document.getElementById('clayout');
+  var title=document.getElementById('clayout-title'), cap=document.getElementById('clayout-cap');
+  function chip(label, fills){
+    var rows=fills.map(function(f){return '<div class="'+(f?'key':'row')+'" style="'+(f?('background:'+f):'')+'"></div>';}).join('');
+    return '<div class="chip"><div class="lbl">'+label+'</div><div class="rows">'+rows+'</div></div>';
+  }
+  function renderLayout(mode){
+    var html='';
+    if(mode==='shard'){
+      title.textContent='Slab — one SP device’s shard of the sequence';
+      cap.innerHTML='Each chip physically holds only <code>T/sp</code> rows. That piece is its <b>slab</b> (<code>seq_len_local</code>). ~1.2&nbsp;MB/chip at T=4096.';
+      for(var c=0;c<SP;c++){
+        var f=[]; for(var r=0;r<ROWS;r++) f.push(COL[c]);
+        html+=chip('chip '+c+' · slab', f);
+      }
+    } else if(mode==='full'){
+      title.textContent='Full-T replicated — the whole sequence, copied on every chip';
+      cap.innerHTML='Every chip holds <em>all</em> <code>T</code> rows (4× a slab, duplicated). This is what single-chip <code>sparse_sdpa</code> needs. ~4.7&nbsp;MB/chip at T=4096, ~57&nbsp;MB at 50k.';
+      for(var c=0;c<SP;c++){
+        var f=[]; for(var r=0;r<ROWS;r++) f.push(COL[r%SP]); // all colors on every chip = full T
+        html+=chip('chip '+c+' · full T', f);
+      }
+    } else { // block-cyclic
+      title.textContent='Block-cyclic — how the chunked cache is actually stored';
+      cap.innerHTML='Chip <code>c</code>’s slab is blocks <code>c, c+sp, c+2·sp, …</code> — interleaved, not a contiguous range. Global pos <code>g</code> → chip <code>(g % chunk_global)//chunk_local</code>.';
+      for(var c=0;c<SP;c++){
+        var f=[]; for(var r=0;r<ROWS;r++) f.push(COL[c]); // each chip one color but representing scattered global blocks
+        html+=chip('chip '+c+' · blocks '+c+','+(c+SP)+',…', f);
+      }
+    }
+    clayout.innerHTML=html;
+  }
+  renderLayout('shard');
+  document.querySelectorAll('[data-layout]').forEach(function(b){
+    b.addEventListener('click',function(){
+      document.querySelectorAll('[data-layout]').forEach(x=>x.style.borderColor='var(--line)');
+      b.style.borderColor='var(--accent)';
+      renderLayout(b.dataset.layout);
+    });
+  });
+  document.querySelector('[data-layout="shard"]').style.borderColor='var(--accent)';
+
+  // ---- block-cyclic strip in the chunked tab ----
+  var nat=document.getElementById('bc-natural'), shuf=document.getElementById('bc-shuffled');
+  if(nat){
+    var N=12; // 12 blocks, sp=4 -> 3 slabs each
+    function cell(i,color){return '<div style="width:42px;padding:6px 0;border-radius:6px;color:#0d1117;background:'+color+'">b'+i+'</div>';}
+    var hn=''; for(var i=0;i<N;i++) hn+=cell(i,COL[Math.floor(i/3)%4]); // natural: contiguous color groups
+    nat.innerHTML='<div style="width:100%;color:var(--muted);font-weight:600;margin-bottom:4px">natural order (global 0→T): contiguous per chip</div>'+hn;
+    // block-cyclic order: chip0 gets blocks 0,4,8 ; chip1 1,5,9 ; ...
+    var order=[]; for(var c=0;c<4;c++) for(var b=c;b<N;b+=4) order.push(b);
+    var hs=''; order.forEach(function(b){ hs+=cell(b, COL[b%4]); });
+    shuf.innerHTML='<div style="width:100%;color:var(--muted);font-weight:600;margin-bottom:4px">block-cyclic storage: chip0=[b0,b4,b8], chip1=[b1,b5,b9], …</div>'+hs;
+  }
+
+  // ---- ring step counter synced to the 8s/4-step spin ----
+  var rs=document.getElementById('ringstep');
+  if(rs){
+    var step=0;
+    setInterval(function(){
+      if(document.body.classList.contains('paused')) return;
+      step=(step+1)%4;
+      rs.textContent=step+' / 4';
+    },2000); // 8s / 4 steps
+  }
+})();
+</script>
+</body>
+</html>
