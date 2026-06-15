@@ -9,7 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_dit.tests.unit.test_ring_joint_attention import create_ring_joint_sdpa_submesh
+from tests.ttnn.unit_tests.operations.sdpa.ring_joint_sdpa_test_common import create_ring_joint_sdpa_submesh
 from models.tt_dit.utils.padding import get_padded_vision_seq_len
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import fa_rand

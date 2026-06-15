@@ -12,7 +12,7 @@ import ttnn
 from loguru import logger
 import pytest
 from tests.tests_common.cache_entries_counter import CacheEntriesCounter
-from models.tt_dit.tests.unit.test_ring_joint_attention import (
+from tests.ttnn.unit_tests.operations.sdpa.ring_joint_sdpa_test_common import (
     run_ring_joint_sdpa,
     run_ring_joint_sdpa_model_config,
     run_test_ring_joint_sdpa,
