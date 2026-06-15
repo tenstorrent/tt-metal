@@ -240,7 +240,8 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
     // frequency between reader and writer. Note this increases effective CB depth.
     // Don't do this for row-major layout because of all the careful handling of page sizes.
     if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
-        constexpr uint32_t ideal_multiplier = 3;
+        // Empirically determined heuristic, works well for all tensor sizes
+        const uint32_t ideal_multiplier = (input_tensor.device()->arch() == tt::ARCH::BLACKHOLE) ? 4 : 3;
         // Find the largest multiplier in [1, ideal] that fits in available L1
         const uint32_t max_l1_space = ttnn::operations::data_movement::get_max_l1_space(input_tensor);
         const uint32_t multiplier = std::clamp(max_l1_space / (cb_depth * cb_page_size), 1u, ideal_multiplier);
