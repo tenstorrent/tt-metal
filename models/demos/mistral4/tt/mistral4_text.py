@@ -87,6 +87,31 @@ class TtMistral4MLA(LightweightModule):
             P[p, i] = 1.0
         self.P = _lin(P.T, mesh)  # _lin transposes; we want the matrix itself, so pass P.T
 
+        # Compressed-latent (paged flash-MLA) weights: split kv_b into wkv_b1 (absorb into q) +
+        # wkv_b2 (output). kv_b weight [H*(nope+vd), kvl] -> [H, nope+vd, kvl]. (A6)
+        def _batched(w):  # [H, m, n] per-head batched-matmul weight, replicated, TILE
+            return ttnn.from_torch(
+                w.contiguous().to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        kvb = sd["self_attn.kv_b_proj.weight"].reshape(self.H, self.nope + self.vd, self.kvl)
+        self.wkv_b1 = _batched(kvb[:, : self.nope, :])  # [H, nope, kvl]   q_nope @ wkv_b1 -> [H,*,kvl]
+        self.wkv_b2 = _batched(kvb[:, self.nope :, :].transpose(1, 2))  # [H, kvl, vd]  ctx @ wkv_b2 -> [H,*,vd]
+        self._sdpa_prog = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=mesh.compute_with_storage_grid_size(),
+            q_chunk_size=0,
+            k_chunk_size=128,
+            exp_approx_mode=False,
+        )
+        self._sdpa_ck = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=False
+        )
+
     def _rope(self, x, cos, sin):
         xd = ttnn.matmul(x, self.P)  # de-interleave
         return ttnn.add(ttnn.mul(xd, cos), ttnn.mul(_rotate_half(xd), sin))
@@ -162,6 +187,97 @@ class TtMistral4MLA(LightweightModule):
         )
         attn = ttnn.reshape(ttnn.permute(attn, (1, 0, 2, 3)), (B, 1, self.H * self.qk))
         return ttnn.linear(attn, self.w_o)
+
+    # ---- A6: compressed-latent paged MLA decode (12.8x smaller KV cache) ----
+    def init_compressed_cache(self, batch, max_seq, block=32):
+        """Paged compressed-latent KV cache [num_blocks,1,block,kvl+rope] + page_table [batch,blocks/user]."""
+        bpu = max_seq // block
+        nb = batch * bpu
+        cache = ttnn.from_torch(
+            torch.zeros(nb, 1, block, self.kvl + self.rope, dtype=torch.bfloat16),
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        )
+        pt = ttnn.from_torch(
+            torch.arange(nb, dtype=torch.int32).reshape(batch, bpu),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.int32,
+            device=self.mesh,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        )
+        return cache, pt
+
+    def _hshard(self, t, rows, width):  # height-shard [32,width] over rows//32 cores
+        nc = max(1, rows // 32)
+        cores = ttnn.num_cores_to_corerangeset(nc, self.mesh.compute_with_storage_grid_size(), row_wise=True)
+        return ttnn.to_memory_config(
+            t,
+            ttnn.create_sharded_memory_config(
+                shape=[32, width],
+                core_grid=cores,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            ),
+        )
+
+    def forward_decode_mla(self, x, pos_t, cos, sin, cache, page_table):
+        """Compressed-latent paged flash-MLA decode (A6): caches only the kv_a latent [kvl+rope] (MQA,
+        12.8x smaller than expanded), absorbs kv_b into q (wkv_b1) and output (wkv_b2). x [B,1,hidden]."""
+        B, H, kvl, rope, nope, vd = x.shape[0], self.H, self.kvl, self.rope, self.nope, self.vd
+        # compressed latent: [kv_pass (normed) | k_rot]
+        kv_a = ttnn.linear(x, self.w_kva)  # [B,1,kvl+rope]
+        kv_pass = ttnn.rms_norm(ttnn.slice(kv_a, [0, 0, 0], [B, 1, kvl]), epsilon=self.eps, weight=self.w_kvan)
+        k_rot = self._rope(ttnn.reshape(ttnn.slice(kv_a, [0, 0, kvl], [B, 1, kvl + rope]), (B, 1, 1, rope)), cos, sin)
+        latent = ttnn.concat([ttnn.reshape(kv_pass, (B, 1, 1, kvl)), k_rot], dim=-1)  # [B,1,1,kvl+rope]
+        # [1,B,1,d] height-sharded one user per core (shard [32,d]; the seqlen-1 dim is tile-padded
+        # to 32) — the 1-kv-head latent write layout (cf. deepseek mla1d.py _fwd_decode).
+        cores_b = ttnn.num_cores_to_corerangeset(B, self.mesh.compute_with_storage_grid_size(), row_wise=True)
+        lat_mem = ttnn.create_sharded_memory_config(
+            shape=[32, kvl + rope],
+            core_grid=cores_b,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        lat_in = ttnn.to_memory_config(ttnn.permute(latent, (1, 0, 2, 3)), lat_mem)  # [1,B,1,d] sharded on B cores
+        ttnn.experimental.paged_update_cache(cache, lat_in, update_idxs_tensor=pos_t, page_table=page_table)
+        # q absorption: q_nope @ wkv_b1 -> latent space; concat q_rope
+        q = ttnn.linear(ttnn.rms_norm(ttnn.linear(x, self.w_qa), epsilon=self.eps, weight=self.w_qan), self.w_qb)
+        qh = ttnn.transpose(ttnn.reshape(q, (B, 1, H, self.qk)), 1, 2)  # [B,H,1,qk]
+        q_nope = ttnn.reshape(ttnn.permute(ttnn.slice(qh, [0, 0, 0, 0], [B, H, 1, nope]), (1, 0, 2, 3)), (H, B, nope))
+        q_lat_nope = ttnn.reshape(ttnn.matmul(q_nope, self.wkv_b1), (H, B, 1, kvl))  # [H,B,1,kvl]
+        q_lat_nope = ttnn.permute(q_lat_nope, (2, 1, 0, 3))  # [1,B,H,kvl]
+        q_rope = ttnn.permute(self._rope(ttnn.slice(qh, [0, 0, 0, nope], [B, H, 1, self.qk]), cos, sin), (2, 0, 1, 3))
+        q_lat = self._hshard(ttnn.concat([q_lat_nope, q_rope], dim=-1), B * H, kvl + rope)  # [1,B,H,kvl+rope] sharded
+        out_mem = ttnn.create_sharded_memory_config(
+            shape=[32, kvl],
+            core_grid=ttnn.num_cores_to_corerangeset(
+                max(1, B * H // 32), self.mesh.compute_with_storage_grid_size(), row_wise=True
+            ),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        attn = ttnn.transformer.paged_flash_multi_latent_attention_decode(
+            q_lat,
+            cache,
+            page_table_tensor=page_table,
+            cur_pos_tensor=pos_t,
+            head_dim_v=kvl,
+            scale=self.scale,
+            program_config=self._sdpa_prog,
+            compute_kernel_config=self._sdpa_ck,
+            memory_config=out_mem,
+        )  # [1,B,H,kvl]
+        # output absorption: ctx @ wkv_b2 -> v_head
+        ctx = ttnn.reshape(
+            ttnn.permute(ttnn.to_memory_config(attn, ttnn.DRAM_MEMORY_CONFIG), (2, 1, 0, 3)), (H, B, kvl)
+        )
+        o = ttnn.reshape(ttnn.matmul(ctx, self.wkv_b2), (H, B, 1, vd))  # [H,B,1,vd]
+        o = ttnn.reshape(ttnn.permute(o, (1, 0, 2, 3)), (B, 1, H * vd))
+        return ttnn.linear(o, self.w_o)
 
 
 class TtMistral4MoE(LightweightModule):
