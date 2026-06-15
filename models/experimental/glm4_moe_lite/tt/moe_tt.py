@@ -17,6 +17,7 @@ from models.experimental.glm4_moe_lite.tt.layer_weights import MoELayerTTWeights
 from models.experimental.glm4_moe_lite.tt.linear_helpers import (
     ROUTER_FUSED_SIGMOID,
     _ROUTER_PREFILL_CKC,
+    Matmul1dProgOverrides,
     compute_1d_prog_cfg,
     prefill_matmul_tuned_enabled,
     prepare_sparse_moe_matmul_in0,
@@ -569,6 +570,11 @@ def moe_topk_tt(
         if prefill_matmul_tuned_enabled() and int(x.shape[2]) > 32:
             scores = tuned_moe_router_prefill_linear(x, moe_w.w_gate, memory_config=mc)
         else:
+            # Full-K in0 block: w_gate is K=hidden (Kt=64), N=n_routed_experts (Nt=2).
+            # _auto_in0_block_w caps at 4 → K-looping dominates this tiny matmul; the full
+            # Kt block roughly halves it (sweep test_decode_batched_matmul_sweep-style probe:
+            # 12.8µs auto bw=4 → 6.0µs bw=64). Grid/per_core_N stay auto (N=2 tiles).
+            _gate_kt = (int(moe_w.w_gate.shape[-2]) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
             scores = ttnn.linear(
                 x,
                 moe_w.w_gate,
@@ -578,6 +584,7 @@ def moe_topk_tt(
                     m_total,
                     fp32_dest_acc_en=False,
                     fused_activation=ROUTER_FUSED_SIGMOID,
+                    overrides=Matmul1dProgOverrides(in0_block_w=_gate_kt),
                 ),
                 compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                     math_fidelity=ttnn.MathFidelity.LoFi,
