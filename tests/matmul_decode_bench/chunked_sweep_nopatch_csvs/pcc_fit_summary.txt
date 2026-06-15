@@ -1,0 +1,88 @@
+SigLIP       qkv    mmd_full_T64                    | INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores | 
+SigLIP       qkv    native             PCC=1.000000 | TIMED pcc=1.000000 | 
+SigLIP       qkv    mmd_partial        PCC=1.000000 | TIMED pcc=1.000000 | stable across reps: True
+SigLIP       qkv    native_T32         PCC=1.000000 | TIMED pcc=1.000000 | 
+SigLIP       qkv    mmd_partial_T32    PCC=1.000000 | TIMED pcc=1.000000 | stable across reps: True
+SigLIP       qkv    native_T64         PCC=1.000000 | TIMED pcc=1.000000 | 
+SigLIP       qkv    mmd_partial_T64    PCC=1.000000 | TIMED pcc=1.000000 | stable across reps: True
+SigLIP       qkv    mmd_full                        | INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores | 
+SigLIP       o      native             PCC=1.000000 | TIMED pcc=1.000000 | 
+SigLIP       qkv    mmd_full_T32                    | INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores | 
+SigLIP       o      native_T32         PCC=1.000000 | TIMED pcc=1.000000 | 
+SigLIP       qkv    mmd_full_T64                    | INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores | 
+SigLIP       o      native_T64         PCC=1.000000 | TIMED pcc=1.000000 | 
+SigLIP       qkv    mmd_partial        PCC=1.000000 | TIMED pcc=1.000000 | stable across reps: True
+SigLIP       o      mmd_full           PCC=1.000000 | TIMED pcc=1.000000 | stable across reps: True
+SigLIP       qkv    mmd_partial_T32    PCC=1.000000 | TIMED pcc=1.000000 | stable across reps: True
+SigLIP       o      mmd_full_T32       PCC=1.000000 | TIMED pcc=1.000000 | stable across reps: True
+SigLIP       qkv    mmd_partial_T64    PCC=1.000000 | TIMED pcc=1.000000 | stable across reps: True
+SigLIP       o      mmd_full_T64       PCC=1.000000 | TIMED pcc=1.000000 | stable across reps: True
+SigLIP       o      native             PCC=1.000000 | TIMED pcc=1.000000 | 
+SigLIP       o      mmd_partial        PCC=1.000000 | TIMED pcc=1.000000 | stable across reps: True
+SigLIP       o      native_T32         PCC=1.000000 | TIMED pcc=1.000000 | 
+SigLIP       o      mmd_partial_T32    PCC=1.000000 | TIMED pcc=1.000000 | stable across reps: True
+SigLIP       o      native_T64         PCC=1.000000 | TIMED pcc=1.000000 | 
+SigLIP       o      mmd_partial_T64    PCC=1.000000 | TIMED pcc=1.000000 | stable across reps: True
+SigLIP       o      mmd_full           PCC=1.000000 | TIMED pcc=1.000000 | stable across reps: True
+SigLIP       fc1    native             PCC=0.999957 | TIMED pcc=0.999957 | 
+SigLIP       o      mmd_full_T32       PCC=1.000000 | TIMED pcc=1.000000 | stable across reps: True
+SigLIP       fc1    native_T32         PCC=0.999957 | TIMED pcc=0.999957 | 
+SigLIP       o      mmd_full_T64       PCC=1.000000 | TIMED pcc=1.000000 | stable across reps: True
+SigLIP       fc1    native_T64         PCC=0.999957 | TIMED pcc=0.999957 | 
+SigLIP       o      mmd_partial        PCC=1.000000 | TIMED pcc=1.000000 | stable across reps: True
+SigLIP       fc1    mmd_full                        | INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores | 
+SigLIP       o      mmd_partial_T32    PCC=1.000000 | TIMED pcc=1.000000 | stable across reps: True
+SigLIP       fc1    mmd_full_T32                    | INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores | 
+SigLIP       o      mmd_partial_T64    PCC=1.000000 | TIMED pcc=1.000000 | stable across reps: True
+SigLIP       fc1    mmd_full_T64                    | INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores | 
+SigLIP       fc1    native             PCC=0.999957 | TIMED pcc=0.999957 | 
+SigLIP       fc1    mmd_partial        PCC=0.999962 | TIMED pcc=0.999962 | stable across reps: True
+SigLIP       fc1    native_T32         PCC=0.999957 | TIMED pcc=0.999957 | 
+SigLIP       fc1    mmd_partial_T32    PCC=0.999962 | TIMED pcc=0.999962 | stable across reps: True
+SigLIP       fc1    native_T64         PCC=0.999957 | TIMED pcc=0.999957 | 
+SigLIP       fc1    mmd_partial_T64    PCC=0.999962 | TIMED pcc=0.999962 | stable across reps: True
+SigLIP       fc1    mmd_full                        | INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores | 
+SigLIP       fc2    native             PCC=0.999873 | TIMED pcc=0.999873 | 
+SigLIP       fc1    mmd_full_T32                    | INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores | 
+SigLIP       fc2    native_T32         PCC=0.999873 | TIMED pcc=0.999873 | 
+SigLIP       fc1    mmd_full_T64                    | INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores | 
+SigLIP       fc2    native_T64         PCC=0.999873 | TIMED pcc=0.999873 | 
+SigLIP       fc1    mmd_partial        PCC=0.999962 | TIMED pcc=0.999962 | stable across reps: True
+SigLIP       fc2    mmd_full                        | NOFIT-BUILD :: RuntimeError: FULL-WS K=4320 N=1152 m_tiles=8 cannot power-of-2 K-split to fit L1/CB even at G=2 (Kc not tile-aligned); pad K to a split-friendly width | 
+SigLIP       fc1    mmd_partial_T32    PCC=0.999962 | TIMED pcc=0.999962 | stable across reps: True
+SigLIP       fc2    mmd_full_T32       PCC=0.999970 | TIMED pcc=0.999970 | stable across reps: True
+SigLIP       fc1    mmd_partial_T64    PCC=0.999962 | TIMED pcc=0.999962 | stable across reps: True
+SigLIP       fc2    mmd_full_T64       PCC=0.999970 | TIMED pcc=0.999970 | stable across reps: True
+SigLIP       fc2    native             PCC=0.999873 | TIMED pcc=0.999873 | 
+SigLIP       fc2    mmd_partial                     | NOFIT-BUILD :: RuntimeError: cannot N-chunk K=4320 N=1152 under 104 cores (want_partial=True) | 
+SigLIP       fc2    native_T32         PCC=0.999873 | TIMED pcc=0.999873 | 
+SigLIP       fc2    mmd_partial_T32                 | NOFIT-BUILD :: RuntimeError: cannot N-chunk K=4320 N=1152 under 104 cores (want_partial=True) | 
+SigLIP       fc2    native_T64         PCC=0.999873 | TIMED pcc=0.999873 | 
+SigLIP       fc2    mmd_partial_T64                 | NOFIT-BUILD :: RuntimeError: cannot N-chunk K=4320 N=1152 under 104 cores (want_partial=True) | 
+SigLIP       fc2    mmd_full                        | NOFIT-BUILD :: RuntimeError: FULL-WS K=4320 N=1152 m_tiles=8 cannot power-of-2 K-split to fit L1/CB even at G=2 (Kc not tile-aligned); pad K to a split-friendly width | 
+VLM          qkv    native             PCC=0.999981 | TIMED pcc=0.999981 | 
+SigLIP       fc2    mmd_full_T32       PCC=0.999970 | TIMED pcc=0.999970 | stable across reps: True
+VLM          qkv    native_T32         PCC=0.999995 | TIMED pcc=0.999995 | 
+SigLIP       fc2    mmd_full_T64       PCC=0.999970 | TIMED pcc=0.999970 | stable across reps: True
+VLM          qkv    native_T96         PCC=0.999995 | TIMED pcc=0.999995 | 
+SigLIP       fc2    mmd_partial                     | NOFIT-BUILD :: RuntimeError: cannot N-chunk K=4320 N=1152 under 104 cores (want_partial=True) | 
+VLM          qkv    mmd_full           PCC=0.999999 | TIMED pcc=0.999999 | stable across reps: True
+SigLIP       fc2    mmd_partial_T32                 | NOFIT-BUILD :: RuntimeError: cannot N-chunk K=4320 N=1152 under 104 cores (want_partial=True) | 
+VLM          qkv    mmd_full_T32       PCC=1.000000 | TIMED pcc=1.000000 | stable across reps: True
+SigLIP       fc2    mmd_partial_T64                 | NOFIT-BUILD :: RuntimeError: cannot N-chunk K=4320 N=1152 under 104 cores (want_partial=True) | 
+VLM          qkv    mmd_full_T96       PCC=1.000000 | TIMED pcc=1.000000 | stable across reps: True
+VLM          qkv    native             PCC=0.999981 | TIMED pcc=0.999981 | 
+VLM          qkv    mmd_partial                     | INVALID-RUN :: RuntimeError: TT_THROW @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/impl/program/program.cpp:1476: tt::exception | 
+VLM          qkv    native_T32         PCC=0.999995 | TIMED pcc=0.999995 | 
+VLM          qkv    mmd_partial_T32    PCC=0.999999 | TIMED pcc=0.999999 | stable across reps: True
+VLM          qkv    native_T96         PCC=0.999995 | TIMED pcc=0.999995 | 
+VLM          qkv    mmd_partial_T96    PCC=0.999999 | TIMED pcc=0.999999 | stable across reps: True
+VLM          qkv    mmd_full           PCC=0.999999 | TIMED pcc=0.999999 | stable across reps: True
+VLM          o      native             PCC=0.999973 | TIMED pcc=0.999973 | 
+VLM          qkv    mmd_full_T32       PCC=1.000000 | TIMED pcc=1.000000 | stable across reps: True
+VLM          o      native_T32         PCC=0.999986 | TIMED pcc=0.999986 | 
+VLM          qkv    mmd_full_T96       PCC=1.000000 | TIMED pcc=1.000000 | stable across reps: True
+VLM          o      native_T96         PCC=0.999986 | TIMED pcc=0.999986 | 
+VLM          qkv    mmd_partial                     | INVALID-RUN :: RuntimeError: TT_THROW @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/impl/program/program.cpp:1476: tt::exception | 
+VLM          o      mmd_full           PCC=0.999991 | TIMED pcc=0.999991 | stable across reps: True
+VLM          qkv    mmd_partial_T32    PCC=0.999999 | TIMED pcc=0.999999 | stable across reps: True

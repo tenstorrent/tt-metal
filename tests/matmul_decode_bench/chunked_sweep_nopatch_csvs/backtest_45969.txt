@@ -1,0 +1,2 @@
+BACK-TEST (METRIC=KERNEL MMSWEEP_OP=mmd over frozen mmd_SigLIP_qkv.csv):
+  SigLIP.qkv    mmd_us/fwd=45.969  calls/fwd=8.0  glue_us/fwd=230.74

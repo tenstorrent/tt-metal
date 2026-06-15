@@ -1,0 +1,7 @@
+  RESIDENT buffer_addrs after fwd1: [1089536, 1187840]
+  RESIDENT stable across reps: True (before=[1089536, 1187840] after=[1089536, 1187840])
+RESULT VLM.qkv CFG=mmd_full : TIMED pcc=0.999999
+--- SigLIP qkv mmd_partial ---
+  RESIDENT buffer_addrs after fwd1: [1110016, 1155072, 1216512]
+  RESIDENT stable across reps: True (before=[1110016, 1155072, 1216512] after=[1110016, 1155072, 1216512])
+RESULT SigLIP.qkv CFG=mmd_partial : TIMED pcc=1.000000

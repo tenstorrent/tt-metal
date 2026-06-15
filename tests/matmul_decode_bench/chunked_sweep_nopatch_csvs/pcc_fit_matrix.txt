@@ -1,0 +1,843 @@
+### SigLIP.qkv CFG=native
+### SigLIP.qkv  CFG=mmd_full_T64
+RESULT SigLIP.qkv CFG=mmd_full_T64 : INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores
+
+  PCC=1.000000 (thr=0.99)
+RESULT SigLIP.qkv CFG=native : TIMED pcc=1.000000
+
+### SigLIP.qkv CFG=native_T32
+### SigLIP.qkv  CFG=mmd_partial
+  PCC=1.000000 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1110016, 1155072, 1216512]
+  RESIDENT stable across reps: True (before=[1110016, 1155072, 1216512] after=[1110016, 1155072, 1216512])
+RESULT SigLIP.qkv CFG=mmd_partial : TIMED pcc=1.000000
+
+  PCC=1.000000 (thr=0.99)
+RESULT SigLIP.qkv CFG=native_T32 : TIMED pcc=1.000000
+
+### SigLIP.qkv CFG=native_T64
+### SigLIP.qkv  CFG=mmd_partial_T32
+  PCC=1.000000 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1394688, 1433600, 1474560]
+  RESIDENT stable across reps: True (before=[1394688, 1433600, 1474560] after=[1394688, 1433600, 1474560])
+RESULT SigLIP.qkv CFG=mmd_partial_T32 : TIMED pcc=1.000000
+
+  PCC=1.000000 (thr=0.99)
+RESULT SigLIP.qkv CFG=native_T64 : TIMED pcc=1.000000
+
+### SigLIP.qkv CFG=mmd_full
+### SigLIP.qkv  CFG=mmd_partial_T64
+  PCC=1.000000 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1355776, 1394688, 1437696]
+  RESIDENT stable across reps: True (before=[1355776, 1394688, 1437696] after=[1355776, 1394688, 1437696])
+RESULT SigLIP.qkv CFG=mmd_partial_T64 : TIMED pcc=1.000000
+
+RESULT SigLIP.qkv CFG=mmd_full : INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores
+
+### SigLIP.qkv CFG=mmd_full_T32
+### SigLIP.o  CFG=native
+  PCC=1.000000 (thr=0.99)
+RESULT SigLIP.o CFG=native : TIMED pcc=1.000000
+
+RESULT SigLIP.qkv CFG=mmd_full_T32 : INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores
+
+### SigLIP.qkv CFG=mmd_full_T64
+### SigLIP.o  CFG=native_T32
+  PCC=1.000000 (thr=0.99)
+RESULT SigLIP.o CFG=native_T32 : TIMED pcc=1.000000
+
+RESULT SigLIP.qkv CFG=mmd_full_T64 : INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores
+
+### SigLIP.qkv CFG=mmd_partial
+### SigLIP.o  CFG=native_T64
+  PCC=1.000000 (thr=0.99)
+RESULT SigLIP.o CFG=native_T64 : TIMED pcc=1.000000
+
+  PCC=1.000000 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1110016, 1155072, 1216512]
+  RESIDENT stable across reps: True (before=[1110016, 1155072, 1216512] after=[1110016, 1155072, 1216512])
+RESULT SigLIP.qkv CFG=mmd_partial : TIMED pcc=1.000000
+
+### SigLIP.qkv CFG=mmd_partial_T32
+### SigLIP.o  CFG=mmd_full
+  PCC=1.000000 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1056768]
+  RESIDENT stable across reps: True (before=[1056768] after=[1056768])
+RESULT SigLIP.o CFG=mmd_full : TIMED pcc=1.000000
+
+  PCC=1.000000 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1394688, 1433600, 1474560]
+  RESIDENT stable across reps: True (before=[1394688, 1433600, 1474560] after=[1394688, 1433600, 1474560])
+RESULT SigLIP.qkv CFG=mmd_partial_T32 : TIMED pcc=1.000000
+
+### SigLIP.qkv CFG=mmd_partial_T64
+### SigLIP.o  CFG=mmd_full_T32
+  PCC=1.000000 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1400832]
+  RESIDENT stable across reps: True (before=[1400832] after=[1400832])
+RESULT SigLIP.o CFG=mmd_full_T32 : TIMED pcc=1.000000
+
+  PCC=1.000000 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1355776, 1394688, 1437696]
+  RESIDENT stable across reps: True (before=[1355776, 1394688, 1437696] after=[1355776, 1394688, 1437696])
+RESULT SigLIP.qkv CFG=mmd_partial_T64 : TIMED pcc=1.000000
+
+### SigLIP.o CFG=native
+### SigLIP.o  CFG=mmd_full_T64
+  PCC=1.000000 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1351680]
+  RESIDENT stable across reps: True (before=[1351680] after=[1351680])
+RESULT SigLIP.o CFG=mmd_full_T64 : TIMED pcc=1.000000
+
+  PCC=1.000000 (thr=0.99)
+RESULT SigLIP.o CFG=native : TIMED pcc=1.000000
+
+### SigLIP.o CFG=native_T32
+### SigLIP.o  CFG=mmd_partial
+  PCC=1.000000 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1105920]
+  RESIDENT stable across reps: True (before=[1105920] after=[1105920])
+RESULT SigLIP.o CFG=mmd_partial : TIMED pcc=1.000000
+
+  PCC=1.000000 (thr=0.99)
+RESULT SigLIP.o CFG=native_T32 : TIMED pcc=1.000000
+
+### SigLIP.o CFG=native_T64
+### SigLIP.o  CFG=mmd_partial_T32
+  PCC=1.000000 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1449984]
+  RESIDENT stable across reps: True (before=[1449984] after=[1449984])
+RESULT SigLIP.o CFG=mmd_partial_T32 : TIMED pcc=1.000000
+
+  PCC=1.000000 (thr=0.99)
+RESULT SigLIP.o CFG=native_T64 : TIMED pcc=1.000000
+
+### SigLIP.o CFG=mmd_full
+### SigLIP.o  CFG=mmd_partial_T64
+  PCC=1.000000 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1400832]
+  RESIDENT stable across reps: True (before=[1400832] after=[1400832])
+RESULT SigLIP.o CFG=mmd_partial_T64 : TIMED pcc=1.000000
+
+  PCC=1.000000 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1056768]
+  RESIDENT stable across reps: True (before=[1056768] after=[1056768])
+RESULT SigLIP.o CFG=mmd_full : TIMED pcc=1.000000
+
+### SigLIP.o CFG=mmd_full_T32
+### SigLIP.fc1  CFG=native
+RESULT SigLIP.fc1 CFG=native : INVALID-RUN :: TypeError: __getitem__(): incompatible function arguments. The following argument types are supported:
+
+  PCC=1.000000 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1400832]
+  RESIDENT stable across reps: True (before=[1400832] after=[1400832])
+RESULT SigLIP.o CFG=mmd_full_T32 : TIMED pcc=1.000000
+
+### SigLIP.o CFG=mmd_full_T64
+### SigLIP.fc1  CFG=native_T32
+RESULT SigLIP.fc1 CFG=native_T32 : INVALID-RUN :: TypeError: __getitem__(): incompatible function arguments. The following argument types are supported:
+
+  PCC=1.000000 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1351680]
+  RESIDENT stable across reps: True (before=[1351680] after=[1351680])
+RESULT SigLIP.o CFG=mmd_full_T64 : TIMED pcc=1.000000
+
+### SigLIP.o CFG=mmd_partial
+### SigLIP.fc1  CFG=native_T64
+RESULT SigLIP.fc1 CFG=native_T64 : INVALID-RUN :: TypeError: __getitem__(): incompatible function arguments. The following argument types are supported:
+
+  PCC=1.000000 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1105920]
+  RESIDENT stable across reps: True (before=[1105920] after=[1105920])
+RESULT SigLIP.o CFG=mmd_partial : TIMED pcc=1.000000
+
+### SigLIP.o CFG=mmd_partial_T32
+### SigLIP.fc1  CFG=mmd_full
+RESULT SigLIP.fc1 CFG=mmd_full : INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores
+
+  PCC=1.000000 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1449984]
+  RESIDENT stable across reps: True (before=[1449984] after=[1449984])
+RESULT SigLIP.o CFG=mmd_partial_T32 : TIMED pcc=1.000000
+
+### SigLIP.o CFG=mmd_partial_T64
+### SigLIP.fc1  CFG=mmd_full_T32
+RESULT SigLIP.fc1 CFG=mmd_full_T32 : INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores
+
+  PCC=1.000000 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1400832]
+  RESIDENT stable across reps: True (before=[1400832] after=[1400832])
+RESULT SigLIP.o CFG=mmd_partial_T64 : TIMED pcc=1.000000
+
+### SigLIP.fc1 CFG=native
+### SigLIP.fc1  CFG=mmd_full_T64
+RESULT SigLIP.fc1 CFG=mmd_full_T64 : INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores
+
+RESULT SigLIP.fc1 CFG=native : INVALID-RUN :: TypeError: __getitem__(): incompatible function arguments. The following argument types are supported:
+
+### SigLIP.fc1 CFG=native_T32
+### SigLIP.fc1  CFG=mmd_partial
+  PCC=0.999962 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1161856, 1189632, 1233792]
+  RESIDENT stable across reps: True (before=[1161856, 1189632, 1233792] after=[1161856, 1189632, 1233792])
+RESULT SigLIP.fc1 CFG=mmd_partial : TIMED pcc=0.999962
+
+RESULT SigLIP.fc1 CFG=native_T32 : INVALID-RUN :: TypeError: __getitem__(): incompatible function arguments. The following argument types are supported:
+
+### SigLIP.fc1 CFG=native_T64
+### SigLIP.fc1  CFG=mmd_partial_T32
+  PCC=0.999962 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1446528, 1468160, 1491840]
+  RESIDENT stable across reps: True (before=[1446528, 1468160, 1491840] after=[1446528, 1468160, 1491840])
+RESULT SigLIP.fc1 CFG=mmd_partial_T32 : TIMED pcc=0.999962
+
+RESULT SigLIP.fc1 CFG=native_T64 : INVALID-RUN :: TypeError: __getitem__(): incompatible function arguments. The following argument types are supported:
+
+### SigLIP.fc1 CFG=mmd_full
+
+### SigLIP.fc1 CFG=mmd_full_T32
+### SigLIP.fc1  CFG=mmd_partial_T64
+
+
+### SigLIP.fc2  CFG=native
+  PCC=0.999873 (thr=0.99)
+RESULT SigLIP.fc2 CFG=native : TIMED pcc=0.999873
+
+RESULT SigLIP.fc1 CFG=mmd_full_T32 : INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores
+
+### SigLIP.fc1 CFG=mmd_full_T64
+### SigLIP.fc2  CFG=native_T32
+  PCC=0.999873 (thr=0.99)
+RESULT SigLIP.fc2 CFG=native_T32 : TIMED pcc=0.999873
+
+RESULT SigLIP.fc1 CFG=mmd_full_T64 : INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores
+
+### SigLIP.fc1 CFG=mmd_partial
+### SigLIP.fc2  CFG=native_T64
+
+
+
+### SigLIP.fc1 CFG=mmd_partial_T32
+  PCC=0.999962 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1446528, 1468160, 1491840]
+  RESIDENT stable across reps: True (before=[1446528, 1468160, 1491840] after=[1446528, 1468160, 1491840])
+RESULT SigLIP.fc1 CFG=mmd_partial_T32 : TIMED pcc=0.999962
+
+### SigLIP.fc1 CFG=mmd_partial_T64
+### SigLIP.fc2  CFG=mmd_full
+RESULT SigLIP.fc2 CFG=mmd_full : NOFIT-BUILD :: RuntimeError: FULL-WS K=4320 N=1152 m_tiles=8 cannot power-of-2 K-split to fit L1/CB even at G=2 (Kc not tile-aligned); pad K to a split-friendly width
+
+  PCC=0.999962 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1407616, 1429248, 1454976]
+  RESIDENT stable across reps: True (before=[1407616, 1429248, 1454976] after=[1407616, 1429248, 1454976])
+RESULT SigLIP.fc1 CFG=mmd_partial_T64 : TIMED pcc=0.999962
+
+### SigLIP.fc2 CFG=native
+### SigLIP.fc2  CFG=mmd_full_T32
+  PCC=0.999970 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1124928]
+  RESIDENT stable across reps: True (before=[1124928] after=[1124928])
+RESULT SigLIP.fc2 CFG=mmd_full_T32 : TIMED pcc=0.999970
+
+  PCC=0.999873 (thr=0.99)
+RESULT SigLIP.fc2 CFG=native : TIMED pcc=0.999873
+
+### SigLIP.fc2 CFG=native_T32
+### SigLIP.fc2  CFG=mmd_full_T64
+  PCC=0.999970 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [848448]
+  RESIDENT stable across reps: True (before=[848448] after=[848448])
+RESULT SigLIP.fc2 CFG=mmd_full_T64 : TIMED pcc=0.999970
+
+  PCC=0.999873 (thr=0.99)
+RESULT SigLIP.fc2 CFG=native_T32 : TIMED pcc=0.999873
+
+### SigLIP.fc2 CFG=native_T64
+### SigLIP.fc2  CFG=mmd_partial
+RESULT SigLIP.fc2 CFG=mmd_partial : NOFIT-BUILD :: RuntimeError: cannot N-chunk K=4320 N=1152 under 104 cores (want_partial=True)
+
+  PCC=0.999873 (thr=0.99)
+RESULT SigLIP.fc2 CFG=native_T64 : TIMED pcc=0.999873
+
+### SigLIP.fc2 CFG=mmd_full
+### SigLIP.fc2  CFG=mmd_partial_T32
+RESULT SigLIP.fc2 CFG=mmd_partial_T32 : NOFIT-BUILD :: RuntimeError: cannot N-chunk K=4320 N=1152 under 104 cores (want_partial=True)
+
+RESULT SigLIP.fc2 CFG=mmd_full : NOFIT-BUILD :: RuntimeError: FULL-WS K=4320 N=1152 m_tiles=8 cannot power-of-2 K-split to fit L1/CB even at G=2 (Kc not tile-aligned); pad K to a split-friendly width
+
+### SigLIP.fc2 CFG=mmd_full_T32
+### SigLIP.fc2  CFG=mmd_partial_T64
+RESULT SigLIP.fc2 CFG=mmd_partial_T64 : NOFIT-BUILD :: RuntimeError: cannot N-chunk K=4320 N=1152 under 104 cores (want_partial=True)
+
+  PCC=0.999970 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1124928]
+  RESIDENT stable across reps: True (before=[1124928] after=[1124928])
+RESULT SigLIP.fc2 CFG=mmd_full_T32 : TIMED pcc=0.999970
+
+### SigLIP.fc2 CFG=mmd_full_T64
+### VLM.qkv  CFG=native
+  PCC=0.999981 (thr=0.99)
+RESULT VLM.qkv CFG=native : TIMED pcc=0.999981
+
+  PCC=0.999970 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [848448]
+  RESIDENT stable across reps: True (before=[848448] after=[848448])
+RESULT SigLIP.fc2 CFG=mmd_full_T64 : TIMED pcc=0.999970
+
+### SigLIP.fc2 CFG=mmd_partial
+### VLM.qkv  CFG=native_T32
+  PCC=0.999995 (thr=0.99)
+RESULT VLM.qkv CFG=native_T32 : TIMED pcc=0.999995
+
+RESULT SigLIP.fc2 CFG=mmd_partial : NOFIT-BUILD :: RuntimeError: cannot N-chunk K=4320 N=1152 under 104 cores (want_partial=True)
+
+### SigLIP.fc2 CFG=mmd_partial_T32
+### VLM.qkv  CFG=native_T96
+  PCC=0.999995 (thr=0.99)
+RESULT VLM.qkv CFG=native_T96 : TIMED pcc=0.999995
+
+RESULT SigLIP.fc2 CFG=mmd_partial_T32 : NOFIT-BUILD :: RuntimeError: cannot N-chunk K=4320 N=1152 under 104 cores (want_partial=True)
+
+### SigLIP.fc2 CFG=mmd_partial_T64
+### VLM.qkv  CFG=mmd_full
+  PCC=0.999999 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1089536, 1187840]
+  RESIDENT stable across reps: True (before=[1089536, 1187840] after=[1089536, 1187840])
+RESULT VLM.qkv CFG=mmd_full : TIMED pcc=0.999999
+
+RESULT SigLIP.fc2 CFG=mmd_partial_T64 : NOFIT-BUILD :: RuntimeError: cannot N-chunk K=4320 N=1152 under 104 cores (want_partial=True)
+
+### VLM.qkv CFG=native
+### VLM.qkv  CFG=mmd_full_T32
+  PCC=1.000000 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1351680]
+  RESIDENT stable across reps: True (before=[1351680] after=[1351680])
+RESULT VLM.qkv CFG=mmd_full_T32 : TIMED pcc=1.000000
+
+  PCC=0.999981 (thr=0.99)
+RESULT VLM.qkv CFG=native : TIMED pcc=0.999981
+
+### VLM.qkv CFG=native_T32
+### VLM.qkv  CFG=mmd_full_T96
+  PCC=1.000000 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1220608]
+  RESIDENT stable across reps: True (before=[1220608] after=[1220608])
+RESULT VLM.qkv CFG=mmd_full_T96 : TIMED pcc=1.000000
+
+  PCC=0.999995 (thr=0.99)
+RESULT VLM.qkv CFG=native_T32 : TIMED pcc=0.999995
+
+### VLM.qkv CFG=native_T96
+### VLM.qkv  CFG=mmd_partial
+RESULT VLM.qkv CFG=mmd_partial : INVALID-RUN :: RuntimeError: TT_THROW @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/impl/program/program.cpp:1476: tt::exception
+
+  PCC=0.999995 (thr=0.99)
+RESULT VLM.qkv CFG=native_T96 : TIMED pcc=0.999995
+
+### VLM.qkv CFG=mmd_full
+### VLM.qkv  CFG=mmd_partial_T32
+  PCC=0.999999 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1347584, 1417216]
+  RESIDENT stable across reps: True (before=[1347584, 1417216] after=[1347584, 1417216])
+RESULT VLM.qkv CFG=mmd_partial_T32 : TIMED pcc=0.999999
+
+  PCC=0.999999 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1089536, 1187840]
+  RESIDENT stable across reps: True (before=[1089536, 1187840] after=[1089536, 1187840])
+RESULT VLM.qkv CFG=mmd_full : TIMED pcc=0.999999
+
+### VLM.qkv CFG=mmd_full_T32
+### VLM.qkv  CFG=mmd_partial_T96
+  PCC=0.999999 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1210368, 1286144]
+  RESIDENT stable across reps: True (before=[1210368, 1286144] after=[1210368, 1286144])
+RESULT VLM.qkv CFG=mmd_partial_T96 : TIMED pcc=0.999999
+
+  PCC=1.000000 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1351680]
+  RESIDENT stable across reps: True (before=[1351680] after=[1351680])
+RESULT VLM.qkv CFG=mmd_full_T32 : TIMED pcc=1.000000
+
+### VLM.qkv CFG=mmd_full_T96
+### VLM.o  CFG=native
+  PCC=0.999973 (thr=0.99)
+RESULT VLM.o CFG=native : TIMED pcc=0.999973
+
+  PCC=1.000000 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1220608]
+  RESIDENT stable across reps: True (before=[1220608] after=[1220608])
+RESULT VLM.qkv CFG=mmd_full_T96 : TIMED pcc=1.000000
+
+### VLM.qkv CFG=mmd_partial
+### VLM.o  CFG=native_T32
+  PCC=0.999986 (thr=0.99)
+RESULT VLM.o CFG=native_T32 : TIMED pcc=0.999986
+
+RESULT VLM.qkv CFG=mmd_partial : INVALID-RUN :: RuntimeError: TT_THROW @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/impl/program/program.cpp:1476: tt::exception
+
+### VLM.qkv CFG=mmd_partial_T32
+### VLM.o  CFG=native_T96
+  PCC=0.999986 (thr=0.99)
+RESULT VLM.o CFG=native_T96 : TIMED pcc=0.999986
+
+  PCC=0.999999 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1347584, 1417216]
+  RESIDENT stable across reps: True (before=[1347584, 1417216] after=[1347584, 1417216])
+RESULT VLM.qkv CFG=mmd_partial_T32 : TIMED pcc=0.999999
+
+### VLM.qkv CFG=mmd_partial_T96
+### VLM.o  CFG=mmd_full
+  PCC=0.999991 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1091584, 1187840]
+  RESIDENT stable across reps: True (before=[1091584, 1187840] after=[1091584, 1187840])
+RESULT VLM.o CFG=mmd_full : TIMED pcc=0.999991
+
+  PCC=0.999999 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1210368, 1286144]
+  RESIDENT stable across reps: True (before=[1210368, 1286144] after=[1210368, 1286144])
+RESULT VLM.qkv CFG=mmd_partial_T96 : TIMED pcc=0.999999
+
+### VLM.o CFG=native
+### VLM.o  CFG=mmd_full_T32
+  PCC=0.999986 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1351680]
+  RESIDENT stable across reps: True (before=[1351680] after=[1351680])
+RESULT VLM.o CFG=mmd_full_T32 : TIMED pcc=0.999986
+
+  PCC=0.999973 (thr=0.99)
+RESULT VLM.o CFG=native : TIMED pcc=0.999973
+
+### VLM.o CFG=native_T32
+### VLM.o  CFG=mmd_full_T96
+  PCC=0.999986 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1220608]
+  RESIDENT stable across reps: True (before=[1220608] after=[1220608])
+RESULT VLM.o CFG=mmd_full_T96 : TIMED pcc=0.999986
+
+  PCC=0.999986 (thr=0.99)
+RESULT VLM.o CFG=native_T32 : TIMED pcc=0.999986
+
+### VLM.o CFG=native_T96
+### VLM.o  CFG=mmd_partial
+RESULT VLM.o CFG=mmd_partial : INVALID-RUN :: RuntimeError: TT_THROW @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/impl/program/program.cpp:1476: tt::exception
+
+  PCC=0.999986 (thr=0.99)
+RESULT VLM.o CFG=native_T96 : TIMED pcc=0.999986
+
+### VLM.o CFG=mmd_full
+### VLM.o  CFG=mmd_partial_T32
+  PCC=0.999991 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1347584, 1417216]
+  RESIDENT stable across reps: True (before=[1347584, 1417216] after=[1347584, 1417216])
+RESULT VLM.o CFG=mmd_partial_T32 : TIMED pcc=0.999991
+
+  PCC=0.999991 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1091584, 1187840]
+  RESIDENT stable across reps: True (before=[1091584, 1187840] after=[1091584, 1187840])
+RESULT VLM.o CFG=mmd_full : TIMED pcc=0.999991
+
+### VLM.o CFG=mmd_full_T32
+### VLM.o  CFG=mmd_partial_T96
+  PCC=0.999991 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1212416, 1286144]
+  RESIDENT stable across reps: True (before=[1212416, 1286144] after=[1212416, 1286144])
+RESULT VLM.o CFG=mmd_partial_T96 : TIMED pcc=0.999991
+
+  PCC=0.999986 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1351680]
+  RESIDENT stable across reps: True (before=[1351680] after=[1351680])
+RESULT VLM.o CFG=mmd_full_T32 : TIMED pcc=0.999986
+
+### VLM.o CFG=mmd_full_T96
+### VLM.gate  CFG=native
+  PCC=0.999918 (thr=0.99)
+RESULT VLM.gate CFG=native : TIMED pcc=0.999918
+
+  PCC=0.999986 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1220608]
+  RESIDENT stable across reps: True (before=[1220608] after=[1220608])
+RESULT VLM.o CFG=mmd_full_T96 : TIMED pcc=0.999986
+
+### VLM.o CFG=mmd_partial
+### VLM.gate  CFG=native_T32
+  PCC=0.999918 (thr=0.99)
+RESULT VLM.gate CFG=native_T32 : TIMED pcc=0.999918
+
+RESULT VLM.o CFG=mmd_partial : INVALID-RUN :: RuntimeError: TT_THROW @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/impl/program/program.cpp:1476: tt::exception
+
+### VLM.o CFG=mmd_partial_T32
+### VLM.gate  CFG=native_T96
+  PCC=0.999918 (thr=0.99)
+RESULT VLM.gate CFG=native_T96 : TIMED pcc=0.999918
+
+  PCC=0.999991 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1347584, 1417216]
+  RESIDENT stable across reps: True (before=[1347584, 1417216] after=[1347584, 1417216])
+RESULT VLM.o CFG=mmd_partial_T32 : TIMED pcc=0.999991
+
+### VLM.o CFG=mmd_partial_T96
+### VLM.gate  CFG=mmd_full
+RESULT VLM.gate CFG=mmd_full : NOFIT-BUILD :: AssertionError: wide-N stream K=2048 N=16384 npc=8 m_tiles=9: no a_cores fits bank
+
+  PCC=0.999991 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1212416, 1286144]
+  RESIDENT stable across reps: True (before=[1212416, 1286144] after=[1212416, 1286144])
+RESULT VLM.o CFG=mmd_partial_T96 : TIMED pcc=0.999991
+
+### VLM.gate CFG=native
+### VLM.gate  CFG=mmd_full_T32
+RESULT VLM.gate CFG=mmd_full_T32 : INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores
+
+  PCC=0.999918 (thr=0.99)
+RESULT VLM.gate CFG=native : TIMED pcc=0.999918
+
+### VLM.gate CFG=native_T32
+### VLM.gate  CFG=mmd_full_T96
+RESULT VLM.gate CFG=mmd_full_T96 : INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores
+
+  PCC=0.999918 (thr=0.99)
+RESULT VLM.gate CFG=native_T32 : TIMED pcc=0.999918
+
+### VLM.gate CFG=native_T96
+### VLM.gate  CFG=mmd_partial
+RESULT VLM.gate CFG=mmd_partial : INVALID-RUN :: RuntimeError: TT_THROW @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/impl/program/program.cpp:1476: tt::exception
+
+  PCC=0.999918 (thr=0.99)
+RESULT VLM.gate CFG=native_T96 : TIMED pcc=0.999918
+
+### VLM.gate CFG=mmd_full
+### VLM.gate  CFG=mmd_partial_T32
+  PCC=0.999924 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [401408, 468992, 536576, 604160, 671744, 739328, 806912, 874496, 942080, 1009664, 1077248, 1144832, 1212416, 1280000, 1347584, 1417216]
+  RESIDENT stable across reps: True (before=[401408, 468992, 536576, 604160, 671744, 739328, 806912, 874496, 942080, 1009664, 1077248, 1144832, 1212416, 1280000, 1347584, 1417216] after=[401408, 468992, 536576, 604160, 671744, 739328, 806912, 874496, 942080, 1009664, 1077248, 1144832, 1212416, 1280000, 1347584, 1417216])
+RESULT VLM.gate CFG=mmd_partial_T32 : TIMED pcc=0.999924
+
+RESULT VLM.gate CFG=mmd_full : NOFIT-BUILD :: ASSERT: wide-N stream K=2048 N=16384 npc=8 m_tiles=9: no a_cores fits bank
+
+### VLM.gate CFG=mmd_full_T32
+### VLM.gate  CFG=mmd_partial_T96
+RESULT VLM.gate CFG=mmd_partial_T96 : INVALID-RUN :: RuntimeError: TT_THROW @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/impl/program/program.cpp:1476: tt::exception
+
+RESULT VLM.gate CFG=mmd_full_T32 : INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores
+
+### VLM.gate CFG=mmd_full_T96
+### VLM.up  CFG=native
+  PCC=0.999918 (thr=0.99)
+RESULT VLM.up CFG=native : TIMED pcc=0.999918
+
+RESULT VLM.gate CFG=mmd_full_T96 : INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores
+
+### VLM.gate CFG=mmd_partial
+### VLM.up  CFG=native_T32
+  PCC=0.999918 (thr=0.99)
+RESULT VLM.up CFG=native_T32 : TIMED pcc=0.999918
+
+RESULT VLM.gate CFG=mmd_partial : INVALID-RUN :: RuntimeError: TT_THROW @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/impl/program/program.cpp:1476: tt::exception
+
+### VLM.gate CFG=mmd_partial_T32
+### VLM.up  CFG=native_T96
+  PCC=0.999918 (thr=0.99)
+RESULT VLM.up CFG=native_T96 : TIMED pcc=0.999918
+
+  PCC=0.999924 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [401408, 468992, 536576, 604160, 671744, 739328, 806912, 874496, 942080, 1009664, 1077248, 1144832, 1212416, 1280000, 1347584, 1417216]
+  RESIDENT stable across reps: True (before=[401408, 468992, 536576, 604160, 671744, 739328, 806912, 874496, 942080, 1009664, 1077248, 1144832, 1212416, 1280000, 1347584, 1417216] after=[401408, 468992, 536576, 604160, 671744, 739328, 806912, 874496, 942080, 1009664, 1077248, 1144832, 1212416, 1280000, 1347584, 1417216])
+RESULT VLM.gate CFG=mmd_partial_T32 : TIMED pcc=0.999924
+
+### VLM.gate CFG=mmd_partial_T96
+### VLM.up  CFG=mmd_full
+RESULT VLM.up CFG=mmd_full : NOFIT-BUILD :: AssertionError: wide-N stream K=2048 N=16384 npc=8 m_tiles=9: no a_cores fits bank
+
+RESULT VLM.gate CFG=mmd_partial_T96 : INVALID-RUN :: RuntimeError: TT_THROW @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/impl/program/program.cpp:1476: tt::exception
+
+### VLM.up CFG=native
+### VLM.up  CFG=mmd_full_T32
+RESULT VLM.up CFG=mmd_full_T32 : INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores
+
+  PCC=0.999918 (thr=0.99)
+RESULT VLM.up CFG=native : TIMED pcc=0.999918
+
+### VLM.up CFG=native_T32
+### VLM.up  CFG=mmd_full_T96
+RESULT VLM.up CFG=mmd_full_T96 : INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores
+
+  PCC=0.999918 (thr=0.99)
+RESULT VLM.up CFG=native_T32 : TIMED pcc=0.999918
+
+### VLM.up CFG=native_T96
+### VLM.up  CFG=mmd_partial
+RESULT VLM.up CFG=mmd_partial : INVALID-RUN :: RuntimeError: TT_THROW @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/impl/program/program.cpp:1476: tt::exception
+
+  PCC=0.999918 (thr=0.99)
+RESULT VLM.up CFG=native_T96 : TIMED pcc=0.999918
+
+### VLM.up CFG=mmd_full
+### VLM.up  CFG=mmd_partial_T32
+  PCC=0.999924 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [401408, 468992, 536576, 604160, 671744, 739328, 806912, 874496, 942080, 1009664, 1077248, 1144832, 1212416, 1280000, 1347584, 1417216]
+  RESIDENT stable across reps: True (before=[401408, 468992, 536576, 604160, 671744, 739328, 806912, 874496, 942080, 1009664, 1077248, 1144832, 1212416, 1280000, 1347584, 1417216] after=[401408, 468992, 536576, 604160, 671744, 739328, 806912, 874496, 942080, 1009664, 1077248, 1144832, 1212416, 1280000, 1347584, 1417216])
+RESULT VLM.up CFG=mmd_partial_T32 : TIMED pcc=0.999924
+
+RESULT VLM.up CFG=mmd_full : NOFIT-BUILD :: ASSERT: wide-N stream K=2048 N=16384 npc=8 m_tiles=9: no a_cores fits bank
+
+### VLM.up CFG=mmd_full_T32
+### VLM.up  CFG=mmd_partial_T96
+RESULT VLM.up CFG=mmd_partial_T96 : INVALID-RUN :: RuntimeError: TT_THROW @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/impl/program/program.cpp:1476: tt::exception
+
+RESULT VLM.up CFG=mmd_full_T32 : INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores
+
+### VLM.up CFG=mmd_full_T96
+### VLM.down  CFG=native
+  PCC=0.998610 (thr=0.99)
+RESULT VLM.down CFG=native : TIMED pcc=0.998610
+
+RESULT VLM.up CFG=mmd_full_T96 : INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores
+
+### VLM.up CFG=mmd_partial
+### VLM.down  CFG=native_T32
+  PCC=0.999628 (thr=0.99)
+RESULT VLM.down CFG=native_T32 : TIMED pcc=0.999628
+
+RESULT VLM.up CFG=mmd_partial : INVALID-RUN :: RuntimeError: TT_THROW @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/impl/program/program.cpp:1476: tt::exception
+
+### VLM.up CFG=mmd_partial_T32
+### VLM.down  CFG=native_T96
+  PCC=0.999628 (thr=0.99)
+RESULT VLM.down CFG=native_T96 : TIMED pcc=0.999628
+
+  PCC=0.999924 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [401408, 468992, 536576, 604160, 671744, 739328, 806912, 874496, 942080, 1009664, 1077248, 1144832, 1212416, 1280000, 1347584, 1417216]
+  RESIDENT stable across reps: True (before=[401408, 468992, 536576, 604160, 671744, 739328, 806912, 874496, 942080, 1009664, 1077248, 1144832, 1212416, 1280000, 1347584, 1417216] after=[401408, 468992, 536576, 604160, 671744, 739328, 806912, 874496, 942080, 1009664, 1077248, 1144832, 1212416, 1280000, 1347584, 1417216])
+RESULT VLM.up CFG=mmd_partial_T32 : TIMED pcc=0.999924
+
+### VLM.up CFG=mmd_partial_T96
+### VLM.down  CFG=mmd_full
+RESULT VLM.down CFG=mmd_full : INVALID-RUN :: RuntimeError: TT_THROW @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/impl/program/program.cpp:1476: tt::exception
+
+RESULT VLM.up CFG=mmd_partial_T96 : INVALID-RUN :: RuntimeError: TT_THROW @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/impl/program/program.cpp:1476: tt::exception
+
+### VLM.down CFG=native
+### VLM.down  CFG=mmd_full_T32
+  PCC=0.999969 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [724992, 864256, 1134592, 1277952]
+  RESIDENT stable across reps: True (before=[724992, 864256, 1134592, 1277952] after=[724992, 864256, 1134592, 1277952])
+RESULT VLM.down CFG=mmd_full_T32 : TIMED pcc=0.999969
+
+  PCC=0.998610 (thr=0.99)
+RESULT VLM.down CFG=native : TIMED pcc=0.998610
+
+### VLM.down CFG=native_T32
+### VLM.down  CFG=mmd_full_T96
+  PCC=0.999966 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [727040, 796672, 866304, 935936, 1202176, 1282048, 1400832, 1474560]
+  RESIDENT stable across reps: True (before=[727040, 796672, 866304, 935936, 1202176, 1282048, 1400832, 1474560] after=[727040, 796672, 866304, 935936, 1202176, 1282048, 1400832, 1474560])
+RESULT VLM.down CFG=mmd_full_T96 : TIMED pcc=0.999966
+
+  PCC=0.999628 (thr=0.99)
+RESULT VLM.down CFG=native_T32 : TIMED pcc=0.999628
+
+### VLM.down CFG=native_T96
+### VLM.down  CFG=mmd_partial
+RESULT VLM.down CFG=mmd_partial : INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/impl/allocator/bank_manager.cpp:462: false
+
+  PCC=0.999628 (thr=0.99)
+RESULT VLM.down CFG=native_T96 : TIMED pcc=0.999628
+
+### VLM.down CFG=mmd_full
+### VLM.down  CFG=mmd_partial_T32
+RESULT VLM.down CFG=mmd_partial_T32 : INVALID-RUN :: RuntimeError: TT_THROW @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/impl/program/program.cpp:1476: tt::exception
+
+RESULT VLM.down CFG=mmd_full : INVALID-RUN :: RuntimeError: TT_THROW @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/impl/program/program.cpp:1476: tt::exception
+
+### VLM.down CFG=mmd_full_T32
+### VLM.down  CFG=mmd_partial_T96
+RESULT VLM.down CFG=mmd_partial_T96 : INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/impl/allocator/bank_manager.cpp:462: false
+
+  PCC=0.999969 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [724992, 864256, 1134592, 1277952]
+  RESIDENT stable across reps: True (before=[724992, 864256, 1134592, 1277952] after=[724992, 864256, 1134592, 1277952])
+RESULT VLM.down CFG=mmd_full_T32 : TIMED pcc=0.999969
+
+### VLM.down CFG=mmd_full_T96
+### DENOISE.gate  CFG=native
+  PCC=0.999993 (thr=0.99)
+RESULT DENOISE.gate CFG=native : TIMED pcc=0.999993
+
+  PCC=0.999966 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [727040, 796672, 866304, 935936, 1202176, 1282048, 1400832, 1474560]
+  RESIDENT stable across reps: True (before=[727040, 796672, 866304, 935936, 1202176, 1282048, 1400832, 1474560] after=[727040, 796672, 866304, 935936, 1202176, 1282048, 1400832, 1474560])
+RESULT VLM.down CFG=mmd_full_T96 : TIMED pcc=0.999966
+
+### VLM.down CFG=mmd_partial
+### DENOISE.gate  CFG=native_T32
+  PCC=0.999993 (thr=0.99)
+RESULT DENOISE.gate CFG=native_T32 : TIMED pcc=0.999993
+
+RESULT VLM.down CFG=mmd_partial : INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/impl/allocator/bank_manager.cpp:462: false
+
+### VLM.down CFG=mmd_partial_T32
+### DENOISE.gate  CFG=mmd_full
+RESULT DENOISE.gate CFG=mmd_full : INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores
+
+RESULT VLM.down CFG=mmd_partial_T32 : INVALID-RUN :: RuntimeError: TT_THROW @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/impl/program/program.cpp:1476: tt::exception
+
+### VLM.down CFG=mmd_partial_T96
+### DENOISE.gate  CFG=mmd_full_T32
+RESULT DENOISE.gate CFG=mmd_full_T32 : INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores
+
+RESULT VLM.down CFG=mmd_partial_T96 : INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/impl/allocator/bank_manager.cpp:462: false
+
+### DENOISE.gate CFG=native
+### DENOISE.gate  CFG=mmd_partial
+  PCC=0.999992 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1341440, 1376256, 1411072, 1449984]
+  RESIDENT stable across reps: True (before=[1341440, 1376256, 1411072, 1449984] after=[1341440, 1376256, 1411072, 1449984])
+RESULT DENOISE.gate CFG=mmd_partial : TIMED pcc=0.999992
+
+  PCC=0.999993 (thr=0.99)
+RESULT DENOISE.gate CFG=native : TIMED pcc=0.999993
+
+### DENOISE.gate CFG=native_T32
+### DENOISE.gate  CFG=mmd_partial_T32
+  PCC=0.999992 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1376256, 1411072, 1445888, 1482752]
+  RESIDENT stable across reps: True (before=[1376256, 1411072, 1445888, 1482752] after=[1376256, 1411072, 1445888, 1482752])
+RESULT DENOISE.gate CFG=mmd_partial_T32 : TIMED pcc=0.999992
+
+  PCC=0.999993 (thr=0.99)
+RESULT DENOISE.gate CFG=native_T32 : TIMED pcc=0.999993
+
+### DENOISE.gate CFG=mmd_full
+### DENOISE.up  CFG=native
+  PCC=0.999993 (thr=0.99)
+RESULT DENOISE.up CFG=native : TIMED pcc=0.999993
+
+RESULT DENOISE.gate CFG=mmd_full : INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores
+
+### DENOISE.gate CFG=mmd_full_T32
+### DENOISE.up  CFG=native_T32
+  PCC=0.999993 (thr=0.99)
+RESULT DENOISE.up CFG=native_T32 : TIMED pcc=0.999993
+
+RESULT DENOISE.gate CFG=mmd_full_T32 : INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores
+
+### DENOISE.gate CFG=mmd_partial
+### DENOISE.up  CFG=mmd_full
+RESULT DENOISE.up CFG=mmd_full : INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores
+
+  PCC=0.999992 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1341440, 1376256, 1411072, 1449984]
+  RESIDENT stable across reps: True (before=[1341440, 1376256, 1411072, 1449984] after=[1341440, 1376256, 1411072, 1449984])
+RESULT DENOISE.gate CFG=mmd_partial : TIMED pcc=0.999992
+
+### DENOISE.gate CFG=mmd_partial_T32
+### DENOISE.up  CFG=mmd_full_T32
+RESULT DENOISE.up CFG=mmd_full_T32 : INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores
+
+  PCC=0.999992 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1376256, 1411072, 1445888, 1482752]
+  RESIDENT stable across reps: True (before=[1376256, 1411072, 1445888, 1482752] after=[1376256, 1411072, 1445888, 1482752])
+RESULT DENOISE.gate CFG=mmd_partial_T32 : TIMED pcc=0.999992
+
+### DENOISE.up CFG=native
+### DENOISE.up  CFG=mmd_partial
+  PCC=0.999992 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1341440, 1376256, 1411072, 1449984]
+  RESIDENT stable across reps: True (before=[1341440, 1376256, 1411072, 1449984] after=[1341440, 1376256, 1411072, 1449984])
+RESULT DENOISE.up CFG=mmd_partial : TIMED pcc=0.999992
+
+  PCC=0.999993 (thr=0.99)
+RESULT DENOISE.up CFG=native : TIMED pcc=0.999993
+
+### DENOISE.up CFG=native_T32
+### DENOISE.up  CFG=mmd_partial_T32
+  PCC=0.999992 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1376256, 1411072, 1445888, 1482752]
+  RESIDENT stable across reps: True (before=[1376256, 1411072, 1445888, 1482752] after=[1376256, 1411072, 1445888, 1482752])
+RESULT DENOISE.up CFG=mmd_partial_T32 : TIMED pcc=0.999992
+
+  PCC=0.999993 (thr=0.99)
+RESULT DENOISE.up CFG=native_T32 : TIMED pcc=0.999993
+
+### DENOISE.up CFG=mmd_full
+### DENOISE.down  CFG=native
+  PCC=0.999952 (thr=0.99)
+RESULT DENOISE.down CFG=native : TIMED pcc=0.999952
+
+RESULT DENOISE.up CFG=mmd_full : INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores
+
+### DENOISE.up CFG=mmd_full_T32
+### DENOISE.down  CFG=native_T32
+  PCC=0.999952 (thr=0.99)
+RESULT DENOISE.down CFG=native_T32 : TIMED pcc=0.999952
+
+RESULT DENOISE.up CFG=mmd_full_T32 : INVALID-RUN :: RuntimeError: TT_FATAL @ /home/ttuser/salnahari/tt-metal-matmul_decode/tt_metal/common/work_split.cpp:98: target_num_cores <= total_available_cores
+
+### DENOISE.up CFG=mmd_partial
+### DENOISE.down  CFG=mmd_full
+  PCC=0.999973 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1146880]
+  RESIDENT stable across reps: True (before=[1146880] after=[1146880])
+RESULT DENOISE.down CFG=mmd_full : TIMED pcc=0.999973
+
+  PCC=0.999992 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1341440, 1376256, 1411072, 1449984]
+  RESIDENT stable across reps: True (before=[1341440, 1376256, 1411072, 1449984] after=[1341440, 1376256, 1411072, 1449984])
+RESULT DENOISE.up CFG=mmd_partial : TIMED pcc=0.999992
+
+### DENOISE.up CFG=mmd_partial_T32
+### DENOISE.down  CFG=mmd_full_T32
+  PCC=0.999973 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1277952]
+  RESIDENT stable across reps: True (before=[1277952] after=[1277952])
+RESULT DENOISE.down CFG=mmd_full_T32 : TIMED pcc=0.999973
+
+  PCC=0.999992 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1376256, 1411072, 1445888, 1482752]
+  RESIDENT stable across reps: True (before=[1376256, 1411072, 1445888, 1482752] after=[1376256, 1411072, 1445888, 1482752])
+RESULT DENOISE.up CFG=mmd_partial_T32 : TIMED pcc=0.999992
+
+### DENOISE.down CFG=native
+### DENOISE.down  CFG=mmd_partial
+  PCC=0.999972 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1216512]
+  RESIDENT stable across reps: True (before=[1216512] after=[1216512])
+RESULT DENOISE.down CFG=mmd_partial : TIMED pcc=0.999972
+
+  PCC=0.999952 (thr=0.99)
+RESULT DENOISE.down CFG=native : TIMED pcc=0.999952
+
+### DENOISE.down CFG=native_T32
+### DENOISE.down  CFG=mmd_partial_T32
+  PCC=0.999972 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1347584]
+  RESIDENT stable across reps: True (before=[1347584] after=[1347584])
+RESULT DENOISE.down CFG=mmd_partial_T32 : TIMED pcc=0.999972
+
+  PCC=0.999952 (thr=0.99)
+RESULT DENOISE.down CFG=native_T32 : TIMED pcc=0.999952
+
+### DENOISE.down CFG=mmd_full
+  PCC=0.999973 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1146880]
+  RESIDENT stable across reps: True (before=[1146880] after=[1146880])
+RESULT DENOISE.down CFG=mmd_full : TIMED pcc=0.999973
+
+### DENOISE.down CFG=mmd_full_T32
+  PCC=0.999973 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1277952]
+  RESIDENT stable across reps: True (before=[1277952] after=[1277952])
+RESULT DENOISE.down CFG=mmd_full_T32 : TIMED pcc=0.999973
+
+### DENOISE.down CFG=mmd_partial
+  PCC=0.999972 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1216512]
+  RESIDENT stable across reps: True (before=[1216512] after=[1216512])
+RESULT DENOISE.down CFG=mmd_partial : TIMED pcc=0.999972
+
+### DENOISE.down CFG=mmd_partial_T32
+  PCC=0.999972 (thr=0.99)
+  RESIDENT buffer_addrs after fwd1: [1347584]
+  RESIDENT stable across reps: True (before=[1347584] after=[1347584])
+RESULT DENOISE.down CFG=mmd_partial_T32 : TIMED pcc=0.999972
+

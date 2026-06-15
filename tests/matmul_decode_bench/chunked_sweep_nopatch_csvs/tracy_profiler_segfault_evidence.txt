@@ -1,0 +1,12 @@
+2026-06-12 07:07:58.479 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+.Fatal Python error: Segmentation fault
+  File "/home/ttuser/salnahari/tt-metal-matmul_decode/ttnn/ttnn/device.py", line 59 in close_device
+Aborted (core dumped)
+2026-06-12 07:08:02.621 | WARNING  | tracy.process_ops_logs:append_device_data:1027 - Device perf report cpp_device_perf_report.csv not found in /home/ttuser/salnahari/tt-metal-matmul_decode/generated/profiler/.logs. Falling back to legacy device-log parsing via import_log_run_stats(); this will take longer.
+AssertionError: cpp_device_perf_report.csv not found and legacy device log profile_log_device.csv is also missing in /home/ttuser/salnahari/tt-metal-matmul_decode/generated/profiler/.logs.
+--- reflog proof: reset e7023ed9 (dirty/patched) -> e4500c1f (clean committed) ---
+e4500c1fae9 HEAD@{0}: reset: moving to HEAD
+e4500c1fae9 HEAD@{1}: reset: moving to HEAD
+e4500c1fae9 HEAD@{2}: reset: moving to e4500c1fae97c103b16fc24fc7010b852992a9e6
+e7023ed9754 HEAD@{3}: commit (amend): Added L1 matmul with frozen weights
+ddab1fcb599 HEAD@{4}: commit (amend): Added L1 matmul with frozen weights
