@@ -80,3 +80,37 @@ passes after.
 
 A playable MP4 generated from Sulphur weights via the distilled pipeline on device, with
 the girl-singing e2e passing both before (Lightricks) and after (Sulphur) the swap.
+
+## Outcome (2026-06-15) — achieved
+
+Three e2e runs on bh Galaxy 4x8, `bh_4x8sp1tp0_linear`, untraced, girl-singing
+`DEFAULT_LTX_PROMPT`, 1088x1920, 145f, seed 10 — all PASS, all valid
+H264 1920x1088 145f@24fps 6.04s + AAC stereo:
+
+1. **Baseline** — Lightricks distilled (before-gate): `baseline_lightricks_1920x1088.mp4`
+2. **Sulphur distilled** (merged `sulphur_distil_bf16`): `sulphur_distil_1920x1088.mp4` — the goal
+3. **Lightricks distilled + Sulphur LoRA** (`sulphur_lora_rank_768`, fused offline via the
+   repo's `fuse_loras_into`, strength 1.0): `sulphur_lora_fused_1920x1088.mp4`
+
+Deviations from the plan above (all justified, none change the result):
+
+- **Base branch.** Started off `ltx-perf` as requested, but its older `conv1d_depthwise`
+  audio kernel failed to JIT-compile against the (shared, symlinked) main build's newer
+  `TensorAccessor` headers. Per the pre-agreed remedy ("if AV decode misbehaves, cherry-pick
+  or rebase"), rebased `ltx-sulphur` onto `smarton/audio-submesh-e2e` so worktree kernel
+  source matches the build. AV path then compiled and ran clean.
+- **Checkpoint env.** The distilled test on this branch `skipif`s unless
+  `default_ltx_checkpoint(...)` resolves to an **existing local path**, so `LTX_CHECKPOINT`
+  must be an absolute path (the `repo:file` HF-ref string fails `os.path.exists`). Set
+  `LTX_CHECKPOINT` to the local file and `HF_HOME=/home/kevinmi/.cache/huggingface` for
+  gemma + Lightricks + upscaler.
+
+LoRA characterization (CPU, `sulphur_lora_rank_768` vs `sulphur_distil - lightricks_distil`):
+it is a **video-style** delta — on video attn/FF weights it reconstructs ~85–94% of the
+Sulphur change at best-fit strength ~0.6–0.9; audio-branch deltas are not covered by it.
+1152 LoRA pairs, key convention `diffusion_model.*.lora_A/B.weight` — cleanly compatible
+with `fuse_loras_into`. Fusing it onto the Lightricks distilled base approximates (but does
+not bit-match) the merged `sulphur_distil`.
+
+Not pursued: full/dev (non-distilled) variant — unnecessary since distilled succeeded.
+Quantized/GGUF/MLX Sulphur mirrors are out of scope for the bf16 safetensors loader.
