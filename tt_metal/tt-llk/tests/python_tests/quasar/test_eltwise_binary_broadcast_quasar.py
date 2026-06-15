@@ -96,11 +96,10 @@ def test_eltwise_binary_broadcast_quasar(
     boot_mode=BootMode.DEFAULT,
 ):
 
-    stimuli_spec = (
-        StimuliSpec.uniform(low=-127.0, high=127.0)
-        if formats.input_format == DataFormat.Int8
-        else None
-    )
+    if formats.input_format == DataFormat.Int8:
+        stimuli_spec = StimuliSpec.uniform(low=-127.0, high=127.0)
+    else:
+        stimuli_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
