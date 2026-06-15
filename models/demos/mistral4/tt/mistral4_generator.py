@@ -70,6 +70,30 @@ class TracedDecode:
         return self.out
 
 
+class TracedPrefill:
+    """Captures TtMistral4TextModel.forward_prefill at a FIXED input length S as a replayable trace
+    over persistent device buffers (x, cos, sin). The KV-cache fill (fill_cache, fixed batch_idx 0 +
+    positions 0..S-1) is captured as a constant side effect; only x/cos/sin vary per prefill. Upgrades
+    trace coverage to prefill AND decode (one trace per supported ISL bucket)."""
+
+    def __init__(self, model, mesh, S, hidden, rope, kv_caches):
+        self.model, self.mesh, self.kv = model, mesh, kv_caches
+        self.tt_x = _repl(torch.zeros(1, S, hidden), mesh)
+        self.tt_cos = _repl(torch.zeros(1, 1, S, rope), mesh)
+        self.tt_sin = _repl(torch.zeros(1, 1, S, rope), mesh)
+        self.model.forward_prefill(self.tt_x, self.tt_cos, self.tt_sin, self.kv)  # warmup/compile
+        self.tid = ttnn.begin_trace_capture(mesh, cq_id=0)
+        self.out = self.model.forward_prefill(self.tt_x, self.tt_cos, self.tt_sin, self.kv)
+        ttnn.end_trace_capture(mesh, self.tid, cq_id=0)
+
+    def run(self, x, cos, sin):
+        ttnn.copy_host_to_device_tensor(_host(x, self.mesh, ttnn.TILE_LAYOUT), self.tt_x)
+        ttnn.copy_host_to_device_tensor(_host(cos, self.mesh, ttnn.TILE_LAYOUT), self.tt_cos)
+        ttnn.copy_host_to_device_tensor(_host(sin, self.mesh, ttnn.TILE_LAYOUT), self.tt_sin)
+        ttnn.execute_trace(self.mesh, self.tid, cq_id=0, blocking=True)
+        return self.out
+
+
 class Mistral4Generator:
     """Greedy generator over a TtMistral4TextModel. cos_full/sin_full hold per-position RoPE
     [B, max_pos, rope_dim] for the whole horizon (prompt + generated)."""

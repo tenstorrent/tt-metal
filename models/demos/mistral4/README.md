@@ -122,8 +122,8 @@ in doc comments). These belong to the shared fp8/VLM framework work (the Devstra
 depends on them and adds none of its own edits to shared infra.
 
 ## Status snapshot (self-review vs review-ign-model)
-Done: A1 framework adherence, A2 device-side (no hot-loop host round-trip), A3 decode trace
-(prefill untraced = PARTIAL, acceptable), A5 on-device sampling, A7 sharded LM head, A9 (prefill to
+Done: A1 framework adherence, A2 device-side (no hot-loop host round-trip), A3 trace — **prefill AND
+decode** captured/replayed bit-exactly (PCC 1.0), A5 on-device sampling, A7 sharded LM head, A9 (prefill to
 4K, no L1 clash), B1–B3 full-depth ungated logit PCC, C1 ISL-sweep harness, C-perf measured, D1
 rebased (current), D1a CI registration, D4 pinned deps, E docs.
 Remaining (large, scoped): **A10 MoE sparse dispatch** — `all_to_all_dispatch` requires a **2D mesh**
