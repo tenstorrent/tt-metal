@@ -115,7 +115,7 @@ BufferedRecvMeshWorkloadFactory::create_at(
     // HEIGHT_SHARDED so every core sees its word at the same L1 address, mirroring how GlobalSemaphore
     // allocates its backing buffer. Zero-initialized below with a blocking write so the kernel always
     // observes a clean slate before it runs.
-    uint32_t coordination_page_size = 16 * sizeof(uint32_t);
+    uint32_t coordination_page_size = 256 * sizeof(uint32_t);
     auto coordination_shard_parameters = tt::tt_metal::ShardSpecBuffer(
         receiver_core_range_set, {1, 1}, tt::tt_metal::ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
     tt::tt_metal::ShardedBufferConfig coordination_buffer_config = {
@@ -131,7 +131,7 @@ BufferedRecvMeshWorkloadFactory::create_at(
 
     // Zero-initialize the coordination buffer (blocking, so the reset lands before the program runs).
     {
-        std::vector<uint32_t> zeros(16, 0);
+        std::vector<uint32_t> zeros(256 * num_cores, 0);
         auto coordination_mesh_buffer = coordination_buffer.get_mesh_buffer();
         tt::tt_metal::distributed::EnqueueWriteMeshBuffer(
             mesh_device->mesh_command_queue(), coordination_mesh_buffer, zeros, /*blocking=*/true);
