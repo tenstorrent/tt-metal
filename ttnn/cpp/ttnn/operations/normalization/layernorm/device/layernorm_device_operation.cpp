@@ -475,6 +475,14 @@ Tensor LayerNormDeviceOperation::create_output_tensors(
 // which reduces the input (RMSNorm reduces the squared input; LayerNorm reduces both the input for
 // E[x] and its square for E[x^2]). The post-all-gather stage normalizes from already-gathered stats,
 // so it never reduces the input and needs no mask.
+//
+// This builds a host tensor of the full input shape, so its sharded buffer holds block_ht x block_wt
+// tiles per core while the compute only reads the first tile-row (the mask is column-only, identical
+// across rows). An alternative that avoids both the host tensor and that per-row redundancy is to
+// generate the per-core mask on-device from the core's width position, as the moreh reduction kernels
+// do with the format-aware generate_mask_w<T> helper (ttnn/cpp/ttnn/kernel/dataflow/moreh_common.hpp);
+// the host-built mask is kept here for the simpler host/kernel path, the redundancy mattering only for
+// the rare non-tile-aligned-and-tall-shard case.
 static std::optional<Tensor> build_legacy_col_mask(
     const Tensor& input,
     const LayerNormProgramConfig& program_config,
