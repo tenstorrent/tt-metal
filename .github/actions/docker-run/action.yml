@@ -70,45 +70,123 @@ runs:
           echo "CIV2_NO_PROXY=$NO_PROXY" >> $GITHUB_ENV
           echo "CIV2_no_proxy=$no_proxy" >> $GITHUB_ENV
         fi
-    - name: Extract registry from image tag
+    - name: Resolve docker image (harbor health check + fallback)
       id: registry
       shell: bash
       run: |
-        set -euo pipefail
+        set -uo pipefail
 
-        IMAGE_TAG="${TT_METAL_DOCKER_IMAGE_TAG}"
-        REGISTRY="${IMAGE_TAG%%/*}"
-        echo "registry=${REGISTRY}" >> "$GITHUB_OUTPUT"
+        RAW_IMAGE="${TT_METAL_DOCKER_IMAGE_TAG}"
 
-        if [ "$REGISTRY" = "harbor.ci.tenstorrent.net" ]; then
-          # Harbor is used as a pull-through cache for GHCR. The usual caller
-          # credentials are GHCR-scoped, so avoid trying to log in to Harbor.
+        # Normalize caller-supplied image to canonical GHCR form.
+        # Callers may pass any of: ghcr.io/..., harbor.ci.tenstorrent.net/ghcr.io/...,
+        # or harbor.ci.tenstorrent.net/<project>/... (harbor-native). Strip all prefixes.
+        if [[ "$RAW_IMAGE" == harbor.ci.tenstorrent.net/ghcr.io/* ]]; then
+          GHCR_IMAGE="${RAW_IMAGE#harbor.ci.tenstorrent.net/}"
+        elif [[ "$RAW_IMAGE" == harbor.ci.tenstorrent.net/* ]]; then
+          GHCR_IMAGE="ghcr.io/${RAW_IMAGE#harbor.ci.tenstorrent.net/}"
+        else
+          GHCR_IMAGE="$RAW_IMAGE"
+        fi
+
+        # Harbor-native path: harbor stores a local copy without the ghcr.io component.
+        # Pulling from this path never causes harbor to contact GitHub.
+        HARBOR_NATIVE="harbor.ci.tenstorrent.net/${GHCR_IMAGE#ghcr.io/}"
+        # Harbor pull-through path: harbor proxies the pull from GHCR on cache miss.
+        HARBOR_PROXY="harbor.ci.tenstorrent.net/${GHCR_IMAGE}"
+
+        echo "Image candidates:"
+        echo "  GHCR:          $GHCR_IMAGE"
+        echo "  Harbor native: $HARBOR_NATIVE"
+        echo "  Harbor proxy:  $HARBOR_PROXY"
+
+        # --- Step 1: Harbor health check (mirrors check-harbor.yaml logic) ---
+        HARBOR_HEALTHY=false
+        HEALTH_RESPONSE=$(curl --max-time 10 -sf \
+          "https://harbor.ci.tenstorrent.net/api/v2.0/health" 2>/dev/null || true)
+        if [ -z "$HEALTH_RESPONSE" ]; then
+          echo "Harbor health check timed out, retrying in 5s..."
+          sleep 5
+          HEALTH_RESPONSE=$(curl --max-time 10 -sf \
+            "https://harbor.ci.tenstorrent.net/api/v2.0/health" 2>/dev/null || true)
+        fi
+
+        if [ -n "$HEALTH_RESPONSE" ]; then
+          OVERALL_STATUS=$(python3 -c \
+            "import sys,json; print(json.loads(sys.stdin.read()).get('status','unknown'))" \
+            <<< "$HEALTH_RESPONSE" 2>/dev/null || echo "unknown")
+          if [ "$OVERALL_STATUS" = "healthy" ]; then
+            HARBOR_HEALTHY=true
+            echo "Harbor is healthy"
+          else
+            echo "::warning title=Harbor Unhealthy::Harbor status: ${OVERALL_STATUS}. Falling back to direct GHCR pull."
+          fi
+        else
+          echo "::warning title=Harbor Unavailable::Harbor did not respond. Falling back to direct GHCR pull."
+        fi
+
+        # --- Step 2: Resolve the image to pull ---
+        RESOLVED_IMAGE=""
+        if [ "$HARBOR_HEALTHY" = "true" ]; then
+          # Check if image is present on harbor native (no ghcr.io component in the path).
+          # We query the Harbor REST API; a 200 means harbor has it locally — no GitHub
+          # contact required. Anything else (401 treated as absent, 404 = not there) falls
+          # through to the pull-through proxy path.
+          #
+          # Path parsing: ghcr.io/{project}/{subpath...}/{image}:{tag}
+          # Harbor API: /api/v2.0/projects/{project}/repositories/{subpath%2F...%2Fimage}/artifacts/{tag}
+          HARBOR_PATH="${GHCR_IMAGE#ghcr.io/}"              # tenstorrent/tt-metal/.../image:tag
+          HARBOR_TAG="${HARBOR_PATH##*:}"                    # tag (or digest after @)
+          HARBOR_REPO="${HARBOR_PATH%%:*}"                   # tenstorrent/tt-metal/.../image
+          HARBOR_PROJECT="${HARBOR_REPO%%/*}"                # tenstorrent
+          HARBOR_REPO_SUBPATH="${HARBOR_REPO#*/}"            # tt-metal/.../image
+          HARBOR_REPO_ENCODED="${HARBOR_REPO_SUBPATH//\//%2F}"  # tt-metal%2F...%2Fimage
+
+          API_STATUS=$(curl --max-time 10 -o /dev/null -sw "%{http_code}" \
+            "https://harbor.ci.tenstorrent.net/api/v2.0/projects/${HARBOR_PROJECT}/repositories/${HARBOR_REPO_ENCODED}/artifacts/${HARBOR_TAG}" \
+            2>/dev/null || echo "000")
+
+          if [ "$API_STATUS" = "200" ]; then
+            echo "Image found on harbor native (HTTP 200) — no GitHub contact needed"
+            RESOLVED_IMAGE="$HARBOR_NATIVE"
+          else
+            echo "Image not on harbor native (HTTP ${API_STATUS}) — using harbor pull-through proxy"
+            RESOLVED_IMAGE="$HARBOR_PROXY"
+          fi
+        else
+          RESOLVED_IMAGE="$GHCR_IMAGE"
+        fi
+
+        echo "Resolved: $RESOLVED_IMAGE"
+        echo "RESOLVED_DOCKER_IMAGE=$RESOLVED_IMAGE" >> "$GITHUB_ENV"
+
+        # Downstream steps: harbor allows anonymous pulls; GHCR needs explicit login.
+        if [[ "$RESOLVED_IMAGE" == harbor.ci.tenstorrent.net/* ]]; then
           echo "login-required=false" >> "$GITHUB_OUTPUT"
-          echo "action-registry=ghcr.io" >> "$GITHUB_OUTPUT"
         else
           echo "login-required=true" >> "$GITHUB_OUTPUT"
-          echo "action-registry=${REGISTRY}" >> "$GITHUB_OUTPUT"
         fi
+        echo "action-registry=ghcr.io" >> "$GITHUB_OUTPUT"
       env:
         TT_METAL_DOCKER_IMAGE_TAG: ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
     - name: Docker login
       if: ${{ steps.registry.outputs.login-required == 'true' }}
       uses: docker/login-action@v3
       with:
-        registry: ${{ steps.registry.outputs.registry }}
+        registry: ghcr.io
         username: ${{ inputs.docker_username }}
         password: ${{ inputs.docker_password }}
     - name: Pull docker image
       shell: bash
       run: |
-        docker pull ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
+        docker pull ${{ env.RESOLVED_DOCKER_IMAGE }}
     - uses: tenstorrent/docker-run-action@v6
       with:
         shell: bash
         username: ${{ inputs.docker_username }}
         password: ${{ inputs.docker_password }}
         registry: ${{ steps.registry.outputs.action-registry }}
-        image: ${{ env.TT_METAL_DOCKER_IMAGE_TAG || 'docker-image-unresolved!'}}
+        image: ${{ env.RESOLVED_DOCKER_IMAGE || 'docker-image-unresolved!'}}
         # The most important option below is `--rm`. Otherwise, the machines will fill up with undeleted containers.
         # The mounting of /etc/passwd, /etc/shadow, and /etc/bashrc is required in order for the correct file permissions
         # for newly created files.
