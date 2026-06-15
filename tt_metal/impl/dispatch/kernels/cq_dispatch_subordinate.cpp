@@ -19,6 +19,7 @@
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler.hpp"
 #include "hostdevcommon/profiler_common.h"
 #include "hostdev/dev_msgs.h"
+#include "risc_common.h"
 
 // dispatch_s has a customized command buffer allocation for NOC 1.
 // Cmd Buf 0 is used for regular writes.
@@ -412,7 +413,7 @@ void process_go_signal_mcast_cmd() {
         const uint32_t stream_index = cmd->mcast.wait_stream - first_stream_used;
         auto dispatch_telemetry =
             reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchCoreTelemetry*>(dispatch_telemetry_base);
-        dispatch_telemetry->last_work_launch_timestamp[stream_index] = get_current_wall_time();
+        dispatch_telemetry->last_work_launch_timestamp[stream_index] = get_timestamp();
     }
 
 #if DEVICE_PRINT_DISPATCH_ENABLED

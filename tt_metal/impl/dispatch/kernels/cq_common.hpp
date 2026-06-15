@@ -695,14 +695,3 @@ FORCE_INLINE void careful_copy_from_l1_to_local_cache(
         n += 6;
     }
 }
-
-FORCE_INLINE uint64_t get_current_wall_time() {
-    // Wall clock register indices — registers are 8 bytes apart
-    // (RISCV_DEBUG_REG_WALL_CLOCK_L (0x1F0), RISCV_DEBUG_REG_WALL_CLOCK_H (0x1F8)),
-    // so the uint32_t array stride is 2, not 1.
-    constexpr uint32_t WALL_CLOCK_LOW_INDEX = 0;
-    constexpr uint32_t WALL_CLOCK_HIGH_INDEX = 2;
-
-    volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-    return (static_cast<uint64_t>(p_reg[WALL_CLOCK_HIGH_INDEX]) << 32) | p_reg[WALL_CLOCK_LOW_INDEX];
-}

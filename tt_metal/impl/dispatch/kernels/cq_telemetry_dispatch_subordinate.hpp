@@ -7,19 +7,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "hostdevcommon/dispatch_telemetry_types.hpp"
 #include "tt_metal/impl/dispatch/kernels/telemetry.hpp"
-
-// TODO: Duplicated for now because cq_common.hpp requires NOC index and mode to be defined, but TRISC shouldn't access
-// the NOC devices
-FORCE_INLINE uint64_t get_current_wall_time() {
-    // Wall clock register indices — registers are 8 bytes apart
-    // (RISCV_DEBUG_REG_WALL_CLOCK_L (0x1F0), RISCV_DEBUG_REG_WALL_CLOCK_H (0x1F8)),
-    // so the uint32_t array stride is 2, not 1.
-    constexpr uint32_t WALL_CLOCK_LOW_INDEX = 0;
-    constexpr uint32_t WALL_CLOCK_HIGH_INDEX = 2;
-
-    volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-    return (static_cast<uint64_t>(p_reg[WALL_CLOCK_HIGH_INDEX]) << 32) | p_reg[WALL_CLOCK_LOW_INDEX];
-}
+#include "risc_common.h"
 
 constexpr uint32_t first_stream_index = FIRST_STREAM_INDEX;
 constexpr uint32_t total_sub_devices = TOTAL_SUB_DEVICES;
@@ -51,7 +39,6 @@ FORCE_INLINE void dispatch_subordinate_telemetry() {
 
     bool done = false;
 
-    // The semaphore counters are potentially incrementing forever, not sure though need to debug
     uint32_t stream_sem_counter[total_sub_devices] = {0};
     for (uint32_t i = 0; i < total_sub_devices; ++i) {
         stream_sem_counter[i] =
@@ -101,7 +88,7 @@ FORCE_INLINE void dispatch_subordinate_telemetry() {
                     if (completion_count[i] < workers_per_sub_device[i]) {
                         // Finish inflight work
                         while (completion_count[i] < workers_per_sub_device[i]) {
-                            uint64_t current_timestamp = get_current_wall_time();
+                            uint64_t current_timestamp = get_timestamp();
                             uint64_t delta_work_runtime = current_timestamp - last_work_launch_timestamp[i];
 
                             const bool will_overflow =
@@ -162,7 +149,7 @@ FORCE_INLINE void dispatch_subordinate_telemetry() {
                     stream_sem_counter[i]);
             }
 
-            uint64_t current_timestamp = get_current_wall_time();
+            uint64_t current_timestamp = get_timestamp();
             dispatch_telemetry->current_timestamp = current_timestamp;
 
             // while completion count is less than total workers, use local last timestamp
@@ -181,7 +168,23 @@ FORCE_INLINE void dispatch_subordinate_telemetry() {
             }
 
             if (completion_count[i] == workers_per_sub_device[i]) {
-                const auto current_last_work_launch_timestamp = dispatch_telemetry->last_work_launch_timestamp[i];
+                uint64_t current_last_work_launch_timestamp = 0;
+                {
+                    auto timestamp_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                        &dispatch_telemetry->last_work_launch_timestamp[i]);
+                    uint32_t timestamp_low_check_1 = 0;
+                    uint32_t timestamp_low_check_2 = 0;
+                    uint32_t timestamp_high = 0;
+                    do {
+                        timestamp_low_check_1 = timestamp_words[0];
+                        timestamp_high = timestamp_words[1];
+                        timestamp_low_check_2 = timestamp_words[0];
+                    } while (timestamp_low_check_1 != timestamp_low_check_2);
+                    current_last_work_launch_timestamp = timestamp_high;
+                    current_last_work_launch_timestamp <<= 32;
+                    current_last_work_launch_timestamp |= timestamp_low_check_1;
+                }
+
                 const bool new_workload = current_last_work_launch_timestamp != last_work_launch_timestamp[i];
                 if (new_workload) {
                     // Catch up to the latest workload, drop any we missed since last_work_launch_timestamp
