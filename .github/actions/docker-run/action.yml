@@ -132,29 +132,44 @@ runs:
         # --- Step 2: Resolve the image to pull ---
         RESOLVED_IMAGE=""
         if [ "$HARBOR_HEALTHY" = "true" ]; then
-          # Check if image is present on harbor native (no ghcr.io component in the path).
-          # We query the Harbor REST API; a 200 means harbor has it locally — no GitHub
-          # contact required. Anything else (401 treated as absent, 404 = not there) falls
-          # through to the pull-through proxy path.
+          # Check if image is present on harbor native using the Docker Registry v2
+          # manifest API. Key details:
           #
-          # Path parsing: ghcr.io/{project}/{subpath...}/{image}:{tag}
-          # Harbor API: /api/v2.0/projects/{project}/repositories/{subpath%2F...%2Fimage}/artifacts/{tag}
-          HARBOR_PATH="${GHCR_IMAGE#ghcr.io/}"              # tenstorrent/tt-metal/.../image:tag
-          HARBOR_TAG="${HARBOR_PATH##*:}"                    # tag (or digest after @)
-          HARBOR_REPO="${HARBOR_PATH%%:*}"                   # tenstorrent/tt-metal/.../image
-          HARBOR_PROJECT="${HARBOR_REPO%%/*}"                # tenstorrent
-          HARBOR_REPO_SUBPATH="${HARBOR_REPO#*/}"            # tt-metal/.../image
-          HARBOR_REPO_ENCODED="${HARBOR_REPO_SUBPATH//\//%2F}"  # tt-metal%2F...%2Fimage
+          # - Harbor's /api/v2.0 REST API returns 401 even for anonymous-pull-enabled
+          #   projects, so it cannot be used without credentials.
+          # - Probing GET/HEAD /v2/{native-repo}/manifests/{tag} (WITHOUT the "ghcr.io/"
+          #   proxy-cache prefix) returns 200 ONLY if the artifact was explicitly pushed
+          #   to the native "tenstorrent" project. The pull-through proxy lives under
+          #   "ghcr.io/..." so native and proxy repos are fully disjoint.
+          # - Harbor requires a Bearer token even for anonymous pulls. We fetch one from
+          #   the token service scoped to pull on the native repo; no credentials needed.
+          HARBOR_PATH="${GHCR_IMAGE#ghcr.io/}"   # tenstorrent/tt-metal/.../image:tag
+          HARBOR_TAG="${HARBOR_PATH##*:}"         # tag
+          HARBOR_REPO="${HARBOR_PATH%%:*}"        # tenstorrent/tt-metal/.../image (native repo path)
+          HARBOR_REGISTRY="harbor.ci.tenstorrent.net"
 
-          API_STATUS=$(curl --max-time 10 -o /dev/null -sw "%{http_code}" \
-            "https://harbor.ci.tenstorrent.net/api/v2.0/projects/${HARBOR_PROJECT}/repositories/${HARBOR_REPO_ENCODED}/artifacts/${HARBOR_TAG}" \
-            2>/dev/null || echo "000")
+          TOKEN_RESPONSE=$(curl --max-time 10 -sf \
+            "https://${HARBOR_REGISTRY}/service/token?service=harbor-registry&scope=repository:${HARBOR_REPO}:pull" \
+            2>/dev/null || true)
+          if command -v jq > /dev/null 2>&1; then
+            HARBOR_BEARER=$(echo "$TOKEN_RESPONSE" | jq -r '.token // ""' 2>/dev/null || echo "")
+          else
+            HARBOR_BEARER=$(python3 -c \
+              "import sys,json; print(json.loads(sys.stdin.read()).get('token',''))" \
+              <<< "$TOKEN_RESPONSE" 2>/dev/null || echo "")
+          fi
 
-          if [ "$API_STATUS" = "200" ]; then
+          ACCEPT_HDR="Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json"
+          MANIFEST_URL="https://${HARBOR_REGISTRY}/v2/${HARBOR_REPO}/manifests/${HARBOR_TAG}"
+          MANIFEST_STATUS=$(curl --max-time 10 -o /dev/null -sw "%{http_code}" -I \
+            ${HARBOR_BEARER:+-H "Authorization: Bearer ${HARBOR_BEARER}"} \
+            -H "$ACCEPT_HDR" "$MANIFEST_URL" 2>/dev/null || echo "000")
+
+          if [ "$MANIFEST_STATUS" = "200" ]; then
             echo "Image found on harbor native (HTTP 200) — no GitHub contact needed"
             RESOLVED_IMAGE="$HARBOR_NATIVE"
           else
-            echo "Image not on harbor native (HTTP ${API_STATUS}) — using harbor pull-through proxy"
+            echo "Image not on harbor native (HTTP ${MANIFEST_STATUS}) — using harbor pull-through proxy"
             RESOLVED_IMAGE="$HARBOR_PROXY"
           fi
         else
