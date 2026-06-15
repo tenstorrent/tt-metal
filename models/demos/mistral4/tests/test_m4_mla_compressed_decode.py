@@ -35,12 +35,13 @@ def _pos(p, mesh):
 
 
 @pytest.mark.xfail(
-    reason="A6 WIP: forward_decode_mla pipeline RUNS end-to-end on device (weight absorption + "
-    "compressed-latent paged cache write + paged_flash_multi_latent_attention_decode + output "
-    "absorption — all shapes/sharding resolved), but PCC is ~0.03 — a correctness bug remains "
-    "(likely the 1-kv-head latent cache-write padded-row semantics or the op's rope/causal handling). "
-    "A6 math (test_m4_mla_absorb_cpu PCC 1.0) and op (test_m4_flash_mla_probe) are proven; this is a "
-    "focused correctness debug. Expanded-kv decode is the verified default. See MISTRAL4_DESIGN.md.",
+    reason="A6 WIP: forward_decode_mla pipeline runs end-to-end; PCC ~0.03 (step-0 ~0.018). Bug "
+    "LOCALIZED to the flash-op feed/output path: the cache WRITE round-trips PCC 1.0 "
+    "(test_m4_mla_cache_rt), the absorption math is CPU-PCC-1.0 (test_m4_mla_absorb_cpu), and the op "
+    "runs (test_m4_flash_mla_probe) — so it is a subtle paged_flash_multi_latent_attention_decode "
+    "q-sharding-to-cache-user / layout contract detail, needing op-only isolation or the op's exact "
+    "spec. Expanded-kv decode is the verified default (forward_decode_mla not wired in). See "
+    "MISTRAL4_DESIGN.md (A6 STEP 2b).",
     strict=False,
 )
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
@@ -70,6 +71,9 @@ def test_m4_mla_compressed_decode(mesh_device, reset_seeds):
         outs.append(ttnn.to_torch(o, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).float()[:B])
     out = torch.cat(outs, dim=1)  # [B, S, hidden]
 
+    # localization: step-0 (single token, attend-to-self) isolates per-step correctness from accumulation
+    s0 = comp_pcc(mla_out[:, 0:1].repeat(B, 1, 1), out[:, 0:1], 0.99)
+    logger.info(f"compressed MLA decode STEP-0 PCC: {s0[1]}")
     passing, msg = comp_pcc(mla_out.repeat(B, 1, 1), out, 0.99)
     logger.info(f"Mistral-Small-4 compressed-latent MLA decode (B={B}) PCC: {msg}")
     assert passing, f"compressed MLA decode PCC below 0.99: {msg}"
