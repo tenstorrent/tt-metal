@@ -572,16 +572,6 @@ class UnpackerEngine(Enum):
     UnpDest = "UNP_DEST"
 
 
-class TilizeUnpackerSel(Enum):
-    """
-    Enum for selecting which unpacker(s) perform tilization.
-    """
-
-    UnpA = "UnpA"
-    UnpB = "UnpB"
-    UnpAB = "UnpAB"
-
-
 class ReluConfig(Enum):
     NoRelu = 0
     ZeroRelu = 1
