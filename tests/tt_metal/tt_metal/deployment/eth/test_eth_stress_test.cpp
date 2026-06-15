@@ -177,17 +177,7 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet05StressTest) {
                 const auto processor = static_cast<DataMovementProcessor>(0);
 
                 log_info(tt::LogTest, "    running on {}", processor);
-                string locinfo = fmt::format(
-                    "sdev: [{} ({})], rdev: [{} ({})]"
-                    ", score: [{}], rcore: [{}]"
-                    ", processor: [{}]",
-                    sender_device->id(),
-                    pci_bdf_for_device_id(sender_device->id()),
-                    receiver_device->id(),
-                    pci_bdf_for_device_id(receiver_device->id()),
-                    sender_core,
-                    receiver_core,
-                    processor);
+                string locinfo = get_locinfo(sender_device, sender_core, receiver_device, receiver_core, processor);
 
                 run_test_stress(
                     this,

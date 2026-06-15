@@ -862,6 +862,21 @@ std::string get_ubb(IDevice* device) {
     return fmt::format("ubb: {}, chip: {}", ubb.tray_id, ubb.asic_id);
 }
 
+std::string get_locinfo(IDevice* sdev, CoreCoord score, IDevice* rdev, CoreCoord rcore, DataMovementProcessor proc) {
+    return fmt::format(
+        "sdev: [{} ({})], rdev: [{} ({})]"
+        ", score: [{}], rcore: [{}]"
+        ", processor: [{}], link: [{}]",
+        sdev->id(),
+        pci_bdf_for_device_id(sdev->id()),
+        rdev->id(),
+        pci_bdf_for_device_id(rdev->id()),
+        score,
+        rcore,
+        proc,
+        get_connector(sdev, score));
+}
+
 }  // namespace tt::tt_metal
 
 #endif /* _ETH_COMMON_HPP */
