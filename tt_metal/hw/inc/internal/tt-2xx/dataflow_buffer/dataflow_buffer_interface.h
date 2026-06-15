@@ -104,12 +104,15 @@ struct LocalDFBInterface {
     uint8_t num_entries_per_txn_id_per_tc;
     uint8_t num_txn_ids;
     uint8_t broadcast_tc;  // DM-DM ALL producer: post to all TCs instead of round-robin
+    uint8_t block_size;    // BLOCKED block size for this RISC's side (>=1); implicit commit advances tc_idx
+                           // per-BLOCK (every block_size entries), keeping a block in one sub-ring.
 
     DFBTCSlot tc_slots[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
 } __attribute__((packed));
 
 static_assert(sizeof(DFBTCSlot) == 17, "DFBTCSlot size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 123, "LocalDFBInterface size is incorrect");
+// DM variant = base 121 + main's num_entries (uint16_t, +2) + BLOCKED's block_size (uint8_t, +1) = 124.
+static_assert(sizeof(LocalDFBInterface) == 124, "LocalDFBInterface size is incorrect");
 
 #endif
 

@@ -442,6 +442,8 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
         this->config.num_entries,
         std::numeric_limits<uint16_t>::max());
     init.num_entries = static_cast<uint16_t>(this->config.num_entries);
+    init.producer_block_size = static_cast<uint8_t>(this->config.producer_block_size);
+    init.consumer_block_size = static_cast<uint8_t>(this->config.consumer_block_size);
 
     log_debug(
         tt::LogMetal,
@@ -655,15 +657,13 @@ static std::pair<uint16_t, uint32_t> compute_capacity_and_stride(const DataflowB
             // calculate_num_tile_counters).
             //
             // Implicit sync + asymmetric BLOCKED: the WIDER-FAN-OUT side (the one with more tile-counters,
-            // i.e. min(P,C) threads fanning to max(P,C)) must use explicit sync. commit_implicit_read/write
-            // advance the tile-counter PER ENTRY, not per block (dataflow_buffer.inl:354/:388), so when that
-            // side has num_tcs_to_rr>1 a block gets scattered across distinct sub-rings instead of staying in
-            // one — i.e. it does NOT honor BLOCKED block-granularity (NOT garbage: VERIFIED on emu-quasar-1x3
-            // the implicit fan-out produces a clean per-entry identity, just not the per-block result). The
-            // side with num_tcs_to_rr==1 (the wide side's counterpart) is a no-op round-robin, so implicit is
-            // fine there — VERIFIED: P>C implicit PRODUCER (num_producer_tcs=1) passes, the A1 pipeline.
-            // For BLOCKED the wider-fan-out side is the one with FEWER threads (C>P -> producer fans out;
-            // P>C -> consumer fans out). (This is FIXABLE — see the per-block-aware tc_idx advance proposal.)
+            // i.e. min(P,C) threads fanning to max(P,C)) now advances its tile-counter PER BLOCK rather than
+            // per entry. block_size is plumbed to the device (dfb_initializer_t::producer/consumer_block_size
+            // -> LocalDFBInterface::block_size) and commit_implicit_read/write only round-robin tc_idx at a
+            // block boundary (dataflow_buffer.inl: `% block_size`). A whole block therefore stays in one
+            // sub-ring, preserving BLOCKED block-granularity — so implicit sync is supported on BOTH sides for
+            // asymmetric BLOCKED (no explicit-side restriction). VERIFIED on emu-quasar-1x3: DM->DM 2Bx1B/1Bx2B
+            // implicit and the A1 implicit fan-out producer all match the explicit per-block golden.
             const uint32_t threads = std::max(config.num_producers, config.num_consumers);
             const uint32_t block = std::max<uint32_t>(config.consumer_block_size, 1u);
             // Each thread's sub-ring must hold a whole number of blocks for BOTH sides' block_size (the
@@ -678,17 +678,6 @@ static std::pair<uint16_t, uint32_t> compute_capacity_and_stride(const DataflowB
                 config.num_entries,
                 pblock,
                 threads);
-            TT_FATAL(
-                config.num_producers == config.num_consumers ||
-                    ((config.num_consumers <= config.num_producers || !config.enable_producer_implicit_sync) &&
-                     (config.num_producers <= config.num_consumers || !config.enable_consumer_implicit_sync)),
-                "BLOCKED DFB {}: asymmetric thread counts ({} producers vs {} consumers) require explicit sync "
-                "on the wider-fan-out side (C>P: the producer; P>C: the consumer); its implicit per-entry "
-                "tile-counter round-robin scatters blocks across sub-rings, losing block-granularity. (The "
-                "narrow side with one tile-counter may be implicit, e.g. a P>C implicit producer.)",
-                dfb.id,
-                config.num_producers,
-                config.num_consumers);
             TT_FATAL(
                 config.num_entries % (block * threads) == 0,
                 "BLOCKED DFB {} num_entries {} must be divisible by block_size * threads = {} * {} "

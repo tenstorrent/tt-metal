@@ -771,13 +771,15 @@ static void run_a1_fanout_blocked_pipeline(
 TEST_F(MeshDeviceFixture, A1Fanout_2_0_DMTensixDM_BLOCKED_1Bx2_blk4) {
     run_a1_fanout_blocked_pipeline(this->devices_.at(0), 2, 4, 16);
 }
-// VERIFIED (do not re-add as a passing test): implicit DM PRODUCER + fan-out (C>P) BLOCKED produces a clean
-// per-entry IDENTITY, NOT the per-block fan-out result — i.e. it loses block-granularity (the implicit
-// commit_implicit_read advances tc_idx per-entry). It is now FATAL'd by the device guard (the wider-fan-out
-// side must be explicit). Not garbage/corruption — a different, well-defined routing → fixable via a
-// block-aware tc_idx advance, after which this could be re-enabled.
 TEST_F(MeshDeviceFixture, A1Fanout_2_0_DMTensixDM_BLOCKED_1Bx4_blk4) {
     run_a1_fanout_blocked_pipeline(this->devices_.at(0), 4, 4, 16);
+}
+// Implicit DM PRODUCER + fan-out (C>P) BLOCKED: previously lost block-granularity (per-entry tc_idx
+// round-robin produced a clean per-entry IDENTITY instead of the per-block fan-out result). With the
+// block-aware commit_implicit_read (`% block_size`), the implicit producer now routes a whole block to one
+// sub-ring and matches the explicit per-block golden. RUN WITH TT_METAL_WATCHER=1 (multi-thread coherence).
+TEST_F(MeshDeviceFixture, A1Fanout_2_0_DMTensixDM_BLOCKED_1Bx2_blk4_impl) {
+    run_a1_fanout_blocked_pipeline(this->devices_.at(0), 2, 4, 16, /*implicit=*/true);
 }
 
 // =====================================================================================
@@ -2262,11 +2264,14 @@ DFB_BLOCKED_TEST_2_0(DMTest1xDFB3Bx3B_blk4_impl, DM, DM, 3, 3, 4, 24, true)
 DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk2_impl, DM, DM, 1, 1, 2, 16, true)
 DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk8_impl, DM, DM, 1, 1, 8, 16, true)
 
-// VERIFIED LIMIT (do not add): implicit-sync ASYMMETRIC BLOCKED with an IMPLICIT CONSUMER (e.g. DM→DM
-// 2Bx1B / 1Bx2B implicit) corrupts data on emu-quasar-1x3 — the implicit consumer drain round-robins the
-// tile-counter per-entry, not per-block, so credits misroute across the unequal side. The device guard
-// (dataflow_buffer.cpp BLOCKED case) FATALs on it. An implicit PRODUCER with an explicit consumer IS
-// supported (see the DM→Trisc A1 implicit P=2 case above, which passes).
+// --- ASYMMETRIC BLOCKED→BLOCKED (DM-DM, IMPLICIT sync) — now block-aware ---
+// Previously a verified LIMIT: an implicit asymmetric side round-robined the tile-counter per-ENTRY, so a
+// block scattered across sub-rings and credits misrouted. Now block_size is plumbed to the device and
+// commit_implicit_read/write only advance tc_idx at a block boundary (dataflow_buffer.inl `% block_size`),
+// so a whole block stays in one sub-ring — the implicit asymmetric path matches the explicit per-block
+// golden (identity for DM→DM). Mirrors the explicit 1Bx2B/2Bx1B cases above with implicit=true.
+DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx2B_blk4_impl, DM, DM, 1, 2, 4, 16, true)
+DFB_BLOCKED_TEST_2_0(DMTest1xDFB2Bx1B_blk4_impl, DM, DM, 2, 1, 4, 16, true)
 
 // --- BLOCKED→BLOCKED (DM-DM, explicit) extra coverage: larger ring / non-pow2 block, multi-thread ---
 // 2Bx2B blk2 on a 32-entry ring → capacity 16/thread → 8 blocks of 2 per thread (more blocks/thread than

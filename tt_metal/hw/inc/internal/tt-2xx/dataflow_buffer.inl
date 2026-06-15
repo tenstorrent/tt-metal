@@ -468,7 +468,11 @@ inline void DataflowBuffer::commit_implicit_read() {
         ptxn_id_index_ = (ptxn_id_index_ + 1) % local_dfb_interface_.num_txn_ids;
         ptxn_id_loop_cnt_++;
     }
-    local_dfb_interface_.tc_idx = (local_dfb_interface_.tc_idx + 1) % local_dfb_interface_.num_tcs_to_rr;
+    // BLOCKED: keep a whole block (block_size entries) in one sub-ring; only round-robin to the next
+    // sub-ring at a block boundary. block_size==1 (non-BLOCKED) advances every entry, as before.
+    if (ptiles_read_ % local_dfb_interface_.block_size == 0) {
+        local_dfb_interface_.tc_idx = (local_dfb_interface_.tc_idx + 1) % local_dfb_interface_.num_tcs_to_rr;
+    }
 }
 
 // Preamble for implicit-sync write: spin until previous writes are acked and data is available in the tile counters.
@@ -502,7 +506,11 @@ inline void DataflowBuffer::commit_implicit_write() {
         ctxn_id_index_ = (ctxn_id_index_ + 1) % local_dfb_interface_.num_txn_ids;
         ctxn_id_loop_cnt_++;
     }
-    local_dfb_interface_.tc_idx = (local_dfb_interface_.tc_idx + 1) % local_dfb_interface_.num_tcs_to_rr;
+    // BLOCKED: drain a whole block (block_size entries) from one sub-ring before round-robining to the
+    // next; only advance tc_idx at a block boundary. block_size==1 (non-BLOCKED) advances every entry.
+    if (ctiles_written_ % local_dfb_interface_.block_size == 0) {
+        local_dfb_interface_.tc_idx = (local_dfb_interface_.tc_idx + 1) % local_dfb_interface_.num_tcs_to_rr;
+    }
 }
 
 // Out-of-line definitions of Noc DFB-specific implicit-sync overloads.

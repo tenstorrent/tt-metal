@@ -183,6 +183,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                 for (uint8_t i = 0; i < dfb_interface.num_txn_ids; i++) {
                     dfb_interface.txn_ids[i] = init_ptr->producer_txn_descriptor.txn_ids[i];
                 }
+                dfb_interface.block_size = init_ptr->producer_block_size ? init_ptr->producer_block_size : 1;
             } else {
                 dfb_interface.num_txn_ids = init_ptr->consumer_txn_descriptor.num_txn_ids;
                 dfb_interface.threshold = init_ptr->consumer_txn_descriptor.num_entries_to_process_threshold;
@@ -192,6 +193,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                 for (uint8_t i = 0; i < dfb_interface.num_txn_ids; i++) {
                     dfb_interface.txn_ids[i] = init_ptr->consumer_txn_descriptor.txn_ids[i];
                 }
+                dfb_interface.block_size = init_ptr->consumer_block_size ? init_ptr->consumer_block_size : 1;
             }
 #endif
         }
