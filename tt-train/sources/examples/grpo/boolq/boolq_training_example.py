@@ -131,16 +131,15 @@ def _boolq_reward(completions, answer, **kwargs):
 def _run_output_dir() -> str:
     return os.path.join(
         str(REPO_ROOT),
-        "generated/tt-train/grpo_speedup_run",
+        "generated/tt-train/grpo_run",
         datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S"),
     )
 
 
 class GRPOMonitor:
-    """on_step_end CSV/stdout monitor. Mirrors the equivalent class in
-    ``examples/grpo/boolq_training_example.py``; kept as a plain class
-    because ``TrainerCallback`` only exposes a no-op default that we
-    don't otherwise need here."""
+    """on_step_end CSV/stdout monitor. Kept as a plain class because
+    ``TrainerCallback`` only exposes a no-op default that we don't
+    otherwise need here."""
 
     def __init__(self, output_dir: str) -> None:
         self.file_path = os.path.join(output_dir, "grpo_metrics.csv")
@@ -376,7 +375,7 @@ if __name__ == "__main__":
     if world_size != 2:
         raise RuntimeError(
             f"boolq_training_example must run under tt-run with world_size == 2 (got {world_size}). "
-            "Use boolq_training_example/runner.sh."
+            "Use boolq/runner.sh."
         )
 
     rank = int(os.environ["OMPI_COMM_WORLD_RANK"])
