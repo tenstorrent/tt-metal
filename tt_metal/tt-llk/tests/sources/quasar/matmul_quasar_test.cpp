@@ -86,7 +86,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
-  
     DataFormat math_format     = static_cast<DataFormat>(formats.math);
     DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
     if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32)
