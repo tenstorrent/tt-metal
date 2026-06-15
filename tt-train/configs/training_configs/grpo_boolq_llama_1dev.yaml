@@ -22,7 +22,7 @@ training_config:
     logging_steps: 1
     checkpointing: true
     checkpoint_interval: 5
-    prompts_to_train: 1600
+    prompts_to_train: 200
     temperature: 1.5
     max_completion_length: 256
     num_generations: 8
