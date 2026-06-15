@@ -61,7 +61,7 @@ class Embedding(LightweightModule):
         """In-place replace the embedding table via ``ttnn.copy``.
 
         HF-format input contract (matches the rest of the model's
-        ``.update()`` methods; see ``HF_LLAMA_FORMAT.md``):
+        ``.update()`` methods; see ``LLAMA_WEIGHT_TRANSFER.md``):
 
         * key       -- HF ``model.embed_tokens.weight`` (passed as kwarg
                        ``embed_tokens``).
@@ -77,7 +77,7 @@ class Embedding(LightweightModule):
         the typical Llama config (Llama-3.2-1B-Instruct, ``V = 128256``,
         ``padded_V = 128256``) this is always satisfied. If a future
         config pads the vocab dim, this method must be extended (and the
-        ``HF_LLAMA_FORMAT.md`` checklist updated).
+        ``LLAMA_WEIGHT_TRANSFER.md`` checklist updated).
 
         Single-device-only today: the ``(None, 3)`` 2D-mesh sharding on
         ``self.weights`` is a no-op on a 1x1 mesh, so a replicated input

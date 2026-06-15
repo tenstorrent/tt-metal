@@ -289,7 +289,7 @@ class LMHead(LightweightModule):
     def update(self, *, weight: ttnn.Tensor) -> None:
         """In-place replace the on-device LM-head weights via ``ttnn.copy``.
 
-        HF-format input contract (see ``HF_LLAMA_FORMAT.md``):
+        HF-format input contract (see ``LLAMA_WEIGHT_TRANSFER.md``):
 
         * key       -- HF ``lm_head.weight`` (passed as kwarg ``weight``).
         * shape     -- ``(1, 1, vocab_size, hidden_size)`` (HF shape
