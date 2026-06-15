@@ -2043,7 +2043,18 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
                                   const std::set<tracy::TTDeviceMarker>::iterator& original_marker_it)
         -> std::pair<std::set<tracy::TTDeviceMarker>::iterator, std::set<tracy::TTDeviceMarker>::iterator> {
         const auto& next_device_marker_it = device_markers.erase(original_marker_it);
-        const auto& [device_marker_it, _] = device_markers.insert(updated_marker);
+        const auto& [device_marker_it, inserted] = device_markers.insert(updated_marker);
+        // updateDeviceMarker only rewrites non-key fields (marker_name/meta_data/runtime_host_id),
+        // so on a clean capture the reinsert lands exactly where the erased marker was and
+        // std::next(device_marker_it) == next_device_marker_it. A dropped-marker run can emit a
+        // duplicate sort key: then insert is a no-op pointing at an unrelated element, or the
+        // reinsert shifts position. Trusting device_marker_it there corrupts set traversal and
+        // crashes a later deref. Degrade to a partial report: hand back the valid erase result so
+        // the caller keeps advancing and never stacks/derefs the bogus iterator.
+        if (this->had_dropped_markers.load(std::memory_order_relaxed) &&
+            (!inserted || std::next(device_marker_it) != next_device_marker_it)) {
+            return {next_device_marker_it, next_device_marker_it};
+        }
         TT_ASSERT(std::next(device_marker_it) == next_device_marker_it);
         return {device_marker_it, next_device_marker_it};
     };
