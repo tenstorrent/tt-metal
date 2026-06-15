@@ -84,6 +84,7 @@ class StimuliConfig:
         use_dense_tile_dimensions: bool = False,
         operand_res_tile_size: int = None,
         twos_complement: bool = False,
+        tile_dimensions_B: list[int] = None,
     ):
 
         # Fields init
@@ -101,6 +102,9 @@ class StimuliConfig:
         self.num_faces = num_faces
         self.face_r_dim = face_r_dim
         self.tile_dimensions = tile_dimensions
+        self.tile_dimensions_B = (
+            tile_dimensions_B if tile_dimensions_B is not None else tile_dimensions
+        )
         self.sfpu = sfpu
         self.write_full_tiles = write_full_tiles
         self.use_dense_tile_dimensions = use_dense_tile_dimensions
@@ -123,7 +127,7 @@ class StimuliConfig:
         )
         self.tile_size_B_bytes = calculate_tile_size_bytes(
             self.stimuli_B_format,
-            self.tile_dimensions,
+            self.tile_dimensions_B,
             format_tile_sizes,
             use_srcs=self.use_srcs,
         )
@@ -527,15 +531,19 @@ class StimuliConfig:
             use_srcs=self.use_srcs,
             twos_complement=self.twos_complement,
         )
+        face_r_dim_B = min(self.tile_dimensions_B[0], FACE_C_DIM)
+        num_faces_B = (self.tile_dimensions_B[0] // face_r_dim_B) * (
+            self.tile_dimensions_B[1] // FACE_C_DIM
+        )
         StimuliConfig.write_matrix_w_tile_dimensions(
             self.buffer_B,
             self.tile_count_B,
             pack_function_B,
             self.buf_b_addr,
             self.tile_size_B_bytes,
-            self.num_faces,
-            self.face_r_dim,
-            self.tile_dimensions,
+            num_faces_B,
+            face_r_dim_B,
+            self.tile_dimensions_B,
             location,
             use_srcs=self.use_srcs,
             twos_complement=self.twos_complement,
