@@ -27,9 +27,7 @@ namespace ttnn::graph {
 // Node identifiers in the graph
 using node_id = int;
 
-// What a capture blocks. Replaces the old (do_block, block_alloc) bool pair so the
-// only meaningful states are representable (the pair could also encode the nonsense
-// "allow dispatch but block alloc"):
+// What a capture blocks:
 //   None        - block nothing (NORMAL capture: record only).
 //   All         - block dispatch AND allocation (NO_DISPATCH: buffers mocked at addr 0).
 //   DispatchOnly - block dispatch, allow real allocation (real-alloc collect: kernels
