@@ -1,0 +1,5 @@
+EXP_NAME=11_fix_offgrid_col11
+EXP_TYPE=runner
+EXP_DESC="THE FIX: request-loop with H2D service worker core moved to col 11 (off the model's 0-10 compute grid; default now). If per-iter drops from ~3090 to ~1900ms, the persistent service kernel colliding with the model grid was the cause and this fixes it."
+RUNNER_ENV=""
+PRODUCER_ENV=""

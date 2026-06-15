@@ -1,0 +1,5 @@
+EXP_NAME=00_baseline_plain
+EXP_TYPE=runner
+EXP_DESC="Runner baseline MAX_SEQ_LEN=61440, no instrumentation. Confirms ~3.3 s/chunk AND that the added perf_probe code (toggles off) introduces no regression."
+RUNNER_ENV=""
+PRODUCER_ENV=""

@@ -1,0 +1,5 @@
+EXP_NAME=05_maxseq56320_sections
+EXP_TYPE=runner
+EXP_DESC="Runner MAX_SEQ_LEN=56320 + per-section timing. If 01 improved per-iter ms, this shows WHICH section dropped (hypothesis: mla), confirming the ring_mla gather over _chunked_kv_buf scales with the allocated buffer (mla_seq_len) rather than logical_n."
+RUNNER_ENV="PREFILL_MAX_SEQ_LEN=56320 PREFILL_SECTION_TIMING=1"
+PRODUCER_ENV="PREFILL_MAX_SEQ_LEN=56320"

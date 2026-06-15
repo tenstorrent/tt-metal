@@ -1,0 +1,5 @@
+EXP_NAME=08_disable_ack_sections
+EXP_TYPE=runner
+EXP_DESC="Runner 61440 + DISABLE_LAYER_ACK=1 + SECTION_TIMING. Removes BOTH the per-layer ack inject and its synchronize_device (on_layer_complete=None), matching the test which fires no callback. Compared against 02 (ack on) this attributes how much of the 'mla' section is the 61 per-layer acks/syncs vs genuine attention compute."
+RUNNER_ENV="PREFILL_DISABLE_LAYER_ACK=1 PREFILL_SECTION_TIMING=1"
+PRODUCER_ENV=""

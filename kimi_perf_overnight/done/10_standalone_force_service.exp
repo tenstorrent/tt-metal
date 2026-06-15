@@ -1,0 +1,4 @@
+EXP_NAME=10_standalone_force_service
+EXP_TYPE=standalone
+EXP_DESC="POSITIVE CONFIRMATION of root cause: standalone-chunked @61440 + PREFILL_FORCE_BUILD_SERVICE=1 — builds the H2D stream service (UNUSED; tokens still from the local trace) in the otherwise-fast path. If total/11 slows from ~1878ms to ~3090ms, the H2D service's mere presence IS the ~1.2s/chunk request-loop cost (converts the by-elimination conclusion into a direct demonstration). If it stays ~1878ms, the service must be actively driven to cost — revisit."
+RUNNER_ENV="PREFILL_FORCE_BUILD_SERVICE=1"

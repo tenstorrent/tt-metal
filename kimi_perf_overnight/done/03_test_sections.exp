@@ -1,0 +1,4 @@
+EXP_NAME=03_test_sections
+EXP_TYPE=test
+EXP_DESC="No-PCC transformer test (fast path) + per-section timing + construction/input dump. SAME instrumentation as 02 -> direct apples-to-apples: which section is smaller in the test, and does its construction config differ (mla_seq_len 56320 vs 61440)."
+TEST_ENV="PREFILL_SECTION_TIMING=1 PREFILL_DUMP_CONSTRUCTION=1"

@@ -1,0 +1,4 @@
+EXP_NAME=01a_standalone_chunked
+EXP_TYPE=standalone
+EXP_DESC="DECISIVE CONTROL (all 4 hypothesis agents converged here): runner in PREFILL_STANDALONE_CHUNKED mode @ MAX_SEQ_LEN=61440. Same pipeline/mla_seq_len as the request loop, but NO H2D socket, NO per-chunk metadata readback, NO ack channel, and NO request-mode clear_loaded_sub_device_manager (prefill_runner.py:578). PREFILL_PREFILL_SYNC=1 so each chunk syncs (per-chunk-comparable to the test). If total/11 ~1.9 s -> the 1.4 s is request-mode machinery (line-578 clear / sub-device baseline / socket). If still ~3.3 s -> genuine forward_chunk compute."
+RUNNER_ENV=""

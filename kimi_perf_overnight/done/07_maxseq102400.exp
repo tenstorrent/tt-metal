@@ -1,0 +1,5 @@
+EXP_NAME=07_maxseq102400
+EXP_TYPE=runner
+EXP_DESC="mla_seq_len scaling sweep point: MAX_SEQ_LEN=102400 (20*5120), largest. Fourth point (with 01=56320, 00=61440, 06=81920) to test LINEARITY of per-iter ms vs allocated KV buffer. Linear -> buffer-bound gather; flat -> mla_seq_len conclusively NOT the cause."
+RUNNER_ENV="PREFILL_MAX_SEQ_LEN=102400"
+PRODUCER_ENV="PREFILL_MAX_SEQ_LEN=102400"

@@ -1,0 +1,4 @@
+EXP_NAME=01b_standalone_sections
+EXP_TYPE=standalone
+EXP_DESC="Standalone-chunked @ 61440 + section timing + construction dump. If 01a is still ~3.3 s (genuine compute), this localizes which section (embed/mla/moe) carries it WITHOUT any request-mode machinery, and dumps construction for diff vs the test (03). If 01a dropped to ~1.9 s, compare these sections against 02 (request-mode sections) to see which section the request machinery inflated."
+RUNNER_ENV="PREFILL_SECTION_TIMING=1 PREFILL_DUMP_CONSTRUCTION=1"

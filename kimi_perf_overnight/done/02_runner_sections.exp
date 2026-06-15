@@ -1,0 +1,5 @@
+EXP_NAME=02_runner_sections
+EXP_TYPE=runner
+EXP_DESC="Runner 61440 + per-section timing + construction/input dump. Localizes the 1.4 s across embed / mla / moe (sync-bracketed) and records construction config + first-chunk input tensor specs for diff vs the test."
+RUNNER_ENV="PREFILL_SECTION_TIMING=1 PREFILL_DUMP_CONSTRUCTION=1"
+PRODUCER_ENV=""

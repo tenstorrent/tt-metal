@@ -1,0 +1,5 @@
+EXP_NAME=13_fix_2cq
+EXP_TYPE=runner
+EXP_DESC="FIX ATTEMPT 2 (dispatch-tax): full 61-layer request-loop with PREFILL_NUM_CQ=2 — open the mesh with 2 command queues so the H2D service claims its own CQ and the model's CQ0 dispatch is uncontended. If per-iter drops from ~3090 to ~1900ms, the separate-CQ decoupling is the fix. If unchanged or errors, the fix is H2DStreamService C++-level (document + stop)."
+RUNNER_ENV="PREFILL_NUM_CQ=2"
+PRODUCER_ENV=""

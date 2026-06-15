@@ -1,0 +1,5 @@
+EXP_NAME=01_maxseq56320
+EXP_TYPE=runner
+EXP_DESC="DECISIVE / cheapest: runner MAX_SEQ_LEN=56320 (=11*5120) to match the test's SEQ_CACHE=55*1024. If per-iter ms drops toward ~1.9 s, mla_seq_len (ring-buffer-proportional work) is the cause."
+RUNNER_ENV="PREFILL_MAX_SEQ_LEN=56320"
+PRODUCER_ENV="PREFILL_MAX_SEQ_LEN=56320"

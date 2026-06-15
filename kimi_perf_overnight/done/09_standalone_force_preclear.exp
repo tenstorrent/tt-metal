@@ -1,0 +1,4 @@
+EXP_NAME=09_standalone_force_preclear
+EXP_TYPE=standalone
+EXP_DESC="DECISIVE disambiguation: standalone-chunked @61440 + PREFILL_FORCE_PRECLEAR=1 — adds the request-mode-only clear_loaded_sub_device_manager (line-578 equivalent) to the otherwise-fast standalone path. If total/11 slows from ~1878ms to ~3090ms, the sub-device-manager clear (reverting compile()'s custom CCL/MoE manager to whole-chip default) IS the root cause of the request-loop gap (H1). If it stays ~1878ms, the clear is innocent and the H2D stream service background activity is the cause."
+RUNNER_ENV="PREFILL_FORCE_PRECLEAR=1"

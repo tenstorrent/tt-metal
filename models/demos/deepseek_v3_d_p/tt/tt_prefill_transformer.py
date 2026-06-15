@@ -382,6 +382,11 @@ class TtPrefillTransformer(LightweightModule):
             h = ttnn.unsqueeze_to_4D(h)  # [1, 1, chunk_per_chip, emb_dim/tp]
 
         layer_outputs = {} if return_layer_outputs else None
+        # PREFILL_PROFILE_READ_EVERY=K: drain the device profiler buffer after every K layers so the
+        # per-RISC DRAM marker buffer (~6 layer-execs) never overflows on long runs. The read forces a
+        # host/device sync at the layer boundary, so the op2op of the FIRST op of the next layer is
+        # perturbed (the parser excludes per-layer first ops). Within-layer op2op stays clean. Default off.
+        _read_every = int(os.environ.get("PREFILL_PROFILE_READ_EVERY", "0") or "0")
         for i, layer in enumerate(self.layers):
             signpost(f"forward_chunk_layer_{i}_start")
             h, _ = layer(
@@ -396,6 +401,8 @@ class TtPrefillTransformer(LightweightModule):
             signpost(f"forward_chunk_layer_{i}_end")
             if return_layer_outputs:
                 layer_outputs[f"layer_{i}"] = ttnn.clone(h)
+            if _read_every > 0 and (i + 1) % _read_every == 0:
+                ttnn.ReadDeviceProfiler(self.mesh_device)
         perf_probe.flush_sections()  # per-chunk section breakdown, gated by PREFILL_SECTION_TIMING
         return h, layer_outputs
 

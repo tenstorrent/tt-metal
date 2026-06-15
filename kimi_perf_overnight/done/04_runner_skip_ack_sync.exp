@@ -1,0 +1,5 @@
+EXP_NAME=04_runner_skip_ack_sync
+EXP_TYPE=runner
+EXP_DESC="Runner 61440 + PREFILL_SKIP_ACK_SYNC=1. The runner fires on_layer_complete per layer, doing ttnn.synchronize_device 61x/chunk; the test passes on_layer_complete=None (0 syncs). This keeps the cheap ack inject but drops those 61 syncs, isolating sync cost from inject cost (complements the earlier DISABLE_LAYER_ACK which removed both)."
+RUNNER_ENV="PREFILL_SKIP_ACK_SYNC=1"
+PRODUCER_ENV=""

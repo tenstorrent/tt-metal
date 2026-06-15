@@ -1,0 +1,5 @@
+EXP_NAME=06_maxseq81920
+EXP_TYPE=runner
+EXP_DESC="mla_seq_len scaling sweep point: MAX_SEQ_LEN=81920 (16*5120), LARGER than baseline. If per-iter ms scales UP with the allocated KV buffer, the ring_mla gather over _chunked_kv_buf is buffer-bound (proves the hypothesis). Producer still pushes the same 11 chunks."
+RUNNER_ENV="PREFILL_MAX_SEQ_LEN=81920"
+PRODUCER_ENV="PREFILL_MAX_SEQ_LEN=81920"

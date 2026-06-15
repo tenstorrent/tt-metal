@@ -1,0 +1,5 @@
+EXP_NAME=12_repro_col0
+EXP_TYPE=runner
+EXP_DESC="Control: force the OLD in-grid worker core (0,0) via PREFILL_H2D_WORKER_COL=0. Should reproduce ~3090ms, confirming the knob works and the col-11 fix (exp 11) is what changed it."
+RUNNER_ENV="PREFILL_H2D_WORKER_COL=0"
+PRODUCER_ENV=""
