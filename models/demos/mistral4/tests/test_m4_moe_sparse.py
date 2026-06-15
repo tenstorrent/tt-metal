@@ -24,13 +24,16 @@ BATCH = 8
 
 
 @pytest.mark.xfail(
-    reason="all_to_all_dispatch needs a 2D mesh: tokens batch-sharded on a data-parallel axis AND "
-    "experts on a separate expert-parallel axis (deepseek uses dispatch-axis x TP-axis). This model's "
-    "flat 1x8 mesh shards the 128 experts across ALL 8 devices (expert-parallel) with tokens "
-    "replicated, so there is no free axis to batch-shard tokens for dispatch — a topology mismatch, "
-    "not a shape bug. _forward_sparse is the authored pipeline; enabling it needs a 2x4 mesh remap "
-    "(2-way DP x 4-way EP) or a non-dispatch sparse gather. The dense expert-parallel MoE is the "
-    "appropriate, verified default on 1x8. See MISTRAL4_DESIGN.md (A10 DEFINITIVE FINDING).",
+    reason="A10 sparse dispatch needs a 2D DP×EP mesh (tokens batch-sharded on a data-parallel axis, "
+    "experts sharded on an expert-parallel axis via ShardTensor2dMesh). This test runs on the flat 1x8 "
+    "mesh where experts are sharded across all 8 (expert-parallel) with tokens replicated — no free DP "
+    "axis to dispatch over. DE-RISKED (2026-06-15): all_to_all_dispatch + all_to_all_combine are PROVEN "
+    "on a (2,4) mesh for the mistral4 MoE config (test_m4_a2a_probe_2x4 PASSES; the upstream "
+    "test_moe_ccl_end_to_end::test_integration[2x4_grid] validates the full dispatch→experts→combine "
+    "round-trip), and the dispatch/combine shape contracts are known. The remaining work is the model-side "
+    "2x4 refactor: lay out the expert weights with ShardTensor2dMesh (32 experts/EP-device), migrate the "
+    "whole model's collective axes (MLA/norm/lm_head/all_reduce/all_gather) to 2x4, and wire _forward_sparse. "
+    "The dense expert-parallel MoE is the verified default on 1x8 meanwhile. See MISTRAL4_DESIGN.md (A10).",
     strict=False,
 )
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
