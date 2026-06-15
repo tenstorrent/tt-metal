@@ -14,7 +14,7 @@ Host memory (RSS) was profiled across three configurations — [Performance](#pe
 decode iterations on T3K (8-chip) and N300 (2-chip) devices.
 
 All [numbers](../sample_data/host_mem_profiling/) below were captured with a maximum generation of 200 tokens (200 decode iterations) to match the
-conditions used in [performance table](PERF.md).
+conditions used for centralized targets in [models/model_targets.yaml](../model_targets.yaml).
 
 ## Performance
 

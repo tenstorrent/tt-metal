@@ -37,6 +37,8 @@ struct llk_unpack_tilize_params_t {
     std::uint32_t unpA_block_c_dim;
 };
 
+// DEPRECATED: Part of the unpack-based untilize path, deprecated in favor of pack_untilize. Scheduled for
+// removal; see tt-metal#22904.
 struct llk_unpack_untilize_params_t {
     std::uint32_t unpA_operand;
 };

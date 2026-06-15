@@ -443,6 +443,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     in0_sender_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
     tt::tt_metal::TensorAccessorArgs(in0_tensor).append_to(in0_sender_compile_time_args);
     tt::tt_metal::TensorAccessorArgs().append_to(in0_sender_compile_time_args);  // placeholder for sparsity
+    in0_sender_compile_time_args.push_back((std::uint32_t)0);  // num_batch_compute (unused, sparsity disabled)
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // READER
@@ -1251,7 +1252,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                 (std::uint32_t)in0_mcast_sender.y   // in0_mcast_sender_noc_y
             };
             // left half
-            if (core.x <= half_core || (!transpose_mcast and core.y == start_core_y)) {
+            if ((core.x - start_core_x) <= half_core || (!transpose_mcast and core.y == start_core_y)) {
                 in0_receiver_kernel_desc.runtime_args.emplace_back(core, mm_in0_receiver_args);
             }
             // right half
@@ -1494,7 +1495,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                         in1_recv_variant(mm_in1_receiver_writer_args.begin(), mm_in1_receiver_writer_args.end());
                     in1_recv_variant[2] = out_tensor;
                     // left half
-                    if (core.x <= half_core || (transpose_mcast and core.y == start_core_y)) {
+                    if ((core.x - start_core_x) <= half_core || (transpose_mcast and core.y == start_core_y)) {
                         in1_receiver_writer_kernel_desc.emplace_runtime_args(core, in1_recv_variant);
                     }
                     // right half
@@ -1951,6 +1952,7 @@ create_program_mcast_in0_in1(
     in0_sender_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
     tt::tt_metal::TensorAccessorArgs(in0_tensor).append_to(in0_sender_compile_time_args);
     tt::tt_metal::TensorAccessorArgs().append_to(in0_sender_compile_time_args);  // placeholder for sparsity
+    in0_sender_compile_time_args.push_back((std::uint32_t)0);  // num_batch_compute (unused, sparsity disabled)
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // READER
@@ -2719,7 +2721,7 @@ create_program_mcast_in0_in1(
                 (std::uint32_t)in0_mcast_sender.y   // in0_mcast_sender_noc_y
             };
             // left half
-            if (core.x <= half_core || (!transpose_mcast and core.y == start_core_y)) {
+            if ((core.x - start_core_x) <= half_core || (!transpose_mcast and core.y == start_core_y)) {
                 tt_metal::SetRuntimeArgs(program, mm_kernel_in0_receiver_id, core, mm_in0_receiver_args);
             }
             // right half
@@ -2951,7 +2953,7 @@ create_program_mcast_in0_in1(
                 }
 
                 // left half
-                if (core.x <= half_core || (transpose_mcast and core.y == start_core_y)) {
+                if ((core.x - start_core_x) <= half_core || (transpose_mcast and core.y == start_core_y)) {
                     tt_metal::SetRuntimeArgs(
                         program, mm_kernel_in1_receiver_writer_id, core, mm_in1_receiver_writer_args);
                 }
@@ -3401,7 +3403,11 @@ ProgramDescriptor MatmulMultiCoreReuseMcast2DProgramFactory::create_descriptor(
     const auto Kt = get_K_dim(a_shape_padded, in0_tile);
     const auto Nt = get_N_dim(b_shape_padded, in1_tile);
 
-    CoreCoord sub_device_start_core = {0, 0};
+    // When a sub-device is present use its bounding-box start; otherwise fall
+    // back to allowed_worker_cores start so non-(0,0) placements work correctly.
+    CoreCoord sub_device_start_core = program_config.allowed_worker_cores.has_value()
+                                          ? program_config.allowed_worker_cores.value().bounding_box().start_coord
+                                          : CoreCoord{0, 0};
     if (operation_attributes.sub_device_id.has_value()) {
         auto sub_device_cores = device->worker_cores(
             tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.sub_device_id.value());

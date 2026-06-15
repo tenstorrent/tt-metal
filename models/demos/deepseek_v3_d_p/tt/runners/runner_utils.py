@@ -1,19 +1,257 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
-"""Debug/diagnostic utilities for the prefill runner.
+"""Utilities for the prefill runner.
 
-Only the metal-native helpers live here — pure ttnn, no upward dependencies
+Only metal-native helpers live here — pure ttnn, no upward dependencies
 on blaze (`_migration`, `_mpi_test_helpers`). Migration-coupled diagnostics
 live in blaze at `disaggregation/migration/python/prefill_runner_util.py`.
-
-Import selectively — all helpers are gated on `PREFILL_DEBUG=1` at the
-caller; importing this module is cheap and safe in any context.
 """
 
+import os
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable, Optional
+
+import torch
 from loguru import logger
+from transformers import AutoConfig
 
 import ttnn
+from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.tt.mla.utils import create_balanced_chunk_order, reorder_tensor_chunks
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
+    create_kv_chunk_address_table_ds,
+    create_kv_chunk_address_table_kimi,
+)
+
+
+# ---------------------------------------------------------------------------
+# Model-variant registry
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class RunnerVariant:
+    """Per-model knobs the runner needs to build a DeepSeek-V3-family model.
+
+    The TT layer code is variant-agnostic — it takes `model_config` (the static
+    dimension constants) + the HF `config`. Everything here is the runner-side
+    plumbing that differs per model: where to find the HF config and the TTNN
+    weight cache, and the sensible defaults for input layout / gate mode.
+    """
+
+    name: str  # matches the pytest weight-cache dir prefix: {name}_{arch}_{N}dev
+    model_config: type  # DeepSeekV3Config | KimiK26Config
+    hf_model_env: str  # env var holding the HF model dir (for config.json)
+    hf_model_default: str
+    ttnn_cache_env: str  # env var holding the TTNN weight-cache root
+    ttnn_cache_default: str
+    default_is_balanced: bool
+    default_gate_mode: str  # GateComputeMode name
+    kv_cache_table_create_function: Callable  # builds this variant's KV chunk address table
+
+
+VARIANTS = {
+    "deepseek_v3_d_p": RunnerVariant(
+        name="deepseek_v3_d_p",
+        model_config=DeepSeekV3Config,
+        hf_model_env="DEEPSEEK_V3_HF_MODEL",
+        hf_model_default="models/demos/deepseek_v3/reference",
+        ttnn_cache_env="TT_DS_PREFILL_TTNN_CACHE",
+        ttnn_cache_default="/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure",
+        default_is_balanced=True,
+        default_gate_mode="DEVICE_FP32",
+        kv_cache_table_create_function=create_kv_chunk_address_table_ds,
+    ),
+    "kimi_k2_6": RunnerVariant(
+        name="kimi_k2_6",
+        model_config=KimiK26Config,
+        hf_model_env="KIMI_K2_6_HF_MODEL",
+        # Repo-local config (dot-free, in-tree) — same default the pytest
+        # `kimi_k2_6` variant uses (model_variants.py default_local_path). The
+        # runner only needs config dims; real weights come from the TTNN cache.
+        # To use a different checkpoint, set KIMI_K2_6_HF_MODEL to a dot-free
+        # path (transformers' trust_remote_code import chokes on the "." in the
+        # canonical /mnt/models/moonshotai/Kimi-K2.6-dequantized dir name).
+        hf_model_default="models/demos/deepseek_v3_d_p/reference/kimi_k2_6",
+        ttnn_cache_env="TT_KIMI_PREFILL_TTNN_CACHE",
+        ttnn_cache_default="/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill",
+        default_is_balanced=False,  # Kimi is validated only in non_balanced layout
+        default_gate_mode="HOST_ALL",  # Kimi (1 expert group) is validated only with the host gate
+        kv_cache_table_create_function=create_kv_chunk_address_table_kimi,
+    ),
+}
+
+
+def get_variant(name: str) -> RunnerVariant:
+    """Resolve a RunnerVariant by name; raises KeyError with the valid set."""
+    try:
+        return VARIANTS[name]
+    except KeyError:
+        raise KeyError(f"Unknown PREFILL_MODEL_VARIANT={name!r}; valid: {sorted(VARIANTS)}")
+
+
+# ---------------------------------------------------------------------------
+# HF config loading
+# ---------------------------------------------------------------------------
+def unwrap_multimodal_config(cfg):
+    """Unwrap Kimi K2.5/K2.6's multimodal wrapper config to the inner text_config.
+
+    The LM fields the rest of the code reads (hidden_size, n_routed_experts, ...)
+    live under `text_config`. Also stubs `quantization_config.weight_block_size`
+    when missing so DSv3's dequant helper's eager read doesn't fail on the
+    pre-dequantized Kimi checkpoint. Mirrors the test-side helper in conftest.py.
+    """
+    if hasattr(cfg, "text_config") and hasattr(cfg.text_config, "hidden_size"):
+        logger.info(f"Unwrapping multimodal wrapper config (inner model_type={cfg.text_config.model_type})")
+        cfg = cfg.text_config
+    qc = getattr(cfg, "quantization_config", None)
+    if isinstance(qc, dict) and not qc.get("weight_block_size"):
+        qc["weight_block_size"] = [128, 128]
+        logger.info("Stubbed quantization_config.weight_block_size for pre-dequantized checkpoint")
+    return cfg
+
+
+def load_hf_config(variant: RunnerVariant):
+    """Load (and unwrap) the HF config for a variant from its `hf_model_env`
+    (falling back to the variant's repo-local default)."""
+    model_path = os.environ.get(variant.hf_model_env) or variant.hf_model_default
+    logger.info(f"Loading HF config for variant={variant.name!r} from {model_path}")
+    cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    return unwrap_multimodal_config(cfg)
+
+
+# ---------------------------------------------------------------------------
+# Device / weight-cache / H2D-service setup
+# ---------------------------------------------------------------------------
+def open_mesh_device(mesh_shape: tuple, model_cfg: type) -> ttnn.MeshDevice:
+    """Configure fabric (1D for sp<=8, else 2D) and open the mesh device."""
+    sp = mesh_shape[0]
+    fabric_config = ttnn.FabricConfig.FABRIC_1D if sp <= 8 else ttnn.FabricConfig.FABRIC_2D
+
+    fabric_router_config = create_fabric_router_config(
+        max_payload_size=model_cfg.FABRIC_PAYLOAD_SIZE,
+    )
+
+    ttnn.set_fabric_config(
+        fabric_config,
+        ttnn.FabricReliabilityMode.RELAXED_INIT,
+        None,
+        ttnn.FabricTensixConfig.DISABLED,
+        ttnn.FabricUDMMode.DISABLED,
+        ttnn.FabricManagerMode.DEFAULT,
+        fabric_router_config,
+    )
+    return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*mesh_shape))
+
+
+def resolve_weight_cache_path(variant: RunnerVariant, mesh_shape: tuple) -> Optional[Path]:
+    """Mirror the layout produced by the pytest weight_cache_path fixture so
+    we read the same files the cache-populate run wrote:
+      $<variant.ttnn_cache_env> / {variant.name}_{arch}_{N}dev / {sp}x{tp}
+    Defaults to the variant's cache root; returns None only if explicitly empty."""
+    env_cache = os.environ.get(variant.ttnn_cache_env, variant.ttnn_cache_default)
+    if not env_cache:
+        return None
+    arch = "bh" if is_blackhole() else "wh"
+    num_devices = ttnn.get_num_devices()
+    sp, tp = mesh_shape
+    path = Path(env_cache) / f"{variant.name}_{arch}_{num_devices}dev" / f"{sp}x{tp}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def make_global_spec(mesh_shape: tuple, max_seq_len: int) -> ttnn.TensorSpec:
+    """Per-iter input spec used by `build_h2d_service` to set the service's
+    global tensor shape (the producer matches it on the host side).
+    Shape `(sp_factor, 1, isl_per_chip)` uint32 ROW_MAJOR DRAM."""
+    sp_factor = mesh_shape[0]
+    isl_per_chip = max_seq_len // sp_factor
+    return ttnn.TensorSpec(
+        shape=ttnn.Shape([sp_factor, 1, isl_per_chip]),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        buffer_type=ttnn.BufferType.DRAM,
+    )
+
+
+def build_h2d_service(
+    mesh_device: ttnn.MeshDevice,
+    *,
+    mesh_shape: tuple,
+    max_seq_len: int,
+    mapper_config: ttnn.MeshMapperConfig,
+    worker_cores: ttnn.CoreRange,
+    metadata_size_bytes: int,
+) -> ttnn.H2DStreamService:
+    """Construct an H2DStreamService whose per-shard backing tensor matches
+    what `prepare_prefill_input_tensor` would have produced.
+
+    Per-shard target: `(1, 1, isl_per_chip)` uint32 ROW_MAJOR DRAM.
+    Achieved by setting global_spec.shape = `(sp_factor, 1, isl_per_chip)` and
+    mapping `[Shard(0), Replicate]` on a `(sp, tp)` mesh — first axis of the
+    tensor is sharded across mesh rows (sp), nothing else is split.
+    """
+    sp_factor, tp_factor = mesh_shape
+    assert max_seq_len % sp_factor == 0, f"max_seq_len={max_seq_len} must be divisible by sp_factor={sp_factor}"
+    isl_per_chip = max_seq_len // sp_factor
+    per_chip_bytes = isl_per_chip * 4  # uint32
+
+    global_spec = make_global_spec(mesh_shape, max_seq_len)
+    mapper = ttnn.create_mesh_mapper(mesh_device, mapper_config)
+    # worker_cores set so the service-core kernel multicasts a data-ready inc
+    # after each transfer; h2d_socket_sync() waits on that on-device, which
+    # avoids the host-side barrier() round-trip per iteration.
+    # metadata_size_bytes set so the producer can ship per-iter control bytes
+    # (slot_id, actual_start, actual_end) inline with the token push.
+    service = ttnn.H2DStreamService(
+        mesh_device=mesh_device,
+        global_spec=global_spec,
+        fifo_size_bytes=8 * per_chip_bytes,  # 8 in-flight pages of headroom
+        scratch_cb_size_bytes=per_chip_bytes,  # one page; service requires >= page_size
+        mapper=mapper,
+        worker_cores=worker_cores,
+        metadata_size_bytes=metadata_size_bytes,
+    )
+    logger.info(
+        f"[h2d] H2DStreamService built: global_shape=({sp_factor},1,{isl_per_chip}) "
+        f"uint32 ROW_MAJOR DRAM, per_chip_bytes={per_chip_bytes}, worker_cores={worker_cores}"
+    )
+    return service
+
+
+def prepare_prefill_input_tensor(
+    token_ids: list[int],
+    mesh_device: ttnn.MeshDevice,
+    sp_factor: int,
+    is_balanced: bool,
+    mesh_shape: tuple,
+    sp_axis: int,
+) -> ttnn.Tensor:
+    """Shard and upload token IDs to device as a prefill input tensor.
+
+    Produces an SP-sharded uint32 ROW_MAJOR DRAM tensor of shape
+    [sp_factor, 1, len(token_ids) // sp_factor] — the format expected by
+    TtPrefillTransformer.forward.
+    """
+    isl_per_chip = len(token_ids) // sp_factor
+    if is_balanced:
+        chunk_order = create_balanced_chunk_order(sp_factor)
+        t = torch.tensor(token_ids, dtype=torch.int64).unsqueeze(0).unsqueeze(0).unsqueeze(-1)
+        t = reorder_tensor_chunks(t, chunk_order, seq_dim=2)
+        token_ids_sharded = t.squeeze(0).squeeze(-1).reshape(sp_factor, 1, isl_per_chip)
+    else:
+        token_ids_sharded = torch.tensor(token_ids, dtype=torch.int64).reshape(sp_factor, 1, isl_per_chip)
+    return ttnn.from_torch(
+        token_ids_sharded,
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(sp_axis, None)),
+    )
 
 
 def probe_dram_allocatable_base(mesh_device, label: str = "") -> None:

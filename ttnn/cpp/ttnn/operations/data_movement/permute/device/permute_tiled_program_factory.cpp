@@ -371,7 +371,7 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreTileRowInvarian
         uint32_t num_packed_values = sizeof(uint32_t) / element_size;
         num_writes = face_shape[1] / num_packed_values;
         switch (input_tensor.dtype()) {
-            case DataType::INT32:
+            case DataType::INT32: padding_val_packed = std::bit_cast<uint32_t>(pad_value); break;
             case DataType::UINT32: padding_val_packed = pad_value; break;
             case DataType::BFLOAT16:
                 padding_val_packed = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
@@ -655,7 +655,7 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreTiledGeneric::c
         num_writes = face_shape[1] / num_packed_values;
 
         switch (input_tensor.dtype()) {
-            case DataType::INT32:
+            case DataType::INT32: padding_val_packed = std::bit_cast<uint32_t>(pad_value); break;
             case DataType::UINT32: padding_val_packed = pad_value; break;
             case DataType::BFLOAT16:
                 padding_val_packed = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});

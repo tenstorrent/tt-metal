@@ -23,8 +23,7 @@ inline void llk_pack_init(
     const std::uint32_t num_faces = get_output_num_faces(output_id);
 
     if constexpr (!skip_addrmod_config) {
-        LLK_ASSERT_BLOCK(are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-            pack_src_format[output_id], pack_dst_format[output_id], face_r_dim));
+        LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
     }
 
     // For pack with tilize enabled, check if the original input format is 8-bit.
@@ -45,8 +44,7 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
     std::uint32_t pack_tile_addr =
         get_output_tile_address<out_of_order_output, pack_mode>(output_id, output_tile_index);
 
-    LLK_ASSERT_BLOCK(are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-        pack_src_format[output_id], pack_dst_format[output_id], get_output_face_r_dim(output)));
+    LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
 
     LLK_ASSERT(
         (tile_index < get_pack_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
@@ -61,8 +59,7 @@ inline void llk_matmul_pack(
 
     static_assert(
         !((pack_mode == PackMode::Untilize) && out_of_order_output), "untilize out of order packing is not supported!");
-    LLK_ASSERT_BLOCK(are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
-        pack_src_format[output_id], pack_dst_format[output_id], get_output_face_r_dim(output)));
+    LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
     LLK_ASSERT(
         ((start_tile_index + ntiles - 1) < get_pack_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
         "Dst tile exceeds packer destination capacity for the configured W-stride.");

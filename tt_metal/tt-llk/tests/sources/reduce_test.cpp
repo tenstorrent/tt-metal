@@ -43,7 +43,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         tensor_shape.total_num_faces(),
         params.TILE_SIZE_UNPACK_A,
         params.TILE_SIZE_UNPACK_B);
-    _llk_unpack_AB_reduce_init_<POOL_TYPE, REDUCE_DIM>(tensor_shape);
+    _llk_unpack_AB_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en>(tensor_shape);
     for (int i = 0; i < params.INPUT_TILE_CNT; ++i)
     {
         _llk_unpack_AB_reduce_<POOL_TYPE, REDUCE_DIM>(L1_ADDRESS(params.buffer_A[i]), L1_ADDRESS(params.buffer_B[0]));
@@ -65,7 +65,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
     const bool is_int_fpu_en                = false;
-    const bool enforce_fp32_accumulation    = false;
+    const bool enforce_fp32_accumulation    = is_fp32_dest_acc_en;
     const ckernel::TensorShape tensor_shape = {
         static_cast<std::uint8_t>(params.in0_face_r_dim),
         static_cast<std::uint8_t>(params.in0_face_c_dim),
@@ -133,7 +133,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(
         formats.pack_dst, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, narrow_tile);
 
-    _llk_pack_reduce_mask_config_<REDUCE_DIM>();
+    _llk_pack_reduce_mask_config_<REDUCE_DIM>(tensor_shape.face_r_dim);
 
     _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, PackMode::Default>(tensor_shape.face_r_dim, narrow_tile);
 

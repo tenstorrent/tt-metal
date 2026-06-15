@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_debug ${LIB_TYPE})
 add_library(TTNN::Ops::Debug ALIAS ttnn_op_debug)
 
-tt_reuse_precompile_headers(ttnn_op_debug TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_debug TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_debug)
 
 set_target_properties(

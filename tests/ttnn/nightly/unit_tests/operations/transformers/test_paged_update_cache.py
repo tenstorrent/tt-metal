@@ -257,6 +257,88 @@ def test_update_cache_decode_program_cache(
     assert device.num_program_cache_entries() == 1
 
 
+def run_update_cache_decode_attr_idxs(
+    cache_idx, head_dim, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
+):
+    """Drives the NON-index-tensor path: update positions are passed via the `update_idxs` list
+    (operation_attributes.update_idxs), which the C++ factory bakes into runtime args. This is the
+    path exercised by the DynamicRuntimeArg re-patching — the index-tensor path is already covered by
+    run_test_update_cache_decode and is correct on cache hits for a different reason (buffer re-patch)."""
+    input_shape = [1, num_users, num_heads, head_dim]
+    cache_shape = [num_users, num_heads, max_seq_len, head_dim]
+    cache = torch.randn(cache_shape).bfloat16().float()
+    cachett = ttnn.Tensor(cache, cache_dtype).to(ttnn.TILE_LAYOUT).to(device)
+    x = torch.randn(input_shape).bfloat16().float()
+    x_pad = torch.nn.functional.pad(x, (0, 0, 0, 32 - num_heads), "constant", 0)
+
+    xt = ttnn.Tensor(x_pad, input_dtype).to(ttnn.TILE_LAYOUT)
+    xt = ttnn.reshape(xt, ttnn.Shape(input_shape))
+    compute_grid_size = device.compute_with_storage_grid_size()
+    num_cores = num_users
+    shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
+    input_shard_spec = ttnn.ShardSpec(
+        shard_grid,
+        [xt.volume() // xt.padded_shape[-1] // num_cores, xt.padded_shape[-1]],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
+    xt = xt.to(device, input_mem_config)
+
+    # Distinct per-user positions; varying cache_idx between cached calls must move where the cache is
+    # written. update_idxs is passed as a plain list (NO update_idxs_tensor) -> attribute path.
+    cache_idxs = [cache_idx + i * 17 for i in range(num_users)]
+    cachett = ttnn.experimental.paged_update_cache(cachett, xt, update_idxs=cache_idxs, share_cache=False)
+
+    for i in range(num_users):
+        update_idx = cache_idxs[i]
+        x_view = x.permute(1, 2, 0, 3)[i, ...]
+        cache[i, 0:num_heads, update_idx : update_idx + 1, 0 : x.shape[-1]] = x_view
+
+    tt_got_back = cachett.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+
+    tt_updated_slice = []
+    for i in range(num_users):
+        update_idx = cache_idxs[i]
+        tt_slice = tt_got_back[i, 0:num_heads, update_idx : update_idx + 1, 0 : x.shape[-1]]
+        tt_updated_slice.append(tt_slice)
+    tt_updated_slice = torch.stack(tt_updated_slice, dim=0).permute(2, 0, 1, 3)
+
+    if input_dtype == ttnn.bfloat16 and cache_dtype == input_dtype:
+        eq_cache, _ = comp_equal(cache, tt_got_back)
+        eq_update, _ = comp_equal(x, tt_updated_slice)
+    else:
+        eq_cache, _ = comp_pcc(cache, tt_got_back, pcc=0.99)
+        eq_update, _ = comp_pcc(x, tt_updated_slice, pcc=0.99)
+    assert eq_cache and eq_update
+
+
+@pytest.mark.parametrize("head_dim", [128])
+@pytest.mark.parametrize("max_seq_len", [2048])
+@pytest.mark.parametrize("num_users", [32])
+@pytest.mark.parametrize("num_heads", [1])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("cache_dtype", [ttnn.bfloat16])
+def test_update_cache_decode_attr_idxs_program_cache(
+    head_dim, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
+):
+    """Regression for the DynamicRuntimeArg fix on the NON-index-tensor path. update_idxs is excluded
+    from the program hash, so the two calls below must share ONE cache entry; and because the cache
+    write offset (cache_start_id / tile_update_offset_B) is re-patched on the cache hit, the second
+    call must write at its OWN positions (not the first call's frozen ones). Pins both halves:
+      - num_program_cache_entries() == 1  guards the hash exclusion (no re-hashing on differing idxs)
+      - the in-process correctness check on the 2nd call guards the frozen-arg bug."""
+    # First call: cache miss, builds + caches the program at one set of positions.
+    run_update_cache_decode_attr_idxs(
+        127, head_dim, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
+    )
+    # Second call: DIFFERENT positions, same shapes -> program-cache HIT. Output must reflect the new
+    # positions (would fail with frozen cache_start_id before the get_dynamic_runtime_args fix).
+    run_update_cache_decode_attr_idxs(
+        1057, head_dim, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
+    )
+    assert device.num_program_cache_entries() == 1
+
+
 def run_test_tensor_index_update_cache_decode(
     cache_idx, head_dim, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
 ):

@@ -4,24 +4,26 @@ on:
   workflow_dispatch:
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
       version: 22.04
       build-umd-tests: true
   umd-unit-tests:
-    needs: build-artifact
+    needs: [check-harbor, build-artifact]
     secrets: inherit
     strategy:
       fail-fast: false
       matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
+        test-group: [{ arch: wormhole_b0, runner-label: N150 }, { arch: wormhole_b0, runner-label: N300 }]
     uses: ./.github/workflows/umd-unit-tests.yaml
     with:
       arch: ${{ matrix.test-group.arch }}

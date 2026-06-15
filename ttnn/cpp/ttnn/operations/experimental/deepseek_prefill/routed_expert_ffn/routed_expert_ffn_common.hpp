@@ -60,4 +60,16 @@ ttnn::Tensor routed_expert_ffn_bh(
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<ttnn::Tensor> output);
 
+// Chunked BH path: split M into chunks of `chunk_M_tiles` tiles, run the BH
+// path per chunk and concat outputs. Used when a single BH program would
+// exceed the per-core L1 budget (M_tiles > ~128 for DeepSeek V3 dims).
+ttnn::Tensor routed_expert_ffn_chunked(
+    const ttnn::Tensor& x,
+    const ttnn::Tensor& gate_proj,
+    const ttnn::Tensor& up_proj,
+    const ttnn::Tensor& down_proj,
+    uint32_t chunk_M_tiles,
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    std::optional<ttnn::Tensor> output);
+
 }  // namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn::detail

@@ -55,7 +55,7 @@ void kernel_main() {
     CoreLocalMem<volatile uint16_t> weight_l1_ptr(cb_weight_obj.get_read_ptr());
 #endif
 
-    auto zero = float_to_bfloat16(0.0f);
+    auto zero = fp32_to_bf16_truncate(0.0f);
 
     uint32_t end_id = start_id + num_tiles_per_core;
     for (uint32_t i = start_id; i < end_id; ++i) {
@@ -87,14 +87,14 @@ void kernel_main() {
                 uint16_t input_grad_val;
 
                 if (target_val != ignore_index && target_val == static_cast<int32_t>(c)) {
-                    float output_grad_val = bfloat16_to_float(output_grad_l1_ptr[idx]);
+                    float output_grad_val = bf16_to_fp32(output_grad_l1_ptr[idx]);
 
 #if defined(WEIGHT)
-                    float weight_val = bfloat16_to_float(weight_l1_ptr[target_val]);
+                    float weight_val = bf16_to_fp32(weight_l1_ptr[target_val]);
 
-                    input_grad_val = float_to_bfloat16(-output_grad_val * weight_val);
+                    input_grad_val = fp32_to_bf16_truncate(-output_grad_val * weight_val);
 #else
-                    input_grad_val = float_to_bfloat16(-output_grad_val);
+                    input_grad_val = fp32_to_bf16_truncate(-output_grad_val);
 #endif
                 } else {
                     input_grad_val = zero;

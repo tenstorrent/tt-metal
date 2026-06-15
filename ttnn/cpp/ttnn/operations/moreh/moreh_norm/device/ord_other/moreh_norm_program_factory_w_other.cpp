@@ -30,6 +30,10 @@ tt::tt_metal::ProgramDescriptor MorehNormOperation::ProgramFactoryWOther::create
     ////////////////////////////////////////////////////////////////////////////
     const auto input_shape = input.padded_shape();
     const auto input_rank = input_shape.rank();
+    auto logical_shape = input.logical_shape();
+    if (logical_shape.rank() < 2) {
+        logical_shape = logical_shape.to_rank(2);
+    }
 
     const auto H = input_shape[-2];
     const auto W = input_shape[-1];
@@ -39,7 +43,7 @@ tt::tt_metal::ProgramDescriptor MorehNormOperation::ProgramFactoryWOther::create
 
     const auto num_units = input.physical_volume() / H / W * Ht;
 
-    const auto origin_w = input.logical_shape()[input_rank - 1];
+    const auto origin_w = logical_shape[input_rank - 1];
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup

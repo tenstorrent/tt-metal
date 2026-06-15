@@ -17,6 +17,7 @@
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <internal/service/service_core_manager.hpp>
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -271,7 +272,22 @@ void dispatch_core_manager::reset_dispatch_core_manager(
             this->reserved_realtime_profiler_core_by_device_.emplace(
                 device_id, tt_cxy_pair(device_id, rt_core.x, rt_core.y));
         }
+
+        // Remove service-owned cores so FD never allocates them.
+        auto claimed = MetalContext::instance().get_service_core_manager().claimed_cores(device_id);
+        if (!claimed.empty()) {
+            logical_dispatch_cores.remove_if([&claimed](const CoreCoord& c) { return claimed.contains(c); });
+        }
     }
+}
+
+std::vector<CoreCoord> dispatch_core_manager::get_available_dispatch_cores(ChipId device_id) {
+    std::lock_guard<std::mutex> lock(this->dispatch_core_assignments_mutex);
+    auto it = this->available_dispatch_cores_by_device.find(device_id);
+    if (it == this->available_dispatch_cores_by_device.end()) {
+        return {};
+    }
+    return std::vector<CoreCoord>(it->second.begin(), it->second.end());
 }
 
 CoreCoord dispatch_core_manager::get_next_available_dispatch_core(ChipId device_id) {

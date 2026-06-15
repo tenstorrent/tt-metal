@@ -1,0 +1,40 @@
+# --- Meshes ---------------------------------------------------------------
+# Dual-pod Blitz decode at pod granularity: two 4×16 BH logical meshes joined by
+# intermesh ethernet (forward crossing + loopback ride logical sockets, not torus wrap).
+# M0: single pod (1×8 hosts). M1: four-pod superpod slice (4×8 hosts).
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 16 ] dim_types: [ RING, LINE ] }
+  host_topology   { dims: [ 1, 8 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+mesh_descriptors {
+  name: "M1"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 16 ] dim_types: [ RING, LINE ] }
+  host_topology   { dims: [ 4, 8 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+# --- Graph (two meshes + intermesh links) ----------------------------------
+
+graph_descriptors {
+  name: "G0"
+  # MGD 1.0 compatibility requires the single top-level graph to be a FABRIC graph
+  # (a "POD"/other type trips "There can only be one FABRIC level graph").
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1  } }
+    channels { count: 16 policy: STRICT }
+  }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

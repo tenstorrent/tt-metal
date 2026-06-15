@@ -282,7 +282,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
             mirrored_weight_tensor,
             input_memory_config,
             input_layout,
-            weights_format,
+            "OIHW",  // transform_weights_for_conv_transpose2d already converted IOHW -> OIHW
             in_channels,
             out_channels,
             batch_size,
@@ -388,7 +388,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
         mirrored_weight_tensor,
         input_memory_config,
         dram_slice_config.num_slices > 1 ? Layout::ROW_MAJOR : input_layout,
-        weights_format,
+        "OIHW",  // transform_weights_for_conv_transpose2d already converted IOHW -> OIHW
         in_channels,
         out_channels,
         batch_size,
@@ -433,6 +433,7 @@ ttnn::Tensor prepare_conv_transpose2d_bias(
     // Note: bias preparation doesn't receive output_padding, so we assume output_padding = 0
     auto dims =
         compute_conv_transpose2d_dimensions(input_height, input_width, kernel_size, stride, padding, {0, 0}, dilation);
+    const uint32_t groups_for_prep = groups > 1 ? 1 : groups;
 
     return prepare_conv_bias(
         bias_tensor,
@@ -447,7 +448,7 @@ ttnn::Tensor prepare_conv_transpose2d_bias(
         ConvTranspose2dDimensions::CONV2D_STRIDE,   // stride is always 1x1 for conv2d micro-op
         ConvTranspose2dDimensions::CONV2D_PADDING,  // padding is 0 (halo already added padding)
         dilation,
-        groups,
+        groups_for_prep,
         device,
         input_dtype,
         output_dtype,

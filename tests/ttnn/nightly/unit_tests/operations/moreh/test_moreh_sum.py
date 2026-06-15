@@ -224,6 +224,20 @@ def test_moreh_sum_non_4d(input_shape, dim, keepdim, use_provide_output, device)
 
 @pytest.mark.parametrize(
     "input_shape",
+    ([5],),
+    ids=["rank-1"],
+)
+@pytest.mark.parametrize("dim", [None], ids=["None"])
+@pytest.mark.parametrize("use_provide_output", [True, False], ids=["provide-output", "allocate-output"])
+def test_moreh_sum_rank_1_global(input_shape, dim, use_provide_output, device):
+    torch.manual_seed(2023)
+
+    passing = moreh_sum(input_shape, dim, False, use_provide_output, False, device)
+    assert passing
+
+
+@pytest.mark.parametrize(
+    "input_shape",
     [
         [4, TILE_HEIGHT * 4, TILE_WIDTH * 4],
     ],

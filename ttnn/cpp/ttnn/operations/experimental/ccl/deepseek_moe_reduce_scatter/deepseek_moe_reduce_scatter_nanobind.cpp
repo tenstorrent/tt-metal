@@ -50,7 +50,7 @@ void bind_deepseek_moe_reduce_scatter(nb::module_& mod) {
         nb::arg("output_memory_config"),
         nb::arg("dim"),
         nb::kw_only(),
-        nb::arg("num_links") = 4,
+        nb::arg("num_links") = nb::none(),
         nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Ring),
         nb::arg("cluster_axis") = nb::none());
 }

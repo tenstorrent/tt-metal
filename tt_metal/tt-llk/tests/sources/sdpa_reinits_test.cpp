@@ -67,7 +67,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _llk_unpack_AB_reduce_block_max_row_(L1_ADDRESS(buffer_A1[batch * 1 + 0]), L1_ADDRESS(buffer_B1[batch * 1 + 0]));
         }
-        _llk_unpack_AB_reduce_block_max_row_uninit_(16, 16);
+        _llk_unpack_AB_reduce_block_max_row_uninit_();
     }
     // Operation 2: Fused Unpack
     UNUSED const Operand buffer_A2(0x1a000, 2048);

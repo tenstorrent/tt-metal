@@ -7,6 +7,7 @@ import importlib.util
 import os
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 import yaml
@@ -14,10 +15,33 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT_PATH = REPO_ROOT / ".github/scripts/utils/validate_perf_targets.py"
+LLM_DEMO_UTILS_PATH = REPO_ROOT / "models/demos/utils/llm_demo_utils.py"
 
 
 def _load_validator_module():
     spec = importlib.util.spec_from_file_location("validate_perf_targets", SCRIPT_PATH)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_llm_demo_utils_module():
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+
+    if "loguru" not in sys.modules:
+        logger_stub = types.SimpleNamespace(info=lambda *a, **k: None, warning=lambda *a, **k: None)
+        sys.modules["loguru"] = types.SimpleNamespace(logger=logger_stub)
+
+    if "models.perf.benchmarking_utils" not in sys.modules:
+        benchmarking_stub = types.SimpleNamespace(
+            BenchmarkData=object,
+            BenchmarkProfiler=object,
+        )
+        sys.modules["models.perf.benchmarking_utils"] = benchmarking_stub
+
+    spec = importlib.util.spec_from_file_location("llm_demo_utils", LLM_DEMO_UTILS_PATH)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -48,6 +72,7 @@ def _write_complete_run(
 def _run_validator(
     tmp_path: Path,
     strict_missing: bool = False,
+    extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     command = [
         sys.executable,
@@ -64,7 +89,7 @@ def _run_validator(
         cwd=str(tmp_path),
         capture_output=True,
         text=True,
-        env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
+        env={**os.environ, "PYTHONPATH": str(REPO_ROOT), **(extra_env or {})},
         check=False,
     )
 
@@ -238,6 +263,174 @@ def test_validate_perf_targets_detects_regression(tmp_path):
     assert "decode_t/s/u" in result.stdout
 
 
+def test_validate_perf_targets_supports_per_metric_tolerance_override(tmp_path):
+    (tmp_path / "generated/benchmark_data").mkdir(parents=True)
+    (tmp_path / "models").mkdir(parents=True)
+    (tmp_path / "tests/pipeline_reorg").mkdir(parents=True)
+
+    _write_complete_run(
+        tmp_path / "generated/benchmark_data/complete_run_1.json",
+        model="demo-model",
+        batch_size=1,
+        seq_len=128,
+        decode_tsu=118.0,
+    )
+
+    targets = {
+        "version": 1,
+        "targets": {
+            "demo-model": {
+                "aliases": [],
+                "skus": {
+                    "wh_n150": {
+                        "entries": [
+                            {
+                                "batch_size": 1,
+                                "seq_len": 128,
+                                "status": "active",
+                                "perf": {
+                                    "decode_t/s/u": 100.0,
+                                    "decode_t_s_u_tolerance": 0.2,
+                                },
+                                "accuracy": {},
+                            }
+                        ]
+                    }
+                },
+            }
+        },
+    }
+    (tmp_path / "models/model_targets.yaml").write_text(yaml.safe_dump(targets), encoding="utf-8")
+    tests_yaml = [{"model": "demo-model", "skus": {"wh_n150": {"tier": 1}}, "team": "models"}]
+    (tmp_path / "tests/pipeline_reorg/models_e2e_tests.yaml").write_text(yaml.safe_dump(tests_yaml), encoding="utf-8")
+
+    result = _run_validator(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_validate_perf_targets_rejects_tolerance_outside_fraction_range(tmp_path):
+    validator = _load_validator_module()
+    targets = {
+        "version": 1,
+        "targets": {
+            "demo-model": {
+                "aliases": [],
+                "skus": {
+                    "wh_n150": {
+                        "entries": [
+                            {
+                                "batch_size": 1,
+                                "seq_len": 128,
+                                "status": "active",
+                                "perf": {"decode_t/s/u": 100.0, "decode_t_s_u_tolerance": 1.2},
+                                "accuracy": {},
+                            }
+                        ]
+                    }
+                },
+            }
+        },
+    }
+
+    errors = validator._validate_targets_schema(targets)
+    assert any("outside [0.0, 1.0]" in err for err in errors)
+
+
+def test_validate_perf_targets_supports_prefill_time_to_first_token_ms_units(tmp_path):
+    (tmp_path / "generated/benchmark_data").mkdir(parents=True)
+    (tmp_path / "models").mkdir(parents=True)
+    (tmp_path / "tests/pipeline_reorg").mkdir(parents=True)
+
+    _write_complete_run(
+        tmp_path / "generated/benchmark_data/complete_run_1.json",
+        model="demo-model",
+        batch_size=1,
+        seq_len=128,
+        decode_tsu=100.0,
+        extra_measurements=[
+            {"step_name": "inference_prefill", "name": "time_to_token", "value": 0.08},
+        ],
+    )
+
+    targets = {
+        "version": 1,
+        "targets": {
+            "demo-model": {
+                "aliases": [],
+                "skus": {
+                    "wh_n150": {
+                        "entries": [
+                            {
+                                "batch_size": 1,
+                                "seq_len": 128,
+                                "status": "active",
+                                "perf": {"decode_t/s/u": 100.0, "prefill_time_to_first_token": 80.0},
+                                "accuracy": {},
+                            }
+                        ]
+                    }
+                },
+            }
+        },
+    }
+    (tmp_path / "models/model_targets.yaml").write_text(yaml.safe_dump(targets), encoding="utf-8")
+    tests_yaml = [{"model": "demo-model", "skus": {"wh_n150": {"tier": 1}}, "team": "models"}]
+    (tmp_path / "tests/pipeline_reorg/models_e2e_tests.yaml").write_text(yaml.safe_dump(tests_yaml), encoding="utf-8")
+
+    result = _run_validator(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_validate_perf_targets_prefers_prefill_time_to_first_token_over_prefill_time_to_token(tmp_path):
+    (tmp_path / "generated/benchmark_data").mkdir(parents=True)
+    (tmp_path / "models").mkdir(parents=True)
+    (tmp_path / "tests/pipeline_reorg").mkdir(parents=True)
+
+    _write_complete_run(
+        tmp_path / "generated/benchmark_data/complete_run_1.json",
+        model="demo-model",
+        batch_size=1,
+        seq_len=128,
+        decode_tsu=100.0,
+        extra_measurements=[
+            {"step_name": "inference_prefill", "name": "time_to_token", "value": 0.08},
+        ],
+    )
+
+    targets = {
+        "version": 1,
+        "targets": {
+            "demo-model": {
+                "aliases": [],
+                "skus": {
+                    "wh_n150": {
+                        "entries": [
+                            {
+                                "batch_size": 1,
+                                "seq_len": 128,
+                                "status": "active",
+                                "perf": {
+                                    "decode_t/s/u": 100.0,
+                                    "prefill_time_to_token": 0.01,
+                                    "prefill_time_to_first_token": 80.0,
+                                },
+                                "accuracy": {},
+                            }
+                        ]
+                    }
+                },
+            }
+        },
+    }
+    (tmp_path / "models/model_targets.yaml").write_text(yaml.safe_dump(targets), encoding="utf-8")
+    tests_yaml = [{"model": "demo-model", "skus": {"wh_n150": {"tier": 1}}, "team": "models"}]
+    (tmp_path / "tests/pipeline_reorg/models_e2e_tests.yaml").write_text(yaml.safe_dump(tests_yaml), encoding="utf-8")
+
+    result = _run_validator(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "ignoring prefill_time_to_token" in result.stdout
+
+
 def test_validate_perf_targets_detects_accuracy_regression(tmp_path):
     (tmp_path / "generated/benchmark_data").mkdir(parents=True)
     (tmp_path / "models").mkdir(parents=True)
@@ -250,7 +443,7 @@ def test_validate_perf_targets_detects_accuracy_regression(tmp_path):
         seq_len=128,
         decode_tsu=100.0,
         extra_measurements=[
-            {"step_name": "inference_decode", "name": "top1_token_accuracy", "value": 80.0},
+            {"step_name": "inference_decode", "name": "top1_token_accuracy", "value": 70.0},
         ],
     )
 
@@ -352,6 +545,47 @@ def test_validate_perf_targets_rejects_unknown_path_profile(tmp_path):
     )
     assert result.returncode != 0
     assert "invalid choice" in result.stderr
+
+
+def test_verify_perf_prefers_prefill_time_to_first_token_with_unit_conversion(monkeypatch):
+    llm_demo_utils = _load_llm_demo_utils_module()
+    warnings_seen = []
+    monkeypatch.setattr(llm_demo_utils.logger, "warning", lambda message: warnings_seen.append(message))
+
+    llm_demo_utils.verify_perf(
+        measurements={
+            "prefill_time_to_token": 0.08,
+            "prefill_time_to_first_token": 80.0,
+        },
+        expected_perf_metrics={
+            "prefill_time_to_token": 0.05,
+            "prefill_time_to_first_token": 80.0,
+        },
+        expected_measurements={
+            "prefill_time_to_token": True,
+            "prefill_time_to_first_token": True,
+        },
+    )
+
+    warning_text = " ".join(warnings_seen)
+    assert "ignoring prefill_time_to_token" in warning_text
+
+
+def test_verify_perf_respects_metric_specific_tolerance(monkeypatch):
+    llm_demo_utils = _load_llm_demo_utils_module()
+
+    llm_demo_utils.verify_perf(
+        measurements={
+            "decode_t/s/u": 118.0,
+        },
+        expected_perf_metrics={
+            "decode_t/s/u": 100.0,
+            "decode_t_s_u_tolerance": 0.2,
+        },
+        expected_measurements={
+            "decode_t/s/u": True,
+        },
+    )
 
 
 def test_extract_metric_value_fails_for_ambiguous_unqualified_metric_name():

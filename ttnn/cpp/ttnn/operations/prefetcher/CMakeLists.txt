@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_prefetcher ${LIB_TYPE})
 add_library(TTNN::Ops::Prefetcher ALIAS ttnn_op_prefetcher)
 
-tt_reuse_precompile_headers(ttnn_op_prefetcher TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_prefetcher TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_prefetcher)
 
 set_target_properties(

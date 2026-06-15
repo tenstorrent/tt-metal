@@ -2,7 +2,7 @@ training_config:
   project_name: "tt_train_tinyllama_ddp32_bpe"
   seed: 5489
   model_save_interval: 0
-  batch_size: 32
+  batch_size: 160
   gradient_accumulation_steps: 1
   num_epochs: 1
   max_steps: 5000

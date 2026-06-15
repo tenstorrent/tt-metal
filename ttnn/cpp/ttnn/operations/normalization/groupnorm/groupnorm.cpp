@@ -220,6 +220,14 @@ Tensor group_norm(
         input_tensor.storage_type() == StorageType::DEVICE,
         "Invalid input tensor storage type: Input tensor must be on device. (storage type={})",
         input_tensor.storage_type());
+    if (input_mask.has_value()) {
+        TT_FATAL(
+            input_mask->storage_type() == StorageType::DEVICE,
+            "Input mask must be on device, got storage type: {}",
+            input_mask->storage_type());
+        TT_FATAL(input_mask->buffer() != nullptr, "Input mask must be allocated in buffers on device!");
+        TT_FATAL(input_tensor.device() == input_mask->device(), "Input and input mask tensors must be on same device");
+    }
     const auto arch = input_tensor.device()->arch();
     const auto math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     const auto approx_mode = true;
@@ -258,14 +266,14 @@ Tensor group_norm(
             // rather than recomputing from scratch, so that program_config's
             // grid_size matches the cores where kernels are actually placed.
             const auto bbox = shard_spec_opt->grid.bounding_box();
-            core_grid = ttnn::CoreGrid(bbox.end_coord.x + 1, bbox.end_coord.y + 1);
+            core_grid = ttnn::operations::normalization::core_grid_from_shard_bounding_box(bbox);
         } else if (reciprocals.has_value() && reciprocals->is_sharded()) {
             // The reciprocals LUT is sharded on a specific grid; its length
             // encodes num_virtual_rows which must match the compute grid.
             // Infer the grid from the reciprocals tensor so the kernel sees a
             // consistent LUT.
             const auto bbox = reciprocals->shard_spec()->grid.bounding_box();
-            core_grid = ttnn::CoreGrid(bbox.end_coord.x + 1, bbox.end_coord.y + 1);
+            core_grid = ttnn::operations::normalization::core_grid_from_shard_bounding_box(bbox);
         } else {
             const auto dev_grid = input_tensor.device()->compute_with_storage_grid_size();
             auto dram_grid = ttnn::operations::normalization::find_expected_dram_grid(
@@ -315,16 +323,15 @@ Tensor group_norm(
         // Precondition above guarantees is_sharded() and shard_spec().has_value()
         // whenever reciprocals is provided.
         const auto recip_bbox = reciprocals->shard_spec()->grid.bounding_box();
-        const uint32_t recip_x = recip_bbox.end_coord.x + 1;
-        const uint32_t recip_y = recip_bbox.end_coord.y + 1;
+        const auto recip_grid = ttnn::operations::normalization::core_grid_from_shard_bounding_box(recip_bbox);
         TT_FATAL(
-            recip_x == core_grid->x && recip_y == core_grid->y,
+            recip_grid.x == core_grid->x && recip_grid.y == core_grid->y,
             "group_norm: reciprocals shard grid (x={}, y={}) must match the compute core_grid "
             "(x={}, y={}). The reciprocals LUT length and per-bank addresses are baked for a "
             "specific grid; running the kernel on a different grid will read past the LUT or "
             "use unallocated banks.",
-            recip_x,
-            recip_y,
+            recip_grid.x,
+            recip_grid.y,
             core_grid->x,
             core_grid->y);
     }

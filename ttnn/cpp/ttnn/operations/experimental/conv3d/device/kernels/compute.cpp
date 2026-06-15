@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <tt-metalium/constants.hpp>
 
-#include "api/compute/untilize.h"
 #include "api/compute/tilize.h"
 #include "api/compute/matmul.h"
 #include "api/compute/bcast.h"

@@ -11,6 +11,7 @@ from helpers.golden_generators import (
     DataCopyGolden,
     PackGolden,
     get_golden_generator,
+    quantize_mx_tensor_chunked,
 )
 from helpers.llk_params import (
     DestAccumulation,
@@ -36,7 +37,6 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
 )
 from helpers.utils import passed_test
-from test_zzz_pack import is_relu_threshold_tolerance_issue
 
 
 def generate_qsr_pack_combinations(
@@ -143,6 +143,9 @@ PACK_FORMATS = input_output_formats(
         DataFormat.UInt8,
         DataFormat.Int16,
         DataFormat.MxFp4,
+        DataFormat.MxInt8,
+        DataFormat.MxInt4,
+        DataFormat.MxInt2,
     ]
 )
 
@@ -163,17 +166,6 @@ def test_pack_quasar(formats_dest_acc_sync_dims_relu, boot_mode=BootMode.DEFAULT
         input_dimensions_B=input_dimensions,
     )
 
-    num_faces = 4
-    generate_golden = get_golden_generator(DataCopyGolden)
-    golden_tensor = generate_golden(
-        src_A,
-        formats.output_format,
-        num_faces=num_faces,
-        input_dimensions=input_dimensions,
-        input_format=formats.input_format,
-    )
-
-    # Same method as test_pack.py for original ReLu testing and threshold tolerance issue
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
     )
@@ -182,6 +174,30 @@ def test_pack_quasar(formats_dest_acc_sync_dims_relu, boot_mode=BootMode.DEFAULT
         output_format=formats.output_format,
         is_fp32_dest_acc_en=dest_acc,
         unpacking_to_dest=unpack_to_dest,
+    )
+
+    # HW flow with relu: unpack input -> dest -> apply relu in pack_src
+    # space -> pack to output (one MX quantization, block scale derived at pack
+    # time from post-relu values). DataCopyGolden, given an MX output format,
+    # does a pre-relu MxInt4 quantization that HW doesn't do. That extra
+    # quantization can shift values across the relu threshold, producing
+    # divergence from HW that grows with threshold-relu (most visible for
+    # MxFp4 -> MxInt4 + MaxThresholdRelu). For MX outputs we route through
+    # pack_src instead and apply the single output MX quantization ourselves
+    # after relu. Non-MX outputs keep the existing path (saturate_integer etc.).
+    num_faces = 4
+    generate_golden = get_golden_generator(DataCopyGolden)
+    datacopy_out_format = (
+        data_formats.pack_src
+        if formats.output_format.is_mx_format()
+        else formats.output_format
+    )
+    golden_tensor = generate_golden(
+        src_A,
+        datacopy_out_format,
+        num_faces=num_faces,
+        input_dimensions=input_dimensions,
+        input_format=formats.input_format,
     )
 
     tensor_average = (
@@ -201,6 +217,13 @@ def test_pack_quasar(formats_dest_acc_sync_dims_relu, boot_mode=BootMode.DEFAULT
         relu_config,
         data_formats.pack_src,
     )
+
+    # Single output MX quantization, after relu — matches HW's pack-time
+    # block-scale derivation from post-relu values.
+    if formats.output_format.is_mx_format():
+        golden_tensor = quantize_mx_tensor_chunked(
+            golden_tensor.to(torch.bfloat16), formats.output_format
+        )
 
     configuration = TestConfig(
         "sources/quasar/pack_quasar_test.cpp",
@@ -229,7 +252,7 @@ def test_pack_quasar(formats_dest_acc_sync_dims_relu, boot_mode=BootMode.DEFAULT
         unpack_to_dest=unpack_to_dest,
         dest_acc=dest_acc,
         boot_mode=boot_mode,
-        disable_format_inference=(formats.input_format == DataFormat.MxFp4),
+        disable_format_inference=(formats.input_format.is_mx_format()),
     )
 
     res_from_L1 = configuration.run().result
@@ -242,7 +265,9 @@ def test_pack_quasar(formats_dest_acc_sync_dims_relu, boot_mode=BootMode.DEFAULT
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
     test_passed = passed_test(
-        golden_tensor, res_tensor, formats.output_format, print_errors=False
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
     )
 
     # Same method as test_pack.py for original ReLu testing and threshold tolerance issue
@@ -255,11 +280,22 @@ def test_pack_quasar(formats_dest_acc_sync_dims_relu, boot_mode=BootMode.DEFAULT
             PackerReluType.MinThresholdRelu,
             PackerReluType.MaxThresholdRelu,
         ]
-        and is_relu_threshold_tolerance_issue(
+        and PackGolden.is_relu_threshold_tolerance_issue(
             golden_tensor,
             res_tensor,
             relu_config,
             data_formats.pack_src,
+            # MxInt4's lattice step is 0.25 * block_scale, so values that
+            # disagree across a threshold can sit ~0.5 apart while still both
+            # being "near the threshold" relative to the format's resolution.
+            # The default rtol/atol of 0.01 is calibrated for finer-precision
+            # formats (Bfp8_b etc.) and misses these legitimate near-threshold
+            # flips for MxInt4. Use the format's tolerance entries.
+            **(
+                {"atol": 0.5, "rtol": 0.35}
+                if formats.output_format == DataFormat.MxInt4
+                else {}
+            ),
         )
     ):
         test_passed = True

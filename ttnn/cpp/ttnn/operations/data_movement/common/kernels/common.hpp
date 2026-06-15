@@ -91,43 +91,6 @@ FORCE_INLINE void tt_memmove(const uint32_t dst_l1_addr, const uint32_t src_l1_a
     }
 }
 
-// this function is useful for converting bfloat16 values to float32
-FORCE_INLINE float bfloat16_to_float32(uint16_t bfloat16_data) {
-    uint32_t bits = static_cast<uint32_t>(bfloat16_data) << 16;
-
-    // Extract the sign bit
-    uint32_t sign = bits & 0x80000000;
-
-    // Extract the exponent
-    uint32_t exponent = bits & 0x7F800000;
-
-    // Extract the mantissa
-    uint32_t mantissa = bits & 0x007FFFFF;
-
-    // Handle special cases
-    if (exponent == 0 && mantissa == 0) {
-        // Zero
-        return sign ? -0.0f : 0.0f;
-    } else if (exponent == 0x7F800000) {
-        if (mantissa == 0) {
-            // Infinity
-            return sign ? -__builtin_huge_valf() : __builtin_huge_valf();
-        } else {
-            // NaN
-            return __builtin_nanf("");
-        }
-    }
-
-    // Assemble the float
-    union {
-        uint32_t u;
-        float f;
-    } ieee_float;
-
-    ieee_float.u = sign | exponent | mantissa;
-    return ieee_float.f;
-}
-
 template <typename T = uint32_t>
 FORCE_INLINE void fill_with_val(uint32_t begin_addr, uint32_t n, T val) {
     auto* ptr = reinterpret_cast<volatile tt_l1_ptr T*>(begin_addr);

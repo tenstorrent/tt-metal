@@ -136,6 +136,15 @@ enum class HighLevelTrafficPattern {
     SequentialAllToAll,
 };
 
+// Mesh scope filter for high-level unicast patterns on multi-mesh systems.
+// Only applied to unicast pair-based expansions (all_to_all / one_to_all / sequential_all_to_all);
+// multicast expansions currently ignore mesh_scope.
+// ALL:        intra-mesh pairs plus inter-mesh pairs to adjacent meshes (default).
+// INTRA_MESH: only same-mesh pairs.
+// INTER_MESH: only inter-mesh pairs to adjacent meshes.
+// Note: distinct from tt::tt_fabric::MeshScope (LOCAL/GLOBAL), which describes mesh ownership.
+enum class MeshTrafficScope { ALL, INTRA_MESH, INTER_MESH };
+
 // Channel trimming mode for test config expansion
 enum class ChannelTrimmingMode { NONE, CAPTURE, REPLAY };
 
@@ -154,6 +163,7 @@ struct HighLevelPatternConfig {
     std::string type;
     std::optional<uint32_t> iterations;
     bool is_sequential = false;
+    MeshTrafficScope mesh_scope = MeshTrafficScope::ALL;
 };
 
 struct ParsedTestConfig {

@@ -60,7 +60,7 @@ def test_sampling_greedy(mesh_device, reset_seeds):
     args.model_config = {}
     args.use_topk_logprobs = False
 
-    sampling = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None, enable_internal_trace=False)
+    sampling = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None)
 
     # Shard logits: each device gets [1, 1, batch, vocab/TP]
     mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp))

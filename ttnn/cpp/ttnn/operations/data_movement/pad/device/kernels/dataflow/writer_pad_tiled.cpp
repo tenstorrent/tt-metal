@@ -6,7 +6,10 @@
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
 #include "common.hpp"
+#include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 // This kernel keeps track of which page (tile) we are on from a logical tensor perspective, and fills the output with
 // either the input or padding respectively
@@ -37,6 +40,7 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<7>();
 
     const auto s0 = TensorAccessor(dst_args, output_addr);
+    Noc noc;
     CircularBuffer cb_input(input_cb_id);
     CircularBuffer cb_pad_val(pad_val_cb_id);
 
@@ -68,17 +72,18 @@ void kernel_main() {
 
         // We have two cases, if we are within the input region, we wait for the reader to send us the correct tile
         // Otherwise we simply write the padding tile we have in our circular buffer
-        uint64_t dst_noc_addr = s0.get_noc_addr(output_page_offset);
         if (within_input_region) {
             cb_input.wait_front(1);
-            uint32_t l1_read_addr = cb_input.get_read_ptr();
-            noc_async_write(l1_read_addr, dst_noc_addr, page_size);
-            noc_async_write_barrier();
+            noc.async_write(
+                cb_input, s0, page_size, {.offset_bytes = 0}, {.page_id = output_page_offset, .offset_bytes = 0});
+            noc.async_write_barrier();
             advance_tensor_index(input_id_per_dim, input_page_shape, num_dims);
             cb_input.pop_front(1);
         } else {
-            noc_async_write(l1_write_addr, dst_noc_addr, page_size);
-            noc_async_write_barrier();
+            CoreLocalMem<uint32_t> pad_src(l1_write_addr);
+            noc.async_write(
+                pad_src, s0, page_size, {.offset_bytes = 0}, {.page_id = output_page_offset, .offset_bytes = 0});
+            noc.async_write_barrier();
         }
         advance_tensor_index(output_id_per_dim, output_page_shape, num_dims);
         output_page_offset++;

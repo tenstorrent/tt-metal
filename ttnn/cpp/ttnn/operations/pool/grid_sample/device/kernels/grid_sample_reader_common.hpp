@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <api/dataflow/dataflow_api.h>
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include "api/numeric/bfloat16.h"
 
 #define ALWI inline __attribute__((always_inline))
 
@@ -29,19 +30,6 @@ ALWI void fill_four_val(uint32_t begin_addr, uint16_t val, uint16_t val1, uint16
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(begin_addr);
     ptr[0] = (val | (val1 << 16));
     ptr[1] = (val2 | (val3 << 16));
-}
-
-ALWI uint16_t float_to_bfloat16(float value) {
-    uint32_t tmp;
-    std::memcpy(&tmp, &value, sizeof(tmp));
-    return static_cast<uint16_t>(tmp >> 16);
-}
-
-ALWI float bfloat16_to_float(uint16_t bf16) {
-    uint32_t tmp = static_cast<uint32_t>(bf16) << 16;
-    float result;
-    std::memcpy(&result, &tmp, sizeof(result));
-    return result;
 }
 
 // Grid coordinate reading functions
@@ -96,8 +84,8 @@ struct GridCoordinateReader {
                 const uint32_t coordinate_pair_offset = grid_idx * STANDARD_GRID_ELEMENTS_PER_POINT;
                 const uint16_t h_coord_raw = grid_ptr[coordinate_pair_offset + 1];  // y coordinate
                 const uint16_t w_coord_raw = grid_ptr[coordinate_pair_offset + 0];  // x coordinate
-                h_coord_rel = bfloat16_to_float(h_coord_raw);
-                w_coord_rel = bfloat16_to_float(w_coord_raw);
+                h_coord_rel = bf16_to_fp32(h_coord_raw);
+                w_coord_rel = bf16_to_fp32(w_coord_raw);
             }
 
             const float h_coord_image = h_coord_rel * height_scale + height_offset;
@@ -128,10 +116,10 @@ struct GridCoordinateReader {
             const float weight_sw = (h1_valid && w0_valid) ? (h_frac * w_frac_inv) : 0.0f;      // South-West
             const float weight_se = (h1_valid && w1_valid) ? (h_frac * w_frac) : 0.0f;          // South-East
 
-            weight_nw_bf = float_to_bfloat16(weight_nw);
-            weight_ne_bf = float_to_bfloat16(weight_ne);
-            weight_sw_bf = float_to_bfloat16(weight_sw);
-            weight_se_bf = float_to_bfloat16(weight_se);
+            weight_nw_bf = fp32_to_bf16_truncate(weight_nw);
+            weight_ne_bf = fp32_to_bf16_truncate(weight_ne);
+            weight_sw_bf = fp32_to_bf16_truncate(weight_sw);
+            weight_se_bf = fp32_to_bf16_truncate(weight_se);
         }
     }
 };

@@ -878,19 +878,23 @@ def _decode_step_inputs(model, mesh_device, token_id, position):
     """Build the host-side decode inputs both paths consume.
 
     Mirrors what ``Gemma4Model.prepare_decode_inputs_host`` packs into
-    its return tuple. Returns ``(embeds, pos_uint32, pos_int32, pli)``;
+    its return tuple. Returns ``(tokens, pos_uint32, pos_int32, pli)``;
     ``pli`` is ``None`` when the model has no PLI configured. Caller is
     responsible for deallocating the returned device tensors after
     each step.
     """
     import torch.nn.functional as F
 
-    embeds, pli = model.compute_host_embeddings(token_id)
+    pli = model.compute_host_pli(token_id)
     is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
     mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
 
-    embeds_tt = ttnn.from_torch(
-        embeds, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=mapper
+    tokens_tt = ttnn.from_torch(
+        torch.tensor([[token_id]], dtype=torch.int32),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint32,
+        mesh_mapper=mapper,
     )
     pos_padded = F.pad(torch.tensor([position], dtype=torch.int32).reshape(1, 1), (0, 31), "constant", 0)
     pos_tt = ttnn.from_torch(
@@ -912,7 +916,7 @@ def _decode_step_inputs(model, mesh_device, token_id, position):
             dtype=ttnn.bfloat16,
             mesh_mapper=mapper,
         )
-    return embeds_tt, pos_tt, pos_int32_tt, pli_tt
+    return tokens_tt, pos_tt, pos_int32_tt, pli_tt
 
 
 def _page_table_to_tt(page_table_torch, mesh_device):
@@ -1691,8 +1695,8 @@ def test_full_model_parity_decode_trace(layer_set, decode_steps, pli, mesh_devic
 
 @parametrize_mesh_with_fabric()
 @pytest.mark.parametrize("decode_steps", [4], ids=lambda n: f"steps{n}")
-@pytest.mark.parametrize("layer_set", ["all_kv_shared"], ids=["all-kv-shared"])
-@pytest.mark.parametrize("pli", [True], ids=["pli"])
+@pytest.mark.parametrize("layer_set", ["small", "all_kv_shared"], ids=["small", "all-kv-shared"])
+@pytest.mark.parametrize("pli", [False, True], ids=["no-pli", "pli"])
 def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, mesh_device, reset_seeds, request):
     """End-to-end mirror of vLLM's warmup→inference flow.
 
@@ -1738,8 +1742,6 @@ def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, m
             real = TestFactory.create_hf_config()
             num_layers = int(real.num_hidden_layers)
             kv_shared_override = int(getattr(real, "num_kv_shared_layers", 0) or 0)
-            if kv_shared_override <= 0:
-                pytest.skip("Model has no kv-shared layers")
         hf_text_config = _create_hf_text_config_with_pli(vocab_size=256, num_layers=num_layers, pli_size=64)
         if kv_shared_override is not None:
             hf_text_config.num_kv_shared_layers = kv_shared_override
@@ -1754,8 +1756,6 @@ def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, m
             real = TestFactory.create_hf_config()
             num_layers = int(real.num_hidden_layers)
             kv_shared_override = int(getattr(real, "num_kv_shared_layers", 0) or 0)
-            if kv_shared_override <= 0:
-                pytest.skip("Model has no kv-shared layers")
         hf_text_config = _create_hf_text_config(vocab_size=256, num_layers=num_layers)
         if kv_shared_override is not None:
             hf_text_config.num_kv_shared_layers = kv_shared_override
@@ -1831,7 +1831,7 @@ def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, m
         max_batch_size=1,
         num_blocks=uniform_num_blocks,
         can_sample_on_device=False,
-        non_greedy_decoding_on_device=False,
+        greedy_only=True,
     )
 
     # vLLM warmup — replicate the bridge's pre-decode setup so the
@@ -1848,7 +1848,7 @@ def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, m
             max_batch_size=1,
             num_blocks=warmup_num_blocks,
             can_sample_on_device=False,
-            non_greedy_decoding_on_device=False,
+            greedy_only=True,
         )
     finally:
         if hasattr(tt_model_vllm, "_active_page_tables_per_layer"):

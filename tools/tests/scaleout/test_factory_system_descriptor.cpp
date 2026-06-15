@@ -410,4 +410,36 @@ TEST(Cluster, TestMinConnectionsStrictModeFailsWithMismatches) {
     std::filesystem::remove(fsd_file);
 }
 
+TEST(CablingGenerator, PruneDeadChannelsRemovesContainingCable) {
+    CablingGenerator gen(
+        "tools/tests/scaleout/cabling_descriptors/16_n300_lb_cluster.textproto",
+        "tools/tests/scaleout/deployment_descriptors/16_lb_deployment.textproto");
+
+    const size_t before = gen.get_chip_connections().size();
+    ASSERT_GT(before, 0u);
+
+    // Take a real channel endpoint from the first connection (host_id -> hostname via deployment).
+    const auto& ep = gen.get_chip_connections().front().first;
+    PhysicalChannelEndpoint dead{gen.get_deployment_hosts().at(*ep.host_id).hostname, ep.tray_id, ep.asic_channel};
+
+    auto cables = gen.find_cables_containing_channels({dead});
+    EXPECT_EQ(cables.size(), 1u);  // dead channel maps to exactly one cable
+
+    auto pruned = gen.prune_dead_channels({dead});
+    EXPECT_EQ(pruned, cables);                             // prune reports the same cable
+    EXPECT_LT(gen.get_chip_connections().size(), before);  // its channels are gone from the FSD
+}
+
+TEST(CablingGenerator, PruneDeadChannelsIgnoresUnknownChannel) {
+    CablingGenerator gen(
+        "tools/tests/scaleout/cabling_descriptors/16_n300_lb_cluster.textproto",
+        "tools/tests/scaleout/deployment_descriptors/16_lb_deployment.textproto");
+
+    const size_t before = gen.get_chip_connections().size();
+    PhysicalChannelEndpoint bogus{"nonexistent-host", TrayId(1), AsicChannel{0, ChanId(0)}};
+
+    EXPECT_TRUE(gen.prune_dead_channels({bogus}).empty());  // no cable matched
+    EXPECT_EQ(gen.get_chip_connections().size(), before);   // FSD unchanged
+}
+
 }  // namespace tt::scaleout_tools

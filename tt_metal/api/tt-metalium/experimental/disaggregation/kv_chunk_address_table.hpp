@@ -108,6 +108,14 @@ public:
     // Check if a FabricNodeId has a registered host mapping.
     bool has_host(const tt::tt_fabric::FabricNodeId& node_id) const;
 
+    // --- Device reads ---
+
+    // Read a single chunk's raw bytes from the primary replica device
+    // (first FabricNodeId in the chunk's DeviceGroup). Returns a buffer
+    // of size loc.size_bytes. Resolves the device internally via the
+    // global ControlPlane — no device list required from the caller.
+    std::vector<uint8_t> read_device_chunk(uint32_t layer, uint32_t position, uint32_t slot) const;
+
     const KvChunkAddressTableConfig& config() const { return config_; }
     uint32_t num_position_chunks() const { return num_position_chunks_; }
     size_t total_entries() const { return entries_.size(); }

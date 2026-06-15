@@ -79,7 +79,7 @@ const bool is_int_fpu_en = false;
 #include "cmath_common.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
-#include "llk_math_eltwise_unary_sfpu_common.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 #include "params.h"
 #include "sfpu/ckernel_sfpu_rsqrt.h"
 
@@ -107,8 +107,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     DataFormat src_format = static_cast<DataFormat>(formats.math);
     _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, is_int_fpu_en>(src_format, src_format);
 
-    const std::uint32_t num_sfpu_iterations = params.TEST_FACE_R_DIM / ckernel::math::SFP_ROWS;
-
     if (!unpack_to_dest)
     {
         const std::uint32_t num_rows = params.num_faces * params.TEST_FACE_R_DIM;
@@ -128,7 +126,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Apply SFPU rsqrt to all tiles
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
-        _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_rsqrt_, params.DST_INDEX + i, num_sfpu_iterations);
+        _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_rsqrt_<SFPU_ITERATIONS>, params.DST_INDEX + i);
     }
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();

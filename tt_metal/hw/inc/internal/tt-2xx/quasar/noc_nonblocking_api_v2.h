@@ -268,18 +268,16 @@ inline __attribute__((always_inline)) uint32_t noc_debug_read_at_len_be(uint32_t
     return NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_AT_LEN);
 }
 
-inline __attribute__((always_inline)) void overlay_cmd_buff_init(uint32_t atomic_ret_val) {
+inline __attribute__((always_inline)) uint64_t noc_local_xy() {
     constexpr uint32_t noc = 0;
     uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_NODE_ID);
     uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
     uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
-    uint64_t my_xy = NOC_XY_COORD(my_x, my_y);
+    return NOC_XY_COORD(my_x, my_y);
+}
 
+inline __attribute__((always_inline)) void init_wr_cmd_buf(uint64_t my_xy) {
     __builtin_riscv_ttrocc_cmdbuf_reset(OVERLAY_WR_CMD_BUF);
-    __builtin_riscv_ttrocc_cmdbuf_reset(OVERLAY_RD_CMD_BUF);
-    __builtin_riscv_ttrocc_scmdbuf_reset();
-
-    // Write command buffer (CMDBUF_0): local src → remote dest
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, CMD_BUF_MISC_WRITE_POSTED);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
@@ -298,8 +296,10 @@ inline __attribute__((always_inline)) void overlay_cmd_buff_init(uint32_t atomic
         OVERLAY_WR_CMD_BUF,
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MAX_BYTES_IN_PACKET_REG_OFFSET / 8,
         NOC_V2_MAX_BYTES_IN_PACKET);
+}
 
-    // Read command buffer (CMDBUF_1): remote src → local dest
+inline __attribute__((always_inline)) void init_rd_cmd_buf(uint64_t my_xy) {
+    __builtin_riscv_ttrocc_cmdbuf_reset(OVERLAY_RD_CMD_BUF);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, CMD_BUF_MISC_READ);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
@@ -318,8 +318,10 @@ inline __attribute__((always_inline)) void overlay_cmd_buff_init(uint32_t atomic
         OVERLAY_RD_CMD_BUF,
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MAX_BYTES_IN_PACKET_REG_OFFSET / 8,
         NOC_V2_MAX_BYTES_IN_PACKET);
+}
 
-    // Atomic command buffer (SCMDBUF): simple buffer for atomics and inline writes
+inline __attribute__((always_inline)) void init_at_cmd_buf(uint64_t my_xy, uint32_t atomic_ret_val) {
+    __builtin_riscv_ttrocc_scmdbuf_reset();
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, CMD_BUF_MISC_ATOMIC);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, atomic_ret_val);
@@ -328,6 +330,14 @@ inline __attribute__((always_inline)) void overlay_cmd_buff_init(uint32_t atomic
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, NOC_V2_WR_RESP_VC);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MAX_BYTES_IN_PACKET_REG_OFFSET / 8, NOC_V2_MAX_BYTES_IN_PACKET);
+}
+
+inline __attribute__((always_inline)) void overlay_cmd_buff_init(uint32_t atomic_ret_val) {
+    uint64_t my_xy = noc_local_xy();
+    init_wr_cmd_buf(my_xy);  // Write command buffer (CMDBUF_0): local src -> remote dest
+    init_rd_cmd_buf(my_xy);  // Read command buffer (CMDBUF_1): remote src -> local dest
+    init_at_cmd_buf(
+        my_xy, atomic_ret_val);  // Atomic command buffer (SCMDBUF): simple buffer for atomics and inline writes
 }
 
 inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {

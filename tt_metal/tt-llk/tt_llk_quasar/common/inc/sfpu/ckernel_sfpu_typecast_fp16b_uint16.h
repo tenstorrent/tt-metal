@@ -26,10 +26,11 @@ inline void _calculate_typecast_fp16b_to_uint16_rows()
     TTI_SFPSTORE(p_sfpu::LREG1, p_sfpu::sfpmem::UINT16, ADDR_MOD_7, 0, 0); // Store from lreg[1] into dest register
 }
 
-inline void _calculate_typecast_fp16b_to_uint16_(const int iterations)
+template <int ITERATIONS = SFPU_ITERATIONS>
+inline void _calculate_typecast_fp16b_to_uint16_()
 {
 #pragma GCC unroll 8
-    for (int d = 0; d < iterations; d++)
+    for (int d = 0; d < ITERATIONS; d++)
     {
         _calculate_typecast_fp16b_to_uint16_rows();
         ckernel::math::_incr_counters_<0x0, 0x0, ckernel::math::SFP_ROWS, 0x0>(); // does the dest_reg++ (increments by 2 rows)

@@ -91,10 +91,7 @@ Tensor untilize_with_unpadding(
     uint32_t output_single_tile_size = input_single_tile_size;
 
     uint32_t num_tiles_per_row = input_tensor.padded_shape()[-1] / tt::constants::TILE_WIDTH;
-    uint32_t num_tiles_per_col = input_tensor.padded_shape()[-2] / tt::constants::TILE_HEIGHT;
 
-    bool enough_space_width = operations::data_movement::is_enough_space(
-        input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_col);
     bool enough_space_height = operations::data_movement::is_enough_space(
         input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
 
@@ -105,7 +102,6 @@ Tensor untilize_with_unpadding(
             memory_config,
             use_multicore,
             fp32_dest_acc_en,
-            enough_space_width,
             enough_space_height,
             sub_core_grids);
     };

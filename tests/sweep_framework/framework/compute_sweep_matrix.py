@@ -175,12 +175,25 @@ def _get_test_group_for_mesh_shape(mesh_shape, mesh_test_groups, run_label, defa
 
 
 def _batch_modules_for_test_group(base_modules, batch_size, batch_policy=None):
-    """Batch base module names using fixed size or policy-defined parallel jobs."""
+    """Batch base module names using fixed size or policy-defined parallel jobs.
+
+    Modules listed in LEAD_MODELS_BATCH_POLICY["solo_modules"] are pulled out
+    and given their own dedicated 1-module batch before the rest are chunked.
+    """
+    solo_set = set(LEAD_MODELS_BATCH_POLICY.get("solo_modules", []))
+    solo = [m for m in base_modules if m in solo_set]
+    rest = [m for m in base_modules if m not in solo_set]
+
     parallel_jobs = (batch_policy or {}).get("parallel_jobs")
     if parallel_jobs:
-        size = max(1, -(-len(base_modules) // parallel_jobs))
-        return chunk_modules(base_modules, size)
-    return chunk_modules(base_modules, batch_size)
+        size = max(1, -(-len(rest) // parallel_jobs))
+        batches = chunk_modules(rest, size)
+    else:
+        batches = chunk_modules(rest, batch_size)
+
+    for sm in solo:
+        batches.append(sm)
+    return batches
 
 
 def _append_routed_group(

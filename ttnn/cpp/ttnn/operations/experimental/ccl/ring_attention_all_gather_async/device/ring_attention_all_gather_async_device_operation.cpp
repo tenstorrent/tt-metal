@@ -80,17 +80,32 @@ void RingAttentionAllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
                     "Output tensor {} memory config should match output_mem_config",
                     i);
 
-                // Check output tensor shape
+                // Check output tensor shape. The gather dimension may be larger than the populated prefix.
                 auto output_shape = output_tensor.logical_shape();
                 auto expected_output_shape = input_tensors[i].logical_shape();
                 expected_output_shape[operation_attributes.dim] *= operation_attributes.ring_size;
 
-                TT_FATAL(
-                    output_shape == expected_output_shape,
-                    "Output tensor {} shape mismatch. Expected shape with dimension {} scaled by ring_size {}",
-                    i,
-                    operation_attributes.dim,
-                    operation_attributes.ring_size);
+                for (int d = 0; d < static_cast<int>(output_shape.rank()); ++d) {
+                    if (d == operation_attributes.dim) {
+                        TT_FATAL(
+                            output_shape[d] >= expected_output_shape[d],
+                            "Output tensor {} gather dim {} too small: got {}, expected >= {} "
+                            "(= input_dim * ring_size {})",
+                            i,
+                            d,
+                            output_shape[d],
+                            expected_output_shape[d],
+                            operation_attributes.ring_size);
+                    } else {
+                        TT_FATAL(
+                            output_shape[d] == expected_output_shape[d],
+                            "Output tensor {} non-gather dim {} mismatch: got {}, expected {}",
+                            i,
+                            d,
+                            output_shape[d],
+                            expected_output_shape[d]);
+                    }
+                }
             }
         }
     }

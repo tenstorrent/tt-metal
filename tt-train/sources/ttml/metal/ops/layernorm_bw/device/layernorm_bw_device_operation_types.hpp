@@ -9,10 +9,10 @@
 namespace ttml::metal::ops::layernorm_bw::device {
 
 // Attributes for the backward operation (add more if needed)
-struct operation_attributes_t {};
+struct LayerNormBackwardParams {};
 
 // Tensors required for backward
-struct tensor_args_t {
+struct LayerNormBackwardInputs {
     ttnn::Tensor input;
     ttnn::Tensor gamma;                                          // scale parameter (learnable weight)
     ttnn::Tensor mean;                                           // mean from forward pass
@@ -22,6 +22,9 @@ struct tensor_args_t {
     std::optional<ttnn::Tensor> preallocated_dgamma_components = std::nullopt;  // dgamma components
     std::optional<ttnn::Tensor> preallocated_dbeta_components = std::nullopt;   // dbeta components
 };
+
+using operation_attributes_t = LayerNormBackwardParams;
+using tensor_args_t = LayerNormBackwardInputs;
 
 // Output tensor specs and tensors
 using spec_return_value_t = std::vector<ttnn::TensorSpec>;

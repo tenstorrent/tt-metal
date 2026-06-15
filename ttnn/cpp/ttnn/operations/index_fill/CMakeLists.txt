@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_index_fill ${LIB_TYPE})
 add_library(TTNN::Ops::IndexFill ALIAS ttnn_op_index_fill)
 
-tt_reuse_precompile_headers(ttnn_op_index_fill TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_index_fill TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_index_fill)
 
 set_target_properties(

@@ -4,6 +4,7 @@
 
 
 import ttnn
+from tests.ttnn.nightly.unit_tests.operations.matmul.utility_functions import ttnn_matmul
 from loguru import logger
 
 from models.common.utility_functions import untilize, tilize_to_list, skip_for_blackhole
@@ -33,7 +34,7 @@ def run_tilize_matmul_test(M, K, N, device):
         ttnn.TILE_LAYOUT,
         device,
     )
-    t2 = ttnn.matmul(a_t, b_t)
+    t2 = ttnn_matmul(a_t, b_t)
     assert list(t2.padded_shape) == [1, 1, M, N]
     tt_host_rm = t2.cpu().to_torch()
     pyt_got_back = tt_host_rm.reshape((1, 1, M, N))

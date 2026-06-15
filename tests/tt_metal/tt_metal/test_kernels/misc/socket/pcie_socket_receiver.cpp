@@ -23,20 +23,21 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < num_iterations; i++) {
         uint32_t outstanding_data_size = data_size;
-        uint64_t dst_noc_addr = get_noc_addr(local_l1_buffer_addr);
+        // DEVICE_PULL: the FIFO lives in pinned host memory, so read_ptr/fifo_addr are
+        // FIFO offsets, not device L1 addresses. Pull each page straight into the
+        // local L1 buffer instead of bouncing through a device-side FIFO copy.
+        uint32_t dst_l1_addr = local_l1_buffer_addr;
         while (outstanding_data_size) {
             socket_wait_for_pages(receiver_socket, 1);
             noc_read_page_chunked(
                 pcie_xy_enc,
                 pcie_data_addr + receiver_socket.read_ptr - receiver_socket.fifo_addr,
-                receiver_socket.read_ptr,
+                dst_l1_addr,
                 page_size);
             noc_async_read_barrier();
 
-            noc_async_write(receiver_socket.read_ptr, dst_noc_addr, page_size);
-            dst_noc_addr += page_size;
+            dst_l1_addr += page_size;
             outstanding_data_size -= page_size;
-            noc_async_write_barrier();
             socket_pop_pages(receiver_socket, 1);
             socket_notify_sender(receiver_socket);
         }

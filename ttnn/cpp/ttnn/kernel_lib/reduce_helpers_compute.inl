@@ -5,6 +5,11 @@
 // Implementation file for reduce_helpers_compute.hpp
 // Do not include directly - include reduce_helpers_compute.hpp instead
 
+#include "api/compute/binary_max_min.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/typecast.h"
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack.h"
@@ -16,6 +21,61 @@
 
 
 namespace compute_kernel_lib {
+
+namespace detail {
+
+// SFPU MAX fold (also used by reduce_{h,w}_neg for -MAX(-x) MIN).
+template <DataFormat format>
+ALWI void sfpu_reduce_max_fold_init() {
+    static_assert(format == DataFormat::Int32, "SFPU reduce MAX fold: Int32 only");
+    binary_max_int32_tile_init();
+}
+
+template <DataFormat format>
+ALWI void sfpu_reduce_max_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
+    static_assert(format == DataFormat::Int32, "SFPU reduce MAX fold: Int32 only");
+    binary_max_int32_tile(a, b, out);
+}
+
+// Copy one input tile into DST and fold into running MAX (first tile seeds dst_idx directly).
+template <DataFormat format>
+ALWI void sfpu_copy_and_fold_max(
+    uint32_t input_cb_id, uint32_t tile_idx, uint32_t dst_idx, uint32_t work_dst, bool is_first_tile) {
+    if (is_first_tile) {
+        copy_tile(input_cb_id, tile_idx, dst_idx);
+    } else {
+        copy_tile(input_cb_id, tile_idx, work_dst);
+        sfpu_reduce_max_fold_tile<format>(dst_idx, work_dst, dst_idx);
+    }
+}
+
+// Matches sfpu_copy_and_fold_max is_first_tile: copy on axis 0 unless Accumulate already reloaded DST.
+template <typename AccumulateT>
+ALWI bool sfpu_is_first_tile(uint32_t axis_index, const AccumulateT& accumulate) {
+    if constexpr (is_accumulate_v<AccumulateT>) {
+        return axis_index == 0 && accumulate.is_first();
+    }
+    return axis_index == 0;
+}
+
+// Post-reduce scalar multiply. mul_unary_tile is fp32-only, so Int32 is bracketed with typecasts
+// (truncates toward zero on the way back); all other formats use plain mul_unary_tile.
+template <DataFormat reduce_format>
+ALWI void reduce_post_mul_tile(uint32_t dst, uint32_t scaler_bits) {
+    if constexpr (reduce_format == DataFormat::Int32) {
+        typecast_tile_init<(uint32_t)DataFormat::Int32, (uint32_t)DataFormat::Float32>();
+        typecast_tile<(uint32_t)DataFormat::Int32, (uint32_t)DataFormat::Float32>(dst);
+        binop_with_scalar_tile_init();
+        mul_unary_tile(dst, scaler_bits);
+        typecast_tile_init<(uint32_t)DataFormat::Float32, (uint32_t)DataFormat::Int32>();
+        typecast_tile<(uint32_t)DataFormat::Float32, (uint32_t)DataFormat::Int32>(dst);
+    } else {
+        binop_with_scalar_tile_init();
+        mul_unary_tile(dst, scaler_bits);
+    }
+}
+
+}  // namespace detail
 
 // HiFi4 fidelity for matmul-based reduce (higher precision than kernel default)
 constexpr ckernel::MathFidelity REDUCE_MATMUL_FIDELITY = ckernel::MathFidelity::HiFi4;
@@ -98,23 +158,43 @@ ALWI constexpr uint32_t get_dst_index(const AccumulateT& accumulate) {
 template <
     PoolType reduce_type,
     ReduceDim reduce_dim,
+    DataFormat reduce_format,
     typename AccumulateT,
-    bool use_matmul = false>
+    bool use_matmul = false,
+    bool is_sfpu = false>
 ALWI void reload_accumulator_if_needed(
     DataflowBuffer& accum_dfb, uint32_t input_dfb_id, uint32_t scaler_dfb_id, const AccumulateT& accumulate) {
     if constexpr (is_accumulate_v<AccumulateT>) {
         if (!accumulate.is_first()) {  // Reload on all iterations except first
             constexpr uint32_t onetile = 1;
             accum_dfb.wait_front(onetile);
-            const uint32_t prev_srca_dfb = use_matmul ? scaler_dfb_id : input_dfb_id;
-            copy_tile_to_dst_init_short_with_dt(prev_srca_dfb, accumulate.config.cb_accumulator);
+            const uint32_t prev_srca_cb = use_matmul ? scaler_dfb_id : input_dfb_id;
+
+            // For MAX + REDUCE_ROW, GMPOOL's running accumulator lives at row 0 of face 0
+            // (max for rows 0-15) and row 0 of face 2 (max for rows 16-31); faces 1 and 3
+            // are never read. The LLK's reduce_row_perform_transpose then rotates those
+            // row-0 accumulators into col 0 of face 0 and col 0 of face 2 for packing.
+            // A vanilla copy_tile reload would leave the running max at col 0, but the
+            // next GMPOOL iteration only reads row 0 — so it would be silently dropped.
+            // Within-face-16x16-transpose on reload puts col 0 of each face back at row 0
+            // of that face, restoring the exact layout GMPOOL expects.
+            constexpr bool reload_within_face_transpose =
+                (reduce_type == PoolType::MAX && reduce_dim == ReduceDim::REDUCE_ROW);
+
+            reconfig_data_format_srca(prev_srca_cb, accumulate.config.cb_accumulator);
+            copy_tile_to_dst_init_short(
+                accumulate.config.cb_accumulator,
+                /*transpose_of_faces=*/0,
+                /*transpose_within_16x16_face=*/reload_within_face_transpose ? 1u : 0u);
             copy_tile(accumulate.config.cb_accumulator, 0, accumulate.config.dst_index);
             accum_dfb.pop_front(onetile);
 
             // CRITICAL: Re-init after copy_tile corrupts SRCA config
             // Use short version since packer config is still valid from initial init
             // Pass accumulator DFB as old_dfb_id to reconfigure data format from accumulator to input DFB
-            if constexpr (use_matmul) {
+            if constexpr (is_sfpu) {
+                detail::sfpu_reduce_max_fold_init<reduce_format>();
+            } else if constexpr (use_matmul) {
                 reduce_with_matmul_init_with_dt(input_dfb_id, scaler_dfb_id, accumulate.config.cb_accumulator);
             } else {
                 reduce_init_short_with_dt<reduce_type, reduce_dim>(
@@ -154,21 +234,26 @@ ALWI void assert_output_dfb_size(uint32_t output_dfb_id, uint32_t total_outputs)
 template <
     PoolType reduce_type,
     ReduceDim reduce_dim,
+    uint32_t input_dfb_id,
+    uint32_t scaler_dfb_id,
+    uint32_t output_dfb_id,
     ReduceInputPolicy input_policy,
     ReduceDataFormatReconfigMode reconfig_mode,
     typename AccumulateT,
     typename PostReduceOp>
 ALWI void reduce(
-    uint32_t input_dfb_id,
-    uint32_t scaler_dfb_id,
-    uint32_t output_dfb_id,
     ReduceInputBlockShape input_block_shape,
     ReduceInputMemoryLayout input_memory_layout,
     AccumulateT accumulate,
     PostReduceOp post_reduce_op) {
+    // Int32 MAX is routed to the SFPU path via is_sfpu_reduce_path<>(); all other formats use FPU/GMPOOL.
+    constexpr DataFormat reduce_format = static_cast<DataFormat>(unpack_src_format[input_dfb_id]);
     // =============================================================================
     // Static Assertions (compile-time validation)
     // =============================================================================
+    static_assert(
+        reduce_type != PoolType::MAX || reduce_dim != ReduceDim::REDUCE_SCALAR || reduce_format != DataFormat::Int32,
+        "Int32 MAX REDUCE_SCALAR is not supported");
     static_assert(
         is_accumulation_type_v<AccumulateT>,
         "AccumulateT must be a valid accumulation type (NoAccumulation or Accumulate)");
@@ -176,10 +261,23 @@ ALWI void reduce(
         is_post_reduce_op_v<PostReduceOp>,
         "PostReduceOp must be callable with a uint32_t argument");
     static_assert(
-        !is_accumulate_v<AccumulateT> || reduce_type != PoolType::MAX || reduce_dim == ReduceDim::REDUCE_COL,
-        "Accumulate::at with PoolType::MAX only works for REDUCE_COL. For REDUCE_ROW / REDUCE_SCALAR "
-        "the pack reduce edge mask drops the face-row-0 spread that GMPOOL needs as its running "
-        "accumulator on the reload pass, so the previous MAX is lost.");
+        !is_accumulate_v<AccumulateT> ||
+            !(reduce_type == PoolType::MAX && reduce_dim == ReduceDim::REDUCE_SCALAR),
+        "Accumulate with PoolType::MAX + REDUCE_SCALAR is not supported: the pack edge mask "
+        "keeps only DST(0,0), but GMPOOL needs that running max broadcast across face-0 row 4 "
+        "on the reload pass, which the current copy_tile reload cannot reproduce.");
+#ifdef ARCH_QUASAR
+    // The MAX + REDUCE_ROW accumulator reload relies on a within-16x16-face transpose during
+    // copy_tile_to_dst_init_short (see reload_accumulator_if_needed). That transpose is rejected
+    // by copy_tile_to_dst_init_short on Quasar ("Transpose within face not supported on Quasar"),
+    // and there is no Quasar-compatible reload that restores the layout GMPOOL expects.
+    static_assert(
+        !is_accumulate_v<AccumulateT> ||
+            !(reduce_type == PoolType::MAX && reduce_dim == ReduceDim::REDUCE_ROW),
+        "Accumulate with PoolType::MAX + REDUCE_ROW is not supported on Quasar: the accumulator "
+        "reload requires a within-16x16-face transpose, which copy_tile_to_dst_init_short asserts "
+        "against on Quasar.");
+#endif
 
     // =============================================================================
     // Runtime Assertions (parameter validation)
@@ -205,6 +303,7 @@ ALWI void reduce(
     const uint32_t num_batches = input_block_shape.batches;
 
     constexpr bool use_matmul = reduce_uses_matmul<reduce_type, reduce_dim>();
+    constexpr bool is_sfpu = is_sfpu_reduce_path<reduce_type, reduce_dim, reduce_format>();
 
     DataflowBuffer input_dfb(input_dfb_id);
     DataflowBuffer scaler_dfb(scaler_dfb_id);
@@ -226,12 +325,18 @@ ALWI void reduce(
         pack_reconfig_data_format(output_dfb_id);
     }
     // Initialization
-    if constexpr (use_matmul) {
+    if constexpr (is_sfpu) {
+        init_sfpu(input_dfb_id, output_dfb_id);
+        copy_tile_to_dst_init_short(input_dfb_id);
+    } else if constexpr (use_matmul) {
         reduce_with_matmul_init(input_dfb_id, scaler_dfb_id);
     } else {
         reduce_init<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id, output_dfb_id);
     }
     scaler_dfb.wait_front(1);  // Wait for scaler tile
+    if constexpr (is_sfpu) {
+        PACK((llk_pack_reduce_mask_config<reduce_dim, PackMode::Default>(output_dfb_id)));
+    }
 
     constexpr uint32_t onetile = 1;
 
@@ -267,7 +372,7 @@ ALWI void reduce(
             tile_regs_acquire();
 
             // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
-            reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT>(
+            reload_accumulator_if_needed<reduce_type, reduce_dim, reduce_format, AccumulateT, false, is_sfpu>(
                 accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
 
             const uint32_t dst_idx = get_dst_index(accumulate);
@@ -353,12 +458,32 @@ ALWI void reduce(
                 tile_regs_acquire();
 
                 // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
-                reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT, use_matmul>(
+                reload_accumulator_if_needed<reduce_type, reduce_dim, reduce_format, AccumulateT, use_matmul, is_sfpu>(
                     accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
+                if constexpr (is_sfpu) {
+                    if (Wt > 1) {
+                        detail::sfpu_reduce_max_fold_init<reduce_format>();
+                    }
+                }
 
                 const uint32_t dst_idx = get_dst_index(accumulate);
                 for (uint32_t wt = 0; wt < Wt; ++wt) {
-                    if constexpr (waits_per_tile(input_policy)) {
+                    if constexpr (is_sfpu) {
+                        constexpr uint32_t sfpu_work_dst = 1;
+                        const bool is_first_tile = detail::sfpu_is_first_tile(wt, accumulate);
+                        if constexpr (waits_per_tile(input_policy)) {
+                            input_dfb.wait_front(onetile);
+                            detail::sfpu_copy_and_fold_max<reduce_format>(
+                                input_dfb_id, 0, dst_idx, sfpu_work_dst, is_first_tile);
+                            input_dfb.pop_front(onetile);
+                        } else if constexpr (waits_bulk(input_policy)) {
+                            detail::sfpu_copy_and_fold_max<reduce_format>(
+                                input_dfb_id, wt, dst_idx, sfpu_work_dst, is_first_tile);
+                        } else {
+                            detail::sfpu_copy_and_fold_max<reduce_format>(
+                                input_dfb_id, wt + index_offset, dst_idx, sfpu_work_dst, is_first_tile);
+                        }
+                    } else if constexpr (waits_per_tile(input_policy)) {
                         // One-at-a-time: wait/pop per tile
                         input_dfb.wait_front(onetile);
                         if constexpr (use_matmul) {
@@ -383,6 +508,12 @@ ALWI void reduce(
                                 input_dfb_id, scaler_dfb_id, wt + index_offset, 0, dst_idx);
                         }
                     }
+                }
+
+                // SFPU intra-tile finalize
+                if constexpr (is_sfpu) {
+                    sfpu_reduce_init<reduce_type, reduce_format>();
+                    sfpu_reduce<reduce_type, reduce_format, reduce_dim>(dst_idx, /*ct_dim=*/1, /*rt_dim=*/1);
                 }
 
                 // Call post-reduce operation (e.g., recip_tile for softmax)
@@ -427,7 +558,7 @@ ALWI void reduce(
 
         // Auto-detect chunk size from DEST register capacity
         // Both reader (dataflow) and compute kernels compute this identically via DEST_AUTO_LIMIT
-        constexpr uint32_t chunk_size = DEST_AUTO_LIMIT;
+        constexpr uint32_t chunk_size = is_sfpu ? (DEST_AUTO_LIMIT - 1) : DEST_AUTO_LIMIT;
         const uint32_t stride = (input_memory_layout.row_stride > 0) ? input_memory_layout.row_stride : Wt;
         const uint32_t tiles_per_bulk = Ht * stride;
         const uint32_t total_output_tiles = Wt * num_batches;
@@ -460,14 +591,36 @@ ALWI void reduce(
                 tile_regs_acquire();
 
                 // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
-                reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT>(
+                reload_accumulator_if_needed<reduce_type, reduce_dim, reduce_format, AccumulateT, false, is_sfpu>(
                     accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
+                if constexpr (is_sfpu) {
+                    if (Ht > 1) {
+                        detail::sfpu_reduce_max_fold_init<reduce_format>();
+                    }
+                }
 
                 for (uint32_t ht = 0; ht < Ht; ++ht) {
                     // Base dst_index: from accumulation config or 0 for multi-column output
                     uint32_t dst_idx = get_dst_index(accumulate);
                     for (uint32_t i = wt; i < chunk_end; ++i) {
-                        if constexpr (waits_per_tile(input_policy)) {
+                        if constexpr (is_sfpu) {
+                            const bool is_first_tile = detail::sfpu_is_first_tile(ht, accumulate);
+                            constexpr uint32_t sfpu_work_dst = chunk_size;
+                            if constexpr (waits_per_tile(input_policy)) {
+                                input_dfb.wait_front(onetile);
+                                detail::sfpu_copy_and_fold_max<reduce_format>(
+                                    input_dfb_id, 0, dst_idx, sfpu_work_dst, is_first_tile);
+                                input_dfb.pop_front(onetile);
+                            } else if constexpr (waits_bulk(input_policy)) {
+                                const uint32_t tile_idx = ht * current_chunk + (i - wt);
+                                detail::sfpu_copy_and_fold_max<reduce_format>(
+                                    input_dfb_id, tile_idx, dst_idx, sfpu_work_dst, is_first_tile);
+                            } else {
+                                const uint32_t tile_idx = batch_offset + ht * stride + i;
+                                detail::sfpu_copy_and_fold_max<reduce_format>(
+                                    input_dfb_id, tile_idx, dst_idx, sfpu_work_dst, is_first_tile);
+                            }
+                        } else if constexpr (waits_per_tile(input_policy)) {
                             // One-at-a-time: wait/pop per tile
                             input_dfb.wait_front(onetile);
                             reduce_tile<reduce_type, reduce_dim>(
@@ -484,6 +637,16 @@ ALWI void reduce(
                                 input_dfb_id, scaler_dfb_id, tile_idx, 0, dst_idx);
                         }
                         ++dst_idx;
+                    }
+                }
+
+                // SFPU intra-tile finalize per output slot
+                if constexpr (is_sfpu) {
+                    const uint32_t sfpu_base_dst = get_dst_index(accumulate);
+                    sfpu_reduce_init<reduce_type, reduce_format>();
+                    for (uint32_t k = 0; k < current_chunk; ++k) {
+                        sfpu_reduce<reduce_type, reduce_format, reduce_dim>(
+                            sfpu_base_dst + k, /*ct_dim=*/1, /*rt_dim=*/1);
                     }
                 }
 
@@ -525,7 +688,9 @@ ALWI void reduce(
     }
 
     // Cleanup
-    if constexpr (!use_matmul) {
+    if constexpr (is_sfpu) {
+        PACK((llk_pack_reduce_mask_clear()));
+    } else if constexpr (!use_matmul) {
         reduce_uninit<>();
     }
 }

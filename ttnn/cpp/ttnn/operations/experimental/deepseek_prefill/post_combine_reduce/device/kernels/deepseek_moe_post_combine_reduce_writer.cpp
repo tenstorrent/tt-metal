@@ -96,6 +96,8 @@ void kernel_main() {
                     token_start_idx + i, indices_addrg, indices_write_addr + i * indices_aligned_page_size);
             }
             noc_async_read_barrier();
+            // Indices stay as uint16 in the CB — the compute kernel reads them
+            // directly via read_tile_value_uint16.
             cb_push_back(cb_indices, TOKENS_PER_CHUNK);
         }
 
@@ -106,8 +108,9 @@ void kernel_main() {
             bool has_local = true;
             if constexpr (use_dispatch_table_skip) {
                 tt_l1_ptr int32_t* dispatch_table = reinterpret_cast<tt_l1_ptr int32_t*>(dispatch_table_write_addr);
-                tt_l1_ptr int32_t* token_indices =
-                    reinterpret_cast<tt_l1_ptr int32_t*>(indices_write_addr + token_idx * indices_aligned_page_size);
+                // Indices stay as uint16 in the CB — no in-place expansion.
+                tt_l1_ptr uint16_t* token_indices =
+                    reinterpret_cast<tt_l1_ptr uint16_t*>(indices_write_addr + token_idx * indices_aligned_page_size);
                 has_local = false;
                 for (uint32_t k = 0; k < num_experts; ++k) {
                     if (dispatch_table[token_indices[k]] != -1) {

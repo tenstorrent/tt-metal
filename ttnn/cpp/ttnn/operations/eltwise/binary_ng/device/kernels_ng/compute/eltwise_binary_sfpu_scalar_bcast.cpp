@@ -54,6 +54,7 @@ ALWI void process_tile(
 #define CB_POST_OTHER cb_post_rhs
 #endif
     cb_wait_front(cb_bcast, num_tiles_per_cycle);
+    pack_reconfig_data_format(cb_out, cb_llk_post);
     unary_bcast_init<BroadcastType::SCALAR>(cb_bcast, cb_llk_post);
     cb_reserve_back(cb_llk_post, num_tiles_per_cycle);
     tile_regs_acquire();
@@ -152,7 +153,7 @@ void kernel_main() {
 
     unary_op_init_common(cb_post_lhs, cb_out);
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+    PACK((llk_pack_relu_config(ReluConfig::zero())));
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))

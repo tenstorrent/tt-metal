@@ -58,6 +58,16 @@ bool mock_firmware_sources_available_for(tt::ARCH arch) {
     }
 }
 
+int firmware_wait_timeout_ms() {
+    const auto& rtoptions = MetalContext::instance().rtoptions();
+    // RTL sim directory backends are event-driven and much slower than functional ttsim (.so).
+    // llrt treats timeout_ms==0 on sim as infinite wait.
+    if (rtoptions.get_simulator_enabled() && rtoptions.get_simulator_path().extension() != ".so") {
+        return 0;
+    }
+    return 10000;
+}
+
 }  // namespace
 
 RiscFirmwareInitializer::RiscFirmwareInitializer(
@@ -451,7 +461,7 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
     }
 
     for (auto& id_and_cores : device_to_early_exit_cores) {
-        const int timeout_ms = 10000;
+        const int timeout_ms = firmware_wait_timeout_ms();
         if (!id_and_cores.second.empty()) {
             try {
                 llrt::internal_::wait_until_cores_done(
@@ -1385,7 +1395,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     }
 
     log_debug(LogDevice, "Waiting for firmware init complete");
-    const int timeout_ms = 10000;
+    const int timeout_ms = firmware_wait_timeout_ms();
     try {
         llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_INIT, not_done_cores, timeout_ms);
     } catch (std::runtime_error&) {

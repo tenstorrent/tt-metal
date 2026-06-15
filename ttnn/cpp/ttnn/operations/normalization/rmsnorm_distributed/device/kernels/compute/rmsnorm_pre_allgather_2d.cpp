@@ -73,9 +73,13 @@ void kernel_main() {
          * sum(x**2)
          */
         // BulkWaitBulkPop: All Wt tiles already in CB (see cumulative wait above)
-        compute_kernel_lib::
-            reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
-                cb_x2, cb_reduce, cb_out, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+        compute_kernel_lib::reduce<
+            PoolType::AVG,
+            ReduceDim::REDUCE_ROW,
+            cb_x2,
+            cb_reduce,
+            cb_out,
+            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
         cb_pop_front(cb_inp, Wt);
         cb_pop_front(cb_reduce, 1);
     }

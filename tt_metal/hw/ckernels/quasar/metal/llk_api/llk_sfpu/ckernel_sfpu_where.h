@@ -18,18 +18,6 @@ namespace ckernel {
 namespace sfpu {
 
 /**
- * @brief Primes the SFPU CC stack ahead of the first ternary SFPU op.
- *
- * Issues an SFPENCC with mode/imm matching what sfpi emits at every @c v_endif
- * (@c EI_RI / @c IMM12_BOTH, i.e. mode 10 / 0x003) so init and per-iteration
- * cleanup leave the CC stack in identical state. Without this priming, the
- * very first @c v_if AND-s into whatever lane mask the CC stack happened to
- * hold at boot, leaving some lanes pre-disabled in @c v_if and active in
- * @c v_else — manifests as a deterministic mismatch on face 0 of tile 0.
- */
-inline void init_where() { TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, sfpi::SFPENCC_MOD1_EI_RI); }
-
-/**
  * @brief Per-lane ternary select: @c out = (cond == 0) ? false_val : true_val.
  *
  * Loads @c false_val directly into the @c result variable so sfpi aliases
@@ -60,7 +48,7 @@ inline void init_where() { TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, sfpi::SFPENCC_M
  * @param dst_index_in2 DEST tile index holding the false-branch operand.
  * @param dst_index_out DEST tile index that receives the per-lane result.
  */
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_where(
     const std::uint32_t dst_index_in0,
     const std::uint32_t dst_index_in1,

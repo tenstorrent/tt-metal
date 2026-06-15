@@ -5,7 +5,11 @@
 #include <stdint.h>
 #include <cstring>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 inline __attribute__((always_inline)) void fill_pad_cb_with_val(
     const uint32_t cb_id, const uint32_t num_bytes, const uint32_t val) {
@@ -22,6 +26,7 @@ inline __attribute__((always_inline)) void fill_pad_cb_with_val(
 // followed by a final partially filled page, and advances i_page accordingly.
 template <typename StreamState>
 inline __attribute__((always_inline)) void read_input_pages_into_l1(
+    Noc& noc,
     const StreamState& s,
     uint32_t& i_page,
     uint32_t l1_write_addr,
@@ -30,12 +35,17 @@ inline __attribute__((always_inline)) void read_input_pages_into_l1(
     const uint32_t size_of_valid_data_in_last_input_page_in_row) {
     uint32_t write_addr = l1_write_addr;
     for (uint32_t p = 0; p < num_input_pages_in_row - 1; ++p) {
-        uint64_t page_noc_addr = s.get_noc_addr(i_page + p);
-        noc_async_read(page_noc_addr, write_addr, input_page_size);
+        CoreLocalMem<uint32_t> dst(write_addr);
+        noc.async_read(s, dst, input_page_size, {.page_id = i_page + p, .offset_bytes = 0}, {.offset_bytes = 0});
         write_addr += input_page_size;
     }
-    uint64_t last_page_noc_addr = s.get_noc_addr(i_page + num_input_pages_in_row - 1);
-    noc_async_read(last_page_noc_addr, write_addr, size_of_valid_data_in_last_input_page_in_row);
+    CoreLocalMem<uint32_t> dst(write_addr);
+    noc.async_read(
+        s,
+        dst,
+        size_of_valid_data_in_last_input_page_in_row,
+        {.page_id = i_page + num_input_pages_in_row - 1, .offset_bytes = 0},
+        {.offset_bytes = 0});
     i_page += num_input_pages_in_row;
 }
 
@@ -73,16 +83,8 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<23>();
 
     uint32_t packed_pad_value = 0;
-    uint32_t row_major_min_bytes = 0;
-    uint32_t num_front_pad_sticks_read = 0;
-    uint32_t num_end_pad_sticks_read = 0;
-    uint32_t num_sticks_padded_read = 0;
     if constexpr (not_pad_by_zero) {
         packed_pad_value = kernel_compile_time_args[13];
-        row_major_min_bytes = kernel_compile_time_args[14];
-        num_front_pad_sticks_read = kernel_compile_time_args[15];
-        num_end_pad_sticks_read = kernel_compile_time_args[16];
-        num_sticks_padded_read = kernel_compile_time_args[17];
     }
 
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
@@ -93,15 +95,10 @@ void kernel_main() {
     CircularBuffer cb_pad_align_exp(cb_pad_align);
 
     const auto s = TensorAccessor(src_args, src_addr);
+    Noc noc;
 
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-
-    uint64_t pad_val_addr = cb_pad_exp.get_read_ptr();
-    uint64_t pad_val_noc_addr = get_noc_addr(pad_val_addr);
-
-    uint64_t pad_align_addr = cb_pad_align_exp.get_read_ptr();
-    uint64_t pad_align_write_addr = cb_pad_align_exp.get_write_ptr();
-    uint64_t pad_align_noc_addr = get_noc_addr(pad_align_addr);
+    const uint32_t pad_val_addr = cb_pad_exp.get_read_ptr();
+    const uint32_t pad_align_addr = cb_pad_align_exp.get_read_ptr();
 
     fill_pad_cb_with_val(cb_pad, stick_size_padded, packed_pad_value);
 
@@ -114,19 +111,30 @@ void kernel_main() {
         for (uint32_t i = 0; i < num_sticks_per_barrier && iter < num_sticks_per_core; ++i, ++iter) {
             bool read_stick = (curr_h >= front_pad_h and curr_h < H) and (curr_c >= front_pad_c and curr_c < C) and
                               (curr_n >= front_pad_n and curr_n < N);
-            noc_async_read(pad_val_noc_addr, l1_write_addr, stick_size_padded);
-            noc_async_read_barrier();
+            {
+                CoreLocalMem<uint32_t> dst(l1_write_addr);
+                noc.async_read(
+                    UnicastEndpoint{},
+                    dst,
+                    stick_size_padded,
+                    {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+                     .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+                     .addr = pad_val_addr},
+                    {.offset_bytes = 0});
+                noc.async_read_barrier();
+            }
             if (read_stick) {
                 if constexpr (front_padding) {  // Read noc into cb_pad_align l1
                     uint32_t temp_addr = cb_pad_align_exp.get_write_ptr();
                     read_input_pages_into_l1(
+                        noc,
                         s,
                         i_page,
                         temp_addr,
                         num_input_pages_in_row,
                         input_page_size,
                         size_of_valid_data_in_last_input_page_in_row);
-                    noc_async_read_barrier();
+                    noc.async_read_barrier();
                     memmove(
                         (void*)(l1_write_addr + stick_size_padded_front),
                         (void*)(cb_pad_align_exp.get_read_ptr()),
@@ -134,16 +142,26 @@ void kernel_main() {
                 } else if constexpr (unaligned) {
                     uint32_t temp_addr = cb_pad_align_exp.get_write_ptr();
                     read_input_pages_into_l1(
+                        noc,
                         s,
                         i_page,
                         temp_addr,
                         num_input_pages_in_row,
                         input_page_size,
                         size_of_valid_data_in_last_input_page_in_row);
-                    noc_async_read_barrier();
-                    noc_async_read(pad_align_noc_addr, l1_write_addr, stick_size_bytes);
+                    noc.async_read_barrier();
+                    CoreLocalMem<uint32_t> dst(l1_write_addr);
+                    noc.async_read(
+                        UnicastEndpoint{},
+                        dst,
+                        stick_size_bytes,
+                        {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+                         .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+                         .addr = pad_align_addr},
+                        {.offset_bytes = 0});
                 } else {
                     read_input_pages_into_l1(
+                        noc,
                         s,
                         i_page,
                         l1_write_addr,
@@ -163,7 +181,7 @@ void kernel_main() {
                 }
             }
         }
-        noc_async_read_barrier();
+        noc.async_read_barrier();
         cb_in0_exp.push_back(num_sticks_per_barrier);
     }
 }

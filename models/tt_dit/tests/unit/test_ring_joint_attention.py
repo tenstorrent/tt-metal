@@ -590,7 +590,11 @@ def run_test_ring_joint_sdpa(
         nh = math.ceil(nh / up_factor) * up_factor
         logger.info(f"Rounding up nh from {orig_nh} to {nh} so that it divides evenly by up_factor={up_factor}.")
     mesh_device_shape = list(mesh_device.shape)
-    assert mesh_device_shape[rp_axis] >= rp_factor and mesh_device_shape[up_axis] >= up_factor
+    if not (mesh_device_shape[rp_axis] >= rp_factor and mesh_device_shape[up_axis] >= up_factor):
+        pytest.skip(
+            f"Mesh shape {mesh_device.shape} cannot satisfy parallel config "
+            f"rp_axis={rp_axis} rp_factor={rp_factor}, up_axis={up_axis} up_factor={up_factor}"
+        )
 
     submesh = create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_factor)
 
@@ -668,6 +672,23 @@ mesh_device_map = {
     "bh_qb_ge": [(2, 2), 2],
 }
 
+
+@pytest.fixture(scope="function")
+def mesh_shape_or_skip(request):
+    """Skip test when requested mesh shape cannot be satisfied, without opening a mesh device."""
+    param = request.param
+
+    assert isinstance(param, tuple)
+    num_devices_requested = param[0] * param[1]
+
+    if not ttnn.using_distributed_env() and num_devices_requested > ttnn.get_num_devices():
+        pytest.skip(
+            f"Requested more devices {num_devices_requested} than available {ttnn.get_num_devices()}. Test not applicable for machine"
+        )
+
+    return param
+
+
 all_parallel_configs = list(set(config for configs in parallel_config_map.values() for config in configs.values()))
 
 
@@ -743,11 +764,22 @@ def test_ring_joint_sdpa(
 
 
 @pytest.mark.parametrize(
-    "mesh_device_id",
-    mesh_device_map.keys(),
+    "mesh_device_id, mesh_shape_or_skip",
+    [(k, v[0]) for k, v in mesh_device_map.items()],
     ids=mesh_device_map.keys(),
+    indirect=["mesh_shape_or_skip"],
 )
-def test_ring_joint_sdpa_perf_table(mesh_device_id):
+@pytest.mark.skip(
+    reason=(
+        "Calling pytest within pytest in ttnn is problematic right now. "
+        "The parent process maintains an open handle to the device which prevents the child process "
+        "from using the device, leading to deadlock. "
+        "TODO: This test should be re-enabled when functionality for releasing handles is exposed in ttnn "
+        "(currently this exists in C++ as release_ownership but does not exist in python at the moment). "
+        "Also, this test doesn't actually test anything so maybe we need to actually do some assertions that might make sense here."
+    )
+)
+def test_ring_joint_sdpa_perf_table(mesh_device_id, mesh_shape_or_skip):
     results = []
     for model_input_id, model_input_shape in benchmark_model_input_shapes.items():
         parallel_config = parallel_config_map[mesh_device_id][model_input_id]
@@ -889,7 +921,11 @@ def test_ring_joint_sdpa_shapes(
     reset_seeds,
 ):
     mesh_device_shape = list(mesh_device.shape)
-    assert mesh_device_shape[rp_axis] >= rp_factor and mesh_device_shape[up_axis] >= up_factor
+    if not (mesh_device_shape[rp_axis] >= rp_factor and mesh_device_shape[up_axis] >= up_factor):
+        pytest.skip(
+            f"Mesh shape {mesh_device.shape} cannot satisfy parallel config "
+            f"rp_axis={rp_axis} rp_factor={rp_factor}, up_axis={up_axis} up_factor={up_factor}"
+        )
 
     submesh = create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_factor)
 
@@ -1120,6 +1156,10 @@ wh_glx_unit_test_params = pytest.mark.parametrize(
     ],
 )
 @pytest.mark.parametrize("mesh_device, num_links", [mesh_device_map["wh_glx"]], ids=["8x4"], indirect=["mesh_device"])
+@pytest.mark.skipif(
+    ttnn.cluster.get_cluster_type() not in (ttnn.cluster.ClusterType.GALAXY, ttnn.cluster.ClusterType.TG),
+    reason="test_ring_joint_sdpa_dit_wh_glx requires a Wormhole Galaxy (6U/TG) cluster",
+)
 def test_ring_joint_sdpa_dit_wh_glx(
     mesh_device,
     input_shape,
@@ -1198,6 +1238,10 @@ bh_glx_unit_test_params = pytest.mark.parametrize(
     ],
 )
 @pytest.mark.parametrize("mesh_device, num_links", [mesh_device_map["bh_glx"]], ids=["8x4"], indirect=["mesh_device"])
+@pytest.mark.skipif(
+    ttnn.cluster.get_cluster_type() != ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
+    reason="test_ring_joint_sdpa_dit_bh_glx requires a Blackhole Galaxy cluster",
+)
 def test_ring_joint_sdpa_dit_bh_glx(
     mesh_device,
     input_shape,

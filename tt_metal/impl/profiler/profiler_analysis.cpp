@@ -12,6 +12,7 @@
 #include <nlohmann/json.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/profiler.hpp>
+#include <tt_metal.hpp>
 #include <fstream>
 
 #include "context/metal_env_accessor.hpp"
@@ -21,6 +22,7 @@
 #include "impl/device/device_manager.hpp"
 #include "profiler_analysis.hpp"
 #include "profiler_state_manager.hpp"
+#include <impl/dispatch/data_collection.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 
@@ -58,6 +60,28 @@ NLOHMANN_JSON_SERIALIZE_ENUM(
 }  // namespace tracy
 
 namespace tt::tt_metal {
+
+namespace {
+
+uint32_t get_available_worker_core_count_for_program(
+    ChipId chip_id,
+    uint64_t encoded_runtime_host_id,
+    MetalEnv& env,
+    uint8_t num_hw_cqs,
+    const DispatchCoreConfig& dispatch_core_config) {
+    const auto decoded = detail::DecodePerDeviceProgramID(encoded_runtime_host_id);
+    const std::optional<tt::ProgramSubDeviceInfo> sub_device_info =
+        tt::GetProgramSubDevice(chip_id, decoded.base_program_id);
+    if (sub_device_info.has_value() && sub_device_info->num_available_worker_cores > 0) {
+        return sub_device_info->num_available_worker_cores;
+    }
+
+    const CoreCoord compute_grid_size =
+        tt::get_compute_grid_size(MetalEnvAccessor(env).impl(), chip_id, num_hw_cqs, dispatch_core_config);
+    return compute_grid_size.x * compute_grid_size.y;
+}
+
+}  // namespace
 
 namespace detail {
 
@@ -310,9 +334,8 @@ getMetaDataForPrograms(const std::vector<std::reference_wrapper<const tracy::TTD
                 tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_num_hw_cqs();
             const DispatchCoreConfig& dispatch_core_config =
                 tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-            const CoreCoord compute_grid_size = tt::get_compute_grid_size(
-                MetalEnvAccessor(env).impl(), marker.chip_id, num_hw_cqs, dispatch_core_config);
-            const uint32_t num_available_worker_cores = compute_grid_size.x * compute_grid_size.y;
+            const uint32_t num_available_worker_cores = get_available_worker_core_count_for_program(
+                static_cast<ChipId>(marker.chip_id), marker.runtime_host_id, env, num_hw_cqs, dispatch_core_config);
 
             program_execution_uid_to_meta_data[program_execution_uid] = {
                 .device_id = static_cast<ChipId>(marker.chip_id),

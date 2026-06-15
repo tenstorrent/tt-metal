@@ -63,9 +63,13 @@ DispatchKernel::DispatchKernel(
     TT_FATAL(
         noc_selection.downstream_noc == tt_metal::k_dispatch_downstream_noc,
         "Invalid downstream NOC specified for Dispatcher kernel");
-    TT_FATAL(
-        noc_selection.upstream_noc != noc_selection.downstream_noc,
-        "Dispatcher kernel cannot have identical upstream and downstream NOCs.");
+    // Quasar only has a single NOC
+    if (descriptor.cluster().arch() != tt::ARCH::QUASAR) {
+        TT_FATAL(
+            noc_selection.upstream_noc != noc_selection.downstream_noc,
+            "Dispatcher kernel cannot have identical upstream and downstream NOCs.");
+    }
+
     static_config_.is_h_variant = h_variant;
     static_config_.is_d_variant = d_variant;
     uint16_t channel = descriptor.cluster().get_assigned_channel_for_device(device_id);
@@ -85,6 +89,7 @@ DispatchKernel::DispatchKernel(
         type = DISPATCH_D;
     }
     this->kernel_type_ = FDKernelType::DISPATCH;
+    this->send_to_brisc_ = true;
     // Log dispatch core info based on virtual core to inspector
     auto virtual_core = this->GetVirtualCore();
     Inspector::set_dispatch_core_info(virtual_core, type, cq_id, device_id, servicing_device_id);
@@ -580,8 +585,7 @@ void DispatchKernel::CreateKernel() {
 
     // Compile at Os on IERISC to fit in code region.
     auto optimization_level = (GetCoreType() == CoreType::WORKER) ? KernelBuildOptLevel::O2 : KernelBuildOptLevel::Os;
-    configure_kernel_variant(
-        dispatch_kernel_file_names[DISPATCH], compile_args, defines, false, true, false, optimization_level);
+    configure_kernel_variant(dispatch_kernel_file_names[DISPATCH], compile_args, defines, optimization_level);
 }
 
 void DispatchKernel::ConfigureCore() {

@@ -289,7 +289,6 @@ Tensor untilize_with_unpadding(
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config,
     bool use_multicore,
     bool fp32_dest_acc_en,
-    bool enough_space_width,
     bool enough_space_height,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     return ttnn::device_operation::launch<UntilizeWithUnpaddingDeviceOperation>(
@@ -298,7 +297,6 @@ Tensor untilize_with_unpadding(
             .output_mem_config = output_mem_config.value_or(input_tensor.memory_config()),
             .use_multicore = use_multicore,
             .fp32_dest_acc_en = fp32_dest_acc_en,
-            .enough_space_width = enough_space_width,
             .enough_space_height = enough_space_height,
             .sub_core_grids = sub_core_grids},
         input_tensor);

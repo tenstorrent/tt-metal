@@ -98,7 +98,8 @@ void DispatchQueryManager::reset(DispatchCoreConfig& dispatch_core_config, uint8
         (num_hw_cqs == 1 or dispatch_core_config_.get_dispatch_core_type() == DispatchCoreType::WORKER);
     distributed_dispatcher_ =
         (num_hw_cqs == 1 and dispatch_core_config_.get_dispatch_core_type() == DispatchCoreType::ETH);
-    go_signal_noc_ = dispatch_s_enabled_ ? NOC::NOC_1 : NOC::NOC_0;
+    const auto arch = MetalEnvAccessor(env_).impl().get_cluster().arch();
+    go_signal_noc_ = (dispatch_s_enabled_ && arch != tt::ARCH::QUASAR) ? NOC::NOC_1 : NOC::NOC_0;
     // Reset the dispatch cores reported by the manager. Will be re-populated when the associated query is made
     dispatch_cores_ = {};
     // Populate dispatch

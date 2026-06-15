@@ -32,11 +32,15 @@ unit_tests_legacy:
 #  - filter: "*SingleDmL1Write*"
 #    config: 1x3
 
-unit_tests_llk:
-  - filter: "*SingleCoreSingleMeshDeviceSfpuParameterizedFixture*TensixSfpuCompute/10"
-    config: 1x3
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
+# these tests custom TestParamInfo name lambda, so the parameter
+#  instances are named relu_1tiles, exponential_1tiles, … - not /0, /1,
+# … /10
+# This breaks gitlab
+# unit_tests_llk:
+#   - filter: "*SingleCoreSingleMeshDeviceSfpuParameterizedFixture*TensixSfpuCompute/10"
+#     config: 1x3
+#     env:
+#       TT_METAL_SLOW_DISPATCH_MODE: 1
 
 unit_tests_api:
   - filter: "*TensixSingleCoreDirectDramReaderDatacopyWriter"

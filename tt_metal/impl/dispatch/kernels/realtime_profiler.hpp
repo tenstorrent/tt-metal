@@ -25,6 +25,7 @@ constexpr uint16_t REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID = 0;
 // Program ID FIFO size
 constexpr uint32_t PROGRAM_ID_FIFO_SIZE = 32;
 
+#ifndef ARCH_QUASAR
 // Append a program ID to the circular buffer embedded in realtime_profiler_msg_t.
 // Returns true if successful, false if the buffer is full.
 // The control block (including this FIFO) lives in dispatch-core-local L1, assigned by
@@ -115,3 +116,19 @@ void write_buffer_id(volatile tt_l1_ptr realtime_profiler_msg_t* msg, uint32_t i
         msg->kernel_end_b.id = id;
     }
 }
+#else
+FORCE_INLINE
+bool program_id_fifo_append(volatile tt_l1_ptr realtime_profiler_msg_t*, uint32_t) { return false; }
+
+FORCE_INLINE
+bool program_id_fifo_pop(volatile tt_l1_ptr realtime_profiler_msg_t*, uint32_t*) { return false; }
+
+FORCE_INLINE
+void record_realtime_timestamp(volatile tt_l1_ptr realtime_profiler_msg_t*, bool) {}
+
+FORCE_INLINE
+uint32_t pop_program_id(volatile tt_l1_ptr realtime_profiler_msg_t*) { return 0; }
+
+FORCE_INLINE
+void write_buffer_id(volatile tt_l1_ptr realtime_profiler_msg_t*, uint32_t) {}
+#endif

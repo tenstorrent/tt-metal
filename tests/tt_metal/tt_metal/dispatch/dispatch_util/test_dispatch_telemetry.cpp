@@ -79,6 +79,9 @@ class DispatchTelemetryHostL1WaitTest : public DispatchTelemetryReadApiTest {
 protected:
     void SetUp() override {
         DispatchTelemetryReadApiTest::SetUp();
+        if (IsSkipped()) {
+            return;
+        }
 
         release_addr_ = devices_.at(0)->allocator()->get_base_allocator_addr(HalMemType::L1);
         started_addr_ = release_addr_ + sizeof(uint32_t);

@@ -86,7 +86,8 @@ void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const {
     std::vector<uint32_t> host_buffer(cores_.num_cores(), reset_value);
     auto mesh_buffer = buffer_.get_mesh_buffer();
     bool using_fast_dispatch = MetalContext::instance().rtoptions().get_fast_dispatch();
-    if (using_fast_dispatch) {
+    bool using_simulator = MetalContext::instance().rtoptions().get_simulator_enabled();
+    if (using_fast_dispatch && !using_simulator) {
         distributed::EnqueueWriteMeshBuffer(
             mesh_buffer->device()->mesh_command_queue(), mesh_buffer, host_buffer, true);
     } else {

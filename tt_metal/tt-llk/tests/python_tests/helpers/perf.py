@@ -192,7 +192,7 @@ def dump_scatter(testname: str, report: PerfReport):
 def get_unique_base_names(input_dir: Path):
     """
     Extract unique base filenames from files matching *.gw*.csv pattern.
-    For example: perf_unpack_untilize.gw0.csv -> perf_unpack_untilize
+    For example: perf_pack_untilize.gw0.csv -> perf_pack_untilize
     """
 
     csv_files = list(input_dir.glob("*.gw*.csv")) + list(

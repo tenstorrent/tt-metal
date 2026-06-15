@@ -42,6 +42,9 @@ from helpers.utils import passed_test
         [
             DataFormat.Float16_b,
             DataFormat.MxFp4,
+            DataFormat.MxInt8,
+            DataFormat.MxInt4,
+            DataFormat.MxInt2,
         ],
     ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
@@ -86,6 +89,7 @@ def test_semaphore_sync_quasar(
         math_fidelity,
         tile_cnt,
         input_format=formats.input_format,
+        dest_acc=dest_acc,
     )
 
     configuration = TestConfig(

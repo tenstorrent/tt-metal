@@ -232,17 +232,14 @@ tt::tt_metal::ProgramDescriptor SoftmaxDeviceOperation::SoftmaxProgramFactoryGen
             TT_THROW("Core not in specified core ranges");
         }
 
-        float scaler = 1.0f;
         uint32_t mask_h = input.logical_shape()[-2] % tile_height;
         if (mask_h == 0) {
             mask_h = tile_height;
         }
 
-        // BufferBinding is safe: scaler is constant 1.0f (not attribute-derived),
-        // and mask_h/num_tiles_per_core/tile_offset/Ht/Wt are shape-derived (same on
-        // cache hit because shape is part of the cache key).
-        reader_desc.emplace_runtime_args(
-            core, {input.buffer(), num_tiles_per_core, tile_offset, Ht, Wt, std::bit_cast<uint32_t>(scaler), mask_h});
+        // Reader computes the reduce scaler in-kernel; only shape-derived args are passed
+        // (same on cache hit because shape is part of the cache key).
+        reader_desc.emplace_runtime_args(core, {input.buffer(), num_tiles_per_core, tile_offset, Ht, Wt, mask_h});
 
         writer_desc.emplace_runtime_args(core, {output_tensor.buffer(), num_tiles_per_core, tile_offset, Ht, Wt});
 

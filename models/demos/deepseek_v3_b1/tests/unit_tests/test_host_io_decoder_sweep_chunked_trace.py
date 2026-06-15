@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
@@ -47,7 +48,8 @@ def _require_host_io_sweep_env() -> None:
 def _assert_chunked_trace_is_readable(trace_root: Path, model_id: str, prompt_id: str) -> None:
     trace_dir = _trace_dir(trace_root, model_id, prompt_id)
     if not (trace_dir / "index.json").is_file():
-        pytest.fail(f"chunked 128K trace is not present: {trace_dir}")
+        logger.warning(f"chunked 128K trace is not present: {trace_dir}; this test can only be run on exabox machines")
+        pytest.skip(f"chunked 128K trace is not present: {trace_dir} (only available on exabox machines)")
 
     reader = ChunkedTraceReader(trace_dir)
     assert reader.index["layout"] == "chunked_group_a_v1"

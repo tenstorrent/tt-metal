@@ -30,6 +30,7 @@ from constants import (
 )
 from matrix_runner_config import (
     GENERATION_MANIFEST_FILENAME,
+    LEAD_MODELS_BATCH_POLICY,
     get_lead_models_test_group_name_for_hardware_group,
     get_runner_config,
     get_test_group_name_for_hardware_group,
@@ -199,10 +200,16 @@ def compute_validation_matrix(
         runner_config = get_runner_config(test_group_name)
         trace_id_list = sorted(trace_ids_by_hardware.get(hardware_group, []))
 
+        solo_modules = set(LEAD_MODELS_BATCH_POLICY.get("solo_modules", []))
+
         if needs_mesh_split:
             for mesh_str, mesh_modules in sorted(mesh_to_modules.items()):
                 sorted_modules = sorted(mesh_modules)
-                runner_batches = chunk_modules(sorted_modules, batch_size)
+                solo = [m for m in sorted_modules if m in solo_modules]
+                rest = [m for m in sorted_modules if m not in solo_modules]
+                runner_batches = chunk_modules(rest, batch_size)
+                for sm in solo:
+                    runner_batches.append(sm)
                 total_batches = len(runner_batches)
                 mesh_label = f".{mesh_str}" if mesh_str else ""
 
@@ -223,7 +230,11 @@ def compute_validation_matrix(
                         entry["mesh_device_shape"] = mesh_str
                     include.append(entry)
         else:
-            runner_batches = chunk_modules(base_modules, batch_size)
+            solo = [m for m in base_modules if m in solo_modules]
+            rest = [m for m in base_modules if m not in solo_modules]
+            runner_batches = chunk_modules(rest, batch_size)
+            for sm in solo:
+                runner_batches.append(sm)
             total_batches = len(runner_batches)
             for index, batch in enumerate(runner_batches, start=1):
                 include.append(

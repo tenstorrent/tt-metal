@@ -177,6 +177,8 @@ HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode) {
     eth_debug_regs[ttsl::as_underlying_type<EthDebugReg>(EthDebugReg::ERISC0_RESET_PC)] = AERISC_RESET_PC;
     eth_debug_regs[ttsl::as_underlying_type<EthDebugReg>(EthDebugReg::ERISC1_RESET_PC)] = SUBORDINATE_AERISC_RESET_PC;
     eth_debug_regs[ttsl::as_underlying_type<EthDebugReg>(EthDebugReg::RISC_SOFT_RESET)] = RISCV_DEBUG_REG_SOFT_RESET_0;
+    eth_debug_regs[ttsl::as_underlying_type<EthDebugReg>(EthDebugReg::ERR_STAT)] =
+        ETH_CORE_A_ETH_CTRL_A_ERR_STAT_REG_ADDR;
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes;
     std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names;

@@ -15,7 +15,7 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 struct IndexInfo {
     bool is_defined{};
     tt::tt_metal::TensorAccessorArgs args;
-    uint32_t address{};
+    tt::tt_metal::Buffer* buffer{};
     uint32_t unit_size{};
 };
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -93,7 +93,7 @@ tt::tt_metal::ProgramDescriptor MorehGetItemOperation::MorehGetItemTilizedFactor
             const auto& index = index_tensors[i];
 
             index_info[dim].is_defined = true;
-            index_info[dim].address = index.buffer()->address();
+            index_info[dim].buffer = index.buffer();
             index_info[dim].args = tt::tt_metal::TensorAccessorArgs(index.buffer());
             index_info[dim].unit_size = index.element_size();
         }
@@ -261,11 +261,11 @@ tt::tt_metal::ProgramDescriptor MorehGetItemOperation::MorehGetItemTilizedFactor
                 {
                     // buffers
                     input.buffer(),
-                    index_info[0].address,
-                    index_info[1].address,
-                    index_info[2].address,
-                    index_info[3].address,
-                    index_info[4].address,
+                    index_info[0].buffer,
+                    index_info[1].buffer,
+                    index_info[2].buffer,
+                    index_info[3].buffer,
+                    index_info[4].buffer,
 
                     // input
                     input_stick_idx_stride_n,
@@ -360,7 +360,7 @@ tt::tt_metal::ProgramDescriptor MorehGetItemOperation::MorehGetItemTilizedFactor
         const auto& index = index_tensors[i];
 
         index_info[dim].is_defined = true;
-        index_info[dim].address = index_tensors[i].buffer()->address();
+        index_info[dim].buffer = index_tensors[i].buffer();
         index_info[dim].args = tt::tt_metal::TensorAccessorArgs(index_tensors[i].buffer());
         index_info[dim].unit_size = index.padded_shape()[-1] * index.element_size();
     }
@@ -509,11 +509,11 @@ tt::tt_metal::ProgramDescriptor MorehGetItemOperation::MorehGetItemTilizedFactor
             {
                 // buffers
                 input.buffer(),
-                index_info[0].address,
-                index_info[1].address,
-                index_info[2].address,
-                index_info[3].address,
-                index_info[4].address,
+                index_info[0].buffer,
+                index_info[1].buffer,
+                index_info[2].buffer,
+                index_info[3].buffer,
+                index_info[4].buffer,
 
                 // input
                 input_stick_idx_stride_n,

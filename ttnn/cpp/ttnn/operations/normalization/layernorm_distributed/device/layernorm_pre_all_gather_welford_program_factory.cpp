@@ -30,13 +30,15 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
     const bool is_rmsnorm = operation_attributes.norm_type == LayerNormDistributedType::RMSNORM;
     const uint32_t tile_height = a.tensor_spec().tile().get_height();
     const uint32_t tile_width = a.tensor_spec().tile().get_width();
-    const auto& shape = a.padded_shape();
-    const uint32_t W = shape[-1], H = shape[-2];
-    const uint32_t HW = H * W;
-    const uint32_t NC = a.physical_volume() / HW;
+    const auto& logical_shape = a.logical_shape();
+    const auto& padded_shape = a.padded_shape();
+    const uint32_t W = logical_shape[-1];
+    const uint32_t padded_W = padded_shape[-1], padded_H = padded_shape[-2];
+    const uint32_t padded_HW = padded_H * padded_W;
+    const uint32_t NC = a.physical_volume() / padded_HW;
 
-    const uint32_t Wt = W / tile_width;
-    const uint32_t Ht = H / tile_height;
+    const uint32_t Wt = padded_W / tile_width;
+    const uint32_t Ht = padded_H / tile_height;
 
     IDevice* device = a.device();
     auto grid_size = device->compute_with_storage_grid_size();
@@ -47,7 +49,8 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
 
     log_debug(tt::LogOp, "is_rmsnorm: {}", is_rmsnorm);
     log_debug(tt::LogOp, "W: {}", W);
-    log_debug(tt::LogOp, "H: {}", H);
+    log_debug(tt::LogOp, "padded_W: {}", padded_W);
+    log_debug(tt::LogOp, "padded_H: {}", padded_H);
     log_debug(tt::LogOp, "num_tile_rows: {}", num_tile_rows);
     log_debug(tt::LogOp, "Wt: {}", Wt);
     log_debug(tt::LogOp, "Ht: {}", Ht);

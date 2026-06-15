@@ -4,7 +4,10 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 // Make n reads defined by num_reads
 // Writes to Specified Circular Buffers in L1
@@ -39,6 +42,7 @@ void kernel_main() {
     }
 
     CircularBuffer cb_in(cb_id_in);
+    Noc noc;
 
     uint32_t curr_tensor = start_tensor;
     uint32_t curr_tensor_id = start_tensor_id;
@@ -50,19 +54,26 @@ void kernel_main() {
         // For width concat we know we start at curr_tensor=0
         // num_pages_per_block[curr_tensor] is always one for width concat
         for (uint32_t j = 0; j < num_tensors; ++j) {
-            auto read_addr =
-                abstract_tensor_accessor_wrappers[curr_tensor].get_noc_addr(page_id_per_tensor[curr_tensor]);
             auto page_size = kernel_compile_time_args[page_size_base_idx + curr_tensor];
-            noc_async_read(read_addr, l1_write_addr, page_size);
+            noc.async_read(
+                abstract_tensor_accessor_wrappers[curr_tensor],
+                CoreLocalMem<uint8_t>(l1_write_addr),
+                page_size,
+                {.page_id = page_id_per_tensor[curr_tensor]},
+                {});
             l1_write_addr += page_size;
             page_id_per_tensor[curr_tensor]++;
             curr_tensor++;
         }
         curr_tensor = 0;
 #else
-        auto read_addr = abstract_tensor_accessor_wrappers[curr_tensor].get_noc_addr(page_id_per_tensor[curr_tensor]);
         auto page_size = kernel_compile_time_args[page_size_base_idx + curr_tensor];
-        noc_async_read(read_addr, l1_write_addr, page_size);
+        noc.async_read(
+            abstract_tensor_accessor_wrappers[curr_tensor],
+            CoreLocalMem<uint8_t>(l1_write_addr),
+            page_size,
+            {.page_id = page_id_per_tensor[curr_tensor]},
+            {});
 
         page_id_per_tensor[curr_tensor]++;
         curr_tensor_id++;
@@ -75,7 +86,7 @@ void kernel_main() {
             }
         }
 #endif
-        noc_async_read_barrier();
+        noc.async_read_barrier();
         cb_in.push_back(ublock_size_pages);
     }
 }

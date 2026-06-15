@@ -643,22 +643,6 @@ def run_conv1d_replicate_pad(
         (1, 64, 32, 512, 3, 1, 2, 2, 1),
         # depthwise (groups == in_channels == out_channels) with replicate pad.
         (1, 32, 32, 512, 3, 1, 1, 1, 32),
-        pytest.param(
-            # depthwise with kernel_size > 1 (Mamba-style d_conv = 4): exercises the 1d-depthwise
-            # path that was previously gated on kernel_size == 1. See PR #44490 (issue #42163)
-            1,
-            512,
-            512,
-            512,
-            4,
-            1,
-            (1, 2),
-            1,
-            512,
-            marks=pytest.mark.skip(
-                reason="Issue #45392: L1 CB allocation overflow for 512-channel depthwise conv1d with bias"
-            ),
-        ),
     ),
 )
 def test_conv1d_replicate_pad(

@@ -35,7 +35,7 @@ void kernel_main() {
         cbout0.reserve_back(ublock_size_tiles);
         cbout1.reserve_back(ublock_size_tiles);
 
-        acquire_dst();
+        tile_regs_acquire();
 
         // ------------------------- Copy to DEST -----------------------------
 
@@ -86,6 +86,9 @@ void kernel_main() {
             add_tiles(cb_in1, cb_in0, i, i, i);
         }
 
+        tile_regs_commit();
+        tile_regs_wait();
+
         // ----------------------- Pack to 2 outs -----------------------------
 
         // Reconfig for L1 accumulation with old calc values
@@ -106,7 +109,7 @@ void kernel_main() {
         pack_reconfig_l1_acc(false);
 
         pack_tile_block(0, cb_out1, ublock_size_tiles);
-        release_dst();
+        tile_regs_release();
 
         cbin0.pop_front(ublock_size_tiles);
         cbin1.pop_front(ublock_size_tiles);

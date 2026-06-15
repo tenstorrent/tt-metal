@@ -23,20 +23,22 @@ void kernel_main() {
 #ifndef BCAST_SCALAR
                 cb_wait_front(tt::CBIndex::c_1, onetile);
 #endif
-                cb_reserve_back(tt::CBIndex::c_16, onetile);
-
-                acquire_dst();
-
                 cb_wait_front(tt::CBIndex::c_0, onetile);
 
+                tile_regs_acquire();
                 BCAST_OP<BroadcastType::SCALAR>(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0);
-                pack_tile(0, tt::CBIndex::c_16);
+                tile_regs_commit();
 
                 cb_pop_front(tt::CBIndex::c_0, onetile);
 #ifndef BCAST_SCALAR
                 cb_pop_front(tt::CBIndex::c_1, onetile);
 #endif
-                release_dst();
+
+                cb_reserve_back(tt::CBIndex::c_16, onetile);
+
+                tile_regs_wait();
+                pack_tile(0, tt::CBIndex::c_16);
+                tile_regs_release();
 
                 cb_push_back(tt::CBIndex::c_16, onetile);
             }

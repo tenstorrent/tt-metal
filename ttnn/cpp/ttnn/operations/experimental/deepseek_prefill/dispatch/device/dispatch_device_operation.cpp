@@ -37,8 +37,8 @@ void DispatchDeviceOperation::validate_on_program_cache_miss(
         "Weights tensor must be BFLOAT16, got {}",
         tensor_args.weights_tensor.dtype());
     TT_FATAL(
-        tensor_args.indices_tensor.dtype() == DataType::INT32 || tensor_args.indices_tensor.dtype() == DataType::UINT32,
-        "Indices tensor must be INT32 or UINT32, got {}",
+        tensor_args.indices_tensor.dtype() == DataType::UINT16,
+        "Indices tensor must be UINT16 (matching moe_grouped_topk output), got {}",
         tensor_args.indices_tensor.dtype());
     TT_FATAL(
         tensor_args.expert_offsets_tensor.dtype() == DataType::INT32 ||
@@ -93,8 +93,10 @@ DispatchDeviceOperation::spec_return_value_t DispatchDeviceOperation::compute_ou
     auto dispatch_buffer_shape = ttnn::Shape({1, 1, max_dispatch_buffer_token_size, hidden_dim});
     auto dispatch_metadata_shape = ttnn::Shape({1, 1, max_dispatch_buffer_token_size, metadata_len});
 
-    // FP8 dispatch uses UINT8 (1 byte/element) for DRAM allocation; actual content is Fp8_e4m3.
-    auto dispatch_buffer_dtype = operation_attributes.use_fp8_dispatch ? DataType::UINT8 : DataType::BFLOAT16;
+    // FP8 dispatch emits Fp8_e4m3 (1 byte/element); DataType::FP8_E4M3 maps directly to
+    // tt::DataFormat::Fp8_e4m3 via datatype_to_dataformat_converter, so downstream CBs created
+    // with detail::create_tensor_cb(output_tensor, ...) pick up the right dtype/page-size.
+    auto dispatch_buffer_dtype = operation_attributes.use_fp8_dispatch ? DataType::FP8_E4M3 : DataType::BFLOAT16;
 
     // Create TensorSpec objects with correct dtypes
     auto dispatch_buffer_spec = TensorSpec(
@@ -154,7 +156,8 @@ prefill_dispatch(
     const ttnn::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set,
     bool use_l1_small_for_semaphores,
-    bool use_fp8_dispatch) {
+    bool use_fp8_dispatch,
+    uint32_t num_untilizers_per_sender) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::dispatch::DispatchDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -170,7 +173,8 @@ prefill_dispatch(
             .output_mem_config = memory_config,
             .worker_core_range_set = worker_core_range_set,
             .use_l1_small_for_semaphores = use_l1_small_for_semaphores,
-            .use_fp8_dispatch = use_fp8_dispatch},
+            .use_fp8_dispatch = use_fp8_dispatch,
+            .num_untilizers_per_sender = num_untilizers_per_sender},
         OperationType::tensor_args_t{
             .input_tensor = input_tensor,
             .weights_tensor = weights_tensor,

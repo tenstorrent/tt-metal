@@ -74,6 +74,16 @@ ALWI void matmul_block_math_dynamic_throttle(
 
 // clang-format off
 /**
+ * Which matmul init to call, and when:
+ *
+ * Pick the init that matches the matmul you run, and call it once before the first matmul:
+ * - matmul_tiles (single tile)    -> mm_init
+ * - matmul_block (block of tiles) -> mm_block_init
+ *
+ * The _with_dt / _with_both_dt variants also reconfigure input data formats before init:
+ * - Use _with_dt when the input data format changed since the last init (it reconfigures srcA first).
+ * - Use _with_both_dt when both input data formats changed (it reconfigures srcA and srcB).
+ *
  * Initialization for matmul_tiles operation. Must be called before matmul_tiles.
  *
  * Return value: None
@@ -111,10 +121,11 @@ ALWI void mm_init(
 
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
     MATH((llk_math_pack_sync_init()));
-    MATH((llk_math_matmul_init<MATH_FIDELITY>()));
+    MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id)));
 
     PACK((llk_pack_hw_configure(out_cb_id)));
     PACK((llk_pack_init(out_cb_id)));
+    PACK((llk_pack_dest_init()));
 #endif
 }
 
@@ -190,7 +201,7 @@ ALWI void mm_init_short(
 #else
     LLK_ASSERT(transpose == 0, "Matmul transpose not yet implemented for Quasar");
     UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id)));
-    MATH((llk_math_matmul_init<MATH_FIDELITY>()));
+    MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id)));
 #endif
 }
 
@@ -268,10 +279,11 @@ ALWI void mm_block_init(
 
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
     MATH((llk_math_pack_sync_init()));
-    MATH((llk_math_matmul_init<MATH_FIDELITY>(ct_dim, rt_dim)));
+    MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, ct_dim, rt_dim)));
 
     PACK((llk_pack_hw_configure(out_cb_id)));
     PACK((llk_pack_init(out_cb_id)));
+    PACK((llk_pack_dest_init()));
 #endif
 }
 
@@ -282,6 +294,11 @@ ALWI void mm_block_init(
  * must be in acquired state via *acquire_dst* call. This call is blocking and
  * is only available on the compute engine.
  *
+ * A block is a rectangle of tiles: A is rt_dim x kt_dim tiles, B is kt_dim x ct_dim tiles, and the
+ * output C is rt_dim x ct_dim tiles. So a block is just ct_dim * rt_dim output tiles produced in one
+ * call (with kt_dim tiles along the shared inner dimension). The output must fit in DST, so the block
+ * size is limited by DST size and sync mode (see mm_block_init for the valid ct_dim/rt_dim ranges).
+ *
  * Return value: None
  *
  * | Argument       | Description                                                             | Type     | Valid Range                                    | Required |
@@ -291,7 +308,7 @@ ALWI void mm_block_init(
  * | in0_tile_index | The index of the tile in block A from the first input CB                | uint32_t | Must be less than the size of the CB           | True     |
  * | in1_tile_index | The index of the tile in block B from the second input CB               | uint32_t | Must be less than the size of the CB           | True     |
  * | idst           | The index of the tile in DST REG to which the result C will be written. | uint32_t | Must be less than the acquired size of DST REG | True     |
-* | transpose       | The transpose flag for performing transpose operation on tiles in B.    | bool     | Must be true or false                          | True     |
+ * | transpose      | The transpose flag for performing transpose operation on tiles in B.    | bool     | Must be true or false                          | True     |
  * | ct_dim         | The column dimension for the output block.                              | uint32_t | Must be equal to block B column dimension      | True     |
  * | rt_dim         | The row dimension for the output block.                                 | uint32_t | Must be equal to block A row dimension         | True     |
  * | kt_dim         | The inner dimension.                                                    | uint32_t | Must be equal to block A column dimension      | True     |
@@ -359,7 +376,7 @@ ALWI void mm_block_init_short(
 #else
     LLK_ASSERT(transpose == 0, "Matmul transpose not yet implemented for Quasar");
     UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id, ct_dim, rt_dim, kt_dim)));
-    MATH((llk_math_matmul_init<MATH_FIDELITY>(ct_dim, rt_dim)));
+    MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, ct_dim, rt_dim)));
 #endif
 }
 

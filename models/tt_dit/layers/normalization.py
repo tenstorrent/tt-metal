@@ -44,12 +44,19 @@ class RMSNorm(Module):
             self.weight = None
             self.bias = None
 
-    def forward(self, x: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor:
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        *,
+        compute_kernel_config=None,
+        program_config: ttnn.LayerNormDefaultProgramConfig | ttnn.LayerNormShardedMultiCoreProgramConfig | None = None,
+    ) -> ttnn.Tensor:
         return ttnn.experimental.dit_rms_norm_unary_fused(
             x,
             weight=self.weight.data if self.weight is not None else None,
             bias=self.bias.data if self.bias is not None else None,
             epsilon=self.norm_eps,
+            program_config=program_config,
             compute_kernel_config=compute_kernel_config,
             activation=self.fused_activation,
         )
@@ -500,3 +507,127 @@ class GroupNorm(Module):
         x = x.reshape([batch_size, height, width, channels])
 
         return x
+
+
+class GroupNorm3D(Module):
+    """``torch.nn.GroupNorm(num_groups, num_channels)`` on a 5D BTHWC tensor, dims=3
+    semantics (statistics pool over ``channels-in-group x T x H x W`` per batch).
+
+    Routes through the DRAM-interleaved ``ttnn.group_norm``. The grid is pinned at
+    construction from ``input_nhw``/``num_batches`` via
+    ``determine_expected_group_norm_dram_grid_size`` (uniform multicast groups; avoids
+    the mcast deadlock at small spatial sizes), so gamma/beta/mask are static
+    ``Parameter``s and round-trip through ``Module.save``/``load``.
+    """
+
+    def __init__(
+        self,
+        num_channels: int,
+        num_groups: int,
+        *,
+        input_nhw: int,
+        num_batches: int = 1,
+        eps: float = 1e-5,
+        mesh_device: ttnn.MeshDevice,
+        dtype: ttnn.DataType = ttnn.bfloat16,
+        use_welford: bool = True,
+    ) -> None:
+        super().__init__()
+        assert num_channels % 32 == 0, "num_channels must be divisible by tile size"
+        assert num_channels % num_groups == 0, "num_channels must be divisible by num_groups"
+
+        self.num_channels = num_channels
+        self.num_groups = num_groups
+        self.eps = eps
+        self.mesh_device = mesh_device
+        self.dtype = dtype
+        # Welford avoids the (E[x^2]-E[x]^2) precision loss when groups have nonzero mean.
+        self.use_welford = use_welford
+        self.input_nhw = input_nhw
+        self.num_batches = num_batches
+
+        self.core_grid = ttnn.determine_expected_group_norm_dram_grid_size(
+            device=mesh_device,
+            num_channels=num_channels,
+            num_groups=num_groups,
+            input_nhw=input_nhw,
+            num_batches=num_batches,
+        )
+        self.num_virtual_cols = ttnn.operations.normalization.dram_group_norm_virtual_columns(
+            self.core_grid, num_channels, num_groups
+        )
+
+        weight_shape = [1, 1, math.ceil(num_channels // self.num_virtual_cols / 32) * self.num_virtual_cols, 32]
+        block_wt = ttnn.operations.normalization.find_max_tile_span(num_channels, num_channels // num_groups, 32)
+        mask_shape = [1, num_groups, 32, 32 * block_wt]
+
+        self.weight = Parameter(total_shape=weight_shape, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype, device=mesh_device)
+        self.bias = Parameter(total_shape=weight_shape, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype, device=mesh_device)
+        self.mask = Parameter(total_shape=mask_shape, dtype=dtype, device=mesh_device)
+
+    @classmethod
+    def from_torch(
+        cls,
+        torch_ref: torch.nn.GroupNorm,
+        *,
+        input_nhw: int,
+        num_batches: int = 1,
+        mesh_device: ttnn.MeshDevice,
+        dtype: ttnn.DataType = ttnn.bfloat16,
+    ) -> GroupNorm3D:
+        module = cls(
+            num_channels=torch_ref.num_channels,
+            num_groups=torch_ref.num_groups,
+            input_nhw=input_nhw,
+            num_batches=num_batches,
+            eps=torch_ref.eps,
+            mesh_device=mesh_device,
+            dtype=dtype,
+        )
+        module.load_torch_state_dict(torch_ref.state_dict())
+        return module
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        if "weight" in state:
+            state["weight"] = ttnn.create_group_norm_weight_bias_rm(
+                state["weight"], self.num_channels, self.num_virtual_cols
+            )
+        if "bias" in state:
+            state["bias"] = ttnn.create_group_norm_weight_bias_rm(
+                state["bias"], self.num_channels, self.num_virtual_cols
+            )
+        mask = ttnn.create_group_norm_input_mask(self.num_channels, self.num_groups, self.num_virtual_cols)
+        state["mask"] = ttnn.to_torch(mask)
+
+    def forward(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
+        B, T, H, W, C = x_BTHWC.shape
+        # dims=3: pool over (channels-in-group, T, H, W) — frames share one group statistic.
+        THW = T * H * W
+        assert B == self.num_batches and B * THW == self.input_nhw, (
+            f"GroupNorm3D built for input_nhw={self.input_nhw}, num_batches={self.num_batches}; "
+            f"got B={B}, T*H*W={THW}"
+        )
+
+        if x_BTHWC.layout != ttnn.ROW_MAJOR_LAYOUT:
+            x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.tilize_with_zero_padding(ttnn.reshape(x_BTHWC, (B, 1, THW, C)), use_multicore=True)
+
+        out = ttnn.group_norm(
+            x,
+            num_groups=self.num_groups,
+            # -1 = built-in chunk heuristic. Default 1 (with pinned core_grid) overflows L1
+            # at large gathered spatial.
+            num_out_blocks=-1,
+            input_mask=self.mask.data,
+            weight=self.weight.data,
+            bias=self.bias.data,
+            epsilon=self.eps,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_layout=ttnn.TILE_LAYOUT,
+            core_grid=self.core_grid,
+            inplace=False,
+            use_welford=self.use_welford,
+        )
+
+        out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
+        return ttnn.reshape(out, (B, T, H, W, C))

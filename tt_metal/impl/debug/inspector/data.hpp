@@ -80,7 +80,7 @@ private:
 
     std::atomic<bool> kernel_path_collection_enabled{false};
     std::mutex kernel_path_mutex;
-    std::unordered_map<int, std::string> kernel_id_to_path;
+    std::unordered_map<int, std::vector<std::string>> kernel_id_to_processor_elf_paths;
 
     // fw_compile_hash needs to be atomic because it is set in MetalContext::initialize()
     std::atomic<uint64_t> fw_compile_hash;

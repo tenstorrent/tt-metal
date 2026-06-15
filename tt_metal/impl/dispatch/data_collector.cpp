@@ -131,52 +131,63 @@ void DataCollector::RecordKernelGroup(
 
 void DataCollector::RecordProgramRun(uint64_t program_id) { program_id_to_call_count[program_id]++; }
 
+void DataCollector::TieRuntimeIdToProgramId(ProgramImpl& program) {
+    // The real-time profiler currently narrows the runtime ID to 16 bits, so we do the same here.
+    uint16_t runtime_id = static_cast<uint16_t>(program.get_runtime_id());
+    uint64_t program_id = program.get_id();
+    std::lock_guard<std::mutex> lock(kernel_source_mutex_);
+    runtime_id_to_program_id_[runtime_id] = program_id;
+}
+
 void DataCollector::RecordKernelSourceMap(ProgramImpl& program) {
-    uint64_t runtime_id = program.get_runtime_id();
-    {
-        // Fast path: only take the lock long enough to check whether we have already
-        // recorded this runtime_id. The expensive kernel-walk below happens without
-        // holding the lock so we don't block the RT profiler receiver thread.
-        std::lock_guard<std::mutex> lock(runtime_id_to_kernel_sources_mutex_);
-        if (runtime_id_to_kernel_sources.contains(runtime_id)) {
-            return;
-        }
+    uint64_t program_id = program.get_id();
+    std::lock_guard<std::mutex> lock(kernel_source_mutex_);
+    if (program_id_to_kernel_sources_.contains(program_id)) {
+        return;
     }
     const auto& hal = MetalContext::instance().hal();
-    std::vector<std::string> sources;
+    std::vector<std::string_view> kernel_sources;
     for (uint32_t i = 0; i < hal.get_programmable_core_type_count(); i++) {
         for (const auto& [handle, kernel] : program.get_kernels(i)) {
-            sources.push_back(kernel->kernel_source().source_);
+            // insert(const string&) allocates only on a miss; on a hit it just returns the
+            // existing node, so this allocation is only done once per unique source.
+            const std::string& stored_path = *unique_kernel_sources_.insert(kernel->kernel_source().source_).first;
+            kernel_sources.emplace_back(stored_path);
         }
     }
-    std::lock_guard<std::mutex> lock(runtime_id_to_kernel_sources_mutex_);
-    // Re-check under the lock in case another thread beat us to it.
-    auto [it, inserted] = runtime_id_to_kernel_sources.try_emplace(runtime_id, std::move(sources));
-    (void)it;
-    (void)inserted;
+    program_id_to_kernel_sources_.emplace(program_id, std::move(kernel_sources));
 }
 
-std::string DataCollector::GetKernelSourcesForRuntimeId(uint64_t runtime_id) const {
-    std::lock_guard<std::mutex> lock(runtime_id_to_kernel_sources_mutex_);
-    auto it = runtime_id_to_kernel_sources.find(runtime_id);
-    if (it == runtime_id_to_kernel_sources.end()) {
-        return "";
-    }
-    std::string result;
-    for (size_t i = 0; i < it->second.size(); i++) {
-        if (i > 0) {
-            result += ",\n";
-        }
-        result += it->second[i];
-    }
-    return result;
-}
-
-std::vector<std::string> DataCollector::GetKernelSourcesVecForRuntimeId(uint64_t runtime_id) const {
-    std::lock_guard<std::mutex> lock(runtime_id_to_kernel_sources_mutex_);
-    auto it = runtime_id_to_kernel_sources.find(runtime_id);
-    if (it == runtime_id_to_kernel_sources.end()) {
+std::span<const std::string_view> DataCollector::GetKernelSourcesForRuntimeId(uint16_t runtime_id) const {
+    std::lock_guard<std::mutex> lock(kernel_source_mutex_);
+    auto rid_it = runtime_id_to_program_id_.find(runtime_id);
+    if (rid_it == runtime_id_to_program_id_.end()) {
         return {};
+    }
+    auto it = program_id_to_kernel_sources_.find(rid_it->second);
+    if (it == program_id_to_kernel_sources_.end()) {
+        return {};
+    }
+    return it->second;
+}
+
+void DataCollector::RecordProgramSubDevice(
+    tt::ChipId device_id,
+    uint64_t sub_device_manager_id,
+    uint64_t runtime_id,
+    SubDeviceId sub_device_id,
+    uint32_t num_available_worker_cores) {
+    std::lock_guard<std::mutex> lock(runtime_id_to_sub_device_mutex_);
+    runtime_id_to_sub_device[std::make_pair(device_id, static_cast<uint16_t>(runtime_id))] =
+        tt::ProgramSubDeviceInfo{*sub_device_id, sub_device_manager_id, num_available_worker_cores};
+}
+
+std::optional<tt::ProgramSubDeviceInfo> DataCollector::GetProgramSubDevice(
+    tt::ChipId device_id, uint64_t runtime_id) const {
+    std::lock_guard<std::mutex> lock(runtime_id_to_sub_device_mutex_);
+    auto it = runtime_id_to_sub_device.find(std::make_pair(device_id, static_cast<uint16_t>(runtime_id)));
+    if (it == runtime_id_to_sub_device.end()) {
+        return std::nullopt;
     }
     return it->second;
 }

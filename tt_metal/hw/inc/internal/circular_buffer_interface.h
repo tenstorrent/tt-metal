@@ -7,14 +7,23 @@
 #include <cstdint>
 
 #include "tt-metalium/circular_buffer_constants.h"
+#include "hostdev/dev_msgs.h"
 #include "internal/risc_attribs.h"
 
 constexpr static std::uint32_t REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE = L1_ALIGNMENT;
 
-// L1 addresses fit in 24 bits (< 2 MB) and num_receivers fits in 8 bits, so the two
-// can share a 32-bit slot. Keeps the struct at 8 uint32 words.
-constexpr static std::uint32_t REMOTE_CB_PACKED_ADDR_MASK = 0x00FFFFFFu;
-constexpr static std::uint32_t REMOTE_CB_PACKED_COUNT_SHIFT = 24;
+// Pack/unpack helpers for RemoteSenderCBInterface::num_receivers_and_remote_pages_sent_ptr.
+// The REMOTE_CB_PACKED_* constants they use live in hostdev/dev_msgs.h. Host code composes the
+// same field with matching bit math in global_circular_buffer.cpp.
+inline constexpr std::uint32_t remote_cb_num_receivers(std::uint32_t packed) {
+    return packed >> REMOTE_CB_PACKED_COUNT_SHIFT;
+}
+inline constexpr std::uint32_t remote_cb_remote_pages_sent_ptr(std::uint32_t packed) {
+    return packed & REMOTE_CB_PACKED_ADDR_MASK;
+}
+inline constexpr std::uint32_t remote_cb_pack(std::uint32_t num_receivers, std::uint32_t remote_pages_sent_ptr) {
+    return (num_receivers << REMOTE_CB_PACKED_COUNT_SHIFT) | (remote_pages_sent_ptr & REMOTE_CB_PACKED_ADDR_MASK);
+}
 
 struct RemoteSenderCBInterface {
     uint32_t config_ptr;
@@ -64,12 +73,6 @@ struct RemoteReceiverCBInterface {
     // receiver's local pages_acked).
     uint32_t remote_pages_acked_ptr;
 };
-
-inline uint32_t remote_cb_num_receivers(uint32_t packed) { return packed >> REMOTE_CB_PACKED_COUNT_SHIFT; }
-inline uint32_t remote_cb_remote_pages_sent_ptr(uint32_t packed) { return packed & REMOTE_CB_PACKED_ADDR_MASK; }
-inline uint32_t remote_cb_pack(uint32_t num_receivers, uint32_t remote_pages_sent_ptr) {
-    return (num_receivers << REMOTE_CB_PACKED_COUNT_SHIFT) | (remote_pages_sent_ptr & REMOTE_CB_PACKED_ADDR_MASK);
-}
 
 // Required for update_remote_cb_config
 static_assert(

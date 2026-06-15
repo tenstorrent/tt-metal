@@ -5,10 +5,12 @@
 #pragma once
 
 #include <stdint.h>
+#include <functional>
 #include <list>
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
@@ -145,6 +147,10 @@ public:
     CoreType get_dispatch_core_type();
 
     DispatchCoreConfig get_dispatch_core_config();
+
+    // Returns dispatch-column cores not yet allocated to FD or RT profiler.
+    // Valid after initialize_fast_dispatch() completes on this device.
+    std::vector<CoreCoord> get_available_dispatch_cores(ChipId device_id);
 
     uint8_t get_num_hw_cqs() const { return this->num_hw_cqs; }
 

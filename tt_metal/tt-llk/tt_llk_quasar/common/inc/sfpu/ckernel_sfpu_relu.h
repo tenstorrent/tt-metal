@@ -26,10 +26,11 @@ inline void _calculate_relu_sfp_rows_()
 }
 
 // Implements standard relu which does max(0, x)
-inline void _calculate_relu_(const int iterations = SFPU_ITERATIONS)
+template <int ITERATIONS = SFPU_ITERATIONS>
+inline void _calculate_relu_()
 {
 #pragma GCC unroll 8
-    for (int d = 0; d < iterations; d++)
+    for (int d = 0; d < ITERATIONS; d++)
     {
         _calculate_relu_sfp_rows_();
         ckernel::math::_incr_counters_<0x0, 0x0, ckernel::math::SFP_ROWS, 0x0>(); // does the dest_reg++ (increments by 2 rows)
@@ -52,12 +53,13 @@ inline void _calculate_lrelu_sfp_rows_()
 }
 
 // Implements leaky relu which return x when x > 0 and x*slope when x < 0
-inline void _calculate_lrelu_(const std::uint32_t slope, const int iterations = SFPU_ITERATIONS)
+template <int ITERATIONS = SFPU_ITERATIONS>
+inline void _calculate_lrelu_(const std::uint32_t slope)
 {
-    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, (slope >> 16)); // store slope in LREG2
+    TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, (slope >> 16)); // store slope in LREG2 (runtime imm)
     TTI_SFPENCC(1, 2);                                           // enable cc
 #pragma GCC unroll 8
-    for (int d = 0; d < iterations; d++)
+    for (int d = 0; d < ITERATIONS; d++)
     {
         _calculate_lrelu_sfp_rows_();
         ckernel::math::_incr_counters_<0x0, 0x0, ckernel::math::SFP_ROWS, 0x0>(); // does the dest_reg++ (increments by 2 rows)
@@ -85,7 +87,7 @@ inline void _calculate_relu_min_sfp_rows_()
 template <int ITERATIONS = SFPU_ITERATIONS>
 inline void _relu_min_(const std::uint32_t threshold)
 {
-    TTI_SFPLOADI(p_sfpu::LREG2, 0 /*Float16_b*/, (threshold >> 16)); // store slope in LREG2
+    TT_SFPLOADI(p_sfpu::LREG2, 0 /*Float16_b*/, (threshold >> 16)); // store threshold in LREG2 (runtime imm)
     TTI_SFPENCC(1, 2);                                               // enable cc
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
@@ -118,12 +120,13 @@ inline void _calculate_relu_max_sfp_rows_()
 }
 
 // Implements relu max
-inline void _relu_max_(const std::uint32_t threshold, const int iterations = SFPU_ITERATIONS)
+template <int ITERATIONS = SFPU_ITERATIONS>
+inline void _relu_max_(const std::uint32_t threshold)
 {
-    TTI_SFPLOADI(p_sfpu::LREG2, 0 /*Float16_b*/, (threshold >> 16)); // store slope in LREG2
+    TT_SFPLOADI(p_sfpu::LREG2, 0 /*Float16_b*/, (threshold >> 16)); // store threshold in LREG2 (runtime imm)
     TTI_SFPENCC(1, 2);                                               // enable cc
 #pragma GCC unroll 8
-    for (int d = 0; d < iterations; d++)
+    for (int d = 0; d < ITERATIONS; d++)
     {
         _calculate_relu_max_sfp_rows_();
         ckernel::math::_incr_counters_<0x0, 0x0, ckernel::math::SFP_ROWS, 0x0>(); // does the dest_reg++ (increments by 2 rows)

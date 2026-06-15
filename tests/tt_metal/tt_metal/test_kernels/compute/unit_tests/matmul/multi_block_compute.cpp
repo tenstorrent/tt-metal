@@ -50,7 +50,7 @@ void kernel_main() {
     mm_init(in0_id, in1_id, partials_id);
 
     for (uint32_t block_id = 0; block_id < num_blocks; block_id++) {
-        acquire_dst();
+        tile_regs_acquire();
 #ifndef PACKER_L1_ACC
         if (block_id > 0) {
             copy_tile_to_dst_init_short(partials_id);
@@ -83,6 +83,9 @@ void kernel_main() {
         cb_in0.pop_front(in0_block_num_tiles);
         cb_in1.pop_front(in1_block_num_tiles);
 
+        tile_regs_commit();
+        tile_regs_wait();
+
 #ifdef PACKER_L1_ACC
         cb_partials.reserve_back(out_block_num_tiles);
         if (block_id == 0) {
@@ -95,7 +98,7 @@ void kernel_main() {
         if (block_id == 0) {
             pack_reconfig_l1_acc(1);
         }
-        release_dst();
+        tile_regs_release();
         if (block_id < last_block_id) {
             cb_partials.wait_front(out_block_num_tiles);
             cb_partials.pop_front(out_block_num_tiles);
@@ -112,7 +115,7 @@ void kernel_main() {
             pack_tile(tile_index, cb_dst_id);
         }
         cb_dst.push_back(out_block_num_tiles);
-        release_dst();
+        tile_regs_release();
 #endif
     }
 
@@ -121,11 +124,14 @@ void kernel_main() {
 
     copy_tile_to_dst_init_short(partials_id);
     cb_partials.wait_front(out_block_num_tiles);
-    acquire_dst();
+    tile_regs_acquire();
     for (uint32_t i = 0; i < out_block_num_tiles; i++) {
         copy_tile(partials_id, i, i);
     }
     cb_partials.pop_front(out_block_num_tiles);
+
+    tile_regs_commit();
+    tile_regs_wait();
 
     pack_init(out_id);
     cb_out.reserve_back(out_block_num_tiles);
@@ -133,6 +139,6 @@ void kernel_main() {
         pack_tile(tile_index, out_id);
     }
     cb_out.push_back(out_block_num_tiles);
-    release_dst();
+    tile_regs_release();
 #endif
 }

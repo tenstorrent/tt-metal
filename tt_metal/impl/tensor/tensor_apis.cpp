@@ -17,6 +17,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
+#include "tt_metal/distributed/mesh_device_view_impl.hpp"
 #include <tt_stl/concepts.hpp>
 #include <tt_stl/small_vector.hpp>
 
@@ -169,13 +170,25 @@ void enqueue_write_tensor(distributed::MeshCommandQueue& cq, const HostTensor& h
 
     if (use_pinned) {
         auto* mesh_device = mesh_buffer->device();
+        const auto& view = mesh_device->get_view();
         std::vector<distributed::ShardDataTransfer> transfers;
         transfers.reserve(distributed_host_buffer.shard_coords().size());
         bool any_pinned = false;
 
         for (const auto& coord : distributed_host_buffer.shard_coords()) {
+            // get_shard yields a buffer only for shards owned by this host, so remote chips are
+            // never pinned or added to the transfer list -- the transfer is a no-op for them here.
             auto buf = distributed_host_buffer.get_shard(coord);
             if (buf) {
+                // The host buffer's distribution must agree with the device's: host memory can only
+                // be pinned to MMIO devices local to this process, so a populated shard for a coord
+                // the device owns on another host must never reach try_pin (which would fault while
+                // resolving the remote device).
+                TT_FATAL(
+                    view.impl().is_local(coord),
+                    "Host buffer holds a shard for device coordinate {}, but that device is not local "
+                    "to this host; host memory can only be pinned to MMIO devices owned by this process.",
+                    coord);
                 auto coord_range = distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(coord, coord));
                 HostBuffer pinned_buf(*buf);
                 auto pinned_memory = experimental::PinnedMemoryCache::instance().try_pin(
@@ -345,15 +358,28 @@ void h2d_as_replicate_tensor_on_1x1_mesh(
         ::tt::tt_metal::CMAKE_UNIQUE_NAMESPACE::should_use_pinned_write_path(*mesh_device, data_to_write.size());
 
     if (use_pinned) {
-        auto full_range = distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(mesh_device->shape()));
+        // Replication fans a single 1x1 host shard out to the whole mesh, but only the chips owned
+        // by this host can be pinned/written; restrict the pin and the transfers to those so the
+        // remote coordinates are a complete no-op here.
+        const auto& view = mesh_device->get_view();
+        std::vector<distributed::MeshCoordinate> local_coords;
+        distributed::MeshCoordinateRangeSet local_range;
+        for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
+            if (view.impl().is_local(coord)) {
+                local_coords.push_back(coord);
+                local_range.merge(distributed::MeshCoordinateRange(coord, coord));
+            }
+        }
+
         HostBuffer pinned_buffer(*host_buffer);
-        auto pinned_memory = experimental::PinnedMemoryCache::instance().try_pin(
-            *mesh_device, full_range, pinned_buffer, /*map_to_noc=*/true);
+        auto pinned_memory = local_coords.empty() ? nullptr
+                                                  : experimental::PinnedMemoryCache::instance().try_pin(
+                                                        *mesh_device, local_range, pinned_buffer, /*map_to_noc=*/true);
 
         if (pinned_memory) {
             std::vector<distributed::ShardDataTransfer> transfers;
-            transfers.reserve(mesh_device->shape().mesh_size());
-            for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
+            transfers.reserve(local_coords.size());
+            for (const auto& coord : local_coords) {
                 auto xfer = distributed::ShardDataTransfer{coord}
                                 .host_data(const_cast<void*>(static_cast<const void*>(data_to_write.data())))
                                 .region(BufferRegion(0, data_to_write.size()));
@@ -414,13 +440,25 @@ std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
 
     if (use_pinned) {
         auto* mesh_device = mesh_buffer->device();
+        const auto& view = mesh_device->get_view();
         std::vector<distributed::ShardDataTransfer> transfers;
         transfers.reserve(distributed_host_buffer.shard_coords().size());
         bool any_pinned = false;
 
         for (const auto& coord : distributed_host_buffer.shard_coords()) {
+            // get_shard yields a buffer only for shards owned by this host, so remote chips are
+            // never pinned or added to the transfer list -- the transfer is a no-op for them here.
             auto buf = distributed_host_buffer.get_shard(coord);
             if (buf) {
+                // The host buffer's distribution must agree with the device's: host memory can only
+                // be pinned to MMIO devices local to this process, so a populated shard for a coord
+                // the device owns on another host must never reach try_pin (which would fault while
+                // resolving the remote device).
+                TT_FATAL(
+                    view.impl().is_local(coord),
+                    "Host buffer holds a shard for device coordinate {}, but that device is not local "
+                    "to this host; host memory can only be pinned to MMIO devices owned by this process.",
+                    coord);
                 auto coord_range = distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(coord, coord));
                 HostBuffer pinned_buf(*buf);
                 auto pinned_memory = experimental::PinnedMemoryCache::instance().try_pin(

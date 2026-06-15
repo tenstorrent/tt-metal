@@ -88,7 +88,7 @@ const bool is_int_fpu_en = false;
 #include "experimental/ckernel_sfpu_swiglu.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
-#include "llk_math_eltwise_unary_sfpu_common.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 #include "params.h"
 
 using namespace ckernel;
@@ -117,7 +117,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     DataFormat src_format = static_cast<DataFormat>(formats.math);
     _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, is_int_fpu_en>(src_format, src_format);
 
-    const std::uint32_t num_sfpu_iterations = params.TEST_FACE_R_DIM / ckernel::math::SFP_ROWS;
     constexpr std::uint32_t NUM_INPUT_TILES = 2; // gate + up
 
     if (!unpack_to_dest)
@@ -158,8 +157,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t DEST_ROWS_PER_TILE = params.num_faces * params.TEST_FACE_R_DIM;
     for (std::uint32_t face = 0; face < params.num_faces; ++face)
     {
-        ckernel::sfpu::_calculate_swiglu_(
-            num_sfpu_iterations,
+        ckernel::sfpu::_calculate_swiglu_<SFPU_ITERATIONS>(
             /*gate_offset_idx=*/0,
             /*up_offset_idx=*/DEST_ROWS_PER_TILE,
             /*out_offset_idx=*/2 * DEST_ROWS_PER_TILE);

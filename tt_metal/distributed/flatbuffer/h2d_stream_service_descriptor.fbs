@@ -1,0 +1,68 @@
+include "hd_socket_descriptor.fbs";
+
+namespace tt.tt_metal.distributed.flatbuffer;
+
+// One placement per mesh dim. Mirrors ttnn::distributed::MeshMapperConfig::Placement.
+// `kind == Replicate` ignores `dim`; `kind == Shard` shards along tensor dim `dim`
+// across this mesh dim.
+enum PlacementKind : uint8 {
+    Replicate = 0,
+    Shard     = 1,
+}
+
+table Placement {
+    kind: PlacementKind;
+    dim:  int32 = 0;
+}
+
+// Minimal TensorSpec snapshot. Layout, memory layout, and buffer type are
+// pinned by the streaming path's current supported regime (ROW_MAJOR /
+// DRAM-interleaved), so only the varying fields are serialized. Extend this
+// table when the streaming path supports more layouts.
+table TensorSpecLite {
+    shape: [uint32];
+    dtype: uint32;
+}
+
+// One entry per participating mesh coord. The per-socket descriptor is
+// embedded inline so the connector reads a single file and attaches every
+// socket in-memory via H2DSocket::connect_from_descriptor — no race between
+// service descriptor and per-socket descriptors being on disk.
+table PerCoordEntry {
+    coord:             [uint32];
+    socket_descriptor: HDSocketDescriptor;
+}
+
+table H2DStreamServiceDescriptor {
+    // Bumped on incompatible schema changes; checked at attach.
+    version: uint32;
+
+    // Source-tensor spec; used by the connector to validate bytes-path inputs
+    // and to wrap them as a borrowed Tensor before invoking the mapper.
+    global_spec: TensorSpecLite;
+
+    // Full mesh shape the service was constructed against. Used by the
+    // connector to build a shape-only mapper via
+    // create_mesh_mapper(mesh_shape, mapper_config).
+    mesh_shape: [uint32];
+
+    // Mapper config. `mapper_shape_override` empty == nullopt on the owner.
+    mapper_placements:     [Placement];
+    mapper_shape_override: [uint32];
+
+    // Chunk plan baked in at construction. The connector validates these
+    // against its own re-derived plan at attach time; mismatch is TT_FATAL.
+    socket_page_size: uint32;
+    num_socket_pages: uint32;
+
+    // 0 disables the metadata path entirely on the connector.
+    metadata_size_bytes: uint32;
+
+    // Mirrored from Config for connector parity.
+    socket_buffer_type: uint32;   // BufferType enum
+    socket_mode:        uint32;   // H2DMode enum
+
+    per_coord_entries: [PerCoordEntry];
+}
+
+root_type H2DStreamServiceDescriptor;

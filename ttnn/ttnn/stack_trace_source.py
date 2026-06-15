@@ -30,7 +30,8 @@ CREATE_STACK_TRACES_TABLE_WITH_SOURCE_SQL = """
 CREATE TABLE IF NOT EXISTS stack_traces (
     operation_id int,
     stack_trace text,
-    source_file_id int REFERENCES source_files(id)
+    source_file_id int REFERENCES source_files(id),
+    rank int NOT NULL DEFAULT 0
 )
 """
 

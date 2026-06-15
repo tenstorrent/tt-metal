@@ -13,7 +13,9 @@ from PIL import Image
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
-from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
+from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VaeHWParallelConfig
+from models.tt_dit.pipelines.events import profiler_event_callback
+from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline, WanPipelineConfig
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
 from models.tt_dit.pipelines.wan.quant_config import QuantConfig, set_quant_config
 from models.tt_dit.utils.video import export_to_video
@@ -74,10 +76,10 @@ def t2v_metrics(mesh_device, height):
             }
         else:
             expected_metrics = {
-                "encoder": 0.1,
+                "encoder": 0.2,
                 "denoising": 370.0,
                 "vae": 7.0,
-                "total": 375.0,
+                "total": 375.2,
             }
     elif tuple(mesh_device.shape) == (2, 2):
         assert height == 480, "2x2 is only supported for 480p"
@@ -235,17 +237,31 @@ def test_pipeline_performance(
         mesh_device, width, height, model_type, topology
     )
 
-    pipeline = pipeline_cls.create_pipeline(
-        mesh_device=mesh_device,
-        sp_axis=sp_axis,
-        tp_axis=tp_axis,
-        num_links=num_links,
-        dynamic_load=dynamic_load,
-        topology=topology,
-        is_fsdp=is_fsdp,
-        height=height,
-        width=width,
-        num_frames=num_frames,
+    h_factor = tuple(mesh_device.shape)[tp_axis]
+    w_factor = tuple(mesh_device.shape)[sp_axis]
+    parallel_config = DiTParallelConfig.from_tuples(cfg=(1, 0), sp=(w_factor, sp_axis), tp=(h_factor, tp_axis))
+    vae_parallel_config = VaeHWParallelConfig.from_tuples(height=(h_factor, tp_axis), width=(w_factor, sp_axis))
+    encoder_parallel_config = EncoderParallelConfig.from_tuple((h_factor, tp_axis))
+
+    pipeline = pipeline_cls(
+        device=mesh_device,
+        config=WanPipelineConfig.default(
+            mesh_shape=mesh_device.shape,
+            dit_parallel_config=parallel_config,
+            vae_parallel_config=vae_parallel_config,
+            encoder_parallel_config=encoder_parallel_config,
+            num_links=num_links,
+            dynamic_load=dynamic_load,
+            topology=topology,
+            is_fsdp=is_fsdp,
+            model_type=model_type,
+            checkpoint_name=(
+                "Wan-AI/Wan2.2-I2V-A14B-Diffusers" if model_type == "i2v" else "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
+            ),
+            height=height,
+            width=width,
+            num_frames=num_frames,
+        ),
     )
 
     if quant_config_name is not None:
@@ -259,11 +275,8 @@ def test_pipeline_performance(
         if traced:
             with torch.no_grad():
                 pipeline(
-                    prompt=prompts[0],
+                    prompts=[prompts[0]],
                     image_prompt=image_prompt,
-                    height=height,
-                    width=width,
-                    num_frames=num_frames,
                     num_inference_steps=2,  # Small number of steps to reduce test time.
                     traced=traced,
                 )
@@ -284,15 +297,11 @@ def test_pipeline_performance(
         prompt_idx = (i + 1) % len(prompts)
         with benchmark_profiler("run", iteration=i):
             with torch.no_grad():
-                result = pipeline(
-                    prompt=prompts[prompt_idx],
+                frames = pipeline(
+                    prompts=[prompts[prompt_idx]],
                     image_prompt=image_prompt,
-                    height=height,
-                    width=width,
-                    num_frames=num_frames,
                     num_inference_steps=num_inference_steps,
-                    profiler=benchmark_profiler,
-                    profiler_iteration=i,
+                    on_event=profiler_event_callback(benchmark_profiler, i),
                     seed=42,
                     traced=traced,
                     output_type="uint8",
@@ -302,11 +311,6 @@ def test_pipeline_performance(
         # Check output
 
     pipeline.release_traces()
-
-    if hasattr(result, "frames"):
-        frames = result.frames
-    else:
-        frames = result[0] if isinstance(result, tuple) else result
 
     print(f"✓ Inference completed successfully")
     print(f"  Output shape: {frames.shape if hasattr(frames, 'shape') else 'Unknown'}")

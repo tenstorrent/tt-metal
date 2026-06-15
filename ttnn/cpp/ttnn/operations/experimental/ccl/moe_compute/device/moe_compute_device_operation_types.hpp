@@ -39,8 +39,8 @@ struct MoEComputeParams {
     MoEComputePath path = MoEComputePath::Full;
 
     // Ring size in matmul cores. On WH this is always 12 (DRAM banks). On BH it is 8, 12,
-    // or 16 (resolved from the bh_ring_size op kwarg, default 12 — the smallest BH ring
-    // that satisfies every shipped model's output_width_shard_dim divisibility check).
+    // or 16 (resolved from the bh_ring_size op kwarg, default 12). num_data_parallel_cores
+    // is auto-derived ring-aware (largest d | hidden_tiles with d<=4 and ring_n % d == 0).
     // Stored in attributes() so the program cache distinguishes different ring sizes
     // within the same session.
     uint32_t bh_ring_size = 12;

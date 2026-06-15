@@ -5,10 +5,31 @@
 #include "tt_metal/api/tt-metalium/experimental/disaggregation/kv_chunk_address_table.hpp"
 
 #include <algorithm>
+#include <cstring>
 
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt_stl/assert.hpp>
 
+#include "impl/context/metal_context.hpp"
+
 namespace tt::tt_metal::experimental::disaggregation {
+
+namespace {
+
+// noc_addr encoding (set by kv_cache_utils.py): (bank_id << 32) | local_addr
+uint32_t addr_channel(uint64_t noc_addr) { return static_cast<uint32_t>(noc_addr >> 32); }
+uint32_t addr_local(uint64_t noc_addr) { return static_cast<uint32_t>(noc_addr & 0xFFFFFFFFull); }
+
+tt::tt_metal::IDevice* resolve_device(const tt::tt_fabric::FabricNodeId& node_id) {
+    const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto chip_id = cp.get_physical_chip_id_from_fabric_node_id(node_id);
+    auto* dev = tt::tt_metal::detail::GetActiveDevice(chip_id);
+    TT_FATAL(dev != nullptr, "GetActiveDevice({}) returned null for {}", chip_id, node_id);
+    return dev;
+}
+
+}  // namespace
 
 size_t KvChunkAddressTable::flat_index(uint32_t layer, uint32_t position_chunk, uint32_t slot) const {
     return (static_cast<size_t>(slot) * num_layers_x_chunks_) + (static_cast<size_t>(layer) * num_position_chunks_) +
@@ -102,4 +123,18 @@ bool KvChunkAddressTable::has_host(const tt::tt_fabric::FabricNodeId& node_id) c
     return fabric_node_to_host_.contains(node_id);
 }
 
+std::vector<uint8_t> KvChunkAddressTable::read_device_chunk(uint32_t layer, uint32_t position, uint32_t slot) const {
+    const auto& loc = lookup(layer, position, slot);
+    const auto& dg = get_device_group(loc.device_group_index);
+    TT_FATAL(
+        !dg.fabric_node_ids.empty(), "DeviceGroup for (layer={}, pos={}, slot={}) is empty", layer, position, slot);
+
+    std::vector<uint8_t> buf(loc.size_bytes);
+    tt::tt_metal::detail::ReadFromDeviceDRAMChannel(
+        resolve_device(dg.fabric_node_ids.front()),
+        static_cast<int>(addr_channel(loc.noc_addr)),
+        addr_local(loc.noc_addr),
+        std::span<uint8_t>(buf));
+    return buf;
+}
 }  // namespace tt::tt_metal::experimental::disaggregation

@@ -47,6 +47,7 @@ target_sources(
         FILES
             board/board.hpp
             cabling_generator/cabling_generator.hpp
+            cabling_generator/regen_descriptors.hpp
             connector/connector.hpp
             factory_system_descriptor/utils.hpp
             node/node_types.hpp
@@ -55,6 +56,7 @@ target_sources(
         node/node_types.cpp
         board/board.cpp
         cabling_generator/cabling_generator.cpp
+        cabling_generator/regen_descriptors.cpp
         connector/connector.cpp
         factory_system_descriptor/utils.cpp
         ${GENERATED_PROTO_SRCS}
@@ -151,6 +153,27 @@ target_include_directories(run_cabling_generator SYSTEM PRIVATE ${CMAKE_CURRENT_
 
 target_link_libraries(
     run_cabling_generator
+    PRIVATE
+        scaleout_tools
+        protobuf::libprotobuf
+        cxxopts::cxxopts
+)
+
+add_executable(run_regen_descriptors src/run_regen_descriptors.cpp)
+
+set_target_properties(
+    run_regen_descriptors
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${Metalium_BINARY_DIR}/tools/scaleout
+)
+
+add_dependencies(run_regen_descriptors scaleout_generated_protos)
+
+target_include_directories(run_regen_descriptors SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+
+target_link_libraries(
+    run_regen_descriptors
     PRIVATE
         scaleout_tools
         protobuf::libprotobuf

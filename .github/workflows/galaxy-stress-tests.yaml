@@ -45,9 +45,14 @@ on:
         default: "in-service"
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
@@ -57,7 +62,7 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
 
   galaxy-stress-test:
-    needs: build-artifact
+    needs: [check-harbor, build-artifact]
     secrets: inherit
     uses: ./.github/workflows/galaxy-stress-tests-impl.yaml
     with:

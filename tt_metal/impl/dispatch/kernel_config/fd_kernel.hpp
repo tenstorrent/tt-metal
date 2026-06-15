@@ -117,10 +117,21 @@ public:
         get_max_num_eth_cores_(get_max_num_eth_cores),
         get_reads_dispatch_cores_(get_reads_dispatch_cores) {
         bool is_galaxy_cluster = descriptor_.cluster().is_galaxy_cluster();
+        bool are_fd_kernels_on_same_core = descriptor.cluster().arch() == tt::ARCH::QUASAR && descriptor.num_cqs() == 1;
         dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] = std::make_unique<tt::tt_metal::DispatchMemMap>(
-            CoreType::WORKER, descriptor.num_cqs(), descriptor.hal(), is_galaxy_cluster, descriptor.rtoptions());
+            CoreType::WORKER,
+            descriptor.num_cqs(),
+            descriptor.hal(),
+            is_galaxy_cluster,
+            are_fd_kernels_on_same_core,
+            descriptor.rtoptions());
         dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] = std::make_unique<tt::tt_metal::DispatchMemMap>(
-            CoreType::ETH, descriptor.num_cqs(), descriptor.hal(), is_galaxy_cluster, descriptor.rtoptions());
+            CoreType::ETH,
+            descriptor.num_cqs(),
+            descriptor.hal(),
+            is_galaxy_cluster,
+            /*are_fd_kernels_on_same_core=*/false,
+            descriptor.rtoptions());
     }
     virtual ~FDKernel() = default;
 
@@ -206,9 +217,6 @@ protected:
         const std::string& path,
         const std::vector<uint32_t>& compile_args,
         std::map<std::string, std::string> defines_in,
-        bool is_active_eth_core,
-        bool send_to_brisc,
-        bool force_watcher_no_inline,
         tt::tt_metal::KernelBuildOptLevel opt_level = tt::tt_metal::KernelBuildOptLevel::Os);
     int GetPort(const FDKernel* other, const std::vector<FDKernel*>& kernels) const {
         for (int idx = 0; idx < kernels.size(); idx++) {
@@ -238,6 +246,8 @@ protected:
     int node_id_;
     uint8_t cq_id_;
     noc_selection_t noc_selection_;
+    bool send_to_brisc_ = false;            // WH/BH only: selects RISCV_0 (true) vs RISCV_1 (false)
+    bool force_watcher_no_inline_ = false;  // Prefetcher enables to fit in code region when watcher is enabled
 
     std::vector<FDKernel*> upstream_kernels_;
     std::vector<FDKernel*> downstream_kernels_;

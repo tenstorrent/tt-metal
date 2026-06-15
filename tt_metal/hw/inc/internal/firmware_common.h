@@ -74,7 +74,6 @@ inline void do_thread_crt1(uint32_t tt_l1_ptr* data_image) {
     // Copy thread initialized data.
     extern thread_local uint32_t __ldm_tdata_start[];
     extern thread_local uint32_t __ldm_tdata_end[];
-    extern uint32_t __tdata_lma[];
     l1_to_local_mem_copy(__ldm_tdata_start, data_image, __ldm_tdata_end - __ldm_tdata_start);
 }
 

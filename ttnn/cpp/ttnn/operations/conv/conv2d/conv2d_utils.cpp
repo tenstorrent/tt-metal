@@ -455,20 +455,15 @@ Conv2dBlockConfig determine_per_core_conv_block_config(
         if (padded_output_height_ntiles_per_core % act_block_h_override_ntiles == 0) {
             act_block_h_ntiles = act_block_h_override_ntiles;
         } else {
-            uint32_t act_block_h_override_ntiles = act_block_h_override / tt::constants::TILE_HEIGHT;
-            if (padded_output_height_ntiles_per_core % act_block_h_override_ntiles == 0) {
-                act_block_h_ntiles = act_block_h_override_ntiles;
-            } else {
-                act_block_h_ntiles =
-                    find_closest_largest_divisor(padded_output_height_ntiles_per_core, act_block_h_override_ntiles);
-                log_warning(
-                    tt::LogOp,
-                    "act_block_h_override {} is not a valid override for padded_output_height_ntiles_per_core {}, "
-                    "instead {} was selected as closest valid option!",
-                    act_block_h_override_ntiles,
-                    padded_output_height_ntiles_per_core,
-                    act_block_h_ntiles);
-            }
+            act_block_h_ntiles =
+                find_closest_largest_divisor(padded_output_height_ntiles_per_core, act_block_h_override_ntiles);
+            log_info(
+                tt::LogOp,
+                "act_block_h_override {} is not a valid override for padded_output_height_ntiles_per_core {}, "
+                "instead {} was selected as closest valid option!",
+                act_block_h_override,
+                padded_output_height_ntiles_per_core,
+                act_block_h_ntiles * tt::constants::TILE_HEIGHT);
         }
     }
 
@@ -559,6 +554,13 @@ bool should_coalesce_1d_depthwise_conv_reads(
     DataType input_datatype) {
     if (!is_1d_depthwise_conv || input_tensor_memory_layout != TensorMemoryLayout::HEIGHT_SHARDED ||
         kernel_width <= 1 || dilation_w != 1) {
+        return false;
+    }
+
+    // Coalesced depthwise reads lay out all kernel-width channel sticks as one contiguous activation block. The
+    // coalesced compute kernel then indexes that block as kernel_width groups of channel tiles, so each stick must
+    // contain an integral number of tiles.
+    if (input_channels_padded % tt::constants::TILE_WIDTH != 0) {
         return false;
     }
 

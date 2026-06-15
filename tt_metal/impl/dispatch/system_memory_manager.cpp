@@ -151,10 +151,29 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
         this->cq_size = dram_backed_command_queues_size / num_hw_cqs;
         TT_ASSERT((this->cq_size % ctx.hal().get_alignment(tt::tt_metal::HalMemType::DRAM)) == 0);
         const IDevice* device = ctx.device_manager()->get_active_device(this->device_id);
-        TT_FATAL(device->is_mmio_capable(), "Device {} is not an MMIO device", this->device_id);
+        TT_FATAL(
+            device->is_mmio_capable() || ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Simulator,
+            "Device {} is not an MMIO device",
+            this->device_id);
+        // Host mirror of the DRAM-backed CQ sysmem region: the host edits this buffer and
+        // write_dram_vec/read_dram_vec sync it to each chip's DRAM (no PCIe hugepage).
         this->dram_region_staging_buffer = std::make_unique<char[]>(dram_backed_command_queues_size);
         this->cq_sysmem_start = this->dram_region_staging_buffer.get();
         this->channel_offset = 0;
+
+        // Carve out the hugepage "auxiliary" tail (same layout as the MMIO path below).
+        // Per HW CQ we reserve two TRANSFER_PAGE_SIZE (4 KiB) pages outside the issue/completion
+        // fifo layout; they are pooled after all CQ slots in free_region_* and allocated via
+        // allocate_region() when host code needs extra device-visible sysmem (e.g. D2H socket
+        // hugepage fallback for fifo data and bytes-sent counters).
+        static constexpr uint32_t AUX_PAGES_PER_CQ_SIM = 2;
+        uint32_t per_cq_reduction_sim = AUX_PAGES_PER_CQ_SIM * DispatchSettings::TRANSFER_PAGE_SIZE;
+        this->cq_size -= per_cq_reduction_sim;
+        uint32_t total_cq_space_sim = static_cast<uint32_t>(num_hw_cqs) * this->cq_size;
+        this->free_region_start_ = this->channel_offset + total_cq_space_sim;
+        this->free_region_size_ = static_cast<uint32_t>(num_hw_cqs) * per_cq_reduction_sim;
+        this->free_region_host_ptr_ = this->cq_sysmem_start + total_cq_space_sim;
+        this->free_region_bump_ = 0;
         this->init_dispatch_core_interfaces(num_hw_cqs, 0);
         return;
     }
@@ -182,6 +201,7 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
     this->channel_offset = DispatchSettings::MAX_HUGEPAGE_SIZE * get_umd_channel(channel) +
                            (channel >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE;
 
+    // Two TRANSFER_PAGE_SIZE pages per HW CQ reserved for free_region_* (see DRAM-backed path above).
     static constexpr uint32_t AUX_PAGES_PER_CQ = 2;
     uint32_t per_cq_reduction = AUX_PAGES_PER_CQ * DispatchSettings::TRANSFER_PAGE_SIZE;
     this->cq_size -= per_cq_reduction;
@@ -732,7 +752,6 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
     // Handler for the timeout
     auto on_timeout = [this, &exit_condition]() {
         exit_condition.store(true);
-
         tt::tt_metal::MetalContext::instance(this->context_id).on_dispatch_timeout_detected();
 
         TT_THROW("TIMEOUT: device timeout, potential hang detected, the device is unrecoverable");

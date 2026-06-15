@@ -1048,7 +1048,7 @@ void py_module(nb::module_& mod) {
         Keyword Args:
             sparsity (ttnn.Tensor): the sparsity tensor containing the mask values. Needs to be on the device. The data type must be bfloat16.
             program_config (ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig): the program configuration for the matmul operation. Only this config type is supported. ``mcast_in0`` must be set to True.
-            nnz (int, optional): the number of non-zero values in the sparsity tensor. If not provided, it will be inferred from the sparsity tensor at runtime.
+            nnz (int, optional): the number of non-zero values in the sparsity tensor. If not provided, it will be inferred from the sparsity tensor at runtime. If provided, it **must** be exactly equal to the number of non-zero entries in `sparsity` (i.e. `nnz == count_nonzero(sparsity)`). It is the user's responsibility to set this value correctly. If the equality condition is not met, the kernel will hang (deadlock) on device, since the receiver and compute kernels loop exactly `nnz` times while the sender only multicasts once per non-zero sparsity entry. Because `count_nonzero(sparsity)` is data-dependent and only known at runtime, this cannot be validated on the host; the mismatch is asserted on-device (failing loudly under watcher) but otherwise results in a hang.
             is_input_a_sparse (bool, optional): boolean indicating whether `input_tensor_a` is sparse. Defaults to `False`. Together with `is_input_b_sparse`, it determines how the sparsity tensor is interpreted. See the supported modes table below.
             is_input_b_sparse (bool, optional): boolean indicating whether `input_tensor_b` is sparse. Defaults to `True`. Together with `is_input_a_sparse`, it determines how the sparsity tensor is interpreted. See the supported modes table below.
             memory_config (ttnn.MemoryConfig, optional): the memory configuration of the output tensor. Defaults to `None`, which will result in using ttnn.DRAM_MEMORY_CONFIG.
@@ -1100,6 +1100,15 @@ void py_module(nb::module_& mod) {
                   - --
                   - --
                   - --
+
+        .. warning::
+            When `nnz` is provided, it **must** equal `count_nonzero(sparsity)` exactly. Passing an `nnz`
+            that does not match the actual number of non-zero entries in `sparsity` will cause the kernel to
+            **hang (deadlock)** on device. Setting `nnz` correctly is the user's responsibility. This
+            condition cannot be checked on the host because `count_nonzero(sparsity)` is data-dependent and
+            only known at runtime; it is validated on-device and will fail loudly (assert) when watcher is
+            enabled, but otherwise manifests as a hang. If you cannot guarantee the exact count, omit `nnz`
+            so it is inferred from the sparsity tensor at runtime.
 
         Note:
             The input tensors support the following data types and layouts:
@@ -1189,6 +1198,11 @@ void py_module(nb::module_& mod) {
         .def_static(
             "compute_output_specs",
             &ttnn::prim::MatmulDeviceOperation::compute_output_specs,
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"))
+        .def_static(
+            "compute_program_hash",
+            &ttnn::prim::MatmulDeviceOperation::compute_program_hash,
             nb::arg("operation_attributes"),
             nb::arg("tensor_args"));
 

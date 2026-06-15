@@ -67,8 +67,8 @@ ALWI void process_grid_point_nearest(
             const uint32_t coordinate_pair_offset = grid_idx * STANDARD_GRID_ELEMENTS_PER_POINT;
             const uint16_t h_coord_raw = grid_ptr[coordinate_pair_offset + 1];  // y coordinate
             const uint16_t w_coord_raw = grid_ptr[coordinate_pair_offset + 0];  // x coordinate
-            h_coord_rel = bfloat16_to_float(h_coord_raw);
-            w_coord_rel = bfloat16_to_float(w_coord_raw);
+            h_coord_rel = bf16_to_fp32(h_coord_raw);
+            w_coord_rel = bf16_to_fp32(w_coord_raw);
         }
 
         // Transform to image coordinates using the same formula as prepare_grid.cpp

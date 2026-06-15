@@ -398,13 +398,33 @@ def _build_fused_descriptor(
         if rebind_offset is not None:
             named_ct_args.append(("rebind_rt_offset", rebind_offset))
 
-        # Get config from first available kernel for this role
+        # Pick config for this role. A fused kernel is a single binary whose NOC is a
+        # compile-time constant (noc_index), so all phases sharing this RISC role must
+        # agree on the NOC.  ReaderConfigDescriptor{} / WriterConfigDescriptor{} are
+        # "use platform default" markers; DataMovementConfigDescriptor carries an
+        # explicit NOC.  Rules:
+        #   - Prefer any explicit DataMovementConfigDescriptor over a default descriptor.
+        #   - If two phases both carry explicit DataMovementConfigDescriptors and they
+        #     disagree on NOC, they cannot be fused into a single binary — raise early.
         role_config = None
         for pk in phase_kernels:
             kernel = pk.get(role_key)
             if kernel is not None:
-                role_config = kernel.config
-                break
+                config = kernel.config
+                if role_config is None:
+                    role_config = config
+                elif isinstance(config, ttnn.DataMovementConfigDescriptor):
+                    if isinstance(role_config, ttnn.DataMovementConfigDescriptor):
+                        if config.noc != role_config.noc:
+                            raise ValueError(
+                                f"Cannot fuse phases for role '{role_key}': conflicting explicit NOC "
+                                f"requirements ({role_config.noc} vs {config.noc}). "
+                                f"A single kernel binary can only have one noc_index."
+                            )
+                    else:
+                        # Upgrade from default (ReaderConfigDescriptor/WriterConfigDescriptor)
+                        # to the explicit config.
+                        role_config = config
 
         # For compute roles, validate configs match across phases and
         # rebuild unpack_to_dest_mode from pool-allocated slot indices

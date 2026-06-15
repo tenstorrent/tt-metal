@@ -12,6 +12,8 @@
 #include "ttnn/operations/reduction/sampling/device/sampling_program_factory.hpp"
 #include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
+#include <tt-metalium/tt_backend_api_types.hpp>
+
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
@@ -23,6 +25,13 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
     const auto& p = tensor_args.p;
     const auto& temp = tensor_args.temp;
     const auto& preallocated_output_tensor = tensor_args.preallocated_output;
+
+    // WH/BH support both UINT32 and INT32 for the index/k/output dtypes. Every other architecture
+    // (e.g. Quasar, which lacks UInt16/UInt32 tile (DFB) metadata support) runs the kernels in the
+    // 32-bit (INT32) path, so UINT32 is not representable and must be rejected instead of silently
+    // miscomputing. Gated on !(WH || BH) so new architectures default to the safe 32-bit path.
+    const auto arch = input_values_tensor.device()->arch();
+    const bool use_32bit_index = !(arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE);
 
     TT_FATAL(
         input_values_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -38,6 +47,10 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_indices_tensor.dtype() == DataType::UINT32 || input_indices_tensor.dtype() == DataType::INT32,
         "Only UINT32 & INT32 dtypes are supported for input indices!");
+    TT_FATAL(
+        !use_32bit_index || input_indices_tensor.dtype() == DataType::INT32,
+        "Only INT32 is supported for input indices on this architecture (UINT32 is only available on "
+        "Wormhole/Blackhole)!");
 
     TT_FATAL(input_indices_tensor.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR is supported for input indices!");
 
@@ -51,6 +64,17 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
         input_shape[3] != 0 && input_shape[3] % 32 == 0,
         "Input inner dim ({}) must be non-zero and divisible by 32, pad if needed!",
         input_shape[3]);
+    // The top-k stage processes the W/32 candidate tiles with a pairwise local sort followed by a
+    // bitonic merge tree whose schedule assumes a power-of-2 tile count. A non-power-of-2 Wt hangs
+    // the device (odd Wt) or silently drops candidate tiles (even non-power-of-2 Wt), so reject it
+    // here instead of timing out. See https://github.com/tenstorrent/tt-metal/issues/44558.
+    const uint32_t Wt = input_shape[3] / 32;
+    TT_FATAL(
+        (Wt & (Wt - 1)) == 0,
+        "Input inner dim ({}) must yield a power-of-2 number of tiles (Wt = W/32 = {}); pad W up to the "
+        "next power-of-2 multiple of 32 (e.g. with -inf values and dummy indices) if needed!",
+        input_shape[3],
+        Wt);
 
     if (args.sub_core_grids.has_value()) {
         ReduceOpDeviceGridValidationOptions sampling_grid_opts;
@@ -70,6 +94,10 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
             preallocated_output_tensor.value().dtype() == DataType::UINT32 ||
                 preallocated_output_tensor.value().dtype() == DataType::INT32,
             "Only UINT32 & INT32 dtypes are supported for outputs!");
+        TT_FATAL(
+            !use_32bit_index || preallocated_output_tensor.value().dtype() == DataType::INT32,
+            "Only INT32 is supported for outputs on this architecture (UINT32 is only available on "
+            "Wormhole/Blackhole)!");
 
         TT_FATAL(
             preallocated_output_tensor.value().memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -93,7 +121,13 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
     }
 
     // Check size, layout and dtype of k, p, temp
-    TT_FATAL(k.dtype() == DataType::UINT32, "Only UINT32 dtypes are supported for k!");
+    TT_FATAL(
+        k.dtype() == DataType::UINT32 || k.dtype() == DataType::INT32,
+        "Only UINT32 & INT32 dtypes are supported for k!");
+    TT_FATAL(
+        !use_32bit_index || k.dtype() == DataType::INT32,
+        "Only INT32 is supported for k on this architecture (UINT32 is only available on "
+        "Wormhole/Blackhole)!");
     TT_FATAL(p.dtype() == DataType::BFLOAT16, "Only BFLOAT16 dtypes are supported for p!");
     TT_FATAL(temp.dtype() == DataType::BFLOAT16, "Only BFLOAT16 dtypes are supported for temp!");
     TT_FATAL(k.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for k!");
@@ -114,9 +148,15 @@ TensorSpec SamplingDeviceOperation::compute_output_specs(
     auto input_shape = input_values_tensor.logical_shape();
     ttnn::Shape output_shape({1, 1, 1, input_shape[2]});
 
+    // WH/BH keep the historical UINT32 default; every other architecture (e.g. Quasar) runs the
+    // 32-bit path and cannot represent a UInt32 tile, so the default (non-preallocated) output must
+    // be INT32 there. Gated on !(WH || BH) so new architectures default to the safe INT32 path.
+    const auto arch = input_values_tensor.device()->arch();
+    const bool use_32bit_index = !(arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE);
+    const DataType output_dtype = use_32bit_index ? DataType::INT32 : DataType::UINT32;
+
     return TensorSpec(
-        output_shape,
-        TensorLayout(DataType::UINT32, PageConfig(Layout::ROW_MAJOR), input_values_tensor.memory_config()));
+        output_shape, TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), input_values_tensor.memory_config()));
 }
 
 Tensor SamplingDeviceOperation::create_output_tensors(

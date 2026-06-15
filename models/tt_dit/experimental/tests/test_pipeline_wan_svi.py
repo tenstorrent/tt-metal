@@ -130,13 +130,9 @@ def _read_svi_config(regime: str, width: int, height: int) -> _SVIRunConfig:
     )
 
 
-def _pipeline_kwargs(
-    config: _SVIRunConfig, *, mesh_device, sp_axis, tp_axis, num_links, dynamic_load, topology, is_fsdp
-):
+def _pipeline_kwargs(config: _SVIRunConfig, *, mesh_device, num_links, dynamic_load, topology, is_fsdp):
     kwargs = dict(
         mesh_device=mesh_device,
-        sp_axis=sp_axis,
-        tp_axis=tp_axis,
         num_links=num_links,
         dynamic_load=dynamic_load,
         topology=topology,
@@ -196,10 +192,10 @@ def _touch(path) -> str:
 
 
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
+    "mesh_device, mesh_shape, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
-        [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False],
-        [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
+        [(2, 4), (2, 4), 2, True, line_params, ttnn.Topology.Linear, False],
+        [(4, 8), (4, 8), 2, False, ring_params, ttnn.Topology.Ring, False],
     ],
     ids=["bh_2x4sp1tp0", "bh_4x8sp1tp0_ring"],
     indirect=["mesh_device", "device_params"],
@@ -218,8 +214,6 @@ def _touch(path) -> str:
 def test_long_video(
     mesh_device,
     mesh_shape,
-    sp_axis,
-    tp_axis,
     num_links,
     dynamic_load,
     topology,
@@ -234,8 +228,6 @@ def test_long_video(
         **_pipeline_kwargs(
             config,
             mesh_device=mesh_device,
-            sp_axis=sp_axis,
-            tp_axis=tp_axis,
             num_links=num_links,
             dynamic_load=dynamic_load,
             topology=topology,
@@ -254,9 +246,6 @@ def test_long_video(
             prompt=config.prompt,
             anchor_image=config.anchor_image,
             num_clips=config.num_clips,
-            num_frames=config.num_frames,
-            height=config.height,
-            width=config.width,
             base_seed=config.base_seed,
             num_inference_steps=config.num_inference_steps,
             guidance_scale=config.guidance_scale,
@@ -277,22 +266,8 @@ def test_comfyui_regime_requires_lightx2v(tmp_path):
     """regime='comfyui' must demand LightX2V LoRA paths."""
     with pytest.raises(ValueError, match="lightx2v_high"):
         WanPipelineSVI(
-            mesh_device=None,
-            parallel_config=None,
-            vae_parallel_config=None,
-            encoder_parallel_config=None,
-            num_links=1,
-            boundary_ratio=0.875,
-            scheduler=None,
-            dynamic_load=False,
-            topology=None,
-            is_fsdp=False,
-            checkpoint_name="Wan-AI/Wan2.2-I2V-A14B-Diffusers",
-            vae_t_chunk_size=None,
-            sdpa_t_fracture_w_only=False,
-            height=480,
-            width=832,
-            num_frames=81,
+            device=None,
+            config=None,
             svi_high=_touch(tmp_path / "svi_high.safetensors"),
             svi_low=_touch(tmp_path / "svi_low.safetensors"),
             regime="comfyui",

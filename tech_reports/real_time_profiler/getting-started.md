@@ -1,6 +1,6 @@
 # Real-time profiler — getting started
 
-The **real-time profiler** (RT profiler) streams per-program timing from the device over the existing fast-dispatch path (D2H socket). Each completed program yields a `ProgramRealtimeRecord`: runtime `program_id`, raw `start_timestamp` / `end_timestamp`, device `frequency` (cycles per ns), `chip_id`, and `kernel_sources` (paths for that program).
+The **real-time profiler** (RT profiler) streams per-program timing from the device over the existing fast-dispatch path (D2H socket). Each completed program yields a `ProgramRealtimeRecord`: `runtime_id`, raw `start_timestamp` / `end_timestamp`, device `frequency` (cycles per ns), `chip_id`, and `kernel_sources` (paths for that program).
 
 You can register **multiple** callbacks; they run on the profiler receiver thread in registration order. Use `UnregisterProgramRealtimeProfilerCallback(handle)` when done (Python: `ttnn.device.UnregisterProgramRealtimeProfilerCallback`).
 
@@ -23,7 +23,7 @@ lock = threading.Lock()
 
 def on_record(record):
     row = {
-        "program_id": record.program_id,
+        "runtime_id": record.runtime_id,
         "chip_id": record.chip_id,
         "start_timestamp": record.start_timestamp,
         "end_timestamp": record.end_timestamp,
@@ -47,7 +47,7 @@ Same pattern is used in tests, e.g. [`tests/ttnn/tracy/matmul_workload.py`](../.
 
 ---
 
-## Tracy deafult support
+## Tracy default support
 
 Metal wires a **`RealtimeProfilerTracyHandler`** that also registers on the same callback list. Records are pushed into Tracy’s Tenstorrent **device** timeline (per-chip context, calibration, program zones, optional sync-check markers). Your custom callbacks still run; you do not replace Tracy, you add alongside it.
 

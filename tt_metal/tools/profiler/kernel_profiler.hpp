@@ -683,11 +683,11 @@ __attribute__((noinline)) void trace_only_init() {
 // Dispatch but disabled
 #else
 
-#define DeviceZoneScopedN(name)
+#define DeviceZoneScopedN(name) (void(sizeof(name)))
 
-#define DeviceTimestampedData(data_id, data)
+#define DeviceTimestampedData(data_id, data) (void(sizeof(data_id) + sizeof(data)))
 
-#define DeviceRecordEvent(event_id)
+#define DeviceRecordEvent(event_id) (void(sizeof(event_id)))
 
 #endif
 
@@ -737,25 +737,30 @@ __attribute__((noinline)) void trace_only_init() {
 
 #else
 
-#define DeviceValidateProfiler(condition)
+// The void(sizeof(FOO)) idiom (a) ensures FOO is syntactically and
+// semantically sane and (b) means that we avoid 'var-set-but-unused'
+// diagnostics, if the only use of a particular var is here.  The
+// sizeof argument is processed in a non-evaluating context -- no code
+// is generated.
+#define DeviceValidateProfiler(condition) (void(sizeof(condition)))
 
-#define DeviceZoneScopedMainN(name)
+#define DeviceZoneScopedMainN(name) (void(name))
 
-#define DeviceZoneScopedMainChildN(name)
+#define DeviceZoneScopedMainChildN(name) (void(name))
 
-#define DeviceZoneScopedN(name)
+#define DeviceZoneScopedN(name) (void(name))
 
-#define DeviceZoneScopedSumN1(name)
+#define DeviceZoneScopedSumN1(name) (void(name))
 
-#define DeviceZoneScopedSumN2(name)
+#define DeviceZoneScopedSumN2(name) (void(name))
 
 #define DeviceTraceOnlyProfilerInit()
 
-#define DeviceZoneSetCounter(counter)
+#define DeviceZoneSetCounter(counter) (void(sizeof(counter)))
 
-#define DeviceTimestampedData(data_id, data)
+#define DeviceTimestampedData(data_id, data) (void(sizeof(data_id) + sizeof(data)))
 
-#define DeviceRecordEvent(event_id)
+#define DeviceRecordEvent(event_id) (void(sizeof(event_id)))
 
 #define DeviceProfilerInit()
 

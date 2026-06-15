@@ -46,42 +46,58 @@ void kernel_main() {
             // reducing in W means out[h][0] = sum(w=0..W-1, in[h][w])
             // in this case we just sequentially add to accumulator all the W-tiles in a row
             for (uint32_t wt = 0; wt < Wt; ++wt) {
-                acquire_dst();
                 cb_input_obj.wait_front(onetile);
+
+                tile_regs_acquire();
                 copy_tile_init(cb_input);
                 copy_tile(cb_input, 0, reduce_dst_idx);
                 negative_tile_init();
                 negative_tile(reduce_dst_idx);
-                cb_input_obj.pop_front(onetile);
-                cb_ineg_obj.reserve_back(onetile);
-                pack_tile(reduce_dst_idx, cb_ineg);
-                cb_ineg_obj.push_back(onetile);
-                release_dst();
+                tile_regs_commit();
 
-                acquire_dst();
+                cb_input_obj.pop_front(onetile);
+
+                cb_ineg_obj.reserve_back(onetile);
+
+                tile_regs_wait();
+                pack_tile(reduce_dst_idx, cb_ineg);
+                tile_regs_release();
+
+                cb_ineg_obj.push_back(onetile);
+
                 if (wt > 0 || ht > 0) {
                     cb_acc_obj.wait_front(onetile);
+                }
+                cb_ineg_obj.wait_front(onetile);
+
+                tile_regs_acquire();
+                if (wt > 0 || ht > 0) {
                     copy_tile_init(cb_acc);
                     copy_tile(cb_acc, 0, reduce_dst_idx);
                 }
-
-                cb_ineg_obj.wait_front(onetile);
                 reduce_init<REDUCE_OP, REDUCE_DIM>(cb_ineg, cb_scaler, cb_acc);
                 reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_ineg, cb_scaler, 0, 0, reduce_dst_idx);
                 reduce_uninit();
+                tile_regs_commit();
+
                 cb_ineg_obj.pop_front(onetile);
                 if (wt > 0 || ht > 0) {
                     cb_acc_obj.pop_front(onetile);
                 }
+
                 cb_acc_obj.reserve_back(onetile);
+
+                tile_regs_wait();
                 pack_tile(reduce_dst_idx, cb_acc);
+                tile_regs_release();
+
                 cb_acc_obj.push_back(onetile);
-                release_dst();
             }  // wt
         }  // ht
 
-        acquire_dst();
         cb_acc_obj.wait_front(onetile);
+
+        tile_regs_acquire();
         copy_tile_init(cb_acc);
         copy_tile(cb_acc, 0, reduce_dst_idx);
         negative_tile_init();
@@ -93,10 +109,16 @@ void kernel_main() {
         binop_with_scalar_tile_init();
         mul_unary_tile(reduce_dst_idx, post_mul_scaler_bits);
 #endif
+        tile_regs_commit();
+
         cb_acc_obj.pop_front(onetile);
+
         cb_output_obj.reserve_back(onetile);
+
+        tile_regs_wait();
         pack_tile(reduce_dst_idx, cb_output);
+        tile_regs_release();
+
         cb_output_obj.push_back(onetile);
-        release_dst();
     }  // nc
 }

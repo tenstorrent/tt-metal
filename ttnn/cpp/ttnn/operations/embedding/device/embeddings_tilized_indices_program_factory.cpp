@@ -4,11 +4,19 @@
 
 #include "embeddings_tilized_indices_program_factory.hpp"
 #include "embedding_program_factory_common.hpp"
+
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_align.hpp>
 
 namespace ttnn::prim {
 
-EmbeddingsTilizedIndicesProgramFactory::cached_program_t EmbeddingsTilizedIndicesProgramFactory::create(
+using namespace tt;
+using namespace tt::constants;
+using namespace tt::tt_metal;
+
+tt::tt_metal::ProgramDescriptor EmbeddingsTilizedIndicesProgramFactory::create_descriptor(
     const EmbeddingParams& operation_attributes, const EmbeddingInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& a = tensor_args.input_tensor_arg;
     const auto& weights = tensor_args.weight_arg;
@@ -16,7 +24,8 @@ EmbeddingsTilizedIndicesProgramFactory::cached_program_t EmbeddingsTilizedIndice
     const auto& embeddings_type = operation_attributes.embeddings_type;
     const auto& pad_token = operation_attributes.pad_token;
 
-    using namespace tt::constants;
+    ProgramDescriptor desc;
+
     ////////////////////////////////////////////////////////////////////////////
     //                 Buffer Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -30,7 +39,6 @@ EmbeddingsTilizedIndicesProgramFactory::cached_program_t EmbeddingsTilizedIndice
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program program{};
 
     uint32_t input_element_size_bytes = a.element_size();
     uint32_t weights_element_size_bytes = weights.element_size();
@@ -74,31 +82,51 @@ EmbeddingsTilizedIndicesProgramFactory::cached_program_t EmbeddingsTilizedIndice
 
     constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t rounded_weight_page_size = tt::align(weight_page_size, alignment);
-    tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(2 * rounded_weight_page_size, {{src0_cb_index, weights_cb_data_format}})
-            .set_page_size(src0_cb_index, rounded_weight_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 2 * rounded_weight_page_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = src0_cb_index,
+            .data_format = weights_cb_data_format,
+            .page_size = rounded_weight_page_size,
+        }}},
+    });
 
     constexpr uint32_t src1_cb_index = tt::CBIndex::c_1;
     uint32_t index_page_size = round_up_to_mul32(input_element_size_bytes);
-    tt::tt_metal::CircularBufferConfig cb_src1_config =
-        tt::tt_metal::CircularBufferConfig(FACE_HEIGHT * index_page_size, {{src1_cb_index, input_cb_data_format}})
-            .set_page_size(src1_cb_index, FACE_HEIGHT * index_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = FACE_HEIGHT * index_page_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = src1_cb_index,
+            .data_format = input_cb_data_format,
+            .page_size = FACE_HEIGHT * index_page_size,
+        }}},
+    });
 
     constexpr uint32_t src2_cb_index = tt::CBIndex::c_2;
     if (embeddings_type == EmbeddingsType::PADDED) {
         uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
-        tt::tt_metal::CircularBufferConfig cb_src2_config =
-            tt::tt_metal::CircularBufferConfig(cache_page_size, {{src2_cb_index, weights_cb_data_format}})
-                .set_page_size(src2_cb_index, cache_page_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = cache_page_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = src2_cb_index,
+                .data_format = weights_cb_data_format,
+                .page_size = cache_page_size,
+            }}},
+        });
     } else if (embeddings_type == EmbeddingsType::BINARY) {
         uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
-        tt::tt_metal::CircularBufferConfig cb_src2_config =
-            tt::tt_metal::CircularBufferConfig(2 * cache_page_size, {{src2_cb_index, weights_cb_data_format}})
-                .set_page_size(src2_cb_index, cache_page_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = 2 * cache_page_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = src2_cb_index,
+                .data_format = weights_cb_data_format,
+                .page_size = cache_page_size,
+            }}},
+        });
     }
 
     uint32_t output_cb_index = src0_cb_index;
@@ -123,49 +151,45 @@ EmbeddingsTilizedIndicesProgramFactory::cached_program_t EmbeddingsTilizedIndice
         embeddings_index_type = EmbeddingsIndexType::UINT32;
     }
 
-    std::map<std::string, std::string> embedding_defines = {
+    KernelDescriptor::Defines embedding_defines = {
         {enchantum::to_string(embeddings_type).data(), "1"}, {enchantum::to_string(embeddings_index_type).data(), "1"}};
 
     if (a.logical_shape()[-1] <= FACE_HEIGHT) {
-        embedding_defines["ONLY_ONE_FACE_COLUMN"] = "1";
+        embedding_defines.emplace_back("ONLY_ONE_FACE_COLUMN", "1");
     }
-    auto reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embedding_ind_tilized.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
+
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embedding_ind_tilized.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(embedding_compile_time_args);
+    reader_desc.defines = std::move(embedding_defines);
+    reader_desc.config = ReaderConfigDescriptor{};
 
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)output_page_size};
     tt::tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
     // Tilized writer
-    auto writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
-        all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = "ttnn/cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_desc.config = WriterConfigDescriptor{};
 
     uint32_t col_offset = 0;
     uint32_t weight_offset = 0;
 
     auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, false);
-    std::vector<uint32_t> reader_runtime_args = {
-        (std::uint32_t)a.buffer()->address(),
-        (std::uint32_t)weights.buffer()->address(),
-        (std::uint32_t)0,
-        (std::uint32_t)0,
-        (std::uint32_t)0,
-        (std::uint32_t)0,
-        (std::uint32_t)0,
-    };
-    if (embeddings_type == EmbeddingsType::PADDED) {
-        reader_runtime_args.push_back(pad_token.value());
-    }
-    std::vector<uint32_t> writer_runtime_args = {
-        (std::uint32_t)output.buffer()->address(), (std::uint32_t)output_page_size, (std::uint32_t)0, (std::uint32_t)0};
+    auto* a_buffer = a.buffer();
+    auto* weights_buffer = weights.buffer();
+    auto* output_buffer = output.buffer();
 
     uint32_t row = 0;
     uint32_t tiles_per_tile_row = (num_cols + TILE_HEIGHT - 1) / TILE_HEIGHT;
+
+    reader_desc.runtime_args.reserve(cores.size());
+    writer_desc.runtime_args.reserve(cores.size());
 
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores[i];
@@ -181,59 +205,31 @@ EmbeddingsTilizedIndicesProgramFactory::cached_program_t EmbeddingsTilizedIndice
 
         // Reader
         {
-            reader_runtime_args[2] = curr_tile;
-            reader_runtime_args[3] = face_offset;
-            reader_runtime_args[4] = local_num_blocks;
-            reader_runtime_args[5] = col_offset;
-            reader_runtime_args[6] = (col_offset % FACE_HEIGHT);  // starting col in the face row
-            tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
+            KernelDescriptor::RTArgList reader_args;
+            reader_args.push_back(a_buffer);
+            reader_args.push_back(weights_buffer);
+            reader_args.push_back(curr_tile);
+            reader_args.push_back(face_offset);
+            reader_args.push_back(local_num_blocks);
+            reader_args.push_back(col_offset);
+            reader_args.push_back(static_cast<uint32_t>(col_offset % FACE_HEIGHT));  // starting col in the face row
+            if (embeddings_type == EmbeddingsType::PADDED) {
+                reader_args.push_back(pad_token.value());
+            }
+            reader_desc.emplace_runtime_args(core, reader_args);
         }
 
         // Writer
-        {
-            writer_runtime_args[2] = local_num_blocks;
-            writer_runtime_args[3] = weight_offset;
-            tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
-        }
+        writer_desc.emplace_runtime_args(
+            core, {output_buffer, static_cast<uint32_t>(output_page_size), local_num_blocks, weight_offset});
 
         weight_offset += local_num_blocks;
     }
 
-    return cached_program_t{
-        std::move(program),
-        {.reader_kernel_id = reader_kernel_id, .writer_kernel_id = writer_kernel_id, .cores = cores}};
-}
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
 
-void EmbeddingsTilizedIndicesProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const EmbeddingParams& /*operation_attributes*/,
-    const EmbeddingInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    auto& program = cached_program.program;
-    const auto& shared_variables = cached_program.shared_variables;
-    const auto& reader_kernel_id = shared_variables.reader_kernel_id;
-    const auto& writer_kernel_id = shared_variables.writer_kernel_id;
-    const auto& cores = shared_variables.cores;
-
-    auto output_buffer_address = tensor_return_value.buffer()->address();
-    auto input_buffer_address = tensor_args.input_tensor_arg.buffer()->address();
-    auto weights_buffer_address = tensor_args.weight_arg.buffer()->address();
-
-    auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id);
-    auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);
-
-    for (const auto& core : cores) {
-        {
-            auto& runtime_args = reader_runtime_args[core.x][core.y];
-            runtime_args[0] = input_buffer_address;
-            runtime_args[1] = weights_buffer_address;
-        }
-
-        {
-            auto& runtime_args = writer_runtime_args[core.x][core.y];
-            runtime_args[0] = output_buffer_address;
-        }
-    }
+    return desc;
 }
 
 }  // namespace ttnn::prim

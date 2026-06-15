@@ -74,9 +74,9 @@ template <
     uint32_t MeshCols,
     ReplicateGroup Axis>
 inline uint32_t get_device_idx_from_global_token_idx(const uint32_t t) {
-    constexpr uint32_t Replicate_Group = (Axis == ReplicateGroup::NONE)   ? MeshRows * MeshCols
-                                         : (Axis == ReplicateGroup::COLS) ? MeshRows
-                                                                          : MeshCols;
+    [[maybe_unused]] constexpr uint32_t Replicate_Group = (Axis == ReplicateGroup::NONE)   ? MeshRows * MeshCols
+                                                          : (Axis == ReplicateGroup::COLS) ? MeshRows
+                                                                                           : MeshCols;
     const uint32_t device_in_group = t / TokensPerDevice;
 
     if constexpr (Axis == ReplicateGroup::NONE) {
@@ -122,6 +122,8 @@ void kernel_main() {
     constexpr uint32_t tokens = get_named_compile_time_arg_val("tokens");
     constexpr uint32_t hidden_size = get_named_compile_time_arg_val("hidden_size");
     constexpr uint32_t experts = get_named_compile_time_arg_val("experts");
+    constexpr uint32_t experts_per_device = get_named_compile_time_arg_val("experts_per_device");
+
     constexpr uint32_t selected_experts_k = get_named_compile_time_arg_val("selected_experts_k");
 
     // Chunk info
@@ -206,14 +208,13 @@ void kernel_main() {
     constexpr uint32_t one_page = 1;
     constexpr uint32_t TILE_HEIGHT = 32;
     constexpr uint32_t TILE_WIDTH = 32;
-    constexpr uint32_t experts_per_device = (experts + num_devices - 1) / num_devices;
     constexpr uint32_t element_size = tilize_output_page_size / (TILE_HEIGHT * TILE_WIDTH);
     constexpr uint32_t tile_width_bytes = TILE_WIDTH * element_size;
 
     // For parallel metadata processing - BRISC processes second half of this core's token range
     // Note: These are computed at runtime based on core_token_start/end in Step 3
-    constexpr uint32_t brisc_token_start = tokens / 2;
-    constexpr uint32_t brisc_token_end = tokens;
+    [[maybe_unused]] constexpr uint32_t brisc_token_start = tokens / 2;
+    [[maybe_unused]] constexpr uint32_t brisc_token_end = tokens;
     constexpr ReplicateGroup axis = ReplicateGroup(cluster_axis);
     constexpr uint32_t dispatch_devices = axis == ReplicateGroup::COLS ? mesh_rows : mesh_cols;
     constexpr uint32_t tokens_per_device = tokens / dispatch_devices;

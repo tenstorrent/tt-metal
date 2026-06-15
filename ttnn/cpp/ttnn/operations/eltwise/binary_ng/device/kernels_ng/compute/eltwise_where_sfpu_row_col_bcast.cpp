@@ -53,6 +53,7 @@ ALWI void process_tile(
     for (uint32_t j = tile_start; j < freq; ++j) {
         exp_cb_other.wait_front(num_tiles_per_cycle);
         exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
+        pack_reconfig_data_format(cb_out, cb_llk_post);
         unary_bcast_init<BroadcastType::ROW>(CB_OTHER, cb_llk_post);
 
         tile_regs_acquire();

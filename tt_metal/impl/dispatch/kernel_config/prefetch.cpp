@@ -63,10 +63,13 @@ PrefetchKernel::PrefetchKernel(
         get_reads_dispatch_cores) {
     static_config_.is_h_variant = h_variant;
     static_config_.is_d_variant = d_variant;
+    // TEMP: Disable function inlining on Prefetcher when watcher is enabled but no_inline is not specified to
+    // respect code space
+    force_watcher_no_inline_ =
+        descriptor_.rtoptions().get_watcher_enabled() && (not descriptor_.rtoptions().get_watcher_noinline());
+
     uint16_t channel = descriptor.cluster().get_assigned_channel_for_device(device_id);
-
     static_config_.dispatch_telemetry_disabled = descriptor.rtoptions().get_dispatch_telemetry_disabled();
-
     DispatchWorkerType type = PREFETCH;
     if (h_variant && d_variant) {
         this->logical_core_ = dispatch_core_manager.prefetcher_core(device_id, channel, cq_id);
@@ -80,6 +83,7 @@ PrefetchKernel::PrefetchKernel(
         type = PREFETCH_D;
     }
     this->kernel_type_ = FDKernelType::DISPATCH;
+    this->send_to_brisc_ = true;
     // Log prefetcher core info based on virtual core to inspector
     auto virtual_core = this->GetVirtualCore();
     tt::tt_metal::Inspector::set_prefetcher_core_info(virtual_core, type, cq_id, device_id, servicing_device_id);
@@ -144,7 +148,8 @@ void PrefetchKernel::GenerateStaticConfigs() {
         if (get_dispatch_query_manager_ref().dispatch_s_enabled()) {
             uint32_t dispatch_buffer_base = my_dispatch_constants.dispatch_buffer_base();
             if (GetCoreType() == CoreType::WORKER) {
-                // dispatch_s is on the same Tensix core as dispatch_d. Shared resources. Offset CB start idx.
+                // dispatch_s (and on Quasar, prefetch itself) shares a Tensix core with dispatch_d.
+                // Place dispatch_s CB immediately after dispatch_d's CB within the shared L1.
                 dispatch_s_buffer_base =
                     dispatch_buffer_base + (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE) *
                                                my_dispatch_constants.dispatch_buffer_pages();
@@ -239,7 +244,8 @@ void PrefetchKernel::GenerateStaticConfigs() {
         {  // Just to make it match previous implementation
             uint32_t dispatch_buffer_base = my_dispatch_constants.dispatch_buffer_base();
             if (GetCoreType() == CoreType::WORKER) {
-                // dispatch_s is on the same Tensix core as dispatch_d. Shared resources. Offset CB start idx.
+                // dispatch_s (and on Quasar, prefetch itself) shares a Tensix core with dispatch_d.
+                // Place dispatch_s CB immediately after dispatch_d's CB within the shared L1.
                 dispatch_s_buffer_base =
                     dispatch_buffer_base + (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE) *
                                                my_dispatch_constants.dispatch_buffer_pages();
@@ -565,16 +571,7 @@ void PrefetchKernel::CreateKernel() {
 
     // Compile at Os on IERISC to fit in code region.
     auto optimization_level = (GetCoreType() == CoreType::WORKER) ? KernelBuildOptLevel::O2 : KernelBuildOptLevel::Os;
-    configure_kernel_variant(
-        dispatch_kernel_file_names[PREFETCH],
-        {},
-        defines,
-        false,
-        true,
-        // TEMP: Disable function inlining on Prefetcher when watcher is enabled but no_inline is not specified to
-        // respect code space
-        descriptor_.rtoptions().get_watcher_enabled() && (not descriptor_.rtoptions().get_watcher_noinline()),
-        optimization_level);
+    configure_kernel_variant(dispatch_kernel_file_names[PREFETCH], {}, defines, optimization_level);
 }
 
 void PrefetchKernel::ConfigureCore() {

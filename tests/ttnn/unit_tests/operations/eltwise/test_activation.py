@@ -96,8 +96,7 @@ def test_gelu(device, h, w):
 @pytest.mark.parametrize(
     "low, high, atol, rtol",
     [
-        (-6, -3, 1e-2, 1e-2),  # Strong negative saturation region
-        (-3, 0, 1e-3, 1e-3),  # Negative transition region
+        (-13, 0, 1e-2, 1e-2),  # Negative saturation region
         (0, 3, 1e-2, 1e-2),  # Positive transition region
         (3, 6, 1e-3, 1e-3),  # Positive saturation region
     ],
@@ -123,6 +122,56 @@ def test_gelu_accurate_allclose(input_shapes, low, high, atol, rtol, device):
     result = ttnn.to_torch(tt_result)
     # Use allclose with range-specific tolerances
     assert_allclose(result, golden, atol=atol, rtol=rtol)
+
+
+def test_gelu_bfloat16_accuracy(device):
+    """Exhaustive bf16 accuracy test: all positive normal bfloat16 bit-patterns (0x0100–0x7F7F).
+
+    Every positive finite normal bf16 value is swept through ttnn.gelu and compared
+    against a float32 reference (torch.nn.functional.gelu upcast).  The requirement
+    is ≤ 10 ULP for every tested input.
+
+    Excluded categories:
+    - Subnormal inputs (x < 2^-126): hardware may flush subnormals to zero.
+    - NaN / +inf: handled by dedicated special-value tests.
+    - 128 positive normals whose exponent field = 1 (x ∈ [2^-126, 2^-125)):
+        gelu(x) ≈ x/2 falls in [2^-127, 2^-126) which is subnormal in fp32.
+        TT hardware DAZ/FTZ flushes this intermediate value to 0, so hardware
+        returns 0 while torch (no FTZ) returns a tiny bf16 subnormal or rounds
+        up to 2^-126 — up to 128 ULP error (e.g. 0x00FF → 128 ULP).
+        Bit-patterns: 0x0080–0x00FF.
+    """
+    # generate_all_bfloat16_bitpatterns returns (256, 256) — tile-layout compatible with no padding waste.
+    all_bf16_2d = generate_all_bfloat16_bitpatterns(torch.bfloat16)
+    all_bf16 = all_bf16_2d.flatten()
+
+    idx = torch.arange(0, 2**16, dtype=torch.int32)
+    exp_field = (idx >> 7) & 0xFF
+    is_negative = idx >= 0x8000
+
+    tiny = torch.finfo(torch.bfloat16).tiny
+    is_special = torch.isnan(all_bf16) | torch.isinf(all_bf16)
+    is_subnormal = (all_bf16.abs() > 0) & (all_bf16.abs() < tiny)
+    # exp=1 normals: gelu output is fp32-subnormal → hardware FTZ → 0; up to 128 ULP
+    is_exp1_normal = exp_field == 1
+
+    test_mask = ~is_negative & ~is_special & ~is_subnormal & ~is_exp1_normal
+
+    tt_in = ttnn.from_torch(
+        all_bf16_2d,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.gelu)
+    golden = golden_function(all_bf16, device=device)
+
+    result = ttnn.to_torch(ttnn.gelu(tt_in)).flatten()
+
+    check_mask = test_mask & torch.isfinite(golden) & torch.isfinite(result)
+    assert_with_ulp(golden[check_mask], result[check_mask], ulp_threshold=10)
 
 
 @pytest.mark.parametrize("h", [64])

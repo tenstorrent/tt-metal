@@ -265,14 +265,14 @@ void validate_reduce_result(
 
 static experimental::KernelSpec::CompilerOptions::Defines build_reduce_defines(const ReduceConfig& test_config) {
     experimental::KernelSpec::CompilerOptions::Defines reduce_defines;
-    reduce_defines.emplace_back("REDUCE_DIM", get_reduce_dim_define_string(test_config.reduce_dim));
+    reduce_defines.emplace("REDUCE_DIM", get_reduce_dim_define_string(test_config.reduce_dim));
     switch (test_config.reduce_type) {
-        case ReduceType::SUM: reduce_defines.emplace_back("REDUCE_OP", "PoolType::SUM"); break;
-        case ReduceType::AVG: reduce_defines.emplace_back("REDUCE_OP", "PoolType::AVG"); break;
-        case ReduceType::MAX: reduce_defines.emplace_back("REDUCE_OP", "PoolType::MAX"); break;
+        case ReduceType::SUM: reduce_defines.emplace("REDUCE_OP", "PoolType::SUM"); break;
+        case ReduceType::AVG: reduce_defines.emplace("REDUCE_OP", "PoolType::AVG"); break;
+        case ReduceType::MAX: reduce_defines.emplace("REDUCE_OP", "PoolType::MAX"); break;
     }
-    reduce_defines.emplace_back("MATH_ONLY", test_config.math_only_reduce ? "1" : "0");
-    reduce_defines.emplace_back("DST_ACCUM_MODE", test_config.fp32_dest_acc_en ? "1" : "0");
+    reduce_defines.emplace("MATH_ONLY", test_config.math_only_reduce ? "1" : "0");
+    reduce_defines.emplace("DST_ACCUM_MODE", test_config.fp32_dest_acc_en ? "1" : "0");
     return reduce_defines;
 }
 
@@ -309,14 +309,14 @@ void run_single_core_reduce_program(
 
     constexpr uint32_t num_buffer_tiles = 32;
     constexpr uint32_t num_output_buffer_tiles = 32;
-    constexpr const char* SRC0_DFB = "src0_dfb";
-    constexpr const char* SRC1_DFB = "src1_dfb";
-    constexpr const char* DST_DFB = "dst_dfb";
-    constexpr const char* READER = "reader";
-    constexpr const char* WRITER = "writer";
-    constexpr const char* COMPUTE = "compute";
-    constexpr const char* IN_TENSOR = "in_tensor";
-    constexpr const char* OUT_TENSOR = "out_tensor";
+    const experimental::DFBSpecName SRC0_DFB{"src0_dfb"};
+    const experimental::DFBSpecName SRC1_DFB{"src1_dfb"};
+    const experimental::DFBSpecName DST_DFB{"dst_dfb"};
+    const experimental::KernelSpecName READER{"reader"};
+    const experimental::KernelSpecName WRITER{"writer"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
+    const experimental::TensorParamName IN_TENSOR{"in_tensor"};
+    const experimental::TensorParamName OUT_TENSOR{"out_tensor"};
 
     experimental::DataflowBufferSpec src0_dfb_spec{
         .unique_id = SRC0_DFB,
@@ -350,12 +350,12 @@ void run_single_core_reduce_program(
         bfloat16 bfloat_scaler_value = bfloat16(scaler);
         uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
         reader_cta_bindings = {{"scaler", packed_scaler_value}};
-        reader_defines.emplace_back("REDUCE_SCALER", "1");
+        reader_defines.emplace("REDUCE_SCALER", "1");
         reader_runtime_arg_names = {"N", "Ht", "Wt", "HtWt"};
     } else {
         reader_kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank_2_0.cpp";
-        reader_defines.emplace_back("GENERATE_BCAST_SCALER", "1");
-        reader_defines.emplace_back("BLOCK_SIZE", "1");
+        reader_defines.emplace("GENERATE_BCAST_SCALER", "1");
+        reader_defines.emplace("BLOCK_SIZE", "1");
         reader_runtime_arg_names = {"num_tiles", "scaler"};
     }
 
@@ -482,20 +482,19 @@ void run_single_core_reduce_program(
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = READER,
-            .runtime_arg_values = {{.node = node, .args = reader_named_rtas}},
+            .kernel = READER,
+            .runtime_arg_values =
+                {{node, experimental::ProgramRunArgs::KernelRunArgs::RuntimeArgValues(reader_named_rtas)}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = WRITER,
-            .runtime_arg_values = {{.node = node, .args = {{"num_tiles", writer_num_tiles}}}},
+            .kernel = WRITER,
+            .runtime_arg_values = {{node, {{"num_tiles", writer_num_tiles}}}},
         },
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = COMPUTE,
-        },
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     params.tensor_args = {
-        {.tensor_parameter_name = IN_TENSOR, .tensor = in_tensor},
-        {.tensor_parameter_name = OUT_TENSOR, .tensor = out_tensor},
+        {IN_TENSOR, experimental::ProgramRunArgs::TensorArgument{in_tensor}},
+        {OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{out_tensor}},
     };
     experimental::SetProgramRunArgs(program_run, params);
 

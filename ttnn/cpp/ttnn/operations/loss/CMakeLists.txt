@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_loss ${LIB_TYPE})
 add_library(TTNN::Ops::Loss ALIAS ttnn_op_loss)
 
-tt_reuse_precompile_headers(ttnn_op_loss TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_loss TTNN::PCHLean)
 TT_ENABLE_UNITY_BUILD(ttnn_op_loss)
 
 set_target_properties(

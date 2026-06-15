@@ -33,7 +33,7 @@ inline void calculate_add_rsqrt(uint32_t param0) {
 // Initialize for add + rsqrt operation (just initializes rsqrt constants)
 template <bool APPROXIMATION_MODE>
 inline void init_add_rsqrt() {
-    _init_sqrt_<APPROXIMATION_MODE>();
+    sqrt_init<APPROXIMATION_MODE>();
 }
 
 }  // namespace ckernel::sfpu

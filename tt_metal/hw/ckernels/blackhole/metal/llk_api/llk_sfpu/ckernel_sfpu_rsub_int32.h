@@ -48,12 +48,12 @@ void calculate_rsub_scalar_int32(uint32_t scalar) {
     // Load scalar value param to lreg2
     _sfpu_load_imm32_(p_sfpu::LREG1, int_scalar);
     for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOAD(p_sfpu::LREG0, INT32, ADDR_MOD_7, 0);
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
         // Uses 6 as imod. Performs integer addition between LREG specified in lreg_c and the 2's complement (4) of LREG
         // specified in lreg_dest. The condition code register is not modified (2).
         TTI_SFPIADD(
             0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
-        TTI_SFPSTORE(p_sfpu::LREG0, INT32, ADDR_MOD_7, 0);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
         sfpi::dst_reg++;
     }
 }

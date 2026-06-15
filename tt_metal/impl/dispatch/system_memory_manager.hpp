@@ -137,6 +137,8 @@ private:
 
     std::unique_ptr<char[]> dram_region_staging_buffer;
 
+    // Bump-allocated tail of CQ sysmem (after all per-CQ issue/completion buffers). Device and host
+    // addresses are returned together by allocate_region() for PCIe/D2H consumers.
     uint32_t free_region_start_ = 0;
     uint32_t free_region_size_ = 0;
     uint32_t free_region_bump_ = 0;

@@ -14,16 +14,13 @@ namespace ckernel {
 /**
  * @brief Initializes the SFPU for ternary where operations.
  *
- * Programs shared SFPU state (ADDR_MOD_7) via the common ternary init, then
- * calls @c _init_where_() to set up the dest address-mod for per-row
- * advancement and prime the CC stack to a known-empty lane mask.
+ * Programs shared SFPU state (ADDR_MOD_7) via the common ternary init
  *
  * @tparam APPROXIMATE  Unused for where; kept for API parity with other SFPU ops.
  */
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_ternary_sfpu_where_init() {
     _llk_math_eltwise_ternary_sfpu_init_<SfpuType::where>();
-    sfpu::init_where();
 }
 
 /**
@@ -39,14 +36,17 @@ inline void llk_math_eltwise_ternary_sfpu_where_init() {
  * @param dst_index1  DEST tile index for the true-branch operand.
  * @param dst_index2  DEST tile index for the false-branch operand.
  * @param odst        DEST tile index that receives the result.
- * @param vector_mode Must be @c VectorMode::RC; Quasar only supports full-tile mode.
+ * @param vector_mode Faces to process: R (0-1), C (0,2), RC (all 4, default), or scalar (once).
  */
 template <bool APPROXIMATE, [[maybe_unused]] DataFormat data_format>
 inline void llk_math_eltwise_ternary_sfpu_where(
-    uint dst_index0, uint dst_index1, uint dst_index2, uint odst, int vector_mode = (int)VectorMode::RC) {
-    LLK_ASSERT(vector_mode == (int)VectorMode::RC, "Quasar currently only supports vector mode RC");
+    std::uint32_t dst_index0,
+    std::uint32_t dst_index1,
+    std::uint32_t dst_index2,
+    std::uint32_t odst,
+    VectorMode vector_mode = VectorMode::RC) {
     _llk_math_eltwise_ternary_sfpu_params_(
-        sfpu::calculate_where<APPROXIMATE, SFPU_ITERATIONS>, dst_index0, dst_index1, dst_index2, odst);
+        sfpu::calculate_where<APPROXIMATE, SFPU_ITERATIONS>, dst_index0, dst_index1, dst_index2, odst, vector_mode);
 }
 
 }  // namespace ckernel

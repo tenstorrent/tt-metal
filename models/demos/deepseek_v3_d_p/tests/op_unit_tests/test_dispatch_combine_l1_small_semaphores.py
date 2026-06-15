@@ -84,8 +84,13 @@ def run_dispatch_op(mesh_device, use_l1_small):
     tt_weights = ttnn.from_torch(
         weights, mesh_mapper=mesh_mapper, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16
     )
+    # #44928: dispatch consumes UINT16 indices directly from moe_grouped_topk.
     tt_indices = ttnn.from_torch(
-        indices, mesh_mapper=mesh_mapper, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.int32
+        indices,
+        mesh_mapper=mesh_mapper,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.uint16,
     )
 
     expert_dispatch_table = ExpertMapping.create_dispatch_table(

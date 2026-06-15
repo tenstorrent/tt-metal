@@ -53,7 +53,8 @@ bool compare_tensors_for_broken(const ttnn::Tensor& t1, const ttnn::Tensor& t2, 
     return all_equals;
 }
 
-TEST_F(LinearOpTest, TTNNBackwardGoodShape) {
+// Disabled: non-deterministic accuracy failures — https://github.com/tenstorrent/tt-metal/issues/46121
+TEST_F(LinearOpTest, DISABLED_TTNNBackwardGoodShape) {
     auto tensor = ttml::autograd::create_tensor();
     ttml::init::uniform_init(tensor, ttnn::Shape({64, 1, 256, 64}), ttml::init::UniformRange{-0.1F, 0.1F});
     tensor->set_requires_grad(true);

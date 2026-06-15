@@ -26,13 +26,15 @@ void kernel_main() {
     CircularBuffer cb_out(out_cb);
 
     cb_out.reserve_back(num_out_tiles);
-    acquire_dst();
+    tile_regs_acquire();
     cb0.wait_front(num_in0_tiles);
     cb1.wait_front(num_in1_tiles);
     matmul_tiles(in0_cb, in1_cb, in0_tile_index, in1_tile_index, out_tile_index);
+    tile_regs_commit();
+    tile_regs_wait();
     pack_tile(0, out_cb);
     cb0.pop_front(num_in0_tiles);
     cb1.pop_front(num_in1_tiles);
-    release_dst();
+    tile_regs_release();
     cb_out.push_back(num_out_tiles);
 }

@@ -8,15 +8,18 @@
 
 namespace ttml::metal::ops::softmax::device {
 
-struct operation_attributes_t {
+struct SoftmaxParams {
     const int32_t dim{3U};  // Use last dimension by default
 };
 
-struct tensor_args_t {
+struct SoftmaxInputs {
     const ttnn::Tensor& input;
 
     std::optional<ttnn::Tensor> preallocated_output;
 };
+
+using operation_attributes_t = SoftmaxParams;
+using tensor_args_t = SoftmaxInputs;
 
 using tensor_return_value_t = ttnn::Tensor;
 using spec_return_value_t = ttnn::TensorSpec;

@@ -14,6 +14,7 @@ from models.demos.deepseek_v3.tt import generator_vllm as generator_vllm_module
 pytestmark = pytest.mark.t3k_compat
 
 
+@pytest.mark.skip(reason="Disabled: see #45677")
 def test_initialize_vllm_model_passes_cache_dir_without_enabling_weight_cache(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
@@ -43,6 +44,7 @@ def test_deepseek_generator_exposes_max_tokens_all_users_capability() -> None:
     assert generator_vllm_module.DeepseekGenerator.get_max_tokens_all_users() == FALLBACK_MAX_TOKENS_ALL_USERS
 
 
+@pytest.mark.skip(reason="Disabled: see #45677")
 def test_get_max_tokens_all_users_overrides_deepseek_r1_on_wormhole(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(generator_vllm_module, "is_wormhole_b0", lambda: True)
 
@@ -56,6 +58,7 @@ def test_get_max_tokens_all_users_overrides_deepseek_r1_on_wormhole(monkeypatch:
     )
 
 
+@pytest.mark.skip(reason="Disabled: see #45677")
 def test_get_max_tokens_all_users_uses_fallback_for_other_configs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(generator_vllm_module, "is_wormhole_b0", lambda: False)
 

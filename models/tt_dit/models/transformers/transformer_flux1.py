@@ -4,9 +4,11 @@
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 import torch
+from diffusers import FluxTransformer2DModel
 
 import ttnn
 from models.common.utility_functions import is_blackhole
@@ -17,6 +19,8 @@ from ...layers.embeddings import CombinedTimestepGuidanceTextProjEmbeddings
 from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear, prepare_chunked_linear_output
 from ...layers.module import Module, ModuleList
 from ...layers.normalization import DistributedLayerNorm
+from ...utils import cache
+from ...utils.padding import PaddingConfig
 from ...utils.substate import rename_substate
 
 if TYPE_CHECKING:
@@ -24,7 +28,6 @@ if TYPE_CHECKING:
 
     from ...parallel.config import DiTParallelConfig
     from ...parallel.manager import CCLManager
-    from ...utils.padding import PaddingConfig
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/transformers/transformer_flux.py
@@ -420,3 +423,73 @@ class Flux1Transformer(Module):
         spatial = spatial * (1 + scale) + shift
 
         return self.proj_out(spatial)
+
+
+class Flux1Checkpoint:
+    """A Flux.1 checkpoint: fetches weights and builds loaded transformers."""
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+        torch_transformer = FluxTransformer2DModel.from_pretrained(
+            name,
+            subfolder="transformer",
+            torch_dtype=torch.bfloat16,
+        )
+        torch_transformer.eval()
+        self._config = torch_transformer.config
+        self._state_dict = torch_transformer.state_dict()
+
+        # Pos embedding is computed in torch and only used as a CPU helper, so keep the reference.
+        self.pos_embed = torch_transformer.pos_embed
+        # Latent channels are stored as `in_channels * 4` in the FLUX checkpoint config; the actual
+        # latent channel count is `in_channels // 4`.
+        self.num_channels_latents: int = self._config.in_channels // 4
+        self.joint_attention_dim: int = self._config.joint_attention_dim
+        self.patch_size: int = self._config.patch_size
+        self.with_guidance_embeds: bool = self._config.guidance_embeds
+
+    def build(
+        self,
+        *,
+        ccl_manager: CCLManager,
+        parallel_config: DiTParallelConfig,
+    ) -> Flux1Transformer:
+        """Construct a ``Flux1Transformer`` for this checkpoint and load its weights."""
+        device = ccl_manager.mesh_device
+        c = self._config
+
+        if c.num_attention_heads % parallel_config.tensor_parallel.factor != 0:
+            padding_config = PaddingConfig.from_tensor_parallel_factor(
+                c.num_attention_heads,
+                c.attention_head_dim,
+                parallel_config.tensor_parallel.factor,
+            )
+        else:
+            padding_config = None
+
+        model = Flux1Transformer(
+            patch_size=c.patch_size,
+            in_channels=c.in_channels,
+            num_layers=c.num_layers,
+            num_single_layers=c.num_single_layers,
+            attention_head_dim=c.attention_head_dim,
+            num_attention_heads=c.num_attention_heads,
+            joint_attention_dim=c.joint_attention_dim,
+            pooled_projection_dim=c.pooled_projection_dim,
+            out_channels=c.in_channels,  # FLUX uses in_channels for both directions.
+            axes_dims_rope=c.axes_dims_rope,
+            with_guidance_embeds=c.guidance_embeds,
+            mesh_device=device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+            padding_config=padding_config,
+        )
+        cache.load_model(
+            model,
+            get_torch_state_dict=lambda: self._state_dict,
+            model_name=os.path.basename(self._name),
+            subfolder="transformer",
+            parallel_config=parallel_config,
+            mesh_shape=tuple(device.shape),
+        )
+        return model

@@ -5,10 +5,12 @@
 
 #include <tuple>
 
+#include "tt_metal/fabric/hw/inc/fabric_routing_mode.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
+#include "ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 
 namespace ttnn::operations::ccl::common {
 
@@ -782,6 +784,69 @@ inline void fabric_send_chip_unicast_noc_unicast_semaphore_only_1d(
         reinterpret_cast<uint32_t>(packet_header), sizeof(PACKET_HEADER_TYPE));
 }
 
+// UDM compat shim for ccl_routing_utils::fabric_set_line_unicast_route. That helper's 2D arm
+// matches via std::is_same_v<HybridMeshPacketHeader>, which won't match UDMHybridMeshPacketHeader
+// (a subclass). Slice the pointer to HybridMesh* so the existing 2D arm catches it. No-op for
+// HybridMesh and LowLatency. Returning auto* keeps the non-UDM branch's volatile-qualified type
+// intact.
+template <typename HdrT>
+FORCE_INLINE auto* pkt_hdr_for_route_helper(volatile HdrT* hdr) {
+    if constexpr (std::is_same_v<HdrT, tt::tt_fabric::UDMHybridMeshPacketHeader>) {
+        return reinterpret_cast<volatile tt::tt_fabric::HybridMeshPacketHeader*>(hdr);
+    } else {
+        return hdr;
+    }
+}
+
+// Portable fabric send for NOC unicast semaphore increment. Single code path under both
+// FABRIC_1D and FABRIC_2D: dispatches on PACKET_HEADER_TYPE via ccl_routing_utils to set up
+// the route, then issues the send via the linear/api.h portable entry point. Replaces the
+// private-API helpers above for new code (kept side-by-side because external callers
+// (all_to_all_combine) still reference the old helpers).
+template <
+    uint32_t LinearizedSrcMeshCoord,
+    tt::tt_fabric::Topology Topology,
+    uint32_t MeshRows,
+    uint32_t MeshCols,
+    typename SenderType>
+inline void fabric_send_chip_unicast_noc_unicast_semaphore_only_portable(
+    std::array<SenderType, 4>& fabric_connections,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    const uint32_t linearized_dest_mesh_coord,
+    uint32_t dest_chip_id,
+    uint32_t dest_mesh_id,
+    uint64_t noc_remote_semaphore_address,
+    uint32_t increment_value,
+    bool flush) {
+    const auto cmd_header =
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{noc_remote_semaphore_address, increment_value, flush};
+
+    uint32_t route;
+    uint8_t num_hops;
+    ccl_routing_utils::line_unicast_route_info_t route_info{};
+    route_info.dst_mesh_id = static_cast<uint16_t>(dest_mesh_id);
+
+    if constexpr (
+        std::is_same_v<PACKET_HEADER_TYPE, tt::tt_fabric::HybridMeshPacketHeader> ||
+        std::is_same_v<PACKET_HEADER_TYPE, tt::tt_fabric::UDMHybridMeshPacketHeader>) {
+        // 2D: route field is dst_chip_id; route direction comes from the hop router.
+        route_info.dst_chip_id = static_cast<uint16_t>(dest_chip_id);
+        route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
+        num_hops = 1;  // 2D header carries the dest; num_hops is unused by HybridMesh::to_chip_unicast
+    } else {
+        // 1D: route field is the manhattan distance; route direction comes from get_route.
+        const uint32_t distance =
+            manhattan_distance<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
+        route_info.distance_in_hops = static_cast<uint16_t>(distance);
+        route = get_route<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
+        num_hops = static_cast<uint8_t>(distance);
+    }
+
+    ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_for_route_helper(packet_header), route_info);
+    tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_atomic_inc(
+        &fabric_connections[route], packet_header, cmd_header, num_hops);
+}
+
 // Bidirectional fabric multicast atomic increment - sends to both positive and negative directions.
 // Topology=Ring: 1D ring multicast that covers all dispatch_devices with just 2 packets instead of
 //                (dispatch_devices - 1) unicasts. DoubleAntipodalAtomicInc=true: the antipodal device
@@ -935,18 +1000,19 @@ inline void send_init_semaphore_to_configured_targets(
         if (device_idx == LinearizedSrcMeshCoord) {
             continue;
         } else if (is_configured_target<LinearizedSrcMeshCoord, MeshRows, MeshCols, Axis>(device_idx)) {
-            if constexpr (is_1d_topology<Topology>()) {
-                fabric_send_chip_unicast_noc_unicast_semaphore_only_1d<
-                    LinearizedSrcMeshCoord,
-                    Topology,
-                    MeshRows,
-                    MeshCols>(fabric_connections, packet_header, device_idx, init_noc_semaphore_addr, 1, flush);
-            } else {
-                const auto& dest_chip_id = dest_chip_ids[device_idx];
-                const auto& dest_mesh_id = dest_mesh_ids[device_idx];
-                fabric_send_chip_unicast_noc_unicast_semaphore_only<SrcChipId, MeshRows, MeshCols>(
-                    fabric_connections, packet_header, dest_chip_id, dest_mesh_id, init_noc_semaphore_addr, 1, flush);
-            }
+            fabric_send_chip_unicast_noc_unicast_semaphore_only_portable<
+                LinearizedSrcMeshCoord,
+                Topology,
+                MeshRows,
+                MeshCols>(
+                fabric_connections,
+                packet_header,
+                device_idx,
+                dest_chip_ids[device_idx],
+                dest_mesh_ids[device_idx],
+                init_noc_semaphore_addr,
+                1,
+                flush);
         }
     }
 }
@@ -997,10 +1063,11 @@ inline void fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction(
 template <tt::tt_fabric::Topology Topology, uint32_t AxisSize>
 inline uint32_t calculate_hops_direction_enforced_1D(uint32_t src_coord, uint32_t dest_coord, Polarity polarity) {
     // Currently this function has only been tested for 1D Ring topology.
-    static_assert(
-        has_wrap_around<Topology>(),
-        "calculate_hops_direction_enforced_1D has only been tested for 1D topologies with wraparound links");
-    return directional_wrap_distance<AxisSize>(src_coord, dest_coord, polarity);
+    if constexpr (has_wrap_around<Topology>()) {
+        return directional_wrap_distance<AxisSize>(src_coord, dest_coord, polarity);
+    } else {
+        return topological_distance<Topology>(src_coord, dest_coord, AxisSize);
+    }
 }
 
 // Given a list of destinations, generates a hop mask relative to the source chip

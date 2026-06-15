@@ -22,9 +22,6 @@
 #include "api/compute/layernorm.h"
 #include "chain_llk.hpp"
 
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
-
 constexpr uint32_t cb_inp = tt::CBIndex::c_0;
 constexpr uint32_t cb_stats = tt::CBIndex::c_1;
 
@@ -140,24 +137,28 @@ void kernel_main() {
          */
         reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION>(cb_stats, cb_reduce, cb_stats_reduced);
         cb_wait_front(cb_stats, stats_tiles_cols);
-        cb_reserve_back(cb_stats_reduced, stats_tile_stride);
 
-        ACQ();
+        tile_regs_acquire();
         // Reduce sum(x**2) first
         for (uint32_t i = 0; i < stats_tiles_cols; i += stats_tile_stride) {
             reduce_tile<PoolType::AVG, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION>(cb_stats, cb_reduce, i, 0, 0);
         }
-        pack_tile(0, cb_stats_reduced);
-
         // Reduce sum(x) next
         for (uint32_t i = 1; i < stats_tiles_cols; i += stats_tile_stride) {
             reduce_tile<PoolType::AVG, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION>(cb_stats, cb_reduce, i, 0, 1);
         }
-        pack_tile(1, cb_stats_reduced);
+        tile_regs_commit();
 
-        REL();
-        cb_push_back(cb_stats_reduced, stats_tile_stride);
         cb_pop_front(cb_stats, stats_tiles_cols);
+
+        cb_reserve_back(cb_stats_reduced, stats_tile_stride);
+
+        tile_regs_wait();
+        pack_tile(0, cb_stats_reduced);
+        pack_tile(1, cb_stats_reduced);
+        tile_regs_release();
+
+        cb_push_back(cb_stats_reduced, stats_tile_stride);
 
         reduce_uninit();
 
@@ -167,12 +168,17 @@ void kernel_main() {
         reconfig_data_format(cb_stats_reduced, cb_stats_reduced);
         pack_reconfig_data_format(cb_mean_squared);
         mul_tiles_init(cb_stats_reduced, cb_stats_reduced);
-        cb_reserve_back(cb_mean_squared, onetile);
         cb_wait_front(cb_stats_reduced, stats_tile_stride);
-        ACQ();
+
+        tile_regs_acquire();
         mul_tiles(cb_stats_reduced, cb_stats_reduced, 1, 1, 0);
+        tile_regs_commit();
+
+        cb_reserve_back(cb_mean_squared, onetile);
+
+        tile_regs_wait();
         pack_tile(0, cb_mean_squared);
-        REL();
+        tile_regs_release();
 
         cb_push_back(cb_mean_squared, 1);
 
@@ -183,32 +189,45 @@ void kernel_main() {
         pack_reconfig_data_format(cb_var);
         sub_tiles_init(cb_stats_reduced, cb_mean_squared);
 
-        cb_reserve_back(cb_var, onetile);
         cb_wait_front(cb_mean_squared, 1);
-        ACQ();
+
+        tile_regs_acquire();
         sub_tiles(cb_stats_reduced, cb_mean_squared, 0, 0, 0);
-        pack_tile(0, cb_var);
-        REL();
-        cb_push_back(cb_var, 1);
+        tile_regs_commit();
+
         cb_pop_front(cb_mean_squared, 1);
+
+        cb_reserve_back(cb_var, onetile);
+
+        tile_regs_wait();
+        pack_tile(0, cb_var);
+        tile_regs_release();
+
+        cb_push_back(cb_var, 1);
 
         /*
          * 1/sqrt(var + eps)
          */
         cb_wait_front(cb_var, 1);
-        cb_reserve_back(cb_recip_sqrt_var, 1);
         reconfig_data_format(cb_var, cb_eps);
         pack_reconfig_data_format(cb_recip_sqrt_var);
-
         add_tiles_init(cb_var, cb_eps);
-        ACQ();
+
+        tile_regs_acquire();
         add_tiles(cb_var, cb_eps, 0, 0, 0);
         rsqrt_tile_init<LEGACY_RSQRT>();
         rsqrt_tile<LEGACY_RSQRT>(0);
-        pack_tile(0, cb_recip_sqrt_var);
-        REL();
-        cb_push_back(cb_recip_sqrt_var, 1);
+        tile_regs_commit();
+
         cb_pop_front(cb_var, 1);
+
+        cb_reserve_back(cb_recip_sqrt_var, 1);
+
+        tile_regs_wait();
+        pack_tile(0, cb_recip_sqrt_var);
+        tile_regs_release();
+
+        cb_push_back(cb_recip_sqrt_var, 1);
 
         if constexpr (do_gamma && do_beta) {
             /*

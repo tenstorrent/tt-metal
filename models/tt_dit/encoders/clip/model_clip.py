@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import math
+
 import torch
 from ttnn.distributed.distributed import ConcatMeshToTensor
 
@@ -14,6 +16,7 @@ from ...layers.linear import ColParallelLinear, Linear
 from ...layers.module import Module, ModuleList, Parameter
 from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
+from ...utils import tensor
 from ...utils.substate import rename_substate
 
 
@@ -121,14 +124,13 @@ class CLIPEncoder(Module):
     def forward(
         self,
         prompt_tokenized: ttnn.Tensor,
-        mesh_device: ttnn.Device,
         *,
-        return_normalized_state: bool = False,
-    ) -> tuple[ttnn.Tensor, ...]:
-        hidden_states = self.embeddings(prompt_tokenized, mesh_device)
+        skip_pooling: bool = False,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        hidden_states = self.embeddings(prompt_tokenized)
 
         causal_attention_mask = create_4d_causal_attention_mask(
-            prompt_tokenized.shape, mesh_device, dtype=hidden_states.get_dtype()
+            prompt_tokenized.shape, self.mesh_device, dtype=hidden_states.get_dtype()
         )
 
         encoder_output = self.encoder(
@@ -146,28 +148,33 @@ class CLIPEncoder(Module):
             compute_kernel_config=self.compute_kernel_config,
         )
 
-        # gather eos
+        if skip_pooling:
+            return encoder_output, normalized_final_state
+
+        pooled_output = self.pooled_output(prompt_tokenized, normalized_final_state)
+        return encoder_output, pooled_output
+
+    def pooled_output(
+        self,
+        prompt_tokenized: ttnn.Tensor,
+        normalized_final_state: ttnn.Tensor,
+    ) -> ttnn.Tensor:
         if self.eos_token_id is None:
             self.eos_token_id = 2
 
-        pooled_output = self._gather_eos(
+        out = self._gather_eos(
             normalized_final_state,
             prompt_tokenized,
             self.eos_token_id,
-            mesh_device=mesh_device,
+            mesh_device=self.mesh_device,
             ccl_manager=self.ccl_manager,
         )
 
         if self.text_projection is not None:
             text_projection_transposed = ttnn.transpose(self.text_projection.data, -2, -1)
-            pooled_output = ttnn.matmul(
-                pooled_output, text_projection_transposed, compute_kernel_config=self.compute_kernel_config
-            )
+            out = ttnn.matmul(out, text_projection_transposed, compute_kernel_config=self.compute_kernel_config)
 
-        if return_normalized_state:
-            return encoder_output, pooled_output, normalized_final_state
-
-        return encoder_output, pooled_output
+        return out
 
     def _pool_eos_from_torch_tensors(self, ids_t: torch.Tensor, seq_t: torch.Tensor, eos_token_id: int) -> torch.Tensor:
         """Helper function to pool EOS tokens from torch tensors.
@@ -564,7 +571,7 @@ class TextEmbeddings(Module):
         if "position_embedding.weight" in state:
             state["position_embedding"] = state.pop("position_embedding.weight")
 
-    def forward(self, prompt: ttnn.Tensor, device: ttnn.Device) -> ttnn.Tensor:
+    def forward(self, prompt: ttnn.Tensor) -> ttnn.Tensor:
         seq_len = prompt.shape[-1]
 
         if seq_len > self.config.max_prompt_length:
@@ -573,9 +580,9 @@ class TextEmbeddings(Module):
 
         input_embeddings = ttnn.embedding(prompt, self.token_embedding.data, layout=ttnn.TILE_LAYOUT)
 
-        position_ids = torch.arange(seq_len).expand((1, -1))  # shape: (1, seq_len)
-        position_ids_ttnn = ttnn.from_torch(position_ids, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
-        position_embeddings = ttnn.embedding(position_ids_ttnn, self.position_embedding.data, layout=ttnn.TILE_LAYOUT)
+        position_ids = tensor.arange(0, seq_len, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=self.mesh_device)
+        position_ids = ttnn.unsqueeze(position_ids, 0)  # shape: (1, seq_len)
+        position_embeddings = ttnn.embedding(position_ids, self.position_embedding.data, layout=ttnn.TILE_LAYOUT)
 
         return input_embeddings + position_embeddings
 
@@ -585,9 +592,9 @@ def create_4d_causal_attention_mask(
     input_shape: tuple[int, int], device: ttnn.Device, dtype: ttnn.DataType
 ) -> ttnn.Tensor:
     """Create a 4D causal attention mask for the given input shape."""
-    batch_size, tgt_len = input_shape
-    mask = torch.full((tgt_len, tgt_len), float("-inf"))
-    mask_cond = torch.arange(mask.size(-1))
-    mask.masked_fill_(mask_cond < (mask_cond + 1).view(mask.size(-1), 1), 0)
-    mask = mask[None, None, :, :].expand(batch_size, 1, tgt_len, tgt_len)
-    return ttnn.from_torch(mask, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    batch_size, seq_len = input_shape
+
+    mask = tensor.full([1, 1, seq_len, seq_len], -math.inf, dtype=dtype, device=device)
+    mask = tensor.triu(mask, diagonal=1)
+
+    return ttnn.expand(mask, [batch_size, 1, seq_len, seq_len])

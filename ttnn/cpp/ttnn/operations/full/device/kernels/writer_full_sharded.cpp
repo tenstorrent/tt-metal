@@ -27,7 +27,7 @@ void kernel_main() {
     uint32_t write_addr = get_write_ptr(cb_value);
 
     if (val.u == 0) {
-        zero_buffer(write_addr, page_size);
+        zero_buffer(cb_value, page_size);
     } else {
 #ifdef OUTPUT_DTYPE_BFLOAT16
         auto ptr = reinterpret_cast<uint16_t*>(write_addr);

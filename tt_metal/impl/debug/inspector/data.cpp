@@ -123,6 +123,10 @@ void Data::rpc_get_programs(rpc::Inspector::GetProgramsResults::Builder& results
             kernel.setPath(kernel_data.path);
             kernel.setSource(kernel_data.source);
             kernel.setProgramId(program_id);
+            auto elf_paths_list = kernel.initProcessorElfPaths(kernel_data.processor_elf_paths.size());
+            for (size_t k = 0; k < kernel_data.processor_elf_paths.size(); ++k) {
+                elf_paths_list.set(k, kernel_data.processor_elf_paths[k]);
+            }
         }
     }
 }
@@ -263,6 +267,10 @@ void Data::rpc_get_kernel(rpc::Inspector::GetKernelParams::Reader params, rpc::I
     kernel.setPath(kernel_data.path);
     kernel.setSource(kernel_data.source);
     kernel.setProgramId(program_id);
+    auto elf_paths_list = kernel.initProcessorElfPaths(kernel_data.processor_elf_paths.size());
+    for (size_t k = 0; k < kernel_data.processor_elf_paths.size(); ++k) {
+        elf_paths_list.set(k, kernel_data.processor_elf_paths[k]);
+    }
 }
 
 // Get build environment information for all devices

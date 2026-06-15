@@ -26,14 +26,13 @@ template <
     int ITERATIONS = 8>
 inline void calculate_sfpu_binary_bitwise(
     const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-    constexpr auto instruction_mode = to_underlying(INSTRUCTION_MODE);
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         // size of each tile in Dest is 64 rows
         constexpr std::uint32_t dst_tile_size = 64;
 
-        TT_SFPLOAD(0, instruction_mode, 3, dst_index_in0 * dst_tile_size);
-        TT_SFPLOAD(1, instruction_mode, 3, dst_index_in1 * dst_tile_size);
+        TT_SFPLOAD(0, INSTRUCTION_MODE, 3, dst_index_in0 * dst_tile_size);
+        TT_SFPLOAD(1, INSTRUCTION_MODE, 3, dst_index_in1 * dst_tile_size);
 
         if constexpr (BITWISE_OP == BinaryBitwiseOp::AND) {
             TTI_SFPAND(0, 1, 0, 0);
@@ -43,7 +42,7 @@ inline void calculate_sfpu_binary_bitwise(
             TTI_SFPXOR(0, 1, 0, 0);
         }
 
-        TT_SFPSTORE(0, instruction_mode, 3, dst_index_out * dst_tile_size);
+        TT_SFPSTORE(0, INSTRUCTION_MODE, 3, dst_index_out * dst_tile_size);
         sfpi::dst_reg++;
     }
 }

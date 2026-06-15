@@ -20,12 +20,17 @@ on:
         required: false
         type: string
         default: 'Release'
+      enable-kernel-ccache:
+        description: 'Enable kernel ccache for JIT compilation at runtime'
+        default: false
+        type: boolean
 
 jobs:
   sdk-examples:
+    environment: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'mainline' || '' }}
     runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', inputs.runner) }}
     container:
-      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!'}}
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
       volumes:
         - /work
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -37,8 +42,11 @@ jobs:
     steps:
       - name: Checkout actions
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
-          sparse-checkout: .github/actions/download-artifact-with-retry
+          sparse-checkout: |
+            .github/actions/download-artifact-with-retry
+            .github/scripts/ccache_log_filter.sh
           sparse-checkout-cone-mode: false
 
       - uses: ./.github/actions/download-artifact-with-retry
@@ -70,6 +78,37 @@ jobs:
           echo "LD_LIBRARY_PATH=$CLANG_RT_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
           echo "ASAN_OPTIONS=detect_leaks=0:color=always" >> "$GITHUB_ENV"
           echo "LSAN_OPTIONS=suppressions=/usr/share/tt-metalium/lsan.supp" >> "$GITHUB_ENV"
+
+      - name: Set up kernel ccache
+        if: ${{ inputs.enable-kernel-ccache == true && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
+        run: |
+          echo "Enabling TT Metal kernel ccache"
+          echo "CCACHE_COMPILERCHECK=content" >> $GITHUB_ENV
+          echo "CCACHE_REMOTE_ONLY=true" >> $GITHUB_ENV
+          echo "CCACHE_NOHASHDIR=true" >> $GITHUB_ENV
+          echo "CCACHE_COMPRESS=true" >> $GITHUB_ENV
+          echo "CCACHE_COMPRESSLEVEL=3" >> $GITHUB_ENV
+          echo "CCACHE_LOGFILE=/tmp/ccache.log" >> $GITHUB_ENV
+          echo "CCACHE_BASEDIR=/work" >> $GITHUB_ENV
+          echo "TT_METAL_CCACHE_KERNEL_SUPPORT=1" >> $GITHUB_ENV
+          echo "CCACHE_TEMPDIR=/tmp/ccache" >> $GITHUB_ENV
+          mkdir -p /tmp/ccache
+          # Build Redis URL in bash so that the password is never embedded in a
+          # workflow input string (GHA does not pass secrets through string inputs
+          # to reusable workflows). This also ensures forks leave CCACHE_REMOTE_STORAGE
+          # unset — the step is guarded by the fork check above.
+          REDIS_USER="${{ vars.REDIS_CCACHE_USER }}"
+          REDIS_PASSWORD="${{ secrets.REDIS_CCACHE_PASSWORD }}"
+          REDIS_HOST="${{ vars.REDIS_CCACHE_HOST }}"
+          REDIS_PORT="${{ vars.REDIS_CCACHE_PORT }}"
+          REDIS_READONLY="${{ vars.REDIS_CCACHE_IS_READONLY }}"
+          CCACHE_REMOTE_STORAGE="redis://${REDIS_USER}:${REDIS_PASSWORD}@${REDIS_HOST}:${REDIS_PORT}"
+          # ccache 4.13 bug: the read-only optional trips the write gate whenever
+          # it has *any* value — even false. Only append it when actually true.
+          if [ "${REDIS_READONLY}" = "true" ]; then
+            CCACHE_REMOTE_STORAGE="${CCACHE_REMOTE_STORAGE}|read-only=true"
+          fi
+          echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
 
       - name: Run examples
         id: test
@@ -130,4 +169,21 @@ jobs:
           if [ -n "$FAILED_EXAMPLES" ]; then
             echo "::error::Failed examples:${FAILED_EXAMPLES}"
             exit 1
+          fi
+
+      - name: Publish ccache summary
+        if: ${{ !cancelled() && inputs.enable-kernel-ccache == true }}
+        run: |
+          echo '## CCache Summary (kernel)' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ccache -s >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+          # Surface remote storage stats and errors from the ccache log.
+          # Uses a filter script to avoid overflowing the 1024k step summary limit.
+          if [ -f /tmp/ccache.log ]; then
+            echo '## CCache Remote Storage (kernel)' >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            "$GITHUB_WORKSPACE/.github/scripts/ccache_log_filter.sh" /tmp/ccache.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
           fi

@@ -11,7 +11,6 @@ Equivalent to the reference Transformer class (models/demos/deepseek_v3/referenc
 but targeting the TT prefill path with SP+TP parallelism.
 """
 
-import os
 from pathlib import Path
 from typing import Callable, Optional, Union
 
@@ -98,6 +97,7 @@ class TtPrefillTransformer(LightweightModule):
         self,
         mesh_device: ttnn.MeshDevice,
         config: PretrainedConfig,
+        model_cfg: type,
         state_dict: dict,
         num_layers: int,
         seq_len: int,
@@ -121,19 +121,10 @@ class TtPrefillTransformer(LightweightModule):
         self.seq_len = seq_len
         self.padding_side = padding_side
 
-        # Log environment variables that define reference output cache and TTNN weights cache.
-        # This is to prevent accidental cache creation at unusual places and fill disk space.
-        TT_DS_PREFILL_TTNN_CACHE = os.getenv("TT_DS_PREFILL_TTNN_CACHE", None)
-        TT_DS_PREFILL_HOST_REF_CACHE = os.getenv("TT_DS_PREFILL_HOST_REF_CACHE", None)
-        logger.debug(f"{TT_DS_PREFILL_TTNN_CACHE=}")
-        logger.debug(f"{TT_DS_PREFILL_HOST_REF_CACHE=}")
-        if TT_DS_PREFILL_TTNN_CACHE is None:
-            raise RuntimeError(
-                "TT_DS_PREFILL_TTNN_CACHE environment variable is not set; export TT_DS_PREFILL_TTNN_CACHE=<path>"
-            )
-        if TT_DS_PREFILL_HOST_REF_CACHE is None:
-            raise RuntimeError(
-                "TT_DS_PREFILL_HOST_REF_CACHE environment variable is not set; export TT_DS_PREFILL_HOST_REF_CACHE=<path>"
+        if not state_dict and not (weight_cache_path and weight_cache_path.exists()):
+            raise ValueError(
+                "TtPrefillTransformer requires weights: pass a non-empty state_dict "
+                f"or a weight_cache_path to an existing cache (got {weight_cache_path=})."
             )
 
         logger.info(f"Building TtPrefillTransformer with {num_layers} layers, seq_len={seq_len}")
@@ -158,6 +149,7 @@ class TtPrefillTransformer(LightweightModule):
             layer = TtPrefillBlock(
                 mesh_device=mesh_device,
                 config=config,
+                model_cfg=model_cfg,
                 state_dict=layer_state,
                 layer_idx=i,
                 seq_len=seq_len,
@@ -181,6 +173,7 @@ class TtPrefillTransformer(LightweightModule):
             mesh_device=mesh_device,
             emb_dim=config.hidden_size,
             torch_weight=state_dict.get("norm_weight"),  # None if cache exists
+            epsilon=config.rms_norm_eps,
             cluster_axis=tp_axis,
             num_links=num_links,
             topology=topology,
@@ -295,9 +288,13 @@ class TtPrefillTransformer(LightweightModule):
             intermediates["lm_head"] = logits_host
             intermediates["logits"] = first_token_logits
 
-        # Reorder intermediates if balanced
+        # Reorder intermediates if balanced. Skip reordering for logits and lm_head in zigzag mode.
+        no_reorder_keys = {"logits", "lm_head"}
         if return_intermediates and self.is_balanced:
             for key, tensor in intermediates.items():
+                if key in no_reorder_keys:
+                    logger.debug(f"Skipping reordering for non-sequence intermediate {key}")
+                    continue
                 if isinstance(tensor, torch.Tensor):
                     logger.debug(f"Reordering intermediate {key} with shape {tensor.shape}")
                     intermediates[key] = reverse_reorder_tensor_chunks(tensor, self.chunk_order, seq_dim=-2)

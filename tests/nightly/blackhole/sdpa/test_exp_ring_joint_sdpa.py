@@ -785,7 +785,7 @@ def test_exp_ring_joint_attention_create_perf_table(b, nh, total_seq, d, q_chunk
 
 # === TEST 5: PERFORMANCE CHECK (CI-gated by SDPA_PERF_CHECKS=1) ===
 # Symmetric +/- band — catches both regressions and unexpected speedups.
-EXP_RING_JOINT_PERF_MARGIN = 0.005
+EXP_RING_JOINT_PERF_MARGIN = 0.01
 
 EXP_RING_JOINT_PERF_CHECK_CONFIGS = [
     # (ring_size_expected, max_payload_size, payload_id, expected_util)

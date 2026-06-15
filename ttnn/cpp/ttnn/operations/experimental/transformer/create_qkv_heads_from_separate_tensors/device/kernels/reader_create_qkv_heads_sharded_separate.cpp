@@ -4,8 +4,14 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 
 void kernel_main() {
+    Noc noc;
+
     constexpr uint32_t q_shard_ht = get_compile_time_arg_val(0);  // number of Q heads in the group, n
     constexpr uint32_t q_shard_wt = get_compile_time_arg_val(1);  // number of K heads in the group, expecting 1
     constexpr uint32_t k_shard_ht = get_compile_time_arg_val(2);  // number of V heads in the group, expecting 1
@@ -40,38 +46,53 @@ void kernel_main() {
      * heads block_ht is the number of tiles along the batch * seq_len dimension shard
      */
 
-    uint64_t q_src_noc_addr = get_noc_addr(get_read_ptr(cb_inq));
-    uint32_t q_write_addr = get_write_ptr(cb_outq);
+    CircularBuffer cb_inq_obj(cb_inq);
+    CircularBuffer cb_inkv_obj(cb_inkv);
+    CircularBuffer cb_outq_obj(cb_outq);
+    CircularBuffer cb_outk_obj(cb_outk);
+    CircularBuffer cb_outv_obj(cb_outv);
+
+    const uint8_t noc_id = noc.get_noc_id();
+    const uint32_t my_noc_x = my_x[noc_id];
+    const uint32_t my_noc_y = my_y[noc_id];
+    const uint32_t q_src_l1_addr = cb_inq_obj.get_read_ptr();
+    uint32_t q_write_addr = cb_outq_obj.get_write_ptr();
+    UnicastEndpoint src_ep;
 
     // re-order q
     constexpr uint32_t q_num_tiles = q_shard_ht * q_shard_wt;
     constexpr uint32_t q_shard_wt_size_bytes = q_shard_wt * single_tile_size_bytes;  // tiles until next sequence
     constexpr uint32_t q_head_size_bytes = tiles_per_head * single_tile_size_bytes;
 
-    cb_reserve_back(cb_outq, q_num_tiles);
+    cb_outq_obj.reserve_back(q_num_tiles);
     uint32_t head_offset = 0;
     for (uint32_t k = 0; k < q_num_heads_per_core; k++) {  // number of kv heads inside the shard
         uint32_t seq_tile_offset = 0;
         for (uint32_t i = 0; i < q_shard_ht; i++) {  // iterate across seq_len dimension tiles
-            uint64_t q_src_noc_addr_head = q_src_noc_addr + seq_tile_offset + head_offset;
-            noc_async_read(q_src_noc_addr_head, q_write_addr, q_head_size_bytes);  // read one head worth of tiles
+            const uint32_t q_src_l1_addr_head = q_src_l1_addr + seq_tile_offset + head_offset;
+            noc.async_read(
+                src_ep,
+                CoreLocalMem<uint32_t>(q_write_addr),
+                q_head_size_bytes,
+                {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = q_src_l1_addr_head},
+                {});
             q_write_addr += q_head_size_bytes;         // go to output address for next Q head
             seq_tile_offset += q_shard_wt_size_bytes;  // go to next tile along seq_len
         }
         head_offset += q_head_size_bytes;
     }
-    noc_async_read_barrier();
-    cb_push_back(cb_outq, q_num_tiles);
+    noc.async_read_barrier();
+    cb_outq_obj.push_back(q_num_tiles);
 
     // re-order k
-    uint64_t kv_src_noc_addr = get_noc_addr(get_read_ptr(cb_inkv));
+    const uint32_t kv_src_l1_addr = cb_inkv_obj.get_read_ptr();
     constexpr uint32_t k_num_tiles = k_shard_ht * k_shard_wt;
     constexpr uint32_t kv_shard_wt_size_bytes = k_shard_wt * single_tile_size_bytes * 2;
     constexpr uint32_t k_head_size_bytes = tiles_per_head * single_tile_size_bytes;
     constexpr uint32_t kv_group_size_bytes = k_head_size_bytes * 2;
 
-    cb_reserve_back(cb_outk, k_num_tiles);
-    uint32_t k_write_addr = get_write_ptr(cb_outk);
+    cb_outk_obj.reserve_back(k_num_tiles);
+    uint32_t k_write_addr = cb_outk_obj.get_write_ptr();
     head_offset = 0;
     for (uint32_t k = 0; k < k_num_heads_per_core; k++) {  // number of k heads inside the shard
 #ifdef TRANSPOSE_K_HEADS
@@ -79,8 +100,13 @@ void kernel_main() {
              k_head_tile_offset += single_tile_size_bytes) {  // finish head after sequence length when transposing K
             uint32_t seq_tile_offset = 0;
             for (uint32_t i = 0; i < k_shard_ht; i++) {  // iterate across seq_len dimension tiles
-                uint64_t k_src_noc_addr = kv_src_noc_addr + seq_tile_offset + head_offset + k_head_tile_offset;
-                noc_async_read(k_src_noc_addr, k_write_addr, single_tile_size_bytes);  // read one head worth of tiles
+                const uint32_t k_src_l1_addr = kv_src_l1_addr + seq_tile_offset + head_offset + k_head_tile_offset;
+                noc.async_read(
+                    src_ep,
+                    CoreLocalMem<uint32_t>(k_write_addr),
+                    single_tile_size_bytes,
+                    {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = k_src_l1_addr},
+                    {});
                 k_write_addr += single_tile_size_bytes;     // go to output address for next K head
                 seq_tile_offset += kv_shard_wt_size_bytes;  // go to next tile along seq_len
             }
@@ -88,34 +114,44 @@ void kernel_main() {
 #else
         uint32_t seq_tile_offset = 0;
         for (uint32_t i = 0; i < k_shard_ht; i++) {  // iterate across seq_len dimension tiles
-            uint64_t k_src_noc_addr = kv_src_noc_addr + seq_tile_offset + head_offset;
-            noc_async_read(k_src_noc_addr, k_write_addr, k_head_size_bytes);  // read one head worth of tiles
+            const uint32_t k_src_l1_addr = kv_src_l1_addr + seq_tile_offset + head_offset;
+            noc.async_read(
+                src_ep,
+                CoreLocalMem<uint32_t>(k_write_addr),
+                k_head_size_bytes,
+                {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = k_src_l1_addr},
+                {});
             k_write_addr += k_head_size_bytes;                                // go to output address for next K head
             seq_tile_offset += kv_shard_wt_size_bytes;                        // go to next tile along seq_len
         }
 #endif
         head_offset += kv_group_size_bytes;
     }
-    noc_async_read_barrier();
-    cb_push_back(cb_outk, k_num_tiles);
+    noc.async_read_barrier();
+    cb_outk_obj.push_back(k_num_tiles);
 
     // re-order v
     constexpr uint32_t v_num_tiles = k_num_tiles;
     constexpr uint32_t v_head_size_bytes = k_head_size_bytes;
     constexpr uint32_t v_num_heads_per_core = k_num_heads_per_core;
-    cb_reserve_back(cb_outv, v_num_tiles);
-    uint32_t v_write_addr = get_write_ptr(cb_outv);
+    cb_outv_obj.reserve_back(v_num_tiles);
+    uint32_t v_write_addr = cb_outv_obj.get_write_ptr();
     head_offset = k_head_size_bytes;                       // v1 is after one k head
     for (uint32_t k = 0; k < v_num_heads_per_core; k++) {  // number of kv heads inside the shard
         uint32_t seq_tile_offset = 0;
         for (uint32_t i = 0; i < v_shard_ht; i++) {  // iterate across seq_len dimension tiles
-            uint64_t v_src_noc_addr = kv_src_noc_addr + seq_tile_offset + head_offset;
-            noc_async_read(v_src_noc_addr, v_write_addr, v_head_size_bytes);  // read one head worth of tiles
+            const uint32_t v_src_l1_addr = kv_src_l1_addr + seq_tile_offset + head_offset;
+            noc.async_read(
+                src_ep,
+                CoreLocalMem<uint32_t>(v_write_addr),
+                v_head_size_bytes,
+                {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = v_src_l1_addr},
+                {});
             v_write_addr += v_head_size_bytes;                                // go to output address for next V head
             seq_tile_offset += kv_shard_wt_size_bytes;                        // go to next tile along seq_len
         }
         head_offset += kv_group_size_bytes;
     }
-    noc_async_read_barrier();
-    cb_push_back(cb_outv, v_num_tiles);
+    noc.async_read_barrier();
+    cb_outv_obj.push_back(v_num_tiles);
 }

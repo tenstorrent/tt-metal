@@ -295,7 +295,7 @@ void kernel_main() {
                                                     (cb_ex_external_data_bytes <
                                                      cb_ex_external_tiles_required * single_tile_size_bytes);
     if constexpr (needs_cb_ex_external_zero_fill) {
-        zero_whole_cb(cb_ex_external_id, noc, noc_coord_x[0], noc_coord_y[0]);
+        zero_whole_cb(cb_ex_external_id, noc);
     }
 
         index_b_offset = 0;

@@ -200,6 +200,73 @@ While both the old and `_new` operations exist side by side (Phase 1), their pro
 caches won't collide because the default hash includes `type_hash<YourDeviceOperation>`,
 which differs between the two distinct operation types.
 
+**Never write a custom `compute_program_hash` to exclude a per-call value.** A legacy op
+often hand-wrote a hash that dropped a value which varies per call but doesn't change the
+program structure (RNG `seed`, a fused `scalar`, a `from`/`to` range, a semaphore address).
+Under the descriptor framework that is a trap: on a cache **hit** only `Buffer*` address
+slots are re-patched, so a non-`Buffer` value baked into the runtime args is **frozen** at
+the first miss (silent wrong result), unless the op happens to fall to the slow-path rebuild.
+
+The correct pattern (static/dynamic split):
+
+- **Static** (program identity → hashed): exclude the per-call value from the default hash by
+  giving `operation_attributes_t` an `attribute_names` / `attribute_values()` pair that lists
+  only the structural fields and omits the dynamic one. Do **not** add a `compute_program_hash`.
+
+  ```cpp
+  struct operation_attributes_t {
+      Shape shape; DataType dtype; MemoryConfig memory_config;
+      uint32_t seed;  // dynamic — omitted below
+      static constexpr auto attribute_names = std::forward_as_tuple("shape", "dtype", "memory_config");
+      auto attribute_values() const { return std::forward_as_tuple(shape, dtype, memory_config); }
+  };
+  ```
+
+- **Dynamic** (re-patched every dispatch): declare a `get_dynamic_runtime_args` hook returning the
+  current value at the (kernel, core, arg) slot `create_descriptor()` wrote it to. The framework
+  re-applies these on every cache hit (the non-`Buffer` analog of a `BufferBinding`):
+
+  ```cpp
+  static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+      const operation_attributes_t& attrs, const tensor_args_t&, tensor_return_value_t& output,
+      const std::optional<ttnn::MeshCoordinate>& coord = std::nullopt);
+  ```
+
+  Each `DynamicRuntimeArg` is `{kernel_idx, core, arg_idx, value}`. Ops without the hook compile
+  to nothing — only declare it when you excluded a value from the hash.
+
+  > **Gotcha:** `attribute_values()` is also how the framework **discovers the mesh device** (via
+  > `get_first_object_of_type<MeshDevice*>`). For ops with no input tensor (e.g. `rand`) the device
+  > lives in the attrs, so it must appear in `attribute_values()` — and as the **first** element,
+  > because that helper's tuple path only inspects element 0. Put `device` first; otherwise dispatch
+  > throws "No mesh device found". Ops with an input tensor source the device from `tensor_args`, so
+  > this only bites device-in-attrs ops.
+
+- **Do not copy-paste** the work-split / core enumeration between `create_descriptor` and
+  `get_dynamic_runtime_args`. Extract a shared helper both call, so the miss-build and the
+  hit-patch derive the identical core list and value by construction.
+
+- **In-place ops** (output aliases an input) take the fast path fine — register both as `Buffer*`
+  bindings via `emplace_runtime_args`; the framework allows the output==input alias. (A duplicate
+  among two *distinct* inputs, e.g. `matmul(X, X)`, still bails to the slow path.)
+
+Compile-time values (CB sizes, `#define`s, compile args) can **never** be dynamic — they bake the
+kernel ELF. They must stay hashed (keep them in `attribute_values()`).
+
+> **Precondition for the fast path: the program hash must include everything the per-core runtime
+> args depend on — in particular the shape.** The fast cache-hit path (buffer bindings +
+> `get_dynamic_runtime_args`) only re-patches buffer addresses and your declared dynamic scalars; it
+> does **not** recompute the rest of the runtime args. So it's only correct when "same hash" implies
+> "same program structure" — same shape, same work-split, same per-core tile counts/offsets.
+>
+> Some ops deliberately do the opposite: they **exclude shape from the hash** so one program is
+> reused across shapes, with the per-core args (num_tiles, offsets, num_cores) carrying the shape and
+> the **slow-path rebuild** recomputing them every dispatch (e.g. `binary_ng` hashes `shard_volumes`,
+> not shape). Such shape-agnostic ops **cannot** use buffer bindings — the fast path would leave the
+> shape-dependent args stale and miscompute. Leave them on the slow path (raw addresses, no
+> bindings). Forcing the fast path would require either putting shape back in the hash (losing the
+> cross-shape reuse) or re-deriving every per-core arg (which is just the slow-path rebuild).
+
 ### 1.5 CMakeLists.txt
 
 Create a `CMakeLists.txt` for the `_new` operation and add it to `ttnn/CMakeLists.txt`:
@@ -315,6 +382,12 @@ directory. Update:
 
 If the old operation had a custom `compute_program_hash`, delete it. The framework
 handles hashing automatically.
+
+If that custom hash existed to **exclude a per-call value** (seed, scalar, range, semaphore
+address), deleting it would put the value back in the key (recompile per value). Instead apply
+the static/dynamic split from §1.4: omit the value from `attribute_values()` and re-apply it via
+`get_dynamic_runtime_args`. Verify with a regression test: a differing value must NOT add a cache
+entry (it's not in the key) AND must change the output (it's re-patched, not frozen).
 
 ### 3.4 Update CMakeLists.txt
 

@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_experimental_transformer ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::Transformer ALIAS ttnn_op_experimental_transformer)
 
-tt_reuse_precompile_headers(ttnn_op_experimental_transformer TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_transformer TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_transformer)
 set_target_properties(
     ttnn_op_experimental_transformer

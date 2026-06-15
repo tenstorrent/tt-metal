@@ -42,7 +42,7 @@ void kernel_main() {
         // Coordinate multicast reception
         // Enable all local cores to send their data simultaneously by broadcasting
         // the receiver semaphore state. This allows for efficient parallel transmission.
-        receiver_sem.set_multicast<Noc::McastMode::EXCLUDE_SRC>(
+        receiver_sem.set_multicast(
             noc, noc_start_x, noc_start_y, noc_end_x, noc_end_y, num_dests);
         noc.async_write_barrier();
 

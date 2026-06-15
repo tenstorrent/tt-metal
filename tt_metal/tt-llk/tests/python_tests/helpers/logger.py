@@ -48,22 +48,22 @@ _PLAIN_FORMAT = (
 _ERROR_FORMAT = _PLAIN_FORMAT
 
 # Regex to strip ANSI escape codes from messages written to files
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
-def _strip_ansi(message: str) -> str:
-    return _ANSI_RE.sub("", message)
+def strip_ansi(message: str) -> str:
+    return ANSI_RE.sub("", message)
 
 
 def _file_format(record):
     """Format function that strips ANSI codes from the message for file sinks."""
-    record["message"] = _strip_ansi(record["message"])
+    record["message"] = strip_ansi(record["message"])
     return _PLAIN_FORMAT + "\n"
 
 
 def _error_file_format(record):
     """Format function that strips ANSI codes for the persistent error log."""
-    record["message"] = _strip_ansi(record["message"])
+    record["message"] = strip_ansi(record["message"])
     return _ERROR_FORMAT + "\n"
 
 

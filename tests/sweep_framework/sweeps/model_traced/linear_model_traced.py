@@ -14,12 +14,579 @@ from tests.sweep_framework.master_config_loader_v2 import (
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
+    dispatch_axis_for_grid,
     get_model_traced_mesh_shape,
     mesh_tensor_to_torch,
+    program_config_grid_bounds,
     reconcile_golden_to_actual,
+    shard_grid_bounds,
 )
+
+
+def _linear_dispatch_axis(program_config, output_memory_config):
+    """Dispatch axis the matmul's program_config needs.
+
+    For 1D ``gather_in0`` matmuls the nominal ``compute_with_storage_grid_size``
+    width over-estimates the real core usage (the op validates the output shard
+    grid against the device / its sparse core set, not that rectangle). So the
+    real placement is the (possibly sparse) output shard grid + hop_cores — e.g.
+    a (8,3) grid whose output shard grid actually uses x<=6, y=9 needs COL, not
+    the ROW its nominal width=8 implies. For ordinary 2D matmuls the compute grid
+    is authoritative, so only override for gather_in0 (overriding everywhere
+    wrongly forces COL on configs that genuinely need ROW).
+    """
+    if isinstance(program_config, dict) and program_config.get("gather_in0"):
+        sx, sy = shard_grid_bounds(output_memory_config)
+        hx, hy = program_config_grid_bounds({"hop_cores": program_config.get("hop_cores")})
+        mx = max([v for v in (sx, hx) if v is not None], default=None)
+        my = max([v for v in (sy, hy) if v is not None], default=None)
+        if mx is not None or my is not None:
+            return dispatch_axis_for_grid(mx, my)
+    return dispatch_axis_for_grid(*program_config_grid_bounds(program_config))
+
+
+# Device opened per-vector (see _ensure_vector_device) so each vector can use the
+# dispatch axis its traced matmul program_config grid needs: some grids touch x=7
+# (need ROW/8x9), others use y=9/10 (need COL/7x10), and no single per-suite axis
+# serves both. Cached; only reopened when the required axis changes between vectors.
+_CUR_DEVICE = None
+_CUR_AXIS = "__uninit__"
+
+
+def _ensure_vector_device(axis):
+    global _CUR_DEVICE, _CUR_AXIS
+    if _CUR_DEVICE is None or axis != _CUR_AXIS:
+        _close_vector_device()
+        _CUR_DEVICE = create_mesh_device(get_model_traced_mesh_shape(), dispatch_core_axis=axis)
+        _CUR_AXIS = axis
+    return _CUR_DEVICE
+
+
+def _close_vector_device():
+    global _CUR_DEVICE, _CUR_AXIS
+    if _CUR_DEVICE is not None:
+        try:
+            ttnn.close_mesh_device(_CUR_DEVICE)
+        except Exception:
+            # best-effort teardown — a failed device close must not mask the real test result
+            pass
+    _CUR_DEVICE = None
+    _CUR_AXIS = "__uninit__"
+
+
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
+
+
+def _parse_2d_shard_dims(placement, ndim=4):
+    """[dim_on_mesh_rows, dim_on_mesh_cols] from a traced placement dict (Shard dims,
+    normalized to >=0; None for Replicate)."""
+    import re
+
+    s = str(placement.get("placement", "")) if isinstance(placement, dict) else str(placement)
+    out = []
+    for m in re.finditer(r"PlacementShard\((?:dim=)?(-?\d+)\)|PlacementReplicate", s):
+        if m.group(1) is None:
+            out.append(None)
+        else:
+            d = int(m.group(1))
+            out.append(d + ndim if d < 0 else d)
+    return out
+
+
+def _as_dtype(v, default):
+    """Resolve a traced dtype (ttnn.DataType | dict | repr-string | None) to ttnn.DataType."""
+    from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+
+    if v is None or v == "__ABSENT__":
+        return default
+    if isinstance(v, ttnn.DataType):
+        return v
+    try:
+        if isinstance(v, dict):
+            return parse_dict_value("dtype", v) or default
+        if isinstance(v, str):
+            return parse_dict_value("dtype", {"type": "DataType", "repr": v}) or default
+    except Exception:
+        return default
+    return default
+
+
+def _crs(cores):
+    return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in cores])
+
+
+def _run_gather_in0_ring_matmul(
+    input_a_shape,
+    input_b_shape,
+    pc,
+    mesh_shape,
+    input_b_placement,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    compute_kernel_config_raw,
+):
+    """gather_in0 1D ring matmul (decode LM-head / MLP-w2 projections).
+
+    These traced configs are fragments of a distributed model op, not self-contained
+    matmuls: the op runs on the model's prefetcher+worker sub-devices (SubDeviceId(1))
+    over a fixed 24-core ring, and it emits per-K-shard PARTIALS that the model
+    finishes with a downstream cross-mesh all-reduce (line_all_reduce). The generic
+    per-vector path can reproduce none of that, so this routine rebuilds the model's
+    decode launch path (mirrors models/demos/llama3_70b_galaxy/tt/{lm_head,llama_mlp}.py
+    and the standalone repros) and reconstructs the all-reduce in torch for the golden.
+
+    One path covers all four traced configs; they differ only by data read from the
+    traced vector:
+      * weight placement -> which mesh axis carries K vs N (LM-head: N over rows,
+        K over cols; w2 down-proj: K over rows, N over cols);
+      * num_global_cb_receivers >= 2 -> the weight is streamed from DRAM through the
+        prefetcher global circular buffer before the matmul (w2 family);
+      * dtypes + compute-kernel flags come straight from the trace.
+    """
+    import math
+
+    from models.demos.llama3_70b_galaxy.tt.prefetcher_common import get_core_ranges
+    from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+
+    TILE = ttnn.TILE_SIZE
+    rows, cols = int(mesh_shape[0]), int(mesh_shape[1])
+
+    def _ru(n, m):
+        return ((n + m - 1) // m) * m
+
+    M = int(input_a_shape[-2])
+    K_pd = int(input_b_shape[-2])  # per-device K (weight dim -2)
+    N_pd = int(input_b_shape[-1])  # per-device N (weight dim -1)
+
+    # Weight placement -> mesh-axis for K (dim 2) and N (dim 3).
+    b_dims = _parse_2d_shard_dims(input_b_placement, ndim=4)
+    if len(b_dims) < 2 or 2 not in b_dims or 3 not in b_dims:
+        raise ValueError(f"weight placement is not a 2D K/N mesh-shard: {input_b_placement}")
+    k_axis = b_dims.index(2)  # 0=rows, 1=cols
+    n_axis = b_dims.index(3)
+    global_K = K_pd * mesh_shape[k_axis]
+    global_N = N_pd * mesh_shape[n_axis]
+
+    # Program-config values come straight from the trace; shard widths follow the
+    # model's ring tiling (round each per-device dim up to a tile over the 24 cores).
+    grid = (int(pc["compute_with_storage_grid_size"]["x"]), int(pc["compute_with_storage_grid_size"]["y"]))
+    in0_block_w = int(pc["in0_block_w"])
+    per_core_N = int(pc["per_core_N"])
+    out_subblock_h = int(pc.get("out_subblock_h", 1))
+    out_subblock_w = int(pc.get("out_subblock_w", 1))
+    per_core_M = int(pc.get("per_core_M", 1))
+    n_gcb = pc.get("num_global_cb_receivers")
+    prefetch = bool(n_gcb is not None and int(n_gcb) >= 2)
+
+    wt_dtype = _as_dtype(input_b_dtype, ttnn.bfloat8_b)
+    act_dtype = _as_dtype(input_a_dtype, ttnn.bfloat8_b)
+    out_dtype = _as_dtype(output_dtype, ttnn.bfloat8_b)
+    ckc = compute_kernel_config_raw
+    if isinstance(ckc, dict):
+        try:
+            ckc = parse_dict_value("compute_kernel_config", ckc)
+        except Exception:
+            ckc = None
+    if not isinstance(ckc, ttnn.WormholeComputeKernelConfig):
+        ckc = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=prefetch,
+            fp32_dest_acc_en=prefetch,
+            packer_l1_acc=True,
+            dst_full_sync_en=True,
+        )
+
+    _close_vector_device()
+    dev = ttnn.open_mesh_device(
+        mesh_shape=ttnn.MeshShape(rows, cols),
+        l1_small_size=79104,
+        dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER, ttnn.DispatchCoreAxis.COL),
+    )
+    try:
+        (
+            active_sender_cores,
+            dram_cores,
+            all_sender_cores,
+            active_receiver_cores_list,
+            all_receiver_cores,
+            worker_cores_range_set,
+            mm_optimised_ring_cores,
+            hop_grid,
+        ) = get_core_ranges(num_reader_cores=12, num_global_cb_receivers=2, is_functional_test=False)
+        RING = len(mm_optimised_ring_cores)  # 24
+
+        K_per_shard = _ru(math.ceil(K_pd / RING), TILE)
+        N_out_shard = _ru(math.ceil(N_pd / RING), TILE)
+        N_PADDED = N_out_shard * RING
+
+        # --- prefetcher global CB + sub-devices ---
+        global_cb = None
+        if prefetch:
+            global_cb_size = 728 * 1088  # TtLlamaPrefetcherSetup.global_cb_size
+            global_cb = ttnn.create_global_circular_buffer(
+                dev, list(zip(all_sender_cores, all_receiver_cores)), global_cb_size
+            )
+            sender_crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in active_sender_cores])
+        else:
+            sender_crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in all_sender_cores])
+        mgr = dev.create_sub_device_manager([ttnn.SubDevice([sender_crs]), ttnn.SubDevice([worker_cores_range_set])], 0)
+        dev.load_sub_device_manager(mgr)
+        worker_id = ttnn.SubDeviceId(1)
+        if not prefetch:
+            dev.set_sub_device_stall_group([ttnn.SubDeviceId(0), worker_id])
+
+        torch.manual_seed(0)
+        hidden = torch.randn(M, global_K)
+        w_global = torch.randn(global_K, global_N)
+        golden = hidden @ w_global  # [M, global_N]
+
+        # --- weight: global [1,1,global_K,global_N] -> per-device via placement dims ---
+        N_per_bank = _ru(math.ceil(N_PADDED / len(dram_cores)), TILE)
+        wt_mc = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(len(dram_cores) - 1, 0))]),
+                [K_pd, N_per_bank],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+        b_tt = ttnn.as_tensor(
+            w_global.reshape(1, 1, global_K, global_N),
+            device=dev,
+            mesh_mapper=ttnn.ShardTensor2dMesh(dev, dims=(b_dims[0], b_dims[1]), mesh_shape=(rows, cols)),
+            layout=ttnn.TILE_LAYOUT,
+            dtype=wt_dtype,
+            memory_config=wt_mc,
+        )
+
+        if prefetch:
+            tensor_addrs = torch.tensor([b_tt.buffer_address()]).repeat(len(dram_cores), 1)
+            addr_mc = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    sender_crs,
+                    [tensor_addrs.shape[0] // len(dram_cores), tensor_addrs.shape[1]],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            )
+            addr_tt = ttnn.as_tensor(
+                tensor_addrs,
+                device=dev,
+                dtype=ttnn.uint32,
+                memory_config=addr_mc,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(dev),
+            )
+            ttnn.dram_prefetcher([b_tt, addr_tt], num_layers=1, global_cb=global_cb)
+            dev.set_sub_device_stall_group([worker_id])
+
+        # --- activation: per-device content is the K-slice along the K mesh-axis ---
+        act_host = torch.zeros(rows, cols, M, K_pd)
+        for r in range(rows):
+            for c in range(cols):
+                ki = c if k_axis == 1 else r
+                act_host[r, c] = hidden[:, ki * K_pd : (ki + 1) * K_pd]
+        a_tt = ttnn.from_torch(
+            act_host,
+            dtype=act_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=dev,
+            mesh_mapper=ttnn.ShardTensor2dMesh(dev, dims=(0, 1), mesh_shape=(rows, cols)),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        in0_ring_mc = ttnn.create_sharded_memory_config(
+            shape=(M, K_per_shard),
+            core_grid=_crs(mm_optimised_ring_cores),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        a_tt = ttnn.to_memory_config(a_tt, in0_ring_mc)
+
+        out_mc = ttnn.create_sharded_memory_config(
+            shape=(M, N_PADDED // RING),
+            core_grid=_crs(active_receiver_cores_list),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        pc_obj = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(*grid),
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+            gather_in0=True,
+            hop_cores=_crs(hop_grid),
+            **({"num_global_cb_receivers": int(n_gcb)} if prefetch else {}),
+        )
+
+        start_time = start_measuring_time()
+        linear_kwargs = dict(
+            compute_kernel_config=ckc,
+            program_config=pc_obj,
+            memory_config=out_mc,
+            dtype=out_dtype,
+            sub_device_id=worker_id,
+        )
+        if prefetch:
+            linear_kwargs["core_grid"] = None
+            linear_kwargs["global_cb"] = global_cb
+        out = ttnn.linear(a_tt, b_tt, **linear_kwargs)
+        if prefetch:
+            dev.reset_sub_device_stall_group()
+
+        partials = ttnn.to_torch(
+            out, mesh_composer=ttnn.ConcatMesh2dToTensor(dev, (rows, cols), dims=(0, 1))
+        ).float()  # [rows, cols, M, N_pd]
+        reduced = partials.sum(dim=k_axis)  # all-reduce over the K-shards
+        recon = reduced.permute(1, 0, 2).reshape(M, global_N)
+        e2e_perf = stop_measuring_time(start_time)
+        return [check_with_pcc(golden, recon, 0.99), e2e_perf]
+    finally:
+        try:
+            ttnn.close_mesh_device(dev)
+        except Exception:
+            # best-effort teardown of the gather_in0 ring-matmul device
+            pass
+
+
+def _pad_batch_to_dram_banks(batch, banks):
+    # `banks` is the device's actual DRAM-bank count
+    # (dev.get_optimal_dram_bank_to_logical_worker_assignment) — hardware-specific
+    # (Wormhole=12, Blackhole differs), so it is always passed in, never defaulted.
+    return batch if batch % banks == 0 else ((batch + banks - 1) // banks) * banks
+
+
+def _placement_to_2d_mesh_dims(placement):
+    """Parse a traced placement into (rows_spec, cols_spec) for ShardTensor2dMesh.
+
+    Each spec is the (possibly negative) tensor dim sharded on that mesh axis, or
+    None for Replicate. A single-element ``[Replicate]`` (ReplicateTensorToMesh)
+    returns ("REPLICATE_ALL", None).
+    """
+    s = str(placement.get("placement", "")) if isinstance(placement, dict) else str(placement)
+    import re
+
+    toks = re.findall(r"PlacementShard\((?:dim=)?(-?\d+)\)|PlacementReplicate", s)
+    # re.findall with alternation returns the captured group ('' for Replicate)
+    specs = []
+    for t in toks:
+        specs.append(int(t) if t != "" else None)
+    if len(specs) <= 1:
+        return ("REPLICATE_ALL", None)
+    return (specs[0], specs[1])
+
+
+def _run_batched_dram_sharded_matmul(
+    input_a_shape,
+    input_b_shape,
+    input_a_placement,
+    input_b_placement,
+    pc,
+    mesh_shape,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    output_tile,
+    compute_kernel_config_raw,
+):
+    """BatchedDRAMSharded matmul (DeepSeek-V3 MLA wkv_b1 / wkv_b2 decode projections).
+
+    ``MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig`` is a batch-sharded
+    distributed matmul: the activation (in0) is L1 HEIGHT_SHARDED across the 12 DRAM-bank
+    -> worker cores (get_optimal_dram_bank_to_logical_worker_assignment), the weight is
+    DRAM HEIGHT_SHARDED over the 12 banks, and the output is L1 HEIGHT_SHARDED on the same
+    worker cores. The generic per-vector path can't reproduce that L1 batch-shard on the
+    optimal worker grid (in0 lands interleaved -> ``is_sharded()`` TT_FATAL), so this routine
+    rebuilds the model's launch path on a COL-dispatch mesh (frees row y=9 so the device's
+    optimal worker grid matches the trace) and reads the per-device tensors back for the
+    torch golden. Mirrors models/demos/deepseek_v3/tt/mla/mla1d.py and the standalone repro.
+    """
+    from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+
+    TILE = ttnn.TILE_SIZE
+    rows, cols = int(mesh_shape[0]), int(mesh_shape[1])
+
+    def _ru(n, m):
+        return ((n + m - 1) // m) * m
+
+    # Traced input_a_shape is the per-device shape (1, batch, m, k); weight (1, batch, k, n).
+    a_shape = tuple(input_a_shape)
+    b_shape = tuple(input_b_shape)
+    batch = int(a_shape[-3])
+    m = int(a_shape[-2])
+    k = int(a_shape[-1])
+    n = int(b_shape[-1])
+
+    tile_h = TILE
+    if output_tile is not None:
+        try:
+            tile_h = int(output_tile.tile_shape[0])
+        except Exception:
+            tile_h = TILE
+    shard_m = _ru(m, tile_h)  # program/tile-padded M (>= logical m)
+    reshard_in0 = m < shard_m  # logical m < a tile -> build interleaved then reshard
+
+    in0_block_w = int(pc["in0_block_w"])
+    per_core_M = int(pc.get("per_core_M", 1))
+    per_core_N = int(pc.get("per_core_N", 1))
+
+    act_dtype = _as_dtype(input_a_dtype, ttnn.bfloat16)
+    wt_dtype = _as_dtype(input_b_dtype, ttnn.bfloat8_b)
+    out_dtype = _as_dtype(output_dtype, None)
+
+    ckc = compute_kernel_config_raw
+    if isinstance(ckc, dict):
+        try:
+            ckc = parse_dict_value("compute_kernel_config", ckc)
+        except Exception:
+            ckc = None
+    if not isinstance(ckc, ttnn.WormholeComputeKernelConfig):
+        ckc = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=True, fp32_dest_acc_en=True, packer_l1_acc=True
+        )
+
+    in0_dims = _placement_to_2d_mesh_dims(input_a_placement)
+    wt_dims = _placement_to_2d_mesh_dims(input_b_placement)
+
+    _close_vector_device()
+    dev = create_mesh_device((rows, cols), l1_small_size=0, dispatch_core_axis=ttnn.DispatchCoreAxis.COL)
+    try:
+        # Batch is sharded over the device's DRAM banks (one worker core per bank), so the
+        # bank count is a hardware property — query it rather than hardcoding the Wormhole 12
+        # (Blackhole differs). The kernel keys off this exact optimal worker assignment, so
+        # bpc / shard shapes must follow the device's real bank count, not a constant.
+        cores = dev.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+        num_banks = len(cores)
+        worker_grid = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in cores]
+        )
+        dram_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_banks - 1, 0))})
+
+        batch_padded = _pad_batch_to_dram_banks(batch, num_banks)
+        bpc = batch_padded // num_banks  # batches per bank / worker core
+
+        in0_mc = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(worker_grid, [bpc * shard_m, k], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        in1_mc = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.ShardSpec(dram_grid, [bpc * k, n], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        out_mc = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(worker_grid, [bpc * shard_m, n], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
+        torch.manual_seed(0)
+
+        # --- in0: build the global host so ShardTensor2dMesh yields per-device [1,batch,m,k] ---
+        g_a = [1, batch, m, k]
+        if in0_dims[0] == "REPLICATE_ALL":
+            a_mapper = ttnn.ReplicateTensorToMesh(dev)
+        else:
+            if in0_dims[0] is not None:
+                g_a[in0_dims[0]] *= rows
+            if in0_dims[1] is not None:
+                g_a[in0_dims[1]] *= cols
+            a_mapper = ttnn.ShardTensor2dMesh(dev, dims=in0_dims, mesh_shape=(rows, cols))
+        a_host = torch.randn(*g_a, dtype=torch.bfloat16)
+        if reshard_in0:
+            # Direct from_torch into the height-shard (a) pads the logical m to a tile and
+            # (b) lands the buffer in low L1 where it collides with the matmul's static CBs.
+            # Build L1-interleaved first (preserves logical m, lands high in L1), then reshard.
+            a_tmp = ttnn.from_torch(
+                a_host,
+                dtype=act_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=dev,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                mesh_mapper=a_mapper,
+            )
+            a_tt = ttnn.to_memory_config(a_tmp, in0_mc)
+            ttnn.deallocate(a_tmp)
+        else:
+            a_tt = ttnn.from_torch(
+                a_host,
+                dtype=act_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=dev,
+                memory_config=in0_mc,
+                mesh_mapper=a_mapper,
+            )
+
+        # --- weight: global host -> per-device [1,batch,k,n] via placement, DRAM HEIGHT_SHARDED ---
+        g_b = [1, batch, k, n]
+        if wt_dims[0] == "REPLICATE_ALL":
+            b_mapper = ttnn.ReplicateTensorToMesh(dev)
+        else:
+            if wt_dims[0] is not None:
+                g_b[wt_dims[0]] *= rows
+            if wt_dims[1] is not None:
+                g_b[wt_dims[1]] *= cols
+            b_mapper = ttnn.ShardTensor2dMesh(dev, dims=wt_dims, mesh_shape=(rows, cols))
+        b_host = torch.randn(*g_b, dtype=torch.bfloat16)
+        b_tt = ttnn.from_torch(
+            b_host,
+            dtype=wt_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=dev,
+            memory_config=in1_mc,
+            mesh_mapper=b_mapper,
+        )
+
+        pc_obj = ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig(
+            in0_block_w=in0_block_w, per_core_M=per_core_M, per_core_N=per_core_N, fused_activation=None
+        )
+        linear_kwargs = dict(
+            input_tensor_b=b_tt, memory_config=out_mc, compute_kernel_config=ckc, program_config=pc_obj
+        )
+        if out_dtype is not None:
+            linear_kwargs["dtype"] = out_dtype
+        if output_tile is not None:
+            linear_kwargs["output_tile"] = output_tile
+
+        start_time = start_measuring_time()
+        out = ttnn.linear(a_tt, **linear_kwargs)
+        ttnn.synchronize_device(dev)
+        e2e_perf = stop_measuring_time(start_time)
+
+        # --- golden: read back the exact per-device inputs, matmul in torch, compare per device ---
+        # ConcatMeshToTensor(dim=0) stacks the per-device [1,batch,m,k] tensors -> [n_dev,batch,m,k]
+        # at their *logical* shapes (the height-shard's tile padding on M is not surfaced here).
+        cat = ttnn.ConcatMeshToTensor(dev, dim=0)
+        a_rb = ttnn.to_torch(a_tt, mesh_composer=cat).float()
+        b_rb = ttnn.to_torch(b_tt, mesh_composer=cat).float()
+        o_rb = ttnn.to_torch(out, mesh_composer=cat).float()
+        golden = torch.matmul(a_rb, b_rb)  # [n_dev, batch, m, n]
+        # guard against any tile padding the op leaves on the output's M/N
+        o_rb = o_rb[..., : golden.shape[-2], : golden.shape[-1]]
+        golden = golden[..., : o_rb.shape[-2], : o_rb.shape[-1]]
+
+        ttnn.deallocate(a_tt)
+        ttnn.deallocate(b_tt)
+        ttnn.deallocate(out)
+        return [check_with_pcc(golden, o_rb, 0.99), e2e_perf]
+    finally:
+        try:
+            ttnn.close_mesh_device(dev)
+        except Exception:
+            # best-effort teardown of the batched-DRAM-sharded device
+            pass
+
 
 # Override the default timeout in seconds for hang detection.
 # Linear operations with large shapes can take longer, increase timeout
@@ -57,11 +624,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    mesh_shape = get_model_traced_mesh_shape()
-    device = create_mesh_device(mesh_shape)
-    device_name = ttnn.get_arch_name()
-    yield (device, device_name)
-    ttnn.close_mesh_device(device)
+    # Device is opened per-vector in run() (see _ensure_vector_device) so each
+    # vector gets the dispatch axis its matmul program_config grid needs. A blunt
+    # per-suite axis can't serve both the x=7/ROW and y=9/COL configs linear has.
+    yield (None, "wormhole_b0")
+    _close_vector_device()
 
 
 def _parse_placement_list(plac_val):
@@ -210,6 +777,80 @@ def run(
     **kwargs,  # Accept placements, traced_source, traced_machine_info, etc.
 ) -> list:
     torch.manual_seed(0)
+
+    # Capture the matmul program_config's fused activation (read from the RAW dict,
+    # before it is parsed to an object). The model frequently carries the activation
+    # (e.g. GELU) inside program_config.fused_activation rather than the separate
+    # `activation` kwarg; the golden must apply it too, else golden(no-act) vs
+    # device(act) yields a spurious ~0.86 PCC. op_type: 2=GELU, 3=RELU, 5=SIGMOID,
+    # 57=SILU (ttnn.UnaryOpType).
+    _fused_act_optype = None
+    _fused_act_param = None
+    if isinstance(program_config, dict):
+        _fa = program_config.get("fused_activation")
+        if isinstance(_fa, dict):
+            _fused_act_optype = _fa.get("op_type")
+            _fused_act_param = _fa.get("param")
+
+    # gather_in0 1D ring matmuls (decode LM-head / MLP-w2) are distributed model
+    # fragments — they need the model's prefetcher+worker sub-devices, the fixed
+    # 24-core ring, and a cross-mesh all-reduce the generic path can't provide.
+    # Detect on the RAW program_config (before it is parsed to an object) and run
+    # the faithful model reconstruction instead.
+    _ib_shape = input_b_shape if input_b_shape is not None else kwargs.get("input_tensor_b_shape")
+    if isinstance(program_config, dict) and program_config.get("gather_in0") and _ib_shape is not None:
+        _ib_plac = kwargs.get("input_b_tensor_placement") or kwargs.get("input_tensor_b_tensor_placement")
+        return _run_gather_in0_ring_matmul(
+            input_a_shape=input_a_shape,
+            input_b_shape=_ib_shape,
+            pc=program_config,
+            mesh_shape=get_model_traced_mesh_shape(),
+            input_b_placement=_ib_plac,
+            input_a_dtype=input_a_dtype,
+            input_b_dtype=(input_b_dtype if input_b_dtype is not None else kwargs.get("input_tensor_b_dtype")),
+            output_dtype=dtype,
+            compute_kernel_config_raw=compute_kernel_config,
+        )
+
+    # BatchedDRAMSharded matmuls (DeepSeek-V3 MLA wkv_b1 / wkv_b2) are batch-sharded
+    # distributed fragments: in0 must be L1 HEIGHT_SHARDED on the device's optimal
+    # DRAM-bank -> worker grid (COL dispatch), weight DRAM HEIGHT_SHARDED. The generic
+    # path can't build that (in0 lands interleaved -> is_sharded() TT_FATAL), so detect
+    # on the RAW program_config and run the faithful model reconstruction.
+    if (
+        isinstance(program_config, dict)
+        and "BatchedDRAMSharded" in str(program_config.get("type", ""))
+        and _ib_shape is not None
+    ):
+        _ot_raw = kwargs.get("output_tile")
+        _otile = None
+        if isinstance(_ot_raw, dict) and _ot_raw.get("type") == "Tile":
+            import re as _re_ot
+
+            _m = _re_ot.search(r"shape:\s*\[\s*(\d+)\s*,\s*(\d+)\s*\]", str(_ot_raw.get("value", "")))
+            if _m:
+                try:
+                    _otile = ttnn.Tile([int(_m.group(1)), int(_m.group(2))])
+                except Exception:
+                    _otile = None
+        return _run_batched_dram_sharded_matmul(
+            input_a_shape=input_a_shape,
+            input_b_shape=_ib_shape,
+            input_a_placement=kwargs.get("input_a_tensor_placement"),
+            input_b_placement=(kwargs.get("input_b_tensor_placement") or kwargs.get("input_tensor_b_tensor_placement")),
+            pc=program_config,
+            mesh_shape=get_model_traced_mesh_shape(),
+            input_a_dtype=input_a_dtype,
+            input_b_dtype=(input_b_dtype if input_b_dtype is not None else kwargs.get("input_tensor_b_dtype")),
+            output_dtype=dtype,
+            output_tile=_otile,
+            compute_kernel_config_raw=compute_kernel_config,
+        )
+
+    # Open (or reuse) a mesh device whose dispatch axis matches this vector's
+    # matmul program_config grid + the real shard-grid placement (read raw,
+    # before parsing below). The fixture yielded None; we own the device here.
+    device = _ensure_vector_device(_linear_dispatch_axis(program_config, kwargs.get("output_memory_config")))
 
     # V2 vectors provide weight as input_tensor_b_* instead of input_b_*. Each
     # field can be present in either convention (or None when absent in master),
@@ -381,6 +1022,28 @@ def run(
             torch_output_tensor = torch.nn.functional.gelu(torch_output_tensor, approximate=approx)
         elif "relu" in act:
             torch_output_tensor = torch.nn.functional.relu(torch_output_tensor)
+
+    # Apply the program_config's fused_activation to the golden too (the model puts
+    # the activation here, not in the `activation` kwarg, for these matmuls). Without
+    # this the golden omits the activation the device applied -> spurious ~0.86 PCC.
+    if _fused_act_optype is not None and not is_batched_weight:
+        try:
+            _ot = int(_fused_act_optype)
+        except (TypeError, ValueError):
+            _ot = None
+        if _ot == 2:  # GELU; param[0]==1 -> tanh (fast/approximate) mode
+            _approx = (
+                "tanh"
+                if (isinstance(_fused_act_param, (list, tuple)) and _fused_act_param and _fused_act_param[0])
+                else "none"
+            )
+            torch_output_tensor = torch.nn.functional.gelu(torch_output_tensor, approximate=_approx)
+        elif _ot == 3:  # RELU
+            torch_output_tensor = torch.nn.functional.relu(torch_output_tensor)
+        elif _ot == 5:  # SIGMOID
+            torch_output_tensor = torch.sigmoid(torch_output_tensor)
+        elif _ot == 57:  # SILU
+            torch_output_tensor = torch.nn.functional.silu(torch_output_tensor)
 
     # Create input tensor A. Mirror the model's flow: build the tensor in
     # DRAM-interleaved with the right per-chip placement, then to_memory_config
@@ -600,7 +1263,7 @@ def run(
                 break
     e2e_perf = stop_measuring_time(start_time)
 
-    # Check with PCC
+    # Check with PCC.
     if is_mesh_device:
         torch_output_tensor = reconcile_golden_to_actual(
             torch_output_tensor, output_tensor, input_a_tensor_placement, input_b_tensor_placement

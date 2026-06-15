@@ -51,7 +51,8 @@ jobs:
             { "name": "(Galaxy) DeepSeek unit tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "unit", "timeout": 15, "owner_id": "U03HY7MK4BT" },
             { "name": "(Galaxy) DeepSeek module tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "module", "timeout": 150, "owner_id": "U03HY7MK4BT" },
             { "name": "(Galaxy) DeepSeek final-op-unit tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "final-op-unit", "timeout": 150, "owner_id": "U03HY7MK4BT" },
-            { "name": "(Galaxy) DeepSeek long-seq module tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "long-seq-module", "timeout": 115, "owner_id": "U0896VBAKFC" }
+            { "name": "(Galaxy) DeepSeek long-seq module tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "long-seq-module", "timeout": 115, "owner_id": "U0896VBAKFC" },
+            { "name": "(Galaxy) DeepSeek TG MoE tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "tg-moe", "timeout": 90, "owner_id": "U03HY7MK4BT" }
           ]')
 
           # Filter matrix based on test-type selection
@@ -115,6 +116,7 @@ jobs:
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -276,6 +278,15 @@ jobs:
           # TODO: set DEEPSEEK_MAX_SEQ_LEN_OVERRIDE to large value if test does not get killed in CI.
           DEEPSEEK_MAX_SEQ_LEN_OVERRIDE=1024 pytest models/demos/deepseek_v3/tests/test_model.py -k "mode_decode" --timeout 1250 --durations=0
           DEEPSEEK_MAX_SEQ_LEN_OVERRIDE=32768 pytest models/demos/deepseek_v3/tests/test_model.py -k "mode_prefill" --timeout 1250 --durations=0
+      - name: Run DeepSeek TG MoE tests
+        if: ${{ matrix.test-group.test-type == 'tg-moe' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        run: |
+          uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+          MESH_DEVICE=TG USE_TORUS_MODE=1 pytest models/demos/deepseek_v3/tests/test_combine_tg.py -v
+          MESH_DEVICE=TG USE_TORUS_MODE=1 pytest models/demos/deepseek_v3/tests/test_compute_tg.py -v
+          MESH_DEVICE=TG pytest models/demos/deepseek_v3/tests/test_dispatch_tg.py -v
+          MESH_DEVICE=TG8X4 USE_TORUS_MODE=1 pytest models/demos/deepseek_v3/tests/test_optimized_moe_decode_block_tg.py -v
       # - name: Save environment data
       #   id: save-environment-data
       #   if: ${{ !cancelled() }}

@@ -25,8 +25,12 @@
 #include <filesystem>
 #include <iostream>
 
+#include <mutex>
+#include <unordered_map>
+
 #include <tt_stl/assert.hpp>
 #include "dispatch/kernels/cq_commands.hpp"
+#include "dispatch/data_collection.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "profiler_analysis.hpp"
 #include "hal_types.hpp"
@@ -65,6 +69,45 @@ namespace tt::tt_metal {
 namespace {
 kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
     return static_cast<kernel_profiler::PacketTypes>((timer_id >> 16) & 0x7);
+}
+
+void add_program_sub_device_meta_data(nlohmann::json& meta_data, tt::ChipId device_id, uint32_t runtime_id) {
+    using CacheKey = std::pair<tt::ChipId, uint32_t>;
+    struct CacheKeyHash {
+        std::size_t operator()(const CacheKey& k) const noexcept {
+            const std::size_t h1 = std::hash<tt::ChipId>{}(k.first);
+            const std::size_t h2 = std::hash<std::uint32_t>{}(k.second);
+            return h1 ^ (h2 + 0x9e3779b9 + (h1 << 6) + (h1 >> 2));  // boost::hash_combine
+        }
+    };
+    static std::mutex cache_mutex;
+    static std::unordered_map<CacheKey, std::optional<tt::ProgramSubDeviceInfo>, CacheKeyHash> sub_device_info_cache;
+
+    const CacheKey cache_key{device_id, runtime_id};
+    std::optional<tt::ProgramSubDeviceInfo> sub_device_info;
+    {
+        std::lock_guard<std::mutex> lock(cache_mutex);
+        auto cache_it = sub_device_info_cache.find(cache_key);
+        if (cache_it == sub_device_info_cache.end()) {
+            cache_it = sub_device_info_cache
+                           .emplace(cache_key, tt::GetProgramSubDevice(device_id, static_cast<uint16_t>(runtime_id)))
+                           .first;
+        }
+        sub_device_info = cache_it->second;
+    }
+    if (!sub_device_info.has_value()) {
+        return;
+    }
+    meta_data["sub_device_id"] = sub_device_info->sub_device_id;
+    meta_data["sub_device_manager_id"] = sub_device_info->sub_device_manager_id;
+}
+
+void add_program_sub_device_meta_data(nlohmann::json& meta_data, uint32_t encoded_run_host_id) {
+    if (encoded_run_host_id == 0) {
+        return;
+    }
+    const auto decoded = detail::DecodePerDeviceProgramID(encoded_run_host_id);
+    add_program_sub_device_meta_data(meta_data, decoded.device_id, decoded.base_program_id);
 }
 
 #if defined(TRACY_ENABLE)
@@ -1833,6 +1876,7 @@ void DeviceProfiler::readDeviceMarkerData(
     ZoneScoped;
 
     nlohmann::json meta_data;
+    add_program_sub_device_meta_data(meta_data, run_host_id);
     const tracy::MarkerDetails marker_details = getMarkerDetails(timer_id);
     const kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
     const auto [trace_id, trace_id_count] = getTraceIdAndCount(run_host_id, device_trace_counter);
@@ -2754,7 +2798,8 @@ void DeviceProfiler::pollDebugDumpResults(
             auto& active_risc_map = this->active_dram_buffer_per_core_risc_map[virtual_core];
 
             for (tracy::RiscType risc_type : enchantum::values_generator<tracy::RiscType>) {
-                if (risc_type == tracy::RiscType::TENSIX_RISC_AGG || (is_eth && risc_type != tracy::RiscType::ERISC) ||
+                if (risc_type == tracy::RiscType::TENSIX_RISC_AGG || risc_type == tracy::RiscType::NONE ||
+                    (is_eth && risc_type != tracy::RiscType::ERISC) ||
                     (!is_eth && risc_type == tracy::RiscType::ERISC)) {
                     continue;
                 }
@@ -2875,7 +2920,8 @@ void DeviceProfiler::pollDebugDumpResults(
             bool core_has_l1_data = false;
 
             for (tracy::RiscType risc_type : enchantum::values_generator<tracy::RiscType>) {
-                if (risc_type == tracy::RiscType::TENSIX_RISC_AGG || (is_eth && risc_type != tracy::RiscType::ERISC) ||
+                if (risc_type == tracy::RiscType::TENSIX_RISC_AGG || risc_type == tracy::RiscType::NONE ||
+                    (is_eth && risc_type != tracy::RiscType::ERISC) ||
                     (!is_eth && risc_type == tracy::RiscType::ERISC)) {
                     continue;
                 }

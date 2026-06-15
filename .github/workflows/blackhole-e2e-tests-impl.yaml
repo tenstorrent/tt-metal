@@ -19,7 +19,7 @@ on:
         required: false
         type: string
         default: "all"
-        description: "Filter test rows by model-name (untagged rows always run)"
+        description: "Filter test rows by model-name (strict: only rows whose model-name matches will run; use 'all' to run every row)"
       test-selection:
         required: false
         type: string
@@ -36,6 +36,7 @@ jobs:
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: |
             .github
@@ -101,9 +102,10 @@ jobs:
           fi
 
           filtered="$selected"
-          if [[ "$MODEL" != "all" ]]; then
-            filtered=$(echo "$filtered" | jq -c --arg model "$MODEL" '[.[] | select(.["model-name"] == $model or (.["model-name"] == null))]')
+          if [[ "$MODEL" != "all" && -n "$MODEL" ]]; then
+            filtered=$(echo "$filtered" | jq -c --arg model "$MODEL" '[.[] | select(.["model-name"] == $model)]')
           fi
+
 
           count=$(echo "$filtered" | jq 'length')
           if [[ "$count" -eq 0 ]]; then
@@ -148,6 +150,7 @@ jobs:
         - ${{ github.workspace }}/docker-job:/work
         - ${{ (!contains(join(matrix.test-group.runs_on, ' '), 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
         - "${{ (matrix.test-group['weights-cache-mode'] == 'cloud-mlperf' && '/mnt/MLPerf/huggingface:/localdev/blackhole_demos/huggingface_data:ro') || (matrix.test-group['weights-cache-mode'] == 'local-disk' && '/localdev/blackhole_demos/huggingface_data:/localdev/blackhole_demos/huggingface_data:ro') || '/no_hf_cache' }}"
+        - "${{ (matrix.test-group['model-name'] == 'deepseek_prefill' && '/mnt/MLPerf/deepseek-prefill-cache:/mnt/MLPerf/deepseek-prefill-cache:ro') || '/no_deepseek_traces' }}"
       options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
     defaults:
       run:
@@ -156,6 +159,7 @@ jobs:
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -171,8 +175,6 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
         if: ${{ !startsWith(matrix.test-group.sku, 'bh_p100') && !startsWith(matrix.test-group.sku, 'bh_p150') }}
         timeout-minutes: 10
-        with:
-          runner-label: ${{ (matrix.test-group.sku == 'bh_deskbox' && 'BH-DeskBox') || (matrix.test-group.sku == 'bh_loudbox' && 'BH-LoudBox') || (matrix.test-group.sku == 'bh_llmbox' && 'BH-LLMBox') || (matrix.test-group.sku == 'bh_quietbox_2' && 'BH-QB-GE') || (matrix.test-group.sku == 'bh_p300' && 'P300-viommu') || '' }}
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |

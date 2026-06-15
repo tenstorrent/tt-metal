@@ -48,6 +48,7 @@
 //   8: my_core_idx           9: my_slice_start      10: my_slice_end
 //   11: scores_addr         12: grouped_scores_addr 13: k_slot_addr
 
+#include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
@@ -106,7 +107,6 @@ constexpr uint32_t leids_aligned_page = decltype(leids_args)::AlignedPageSize;
 constexpr uint32_t cnt_page_bytes = decltype(counts_args)::AlignedPageSize;
 constexpr uint32_t off_page_bytes = decltype(offsets_args)::AlignedPageSize;
 
-constexpr uint32_t TILE_H = 32U;
 constexpr uint32_t SENTINEL = 0xFFFFFFFFU;
 constexpr uint16_t K_SLOT_SENTINEL = 0xFFFFU;
 constexpr uint32_t PLAN_CHUNK = 32U;
@@ -280,8 +280,7 @@ void kernel_main() {
     if (my_core_idx == 0) {
         // Wait for all other cores to publish their counts.
         if (num_total_cores > 1U) {
-            volatile tt_l1_ptr uint32_t* phase1_sem =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(scan_phase1_sem_id));
+            volatile tt_l1_ptr uint32_t* phase1_sem = get_sem_ptr(scan_phase1_sem_id);
             noc_semaphore_wait(phase1_sem, num_total_cores - 1U);
         }
 
@@ -374,8 +373,7 @@ void kernel_main() {
             phase2_sem_ptr, phase2_sem_addr, mcast_sx, mcast_sy, mcast_ex, mcast_ey, mcast_num_dests_incl_self);
     } else {
         // Non-lead cores wait for phase 2 signal.
-        volatile tt_l1_ptr uint32_t* phase2_sem =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(scan_phase2_sem_id));
+        volatile tt_l1_ptr uint32_t* phase2_sem = get_sem_ptr(scan_phase2_sem_id);
         noc_semaphore_wait(phase2_sem, 1U);
     }
 
@@ -503,8 +501,7 @@ void kernel_main() {
     // ===========================================================
     if (my_core_idx == 0) {
         if (num_total_cores > 1U) {
-            volatile tt_l1_ptr uint32_t* phase3_sem =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(scan_phase3_sem_id));
+            volatile tt_l1_ptr uint32_t* phase3_sem = get_sem_ptr(scan_phase3_sem_id);
             noc_semaphore_wait(phase3_sem, num_total_cores - 1U);
         }
         // Signal plan_ready_sem on every core (incl. lead) via ONE multicast.
@@ -518,15 +515,14 @@ void kernel_main() {
     // ===========================================================
     // WORKER PHASE: wait for plan_ready, then gather rows
     // ===========================================================
-    volatile tt_l1_ptr uint32_t* plan_ready_sem =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(plan_ready_sem_id));
+    volatile tt_l1_ptr uint32_t* plan_ready_sem = get_sem_ptr(plan_ready_sem_id);
     noc_semaphore_wait(plan_ready_sem, 1U);
 
     // Pull offsets[e_local] from DRAM so we can short-circuit reads for
     // tile-rows past the last active expert slice.
     noc_async_read(off_addrgen.get_noc_addr(0), (uint32_t)stage, (e_local + 1U) * sizeof(uint32_t));
     noc_async_read_barrier();
-    const uint32_t max_active_tiles = stage[e_local] / TILE_H;
+    const uint32_t max_active_tiles = stage[e_local] / tt::constants::TILE_HEIGHT;
 
     // Each core processes interleaved tile-rows [my_worker_start, my_worker_start+72,
     // my_worker_start+144, ...]. my_worker_count is uniform (= tiles_group_1) so
@@ -552,49 +548,36 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* plan_l1_buf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(plan_l1_addr);
 
     uint32_t tile_row = my_worker_start;
-    const uint64_t zeros_noc = get_noc_addr(MEM_ZEROS_BASE);
-    constexpr uint32_t zero_chunk_bytes = MEM_ZEROS_SIZE;
+    Noc noc;
+    CircularBuffer src0_cb(cb_src0);
     for (uint32_t step = 0; step < my_active_count; ++step, tile_row += worker_stride) {
-        uint64_t plan_noc = plan_addrgen.get_noc_addr(0, tile_row * TILE_H * sizeof(uint32_t));
-        noc_async_read(plan_noc, plan_l1_addr, TILE_H * sizeof(uint32_t));
+        uint64_t plan_noc = plan_addrgen.get_noc_addr(0, tile_row * tt::constants::TILE_HEIGHT * sizeof(uint32_t));
+        noc_async_read(plan_noc, plan_l1_addr, tt::constants::TILE_HEIGHT * sizeof(uint32_t));
         noc_async_read_barrier();
 
         for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
             cb_reserve_back(cb_src0, tiles_per_chunk);
-            uint32_t dst = get_write_ptr(cb_src0);
+            uint32_t dst = src0_cb.get_write_ptr();
             uint32_t chunk_off_bytes = chunk * hidden_chunk_bytes;
             bool is_last_chunk = (chunk == num_chunks - 1U);
             uint32_t read_bytes = is_last_chunk ? last_chunk_bytes : hidden_chunk_bytes;
             uint32_t pad_bytes = hidden_chunk_bytes - read_bytes;
 
-            for (uint32_t r = 0; r < TILE_H; ++r) {
+            for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
                 uint32_t src = plan_l1_buf[r];
-                uint32_t row_dst = dst + r * hidden_chunk_bytes;
+                uint32_t row_off = r * hidden_chunk_bytes;
                 if (src == SENTINEL) {
-                    uint32_t remaining = hidden_chunk_bytes;
-                    uint32_t off = 0;
-                    while (remaining > 0U) {
-                        uint32_t n = remaining > zero_chunk_bytes ? zero_chunk_bytes : remaining;
-                        noc_async_read(zeros_noc, row_dst + off, n);
-                        off += n;
-                        remaining -= n;
-                    }
+                    noc.async_write_zeros(src0_cb, hidden_chunk_bytes, {.offset_bytes = row_off});
                 } else {
                     uint64_t row_noc = dispatched_addrgen.get_noc_addr(src, chunk_off_bytes);
-                    noc_async_read(row_noc, row_dst, read_bytes);
+                    noc_async_read(row_noc, dst + row_off, read_bytes);
                     if (pad_bytes > 0U) {
-                        uint32_t remaining = pad_bytes;
-                        uint32_t off = 0;
-                        while (remaining > 0U) {
-                            uint32_t n = remaining > zero_chunk_bytes ? zero_chunk_bytes : remaining;
-                            noc_async_read(zeros_noc, row_dst + read_bytes + off, n);
-                            off += n;
-                            remaining -= n;
-                        }
+                        noc.async_write_zeros(src0_cb, pad_bytes, {.offset_bytes = row_off + read_bytes});
                     }
                 }
             }
             noc_async_read_barrier();
+            noc.write_zeros_l1_barrier();
             cb_push_back(cb_src0, tiles_per_chunk);
         }
     }

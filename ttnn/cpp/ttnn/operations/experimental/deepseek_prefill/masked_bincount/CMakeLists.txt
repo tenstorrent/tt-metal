@@ -6,7 +6,7 @@ add_library(
     ALIAS ttnn_op_experimental_deepseek_prefill_masked_bincount
 )
 
-target_precompile_headers(ttnn_op_experimental_deepseek_prefill_masked_bincount REUSE_FROM TTNN::PCH)
+target_precompile_headers(ttnn_op_experimental_deepseek_prefill_masked_bincount REUSE_FROM TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_deepseek_prefill_masked_bincount)
 
 set_target_properties(

@@ -9,12 +9,12 @@
 
 namespace ttml::metal::ops::sdpa_bw::device::kv {
 
-struct operation_attributes_t {
+struct SDPABackwardKVParams {
     AttentionMaskType mask_type{AttentionMaskType::Arbitrary};
     float dropout_probability{0.0F};
 };
 
-struct tensor_args_t {
+struct SDPABackwardKVInputs {
     const ttnn::Tensor& grad_output;               // Gradient w.r.t. output
     const ttnn::Tensor& query;                     // Input Q (needed for gradients)
     const ttnn::Tensor& key;                       // Input K (needed for gradients)
@@ -27,6 +27,9 @@ struct tensor_args_t {
     std::optional<ttnn::Tensor> preallocated_grad_key;
     std::optional<ttnn::Tensor> preallocated_grad_value;
 };
+
+using operation_attributes_t = SDPABackwardKVParams;
+using tensor_args_t = SDPABackwardKVInputs;
 
 using tensor_return_value_t = std::tuple<ttnn::Tensor, ttnn::Tensor>;  // [grad_K, grad_V]
 

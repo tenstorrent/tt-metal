@@ -51,6 +51,26 @@ def get_num_tiles_per_accumulation(acc_to_dest: bool) -> int:
     return 2 if acc_to_dest else 1
 
 
+_TILE_SHAPE = construct_tile_shape()
+
+
+def valid_acc_to_dest(dest_sync_dims_dest_acc) -> list:
+    """Pick the acc_to_dest modes worth running for a given input size.
+
+    acc_to_dest=True accumulates `get_num_tiles_per_accumulation(True)` result tiles into
+    dest, so it only makes sense when the tile count is a non-zero multiple of that.
+    """
+    _, input_dimensions, _ = dest_sync_dims_dest_acc
+    total_tiles = (
+        input_dimensions[0] * input_dimensions[1]
+    ) // _TILE_SHAPE.total_tile_size()
+
+    per_acc = get_num_tiles_per_accumulation(True)
+    if total_tiles >= per_acc and total_tiles % per_acc == 0:
+        return [False, True]
+    return [False]
+
+
 @pytest.mark.quasar
 @parametrize(
     formats=input_output_formats(
@@ -58,6 +78,9 @@ def get_num_tiles_per_accumulation(acc_to_dest: bool) -> int:
             DataFormat.MxFp8R,
             DataFormat.MxFp8P,
             DataFormat.MxFp4,
+            DataFormat.MxInt8,
+            DataFormat.MxInt4,
+            DataFormat.MxInt2,
             DataFormat.Float16_b,
             DataFormat.Float16,
         ],
@@ -67,18 +90,27 @@ def get_num_tiles_per_accumulation(acc_to_dest: bool) -> int:
         MathOperation.Elwsub,
         MathOperation.Elwmul,
     ],
-    math_fidelity=[
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ],
-    implied_math_format=[
-        ImpliedMathFormat.No,
-        ImpliedMathFormat.Yes,
-    ],
+    # Math fidelity only affects multiplication; for add/sub only LoFi is meaningful.
+    math_fidelity=lambda mathop: (
+        [MathFidelity.LoFi]
+        if mathop in [MathOperation.Elwadd, MathOperation.Elwsub]
+        else [
+            MathFidelity.LoFi,
+            MathFidelity.HiFi2,
+            MathFidelity.HiFi3,
+            MathFidelity.HiFi4,
+        ]
+    ),
+    implied_math_format=lambda formats: (
+        [
+            ImpliedMathFormat.No,
+            ImpliedMathFormat.Yes,
+        ]
+        if not formats.input_format.is_mx_format()
+        else [ImpliedMathFormat.Yes]
+    ),
     dest_sync_dims_dest_acc=ELTWISE_DIMENSIONS,
-    acc_to_dest=[False, True],
+    acc_to_dest=valid_acc_to_dest,
     num_faces=[4],
 )
 def test_eltwise_binary(
@@ -92,31 +124,8 @@ def test_eltwise_binary(
     boot_mode=BootMode.DEFAULT,
 ):
     dest_sync_mode, input_dimensions, dest_acc = dest_sync_dims_dest_acc
-    tile_shape = construct_tile_shape()
-
-    # Math fidelity only affects multiplication operations
-    if (
-        mathop in [MathOperation.Elwadd, MathOperation.Elwsub]
-        and math_fidelity != MathFidelity.LoFi
-    ):
-        pytest.skip("Math fidelity only affects multiplication operations")
-
-    # MX formats REQUIRE implied_math_format=Yes on Quasar (bypass format inference pipeline)
-    if (
-        formats.input_format.is_mx_format()
-        and implied_math_format == ImpliedMathFormat.No
-    ):
-        pytest.skip("MX formats require implied_math_format=Yes on Quasar")
 
     num_tiles_per_accumulation = get_num_tiles_per_accumulation(acc_to_dest)
-    total_tiles = (
-        input_dimensions[0] * input_dimensions[1]
-    ) // tile_shape.total_tile_size()
-
-    if (
-        acc_to_dest and total_tiles < num_tiles_per_accumulation
-    ) or total_tiles % num_tiles_per_accumulation != 0:
-        pytest.skip("Not enough tiles for dest accumulation")
 
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -127,7 +136,7 @@ def test_eltwise_binary(
     )
 
     tile_cnt_res = src_A.numel() // (
-        tile_shape.total_tile_size() * num_tiles_per_accumulation
+        _TILE_SHAPE.total_tile_size() * num_tiles_per_accumulation
     )
 
     generate_golden = get_golden_generator(EltwiseBinaryGolden)
@@ -139,7 +148,7 @@ def test_eltwise_binary(
         math_fidelity,
         input_format=formats.input_format,
         acc_to_dest=acc_to_dest,
-        tile_shape=tile_shape,
+        tile_shape=_TILE_SHAPE,
         num_tiles_per_accumulation=num_tiles_per_accumulation,
     )
 
@@ -196,6 +205,4 @@ def test_eltwise_binary(
         golden_tensor,
         res_tensor,
         formats.output_format,
-        print_errors=True,
-        print_pcc=True,
     ), "Assert against golden failed"

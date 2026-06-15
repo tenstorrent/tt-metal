@@ -59,6 +59,11 @@ public:
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt) override;
     void enqueue_wait_for_event(const MeshEvent& sync_event) override;
+    void enqueue_write_dram_core_counter(
+        tt::stl::Span<const DeviceMemoryAddress> targets,
+        uint32_t value,
+        bool blocking,
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
     void finish(tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
     void reset_worker_state(
         bool reset_launch_msg_state,

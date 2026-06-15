@@ -35,10 +35,6 @@ void kernel_main() {
 
     // Constants
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes_in0 = get_tile_size(cb_id_in0);
-#if not GENERATE_INDICES
-    const uint32_t tile_bytes_index = get_tile_size(cb_intermed_index);
-#endif
 
     // Tensor accessor
     const auto inout_tensor_accessor = TensorAccessor(inout_tensor_args, src_addr);
@@ -46,6 +42,10 @@ void kernel_main() {
     Noc noc;
     CircularBuffer cb_in0(cb_id_in0);
     CircularBuffer cb_index(cb_intermed_index);
+    const uint32_t tile_bytes_in0 = cb_in0.get_tile_size();
+#if not GENERATE_INDICES
+    const uint32_t tile_bytes_index = cb_index.get_tile_size();
+#endif
 
     // Read data and generate indices
     for (uint32_t core_loop = 0; core_loop < work_per_core; core_loop++) {

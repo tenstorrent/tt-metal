@@ -34,7 +34,7 @@ void kernel_main() {
     for (uint32_t tile_id = 0; tile_id < num_entries_per_consumer; tile_id++) {
         if constexpr (implicit_sync) {
 #ifdef ARCH_QUASAR
-            noc.async_write<Noc::TxnIdMode::ENABLED>(
+            noc.async_write<NocOptions::TXN_ID>(
                 dfb, tensor_accessor, {}, {.page_id = tile_id});
 #endif
         } else {

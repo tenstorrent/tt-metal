@@ -11,14 +11,16 @@
 #include "api/compile_time_args.h"
 #include <cstring>
 
-#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+#if defined(KERNEL_BUILD)
 // Forward declared from dataflow_api.h
+// Some paths call this but never define it. But the template is never
+// instantiated. This smells bad.
 static uintptr_t get_common_arg_addr(int arg_idx);
 #else
-// In non-kernel/non-firmware builds, get_common_arg_addr is a stub that always returns 0U.
+// In non-kernel, get_common_arg_addr is a stub that always returns 0U.
 // This is safe because the function should not be called in these builds; if it is, 0U is an invalid address
 // and will likely cause a detectable error, making misuse obvious during development.
-[[maybe_unused]] static inline uint32_t get_common_arg_addr(int /*arg_idx*/) { return 0U; }
+//[[maybe_unused]] static inline uint32_t get_common_arg_addr(int /*arg_idx*/) { return 0U; }
 #endif
 
 namespace tensor_accessor {
@@ -207,6 +209,8 @@ struct DistributionSpec {
 
         init_runtime_values();
     }
+
+#if defined(KERNEL_BUILD)
     /**
      * @brief Build a DistributionSpec from the provided arguments. This function allows for both static and dynamic
      * rank, number of banks, tensor shape, shard shape, and bank coordinates.
@@ -231,6 +235,7 @@ struct DistributionSpec {
             !Args::num_banks_is_crta or Args::bank_coords_is_crta,
             "Bank coords must be CRTA if num_banks is not known at compile time!");
     }
+#endif
 
 // Helper macro to avoid code duplication in getters
 #define getter_helper(is_static, val_ct, val_rt) \

@@ -39,6 +39,7 @@ if _SHOULD_RUN_SIMULATOR and _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so")
 import helpers.order_processing as order_processing
 import helpers.utils as utils_module
 import pytest
+import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.device import LLKAssertException
 from helpers.exalens_server import ExalensServer
@@ -103,6 +104,29 @@ init_llk_home()
 @pytest.fixture()
 def regenerate_cpp(request):
     return not request.config.getoption("--skip-codegen")
+
+
+# Default seed for deterministic stimuli. Override via LLK_TEST_SEED to reproduce
+# a specific run or to sweep different random inputs.
+_LLK_TEST_SEED = os.environ.get("LLK_TEST_SEED")
+try:
+    _DEFAULT_TORCH_SEED = int(_LLK_TEST_SEED, 0) if _LLK_TEST_SEED is not None else 42
+except ValueError as e:
+    raise pytest.UsageError(
+        f"LLK_TEST_SEED must be an integer, got {_LLK_TEST_SEED!r}"
+    ) from e
+
+
+@pytest.fixture(autouse=True)
+def _seed_torch_rng():
+    """Lock torch's global RNG before every test to avoid flaky failures.
+
+    Stimuli that don't set an explicit StimuliSpec.seed fall back to torch's
+    global generator, so seeding here makes both generate_stimuli() and any
+    direct torch.rand/randn/randint/uniform_ calls reproducible.
+    """
+    torch.manual_seed(_DEFAULT_TORCH_SEED)
+    yield
 
 
 # Define the possible custom command line options

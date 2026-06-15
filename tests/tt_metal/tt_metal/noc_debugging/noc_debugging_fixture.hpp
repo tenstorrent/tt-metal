@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdlib>
+#include <string>
 #include <gtest/gtest.h>
 #include "profiler_state_manager.hpp"
 #include "tt_metal/tt_metal/common/mesh_dispatch_fixture.hpp"
@@ -16,6 +18,36 @@ namespace tt::tt_metal {
 
 class NOCDebuggingFixture : public MeshDispatchFixture {
 public:
+    static void SetUpTestSuite() {
+#if !defined(TRACY_ENABLE)
+        return;
+#endif
+        // NOC debugging requires profiler + NOC event infrastructure, which is
+        // created during MetalContext::initialize_impl() only when profiler_enabled
+        // is true at that time.  Setting the env var before create_shared_devices()
+        // ensures profiler_state_manager_ is allocated and firmware is configured
+        // for NOC event collection.
+        const char* prev = getenv("TT_METAL_NOC_DEBUG_DUMP");
+        had_prev_env_ = (prev != nullptr);
+        if (had_prev_env_) {
+            prev_env_value_ = prev;
+        }
+        setenv("TT_METAL_NOC_DEBUG_DUMP", "1", /*overwrite=*/1);
+        MeshDispatchFixture::create_shared_devices();
+    }
+
+    static void TearDownTestSuite() {
+#if !defined(TRACY_ENABLE)
+        return;
+#endif
+        MeshDispatchFixture::destroy_shared_devices();
+        if (had_prev_env_) {
+            setenv("TT_METAL_NOC_DEBUG_DUMP", prev_env_value_.c_str(), 1);
+        } else {
+            unsetenv("TT_METAL_NOC_DEBUG_DUMP");
+        }
+    }
+
     bool has_write_barrier_issue(ChipId chip_id, CoreCoord virtual_core, int processor_id) const {
         auto& noc_debug_state = tt::tt_metal::MetalContext::instance().noc_debug_state();
         if (!noc_debug_state) {
@@ -99,26 +131,24 @@ public:
     }
 
 protected:
-    bool previous_debug_dump_enabled_{};
+    static inline bool had_prev_env_{false};
+    static inline std::string prev_env_value_{};
 
     void SetUp() override {
+#if !defined(TRACY_ENABLE)
+        GTEST_SKIP() << "NOC debugging tests require a Tracy-enabled build (build with ENABLE_TRACY=ON)";
+#endif
+        MeshDispatchFixture::SetUp();
+
         if (this->IsSlowDispatch()) {
             GTEST_SKIP() << "NOC debugging tests require fast dispatch mode";
         }
 
-        // This is a simple test with simple kernels
-        // Don't run this test if Watcher or DPrint is enabled
         if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() ||
             tt::tt_metal::MetalContext::instance().rtoptions().get_feature_enabled(
                 tt::llrt::RunTimeDebugFeatureDprint)) {
             GTEST_SKIP() << "NOC debugging tests require Watcher and DPRINT to be disabled";
         }
-
-        previous_debug_dump_enabled_ =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_experimental_noc_debug_dump_enabled();
-        tt::tt_metal::MetalContext::instance().rtoptions().set_experimental_noc_debug_dump_enabled(true);
-
-        MeshDispatchFixture::SetUp();
 
         if (auto& noc_debug_state = tt::tt_metal::MetalContext::instance().noc_debug_state()) {
             noc_debug_state->reset_state();
@@ -126,14 +156,13 @@ protected:
     }
 
     void TearDown() override {
-        MeshDispatchFixture::TearDown();
-
+#if !defined(TRACY_ENABLE)
+        return;
+#endif
         if (auto& noc_debug_state = tt::tt_metal::MetalContext::instance().noc_debug_state()) {
             noc_debug_state->reset_state();
         }
-
-        tt::tt_metal::MetalContext::instance().rtoptions().set_experimental_noc_debug_dump_enabled(
-            previous_debug_dump_enabled_);
+        MeshDispatchFixture::TearDown();
     }
 };
 

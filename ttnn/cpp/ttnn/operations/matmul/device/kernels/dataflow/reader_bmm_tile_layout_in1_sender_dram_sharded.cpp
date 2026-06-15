@@ -56,8 +56,10 @@ void kernel_main() {
     constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_in1");
     constexpr uint32_t cb_id_out = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t cb_id_out_reshard = get_named_compile_time_arg_val("cb_out_reshard");
-    constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
-    constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size_bytes;
+    // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM and the
+    // in1 CB pages are sized to match, so the block size in L1 must use the padded page stride
+    // (in1_num_pages * in1_page_size) rather than get_tile_size() (the unpadded tile size).
+    constexpr uint32_t in1_block_size_bytes = in1_num_pages * in1_page_size;
 
     Noc noc;
     CircularBuffer cb_in1(cb_id_in1);
@@ -73,8 +75,8 @@ void kernel_main() {
     constexpr DataFormat in1_data_format = get_dataformat(cb_id_in1);
 
     AllocatorBank<AllocatorBankType::DRAM> dram_bank;
-    noc.set_async_read_state<Noc::VcSelection::CUSTOM, NOC_MAX_BURST_SIZE>(
-        dram_bank, in1_page_size, {.bank_id = dram_bank_id, .addr = in1_tensor_addr}, vc);
+    noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
+        dram_bank, in1_page_size, {.bank_id = dram_bank_id, .addr = in1_tensor_addr}, NocOptVals{.vc = vc});
 
 #ifdef ARCH_GRAYSKULL
     for (uint32_t block = 0; block < num_blocks; ++block) {
@@ -83,13 +85,13 @@ void kernel_main() {
         l1_write_addr_in1 = cb_in1.get_write_ptr();
 
         for (uint32_t h = 0; h < in1_num_pages; ++h) {
-            noc.async_read_with_state<Noc::VcSelection::CUSTOM, NOC_MAX_BURST_SIZE>(
+            noc.async_read_with_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
                 dram_bank,
                 CoreLocalMem<uint32_t>(l1_write_addr_in1),
                 in1_page_size,
                 {.bank_id = dram_bank_id, .addr = in1_tensor_addr + l1_read_addr_in1},
                 {},
-                vc);
+                NocOptVals{.vc = vc});
             l1_read_addr_in1 += in1_page_size;
             l1_write_addr_in1 += in1_page_size;
         }
@@ -110,20 +112,19 @@ void kernel_main() {
     l1_write_addr_in1 = l1_write_addr_in1_start;
     for (uint32_t block = 0; block < num_blocks; ++block) {
         for (uint32_t h = 0; h < in1_num_pages; ++h) {
-            noc.async_read<Noc::TxnIdMode::ENABLED, NOC_MAX_BURST_SIZE>(
+            noc.async_read<NocOptions::TXN_ID, NOC_MAX_BURST_SIZE>(
                 dram_bank,
                 CoreLocalMem<uint32_t>(l1_write_addr_in1),
                 in1_page_size,
                 {.bank_id = dram_bank_id, .addr = in1_tensor_addr + l1_read_addr_in1},
                 {},
-                vc,
-                curr_block_trid);
+                NocOptVals{.vc = vc, .trid = curr_block_trid});
             l1_read_addr_in1 += in1_page_size;
             l1_write_addr_in1 += in1_page_size;
         }
 
         if (num_free_blocks_in_buffer == 2) {
-            noc.async_read_barrier<Noc::BarrierMode::TXN_ID>(block_trid_to_wait);
+            noc.async_read_barrier<NocOptions::TXN_ID>({.trid = static_cast<uint8_t>(block_trid_to_wait)});
             cb_in1.push_back(in1_block_num_tiles);
             // wait for next block trid
             block_trid_to_wait = block_trid_to_wait == 3 ? 1 : (block_trid_to_wait + 1);
@@ -143,7 +144,7 @@ void kernel_main() {
         l1_write_addr_in1 = l1_write_addr_in1_start + l1_write_addr_in1_offset;
     }
     // last block to wait
-    noc.async_read_barrier<Noc::BarrierMode::TXN_ID>(block_trid_to_wait);
+    noc.async_read_barrier<NocOptions::TXN_ID>({.trid = static_cast<uint8_t>(block_trid_to_wait)});
     cb_in1.push_back(in1_block_num_tiles);
 #endif
 
@@ -153,17 +154,17 @@ void kernel_main() {
     uint32_t l1_write_addr_in3 = cb_in3.get_write_ptr();
     uint32_t l1_read_addr_in3 = 0;
 
-    noc.set_async_read_state<Noc::VcSelection::CUSTOM, NOC_MAX_BURST_SIZE>(
-        dram_bank, in3_page_size, {.bank_id = dram_bank_id, .addr = in3_tensor_addr}, vc);
+    noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
+        dram_bank, in3_page_size, {.bank_id = dram_bank_id, .addr = in3_tensor_addr}, NocOptVals{.vc = vc});
 
     for (uint32_t h = 0; h < in3_num_pages; ++h) {
-        noc.async_read_with_state<Noc::VcSelection::CUSTOM, NOC_MAX_BURST_SIZE>(
+        noc.async_read_with_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
             dram_bank,
             CoreLocalMem<uint32_t>(l1_write_addr_in3),
             in3_page_size,
             {.bank_id = dram_bank_id, .addr = in3_tensor_addr + l1_read_addr_in3},
             {},
-            vc);
+            NocOptVals{.vc = vc});
         l1_read_addr_in3 += in3_page_size;
         l1_write_addr_in3 += in3_page_size;
     }
@@ -209,4 +210,13 @@ void kernel_main() {
     }
     noc.async_write_barrier();
 #endif
+
+    // Restore NCRISC_RD_CMD_BUF NOC_CTRL to the firmware default (VC=1, set in
+    // noc_init). set_async_read_state<NocOptions::CUSTOM_VC> writes a per-bank VC into NOC_CTRL
+    // and this hardware register persists across kernel launches. Kernels that
+    // follow (e.g. 1d-multicast matmul readers running in DM_DEDICATED_NOC mode)
+    // rely on NOC_CTRL being at its initialized value and do not re-set it, so
+    // they inherit the stale custom VC and suffer reduced DRAM bandwidth.
+    noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
+        dram_bank, in1_page_size, {.bank_id = dram_bank_id, .addr = in1_tensor_addr}, NocOptVals{.vc = 1});
 }

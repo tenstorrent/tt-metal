@@ -38,7 +38,7 @@ from triage import (
     ScriptConfig,
     ScriptPriority,
     collection_serializer,
-    log_check,
+    log_warning,
     run_script,
     triage_field,
 )
@@ -86,7 +86,7 @@ def run(args, context: Context):
         window = 0
 
     if window <= 0:
-        log_check(False, f"Op-id window suppressed: --op-window={window} (must be > 0).")
+        log_warning(f"Op-id window suppressed: --op-window={window} (must be > 0).")
         return None
 
     bundle = get_operation_provider(args, context)
@@ -94,14 +94,12 @@ def run(args, context: Context):
     runtime_id_to_operation = bundle.runtime_id_to_operation
 
     if not aggregations:
-        log_check(False, "Op-id window suppressed: no running ops found in dispatcher mailboxes.")
         return None
 
     raw_to_devices = _build_raw_id_to_devices(aggregations, runtime_id_to_operation)
     running_raw_ids = set(raw_to_devices.keys())
     if not running_raw_ids:
-        log_check(
-            False,
+        log_warning(
             "Op-id window suppressed: no running host_assigned_id resolved to a known Inspector "
             "runtime id (Inspector data may be empty / out of sync).",
         )
@@ -114,7 +112,7 @@ def run(args, context: Context):
         (raw_id, op_info) for raw_id, op_info in runtime_id_to_operation.items() if min_id <= raw_id <= max_id
     )
     if not entries:
-        log_check(False, f"Op-id window suppressed: no Inspector entries in range [{min_id}, {max_id}].")
+        log_warning(f"Op-id window suppressed: no Inspector entries in range [{min_id}, {max_id}].")
         return None
 
     rows: list[OpWindowRow] = []

@@ -221,6 +221,37 @@ def dict_to_compute_kernel_config(cfg):
     )
 
 
+def _add_1d_matmul_extra_kwargs(kwargs, cfg):
+    """Preserve gather_in0 / hop_cores for 1D matmul program configs. These were
+    previously dropped, so a traced gather_in0=True matmul ran as a plain
+    (non-gather) 1D matmul — taking the general grid path (program grid must fit
+    the device grid) instead of the gather_in0 path (which validates the output
+    shard grid against the device grid). That made galaxy configs whose nominal
+    grid is 8-wide fail on COL dispatch even though the real (sparse, x<=6)
+    placement fits.
+
+    num_global_cb_receivers is intentionally NOT forwarded: values > 1 require a
+    global circular buffer (global_cb) that the trace does not capture, and it is
+    a gather-distribution optimization rather than a numerical-correctness
+    parameter, so it is left at the default 1 to keep the op runnable.
+    """
+    if cfg.get("gather_in0") is not None:
+        kwargs["gather_in0"] = bool(cfg["gather_in0"])
+    hop = cfg.get("hop_cores")
+    if isinstance(hop, list) and hop:
+        ranges = set()
+        for r in hop:
+            s = r.get("start") if isinstance(r, dict) else None
+            e = r.get("end") if isinstance(r, dict) else None
+            if isinstance(s, dict) and isinstance(e, dict):
+                ranges.add(
+                    ttnn.CoreRange(ttnn.CoreCoord(int(s["x"]), int(s["y"])), ttnn.CoreCoord(int(e["x"]), int(e["y"])))
+                )
+        if ranges:
+            kwargs["hop_cores"] = ttnn.CoreRangeSet(ranges)
+    return kwargs
+
+
 def dict_to_program_config(cfg, input_b_memory_config=None, input_a_memory_config=None):
     """Convert a program_config dict from traced JSON to a proper ProgramConfig object.
 
@@ -371,6 +402,7 @@ def _build_program_config_by_type(type_name: str, cfg: dict):
                 kwargs["out_block_h"] = int(cfg["out_block_h"])
             if cfg.get("out_block_w") is not None:
                 kwargs["out_block_w"] = int(cfg["out_block_w"])
+            _add_1d_matmul_extra_kwargs(kwargs, cfg)
             return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(**kwargs)
 
         if type_name == "MatmulMultiCoreReuseProgramConfig":
@@ -504,6 +536,7 @@ def _build_program_config_heuristic(cfg, input_b_memory_config=None, input_a_mem
                 kwargs["out_block_h"] = int(cfg["out_block_h"])
             if cfg.get("out_block_w") is not None:
                 kwargs["out_block_w"] = int(cfg["out_block_w"])
+            _add_1d_matmul_extra_kwargs(kwargs, cfg)
             try:
                 return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(**kwargs)
             except Exception:

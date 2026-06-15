@@ -4,11 +4,12 @@
 
 # Adapted from https://github.com/huggingface/diffusers/blob/main/src/diffusers/pipelines/wan/pipeline_wan.py
 
+from __future__ import annotations
+
 import os
 from typing import List, NamedTuple, Optional, Union
 
 import torch
-from diffusers.schedulers import UniPCMultistepScheduler
 from PIL import Image
 
 import ttnn
@@ -17,7 +18,9 @@ from ...models.vae.vae_wan2_1 import WanEncoder
 from ...utils import cache
 from ...utils.conv3d import conv_pad_height, conv_pad_in_channels, conv_pad_width
 from ...utils.tensor import bf16_tensor_2dshard, fast_device_to_host, unflatten
-from .pipeline_wan import WanPipeline
+from .pipeline_wan import WanPipeline, WanPipelineConfig
+
+_DEFAULT_I2V_CHECKPOINT = "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
 
 
 class ImagePrompt(NamedTuple):
@@ -26,27 +29,19 @@ class ImagePrompt(NamedTuple):
 
 
 class WanPipelineI2V(WanPipeline):
-    def __init__(self, *args, height: int = 0, width: int = 0, **kwargs):
-        # Update I2V specific defaults
-        if "checkpoint_name" not in kwargs:
-            kwargs["checkpoint_name"] = "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
-        if "scheduler" not in kwargs:
-            kwargs["scheduler"] = UniPCMultistepScheduler.from_pretrained(
-                kwargs["checkpoint_name"], subfolder="scheduler", trust_remote_code=True
-            )
-
-        # initialize without warmup; pass height/width so the decoder also gets production blocking dims
-        super().__init__(*args, model_type="i2v", run_warmup=False, height=height, width=width, **kwargs)
+    def __init__(self, *, device: ttnn.MeshDevice, config: WanPipelineConfig) -> None:
+        # initialize without warmup; we warm up below with a sample image_prompt.
+        super().__init__(device=device, config=config, run_warmup=False)
 
         self.tt_vae_encoder = WanEncoder(
-            base_dim=self.vae.config.base_dim,
-            in_channels=self.vae.config.in_channels,
-            z_dim=self.vae.config.z_dim,
-            dim_mult=self.vae.config.dim_mult,
-            num_res_blocks=self.vae.config.num_res_blocks,
-            attn_scales=self.vae.config.attn_scales,
-            temperal_downsample=self.vae.config.temperal_downsample,
-            is_residual=self.vae.config.is_residual,
+            base_dim=self._vae.config.base_dim,
+            in_channels=self._vae.config.in_channels,
+            z_dim=self._vae.config.z_dim,
+            dim_mult=self._vae.config.dim_mult,
+            num_res_blocks=self._vae.config.num_res_blocks,
+            attn_scales=self._vae.config.attn_scales,
+            temperal_downsample=self._vae.config.temperal_downsample,
+            is_residual=self._vae.config.is_residual,
             mesh_device=self.mesh_device,
             ccl_manager=self.vae_ccl_manager,
             parallel_config=self.vae_parallel_config,
@@ -58,25 +53,48 @@ class WanPipelineI2V(WanPipeline):
             subfolder="vae_encoder",
             parallel_config=self.vae_parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
-            get_torch_state_dict=lambda: self.vae.state_dict(),
+            get_torch_state_dict=lambda: self._vae.torch_state_dict(),
         )
 
-        # warmup buffers
-        self.warmup_buffers(height=height, width=width, image_prompt=Image.new("RGB", (width, height)))
+        # warmup buffers with a sample image_prompt sized to the target resolution.
+        self(
+            prompts=["warmup"],
+            image_prompt=Image.new("RGB", (self._width, self._height)),
+            num_inference_steps=2,
+            guidance_scale=2 if config.cfg_enabled else 1,
+            guidance_scale_2=2 if config.cfg_enabled else 1,
+        )
 
-    @staticmethod
-    def create_pipeline(*args, **kwargs):
-        # Update I2V specific defaults
-        if "checkpoint_name" not in kwargs:
-            kwargs["checkpoint_name"] = "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
-        return WanPipeline.create_pipeline(*args, pipeline_class=WanPipelineI2V, **kwargs)
+    @classmethod
+    def create_pipeline(
+        cls,
+        *,
+        mesh_device: ttnn.MeshDevice,
+        checkpoint_name: str = _DEFAULT_I2V_CHECKPOINT,
+        height: int = 480,
+        width: int = 832,
+        num_frames: int = 81,
+        cfg_enabled: bool = True,
+        pipeline_class: type[WanPipeline] | None = None,
+    ) -> WanPipelineI2V:
+        config = WanPipelineConfig.default(
+            mesh_shape=mesh_device.shape,
+            checkpoint_name=checkpoint_name,
+            height=height,
+            width=width,
+            num_frames=num_frames,
+            cfg_enabled=cfg_enabled,
+            model_type="i2v",
+        )
+        pipeline_class_ = pipeline_class or cls
+        return pipeline_class_(device=mesh_device, config=config)
 
     def get_model_input(self, latents, cond_latents):
         """
         Adapter function to enable I2V. For base T2V, just return the latents.
         """
         latents = super().get_model_input(latents, None)
-        z_dim = self.vae.config.z_dim
+        z_dim = self._vae.config.z_dim
         t_size = latents.shape[-1]
         model_input = ttnn.concat(
             [unflatten(latents, -1, (t_size // z_dim, -1)), unflatten(cond_latents, -1, (t_size // z_dim, -1))],
@@ -94,7 +112,6 @@ class WanPipelineI2V(WanPipeline):
         num_frames: int = 81,
         dtype: Optional[torch.dtype] = None,
         device: Optional[torch.device] = None,
-        latents: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         assert batch_size == 1, "Only batch size 1 is currently supported for I2V"
 
@@ -111,7 +128,6 @@ class WanPipelineI2V(WanPipeline):
             num_frames=num_frames,
             dtype=dtype,
             device=device,
-            latents=latents,
         )
 
         latent_shape = latents.shape
@@ -131,7 +147,7 @@ class WanPipelineI2V(WanPipeline):
 
             if video_condition is None:
                 video_condition = image.new_zeros(image.shape[0], image.shape[1], num_frames, height, width)
-            if self.config.expand_timesteps:  # Unverified code path
+            if self._expand_timesteps:  # Unverified code path
                 video_condition = image_prompt.unqueeze(2)
                 assert len(image_prompt) == 1, "Only single image conditioning is supported for expand timesteps"
             else:
@@ -176,11 +192,11 @@ class WanPipelineI2V(WanPipeline):
         encoded_video_torch = encoded_video_torch.to(dtype=dtype)
 
         latents_mean = (
-            torch.tensor(self.vae.config.latents_mean)
-            .view(1, self.vae.config.z_dim, 1, 1, 1)
+            torch.tensor(self._vae.config.latents_mean)
+            .view(1, self._vae.config.z_dim, 1, 1, 1)
             .to(encoded_video_torch.device, encoded_video_torch.dtype)
         )
-        latents_std = 1.0 / torch.tensor(self.vae.config.latents_std).view(1, self.vae.config.z_dim, 1, 1, 1).to(
+        latents_std = 1.0 / torch.tensor(self._vae.config.latents_std).view(1, self._vae.config.z_dim, 1, 1, 1).to(
             encoded_video_torch.device, encoded_video_torch.dtype
         )
 

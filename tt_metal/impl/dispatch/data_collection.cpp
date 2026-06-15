@@ -52,12 +52,26 @@ void RecordKernelSourceMap(ProgramImpl& program) {
     tt::tt_metal::MetalContext::instance().data_collector()->RecordKernelSourceMap(program);
 }
 
-std::string GetKernelSourcesForRuntimeId(uint64_t runtime_id) {
-    return tt::tt_metal::MetalContext::instance().data_collector()->GetKernelSourcesForRuntimeId(runtime_id);
+void RecordProgramSubDevice(
+    tt::ChipId device_id,
+    uint64_t sub_device_manager_id,
+    uint64_t runtime_id,
+    SubDeviceId sub_device_id,
+    uint32_t num_available_worker_cores) {
+    tt::tt_metal::MetalContext::instance().data_collector()->RecordProgramSubDevice(
+        device_id, sub_device_manager_id, runtime_id, sub_device_id, num_available_worker_cores);
 }
 
-std::vector<std::string> GetKernelSourcesVecForRuntimeId(uint64_t runtime_id) {
-    return tt::tt_metal::MetalContext::instance().data_collector()->GetKernelSourcesVecForRuntimeId(runtime_id);
+std::optional<ProgramSubDeviceInfo> GetProgramSubDevice(tt::ChipId device_id, uint64_t runtime_id) {
+    return tt::tt_metal::MetalContext::instance().data_collector()->GetProgramSubDevice(device_id, runtime_id);
+}
+
+void TieRuntimeIdToProgramId(ProgramImpl& program) {
+    tt::tt_metal::MetalContext::instance().data_collector()->TieRuntimeIdToProgramId(program);
+}
+
+std::span<const std::string_view> GetKernelSourcesForRuntimeId(uint16_t runtime_id) {
+    return tt::tt_metal::MetalContext::instance().data_collector()->GetKernelSourcesForRuntimeId(runtime_id);
 }
 
 ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(

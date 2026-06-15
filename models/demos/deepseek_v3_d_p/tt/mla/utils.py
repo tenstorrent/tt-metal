@@ -1,11 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-import math
-
 import torch
-
-import ttnn
 
 
 def create_balanced_chunk_order(sp_factor: int) -> list[int]:
@@ -66,6 +62,87 @@ def reverse_reorder_tensor_chunks(tensor: torch.Tensor, chunk_order: list[int], 
     return reorder_tensor_chunks(tensor, inverse_order, seq_dim)
 
 
+def block_cyclic_reorder(matrix: torch.Tensor, chunk_local: int, sp_factor: int, seq_dim: int = 2) -> torch.Tensor:
+    """Reorder a [.., seq, ..] matrix into block-cyclic order keyed by `chunk_local`.
+
+    Splits the sequence into blocks of `chunk_local` rows and concatenates them so that device c's
+    contiguous shard (after a plain SP shard over `seq_dim`) holds blocks c, c+sp, c+2sp, ... — the
+    same block-cyclic layout the per-chip KV cache writes into. This makes the indexed-RoPE op's
+    contiguous, `update_idxt`-offset read of each device's cos/sin shard land on the right global
+    positions, including the boundary chip's older-then-wrap rows.
+    """
+    seq_len = matrix.shape[seq_dim]
+    assert seq_len % chunk_local == 0, f"seq_len {seq_len} must be a multiple of chunk_local {chunk_local}"
+    num_blocks = seq_len // chunk_local
+    assert num_blocks % sp_factor == 0, f"num_blocks {num_blocks} must be a multiple of sp_factor {sp_factor}"
+    blocks = list(torch.split(matrix, chunk_local, dim=seq_dim))
+    order = [b for c in range(sp_factor) for b in range(c, num_blocks, sp_factor)]
+    return torch.cat([blocks[b] for b in order], dim=seq_dim)
+
+
+def rotated_chip_positions(kv_actual_isl: int, sp: int, chunk_local: int) -> list[list[int]]:
+    """Per-chip global position for each chip-local row after the server's KV-pad-aware rotation,
+    mirroring the writer kernel EXACTLY. positions[c][r] is the global token position carried by
+    chip c's r-th rotated row.
+
+    Slab-aware: each chip writes chunk_local rows starting at update_idxt, and the cache cell at
+    local row lr on chip c holds global position (lr // chunk_local)*chunk_size_global +
+    c*chunk_local + (lr % chunk_local). The union over all (c, r) tiles
+    [kv_actual_isl, kv_actual_isl + chunk_size_global) exactly, so the first new_actual_isl
+    positions are the contiguous valid range and the rest are pad (masked by causality) -- no
+    separate new_actual_isl plumbing needed.
+    """
+    chunk_size_global = sp * chunk_local
+    boundary_slab = kv_actual_isl // chunk_size_global
+    boundary_chip = (kv_actual_isl // chunk_local) % sp
+    boundary_offset = kv_actual_isl % chunk_local
+
+    positions = [[0] * chunk_local for _ in range(sp)]
+    for c in range(sp):
+        if c < boundary_chip:
+            update_idxt = (boundary_slab + 1) * chunk_local
+        elif c == boundary_chip:
+            update_idxt = boundary_slab * chunk_local + boundary_offset
+        else:
+            update_idxt = boundary_slab * chunk_local
+        for r in range(chunk_local):
+            lr = update_idxt + r
+            positions[c][r] = (lr // chunk_local) * chunk_size_global + c * chunk_local + (lr % chunk_local)
+    return positions
+
+
+def blockcyclic_positions(sp: int, chunk_size_global: int, seq_len_cache: int) -> torch.Tensor:
+    """Global natural position held by each block-cyclic shard row (device-major: an SP-contiguous
+    split of the cache's seq dim yields each chip's rows).
+
+    Shard row r -> chip c = r // seq_len_local, local row lr = r % seq_len_local, and that row holds
+    global position (lr // chunk_local) * chunk_size_global + c * chunk_local + (lr % chunk_local) --
+    the inverse of the update_padded_kv_cache writer. Returns a [seq_len_cache] index tensor.
+    """
+    seq_len_local = seq_len_cache // sp
+    chunk_local = chunk_size_global // sp
+    c = torch.arange(sp).repeat_interleave(seq_len_local)
+    lr = torch.arange(seq_len_local).repeat(sp)
+    slab, off = lr // chunk_local, lr % chunk_local
+    return slab * chunk_size_global + c * chunk_local + off
+
+
+def blockcyclic_cache_host(
+    kv_natural: torch.Tensor, sp: int, chunk_size_global: int, seq_len_cache: int, kvpe_dim: int
+) -> torch.Tensor:
+    """Arrange a natural-order [seq, kvpe] KV tensor into the device cache's block-cyclic slab-major
+    layout so that an SP-contiguous shard of dim 2 gives each chip its own rows. Rows whose global
+    position is beyond the provided KV (e.g. the not-yet-written new chunk) stay zero. Returns
+    [1, 1, seq_len_cache, kvpe_dim].
+    """
+    prior_len = kv_natural.shape[0]
+    p = blockcyclic_positions(sp, chunk_size_global, seq_len_cache)
+    out = torch.zeros(seq_len_cache, kvpe_dim, dtype=kv_natural.dtype)
+    valid = p < prior_len
+    out[valid] = kv_natural[p[valid]]
+    return out.reshape(1, 1, seq_len_cache, kvpe_dim)
+
+
 def global_to_local_token_id(
     global_token_id: int,
     sp_factor: int,
@@ -109,60 +186,3 @@ def global_to_local_token_id(
         local_token_id = offset_in_chunk
 
     return device_id, local_token_id
-
-
-def zero_cache_padding_zigzag(
-    kvpe_cache: ttnn.Tensor,
-    global_end_token: int,
-    sp_factor: int,
-    seq_len: int,
-    decode_chunk_align: int = 128,
-    tp_factor: int = 1,
-):
-    """Zero-pad KV cache for migration alignment under zigzag attention layout.
-
-    Called before prefill to zero the padding region from global_end_token up
-    to the next decode_chunk_align boundary. Handles the zigzag token mapping
-    to dispatch per-device zero_cache_range calls with correct local token
-    ranges. For 2D meshes (SP x TP), zeroes all TP replicas for each SP device.
-
-    Args:
-        kvpe_cache: The mesh KV cache tensor (one shard per SP device, replicated over TP).
-        global_end_token: First invalid global token position (effective seq_len).
-        sp_factor: Number of devices in the sequence parallel group.
-        seq_len: Total sequence length across all devices.
-        decode_chunk_align: Decode chunk alignment in tokens (default 128).
-        tp_factor: Number of TP replicas per SP device (default 1).
-    """
-    padded_end = math.ceil(global_end_token / decode_chunk_align) * decode_chunk_align
-    padded_end = min(padded_end, seq_len)
-
-    if global_end_token >= padded_end:
-        return
-
-    tile_size = 32  # KV cache tile height
-
-    # Accumulate local token ranges per SP device
-    device_ranges: dict[int, tuple[int, int]] = {}
-
-    # Walk the global padding region in tile-sized steps (32 tokens)
-    # Round global_end_token down to tile boundary for the start
-    global_start = (global_end_token // tile_size) * tile_size
-    for global_tok in range(global_start, padded_end, tile_size):
-        device_id, local_token_id = global_to_local_token_id(global_tok, sp_factor, seq_len)
-        local_tile_start = (local_token_id // tile_size) * tile_size
-        local_tile_end = local_tile_start + tile_size
-
-        if device_id not in device_ranges:
-            device_ranges[device_id] = (local_tile_start, local_tile_end)
-        else:
-            prev_start, prev_end = device_ranges[device_id]
-            device_ranges[device_id] = (min(prev_start, local_tile_start), max(prev_end, local_tile_end))
-
-    # Dispatch per-device zero_cache_range
-    # In a 2D mesh (SP x TP), flat device index = sp_device * tp_factor + tp_device
-    device_tensors = ttnn.get_device_tensors(kvpe_cache)
-    for sp_device_id, (local_start, local_end) in device_ranges.items():
-        for tp_device_id in range(tp_factor):
-            flat_idx = sp_device_id * tp_factor + tp_device_id
-            ttnn.kv_cache.zero_cache_range(device_tensors[flat_idx], local_start, local_end)

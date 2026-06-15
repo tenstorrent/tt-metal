@@ -41,7 +41,6 @@ Two scopes:
 """
 
 import math
-import os
 import zlib
 import pytest
 import torch
@@ -50,7 +49,12 @@ from loguru import logger
 
 from models.common.utility_functions import run_for_blackhole
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.ttnn.unit_tests.operations.prefetcher_common import round_up as _round_up, bytes_per_tile as _bytes_per_tile
+from tests.ttnn.unit_tests.operations.prefetcher_common import (
+    round_up as _round_up,
+    bytes_per_tile as _bytes_per_tile,
+    bank_receivers_strided as _bank_receivers_strided,
+    make_recv_contig_weight as _make_recv_contig_weight,
+)
 
 
 # DRAM bank count is queried at runtime via `device.dram_grid_size().x`:
@@ -61,13 +65,14 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import round_up as _roun
 # to the unharvested case; on P100 the same parametrization runs at ring=7*recv_per_bank.
 
 
-pytestmark = [
-    run_for_blackhole("DRAM-core prefetcher requires Blackhole"),
-    pytest.mark.skipif(
-        os.environ.get("TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES", "0") != "1",
-        reason="TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES not set",
-    ),
-]
+pytestmark = run_for_blackhole("DRAM-core prefetcher requires Blackhole")
+
+
+@pytest.fixture(autouse=True)
+def _require_dram_core_prefetcher(device):
+    """Skip unless programmable DRAM cores are available on this device."""
+    if not ttnn.experimental.is_dram_core_prefetcher_supported(device):
+        pytest.skip("programmable DRAM cores unavailable; set TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1")
 
 
 def _bank_receivers_row_major(bank_idx: int, recv_per_bank: int, ring_cols: int):
@@ -220,10 +225,6 @@ def test_dram_core_prefetcher_BH_param(
     gcb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d(
         device, [program_config], [tt_weight], bank_to_receivers=bank_to_receivers, size=gcb_size
     )
-    logger.info(
-        f"[{name}] M={M} K={K} N={N} ring={ring_size} recv/bank={num_receivers_per_bank} dtype={dtype} "
-        f"K_per_shard={K_per_shard} fifo_page={in1_block_size_bytes} gcb_size={gcb_size}"
-    )
     output_mem_config = ttnn.create_sharded_memory_config(
         shape=(M, N // ring_size),
         core_grid=receiver_core_range_set,
@@ -240,7 +241,10 @@ def test_dram_core_prefetcher_BH_param(
     )
 
     # ---- Run: prefetcher (async) -> matmul (consumes via gcb) -> stop drains ----
-    ttnn.experimental.start_dram_core_prefetcher(device, [tt_weight, addrs], num_layers=1, global_cb=gcb)
+    ttnn.experimental.start_dram_core_prefetcher(device)
+    # Fence the prefetcher against the weight write so it never reads stale DRAM.
+    ttnn.experimental.wait_for_cq_on_dram_core_prefetcher(device, 0)
+    ttnn.experimental.queue_dram_core_prefetcher_request(device, [(tt_weight, ring_size)], global_cb=gcb)
     tt_out = ttnn.linear(
         tt_act,
         tt_weight,
@@ -371,9 +375,6 @@ def test_create_global_circular_buffer_for_matmul_1d(device, layers_buffered):
     gcb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d(
         device, [program_config], [tt_weight], bank_to_receivers=bank_to_receivers, size=size
     )
-    logger.info(
-        f"[factory layers_buffered={layers_buffered}] in1_block={in1_block_size} num_blocks={num_blocks} size={size}"
-    )
 
     # ---- Run: prefetcher (async) -> matmul (consumes via gcb) -> stop drains ----
     output_mem_config = ttnn.create_sharded_memory_config(
@@ -390,7 +391,8 @@ def test_create_global_circular_buffer_for_matmul_1d(device, layers_buffered):
         packer_l1_acc=True,
         dst_full_sync_en=True,
     )
-    ttnn.experimental.start_dram_core_prefetcher(device, [tt_weight, addrs], num_layers=1, global_cb=gcb)
+    ttnn.experimental.start_dram_core_prefetcher(device)
+    ttnn.experimental.queue_dram_core_prefetcher_request(device, [(tt_weight, ring_size)], global_cb=gcb)
     tt_out = ttnn.linear(
         tt_act,
         tt_weight,
@@ -540,17 +542,14 @@ def test_dram_core_prefetcher_multi_tensor(device, num_tensors, num_layers):
 
     # Per receiver per (layer, tensor): ring_size pushes.
     num_iters_total = num_layers * num_tensors * ring_size
-    logger.info(
-        f"[multi_tensor] num_tensors={num_tensors} num_layers={num_layers} K={_MT_K} N={_MT_N} "
-        f"banks={num_dram_banks} ring={num_receivers} push_page={push_page_size} gcb_size={gcb_size} "
-        f"num_iters_total={num_iters_total}"
-    )
-
     # Sender: push all `num_tensors` weights through the prefetcher, num_layers times.
-    ttnn.experimental.start_dram_core_prefetcher(
+    # The prefetcher has no num_layers replay count anymore, so flatten the list to
+    # num_layers * num_tensors entries (layout dedup keeps the wire compact). With
+    # num_layers > 1 this also exercises the multi-page request split.
+    ttnn.experimental.start_dram_core_prefetcher(device)
+    ttnn.experimental.queue_dram_core_prefetcher_request(
         device,
-        weights + [addrs],
-        num_layers=num_layers,
+        [(w, ring_size) for w in weights] * num_layers,
         global_cb=gcb,
     )
     # Receiver: discard all pushed data.
@@ -562,4 +561,62 @@ def test_dram_core_prefetcher_multi_tensor(device, num_tensors, num_layers):
     )
     ttnn.experimental.stop_dram_core_prefetcher(device)
     ttnn.synchronize_device(device)
-    logger.info(f"[multi_tensor] num_tensors={num_tensors} num_layers={num_layers} completed cleanly")
+
+
+# ---------------------------------------------------------------------------
+# Receiver-contiguous DRAM layout smoke
+# ---------------------------------------------------------------------------
+# Allocates DRAM weight via NdShardSpec with `num_shards = ring_size`
+# (over-subscribed: more shards than DRAM banks). The manager auto-detects
+# this from buffer_distribution_spec().num_shards() and dispatches to the
+# receiver-contiguous compute_tensor_geom path. The GCB topology is built
+# so shard index == ring position, matching the round-robin shard-to-bank
+# placement. Receiver is the discard consumer (smoke: no PCC check yet).
+
+
+@pytest.mark.parametrize("num_tensors,num_layers", [(1, 1), (2, 1), (2, 5)])
+def test_dram_core_prefetcher_recv_contig_smoke(device, num_tensors, num_layers):
+    num_dram_banks = device.dram_grid_size().x
+    num_recv_per_bank = _MT_NUM_RECV_PER_BANK
+    num_receivers = num_dram_banks * num_recv_per_bank
+    ring_size = num_receivers
+
+    K = _MT_K
+    N = _MT_N
+    n_per_recv = N // ring_size
+
+    weights = []
+    for i in range(num_tensors):
+        torch.manual_seed(0xC400 + i)
+        pt = torch.randn(1, 1, K, N)
+        weights.append(_make_recv_contig_weight(device, pt, num_dram_banks, ring_size, ttnn.bfloat8_b))
+
+    k_tiles = K // ttnn.TILE_SIZE
+    k_block_w_tiles = (k_tiles + ring_size - 1) // ring_size
+    n_tiles_per_recv = n_per_recv // ttnn.TILE_SIZE
+    push_page_size = k_block_w_tiles * n_tiles_per_recv * _MT_TILE_BYTES
+    per_recv_bytes_per_tensor = ring_size * push_page_size
+    gcb_size = _round_up(per_recv_bytes_per_tensor, push_page_size)
+
+    bank_to_receivers = [
+        (b, _bank_receivers_strided(b, num_recv_per_bank, num_dram_banks, ring_cols=num_dram_banks))
+        for b in range(num_dram_banks)
+    ]
+    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(device, bank_to_receivers, gcb_size)
+
+    num_iters_total = num_layers * num_tensors * ring_size
+
+    ttnn.experimental.start_dram_core_prefetcher(device)
+    ttnn.experimental.queue_dram_core_prefetcher_request(
+        device,
+        [(w, ring_size) for w in weights] * num_layers,
+        global_cb=gcb,
+    )
+    ttnn.experimental.test_dram_prefetcher_consumer(
+        device,
+        num_iters=num_iters_total,
+        page_size_bytes=push_page_size,
+        global_cb=gcb,
+    )
+    ttnn.experimental.stop_dram_core_prefetcher(device)
+    ttnn.synchronize_device(device)

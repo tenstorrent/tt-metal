@@ -89,7 +89,12 @@ void PostCombineReduceDeviceOperation::validate_on_program_cache_miss(
 
     if (indices.has_value()) {
         TT_FATAL(indices->layout() == ttnn::Layout::ROW_MAJOR, "indices must be ROW_MAJOR");
-        TT_FATAL(indices->dtype() == DataType::INT32, "indices must be int32");
+        // #44928: indices come straight from moe_grouped_topk as UINT16. The
+        // writer expands them to int32 in L1 before the compute kernel reads.
+        TT_FATAL(
+            indices->dtype() == DataType::UINT16,
+            "indices must be uint16 (matching moe_grouped_topk output), got {}",
+            indices->dtype());
         TT_FATAL(expert_dispatch_table->layout() == ttnn::Layout::ROW_MAJOR, "expert_dispatch_table must be ROW_MAJOR");
         TT_FATAL(expert_dispatch_table->dtype() == DataType::INT32, "expert_dispatch_table must be int32");
     }

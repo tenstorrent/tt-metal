@@ -129,7 +129,11 @@ static inline ttsl::hash::hash_t hash_kernel_descriptor(const KernelDescriptor& 
         kernel.source_type,
         kernel.core_ranges,
         kernel.compile_time_args,
+        kernel.named_compile_time_args,
         kernel.defines,
+        kernel.opt_level.has_value(),
+        kernel.opt_level.value_or(KernelBuildOptLevel{}),
+        kernel.compiler_include_paths,
         kernel.common_runtime_args.size(),
         kernel.runtime_args.size(),
         kernel.config.index(),
@@ -141,7 +145,8 @@ static inline ttsl::hash::hash_t hash_cb_format_descriptor(const CBFormatDescrip
         format_descriptor.buffer_index,
         format_descriptor.data_format,
         format_descriptor.page_size,
-        format_descriptor.tile);
+        format_descriptor.tile,
+        format_descriptor.face_geometry);
 }
 
 static inline ttsl::hash::hash_t hash_cb_descriptor(const CBDescriptor& cb) {
@@ -312,6 +317,11 @@ void KernelDescriptor::emplace_common_runtime_args(const RTArgList& args) {
 std::size_t std::hash<tt::tt_metal::TileDescriptor>::operator()(
     const tt::tt_metal::TileDescriptor& tile_desc) const noexcept {
     return tt::stl::hash::hash_objects_with_default_seed(tile_desc.height, tile_desc.width, tile_desc.transpose);
+}
+
+std::size_t std::hash<tt::tt_metal::FaceGeometry>::operator()(
+    const tt::tt_metal::FaceGeometry& face_geometry) const noexcept {
+    return tt::stl::hash::hash_objects_with_default_seed(face_geometry.face_r_dim, face_geometry.num_faces);
 }
 
 std::size_t std::hash<tt::tt_metal::ProgramDescriptor>::operator()(

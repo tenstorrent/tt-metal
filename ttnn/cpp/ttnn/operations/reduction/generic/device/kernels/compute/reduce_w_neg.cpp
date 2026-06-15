@@ -4,6 +4,9 @@
 
 #include <cstdint>
 
+#include "api/compute/cb_api.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/pack.h"
 #include "api/compute/reduce.h"
 
 #include "api/compute/eltwise_binary.h"
@@ -11,6 +14,8 @@
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 #include "llk_math_eltwise_binary.h"
 
@@ -31,6 +36,72 @@ void kernel_main() {
     constexpr uint32_t cb_input = tt::CBIndex::c_0;
     constexpr uint32_t cb_scaler = tt::CBIndex::c_2;
     constexpr uint32_t cb_output = tt::CBIndex::c_3;
+    constexpr uint32_t onetile = 1;
+    constexpr DataFormat reduce_format = static_cast<DataFormat>(unpack_src_format[cb_input]);
+
+    if constexpr (is_sfpu_reduce_path<REDUCE_OP, REDUCE_DIM, reduce_format>()) {
+        constexpr uint32_t acc_dst = 0;
+        constexpr uint32_t work_dst = 1;
+
+        init_sfpu(cb_input, cb_output);
+        copy_tile_to_dst_init_short(cb_input);
+        cb_wait_front(cb_scaler, onetile);
+        PACK((llk_pack_reduce_mask_config<REDUCE_DIM, PackMode::Default>(cb_output)));
+
+        for (uint32_t nc = 0; nc < NC; ++nc) {
+            for (uint32_t ht = 0; ht < Ht; ++ht) {
+                tile_regs_acquire();
+                negative_tile_init();
+                if (Wt > 1) {
+                    compute_kernel_lib::detail::sfpu_reduce_max_fold_init<reduce_format>();
+                }
+
+                for (uint32_t wt = 0; wt < Wt; ++wt) {
+                    cb_wait_front(cb_input, onetile);
+                    if (wt == 0) {
+                        copy_tile(cb_input, 0, acc_dst);
+                        if constexpr (reduce_format == DataFormat::Int32) {
+                            negative_tile_int32(acc_dst);
+                        } else {
+                            negative_tile(acc_dst);
+                        }
+                    } else {
+                        copy_tile(cb_input, 0, work_dst);
+                        if constexpr (reduce_format == DataFormat::Int32) {
+                            negative_tile_int32(work_dst);
+                        } else {
+                            negative_tile(work_dst);
+                        }
+                        compute_kernel_lib::detail::sfpu_reduce_max_fold_tile<reduce_format>(
+                            acc_dst, work_dst, acc_dst);
+                    }
+                    cb_pop_front(cb_input, onetile);
+                }
+
+                sfpu_reduce_init<REDUCE_OP, reduce_format>();
+                sfpu_reduce<REDUCE_OP, reduce_format, REDUCE_DIM>(acc_dst, /*ct_dim=*/1, /*rt_dim=*/1);
+                if constexpr (reduce_format == DataFormat::Int32) {
+                    negative_tile_int32(acc_dst);
+                } else {
+                    negative_tile(acc_dst);
+                }
+#ifdef REDUCE_POST_MUL
+                compute_kernel_lib::detail::reduce_post_mul_tile<reduce_format>(acc_dst, post_mul_scaler_bits);
+#endif
+
+                tile_regs_commit();
+                cb_reserve_back(cb_output, onetile);
+                tile_regs_wait();
+                pack_tile(acc_dst, cb_output);
+                tile_regs_release();
+                cb_push_back(cb_output, onetile);
+            }
+        }
+
+        PACK((llk_pack_reduce_mask_clear()));
+        return;
+    }
+
     constexpr uint32_t cb_acc = tt::CBIndex::c_4;
     constexpr uint32_t cb_ineg = tt::CBIndex::c_5;
 
@@ -44,7 +115,6 @@ void kernel_main() {
 
     cb_scaler_obj.wait_front(1);  // scaler tile from the reader
     for (uint32_t nc = 0; nc < NC; nc++) {
-        constexpr int onetile = 1;
         int dst_idx = 0;
         for (uint32_t ht = 0; ht < Ht; ++ht) {
             // tiles are expected to be coming in in NCHW order (W-contiguous)

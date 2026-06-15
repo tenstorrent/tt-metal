@@ -4,10 +4,14 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 inline __attribute__((always_inline)) void fill_pad_cb_with_val(
-    const uint32_t cb_id, const uint32_t num_bytes_risc, uint32_t num_noc_transfer, const uint32_t val) {
+    Noc& noc, const uint32_t cb_id, const uint32_t num_bytes_risc, uint32_t num_noc_transfer, const uint32_t val) {
     CircularBuffer cb(cb_id);
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr());
 
@@ -16,28 +20,28 @@ inline __attribute__((always_inline)) void fill_pad_cb_with_val(
     }
 
     uint32_t pad_val_addr = cb.get_write_ptr();
-    uint64_t pad_val_noc_addr = get_noc_addr(pad_val_addr);
     uint32_t l1_write_addr = pad_val_addr;
 
     for (uint32_t i = 0; i < num_noc_transfer; ++i) {
-        noc_async_read(pad_val_noc_addr, l1_write_addr, num_bytes_risc);
+        CoreLocalMem<uint32_t> dst(l1_write_addr);
+        noc.async_read(
+            UnicastEndpoint{},
+            dst,
+            num_bytes_risc,
+            {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+             .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+             .addr = pad_val_addr},
+            {.offset_bytes = 0});
         l1_write_addr += num_bytes_risc;
     }
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 }
 
 inline __attribute__((always_inline)) void fill_pad_cb_with_zero(
-    const uint32_t cb_id, const uint32_t num_bytes_risc, uint32_t num_noc_transfer) {
+    Noc& noc, const uint32_t cb_id, const uint32_t num_bytes_risc, uint32_t num_noc_transfer) {
     CircularBuffer cb(cb_id);
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    uint32_t pad_val_addr = cb.get_write_ptr();
-    uint32_t l1_write_addr = pad_val_addr;
-
-    for (uint32_t i = 0; i < num_noc_transfer; ++i) {
-        noc_async_read(zeros_noc_addr, l1_write_addr, num_bytes_risc);
-        l1_write_addr += num_bytes_risc;
-    }
-    noc_async_read_barrier();
+    noc.async_write_zeros(cb, num_bytes_risc * num_noc_transfer);
+    noc.write_zeros_l1_barrier();
 }
 
 void kernel_main() {
@@ -73,13 +77,14 @@ void kernel_main() {
     CircularBuffer cb_pad_exp(cb_pad);
     CircularBuffer cb_out0_exp(cb_out0);
 
-    uint32_t pad_val_addr = cb_pad_exp.get_read_ptr();
-    uint64_t pad_val_noc_addr = get_noc_addr(pad_val_addr);
+    Noc noc;
+
+    const uint32_t pad_val_addr = cb_pad_exp.get_read_ptr();
 
     if constexpr (not_pad_by_zero) {
-        fill_pad_cb_with_val(cb_pad, row_major_min_bytes, num_sticks_padded_read, packed_pad_value);
+        fill_pad_cb_with_val(noc, cb_pad, row_major_min_bytes, num_sticks_padded_read, packed_pad_value);
     } else {
-        fill_pad_cb_with_zero(cb_pad, zero_pad_stick_size, num_zero_pad_sticks_read);
+        fill_pad_cb_with_zero(noc, cb_pad, zero_pad_stick_size, num_zero_pad_sticks_read);
     }
 
     uint32_t l1_write_addr = cb_out0_exp.get_write_ptr();
@@ -95,7 +100,15 @@ void kernel_main() {
             i_stick++;
 
         } else {
-            noc_async_read(pad_val_noc_addr, l1_write_addr, stick_size_bytes);
+            CoreLocalMem<uint32_t> dst(l1_write_addr);
+            noc.async_read(
+                UnicastEndpoint{},
+                dst,
+                stick_size_bytes,
+                {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+                 .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+                 .addr = pad_val_addr},
+                {.offset_bytes = 0});
             l1_write_addr += stick_size_bytes;
         }
 
@@ -110,5 +123,5 @@ void kernel_main() {
         }
     }
 
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 }

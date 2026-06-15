@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_bernoulli ${LIB_TYPE})
 add_library(TTNN::Ops::Bernoulli ALIAS ttnn_op_bernoulli)
 
-tt_reuse_precompile_headers(ttnn_op_bernoulli TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_bernoulli TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_bernoulli)
 
 set_target_properties(

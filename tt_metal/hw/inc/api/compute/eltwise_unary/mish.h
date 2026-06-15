@@ -6,7 +6,8 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_mish.h"
+#include "ckernel_sfpu_mish.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -36,7 +37,7 @@ namespace ckernel {
 // clang-format on
 template <bool APPROXIMATION_MODE>
 ALWI void mish_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_mish<APPROXIMATION_MODE, DST_ACCUM_MODE>(idst)));
+    MATH(SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_mish, (APPROXIMATION_MODE, DST_ACCUM_MODE), RC, idst));
 }
 
 /**
@@ -44,7 +45,7 @@ ALWI void mish_tile(uint32_t idst) {
  */
 template <bool APPROXIMATION_MODE>
 ALWI void mish_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_mish_init<APPROXIMATION_MODE, DST_ACCUM_MODE>()));
+    MATH(SFPU_INIT_CB(mish, sfpu::mish_init, (APPROXIMATION_MODE, DST_ACCUM_MODE)));
 }
 
 }  // namespace ckernel

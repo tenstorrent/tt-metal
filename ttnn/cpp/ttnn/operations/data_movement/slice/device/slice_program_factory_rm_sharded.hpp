@@ -4,23 +4,21 @@
 #pragma once
 
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation_types.hpp"
 
 namespace ttnn::prim {
 
 struct SliceRmShardedProgramFactory {
-    struct shared_variables_t {
-        tt::tt_metal::CBHandle cb_src0{};
-        tt::tt_metal::CBHandle cb_output{};
-    };
-
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(const SliceParams& args, const SliceInputs& tensor_args, Tensor& output);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program, const SliceParams& args, const SliceInputs& tensor_args, Tensor& output);
+    // Contract (1): per-coord ProgramDescriptor.  Both CBs are sharded
+    // (CBDescriptor::buffer bound to input/output buffers); the framework
+    // patches the dynamic CB addresses on cache hit via
+    // apply_descriptor_runtime_args.  CB total_size/page_size are NOT patched
+    // — padded_shape is folded into compute_program_hash() so each unique
+    // sizing gets its own cache entry.
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const SliceParams& args, const SliceInputs& tensor_args, Tensor& output);
 };
 
 }  // namespace ttnn::prim

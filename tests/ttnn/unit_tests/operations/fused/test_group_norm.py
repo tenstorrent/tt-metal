@@ -322,6 +322,122 @@ def test_group_norm_with_block_sharded_v2_8x4_grid(device, N, C, H, W, num_group
     )
 
 
+OFFSET_SHARD_GRID_SHAPE_CASES = [
+    # (N, C, H, W, num_groups), (core_grid_x, core_grid_y)
+    ((1, 1280, 16, 16, 32), (4, 4)),
+    ((1, 960, 1, 1024, 32), (8, 4)),
+]
+OFFSET_SHARD_GRID_OFFSETS = [
+    ttnn.CoreCoord(0, 0),
+    ttnn.CoreCoord(2, 0),
+    ttnn.CoreCoord(0, 2),
+    ttnn.CoreCoord(1, 1),
+    ttnn.CoreCoord(4, 4),
+]
+OFFSET_SHARD_GRID_ORIENTATIONS = [ttnn.ShardOrientation.COL_MAJOR, ttnn.ShardOrientation.ROW_MAJOR]
+
+
+def _offset_grid_fits_device(device, core_grid, offset):
+    dev = device.compute_with_storage_grid_size()
+    return offset.x + core_grid[0] <= dev.x and offset.y + core_grid[1] <= dev.y
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("shape, core_grid", OFFSET_SHARD_GRID_SHAPE_CASES)
+@pytest.mark.parametrize("grid_offset", OFFSET_SHARD_GRID_OFFSETS)
+@pytest.mark.parametrize("orientation", OFFSET_SHARD_GRID_ORIENTATIONS)
+@pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
+def test_group_norm_with_offset_shard_grid(device, shape, core_grid, grid_offset, orientation, use_welford):
+    """Sharded groupnorm must work when the shard grid does not start at core (0, 0), for both orientations."""
+    if not _offset_grid_fits_device(device, core_grid, grid_offset):
+        pytest.skip(f"core grid {core_grid} at offset ({grid_offset.x}, {grid_offset.y}) does not fit on this device")
+
+    N, C, H, W, num_groups = shape
+    torch.manual_seed(0)
+
+    grid_size = ttnn.CoreGrid(y=core_grid[1], x=core_grid[0])
+
+    # For BLOCK sharding the channel dim C is split across grid.y for COL_MAJOR and across
+    # grid.x for ROW_MAJOR; the input mask / gamma / beta are laid out per that core count.
+    col_major = orientation == ttnn.ShardOrientation.COL_MAJOR
+    channel_cores = grid_size.y if col_major else grid_size.x
+
+    torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
+    torch_weight = torch.rand((C,), dtype=torch.bfloat16)
+    torch_bias = torch.rand((C,), dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.group_norm(
+        torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias
+    )
+    torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+
+    input_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    input_tensor = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, channel_cores, ttnn.DataType.BFLOAT8_B)
+    input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
+
+    gamma = ttnn.create_group_norm_weight_bias_rm(torch_weight, C, channel_cores)
+    beta = ttnn.create_group_norm_weight_bias_rm(torch_bias, C, channel_cores)
+
+    gamma_t = ttnn.from_torch(
+        gamma,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    beta_t = ttnn.from_torch(
+        beta,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    shard_end = ttnn.CoreCoord(core_grid[0] + grid_offset.x - 1, core_grid[1] + grid_offset.y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(grid_offset, shard_end)})
+    # COL_MAJOR splits height across grid.x and C across grid.y; ROW_MAJOR is transposed.
+    if col_major:
+        shard_shape = N * H * W // grid_size.x, C // grid_size.y
+    else:
+        shard_shape = N * H * W // grid_size.y, C // grid_size.x
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, orientation)
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+    input_tensor = ttnn.to_memory_config(input_tensor, sharded_mem_config)
+
+    output_tensor = ttnn.group_norm(
+        input_tensor,
+        num_groups=num_groups,
+        input_mask=input_mask_tensor,
+        weight=gamma_t,
+        bias=beta_t,
+        memory_config=sharded_mem_config,
+        core_grid=grid_size,
+        use_welford=use_welford,
+    )
+
+    output_tensor = ttnn.to_memory_config(output_tensor, ttnn.L1_MEMORY_CONFIG)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.9999,
+        rtol=0.05,
+        atol=0.065,
+        frobenius_threshold=0.015,
+    )
+
+
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize("N, C, H, W, num_groups", BLOCK_SHARDED_V2_8X8_SHAPES)
 @pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
@@ -1150,6 +1266,54 @@ def test_group_norm_negative_tests(
             num_groups=num_groups,
             core_grid=ttnn.CoreGrid(y=1, x=1),
             inplace=False,
+        )
+
+
+def test_group_norm_rejects_host_input_mask(device):
+    input_tensor = ttnn.empty((1, 1, 32, 320), device=device)
+    input_mask = ttnn.create_group_norm_input_mask(320, 32, 1, ttnn.DataType.BFLOAT16)
+
+    with pytest.raises(RuntimeError, match="Input mask must be on device"):
+        ttnn.group_norm(
+            input_tensor,
+            num_groups=32,
+            input_mask=input_mask,
+            core_grid=ttnn.CoreGrid(y=1, x=1),
+            inplace=False,
+        )
+
+
+def test_group_norm_rejects_host_negative_mask(device):
+    grid_size = ttnn.CoreGrid(y=1, x=1)
+    torch_input_tensor = torch.rand((1, 320, 32, 32), dtype=torch.bfloat16)
+    input_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(1, 1, 32 * 32, 320)
+    input_tensor = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    input_mask = ttnn.create_group_norm_input_mask(320, 32, grid_size.x, ttnn.DataType.BFLOAT16)
+    input_mask = ttnn.to_device(input_mask, device)
+    negative_mask = ttnn.create_group_norm_input_negative_mask(320, 32, grid_size.x, ttnn.DataType.BFLOAT16)
+
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    shard_spec = ttnn.ShardSpec(shard_grid, (32 * 32, 320), ttnn.ShardOrientation.ROW_MAJOR)
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+    input_tensor = ttnn.to_memory_config(input_tensor, memory_config=sharded_mem_config)
+
+    with pytest.raises(RuntimeError, match="Negative mask must be on device"):
+        ttnn.group_norm(
+            input_tensor,
+            num_groups=32,
+            input_mask=input_mask,
+            negative_mask=negative_mask,
+            memory_config=sharded_mem_config,
+            core_grid=grid_size,
         )
 
 

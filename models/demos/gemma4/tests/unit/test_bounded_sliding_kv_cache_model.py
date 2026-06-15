@@ -251,7 +251,7 @@ def _build_sliding_window_mask(cache_len: int, sliding_window: int | None) -> to
     return mask
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=True)
 @pytest.mark.parametrize("cache_len", [32, 512, 1500], ids=lambda c: f"cache{c}")
 def test_attention_decode_bounded_vs_unbounded_parity(cache_len, mesh_device, reset_seeds, request):
     """Drive a sliding-attention decode through both the unbounded path and the

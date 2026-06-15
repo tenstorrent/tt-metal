@@ -261,6 +261,20 @@ inline __attribute__((always_inline)) void flush_l2_cache_range(uintptr_t start_
     }
 }
 
+// Invalidate a range of addresses from L2 to TL1.
+// Invalidates all cache lines covering [start_addr, start_addr + size).
+inline __attribute__((always_inline)) void invalidate_l2_cache_range(uintptr_t start_addr, size_t size) {
+    if (size == 0) {
+        return;
+    }
+    uintptr_t aligned_start = start_addr & ~(uintptr_t)63;  // align to 64B
+    uintptr_t end_addr = start_addr + size;
+
+    for (uintptr_t addr = aligned_start; addr < end_addr; addr += 64) {
+        invalidate_l2_cache_line(addr);
+    }
+}
+
 // Flush entire L2 cache to TL1.
 // Iterates FLUSH64 over all cacheable TL1 addresses (4MB).
 inline void flush_l2_cache_full() {
@@ -287,12 +301,10 @@ inline void invalidate_l2_cache(uint32_t hartid) {
 // Combined Cache Operations
 // -----------------------------------------------------------------------------
 
-// Invalidate entire L1 cache (D$ + I$) on this core.
-// Provided for API compatibility with previous architectures.
-// Uses flush (not invalidate) for D$ since older architectures had write-through caches.
-inline void invalidate_l1_cache() {
-    flush_l1_dcache(0);
-    invalidate_l1_icache();
+// No-op for Quasar DM cores. The data movement cores are completely coherent with each other.
+// Most cases that previous architectures invalidated the l1 cache either do not need
+// invalidation for Quasar or should invalidate the l2 cache instead.
+inline __attribute__((always_inline)) void invalidate_l1_cache() {
 }
 
 // Invalidate entire cache hierarchy: L2 + L1 D$ + L1 I$.
@@ -303,7 +315,8 @@ inline void invalidate_cache_all(uint32_t hartid) {
     invalidate_l2_cache(hartid);
 
     // 2. Invalidate local L1 (D$ + I$)
-    invalidate_l1_cache();
+    invalidate_l1_dcache(0);
+    invalidate_l1_icache();
 }
 
 #endif  // ARCH_QUASAR && COMPILE_FOR_DM

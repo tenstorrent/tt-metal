@@ -56,6 +56,8 @@ inline std::string get_generic_reduction_doc(const char* op_name, const char* qu
                   - TILE
 
             The output tensor will be in TILE layout and have the same dtype as the :attr:`input_tensor`.
+            Exception: for sum and mean, 4D ROW_MAJOR BFLOAT16/FLOAT32 inputs with INTERLEAVED memory
+            config reduced along the last (-1) or second-to-last (-2) dimension preserve ROW_MAJOR layout.
 
         Memory Support:
             - Interleaved: DRAM and L1

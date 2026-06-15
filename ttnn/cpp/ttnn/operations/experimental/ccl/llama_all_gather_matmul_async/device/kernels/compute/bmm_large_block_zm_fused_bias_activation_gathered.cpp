@@ -218,7 +218,7 @@ void kernel_main() {
 #ifdef PACK_RELU
         // for each batch we start we relu disabled so that intermediate results are not relu'd
         if constexpr (batch > 1) {
-            PACK((llk_pack_relu_config(ReluType::NO_RELU)));
+            PACK((llk_pack_relu_config(ReluConfig::none())));
         }
 #endif
 
@@ -247,7 +247,7 @@ void kernel_main() {
 #if not defined FUSE_BIAS and defined PACK_RELU
             if (last_out) {
                 // if last block we pack the final result with relu enabled
-                PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+                PACK((llk_pack_relu_config(ReluConfig::zero())));
             }
 #endif
 

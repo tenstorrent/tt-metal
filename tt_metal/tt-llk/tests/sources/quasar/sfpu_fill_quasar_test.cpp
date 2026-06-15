@@ -99,7 +99,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "cmath_common.h"
 #include "experimental/ckernel_sfpu_fill.h"
 #include "llk_math_common.h"
-#include "llk_math_eltwise_unary_sfpu_common.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 #include "params.h"
 
 using namespace ckernel;
@@ -129,9 +129,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>(math_format, math_format);
     }
 
-    // SFPU iterates SFP_ROWS rows at a time; one face is FACE_R_DIM rows tall.
-    constexpr int num_sfpu_iterations = static_cast<int>(FACE_R_DIM / SFP_ROWS);
-
     _llk_math_eltwise_sfpu_init_();
 
     if (is_int_fill)
@@ -145,7 +142,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
         {
             _llk_math_eltwise_unary_sfpu_params_(
-                [](std::uint32_t v) { ckernel::sfpu::_calculate_fill_int_<FILL_INT_FORMAT, num_sfpu_iterations>(v); }, params.DST_INDEX + i, FILL_INT_VALUE);
+                ckernel::sfpu::_calculate_fill_int_<FILL_INT_FORMAT, SFPU_ITERATIONS>, params.DST_INDEX + i, VectorMode::RC, FILL_INT_VALUE);
         }
     }
     else
@@ -157,7 +154,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Walk every tile in DEST starting at DST_INDEX, filling all lanes with FILL_CONST.
         for (std::uint32_t i = 0; i < params.TILE_CNT; i++)
         {
-            _llk_math_eltwise_unary_sfpu_params_([](float v) { _calculate_fill_<num_sfpu_iterations>(v); }, params.DST_INDEX + i, FILL_CONST);
+            _llk_math_eltwise_unary_sfpu_params_(_calculate_fill_<SFPU_ITERATIONS>, params.DST_INDEX + i, VectorMode::RC, FILL_CONST);
         }
     }
 

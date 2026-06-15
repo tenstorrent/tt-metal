@@ -165,25 +165,33 @@ def apply_rotary_emb_golden(x: torch.Tensor, cos_cache: torch.Tensor, sin_cache:
     """
     seq_len = x.shape[2]  # For prefill mode
 
-    # Slice cos/sin to match seq_len (cache may be larger)
-    cos = cos_cache[..., :seq_len, :]
-    sin = sin_cache[..., :seq_len, :]
+    # The op rotates only the first min(seq_len, cos_seq) token rows and
+    # ZERO-FILLS the rest: when the (replicated) cos/sin cache has fewer seq rows
+    # than the input (e.g. cos seq=32 vs per-chip seq=128 on galaxy traces), rows
+    # >= cos_seq have no rotation factor and the kernel writes zeros there
+    # (rotary_embedding_llama_multi_core_program_factory.cpp). Mirror that instead
+    # of multiplying mismatched seq lengths (which used to crash).
+    s = min(seq_len, cos_cache.shape[2])
+
+    cos = cos_cache[..., :s, :]
+    sin = sin_cache[..., :s, :]
 
     # cos/sin are in TTNN "doubled" format: [c0, c0, c1, c1, ...]
     # Extract the "un-doubled" version: [c0, c1, c2, ...]
-    freqs_cos = cos[..., 0::2]  # [..., seq_len, head_dim//2]
+    freqs_cos = cos[..., 0::2]  # [..., s, head_dim//2]
     freqs_sin = sin[..., 0::2]
 
-    # Split input into even/odd (real/imaginary parts of complex rotation)
-    x_even = x[..., 0::2]  # [batch, n_heads, seq_len, head_dim//2]
-    x_odd = x[..., 1::2]
+    # Split the first s rows into even/odd (real/imaginary parts of the rotation).
+    x_even = x[..., :s, 0::2]
+    x_odd = x[..., :s, 1::2]
 
     # 2D rotation: [cos -sin; sin cos] @ [even; odd]
     cos_part = x_even * freqs_cos - x_odd * freqs_sin
     sin_part = x_even * freqs_sin + x_odd * freqs_cos
 
-    # Interleave back to original format
-    out = torch.stack([cos_part, sin_part], dim=-1).flatten(-2)
+    # Interleave back to original format; zero-fill rows >= s.
+    out = torch.zeros_like(x)
+    out[..., :s, :] = torch.stack([cos_part, sin_part], dim=-1).flatten(-2).to(x.dtype)
     return out
 
 

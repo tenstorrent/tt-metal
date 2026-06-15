@@ -32,12 +32,12 @@
 // Single per-DFB unrolled body.  All variables (num_entries_per_producer,
 // implicit_sync, num_producers, producer_idx, noc) are visible from kernel_main.
 //
-// The implicit_sync=true branch uses Noc::TxnIdMode::ENABLED, which is declared
+// The implicit_sync=true branch uses NocOptions::TXN_ID, which is declared
 // only under #ifdef ARCH_QUASAR in api/dataflow/noc.h. This kernel is only used
 // by Quasar-only sequential-DFB harnesses, so the branch is unreachable on Gen1.
 #ifdef ARCH_QUASAR
 #define DFB_SEQ_PRODUCE_IMPLICIT_SYNC(tensor_accessor_, dfb_, page_id_) \
-    noc.async_read<Noc::TxnIdMode::ENABLED>((tensor_accessor_), (dfb_), {.page_id = (page_id_)}, {})
+    noc.async_read<NocOptions::TXN_ID>((tensor_accessor_), (dfb_), {.page_id = (page_id_)}, {})
 #else
 #define DFB_SEQ_PRODUCE_IMPLICIT_SYNC(tensor_accessor_, dfb_, page_id_) ((void)0)
 #endif

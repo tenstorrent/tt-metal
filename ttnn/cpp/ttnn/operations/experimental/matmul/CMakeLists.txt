@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_experimental_matmul ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::Matmul ALIAS ttnn_op_experimental_matmul)
 
-tt_reuse_precompile_headers(ttnn_op_experimental_matmul TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_matmul TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_matmul)
 
 set_target_properties(

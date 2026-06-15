@@ -66,6 +66,12 @@ struct CBConfigTile {
   tile: Tile;     // The tile for this index
 }
 
+struct CBConfigUnpackFaceGeometry {
+  index: uint32;       // The index in the array
+  face_r_dim: uint32;  // The unpack face row dimension for this index
+  num_faces: uint32;   // The number of logical faces for this index
+}
+
 table CircularBufferConfig {
   total_size: uint32;
   globally_allocated_address: Uint32Optional;
@@ -79,4 +85,5 @@ table CircularBufferConfig {
   dynamic_cb: bool;
   max_size: uint32;
   buffer_size: uint32;
+  unpack_face_geometry: [CBConfigUnpackFaceGeometry]; // Mimic optional array in C++ by using KV map.
 }

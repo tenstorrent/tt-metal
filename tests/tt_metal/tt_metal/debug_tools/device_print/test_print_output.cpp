@@ -109,8 +109,9 @@ TEST_F(DevicePrintOutputFixture, PrintManyIterations) {
 TEST_F(DevicePrintOutputFixture, PrintConcurrentAllRiscs) {
     size_t device_counter = 0;
     for (auto& mesh_device : this->devices_) {
-        if (mesh_device->arch() != tt::ARCH::WORMHOLE_B0 && mesh_device->arch() != tt::ARCH::BLACKHOLE) {
-            // Test currently works only on WH and BH
+        if (mesh_device->arch() != tt::ARCH::WORMHOLE_B0 && mesh_device->arch() != tt::ARCH::BLACKHOLE &&
+            mesh_device->arch() != tt::ARCH::QUASAR) {
+            // Test currently works on WH, BH, and Quasar
             continue;
         }
         device_counter++;
@@ -123,38 +124,86 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentAllRiscs) {
         auto& program_ = workload.get_programs().at(device_range);
 
         constexpr CoreCoord core = {0, 0};
-        uint32_t iterations_count = 1000;
+        // Quasar prints from many more concurrent RISCs (22 on this test) than WH/BH (5).
+        // 1000 × 22 = 22k contended prints take well over 10 minutes on the RTL emulator,
+        // so reduce the iteration count on Quasar. The race-detection signal does not require
+        // a large count — even a small number of iterations with high concurrency exposes any
+        // memory-ordering bugs immediately, and the assertion is per-iteration.
+        const uint32_t iterations_count = (mesh_device->arch() == tt::ARCH::QUASAR) ? 100u : 1000u;
         std::vector<uint32_t> runtime_args = {iterations_count};
 
-        // BRISC
-        auto kernel_handle = CreateKernel(
-            program_,
-            "tests/tt_metal/tt_metal/test_kernels/device_print/print_iterations.cpp",
-            core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        // Per-arch expected number of distinct RISCs printing concurrently on the same core.
+        //   WH/BH: 5  (BRISC + NCRISC + TRISC0/1/2)
+        //   Quasar: 6 user DMs (DM2..DM7) + 16 TRISCs (4 Tensix engines × 4 TRISCs) = 22
+        int risc_count_per_iter = 0;
 
-        SetRuntimeArgs(program_, kernel_handle, core, runtime_args);
+        if (mesh_device->arch() == tt::ARCH::QUASAR) {
+            // Quasar QuasarDataMovementConfig/QuasarComputeConfig don't have a runtime-args path
+            // hooked up yet; pass the iteration count as a compile-time arg instead. Use a
+            // kernel variant that reads get_compile_time_arg_val(0).
+            std::vector<uint32_t> compile_args = {iterations_count};
 
-        // NCRISC
-        kernel_handle = CreateKernel(
-            program_,
-            "tests/tt_metal/tt_metal/test_kernels/device_print/print_iterations.cpp",
-            core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+            // Single DM kernel covering all 6 user DM threads in the cluster (DM0/DM1 reserved).
+            CreateKernel(
+                program_,
+                "tests/tt_metal/tt_metal/test_kernels/device_print/print_iterations_compile_time.cpp",
+                core,
+                experimental::quasar::QuasarDataMovementConfig{
+                    .num_threads_per_cluster = experimental::quasar::QUASAR_NUM_DM_CORES_PER_CLUSTER - 2,
+                    .compile_args = compile_args,
+                });
 
-        SetRuntimeArgs(program_, kernel_handle, core, runtime_args);
+            // Single compute kernel covering all 4 Tensix engines × 4 TRISCs = 16 baby-RISCs.
+            CreateKernel(
+                program_,
+                "tests/tt_metal/tt_metal/test_kernels/device_print/print_iterations_compile_time.cpp",
+                core,
+                experimental::quasar::QuasarComputeConfig{
+                    .num_threads_per_cluster = experimental::quasar::QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER,
+                    .compile_args = compile_args,
+                });
 
-        // TRISC0 (Unpack), TRISC1 (Math), TRISC2 (Pack)
-        kernel_handle = CreateKernel(
-            program_, "tests/tt_metal/tt_metal/test_kernels/device_print/print_iterations.cpp", core, ComputeConfig{});
+            risc_count_per_iter = (experimental::quasar::QUASAR_NUM_DM_CORES_PER_CLUSTER - 2) +
+                                  (experimental::quasar::QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER *
+                                   experimental::quasar::QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE);
+        } else {
+            // WH/BH: BRISC
+            auto kernel_handle = CreateKernel(
+                program_,
+                "tests/tt_metal/tt_metal/test_kernels/device_print/print_iterations.cpp",
+                core,
+                DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-        SetRuntimeArgs(program_, kernel_handle, core, runtime_args);
+            SetRuntimeArgs(program_, kernel_handle, core, runtime_args);
+
+            // NCRISC
+            kernel_handle = CreateKernel(
+                program_,
+                "tests/tt_metal/tt_metal/test_kernels/device_print/print_iterations.cpp",
+                core,
+                DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+
+            SetRuntimeArgs(program_, kernel_handle, core, runtime_args);
+
+            // TRISC0 (Unpack), TRISC1 (Math), TRISC2 (Pack)
+            kernel_handle = CreateKernel(
+                program_,
+                "tests/tt_metal/tt_metal/test_kernels/device_print/print_iterations.cpp",
+                core,
+                ComputeConfig{});
+
+            SetRuntimeArgs(program_, kernel_handle, core, runtime_args);
+
+            // Every RISC on a WH/BH Tensix core: BRISC + NCRISC + TRISC0/1/2.
+            risc_count_per_iter = static_cast<int>(
+                MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::TENSIX));
+        }
 
         DebugToolsMeshFixture::RunProgram(mesh_device, workload);
         MetalContext::instance().dprint_server()->await();
 
-        // Verify all 5*N messages (5 RISCs x N iterations) are correctly formatted.
-        // Each iteration value must appear exactly 5 times — once per RISC.
+        // Verify all risc_count_per_iter * N messages are correctly formatted.
+        // Each iteration value must appear exactly risc_count_per_iter times — once per RISC.
         std::fstream log_file;
         ASSERT_TRUE(OpenFile(dprint_file_name, log_file, std::fstream::in));
         std::vector<int> counts(iterations_count, 0);
@@ -168,9 +217,124 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentAllRiscs) {
                 counts[iter]++;
             }
         }
+        const int expected_count = risc_count_per_iter * static_cast<int>(device_counter);
         for (int i = 0; i < static_cast<int>(counts.size()); i++) {
-            EXPECT_EQ(counts[i], 5 * device_counter) << "Iteration " << i << " appeared " << counts[i]
-                                                     << " times (expected " << 5 * device_counter << " times)";
+            EXPECT_EQ(counts[i], expected_count)
+                << "Iteration " << i << " appeared " << counts[i] << " times (expected " << expected_count << " times)";
+        }
+    }
+}
+
+// Quasar-only race-detection variant of PrintConcurrentAllRiscs that uses *only the rocket-core
+// DMs* (DM2..DM7). Isolates whether the contention bug is within a single rocket-core group, or
+// requires the mix of rocket + baby-risc contenders.
+TEST_F(DevicePrintOutputFixture, PrintConcurrentRocketRiscs) {
+    size_t device_counter = 0;
+    for (auto& mesh_device : this->devices_) {
+        if (mesh_device->arch() != tt::ARCH::QUASAR) {
+            continue;  // Quasar-only: rocket cores are a Quasar-specific concept.
+        }
+        device_counter++;
+
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        Program program = Program();
+        workload.add_program(device_range, std::move(program));
+        auto& program_ = workload.get_programs().at(device_range);
+
+        constexpr CoreCoord core = {0, 0};
+        const uint32_t iterations_count = 5;
+        std::vector<uint32_t> compile_args = {iterations_count};
+
+        constexpr int kNumUserDms = experimental::quasar::QUASAR_NUM_DM_CORES_PER_CLUSTER - 2;
+        CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/device_print/print_iterations_compile_time.cpp",
+            core,
+            experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = kNumUserDms,
+                .compile_args = compile_args,
+            });
+
+        DebugToolsMeshFixture::RunProgram(mesh_device, workload);
+        MetalContext::instance().dprint_server()->await();
+
+        std::fstream log_file;
+        ASSERT_TRUE(OpenFile(dprint_file_name, log_file, std::fstream::in));
+        std::vector<int> counts(iterations_count, 0);
+        std::string line;
+        for (;;) {
+            if (!getline(log_file, line)) {
+                break;
+            }
+            int iter = -1;
+            if (sscanf(line.c_str(), "Test iteration: %d", &iter) == 1 && iter >= 0 && iter < counts.size()) {
+                counts[iter]++;
+            }
+        }
+        const int expected_count = kNumUserDms * static_cast<int>(device_counter);
+        for (int i = 0; i < static_cast<int>(counts.size()); i++) {
+            EXPECT_EQ(counts[i], expected_count)
+                << "Iteration " << i << " appeared " << counts[i] << " times (expected " << expected_count << " times)";
+        }
+    }
+}
+
+// Quasar-only race-detection variant of PrintConcurrentAllRiscs that uses *only baby-risc TRISCs*
+// (4 Tensix engines × 4 TRISCs = 16 threads). Complements PrintConcurrentRocketRiscs so we can
+// localize the locking bug to rocket-only, baby-risc-only, or the cross-group case.
+TEST_F(DevicePrintOutputFixture, PrintConcurrentBabyRiscs) {
+    size_t device_counter = 0;
+    for (auto& mesh_device : this->devices_) {
+        if (mesh_device->arch() != tt::ARCH::QUASAR) {
+            continue;  // Quasar-only.
+        }
+        device_counter++;
+
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        Program program = Program();
+        workload.add_program(device_range, std::move(program));
+        auto& program_ = workload.get_programs().at(device_range);
+
+        constexpr CoreCoord core = {0, 0};
+        const uint32_t iterations_count = 5;
+        std::vector<uint32_t> compile_args = {iterations_count};
+
+        constexpr int kNumTensixEngines = experimental::quasar::QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER;
+        // unpack + math + pack + extra
+        constexpr int kTriscsPerEngine = experimental::quasar::QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE;
+        CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/device_print/print_iterations_compile_time.cpp",
+            core,
+            experimental::quasar::QuasarComputeConfig{
+                .num_threads_per_cluster = kNumTensixEngines,
+                .compile_args = compile_args,
+            });
+
+        DebugToolsMeshFixture::RunProgram(mesh_device, workload);
+        MetalContext::instance().dprint_server()->await();
+
+        std::fstream log_file;
+        ASSERT_TRUE(OpenFile(dprint_file_name, log_file, std::fstream::in));
+        std::vector<int> counts(iterations_count, 0);
+        std::string line;
+        for (;;) {
+            if (!getline(log_file, line)) {
+                break;
+            }
+            int iter = -1;
+            if (sscanf(line.c_str(), "Test iteration: %d", &iter) == 1 && iter >= 0 && iter < counts.size()) {
+                counts[iter]++;
+            }
+        }
+        const int expected_count = kNumTensixEngines * kTriscsPerEngine * static_cast<int>(device_counter);
+        for (int i = 0; i < static_cast<int>(counts.size()); i++) {
+            EXPECT_EQ(counts[i], expected_count)
+                << "Iteration " << i << " appeared " << counts[i] << " times (expected " << expected_count << " times)";
         }
     }
 }

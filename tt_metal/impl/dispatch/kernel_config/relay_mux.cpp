@@ -127,8 +127,7 @@ void RelayMux::GenerateStaticConfigs() {
 void RelayMux::GenerateDependentConfigs() {}
 
 void RelayMux::CreateKernel() {
-    auto mux_kernel =
-        configure_kernel_variant(dispatch_kernel_file_names[FABRIC_MUX], mux_ct_args_, {}, false, false, false);
+    auto mux_kernel = configure_kernel_variant(dispatch_kernel_file_names[FABRIC_MUX], mux_ct_args_, {});
 
     tt::tt_metal::SetRuntimeArgs(*program_, mux_kernel, logical_core_, mux_rt_args_);
 }

@@ -305,6 +305,54 @@ jobs:
 
           echo "Approving PR #$PR_NUMBER as requested by authorized user: $COMMENT_AUTHOR"
 
+          # Pre-flight: detect self-approval (GitHub rejects reviews where the
+          # authenticated user is also the PR author).
+          # PR author is available from the event payload (issue_comment trigger),
+          # avoiding an extra API call.
+          PR_AUTHOR="${{ github.event.issue.user.login }}"
+
+          PAT_USER=$(curl -s \
+            -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/user" \
+            | jq -r '.login // empty')
+
+          if [ -n "$PAT_USER" ] && [ "$PAT_USER" = "$PR_AUTHOR" ]; then
+            echo "❌ Self-approval detected: PAT belongs to '$PAT_USER' who is also the PR author."
+            echo "GitHub does not allow a user to approve their own pull request."
+
+            SELF_APPROVE_MSG=$(cat <<'EOFMSG'
+          ❌ **Bypass Approval Failed — Self-Approval Not Allowed**
+
+          The bypass PAT (`CODEOWNERS_GROUP_ANALYSIS_PAT`) is authenticated as **@PATUSER**, who is also the author of this PR. GitHub does not permit a user to approve their own pull request.
+
+          **To fix:** A different team member with bypass authority must run `/codeowners bypass`, or the infra team must configure a second PAT belonging to a different account for bypass approvals.
+          EOFMSG
+          )
+            SELF_APPROVE_MSG="${SELF_APPROVE_MSG//PATUSER/$PAT_USER}"
+
+            TEMP_FILE=$(mktemp)
+            jq -n --arg body "$SELF_APPROVE_MSG" '{"body": $body}' > "$TEMP_FILE"
+
+            curl -s -X POST \
+              -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              -H "Content-Type: application/json" \
+              -d @"$TEMP_FILE" \
+              "https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments"
+
+            rm -f "$TEMP_FILE"
+
+            curl -s -X POST \
+              -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              -H "Content-Type: application/json" \
+              -d '{"content": "-1"}' \
+              "https://api.github.com/repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions"
+
+            exit 1
+          fi
+
           # Create approval
           REVIEW_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews"
 
@@ -324,6 +372,7 @@ jobs:
             "$REVIEW_API")
 
           REVIEW_ID=$(echo "$REVIEW_RESPONSE" | jq -r '.id // empty')
+          ERROR_MSG=$(echo "$REVIEW_RESPONSE" | jq -r '.message // empty')
 
           if [ -n "$REVIEW_ID" ] && [ "$REVIEW_ID" != "null" ]; then
             echo "✅ Successfully approved PR #$PR_NUMBER (Review ID: $REVIEW_ID)"
@@ -339,13 +388,27 @@ jobs:
             echo "❌ Failed to approve PR #$PR_NUMBER"
             echo "Response: $REVIEW_RESPONSE"
 
-            # Post failure comment with explanation
+            # Build a diagnostic error message
+            if echo "$ERROR_MSG" | grep -qi "can not approve your own"; then
+              FAIL_DETAIL="The PAT user ($PAT_USER) is the PR author — GitHub blocks self-approval. Use a different account's PAT or have another team member run the bypass."
+            elif echo "$ERROR_MSG" | grep -qi "validation failed"; then
+              FAIL_DETAIL="GitHub rejected the review: $ERROR_MSG"
+            else
+              FAIL_DETAIL="GitHub API error: $ERROR_MSG. This might be a temporary issue — try again or contact the infra team."
+            fi
+
+            FAIL_BODY=$(printf '❌ **Bypass Approval Failed**\n\n%s' "$FAIL_DETAIL")
+            TEMP_FILE=$(mktemp)
+            jq -n --arg body "$FAIL_BODY" '{"body": $body}' > "$TEMP_FILE"
+
             curl -s -X POST \
               -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
               -H "Accept: application/vnd.github.v3+json" \
               -H "Content-Type: application/json" \
-              -d "{\"body\": \"❌ **Bypass Approval Failed**\\n\\nFailed to approve PR #$PR_NUMBER. This might be a temporary issue with the GitHub API.\\n\\nPlease try again or contact the infra team if the problem persists.\"}" \
+              -d @"$TEMP_FILE" \
               "https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments"
+
+            rm -f "$TEMP_FILE"
 
             # Add failure reaction
             curl -s -X POST \
@@ -510,6 +573,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           fetch-depth: 1
           sparse-checkout: .github/CODEOWNERS

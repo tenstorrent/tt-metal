@@ -8,17 +8,17 @@ import functools
 import inspect
 import weakref
 from types import NoneType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, overload
 
 from loguru import logger
 
 import ttnn
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
+    from typing import ClassVar
 
 _OMITTED = object()
-"""Sentinel for omitted positional args — distinct from ``None``, which is a valid scalar input."""
 
 
 class Tracer:
@@ -38,8 +38,9 @@ class Tracer:
        overwrites previous results in place.
     """
 
-    _traces_live: int = 0
+    _traces_live: ClassVar[dict[int, int]] = {}
 
+    @overload
     def __init__(
         self,
         function: Callable[..., Any],
@@ -49,30 +50,71 @@ class Tracer:
         prep_run: bool = True,
         clone_prep_inputs: bool = True,
     ) -> None:
+        ...
+
+    @overload
+    def __init__(
+        self,
+        function: Callable[..., Any],
+        /,
+        *,
+        devices: Sequence[ttnn.MeshDevice],
+        prep_run: bool = True,
+        clone_prep_inputs: bool = True,
+    ) -> None:
+        ...
+
+    def __init__(
+        self,
+        function: Callable[..., Any],
+        /,
+        *,
+        device: ttnn.MeshDevice | None = None,
+        devices: Sequence[ttnn.MeshDevice] | None = None,
+        prep_run: bool = True,
+        clone_prep_inputs: bool = True,
+    ) -> None:
         """Initialize the tracer.
 
         If the function modifies its input tensors in place, set ``clone_prep_inputs`` to ``True``
         so that preparation runs operate on cloned inputs, leaving the originals intact for trace
         capture.
 
+        Exactly one of ``device`` or ``devices`` must be provided. When ``devices`` is given, a
+        trace is captured and executed on each device simultaneously.
+
         Args:
             function: Function to be traced.
-            device: Device on which to capture and execute the trace.
+            device: Single device on which to capture and execute the trace.
+            devices: Multiple devices on which to capture and execute the trace simultaneously.
             prep_run: Whether to run the function once before capturing the trace.
             clone_prep_inputs: Whether to clone tensor inputs for the preparation run.
         """
+        if (device is None) == (devices is None):
+            msg = "exactly one of 'device' or 'devices' must be provided"
+            raise ValueError(msg)
+
+        if devices is None:
+            assert device is not None
+            devices = (device,)
+
+        for d in devices:
+            if d.id() not in Tracer._traces_live:
+                Tracer._traces_live[d.id()] = 0
+
         self._function = function
-        self._device = device
+        self._devices: tuple[ttnn.MeshDevice, ...] = tuple(devices)
         self._prep_run = prep_run
         self._clone_prep_inputs = clone_prep_inputs
         self._args: tuple[Any, ...] = ()
         self._kwargs: dict[str, Any] = {}
         self._outputs: Any = None
-        self._trace_id: ttnn.MeshTraceId | None = None
+        self._trace_ids: tuple[ttnn.MeshTraceId, ...] | None = None
 
     def __call__(
         self,
         *args: Any,
+        traced: bool = True,
         tracer_cq_id: int = 0,
         tracer_blocking_execution: bool = True,
         tracer_execute_on_capture: bool = True,
@@ -80,146 +122,208 @@ class Tracer:
     ) -> Any:
         """Capture or execute trace.
 
-        On the first call, runs the wrapped function to capture the trace. On subsequent calls,
-        executes the captured trace. On the first call, inputs initialize the trace inputs. On
-        subsequent calls, they update the trace inputs. Only ``ttnn.Tensor`` inputs can be changed.
-        Aside from omitting positional inputs to reuse previous values, a value of ``None`` can be
-        passed to reuse the previous value for tensor inputs as well. Host tensor inputs will
-        automatically be moved to the tracer device.
+        In traced mode, the first call captures the trace and subsequent calls execute it. The
+        first call's inputs initialize the stored input state; subsequent calls must pass the
+        same number of positional arguments and the same set of keyword argument names. Tensor
+        inputs are validated for shape/dtype/layout match; non-tensor inputs (scalars, ``None``)
+        must compare equal to the captured values. Host tensor inputs are automatically moved
+        to the tracer device.
 
         Args:
+            traced: Whether to capture/execute the trace on this call. If ``False``, the wrapped
+                function is called directly without tracing.
             tracer_cq_id: Command queue id.
             tracer_blocking_execution: Whether ``ttnn.execute_trace`` should block.
             tracer_execute_on_capture: Whether to execute the trace immediately after capturing it
                 on the first call. If ``False``, only the trace is captured and outputs are not
                 computed.
             *args: Positional inputs to pass to the wrapped function.
-            **kwargs: Named inputs to pass to the wrapped function. Optional on subsequent calls.
+            **kwargs: Named inputs to pass to the wrapped function.
 
         Returns:
             The outputs of the wrapped function.
 
         Raises:
-            TypeError: If outputs have unsupported types.
+            TypeError: If outputs have unsupported types, or if subsequent traced calls do not
+                match the captured arity/keyword set.
             Any exception raised by the wrapped function during first invocation.
         """
-        if self._trace_id is None:
+        if not traced:
             if self._function is None:
-                msg = "tracer cannot be reused after the trace was released"
+                msg = "untraced execution is not possible after the captured function has been released"
+                raise RuntimeError(msg)
+            if self._trace_ids is not None:
+                msg = "untraced execution is not allowed after the trace has been captured"
                 raise RuntimeError(msg)
 
-            args = _tree_map(_verify_value, args, path_label="args")
-            kwargs = _tree_map(_verify_value, kwargs, path_label="kwargs")
-            self._args = _tree_map(self._tensor_to_device, args, path_label="args")
-            self._kwargs = _tree_map(self._tensor_to_device, kwargs, path_label="kwargs")
+            self._args = args
+            self._kwargs = kwargs
+            return self._function(*args, **kwargs)
 
-            if self._prep_run:
-                if self._clone_prep_inputs:
-                    prep_args = _tree_map(_clone_tensor, self._args, path_label="args")
-                    prep_kwargs = _tree_map(_clone_tensor, self._kwargs, path_label="kwargs")
-                else:
-                    prep_args = self._args
-                    prep_kwargs = self._kwargs
+        if tracer_blocking_execution and len(self._devices) != 1:
+            tracer_blocking_execution = False
+            logger.warning("blocking execution is not supported with multiple devices")
 
-                self._function(*prep_args, **prep_kwargs)
-                del prep_args, prep_kwargs
-
-            # capture trace
-            logger.debug("capturing trace...")
-            trace_id = ttnn.begin_trace_capture(self._device, cq_id=tracer_cq_id)
-            try:
-                try:
-                    outputs = self._function(*self._args, **self._kwargs)
-                finally:
-                    ttnn.end_trace_capture(self._device, trace_id, cq_id=tracer_cq_id)
-
-                outputs = _tree_map(_verify_value, outputs, path_label="outputs")
-            except Exception:
-                ttnn.release_trace(self._device, trace_id)
-                raise
-
-            if tracer_execute_on_capture:
-                # Trace capture records commands but does not execute them. Execute the trace to
-                # actually compute outputs.
-                ttnn.execute_trace(self._device, trace_id, cq_id=tracer_cq_id, blocking=tracer_blocking_execution)
-                ttnn.synchronize_device(self._device)
-                ttnn.distributed_context_barrier()
-
-            # Allow resources referenced by the function to be freed, which might be used to offload
-            # weights.
-            self._function = None
-
-            Tracer._traces_live += 1
-            self._trace_id = trace_id
-            self._outputs = outputs
+        if self._trace_ids is None:
+            self._capture(
+                args,
+                kwargs,
+                cq_id=tracer_cq_id,
+                blocking_execution=tracer_blocking_execution,
+                execute=tracer_execute_on_capture,
+            )
         else:
-            if len(args) > len(self._args):
-                msg = f"expected at most {len(self._args)} positional args, got {len(args)}"
-                raise TypeError(msg)
-
-            # Pad with None to allow omitting trailing positional args.
-            args = args + (None,) * (len(self._args) - len(args))
-            _tree_map(self._update_input, self._args, args, path_label="args")
-
-            # kwargs can be omitted entirely to reuse all previous values, but individual
-            # entries must be explicitly set to None to preserve them (unlike positional args,
-            # _tree_map requires dicts to have matching keys).
-            for name, new in kwargs.items():
-                if name not in self._kwargs:
-                    msg = f"input '{name}' was not in the initial inputs"
-                    raise KeyError(msg)
-
-                # None means reuse the previous value entirely.
-                if new is not None:
-                    _tree_map(self._update_input, self._kwargs[name], new, path_label=f'kwargs["{name}"]')
-
-            ttnn.execute_trace(self._device, self._trace_id, cq_id=tracer_cq_id, blocking=tracer_blocking_execution)
-            ttnn.synchronize_device(self._device)
-            ttnn.distributed_context_barrier()
+            self._execute(args, kwargs, cq_id=tracer_cq_id, blocking=tracer_blocking_execution)
 
         return self._outputs
+
+    def _capture(
+        self,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        *,
+        cq_id: int,
+        blocking_execution: bool,
+        execute: bool,
+    ) -> None:
+        if self._function is None:
+            msg = "tracer cannot be reused after the trace was released"
+            raise RuntimeError(msg)
+
+        args = _tree_map(_verify_value, args, path_label="args")
+        kwargs = _tree_map(_verify_value, kwargs, path_label="kwargs")
+        self._args = _tree_map(self._tensor_to_device, args, path_label="args")
+        self._kwargs = _tree_map(self._tensor_to_device, kwargs, path_label="kwargs")
+
+        if self._prep_run:
+            if self._clone_prep_inputs:
+                prep_args = _tree_map(_clone_tensor, self._args, path_label="args")
+                prep_kwargs = _tree_map(_clone_tensor, self._kwargs, path_label="kwargs")
+            else:
+                prep_args = self._args
+                prep_kwargs = self._kwargs
+
+            self._function(*prep_args, **prep_kwargs)
+            del prep_args, prep_kwargs
+
+        # capture trace
+        logger.debug("capturing trace...")
+        trace_ids = tuple(ttnn.begin_trace_capture(d, cq_id=cq_id) for d in self._devices)
+        try:
+            try:
+                outputs = self._function(*self._args, **self._kwargs)
+            finally:
+                for d, trace_id in zip(self._devices, trace_ids, strict=True):
+                    ttnn.end_trace_capture(d, trace_id, cq_id=cq_id)
+
+            outputs = _tree_map(_verify_value, outputs, path_label="outputs")
+        except Exception:
+            for d, trace_id in zip(self._devices, trace_ids, strict=True):
+                ttnn.release_trace(d, trace_id)
+            raise
+
+        for d in self._devices:
+            Tracer._traces_live[d.id()] += 1
+        self._trace_ids = trace_ids
+        self._outputs = outputs
+
+        if execute:
+            # Trace capture records commands but does not execute them. Execute the trace to
+            # actually compute outputs.
+            for d, trace_id in zip(self._devices, trace_ids, strict=True):
+                ttnn.execute_trace(d, trace_id, cq_id=cq_id, blocking=blocking_execution)
+            for d in self._devices:
+                ttnn.synchronize_device(d)
+            ttnn.distributed_context_barrier()
+
+    def _execute(
+        self,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        *,
+        cq_id: int,
+        blocking: bool,
+    ) -> None:
+        trace_ids = self._trace_ids
+        assert trace_ids is not None
+
+        if len(args) != len(self._args):
+            msg = f"expected {len(self._args)} positional args, got {len(args)}"
+            raise TypeError(msg)
+
+        if kwargs.keys() != self._kwargs.keys():
+            msg = f"expected kwargs {sorted(self._kwargs)}, got {sorted(kwargs)}"
+            raise TypeError(msg)
+
+        _tree_map(self._update_input, self._args, args, path_label="args")
+        for name, new in kwargs.items():
+            _tree_map(self._update_input, self._kwargs[name], new, path_label=f'kwargs["{name}"]')
+
+        for d, trace_id in zip(self._devices, trace_ids, strict=True):
+            ttnn.execute_trace(d, trace_id, cq_id=cq_id, blocking=blocking)
+        for d in self._devices:
+            ttnn.synchronize_device(d)
+        ttnn.distributed_context_barrier()
 
     @property
     def trace_captured(self) -> bool:
         """Whether a trace has been captured and is ready for execution."""
-        return self._trace_id is not None
+        return self._trace_ids is not None
+
+    @property
+    def inputs(self) -> dict[int | str, Any]:
+        """Stored inputs from the most recent call (empty before the first call).
+
+        Keyed by parameter name (``str``) for keyword inputs, or by index (``int``) for positional
+        inputs. After the trace has been captured, tensor entries are the trace's input buffers, so
+        the reference is a safe handle to the latest value of that input, which is useful when the
+        caller needs to consume an input after trace execution. In untraced mode, tensor entries are
+        simply the most recently passed references.
+        """
+        return {**dict(enumerate(self._args)), **self._kwargs}
 
     def release_trace(self) -> None:
         """Release the captured trace and clear inputs and outputs."""
-        trace_id = self._trace_id
+        trace_ids = self._trace_ids
+        if trace_ids is None:
+            return
 
-        if trace_id is not None:
-            self._trace_id = None
-            self._args = ()
-            self._kwargs = {}
-            self._outputs = None
-            Tracer._traces_live -= 1
-            ttnn.release_trace(self._device, trace_id)
+        self._trace_ids = None
+        self._args = ()
+        self._kwargs = {}
+        self._outputs = None
+        for d, trace_id in zip(self._devices, trace_ids, strict=True):
+            Tracer._traces_live[d.id()] -= 1
+            ttnn.release_trace(d, trace_id)
 
-    @staticmethod
-    def warn_if_live() -> None:
-        """Log a warning if there are any live traces that have not been released."""
-        if Tracer._traces_live > 0:
-            frame = inspect.stack()[1]
-            location = f"{frame.filename}:{frame.lineno} in {frame.function}"
-            logger.warning(f"{Tracer._traces_live} live trace(s) at: {location}")
+    def release_function(self) -> None:
+        """Drop the reference to the wrapped function.
+
+        This allows resources held by the function to be garbage collected.
+        """
+        self._function = None
 
     def _tensor_to_device(self, value: Any, *, path_label: str) -> Any:
         if not isinstance(value, ttnn.Tensor):
             return value
 
         if value.device() is None:
-            return value.to(self._device)
-        if value.device() == self._device:
+            if len(self._devices) != 1:
+                msg = (
+                    f"input '{path_label}' is a host tensor; host tensors are not supported "
+                    "during capture when the tracer manages multiple devices"
+                )
+                raise ValueError(msg)
+            return value.to(self._devices[0])
+
+        if any(value.device() == d for d in self._devices):
             return value
 
-        msg = f"input '{path_label}' device {value.device()} does not match tracer device {self._device}"
+        msg = f"input '{path_label}' device {value.device()} does not match any tracer device"
         raise ValueError(msg)
 
     def _update_input(self, prev: Any, new: Any, *, path_label: str) -> None:
-        if new is None and isinstance(prev, ttnn.Tensor):
-            return
-
+        """Copy ``new`` into the slot ``prev`` in place."""
         if type(new) is not type(prev):
             msg = f"input '{path_label}' type {type(new)} does not match the initial type {type(prev)}"
             raise TypeError(msg)
@@ -275,8 +379,9 @@ def _is_tracer_valid_value(value: Any) -> bool:
     return False
 
 
-def _clone_tensor(value: Any, *, path_label: str) -> Any:  # noqa: ARG001
+def _clone_tensor(value: Any, *, path_label: str) -> Any:
     """Clone a tensor, passing through non-tensor values unchanged."""
+    del path_label
     return ttnn.clone(value) if isinstance(value, ttnn.Tensor) else value
 
 

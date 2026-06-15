@@ -15,8 +15,7 @@ void kernel_main() {
     const uint32_t tile_offset = get_arg_val<uint32_t>(2);
     const uint32_t Ht = get_arg_val<uint32_t>(3);
     const uint32_t Wt = get_arg_val<uint32_t>(4);
-    const uint32_t scaler = get_arg_val<uint32_t>(5);
-    const uint32_t mask_h = get_arg_val<uint32_t>(6);
+    const uint32_t mask_h = get_arg_val<uint32_t>(5);
 
     // Constants
     constexpr auto cb_in = tt::CBIndex::c_0;

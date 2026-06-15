@@ -15,12 +15,49 @@ from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
+    dispatch_axis_for_grid,
     get_mesh_composer,
     get_model_traced_mesh_shape,
     mesh_tensor_to_torch,
+    program_config_grid_bounds,
     reconcile_golden_to_actual,
     replicate_with_topology,
 )
+
+# Device is opened per-vector (see _ensure_vector_device) so each vector can use
+# the dispatch axis its traced SDPAProgramConfig grid needs (some touch x=7/ROW,
+# others y=9/COL). Cached and only reopened when the required axis changes.
+_CUR_DEVICE = None
+_CUR_AXIS = "__uninit__"
+
+
+def _ensure_vector_device(axis):
+    global _CUR_DEVICE, _CUR_AXIS
+    if _CUR_DEVICE is None or axis != _CUR_AXIS:
+        _close_vector_device()
+        _CUR_DEVICE = create_mesh_device(get_model_traced_mesh_shape(), dispatch_core_axis=axis)
+        _CUR_AXIS = axis
+    return _CUR_DEVICE
+
+
+def _close_vector_device():
+    global _CUR_DEVICE, _CUR_AXIS
+    if _CUR_DEVICE is not None:
+        try:
+            ttnn.close_mesh_device(_CUR_DEVICE)
+        except Exception:
+            # best-effort teardown — a failed device close must not mask the real test result
+            pass
+    _CUR_DEVICE = None
+    _CUR_AXIS = "__uninit__"
+
+
+def _vector_dispatch_axis(kwargs):
+    pc = kwargs.get("program_config")
+    pc_val = pc.get("value", "") if isinstance(pc, dict) else str(pc or "")
+    return dispatch_axis_for_grid(*program_config_grid_bounds(pc_val))
+
+
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import (
     build_op_kwargs,
     extract_named_tensor_kwargs,
@@ -102,11 +139,9 @@ def invalidate_vector(test_vector) -> tuple:
 
 
 def mesh_device_fixture():
-    mesh_shape = get_model_traced_mesh_shape()
-    device = create_mesh_device(mesh_shape)
-    device_name = ttnn.get_arch_name()
-    yield (device, device_name)
-    ttnn.close_mesh_device(device)
+    # Device is opened per-vector in run() (see _ensure_vector_device).
+    yield (None, "wormhole_b0")
+    _close_vector_device()
 
 
 def _sdpa_input_shard_axis_and_factor(placement_dict):
@@ -163,6 +198,10 @@ def run(
     **kwargs,
 ) -> list:
     torch.manual_seed(0)
+
+    # Open (or reuse) a mesh device whose dispatch axis matches this vector's
+    # traced program_config grid (fixture yielded None; we own the device here).
+    device = _ensure_vector_device(_vector_dispatch_axis(kwargs))
 
     raw_placement_a = kwargs.get("input_a_tensor_placement", None)
     input_a_tensor_placement = raw_placement_a
@@ -224,17 +263,38 @@ def run(
                 import re
 
                 val = raw_pc.get("value", "")
-                gm = re.search(r"compute_with_storage_grid_size=(\d+)-(\d+)", val)
+                # Grid recorded as "(x=8,y=8)" or "8-9" (a grid SIZE).
+                gm = re.search(r"compute_with_storage_grid_size=\(x=(\d+),y=(\d+)\)", val) or re.search(
+                    r"compute_with_storage_grid_size=(\d+)-(\d+)", val
+                )
                 qm = re.search(r"q_chunk_size=(\d+)", val)
                 km = re.search(r"k_chunk_size=(\d+)", val)
                 em = re.search(r"exp_approx_mode=(\w+)", val)
-                if gm and qm and km:
-                    op_kwargs["program_config"] = ttnn.SDPAProgramConfig(
-                        compute_with_storage_grid_size=(int(gm.group(1)), int(gm.group(2))),
-                        q_chunk_size=int(qm.group(1)),
-                        k_chunk_size=int(km.group(1)),
-                        exp_approx_mode=em.group(1).lower() == "true" if em else False,
+                mcm = re.search(r"max_cores_per_head_batch=(\d+)", val)
+                # sub_core_grids keeps kernels off dispatch cores; preserve it.
+                sub_core_grids = None
+                if "sub_core_grids=std::nullopt" not in val:
+                    ranges = re.findall(r"\[(\d+)-(\d+)\s*-\s*(\d+)-(\d+)\]", val)
+                    if ranges:
+                        sub_core_grids = ttnn.CoreRangeSet(
+                            {
+                                ttnn.CoreRange(ttnn.CoreCoord(int(a), int(b)), ttnn.CoreCoord(int(c), int(d)))
+                                for a, b, c, d in ranges
+                            }
+                        )
+                if gm:
+                    pc_kwargs = dict(
+                        compute_with_storage_grid_size=ttnn.CoreCoord(int(gm.group(1)), int(gm.group(2))),
+                        q_chunk_size=int(qm.group(1)) if qm else 0,
+                        k_chunk_size=int(km.group(1)) if km else 0,
                     )
+                    if em:
+                        pc_kwargs["exp_approx_mode"] = em.group(1).lower() == "true"
+                    if mcm:
+                        pc_kwargs["max_cores_per_head_batch"] = int(mcm.group(1))
+                    if sub_core_grids is not None:
+                        pc_kwargs["sub_core_grids"] = sub_core_grids
+                    op_kwargs["program_config"] = ttnn.SDPAProgramConfig(**pc_kwargs)
             elif not isinstance(raw_pc, dict):
                 op_kwargs["program_config"] = raw_pc
     # Handle shape extraction — V2 loader provides separate input_b_shape, input_c_shape
@@ -439,6 +499,7 @@ def run(
         try:
             is_lofi = ckc.math_fidelity == ttnn.MathFidelity.LoFi
         except Exception:
+            # compute_kernel_config without a math_fidelity attr — treat as not-LoFi
             pass
     # BFLOAT8_B K/V has lower precision — relax PCC threshold
     is_low_precision_kv = str(input_b_dtype) in ("DataType.BFLOAT8_B", "DataType.BFLOAT4_B")

@@ -26,7 +26,7 @@
 #include <ttnn/distributed/tensor_topology.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/system_mesh.hpp>
-#include <tt-metalium/experimental/mock_device.hpp>
+#include <tt-metalium/experimental/mock_device/mock_device.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"

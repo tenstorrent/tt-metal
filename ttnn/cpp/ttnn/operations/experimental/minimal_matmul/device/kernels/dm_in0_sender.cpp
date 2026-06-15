@@ -272,7 +272,7 @@ void kernel_main() {
                     read_in0_block_sync<M_block_tiles, K_block_tiles>(
                         in0_reader,
                         in0_shape,
-                        in0_start_address,
+                        cb_id_in0,
                         in0_tile_size,
 #ifdef READ_FROM_LOCAL_INPUT
                         in3_reader,

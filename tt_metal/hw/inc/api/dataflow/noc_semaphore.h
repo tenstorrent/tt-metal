@@ -148,9 +148,10 @@ public:
      * @param noc_y_end The ending Y coordinate of the region (inclusive).
      * @param num_dests The number of destination cores in the region.
      * @param linked Whether to link this operation with the next (default is false).
-     * @tparam mcast_mode Indicates whether to include the sender in the multicast (default is EXCLUDE_SRC)
+     * @tparam opts NocOptions flags; set NocOptions::MCAST_INCL_SRC to include the sender in the multicast
+     *             (default is NocOptions::DEFAULT which excludes sender)
      */
-    template <Noc::McastMode mcast_mode = Noc::McastMode::EXCLUDE_SRC>
+    template <NocOptions opts = NocOptions::DEFAULT>
     void set_multicast(
         const Noc& noc,
         uint32_t noc_x_start,
@@ -162,9 +163,9 @@ public:
         const uint64_t multicast_addr =
             get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, noc.get_noc_id());
         const uintptr_t src_l1_addr = get_l1_addr();
-        if constexpr (mcast_mode == Noc::McastMode::INCLUDE_SRC) {
+        if constexpr (has_flag(opts, NocOptions::MCAST_INCL_SRC)) {
             noc_semaphore_set_multicast_loopback_src(src_l1_addr, multicast_addr, num_dests, linked, noc.get_noc_id());
-        } else if constexpr (mcast_mode == Noc::McastMode::EXCLUDE_SRC) {
+        } else {
             noc_semaphore_set_multicast(src_l1_addr, multicast_addr, num_dests, linked, noc.get_noc_id());
         }
     }
@@ -183,10 +184,11 @@ public:
      * @param noc_y_end The ending Y coordinate of the region (inclusive).
      * @param num_dests The number of destination cores in the region.
      * @param linked Whether to link this operation with the next (default is false).
-     * @tparam mcast_mode Indicates whether to include the sender in the multicast (default is EXCLUDE_SRC).
+     * @tparam opts NocOptions flags; set NocOptions::MCAST_INCL_SRC to include the sender in the multicast
+     *             (default is NocOptions::DEFAULT which excludes sender)
      * @tparam dst_core_type Programmable core type of the destination (defaults to this Semaphore's core_type).
      */
-    template <Noc::McastMode mcast_mode = Noc::McastMode::EXCLUDE_SRC, ProgrammableCoreType dst_core_type = core_type>
+    template <NocOptions opts = NocOptions::DEFAULT, ProgrammableCoreType dst_core_type = core_type>
     void relay_multicast(
         const Noc& noc,
         const Semaphore<dst_core_type>& dst_sem,
@@ -200,9 +202,9 @@ public:
         const uint64_t multicast_addr = ::get_noc_multicast_addr(
             noc_x_start, noc_y_start, noc_x_end, noc_y_end, dst_sem.get_l1_addr(), noc.get_noc_id());
         const uintptr_t src_l1_addr = get_l1_addr();
-        if constexpr (mcast_mode == Noc::McastMode::INCLUDE_SRC) {
+        if constexpr (has_flag(opts, NocOptions::MCAST_INCL_SRC)) {
             noc_semaphore_set_multicast_loopback_src(src_l1_addr, multicast_addr, num_dests, linked, noc.get_noc_id());
-        } else if constexpr (mcast_mode == Noc::McastMode::EXCLUDE_SRC) {
+        } else {
             noc_semaphore_set_multicast(src_l1_addr, multicast_addr, num_dests, linked, noc.get_noc_id());
         }
     }

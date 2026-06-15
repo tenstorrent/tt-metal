@@ -4,8 +4,11 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -26,12 +29,13 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<0>();
     uint32_t read_size = unpadded_stick_size + misalignment;
 
-    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
-    // program cache hits.
+    // padded_stick_size = per-shard page size (shard_W on B/W-sharded, full row otherwise);
+    // feeds `noc_async_read_sharded`'s multi-shard split via `get_aligned_page_size()`.
     const auto s0 = TensorAccessor(src_args, src_addr, padded_stick_size);
 
     constexpr uint32_t cb_id_in0 = 0;
 
+    Noc noc;
     // Create CircularBuffer for Device 2.0 API
     CircularBuffer cb_in0(cb_id_in0);
 
@@ -43,10 +47,12 @@ void kernel_main() {
 
         for (uint32_t i = 0; i < num_read_per_barrier and sticks_read < num_sticks_per_core; ++i) {
             sticks_read++;
-            uint64_t src_noc_addr = s0.get_noc_addr(src_stick_id);
-            noc_async_read(src_noc_addr, src_buffer_l1_addr, read_size);
+            // noc_async_read_sharded splits the read across shards for B/W-sharded inputs;
+            // falls through to a single noc_async_read for interleaved / HEIGHT-sharded.
+            tt::data_movement::common::noc_async_read_sharded(
+                src_buffer_l1_addr, s0, src_stick_id, /*offset=*/0, /*size=*/read_size);
             if (misalignment != 0) {
-                noc_async_read_barrier();
+                noc.async_read_barrier();
                 tt::data_movement::common::tt_memmove<false, false, false, 0>(
                     src_buffer_l1_addr, src_buffer_l1_addr + misalignment, unpadded_stick_size);
             }
@@ -62,7 +68,7 @@ void kernel_main() {
                 }
             }
         }
-        noc_async_read_barrier();
+        noc.async_read_barrier();
         cb_in0.push_back(num_read_per_barrier);
     }
 }

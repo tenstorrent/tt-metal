@@ -13,6 +13,12 @@
 
 namespace ttnn::operations::normalization {
 
+ttnn::CoreGrid core_grid_from_shard_bounding_box(const tt::tt_metal::CoreRange& bbox) {
+    return ttnn::CoreGrid(
+        static_cast<uint32_t>(bbox.end_coord.x - bbox.start_coord.x + 1),
+        static_cast<uint32_t>(bbox.end_coord.y - bbox.start_coord.y + 1));
+}
+
 namespace {
 
 uint32_t find_closest_largest_divisor(uint32_t num, uint32_t start_divisor) {

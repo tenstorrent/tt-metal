@@ -23,7 +23,7 @@ void kernel_main() {
 
     mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
 
-    acquire_dst();
+    tile_regs_acquire();
     for (uint32_t b = 0; b < block_cnt; ++b) {
         cb0.wait_front(in0_block_tile_cnt);
         cb1.wait_front(in1_block_tile_cnt);
@@ -49,6 +49,9 @@ void kernel_main() {
         cb1.pop_front(in1_block_tile_cnt);
     }
 
+    tile_regs_commit();
+    tile_regs_wait();
+
     // Pack out
     cb16.reserve_back(out_block_tile_cnt);
     for (uint32_t i = 0; i < out_block_tile_cnt; ++i) {
@@ -57,5 +60,5 @@ void kernel_main() {
 
     cb16.push_back(out_block_tile_cnt);
 
-    release_dst();
+    tile_regs_release();
 }

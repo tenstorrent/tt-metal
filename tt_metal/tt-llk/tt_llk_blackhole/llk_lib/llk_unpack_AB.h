@@ -151,7 +151,10 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
  *
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
- * @param transpose: Transpose mode for SrcA face order and/or within-face transpose.
+ * @param transpose: Transpose mode for SrcA face order and/or within-face transpose, values = <None/IntraFace/InterFace/Both>
+ * @note Call @ref _llk_unpack_AB_uninit_ to restore the modified datum-count state.
+ * @ref _llk_unpack_AB_ is the matching execute call.
+ * @ref _llk_math_eltwise_binary_init_ is the matching init on the math thread (consumes SrcA/SrcB).
  */
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const ckernel::Transpose transpose)
@@ -167,12 +170,34 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const 
     _llk_unpack_AB_mop_config_<BType>(transpose_of_faces, tensor_shape); // transpose of faces 0,2,1,3
 }
 
+/**
+ * @brief Initialize unpacker to unpack operands A and B with no transpose.
+ *
+ * Convenience overload that forwards to the transpose-aware init with @ref ckernel::Transpose::None.
+ *
+ * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
+ * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
+ * @note Call @ref _llk_unpack_AB_uninit_ to restore the modified datum-count state.
+ * @ref _llk_unpack_AB_ is the matching execute call.
+ */
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
     _llk_unpack_AB_init_<BType>(tensor_shape, ckernel::Transpose::None);
 }
 
+/**
+ * @brief Initialize unpacker to unpack operands A and B with a boolean transpose flag.
+ *
+ * Convenience overload taking an integer flag: nonzero selects @ref ckernel::Transpose::Both,
+ * zero selects @ref ckernel::Transpose::None.
+ *
+ * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
+ * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
+ * @param transpose: Nonzero to enable both inter-face and within-face transpose, zero for none.
+ * @note Call @ref _llk_unpack_AB_uninit_ to restore the modified datum-count state.
+ * @ref _llk_unpack_AB_ is the matching execute call.
+ */
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const std::uint32_t transpose)
 {
@@ -187,12 +212,10 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const 
  *
  * @param unpA_tensor_shape: Tensor shape for source A operand
  * @param unpB_tensor_shape: Tensor shape for source B operand
+ * @note Call @ref _llk_unpack_AB_init_ before this function.
  */
-inline void _llk_unpack_AB_uninit_(const ckernel::TensorShape unpA_tensor_shape, const ckernel::TensorShape unpB_tensor_shape)
+inline void _llk_unpack_AB_uninit_()
 {
-    // TODO NC: Issue tt-llk#1036 will make this transient
-    TT_SETADCXX(p_setadc::UNP_A, unpA_tensor_shape.face_r_dim * unpA_tensor_shape.face_c_dim - 1, 0x0);
-    TT_SETADCXX(p_setadc::UNP_B, unpB_tensor_shape.face_r_dim * unpB_tensor_shape.face_c_dim - 1, 0x0);
 }
 
 /**
@@ -206,6 +229,9 @@ inline void _llk_unpack_AB_uninit_(const ckernel::TensorShape unpA_tensor_shape,
  * @param address_b: L1 memory address of source B tile
  * @param bcast_row_idx: Row index within source B tile for ROW broadcast
  * @param srcb_format: Source B data format used to calculate ROW broadcast address offset
+ * @note Call @ref _llk_unpack_AB_init_ with matching template args before this function, and
+ *       @ref _llk_unpack_AB_uninit_ after it to restore modified state.
+ * @ref _llk_math_eltwise_binary_ on the math thread consumes the SrcA/SrcB tiles unpacked here.
  */
 
 template <BroadcastType BType = BroadcastType::NONE>

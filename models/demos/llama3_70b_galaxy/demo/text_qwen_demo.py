@@ -19,6 +19,9 @@ from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 from models.common.utility_functions import (
     comp_pcc,
 )
+from models.demos.utils.device_sku import get_current_device_sku_name
+from models.demos.utils.llm_demo_utils import verify_perf
+from models.demos.utils.model_targets import resolve_perf_targets
 
 # Qwen-specific imports
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
@@ -1123,18 +1126,31 @@ def test_qwen_demo_text(
 
     # Test batch-32, ISL=128, OSL=128 TTFT and decode throughput
     if batch_size == 32 and len(input_prompts[0]) == 507:
-        target_time_to_first_token = 700
-        assert (
-            avg_time_to_first_token * 1000 < target_time_to_first_token
-        ), f"TTFT {avg_time_to_first_token} ms is too high, should be < {target_time_to_first_token}."
-        target_decode_tok_s_u = 60
-        target_decode_tok_s = target_decode_tok_s_u * batch_size
-        assert (
-            decode_tok_s_user >= target_decode_tok_s_u
-        ), f"Decode throughput {decode_tok_s_user} tok/s/user is too low, should be > {target_decode_tok_s_u}."
-        assert (
-            decode_tok_s >= target_decode_tok_s
-        ), f"Decode throughput {decode_tok_s} tok/s is too low, should be > {target_decode_tok_s}."
+        sku = get_current_device_sku_name()
+        resolved_targets = resolve_perf_targets(
+            model_name="qwen3-32b-galaxy",
+            sku=sku,
+            batch_size=batch_size,
+            seq_len=len(input_prompts[0]),
+        )
+        if resolved_targets:
+            verify_perf(
+                measurements,
+                expected_measurements={
+                    "prefill_time_to_token": True,
+                    "decode_t/s/u": True,
+                    "decode_t/s": True,
+                },
+                model_name="qwen3-32b-galaxy",
+                sku=sku,
+                batch_size=batch_size,
+                seq_len=len(input_prompts[0]),
+            )
+        else:
+            logger.warning(
+                "No centralized perf targets found for qwen3-32b-galaxy "
+                f"on sku={sku}, batch_size={batch_size}, seq_len={len(input_prompts[0])}"
+            )
 
     # Save benchmark data for CI dashboard
     if is_ci_env and repeat_batches > 1:

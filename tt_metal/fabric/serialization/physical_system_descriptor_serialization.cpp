@@ -26,11 +26,18 @@ uint32_t board_type_to_proto(BoardType board_type) { return static_cast<uint32_t
 // Helper function to convert protobuf value to BoardType enum
 BoardType proto_to_board_type(uint32_t proto_value) { return static_cast<BoardType>(proto_value); }
 
+tt::fabric::proto::PortType port_type_to_proto(PortType port_type) {
+    return static_cast<tt::fabric::proto::PortType>(port_type);
+}
+
+PortType proto_to_port_type(tt::fabric::proto::PortType port_type) { return static_cast<PortType>(port_type); }
+
 // Convert EthConnection to protobuf
 void eth_connection_to_proto(const EthConnection& eth_conn, tt::fabric::proto::EthConnection* proto_conn) {
     proto_conn->set_src_chan(eth_conn.src_chan);
     proto_conn->set_dst_chan(eth_conn.dst_chan);
     proto_conn->set_is_local(eth_conn.is_local);
+    proto_conn->set_port_type(port_type_to_proto(eth_conn.port_type));
 }
 
 // Convert protobuf to EthConnection
@@ -39,6 +46,7 @@ EthConnection proto_to_eth_connection(const tt::fabric::proto::EthConnection& pr
     eth_conn.src_chan = proto_conn.src_chan();
     eth_conn.dst_chan = proto_conn.dst_chan();
     eth_conn.is_local = proto_conn.is_local();
+    eth_conn.port_type = proto_to_port_type(proto_conn.port_type());
     return eth_conn;
 }
 
@@ -201,6 +209,13 @@ void physical_system_descriptor_to_proto(
     proto_desc->mutable_ethernet_firmware_version()->set_minor(descriptor.get_ethernet_firmware_version().minor);
     proto_desc->mutable_ethernet_firmware_version()->set_patch(descriptor.get_ethernet_firmware_version().patch);
 
+    // Set firmware bundle version (optional)
+    if (descriptor.get_firmware_bundle_version().has_value()) {
+        proto_desc->mutable_firmware_bundle_version()->set_major(descriptor.get_firmware_bundle_version()->major);
+        proto_desc->mutable_firmware_bundle_version()->set_minor(descriptor.get_firmware_bundle_version()->minor);
+        proto_desc->mutable_firmware_bundle_version()->set_patch(descriptor.get_firmware_bundle_version()->patch);
+    }
+
     // Convert pcie_devices_per_tray map
     for (const auto& [host_name, tray_map] : descriptor.get_pcie_devices_per_tray()) {
         auto* proto_host_pcie_map = proto_desc->add_pcie_devices_per_tray();
@@ -299,6 +314,14 @@ std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
     descriptor->get_ethernet_firmware_version().major = proto_desc.ethernet_firmware_version().major();
     descriptor->get_ethernet_firmware_version().minor = proto_desc.ethernet_firmware_version().minor();
     descriptor->get_ethernet_firmware_version().patch = proto_desc.ethernet_firmware_version().patch();
+
+    // Set firmware bundle version (optional)
+    if (proto_desc.has_firmware_bundle_version()) {
+        descriptor->get_firmware_bundle_version() = tt::umd::FirmwareBundleVersion(
+            proto_desc.firmware_bundle_version().major(),
+            proto_desc.firmware_bundle_version().minor(),
+            proto_desc.firmware_bundle_version().patch());
+    }
 
     // Convert pcie_devices_per_tray map
     auto& pcie_devices_per_tray = descriptor->get_pcie_devices_per_tray();

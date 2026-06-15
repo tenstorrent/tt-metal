@@ -117,7 +117,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "cfg_defines.h"
 #include "cmath_common.h"
 #include "llk_math_common.h"
-#include "llk_math_eltwise_unary_sfpu_common.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 #include "params.h"
 #include "sfpu/ckernel_sfpu_square.h"
 
@@ -136,13 +136,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
     }
 
-    const int num_sfpu_iterations = params.TEST_FACE_R_DIM >> 1; // SFP_ROWS == 2
-
     _llk_math_eltwise_sfpu_init_();
 
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_square_, params.DST_INDEX + i, num_sfpu_iterations);
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_square_<SFPU_ITERATIONS>, params.DST_INDEX + i);
     }
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();

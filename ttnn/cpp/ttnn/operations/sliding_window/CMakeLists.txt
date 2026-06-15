@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_sliding_window ${LIB_TYPE})
 add_library(TTNN::Ops::SlidingWindow ALIAS ttnn_op_sliding_window)
 
-tt_reuse_precompile_headers(ttnn_op_sliding_window TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_sliding_window TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_sliding_window)
 set_target_properties(
     ttnn_op_sliding_window

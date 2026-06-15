@@ -486,7 +486,15 @@ std::ostream& operator<<(std::ostream& os, const TensorTestCase& test_case) {
 
 }  // namespace
 
-class FlatBufferFileSerializationTest : public FlatBufferFileTest, public ::testing::WithParamInterface<TestParam> {};
+class FlatBufferFileSerializationTest : public FlatBufferFileTest, public ::testing::WithParamInterface<TestParam> {
+public:
+    static void SetUpTestSuite() {
+        ttml::autograd::ctx().open_device();
+    }
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
+    }
+};
 
 TEST_P(FlatBufferFileSerializationTest, ScopedTempDirWriteReadRoundTrip) {
     // get_device() will automatically open the device if it's not already open
@@ -659,7 +667,6 @@ TEST_P(FlatBufferFileSerializationTest, ScopedTempDirWriteReadRoundTrip) {
     EXPECT_NO_THROW(int_value2 = deserializer2.get_int("int_key"));
     EXPECT_EQ(int_value2, 42);
 
-    ttml::autograd::ctx().close_device();
 }
 
 INSTANTIATE_TEST_SUITE_P(

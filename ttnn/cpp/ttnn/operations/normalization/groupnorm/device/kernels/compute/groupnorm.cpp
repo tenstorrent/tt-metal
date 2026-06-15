@@ -13,7 +13,6 @@
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
-#include "api/compute/untilize.h"
 #include "api/compute/matmul.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
@@ -349,11 +348,11 @@ void kernel_main() {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
-                    compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
-                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
                     cb_x_id,
                     cb_scaler_id,
                     cb_ex_partial_id,
+                    compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
+                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
                     compute_kernel_lib::ReduceInputBlockShape::of(out_block_h_actual, block_w));
                 cb_x.pop_front(out_block_hw_normal);
 
@@ -365,11 +364,11 @@ void kernel_main() {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
-                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
                     cb_ex_external_id,
                     cb_scaler_global_id,
                     cb_ex_global_id,
+                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
                     compute_kernel_lib::ReduceInputBlockShape::col(cb_ex_external_tiles_required));
                 if (num_cores_per_mcast_group > 1) {
                     cb_ex.reserve_back(1);
@@ -481,11 +480,11 @@ void kernel_main() {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
-                    compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
-                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
                     cb_xmm_id,
                     cb_scaler_id,
                     cb_ex2_partial_id,
+                    compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
+                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
                     compute_kernel_lib::ReduceInputBlockShape::of(out_block_h_actual, block_w));
                 cb_xmm.pop_front(out_block_hw_normal);
             }
@@ -495,11 +494,11 @@ void kernel_main() {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
-                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
                     cb_ex_external_id,
                     cb_scaler_global_id,
                     cb_ex2_global_id,
+                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
                     compute_kernel_lib::ReduceInputBlockShape::col(cb_ex_external_tiles_required));
                 if (num_cores_per_mcast_group > 1) {
                     cb_ex2.reserve_back(1);

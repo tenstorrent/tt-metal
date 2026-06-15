@@ -12,7 +12,7 @@ target_link_libraries(
         test_common_libs
         TTNN::CPP
 )
-tt_reuse_precompile_headers(test_common_utils TTNN::PCH)
+tt_reuse_precompile_headers(test_common_utils TTNN::PCHFull)
 
 function(setup_ttnn_test_target target_name)
     target_link_libraries(
@@ -27,7 +27,7 @@ function(setup_ttnn_test_target target_name)
             ${PROJECT_SOURCE_DIR}/tests
             ${CMAKE_CURRENT_SOURCE_DIR}
     )
-    tt_reuse_precompile_headers(${target_name} TTNN::PCH)
+    tt_reuse_precompile_headers(${target_name} TTNN::PCHFull)
 endfunction()
 
 # unit_tests_ttnn
@@ -52,7 +52,7 @@ target_link_libraries(
         test_common_utils
         TTNN::CPP
 )
-tt_reuse_precompile_headers(unit_tests_ttnn_smoke TTNN::PCH)
+tt_reuse_precompile_headers(unit_tests_ttnn_smoke TTNN::PCHFull)
 
 add_library(unit_tests_ttnn_basic OBJECT)
 add_library(TTNN::Test::Basic ALIAS unit_tests_ttnn_basic)
@@ -66,7 +66,7 @@ target_link_libraries(
         test_common_utils
         TTNN::CPP
 )
-tt_reuse_precompile_headers(unit_tests_ttnn_basic TTNN::PCH)
+tt_reuse_precompile_headers(unit_tests_ttnn_basic TTNN::PCHFull)
 
 add_executable(unit_tests_ttnn)
 target_link_libraries(
@@ -88,7 +88,7 @@ target_link_libraries(
         test_common_libs
         TTNN::CPP
 )
-tt_reuse_precompile_headers(unit_tests_ttnn_ccl_lib TTNN::PCH)
+tt_reuse_precompile_headers(unit_tests_ttnn_ccl_lib TTNN::PCHFull)
 
 add_executable(unit_tests_ttnn_ccl)
 target_link_libraries(unit_tests_ttnn_ccl PRIVATE TTNN::Test::CCL)
@@ -110,7 +110,7 @@ target_link_libraries(
         test_common_libs
         TTNN::CPP
 )
-tt_reuse_precompile_headers(unit_tests_ttnn_ccl_ops_lib TTNN::PCH)
+tt_reuse_precompile_headers(unit_tests_ttnn_ccl_ops_lib TTNN::PCHFull)
 
 add_executable(unit_tests_ttnn_ccl_ops)
 target_link_libraries(unit_tests_ttnn_ccl_ops PRIVATE TTNN::Test::CCL::Ops)
@@ -162,6 +162,12 @@ setup_ttnn_test_target(unit_tests_ttnn_emitc)
 if(TT_METAL_USE_EMULE)
     target_link_options(unit_tests_ttnn PRIVATE -rdynamic)
 endif()
+
+# unit_tests_ttnn_mock_allocator
+
+add_executable(unit_tests_ttnn_mock_allocator)
+target_sources(unit_tests_ttnn_mock_allocator PRIVATE ${UNIT_TESTS_TTNN_MOCK_ALLOCATOR_SOURCES})
+setup_ttnn_test_target(unit_tests_ttnn_mock_allocator)
 
 add_subdirectory(multiprocess)
 add_subdirectory(udm)

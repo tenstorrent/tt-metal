@@ -9,7 +9,7 @@
 
 void kernel_main() {
     constexpr uint32_t socket_config_addr = get_compile_time_arg_val(0);
-    // arg 1 (local_l1_buffer_addr) reserved for ABI compatibility
+    constexpr uint32_t local_l1_buffer_addr = get_compile_time_arg_val(1);
     constexpr uint32_t page_size = get_compile_time_arg_val(2);
     constexpr uint32_t data_size = get_compile_time_arg_val(3);
     // arg 4 (measurement_buffer_addr) reserved for ABI compatibility; throughput measured on host
@@ -27,10 +27,13 @@ void kernel_main() {
         uint32_t outstanding_data_size = data_size;
         while (outstanding_data_size) {
             socket_wait_for_pages(receiver_socket, 1);
+            // DEVICE_PULL: the FIFO lives in pinned host memory (read_ptr/fifo_addr are
+            // FIFO offsets); land each page in the local L1 buffer (host passes a
+            // page_size-sized buffer, reused as a single landing slot).
             noc_read_page_chunked(
                 pcie_xy_enc,
                 pcie_data_addr + receiver_socket.read_ptr - receiver_socket.fifo_addr,
-                receiver_socket.read_ptr,
+                local_l1_buffer_addr,
                 page_size);
             outstanding_data_size -= page_size;
             socket_pop_pages(receiver_socket, 1);

@@ -110,7 +110,7 @@
 // Hardcode below due to compiler bug that cannot statically resolve the expression see GH issue #19265
 #define MEM_MAILBOX_BASE 96  // (MEM_NCRISC_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2) * 2)  // 2 nocs * 2 (B,NC)
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
-#define MEM_MAILBOX_SIZE 12912
+#define MEM_MAILBOX_SIZE 13168
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)
 #define MEM_ZEROS_BASE ((MEM_MAILBOX_END + 31) & ~31)
 
@@ -334,13 +334,27 @@
 #define MEM_DRISC_FIRMWARE_SIZE (24 * 1024)
 #define MEM_DRISC_MAP_END (MEM_DRISC_FIRMWARE_BASE + MEM_DRISC_FIRMWARE_SIZE)
 #define MEM_DRISC_INIT_LOCAL_L1_BASE_SCRATCH MEM_DRISC_MAP_END
-#define MEM_DRISC_BANK_TO_NOC_SCRATCH (MEM_DRISC_INIT_LOCAL_L1_BASE_SCRATCH + MEM_DRISC_LOCAL_SIZE)
+// L1 staging area for the firmware's initialized local .data image, copied into the
+// 8KB private RAM by do_crt1. Only sizeof(.data) is staged here: .bss/.tbss are zeroed
+// in place in local RAM (not copied), and a kernel's local data is staged inside its
+// own binary (__kernel_data_lma), not here. The DRISC firmware currently has 0 bytes of
+// initialized local .data, so 1KB is ample headroom while freeing L1 for the
+// programmable-DRAM-core kernel working region. NOTE: distinct from MEM_DRISC_LOCAL_SIZE,
+// which is the private-RAM *window* size (linker DATA_SIZE in main.ld) and must stay 8KB.
+#define MEM_DRISC_INIT_LOCAL_L1_SCRATCH_SIZE (1 * 1024)
+#define MEM_DRISC_BANK_TO_NOC_SCRATCH (MEM_DRISC_INIT_LOCAL_L1_BASE_SCRATCH + MEM_DRISC_INIT_LOCAL_L1_SCRATCH_SIZE)
 #define MEM_DRISC_BANK_TO_NOC_SIZE (MEM_BANK_TO_NOC_XY_SIZE + MEM_BANK_OFFSET_SIZE)
 #define MEM_DRISC_STACK_MIN_SIZE 256
 #define MEM_DRISC_L1_BASE 0x0
 #define MEM_DRISC_L1_SIZE (128 * 1024)
 #define MEM_DRISC_KERNEL_CONFIG_BASE (MEM_DRISC_BANK_TO_NOC_SCRATCH + MEM_DRISC_BANK_TO_NOC_SIZE)
-#define MEM_DRISC_KERNEL_CONFIG_SIZE (10 * 1024)
+// Per-program RTAs/semaphores ring buffer. DRAM cores do not support CBs and their
+// kernel *text* loads directly into the firmware window (DRAM is the false branch of
+// get_core_kernel_stored_in_config_buffer), so kernel text consumes 0 bytes here. The
+// prefetcher kernel uses 2 RTAs (~tens of bytes); 2KB is generous for any DRISC program.
+// Shrunk from 10KB to free L1 for the kernel working region. finalize_program_offsets
+// TT_FATALs ("Program size too large for kernel config buffer") if a program exceeds it.
+#define MEM_DRISC_KERNEL_CONFIG_SIZE (2 * 1024)
 #define DRISC_RESET_PC (MEM_LOCAL_BASE | 0x14000)
 
 /////////////

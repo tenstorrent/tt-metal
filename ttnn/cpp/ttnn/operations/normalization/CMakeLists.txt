@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_normalization ${LIB_TYPE})
 add_library(TTNN::Ops::Normalization ALIAS ttnn_op_normalization)
 
-tt_reuse_precompile_headers(ttnn_op_normalization TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_normalization TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_normalization)
 set_target_properties(
     ttnn_op_normalization

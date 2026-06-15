@@ -4,7 +4,6 @@
 
 #include <cstdint>
 
-#include "api/compute/untilize.h"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
 void kernel_main() {
