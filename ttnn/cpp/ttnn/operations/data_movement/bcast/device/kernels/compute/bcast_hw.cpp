@@ -7,7 +7,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
 void kernel_main() {
-    constexpr uint32_t onetile = 1;
     uint32_t B = get_arg_val<uint32_t>(0);
     uint32_t Ht = get_arg_val<uint32_t>(1);
     uint32_t Wt = get_arg_val<uint32_t>(2);
@@ -22,14 +21,14 @@ void kernel_main() {
     init_bcast<BCAST_LLKOP, BCAST_DIM>(cb_lhs, cb_rhs, cb_out);
 
     // BCAST_SCALAR flips the cb_rhs lifecycle:
-    //   defined  -> cb_rhs is held outside the entire loop with a single scalar
-    //               tile. External wait_front(1) here; chain's InputLifecycle::CallerManaged
-    //               emits neither wait nor pop. No pop at end of kernel (matches
-    //               the original's never-popped held tile).
-    //   undefined -> cb_rhs is popped each iter (InputLifecycle::Streaming).
+    //   defined  -> cb_rhs is a single scalar tile held for the whole walk: read at the front
+    //               (OperandKind::Scalar) for every output tile and never popped. The chain owns
+    //               the wait via InputLifecycle::HeldStream (cb_wait_front(1) per iter, idempotent
+    //               since never popped) — folding in what was a manual external wait_front +
+    //               CallerManaged. Matches the original's wait-once / hold / never-pop held tile.
+    //   undefined -> cb_rhs is waited+popped each iter (InputLifecycle::Streaming).
 #ifdef BCAST_SCALAR
-    cb_wait_front(cb_rhs, onetile);
-    constexpr auto rhs_lifecycle = compute_kernel_lib::InputLifecycle::CallerManaged;
+    constexpr auto rhs_lifecycle = compute_kernel_lib::InputLifecycle::HeldStream;
 #else
     constexpr auto rhs_lifecycle = compute_kernel_lib::InputLifecycle::Streaming;
 #endif
