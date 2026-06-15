@@ -114,6 +114,7 @@ def test_generate_e2e(mesh_device, weight_cache):
         wc=weight_cache,
         max_new_tokens=20,
         verbose=True,
+        cpu_gate=False,
     )
     elapsed = time.perf_counter() - t0
 

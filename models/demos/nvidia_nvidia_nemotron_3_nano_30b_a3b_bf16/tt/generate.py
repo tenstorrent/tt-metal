@@ -104,7 +104,7 @@ def generate(
     temperature: float = 0.0,
     top_p: float = 0.9,
     verbose: bool = True,
-    cpu_gate: bool = True,
+    cpu_gate: bool = False,
 ) -> str:
     """Generate text continuation for `prompt`.
 
@@ -118,11 +118,12 @@ def generate(
         temperature:    Sampling temperature; 0 = greedy.
         top_p:          Nucleus sampling threshold.
         verbose:        Print progress.
-        cpu_gate:       If True (default), compute MoE gate on CPU in float32 —
-                        exact HF routing, correct output, but not trace-compatible
-                        (trace is skipped; each decode step calls forward directly).
-                        If False, use on-device bfloat16 gate — trace-compatible
-                        but ~11% routing accuracy (garbled output).
+        cpu_gate:       If False (default), compute MoE gate on device in bfloat16 —
+                        trace-compatible; decode loop uses ttnn.execute_trace for
+                        ~16 tok/s on TP=4 QB.
+                        If True, gate runs on CPU in float32 — exact HF routing
+                        but not trace-compatible (each decode step calls forward
+                        directly, ~7 tok/s).
 
     Returns:
         The full generated text (prompt + new tokens).
