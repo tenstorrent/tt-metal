@@ -8,6 +8,7 @@
 #include <atomic>
 #include <chrono>
 #include <thread>
+#include <vector>
 
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>

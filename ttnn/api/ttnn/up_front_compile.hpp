@@ -8,7 +8,6 @@
 #include <cstdint>
 #include <mutex>
 #include <unordered_map>
-#include <vector>
 
 namespace tt::tt_metal {
 class Program;
@@ -30,34 +29,23 @@ struct CompileStats {
 };
 
 // ---------------------------------------------------------------------------
-// Up-front parallel precompile.
+// Up-front parallel precompile: JIT-compile a distinct set of programs in parallel
+// to warm the on-disk kernel cache (TT_METAL_CACHE), so the subsequent real run is
+// warm. Works for any op dispatched through the device-op adapter.
 //
-// The expensive part of a cold model run is JIT kernel compilation, done one
-// program at a time behind sequential op dispatch. This warms the on-disk
-// kernel cache (TT_METAL_CACHE) for a model's whole distinct program set, up
-// front and in parallel, so the subsequent real run / trace capture runs warm.
-//
-// Usage (op-agnostic — works for any op that dispatches through the device-op
-// adapter, i.e. generic_op and every C++ ProgramDescriptor-migrated op):
-//
+// Usage:
 //     ttnn.graph.up_front_begin_collect()           # NO_DISPATCH: nothing runs,
 //     model(dummy_input, device)                    #   each op stashes its workload
 //     ttnn.graph.up_front_end_collect()
 //     ttnn.graph.up_front_compile(device, workers)  # parallel JIT, warms the cache
-//     # real run / trace capture is now warm
 //
-// Requirements:
-//   * Run on a COLD device program cache with the cache ENABLED, so each op is
-//     a cache miss (reaches the collector) and carries a distinct program hash.
-//     (If the hash is 0 — cache disabled — the collector keeps every program
-//     distinct via a synthetic key, trading dedup for correctness.)
+// Run on a COLD program cache with the cache ENABLED, so each op is a miss that
+// reaches the collector with a distinct hash.
 //
-// Mechanism: a NO_DISPATCH graph capture mocks all buffer allocations (addr 0)
-// and blocks dispatch, so the collect pass uses no real device memory. The
-// dispatch funnel (device_operation.hpp::create_and_cache_mesh_workload) moves
-// the freshly-built-but-uncompiled MeshWorkload into the collector, keyed by
-// program hash, and skips caching + enqueue. parallel_compile then JIT-compiles
-// the distinct set. Address-independence of compilation makes addr-0 fine.
+// Mechanism: NO_DISPATCH graph capture mocks buffer allocations (addr 0) and blocks
+// dispatch; the device-op funnel moves each built-but-uncompiled MeshWorkload into
+// the collector (keyed by hash, skipping cache + enqueue), then parallel_compile
+// JIT-compiles the distinct set. Compilation is address-independent, so addr-0 is fine.
 // ---------------------------------------------------------------------------
 class ProgramCollector {
 public:
@@ -80,13 +68,8 @@ public:
     // Toggle the per-thread active flag. Used by begin/end_collect.
     static void set_active(bool active);
 
-    // Move every collected workload out of the store under the collector mutex and
-    // reset the counters, returning the workloads by value. parallel_compile owns
-    // their lifetime for the duration of compilation, so a concurrent up_front_clear()
-    // / begin_collect(clear=true) — the GIL is released during up_front_compile —
-    // cannot destroy the MeshWorkloads (and the Program* borrowed into them) while
-    // worker threads are still compiling. Leaves the store empty; any collect() that
-    // races the compile lands in the fresh, emptied store for the next pass.
+    // Move the collected set out under the mutex and reset the counters; the caller
+    // owns it for the whole compile. Leaves the store empty.
     std::unordered_map<std::uint64_t, tt::tt_metal::distributed::MeshWorkload> take_workloads();
 
 private:
