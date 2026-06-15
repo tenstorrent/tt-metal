@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -18,6 +19,16 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
 CACHE_DICT_FILE = "cache_dict.json"
+
+
+def _load_torch_with_logging(tt_model: Module, get_torch_state_dict: Callable[[], dict], subfolder: str) -> None:
+    """Bracket the otherwise-silent source-weight read with logs. ``get_torch_state_dict``
+    reads tens of GB of safetensors off disk; without this the load looks hung."""
+    logger.info(f"{subfolder}: reading source weights from disk...")
+    t = time.monotonic()
+    state = get_torch_state_dict()
+    logger.info(f"{subfolder}: read {len(state)} tensors in {time.monotonic() - t:.0f}s; converting to device...")
+    tt_model.load_torch_state_dict(state)
 
 
 class MissingCacheError(Exception):
@@ -92,11 +103,8 @@ def load_model(
     if cache_dir is None:
         assert get_torch_state_dict is not None
 
-        logger.info(
-            "Loading transformer weights from PyTorch state dict. "
-            "To use caching, set the TT_DIT_CACHE_DIR environment variable."
-        )
-        tt_model.load_torch_state_dict(get_torch_state_dict())
+        logger.info(f"{subfolder}: no device cache (set TT_DIT_CACHE_DIR to cache converted weights).")
+        _load_torch_with_logging(tt_model, get_torch_state_dict, subfolder)
         ttnn.distributed_context_barrier()
         return
 
@@ -109,8 +117,8 @@ def load_model(
     if get_torch_state_dict is None:
         raise MissingCacheError(cache_dir)
 
-    logger.info("Cache does not exist. Loading PyTorch state dict.")
-    tt_model.load_torch_state_dict(get_torch_state_dict())
+    logger.info(f"{subfolder}: device cache miss at '{cache_dir}'.")
+    _load_torch_with_logging(tt_model, get_torch_state_dict, subfolder)
 
     # If distributed, ensure that all processes have completed the check whether cache_dir exists,
     # before any rank might proceed to create that dir to save.
