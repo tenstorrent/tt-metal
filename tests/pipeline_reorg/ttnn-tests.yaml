@@ -189,7 +189,10 @@
   merge_gate: false
 
 - name: "ttnn sdpa group"
-  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/sdpa -xv -m "not disable_fast_runtime_mode"'
+  # ring_joint_attention / exp_ring_joint_attention are multi-card op tests (relocated here
+  # from models/tt_dit). They are gated on multi-card runners via their per-arch nightly
+  # wrappers; ignore them here so this single-card glob's run-set is unchanged.
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/sdpa -xv -m "not disable_fast_runtime_mode" --ignore=tests/ttnn/unit_tests/operations/sdpa/test_ring_joint_attention.py --ignore=tests/ttnn/unit_tests/operations/sdpa/test_exp_ring_joint_attention.py'
   skus:
     wh_n300_civ2:
       timeout: 15
