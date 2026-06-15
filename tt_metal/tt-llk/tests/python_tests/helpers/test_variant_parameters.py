@@ -5,7 +5,7 @@
 import math
 from abc import ABC, abstractmethod
 from ctypes import c_uint32
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .format_config import DataFormat
 from .golden_generators import TILE_DIMENSIONS
@@ -139,6 +139,35 @@ class SFPU_INT_OP(TemplateParameter):
         if self.op:
             return f"#define SFPU_INT_OP_{self.op.upper()}"
         return ""
+
+
+@dataclass
+class SFPU_DEFINES(TemplateParameter):
+    """Emit the per-op SFPU dispatch #defines consumed by sources/quasar/sfpu_test.cpp.
+
+    Emits the arity selector (SFPU_UNARY_OP / SFPU_BINARY_OP / SFPU_TERNARY_OP), the
+    op include header (SFPU_INCLUDE_HEADER), and one #define per entry of the op's
+    dispatch-defines dict (e.g. SFPU_OP_CALL, SFPU_TYPE, SFPU_INIT,
+    SFPU_ADDITIONAL_ARGS). A None or "" value emits a bare #define (a presence-only
+    macro), so e.g. SFPU_INIT / SFPU_ADDITIONAL_ARGS expand to nothing when an op
+    supplies no init statement or extra trailing args.
+    """
+
+    arity_macro: str
+    include_header: str
+    defines: dict = field(default_factory=dict)
+
+    def convert_to_cpp(self) -> str:
+        lines = [
+            f"#define {self.arity_macro}",
+            f'#define SFPU_INCLUDE_HEADER "{self.include_header}"',
+        ]
+        for key, value in self.defines.items():
+            if value is None or value == "":
+                lines.append(f"#define {key}")
+            else:
+                lines.append(f"#define {key} {value}")
+        return "\n".join(lines)
 
 
 def _generate_operation_constants(mathop: MathOperation) -> list[str]:

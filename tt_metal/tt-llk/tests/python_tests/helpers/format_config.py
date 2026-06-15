@@ -720,6 +720,30 @@ def create_formats_for_testing(formats: List[Tuple[DataFormat]]) -> List[FormatC
     return format_configs
 
 
+class BinaryFormatConfig(FormatConfig):
+    @property
+    def input_a_format(self) -> DataFormat:
+        return self.unpack_A_src
+
+    @property
+    def input_b_format(self) -> DataFormat:
+        return self.unpack_B_src
+
+
+class TernaryFormatConfig(FormatConfig):
+    @property
+    def input_a_format(self) -> DataFormat:
+        return self.unpack_A_src
+
+    @property
+    def input_b_format(self) -> DataFormat:
+        return self.unpack_B_src
+
+    @property
+    def input_c_format(self) -> DataFormat:
+        return self.unpack_S_src
+
+
 def is_dest_acc_needed(format: InputOutputFormat) -> bool:
     """
     This function is called when a format configuration for input and output is called without dest accumulation.
