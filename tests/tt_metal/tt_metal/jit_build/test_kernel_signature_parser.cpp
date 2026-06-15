@@ -160,6 +160,30 @@ TEST(KernelSignatureParser, DefaultedParamThrows) {
     EXPECT_THROW(parse_kernel_main_signature(src), std::runtime_error);
 }
 
+// A template clause separated from the marker by an attribute is detected and reported precisely,
+// rather than silently dropped. (Silently dropping it would later surface as the misleading
+// "compile-time argument not taken as a template parameter" schema error — the user did declare it.)
+TEST(KernelSignatureParser, TemplateSeparatedFromMarkerThrows) {
+    const std::string src =
+        "template <uint32_t N>\n"
+        "[[maybe_unused]]\n"
+        "TT_KERNEL void k(uint32_t a) {}\n";
+    EXPECT_THROW(parse_kernel_main_signature(src), std::runtime_error);
+}
+
+// A template *helper* declared before the (non-templated) entry must not be mistaken for the
+// entry's own separated template clause — the intervening '}' bounds the leftward search.
+TEST(KernelSignatureParser, TemplateHelperBeforeEntryNotMistaken) {
+    const std::string src =
+        "template <typename T> T helper(T v) { return v; }\n"
+        "TT_KERNEL void k(uint32_t a) {}\n";
+    auto sig = parse_kernel_main_signature(src);
+    ASSERT_TRUE(sig.has_value());
+    EXPECT_EQ(sig->name, "k");
+    EXPECT_TRUE(sig->template_param_names.empty());
+    EXPECT_EQ(sig->fn_param_names, (std::vector<std::string>{"a"}));
+}
+
 // Build a large "fake" kernel source: many functions, big comment blocks, string literals,
 // preprocessor noise, and decoy mentions of TT_KERNEL inside comments/strings/#defines — with
 // exactly one real TT_KERNEL entry buried in the middle. `blocks` controls the size.

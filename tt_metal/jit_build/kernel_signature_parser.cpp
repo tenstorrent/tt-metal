@@ -319,6 +319,31 @@ std::optional<KernelMainSignature> parse_kernel_main_signature(const std::string
                 throw std::runtime_error("TT_KERNEL: expected a 'template <...>' clause before the marker");
             }
             sig.template_param_names = extract_param_names(tmpl_body, "template parameter");
+        } else if (k >= 0) {
+            // No '<...>' clause is adjacent to the marker. But a `template` keyword sitting just to
+            // the left — separated from TT_KERNEL only by an attribute, a constraint, or some other
+            // specifier — would otherwise be silently dropped: the kernel would parse as
+            // non-templated and later trip the misleading "compile-time argument not taken as a
+            // template parameter" schema error. Detect that case here and fail with a precise
+            // message instead. Bound the search at the nearest statement/brace delimiter: every
+            // *complete* prior template construct closes with ';' or '}' (or opens a block with
+            // '{'), so a `template` found before any of those must be this entry's, separated from
+            // its marker.
+            long lo = k;
+            while (lo >= 0 && text[lo] != ';' && text[lo] != '{' && text[lo] != '}') {
+                --lo;
+            }
+            const std::string kw = "template";
+            const long kw_len = static_cast<long>(kw.size());
+            for (long j = lo + 1; j + kw_len <= k + 1; ++j) {
+                const bool left_ok = (j == 0) || !is_ident_char(text[j - 1]);
+                const bool right_ok = (j + kw_len >= static_cast<long>(n)) || !is_ident_char(text[j + kw_len]);
+                if (left_ok && right_ok && text.compare(static_cast<size_t>(j), kw.size(), kw) == 0) {
+                    throw std::runtime_error(
+                        "TT_KERNEL: a 'template' clause precedes the marker but is separated from it (e.g. by an "
+                        "attribute or constraint); place the template parameter list immediately before TT_KERNEL");
+                }
+            }
         }
     }
 
