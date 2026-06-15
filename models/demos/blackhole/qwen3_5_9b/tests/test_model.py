@@ -49,7 +49,7 @@ from models.tt_transformers.tt.load_checkpoints import (
     ],
     ids=["300dpi", "240dpi"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_vision_model_inference(
     mesh_device,
     reset_seeds,
@@ -144,19 +144,23 @@ def test_vision_model_inference(
     tt_input = tt_model.prepare_input(patch_input, seq_len)
 
     # Run reference model
+    logger.info("started reference transformer")
     reference_output = reference_model(pt_pixel_values, image_grid_thw).pooler_output
 
     # Run TT model
+    logger.info("started vision transformer")
     tt_out = tt_model(
         tt_input,
         unpadded_seq_len=ref_seq_len,
         rot_mats=rot_mats,
     )
+    logger.info("finished vision transformer")
 
     tt_out = ttnn.to_torch(
         tt_out,
         mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3),
     )
+    logger.info("got from torch")
 
     tt_output_torch = tt_out[:, 0:1, :, : model_args.hf_config.vision_config.out_hidden_size].squeeze(0).squeeze(0)
 
