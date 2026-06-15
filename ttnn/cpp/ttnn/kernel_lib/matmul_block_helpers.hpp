@@ -377,10 +377,11 @@ struct NoIn1BaseOffset {
  * `ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp`
  * for the canonical pattern.
  *
- * The one supported aliasing is interm_buf overlaying out_buf in L1 (conv2d's
- * `partials_cb_uses_output` path); opt in via `pin_interm_to_captured_base=true`,
- * which adds explicit base-reset code per K-block to keep the writer pinned
- * to a fixed L1 base. See pin_interm_to_captured_base docstring below.
+ * interm_buf must be its own DISTINCT L1 region from out_buf — the helper's
+ * per-K-block reserve/push/pop on interm assumes the spill buffer is not aliased
+ * onto the output allocation. (conv2d's old `partials_cb_uses_output` overlay,
+ * which needed a pinned fixed-base spill path, was retired in favor of a
+ * dedicated single-block matmul_partials_cb.)
  *
  * One helper serving both standard matmul (non-multicast bmm) and SDPA. Supports two
  * output-pack strategies selected at compile time via tile_order:
@@ -492,6 +493,28 @@ struct NoIn1BaseOffset {
  *   PreKBlockFn       Functor called at the start of each K-block iteration, before
  *                     input CB waits. Receives (block, num_k_blocks, is_last).
  *                     Use for per-K-block preprocessing such as in0_transpose.
+ *   pin_interm_to_captured_base
+ *                     Default false (non-pin — the FIFO spill/reload path every matmul /
+ *                     SDPA / CCL caller uses; do not change). OPT-IN perf feature for a
+ *                     caller whose interm_buf is a DEDICATED single-output-block L1 region
+ *                     (conv2d's matmul_partials_cb): instead of the per-K-block
+ *                     reserve / push / wait_front / pop_front FIFO choreography, the helper
+ *                     reserves the whole out_block on interm ONCE at K-loop entry, packs
+ *                     each K-block's subblock partials to FIXED subblock-contiguous tile
+ *                     offsets within that reservation (pack_tile<true>), skips the per-K-block
+ *                     interm drain entirely, and pushes the full block ONCE at exit. This
+ *                     recovers the packer_l1_acc drain-skip win (no per-K-block CB
+ *                     bookkeeping; L1_ACC integrates per-address across K-blocks at the fixed
+ *                     offsets). Requires packer_l1_acc (the drain-skip only exists with L1
+ *                     accumulation) and tile_order == SubblockMajor; supports BOTH
+ *                     last_block_target == Interm (one pinned region, exit push makes it
+ *                     visible) and Out / OutWithRelu (non-last spills pinned + accumulated,
+ *                     last block reloads the accumulated partial from the fixed offset and
+ *                     packs sequentially to out_buf). Caller MUST size interm_buf to exactly
+ *                     ONE output block and reset its rd/wr ptrs to a fixed base each outer
+ *                     iteration so each output block reuses the same region (conv2d does
+ *                     this). No pin_base_tile_offset is needed — the dedicated one-block
+ *                     region wraps to the caller-reset base per output block. batch must be 1.
  *   PostKBlockFn      Functor called at the very end of each K-block iteration, after
  *                     input pop_front and after the L1_ACC partial drain. Receives
  *                     (block, num_k_blocks, is_last). Symmetric counterpart to
@@ -543,30 +566,6 @@ struct NoIn1BaseOffset {
  *                     OutWithUntilize; ignored otherwise. Set equal to
  *                     out_subblock_h * out_subblock_w (= out_subblock_num_tiles) so
  *                     the per-subblock pack_untilize call covers the full DST sub-block.
- *   pin_interm_to_captured_base
- *                     Default false. When true, the helper reserves interm_buf
- *                     once at entry (out_block_num_tiles), packs each K-block's
- *                     subblocks to fixed tile offsets within that reservation via
- *                     pack_tile<true>, and reloads via copy_block_matmul_partials
- *                     with start_in_tile_index set to the subblock's tile offset.
- *                     No per-K-block reserve/push/pop on interm and no direct
- *                     CB-interface field access — the CB pointers never advance
- *                     off the captured base because the helper never push_backs
- *                     during the K-loop. On the pack_last_to_interm path the
- *                     helper push_backs out_block_num_tiles once at exit so the
- *                     downstream consumer (bias-add, untilize) sees the
- *                     accumulated block; on the !pack_last_to_interm path
- *                     interm holds only K-loop scratch and no end push is needed.
- *                     Required when interm_buf is allocated to alias the output
- *                     buffer in L1 (e.g. conv2d's `partials_cb_uses_output=true`
- *                     path) — without pin, the K-loop's natural push/pop would
- *                     advance the CB pointers past the captured base and wrap
- *                     into already-packed output. Constraints: tile_order must be
- *                     SubblockMajor (offset arithmetic is subblock-aligned),
- *                     last_block_target must not be OutWithUntilize
- *                     (pack_untilize_dest doesn't compose with absolute-offset
- *                     packs), and shape.batch must be 1 (the one-shot reservation
- *                     is outside the batch loop).
  *   Activation        Default NoneActivation. When the bound activation kind is non-NONE
  *                     the helper fuses SFPU activation onto the PACKER thread (TRISC2)
  *                     at the per-subblock pack stage of the last K-block, instead of
@@ -717,11 +716,11 @@ struct NoIn1BaseOffset {
  *           return unpadded_widths[(ring_idx + block) % ring_size];
  *       }
  *   };
- *   // untilize_block_ct_dim=0 (template slot 12, no untilize on this path).
+ *   // untilize_block_ct_dim=0 (template slot 11, no untilize on this path).
  *   matmul_block<transpose, l1_acc, LastBlockTarget::Out, OutputCBLayout::SubblockMajor,
  *                matmul_config::InitMode::None,
  *                InputPolicy::WaitAndPopPerKBlock, InputPolicy::WaitAndPopPerKBlock,
- *                NoPostCompute, NoPreKBlock, false, NoPostKBlock,
+ *                NoPostCompute, NoPreKBlock, NoPostKBlock,
  *                0, RingInnerDimFn>(
  *       in0_buf, in1_buf, out_buf, interm_buf,
  *       MatmulBlockShape::of(in0_num_subblocks, in1_num_subblocks,
@@ -737,11 +736,11 @@ struct NoIn1BaseOffset {
  *   // untilizes per-subblock output directly through the LLK pack_untilize.
  *   // Template slot order: transpose, packer_l1_acc, last_block_target, tile_order,
  *   // init_mode, in0_policy, in1_policy, PostComputeFn, PreKBlockFn,
- *   // pin_interm_to_captured_base, PostKBlockFn, untilize_block_ct_dim.
+ *   // PostKBlockFn, untilize_block_ct_dim.
  *   matmul_block<in1_transpose_tile, l1_acc, LastBlockTarget::OutWithUntilize,
  *                OutputCBLayout::SubblockMajor, matmul_config::InitMode::None,
  *                InputPolicy::WaitAndPopPerKBlock, InputPolicy::WaitAndPopPerKBlock,
- *                NoPostCompute, RingPreKBlock, false,
+ *                NoPostCompute, RingPreKBlock,
  *                RingPostKBlock, out_subblock_num_tiles>(
  *       in0_buf, in1_buf, out_buf, mm_partials_buf,
  *       MatmulBlockShape::of(in0_num_subblocks, in1_num_subblocks,
@@ -752,19 +751,21 @@ struct NoIn1BaseOffset {
  *       ring_post_k_block);
  *
  * @example
- *   // conv2d pattern: per-K-block tilize (PreKBlockFn) + interm_buf pinned to a captured
- *   // base across the K-loop because matmul_partials_cb is allocated to alias out_cb in
- *   // L1 (partials_cb_uses_output=true). init_mode=None because the kernel-entry
- *   // mm_block_init covers initial state and ConvTilizePreKBlock issues
- *   // mm_block_init_short_with_both_dt after each tilize. Template slot order: transpose,
- *   // packer_l1_acc, last_block_target, tile_order, init_mode, in0_policy, in1_policy,
- *   // PostComputeFn, PreKBlockFn, pin_interm_to_captured_base.
+ *   // conv2d pattern: per-K-block tilize (PreKBlockFn) with a DEDICATED single-block
+ *   // matmul_partials_cb (its own L1 region, NOT aliased onto out_cb). The helper's
+ *   // non-pin FIFO reserves/pushes/pops in one-block increments that wrap back to the
+ *   // per-iter base every K-block, so packer_l1_acc accumulates at a fixed address
+ *   // across K-blocks for multi-output-block convs too. init_mode=ShortAfterPreKBlock
+ *   // because the kernel-entry mm_block_init covers initial state and the helper itself
+ *   // re-issues the reconfig + mm_block_init_short after each per-K-block tilize, so
+ *   // ConvTilizePreKBlock no longer carries the matmul-state restore. Template slot
+ *   // order: transpose, packer_l1_acc, last_block_target, tile_order, init_mode,
+ *   // in0_policy, in1_policy, PostComputeFn, PreKBlockFn.
  *   matmul_block<false, packer_l1_acc, LastBlockTarget::Interm,
- *                OutputCBLayout::SubblockMajor, matmul_config::InitMode::None,
+ *                conv_output_layout, matmul_config::InitMode::ShortAfterPreKBlock,
  *                InputPolicy::WaitAndPopPerKBlock, InputPolicy::WaitAndPopPerKBlock,
- *                ConvSFPUPostCompute, ConvTilizePreKBlock,
- *                true>(  // pin_interm_to_captured_base
- *       cb_mm_in0, cb_in1, cb_matmul_partials, cb_matmul_partials,  // out==interm
+ *                ConvSFPUPostCompute, ConvTilizePreKBlock>(
+ *       cb_mm_in0, cb_in1, matmul_out_buf, cb_matmul_partials,  // partials is its own region
  *       MatmulBlockShape::of(in0_num_subblocks, in1_num_subblocks,
  *                             out_subblock_h, out_subblock_w,
  *                             in0_block_k, in0_num_blocks_w),
