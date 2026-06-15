@@ -68,10 +68,14 @@ def test_windowed_sdpa_smoke(device, dtype, pcc_threshold, num_heads, seq_len, c
         q_chunk_size=chunk,
         k_chunk_size=chunk,
     )
+    # fp32_dest_acc_en must remain False: the windowed SDPA program factory
+    # hardcodes Float16_b intermediate CBs (Issue #13364) — enabling 32-bit dest
+    # accumulation while keeping 16-bit CBs causes a hardware UndefinedBehavior
+    # (tensix_movd2b: incompatible use_dst32b=0 dest_32b_lo=1).
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
-        fp32_dest_acc_en=True,
+        fp32_dest_acc_en=False,
         packer_l1_acc=True,
     )
 
