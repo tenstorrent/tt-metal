@@ -346,4 +346,15 @@ inline constexpr bool _is_srcs_32bit_mode_(const DataFormat unpack_S_dst_format)
     return unpack_S_dst_format == DataFormat::Float32 || unpack_S_dst_format == DataFormat::Int32;
 }
 
+/**
+ * @brief finds and returns the larger value between two inputs
+ * @note if both values are equal returns input1
+ *
+ * @param input1/input2: the values to be compared
+ */
+inline std::uint32_t find_max(std::uint32_t input1, std::uint32_t input2)
+{
+    return (input1 >= input2) ? input1 : input2;
+}
+
 } // namespace ckernel::trisc
