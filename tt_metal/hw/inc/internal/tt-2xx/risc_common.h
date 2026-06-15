@@ -384,9 +384,9 @@ inline __attribute__((interrupt, hot)) void handle_interrupt() {
 #endif
 }
 
-constexpr uint32_t SYNC_INTERRUPT_INDEX = 0;                  // sync interrupt index
+constexpr uint32_t SYNC_INTERRUPT_INDEX = 0;                  // synchronized interrupts index
 constexpr uint32_t MACHINE_EXTERNAL_INTERRUPT_OFFSET = 11;    // machine external interrupt offset
-constexpr uint32_t ROCC_INTERRUPT_INDEX = 13;     // ROCC interrupt index
+constexpr uint32_t ROCC_INTERRUPT_INDEX = 13;                 // rocc interrupt index
 
 // Encodes a 21-bit byte offset into a RISC-V J-type immediate field
 inline __attribute__((always_inline)) uint32_t encode_j_immediate(int32_t offset) {
