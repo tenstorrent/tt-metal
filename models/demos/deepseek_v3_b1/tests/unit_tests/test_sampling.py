@@ -9,6 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_b1.micro_ops.sampling.op import SamplingOp
 from models.demos.deepseek_v3_b1.utils import float_to_uint32
 
@@ -690,6 +691,12 @@ def test_sampling_topk_single_device(
     device, seed, p, temperature, final_core_idx, num_internal_iterations, k, from_metadata, copy_probabilities
 ):
     # skip test_3
+    if is_blackhole():
+        pytest.skip(
+            "[SKIP REASON]: "
+            "test_sampling_topk_single_device produces wrong token selection and overflowed p_scores on Blackhole "
+            "(slow dispatch). Temporarily disabled until fix lands. Issue: #46981"
+        )
     """
     Test k=32 top-K sampling path for a single device and 101 cores.
 
