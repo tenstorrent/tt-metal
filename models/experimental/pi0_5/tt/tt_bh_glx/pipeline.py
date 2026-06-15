@@ -64,7 +64,13 @@ from ._l1_migration import (
     migrate_prefill_mlp_weights_to_l1,
     migrate_prefill_vlm_weights_to_l1,
     migrate_siglip_weights_to_l1,
+    migrate_vlm_attn_to_l1,
     prefill_mlp_l1_enabled,
+    siglip_attn_l1_enabled,
+    siglip_l1_tensors,
+    siglip_mlp_l1_enabled,
+    vlm_attn_l1_enabled,
+    vlm_attn_l1_tensors,
     prefill_mlp_l1_grid,
     prefill_mlp_l1_layout,
     prefill_mlp_l1_projs,
@@ -255,6 +261,23 @@ class Pi0_5GLXPipeline:
         # to; sample_actions_traced reads from it after execute_trace.
         self._trace_id = None
         self._captured_actions = None
+
+        # Per-stage trace state (Phase B.3 alt). Three separate traces on the
+        # three stage submeshes (vision_submesh, prefill_submesh, denoise_submesh)
+        # rather than one parent-mesh trace. Inter-stage transports (vision→prefill
+        # socket, KV migration) run between traces, in Python — they aren't
+        # captured. Caches:
+        #   _vision_trace_id / _vision_out_buf   — trace + output tensor on vision_submesh
+        #   _prefill_trace_id / _prefill_kv_buf  — trace + per-layer KV refs on prefill_submesh
+        #   _denoise_trace_id                    — trace; output is self.x_t_fp32 on denoise_submesh
+        # _prefix_kv_per_chip is cached after the first migration (lives across
+        # subsequent calls; refreshed only when the prefill output changes).
+        self._vision_trace_id = None
+        self._vision_out_buf = None
+        self._prefill_trace_id = None
+        self._prefill_kv_buf = None
+        self._denoise_trace_id = None
+        self._prefix_kv_per_chip = None
         self._rope_l1 = os.environ.get("PI0_ROPE_TABLES_L1", "").lower() in ("1", "true", "yes", "on")
 
         # Opt-in: move SigLIP and VLM matmul weights to L1. These stages run once
@@ -281,6 +304,23 @@ class Pi0_5GLXPipeline:
             migrate_prefill_mlp_weights_to_l1(
                 self.stage_prefill, prefill_mlp_l1_layout(), gx, gy, prefill_mlp_l1_projs()
             )
+
+        # Per-tensor SigLIP L1 migration (e.g. PI0_GLX_SIGLIP_L1_TENSORS=wo,fc2).
+        # fc1 and wqkv (N=4608) crash with CB-clash; wo and fc2 (N=1152) are
+        # safe candidates. Empty/unset → no migration (production default).
+        _siglip_tensors = list(siglip_l1_tensors())
+        # Back-compat: bool flags fold into the allowlist
+        if siglip_mlp_l1_enabled():
+            _siglip_tensors += ["fc1", "fc2"]
+        if siglip_attn_l1_enabled():
+            _siglip_tensors += ["wqkv", "wo"]
+        if _siglip_tensors:
+            migrate_siglip_weights_to_l1(self.stage_vision, tensors=set(_siglip_tensors))
+
+        # Opt-in: VLM PaliGemma attention (wqkv + o_proj) → L1.
+        # Per-chip footprint ~9.7 MB / 168 MB usable. Default OFF.
+        if vlm_attn_l1_enabled():
+            migrate_vlm_attn_to_l1(self.stage_prefill, tensors=vlm_attn_l1_tensors())
 
     # ---- upstream-openpi compat artifacts -------------------------------
 
@@ -577,6 +617,139 @@ class Pi0_5GLXPipeline:
         self._trace_id = ttnn.begin_trace_capture(self.h.trace_root, cq_id=0)
         self._captured_actions = self._sample_actions_device(upstream)
         ttnn.end_trace_capture(self.h.trace_root, self._trace_id, cq_id=0)
+
+    # ---- Per-stage trace fallback (Phase B.3 alt) -----------------------
+    #
+    # The whole-pipeline capture_trace() above did not complete on this 32-chip
+    # parent MeshDevice (warmup hangs; root cause TBD — likely socket handshake
+    # ordering across many submesh CQs). As a fallback, capture three SEPARATE
+    # traces — one per stage submesh — and stitch them together in Python with
+    # the inter-stage sockets / KV migration happening between traces.
+    #
+    # Layout:
+    #   vision  trace on h.vision_submesh   (1,4)  — input self.pixel_values_buf
+    #                                                  output self._vision_out_buf
+    #   socket vision_per_chip[3] → prefill_per_chip[0] (Python-side, between traces)
+    #   prefill trace on h.prefill_submesh  (6,3)  — input vision_out_p0
+    #                                                  output (final_hidden, per_layer_kv)
+    #   KV migration prefill chips → denoise chips (Python-side)
+    #   denoise trace on h.denoise_submesh  (6,1)  — input self.x_t_fp32, prefix_kv
+    #                                                  output self.x_t_fp32 (in-place)
+    #
+    # IMPORTANT — known limitation: the stage compute currently runs on per-chip
+    # 1x1 submeshes (h.vision_per_chip[i], etc.) which have their own command
+    # queues distinct from the stage submesh CQ. The trace capture below issues
+    # the SAME per-chip compute path, so whether begin_trace_capture on the
+    # stage submesh captures ops issued on its child 1x1 submeshes is the open
+    # question. If it doesn't, the captured trace will be empty / replay will
+    # be a no-op. This scaffolding lays out the call sites; validation is
+    # deferred to a future debug session.
+
+    def capture_per_stage_traces(
+        self,
+        images: List[torch.Tensor],
+        img_masks: Optional[List[torch.Tensor]],
+        lang_tokens: torch.Tensor,
+        lang_masks: Optional[torch.Tensor],
+    ) -> None:
+        """Capture three per-stage traces (vision, prefill, denoise). Inter-stage
+        transports run between traces. Must be called once before
+        sample_actions_per_stage_traced.
+        """
+        # 1) Stage persistent inputs.
+        self._ensure_persistent_input_buffers(images, lang_tokens)
+        self._refresh_noise_buffer()
+
+        # 2) Build / cache upstream artifacts.
+        upstream = None
+        if use_upstream_masks() and img_masks is not None and lang_masks is not None:
+            num_image_tokens = self.config.siglip_config.num_patches
+            prefix_len = num_image_tokens * len(images) + int(lang_tokens.shape[-1])
+            key = self._upstream_key(img_masks, lang_masks, prefix_len)
+            if self._upstream_per_chip is None or self._upstream_cache_key != key:
+                self._build_and_upload_upstream_artifacts(img_masks, lang_masks, prefix_len)
+                self._upstream_cache_key = key
+            upstream = self._upstream_per_chip
+
+        # 3) Warmup pass (JIT compiles all kernels). Each stage's compute runs
+        # once eagerly so begin_trace_capture doesn't have to tolerate JIT.
+        _ = self._sample_actions_device(upstream)
+        self._refresh_noise_buffer()
+
+        # 4) Vision trace.
+        self._vision_trace_id = ttnn.begin_trace_capture(self.h.vision_submesh, cq_id=0)
+        self._vision_out_buf = self.stage_vision.run(self.pixel_values_buf)
+        ttnn.end_trace_capture(self.h.vision_submesh, self._vision_trace_id, cq_id=0)
+
+        # Inter-stage transport vision→prefill (NOT in any trace — happens each call).
+        vision_out_p0 = self.transport.send(self._vision_out_buf, self.h.prefill_per_chip[0], tag="v2p")
+
+        # 5) Prefill trace.
+        self._prefill_trace_id = ttnn.begin_trace_capture(self.h.prefill_submesh, cq_id=0)
+        prefix_embs = self._build_prefix(vision_out_p0, self.lang_tokens_buf)
+        _final_hidden, per_layer_kv = self.stage_prefill.run(
+            prefix_embs,
+            attention_mask=None,
+            position_ids=None,
+            per_chip_attn_mask=(upstream["prefix_attn_mask"] if upstream is not None else None),
+            per_chip_cos=(upstream["prefix_cos"] if upstream is not None else None),
+            per_chip_sin=(upstream["prefix_sin"] if upstream is not None else None),
+        )
+        self._prefill_kv_buf = per_layer_kv  # ttnn.Tensor refs per chip
+        ttnn.end_trace_capture(self.h.prefill_submesh, self._prefill_trace_id, cq_id=0)
+
+        # KV migration runs OUTSIDE traces — sockets between prefill chips and
+        # denoise chips happen in Python.
+        self._prefix_kv_per_chip = migrate_layer_paired(
+            self._prefill_kv_buf, self.h.denoise_per_chip, transport=self.transport
+        )
+
+        # 6) Denoise trace. self.x_t_fp32 is read+written in-place each step.
+        self._denoise_trace_id = ttnn.begin_trace_capture(self.h.denoise_submesh, cq_id=0)
+        self._run_denoise_loop_device(self._prefix_kv_per_chip, upstream)
+        ttnn.end_trace_capture(self.h.denoise_submesh, self._denoise_trace_id, cq_id=0)
+
+    def sample_actions_per_stage_traced(
+        self,
+        images: List[torch.Tensor],
+        lang_tokens: torch.Tensor,
+    ) -> torch.Tensor:
+        """Replay the three per-stage traces, with inter-stage sockets + KV
+        migration in Python between them.
+        """
+        if self._vision_trace_id is None or self._prefill_trace_id is None or self._denoise_trace_id is None:
+            raise RuntimeError("capture_per_stage_traces() must be called before sample_actions_per_stage_traced()")
+
+        # Refresh inputs into persistent buffers.
+        self._ensure_persistent_input_buffers(images, lang_tokens)
+        self._refresh_noise_buffer()
+
+        # Replay vision.
+        ttnn.execute_trace(self.h.vision_submesh, self._vision_trace_id, cq_id=0, blocking=False)
+
+        # Vision→prefill socket (not captured).
+        # NOTE: _vision_out_buf is what the vision trace writes to. The socket
+        # send issues new ops on Python's CQ — they're sequenced after the
+        # trace's writes by TTNN command-queue ordering on vision_per_chip[3].
+        vision_out_p0 = self.transport.send(self._vision_out_buf, self.h.prefill_per_chip[0], tag="v2p")
+        # (vision_out_p0 is the buffer the prefill trace expects to read from at
+        # the start of its body — it must be the SAME tensor reference captured
+        # during capture_per_stage_traces. send() returns the cached receiver
+        # buffer for this (src, dst, tag), which is stable across calls.)
+
+        # Replay prefill.
+        ttnn.execute_trace(self.h.prefill_submesh, self._prefill_trace_id, cq_id=0, blocking=False)
+
+        # KV migration (not captured).
+        self._prefix_kv_per_chip = migrate_layer_paired(
+            self._prefill_kv_buf, self.h.denoise_per_chip, transport=self.transport
+        )
+
+        # Replay denoise. self.x_t_fp32 holds the result after this returns.
+        ttnn.execute_trace(self.h.denoise_submesh, self._denoise_trace_id, cq_id=0, blocking=True)
+
+        ah = self.action_horizon
+        return ttnn.to_torch(self.x_t_fp32)[:, :ah, :]
 
     def sample_actions_traced(
         self,
