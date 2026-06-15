@@ -403,6 +403,269 @@ class TtSam3ImagePipeline:
 
         decoder._get_rpb_matrix = _fast_rpb_matrix
 
+        self._decoder = decoder
+        self._orig_decoder_forward = decoder.forward
+        self._orig_layer_forwards = [l.forward for l in decoder.layers]
+
+        import math as _math
+
+        from sam3.model.model_misc import inverse_sigmoid as _inv_sig
+
+        _dim_t_cache = {}
+
+        def _cached_sineembed(pos_tensor, d_model):
+            nf = d_model // 2
+            key = (nf, pos_tensor.device.type)
+            if key not in _dim_t_cache:
+                dt = torch.arange(nf, dtype=torch.float32, device=pos_tensor.device)
+                _dim_t_cache[key] = 10000 ** (2 * (torch.div(dt, 2, rounding_mode="floor")) / nf)
+            dim_t = _dim_t_cache[key]
+            scale = 2 * _math.pi
+            x_embed = pos_tensor[:, :, 0] * scale
+            y_embed = pos_tensor[:, :, 1] * scale
+            pos_x = x_embed[:, :, None] / dim_t
+            pos_y = y_embed[:, :, None] / dim_t
+            pos_x = torch.stack((pos_x[:, :, 0::2].sin(), pos_x[:, :, 1::2].cos()), dim=3).flatten(2)
+            pos_y = torch.stack((pos_y[:, :, 0::2].sin(), pos_y[:, :, 1::2].cos()), dim=3).flatten(2)
+            if pos_tensor.size(-1) == 2:
+                return torch.cat((pos_y, pos_x), dim=2)
+            w_embed = pos_tensor[:, :, 2] * scale
+            pos_w = w_embed[:, :, None] / dim_t
+            pos_w = torch.stack((pos_w[:, :, 0::2].sin(), pos_w[:, :, 1::2].cos()), dim=3).flatten(2)
+            h_embed = pos_tensor[:, :, 3] * scale
+            pos_h = h_embed[:, :, None] / dim_t
+            pos_h = torch.stack((pos_h[:, :, 0::2].sin(), pos_h[:, :, 1::2].cos()), dim=3).flatten(2)
+            return torch.cat((pos_y, pos_x, pos_w, pos_h), dim=2)
+
+        def _make_opt_layer_fwd(lyr):
+            _sa, _ca = lyr.self_attn, lyr.cross_attn
+            _n1, _n2, _d1, _d2 = lyr.norm1, lyr.norm2, lyr.dropout1, lyr.dropout2
+            _ffn = lyr.forward_ffn
+            _txt = lyr.use_text_cross_attention
+            if _txt:
+                _ca_txt, _ct_d, _ct_n = lyr.ca_text, lyr.catext_dropout, lyr.catext_norm
+
+            def _fwd(
+                tgt=None,
+                tgt_query_pos=None,
+                tgt_query_sine_embed=None,
+                tgt_key_padding_mask=None,
+                tgt_reference_points=None,
+                memory_text=None,
+                text_attention_mask=None,
+                memory=None,
+                memory_key_padding_mask=None,
+                memory_level_start_index=None,
+                memory_spatial_shapes=None,
+                memory_pos=None,
+                self_attn_mask=None,
+                cross_attn_mask=None,
+                dac=False,
+                dac_use_selfatt_ln=True,
+                presence_token=None,
+                identity=0.0,
+                **kwargs,
+            ):
+                if _sa is not None:
+                    if dac:
+                        h = tgt.shape[0] // 2
+                        tgt_o2o, tgt_o2m = tgt[:h], tgt[h:]
+                        qp_o2o = tgt_query_pos[:h]
+                    else:
+                        tgt_o2o = tgt
+                        qp_o2o = tgt_query_pos
+                    if presence_token is not None:
+                        tgt_o2o = torch.cat([presence_token, tgt_o2o], dim=0)
+                        zp = torch.zeros_like(presence_token)
+                        qp_o2o = torch.cat([zp, qp_o2o], dim=0)
+                        tgt_query_pos = torch.cat([zp, tgt_query_pos], dim=0)
+                    q = k = tgt_o2o + qp_o2o
+                    tgt2 = _sa(q, k, tgt_o2o, attn_mask=self_attn_mask)[0]
+                    tgt_o2o = tgt_o2o + _d2(tgt2)
+                    if dac:
+                        if not dac_use_selfatt_ln:
+                            tgt_o2o = _n2(tgt_o2o)
+                        tgt = torch.cat((tgt_o2o, tgt_o2m), dim=0)
+                        if dac_use_selfatt_ln:
+                            tgt = _n2(tgt)
+                    else:
+                        tgt = _n2(tgt_o2o)
+                if _txt:
+                    tgt2 = _ca_txt(tgt + tgt_query_pos, memory_text, memory_text, key_padding_mask=text_attention_mask)[
+                        0
+                    ]
+                    tgt = tgt + _ct_d(tgt2)
+                    tgt = _ct_n(tgt)
+                if presence_token is not None and cross_attn_mask is not None:
+                    pp = getattr(lyr, "_pp_mask", None)
+                    if pp is not None:
+                        cross_attn_mask = pp
+                    else:
+                        cross_attn_mask = torch.cat(
+                            [torch.zeros_like(cross_attn_mask[:, :1, :]), cross_attn_mask], dim=1
+                        )
+                tgt2 = _ca(
+                    query=tgt + tgt_query_pos,
+                    key=(memory + memory_pos) if memory_pos is not None else memory,
+                    value=memory,
+                    attn_mask=cross_attn_mask,
+                    key_padding_mask=(
+                        memory_key_padding_mask.transpose(0, 1) if memory_key_padding_mask is not None else None
+                    ),
+                )[0]
+                tgt = tgt + _d1(tgt2)
+                tgt = _n1(tgt)
+                tgt = _ffn(tgt)
+                pt_out = None
+                if presence_token is not None:
+                    pt_out = tgt[:1]
+                    tgt = tgt[1:]
+                return tgt, pt_out
+
+            return _fwd
+
+        for _lyr in decoder.layers:
+            _lyr._pp_mask = None
+            _lyr.forward = _make_opt_layer_fwd(_lyr)
+
+        _mask_buf = [None]
+
+        def _opt_dec_fwd(
+            self_d,
+            tgt,
+            memory,
+            tgt_mask=None,
+            memory_mask=None,
+            tgt_key_padding_mask=None,
+            memory_key_padding_mask=None,
+            pos=None,
+            reference_boxes=None,
+            level_start_index=None,
+            spatial_shapes=None,
+            valid_ratios=None,
+            memory_text=None,
+            text_attention_mask=None,
+            apply_dac=None,
+            is_instance_prompt=False,
+            decoder_extra_kwargs=None,
+            obj_roi_memory_feat=None,
+            obj_roi_memory_mask=None,
+            box_head_trk=None,
+        ):
+            if memory_mask is not None:
+                assert self_d.boxRPB == "none"
+            apply_dac = apply_dac if apply_dac is not None else self_d.dac
+            if apply_dac:
+                tgt = tgt.repeat(2, 1, 1)
+                if reference_boxes is not None:
+                    reference_boxes = reference_boxes.repeat(2, 1, 1)
+            bs = tgt.shape[1]
+            intermediate = []
+            intermediate_presence_logits = []
+            presence_feats = None
+            if self_d.box_refine:
+                if reference_boxes is None:
+                    reference_boxes = self_d.reference_points.weight.unsqueeze(1)
+                    reference_boxes = (
+                        reference_boxes.repeat(2, bs, 1) if apply_dac else reference_boxes.repeat(1, bs, 1)
+                    ).sigmoid()
+                intermediate_ref_boxes = [reference_boxes]
+            else:
+                reference_boxes = None
+                intermediate_ref_boxes = None
+            output = tgt
+            presence_out = None
+            if self_d.presence_token is not None and not is_instance_prompt:
+                presence_out = self_d.presence_token.weight[None].expand(1, bs, -1)
+            box_head = self_d.bbox_embed
+            if is_instance_prompt and self_d.instance_bbox_embed is not None:
+                box_head = self_d.instance_bbox_embed
+            out_norm = self_d.norm
+            if is_instance_prompt and self_d.instance_norm is not None:
+                out_norm = self_d.instance_norm
+            vr2 = torch.cat([valid_ratios, valid_ratios], -1)[None, :] if valid_ratios is not None else None
+            fs = (
+                (spatial_shapes[0, 0], spatial_shapes[0, 1])
+                if spatial_shapes is not None and self_d.boxRPB != "none"
+                else None
+            )
+
+            for li, layer in enumerate(self_d.layers):
+                rpi = reference_boxes[:, :, None] * vr2
+                qse = _cached_sineembed(rpi[:, :, 0, :], self_d.d_model)
+                qp = self_d.ref_point_head(qse)
+                if self_d.boxRPB != "none" and reference_boxes is not None:
+                    memory_mask = self_d._get_rpb_matrix(reference_boxes, fs).flatten(0, 1)
+                    if presence_out is not None:
+                        nq = memory_mask.shape[1]
+                        if _mask_buf[0] is None or _mask_buf[0].shape[1] != nq + 1:
+                            _mask_buf[0] = torch.zeros(
+                                memory_mask.shape[0], nq + 1, memory_mask.shape[2], dtype=memory_mask.dtype
+                            )
+                        _mask_buf[0][:, 1:, :] = memory_mask
+                        layer._pp_mask = _mask_buf[0]
+                    else:
+                        layer._pp_mask = None
+                output, presence_out = layer(
+                    tgt=output,
+                    tgt_query_pos=qp,
+                    tgt_query_sine_embed=qse,
+                    tgt_key_padding_mask=tgt_key_padding_mask,
+                    tgt_reference_points=rpi,
+                    memory_text=memory_text,
+                    text_attention_mask=text_attention_mask,
+                    memory=memory,
+                    memory_key_padding_mask=memory_key_padding_mask,
+                    memory_level_start_index=level_start_index,
+                    memory_spatial_shapes=spatial_shapes,
+                    memory_pos=pos,
+                    self_attn_mask=tgt_mask,
+                    cross_attn_mask=memory_mask,
+                    dac=apply_dac,
+                    dac_use_selfatt_ln=self_d.dac_use_selfatt_ln,
+                    presence_token=presence_out,
+                    **(decoder_extra_kwargs or {}),
+                    obj_roi_memory_feat=obj_roi_memory_feat,
+                    obj_roi_memory_mask=obj_roi_memory_mask,
+                )
+                layer._pp_mask = None
+                if self_d.box_refine:
+                    ref_bs = _inv_sig(reference_boxes)
+                    normed = out_norm(output)
+                    if box_head_trk is None:
+                        du = box_head(normed) if self_d.use_normed_output_consistently else box_head(output)
+                    else:
+                        Q_det = decoder_extra_kwargs["Q_det"]
+                        du = torch.cat([self_d.bbox_embed(output[:Q_det]), box_head_trk(output[Q_det:])], dim=0)
+                    new_rp = (du + ref_bs).sigmoid()
+                    reference_boxes = new_rp.detach()
+                    if li != self_d.num_layers - 1:
+                        intermediate_ref_boxes.append(new_rp)
+                else:
+                    normed = out_norm(output)
+                intermediate.append(normed)
+                if self_d.presence_token is not None and not is_instance_prompt:
+                    ipl = self_d.presence_token_head(self_d.presence_token_out_norm(presence_out)).squeeze(-1)
+                    if self_d.clamp_presence_logits:
+                        ipl.clamp_(min=-self_d.clamp_presence_logit_max_val, max=self_d.clamp_presence_logit_max_val)
+                    intermediate_presence_logits.append(ipl)
+                    presence_feats = presence_out.clone()
+            return (
+                torch.stack(intermediate),
+                torch.stack(intermediate_ref_boxes) if intermediate_ref_boxes is not None else None,
+                (
+                    torch.stack(intermediate_presence_logits)
+                    if self_d.presence_token is not None and not is_instance_prompt
+                    else None
+                ),
+                presence_feats,
+            )
+
+        import types
+
+        decoder.forward = types.MethodType(_opt_dec_fwd, decoder)
+        decoder.compiled = True
+
     def _patched_vit_forward(self, x):
         if self._encoder.forward is not self._patched_encoder_forward:
             self._encoder.forward = self._patched_encoder_forward
@@ -430,6 +693,9 @@ class TtSam3ImagePipeline:
         self._encoder.forward = self._orig_encoder_forward
         self._pixel_decoder.forward = self._orig_pd_forward
         self._mask_predictor.forward = self._orig_mp_forward
+        self._decoder.forward = self._orig_decoder_forward
+        for i, layer in enumerate(self._decoder.layers):
+            layer.forward = self._orig_layer_forwards[i]
 
     @torch.inference_mode()
     def forward(self, input_batch):
