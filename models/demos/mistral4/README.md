@@ -67,9 +67,10 @@ Decode cost is **flat across ISL** (the decode step is a captured trace independ
 
 **MoE sparse dispatch** (`forward_decode(use_sparse=True)`): routes each token to only its top-4 experts
 (`mesh_partition` → all-to-all dispatch → local experts → combine → `all_gather`) vs computing all 16
-local experts dense. Matches dense logits (PCC 0.9958) and gives a throughput win once MoE-compute-bound
-(**+11.5% at B=32**); at low batch the all-to-all overhead makes dense faster, so dense is the default
-and sparse is opt-in for high-batch serving (untraced; full-depth would amortize non-MoE cost further).
+local experts dense. Matches dense logits (PCC 0.9958), is **trace-compatible** (capture/replay PCC 1.0), and gives a
+throughput win once MoE-compute-bound (**+11.5% at B=32**); at low batch the all-to-all overhead makes
+dense faster, so dense is the default and sparse is opt-in for high-batch serving (full-depth would
+amortize non-MoE cost further).
 
 **Chunked prefill** (`forward_prefill_chunked`, paged k/v + `chunked_scaled_dot_product_attention`)
 processes the prompt in chunk-token windows so L1 holds only one chunk's attention — lifting the
