@@ -20,13 +20,61 @@ void bind_generalized_moe_gate(nb::module_& mod) {
 
         Writes results into ``output_tensor`` and ``output_indices_tensor`` (same tensors are returned).
 
+        Sharding / cores:
+            All five tensors are HEIGHT_SHARDED in L1 with ROW_MAJOR orientation — one shard per core.
+            There is no fixed grid: the op runs on exactly the cores covered by ``input_tensor``'s shard
+            grid (the caller chooses it). Each core independently gates one token over all experts, so the
+            number of cores equals the leading (token) shard dimension of the input — ``batch`` in the tests
+            and model, one token per core; e.g. they allocate the grid via
+            ``ttnn.num_cores_to_corerangeset(batch, compute_with_storage_grid_size(), row_wise=True)``.
+            (A ``batch`` larger than the core count is the caller's concern — the model chunks it and reuses
+            the cores across iterations, so this op only ever sees one iteration's worth of tokens.)
+            ``bias_tensor`` and ``input_indices_tensor`` grids must contain the input grid; ``output_tensor``
+            and ``output_indices_tensor`` must share one grid that also contains the input grid.
+
+            Experts are packed ``num_blocks`` 32x32 tiles per shard, one 256-expert block per tile. Each
+            block's 256 experts occupy ONLY the top-left 16x16 face (face0) of its 32x32 tile — the other
+            three faces are unused padding (the SFPU top-k operates on a single face). ``num_blocks`` = 1 for
+            experts <= 256, 2 for 256 < experts <= 512. There is no separate hidden/intermediate dim — a gate
+            only sees [num_tokens, num_experts] and emits the top-``topk``.
+
+        Shapes  (B = #tokens this call = #cores; E = #experts = 256 or 512; num_blocks = E/256, i.e. 1 or 2;
+                 k = ``topk``, 1..8). In the model the router logits arrive as ``[1, 1, B, E]`` and are
+                 reshaped into the op's per-token block layout below:
+
+            input_tensor / bias_tensor (BF16), input_indices_tensor (UInt16):
+                logical    : rank >= 2, with the trailing two dims forming exactly one 256-expert block
+                             (16x16). num_blocks is read from the SHARD shape, NOT the logical rank, so the
+                             leading dims are just a token/block spelling and the op treats these uniformly:
+                             the tests/model pass ``[B, 16, 16]`` for E <= 256 (num_blocks = 1) and
+                             ``[B, num_blocks, 16, 16]`` for E <= 512 (num_blocks = 2) — same contract, the
+                             rank only differs because the second form names the block dim explicitly.
+                on device  : TILE layout, HEIGHT_SHARDED. Each 16x16 block sits in face0 of a 32x32 tile, so
+                             the per-core shard is ``(num_blocks*32, 32)`` and the full (flattened) sharded
+                             tensor is ``(B*num_blocks*32, 32)``.
+
+            output_tensor (BF16), output_indices_tensor (UInt16):
+                logical    : caller's choice — the op only requires a shape that pads to one 32x32 tile per
+                             token (the (32, 32) shard) and constrains nothing else, so e.g. ``[B, 1, 16]``
+                             and ``[B, 32, 32]`` are equivalent (neither is "bigger" — both are one tile).
+                on device  : TILE layout, HEIGHT_SHARDED. Per-core shard ``(32, 32)`` (one tile/token), full
+                             sharded tensor ``(B*32, 32)``. Only the first k entries of row 0 are valid (the
+                             selected scores / expert ids); the model slices+views them back to ``[1, 1, B, k]``.
+
         Args:
-            input_tensor: Router logits per shard ([*, 16, 16] logical = 256 experts, tile 32x32).
-            bias_tensor: Score-correction bias added for selection only (output scores stay unbiased),
-                same shard spec as logits.
-            input_indices_tensor: Transposed routing indices shard (the global expert id per slot).
-            output_tensor: Preallocated BF16 buffer for the normalized top-``topk`` scores (shard 32x32).
-            output_indices_tensor: Preallocated UInt16 buffer for the selected expert indices (shard 32x32).
+            input_tensor: Router logits, BF16. Shard shape ``(num_blocks*32, 32)`` (num_blocks tiles stacked
+                along the height); each 32x32 tile carries one 256-expert block in its top-left 16x16 face
+                (face0) only — the rest of the tile is padding. One shard/token per core.
+            bias_tensor: Score-correction bias added for selection only (output scores stay unbiased), BF16.
+                Same shard spec / shape / orientation as ``input_tensor`` (transposed within each 16x16 block).
+            input_indices_tensor: Routing indices (the global expert id per slot), UInt16. Same sharding as
+                ``input_tensor`` — shard shape ``(num_blocks*32, 32)``, matching orientation, and a grid that
+                contains the input grid; only the dtype and contents differ. One 32x32 tile per block holds
+                that block's global ids (block b = arange(256) + b*256), transposed within each 16x16 block.
+            output_tensor: Preallocated BF16 buffer for the normalized top-``topk`` scores. Shard shape
+                ``(32, 32)`` — a single tile per token; only the first ``topk`` entries are valid.
+            output_indices_tensor: Preallocated UInt16 buffer for the selected expert indices. Shard shape
+                ``(32, 32)``, same grid as ``output_tensor``; only the first ``topk`` entries are valid.
             eps: Denominator stabilization for normalization (default: 1e-20).
             scaling_factor: Routed scaling factor applied after normalization (default: 2.5).
             enable_sigmoid: Apply sigmoid to the logits before the bias add when True (sigmoid routing);
