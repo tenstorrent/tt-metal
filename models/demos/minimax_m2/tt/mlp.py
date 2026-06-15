@@ -114,6 +114,7 @@ class MLP:
             )
             self.use_throughput_experts = False
             self.ep_dgs = dgs
+            self.ep_num_links = ccl_manager.num_links
             return
         self.use_throughput_experts = use_throughput_experts
         if self.use_throughput_experts:
@@ -225,40 +226,22 @@ class MLP:
             Expert output tensor [batch, seq_len, hidden_size]
         """
         if getattr(self, "use_ep_moe", False):
-            # Bridge DP-row representation (logical [1,1,S,H] per row; the R prompts live in the
-            # MESH rows, not the logical shape) <-> EP dispatch layout (logical (R,S,H) sharded
-            # dim0=rows, replicate cols). A mesh axis can't be promoted into the logical shape by
-            # reshape, so we round-trip through host. CORRECTNESS-TEST path (not perf), ~2 hops/layer.
-            import torch as _torch
-
-            R, C = self.mesh_device.shape
-            S, H = hidden_states.shape[-2], hidden_states.shape[-1]
-            dts = ttnn.get_device_tensors(hidden_states)  # chip (r,c) at r*C+c; cols replicate full emb
-            host = _torch.cat([ttnn.to_torch(dts[r * C]).reshape(1, S, H) for r in range(R)], dim=0)  # (R,S,H)
-            x3d = ttnn.from_torch(
-                host,
-                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, self.mesh_device.shape, dims=(0, None)),
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                dtype=ttnn.bfloat16,
-            )
-            idx, wts = self.router(x3d, True)  # route on (R,S,H) view -> per-row top-k
-            out = self.experts(x3d, topk_indices=idx, topk_weights=wts)  # (R,S,H/tp) reduce-scattered
-            out_host = ttnn.to_torch(
-                out,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    self.mesh_device, mesh_shape=self.mesh_device.shape, dims=(0, -1)
-                ),
-            ).reshape(
-                R, 1, S, H
-            )  # gather rows(dim0)+emb(cols) -> per-row full emb
-            return ttnn.from_torch(
-                out_host,
-                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, self.mesh_device.shape, dims=(0, None)),
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                dtype=ttnn.bfloat16,
-            )
+            # On-device EP bridge (DeepSeek `_moe_path` pattern, fully traceable — no host hop):
+            # the decoder hands us per-device [1,1,S,H] (the R prompts/seq-shards live in the MESH
+            # rows). The EP dispatch reads rows via cluster_axis=0, so we just SQUEEZE the leading
+            # dim to per-device [1,S,H]; the router runs per-row (each row routes its own tokens).
+            # The MoE returns reduce-scattered emb/tp; all-gather it back to full emb so it matches
+            # the layer residual's [1,1,S,H] (the EP=1 path returns full emb too).
+            Hfull = hidden_states.shape[-1]
+            idx, wts = self.router(hidden_states, True)  # per-row top-k on [1,1,S,H]
+            x3d = ttnn.squeeze(hidden_states, dim=0)  # [1,1,S,H] -> [1,S,H] per device
+            out = self.experts(x3d, topk_indices=idx, topk_weights=wts)  # -> [1,S,H/tp] reduce-scattered
+            out = ttnn.unsqueeze(out, dim=0)  # -> [1,1,S,H/tp]
+            if self.mesh_device.shape[1] > 1 and out.shape[-1] < Hfull:
+                out = ttnn.all_gather(
+                    out, dim=-1, cluster_axis=1, num_links=self.ep_num_links, topology=ttnn.Topology.Linear
+                )
+            return out
 
         expert_indices, expert_weights = self.router(hidden_states, self.use_throughput_experts)
         expert_output = self.experts(
