@@ -193,11 +193,15 @@ MODEL_TRACED_BATCH_POLICY = {
 # these specific galaxy-class machine labels instead of the shared topology-6u
 # label, so the galaxy sweep runs only on this vetted pool. Each batch is pinned
 # to one label (GitHub can't OR labels); batch i -> pool[i % len(pool)].
+# Chosen from a vector-level (incl. PCC) per-runner fail-rate analysis of the
+# last 15 lead-models runs (all retry attempts): these 4 had the lowest observed
+# fail rates (<=2.8%). The previously-included g04glx03/g14glx04 (~3.3%) were
+# dropped; g04glx01/g14glx03/OM1-01A02-STGWH02 are excluded as broken (30-92%).
 GALAXY_RUNNER_POOL = (
-    "OM1-01A04-STGWH01",
     "OM1-01A04-STGWH02",
-    "g04glx03",
-    "g14glx04",
+    "OM1-01A02-STGWH01",
+    "OM1-01A02-STGWH03",
+    "OM1-01A03-STGWH02",
 )
 
 # Logical galaxy test groups whose batches route to GALAXY_RUNNER_POOL.
