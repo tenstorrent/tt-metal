@@ -2380,7 +2380,7 @@ class ModelArgs:
                 "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "Qwen2.5-7B": {"N150": 4, "N300": 32, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Devstral-2-123B": {"N150": None, "N300": None, "T3K": None, "TG": None, "P150x4": None, "P150x8": 4},
-                "Devstral-Small-2-24B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128, "P150x8": 128},
+                "Devstral-Small-2-24B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 16, "P150x8": 128},
                 "Qwen2.5-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128, "P150x8": 128},
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 16, "TG": 128, "P150x4": 128, "P150x8": 128},
                 "Qwen2.5-VL-3B": {"N150": 128, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
