@@ -364,8 +364,6 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     // distributed stages need neither (CB 14 also aliases the fused-residual input there).
     const bool do_col_mask = col_mask.has_value();
     const bool do_legacy_layernorm_col_mask = do_col_mask && !rms_norm && !is_pre_all_gather && !is_post_all_gather;
-    // Valid (logical) columns in the final width tile; the rest of that tile is padding.
-    const uint32_t last_tile_valid_w = logical_K - (Kt - 1) * tile_width;
 
     RuntimeArgsContext rt_ctx{
         .grid = grid,
@@ -431,10 +429,10 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     // RMSNorm doesn't use Welford in this kernel path.
     kernel_config.welford_fp32_alias =
         use_welford && !rms_norm && in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en;
-    kernel_config.last_tile_valid_w = last_tile_valid_w;
     if (do_col_mask) {
+        // The masking is entirely compute-side: it applies the host-built CB 19 mask. No writer
+        // define is needed (the writer no longer builds a mask).
         kernel_config.compute_defines.emplace_back("DO_COL_MASK", "1");
-        kernel_config.writer_defines.emplace_back("DO_COL_MASK", "1");
     }
 
     add_kernel_descriptors(program_descriptor, core_ranges, workers, grid, std::move(kernel_config));

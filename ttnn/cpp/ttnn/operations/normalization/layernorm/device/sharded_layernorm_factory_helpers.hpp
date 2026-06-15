@@ -309,10 +309,8 @@ struct KernelConfig {
     bool welford_fp32_alias = false;
 
     // Legacy (non-Welford) column masking for non-tile-aligned widths: zero the padding columns of
-    // the final width tile so they do not enter E[x] or the variance. last_tile_valid_w is the
-    // number of valid (logical) columns in that final tile.
+    // the final width tile so they do not enter E[x] or the variance.
     bool do_col_mask = false;
-    uint32_t last_tile_valid_w = 0;
 };
 
 // Struct to hold CB configuration for building CB descriptors

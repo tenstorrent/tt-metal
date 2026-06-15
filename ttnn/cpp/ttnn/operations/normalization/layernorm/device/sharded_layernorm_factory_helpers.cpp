@@ -819,10 +819,6 @@ void add_kernel_descriptors(
         {"cb_in_2", tt::CBIndex::c_2},
         {"cb_eps", tt::CBIndex::c_3},
         {"cb_in_4", tt::CBIndex::c_4},
-        // Column mask (legacy non-tile-aligned path); the writer generates CB 7 for LayerNorm,
-        // the compute applies CB 7 (E[x]) and CB 19 (variance / RMSNorm squares).
-        {"cb_col_mask", tt::CBIndex::c_7},
-        {"last_tile_valid_w", kernel_config.last_tile_valid_w},
     };
 
     KernelDescriptor::NamedCompileTimeArgs compute_cb_named_args = {
@@ -851,9 +847,8 @@ void add_kernel_descriptors(
         // layernorm_sharded_welford.cpp) so the named arg can stay present unconditionally.
         {"cb_x_welford", tt::CBIndex::c_29},
         {"welford_fp32_alias", static_cast<uint8_t>(kernel_config.welford_fp32_alias ? 1 : 0)},
-        // Column mask for the legacy non-tile-aligned path. CB 7 and CB 14 are LayerNorm-only; CB 19
-        // is shared with RMSNorm.
-        {"cb_col_mask", tt::CBIndex::c_7},
+        // Column mask for the legacy non-tile-aligned path. CB 14 (E[x] scratch) is LayerNorm-only;
+        // CB 19 (the host-built mask) is applied at every masking site and shared with RMSNorm.
         {"cb_mask_scratch", tt::CBIndex::c_14},
         {"cb_col_mask_packed", tt::CBIndex::c_19},
     };
@@ -1134,15 +1129,8 @@ void add_cb_descriptors(
             tt::DataFormat::Float16_b,
             cb_config.bfloat16_tile_size));
         if (cb_config.do_legacy_layernorm_col_mask) {
-            // CB 7: column mask, two tiles [all-ones, partial]. The writer generates it; LayerNorm
-            // compute multiplies the final width tile by the partial mask to zero its padding cols.
-            program_descriptor.cbs.push_back(make_cb_descriptor(
-                2 * cb_config.bfloat16_tile_size,
-                core_ranges.all_cores,
-                tt::CBIndex::c_7,
-                tt::DataFormat::Float16_b,
-                cb_config.bfloat16_tile_size));
-            // CB 14: scratch holding the masked input for the LayerNorm E[x] reduction.
+            // CB 14: scratch holding the masked input for the LayerNorm E[x] reduction (so cb_in stays
+            // intact for the (x - E[x]) pass). The mask itself is the host-built CB 19 below.
             program_descriptor.cbs.push_back(make_cb_descriptor(
                 cb_config.xmm_CB_size,
                 core_ranges.all_cores,

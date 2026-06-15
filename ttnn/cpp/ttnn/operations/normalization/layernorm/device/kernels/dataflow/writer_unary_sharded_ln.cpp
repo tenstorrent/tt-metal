@@ -10,28 +10,6 @@
 #include "reshard_writer.hpp"
 #include "api/tensor/noc_traits.h"
 
-#ifdef DO_COL_MASK
-// Fill one bf16 tile (face-tiled layout) with a column mask: columns [0, valid_w) = 1.0, rest = 0.0,
-// identical for every row. valid_w = 32 produces an all-ones tile.
-FORCE_INLINE void generate_col_mask_tile(uint32_t l1_byte_addr, uint32_t valid_w) {
-    auto ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_byte_addr);
-    constexpr uint16_t kOne = 0x3F80;  // bf16(1.0)
-    constexpr uint16_t kZero = 0x0000;
-    const uint32_t left = valid_w >= 16 ? 16 : valid_w;         // valid columns in the left faces (cols 0-15)
-    const uint32_t right = valid_w >= 16 ? (valid_w - 16) : 0;  // valid columns in the right faces (cols 16-31)
-    for (uint32_t h = 0; h < 16; h++) {
-        for (uint32_t w = 0; w < 16; w++) {
-            const uint16_t left_val = (w < left) ? kOne : kZero;
-            const uint16_t right_val = (w < right) ? kOne : kZero;
-            ptr[h * 16 + w] = left_val;         // face 0 (rows 0-15,  cols 0-15)
-            ptr[h * 16 + w + 256] = right_val;  // face 1 (rows 0-15,  cols 16-31)
-            ptr[h * 16 + w + 512] = left_val;   // face 2 (rows 16-31, cols 0-15)
-            ptr[h * 16 + w + 768] = right_val;  // face 3 (rows 16-31, cols 16-31)
-        }
-    }
-}
-#endif
-
 void kernel_main() {
     constexpr bool is_all_to_all_worker = get_compile_time_arg_val(0) == 1;
     constexpr bool fuse_gamma = get_compile_time_arg_val(1) == 1;
@@ -84,22 +62,6 @@ void kernel_main() {
         constexpr uint32_t eps_cb_id = get_named_compile_time_arg_val("cb_eps");
         const uint32_t eps = get_arg_val<uint32_t>(2);
         generate_bcast_col_scalar(CircularBuffer(eps_cb_id), eps);
-
-#ifdef DO_COL_MASK
-#ifndef RMSNORM
-        // Two-tile column mask consumed by LayerNorm compute (RMSNorm uses the host-built CB 19).
-        // Tile 0 is all ones (full width tiles); tile 1 zeroes the padding columns of the final,
-        // partially-valid width tile.
-        constexpr uint32_t cb_col_mask = get_named_compile_time_arg_val("cb_col_mask");
-        constexpr uint32_t last_tile_valid_w = get_named_compile_time_arg_val("last_tile_valid_w");
-        const uint32_t col_mask_tile_bytes = get_tile_size(cb_col_mask);
-        cb_reserve_back(cb_col_mask, 2);
-        const uint32_t col_mask_addr = get_write_ptr(cb_col_mask);
-        generate_col_mask_tile(col_mask_addr, 32);
-        generate_col_mask_tile(col_mask_addr + col_mask_tile_bytes, last_tile_valid_w);
-        cb_push_back(cb_col_mask, 2);
-#endif
-#endif
 
         if constexpr (is_all_to_all_worker) {
             constexpr uint32_t cb_in_4 = get_named_compile_time_arg_val("cb_in_4");
