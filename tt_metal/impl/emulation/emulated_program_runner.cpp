@@ -1623,10 +1623,10 @@ static std::unordered_map<uint64_t, tt_emule::Core*>* build_core_map(
 // Initialize CB-sync state on a core from the program's circular buffer list.
 static void init_core_cb_sync(tt_emule::Core* core, detail::ProgramImpl& impl, const CoreCoord& logical_core) {
     core->reset_cb_sync();
-    auto cb_impls = impl.circular_buffers_on_core(logical_core);
-    for (auto& cb_impl : cb_impls) {
+    bool configured[EMULE_NUM_CBS] = {};
+    auto configure = [&](const std::shared_ptr<CircularBufferImpl>& cb_impl, const CoreCoord& lc) {
         for (uint8_t idx : cb_impl->local_buffer_indices()) {
-            if (idx >= EMULE_NUM_CBS) {
+            if (idx >= EMULE_NUM_CBS || configured[idx]) {
                 continue;
             }
             uint32_t cb_addr = cb_impl->address();
@@ -1634,17 +1634,24 @@ static void init_core_cb_sync(tt_emule::Core* core, detail::ProgramImpl& impl, c
             uint32_t num_pages = (page_size > 0) ? cb_impl->num_pages(idx) : 0;
             uint8_t* base = (page_size > 0) ? core->l1_ptr(cb_addr) : nullptr;
             core->init_cb_sync(idx, base, page_size, num_pages);
+            configured[idx] = true;
             log_debug(
                 tt::LogMetal,
                 "  Core({},{}) CB[{}]: addr=0x{:x} page_size={} num_pages={} base={:p}",
-                logical_core.x,
-                logical_core.y,
-                idx,
-                cb_addr,
-                page_size,
-                num_pages,
-                (void*)base);
+                lc.x, lc.y, idx, cb_addr, page_size, num_pages, (void*)base);
         }
+    };
+    // Pass 1: CBs allocated on this core take precedence (own addresses).
+    for (auto& cb_impl : impl.circular_buffers_on_core(logical_core)) {
+        configure(cb_impl, logical_core);
+    }
+    // Pass 2: register the remaining program CBs at their global L1 address so a
+    // kernel can get_write_ptr() a CB allocated only on a remote core (silicon CB
+    // addresses are program-global). Needed for multi-core topk, where local cores
+    // NOC-write into the final core's final_*_cb. Used only as cross-core NOC
+    // targets here; the masked L1 offset is what __emule_resolve_noc_addr routes.
+    for (auto& cb_impl : impl.circular_buffers()) {
+        configure(cb_impl, logical_core);
     }
 }
 
