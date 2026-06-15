@@ -207,6 +207,8 @@ class Gemma4DecoderLayer:
         keep_kv=False,
         is_kv_shared=False,
         position_idx_cache=None,
+        batch_size=1,
+        user_id=0,
         valid_seq_len=None,
         sequential_kv_write=False,
     ):
@@ -230,8 +232,12 @@ class Gemma4DecoderLayer:
         # 1. Attention block: norm -> attn -> post_attn_norm -> residual add
         residual = hidden_states
         normed = self.input_layernorm.forward(hidden_states)
+        if not is_decode and batch_size > 1:
+            attn_in = ttnn.reshape(normed, [batch_size, 1, normed.shape[-2] // batch_size, -1])
+        else:
+            attn_in = normed
         attn_output = self.self_attn(
-            normed,
+            attn_in,
             rope_mats=rope_mats,
             position_idx=position_idx,
             page_table=page_table,
@@ -242,6 +248,8 @@ class Gemma4DecoderLayer:
             keep_kv=keep_kv,
             is_kv_shared=is_kv_shared,
             position_idx_cache=position_idx_cache,
+            batch_size=batch_size,
+            user_id=user_id,
             valid_seq_len=valid_seq_len,
             sequential_kv_write=sequential_kv_write,
         )
@@ -250,6 +258,10 @@ class Gemma4DecoderLayer:
             hidden_states = residual
         else:
             attn_output = self.post_attention_layernorm.forward(attn_output)
+            if not is_decode and batch_size > 1:
+                residual = ttnn.reshape(
+                    residual, [1, 1, residual.shape[-2] * residual.shape[-3] * residual.shape[0], -1]
+                )
             hidden_states = ttnn.add(residual, attn_output)
             residual.deallocate(True)
             attn_output.deallocate(True)

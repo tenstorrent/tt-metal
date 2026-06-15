@@ -2303,11 +2303,11 @@ void update_program_dispatch_commands(
     static_assert(
         std::is_same_v<uint16_t, decltype(std::declval<CQDispatchCmd>().set_write_offset.program_host_id)>,
         "program_host_id type should be uint16_t");
-    uint16_t runtime_id = program.get_runtime_id();
+    uint16_t runtime_id = static_cast<uint16_t>(program.get_runtime_id());
     cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
         program_host_id_offset, &runtime_id, sizeof(runtime_id));
 
-    // Record the runtime_id -> kernel source paths mapping for real-time profiler correlation.
+    tt::TieRuntimeIdToProgramId(program);
     tt::RecordKernelSourceMap(program);
 
     if (hal.get_programmable_core_type_count() >= 2) {
@@ -2835,6 +2835,9 @@ TraceNode create_trace_node(ProgramImpl& program, IDevice* device, uint32_t num_
             all_dfb_configs_payloads.push_back(std::move(dfb_config_payload));
         }
     }
+
+    tt::TieRuntimeIdToProgramId(program);
+    tt::RecordKernelSourceMap(program);
 
     return TraceNode{
         program.shared_from_this(),

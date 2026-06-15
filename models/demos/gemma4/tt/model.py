@@ -492,6 +492,8 @@ class Gemma4Model:
         pli_combined=None,
         get_last_token=-1,
         page_tables_per_layer=None,
+        batch_size=1,
+        user_id=0,
         return_hidden=False,
         sequential_kv_write=False,
     ):
@@ -525,6 +527,7 @@ class Gemma4Model:
                 full-attention layers (KV cache groups).
         """
         seq_len = hidden_states.shape[2]
+        rope_seq_len = seq_len // batch_size if (not is_decode and batch_size > 1) else seq_len
         caches = kv_caches or self.tt_kv_cache
 
         # Real (unpadded) prefill length: the prompt is padded up to a power of 2
@@ -574,7 +577,7 @@ class Gemma4Model:
                 # Decode: return 2D caches for on-device embedding lookup
                 layer_rope = self._get_rope_mats(i, for_decode=True)
             else:
-                layer_rope = self._get_rope_mats(i, seq_len=seq_len)
+                layer_rope = self._get_rope_mats(i, seq_len=rope_seq_len)
 
             # Convert per-layer input to device tensor if available
             pli_tt = None
@@ -585,7 +588,11 @@ class Gemma4Model:
                 # Pre-computed device tensors (legacy trace mode)
                 pli_tt = pli_device_tensors[i]
             elif per_layer_inputs is not None and i < len(per_layer_inputs):
-                pli_4d = per_layer_inputs[i].unsqueeze(0).unsqueeze(0)  # [1, 1, seq, pli_size]
+                pli_layer = per_layer_inputs[i]
+                if batch_size > 1 and pli_layer.dim() == 3:
+                    pli_4d = pli_layer.reshape(1, 1, -1, pli_layer.shape[-1])
+                else:
+                    pli_4d = pli_layer.unsqueeze(0).unsqueeze(0)  # [1, 1, seq, pli_size]
                 pli_tt = ttnn.from_torch(
                     pli_4d,
                     device=self.mesh_device,
@@ -620,6 +627,8 @@ class Gemma4Model:
                 keep_kv=keep_kv,
                 is_kv_shared=is_kv_shared,
                 position_idx_cache=position_idx_cache,
+                batch_size=batch_size,
+                user_id=user_id,
                 valid_seq_len=prefill_valid_len,
                 sequential_kv_write=sequential_kv_write,
             )
@@ -634,6 +643,11 @@ class Gemma4Model:
             if kv_pair is not None:
                 kv_pair[0].deallocate(True)
                 kv_pair[1].deallocate(True)
+
+        # Batched prefill (batch_size > 1) returns hidden states; Generator applies
+        # norm + lm_head per user. Single-user prefill runs norm + lm_head here.
+        if not is_decode and get_last_token == -1 and batch_size > 1:
+            return hidden_states
 
         # Final norm
         hidden_states = self.norm.forward(hidden_states)
@@ -972,15 +986,25 @@ class Gemma4Model:
         """
         import torch.nn.functional as F
 
-        del start_pos, last_token_idx, global_user_id, batch_size, user_id, batched_prefill, kwargs
+        del start_pos, last_token_idx, global_user_id, user_id, batched_prefill, kwargs
         del chunk_start_idx  # Accepted for signature compat; Gemma4 doesn't chunk-prefill.
 
         device = None if trace_enabled else self.mesh_device
         mesh_mapper = self._replicate_to_mesh_mapper()
 
         tokens_torch = tokens.to(torch.long)
+        if batch_size > 1:
+            assert tokens_torch.dim() == 2, "batched prefill tokens must be [batch, seq_len]"
+            per_user_seq_len = tokens_torch.shape[-1]
+            tokens_for_embed = tokens_torch.reshape(1, 1, 1, -1)
+        else:
+            per_user_seq_len = tokens_torch.shape[-1]
+            # Match test_full_model / vLLM parity: [1, seq_len] token rows, not
+            # [1, 1, 1, seq_len]. The flattened layout is for batched-prefill streams.
+            tokens_for_embed = tokens_torch
+
         tt_tokens = ttnn.from_torch(
-            tokens,
+            tokens_for_embed,
             device=device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -1008,6 +1032,8 @@ class Gemma4Model:
             )
 
         self._prefill_input_ids_torch = tokens_torch
+        self._prefill_batch_size = batch_size
+        self._prefill_seq_len_per_user = per_user_seq_len
         if self._embed_weight_cpu is not None:
             self._prefill_embeds_torch = F.embedding(tokens_torch, self._embed_weight_cpu).float() * self.embed_scale
         else:
@@ -1017,14 +1043,24 @@ class Gemma4Model:
             return tt_tokens, None, None, tt_page_table, tt_chunk_page_table, None
 
         tt_embeds = self.embed_tokens(tt_tokens)
-        if len(tt_embeds.shape) == 3:
-            tt_embeds = ttnn.unsqueeze_to_4D(tt_embeds)
+        if batch_size > 1:
+            if len(tt_embeds.shape) == 3:
+                tt_embeds = ttnn.unsqueeze_to_4D(tt_embeds)
+        else:
+            tt_embeds = ttnn.reshape(tt_embeds, (1, 1, per_user_seq_len, self.hidden_size))
         tt_embeds = ttnn.to_layout(tt_embeds, ttnn.TILE_LAYOUT)
 
         return tt_embeds, None, None, tt_page_table, tt_chunk_page_table, None
 
     def prepare_prefill_inputs_trace(self, tokens, **kwargs):
         return self.prepare_inputs_prefill(tokens, trace_enabled=True, **kwargs)
+
+    def _reshape_prefill_embeds(self, tt_embeds, seq_len):
+        if len(tt_embeds.shape) == 3:
+            return ttnn.reshape(tt_embeds, (1, 1, seq_len, self.hidden_size))
+        if tt_embeds.shape[2] != seq_len:
+            return ttnn.reshape(tt_embeds, (1, 1, seq_len, self.hidden_size))
+        return tt_embeds
 
     def transform_and_embed_prefill_inputs_device(
         self, tokens, tt_page_table, tt_chunk_page_table, tt_chunk_start_idx=None
@@ -1040,9 +1076,13 @@ class Gemma4Model:
         (``transformed_inputs[3]`` → ``ttnn_prefill_forward(chunk_start_idx=...)``).
         Gemma4 doesn't chunk-prefill, so it's always ``None`` in practice.
         """
+        if len(tokens.shape) == 4 and tokens.shape[1] == 1 and tokens.shape[2] == 1:
+            seq_len = tokens.shape[3]
+            tokens = ttnn.reshape(tokens, (1, seq_len))
+        else:
+            seq_len = tokens.shape[-1]
         tt_embeds = self.embed_tokens(tokens)
-        if len(tt_embeds.shape) == 3:
-            tt_embeds = ttnn.unsqueeze_to_4D(tt_embeds)
+        tt_embeds = self._reshape_prefill_embeds(tt_embeds, seq_len)
         tt_embeds = ttnn.to_layout(tt_embeds, ttnn.TILE_LAYOUT)
         return tt_embeds, tt_page_table, tt_chunk_page_table, tt_chunk_start_idx
 
@@ -1102,6 +1142,8 @@ class Gemma4Model:
             embeds_torch=embeds_torch,
             get_last_token=get_last_token,
             page_tables_per_layer=page_tables_per_layer,
+            batch_size=batch_size,
+            user_id=user_id,
         )
 
     def process_output_prefill(self, tt_out, last_token_idx):
@@ -1117,24 +1159,25 @@ class Gemma4Model:
         return torch_output[..., last_token_idx, : self.vocab_size]
 
     def process_logits_after_prefill_trace(self, hidden_states, last_token_idx):
-        """Apply the deferred lm_head for a traced prefill.
+        """Deferred lm_head for traced prefill.
 
-        The prefill trace returns post-norm hidden states ``[1,1,seq,hidden]``
-        (lm_head is skipped inside the trace — see ``__call__``'s
-        ``_prefill_trace_mode`` branch). Slice the 32-row tile containing
-        ``last_token_idx`` and run lm_head + softcap on just those rows, so the
-        262k-vocab matmul stays at 32 rows instead of the full padded sequence
-        (which would dominate TTFT and defeat the point of tracing). Returns
-        ``[1,1,32,vocab]`` logits — the same shape the old full-seq path sliced
-        to, so downstream (sampling / ``process_output_prefill``) is unchanged.
+        The trace returns post-norm hidden states ``[1,1,seq,hidden]`` when
+        ``_prefill_trace_mode`` is set (lm_head skipped inside the trace).
+        Slice the 32-row tile containing ``last_token_idx`` and run lm_head +
+        softcap on those rows only.
+
+        If the last dim is already vocab-sized (legacy / batched path that ran
+        lm_head inside the trace), only slice and return.
         """
         get_last_token = (last_token_idx // 32) * 32
-        h = ttnn.slice(
+        sliced = ttnn.slice(
             hidden_states,
             (0, 0, get_last_token, 0),
             (1, 1, get_last_token + 32, hidden_states.shape[-1]),
         )
-        return self._apply_lm_head(h, is_decode=False)
+        if sliced.shape[-1] == self.hidden_size:
+            return self._apply_lm_head(sliced, is_decode=False)
+        return sliced
 
     def switch_mode(self, mode):
         """Generator compatibility — no prefetcher to reinitialize."""

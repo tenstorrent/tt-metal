@@ -12,6 +12,7 @@
 #include "build.h"
 #include "ckernel.h"
 #include "dprint.h"
+#include "sfpu_stub.h"
 
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
