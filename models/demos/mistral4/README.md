@@ -60,8 +60,15 @@ PCCs are ~0.999. Passes the >0.98 full-depth gate.
 | Prefill TTFT @ ISL 128 / 1024 / 4096 | 226 ms / 655 ms / 2657 ms |
 | Prefill throughput @ ISL 1024 / 4096 | 1564 / 1541 tok/s |
 | Largest ISL measured (single-shot prefill) | 4096 (no L1 clash) |
+| Largest ISL with **chunked prefill** | 16384 (verified; paged k/v + chunked SDPA, single-shot caps ~4K) |
 
 Decode cost is **flat across ISL** (the decode step is a captured trace independent of context).
+
+**Chunked prefill** (`forward_prefill_chunked`, paged k/v + `chunked_scaled_dot_product_attention`)
+processes the prompt in chunk-token windows so L1 holds only one chunk's attention — lifting the
+single-shot ~4K cap to a verified **16K** (`test_m4_chunked_isl`; PCC 1.0 vs single-shot in
+`test_m4_chunked_prefill`/`test_m4_text_prefill_chunked`). Single-shot prefill stays the default ≤4K;
+generator integration + full-depth TTFT@16K + per-chunk trace are tracked follow-ups.
 
 **Multi-user batched decode** (traced, dense MoE) trades latency for throughput — the MoE streams
 each expert's weights once and applies them to all B tokens, so aggregate tok/s grows with batch
@@ -80,11 +87,12 @@ see status.
 ## Current status / remaining work
 - **Done:** full-depth logit correctness; e2e VLM correctness; on-device sampling; decode trace
   (replicated + sharded production mesh); fully on-device MoE; ISL perf sweep harness + measured
-  full-depth numbers.
-- **Remaining serving optimizations:** MoE **sparse dispatch** (top-4 compute instead of dense-local);
-  **paged compressed-latent KV** (deepseek-style, 12.8× smaller cache than expanded-kv) + **chunked
-  prefill** for >4K contexts (single-shot prefill is measured fine to 4K); **2CQ**; **sharded LM head**;
-  prefill trace. CI registration + rebase onto latest main.
+  full-depth numbers; **chunked prefill** (paged k/v, verified to 16K — lifts the single-shot ~4K cap);
+  sharded LM head.
+- **Remaining serving optimizations:** MoE **sparse dispatch** (top-4 compute instead of dense-local —
+  needs a 2×4 DP×EP mesh); chunked-prefill **generator integration + full-depth TTFT@16K + per-chunk
+  trace**; **paged compressed-latent KV** (12.8× smaller cache, op-execution-nondeterministic on this
+  BH build — see A6 below); **2CQ** (low value). CI registration done; rebase onto latest main.
 - **Dependency:** requires `transformers >= 5.10` (native `mistral4`/`mistral3`/`pixtral` + fp8 dequant).
 
 ## Reproduce
