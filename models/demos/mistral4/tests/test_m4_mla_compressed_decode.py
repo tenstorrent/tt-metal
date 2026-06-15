@@ -35,13 +35,17 @@ def _pos(p, mesh):
 
 
 @pytest.mark.xfail(
-    reason="A6 compressed-latent paged flash-MLA decode is COMPILE/RUN-NONDETERMINISTIC on this BH "
-    "setup: the same forward_decode_mla gives PCC ~0.9997 on some kernel compiles and ~0.02 on others "
-    "(observed repeatedly across cache-clears and compute_kernel_config changes). The math and op "
-    "contract are proven reliably (absorption CPU 1.0, op-only fully-populated-cache 0.9999), so this "
-    "is an op-execution reliability issue (suspected uninitialized read in "
-    "paged_flash_multi_latent_attention_decode or its sharded buffers, layout-dependent). Expanded-kv "
-    "decode (0.99971, fully reproducible) is the verified default. See MISTRAL4_DESIGN.md (A6).",
+    reason="A6 compressed-latent paged flash-MLA decode is COMPILE/DEVICE-STATE NONDETERMINISTIC on "
+    "this BH P150x8 setup: IDENTICAL default-config code + clean kernel cache yields PCC ~0.9997 on some "
+    "compiles/sessions and EXACTLY 0.020497 on others (sticky per session; verified both modes "
+    "repeatedly). Exhaustive isolation proved every sub-op CORRECT on good compiles (absorption CPU 1.0, "
+    "op-only full-cache 0.9999, device q_lat 0.99994, device latent 0.99993, sharded cache "
+    "write/readback 0.99993, q_lat _hshard feed 0.99987, output absorption 0.99994, assembled step-0 "
+    "0.99988, all 32 per-step 0.9997) — so the math + layout are right and the bimodality points to an "
+    "uninitialized/stale read inside paged_flash_multi_latent_attention_decode or its sharded L1 buffers "
+    "(an upstream op reliability issue, not a model bug; even single-call step-0 is bimodal). HiFi4 on "
+    "the batched absorption matmuls also corrupts to 0.02 (config-fragile). Expanded-kv decode (2-layer "
+    "0.99779, fully reproducible) is the verified-quality DEFAULT. See MISTRAL4_DESIGN.md (A6).",
     strict=False,
 )
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
