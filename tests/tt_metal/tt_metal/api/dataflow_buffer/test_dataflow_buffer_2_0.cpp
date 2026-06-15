@@ -2352,8 +2352,10 @@ TEST_F(MeshDeviceFixture, TensixDMTest1xDFB1Bx1B_blk4_entry2048_2_0) {
 // golden (capacity=num_entries/max(P,C), ntc=(P>=C)?P/C:1). Fan-in P>C uses a 32-entry ring so the
 // permutation is non-degenerate (at the minimal ring some P>C goldens collapse to identity).
 DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB1Bx2B_blk4, TENSIX, DM, 1, 2, 4, 16, false)
-DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB1Bx4B_blk4, TENSIX, DM, 1, 4, 4, 16, false)
-DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB2Bx4B_blk4, TENSIX, DM, 2, 4, 4, 16, false)
+// 32-entry ring so blocks_per_thread=2 → a real (non-degenerate) C=4 fan-out permutation. At ne=16 these
+// collapsed to identity (1 block/thread), so they didn't actually data-verify the C=4 fan-out read order.
+DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB1Bx4B_blk4, TENSIX, DM, 1, 4, 4, 32, false)
+DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB2Bx4B_blk4, TENSIX, DM, 2, 4, 4, 32, false)
 DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB2Bx1B_blk4, TENSIX, DM, 2, 1, 4, 16, false)
 DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB4Bx1B_blk4, TENSIX, DM, 4, 1, 4, 32, false)
 DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB4Bx2B_blk4, TENSIX, DM, 4, 2, 4, 32, false)
@@ -2408,6 +2410,10 @@ DFB_TRISC_BLOCKED_ALL_TEST_2_0(TensixDMTest1xDFB1Bx2A_blk4, 1, 2, 4, 16)  // P+C
 DFB_TRISC_BLOCKED_ALL_TEST_2_0(TensixDMTest1xDFB1Bx4A_blk4, 1, 4, 4, 16)  // P+C=5 (odd): 1->4 broadcast
 DFB_TRISC_BLOCKED_ALL_TEST_2_0(TensixDMTest1xDFB2Bx2A_blk4, 2, 2, 4, 16)  // P+C=4 (even): 2 pairs
 DFB_TRISC_BLOCKED_ALL_TEST_2_0(TensixDMTest1xDFB2Bx4A_blk4, 2, 4, 4, 16)  // P+C=6 (even): 2 pairs, P<C
+// P=4 (widest legal Tensix-producer remapper fan-out): 32-entry ring so each producer sub-ring holds 2
+// blocks (non-degenerate). Data-verified via the BLOCKED→ALL golden output[r]=input[(r%P)*cap+(r/P)].
+DFB_TRISC_BLOCKED_ALL_TEST_2_0(TensixDMTest1xDFB4Bx1A_blk4, 4, 1, 4, 32)  // P+C=5 (odd)
+DFB_TRISC_BLOCKED_ALL_TEST_2_0(TensixDMTest1xDFB4Bx2A_blk4, 4, 2, 4, 32)  // P+C=6 (even)
 
 // --- BLOCKED-producer → ALL-consumer (DM-DM, explicit sync) ---
 // The producer block-bursts into its contiguous per-producer sub-ring; every ALL consumer reads every
