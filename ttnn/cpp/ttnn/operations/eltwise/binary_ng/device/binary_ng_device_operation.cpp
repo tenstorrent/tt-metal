@@ -71,10 +71,6 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
     return false;
 }
 
-bool is_quant_op(const BinaryOpType val) {
-    return (val == BinaryOpType::QUANT) || (val == BinaryOpType::DEQUANT) || (val == BinaryOpType::REQUANT);
-}
-
 ShardSpec generate_shard_spec_all_cores(
     const Tensor& input_tensor_a, const Shape& padded_out_shape, const TensorMemoryLayout& memory_layout) {
     // Generate shard spec using all worker cores
@@ -587,7 +583,7 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     DataType dtype_b = input_tensor_b.dtype();
     bool is_sfpu_op = (ttnn::operations::binary_ng::utils::is_binary_sfpu_op(
         binary_op_type, dtype_a, dtype_b, fast_and_approximate_mode.value_or(false)));
-    bool is_quant_op = ttnn::operations::binary_ng::utils::is_quant_op(binary_op_type);
+    bool is_quant_op = ttnn::operations::binary::utils::is_quant_op(binary_op_type);
     bool is_where_op =
         (binary_op_type == ttnn::operations::binary_ng::BinaryOpType::WHERE_TTS ||
          binary_op_type == ttnn::operations::binary_ng::BinaryOpType::WHERE_TST);
@@ -719,7 +715,7 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     DataType dtype_a = input_tensor_a.dtype();
     bool is_sfpu_op = (ttnn::operations::binary_ng::utils::is_binary_sfpu_op(
         binary_op_type, dtype_a, dtype_a, fast_and_approximate_mode.value_or(false)));
-    bool is_quant_op = ttnn::operations::binary_ng::utils::is_quant_op(binary_op_type);
+    bool is_quant_op = ttnn::operations::binary::utils::is_quant_op(binary_op_type);
     MemoryConfig mem_config_actual = memory_config.value_or(
         output_tensor.has_value() ? output_tensor->memory_config() : input_tensor_a.memory_config());
 

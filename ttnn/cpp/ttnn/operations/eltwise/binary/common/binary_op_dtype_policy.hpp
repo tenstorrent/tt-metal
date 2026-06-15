@@ -48,8 +48,7 @@ inline constexpr std::array<DT, 0> unsupported{};
 }  // namespace dtype_sets
 
 // Dtypes allowed for tensor A. For symmetric ops both operands must match and use this set.
-// For asymmetric quant ops (QUANT: float A; REQUANT/DEQUANT: int32 A; all: float32 B)
-// see utils::is_dtype_combination_supported.
+// For asymmetric quant operand pairs see is_quant_operand_pair_supported.
 std::span<const tt::tt_metal::DataType> supported_tensor_a_dtypes(BinaryOpType op);
 
 bool is_supported(BinaryOpType op, tt::tt_metal::DataType dtype);
@@ -59,5 +58,8 @@ bool is_bfloat_tile_dtype(tt::tt_metal::DataType dtype);
 bool is_mixed_bfloat_tile_pair(tt::tt_metal::DataType dtype_a, tt::tt_metal::DataType dtype_b);
 
 bool supports_mixed_bfloat_tile_inputs(BinaryOpType op);
+
+// QUANT: float A × float32 scale B; REQUANT/DEQUANT: int32 A × float32 scale B.
+bool is_quant_operand_pair_supported(BinaryOpType op, tt::tt_metal::DataType dtype_a, tt::tt_metal::DataType dtype_b);
 
 }  // namespace ttnn::operations::binary::dtype_policy

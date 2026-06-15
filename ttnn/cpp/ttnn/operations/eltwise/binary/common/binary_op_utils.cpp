@@ -36,18 +36,31 @@ bool is_typecast(tt::tt_metal::DataType input, tt::tt_metal::DataType output) {
            (input == UINT32 && output == UINT16);
 }
 
+bool is_quant_op(BinaryOpType op) {
+    return op == BinaryOpType::QUANT || op == BinaryOpType::DEQUANT || op == BinaryOpType::REQUANT;
+}
+
+namespace {
+
+bool is_isclose_mixed_dtype_pair(DataType dtype_a, DataType dtype_b) {
+    return (dtype_a == DataType::FLOAT32 && dtype_b == DataType::BFLOAT16) ||
+           (dtype_a == DataType::BFLOAT16 && dtype_b == DataType::FLOAT32);
+}
+
+}  // namespace
+
 bool is_dtype_combination_supported(BinaryOpType op, DataType dtype_a, DataType dtype_b) {
+    if (is_quant_op(op)) {
+        return dtype_policy::is_quant_operand_pair_supported(op, dtype_a, dtype_b);
+    }
+
+    if (op == BinaryOpType::ISCLOSE) {
+        return dtype_a == dtype_b ? dtype_policy::is_supported(op, dtype_a)
+                                  : is_isclose_mixed_dtype_pair(dtype_a, dtype_b);
+    }
+
     if (dtype_a == dtype_b) {
-        switch (op) {
-            case BinaryOpType::QUANT:
-                // Scale (B) must be float32; same-dtype only when both operands are float32.
-                return dtype_a == DataType::FLOAT32 && dtype_policy::is_supported(op, dtype_a);
-            case BinaryOpType::DEQUANT:
-            case BinaryOpType::REQUANT:
-                // A is int32, B must be float32 — same dtype is never valid.
-                return false;
-            default: return dtype_policy::is_supported(op, dtype_a);
-        }
+        return dtype_policy::is_supported(op, dtype_a);
     }
 
     if (dtype_policy::is_mixed_bfloat_tile_pair(dtype_a, dtype_b) &&
@@ -55,19 +68,7 @@ bool is_dtype_combination_supported(BinaryOpType op, DataType dtype_a, DataType 
         return dtype_policy::is_supported(op, dtype_a) && dtype_policy::is_supported(op, dtype_b);
     }
 
-    // Asymmetric operand pairs: tensor A from policy, tensor B rules below.
-    switch (op) {
-        // Mixed compare is narrower than the same-dtype policy (float_and_int32 includes block floats).
-        case BinaryOpType::ISCLOSE:
-            return (dtype_a == DataType::FLOAT32 && dtype_b == DataType::BFLOAT16) ||
-                   (dtype_a == DataType::BFLOAT16 && dtype_b == DataType::FLOAT32);
-        // Quant family (A × float32 scale B): QUANT takes floating-point A;
-        // REQUANT/DEQUANT take int32 A. See ckernel_sfpu_quant.h.
-        case BinaryOpType::QUANT:
-        case BinaryOpType::DEQUANT:
-        case BinaryOpType::REQUANT: return dtype_policy::is_supported(op, dtype_a) && dtype_b == DataType::FLOAT32;
-        default: return false;
-    }
+    return false;
 }
 
 std::map<std::string, std::string> get_defines(

@@ -98,4 +98,8 @@ bool supports_mixed_bfloat_tile_inputs(BinaryOpType op) {
     }
 }
 
+bool is_quant_operand_pair_supported(BinaryOpType op, DataType dtype_a, DataType dtype_b) {
+    return is_supported(op, dtype_a) && dtype_b == DataType::FLOAT32;
+}
+
 }  // namespace ttnn::operations::binary::dtype_policy
