@@ -200,3 +200,39 @@ def test_generate_reports_writes_multicast_noc_util_column(tmp_path):
         row = next(reader)
         assert "MULTICAST NOC UTIL (%)" in reader.fieldnames
         assert row["MULTICAST NOC UTIL (%)"] == "25.0"
+
+
+def test_generate_reports_writes_noc_counter_bytes_column(tmp_path):
+    log_folder = tmp_path / "logs"
+    report_folder = tmp_path / "reports"
+    log_folder.mkdir(parents=True, exist_ok=True)
+
+    ops = {
+        1: {
+            "global_call_count": 1,
+            "device_id": 0,
+            "host_time": {"ns_since_start": 10, "exec_time_ns": 20},
+            "metal_trace_id": None,
+            "input_tensors": [],
+            "output_tensors": [],
+            "NOC BYTES FROM COUNTERS": 402653184,
+        }
+    }
+
+    process_ops_logs.generate_reports(
+        ops=ops,
+        deviceOps={},
+        traceOps={},
+        signposts={},
+        logFolder=log_folder,
+        outputFolder=report_folder,
+        date=False,
+        nameAppend=None,
+    )
+
+    report_csv = Path(report_folder) / "ops_perf_results.csv"
+    with report_csv.open("r", newline="") as csv_file:
+        reader = csv.DictReader(csv_file)
+        row = next(reader)
+        assert "NOC BYTES FROM COUNTERS" in reader.fieldnames
+        assert row["NOC BYTES FROM COUNTERS"] == "402653184"

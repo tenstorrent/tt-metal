@@ -38,6 +38,7 @@ from tracy.common import (
 )
 from tracy import device_post_proc_config
 from tracy.perf_counter_scope import sample_cores_per_op
+from tracy.noc_bandwidth import noc_bytes_from_trace_dir
 from tracy.perf_counter_analysis import (
     PERF_COUNTER_CSV_HEADERS,
     compute_device_only_metrics,
@@ -128,6 +129,10 @@ OPS_CSV_HEADER = [
     "DRAM BW UTIL PER CTRL (%)",
     "ETH BW UTIL (%)",
     "NPE CONG IMPACT (%)",
+    # On-device NoC bytes per op (sum over the op's cores), independent of tt-npe.
+    # BW % = bytes / (DEVICE FW DURATION [ns] x peak) is applied by the analysis
+    # layer, which knows the part's peak (see tools/tracy/noc_bandwidth.py).
+    "NOC BYTES FROM COUNTERS",
 ]
 
 _PERF_COUNTER_CSV_HEADERS_SET = set(PERF_COUNTER_CSV_HEADERS)
@@ -1067,6 +1072,19 @@ def append_device_data(
                     op["ETH BW UTIL (%)"] = op_npe_stats.result.getEthBwUtilPerCoreStr()
                     op["NPE CONG IMPACT (%)"] = round(op_npe_stats.result.getCongestionImpact(), 2)
             logger.info(f"Analyzed {ops_found} operations with tt-npe trace data.")
+        else:
+            # tt-npe absent: fall back to the on-device noc_status counters so a
+            # per-op NoC bytes column is still produced (BW % applied downstream).
+            noc_bytes = noc_bytes_from_trace_dir(logFolder)
+            if noc_bytes:
+                ops_found = 0
+                for op in chain(*host_ops_by_device.values(), trace_ops_by_augmented_id.values()):
+                    run_host_id = op["global_call_count"] & ((1 << TRACE_OP_ID_BITSHIFT) - 1)
+                    bucket = noc_bytes.get(run_host_id)
+                    if bucket is not None:
+                        ops_found += 1
+                        op["NOC BYTES FROM COUNTERS"] = bucket["total"]
+                logger.info(f"Analyzed {ops_found} operations with on-device NoC counters (tt-npe absent).")
 
     return host_ops_by_device, trace_ops_by_augmented_id
 
