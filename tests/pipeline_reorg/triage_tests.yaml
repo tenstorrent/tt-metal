@@ -25,6 +25,8 @@
       timeout: 11
     bh_p150b_civ2_viommu_prio:
       timeout: 11
+    bh_p150b_civ2_viommu:
+      timeout: 11
   owner_id: U09UX6JLA3U # Ognjen Nenezic
   team: debug
 
@@ -37,6 +39,8 @@
     wh_n150_civ2:
       timeout: 5
     bh_p150b_civ2_viommu_prio:
+      timeout: 5
+    bh_p150b_civ2_viommu:
       timeout: 5
   owner_id: U09UX6JLA3U # Ognjen Nenezic
   team: debug

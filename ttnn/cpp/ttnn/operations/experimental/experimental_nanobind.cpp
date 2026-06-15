@@ -83,6 +83,7 @@
 #include "ttnn/operations/experimental/deepseek_prefill/insert/insert_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/moe_grouped_topk_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache/update_padded_kv_cache_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/zero_padded_kv_cache/zero_padded_kv_cache_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/rotary_embedding_indexed_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/moe/deepseek_moe_gate/deepseek_moe_gate_nanobind.hpp"
 
@@ -187,6 +188,7 @@ void py_module(nb::module_& mod) {
     deepseek_prefill::detail::bind_extract(mod);
     deepseek_prefill::detail::bind_insert(mod);
     deepseek_prefill::detail::bind_update_padded_kv_cache(mod);
+    deepseek_prefill::detail::bind_zero_padded_kv_cache(mod);
     deepseek_prefill::detail::bind_rotary_embedding_indexed(mod);
 
     deepseek_moe_post_combine_tilize::detail::bind_deepseek_moe_post_combine_tilize(mod);
