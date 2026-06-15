@@ -338,10 +338,10 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         mcast_noc_y.push_back(device->worker_core_from_logical_core({core_start_offset.x, y}).y);
     }
 
-    // LayerNorm masks the host-tilized input at the E[x] site with a per-block mask (one partial tile
-    // at the end), which is only correct when the whole row width is on a single core (num_blocks == 1).
-    // RMSNorm instead masks the compute-produced squares with the per-block host mask, which carries
-    // each block's own validity, so it works when the reduction is split across cores (num_blocks > 1).
+    // Sharded LayerNorm does not support a non-tile-aligned width split across multiple cores: its
+    // E[x]-site masking is only wired for a single width shard (num_blocks == 1). RMSNorm instead masks
+    // the per-core squares (each core's mask carries its own validity), so it works when the reduction
+    // is split across cores (num_blocks > 1).
     TT_FATAL(
         !col_mask_needed || grid.num_blocks == 1 || rms_norm,
         "Sharded layer_norm (non-RMS) does not support a non-tile-aligned width ({}) split across "

@@ -68,7 +68,7 @@ void kernel_main() {
     constexpr uint32_t cb_ex_external2_id = tt::CBIndex::c_13;  // E[x^2] partials received from other cores
     const uint32_t cb_reduction_out = (!use_two_stage_reduce or is_second_stage_reader) ? cb_out : cb_ex2;
 #ifdef DO_COL_MASK
-    constexpr uint32_t cb_col_mask_packed = tt::CBIndex::c_19;  // host-built full-width column mask
+    constexpr uint32_t cb_col_mask_packed = tt::CBIndex::c_19;  // writer-generated full-width column mask
 #endif
 
     CircularBuffer cb_scaler(cb_scaler_id);
@@ -140,8 +140,8 @@ void kernel_main() {
     // not back into cb_in, because the X^2 pass below re-reads cb_in (which is also a buffer-backed
     // input CB that must not be mutated). The X^2 pass masks its own result separately, on the squares
     // (the DO_COL_MASK block after the X^2 loop), so both statistics end up reduced over the logical
-    // width only. cb_col_mask_packed is the host-built full-width mask (1.0 valid / 0.0 padding),
-    // buffer-backed (resident), read by tile index.
+    // width only. cb_col_mask_packed is the writer-generated full-width mask (1.0 valid / 0.0 padding),
+    // waited on above and read by tile index.
     reconfig_data_format(cb_in_id, cb_col_mask_packed);
     mul_tiles_init(cb_in_id, cb_col_mask_packed);
     cb_x2.reserve_back(num_tiles_per_block);
@@ -219,10 +219,10 @@ void kernel_main() {
 #ifdef DO_COL_MASK
     // The mean-of-squares reduce (RMSNorm's statistic, and LayerNorm's E[x^2]) squares the raw input,
     // which leaves the padding columns holding (pad_value)^2; zero them in place before the reduce so
-    // they do not enter the mean of squares. The host-built mask (cb_col_mask_packed) carries each
-    // block's own validity (full, partial, or all-padding tiles), tilized into the compute data format
-    // so it aligns with the compute-produced squared tiles in the FPU multiply. It is buffer-backed
-    // (resident), so it is read by tile index without a producer push / wait_front.
+    // they do not enter the mean of squares. The writer-generated mask (cb_col_mask_packed) carries
+    // each block's own validity (full, partial, or all-padding tiles), in the compute data format so
+    // it aligns with the compute-produced squared tiles in the FPU multiply. It was waited on near the
+    // top of the kernel and is read by tile index here (never popped).
     reconfig_data_format(cb_x2_id, cb_col_mask_packed);
     mul_tiles_init(cb_x2_id, cb_col_mask_packed);
     for (uint32_t t = 0; t < num_tiles_per_block; t++) {

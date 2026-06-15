@@ -856,8 +856,8 @@ void add_kernel_descriptors(
         // layernorm_sharded_welford.cpp) so the named arg can stay present unconditionally.
         {"cb_x_welford", tt::CBIndex::c_29},
         {"welford_fp32_alias", static_cast<uint8_t>(kernel_config.welford_fp32_alias ? 1 : 0)},
-        // Column mask for the legacy non-tile-aligned path. CB 14 (E[x] scratch) is LayerNorm-only;
-        // CB 19 (the host-built mask) is applied at every masking site and shared with RMSNorm.
+        // Column mask for the non-tile-aligned path. CB 14 (E[x] scratch) is LayerNorm-only; CB 19
+        // (the writer-generated mask) is applied at every masking site and shared with RMSNorm.
         {"cb_mask_scratch", tt::CBIndex::c_14},
         {"cb_col_mask_packed", tt::CBIndex::c_19},
     };
@@ -1139,7 +1139,7 @@ void add_cb_descriptors(
             cb_config.bfloat16_tile_size));
         if (cb_config.do_legacy_layernorm_col_mask) {
             // CB 14: scratch holding the masked input for the LayerNorm E[x] reduction (so cb_in stays
-            // intact for the (x - E[x]) pass). The mask itself is the host-built CB 19 below.
+            // intact for the (x - E[x]) pass). The mask itself is the writer-generated CB 19 below.
             program_descriptor.cbs.push_back(make_cb_descriptor(
                 cb_config.xmm_CB_size,
                 core_ranges.all_cores,
