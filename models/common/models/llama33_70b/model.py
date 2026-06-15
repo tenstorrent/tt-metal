@@ -299,10 +299,19 @@ class Llama33_70BExecutorRuntimeConfig:
     kv_cache_dtype: ttnn.DataType = ttnn.bfloat8_b
     optimizations: Any = None
 
-    def can_enable_trace(self, prefill_seq_len: int, num_cached_tokens: int) -> bool:
-        # Prefill trace capture hits TT_FATAL under LazyWeight + distributed norms.
-        # Decode trace remains enabled at the engine layer.
-        return False
+    def can_enable_trace(self, prefill_seq_len: int, num_cached_tokens: int = 0) -> bool:
+        # Mirror TTTv1's prefill-trace gate (model_config.get_trace_prefill_supported_seq_lens).
+        # For Llama-3.3-70B the model-specific T3K entry is [128] ONLY (model_config.py:2422) —
+        # unlike the family default [128, 1024] and unlike Llama-3.1-70B's [128, 1024, 2048, ...].
+        # So we trace 128-token prefill (batch-32 Short-Context workload) and leave everything else
+        # eager on BOTH stacks. Decode trace remains enabled at the engine layer regardless.
+        num_devices = int(self.cluster_shape[0]) * int(self.cluster_shape[1])
+        allowed = {8: (128,)}.get(num_devices, (128,))
+        return (
+            prefill_seq_len in allowed
+            and prefill_seq_len <= self.max_prefill_chunk_size
+            and prefill_seq_len <= self.max_seq_len
+        )
 
 
 @dataclass
