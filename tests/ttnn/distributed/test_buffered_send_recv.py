@@ -107,7 +107,7 @@ def _run_buffered_send_recv_case(
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": 2048}], indirect=True
 )
-@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize(
     "tensor_shape",
     [[968, 2048]],
@@ -120,9 +120,7 @@ def _run_buffered_send_recv_case(
 )
 @pytest.mark.parametrize(
     "num_connections",
-    [
-        1,
-    ],
+    [1, 2],
     ids=lambda v: f"conn{v}",
 )
 @pytest.mark.parametrize(

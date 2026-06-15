@@ -111,6 +111,18 @@ BufferedSendMeshWorkloadFactory::create_at(
         max_alignment);
     auto num_pages_per_packet = fabric_max_payload_size / socket_aligned_page_size;
 
+    // Bank-contiguous packing optimization (see send_direct_async): for an interleaved DRAM tensor,
+    // pages whose indices differ by num_banks live in the same bank at consecutive slots and are
+    // contiguous in memory. Each CB entry holds a super-block of (num_banks * num_pages_per_packet)
+    // pages; the reader issues one read per bank (overlapping across banks before a single barrier)
+    // and the writer drains the entry as num_banks combined fabric packets. Restricted to DRAM so the
+    // super-block CB stays small (num_banks ~12).
+    auto* input_buffer = input_tensor.buffer();
+    const bool is_interleaved = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED;
+    const bool is_dram = input_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    uint32_t num_banks = input_buffer->allocator()->get_num_banks(input_buffer->buffer_type());
+    uint32_t enable_bank_packing = (is_interleaved && is_dram && num_pages_per_packet > 1 && num_banks > 1) ? 1u : 0u;
+
     // Small pages (num_pages_per_packet > 0): pack multiple whole pages into one fabric packet.
     // Large pages (num_pages_per_packet == 0): split a single page across multiple fabric packets.
     uint32_t num_whole_packets_per_page = 0, partial_packet_size = 0;
@@ -124,7 +136,11 @@ BufferedSendMeshWorkloadFactory::create_at(
     uint32_t handshake_page_size = tt::align(static_cast<uint32_t>(64), max_alignment);
 
     uint32_t cb_num_pages = 2;
-    uint32_t cb_page_size = fabric_max_payload_size;
+    // For bank packing, each CB entry holds a full super-block: num_banks regions of
+    // num_pages_per_packet pages each (laid out at input_page_size stride, contiguous per bank).
+    uint32_t cb_page_size = enable_bank_packing
+                                ? static_cast<uint32_t>(num_banks * num_pages_per_packet * input_page_size)
+                                : fabric_max_payload_size;
 
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
@@ -160,7 +176,7 @@ BufferedSendMeshWorkloadFactory::create_at(
     // reuse and is not aliased by the data CBs, which the buffered ring relies on. Sharded one page
     // per sender core (HEIGHT_SHARDED) so every sender core sees the struct at the same L1 address,
     // mirroring how GlobalSemaphore allocates its persistent L1_SMALL buffer.
-    uint32_t info_buffer_page_size = 16 * sizeof(uint32_t);
+    uint32_t info_buffer_page_size = 256 * sizeof(uint32_t);
     auto info_shard_parameters = tt::tt_metal::ShardSpecBuffer(
         sender_core_range_set, {1, 1}, tt::tt_metal::ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
     tt::tt_metal::ShardedBufferConfig info_buffer_config = {
@@ -176,7 +192,7 @@ BufferedSendMeshWorkloadFactory::create_at(
 
     log_info(tt::LogOp, "Writing zeros to info buffer");
     // Zero-initialize the info buffer (blocking, so the reset lands before the program runs).
-    std::vector<uint32_t> zeros(num_cores * info_buffer_page_size / sizeof(uint32_t), 0);
+    std::vector<uint32_t> zeros(256 * num_cores, 0);
     auto info_mesh_buffer = info_buffer.get_mesh_buffer();
     tt::tt_metal::distributed::EnqueueWriteMeshBuffer(
         mesh_device->mesh_command_queue(), info_mesh_buffer, zeros, /*blocking=*/true);
@@ -191,14 +207,17 @@ BufferedSendMeshWorkloadFactory::create_at(
         num_whole_packets_per_page,  // num_whole_packets_per_page
         partial_packet_size,         // partial_packet_size
         fabric_max_payload_size,     // fabric_max_payload_size
+        num_banks,                   // num_banks
+        enable_bank_packing,         // enable_bank_packing
     };
     reader_compile_args.insert(reader_compile_args.end(), compile_time_args.begin(), compile_time_args.end());
 
-    // Reuse the stock sender_reader: it streams input pages into the data CB regardless of how the
-    // writer drains them.
+    // Reuse send_direct_async's reader: it streams input pages into the data CB, gathering
+    // bank-contiguous pages into super-block CB entries when bank packing is enabled.
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/send_async/device/kernels/sender_reader.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/send_direct_async/device/kernels/"
+        "sender_direct_reader.cpp",
         sender_core_range_set,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_args));
 
@@ -213,6 +232,8 @@ BufferedSendMeshWorkloadFactory::create_at(
         num_whole_packets_per_page,  // num_whole_packets_per_page
         partial_packet_size,         // partial_packet_size
         fabric_max_payload_size,     // whole_packet_size (fabric_max_payload_size)
+        num_banks,                   // num_banks
+        enable_bank_packing,         // enable_bank_packing
     };
     writer_compile_args.insert(writer_compile_args.end(), compile_time_args.begin(), compile_time_args.end());
 
