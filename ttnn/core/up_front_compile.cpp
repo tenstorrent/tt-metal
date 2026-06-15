@@ -77,14 +77,25 @@ std::vector<tt::tt_metal::Program*> ProgramCollector::program_pointers() {
 }
 
 void begin_collect(bool clear, bool real_alloc) {
+    // Reject nesting on top of an existing capture/hook: begin_capture only installs
+    // the NO_DISPATCH blocking hook when no hook is already present, so collecting
+    // under an active capture would leave the collector active WITHOUT dispatch
+    // actually blocked — ops would silently early-return from the funnel on a live
+    // device. This feature owns the capture frame exclusively.
+    TT_FATAL(
+        tt::tt_metal::GraphTracker::instance().get_hook() == nullptr,
+        "up_front_compile: begin_collect cannot run while a graph capture / hook is already active");
     if (clear) {
         ProgramCollector::instance().clear();
     }
-    ProgramCollector::set_active(true);
     // NO_DISPATCH: buffer allocations are mocked (addr 0) and nothing dispatches,
     // so the collect pass uses no real device memory. The funnel's stash + early
     // return (device_operation.hpp) handles program collection.
     ttnn::graph::GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH);
+    // Mark the collector active only AFTER capture (and thus the blocking hook) is
+    // successfully in place — if begin_graph_capture throws, the thread-local flag
+    // must not be left set, or subsequent ops would early-return without blocking.
+    ProgramCollector::set_active(true);
     if (real_alloc) {
         // Real-alloc collect: unblock the allocator so buffers get REAL (deterministic)
         // addresses — so address-baked kernels (e.g. pool reader_indices) and
@@ -92,18 +103,23 @@ void begin_collect(bool clear, bool real_alloc) {
         // program the real run will, and thus warm. Dispatch/write stay blocked (no compute).
         // Costs real device memory (~the real run's peak) and requires the dealloc lifecycle
         // to run (deallocate is host-side, so it does). See up_front_compile.hpp.
-        if (auto hook = tt::tt_metal::GraphTracker::instance().get_hook()) {
-            if (auto* ph = dynamic_cast<ttnn::graph::ProcessorHooks*>(hook.get())) {
-                ph->set_block_alloc(false);
-            }
-        }
+        // The NO_DISPATCH capture above installs this hook unconditionally, and
+        // begin_collect asserts no other hook pre-exists, so the cast cannot fail
+        // here — assert the invariant (debug-only) rather than silently degrading
+        // real_alloc to an addr-0 collect.
+        auto* ph = dynamic_cast<ttnn::graph::ProcessorHooks*>(tt::tt_metal::GraphTracker::instance().get_hook().get());
+        TT_ASSERT(ph != nullptr, "up_front_compile: real_alloc requires the NO_DISPATCH ProcessorHooks to be active");
+        ph->set_block_alloc(false);
     }
 }
 
 void end_collect() {
+    // Deactivate the collector FIRST so the thread-local active flag is reset even
+    // if end_graph_capture() throws — otherwise it would leak into subsequent ops
+    // on this thread, which would early-return from the funnel.
+    ProgramCollector::set_active(false);
     // Discard the JSON graph; we only used NO_DISPATCH for allocation blocking.
     ttnn::graph::GraphProcessor::end_graph_capture();
-    ProgramCollector::set_active(false);
 }
 
 CompileStats parallel_compile(tt::tt_metal::distributed::MeshDevice* device, int max_workers, bool clear) {
