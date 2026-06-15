@@ -691,12 +691,6 @@ def test_sampling_topk_single_device(
     device, seed, p, temperature, final_core_idx, num_internal_iterations, k, from_metadata, copy_probabilities
 ):
     # skip test_3
-    if is_blackhole():
-        pytest.skip(
-            "[SKIP REASON]: "
-            "test_sampling_topk_single_device produces wrong token selection and overflowed p_scores on Blackhole "
-            "(slow dispatch). Temporarily disabled until fix lands. Issue: #46981"
-        )
     """
     Test k=32 top-K sampling path for a single device and 101 cores.
 
@@ -704,6 +698,13 @@ def test_sampling_topk_single_device(
     The kernel must select a token from within this set, proving that the
     full pipeline (local top-K, global merge, softmax, temperature) works.
     """
+    if is_blackhole():
+        pytest.skip(
+            "[SKIP REASON]: "
+            "test_sampling_topk_single_device produces wrong token selection and overflowed p_scores on Blackhole "
+            "(slow dispatch). Temporarily disabled until fix lands. "
+            "https://github.com/tenstorrent/tt-metal/issues/46981"
+        )
     _run_sampling_topk_single_device(
         device,
         seed=seed,
