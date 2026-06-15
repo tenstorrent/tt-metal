@@ -1,4 +1,4 @@
-# Distributed RMSNorm fusion (Wan2.2 + LTX-2.3 AV): findings & speedups
+# Distributed RMSNorm fusion (Wan2.2 + LTX-2.3 AV + FLUX): findings & speedups
 
 Single source of truth for the fused distributed-RMSNorm op
 (`ttnn.experimental.wan_fused_distributed_rmsnorm`) — one device program that does
@@ -11,11 +11,12 @@ file, both models). `test_bench` = traced baseline-vs-fused timing (+CSV); `test
 = fused vs fp32-PyTorch ref AND vs on-device composite, plus 10× bit-exact determinism.
 **Spec / module mapping:** `distributed_rmsnorm_av.md` (which LTX modules fuse, shapes).
 
-**Adding a config:** one row in `_WAN_RAW` (Wan: `cid, seq_len, use_rope`) or one `mk(...)`
-line in `_make_cfgs` (LTX: `cid, rows, dim, head_dim, rope`) → flows into perf + PCC +
+**Adding a config:** one row in `_WAN_RAW` (Wan: `cid, seq_len, use_rope`), one `mk(...)`
+line (LTX), or one entry in the `_make_cfgs` FLUX branch → flows into perf + PCC +
 determinism automatically. A new mesh/topology = one row in `_BENCH_PARAMS`/`_CORR_PARAMS`
-`(mesh, device_params, model, tp, topology, links, tp_axis)`. Isolate with
-`RMS_BENCH_ONLY=`/`CORR_ONLY=`; pick methods with `RMS_BENCH_METHODS=`.
+`(mesh, device_params, model, tp, topology, links, tp_axis, full_mesh)` — `full_mesh=True`
+keeps the whole 2D mesh with TP on axis 1 (the 8-wide closed ring), used by FLUX TP=8 RING.
+Isolate with `RMS_BENCH_ONLY=`/`CORR_ONLY=`; pick methods with `RMS_BENCH_METHODS=`.
 
 Baseline = composite RMSNorm (`use_device_op=False`) + the *unfused* trailing op LTX uses
 today (`ttnn.addcmul` for adaLN, standalone `rotary_embedding_llama` for RoPE); for Wan the
@@ -76,6 +77,54 @@ nothing to fold in.
 > ring sweep can trip a `system_memory_manager` throw mid-run; gather big sweeps in small
 > `RMS_BENCH_ONLY` batches with `tt-smi -glx_reset` between each. Per-config error isolation
 > in `test_bench` keeps the table from being lost when one config fails.
+
+---
+
+## FLUX shapes (full dim 6144, 48 heads, head_dim 128, broadcast RoPE)
+
+RING only (no LINE bench). TP=4 RING = full 4×8 mesh, TP on the closed 4-axis (feat/dev
+1536, 12 heads/dev), replicate the 8-axis. TP=8 RING = full 4×8 mesh, TP on the closed
+8-axis (feat/dev 768, 6 heads/dev), replicate the 4-axis. Baseline = Wan-style composite
+(weight+RoPE fused in-op); fused = the single device op. µs/iter (traced, 4 links).
+
+| config | TP | rows | pattern | base | fused | ↑ |
+|---|---:|---:|---|---:|---:|---:|
+| flux_tp4_N512  | 4 | 512   | qk+rope | 117.99 | 92.07  | **1.28×** |
+| flux_tp4_N64   | 4 | 64    | qk+rope | 92.90  | 104.73 | 0.89× |
+| flux_tp4_N2048 | 4 | 2048  | qk+rope | 175.17 | 168.15 | 1.04× |
+| flux_tp4_N8192 | 4 | 8192  | qk+rope | 577.97 | 483.43 | **1.20×** |
+| flux_tp8_N1024 | 8 | 1024  | qk+rope | 123.07 | 107.70 | **1.14×** |
+| flux_tp8_N128  | 8 | 128   | qk+rope | 96.55  | 64.33  | **1.50×** |
+| flux_tp8_N4096 | 8 | 4096  | qk+rope | 279.75 | 255.43 | 1.10× |
+| flux_tp8_N16384| 8 | 16384 | qk+rope | 953.79 | 780.48 | **1.22×** |
+
+**Correctness + determinism:** all 8 `per_head_norm=False` configs pass on both TP=4 and
+TP=8 RING — `det=OK` (0/9, bit-exact), `pcc(fused:torch)` 99.985–100.00%, flagged NONE.
+Same big-shape-wins / small-shape-wash pattern as Wan/LTX (the N=64 TP=4 config is the one
+slight regression at 0.89×, a dispatch-bound shape with little to fold).
+
+> **Known issue — `per_head_norm=True` (FLUX.2 QK-norm) DEADLOCKS on `ring_size>1`.**
+> Per-head RMSNorm (reduce over head_dim per head, no AG → `is_tp_1`) works on a 1×1 mesh
+> (device-op unit test, up to 8 heads) but **hangs on a TP-sharded submesh** (4-/8-wide
+> ring). The test harness emits only `per_head_norm=False` FLUX configs by default; set
+> `WAN_FLUX_PHN=1` to also emit the (hanging) `per_head_norm=True` configs for fix work.
+>
+> *Root cause (DPRINT-localized):* the per-head PRE does `num_heads_per_device` back-to-back
+> row-reductions **within one chunk** (whole-row norm does exactly one per chunk, separated
+> by the AG-wait/POST boundary). After ~3 the compute math/pack pipeline wedges — the SAME
+> matmul-reduce → pack wedge already documented for the POST whole-row reduce (fixed there by
+> the FPU eltwise-add, commit `11bc6a0e056`). A two-pass DPRINT test was the clincher: all 12
+> per-head **squares** complete on every device (`pre_pass1_done` ×32), then the 12 **reduces**
+> wedge before producing any output.
+>
+> *Ruled out (each verified on-device):* (1) deepen `pre_intermediate_cb` 1→`num_heads`; (2)
+> force `num_workers=1`; (3) split PRE into squares-pass + reduces-pass; (4) `reduce_uninit()`
+> drain between reduces; (5) raw classic `reduce_tile` (non-matmul) instead of the matmul
+> `compute_kernel_lib::reduce`; (6) + explicit scaler `cb_wait_front`. All still hang in the
+> reduce fan-out. The POST eltwise-add fix doesn't transfer directly: POST sums `ring_size`
+> *tiles* (`add_tiles`), but the per-head PRE needs a *column* sum within a tile — an LLK-level
+> change (transpose+reduce, or a fused squared-row-reduce LLK). Needs compute-kernel/LLK
+> expertise, not black-box galaxy iteration.
 
 ---
 
