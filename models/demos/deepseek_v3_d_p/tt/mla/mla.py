@@ -403,9 +403,33 @@ class ttMLA:
         "wkv_b2": ("kv_lora_rank", "v_head_dim"),
     }
 
+    def _resolve_mm_cfg(self, weight_name: str, seq_len_local: int) -> dict | None:
+        """Resolve the tuned matmul config for this weight/seq_len, applying head-count and
+        chunked-mode gating. Returns None when no tuned config applies (caller falls back to defaults).
+        """
+        cfg = self.mm_configs[weight_name].get(seq_len_local) if is_blackhole() else None
+        # Some tuned configs are head-count specific (the chunked-prefill 640 set was tuned for Kimi's
+        # 64 heads; several program_configs overflow the grid at DeepSeek's 128). A config may declare
+        # the num_heads it was tuned for; when it doesn't match this model, fall back so a different
+        # variant at the same seq_len_local doesn't pick up a dimensionally-invalid program_config.
+        if cfg is not None and cfg.get("num_heads") not in (None, self.num_heads):
+            cfg = None
+        # The chunked-prefill 640 set is only dimensionally valid in chunked mode (e.g. wkv_b1/wkv_b2
+        # are true batched per-head matmuls over the per-head SDPA output; the single-shot path applies
+        # them to a batch=1 latent). Fall back to defaults when this ttMLA was not built for chunked.
+        if cfg is not None and cfg.get("chunked_only") and not self.is_chunked:
+            cfg = None
+        return cfg
+
+    def _get_act_mem_config(self, weight_name: str, seq_len_local: int) -> ttnn.MemoryConfig:
+        """Memory config for the activation (in0) feeding this weight's matmul, as tuned in the mm
+        config (act_mem_config). Defaults to DRAM when no tuned config applies."""
+        cfg = self._resolve_mm_cfg(weight_name, seq_len_local)
+        return cfg["act_mem_config"] if cfg is not None else ttnn.DRAM_MEMORY_CONFIG
+
     def _get_mm_kwargs(self, weight_name: str, seq_len_local: int) -> dict:
         """Get matmul kwargs from config, falling back to defaults."""
-        cfg = self.mm_configs[weight_name].get(seq_len_local) if is_blackhole() else None
+        cfg = self._resolve_mm_cfg(weight_name, seq_len_local)
         if cfg is None:
             if weight_name in self._BATCHED_MM_DIMS:
                 return self._make_batched_mm_kwargs(weight_name, seq_len_local)
@@ -464,6 +488,13 @@ class ttMLA:
     def _get_sdpa_program_config(self, seq_len_local: int) -> ttnn.SDPAProgramConfig:
         """Get SDPA program config, falling back to default chunk sizes."""
         cfg = self.sdpa_configs.get(seq_len_local)
+        # Like the matmul configs, an SDPA config may be head-count specific (the chunked 640 entry
+        # was tuned for Kimi's 64 heads). Fall back to defaults when it doesn't match this model.
+        if cfg is not None and cfg.get("num_heads") not in (None, self.num_heads):
+            cfg = None
+        # The 640 chunk tiling drives ring joint attention and is only valid in chunked mode.
+        if cfg is not None and cfg.get("chunked_only") and not self.is_chunked:
+            cfg = None
         q_chunk_size = cfg["q_chunk_size"] if cfg else 32
         k_chunk_size = cfg["k_chunk_size"] if cfg else 32
         return ttnn.SDPAProgramConfig(
@@ -591,12 +622,16 @@ class ttMLA:
             kv_actual_isl=kv_actual_isl,
         )
 
-        # ring_mla output is in kv_lora_rank (latent V) space; expand to v_head_dim per head.
+        # ring_mla output is in kv_lora_rank (latent V) space; expand to v_head_dim per head. Unlike the
+        # single-shot path this in0 is the per-head SDPA output (batch=local_heads), so the tuned 640
+        # config is a true batched MatmulMultiCoreReuse. When no tuned config matches (non-Kimi variant
+        # or non-blackhole) _get_mm_kwargs falls back to the 1D batched default.
+        # NOTE: Input is ideally L1 but DRAM comes from SDPA
         attn_out = ttnn.linear(
             attn_out,
             self.wkv_b2_weight,
             compute_kernel_config=self.default_compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **self._get_mm_kwargs("wkv_b2", seq_len_local),
         )
         return attn_out
 
@@ -637,6 +672,7 @@ class ttMLA:
         cache_batch_idx = cache_user_id * self.layer_num + cache_layer_idx
 
         # q_projection
+        # NOTE: input is ideally L1 for chunked, but hidden states memory config is set outside the module
         tt_q = ttnn.linear(
             hidden_states,
             self.q_a_proj_weight,
@@ -673,7 +709,7 @@ class ttMLA:
             tt_q,
             weight=self.q_a_layernorm_weight,
             epsilon=self.config.rms_norm_eps,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self._get_act_mem_config("q_b_proj", seq_len_local),
             compute_kernel_config=self.default_compute_kernel_config,
         )
         tt_q = ttnn.linear(
@@ -715,6 +751,7 @@ class ttMLA:
         ttnn.deallocate(tt_q_rope)
 
         # kv
+        # NOTE: input is ideally L1 for chunked, but hidden states memory config is set outside the module
         tt_kv = ttnn.linear(
             hidden_states,
             self.kv_a_proj_with_mqa_weight,
