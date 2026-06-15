@@ -789,7 +789,11 @@ class VoxtralTTSPipeline:
                 ttnn.deallocate(audio_bt37_tt)
 
             if include_waveform_decode:
-                latent_tt = self.audio_tokenizer.latent_from_codes_tt(codes_b37t_tt)
+                # Pass a clone: latent_from_codes_tt internally does to_layout(codes, ROW_MAJOR) then
+                # deallocates the result — which, when codes_b37t_tt is already row-major, aliases and
+                # frees the caller's tensor. We still need codes_b37t_tt below (to_torch / device return),
+                # so hand the tokenizer a disposable copy.
+                latent_tt = self.audio_tokenizer.latent_from_codes_tt(ttnn.clone(codes_b37t_tt))
                 if debug is not None:
                     debug.set("tokenizer.latent", ttnn.to_torch(latent_tt).squeeze(1).float())
                 mel_tt = self.audio_tokenizer.decode_latent_to_mel_b1tc(latent_tt)
