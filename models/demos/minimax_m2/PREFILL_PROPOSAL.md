@@ -11,7 +11,7 @@
 
 ---
 
-## 0. Status (living) — last updated 2026-06-12
+## 0. Status (living) — last updated 2026-06-15
 
 **Model (validated, single Wormhole, TP=1/EP=1/SP=1, random weights, seq=128):**
 attention block 0.9991 · router (decomposed) · experts 0.9990 · **full decoder layer
@@ -34,6 +34,26 @@ sigmoid+bias router, SiLU-SwiGLU experts, no biases/sinks/sliding-window) are do
 - **3 bugs fixed** in never-before-run paths: experts `Topology.Ring`→`ccl_manager.topology`
   (plain-MESH Galaxy needs FABRIC_1D + Linear, no torus); stale `SamplingGenerator(
   enable_internal_trace=)` kwarg; `load_state_dict` missing `trust_remote_code=True`.
+
+**NEW — on-device EP bridge + first full-model perf (2026-06-15):**
+- **On-device EP MoE bridge (host round-trip removed).** The DP-row↔EP-dispatch re-layout in
+  `mlp.py` was a device→host→device hop (correctness-only, ~2 hops/layer, non-traceable). Replaced
+  with DeepSeek's on-device `_moe_path`: `squeeze` to per-device `[1,S,H]` (dispatch reads rows via
+  `cluster_axis=0`), route per-row, `all_gather` output back to full emb. **No host hop → the whole
+  forward is trace-capturable.** Verified: `(4,8)` random smoke PASS + real-weights first token still
+  `'The'` (identical to host-bridge). Commit `085f140b587`.
+- **First full-model prefill perf (real 230B, traced, device-bound):** `(4,8)` TP=8 / EP=32 / DP=4,
+  62 layers / 256 experts / bfp4, seq **2048 × 4 prompts = 8192 tokens**, captured as ONE ttnn trace:
+  **~879 ms/prefill ⇒ ~9,319 tokens/s** (≈14 ms/layer). Measurement = host wall-clock of the blocking
+  traced replay (×10); cross-checked vs Tracy device-kernel on a 4-layer run (15.18 vs 15.02 ms, <1%)
+  ⇒ genuinely **device-bound** (real on-chip time, not host overhead). Test: `tests/perf/test_model_perf.py`.
+  - *Caveat — this is a FLOOR, not a tuned number.* Roofline ≈ **2–6% MFU**, i.e. we are almost
+    certainly **data-movement / fabric-bound, not compute-bound** (unconfirmed — needs an op-level
+    breakdown). Suspected levers: EP dispatch/combine all-to-all over **Linear** fabric (no torus on
+    this box); dispatch-buffer **capacity_factor 2.0** (≈2× token padding through the expert FFN);
+    bfp4 low arithmetic intensity; zero kernel-config tuning yet.
+  - *Engineering win:* removing the last host hop made the forward traceable; **tracing then collapsed
+    host-launch overhead ~15–25×** (the eager MoE op was host-launch-bound).
 
 **Done:** code + docs are MiniMax-only; program-config classes + identifiers all MiniMax-named.
 
@@ -61,13 +81,16 @@ serving needs the following, **none of which exist/are validated yet**:
 - **No KV migration** (prefill→decode disaggregation) — Tier-2, cross-team; endpoint is a NoOp stub.
 - **SP=4 (sequence parallel)** not done — needed for config (A) long-context single-prompt prefill.
 - **Decode is out of scope** (runs in tt-blaze) → this repo produces the **first token only**, not text.
-- **EP integration is TEST-grade:** the DP-row↔EP-dgs bridge in `mlp.py` is a **host round-trip**
-  (~2 hops/layer) — correctness-only; **production needs an on-device bridge**.
+- **EP DP-row↔EP-dgs bridge is now on-device** (host round-trip removed, 2026-06-15) → forward is
+  trace-capturable. EP integration is still otherwise TEST-grade (no chunked attn / paged KV / runner).
 - **bfp4 accuracy:** full-model logit PCC ~0.95 (argmax/top-5 correct). Fine for first-token;
   long generation accuracy under bfp4 unmeasured.
+- **Perf is a FLOOR, not tuned:** ~9.3K tok/s prefill, ≈2–6% MFU; bottleneck (fabric-comm vs DRAM bw
+  vs compute) **not yet measured** — needs an op-level device breakdown before optimizing.
 
 **Still not validated (one-liner):** chunked/paged attention, real paged-KV read-back, SP=4,
-runner/pipeline/scheduler, KV migration, long context, decode, on-device EP bridge, bfp4 long-gen.
+runner/pipeline/scheduler, KV migration, long context, decode, bfp4 long-gen, perf-bottleneck
+breakdown / tuning.
 
 ---
 
@@ -196,6 +219,8 @@ With SP=4 and 5 120-token chunks, each row processes **1 280 tokens per chunk**.
 ⚠️  slice_write instead of concat    experts/prefill.py:197   realloc every chunk
 ⚠️  reduce_scatter at MLP output     layer.py:146             allreduce wastes BW
 ⚠️  No prefill TTNN trace            model_config.py:160      Python overhead per fwd
+     (DEMONSTRATED traceable in tests/perf/test_model_perf.py — collapsed host overhead ~15-25x;
+      not yet wired into the production forward / generator)
 ⚠️  No warmup seq_lens               model_config.py:174      Issue #32818
 ⚠️  disable_batched_prefill = True   model_config.py:117
 ```
@@ -634,6 +659,14 @@ TP=8 via the transposed `(4,8)` (cols=TP=8, rows=SP=4), or `(1,8)` for pure TP=8
 | `test_ep_moe_vs_ref.py` | **EP MoE block** vs torch (256 exp 8/chip) — PASS 0.9803 | `(8,4)`/`(4,8)` | — |
 | `galaxy_ep_forward_smoke.py` | full model DP-attn + EP=32 fwd, random wts (runs/finite) | `(4,8)` | — |
 | `galaxy_first_token_ep.py` | **real weights, EP=32, 4 prompts → first tokens**; verifies prompt0 vs oracle (PASS: 758 'The') | `(4,8)` | `HF_MODEL` |
+| `tests/perf/test_ep_moe_perf.py` | EP MoE op device-perf (eager + `TRACE=1`) — ~8 ms/layer device-bound | `(4,8)` | — |
+| `tests/perf/test_model_perf.py::test_model_fwd` | **full-model traced prefill perf** (wall-clock of replay). `REAL=1 PERF_SEQ=2048 TRACE_REGION=1000000000 HF_MODEL=…` → ~9.3K tok/s; random/reduced via `PERF_LAYERS`/`PERF_EXPERTS` | `(4,8)` | `HF_MODEL` for `REAL=1` |
+
+> **Perf-test gotchas:** run `test_model_fwd` directly (not the Tracy `run_device_perf` wrapper) for the
+> real model — Tracy's per-op device CSV overflows at 62 layers × 256 experts. Each decoder layer frees
+> its own input buffer, so the harness keeps the input persistent and runs each forward on `ttnn.clone(x)`.
+> Bump `trace_region_size` (env `TRACE_REGION`) to ~1 GB for 62 layers. If a run hangs/fails, kill the whole
+> tracy process tree first — a leftover holds `CHIP_IN_USE_*_PCIe` and the next run dies on a 300 s timeout.
 
 ### 14.3.1 Local-only vs pushable
 The `tests/unit/*.py` files **are committed** (they need only `HF_MODEL` = the small modeling
