@@ -255,8 +255,6 @@ def test_eltwise_binary_reuse_dest_quasar(
             )
         else:
             math_format_for_fidelity = formats.output_format
-    else:
-        math_format_for_fidelity = None
 
     for out_t in range(tile_cnt_output):
         block_idx = out_t // output_tiles_in_block

@@ -2433,9 +2433,6 @@ class EltwiseBinaryGolden(FidelityMasking):
                 else:
                     result += phase_result
         else:
-            if keep_float32:
-                t1 = t1.to(torch.float32)
-                t2 = t2.to(torch.float32)
             result = self.ops[op](t1, t2)
 
         return result

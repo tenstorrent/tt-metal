@@ -573,10 +573,7 @@ ALWI void unpack_tilizeA_B_uninit(uint32_t icb) { UNPACK((llk_unpack_tilizeA_B_u
 
 #else
 
-ALWI void tilize_uninit(uint32_t icb, uint32_t ocb) {
-    (void)icb;
-    (void)ocb;
-}
+ALWI void tilize_uninit([[maybe_unused]] uint32_t icb, [[maybe_unused]] uint32_t ocb) {}
 
 #endif  // !ARCH_QUASAR
 

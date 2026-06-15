@@ -6,7 +6,6 @@
 
 #include <cmath>
 #include <cstdint>
-#include <cstring>
 #include <random>
 #include <vector>
 
@@ -25,6 +24,7 @@
 #include <tt-logger/tt-logger.hpp>
 
 #include "device_fixture.hpp"
+#include "mxfp_dram_page_utils.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/float8_utils.hpp"
 
@@ -34,43 +34,9 @@ using std::vector;
 
 namespace unit_tests::llk::mxfp4_typecast {
 
-static uint32_t align_up(uint32_t value, uint32_t alignment) {
-    return alignment ? ((value + alignment - 1) / alignment) * alignment : value;
-}
-
-static vector<uint32_t> pad_dram_pages(
-    const vector<uint32_t>& packed,
-    uint32_t num_tiles,
-    uint32_t tile_size,
-    uint32_t dram_page_stride,
-    uint32_t num_banks,
-    uint32_t bank_id) {
-    vector<uint32_t> padded(num_tiles * num_banks * dram_page_stride / sizeof(uint32_t), 0);
-    auto* dst = reinterpret_cast<uint8_t*>(padded.data());
-    const auto* src = reinterpret_cast<const uint8_t*>(packed.data());
-    for (uint32_t tile = 0; tile < num_tiles; tile++) {
-        uint32_t page = tile * num_banks + bank_id;
-        std::memcpy(dst + page * dram_page_stride, src + tile * tile_size, tile_size);
-    }
-    return padded;
-}
-
-static vector<uint32_t> compact_dram_pages(
-    const vector<uint32_t>& padded,
-    uint32_t num_tiles,
-    uint32_t tile_size,
-    uint32_t dram_page_stride,
-    uint32_t num_banks,
-    uint32_t bank_id) {
-    vector<uint32_t> packed(num_tiles * tile_size / sizeof(uint32_t), 0);
-    auto* dst = reinterpret_cast<uint8_t*>(packed.data());
-    const auto* src = reinterpret_cast<const uint8_t*>(padded.data());
-    for (uint32_t tile = 0; tile < num_tiles; tile++) {
-        uint32_t page = tile * num_banks + bank_id;
-        std::memcpy(dst + tile * tile_size, src + page * dram_page_stride, tile_size);
-    }
-    return packed;
-}
+using mxfp_typecast_utils::align_up;
+using mxfp_typecast_utils::compact_dram_pages;
+using mxfp_typecast_utils::pad_dram_pages;
 
 // Run a datacopy kernel with different input/output formats.
 // For Quasar, data is moved via DataflowBuffers (DFBs) and the hardware
