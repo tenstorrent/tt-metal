@@ -12,6 +12,7 @@
 #include "ckernel_sfpu_sqrt_custom.h"
 #include "ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_log.h"
+#include "ckernel_sfpu_log1p.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "sfpi.h"
 
@@ -788,41 +789,90 @@ inline void _calculate_cosine_(const int iterations) {
     }
 }
 
+template <bool is_fp32_dest_acc_en>
+sfpi_inline sfpi::vFloat log1p_or_log_dispatch(sfpi::vFloat arg, sfpi::vInt use_log1p) {
+    sfpi::vFloat res;
+    v_if(use_log1p) {
+        res = calculate_log1p_fp32<is_fp32_dest_acc_en>(arg);
+    }
+    v_else {
+        res = _calculate_log_body_no_init_(arg);
+    }
+    v_endif;
+    return res;
+}
+
 // https://en.wikipedia.org/wiki/Inverse_hyperbolic_functions#Definitions_in_terms_of_logarithms
 // acosh(x) = log(x + sqrt(x^2 - 1))
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_acosh() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat inp = sfpi::dst_reg[0];
-        sfpi::vFloat res;
-        v_if(inp < sfpi::vConst1) { res = std::numeric_limits<float>::quiet_NaN(); }
-        v_elseif(inp == sfpi::vConst1) { res = sfpi::vConst0; }
+        sfpi::vFloat x = sfpi::dst_reg[0];
+        v_if(x < sfpi::vConst1) { sfpi::dst_reg[0] = std::numeric_limits<float>::quiet_NaN(); }
+        v_elseif(x == sfpi::vConst1) { sfpi::dst_reg[0] = sfpi::vConst0; }
         v_else {
-            sfpi::vFloat tmp = inp * inp;
-            tmp = tmp - sfpi::vConst1;
-            tmp = _calculate_sqrt_body_<APPROXIMATION_MODE>(tmp);
-            tmp = tmp + inp;
-            res = _calculate_log_body_no_init_(tmp);
+            sfpi::vFloat arg;
+            sfpi::vInt use_log1p;
+            v_if(x < 1.5f) {
+                sfpi::vFloat x_m1 = x - sfpi::vConst1;
+                sfpi::vFloat x_p1 = x + sfpi::vConst1;
+                arg = x_m1 + _calculate_sqrt_body_<APPROXIMATION_MODE>(x_m1 * x_p1);
+                use_log1p = 1;
+            }
+            v_elseif(x < 268435456.0f) {
+                sfpi::vFloat tmp = x * x;
+                tmp = tmp - sfpi::vConst1;
+                arg = x + _calculate_sqrt_body_<APPROXIMATION_MODE>(tmp);
+                use_log1p = 0;
+            }
+            v_else {
+                arg = 2.0f * x;
+                use_log1p = 0;
+            }
+            v_endif;
+            
+            sfpi::vFloat res = log1p_or_log_dispatch<is_fp32_dest_acc_en>(arg, use_log1p);
+            
+            if constexpr (!is_fp32_dest_acc_en) {
+                res = sfpi::convert<sfpi::vFloat16b>(res, sfpi::RoundMode::NearestEven);
+            }
+            sfpi::dst_reg[0] = res;
         }
         v_endif;
-        sfpi::dst_reg[0] = res;
         sfpi::dst_reg++;
     }
 }
 
 // asinh(x) = log(x + sqrt(x^2 + 1))
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_asinh() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat inp = sfpi::dst_reg[0];
-        sfpi::vFloat tmp = inp * inp + sfpi::vConst1;
-        tmp = _calculate_sqrt_body_<APPROXIMATION_MODE>(tmp);
-        tmp = tmp + sfpi::abs(inp);
-        auto res = _calculate_log_body_no_init_(tmp);
-        v_if(inp < sfpi::vConst0) { res = -res; }
+        sfpi::vFloat x = sfpi::dst_reg[0];
+        sfpi::vFloat a = sfpi::abs(x);
+        sfpi::vFloat res;
+        v_if(a < 0.5f) {
+            sfpi::vFloat a2 = a * a;
+            sfpi::vFloat arg = a + a2 * _sfpu_reciprocal_<APPROXIMATION_MODE ? 0 : 2>(sfpi::vConst1 + _calculate_sqrt_body_<APPROXIMATION_MODE>(sfpi::vConst1 + a2));
+            res = calculate_log1p_fp32<is_fp32_dest_acc_en>(arg);
+        }
+        v_elseif(a < 268435456.0f) {
+            sfpi::vFloat arg = a + _calculate_sqrt_body_<APPROXIMATION_MODE>(sfpi::vConst1 + a * a) - sfpi::vConst1;
+            res = calculate_log1p_fp32<is_fp32_dest_acc_en>(arg);
+        }
+        v_else {
+            sfpi::vFloat ln2 = 0.6931471805599453f; // LOG_TWO
+            res = ln2 + _calculate_log_body_no_init_(a);
+        }
         v_endif;
+        
+        v_if(x < sfpi::vConst0) { res = -res; }
+        v_endif;
+        
+        if constexpr (!is_fp32_dest_acc_en) {
+            res = sfpi::convert<sfpi::vFloat16b>(res, sfpi::RoundMode::NearestEven);
+        }
         sfpi::dst_reg[0] = res;
         sfpi::dst_reg++;
     }
@@ -833,42 +883,53 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_atanh() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat inp = sfpi::dst_reg[0];
-        sfpi::vFloat abs_inp = sfpi::abs(inp);
+        sfpi::vFloat x = sfpi::dst_reg[0];
+        sfpi::vFloat abs_x = sfpi::abs(x);
         sfpi::vFloat res;
-        v_if(abs_inp > sfpi::vConst1) { res = std::numeric_limits<float>::quiet_NaN(); }
-        v_elseif(abs_inp == sfpi::vConst1) {
+        
+        v_if(abs_x > sfpi::vConst1) { res = std::numeric_limits<float>::quiet_NaN(); }
+        v_elseif(abs_x == sfpi::vConst1) {
             sfpi::vFloat inf = std::numeric_limits<float>::infinity();
-            res = sfpi::copysgn(inf, inp);
+            res = sfpi::copysgn(inf, x);
         }
         v_else {
-            sfpi::vFloat num = sfpi::vConst1 + inp;
-            sfpi::vFloat den = sfpi::vConst1 - inp;
-            sfpi::vFloat tmp = _sfpu_reciprocal_<APPROXIMATION_MODE ? 0 : 2>(den);
-            tmp = sfpi::copysgn(tmp, den);
-            if constexpr (is_fp32_dest_acc_en || APPROXIMATION_MODE) {
-                den = tmp;
-            } else {
-                den = sfpi::convert<sfpi::vFloat16b>(tmp, sfpi::RoundMode::NearestEven);
+            sfpi::vFloat arg;
+            v_if(abs_x < 0.5f) {
+                sfpi::vFloat num = 2.0f * x;
+                sfpi::vFloat den = sfpi::vConst1 - x;
+                arg = num * _sfpu_reciprocal_<APPROXIMATION_MODE ? 0 : 2>(den);
+                res = 0.5f * calculate_log1p_fp32<is_fp32_dest_acc_en>(arg);
             }
-            num = num * den;
-            den = _calculate_log_body_no_init_(num);
-            res = 0.5f * den;
+            v_else {
+                sfpi::vFloat num = 2.0f * abs_x;
+                sfpi::vFloat den = sfpi::vConst1 - abs_x;
+                arg = num * _sfpu_reciprocal_<APPROXIMATION_MODE ? 0 : 2>(den);
+                res = 0.5f * calculate_log1p_fp32<is_fp32_dest_acc_en>(arg);
+                v_if(x < sfpi::vConst0) { res = -res; }
+                v_endif;
+            }
+            v_endif;
         }
         v_endif;
+        
+        if constexpr (!is_fp32_dest_acc_en) {
+            res = sfpi::convert<sfpi::vFloat16b>(res, sfpi::RoundMode::NearestEven);
+        }
         sfpi::dst_reg[0] = res;
         sfpi::dst_reg++;
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void init_inverse_hyperbolic() {
     sqrt_init<APPROXIMATION_MODE>();
+    log1p_init<APPROXIMATION_MODE, false, is_fp32_dest_acc_en>();
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void init_atanh() {
     _init_sfpu_reciprocal_<APPROXIMATION_MODE>();
+    log1p_init<APPROXIMATION_MODE, false, is_fp32_dest_acc_en>();
 }
 
 }  // namespace ckernel::sfpu
