@@ -36,6 +36,11 @@ import ttnn
 
 _HANDSHAKE_PAGE_SIZE = 4096  # bytes; small — direct-mode socket only uses FIFO for the handshake
 
+# send_direct_async runs one worker core per SocketConnection, round-robined onto
+# the adjacent chip pair's 2 forwarding fabric links. Ported from trace branch
+# (commit 7009cd6a47c). Set PI05_SOCK_CONN to A/B (1 = original single-conn).
+_N_SOCK_CONN = int(os.environ.get("PI05_SOCK_CONN", "2"))
+
 
 def send_via_host(src_tensor, dst_submesh, memory_config=None):
     """LEGACY host-bounce path (v1). Kept for A/B testing via PI05_GLX_TRANSPORT=host."""
@@ -75,14 +80,18 @@ class SocketTransport:
         key = (id(src_mesh), id(dst_mesh))
         pair = self._pairs.get(key)
         if pair is None:
-            # For 1x1 submeshes, the only coordinate is (0,0). One connection per
-            # socket — direct mode only needs a single page for the handshake.
-            conn = ttnn.SocketConnection(
-                ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(0, 0)),
-                ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(0, 1)),
-            )
+            # For 1x1 submeshes, the only mesh coordinate is (0,0). One worker
+            # core per connection (sender (i,0) -> receiver (i,1)); N connections
+            # spread send_direct_async across the chip pair's 2 fabric links.
+            conns = [
+                ttnn.SocketConnection(
+                    ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(i, 0)),
+                    ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(i, 1)),
+                )
+                for i in range(_N_SOCK_CONN)
+            ]
             mem = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, _HANDSHAKE_PAGE_SIZE * 4)
-            cfg = ttnn.SocketConfig([conn], mem)
+            cfg = ttnn.SocketConfig(conns, mem)
             pair = ttnn.create_socket_pair(src_mesh, dst_mesh, cfg)
             self._pairs[key] = pair
         return pair

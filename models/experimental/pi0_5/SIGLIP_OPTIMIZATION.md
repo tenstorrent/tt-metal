@@ -204,3 +204,24 @@ latency** (math-bound; measured 1.00× and they OOM because the fc1 weight
 doesn't fit in L1 next to block-sharded activations). They are kept as gated,
 measured negative results — use `minimal_matmul` (see the MLP sweep) if you ever
 need to unblock the CB clash, but expect no speedup for SigLIP.
+
+## WIN 5 — multi-connection fabric sockets (`PI05_SOCK_CONN=2`, default ON)
+
+Ported from branch `pi05_openpi_upstream_bh_glx_trace` (commit `7009cd6a47c`).
+`SocketTransport._pair` now opens **N `SocketConnection`s** (sender core `(i,0)`
+→ receiver core `(i,1)`) instead of one, so `send_direct_async` spreads the
+inter-chip transfer across the adjacent chip pair's **2 forwarding fabric
+links** (~2× bandwidth, 2.7→5.3 GB/s).
+
+A/B (cumulative-optimized config, this 4×4 island):
+
+| metric | `PI05_SOCK_CONN=1` | `PI05_SOCK_CONN=2` | delta |
+|---|---|---|---|
+| single-shot | 7.789 ms | **7.525 ms** | −3.4% |
+| streaming | 2.255 ms/frame (443 fps) | **2.081 ms/frame (481 fps)** | −7.7% |
+| PCC vs torch | 0.9992 | 0.9990 | both PASS |
+
+`PI05_SOCK_CONN=3` hard-fails (`Available links: 2, Requested pairs: 3`) — there
+are exactly 2 fabric links between adjacent BH-GLX chips, so **2 is both the
+optimum and the hardware ceiling**. Default is 2; set `PI05_SOCK_CONN=1` to A/B
+the original single-connection path.
