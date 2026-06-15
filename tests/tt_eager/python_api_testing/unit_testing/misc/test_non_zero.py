@@ -53,8 +53,7 @@ def test_indexed_slice(seed, B, b, tt_dtype, device):
     torch_input_tensor = torch.concat((zero_tensor, non_zero_tensor), dim=3)
     torch_input_tensor = torch_input_tensor[:, :, :, torch.randperm(torch_input_tensor.size(3))]
 
-    golden_output = torch.nonzero(torch_input_tensor, as_tuple=True)[3]
-    golden_output = golden_output.unsqueeze(0).unsqueeze(0).unsqueeze(0).to(torch.int32)
+    golden_output = torch.nonzero(torch_input_tensor, as_tuple=False).int()
 
     input_tt = ttnn.from_torch(torch_input_tensor, dtype=tt_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
@@ -62,9 +61,13 @@ def test_indexed_slice(seed, B, b, tt_dtype, device):
 
     num_indices_tt, indices_tt = ttnn.nonzero(input_tt, memory_config=mem_config, queue_id=0)
 
-    num_non_zeros = ttnn.to_torch(ttnn.to_layout(num_indices_tt, ttnn.ROW_MAJOR_LAYOUT))[0, 0, 0, 0].item()
+    num_non_zeros = int(ttnn.to_torch(ttnn.to_layout(num_indices_tt, ttnn.ROW_MAJOR_LAYOUT))[0, 0, 0, 0].item())
     assert num_non_zeros == B - b
 
-    a_pt = ttnn.to_torch(ttnn.to_layout(indices_tt, ttnn.ROW_MAJOR_LAYOUT))[:, :, :, :num_non_zeros].to(torch.int32)
+    tt_indices = (
+        ttnn.to_torch(ttnn.to_layout(indices_tt, ttnn.ROW_MAJOR_LAYOUT))[0, 0, 0, : num_non_zeros * 4]
+        .reshape(num_non_zeros, 4)
+        .int()
+    )
 
-    assert torch.equal(golden_output, a_pt)
+    assert torch.equal(golden_output, tt_indices)
