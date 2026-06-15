@@ -150,6 +150,7 @@ def test_eltwise_binary(
         acc_to_dest=acc_to_dest,
         tile_shape=_TILE_SHAPE,
         num_tiles_per_accumulation=num_tiles_per_accumulation,
+        dest_acc=dest_acc,
     )
 
     configuration = TestConfig(
