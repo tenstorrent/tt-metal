@@ -15,6 +15,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 
 # from models.demos.deepseek_v3_d_p.reference.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
@@ -56,7 +57,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
             },
-            1,
+            2 if is_blackhole() else 1,
             ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="linear"),
             id="linear-4",
@@ -67,7 +68,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
             },
-            1,
+            2 if is_blackhole() else 1,
             ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
             id="linear-8",
@@ -78,7 +79,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
             },
-            1,
+            2 if is_blackhole() else 1,
             ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
             id="mesh-4x2",
@@ -90,7 +91,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
                 "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
                 "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
             },
-            1,
+            2 if is_blackhole() else 1,
             ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
             id="fabric2d-mesh-4x2",
@@ -101,7 +102,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
             },
-            1,
+            2 if is_blackhole() else 1,
             ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="mesh-2x4",
