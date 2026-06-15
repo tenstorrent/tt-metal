@@ -212,7 +212,9 @@ If no dimension is provided, sum is computed over all dimensions yielding a sing
 </tr>
 </tbody>
 </table>
-<p>The output tensor will be in TILE layout and have the same dtype as the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</p>
+<p>The output tensor will be in TILE layout and have the same dtype as the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.
+Exception: for sum and mean, 4D ROW_MAJOR BFLOAT16/FLOAT32 inputs with INTERLEAVED memory
+config reduced along the last (-1) or second-to-last (-2) dimension preserve ROW_MAJOR layout.</p>
 </div>
 <dl class="simple">
 <dt>Memory Support:</dt>
