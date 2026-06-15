@@ -21,7 +21,39 @@ When this skill is invoked as part of vLLM integration or optimized-vLLM, do not
 
 Do not run Tracy or device-profiler collection on a full-model stack with every layer present. Full-stack profiling can create multi-GB profiler dumps, overflow device-profiler buffers, and distort the measurement. For full-model profiling, build a reduced profiling variant with one real layer of each layer kind and the real surrounding path: embeddings or input projection, the representative layers, final norm, LM head, sampling or token feedback when relevant, real KV-cache/page-table shapes, and the same trace path. Capture one warmed traced decode replay, or the smallest signposted prefill/decode window that answers the question. Use this reduced-layer profile for `tt-perf-report`; use the complete model only for end-to-end timing and correctness.
 
-Run watcher and profiler evidence as separate hardware runs for non-vLLM optimization. Do not combine `TT_METAL_WATCHER` with device-profiler collection. Do not run profiler evidence in vLLM serving stages at all. On T3K, the dangerous pattern seen in Phi-3.5 Mini experiments was: a vLLM/serving profiler failure or watcher failure, followed by a full in-process 32-layer serving-adapter profile under device-profiler env such as `TT_METAL_DEVICE_PROFILER=1`, `TT_METAL_PROFILER_CPP_POST_PROCESS=1`, `TT_METAL_PROFILER_MID_RUN_DUMP=1`, `TT_METAL_PROFILER_TRACE_TRACKING=1`, and `TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=5000`, then explicit `ttnn.ReadDeviceProfiler(mesh)` readback. With signatures such as `Timeout waiting for Ethernet core service remote IO request`, `ETH core heartbeat check failed`, `Unexpected ERISC Response Flags`, `Read 0xffffffff from ARC scratch`, or ARC lock/readback waits, this can leave the T3K undiscoverable: `tt-smi -ls --local` hangs and `tt-smi -r` may hang. If this happens, stop profiler collection, preserve the logs, mark the evidence `hardware-profiler-limited`, and ask the monitor/operator to reboot the physical Docker host. A direct host `sudo /sbin/reboot` recovered `wh-lb-90`; `ird reboot --force` reported success there but did not reset host uptime or fix `tt-smi`.
+Run watcher and profiler evidence as separate hardware runs for non-vLLM optimization. Do not combine `TT_METAL_WATCHER` with device-profiler collection. Do not run profiler evidence in vLLM serving stages at all. On T3K, the dangerous pattern seen in Phi-3.5 Mini experiments was: a vLLM/serving profiler failure or watcher failure, followed by a full in-process 32-layer serving-adapter profile under device-profiler env such as `TT_METAL_DEVICE_PROFILER=1`, `TT_METAL_PROFILER_CPP_POST_PROCESS=1`, `TT_METAL_PROFILER_MID_RUN_DUMP=1`, `TT_METAL_PROFILER_TRACE_TRACKING=1`, and `TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=5000`, then explicit `ttnn.ReadDeviceProfiler(mesh)` readback. With signatures such as `Timeout waiting for Ethernet core service remote IO request`, `ETH core heartbeat check failed`, `Unexpected ERISC Response Flags`, `Read 0xffffffff from ARC scratch`, or ARC lock/readback waits, this can leave the T3K undiscoverable: `tt-smi -ls --local` hangs and `tt-smi -r` may hang. If this happens, stop profiler collection, preserve the logs, mark the evidence `hardware-profiler-limited`, and run the T3K reset recovery procedure below before declaring the optimization stage blocked.
+
+## T3K Reset Recovery
+
+ARC, ERISC, remote Ethernet, or `tt-smi` discovery/reset failures during optimization are recoverable infrastructure events until the recovery steps below fail. Do not mark the model implementation blocked just because a board is temporarily undiscoverable after watcher, profiler, serving, or reset trouble.
+
+When you see signatures such as `Timeout waiting for Ethernet core service remote IO request`, `ETH core heartbeat check failed`, `Unexpected ERISC Response Flags`, `Read 0xffffffff from ARC scratch`, ARC lock/readback waits, `tt-smi -ls --local` hanging, or a failed `tt-smi` reset:
+
+1. Stop only the risky or stale test/server/profiler processes for this run. Preserve `CODEX_HOME`, repo state, multigoal logs, work logs, README files, benchmark JSON, and reduced profiler outputs. Do not delete authenticated config or successful stage evidence.
+2. Do not collect more Tracy, watcher, device-profiler, serving-adapter profiler, or `ttnn.ReadDeviceProfiler(mesh)` evidence while the card is unhealthy.
+3. Run a bounded reset from the host:
+
+```bash
+timeout 180 tt-smi -r
+timeout 60 tt-smi -ls --local
+```
+
+4. If all eight devices are visible, verify a minimal source-backed mesh open/close before resuming optimization:
+
+```bash
+python - <<'PY'
+import ttnn
+mesh = ttnn.open_mesh_device(ttnn.MeshShape(2, 4), trace_region_size=0)
+ttnn.close_mesh_device(mesh)
+print("MESH_SMOKE_OK")
+PY
+```
+
+5. If reset or the mesh smoke fails, ask the monitor/operator for a host reboot and reservation re-acquire. If you have direct experiment-monitor authority, reboot the host, reacquire the same or equivalent T3K reservation if needed, restore the run root or preserved `CODEX_HOME`, and repeat the device list plus mesh smoke check.
+6. After recovery, resume the same optimization stage from the preserved run state. In the multigoal bringup flow use `--resume-stage <stage_number>` instead of restarting earlier completed stages. Verify the resumed objective still names the exact target model and expected stage skill.
+7. Record the recovery in the stage work log: failure signature, commands run, whether reset or reboot was required, final `tt-smi -ls --local` health, mesh smoke result, and resumed stage/thread. This is infrastructure evidence, not a model correctness or performance result.
+
+Keep large raw Tracy/profiler dumps out of copied-back artifacts after a recovery. Preserve compact evidence such as `*_perf_report.txt`, `*_perf_report.csv`, reduced summaries, benchmark JSON, logs, and READMEs. Raw multi-GB Tracy CSVs are not worth destabilizing the node or evidence copy.
 
 For decoder or module-level optimization, do not use a blunt global dtype policy. Start with a named precision/fidelity policy and tune tensor groups separately: attention weights, MLP/expert weights, KV cache, activations/residuals, CCL communication, norms, logits, and layer exceptions. Use the fallback policy below as the starting point unless an earlier stage has already selected a faster correct policy. Move one tensor group at a time.
 
@@ -113,7 +145,7 @@ Final optimized evidence checklist - these items MUST be completed:
 - Stress or repeated-run coverage appropriate to the risk of the changes.
 - Warmed prefill and decode latency before/after optimization.
 - `tt-perf-report` output with advice enabled and the main performance conclusions, collected from representative decoder/module tests or a reduced full-model profiling variant, not a full all-layer model trace. This requirement does not apply to vLLM serving stages.
-- Watcher still clean. Watcher should be run by setting `TT_METAL_WATCHER=10`, don't skip asserts or anything. Keep watcher runs separate from device-profiler runs. If watcher/profiler collection produces remote Ethernet, ARC, or ERISC errors and `tt-smi` starts hanging, do not retry more profiler collection; preserve evidence and request host reboot recovery.
+- Watcher still clean. Watcher should be run by setting `TT_METAL_WATCHER=10`, don't skip asserts or anything. Keep watcher runs separate from device-profiler runs. If watcher/profiler collection produces remote Ethernet, ARC, or ERISC errors and `tt-smi` starts hanging, do not retry more profiler collection; preserve compact evidence, run T3K reset recovery, and resume the same stage if the node returns healthy.
 - For vLLM decode-serving optimization: same-harness vLLM before/after metrics and proof the measured path used on-device sampling without host greedy argmax or full-logits readback.
 - For vLLM decode-serving optimization: no Tracy, `tt-perf-report`, live-server device profiler, or serving-adapter profiler collection was attempted; if profiler evidence is absent, record that this is intentional.
 - Optimization checklist:
@@ -242,7 +274,7 @@ python tools/tracy/process_ops_logs.py --date
 Known tooling-failure signatures and prescribed actions - do not burn hours rediscovering these:
 
 - Tracy enrichment failing with "too many source locations" or dropped device markers on large models: the profile was too broad. Stop it, preserve the log, and rerun a reduced-layer probe with one layer per kind instead of the full stack. Do this reduced probe up front for full-model profiling rather than waiting for the full-stack profile to fail.
-- Device-profiler-enabled serving appearing in a run: this should only happen accidentally, because vLLM serving stages must not use profiler collection. Kill leftover `EngineCore`/server processes and run at most one bounded health check. If `tt-smi -ls --local` or reset hangs, or if logs show remote Ethernet/ARC/ERISC failures (`Timeout waiting for Ethernet core service remote IO request`, `ETH core heartbeat check failed`, `Unexpected ERISC Response Flags`, `Read 0xffffffff from ARC scratch`, ARC lock/readback waits), stop. Do not run a full serving-adapter profile followed by `ttnn.ReadDeviceProfiler(mesh)`. Preserve the logs as `hardware-profiler-limited`; recovery may require a physical Docker host reboot.
+- Device-profiler-enabled serving appearing in a run: this should only happen accidentally, because vLLM serving stages must not use profiler collection. Kill leftover `EngineCore`/server processes and run at most one bounded health check. If `tt-smi -ls --local` or reset hangs, or if logs show remote Ethernet/ARC/ERISC failures (`Timeout waiting for Ethernet core service remote IO request`, `ETH core heartbeat check failed`, `Unexpected ERISC Response Flags`, `Read 0xffffffff from ARC scratch`, ARC lock/readback waits), stop profiler collection and run the T3K reset recovery procedure. Do not run a full serving-adapter profile followed by `ttnn.ReadDeviceProfiler(mesh)`. Preserve the logs as `hardware-profiler-limited`; reboot/re-acquire is a fallback after reset fails, not the first blocker conclusion.
 - Watcher overflowing the ACTIVE_ETH kernel config buffer: retry with `TT_METAL_WATCHER_DISABLE_ETH=1` and record the scoped limitation.
 - Transient CCL/fabric link errors immediately after a failed multi-device run: reset devices and retry once before treating it as hardware evidence.
 
