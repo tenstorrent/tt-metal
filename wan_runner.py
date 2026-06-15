@@ -63,22 +63,23 @@ class WanRunner:
         self.logger.info(f"  size: {self.config.width}x{self.config.height}, frames: {self.config.num_frames}")
         self.logger.info(f"  steps: {self.config.num_inference_steps}, use_trace: {self.config.use_trace}")
 
+        # Geometry (height/width/num_frames) and CFG are fixed at creation; guidance_scale
+        # is applied per call. Enable CFG so per-request guidance_scale > 1 is accepted.
         self.pipeline = WanPipeline.create_pipeline(
             mesh_device=self.mesh_device,
             checkpoint_name=self.config.model_name,
-            target_height=self.config.height,
-            target_width=self.config.width,
+            height=self.config.height,
+            width=self.config.width,
             num_frames=self.config.num_frames,
+            cfg_enabled=self.config.guidance_scale > 1,
         )
         self.logger.info("Wan2.2 pipeline created")
 
         self.logger.info("Running warmup inference (compiles kernels / captures trace)...")
+        # num_frames/height/width are fixed at creation; __call__ does not accept them.
         self.pipeline(
-            prompt="A golden sunrise over mountain peaks",
+            prompts=["A golden sunrise over mountain peaks"],
             num_inference_steps=2,
-            num_frames=self.config.num_frames,
-            height=self.config.height,
-            width=self.config.width,
             guidance_scale=self.config.guidance_scale,
             guidance_scale_2=self.config.guidance_scale_2,
             seed=42,
@@ -96,27 +97,20 @@ class WanRunner:
         prompt = request["prompt"]
         negative_prompt = request.get("negative_prompt") or None
         num_inference_steps = request.get("num_inference_steps") or self.config.num_inference_steps
-        # num_frames / height / width are fixed at pipeline creation (WanPipeline.warmup_buffers
-        # sizes self.latent_buffer at startup). Per-request overrides cause shape mismatches in
-        # ttnn.copy; ignore them and use the config values.
-        num_frames = self.config.num_frames
-        height = self.config.height
-        width = self.config.width
+        # num_frames / height / width are fixed at pipeline creation; __call__ reads
+        # self._num_frames/_height/_width and does not accept per-request overrides.
         guidance_scale = request.get("guidance_scale") or self.config.guidance_scale
         guidance_scale_2 = request.get("guidance_scale_2") or self.config.guidance_scale_2
         seed = request.get("seed")
 
         self.logger.info(
             f"Running inference: prompt='{prompt[:80]}', steps={num_inference_steps}, "
-            f"frames={num_frames}, size={width}x{height}, seed={seed}"
+            f"frames={self.config.num_frames}, size={self.config.width}x{self.config.height}, seed={seed}"
         )
 
         kwargs = dict(
-            prompt=prompt,
+            prompts=[prompt],
             num_inference_steps=num_inference_steps,
-            num_frames=num_frames,
-            height=height,
-            width=width,
             guidance_scale=guidance_scale,
             guidance_scale_2=guidance_scale_2,
             seed=int(seed) if seed is not None else 0,
@@ -124,7 +118,7 @@ class WanRunner:
             traced=self.config.use_trace,
         )
         if negative_prompt:
-            kwargs["negative_prompt"] = negative_prompt
+            kwargs["negative_prompts"] = [negative_prompt]
 
         output = self.pipeline(**kwargs)
         # WanPipelineOutput.frames: numpy uint8 of shape (B, T, H, W, C). Strip batch.
