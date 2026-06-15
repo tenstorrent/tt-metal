@@ -108,8 +108,8 @@ struct CachedProgramFactory {
 // material (see ttsl::hash::canonical_key). std::unordered_map uses the hash to pick a bucket and
 // operator== to confirm the match -- so a 64-bit hash collision lands two distinct keys in the
 // same bucket and is resolved by exact comparison instead of producing a wrong cache hit
-// (issue #45821). An empty `canonical` opts out (hash-only behavior) for ops whose custom
-// compute_program_hash we cannot faithfully mirror.
+// (issue #45821). `canonical` always carries at least an op-identity prefix, so distinct ops can
+// never alias on a hash collision.
 struct ProgramCacheKey {
     uint64_t hash = 0;
     std::string canonical;

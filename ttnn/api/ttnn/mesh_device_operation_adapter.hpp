@@ -825,9 +825,9 @@ public:
     // The key is prefixed with op_type_name (the DeviceOperation's type name) so distinct ops can
     // never alias on a hash collision.
     // For ops with a custom compute_program_hash we can't infer which fields it keyed on (it may
-    // deliberately exclude some, e.g. an RNG seed), so we return an empty string -- opting that op
-    // out of collision resolution (hash-only, today's behavior). The default reflection-hash path
-    // is mirrored exactly.
+    // deliberately exclude some, e.g. an RNG seed), so we return only the op-identity prefix --
+    // opting that op out of attribute-level collision resolution. The default reflection-hash
+    // path is mirrored exactly.
     static std::string compute_mesh_workload_canonical_key(
         [[maybe_unused]] tt::tt_metal::distributed::MeshDevice* mesh_device,
         std::string_view op_type_name,
