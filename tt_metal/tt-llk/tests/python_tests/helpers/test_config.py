@@ -238,12 +238,8 @@ class TestConfig:
     # device print buffer doesn't overlap RUNTIME_ARGS.
     DEVICE_PRINT_RUNTIME_ARGS_START: ClassVar[int] = 0x20000
     PROCESSOR_COUNT: ClassVar[int] = 0
-    # Per-buffer sizes. The layout mirrors DevicePrintMemoryLayout / the dprint
-    # server: WH/BH have one buffer (DEVICE_PRINT_BUFFER_SIZE), Quasar splits into a
-    # TRISC/compute buffer (DEVICE_PRINT_BUFFER_SIZE) followed by a DM buffer
-    # (DEVICE_PRINT_BUFFER_SIZE2). Both fit the 0x15000..0x20000 L1 gap (0xB000).
-    DEVICE_PRINT_BUFFER_SIZE: ClassVar[int] = 0x4000
-    DEVICE_PRINT_BUFFER_SIZE2: ClassVar[int] = 0x2000
+    DEVICE_PRINT_BUFFER_SIZE: ClassVar[int] = 0x4000  # WH/BH/Quasar TRISC
+    DEVICE_PRINT_BUFFER_SIZE2: ClassVar[int] = 0x2000  # Quasar DM
     DEVICE_PRINT_ENABLED: ClassVar[bool] = False
 
     # Single source of truth that maps component, risc_id and display name.
@@ -251,21 +247,11 @@ class TestConfig:
     # _risc_names_tensix and make_device_print_parser in device_print.py.
     # The kernel needs it to tell the host who it is when it prints, and
     # the host needs it to map it into a string and find the ELF on disk.
-    # risc_id must land in the buffer this core writes to (see device_print_buffers):
-    # on WH/BH the TENSIX compute threads are MATH0/1/2 = 2/3/4 (offset 0); Quasar
-    # overrides this in setup_arch() to engine E0's threads 8..11, which fall in the
-    # TRISC buffer (processor_offset 8). See QUASAR_RISC_INFO below.
+    # Quasar overrides this in setup_arch.
     RISC_INFO: ClassVar[dict[str, tuple[int, str]]] = {
         "unpack": (2, "UNPACK"),
         "math": (3, "MATH"),
         "pack": (4, "PACK"),
-    }
-    # Quasar compute threads are E0_MATH0..3 (TensixProcessorTypes 8..11).
-    QUASAR_RISC_INFO: ClassVar[dict[str, tuple[int, str]]] = {
-        "unpack": (8, "UNPACK"),
-        "math": (9, "MATH"),
-        "pack": (10, "PACK"),
-        "sfpu": (11, "SFPU"),
     }
 
     @staticmethod
@@ -322,7 +308,12 @@ class TestConfig:
                 TestConfig.ARCH = ChipArchitecture.QUASAR
                 TestConfig.DATA_FORMAT_ENUM = QUASAR_DATA_FORMAT_ENUM_VALUES
                 TestConfig.KERNEL_COMPONENTS = ["unpack", "math", "pack", "sfpu"]
-                TestConfig.RISC_INFO = TestConfig.QUASAR_RISC_INFO
+                TestConfig.RISC_INFO = {
+                    "unpack": (8, "UNPACK"),
+                    "math": (9, "MATH"),
+                    "pack": (10, "PACK"),
+                    "sfpu": (11, "SFPU"),
+                }
                 TestConfig.PROCESSOR_COUNT = 24
                 TestConfig.TRISC_START_ADDRS = [
                     0x16DFF0,

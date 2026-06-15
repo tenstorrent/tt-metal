@@ -35,9 +35,7 @@ struct DevicePrintMemoryLayout {
 #if defined(COMPILE_FOR_DM)
     DevicePrintBuffer<buffer_size_triscs, 16, 8> buffer_triscs;  // Quasar TRISC 16 processors
     DevicePrintBuffer<buffer_size_dms, 8, 0> buffer;             // Quasar DM 8 processors
-// LLK infra doesn't define COMPILE_FOR_TRISC (its NOC/stream headers gate on it), but its
-// compute kernels are TRISC, so it uses the same TRISC-first layout here.
-#elif defined(COMPILE_FOR_TRISC) || defined(ENV_LLK_INFRA)
+#elif defined(COMPILE_FOR_TRISC) || defined(ENV_LLK_INFRA)  // Eventual LLK DM code will need to #define COMPILE_FOR_DM.
     DevicePrintBuffer<buffer_size_triscs, 16, 8> buffer;  // Quasar TRISC 16 processors
     DevicePrintBuffer<buffer_size_dms, 8, 0> buffer_dms;  // Quasar DM 8 processors
 #else

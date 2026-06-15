@@ -717,19 +717,18 @@ class DevicePrintParser:
 
     Construct with a {risc_id: elf_path} mapping (risc_id matches the value written
     into DevicePrintHeader.risc_id by the kernel, and PROCESSOR_INDEX passed by the
-    build to dprint.h) and the list of buffer regions to drain (one on WH/BH, two on
-    Quasar — TRISC then DM; see TestConfig.device_print_buffers()). Call poll(location)
-    during the run and final_drain(location) after to pull and decode all pending records.
+    build to dprint.h) and the list of buffer regions to drain. Call poll(location)
+    during the run and final_drain(location) after to pull and decode all records.
     """
 
     def __init__(
         self,
         elf_paths: dict[int, str | Path],
-        buffers: list[tuple[int, int, int]],
+        buffers: list[
+            tuple[int, int, int]
+        ],  # (base_address, total_size, processor_count)
         dest_make_float: bool = True,
     ):
-        # buffers: list of (base_address, total_size, processor_count). processor_count
-        # sizes the Aux header, so it must match the device-side DevicePrintBuffer.
         self._regions = [
             _BufferRegion(base, aux_size_for(count), total_size - aux_size_for(count))
             for base, total_size, count in buffers

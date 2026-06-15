@@ -8,9 +8,7 @@
 
 // PROCESSOR_INDEX, LLK_DEVICE_PRINT_BUFFER_BASE, LLK_RUNTIME_ARGS_START,
 // DEVICE_PRINT_BUFFER_SIZE and DEVICE_PRINT_BUFFER_SIZE2 (the Quasar DM buffer)
-// are passed in by test_config.py at build time; see RISC_INFO,
-// DEVICE_PRINT_BUFFER_BASE, DEVICE_PRINT_RUNTIME_ARGS_START and the buffer
-// sizes in test_config.py.
+// are passed in by test_config.py at build time.
 
 // Disabled under COVERAGE: coverage linker scripts grow TRISC sections
 // way past the device print buffer slot, so they can't share L1.
@@ -55,12 +53,11 @@ constexpr uintptr_t llk_device_print_buffer_l1_base = LLK_DEVICE_PRINT_BUFFER_BA
 #else
 constexpr uintptr_t llk_device_print_buffer_l1_base = LLK_DEVICE_PRINT_BUFFER_BASE;
 #endif
-// Size against the whole layout, not a single buffer: on Quasar it holds both the
-// TRISC and DM buffers, so the full footprint is what must clear RUNTIME_ARGS.
+// Check the footprint of the device print region against RUNTIME_ARGS, the next region.
 static_assert(
     llk_device_print_buffer_l1_base + sizeof(DevicePrintMemoryLayout) <= LLK_RUNTIME_ARGS_START,
-    "LLK device print buffer overlaps RUNTIME_ARGS; adjust TestConfig.DEVICE_PRINT_BUFFER_BASE / "
-    "DEVICE_PRINT_BUFFER_SIZE / DEVICE_PRINT_BUFFER_SIZE2 in tests/python_tests/helpers/test_config.py.");
+    "LLK device print buffer overlaps RUNTIME_ARGS; adjust TestConfig.DEVICE_PRINT_BUFFER_BASE/"
+    "DEVICE_PRINT_BUFFER_SIZE/DEVICE_PRINT_BUFFER_SIZE2 in tests/python_tests/helpers/test_config.py.");
 
 // A single #include "dprint.h" exposes every device print facility.
 #include "api/debug/dprint_tile.h"
