@@ -34,19 +34,23 @@ struct DramSenderStateBlock {
     uint32_t receiver_noc_xy_ptr;     // -> the receiver NOC XY table below
     uint32_t aligned_pages_sent_ptr;  // DRISC-side per-receiver pages_sent slot base
     uint32_t num_receivers_and_remote_pages_sent_ptr;  // packed; see remote_cb_pack()
-    // ----- Sender config block, pointed to by config_ptr (16 B) -----
+    // ----- Sender config block, pointed to by config_ptr (20 B) -----
     // Read by the remote-CB kernel helpers (fifo_size_per_receiver at word [3]) and by
     // the prefetcher kernel (num_receivers).
     uint32_t is_sender;
     uint32_t num_receivers;
     uint32_t buffer_address;
     uint32_t fifo_size_per_receiver;
+    // Bank-local slab index of this sender's first receiver. Lets two DRISC cores split
+    // one bank's receiver set: the kernel reads slab (recv_index_base + r) for its local
+    // receiver r. 0 for a single sender / the first of a pair.
+    uint32_t recv_index_base;
     // ----- Followed in L1 by the receiver NOC XY table -----
     // 2 * num_receivers uint32s (x0, y0, x1, y1, ...), appended by the caller after
     // this struct's bytes since its length is dynamic; pointed to by receiver_noc_xy_ptr.
 } __attribute__((packed));
 
-static_assert(sizeof(DramSenderStateBlock) == 10 * sizeof(uint32_t), "DramSenderStateBlock layout drift");
+static_assert(sizeof(DramSenderStateBlock) == 11 * sizeof(uint32_t), "DramSenderStateBlock layout drift");
 static_assert(
     offsetof(DramSenderStateBlock, is_sender) == 6 * sizeof(uint32_t),
     "config block must stay contiguous right after the loaded interface fields");

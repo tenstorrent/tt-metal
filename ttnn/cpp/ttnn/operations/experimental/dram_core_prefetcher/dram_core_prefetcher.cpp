@@ -13,8 +13,8 @@ bool is_dram_core_prefetcher_supported(tt::tt_metal::distributed::MeshDevice* me
     return tt::tt_metal::experimental::IsDramCorePrefetcherSupported(*mesh_device);
 }
 
-void start_dram_core_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device) {
-    tt::tt_metal::experimental::StartDramCorePrefetcher(*mesh_device, {});
+void start_dram_core_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device, bool dual_senders_per_bank) {
+    tt::tt_metal::experimental::StartDramCorePrefetcher(*mesh_device, {.dual_senders_per_bank = dual_senders_per_bank});
 }
 
 void queue_dram_core_prefetcher_request(
@@ -28,6 +28,13 @@ void queue_dram_core_prefetcher_request(
         inputs.push_back({tensor.mesh_tensor(), block_count});
     }
     tt::tt_metal::experimental::QueueDramCorePrefetcherRequest(*mesh_device, global_cb, device_subset, inputs);
+}
+
+void wait_for_cq_on_dram_core_prefetcher(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    uint8_t cq_id,
+    const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset) {
+    tt::tt_metal::experimental::WaitForCqOnDramCorePrefetcher(*mesh_device, cq_id, device_subset);
 }
 
 void stop_dram_core_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device) {

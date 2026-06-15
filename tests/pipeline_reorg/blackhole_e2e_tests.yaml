@@ -34,8 +34,6 @@
     TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_at_least_2x2_mesh.yaml
     TT_FABRIC_PROFILE_RX_CH_FWD=1 TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_code_profiling.yaml
   skus:
-    bh_llmbox:
-      timeout: 15
     bh_loudbox:
       timeout: 15
     bh_p300:
@@ -49,8 +47,6 @@
   name: ccl nightly tests
   cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly
   skus:
-    bh_llmbox:
-      timeout: 60
     bh_loudbox:
       timeout: 60
     bh_p300:
@@ -65,13 +61,9 @@
   tags: [sdpa]
   cmd: pytest tests/nightly/blackhole/sdpa/ -svv
   skus:
-    bh_llmbox:
-      timeout: 60
     bh_loudbox:
       timeout: 60
     bh_p300:
-      timeout: 60
-    bh_quietbox_2:
       timeout: 60
   owner_id: U07RD9YRFT9 # Slavko Krstic
   team: ttnn
@@ -100,8 +92,6 @@
   cmd: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_at_least_2x2_mesh.yaml
   upload_fabric_data: true
   skus:
-    bh_llmbox:
-      timeout: 15
     bh_loudbox:
       timeout: 15
     bh_p300:
@@ -114,8 +104,6 @@
 - id: bh-ring-sdpa-perf
   name: ring sdpa perf tests
   tags: [sdpa]
-  # Skip QB1 (bh_llmbox / 4xP150): perf differs slightly from QB2 (2xP300);
-  # running on one machine class lets us keep a tighter tolerance (PR #44069).
   cmd: |
     SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_perf_check -svv
     SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_perf_check -svv
@@ -137,8 +125,6 @@
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric2DUDMModeFixture.*:*ChannelTrimming*"
     ./build/test/ttnn/unit_tests_ttnn_udm
   skus:
-    bh_llmbox:
-      timeout: 20
     bh_loudbox:
       timeout: 20
     bh_p300:
@@ -168,8 +154,6 @@
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
     TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
   skus:
-    bh_llmbox:
-      timeout: 15
     bh_loudbox:
       timeout: 15
     bh_p300:
@@ -186,8 +170,6 @@
     # Disabled due to issue https://github.com/tenstorrent/tt-metal/issues/41040
     # pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH.py
   skus:
-    bh_llmbox:
-      timeout: 15
     bh_loudbox:
       timeout: 15
     bh_p300:
@@ -211,8 +193,6 @@
   name: fabric stability nightly tests
   cmd: TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ./tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability_short_running.yaml
   skus:
-    bh_llmbox:
-      timeout: 15
     bh_loudbox:
       timeout: 15
     bh_p300:
@@ -227,8 +207,6 @@
   cmd: pytest tests/ttnn/stress_tests/
   skus:
     bh_p150b_civ2:
-      timeout: 45
-    bh_llmbox:
       timeout: 45
   owner_id: U084DDYSWCW # Adrian Morrison
   team: ttnn
@@ -288,21 +266,8 @@
     pytest models/demos/deepseek_v3_d_p/tests/cache/ -vvv --tb=short
   skus:
     bh_quietbox_2:
-      timeout: 10
+      timeout: 20
   owner_id: U08E1JCMAJF # Marko Bezulj
-  team: models
-
-- id: bh-qb-deepseek-prefill-op-tests
-  name: bh_qb_DeepSeek_PREFILL_OP_TESTS
-  model-name: deepseek_prefill
-  cmd: |
-    exit_code=0
-    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "(not test_ring_joint_mla or (2x2 and pcc_check and not fabric2d)) and not small-dims-validate-pcc" || exit_code=$?
-    exit $exit_code
-  skus:
-    bh_llmbox:
-      timeout: 30
-  owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
 
 - id: bh-p150-deepseek-prefill-op-tests
@@ -340,6 +305,6 @@
     exit $exit_code
   skus:
     bh_quietbox_2:
-      timeout: 60
+      timeout: 20
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models

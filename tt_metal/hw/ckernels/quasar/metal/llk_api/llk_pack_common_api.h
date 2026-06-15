@@ -116,6 +116,11 @@ inline void llk_pack_dest_section_done() {
 }
 
 /**
+ * @brief Reset packer dest-bank parity to bank 0 at program start (pack-side mirror of llk_math_pack_sync_init).
+ */
+inline void llk_pack_dest_init() { _llk_pack_dest_init_<p_pacr::PACK0, DST_SYNC_MODE>(); }
+
+/**
  * @brief Configure packer ReLU at runtime from a packed uint32.
  * @param config Packed uint32: bits [1:0] = ReluType, bits [31:16] = threshold.
  */

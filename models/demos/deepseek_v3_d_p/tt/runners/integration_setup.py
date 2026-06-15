@@ -26,10 +26,7 @@ import sys
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
-    NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
-    create_kv_chunk_address_table,
-)
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
 
 # bfp8 [1, 1, 32, 576] KV chunk: 18 tiles * 1088 B = 19584 B.
 _CHUNK_SIZE_BYTES = 19584
@@ -51,18 +48,18 @@ def _serialize_table_to_path(table, path: str) -> None:
 
 
 def build_and_serialize_kv_chunk_table(
-    *, mesh_device, kvpe_cache, seq_len, num_layers, mesh_shape, sp_axis, path
+    *, variant, mesh_device, kvpe_cache, seq_len, num_layers, mesh_shape, sp_axis, path
 ) -> str:
-    """Build the KV chunk address table from the device KV layout (via the shared
-    kv_cache_utils.create_kv_chunk_address_table) and serialize it to ``path`` for
-    the inference server to forward via SET_TABLE. Returns the path on success."""
+    """Build the KV chunk address table from the device KV layout (via the variant's
+    kv_cache_table_create_function) and serialize it to ``path`` for the inference
+    server to forward via SET_TABLE. Returns the path on success."""
     cfg = _disaggregation().KvChunkAddressTableConfig()
     cfg.num_layers = num_layers
     cfg.max_sequence_length = seq_len
     cfg.num_slots = 1
     cfg.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     cfg.chunk_size_bytes = _CHUNK_SIZE_BYTES
-    table = create_kv_chunk_address_table(
+    table = variant.kv_cache_table_create_function(
         config=cfg,
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,

@@ -127,7 +127,12 @@ def generate_qsr_pack_l1_acc_combinations(
 @pytest.mark.quasar
 @parametrize(
     formats_dest_acc=generate_qsr_pack_l1_acc_combinations(PACK_L1_ACC_FORMATS),
-    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
+    # don't generate the No variant for them. formats_dest_acc[0] is the InputOutputFormat (input/output pair).
+    implied_math_format=lambda formats_dest_acc: (
+        [ImpliedMathFormat.Yes]
+        if formats_dest_acc[0].input_format.is_mx_format()
+        else [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
+    ),
     dest_sync_mode=[DestSync.Half, DestSync.Full],
     input_dimensions=INPUT_DIMENSIONS,
 )
@@ -139,13 +144,6 @@ def test_pack_l1_acc_quasar(
     boot_mode=BootMode.DEFAULT,
 ):
     (formats, dest_acc) = formats_dest_acc
-
-    # MX formats REQUIRE implied_math_format=Yes on Quasar (bypass format inference pipeline)
-    if (
-        formats.input_format.is_mx_format()
-        and implied_math_format == ImpliedMathFormat.No
-    ):
-        pytest.skip("MX formats require implied_math_format=Yes on Quasar")
 
     tile_rows, tile_cols = TILE_DIMENSIONS
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(

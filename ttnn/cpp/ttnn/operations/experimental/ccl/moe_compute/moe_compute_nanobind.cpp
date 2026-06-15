@@ -34,14 +34,28 @@ void bind_moe_compute(nb::module_& mod) {
 
         This operation performs the expert matmuls (gate/up projection via W0/W1, down
         projection via W2) and activation (SILU, SwiGLU, or GELU) in a fused compute kernel.
-        Tile distribution across the 12-core ring is derived at compile time from
-        ``hidden_size`` and ``intermediate_size`` using Euclidean-rhythm (Bresenham)
-        shard formulas — no model-specific configuration tables are needed.
+        Tile distribution across the matmul ring (12 cores on Wormhole; ``bh_ring_size``
+        cores — 8/12/16 — on Blackhole) is derived at compile time from ``hidden_size`` and
+        ``intermediate_size`` using Euclidean-rhythm (Bresenham) shard formulas — no
+        model-specific configuration tables are needed.
 
         Note: This is the **compute** portion of the MoE pipeline. The A2A dispatch
         (producing the sparse buffer consumed by this op) and the A2A combine (reducing
         expert outputs) are handled by separate collective operations; see the MoE
         module tests for the full flow.
+
+        **Hardware / device configuration**
+
+        - **Unharvested Wormhole chips.** The multi-device (6U/Galaxy) flow assumes the
+          full Wormhole compute grid: the WH worker layout hardcodes the drain tilize core
+          at logical ``(6, 9)`` and the combine cores at columns 5–6, so the ``y=9`` compute
+          row must be present. Harvested WH SKUs that drop that row are not supported on
+          this path (the single-card test path derives the drain core dynamically instead).
+        - **``DispatchCoreAxis.COL``.** The mesh device must be opened with
+          ``dispatch_core_axis=ttnn.DispatchCoreAxis.COL`` so dispatch cores occupy a column
+          edge and do not overlap the op's tilize/matmul/combine worker cores.
+
+        See https://github.com/tenstorrent/tt-metal/issues/41132 for details.
 
         **Weight tensor layout (CRITICAL)**
 

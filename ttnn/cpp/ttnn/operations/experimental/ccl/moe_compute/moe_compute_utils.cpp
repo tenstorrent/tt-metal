@@ -368,15 +368,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> add_shared_expert_weights(
     const ttnn::Tensor& shared_w1,
     const ttnn::Tensor& shared_w2) {
     auto output_w0 = ttnn::concat({routed_w0, shared_w0}, 1);
-    auto tile_w0 = ttnn::to_layout(output_w0, ttnn::Layout::TILE);
-    output_w0.deallocate(/*force=*/true);
     auto output_w1 = ttnn::concat({routed_w1, shared_w1}, 1);
-    auto tile_w1 = ttnn::to_layout(output_w1, ttnn::Layout::TILE);
-    output_w1.deallocate(/*force=*/true);
     auto output_w2 = ttnn::concat({routed_w2, shared_w2}, 1);
-    auto tile_w2 = ttnn::to_layout(output_w2, ttnn::Layout::TILE);
-    output_w2.deallocate(/*force=*/true);
-    return {tile_w0, tile_w1, tile_w2};
+    return {output_w0, output_w1, output_w2};
 }
 
 ttnn::Tensor prepare_w0_w1_tensor_for_moe_compute(
@@ -553,11 +547,11 @@ ttnn::Tensor prepare_w2_tensor_for_moe_compute(
         n_reordered_no_pad.deallocate(/*force=*/true);
         pad.deallocate(/*force=*/true);
         auto result = ttnn::to_layout(padded, ttnn::Layout::TILE);
-        padded.deallocate(/*force=*/true);
+        padded.deallocate(/*force=*/false);
         return result;
     }
     auto result = ttnn::to_layout(n_reordered_no_pad, ttnn::Layout::TILE);
-    n_reordered_no_pad.deallocate(/*force=*/true);
+    n_reordered_no_pad.deallocate(/*force=*/false);
     return result;
 }
 
@@ -691,15 +685,26 @@ ttnn::Tensor prepare_w2_tensor_with_bias(
         n_with_bias = padded;
     }
     auto result = ttnn::to_layout(n_with_bias, ttnn::Layout::TILE);
-    n_with_bias.deallocate(/*force=*/true);
+    n_with_bias.deallocate(/*force=*/false);
     return result;
 }
 
+// Optionally returns a host tensor to facilitate test quantity caching
 ttnn::Tensor quantize_weights_via_host(
-    const ttnn::Tensor& device_tensor, ttnn::DataType dtype, const ttnn::MemoryConfig& memory_config) {
+    const ttnn::Tensor& device_tensor, ttnn::DataType dtype, const std::optional<ttnn::MemoryConfig>& memory_config) {
     auto host_tensor = ttnn::from_device(device_tensor);
     auto cast_tensor = ttnn::to_dtype(host_tensor, dtype);
-    host_tensor.deallocate(/*force=*/true);
+    // to_dtype is a no-op when the dtype already matches, returning host_tensor itself.
+    // Only free host_tensor when the cast produced a distinct tensor; otherwise the
+    // deallocate would invalidate cast_tensor (the value we return / pass to to_device).
+    if (host_tensor.dtype() != dtype) {
+        host_tensor.deallocate(/*force=*/true);
+    }
+
+    if (!memory_config.has_value()) {
+        return cast_tensor;
+    }
+
     auto result = ttnn::to_device(cast_tensor, device_tensor.device(), memory_config);
     cast_tensor.deallocate(/*force=*/true);
     return result;
