@@ -100,7 +100,7 @@ void run_matmul_bench(benchmark::State& state, bool transpose_a, bool transpose_
             /*compute_kernel_config=*/std::nullopt,
             /*output_tensor=*/output,
             /*offsets_start_index=*/0,
-            /*effective_M_tiles=*/M_tiles);
+            /*expected_M_tiles=*/M_tiles);
     };
 
     for (int i = 0; i < kWarmupIterations; ++i) {

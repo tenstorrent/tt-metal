@@ -51,12 +51,12 @@ struct VariableMatmulParams {
     // matmul kernel applies intra-tile transpose via the LLK transpose flag.
     bool transpose_b = false;
 
-    // effective_M_tiles:
-    //   When > 0, the matmul processes only `effective_M_tiles` rows on the M axis (instead
+    // expected_M_tiles:
+    //   When > 0, the matmul processes only `expected_M_tiles` rows on the M axis (instead
     //   of the input's full M). With an output_tensor, this also bounds the host-side
     //   output-shape validation (the EP path may further override the per-core M split).
     //   Runtime arg — different values hit the same cached program.
-    uint32_t effective_M_tiles = 0;
+    uint32_t expected_M_tiles = 0;
 
     // On-device offsets (EP). Dataflow kernels read offsets[start..start+2] at runtime and
     // derive the role-appropriate ranges:

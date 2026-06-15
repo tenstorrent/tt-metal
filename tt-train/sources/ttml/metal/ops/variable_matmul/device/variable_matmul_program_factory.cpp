@@ -126,16 +126,16 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     // writer's per-tile bounds check clips writes back to the logical tile count.
     const uint32_t parent_M_tiles = tt::div_up(parent_M, tt::constants::TILE_HEIGHT);
 
-    // effective_M_tiles overrides for offset-read mode; otherwise process the whole input.
+    // expected_M_tiles overrides for offset-read mode; otherwise process the whole input.
     const uint32_t actual_M_tiles =
-        (operation_attributes.effective_M_tiles > 0) ? operation_attributes.effective_M_tiles : parent_M_tiles;
+        (operation_attributes.expected_M_tiles > 0) ? operation_attributes.expected_M_tiles : parent_M_tiles;
     const uint32_t actual_M = actual_M_tiles * tt::constants::TILE_HEIGHT;
 
     // Pick the grid orientation based on the matmul-M extent the caller actually uses
-    // (effective_M_tiles when set, else parent_M_tiles). For EP shared-tensor callers
+    // (expected_M_tiles when set, else parent_M_tiles). For EP shared-tensor callers
     // (moe_ffn), parent_M = T_cap but actual_M_tiles is the per-call upper bound, so this
     // gets the right orientation per shape instead of being skewed by T_cap. Stable across
-    // calls as long as the caller passes a stable effective_M_tiles value.
+    // calls as long as the caller passes a stable expected_M_tiles value.
     const bool transpose_core_grid = actual_M_tiles > N_tiles;
 
     const uint32_t M_block_tiles = config.M_block_size;
@@ -257,7 +257,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     // (in0 sender + in0 receiver, in1 sender + in1 receiver). Sender and receiver MUST
     // agree on this flag — a mismatch makes one side read different runtime args than the other.
     const bool use_offset_in0 =
-        operation_attributes.effective_M_tiles > 0 || parent_K_tiles_in0 > K_tiles || offset_k_mode;
+        operation_attributes.expected_M_tiles > 0 || parent_K_tiles_in0 > K_tiles || offset_k_mode;
     const bool use_offset_in1 = parent_K_tiles_in1 > K_tiles || offset_k_mode;
     // Both dm kernels always read the offsets tensor (each one derives its own slice).
     // Compute reads its override values from cb_ctrl, not directly from offsets.
@@ -538,7 +538,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         //  9: N_end_tile
         // 10: defer_write_k_block
         // 11: out_addr
-        // 12: actual_M_tiles            (= effective_M_tiles)
+        // 12: actual_M_tiles            (= expected_M_tiles)
         // 13: actual_padded_M_tiles
         // 14: actual_M_blocks_per_core
         // 15: parent_M_tiles_stride     (parent M tile count; used as K-row stride for transpose_a)
@@ -684,7 +684,7 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
     auto& sv = cached_program.shared_variables;
 
     // Recompute actual M values. Parent M comes from the input tensor; the matmul itself
-    // processes effective_M_tiles when set (offset-read mode), else the full parent.
+    // processes expected_M_tiles when set (offset-read mode), else the full parent.
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& a_padded = input_tensor.padded_shape();
     const auto& w_padded = tensor_args.weight_tensor.padded_shape();
@@ -694,7 +694,7 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
     const uint32_t parent_K_tiles_in0 = (transpose_a ? a_padded[-2] : a_padded[-1]) / tt::constants::TILE_WIDTH;
     const uint32_t parent_K_tiles_in1 = (transpose_b ? w_padded[-1] : w_padded[-2]) / tt::constants::TILE_WIDTH;
     const uint32_t actual_M_tiles =
-        (operation_attributes.effective_M_tiles > 0) ? operation_attributes.effective_M_tiles : parent_M_tiles;
+        (operation_attributes.expected_M_tiles > 0) ? operation_attributes.expected_M_tiles : parent_M_tiles;
     const uint32_t actual_padded_M_tiles = tt::round_up(actual_M_tiles, sv.in0_parallel_axis_cores);
     const uint32_t actual_M_tiles_per_core = actual_padded_M_tiles / sv.in0_parallel_axis_cores;
     const uint32_t actual_M_blocks_per_core = tt::div_up(actual_M_tiles_per_core, sv.M_block_tiles);

@@ -243,7 +243,7 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndOutputRow) {
         /*compute_kernel_config=*/std::nullopt,
         /*output_tensor=*/parent_out,
         /*offsets_start_index=*/kStart,
-        /*effective_M_tiles=*/M_parent / 32U);  // upper bound = parent_M
+        /*expected_M_tiles=*/M_parent / 32U);  // upper bound = parent_M
 
     auto input_slice = ttnn::slice(
         input,

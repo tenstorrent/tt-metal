@@ -60,6 +60,6 @@ ttnn::Tensor variable_matmul(
     uint32_t offsets_start_index = 0,
     // Bounds the host-side output_tensor validation on the EP path (matters when
     // token_capacity is non-tile-aligned). Also hints the transpose_core_grid heuristic.
-    uint32_t effective_M_tiles = 0);
+    uint32_t expected_M_tiles = 0);
 
 }  // namespace ttml::metal

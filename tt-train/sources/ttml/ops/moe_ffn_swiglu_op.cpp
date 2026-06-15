@@ -131,7 +131,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
             /*compute_kernel_config=*/std::nullopt,
             /*output_tensor=*/gate_proj,
             /*offsets_start_index=*/e,
-            /*effective_M_tiles=*/per_expert_M_tiles);
+            /*expected_M_tiles=*/per_expert_M_tiles);
         ttml::metal::variable_matmul(
             /*input_tensor=*/grouped_value,
             /*weight_tensor=*/w_up_e,
@@ -143,7 +143,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
             /*compute_kernel_config=*/std::nullopt,
             /*output_tensor=*/up_proj,
             /*offsets_start_index=*/e,
-            /*effective_M_tiles=*/per_expert_M_tiles);
+            /*expected_M_tiles=*/per_expert_M_tiles);
     }
     // Bulk silu·multiply over the full shared tensors — pad rows compute silu(0)·0=0 so the
     // wasted work is cheap and leaves the result's pad rows zero.
@@ -170,7 +170,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
             /*compute_kernel_config=*/std::nullopt,
             /*output_tensor=*/y,
             /*offsets_start_index=*/e,
-            /*effective_M_tiles=*/per_expert_M_tiles);
+            /*expected_M_tiles=*/per_expert_M_tiles);
     }
     activated.deallocate();
 
@@ -232,7 +232,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
                 /*compute_kernel_config=*/std::nullopt,
                 /*output_tensor=*/d_activated,
                 /*offsets_start_index=*/e,
-                /*effective_M_tiles=*/per_expert_M_tiles);
+                /*expected_M_tiles=*/per_expert_M_tiles);
         }
 
         // Bulk activated = silu(gate_proj) * up_proj — needed for dW_down's K-reduce.
@@ -306,7 +306,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
                 /*compute_kernel_config=*/std::nullopt,
                 /*output_tensor=*/dX_via_gate,
                 /*offsets_start_index=*/e,
-                /*effective_M_tiles=*/per_expert_M_tiles);
+                /*expected_M_tiles=*/per_expert_M_tiles);
             ttml::metal::variable_matmul(
                 /*input_tensor=*/d_up_proj,
                 /*weight_tensor=*/w_up_e,
@@ -318,7 +318,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
                 /*compute_kernel_config=*/std::nullopt,
                 /*output_tensor=*/dX_via_up,
                 /*offsets_start_index=*/e,
-                /*effective_M_tiles=*/per_expert_M_tiles);
+                /*expected_M_tiles=*/per_expert_M_tiles);
         }
         d_gate_proj.deallocate();
         d_up_proj.deallocate();

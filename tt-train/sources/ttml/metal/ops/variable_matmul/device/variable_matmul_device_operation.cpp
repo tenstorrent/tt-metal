@@ -70,13 +70,13 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
     // When transpose_b, the weight is stored as [N, K] and K matches w_logical[-1].
     const uint32_t K_w = operation_attributes.transpose_b ? w_logical[-1] : w_logical[-2];
 
-    // Effective M for the matmul (after applying length); falls back to the input
-    // tensor's full M when caller didn't specify a sub-range.
-    const uint32_t effective_M_tiles = operation_attributes.effective_M_tiles;
+    // Matmul-M: use expected_M_tiles when the caller set it (a hint for offset-read mode),
+    // else fall back to the input tensor's full M.
+    const uint32_t expected_M_tiles = operation_attributes.expected_M_tiles;
     const uint32_t M_parent_tiles = tt::div_up(M_parent, TILE_HEIGHT);
     const uint32_t K_in_tiles = K_in / TILE_WIDTH;
     const uint32_t K_w_tiles = K_w / TILE_WIDTH;
-    const uint32_t M = (effective_M_tiles > 0) ? (effective_M_tiles * TILE_HEIGHT) : M_parent;
+    const uint32_t M = (expected_M_tiles > 0) ? (expected_M_tiles * TILE_HEIGHT) : M_parent;
 
     // K-axis: when K_w > K_in the weight is the parent and matmul-K = K_in; otherwise the
     // input is the parent (or both match) and matmul-K = K_w. The InputAndWeightK role
@@ -98,7 +98,7 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
     const uint32_t M_tiles_ceil = tt::div_up(M, TILE_HEIGHT);
     TT_FATAL(
         M_tiles_ceil <= M_parent_tiles,
-        "variable_matmul effective_M tiles {} exceeds input M tiles {}",
+        "variable_matmul expected_M tiles {} exceeds input M tiles {}",
         M_tiles_ceil,
         M_parent_tiles);
 
@@ -206,11 +206,11 @@ VariableMatmulDeviceOperation::spec_return_value_t VariableMatmulDeviceOperation
     const auto& in1 = tensor_args.weight_tensor;
     // With transpose_b, the weight is stored as [N, K] so N is at logical[-2].
     const uint32_t N = operation_attributes.transpose_b ? in1.logical_shape()[-2] : in1.logical_shape()[-1];
-    // M dimension: use effective_M_tiles when provided (offset-read mode); otherwise derive
+    // M dimension: use expected_M_tiles when provided (offset-read mode); otherwise derive
     // from the input tensor's matmul-M dim ([-1] if transpose_a, else [-2]).
     const uint32_t M_from_input = operation_attributes.transpose_a ? in0.logical_shape()[-1] : in0.logical_shape()[-2];
-    const uint32_t M = (operation_attributes.effective_M_tiles > 0)
-                           ? (operation_attributes.effective_M_tiles * tt::constants::TILE_HEIGHT)
+    const uint32_t M = (operation_attributes.expected_M_tiles > 0)
+                           ? (operation_attributes.expected_M_tiles * tt::constants::TILE_HEIGHT)
                            : M_from_input;
 
     const auto& memory_config = in0.memory_config();
@@ -256,16 +256,15 @@ ttsl::hash::hash_t VariableMatmulDeviceOperation::compute_program_hash(
     // program's compile-time flags would diverge from what compute_program_hash predicted).
     const bool input_and_weight_k_active =
         operation_attributes.offsets_role == OffsetsRole::InputAndWeightK && tensor_args.offsets_tensor.has_value();
-    const bool use_offset =
-        operation_attributes.effective_M_tiles > 0 || in0_parent_k_mode || input_and_weight_k_active;
+    const bool use_offset = operation_attributes.expected_M_tiles > 0 || in0_parent_k_mode || input_and_weight_k_active;
     const bool use_offset_in1 = in1_parent_k_mode || input_and_weight_k_active;
     // Mirror the program factory's transpose_core_grid decision exactly: use the caller's
-    // effective_M_tiles when set (per-call M upper bound), else fall back to the input's
+    // expected_M_tiles when set (per-call M upper bound), else fall back to the input's
     // full M dimension. Comparison in tile units.
     const uint32_t parent_M_for_hash = transpose_a ? a.logical_shape()[-1] : a.logical_shape()[-2];
     const uint32_t parent_M_tiles_for_hash = tt::div_up(parent_M_for_hash, tt::constants::TILE_HEIGHT);
     const uint32_t actual_M_tiles_for_hash =
-        (operation_attributes.effective_M_tiles > 0) ? operation_attributes.effective_M_tiles : parent_M_tiles_for_hash;
+        (operation_attributes.expected_M_tiles > 0) ? operation_attributes.expected_M_tiles : parent_M_tiles_for_hash;
     const uint32_t N = transpose_b ? w.logical_shape()[-2] : w.logical_shape()[-1];
     const uint32_t N_tiles_for_hash = N / tt::constants::TILE_WIDTH;
     const bool transpose_core_grid = actual_M_tiles_for_hash > N_tiles_for_hash;
@@ -310,7 +309,7 @@ ttnn::Tensor ttml_variable_matmul(
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<ttnn::Tensor> output_tensor,
     uint32_t offsets_start_index,
-    uint32_t effective_M_tiles) {
+    uint32_t expected_M_tiles) {
     using OperationType = ttml::metal::ops::variable_matmul::device::VariableMatmulDeviceOperation;
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor.device()->arch(),
@@ -326,7 +325,7 @@ ttnn::Tensor ttml_variable_matmul(
             .compute_kernel_config = kernel_config_val,
             .transpose_a = transpose_a,
             .transpose_b = transpose_b,
-            .effective_M_tiles = effective_M_tiles,
+            .expected_M_tiles = expected_M_tiles,
             .offsets_role = offsets_role,
             .offsets_start_index = offsets_start_index,
         },
