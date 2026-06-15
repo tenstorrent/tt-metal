@@ -56,8 +56,6 @@ uint32_t _start() {
 #endif
 #else
     extern uint32_t __tdata_lma[];
-    // for now this works for legacy kernels, we need to revisit this for new kernels
-    // if (hartid == /* leading core */ 0) {
     extern uint32_t __ldm_tdata_start[];
     extern uint32_t __ldm_tdata_end[];
     uint32_t neo_id = internal_::get_neo_id();
