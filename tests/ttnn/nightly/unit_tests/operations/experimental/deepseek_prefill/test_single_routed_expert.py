@@ -176,6 +176,7 @@ def test_single_routed_expert_ds(mesh_device, device_params, num_tokens: int, em
 @pytest.mark.parametrize(
     "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
+@pytest.mark.extended_model
 def test_single_routed_expert_minimax(mesh_device, device_params, num_tokens: int, emb_dim: int, hidden_dim: int):
     run_single_routed_expert(mesh_device, device_params, num_tokens, emb_dim, hidden_dim)
 
@@ -189,6 +190,7 @@ def test_single_routed_expert_minimax(mesh_device, device_params, num_tokens: in
 @pytest.mark.parametrize(
     "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
+@pytest.mark.extended_model
 def test_single_routed_expert_glm(mesh_device, device_params, num_tokens: int, emb_dim: int, hidden_dim: int):
     run_single_routed_expert(mesh_device, device_params, num_tokens, emb_dim, hidden_dim)
 
@@ -202,6 +204,7 @@ def test_single_routed_expert_glm(mesh_device, device_params, num_tokens: int, e
 @pytest.mark.parametrize(
     "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
+@pytest.mark.extended_model
 def test_single_routed_expert_v4_pro(mesh_device, device_params, num_tokens: int, emb_dim: int, hidden_dim: int):
     run_single_routed_expert(mesh_device, device_params, num_tokens, emb_dim, hidden_dim)
 
@@ -215,6 +218,7 @@ def test_single_routed_expert_v4_pro(mesh_device, device_params, num_tokens: int
 @pytest.mark.parametrize(
     "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
+@pytest.mark.extended_model
 def test_single_routed_expert_v4_flash(mesh_device, device_params, num_tokens: int, emb_dim: int, hidden_dim: int):
     run_single_routed_expert(mesh_device, device_params, num_tokens, emb_dim, hidden_dim)
 
@@ -228,6 +232,7 @@ def test_single_routed_expert_v4_flash(mesh_device, device_params, num_tokens: i
 @pytest.mark.parametrize(
     "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
+@pytest.mark.extended_model
 def test_single_routed_expert_gpt_oss(mesh_device, device_params, num_tokens: int, emb_dim: int, hidden_dim: int):
     run_single_routed_expert(mesh_device, device_params, num_tokens, emb_dim, hidden_dim)
 
@@ -369,6 +374,7 @@ def test_single_routed_expert_faked_token_count_ds(
     "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
 @pytest.mark.skipif(not is_blackhole(), reason="device-side count-aware sparsity is Blackhole-only")
+@pytest.mark.extended_model
 def test_single_routed_expert_faked_token_count_minimax(
     mesh_device, device_params, allocated_tokens: int, active_tokens: int, emb_dim: int, hidden_dim: int
 ):
@@ -387,6 +393,7 @@ def test_single_routed_expert_faked_token_count_minimax(
     "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
 @pytest.mark.skipif(not is_blackhole(), reason="device-side count-aware sparsity is Blackhole-only")
+@pytest.mark.extended_model
 def test_single_routed_expert_faked_token_count_glm(
     mesh_device, device_params, allocated_tokens: int, active_tokens: int, emb_dim: int, hidden_dim: int
 ):
@@ -408,6 +415,7 @@ def test_single_routed_expert_faked_token_count_glm(
     "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
 @pytest.mark.skipif(not is_blackhole(), reason="device-side count-aware sparsity is Blackhole-only")
+@pytest.mark.extended_model
 def test_single_routed_expert_faked_token_count_v4_pro(
     mesh_device, device_params, allocated_tokens: int, active_tokens: int, emb_dim: int, hidden_dim: int
 ):
@@ -429,6 +437,7 @@ def test_single_routed_expert_faked_token_count_v4_pro(
     "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
 @pytest.mark.skipif(not is_blackhole(), reason="device-side count-aware sparsity is Blackhole-only")
+@pytest.mark.extended_model
 def test_single_routed_expert_faked_token_count_v4_flash(
     mesh_device, device_params, allocated_tokens: int, active_tokens: int, emb_dim: int, hidden_dim: int
 ):
@@ -450,6 +459,7 @@ def test_single_routed_expert_faked_token_count_v4_flash(
     "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
 @pytest.mark.skipif(not is_blackhole(), reason="device-side count-aware sparsity is Blackhole-only")
+@pytest.mark.extended_model
 def test_single_routed_expert_faked_token_count_gpt_oss(
     mesh_device, device_params, allocated_tokens: int, active_tokens: int, emb_dim: int, hidden_dim: int
 ):

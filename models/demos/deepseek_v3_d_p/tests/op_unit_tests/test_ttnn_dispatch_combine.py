@@ -422,6 +422,7 @@ def test_ttnn_dispatch_combine_ds(
     [ttnn.TILE_LAYOUT],
     ids=["dispatched_buffer_tile"],
 )
+@pytest.mark.extended_model
 def test_ttnn_dispatch_combine_glm(
     mesh_device,
     seq_len_per_chip,
@@ -465,6 +466,7 @@ def test_ttnn_dispatch_combine_glm(
     [ttnn.TILE_LAYOUT],
     ids=["dispatched_buffer_tile"],
 )
+@pytest.mark.extended_model
 def test_ttnn_dispatch_combine_minimax(
     mesh_device,
     seq_len_per_chip,
@@ -508,6 +510,7 @@ def test_ttnn_dispatch_combine_minimax(
     [ttnn.TILE_LAYOUT],
     ids=["dispatched_buffer_tile"],
 )
+@pytest.mark.extended_model
 def test_ttnn_dispatch_combine_v4_pro(
     mesh_device,
     seq_len_per_chip,
@@ -551,6 +554,7 @@ def test_ttnn_dispatch_combine_v4_pro(
     [ttnn.TILE_LAYOUT],
     ids=["dispatched_buffer_tile"],
 )
+@pytest.mark.extended_model
 def test_ttnn_dispatch_combine_v4_flash(
     mesh_device,
     seq_len_per_chip,
@@ -594,6 +598,7 @@ def test_ttnn_dispatch_combine_v4_flash(
     [ttnn.TILE_LAYOUT],
     ids=["dispatched_buffer_tile"],
 )
+@pytest.mark.extended_model
 def test_ttnn_dispatch_combine_gpt_oss(
     mesh_device,
     seq_len_per_chip,

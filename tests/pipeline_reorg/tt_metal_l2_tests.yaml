@@ -85,7 +85,7 @@
 
 - name: ttnn nightly experimental tests (wormhole)
   # test_moe_grouped_topk hangs on Wormhole (TODO: file issue + restore). Exclude on WH only.
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance and not test_moe_grouped_topk" --timeout=600'
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance and not test_moe_grouped_topk" -m "not extended_model" --timeout=600'
   skus:
     wh_n150:
       timeout: 65
@@ -96,7 +96,7 @@
   category: experimental
 
 - name: ttnn nightly experimental tests (blackhole)
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance" --timeout=600'
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance" -m "not extended_model" --timeout=600'
   skus:
     bh_p100:
       timeout: 35

@@ -546,6 +546,7 @@ def test_ttnn_routed_expert_ds(
     "mesh_device, device_params", ROUTED_EXPERT_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+@pytest.mark.extended_model
 def test_ttnn_routed_expert_glm(
     mesh_device,
     device_params,
@@ -592,6 +593,7 @@ def test_ttnn_routed_expert_glm(
     "mesh_device, device_params", ROUTED_EXPERT_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+@pytest.mark.extended_model
 def test_ttnn_routed_expert_minimax(
     mesh_device,
     device_params,
@@ -638,6 +640,7 @@ def test_ttnn_routed_expert_minimax(
     "mesh_device, device_params", ROUTED_EXPERT_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+@pytest.mark.extended_model
 def test_ttnn_routed_expert_v4_pro(
     mesh_device,
     device_params,
@@ -684,6 +687,7 @@ def test_ttnn_routed_expert_v4_pro(
     "mesh_device, device_params", ROUTED_EXPERT_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+@pytest.mark.extended_model
 def test_ttnn_routed_expert_v4_flash(
     mesh_device,
     device_params,
@@ -730,6 +734,7 @@ def test_ttnn_routed_expert_v4_flash(
     "mesh_device, device_params", ROUTED_EXPERT_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+@pytest.mark.extended_model
 def test_ttnn_routed_expert_gpt_oss(
     mesh_device,
     device_params,

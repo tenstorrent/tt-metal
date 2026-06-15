@@ -31,28 +31,47 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         pytest.param(3200, 7 * 1024, 2 * 1024, id="deepseek_v3-3.2K"),
         # Real model shapes.
         pytest.param(
-            4096, DeepSeekV4ProConfig.EMB_SIZE, DeepSeekV4ProConfig.MOE_INTERMEDIATE_SIZE, id="deepseek_v4_pro-4K"
+            4096,
+            DeepSeekV4ProConfig.EMB_SIZE,
+            DeepSeekV4ProConfig.MOE_INTERMEDIATE_SIZE,
+            id="deepseek_v4_pro-4K",
+            marks=pytest.mark.extended_model,
         ),
         pytest.param(
             3200,
             DeepSeekV4ProConfig.EMB_SIZE,
             DeepSeekV4ProConfig.MOE_INTERMEDIATE_SIZE,
             id="deepseek_v4_pro-3.2K",
+            marks=pytest.mark.extended_model,
         ),
         pytest.param(
             4096,
             DeepSeekV4FlashConfig.EMB_SIZE,
             DeepSeekV4FlashConfig.MOE_INTERMEDIATE_SIZE,
             id="deepseek_v4_flash-4K",
+            marks=pytest.mark.extended_model,
         ),
         pytest.param(
             3200,
             DeepSeekV4FlashConfig.EMB_SIZE,
             DeepSeekV4FlashConfig.MOE_INTERMEDIATE_SIZE,
             id="deepseek_v4_flash-3.2K",
+            marks=pytest.mark.extended_model,
         ),
-        pytest.param(4096, GptOss120BConfig.EMB_SIZE, GptOss120BConfig.MOE_INTERMEDIATE_SIZE, id="gpt_oss_120b-4K"),
-        pytest.param(3200, GptOss120BConfig.EMB_SIZE, GptOss120BConfig.MOE_INTERMEDIATE_SIZE, id="gpt_oss_120b-3.2K"),
+        pytest.param(
+            4096,
+            GptOss120BConfig.EMB_SIZE,
+            GptOss120BConfig.MOE_INTERMEDIATE_SIZE,
+            id="gpt_oss_120b-4K",
+            marks=pytest.mark.extended_model,
+        ),
+        pytest.param(
+            3200,
+            GptOss120BConfig.EMB_SIZE,
+            GptOss120BConfig.MOE_INTERMEDIATE_SIZE,
+            id="gpt_oss_120b-3.2K",
+            marks=pytest.mark.extended_model,
+        ),
     ],
 )
 @pytest.mark.parametrize(

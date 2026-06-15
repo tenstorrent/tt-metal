@@ -488,6 +488,7 @@ def test_ttnn_dispatch_ds(
 )
 @pytest.mark.parametrize("use_fp8_output", [False, True], ids=["bf16_out", "fp8_out"])
 @pytest.mark.parametrize("verbose", [False])
+@pytest.mark.extended_model
 def test_ttnn_dispatch_glm(
     mesh_device,
     seq_len_per_chip,
@@ -561,6 +562,7 @@ def test_ttnn_dispatch_glm(
 )
 @pytest.mark.parametrize("use_fp8_output", [False, True], ids=["bf16_out", "fp8_out"])
 @pytest.mark.parametrize("verbose", [False])
+@pytest.mark.extended_model
 def test_ttnn_dispatch_minimax(
     mesh_device,
     seq_len_per_chip,
@@ -633,6 +635,7 @@ def test_ttnn_dispatch_minimax(
 )
 @pytest.mark.parametrize("use_fp8_output", [False, True], ids=["bf16_out", "fp8_out"])
 @pytest.mark.parametrize("verbose", [False])
+@pytest.mark.extended_model
 def test_ttnn_dispatch_v4_pro(
     mesh_device,
     seq_len_per_chip,
@@ -705,6 +708,7 @@ def test_ttnn_dispatch_v4_pro(
 )
 @pytest.mark.parametrize("use_fp8_output", [False, True], ids=["bf16_out", "fp8_out"])
 @pytest.mark.parametrize("verbose", [False])
+@pytest.mark.extended_model
 def test_ttnn_dispatch_v4_flash(
     mesh_device,
     seq_len_per_chip,
@@ -777,6 +781,7 @@ def test_ttnn_dispatch_v4_flash(
 )
 @pytest.mark.parametrize("use_fp8_output", [False, True], ids=["bf16_out", "fp8_out"])
 @pytest.mark.parametrize("verbose", [False])
+@pytest.mark.extended_model
 def test_ttnn_dispatch_gpt_oss(
     mesh_device,
     seq_len_per_chip,

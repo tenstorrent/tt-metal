@@ -36,11 +36,11 @@ NUM_ROUTED_EXPERTS = DeepSeekV3Config.NUM_ROUTED_EXPERTS
 # DeepSeek V4 Pro = 7168, DeepSeek V4 Flash = 4096, GPT-OSS 120B = 2880.
 EMB_DIM_PARAMS = [
     pytest.param(DeepSeekV3Config.EMB_SIZE, id="ds"),
-    pytest.param(GLM51Config.EMB_SIZE, id="glm"),
-    pytest.param(MiniMaxM27Config.EMB_SIZE, id="minimax"),
-    pytest.param(DeepSeekV4ProConfig.EMB_SIZE, id="v4_pro"),
-    pytest.param(DeepSeekV4FlashConfig.EMB_SIZE, id="v4_flash"),
-    pytest.param(GptOss120BConfig.EMB_SIZE, id="gpt_oss"),
+    pytest.param(GLM51Config.EMB_SIZE, id="glm", marks=pytest.mark.extended_model),
+    pytest.param(MiniMaxM27Config.EMB_SIZE, id="minimax", marks=pytest.mark.extended_model),
+    pytest.param(DeepSeekV4ProConfig.EMB_SIZE, id="v4_pro", marks=pytest.mark.extended_model),
+    pytest.param(DeepSeekV4FlashConfig.EMB_SIZE, id="v4_flash", marks=pytest.mark.extended_model),
+    pytest.param(GptOss120BConfig.EMB_SIZE, id="gpt_oss", marks=pytest.mark.extended_model),
 ]
 
 

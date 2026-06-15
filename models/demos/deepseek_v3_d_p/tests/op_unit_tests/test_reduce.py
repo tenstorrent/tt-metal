@@ -232,6 +232,7 @@ def test_ttnn_reduce_ds(mesh_device, seq_len, emb_dim, topk, use_weights):
     ids=["glm"],
 )
 @pytest.mark.parametrize("mesh_device, device_params", REDUCE_MESH_PARAMS, indirect=["mesh_device", "device_params"])
+@pytest.mark.extended_model
 def test_ttnn_reduce_glm(mesh_device, seq_len, emb_dim, topk, use_weights):
     run_reduce(mesh_device, seq_len, emb_dim, topk, use_weights)
 
@@ -244,6 +245,7 @@ def test_ttnn_reduce_glm(mesh_device, seq_len, emb_dim, topk, use_weights):
     ids=["minimax"],
 )
 @pytest.mark.parametrize("mesh_device, device_params", REDUCE_MESH_PARAMS, indirect=["mesh_device", "device_params"])
+@pytest.mark.extended_model
 def test_ttnn_reduce_minimax(mesh_device, seq_len, emb_dim, topk, use_weights):
     run_reduce(mesh_device, seq_len, emb_dim, topk, use_weights)
 
@@ -256,6 +258,7 @@ def test_ttnn_reduce_minimax(mesh_device, seq_len, emb_dim, topk, use_weights):
     ids=["v4_pro"],
 )
 @pytest.mark.parametrize("mesh_device, device_params", REDUCE_MESH_PARAMS, indirect=["mesh_device", "device_params"])
+@pytest.mark.extended_model
 def test_ttnn_reduce_v4_pro(mesh_device, seq_len, emb_dim, topk, use_weights):
     run_reduce(mesh_device, seq_len, emb_dim, topk, use_weights)
 
@@ -268,6 +271,7 @@ def test_ttnn_reduce_v4_pro(mesh_device, seq_len, emb_dim, topk, use_weights):
     ids=["v4_flash"],
 )
 @pytest.mark.parametrize("mesh_device, device_params", REDUCE_MESH_PARAMS, indirect=["mesh_device", "device_params"])
+@pytest.mark.extended_model
 def test_ttnn_reduce_v4_flash(mesh_device, seq_len, emb_dim, topk, use_weights):
     run_reduce(mesh_device, seq_len, emb_dim, topk, use_weights)
 
@@ -280,5 +284,6 @@ def test_ttnn_reduce_v4_flash(mesh_device, seq_len, emb_dim, topk, use_weights):
     ids=["gpt_oss"],
 )
 @pytest.mark.parametrize("mesh_device, device_params", REDUCE_MESH_PARAMS, indirect=["mesh_device", "device_params"])
+@pytest.mark.extended_model
 def test_ttnn_reduce_gpt_oss(mesh_device, seq_len, emb_dim, topk, use_weights):
     run_reduce(mesh_device, seq_len, emb_dim, topk, use_weights)

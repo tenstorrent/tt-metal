@@ -15,7 +15,10 @@ import torch
 import ttnn
 
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -400,12 +403,16 @@ STRESS_GLOBAL_ROWS = 2 * 25 * K  # 51200
 STRESS_MAX_TOKENS = 25 * K  # 25600
 
 # hidden_dim (the global tensor's column count) is the only model-dependent stress shape:
-# DeepSeek V3 = 7168, GLM 5.1 = 6144, MiniMax M2.7 = 3072. global_rows and max_tokens are
+# DeepSeek V3 = 7168, GLM 5.1 = 6144, MiniMax M2.7 = 3072, DeepSeek V4 Pro = 7168,
+# DeepSeek V4 Flash = 4096, GPT-OSS 120B = 2880. global_rows and max_tokens are
 # token-dimension and model-independent.
 STRESS_HIDDEN_DIM_PARAMS = [
     pytest.param(DeepSeekV3Config.EMB_SIZE, id="ds"),
-    pytest.param(GLM51Config.EMB_SIZE, id="glm"),
-    pytest.param(MiniMaxM27Config.EMB_SIZE, id="minimax"),
+    pytest.param(GLM51Config.EMB_SIZE, id="glm", marks=pytest.mark.extended_model),
+    pytest.param(MiniMaxM27Config.EMB_SIZE, id="minimax", marks=pytest.mark.extended_model),
+    pytest.param(DeepSeekV4ProConfig.EMB_SIZE, id="v4_pro", marks=pytest.mark.extended_model),
+    pytest.param(DeepSeekV4FlashConfig.EMB_SIZE, id="v4_flash", marks=pytest.mark.extended_model),
+    pytest.param(GptOss120BConfig.EMB_SIZE, id="gpt_oss", marks=pytest.mark.extended_model),
 ]
 
 
