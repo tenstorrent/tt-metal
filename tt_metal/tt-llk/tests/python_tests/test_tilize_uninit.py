@@ -31,15 +31,12 @@ the THCON_SECx_REG0_TileDescriptor z-dim back via get_tensix_state:
 from dataclasses import asdict
 
 import pytest
-from conftest import skip_for_coverage, skip_for_quasar
 from fuser.fuser_config_parser import FuserConfigSchema
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.logger import logger
 from ttexalens.tt_exalens_lib import get_tensix_state
 
 
-@skip_for_quasar
-@skip_for_coverage
 @pytest.mark.parametrize(
     "test_name,num_faces",
     [("tilize_only_num_faces_2", 2)],
@@ -68,8 +65,6 @@ def test_tilize_uninit_restores_z_dim(test_name, num_faces, regenerate_cpp):
     )
 
 
-@skip_for_quasar
-@skip_for_coverage
 @pytest.mark.parametrize(
     "test_name,mm_num_faces",
     [("tilize_num_faces_2_then_bfp8_matmul", 4)],
