@@ -40,8 +40,9 @@ class TracedDecode:
     position 0 again with real k/v, so no cache reset is needed before replay.
     """
 
-    def __init__(self, model, mesh, B, hidden, rope, kv_caches):
+    def __init__(self, model, mesh, B, hidden, rope, kv_caches, use_sparse=False, sub_device_id=None):
         self.model, self.mesh, self.B, self.kv = model, mesh, B, kv_caches
+        self._kw = {"use_sparse": use_sparse, "sub_device_id": sub_device_id}  # sparse MoE opts (default off)
         self.tt_x = _repl(torch.zeros(B, 1, hidden), mesh)
         self.tt_cos = _repl(torch.zeros(B, 1, 1, rope), mesh)
         self.tt_sin = _repl(torch.zeros(B, 1, 1, rope), mesh)
@@ -49,9 +50,9 @@ class TracedDecode:
             torch.zeros(B, dtype=torch.int32), device=mesh, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh)
         )
         # warmup (compile kernels) then capture the graph
-        self.model.forward_decode(self.tt_x, self.tt_pos, self.tt_cos, self.tt_sin, self.kv)
+        self.model.forward_decode(self.tt_x, self.tt_pos, self.tt_cos, self.tt_sin, self.kv, **self._kw)
         self.tid = ttnn.begin_trace_capture(mesh, cq_id=0)
-        self.out = self.model.forward_decode(self.tt_x, self.tt_pos, self.tt_cos, self.tt_sin, self.kv)
+        self.out = self.model.forward_decode(self.tt_x, self.tt_pos, self.tt_cos, self.tt_sin, self.kv, **self._kw)
         ttnn.end_trace_capture(mesh, self.tid, cq_id=0)
 
     def step(self, x, cos, sin, positions):

@@ -32,7 +32,7 @@ DECODE_STEPS = 32
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 100000000, "num_command_queues": 1}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200000000, "num_command_queues": 1}],
     indirect=True,
 )
 def test_m4_perf(mesh_device, reset_seeds):
@@ -45,12 +45,18 @@ def test_m4_perf(mesh_device, reset_seeds):
     rope, hidden = cfg.qk_rope_head_dim, cfg.hidden_size
     table = []
 
-    # ---- decode throughput vs batch: per-step latency is ~flat across batch (the MoE streams each
-    # expert's weights ONCE and applies them to all B tokens), so aggregate tok/s scales with batch.
-    decode_rows = []
-    for B in DECODE_BATCHES:
-        kv = tt.init_kv_caches(B, max_seq=max(ISLS) + DECODE_STEPS + 64)
-        td = TracedDecode(tt, mesh_device, B, hidden, rope, kv)
+    # M4_PERF_SPARSE=1: also measure the sparse-MoE decode (top-k dispatch) per batch alongside dense.
+    sparse_on = os.environ.get("M4_PERF_SPARSE") == "1"
+    sdid = None
+    if sparse_on:
+        grid = mesh_device.compute_with_storage_grid_size()
+        crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+        sdm = mesh_device.create_sub_device_manager([ttnn.SubDevice([crs])], 0)
+        mesh_device.load_sub_device_manager(sdm)
+        mesh_device.set_sub_device_stall_group([ttnn.SubDeviceId(0)])
+        sdid = ttnn.SubDeviceId(0)
+
+    def _time_decode(td, B):
         x1, c1, s1 = torch.randn(B, 1, hidden) * 0.1, torch.randn(B, 1, 1, rope), torch.randn(B, 1, 1, rope)
         td.step(x1, c1, s1, [0] * B)  # warmup replay
         ttnn.synchronize_device(mesh_device)
@@ -58,11 +64,27 @@ def test_m4_perf(mesh_device, reset_seeds):
         for i in range(DECODE_STEPS):
             td.step(x1, c1, s1, [i] * B)
         ttnn.synchronize_device(mesh_device)
-        step = (time.time() - t0) / DECODE_STEPS
+        return (time.time() - t0) / DECODE_STEPS
+
+    # ---- decode throughput vs batch: per-step latency is ~flat across batch (the MoE streams each
+    # expert's weights ONCE and applies them to all B tokens), so aggregate tok/s scales with batch.
+    decode_rows = []
+    for B in DECODE_BATCHES:
+        kv = tt.init_kv_caches(B, max_seq=max(ISLS) + DECODE_STEPS + 64)
+        td = TracedDecode(tt, mesh_device, B, hidden, rope, kv)
+        step = _time_decode(td, B)
         decode_rows.append((B, step, 1 / step, B / step))
         logger.info(
             f"DECODE B={B}: {step*1e3:.2f}ms/step, {1/step:.1f} tok/s/user, {B/step:.0f} tok/s aggregate ({N_LAYERS}L)"
         )
+        if sparse_on and B >= mesh_device.get_num_devices():
+            kvs = tt.init_kv_caches(B, max_seq=max(ISLS) + DECODE_STEPS + 64)
+            tds = TracedDecode(tt, mesh_device, B, hidden, rope, kvs, use_sparse=True, sub_device_id=sdid)
+            ss = _time_decode(tds, B)
+            spd = (step / ss - 1) * 100
+            logger.info(
+                f"DECODE-SPARSE B={B}: {ss*1e3:.2f}ms/step, {B/ss:.0f} tok/s aggregate ({N_LAYERS}L) — {spd:+.1f}% vs dense"
+            )
     dev_dec = decode_rows[0][1]
 
     # ---- prefill TTFT sweep (steady-state; warm up each shape once) ----
