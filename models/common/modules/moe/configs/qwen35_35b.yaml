@@ -13,22 +13,6 @@ n_group: 1
 score_func: softmax
 routed_scaling_factor: 1.0
 
-# router matmul program config: tuned 2D-mcast blocking for the gate matmul (batch 32 × hidden 2048 @
-# 2048 × 256). Same blocking as deepseek_v3: in0_block_w=32 divides K=64 tiles; out is 1×8 tiles →
-# per_core_M=1, per_core_N=2. compute_with_storage_grid_size is device-derived (auto-filled). Omit this
-# block to let ttnn auto-select (slower). (No gate_matmul_compute here — hidden=2048 is shallow enough
-# that the default matmul fidelity is fine; the program config is independent of fidelity.)
-gate_matmul_program_config:
-  in0_block_w: 32
-  out_subblock_h: 1
-  out_subblock_w: 2
-  out_block_h: 1
-  out_block_w: 2
-  per_core_M: 1
-  per_core_N: 2
-  transpose_mcast: false
-  fused_activation: null
-
 compute:
   intermediate_size: 512
   activation_type: SILU

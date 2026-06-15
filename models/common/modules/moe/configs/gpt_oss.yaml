@@ -22,22 +22,6 @@ routed_scaling_factor: 1.0
 # (has_bias=true above is the separate EXPERT-MLP bias.)
 router_bias: true
 
-# router matmul program config: tuned 2D-mcast blocking for the gate matmul (batch 32 × hidden 2880 @
-# 2880 × 256 — N=128 experts padded to 256). The router LINEAR bias goes through ttnn.linear; this program
-# config applies to that linear's matmul. in0_block_w=30 = largest ≤32 divisor of K=90 tiles (hidden 2880
-# isn't a 1024-multiple); out is 1×8 tiles → per_core_M=1, per_core_N=2 (4 cores in N). Grid auto-filled.
-# Omit to let ttnn auto-select (slower).
-gate_matmul_program_config:
-  in0_block_w: 30
-  out_subblock_h: 1
-  out_subblock_w: 2
-  out_block_h: 1
-  out_block_w: 2
-  per_core_M: 1
-  per_core_N: 2
-  transpose_mcast: false
-  fused_activation: null
-
 compute:
   intermediate_size: 2880
   activation_type: SWIGLU

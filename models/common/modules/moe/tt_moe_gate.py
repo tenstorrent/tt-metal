@@ -77,8 +77,6 @@ class TTMoEGate:
         score_func = config.score_func
         scaling_factor = config.routed_scaling_factor
         eps = config.eps
-        matmul_compute_config = config.gate_matmul_compute
-        matmul_program_config = config.gate_matmul_program_config
 
         # `score_func` maps to (a) the score nonlinearity and (b) two op flags -- enable_sigmoid (apply
         # sigmoid inside the op) and output_softmax (softmax over the selected top-k vs linear renorm):
@@ -141,8 +139,12 @@ class TTMoEGate:
         self.num_device_cores = grid.x * grid.y
         self._grid = grid
 
-        self.compute_kernel_config = self._matmul_compute_config(matmul_compute_config)
-        self.matmul_program_config = self._matmul_program_config(matmul_program_config)
+        self.compute_kernel_config = self._matmul_compute_config(
+            config.gate_matmul_compute, config.gate_matmul_high_fidelity
+        )
+        self.matmul_program_config = self._matmul_program_config(
+            config.gate_matmul_program_config, config.gate_matmul_auto_program_config
+        )
 
         # Op path: pad the router weight (+ linear bias) to the block size UP FRONT so the matmul directly
         # emits padded_experts-wide logits — this avoids a per-forward ttnn.pad (its dispatch + memory copy
@@ -273,25 +275,30 @@ class TTMoEGate:
         )
 
     # ------------------------------------------------------------------ helpers
-    def _matmul_compute_config(self, cfg):
-        """Build the router-matmul ``compute_kernel_config`` from a per-model dict (or pass through an
-        already-built config / ``None``).
+    def _matmul_compute_config(self, cfg, high_fidelity):
+        """Build the router-matmul ``compute_kernel_config``.
 
-        The gate matmul is tiny but its reduction is ``hidden_size``-deep; on a deep, tie-sensitive gate
-        (e.g. deepseek 7168→256, grouped top-8) the DEFAULT matmul (LoFi + bf16 accumulate) builds up
-        enough error to flip near-tied experts at the top-k boundary (output weights stay ~right, but the
-        selected expert *ids* drift). There is no universal setting — deepseek_v3 uses HiFi2+fp32-accumulate,
-        mixtral uses LoFi, gpt_oss keeps the default — so this is per-model config (yaml ``gate_matmul_compute``)
-        rather than hardcoded. Built device-agnostically (``init_device_compute_kernel_config`` selects the
-        right config class per arch), unlike a hardcoded ``WormholeComputeKernelConfig`` (wrong on Blackhole).
+        The gate matmul is tiny but its reduction is ``hidden_size``-deep; with the ttnn DEFAULT matmul
+        (LoFi + bf16 accumulate) the accumulated error flips near-tied experts at the top-k boundary
+        (output weights stay ~right, but the selected expert *ids* drift). Whether a given gate actually
+        has a near-tie there is data-dependent (not a clean function of ``hidden_size`` / ``k``), so rather
+        than gate it per-model we DEFAULT every gate to HiFi2 + fp32 accumulation — the matmul is small, so
+        the fidelity cost is negligible and it removes the drift uniformly. Built device-agnostically
+        (``init_device_compute_kernel_config`` picks the right config class per arch), unlike a hardcoded
+        ``WormholeComputeKernelConfig`` (wrong on Blackhole).
 
-          - ``None``        → ttnn's default matmul fidelity (fine for shallow / tie-insensitive gates).
-          - ``dict``        → keys ``math_fidelity`` ("HiFi2"|…), ``math_approx_mode``, ``fp32_dest_acc_en``,
-                              ``packer_l1_acc`` (each optional; the defaults below suit a deep, tie-sensitive gate).
-          - ttnn config     → used as-is.
+          - ``cfg`` dict → custom: keys ``math_fidelity`` ("HiFi2"|…), ``math_approx_mode``,
+                           ``fp32_dest_acc_en``, ``packer_l1_acc`` override the high-fidelity defaults.
+                           A dict (or prebuilt config) WINS over ``high_fidelity``.
+          - else ``high_fidelity`` True (default) → built-in HiFi2 + fp32 accumulate + packer L1 acc.
+          - else (``high_fidelity`` False)        → ttnn's default (low) matmul fidelity.
         """
-        if cfg is None or not isinstance(cfg, dict):
-            return cfg
+        if cfg is not None and not isinstance(cfg, dict):
+            return cfg  # already a ttnn compute_kernel_config → use as-is
+        if cfg is None:
+            if not high_fidelity:
+                return None  # opt out → ttnn's default matmul fidelity
+            cfg = {}  # built-in high-fidelity default (keys below)
         cfg = dict(cfg)
         fidelity = cfg.pop("math_fidelity", "HiFi2")
         if isinstance(fidelity, str):
@@ -304,31 +311,67 @@ class TTMoEGate:
             packer_l1_acc=cfg.pop("packer_l1_acc", True),
         )
 
-    def _matmul_program_config(self, cfg):
-        """Build the router-matmul ``program_config`` from a per-model dict (or pass through an
-        already-built config / ``None``).
+    def _matmul_program_config(self, cfg, auto):
+        """Build the router-matmul ``program_config``.
 
         The gate matmul is tiny (``batch×hidden @ hidden×experts``) but ttnn's auto-selected program config
-        is generic; a hand-tuned 2D-multicast config (kernel grid + block/subblock sizing) can materially
-        cut its latency — deepseek's ``MoEGate`` ships one (``per_core_M=1, per_core_N=2, …``). There is no
-        universal setting (it depends on the matmul shape and the device grid), so it is per-model config
-        (yaml ``gate_matmul_program_config``) rather than hardcoded, and ``None`` keeps ttnn's auto pick.
+        is generic; a hand-tuned 2D-multicast config (kernel grid + block/subblock sizing) materially cuts
+        its latency. The tuning is pure shape/grid math (no data dependence), so by DEFAULT we DERIVE it from
+        the gate matmul shape + the device grid (see ``_derive_program_config``) rather than hand-listing it
+        per model.
 
-          - ``None``        → ttnn auto-selects the program config (fine for most gates).
-          - ``dict``        → key ``type`` names the ttnn program-config class (default
-                              "MatmulMultiCoreReuseMultiCastProgramConfig"); the remaining keys are its
-                              kwargs (e.g. ``in0_block_w``, ``per_core_M``, ``per_core_N``, ``out_subblock_*``,
-                              ``transpose_mcast``). ``compute_with_storage_grid_size`` is device-derived — it
-                              is auto-filled from the mesh device when the dict omits it (so the yaml stays
-                              arch-agnostic, like deepseek's ``mesh_device.compute_with_storage_grid_size()``).
-          - ttnn config     → used as-is.
+          - ``cfg`` dict → full override: key ``type`` names the ttnn program-config class (default
+                           "MatmulMultiCoreReuseMultiCastProgramConfig"); the remaining keys are its kwargs
+                           (e.g. ``in0_block_w``, ``per_core_M``, ``per_core_N``, ``out_subblock_*``).
+                           ``compute_with_storage_grid_size`` is auto-filled when omitted (yaml stays
+                           arch-agnostic). A dict (or prebuilt config) WINS over ``auto``.
+          - else ``auto`` True (default) → the derived 2D-mcast config.
+          - else (``auto`` False)        → ttnn auto-selects the program config.
         """
-        if cfg is None or not isinstance(cfg, dict):
-            return cfg
+        if cfg is not None and not isinstance(cfg, dict):
+            return cfg  # already a ttnn program config → use as-is
+        if cfg is None:
+            if not auto:
+                return None  # let ttnn auto-select
+            cfg = self._derive_program_config()
         cfg = dict(cfg)
         pc_class = getattr(ttnn, cfg.pop("type", "MatmulMultiCoreReuseMultiCastProgramConfig"))
         cfg.setdefault("compute_with_storage_grid_size", self.mesh_device.compute_with_storage_grid_size())
         return pc_class(**cfg)
+
+    def _derive_program_config(self) -> dict:
+        """Derive the 2D-mcast blocking for the gate matmul (``batch×hidden @ hidden×padded_experts``) from
+        its shape + the device grid. Reproduces the previously hand-tuned per-model configs exactly.
+
+          ``M_tiles = ceil(batch/32)`` (=1 for the batch-32 decode gate); ``K_tiles = hidden/32``;
+          ``N_tiles = padded_experts/32`` (256 experts → 8, the 512-combine path → 16).
+            • ``in0_block_w`` = largest divisor of ``K_tiles`` that is ≤ 32 (the widest K-block within the
+              32-tile cap; a non-1024-multiple hidden gives e.g. 20 / 22 / 30 instead of 32).
+            • ``per_core_N`` = smallest divisor ≥ 2 of ``N_tiles`` that fits the grid
+              (``N_tiles / per_core_N ≤ grid.x``): 2 on an 8-wide grid, growing to 4 on a narrower one.
+            • ``out_block_{h,w}`` = ``per_core_{M,N}``; ``out_subblock_{h,w}`` = largest factors with
+              ``h * w ≤ 8`` (the DEST half-register tile cap).
+        """
+        batch = self.config.batch_per_device or 32
+        m_tiles = (batch + 31) // 32
+        k_tiles = self.hidden_size // 32
+        n_tiles = self._padded_experts // 32
+        grid_x = self._grid.x
+        in0_block_w = max(d for d in range(1, 33) if k_tiles % d == 0)
+        per_core_n = next((d for d in range(2, n_tiles + 1) if n_tiles % d == 0 and n_tiles // d <= grid_x), n_tiles)
+        out_subblock_w = next((w for w in range(min(per_core_n, 8), 0, -1) if per_core_n % w == 0), 1)
+        out_subblock_h = next((h for h in range(m_tiles, 0, -1) if m_tiles % h == 0 and h * out_subblock_w <= 8), 1)
+        return {
+            "in0_block_w": in0_block_w,
+            "out_subblock_h": out_subblock_h,
+            "out_subblock_w": out_subblock_w,
+            "out_block_h": m_tiles,
+            "out_block_w": per_core_n,
+            "per_core_M": m_tiles,
+            "per_core_N": per_core_n,
+            "transpose_mcast": False,
+            "fused_activation": None,
+        }
 
     def _sharded_mem_config(self, num_cores: int, shard_shape: tuple = _SHARD_SHAPE) -> ttnn.MemoryConfig:
         # one token per core; shard_shape is (32,32) for a single 256-block, (num_blocks*32, 32) for the

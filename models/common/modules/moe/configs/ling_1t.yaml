@@ -17,30 +17,6 @@ routed_scaling_factor: 2.5
 # noaux_tc score-correction bias (e_score_correction_bias): added to the sigmoid scores for SELECTION only.
 score_correction_bias: true
 
-# router matmul compute config (OPTIONAL, per-model): ling_1t's gate matmul is hidden=8192-deep and the
-# grouped 8→4 selection is tie-sensitive, so it needs HiFi2 + fp32 accumulation (the default LoFi + bf16
-# accumulate flips near-tied experts → top-k drift). Omit to fall back to ttnn's default matmul fidelity.
-gate_matmul_compute:
-  math_fidelity: HiFi2
-  math_approx_mode: true
-  fp32_dest_acc_en: true
-  packer_l1_acc: true
-
-# router matmul program config: tuned 2D-mcast blocking for the gate matmul (batch 32 × hidden 8192 @
-# 8192 × 256). n_group=8 (deepseek grouped op), but the router matmul is the same [batch,hidden]@[hidden,256].
-# in0_block_w=32 divides K=256 tiles; out is 1×8 tiles → per_core_M=1, per_core_N=2 (4 cores in N).
-# compute_with_storage_grid_size is device-derived (auto-filled). Omit to let ttnn auto-select (slower).
-gate_matmul_program_config:
-  in0_block_w: 32
-  out_subblock_h: 1
-  out_subblock_w: 2
-  out_block_h: 1
-  out_block_w: 2
-  per_core_M: 1
-  per_core_N: 2
-  transpose_mcast: false
-  fused_activation: null
-
 compute:
   intermediate_size: 2048
   activation_type: SILU

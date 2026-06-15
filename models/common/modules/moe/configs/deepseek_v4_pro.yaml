@@ -17,28 +17,6 @@ n_group: 1
 score_func: sqrtsoftplus
 routed_scaling_factor: 2.5
 
-# router matmul compute config: hidden=7168 is deep + tie-sensitive, needs HiFi2 + fp32 accumulation.
-gate_matmul_compute:
-  math_fidelity: HiFi2
-  math_approx_mode: true
-  fp32_dest_acc_en: true
-  packer_l1_acc: true
-
-# router matmul program config: tuned 2D-mcast blocking for the gate matmul (batch 32 × hidden 7168 @
-# 7168 × 512 — N=384 experts padded to 512 for the 2-block combine). in0_block_w=32 divides K=224 tiles; out
-# is 1×16 tiles → per_core_N=2 spreads N across 8 cores (needs storage grid x≥8; drop to per_core_N=4 if
-# narrower). compute_with_storage_grid_size is device-derived (auto-filled). Omit to let ttnn auto-select.
-gate_matmul_program_config:
-  in0_block_w: 32
-  out_subblock_h: 1
-  out_subblock_w: 2
-  out_block_h: 1
-  out_block_w: 2
-  per_core_M: 1
-  per_core_N: 2
-  transpose_mcast: false
-  fused_activation: null
-
 compute:
   intermediate_size: 3072
   activation_type: SILU

@@ -16,29 +16,6 @@ n_group: 1
 score_func: softmax
 routed_scaling_factor: 1.0
 
-# router matmul compute config: hidden=4096 is deep enough to flip near-tied top-k experts at the default
-# (LoFi + bf16-accumulate) fidelity (cf. qwen3_235b), so use HiFi2 + fp32 accumulation (in the fallback matmul).
-gate_matmul_compute:
-  math_fidelity: HiFi2
-  math_approx_mode: true
-  fp32_dest_acc_en: true
-  packer_l1_acc: true
-
-# router matmul program config: tuned 2D-mcast blocking for the FALLBACK router matmul (batch 32 × hidden
-# 4096 @ 4096 × 512 — N=512 UNpadded; the fallback runs ttnn.matmul → ttnn.topk, so this applies to that
-# matmul). in0_block_w=32 divides K=128 tiles; out is 1×16 tiles → per_core_N=2 spreads N across 8 cores
-# (needs storage grid x≥8; drop to per_core_N=4 if narrower). Grid auto-filled. Omit to let ttnn auto-select.
-gate_matmul_program_config:
-  in0_block_w: 32
-  out_subblock_h: 1
-  out_subblock_w: 2
-  out_block_h: 1
-  out_block_w: 2
-  per_core_M: 1
-  per_core_N: 2
-  transpose_mcast: false
-  fused_activation: null
-
 compute:
   intermediate_size: 1024
   activation_type: SILU

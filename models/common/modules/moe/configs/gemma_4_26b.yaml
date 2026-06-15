@@ -16,29 +16,6 @@ n_group: 1
 score_func: softmax
 routed_scaling_factor: 1.0
 
-# router matmul compute config: hidden=2816 is deep enough that the default (LoFi + bf16-accumulate)
-# matmul flips near-tied experts at the top-8 boundary (cf. qwen3_235b), so use HiFi2 + fp32 accumulation.
-gate_matmul_compute:
-  math_fidelity: HiFi2
-  math_approx_mode: true
-  fp32_dest_acc_en: true
-  packer_l1_acc: true
-
-# router matmul program config: tuned 2D-mcast blocking for the gate matmul (batch 32 × hidden 2816 @
-# 2816 × 256 — N=128 experts padded to 256). in0_block_w=22 = largest ≤32 divisor of K=88 tiles (hidden 2816
-# isn't a 1024-multiple); out is 1×8 tiles → per_core_M=1, per_core_N=2 (4 cores in N). Grid auto-filled.
-# Omit to let ttnn auto-select (slower).
-gate_matmul_program_config:
-  in0_block_w: 22
-  out_subblock_h: 1
-  out_subblock_w: 2
-  out_block_h: 1
-  out_block_w: 2
-  per_core_M: 1
-  per_core_N: 2
-  transpose_mcast: false
-  fused_activation: null
-
 # REMINDER — Gemma4's gate has steps TTMoEGate does NOT cover (caller must apply, see modular_gemma4.py
 # Gemma4TextRouter.forward):
 #   step 1: RMSNorm(hidden) (with_scale=False) — before this gate

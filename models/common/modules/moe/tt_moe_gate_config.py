@@ -27,7 +27,9 @@ _GATE_YAML_KEYS = (
     "routed_scaling_factor",
     "score_correction_bias",
     "router_bias",
+    "gate_matmul_high_fidelity",
     "gate_matmul_compute",
+    "gate_matmul_auto_program_config",
     "gate_matmul_program_config",
 )
 
@@ -55,10 +57,22 @@ class TTMoEGateConfig(BaseModel):
     routed_scaling_factor: float = 1.0
     score_correction_bias: bool = False  # deepseek/noaux_tc: e_score_correction_bias (selection-only)
     router_bias: bool = False  # gpt-oss: router LINEAR bias (into logits → selection AND weights)
-    gate_matmul_compute: dict | None = None  # per-model router-matmul compute kernel config
-    # per-model router-matmul program config (kernel grid / blocking) — a tuned 2D-mcast config can
-    # materially cut the gate matmul's latency. `type` names the ttnn program-config class (default
-    # MatmulMultiCoreReuseMultiCastProgramConfig); remaining keys are its kwargs. None → ttnn auto-picks.
+    # router-matmul COMPUTE kernel fidelity. Default HIGH fidelity (HiFi2 + fp32 accumulate): the deep gate
+    # reduction drifts under the ttnn default (LoFi + bf16 accumulate) and flips near-tied experts at the
+    # top-k boundary, so every gate gets high fidelity (the matmul is tiny → the cost is negligible). Set
+    # `gate_matmul_high_fidelity: false` to opt out (ttnn's default fidelity).
+    gate_matmul_high_fidelity: bool = True
+    # OPTIONAL full override of the compute kernel: a dict (keys math_fidelity / math_approx_mode /
+    # fp32_dest_acc_en / packer_l1_acc override the HiFi2 defaults). Wins over gate_matmul_high_fidelity
+    # when set; None → use the flag above. See TTMoEGate._matmul_compute_config.
+    gate_matmul_compute: dict | None = None
+    # router-matmul PROGRAM config (kernel grid / 2D-mcast blocking). Default AUTO: derived from the gate
+    # matmul shape + device grid (TTMoEGate._derive_program_config) — a tuned config materially cuts the gate
+    # matmul latency vs ttnn's auto pick. Set `gate_matmul_auto_program_config: false` for ttnn's auto-select.
+    gate_matmul_auto_program_config: bool = True
+    # OPTIONAL full override of the program config: a dict whose `type` names the ttnn program-config class
+    # (default MatmulMultiCoreReuseMultiCastProgramConfig) and remaining keys are its kwargs
+    # (compute_with_storage_grid_size auto-filled). Wins over the auto flag when set; None → auto / ttnn.
     gate_matmul_program_config: dict | None = None
     eps: float = 1e-20
 

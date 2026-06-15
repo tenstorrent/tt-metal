@@ -16,31 +16,6 @@ routed_scaling_factor: 2.5
 # (output weights stay unbiased). Explicit per-model flag (not inferred from score_func).
 score_correction_bias: true
 
-# router matmul compute config (OPTIONAL, per-model): deepseek's gate matmul is hidden=7168-deep and the
-# grouped 8→4 selection is tie-sensitive, so it needs HiFi2 + fp32 accumulation — the default matmul
-# (LoFi + bf16 accumulate) flips near-tied experts → top-k index drift. Omit this block to fall back to
-# ttnn's default matmul fidelity (fine for shallow / tie-insensitive gates, e.g. qwen35).
-gate_matmul_compute:
-  math_fidelity: HiFi2
-  math_approx_mode: true
-  fp32_dest_acc_en: true
-  packer_l1_acc: true
-
-# router matmul program config (OPTIONAL, per-model): a tuned 2D-multicast blocking for the gate matmul
-# (batch×7168 @ 7168×256) — matches deepseek's own MoEGate decode gate_proj. Cuts the matmul latency vs
-# ttnn's auto pick. `compute_with_storage_grid_size` is device-derived (auto-filled), so it's omitted here.
-# Omit this block to let ttnn auto-select the program config.
-gate_matmul_program_config:
-  in0_block_w: 32
-  out_subblock_h: 1
-  out_subblock_w: 2
-  out_block_h: 1
-  out_block_w: 2
-  per_core_M: 1
-  per_core_N: 2
-  transpose_mcast: false
-  fused_activation: null
-
 compute:
   intermediate_size: 2048
   activation_type: SILU

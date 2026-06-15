@@ -11,25 +11,10 @@ has_bias: false
 # gate (routing front-end): n_group 1 = generalized op (ungrouped) / 8 = deepseek op (grouped top-8).
 # Same as qwen3_omni_thinker but top-6: Qwen3 MoE = softmax over all → top-6 → renormalize (≡ softmax
 # over selected, Z cancels), no bias, no scaling. 128 experts → padded to the op's 256-face in
-# TTMoEGate.forward. hidden=1024 is shallow, so the default matmul fidelity is fine (no gate_matmul_compute).
+# TTMoEGate.forward.
 n_group: 1
 score_func: softmax
 routed_scaling_factor: 1.0
-
-# router matmul program config: tuned 2D-mcast blocking for the gate matmul (batch 32 × hidden 1024 @
-# 1024 × 256 — N=128 experts padded to 256). in0_block_w=32 = K=32 tiles (whole K in one block); out is 1×8
-# tiles → per_core_M=1, per_core_N=2 (4 cores in N). compute_with_storage_grid_size is device-derived
-# (auto-filled). Omit to let ttnn auto-select (slower).
-gate_matmul_program_config:
-  in0_block_w: 32
-  out_subblock_h: 1
-  out_subblock_w: 2
-  out_block_h: 1
-  out_block_w: 2
-  per_core_M: 1
-  per_core_N: 2
-  transpose_mcast: false
-  fused_activation: null
 
 compute:
   intermediate_size: 384
