@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // To run:
-// $ROOT/tt-metal/build_emule/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.OOB_Tensor_Gap_*_SanityCheck"
+// $ROOT/tt-metal/build_emule/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.OOB_Tensor_*"
 
 #include <gtest/gtest.h>
 #include <cstdint>
@@ -107,6 +107,80 @@ TEST_F(MeshDeviceFixture, OOB_Tensor_Gap_DRAM_SanityCheck) {
     EXPECT_DEATH(
         detail::LaunchProgram(device, program),
         ".*Out-of-Bounds Write: Attempted to access DRAM address.*not part of any allocated tensor.*");
+}
+
+// Positive control (L1): resolving and writing an address INSIDE an allocated L1
+// buffer must NOT abort. Guards the OOB check from flagging legitimate in-bounds
+// accesses (e.g. an off-by-one in the range comparison or the offset
+// normalization).
+TEST_F(MeshDeviceFixture, OOB_Tensor_InBounds_L1_NoViolation) {
+    ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
+
+    auto* device = this->devices_.at(0)->get_devices()[0];
+    CoreCoord logical_core = {0, 0};
+    Program program = CreateProgram();
+
+    constexpr uint32_t buffer_size = 1024;
+    auto buf = Buffer::create(device, buffer_size, buffer_size, BufferType::L1);
+    // A word comfortably inside the buffer.
+    uint32_t in_addr = static_cast<uint32_t>(buf->address()) + 64;
+
+    std::string kernel_src = R"(
+        #include "api/dataflow/dataflow_api.h"
+        void kernel_main() {
+            uint32_t addr = get_arg_val<uint32_t>(0);
+            volatile uint32_t* ptr = (volatile uint32_t*)__emule_local_l1_to_ptr(addr);
+            *ptr = 0x1234;
+        }
+    )";
+    auto kernel = CreateKernelFromString(
+        program,
+        kernel_src,
+        logical_core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    SetRuntimeArgs(program, kernel, logical_core, {in_addr});
+
+    // Must NOT abort — the address is inside an allocated tensor.
+    detail::LaunchProgram(device, program);
+    SUCCEED();
+
+    ::unsetenv("TT_METAL_EMULE_ASAN");
+}
+
+// Positive control (DRAM): resolving a DRAM offset INSIDE an allocated DRAM
+// buffer via __emule_dram_ptr must NOT abort.
+TEST_F(MeshDeviceFixture, OOB_Tensor_InBounds_DRAM_NoViolation) {
+    ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
+
+    auto* device = this->devices_.at(0)->get_devices()[0];
+    CoreCoord logical_core = {0, 0};
+    Program program = CreateProgram();
+
+    constexpr uint32_t buffer_size = 1024;
+    auto buf = Buffer::create(device, buffer_size, buffer_size, BufferType::DRAM);
+    uint32_t in_addr = static_cast<uint32_t>(buf->address()) + 64;
+
+    std::string kernel_src = R"(
+        #include "api/dataflow/dataflow_api.h"
+        extern "C" uint8_t* __emule_dram_ptr(uint64_t offset);
+        void kernel_main() {
+            uint32_t addr = get_arg_val<uint32_t>(0);
+            volatile uint32_t* ptr = (volatile uint32_t*)__emule_dram_ptr(addr);
+            *ptr = 0x5678;
+        }
+    )";
+    auto kernel = CreateKernelFromString(
+        program,
+        kernel_src,
+        logical_core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    SetRuntimeArgs(program, kernel, logical_core, {in_addr});
+
+    // Must NOT abort — the offset is inside an allocated DRAM tensor.
+    detail::LaunchProgram(device, program);
+    SUCCEED();
+
+    ::unsetenv("TT_METAL_EMULE_ASAN");
 }
 
 }  // namespace tt::tt_metal

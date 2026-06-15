@@ -75,6 +75,7 @@ set(UNIT_TESTS_API_SOURCES
     test_alignment_writes.cpp
     test_cb_leak.cpp
     test_cb_pages.cpp
+    test_host_alignment.cpp
     test_metadata_size.cpp
     test_noc_without_barrier.cpp
     test_padded_write.cpp

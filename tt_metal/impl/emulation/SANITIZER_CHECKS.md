@@ -93,7 +93,8 @@ at the top of each host entry point (`WriteToBuffer`, `ReadFromBuffer`, `ReadSha
 the core-subset and shared-ptr overloads). Not allocated → abort. One boolean,
 before any access touches memory.
 *Diagnostic:* `Use-After-Free: <op> called on Buffer … not currently allocated`.
-*Exercised by:* `test_tensor_bad_acess.cpp`.
+*Exercised by:* `test_tensor_bad_acess.cpp` (five deallocated-Buffer death tests
+across every host entry point + a live-buffer round-trip positive control).
 
 ### 2. Host L1 / DRAM Alignment
 **Lives in:** `[metal] host_sanitizers.hpp` (`check_host_l1_alignment` /
@@ -110,8 +111,11 @@ alignment when a DMA engine backs the transfer, otherwise **1**. On emule
 the framework's own contract that host pokes accept any byte address; on a real
 DMA build it catches a genuinely misaligned DMA transfer.
 *Diagnostic:* `L1 Alignment: … must be N-byte aligned` / `DRAM Alignment: …`.
-*Exercised by:* no dedicated death test in this set (resolves to a no-op under
-emule). `test_alignment_writes.cpp` covers the *kernel*-side NOC alignment (§10).
+*Exercised by:* `test_host_alignment.cpp` — no death test is possible on emule
+(the requirement resolves to 1, so the check cannot fire); instead two
+positive-control round-trips (unaligned host→L1 and host→DRAM pokes that must
+NOT abort) guard the no-op contract against re-hardcoding a fixed alignment.
+`test_alignment_writes.cpp` covers the *kernel*-side NOC alignment (§10).
 
 ### 3. Metadata Overflow
 **Lives in:** `[metal] tt_metal/impl/host_api/tt_metal.cpp` (the
@@ -123,7 +127,8 @@ program's static CB region extent and compares it against the reserved L1 window
 an overrun throws, which the host turns into the `[ASAN ERROR] Metadata Overflow`
 abort.
 *Diagnostic:* `Metadata Overflow: Program metadata exceeds reserved L1 region`.
-*Exercised by:* `test_metadata_size.cpp`.
+*Exercised by:* `test_metadata_size.cpp` (an overrunning CB death test + a
+fitting-CB positive control).
 
 ---
 
@@ -151,7 +156,8 @@ sharded / CB / `l1_alloc` accesses arrive as absolute bridge pointers, not
 offsets, and a raw absolute value would never match a relative range — then checks
 that offset against the live extents. In none → abort.
 *Diagnostic:* `Out-of-Bounds Write: Attempted to access address 0x… which is not part of any allocated tensor`.
-*Exercised by:* `test_write_outside_tensor.cpp` (L1 + DRAM).
+*Exercised by:* `test_write_outside_tensor.cpp` (L1 + DRAM gap death tests +
+in-bounds L1 and DRAM positive controls).
 
 ### 5. Tensor Padding Violation
 **Lives in:** `__emule_local_l1_to_ptr` in `[emule] jit_kernel_stubs.hpp` &
@@ -176,7 +182,8 @@ semaphore region (semaphores must go through the semaphore API).
 (`__emule_sem_l1_range_start/end`) to the kernel. It's the **first** test in
 `__emule_local_l1_to_ptr`: if the address is in that range, abort.
 *Diagnostic:* `Illegal Semaphore Access: Offset 0x… is inside the reserved Semaphore region [start, end)`.
-*Exercised by:* `test_semaphore_write.cpp`.
+*Exercised by:* `test_semaphore_write.cpp` (an in-region write death test + an
+outside-region positive control).
 
 ### 7. CB Boundary Violation
 **Lives in:** `__emule_local_l1_to_ptr` in `[emule] jit_kernel_stubs.hpp` &
@@ -194,7 +201,9 @@ no active handshake (globally-allocated/sharded CBs, single-buffered scratch,
 output CBs written then DMA'd) is not flagged. A write *past* the CB's allocated
 region is caught by the OOB check (§4) instead.
 *Diagnostic:* `CB Boundary Violation: Attempted to access CB <id> at offset 0x… outside the write/read window`.
-*Exercised by:* `test_write_beyond_res_pages.cpp` (write side, read side, wraparound, and a no-active-window control).
+*Exercised by:* `test_write_beyond_res_pages.cpp` (write side, read side, a
+wraparound positive control + a wraparound violation that confirms the modular
+window stays active through a wrap, and a no-active-window control).
 
 ### 8. CB Reservation Overflow  *(always on)*
 **Lives in:** `cb_reserve_back` in `[emule] include/jit_hw/api/cb_api.h`.
@@ -205,7 +214,9 @@ CB's `num_pages`; if it exceeds capacity, abort. **Always on** (not gated by the
 env var) because gating it would let an over-reserve *deadlock* on the space wait
 instead of reporting a clear error.
 *Diagnostic:* `CB Reservation Overflow: CB <id> has <N> total pages, …`.
-*Exercised by:* `test_cb_pages.cpp`.
+*Exercised by:* `test_cb_pages.cpp` (an over-reserve death test, an
+exact-capacity positive control for the `>` boundary, and an always-on death
+test with the master switch explicitly cleared).
 
 ### 9. NoC Read Pending on `cb_pop_front`
 **Lives in:** `cb_pop_front` in `[emule] include/jit_hw/api/cb_api.h`; the pending
@@ -221,7 +232,8 @@ read there is harmless.
 `__emule_pending_noc_reads`; the read barrier clears it. `cb_pop_front` aborts if
 that counter is still > 0 (a barrier was skipped before the pop).
 *Diagnostic:* `Race Condition: cb_pop_front(cb_id=…) called while a NoC read is still pending`.
-*Exercised by:* `test_noc_without_barrier.cpp`.
+*Exercised by:* `test_noc_without_barrier.cpp` (a missing-barrier death test + a
+barrier-present positive control confirming the barrier clears the counter).
 
 ### 10. NOC Transfer Alignment
 **Lives in:** `__emule_check_noc_read_alignment` / `__emule_check_noc_write_alignment`
@@ -277,7 +289,9 @@ master switch. `sweep_per_kernel_dirty_cbs` returns early when
 regression past a kernel with a known un-flushed-CB bug without losing OOB /
 Padding / Object-Intent / CB-Boundary coverage. The `test_cb_leak.cpp` death tests
 `unsetenv` it so they still validate the check even when it is exported globally.
-*Exercised by:* `test_cb_leak.cpp` (reserve-without-push, wait-without-pop, and a balanced no-violation control).
+*Exercised by:* `test_cb_leak.cpp` (reserve-without-push, wait-without-pop, a
+partial-push net-unmatched edge case, a balanced no-violation control, and the
+per-check opt-out env test).
 
 ### 12. Object Intent Violation
 **Lives in:** `[metal] tt_metal/impl/emulation/emulated_program_runner.cpp` (the
@@ -302,7 +316,12 @@ fused producers/consumers), even if it "belongs" to another kernel's context, so
 to it is legitimate. The base address passed as a runtime arg equals the buffer's start
 offset (same address space, no normalization), so the match is exact.
 *Diagnostic:* `Object Intent Violation: Attempted to modify memory belonging to an adjacent object context — L1 buffer [start, end) … changed but no pointer was resolved into it`.
-*Exercised by:* `test_valid_mem_wrong_alloc.cpp` (adjacent + non-adjacent violations + a control).
+*Exercised by:* `test_valid_mem_wrong_alloc.cpp` (adjacent + non-adjacent
+violations, a resolve-both control, and an I/O-arg-exemption positive control
+that confirms a buffer handed to the kernel via runtime args is NOT flagged).
+Note: a violation test must pass the victim's *byte offset*, never its absolute
+address — passing the address would exempt the victim as an I/O tensor and mask
+the violation.
 
 ---
 

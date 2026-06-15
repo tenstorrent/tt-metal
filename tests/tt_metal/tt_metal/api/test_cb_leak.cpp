@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // To run:
-// $ROOT/tt-metal/build_emule/test/tt_metal/unit_tests_api
-// --gtest_filter="MeshDeviceFixture.Dirty_CB_ReserveWithoutPush:MeshDeviceFixture.Dirty_CB_WaitWithoutPop:MeshDeviceFixture.Dirty_CB_Balanced_NoViolation"
+// $ROOT/tt-metal/build_emule/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.Dirty_CB_*"
 
 #include <gtest/gtest.h>
 #include <cstdint>
@@ -100,6 +99,43 @@ TEST_F(MeshDeviceFixture, Dirty_CB_WaitWithoutPop) {
     EXPECT_DEATH(
         detail::LaunchProgram(device, program),
         ".*Dirty CB Detected: Core \\(0, 0\\) CB 0 was not flushed!.*");
+}
+
+// Partial-push edge case: the check tracks the NET unmatched count, not just
+// "any reserve without any push". Reserve 2 but push only 1 -> 1 page still
+// reserved-without-push at exit -> un-flushed -> abort. Pins the arithmetic to
+// `reserved -= pushed` rather than a boolean "did a push happen".
+TEST_F(MeshDeviceFixture, Dirty_CB_PartialPush) {
+    ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
+    ::unsetenv("TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB");
+
+    auto* device = this->devices_.at(0)->get_devices()[0];
+    CoreCoord logical_core = {0, 0};
+    Program program = CreateProgram();
+
+    uint32_t cb_id = 0;
+    CircularBufferConfig cb_config =
+        CircularBufferConfig(2 * 1024, {{cb_id, tt::DataFormat::Float16_b}}).set_page_size(cb_id, 1024);
+    CreateCircularBuffer(program, logical_core, cb_config);
+
+    // Reserve 2 pages, push only 1 -> net 1 page un-pushed at exit.
+    std::string kernel_src = R"(
+        #include "api/dataflow/dataflow_api.h"
+        void kernel_main() {
+            cb_reserve_back(0, 2);
+            cb_push_back(0, 1);
+            // MISSING: cb_push_back(0, 1);  -> 1 page still reserved
+        }
+    )";
+
+    CreateKernelFromString(
+        program,
+        kernel_src,
+        logical_core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+
+    EXPECT_DEATH(
+        detail::LaunchProgram(device, program), ".*Dirty CB Detected: Core \\(0, 0\\) CB 0 was not flushed!.*");
 }
 
 // Positive control: a kernel whose reserve/push and wait/pop all balance leaves

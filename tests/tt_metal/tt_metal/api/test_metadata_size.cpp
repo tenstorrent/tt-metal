@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // To run:
-// $ROOT/tt-metal/build_emule/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.Metadata_*_SanityCheck"
-
+// $ROOT/tt-metal/build_emule/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.Metadata_*"
 
 #include <gtest/gtest.h>
 
@@ -67,4 +66,37 @@ TEST_F(MeshDeviceFixture, Metadata_CB_Tensor_Clash_SanityCheck) {
         ".*\\[ASAN ERROR\\] Metadata Overflow.*");
 }
 
+// Positive control: a small CB that comfortably fits below the lowest occupied
+// L1 address must configure and launch without aborting. Guards against the
+// overflow check firing on well-sized programs.
+TEST_F(MeshDeviceFixture, Metadata_CB_Tensor_NoViolation) {
+    ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
+
+    auto* device = this->devices_.at(0)->get_devices()[0];
+    CoreCoord logical_core = {0, 0};
+
+    // A tiny 2-page CB leaves the vast majority of L1 free; no clash possible.
+    Program program = CreateProgram();
+    constexpr uint32_t cb_id = 0;
+    CircularBufferConfig cb_config =
+        CircularBufferConfig(2 * 1024, {{cb_id, tt::DataFormat::Float16_b}}).set_page_size(cb_id, 1024);
+    CreateCircularBuffer(program, logical_core, cb_config);
+
+    std::string kernel_src = R"(
+        #include "api/dataflow/dataflow_api.h"
+        void kernel_main() {}
+    )";
+    CreateKernelFromString(
+        program,
+        kernel_src,
+        logical_core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+
+    // Must NOT abort.
+    detail::LaunchProgram(device, program);
+    SUCCEED();
+
+    ::unsetenv("TT_METAL_EMULE_ASAN");
 }
+
+}  // namespace tt::tt_metal

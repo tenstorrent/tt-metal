@@ -98,4 +98,24 @@ TEST_F(MeshDeviceFixture, Host_UAF_WriteToBuffer_SharedPtrOverload_SanityCheck) 
     EXPECT_DEATH(detail::WriteToBuffer(buffer, data), ".*Use-After-Free.*WriteToBuffer.*");
 }
 
+// Positive control: a write/read round-trip on a LIVE (still-allocated) buffer
+// must NOT abort and must round-trip the data. Guards the check from regressing
+// to flag healthy buffers (e.g. an inverted is_allocated() test).
+TEST_F(MeshDeviceFixture, Host_UAF_Allocated_NoViolation) {
+    ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
+
+    auto* device = this->devices_.at(0)->get_devices()[0];
+
+    auto buffer = Buffer::create(device, 1024, 1024, BufferType::L1);  // left allocated
+
+    std::vector<uint32_t> data(256, 0xABCDEFu);
+    detail::WriteToBuffer(*buffer, data);  // must NOT abort
+
+    std::vector<uint32_t> out;
+    detail::ReadFromBuffer(*buffer, out);  // must NOT abort
+    EXPECT_EQ(out, data);
+
+    ::unsetenv("TT_METAL_EMULE_ASAN");
+}
+
 }  // namespace tt::tt_metal

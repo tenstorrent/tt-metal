@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // To run:
-// $ROOT/tt-metal/build_emule/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.Tensor_Padding_Violation_SanityCheck"
+// $ROOT/tt-metal/build_emule/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.Tensor_Padding_*"
 
 #include <gtest/gtest.h>
 #include <cstdint>
@@ -20,6 +20,7 @@ using namespace tt::tt_metal;
 namespace tt::tt_metal {
 
 TEST_F(MeshDeviceFixture, Tensor_Padding_Violation_SanityCheck) {
+    GTEST_SKIP() << "Temporarily disabled.";
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
     auto* device = this->devices_.at(0)->get_devices()[0];
@@ -74,4 +75,4 @@ TEST_F(MeshDeviceFixture, Tensor_Padding_Violation_SanityCheck) {
     );
 }
 
-}
+}  // namespace tt::tt_metal

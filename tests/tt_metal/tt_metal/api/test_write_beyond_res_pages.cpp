@@ -114,14 +114,22 @@ TEST_F(MeshDeviceFixture, CB_Boundary_Violation_Read_SanityCheck) {
         ".*CB Boundary Violation: Attempted to access CB 0.*Read window.*");
 }
 
-// Wraparound sanity check. The kernel cycles the CB once (push 1, pop 1)
-// so write_idx=1 and read_idx=1 on a 2-page CB. Then it reserves 2 pages —
-// the reservation spans pages [1, 0) modular = {page 1, page 0}. A
-// noc_async_read whose destination is either page 0 or page 1 should be
-// inside the wrapped window and pass. We exercise the wrapped page (page 0,
-// which sits BELOW the current write_ptr in raw address space) to make sure
-// the modular page-distance math accepts it. No abort expected.
-TEST_F(MeshDeviceFixture, CB_Boundary_Wraparound_SanityCheck) {
+// Wraparound positive control. On a 3-page CB we cycle the write/read pointers
+// forward to write_idx=2 (occupied=0), then reserve 2 pages. The reserved write
+// window now WRAPS to a strict subset — page 2 (at write_idx) and page 0 (the
+// wrapped continuation) — while page 1 is left OUTSIDE the window. A
+// noc_async_read whose destination is the wrapped page 0 (which sits at a LOWER
+// raw address than the write pointer) must be accepted by the modular
+// page-distance math. The kernel then pushes the 2 reserved pages so it exits
+// flushed (reserved==0, waited==0) — neither the boundary check nor the
+// redefined Dirty-CB check may fire. No abort expected.
+//
+// (A 3-page CB, not 2, is deliberate: with a 2-page CB a 2-page reservation
+// spans the whole buffer, so every page trivially passes and the test cannot
+// tell "accepted because wrapped correctly" apart from "the check went dormant"
+// — the additive-counter false-negative mode. With 3 pages the window is a
+// strict subset, which the paired Violation test below relies on.)
+TEST_F(MeshDeviceFixture, CB_Boundary_Wraparound_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
     auto* device = this->devices_.at(0)->get_devices()[0];
@@ -131,26 +139,27 @@ TEST_F(MeshDeviceFixture, CB_Boundary_Wraparound_SanityCheck) {
     constexpr uint32_t cb_id = 0;
     constexpr uint32_t page_size = 1024;
     CircularBufferConfig cb_config =
-        CircularBufferConfig(2 * page_size, {{cb_id, tt::DataFormat::Float16_b}}).set_page_size(cb_id, page_size);
+        CircularBufferConfig(3 * page_size, {{cb_id, tt::DataFormat::Float16_b}}).set_page_size(cb_id, page_size);
     CreateCircularBuffer(program, logical_core, cb_config);
 
     std::string kernel_src = R"(
         #include "api/dataflow/dataflow_api.h"
         void kernel_main() {
-            // Cycle once so write_idx=1, read_idx=1 on a 2-page CB.
-            cb_reserve_back(0, 1);
-            cb_push_back(0, 1);
-            cb_wait_front(0, 1);
-            cb_pop_front(0, 1);
-            // Reserve 2 pages — window wraps: page 1 then page 0.
+            // Cycle twice so write_idx=2, read_idx=2 on a 3-page CB (occupied=0).
+            for (uint32_t i = 0; i < 2; ++i) {
+                cb_reserve_back(0, 1);
+                cb_push_back(0, 1);
+                cb_wait_front(0, 1);
+                cb_pop_front(0, 1);
+            }
+            // Reserve 2 — window wraps: page 2 then page 0 (page 1 excluded).
             cb_reserve_back(0, 2);
-            uint32_t write_addr = get_write_ptr(0);
+            uint32_t write_addr = get_write_ptr(0);   // page 2 = cb.base + 2*1024
             uint64_t src_noc = get_noc_addr(write_addr);
-            // Write into the wrapped slot (page 0). write_addr currently
-            // points to page 1 (cb.base + 1024); page 0 is at write_addr - 1024.
-            noc_async_read(src_noc, write_addr - 1024, 1024);
+            // Destination is the wrapped slot (page 0 = write_addr - 2*1024).
+            noc_async_read(src_noc, write_addr - 2048, 1024);
             noc_async_read_barrier();
-            cb_push_back(0, 2);
+            cb_push_back(0, 2);                        // flush: reserved -> 0
         }
     )";
 
@@ -160,10 +169,60 @@ TEST_F(MeshDeviceFixture, CB_Boundary_Wraparound_SanityCheck) {
         logical_core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    // The kernel leaves CB 0 with occupied=2 at exit, so the dirty-CB
-    // sanitizer will fire AFTER the (legitimate) wraparound write succeeds.
-    // That confirms the boundary check let the wrap-around access through.
-    EXPECT_DEATH(detail::LaunchProgram(device, program), ".*Dirty CB Detected.*");
+    // Wrapped access is legal and the kernel exits flushed → no sanitizer fires.
+    detail::LaunchProgram(device, program);
+    SUCCEED();
+
+    ::unsetenv("TT_METAL_EMULE_ASAN");
+}
+
+// Wraparound negative control. Identical setup (3-page CB, write_idx=2, reserve
+// 2 → wrapped window {page 2, page 0}), but the noc_async_read destination is
+// page 1 — the one page the reservation does NOT cover. Page 1's modular
+// distance from write_idx(=2) is (1+3-2)%3 = 2, which is not < the 2 reserved
+// pages, so it is outside the (wrapped) write window and the boundary check must
+// abort. This proves the check stays ACTIVE through a wrap and rejects
+// out-of-window pages, rather than passing everything (the additive-counter
+// dormancy failure mode).
+TEST_F(MeshDeviceFixture, CB_Boundary_Wraparound_Violation_SanityCheck) {
+    ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
+
+    auto* device = this->devices_.at(0)->get_devices()[0];
+    CoreCoord logical_core = {0, 0};
+    Program program = CreateProgram();
+
+    constexpr uint32_t cb_id = 0;
+    constexpr uint32_t page_size = 1024;
+    CircularBufferConfig cb_config =
+        CircularBufferConfig(3 * page_size, {{cb_id, tt::DataFormat::Float16_b}}).set_page_size(cb_id, page_size);
+    CreateCircularBuffer(program, logical_core, cb_config);
+
+    std::string kernel_src = R"(
+        #include "api/dataflow/dataflow_api.h"
+        void kernel_main() {
+            // Cycle twice so write_idx=2, read_idx=2 on a 3-page CB (occupied=0).
+            for (uint32_t i = 0; i < 2; ++i) {
+                cb_reserve_back(0, 1);
+                cb_push_back(0, 1);
+                cb_wait_front(0, 1);
+                cb_pop_front(0, 1);
+            }
+            cb_reserve_back(0, 2);
+            uint32_t write_addr = get_write_ptr(0);   // page 2 = cb.base + 2*1024
+            uint64_t src_noc = get_noc_addr(write_addr);
+            // Destination is page 1 — OUTSIDE the wrapped {page 2, page 0} window.
+            noc_async_read(src_noc, write_addr - 1024, 1024);
+            noc_async_read_barrier();
+        }
+    )";
+
+    CreateKernelFromString(
+        program,
+        kernel_src,
+        logical_core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+
+    EXPECT_DEATH(detail::LaunchProgram(device, program), ".*CB Boundary Violation: Attempted to access CB 0.*");
 }
 
 // Positive control: accessing a CB page with NO active reservation/wait window
