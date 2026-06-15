@@ -48,6 +48,7 @@ class TestVariant:
         mla_ref_cache_env: Optional[str] = None,
         ttnn_cache_env: Optional[str] = None,
         moe_pcc_threshold: float = 0.999,
+        moe_pcc_threshold_fp8: float = 0.972,
         mla_pcc_threshold: float = 0.999,
         supports_pretrained: bool = True,
         prefill_trace_default: Optional[str] = None,
@@ -66,6 +67,7 @@ class TestVariant:
         self.mla_ref_cache_env = mla_ref_cache_env
         self.ttnn_cache_env = ttnn_cache_env
         self.moe_pcc_threshold = moe_pcc_threshold
+        self.moe_pcc_threshold_fp8 = moe_pcc_threshold_fp8
         self.mla_pcc_threshold = mla_pcc_threshold
         self.supports_pretrained = supports_pretrained
         # Golden chunked-prefill trace (metadata.json token_ids + kv_cache/ + hidden_states/) for the
@@ -89,6 +91,7 @@ DSV3 = TestVariant(
     ttnn_cache_env="TT_DS_PREFILL_TTNN_CACHE",
     mla_pcc_threshold=0.996,
     moe_pcc_threshold=0.985,
+    moe_pcc_threshold_fp8=0.972,
     prefill_trace_default="/mnt/models/deepseek-prefill-cache/golden/longbook_qa_eng_prefill_56320_nopad",
 )
 
@@ -108,6 +111,7 @@ KIMI_V2_6 = TestVariant(
     ttnn_cache_env="TT_KIMI_PREFILL_TTNN_CACHE",
     mla_pcc_threshold=0.995,
     moe_pcc_threshold=0.971,
+    moe_pcc_threshold_fp8=0.985,
     # vllm-traced golden: metadata.json + kv_cache nest under a run-hash subdir (resolve_trace_dir
     # descends), and kv_post_transform is row-sharded (the transformer test's loader reassembles it).
     prefill_trace_default="/mnt/models/deepseek-prefill-cache/golden/kimi-26/kimi_longbook_56320",

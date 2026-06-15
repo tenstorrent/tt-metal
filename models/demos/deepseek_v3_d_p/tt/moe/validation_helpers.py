@@ -740,6 +740,7 @@ def validate_dispatch_buffer(
     num_dispatch_groups: int,
     dispatch_group_size: int,
     experts_per_chip: int,
+    atol: float = 1e-6,
     verbose: bool = True,
 ) -> ValidationResult:
     """
@@ -754,6 +755,8 @@ def validate_dispatch_buffer(
         num_dispatch_groups: Number of EP ranks
         dispatch_group_size: Number of chips in dispatch group
         experts_per_chip: Number of experts per chip
+        atol: Absolute tolerance for the allclose comparison. Defaults to ~exact match;
+            pass a larger value for fp8-quantized buffers (e4m3 dispatch round-trip).
         verbose: Whether to log detailed mismatch info
 
     Returns:
@@ -767,7 +770,7 @@ def validate_dispatch_buffer(
         _chip: int,
         _expert: int,
     ) -> Tuple[bool, Optional[str]]:
-        match = torch.allclose(torch_slot, ttnn_slot, atol=1e-6)
+        match = torch.allclose(torch_slot, ttnn_slot, atol=atol)
         if not match:
             max_diff = torch.max(torch.abs(torch_slot.float() - ttnn_slot.float())).item()
             return False, f"max_diff={max_diff:.6f}"

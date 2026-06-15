@@ -498,7 +498,9 @@ class TtMoe(LightweightModule):
         # (and per_token_cast_back below) run on the full Tensix grid, so they must not be confined to
         # the dispatch sub-device; x stays alive for the shared expert and is freed once dispatched.
         if self.use_fp8_compression:
-            x_fp8, scale = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x)
+            x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            x_fp8, scale = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x_rm)
+            ttnn.deallocate(x_rm)
 
         signpost("shared_expert_and_dispatch_start")
         if self.overlap_shared_expert_with_dispatch:
