@@ -299,7 +299,7 @@ void kernel_main() {
                         for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
                             const uint32_t col = kb * in0_block_w_gu + k;
                             const uint32_t tile_idx = row * K_gate_tiles + col;
-                            noc_async_read_tile(tile_idx, x_acc, l1_x, /*offset=*/0, /*noc=*/0);
+                            noc_async_read_page(tile_idx, x_acc, l1_x, /*offset=*/0, /*noc=*/0);
                             l1_x += x_tile_bytes;
                         }
                     } else {
@@ -334,7 +334,7 @@ void kernel_main() {
                         const uint32_t col = my_nt_gu * per_core_N_gu + n;
                         if (col < N_gate_tiles_full) {
                             const uint32_t tile_idx = row * N_gate_tiles_full + col;
-                            noc_async_read_tile(tile_idx, gate_acc, l1_w_gate, /*offset=*/0, /*noc=*/0);
+                            noc_async_read_page(tile_idx, gate_acc, l1_w_gate, /*offset=*/0, /*noc=*/0);
                         } else {
                             volatile tt_l1_ptr uint64_t* p = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w_gate);
                             for (uint32_t i = 0; i < gate_tile_bytes / 8; ++i) {
@@ -352,7 +352,7 @@ void kernel_main() {
                         const uint32_t col = my_nt_gu * per_core_N_gu + n;
                         if (col < N_gate_tiles_full) {
                             const uint32_t tile_idx = row * N_gate_tiles_full + col;
-                            noc_async_read_tile(tile_idx, up_acc, l1_w_up, /*offset=*/0, /*noc=*/0);
+                            noc_async_read_page(tile_idx, up_acc, l1_w_up, /*offset=*/0, /*noc=*/0);
                         } else {
                             volatile tt_l1_ptr uint64_t* p = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w_up);
                             for (uint32_t i = 0; i < up_tile_bytes / 8; ++i) {
@@ -463,7 +463,7 @@ void kernel_main() {
                         const uint32_t col = my_nt_d * per_core_N_d + n;
                         if (row < K_down_tiles && col < N_down_tiles_full) {
                             const uint32_t tile_idx = row * N_down_tiles_full + col;
-                            noc_async_read_tile(tile_idx, down_acc, l1_w, /*offset=*/0, /*noc=*/0);
+                            noc_async_read_page(tile_idx, down_acc, l1_w, /*offset=*/0, /*noc=*/0);
                         } else {
                             volatile tt_l1_ptr uint64_t* p = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w);
                             for (uint32_t i = 0; i < down_tile_bytes / 8; ++i) {

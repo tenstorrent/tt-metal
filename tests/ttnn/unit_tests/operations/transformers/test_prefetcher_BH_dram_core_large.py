@@ -49,7 +49,12 @@ from loguru import logger
 
 from models.common.utility_functions import run_for_blackhole
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.ttnn.unit_tests.operations.prefetcher_common import round_up as _round_up, bytes_per_tile as _bytes_per_tile
+from tests.ttnn.unit_tests.operations.prefetcher_common import (
+    round_up as _round_up,
+    bytes_per_tile as _bytes_per_tile,
+    bank_receivers_strided as _bank_receivers_strided,
+    make_recv_contig_weight as _make_recv_contig_weight,
+)
 
 
 # DRAM bank count is queried at runtime via `device.dram_grid_size().x`:
@@ -237,6 +242,8 @@ def test_dram_core_prefetcher_BH_param(
 
     # ---- Run: prefetcher (async) -> matmul (consumes via gcb) -> stop drains ----
     ttnn.experimental.start_dram_core_prefetcher(device)
+    # Fence the prefetcher against the weight write so it never reads stale DRAM.
+    ttnn.experimental.wait_for_cq_on_dram_core_prefetcher(device, 0)
     ttnn.experimental.queue_dram_core_prefetcher_request(device, [(tt_weight, ring_size)], global_cb=gcb)
     tt_out = ttnn.linear(
         tt_act,
@@ -546,6 +553,65 @@ def test_dram_core_prefetcher_multi_tensor(device, num_tensors, num_layers):
         global_cb=gcb,
     )
     # Receiver: discard all pushed data.
+    ttnn.experimental.test_dram_prefetcher_consumer(
+        device,
+        num_iters=num_iters_total,
+        page_size_bytes=push_page_size,
+        global_cb=gcb,
+    )
+    ttnn.experimental.stop_dram_core_prefetcher(device)
+    ttnn.synchronize_device(device)
+
+
+# ---------------------------------------------------------------------------
+# Receiver-contiguous DRAM layout smoke
+# ---------------------------------------------------------------------------
+# Allocates DRAM weight via NdShardSpec with `num_shards = ring_size`
+# (over-subscribed: more shards than DRAM banks). The manager auto-detects
+# this from buffer_distribution_spec().num_shards() and dispatches to the
+# receiver-contiguous compute_tensor_geom path. The GCB topology is built
+# so shard index == ring position, matching the round-robin shard-to-bank
+# placement. Receiver is the discard consumer (smoke: no PCC check yet).
+
+
+@pytest.mark.parametrize("num_tensors,num_layers", [(1, 1), (2, 1), (2, 5)])
+def test_dram_core_prefetcher_recv_contig_smoke(device, num_tensors, num_layers):
+    num_dram_banks = device.dram_grid_size().x
+    num_recv_per_bank = _MT_NUM_RECV_PER_BANK
+    num_receivers = num_dram_banks * num_recv_per_bank
+    ring_size = num_receivers
+
+    K = _MT_K
+    N = _MT_N
+    n_per_recv = N // ring_size
+
+    weights = []
+    for i in range(num_tensors):
+        torch.manual_seed(0xC400 + i)
+        pt = torch.randn(1, 1, K, N)
+        weights.append(_make_recv_contig_weight(device, pt, num_dram_banks, ring_size, ttnn.bfloat8_b))
+
+    k_tiles = K // ttnn.TILE_SIZE
+    k_block_w_tiles = (k_tiles + ring_size - 1) // ring_size
+    n_tiles_per_recv = n_per_recv // ttnn.TILE_SIZE
+    push_page_size = k_block_w_tiles * n_tiles_per_recv * _MT_TILE_BYTES
+    per_recv_bytes_per_tensor = ring_size * push_page_size
+    gcb_size = _round_up(per_recv_bytes_per_tensor, push_page_size)
+
+    bank_to_receivers = [
+        (b, _bank_receivers_strided(b, num_recv_per_bank, num_dram_banks, ring_cols=num_dram_banks))
+        for b in range(num_dram_banks)
+    ]
+    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(device, bank_to_receivers, gcb_size)
+
+    num_iters_total = num_layers * num_tensors * ring_size
+
+    ttnn.experimental.start_dram_core_prefetcher(device)
+    ttnn.experimental.queue_dram_core_prefetcher_request(
+        device,
+        [(w, ring_size) for w in weights] * num_layers,
+        global_cb=gcb,
+    )
     ttnn.experimental.test_dram_prefetcher_consumer(
         device,
         num_iters=num_iters_total,

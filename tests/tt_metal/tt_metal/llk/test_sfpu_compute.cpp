@@ -66,6 +66,7 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
     {"tanh", {{"SFPU_OP_CHAIN_0", "tanh_tile_init(); tanh_tile(0);"}}},
     {"sign", {{"SFPU_OP_CHAIN_0", "sign_tile_init(); sign_tile(0);"}}},
     {"rsqrt", {{"SFPU_OP_CHAIN_0", "rsqrt_tile_init(); rsqrt_tile(0);"}}},
+    {"mul_unary", {{"SFPU_OP_CHAIN_0", "binop_with_scalar_tile_init(); mul_unary_tile(0, 0x40000000u);"}}},  // 2.0f
 };
 
 // Binary SFPU ops driven by `run_sfpu_binary_two_input_buffer`.
@@ -153,6 +154,9 @@ bfloat16 sfpu_function(const std::string& op_name, const bfloat16& input) {
         float val = static_cast<float>(input);
         float result = static_cast<float>((val > 0.0f) - (val < 0.0f));
         return bfloat16(result);
+    }
+    if (op_name == "mul_unary") {
+        return bfloat16(static_cast<float>(input) * 2.0f);
     }
     TT_THROW("Unsupported op_name in test");
 }
@@ -385,6 +389,7 @@ bool run_sfpu_all_same_buffer(
     sfpu_defines["SFPU_OP_NEG_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_BINOP_WITH_SCALAR_INCLUDE"] = "1";
 
     // Every existing parametrization of this test uses a single-core CoreRangeSet of {0, 0};
     // MakeProgramFromSpec models the kernel set per single-core WorkUnit.
@@ -1113,6 +1118,7 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "tanh"),
         std::make_tuple(1, "sign"),
         std::make_tuple(1, "rsqrt"),
+        std::make_tuple(1, "mul_unary"),
         std::make_tuple(4, "relu"),
         std::make_tuple(4, "exponential"),
         std::make_tuple(4, "reciprocal"),
@@ -1123,7 +1129,8 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "log"),
         std::make_tuple(4, "tanh"),
         std::make_tuple(4, "sign"),
-        std::make_tuple(4, "rsqrt")),
+        std::make_tuple(4, "rsqrt"),
+        std::make_tuple(4, "mul_unary")),
     [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });
@@ -1174,6 +1181,7 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "tanh"),
         std::make_tuple(1, "sign"),
         std::make_tuple(1, "rsqrt"),
+        std::make_tuple(1, "mul_unary"),
         std::make_tuple(4, "relu"),
         std::make_tuple(4, "exponential"),
         std::make_tuple(4, "reciprocal"),
@@ -1184,7 +1192,8 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "log"),
         std::make_tuple(4, "tanh"),
         std::make_tuple(4, "sign"),
-        std::make_tuple(4, "rsqrt")),
+        std::make_tuple(4, "rsqrt"),
+        std::make_tuple(4, "mul_unary")),
     [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });
