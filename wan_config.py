@@ -31,9 +31,12 @@ class WanConfig:
     fabric_config_name: str = "FABRIC_1D"
 
     # Device parameters. l1_small_size is filled from BoardSpec; trace_region_size
-    # is per-model (Wan2.2 ships at 30MB per tt-inference-server/workflows/model_spec.py).
+    # must hold the full T2V pipeline's captured traces. Empirically on p300x2 at
+    # 832x480/81f the two-stage pipeline captures two expert traces (~64.7MB each,
+    # ~129.4MB total) plus a VAE-decode trace; 200MB gives headroom. (The reference
+    # perf test uses 120MB with a quantized/FSDP config that yields smaller traces.)
     l1_small_size: int = 0
-    trace_region_size: int = 30_000_000
+    trace_region_size: int = 200_000_000
 
     # Model settings
     model_name: str = "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
