@@ -283,20 +283,25 @@ class LTXPipeline:
         # Fewer T-shards = fewer cross-chip causal-halo barriers (the audio vocoder's dominant
         # device-side cost): T-shard=4 on a 1x4/2x4 slice beats T-shard=8 on the full 4x8.
         # Defaults to the full mesh; LTX_AUDIO_SUBMESH=RxC slices an RxC submesh for audio.
+        #
+        # The submesh is created LAZILY (`_ensure_audio_submesh`, on the first decode_audio),
+        # not here. An overlapping child submesh's CCLManager allocates a second SubDevice +
+        # global semaphores on the cores it shares with the parent; doing that at __init__,
+        # before the video DiT runs, shifts the runtime-arg layout baked into the parent's CCL
+        # kernels and the video denoise then indexes past its runtime args. Deferring until video
+        # (DiT + VAE) is fully done keeps the parent's runtime args clean during generation.
         self.audio_mesh_device = mesh_device
         self.audio_ccl_manager = self.vae_ccl_manager
         self._owned_audio_submesh = None
+        self._audio_submesh_shape: tuple[int, int] | None = None
+        self._audio_submesh_num_links = ccl_manager.num_links
         _audio_submesh = os.environ.get("LTX_AUDIO_SUBMESH")
         if _audio_submesh:
             r, c = (int(v) for v in _audio_submesh.lower().split("x"))
             full = tuple(mesh_device.shape)
             if r <= full[0] and c <= full[1] and (r, c) != full:
-                self.audio_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(r, c))
-                self._owned_audio_submesh = self.audio_mesh_device
-                self.audio_ccl_manager = CCLManager(
-                    self.audio_mesh_device, num_links=ccl_manager.num_links, topology=ttnn.Topology.Linear
-                )
-                logger.info(f"Audio decode routed onto {r}x{c} submesh of {full[0]}x{full[1]}")
+                self._audio_submesh_shape = (r, c)
+                logger.info(f"Audio decode will route onto {r}x{c} submesh of {full[0]}x{full[1]} (lazy)")
         if vae_parallel_config is None:
             vae_parallel_config = VaeHWParallelConfig(
                 height_parallel=parallel_config.tensor_parallel,
@@ -388,6 +393,25 @@ class LTXPipeline:
         self._trace_state.clear()
         self._prompt_v = StateTensor()
         self._prompt_a = StateTensor()
+
+    def _ensure_audio_submesh(self) -> None:
+        """Create the audio submesh + its CCLManager + decoder shells, once, on first use.
+
+        Deferred from __init__ so the video DiT runs before any overlapping child submesh
+        exists (an overlapping submesh's CCLManager allocations corrupt the parent's CCL
+        runtime args — see __init__). No-op when audio runs on the full mesh, or once built.
+        """
+        if self._audio_submesh_shape is None or self._owned_audio_submesh is not None:
+            return
+        r, c = self._audio_submesh_shape
+        self.audio_mesh_device = self.mesh_device.create_submesh(ttnn.MeshShape(r, c))
+        self._owned_audio_submesh = self.audio_mesh_device
+        self.audio_ccl_manager = CCLManager(
+            self.audio_mesh_device, num_links=self._audio_submesh_num_links, topology=ttnn.Topology.Linear
+        )
+        full = tuple(self.mesh_device.shape)
+        logger.info(f"Audio decode routed onto {r}x{c} submesh of {full[0]}x{full[1]}")
+        self._new_audio_decoder()
 
     def release_audio_submesh(self) -> None:
         """Drop the pipeline's references to the audio decode submesh (LTX_AUDIO_SUBMESH).
@@ -630,8 +654,14 @@ class LTXPipeline:
         audio decoder shell; the transformer/VAE/upsampler are never used by
         ``decode_audio``."""
         if audio_only:
+            # No video pipeline to protect, so the submesh can be created eagerly here
+            # (_ensure_audio_submesh builds it + the shells; falls back to _new_audio_decoder
+            # on the full mesh).
             if self.checkpoint_name is not None:
-                self._new_audio_decoder()
+                if self._audio_submesh_shape is not None:
+                    self._ensure_audio_submesh()
+                else:
+                    self._new_audio_decoder()
             return
         self.transformer = self._new_transformer()
         self.transformer_states.append(
@@ -673,7 +703,10 @@ class LTXPipeline:
             self._upsampler_path = LTXPipeline._resolve_checkpoint_file(LTX_UPSAMPLER_HF_REF)
             self.upsampler = self._new_upsampler()
 
-        if self.checkpoint_name is not None:
+        # When audio is routed onto a deferred submesh, its shells are built by
+        # `_ensure_audio_submesh` on the first decode (the submesh itself must not exist yet —
+        # see __init__). On the full mesh, build the shells now as before.
+        if self.checkpoint_name is not None and self._audio_submesh_shape is None:
             self._new_audio_decoder()
 
     def _register_coresident_exclusions(self) -> None:
@@ -1718,6 +1751,10 @@ class LTXPipeline:
         ``num_frames``/``fps`` trim the output to the clip duration.
         """
         assert self.checkpoint_name is not None, "checkpoint_name must be set before decode_audio"
+
+        # Build the audio submesh + decoder shells now (no-op after the first call, and on the
+        # full mesh). Deferred to here so the video DiT has already run with clean CCL runtime args.
+        self._ensure_audio_submesh()
 
         _dump = os.environ.get("LTX_DUMP_AUDIO_LATENT")
         if _dump and float(audio_latent.abs().max()) > 0:  # skip the all-zero warmup latent
