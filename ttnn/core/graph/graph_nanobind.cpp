@@ -436,9 +436,8 @@ void py_graph_module(nb::module_& m) {
         R"doc(up_front_compile(device, max_workers=0) -> (num_programs, num_errors, max_workers, wall_seconds)
 
         JIT-compile every distinct collected program in parallel, warming the on-disk
-        kernel cache (TT_METAL_CACHE). The subsequent real run / trace capture runs warm.
-        max_workers<=0 uses hardware concurrency (note: the build executor saturates
-        ~4 workers, so higher buys little). The GIL is released for the duration.
+        kernel cache (TT_METAL_CACHE). The subsequent real run runs warm. max_workers<=0
+        uses hardware concurrency. The GIL is released for the duration.
         )doc");
 }
 
