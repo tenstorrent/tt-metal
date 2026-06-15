@@ -89,10 +89,7 @@ private:
 // ACCUMULATES into the existing set — the cross-test usage: a pytest plugin
 // wraps each test body in begin_collect(clear=false)/end_collect(), so programs
 // from every test pile into one deduped set, then a single parallel_compile at
-// session end. (begin/end_collect push/pop a NO_DISPATCH graph-capture frame
-// per call and the hook is cleanly removed on end, so per-test wrapping is safe;
-// only the clear must be suppressed to accumulate — clear the collector once up
-// front via ProgramCollector::clear() / up_front_clear instead.)
+// session end.
 //
 // real_alloc=false (default): NO_DISPATCH mocks every buffer at address 0 → zero device
 // memory, scales to any model, but kernels that bake a buffer address into compile-time
@@ -101,9 +98,9 @@ private:
 // assign REAL addresses during collect (dispatch still blocked) so those build the same
 // program the real run will → they warm. The L1 allocator is deterministic across processes,
 // so a fresh-device collect and a fresh-device real run land buffers at identical addresses.
-// COST: real device memory (~the real run's peak; a collect OOM is a faithful signal the real
-// run would OOM too) + the alloc/free sequence must match the real run (it does if collect
-// replays the same forward). Use real_alloc for models that fit; addr-0 for the giant ones.
+// COST: real device memory (~the real run's peak) + the alloc/free sequence must match the
+// real run (it does if collect replays the same forward). Use real_alloc for models that fit;
+// addr-0 for the giant ones.
 void begin_collect(bool clear = true, bool real_alloc = false);
 
 // End the collect pass: stops NO_DISPATCH capture and deactivates the collector.
