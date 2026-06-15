@@ -137,35 +137,32 @@ void kernel_main() {
              * Weight (gamma) fusion
              */
             if constexpr (has_weight) {
-                // Reconfigure for mul_bcast_row
-                reconfig_data_format(mul_rms_result_cb, weight_cb);
-                pack_reconfig_data_format(mul_weight_result_cb);
-                mul_bcast_rows_init_short(mul_rms_result_cb, weight_cb);
-                // cumulative wait
+                // gamma: mul_rms_result * weight (bcast rows). In-place onto intermediate_cb
+                // when rope is fused (mul_weight_result_cb == mul_rms_result_cb), so
+                // InputLifecycle::Chunked + OutputLifecycle::Chunked: the chain pops the block
+                // in the compute phase before the pack phase reserves it (eltwise_chain.inl:1902
+                // < :1929), exactly the raw pop-before-reserve that the single-buffered in-place
+                // CB needs. weight (gamma) is a full vector indexed col_tile + i (linear), held
+                // via the cumulative wait below -> CallerManaged + Block + TileOffset::Set{col_tile},
+                // mirroring the layernorm gamma / beta blocks. Reconfig: reconfig_data_format +
+                // mul_bcast_rows_init_short -> Input; pack_reconfig(mul_weight_result_cb) -> Output.
                 cb_wait_front(weight_cb, col_tile + block_size);
-                cb_wait_front(mul_rms_result_cb, block_size);
-                tile_regs_acquire();
-                for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                    mul_tiles_bcast_rows(mul_rms_result_cb, weight_cb, i, col_tile + i, i);
-                }
-                tile_regs_commit();
-
-                /**
-                 * The compute loop must be written like this because if rope is fused,
-                 * mul_weight_result_cb == mul_rms_result_cb
-                 * and so this is an in-place operation.
-                 * If rope is not fused, mul_weight_result_cb == output_cb
-                 */
-                cb_pop_front(mul_rms_result_cb, block_size);
-                cb_reserve_back(mul_weight_result_cb, block_size);
-
-                tile_regs_wait();
-                for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                    pack_tile(i, mul_weight_result_cb);
-                }
-                tile_regs_release();
-                cb_push_back(mul_weight_result_cb, block_size);
-                // (next iteration's norm-x is a migrated chain that re-inits its own reconfig.)
+                compute_kernel_lib::eltwise_chain(
+                    compute_kernel_lib::EltwiseShape::tiles(block_size, /*block_size=*/block_size),
+                    compute_kernel_lib::BinaryFpu<
+                        mul_rms_result_cb,
+                        weight_cb,
+                        compute_kernel_lib::BinaryFpuOp::Mul,
+                        compute_kernel_lib::BroadcastDim::Row,
+                        compute_kernel_lib::InputLifecycle::Chunked,
+                        compute_kernel_lib::InputLifecycle::CallerManaged,
+                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::TileOffset::Unset,
+                        compute_kernel_lib::TileOffset::Set>{0u, col_tile},
+                    compute_kernel_lib::PackTile<mul_weight_result_cb, compute_kernel_lib::OutputLifecycle::Chunked>{});
             }
 
             /**
