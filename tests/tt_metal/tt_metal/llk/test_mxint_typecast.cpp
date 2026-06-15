@@ -53,14 +53,14 @@ static vector<uint32_t> run_mxint_typecast(
     InterleavedBufferConfig src_config{
         .device = dev,
         .size = num_tiles * input_tile_size,
-        .page_size = input_tile_size,
+        .page_size = num_tiles * input_tile_size,
         .buffer_type = BufferType::DRAM};
     auto src_buffer = CreateBuffer(src_config);
 
     InterleavedBufferConfig dst_config{
         .device = dev,
         .size = num_tiles * output_tile_size,
-        .page_size = output_tile_size,
+        .page_size = num_tiles * output_tile_size,
         .buffer_type = BufferType::DRAM};
     auto dst_buffer = CreateBuffer(dst_config);
 
@@ -145,11 +145,11 @@ static vector<uint32_t> run_mxint_typecast(
     Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
     detail::WriteToBuffer(src_buffer, src_vec);
-    // Pass aligned DRAM page stride so the reader/writer advance the DRAM pointer
-    // by the allocator's aligned_page_size while the DFB streams the native tile
-    // size (the allocator rounds up to a 64B-aligned page).
-    uint32_t src_dram_stride = static_cast<uint32_t>(src_buffer->aligned_page_size());
-    uint32_t dst_dram_stride = static_cast<uint32_t>(dst_buffer->aligned_page_size());
+    // These simple test kernels take an explicit bank id and linear address,
+    // so keep each buffer as one DRAM page and walk tiles contiguously within
+    // bank 0 instead of using interleaved per-tile pages.
+    uint32_t src_dram_stride = input_tile_size;
+    uint32_t dst_dram_stride = output_tile_size;
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
