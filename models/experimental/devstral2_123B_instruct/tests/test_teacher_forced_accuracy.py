@@ -7,23 +7,21 @@
 Sweeps prefill context lengths (powers of two from 32 through 256K by default). Tale of Two
 Cities is tiled when a longer token stream is required. Each sweep point writes a per-length
 ``.refpt`` HF reference (generated on first run) and a JSON result under
-``reference_outputs/teacher_forced_sweep/``.
+``tests/teacher_forced_sweep_outputs/`` (``references/`` and ``results/`` subdirs).
 
 Run::
 
     pytest models/experimental/devstral2_123B_instruct/tests/test_teacher_forced_accuracy.py -v
 
-Edit ``SWEEP_PREFILL_LENGTHS`` in this file to change sweep points. By default the sweep stops on
-the first failure; set ``_SWEEP_RUN_ALL_BEFORE_FAIL = True`` to run every point and fail at the end.
+Edit ``SWEEP_PREFILL_LENGTHS`` to run a subset; pytest timeout always budgets for all 14 points in
+``FULL_SWEEP_PREFILL_LENGTHS`` (32 … 256K).
 
 Environment overrides::
 
-    DEVSTRAL2_TEACHER_SWEEP_OUTPUT_DIR Output root (default: tests/reference_outputs/teacher_forced_sweep)
-    DEVSTRAL2_TEACHER_MAX_EVAL         Eval tokens when prefill >= this value (default 500)
-    DEVSTRAL2_MIN_TOP1_ACC             Minimum top-1 fraction (default 0.90)
-    DEVSTRAL2_MIN_TOP5_ACC             Minimum top-5 fraction (default 0.96)
-    DEVSTRAL2_NUM_LAYERS               Limit decoder layers (default: all 88)
-    DEVSTRAL2_WEIGHT_CACHE_SEQ_LEN     Tiled-weight cache key (default 262144)
+    DEVSTRAL2_MIN_TOP1_ACC         Minimum top-1 fraction (default 0.96)
+    DEVSTRAL2_MIN_TOP5_ACC         Minimum top-5 fraction (default 0.99)
+    DEVSTRAL2_NUM_LAYERS           Limit decoder layers (default: all 88)
+    DEVSTRAL2_WEIGHT_CACHE_SEQ_LEN Tiled-weight cache key (default 262144)
 """
 
 from __future__ import annotations
@@ -69,8 +67,8 @@ from models.tt_transformers.tt.ccl import TT_CCL
 _TESTS_DIR = Path(__file__).resolve().parent
 _TALE_OF_TWO_CITIES = _TESTS_DIR.parents[2] / "tt_transformers" / "tests" / "tale-of-two-cities.txt.bz2"
 
-# Prefill lengths to sweep (powers of two from 32 through 256K). Edit to narrow or extend the sweep.
-SWEEP_PREFILL_LENGTHS = [
+# Full sweep (powers of two 32 … 256K). Pytest timeout always budgets for all 14 points.
+FULL_SWEEP_PREFILL_LENGTHS = [
     32,
     64,
     128,
@@ -87,23 +85,58 @@ SWEEP_PREFILL_LENGTHS = [
     262144,
 ]
 
+# Prefill lengths to run in this invocation. Edit to narrow during development.
+SWEEP_PREFILL_LENGTHS = list(FULL_SWEEP_PREFILL_LENGTHS)
+
+# Teacher-forced eval window after prefill. Matches tt-transformers CI token-accuracy run
+# (max_generated_tokens=500); the .refpt there is 1024 tokens split 512 prefill / 512 eval but
+# decode stops at 500 iterations.
+TEACHER_EVAL_TOKENS = 500
+
 # Stop on first failure by default; set True to run all points and fail at the end.
 _SWEEP_RUN_ALL_BEFORE_FAIL = False
 
-_DEFAULT_MAX_EVAL_TOKENS = int(os.environ.get("DEVSTRAL2_TEACHER_MAX_EVAL", "500"))
+# Single pytest timeout for the full sweep (not per seq len). See ``_sweep_timeout_seconds()``.
+_SWEEP_TIMEOUT_MARGIN = 1.25
 
-_MIN_TOP1_ACC = float(os.environ.get("DEVSTRAL2_MIN_TOP1_ACC", "0.90"))
-_MIN_TOP5_ACC = float(os.environ.get("DEVSTRAL2_MIN_TOP5_ACC", "0.96"))
+_MIN_TOP1_ACC = float(os.environ.get("DEVSTRAL2_MIN_TOP1_ACC", "0.96"))
+_MIN_TOP5_ACC = float(os.environ.get("DEVSTRAL2_MIN_TOP5_ACC", "0.99"))
 
 
 def _sweep_output_dir() -> Path:
-    raw = os.environ.get("DEVSTRAL2_TEACHER_SWEEP_OUTPUT_DIR", "").strip()
-    return Path(raw) if raw else _TESTS_DIR / "reference_outputs" / "teacher_forced_sweep"
+    return _TESTS_DIR / "teacher_forced_sweep_outputs"
+
+
+def _sweep_timeout_seconds() -> int:
+    """Budget for TT model load, weight cache, cold HF ``.refpt`` generation, and **all 14** sweep points.
+
+    Always uses ``FULL_SWEEP_PREFILL_LENGTHS`` (32 … 256K) even when ``SWEEP_PREFILL_LENGTHS`` is a
+    subset. Calibrated from BH Loudbox run 2026-06-15T11:21Z (prefill 32/64/128, 500 eval, cold HF
+    refs): **2270 s (~38 min)** for 3 points. Rates: HF hub load ~167 s/ref, HF forward ~0.07 s/token,
+    TT prefill ~39 s/128-token chunk, TT decode ~0.42 s/step → **~71 h** for 14 points (25% margin).
+    """
+    tt_model_setup_sec = 600
+    hf_hub_load_per_ref_sec = 167
+    hf_forward_sec_per_token = 0.072
+    tt_base_sec = 60
+    tt_prefill_sec_per_chunk = 39
+    tt_decode_sec_per_eval_token = 0.42
+    kv_block_size = Devstral2Args.kv_block_size
+
+    budget = tt_model_setup_sec
+    for prefill_len in FULL_SWEEP_PREFILL_LENGTHS:
+        total_length = prefill_len + TEACHER_EVAL_TOKENS
+        num_prefill_chunks = (prefill_len + kv_block_size - 1) // kv_block_size
+        budget += hf_hub_load_per_ref_sec + int(total_length * hf_forward_sec_per_token)
+        budget += tt_base_sec + num_prefill_chunks * tt_prefill_sec_per_chunk
+        budget += int(TEACHER_EVAL_TOKENS * tt_decode_sec_per_eval_token)
+    return int(budget * _SWEEP_TIMEOUT_MARGIN)
 
 
 def _eval_tokens_for_prefill(prefill_len: int) -> int:
-    """Eval window: full ``_DEFAULT_MAX_EVAL_TOKENS`` for long prefills; shorter prefills use ``prefill_len``."""
-    return min(_DEFAULT_MAX_EVAL_TOKENS, prefill_len)
+    """Fixed 500-token teacher-forced eval window (independent of prefill length)."""
+    del prefill_len
+    return TEACHER_EVAL_TOKENS
 
 
 def _sweep_reference_path(prefill_len: int, total_length: int) -> Path:
@@ -477,6 +510,8 @@ def _dump_sweep_summary(run_id: str, results: list[dict]) -> Path:
         "run_id": run_id,
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "sweep_prefill_lengths": SWEEP_PREFILL_LENGTHS,
+        "teacher_eval_tokens": TEACHER_EVAL_TOKENS,
+        "sweep_timeout_seconds": _sweep_timeout_seconds(),
         "thresholds": {"top1_min": _MIN_TOP1_ACC, "top5_min": _MIN_TOP5_ACC},
         "num_points": len(results),
         "num_passed": sum(1 for r in results if r.get("passed")),
@@ -571,7 +606,7 @@ _DEVICE_PARAMS = [
 
 @pytest.mark.slow
 @pytest.mark.models_performance_bare_metal
-@pytest.mark.timeout(14400)
+@pytest.mark.timeout(_sweep_timeout_seconds())
 @pytest.mark.parametrize("mesh_device", [_mesh_device_param()], indirect=True)
 @pytest.mark.parametrize("device_params", _DEVICE_PARAMS, indirect=True)
 def test_devstral2_teacher_forced_accuracy_sweep(mesh_device):
@@ -579,8 +614,13 @@ def test_devstral2_teacher_forced_accuracy_sweep(mesh_device):
     prefill_lengths = SWEEP_PREFILL_LENGTHS
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     fail_fast = not _SWEEP_RUN_ALL_BEFORE_FAIL
+    sweep_timeout_sec = _sweep_timeout_seconds()
 
-    logger.info(f"Teacher-forced sweep run_id={run_id}, points={prefill_lengths}")
+    logger.info(
+        f"Teacher-forced sweep run_id={run_id}, points={prefill_lengths}, "
+        f"eval_tokens={TEACHER_EVAL_TOKENS}, pytest_timeout={sweep_timeout_sec}s "
+        f"({sweep_timeout_sec / 3600:.1f}h)"
+    )
 
     raw_layers = os.environ.get("DEVSTRAL2_NUM_LAYERS", "").strip()
     num_layers = int(raw_layers) if raw_layers else None

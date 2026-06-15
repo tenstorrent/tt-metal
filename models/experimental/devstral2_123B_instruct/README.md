@@ -122,6 +122,44 @@ Measured with ``pytest models/experimental/devstral2_123B_instruct/tests/perf/te
 
 
 
+## Teacher-forced accuracy sweep
+
+End-to-end **teacher-forced** top-1 / top-5 token accuracy vs HuggingFace over a range of prefill
+context lengths. Eval uses a fixed **500 tokens** after each prefill (same as tt-transformers CI
+`max_generated_tokens=500` in `simple_text_demo.py`; that test uses a 1024-token `.refpt` with a
+512-token prefill and stops decode at 500 steps).
+
+**Test file:** `tests/test_teacher_forced_accuracy.py` — single test:
+`test_devstral2_teacher_forced_accuracy_sweep`.
+
+**Default sweep (edit `SWEEP_PREFILL_LENGTHS` in the test file):** prefill lengths 32, 64, 128, …,
+262144 (powers of two). Tale of Two Cities is tiled when a longer stream is needed.
+
+**Outputs:**
+
+`tests/teacher_forced_sweep_outputs/`
+
+| Path | Contents |
+|------|----------|
+| `references/prefill_{N}_total_{M}.refpt` | Cached HF reference for that prefill + 500 eval tokens |
+| `results/prefill_{N}.json` | Per-length top-1/top-5 accuracy, predictions, pass/fail |
+| `results/sweep_summary_{run_id}.json` | Full sweep rollup |
+
+**Run:**
+
+```sh
+pytest models/experimental/devstral2_123B_instruct/tests/test_teacher_forced_accuracy.py -v
+```
+
+**Timeout:** One pytest timeout covers the **entire sweep** (not per seq len). It is **always**
+budgeted for all **14** points in ``FULL_SWEEP_PREFILL_LENGTHS`` (32 … 256K), even when
+``SWEEP_PREFILL_LENGTHS`` is narrowed for a dev run. Calibrated from BH Loudbox 2026-06-15
+(32/64/128, 500 eval, cold HF refs ≈ 38 min); full 14-point cold budget ≈ **71 hours**. Re-runs
+with cached ``.refpt`` files finish much sooner.
+
+**Thresholds:** top-1 ≥ 96%, top-5 ≥ 99% (override with `DEVSTRAL2_MIN_TOP1_ACC` /
+`DEVSTRAL2_MIN_TOP5_ACC`).
+
 ## Resources
 
 | Path | Purpose |
@@ -140,10 +178,12 @@ Measured with ``pytest models/experimental/devstral2_123B_instruct/tests/perf/te
 | Item | Value |
 |------|--------|
 | HF `max_position_embeddings` | 262,144 (model-native RoPE horizon) |
+| **`max_batch_size` (TT inference)** | **1** — single-user only; all demos, perf tests, and PCC tests use `max_batch_size=1` |
 | Practical `max_seq_len` (TT KV cache) | Sized per run: `prompt + max_new_tokens`, floored by `DEVSTRAL2_MIN_MAX_SEQ_LEN` (default **98,304**) |
 | Verified context on BH Loudbox (1×8) | **Up to 96K** tokens (end-to-end text generation) |
 | Full-model PCC (88 layers) | **0.99** (`tests/test_ministral3_full_model.py`) |
 
 ### Limitations
 
+- **Batch size:** Only **batch size 1** is supported and tested (`Devstral2Args.max_batch_size=1` in `tt/model_args.py`). Demos (`text_demo.py`, `tt_demo_agent.py`), perf tests, PCC tests, and the teacher-forced sweep all run a single sequence at a time. Multi-user / `batch_size > 1` is not validated on this 123B mesh configuration. On-device sampling pads decode logits to a **32-row tile** internally (`demo/on_device_sampling.py`) for `TTSampling` — that is not multi-batch serving; only row 0 is the active user.
 - **Context length:** Long context is limited by per-chip KV and RoPE allocation, not by the HF config alone. On Blackhole Loudbox (1×8), **up to 96K tokens** has been verified for end-to-end generation. Defaults use `max_seq_len=98304` (`DEVSTRAL2_MIN_MAX_SEQ_LEN` / `--max-seq-len`). Prompts longer than the configured budget need a larger cap and sufficient device memory.
