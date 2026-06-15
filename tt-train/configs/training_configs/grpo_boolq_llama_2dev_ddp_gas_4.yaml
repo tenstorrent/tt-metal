@@ -1,5 +1,5 @@
 # Two-chip DDP variant of grpo_boolq_llama_1dev.yaml, used by the
-# WeightBridge end-to-end test (tt-train/sources/examples/grpo_speedup/
+# WeightBridge end-to-end test (tt-train/sources/examples/grpo/
 # tests/weight_transfer/test_bridge_transfer.py): the ttml rank opens
 # both chips of one N300 board so weight parameters are replicated
 # across the [1, 2] mesh and the sanity-completion generate splits its
