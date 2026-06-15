@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
-// AI-generated — run_id: 2026-04-08_abs_quasar_2f52d870
 
 #include <cstdint>
 
@@ -86,11 +85,11 @@ const bool is_int_fpu_en = false;
 
 #include "cfg_defines.h"
 #include "cmath_common.h"
-#include "experimental/ckernel_sfpu_abs.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "params.h"
+#include "sfpu_operations_quasar.h"
 
 using namespace ckernel;
 using namespace ckernel::math;
@@ -141,22 +140,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     _llk_math_eltwise_sfpu_init_();
+    test_utils::init_unary_sfpu_operation_quasar<SFPU_UNARY_OPERATION>();
 
-    // Apply SFPU abs (SFPABS) in-place on Dest for each tile.
-    // Tile index must match the one used by the producer (datacopy above, or
-    // UNPACK-to-Dest), so it is offset by params.DST_INDEX.
+    // Apply the selected SFPU op in-place on Dest for each tile. Tile index must
+    // match the one used by the producer (datacopy above, or UNPACK-to-Dest),
+    // so it is offset by params.DST_INDEX.
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
-        _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_abs_<SFPU_ITERATIONS>, params.DST_INDEX + i);
+        test_utils::call_unary_sfpu_operation_quasar<SFPU_UNARY_OPERATION>(params.DST_INDEX + i);
     }
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
 
     // Idle all execution units this MATH thread has driven before PACK takes
-    // over: SFPU (the abs loop), FPU (datacopy on the !unpack_to_dest path),
+    // over: SFPU (the op loop), FPU (datacopy on the !unpack_to_dest path),
     // and MOP (any macro-op sequences issued from the SFPU helpers).
-    // No wait_replay_idle() because this kernel emits straight-line SFPU
-    // code and does not install a replay buffer.
     wait_sfpu_idle();
     wait_fpu_idle();
     wait_mop_idle();

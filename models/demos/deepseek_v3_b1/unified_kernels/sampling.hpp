@@ -652,6 +652,11 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
     tile_regs_commit();
     tile_regs_wait();
 
+    // The custom TTI_SETADCXX(PAC, 1 - 1, 0x0) below packs 1 element per row across
+    // 16 rows (32 elements total) for the topk output, which requires
+    // pack_reads_per_xy_plane = FACE_R_DIM = 16 so the tile position generator counts
+    // 16 rows before resetting. Save FACE_R_DIM here and restore 1 after pack_tile.
+    PACK((cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(FACE_R_DIM)));
     PACK(TTI_SETADCXX(p_setadc::PAC, 1 - 1, 0x0));
 
     ckernel::pack_reconfig_data_format(out_scores_cb);
@@ -659,6 +664,7 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
     ckernel::pack_reconfig_data_format(out_indices_cb);
     ckernel::pack_tile(index_offset_tiles, out_indices_cb);
     PACK(TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0));
+    PACK((cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(1)));
 
     tile_regs_release();
 
@@ -758,6 +764,11 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
     tile_regs_wait();
 
     // Step 10: pack final top-32 scores/indices.
+    // The custom TTI_SETADCXX(PAC, 1 - 1, 0x0) below packs 1 element per row across
+    // 16 rows (32 elements total) for the topk output, which requires
+    // pack_reads_per_xy_plane = FACE_R_DIM = 16 so the tile position generator counts
+    // 16 rows before resetting. Save FACE_R_DIM here and restore 1 after pack_tile.
+    PACK((cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(FACE_R_DIM)));
     PACK(TTI_SETADCXX(p_setadc::PAC, 1 - 1, 0x0));
 
     ckernel::pack_reconfig_data_format(out_scores_cb);
@@ -766,6 +777,7 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
     ckernel::pack_tile(index_offset_tiles, out_indices_cb);
 
     PACK(TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0));
+    PACK((cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(1)));
 
     // Reset unpacker state for downstream operations (softmax)
     UNPACK((cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0)));
