@@ -1,8 +1,0 @@
-﻿ttnn.narrow
-===========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.narrow:
-
-.. autooperation:: ttnn.narrow

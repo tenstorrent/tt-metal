@@ -1,8 +1,0 @@
-﻿ttnn.randn
-==========
-
-.. currentmodule:: ttnn
-
-.. _ttnn.randn:
-
-.. autooperation:: ttnn.randn

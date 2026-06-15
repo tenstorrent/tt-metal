@@ -168,7 +168,7 @@ The sparsity tensor must be a rank 4 tensor in row major layout.</p>
 <ul class="simple">
 <li><p><strong>sparsity</strong> (<em>ttnn.Tensor</em>) – the sparsity tensor containing the mask values. Needs to be on the device. The data type must be bfloat16.</p></li>
 <li><p><strong>program_config</strong> (<a class="reference internal" href="ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.html#ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig" title="ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig"><em>ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig</em></a>) – the program configuration for the matmul operation. Only this config type is supported. <code class="docutils literal notranslate"><span class="pre">mcast_in0</span></code> must be set to True.</p></li>
-<li><p><strong>nnz</strong> (<em>int</em><em>, </em><em>optional</em>) – the number of non-zero values in the sparsity tensor. If not provided, it will be inferred from the sparsity tensor at runtime. If provided, it <strong>must</strong> be exactly equal to the number of non-zero entries in <cite>sparsity</cite> (i.e. <cite>nnz == count_nonzero(sparsity)</cite>). It is the user’s responsibility to set this value correctly. If the equality condition is not met, the kernel will hang (deadlock) on device, since the receiver and compute kernels loop exactly <cite>nnz</cite> times while the sender only multicasts once per non-zero sparsity entry. Because <cite>count_nonzero(sparsity)</cite> is data-dependent and only known at runtime, this cannot be validated on the host; the mismatch is asserted on-device (failing loudly under watcher) but otherwise results in a hang.</p></li>
+<li><p><strong>nnz</strong> (<em>int</em><em>, </em><em>optional</em>) – the number of non-zero values in the sparsity tensor. If not provided, it will be inferred from the sparsity tensor at runtime.</p></li>
 <li><p><strong>is_input_a_sparse</strong> (<em>bool</em><em>, </em><em>optional</em>) – boolean indicating whether <cite>input_tensor_a</cite> is sparse. Defaults to <cite>False</cite>. Together with <cite>is_input_b_sparse</cite>, it determines how the sparsity tensor is interpreted. See the supported modes table below.</p></li>
 <li><p><strong>is_input_b_sparse</strong> (<em>bool</em><em>, </em><em>optional</em>) – boolean indicating whether <cite>input_tensor_b</cite> is sparse. Defaults to <cite>True</cite>. Together with <cite>is_input_a_sparse</cite>, it determines how the sparsity tensor is interpreted. See the supported modes table below.</p></li>
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – the memory configuration of the output tensor. Defaults to <cite>None</cite>, which will result in using ttnn.DRAM_MEMORY_CONFIG.</p></li>
@@ -241,16 +241,6 @@ The sparsity tensor must be a rank 4 tensor in row major layout.</p>
 </table>
 </dd>
 </dl>
-<div class="admonition warning">
-<p class="admonition-title">Warning</p>
-<p>When <cite>nnz</cite> is provided, it <strong>must</strong> equal <cite>count_nonzero(sparsity)</cite> exactly. Passing an <cite>nnz</cite>
-that does not match the actual number of non-zero entries in <cite>sparsity</cite> will cause the kernel to
-<strong>hang (deadlock)</strong> on device. Setting <cite>nnz</cite> correctly is the user’s responsibility. This
-condition cannot be checked on the host because <cite>count_nonzero(sparsity)</cite> is data-dependent and
-only known at runtime; it is validated on-device and will fail loudly (assert) when watcher is
-enabled, but otherwise manifests as a hang. If you cannot guarantee the exact count, omit <cite>nnz</cite>
-so it is inferred from the sparsity tensor at runtime.</p>
-</div>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
 <p>The input tensors support the following data types and layouts:</p>

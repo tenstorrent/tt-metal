@@ -130,40 +130,40 @@
 <span class="target" id="namespaceckernel_1a6a35fa2a45b4890677bb55e42dff3cbb"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">selu_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">param0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">param1</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel9selu_tileE8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Performs element-wise computation of: selu = scale <em>(max(0,x) + min(0,alpha * (exp(x)-1))) by broadcast , where x is each element of a tile in DST register at index tile_index. The value is provided as const param0 The DST register buffer must be in acquired state via *acquire_dst</em> call. This call is blocking and is only available on the compute engine.</p>
+<p>Performs element-wise computation of: selu = scale *(max(0,x) + min(0,alpha * (exp(x)-1))) by broadcast , where x is each element of a tile in DST register at index tile_index. The value is provided as const param0 The DST register buffer must be in acquired state via <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine.</p>
 <p>Return value: None</p>
 <p></p>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd">
-<th class="head"><p>Argument  </p></th>
-<th class="head"><p>Description  </p></th>
-<th class="head"><p>Type  </p></th>
-<th class="head"><p>Valid Range  </p></th>
-<th class="head"><p>Required  </p></th>
+<th class="head"><p>Argument   </p></th>
+<th class="head"><p>Description   </p></th>
+<th class="head"><p>Type   </p></th>
+<th class="head"><p>Valid Range   </p></th>
+<th class="head"><p>Required    </p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>idst  </p></td>
-<td><p>The index of the tile in DST register buffer to perform the computation on  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>Must be less than the size of the DST register buffer  </p></td>
-<td><p>True  </p></td>
+<td><p>idst   </p></td>
+<td><p>The index of the tile in DST register buffer to perform the computation on   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>Must be less than the size of the DST register buffer   </p></td>
+<td><p>True    </p></td>
 </tr>
 <tr class="row-odd">
-<td><p>param0  </p></td>
-<td><p>scale value  </p></td>
-<td><p>uint32_t  </p></td>
+<td><p>param0   </p></td>
+<td><p>scale value   </p></td>
+<td><p>uint32_t   </p></td>
 <td><p></p></td>
-<td><p>True  </p></td>
+<td><p>True    </p></td>
 </tr>
 <tr class="row-even">
-<td><p>param1  </p></td>
-<td><p>alpha value  </p></td>
-<td><p>uint32_t  </p></td>
+<td><p>param1   </p></td>
+<td><p>alpha value   </p></td>
+<td><p>uint32_t   </p></td>
 <td><p></p></td>
-<td><p>True  </p></td>
+<td><p>True   </p></td>
 </tr>
 </tbody>
 </table>

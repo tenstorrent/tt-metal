@@ -1,8 +1,0 @@
-﻿ttnn.snake\_beta
-================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.snake_beta:
-
-.. autooperation:: ttnn.snake_beta
