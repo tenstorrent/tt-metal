@@ -482,8 +482,13 @@ def quantize_mx_tensor_chunked(
     if tensor_size == 0:
         return tensor
 
-    # Pre-allocate output tensor for better performance
-    quantized = torch.zeros_like(tensor)
+    # MX pack/unpack decodes back to the format-visible unpack dtype
+    # (currently BF16 for Quasar MX formats), not necessarily the input dtype.
+    quantized = torch.empty(
+        tensor.shape,
+        dtype=format_dict[data_format],
+        device=tensor.device,
+    )
     idx = 0
     # FACE_R_DIM support is not implemented yet, so we only support 4 faces for now.
     # Chunk size lookup: (min_size, chunk_size, num_faces)
@@ -514,7 +519,9 @@ def quantize_mx_tensor_chunked(
         quantized_chunk = quantize_mx_stimuli(chunk, data_format, num_faces=num_faces)
 
         # Write directly to output tensor (avoid list append + concat)
-        quantized[idx : idx + actual_chunk_size] = quantized_chunk[:actual_chunk_size]
+        quantized[idx : idx + actual_chunk_size] = quantized_chunk[
+            :actual_chunk_size
+        ].to(dtype=quantized.dtype, device=quantized.device)
         idx += actual_chunk_size
 
     return quantized
