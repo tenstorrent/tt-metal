@@ -14,6 +14,7 @@
 #include "api/compute/layernorm.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/experimental/copy_tile_src_safe.h"
 #include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "api/dataflow/circular_buffer.h"
@@ -137,9 +138,9 @@ void kernel_main() {
             tile_regs_acquire();
 #ifdef RMSNORM
             reconfig_data_format_srca(cb_in);
-            copy_tile_init(cb_in);
+            copy_tile_src_safe_init(cb_in);
             for (auto i : block.local()) {
-                copy_tile(cb_in, i, i);
+                copy_tile_src_safe(cb_in, i, i);
             }
 #else
             // x-E[x]
@@ -179,8 +180,8 @@ void kernel_main() {
             if (!block.is_first()) {
                 cb_accumulate_obj.wait_front(onetile);
                 reconfig_data_format_srca(cb_accumulate);
-                copy_tile_init(cb_accumulate);
-                copy_tile(cb_accumulate, 0, dst0);
+                copy_tile_src_safe_init(cb_accumulate);
+                copy_tile_src_safe(cb_accumulate, 0, dst0);
                 cb_accumulate_obj.pop_front(onetile);
             }
             cb_xmm2_obj.wait_front(block.full_block_size());
@@ -286,9 +287,9 @@ void kernel_main() {
             cb_in_obj.wait_front(block.full_block_size());
 #ifdef RMSNORM
             reconfig_data_format_srca(cb_in);
-            copy_tile_init(cb_in);
+            copy_tile_src_safe_init(cb_in);
             for (auto i : block.local()) {
-                copy_tile(cb_in, i, i);
+                copy_tile_src_safe(cb_in, i, i);
             }
 #else
             cb_ex_obj.wait_front(1);
