@@ -26,10 +26,6 @@ namespace {
 using namespace tt::tt_metal;
 using ttml::metal::VariableMatmulConfig;
 
-// HiFi4 + FP32 dest: 2 cycles per tile matmul
-// 120 cores * 1350 MHz * (1/2 tile/cycle) * 2048 FLOPs/tile = 165.9 TFLOPS
-constexpr double kPeakTflops = 165.9;
-
 const VariableMatmulConfig kBaseConfig{
     .M_block_size = 4,
     .K_block_size = 8,
@@ -56,7 +52,6 @@ void report_counters(benchmark::State& state, double time_us, uint32_t M, uint32
     const double tflops = flops / (time_us * 1e6);
     state.counters["time_us"] = time_us;
     state.counters["tflops"] = tflops;
-    state.counters["util_pct"] = (tflops / kPeakTflops) * 100.0;
 }
 
 // Run a single benchmark loop with the given transpose flags. Matmul dimensions are always
