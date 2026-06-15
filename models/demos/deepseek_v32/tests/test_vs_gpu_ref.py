@@ -7,7 +7,7 @@ DeepSeek V3.2 MLA/indexer/KV-cache vs the OFFICIAL reference values.
 Unlike test_mla.py (whose truth is the in-repo MLACPU model), the truth here is
 the recorded output of the official DeepSeek-V3.2 CUDA stack, captured from a
 vLLM run (a single 5120-token prefill) and stored as safetensors streams. See
-context/reference-results.md. Reference layers available: 0, 30, 60.
+context/reference-gpu-results.md. Reference layers available: 0, 30, 60.
 
 Streams (per layer L), loaded by load_stream:
   module_io/mla_input_layer_L     [5120, 7168] bf16   (== indexer_input)
