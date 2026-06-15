@@ -4,39 +4,34 @@
 
 """Teacher-forced top-1 / top-5 token accuracy vs HuggingFace for Devstral-2-123B.
 
-Self-contained tests generate ``.refpt`` HF references on first run (if missing), then run TT
-teacher-forced decode and score against HF top-1 / top-5.
-
-Tests:
-
-- ``test_devstral2_teacher_forced_accuracy`` — 1K reference (512 prefill + 500 eval)
-- ``test_devstral2_teacher_forced_accuracy_16k`` — long-context prefill (default 16K) + 500 eval
+Sweeps prefill context lengths (powers of two from 32 through 256K by default). Tale of Two
+Cities is tiled when a longer token stream is required. Each sweep point writes a per-length
+``.refpt`` HF reference (generated on first run) and a JSON result under
+``reference_outputs/teacher_forced_sweep/``.
 
 Run::
 
     pytest models/experimental/devstral2_123B_instruct/tests/test_teacher_forced_accuracy.py -v
-    pytest models/experimental/devstral2_123B_instruct/tests/test_teacher_forced_accuracy.py -k 16k -v
 
-    # 32K prefill (corpus supports up to ~192K tokens):
-    DEVSTRAL2_TEACHER_PREFILL_LEN=32768 pytest ... -k 16k -v
+Edit ``SWEEP_PREFILL_LENGTHS`` in this file to change sweep points. By default the sweep stops on
+the first failure; set ``_SWEEP_RUN_ALL_BEFORE_FAIL = True`` to run every point and fail at the end.
 
 Environment overrides::
 
-    DEVSTRAL2_TEACHER_REF          Path to 1K ``.refpt`` (default: tests/reference_outputs/…)
-    DEVSTRAL2_TEACHER_16K_REF      Path to long-context ``.refpt``
-    DEVSTRAL2_TEACHER_PREFILL_LEN  Long-context prefill tokens (default 16384; max ~192K from corpus)
-    DEVSTRAL2_MIN_TOP1_ACC         Minimum top-1 fraction (default 0.90)
-    DEVSTRAL2_MIN_TOP5_ACC         Minimum top-5 fraction (default 0.96)
-    DEVSTRAL2_NUM_LAYERS           Limit decoder layers (default: all 88)
-    DEVSTRAL2_TEACHER_TOTAL_LEN    1K reference token count (default 1024)
-    DEVSTRAL2_TEACHER_16K_MAX_EVAL Eval tokens after long prefill (default 500)
-    DEVSTRAL2_WEIGHT_CACHE_SEQ_LEN Tiled-weight cache key (default 262144); reuse ``seq_256k`` weights
+    DEVSTRAL2_TEACHER_SWEEP_OUTPUT_DIR Output root (default: tests/reference_outputs/teacher_forced_sweep)
+    DEVSTRAL2_TEACHER_MAX_EVAL         Eval tokens when prefill >= this value (default 500)
+    DEVSTRAL2_MIN_TOP1_ACC             Minimum top-1 fraction (default 0.90)
+    DEVSTRAL2_MIN_TOP5_ACC             Minimum top-5 fraction (default 0.96)
+    DEVSTRAL2_NUM_LAYERS               Limit decoder layers (default: all 88)
+    DEVSTRAL2_WEIGHT_CACHE_SEQ_LEN     Tiled-weight cache key (default 262144)
 """
 
 from __future__ import annotations
 
 import bz2
+import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -72,29 +67,51 @@ from models.experimental.devstral2_123B_instruct.tt.weight_loading import DEVSTR
 from models.tt_transformers.tt.ccl import TT_CCL
 
 _TESTS_DIR = Path(__file__).resolve().parent
-_DEFAULT_REFERENCE_FILE = _TESTS_DIR / "reference_outputs" / "devstral2_123b_instruct.refpt"
-_DEFAULT_16K_REFERENCE_FILE = _TESTS_DIR / "reference_outputs" / "devstral2_123b_instruct_16k.refpt"
 _TALE_OF_TWO_CITIES = _TESTS_DIR.parents[2] / "tt_transformers" / "tests" / "tale-of-two-cities.txt.bz2"
 
-_DEFAULT_TOTAL_LENGTH = int(os.environ.get("DEVSTRAL2_TEACHER_TOTAL_LEN", "1024"))
-_DEFAULT_MAX_EVAL_TOKENS = 500
-_DEFAULT_TEACHER_PREFILL_LEN = 16 * 1024
+# Prefill lengths to sweep (powers of two from 32 through 256K). Edit to narrow or extend the sweep.
+SWEEP_PREFILL_LENGTHS = [
+    32,
+    64,
+    128,
+    256,
+    512,
+    1024,
+    2048,
+    4096,
+    8192,
+    16384,
+    32768,
+    65536,
+    131072,
+    262144,
+]
+
+# Stop on first failure by default; set True to run all points and fail at the end.
+_SWEEP_RUN_ALL_BEFORE_FAIL = False
+
+_DEFAULT_MAX_EVAL_TOKENS = int(os.environ.get("DEVSTRAL2_TEACHER_MAX_EVAL", "500"))
 
 _MIN_TOP1_ACC = float(os.environ.get("DEVSTRAL2_MIN_TOP1_ACC", "0.90"))
 _MIN_TOP5_ACC = float(os.environ.get("DEVSTRAL2_MIN_TOP5_ACC", "0.96"))
 
 
-def _teacher_prefill_len() -> int:
-    """Long-context teacher-forcing prefill length (tokens before eval region)."""
-    return int(os.environ.get("DEVSTRAL2_TEACHER_PREFILL_LEN", str(_DEFAULT_TEACHER_PREFILL_LEN)))
+def _sweep_output_dir() -> Path:
+    raw = os.environ.get("DEVSTRAL2_TEACHER_SWEEP_OUTPUT_DIR", "").strip()
+    return Path(raw) if raw else _TESTS_DIR / "reference_outputs" / "teacher_forced_sweep"
 
 
-def _teacher_long_context_max_eval() -> int:
-    return int(os.environ.get("DEVSTRAL2_TEACHER_16K_MAX_EVAL", "500"))
+def _eval_tokens_for_prefill(prefill_len: int) -> int:
+    """Eval window: full ``_DEFAULT_MAX_EVAL_TOKENS`` for long prefills; shorter prefills use ``prefill_len``."""
+    return min(_DEFAULT_MAX_EVAL_TOKENS, prefill_len)
 
 
-def _teacher_long_context_total_length() -> int:
-    return _teacher_prefill_len() + _teacher_long_context_max_eval()
+def _sweep_reference_path(prefill_len: int, total_length: int) -> Path:
+    return _sweep_output_dir() / "references" / f"prefill_{prefill_len:06d}_total_{total_length:06d}.refpt"
+
+
+def _sweep_result_path(prefill_len: int) -> Path:
+    return _sweep_output_dir() / "results" / f"prefill_{prefill_len:06d}.json"
 
 
 def _load_corpus_text() -> str:
@@ -104,8 +121,28 @@ def _load_corpus_text() -> str:
         return f.read()
 
 
-def _corpus_token_count(tokenizer) -> int:
-    return len(tokenizer.encode(_load_corpus_text(), add_special_tokens=True))
+def _base_corpus_tokens(tokenizer) -> list[int]:
+    return tokenizer.encode(_load_corpus_text(), add_special_tokens=True)
+
+
+def _build_token_sequence(tokenizer, total_length: int) -> list[int]:
+    """Return ``total_length`` tokens from Tale of Two Cities, tiling the stream when needed."""
+    if total_length <= 0:
+        raise ValueError(f"total_length must be positive, got {total_length}")
+
+    base = _base_corpus_tokens(tokenizer)
+    if not base:
+        raise ValueError("Corpus tokenization produced an empty sequence")
+
+    if total_length <= len(base):
+        return base[:total_length]
+
+    repeat_body = base[1:] if len(base) > 1 else base
+    tokens = list(base)
+    while len(tokens) < total_length:
+        need = total_length - len(tokens)
+        tokens.extend(repeat_body[:need])
+    return tokens[:total_length]
 
 
 class TokenAccuracy:
@@ -116,13 +153,11 @@ class TokenAccuracy:
         reference_tokens: torch.Tensor,
         top5_tokens: torch.Tensor,
         *,
-        max_eval_tokens: int = _DEFAULT_MAX_EVAL_TOKENS,
-        split_point: int | None = None,
+        max_eval_tokens: int,
+        split_point: int,
     ) -> None:
         if reference_tokens.ndim == 2:
             reference_tokens = reference_tokens[0]
-        if split_point is None:
-            split_point = reference_tokens.shape[-1] // 2
         self.input_prompt = reference_tokens[:split_point]
         self.reference_tokens = reference_tokens[split_point:]
         self.top5_tokens = top5_tokens[split_point - 1 :]
@@ -159,46 +194,37 @@ class TokenAccuracy:
             return 0.0, 0.0, 0
         return count_top1 / matching_sz, count_top5 / matching_sz, matching_sz
 
-
-def _resolve_16k_reference_file() -> Path:
-    raw = os.environ.get("DEVSTRAL2_TEACHER_16K_REF", "").strip()
-    return Path(raw) if raw else _DEFAULT_16K_REFERENCE_FILE
+    def mismatch_indices(self) -> list[int]:
+        indices: list[int] = []
+        matching_sz = min(len(self.reference_tokens), len(self.store_predicted_tokens), self.max_eval_tokens)
+        for i in range(matching_sz):
+            pred = self.store_predicted_tokens[i]
+            ref_top1 = int(self.top5_tokens[i, 0].item())
+            if pred != ref_top1:
+                indices.append(i)
+        return indices
 
 
 def _generate_reference_file(
     output_file: Path,
     *,
-    total_length: int = _DEFAULT_TOTAL_LENGTH,
+    total_length: int,
+    prefill_len: int,
     chunk_size: int = 1024,
-    prefill_len: int | None = None,
-    require_full_length: bool = False,
 ) -> None:
-    """Tokenize Tale of Two Cities, run HF forward, save ``reference_tokens`` + ``top5_tokens``."""
+    """Tokenize (and tile) Tale of Two Cities, run HF forward, save ``reference_tokens`` + ``top5_tokens``."""
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
-    logger.info(f"Generating teacher-forcing reference at {output_file} (total_length={total_length})")
+    logger.info(
+        f"Generating teacher-forcing reference at {output_file} "
+        f"(total_length={total_length}, prefill_len={prefill_len})"
+    )
     tokenizer = AutoTokenizer.from_pretrained(DEVSTRAL2_MODEL_ID, trust_remote_code=True)
-    corpus_tokens = _corpus_token_count(tokenizer)
-    if total_length > corpus_tokens:
-        raise ValueError(
-            f"Requested {total_length} tokens but Tale of Two Cities yields {corpus_tokens} "
-            f"with the Devstral tokenizer (~192K max). Reduce DEVSTRAL2_TEACHER_PREFILL_LEN or "
-            "DEVSTRAL2_TEACHER_16K_MAX_EVAL."
-        )
+    encoded_tokens = _build_token_sequence(tokenizer, total_length)
 
     model = load_devstral2_causal_lm()
     model.eval()
     device = next(model.parameters()).device
-
-    encoded_tokens = tokenizer.encode(_load_corpus_text(), add_special_tokens=True)[:total_length]
-    if len(encoded_tokens) < total_length:
-        if require_full_length:
-            raise ValueError(
-                f"Corpus yielded {len(encoded_tokens)} tokens (requested {total_length}). "
-                f"Maximum available: {corpus_tokens}."
-            )
-        logger.warning(f"Corpus yielded {len(encoded_tokens)} tokens (requested {total_length}); using all available.")
-        total_length = len(encoded_tokens)
 
     encoded_tokens_tensor = torch.tensor(encoded_tokens, device=device).unsqueeze(0)
     all_top5_tokens: list[torch.Tensor] = []
@@ -221,7 +247,8 @@ def _generate_reference_file(
         "top5_tokens": torch.cat(all_top5_tokens, dim=0).cpu(),
         "model_id": DEVSTRAL2_MODEL_ID,
         "total_length": total_length,
-        "prefill_len": prefill_len if prefill_len is not None else total_length // 2,
+        "prefill_len": prefill_len,
+        "corpus_extended": total_length > len(_base_corpus_tokens(tokenizer)),
     }
     torch.save(data, output_file)
     logger.info(f"Saved reference outputs to {output_file}")
@@ -231,32 +258,26 @@ def _ensure_reference_file(
     reference_file: Path,
     *,
     total_length: int,
-    expected_prefill_len: int | None = None,
+    prefill_len: int,
 ) -> Path:
     """Return path to ``.refpt``, generating it with HF when absent or stale."""
     if reference_file.is_file():
         data = torch.load(reference_file, weights_only=False)
         cached_len = int(data.get("total_length", 0))
-        cached_prefill = data.get("prefill_len")
-        if cached_len == total_length and (
-            expected_prefill_len is None or int(cached_prefill or 0) == expected_prefill_len
-        ):
+        cached_prefill = int(data.get("prefill_len", 0))
+        if cached_len == total_length and cached_prefill == prefill_len:
             logger.info(f"Using existing reference: {reference_file}")
             return reference_file
         logger.info(
             f"Stale reference at {reference_file} "
-            f"(cached total_length={cached_len}, want {total_length}); regenerating..."
+            f"(cached total={cached_len}, prefill={cached_prefill}; "
+            f"want total={total_length}, prefill={prefill_len}); regenerating..."
         )
     else:
         logger.info(f"Reference not found at {reference_file}; generating from HF...")
 
     try:
-        _generate_reference_file(
-            reference_file,
-            total_length=total_length,
-            prefill_len=expected_prefill_len,
-            require_full_length=expected_prefill_len is not None,
-        )
+        _generate_reference_file(reference_file, total_length=total_length, prefill_len=prefill_len)
     except Exception as exc:
         pytest.skip(
             "Could not generate teacher-forcing reference "
@@ -285,19 +306,12 @@ def _mesh_device_param():
     }.get(os.environ.get("MESH_DEVICE"), (1, 8))
 
 
-def _resolve_1k_reference_file() -> Path:
-    raw = os.environ.get("DEVSTRAL2_TEACHER_REF", "").strip()
-    return Path(raw) if raw else _DEFAULT_REFERENCE_FILE
-
-
 def _test_seq_len(prefill_len: int, eval_tokens: int, kv_block_size: int) -> int:
-    """Logical KV budget (prefill + eval); weight tiles still loaded from ``seq_256k`` cache."""
     need = prefill_len + eval_tokens + 1
     return max(_round_up(need, kv_block_size), kv_block_size)
 
 
 def _runtime_max_seq_len(test_seq_len: int, kv_block_size: int) -> int:
-    """Device ``max_seq_len``: at least the weight-cache key so RoPE/matmul caches hit ``seq_256k``."""
     cache_seq = devstral2_weight_cache_seq_len()
     return max(_round_up(test_seq_len, kv_block_size), cache_seq)
 
@@ -447,6 +461,104 @@ def _log_accuracy_table(token_acc: TokenAccuracy, tokenizer, *, max_rows: int = 
         )
 
 
+def _dump_sweep_result(result: dict) -> Path:
+    path = _sweep_result_path(result["prefill_len"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(result, f, indent=2)
+    logger.info(f"Wrote sweep result: {path}")
+    return path
+
+
+def _dump_sweep_summary(run_id: str, results: list[dict]) -> Path:
+    summary_path = _sweep_output_dir() / "results" / f"sweep_summary_{run_id}.json"
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "run_id": run_id,
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "sweep_prefill_lengths": SWEEP_PREFILL_LENGTHS,
+        "thresholds": {"top1_min": _MIN_TOP1_ACC, "top5_min": _MIN_TOP5_ACC},
+        "num_points": len(results),
+        "num_passed": sum(1 for r in results if r.get("passed")),
+        "num_failed": sum(1 for r in results if not r.get("passed")),
+        "results": results,
+    }
+    with summary_path.open("w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+    logger.info(f"Wrote sweep summary: {summary_path}")
+    return summary_path
+
+
+def _run_sweep_point(
+    mesh_device,
+    model: TtMinistral3ForCausalLM,
+    args: Devstral2Args,
+    *,
+    prefill_len: int,
+    weight_cache_path: str,
+    run_id: str,
+    tokenizer,
+) -> dict:
+    eval_tokens = _eval_tokens_for_prefill(prefill_len)
+    total_length = prefill_len + eval_tokens
+    reference_file = _sweep_reference_path(prefill_len, total_length)
+
+    kv_block_size = Devstral2Args.kv_block_size
+    test_seq_len = _test_seq_len(prefill_len, eval_tokens, kv_block_size)
+    max_seq_len = _runtime_max_seq_len(test_seq_len, kv_block_size)
+
+    reference_file = _ensure_reference_file(
+        reference_file,
+        total_length=total_length,
+        prefill_len=prefill_len,
+    )
+    reference_data = _load_reference_data(reference_file)
+    token_acc = TokenAccuracy(
+        reference_data["reference_tokens"],
+        reference_data["top5_tokens"],
+        max_eval_tokens=eval_tokens,
+        split_point=prefill_len,
+    )
+
+    logger.info(
+        f"Sweep prefill={prefill_len}: eval={eval_tokens}, total={total_length}, "
+        f"test_seq_len={test_seq_len}, max_seq_len={max_seq_len}, reference={reference_file}"
+    )
+
+    top1, top5, n_tokens = _run_teacher_forced_accuracy(model, args, mesh_device, token_acc)
+    _log_accuracy_table(token_acc, tokenizer)
+
+    passed = top1 >= _MIN_TOP1_ACC and top5 >= _MIN_TOP5_ACC
+    mismatches = token_acc.mismatch_indices()
+    result = {
+        "run_id": run_id,
+        "prefill_len": prefill_len,
+        "eval_tokens": eval_tokens,
+        "total_length": total_length,
+        "test_seq_len": test_seq_len,
+        "max_seq_len": max_seq_len,
+        "top1_accuracy": top1,
+        "top5_accuracy": top5,
+        "num_eval_tokens": n_tokens,
+        "passed": passed,
+        "thresholds": {"top1_min": _MIN_TOP1_ACC, "top5_min": _MIN_TOP5_ACC},
+        "reference_file": str(reference_file),
+        "weight_cache_path": weight_cache_path,
+        "corpus_extended": bool(reference_data.get("corpus_extended", False)),
+        "num_top1_mismatches": len(mismatches),
+        "mismatch_steps": mismatches[:50],
+        "predicted_tokens": token_acc.store_predicted_tokens,
+        "reference_top1_tokens": [int(token_acc.top5_tokens[i, 0].item()) for i in range(n_tokens)],
+    }
+
+    logger.info(
+        f"Sweep prefill={prefill_len}: top-1={top1:.4f} ({top1 * 100:.2f}%), "
+        f"top-5={top5:.4f} ({top5 * 100:.2f}%), passed={passed}"
+    )
+    _dump_sweep_result(result)
+    return result
+
+
 _DEVICE_PARAMS = [
     {
         "fabric_config": ttnn.FabricConfig.FABRIC_1D,
@@ -457,74 +569,63 @@ _DEVICE_PARAMS = [
 ]
 
 
-def _execute_teacher_forced_test(
-    mesh_device,
-    *,
-    reference_file: Path,
-    total_length: int,
-    expected_prefill_len: int | None,
-    split_point: int | None,
-    max_eval_tokens: int,
-    test_label: str,
-) -> None:
-    reference_file = _ensure_reference_file(
-        reference_file,
-        total_length=total_length,
-        expected_prefill_len=expected_prefill_len,
-    )
-    reference_data = _load_reference_data(reference_file)
-    token_acc = TokenAccuracy(
-        reference_data["reference_tokens"],
-        reference_data["top5_tokens"],
-        max_eval_tokens=max_eval_tokens,
-        split_point=split_point,
-    )
-
-    raw_layers = os.environ.get("DEVSTRAL2_NUM_LAYERS", "").strip()
-    num_layers = int(raw_layers) if raw_layers else None
-
-    kv_block_size = Devstral2Args.kv_block_size
-    test_seq_len = _test_seq_len(token_acc.prefill_len, token_acc.eval_len, kv_block_size)
-    max_seq_len = _runtime_max_seq_len(test_seq_len, kv_block_size)
-    logger.info(
-        f"{test_label}: prefill={token_acc.prefill_len}, eval={token_acc.eval_len}, "
-        f"test_seq_len={test_seq_len}, max_seq_len={max_seq_len}, reference={reference_file}"
-    )
-
-    model, args, weight_cache_path = _build_model(mesh_device, num_layers, max_seq_len)
-    logger.info(f"TT weight cache (reuse): {weight_cache_path}")
-
-    top1, top5, n_tokens = _run_teacher_forced_accuracy(model, args, mesh_device, token_acc)
-
-    tokenizer = AutoTokenizer.from_pretrained(DEVSTRAL2_LARGE_REPO_ID, trust_remote_code=True)
-    _log_accuracy_table(token_acc, tokenizer)
-
-    logger.info(
-        f"{test_label} over {n_tokens} tokens: "
-        f"top-1={top1:.4f} ({top1 * 100:.2f}%), top-5={top5:.4f} ({top5 * 100:.2f}%)"
-    )
-    logger.info(f"Thresholds: top-1 >= {_MIN_TOP1_ACC:.2%}, top-5 >= {_MIN_TOP5_ACC:.2%}")
-
-    assert top1 >= _MIN_TOP1_ACC, f"Top-1 accuracy {top1:.4f} below {_MIN_TOP1_ACC:.4f}"
-    assert top5 >= _MIN_TOP5_ACC, f"Top-5 accuracy {top5:.4f} below {_MIN_TOP5_ACC:.4f}"
-
-
 @pytest.mark.slow
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.timeout(14400)
 @pytest.mark.parametrize("mesh_device", [_mesh_device_param()], indirect=True)
 @pytest.mark.parametrize("device_params", _DEVICE_PARAMS, indirect=True)
-def test_devstral2_teacher_forced_accuracy_16k(mesh_device):
-    """Long-context prefill (default 16K, env-configurable) + 500 teacher-forced decode vs HF."""
-    prefill_len = _teacher_prefill_len()
-    max_eval = _teacher_long_context_max_eval()
-    total_length = _teacher_long_context_total_length()
-    _execute_teacher_forced_test(
-        mesh_device,
-        reference_file=_resolve_16k_reference_file(),
-        total_length=total_length,
-        expected_prefill_len=prefill_len,
-        split_point=prefill_len,
-        max_eval_tokens=max_eval,
-        test_label=f"Teacher-forced accuracy ({prefill_len}-token prefill)",
+def test_devstral2_teacher_forced_accuracy_sweep(mesh_device):
+    """Teacher-forced accuracy sweep: prefill lengths 32, 64, …, 256K (powers of two)."""
+    prefill_lengths = SWEEP_PREFILL_LENGTHS
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    fail_fast = not _SWEEP_RUN_ALL_BEFORE_FAIL
+
+    logger.info(f"Teacher-forced sweep run_id={run_id}, points={prefill_lengths}")
+
+    raw_layers = os.environ.get("DEVSTRAL2_NUM_LAYERS", "").strip()
+    num_layers = int(raw_layers) if raw_layers else None
+
+    kv_block_size = Devstral2Args.kv_block_size
+    worst_prefill = max(prefill_lengths)
+    worst_eval = _eval_tokens_for_prefill(worst_prefill)
+    global_test_seq_len = _test_seq_len(worst_prefill, worst_eval, kv_block_size)
+    global_max_seq_len = _runtime_max_seq_len(global_test_seq_len, kv_block_size)
+    logger.info(
+        f"Building model once for sweep: worst_prefill={worst_prefill}, "
+        f"global_test_seq_len={global_test_seq_len}, global_max_seq_len={global_max_seq_len}"
     )
+
+    model, args, weight_cache_path = _build_model(mesh_device, num_layers, global_max_seq_len)
+    logger.info(f"TT weight cache (reuse): {weight_cache_path}")
+
+    tokenizer = AutoTokenizer.from_pretrained(DEVSTRAL2_LARGE_REPO_ID, trust_remote_code=True)
+
+    results: list[dict] = []
+    failures: list[str] = []
+
+    for prefill_len in prefill_lengths:
+        result = _run_sweep_point(
+            mesh_device,
+            model,
+            args,
+            prefill_len=prefill_len,
+            weight_cache_path=weight_cache_path,
+            run_id=run_id,
+            tokenizer=tokenizer,
+        )
+        results.append(result)
+        if not result["passed"]:
+            msg = (
+                f"prefill={prefill_len}: top-1={result['top1_accuracy']:.4f} "
+                f"(min {_MIN_TOP1_ACC:.4f}), top-5={result['top5_accuracy']:.4f} (min {_MIN_TOP5_ACC:.4f})"
+            )
+            failures.append(msg)
+            if fail_fast:
+                _dump_sweep_summary(run_id, results)
+                pytest.fail(msg)
+
+    summary_path = _dump_sweep_summary(run_id, results)
+    logger.info(f"Sweep complete: {len(results)} points, {len(failures)} failed, summary={summary_path}")
+
+    if failures:
+        pytest.fail("Teacher-forced sweep failures:\n" + "\n".join(failures))
