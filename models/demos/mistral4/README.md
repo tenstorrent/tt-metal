@@ -61,8 +61,15 @@ PCCs are ~0.999. Passes the >0.98 full-depth gate.
 | Prefill throughput @ ISL 1024 / 4096 | 1564 / 1541 tok/s |
 | Largest ISL measured (single-shot prefill) | 4096 (no L1 clash) |
 | Largest ISL with **chunked prefill** | 16384 (verified; paged k/v + chunked SDPA, single-shot caps ~4K) |
+| Decode MoE: **sparse** vs dense (2-layer, B=32) | sparse 308 vs dense 276 tok/s agg (**+11.5%**); B=8 sparse 182 vs dense 192 (dense wins at low batch) |
 
 Decode cost is **flat across ISL** (the decode step is a captured trace independent of context).
+
+**MoE sparse dispatch** (`forward_decode(use_sparse=True)`): routes each token to only its top-4 experts
+(`mesh_partition` → all-to-all dispatch → local experts → combine → `all_gather`) vs computing all 16
+local experts dense. Matches dense logits (PCC 0.9958) and gives a throughput win once MoE-compute-bound
+(**+11.5% at B=32**); at low batch the all-to-all overhead makes dense faster, so dense is the default
+and sparse is opt-in for high-batch serving (untraced; full-depth would amortize non-MoE cost further).
 
 **Chunked prefill** (`forward_prefill_chunked`, paged k/v + `chunked_scaled_dot_product_attention`)
 processes the prompt in chunk-token windows so L1 holds only one chunk's attention — lifting the
