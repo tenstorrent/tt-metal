@@ -19,8 +19,8 @@
 // The buffer for the att mask is currently sized as (1t,Wt) so we only reuse it for one HtWt-sized batch of x
 // then read another Wt tiles of mask for the next batch
 
-void calc_numeric_stable(
-    uint32_t Wt, uint32_t ndst, uint32_t cb_in, uint32_t cb_max_scaler, uint32_t cb_max, uint32_t cb_out) {
+template <uint32_t cb_in, uint32_t cb_max_scaler, uint32_t cb_max, uint32_t cb_out>
+void calc_numeric_stable(uint32_t Wt, uint32_t ndst) {
     auto cb_in_obj = CircularBuffer(cb_in);
     auto cb_max_obj = CircularBuffer(cb_max);
     auto cb_out_obj = CircularBuffer(cb_out);
@@ -29,9 +29,11 @@ void calc_numeric_stable(
     compute_kernel_lib::reduce<
         PoolType::MAX,
         ReduceDim::REDUCE_ROW,
+        cb_in,
+        cb_max_scaler,
+        cb_max,
         compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop,
-        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
-        cb_in, cb_max_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
 
     // calculate x-max(x)
     exp_tile_init<EXP_APPROX>();
@@ -182,7 +184,7 @@ void kernel_main() {
 // add numeric_stable
 // fuse exp with sub tiles
 #ifdef NUMERIC_STABLE
-        calc_numeric_stable(Wt, ndst, cb_x, cb_max_scaler, cb_max, cb_exps);
+        calc_numeric_stable<cb_x, cb_max_scaler, cb_max, cb_exps>(Wt, ndst);
 #endif
 
 #ifdef CAUSAL_MASK
@@ -241,14 +243,14 @@ void kernel_main() {
 // add numeric_stable
 // fuse exp with sub tiles
 #ifdef NUMERIC_STABLE
-            calc_numeric_stable(Wt, ndst, cb_x, cb_max_scaler, cb_max, cb_exps);
+            calc_numeric_stable<cb_x, cb_max_scaler, cb_max, cb_exps>(Wt, ndst);
 #endif
 
         } else {
 // add numeric_stable
 // fuse exp with sub tiles
 #ifdef NUMERIC_STABLE
-            calc_numeric_stable(Wt, ndst, cb_in0, cb_max_scaler, cb_max, cb_exps);
+            calc_numeric_stable<cb_in0, cb_max_scaler, cb_max, cb_exps>(Wt, ndst);
 #else
             for (uint32_t wt = 0; wt < Wt; wt += ndst) {
                 tile_regs_acquire();
@@ -275,18 +277,20 @@ void kernel_main() {
 #endif
 
         // SUM reduce with reciprocal post-processing (1/sum)
-        compute_kernel_lib::
-            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
-                cb_exps,
-                cb_sum_scaler,
-                cb_recipsumexps,
-                compute_kernel_lib::ReduceInputBlockShape::row(Wt),
-                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                compute_kernel_lib::NoAccumulation{},
-                [](uint32_t) {
-                    recip_tile_init();
-                    recip_tile(0);
-                });
+        compute_kernel_lib::reduce<
+            PoolType::SUM,
+            ReduceDim::REDUCE_ROW,
+            cb_exps,
+            cb_sum_scaler,
+            cb_recipsumexps,
+            compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
+            compute_kernel_lib::ReduceInputBlockShape::row(Wt),
+            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+            compute_kernel_lib::NoAccumulation{},
+            [](uint32_t) {
+                recip_tile_init();
+                recip_tile(0);
+            });
 
         cb_recipsumexps_obj.wait_front(1);  // will reuse Wt times for bcast
 

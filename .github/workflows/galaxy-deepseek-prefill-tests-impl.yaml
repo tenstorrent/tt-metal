@@ -56,20 +56,22 @@ jobs:
         id: apply-test-type-filter
         run: |
           MATRIX='${{ steps.build-matrix.outputs.matrix }}'
+          # test-type is a comma-separated selection (validated upstream). An empty
+          # value or any "all" token means run the full matrix; otherwise keep entries
+          # whose test_type OR test_group matches any selected token.
           TEST_TYPE="${{ inputs.test-type }}"
-          if [ "$TEST_TYPE" = "all" ]; then
+          if [ -z "$TEST_TYPE" ] || \
+            echo "$TEST_TYPE" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -Fxq "all"; then
             echo "matrix<<EOF" >> $GITHUB_OUTPUT
             echo "$MATRIX" >> $GITHUB_OUTPUT
             echo "EOF" >> $GITHUB_OUTPUT
           else
-            # Try filtering by exact test_type first
-            FILTERED=$(echo "$MATRIX" | jq -c --arg t "$TEST_TYPE" '[.[] | select(.test_type == $t)]')
-            # If no match, try filtering by test_group
+            FILTERED=$(echo "$MATRIX" | jq -c --arg sel "$TEST_TYPE" '
+              ($sel | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $tokens
+              | [ .[] | . as $e | select(($tokens | index($e.test_type)) or ($tokens | index($e.test_group))) ]
+            ')
             if [ "$FILTERED" = "[]" ]; then
-              FILTERED=$(echo "$MATRIX" | jq -c --arg g "$TEST_TYPE" '[.[] | select(.test_group == $g)]')
-            fi
-            if [ "$FILTERED" = "[]" ]; then
-              echo "::error::No tests found for test-type '$TEST_TYPE'. Ensure the test-type or test-group is defined in the test matrix (TESTS_YAML_PATH=${TESTS_YAML_PATH})."
+              echo "::error::No tests found for test-type '$TEST_TYPE'. Ensure each selected test-type or test-group is defined in the test matrix (TESTS_YAML_PATH=${TESTS_YAML_PATH})."
               exit 1
             fi
             echo "matrix<<EOF" >> $GITHUB_OUTPUT

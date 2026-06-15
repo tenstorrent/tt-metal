@@ -9,6 +9,9 @@ wormhole_b0:
   - tests/ttnn/unit_tests/base_functionality/test_graph_report.py::test_resnet50_e2e_graph_capture
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
+  - tests/ttnn/unit_tests/operations/fused/test_layer_norm.py
+  - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
+  - tests/ttnn/unit_tests/operations/fused/test_softmax.py
   - tests/ttnn/unit_tests/operations/matmul/test_matmul.py
   - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
   - tests/ttnn/unit_tests/operations/pool/test_mpwi.py
@@ -20,6 +23,9 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
 
+  # Likely OOM killer related failures -- probably need to run these tests serially
+  - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_oob
+
   # Numeric mismatches, likely caused by issue #41163
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_uint16.py
   - tests/ttnn/unit_tests/operations/eltwise/test_eltwise_typecast.py
@@ -28,12 +34,11 @@ wormhole_b0:
 
   # Numeric mismatches, not root caused
   # https://github.com/tenstorrent/tt-metal/issues/41530
-  - tests/ttnn/unit_tests/operations/fused/test_layer_norm.py
-  - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
-  - tests/ttnn/unit_tests/operations/fused/test_softmax.py
-  - tests/ttnn/unit_tests/operations/reduce/test_moe.py
   - tests/ttnn/unit_tests/operations/reduce/test_reduction.py
   - tests/ttnn/unit_tests/operations/reduce/test_sum.py
+
+  # ERROR: UnsupportedFunctionality: tensix_gmpool: src_b_val=0x0 must be 1.0f
+  - tests/ttnn/unit_tests/operations/reduce/test_moe.py
 
 blackhole:
   # Job-level timeouts
@@ -115,7 +120,8 @@ blackhole:
 
   # Numeric mismatches, not root caused
   # https://github.com/tenstorrent/tt-metal/issues/41530
-  - tests/ttnn/unit_tests/operations/reduce/test_moe.py
   - tests/ttnn/unit_tests/operations/reduce/test_reduction.py
-  - tests/ttnn/unit_tests/operations/reduce/test_reduction_program_cache.py
   - tests/ttnn/unit_tests/operations/reduce/test_sum.py
+
+  # ERROR: UnsupportedFunctionality: tensix_gmpool: src_b_val=0x0 must be 1.0f
+  - tests/ttnn/unit_tests/operations/reduce/test_moe.py

@@ -94,9 +94,9 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_bf16_(sfpi::vFloat x) {
     sfpi::vInt z = _float_to_int32_for_exp_21f_(xlog2);
 
     sfpi::vInt exponential_part = sfpi::exexp(sfpi::reinterpret<sfpi::vFloat>(z), sfpi::ExponentMode::NoDebias);
-    sfpi::vInt fractional_part = sfpi::exman(sfpi::reinterpret<sfpi::vFloat>(z));
+    sfpi::vMag fractional_part = sfpi::exman(sfpi::reinterpret<sfpi::vFloat>(z));
 
-    sfpi::vFloat frac = sfpi::int32_to_float(fractional_part, sfpi::RoundMode::NearestEven);
+    sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::NearestEven);
 
     // Refine 2^x_f on x_f to [0, 2^23). Same minimax coefficients as the
     // production exp_21f kernel (≤ 3 fp32 ULP, well under 1 bf16 ULP).

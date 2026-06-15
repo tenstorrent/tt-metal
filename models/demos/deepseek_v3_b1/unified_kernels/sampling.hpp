@@ -136,26 +136,20 @@ FORCE_INLINE void generate_row0_bcast(const uint32_t cb_id, uint16_t bf16_val) {
 template <bool legacy_compat = true>
 void calculate_sampling_recip_scalar() {
     sfpi::vFloat in = sfpi::dst_reg[0];
+    sfpi::vFloat out;
     if constexpr (legacy_compat) {
-        sfpi::vFloat out = ckernel::sfpu::_reciprocal_compat_<APPROX ? 2 : 3>(in);
-        if constexpr (DST_ACCUM_MODE || APPROX) {
-            sfpi::dst_reg[0] = out;
-        } else {
-            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(out, sfpi::RoundMode::NearestEven));
-        }
+        out = ckernel::sfpu::_reciprocal_compat_<APPROX ? 2 : 3>(in);
+    } else if constexpr (APPROX) {
+        out = ckernel::sfpu::_sfpu_reciprocal_<0>(in);
+    } else if constexpr (DST_ACCUM_MODE) {
+        out = ckernel::sfpu::_sfpu_reciprocal_<2>(in);
     } else {
-        if constexpr (APPROX) {
-            sfpi::dst_reg[0] = ckernel::sfpu::_sfpu_reciprocal_<0>(in);
-        } else {
-            if constexpr (DST_ACCUM_MODE) {
-                sfpi::dst_reg[0] = ckernel::sfpu::_sfpu_reciprocal_<2>(in);
-            } else {
-                sfpi::vFloat out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
-                sfpi::dst_reg[0] =
-                    sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(out, sfpi::RoundMode::NearestEven));
-            }
-        }
+        out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
     }
+    if constexpr (!(DST_ACCUM_MODE || APPROX)) {
+        out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::NearestEven);
+    }
+    sfpi::dst_reg[0] = out;
 }
 
 template <bool legacy_compat = true>
@@ -411,6 +405,7 @@ void trisc_fused_softmax_top_p_sampling_block() {
         pack_tile(0, probs_cb);
         cb_push_back(probs_cb, 1);
         tile_regs_release();
+        reconfig_data_format_srca(exp_cb, probs_cb);
         cb_wait_front(probs_cb, 1);
         cb_wait_front(p_cb, 1);
         tile_regs_acquire();
@@ -599,7 +594,7 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
     cb_reserve_back(out_scores_cb, 1);
     cb_reserve_back(out_indices_cb, 1);
 
-    acquire_dst();
+    tile_regs_acquire();
 
     uint32_t num_faces = 4;
     reconfig_data_format_srca(in_scores_cb);
@@ -654,15 +649,18 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
         MATH((llk_math_deepseek_top32_rm_merge<false, DST_ACCUM_MODE>(value_offset_tiles, true)));
         MATH((llk_math_deepseek_top32_rm_rebuild<false, DST_ACCUM_MODE>(value_offset_tiles, decreasing, true)));
     }
+    tile_regs_commit();
+    tile_regs_wait();
 
     PACK(TTI_SETADCXX(p_setadc::PAC, 1 - 1, 0x0));
+
     ckernel::pack_reconfig_data_format(out_scores_cb);
     ckernel::pack_tile(value_offset_tiles, out_scores_cb);
     ckernel::pack_reconfig_data_format(out_indices_cb);
     ckernel::pack_tile(index_offset_tiles, out_indices_cb);
     PACK(TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0));
 
-    release_dst();
+    tile_regs_release();
 
     cb_pop_front(in_scores_cb, num_input_tiles);
     cb_pop_front(in_indices_cb, num_input_tiles);
@@ -697,7 +695,7 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
     cb_reserve_back(out_scores_cb, 1);
     cb_reserve_back(out_indices_cb, 1);
 
-    acquire_dst();
+    tile_regs_acquire();
 
     const uint32_t num_chunks = row_elements / chunk_size;
 
@@ -756,9 +754,12 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
         MATH((llk_math_deepseek_top32_rm_merge<false, DST_ACCUM_MODE>(value_offset_tiles, true)));
         MATH((llk_math_deepseek_top32_rm_rebuild<false, DST_ACCUM_MODE>(value_offset_tiles, decreasing, true)));
     }
+    tile_regs_commit();
+    tile_regs_wait();
 
     // Step 10: pack final top-32 scores/indices.
     PACK(TTI_SETADCXX(p_setadc::PAC, 1 - 1, 0x0));
+
     ckernel::pack_reconfig_data_format(out_scores_cb);
     ckernel::pack_tile(value_offset_tiles, out_scores_cb);
     ckernel::pack_reconfig_data_format(out_indices_cb);
@@ -771,7 +772,7 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
     UNPACK(TTI_SETADCXY(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111));
     UNPACK(TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111));
 
-    release_dst();
+    tile_regs_release();
 
     cb_pop_front(in_scores_cb, num_input_tiles);
     cb_pop_front(in_indices_cb, num_input_tiles);
@@ -792,8 +793,8 @@ struct TopKSampling {
         uint32_t WinnerPageBytes,
         uint32_t NumSenders,
         uint32_t ExpectedRemoteIncs,
-        uint32_t ReceiverSemaphoreId,
-        uint32_t LocalReadySemaphoreId,
+        uint32_t ReceiverSemaphoreAddr,
+        uint32_t LocalReadySemaphoreAddr,
         uint32_t MeshMode,
         uint32_t Stage1Sender,
         uint32_t Stage1Receiver,
@@ -839,8 +840,8 @@ struct TopKSampling {
         static constexpr uint32_t winner_page_bytes = WinnerPageBytes;
         static constexpr uint32_t num_senders = NumSenders;
         static constexpr uint32_t expected_remote_incs = ExpectedRemoteIncs;
-        static constexpr uint32_t receiver_semaphore_id = ReceiverSemaphoreId;
-        static constexpr uint32_t local_ready_semaphore_id = LocalReadySemaphoreId;
+        static constexpr uint32_t receiver_semaphore_addr = ReceiverSemaphoreAddr;
+        static constexpr uint32_t local_ready_semaphore_addr = LocalReadySemaphoreAddr;
         static constexpr bool mesh_mode = MeshMode == 1;
         static constexpr bool stage1_sender = Stage1Sender == 1;
         static constexpr bool stage1_receiver = Stage1Receiver == 1;
@@ -891,7 +892,7 @@ struct TopKSampling {
 
     template <
         uint32_t WinnerPageBytes,
-        uint32_t LocalReadySemaphoreId,
+        uint32_t LocalReadySemaphoreAddr,
         uint32_t SocketMode = 0,
         uint32_t SocketCBId = 0,
         uint32_t SocketPageSizeBytes = 0,
@@ -920,7 +921,7 @@ struct TopKSampling {
         uint32_t MaskAliasesScaler = 0>
     struct WriterCTArgs {
         static constexpr uint32_t winner_page_bytes = WinnerPageBytes;
-        static constexpr uint32_t local_ready_semaphore_id = LocalReadySemaphoreId;
+        static constexpr uint32_t local_ready_semaphore_addr = LocalReadySemaphoreAddr;
         static constexpr uint32_t socket_mode = SocketMode;
         static constexpr uint32_t socket_cb_id = SocketCBId;
         static constexpr uint32_t socket_page_size_bytes = SocketPageSizeBytes;
@@ -1220,8 +1221,7 @@ struct TopKSampling {
             uint32_t final_noc_x,
             uint32_t final_noc_y) {
             const uint64_t final_noc_base = get_noc_addr(final_noc_x, final_noc_y, 0);
-            const uint64_t dst_sem_noc_addr =
-                final_noc_base | static_cast<uint64_t>(get_semaphore(CTArgs::receiver_semaphore_id));
+            const uint64_t dst_sem_noc_addr = final_noc_base | static_cast<uint64_t>(CTArgs::receiver_semaphore_addr);
             noc_async_write_one_packet<true, true>(
                 local_scores_addr, final_noc_base | dst_scores_l1_addr, CTArgs::topk_scores_slot_bytes);
             noc_async_write_one_packet<true, true>(
@@ -1471,8 +1471,7 @@ struct TopKSampling {
             // Output goes to the winner CB in split layout [K scores | K indices].
             // The argmax is global_scores[0] / global_indices[0] (descending order).
             if constexpr (IsFinalCore) {
-                auto recv_sem_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CTArgs::receiver_semaphore_id));
+                auto recv_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::receiver_semaphore_addr);
                 {
                     DeviceZoneScopedN("SP-PHASE2WAIT");
                     wait_and_reset_semaphore(recv_sem_ptr, CTArgs::expected_remote_incs + 1);

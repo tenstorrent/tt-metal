@@ -145,9 +145,10 @@ inline void _llk_pack_untilize_wrapper_(
         address, pack_dst_format, face_r_dim, tile_dst_rt_offset);
 }
 
-inline void _llk_pack_untilize_uninit_wrapper_([[maybe_unused]] const std::uint32_t pack_src_format, const std::uint32_t face_r_dim = FACE_R_DIM)
+inline void _llk_pack_untilize_uninit_wrapper_(
+    [[maybe_unused]] const std::uint32_t pack_src_format, [[maybe_unused]] const std::uint32_t face_r_dim = FACE_R_DIM)
 {
-    _llk_pack_untilize_uninit_(face_r_dim);
+    _llk_pack_untilize_uninit_();
 }
 
 #elif defined(ARCH_BLACKHOLE)
@@ -196,7 +197,7 @@ inline void _llk_pack_reconfig_data_format_wrapper_(
 
 template <PackMode pack_mode = PackMode::Default, bool zero_output = false>
 inline void _llk_pack_init_wrapper_(
-    [[maybe_unused]] const std::uint32_t pack_dst_format,
+    const std::uint32_t pack_dst_format,
     const std::uint32_t face_r_dim           = FACE_R_DIM,
     const std::uint32_t tile_c_dim           = TILE_C_DIM,
     const std::uint32_t num_faces            = 4,
@@ -204,7 +205,13 @@ inline void _llk_pack_init_wrapper_(
     [[maybe_unused]] const bool narrow_tile  = false,
     const std::uint32_t num_tiles            = 1)
 {
-    _llk_pack_init_<pack_mode, zero_output>(face_r_dim, tile_c_dim, num_faces, num_tiles);
+    // No-src wrapper: the packer strides are owned by the preceding hw-configure/reconfig, so we skip
+    // them here. Because strides are the only consumer of pack_src_format, we call the internal init
+    // helper directly instead of the public _llk_pack_init_: that avoids fabricating a pack_src_format
+    // (the src format is never read once strides are skipped) and bypasses the public entry point's
+    // format-based num_tiles assert, which would otherwise validate against a placeholder value.
+    llk_pack_internal_bh::pack_init_apply<pack_mode, zero_output, false /* skip_addrmod_config */, true /* skip_packer_strides */>(
+        pack_dst_format /* pack_src_format: ignored when strides are skipped */, face_r_dim, tile_c_dim, num_faces, num_tiles);
 }
 
 template <PackMode pack_mode = PackMode::Default, bool zero_output = false>

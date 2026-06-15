@@ -24,7 +24,7 @@ def test_deepseek_v3_mla_perf_loudbox():
     """
     run_mla_perf_with_approximation(
         command_2x4=_CMD_2X4,
-        expected_ns_2x4=8_952_745,
+        expected_ns_2x4=8_244_047,  # Recalibrated 2026-06-10 on BH LoudBox 2x4.
         model_name_2x4="deepseek_v3_mla_lb_2x4",
         subdir="deepseek_v3_mla",
         margin=0.03,
@@ -38,7 +38,7 @@ def test_deepseek_v3_mla_perf_galaxy():
         pytest.skip("This test requires 8x4 mesh - galaxy. (set MESH_DEVICE=TG)")
     run_model_device_perf_test_with_merge(
         command=_CMD_8X4,
-        expected_device_perf_ns_per_iteration=15_427_562,
+        expected_device_perf_ns_per_iteration=14_252_829,  # Recalibrated 2026-06-10 on bh-glx-110-c08u02; FABRIC_1D.
         subdir="deepseek_v3_mla",
         model_name="deepseek_v3_mla_glx_8x4",
         num_iterations=1,

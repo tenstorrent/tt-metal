@@ -13,6 +13,8 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -189,6 +191,13 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
+    // in1/bias are DRAM sharded with one tile per page; the allocator pads each page to the DRAM
+    // alignment (e.g. bfp8 32x16 tile = 544B padded to 576B on Blackhole's 64B alignment). The
+    // reader copies blocks contiguously from DRAM, so the CB must hold tiles at the padded stride.
+    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    uint32_t in1_aligned_tile_size = tt::align(in1_single_tile_size, dram_alignment);
+    uint32_t bias_aligned_tile_size = tt::align(bias_single_tile_size, dram_alignment);
+
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles;
     if (B * num_blocks > 1) {
@@ -200,7 +209,7 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     if (B * num_blocks > 1) {
         in1_CB_tiles = in1_CB_tiles * 3;  // triple buffer
     }
-    uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
+    uint32_t in1_CB_size = in1_CB_tiles * in1_aligned_tile_size;
 
     uint32_t out_block_tiles = per_core_M * per_core_N_compute;
     uint32_t out_CB_tiles = out_block_tiles;
@@ -217,16 +226,16 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     uint32_t in2_CB_size = in2_CB_tiles * in0_single_tile_size;
 
     uint32_t in3_CB_tiles = per_core_N_compute;
-    uint32_t in3_CB_size = in3_CB_tiles * bias_single_tile_size;
+    uint32_t in3_CB_size = in3_CB_tiles * bias_aligned_tile_size;
 
     // get the max page size based on num tiles
     uint32_t in1_buffer_page_size, in1_buffer_num_pages;
     get_max_page_size_and_num_pages(
-        device, in1_block_tiles, in1_single_tile_size, in1_buffer_page_size, in1_buffer_num_pages);
+        device, in1_block_tiles, in1_aligned_tile_size, in1_buffer_page_size, in1_buffer_num_pages);
 
     uint32_t bias_buffer_page_size, bias_buffer_num_pages;
     get_max_page_size_and_num_pages(
-        device, per_core_N_in1_sender, bias_single_tile_size, bias_buffer_page_size, bias_buffer_num_pages);
+        device, per_core_N_in1_sender, bias_aligned_tile_size, bias_buffer_page_size, bias_buffer_num_pages);
 
     uint32_t num_worker_cores = num_dram_banks;
 
@@ -522,7 +531,7 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         cb_desc.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = tt::CBIndex::c_1,
             .data_format = in1_data_format,
-            .page_size = in1_single_tile_size,
+            .page_size = in1_aligned_tile_size,
             .tile = in1_tile_desc});
         desc.cbs.push_back(std::move(cb_desc));
     }
@@ -606,7 +615,7 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         cb_desc.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = tt::CBIndex::c_3,
             .data_format = bias_data_format,
-            .page_size = bias_single_tile_size,
+            .page_size = bias_aligned_tile_size,
             .tile = bias_tile_desc});
         desc.cbs.push_back(std::move(cb_desc));
     }

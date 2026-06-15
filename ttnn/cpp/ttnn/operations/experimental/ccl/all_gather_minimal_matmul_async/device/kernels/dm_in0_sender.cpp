@@ -377,7 +377,7 @@ void kernel_main() {
                     read_in0_block_sync<M_block_tiles, K_block_tiles>(
                         in0_reader,
                         in0_shape,
-                        in0_start_address,
+                        cb_id_in0,
                         in0_tile_size,
 #ifdef READ_FROM_LOCAL_INPUT
                         in3_reader,
@@ -424,17 +424,25 @@ void kernel_main() {
 #ifdef USE_MUX
                 if (n_block_iter == 0) {
                     if constexpr (is_linear) {
-                        // Linear uni-ring: every iter, every device sends ONE full K-block to its
-                        // predecessor in the virtual ring. Dev 0 (num_targets_backward_direction == 0)
-                        // long-sends to Dev N-1 via mux_backward (forward direction, N-1 hops; the
-                        // routing was overridden in the program factory to set distance_in_hops = N-1).
-                        // Other devices short-send to my_rank-1 via mux_forward (backward direction,
-                        // 1 hop). All sends signal out_ready_semaphore_forward at the receiver.
+                        // Linear uni-ring: every (non-skipped) iter, every device sends ONE full
+                        // K-block to its predecessor in the virtual ring. Dev 0
+                        // (num_targets_backward_direction == 0) long-sends to Dev N-1 via
+                        // mux_backward (forward direction, N-1 hops; the routing was overridden in
+                        // the program factory to set distance_in_hops = N-1). Other devices
+                        // short-send to my_rank-1 via mux_forward (backward direction, 1 hop). All
+                        // sends signal out_ready_semaphore_forward at the receiver.
+                        //
+                        // Skip the last K_blocks_per_device iters: by then every block has already
+                        // reached every device, so this final relay lap is redundant -- it would
+                        // re-deliver each device's own data back to it and fire sem increments the
+                        // receiver never waits on (which is why the receiver no longer needs to
+                        // compensate sem_target; see compute_actual_k_block). Mirrors the Ring skip.
                         if constexpr (num_targets_backward_direction == 0) {
                             // Dev 0 (chain head): long send via mux_backward + pkt_hdrs_forward
                             if constexpr (num_targets_forward_direction > 0) {
                                 if (in0_core_order_index >= backward_in0_core_order_index &&
-                                    in0_core_order_index < forward_in0_core_order_index) {
+                                    in0_core_order_index < forward_in0_core_order_index &&
+                                    k_block_iter < (K_num_blocks - K_blocks_per_device)) {
                                     forward_half_block_to_fabric_neighbor(
                                         m_tile,
                                         k_block_left_tile,
@@ -456,7 +464,8 @@ void kernel_main() {
                             }
                         } else {
                             // Dev k > 0: short send via mux_forward + pkt_hdrs_backward
-                            if (in0_core_order_index >= forward_in0_core_order_index) {
+                            if (in0_core_order_index >= forward_in0_core_order_index &&
+                                k_block_iter < (K_num_blocks - K_blocks_per_device)) {
                                 forward_half_block_to_fabric_neighbor(
                                     m_tile,
                                     k_block_left_tile,

@@ -330,8 +330,7 @@ class TtPrefillBlock(LightweightModule):
             route_scale=model_cfg.ROUTE_SCALE,
             weight_cache_path=weight_cache_path,
             layer_idx=layer_idx,
-            # 45701 workaround: disable shared-expert/dispatch sub-device overlap.
-            overlap_shared_expert_with_dispatch=False,
+            overlap_shared_expert_with_dispatch=True,
         )
 
     def forward(

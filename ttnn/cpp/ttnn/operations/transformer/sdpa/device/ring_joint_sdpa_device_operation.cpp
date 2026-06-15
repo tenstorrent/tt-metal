@@ -244,7 +244,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const bool is_chunked = tensor_args.is_chunked();
 
     const auto dtype = input_tensor_q.dtype();
-    if (!args.is_causal && !is_chunked) {
+    if ((!args.is_causal && !is_chunked) || args.is_cross) {
         for (const auto& tensor : sdpa_input_tensors) {
             TT_FATAL(
                 tensor.dtype() == dtype,
@@ -298,12 +298,27 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         N_local_kv);
 
     TT_FATAL(
-        !is_chunked || args.is_causal,
-        "Chunked-prefill (N_local_q < N_local_kv) is mathematically causal; callers must pass is_causal=True. "
-        "Got N_local_q={}, N_local_kv={}, is_causal={}",
+        !is_chunked || args.is_causal || args.is_cross,
+        "Chunked-shaped prefill (N_local_q < N_local_kv) must be causal (incremental prefill) or cross "
+        "(is_cross=True, non-causal short-Q/long-K). Got N_local_q={}, N_local_kv={}, is_causal={}, is_cross={}",
         N_local_q,
         N_local_kv,
-        args.is_causal);
+        args.is_causal,
+        args.is_cross);
+
+    // Cross is the non-causal short-Q/long-K/V path: requires is_chunked, excludes is_causal and
+    // balanced (causal-only) zigzag.
+    if (args.is_cross) {
+        TT_FATAL(
+            is_chunked,
+            "is_cross requires per-device Q seq length < K/V seq length; use the full-prefill non-causal "
+            "path for equal lengths. Got N_local_q={}, N_local_kv={}",
+            N_local_q,
+            N_local_kv);
+        TT_FATAL(
+            !args.is_causal, "is_cross and is_causal are mutually exclusive (cross attention applies no triangle)");
+        TT_FATAL(!args.is_balanced, "is_cross is non-causal; balanced zigzag load-balancing is causal-only");
+    }
 
     // Value checks for the runtime-patched scalars (kv_cache_batch_idx, logical_n, kv_actual_isl).
     // Also invoked on every program-cache hit, where these values vary but the rest is hash-pinned.
@@ -399,7 +414,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     }
 
     // Chunked-prefill targets MLA (K head dim == Q != V) — use is_causal's relaxed K-only check.
-    if (!args.is_causal && !is_chunked) {
+    // Cross is full attention (V head dim must equal Q), so it takes the strict check.
+    if ((!args.is_causal && !is_chunked) || args.is_cross) {
         TT_FATAL(
             k_shape[3] == DH && VDH == DH, "Head dimensions must match. Got Q: {}, K: {}, V: {}", DH, k_shape[3], VDH);
         if (has_joint_tensors) {
@@ -576,6 +592,7 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         args.scale,
         args.is_causal,
         args.is_balanced,
+        args.is_cross,
         cache_key_logical_n,
         args.ring_size,
         args.compute_kernel_config,
@@ -667,6 +684,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     const bool is_causal,
     const bool is_balanced,
+    const bool is_cross,
     const std::optional<float> scale,
     const std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
@@ -742,6 +760,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         scale,
         is_causal,
         is_balanced,
+        is_cross,
         logical_n,
         num_devices,
         tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,

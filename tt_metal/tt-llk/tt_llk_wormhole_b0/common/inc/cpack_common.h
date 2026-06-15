@@ -670,18 +670,22 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
 
     // Set packer strides
     set_packer_strides(pack_src_format);
+
+    // NOTE: the packer X (datum) counter (SETADCXX PAC) is intentionally NOT programmed here. Its value
+    // is pack_mode-dependent (Untilize vs Default) and is owned by _llk_pack_init_, which runs after this
+    // reconfig for the specific op/mode.
 }
 
 template <bool is_fp32_dest_acc_en, PackMode pack_mode>
 inline void configure_pack(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
-    const std::uint32_t tile_size   = 0,
-    const std::uint32_t face_r_dim  = FACE_R_DIM,
-    const std::uint32_t num_faces   = 4,
-    const bool partial_face         = false,
-    const bool narrow_tile          = false,
-    const std::uint32_t relu_config = 0)
+    const std::uint32_t tile_size           = 0,
+    const std::uint32_t face_r_dim          = FACE_R_DIM,
+    const std::uint32_t num_faces           = 4,
+    const bool partial_face                 = false,
+    [[maybe_unused]] const bool narrow_tile = false,
+    const std::uint32_t relu_config         = 0)
 {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize,
@@ -721,12 +725,17 @@ inline void configure_pack(
 
     set_packer_l1_offset(pack_dst_format, face_r_dim);
 
+    // NOTE: the packer X (datum) counter (SETADCXX PAC) is intentionally NOT programmed here. Its value
+    // is pack_mode-dependent (Untilize packs a single face row, Default a full face) and hw-configure
+    // always runs in PackMode::Default, so it cannot establish the Untilize value. _llk_pack_init_ owns
+    // this counter and runs after hw-configure for the specific op/mode.
+
     // PACK_COUNTERS_SEC0_pack_per_xy_plane = cfg_reg_array[3][0 +: 8];
     // PACK_COUNTERS_SEC0_pack_reads_per_xy_plane = cfg_reg_array[3][8 +: 8];
     // PACK_COUNTERS_SEC0_pack_xys_per_tile = cfg_reg_array[3][16 +: 7];
     // PACK_COUNTERS_SEC0_pack_yz_transposed = cfg_reg_array[3][23 +: 1];
     pack_counters_u pack_counters;
-    pack_counters.val                       = 0;
+    pack_counters.val = 0;
     pack_counters.f.pack_reads_per_xy_plane =
         1; // Default 1 — makes non-reduce operations agnostic to this counter; reduce sets it via _llk_pack_reduce_mask_config_
     for (std::uint32_t i = 0; i < NUM_PACKERS; i++)
@@ -746,14 +755,6 @@ inline void configure_pack(
     regfile[p_gpr_pack::TILE_HEADER + 2] = 0;
     regfile[p_gpr_pack::TILE_HEADER + 3] = 0;
     sync_regfile_write(p_gpr_pack::TILE_HEADER + 3);
-
-    const std::uint32_t face_dim = face_r_dim * FACE_C_DIM;
-
-    // To untilize narrow tile (32x16) we just pack 2 faces back to back
-    // Number of datums to pack per row
-    const std::uint32_t pack_x_dim = (narrow_tile || pack_mode != PackMode::Untilize) ? face_dim : FACE_R_DIM;
-
-    TT_SETADCXX(p_setadc::PAC, pack_x_dim - 1, 0x0);
 }
 
 inline std::uint8_t get_packer_dest_offset_index()

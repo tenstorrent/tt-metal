@@ -19,17 +19,18 @@ void kernel_main() {
         for (uint32_t h = 0; h < Ht; h++) {
             cb_wait_front(tt::CBIndex::c_1, onetile);
             for (uint32_t w = 0; w < Wt; w++) {
-                cb_reserve_back(tt::CBIndex::c_16, onetile);
+                cb_wait_front(tt::CBIndex::c_0, onetile);
 
                 tile_regs_acquire();
-
-                cb_wait_front(tt::CBIndex::c_0, onetile);
                 BCAST_OP<BroadcastType::COL>(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0);
                 tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(0, tt::CBIndex::c_16);
+
                 cb_pop_front(tt::CBIndex::c_0, onetile);
 
+                cb_reserve_back(tt::CBIndex::c_16, onetile);
+
+                tile_regs_wait();
+                pack_tile(0, tt::CBIndex::c_16);
                 tile_regs_release();
 
                 cb_push_back(tt::CBIndex::c_16, onetile);

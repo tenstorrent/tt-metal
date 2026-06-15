@@ -88,6 +88,7 @@ _POST_COMBINE_TILIZE_SHARD_WIDTH_MULTIPLE = (
 # N pre-split outputs from fast_reduce_nc_fused). Any other size falls through to a single
 # input ttnn.reduce_scatter, so fast_reduce should produce one output instead of N.
 _DEEPSEEK_RS_DP_DIM = 8
+_WH_MAX_CORE_GRID_Y = 9
 
 
 def _default_post_combine_tilize_memory_config(
@@ -95,19 +96,27 @@ def _default_post_combine_tilize_memory_config(
 ) -> Optional[ttnn.MemoryConfig]:
     """`post_combine_tilize_output_memory_config` from test_optimized_moe_decode_block.py.
 
-    NdShard L1 grid is `[num_cores_x, effective_experts_k]`. `num_cores_x` and the
+    Each expert is one shard-row, `num_cores_x` cores wide (the hidden split). Rows
+    stack down a column up to the device height (`_WH_MAX_CORE_GRID_Y + 1`); when
+    `effective_experts_k` exceeds that, the overflow wraps into additional
+    column-bands of width `num_cores_x`. `num_cores_x` is reduced as needed so the
+    bands (`num_cores_x * num_bands`) fit the device width. `num_cores_x` and the
     inner shard width are chosen so the shards evenly tile `hidden_size` and the
     width is a multiple of 128 (the kernel's 4-tile read granularity). Prefer the
-    widest grid (≤ MAX_CORES_X) that satisfies both. Matches the deepseek default
-    of 7×1024 for hidden=7168.
+    widest grid that satisfies all of these.
 
-    Returns None when no `num_cores_x` ∈ [1, MAX_CORES_X] yields a width that is
-    a multiple of 128 — caller is expected to fall back to the
-    `tilize_with_val_padding` path. For gpt_oss (hidden=2880) no split works,
-    so this returns None.
+    Returns None when no `num_cores_x` yields a width that is a multiple of 128 —
+    caller is expected to fall back to the `tilize_with_val_padding` path.
     """
+
+    usable_rows = _WH_MAX_CORE_GRID_Y  # 0-indexed inclusive max → row count
+    usable_cols = _POST_COMBINE_TILIZE_MAX_CORES_X
+    num_bands = (effective_experts_k + usable_rows - 1) // usable_rows
+    # Each band is num_cores_x wide; all bands must fit the compute width side by side.
+    max_cores_x = usable_cols // num_bands
+
     num_cores_x = None
-    for n in range(_POST_COMBINE_TILIZE_MAX_CORES_X, 0, -1):
+    for n in range(max_cores_x, 0, -1):
         if hidden_size % n != 0:
             continue
         width = hidden_size // n
@@ -117,13 +126,27 @@ def _default_post_combine_tilize_memory_config(
     if num_cores_x is None:
         return None
     shard_width = hidden_size // num_cores_x
+
+    # Lay experts into column-bands: band b holds experts [b*usable_dim, ...), stacked
+    # down y, at x-offset b*num_cores_x. A single band (effective_experts_k ≤ usable_rows)
+    # reproduces the original single-rectangle grid exactly.
+    core_ranges = []
+    for band in range(num_bands):
+        first_expert = band * usable_rows
+        band_height = min(usable_rows, effective_experts_k - first_expert)
+        x0 = band * num_cores_x
+        core_ranges.append(
+            ttnn.CoreRange(
+                ttnn.CoreCoord(x0, 0),
+                ttnn.CoreCoord(x0 + num_cores_x - 1, band_height - 1),
+            )
+        )
+
     return ttnn.MemoryConfig(
         buffer_type=ttnn.BufferType.L1,
         nd_shard_spec=ttnn.NdShardSpec(
             shard_shape=[ttnn.TILE_SIZE, shard_width],
-            grid=ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, effective_experts_k - 1))}
-            ),
+            grid=ttnn.CoreRangeSet(core_ranges),
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )

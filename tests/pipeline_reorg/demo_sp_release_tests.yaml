@@ -81,7 +81,7 @@
     pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py -k '2x2 and pcc_check and fabric2d' -vvv --tb=short
   model: deepseek_prefill
   skus:
-    bh_llmbox:
+    bh_quietbox_2:
       timeout: 40
   owner_id: U08E1JCMAJF
   team: models

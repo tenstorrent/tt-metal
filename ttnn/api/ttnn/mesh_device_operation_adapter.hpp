@@ -504,6 +504,11 @@ public:
                     [&](const ttnn::MeshCoordinateRange& device_range,
                         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
                         auto desc = invoke_per_coord(attrs, tensor_args, tensor_return_value, mesh_dispatch_coordinate);
+                        // An empty ProgramDescriptor (no kernels/CBs/semaphores) means this coordinate has no
+                        // work. Skip it entirely.
+                        if (desc.kernels.empty() && desc.cbs.empty() && desc.semaphores.empty()) {
+                            return;
+                        }
                         tt::tt_metal::Program program{desc};
                         auto collected = collect_tensor_buffers(tensor_args, tensor_return_value, empty_descriptor);
                         auto bindings = tt::tt_metal::resolve_bindings(

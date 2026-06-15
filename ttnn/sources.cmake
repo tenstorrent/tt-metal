@@ -160,6 +160,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/examples/example_multiple_return/example_multiple_return_nanobind.cpp
     cpp/ttnn/operations/examples/examples_nanobind.cpp
     cpp/ttnn/operations/experimental/bcast_to/bcast_to_nanobind.cpp
+    cpp/ttnn/operations/experimental/multi_scale_deformable_attn/multi_scale_deformable_attn_nanobind.cpp
     cpp/ttnn/operations/experimental/cnn/convert_to_chw/convert_to_chw_nanobind.cpp
     cpp/ttnn/operations/experimental/cnn/convert_to_hwc/convert_to_hwc_nanobind.cpp
     cpp/ttnn/operations/experimental/conv3d/conv3d_nanobind.cpp
@@ -191,7 +192,10 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/deepseek_prefill/extract/extract_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/insert/insert_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache/update_padded_kv_cache_nanobind.cpp
+    cpp/ttnn/operations/experimental/deepseek_prefill/zero_padded_kv_cache/zero_padded_kv_cache_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/rotary_embedding_indexed_nanobind.cpp
+    cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/per_token_cast_to_fp8_nanobind.cpp
+    cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_back/per_token_cast_back_nanobind.cpp
     cpp/ttnn/operations/experimental/plusone/plusone_nanobind.cpp
     cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.cpp
     cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.cpp
@@ -331,6 +335,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/global_semaphore.cpp
     cpp/ttnn-nanobind/hd_socket.cpp
     cpp/ttnn-nanobind/h2d_stream_service.cpp
+    cpp/ttnn-nanobind/counter_channel.cpp
     cpp/ttnn-nanobind/mesh_socket.cpp
     cpp/ttnn-nanobind/profiler.cpp
     cpp/ttnn-nanobind/program_descriptors.cpp

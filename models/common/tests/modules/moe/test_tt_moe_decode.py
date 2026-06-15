@@ -29,6 +29,7 @@ from ttnn.operations.ccl import MoEActivationFunction
 import ttnn
 from models.common.modules.moe.tt_moe_decode import TTMoEDecode
 from models.common.modules.moe.tt_moe_decode_config import TTMoEDecodeConfig
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3.tests.fused_op_unit_tests.moe.test_optimized_moe_decode_block import (
     create_torch_dispatch_input_expert_scores_tensor,
     create_torch_dispatch_input_tensor,
@@ -85,6 +86,10 @@ def is_mesh_graph_descriptor_set(expected_path):
 # ---------------------------------------------------------------------------
 
 
+torch.set_num_threads(max(1, os.cpu_count() or 1))
+
+
+@torch.no_grad()
 def _matmul_golden(
     token: torch.Tensor,
     w0: torch.Tensor,
@@ -106,12 +111,19 @@ def _matmul_golden(
     Per-expert bias shapes: `b0`/`b1` are `[num_layers, 1, N]`, `b2` is
     `[num_layers, 1, hidden_size]`. `unsqueeze(-2)` broadcasts over the token dim.
     """
+
+    _orig_dtype = token.dtype
+    token = token.float()
+    w0 = w0.float()
+    w1 = w1.float()
+    w2 = w2.float()
+
     gate = token @ w0
     if b0 is not None:
-        gate = gate + b0.unsqueeze(-2)
+        gate = gate + b0.float().unsqueeze(-2)
     up = token @ w1
     if b1 is not None:
-        up = up + b1.unsqueeze(-2)
+        up = up + b1.float().unsqueeze(-2)
 
     if activation_type == MoEActivationFunction.SILU:
         intermediate = torch.nn.functional.silu(gate) * up
@@ -124,8 +136,8 @@ def _matmul_golden(
 
     output = intermediate @ w2
     if b2 is not None:
-        output = output + b2.unsqueeze(-2)
-    return output
+        output = output + b2.float().unsqueeze(-2)
+    return output.to(_orig_dtype)
 
 
 def _create_per_expert_weights(num_layers: int, num_experts: int, h: int, n: int) -> torch.Tensor:
@@ -185,6 +197,7 @@ def _create_expert_indices(batch: int, num_experts: int, select_k: int) -> torch
     return out
 
 
+@torch.no_grad()
 def _gen_output_golden(
     tokens: torch.Tensor,
     expert_indices: torch.Tensor,
@@ -252,6 +265,7 @@ def _create_shared_expert_weights(
     return shared_w0, shared_w1, shared_w2
 
 
+@torch.no_grad()
 def _add_shared_experts_to_golden(
     out: torch.Tensor,
     tokens: torch.Tensor,
@@ -292,7 +306,6 @@ def _config_id(path: Path) -> str:
 # known failures
 # Note: it would be better to test all of these and let them fail but some cause hard crashes and derail the test
 SKIP_LIST = [
-    "deepseek_ocr.yaml",  # this one is actually unexpected and causes the test to hang (watcher assert)
     "ling_1t.yaml",
     "mistral_large_3.yaml",
     "deepseek_v4_pro.yaml",
@@ -319,7 +332,7 @@ SKIP_LIST = [
         pytest.param(
             (8, 1),
             id="8x1",
-            marks=pytest.mark.skipif(is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_16x1), reason=f"16x1 MGD is set"),
+            marks=pytest.mark.skipif(not is_blackhole(), reason=f"8x1 grid is only for BH testing"),
         ),
     ],
     indirect=True,
@@ -338,6 +351,7 @@ SKIP_LIST = [
 )
 @pytest.mark.parametrize("num_iterations", [3])
 @pytest.mark.parametrize("config_path", CONFIG_PATHS, ids=_config_id)
+@pytest.mark.timeout(900)
 @torch.no_grad()
 def test_tt_moe_decode(
     mesh_device: ttnn.MeshDevice,

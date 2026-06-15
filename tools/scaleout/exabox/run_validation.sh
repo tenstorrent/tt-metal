@@ -23,12 +23,24 @@ Optional:
                                             (if provided, cabling and deployment descriptors are ignored)
     --output <directory>                    Output directory for log files (default: validation_output)
     --volume <host-path>                    Additional volume mount for Docker containers (can be repeated)
-                                            /data/scaleout_configs is mounted by default; each host path
-                                            is mounted at the same path inside the container
+                                            /data/scaleout_configs is mounted by default when it exists on
+                                            the host; each host path is mounted at the same path inside
+                                            the container
     --mpi-if <interface>                    Network interface for MPI TCP transport (default: ens5f0np0)
     --mpi-args <args>                       Extra arguments passed directly to mpirun (quoted string)
                                             e.g. --mpi-args "--tag-output"
+    --validation-args <args>                Extra arguments passed verbatim to run_cluster_validation (quoted string)
+                                            e.g. --validation-args "--min-connections 2 --hard-fail"
+                                            Use this for any run_cluster_validation flag (relaxed validation, strict
+                                            failure, connectivity prints, metrics logging, etc.)
     --help                                  Display this help message and exit
+
+================================================================================
+To see the full list of run_cluster_validation flags forwardable via
+--validation-args, run (no cluster needed, --hosts is not required):
+
+    $0 --image <image> --validation-args "--help"
+================================================================================
 
 Example:
     $0 --hosts bh-glx-c01u02,bh-glx-c01u08,bh-glx-c02u02,bh-glx-c02u08 \\
@@ -46,9 +58,16 @@ ITERATIONS=50
 
 FACTORY_DESCRIPTOR_PATH=""
 OUTPUT_DIR="validation_output"
-EXTRA_VOLUMES=(/data/scaleout_configs)
+# /data/scaleout_configs is a Markham-cluster convention. Only mount it when it
+# actually exists locally; otherwise Docker fails trying to auto-create the
+# missing bind-mount source path (mkdir: permission denied) and every rank dies
+# before run_cluster_validation starts. Sites that keep configs elsewhere just
+# pass them via --volume / the descriptor path flags.
+EXTRA_VOLUMES=()
+[[ -d /data/scaleout_configs ]] && EXTRA_VOLUMES+=(/data/scaleout_configs)
 MPI_IF="ens5f0np0"
 MPI_EXTRA_ARGS=()
+VALIDATION_EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -137,6 +156,15 @@ while [[ $# -gt 0 ]]; do
             MPI_EXTRA_ARGS+=("${_extra[@]}")
             shift 2
             ;;
+        --validation-args)
+            if [[ -z "$2" ]]; then
+                echo "Error: --validation-args requires a non-empty value"
+                exit 1
+            fi
+            read -ra _extra <<< "$2"
+            VALIDATION_EXTRA_ARGS+=("${_extra[@]}")
+            shift 2
+            ;;
         --help)
             show_help
             exit 0
@@ -148,6 +176,21 @@ while [[ $# -gt 0 ]]; do
             exit 1
             ;;
     esac
+done
+
+# If the operator forwarded --help / -h through --validation-args, just print
+# run_cluster_validation --help from the docker image and exit. Short-circuits
+# before --hosts validation since no cluster operation is performed.
+for _arg in "${VALIDATION_EXTRA_ARGS[@]}"; do
+    if [[ "$_arg" == "--help" || "$_arg" == "-h" ]]; then
+        if [[ -z "$DOCKER_IMAGE" ]]; then
+            echo "Error: --validation-args \"--help\" requires --image <docker-image>"
+            echo "Example: $0 --image <ghcr-image> --validation-args \"--help\""
+            exit 1
+        fi
+        exec docker run --rm --entrypoint='' "$DOCKER_IMAGE" \
+            ./build/tools/scaleout/run_cluster_validation --help
+    fi
 done
 
 # Validate required arguments
@@ -186,6 +229,7 @@ run_cluster_validation() {
             --tag-output \
             ./build/tools/scaleout/run_cluster_validation \
             "${descriptor_args[@]}" \
+            "${VALIDATION_EXTRA_ARGS[@]}" \
             --send-traffic \
             --num-iterations 10 \
             --output-path "$validation_output_path"
@@ -198,6 +242,7 @@ run_cluster_validation() {
             --host "$HOSTS" \
             ./build/tools/scaleout/run_cluster_validation \
             "${descriptor_args[@]}" \
+            "${VALIDATION_EXTRA_ARGS[@]}" \
             --send-traffic \
             --num-iterations 10 \
             --output-path "$validation_output_path"
@@ -274,6 +319,9 @@ if [[ "${#MPI_EXTRA_ARGS[@]}" -gt 0 ]]; then
 fi
 echo "Number of iterations: $ITERATIONS"
 echo "Output directory: $OUTPUT_DIR"
+if [[ ${#VALIDATION_EXTRA_ARGS[@]} -gt 0 ]]; then
+    echo "Extra validation args: ${VALIDATION_EXTRA_ARGS[*]}"
+fi
 echo ""
 
 # Create output directory if it doesn't exist and resolve to an absolute path so
@@ -324,6 +372,14 @@ for ((i=1; i<=ITERATIONS; i++)); do
             echo ""
             echo "Running cluster validation..."
             run_cluster_validation "$OUTPUT_DIR/iteration_${i}"
+            VALIDATION_EXIT_CODE=$?
+            # Surface validation failures explicitly. Without this, a container
+            # that dies before run_cluster_validation starts (e.g. a bad bind
+            # mount -> docker exit 126) produces no output yet the loop still
+            # prints "completed", masking the failure.
+            if [[ $VALIDATION_EXIT_CODE -ne 0 ]]; then
+                echo "ERROR: cluster validation FAILED (exit code $VALIDATION_EXIT_CODE)"
+            fi
         else
             echo "Skipping validation due to mpirun failure"
         fi

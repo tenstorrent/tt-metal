@@ -175,8 +175,6 @@ jobs:
         if: ${{ contains(matrix.test-group.sku, 'bh_') }}
         uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
         timeout-minutes: 10
-        with:
-          runner-label: ${{ join(matrix.test-group.runs_on, ' ') }}
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
