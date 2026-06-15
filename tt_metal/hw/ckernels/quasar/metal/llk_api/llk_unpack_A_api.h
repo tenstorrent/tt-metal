@@ -66,9 +66,9 @@ inline void llk_unpack_A_init(
                     operand_id, tensor_shape, 1);
             }
         } else {
-            constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
+            constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_DEST : p_unpacr::UNP_B;
             constexpr bool is_fp32_dest_acc_en = unpack_to_dest ? false : DST_ACCUM_MODE;
-            _llk_unpack_unary_broadcast_operands_init_<unp_sel, BType, unpack_to_dest, is_fp32_dest_acc_en>(
+            _llk_unpack_unary_broadcast_operands_init_<unp_sel, BType, is_fp32_dest_acc_en>(
                 operand_id, 1);
         }
     }
@@ -81,7 +81,7 @@ inline void llk_unpack_A_init(
  * @tparam BType: Broadcast type; BroadcastType::NONE selects the plain unary path
  * @tparam acc_to_dest: Unused on Quasar; kept for API parity with Blackhole / other arches
  * @tparam binary_reuse_dest: Dest reuse mode (unary path only)
- * @tparam unpack_to_dest: Broadcast path only — when true, unpack targets dest (UNP_A); otherwise SrcB (UNP_B)
+ * @tparam unpack_to_dest: Broadcast path only — when true, unpack targets dest (UNP_DEST); otherwise SrcB (UNP_B)
  * @param operand: The logical dataflow buffer id
  * @param tile_index: The index in the input CB to read from
  */
@@ -100,8 +100,8 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
         const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
         _llk_unpack_unary_operand_<p_unpacr::UNP_A, binary_reuse_dest>(l1_tile_idx, tensor_shape);
     } else {
-        constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
-        _llk_unpack_unary_broadcast_operands_<unp_sel, unpack_to_dest>(l1_tile_idx);
+        constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_DEST : p_unpacr::UNP_B;
+        _llk_unpack_unary_broadcast_operands_<unp_sel>(l1_tile_idx);
     }
     WAYPOINT("UPAD");
 }
@@ -112,7 +112,7 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
  * @tparam BType: Broadcast type; BroadcastType::NONE selects the plain unary path
  * @tparam acc_to_dest: Unused on Quasar; kept for API parity with Blackhole / other arches
  * @tparam binary_reuse_dest: Dest reuse mode (unary path only)
- * @tparam unpack_to_dest: Broadcast path only — when true, unpack targets dest (UNP_A); otherwise SrcB (UNP_B)
+ * @tparam unpack_to_dest: Broadcast path only — when true, unpack targets dest (UNP_DEST); otherwise SrcB (UNP_B)
  * @param operand: The logical dataflow buffer id
  * @param start_tile_index: The starting tile index within the input buffer
  * @param ntiles: The number of consecutive tiles to unpack
@@ -134,8 +134,8 @@ inline void llk_unpack_A_block(
         if constexpr (BType == BroadcastType::NONE) {
             _llk_unpack_unary_operand_<p_unpacr::UNP_A, binary_reuse_dest>(rd_entry_idx + tile_index, tensor_shape);
         } else {
-            constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
-            _llk_unpack_unary_broadcast_operands_<unp_sel, unpack_to_dest>(rd_entry_idx + tile_index);
+            constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_DEST : p_unpacr::UNP_B;
+            _llk_unpack_unary_broadcast_operands_<unp_sel>(rd_entry_idx + tile_index);
         }
         WAYPOINT("UPAD");
     }
