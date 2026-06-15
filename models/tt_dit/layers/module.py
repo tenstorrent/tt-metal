@@ -4,10 +4,12 @@
 
 from __future__ import annotations
 
+import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple, overload
 
+from loguru import logger
 from typing_extensions import deprecated
 
 import ttnn
@@ -29,6 +31,27 @@ class IncompatibleKeys(NamedTuple):
 
 class LoadingError(Exception):
     pass
+
+
+class _LoadProgress:
+    """Heartbeat for weight loading. A 46 GB load+convert is silent for minutes and
+    reads as a hang; this emits a timed progress line so it never looks dead."""
+
+    def __init__(self, total: int, what: str) -> None:
+        self._total = total
+        self._done = 0
+        self._what = what
+        self._t0 = time.monotonic()
+        self._last = 0.0
+
+    def tick(self) -> None:
+        self._done += 1
+        elapsed = time.monotonic() - self._t0
+        # Throttle to ~5s so fast loads stay quiet and slow ones still show life.
+        if elapsed - self._last >= 5.0 or self._done == self._total:
+            self._last = elapsed
+            pct = 100 * self._done / self._total if self._total else 100
+            logger.info(f"{self._what}: {self._done}/{self._total} tensors ({pct:.0f}%), {elapsed:.0f}s")
 
 
 class Module(ABC):
@@ -93,6 +116,11 @@ class Module(ABC):
         `load_torch_state_dict`.
         """
 
+    def _num_parameters(self) -> int:
+        return len(self._parameters) + sum(
+            child._num_parameters() for _, child in self.named_children()
+        )  # noqa: SLF001
+
     def _load_torch_state_dict_inner(
         self,
         state_dict: Mapping[str, torch.Tensor],
@@ -100,6 +128,7 @@ class Module(ABC):
         module_key_prefix: str,
         missing_keys: MutableSequence[str],
         unexpected_keys: MutableSequence[str],
+        progress: _LoadProgress | None = None,
     ) -> None:
         state_dict = dict(state_dict)
         self._prepare_torch_state(state_dict)
@@ -113,6 +142,7 @@ class Module(ABC):
                     module_key_prefix=f"{module_key_prefix}{name}.",
                     missing_keys=missing_keys,
                     unexpected_keys=unexpected_keys,
+                    progress=progress,
                 )
             except LoadingError:
                 raise
@@ -127,6 +157,8 @@ class Module(ABC):
                 except LoadingError as err:
                     msg = f"while loading '{module_key_prefix}{name}': {err}"
                     raise LoadingError(msg) from err
+                if progress is not None:
+                    progress.tick()
             else:
                 missing_keys.append(f"{module_key_prefix}{name}")
 
@@ -147,7 +179,11 @@ class Module(ABC):
         unexpected_keys = []
         self.evict_coresident_exclusions()
         self._load_torch_state_dict_inner(
-            state_dict, module_key_prefix="", missing_keys=missing_keys, unexpected_keys=unexpected_keys
+            state_dict,
+            module_key_prefix="",
+            missing_keys=missing_keys,
+            unexpected_keys=unexpected_keys,
+            progress=_LoadProgress(self._num_parameters(), "converting weights to device"),
         )
 
         if strict and (missing_keys or unexpected_keys):
@@ -177,6 +213,11 @@ class Module(ABC):
 
     def load(self, directory: str | Path, /, *, prefix: str = "") -> None:
         directory = Path(directory)
+
+        # Top-level only: announce the cache load so it doesn't sit silent. Signature is
+        # left untouched — subclasses (Mochi/Wan) override this method.
+        if prefix == "":
+            logger.info(f"loading {self._num_parameters()} cached weight tensors from '{directory}'...")
 
         self.evict_coresident_exclusions()
 
