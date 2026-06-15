@@ -46,9 +46,9 @@ CKPT = os.environ.get(
     "PI05_CHECKPOINT_DIR",
     "/home/tt-admin/sdawle/tt-metal/models/experimental/pi0_5/weights/pi05_libero_upstream",
 )
-N_CHIPS = 6
-N_PER = 3
-DEPTH = N_CHIPS * N_PER  # 18
+N_CHIPS = int(os.environ.get("REPRO_CHIPS", "6"))
+N_PER = int(os.environ.get("REPRO_PER", "3"))
+DEPTH = N_CHIPS * N_PER  # 18 (keep REPRO_CHIPS*REPRO_PER == 18)
 SUFFIX = 32  # padded action-horizon (one tile)
 PREFIX = int(os.environ.get("REPRO_PREFIX", "64"))  # prefix-KV length (0 = self-attn only)
 SEED = 0
@@ -347,6 +347,20 @@ def main():
             ft = ttnn.to_torch(xt_t, mesh_composer=ttnn.ConcatMeshToTensor(denoise, dim=0))[0][:ah, :]
             log(f"full-loop traced: finite={torch.isfinite(ft).all().item()} mean={ft.mean():.4f} std={ft.std():.4f}")
             log(f"PCC full-loop eager-vs-traced = {_pcc(fe, ft):.6f}")
+
+            # ---- traced-replay timing (the denoise stage latency) ----
+            import time as _time
+            _NW, _NI = 3, 20
+            for _ in range(_NW):
+                ttnn.copy_host_to_device_tensor(noise_host, xt_t)
+                ttnn.execute_trace(denoise, tid_f, cq_id=0, blocking=True)
+            _t0 = _time.perf_counter()
+            for _ in range(_NI):
+                ttnn.copy_host_to_device_tensor(noise_host, xt_t)
+                ttnn.execute_trace(denoise, tid_f, cq_id=0, blocking=True)
+            _den_ms = 1e3 * (_time.perf_counter() - _t0) / _NI
+            log(f"DENOISE traced replay = {_den_ms:.2f} ms ({N_STEPS} steps, {N_CHIPS} chips, {N_PER} layers/chip)")
+            print(f"METRIC denoise_ms={_den_ms:.3f}")
 
         log("SUCCESS")
     finally:

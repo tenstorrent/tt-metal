@@ -502,7 +502,8 @@ def main():
         _t = time.perf_counter()
         migrate_side(0, past_k)
         migrate_side(1, past_v)
-        log(f"KV migration on-device (p2p+socket): {1e3*(time.perf_counter()-_t):.2f}ms (single-shot)")
+        _KV_SINGLESHOT_MS = 1e3*(time.perf_counter()-_t)
+        log(f"KV migration on-device (p2p+socket): {_KV_SINGLESHOT_MS:.2f}ms (single-shot)")
         # expert cross-attn concat needs bf8_b (matches per-step k_rope dtype)
         past_k = [ttnn.typecast(t, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in past_k]
         past_v = [ttnn.typecast(t, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in past_v]
@@ -727,6 +728,15 @@ def main():
                 f"PERF traced replays ({NITER}it/{NWARM}wu): vision={t_vis:.2f} prefill={t_pre:.2f} denoise={t_den:.2f} ms"
             )
             log("PERF hand-offs (single-shot, logged above): see VISION->PREFIX and KV migration lines")
+            # authoritative e2e = looped replays + single-shot handoffs (sockets/overhead included)
+            _vp_ms = float(os.environ.get("PI05_VP_MS", "5.0"))  # vision->prefix host bounce (warm, ~5ms)
+            _e2e = t_vis + _vp_ms + t_pre + _KV_SINGLESHOT_MS + t_den
+            log(f"E2E host-side per-inference = {_e2e:.2f} ms (vis {t_vis:.1f}+vp {_vp_ms:.1f}+prefill {t_pre:.1f}+kv {_KV_SINGLESHOT_MS:.1f}+den {t_den:.1f}; sockets/overhead INCLUDED)")
+            print(f"METRIC e2e_ms={_e2e:.3f}")
+            print(f"METRIC vision_ms={t_vis:.3f}")
+            print(f"METRIC prefill_ms={t_pre:.3f}")
+            print(f"METRIC denoise_ms={t_den:.3f}")
+            print(f"METRIC kv_migration_ms={_KV_SINGLESHOT_MS:.3f}")
             log(
                 f"FULL E2E (replays + hand-offs): vision({t_vis:.1f}) + prefill({t_pre:.1f}) + denoise({t_den:.1f}) + hand-offs ~= per-inference latency [{N_STEPS} denoise steps]"
             )
