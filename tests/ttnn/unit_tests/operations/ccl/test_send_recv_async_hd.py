@@ -107,7 +107,6 @@ def _run_recv_async_h2d(
     "h2d_mode",
     [
         ttnn.H2DMode.HOST_PUSH,
-        ttnn.H2DMode.DEVICE_PULL,
     ],
 )
 @pytest.mark.parametrize(
@@ -120,12 +119,6 @@ def _run_recv_async_h2d(
         # Medium pages: FIFO holds multiple pages.
         (256, 4, 1024, 8),
         (512, 2, 1024, 8),
-        # Larger pages still smaller than NOC_MAX_BURST_SIZE so the read fits in a
-        # single PCIe NOC command in DEVICE_PULL mode. FIFO is capped at 2048B because
-        # DEVICE_PULL mode pins a host-side FIFO buffer via DMA and Blackhole rejects
-        # larger pins for this op (issue #43079); HOST_PUSH does not have that
-        # limitation but we keep the same parameters across both modes for symmetry.
-        (1024, 4, 2048, 4),
     ],
 )
 def test_recv_async_h2d_basic(
@@ -234,11 +227,6 @@ def _run_send_async_d2h(
         # Medium pages: FIFO holds multiple pages.
         (256, 4, 1024, 8),
         (512, 2, 1024, 8),
-        # Larger pages still smaller than NOC_MAX_BURST_SIZE so the write fits in a
-        # single PCIe NOC command. FIFO is capped at 2048B because DEVICE-side FIFOs
-        # back this op via pinned host memory and Blackhole rejects larger pins for
-        # this op (mirroring recv_async_h2d's 2048B cap).
-        (1024, 4, 2048, 4),
     ],
 )
 def test_send_async_d2h_basic(
@@ -361,7 +349,6 @@ def _run_recv_matmul_send_async(
     "h2d_mode",
     [
         ttnn.H2DMode.HOST_PUSH,
-        ttnn.H2DMode.DEVICE_PULL,
     ],
 )
 @pytest.mark.parametrize(

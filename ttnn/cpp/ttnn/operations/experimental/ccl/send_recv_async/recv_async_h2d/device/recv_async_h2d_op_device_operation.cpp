@@ -16,6 +16,10 @@ void RecvAsyncH2DDeviceOperation::validate_on_program_cache_miss(
     const auto& output_tensor = tensor_args;
 
     TT_FATAL(h2d_socket != nullptr, "recv_async_h2d: H2DSocket pointer is null");
+    TT_FATAL(
+        h2d_socket->get_h2d_mode() == tt::tt_metal::distributed::H2DMode::HOST_PUSH,
+        "recv_async_h2d currently onlys supports HOST_PUSH H2DMode, but got {}",
+        h2d_socket->get_h2d_mode());
     TT_FATAL(output_tensor.device() != nullptr, "recv_async_h2d: output tensor must be on device");
     TT_FATAL(
         h2d_socket->get_mesh_device() != nullptr,
