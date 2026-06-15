@@ -59,8 +59,8 @@ PCCs are ~0.999. Passes the >0.98 full-depth gate.
 | Decode tok/s/user (E2E, incl. host argmax read-back) | 8.6 |
 | Prefill TTFT @ ISL 128 / 1024 / 4096 | 226 ms / 655 ms / 2657 ms |
 | Prefill throughput @ ISL 1024 / 4096 | 1564 / 1541 tok/s |
-| Largest ISL measured (single-shot prefill) | 4096 (no L1 clash) |
-| Largest ISL with **chunked prefill** | 16384 (verified; paged k/v + chunked SDPA, single-shot caps ~4K) |
+| Largest ISL — single-shot prefill | 4096 (no L1 clash) |
+| Largest ISL — **chunked prefill, full-depth 36L** | **8192** (TTFT 7.8 s, 217 ms/layer); 16384 OOMs at 36L (paged KV + 119B weights), runs at ≤2 layers |
 | Decode MoE **sparse** vs dense — **full-depth 36L, B=32** (traced) | sparse **60** vs dense **43** tok/s agg → **+39.2%** |
 | Decode MoE sparse vs dense — 2-layer (traced) | +13.9% @B=8 (404 vs 355), +16.9% @B=32 (541 vs 462 tok/s agg) |
 
@@ -75,9 +75,11 @@ remains the default; sparse is opt-in for batched serving.
 
 **Chunked prefill** (`forward_prefill_chunked`, paged k/v + `chunked_scaled_dot_product_attention`)
 processes the prompt in chunk-token windows so L1 holds only one chunk's attention — lifting the
-single-shot ~4K cap to a verified **16K** (`test_m4_chunked_isl`; PCC 1.0 vs single-shot in
-`test_m4_chunked_prefill`/`test_m4_text_prefill_chunked`). Single-shot prefill stays the default ≤4K;
-generator integration + full-depth TTFT@16K + per-chunk trace are tracked follow-ups.
+single-shot ~4K L1 cap. PCC 1.0 vs single-shot (`test_m4_chunked_prefill`/`test_m4_text_prefill_chunked`).
+At the **full 36 layers it is measured to 8K** (TTFT 7.8 s); **16K runs at reduced layer counts but OOMs
+at full depth** (the per-layer paged KV caches plus the 119B weights exceed DRAM) — a paged-cache
+memory-management follow-up. Single-shot prefill stays the default ≤4K; generator integration + per-chunk
+trace are tracked follow-ups.
 
 **Multi-user batched decode** (traced, dense MoE) trades latency for throughput — the MoE streams
 each expert's weights once and applies them to all B tokens, so aggregate tok/s grows with batch
@@ -96,14 +98,15 @@ see status.
 ## Current status / remaining work
 - **Done:** full-depth logit correctness; e2e VLM correctness; on-device sampling; decode trace
   (replicated + sharded production mesh); fully on-device MoE; ISL perf sweep harness + measured
-  full-depth numbers; **chunked prefill** (paged k/v, verified to 16K — lifts the single-shot ~4K cap);
-  sharded LM head; **MoE sparse dispatch** (`forward_decode(use_sparse=True)`: `mesh_partition` →
+  full-depth numbers; **chunked prefill** (paged k/v, measured to 8K full-depth — lifts the single-shot
+  ~4K cap); sharded LM head; **MoE sparse dispatch** (`forward_decode(use_sparse=True)`: `mesh_partition` →
   all-to-all dispatch → top-4 routed experts → combine → all_gather; full-model decode sparse == dense
   logits PCC 0.9958; computes only the 4 routed experts/token vs all 16 local dense).
-- **Remaining (optimization/polish):** sparse-decode **tok/s measurement + trace-compat + generator
-  wiring**; chunked-prefill **generator integration + full-depth TTFT@16K + per-chunk trace**; **paged
-  compressed-latent KV** (12.8× smaller cache, op-execution-nondeterministic on this BH build — see A6);
-  **2CQ** (low value). CI registration done; rebase onto latest main.
+- **Remaining (optimization/polish):** chunked-prefill **16K at full depth** (paged-cache memory
+  management — OOMs at 36L today) + generator integration + per-chunk trace; sparse-decode **generator
+  wiring** (sub-device auto-setup; tok/s + trace already done); **paged compressed-latent KV** (12.8×
+  smaller cache, op-execution-nondeterministic on this BH build — see A6); **2CQ** (low value). CI
+  registration done; rebase onto latest main.
 - **Dependency:** requires `transformers >= 5.10` (native `mistral4`/`mistral3`/`pixtral` + fp8 dequant).
 
 ## Reproduce

@@ -53,7 +53,7 @@ def test_m4_chunked_isl(mesh_device, reset_seeds):
         ttnn.synchronize_device(mesh_device)
         dt = time.perf_counter() - t0
         logger.info(
-            f"A6 chunked-prefill ISL {S}: RAN in {dt*1000:.0f} ms (2-layer, B={B}) -> {dt*1000/N_LAYERS:.0f} ms/layer"
+            f"A6 chunked-prefill ISL {S}: RAN in {dt*1000:.0f} ms ({N_LAYERS}-layer, B={B}) -> {dt*1000/N_LAYERS:.0f} ms/layer"
         )
         largest = S
         ttnn.deallocate(o)
