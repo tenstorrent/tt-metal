@@ -24,6 +24,6 @@ ttnn::Tensor q_rope_fw(
     const ttnn::Tensor& trans_mat,
     uint32_t qk_nope_dim,
     uint32_t qk_rope_dim,
-    bool fp32_dest_acc_en = false);
+    bool fp32_dest_acc_en = true);
 
 }  // namespace ttml::metal

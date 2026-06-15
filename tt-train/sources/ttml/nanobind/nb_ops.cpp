@@ -334,11 +334,11 @@ void py_module(nb::module_& m) {
             nb::arg("rope_params"),
             nb::arg("qk_nope_dim"),
             nb::arg("qk_rope_dim"),
-            nb::arg("fp32_dest_acc_en") = false,
+            nb::arg("fp32_dest_acc_en") = true,
             "MLA Q RoPE with autograd: fused metal q_rope_fw forward (copy q_nope, RoPE on q_pe),\n"
             "composite backward (slice + neg-trig rotary_embedding_llama + concat).\n"
             "q_full: [B, n_heads, S, qk_nope_dim + qk_rope_dim] TILE bf16.\n"
-            "fp32_dest_acc_en: defaults to False; same rule as rotary_embedding_llama - may only be True when "
+            "fp32_dest_acc_en: defaults to True; same rule as rotary_embedding_llama - may only be True when "
             "qk_rope_dim <= 128.");
         py_rope.def(
             "gen_freqs",
