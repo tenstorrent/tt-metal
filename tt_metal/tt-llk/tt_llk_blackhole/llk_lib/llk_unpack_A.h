@@ -48,6 +48,7 @@ inline void _llk_unpack_A_mop_config_(
     static_assert(
         !(((acc_to_dest) || (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE)) && (unpack_to_dest)),
         "Not supported configuration when unpacking to dest!");
+    LLK_DPRINT_TENSOR_SHAPE("_llk_unpack_A_mop_config_", tensor_shape);
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     const std::uint8_t num_faces = tensor_shape.total_num_faces();
 
@@ -236,6 +237,7 @@ inline void _llk_unpack_A_init_(
     const std::uint32_t unpack_src_format           = 0,
     const std::uint32_t unpack_dst_format           = 0)
 {
+    LLK_DPRINT_TENSOR_SHAPE("_llk_unpack_A_init_", tensor_shape);
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     const std::uint8_t face_r_dim = tensor_shape.face_r_dim;
     const std::uint8_t num_faces  = tensor_shape.total_num_faces();
