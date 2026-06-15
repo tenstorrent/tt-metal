@@ -11,6 +11,7 @@ from loguru import logger
 import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
+from ....models.transformers.transformer_flux1 import Flux1Checkpoint
 from ....parallel.config import DiTParallelConfig, EncoderParallelConfig, VAEParallelConfig
 from ....pipelines.events import profiler_event_callback
 from ....pipelines.flux1.pipeline_flux1 import Flux1Pipeline, Flux1PipelineConfig
@@ -190,3 +191,79 @@ def test_flux1_pipeline(
             if prompt[0] == "q":
                 break
             run(prompt=prompt, number=i, seed=i)
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "sp", "tp", "encoder_tp", "vae_tp", "topology", "num_links", "mesh_test_id"),
+    [
+        pytest.param((1, 1), (0, 0), (0, 0), (2, 1), (2, 1), ttnn.Topology.Linear, 2, "2x2sp0tp1", id="2x2sp0tp1"),
+    ],
+    indirect=["mesh_device"],
+)
+def test_flux1_schnell_load(
+    *,
+    mesh_device: ttnn.MeshDevice,
+    sp: tuple[int, int],
+    tp: tuple[int, int],
+    encoder_tp: tuple[int, int],
+    vae_tp: tuple[int, int],
+    topology: ttnn.Topology,
+    num_links: int,
+    mesh_test_id: str,
+    model_location_generator,
+) -> None:
+    """Simple test that loads Flux.1-schnell model and verifies initialization."""
+    logger.info(f"Loading Flux.1-schnell on mesh device: {mesh_device.shape}")
+
+    parallel_config = DiTParallelConfig.from_tuples(cfg=(1, 0), sp=sp, tp=tp)
+    encoder_parallel_config = EncoderParallelConfig.from_tuple(encoder_tp)
+    vae_parallel_config = VAEParallelConfig.from_tuple(vae_tp)
+
+    pipeline = Flux1Pipeline(
+        device=mesh_device,
+        config=Flux1PipelineConfig.default(
+            mesh_shape=mesh_device.shape,
+            dit_parallel_config=parallel_config,
+            encoder_parallel_config=encoder_parallel_config,
+            vae_parallel_config=vae_parallel_config,
+            num_links=num_links,
+            topology=topology,
+            checkpoint_name=model_location_generator("black-forest-labs/FLUX.1-dev"),
+        ),
+    )
+
+    logger.info("Flux.1-schnell pipeline loaded successfully")
+
+
+def _log_hf_checkpoint_location(checkpoint_name) -> None:
+    """Log where HuggingFace will look for / resolve the checkpoint files."""
+    import huggingface_hub.constants as hf_const
+    from huggingface_hub import try_to_load_from_cache
+
+    logger.info(f"Resolved checkpoint_name (passed to from_pretrained): {checkpoint_name}")
+    logger.info(f"HF_HOME      = {hf_const.HF_HOME}")
+    logger.info(f"HF_HUB_CACHE = {hf_const.HF_HUB_CACHE}")
+
+    # If checkpoint_name is a local path, files load from there directly.
+    if os.path.isdir(checkpoint_name):
+        logger.info(f"checkpoint_name is a local directory; loading from: {checkpoint_name}")
+        return
+
+    # Otherwise it's an HF repo id resolved out of the hub cache. Show the cached file paths.
+    for rel in ("transformer/config.json", "model_index.json"):
+        cached = try_to_load_from_cache(checkpoint_name, rel)
+        logger.info(f"  {rel} -> {cached}")
+
+
+def test_flux1_dev_checkpoint_load(model_location_generator) -> None:
+    """Loads Flux1Checkpoint and verifies key metadata/state are available."""
+    checkpoint_name = model_location_generator("black-forest-labs/FLUX.1-dev")
+    _log_hf_checkpoint_location(checkpoint_name)
+    checkpoint = Flux1Checkpoint(checkpoint_name)
+
+
+def test_flux1_schnell_checkpoint_load(model_location_generator) -> None:
+    """Loads Flux1Checkpoint and verifies key metadata/state are available."""
+    checkpoint_name = model_location_generator("black-forest-labs/FLUX.1-schnell")
+    _log_hf_checkpoint_location(checkpoint_name)
+    checkpoint = Flux1Checkpoint(checkpoint_name)
