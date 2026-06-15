@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "api/compute/bcast.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
@@ -18,10 +19,10 @@ void kernel_main() {
     constexpr auto cb_out = tt::CBIndex::c_16;
     CircularBuffer cb_rhs_obj(cb_rhs);
 
-    // Bcast-W: original `init_bcast<BCAST_LLKOP, BCAST_DIM>` preserved as the
-    // big init. Chain's BinaryFpu uses CHAIN_BCAST_OP / CHAIN_BCAST_DIM
-    // (helper-lib types emitted by bcast_op_utils).
-    init_bcast<BCAST_LLKOP, BCAST_DIM>(cb_lhs, cb_rhs, cb_out);
+    // Standard hw-config big init only. The chain's BinaryFpu emits the bcast MOP
+    // (eltwise_chain.inl:209) each run, so init_bcast's per-op MOP was redundant;
+    // compute_kernel_hw_startup provides the hw_configure + pack init.
+    compute_kernel_hw_startup(cb_lhs, cb_rhs, cb_out);
 
     // bcast_w: 1 cb_rhs scalar per row, broadcast across Wt cb_lhs tiles.
     // cb_rhs is held across the inner Wt loop and popped once at end-of-row.
