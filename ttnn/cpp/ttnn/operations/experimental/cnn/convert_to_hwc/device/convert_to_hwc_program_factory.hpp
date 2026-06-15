@@ -8,33 +8,12 @@
 #include "ttnn/device_operation.hpp"
 #include "convert_to_hwc_device_operation_types.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::experimental::prim {
 
-struct ConvertToHWCSharedVariables {
-    tt::tt_metal::CBHandle cb_in{};
-    tt::tt_metal::CBHandle cb_out{};
-    bool is_input_in_dram = false;
-    // Destination/output cores where kernels execute
-    std::vector<tt::tt_metal::CoreCoord> output_cores;
-    // Serialized per-core runtime args for gather-based writer kernels
-    std::vector<std::vector<uint32_t>> per_core_serialized_transfers;
-    tt::tt_metal::KernelHandle writer_kernel_id0{};
-    tt::tt_metal::KernelHandle writer_kernel_id1{};
-    uint32_t remote_address = 0;
-};
-
 struct ConvertToHWCProgramFactory {
-    using shared_variables_t = ConvertToHWCSharedVariables;
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
-        const ConvertToHwcParams& operation_attributes,
-        const ConvertToHwcInputs& tensor_args,
-        Tensor& tensor_return_value);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
         const ConvertToHwcParams& operation_attributes,
         const ConvertToHwcInputs& tensor_args,
         Tensor& tensor_return_value);
