@@ -152,7 +152,7 @@ ProgramSpec spec{
     .semaphores = {sem_1},
     .work_units = {main_work_unit},
 };
-Program program = MakeProgramFromSpec(spec);  // temporary free function
+Program program = MakeProgramFromSpec(*mesh_device, spec);  // temporary free function
 //Program program = Program(spec);            // stable API form
 ```
 
@@ -228,7 +228,7 @@ ProgramSpec spec{
     .kernels = {reader},
     .work_units = {main_work_unit},
 };
-Program program = MakeProgramFromSpec(spec);
+Program program = MakeProgramFromSpec(*mesh_device, spec);
 
 // ----- ProgramRunArgs: argument values, set per execution -----
 ProgramRunArgs params;
