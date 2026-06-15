@@ -1261,10 +1261,15 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             dfb.unique_id,
             tp_name);
         const TensorSpec& tensor_spec = it->second->spec;
+        // A borrowed DFB may be backed by either L1 buffer type. L1_SMALL is physically L1 (a separate small
+        // allocator region), and a CB can be backed by an L1_SMALL buffer; rejecting it forces ops that keep
+        // small internal config/lookup tensors in L1_SMALL (e.g. sliding-window halo) to copy them into the
+        // main L1 pool just to borrow a DFB.
         TT_FATAL(
-            tensor_spec.memory_config().buffer_type() == tt::tt_metal::BufferType::L1,
-            "DFB '{}' borrows memory from TensorParameter '{}', but its TensorSpec is not L1-resident (L1 is "
-            "required).",
+            tensor_spec.memory_config().buffer_type() == tt::tt_metal::BufferType::L1 ||
+                tensor_spec.memory_config().buffer_type() == tt::tt_metal::BufferType::L1_SMALL,
+            "DFB '{}' borrows memory from TensorParameter '{}', but its TensorSpec is not L1-resident (L1 or "
+            "L1_SMALL is required).",
             dfb.unique_id,
             tp_name);
         // Coarse spec-time sizing check against the TensorSpec's full packed size. No Buffer is
