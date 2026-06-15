@@ -13,7 +13,14 @@ analytical check the Phase 3 gate requires (measured bytes match expectation).
 
 import pytest
 
-from tracy.noc_bandwidth import aggregate_noc_bytes_per_op, noc_bw_util_pct, per_op_noc_bw_pct
+import glob
+
+from tracy.noc_bandwidth import (
+    aggregate_noc_bytes_per_op,
+    noc_bw_util_pct,
+    noc_bytes_from_trace_dir,
+    per_op_noc_bw_pct,
+)
 
 
 def _ev(run_host_id, noc, num_bytes, sx=0, sy=0, etype="WRITE"):
@@ -61,6 +68,22 @@ def test_per_op_bw_joins_durations():
     # 402e6 bytes / 785us = ~512 GB/s -> ~100% of a 512 GB/s peak.
     assert bw[1] == pytest.approx(100.0, abs=2.0)
     assert bw[2] < bw[1]
+
+
+def test_trace_dir_aggregates_real_capture():
+    """If a real noc-trace capture is on disk, its summed bytes must match the
+    analytical eltwise traffic (the Phase 3 gate, end-to-end through the dir
+    reader)."""
+    import os
+
+    dirs = glob.glob("generated/profiler/*/.logs")
+    cap = next((d for d in dirs if glob.glob(os.path.join(d, "noc_trace*BinaryNg*ID*.json"))), None)
+    if cap is None:
+        pytest.skip("no binary-op noc-trace capture on disk")
+    agg = noc_bytes_from_trace_dir(cap)
+    expected = 3 * 8192 * 8192 * 2  # 8192x8192 bf16 add: 2 reads + 1 write
+    warm = [v["total"] for v in agg.values() if abs(v["total"] - expected) / expected < 0.02]
+    assert warm, f"no op matched analytical {expected} bytes; saw {[v['total'] for v in agg.values()]}"
 
 
 def test_eltwise_known_bytes_match_analytical():
