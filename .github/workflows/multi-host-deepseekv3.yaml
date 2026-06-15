@@ -104,13 +104,6 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
 
-  resolve-docker-pull-refs:
-    needs: [check-harbor, build-artifact]
-    uses: ./.github/workflows/resolve-docker-pull-refs.yaml
-    with:
-      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
-      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-
   deepseekv3-tests:
     if: ${{ github.event_name == 'schedule' || inputs.deepseekv3_unit_tests || inputs.deepseekv3_module_tests || inputs.teacher_forced || inputs.demo || inputs.demo_stress }}
     strategy:
@@ -122,10 +115,11 @@ jobs:
       - ${{ matrix.setup == 'quad' && 'multi-host-glx-4x' || 'multi-host-galaxy' }}
       - bare-metal
       - in-service
-    needs: [resolve-docker-pull-refs, build-artifact]
+    needs: [build-artifact]
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
       - name: ⬇️ Download Build
@@ -185,7 +179,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: 80
         with:
-          docker_image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -210,7 +204,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: 80
         with:
-          docker_image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -236,7 +230,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: 170
         with:
-          docker_image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -263,7 +257,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: 170
         with:
-          docker_image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -291,7 +285,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 440 || 80 }}
         with:
-          docker_image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -326,7 +320,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 440 || 80 }}
         with:
-          docker_image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -362,7 +356,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 420 || 60 }}
         with:
-          docker_image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -397,7 +391,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 420 || 60 }}
         with:
-          docker_image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -432,7 +426,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 440 || 80 }}
         with:
-          docker_image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -467,7 +461,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 440 || 80 }}
         with:
-          docker_image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -503,7 +497,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 500 || 140 }}
         with:
-          docker_image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -538,7 +532,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 500 || 140 }}
         with:
-          docker_image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib

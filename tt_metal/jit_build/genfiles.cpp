@@ -406,9 +406,11 @@ void emit_unpack_data_formats(
     const std::vector<DataFormat>& src_formats_all_cbs,
     const std::vector<DataFormat>& dst_formats_all_cbs,
     uint32_t max_cbs) {
-    // TODO: we should be emitting "unsigned char", no reason to use up 4B per data format
-    emit_formats_array(out, "constexpr std::int32_t", "unpack_src_format", max_cbs, src_formats_all_cbs);
-    emit_formats_array(out, "constexpr std::int32_t", "unpack_dst_format", max_cbs, dst_formats_all_cbs);
+    // DataFormat values fit in a byte (Invalid==255); emit as uint8_t to save 3B/entry of LDM (the
+    // .data region shares the TRISC's 2KB local memory with the stack). Matches pack_src/dst_format
+    // and the unpack tile-dim arrays, which are already uint8_t. All consumers read+promote to uint32.
+    emit_formats_array(out, "constexpr uint8_t", "unpack_src_format", max_cbs, src_formats_all_cbs);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_dst_format", max_cbs, dst_formats_all_cbs);
 }
 
 std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_formats(
@@ -689,7 +691,7 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
     // if the original input format is 8-bit (Int8, UInt8, Fp8_e4m3, Lf8) since those formats
     // do not require the tilize workaround. This is needed to determine whether to skip the workaround in llk_pack_init.
     out << "#if defined(UCK_CHLKC_PACK)\n";
-    emit_formats_array(out, "constexpr std::int32_t", "unpack_src_format", max_cbs, fmts.unpack_src);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_src_format", max_cbs, fmts.unpack_src);
     out << "#endif\n";   // if pack
     out << "#endif\n\n"; // if not math and not unpack
 

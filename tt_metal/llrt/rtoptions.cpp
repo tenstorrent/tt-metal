@@ -984,9 +984,18 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // the profiler infrastructure will be used to continuously dump NOC debug packets to a file. Default: false
         // (debug dump mode disabled) Usage: export TT_METAL_NOC_DEBUG_DUMP=1
         case EnvVarID::TT_METAL_NOC_DEBUG_DUMP: {
+#if !defined(TRACY_ENABLE)
+            if (is_env_enabled(value)) {
+                log_warning(
+                    tt::LogMetal,
+                    "TT_METAL_NOC_DEBUG_DUMP=1 requires a Tracy-enabled build (build with ENABLE_TRACY=ON). "
+                    "Ignoring; NOC debug events will not be collected.");
+            }
+#else
             if (is_env_enabled(value)) {
                 this->set_experimental_noc_debug_dump_enabled(true);
             }
+#endif
             break;
         }
 

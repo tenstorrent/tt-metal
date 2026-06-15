@@ -137,6 +137,11 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     const auto [neighbors, directions] =
         ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
 
+    // FABRIC_2D uses the portable RoutingPlaneConnectionManager (per-destination connection +
+    // multicast handshake) for multi-hop combine-axis forwarding; FABRIC_1D keeps the legacy
+    // per-direction array connection. Must match the writer kernel's #ifdef FABRIC_2D gating.
+    const bool is_2d_fabric = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+
     auto dispatched_shape = dispatched_buffer.logical_shape();
     auto hidden_size = dispatched_shape[-1];
     auto max_dispatch_buffer_token_size = dispatched_shape[-2];
@@ -1147,33 +1152,44 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         }
 
         if (num_links > 0) {
-            uint32_t core_link = core_idx % num_links;
+            // Combine-axis neighbors (each a distinct fabric direction) as fabric nodes.
+            std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
             for (const auto& neighbor_coordinate : neighbors) {
                 if (neighbor_coordinate[0] == mesh_coordinate[0] && neighbor_coordinate[1] == mesh_coordinate[1]) {
                     continue;
                 }
-
-                log_debug(
-                    tt::LogOp,
-                    "Combine connection: ({}, {}) -> ({}, {}) core {} link {} experts [{}, {})",
-                    mesh_coordinate[0],
-                    mesh_coordinate[1],
-                    neighbor_coordinate[0],
-                    neighbor_coordinate[1],
-                    sender_core,
-                    core_link,
-                    expert_start,
-                    expert_end);
-
-                // ProgramDescriptor specialization: appends fabric-routing args
-                // onto writer_runtime_args_raw and patches desc-side bookkeeping.
-                tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
+                dst_nodes.push_back(mesh_device->get_fabric_node_id(neighbor_coordinate));
+            }
+            const uint32_t core_link = core_idx % num_links;
+            if (is_2d_fabric) {
+                // Portable RoutingPlaneConnectionManager path: one connection per combine-axis neighbor
+                // so traffic forwards across MULTIPLE hops (the legacy fixed-link array connection only
+                // forwards a single hop, deadlocking multi-hop FABRIC_2D — e.g. the 4-device column of a
+                // 4x2 mesh). The writer reads num_connections first, then builds the manager from the
+                // appended args. {core_link} (= core_idx % num_links) is one link index applied to all of
+                // this sender core's connections, spreading sender cores across links (matches the
+                // FABRIC_1D path & broadcast).
+                writer_runtime_args_raw.push_back(static_cast<uint32_t>(dst_nodes.size()));
+                tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
                     src_fabric_node_id,
-                    mesh_device->get_fabric_node_id(neighbor_coordinate),
-                    core_link,
+                    dst_nodes,
+                    {core_link},
                     desc,
+                    writer_kernel_id,
                     sender_core,
                     writer_runtime_args_raw);
+                log_debug(
+                    tt::LogOp,
+                    "FABRIC_2D combine writer: src={} num_connections={} core_link={}",
+                    src_fabric_node_id,
+                    dst_nodes.size(),
+                    core_link);
+            } else {
+                // Legacy per-direction array connection (FABRIC_1D linear/ring — never deadlocked).
+                for (const auto& dst_node : dst_nodes) {
+                    tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
+                        src_fabric_node_id, dst_node, core_link, desc, sender_core, writer_runtime_args_raw);
+                }
             }
         }
 

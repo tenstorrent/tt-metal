@@ -9,20 +9,32 @@
 
 namespace ttnn::operations::experimental {
 
-void start_dram_core_prefetcher(
+bool is_dram_core_prefetcher_supported(tt::tt_metal::distributed::MeshDevice* mesh_device) {
+    return tt::tt_metal::experimental::IsDramCorePrefetcherSupported(*mesh_device);
+}
+
+void start_dram_core_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device, bool dual_senders_per_bank) {
+    tt::tt_metal::experimental::StartDramCorePrefetcher(*mesh_device, {.dual_senders_per_bank = dual_senders_per_bank});
+}
+
+void queue_dram_core_prefetcher_request(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
-    const std::vector<ttnn::Tensor>& tensors,
-    uint32_t num_layers,
-    const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb) {
-    std::vector<const tt::tt_metal::MeshTensor*> mesh_tensors;
-    mesh_tensors.reserve(tensors.size());
-    for (const auto& t : tensors) {
-        mesh_tensors.push_back(&t.mesh_tensor());
+    const std::vector<std::pair<ttnn::Tensor, uint32_t>>& tensors,
+    const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb,
+    const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset) {
+    std::vector<tt::tt_metal::experimental::DramCorePrefetcherInput> inputs;
+    inputs.reserve(tensors.size());
+    for (const auto& [tensor, block_count] : tensors) {
+        inputs.push_back({tensor.mesh_tensor(), block_count});
     }
-    tt::tt_metal::experimental::DramCorePrefetcherConfig config{
-        .num_layers = num_layers,
-    };
-    tt::tt_metal::experimental::StartDramCorePrefetcher(*mesh_device, mesh_tensors, global_cb, config);
+    tt::tt_metal::experimental::QueueDramCorePrefetcherRequest(*mesh_device, global_cb, device_subset, inputs);
+}
+
+void wait_for_cq_on_dram_core_prefetcher(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    uint8_t cq_id,
+    const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset) {
+    tt::tt_metal::experimental::WaitForCqOnDramCorePrefetcher(*mesh_device, cq_id, device_subset);
 }
 
 void stop_dram_core_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device) {

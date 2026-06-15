@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_uniform ${LIB_TYPE})
 add_library(TTNN::Ops::Uniform ALIAS ttnn_op_uniform)
 
-tt_reuse_precompile_headers(ttnn_op_uniform TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_uniform TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_uniform)
 
 # Only kernels FILE_SET; disable interface header verification

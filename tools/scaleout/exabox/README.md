@@ -239,11 +239,19 @@ source python_env/bin/activate
 
 Look for `All Detected Links are healthy` in the output. If you see `could not access or execute an executable`, see [Recovery Script Fails](./TROUBLESHOOTING.md#recovery-script-fails-with-could-not-access-or-execute-an-executable).
 
+**Tolerating missing cables:** by default, recovery fails if any expected cable is missing — either with `Encountered unrecoverable state` after 5 retrain attempts, or by early-exiting after a successful retrain without sending traffic. To validate the rest of the cluster when one or more cables are down, forward `--min-connections N` (relaxed mode, ASIC pair passes if it has at least N connections) via `--validation-args` and/or pass `--rerun-on-retrain` (rerun validation after a successful retrain so traffic actually runs).
+
+```bash
+./tools/scaleout/exabox/recover.sh --hosts <hosts> --validation-args "--min-connections 3" --rerun-on-retrain
+```
+
+Any other `run_cluster_validation` flag (e.g. `--hard-fail`, `--print-connectivity`, `--log-ethernet-metrics`) can be forwarded via `--validation-args`.
+
 ## Troubleshooting
 
 **Machine reboots during test**: If your machine reboots mid-test, the tests keep running on the other machines. You'll need to manually kill them or wait for them to timeout.
 
-**Missing connections** (`Channel/Port Connections found in FSD but missing in GSD`): Check cables are seated, verify you're using the right FSD file.
+**Missing connections** (`Channel/Port Connections found in FSD but missing in GSD`): Check cables are seated, verify you're using the right FSD file. If you only need to validate the rest of the cluster while a known cable is down, rerun with `--validation-args "--min-connections N"` and/or `--rerun-on-retrain` (see [Quick Health Check](#quick-health-check-for-developers)).
 
 **Timeouts** (`Timeout (10000 ms) waiting for physical cores`): Usually a transient issue. Issue a cluster-level reset (do NOT power cycle). If the issue persists, contact syseng in the `#exabox-infra` Slack channel. Power cycling should only be done in coordination with cluster managers (infra and cloud teams).
 

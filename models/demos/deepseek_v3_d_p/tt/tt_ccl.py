@@ -75,23 +75,9 @@ class TT_CCL:
         )
 
         self.ring_attention_ccl_core_grid_offset = (full_compute_grid.x - 1, 0)
-        ccl_sub_device_crs = ttnn.CoreRangeSet(
-            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_compute_grid.x - 1, full_compute_grid.y - 1))}
-        )
-        self.worker_sub_device = ttnn.SubDevice(
-            [
-                ccl_sub_device_crs,
-            ]
-        )
-        self.worker_sub_device_id = ttnn.SubDeviceId(0)
-        self.sub_device_stall_group = [self.worker_sub_device_id]
-
-        self.sub_device_manager = self.mesh_device.create_sub_device_manager([self.worker_sub_device], 0)
-        self.mesh_device.load_sub_device_manager(self.sub_device_manager)
-        self.mesh_device.set_sub_device_stall_group(self.sub_device_stall_group)
 
         # create global semaphore handles
-        self.ring_attention_ccl_semaphore_handles = create_global_semaphores(mesh_device, ccl_sub_device_crs, 0)
+        self.ring_attention_ccl_semaphore_handles = create_global_semaphores(mesh_device, self.sub_device_crs, 0)
 
         self.barrier_semaphore_idx = [0, 0, 0]
         self.barrier_semaphore_handles = [[], [], []]
@@ -117,6 +103,129 @@ class TT_CCL:
                 self.rs_semaphore_handles[i].append(
                     [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(3)]
                 )
+
+        # Single, stable-address reduce_scatter INTERMEDIATE accumulator, shared by ALL layers'
+        # shared experts. Giving the shared-expert reduce_scatter a persistent, fixed-address
+        # intermediate (a) keeps it alive across the shared-expert||dispatch sub-device overlap so
+        # the concurrent dispatch can't reuse its freed slot mid-flight, and (b) fixes the DRAM
+        # layout every iteration so the op's fabric reduction order is identical -> bit-exact
+        # determinism. One buffer for the whole model (layers share the shape and run sequentially)
+        # keeps the memory cost flat. See TtSharedExpert.forward.
+        self.shared_rs_intermediate = None
+
+        # Persistent ring-attention buffers shared by every layer's MLA, keyed by their shape
+        # signature. One set for the whole model. See get_mla_ring_attention_buffers.
+        self.mla_ring_attention_buffers: dict[tuple, dict] = {}
+
+        # Persistent chunked-prefill (ring_mla) gathered-KV scratch buffers shared by every layer's
+        # MLA, keyed by shape signature. See get_mla_chunked_kv_buffer.
+        self.mla_chunked_kv_buffers: dict[tuple, "ttnn.Tensor"] = {}
+
+    def get_mla_ring_attention_buffers(
+        self,
+        *,
+        seq_len,
+        kv_lora_rank,
+        qk_rope_head_dim,
+        qk_head_dim,
+        v_head_dim,
+        num_heads,
+        tp_axis,
+        dtype=ttnn.bfloat8_b,
+    ):
+        """Lazily allocate (once per mesh) and return the persistent ring-attention buffers shared by
+        every layer's MLA: the all-gather K/V output buffers plus the dummy joint_q/kv/v placeholders
+        (seq_len=0) that ring_joint_scaled_dot_product_attention requires. All MLA layers share one
+        config + seq_len + mesh, so a single set is reused at a stable address across layers -- layers
+        run sequentially (no in-flight overlap), and the fixed address also keeps the op's fabric
+        reduction order identical for bit-exact determinism. Cached by shape signature so distinct
+        configs/seq_lens on the same mesh get their own set. Returns a dict of ttnn.Tensor."""
+        import torch
+
+        key = (seq_len, kv_lora_rank, qk_rope_head_dim, qk_head_dim, v_head_dim, num_heads, tp_axis, dtype)
+        if key in self.mla_ring_attention_buffers:
+            return self.mla_ring_attention_buffers[key]
+
+        mesh_shape = tuple(self.mesh_device.shape)
+        num_heads_local = num_heads // self.mesh_device.shape[tp_axis]
+        v_shard_dims = [None, None]
+        v_shard_dims[tp_axis] = 1  # TP heads
+        k_shard_dims = [None, None]  # replicated across the mesh
+        joint_shard_dims = [None, None]
+        joint_shard_dims[tp_axis] = 1  # shard on head dimension
+
+        def _alloc(tensor, *, shard_dims=None, replicate=False):
+            mapper = (
+                ttnn.ReplicateTensorToMesh(self.mesh_device)
+                if replicate
+                else ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=mesh_shape, dims=shard_dims)
+            )
+            return ttnn.from_torch(
+                tensor,
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mapper,
+            )
+
+        assert num_heads_local * self.mesh_device.shape[tp_axis] == num_heads
+        buffers = {
+            "persistent_k_output_buffer": _alloc(
+                torch.zeros(1, 1, seq_len, kv_lora_rank + qk_rope_head_dim), shard_dims=k_shard_dims
+            ),
+            "persistent_v_output_buffer": _alloc(
+                torch.zeros(1, num_heads, seq_len, v_head_dim), shard_dims=v_shard_dims
+            ),
+            "joint_q": _alloc(torch.zeros(1, num_heads, 0, qk_head_dim), shard_dims=joint_shard_dims),
+            "joint_kv": _alloc(torch.zeros(1, 1, 0, kv_lora_rank + qk_rope_head_dim), replicate=True),
+            "joint_v": _alloc(torch.zeros(1, num_heads, 0, v_head_dim), shard_dims=joint_shard_dims),
+        }
+        self.mla_ring_attention_buffers[key] = buffers
+        return buffers
+
+    def get_mla_chunked_kv_buffer(self, *, cache_batch, seq_len, kvpe_dim, dtype=ttnn.bfloat8_b):
+        """Lazily allocate (once per mesh) and return the combined gathered-KV scratch buffer used by
+        the chunked-prefill ring_mla op (persistent_output_buffer_kv). It's scratch -- each layer's
+        gather overwrites it, it holds no per-layer state -- and uniform across layers (cache_batch =
+        slot_num*layer_num, seq_len, mesh are all fixed for a model), so one buffer is shared by every
+        layer's MLA instead of re-allocating a full slot_num*layer_num buffer per layer. Replicated
+        across the mesh ([None, None]); cached by shape signature."""
+        import torch
+
+        key = (cache_batch, seq_len, kvpe_dim, dtype)
+        if key not in self.mla_chunked_kv_buffers:
+            self.mla_chunked_kv_buffers[key] = ttnn.from_torch(
+                torch.zeros(cache_batch, 1, seq_len, kvpe_dim),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=[None, None]
+                ),
+            )
+        return self.mla_chunked_kv_buffers[key]
+
+    def get_shared_rs_intermediate(self, input_tensor):
+        """Lazily allocate (once per mesh) and return the shared reduce_scatter intermediate
+        accumulator. Line (Linear) topology needs a double-sized leading dim for the
+        forward/backward halves: shape = [2, *input_shape]. Interleaved DRAM, input dtype/layout,
+        replicated across the mesh. A single buffer is reused at a stable address by every
+        shared-expert reduce_scatter — all layers share the same shape and run sequentially, so one
+        buffer for the whole model is safe."""
+        import torch
+
+        if self.shared_rs_intermediate is None:
+            self.shared_rs_intermediate = ttnn.from_torch(
+                torch.zeros([2] + list(input_tensor.shape)),
+                device=self.mesh_device,
+                layout=input_tensor.layout,
+                dtype=input_tensor.dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        return self.shared_rs_intermediate
 
     def get_and_cycle_barrier_semaphore_handle(self, cluster_axis=None):
         semaphore_index = 2 if cluster_axis is None else cluster_axis

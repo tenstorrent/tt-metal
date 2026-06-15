@@ -2,8 +2,8 @@ name: "(Tier 2) Models Unit Tests"
 
 on:
   schedule:
-    # 3 times a day at 01:00, 09:00, and 17:00 UTC — all models, all SKUs
-    - cron: "0 1,9,17 * * *"
+    # Twice a day at 01:00 and 13:00 UTC — all models, all SKUs
+    - cron: "0 1,13 * * *"
   workflow_dispatch:
     inputs:
       model:
@@ -128,7 +128,7 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/models-unit-tests-impl.yaml
     with:
-      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}

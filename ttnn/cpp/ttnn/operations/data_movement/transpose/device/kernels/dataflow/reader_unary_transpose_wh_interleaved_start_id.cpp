@@ -25,11 +25,11 @@ void kernel_main() {
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes = get_tile_size(cb_id_in0);
+    CircularBuffer cb(cb_id_in0);
+    const uint32_t tile_bytes = cb.get_tile_size();
     const auto s = TensorAccessor(src_args, src_addr);
 
     Noc noc;
-    CircularBuffer cb(cb_id_in0);
 
     uint32_t ht = start_ht;
     uint32_t wt = start_wt;

@@ -35,6 +35,7 @@
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt_stl/reflection.hpp>
 #include "impl/host_api/temp_quasar_api.hpp"  // for QuasarComputeConfig
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
@@ -63,6 +64,76 @@ using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeMinimalWorkUnit;
 using test_helpers::MakeShardedTensorParameter;
 using test_helpers::ScopedSlowDispatchOverride;
+
+// ============================================================================
+// Reflection: ProgramSpec and its subcomponents are hashable via ttsl reflection
+// ============================================================================
+//
+// ttsl::hash (tt_stl/reflection.hpp) hashes a plain aggregate by reflecting over its fields
+// and recursing into each one. These checks pin that the whole ProgramSpec tree stays
+// hashable: if a future change adds a field ttsl::hash can't handle (or makes one of these
+// structs non-aggregate), the build breaks here rather than at some distant call site.
+//
+// This can't be a requires-expression. ttsl::hash::hash_object is an unconstrained template
+// whose "unsupported type" case is a static_assert in the function *body*, so the call is
+// always well-formed and unhashability only surfaces once the body is instantiated. hash_one
+// is never called; taking its address ODR-uses it, which forces that instantiation — and the
+// recursion through T's fields — at compile time.
+template <typename T>
+ttsl::hash::hash_t hash_one(const T& value) {
+    return ttsl::hash::hash_objects_with_default_seed(value);
+}
+template <typename T>
+inline constexpr bool hashable_v = (static_cast<void>(&hash_one<T>), true);
+
+// Top-level specs
+static_assert(hashable_v<ProgramSpec>, "ProgramSpec must be hashable via ttsl reflection");
+static_assert(hashable_v<WorkUnitSpec>, "WorkUnitSpec must be hashable via ttsl reflection");
+static_assert(hashable_v<KernelSpec>, "KernelSpec must be hashable via ttsl reflection");
+static_assert(hashable_v<DataflowBufferSpec>, "DataflowBufferSpec must be hashable via ttsl reflection");
+static_assert(hashable_v<RemoteDataflowBufferSpec>, "RemoteDataflowBufferSpec must be hashable via ttsl reflection");
+static_assert(hashable_v<SemaphoreSpec>, "SemaphoreSpec must be hashable via ttsl reflection");
+static_assert(hashable_v<TensorParameter>, "TensorParameter must be hashable via ttsl reflection");
+
+// KernelSpec subcomponents
+static_assert(hashable_v<KernelSpec::SourceCode>, "KernelSpec::SourceCode must be hashable via ttsl reflection");
+static_assert(
+    hashable_v<KernelSpec::CompilerOptions>, "KernelSpec::CompilerOptions must be hashable via ttsl reflection");
+static_assert(
+    hashable_v<KernelSpec::RuntimeArgSchema>, "KernelSpec::RuntimeArgSchema must be hashable via ttsl reflection");
+static_assert(hashable_v<DFBBinding>, "DFBBinding must be hashable via ttsl reflection");
+static_assert(hashable_v<SemaphoreBinding>, "SemaphoreBinding must be hashable via ttsl reflection");
+static_assert(hashable_v<TensorBinding>, "TensorBinding must be hashable via ttsl reflection");
+
+// Kernel hardware configs
+static_assert(
+    hashable_v<DataMovementHardwareConfig>, "DataMovementHardwareConfig must be hashable via ttsl reflection");
+static_assert(
+    hashable_v<DataMovementHardwareConfig::Gen1Config>,
+    "DataMovementHardwareConfig::Gen1Config must be hashable via ttsl reflection");
+static_assert(
+    hashable_v<DataMovementHardwareConfig::Gen2Config>,
+    "DataMovementHardwareConfig::Gen2Config must be hashable via ttsl reflection");
+static_assert(hashable_v<ComputeHardwareConfig>, "ComputeHardwareConfig must be hashable via ttsl reflection");
+
+// Per-spec advanced options
+static_assert(hashable_v<KernelAdvancedOptions>, "KernelAdvancedOptions must be hashable via ttsl reflection");
+static_assert(hashable_v<DFBAdvancedOptions>, "DFBAdvancedOptions must be hashable via ttsl reflection");
+static_assert(hashable_v<SemaphoreAdvancedOptions>, "SemaphoreAdvancedOptions must be hashable via ttsl reflection");
+static_assert(
+    hashable_v<TensorParameterAdvancedOptions>, "TensorParameterAdvancedOptions must be hashable via ttsl reflection");
+
+TEST(ProgramSpecReflectionTest, IsHashable) {
+    const ProgramSpec spec = MakeMinimalValidProgramSpec();
+
+    // Deterministic: hashing the same spec twice yields the same value.
+    EXPECT_EQ(ttsl::hash::hash_objects_with_default_seed(spec), ttsl::hash::hash_objects_with_default_seed(spec));
+
+    // Sensitive: changing a field changes the hash.
+    ProgramSpec modified = spec;
+    modified.name += "_v2";
+    EXPECT_NE(ttsl::hash::hash_objects_with_default_seed(spec), ttsl::hash::hash_objects_with_default_seed(modified));
+}
 
 // ============================================================================
 // Test Fixtures
@@ -133,11 +204,11 @@ TEST_F(ProgramSpecTestQuasar, DuplicateSemaphoreNameFails) {
 
     // Add two semaphores with the same name
     SemaphoreSpec sem1;
-    sem1.unique_id = "sem_0";
+    sem1.unique_id = SemaphoreSpecName{"sem_0"};
     sem1.target_nodes = NodeCoord{0, 0};
 
     SemaphoreSpec sem2;
-    sem2.unique_id = "sem_0";  // duplicate!
+    sem2.unique_id = SemaphoreSpecName{"sem_0"};  // duplicate!
     sem2.target_nodes = NodeCoord{1, 0};
 
     spec.semaphores = {sem1, sem2};
@@ -159,8 +230,8 @@ TEST_F(ProgramSpecTestQuasar, SharedLocalAccessorNameForDifferentDFBsFails) {
 
     // Bind two *different* DFBs with the same accessor_name — illegal
     // (self-loop sharing requires the same DFB on both bindings).
-    kernel.dfb_bindings.push_back(ProducerOf("dfb_0", "same_accessor"));
-    kernel.dfb_bindings.push_back(ConsumerOf("dfb_1", "same_accessor"));
+    kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb_0"}, "same_accessor"));
+    kernel.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_1"}, "same_accessor"));
 
     spec.kernels = {kernel};
     spec.dataflow_buffers = {dfb0, dfb1};
@@ -184,9 +255,9 @@ TEST_F(ProgramSpecTestQuasar, DuplicateProducerBindingForSameLocalAccessorNameFa
 
     // Two PRODUCER bindings on the same kernel sharing a accessor_name —
     // illegal: the self-loop relaxation requires opposite endpoint types.
-    producer_kernel.dfb_bindings.push_back(ProducerOf("dfb", "shared"));
-    producer_kernel.dfb_bindings.push_back(ProducerOf("dfb", "shared"));
-    consumer_kernel.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
+    producer_kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "shared"));
+    producer_kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "shared"));
+    consumer_kernel.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     spec.kernels = {producer_kernel, consumer_kernel};
     spec.dataflow_buffers = {dfb};
@@ -208,14 +279,64 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopWithSharedLocalAccessorNameSucceeds) {
     // accessor_name across the PRODUCER and CONSUMER bindings.
     auto kernel = MakeMinimalDMKernel("kernel");
     auto dfb = MakeMinimalDFB("dfb");
-    kernel.dfb_bindings.push_back(ProducerOf("dfb", "acc"));
-    kernel.dfb_bindings.push_back(ConsumerOf("dfb", "acc"));
+    kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "acc"));
+    kernel.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "acc"));
 
     spec.kernels = {kernel};
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
     EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+}
+
+TEST_F(ProgramSpecTestQuasar, SelfLoopWithDistinctAccessorNamesSucceeds) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    // A producer+consumer self-loop on one DFB may use DISTINCT accessor names ('p'/'c'): it binds
+    // one PRODUCER and one CONSUMER (different roles), which is the sanctioned multi-binding form.
+    // Only a second binding of the SAME role under a different name is forbidden.
+    auto kernel = MakeMinimalDMKernel("kernel");
+    auto dfb = MakeMinimalDFB("dfb");
+    kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "p"));
+    kernel.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "c"));
+
+    spec.kernels = {kernel};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
+
+    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+}
+
+TEST_F(ProgramSpecTestQuasar, DFBBoundTwiceInSameRoleUnderDifferentNamesFails) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    // The wrong port of the legacy "one buffer, two names" CB-alias idiom: one kernel binds the
+    // same DFB twice in the SAME role (here two CONSUMER bindings) under different accessor names,
+    // yielding two accessors / DataflowBuffer objects for one FIFO. Forbidden — the right port is a
+    // kernel-side handle alias over a single binding. (A producer+consumer self-loop is a different,
+    // legitimate multi-binding and stays legal — see SelfLoopWithDistinctAccessorNamesSucceeds.)
+    auto producer = MakeMinimalDMKernel("producer");
+    auto consumer = MakeMinimalDMKernel("consumer");
+    auto dfb = MakeMinimalDFB("dfb");
+
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in_a"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in_b"));
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("has two CONSUMER bindings to DFB 'dfb' under different accessor names")));
 }
 
 TEST_F(ProgramSpecTestQuasar, InvalidLocalAccessorNameFails) {
@@ -242,7 +363,7 @@ TEST_F(ProgramSpecTestQuasar, InvalidLocalAccessorNameFails) {
         auto kernel = MakeMinimalDMKernel("kernel");
         auto dfb = MakeMinimalDFB("dfb");
 
-        kernel.dfb_bindings.push_back(ProducerOf("dfb", bad_name));
+        kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, bad_name));
 
         spec.kernels = {kernel};
         spec.dataflow_buffers = {dfb};
@@ -264,7 +385,7 @@ TEST_F(ProgramSpecTestQuasar, KernelReferencesUnknownDFBFails) {
 
     auto kernel = MakeMinimalDMKernel("kernel");
     // Bind to a DFB that doesn't exist
-    kernel.dfb_bindings.push_back(ProducerOf("nonexistent_dfb", "accessor"));
+    kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"nonexistent_dfb"}, "accessor"));
 
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
@@ -307,7 +428,7 @@ TEST_F(ProgramSpecTestQuasar, DFBWithOnlyProducerFails) {
     auto dfb = MakeMinimalDFB("dfb");
 
     // Only bind as producer, no consumer
-    kernel.dfb_bindings.push_back(ProducerOf("dfb", "accessor"));
+    kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "accessor"));
 
     spec.kernels = {kernel};
     spec.dataflow_buffers = {dfb};
@@ -328,7 +449,7 @@ TEST_F(ProgramSpecTestQuasar, DFBWithOnlyConsumerFails) {
     auto dfb = MakeMinimalDFB("dfb");
 
     // Only bind as consumer, no producer
-    kernel.dfb_bindings.push_back(ConsumerOf("dfb", "accessor"));
+    kernel.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "accessor"));
 
     spec.kernels = {kernel};
     spec.dataflow_buffers = {dfb};
@@ -354,9 +475,9 @@ TEST_F(ProgramSpecTestQuasar, DFBWithMultipleProducersInSameWorkUnitFails) {
 
     // Two PRODUCER bindings on the same DFB, both KernelSpecs in the same WorkUnitSpec.
     // Multi-binding requires non-overlapping WU membership per role; this should fail.
-    producer1.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    producer2.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    consumer.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
+    producer1.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    producer2.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     spec.kernels = {producer1, producer2, consumer};
     spec.dataflow_buffers = {dfb};
@@ -384,9 +505,9 @@ TEST_F(ProgramSpecTestQuasar, DFBWithMultipleConsumersInSameWorkUnitFails) {
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    producer.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    consumer1.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
-    consumer2.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer1.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+    consumer2.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     spec.kernels = {producer, consumer1, consumer2};
     spec.dataflow_buffers = {dfb};
@@ -413,9 +534,9 @@ TEST_F(ProgramSpecTestQuasar, DFBWithMultipleConsumersInDifferentWorkUnitsSuccee
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    producer.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    consumer1.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
-    consumer2.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer1.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+    consumer2.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     // producer covers both WUs (placed in both); each consumer covers one WU.
     spec.kernels = {producer, consumer1, consumer2};
@@ -442,9 +563,9 @@ TEST_F(ProgramSpecTestQuasar, DFBWithMultipleProducersInDifferentWorkUnitsSuccee
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    producer1.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    producer2.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    consumer.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
+    producer1.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    producer2.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     spec.kernels = {producer1, producer2, consumer};
     spec.dataflow_buffers = {dfb};
@@ -469,8 +590,8 @@ TEST_F(ProgramSpecTestQuasar, DFBProducerConsumerCoverageMismatchFails) {
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    producer.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    consumer.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     // Producer covers wu_p; consumer covers wu_c. Their coverages differ — invalid.
     spec.kernels = {producer, consumer};
@@ -499,9 +620,9 @@ TEST_F(ProgramSpecTestQuasar, DFBMultiBindingAccessPatternMismatchFails) {
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    producer.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    consumer1.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
-    consumer2.dfb_bindings.push_back(AllConsumerOf("dfb", "in"));
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer1.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+    consumer2.dfb_bindings.push_back(AllConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     spec.kernels = {producer, consumer1, consumer2};
     spec.dataflow_buffers = {dfb};
@@ -530,9 +651,9 @@ TEST_F(ProgramSpecTestQuasar, DFBMultiBindingNumThreadsMismatchFails) {
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    producer.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    consumer1.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
-    consumer2.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer1.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+    consumer2.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     spec.kernels = {producer, consumer1, consumer2};
     spec.dataflow_buffers = {dfb};
@@ -565,9 +686,9 @@ TEST_F(ProgramSpecTestQuasar, DFBMultiBindingMixingComputeAndDMOnSameRoleFails) 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    dm_producer.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    compute_producer.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    consumer.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
+    dm_producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    compute_producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     spec.kernels = {dm_producer, compute_producer, consumer};
     spec.dataflow_buffers = {dfb};
@@ -599,10 +720,10 @@ TEST_F(ProgramSpecTestQuasar, DFBMultiBindingSelfLoopWithMatchingSidesSucceeds) 
     // INTRA-tensix self-loop DFBs have no DM endpoint; the spec-to-impl translation produces
     // enable_{producer,consumer}_implicit_sync=false automatically (no DM kernel to vote for it).
 
-    self_loop_1.dfb_bindings.push_back(ProducerOf("dfb", "p"));
-    self_loop_1.dfb_bindings.push_back(ConsumerOf("dfb", "c"));
-    self_loop_2.dfb_bindings.push_back(ProducerOf("dfb", "p"));
-    self_loop_2.dfb_bindings.push_back(ConsumerOf("dfb", "c"));
+    self_loop_1.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "p"));
+    self_loop_1.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "c"));
+    self_loop_2.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "p"));
+    self_loop_2.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "c"));
 
     spec.kernels = {self_loop_1, self_loop_2};
     spec.dataflow_buffers = {dfb};
@@ -635,10 +756,10 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopWithExtraProducerSideKernelFails) {
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    self_loop_1.dfb_bindings.push_back(ProducerOf("dfb", "p"));
-    self_loop_1.dfb_bindings.push_back(ConsumerOf("dfb", "c"));
-    extra_producer.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    extra_consumer.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
+    self_loop_1.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "p"));
+    self_loop_1.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "c"));
+    extra_producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    extra_consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     spec.kernels = {self_loop_1, extra_producer, extra_consumer};
     spec.dataflow_buffers = {dfb};
@@ -799,8 +920,8 @@ TEST_F(ProgramSpecTestQuasar, RemoteDFBNotYetSupportedAtRuntime) {
     auto producer = MakeMinimalDMKernel("producer");
     auto consumer = MakeMinimalDMKernel("consumer");
 
-    producer.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    consumer.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     spec.kernels = {producer, consumer};
     spec.remote_dataflow_buffers = {RemoteDataflowBufferSpec{
@@ -826,7 +947,8 @@ inline ProgramSpec MakeBorrowedDFBProgramSpec(
     const std::string& tensor_param_name = "borrowed_tensor",
     tt::tt_metal::BufferType tensor_buffer_type = tt::tt_metal::BufferType::L1,
     uint32_t dfb_entry_size = 16,
-    uint32_t dfb_num_entries = 2) {
+    uint32_t dfb_num_entries = 2,
+    bool bind_backing_to_kernel = true) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -835,14 +957,18 @@ inline ProgramSpec MakeBorrowedDFBProgramSpec(
     auto producer = MakeMinimalDMKernel("producer");
     auto consumer = MakeMinimalDMKernel("consumer");
     auto dfb = MakeMinimalDFB("dfb", dfb_entry_size, dfb_num_entries);
-    dfb.borrowed_from = tensor_param_name;
+    dfb.borrowed_from = TensorParamName{tensor_param_name};
 
-    producer.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    consumer.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     auto tensor_param = MakeMinimalTensorParameter(tensor_param_name, tensor_buffer_type);
-    // The TensorParameter must be bound to at least one kernel (referential-integrity check).
-    BindTensorParameterToKernel(producer, tensor_param_name, "borrowed_t");
+    // The borrowed_from reference is itself counted as a use of the TensorParameter, so binding it
+    // to a kernel is not required for referential integrity. Callers exercising the borrowed-only
+    // path pass bind_backing_to_kernel=false.
+    if (bind_backing_to_kernel) {
+        BindTensorParameterToKernel(producer, tensor_param_name, "borrowed_t");
+    }
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
@@ -857,10 +983,25 @@ TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBSucceeds) {
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
+TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBBackingParameterNeedNotBeKernelBoundSucceeds) {
+    // Regression: a TensorParameter used ONLY as a borrowed-memory DFB's backing (referenced via
+    // borrowed_from, never bound by a kernel) is a legitimate use. The validator must count
+    // borrowed_from toward referential integrity rather than rejecting the parameter as "defined
+    // but not bound by any kernel". This is the common borrowed-memory-DFB case (e.g. a borrowed
+    // LUT / scratch tensor consumed only through the DFB).
+    ProgramSpec spec = MakeBorrowedDFBProgramSpec(
+        "borrowed_tensor",
+        tt::tt_metal::BufferType::L1,
+        /*dfb_entry_size=*/16,
+        /*dfb_num_entries=*/2,
+        /*bind_backing_to_kernel=*/false);
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
 TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBUnknownTensorParameterFails) {
     ProgramSpec spec = MakeBorrowedDFBProgramSpec("borrowed_tensor");
     // Re-target the DFB at a TensorParameter that wasn't declared.
-    spec.dataflow_buffers[0].borrowed_from = "nonexistent_tensor";
+    spec.dataflow_buffers[0].borrowed_from = TensorParamName{"nonexistent_tensor"};
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
@@ -893,7 +1034,7 @@ TEST_F(ProgramSpecTestQuasar, SemaphoresSucceed) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     SemaphoreSpec sem;
-    sem.unique_id = "sem_0";
+    sem.unique_id = SemaphoreSpecName{"sem_0"};
     sem.target_nodes = NodeCoord{0, 0};
     spec.semaphores = {sem};
 
@@ -904,12 +1045,12 @@ TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingsSucceed) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     SemaphoreSpec sem;
-    sem.unique_id = "sem_0";
+    sem.unique_id = SemaphoreSpecName{"sem_0"};
     sem.target_nodes = NodeCoord{0, 0};
     spec.semaphores = {sem};
 
     SemaphoreBinding binding;
-    binding.semaphore_spec_name = "sem_0";
+    binding.semaphore_spec_name = SemaphoreSpecName{"sem_0"};
     binding.accessor_name = "my_sem";
     spec.kernels[0].semaphore_bindings = {binding};
 
@@ -922,14 +1063,14 @@ TEST_F(ProgramSpecTestQuasar, SemaphoreBoundToComputeKernelFailsOnQuasar) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     SemaphoreSpec sem;
-    sem.unique_id = "sem_0";
+    sem.unique_id = SemaphoreSpecName{"sem_0"};
     sem.target_nodes = NodeCoord{0, 0};
     spec.semaphores = {sem};
 
     // kernels[1] is the compute kernel in MakeMinimalValidProgramSpec
     ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
     spec.kernels[1].semaphore_bindings = {
-        SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "done_flag"}};
+        SemaphoreBinding{.semaphore_spec_name = SemaphoreSpecName{"sem_0"}, .accessor_name = "done_flag"}};
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
@@ -941,7 +1082,7 @@ TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingUnknownSemaphoreFails) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     SemaphoreBinding binding;
-    binding.semaphore_spec_name = "missing_sem";
+    binding.semaphore_spec_name = SemaphoreSpecName{"missing_sem"};
     binding.accessor_name = "my_sem";
     spec.kernels[0].semaphore_bindings = {binding};
 
@@ -955,12 +1096,12 @@ TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingInvalidAccessorFails) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     SemaphoreSpec sem;
-    sem.unique_id = "sem_0";
+    sem.unique_id = SemaphoreSpecName{"sem_0"};
     sem.target_nodes = NodeCoord{0, 0};
     spec.semaphores = {sem};
 
     SemaphoreBinding binding;
-    binding.semaphore_spec_name = "sem_0";
+    binding.semaphore_spec_name = SemaphoreSpecName{"sem_0"};
     binding.accessor_name = "has-dash";
     spec.kernels[0].semaphore_bindings = {binding};
 
@@ -974,18 +1115,18 @@ TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingDuplicateAccessorFails) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     SemaphoreSpec sem0;
-    sem0.unique_id = "sem_0";
+    sem0.unique_id = SemaphoreSpecName{"sem_0"};
     sem0.target_nodes = NodeCoord{0, 0};
 
     SemaphoreSpec sem1;
-    sem1.unique_id = "sem_1";
+    sem1.unique_id = SemaphoreSpecName{"sem_1"};
     sem1.target_nodes = NodeCoord{0, 0};
 
     spec.semaphores = {sem0, sem1};
 
     spec.kernels[0].semaphore_bindings = {
-        SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "same"},
-        SemaphoreBinding{.semaphore_spec_name = "sem_1", .accessor_name = "same"}};
+        SemaphoreBinding{.semaphore_spec_name = SemaphoreSpecName{"sem_0"}, .accessor_name = "same"},
+        SemaphoreBinding{.semaphore_spec_name = SemaphoreSpecName{"sem_1"}, .accessor_name = "same"}};
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
@@ -996,7 +1137,7 @@ TEST_F(ProgramSpecTestQuasar, SemaphoreNonZeroInitialValueFailsOnQuasar) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     SemaphoreSpec sem;
-    sem.unique_id = "sem_0";
+    sem.unique_id = SemaphoreSpecName{"sem_0"};
     sem.target_nodes = NodeCoord{0, 0};
     sem.advanced_options = SemaphoreAdvancedOptions{.initial_value = 1};
     spec.semaphores = {sem};
@@ -1081,8 +1222,8 @@ TEST_F(ProgramSpecTestQuasar, DFBWithComputeEndpointRequiresDataFormat) {
     auto dfb = MakeMinimalDFB("dfb");
     // dfb.data_format_metadata is NOT set (nullopt)
 
-    producer.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    consumer.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
@@ -1106,13 +1247,13 @@ TEST_F(ProgramSpecTestQuasar, ComputeConfigUnpackToDestModeReferencesUnboundDFBF
     // Set unpack_to_dest_mode referencing a DFB this kernel doesn't bind
     // (in this case, a DFB that doesn't exist in the spec at all).
     auto& compute_config = std::get<ComputeHardwareConfig>(consumer.hw_config);
-    compute_config.unpack_to_dest_mode = {{"nonexistent_dfb", UnpackToDestMode::UnpackToDestFp32}};
+    compute_config.unpack_to_dest_mode = {{DFBSpecName{"nonexistent_dfb"}, UnpackToDestMode::UnpackToDestFp32}};
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    producer.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    consumer.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
@@ -1137,32 +1278,33 @@ TEST_F(ProgramSpecTestQuasar, NonFP32DFBWithExplicitDefaultUnpackToDestModeSucce
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
             auto& config = std::get<ComputeHardwareConfig>(kernel.hw_config);
-            config.unpack_to_dest_mode = {{"dfb_0", UnpackToDestMode::Default}};
+            config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::Default}};
         }
     }
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
-TEST_F(ProgramSpecTestQuasar, NonFP32DFBWithUnpackToDestFp32ModeFails) {
-    // UnpackToDestFp32 is FP32-only; setting it on a non-FP32 DFB is rejected.
-    ProgramSpec spec = MakeMinimalValidProgramSpec();  // dfb_0 is Float16_b
+TEST_F(ProgramSpecTestQuasar, NonFP32DFBWithUnpackToDestFp32ModeSucceeds) {
+    // UnpackToDestFp32 on a non-Float32 DFB is INERT: the LLK ignores the mode where the data
+    // isn't FP32. The validator tolerates it (rejecting it would force porters to dtype-gate
+    // legacy unpack_to_dest_mode vectors that set UnpackToDestFp32 unconditionally). With
+    // fp32_dest_acc_en=true the entry is coherent, so the spec validates.
+    ProgramSpec spec = MakeMinimalValidProgramSpec();  // dfb_0 is Float16_b (non-FP32)
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
             auto& config = std::get<ComputeHardwareConfig>(kernel.hw_config);
-            config.unpack_to_dest_mode = {{"dfb_0", UnpackToDestMode::UnpackToDestFp32}};
+            config.fp32_dest_acc_en = true;
+            config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::UnpackToDestFp32}};
         }
     }
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("specifies UnpackToDestFp32, but the DFB data format is not Float32")));
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, FP32ConsumerWithFp32DestAccEnAndNoEntryFails) {
     // The narrow case where a choice is required: CONSUMER + FP32 + fp32_dest_acc_en=true.
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     for (auto& dfb : spec.dataflow_buffers) {
-        if (dfb.unique_id == "dfb_0") {
+        if (dfb.unique_id == DFBSpecName{"dfb_0"}) {
             dfb.data_format_metadata = tt::DataFormat::Float32;
         }
     }
@@ -1186,7 +1328,7 @@ TEST_F(ProgramSpecTestQuasar, FP32ConsumerWithoutFp32DestAccEnDoesNotRequireEntr
     // no real choice — Default is the only valid value. No explicit entry required.
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     for (auto& dfb : spec.dataflow_buffers) {
-        if (dfb.unique_id == "dfb_0") {
+        if (dfb.unique_id == DFBSpecName{"dfb_0"}) {
             dfb.data_format_metadata = tt::DataFormat::Float32;
         }
     }
@@ -1211,8 +1353,8 @@ TEST_F(ProgramSpecTestQuasar, FP32ProducerOnlyBindingDoesNotRequireEntry) {
     auto dfb = MakeMinimalDFB("dfb_0");
     dfb.data_format_metadata = tt::DataFormat::Float32;
 
-    producer_compute.dfb_bindings.push_back(ProducerOf("dfb_0", "out"));
-    consumer_dm.dfb_bindings.push_back(ConsumerOf("dfb_0", "in"));
+    producer_compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb_0"}, "out"));
+    consumer_dm.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_0"}, "in"));
 
     spec.kernels = {producer_compute, consumer_dm};
     spec.dataflow_buffers = {dfb};
@@ -1222,8 +1364,9 @@ TEST_F(ProgramSpecTestQuasar, FP32ProducerOnlyBindingDoesNotRequireEntry) {
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
-TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32OnProducerBindingFails) {
-    // UnpackToDestFp32 on a producer-only binding is meaningless (producers don't unpack).
+TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32OnProducerBindingSucceeds) {
+    // UnpackToDestFp32 on a producer-only binding is INERT (producers don't unpack), so the
+    // validator tolerates it rather than rejecting. With fp32_dest_acc_en=true it is coherent.
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -1232,32 +1375,29 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32OnProducerBindingFails) {
     auto producer_compute = MakeMinimalComputeKernel("producer_compute");
     auto& producer_config = std::get<ComputeHardwareConfig>(producer_compute.hw_config);
     producer_config.fp32_dest_acc_en = true;
-    producer_config.unpack_to_dest_mode = {{"dfb_0", UnpackToDestMode::UnpackToDestFp32}};
+    producer_config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::UnpackToDestFp32}};
 
     auto consumer_dm = MakeMinimalDMKernel("consumer_dm");
 
     auto dfb = MakeMinimalDFB("dfb_0");
     dfb.data_format_metadata = tt::DataFormat::Float32;
 
-    producer_compute.dfb_bindings.push_back(ProducerOf("dfb_0", "out"));
-    consumer_dm.dfb_bindings.push_back(ConsumerOf("dfb_0", "in"));
+    producer_compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb_0"}, "out"));
+    consumer_dm.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_0"}, "in"));
 
     spec.kernels = {producer_compute, consumer_dm};
     spec.dataflow_buffers = {dfb};
     spec.work_units =
         std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer_compute", "consumer_dm"})};
 
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("does not have a CONSUMER endpoint on this DFB")));
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32WithoutFp32DestAccEnFails) {
     // UnpackToDestFp32 requires fp32_dest_acc_en=true (Dest must be 32-bit-wide to hold FP32).
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     for (auto& dfb : spec.dataflow_buffers) {
-        if (dfb.unique_id == "dfb_0") {
+        if (dfb.unique_id == DFBSpecName{"dfb_0"}) {
             dfb.data_format_metadata = tt::DataFormat::Float32;
         }
     }
@@ -1265,7 +1405,7 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32WithoutFp32DestAccEnFails) {
         if (kernel.is_compute_kernel()) {
             auto& config = std::get<ComputeHardwareConfig>(kernel.hw_config);
             // fp32_dest_acc_en stays at its default (false).
-            config.unpack_to_dest_mode = {{"dfb_0", UnpackToDestMode::UnpackToDestFp32}};
+            config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::UnpackToDestFp32}};
         }
     }
     EXPECT_THAT(
@@ -1274,29 +1414,11 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32WithoutFp32DestAccEnFails) {
             ::testing::HasSubstr("specifies UnpackToDestFp32, but fp32_dest_acc_en is false")));
 }
 
-TEST_F(ProgramSpecTestQuasar, DuplicateUnpackToDestModeEntriesFail) {
-    // Two entries for the same DFB is a user error; we reject rather than silently picking one.
-    ProgramSpec spec = MakeMinimalValidProgramSpec();
-    for (auto& kernel : spec.kernels) {
-        if (kernel.is_compute_kernel()) {
-            auto& config = std::get<ComputeHardwareConfig>(kernel.hw_config);
-            config.unpack_to_dest_mode = {
-                {"dfb_0", UnpackToDestMode::Default},
-                {"dfb_0", UnpackToDestMode::Default},
-            };
-        }
-    }
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("has duplicate unpack_to_dest_mode entries for DFB 'dfb_0'")));
-}
-
 TEST_F(ProgramSpecTestQuasar, FP32DFBWithDefaultUnpackToDestModeSucceeds) {
     // Default is always a valid value, even outside the (CONSUMER + FP32 + fp32_dest_acc_en) triple.
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     for (auto& dfb : spec.dataflow_buffers) {
-        if (dfb.unique_id == "dfb_0") {
+        if (dfb.unique_id == DFBSpecName{"dfb_0"}) {
             dfb.data_format_metadata = tt::DataFormat::Float32;
         }
     }
@@ -1304,7 +1426,7 @@ TEST_F(ProgramSpecTestQuasar, FP32DFBWithDefaultUnpackToDestModeSucceeds) {
         if (kernel.is_compute_kernel()) {
             auto& config = std::get<ComputeHardwareConfig>(kernel.hw_config);
             config.fp32_dest_acc_en = true;
-            config.unpack_to_dest_mode = {{"dfb_0", UnpackToDestMode::Default}};
+            config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::Default}};
         }
     }
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
@@ -1323,8 +1445,8 @@ TEST_F(ProgramSpecTestQuasar, DataFormatNotSupportedOnTargetArchitectureFails) {
     // Legacy block-float format; not supported on Quasar.
     dfb.data_format_metadata = tt::DataFormat::Bfp8;
 
-    producer.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    consumer.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
@@ -1353,8 +1475,8 @@ TEST_F(ProgramSpecTestQuasar, TooManyDFBsFailsValidation) {
         auto dfb = MakeMinimalDFB(name);
         dfb.data_format_metadata = tt::DataFormat::Float16_b;
         spec.dataflow_buffers.push_back(dfb);
-        producer.dfb_bindings.push_back(ProducerOf(name, "p_" + std::to_string(i)));
-        consumer.dfb_bindings.push_back(ConsumerOf(name, "c_" + std::to_string(i)));
+        producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{name}, "p_" + std::to_string(i)));
+        consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{name}, "c_" + std::to_string(i)));
     }
 
     spec.kernels = {producer, consumer};
@@ -1533,8 +1655,8 @@ TEST_F(ProgramSpecTestQuasar, LocalDFBProducerConsumerWorkUnitMembershipMismatch
     auto consumer = MakeMinimalDMKernel("consumer");
     auto dfb = MakeMinimalDFB("dfb");
 
-    producer.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    consumer.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
@@ -1563,14 +1685,14 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelInterScopeFails) {
     spec.name = "self_loop_inter";
 
     auto compute = MakeMinimalComputeKernel("compute");
-    compute.advanced_options = KernelAdvancedOptions{
-        .dfb_self_loop_connectivities = {{.dfb_spec_name = "dfb", .scope = DFBSelfLoopScope::INTER}}};
+    compute.advanced_options =
+        KernelAdvancedOptions{.dfb_self_loop_connectivities = {{DFBSpecName{"dfb"}, DFBSelfLoopConnectivity::INTER}}};
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    compute.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    compute.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
+    compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     spec.kernels = {compute};
     spec.dataflow_buffers = {dfb};
@@ -1590,13 +1712,13 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopScopeOnDMKernelFails) {
 
     auto producer = MakeMinimalDMKernel("producer");
     // Misapplied: self-loop scope entries are valid only on compute kernels.
-    producer.advanced_options = KernelAdvancedOptions{
-        .dfb_self_loop_connectivities = {{.dfb_spec_name = "dfb", .scope = DFBSelfLoopScope::INTRA}}};
+    producer.advanced_options =
+        KernelAdvancedOptions{.dfb_self_loop_connectivities = {{DFBSpecName{"dfb"}, DFBSelfLoopConnectivity::INTRA}}};
     auto consumer = MakeMinimalDMKernel("consumer");
 
     auto dfb = MakeMinimalDFB("dfb");
-    producer.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    consumer.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
@@ -1615,14 +1737,14 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopScopeReferencingUnknownDFBFails) {
 
     auto compute = MakeMinimalComputeKernel("compute");
     // Misapplied: there is no DFB named "ghost" in the spec.
-    compute.advanced_options = KernelAdvancedOptions{
-        .dfb_self_loop_connectivities = {{.dfb_spec_name = "ghost", .scope = DFBSelfLoopScope::INTRA}}};
+    compute.advanced_options =
+        KernelAdvancedOptions{.dfb_self_loop_connectivities = {{DFBSpecName{"ghost"}, DFBSelfLoopConnectivity::INTRA}}};
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    compute.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    compute.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
+    compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     spec.kernels = {compute};
     spec.dataflow_buffers = {dfb};
@@ -1641,15 +1763,15 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopScopeOnNonSelfLoopedDFBFails) {
 
     auto compute = MakeMinimalComputeKernel("compute");
     // Misapplied: the kernel only produces; it does not self-loop the DFB.
-    compute.advanced_options = KernelAdvancedOptions{
-        .dfb_self_loop_connectivities = {{.dfb_spec_name = "dfb", .scope = DFBSelfLoopScope::INTRA}}};
+    compute.advanced_options =
+        KernelAdvancedOptions{.dfb_self_loop_connectivities = {{DFBSpecName{"dfb"}, DFBSelfLoopConnectivity::INTRA}}};
     auto dm_consumer = MakeMinimalDMKernel("dm_consumer");
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    compute.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    dm_consumer.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
+    compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    dm_consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     spec.kernels = {compute, dm_consumer};
     spec.dataflow_buffers = {dfb};
@@ -1658,38 +1780,6 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopScopeOnNonSelfLoopedDFBFails) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("does not self-loop this DFB")));
-}
-
-TEST_F(ProgramSpecTestQuasar, DuplicateSelfLoopScopeEntriesFails) {
-    NodeCoord node{0, 0};
-
-    ProgramSpec spec;
-    spec.name = "self_loop_duplicate";
-
-    auto compute = MakeMinimalComputeKernel("compute");
-    // Two entries for the same DFB on the same kernel.
-    compute.advanced_options = KernelAdvancedOptions{
-        .dfb_self_loop_connectivities =
-            {
-                {.dfb_spec_name = "dfb", .scope = DFBSelfLoopScope::INTRA},
-                {.dfb_spec_name = "dfb", .scope = DFBSelfLoopScope::INTRA},
-            },
-    };
-
-    auto dfb = MakeMinimalDFB("dfb");
-    dfb.data_format_metadata = tt::DataFormat::Float16_b;
-
-    compute.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    compute.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
-
-    spec.kernels = {compute};
-    spec.dataflow_buffers = {dfb};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute"})};
-
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("duplicate dfb_self_loop_connectivities entries")));
 }
 
 // ============================================================================
@@ -1724,8 +1814,8 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelImplicitIntraSucceeds) {
     // INTRA-tensix self-loop: no DM endpoint, so the spec-to-impl translation produces
     // enable_{producer,consumer}_implicit_sync=false at the lower DFB layer automatically.
 
-    compute.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    compute.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
+    compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     spec.kernels = {compute};
     spec.dataflow_buffers = {dfb};
@@ -1744,14 +1834,14 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelExplicitIntraSucceeds) {
     spec.name = "self_loop_explicit_intra";
 
     auto compute = MakeMinimalComputeKernel("compute");
-    compute.advanced_options = KernelAdvancedOptions{
-        .dfb_self_loop_connectivities = {{.dfb_spec_name = "dfb", .scope = DFBSelfLoopScope::INTRA}}};
+    compute.advanced_options =
+        KernelAdvancedOptions{.dfb_self_loop_connectivities = {{DFBSpecName{"dfb"}, DFBSelfLoopConnectivity::INTRA}}};
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    compute.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    compute.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
+    compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     spec.kernels = {compute};
     spec.dataflow_buffers = {dfb};
@@ -1772,8 +1862,8 @@ TEST_F(ProgramSpecTestQuasar, DMOnlyProgramSucceeds) {
     auto dfb = MakeMinimalDFB("dfb");
     // No data_format_metadata needed for DM-only DFBs
 
-    producer.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    consumer.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
@@ -1793,8 +1883,8 @@ TEST_F(ProgramSpecTestQuasar, MultiNodeProgramSucceeds) {
     auto consumer = MakeMinimalDMKernel("consumer");
     auto dfb = MakeMinimalDFB("dfb");
 
-    producer.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    consumer.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
@@ -1835,8 +1925,8 @@ TEST_F(ProgramSpecTestQuasar, MaxDMThreadsSucceeds) {
     auto dfb = MakeMinimalDFB("dfb");
     dfb.num_entries = 9;  // must be a multiple of the number of threads
 
-    producer.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    consumer.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
@@ -1859,8 +1949,8 @@ TEST_F(ProgramSpecTestQuasar, MaxComputeThreadsSucceeds) {
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
     dfb.num_entries = 4;  // must be a multiple of the number of threads
 
-    dm.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    compute.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
+    dm.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     spec.kernels = {dm, compute};
     spec.dataflow_buffers = {dfb};
@@ -1883,10 +1973,10 @@ TEST_F(ProgramSpecTestQuasar, MultipleDFBsSucceeds) {
     auto dfb2 = MakeMinimalDFB("dfb2");
     dfb2.data_format_metadata = tt::DataFormat::Int8;
 
-    producer.dfb_bindings.push_back(ProducerOf("dfb1", "out1"));
-    producer.dfb_bindings.push_back(ProducerOf("dfb2", "out2"));
-    consumer.dfb_bindings.push_back(ConsumerOf("dfb1", "in1"));
-    consumer.dfb_bindings.push_back(ConsumerOf("dfb2", "in2"));
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb1"}, "out1"));
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb2"}, "out2"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb1"}, "in1"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb2"}, "in2"));
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb1, dfb2};
@@ -1933,8 +2023,7 @@ TEST_F(ProgramSpecTestQuasar, VarargPerNodeOverlapFails) {
     spec.name = "vararg_overlap_test";
     auto kernel = MakeMinimalDMKernel("dm_kernel");
     kernel.advanced_options = KernelAdvancedOptions{
-        .num_runtime_varargs_per_node =
-            KernelAdvancedOptions::NumVarargsPerNode{{both, 3}, {node_a, 3}},  // node_a listed twice
+        .num_runtime_varargs_per_node = Table<Nodes, uint32_t>{{both, 3}, {node_a, 3}},  // node_a listed twice
     };
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", both, {"dm_kernel"})};
@@ -1959,8 +2048,8 @@ TEST_F(ProgramSpecTestQuasar, NodeRangeSetTargetNodesSucceeds) {
     auto consumer = MakeMinimalDMKernel("consumer");
     auto dfb = MakeMinimalDFB("dfb");
 
-    producer.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    consumer.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
@@ -2000,7 +2089,7 @@ TEST_F(ProgramSpecTestQuasar, ValidUnpackToDestModeSucceeds) {
     // The full meaningfulness triple: FP32 DFB, consumed by a compute kernel with
     // fp32_dest_acc_en=true. UnpackToDestFp32 is meaningful here.
     for (auto& dfb : spec.dataflow_buffers) {
-        if (dfb.unique_id == "dfb_0") {
+        if (dfb.unique_id == DFBSpecName{"dfb_0"}) {
             dfb.data_format_metadata = tt::DataFormat::Float32;
         }
     }
@@ -2008,7 +2097,7 @@ TEST_F(ProgramSpecTestQuasar, ValidUnpackToDestModeSucceeds) {
         if (kernel.is_compute_kernel()) {
             auto& config = std::get<ComputeHardwareConfig>(kernel.hw_config);
             config.fp32_dest_acc_en = true;
-            config.unpack_to_dest_mode = {{"dfb_0", UnpackToDestMode::UnpackToDestFp32}};
+            config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::UnpackToDestFp32}};
         }
     }
 
@@ -2035,14 +2124,14 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestModePlacedAtDfbIdSlot) {
     // dfb_1 is FP32 so the user can opt into UnpackToDestFp32 on it.
     dfb1.data_format_metadata = tt::DataFormat::Float32;
 
-    producer.dfb_bindings.push_back(ProducerOf("dfb_0", "out0"));
-    producer.dfb_bindings.push_back(ProducerOf("dfb_1", "out1"));
-    consumer.dfb_bindings.push_back(ConsumerOf("dfb_0", "in0"));
-    consumer.dfb_bindings.push_back(ConsumerOf("dfb_1", "in1"));
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb_0"}, "out0"));
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb_1"}, "out1"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_0"}, "in0"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_1"}, "in1"));
 
     auto& compute_config = std::get<ComputeHardwareConfig>(consumer.hw_config);
     compute_config.fp32_dest_acc_en = true;
-    compute_config.unpack_to_dest_mode = {{"dfb_1", UnpackToDestMode::UnpackToDestFp32}};
+    compute_config.unpack_to_dest_mode = {{DFBSpecName{"dfb_1"}, UnpackToDestMode::UnpackToDestFp32}};
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb0, dfb1};
@@ -2287,9 +2376,9 @@ TEST_F(ProgramSpecTestQuasar, DFBMultiBindingForcesUniformRiscMaskAcrossProducer
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    producer_a.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    producer_b.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    consumer.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
+    producer_a.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    producer_b.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
     // unrelated_dm intentionally has no DFB bindings — it just consumes DM lanes on node0.
 
     spec.kernels = {producer_a, producer_b, unrelated_dm, consumer};
@@ -2363,7 +2452,7 @@ static_assert(
 TEST(AggregateSpecTypes, KernelSpecDesignatedInitializers) {
     // Demonstrates constructing KernelSpec with designated initializers
     KernelSpec dm_kernel{
-        .unique_id = "my_dm_kernel",
+        .unique_id = KernelSpecName{"my_dm_kernel"},
         .source = KernelSpec::SourceCode{"void kernel_main() {}"},
         .num_threads = 2,
         .hw_config =
@@ -2372,12 +2461,12 @@ TEST(AggregateSpecTypes, KernelSpecDesignatedInitializers) {
             },
     };
 
-    EXPECT_EQ(dm_kernel.unique_id, "my_dm_kernel");
+    EXPECT_EQ(dm_kernel.unique_id.get(), "my_dm_kernel");
     EXPECT_EQ(dm_kernel.num_threads, 2);
     EXPECT_TRUE(dm_kernel.is_data_movement_kernel());
 
     KernelSpec compute_kernel{
-        .unique_id = "my_compute_kernel",
+        .unique_id = KernelSpecName{"my_compute_kernel"},
         .source = KernelSpec::SourceCode{"void kernel_main() {}"},
         .num_threads = 4,
         .compiler_options =
@@ -2392,39 +2481,39 @@ TEST(AggregateSpecTypes, KernelSpecDesignatedInitializers) {
             },
     };
 
-    EXPECT_EQ(compute_kernel.unique_id, "my_compute_kernel");
+    EXPECT_EQ(compute_kernel.unique_id.get(), "my_compute_kernel");
     EXPECT_TRUE(compute_kernel.is_compute_kernel());
 }
 
 TEST(AggregateSpecTypes, DataflowBufferSpecDesignatedInitializers) {
     // Demonstrates constructing DataflowBufferSpec with designated initializers
     DataflowBufferSpec dfb{
-        .unique_id = "my_dfb",
+        .unique_id = DFBSpecName{"my_dfb"},
         .entry_size = 2048,
         .num_entries = 4,
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
 
-    EXPECT_EQ(dfb.unique_id, "my_dfb");
+    EXPECT_EQ(dfb.unique_id.get(), "my_dfb");
     EXPECT_EQ(dfb.entry_size, 2048u);
     EXPECT_EQ(dfb.num_entries, 4u);
 
     // DFB with advanced options
     DataflowBufferSpec borrowed_dfb{
-        .unique_id = "borrowed_dfb",
+        .unique_id = DFBSpecName{"borrowed_dfb"},
         .entry_size = 1024,
         .num_entries = 8,
-        .borrowed_from = "input_tensor",
+        .borrowed_from = TensorParamName{"input_tensor"},
     };
 
-    EXPECT_EQ(borrowed_dfb.borrowed_from, std::optional<TensorParameterName>{"input_tensor"});
+    EXPECT_EQ(borrowed_dfb.borrowed_from, std::optional<TensorParamName>{TensorParamName{"input_tensor"}});
 }
 
 TEST(AggregateSpecTypes, WorkUnitSpecDesignatedInitializers) {
     // Demonstrates constructing WorkUnitSpec with designated initializers
     WorkUnitSpec work_unit{
         .name = "my_work_unit",
-        .kernels = {"kernel1", "kernel2"},
+        .kernels = {KernelSpecName{"kernel1"}, KernelSpecName{"kernel2"}},
         .target_nodes = NodeCoord{0, 0},
     };
 
@@ -2458,7 +2547,7 @@ TEST(AggregateSpecTypes, VarargCountsOnAdvancedOptions) {
 
 TEST(AggregateSpecTypes, VarargPerNodeOverrideOnAdvancedOptions) {
     // Per-node override path (advanced): ensure designated-init works.
-    using NumVarargsPerNode = KernelAdvancedOptions::NumVarargsPerNode;
+    using NumVarargsPerNode = Table<Nodes, uint32_t>;
     KernelAdvancedOptions adv{
         .num_runtime_varargs_per_node = NumVarargsPerNode{{NodeCoord{0, 0}, 4}, {NodeCoord{1, 0}, 7}},
     };
@@ -2469,7 +2558,7 @@ TEST(AggregateSpecTypes, VarargPerNodeOverrideOnAdvancedOptions) {
 
 TEST(AggregateSpecTypes, KernelSpecNamedRuntimeArgsDesignatedInitializers) {
     KernelSpec k{
-        .unique_id = "k",
+        .unique_id = KernelSpecName{"k"},
         .source = KernelSpec::SourceCode{"void kernel_main() {}"},
         .runtime_arg_schema =
             KernelSpec::RuntimeArgSchema{
@@ -2486,12 +2575,12 @@ TEST(AggregateSpecTypes, KernelSpecNamedRuntimeArgsDesignatedInitializers) {
 TEST(AggregateSpecTypes, SemaphoreSpecDesignatedInitializers) {
     // Demonstrates constructing SemaphoreSpec with designated initializers
     SemaphoreSpec sem{
-        .unique_id = "my_semaphore",
+        .unique_id = SemaphoreSpecName{"my_semaphore"},
         .target_nodes = NodeCoord{0, 0},
         .advanced_options = SemaphoreAdvancedOptions{.initial_value = 7},
     };
 
-    EXPECT_EQ(sem.unique_id, "my_semaphore");
+    EXPECT_EQ(sem.unique_id.get(), "my_semaphore");
     EXPECT_EQ(sem.advanced_options.initial_value, 7u);
 }
 
@@ -2502,12 +2591,12 @@ TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
         .kernels =
             {
                 KernelSpec{
-                    .unique_id = "producer",
+                    .unique_id = KernelSpecName{"producer"},
                     .source = KernelSpec::SourceCode{"void kernel_main() {}"},
                     .dfb_bindings =
                         {
                             DFBBinding{
-                                .dfb_spec_name = "dfb",
+                                .dfb_spec_name = DFBSpecName{"dfb"},
                                 .accessor_name = "out",
                                 .endpoint_type = DFBEndpointType::PRODUCER,
                                 .access_pattern = DFBAccessPattern::STRIDED,
@@ -2519,12 +2608,12 @@ TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
                         },
                 },
                 KernelSpec{
-                    .unique_id = "consumer",
+                    .unique_id = KernelSpecName{"consumer"},
                     .source = KernelSpec::SourceCode{"void kernel_main() {}"},
                     .dfb_bindings =
                         {
                             DFBBinding{
-                                .dfb_spec_name = "dfb",
+                                .dfb_spec_name = DFBSpecName{"dfb"},
                                 .accessor_name = "in",
                                 .endpoint_type = DFBEndpointType::CONSUMER,
                                 .access_pattern = DFBAccessPattern::STRIDED,
@@ -2536,7 +2625,7 @@ TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
         .dataflow_buffers =
             {
                 DataflowBufferSpec{
-                    .unique_id = "dfb",
+                    .unique_id = DFBSpecName{"dfb"},
                     .entry_size = 1024,
                     .num_entries = 2,
                     .data_format_metadata = tt::DataFormat::Float16_b,
@@ -2546,7 +2635,7 @@ TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
             {
                 WorkUnitSpec{
                     .name = "work_unit",
-                    .kernels = {"producer", "consumer"},
+                    .kernels = {KernelSpecName{"producer"}, KernelSpecName{"consumer"}},
                     .target_nodes = NodeCoord{0, 0},
                 },
             },
@@ -2561,18 +2650,18 @@ TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
 TEST(AggregateSpecTypes, NestedStructsDesignatedInitializers) {
     // Demonstrates constructing nested configuration structs with designated initializers
     DFBBinding binding{
-        .dfb_spec_name = "my_dfb",
+        .dfb_spec_name = DFBSpecName{"my_dfb"},
         .accessor_name = "accessor",
         .endpoint_type = DFBEndpointType::PRODUCER,
         .access_pattern = DFBAccessPattern::ALL,
     };
-    EXPECT_EQ(binding.dfb_spec_name, "my_dfb");
+    EXPECT_EQ(binding.dfb_spec_name.get(), "my_dfb");
 
     SemaphoreBinding sem_binding{
-        .semaphore_spec_name = "my_sem",
+        .semaphore_spec_name = SemaphoreSpecName{"my_sem"},
         .accessor_name = "sem_accessor",
     };
-    EXPECT_EQ(sem_binding.semaphore_spec_name, "my_sem");
+    EXPECT_EQ(sem_binding.semaphore_spec_name.get(), "my_sem");
 
     KernelSpec::CompilerOptions opts{
         .include_paths = {"/path/to/include"},
@@ -2591,14 +2680,14 @@ TEST(AggregateSpecTypes, NestedStructsDesignatedInitializers) {
     RemoteDataflowBufferSpec remote_dfb{
         .dfb_spec =
             DataflowBufferSpec{
-                .unique_id = "remote_dfb",
+                .unique_id = DFBSpecName{"remote_dfb"},
                 .entry_size = 1024,
                 .num_entries = 2,
             },
         .producer_consumer_map = {{NodeCoord{0, 0}, NodeCoord{1, 0}}},
     };
     EXPECT_EQ(remote_dfb.producer_consumer_map.size(), 1u);
-    EXPECT_EQ(remote_dfb.dfb_spec.unique_id, "remote_dfb");
+    EXPECT_EQ(remote_dfb.dfb_spec.unique_id.get(), "remote_dfb");
 }
 
 // ============================================================================
@@ -2642,8 +2731,8 @@ TEST_F(ProgramSpecTestGen1, DMOnlyProgramSucceeds) {
     auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
     auto dfb = MakeMinimalDFB("dfb");
 
-    producer.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    consumer.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
@@ -2843,14 +2932,14 @@ TEST_F(ProgramSpecTestGen1, SemaphoreBoundToComputeKernelFailsOnGen1) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
 
     SemaphoreSpec sem;
-    sem.unique_id = "sem_0";
+    sem.unique_id = SemaphoreSpecName{"sem_0"};
     sem.target_nodes = NodeCoord{0, 0};
     spec.semaphores = {sem};
 
     // kernels[1] is the compute kernel in MakeMinimalGen1ValidProgramSpec
     ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
     spec.kernels[1].semaphore_bindings = {
-        SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "done_flag"}};
+        SemaphoreBinding{.semaphore_spec_name = SemaphoreSpecName{"sem_0"}, .accessor_name = "done_flag"}};
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
@@ -2863,14 +2952,14 @@ TEST_F(ProgramSpecTestGen1, SemaphoreBoundToDMKernelSucceedsOnGen1) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
 
     SemaphoreSpec sem;
-    sem.unique_id = "sem_0";
+    sem.unique_id = SemaphoreSpecName{"sem_0"};
     sem.target_nodes = NodeCoord{0, 0};
     spec.semaphores = {sem};
 
     // kernels[0] is the DM kernel in MakeMinimalGen1ValidProgramSpec
     ASSERT_TRUE(spec.kernels[0].is_data_movement_kernel());
     spec.kernels[0].semaphore_bindings = {
-        SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "done_flag"}};
+        SemaphoreBinding{.semaphore_spec_name = SemaphoreSpecName{"sem_0"}, .accessor_name = "done_flag"}};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
@@ -2880,13 +2969,13 @@ TEST_F(ProgramSpecTestGen1, SemaphoresWithNonZeroInitialValueSucceedOnGen1) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
 
     SemaphoreSpec sem;
-    sem.unique_id = "sem_0";
+    sem.unique_id = SemaphoreSpecName{"sem_0"};
     sem.target_nodes = NodeCoord{0, 0};
     sem.advanced_options = SemaphoreAdvancedOptions{.initial_value = 3};
     spec.semaphores = {sem};
 
     spec.kernels[0].semaphore_bindings = {
-        SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "done_flag"}};
+        SemaphoreBinding{.semaphore_spec_name = SemaphoreSpecName{"sem_0"}, .accessor_name = "done_flag"}};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
@@ -3003,11 +3092,11 @@ TEST_F(ProgramSpecTestGen1, AccessorNamesAcrossCategoriesAreSeparateNamespaces) 
     // semaphore and a tensor accessor, both also named "input_dfb" — the same string at a
     // C++ level — which should pass because they're in different namespaces.
     SemaphoreSpec sem;
-    sem.unique_id = "sem_0";
+    sem.unique_id = SemaphoreSpecName{"sem_0"};
     sem.target_nodes = NodeCoord{0, 0};
     spec.semaphores = {sem};
     spec.kernels[0].semaphore_bindings = {
-        SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "input_dfb"}};
+        SemaphoreBinding{.semaphore_spec_name = SemaphoreSpecName{"sem_0"}, .accessor_name = "input_dfb"}};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_dfb");
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
@@ -3143,7 +3232,7 @@ TEST_F(ProgramSpecTestGen1, DynamicTensorShape_InterleavedKernelHashStableAcross
             tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
         auto tensor_layout = tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, page_config, memory_config);
         TensorParameter tp{
-            .unique_id = "input_tensor",
+            .unique_id = TensorParamName{"input_tensor"},
             .spec = tt::tt_metal::TensorSpec(std::move(shape), std::move(tensor_layout)),
             .advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = true},
         };
@@ -3316,8 +3405,8 @@ TEST_F(ProgramSpecTestGen1, CompilerIncludePathsForwardedToKernelConfig) {
 
     auto dfb = MakeMinimalDFB("dfb_0");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
-    dm_kernel.dfb_bindings.push_back(ProducerOf("dfb_0", "input_dfb"));
-    compute_kernel.dfb_bindings.push_back(ConsumerOf("dfb_0", "input_dfb"));
+    dm_kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb_0"}, "input_dfb"));
+    compute_kernel.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_0"}, "input_dfb"));
 
     spec.kernels = {dm_kernel, compute_kernel};
     spec.dataflow_buffers = {dfb};
@@ -3372,8 +3461,8 @@ TEST_F(ProgramSpecTestQuasar, AliasDFBFailsOnMismatchedTotalSize) {
     // DFB_A: 512 * 8 = 4096 bytes, DFB_B: 256 * 8 = 2048 bytes — different totals → TT_FATAL
     auto dfb_a = MakeMinimalDFB("dfb_a", /*entry_size=*/512, /*num_entries=*/8);
     auto dfb_b = MakeMinimalDFB("dfb_b", /*entry_size=*/256, /*num_entries=*/8);
-    dfb_a.advanced_options = DFBAdvancedOptions{.alias_with = {"dfb_b"}};
-    dfb_b.advanced_options = DFBAdvancedOptions{.alias_with = {"dfb_a"}};
+    dfb_a.advanced_options = DFBAdvancedOptions{.alias_with = {DFBSpecName{"dfb_b"}}};
+    dfb_b.advanced_options = DFBAdvancedOptions{.alias_with = {DFBSpecName{"dfb_a"}}};
 
     const NodeCoord node{0, 0};
     auto spec = MakeAliasProgramSpec(node, dfb_a, dfb_b);
@@ -3388,7 +3477,7 @@ TEST_F(ProgramSpecTestQuasar, AliasDFBFailsOnAsymmetricDeclaration) {
     // DFB_A lists DFB_B but DFB_B does not list DFB_A — clique violation → TT_FATAL
     auto dfb_a = MakeMinimalDFB("dfb_a", /*entry_size=*/512, /*num_entries=*/8);
     auto dfb_b = MakeMinimalDFB("dfb_b", /*entry_size=*/256, /*num_entries=*/16);
-    dfb_a.advanced_options = DFBAdvancedOptions{.alias_with = {"dfb_b"}};
+    dfb_a.advanced_options = DFBAdvancedOptions{.alias_with = {DFBSpecName{"dfb_b"}}};
     // dfb_b.alias_with intentionally left empty
 
     const NodeCoord node{0, 0};
@@ -3414,17 +3503,17 @@ TEST_F(ProgramSpecTestQuasar, AliasDFBMatmulStyleSucceeds) {
 
     auto dfb_a = MakeMinimalDFB("dfb_a", /*entry_size=*/512, /*num_entries=*/8);
     auto dfb_b = MakeMinimalDFB("dfb_b", /*entry_size=*/512, /*num_entries=*/8);
-    dfb_a.advanced_options = DFBAdvancedOptions{.alias_with = {"dfb_b"}};
-    dfb_b.advanced_options = DFBAdvancedOptions{.alias_with = {"dfb_a"}};
+    dfb_a.advanced_options = DFBAdvancedOptions{.alias_with = {DFBSpecName{"dfb_b"}}};
+    dfb_b.advanced_options = DFBAdvancedOptions{.alias_with = {DFBSpecName{"dfb_a"}}};
 
     KernelSpec producer = MakeMinimalDMKernel("producer_kernel");
     KernelSpec consumer = MakeMinimalDMKernel("consumer_kernel");
     KernelSpec other = MakeMinimalDMKernel("other_kernel");
 
-    producer.dfb_bindings.push_back(ProducerOf("dfb_a", "out_a"));
-    consumer.dfb_bindings.push_back(ConsumerOf("dfb_a", "in_a"));
-    producer.dfb_bindings.push_back(ProducerOf("dfb_b", "out_b"));
-    other.dfb_bindings.push_back(ConsumerOf("dfb_b", "in_b"));
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb_a"}, "out_a"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_a"}, "in_a"));
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb_b"}, "out_b"));
+    other.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_b"}, "in_b"));
 
     ProgramSpec spec;
     spec.kernels = {producer, consumer, other};
@@ -3444,17 +3533,17 @@ TEST_F(ProgramSpecTestQuasar, AliasDFBFailsOnDifferentNodeCoverage) {
 
     auto dfb_a = MakeMinimalDFB("dfb_a", /*entry_size=*/512, /*num_entries=*/8);
     auto dfb_b = MakeMinimalDFB("dfb_b", /*entry_size=*/512, /*num_entries=*/8);
-    dfb_a.advanced_options = DFBAdvancedOptions{.alias_with = {"dfb_b"}};
-    dfb_b.advanced_options = DFBAdvancedOptions{.alias_with = {"dfb_a"}};
+    dfb_a.advanced_options = DFBAdvancedOptions{.alias_with = {DFBSpecName{"dfb_b"}}};
+    dfb_b.advanced_options = DFBAdvancedOptions{.alias_with = {DFBSpecName{"dfb_a"}}};
 
     KernelSpec producer_a = MakeMinimalDMKernel("producer_a");
     KernelSpec consumer_a = MakeMinimalDMKernel("consumer_a");
     KernelSpec producer_b = MakeMinimalDMKernel("producer_b");
     KernelSpec consumer_b = MakeMinimalDMKernel("consumer_b");
-    producer_a.dfb_bindings.push_back(ProducerOf("dfb_a", "out_a"));
-    consumer_a.dfb_bindings.push_back(ConsumerOf("dfb_a", "in_a"));
-    producer_b.dfb_bindings.push_back(ProducerOf("dfb_b", "out_b"));
-    consumer_b.dfb_bindings.push_back(ConsumerOf("dfb_b", "in_b"));
+    producer_a.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb_a"}, "out_a"));
+    consumer_a.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_a"}, "in_a"));
+    producer_b.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb_b"}, "out_b"));
+    consumer_b.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_b"}, "in_b"));
 
     ProgramSpec spec;
     spec.kernels = {producer_a, consumer_a, producer_b, consumer_b};
@@ -3476,17 +3565,17 @@ TEST_F(ProgramSpecTestQuasar, AliasDFBFailsOnInconsistentBorrowedFrom) {
 
     auto dfb_a = MakeMinimalDFB("dfb_a", /*entry_size=*/16, /*num_entries=*/2);
     auto dfb_b = MakeMinimalDFB("dfb_b", /*entry_size=*/16, /*num_entries=*/2);
-    dfb_a.advanced_options = DFBAdvancedOptions{.alias_with = {"dfb_b"}};
-    dfb_b.advanced_options = DFBAdvancedOptions{.alias_with = {"dfb_a"}};
-    dfb_a.borrowed_from = "borrowed_tensor";
+    dfb_a.advanced_options = DFBAdvancedOptions{.alias_with = {DFBSpecName{"dfb_b"}}};
+    dfb_b.advanced_options = DFBAdvancedOptions{.alias_with = {DFBSpecName{"dfb_a"}}};
+    dfb_a.borrowed_from = TensorParamName{"borrowed_tensor"};
     // dfb_b.borrowed_from intentionally left unset
 
     KernelSpec producer = MakeMinimalDMKernel("producer_kernel");
     KernelSpec consumer = MakeMinimalDMKernel("consumer_kernel");
-    producer.dfb_bindings.push_back(ProducerOf("dfb_a", "out_a"));
-    consumer.dfb_bindings.push_back(ConsumerOf("dfb_a", "in_a"));
-    producer.dfb_bindings.push_back(ProducerOf("dfb_b", "out_b"));
-    consumer.dfb_bindings.push_back(ConsumerOf("dfb_b", "in_b"));
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb_a"}, "out_a"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_a"}, "in_a"));
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb_b"}, "out_b"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_b"}, "in_b"));
 
     auto tensor_param = MakeMinimalTensorParameter("borrowed_tensor", tt::tt_metal::BufferType::L1);
     BindTensorParameterToKernel(producer, "borrowed_tensor", "borrowed_t");

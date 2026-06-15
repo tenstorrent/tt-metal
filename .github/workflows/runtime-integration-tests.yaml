@@ -64,16 +64,16 @@ jobs:
     uses: ./.github/workflows/runtime-integration-tests-impl.yaml
     secrets: inherit
     with:
-      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: >-
         ${{
           github.event_name == 'schedule'
-            && 'wh_n150_civ2,bh_p150b_civ2,bh_quietbox'
+            && 'wh_n150_civ2,bh_p150b_civ2,bh_loudbox'
             || format('{0}{1}',
               inputs.wormhole && 'wh_n150_civ2' || '',
-              inputs.blackhole && format('{0}bh_p150b_civ2,bh_quietbox',
+              inputs.blackhole && format('{0}bh_p150b_civ2,bh_loudbox',
                 inputs.wormhole && ',' || '') || ''
             )
         }}

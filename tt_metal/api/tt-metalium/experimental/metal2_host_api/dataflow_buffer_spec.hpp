@@ -13,6 +13,7 @@
 
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/face_geometry.hpp>
 #include <tt-metalium/tile.hpp>
@@ -65,8 +66,8 @@
 
 namespace tt::tt_metal::experimental {
 
-// A name identifying a DataflowBufferSpec within a ProgramSpec.
-using DFBSpecName = std::string;
+// DFBSpecName is defined in advanced_options.hpp (included above) — the lowest
+// header that references it.
 
 //------------------------------------------------
 // DataflowBufferSpec
@@ -122,8 +123,8 @@ struct DataflowBufferSpec {
     // The bound memory object must have L1-based storage and be large enough to hold the DFB's
     // total size (entry_size * num_entries).
     //
-    // (TODO: this should become std::variant<TensorParameterName, BufferParameterName>.)
-    std::optional<TensorParameterName> borrowed_from = std::nullopt;
+    // (TODO: this should become std::variant<TensorParamName, BufferParameterName>.)
+    std::optional<TensorParamName> borrowed_from = std::nullopt;
 
     //////////////////////////////
     // Advanced options (see advanced_options.hpp)
@@ -169,7 +170,10 @@ struct RemoteDataflowBufferSpec {
 
     // Producer-consumer node mapping: each entry pairs a producer node with the
     // consumer node it feeds.
-    using ProducerConsumerMap = std::vector<std::pair<NodeCoord, NodeCoord>>;
+    // (What about multi-casting? TBD.)
+    using ProducerNode = NodeCoord;
+    using ConsumerNode = NodeCoord;
+    using ProducerConsumerMap = Table<ProducerNode, ConsumerNode>;
     ProducerConsumerMap producer_consumer_map;
 };
 

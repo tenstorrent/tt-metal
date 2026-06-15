@@ -69,7 +69,7 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/t3000-perf-tests-impl.yaml
     with:
-      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       enabled-skus: "wh_llmbox_perf"
