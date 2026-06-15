@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 import os
@@ -215,6 +215,8 @@ def test_decoder_inference(
             freqs_cis_i,
             mask=attn_mask,
         )
+        if ref_output.dim() == 2:
+            ref_output = ref_output.unsqueeze(0)
         # Run TT model
         tt_out = tt_model(
             decode_input,

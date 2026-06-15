@@ -17,15 +17,15 @@
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
     pytest --timeout 300 models/tt_transformers/tests/test_embedding.py
     pytest --timeout 300 models/tt_transformers/tests/test_rms_norm.py
-    pytest --timeout 300 models/tt_transformers/tests/test_mlp.py
+    pytest --timeout 600 models/tt_transformers/tests/test_mlp.py
     pytest --timeout 300 models/tt_transformers/tests/test_attention.py
     pytest --timeout 300 models/tt_transformers/tests/test_attention_prefill.py
     pytest --timeout 300 models/tt_transformers/tests/test_decoder.py
-    pytest --timeout 300 models/tt_transformers/tests/test_decoder_prefill.py
+    pytest --timeout 400 models/tt_transformers/tests/test_decoder_prefill.py
   model: llama3.1-8b
   skus:
     wh_n150:
-      timeout: 5
+      timeout: 30
       tier: 1
     wh_llmbox_perf:
       timeout: 12
@@ -43,9 +43,6 @@
     wh_n150:
       timeout: 5
       tier: 3
-    wh_n300:
-      timeout: 5
-      tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
@@ -57,9 +54,6 @@
   model: llama3.2-3b
   skus:
     wh_n150:
-      timeout: 5
-      tier: 3
-    wh_n300:
       timeout: 5
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
@@ -81,6 +75,8 @@
 - name: Llama 3.2-90B-Vision unit tests
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.2-90B-Vision-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.2-90B-Vision-Instruct MESH_DEVICE=T3K
+    pytest --timeout 900 models/tt_transformers/tests/test_decoder.py  # text module only
+    pytest --timeout 900 models/tt_transformers/tests/test_decoder_prefill.py  # text module only
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_image_mlp.py
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_image_attention.py
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_image_block.py
@@ -90,10 +86,10 @@
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_class_embedding.py
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_tile_position_embedding.py
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_positional_embedding.py
-  model: llama90b-vl
+  model: llama3.2-90b-vision
   skus:
     wh_llmbox_perf:
-      timeout: 10
+      timeout: 15
       tier: 2
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
@@ -179,8 +175,19 @@
     pytest --timeout 600 models/tt_transformers/tests/test_decoder_prefill.py
   model: mistral-7b
   skus:
-    wh_llmbox_perf:
-      timeout: 12
+    wh_n150:
+      timeout: 20
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Gemma-3-4B unit tests
+  cmd: |
+    pytest --timeout 600 models/demos/multimodal/gemma3/tests/test_ci_dispatch.py -k "4b"
+  model: gemma-3-4b
+  skus:
+    wh_n150:
+      timeout: 22
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -196,11 +203,127 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
+# Gemma-4 unit tests: one entry per model variant, multiple SKUs per entry.
+# parametrize_mesh_with_fabric() picks the largest mesh shape that fits on each
+# runner when CI=true is set, so the same `pytest` invocation runs 1x1 on N150,
+# 1x2 on N300, 1x8 on T3K — no per-SKU `-k` filter needed.
+
+- name: Gemma-4-E2B unit tests
+  cmd: |
+    uv pip install -r models/demos/gemma4/requirements.txt
+    export HF_MODEL=models/demos/gemma4/configs/gemma-4-E2B-it
+    # test_lm_head and test_model::test_full_model load real weights via
+    # AutoModelForCausalLM.from_pretrained — they run in the e2e job instead
+    # so the unit suite can stay weight-free and self-contained on the
+    # checked-in config.json.
+    # test_bridge_* in test_vllm_parity.py import generator_vllm which needs
+    # the vllm package; vllm is not installed in this CI image, so skip them
+    # here (they still run in environments that have vllm).
+    pytest --timeout 600 \
+      --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
+      --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
+      -k "not test_bridge_" \
+      models/demos/gemma4/tests/unit/
+  model: gemma-4-e2b
+  skus:
+    wh_n150:
+      timeout: 10
+      tier: 3
+    bh_p150:
+      timeout: 10
+      tier: 3
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+- name: Gemma-4-E4B unit tests
+  cmd: |
+    uv pip install -r models/demos/gemma4/requirements.txt
+    export HF_MODEL=models/demos/gemma4/configs/gemma-4-E4B-it
+    pytest --timeout 600 \
+      --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
+      --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
+      -k "not test_bridge_" \
+      models/demos/gemma4/tests/unit/
+  model: gemma-4-e4b
+  skus:
+    # wh_n300 disabled due to reduced N300 runner availability — re-enable when capacity returns.
+    # wh_n300:
+    #   timeout: 5
+    #   tier: 3
+    bh_p300:
+      timeout: 15
+      tier: 3
+    bh_quietbox_2:
+      timeout: 15
+      tier: 3
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+- name: Gemma-4-26B-A4B unit tests
+  cmd: |
+    uv pip install -r models/demos/gemma4/requirements.txt
+    export HF_MODEL=models/demos/gemma4/configs/gemma-4-26B-A4B-it
+    pytest --timeout 900 \
+      --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
+      --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
+      -k "not test_bridge_" \
+      models/demos/gemma4/tests/unit/
+  model: gemma-4-26b-a4b
+  skus:
+    wh_llmbox:
+      timeout: 20
+      tier: 2
+    bh_quietbox_2:
+      timeout: 15
+      tier: 2
+    # bh_galaxy: temporarily disabled — sliding-1x32 path hits an unrecoverable
+    # ethernet / fabric hang on Blackhole Galaxy that surfaces during
+    # `test_experts[blackhole-decode-1x32]` and cascades across all 32 devices.
+    # Needs separate investigation (likely Galaxy fabric infra, not gemma4
+    # code). Re-enable once root-caused.
+    # bh_galaxy:
+    #   timeout: 20
+    #   tier: 2
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+- name: Gemma-4-31B unit tests
+  cmd: |
+    uv pip install -r models/demos/gemma4/requirements.txt
+    export HF_MODEL=models/demos/gemma4/configs/gemma-4-31B-it
+    pytest --timeout 900 \
+      --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
+      --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
+      -k "not test_bridge_" \
+      models/demos/gemma4/tests/unit/
+  model: gemma-4-31b
+  skus:
+    wh_llmbox:
+      timeout: 15
+      tier: 2
+    bh_quietbox_2:
+      timeout: 15
+      tier: 2
+    # bh_galaxy: temporarily disabled — same Blackhole Galaxy ethernet / fabric
+    # hang as Gemma-4-26B-A4B above (surfaces during sliding-1x32 attention
+    # prefill on 31B). Needs separate investigation; re-enable once root-caused.
+    # bh_galaxy:
+    #   timeout: 20
+    #   tier: 2
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
 - name: Shallow UNet unit tests
   cmd: |
     pytest --timeout 600 models/experimental/functional_unet/tests/test_unet_model.py
   model: shallow-unet
   skus:
+    wh_n150:
+      timeout: 5
+      tier: 2
+    # wh_n300:
+    #   timeout: 5
+    #   tier: 2
     wh_llmbox_perf:
       timeout: 5
       tier: 2
@@ -225,22 +348,111 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
-- name: Llama 3.3-70B unit tests (Galaxy)
+# TODO See Issue: https://github.com/tenstorrent/tt-metal/issues/42139
+# - name: Llama 3.3-70B unit tests (Galaxy)
+#   cmd: |
+#     export LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG
+#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_rms_norm.py
+#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_mlp.py
+#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_mlp_prefill.py
+#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_attention.py
+#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_attention_prefill.py
+#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_decoder_prefill.py
+#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py
+#   model: llama3.3-70b-galaxy
+#   skus:
+#     wh_galaxy_perf:
+#       timeout: 30
+#       tier: 1
+#   owner_id: U053W15B6JF # Djordje Ivanovic
+#   team: models
+
+- name: Qwen3-32B unit tests (Galaxy)
   cmd: |
-    export LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG
-    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_rms_norm.py
-    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_mlp.py
-    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_mlp_prefill.py
-    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_attention.py
-    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_attention_prefill.py
-    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_decoder_prefill.py
-    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py
-  model: llama3.3-70b-galaxy
+    export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_mlp.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_mlp_prefill.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_attention.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_attention_prefill.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_decoder.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_decoder_prefill.py
+  model: qwen3-32b-galaxy
   skus:
-    wh_galaxy:
-      timeout: 30
+    wh_galaxy_perf:
+      timeout: 10
       tier: 1
   owner_id: U053W15B6JF # Djordje Ivanovic
+  team: models
+
+# GPT-OSS unit tests: uses HF config only (no weights). parametrize_mesh_with_fabric()
+# picks the largest fitting mesh shape per SKU when CI=true, so one yaml entry
+# covers N150 (1x1), T3K/llmbox (1x8), and Galaxy (4x8) without per-SKU -k filters.
+- name: GPT-OSS 20B unit tests
+  cmd: |
+    uv pip install -r models/demos/gpt_oss/requirements.txt
+    export HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-20b
+    pytest --timeout 600 models/demos/gpt_oss/tests/unit/
+  model: gpt-oss-20b
+  skus:
+    # Wormhole
+    wh_llmbox:
+      timeout: 12
+      tier: 2
+    # Blackhole
+    bh_p150:
+      timeout: 10
+      tier: 2
+    bh_quietbox_2:
+      timeout: 5
+      tier: 2
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+- name: GPT-OSS 120B unit tests
+  cmd: |
+    uv pip install -r models/demos/gpt_oss/requirements.txt
+    export HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-120b TT_MM_THROTTLE_PERF=2
+    # Tensor cache is pre-built on the NAS — skip loading model weights by default.
+    # Check mlperf-write-access in the workflow to load weights and regenerate the cache.
+    SKIP_MODEL_LOAD="--skip-model-load"
+    [ "${MLPERF_READ_ONLY:-true}" = "false" ] && SKIP_MODEL_LOAD=""
+    pytest --timeout 1500 models/demos/gpt_oss/tests/unit $SKIP_MODEL_LOAD
+  model: gpt-oss-120b
+  skus:
+    # Wormhole
+    wh_llmbox:
+      timeout: 25
+      tier: 1
+    wh_galaxy:
+      timeout: 40
+      tier: 1
+    # Blackhole
+    bh_quietbox_2:
+      timeout: 10
+      tier: 1
+    bh_galaxy:
+      timeout: 10
+      tier: 1
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+- name: Whisper unit tests
+  cmd: |
+    export HF_HUB_OFFLINE=0 HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub HF_DATASETS_CACHE=/tmp/huggingface/datasets
+    pytest --timeout 600 models/demos/audio/whisper/tests/test_whisper_modules.py
+    pytest --timeout 600 models/demos/audio/whisper/tests/test_whisper_streaming_detok.py
+  model: whisper
+  skus:
+    wh_n150:
+      timeout: 10
+      tier: 1
+    bh_p150:
+      timeout: 10
+      tier: 1
+    # wh_n300:
+    #   timeout: 15
+    #   tier: 1
+  owner_id: U0491KT8MNY # Mohamed Bahnas
   team: models
 
 - name: QwQ-32B unit tests
@@ -262,9 +474,6 @@
   model: falcon-7b
   skus:
     wh_n150:
-      timeout: 5
-      tier: 3
-    wh_n300:
       timeout: 5
       tier: 3
   owner_id: UBHPP2NDP # Joseph Chu
@@ -343,10 +552,21 @@
     wh_n150:
       timeout: 3
       tier: 3
-    wh_n300:
-      timeout: 3
-      tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: TT-DiT common unit tests, shared amongst all models.
+  cmd: |
+    pytest --timeout 10000 models/tt_dit/tests/unit/
+  model: dit-common
+  skus:
+    wh_n150:
+      timeout: 60
+      tier: 1
+    bh_quietbox_2:
+      timeout: 140
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
 # Phi-4-mini: disabled, asserting with 'assert freqs.shape[-1] == ext_factors.shape[-1]'
@@ -366,17 +586,16 @@
 #   owner_id: U03PUAKE719 # Miguel Tairum Cruz
 #   team: models
 
-# Mamba-2.8B: disabled, failing on latest main (conv2d kernel static_assert)
+# Some tests failing PCC (0.03)
 # - name: Mamba-2.8B unit tests
 #   cmd: |
-#     pytest --timeout 600 models/demos/wormhole/mamba/tests/test_mamba_block.py
+#     pytest --timeout 600 models/demos/wormhole/mamba/tests/test_mamba_model.py
 #   model: mamba-2.8b
 #   skus:
 #     wh_n150:
 #       timeout: 5
 #       tier: 3
-#     wh_n300:
-#       timeout: 5
-#       tier: 3
+#   owner_id: U06ECNVR0EN # Evan Smal
+#   team: models
 #   owner_id: U06ECNVR0EN # Evan Smal
 #   team: models

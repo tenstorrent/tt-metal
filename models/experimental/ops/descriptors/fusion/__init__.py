@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -15,11 +15,10 @@ from models.experimental.ops.descriptors.fusion.fusion import (
     Sequential,
     clear_build_cache,
 )
+from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
 from models.experimental.ops.descriptors.fusion.graph import (
-    CoreGroup,
     OpGraphBuilder,
     OpNode,
-    build_op_graph,
 )
 from models.experimental.ops.descriptors.fusion.common import (
     BarrierConfig,
@@ -35,7 +34,6 @@ from models.experimental.ops.descriptors.fusion.cb_allocator import (
 from models.experimental.ops.descriptors.fusion.codegen import (
     collect_defines,
     collect_includes,
-    extract_kernel_body,
     inline_local_includes,
 )
 
@@ -44,11 +42,10 @@ __all__ = [
     "Sequential",
     "Parallel",
     "FusedOp",
+    "OpDescriptor",
     # Graph API
     "OpNode",
-    "CoreGroup",
     "OpGraphBuilder",
-    "build_op_graph",
     # CB management
     "CBPoolAllocator",
     "CBInfo",
@@ -60,7 +57,6 @@ __all__ = [
     "num_cbs_for_device",
     "clear_build_cache",
     # C++ parsing
-    "extract_kernel_body",
     "inline_local_includes",
     "collect_includes",
     "collect_defines",

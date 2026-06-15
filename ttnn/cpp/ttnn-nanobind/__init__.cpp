@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,9 +14,12 @@
 #include "ttnn-nanobind/device.hpp"
 #include "ttnn-nanobind/events.hpp"
 #include "ttnn-nanobind/fabric.hpp"
+#include "ttnn-nanobind/disaggregation.hpp"
 #include "ttnn-nanobind/global_circular_buffer.hpp"
 #include "ttnn-nanobind/global_semaphore.hpp"
 #include "ttnn-nanobind/hd_socket.hpp"
+#include "ttnn-nanobind/counter_channel.hpp"
+#include "ttnn-nanobind/h2d_stream_service.hpp"
 #include "ttnn-nanobind/mesh_socket.hpp"
 #include "ttnn-nanobind/bfp_utils.hpp"
 #include "ttnn-nanobind/operations/copy.hpp"
@@ -63,7 +66,6 @@
 #include "ttnn/operations/normalization/normalization_nanobind.hpp"
 #include "ttnn/operations/point_to_point/point_to_point_nanobind.hpp"
 #include "ttnn/operations/pool/generic/generic_pools_nanobind.hpp"
-#include "ttnn/operations/pool/global_avg_pool/global_avg_pool_nanobind.hpp"
 #include "ttnn/operations/pool/rotate/rotate_nanobind.hpp"
 #include "ttnn/operations/pool/upsample/upsample_nanobind.hpp"
 #include "ttnn/operations/pool/grid_sample/grid_sample_nanobind.hpp"
@@ -73,6 +75,7 @@
 #include "ttnn/operations/transformer/transformer_nanobind.hpp"
 #include "ttnn/operations/uniform/uniform_nanobind.hpp"
 #include "ttnn/operations/rand/rand_nanobind.hpp"
+#include "ttnn/operations/randn/randn_nanobind.hpp"
 #include "ttnn/operations/experimental/test/hang_device/hang_device_operation_nanobind.hpp"
 
 namespace nb = nanobind;
@@ -159,7 +162,6 @@ void py_module(nb::module_& mod) {
 
     auto m_pool = mod.def_submodule("pool", "pooling  operations");
     pool::py_module(m_pool);
-    avgpool::py_module(m_pool);
     rotate::py_module(m_pool);
     upsample::py_module(m_pool);
     grid_sample::bind_grid_sample(m_pool);
@@ -185,6 +187,10 @@ void py_module(nb::module_& mod) {
     auto m_experimental = mod.def_submodule("experimental", "experimental operations");
     experimental::py_module(m_experimental);
 
+    auto m_disaggregation =
+        m_experimental.def_submodule("disaggregation", "Disaggregation APIs for KV cache management");
+    disaggregation::bind_disaggregation_api(m_disaggregation);
+
     auto m_moreh = mod.def_submodule("moreh", "moreh operations");
     moreh::bind_moreh_operations(m_moreh);
 
@@ -205,6 +211,9 @@ void py_module(nb::module_& mod) {
 
     auto m_rand = mod.def_submodule("rand", "ttnn rand operation");
     rand::bind_rand_operation(m_rand);
+
+    auto m_randn = mod.def_submodule("randn", "ttnn randn operation");
+    randn::bind_randn_operation(m_randn);
 
     auto m_point_to_point = mod.def_submodule("point_to_point", "point_to_point operations");
     point_to_point::bind_point_to_point(m_point_to_point);
@@ -239,6 +248,9 @@ NB_MODULE(_ttnn, mod) {
     auto m_global_circular_buffer = mod.def_submodule("global_circular_buffer", "ttnn global circular buffer");
     auto m_global_semaphore = mod.def_submodule("global_semaphore", "ttnn global semaphore");
     auto m_hd_socket = mod.def_submodule("hd_socket", "ttnn host-device sockets");
+    auto m_h2d_stream_service =
+        mod.def_submodule("h2d_stream_service", "ttnn persistent host-to-device streaming service");
+    auto m_counter_channel = mod.def_submodule("counter_channel", "ttnn cross-process producer-counter channel");
     auto m_mesh_socket = mod.def_submodule("mesh_socket", "ttnn mesh socket");
     auto m_profiler = mod.def_submodule("profiler", "Submodule defining the profiler");
     auto m_reports = mod.def_submodule("reports", "ttnn reports");
@@ -263,6 +275,8 @@ NB_MODULE(_ttnn, mod) {
     ttnn::global_circular_buffer::py_module_types(m_global_circular_buffer);
     ttnn::global_semaphore::py_module_types(m_global_semaphore);
     ttnn::hd_socket::py_module_types(m_hd_socket);
+    ttnn::h2d_stream_service::py_module_types(m_h2d_stream_service);
+    ttnn::counter_channel::py_module_types(m_counter_channel);
     ttnn::mesh_socket::py_module_types(m_mesh_socket);
     ttnn::reports::py_module_types(m_reports);
     ttnn::program_descriptors::py_module_types(m_program_descriptors);
@@ -300,6 +314,8 @@ NB_MODULE(_ttnn, mod) {
     ttnn::global_circular_buffer::py_module(m_global_circular_buffer);
     ttnn::global_semaphore::py_module(m_global_semaphore);
     ttnn::hd_socket::py_module(m_hd_socket);
+    ttnn::h2d_stream_service::py_module(m_h2d_stream_service);
+    ttnn::counter_channel::py_module(m_counter_channel);
     ttnn::mesh_socket::py_module(m_mesh_socket);
     ttnn::profiler::py_module(m_profiler);
     ttnn::reports::py_module(m_reports);
@@ -311,7 +327,13 @@ NB_MODULE(_ttnn, mod) {
     ttnn::operations::py_module(m_operations);
     // tt::operations::primary::py_module(m_primary_ops);
 
-    mod.attr("CONFIG") = &ttnn::CONFIG;
+    // CONFIG is a shared mutable global: Python code reads and writes properties
+    // via setattr (e.g. manage_config context manager).  We must bind by reference
+    // so mutations are visible across C++ and Python.  Suppress the leak warning
+    // for this one binding — the object is intentionally static-lifetime.
+    nb::set_leak_warnings(false);
+    mod.attr("CONFIG") = nb::cast(&ttnn::CONFIG, nb::rv_policy::reference);
+    nb::set_leak_warnings(true);
     mod.def(
         "get_python_operation_id",
         []() -> std::uint64_t { return ttnn::CoreIDs::instance().get_python_operation_id(); },

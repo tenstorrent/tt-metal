@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,12 +8,14 @@
 #include <optional>
 #include <vector>
 
-#include "ttnn/decorators.hpp"
-
 #include <tt-metalium/global_circular_buffer.hpp>
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 
+// Worker-sender prefetcher op. `global_cb` must be a worker-sender GCB; passing a
+// DRAM-sender GCB will TT_FATAL with a redirect to
+// ttnn.experimental.start_dram_core_prefetcher / ttnn.experimental.stop_dram_core_prefetcher.
 ttnn::Tensor dram_prefetcher(
     std::vector<ttnn::Tensor>& tensors,
     uint32_t num_layers,

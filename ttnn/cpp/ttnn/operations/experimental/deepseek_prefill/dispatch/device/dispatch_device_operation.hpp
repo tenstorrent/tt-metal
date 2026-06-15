@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,8 +10,6 @@
 
 #include "dispatch_types.hpp"
 #include "dispatch_program_factory.hpp"
-#include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::dispatch {
 
@@ -57,10 +55,13 @@ prefill_dispatch(
     uint32_t num_routed_experts,
     uint32_t num_experts_per_tok,
     uint32_t metadata_len,
-    uint32_t max_dispatched_tokens_per_expert,
+    uint32_t max_dispatch_buffer_token_size,
     std::optional<uint32_t> axis,
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
-    const CoreRangeSet& worker_core_range_set);
+    const CoreRangeSet& worker_core_range_set,
+    bool use_l1_small_for_semaphores = false,
+    bool use_fp8_dispatch = false,
+    uint32_t num_untilizers_per_sender = 2);
 }  // namespace ttnn::prim

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -104,5 +104,5 @@ inline void llk_unpack_AB_reduce_block_max_row_runtime(
  * Use standard LLK cleanup procedures for general-purpose operations.
  */
 inline void llk_unpack_AB_reduce_block_max_row_uninit_runtime(bool respect_trigger = false) {
-    _llk_unpack_AB_reduce_block_max_row_uninit_runtime_(FACE_R_DIM, FACE_R_DIM, respect_trigger);
+    _llk_unpack_AB_reduce_block_max_row_uninit_runtime_(respect_trigger);
 }

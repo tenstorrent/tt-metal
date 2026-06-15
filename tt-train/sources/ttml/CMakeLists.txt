@@ -3,6 +3,7 @@ project(ttml)
 set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/auto_context.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/autocast_tensor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/autograd/callback.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/graph.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/clip_grad_norm.cpp
@@ -49,6 +50,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/single_head_attention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/binary_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/comm_ops.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/losses.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/losses.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/pipeline_parallel_comm_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/ring_attention_sdpa.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/ring_attention_sdpa.hpp
@@ -59,6 +62,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/losses.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/matmul_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/multi_head_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/polynorm_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/reshape_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rmsnorm_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rmsnorm_op.hpp
@@ -68,6 +72,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/softmax_backward_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/scaled_dot_product_attention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/swiglu_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/moe_ffn_swiglu_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/unary_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rand_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/randn_op.cpp
@@ -86,6 +91,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/no_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/optimizer_registry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/cosine_annealing_scheduler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/lambda_scheduler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/linear_scheduler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/scheduler_base.cpp
@@ -125,6 +131,18 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/cross_entropy_fw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/device/cross_entropy_fw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/device/cross_entropy_fw_program_factory.cpp
+    # Select Target Logit (per-token target-logit selection for distributed cross-entropy forward)
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/select_target_logit/select_target_logit.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/select_target_logit/device/select_target_logit_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/select_target_logit/device/select_target_logit_program_factory.cpp
+    # Subtract At Target (per-token scalar subtraction at target positions for distributed cross-entropy backward)
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/subtract_at_target/subtract_at_target.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/subtract_at_target/device/subtract_at_target_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/subtract_at_target/device/subtract_at_target_program_factory.cpp
+    # K-Split Gram Matmul (multicast)
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/k_split_gram_matmul/k_split_gram_matmul.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/k_split_gram_matmul/device/k_split_gram_matmul_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/k_split_gram_matmul/device/k_split_gram_matmul_program_factory.cpp
     # CrossEntropy Backward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/cross_entropy_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/device/cross_entropy_bw_device_operation.cpp
@@ -145,6 +163,14 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/silu_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_program_factory.cpp
+    # MoE Group
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_group/moe_group.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_group/device/moe_group_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_group/device/moe_group_program_factory.cpp
+    # MoE Ungroup
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_ungroup/moe_ungroup.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_ungroup/device/moe_ungroup_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_ungroup/device/moe_ungroup_program_factory.cpp
     # SwiGLU Elemwise Backward (fused eltwise backward)
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/swiglu_elemwise_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/device/swiglu_elemwise_bw_device_operation.cpp
@@ -173,10 +199,22 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd/sgd.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd/device/sgd_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd/device/sgd_program_factory.cpp
+    # PolyNorm Forward
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/polynorm_fw/polynorm_fw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/polynorm_fw/device/polynorm_fw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/polynorm_fw/device/polynorm_fw_program_factory.cpp
+    # PolyNorm Backward
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/polynorm_bw/polynorm_bw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/polynorm_bw/device/polynorm_bw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/polynorm_bw/device/polynorm_bw_program_factory.cpp
     # AdamW Optimizer (consolidated: supports both half and full precision)
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/adamw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_program_factory.cpp
+    # Frobenius Normalize
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/frobenius_normalize/frobenius_normalize.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/frobenius_normalize/device/frobenius_normalize_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/frobenius_normalize/device/frobenius_normalize_program_factory.cpp
 )
 
 list(APPEND SOURCES ${METAL_OPS_FILES})

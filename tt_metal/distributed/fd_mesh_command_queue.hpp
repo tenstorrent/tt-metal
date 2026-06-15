@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,6 +22,8 @@ namespace tt::tt_metal::tt_dispatch_tests::Common {
 class FDMeshCQTestAccessor;
 }  // namespace tt::tt_metal::tt_dispatch_tests::Common
 
+#include "trace/trace_node.hpp"
+
 namespace tt::tt_metal::distributed {
 
 struct MeshReadEventDescriptor;
@@ -30,12 +32,6 @@ struct MeshCoreDataReadDescriptor;
 
 using MeshCompletionReaderVariant =
     std::variant<MeshBufferReadDescriptor, MeshReadEventDescriptor, MeshCoreDataReadDescriptor>;
-
-struct DeviceMemoryAddress {
-    MeshCoordinate device_coord;
-    CoreCoord virtual_core_coord;
-    DeviceAddr address{};
-};
 
 class FDMeshCommandQueue final : public MeshCommandQueueBase {
 private:
@@ -53,29 +49,6 @@ private:
         tt::stl::Span<const SubDeviceId> sub_device_ids,
         bool notify_host,
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
-    // Trace capture utility functions
-    // Captures dispatch commands associated with running a program on a Virtual Mesh subgrid
-    // inside the appropriate trace staging vector (corresponding to the specified subgrid)
-    void capture_program_trace_on_subgrid(
-        const MeshCoordinateRange& sub_grid,
-        ProgramCommandSequence& program_cmd_seq,
-        bool stall_first,
-        bool stall_before_program,
-        uint32_t program_runtime_id);
-    // Captures a dispatch command to reset the expected number of workers. Used when the worker
-    // counter on the host overflows.
-    void capture_expected_worker_count_reset_cmd(uint32_t previous_expected_workers, SubDeviceId sub_device);
-    // For a given MeshWorkload, a subgrid is unused if no programs are run on it. Go signals
-    // must be sent to this subgrid, to ensure consistent global state across the Virtual Mesh.
-    // When running trace, the dispatch commands responsible for forwarding go signals must be
-    // captured on these subgrids.
-    void capture_go_signal_trace_on_unused_subgrids(
-        const MeshCoordinateRangeSet& active_grids_set,
-        const SubDeviceId& sub_device_id,
-        uint32_t expected_num_workers_completed,
-        bool mcast_go_signals,
-        bool unicast_go_signals,
-        const program_dispatch::ProgramDispatchMetadata& dispatch_md);
     // Workload dispatch utility functions
     // Write dispatch commands associated with running a program on a Virtual Mesh subgrid
     void write_program_cmds_to_subgrid(
@@ -83,8 +56,7 @@ private:
         ProgramCommandSequence& program_cmd_seq,
         bool stall_first,
         bool stall_before_program,
-        std::unordered_set<uint32_t>& chip_ids_in_workload,
-        uint32_t program_runtime_id);
+        std::unordered_set<uint32_t>& chip_ids_in_workload);
     // For a given MeshWorkload, a subgrid is unused if no programs are run on it.  Go signals
     // must be sent to this subgrid, to ensure consistent global state across the Virtual Mesh.
     // This function generates and writes dispatch commands forwarding go signals to these subgrids.
@@ -95,13 +67,6 @@ private:
         bool mcast_go_signals,
         bool unicast_go_signals,
         const program_dispatch::ProgramDispatchMetadata& dispatch_md);
-    // When the device profiler is not enabled, launch messages are identical across all physical devices running the
-    // same program, to reduce state managed on host. When the profiler is enabled, the host_assigned_id field in the
-    // launch message must be unique across physical devices to accurately capture program execution time on host and
-    // device. This API is responsible for updating the launch message before writing it to each device (see
-    // tt_metal/api/tt-metalium/dev_msgs.h for a description of how the host_assigned_id field is generated).
-    void update_launch_messages_for_device_profiler(
-        ProgramCommandSequence& program_cmd_seq, uint32_t program_runtime_id, IDevice* device);
     // Clear the num_workers_completed counter on the dispatcher cores corresponding to this CQ.
     void clear_expected_num_workers_completed();
     // Access a reference system memory manager, which acts as a global host side state manager for
@@ -129,11 +94,18 @@ private:
     DispatchArray<uint32_t> expected_num_workers_completed_reset_{};
     DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_reset_;
 
+    struct MeshTraceNode {
+        std::vector<std::pair<MeshCoordinateRange, TraceNode>> trace_nodes;
+        bool multicast_go_signals{false};
+        bool unicast_go_signals{false};
+        SubDeviceId sub_device_id;
+    };
+
     // The following data structures are only popiulated when the MeshCQ is being used to trace workloads
     // i.e. between record_begin() and record_end() being called
     std::optional<MeshTraceId> trace_id_;
     std::shared_ptr<MeshTraceDescriptor> trace_ctx_;
-    std::vector<MeshTraceStagingMetadata> ordered_mesh_trace_md_;
+    std::vector<MeshTraceNode> trace_nodes_;
 
     CoreCoord dispatch_core_;
     const CoreType dispatch_core_type_;
@@ -208,7 +180,8 @@ protected:
         const void* src,
         const std::optional<BufferRegion>& region,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},
-        std::shared_ptr<experimental::PinnedMemory> pinned_memory = nullptr) override;
+        std::shared_ptr<experimental::PinnedMemory> pinned_memory = nullptr,
+        const tt::tt_metal::CoreRangeSet* logical_core_filter = nullptr) override;
     void read_shard_from_device(
         const MeshBuffer& buffer,
         const MeshCoordinate& device_coord,
@@ -217,11 +190,15 @@ protected:
         const std::optional<BufferRegion>& region,
         std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
-    void submit_memcpy_request(std::unordered_map<IDevice*, uint32_t>& num_txns_per_device, bool blocking) override;
+    void submit_memcpy_request(
+        std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
+        bool blocking,
+        std::vector<MemoryPin> memory_pins = {}) override;
     void finish_nolock(tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
     MeshEvent enqueue_record_event_to_host_nolock(
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt) override;
+    void invalidate_prefetcher_cache_after_pinned_write() override;
 
 public:
     FDMeshCommandQueue(
@@ -254,6 +231,11 @@ public:
         uint32_t size_bytes,
         bool blocking,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+    void enqueue_write_dram_core_counter(
+        tt::stl::Span<const DeviceMemoryAddress> targets,
+        uint32_t value,
+        bool blocking,
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
 
     MeshEvent enqueue_record_event(
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},

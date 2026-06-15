@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,6 +11,7 @@
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <vector>
 
 #include <fmt/base.h>
 
@@ -28,6 +29,7 @@ struct Config {
         bool throw_exception_on_fallback = false;
         bool enable_logging = false;
         bool enable_graph_report = false;
+        bool enable_graph_python_stack_traces = false;
         bool enable_detailed_buffer_report = false;
         bool enable_detailed_tensor_report = false;
         bool enable_comparison_mode = false;
@@ -81,6 +83,10 @@ public:
 
     // Defined in config.cpp (uses tt-logger).
     void validate(std::string_view name) const;
+
+    // Returns all config attributes as key-value pairs for Inspector.
+    // Defined in config.cpp (uses reflection for_each).
+    std::vector<std::pair<std::string, std::string>> get_config_entries() const;
 
     // Defined in config.cpp (uses reflection for_each).
     friend std::ostream& operator<<(std::ostream& os, const Config& config);

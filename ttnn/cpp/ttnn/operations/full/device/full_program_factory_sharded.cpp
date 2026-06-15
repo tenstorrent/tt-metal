@@ -1,93 +1,54 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/buffer_distribution_spec.hpp>
-#include "full_program_factory_sharded.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "full_program_factory_common.hpp"
+#include "full_program_factory_sharded.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 namespace ttnn::operations::full {
 
 using namespace tt;
 using namespace tt::constants;
-using namespace tt::tt_metal::detail;
+using namespace tt::tt_metal;
 
-FullShardedProgramFactory::cached_program_t FullShardedProgramFactory::create(
+ProgramDescriptor FullShardedProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& output) {
     auto fill_value = operation_attributes.fill_value;
     DataType dtype{operation_attributes.dtype};
-    MemoryConfig memory_config{operation_attributes.memory_config};
-
-    Program program{};
 
     auto data_format = datatype_to_dataformat_converter(dtype);
 
-    uint32_t tensor_width = output.padded_shape()[-1];
-    uint32_t tensor_height = output.physical_volume() / tensor_width;
-    const auto& output_shard_spec = output.shard_spec().value();
-    uint32_t shard_height = output_shard_spec.shape[0];
-    uint32_t shard_width = output_shard_spec.shape[1];
-    uint32_t num_compute_cores = output_shard_spec.grid.num_cores();
     uint32_t tensor_width_in_pages = output.buffer()->shard_spec().tensor2d_shape_in_pages[1];
 
-    uint32_t num_input_blocks_across_width = tt::div_up(tensor_width, shard_width);
-    uint32_t num_shards_height = tt::div_up(tensor_height, shard_height);
-    uint32_t num_shards = num_shards_height * num_input_blocks_across_width;
-
-    CoreRangeSet compute_core_range;
-    std::vector<CoreCoord> runtime_cores;
-    if (memory_config.is_dram()) {  // For DRAM sharded tensors, we take one core that is optimal for each DRAM bank
-                                    // with a shard to use as our compute cores.
-        num_compute_cores =
-            std::min(num_compute_cores, num_shards);  // If the number of banks to shard over is more than the number
-                                                      // of shards, only num_shards DRAM banks will have data.
-        auto all_dram_workers = output.device()->get_optimal_dram_bank_to_logical_worker_assignment(
-            tt::tt_metal::NOC::RISCV_0_default);  // Getting optimal worker core for each DRAM bank index.
-        bool is_row_major = (output_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
-        auto shard_grid_cores = corerange_to_cores(
-            output_shard_spec.grid, num_compute_cores, is_row_major);  // Getting the DRAM banks with shards in order.
-        runtime_cores.reserve(shard_grid_cores.size());
-        for (const auto& dram_core : shard_grid_cores) {
-            uint32_t dram_channel =
-                output.device()->dram_channel_from_logical_core(dram_core);  // For each DRAM coord, get its bank ID.
-            runtime_cores.push_back(all_dram_workers[dram_channel]);  // Get the worker core for the DRAM bank and add
-                                                                      // it to the vector of worker cores.
-        }
-        compute_core_range = CoreRangeSet(ttsl::Span<const CoreCoord>(runtime_cores));
-    } else {
-        if (num_compute_cores >
-            num_shards) {  // For L1 sharding, the user may specify a core grid larger than the number of shards. In
-                           // this case, we need to determine which cores have data on them so that we are not running
-                           // programs on cores with no data being processed.
-            runtime_cores = output.buffer()->buffer_distribution_spec().value().cores_with_data();
-            compute_core_range = CoreRangeSet(ttsl::Span<const CoreCoord>(runtime_cores));
-        } else {
-            compute_core_range =
-                output_shard_spec.grid;  // If the user specified the same number of compute cores as the number of
-                                         // shards, then we can directly use the core grid specified in the shard_spec.
-            bool is_row_major = (output_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
-            runtime_cores = corerange_to_cores(compute_core_range, std::nullopt, is_row_major);
-        }
-    }
+    std::vector<CoreCoord> runtime_cores = get_optimal_worker_cores_for_sharded_tensor(output);
+    const auto& compute_core_range = CoreRangeSet(ttsl::Span<const CoreCoord>(runtime_cores));
 
     const auto& aligned_page_size = output.buffer()->aligned_page_size();
     const auto& page_size = output.buffer()->page_size();
 
     constexpr CBIndex cb_fill_value_id = CBIndex::c_24;
 
-    auto cb_value_config = tt::tt_metal::CircularBufferConfig(page_size, {{cb_fill_value_id, data_format}})
-                               .set_page_size(cb_fill_value_id, page_size);
-    CreateCircularBuffer(program, compute_core_range, cb_value_config);
-    auto writer_defines = get_writer_defines(dtype);
+    ProgramDescriptor desc;
+
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = page_size,
+        .core_ranges = compute_core_range,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(cb_fill_value_id),
+            .data_format = data_format,
+            .page_size = page_size,
+        }}},
+    });
+
+    auto writer_defines = defines_from_map(get_writer_defines(dtype));
     auto u = encode_fill_value(fill_value, dtype);
 
     uint32_t elems_per_page = page_size / datum_size(data_format);
@@ -95,11 +56,13 @@ FullShardedProgramFactory::cached_program_t FullShardedProgramFactory::create(
         (uint32_t)cb_fill_value_id, elems_per_page, page_size, aligned_page_size, tensor_width_in_pages};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
-    auto writer_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/full/device/kernels/writer_full_sharded.cpp",
-        compute_core_range,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = "ttnn/cpp/ttnn/operations/full/device/kernels/writer_full_sharded.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = compute_core_range;
+    writer_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_desc.defines = std::move(writer_defines);
+    writer_desc.config = WriterConfigDescriptor{};
 
     uint32_t shard_height_in_pages = output.buffer()->shard_spec().shape_in_pages()[0];
     uint32_t shard_width_in_pages = output.buffer()->shard_spec().shape_in_pages()[1];
@@ -123,30 +86,13 @@ FullShardedProgramFactory::cached_program_t FullShardedProgramFactory::create(
         uint32_t valid_pages_height = (shard_row_idx == num_shards_across_height - 1)
                                           ? (tensor_height_in_pages - (shard_row_idx * shard_height_in_pages))
                                           : shard_height_in_pages;
-        SetRuntimeArgs(
-            program,
-            writer_id,
-            core,
-            {output.buffer()->address(), u.u32, first_page_id, valid_pages_width, valid_pages_height});
+        writer_desc.emplace_runtime_args(
+            core, {output.buffer(), u.u32, first_page_id, valid_pages_width, valid_pages_height});
     }
 
-    return {std::move(program), {writer_id, runtime_cores}};
-}
+    desc.kernels.push_back(std::move(writer_desc));
 
-void FullShardedProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& /*tensor_args*/,
-    tensor_return_value_t& output) {
-    auto& program = cached_program.program;
-    auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    auto& cores_with_runtime_args = cached_program.shared_variables.cores_with_runtime_args;
-
-    auto output_buffer_address = output.buffer()->address();
-    for (const auto& core : cores_with_runtime_args) {
-        auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-        runtime_args[0] = output_buffer_address;
-    }
+    return desc;
 }
 
 }  // namespace ttnn::operations::full

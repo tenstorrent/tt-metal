@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,8 +9,10 @@ pytestmark = pytest.mark.use_module_device
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from models.common.utility_functions import torch_random
+
+TEST_PADDING_VALUE = -42
 
 
 @pytest.mark.parametrize(
@@ -34,6 +36,7 @@ from models.common.utility_functions import torch_random
         ((10, 65, 64, 64), (10, 1, 32, 32)),
         ((10, 4, 32 * 16, 32 * 16), (5, 2, 32, 64)),  # half batch sharding
         ((10, 5, 32 * 11, 32 * 11), (10, 2, 64, 64)),  # tensor dimensions not evenly divided by shard dimensions
+        ((1, 1, 18, 26), (1, 1, 32, 160)),
     ],
 )
 @pytest.mark.parametrize("dim", [0, 1])
@@ -59,8 +62,18 @@ def test_reduce_on_batch(shape, shard_shape, dim, interleaved, device):
     input_tensor = ttnn.from_torch(
         torch_input_tensor, layout=ttnn.TILE_LAYOUT, memory_config=memory_config, device=device
     )
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     output_tensor = ttnn.sum(input_tensor, dim=dim, keepdim=True, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.995)
+    # test for equivalance
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999,
+        rtol=0.008,
+        atol=8.1,
+        frobenius_threshold=0.002,
+        check_ulp=True,
+    )

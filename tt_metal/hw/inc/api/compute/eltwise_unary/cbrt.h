@@ -1,11 +1,14 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include "api/compute/common_globals.h"
-#include "llk_math_eltwise_unary_sfpu_cbrt.h"
+#ifdef TRISC_MATH
+#include "ckernel_sfpu_cbrt.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
+#endif
 
 namespace ckernel {
 
@@ -23,11 +26,14 @@ namespace ckernel {
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void cbrt_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_cbrt<APPROX, DST_ACCUM_MODE>(idst))); }
+ALWI void cbrt_tile(uint32_t idst) {
+    MATH(SFPU_CALL_MODE(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_cube_root, (APPROX, DST_ACCUM_MODE, 8 /* ITERATIONS */), RC, idst));
+}
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void cbrt_tile_init() { MATH((llk_math_eltwise_unary_sfpu_cbrt_init<APPROX>())); }
+ALWI void cbrt_tile_init() { MATH(SFPU_INIT_CB(cbrt, sfpu::cube_root_init, (APPROX))); }
 
 }  // namespace ckernel

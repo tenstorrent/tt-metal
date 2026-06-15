@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -99,6 +99,9 @@ def read_ring_buffer_for_block(
 
     risc_name = location.noc_block.risc_names[0]
 
+    if not dispatcher_data.risc_enabled(risc_name):
+        return None
+
     return read_ring_buffer(location, block_type, risc_name, dispatcher_data, elf_cache)
 
 
@@ -107,7 +110,7 @@ def run(args, context: Context):
     run_checks = get_run_checks(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
     elfs_cache = get_elfs_cache(args, context)
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth"]
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth", "dram"]
     return run_checks.run_per_block_check(
         lambda location: read_ring_buffer_for_block(location, dispatcher_data, elfs_cache, run_checks),
         block_filter=BLOCK_TYPES_TO_CHECK,

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -91,7 +91,7 @@ CATEGORIES = {
         "Missing channel connections",
     ),
     "recovered_connections": (
-        r"Ethernet Links were Retrained",
+        r"Rediscovering ethernet links after successful link retraining",
         "BLUE",
         "Recovered connections",
     ),

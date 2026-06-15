@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -45,8 +45,8 @@ void kernel_main() {
     constexpr uint32_t prev_max_dst_idx = 1;
 
     for (uint32_t i = 0; i < rows; i++) {
-        acquire_dst();
-        reduce_block_max_row_init<cols>();
+        tile_regs_acquire();
+        reduce_block_max_row_init<cols>(out_max_cb);
         reduce_block_max_row<cols>(qk_im_cb, scale_cb, i * cols, reduce_dst_idx);
         reduce_block_max_row_uninit(qk_im_cb);
 
@@ -57,8 +57,10 @@ void kernel_main() {
             binary_max_tile(reduce_dst_idx, prev_max_dst_idx, reduce_dst_idx);
         }
 
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(reduce_dst_idx, out_max_cb);
-        release_dst();
+        tile_regs_release();
     }
 
     cb_push_back(out_max_cb, rows);

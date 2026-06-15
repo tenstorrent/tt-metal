@@ -1,7 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "argmax_device_operation.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "argmax_utils.hpp"
@@ -34,7 +35,7 @@ ttnn::SmallVector<uint32_t> get_output_shape(const Tensor& input_tensor, const s
         rank);
 
     // Adjust negative reduction dimension to positive
-    red_dim = red_dim < 0 ? red_dim + rank : red_dim;
+    red_dim = normalize_dim(red_dim, rank);
 
     // Generate output shape
     // Iterate over the input shape and adjust the output shape for keepdim
@@ -129,16 +130,26 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
     }
 
     if (args.dim.has_value()) {
-        const uint32_t input_rank = input_tensor_a.logical_shape().rank();
-        const uint32_t normalized_dim = args.dim.value() < 0 ? args.dim.value() + input_rank : args.dim.value();
-
-        // TODO: Add support for normalized_dim = 0, 1, 2
-        TT_FATAL(
-            normalized_dim == (input_rank - 1),
-            "Only argmax on last dim is supported! Got dim={} (normalized={}), expected {}",
-            args.dim.value(),
-            normalized_dim,
-            input_rank - 1);
+        const int32_t rank = static_cast<int32_t>(input_tensor_a.logical_shape().rank());
+        const int32_t normalized_dim = normalize_dim(static_cast<int32_t>(args.dim.value()), rank);
+        if (input_layout == Layout::TILE) {
+            // Last dim: W, second-to-last: H.
+            const bool w_dim = (normalized_dim == rank - 1);
+            const bool h_dim = (rank >= 2 && normalized_dim == rank - 2);
+            TT_FATAL(
+                w_dim or h_dim,
+                "TILE: argmax dim must be H (rank-2) or W (last). Got dim={} (normalized={}) for rank {}.",
+                args.dim.value(),
+                normalized_dim,
+                rank);
+        } else {
+            TT_FATAL(
+                normalized_dim == (rank - 1),
+                "ROW_MAJOR: only argmax on the last dim is supported. Got dim={} (normalized={}), expected {}",
+                args.dim.value(),
+                normalized_dim,
+                rank - 1);
+        }
     } else {
         TT_FATAL(input_layout != Layout::TILE, "For inputs with TILE layout, dim parameter must be specified!");
     }
@@ -152,8 +163,17 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
         }
         TT_FATAL(
             input_tensor_a.layout() == Layout::ROW_MAJOR,
-            "Multicore argmax only supports ROW_MAJOR layout for inputs, got {}",
+            "Multicore argmax only supports ROW_MAJOR layout for inputs, got {}. "
+            "(ROW_MAJOR tensors reduced along height are converted to TILE internally; use use_multicore=False for "
+            "that path.)",
             input_tensor_a.layout());
+    }
+
+    if (args.use_multicore && args.sub_core_grids.has_value()) {
+        ReduceOpDeviceGridValidationOptions grid_opts;
+        grid_opts.sub_grid_contained_in_device_grid = &args.sub_core_grids.value();
+        grid_opts.sub_grid_label = "Multicore argmax sub_core_grids";
+        validate_reduce_op_tensor(tensor_args.input, "Argmax", "input", &grid_opts);
     }
 }
 

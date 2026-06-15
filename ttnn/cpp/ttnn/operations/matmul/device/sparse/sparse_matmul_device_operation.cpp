@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,7 @@
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 
 #include <tt-metalium/work_split.hpp>
 
@@ -157,6 +158,14 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
         "nnz ({}) must be less than or equal to the length of all batch dimensions ({})",
         operation_attributes.nnz,
         batch_length);
+
+    // When nnz is supplied, the receiver and compute kernels loop exactly nnz times while the in0 sender
+    // only multicasts once per non-zero sparsity entry. The op therefore requires
+    // count_nonzero(sparsity) == nnz; a mismatch deadlocks the device (see issue #45943).
+    // count_nonzero(sparsity) is data-dependent and lives on device, so it cannot be checked here on the
+    // host -- it is the caller's responsibility to pass an exact nnz, and the contract is validated
+    // on-device in reader_bmm_tile_layout_in0_sender_padding.cpp (asserts loudly under watcher instead of
+    // hanging).
 }
 
 SparseMatmulDeviceOperation::spec_return_value_t SparseMatmulDeviceOperation::compute_output_specs(
@@ -341,6 +350,10 @@ SparseMatmulParams create_sparse_matmul_attributes(
 
     auto matmul_struct =
         create_matmul_attributes(input_tensor_a, input_tensor_b, matmul_attributes, {optional_output_tensors.at(0)});
+    if (matmul_struct.program_config.has_value()) {
+        auto device_grid = input_tensor_a.device()->compute_with_storage_grid_size();
+        operations::matmul::normalize_program_config(matmul_struct.program_config.value(), device_grid);
+    }
     return SparseMatmulParams{
         parameters.nnz,
         parameters.is_input_a_sparse,

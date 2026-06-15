@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@
 
 #include "api/compute/common.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
+#include "llk_assert.h"
 #ifdef TRISC_MATH
 #include "llk_math_matmul_api.h"
 #endif
@@ -67,12 +68,22 @@ ALWI void matmul_block_math_dynamic_throttle(
         }
         MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, ct_dim, rt_dim)));
     }
-#endif  // TODO: AM; add Quasar implementation
+#endif
 }
 #endif
 
 // clang-format off
 /**
+ * Which matmul init to call, and when:
+ *
+ * Pick the init that matches the matmul you run, and call it once before the first matmul:
+ * - matmul_tiles (single tile)    -> mm_init
+ * - matmul_block (block of tiles) -> mm_block_init
+ *
+ * The _with_dt / _with_both_dt variants also reconfigure input data formats before init:
+ * - Use _with_dt when the input data format changed since the last init (it reconfigures srcA first).
+ * - Use _with_both_dt when both input data formats changed (it reconfigures srcA and srcB).
+ *
  * Initialization for matmul_tiles operation. Must be called before matmul_tiles.
  *
  * Return value: None
@@ -96,24 +107,25 @@ ALWI void mm_init(
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(in1_cb_id, in0_cb_id)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
 
-    MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
-    MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
+    MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
+    MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
 
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(out_cb_id)));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>()));
     PACK((llk_pack_init(out_cb_id)));
-    PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
 #else
-    ASSERT(transpose == 0);  // matmul transpose not yet implemented for Quasar
+    LLK_ASSERT(transpose == 0, "Matmul transpose not yet implemented for Quasar");
     UNPACK((llk_unpack_hw_configure(in1_cb_id, in0_cb_id)));
     UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id)));
 
-    MATH((llk_math_matmul_init<MATH_FIDELITY>()));
-    MATH((llk_math_pack_sync_init()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
+    MATH((llk_math_pack_sync_init()));
+    MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id)));
 
     PACK((llk_pack_hw_configure(out_cb_id)));
     PACK((llk_pack_init(out_cb_id)));
+    PACK((llk_pack_dest_init()));
 #endif
 }
 
@@ -163,7 +175,7 @@ template <uint32_t num_faces = 4>
 ALWI void matmul_tiles_math(uint32_t idst) {
 #ifndef ARCH_QUASAR
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE, num_faces>(idst)));
-#endif  // TODO: AM; add Quasar implementation
+#endif
 }
 
 // clang-format off
@@ -186,7 +198,11 @@ ALWI void mm_init_short(
     state_configure(in1_cb_id, in0_cb_id, call_line);
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
-#endif  // TODO: AM; add Quasar implementation
+#else
+    LLK_ASSERT(transpose == 0, "Matmul transpose not yet implemented for Quasar");
+    UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id)));
+    MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id)));
+#endif
 }
 
 // clang-format off
@@ -207,10 +223,11 @@ ALWI void mm_init_short(
 ALWI void mm_init_short_with_dt(
     uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t c_in_old_srca, const uint32_t transpose = 0) {
 #ifndef ARCH_QUASAR
-    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(c_in_old_srca, in1_cb_id)));
+    UNPACK(
+        (llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(c_in_old_srca, in1_cb_id)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(c_in_old_srca, in1_cb_id)));
     mm_init_short(in0_cb_id, in1_cb_id, transpose);
-#endif  // TODO: AM; add Quasar implementation
+#endif
 }
 
 // clang-format off
@@ -244,28 +261,29 @@ ALWI void mm_block_init(
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(in1_cb_id, in0_cb_id)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
 
-    MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
-    MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
+    MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
+    MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
 #ifdef ARCH_BLACKHOLE
     // Dynamic throttling is only available on Blackhole architecture
     MATH((throttled_mop_status = 0));
 #endif
 
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(out_cb_id)));
-    PACK((llk_pack_init<false, false>(out_cb_id)));
-    PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>()));
+    PACK((llk_pack_init<PackMode::Default, false /* zero_output */>(out_cb_id)));
 #else
-    ASSERT(transpose == 0);  // matmul transpose not yet implemented for Quasar
+    LLK_ASSERT(transpose == 0, "Matmul transpose not yet implemented for Quasar");
     UNPACK((llk_unpack_hw_configure(in1_cb_id, in0_cb_id)));
     UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id, ct_dim, rt_dim, kt_dim)));
 
-    MATH((llk_math_matmul_init<MATH_FIDELITY>(ct_dim, rt_dim)));
-    MATH((llk_math_pack_sync_init()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
+    MATH((llk_math_pack_sync_init()));
+    MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, ct_dim, rt_dim)));
 
     PACK((llk_pack_hw_configure(out_cb_id)));
     PACK((llk_pack_init(out_cb_id)));
+    PACK((llk_pack_dest_init()));
 #endif
 }
 
@@ -276,6 +294,11 @@ ALWI void mm_block_init(
  * must be in acquired state via *acquire_dst* call. This call is blocking and
  * is only available on the compute engine.
  *
+ * A block is a rectangle of tiles: A is rt_dim x kt_dim tiles, B is kt_dim x ct_dim tiles, and the
+ * output C is rt_dim x ct_dim tiles. So a block is just ct_dim * rt_dim output tiles produced in one
+ * call (with kt_dim tiles along the shared inner dimension). The output must fit in DST, so the block
+ * size is limited by DST size and sync mode (see mm_block_init for the valid ct_dim/rt_dim ranges).
+ *
  * Return value: None
  *
  * | Argument       | Description                                                             | Type     | Valid Range                                    | Required |
@@ -285,7 +308,7 @@ ALWI void mm_block_init(
  * | in0_tile_index | The index of the tile in block A from the first input CB                | uint32_t | Must be less than the size of the CB           | True     |
  * | in1_tile_index | The index of the tile in block B from the second input CB               | uint32_t | Must be less than the size of the CB           | True     |
  * | idst           | The index of the tile in DST REG to which the result C will be written. | uint32_t | Must be less than the acquired size of DST REG | True     |
-* | transpose       | The transpose flag for performing transpose operation on tiles in B.    | bool     | Must be true or false                          | True     |
+ * | transpose      | The transpose flag for performing transpose operation on tiles in B.    | bool     | Must be true or false                          | True     |
  * | ct_dim         | The column dimension for the output block.                              | uint32_t | Must be equal to block B column dimension      | True     |
  * | rt_dim         | The row dimension for the output block.                                 | uint32_t | Must be equal to block A row dimension         | True     |
  * | kt_dim         | The inner dimension.                                                    | uint32_t | Must be equal to block A column dimension      | True     |
@@ -351,9 +374,9 @@ ALWI void mm_block_init_short(
     MATH((throttled_mop_status = 0));
 #endif
 #else
-    ASSERT(transpose == 0);  // matmul transpose not yet implemented for Quasar
+    LLK_ASSERT(transpose == 0, "Matmul transpose not yet implemented for Quasar");
     UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id, ct_dim, rt_dim, kt_dim)));
-    MATH((llk_math_matmul_init<MATH_FIDELITY>(ct_dim, rt_dim)));
+    MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, ct_dim, rt_dim)));
 #endif
 }
 
@@ -385,10 +408,11 @@ ALWI void mm_block_init_short_with_dt(
     uint32_t call_line = __builtin_LINE()) {
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
-    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(old_in1_cb_id, in1_cb_id)));
+    UNPACK(
+        (llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(old_in1_cb_id, in1_cb_id)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_in1_cb_id, in1_cb_id)));
     mm_block_init_short(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
-#endif  // TODO: AM; add Quasar implementation
+#endif
 }
 
 // clang-format off
@@ -419,10 +443,11 @@ ALWI void mm_block_init_short_with_both_dt(
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1) {
 #ifndef ARCH_QUASAR
-    UNPACK((llk_unpack_reconfig_data_format<DST_ACCUM_MODE>(old_in1_cb_id, in1_cb_id, old_in0_cb_id, in0_cb_id)));
+    UNPACK((llk_unpack_reconfig_data_format<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(
+        old_in1_cb_id, in1_cb_id, old_in0_cb_id, in0_cb_id)));
     MATH((llk_math_reconfig_data_format<DST_ACCUM_MODE>(old_in1_cb_id, in1_cb_id, old_in0_cb_id, in0_cb_id)));
     mm_block_init_short(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
-#endif  // TODO: AM; add Quasar implementation
+#endif
 }
 
 }  // namespace ckernel

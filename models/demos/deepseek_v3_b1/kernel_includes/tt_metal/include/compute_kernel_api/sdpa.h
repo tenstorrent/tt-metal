@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,7 @@
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack_untilize.h"
+#include "api/compute/experimental/pack_block.h"
 #include "../../../../kernel_includes/tt_metal/include/compute_kernel_api/sdpa_custom_mm.h"
 #include "../../../../kernel_includes/tt_metal/include/compute_kernel_api/sdpa_custom_mm_reuse_dest_srcb.h"
 #include "../../../../kernel_includes/tt_metal/include/compute_kernel_api/deepseek_compute_kernel_hw_startup.h"
@@ -16,6 +17,8 @@
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_math_sdpa_bcast_col_srcb_reuse_api.h"
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_math_sdpa_bcast_col_srca_srcb_reuse_api.h"
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_sdpa_reduce_row.h"
+#include "ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_recip.h"
 #endif
 #ifdef TRISC_UNPACK
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_unpack_A_sdpa_api.h"
@@ -29,7 +32,7 @@
 
 namespace ckernel {
 
-template <EltwiseBinaryType eltwise_binary_type = ELWADD, uint32_t num_tiles, bool dense = false>
+template <EltwiseBinaryType eltwise_binary_type = EltwiseBinaryType::ELWADD, uint32_t num_tiles, bool dense = false>
 ALWI void sdpa_bcast_col_reuse_tiles_init(uint32_t icb0) {
     UNPACK((llk_unpack_A_sdpa_init<num_tiles, BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(
         false, false, icb0)));
@@ -45,7 +48,7 @@ ALWI void sdpa_bcast_col_reuse_preamble() {
 
 ALWI void sdpa_bcast_col_reuse_postamble() { MATH((llk_math_sdpa_bcast_col_srcb_reuse_postamble())); }
 
-template <EltwiseBinaryType eltwise_binary_type = ELWADD, uint32_t num_tiles>
+template <EltwiseBinaryType eltwise_binary_type = EltwiseBinaryType::ELWADD, uint32_t num_tiles>
 ALWI void sdpa_bcast_col_reuse_tiles(
     uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
     UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(in0_cb_id, in_tile_index)));
@@ -56,16 +59,17 @@ ALWI void sdpa_bcast_col_reuse_tiles(
 
 template <uint32_t num_tiles, bool dense = false>
 ALWI void sdpa_mul_bcast_col_reuse_tiles_init(uint32_t icb0) {
-    sdpa_bcast_col_reuse_tiles_init<ELWMUL, num_tiles, dense>(icb0);
+    sdpa_bcast_col_reuse_tiles_init<EltwiseBinaryType::ELWMUL, num_tiles, dense>(icb0);
 }
 
 template <uint32_t num_tiles>
 ALWI void sdpa_mul_bcast_col_reuse_tiles(
     uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
-    sdpa_bcast_col_reuse_tiles<ELWMUL, num_tiles>(in0_cb_id, in1_cb_id, in_tile_index, dst_tile_index);
+    sdpa_bcast_col_reuse_tiles<EltwiseBinaryType::ELWMUL, num_tiles>(
+        in0_cb_id, in1_cb_id, in_tile_index, dst_tile_index);
 }
 
-template <EltwiseBinaryType eltwise_binary_type = ELWADD, uint32_t num_tiles>
+template <EltwiseBinaryType eltwise_binary_type = EltwiseBinaryType::ELWADD, uint32_t num_tiles>
 ALWI void sdpa_bcast_col_srca_srcb_reuse_tiles_init(uint32_t icb0) {
     MATH((llk_math_sdpa_bcast_col_srca_srcb_reuse_init_with_operands<eltwise_binary_type, num_tiles, MATH_FIDELITY>(
         icb0, icb0, false)));
@@ -78,10 +82,11 @@ ALWI void sdpa_bcast_col_srca_srcb_reuse_preamble(uint32_t isrc) {
 }
 
 template <
-    EltwiseBinaryType eltwise_binary_type = ELWADD,
+    EltwiseBinaryType eltwise_binary_type = EltwiseBinaryType::ELWADD,
     uint32_t num_tiles,
     bool skip_signalling = false,
-    bool fused_signalling = false>
+    bool fused_signalling = false,
+    uint32_t output_granularity>
 ALWI void sdpa_bcast_col_srca_srcb_reuse_tiles(uint32_t dst_tile_index) {
     MATH((llk_math_sdpa_bcast_col_srca_srcb_reuse<
           eltwise_binary_type,
@@ -89,27 +94,38 @@ ALWI void sdpa_bcast_col_srca_srcb_reuse_tiles(uint32_t dst_tile_index) {
           DST_ACCUM_MODE,
           MATH_FIDELITY,
           skip_signalling,
-          fused_signalling>(dst_tile_index)));
+          fused_signalling,
+          output_granularity>(dst_tile_index)));
 }
 
 template <uint32_t num_tiles>
 ALWI void sdpa_sub_bcast_col_srca_srcb_reuse_tiles_init(uint32_t icb0) {
-    sdpa_bcast_col_srca_srcb_reuse_tiles_init<ELWSUB, num_tiles>(icb0);
+    sdpa_bcast_col_srca_srcb_reuse_tiles_init<EltwiseBinaryType::ELWSUB, num_tiles>(icb0);
 }
 
-template <uint32_t num_tiles, bool skip_signalling = false, bool fused_signalling = false>
+template <uint32_t num_tiles, bool skip_signalling = false, bool fused_signalling = false, uint32_t output_granularity>
 ALWI void sdpa_sub_bcast_col_srca_srcb_reuse_tiles(uint32_t dst_tile_index) {
-    sdpa_bcast_col_srca_srcb_reuse_tiles<ELWSUB, num_tiles, skip_signalling, fused_signalling>(dst_tile_index);
+    sdpa_bcast_col_srca_srcb_reuse_tiles<
+        EltwiseBinaryType::ELWSUB,
+        num_tiles,
+        skip_signalling,
+        fused_signalling,
+        output_granularity>(dst_tile_index);
 }
 
 template <uint32_t num_tiles>
 ALWI void sdpa_mul_bcast_col_srca_srcb_reuse_tiles_init(uint32_t icb0) {
-    sdpa_bcast_col_srca_srcb_reuse_tiles_init<ELWMUL, num_tiles>(icb0);
+    sdpa_bcast_col_srca_srcb_reuse_tiles_init<EltwiseBinaryType::ELWMUL, num_tiles>(icb0);
 }
 
-template <uint32_t num_tiles, bool skip_signalling = false, bool fused_signalling = false>
+template <uint32_t num_tiles, bool skip_signalling = false, bool fused_signalling = false, uint32_t output_granularity>
 ALWI void sdpa_mul_bcast_col_srca_srcb_reuse_tiles(uint32_t dst_tile_index) {
-    sdpa_bcast_col_srca_srcb_reuse_tiles<ELWMUL, num_tiles, skip_signalling, fused_signalling>(dst_tile_index);
+    sdpa_bcast_col_srca_srcb_reuse_tiles<
+        EltwiseBinaryType::ELWMUL,
+        num_tiles,
+        skip_signalling,
+        fused_signalling,
+        output_granularity>(dst_tile_index);
 }
 
 template <DataFormat format>
@@ -131,7 +147,6 @@ ALWI void sdpa_reduce_sum_row(uint src_index, uint dst_index, bool prev_sum = fa
 
 #ifdef TRISC_PACK
 // Packer:
-// All 32 slots of replay buffer are used for red sum and red max
 // Fast Approx Exp uses 3 constants and LoadMacro
 // Non-Approx Exp uses 1 constant for recip. TODO: Look into integrating new polynomial exp in
 // ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp
@@ -164,7 +179,8 @@ inline void init_fast_approx_exp_constants() {
 
 inline void fast_approx_exp(uint32_t dst_index) {
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index + get_dest_buffer_base());
-    ckernel::sfpu::calculate_exponential<true, true, DST_ACCUM_MODE, true, 4, true>();
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    ckernel::sfpu::calculate_exponential<true, DST_ACCUM_MODE, true, 8, true>();
 }
 
 // TODO: Currently hardcodes the lregs used by red max
@@ -180,12 +196,11 @@ inline void non_approx_exp_mul_prev(uint32_t curr_sum_index, uint32_t corr_exp_i
     sfpi::vFloat curr_max_bottom_4 = sfpi::l_reg[sfpi::LRegs::LReg2];
     sfpi::vFloat sub_top_4 = prev_max_top_4 - curr_max_top_4;
     sfpi::vFloat sub_bottom_4 = prev_max_bottom_4 - curr_max_bottom_4;
-    ckernel::sfpu::_init_sfpu_reciprocal_<false>();
-    sfpi::vFloat exp_top_4 = ckernel::sfpu::
-        _calculate_exponential_piecewise_<exp_approx_mode, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
+    sfpi::vFloat exp_top_4 =
+        sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
             sub_top_4, scale_bf16);
-    sfpi::vFloat exp_bottom_4 = ckernel::sfpu::
-        _calculate_exponential_piecewise_<exp_approx_mode, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
+    sfpi::vFloat exp_bottom_4 =
+        sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
             sub_bottom_4, scale_bf16);
     // Subtract 1. This is because the bcast mul accumulates to dest
     // Without -1: bcast = prev * exp + prev
@@ -227,6 +242,10 @@ inline void recip_sum(uint32_t curr_sum_index, uint32_t recip_dst_index) {
 
 // First chunk controls whether we run the correction path with prev sum, max, out
 // Last chunk controls whether we signal out packer to start packing as output is produced
+//
+// output_granularity controls how often the QK^T*V matmul (sdpa_custom_mm_reuse_dest_srcb_block)
+// signals the packer via the FPU->SFPU semaphore. The packer must consume tiles in matching
+// groups of output_granularity. num_tiles_v must be divisible by output_granularity.
 template <
     uint32_t chunk_size,
     uint32_t num_tiles_k,
@@ -236,7 +255,9 @@ template <
     bool transpose_k,
     bool transpose_v,
     uint32_t packed_tile_size,
-    bool exp_approx_mode = false>
+    bool exp_approx_mode = false,
+    uint32_t output_granularity = 1,
+    bool mm_pack_init = true>
 void compute_sdpa_chunk(
     uint32_t cb_q,
     uint32_t cb_k,
@@ -250,8 +271,10 @@ void compute_sdpa_chunk(
     bool first_chunk,
     bool last_chunk,
     bool mask_chunk) {
+    static_assert(DST_ACCUM_MODE == false, "FP32 destination accumulation mode is not supported");
+    static_assert(num_tiles_v % output_granularity == 0, "num_tiles_v must be divisible by output_granularity");
     PACK((ckernel::sfpu::_init_sdpa_reduce_max_row_8x32_replay_buffers_()));
-    sdpa_custom_mm_block_init_short<transpose_k>(cb_q, cb_k, cb_out, chunk_size);
+    sdpa_custom_mm_block_init_short<transpose_k, mm_pack_init>(cb_q, cb_k, cb_out, chunk_size);
     cb_wait_front(cb_k, num_tiles_k * chunk_size);
     // Q @ K (FPU)
     // Make sure SFPU of previous chunk is done (sem is zero)
@@ -266,7 +289,7 @@ void compute_sdpa_chunk(
     sdpa_sub_bcast_col_srca_srcb_reuse_tiles_init<chunk_size>(cb_q);  // For tile shape
     MATH((t6_semaphore_wait_on_max<p_stall::STALL_MATH>(semaphore::FPU_SFPU)));
     sdpa_bcast_col_srca_srcb_reuse_preamble(max_dst_offset);
-    sdpa_sub_bcast_col_srca_srcb_reuse_tiles<chunk_size, false>(mm1_dst_offset);
+    sdpa_sub_bcast_col_srca_srcb_reuse_tiles<chunk_size, false, false, 1>(mm1_dst_offset);
     if (!first_chunk) {
         // Exp Sub (SFPU)
         // Signal FPU that tile is ready
@@ -278,7 +301,7 @@ void compute_sdpa_chunk(
         sdpa_mul_bcast_col_srca_srcb_reuse_tiles_init<num_tiles_v>(cb_q);
         MATH((t6_semaphore_wait_on_zero<p_stall::STALL_MATH>(SFPU_FPU)));
         sdpa_bcast_col_srca_srcb_reuse_preamble(corr_exp_dst_offset);
-        sdpa_mul_bcast_col_srca_srcb_reuse_tiles<num_tiles_v, true>(mm2_dst_offset);
+        sdpa_mul_bcast_col_srca_srcb_reuse_tiles<num_tiles_v, true, false, 1>(mm2_dst_offset);
         // FPU has consumed the tile
         MATH((t6_semaphore_post<p_stall::MATH>(semaphore::FPU_SFPU)));
         // Reset to 0
@@ -286,10 +309,10 @@ void compute_sdpa_chunk(
         MATH((t6_semaphore_get<p_stall::NONE>(SFPU_FPU)));
     }
     // Exp Mul Scale (SFPU)
-    PACK((init_fast_approx_exp_constants<scale_fp32>()));
     for (uint32_t i = 0; i < chunk_size; i++) {
         // Wait for FPU that tile is ready (sem is non-zero)
         PACK((t6_semaphore_wait_on_zero<p_stall::STALL_SFPU>(semaphore::FPU_SFPU)));
+        // Each tile is 8x32, which is the same as a full 16x16 face
         PACK((fast_approx_exp(mm1_dst_offset + i * packed_tile_size)));
         PACK((t6_semaphore_get<p_stall::WAIT_SFPU>(semaphore::FPU_SFPU)));
         // No stall since we waited on sfpu already
@@ -298,7 +321,7 @@ void compute_sdpa_chunk(
 
     // MM (FPU)
     sdpa_custom_mm_reuse_dest_srcb_block_init_short(cb_q, cb_k, cb_out, transpose_v, chunk_size, num_tiles_v);
-    sdpa_custom_mm_reuse_dest_srcb_block(
+    sdpa_custom_mm_reuse_dest_srcb_block<output_granularity>(
         cb_q,
         cb_k,
         0,
@@ -326,14 +349,14 @@ void compute_sdpa_chunk(
     cb_pop_front(cb_k, num_tiles_k * chunk_size);
 }
 
-template <uint32_t num_tiles_v, bool exp_approx_mode, uint16_t scale_bf16>
+template <uint32_t num_tiles_v, bool exp_approx_mode, uint16_t scale_bf16, uint32_t output_granularity>
 void compute_sdpa_recip(uint32_t cb_q, uint32_t sum_dst_offset, uint32_t recip_dst_offset, uint32_t mm2_dst_offset) {
     PACK((recip_sum<exp_approx_mode, scale_bf16>(sum_dst_offset, recip_dst_offset)));
     PACK((t6_semaphore_post<p_stall::WAIT_SFPU>(SFPU_FPU)));
     sdpa_mul_bcast_col_srca_srcb_reuse_tiles_init<num_tiles_v>(cb_q);
     MATH((t6_semaphore_wait_on_zero<p_stall::STALL_MATH>(SFPU_FPU)));
     sdpa_bcast_col_srca_srcb_reuse_preamble(recip_dst_offset);
-    sdpa_mul_bcast_col_srca_srcb_reuse_tiles<num_tiles_v, false, true>(mm2_dst_offset);
+    sdpa_mul_bcast_col_srca_srcb_reuse_tiles<num_tiles_v, false, true, output_granularity>(mm2_dst_offset);
     MATH((t6_semaphore_get<p_stall::MATH>(SFPU_FPU)));
 }
 
@@ -390,11 +413,11 @@ void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
         sfpi::vFloat diff_worker = worker_max_vec - cur_max;
 
         // Exponentials of differences
-        sfpi::vFloat exp_prev = ckernel::sfpu::
-            _calculate_exponential_piecewise_<SDPA_EXP_APPROX_MODE, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
+        sfpi::vFloat exp_prev =
+            sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
                 diff_prev, scale_bf16);
-        sfpi::vFloat exp_worker = ckernel::sfpu::
-            _calculate_exponential_piecewise_<SDPA_EXP_APPROX_MODE, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
+        sfpi::vFloat exp_worker =
+            sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
                 diff_worker, scale_bf16);
 
         if constexpr (!final_norm) {
@@ -403,6 +426,7 @@ void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
             sfpi::dst_reg[worker_max_base_idx] = exp_worker;
         } else {
             sfpi::vFloat curr_sum = exp_worker * worker_sum_vec + exp_prev * prev_sum_vec;
+            ckernel::sfpu::_init_sfpu_reciprocal_<false>();
             sfpi::vFloat recip_sum = ckernel::sfpu::sfpu_reciprocal<SDPA_EXP_APPROX_MODE>(curr_sum);
             sfpi::dst_reg[prev_max_base_idx] = exp_prev * recip_sum;
             sfpi::dst_reg[worker_max_base_idx] = exp_worker * recip_sum;
@@ -415,9 +439,9 @@ void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
  * Wrapper for fused max-sub-exp-add SFPI kernel.
  * Invokes calculate_fused_max_sub_exp_add_tile via LLK unary SFPU parameters.
  */
-template <bool SDPA_EXP_APPROX_MODE, int vector_mode = (int)VectorMode::C, bool final_norm = false>
+template <bool SDPA_EXP_APPROX_MODE, VectorMode vector_mode = VectorMode::C, bool final_norm = false>
 void fused_max_sub_exp_add_tile(uint32_t idst, int scale_bf16) {
-    _llk_math_eltwise_unary_sfpu_params_<false /*APPROXIMATE*/>(
+    _llk_math_eltwise_unary_sfpu_params_(
         calculate_fused_max_sub_exp_add_tile<SDPA_EXP_APPROX_MODE, final_norm>, idst, vector_mode, scale_bf16);
 }
 #endif
@@ -447,7 +471,7 @@ template <
     bool normalize,
     uint32_t block_size,
     uint32_t scale_fp32,
-    int vector_mode = (int)VectorMode::C,
+    VectorMode vector_mode = VectorMode::C,
     bool pop_ms = false,
     bool dense = false>
 ALWI void sdpa_tail_ms_reduce(uint32_t cb_worker_ms, uint32_t cb_prev_ms, uint32_t cb_cur_ms, uint32_t cb_l_for_init) {
@@ -475,6 +499,7 @@ ALWI void sdpa_tail_ms_reduce(uint32_t cb_worker_ms, uint32_t cb_prev_ms, uint32
 
     // Not final reduction: pack out stats and release regs
     if constexpr (!normalize) {
+        PACK((llk_pack_init<PackMode::Default, false /* zero_output */, true /* skip_addrmod_config */>(cb_cur_ms)));
         tile_regs_commit();
         cb_reserve_back(cb_cur_ms, 1);
         tile_regs_wait();
@@ -506,7 +531,7 @@ ALWI void sdpa_tail_l_block(
         cb_wait_front(cb_l2, block_size);
         cb_wait_front(cb_l1, block_size);
     }
-    sdpa_mul_bcast_col_reuse_tiles<block_size>(cb_l2, cb_l1, tile_index, 0);
+    sdpa_mul_bcast_col_reuse_tiles<block_size>(cb_l2, cb_l1, tile_index, 0 /*dst_tile_index*/);
     if constexpr (manage_cbs) {
         cb_pop_front(cb_l2, block_size);
         cb_pop_front(cb_l1, block_size);
@@ -517,10 +542,16 @@ ALWI void sdpa_tail_l_block(
     tile_regs_commit();
     tile_regs_wait();
     if constexpr (untilize) {
-        pack_untilize_dest<block_size, block_size * num_blocks, false, false, TILE_C_DIM, 0, dense>(
-            cb_l_out, 1, block_index, 8, dense ? 2 : 4);
+        pack_untilize_dest<
+            block_size,
+            block_size * num_blocks,
+            false /*diagonal*/,
+            false /*narrow_row*/,
+            TILE_C_DIM,
+            0 /*tile_dst_ct_offset*/,
+            dense>(cb_l_out, 1 /*block_rt_dim*/, block_index);
     } else {
-        pack_tile_block(0, cb_l_out, block_size);
+        pack_block_contiguous(0 /*ifrom_dst*/, cb_l_out, block_size);
     }
     if constexpr (manage_cbs) {
         if constexpr (!untilize) {
@@ -577,7 +608,7 @@ template <
     uint32_t block_size,
     uint32_t num_blocks,
     uint32_t scale_fp32,
-    int vector_mode = (int)VectorMode::C,
+    VectorMode vector_mode = VectorMode::C,
     bool dense = false,
     bool untilize = false>
 ALWI void sdpa_tail(
@@ -588,7 +619,7 @@ ALWI void sdpa_tail(
     uint32_t cb_l2,
     uint32_t cb_l_out) {
     // Phase 1: MS reduction - computes P1/P2, sets up SRCB
-    sdpa_tail_ms_reduce<SDPA_EXP_APPROX_MODE, normalize, block_size, scale_fp32, vector_mode, true, dense>(
+    sdpa_tail_ms_reduce<SDPA_EXP_APPROX_MODE, normalize, block_size, scale_fp32, vector_mode, true /*pop_ms*/, dense>(
         cb_worker_max_sum, cb_prev_max_sum, cb_cur_max_sum, cb_l1);
 
     // TODO: Update the tile locs in ms_reduce to enable dense packing during entire reduction
@@ -597,21 +628,30 @@ ALWI void sdpa_tail(
         PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(
             (TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * 2)));
     }
+    if constexpr (!untilize) {
+        pack_block_contiguous_init(cb_l_out);
+    }
 
     // Phase 2: Process all L blocks
     // Untilize requires operating on all blocks at once
     if constexpr (untilize) {
-        // TODO: We can pre-initialize this
-        pack_untilize_dest_init<block_size, num_blocks * block_size, false, TILE_C_DIM, dense>(
-            cb_l_out, 8, dense ? 2 : 4);
+        pack_untilize_dest_init<
+            block_size,
+            num_blocks * block_size,
+            false /*narrow_row*/,
+            TILE_C_DIM,
+            dense,
+            false /*configure_remap*/>(cb_l_out);
         cb_reserve_back(cb_l_out, block_size * num_blocks);
     }
     // When normalize=true, first block uses regs still held from MS phase
     if constexpr (normalize) {
-        sdpa_tail_l_block<block_size, num_blocks, untilize, dense, true>(cb_l1, cb_l2, cb_l_out, 0, 0, false);
+        sdpa_tail_l_block<block_size, num_blocks, untilize, dense, true /*manage_cbs*/>(
+            cb_l1, cb_l2, cb_l_out, 0 /*tile_index*/, 0 /*block_index*/, false /*acquire_regs*/);
     }
     for (uint32_t i = (normalize ? 1 : 0); i < num_blocks; i++) {
-        sdpa_tail_l_block<block_size, num_blocks, untilize, dense, true>(cb_l1, cb_l2, cb_l_out, 0, i, true);
+        sdpa_tail_l_block<block_size, num_blocks, untilize, dense, true /*manage_cbs*/>(
+            cb_l1, cb_l2, cb_l_out, 0 /*tile_index*/, i, true /*acquire_regs*/);
     }
     if constexpr (untilize) {
         cb_push_back(cb_l_out, block_size * num_blocks);
@@ -624,7 +664,7 @@ ALWI void sdpa_tail(
     }
 
     // Phase 3: Finalize (postamble + pop MS)
-    sdpa_tail_finalize<false>(cb_worker_max_sum, cb_prev_max_sum);
+    sdpa_tail_finalize<false /*pop_ms*/>(cb_worker_max_sum, cb_prev_max_sum);
 }
 
 }  // namespace ckernel

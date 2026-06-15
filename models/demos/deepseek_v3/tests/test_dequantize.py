@@ -1,16 +1,21 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Sequence
 
 import pytest
 import torch
 
-from models.demos.deepseek_v3.utils.hf_model_utils import load_weight_from_weights_dict
+from models.demos.deepseek_v3.utils.hf_model_utils import (
+    DEQUANTIZED_CHECKPOINT_SUFFIX,
+    STACKED_DEQUANTIZED_CHECKPOINT_SUFFIX,
+    load_weight_from_weights_dict,
+)
 from models.demos.deepseek_v3.utils.test_utils import load_state_dict
 
 REFERENCE_WEIGHT_KEYS = [
@@ -37,6 +42,9 @@ FULL_DEQUANT_COMPARE_TIMEOUT_SECONDS = 7200
 PRINT_TENSORS_ENV_VAR = "DEEPSEEK_V3_DEQUANT_PRINT_TENSORS"
 MAX_DIFF_INDICES_TO_PRINT = 20
 MAX_TENSOR_ELEMENTS_TO_PRINT = 100
+STACKED_EXPERT_WEIGHT_RE = re.compile(
+    r"^model\.layers\.(?P<layer>\d+)\.mlp\.experts\.(?P<expert>\d+)\.(?P<projection>gate_proj|down_proj|up_proj)\.weight$"
+)
 
 
 def _dequantize_reference_tensor(
@@ -130,6 +138,20 @@ def _print_tensor_comparison(
     print("---\n")
 
 
+def _expected_dequantized_weight_keys(orig_weight_keys: set[str], deq_keys: set[str]) -> set[str]:
+    if not any(".experts_stacked." in key for key in deq_keys):
+        return orig_weight_keys
+
+    expected_keys: set[str] = set()
+    for key in orig_weight_keys:
+        match = STACKED_EXPERT_WEIGHT_RE.match(key)
+        if match is None:
+            expected_keys.add(key)
+            continue
+        expected_keys.add(f"model.layers.{match.group('layer')}.mlp.experts_stacked.{match.group('projection')}.weight")
+    return expected_keys
+
+
 def _resolve_quantized_model_path(model_path: Path) -> Path | None:
     explicit_path = os.getenv(QUANTIZED_MODEL_PATH_ENV_VAR)
     if explicit_path:
@@ -137,8 +159,12 @@ def _resolve_quantized_model_path(model_path: Path) -> Path | None:
         return candidate if candidate.is_dir() else None
 
     model_path = Path(model_path).resolve()
-    if model_path.name.endswith("-dequantized"):
-        candidate = model_path.with_name(model_path.name.removesuffix("-dequantized"))
+    if model_path.name.endswith(STACKED_DEQUANTIZED_CHECKPOINT_SUFFIX):
+        candidate = model_path.with_name(model_path.name.removesuffix(STACKED_DEQUANTIZED_CHECKPOINT_SUFFIX))
+        return candidate if candidate.is_dir() else None
+
+    if model_path.name.endswith(DEQUANTIZED_CHECKPOINT_SUFFIX):
+        candidate = model_path.with_name(model_path.name.removesuffix(DEQUANTIZED_CHECKPOINT_SUFFIX))
         return candidate if candidate.is_dir() else None
 
     return None
@@ -268,7 +294,7 @@ def test_dequantized_checkpoint_has_all_original_weights(model_path):
     if quantized_model_path is None:
         pytest.skip(
             f"Could not resolve the original quantized checkpoint. Set {QUANTIZED_MODEL_PATH_ENV_VAR} "
-            "or run with DEEPSEEK_V3_HF_MODEL pointing at a '-dequantized' checkpoint."
+            "or run with DEEPSEEK_V3_HF_MODEL pointing at a '-dequantized-stacked' checkpoint."
         )
 
     deq_path = Path(model_path).resolve()
@@ -283,8 +309,13 @@ def test_dequantized_checkpoint_has_all_original_weights(model_path):
     orig_keys = set(orig_index["weight_map"].keys())
     deq_keys = set(deq_index["weight_map"].keys())
 
-    # Expected in dequantized = all original keys except _scale_inv (folded into weight)
-    orig_weight_keys = {k for k in orig_keys if not k.endswith("_scale_inv")}
+    # Expected in dequantized = all original keys except _scale_inv (folded into weight).
+    # Stacked exports intentionally replace per-expert MoE tensors with one
+    # `experts_stacked.<projection>.weight` tensor per layer/projection.
+    orig_weight_keys = _expected_dequantized_weight_keys(
+        {k for k in orig_keys if not k.endswith("_scale_inv")},
+        deq_keys,
+    )
 
     missing = orig_weight_keys - deq_keys
     extra = deq_keys - orig_weight_keys
@@ -305,7 +336,7 @@ def test_saved_dequantized_reference_weights_match_old_pipeline(model_path, hf_c
     if quantized_model_path is None:
         pytest.skip(
             f"Could not resolve the original quantized checkpoint. Set {QUANTIZED_MODEL_PATH_ENV_VAR} "
-            "or run with DEEPSEEK_V3_HF_MODEL pointing at a '-dequantized' checkpoint."
+            "or run with DEEPSEEK_V3_HF_MODEL pointing at a '-dequantized-stacked' checkpoint."
         )
 
     quantized_state_dict = load_state_dict(quantized_model_path, "")
@@ -331,7 +362,7 @@ def test_all_saved_dequantized_weights_match_old_pipeline(model_path, hf_config,
     if quantized_model_path is None:
         pytest.skip(
             f"Could not resolve the original quantized checkpoint. Set {QUANTIZED_MODEL_PATH_ENV_VAR} "
-            "or run with DEEPSEEK_V3_HF_MODEL pointing at a '-dequantized' checkpoint."
+            "or run with DEEPSEEK_V3_HF_MODEL pointing at a '-dequantized-stacked' checkpoint."
         )
 
     quantized_state_dict = load_state_dict(quantized_model_path, "")

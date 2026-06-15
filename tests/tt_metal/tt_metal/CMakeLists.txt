@@ -76,6 +76,7 @@ add_custom_target(
         ${METAL_TEST_TARGETS}
         metal_perf_microbenchmark_tests
         unit_tests_api
+        unit_tests_per_core_allocation
         unit_tests_data_movement
         unit_tests_debug_tools
         unit_tests_inspector

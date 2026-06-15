@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -14,7 +14,7 @@ struct ArgmaxParams {
     std::optional<int> dim;
     bool keepdim{};
     std::optional<CoreRangeSet> sub_core_grids;
-    bool use_multicore{};
+    bool use_multicore{};  // Deprecated: use sub_core_grids instead. Removal tracked in #44838.
     tt::tt_metal::MemoryConfig output_mem_config;
 };
 

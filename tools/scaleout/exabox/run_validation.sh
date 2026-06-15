@@ -22,8 +22,25 @@ Optional:
     --factory-descriptor-path <path>        Path to pregenerated factory system descriptor (FSD) file (.textproto)
                                             (if provided, cabling and deployment descriptors are ignored)
     --output <directory>                    Output directory for log files (default: validation_output)
-    --rerun-on-retrain                      Rerun validation when Ethernet links are retrained
+    --volume <host-path>                    Additional volume mount for Docker containers (can be repeated)
+                                            /data/scaleout_configs is mounted by default when it exists on
+                                            the host; each host path is mounted at the same path inside
+                                            the container
+    --mpi-if <interface>                    Network interface for MPI TCP transport (default: ens5f0np0)
+    --mpi-args <args>                       Extra arguments passed directly to mpirun (quoted string)
+                                            e.g. --mpi-args "--tag-output"
+    --validation-args <args>                Extra arguments passed verbatim to run_cluster_validation (quoted string)
+                                            e.g. --validation-args "--min-connections 2 --hard-fail"
+                                            Use this for any run_cluster_validation flag (relaxed validation, strict
+                                            failure, connectivity prints, metrics logging, etc.)
     --help                                  Display this help message and exit
+
+================================================================================
+To see the full list of run_cluster_validation flags forwardable via
+--validation-args, run (no cluster needed, --hosts is not required):
+
+    $0 --image <image> --validation-args "--help"
+================================================================================
 
 Example:
     $0 --hosts bh-glx-c01u02,bh-glx-c01u08,bh-glx-c02u02,bh-glx-c02u08 \\
@@ -41,7 +58,16 @@ ITERATIONS=50
 
 FACTORY_DESCRIPTOR_PATH=""
 OUTPUT_DIR="validation_output"
-RERUN_ON_RETRAIN=false
+# /data/scaleout_configs is a Markham-cluster convention. Only mount it when it
+# actually exists locally; otherwise Docker fails trying to auto-create the
+# missing bind-mount source path (mkdir: permission denied) and every rank dies
+# before run_cluster_validation starts. Sites that keep configs elsewhere just
+# pass them via --volume / the descriptor path flags.
+EXTRA_VOLUMES=()
+[[ -d /data/scaleout_configs ]] && EXTRA_VOLUMES+=(/data/scaleout_configs)
+MPI_IF="ens5f0np0"
+MPI_EXTRA_ARGS=()
+VALIDATION_EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -105,13 +131,39 @@ while [[ $# -gt 0 ]]; do
             OUTPUT_DIR="$2"
             shift 2
             ;;
-        --rerun-on-retrain)
-            if [[ -n "$2" ]] && [[ "$2" != --* ]]; then
-                echo "Error: --rerun-on-retrain does not accept a value"
+        --volume)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --volume requires a non-empty value"
                 exit 1
             fi
-            RERUN_ON_RETRAIN=true
-            shift
+            EXTRA_VOLUMES+=("$2")
+            shift 2
+            ;;
+        --mpi-if)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --mpi-if requires a non-empty value"
+                exit 1
+            fi
+            MPI_IF="$2"
+            shift 2
+            ;;
+        --mpi-args)
+            if [[ -z "$2" ]]; then
+                echo "Error: --mpi-args requires a non-empty value"
+                exit 1
+            fi
+            read -ra _extra <<< "$2"
+            MPI_EXTRA_ARGS+=("${_extra[@]}")
+            shift 2
+            ;;
+        --validation-args)
+            if [[ -z "$2" ]]; then
+                echo "Error: --validation-args requires a non-empty value"
+                exit 1
+            fi
+            read -ra _extra <<< "$2"
+            VALIDATION_EXTRA_ARGS+=("${_extra[@]}")
+            shift 2
             ;;
         --help)
             show_help
@@ -124,6 +176,21 @@ while [[ $# -gt 0 ]]; do
             exit 1
             ;;
     esac
+done
+
+# If the operator forwarded --help / -h through --validation-args, just print
+# run_cluster_validation --help from the docker image and exit. Short-circuits
+# before --hosts validation since no cluster operation is performed.
+for _arg in "${VALIDATION_EXTRA_ARGS[@]}"; do
+    if [[ "$_arg" == "--help" || "$_arg" == "-h" ]]; then
+        if [[ -z "$DOCKER_IMAGE" ]]; then
+            echo "Error: --validation-args \"--help\" requires --image <docker-image>"
+            echo "Example: $0 --image <ghcr-image> --validation-args \"--help\""
+            exit 1
+        fi
+        exec docker run --rm --entrypoint='' "$DOCKER_IMAGE" \
+            ./build/tools/scaleout/run_cluster_validation --help
+    fi
 done
 
 # Validate required arguments
@@ -142,30 +209,101 @@ if [[ -z "$DOCKER_IMAGE" ]]; then
 fi
 
 run_cluster_validation() {
+    local validation_output_path="$1"
+
     if [[ -n "$FACTORY_DESCRIPTOR_PATH" ]]; then
         local descriptor_args=(--factory-descriptor-path "$FACTORY_DESCRIPTOR_PATH")
     else
         local descriptor_args=(--cabling-descriptor-path "$CABLING_DESCRIPTOR_PATH" --deployment-descriptor-path "$DEPLOYMENT_DESCRIPTOR_PATH")
     fi
 
+    local volume_args=()
+    for vol in "${EXTRA_VOLUMES[@]}"; do
+        volume_args+=(--volume "$vol")
+    done
+
     if [[ $DOCKER_IMAGE == "none" ]]; then
         mpirun --host "$HOSTS" \
-            --mca btl_tcp_if_exclude docker0,lo,tailscale0 \
+            --mca btl_tcp_if_include "$MPI_IF" \
+            "${MPI_EXTRA_ARGS[@]}" \
             --tag-output \
             ./build/tools/scaleout/run_cluster_validation \
             "${descriptor_args[@]}" \
+            "${VALIDATION_EXTRA_ARGS[@]}" \
             --send-traffic \
-            --num-iterations 10
+            --num-iterations 10 \
+            --output-path "$validation_output_path"
     else
         ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
             --empty-entrypoint \
+            --mpi-interface "$MPI_IF" \
+            "${volume_args[@]}" \
+            "${MPI_EXTRA_ARGS[@]}" \
             --host "$HOSTS" \
             ./build/tools/scaleout/run_cluster_validation \
             "${descriptor_args[@]}" \
+            "${VALIDATION_EXTRA_ARGS[@]}" \
             --send-traffic \
-            --num-iterations 10
+            --num-iterations 10 \
+            --output-path "$validation_output_path"
     fi
 }
+
+# Function to run reset on hosts and return hosts that failed reset
+# Args: host_list (comma-separated), output_file, message_prefix
+run_board_reset() {
+    local host_list="$1"
+    local output_file="$2"
+    local msg_prefix="$3"
+
+    # Convert host list to array
+    IFS=',' read -ra host_array <<< "$host_list"
+
+    # Run reset
+    mpirun --host "$host_list" \
+        --mca btl_tcp_if_include "$MPI_IF" \
+        "${MPI_EXTRA_ARGS[@]}" \
+        --tag-output \
+        bash -c 'tt-smi -glx_reset > /dev/null 2>&1; echo "RESET_EXIT_CODE=$?"' > "$output_file"
+    mpirun_exit_code=$?
+
+   # Check if mpirun failed
+    if [[ $mpirun_exit_code -ne 0 ]]; then
+        echo "ERROR: mpirun failed with exit code $mpirun_exit_code" >&2
+        rm -f "$output_file"
+        return 1  # Signal mpirun infrastructure failure
+    fi
+
+    # Parse and display results, collect failures
+    local failed_hosts=()
+    while IFS= read -r line; do
+        if [[ $line =~ ^\[([0-9]+),([0-9]+)\]\<stdout\>:RESET_EXIT_CODE=([0-9]+)$ ]]; then
+            local job_id="${BASH_REMATCH[1]}"
+            local mpi_rank="${BASH_REMATCH[2]}"
+            local exit_code="${BASH_REMATCH[3]}"
+
+            # Use mpi_rank to index host_array
+            if [[ $mpi_rank -lt ${#host_array[@]} ]]; then
+                local hostname="${host_array[$mpi_rank]}"
+                if [[ $exit_code -eq 0 ]]; then
+                    echo "[$job_id,$mpi_rank]$hostname: ${msg_prefix}Reset completed successfully" >&2
+                else
+                    echo "[$job_id,$mpi_rank]$hostname: ${msg_prefix}Reset failed | Exit code: $exit_code" >&2
+                    failed_hosts+=("$hostname")
+                fi
+            else
+                echo "Warning: MPI rank $mpi_rank exceeds host array size ${#host_array[@]}" >&2
+            fi
+        fi
+    done < "$output_file"
+    rm -f "$output_file"
+
+    # Return comma-separated list of failed hosts (to stdout only)
+    local IFS=','
+    echo "${failed_hosts[*]}"
+    return 0  # Success
+}
+
 
 echo "Using hosts: $HOSTS"
 echo "Using docker image: $DOCKER_IMAGE"
@@ -175,12 +313,25 @@ else
     echo "Cabling descriptor path: $CABLING_DESCRIPTOR_PATH"
     echo "Deployment descriptor path: $DEPLOYMENT_DESCRIPTOR_PATH"
 fi
+echo "MPI interface: $MPI_IF"
+if [[ "${#MPI_EXTRA_ARGS[@]}" -gt 0 ]]; then
+    echo "MPI extra args: ${MPI_EXTRA_ARGS[*]}"
+fi
 echo "Number of iterations: $ITERATIONS"
 echo "Output directory: $OUTPUT_DIR"
+if [[ ${#VALIDATION_EXTRA_ARGS[@]} -gt 0 ]]; then
+    echo "Extra validation args: ${VALIDATION_EXTRA_ARGS[*]}"
+fi
 echo ""
 
-# Create output directory if it doesn't exist
+# Create output directory if it doesn't exist and resolve to an absolute path so
+# that paths passed into Docker containers refer to the same location on the host.
 mkdir -p "$OUTPUT_DIR"
+OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
+
+# Ensure the output directory is bind-mounted into containers so per-iteration
+# CSVs survive container exit and are visible to the host-side aggregation step.
+EXTRA_VOLUMES+=("$OUTPUT_DIR")
 
 # Main testing loop
 for ((i=1; i<=ITERATIONS; i++)); do
@@ -195,41 +346,109 @@ for ((i=1; i<=ITERATIONS; i++)); do
         echo "=========================================="
         echo ""
 
-        echo "Running tt-smi -glx_reset..."
-        mpirun --host "$HOSTS" --mca btl_tcp_if_exclude docker0,lo,tailscale0 tt-smi -glx_reset
+        echo "Running tt-smi -glx_reset (this may take a few minutes)..."
 
-        sleep 5
+        # Run initial reset and capture failures
+        RESET_OUTPUT_FILE="$OUTPUT_DIR/reset_output_iter_${i}_$$"
+        FAILED_HOSTS_STR=$(run_board_reset "$HOSTS" "$RESET_OUTPUT_FILE" "")
+        MPI_EXIT_CODE=$?
 
-        echo ""
-        echo "Running cluster validation..."
-        run_cluster_validation
+        # Retry only failed hosts if any
+        if [[ -n "$FAILED_HOSTS_STR" ]]; then
+            echo ""
+            echo "Retrying reset for failed hosts: $FAILED_HOSTS_STR"
+
+            RESET_RETRY_OUTPUT_FILE="$OUTPUT_DIR/reset_retry_output_iter_${i}_$$"
+
+            # Run retry and capture exit code (discard stdout)
+            run_board_reset "$FAILED_HOSTS_STR" "$RESET_RETRY_OUTPUT_FILE" "Retry: " > /dev/null
+            MPI_EXIT_CODE=$?
+        fi
+
+        # Only run validation if retry was successful (or no retry needed)
+        if [[ $MPI_EXIT_CODE -eq 0 ]]; then
+            sleep 5
+
+            echo ""
+            echo "Running cluster validation..."
+            run_cluster_validation "$OUTPUT_DIR/iteration_${i}"
+            VALIDATION_EXIT_CODE=$?
+            # Surface validation failures explicitly. Without this, a container
+            # that dies before run_cluster_validation starts (e.g. a bad bind
+            # mount -> docker exit 126) produces no output yet the loop still
+            # prints "completed", masking the failure.
+            if [[ $VALIDATION_EXIT_CODE -ne 0 ]]; then
+                echo "ERROR: cluster validation FAILED (exit code $VALIDATION_EXIT_CODE)"
+            fi
+        else
+            echo "Skipping validation due to mpirun failure"
+        fi
+
         echo "Iteration $i completed at $(date)"
         echo "=========================================="
     } 2>&1 | tee "$LOG_FILE"
 
-    if [[ "$RERUN_ON_RETRAIN" == true ]] && grep -q "Ethernet Links were Retrained" "$LOG_FILE"; then
-        OUTPUT_DIR_RETRY="${OUTPUT_DIR}_retry"
-
-        mkdir -p "$OUTPUT_DIR_RETRY"
-
-        LOG_FILE_RETRY="$OUTPUT_DIR_RETRY/cluster_validation_iteration_${i}_retry.log"
-
-        {
-            echo "=========================================="
-            echo "Iteration: $i - retry due to retrained links"
-            echo "Timestamp: $(date)"
-            echo "=========================================="
-            echo ""
-
-            echo "Re-running cluster validation..."
-            run_cluster_validation
-            echo "Iteration $i retry completed at $(date)"
-            echo "=========================================="
-        } 2>&1 | tee "$LOG_FILE_RETRY"
-    fi
-
     echo "Iteration $i logged to $LOG_FILE"
     echo ""
 done
+
+# ----------------------------------------------------------------------------
+# End-of-run aggregation: produce a single CSV with one row per retrained link
+# and the total number of retrains observed across the entire run. Per-iteration
+# link_retrain_report.csv files are written by the C++ tool inside each iteration's
+# output directory.
+# ----------------------------------------------------------------------------
+RETRAIN_SUMMARY="$OUTPUT_DIR/link_retrain_summary.csv"
+
+retrain_csvs=()
+while IFS= read -r -d '' csv; do
+    retrain_csvs+=("$csv")
+done < <(find "$OUTPUT_DIR" -name "link_retrain_report.csv" -print0 2>/dev/null | sort -zV)
+
+echo "=========================================="
+echo "LINK RETRAIN SUMMARY (across all iterations)"
+echo "=========================================="
+
+if [[ ${#retrain_csvs[@]} -eq 0 ]]; then
+    echo "No link retraining events detected across $ITERATIONS iteration(s)."
+    echo ""
+    echo "All $ITERATIONS iterations completed!"
+    exit 0
+fi
+
+echo "Iterations with retraining: ${#retrain_csvs[@]}"
+echo ""
+
+# Sum Retrain_Count per (Host,Tray,ASIC,Channel,Unique_ID) across all CSVs.
+# Each per-iteration CSV has header: Host,Tray,ASIC,Channel,Unique_ID,Retrain_Count
+{
+    echo "Host,Tray,ASIC,Channel,Unique_ID,Total_Retrain_Count"
+    awk -F, '
+        FNR == 1 { next }                       # skip per-file header
+        {
+            key = $1 FS $2 FS $3 FS $4 FS $5
+            counts[key] += $6
+        }
+        END {
+            for (k in counts) print k FS counts[k]
+        }
+    ' "${retrain_csvs[@]}" | sort -t, -k1,1 -k2,2n -k3,3n -k4,4n
+} > "$RETRAIN_SUMMARY"
+
+if command -v column >/dev/null 2>&1; then
+    column -t -s, "$RETRAIN_SUMMARY"
+else
+    cat "$RETRAIN_SUMMARY"
+fi
+
+# Total retrain events across all links (sum of the rightmost column).
+TOTAL_RETRAIN_EVENTS=$(awk -F, 'NR > 1 { s += $6 } END { print s+0 }' "$RETRAIN_SUMMARY")
+UNIQUE_LINKS=$(($(wc -l < "$RETRAIN_SUMMARY") - 1))
+
+echo ""
+echo "Unique links retrained: $UNIQUE_LINKS"
+echo "Total retrain events: $TOTAL_RETRAIN_EVENTS"
+echo "Full retrain summary written to: $RETRAIN_SUMMARY"
+echo ""
 
 echo "All $ITERATIONS iterations completed!"

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,6 @@ struct UntilizeWithUnpaddingParams {
     tt::tt_metal::MemoryConfig output_mem_config;
     bool use_multicore = false;
     bool fp32_dest_acc_en = false;
-    bool enough_space_width = false;
     bool enough_space_height = false;
     std::optional<CoreRangeSet> sub_core_grids = std::nullopt;
 };

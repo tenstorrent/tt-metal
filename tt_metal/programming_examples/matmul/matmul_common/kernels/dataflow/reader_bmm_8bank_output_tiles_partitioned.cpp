@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,16 +22,14 @@ void kernel_main() {
     uint32_t num_output_tiles = get_arg_val<uint32_t>(10);
     uint32_t MtNt = get_arg_val<uint32_t>(11);
 
-    // DPRINT << "Mt=" << Mt << " Kt=" << Kt << " Nt=" << Nt << " MtKt=" << MtKt << "KtNt=" << KtNt << ENDL();
-    // DPRINT << "src0=" << src0_addr << " src1=" << src1_addr << ENDL();
-    // DPRINT << "batch=" << batch << ENDL();
+    // DPRINT("Mt={} Kt={} Nt={} MtKt={} KtNt={}\n", Mt, Kt, Nt, MtKt, KtNt);
+    // DPRINT("src0={:#x} src1={:#x}\n", src0_addr, src1_addr);
+    // DPRINT("batch={}\n", batch);
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
 
     constexpr uint32_t onetile = 1;
-    const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
-    const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
 
     uint32_t itileA = output_tile_start_id / Nt * Kt;  // input0 row = output row * input0 width
 
@@ -44,16 +42,16 @@ void kernel_main() {
     }
 
     constexpr auto s0_args = TensorAccessorArgs<0>();
-    const auto s0 = TensorAccessor(s0_args, src0_addr, in0_tile_bytes);
+    const auto s0 = TensorAccessor(s0_args, src0_addr);
     constexpr auto s1_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
-    const auto s1 = TensorAccessor(s1_args, src1_addr, in1_tile_bytes);
+    const auto s1 = TensorAccessor(s1_args, src1_addr);
 
     for (uint32_t n = 0; n < num_output_tiles; n++) {
         for (uint32_t kt = 0; kt < Kt; kt++) {
             {  // Read A's tile at (mt, kt)
                 cb_reserve_back(cb_id_in0, onetile);
                 uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-                noc_async_read_tile(itileA, s0, l1_write_addr_in0);
+                noc_async_read_page(itileA, s0, l1_write_addr_in0);
                 noc_async_read_barrier();
                 cb_push_back(cb_id_in0, onetile);
             }
@@ -61,11 +59,11 @@ void kernel_main() {
             {  // Read B's tile at (kt, nt)
                 cb_reserve_back(cb_id_in1, onetile);
                 uint32_t l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-                noc_async_read_tile(itileB, s1, l1_write_addr_in1);
+                noc_async_read_page(itileB, s1, l1_write_addr_in1);
                 noc_async_read_barrier();
                 cb_push_back(cb_id_in1, onetile);
             }
-            // DPRINT << "Pushed itileA=" << itileA << " itileB=" << itileB << ENDL();
+            // DPRINT("Pushed itileA={} itileB={}\n", itileA, itileB);
 
             itileA += 1;   // A is MK
             itileB += Nt;  // B is KN, so to get k++ we stride by Nt

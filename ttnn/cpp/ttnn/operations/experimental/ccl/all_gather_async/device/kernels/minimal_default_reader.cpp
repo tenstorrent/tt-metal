@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -74,7 +74,7 @@ void kernel_main() {
 #else
     constexpr auto input_tensor_args = TensorAccessorArgs<ct_idx>();
     constexpr uint32_t ct_offset = input_tensor_args.num_compile_time_args();
-    const auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_tensor_address, page_size);
+    const auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_tensor_address);
 #endif
 
 #ifdef OUTPUT_IS_SHARDED
@@ -97,7 +97,7 @@ void kernel_main() {
     arg_idx += output_rt_increment;
 #else
     constexpr auto output_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
-    const auto output_tensor_addrgen = TensorAccessor(output_tensor_args, output_tensor_address, page_size);
+    const auto output_tensor_addrgen = TensorAccessor(output_tensor_args, output_tensor_address);
 #endif
 
     OpSignaler op_signaler;
@@ -120,7 +120,7 @@ void kernel_main() {
             size_t l1_write_addr = get_write_ptr(cb_output_id);
             for (uint32_t j = 0; j < num_tiles_to_read; ++j) {
                 uint32_t tile_id = output_tile_id_start + tiles_read;
-                uint64_t noc_read_addr = get_noc_addr(tile_id, input_tensor_addrgen);
+                uint64_t noc_read_addr = input_tensor_addrgen.get_noc_addr(tile_id);
                 noc_async_read(noc_read_addr, l1_write_addr, page_size);
 
                 l1_write_addr += page_size;
@@ -310,7 +310,7 @@ void kernel_main() {
 
                             for (uint32_t j = 0; j < num_tiles_to_read; ++j) {
                                 uint32_t tile_id = output_tile_id_start + cb_row_offset + cb_pages_read_in_row;
-                                uint64_t noc_read_addr = get_noc_addr(tile_id, output_tensor_addrgen);
+                                uint64_t noc_read_addr = output_tensor_addrgen.get_noc_addr(tile_id);
                                 noc_async_read(noc_read_addr, l1_write_addr, page_size);
 
                                 l1_write_addr += page_size;

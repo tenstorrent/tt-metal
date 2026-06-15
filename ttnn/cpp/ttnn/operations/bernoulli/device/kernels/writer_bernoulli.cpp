@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <tt-metalium/constants.hpp>
@@ -16,9 +16,8 @@ void kernel_main() {
     auto num_tiles = get_arg_val<uint32_t>(2);
     uint32_t end_id = start_id + num_tiles;
 
-    const uint32_t tile_size_bytes = get_tile_size(intermed1_cb_id);
     constexpr auto out_args = TensorAccessorArgs<3>();
-    const auto output_addrg = TensorAccessor(out_args, out_addr, tile_size_bytes);
+    const auto output_addrg = TensorAccessor(out_args, out_addr);
 
     cb_reserve_back(intermed1_cb_id, 1);
     uint32_t intermed1_cb_write_ptr = get_write_ptr(intermed1_cb_id);
@@ -70,7 +69,7 @@ void kernel_main() {
         cb_pop_front(in_cb_id, 1);
         cb_pop_front(intermed_cb_id, 1);
 
-        noc_async_write_tile(i, output_addrg, intermed1_cb_write_ptr);
+        noc_async_write_page(i, output_addrg, intermed1_cb_write_ptr);
         noc_async_write_barrier();
     }
 }

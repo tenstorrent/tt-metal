@@ -1,13 +1,13 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
@@ -39,17 +39,27 @@ void kernel_main() {
     constexpr auto src_b_args =
         TensorAccessorArgs<src_args.next_compile_time_args_offset(), src_args.next_common_runtime_args_offset()>();
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_src(cb_id_src);
-    experimental::CircularBuffer cb_src_b(cb_id_src_b);
+    Noc noc;
+    CircularBuffer cb_src(cb_id_src);
+    CircularBuffer cb_src_b(cb_id_src_b);
 
-#if !SRC_SHARDED
-    const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
-    const auto src = TensorAccessor(src_args, src_addr, src_tile_bytes);
+#if SRC_SHARDED
+#if !SRC_BCAST
+    cb_src.reserve_back(src_num_tiles);
+    cb_src.push_back(src_num_tiles);
 #endif
-#if !SRC_SHARDED_B
-    const uint32_t src_tile_bytes_b = get_tile_size(cb_id_src_b);
-    const auto src_b = TensorAccessor(src_b_args, src_addr_b, src_tile_bytes_b);
+#else
+    const uint32_t src_tile_bytes = cb_src.get_tile_size();
+    const auto src = TensorAccessor(src_args, src_addr);
+#endif
+#if SRC_SHARDED_B
+#if !SRC_BCAST_B
+    cb_src_b.reserve_back(src_num_tiles_b);
+    cb_src_b.push_back(src_num_tiles_b);
+#endif
+#else
+    const uint32_t src_tile_bytes_b = cb_src_b.get_tile_size();
+    const auto src_b = TensorAccessor(src_b_args, src_addr_b);
 #endif
     constexpr uint32_t onetile = 1;
     constexpr bool has_sharding = get_compile_time_arg_val(src_b_args.next_compile_time_args_offset()) == 1;
@@ -101,7 +111,9 @@ void kernel_main() {
                     noc.async_read(src, cb_src, src_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
                     noc.async_read_barrier();
 #endif
-                    FILL_TILE_WITH_FIRST_ELEMENT(cb_id_src);
+#if !BCAST_LLK
+                    FILL_TILE_WITH_FIRST_ELEMENT(cb_src.get_write_ptr());
+#endif
                     cb_src.push_back(onetile);
 #endif
 #if SRC_BCAST_B
@@ -110,7 +122,9 @@ void kernel_main() {
                     noc.async_read(src_b, cb_src_b, src_tile_bytes_b, {.page_id = tile_offset_b}, {.offset_bytes = 0});
                     noc.async_read_barrier();
 #endif
-                    FILL_TILE_WITH_FIRST_ELEMENT_B(cb_id_src_b);
+#if !BCAST_LLK
+                    FILL_TILE_WITH_FIRST_ELEMENT_B(cb_src_b.get_write_ptr());
+#endif
                     cb_src_b.push_back(onetile);
 #endif
                     for (uint32_t th = start_th; th < Ht && num_tiles_read < dst_num_tiles; ++th) {
@@ -125,9 +139,8 @@ void kernel_main() {
 #endif
                             cb_src.push_back(onetile);
 #endif
-#if !SRC_BCAST_B
+#if !SRC_BCAST_B && !SRC_SHARDED_B
                             cb_src_b.reserve_back(onetile);
-#if !SRC_SHARDED_B
                             noc.async_read(
                                 src_b,
                                 cb_src_b,
@@ -135,7 +148,6 @@ void kernel_main() {
                                 {.page_id = tile_offset_b + tw},
                                 {.offset_bytes = 0});
                             noc.async_read_barrier();
-#endif
                             cb_src_b.push_back(onetile);
 #endif
                         }

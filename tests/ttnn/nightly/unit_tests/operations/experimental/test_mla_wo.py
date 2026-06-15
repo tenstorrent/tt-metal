@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -343,6 +343,9 @@ SHAPE2TIME = {
 }
 
 
+@pytest.mark.skip(
+    reason="Disabled by issue #44858: stable PCC assertion failure in test_mla_wo on nightly blackhole P150b"
+)
 @pytest.mark.parametrize(
     "device_params",
     [

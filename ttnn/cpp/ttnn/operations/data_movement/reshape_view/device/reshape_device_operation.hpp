@@ -1,13 +1,13 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/data_movement/reshape_view/device/reshape_device_operation_types.hpp"
 #include "ttnn/operations/data_movement/reshape_view/device/reshape_row_major_program_factory.hpp"
 #include "ttnn/operations/data_movement/reshape_view/device/reshape_tiled_program_factory.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::prim {
 

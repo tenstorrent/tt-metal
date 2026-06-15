@@ -12,7 +12,7 @@ This test suite uses the TT-Metal Mesh Device API, which provides a unified inte
 
 ## Device 2.0 API Support
 
-This test suite includes tests using both the standard NOC API and the experimental Device 2.0 API
+This test suite includes tests using both the standard NOC API and the Device 2.0 API
 
 ## Test Flow
 
@@ -35,8 +35,8 @@ This test suite includes tests using both the standard NOC API and the experimen
 | MulticastAtomicMultiSourceNOC1     | 324 | 4 sender cores multicast atomic increment to 12 destinations (NOC_1)      |
 | MulticastAtomicLargerIncrement     | 325 | 4 senders, 3 transactions each, increment value 5 (NOC_0)                 |
 | MulticastAtomicLargerIncrementNOC1 | 326 | 4 senders, 3 transactions each, increment value 5 (NOC_1)                 |
-| MulticastAtomicSingleSource_2_0    | 327 | Single sender using experimental API                                      |
-| MulticastAtomicLargerIncrement_2_0 | 328 | 4 senders, 3 transactions each, increment value 5 using experimental API  |
+| MulticastAtomicSingleSource_2_0    | 327 | Single sender using API                                      |
+| MulticastAtomicLargerIncrement_2_0 | 328 | 4 senders, 3 transactions each, increment value 5 using API  |
 
 ### SingleSourceMulticastAtomic (IDs 321, 323, 327)
 - **Description**: Single sender core multicasts atomic increment to a 3x4 grid of 12 destination cores
@@ -60,7 +60,7 @@ This test suite includes tests using both the standard NOC API and the experimen
 | num_of_transactions  | uint32_t              | Number of multicast atomic increments per sender |
 | atomic_inc_value     | uint32_t              | Value to increment semaphore by |
 | noc_id               | NOC                   | Which NOC to use (NOC_0 or NOC_1) |
-| use_2_0_api          | bool                  | Use experimental Device 2.0 API (default: false) |
+| use_2_0_api          | bool                  | Use Device 2.0 API (default: false) |
 
 ## Important Notes
 

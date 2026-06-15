@@ -1,10 +1,13 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     int i{0};
@@ -16,19 +19,19 @@ void kernel_main() {
     uint32_t cb_id{16};
     const auto cb_id_output = cb_id++;
 
-    const uint32_t output_tile_bytes = get_tile_size(cb_id_output);
-
     constexpr auto output_args = TensorAccessorArgs<0>();
-    const auto s = TensorAccessor(output_args, output_addr, output_tile_bytes);
+    const auto s = TensorAccessor(output_args, output_addr);
 
-    const auto output_l1_read_addr = get_read_ptr(cb_id_output);
+    Noc noc;
+    CircularBuffer cb_output(cb_id_output);
+    const auto output_tile_bytes = get_tile_size(cb_id_output);
 
     auto output_tile_idx = tile_offset;
     for (uint32_t idx = 0; idx < num_output_tiles_per_core; ++idx) {
-        cb_wait_front(cb_id_output, 1);
-        noc_async_write_tile(output_tile_idx, s, output_l1_read_addr);
-        noc_async_write_barrier();
-        cb_pop_front(cb_id_output, 1);
+        cb_output.wait_front(1);
+        noc.async_write(cb_output, s, output_tile_bytes, {.offset_bytes = 0}, {.page_id = output_tile_idx});
+        noc.async_write_barrier();
+        cb_output.pop_front(1);
         output_tile_idx++;
     }
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -46,9 +46,9 @@ void kernel_main() {
     uint32_t out_col_end = out_col_start + input_shard_col_tiles;
 
     constexpr auto input_tensor_args = TensorAccessorArgs<10>();
-    auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_buffer_addr, page_size);
+    auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_buffer_addr);
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
-    auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_buffer_addr, page_size);
+    auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_buffer_addr);
 
     if (my_ring_id == remote_device_ring_id) {
         // Follows same logic as sender reader for local copy.
@@ -67,7 +67,7 @@ void kernel_main() {
 
                 uint32_t num_pages_to_read = std::min(shard_col_end_id - col_tile_id, num_pages_per_packet);
                 for (uint32_t j = 0; j < num_pages_to_read; j++) {
-                    noc_async_read_tile(tile_id, input_tensor_addrgen, l1_write_addr);
+                    noc_async_read_page(tile_id, input_tensor_addrgen, l1_write_addr);
                     l1_write_addr += page_size;
                     tile_id++;
                 }
@@ -106,7 +106,7 @@ void kernel_main() {
                     uint32_t global_id = sender_relative_ring_id + packet_id * NUM_SENDERS;
                     uint32_t first_id = (global_id % N_DRAM_BANKS) + 2 * N_DRAM_BANKS * (global_id / N_DRAM_BANKS);
                     uint64_t packet_addr =
-                        get_noc_addr(first_id, intermediate_tensor_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+                        intermediate_tensor_addrgen.get_noc_addr(first_id, 0 /*offset*/, 0 /*noc_id*/);
 
                     noc_async_read(packet_addr, l1_write_addr, payload_size_bytes);
                     l1_write_addr += payload_size_bytes;

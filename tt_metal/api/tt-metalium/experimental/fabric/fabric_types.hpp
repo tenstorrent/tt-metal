@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -141,6 +141,18 @@ struct fmt::formatter<tt::tt_fabric::MeshId> {
 };
 
 namespace tt::tt_metal {
+
+// Physical port / cable type for ethernet connections
+enum class PortType {
+    UNKNOWN,
+    TRACE,
+    QSFP_DD,
+    WARP100,
+    WARP400,
+    LINKING_BOARD_1,
+    LINKING_BOARD_2,
+    LINKING_BOARD_3,
+};
 
 using AsicID = tt::stl::StrongType<uint64_t, struct AsicIDTag>;
 using TrayID = tt::stl::StrongType<uint32_t, struct TrayIDTag>;

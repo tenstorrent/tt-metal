@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -43,6 +43,8 @@ public:
     DataFormat data_format(uint32_t buffer_index) const;
 
     const std::optional<Tile>& tile(uint32_t buffer_index) const;
+
+    const std::optional<FaceGeometry>& unpack_face_geometry(uint32_t buffer_index) const;
 
     uint32_t address() const;
 

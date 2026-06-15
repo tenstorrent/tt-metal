@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -59,20 +59,30 @@ void py_module(nb::module_& mod) {
     )doc");
 
     matmul_multi_core_reuse_program_config.def(
-        nb::init<CoreCoord, std::size_t, std::size_t, std::size_t, std::size_t, std::size_t>(),
+        nb::init<
+            CoreCoord,
+            std::size_t,
+            std::size_t,
+            std::size_t,
+            std::size_t,
+            std::size_t,
+            std::optional<CoreRangeSet>>(),
         nb::kw_only(),
         nb::arg("compute_with_storage_grid_size"),
         nb::arg("in0_block_w").noconvert(),
         nb::arg("out_subblock_h").noconvert(),
         nb::arg("out_subblock_w").noconvert(),
         nb::arg("per_core_M").noconvert(),
-        nb::arg("per_core_N").noconvert());
+        nb::arg("per_core_N").noconvert(),
+        nb::arg("allowed_worker_cores") = nb::none());
     matmul_multi_core_reuse_program_config.def_rw(
         "compute_with_storage_grid_size", &MatmulMultiCoreReuseProgramConfig::compute_with_storage_grid_size, R"doc(
         Grid size for compute cores with storage capability.
 
         Specifies the 2D grid of cores (x, y) that will be used for computation and have
         access to storage. This determines how the computation is distributed across cores.
+
+        **DEPRECATED**: Use ``allowed_worker_cores`` instead for finer control over the compute grid.
     )doc");
     matmul_multi_core_reuse_program_config.def_rw("in0_block_w", &MatmulMultiCoreReuseProgramConfig::in0_block_w, R"doc(
         Block width for both input tensors along the K dimension (shared inner dimension).
@@ -112,16 +122,24 @@ void py_module(nb::module_& mod) {
         Larger values mean fewer cores are used but each core does more work.
         Must be chosen such that (total_N / per_core_N) cores are available.
     )doc");
+    matmul_multi_core_reuse_program_config.def_rw(
+        "allowed_worker_cores", &MatmulMultiCoreReuseProgramConfig::allowed_worker_cores, R"doc(
+        Optional set of worker cores to restrict the matmul computation to.
+
+        When set, overrides ``compute_with_storage_grid_size`` for determining the active
+        compute grid. Accepts a ``CoreRangeSet`` describing the exact cores to use.
+    )doc");
     matmul_multi_core_reuse_program_config.def("__repr__", [](const MatmulMultiCoreReuseProgramConfig& config) {
         return fmt::format(
             "MatmulMultiCoreReuseProgramConfig(compute_with_storage_grid_size={}, in0_block_w={}, out_subblock_h={}, "
-            "out_subblock_w={}, per_core_M={}, per_core_N={})",
+            "out_subblock_w={}, per_core_M={}, per_core_N={}, allowed_worker_cores={})",
             config.compute_with_storage_grid_size,
             config.in0_block_w,
             config.out_subblock_h,
             config.out_subblock_w,
             config.per_core_M,
-            config.per_core_N);
+            config.per_core_N,
+            config.allowed_worker_cores.has_value() ? fmt::format("{}", config.allowed_worker_cores.value()) : "None");
     });
 
     auto matmul_multi_core_reuse_multicast_program_config =
@@ -143,12 +161,12 @@ void py_module(nb::module_& mod) {
            std::size_t per_core_N,
            bool transpose_mcast,
            std::optional<UnaryWithParam> fused_activation,
-           bool fuse_batch) {
-            // Set out_block_h and out_block_w to defaults if they are not provided
+           bool fuse_batch,
+           std::optional<CoreRangeSet> allowed_worker_cores) {
             std::size_t actual_out_block_h = out_block_h.value_or(per_core_M);
             std::size_t actual_out_block_w = out_block_w.value_or(per_core_N);
 
-            new (t) MatmulMultiCoreReuseMultiCastProgramConfig(
+            new (t) MatmulMultiCoreReuseMultiCastProgramConfig{
                 compute_with_storage_grid_size,
                 in0_block_w,
                 out_subblock_h,
@@ -159,7 +177,8 @@ void py_module(nb::module_& mod) {
                 per_core_N,
                 transpose_mcast,
                 std::move(fused_activation),
-                fuse_batch);
+                fuse_batch,
+                std::move(allowed_worker_cores)};
         },
         nb::kw_only(),
         nb::arg("compute_with_storage_grid_size"),
@@ -172,7 +191,8 @@ void py_module(nb::module_& mod) {
         nb::arg("per_core_N").noconvert(),
         nb::arg("transpose_mcast").noconvert(),
         nb::arg("fused_activation") = nb::none(),
-        nb::arg("fuse_batch").noconvert() = true);
+        nb::arg("fuse_batch").noconvert() = true,
+        nb::arg("allowed_worker_cores") = nb::none());
 
     matmul_multi_core_reuse_multicast_program_config.def_rw(
         "compute_with_storage_grid_size",
@@ -183,6 +203,8 @@ void py_module(nb::module_& mod) {
         Specifies the 2D grid of cores (x, y) that will be used for computation and have
         access to storage. This determines how the computation is distributed across cores
         and affects multicast communication patterns.
+
+        **DEPRECATED**: Use ``allowed_worker_cores`` instead for finer control over the compute grid.
     )doc");
 
     matmul_multi_core_reuse_multicast_program_config.def_rw(
@@ -275,12 +297,21 @@ void py_module(nb::module_& mod) {
 
         Note: the batch dimensions need to all be 1 for the second input tensor when fuse_batch is true.
     )doc");
+    matmul_multi_core_reuse_multicast_program_config.def_rw(
+        "allowed_worker_cores",
+        &MatmulMultiCoreReuseMultiCastProgramConfig::allowed_worker_cores,
+        R"doc(
+        Optional set of worker cores to restrict the matmul computation to.
+
+        When set, overrides ``compute_with_storage_grid_size`` for determining the active
+        compute grid. Accepts a ``CoreRangeSet`` describing the exact cores to use.
+    )doc");
     matmul_multi_core_reuse_multicast_program_config.def(
         "__repr__", [](const MatmulMultiCoreReuseMultiCastProgramConfig& config) {
             return fmt::format(
                 "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size={}, in0_block_w={}, "
                 "out_subblock_h={}, out_subblock_w={}, out_block_h={}, out_block_w={}, per_core_M={}, "
-                "per_core_N={}, transpose_mcast={}, fused_activation={}, fuse_batch={})",
+                "per_core_N={}, transpose_mcast={}, fused_activation={}, fuse_batch={}, allowed_worker_cores={})",
                 config.compute_with_storage_grid_size,
                 config.in0_block_w,
                 config.out_subblock_h,
@@ -291,7 +322,9 @@ void py_module(nb::module_& mod) {
                 config.per_core_N,
                 config.transpose_mcast,
                 config.fused_activation,
-                config.fuse_batch);
+                config.fuse_batch,
+                config.allowed_worker_cores.has_value() ? fmt::format("{}", config.allowed_worker_cores.value())
+                                                        : "None");
         });
 
     auto matmul_multi_core_reuse_multicast_1d_program_config =
@@ -300,6 +333,14 @@ void py_module(nb::module_& mod) {
         Configuration class for 1D multicast matmul operations with advanced features.
 
         This program config is for use with width and height sharded tensors, or very narrow interleaved tensors.
+
+        When ``gather_in0`` is False and the matmul op is invoked with a ``sub_device_id``,
+        ``compute_with_storage_grid_size`` is anchored at the sub-device's worker bounding-box start
+        instead of ``(0, 0)``. The 1D multicast targets a single bounding-box rectangle and the
+        per-core index math assumes a contiguous row-major rectangle, so the sub-device's worker
+        cores must themselves form a single rectangle. Non-rectangular sub-device worker grids are
+        rejected at validate time. When ``gather_in0`` is True, ``compute_with_storage_grid_size``
+        is ignored and the gather path can run on any sub-device worker layout.
     )doc");
 
     matmul_multi_core_reuse_multicast_1d_program_config
@@ -320,12 +361,12 @@ void py_module(nb::module_& mod) {
                bool gather_in0,
                CoreRangeSet hop_cores,
                std::size_t num_global_cb_receivers,
-               bool untilize_out) {
-                // Set out_block_h and out_block_w to defaults if they are not provided
+               bool untilize_out,
+               std::optional<CoreRangeSet> allowed_worker_cores) {
                 std::size_t actual_out_block_h = out_block_h.value_or(per_core_M);
                 std::size_t actual_out_block_w = out_block_w.value_or(per_core_N);
 
-                new (t) MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                new (t) MatmulMultiCoreReuseMultiCast1DProgramConfig{
                     compute_with_storage_grid_size,
                     in0_block_w,
                     out_subblock_h,
@@ -340,7 +381,8 @@ void py_module(nb::module_& mod) {
                     gather_in0,
                     std::move(hop_cores),
                     num_global_cb_receivers,
-                    untilize_out);
+                    untilize_out,
+                    std::move(allowed_worker_cores)};
             },
             nb::kw_only(),
             nb::arg("compute_with_storage_grid_size"),
@@ -357,7 +399,8 @@ void py_module(nb::module_& mod) {
             nb::arg("gather_in0").noconvert() = false,
             nb::arg("hop_cores").noconvert() = nb::cast(CoreRangeSet()),
             nb::arg("num_global_cb_receivers").noconvert() = 1,
-            nb::arg("untilize_out").noconvert() = false)
+            nb::arg("untilize_out").noconvert() = false,
+            nb::arg("allowed_worker_cores") = nb::none())
         .def_rw(
             "compute_with_storage_grid_size",
             &MatmulMultiCoreReuseMultiCast1DProgramConfig::compute_with_storage_grid_size,
@@ -367,6 +410,12 @@ void py_module(nb::module_& mod) {
             Defines the 2D grid of cores that will be used for computation. In 1D multicast,
             this grid is used to determine the communication pattern for broadcasting data
             along one dimension while distributing computation.
+
+            When the matmul op is invoked with a ``sub_device_id`` (and ``gather_in0`` is False),
+            this rectangle is anchored at the sub-device's worker bounding-box start (instead of
+            ``(0, 0)``) and must fit inside that bounding box. Ignored when ``gather_in0`` is True.
+
+            **DEPRECATED**: Use ``allowed_worker_cores`` instead for finer control over the compute grid.
         )doc")
         .def_rw("in0_block_w", &MatmulMultiCoreReuseMultiCast1DProgramConfig::in0_block_w, R"doc(
             Block width for both input tensors along the K dimension (shared inner dimension).
@@ -460,12 +509,21 @@ void py_module(nb::module_& mod) {
             the operation. This can be useful when the subsequent operation expects row-major
             data and can eliminate a separate untilization pass. Defaults to false.
         )doc")
+        .def_rw(
+            "allowed_worker_cores",
+            &MatmulMultiCoreReuseMultiCast1DProgramConfig::allowed_worker_cores,
+            R"doc(
+            Optional set of worker cores to restrict the matmul computation to.
+
+            When set, overrides ``compute_with_storage_grid_size`` for determining the active
+            compute grid. Accepts a ``CoreRangeSet`` describing the exact cores to use.
+        )doc")
         .def("__repr__", [](const MatmulMultiCoreReuseMultiCast1DProgramConfig& config) {
             return fmt::format(
                 "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size={}, in0_block_w={}, "
                 "out_block_h={}, out_block_w={}, out_subblock_h={}, out_subblock_w={}, per_core_M={}, per_core_N={}, "
                 "fuse_batch={}, fused_activation={}, mcast_in0={}, gather_in0={}, hop_cores={}, "
-                "num_global_cb_receivers={}, untilize_out={})",
+                "num_global_cb_receivers={}, untilize_out={}, allowed_worker_cores={})",
                 config.compute_with_storage_grid_size,
                 config.in0_block_w,
                 config.out_block_h,
@@ -480,7 +538,9 @@ void py_module(nb::module_& mod) {
                 config.gather_in0,
                 config.hop_cores,
                 config.num_global_cb_receivers,
-                config.untilize_out);
+                config.untilize_out,
+                config.allowed_worker_cores.has_value() ? fmt::format("{}", config.allowed_worker_cores.value())
+                                                        : "None");
         });
 
     auto matmul_multi_core_reuse_multicast_dram_sharded_program_config =
@@ -988,7 +1048,7 @@ void py_module(nb::module_& mod) {
         Keyword Args:
             sparsity (ttnn.Tensor): the sparsity tensor containing the mask values. Needs to be on the device. The data type must be bfloat16.
             program_config (ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig): the program configuration for the matmul operation. Only this config type is supported. ``mcast_in0`` must be set to True.
-            nnz (int, optional): the number of non-zero values in the sparsity tensor. If not provided, it will be inferred from the sparsity tensor at runtime.
+            nnz (int, optional): the number of non-zero values in the sparsity tensor. If not provided, it will be inferred from the sparsity tensor at runtime. If provided, it **must** be exactly equal to the number of non-zero entries in `sparsity` (i.e. `nnz == count_nonzero(sparsity)`). It is the user's responsibility to set this value correctly. If the equality condition is not met, the kernel will hang (deadlock) on device, since the receiver and compute kernels loop exactly `nnz` times while the sender only multicasts once per non-zero sparsity entry. Because `count_nonzero(sparsity)` is data-dependent and only known at runtime, this cannot be validated on the host; the mismatch is asserted on-device (failing loudly under watcher) but otherwise results in a hang.
             is_input_a_sparse (bool, optional): boolean indicating whether `input_tensor_a` is sparse. Defaults to `False`. Together with `is_input_b_sparse`, it determines how the sparsity tensor is interpreted. See the supported modes table below.
             is_input_b_sparse (bool, optional): boolean indicating whether `input_tensor_b` is sparse. Defaults to `True`. Together with `is_input_a_sparse`, it determines how the sparsity tensor is interpreted. See the supported modes table below.
             memory_config (ttnn.MemoryConfig, optional): the memory configuration of the output tensor. Defaults to `None`, which will result in using ttnn.DRAM_MEMORY_CONFIG.
@@ -1040,6 +1100,15 @@ void py_module(nb::module_& mod) {
                   - --
                   - --
                   - --
+
+        .. warning::
+            When `nnz` is provided, it **must** equal `count_nonzero(sparsity)` exactly. Passing an `nnz`
+            that does not match the actual number of non-zero entries in `sparsity` will cause the kernel to
+            **hang (deadlock)** on device. Setting `nnz` correctly is the user's responsibility. This
+            condition cannot be checked on the host because `count_nonzero(sparsity)` is data-dependent and
+            only known at runtime; it is validated on-device and will fail loudly (assert) when watcher is
+            enabled, but otherwise manifests as a hang. If you cannot guarantee the exact count, omit `nnz`
+            so it is inferred from the sparsity tensor at runtime.
 
         Note:
             The input tensors support the following data types and layouts:
@@ -1130,6 +1199,11 @@ void py_module(nb::module_& mod) {
             "compute_output_specs",
             &ttnn::prim::MatmulDeviceOperation::compute_output_specs,
             nb::arg("operation_attributes"),
+            nb::arg("tensor_args"))
+        .def_static(
+            "compute_program_hash",
+            &ttnn::prim::MatmulDeviceOperation::compute_program_hash,
+            nb::arg("operation_attributes"),
             nb::arg("tensor_args"));
 
     // Bind MatmulMultiCoreReuseOptimizedProgramFactory for descriptor creation
@@ -1152,6 +1226,95 @@ void py_module(nb::module_& mod) {
             "default_core_range",
             &ttnn::prim::MatmulMultiCoreReuseOptimizedProgramFactory::default_core_range,
             nb::arg("device"));
+
+    // Bind MatmulMultiCoreProgramFactory for descriptor creation
+    nb::class_<ttnn::prim::MatmulMultiCoreProgramFactory>(mod, "MatmulMultiCoreProgramFactory")
+        .def_static(
+            "create_descriptor",
+            [](const ttnn::prim::MatmulParams& operation_attributes,
+               const ttnn::prim::MatmulInputs& tensor_args,
+               std::vector<ttnn::Tensor>& tensor_return_value,
+               const std::optional<CoreRangeSet>& core_range_set) {
+                return ttnn::prim::MatmulMultiCoreProgramFactory::create_descriptor(
+                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
+            },
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"),
+            nb::arg("tensor_return_value"),
+            nb::arg("core_range_set") = std::nullopt);
+
+    // Bind MatmulMultiCoreReuseMcast1DProgramFactory for descriptor creation
+    nb::class_<ttnn::prim::MatmulMultiCoreReuseMcast1DProgramFactory>(mod, "MatmulMultiCoreReuseMcast1DProgramFactory")
+        .def_static(
+            "create_descriptor",
+            [](const ttnn::prim::MatmulParams& operation_attributes,
+               const ttnn::prim::MatmulInputs& tensor_args,
+               std::vector<ttnn::Tensor>& tensor_return_value,
+               const std::optional<CoreRangeSet>& core_range_set) {
+                return ttnn::prim::MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
+                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
+            },
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"),
+            nb::arg("tensor_return_value"),
+            nb::arg("core_range_set") = std::nullopt);
+
+    // Bind MatmulMultiCoreReuseMcast2DProgramFactory for descriptor creation
+    nb::class_<ttnn::prim::MatmulMultiCoreReuseMcast2DProgramFactory>(mod, "MatmulMultiCoreReuseMcast2DProgramFactory")
+        .def_static(
+            "create_descriptor",
+            [](const ttnn::prim::MatmulParams& operation_attributes,
+               const ttnn::prim::MatmulInputs& tensor_args,
+               std::vector<ttnn::Tensor>& tensor_return_value,
+               const std::optional<CoreRangeSet>& core_range_set) {
+                return ttnn::prim::MatmulMultiCoreReuseMcast2DProgramFactory::create_descriptor(
+                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
+            },
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"),
+            nb::arg("tensor_return_value"),
+            nb::arg("core_range_set") = std::nullopt);
+
+    // Bind MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory for descriptor creation
+    nb::class_<ttnn::prim::MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory>(
+        mod, "MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory")
+        .def_static(
+            "create_descriptor",
+            [](const ttnn::prim::MatmulParams& operation_attributes,
+               const ttnn::prim::MatmulInputs& tensor_args,
+               std::vector<ttnn::Tensor>& tensor_return_value,
+               const std::optional<CoreRangeSet>& core_range_set) {
+                return ttnn::prim::MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_descriptor(
+                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
+            },
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"),
+            nb::arg("tensor_return_value"),
+            nb::arg("core_range_set") = std::nullopt);
+
+    // Bind MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory for descriptor creation
+    nb::class_<ttnn::prim::MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory>(
+        mod, "MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory")
+        .def_static(
+            "create_descriptor",
+            [](const ttnn::prim::MatmulParams& operation_attributes,
+               const ttnn::prim::MatmulInputs& tensor_args,
+               std::vector<ttnn::Tensor>& tensor_return_value,
+               const std::optional<CoreRangeSet>& core_range_set) {
+                return ttnn::prim::MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::create_descriptor(
+                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
+            },
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"),
+            nb::arg("tensor_return_value"),
+            nb::arg("core_range_set") = std::nullopt);
+
+    // Bind select_program_factory for Python-side factory dispatch
+    mod.def(
+        "matmul_select_program_factory",
+        &ttnn::prim::MatmulDeviceOperation::select_program_factory,
+        nb::arg("operation_attributes"),
+        nb::arg("tensor_args"));
 
     // Bind create_matmul_attributes helper
     mod.def(

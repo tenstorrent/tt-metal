@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -28,11 +28,12 @@ from elfs_cache import run as get_elfs_cache, ElfsCache
 from triage import triage_singleton, ScriptConfig, run_script, log_check_location
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.elf import ElfVariable
-from ttexalens.memory_access import MemoryAccess
+from ttexalens.memory_access import create_l1_memory_access
 from ttexalens.context import Context
 from triage import TTTriageError, triage_field, hex_serializer
 from run_checks import run as get_run_checks
 from run_checks import RunChecks, BlockType
+
 
 script_config = ScriptConfig(
     data_provider=True,
@@ -77,6 +78,15 @@ class DispatcherCoreData:
     # Host-assigned id from the previous launch message entry (best-effort).
     # Not serialized by default; used by scripts that need accurate previous-op tracking.
     previous_host_assigned_id: int | None = None
+    # Inspector/control-plane-sourced block type for this core. Used by callers to reason about
+    # active-vs-idle ETH without re-consulting the cluster descriptor.
+    block_type: BlockType | None = None
+    # Whether kernel_config.enables turned this specific risc on. False => idle by design (no kernel
+    # launched on it). None => unknown (read failed / corrupt), so callers must not hide the core.
+    risc_enabled_by_kernel: bool | None = None
+    # Hint surfaced when find_kernel fails — explains the most likely cause (program cache off,
+    # or workload destroyed despite cache being on) so callers can append it to "PC not in range" style errors.
+    kernel_lookup_warning: str | None = None
 
 
 class DispatcherData:
@@ -88,6 +98,7 @@ class DispatcherData:
         metal_device_id_mapping: MetalDeviceIdMapping,
     ):
         self.inspector_data = inspector_data
+        self.metal_device_id_mapping = metal_device_id_mapping
         self.programs = inspector_data.getPrograms().programs
         self.kernels = {kernel.watcherKernelId: kernel for program in self.programs for kernel in program.kernels}
         self.use_rpc_kernel_find = True
@@ -123,6 +134,7 @@ class DispatcherData:
             device_unique_id = run_checks.devices[0].unique_id
 
             build_env = self._build_env_cache[device_unique_id]
+            self._drisc_enabled_flag: bool | None = bool(build_env.dramProgrammableCoresEnabled)
             # Use build_env for initial firmware paths
             brisc_elf_path = os.path.join(build_env.firmwarePath, "brisc", "brisc.elf")
             idle_erisc_elf_path = os.path.join(build_env.firmwarePath, "idle_erisc", "idle_erisc.elf")
@@ -149,10 +161,23 @@ class DispatcherData:
         self._idle_erisc_elf = elfs_cache[idle_erisc_elf_path]
         self._active_erisc_elf = elfs_cache[active_erisc_elf_path]
 
+        self._is_blackhole = run_checks.devices[0].is_blackhole()
+
+        # Load DRISC ELF for DRAM cores (Blackhole only)
+        self._drisc_elf = None
+        if self._is_blackhole and self._drisc_enabled_flag:
+            try:
+                drisc_elf_path = os.path.join(build_env.firmwarePath, "drisc", "drisc.elf")
+                self._drisc_elf = elfs_cache[drisc_elf_path]
+            except Exception:
+                # DRISC firmware is optional; if it cannot be loaded, leave self._drisc_elf as None
+                pass
+
         # Access the value of enumerator for supported blocks
         self._ProgrammableCoreTypes_TENSIX = self._brisc_elf.get_enum_value("ProgrammableCoreType::TENSIX")
         self._ProgrammableCoreTypes_IDLE_ETH = self._brisc_elf.get_enum_value("ProgrammableCoreType::IDLE_ETH")
         self._ProgrammableCoreTypes_ACTIVE_ETH = self._brisc_elf.get_enum_value("ProgrammableCoreType::ACTIVE_ETH")
+        self._ProgrammableCoreTypes_DRAM = self._brisc_elf.get_enum_value("ProgrammableCoreType::DRAM")
 
         # Enumerators for tensix block
         self._enum_values_tenisx = {
@@ -181,6 +206,15 @@ class DispatcherData:
                 if self._is_2_erisc_mode
                 else self._idle_erisc_elf.get_enum_value("EthProcessorTypes::DM0")
             )
+
+        # Enumerators for DRAM block (Blackhole only)
+        self._enum_values_dram: dict = {}
+        if self._drisc_elf is not None:
+            self._enum_values_dram = {
+                "ProcessorTypes": {
+                    "DRISC": self._drisc_elf.get_enum_value("DramProcessorTypes::DM0"),
+                },
+            }
 
         # Go message states are constant values in the firmware elf, so we cache them
         def get_const_value(name) -> int:
@@ -238,6 +272,20 @@ class DispatcherData:
             )
         return self._build_env_cache[device_unique_id]
 
+    def _kernel_missing_hint_for_device(self, metal_device_id: int) -> str | None:
+        mesh_devices = self.inspector_data.getMeshDevices().meshDevices
+        containing = [md for md in mesh_devices if metal_device_id in md.devices]
+        disabled = [md.meshId for md in containing if not md.programCacheEnabled]
+        if disabled:
+            return (
+                f"Program cache is disabled on MeshDevice(s) {disabled} containing this device. "
+                f"Enable program cache to see the callstack."
+            )
+        return (
+            "No host-side live program owns the kernel on this device —"
+            " the program should remain alive on host while its kernel is running."
+        )
+
     def find_kernel(self, watcher_kernel_id):
         # Try to get kernel from RPC inspector data first, then fallback to cached kernels
         # RPC kernel find won't work if we are not connected to RPC, but are reading serialized data or logs
@@ -250,6 +298,19 @@ class DispatcherData:
             self.use_rpc_kernel_find = False
             return self.kernels[watcher_kernel_id]
         raise TTTriageError(f"Kernel {watcher_kernel_id} not found in inspector data.")
+
+    def drisc_enabled(self) -> bool:
+        return self._drisc_enabled_flag
+
+    def risc_enabled(self, risc_name: str) -> bool:
+        if risc_name == "drisc":
+            return self.drisc_enabled()
+        return True
+
+    def is_idle_in_default_view(self, location: OnChipCoordinate, risc_name: str) -> bool:
+        """Risc hidden unless --all-cores: finished (Go=DONE) or never enabled by the program."""
+        d = self.get_cached_core_data(location, risc_name)
+        return d.go_message == "DONE" or d.risc_enabled_by_kernel is False
 
     def get_cached_core_data(self, location: OnChipCoordinate, risc_name: str) -> DispatcherCoreData:
         key = (location, risc_name)
@@ -269,7 +330,7 @@ class DispatcherData:
 
     def read_mailboxes(self, location: OnChipCoordinate) -> ElfVariable:
         block_type = self._get_block_type(location)
-        l1_mem_access = MemoryAccess.create_l1(location)
+        l1_mem_access = create_l1_memory_access(location)
         match block_type:
             case "tensix":
                 fw_elf = self._brisc_elf
@@ -277,6 +338,10 @@ class DispatcherData:
                 fw_elf = self._idle_erisc_elf
             case "active_eth":
                 fw_elf = self._active_erisc_elf
+            case "dram":
+                if self._drisc_elf is None:
+                    raise TTTriageError("DRISC ELF not available for DRAM block type (Blackhole only)")
+                fw_elf = self._drisc_elf
             case _:
                 raise TTTriageError(f"Unsupported block type: {block_type}")
         return fw_elf.read_global("mailboxes", l1_mem_access)
@@ -295,6 +360,11 @@ class DispatcherData:
             case "active_eth":
                 programmable_core_type = self._ProgrammableCoreTypes_ACTIVE_ETH
                 enum_values = self._enum_values_eth
+            case "dram":
+                if self._drisc_elf is None or not self._enum_values_dram or not self._drisc_enabled_flag:
+                    raise TTTriageError("DRISC ELF not available for DRAM block type (Blackhole only)")
+                programmable_core_type = self._ProgrammableCoreTypes_DRAM
+                enum_values = self._enum_values_dram
             case _:
                 raise TTTriageError(f"Unsupported block type: {block_type}")
         # Get the build_env for the device to get the correct firmware path
@@ -360,10 +430,13 @@ class DispatcherData:
             raise
         except Exception:
             pass
+        kernel_lookup_warning: str | None = None
         try:
             kernel = self.find_kernel(watcher_kernel_id)
         except Exception:
-            pass
+            if watcher_kernel_id != -1 and self.metal_device_id_mapping.has_unique_id(location._device.unique_id):
+                metal_device_id = self.metal_device_id_mapping.get_metal_device_id(location._device.unique_id)
+                kernel_lookup_warning = self._kernel_missing_hint_for_device(metal_device_id)
         try:
             previous_kernel = self.find_kernel(watcher_previous_kernel_id)
         except Exception:
@@ -382,13 +455,13 @@ class DispatcherData:
         except Exception:
             pass
         try:
-            host_assigned_id = mailboxes.launch[launch_msg_rd_ptr].kernel_config.host_assigned_id
+            host_assigned_id = int(mailboxes.launch[launch_msg_rd_ptr].kernel_config.host_assigned_id)
         except TimeoutDeviceRegisterError:
             raise
         except Exception:
             pass
         try:
-            previous_host_assigned_id = mailboxes.launch[previous_launch_msg_rd_ptr].kernel_config.host_assigned_id
+            previous_host_assigned_id = int(mailboxes.launch[previous_launch_msg_rd_ptr].kernel_config.host_assigned_id)
         except TimeoutDeviceRegisterError:
             raise
         except:
@@ -405,6 +478,7 @@ class DispatcherData:
         dispatch_mode = None
         brisc_noc_id = None
         enables = None
+        risc_enabled_by_kernel = None
         subordinate_sync = None
         watcher_enabled = None
 
@@ -446,8 +520,11 @@ class DispatcherData:
             # Tensix: "BNT" (B=BRISC, N=NCRISC, T=TRISC)
             # ETH Blackhole: "EE" (2 ERISCs)
             # ETH Wormhole: "E" (1 ERISC)
+            # DRAM: "D" (1 DRISC)
             if self._get_block_type(location) == "tensix":
                 symbols = "BNT"
+            elif self._get_block_type(location) == "dram":
+                symbols = "D"
             elif location.device.is_blackhole():
                 symbols = "EE"
             else:
@@ -455,6 +532,8 @@ class DispatcherData:
             enables = ""
             for i, sym in enumerate(symbols):
                 enables += sym if (enables_val & (1 << i)) else sym.lower()
+            # bit i set => processor i enabled; proc_type is this risc's processor index.
+            risc_enabled_by_kernel = bool(enables_val & (1 << proc_type))
         except Exception:
             log_check_location(
                 location,
@@ -496,9 +575,16 @@ class DispatcherData:
                 f"failed to read subordinate sync from mailboxes. {MAILBOX_CORRUPTED_MESSAGE}",
             )
 
+        # Path picking must use the same source of truth as block_type above (inspector /
+        # metal control plane), not location.device.active_eth_block_locations (cluster
+        # descriptor / exalens).
+        is_active_eth = block_type == "active_eth"
+
         # Construct the firmware path from the build_env instead of relative paths
         # This ensures we get the correct firmware path for this device and build config
-        if location in location.device.active_eth_block_locations:
+        if block_type == "dram":
+            firmware_path = os.path.join(build_env.firmwarePath, "drisc", "drisc.elf")
+        elif is_active_eth:
             if proc_name.lower() == "erisc":
                 firmware_path = os.path.join(build_env.firmwarePath, "erisc", "erisc.elf")
             elif proc_name.lower() == "erisc0":
@@ -522,7 +608,7 @@ class DispatcherData:
         firmware_path = os.path.realpath(firmware_path)
 
         if kernel:
-            if location in location.device.active_eth_block_locations:
+            if is_active_eth:
                 if proc_name.lower() == "erisc":
                     kernel_path = kernel.path + "/erisc/erisc.elf"
                 elif proc_name.lower() == "erisc0":
@@ -548,10 +634,16 @@ class DispatcherData:
             if proc_name == "NCRISC" and location.device.is_wormhole():
                 kernel_offset = 0xFFC00000
             # In wormhole we only use text offset to calculate the kernel offset for active ETH
-            elif location in location.device.active_eth_block_locations and location.device.is_wormhole():
+            elif is_active_eth and location.device.is_wormhole():
+                kernel_offset = kernel_text_offset
+            elif block_type == "dram":
+                # DRAM kernel ELFs are linked at their actual load address (kernel_text_offset),
+                # not at address 0 like Tensix kernels, so no base adjustment is needed.
                 kernel_offset = kernel_text_offset
             else:
-                kernel_offset = kernel_config_base + kernel_text_offset
+                # For most blocks, the kernel is loaded at an offset from the config base, so we add them together to get the actual load address.
+                # The & 0xFFFFFFFF is needed to wrap around to 32 bits, since the offset can be negative and Python ints are unbounded.
+                kernel_offset = (kernel_config_base + kernel_text_offset) & 0xFFFFFFFF
         else:
             kernel_path = None
             kernel_xip_path = None
@@ -583,6 +675,9 @@ class DispatcherData:
             enables=enables,
             subordinate_sync=subordinate_sync,
             watcher_enabled=watcher_enabled,
+            block_type=block_type,
+            risc_enabled_by_kernel=risc_enabled_by_kernel,
+            kernel_lookup_warning=kernel_lookup_warning,
         )
 
 

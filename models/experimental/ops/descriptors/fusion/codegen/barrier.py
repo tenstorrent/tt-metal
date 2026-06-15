@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -319,7 +319,12 @@ def _build_barrier_dispatch(
                 }
             )
             cumulative_rebind_offset += len(rebinds) * 2
-    # Trailing barrier (after last phase, e.g. for parent sync in OpGraph)
+    # Trailing barrier (after last phase).
+    # When the last phase has a group sync entry (e.g. early-exit cores in
+    # OpGraph), a full group barrier is emitted.  Otherwise, a local-only
+    # trailing barrier is still needed for re-dispatch correctness: the last
+    # phase's CBs must be reset so that a subsequent dispatch starts with
+    # clean stream-register and FIFO-pointer state.
     last_phase_idx = sources[-1][0]
     if last_phase_idx in multi_barrier.transition_map:
         seg_idx, _ = multi_barrier.transition_map[last_phase_idx]
@@ -331,6 +336,17 @@ def _build_barrier_dispatch(
                 "rebinds": [],
                 "rebind_entry_offset": cumulative_rebind_offset,
                 "is_arrive": last_phase_idx not in noop_phase_indices,
+            }
+        )
+    elif len(sources) > 1:
+        dispatch.append(
+            {
+                "done_val": len(sources),
+                "seg_idx": None,
+                "next_phase_idx": None,
+                "rebinds": [],
+                "rebind_entry_offset": cumulative_rebind_offset,
+                "is_arrive": False,
             }
         )
     return dispatch
@@ -393,6 +409,8 @@ def _emit_state_vars(risc_type: str, is_coordinator: bool, has_compute: bool, ha
             lines.append("volatile tt_l1_ptr uint32_t* writer_done;")
     elif risc_type == "compute":
         lines.append("volatile tt_l1_ptr uint32_t* compute_done;")
+        lines.append("volatile tt_l1_ptr uint32_t* pack_drained;")
+        lines.append("volatile tt_l1_ptr uint32_t* math_drained;")
     lines.append("volatile tt_l1_ptr uint32_t* reset_done;")
     lines.append("")
     return lines
@@ -449,7 +467,27 @@ def _emit_local_sync_coordinator(
 def _emit_local_sync_follower(risc_type: str) -> List[str]:
     """Emit ``namespace local { void sync(); }`` for BRISC or compute.
 
-    Order: done++ -> drain NOC (DM only) -> signal done -> wait reset_done.
+    Order:
+      DM follower:      done++ -> drain NOC -> signal *writer_done -> wait reset_done.
+      Compute follower: done++ -> drain tensix pipeline -> signal *compute_done -> wait reset_done.
+
+    The tensix-pipeline drain MUST happen BEFORE signalling ``*compute_done``
+    (issue #40330).  ``reset_cbs`` on the coordinator reads
+    ``STREAM.tiles_received`` / ``STREAM.tiles_acked`` for every CB and
+    equalizes them only when they differ.  ``push_back`` / ``pop_front``
+    instructions issued by compute go through the pack/unpack back-end
+    pipeline; the stream-register write happens at the END of that pipeline,
+    not at instruction-issue time.  ``tensix_sync()`` blocks the calling TRISC
+    until its own back-end has drained, so it is the only signal that the
+    stream registers reflect the just-completed phase.
+
+    If we signalled ``*compute_done`` first and drained second, the coordinator
+    raced ``reset_cbs`` against the in-flight ``push_back``: the read saw
+    ``received == acked == 0``, the equalize was skipped, then the drain
+    committed ``received = 8`` while ``acked`` stayed at 0 — and the next
+    phase's ``reserve_back`` deadlocked with ``free = 8 - (8 - 0) = 0``.  The
+    DPRINT capture in the gamma-loop reserve_back made this exact pattern
+    visible (slot 16: phase 1 entry shows ``received=8 acked=0``).
     """
     lines = ["namespace local {"]
     lines.append("    __attribute__((noinline)) void sync() {")
@@ -462,6 +500,31 @@ def _emit_local_sync_follower(risc_type: str) -> List[str]:
         lines.append("        noc_async_write_barrier();")
         lines.append("        *writer_done = done;")
     else:  # compute
+        lines.append("        // Issue #40330: drain the tensix pipeline BEFORE signalling")
+        lines.append("        // *compute_done so the coordinator's reset_cbs reads up-to-date")
+        lines.append("        // STREAM.tiles_received / tiles_acked values.  Order is")
+        lines.append("        // pack -> math -> unpack so each stage waits for its downstream")
+        lines.append("        // consumer before draining its own back-end:")
+        lines.append("        //   pack  needs CB space      (freed by coordinator reset_cbs)")
+        lines.append("        //   math  needs Dest registers (freed after pack drains)")
+        lines.append("        //   unpack needs SrcA/SrcB     (freed after math drains)")
+        lines.append("        // This drain ALSO ensures the next phase's LLK assert checks")
+        lines.append("        // (e.g. are_unpackers_AB_configured_correctly) — which call")
+        lines.append("        // tensix_sync() at init — see an empty back-end and do not")
+        lines.append("        // deadlock waiting for prior-phase instructions.")
+        lines.append("#ifdef TRISC_PACK")
+        lines.append("        tensix_sync();")
+        lines.append("        *pack_drained = done;")
+        lines.append("#endif")
+        lines.append("#ifdef TRISC_MATH")
+        lines.append("        while (*pack_drained < done) {}")
+        lines.append("        tensix_sync();")
+        lines.append("        *math_drained = done;")
+        lines.append("#endif")
+        lines.append("#ifdef TRISC_UNPACK")
+        lines.append("        while (*math_drained < done) {}")
+        lines.append("        tensix_sync();")
+        lines.append("#endif")
         lines.append("        *compute_done = done;")
     lines.append("        // Wait for coordinator to complete reset (op sem + CB)")
     lines.append("        // before proceeding.  Without this, a fast core can start")
@@ -487,6 +550,8 @@ def _emit_group_sync_coordinator(dispatch: List[Dict[str, Any]]) -> List[str]:
     for entry in dispatch:
         done_val = entry["done_val"]
         seg_idx = entry["seg_idx"]
+        if seg_idx is None:
+            continue
         is_arrive = entry.get("is_arrive", True)
         mode = "SyncMode::Full" if is_arrive else "SyncMode::WaitOnly"
         lines.append(f"        if (done == {done_val}) {{")
@@ -499,7 +564,6 @@ def _emit_group_sync_coordinator(dispatch: List[Dict[str, Any]]) -> List[str]:
 def _emit_group_sync_follower(
     dispatch: List[Dict[str, Any]],
     for_compute: bool,
-    risc_type: str,
 ) -> List[str]:
     """Emit ``group::sync()`` function for BRISC or compute.
 
@@ -518,7 +582,8 @@ def _emit_group_sync_follower(
         is_arrive = entry.get("is_arrive", True)
         mode = "SyncMode::Full" if is_arrive else "SyncMode::WaitOnly"
         lines.append(f"        if (done == {done_val}) {{")
-        lines.append(f"            seg_{seg_idx}::sync<{mode}>();")
+        if seg_idx is not None:
+            lines.append(f"            seg_{seg_idx}::sync<{mode}>();")
         lines.append(f"            resync_cbs(phase_{completed_phase_idx}_cbs);")
         if rebinds and next_phase_idx is not None:
             if for_compute:
@@ -539,7 +604,6 @@ def _emit_group_sync_follower(
 def _emit_init_coordinator(
     has_compute: bool,
     num_segments: int,
-    op_semaphore_info: Optional[List[Tuple[int, int]]] = None,
     has_writer: bool = True,
 ) -> List[str]:
     """Emit ``init()`` for the coordinator (NCRISC)."""
@@ -562,13 +626,14 @@ def _emit_init_coordinator(
     lines.append("    // Each follower RISC resets its own semaphore in its own init().")
     lines.append("    // Resetting here races with fast compute/BRISC signaling")
     lines.append("    // (e.g. no-op phase 0 where compute signals immediately).")
-    if op_semaphore_info:
-        lines.append("    // Reset op semaphores so phase 0 doesn't see stale values")
-        lines.append("    // from the previous execution's last phase.")
-        for sem_id, initial_value in op_semaphore_info:
-            lines.append(
-                f"    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore({sem_id})) = {initial_value};"
-            )
+    # NOTE: Do NOT reset op semaphores here. The hardware dispatch initializes
+    # semaphores to their initial_value on every enqueue (including cache hits),
+    # and local::sync()'s trailing barrier resets them after the last phase.
+    # Resetting in init() races with receiver cores that call sender_sem.up()
+    # via NOC before this core finishes init() — those signals would be erased,
+    # causing a deadlock when mcast_in0 is the first (phase 0) operation.
+    # The synchronized reset in local::sync() (gated by *reset_done) is
+    # sufficient for all inter-phase transitions.
     for seg_idx in range(num_segments):
         lines.append(f"    group::seg_{seg_idx}::init();")
     lines.append("}")
@@ -596,6 +661,12 @@ def _emit_init_follower(
         lines.append("    *compute_done = 0;")
         lines.append("    reset_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(")
         lines.append("        get_arg_val<uint32_t>(rt_offset + 1));")
+        lines.append("    pack_drained = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(")
+        lines.append("        get_arg_val<uint32_t>(rt_offset + 2));")
+        lines.append("    *pack_drained = 0;")
+        lines.append("    math_drained = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(")
+        lines.append("        get_arg_val<uint32_t>(rt_offset + 3));")
+        lines.append("    *math_drained = 0;")
     for seg_idx in range(num_segments):
         lines.append(f"    group::seg_{seg_idx}::init();")
     lines.append("}")
@@ -707,11 +778,15 @@ def _generate_barrier_namespace(
             )
             lines.append("")
     else:
+        # Compute follower has 4 base RT args (compute_done, reset_done,
+        # pack_drained, math_drained); DM follower has 2 (writer_done,
+        # reset_done).  Segment release addresses follow immediately after.
+        follower_base = 4 if risc_type == "compute" else 2
         for seg_idx in range(num_segments):
             lines.extend(
                 _SPINWAIT_SEGMENT_TEMPLATE.format(
                     seg_idx=seg_idx,
-                    release_offset=2 + seg_idx,  # +2: done_signal + reset_done
+                    release_offset=follower_base + seg_idx,
                 ).split("\n")
             )
             lines.append("")
@@ -720,7 +795,7 @@ def _generate_barrier_namespace(
     if is_coordinator:
         lines.extend(_emit_group_sync_coordinator(dispatch))
     else:
-        lines.extend(_emit_group_sync_follower(dispatch, for_compute=(risc_type == "compute"), risc_type=risc_type))
+        lines.extend(_emit_group_sync_follower(dispatch, for_compute=(risc_type == "compute")))
     lines.append("} // namespace group")
     lines.append("")
 
@@ -733,7 +808,7 @@ def _generate_barrier_namespace(
 
     # init()
     if is_coordinator:
-        lines.extend(_emit_init_coordinator(has_compute, num_segments, op_semaphore_info, has_writer=has_writer))
+        lines.extend(_emit_init_coordinator(has_compute, num_segments, has_writer=has_writer))
     else:
         lines.extend(_emit_init_follower(risc_type, num_segments))
     lines.append("")

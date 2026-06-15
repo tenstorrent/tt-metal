@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -57,6 +57,7 @@ try:
     PreferredPrecision = _cpp_autograd.PreferredPrecision
     Tensor = _cpp_autograd.Tensor
     create_tensor = _cpp_autograd.create_tensor
+    callback = _cpp_autograd.callback
 
 except ImportError:
     # C++ bindings not available yet (e.g., during build)
@@ -78,5 +79,6 @@ __all__ = [
     "ParallelismContext",
     "PreferredPrecision",
     "Tensor",
+    "callback",
     "create_tensor",
 ]

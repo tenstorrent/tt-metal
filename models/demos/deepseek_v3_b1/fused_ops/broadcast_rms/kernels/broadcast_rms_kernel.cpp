@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 // Fused Broadcast + RMSNorm unified kernel
@@ -12,10 +12,6 @@
 #include "../../../unified_kernels/broadcast.hpp"
 #endif
 #include "../../../unified_kernels/rmsnorm.hpp"
-
-#if defined(COMPILE_FOR_BRISC)
-#include "ttnn/cpp/ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
-#endif
 
 void kernel_main() {
     constexpr bool skip_ccl = get_named_compile_time_arg_val("skip_ccl") == 1;

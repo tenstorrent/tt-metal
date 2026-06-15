@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,10 +6,10 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/endpoints.h"
-#include "experimental/core_local_mem.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 
 void kernel_main() {
     // RUNTIME ARGS
@@ -56,15 +56,17 @@ void kernel_main() {
     constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_in1");
     constexpr uint32_t cb_id_out = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t cb_id_out_reshard = get_named_compile_time_arg_val("cb_out_reshard");
-    constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
-    constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size_bytes;
+    // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM and the
+    // in1 CB pages are sized to match, so the block size in L1 must use the padded page stride
+    // (in1_num_pages * in1_page_size) rather than get_tile_size() (the unpadded tile size).
+    constexpr uint32_t in1_block_size_bytes = in1_num_pages * in1_page_size;
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_in1(cb_id_in1);
-    experimental::CircularBuffer cb_out(cb_id_out);
-    experimental::CircularBuffer cb_out_reshard(cb_id_out_reshard);
+    Noc noc;
+    CircularBuffer cb_in1(cb_id_in1);
+    CircularBuffer cb_out(cb_id_out);
+    CircularBuffer cb_out_reshard(cb_id_out_reshard);
 #ifdef FUSE_BIAS
-    experimental::CircularBuffer cb_in3(cb_id_in3);
+    CircularBuffer cb_in3(cb_id_in3);
 #endif
 
     //  READER
@@ -72,8 +74,9 @@ void kernel_main() {
     uint32_t l1_read_addr_in1 = 0;
     constexpr DataFormat in1_data_format = get_dataformat(cb_id_in1);
 
-    uint64_t in1_base_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, in1_tensor_addr);
-    noc_async_read_one_packet_set_state<true>(in1_base_addr, in1_page_size, vc);
+    AllocatorBank<AllocatorBankType::DRAM> dram_bank;
+    noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
+        dram_bank, in1_page_size, {.bank_id = dram_bank_id, .addr = in1_tensor_addr}, NocOptVals{.vc = vc});
 
 #ifdef ARCH_GRAYSKULL
     for (uint32_t block = 0; block < num_blocks; ++block) {
@@ -82,7 +85,13 @@ void kernel_main() {
         l1_write_addr_in1 = cb_in1.get_write_ptr();
 
         for (uint32_t h = 0; h < in1_num_pages; ++h) {
-            noc_async_read_one_packet_with_state<true, true>(in1_base_addr + l1_read_addr_in1, l1_write_addr_in1, vc);
+            noc.async_read_with_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
+                dram_bank,
+                CoreLocalMem<uint32_t>(l1_write_addr_in1),
+                in1_page_size,
+                {.bank_id = dram_bank_id, .addr = in1_tensor_addr + l1_read_addr_in1},
+                {},
+                NocOptVals{.vc = vc});
             l1_read_addr_in1 += in1_page_size;
             l1_write_addr_in1 += in1_page_size;
         }
@@ -102,17 +111,20 @@ void kernel_main() {
     uint32_t l1_write_addr_in1_start = cb_in1.get_write_ptr();
     l1_write_addr_in1 = l1_write_addr_in1_start;
     for (uint32_t block = 0; block < num_blocks; ++block) {
-        noc_async_read_set_trid(curr_block_trid);
-
         for (uint32_t h = 0; h < in1_num_pages; ++h) {
-            noc_async_read_one_packet_with_state_with_trid(
-                in1_base_addr, l1_read_addr_in1, l1_write_addr_in1, curr_block_trid);
+            noc.async_read<NocOptions::TXN_ID, NOC_MAX_BURST_SIZE>(
+                dram_bank,
+                CoreLocalMem<uint32_t>(l1_write_addr_in1),
+                in1_page_size,
+                {.bank_id = dram_bank_id, .addr = in1_tensor_addr + l1_read_addr_in1},
+                {},
+                NocOptVals{.vc = vc, .trid = curr_block_trid});
             l1_read_addr_in1 += in1_page_size;
             l1_write_addr_in1 += in1_page_size;
         }
 
         if (num_free_blocks_in_buffer == 2) {
-            noc_async_read_barrier_with_trid(block_trid_to_wait);
+            noc.async_read_barrier<NocOptions::TXN_ID>({.trid = static_cast<uint8_t>(block_trid_to_wait)});
             cb_in1.push_back(in1_block_num_tiles);
             // wait for next block trid
             block_trid_to_wait = block_trid_to_wait == 3 ? 1 : (block_trid_to_wait + 1);
@@ -132,7 +144,7 @@ void kernel_main() {
         l1_write_addr_in1 = l1_write_addr_in1_start + l1_write_addr_in1_offset;
     }
     // last block to wait
-    noc_async_read_barrier_with_trid(block_trid_to_wait);
+    noc.async_read_barrier<NocOptions::TXN_ID>({.trid = static_cast<uint8_t>(block_trid_to_wait)});
     cb_in1.push_back(in1_block_num_tiles);
 #endif
 
@@ -142,11 +154,17 @@ void kernel_main() {
     uint32_t l1_write_addr_in3 = cb_in3.get_write_ptr();
     uint32_t l1_read_addr_in3 = 0;
 
-    uint64_t in3_base_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, in3_tensor_addr);
-    noc_async_read_one_packet_set_state<true>(in3_base_addr, in3_page_size, vc);
+    noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
+        dram_bank, in3_page_size, {.bank_id = dram_bank_id, .addr = in3_tensor_addr}, NocOptVals{.vc = vc});
 
     for (uint32_t h = 0; h < in3_num_pages; ++h) {
-        noc_async_read_one_packet_with_state<true, true>(in3_base_addr + l1_read_addr_in3, l1_write_addr_in3, vc);
+        noc.async_read_with_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
+            dram_bank,
+            CoreLocalMem<uint32_t>(l1_write_addr_in3),
+            in3_page_size,
+            {.bank_id = dram_bank_id, .addr = in3_tensor_addr + l1_read_addr_in3},
+            {},
+            NocOptVals{.vc = vc});
         l1_read_addr_in3 += in3_page_size;
         l1_write_addr_in3 += in3_page_size;
     }
@@ -171,12 +189,12 @@ void kernel_main() {
             l1_write_addr_out_reshard += reshard_tensor_start_offset;
         }
 
-        experimental::UnicastEndpoint dst_ep;
+        UnicastEndpoint dst_ep;
         uint32_t reshard_dest_local_addr = l1_write_addr_out_reshard;
 
         for (uint32_t h = 0; h < per_core_M; ++h) {
             noc.async_write(
-                experimental::CoreLocalMem<uint32_t>(l1_read_addr_out),
+                CoreLocalMem<uint32_t>(l1_read_addr_out),
                 dst_ep,
                 per_core_N_reshard_bytes[index_offset],
                 {},

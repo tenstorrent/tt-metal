@@ -1,49 +1,56 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 
 #include "api/compute/reduce.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr uint32_t Ht = get_compile_time_arg_val(0);
-    constexpr uint32_t Wt = get_compile_time_arg_val(1);
-    constexpr uint32_t NC = get_compile_time_arg_val(2);
-    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
-    reduce_init(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
+    constexpr uint32_t Ht = get_arg(args::Ht);
+    constexpr uint32_t Wt = get_arg(args::Wt);
+    constexpr uint32_t NC = get_arg(args::NC);
 
-    experimental::CircularBuffer cb0(tt::CBIndex::c_0);
-    experimental::CircularBuffer cb2(tt::CBIndex::c_2);
-    experimental::CircularBuffer cb16(tt::CBIndex::c_16);
+    constexpr uint32_t onetile = 1;
 
-    cb2.wait_front(1);  // scaler tile from the reader
+    DataflowBuffer dfb_in(dfb::in_data);
+    DataflowBuffer dfb_in_scaler(dfb::in_scaler);
+    DataflowBuffer dfb_out(dfb::out);
+    compute_kernel_hw_startup(dfb::in_data, dfb::in_scaler, dfb::out);
+    reduce_init<REDUCE_OP, REDUCE_DIM>(dfb::in_data, dfb::in_scaler, dfb::out);
+
+    dfb_in_scaler.wait_front(onetile);
     for (uint32_t nc = 0; nc < NC; nc++) {
-        constexpr int onetile = 1;
         int reduce_dst_idx = 0;
         for (uint32_t wt = 0; wt < Wt; ++wt) {
             // tiles are expected to be coming in in NCWH order (H-contiguous)
             // reducing in W means out[0][w] = sum(h=0..H-1, in[h][w])
             // in this case we just sequentially add to accumulator all the H-tiles in a column
-            acquire_dst();
+            tile_regs_acquire();
+            tile_regs_wait();
             for (uint32_t ht = 0; ht < Ht; ++ht) {
-                cb0.wait_front(onetile);
+                dfb_in.wait_front(onetile);
 #if (MATH_ONLY == 1)
-                UNPACK((llk_unpack_AB_reduce(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0)));
-                // REDUCE_OP is expected to come from add_define
-                reduce_tile_math(reduce_dst_idx);
-#elif (MATH_ONLY == 0)
-                // REDUCE_OP is expected to come from add_define
-                reduce_tile(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0, reduce_dst_idx);
+#ifdef ARCH_QUASAR
+                UNPACK((llk_unpack_AB_reduce(dfb::in_data, dfb::in_scaler, 0, 0)));
+#else
+                UNPACK((llk_unpack_AB_reduce<REDUCE_OP, REDUCE_DIM>(dfb::in_data, dfb::in_scaler, 0, 0)));
 #endif
-                cb0.pop_front(onetile);
+                // REDUCE_OP and REDUCE_DIM are expected to come from add_define
+                reduce_tile_math<REDUCE_OP, REDUCE_DIM>(reduce_dst_idx);
+#elif (MATH_ONLY == 0)
+                // REDUCE_OP and REDUCE_DIM are expected to come from add_define
+                reduce_tile<REDUCE_OP, REDUCE_DIM>(dfb::in_data, dfb::in_scaler, 0, 0, reduce_dst_idx);
+#endif
+                dfb_in.pop_front(onetile);
             }
-
-            cb16.reserve_back(onetile);
-            pack_tile(reduce_dst_idx, tt::CBIndex::c_16);
-            cb16.push_back(onetile);
-            release_dst();
+            dfb_out.reserve_back(onetile);
+            pack_tile(reduce_dst_idx, dfb::out);
+            dfb_out.push_back(onetile);
+            tile_regs_commit();
+            tile_regs_release();
         }
     }
     reduce_uninit();

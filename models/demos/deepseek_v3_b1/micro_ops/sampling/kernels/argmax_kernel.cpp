@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 // Sampling unified kernel (k=1 argmax fast path) wrapper.
@@ -24,8 +24,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("sampling_winner_page_bytes"),
         get_named_compile_time_arg_val("sampling_num_senders"),
         get_named_compile_time_arg_val("sampling_expected_remote_incs"),
-        get_named_compile_time_arg_val("sampling_receiver_semaphore_id"),
-        get_named_compile_time_arg_val("sampling_local_ready_semaphore_id"),
+        get_named_compile_time_arg_val("sampling_receiver_semaphore_addr"),
+        get_named_compile_time_arg_val("sampling_local_ready_semaphore_addr"),
         get_named_compile_time_arg_val("sampling_mesh_mode"),
         get_named_compile_time_arg_val("sampling_stage1_sender"),
         get_named_compile_time_arg_val("sampling_stage1_receiver"),
@@ -67,7 +67,7 @@ void kernel_main() {
 #elif defined(COMPILE_FOR_BRISC)
     using SamplingWriterCTArgs = deepseek_b1_ops::Sampling::WriterCTArgs<
         get_named_compile_time_arg_val("sampling_winner_page_bytes"),
-        get_named_compile_time_arg_val("sampling_local_ready_semaphore_id"),
+        get_named_compile_time_arg_val("sampling_local_ready_semaphore_addr"),
         0,
         0,
         0>;

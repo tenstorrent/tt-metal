@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -61,11 +61,11 @@ void kernel_main() {
 
     uint32_t device_batch_offset = 0;
     if constexpr (PHASES_TO_READ == 2) {
-        const auto addrg = TensorAccessor(index_args, batch_offset_tensor_addr, index_stick_size);
+        const auto addrg = TensorAccessor(index_args, batch_offset_tensor_addr);
         cb_reserve_back(cb_batch_offset_id, 1);
         uint32_t index_cb_wr_ptr = get_write_ptr(cb_batch_offset_id);
         // Read the batch offset 1 page to read
-        uint64_t batch_offset_index_noc_addr = get_noc_addr(0, addrg);
+        uint64_t batch_offset_index_noc_addr = addrg.get_noc_addr(0);
         noc_async_read(batch_offset_index_noc_addr, index_cb_wr_ptr, index_stick_size);
         noc_async_read_barrier();
         cb_push_back(cb_batch_offset_id, 1);

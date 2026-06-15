@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -168,7 +168,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
-        vector<uint32_t> compute_kernel_args = {uint(num_output_tiles)};
+        vector<uint32_t> compute_kernel_args = {uint(num_output_tiles), /*use_dfbs=*/false};
 
         tt_metal::CreateKernel(
             program,
@@ -314,7 +314,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(
                 .noc = tt_metal::NOC::RISCV_0_default,
                 .compile_args = writer_compile_time_args});
 
-        vector<uint32_t> compute_kernel_args = {uint(num_output_tiles)};
+        vector<uint32_t> compute_kernel_args = {uint(num_output_tiles), /*use_dfbs=*/false};
 
         tt_metal::CreateKernel(
             program,
@@ -403,7 +403,7 @@ bool test_interleaved_l1_datacopy(
 
     // Buffers and host data
 
-    vector<uint32_t> compute_kernel_args = {num_pages};
+    vector<uint32_t> compute_kernel_args = {num_pages, /*use_dfbs=*/false};
     tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
@@ -466,7 +466,7 @@ bool test_interleaved_l1_datacopy(
             .noc = tt_metal::NOC::RISCV_1_default,
             .compile_args = reader_compile_time_args});
 
-    std::vector<uint32_t> writer_compile_time_args;
+    std::vector<uint32_t> writer_compile_time_args = {tt::CBIndex::c_16};
     tt::tt_metal::TensorAccessorArgs(dst).append_to(writer_compile_time_args);
     auto unary_writer_kernel = tt_metal::CreateKernel(
         program,

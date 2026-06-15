@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@
 
 #include "llk_math_common_api.h"
 #include "llk_math_eltwise_unary_datacopy.h"
+#include "llk_math_fast_tilize.h"
 
 /*************************************************************************
  * LLK ELTWISE UNARY DATACOPY
@@ -45,8 +46,13 @@ template <
     bool is_fp32_dest_acc_en,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool is_int_fpu_en = false,
-    bool tilize = false /*unused*/>
+    PackMode pack_mode = PackMode::Default>
 inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand = 0) {
+    static_assert(
+        pack_mode == PackMode::Default || pack_mode == PackMode::Untilize || pack_mode == PackMode::Tilize,
+        "Wormhole B0 math datacopy init: use PackMode::Default, PackMode::Untilize, or PackMode::Tilize (tilize is "
+        "ignored on WH)");
+    (void)pack_mode;
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
     const std::uint32_t dst_format = get_operand_dst_format(operand_id);

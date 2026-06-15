@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "sort_nanobind.hpp"
@@ -42,7 +42,7 @@ void bind_sort_operation(nb::module_& mod) {
 
         Note:
 
-            Supported dtypes and layout for input tensor values:
+            Supported dtypes and layouts for input tensor values:
 
             .. list-table::
                 :header-rows: 1
@@ -50,11 +50,13 @@ void bind_sort_operation(nb::module_& mod) {
                 * - Dtypes
                   - Layouts
                 * - BFLOAT16
-                  - TILE
+                  - TILE, ROW_MAJOR
                 * - UINT16
-                  - TILE
+                  - TILE, ROW_MAJOR
+                * - FLOAT32
+                  - TILE, ROW_MAJOR
 
-            Supported dtypes and layout for index tensor values:
+            Supported dtypes and layouts for index tensor values:
 
             .. list-table::
                 :header-rows: 1
@@ -62,10 +64,11 @@ void bind_sort_operation(nb::module_& mod) {
                 * - Dtypes
                   - Layouts
                 * - UINT16, UINT32
-                  - TILE
+                  - TILE, ROW_MAJOR
 
         Memory Support:
             - Interleaved: DRAM and L1
+            - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED, BLOCK_SHARDED (DRAM and L1)
     )doc";
 
     ttnn::bind_function<"sort">(

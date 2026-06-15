@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,21 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from rich.theme import Theme
+
+
+def safe_path(path: str | None) -> str | None:
+    """Disambiguate an output path per process so parallel tt-run instances don't clobber it."""
+    if not path:
+        return path
+    rank_env = os.environ.get("TT_RUN_RANK")
+    if rank_env is None:
+        return path
+    try:
+        rank = int(rank_env)
+    except ValueError:
+        return path
+    root, ext = os.path.splitext(path)
+    return f"{root}_rank_{rank}{ext}"
 
 
 def should_use_color() -> bool:

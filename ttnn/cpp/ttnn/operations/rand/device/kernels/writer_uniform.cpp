@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,7 @@ void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(2);
     uint32_t end_id = start_id + num_tiles;
 
-    const auto output_addrg = TensorAccessor(dst_args, dst_addr, get_tile_size(dst_cb_id));
+    const auto output_addrg = TensorAccessor(dst_args, dst_addr);
 
     cb_reserve_back(dst_cb_id, 1);
     uint32_t dst_cb_write_ptr = get_write_ptr(dst_cb_id);
@@ -29,7 +29,7 @@ void kernel_main() {
         auto intermed_cb_addr = reinterpret_cast<float*>(intermed_cb_read_ptr);
 
 #ifdef OUTPUT_DTYPE_FLOAT32
-        noc_async_write_tile(i, output_addrg, intermed_cb_read_ptr);
+        noc_async_write_page(i, output_addrg, intermed_cb_read_ptr);
         noc_async_write_barrier();
         cb_pop_front(intermed_cb_id, 1);
 #endif
@@ -48,7 +48,7 @@ void kernel_main() {
         }
         cb_pop_front(intermed_cb_id, 1);
 
-        noc_async_write_tile(i, output_addrg, dst_cb_write_ptr);
+        noc_async_write_page(i, output_addrg, dst_cb_write_ptr);
         noc_async_write_barrier();
 #endif
     }

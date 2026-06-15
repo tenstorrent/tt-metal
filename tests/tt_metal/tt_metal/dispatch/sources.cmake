@@ -9,15 +9,20 @@ set(UNIT_TESTS_DISPATCH_SMOKE_SOURCES
     dispatch_program/test_sub_device.cpp
     dispatch_program/test_kernel_config_buffer.cpp
     dispatch_util/test_device_command.cpp
+    dispatch_util/test_dispatch_telemetry.cpp
     dispatch_util/test_dispatch_settings.cpp
+    dispatch_util/test_simple_trace_allocator.cpp
 )
 
 set(UNIT_TESTS_DISPATCH_BASIC_SOURCES
+    test_service_core_manager.cpp
     dispatch_buffer/test_sub_device.cpp
     dispatch_buffer/test_BufferCorePageMapping_Iterator.cpp
     dispatch_program/test_dispatch.cpp
     dispatch_program/test_dataflow_cb.cpp
     dispatch_program/test_global_circular_buffers.cpp
+    dispatch_program/test_realtime_profiler_sanity.cpp
+    dispatch_program/test_realtime_profiler_stress.cpp
     dispatch_trace/test_sub_device.cpp
     dispatch_util/test_ringbuffer_cache.cpp
 )

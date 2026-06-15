@@ -10,6 +10,7 @@ set(FABRIC_JIT_API_HEADERS
     hw/inc/edm_fabric/fabric_connection_manager.hpp
     hw/inc/edm_fabric/fabric_edm_packet_header_validate.hpp
     hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp
+    hw/inc/edm_fabric/fabric_router_eth_handshake.hpp
     hw/inc/edm_fabric/fabric_txq_setup.h
     hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp
     hw/inc/fabric_direction_table_interface.h
@@ -63,6 +64,9 @@ set(FABRIC_SOURCES
     topology_mapper.cpp
     topology_mapper_utils.cpp
     topology_solver.cpp
+    topology_solver_sat.cpp
+    topology_solver_sat_solver.cpp
+    pipeline_builder.cpp
     physical_grouping_descriptor_core.cpp
     physical_grouping_descriptor_graph_building.cpp
     physical_grouping_descriptor_matching.cpp

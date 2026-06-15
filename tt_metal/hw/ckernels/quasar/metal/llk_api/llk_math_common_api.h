@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,25 +15,6 @@
 /*************************************************************************
  * LLK MATH COMMON
  *************************************************************************/
-
-/**
- * @brief Determines whether the source register format and Float32 destination format are a supported combination
- *
- * @param src_reg_fmt: The source register format
- */
-inline bool is_src_fmt_fp32_dest_compatible(const DataFormat src_reg_fmt) {
-    return src_reg_fmt == DataFormat::Float16_b || src_reg_fmt == DataFormat::Float16 ||
-           src_reg_fmt == DataFormat::Tf32;
-}
-
-/**
- * @brief Determines whether the source register format and Int32 destination format are a supported combination
- *
- * @param src_reg_fmt: The source register format
- */
-inline bool is_src_fmt_int32_dest_compatible(const DataFormat src_reg_fmt) {
-    return src_reg_fmt == DataFormat::Int8 || src_reg_fmt == DataFormat::UInt8;
-}
 
 /**
  *
@@ -57,16 +38,16 @@ inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::u
 
     // TODO: AM; introduce dest mode enum, issue #37483
     // Determine the dest format based on the srcA/B formats and EN_32BIT_DEST_FORMAT
-    if (EN_32BIT_DEST_FORMAT && is_src_fmt_fp32_dest_compatible(srca_format) &&
-        is_src_fmt_fp32_dest_compatible(srcb_format)) {
+    if (EN_32BIT_DEST_FORMAT && _is_src_fmt_fp32_dest_compatible_(srca_format) &&
+        _is_src_fmt_fp32_dest_compatible_(srcb_format)) {
         // TODO: AM; hardcoding false for EN_IMPLIED_MATH_FORMAT for now, will be fixed in issue #37720
         _llk_math_srcAB_hw_configure_<
             false /*EN_IMPLIED_MATH_FORMAT*/,
             true /*EN_FP32_DEST_FORMAT*/,
             false /*EN_INT32_DEST_FORMAT*/>(srca_format, srcb_format);
     } else if (
-        EN_32BIT_DEST_FORMAT && is_src_fmt_int32_dest_compatible(srca_format) &&
-        is_src_fmt_int32_dest_compatible(srcb_format)) {
+        EN_32BIT_DEST_FORMAT && _is_src_fmt_int32_dest_compatible_(srca_format) &&
+        _is_src_fmt_int32_dest_compatible_(srcb_format)) {
         // TODO: AM; hardcoding false for EN_IMPLIED_MATH_FORMAT for now, will be fixed in issue #37720
         _llk_math_srcAB_hw_configure_<
             false /*EN_IMPLIED_MATH_FORMAT*/,
@@ -79,6 +60,21 @@ inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::u
             false /*EN_FP32_DEST_FORMAT*/,
             false /*EN_INT32_DEST_FORMAT*/>(srca_format, srcb_format);
     }
+}
+
+inline void llk_math_reconfig_remap(const bool /*remap_enable*/) {}
+
+/**
+ * @brief Returns the effective math fidelity for an eltwise binary operation.
+ * Math fidelity only applies to ELWMUL; for all other binary ops (ELWADD/ELWSUB), LoFi is used.
+ *
+ * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
+ * @tparam math_fidelity: The requested math fidelity
+ * @return The requested math_fidelity for ELWMUL, MathFidelity::LoFi otherwise.
+ */
+template <EltwiseBinaryType eltwise_binary_type, MathFidelity math_fidelity>
+inline constexpr MathFidelity get_effective_math_fidelity() {
+    return (eltwise_binary_type == EltwiseBinaryType::ELWMUL) ? math_fidelity : MathFidelity::LoFi;
 }
 
 /**
@@ -112,9 +108,11 @@ inline void llk_math_wait_for_dest_available() {
 /**
  * @brief Signals that the current destination section is done.
  * After math is done, posts to the MATH_PACK semaphore so the packer can proceed;
+ * @tparam EN_32BIT_DEST: Set to true to use 32bit math dest in Float32 or Int32 format
  */
+template <bool EN_32BIT_DEST>
 inline void llk_math_dest_section_done() {
-    _llk_math_dest_section_done_<DST_SYNC_MODE>();
+    _llk_math_dest_section_done_<DST_SYNC_MODE, EN_32BIT_DEST>();
 }
 
 /**
@@ -122,3 +120,31 @@ inline void llk_math_dest_section_done() {
  * Waits for any previous packs to finish, resets the dest bank id, initializes the MATH_PACK semaphore
  */
 inline void llk_math_pack_sync_init() { _llk_math_pack_sync_init_<DST_SYNC_MODE>(); }
+
+// Math has no per-tile data-format state on Quasar; format reconfig is unpack-only.
+// The wrappers below are intentionally empty no-ops, kept so reconfig_data_format.h
+// can issue MATH((...)) uniformly across arches.
+template <[[maybe_unused]] bool EN_32BIT_DEST, [[maybe_unused]] bool to_from_int8 = false>
+inline void llk_math_reconfig_data_format_srca(const std::uint32_t /*srca_new_operand*/) {}
+
+template <[[maybe_unused]] bool EN_32BIT_DEST, [[maybe_unused]] bool to_from_int8 = false>
+inline void llk_math_reconfig_data_format_srcb(const std::uint32_t /*srcb_new_operand*/) {}
+
+template <[[maybe_unused]] bool EN_32BIT_DEST, [[maybe_unused]] bool to_from_int8 = false>
+inline void llk_math_reconfig_data_format(
+    const std::uint32_t /*srca_new_operand*/, const std::uint32_t /*srcb_new_operand*/) {}
+
+template <[[maybe_unused]] bool EN_32BIT_DEST, [[maybe_unused]] bool to_from_int8 = false>
+inline void llk_math_reconfig_data_format(
+    const std::uint32_t /*srca_old_operand*/,
+    const std::uint32_t /*srca_new_operand*/,
+    const std::uint32_t /*srcb_old_operand*/,
+    const std::uint32_t /*srcb_new_operand*/) {}
+
+template <[[maybe_unused]] bool EN_32BIT_DEST, [[maybe_unused]] bool to_from_int8 = false>
+inline void llk_math_reconfig_data_format_srca(
+    const std::uint32_t /*srca_old_operand*/, const std::uint32_t /*srca_new_operand*/) {}
+
+template <[[maybe_unused]] bool EN_32BIT_DEST, [[maybe_unused]] bool to_from_int8 = false>
+inline void llk_math_reconfig_data_format_srcb(
+    const std::uint32_t /*srcb_old_operand*/, const std::uint32_t /*srcb_new_operand*/) {}

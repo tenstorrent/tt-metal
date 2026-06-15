@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -23,7 +23,7 @@ inline void calculate_right_shift(const uint shift_amt) {
         v_endif;
         vInt res = reinterpret<vInt>(val >> shift_amt);
 
-        v_if(input < 0) { res = setsgn(res + 1, input); }
+        v_if(input < 0) { res = copysgn(res + 1, input); }
         v_endif;
 
         dst_reg[0] = res;

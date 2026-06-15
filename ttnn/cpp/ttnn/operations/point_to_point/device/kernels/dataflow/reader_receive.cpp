@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
@@ -56,6 +56,8 @@ void kernel_main() {
 
     fabric_connection.close();
 
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
     const auto packet_buffer = TensorAccessor(packet_buffer_args, intermediate_base_addr, packet_size_bytes);
 
     cb_reserve_back(packet_cb_id, 1);
@@ -74,7 +76,7 @@ void kernel_main() {
 
         for (uint32_t page_segment_idx = 0; page_segment_idx < page_segments; ++page_segment_idx) {
             if (page_idx == page_idx_start || packet_page_idx == curr_pages_per_packet) {
-                const uint64_t packet_noc_addr = get_noc_addr(packet_idx, packet_buffer, 0, 0);
+                const uint64_t packet_noc_addr = packet_buffer.get_noc_addr(packet_idx, 0, 0);
                 noc_async_read(packet_noc_addr, packet_l1_addr, packet_size_bytes);
                 noc_async_read_barrier();
 

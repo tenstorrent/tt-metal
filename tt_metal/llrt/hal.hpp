@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,8 +27,9 @@
 #include <vector>
 
 #include "tt_memory.h"
-#include "hal/generated/dev_msgs.hpp"          // IWYU pragma: export
-#include "hal/generated/fabric_telemetry.hpp"  // IWYU pragma: export
+#include "hal/generated/dev_msgs.hpp"                // IWYU pragma: export
+#include "hal/generated/fabric_telemetry.hpp"        // IWYU pragma: export
+#include "hal/generated/realtime_profiler_msgs.hpp"  // IWYU pragma: export
 
 #include <tt_stl/overloaded.hpp>
 #include <umd/device/types/core_coordinates.hpp>
@@ -58,9 +59,10 @@ bool operator==(const HalProcessorIdentifier&, const HalProcessorIdentifier&);
 enum class HalDramMemAddrType : uint8_t {
     BARRIER = 0,
     PROFILER = 1,
-    DRAM_BACKED_COMMAND_QUEUES = 2,
-    UNRESERVED = 3,
-    COUNT = 4
+    DEVICE_PRINT_DISPATCH = 2,
+    DRAM_BACKED_COMMAND_QUEUES = 3,
+    UNRESERVED = 4,
+    COUNT = 5
 };
 
 enum class HalTensixHarvestAxis : uint8_t { ROW = 0x1, COL = 0x2 };
@@ -80,6 +82,9 @@ struct HalJitBuildConfig {
     DeviceAddr fw_launch_addr;
     uint32_t fw_launch_addr_value;
     ll_api::memory::Loading memory_load;
+    // Offset added to all L1 addresses when writing from host (via write_core).
+    // Non-zero for cores where L1 NOC address != private address (e.g. DRAM cores: 0x2000000000).
+    DeviceAddr l1_noc_offset = 0;
 };
 
 // Ethernet Firmware mailbox messages
@@ -112,7 +117,31 @@ enum class FWMailboxMsg : uint8_t {
     RX_LINK_UP,
     // Port Status
     PORT_STATUS,
+    // Postcode
+    POSTCODE,
+    // ETH link training status
+    TRAIN_STATUS,
+    // SerDes reset status
+    SERDES_RESET_STATUS,
     // Number of mailbox message types
+    COUNT,
+};
+
+// Hardware debug registers on active ethernet cores.
+// Populated only on archs that expose them (currently BH) - callers must check
+// Hal::get_supports_eth_debug_regs() before reading addresses.
+enum class EthDebugReg : uint8_t {
+    // PCS status register
+    PCS_STATUS,
+    // ERISC0 reset PC
+    ERISC0_RESET_PC,
+    // ERISC1 reset PC
+    ERISC1_RESET_PC,
+    // RISC soft reset register
+    RISC_SOFT_RESET,
+    // ETH_CTRL ERR_STAT register (link error status)
+    ERR_STAT,
+    // Number of debug register entries
     COUNT,
 };
 
@@ -146,11 +175,13 @@ private:
     std::vector<DeviceAddr> mem_map_bases_;
     std::vector<uint32_t> mem_map_sizes_;
     std::vector<uint32_t> eth_fw_mailbox_msgs_;
+    std::vector<uint32_t> eth_debug_regs_;
     bool supports_cbs_ = false;
     bool supports_dfbs_ = false;
     bool supports_receiving_multicast_cmds_ = false;
     dev_msgs::Factory dev_msgs_factory_;
     tt::tt_fabric::fabric_telemetry::Factory fabric_telemetry_factory_;
+    realtime_profiler_msgs::Factory realtime_profiler_msgs_factory_;
 
 public:
     HalCoreInfoType(
@@ -166,7 +197,9 @@ public:
         bool supports_dfbs,
         bool supports_receiving_multicast_cmds,
         dev_msgs::Factory dev_msgs_factory,
-        tt::tt_fabric::fabric_telemetry::Factory fabric_telemetry_factory) :
+        tt::tt_fabric::fabric_telemetry::Factory fabric_telemetry_factory,
+        realtime_profiler_msgs::Factory realtime_profiler_msgs_factory,
+        std::vector<uint32_t> eth_debug_regs = {}) :
         programmable_core_type_(programmable_core_type),
         core_type_(core_type),
         processor_classes_(std::move(processor_classes)),
@@ -175,11 +208,13 @@ public:
         mem_map_bases_(std::move(mem_map_bases)),
         mem_map_sizes_(std::move(mem_map_sizes)),
         eth_fw_mailbox_msgs_{std::move(eth_fw_mailbox_msgs)},
+        eth_debug_regs_(std::move(eth_debug_regs)),
         supports_cbs_(supports_cbs),
         supports_dfbs_(supports_dfbs),
         supports_receiving_multicast_cmds_(supports_receiving_multicast_cmds),
         dev_msgs_factory_(dev_msgs_factory),
-        fabric_telemetry_factory_(fabric_telemetry_factory) {}
+        fabric_telemetry_factory_(fabric_telemetry_factory),
+        realtime_profiler_msgs_factory_(realtime_profiler_msgs_factory) {}
 
     DeviceAddr get_dev_addr(HalL1MemAddrType addr_type) const;
     uint32_t get_dev_size(HalL1MemAddrType addr_type) const;
@@ -192,6 +227,7 @@ public:
     uint32_t get_processor_class_num_fw_binaries(uint32_t processor_class_idx) const;
     const dev_msgs::Factory& get_dev_msgs_factory() const;
     const tt::tt_fabric::fabric_telemetry::Factory& get_fabric_telemetry_factory() const;
+    const realtime_profiler_msgs::Factory& get_realtime_profiler_msgs_factory() const;
 };
 
 inline DeviceAddr HalCoreInfoType::get_dev_addr(HalL1MemAddrType addr_type) const {
@@ -226,6 +262,10 @@ inline const dev_msgs::Factory& HalCoreInfoType::get_dev_msgs_factory() const { 
 
 inline const tt::tt_fabric::fabric_telemetry::Factory& HalCoreInfoType::get_fabric_telemetry_factory() const {
     return this->fabric_telemetry_factory_;
+}
+
+inline const realtime_profiler_msgs::Factory& HalCoreInfoType::get_realtime_profiler_msgs_factory() const {
+    return this->realtime_profiler_msgs_factory_;
 }
 
 // HalJitBuildQueryInterface is an interface for querying arch-specific build options.
@@ -326,6 +366,24 @@ private:
     size_t total_pinned_memory_size_{};
     bool has_tile_counter_registers_{};
     bool supports_implicit_dfb_sync_{};
+    uint32_t num_tile_counters_{};
+
+    uint32_t neo_tile_counters_base_addr_{};
+    uint32_t neo_tile_counters_stride_{};
+    uint32_t neo_tile_counters_size_{};
+    uint32_t neo_tile_counters_tiles_available_offset_{};
+    uint32_t neo_tile_counters_buffer_capacity_offset_{};
+
+    bool has_remapper_{};
+    uint32_t remapper_global_control_addr_{};
+    uint32_t remapper_client_l_config_base_addr_{};
+    uint32_t remapper_client_r_config_base_addr_{};
+    uint32_t remapper_pair_stride_{};
+    uint32_t remapper_num_pairs_{};
+
+    uint32_t eth_interrupt_mode_base_reg_{};
+    uint32_t eth_interrupt_num_vecs_{};
+    uint32_t noc_max_burst_size_bytes_{};
 
     float eps_ = 0.0f;
     float nan_ = 0.0f;
@@ -334,7 +392,11 @@ private:
     void initialize_wh(
         bool is_base_routing_fw_enabled, uint32_t profiler_dram_bank_size_per_risc_bytes, bool enable_dram_backed_cq);
     void initialize_bh(
-        bool enable_2_erisc_mode, uint32_t profiler_dram_bank_size_per_risc_bytes, bool enable_dram_backed_cq);
+        bool enable_2_erisc_mode,
+        uint32_t profiler_dram_bank_size_per_risc_bytes,
+        bool enable_dram_backed_cq,
+        bool is_simulator,
+        bool enable_blackhole_dram_programmable_cores);
     void initialize_qa(uint32_t profiler_dram_bank_size_per_risc_bytes, bool enable_dram_backed_cq);
 
     // Functions where implementation varies by architecture
@@ -361,7 +423,9 @@ public:
         bool is_base_routing_fw_enabled,
         bool enable_2_erisc_mode,
         uint32_t profiler_dram_bank_size_per_risc_bytes,
-        bool enable_dram_backed_cq);
+        bool enable_dram_backed_cq,
+        bool is_simulator = false,
+        bool enable_blackhole_dram_programmable_cores = false);
 
     tt::ARCH get_arch() const { return arch_; }
 
@@ -392,6 +456,24 @@ public:
     bool has_stream_registers() const { return has_stream_registers_; }
     bool has_tile_counter_registers() const { return has_tile_counter_registers_; }
     bool supports_implicit_dfb_sync() const { return supports_implicit_dfb_sync_; }
+    uint32_t get_num_tile_counters() const { return num_tile_counters_; }
+
+    uint32_t get_neo_tile_counters_base_addr() const { return neo_tile_counters_base_addr_; }
+    uint32_t get_neo_tile_counters_stride() const { return neo_tile_counters_stride_; }
+    uint32_t get_neo_tile_counters_size() const { return neo_tile_counters_size_; }
+    uint32_t get_neo_tile_counters_tiles_available_offset() const { return neo_tile_counters_tiles_available_offset_; }
+    uint32_t get_neo_tile_counters_buffer_capacity_offset() const { return neo_tile_counters_buffer_capacity_offset_; }
+
+    bool has_remapper() const { return has_remapper_; }
+    uint32_t get_remapper_global_control_addr() const { return remapper_global_control_addr_; }
+    uint32_t get_remapper_client_l_config_base_addr() const { return remapper_client_l_config_base_addr_; }
+    uint32_t get_remapper_client_r_config_base_addr() const { return remapper_client_r_config_base_addr_; }
+    uint32_t get_remapper_pair_stride() const { return remapper_pair_stride_; }
+    uint32_t get_remapper_num_pairs() const { return remapper_num_pairs_; }
+
+    // Base address of ETH RISC interrupt mode registers. Returns 0 if not supported on an arch
+    uint32_t get_eth_interrupt_mode_base_reg() const { return eth_interrupt_mode_base_reg_; }
+    uint32_t get_eth_interrupt_num_vecs() const { return eth_interrupt_num_vecs_; }
 
     float get_eps() const { return eps_; }
     float get_nan() const { return nan_; }
@@ -401,6 +483,8 @@ public:
     uint32_t get_arch_num_circular_buffers() const {
         return (arch_ == tt::ARCH::WORMHOLE_B0) ? 32 : NUM_CIRCULAR_BUFFERS;
     }
+
+    uint32_t get_noc_max_burst_size_bytes() const { return noc_max_burst_size_bytes_; }
 
     template <typename IndexType, typename SizeType, typename CoordType>
     auto noc_coordinate(IndexType noc_index, SizeType noc_size, CoordType coord) const
@@ -432,12 +516,17 @@ public:
     }
 
     bool get_supports_eth_fw_mailbox() const;
+    bool get_supports_eth_debug_regs() const;
     uint32_t get_eth_fw_mailbox_val(FWMailboxMsg msg) const;
+    uint32_t get_eth_debug_reg_addr(EthDebugReg reg) const;
     uint32_t get_eth_fw_mailbox_arg_addr(int mailbox_index, uint32_t arg_index) const;
     uint32_t get_eth_fw_mailbox_arg_count() const;
     uint32_t get_eth_fw_mailbox_address(int mailbox_index) const;
     HalTensixHarvestAxis get_tensix_harvest_axis() const { return tensix_harvest_axis_; }
     uint32_t get_programmable_core_type_count() const;
+    bool has_programmable_core_type(HalProgrammableCoreType programmable_core_type) const {
+        return static_cast<uint32_t>(programmable_core_type) < get_programmable_core_type_count();
+    }
     HalProgrammableCoreType get_programmable_core_type(uint32_t core_type_index) const;
     uint32_t get_programmable_core_type_index(HalProgrammableCoreType programmable_core_type_index) const;
     CoreType get_core_type(uint32_t programmable_core_type_index) const;
@@ -452,6 +541,8 @@ public:
     bool get_core_kernel_stored_in_config_buffer(HalProgrammableCoreType programmable_core_type) const;
 
     DeviceAddr get_dev_addr(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const;
+    // Returns get_dev_addr() + get_l1_noc_offset(): the NOC-visible address for host-side read/write_core calls.
+    DeviceAddr get_dev_noc_addr(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const;
     uint32_t get_dev_size(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const;
 
     // Overloads for Dram Params
@@ -528,6 +619,13 @@ public:
         return this->core_info_[index].get_fabric_telemetry_factory();
     }
 
+    const realtime_profiler_msgs::Factory& get_realtime_profiler_msgs_factory(
+        HalProgrammableCoreType programmable_core_type) const {
+        auto index = get_programmable_core_type_index(programmable_core_type);
+        TT_ASSERT(index < this->core_info_.size());
+        return this->core_info_[index].get_realtime_profiler_msgs_factory();
+    }
+
     // This interface guarantees that go_msg_t is 4B and has the same layout for all core types.
     // Code that assumes that should use this interface to create go_msg_t values,
     // as it is otherwise not guaranteed by the HAL interface.
@@ -554,6 +652,8 @@ public:
 
     size_t get_max_pinned_memory_count() const { return max_pinned_memory_count_; }
     size_t get_total_pinned_memory_size() const { return total_pinned_memory_size_; }
+
+    DeviceAddr get_l1_noc_offset(HalProgrammableCoreType programmable_core_type) const;
 };
 
 inline uint32_t Hal::get_programmable_core_type_count() const { return core_info_.size(); }
@@ -592,6 +692,11 @@ inline DeviceAddr Hal::get_dev_addr(HalProgrammableCoreType programmable_core_ty
     return this->core_info_[index].get_dev_addr(addr_type);
 }
 
+inline DeviceAddr Hal::get_dev_noc_addr(
+    HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const {
+    return get_dev_addr(programmable_core_type, addr_type) + get_l1_noc_offset(programmable_core_type);
+}
+
 inline uint32_t Hal::get_dev_size(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const {
     uint32_t index = ttsl::as_underlying_type<HalProgrammableCoreType>(programmable_core_type);
     TT_ASSERT(index < this->core_info_.size());
@@ -608,6 +713,20 @@ inline DeviceAddr Hal::get_dev_addr(HalDramMemAddrType addr_type) const {
     uint32_t index = ttsl::as_underlying_type<HalDramMemAddrType>(addr_type);
     TT_ASSERT(index < this->dram_bases_.size());
     return this->dram_bases_[index];
+}
+
+// Returns the NOC offset to apply to L1 addresses when writing from the host.
+// Non-zero only for cores where L1 private address != L1 NOC address (e.g. DRAM cores: 0x2000000000).
+inline DeviceAddr Hal::get_l1_noc_offset(HalProgrammableCoreType programmable_core_type) const {
+    uint32_t index = ttsl::as_underlying_type<HalProgrammableCoreType>(programmable_core_type);
+    TT_ASSERT(index < this->core_info_.size());
+    if (this->core_info_[index].get_processor_classes_count() == 0) {
+        return 0;
+    }
+    if (this->core_info_[index].get_processor_types_count(0) == 0) {
+        return 0;
+    }
+    return this->core_info_[index].get_jit_build_config(0, 0).l1_noc_offset;
 }
 
 inline uint32_t Hal::get_dev_size(HalDramMemAddrType addr_type) const {
@@ -716,6 +835,18 @@ inline uint32_t Hal::get_eth_fw_mailbox_val(FWMailboxMsg msg) const {
     return this->core_info_[index].eth_fw_mailbox_msgs_[ttsl::as_underlying_type<FWMailboxMsg>(msg)];
 }
 
+inline bool Hal::get_supports_eth_debug_regs() const {
+    const auto index = ttsl::as_underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
+    TT_ASSERT(index < this->core_info_.size());
+    return !this->core_info_[index].eth_debug_regs_.empty();
+}
+
+inline uint32_t Hal::get_eth_debug_reg_addr(EthDebugReg reg) const {
+    const auto index = ttsl::as_underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
+    TT_ASSERT(index < this->core_info_.size());
+    return this->core_info_[index].eth_debug_regs_[ttsl::as_underlying_type<EthDebugReg>(reg)];
+}
+
 inline uint32_t Hal::get_eth_fw_mailbox_arg_addr(int mailbox_index, uint32_t arg_index) const {
     return this->eth_fw_arg_addr_func_(mailbox_index, arg_index);
 }
@@ -742,6 +873,9 @@ inline bool Hal::get_core_kernel_stored_in_config_buffer(HalProgrammableCoreType
             return get_dispatch_feature_enabled(DispatchFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER);
         case HalProgrammableCoreType::IDLE_ETH:
             return get_dispatch_feature_enabled(DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER);
+        case HalProgrammableCoreType::DRAM:
+            // DRAM kernels are always loaded directly to L1; no config buffer indirection.
+            return false;
         default: TT_THROW("Invalid HalProgrammableCoreType {}", static_cast<int>(programmable_core_type));
     }
 }
@@ -753,6 +887,7 @@ constexpr HalProgrammableCoreType hal_programmable_core_type_from_core_type(Core
         case CoreType::TENSIX: return HalProgrammableCoreType::TENSIX;
         case CoreType::ACTIVE_ETH: return HalProgrammableCoreType::ACTIVE_ETH;
         case CoreType::IDLE_ETH: return HalProgrammableCoreType::IDLE_ETH;
+        case CoreType::DRAM: return HalProgrammableCoreType::DRAM;
         default: TT_FATAL(false, "CoreType is not recognized by the HAL in {}", __FUNCTION__);
     }
 }
@@ -777,3 +912,10 @@ struct std::hash<tt::tt_metal::HalProcessorIdentifier> {
 #define HAL_MEM_ETH_SIZE                                         \
     ::tt::tt_metal::MetalContext::instance().hal().get_dev_size( \
         ::tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, ::tt::tt_metal::HalL1MemAddrType::BASE)
+
+#define HAL_MEM_DRAM_L1_BASE                                     \
+    ::tt::tt_metal::MetalContext::instance().hal().get_dev_addr( \
+        ::tt::tt_metal::HalProgrammableCoreType::DRAM, ::tt::tt_metal::HalL1MemAddrType::BASE)
+#define HAL_MEM_DRAM_L1_SIZE                                     \
+    ::tt::tt_metal::MetalContext::instance().hal().get_dev_size( \
+        ::tt::tt_metal::HalProgrammableCoreType::DRAM, ::tt::tt_metal::HalL1MemAddrType::BASE)

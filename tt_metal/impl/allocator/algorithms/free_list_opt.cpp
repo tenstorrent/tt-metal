@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -404,7 +404,6 @@ Statistics FreeListOpt::get_statistics() const {
     size_t total_allocated_bytes = 0;
     size_t total_free_bytes = 0;
     size_t largest_free_block_bytes = 0;
-    std::vector<uint32_t> largest_free_block_addrs;
 
     for (size_t i = 0; i < block_address_.size(); i++) {
         if (!meta_block_is_allocated_[i]) {
@@ -414,11 +413,7 @@ Statistics FreeListOpt::get_statistics() const {
             total_allocated_bytes += block_size_[i];
         } else {
             total_free_bytes += block_size_[i];
-            if (block_size_[i] >= largest_free_block_bytes) {
-                largest_free_block_bytes = block_size_[i];
-                // XXX: This is going to overflow
-                largest_free_block_addrs.push_back(block_address_[i] + offset_bytes_);
-            }
+            largest_free_block_bytes = std::max(block_size_[i], largest_free_block_bytes);
         }
     }
 
@@ -432,9 +427,6 @@ Statistics FreeListOpt::get_statistics() const {
         .total_allocated_bytes = total_allocated_bytes,
         .total_free_bytes = total_free_bytes,
         .largest_free_block_bytes = largest_free_block_bytes,
-        // Why do we need largest_free_block_addrs? Without it the entire loop can be removed
-        // and statistics can be tracked during allocation and deallocation
-        .largest_free_block_addrs = std::move(largest_free_block_addrs),
     };
 }
 

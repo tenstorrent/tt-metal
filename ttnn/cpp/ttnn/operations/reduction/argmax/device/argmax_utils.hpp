@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -6,9 +6,13 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
+#include <cstdint>
 #include <optional>
 
 namespace ttnn::prim {
+
+// Normalize a possibly-negative dim into [0, rank) for indexing against logical shape.
+inline int32_t normalize_dim(int32_t dim, int32_t rank) noexcept { return dim < 0 ? dim + rank : dim; }
 
 /*
  * Generates the output shape for the reduction operation.

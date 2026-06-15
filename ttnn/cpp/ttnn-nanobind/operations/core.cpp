@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,8 +17,12 @@
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/operations/experimental/core_subset_write/copy_to_device_filtered.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/base_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+
+#include <nanobind/stl/vector.h>
 
 // NOLINTBEGIN(bugprone-unused-raii)
 
@@ -41,26 +45,76 @@ void py_module_types(nb::module_& mod) {
     )doc");
 
     // Unified ComputeKernelConfig - all architecture-specific names are now aliases
-    nb::class_<DeviceComputeKernelConfigPlaceholder>(mod, "DeviceComputeKernelConfig");
+    nb::class_<DeviceComputeKernelConfigPlaceholder>(mod, "DeviceComputeKernelConfig", R"doc(
+        Abstract base type used in op signatures to accept any architecture-specific compute kernel config.
+
+        Example concrete, instantiable class is :class:`ttnn.WormholeComputeKernelConfig`, which is valid for both
+        Wormhole and Blackhole devices. Construct one of the concrete classes and pass it wherever a
+        ``ttnn.DeviceComputeKernelConfig`` is expected.
+    )doc");
 
     // Primary config class (ComputeKernelConfig is the canonical name, but we expose as WormholeComputeKernelConfig
     // for backward compatibility)
-    nb::class_<ComputeKernelConfig>(mod, "WormholeComputeKernelConfig")
+    nb::class_<ComputeKernelConfig>(mod, "WormholeComputeKernelConfig", R"doc(
+        Compute kernel configuration for Wormhole devices. Note that ``BlackholeComputeKernelConfig``
+        is a type alias for the same class (``WormholeComputeKernelConfig``).
+
+        Controls the precision/throughput trade-offs of the on-chip matrix engine and SFPU.
+        Pass an instance of this class as the ``compute_kernel_config`` argument to ops such as
+        :func:`ttnn.matmul`, :func:`ttnn.linear`, and others that accept a
+        :class:`ttnn.DeviceComputeKernelConfig`.
+
+        See the per-attribute docs below for what each field does, and
+        ``tech_reports/matrix_engine/matrix_engine.md`` for the full architectural background.
+    )doc")
         .def(
-            nb::init<MathFidelity, bool, bool, bool, bool, ttnn::operations::compute_throttle_utils::ThrottleLevel>(),
+            nb::init<
+                tt::tt_metal::MathFidelity,
+                bool,
+                bool,
+                bool,
+                bool,
+                ttnn::operations::compute_throttle_utils::ThrottleLevel>(),
             nb::kw_only(),
-            nb::arg("math_fidelity") = nb::cast(MathFidelity::Invalid),
+            nb::arg("math_fidelity") = nb::cast(tt::tt_metal::MathFidelity::Invalid),
             nb::arg("math_approx_mode") = true,
             nb::arg("fp32_dest_acc_en") = false,
             nb::arg("packer_l1_acc") = false,
             nb::arg("dst_full_sync_en") = false,
             nb::arg("throttle_level") = compute_throttle_utils::ThrottleLevel::NO_THROTTLE)
-        .def_rw("math_fidelity", &ComputeKernelConfig::math_fidelity)
-        .def_rw("math_approx_mode", &ComputeKernelConfig::math_approx_mode)
-        .def_rw("fp32_dest_acc_en", &ComputeKernelConfig::fp32_dest_acc_en)
-        .def_rw("packer_l1_acc", &ComputeKernelConfig::packer_l1_acc)
-        .def_rw("dst_full_sync_en", &ComputeKernelConfig::dst_full_sync_en)
-        .def_rw("throttle_level", &ComputeKernelConfig::throttle_level);
+        .def_rw("math_fidelity", &ComputeKernelConfig::math_fidelity, R"doc(
+            Controls the number of mantissa-bit passes through the 5b×7b multiplier array, trading
+            throughput for precision. See :class:`ttnn.MathFidelity` for the available values.
+        )doc")
+        .def_rw("math_approx_mode", &ComputeKernelConfig::math_approx_mode, R"doc(
+            When ``True``, SFPU ops that have an approximate variant (e.g. ``exp``, ``gelu``, ``sqrt``)
+            run in high-performance / lower-precision mode instead of high-precision / lower-performance mode.
+            Has no effect on ops that do not have an approximate variant.
+        )doc")
+        .def_rw("fp32_dest_acc_en", &ComputeKernelConfig::fp32_dest_acc_en, R"doc(
+            When ``True``, the FPU accumulates results into the math destination (DST) register in FP32
+            instead of BFLOAT16. This is required when the output dtype is ``FLOAT32`` and improves
+            numerical accuracy for intermediate accumulations.
+
+            Warning: enabling this halves the number of tiles that fit in DST. With ``DstSync::Half``,
+            BFLOAT16 holds 8 tiles while FP32 holds only 4.
+        )doc")
+        .def_rw("packer_l1_acc", &ComputeKernelConfig::packer_l1_acc, R"doc(
+            When ``True``, the packer reads the current value at the output SRAM address, adds the value
+            from DST, and writes the result back (in-place accumulation in SRAM). This is useful for
+            accumulating partial sums in higher precision circular buffer (e.g. FP32) across multiple kernel launches,
+            and then doing a final pack to a lower-precision circular buffer (e.g. BFLOAT16).
+        )doc")
+        .def_rw("dst_full_sync_en", &ComputeKernelConfig::dst_full_sync_en, R"doc(
+            When ``True``, the math and pack units synchronize over the full DST register rather than
+            the default half-DST split. Leave at ``False`` unless you explicitly need full-DST sync
+            semantics.
+        )doc")
+        .def_rw("throttle_level", &ComputeKernelConfig::throttle_level, R"doc(
+            Inserts NOP instructions into the compute kernel to reduce throughput and limit di/dt
+            (power-supply current transients) when running on large core grids. See
+            :class:`ttnn.ThrottleLevel` for the available levels and their throughput percentages.
+        )doc");
 }
 
 void py_module(nb::module_& mod) {
@@ -70,7 +124,7 @@ void py_module(nb::module_& mod) {
         nb::arg("arch"),
         nb::arg("device_kernel_config") = nb::none(),
         nb::kw_only(),
-        nb::arg("math_fidelity") = nb::cast(MathFidelity::LoFi),
+        nb::arg("math_fidelity") = nb::cast(tt::tt_metal::MathFidelity::LoFi),
         nb::arg("math_approx_mode") = true,
         nb::arg("fp32_dest_acc_en") = false,
         nb::arg("packer_l1_acc") = false,
@@ -307,6 +361,27 @@ void py_module(nb::module_& mod) {
         )doc");
 
     mod.def(
+        "copy_host_to_device_tensor_partial",
+        [](const ttnn::Tensor& host_tensor,
+           ttnn::Tensor& device_tensor,
+           const tt::tt_metal::CoreRangeSet& logical_core_filter,
+           const std::optional<QueueId>& cq_id) {
+            ttnn::experimental::core_subset_write::copy_to_device_filtered(
+                host_tensor, device_tensor, logical_core_filter, cq_id);
+        },
+        nb::arg("host_tensor"),
+        nb::arg("device_tensor"),
+        nb::arg("logical_core_filter"),
+        nb::arg("cq_id") = nb::none(),
+        R"doc(
+        Copies host tensor data into the pre-allocated device tensor, writing only shards mapped to
+        cores in ``logical_core_filter``. The device tensor must use a sharded buffer layout.
+
+        - Empty ``logical_core_filter`` is a no-op (no shards are written).
+        - Non-empty ``logical_core_filter`` with an interleaved device buffer raises an error.
+        )doc");
+
+    mod.def(
         "copy_device_to_host_tensor",
         [](const ttnn::Tensor& device_tensor,
            ttnn::Tensor& host_tensor,
@@ -455,6 +530,47 @@ void py_module(nb::module_& mod) {
         >>> num_cores, all_cores, core_group_1, core_group_2, units_1, units_2 = \\
         ...     ttnn.split_work_to_cores(core_rangeset, 100)
         >>> print(f"Using {num_cores} cores, {units_1} units per core in group 1, {units_2} in group 2")
+        )doc");
+
+    mod.def(
+        "grid_to_cores",
+        nb::overload_cast<uint32_t, uint32_t, uint32_t, bool>(&tt::tt_metal::grid_to_cores),
+        nb::arg("num_cores"),
+        nb::arg("grid_size_x"),
+        nb::arg("grid_size_y"),
+        nb::arg("row_wise") = false,
+        R"doc(
+            Convert a grid specification to a list of CoreCoord objects.
+
+            Args:
+                num_cores (int): Number of cores to generate coordinates for.
+                grid_size_x (int): Width of the core grid.
+                grid_size_y (int): Height of the core grid.
+                row_wise (bool, optional): Iterate row-wise. Defaults to False.
+
+            Returns:
+                list[CoreCoord]: List of core coordinates.
+
+            Example:
+            >>> cores = ttnn.grid_to_cores(4, 8, 8)
+        )doc");
+
+    mod.def(
+        "grid_to_cores",
+        nb::overload_cast<CoreCoord, CoreCoord, bool>(&tt::tt_metal::grid_to_cores),
+        nb::arg("start"),
+        nb::arg("end"),
+        nb::arg("row_wise") = false,
+        R"doc(
+            Convert a core range to a list of CoreCoord objects.
+
+            Args:
+                start (CoreCoord): Start coordinate of the range.
+                end (CoreCoord): End coordinate of the range (inclusive).
+                row_wise (bool, optional): Iterate row-wise. Defaults to False.
+
+            Returns:
+                list[CoreCoord]: List of core coordinates.
         )doc");
 }
 

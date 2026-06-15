@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,22 +19,22 @@ void kernel_main() {
                 // so here we just linearly read 2 parallel arrays and apply bcast op per tile
                 // (bcast_h propagates the op down the H dimension, so it can be though of as bcast to H)
                 cb_wait_front(tt::CBIndex::c_1, onetile);
+                cb_wait_front(tt::CBIndex::c_0, onetile);
+
+                tile_regs_acquire();
+                BCAST_OP<BroadcastType::ROW>(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0);
+                tile_regs_commit();
+
+                cb_pop_front(tt::CBIndex::c_0, onetile);
+                cb_pop_front(tt::CBIndex::c_1, onetile);
 
                 cb_reserve_back(tt::CBIndex::c_16, onetile);
 
-                acquire_dst();
-
-                cb_wait_front(tt::CBIndex::c_0, onetile);
-
-                BCAST_OP<BroadcastType::ROW>(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0);
+                tile_regs_wait();
                 pack_tile(0, tt::CBIndex::c_16);
-
-                cb_pop_front(tt::CBIndex::c_0, onetile);
-
-                release_dst();
+                tile_regs_release();
 
                 cb_push_back(tt::CBIndex::c_16, onetile);
-                cb_pop_front(tt::CBIndex::c_1, onetile);
             }
         }
     }

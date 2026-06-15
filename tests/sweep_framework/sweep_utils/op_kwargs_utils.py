@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -41,11 +41,15 @@ _INFRA_KEYS = frozenset(
         "sweep_name",
         "storage_type",
         "mesh_coords",
+        "timestamp",
+        "input_hash",
+        "tag",
+        "__absent_keys__",
     }
 )
 
 # Keys for positional tensor inputs — handled by sweep test tensor creation code
-_TENSOR_SUFFIXES = ("_shape", "_dtype", "_layout", "_memory_config", "_tensor_placement", "_activations")
+_TENSOR_SUFFIXES = ("_shape", "_dtype", "_layout", "_memory_config", "_tensor_placement")
 _TENSOR_PREFIXES = (
     "input_a",
     "input_b",
@@ -64,6 +68,8 @@ _TENSOR_PREFIXES = (
     "input_tensor_k",
     "input_tensor_v",
     "page_table_tensor",
+    "cur_pos_tensor",
+    "attn_mask",
 )
 
 
@@ -135,6 +141,55 @@ def _is_program_config_dict(value: Any) -> bool:
     return False
 
 
+def _is_core_range_set_dict(value: Any) -> bool:
+    """Check if a value looks like a CoreRangeSet dict."""
+    return isinstance(value, dict) and value.get("type") == "CoreRangeSet"
+
+
+def _parse_core_range_set(value: Any) -> Any:
+    """Parse a CoreRangeSet dict into a ttnn.CoreRangeSet.
+
+    Handles C++ repr format: {"type": "CoreRangeSet", "value": "{[0-0 - 7-7]}"}
+    where each CoreRange is rendered as [x1-y1 - x2-y2] by CoreRange::str().
+    Also handles structured data format with "data" key.
+    """
+    import re
+    import json as _json
+    import ttnn  # required: this helper builds ttnn.CoreRange/CoreCoord/CoreRangeSet
+
+    data = value.get("data")
+    if data is not None:
+        try:
+            if isinstance(data, str):
+                data = _json.loads(data)
+            if isinstance(data, list):
+                core_ranges = set()
+                for rd in data:
+                    start = rd["start"]
+                    end = rd["end"]
+                    core_ranges.add(
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(start["x"], start["y"]),
+                            ttnn.CoreCoord(end["x"], end["y"]),
+                        )
+                    )
+                if core_ranges:
+                    return ttnn.CoreRangeSet(core_ranges)
+        except (KeyError, TypeError, ValueError):
+            # Malformed/partial structured "data" — fall through to the
+            # regex-based repr parser below rather than failing the vector.
+            pass
+
+    repr_str = str(value.get("value", value.get("repr", "")))
+    core_ranges = set()
+    for m in re.finditer(r"\[(\d+)-(\d+)\s*-\s*(\d+)-(\d+)\]", repr_str):
+        x1, y1, x2, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+        core_ranges.add(ttnn.CoreRange(ttnn.CoreCoord(x1, y1), ttnn.CoreCoord(x2, y2)))
+    if core_ranges:
+        return ttnn.CoreRangeSet(core_ranges)
+    return None
+
+
 def _is_core_grid_dict(value: Any) -> bool:
     """Check if a value looks like a core_grid dict."""
     if not isinstance(value, dict):
@@ -150,6 +205,88 @@ def _is_dtype_dict(value: Any) -> bool:
 def _is_layout_dict(value: Any) -> bool:
     """Check if a value looks like a layout dict {type: 'Layout', repr: 'Layout.TILE'}."""
     return isinstance(value, dict) and value.get("type") == "Layout"
+
+
+def _is_unary_op_dict(value: Any) -> bool:
+    """Check if a value looks like a UnaryOpType dict {type: 'UnaryOpType', repr: 'UnaryOpType.SILU'}."""
+    return isinstance(value, dict) and value.get("type") == "UnaryOpType"
+
+
+def _parse_unary_op(value: Any) -> Any:
+    """Parse a UnaryOpType dict to a ttnn.UnaryOpType enum value."""
+    if not _is_unary_op_dict(value):
+        return value
+    repr_str = str(value.get("repr", ""))
+    # Format: "UnaryOpType.SILU" → SILU
+    name = repr_str.split(".", 1)[-1] if "." in repr_str else repr_str
+    try:
+        import ttnn as _ttnn
+
+        return getattr(_ttnn.UnaryOpType, name)
+    except (ImportError, AttributeError):
+        return value
+
+
+def _maybe_parse_unary_list(value: Any) -> Any:
+    """If value is a list of UnaryOpType dicts, convert each element."""
+    if isinstance(value, list) and value and all(_is_unary_op_dict(v) for v in value):
+        parsed = [_parse_unary_op(v) for v in value]
+        # Return parsed list only if every element converted to an enum
+        if all(not isinstance(p, dict) for p in parsed):
+            return parsed
+    return value
+
+
+def _create_output_tensor(descriptor: dict, device, input_shape=None) -> Any:
+    """Create a preallocated output tensor from a traced output_tensor descriptor.
+
+    The descriptor has: original_shape, original_dtype, layout, memory_config.
+    We create an empty tensor on device with matching specs so the op trace
+    records the same output_tensor argument as the model.
+    """
+    import ttnn
+    import torch
+
+    shape = descriptor.get("original_shape")
+    if not shape:
+        shape = input_shape
+    if not shape:
+        return None
+
+    if isinstance(shape, dict) and "value" in shape:
+        import re
+
+        m = re.match(r"Shape\(\[([0-9,\s]+)\]\)", str(shape["value"]))
+        if m:
+            shape = [int(x.strip()) for x in m.group(1).split(",")]
+    if isinstance(shape, str):
+        import ast
+
+        try:
+            shape = ast.literal_eval(shape)
+        except Exception:
+            return None
+
+    dtype_str = descriptor.get("original_dtype", "DataType.BFLOAT16")
+    dtype = parse_dtype(dtype_str) if isinstance(dtype_str, str) else None
+    if dtype is None:
+        dtype = ttnn.bfloat16
+
+    layout_str = descriptor.get("layout", "Layout.TILE")
+    layout = parse_layout(layout_str) if isinstance(layout_str, str) else None
+    if layout is None:
+        layout = ttnn.TILE_LAYOUT
+
+    mc_dict = descriptor.get("memory_config")
+    memory_config = dict_to_memory_config(mc_dict) if isinstance(mc_dict, dict) else ttnn.DRAM_MEMORY_CONFIG
+
+    try:
+        # Preallocated output buffer is overwritten by the op; use empty() to
+        # skip a host-side memset of potentially large tensors.
+        torch_tensor = torch.empty(shape, dtype=torch.float32)
+        return ttnn.from_torch(torch_tensor, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
+    except Exception:
+        return None
 
 
 def parse_dict_value(key: str, value: Any) -> Any:
@@ -173,11 +310,59 @@ def parse_dict_value(key: str, value: Any) -> Any:
             return parse_dtype(value.get("repr", ""))
         elif _is_layout_dict(value):
             return parse_layout(value.get("repr", ""))
+        elif _is_core_range_set_dict(value):
+            return _parse_core_range_set(value)
+        elif value.get("type") == "Shape":
+            import re as _shape_re
+
+            m = _shape_re.search(r"Shape\(\[(.*?)\]\)", str(value.get("value", "")))
+            if m:
+                return [int(x.strip()) for x in m.group(1).split(",") if x.strip()]
     except (ValueError, TypeError, KeyError):
+        # malformed structured Shape data — fall through to regex repr parsing below
         pass
 
-    # Return as-is if we can't parse it (sweep test can handle it)
+    # Dicts with a "type" key that we couldn't parse into a ttnn object
+    # must NOT be passed to C++ bindings — they'll cause "incompatible
+    # function arguments". Return None so build_op_kwargs drops them.
+    if isinstance(value, dict) and "type" in value:
+        return None
+
     return value
+
+
+def extract_positional_args(kwargs: Dict[str, Any]) -> Dict[int, Any]:
+    """Extract non-tensor positional args (arg0, arg1, …) from the run() kwargs.
+
+    The V2 config loader stores non-tensor positional arguments under the keys
+    ``arg0``, ``arg1``, ``arg2``, etc.  ``build_op_kwargs`` intentionally filters
+    these out (they are positional, not keyword arguments to the ttnn op).
+
+    Sweep tests should call this helper **before** the op invocation to retrieve
+    positional args such as ``scale``, ``cache_idx``, ``output_dtype``, etc.
+
+    Example::
+
+        pos_args = extract_positional_args(kwargs)
+        scale = float(pos_args.get(1, 1.0))        # arg1 = scale
+        output_dtype = pos_args.get(2, ttnn.float32)  # arg2 = dtype
+
+    Args:
+        kwargs: The ``**kwargs`` dict from the ``run()`` function.
+
+    Returns:
+        Dict mapping integer index → parsed value.  Only indices whose
+        ``argN`` key is present and not ``__ABSENT__`` are included.
+        Dict values (enums, memory configs, etc.) are auto-parsed into ttnn objects.
+    """
+    positional = {}
+    for key, value in kwargs.items():
+        if key.startswith("arg") and key[3:].isdigit():
+            if value is None or value == "__ABSENT__":
+                continue
+            parsed = parse_dict_value(key, value)
+            positional[int(key[3:])] = parsed
+    return positional
 
 
 def build_op_kwargs(
@@ -186,6 +371,7 @@ def build_op_kwargs(
     exclude: Optional[Set[str]] = None,
     include_only: Optional[Set[str]] = None,
     output_memory_config: Any = None,
+    device: Any = None,
 ) -> Dict[str, Any]:
     """Extract actual op kwargs from the full test vector kwargs.
 
@@ -197,6 +383,10 @@ def build_op_kwargs(
     don't accept it or handle it via separate positional parameters.  Sweep
     modules that need ``memory_config`` in op kwargs should add it explicitly
     after calling this function.
+
+    Note: Positional args (``arg0``, ``arg1``, …) are filtered out because they
+    are positional parameters, not keyword arguments.  Use
+    :func:`extract_positional_args` to retrieve them.
 
     Args:
         kwargs: The **kwargs from the run() function (everything not in named params)
@@ -212,11 +402,18 @@ def build_op_kwargs(
     exclude = exclude or set()
     op_kwargs = {}
 
-    for key, value in kwargs.items():
-        # Skip None values
-        if value is None:
-            continue
+    # V2 vectors carry __absent_keys__: parameter names that were *absent* in
+    # the master config (vs explicitly None). A None value whose key is not in
+    # this set was explicitly None in master and must be preserved so the
+    # sweep trace records the same kwarg. Without this, ops drop kwargs like
+    # sub_core_grids=None and produce a hash divergence vs master.
+    absent_keys = kwargs.get("__absent_keys__") or set()
+    if not isinstance(absent_keys, (set, frozenset, list, tuple)):
+        absent_keys = set()
+    else:
+        absent_keys = set(absent_keys)
 
+    for key, value in kwargs.items():
         # Skip __ABSENT__ sentinel values (parameter not present in traced config)
         if value == "__ABSENT__":
             continue
@@ -234,6 +431,26 @@ def build_op_kwargs(
             if key in exclude:
                 continue
 
+        # None handling: keep explicit None when V2 says the key was present
+        # in master (i.e. not in __absent_keys__). Drop None when absent.
+        if value is None:
+            if key in absent_keys:
+                continue
+            op_kwargs[key] = None
+            continue
+
+        # Parse list-of-UnaryOpType-dicts (e.g. input_tensor_a_activations)
+        list_parsed = _maybe_parse_unary_list(value)
+        if list_parsed is not value:
+            op_kwargs[key] = list_parsed
+            continue
+        # Create preallocated output tensor from descriptor
+        if key == "output_tensor" and isinstance(value, dict) and device is not None:
+            input_shape = kwargs.get("input_a_shape")
+            tensor = _create_output_tensor(value, device, input_shape=input_shape)
+            if tensor is not None:
+                op_kwargs[key] = tensor
+            continue
         # Parse dict values into ttnn objects
         parsed = parse_dict_value(key, value)
         if parsed is not None:

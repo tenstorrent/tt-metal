@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 from loguru import logger
@@ -19,6 +19,9 @@ from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 from models.common.utility_functions import (
     comp_pcc,
 )
+from models.demos.utils.device_sku import get_current_device_sku_name
+from models.demos.utils.llm_demo_utils import verify_perf
+from models.demos.utils.model_targets import resolve_perf_targets
 
 # Qwen-specific imports
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
@@ -709,13 +712,14 @@ def test_qwen_demo_text(
         if pcc_check:
             torch_output_logits = torch_output[0]
             logits = tt_out_logits_all_users[0, 0, :vocab_size]
-            does_pass, pcc_message = comp_pcc(
-                logits, torch_output_logits, 0.91 if not apc_test else demo_targets["prefill_pcc"]
-            )
+            expected_prefill_pcc = 0.91 if not apc_test else demo_targets["prefill_pcc"]
+            does_pass, pcc_message = comp_pcc(logits, torch_output_logits, expected_prefill_pcc)
             logger.info(f"PCC: {pcc_message}")
             logger.info(
                 f"Teacher forced token at prefill {'PASSED' if does_pass else 'FAILED'} PCC check with torch reference model"
             )
+            if not apc_test:
+                assert does_pass, f"Prefill PCC check failed: {pcc_message}, while expected >= {expected_prefill_pcc}."
         if apc_test:
             assert_message = (
                 f"Prefill PCC check failed: {pcc_message}, while expected {demo_targets['prefill_pcc']}.\n"
@@ -847,13 +851,17 @@ def test_qwen_demo_text(
                         torch_output_logits = torch_output[1]  # 0 is prefill logits
                     else:
                         torch_output_logits = torch_output[iteration + 1]
-                    does_pass, pcc_message = comp_pcc(
-                        tt_out_logits_saved, torch_output_logits, 0.91 if not apc_test else demo_targets["decode_pcc"]
-                    )
+                    expected_decode_pcc = 0.91 if not apc_test else demo_targets["decode_pcc"]
+                    does_pass, pcc_message = comp_pcc(tt_out_logits_saved, torch_output_logits, expected_decode_pcc)
                     logger.info(f"PCC: {pcc_message}")
                     logger.info(
                         f"Teacher forced token at decode iteration {iteration} {'PASSED' if does_pass else 'FAILED'} PCC check with torch reference model"
                     )
+                    if not apc_test:
+                        assert does_pass, (
+                            f"Decode PCC check failed at iteration {iteration}: {pcc_message}, "
+                            f"while expected >= {expected_decode_pcc}."
+                        )
                 if apc_test:
                     assert_message = (
                         f"Decode PCC check failed: {pcc_message}, while expected {demo_targets['decode_pcc']}.\n"
@@ -1118,18 +1126,31 @@ def test_qwen_demo_text(
 
     # Test batch-32, ISL=128, OSL=128 TTFT and decode throughput
     if batch_size == 32 and len(input_prompts[0]) == 507:
-        target_time_to_first_token = 700
-        assert (
-            avg_time_to_first_token * 1000 < target_time_to_first_token
-        ), f"TTFT {avg_time_to_first_token} ms is too high, should be < {target_time_to_first_token}."
-        target_decode_tok_s_u = 60
-        target_decode_tok_s = target_decode_tok_s_u * batch_size
-        assert (
-            decode_tok_s_user >= target_decode_tok_s_u
-        ), f"Decode throughput {decode_tok_s_user} tok/s/user is too low, should be > {target_decode_tok_s_u}."
-        assert (
-            decode_tok_s >= target_decode_tok_s
-        ), f"Decode throughput {decode_tok_s} tok/s is too low, should be > {target_decode_tok_s}."
+        sku = get_current_device_sku_name()
+        resolved_targets = resolve_perf_targets(
+            model_name="qwen3-32b-galaxy",
+            sku=sku,
+            batch_size=batch_size,
+            seq_len=len(input_prompts[0]),
+        )
+        if resolved_targets:
+            verify_perf(
+                measurements,
+                expected_measurements={
+                    "prefill_time_to_token": True,
+                    "decode_t/s/u": True,
+                    "decode_t/s": True,
+                },
+                model_name="qwen3-32b-galaxy",
+                sku=sku,
+                batch_size=batch_size,
+                seq_len=len(input_prompts[0]),
+            )
+        else:
+            logger.warning(
+                "No centralized perf targets found for qwen3-32b-galaxy "
+                f"on sku={sku}, batch_size={batch_size}, seq_len={len(input_prompts[0])}"
+            )
 
     # Save benchmark data for CI dashboard
     if is_ci_env and repeat_batches > 1:

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,8 +26,10 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/kernels/kernel.hpp"
-#include <tt-metalium/experimental/host_api.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include "internal/tt-2xx/quasar/error_handling.h"
 #include "impl/debug/debug_helpers.hpp"
+#include <umd/device/types/core_coordinates.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher asserts.
@@ -58,61 +60,91 @@ static void RunTest(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = Program();
-    workload.add_program(device_range, std::move(program));
-    auto& program_ = workload.get_programs().at(device_range);
     auto* device = mesh_device->get_devices()[0];
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     bool is_quasar = hal.get_arch() == tt::ARCH::QUASAR;
-    const std::string kernel = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp";
+    // TENSIX cores use the Metal 2.0 host API and the *_2_0.cpp kernel; ETH/DRAM cores remain on the legacy
+    // host API and continue to use the original kernel.
+    const bool use_legacy_api = processor.core_type != HalProgrammableCoreType::TENSIX;
+    const std::string kernel = use_legacy_api ? "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp"
+                                              : "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts_2_0.cpp";
 
     // Depending on riscv type, choose one core to run the test on (since the test hangs the board).
     CoreCoord logical_core, virtual_core;
     // Set up the kernel on the correct risc
-    KernelHandle assert_kernel;
+    KernelHandle assert_kernel = 0;
+    const experimental::KernelSpecName ASSERT_KERNEL_NAME{"assert_kernel"};
     auto processor_idx =
         hal.get_processor_index(processor.core_type, processor.processor_class, processor.processor_type);
     std::string risc = hal.get_processor_class_name(processor.core_type, processor_idx, false);
     switch (processor.core_type) {
-        case HalProgrammableCoreType::TENSIX:
+        case HalProgrammableCoreType::TENSIX: {
             logical_core = {0, 0};
             virtual_core = device->worker_core_from_logical_core(logical_core);
+            experimental::KernelSpec assert_kernel_spec{
+                .unique_id = ASSERT_KERNEL_NAME,
+                .source = kernel,
+                .runtime_arg_schema = {.runtime_arg_names = {"a", "b", "assert_type", "hw_assert_cause"}},
+            };
             switch (processor.processor_class) {
-                case HalProcessorClassType::DM:
+                case HalProcessorClassType::DM: {
+                    // On Quasar, all 6 user DMs (DM2..DM7) launch the kernel; only the one whose
+                    // kernel-local thread id matches target_thread_id executes the test, others exit early.
+                    // DM0/DM1 are reserved for internal use and are skipped by the outer test fixture.
+                    // On gen1, the test pins to a specific BRISC/NCRISC processor (no target_thread_id needed).
+                    auto gen1_processor =
+                        is_quasar ? tt::tt_metal::DataMovementProcessor::RISCV_0
+                                  : static_cast<tt::tt_metal::DataMovementProcessor>(processor.processor_type);
+                    auto gen1_noc = (gen1_processor == tt::tt_metal::DataMovementProcessor::RISCV_1)
+                                        ? tt_metal::NOC::RISCV_1_default
+                                        : tt_metal::NOC::RISCV_0_default;
                     if (is_quasar) {
-                        // On Quasar, kernel runs on all 8 DMs but only dm_id executes the test;
-                        // others exit early. This lets us verify assert works on each DM individually
-                        uint32_t dm_id = static_cast<uint32_t>(processor.processor_type);
-                        assert_kernel = tt::tt_metal::experimental::quasar::CreateKernel(
-                            program_,
-                            kernel,
-                            logical_core,
-                            tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                                .num_threads_per_cluster = 8, .compile_args = {dm_id}});
+                        // processor.processor_type is the absolute DM index (2..7 for DM2..DM7).
+                        // Map to kernel-local thread id (0..5) since the kernel launches on the 6 user DMs.
+                        constexpr uint32_t kFirstUserDm = 2;
+                        uint32_t target_thread_id = static_cast<uint32_t>(processor.processor_type) - kFirstUserDm;
+                        assert_kernel_spec.num_threads = 6;
+                        assert_kernel_spec.compile_time_args = {{"target_thread_id", target_thread_id}};
                     } else {
-                        DataMovementConfig dm_config{};
-                        dm_config.processor = static_cast<tt_metal::DataMovementProcessor>(processor.processor_type);
-                        dm_config.noc = (processor.processor_type ==
-                                         enchantum::to_underlying(tt::tt_metal::DataMovementProcessor::RISCV_1))
-                                            ? tt_metal::NOC::RISCV_1_default
-                                            : tt_metal::NOC::RISCV_0_default;
-                        assert_kernel = CreateKernel(program_, kernel, logical_core, dm_config);
+                        assert_kernel_spec.num_threads = 1;
                     }
+                    // Provide both gen1 and gen2 configs so the same KernelSpec runs on either arch.
+                    assert_kernel_spec.hw_config = experimental::DataMovementHardwareConfig{
+                        .gen1_config =
+                            experimental::DataMovementHardwareConfig::Gen1Config{
+                                .processor = gen1_processor,
+                                .noc = gen1_noc,
+                            },
+                        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
+                    };
                     break;
-                case HalProcessorClassType::COMPUTE:
-                    // TODO: Watcher features are temporarily skipped on Quasar until basic runtime bring-up is complete
-                    if (is_quasar) {
-                        GTEST_SKIP() << "Compute kernel watcher tests skipped on Quasar until TRISC runtime bring-up "
-                                        "is complete";
-                    }
-                    assert_kernel = CreateKernel(
-                        program_,
-                        kernel,
-                        logical_core,
-                        ComputeConfig{.defines = {{fmt::format("TRISC{}", processor.processor_type), "1"}}});
+                }
+                case HalProcessorClassType::COMPUTE: {
+                    uint32_t trisc_id = static_cast<uint32_t>(processor.processor_type);
+                    assert_kernel_spec.num_threads = 1;
+                    assert_kernel_spec.compiler_options = {
+                        .defines = {{fmt::format("TRISC{}", trisc_id), "1"}}};
+                    // Bind trisc_id so the kernel can early-return on TRISCs that aren't the target
+                    // of a Quasar compute HW-fault test.
+                    assert_kernel_spec.compile_time_args = {{"trisc_id", trisc_id}};
+                    assert_kernel_spec.hw_config = experimental::ComputeHardwareConfig{};
                     break;
+                }
                 default: TT_THROW("Unsupported processor class type for TENSIX");
             }
+            experimental::WorkUnitSpec wu{
+                .name = "main",
+                .kernels = {ASSERT_KERNEL_NAME},
+                .target_nodes = experimental::NodeCoord{logical_core},
+            };
+            experimental::ProgramSpec spec{
+                .name = "watcher_assert",
+                .kernels = {assert_kernel_spec},
+                .work_units = {wu},
+            };
+            program = experimental::MakeProgramFromSpec(*mesh_device, spec);
             break;
+        }
         case HalProgrammableCoreType::ACTIVE_ETH:
         case HalProgrammableCoreType::IDLE_ETH: {
             bool is_active = (processor.core_type == HalProgrammableCoreType::ACTIVE_ETH);
@@ -128,19 +160,48 @@ static void RunTest(
             if (!is_active) {
                 eth_config.eth_mode = Eth::IDLE;
             }
-            assert_kernel = CreateKernel(program_, kernel, logical_core, eth_config);
+            assert_kernel = CreateKernel(program, kernel, logical_core, eth_config);
             // TODO: replace string literals with hal.get_processor_class_name() after
             // unifying all tests + watcher_device_reader::get_riscv_name() with same method
             risc = is_active ? "erisc" : "ierisc";
+            break;
+        }
+        case HalProgrammableCoreType::DRAM: {
+            if (!hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+                log_info(LogTest, "Skipping: DRAM programmable cores not available on this architecture.");
+                GTEST_SKIP();
+            }
+            logical_core = {0, 0};
+            virtual_core = device->virtual_core_from_logical_core(logical_core, CoreType::DRAM);
+            assert_kernel = CreateKernel(program, kernel, logical_core, DramConfig{.noc = tt_metal::NOC::NOC_0});
+            risc = "drisc";
             break;
         }
         case HalProgrammableCoreType::COUNT: TT_THROW("Unsupported programmable core type");
     }
     log_info(LogTest, "Running test on device {} core {}[{}]...", device->id(), logical_core, virtual_core);
 
+    // Build runtime arg setter that targets either the Metal 2.0 named-name path (TENSIX) or
+    // the legacy handle (ETH/DRAM).
+    auto set_args = [&](Program& prog, const std::vector<uint32_t>& args) {
+        if (use_legacy_api) {
+            SetRuntimeArgs(prog, assert_kernel, logical_core, args);
+        } else {
+            experimental::ProgramRunArgs params;
+            params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+                .kernel = ASSERT_KERNEL_NAME,
+                .runtime_arg_values =
+                    {{experimental::NodeCoord{logical_core},
+                      {{"a", args[0]}, {"b", args[1]}, {"assert_type", args[2]}, {"hw_assert_cause", args[3]}}}},
+            }};
+            experimental::SetProgramRunArgs(prog, params);
+        }
+    };
+
     // Write runtime args that should not trip an assert.
     const std::vector<uint32_t> safe_args = {3, 4, static_cast<uint32_t>(assert_type), hw_assert_cause};
-    SetRuntimeArgs(program_, assert_kernel, logical_core, safe_args);
+    set_args(program, safe_args);
+    workload.add_program(device_range, std::move(program));
 
     // Run the kernel, don't expect an issue here.
     log_info(LogTest, "Running args that shouldn't assert...");
@@ -148,8 +209,9 @@ static void RunTest(
     log_info(LogTest, "Args did not assert!");
 
     // Write runtime args that should trip an assert.
+    auto& program_ref = workload.get_programs().at(device_range);
     const std::vector<uint32_t> unsafe_args = {3, 3, static_cast<uint32_t>(assert_type), hw_assert_cause};
-    SetRuntimeArgs(program_, assert_kernel, logical_core, unsafe_args);
+    set_args(program_ref, unsafe_args);
 
     // Run the kernel, expect an exit due to the assert.
     log_info(LogTest, "Running args that should assert...");
@@ -176,26 +238,39 @@ static void RunTest(
     switch (processor.core_type) {
         case HalProgrammableCoreType::ACTIVE_ETH: core_str = "acteth"; break;
         case HalProgrammableCoreType::IDLE_ETH: core_str = "idleth"; break;
+        case HalProgrammableCoreType::DRAM: core_str = "dram"; break;
         default: core_str = "worker";
     }
 
+    uint64_t hw_fault_info = 0;
+    // DM errors are using the error values, as they are directly returned by the hardware
+    // TRISC errors are spread and have different meanings, so using 5,7 the same as DM (illegal access)
+    // and adding new cases 8 and 9.
+    if (processor.processor_class == HalProcessorClassType::COMPUTE) {
+        switch (hw_assert_cause) {
+            case 5:
+            case 7: hw_assert_cause = 0x128; break;
+            case 8: hw_assert_cause = 0x23bc; break;
+            case 9: hw_assert_cause = 0xc03; break;
+            default: hw_assert_cause = 0; break;
+        }
+    } else {
+        switch (hw_assert_cause) {
+            case static_cast<uint32_t>(DmErrors::ILLEGAL_INSTRUCTION): hw_fault_info = 0x0; break;
+            case static_cast<uint32_t>(DmErrors::UNALIGNED_LOAD):
+            case static_cast<uint32_t>(DmErrors::UNALIGNED_STORE): hw_fault_info = 0x2; break;
+            case static_cast<uint32_t>(DmErrors::LOAD_ACCESS_FAULT):
+            case static_cast<uint32_t>(DmErrors::STORE_ACCESS_FAULT): hw_fault_info = 0xffffffffff000000; break;
+            default: hw_fault_info = 0; break;
+        }
+    }
     // Don't hardcode line number, the ASSERT location in watcher_asserts.cpp kernel
     // can shift as code changes. Use regex to match any line number for DebugAssertTripped
     // (get_debug_assert_message defaults to line 0, which we replace with \d+ below)
-    uint64_t hw_fault_info = 0;
-    switch (hw_assert_cause) {
-        case 2: hw_fault_info = 0x0; break;
-        case 4:
-        case 6: hw_fault_info = 0x2; break;
-        case 5:
-        case 7: hw_fault_info = 0xffffffffff000000; break;
-        default: hw_fault_info = 0; break;
-    }
-    log_critical(LogTest, "hw_fault_info: 0x{:x}, hw_assert_cause: 0x{:x}", hw_fault_info, hw_assert_cause);
     const std::string msg = get_debug_assert_message(
         assert_type,
         0,
-        // hard code cause/line info for hW faults, as we know them exactly
+        // hard code cause/line info for HW faults, as we know them exactly
         hw_fault_info << 32 | hw_assert_cause);
     ASSERT_FALSE(msg.empty()) << "Unhandled assert type " << static_cast<int>(assert_type);
 
@@ -222,13 +297,22 @@ static void RunTest(
         EXPECT_TRUE(std::regex_match(exception, std::regex(pattern)))
             << "Expected pattern: " << pattern << "\nActual: " << exception;
     } else if (assert_type == dev_msgs::DebugAssertHwFault) {
-        // Build regex pattern from string expected, replacing PC 0x0 with PC 0x\d+
+        // Build regex pattern from string expected, replacing PC 0x0 with PC 0x[\da-fA-F]+
+        // or instruction: 0x00000000 with instruction: 0x[\da-fA-F]+
         std::string pattern = regex_escape(expected);
-        const std::string pc_placeholder = "PC 0x0";
-        size_t pos = pattern.find(pc_placeholder);
-        ASSERT_NE(pos, std::string::npos)
-            << "Expected placeholder '" << pc_placeholder << "' not found in exception: " << pattern;
-        pattern.replace(pos, pc_placeholder.length(), "PC 0x\\d+");
+        if (processor.processor_class == HalProcessorClassType::DM) {
+            const std::string pc_placeholder = "PC 0x0";
+            size_t pos = pattern.find(pc_placeholder);
+            ASSERT_NE(pos, std::string::npos)
+                << "Expected placeholder '" << pc_placeholder << "' not found in escaped pattern: " << pattern;
+            pattern.replace(pos, pc_placeholder.length(), "PC 0x[\\da-fA-F]+");
+        } else if (processor.processor_class == HalProcessorClassType::COMPUTE) {
+            const std::string instruction_placeholder = "instruction: 0x00000000";
+            size_t pos = pattern.find(instruction_placeholder);
+            ASSERT_NE(pos, std::string::npos)
+                << "Expected placeholder '" << instruction_placeholder << "' not found in escaped pattern: " << pattern;
+            pattern.replace(pos, instruction_placeholder.length(), "instruction: 0x[\\da-fA-F]+");
+        }
         EXPECT_TRUE(std::regex_match(exception, std::regex(pattern)))
             << "Expected pattern: " << pattern << "\nActual: " << exception;
     } else {
@@ -255,6 +339,9 @@ TEST_P(WatcherAssertTest, TestWatcherAssert) {
 
     // Skip if processor type is not available on this architecture
     const auto& hal = MetalContext::instance().hal();
+    if (!hal.has_programmable_core_type(params.processor.core_type)) {
+        GTEST_SKIP() << "Test " << params.test_name << " skipped: core type not available on this architecture";
+    }
     uint32_t core_type_index = hal.get_programmable_core_type_index(params.processor.core_type);
     uint32_t available_processors =
         hal.get_processor_types_count(core_type_index, static_cast<uint32_t>(params.processor.processor_class));
@@ -264,18 +351,29 @@ TEST_P(WatcherAssertTest, TestWatcherAssert) {
     }
 
     // Dispatch mode validation:
-    // - IDLE_ETH cores only support SD (FD not yet implemented)
+    // - IDLE_ETH and DRAM cores only support SD (FD not yet implemented)
     // - TENSIX/ACTIVE_ETH cores: SD only used for Quasar watcher tests (TODO: Remove once FD enabled on Quasar)
     bool is_idle_eth = (params.processor.core_type == HalProgrammableCoreType::IDLE_ETH);
+    bool is_dram = (params.processor.core_type == HalProgrammableCoreType::DRAM);
     bool is_quasar = (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR);
     bool using_slow_dispatch = this->IsSlowDispatch();
 
-    if (is_idle_eth && !using_slow_dispatch) {
-        log_info(tt::LogTest, "IDLE_ETH requires Slow Dispatch (Fast Dispatch not yet supported).");
+    // On Quasar, DM0 and DM1 are reserved for internal use; user kernels can only land on DM2..DM7.
+    if (is_quasar && params.processor.core_type == HalProgrammableCoreType::TENSIX &&
+        params.processor.processor_class == HalProcessorClassType::DM && params.processor.processor_type < 2) {
+        GTEST_SKIP() << "DM0/DM1 are reserved for internal use on Quasar";
+    }
+
+    if ((is_idle_eth || is_dram) && !using_slow_dispatch) {
+        log_info(
+            tt::LogTest, "{} requires Slow Dispatch (Fast Dispatch not yet supported).", is_dram ? "DRAM" : "IDLE_ETH");
         GTEST_SKIP();
     }
-    if (using_slow_dispatch && !is_quasar && !is_idle_eth) {
-        GTEST_SKIP() << "Slow Dispatch tests only run on Quasar or IDLE_ETH cores";
+    if (using_slow_dispatch && !is_quasar && !is_idle_eth && !is_dram) {
+        GTEST_SKIP() << "Slow Dispatch tests only run on Quasar, IDLE_ETH, or DRAM cores";
+    }
+    if (!is_quasar && params.assert_type == dev_msgs::DebugAssertHwFault) {
+        GTEST_SKIP() << "HW Fault tests only run on Quasar";
     }
     this->RunTestOnDevice(
         [&params](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
@@ -307,7 +405,8 @@ INSTANTIATE_TEST_SUITE_P(
         WatcherTestParams{"Trisc2", {TENSIX, COMPUTE, 2}},
         WatcherTestParams{"Trisc3", {TENSIX, COMPUTE, 3}},  // Trisc3 only Runs on Quasar
         WatcherTestParams{"Erisc", {ACTIVE_ETH, DM, 0}},
-        WatcherTestParams{"IErisc", {IDLE_ETH, DM, 0}}),
+        WatcherTestParams{"IErisc", {IDLE_ETH, DM, 0}},
+        WatcherTestParams{"Drisc", {DRAM, DM, 0}}),
     [](const ::testing::TestParamInfo<WatcherTestParams>& info) { return info.param.test_name; });
 
 INSTANTIATE_TEST_SUITE_P(
@@ -316,6 +415,7 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         WatcherTestParams{"Brisc", {TENSIX, DM, 0}, dev_msgs::DebugAssertTripped},
         WatcherTestParams{"NCrisc", {TENSIX, DM, 1}, dev_msgs::DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped},
+        WatcherTestParams{"NCriscPacketTag", {TENSIX, DM, 1}, dev_msgs::DebugAssertNCriscNOCPacketTagClearedTripped},
         // DM2 to DM7 only run on Quasar
         WatcherTestParams{"DM2", {TENSIX, DM, 2}, dev_msgs::DebugAssertTripped},
         WatcherTestParams{"DM3", {TENSIX, DM, 3}, dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped},
@@ -324,22 +424,42 @@ INSTANTIATE_TEST_SUITE_P(
         WatcherTestParams{"DM6", {TENSIX, DM, 6}, dev_msgs::DebugAssertRtaOutOfBounds},
         WatcherTestParams{"DM7", {TENSIX, DM, 7}, dev_msgs::DebugAssertCrtaOutOfBounds},
         WatcherTestParams{
-            "HWFault2", {TENSIX, DM, 7}, dev_msgs::DebugAssertHwFault, 2},  //  using DM7 to run only on Quasar
+            "DMHWFaultIllegalInstruction",
+            {TENSIX, DM, 2},
+            dev_msgs::DebugAssertHwFault,
+            static_cast<uint32_t>(DmErrors::ILLEGAL_INSTRUCTION)},
         WatcherTestParams{
-            "HWFault4", {TENSIX, DM, 7}, dev_msgs::DebugAssertHwFault, 4},  //  using DM7 to run only on Quasar
+            "DMHWFaultUnalignedLoad",
+            {TENSIX, DM, 3},
+            dev_msgs::DebugAssertHwFault,
+            static_cast<uint32_t>(DmErrors::UNALIGNED_LOAD)},
         WatcherTestParams{
-            "HWFault5", {TENSIX, DM, 7}, dev_msgs::DebugAssertHwFault, 5},  //  using DM7 to run only on Quasar
+            "DMHWFaultLoadAccessFault",
+            {TENSIX, DM, 5},
+            dev_msgs::DebugAssertHwFault,
+            static_cast<uint32_t>(DmErrors::LOAD_ACCESS_FAULT)},
         WatcherTestParams{
-            "HWFault6", {TENSIX, DM, 7}, dev_msgs::DebugAssertHwFault, 6},  //  using DM7 to run only on Quasar
+            "DMHWFaultUnalignedStore",
+            {TENSIX, DM, 6},
+            dev_msgs::DebugAssertHwFault,
+            static_cast<uint32_t>(DmErrors::UNALIGNED_STORE)},
         WatcherTestParams{
-            "HWFault7", {TENSIX, DM, 7}, dev_msgs::DebugAssertHwFault, 7},  //  using DM7 to run only on Quasar
+            "DMHWFaultStoreAccessFault",
+            {TENSIX, DM, 7},
+            dev_msgs::DebugAssertHwFault,
+            static_cast<uint32_t>(DmErrors::STORE_ACCESS_FAULT)},
+        WatcherTestParams{"ComputeHWFaultRead", {TENSIX, COMPUTE, 1}, dev_msgs::DebugAssertHwFault, 5},
+        WatcherTestParams{"ComputeHWFaultWrite", {TENSIX, COMPUTE, 1}, dev_msgs::DebugAssertHwFault, 7},
+        WatcherTestParams{"ComputeHWFaultIllegalInstruction", {TENSIX, COMPUTE, 0}, dev_msgs::DebugAssertHwFault, 8},
+        WatcherTestParams{"ComputeHWFaultSemaphore", {TENSIX, COMPUTE, 0}, dev_msgs::DebugAssertHwFault, 9},
         WatcherTestParams{"Trisc0", {TENSIX, COMPUTE, 0}, dev_msgs::DebugAssertNCriscNOCNonpostedWritesSentTripped},
         WatcherTestParams{"Trisc1", {TENSIX, COMPUTE, 1}, dev_msgs::DebugAssertNCriscNOCPostedWritesSentTripped},
         WatcherTestParams{"Trisc2", {TENSIX, COMPUTE, 2}, dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped},
         WatcherTestParams{
             "Trisc3", {TENSIX, COMPUTE, 3}, dev_msgs::DebugAssertRtaOutOfBounds},  // Trisc3 only Runs on Quasar
         WatcherTestParams{"Erisc", {ACTIVE_ETH, DM, 0}, dev_msgs::DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped},
-        WatcherTestParams{"IErisc", {IDLE_ETH, DM, 0}, dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped}),
+        WatcherTestParams{"IErisc", {IDLE_ETH, DM, 0}, dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped},
+        WatcherTestParams{"Drisc", {DRAM, DM, 0}, dev_msgs::DebugAssertTripped}),
     [](const ::testing::TestParamInfo<WatcherTestParams>& info) { return info.param.test_name; });
 
 }  // namespace

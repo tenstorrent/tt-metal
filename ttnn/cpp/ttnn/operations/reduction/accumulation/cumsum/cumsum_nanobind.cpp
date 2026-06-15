@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -66,15 +66,14 @@ void bind_reduction_cumsum_operation(nb::module_& mod) {
     ttnn::bind_function<"cumsum">(
         mod,
         docstring,
-        ttnn::overload_t(
-            &ttnn::cumsum,
-            nb::arg("input").noconvert(),
-            nb::arg("dim"),
-            nb::kw_only(),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("reverse_order") = false,
-            nb::arg("out") = nb::none(),
-            nb::arg("memory_config") = nb::none()));
+        &ttnn::cumsum,
+        nb::arg("input").noconvert(),
+        nb::arg("dim"),
+        nb::kw_only(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("reverse_order") = false,
+        nb::arg("out") = nb::none(),
+        nb::arg("memory_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::reduction::accumulation::detail

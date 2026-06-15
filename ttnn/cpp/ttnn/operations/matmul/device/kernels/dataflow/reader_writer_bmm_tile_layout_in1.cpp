@@ -1,13 +1,13 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // RUNTIME ARGS
@@ -62,9 +62,9 @@ void kernel_main() {
     constexpr auto in1_args = TensorAccessorArgs<19>();
     constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_in1(cb_id_in1);
-    experimental::CircularBuffer cb_out(cb_id_out0);
+    Noc noc;
+    CircularBuffer cb_in1(cb_id_in1);
+    CircularBuffer cb_out(cb_id_out0);
 
 #ifdef IN1_SHARDED
     const uint32_t in1_num_tiles = batch * num_blocks * in1_block_h * in1_block_w;
@@ -72,12 +72,12 @@ void kernel_main() {
     cb_in1.push_back(in1_num_tiles);
 #else
     const uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
-    const auto s1 = TensorAccessor(in1_args, in1_tensor_addr, in1_single_tile_size_bytes);
+    const auto s1 = TensorAccessor(in1_args, in1_tensor_addr);
 #endif  // IN1_SHARDED
 
 #ifndef OUT_SHARDED
     const uint32_t output_single_tile_size_bytes = get_tile_size(cb_id_out0);
-    const auto s = TensorAccessor(out_args, out_tensor_addr, output_single_tile_size_bytes);
+    const auto s = TensorAccessor(out_args, out_tensor_addr);
 #endif  // OUT_SHARDED
 
 #if not defined IN1_SHARDED or not defined OUT_SHARDED
@@ -89,7 +89,7 @@ void kernel_main() {
 
 #ifdef INTERMEDIATE_CB_READ
             constexpr uint32_t in1_intermediate_cb_index = get_named_compile_time_arg_val("cb_in1_intermediate");
-            experimental::CircularBuffer cb_helper(in1_intermediate_cb_index);
+            CircularBuffer cb_helper(in1_intermediate_cb_index);
             cb_helper.reserve_back(one_tile);
 #endif  // INTERMEDIATE_CB_READ
 
@@ -156,7 +156,7 @@ void kernel_main() {
                     uint32_t out_tensor_tile_id = out_tensor_sb_row_start_tile_id;
                     for (uint32_t w = 0; w < out_subblock_w; ++w) {
                         noc.async_write(
-                            experimental::use<experimental::CircularBuffer::AddrSelector::READ_PTR>(cb_out),
+                            use<CircularBuffer::AddrSelector::READ_PTR>(cb_out),
                             s,
                             output_single_tile_size_bytes,
                             {.offset_bytes = out_read_offset},

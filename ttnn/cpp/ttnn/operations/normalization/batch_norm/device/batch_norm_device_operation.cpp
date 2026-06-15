@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -124,33 +124,24 @@ ttsl::hash::hash_t BatchNormOperation::compute_program_hash(
 
     TT_FATAL(is_device_tensor(input), "Unexpected type {}", input.storage_type());
 
-    // For input tensor
-    auto base_tuple = std::make_tuple(attributes, input.dtype(), input.memory_config());
-
-    // To extract (optional<DataType>, optional<MemoryConfig>) from optional tensors
-    auto get_optional_tensor_info = [](const std::optional<const Tensor>& tensor_opt)
-        -> std::tuple<std::optional<DataType>, std::optional<MemoryConfig>> {
-        if (!tensor_opt.has_value()) {
-            return std::make_tuple(std::nullopt, std::nullopt);
+    auto hash_optional_tensor = [](const std::optional<Tensor>& t) -> ttsl::hash::hash_t {
+        if (!t.has_value()) {
+            return ttsl::hash::hash_objects_with_default_seed(false);
         }
-
-        const auto& tensor = tensor_opt.value();
-        return std::make_tuple(std::optional{tensor.dtype()}, std::optional{tensor.memory_config()});
+        return ttsl::hash::hash_objects_with_default_seed(true, t->tensor_spec(), t->padded_shape());
     };
 
-    auto args_tuple = std::tuple_cat(
-        base_tuple,
-        get_optional_tensor_info(batch_mean),
-        get_optional_tensor_info(batch_var),
-        get_optional_tensor_info(weight),
-        get_optional_tensor_info(bias));
-
-    // Apply the hash operation
-    return std::apply(
-        [](auto&&... args) {
-            return operation::hash_operation<BatchNormOperation>(std::forward<decltype(args)>(args)...);
-        },
-        std::move(args_tuple));
+    return operation::hash_operation<BatchNormOperation>(
+        attributes,
+        input.tensor_spec(),
+        input.padded_shape(),
+        batch_mean.tensor_spec(),
+        batch_mean.padded_shape(),
+        batch_var.tensor_spec(),
+        batch_var.padded_shape(),
+        hash_optional_tensor(weight),
+        hash_optional_tensor(bias),
+        hash_optional_tensor(output));
 }
 
 ttsl::hash::hash_t BatchNormOperation::operation_attributes_t::to_hash() const {

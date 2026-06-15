@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -38,7 +38,8 @@ from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
 from ttexalens.gdb.gdb_server import GdbServer, ServerSocket
 from ttexalens.gdb.gdb_client import get_gdb_callstack
-from ttexalens.hardware.risc_debug import CallstackEntry, ParsedElfFile
+from ttexalens.elf import ElfFile
+from ttexalens.hardware.risc_debug import CallstackEntry
 from ttexalens.tt_exalens_lib import top_callstack, callstack
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 from utils import WARN
@@ -61,6 +62,15 @@ class KernelCallstackWithMessage:
     message: str | None
 
 
+def _pc_not_in_range_message(dispatcher_core_data: DispatcherCoreData) -> str:
+    msg = "PC was not in range of any provided ELF files."
+    if dispatcher_core_data.block_type == "active_eth":
+        msg += " Probably context switch occurred and PC is contained in base ERISC firmware."
+    if dispatcher_core_data.kernel_lookup_warning:
+        msg += "\n" + dispatcher_core_data.kernel_lookup_warning
+    return msg
+
+
 def get_callstack(
     location: OnChipCoordinate,
     risc_name: str,
@@ -70,7 +80,7 @@ def get_callstack(
     rewind_pc_for_ebreak: bool,
 ) -> KernelCallstackWithMessage:
     context = location._device._context
-    elfs: list[ParsedElfFile] = [elfs_cache[dispatcher_core_data.firmware_path]]
+    elfs: list[ElfFile] = [elfs_cache[dispatcher_core_data.firmware_path]]
     offsets: list[int | None] = [None]
     if dispatcher_core_data.kernel_path is not None:
         elfs.append(elfs_cache[dispatcher_core_data.kernel_path])
@@ -84,9 +94,7 @@ def get_callstack(
                 cs = top_callstack(pc, elfs, offsets, context)
                 error_message = None
                 if len(cs) == 0:
-                    error_message = "PC was not in range of any provided ELF files."
-                    if location in location._device.active_eth_block_locations:
-                        error_message += " Probably context switch occurred and PC is contained in base ERISC firmware."
+                    error_message = _pc_not_in_range_message(dispatcher_core_data)
                 return KernelCallstackWithMessage(callstack=cs, message=error_message)
             except TimeoutDeviceRegisterError:
                 raise
@@ -97,9 +105,7 @@ def get_callstack(
                 cs = callstack(location, elfs, offsets, risc_name)
                 error_message = None
                 if len(cs) == 0:
-                    error_message = "PC was not in range of any provided ELF files."
-                    if location in location._device.active_eth_block_locations:
-                        error_message += " Probably context switch occurred and PC is contained in base ERISC firmware."
+                    error_message = _pc_not_in_range_message(dispatcher_core_data)
                 return KernelCallstackWithMessage(callstack=cs, message=error_message)
             except TimeoutDeviceRegisterError:
                 raise
@@ -112,12 +118,7 @@ def get_callstack(
                     error_message = str(e) + " - defaulting to top callstack"
                     cs = top_callstack(pc, elfs, offsets, context)
                     if len(cs) == 0:
-                        additional_message = "PC was not in range of any provided ELF files."
-                        if location in location._device.active_eth_block_locations:
-                            additional_message += (
-                                " Probably context switch occurred and PC is contained in base ERISC firmware."
-                            )
-                        error_message = "\n".join([error_message, additional_message])
+                        error_message = "\n".join([error_message, _pc_not_in_range_message(dispatcher_core_data)])
                     return KernelCallstackWithMessage(callstack=cs, message=error_message)
                 except TimeoutDeviceRegisterError:
                     raise
@@ -128,58 +129,6 @@ def get_callstack(
         raise
     except Exception as e:
         return KernelCallstackWithMessage(callstack=[], message=str(e))
-
-
-def get_function_die(entry: CallstackEntry) -> "ElfDie | None":
-    """Navigate from a callstack entry's argument/local dies to the parent function die."""
-    from ttexalens.elf.die import ElfDie
-
-    for var in entry.arguments + entry.locals:
-        die = getattr(var, "die", None)
-        if die is None:
-            continue
-        current = getattr(die, "parent", None)
-        while current is not None:
-            if current.tag == "DW_TAG_subprogram":
-                return current
-            if current.tag == "DW_TAG_inlined_subroutine":
-                abstract_origin = current.get_DIE_from_attribute("DW_AT_abstract_origin")
-                if abstract_origin is not None:
-                    return abstract_origin
-                return current
-            current = current.parent
-    return None
-
-
-def extract_template_params(function_die) -> list[tuple[str | None, str]]:
-    """Extract template parameters (name, display_value) from a function die."""
-    actual_die = function_die
-    if "DW_AT_specification" in actual_die.attributes:
-        spec_die = actual_die.get_DIE_from_attribute("DW_AT_specification")
-        if spec_die is not None:
-            actual_die = spec_die
-
-    template_params = []
-    for child in actual_die.iter_children():
-        if child.tag == "DW_TAG_template_type_param":
-            param_name = child.name
-            type_die = child.resolved_type
-            type_name = type_die.name if type_die and type_die is not child else None
-            template_params.append((param_name, type_name or "?"))
-        elif child.tag == "DW_TAG_template_value_param":
-            param_name = child.name
-            value = child.value
-            template_params.append((param_name, f"{value}" if value is not None else "?"))
-        elif child.tag == "DW_TAG_GNU_template_parameter_pack":
-            for pack_child in child.iter_children():
-                if pack_child.tag == "DW_TAG_template_type_param":
-                    type_die = pack_child.resolved_type
-                    type_name = type_die.name if type_die and type_die is not pack_child else None
-                    template_params.append((pack_child.name, type_name or "?"))
-                elif pack_child.tag == "DW_TAG_template_value_param":
-                    value = pack_child.value
-                    template_params.append((pack_child.name, f"{value}" if value is not None else "?"))
-    return template_params
 
 
 def _format_callstack(callstack: list[CallstackEntry]) -> list[str]:
@@ -194,24 +143,23 @@ def _format_callstack(callstack: list[CallstackEntry]) -> list[str]:
             line += f"[blue]0x{frame.pc:08X}[/] in "
         if frame.function_name is not None:
             line += f"[yellow]{frame.function_name}[/] () "
-        if frame.file is not None:
+        if frame.file_info is not None:
+            fi = frame.file_info
             # Convert absolute path to relative path with ./ prefix
-            file_path = Path(frame.file)
+            file_path = Path(fi.file)
             try:
                 if file_path.is_absolute():
                     rel_path = file_path.relative_to(cwd)
                     display_path = f"./{rel_path}"
                 else:
-                    display_path = frame.file
+                    display_path = fi.file
             except ValueError:
                 # Path is not relative to cwd, keep as is
-                display_path = frame.file
+                display_path = fi.file
 
             line += f"at [green]{display_path}[/]"
-            if frame.line is not None:
-                line += f" [green]{frame.line}[/]"
-                if frame.column is not None:
-                    line += f"[green]:{frame.column}[/]"
+            line += f" [green]{fi.line}[/]"
+            line += f"[green]:{fi.column}[/]"
         result.append(line)
     return result
 
@@ -325,7 +273,7 @@ class CallstackProvider:
                 kernel_callstack_with_message=KernelCallstackWithMessage(callstack=[], message="Core is in reset"),
             )
 
-        if location in location._device.active_eth_block_locations and not self.force_active_eth:
+        if dispatcher_core_data.block_type == "active_eth" and not self.force_active_eth:
             callstack_with_message = get_callstack(
                 location,
                 risc_name,

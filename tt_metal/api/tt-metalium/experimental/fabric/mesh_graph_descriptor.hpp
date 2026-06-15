@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -149,6 +149,9 @@ public:
         }
         return types;
     }
+
+    // Unique mesh descriptor names from mesh instances (e.g. "M0", "Decode32x4"), sorted lexicographically.
+    std::vector<std::string> get_all_mesh_names() const;
 
     // Queries
     const std::vector<GlobalNodeId>& instances_by_name(const std::string& name) const {

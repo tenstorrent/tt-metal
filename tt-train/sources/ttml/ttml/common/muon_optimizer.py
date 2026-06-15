@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -59,7 +59,7 @@ class MuonWithAdamW(ttml.optimizers.OptimizerBase):
             else:
                 adamw_params[name] = tensor
 
-        # Create sub-optimizers
+        # TODO: add FSDP-aware Muon.
         self._muon = ttml.optimizers.MuonComposite(
             muon_params,
             ttml.optimizers.MuonConfig.make(

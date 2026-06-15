@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_allclose, assert_relative_frobenius
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from dataclasses import dataclass
 
 pytestmark = pytest.mark.use_module_device
@@ -23,31 +23,55 @@ class AllCloseThresholds:
 # Poison value to ensure Welford's algorithm ignores padded elements (#31982)
 PAD_VALUE = -42
 
-allclose_thresholds = {
-    # bfloat16 can accumulate a lot of error for fused ops. Rounding
-    # error after a single operation will be 0.5 ULP in the worst case,
-    # which is 0.5*2^-7=0.00390625 (a little less than 0.5%). Since we're doing
-    # potentially thousands of operations in many tests, we'll allow up to 5%.
-    torch.bfloat16: AllCloseThresholds(rtol=5e-2, atol=5e-2),
-    # Unused for now, see https://github.com/tenstorrent/tt-metal/issues/33621
-    # torch.float32: AllCloseThresholds(rtol=1e-5, atol=1e-8)
-}
 
+def assert_output_accuracy(torch_output, ttnn_output, use_welford=False):
+    """Layer_norm output accuracy check with dtype-/path-conditional bounds.
 
-def assert_output_accuracy(torch_output, ttnn_output):
+    The bf16 path and the legacy (non-Welford) fp32 path keep the wider tolerance
+    calibrated for bf16's 7-bit mantissa quantization.
+
+    The fp32 + Welford path tightens to bounds derived from a per-output-element
+    error model. With unpack_to_dest_mode=UnpackToDestFp32 applied to the Welford
+    input CB and to the mean/M2 spill CBs, the dominant per-element error budget is:
+    - mean/var estimate accuracy: O(ε_tf32) relative (no per-block compounding)
+    - per-op SrcA/SrcB Tf32 truncation in the post-Welford eltwise (sub, rsqrt,
+      mul, mul gamma, add bias): each contributes ε_tf32 * |operand|
+
+    For inputs U[0,1) (mean(x) ≈ 1, var(x) ≈ 1/6, |normalized| ≤ 2.45,
+    |y| ≤ 3.5), the per-element absolute error sums to ~1e-2 worst case. Typical
+    error from random-sign cancellation is ~5e-3, giving relative Frobenius
+    ≈ typical_err / typical_|y| ≈ 5e-3 / 1.5 ≈ 3e-3. PCC tracks 1 - O((ε/std)²)
+    which is well below 1e-5 of mismatch -- pcc_threshold of 0.99999 leaves ample
+    margin.
+
+    Bounds below carry ~1.5x safety margin over the analytical worst case.
+    """
     dtype = ttnn_output.dtype
-    if dtype == torch.bfloat16:
-        return assert_allclose(
-            torch_output, ttnn_output, rtol=allclose_thresholds[dtype].rtol, atol=allclose_thresholds[dtype].atol
-        )
-    elif dtype == torch.float32:
-        # torch.float32 data is not being robustly converted to tt tensors
-        # (see https://github.com/tenstorrent/tt-metal/issues/33621).
-        # So we'll use relative Frobenius norm of the error instead, which is
-        # looser than allclose (since it's a global metric), but better than PCC.
-        return assert_relative_frobenius(torch_output, ttnn_output, threshold=0.01)
+    if dtype == torch.float32 and use_welford:
+        rtol = 5e-3
+        atol = 1.5e-2
+        pcc_threshold = 0.99999
+        frobenius_threshold = 5e-3
+    elif dtype == torch.bfloat16:
+        rtol = 1e-2
+        atol = 5e-2
+        pcc_threshold = 0.9999
+        frobenius_threshold = 0.015
     else:
-        raise ValueError(f"Robust checks are not implemented for dtype: {dtype}")
+        rtol = 1e-2
+        atol = 5e-2
+        pcc_threshold = 0.9999
+        frobenius_threshold = 0.0105
+    assert_numeric_metrics(
+        torch_output,
+        ttnn_output,
+        rtol=rtol,
+        atol=atol,
+        pcc_threshold=pcc_threshold,
+        frobenius_threshold=frobenius_threshold,
+        check_frobenius=True,
+        check_pcc=True,
+    )
 
 
 def create_recip_tensor(device, w, use_welford):
@@ -59,8 +83,8 @@ def create_recip_tensor(device, w, use_welford):
     return ttnn.create_layer_norm_reciprocals(device, core_range_set, w)
 
 
-@pytest.mark.parametrize("h", [32])
-@pytest.mark.parametrize("w", [64])
+@pytest.mark.parametrize("h", [32, 42])
+@pytest.mark.parametrize("w", [24, 64])
 @pytest.mark.parametrize("use_welford", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_layer_norm(device, h, w, use_welford, dtype):
@@ -70,16 +94,17 @@ def test_layer_norm(device, h, w, use_welford, dtype):
     torch_output_tensor = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, PAD_VALUE)
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
     recip_tensor = create_recip_tensor(device, w, use_welford)
     output_tensor = ttnn.layer_norm(input_tensor, program_config=program_config, recip_tensor=recip_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_output_accuracy(torch_output_tensor, output_tensor)
+    assert_output_accuracy(torch_output_tensor, output_tensor, use_welford=use_welford)
 
 
-@pytest.mark.parametrize("h", [32])
-@pytest.mark.parametrize("w", [64])
+@pytest.mark.parametrize("h", [32, 42])
+@pytest.mark.parametrize("w", [24, 64])
 @pytest.mark.parametrize("use_welford", [True, False])
 def test_layer_norm_with_weight_and_bias(device, h, w, use_welford):
     torch.manual_seed(0)
@@ -93,6 +118,7 @@ def test_layer_norm_with_weight_and_bias(device, h, w, use_welford):
     )
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, PAD_VALUE)
     weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -104,7 +130,7 @@ def test_layer_norm_with_weight_and_bias(device, h, w, use_welford):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_output_accuracy(torch_output_tensor, output_tensor)
+    assert_output_accuracy(torch_output_tensor, output_tensor, use_welford=use_welford)
 
 
 @pytest.mark.parametrize("h", [32])
@@ -134,11 +160,11 @@ def test_layer_norm_with_weight_and_bias_row_major(device, h, w, use_welford):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_output_accuracy(torch_output_tensor, output_tensor)
+    assert_output_accuracy(torch_output_tensor, output_tensor, use_welford=use_welford)
 
 
-@pytest.mark.parametrize("h", [32])
-@pytest.mark.parametrize("w", [64, 127, 519])
+@pytest.mark.parametrize("h", [24, 32, 2048])
+@pytest.mark.parametrize("w", [42, 64, 127, 519, 4096])
 @pytest.mark.parametrize("use_welford", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_welford, dtype):
@@ -153,7 +179,9 @@ def test_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_welfor
     )
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, PAD_VALUE)
     residual_input_tensor = ttnn.from_torch(torch_residual_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    residual_input_tensor = ttnn.fill_implicit_tile_padding(residual_input_tensor, PAD_VALUE)
     weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -170,11 +198,11 @@ def test_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_welfor
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_output_accuracy(torch_output_tensor, output_tensor)
+    assert_output_accuracy(torch_output_tensor, output_tensor, use_welford=use_welford)
 
 
-@pytest.mark.parametrize("h", [2])
-@pytest.mark.parametrize("w", [512])
+@pytest.mark.parametrize("h", [2, 42])
+@pytest.mark.parametrize("w", [24, 512])
 def test_layer_norm_with_tile_layout(device, h, w):
     torch.manual_seed(0)
     dtype = torch.bfloat16
@@ -192,6 +220,7 @@ def test_layer_norm_with_tile_layout(device, h, w):
     input_tensor = ttnn.from_torch(torch_input_tensor)
     input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
     input_tensor = ttnn.to_device(input_tensor, device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, PAD_VALUE)
 
     weight = ttnn.from_torch(torch_weight)
     weight = ttnn.to_layout(weight, ttnn.TILE_LAYOUT)
@@ -210,11 +239,12 @@ def test_layer_norm_with_tile_layout(device, h, w):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # test_layer_norm_with_tile_layout exercises the default (non-Welford) bf16 path.
     assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
-@pytest.mark.parametrize("h", [1024, 2080])
-@pytest.mark.parametrize("w", [3200, 4128])
+@pytest.mark.parametrize("h", [24, 1024, 2080])
+@pytest.mark.parametrize("w", [42, 3200, 4128])
 @pytest.mark.parametrize("use_welford", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_large_layer_norm(device, h, w, use_welford, dtype):
@@ -224,17 +254,18 @@ def test_large_layer_norm(device, h, w, use_welford, dtype):
     torch_output_tensor = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, PAD_VALUE)
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
     recip_tensor = create_recip_tensor(device, w, use_welford)
     output_tensor = ttnn.layer_norm(input_tensor, program_config=program_config, recip_tensor=recip_tensor)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_output_accuracy(torch_output_tensor, output_tensor)
+    assert_output_accuracy(torch_output_tensor, output_tensor, use_welford=use_welford)
 
 
-@pytest.mark.parametrize("h", [2048])
-@pytest.mark.parametrize("w", [4096])
+@pytest.mark.parametrize("h", [24, 2048])
+@pytest.mark.parametrize("w", [42, 4096])
 @pytest.mark.parametrize("use_welford", [True, False])
 def test_large_layer_norm_with_weight_and_bias(device, h, w, use_welford):
     torch.manual_seed(0)
@@ -249,6 +280,7 @@ def test_large_layer_norm_with_weight_and_bias(device, h, w, use_welford):
     )
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, PAD_VALUE)
     weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -260,11 +292,11 @@ def test_large_layer_norm_with_weight_and_bias(device, h, w, use_welford):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_output_accuracy(torch_output_tensor, output_tensor)
+    assert_output_accuracy(torch_output_tensor, output_tensor, use_welford=use_welford)
 
 
-@pytest.mark.parametrize("h", [2048])
-@pytest.mark.parametrize("w", [4096])
+@pytest.mark.parametrize("h", [24, 2048])
+@pytest.mark.parametrize("w", [42, 4096])
 @pytest.mark.parametrize("use_welford", [True, False])
 def test_large_layer_norm_with_weight(device, h, w, use_welford):
     torch.manual_seed(0)
@@ -276,6 +308,7 @@ def test_large_layer_norm_with_weight(device, h, w, use_welford):
     torch_output_tensor = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w], weight=torch_weight)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, PAD_VALUE)
     weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
 
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
@@ -286,11 +319,11 @@ def test_large_layer_norm_with_weight(device, h, w, use_welford):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_output_accuracy(torch_output_tensor, output_tensor)
+    assert_output_accuracy(torch_output_tensor, output_tensor, use_welford=use_welford)
 
 
-@pytest.mark.parametrize("h", [2048])
-@pytest.mark.parametrize("w", [4096])
+@pytest.mark.parametrize("h", [24, 2048])
+@pytest.mark.parametrize("w", [42, 4096])
 @pytest.mark.parametrize("use_welford", [True, False])
 def test_large_layer_norm_with_bias(device, h, w, use_welford):
     torch.manual_seed(0)
@@ -302,6 +335,7 @@ def test_large_layer_norm_with_bias(device, h, w, use_welford):
     torch_output_tensor = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w], bias=torch_bias)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, PAD_VALUE)
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
@@ -310,10 +344,10 @@ def test_large_layer_norm_with_bias(device, h, w, use_welford):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_output_accuracy(torch_output_tensor, output_tensor)
+    assert_output_accuracy(torch_output_tensor, output_tensor, use_welford=use_welford)
 
 
-@pytest.mark.parametrize("h, w", [(2048, 2048)])
+@pytest.mark.parametrize("h, w", [(24, 42), (2048, 2048)])
 @pytest.mark.parametrize("legacy_reduction", [True, False])
 @pytest.mark.parametrize("legacy_rsqrt", [True, False])
 def test_large_layer_norm_with_legacy_reduction_and_rsqrt(device, h, w, legacy_reduction, legacy_rsqrt):
@@ -326,6 +360,7 @@ def test_large_layer_norm_with_legacy_reduction_and_rsqrt(device, h, w, legacy_r
     torch_output_tensor = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w], bias=torch_bias)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, PAD_VALUE)
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
     program_config = ttnn.LayerNormDefaultProgramConfig(
@@ -344,9 +379,15 @@ def test_large_layer_norm_with_legacy_reduction_and_rsqrt(device, h, w, legacy_r
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    # Non-fp32 accumulation is inaccurate, so we'll just compare pcc
-    # to make sure it captures the general trend
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.97)
+    # Non-fp32 accumulation is inaccurate
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999,
+        rtol=0.2,
+        atol=0.2,
+        frobenius_threshold=0.15,
+    )
 
 
 @pytest.mark.parametrize(
@@ -378,6 +419,7 @@ def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, PAD_VALUE)
     residual_input_tensor = ttnn.from_torch(torch_residual_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    residual_input_tensor = ttnn.fill_implicit_tile_padding(residual_input_tensor, PAD_VALUE)
     weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -394,10 +436,7 @@ def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    if dtype == torch.float32 and use_welford and w == 4083 and h == 19:
-        assert_relative_frobenius(torch_output_tensor, output_tensor, threshold=0.0103)
-    else:
-        assert_output_accuracy(torch_output_tensor, output_tensor)
+    assert_output_accuracy(torch_output_tensor, output_tensor, use_welford=use_welford)
 
 
 @pytest.mark.parametrize("use_welford", [True, False])
@@ -424,11 +463,11 @@ def test_l1_interleaved(device, use_welford, dtype):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_output_accuracy(torch_output_tensor, output_tensor)
+    assert_output_accuracy(torch_output_tensor, output_tensor, use_welford=use_welford)
 
 
-@pytest.mark.parametrize("dim_a", [2048, 3072, 4096])
-@pytest.mark.parametrize("dim_b", [2048, 3072, 4096])
+@pytest.mark.parametrize("dim_a", [24, 2048, 3072, 4096])
+@pytest.mark.parametrize("dim_b", [32, 2048, 3072, 4096])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 def test_layer_norm_across_dtypes(*, device: ttnn.Device, dim_a: int, dim_b: int, dtype: ttnn.DataType) -> None:
     torch.manual_seed(0)
@@ -440,6 +479,7 @@ def test_layer_norm_across_dtypes(*, device: ttnn.Device, dim_a: int, dim_b: int
     torch_output = torch.nn.functional.layer_norm(torch_input, (input_shape[-1],), eps=epsilon)
 
     tt_input = ttnn.from_torch(torch_input, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+    tt_input = ttnn.fill_implicit_tile_padding(tt_input, PAD_VALUE)
     tt_output = ttnn.layer_norm(tt_input, epsilon=epsilon)
 
     tt_output_torch = ttnn.to_torch(tt_output)
@@ -447,7 +487,14 @@ def test_layer_norm_across_dtypes(*, device: ttnn.Device, dim_a: int, dim_b: int
     if dtype == ttnn.bfloat16:
         assert_output_accuracy(torch_output, tt_output_torch)
     elif dtype == ttnn.bfloat8_b:
-        assert_with_pcc(torch_output, tt_output_torch, pcc=0.987)
+        assert_numeric_metrics(
+            torch_output,
+            tt_output_torch,
+            pcc_threshold=0.9999,
+            rtol=0.01,
+            atol=0.07,
+            frobenius_threshold=0.015,
+        )
 
 
 @pytest.mark.parametrize("h", [32, 2999, 32 * 64 + 18])
@@ -474,6 +521,7 @@ def test_layer_norm_with_padding(device, h, w, use_welford, dtype):
         layout=ttnn.Layout.TILE,
         device=device,
     )
+    tt_input_tensor = ttnn.fill_implicit_tile_padding(tt_input_tensor, PAD_VALUE)
 
     # Run layer norm
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
@@ -490,3 +538,11 @@ def test_layer_norm_with_padding(device, h, w, use_welford, dtype):
     golden_output = golden(torch_input_tensor, weight=None, bias=None, eps=1e-5)
 
     assert_output_accuracy(golden_output, output_ttnn)
+
+
+def test_layer_norm_inputs_requires_input_tensor():
+    """``LayerNormInputs()`` without an input tensor must raise."""
+    import pytest
+
+    with pytest.raises(TypeError):
+        ttnn.LayerNormInputs()

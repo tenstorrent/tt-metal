@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,6 @@
 #include "stream_io_map.h"
 #include "tensix.h"
 #include "tensix_neo_reg.h"
-#include "api/debug/assert.h"
 
 #define NOC_X(x) NOC_0_X(noc_index, noc_size_x, (x))
 #define NOC_Y(y) NOC_0_Y(noc_index, noc_size_y, (y))
@@ -105,7 +104,7 @@ inline __attribute__((always_inline)) uint32_t buf_ptr_dec_wrap(uint32_t buf_ptr
 }
 
 // This definition of reg_read conflicts with the one in
-// tt_metal/third_party/tt_llk_wormhole_b0/common/inc/ckernel.h, which trisc
+// tt_metal/tt-llk/tt_llk_wormhole_b0/common/inc/ckernel.h, which trisc
 // kernels bring into the global namespace using "using namespace ckernel".
 #if !defined(COMPILE_FOR_TRISC)  // BRISC, NCRISC, ERISC, IERISC
 inline __attribute__((always_inline)) uint32_t reg_read(uintptr_t addr) {
@@ -262,6 +261,20 @@ inline __attribute__((always_inline)) void flush_l2_cache_range(uintptr_t start_
     }
 }
 
+// Invalidate a range of addresses from L2 to TL1.
+// Invalidates all cache lines covering [start_addr, start_addr + size).
+inline __attribute__((always_inline)) void invalidate_l2_cache_range(uintptr_t start_addr, size_t size) {
+    if (size == 0) {
+        return;
+    }
+    uintptr_t aligned_start = start_addr & ~(uintptr_t)63;  // align to 64B
+    uintptr_t end_addr = start_addr + size;
+
+    for (uintptr_t addr = aligned_start; addr < end_addr; addr += 64) {
+        invalidate_l2_cache_line(addr);
+    }
+}
+
 // Flush entire L2 cache to TL1.
 // Iterates FLUSH64 over all cacheable TL1 addresses (4MB).
 inline void flush_l2_cache_full() {
@@ -288,12 +301,10 @@ inline void invalidate_l2_cache(uint32_t hartid) {
 // Combined Cache Operations
 // -----------------------------------------------------------------------------
 
-// Invalidate entire L1 cache (D$ + I$) on this core.
-// Provided for API compatibility with previous architectures.
-// Uses flush (not invalidate) for D$ since older architectures had write-through caches.
-inline void invalidate_l1_cache() {
-    flush_l1_dcache(0);
-    invalidate_l1_icache();
+// No-op for Quasar DM cores. The data movement cores are completely coherent with each other.
+// Most cases that previous architectures invalidated the l1 cache either do not need
+// invalidation for Quasar or should invalidate the l2 cache instead.
+inline __attribute__((always_inline)) void invalidate_l1_cache() {
 }
 
 // Invalidate entire cache hierarchy: L2 + L1 D$ + L1 I$.
@@ -304,7 +315,8 @@ inline void invalidate_cache_all(uint32_t hartid) {
     invalidate_l2_cache(hartid);
 
     // 2. Invalidate local L1 (D$ + I$)
-    invalidate_l1_cache();
+    invalidate_l1_dcache(0);
+    invalidate_l1_icache();
 }
 
 #endif  // ARCH_QUASAR && COMPILE_FOR_DM
@@ -315,6 +327,10 @@ inline __attribute__((always_inline)) void invalidate_l1_cache() {
     // No-op for non-DM cores on Quasar
 }
 #endif  // ARCH_QUASAR && !COMPILE_FOR_DM
+
+// Included here (rather than at the top of the file) so that assert_and_hang()
+// sees flush_l2_cache_line() in scope on ARCH_QUASAR + COMPILE_FOR_DM builds.
+#include "api/debug/assert.h"
 
 template <bool enable = true>
 inline __attribute__((always_inline)) void set_l1_data_cache() {
@@ -382,32 +398,46 @@ inline __attribute__((always_inline)) void setup_isr_csrs() {
 
 inline __attribute__((always_inline)) void enable_dfb_tile_isr() {
     // Enable ROCC interrupt in mie
-    uint64_t mie_val;
-    asm volatile("csrr %0, mie" : "=r"(mie_val));
-    mie_val |= (1 << 13);
-    asm volatile("csrrs zero, mie, %0" : : "r"(mie_val));
+    asm volatile("csrrs zero, mie, %0" : : "r"(1 << 13));
 
     // Enable MIE in mstatus
-    uint64_t mstatus_val;
-    asm volatile("csrr %0, mstatus" : "=r"(mstatus_val));
-    mstatus_val |= (1 << 3);
-    asm volatile("csrrs zero, mstatus, %0" : : "r"(mstatus_val));
+    asm volatile("csrrs zero, mstatus, %0" : : "r"(1 << 3));
 }
 
 inline __attribute__((always_inline)) void disable_dfb_tile_isr() {
     // Disable ROCC interrupt in mie
-    uint64_t mie_val;
-    asm volatile("csrr %0, mie" : "=r"(mie_val));
-    mie_val &= ~(1 << 13);
-    asm volatile("csrrc zero, mie, %0" : : "r"(mie_val));
+    asm volatile("csrrc zero, mie, %0" : : "r"(1 << 13));
 
     // Disable MIE in mstatus
-    uint64_t mstatus_val;
-    asm volatile("csrr %0, mstatus" : "=r"(mstatus_val));
-    mstatus_val &= ~(1 << 3);
-    asm volatile("csrrc zero, mstatus, %0" : : "r"(mstatus_val));
+    asm volatile("csrrc zero, mstatus, %0" : : "r"(1 << 3));
+}
+#else
+inline __attribute__((interrupt, hot)) void handle_interrupt() {
+    uint32_t trisc_id = internal_::get_trisc_id();
+    uint32_t error_code = RISC_PIC_BRISC_EX_REG_BASE(trisc_id)[HW_ERROR_INTERRUPT_INDEX] >> 8 & 0x3f;
+    if (error_code == trisc_id || (35 - error_code) == trisc_id ||
+        (error_code > 3 && error_code < 32 && trisc_id == 0)) {
+        ASSERT(0 == 1, debug_assert_type_t::DebugAssertHwFault);
+        uint32_t hirv = *(RISC_PIC_BRISC_HW_INT_REG(trisc_id));  // clears the interrupt after handling the error
+        (void)hirv;
+    } else {
+        uint32_t hirv = *(RISC_PIC_BRISC_HW_INT_REG(trisc_id));  // clears the interrupt
+        (void)hirv;
+        return;
+    }
+#if !defined(WATCHER_ENABLED)  // hang anyway
+    while (1) {
+        ;
+    }
+#endif
 }
 
+inline __attribute__((always_inline)) void setup_isr_csrs() {
+    uint32_t trisc_id = ckernel::csr_read<ckernel::CSR::TRISC_ID>();
+    RISC_PIC_BRISC_HW_IVT_BASE(trisc_id)[HW_ERROR_INTERRUPT_INDEX] = reinterpret_cast<uint32_t>(handle_interrupt);
+    *(RISC_PIC_BRISC_HW_INT_EN(trisc_id)) = 1 << HW_ERROR_INTERRUPT_INDEX;
+    RISCV_DEBUG_REGS->ERR_MASK = 0xFFFF;  // enable all errors
+}
 #endif  // !defined(COMPILE_FOR_TRISC)
 
 // Helper function to wait for a specified number of cycles, safe to call in erisc kernels.
@@ -429,8 +459,9 @@ inline void riscv_wait(uint32_t cycles) {
     } while (wall_clock < (wall_clock_timestamp + cycles));
 }
 
-// Flush i$ on ethernet riscs
-inline __attribute__((always_inline)) void flush_erisc_icache() {
+// Flush i$ by executing enough NOPs to evict all cache lines.
+// Required on ERISC and DRISC cores which lack MMIO-based cache flush registers.
+inline __attribute__((always_inline)) void manually_flush_icache() {
 #ifdef ARCH_BLACKHOLE
 #pragma GCC unroll 2048
     for (int i = 0; i < 2048; i++) {

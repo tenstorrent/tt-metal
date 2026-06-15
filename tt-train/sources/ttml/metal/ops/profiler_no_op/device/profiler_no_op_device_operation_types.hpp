@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,15 +8,18 @@
 
 namespace ttml::metal::ops::profiler_no_op::device {
 
-struct operation_attributes_t {
+struct ProfilerNoOpParams {
     std::string identifier = "profiler_no_op";
 };
 
-struct tensor_args_t {
+struct ProfilerNoOpInputs {
     const ttnn::Tensor& input;
 
     std::optional<ttnn::Tensor> preallocated_output;
 };
+
+using operation_attributes_t = ProfilerNoOpParams;
+using tensor_args_t = ProfilerNoOpInputs;
 
 using tensor_return_value_t = ttnn::Tensor;
 using spec_return_value_t = ttnn::TensorSpec;

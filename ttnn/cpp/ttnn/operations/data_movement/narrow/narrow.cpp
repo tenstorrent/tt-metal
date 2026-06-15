@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,7 @@ namespace ttnn {
 
 ttnn::Tensor narrow(
     const ttnn::Tensor& input_tensor, const int32_t narrow_dim, const int32_t narrow_start, const uint32_t length) {
-    auto input_tensor_shape = input_tensor.padded_shape();
+    const auto& input_tensor_shape = input_tensor.padded_shape();
     uint32_t dim = input_tensor_shape.get_normalized_index(narrow_dim);
     uint32_t start = operations::data_movement::wrap_index(narrow_start, input_tensor_shape[dim]);
 
@@ -75,8 +75,7 @@ ttnn::Tensor narrow(
 
     tt::tt_metal::distributed::ReplicatedBufferConfig replicated_config =
         std::get<tt::tt_metal::distributed::ReplicatedBufferConfig>(storage.get_mesh_buffer().global_config());
-    uint32_t reduction_factor = input_tensor_shape[dim] / length;
-    replicated_config.size /= reduction_factor;
+    replicated_config.size = replicated_config.size / input_tensor_shape[dim] * length;
     tt::tt_metal::distributed::MeshBufferConfig narrowed_global_config = replicated_config;
 
     // Handle INTERLEAVED DRAM buffers
@@ -126,7 +125,6 @@ ttnn::Tensor narrow(
             storage.get_mesh_buffer().device(),
             storage.get_mesh_buffer().address() + offset_bytes);
 
-        tt::tt_metal::DeviceStorage subtensor_storage(subtensor_mesh, storage.coords, storage.get_root_mesh_buffer());
         TensorSpec subtensor_spec = TensorSpec(
             output_tensor_shape,
             tt::tt_metal::TensorLayout(
@@ -134,7 +132,9 @@ ttnn::Tensor narrow(
                 input_tensor.tensor_spec().page_config(),
                 input_tensor.tensor_spec().memory_config()));
 
-        return Tensor(subtensor_storage, subtensor_spec, input_tensor.tensor_topology());
+        tt::tt_metal::DeviceStorage subtensor_storage(
+            storage, tt::tt_metal::MeshTensor(subtensor_mesh, subtensor_spec, input_tensor.tensor_topology()));
+        return Tensor(std::move(subtensor_storage));
     }
 
     // Handle sharded L1 buffers
@@ -251,9 +251,10 @@ ttnn::Tensor narrow(
         // Update tensor shape in pages
         auto narrowed_pages_shape = tensor_pages_shape;
         if (narrow_width) {
-            narrowed_pages_shape[1] /= reduction_factor;
+            narrowed_pages_shape[1] = length / page_shape[1];
         } else {
-            narrowed_pages_shape[0] /= reduction_factor;
+            narrowed_pages_shape[0] =
+                static_cast<uint32_t>(static_cast<uint64_t>(tensor_pages_shape[0]) * length / input_tensor_shape[dim]);
         }
 
         // Create new shard specifications
@@ -282,8 +283,6 @@ ttnn::Tensor narrow(
             storage.get_mesh_buffer().device(),
             storage.get_mesh_buffer().address() + (page_offset * buffer->aligned_page_size()));
 
-        tt::tt_metal::DeviceStorage subtensor_storage(subtensor_mesh, storage.coords, storage.get_root_mesh_buffer());
-
         auto narrowed_memory_config =
             MemoryConfig(input_tensor.memory_config().memory_layout(), BufferType::L1, narrowed_shard_spec);
 
@@ -292,7 +291,9 @@ ttnn::Tensor narrow(
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(), input_tensor.tensor_spec().page_config(), narrowed_memory_config));
 
-        return Tensor(subtensor_storage, subtensor_spec, input_tensor.tensor_topology());
+        tt::tt_metal::DeviceStorage subtensor_storage(
+            storage, tt::tt_metal::MeshTensor(subtensor_mesh, subtensor_spec, input_tensor.tensor_topology()));
+        return Tensor(std::move(subtensor_storage));
     }
 
     // Unsupported tensor configuration

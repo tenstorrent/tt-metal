@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
 """
 Usage:
-    inspector_data [--inspector-rpc-port=<inspector_rpc_port>] [--inspector-rpc-host=<inspector_rpc_host>] [--inspector-log-path=<inspector_log_path>]
+    inspector_data [--inspector-rpc-port=<inspector_rpc_port>] [--inspector-rpc-host=<inspector_rpc_host>] [--inspector-disable-rank] [--inspector-log-path=<inspector_log_path>]
 
 Options:
     --inspector-rpc-port=<inspector_rpc_port>  Port for the inspector RPC server. [default: 50051]
     --inspector-rpc-host=<inspector_rpc_host>  Host for the inspector RPC server. [default: localhost]
     --inspector-log-path=<inspector_log_path>  Path to the inspector log directory.
+    --inspector-disable-rank                   If you want to manually connect to the RPC and do not want rank to be automatically added to the RPC port and log directory.
 
 Description:
     Provides inspector data for other scripts.
@@ -22,9 +23,10 @@ Owner:
     tt-vjovanovic
 """
 
-from triage import triage_singleton, ScriptConfig, run_script
-from parse_inspector_logs import get_data as get_logs_data, get_log_directory
+from triage import triage_singleton, ScriptConfig, TTTriageError, log_warning, run_script
+from parse_inspector_logs import get_log_directory
 import asyncio
+import atexit
 import capnp
 import os
 import threading
@@ -37,7 +39,7 @@ script_config = ScriptConfig(
 InspectorData = inspector_capnp.Inspector
 
 
-class InspectorException(Exception):
+class InspectorException(TTTriageError):
     pass
 
 
@@ -62,6 +64,13 @@ class InspectorRpcController(InspectorData):
                 exception = self.task.exception()
                 assert exception is not None
                 raise exception
+        # The asyncio loop runs on a daemon thread. If that thread is still
+        # alive at interpreter shutdown, CPython curtails finalization and
+        # nanobind reports its still-registered objects (ELF/DWARF/frame
+        # wrappers held by cached data providers) as leaked. Since this
+        # controller is cached for the whole run, __del__ won't fire in time,
+        # so stop the loop and join the thread via atexit instead.
+        atexit.register(self.stop)
 
     def __del__(self):
         if self.running:
@@ -165,15 +174,30 @@ def run(args, context) -> InspectorData:
     log_directory = args["--inspector-log-path"]
     rpc_port = args["--inspector-rpc-port"]
     rpc_host = args["--inspector-rpc-host"]
+    rank: int | None = None
+
+    if not args["--inspector-disable-rank"]:
+        # If MPI rank is available, add rank to the RPC host and port
+        try:
+            rank_env = os.environ.get("TT_RUN_RANK")
+            if rank_env is not None:
+                rank = int(rank_env)
+        except Exception as e:
+            log_warning(f"Warning: MPI rank is not available or failed to parse, running in rank-less mode. Error: {e}")
+            pass
 
     # First try to connect to Inspector RPC
     try:
+        if rank is not None:
+            rpc_port = int(rpc_port) + rank
         return InspectorRpcController(rpc_host, rpc_port)
-    except:
+    except Exception:
         pass
 
     # Check for Inspector log directory
     log_directory = get_log_directory(log_directory)
+    if rank is not None:
+        log_directory = os.path.join(log_directory, f"_rank_{rank}")
     if not os.path.exists(log_directory):
         raise ValueError(
             f"\n\tLog directory {log_directory} does not exist."
@@ -187,10 +211,10 @@ def run(args, context) -> InspectorData:
         return InspectorRpcSerialized(log_directory)
     except:
         raise InspectorException(
-            "There is no Inspector RPC data, cannot continue. "
-            "Use --inspector-log-path to load saved Inspector data, or --inspector-rpc-host/--inspector-rpc-port "
-            "to connect to a live Inspector. Ensure Inspector was enabled in Metal with TT_METAL_INSPECTOR=1 and "
-            "TT_METAL_INSPECTOR_RPC=1."
+            f"Inspector unavailable (no live RPC at {rpc_host}:{rpc_port}, no serialized logs at {log_directory}). "
+            "This usually means no Metal workload is currently running — there's nothing to triage.\n"
+            "  If you're debugging a live hang, keep the process alive while running triage in another terminal.\n"
+            "  If you're analyzing a past run, point --inspector-log-path at the saved logs."
         )
 
 

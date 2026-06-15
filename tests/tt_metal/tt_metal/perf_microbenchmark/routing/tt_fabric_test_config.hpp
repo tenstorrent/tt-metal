@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -87,6 +87,7 @@ static const StringEnumMapper<RoutingDirection> routing_direction_mapper({
     {"S", RoutingDirection::S},
     {"E", RoutingDirection::E},
     {"W", RoutingDirection::W},
+    {"Z", RoutingDirection::Z},
 });
 
 static const StringEnumMapper<Topology> topology_mapper({
@@ -126,6 +127,12 @@ static const StringEnumMapper<HighLevelTrafficPattern> high_level_traffic_patter
     {"neighbor_exchange", HighLevelTrafficPattern::NeighborExchange},
     {"sequential_neighbor_exchange", HighLevelTrafficPattern::SequentialNeighborExchange},
     {"sequential_all_to_all", HighLevelTrafficPattern::SequentialAllToAll},
+});
+
+static const StringEnumMapper<MeshTrafficScope> mesh_scope_mapper({
+    {"all", MeshTrafficScope::ALL},
+    {"intra_mesh", MeshTrafficScope::INTRA_MESH},
+    {"inter_mesh", MeshTrafficScope::INTER_MESH},
 });
 
 // Optimized string concatenation utility to avoid multiple allocations
@@ -332,10 +339,18 @@ public:
     bool has_help_option();
     void print_help();
 
+    // Display options
+    bool show_workers();
+
     // Progress monitoring options
     bool show_progress();
+    bool show_progress_detail();
     uint32_t get_progress_interval();
     uint32_t get_hung_threshold();
+    uint32_t get_hung_confirmation_rounds();
+    bool wait_on_hang();
+    std::string get_validation_summary_file();
+    std::string get_validation_detail_file();
 
 private:
     const std::vector<std::string>& input_args_;
@@ -428,7 +443,8 @@ public:
     std::vector<TestConfig> build_tests(
         const std::vector<ParsedTestConfig>& raw_configs, CmdlineParser& cmdline_parser);
 
-    // Helper function to check if a test should be skipped based on architecture or cluster type.
+    // Helper function to check if a test should be skipped based on architecture, cluster type, or
+    // being on a multi-mesh system.
     bool should_skip_test_on_platform(const ParsedTestConfig& test_config) const;
 
     // Helper function to check if a test should be skipped based on topology incompatibilities.
@@ -478,7 +494,15 @@ private:
         ParsedTestConfig& test, const std::vector<HighLevelPatternConfig>& patterns, uint32_t iteration_idx);
 
     void expand_one_or_all_to_all_unicast(
-        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type);
+        ParsedTestConfig& test,
+        const ParsedTrafficPatternConfig& base_pattern,
+        HighLevelTrafficPattern pattern_type,
+        MeshTrafficScope mesh_scope = MeshTrafficScope::ALL);
+
+    // Filters device pairs to intra/inter-mesh subsets based on the requested scope.
+    // On single-mesh systems all pairs are intra-mesh; INTER_MESH yields an empty set.
+    std::vector<std::pair<FabricNodeId, FabricNodeId>> filter_pairs_by_mesh_scope(
+        const std::vector<std::pair<FabricNodeId, FabricNodeId>>& all_pairs, MeshTrafficScope mesh_scope) const;
 
     void expand_all_to_one_unicast(
         ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, uint32_t iteration_idx);
@@ -488,7 +512,10 @@ private:
     void expand_full_device_random_pairing(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern);
 
     void expand_sequential_all_to_all_unicast(
-        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, uint32_t iteration_idx);
+        ParsedTestConfig& test,
+        const ParsedTrafficPatternConfig& base_pattern,
+        uint32_t iteration_idx,
+        MeshTrafficScope mesh_scope = MeshTrafficScope::ALL);
 
     void expand_all_devices_uniform_pattern(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern);
 
@@ -498,10 +525,16 @@ private:
     void expand_unidirectional_linear_unicast_or_multicast(
         ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern);
 
-    void expand_neighbor_exchange(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern);
+    void expand_neighbor_exchange(
+        ParsedTestConfig& test,
+        const ParsedTrafficPatternConfig& base_pattern,
+        MeshTrafficScope mesh_scope = MeshTrafficScope::ALL);
 
     void expand_sequential_neighbor_exchange(
-        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, uint32_t iteration_idx);
+        ParsedTestConfig& test,
+        const ParsedTrafficPatternConfig& base_pattern,
+        uint32_t iteration_idx,
+        MeshTrafficScope mesh_scope = MeshTrafficScope::ALL);
 
     void expand_full_or_half_ring_unicast_or_multicast(
         ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type);

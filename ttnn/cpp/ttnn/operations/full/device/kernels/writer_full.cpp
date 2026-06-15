@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,7 +25,7 @@ void kernel_main() {
     uint32_t write_addr = get_write_ptr(cb_value);
 
     if (val.u == 0) {
-        zero_buffer(write_addr, page_size);
+        zero_buffer(cb_value, page_size);
     } else {
 #ifdef OUTPUT_DTYPE_BFLOAT16
         auto ptr = reinterpret_cast<uint16_t*>(write_addr);
@@ -49,7 +49,7 @@ void kernel_main() {
 
     cb_push_back(cb_value, 1);
 
-    const auto s = TensorAccessor(dst_args, output_addr, page_size);
+    const auto s = TensorAccessor(dst_args, output_addr);
 
     cb_wait_front(cb_value, 1);
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,7 +22,7 @@ ttnn::Tensor wan_fused_rmsnorm_post_allgather(
     const std::optional<const DataType>& dtype) {
     auto arch = input_tensor.device()->arch();
     auto kernel_config_val =
-        init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, false, true, false);
+        init_device_compute_kernel_config(arch, compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, false, true, false);
 
     return ttnn::prim::fused_rmsnorm_post_all_gather(
         input_tensor,

@@ -4,26 +4,18 @@ on:
   workflow_dispatch:
     inputs:
       model:
-        description: 'Select model to test'
+        description: "Select model to test"
         required: false
-        default: 'all'
+        default: "all"
         type: choice
         options:
           - all
-          - llama3
-          # - llama3_long_context
-          # - llama3_evals
-          - llama3_8b_dp
-          - llama3_70b_dp
           - sentence_bert
           - sd35
           - flux1
-          - gpt-oss
           - motif
           - wan22
           - mochi
-          - qwen3_32b
-          - qwen3_32b_long_context
           - deepseek_v3
           - qwenimage
       platform:
@@ -58,9 +50,13 @@ on:
   schedule:
     - cron: "0 0 * * *" # This cron schedule runs demo tests every day at 12am UTC
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
@@ -69,7 +65,7 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
   galaxy-demo-tests:
-    needs: build-artifact
+    needs: [check-harbor, build-artifact]
     secrets: inherit
     uses: ./.github/workflows/galaxy-demo-tests-impl.yaml
     with:

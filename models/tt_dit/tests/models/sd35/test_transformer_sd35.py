@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -130,7 +130,7 @@ def test_sd35_transformer_block(
     )
 
     # Run TT model
-    tt_spatial_out, tt_prompt_out = tt_model(tt_spatial, tt_prompt, tt_time_embed, spatial_seq_len, prompt_seq_len)
+    tt_spatial_out, tt_prompt_out = tt_model(tt_spatial, tt_prompt, tt_time_embed, spatial_seq_len)
 
     # Convert outputs back to torch and compare
     spatial_shard_dims = [None, None]
@@ -333,10 +333,9 @@ def test_sd35_transformer2d_model(
 
     # Calculate sequence lengths
     N = spatial_seq_len  # H * W // (patch_size * patch_size)
-    L = prompt_seq_len
 
     # Run TT model
-    tt_output = tt_model(tt_spatial, tt_prompt, tt_pooled, tt_timestep, N, L)
+    tt_output = tt_model(tt_spatial, tt_prompt, tt_pooled, tt_timestep, N)
     logger.info(f"TT output shape: {tt_output.shape}")
 
     tt_output_tensors = ttnn.get_device_tensors(tt_output)
@@ -460,7 +459,7 @@ def test_sd35_transformer_model_caching(
         padding_config=padding_config,
     )
     start = time.time()
-    tt_model.load_torch_state_dict(torch_model.state_dict(), on_host=True)
+    tt_model.load_torch_state_dict(torch_model.state_dict())
     end = time.time()
     logger.info(f"Time taken to load state dict: {end - start} seconds")
 

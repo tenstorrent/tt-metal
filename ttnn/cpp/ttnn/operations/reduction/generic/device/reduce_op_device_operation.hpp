@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,13 +6,12 @@
 
 #include <variant>
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 #include "reduce_op_device_operation_types.hpp"
-#include "reduce_op_single_core_hw_program_factory.hpp"
-#include "reduce_op_multi_core_h_program_factory.hpp"
-#include "reduce_op_multi_core_w_program_factory.hpp"
+#include "tt_stl/reflection.hpp"
+#include "ttnn/types.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::prim {
 
@@ -21,6 +20,27 @@ struct ReduceDeviceOperation {
     using tensor_args_t = Tensor;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
+
+    struct ReduceSingleCoreHwProgramFactory {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
+
+    struct ReduceMultiCoreHProgramFactory {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
+
+    struct ReduceMultiCoreWProgramFactory {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
 
     using program_factory_t =
         std::variant<ReduceSingleCoreHwProgramFactory, ReduceMultiCoreHProgramFactory, ReduceMultiCoreWProgramFactory>;
@@ -50,6 +70,9 @@ ttnn::Tensor reduce(
     const std::optional<DataType>& output_dtype,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    bool negate = false);
+    bool negate = false,
+    float post_mul_scaler = 1.0f,
+    bool row_major_w_dense_path = false,
+    bool row_major_h_dense_path = false);
 
 }  // namespace ttnn::prim

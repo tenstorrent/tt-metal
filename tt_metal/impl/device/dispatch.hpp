@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -40,6 +40,21 @@ void validate_core_read_write_bounds(
 DeviceAddr add_bank_offset_to_address(IDevice* device, const CoreCoord& virtual_core, DeviceAddr address);
 
 void write_to_core(
+    IDevice* device,
+    const CoreCoord& virtual_core,
+    const void* src,
+    DeviceAddr address,
+    uint32_t size_bytes,
+    uint32_t cq_id,
+    tt::stl::Span<const uint32_t> expected_num_workers_completed,
+    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+
+// Like write_to_core, but skips validate_core_read_write_bounds. That is the only
+// functional difference: as with write_to_core, `address` is used verbatim as the full
+// device destination with no bank/channel translation. Used for writes to programmable
+// DRAM-core (DRISC) L1, which the bounds check (DRAM-banked-memory semantics) would
+// otherwise reject.
+void write_to_core_unchecked(
     IDevice* device,
     const CoreCoord& virtual_core,
     const void* src,

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,8 +7,9 @@ import math
 import torch
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 
-from ..utils.matmul import get_matmul_config
+from ..utils.matmul import get_fused_mmrs_config, get_matmul_config, get_matmul_core_grid
 from .module import Module, Parameter
 
 MATH_FIDELITY = {
@@ -35,6 +36,12 @@ class Linear(Module):
         if self.activation_fn == "gelu":
             self.activation_fn = None
             self.fused_activation_fn = (ttnn.UnaryOpType.GELU, False)
+        elif self.activation_fn == "gelu_tanh":
+            # True = approximate mode = tanh-LUT GELU (matches F.gelu(approximate="tanh")). The LUT
+            # is NaN-safe (no pow/log), unlike a hand-rolled x**3 decomposition whose pow(x,3) can
+            # NaN on negative inputs and corrupt the audio decoder ("mesh of 4 voices" artifact).
+            self.activation_fn = None
+            self.fused_activation_fn = (ttnn.UnaryOpType.GELU, True)
         self.mesh_device = mesh_device
 
         """
@@ -60,7 +67,7 @@ class Linear(Module):
 
     def forward(self, x: ttnn.Tensor, compute_kernel_config=None, dtype=None, default_block_size=None) -> ttnn.Tensor:
         M, K, N = x.padded_shape[-2], x.padded_shape[-1], self.weight.data.padded_shape[-1]
-        core_grid = self.mesh_device.compute_with_storage_grid_size()
+        core_grid = get_matmul_core_grid(self.mesh_device)
         matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
         output = ttnn.experimental.minimal_matmul(
             input_tensor=x,
@@ -86,12 +93,19 @@ def gelu_decomposed(x: ttnn.Tensor) -> ttnn.Tensor:
     return ttnn.multiply(x_times_bracket, 0.5)
 
 
-def gelu_tanh(x: ttnn.Tensor) -> ttnn.Tensor:
+def gelu_tanh_decomposed(x: ttnn.Tensor) -> ttnn.Tensor:
     # GELU tanh approximation: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+    #
+    # This unfused decomposition is higher precision than the fused tanh-LUT GELU
+    # (ttnn.UnaryOpType.GELU, True) and recovers PCC on the Wan text embedder, which
+    # regressed when the fused LUT path was introduced. The cube is computed as
+    # x * x * x (instead of ttnn.pow(x, 3)) to keep the decomposition explicit and
+    # avoid relying on ttnn.pow implementation details.
     sqrt_2_over_pi = math.sqrt(2.0 / math.pi)
-    inner = ttnn.add(x, ttnn.multiply(ttnn.pow(x, 3), 0.044715))
-    one_plus_tanh = 1.0 + ttnn.tanh(ttnn.multiply(inner, sqrt_2_over_pi))
-    return 0.5 * x * one_plus_tanh
+    x_cubed = ttnn.multiply(ttnn.multiply(x, x), x)
+    inner = ttnn.add(x, ttnn.multiply(x_cubed, 0.044715))
+    one_plus_tanh = ttnn.add(ttnn.tanh(ttnn.multiply(inner, sqrt_2_over_pi)), 1.0)
+    return ttnn.multiply(ttnn.multiply(x, one_plus_tanh), 0.5)
 
 
 class ColParallelLinear(Module):
@@ -124,6 +138,12 @@ class ColParallelLinear(Module):
         if self.activation_fn == "gelu":
             self.activation_fn = None
             self.fused_activation_fn = (ttnn.UnaryOpType.GELU, False)
+        elif self.activation_fn == "gelu_tanh":
+            # True = approximate mode = tanh-LUT GELU (matches F.gelu(approximate="tanh")). The LUT
+            # is NaN-safe (no pow/log), unlike a hand-rolled x**3 decomposition whose pow(x,3) can
+            # NaN on negative inputs and corrupt the audio decoder ("mesh of 4 voices" artifact).
+            self.activation_fn = None
+            self.fused_activation_fn = (ttnn.UnaryOpType.GELU, True)
         self.mesh_device = mesh_device
         self.mesh_axis = mesh_axis
         self.fsdp_mesh_axis = fsdp_mesh_axis
@@ -181,7 +201,7 @@ class ColParallelLinear(Module):
             state["bias"] = bias
 
     def forward(
-        self, x: ttnn.Tensor, compute_kernel_config=None, default_block_size=None
+        self, x: ttnn.Tensor, compute_kernel_config=None, default_block_size=None, parallel_config=None, dtype=None
     ) -> ttnn.Tensor | list[ttnn.Tensor]:
         """
         Expects x to be replicated.
@@ -198,31 +218,70 @@ class ColParallelLinear(Module):
         else:
             weight = self.weight.data
 
-        M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
-        core_grid = self.mesh_device.compute_with_storage_grid_size()
-        matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
+        if parallel_config is not None and parallel_config.tensor_parallel.factor > 1:
+            M, K, N = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
+            full_grid = self.mesh_device.compute_with_storage_grid_size()
+            core_grid = ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
+            matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
 
-        if self.chunks is not None:
-            outputs = ttnn.experimental.minimal_matmul_split(
-                x,
-                weight,
-                chunks=self.chunks,
-                dim=-1,
+            ag_persistent_buffer = self.ccl_manager.get_ag_ping_pong_buffer(
+                x.shape, 3, parallel_config.tensor_parallel.mesh_axis, dtype=x.get_dtype()
+            )
+            ag_global_semaphores = self.ccl_manager.get_ag_ping_pong_semaphore(
+                parallel_config.tensor_parallel.mesh_axis
+            )
+            outputs = ttnn.experimental.all_gather_minimal_matmul_async(
+                input_tensor=x,
+                weight_tensor=weight,
                 bias_tensor=self.bias.data if self.bias is not None else None,
+                config=matmul_config,
                 fused_activation=self.fused_activation_fn,
                 compute_kernel_config=compute_kernel_config or self.compute_config,
-                config=matmul_config,
+                persistent_output_buffer=ag_persistent_buffer,
+                multi_device_global_semaphore=ag_global_semaphores,
+                num_links=self.ccl_manager.num_links,
+                topology=self.ccl_manager.topology,
+                cluster_axis=parallel_config.tensor_parallel.mesh_axis,
+                barrier_semaphore=None,
+                force_transpose=True,
+                num_workers_per_link=full_grid.x // self.ccl_manager.num_links,
+                num_buffers_per_channel=48 if not is_blackhole() else 24,
+                chunks=self.chunks if self.chunks is not None else 1,
+                dtype=dtype,
             )
-            return [_apply_activation_fn(o, self.activation_fn) for o in outputs]
 
-        output = ttnn.experimental.minimal_matmul(
-            input_tensor=x,
-            weight_tensor=weight,
-            bias_tensor=self.bias.data if self.bias is not None else None,
-            config=matmul_config,
-            fused_activation=self.fused_activation_fn,
-            compute_kernel_config=compute_kernel_config or self.compute_config,
-        )
+            if self.chunks is not None and (self.chunks > 1):
+                return [_apply_activation_fn(o, self.activation_fn) for o in outputs]
+            else:
+                output = outputs[0]
+        else:
+            M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
+            core_grid = get_matmul_core_grid(self.mesh_device)
+            matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
+
+            if self.chunks is not None:
+                outputs = ttnn.experimental.minimal_matmul_split(
+                    x,
+                    weight,
+                    chunks=self.chunks,
+                    dim=-1,
+                    bias_tensor=self.bias.data if self.bias is not None else None,
+                    fused_activation=self.fused_activation_fn,
+                    compute_kernel_config=compute_kernel_config or self.compute_config,
+                    config=matmul_config,
+                    dtype=dtype,
+                )
+                return [_apply_activation_fn(o, self.activation_fn) for o in outputs]
+
+            output = ttnn.experimental.minimal_matmul(
+                input_tensor=x,
+                weight_tensor=weight,
+                bias_tensor=self.bias.data if self.bias is not None else None,
+                config=matmul_config,
+                fused_activation=self.fused_activation_fn,
+                compute_kernel_config=compute_kernel_config or self.compute_config,
+                dtype=dtype,
+            )
 
         return _apply_activation_fn(output, self.activation_fn)
 
@@ -300,6 +359,7 @@ class RowParallelLinear(Module):
         compute_kernel_config=None,
         use_persistent_buffer: bool = True,
         default_block_size: tuple = None,
+        dtype=None,
     ) -> ttnn.Tensor:
         """
         Expects x to be column fractured.
@@ -316,7 +376,7 @@ class RowParallelLinear(Module):
             weight = self.weight.data
 
         M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
-        core_grid = self.mesh_device.compute_with_storage_grid_size()
+        core_grid = get_matmul_core_grid(self.mesh_device)
         matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
         output = ttnn.experimental.minimal_matmul(
             input_tensor=x,
@@ -324,6 +384,7 @@ class RowParallelLinear(Module):
             bias_tensor=self.bias.data if self.bias is not None else None,
             config=matmul_config,
             compute_kernel_config=compute_kernel_config or self.compute_config,
+            dtype=dtype,
         )
 
         if self._mesh_axis_size > 1:
@@ -340,6 +401,61 @@ class RowParallelLinear(Module):
 
         return output
 
+    def forward_fused_addcmul(
+        self,
+        x: ttnn.Tensor,
+        addcmul_a: ttnn.Tensor,
+        addcmul_b: ttnn.Tensor,
+        scalar: float = 1.0,
+        *,
+        compute_kernel_config=None,
+        dtype=None,
+    ) -> ttnn.Tensor:
+        """Fused RowParallel matmul + reduce-scatter + addcmul at the RS final write step.
+
+        Computes: output = addcmul_a + scalar * rs_result * addcmul_b
+
+        Both addcmul_a and addcmul_b must already be at their per-TP-device slice size
+        [D/tp]. The RS kernel fuses the addcmul at the final ring write, eliminating
+        extra CCL ops entirely.
+        """
+        if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
+            unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
+            weight = self.ccl_manager.all_gather_persistent_buffer(
+                unsqueezed_weight, dim=3, mesh_axis=self.fsdp_mesh_axis
+            )
+            weight = ttnn.reshape(weight, (weight.shape[-2], weight.shape[-1]))
+        else:
+            weight = self.weight.data
+
+        M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
+        core_grid = self.mesh_device.compute_with_storage_grid_size()
+
+        needs_reshape = len(x.shape) <= 3
+        if needs_reshape:
+            x = ttnn.unsqueeze(x, 0)
+        _, output = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+            input_tensor=x,
+            weight_tensor=weight,
+            dim=3,
+            multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore(self.mesh_axis),
+            **get_fused_mmrs_config(M, K, N, core_grid, self.ccl_manager.num_links),
+            bias=self.bias.data if self.bias is not None else None,
+            memory_config_mm=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            rs_output_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            topology=self.ccl_manager.topology,
+            cluster_axis=self.mesh_axis,
+            compute_kernel_config=compute_kernel_config or self.compute_config,
+            barrier_semaphore=self.ccl_manager.get_barrier_semaphore(self.mesh_axis),
+            fused_ternary_scalar=scalar,
+            addcmul_input_tensor1=addcmul_a,
+            addcmul_input_tensor2=addcmul_b,
+            dtype=dtype,
+        )
+        if needs_reshape:
+            output = ttnn.squeeze(output, 0)
+        return output
+
 
 def _apply_activation_fn(t: ttnn.Tensor, activation_fn: str | None) -> ttnn.Tensor:
     if activation_fn is None:
@@ -348,10 +464,10 @@ def _apply_activation_fn(t: ttnn.Tensor, activation_fn: str | None) -> ttnn.Tens
         return ttnn.silu(t)
     if activation_fn == "decomposed_gelu":
         return gelu_decomposed(t)
+    if activation_fn == "gelu_tanh_decomposed":
+        return gelu_tanh_decomposed(t)
     if activation_fn == "quick_gelu":
         return t * ttnn.sigmoid(1.702 * t)  # quick approx gelu
-    if activation_fn == "gelu_tanh":
-        return gelu_tanh(t)
     if activation_fn == "swiglu":
         t, gate = ttnn.chunk(t, 2, -1)
         return t * ttnn.silu(gate)

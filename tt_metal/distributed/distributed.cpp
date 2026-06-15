@@ -1,7 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <utility>
@@ -13,6 +14,10 @@
 #include "mesh_workload_impl.hpp"
 #include "tt-metalium/program.hpp"
 #include "dispatch/system_memory_manager.hpp"
+#include <internal/service/service_core_manager.hpp>
+#include "impl/internal/service/service_core_manager_impl.hpp"
+#include "impl/context/metal_context.hpp"
+#include <tt-metalium/tt_metal.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -21,6 +26,76 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
     if (mesh_cq.device()->get_view().get_devices().empty()) {
         return;
     }
+
+    // Route service workloads to the SD path. Done here, not in add_program, because the physical
+    // device needed to device-scope the service-core check is only known at enqueue. Common case -
+    // no service claimed so skip entirely.
+    //
+    // No-mixing contract: a workload is entirely a service workload (every program on claimed service
+    // cores) or entirely a normal one.
+    auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager();
+    auto& programs = mesh_workload.impl().get_programs();
+    if (svc.impl().has_any_claims()) {
+        bool saw_service = false;
+        bool saw_normal = false;
+        for (auto& [device_range, program] : programs) {
+            size_t service_cores = 0;
+            size_t total_cores = 0;
+            for (const auto& coord : device_range) {
+                auto* device = mesh_cq.device()->impl().get_device(coord);
+                if (device == nullptr) {
+                    continue;
+                }
+                for (const auto& per_type : program.impl().logical_cores()) {
+                    for (const auto& core : per_type) {
+                        ++total_cores;
+                        if (svc.impl().is_service_core(device->id(), core)) {
+                            ++service_cores;
+                        }
+                    }
+                }
+            }
+            // Level 1: a program targets only claimed service cores or only worker-grid cores, never a
+            // mix. This also catches a core claimed on some devices in the range but not others.
+            TT_FATAL(
+                service_cores == 0 || service_cores == total_cores,
+                "MeshWorkload program spans both service and worker-grid cores ({}/{} placements are claimed "
+                "service cores). A program must target only claimed service cores (on every device in its "
+                "range) or only worker-grid cores.",
+                service_cores,
+                total_cores);
+            const bool program_is_service = service_cores > 0;
+            // Level 2: the workload is all-service or all-normal, not a mix of the two.
+            saw_service |= program_is_service;
+            saw_normal |= !program_is_service;
+            TT_FATAL(
+                !(saw_service && saw_normal),
+                "MeshWorkload mixes service and normal programs. A workload must be entirely service (all "
+                "programs on claimed service cores) or entirely normal (all on the worker grid).");
+        }
+
+        if (saw_service) {
+            // Service workload: every core is claimed (checked above), so mark launch-once and
+            // dispatch each program via SD, bypassing FD. Re-enqueue TT_FATALs in mark_launched.
+            for (auto& [device_range, program] : programs) {
+                for (const auto& coord : device_range) {
+                    auto* device = mesh_cq.device()->impl().get_device(coord);
+                    TT_FATAL(
+                        device != nullptr,
+                        "EnqueueMeshWorkload: service program targets mesh coordinate {} with no local device",
+                        coord);
+                    for (const auto& per_type : program.impl().logical_cores()) {
+                        for (const auto& core : per_type) {
+                            svc.impl().mark_launched(device->id(), core);  // launch-once
+                        }
+                    }
+                    tt::tt_metal::detail::LaunchProgram(device, program, false, true);
+                }
+            }
+            return;
+        }
+    }
+
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
         mesh_workload.impl().compile(mesh_cq.device());
         mesh_workload.impl().load_binaries(mesh_cq);

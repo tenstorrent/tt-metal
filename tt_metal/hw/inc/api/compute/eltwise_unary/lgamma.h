@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -98,8 +98,6 @@ ALWI void lgamma_adjusted_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, u
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void lgamma_adjusted_tile_init() {
-    MATH((llk_math_eltwise_ternary_sfpu_lgamma_adjusted_init<APPROX, DST_ACCUM_MODE>()));
-}
+ALWI void lgamma_adjusted_tile_init() { MATH((llk_math_eltwise_ternary_sfpu_lgamma_adjusted_init<DST_ACCUM_MODE>())); }
 
 }  // namespace ckernel

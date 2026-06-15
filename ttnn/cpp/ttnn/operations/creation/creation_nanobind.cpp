@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -474,10 +474,10 @@ void bind_empty_like(nb::module_& mod) {
             tensor (ttnn.Tensor): The reference tensor whose shape will be used for the output tensor.
 
         Keyword Args:
-            dtype (ttnn.DataType, optional): The desired data type of the output tensor. Defaults to `ttnn.bfloat16`.
-            layout (ttnn.Layout, optional): The desired layout of the output tensor. Defaults to `ttnn.ROW_MAJOR`.
-            device (ttnn.Device | ttnn.MeshDevice, optional): The device where the tensor will be allocated. Defaults to `None`.
-            memory_config (ttnn.MemoryConfig, optional): The memory configuration for the operation. Defaults to `ttnn.DRAM_MEMORY_CONFIG`.
+            dtype (ttnn.DataType, optional): The desired data type of the output tensor. Defaults to the input tensor's dtype.
+            layout (ttnn.Layout, optional): The desired layout of the output tensor. Defaults to the input tensor's layout.
+            device (ttnn.Device | ttnn.MeshDevice, optional): The device where the tensor will be allocated. Defaults to the input tensor's device.
+            memory_config (ttnn.MemoryConfig, optional): The memory configuration for the operation. Defaults to the input tensor's memory config.
 
         Returns:
             ttnn.Tensor: The output uninitialized tensor with the same shape as the input tensor.
@@ -489,10 +489,10 @@ void bind_empty_like(nb::module_& mod) {
         empty_like_impl,
         nb::arg("tensor"),
         nb::kw_only(),
-        nb::arg("dtype") = DataType::BFLOAT16,
-        nb::arg("layout") = Layout::ROW_MAJOR,
+        nb::arg("dtype") = nb::none(),
+        nb::arg("layout") = nb::none(),
         nb::arg("device") = nb::none(),
-        nb::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG);
+        nb::arg("memory_config") = nb::none());
 }
 
 Tensor from_buffer_impl(
@@ -502,6 +502,8 @@ Tensor from_buffer_impl(
     MeshDevice* device,
     const std::optional<Layout>& layout,
     const std::optional<MemoryConfig>& memory_config) {
+    // bind_function releases the GIL across the C++ body; nb::cast requires it, so re-acquire GIL.
+    nb::gil_scoped_acquire acquire;
     switch (dtype) {
         case DataType::UINT8: {
             auto cpp_buffer = nb::cast<std::vector<uint8_t>>(buffer);
@@ -527,6 +529,10 @@ Tensor from_buffer_impl(
             auto cpp_buffer = nb::cast<std::vector<::bfloat16>>(buffer);
             return ttnn::from_buffer(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
         }
+        case DataType::FP8_E4M3:
+            TT_THROW(
+                "from_buffer: FP8_E4M3 is an output-only dtype, used exclusively by the DeepSeek V3 "
+                "prefill ops for now; host-side construction via from_buffer is not supported.");
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B:
         case DataType::INVALID: {

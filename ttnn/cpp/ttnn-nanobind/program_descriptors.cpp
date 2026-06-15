@@ -1,12 +1,15 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "program_descriptors.hpp"
 
+#include "ttnn/types.hpp"
+
 #include <algorithm>
 #include <cstdint>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -15,6 +18,7 @@
 #include <nanobind/operators.h>
 #include <nanobind/make_iterator.h>
 #include <nanobind/stl/bind_vector.h>
+#include <nanobind/stl/filesystem.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/string.h>
@@ -30,7 +34,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 
-NB_MAKE_OPAQUE(std::vector<UnpackToDestMode>);
+NB_MAKE_OPAQUE(std::vector<tt::tt_metal::UnpackToDestMode>);
 NB_MAKE_OPAQUE(std::vector<uint32_t>);
 
 namespace ttnn::program_descriptors {
@@ -288,6 +292,35 @@ void py_module_types(nb::module_& mod) {
         .def(nb::self == nb::self)
         .def(nb::self != nb::self);
 
+    // Bind FaceGeometry
+    nb::class_<tt::tt_metal::FaceGeometry>(mod, "FaceGeometry", R"pbdoc(
+        Descriptor for the face layout of a tile.
+
+        A tile is subdivided into equally sized faces. FaceGeometry records how many rows each
+        face contains (face_r_dim) and how many faces make up the operand (num_faces). Use it to
+        describe an operand whose geometry differs from the default full-tile layout.
+    )pbdoc")
+        .def(nb::init<>(), R"pbdoc(
+            Default constructor for FaceGeometry (standard full tile: 16-row faces, 4 faces).
+        )pbdoc")
+        .def(
+            "__init__",
+            [](tt::tt_metal::FaceGeometry* self, uint32_t face_r_dim, uint32_t num_faces) {
+                new (self) tt::tt_metal::FaceGeometry{face_r_dim, num_faces};
+            },
+            nb::arg("face_r_dim"),
+            nb::arg("num_faces"),
+            R"pbdoc(
+                Initialize a FaceGeometry.
+
+                Args:
+                    face_r_dim: Number of rows in each face
+                    num_faces: Number of faces in the operand
+            )pbdoc")
+        .def_rw("face_r_dim", &tt::tt_metal::FaceGeometry::face_r_dim, "Number of rows in each face")
+        .def_rw("num_faces", &tt::tt_metal::FaceGeometry::num_faces, "Number of faces in the operand")
+        .def(nb::self == nb::self);
+
     // Bind CBDescriptor and related types
     nb::class_<tt::tt_metal::CBFormatDescriptor>(mod, "CBFormatDescriptor", R"pbdoc(
         Descriptor for command buffer format configuration.
@@ -356,7 +389,11 @@ void py_module_types(nb::module_& mod) {
             },
             "Raw tt::DataFormat enum value as uint8 (reliable getter for all formats)")
         .def_rw("page_size", &tt::tt_metal::CBFormatDescriptor::page_size, "Size of a page in bytes")
-        .def_rw("tile", &tt::tt_metal::CBFormatDescriptor::tile, "Optional tile descriptor for custom tile dimensions");
+        .def_rw("tile", &tt::tt_metal::CBFormatDescriptor::tile, "Optional tile descriptor for custom tile dimensions")
+        .def_rw(
+            "face_geometry",
+            &tt::tt_metal::CBFormatDescriptor::face_geometry,
+            "Optional FaceGeometry override for pack/unpack face layout");
 
     nb::class_<tt::tt_metal::CBDescriptor>(mod, "CBDescriptor", R"pbdoc(
         Circular Buffer Descriptor.
@@ -580,12 +617,12 @@ void py_module_types(nb::module_& mod) {
         .def_rw("noc", &tt::tt_metal::DataMovementConfigDescriptor::noc, "Network-on-chip to use")
         .def_rw("noc_mode", &tt::tt_metal::DataMovementConfigDescriptor::noc_mode, "NOC mode for data movement");
 
-    export_enum<UnpackToDestMode>(mod, "UnpackToDestMode");
+    export_enum<tt::tt_metal::UnpackToDestMode>(mod, "UnpackToDestMode");
 
     // nanobind bind_vector docs:
     // the item accessor __getitem__ copies the accessed element by default.
     // Consequently, writes to elements may not propagate in the expected way.
-    nb::bind_vector<std::vector<UnpackToDestMode>>(mod, "VectorUnpackToDestMode");
+    nb::bind_vector<std::vector<tt::tt_metal::UnpackToDestMode>>(mod, "VectorUnpackToDestMode");
 
     nb::class_<tt::tt_metal::ComputeConfigDescriptor>(mod, "ComputeConfigDescriptor", R"pbdoc(
         Configuration descriptor for compute operations.
@@ -599,7 +636,7 @@ void py_module_types(nb::module_& mod) {
         .def(
             "__init__",
             [](tt::tt_metal::ComputeConfigDescriptor* t,
-               MathFidelity math_fidelity,
+               tt::tt_metal::MathFidelity math_fidelity,
                bool math_approx_mode,
                bool fp32_dest_acc_en,
                bool dst_full_sync_en,
@@ -611,7 +648,7 @@ void py_module_types(nb::module_& mod) {
                     .bfp8_pack_precise = bfp8_pack_precise,
                     .math_approx_mode = math_approx_mode};
             },
-            nb::arg("math_fidelity") = nb::cast(MathFidelity::HiFi4),
+            nb::arg("math_fidelity") = nb::cast(tt::tt_metal::MathFidelity::HiFi4),
             nb::arg("math_approx_mode") = false,
             nb::arg("fp32_dest_acc_en") = false,
             nb::arg("dst_full_sync_en") = false,
@@ -685,7 +722,8 @@ void py_module_types(nb::module_& mod) {
                 tt::tt_metal::KernelDescriptor::RuntimeArgs,
                 tt::tt_metal::KernelDescriptor::CommonRuntimeArgs,
                 std::optional<tt::tt_metal::KernelBuildOptLevel>,
-                tt::tt_metal::KernelDescriptor::ConfigDescriptor>(),
+                tt::tt_metal::KernelDescriptor::ConfigDescriptor,
+                tt::tt_metal::KernelDescriptor::IncludePaths>(),
             nb::arg("kernel_source"),
             nb::arg("source_type") = nb::cast(tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH),
             nb::arg("core_ranges"),
@@ -696,6 +734,7 @@ void py_module_types(nb::module_& mod) {
             nb::arg("common_runtime_args") = tt::tt_metal::KernelDescriptor::CommonRuntimeArgs(),
             nb::arg("opt_level") = nb::none(),
             nb::arg("config"),
+            nb::arg("compiler_include_paths") = nb::cast(tt::tt_metal::KernelDescriptor::IncludePaths()),
             R"pbdoc(
                 Initialize a KernelDescriptor with complete configuration.
 
@@ -710,6 +749,7 @@ void py_module_types(nb::module_& mod) {
                     common_runtime_args: Common runtime arguments shared across kernels
                     opt_level: Optimization level for kernel compilation
                     config: Configuration descriptor for the kernel
+                    compiler_include_paths: Additional include paths passed to the kernel compiler as -I flags
             )pbdoc")
         .def_rw(
             "kernel_source",
@@ -768,6 +808,10 @@ void py_module_types(nb::module_& mod) {
             &tt::tt_metal::KernelDescriptor::common_runtime_args,
             "Common runtime arguments shared across all cores")
         .def_rw("config", &tt::tt_metal::KernelDescriptor::config, "Configuration descriptor for the kernel")
+        .def_rw(
+            "compiler_include_paths",
+            &tt::tt_metal::KernelDescriptor::compiler_include_paths,
+            "Additional include paths passed to the kernel compiler as -I flags")
         .def(
             "clear_runtime_args",
             [](tt::tt_metal::KernelDescriptor& self) { self.runtime_args.clear(); },
@@ -847,7 +891,18 @@ void py_module_types(nb::module_& mod) {
                 }
             },
             nb::arg("values"),
-            "Extend all cores' runtime args with the same values");
+            "Extend all cores' runtime args with the same values")
+        .def(
+            "append_common_runtime_args_from",
+            [](tt::tt_metal::KernelDescriptor& self, const tt::tt_metal::KernelDescriptor& other) {
+                if (&self == &other) {
+                    throw std::runtime_error("Cannot append a kernel's common_runtime_args from itself");
+                }
+                self.common_runtime_args.insert(
+                    self.common_runtime_args.end(), other.common_runtime_args.begin(), other.common_runtime_args.end());
+            },
+            nb::arg("other"),
+            "Append another kernel's common_runtime_args to this kernel's");
 
     // Bind SemaphoreDescriptor
     nb::class_<tt::tt_metal::SemaphoreDescriptor>(mod, "SemaphoreDescriptor", R"pbdoc(
@@ -899,7 +954,11 @@ void py_module_types(nb::module_& mod) {
             )pbdoc")
         .def_rw("kernels", &tt::tt_metal::ProgramDescriptor::kernels, "Collection of kernel descriptors")
         .def_rw("semaphores", &tt::tt_metal::ProgramDescriptor::semaphores, "Collection of semaphore descriptors")
-        .def_rw("cbs", &tt::tt_metal::ProgramDescriptor::cbs, "Collection of command buffer descriptors");
+        .def_rw("cbs", &tt::tt_metal::ProgramDescriptor::cbs, "Collection of command buffer descriptors")
+        .def_rw(
+            "custom_program_hash",
+            &tt::tt_metal::ProgramDescriptor::custom_program_hash,
+            "Optional memoized program hash (skips full descriptor walk when set)");
 
     mod.def(
         "merge_program_descriptors",

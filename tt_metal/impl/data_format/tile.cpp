@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -77,6 +77,23 @@ uint32_t Tile::get_tile_size(const DataFormat& format) const {
         case DataFormat::Bfp4_b: return (tile_hw / 2) + aligned_exp_size;
         case DataFormat::Bfp8:
         case DataFormat::Bfp8_b: return tile_hw + aligned_exp_size;
+        case DataFormat::MxFp4: {
+            constexpr uint32_t kMxBlockSize = 32;
+            TT_ASSERT(tile_hw % kMxBlockSize == 0, "MXFP4 tile size must be a multiple of 32 elements");
+            uint32_t exp_bytes = tt::round_up(tile_hw / kMxBlockSize, l1_alignment);
+            uint32_t elem_bytes = tile_hw / 2;
+            return exp_bytes + elem_bytes;
+        }
+        case DataFormat::MxFp6P:
+        case DataFormat::MxFp6R:
+        case DataFormat::MxFp8R:
+        case DataFormat::MxFp8P: {
+            constexpr uint32_t kMxBlockSize = 32;
+            TT_ASSERT(tile_hw % kMxBlockSize == 0, "MXFP6/MXFP8 tile size must be a multiple of 32 elements");
+            uint32_t exp_bytes = tt::round_up(tile_hw / kMxBlockSize, l1_alignment);
+            uint32_t elem_bytes = tile_hw;
+            return exp_bytes + elem_bytes;
+        }
         case DataFormat::Float16:
         case DataFormat::Float16_b: return (tile_hw * 2);
         case DataFormat::Float32: return (tile_hw * 4);
@@ -86,6 +103,7 @@ uint32_t Tile::get_tile_size(const DataFormat& format) const {
         case DataFormat::UInt8:
         case DataFormat::RawUInt8: return tile_hw;
         case DataFormat::UInt16:
+        case DataFormat::Int16:
         case DataFormat::RawUInt16: return (tile_hw * 2);
         case DataFormat::UInt32:
         case DataFormat::Int32:

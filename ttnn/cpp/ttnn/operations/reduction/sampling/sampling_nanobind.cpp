@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -45,7 +45,7 @@ void bind_reduction_sampling_operation(nb::module_& mod) {
             temp (ttnn.Tensor): Temperature tensor for scaling (1/T).
             seed (int, optional): Seed for sampling randomness. Defaults to `0`.
             sub_core_grids (ttnn.CoreRangeSet, optional): Core range set for multicore execution. Defaults to `None`.
-            optional_output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
 
         Note:
             This operations only supports inputs and outputs according to the following data types and layout:
@@ -58,21 +58,12 @@ void bind_reduction_sampling_operation(nb::module_& mod) {
                 * - BFLOAT16
                   - TILE
 
-
-            .. list-table:: input_indices_tensor
+            .. list-table:: input_indices_tensor, k
                 :header-rows: 1
 
                 * - dtype
                   - layout
-                * - UINT32, INT32
-                  - ROW_MAJOR
-
-            .. list-table:: k
-                :header-rows: 1
-
-                * - dtype
-                  - layout
-                * - UINT32
+                * - UINT32 (only on Wormhole/Blackhole), INT32
                   - ROW_MAJOR
 
             .. list-table:: p, temp
@@ -83,56 +74,55 @@ void bind_reduction_sampling_operation(nb::module_& mod) {
                 * - BFLOAT16
                   - ROW_MAJOR
 
-            If no :attr:`output_tensor` is provided, the return tensor will be as follows:
-
-            .. list-table:: output_tensor (default)
+            .. list-table:: output_tensor (optional)
                 :header-rows: 1
 
                 * - dtype
                   - layout
-                * - UINT32
+                * - UINT32 (only on Wormhole/Blackhole), INT32
                   - ROW_MAJOR
 
-            If :attr:`output_tensor` is provided, the supported data types and layout are:
+            On Wormhole and Blackhole, both UINT32 and INT32 are supported for
+            :attr:`input_indices_tensor`, :attr:`k`, and the output tensor. Otherwise (e.g. on
+            Quasar, which does not support UINT32/UINT16 tile formats), only INT32 is supported.
 
-            .. list-table:: output_tensor (if provided)
-                :header-rows: 1
+            When :attr:`output_tensor` is not provided, the default output dtype is architecture-dependent:
+            UINT32 on Wormhole/Blackhole, and INT32 otherwise.
 
-                * - dtype
-                  - layout
-                * - INT32, UINT32
-                  - ROW_MAJOR
+        Returns:
+            ttnn.Tensor: The output tensor containing sampled indices.
 
-            Returns:
-                ttnn.Tensor: The output tensor containing sampled indices.
+        Memory Support:
+            - Interleaved: DRAM and L1
 
-            Memory Support:
-                - Interleaved: DRAM and L1
-
-            Limitations:
-                - Inputs must be 4D tensors with shape [N, C, H, W], and must be located on the device.
-                - The input tensors must represent exactly `32 users` based on their shape (i.e. N*C*H = 32).
-                - The last dimension of:attr:`input_values_tensor` must be padded to a multiple of 32
-                - The overall shape of :attr:`input_values_tensor` must match that of :attr:`input_indices_tensor`.
-                - :attr:`k`: Must contain 32 values, in the range  '(0,32]'.
-                - :attr:`p`, :attr:`temp`: Must contain 32 values in the range `[0.0, 1.0]`.
-                - :attr:`sub_core_grids` (if provided): number of cores must equal the number of users (which is constrained to 32).
+        Limitations:
+            - Inputs must be 4D tensors with shape [N, C, H, W], and must be located on the device.
+            - The input tensors must represent exactly `32 users` based on their shape (i.e. N*C*H = 32).
+            - The last dimension of:attr:`input_values_tensor` must be padded to a multiple of 32
+            - The number of tiles along the last dimension, ``Wt = W / 32``, must be a power of 2
+              (i.e. ``W`` must be a power-of-2 multiple of 32: 32, 64, 128, 256, ...). The internal
+              top-k stage uses a bitonic merge tree that assumes a power-of-2 tile count; a
+              non-power-of-2 ``Wt`` is rejected. Pad ``W`` up to the next power-of-2 multiple of 32
+              (e.g. with ``-inf`` values and dummy indices) if needed.
+            - The overall shape of :attr:`input_values_tensor` must match that of :attr:`input_indices_tensor`.
+            - :attr:`k`: Must contain 32 values, in the range  '(0,32]'.
+            - :attr:`p`, :attr:`temp`: Must contain 32 values in the range `[0.0, 1.0]`.
+            - :attr:`sub_core_grids` (if provided): number of cores must equal the number of users (which is constrained to 32).
         )doc";
 
     ttnn::bind_function<"sampling">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::sampling,
-            nb::arg("input_values_tensor").noconvert(),
-            nb::arg("input_indices_tensor").noconvert(),
-            nb::arg("k").noconvert(),
-            nb::arg("p").noconvert(),
-            nb::arg("temp").noconvert(),
-            nb::kw_only(),
-            nb::arg("seed") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none(),
-            nb::arg("output_tensor") = nb::none()));
+        &ttnn::sampling,
+        nb::arg("input_values_tensor").noconvert(),
+        nb::arg("input_indices_tensor").noconvert(),
+        nb::arg("k").noconvert(),
+        nb::arg("p").noconvert(),
+        nb::arg("temp").noconvert(),
+        nb::kw_only(),
+        nb::arg("seed") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
 }
 
 }  // namespace ttnn::operations::reduction::detail

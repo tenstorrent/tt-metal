@@ -1,11 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/operations/transformer/sdpa/device/sdpa_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_perf_model.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -58,6 +57,18 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
             !(attrs.is_causal && tensors.attn_mask.has_value()),
             "is_causal and attn_mask cannot both be present. Got is_causal: {}, attn_mask: {}",
             attrs.is_causal,
+            tensors.attn_mask.has_value());
+
+        // A user-provided dense mask runs on the streaming compute kernel, which applies the mask
+        // and the structured sliding-window stamp through the same L1-accumulate slot and treats
+        // them as mutually exclusive (static_assert in sdpa_standard_v2). Sliding-window masking is
+        // expected to be baked into the provided mask instead. Reject the combination here so the
+        // caller gets a clear error rather than a kernel build failure.
+        TT_FATAL(
+            !(attrs.sliding_window_size.value_or(0) > 0 && tensors.attn_mask.has_value()),
+            "sliding_window_size and attn_mask cannot both be present; bake the sliding-window mask "
+            "into attn_mask. Got sliding_window_size: {}, attn_mask: {}",
+            attrs.sliding_window_size.value_or(0),
             tensors.attn_mask.has_value());
 
         const auto& mask_option = tensors.attn_mask;
@@ -177,6 +188,12 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         }
         if (flexible_chunked) {
             const auto& csi_tensor = attrs.chunk_start_idx_tensor.value();
+            TT_FATAL(
+                tensors.chunk_start_idx_tensor.has_value(),
+                "chunk_start_idx tensor must be present in tensor args for descriptor cache patching");
+            TT_FATAL(
+                tensors.chunk_start_idx_tensor.value().buffer() == csi_tensor.buffer(),
+                "chunk_start_idx tensor in attrs and tensor args must reference the same buffer");
             TT_FATAL(csi_tensor.storage_type() == StorageType::DEVICE, "chunk_start_idx tensor must be on device");
             TT_FATAL(
                 csi_tensor.dtype() == DataType::INT32,
@@ -380,6 +397,7 @@ ttsl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attrs, 
     const Tensor& v = tensors.v.value_or(tensors.k);
 
     const std::optional<Tensor> page_table_for_hash = flexible_chunked ? std::nullopt : tensors.page_table;
+    const std::optional<int64_t> chunk_start_idx_for_hash = flexible_chunked ? std::nullopt : attrs.chunk_start_idx;
     operation::Hash hash = operation::hash_operation<SDPAOperation>(
         attrs.head_dim_v,
         attrs.scale,
@@ -389,6 +407,7 @@ ttsl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attrs, 
         attrs.is_causal,
         is_chunked_prefill,
         flexible_chunked,
+        chunk_start_idx_for_hash,
         attrs.compute_kernel_config,
         q,
         k,
@@ -460,7 +479,7 @@ SDPAOperation::create_op_performance_model(
     CoreCoord compute_grid_dims = args.program_config.has_value()
                                       ? args.program_config->compute_with_storage_grid_size
                                       : output_tensor.device()->compute_with_storage_grid_size();
-    MathFidelity math_fidelity = ttnn::get_math_fidelity(args.compute_kernel_config);
+    tt::tt_metal::MathFidelity math_fidelity = ttnn::get_math_fidelity(args.compute_kernel_config);
 
     int ideal_dev_clock_cycles = operations::transformer::sdpa::compute_sdpa_ideal_cycles(
         batch_size,
@@ -519,6 +538,7 @@ Tensor sdpa(
             .v = input_tensor_v,
             .attn_mask = attn_mask,
             .page_table = page_table_tensor,
+            .chunk_start_idx_tensor = chunk_start_idx_tensor,
             .attention_sink = attention_sink,
         });
 }

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -13,10 +13,9 @@ from tt_lib.utils import (
     pad_weight,
     tilize_to_list,
     untilize,
-    is_close,
 )
-from models.common.utility_functions import print_diff_argmax, comp_pcc
-from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import ttnn_scale_mask_softmax_in_place
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
@@ -34,6 +33,8 @@ from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pa
 )
 def test_softmax_causal_mask(device, in_dtype, in0_mem_config):
     torch.manual_seed(0)
+    # Single-call (no determinism wrapper): the in-place wrapper clones the sharded input, and
+    # on Blackhole that extra L1 buffer clashes with the statically-allocated circular buffers.
     sm_op = ttnn.scale_mask_softmax_in_place
 
     fuse_head = 2
@@ -84,12 +85,14 @@ def test_softmax_causal_mask(device, in_dtype, in0_mem_config):
     golden_output_tensor = input_tensor * scale + attention_mask
     golden_output_tensor = torch.softmax(golden_output_tensor, dim=-1)
 
-    allclose, output = comp_pcc(
-        tt_output_tensor,
+    assert_numeric_metrics(
         golden_output_tensor,
+        tt_output_tensor,
+        pcc_threshold=0.999,
+        rtol=0.091,
+        atol=0.001,
+        frobenius_threshold=0.025,
     )
-    logger.info(output)
-    assert allclose, f"FAILED: {output}"
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
@@ -115,6 +118,8 @@ def test_softmax_causal_mask(device, in_dtype, in0_mem_config):
 )
 def test_softmax(device, in_dtype, in0_mem_config, causal_mask):
     torch.manual_seed(0)
+    # Single-call (no determinism wrapper): the in-place wrapper clones the sharded input, and
+    # on Blackhole that extra L1 buffer exhausts L1 / clashes with the static circular buffers.
     sm_op = ttnn.scale_mask_softmax_in_place
 
     fuse_head = 2
@@ -177,12 +182,14 @@ def test_softmax(device, in_dtype, in0_mem_config, causal_mask):
     golden_output_tensor = input_tensor * scale + attention_mask
     golden_output_tensor = torch.softmax(golden_output_tensor, dim=-1)
 
-    allclose, output = comp_pcc(
+    assert_numeric_metrics(
         tt_output_tensor,
         golden_output_tensor,
+        pcc_threshold=0.999,
+        rtol=0.091,
+        atol=0.001,
+        frobenius_threshold=0.025,
     )
-    logger.info(output)
-    assert allclose, f"FAILED: {output}"
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
@@ -205,6 +212,8 @@ def test_softmax(device, in_dtype, in0_mem_config, causal_mask):
 )
 def test_scale_mask_softmax_rm(device, in_dtype, in0_mem_config, causal_mask):
     torch.manual_seed(0)
+    # Single-call (no determinism wrapper): the in-place wrapper clones the sharded input, and
+    # on Blackhole that extra L1 buffer exhausts L1 / clashes with the static circular buffers.
     sm_op = ttnn.scale_mask_softmax_in_place
 
     fuse_head = 1
@@ -271,12 +280,14 @@ def test_scale_mask_softmax_rm(device, in_dtype, in0_mem_config, causal_mask):
     golden_output_tensor = input_tensor * scale + attention_mask
     golden_output_tensor = torch.softmax(golden_output_tensor, dim=-1)
 
-    allclose, output = comp_pcc(
-        tt_output_tensor,
+    assert_numeric_metrics(
         golden_output_tensor,
+        tt_output_tensor,
+        pcc_threshold=0.999,
+        rtol=0.089,
+        atol=0.001,
+        frobenius_threshold=0.025,
     )
-    logger.info(output)
-    assert allclose, f"FAILED: {output}"
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
@@ -299,7 +310,7 @@ def test_scale_mask_softmax_rm(device, in_dtype, in0_mem_config, causal_mask):
 )
 def test_softmax_with_sharded_mask(device, in_dtype, in0_mem_config, shard_orient):
     torch.manual_seed(0)
-    sm_op = ttnn.scale_mask_softmax_in_place
+    sm_op = ttnn_scale_mask_softmax_in_place
 
     grid_size = (8, 4)
     input_shape = (1, 32, 32, 1024)
@@ -346,9 +357,11 @@ def test_softmax_with_sharded_mask(device, in_dtype, in0_mem_config, shard_orien
     golden_output_tensor = input_tensor * scale + attention_mask
     golden_output_tensor = torch.softmax(golden_output_tensor, dim=-1)
 
-    allclose, output = comp_pcc(
-        tt_output_tensor,
+    assert_numeric_metrics(
         golden_output_tensor,
+        tt_output_tensor,
+        pcc_threshold=0.999,
+        rtol=0.085,
+        atol=0.001,
+        frobenius_threshold=0.031,
     )
-    logger.info(output)
-    assert allclose, f"FAILED: {output}"

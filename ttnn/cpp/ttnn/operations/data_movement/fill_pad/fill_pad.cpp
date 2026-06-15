@@ -1,24 +1,24 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fill_pad.hpp"
 #include "device/fill_pad_device_operation.hpp"
 #include "ttnn/operation.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include <utility>
 #include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 namespace ttnn {
 
 Tensor fill_implicit_tile_padding(
-    const Tensor& input_tensor, float fill_value, const std::optional<MemoryConfig>& memory_config) {
+    const Tensor& input_tensor, tt::tt_metal::PadValue fill_value, const std::optional<MemoryConfig>& memory_config) {
     // if padded shape == logical shape for last 2 dims no padding should be present, and no fill pad is necessary
     uint32_t padded_height =
         tt::div_up(input_tensor.logical_shape()[-2], tt::constants::TILE_HEIGHT) * tt::constants::TILE_HEIGHT;
     uint32_t padded_width =
-        tt::div_up(input_tensor.logical_shape()[-1], tt::constants::TILE_HEIGHT) * tt::constants::TILE_HEIGHT;
+        tt::div_up(input_tensor.logical_shape()[-1], tt::constants::TILE_WIDTH) * tt::constants::TILE_WIDTH;
     if (padded_width == input_tensor.logical_shape()[-1] && padded_height == input_tensor.logical_shape()[-2]) {
         return input_tensor;
     }
@@ -27,6 +27,7 @@ Tensor fill_implicit_tile_padding(
     if (input_tensor.dtype() == DataType::BFLOAT8_B) {
         mutable_input_tensor = ttnn::typecast(mutable_input_tensor, DataType::BFLOAT16);
     }
+    Tensor output_tensor;
     // if input_tensor is rank > 3, then we need to reshape it to rank 3 such that the last 2 dims are the same
     if (mutable_input_tensor.logical_shape().rank() > 3) {
         ttnn::Shape original_shape = mutable_input_tensor.logical_shape();
@@ -37,12 +38,33 @@ Tensor fill_implicit_tile_padding(
         }
 
         ttnn::Shape new_shape = ttnn::Shape{std::array<uint32_t, 3>{third_dim, original_shape[-2], original_shape[-1]}};
-        auto reshaped_tensor = ttnn::reshape(mutable_input_tensor, new_shape);
+        // skip_padding_fill=true breaks a potential recursion: ttnn::reshape now calls fill_implicit_tile_padding
+        // for tiled outputs, and this helper calls ttnn::reshape. The inner reshapes here should never touch
+        // padding lanes (they are pure rank re-views), so opt out of the fill dispatch explicitly.
+        auto reshaped_tensor = ttnn::reshape(
+            mutable_input_tensor,
+            new_shape,
+            /*memory_config=*/std::nullopt,
+            /*pad_value=*/std::nullopt,
+            ttnn::TileReshapeMapMode::CACHE,
+            /*sub_core_grid=*/std::nullopt,
+            /*skip_padding_fill=*/true);
 
         reshaped_tensor = ttnn::prim::fill_pad(reshaped_tensor, fill_value, output_memory_config);
-        return ttnn::reshape(reshaped_tensor, original_shape);
+        output_tensor = ttnn::reshape(
+            reshaped_tensor,
+            original_shape,
+            /*memory_config=*/std::nullopt,
+            /*pad_value=*/std::nullopt,
+            ttnn::TileReshapeMapMode::CACHE,
+            /*sub_core_grid=*/std::nullopt,
+            /*skip_padding_fill=*/true);
+    } else {
+        output_tensor = ttnn::prim::fill_pad(mutable_input_tensor, fill_value, output_memory_config);
     }
-    auto output_tensor = ttnn::prim::fill_pad(mutable_input_tensor, fill_value, output_memory_config);
+    // BFLOAT8_B was typecast to BFLOAT16 above for fill_pad; restore the original dtype on every return path,
+    // including the rank>3 branch (previously the cast-back only fired on the rank<=3 path, leaking BFLOAT16
+    // for rank>3 BFLOAT8_B inputs).
     if (input_tensor.dtype() == DataType::BFLOAT8_B) {
         return ttnn::typecast(output_tensor, DataType::BFLOAT8_B);
     }

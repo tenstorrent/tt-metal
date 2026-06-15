@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,14 +9,17 @@
 namespace ttml::metal::ops::silu_bw::device {
 
 // Attributes for the backward operation (add more if needed)
-struct operation_attributes_t {};
+struct SiLUBackwardParams {};
 
 // Tensors required for backward
-struct tensor_args_t {
+struct SiLUBackwardInputs {
     ttnn::Tensor input;
     ttnn::Tensor dL_dout;
     std::optional<ttnn::Tensor> preallocated_da = std::nullopt;
 };
+
+using operation_attributes_t = SiLUBackwardParams;
+using tensor_args_t = SiLUBackwardInputs;
 
 // Output tensor specs and tensors
 using spec_return_value_t = std::vector<ttnn::TensorSpec>;

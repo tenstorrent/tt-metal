@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -14,6 +14,7 @@ from models.demos.deepseek_v3_b1.circular_buffer_utils import (
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock, extend_fabric_args
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp, MoeSem
 from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import _extend_runtime_args
+from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import PerCoreRuntimeArgsDescriptor, UnifiedKernelDescriptor
 
 
@@ -28,7 +29,7 @@ class DecoderBlock:
         matmul3_weights_tensor,
         sin_tensor,
         cos_tensor,
-        position_ids,
+        metadata,
         dkv_matmul_weights_tensor,
         dkv_rmsnorm_gamma_tensor,
         kv_cache_tensor,
@@ -67,7 +68,7 @@ class DecoderBlock:
             matmul3_weights_tensor,
             sin_tensor,
             cos_tensor,
-            position_ids,
+            metadata,
             dkv_matmul_weights_tensor,
             dkv_rmsnorm_gamma_tensor,
             kv_cache_tensor,
@@ -115,12 +116,17 @@ class DecoderBlock:
         return full_q, new_kv, attn_output, moe_scores, moe_indices, moe_output
 
     @staticmethod
-    def get_num_semaphores(num_links=1):
-        return AttentionBlock.get_num_semaphores(num_links=num_links) + MoeSem.NUM_SEMAPHORES
+    def get_num_semaphores(num_links_bcast=1, num_links_allreduce=1):
+        return (
+            AttentionBlock.get_num_semaphores(num_links_bcast=num_links_bcast, num_links_allreduce=num_links_allreduce)
+            + MoeSem.NUM_SEMAPHORES
+        )
 
     @staticmethod
-    def create_semaphores(mesh_device, num_links=1):
-        return AttentionBlock.create_semaphores(mesh_device, num_links=num_links) + MoeOp.create_semaphores(mesh_device)
+    def create_semaphores(mesh_device, num_links_bcast=1, num_links_allreduce=1):
+        return AttentionBlock.create_semaphores(
+            mesh_device, num_links_bcast=num_links_bcast, num_links_allreduce=num_links_allreduce
+        ) + MoeOp.create_semaphores(mesh_device)
 
     @staticmethod
     def get_program_context(
@@ -139,7 +145,6 @@ class DecoderBlock:
         dkv_matmul_weights_tensor,
         dkv_rmsnorm_gamma_tensor,
         kv_cache_tensor,
-        position_ids_tensor,
         sdpa_scale,
         sdpa_kv_cache_buffer,
         sdpa_out_interm_buffer,
@@ -156,7 +161,8 @@ class DecoderBlock:
         attention_block_semaphores=None,
         reduce_cluster_axis=1,
         sdpa_cluster_axis=0,
-        num_links=1,
+        num_links_bcast=1,
+        num_links_allreduce=1,
         # MoE parameters
         shared_residual_mcast_src_tensor=None,
         gate_mm_weights_tensor=None,
@@ -167,6 +173,9 @@ class DecoderBlock:
         gate_proj_weights_tensor=None,
         up_proj_weights_tensor=None,
         down_proj_weights_tensor=None,
+        sram_gate_proj_weights_tensor=None,
+        sram_up_proj_weights_tensor=None,
+        sram_down_proj_weights_tensor=None,
         moe_final_output_tensor=None,
         rmsnorm_gamma_tensor=None,
         shared_gate_weights_overlapped=None,
@@ -193,7 +202,9 @@ class DecoderBlock:
         broadcast_topology_override=None,
         persistent_next_iter_semaphore=None,
         persistent_mode=False,
+        termination_semaphore=None,
         is_torus=True,
+        enable_sram_bspm=False,
     ):
         """Build io_tensors and mesh_program_descriptor without executing.
 
@@ -203,7 +214,7 @@ class DecoderBlock:
         cb_id_manager = CircularBufferIdManager()
         mla_cb_id_context = cb_id_manager.create_context()
         moe_cb_id_context = cb_id_manager.create_context()
-        full_device_grid, decoder_cbs, decoder_per_device_contexts = AttentionBlock.get_program_context(
+        full_device_grid, metadata_addr, decoder_cbs, decoder_per_device_contexts = AttentionBlock.get_program_context(
             input_tensor_mesh,
             gamma_tensor,
             matmul_weights_tensor,
@@ -218,7 +229,6 @@ class DecoderBlock:
             dkv_matmul_weights_tensor,
             dkv_rmsnorm_gamma_tensor,
             kv_cache_tensor,
-            position_ids_tensor,
             sdpa_scale,
             None,
             sdpa_kv_cache_buffer,
@@ -238,7 +248,8 @@ class DecoderBlock:
             attention_block_semaphores,
             reduce_cluster_axis,
             sdpa_cluster_axis,
-            num_links,
+            num_links_bcast,
+            num_links_allreduce,
             epsilon,
             fp32_dest_acc_en,
             skip_ccl,
@@ -259,6 +270,9 @@ class DecoderBlock:
             gate_proj_weights_tensor=gate_proj_weights_tensor,
             up_proj_weights_tensor=up_proj_weights_tensor,
             down_proj_weights_tensor=down_proj_weights_tensor,
+            sram_gate_proj_weights_tensor=sram_gate_proj_weights_tensor,
+            sram_up_proj_weights_tensor=sram_up_proj_weights_tensor,
+            sram_down_proj_weights_tensor=sram_down_proj_weights_tensor,
             final_output_tensor=moe_final_output_tensor,
             rmsnorm_gamma_tensor=rmsnorm_gamma_tensor,
             shared_gate_weights_overlapped=shared_gate_weights_overlapped,
@@ -276,14 +290,18 @@ class DecoderBlock:
             reduce_semaphores=reduce_semaphores,
             reduce_root_coord=reduce_root_coord,
             reconfig_moe_cbs=True,
+            enable_sram_bspm=enable_sram_bspm,
             semaphores=moe_semaphores,
             noc_mode=noc_mode,
             cb_id_context=moe_cb_id_context,
             downstream_sockets=downstream_sockets,
             persistent_next_iter_semaphore=persistent_next_iter_semaphore,
             persistent_mode=persistent_mode,
+            termination_semaphore=termination_semaphore,
             bcast_sender_coord=sender_coord,
             is_torus=is_torus,
+            forward_metadata_size_bytes=DeepseekMetadata.aligned_size_bytes(),
+            metadata_l1_addr=metadata_addr,
         )
 
         moe._build_descriptors()
@@ -310,7 +328,6 @@ class DecoderBlock:
             qrope_sin_tensor,
             krope_cos_tensor,
             krope_sin_tensor,
-            position_ids_tensor,
             kv_cache_tensor,
             sdpa_kv_cache_buffer,
             sdpa_out_interm_buffer,
@@ -509,40 +526,46 @@ class DecoderBlock:
                 ccl = ctx["ccl"]
                 ccl_sender_core = ctx["ccl_sender_core"]
                 gather_core = ctx["gather_core"]
+                allreduce_config = ccl["allreduce_config"]
+                allgather_config = ccl["allgather_config"]
+                coord = ccl["mesh_coord"]
 
-                ccl_sender_group = kernel_result.get_group_by_arg("is_ccl_sender_core", 1)
-                ccl_receiver_group = kernel_result.get_group_by_arg("is_ccl_receiver_core", 1)
+                sender_group = kernel_result.get_group_by_arg("is_allreduce_sender_core", 1)
+                receiver_group = kernel_result.get_group_by_arg("is_allreduce_receiver_core", 1)
 
-                sender_brisc_kernel_idx = ccl_sender_group.brisc_kernel_index
-
-                ccl_sender_ncrisc_rt_args_ref = program.kernels[ccl_sender_group.ncrisc_kernel_index].runtime_args[
+                # Sender NCRISC: common RT args + [count] + allreduce fabric args + allgather fabric args
+                ccl_sender_ncrisc_rt = program.kernels[sender_group.ncrisc_kernel_index].runtime_args[
                     ccl_sender_core.x
                 ][ccl_sender_core.y]
-                ccl_sender_ncrisc_rt_args_ref.extend(ccl["sender_ncrisc_common_rt_args"])
-                ccl_sender_brisc_rt_args_ref = program.kernels[ccl_sender_group.brisc_kernel_index].runtime_args[
-                    ccl_sender_core.x
-                ][ccl_sender_core.y]
-                ccl_sender_brisc_rt_args_ref.extend(ccl["sender_brisc_common_rt_args"])
-                ccl_receiver_ncrisc_rt_args_ref = program.kernels[ccl_receiver_group.ncrisc_kernel_index].runtime_args[
-                    gather_core.x
-                ][gather_core.y]
-                ccl_receiver_ncrisc_rt_args_ref.extend(ccl["receiver_ncrisc_common_rt_args"])
+                ccl_sender_ncrisc_rt.extend(ccl["sender_ncrisc_common_rt_args"])
+                allreduce_ncrisc_pc_args = list(
+                    allreduce_config.get_ncrisc_per_core_rt_args(coord, program, ccl_sender_core)
+                )
+                ccl_sender_ncrisc_rt.append(len(allreduce_ncrisc_pc_args))
+                ccl_sender_ncrisc_rt.extend(allreduce_ncrisc_pc_args)
+                ccl_sender_ncrisc_rt.extend(
+                    allgather_config.get_transport_ncrisc_per_core_rt_args(coord, program, ccl_sender_core)
+                )
 
-                fabric_node_id = ccl["fabric_node_id"]
-                neighbor_fabric_node_id = ccl["neighbor_fabric_node_id"]
-
-                sender_brisc_rt_args_ref = program.kernels[sender_brisc_kernel_idx].runtime_args[ccl_sender_core.x][
+                # Sender BRISC: common RT args + [count] + allreduce fabric args + allgather fabric args
+                ccl_sender_brisc_rt = program.kernels[sender_group.brisc_kernel_index].runtime_args[ccl_sender_core.x][
                     ccl_sender_core.y
                 ]
-                sender_fabric_args = ttnn.setup_routing_plane_connection(
-                    fabric_node_id,
-                    [neighbor_fabric_node_id],
-                    [ccl["sender_link"]],
-                    program,
-                    sender_brisc_kernel_idx,
-                    ccl_sender_core,
+                ccl_sender_brisc_rt.extend(ccl["sender_brisc_common_rt_args"])
+                allreduce_brisc_pc_args = list(
+                    allreduce_config.get_brisc_per_core_rt_args(coord, program, ccl_sender_core)
                 )
-                extend_fabric_args(sender_brisc_rt_args_ref, sender_fabric_args)
+                ccl_sender_brisc_rt.append(len(allreduce_brisc_pc_args))
+                ccl_sender_brisc_rt.extend(allreduce_brisc_pc_args)
+                ccl_sender_brisc_rt.extend(
+                    allgather_config.get_transport_brisc_per_core_rt_args(coord, program, ccl_sender_core)
+                )
+
+                # Receiver NCRISC: common RT args only (reader uses semaphores, no fabric)
+                ccl_receiver_ncrisc_rt = program.kernels[receiver_group.ncrisc_kernel_index].runtime_args[
+                    gather_core.x
+                ][gather_core.y]
+                ccl_receiver_ncrisc_rt.extend(ccl["receiver_ncrisc_common_rt_args"])
 
             # MoE fabric connections (reduce-to-one)
             moe._setup_fabric_connections(mesh_coord, row, col, reduce_root_coord, kernel_result, program)

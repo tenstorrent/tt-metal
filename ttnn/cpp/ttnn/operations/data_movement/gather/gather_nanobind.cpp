@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -70,16 +70,15 @@ void bind_gather_operation(nb::module_& mod) {
     ttnn::bind_function<"gather">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::gather,
-            nb::arg("input").noconvert(),
-            nb::arg("dim"),
-            nb::arg("index"),
-            nb::kw_only(),
-            nb::arg("sparse_grad") = false,
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("out") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()));
+        &ttnn::gather,
+        nb::arg("input").noconvert(),
+        nb::arg("dim"),
+        nb::arg("index"),
+        nb::kw_only(),
+        nb::arg("sparse_grad") = false,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("out") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none());
 }
 
 }  // namespace ttnn::operations::data_movement::detail

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -326,9 +326,9 @@ def _from_torch_and_dump(
         tensor,
         dtype=dtype,
         layout=layout,
-        # For fully replicated tensors, cache unsharded tensor so it can be loaded on any device.
         mesh_mapper=local_mesh_mapper,
         memory_config=memory_config,
+        # For fully replicated tensors, cache unsharded tensor so it can be loaded on any device.
         device=None,
         pad_value=pad_value,
     )

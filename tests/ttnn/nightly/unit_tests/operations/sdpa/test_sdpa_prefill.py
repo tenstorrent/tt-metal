@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 import ttnn
 from loguru import logger
 import pytest
-from models.common.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
+from models.common.utility_functions import skip_for_wormhole_b0, skip_for_blackhole, is_slow_dispatch
 
 
 def fa_rand(*shape):
@@ -165,6 +165,7 @@ def run_sdpa_noncausal(
     rmse_threshold=None,
     bcast_mask_batch_dim=False,
     bcast_mask_head_dim=True,
+    mask_dtype=ttnn.bfloat4_b,
 ):
     torch.manual_seed(1234)
     if sk is None:
@@ -203,7 +204,7 @@ def run_sdpa_noncausal(
             )
         )
         mask = mask * -1e9
-        tt_mask = ttnn.from_torch(mask, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_mask = ttnn.from_torch(mask, dtype=mask_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
     tt_Q = ttnn.from_torch(Q, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
     tt_K = ttnn.from_torch(K, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
@@ -513,6 +514,59 @@ def test_sdpa_noncausal_mask(
     )
 
 
+# Provided masks run on the streaming compute kernel (apply_provided_mask_streaming). Covers
+# non-block-float (bf16) and block-float (bfp8/bfp4) mask dtypes — the latter exercise the
+# unpacker data-format reconfig in the dense-mask copy path (copy_tile_to_dst_init_short_with_dt),
+# which is required so block-float source tiles are not mis-decoded as fp16. Also covers
+# broadcast-batch/head and K-padded (s=160) shapes.
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize(
+    "mask_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["mask-bf16", "mask-bfp8", "mask-bfp4"]
+)
+@pytest.mark.parametrize("q_chunk_size", [32, 128], ids=["q32", "q128"])
+@pytest.mark.parametrize("k_chunk_size", [64, 128], ids=["k64", "k128"])
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d",
+    (
+        [1, 16, 16, 128, 64],
+        [2, 8, 1, 160, 64],  # K-padded (q32/k64,k128) and Q+K-padded (q128)
+    ),
+)
+@pytest.mark.parametrize("bcast_mask_batch_dim", [True, False], ids=["bcast-mask-batch-dim", "no-bcast-mask-batch-dim"])
+@pytest.mark.parametrize("bcast_mask_head_dim", [True, False], ids=["bcast-mask-head-dim", "no-bcast-mask-head-dim"])
+def test_sdpa_noncausal_mask_streaming(
+    device,
+    b,
+    nh,
+    nkv,
+    s,
+    d,
+    q_chunk_size,
+    k_chunk_size,
+    dtype,
+    mask_dtype,
+    bcast_mask_batch_dim,
+    bcast_mask_head_dim,
+):
+    rmse_threshold = 0.007
+    run_sdpa_noncausal(
+        device,
+        b,
+        nh,
+        nkv,
+        s,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        rmse_threshold=rmse_threshold,
+        use_mask=True,
+        bcast_mask_batch_dim=bcast_mask_batch_dim,
+        bcast_mask_head_dim=bcast_mask_head_dim,
+        mask_dtype=mask_dtype,
+    )
+
+
 def run_test_chunked_sdpa(
     device,
     b,
@@ -769,6 +823,8 @@ def test_sdpa_chunked(
     When trace=True, device is created with trace_region_size; test captures one SDPA then replays per chunk."""
     if trace and not flexible:
         pytest.skip("Trace is not supported for legacy chunked SDPA")
+    if trace and is_slow_dispatch():
+        pytest.skip("Trace is not supported for slow dispatch")
     for _ in range(2):
         run_test_chunked_sdpa(
             device,
@@ -847,9 +903,11 @@ def test_sdpa_chunked_iterate_batch(
             grid_size=(1, 1),
         )
 
-    # Print number of program cache entries
-    assert device.num_program_cache_entries() == 1, "Program cache should only have 1 entry but has {}".format(
-        device.num_program_cache_entries()
+    expected_entries = s // prefill_chunk_size
+    assert (
+        device.num_program_cache_entries() == expected_entries
+    ), "Program cache should have {} entry/entries but has {}".format(
+        expected_entries, device.num_program_cache_entries()
     )
 
 
@@ -1525,6 +1583,29 @@ def reference_sdpa_with_attention_sinks(Q, K, V, S, is_causal=True, sliding_wind
     return output
 
 
+def reference_causal_attention_sink_sliding_window_rows(Q, K, V, S, query_positions, sliding_window):
+    b, nh, s, d = Q.shape
+    _, nkv, _, _ = K.shape
+    assert nh % nkv == 0
+    assert S.shape == (1, nh, 1, 1), f"Expected S shape {(1, nh, 1, 1)}, got {S.shape}"
+
+    K_repeated = torch.cat([K[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)
+    V_repeated = torch.cat([V[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)
+    sink_scores = S.repeat_interleave(b, dim=0) * (1.0 / math.sqrt(d))
+
+    rows = []
+    for q_pos in query_positions:
+        window_start = max(0, q_pos + 1 - sliding_window)
+        q = Q[:, :, q_pos : q_pos + 1, :]
+        k = K_repeated[:, :, window_start : q_pos + 1, :]
+        v = V_repeated[:, :, window_start : q_pos + 1, :]
+        qk = torch.matmul(q, k.transpose(-2, -1)) * (1.0 / math.sqrt(d))
+        weights = torch.softmax(torch.cat([qk, sink_scores], dim=-1), dim=-1)[..., :-1]
+        rows.append(torch.matmul(weights, v).squeeze(-2))
+
+    return torch.stack(rows, dim=2)
+
+
 def reference_flash_attention_with_sinks(Q, K, V, S, is_causal=True, q_chunk_size=32, k_chunk_size=32):
     """
     Flash Attention implementation with attention sinks using chunked processing.
@@ -1883,3 +1964,68 @@ def test_sdpa_with_attention_sink_sliding_window(
         sliding_window=sliding_window,
         rmse_threshold=rmse_threshold,
     )
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+def test_sdpa_with_attention_sink_gpt_oss_prefill_sampled_accuracy(device, dtype, reset_seeds):
+    b = 1
+    nh = 64
+    nkv = 8
+    s = 4096
+    d = 64
+    q_chunk_size = 256
+    k_chunk_size = 256
+    sliding_window = 128
+
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=False,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    Q = fa_rand(b, nh, s, d)
+    K = fa_rand(b, nkv, s, d)
+    V = fa_rand(b, nkv, s, d)
+
+    # GPT-OSS stores sink logits in the already-scaled attention-score domain. TTNN SDPA
+    # applies the softmax scale internally, so provide sink / scale to match model usage.
+    scale = 1.0 / math.sqrt(d)
+    S = (torch.rand(1, nh, 1, 1) * 4.0) / scale
+
+    tt_Q = ttnn.from_torch(Q, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+    tt_K = ttnn.from_torch(K, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+    tt_V = ttnn.from_torch(V, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+    tt_S = ttnn.from_torch(S, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+
+    tt_back = ttnn.transformer.scaled_dot_product_attention(
+        tt_Q,
+        tt_K,
+        tt_V,
+        is_causal=True,
+        sliding_window_size=sliding_window,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+        attention_sink=tt_S,
+    )
+    tt_back = ttnn.to_torch(tt_back)[:, :, :s, :]
+
+    assert tt_back.shape == (b, nh, s, d)
+    assert torch.isfinite(tt_back).all()
+
+    query_positions = [0, sliding_window - 1, sliding_window, q_chunk_size - 1, q_chunk_size, s // 2, s - 1]
+    gt = reference_causal_attention_sink_sliding_window_rows(Q, K, V, S, query_positions, sliding_window)
+    tt_rows = tt_back[:, :, query_positions, :]
+
+    out_pass, out_pcc = comp_pcc(gt, tt_rows, 0.99)
+    logger.debug(f"sampled pytorch vs tt: {out_pcc}")
+    rmse = torch.sqrt(((gt - tt_rows) ** 2).mean()).item()
+    logger.debug(f"sampled rmse: {rmse}")
+    assert rmse < 0.02, f"RMSE {rmse} exceeds threshold 0.02"
+    assert out_pass, f"PCC check failed: {out_pcc}"

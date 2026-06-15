@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,14 +12,17 @@
 #include <nlohmann/json.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/profiler.hpp>
+#include <tt_metal.hpp>
 #include <fstream>
 
 #include "context/metal_env_accessor.hpp"
 #include "core_coord.hpp"
+#include "common/filesystem_utils.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/device/device_manager.hpp"
 #include "profiler_analysis.hpp"
 #include "profiler_state_manager.hpp"
+#include <impl/dispatch/data_collection.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 
@@ -57,6 +60,28 @@ NLOHMANN_JSON_SERIALIZE_ENUM(
 }  // namespace tracy
 
 namespace tt::tt_metal {
+
+namespace {
+
+uint32_t get_available_worker_core_count_for_program(
+    ChipId chip_id,
+    uint64_t encoded_runtime_host_id,
+    MetalEnv& env,
+    uint8_t num_hw_cqs,
+    const DispatchCoreConfig& dispatch_core_config) {
+    const auto decoded = detail::DecodePerDeviceProgramID(encoded_runtime_host_id);
+    const std::optional<tt::ProgramSubDeviceInfo> sub_device_info =
+        tt::GetProgramSubDevice(chip_id, decoded.base_program_id);
+    if (sub_device_info.has_value() && sub_device_info->num_available_worker_cores > 0) {
+        return sub_device_info->num_available_worker_cores;
+    }
+
+    const CoreCoord compute_grid_size =
+        tt::get_compute_grid_size(MetalEnvAccessor(env).impl(), chip_id, num_hw_cqs, dispatch_core_config);
+    return compute_grid_size.x * compute_grid_size.y;
+}
+
+}  // namespace
 
 namespace detail {
 
@@ -309,9 +334,8 @@ getMetaDataForPrograms(const std::vector<std::reference_wrapper<const tracy::TTD
                 tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_num_hw_cqs();
             const DispatchCoreConfig& dispatch_core_config =
                 tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-            const CoreCoord compute_grid_size = tt::get_compute_grid_size(
-                MetalEnvAccessor(env).impl(), marker.chip_id, num_hw_cqs, dispatch_core_config);
-            const uint32_t num_available_worker_cores = compute_grid_size.x * compute_grid_size.y;
+            const uint32_t num_available_worker_cores = get_available_worker_core_count_for_program(
+                static_cast<ChipId>(marker.chip_id), marker.runtime_host_id, env, num_hw_cqs, dispatch_core_config);
 
             program_execution_uid_to_meta_data[program_execution_uid] = {
                 .device_id = static_cast<ChipId>(marker.chip_id),
@@ -580,11 +604,11 @@ void writeProgramsPerfResultsToCSV(
         }
     }
 
-    TT_ASSERT(std::filesystem::exists(report_path.parent_path()));
+    TT_ASSERT(tt::filesystem::safe_exists(report_path.parent_path()).value_or(false));
     TT_ASSERT(report_path.extension() == ".csv");
 
     std::ofstream log_file_ofs;
-    if (std::filesystem::exists(report_path)) {
+    if (tt::filesystem::safe_exists(report_path).value_or(false)) {
         log_file_ofs.open(report_path, std::ios_base::app);
     } else {
         log_file_ofs.open(report_path);
@@ -771,7 +795,7 @@ void from_json(const nlohmann::json& j, AnalysisConfig& config) {
 }
 
 std::vector<AnalysisConfig> loadAnalysisConfigsFromJSON(const std::filesystem::path& json_path) {
-    TT_ASSERT(std::filesystem::exists(json_path));
+    TT_ASSERT(tt::filesystem::safe_exists(json_path).value_or(false));
     std::ifstream json_ifs(json_path);
     const nlohmann::json configs_json = nlohmann::json::parse(json_ifs);
 

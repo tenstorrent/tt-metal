@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -345,7 +345,7 @@ def test_binary_ng_pow(device, input_a, input_b, dtype):
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output = ttnn.pow(input_tensor_a, input_tensor_b, use_legacy=None)
+    output = ttnn.pow(input_tensor_a, input_tensor_b)
     output = ttnn.to_torch(output)
 
     pcc = ttnn.pearson_correlation_coefficient(torch_output_tensor, output)

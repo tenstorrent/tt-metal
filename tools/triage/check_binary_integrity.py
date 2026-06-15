@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -20,7 +20,7 @@ from run_checks import run as get_run_checks
 import os
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
-from ttexalens.tt_exalens_lib import read_from_device
+from ttexalens.memory_access import create_l1_memory_access
 from triage import ScriptConfig, log_check_risc, run_script
 
 script_config = ScriptConfig(
@@ -31,6 +31,10 @@ script_config = ScriptConfig(
 def check_binary_integrity(
     location: OnChipCoordinate, risc_name: str, dispatcher_data: DispatcherData, elfs_cache: ElfsCache
 ):
+    if not dispatcher_data.risc_enabled(risc_name):
+        return
+
+    l1_mem_access = create_l1_memory_access(location)
     dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
 
     # Check firmware ELF binary state on the device
@@ -41,7 +45,7 @@ def check_binary_integrity(
         f"Firmware ELF file {dispatcher_core_data.firmware_path} does not exist.",
     )
     if os.path.exists(dispatcher_core_data.firmware_path):
-        elf_file = elfs_cache[dispatcher_core_data.firmware_path].elf
+        elf_file = elfs_cache[dispatcher_core_data.firmware_path]
         sections_to_verify = [".text"]
         for section_name in sections_to_verify:
             section = elf_file.get_section_by_name(section_name)
@@ -53,13 +57,13 @@ def check_binary_integrity(
                     f"Section {section_name} not found in ELF file {dispatcher_core_data.firmware_path}.",
                 )
             else:
-                address: int = section["sh_addr"]
-                data: bytes = section.data()
-                read_data = read_from_device(location, address, num_bytes=len(data))
+                address: int = section.address
+                read_data = bytearray(len(section.data))
+                l1_mem_access.read(address, read_data)
                 log_check_risc(
                     risc_name,
                     location,
-                    read_data == data,
+                    read_data == section.data,
                     f"Data mismatch in section {section_name} at address 0x{address:08x} in ELF file {dispatcher_core_data.firmware_path}.",
                 )
 
@@ -73,7 +77,7 @@ def check_binary_integrity(
         )
 
         if os.path.exists(dispatcher_core_data.kernel_xip_path):
-            elf_file = elfs_cache[dispatcher_core_data.kernel_xip_path].elf
+            elf_file = elfs_cache[dispatcher_core_data.kernel_xip_path]
             sections_to_verify = [".text"]
             for section_name in sections_to_verify:
                 section = elf_file.get_section_by_name(section_name)
@@ -84,20 +88,27 @@ def check_binary_integrity(
                         False,
                         f"Section {section_name} not found in ELF file {dispatcher_core_data.kernel_xip_path}.",
                     )
-                else:
-                    data: bytes = section.data()
-                    address: int = dispatcher_core_data.kernel_offset
-                    read_data = read_from_device(location, address, num_bytes=len(data))
+                elif dispatcher_core_data.kernel_offset is None:
                     log_check_risc(
                         risc_name,
                         location,
-                        read_data == data,
+                        False,
+                        f"Kernel offset not set for ELF file {dispatcher_core_data.kernel_xip_path}.",
+                    )
+                else:
+                    address: int = dispatcher_core_data.kernel_offset
+                    read_data = bytearray(len(section.data))
+                    l1_mem_access.read(address, read_data)
+                    log_check_risc(
+                        risc_name,
+                        location,
+                        read_data == section.data,
                         f"Data mismatch in section {section_name} at address 0x{address:08x} in ELF file {dispatcher_core_data.kernel_xip_path}.",
                     )
 
 
 def run(args, context: Context):
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "dram"]
     dispatcher_data = get_dispatcher_data(args, context)
     elfs_cache = get_elfs_cache(args, context)
     run_checks = get_run_checks(args, context)

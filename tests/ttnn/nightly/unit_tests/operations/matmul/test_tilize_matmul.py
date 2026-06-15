@@ -1,12 +1,14 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 
 import ttnn
+from tests.ttnn.nightly.unit_tests.operations.matmul.utility_functions import ttnn_matmul
 from loguru import logger
 
-from models.common.utility_functions import untilize, tilize_to_list, comp_pcc, skip_for_blackhole
+from models.common.utility_functions import untilize, tilize_to_list, skip_for_blackhole
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 import torch
 
 
@@ -32,7 +34,7 @@ def run_tilize_matmul_test(M, K, N, device):
         ttnn.TILE_LAYOUT,
         device,
     )
-    t2 = ttnn.matmul(a_t, b_t)
+    t2 = ttnn_matmul(a_t, b_t)
     assert list(t2.padded_shape) == [1, 1, M, N]
     tt_host_rm = t2.cpu().to_torch()
     pyt_got_back = tt_host_rm.reshape((1, 1, M, N))
@@ -40,12 +42,12 @@ def run_tilize_matmul_test(M, K, N, device):
 
     ref_bmm = torch.matmul(A.reshape(1, M, K), B.reshape(1, K, N))
     ref_bmm = ref_bmm.reshape(1, 1, M, N)
-    passing_pcc, output_pcc = comp_pcc(ref_bmm, pyt_got_back_rm, 0.99)
-    logger.debug(f"Passing={passing_pcc}")
-    logger.debug(f"Output pcc={output_pcc}")
-    assert passing_pcc
+    assert_numeric_metrics(
+        ref_bmm, pyt_got_back_rm, atol=0.007 * K, rtol=0.142 * K, frobenius_threshold=0.001 * K, check_ulp=False
+    )
 
 
 @skip_for_blackhole("Hanging on BH, see #12349")
 def test_run_tilize_matmul_test(device):
+    torch.manual_seed(0)
     run_tilize_matmul_test(32, 32, 32, device)

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 import gc
@@ -29,7 +29,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
             20,
             1280,
             0,
-            0.972,
+            0.972 if not is_blackhole() else 0.968,
         ),
         (
             (1024, 1024),

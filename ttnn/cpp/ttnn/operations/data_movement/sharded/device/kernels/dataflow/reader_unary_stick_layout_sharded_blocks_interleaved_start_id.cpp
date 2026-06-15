@@ -1,9 +1,13 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/endpoints.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
 
@@ -19,22 +23,24 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
-    constexpr uint32_t stick_size = get_compile_time_arg_val(2);
-    constexpr uint32_t num_trids = get_compile_time_arg_val(3);
-    constexpr auto src_args = TensorAccessorArgs<4>();
+    constexpr uint32_t num_trids = get_compile_time_arg_val(2);
+    constexpr auto src_args = TensorAccessorArgs<3>();
 
-    const auto s0 = TensorAccessor(src_args, src_addr + aligned_input_width_offset_bytes, stick_size);
+    Noc noc;
+    CircularBuffer cb_in0(cb_id_in0);
+    CircularBuffer cb_in1(cb_id_in1);
+
+    const auto s0 = TensorAccessor(src_args, src_addr + aligned_input_width_offset_bytes);
     uint32_t stick_id = start_id;
-    cb_reserve_back(cb_id_in0, block_height);
-    uint32_t dest_write_addr = get_write_ptr(cb_id_in0);
+    cb_in0.reserve_back(block_height);
     if (aligned) {
+        uint32_t dest_off = 0;
         for (uint32_t h = 0; h < block_height; ++h) {
-            uint64_t src_noc_addr = get_noc_addr(stick_id, s0);
-            noc_async_read(src_noc_addr, dest_write_addr, block_width_bytes);
+            noc.async_read(s0, cb_in0, block_width_bytes, {.page_id = stick_id}, {.offset_bytes = dest_off});
             stick_id++;
-            dest_write_addr += padded_block_width_bytes;
+            dest_off += padded_block_width_bytes;
         }
-        noc_async_read_barrier();
+        noc.async_read_barrier();
     } else {
         enum SlotState : uint8_t {
             IDLE = 0,
@@ -45,19 +51,26 @@ void kernel_main() {
 
         constexpr uint32_t trid_base = 1;
 
-        cb_reserve_back(cb_id_in1, num_trids);
-        uint32_t scratch_write_addr_base = get_write_ptr(cb_id_in1);
+        cb_in1.reserve_back(num_trids);
         uint32_t scratch_cb_page_size = get_local_cb_interface(cb_id_in1).fifo_page_size;
         SlotState slot_states[num_trids];
-        uint32_t dest_write_addrs[num_trids];
-        uint32_t scratch_write_addrs[num_trids];
+        uint32_t dest_offsets[num_trids];
+        uint32_t scratch_offsets[num_trids];
 
         // Initialize slots
         for (uint32_t i = 0; i < num_trids; i++) {
             slot_states[i] = SlotState::IDLE;
-            scratch_write_addrs[i] = scratch_write_addr_base + i * scratch_cb_page_size;
+            scratch_offsets[i] = i * scratch_cb_page_size;
         }
 
+        // Local NoC coordinates for the scratch->dest reads.
+        UnicastEndpoint self_ep;
+        const uint32_t my_noc_x = my_x[noc.get_noc_id()];
+        const uint32_t my_noc_y = my_y[noc.get_noc_id()];
+        // Base L1 address of the scratch CB
+        const uint32_t scratch_l1_base = cb_in1.get_write_ptr();
+
+        uint32_t dest_off = 0;         // running offset into cb_in0
         uint32_t rows_issued = 0;      // Number of src->scratch transfers started
         uint32_t rows_completed = 0;   // Number of scratch->dest transfers completed
 
@@ -66,35 +79,44 @@ void kernel_main() {
                 uint32_t active_trid = trid_base + slot;
 
                 if (slot_states[slot] == SlotState::IDLE && rows_issued < block_height) {
-                    // Start new src->scratch transfer
-                    noc_async_read_set_trid(active_trid);
-                    uint64_t src_noc_addr = get_noc_addr(stick_id, s0);
-                    noc_async_read(src_noc_addr, scratch_write_addrs[slot], aligned_block_width_bytes);
-                    dest_write_addrs[slot] = dest_write_addr;
+                    // Start new src->scratch transfer (TRID-tagged).
+                    noc.async_read<NocOptions::TXN_ID>(
+                        s0,
+                        cb_in1,
+                        aligned_block_width_bytes,
+                        {.page_id = stick_id},
+                        {.offset_bytes = scratch_offsets[slot]},
+                        NocOptVals{.trid = static_cast<uint8_t>(active_trid)});
+                    dest_offsets[slot] = dest_off;
                     slot_states[slot] = SlotState::SRC_PENDING;
 
                     stick_id++;
-                    dest_write_addr += padded_block_width_bytes;
+                    dest_off += padded_block_width_bytes;
                     rows_issued++;
                 }
                 if (slot_states[slot] == SlotState::SRC_PENDING) {
                     // Check if src->scratch is complete
-                    if (ncrisc_noc_read_with_transaction_id_flushed(noc_index, active_trid) == 1) {
+                    if (noc.is_read_trid_flushed(active_trid)) {
                         slot_states[slot] = SlotState::SCRATCH_READY;
                     }
                 }
                 if (slot_states[slot] == SlotState::SCRATCH_READY) {
-                    // Start scratch->dest transfer
-                    noc_async_read_set_trid(active_trid);
-
-                    uint64_t scratch_noc_read_addr = get_noc_addr(scratch_write_addrs[slot] + aligned_offset);
-                    noc_async_read(scratch_noc_read_addr, dest_write_addrs[slot], block_width_bytes);
+                    // Start scratch->dest transfer: local L1 loopback read tagged with the same trid.
+                    noc.async_read<NocOptions::TXN_ID>(
+                        self_ep,
+                        cb_in0,
+                        block_width_bytes,
+                        {.noc_x = my_noc_x,
+                         .noc_y = my_noc_y,
+                         .addr = scratch_l1_base + scratch_offsets[slot] + aligned_offset},
+                        {.offset_bytes = dest_offsets[slot]},
+                        NocOptVals{.trid = static_cast<uint8_t>(active_trid)});
 
                     slot_states[slot] = SlotState::SCRATCH_PENDING;
                 }
                 if (slot_states[slot] == SlotState::SCRATCH_PENDING) {
                     // Check if scratch->dest is complete
-                    if (ncrisc_noc_read_with_transaction_id_flushed(noc_index, active_trid) == 1) {
+                    if (noc.is_read_trid_flushed(active_trid)) {
                         slot_states[slot] = SlotState::IDLE;
                         rows_completed++;
                     }
@@ -103,6 +125,9 @@ void kernel_main() {
         }
 
     }
+    // Reset the sticky NOC_PACKET_TAG register for downstream untagged reads.
+    // No Device 2.0 wrapper exists for this config-only register write; this is
+    // not a NoC transaction.
     noc_async_read_set_trid(0);
-    cb_push_back(cb_id_in0, block_height);
+    cb_in0.push_back(block_height);
 }

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -16,7 +16,6 @@ from models.common.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
     nearest_32,
-    is_blackhole,
     skip_for_blackhole,
 )
 
@@ -99,8 +98,6 @@ def test_create_head_interleaved(
     n_local_kv_heads = n_kv_heads // parallel_factor
     if n_local_heads > 32 or n_local_kv_heads == 0:
         pytest.skip("Skipping due to impossible parallelization")
-    if is_blackhole() and is_dram:
-        pytest.skip("Skipping DRAM test on blackhole due to issue #16667")
     for i in range(3):
         # multiple loops to test program caching
         run_test_create_head_interleaved(device, n_local_heads, n_local_kv_heads, head_dim, batch, is_dram)
@@ -185,7 +182,15 @@ def run_test_create_head_max_width_shard(device, n_local_heads, n_local_kv_heads
 
 @pytest.mark.parametrize(
     "n_local_heads, n_local_kv_heads, head_dim, batch",
-    ((8, 1, 128, 32), (8, 4, 96, 32), (16, 2, 64, 32), (8, 1, 128, 16), (8, 1, 128, 8), (32, 8, 128, 4)),
+    (
+        (8, 1, 128, 32),
+        (8, 4, 96, 32),
+        (16, 2, 64, 32),
+        (8, 1, 128, 16),
+        (8, 1, 128, 8),
+        (32, 8, 128, 4),
+        (64, 8, 96, 1),
+    ),
 )
 def test_create_head_max_width_shard(
     n_local_heads,

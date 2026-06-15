@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -60,9 +60,11 @@ struct EthConnection {
     uint8_t src_chan = 0;
     uint8_t dst_chan = 0;
     bool is_local = false;
+    PortType port_type = PortType::UNKNOWN;
 
     bool operator==(const EthConnection& other) const {
-        return src_chan == other.src_chan && dst_chan == other.dst_chan && other.is_local == is_local;
+        return src_chan == other.src_chan && dst_chan == other.dst_chan && other.is_local == is_local &&
+               port_type == other.port_type;
     }
     bool operator<(const EthConnection& other) const {
         if (src_chan != other.src_chan) {
@@ -119,6 +121,8 @@ struct hash<tt::tt_metal::ExitNodeConnection> {
         seed ^= std::hash<uint8_t>{}(min_chan) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
         seed ^= std::hash<uint8_t>{}(max_chan) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
         seed ^= std::hash<bool>{}(conn.eth_conn.is_local) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+        seed ^= std::hash<uint8_t>{}(static_cast<uint8_t>(conn.eth_conn.port_type)) + 0x9e3779b9 + (seed << 6) +
+                (seed >> 2);
         return seed;
     }
 };
@@ -176,6 +180,9 @@ public:
     // ASIC Topology Query APIs
     std::vector<AsicID> get_asic_neighbors(AsicID asic_id) const;
     std::vector<EthConnection> get_eth_connections(AsicID src_asic_id, AsicID dst_asic_id) const;
+    PortType get_port_type(AsicID src_asic, AsicID dst_asic, uint8_t src_chan) const;
+    std::vector<PortType> get_available_port_types(AsicID src_asic) const;
+    bool has_port_type(AsicID src_asic, AsicID dst_asic, PortType port_type) const;
     const AsicTopology& get_asic_topology(const std::string& hostname) const;
     TrayID get_tray_id(AsicID asic_id) const;
     ASICLocation get_asic_location(AsicID asic_id) const;
@@ -207,6 +214,9 @@ public:
     const std::unordered_map<std::string, uint32_t>& get_host_to_rank_map() const { return host_to_rank_; }
     const ExitNodeConnectionTable& get_exit_node_connection_table() const { return exit_node_connection_table_; }
     const tt::umd::semver_t& get_ethernet_firmware_version() const { return ethernet_firmware_version_; }
+    const std::optional<tt::umd::FirmwareBundleVersion>& get_firmware_bundle_version() const {
+        return firmware_bundle_version_;
+    }
     const std::unordered_map<std::string, std::unordered_map<uint32_t, std::unordered_set<uint32_t>>>&
     get_pcie_devices_per_tray() const {
         return pcie_devices_per_tray_;
@@ -218,6 +228,8 @@ public:
 
     tt::TargetDevice get_target_device_type() const { return target_device_type_; }
     bool get_all_hostnames_unique() const { return all_hostnames_unique_; }
+    void set_is_bh_galaxy_rev_c(bool is_bh_galaxy_rev_c) { is_bh_galaxy_rev_c_ = is_bh_galaxy_rev_c; }
+    bool is_bh_galaxy_rev_c() const { return is_bh_galaxy_rev_c_; }
 
     PhysicalConnectivityGraph& get_system_graph() { return system_graph_; }
     std::unordered_map<AsicID, ASICDescriptor>& get_asic_descriptors() { return asic_descriptors_; }
@@ -225,6 +237,7 @@ public:
     std::unordered_map<std::string, uint32_t>& get_host_to_rank_map() { return host_to_rank_; }
     ExitNodeConnectionTable& get_exit_node_connection_table() { return exit_node_connection_table_; }
     tt::umd::semver_t& get_ethernet_firmware_version() { return ethernet_firmware_version_; }
+    std::optional<tt::umd::FirmwareBundleVersion>& get_firmware_bundle_version() { return firmware_bundle_version_; }
     std::unordered_map<std::string, std::unordered_map<uint32_t, std::unordered_set<uint32_t>>>&
     get_pcie_devices_per_tray() {
         return pcie_devices_per_tray_;
@@ -247,8 +260,11 @@ private:
     ExitNodeConnectionTable exit_node_connection_table_;
     bool all_hostnames_unique_ = true;
     tt::umd::semver_t ethernet_firmware_version_;
+    std::optional<tt::umd::FirmwareBundleVersion> firmware_bundle_version_;
     std::unordered_map<std::string, std::unordered_map<uint32_t, std::unordered_set<uint32_t>>> pcie_devices_per_tray_;
     std::unordered_map<std::string, std::unordered_map<uint32_t, ASICLocation>> pcie_id_to_asic_location_;
+
+    bool is_bh_galaxy_rev_c_ = false;
 
     // Local hostname and rank set by discovery (for my_host_name())
     std::string local_hostname_;

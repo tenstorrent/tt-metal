@@ -13,6 +13,11 @@ message ConnectionEndpoint {
 message ConnectionPair {
     ConnectionEndpoint first = 1;
     ConnectionEndpoint second = 2;
+    // Symmetric hash of the underlying physical cable (src_asic + dst_asic + chans).
+    // Both sides of the same cable produce the same value, so every host can use this
+    // to deterministically map a broadcast connection back to its local physical cable
+    // regardless of how the controller reassigned port_ids during Z/non-Z resolution.
+    uint64 connection_hash = 3;
 }
 
 // Root table containing all connection pairs

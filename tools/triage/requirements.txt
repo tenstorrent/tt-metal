@@ -1,2 +1,3 @@
 pycapnp==2.0.0
-tt-exalens==0.3.11
+tt-umd==0.9.6
+tt-exalens==0.3.21

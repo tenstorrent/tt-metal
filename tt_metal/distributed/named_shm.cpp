@@ -1,8 +1,9 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/distributed/named_shm.hpp"
+#include "tt_metal/distributed/shm_resource_tracker.hpp"
 
 #include <tt_stl/assert.hpp>
 #include <fmt/format.h>
@@ -10,6 +11,7 @@
 #include <atomic>
 #include <cerrno>
 #include <cstring>
+#include <random>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -68,6 +70,7 @@ NamedShm NamedShm::create(const std::string& name, size_t size) {
     }
 
     std::memset(ptr, 0, size);
+    ShmResourceTracker::instance().track_shm(name);
     return NamedShm(name, ptr, size);
 }
 
@@ -108,14 +111,23 @@ void NamedShm::close() {
 void NamedShm::unlink() {
     close();
     if (!name_.empty()) {
-        shm_unlink(name_.c_str());
-        name_.clear();
+        int rc = shm_unlink(name_.c_str());
+        if (rc == 0 || errno == ENOENT) {
+            ShmResourceTracker::instance().untrack_shm(name_);
+            name_.clear();
+        }
     }
 }
 
 std::string generate_shm_name(const std::string& prefix) {
     static std::atomic<uint32_t> counter{0};
-    return fmt::format("/tt_{}_{}_{}", prefix, getpid(), counter.fetch_add(1));
+    static const uint32_t random_number = []() {
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_int_distribution<uint32_t> dist;
+        return dist(gen);
+    }();
+    return fmt::format("/tt_{}_{}_{}_{}", prefix, getpid(), random_number, counter.fetch_add(1));
 }
 
 }  // namespace tt::tt_metal::distributed

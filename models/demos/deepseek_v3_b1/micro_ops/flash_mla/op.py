@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -248,16 +248,19 @@ class FlashMLAProgramConfig:
     device_chunk_size: int = None
     exp_approx_mode: bool = True
     grid: type = FlashMLAOptimalGridNOC0  # Grid layout class (NOC0 optimized by default)
-    device_chunk_size: int = None
+    max_seq_len: int = 128 * 1024
+    max_kv_cache_slots: int = 64
+    sp_dim: int = 4
+    tp_dim: int = 2
 
     def __post_init__(self):
-        expected = self.grid.CORES_PER_BLOCK * self.k_chunk_size
+        expected = self.grid.NUM_BLOCKS * self.k_chunk_size
         if self.device_chunk_size is None:
             self.device_chunk_size = expected
         else:
             assert self.device_chunk_size == expected, (
-                f"device_chunk_size must equal grid.CORES_PER_BLOCK * k_chunk_size "
-                f"({self.grid.CORES_PER_BLOCK} * {self.k_chunk_size} = {expected}), "
+                f"device_chunk_size must equal grid.NUM_BLOCKS * k_chunk_size "
+                f"({self.grid.NUM_BLOCKS} * {self.k_chunk_size} = {expected}), "
                 f"got {self.device_chunk_size}"
             )
 
@@ -640,6 +643,7 @@ class FlashMLADecode:
             ("kv_cache_cur_pos_ready_semaphore_id", kv_cache_cur_pos_ready_semaphore_id),
             ("kv_cache_cur_pos_ready_value", kv_cache_cur_pos_ready_value),
             ("cb_k_in", cb_k_in),
+            ("num_mcast_dests", num_mcast_dests),
         ]
         # TensorAccessorArgs for K (indexed, starting at index 0)
         brisc_compile_time_args = list(get_tensor_accessor_args(kv_cache_tensor))
@@ -850,6 +854,8 @@ class FlashMLADecode:
                         is_mcast_sender,
                         mcast_start_x,
                         mcast_start_y,
+                        mcast_end_x,
+                        mcast_end_y,
                         vc,
                     ],
                 )

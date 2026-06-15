@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,8 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_clamp.h"
+#include "ckernel_sfpu_clamp.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -27,7 +28,8 @@ namespace ckernel {
 */
 // clang-format on
 ALWI void clamp_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
-    MATH((llk_math_eltwise_unary_sfpu_clamp<APPROX>(idst, param0, param1)));
+    MATH(SFPU_CALL_MODE(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_clamp, (APPROX, 8 /* ITERATIONS */), RC, idst, param0, param1));
 }
 
 // clang-format off
@@ -46,12 +48,13 @@ ALWI void clamp_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
  */
 // clang-format on
 ALWI void clamp_tile_int32(uint32_t idst, uint32_t param0, uint32_t param1) {
-    MATH((llk_math_eltwise_unary_sfpu_clamp_int32<APPROX>(idst, param0, param1)));
+    MATH(SFPU_CALL_MODE(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_clamp_int32, (APPROX, 8 /* ITERATIONS */), RC, idst, param0, param1));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void clamp_tile_init() { MATH((llk_math_eltwise_unary_sfpu_clamp_init<APPROX>())); }
+ALWI void clamp_tile_init() { MATH(SFPU_INIT(clamp)); }
 
 }  // namespace ckernel

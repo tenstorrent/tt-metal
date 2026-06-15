@@ -1,12 +1,11 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
-
 #include "ttnn/operations/normalization/softmax/device/softmax_operation_types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::transformer {
 

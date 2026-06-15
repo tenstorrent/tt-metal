@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -27,13 +27,15 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     MeshDeviceStub,
     PermuteConfig,
     ReshardConfig,
-    SavedWeight,
     SliceConfig,
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
+    K_CHUNK_SIZE,
+    Q_CHUNK_SIZE,
     USERS_PER_ROW,
     even_int_div,
     get_mesh_coords,
+    get_prefill_chunk_sizes,
     get_state_dicts,
     shard_and_save,
     sub_state_dicts,
@@ -47,6 +49,7 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
+from models.experimental.ops.descriptors.fusion import Parallel
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
@@ -66,7 +69,17 @@ def pad_batch_to_dram_banks(batch, num_banks=12):
     return ((batch + num_banks - 1) // num_banks) * num_banks
 
 
-def build_prefill_matmul_program_config(seq_len, k, n, batch=1, tile_h=32, tile_w=32, *, mesh_device: ttnn.Device):
+def build_prefill_matmul_program_config(
+    seq_len,
+    k,
+    n,
+    batch=1,
+    tile_h=32,
+    tile_w=32,
+    *,
+    mesh_device: ttnn.Device,
+    override_compute_grid: ttnn.CoreGrid = None,
+):
     """Build MatmulMultiCoreReuseMultiCastProgramConfig for prefill matmuls.
 
     Handles both unbatched (batch=1, fuse_batch=True) and batched (batch>1, fuse_batch=False)
@@ -89,7 +102,8 @@ def build_prefill_matmul_program_config(seq_len, k, n, batch=1, tile_h=32, tile_
     N_tiles = even_int_div(n, tile_w)
 
     compute_grid = mesh_device.compute_with_storage_grid_size()
-
+    if override_compute_grid is not None:
+        compute_grid = override_compute_grid
     # grid_x splits N dimension; grid_y splits M dimension
     grid_x = 1
     for x in range(min(compute_grid.x, N_tiles), 0, -1):
@@ -175,25 +189,6 @@ def build_prefill_matmul_program_config(seq_len, k, n, batch=1, tile_h=32, tile_
 
 def _deepseek_kvdbg_enabled() -> bool:
     return os.getenv("DEEPSEEK_KVDBG", "").lower() in ("1", "true", "yes", "y")
-
-
-def _launch_merged_descriptors(op_descriptors):
-    # Temporary workaround for https://github.com/tenstorrent/tt-metal/issues/40275.
-    # Keep the DeepSeek decode Q/KV norm path on the old merged generic_op
-    # dispatch until the Parallel(...).build().launch() cache/rebind logic is fixed.
-    if not op_descriptors:
-        raise ValueError("op_descriptors cannot be empty")
-
-    merged_descriptor = op_descriptors[0].descriptor
-    if len(op_descriptors) > 1:
-        merged_descriptor = ttnn.merge_program_descriptors([op.descriptor for op in op_descriptors])
-
-    io_tensors = [tensor for op in op_descriptors for tensor in op.input_tensors] + [
-        tensor for op in op_descriptors for tensor in op.output_tensors
-    ]
-    ttnn.generic_op(io_tensors, merged_descriptor)
-
-    return [op.output_tensors for op in op_descriptors]
 
 
 class MLA1D(AbstractModule):
@@ -340,9 +335,8 @@ class MLA1D(AbstractModule):
             shape=(num_heads * (qk_nope_head_dim + v_head_dim), kv_lora_rank),
         ).reshape(num_shards, num_heads, qk_nope_head_dim + v_head_dim, kv_lora_rank)
 
-        torch_weights_k = torch_weights[..., :qk_nope_head_dim, :].transpose(
-            -2, -1
-        )  # [num_shards, num_heads, kv_lora_rank, qk_nope_head_dim]
+        torch_weights_k = torch_weights[..., :qk_nope_head_dim, :].transpose(-2, -1).contiguous()
+        # [num_shards, num_heads, kv_lora_rank, qk_nope_head_dim]
         torch_weights_v = torch_weights[..., qk_nope_head_dim:, :]  # [num_shards, num_heads, v_head_dim, kv_lora_rank]
 
         # Create DRAM HEIGHT sharded memory config for wkv_b1 (batch sharding)
@@ -419,10 +413,10 @@ class MLA1D(AbstractModule):
         mesh_device: ttnn.MeshDevice,
         memory_config: ttnn.MemoryConfig,
         padding_needed: tuple[int, int, int] = (0, 0, 0),
-    ) -> SavedWeight:
+    ) -> ttnn.Tensor:
         return shard_and_save(
             path,
-            torch_metaweight.transpose(-2, -1),
+            torch_metaweight.transpose(-2, -1).contiguous(),
             shard_dims=dims,
             mesh_device=mesh_device,
             dtype=ttnn.bfloat8_b,
@@ -436,6 +430,7 @@ class MLA1D(AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
+        batch_size_per_row: int,
     ) -> ModelPrefillConfig:
         """Prefill model config for an MLP with 1D tensor parallelism.
 
@@ -504,8 +499,8 @@ class MLA1D(AbstractModule):
         )
 
         # FlashMLA
-        q_chunk_size = 128  # TODO: Make dynamic?
-        k_chunk_size = 128  # TODO: Make dynamic?
+        q_chunk_size = Q_CHUNK_SIZE
+        k_chunk_size = K_CHUNK_SIZE
 
         sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,
@@ -580,8 +575,10 @@ class MLA1D(AbstractModule):
             dim=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        chunk_sizes = get_prefill_chunk_sizes(hf_config.max_seq_len, mesh_shape[0])
 
         return {
+            "batch_size_per_row": batch_size_per_row,
             "num_heads": num_heads,
             "num_heads_local": num_heads_local,
             "q_lora_rank": q_lora_rank,
@@ -603,6 +600,8 @@ class MLA1D(AbstractModule):
             "wq_kv_a_r_prefill": wq_kv_a_r_config,
             "wkv_b2_ag_prefill": wkv_b2_ag_config,
             "wo_ag_prefill": wo_ag_config,
+            "mla_chunk": chunk_sizes.mla_chunk,
+            "wkv_b2_chunk": chunk_sizes.wkv_b2_chunk,
             "mesh_device": mesh_device,
         }
 
@@ -611,6 +610,7 @@ class MLA1D(AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
+        batch_size_per_row: int,
     ) -> ModelDecodeConfig:
         """Generate decode operator configuration for this MLP layer.
 
@@ -641,7 +641,7 @@ class MLA1D(AbstractModule):
 
         input_memory_config = ttnn.create_sharded_memory_config(
             shape=(
-                ttnn.core.roundup(USERS_PER_ROW, ttnn.TILE_SIZE),
+                ttnn.core.roundup(batch_size_per_row, ttnn.TILE_SIZE),
                 hidden_size_per_device,
             ),
             core_grid=ttnn.CoreGrid(y=7, x=4),
@@ -675,7 +675,7 @@ class MLA1D(AbstractModule):
         qkv_a_num_in0_cores = qkv_a_in0_core_grid.x * qkv_a_in0_core_grid.y
         qkv_a_num_out_cores = qkv_a_out_core_grid.x * qkv_a_out_core_grid.y
         qkv_a_in0_block_w = even_int_div(hidden_size_per_device, qkv_a_num_in0_cores * tile_size)  # 896 // 7 // 32 = 4
-        qkv_a_per_core_M = math.ceil(USERS_PER_ROW / tile_size)  # ceil(32 / 32) = 1
+        qkv_a_per_core_M = math.ceil(batch_size_per_row / tile_size)
         qkv_a_per_core_N = even_int_div(qkv_a_n_padded, qkv_a_num_out_cores * tile_size)  # 2304 // 8 // 32 = 9
 
         qkv_a_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
@@ -717,7 +717,7 @@ class MLA1D(AbstractModule):
         wq_b_num_in0_cores = wq_b_in0_core_grid.x * wq_b_in0_core_grid.y
         wq_b_num_out_cores = wq_b_out_core_grid.x * wq_b_out_core_grid.y
         wq_b_in0_block_w = even_int_div(q_lora_rank, wq_b_num_in0_cores * tile_size)  # 1536 // 16 // 32 = 3
-        wq_b_per_core_M = math.ceil(USERS_PER_ROW / tile_size)  # ceil(32 / 32) = 1
+        wq_b_per_core_M = math.ceil(batch_size_per_row / tile_size)
         wq_b_per_core_N = even_int_div(wq_b_n_padded, wq_b_num_out_cores * tile_size)  # 3072 // 16 // 32 = 6
 
         wq_b_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
@@ -750,7 +750,7 @@ class MLA1D(AbstractModule):
         # =====================================================================
         wkv_b1_batch = num_heads_local  # 16
         wkv_b1_batch_padded = pad_batch_to_dram_banks(wkv_b1_batch)  # 24
-        wkv_b1_m = ttnn.core.roundup(USERS_PER_ROW, tile_size)  # roundup(32, 32) = 32
+        wkv_b1_m = ttnn.core.roundup(batch_size_per_row, tile_size)
         wkv_b1_k = qk_nope_head_dim  # 128
         wkv_b1_n = kv_lora_rank  # 512
 
@@ -879,7 +879,7 @@ class MLA1D(AbstractModule):
         wo_num_in0_cores = wo_in0_core_grid.x * wo_in0_core_grid.y
         wo_num_out_cores = wo_out_core_grid.x * wo_out_core_grid.y
         wo_in0_block_w = even_int_div(wo_k, wo_num_in0_cores * tile_size)  # 16384 // 16 // 32 = 32
-        wo_per_core_M = math.ceil(USERS_PER_ROW / tile_size)  # ceil(32 / 32) = 1
+        wo_per_core_M = math.ceil(batch_size_per_row / tile_size)
         wo_per_core_N = even_int_div(wo_n_padded, wo_num_out_cores * tile_size)  # 1152 // 12 // 32 = 3
 
         wo_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
@@ -907,7 +907,7 @@ class MLA1D(AbstractModule):
         )
 
         # Resharding for q_rope
-        q_rope_shape = (1, USERS_PER_ROW, num_heads_local, qk_rope_head_dim)
+        q_rope_shape = (1, batch_size_per_row, num_heads_local, qk_rope_head_dim)
         q_rope_shard_height = nearest_y(q_rope_shape[2], ttnn.TILE_SIZE)
         q_rope_shard_width = q_rope_shape[3]
         q_rope_num_cores = q_rope_shape[1]
@@ -933,7 +933,7 @@ class MLA1D(AbstractModule):
         )
 
         # Resharding for kv_rope
-        kv_rope_shape = (1, USERS_PER_ROW, 1, qk_rope_head_dim)
+        kv_rope_shape = (1, batch_size_per_row, 1, qk_rope_head_dim)
         kv_rope_shard_height = nearest_y(kv_rope_shape[2], ttnn.TILE_SIZE)
         kv_rope_shard_width = kv_rope_shape[3]
         kv_rope_num_cores = kv_rope_shape[1]
@@ -960,7 +960,7 @@ class MLA1D(AbstractModule):
         )
 
         # Resharding for kvpe
-        kvpe_shape = (1, even_int_div(USERS_PER_ROW, mesh_shape[1]), 1, kv_lora_rank + qk_rope_head_dim)
+        kvpe_shape = (1, even_int_div(batch_size_per_row, mesh_shape[1]), 1, kv_lora_rank + qk_rope_head_dim)
         kvpe_shard_height = nearest_y(kvpe_shape[2], ttnn.TILE_SIZE)
         kvpe_shard_width = kvpe_shape[3]
         kvpe_num_cores = kvpe_shape[1]
@@ -977,7 +977,7 @@ class MLA1D(AbstractModule):
 
         # FlashMLA
         q_chunk_size = 0  # Unused in decode mode
-        k_chunk_size = 128  # TODO: Make dynamic?
+        k_chunk_size = K_CHUNK_SIZE
 
         sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,
@@ -994,9 +994,10 @@ class MLA1D(AbstractModule):
         )
 
         q_num_cores = num_cores
-        q_num_cores = min(even_int_div(USERS_PER_ROW, mesh_shape[1]) * num_heads, q_num_cores)
+        q_num_cores = min(even_int_div(batch_size_per_row, mesh_shape[1]) * num_heads, q_num_cores)
         block_height = nearest_y(
-            (even_int_div(USERS_PER_ROW, mesh_shape[1]) * num_heads) // q_num_cores, ttnn.TILE_SIZE
+            (even_int_div(batch_size_per_row, mesh_shape[1]) * num_heads) // q_num_cores,
+            ttnn.TILE_SIZE,
         )
         block_width = kv_lora_rank + qk_rope_head_dim
 
@@ -1077,7 +1078,7 @@ class MLA1D(AbstractModule):
         # on the pre-40275 merged-descriptor dispatch as a temporary workaround.
         num_q_cores = 16
         num_kv_nope_cores = 16
-        shard_height = ttnn.core.roundup(USERS_PER_ROW, ttnn.TILE_SIZE)
+        shard_height = ttnn.core.roundup(batch_size_per_row, ttnn.TILE_SIZE)
 
         # Q slice: WIDTH sharded on 4x4 grid (0,0)-(3,3) -> 16 cores, shard [32, 96]
         q_slice_mem_config = ttnn.MemoryConfig(
@@ -1126,6 +1127,7 @@ class MLA1D(AbstractModule):
         )
 
         return {
+            "batch_size_per_row": batch_size_per_row,
             "num_heads": num_heads,
             "q_lora_rank": q_lora_rank,
             "kv_lora_rank": kv_lora_rank,
@@ -1604,6 +1606,374 @@ class MLA1D(AbstractModule):
             logger.warning("KVDBG deepseek prefill failed: {}", exc)
 
     @classmethod
+    def _fwd_prefill_output_from_q_and_kvpe(
+        cls,
+        tt_q: ttnn.Tensor,
+        tt_kvpe: ttnn.Tensor,
+        cfg: RunPrefillConfig,
+        rope_tensors: dict,
+        ccl: CCL,
+        seq_len: int,
+        dim: int,
+        num_heads: int,
+        num_heads_local: int,
+        q_lora_rank: int,
+        kv_lora_rank: int,
+        qk_nope_head_dim: int,
+        qk_rope_head_dim: int,
+        qk_head_dim: int,
+        v_head_dim: int,
+    ) -> ttnn.Tensor:
+        # Q path: norm + wq_b (interleaved in0 + DRAM WIDTH sharded in1)
+        tt_q = RMSNorm.forward_prefill(tt_q, cfg["q_norm"])
+        wq_b_program_config = build_prefill_matmul_program_config(
+            seq_len,
+            k=q_lora_rank,
+            n=num_heads_local * qk_head_dim,
+            mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
+        )
+        tt_q = ttnn.linear(tt_q, **cfg["wq_b"], program_config=wq_b_program_config)
+
+        tt_q = ttnn.reshape(tt_q, (1, seq_len, num_heads_local, qk_head_dim))
+        tt_q = ttnn.permute(tt_q, (0, 2, 1, 3))
+
+        tt_q_nope = ttnn.slice(tt_q, [0, 0, 0, 0], [1, num_heads_local, seq_len, qk_nope_head_dim])
+        tt_q_rope = ttnn.slice(tt_q, [0, 0, 0, qk_nope_head_dim], [1, num_heads_local, seq_len, qk_head_dim])
+        ttnn.deallocate(tt_q)
+
+        num_heads_local_padded = pad_batch_to_dram_banks(num_heads_local)
+        wkv_b1_program_config = build_prefill_matmul_program_config(
+            seq_len,
+            k=qk_nope_head_dim,
+            n=kv_lora_rank,
+            batch=num_heads_local_padded,
+            mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
+        )
+        tt_q_nope = ttnn.linear(
+            tt_q_nope, **cfg["wkv_b1"], program_config=wkv_b1_program_config
+        )  # [1, num_heads_local_padded, seq_len, kv_lora_rank]
+
+        tt_q_rope = ttnn.experimental.rotary_embedding_llama(
+            tt_q_rope,
+            rope_tensors["cos_matrix"],
+            rope_tensors["sin_matrix"],
+            rope_tensors["trans_matrix"],
+            is_decode_mode=False,
+        )
+
+        tt_q = ttnn.concat([tt_q_nope, tt_q_rope], dim=-1)
+
+        attn_out = ttnn.transformer.flash_mla_prefill(
+            tt_q,
+            tt_kvpe,
+            **cfg["flash_mla"],
+        )  # [1, num_heads_local, seq_len, kv_lora_rank]
+        ttnn.deallocate(tt_q)
+        ttnn.deallocate(tt_kvpe)
+
+        wkv_b2_ag_prefill_runtime_args = ccl.populate_all_gather_runtime_args(cfg["wkv_b2_ag_prefill"])
+        num_heads_padded = pad_batch_to_dram_banks(num_heads)
+
+        def _run_wkv_b2_prefill_matmul(v_out_chunk_ag: ttnn.Tensor, chunk_seq_len: int) -> ttnn.Tensor:
+            padded_chunk_seq_len = nearest_y(chunk_seq_len, ttnn.TILE_SIZE)
+            v_out_chunk_input = v_out_chunk_ag
+            if padded_chunk_seq_len != chunk_seq_len:
+                v_out_chunk_input = ttnn.pad(
+                    v_out_chunk_ag,
+                    padding=((0, 0), (0, 0), (0, padded_chunk_seq_len - chunk_seq_len), (0, 0)),
+                    value=0.0,
+                )
+
+            wkv_b2_program_config = build_prefill_matmul_program_config(
+                padded_chunk_seq_len,
+                k=kv_lora_rank,
+                n=v_head_dim,
+                batch=num_heads_padded,
+                mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
+            )
+            v_out_chunk = ttnn.linear(v_out_chunk_input, **cfg["wkv_b2"], program_config=wkv_b2_program_config)
+
+            if v_out_chunk_input is not v_out_chunk_ag:
+                ttnn.deallocate(v_out_chunk_input)
+                trimmed_v_out_chunk = ttnn.slice(
+                    v_out_chunk,
+                    (0, 0, 0, 0),
+                    (1, v_out_chunk.shape[1], chunk_seq_len, v_head_dim),
+                )
+                ttnn.deallocate(v_out_chunk)
+                v_out_chunk = trimmed_v_out_chunk
+
+            return v_out_chunk
+
+        WKV_B2_AG_SEQ_CHUNK_SIZE = cfg["wkv_b2_chunk"]
+
+        out = ttnn.allocate_tensor_on_device(
+            shape=(1, 1, seq_len, dim),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        for start in range(0, seq_len, WKV_B2_AG_SEQ_CHUNK_SIZE):
+            end = min(start + WKV_B2_AG_SEQ_CHUNK_SIZE, seq_len)
+            chunk_seq_len = end - start
+            attn_out_chunk = ttnn.slice(
+                attn_out,
+                (0, 0, start, 0),
+                (1, num_heads_local, end, kv_lora_rank),
+            )
+            v_out_chunk_ag = ttnn.experimental.all_gather_async(attn_out_chunk, **wkv_b2_ag_prefill_runtime_args)
+            ttnn.deallocate(attn_out_chunk, force=False)
+
+            v_chunk = _run_wkv_b2_prefill_matmul(v_out_chunk_ag, chunk_seq_len)
+            ttnn.deallocate(v_out_chunk_ag)
+
+            v_chunk = ttnn.permute(v_chunk, (0, 2, 1, 3))
+
+            padded_chunk_seq_len = nearest_y(chunk_seq_len, ttnn.TILE_SIZE)
+            if padded_chunk_seq_len != chunk_seq_len:
+                v_chunk = ttnn.pad(
+                    v_chunk,
+                    padding=((0, 0), (0, padded_chunk_seq_len - chunk_seq_len), (0, 0), (0, 0)),
+                    value=0.0,
+                )
+            v_chunk = ttnn.reshape(v_chunk, (1, 1, padded_chunk_seq_len, num_heads * v_head_dim))
+            wo_chunk_program_config = build_prefill_matmul_program_config(
+                padded_chunk_seq_len,
+                k=num_heads * v_head_dim,
+                n=dim,
+                mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
+            )
+            out_chunk = ttnn.linear(v_chunk, **cfg["wo"], program_config=wo_chunk_program_config)
+            ttnn.deallocate(v_chunk)
+            if padded_chunk_seq_len != chunk_seq_len:
+                trimmed_out_chunk = ttnn.slice(out_chunk, (0, 0, 0, 0), (1, 1, chunk_seq_len, dim))
+                ttnn.deallocate(out_chunk)
+                out_chunk = trimmed_out_chunk
+            ttnn.experimental.slice_write(out_chunk, out, [0, 0, start, 0], [1, 1, end, dim], [1, 1, 1, 1])
+            ttnn.deallocate(out_chunk)
+
+        ttnn.deallocate(attn_out)
+        return out
+
+    @classmethod
+    def _fwd_prefill_output_from_q_and_kvpe_chunked(
+        cls,
+        tt_q: ttnn.Tensor,
+        kvpe_cache: ttnn.Tensor,
+        cfg: RunPrefillConfig,
+        rope_tensors: dict,
+        page_table: ttnn.Tensor,
+        ccl: CCL,
+        seq_len: int,
+        dim: int,
+        num_heads: int,
+        num_heads_local: int,
+        q_lora_rank: int,
+        kv_lora_rank: int,
+        qk_nope_head_dim: int,
+        qk_rope_head_dim: int,
+        qk_head_dim: int,
+        v_head_dim: int,
+        chunk_start_idx: int = 0,
+        mesh_coords: set | None = None,
+    ) -> ttnn.Tensor:
+        # Q path: norm + wq_b (interleaved in0 + DRAM WIDTH sharded in1)
+        tt_q = RMSNorm.forward_prefill(tt_q, cfg["q_norm"])
+        wq_b_program_config = build_prefill_matmul_program_config(
+            seq_len,
+            k=q_lora_rank,
+            n=num_heads_local * qk_head_dim,
+            mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
+        )
+        tt_q = ttnn.linear(tt_q, **cfg["wq_b"], program_config=wq_b_program_config)
+
+        tt_q = ttnn.reshape(tt_q, (1, seq_len, num_heads_local, qk_head_dim))
+        tt_q = ttnn.permute(tt_q, (0, 2, 1, 3))
+
+        tt_q_nope = ttnn.slice(tt_q, [0, 0, 0, 0], [1, num_heads_local, seq_len, qk_nope_head_dim])
+        tt_q_rope = ttnn.slice(tt_q, [0, 0, 0, qk_nope_head_dim], [1, num_heads_local, seq_len, qk_head_dim])
+        ttnn.deallocate(tt_q)
+
+        num_heads_local_padded = pad_batch_to_dram_banks(num_heads_local)
+        wkv_b1_program_config = build_prefill_matmul_program_config(
+            seq_len,
+            k=qk_nope_head_dim,
+            n=kv_lora_rank,
+            batch=num_heads_local_padded,
+            mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
+        )
+        tt_q_nope = ttnn.linear(
+            tt_q_nope, **cfg["wkv_b1"], program_config=wkv_b1_program_config
+        )  # [1, num_heads_local_padded, seq_len, kv_lora_rank]
+
+        tt_q_rope = ttnn.experimental.rotary_embedding_llama(
+            tt_q_rope,
+            rope_tensors["cos_matrix"],
+            rope_tensors["sin_matrix"],
+            rope_tensors["trans_matrix"],
+            is_decode_mode=False,
+        )
+
+        tt_q = ttnn.concat([tt_q_nope, tt_q_rope], dim=-1)
+        ttnn.deallocate(tt_q_nope)
+        ttnn.deallocate(tt_q_rope)
+
+        # Replicate the heads-sharded tt_q across cluster_axis=1 so the device
+        # at the target mesh coord holds the full [1, num_heads, seq_len, qk_head_dim].
+        tt_q_full = ttnn.experimental.all_gather_async(
+            tt_q, **ccl.populate_all_gather_runtime_args(cfg["wkv_b2_ag_prefill"])
+        )
+        ttnn.deallocate(tt_q)
+        tt_q = tt_q_full
+
+        attn_out = ttnn.transformer.chunked_flash_mla_prefill(
+            tt_q,
+            kvpe_cache,
+            cfg["flash_mla"]["head_dim_v"],
+            page_table,
+            chunk_start_idx,
+            scale=cfg["flash_mla"]["scale"],
+            program_config=cfg["flash_mla"]["program_config"],
+            compute_kernel_config=cfg["flash_mla"]["compute_kernel_config"],
+            memory_config=cfg["flash_mla"]["memory_config"],
+        )  # [1, num_heads, seq_len, kv_lora_rank], valid only on mesh_coords device
+        ttnn.deallocate(tt_q)
+
+        # Per-device scalar mask: 1 on sender_coord, 0 elsewhere. After multiply,
+        # only the sender holds non-zero attn_out; every other device contributes 0
+        # to the subsequent reductions.
+        sender_coord = next(iter(mesh_coords))
+        mesh_shape_tup = tuple(cfg[MESH_DEVICE_STATE_DICT_KEY].shape)
+        mask_torch = torch.zeros(1, 1, mesh_shape_tup[0], mesh_shape_tup[1])
+        mask_torch[0, 0, int(sender_coord[0]), int(sender_coord[1])] = 1.0
+        mask = ttnn.from_torch(
+            mask_torch,
+            dtype=attn_out.dtype,
+            device=cfg[MESH_DEVICE_STATE_DICT_KEY],
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=cfg["flash_mla"]["memory_config"],
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                cfg[MESH_DEVICE_STATE_DICT_KEY], dims=(-2, -1), mesh_shape=mesh_shape_tup
+            ),
+        )
+
+        attn_out_masked = ttnn.multiply(attn_out, mask)
+        ttnn.deallocate(attn_out)
+        ttnn.deallocate(mask)
+
+        # Broadcast attn_out only across columns of sender's row (cluster_axis=1).
+        # wkv_b2 weights are replicated across cluster_axis=1, but wo weights are
+        # column-sharded along the output dim — every column needs the full attn_out
+        # to compute its own wo slice. After this all_reduce: sender's row has the
+        # valid full attn_out replicated across columns; other rows still hold zeros
+        # and will produce zero wo output (broadcast across rows happens later on
+        # the much smaller wo output).
+        attn_out = ttnn.all_reduce(
+            attn_out_masked,
+            cluster_axis=1,
+            memory_config=cfg["flash_mla"]["memory_config"],
+        )
+        ttnn.deallocate(attn_out_masked)
+
+        num_heads_padded = pad_batch_to_dram_banks(num_heads)
+
+        def _run_wkv_b2_prefill_matmul(v_out_chunk_ag: ttnn.Tensor, chunk_seq_len: int) -> ttnn.Tensor:
+            padded_chunk_seq_len = nearest_y(chunk_seq_len, ttnn.TILE_SIZE)
+            v_out_chunk_input = v_out_chunk_ag
+            if padded_chunk_seq_len != chunk_seq_len:
+                v_out_chunk_input = ttnn.pad(
+                    v_out_chunk_ag,
+                    padding=((0, 0), (0, 0), (0, padded_chunk_seq_len - chunk_seq_len), (0, 0)),
+                    value=0.0,
+                )
+
+            wkv_b2_program_config = build_prefill_matmul_program_config(
+                padded_chunk_seq_len,
+                k=kv_lora_rank,
+                n=v_head_dim,
+                batch=num_heads_padded,
+                mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
+            )
+            v_out_chunk = ttnn.linear(v_out_chunk_input, **cfg["wkv_b2"], program_config=wkv_b2_program_config)
+
+            if v_out_chunk_input is not v_out_chunk_ag:
+                ttnn.deallocate(v_out_chunk_input)
+                trimmed_v_out_chunk = ttnn.slice(
+                    v_out_chunk,
+                    (0, 0, 0, 0),
+                    (1, v_out_chunk.shape[1], chunk_seq_len, v_head_dim),
+                )
+                ttnn.deallocate(v_out_chunk)
+                v_out_chunk = trimmed_v_out_chunk
+
+            return v_out_chunk
+
+        WKV_B2_AG_SEQ_CHUNK_SIZE = cfg["wkv_b2_chunk"]
+
+        out = ttnn.allocate_tensor_on_device(
+            shape=(1, 1, seq_len, dim),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        for start in range(0, seq_len, WKV_B2_AG_SEQ_CHUNK_SIZE):
+            end = min(start + WKV_B2_AG_SEQ_CHUNK_SIZE, seq_len)
+            chunk_seq_len = end - start
+            # attn_out is full-heads on sender's row; other rows hold zeros. Slice
+            # on seq directly — no per-chunk all_gather needed.
+            attn_out_chunk = ttnn.slice(
+                attn_out,
+                (0, 0, start, 0),
+                (1, num_heads, end, kv_lora_rank),
+            )
+
+            v_chunk = _run_wkv_b2_prefill_matmul(attn_out_chunk, chunk_seq_len)
+            ttnn.deallocate(attn_out_chunk, force=False)
+
+            v_chunk = ttnn.permute(v_chunk, (0, 2, 1, 3))
+
+            padded_chunk_seq_len = nearest_y(chunk_seq_len, ttnn.TILE_SIZE)
+            if padded_chunk_seq_len != chunk_seq_len:
+                v_chunk = ttnn.pad(
+                    v_chunk,
+                    padding=((0, 0), (0, padded_chunk_seq_len - chunk_seq_len), (0, 0), (0, 0)),
+                    value=0.0,
+                )
+            v_chunk = ttnn.reshape(v_chunk, (1, 1, padded_chunk_seq_len, num_heads * v_head_dim))
+            wo_chunk_program_config = build_prefill_matmul_program_config(
+                padded_chunk_seq_len,
+                k=num_heads * v_head_dim,
+                n=dim,
+                mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
+            )
+            out_chunk = ttnn.linear(v_chunk, **cfg["wo"], program_config=wo_chunk_program_config)
+            ttnn.deallocate(v_chunk)
+            if padded_chunk_seq_len != chunk_seq_len:
+                trimmed_out_chunk = ttnn.slice(out_chunk, (0, 0, 0, 0), (1, 1, chunk_seq_len, dim))
+                ttnn.deallocate(out_chunk)
+                out_chunk = trimmed_out_chunk
+
+            # Sender's row holds the valid column-sharded out_chunk; other rows
+            # produced zeros (zero attn_out → zero wo output). all_reduce across
+            # cluster_axis=0 broadcasts sender's row to every row on the much
+            # smaller wo output (chunk_seq * dim/mesh_shape[1]).
+            out_chunk_full = ttnn.all_reduce(
+                out_chunk,
+                cluster_axis=0,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(out_chunk)
+
+            ttnn.experimental.slice_write(out_chunk_full, out, [0, 0, start, 0], [1, 1, end, dim], [1, 1, 1, 1])
+            ttnn.deallocate(out_chunk_full)
+
+        ttnn.deallocate(attn_out)
+
+        return out
+
+    @classmethod
     def forward_prefill(
         cls,
         x: ttnn.Tensor,
@@ -1612,8 +1982,9 @@ class MLA1D(AbstractModule):
         cfg: RunPrefillConfig,
         rope_tensors: dict,
         page_table: ttnn.Tensor,
+        chunk_start_idx: int = 0,
     ) -> ttnn.Tensor:
-        """Forward pass of MLA in prefill mode.
+        """Forward pass of MLA in prefill mode with chunked seq_len processing.
 
         Args:
             x: Input tensor
@@ -1626,7 +1997,14 @@ class MLA1D(AbstractModule):
         Returns:
             Output tensor after MLP computation
         """
+        chunk_size = cfg["mla_chunk"]
         mesh_shape = cfg["mesh_shape"]
+
+        if x.shape[2] > chunk_size and cfg["batch_size_per_row"] != 8:
+            raise ValueError(
+                f"MLA chunking (seq_len={x.shape[2]} > mla_chunk={chunk_size}) is only supported "
+                f"for 8 users per row, got batch_size_per_row={cfg['batch_size_per_row']}"
+            )
 
         sdpa_dp_factor = mla_tp_factor = mesh_shape[1]
 
@@ -1641,196 +2019,208 @@ class MLA1D(AbstractModule):
 
         kvpe_cache = cfg["kvpe_cache"]
         ccl = cfg["ccl"]
-
-        seq_len = x.shape[2]
-
-        # Fused Linear + AR: wq_kv_a (wq_a + wkv_a)
-
-        tt_q, tt_kv_nope, tt_kv_rope = cls._fwd_prefill_wq_kv_a(
-            x,
-            cfg,
-            ccl,
-            seq_len,
-            q_lora_rank,
-            kv_lora_rank,
-            qk_rope_head_dim,
-        )
-
-        # Q path: norm + wq_b (interleaved in0 + DRAM WIDTH sharded in1)
-        tt_q = RMSNorm.forward_prefill(tt_q, cfg["q_norm"])
-        wq_b_program_config = build_prefill_matmul_program_config(
-            seq_len, k=q_lora_rank, n=num_heads_local * qk_head_dim, mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY]
-        )
-        tt_q = ttnn.linear(tt_q, **cfg["wq_b"], program_config=wq_b_program_config)
-
-        tt_q = ttnn.reshape(tt_q, (1, seq_len, num_heads_local, qk_head_dim))
-        tt_q = ttnn.permute(tt_q, (0, 2, 1, 3))  # [1, num_heads_local, seq_len, qk_head_dim]
-
-        tt_q_nope = ttnn.slice(tt_q, [0, 0, 0, 0], [1, num_heads_local, seq_len, qk_nope_head_dim])
-        tt_q_rope = ttnn.slice(tt_q, [0, 0, 0, qk_nope_head_dim], [1, num_heads_local, seq_len, qk_head_dim])
-        ttnn.deallocate(tt_q)
-
-        # wkv_b1 (interleaved in0 + DRAM HEIGHT sharded in1)
-        # Pad batch dimension to match DRAM sharded weight layout
-        num_heads_local_padded = pad_batch_to_dram_banks(num_heads_local)
-
-        wkv_b1_program_config = build_prefill_matmul_program_config(
-            seq_len,
-            k=qk_nope_head_dim,
-            n=kv_lora_rank,
-            batch=num_heads_local_padded,
-            mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
-        )
-        tt_q_nope = ttnn.linear(
-            tt_q_nope, **cfg["wkv_b1"], program_config=wkv_b1_program_config
-        )  # [1, num_heads_local_padded, seq_len, kv_lora_rank]
-
-        # Q RoPE
-        tt_q_rope = ttnn.experimental.rotary_embedding_llama(
-            tt_q_rope,
-            rope_tensors["cos_matrix"],
-            rope_tensors["sin_matrix"],
-            rope_tensors["trans_matrix"],
-            is_decode_mode=False,
-        )
-
-        # Q ready for FlashMLA
-        tt_q = ttnn.concat([tt_q_nope, tt_q_rope], dim=-1)
-
-        # KV Norm
-        tt_kv_nope = RMSNorm.forward_prefill(tt_kv_nope, cfg["kv_norm"])
-
-        # KV RoPE
-        tt_kv_rope = ttnn.experimental.rotary_embedding_llama(
-            tt_kv_rope,
-            rope_tensors["cos_matrix"],
-            rope_tensors["sin_matrix"],
-            rope_tensors["trans_matrix"],
-            is_decode_mode=False,
-        )
-
-        tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], dim=-1)
-
-        ttnn.deallocate(tt_kv_nope)
-        ttnn.deallocate(tt_kv_rope)
-
-        tt_kvpe_fp16 = tt_kvpe
-        tt_kvpe = ttnn.typecast(tt_kvpe_fp16, dtype=kvpe_cache.dtype)
-        ttnn.deallocate(tt_kvpe_fp16)
-
-        # Update KVPE Cache
-        batch_size_per_dp_shard = even_int_div(USERS_PER_ROW, sdpa_dp_factor)
-        local_batch_idx = batch_idx % batch_size_per_dp_shard  # Local batch index within the DP shard
-        col_idx = batch_idx // batch_size_per_dp_shard  # Which DP shard the batch belongs to
-        if _deepseek_kvdbg_enabled():
-            cls._debug_prefill_page_table(
-                page_table=page_table,
-                local_batch_idx=local_batch_idx,
-                global_batch_idx=batch_idx,
-                row_idx=row_idx,
-                col_idx=col_idx,
-                block_size=kvpe_cache.shape[2],
-                max_blocks=kvpe_cache.shape[0],
-                mesh_device=cfg.get("mesh_device", None),
-            )
-
-        ttnn.experimental.paged_fill_cache(
-            kvpe_cache,
-            tt_kvpe,
-            page_table=page_table,
-            batch_idx=local_batch_idx,
-            mesh_coords=set(get_mesh_coords(mesh_shape, row_idx, col_idx)),
-        )
-
-        # FlashMLA
-        attn_out = ttnn.transformer.flash_mla_prefill(
-            tt_q,
-            tt_kvpe,
-            **cfg["flash_mla"],
-        )  # [1, num_heads_local, seq_len, kv_lora_rank]
-        ttnn.deallocate(tt_q)
-        ttnn.deallocate(tt_kvpe)
-
-        # DP wkv_b2 to match decode weights
-        v_out = ttnn.experimental.all_gather_async(
-            attn_out, **ccl.populate_all_gather_runtime_args(cfg["wkv_b2_ag_prefill"])
-        )  # [1, num_heads, seq_len, v_head_dim] # wkv_b2_ag_prefill
-
-        # wkv_b2 (interleaved in0 + DRAM HEIGHT sharded in1)
-        # Pad batch dimension to match DRAM sharded weight layout
-        num_heads_padded = pad_batch_to_dram_banks(num_heads)
-
-        wkv_b2_program_config = build_prefill_matmul_program_config(
-            seq_len,
-            k=kv_lora_rank,
-            n=v_head_dim,
-            batch=num_heads_padded,
-            mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
-        )
-        v_out = ttnn.linear(
-            v_out, **cfg["wkv_b2"], program_config=wkv_b2_program_config
-        )  # [1, num_heads_padded, seq_len, v_head_dim]
-        ttnn.deallocate(attn_out)
-
-        # Slice off batch padding from wkv_b2 output
-
-        # Permute BEFORE all_gather to avoid large tensor permute at 32K+ seq_len
-        v_out = ttnn.permute(v_out, (0, 2, 1, 3))  # [1, seq_len, num_heads_local, v_head_dim]
-
-        # wo matmul (interleaved in0 + DRAM WIDTH sharded in1)
-        # Chunk the sequence dimension if needed to avoid OOM/hang in all_gather for large sequences
-        # Strategy: Process each chunk independently to keep all_gather buffers small
-        wo_k = num_heads * v_head_dim
+        device = x.device()
         dim = x.shape[3]
 
-        SEQ_LEN_CHUNK_SIZE = 8192
-        if seq_len > SEQ_LEN_CHUNK_SIZE:
-            num_heads = v_out.shape[2]
-            v_head_dim = v_out.shape[3]
-            # Use ceiling division instead of even_int_div to handle non-multiples of 8192
-            num_chunks = (seq_len + SEQ_LEN_CHUNK_SIZE - 1) // SEQ_LEN_CHUNK_SIZE
+        seq_len = x.shape[2]
+        batch_size = x.shape[1]
+        row_batched_prefill = batch_size > 1
+        if row_batched_prefill:
+            expected_batch_size = cfg["batch_size_per_row"]
+            assert (
+                batch_size == expected_batch_size
+            ), f"Row-batched MLA prefill expects a full row batch of {expected_batch_size}, got {batch_size}"
+            assert row_idx is not None, "Row-batched MLA prefill requires a concrete row_idx"
 
-            # Pad seq_len to be a multiple of SEQ_LEN_CHUNK_SIZE if needed
-            padded_seq_len = num_chunks * SEQ_LEN_CHUNK_SIZE
-            if seq_len != padded_seq_len:
-                # Pad the sequence dimension (dim=1)
-                v_out = ttnn.pad(v_out, padding=((0, 0), (0, padded_seq_len - seq_len), (0, 0), (0, 0)), value=0.0)
+        # Process in chunks by seq_len
+        out = ttnn.allocate_tensor_on_device(
+            shape=(1, batch_size, seq_len, dim),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
-            wo_chunk_program_config = build_prefill_matmul_program_config(
-                SEQ_LEN_CHUNK_SIZE, k=wo_k, n=dim, mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY]
+        cos_dim = rope_tensors["cos_matrix"].shape[3]
+        sin_dim = rope_tensors["sin_matrix"].shape[3]
+
+        for chunk_start in range(0, seq_len, chunk_size):
+            chunk_end = min(chunk_start + chunk_size, seq_len)
+            chunk_seq_len = chunk_end - chunk_start
+            abs_chunk_start = chunk_start_idx + chunk_start
+            abs_chunk_end = chunk_start_idx + chunk_end
+            do_chunked = abs_chunk_start > 0
+
+            # Slice input chunk
+            x_chunk = ttnn.slice(x, [0, 0, chunk_start, 0], [1, batch_size, chunk_end, dim])
+
+            # Slice rope matrices to this sub-chunk's absolute position range
+            # [chunk_start, chunk_end) so RoPE encodes the correct positions.
+            rope_chunk = {
+                "cos_matrix": ttnn.slice(
+                    rope_tensors["cos_matrix"], [0, 0, abs_chunk_start, 0], [1, 1, abs_chunk_end, cos_dim]
+                ),
+                "sin_matrix": ttnn.slice(
+                    rope_tensors["sin_matrix"], [0, 0, abs_chunk_start, 0], [1, 1, abs_chunk_end, sin_dim]
+                ),
+                "trans_matrix": rope_tensors["trans_matrix"],
+            }
+
+            # Fused Linear + AR: wq_kv_a (wq_a + wkv_a)
+            tt_q_chunk, tt_kv_nope_chunk, tt_kv_rope_chunk = cls._fwd_prefill_wq_kv_a(
+                x_chunk,
+                cfg,
+                ccl,
+                chunk_seq_len,
+                q_lora_rank,
+                kv_lora_rank,
+                qk_rope_head_dim,
             )
 
-            output_chunks = []
-            hidden_dim = num_heads * v_head_dim
-            for chunk_idx in range(num_chunks):
-                start = chunk_idx * SEQ_LEN_CHUNK_SIZE
-                end = start + SEQ_LEN_CHUNK_SIZE
-                v_chunk = ttnn.slice(v_out, (0, start, 0, 0), (1, end, num_heads, v_head_dim))
-                v_chunk = ttnn.reshape(v_chunk, (1, 1, SEQ_LEN_CHUNK_SIZE, hidden_dim))
-                out_chunk = ttnn.linear(
-                    v_chunk, **cfg["wo"], program_config=wo_chunk_program_config
-                )  # [1, 1, chunk_size, dim]
-                output_chunks.append(out_chunk)
-                ttnn.deallocate(v_chunk)
+            # KV Norm
+            tt_kv_nope_chunk = RMSNorm.forward_prefill(tt_kv_nope_chunk, cfg["kv_norm"])
 
-            ttnn.deallocate(v_out)
-
-            out = ttnn.concat(output_chunks, dim=2)
-            output_dim = out.shape[3]
-            for chunk in output_chunks:
-                ttnn.deallocate(chunk)
-
-            # Trim padding if we added any
-            if seq_len != padded_seq_len:
-                out = ttnn.slice(out, (0, 0, 0, 0), (1, 1, seq_len, output_dim))
-        else:
-            # For non-chunked case: [1, seq_len, num_heads, v_head_dim] -> [1, 1, seq_len, hidden_dim]
-            v_out = ttnn.reshape(v_out, (1, 1, seq_len, num_heads * v_head_dim))
-            wo_program_config = build_prefill_matmul_program_config(
-                seq_len, k=wo_k, n=dim, mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY]
+            # KV RoPE
+            tt_kv_rope_chunk = ttnn.experimental.rotary_embedding_llama(
+                tt_kv_rope_chunk,
+                rope_chunk["cos_matrix"],
+                rope_chunk["sin_matrix"],
+                rope_tensors["trans_matrix"],
+                is_decode_mode=False,
             )
-            out = ttnn.linear(v_out, **cfg["wo"], program_config=wo_program_config)  # [1, 1, seq_len, dim]
-            ttnn.deallocate(v_out)
+
+            tt_kvpe_chunk = ttnn.concat([tt_kv_nope_chunk, tt_kv_rope_chunk], dim=-1)
+
+            ttnn.deallocate(tt_kv_nope_chunk)
+            ttnn.deallocate(tt_kv_rope_chunk)
+
+            tt_kvpe_chunk = ttnn.typecast(tt_kvpe_chunk, dtype=kvpe_cache.dtype)
+
+            block_size = int(kvpe_cache.shape[2])
+            chunk_start_block = abs_chunk_start // block_size
+            chunk_end_block = abs_chunk_end // block_size
+            chunk_page_table = ttnn.slice(
+                page_table,
+                [0, chunk_start_block],
+                [page_table.shape[0], chunk_end_block],
+            )
+
+            # Update KVPE Cache for this chunk
+            batch_size_per_dp_shard = even_int_div(cfg["batch_size_per_row"], sdpa_dp_factor)
+            local_batch_idx = batch_idx % batch_size_per_dp_shard
+            col_idx = batch_idx // batch_size_per_dp_shard
+            if _deepseek_kvdbg_enabled() and not row_batched_prefill:
+                cls._debug_prefill_page_table(
+                    page_table=chunk_page_table,
+                    local_batch_idx=local_batch_idx,
+                    global_batch_idx=batch_idx,
+                    row_idx=row_idx,
+                    col_idx=col_idx,
+                    block_size=kvpe_cache.shape[2],
+                    max_blocks=kvpe_cache.shape[0],
+                    mesh_device=cfg["mesh_device"],
+                )
+
+            if row_batched_prefill:
+                for dp_col_idx in range(sdpa_dp_factor):  # 0..7
+                    batch_start_idx = dp_col_idx * batch_size_per_dp_shard  # 0, 4, 8, ...
+                    mesh_coords = set(get_mesh_coords(mesh_shape, row_idx, dp_col_idx))
+                    for local_user_idx in range(batch_size_per_dp_shard):  # 0..4
+                        user_batch_idx = batch_start_idx + local_user_idx
+                        tt_kvpe_user = ttnn.slice(
+                            tt_kvpe_chunk,
+                            [0, user_batch_idx, 0, 0],
+                            [1, user_batch_idx + 1, chunk_seq_len, kv_lora_rank + qk_rope_head_dim],
+                        )
+                        ttnn.experimental.paged_fill_cache(
+                            kvpe_cache,
+                            tt_kvpe_user,
+                            page_table=chunk_page_table,
+                            batch_idx=local_user_idx,
+                            mesh_coords=mesh_coords,
+                        )
+            else:
+                ttnn.experimental.paged_fill_cache(
+                    kvpe_cache,
+                    tt_kvpe_chunk,
+                    page_table=chunk_page_table,
+                    batch_idx=local_batch_idx,
+                    mesh_coords=set(get_mesh_coords(mesh_shape, row_idx, col_idx)),
+                )
+            if do_chunked:
+                ttnn.deallocate(tt_kvpe_chunk)
+            ttnn.deallocate(chunk_page_table, force=False)
+
+            # Compute output for this chunk
+            for user_batch_idx in range(batch_size):
+                tt_q_user = ttnn.slice(
+                    tt_q_chunk, [0, user_batch_idx, 0, 0], [1, user_batch_idx + 1, chunk_seq_len, tt_q_chunk.shape[3]]
+                )
+
+                if do_chunked:
+                    user_page_table = ttnn.slice(
+                        page_table,
+                        [user_batch_idx, 0],
+                        [user_batch_idx + 1, chunk_end_block],
+                    )
+                    batch_out = cls._fwd_prefill_output_from_q_and_kvpe_chunked(
+                        tt_q_user,
+                        kvpe_cache,
+                        cfg,
+                        rope_chunk,
+                        user_page_table,
+                        ccl,
+                        chunk_seq_len,
+                        dim,
+                        num_heads,
+                        num_heads_local,
+                        q_lora_rank,
+                        kv_lora_rank,
+                        qk_nope_head_dim,
+                        qk_rope_head_dim,
+                        qk_head_dim,
+                        v_head_dim,
+                        chunk_start_idx=abs_chunk_start,
+                        mesh_coords=set(get_mesh_coords(mesh_shape, row_idx, col_idx)),
+                    )
+                    ttnn.deallocate(user_page_table, force=False)
+                else:
+                    tt_kvpe_user = ttnn.slice(
+                        tt_kvpe_chunk,
+                        [0, user_batch_idx, 0, 0],
+                        [1, user_batch_idx + 1, chunk_seq_len, kv_lora_rank + qk_rope_head_dim],
+                    )
+                    batch_out = cls._fwd_prefill_output_from_q_and_kvpe(
+                        tt_q_user,
+                        tt_kvpe_user,
+                        cfg,
+                        rope_chunk,
+                        ccl,
+                        chunk_seq_len,
+                        dim,
+                        num_heads,
+                        num_heads_local,
+                        q_lora_rank,
+                        kv_lora_rank,
+                        qk_nope_head_dim,
+                        qk_rope_head_dim,
+                        qk_head_dim,
+                        v_head_dim,
+                    )
+
+                ttnn.experimental.slice_write(
+                    batch_out,
+                    out,
+                    [0, user_batch_idx, chunk_start, 0],
+                    [1, user_batch_idx + 1, chunk_end, dim],
+                    [1, 1, 1, 1],
+                )
+                ttnn.deallocate(batch_out)
+            if not do_chunked:
+                ttnn.deallocate(tt_kvpe_chunk)
+            ttnn.deallocate(tt_q_chunk)
+            ttnn.deallocate(rope_chunk["cos_matrix"], force=False)
+            ttnn.deallocate(rope_chunk["sin_matrix"], force=False)
 
         return out
 
@@ -1846,6 +2236,13 @@ class MLA1D(AbstractModule):
         qk_rope_head_dim: int,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         # Shard in0 to L1 WIDTH sharded for qkv_a matmul
+        x_shard_shape = list(x.shape)
+        x_shard_shape[-2] = ttnn.core.roundup(x_shard_shape[-2], ttnn.TILE_SIZE)
+        in0_memory_config = ttnn.create_sharded_memory_config(
+            x_shard_shape,
+            **cfg["wq_kv_a_in0_memory_config"],
+        )
+        x = ttnn.to_memory_config(x, memory_config=in0_memory_config)
 
         # Fused wq_kv_a matmul
         # 1,1,32,896, width sharded 7x4 [32,32]
@@ -1884,19 +2281,21 @@ class MLA1D(AbstractModule):
         cfg: RunDecodeConfig,
         rope_tensors: dict,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        # Parallel Q and KV Norms
-        # Q: 1,1,32,1536, width sharded 8x2 [32,96]
-        # KV: 1,1,32,512 8x2 [32,32]
-        q_norm_desc = descriptors.rms_norm(tt_q, program_config=RMSNorm._get_pc(tt_q.memory_config()), **cfg["q_norm"])
-        kv_norm_desc = descriptors.rms_norm(
-            tt_kv_nope, program_config=RMSNorm._get_pc(tt_kv_nope.memory_config()), **cfg["kv_norm"]
-        )
-        # Temporary workaround for https://github.com/tenstorrent/tt-metal/issues/40275:
-        # avoid the fusion cache/rebind path here until
-        # Parallel(...).build().launch() is fixed for this decode flow.
-        results = _launch_merged_descriptors([q_norm_desc, kv_norm_desc])
-        tt_q = results[0][0]
-        tt_kv_nope = results[1][0]
+        # Parallel Q and KV Norms — persistent Parallel (reuse OpDescriptors + update).
+        # Q: 1,1,32,1536, width sharded 4x4 [32,96]
+        # KV: 1,1,32,512, width sharded 2x8 [32,32]
+        fused = cfg.get("fused_qkv_norm")
+        if fused is None:
+            q_pc = RMSNorm._get_pc(tt_q.memory_config())
+            kv_pc = RMSNorm._get_pc(tt_kv_nope.memory_config())
+            fused = Parallel(
+                q=descriptors.rms_norm(program_config=q_pc, **cfg["q_norm"]),
+                kv=descriptors.rms_norm(program_config=kv_pc, **cfg["kv_norm"]),
+            )
+            cfg["fused_qkv_norm"] = fused
+        fused.q.update(tt_q)
+        fused.kv.update(tt_kv_nope)
+        tt_q, tt_kv_nope = fused.run()
         # Q: 1,1,32,1536, width sharded 8x2 [32,96]
 
         # KV RoPE
@@ -2040,9 +2439,18 @@ class MLA1D(AbstractModule):
         qk_head_dim: int,
         qk_nope_head_dim: int,
     ) -> ttnn.Tensor:
+        pad_rows = 0
+        padded_bsz = bsz
+        if tt_q.shape[-2] < ttnn.TILE_SIZE:
+            pad_rows = ttnn.TILE_SIZE - tt_q.shape[-2]
+            padded_bsz = tt_q.shape[-2] + pad_rows
+            tt_q = ttnn.pad(tt_q, padding=((0, 0), (0, 0), (0, pad_rows), (0, 0)), value=0.0)
+
         # Shard in0 to L1 WIDTH sharded for wq_b matmul
+        tt_q_shard_shape = list(tt_q.shape)
+        tt_q_shard_shape[-2] = ttnn.core.roundup(tt_q_shard_shape[-2], ttnn.TILE_SIZE)
         wq_b_in0_memory_config = ttnn.create_sharded_memory_config(
-            tt_q.shape,
+            tt_q_shard_shape,
             **cfg["wq_b_in0_memory_config"],
         )
         tt_q = ttnn.to_memory_config(tt_q, memory_config=wq_b_in0_memory_config)
@@ -2062,7 +2470,7 @@ class MLA1D(AbstractModule):
                 ),
             ),
         )
-        tt_q = ttnn.experimental.view(tt_q, (1, bsz, num_heads_local, qk_head_dim))
+        tt_q = ttnn.experimental.view(tt_q, (1, padded_bsz, num_heads_local, qk_head_dim))
         tt_q = ttnn.to_memory_config(tt_q, memory_config=ttnn.L1_MEMORY_CONFIG)
         tt_q = ttnn.tilize_with_zero_padding(tt_q)
 
@@ -2072,6 +2480,7 @@ class MLA1D(AbstractModule):
         tt_q_rope = ttnn.slice(
             tt_q, [0, 0, 0, qk_nope_head_dim], [1, bsz, num_heads_local, qk_head_dim], **cfg["q_rope_slice"]
         )
+        ttnn.deallocate(tt_q)
 
         # Q Nope: wkv_b1
         # 1,32,16,192 L1 interleaved
@@ -2101,6 +2510,8 @@ class MLA1D(AbstractModule):
         # Concat Q Nope and Q Rope
         # 1,32,16,512 L1 interleaved | # 1,32,16,64 L1 interleaved
         tt_q = ttnn.concat([tt_q_nope, tt_q_rope], **cfg["q_concat"])
+        ttnn.deallocate(tt_q_nope)
+        ttnn.deallocate(tt_q_rope)
         # 1,32,16,576 L1 interleaved
         return tt_q
 
@@ -2139,6 +2550,7 @@ class MLA1D(AbstractModule):
             attn_out, 1, 2, memory_config=cfg["wkv_b2_in0_memory_config"]
         )  # [1, num_heads, bsz, kv_lora_rank]
         v_out = ttnn.linear(attn_out, **cfg["wkv_b2"])  # [1, num_heads_padded, bsz, v_head_dim]
+        ttnn.deallocate(attn_out)
 
         # Slice off padding from wkv_b2 output
 
@@ -2175,19 +2587,25 @@ class MLA1D(AbstractModule):
         v_out = ttnn.untilize(v_out)
         v_out = ttnn.experimental.view(v_out, (1, 1, bsz // mesh_shape[1], num_heads * v_head_dim))
         # All_gather
-        wo_in0_memory_config = ttnn.create_sharded_memory_config(
-            (1, 1, bsz, num_heads * v_head_dim),
-            **cfg["wo_in0_memory_config"],
-        )
+        v_out = ttnn.to_memory_config(v_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         v_out = ttnn.experimental.all_gather_async(v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_decode"]))
-        v_out = ttnn.tilize(v_out)
-        v_out = ttnn.to_memory_config(v_out, memory_config=wo_in0_memory_config)
+        # Decode batch sizes smaller than a tile still need a tiled tensor for `wo`.
+        v_out = ttnn.tilize_with_zero_padding(v_out)
         # 1,1,32,16384 WIDTH sharded 2x8 [32,1024]
 
         return v_out
 
     @classmethod
     def _fwd_decode_wo(cls, v_out: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
+        # 1,1,32,16384 L1 interleaved
+        # Shard in0 to L1 WIDTH sharded for wo matmul
+        v_out_shard_shape = list(v_out.shape)
+        v_out_shard_shape[-2] = ttnn.core.roundup(v_out_shard_shape[-2], ttnn.TILE_SIZE)
+        wo_in0_memory_config = ttnn.create_sharded_memory_config(
+            v_out_shard_shape,
+            **cfg["wo_in0_memory_config"],
+        )
+        v_out = ttnn.to_memory_config(v_out, memory_config=wo_in0_memory_config)
         out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, bsz, dim]
         # 1,1,32,896 WIDTH sharded 2x6 [32,96]
         return out
@@ -2205,27 +2623,72 @@ class MLA1D(AbstractModule):
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         # Fused wq_kv_a matmul (interleaved in0 + DRAM WIDTH sharded in1)
         dim = x.shape[3]
+        batch_size = x.shape[1]
         qkv_a_n = q_lora_rank + kv_lora_rank + qk_rope_head_dim
+
+        tt_q = ttnn.allocate_tensor_on_device(
+            shape=(1, batch_size, seq_len, q_lora_rank),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_device=x.device(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        tt_kv_nope = ttnn.allocate_tensor_on_device(
+            shape=(1, batch_size, seq_len, kv_lora_rank),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_device=x.device(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        tt_kv_rope = ttnn.allocate_tensor_on_device(
+            shape=(1, batch_size, seq_len, qk_rope_head_dim),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_device=x.device(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Row-batched prefill drives the fused Q/KV projection with batch on dim 1.
+        # The program config must account for that batch so fuse_batch stays disabled.
         wq_kv_a_program_config = build_prefill_matmul_program_config(
-            seq_len, k=dim, n=qkv_a_n, mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY]
+            seq_len,
+            k=dim,
+            n=qkv_a_n,
+            batch=batch_size,
+            mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
+            override_compute_grid=ttnn.CoreGrid(
+                x=6, y=6
+            ),  # FIXME: optimize this config for prefill, potential DI_DT hang WORKAROUND. See issue #41501.
         )
         tt_q_kv = ttnn.linear(x, **cfg["wq_kv_a"], program_config=wq_kv_a_program_config)
 
         # AR using AG + local reduce (since sub-tile RS not supported for new shapes)
+        wq_kv_a_ag_args = ccl.populate_all_gather_runtime_args(cfg["wq_kv_a_ag_prefill"])
+        wq_kv_a_reduce_args = dict(cfg["wq_kv_a_r_prefill"])
+        if batch_size > 1:
+            # Keep the user batch intact during TP reduce by borrowing the singleton dim 0 as
+            # the gather/reduce axis; dim 1 already carries the real row batch.
+            wq_kv_a_ag_args = {**wq_kv_a_ag_args, "dim": 0}
+            wq_kv_a_reduce_args = {**wq_kv_a_reduce_args, "dims": [0]}
+
         tt_q_kv = ttnn.experimental.all_gather_async(
-            tt_q_kv, **ccl.populate_all_gather_runtime_args(cfg["wq_kv_a_ag_prefill"])
-        )  # [1, num_devices, seq_len, q_lora_rank + kv_lora_rank + qk_rope_head_dim]
-        tt_q_kv = ttnn.experimental.fast_reduce_nc(
-            tt_q_kv, **cfg["wq_kv_a_r_prefill"]
-        )  # [1, 1, seq_len, q_lora_rank + kv_lora_rank + qk_rope_head_dim]
+            tt_q_kv, **wq_kv_a_ag_args
+        )  # [1, batch, seq_len, q_lora_rank + kv_lora_rank + qk_rope_head_dim]
+        tt_q_kv = ttnn.experimental.fast_reduce_nc(tt_q_kv, **wq_kv_a_reduce_args)
 
         # Slice into three parts: tt_q, tt_kv_nope, tt_kv_rope
-        tt_q = ttnn.slice(tt_q_kv, [0, 0, 0, 0], [1, 1, seq_len, q_lora_rank])
-        tt_kv_nope = ttnn.slice(tt_q_kv, [0, 0, 0, q_lora_rank], [1, 1, seq_len, q_lora_rank + kv_lora_rank])
+        tt_q = ttnn.slice(tt_q_kv, [0, 0, 0, 0], [1, batch_size, seq_len, q_lora_rank], output_tensor=tt_q)
+        tt_kv_nope = ttnn.slice(
+            tt_q_kv,
+            [0, 0, 0, q_lora_rank],
+            [1, batch_size, seq_len, q_lora_rank + kv_lora_rank],
+            output_tensor=tt_kv_nope,
+        )
         tt_kv_rope = ttnn.slice(
             tt_q_kv,
             [0, 0, 0, q_lora_rank + kv_lora_rank],
-            [1, 1, seq_len, q_lora_rank + kv_lora_rank + qk_rope_head_dim],
+            [1, batch_size, seq_len, q_lora_rank + kv_lora_rank + qk_rope_head_dim],
+            output_tensor=tt_kv_rope,
         )
         ttnn.deallocate(tt_q_kv)
         return tt_q, tt_kv_nope, tt_kv_rope

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,11 +9,12 @@ import pytest
 import torch
 import math
 
-
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_pcc,
-)
 from models.common.utility_functions import torch2tt_tensor
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import (
+    ttnn_layer_norm_in_place,
+    ttnn_rms_norm_in_place,
+)
 
 
 def rms_norm(x, dim, gamma, beta, eps):
@@ -149,7 +150,7 @@ def test_layernorm_sharded_mix_precision_rm(
     )
 
     if test_id == 0:
-        ttz = ttnn.layer_norm(
+        ttz = ttnn_layer_norm_in_place(
             in0_t_shard,
             residual_input_tensor=in1_t_shard,
             epsilon=epsf,
@@ -158,7 +159,7 @@ def test_layernorm_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 1:
-        ttz = ttnn.layer_norm(
+        ttz = ttnn_layer_norm_in_place(
             in0_t_shard,
             residual_input_tensor=in1_t_shard,
             epsilon=epsf,
@@ -168,7 +169,7 @@ def test_layernorm_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 2:
-        ttz = ttnn.layer_norm(
+        ttz = ttnn_layer_norm_in_place(
             in0_t_shard,
             residual_input_tensor=in1_t_shard,
             epsilon=epsf,
@@ -179,7 +180,7 @@ def test_layernorm_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 3:
-        ttz = ttnn.rms_norm(
+        ttz = ttnn_rms_norm_in_place(
             in0_t_shard,
             residual_input_tensor=in1_t_shard,
             epsilon=epsf,
@@ -188,7 +189,7 @@ def test_layernorm_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 4:
-        ttz = ttnn.rms_norm(
+        ttz = ttnn_rms_norm_in_place(
             in0_t_shard,
             residual_input_tensor=in1_t_shard,
             epsilon=epsf,
@@ -198,7 +199,7 @@ def test_layernorm_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 5:
-        ttz = ttnn.rms_norm(
+        ttz = ttnn_rms_norm_in_place(
             in0_t_shard,
             residual_input_tensor=in1_t_shard,
             epsilon=epsf,
@@ -209,7 +210,7 @@ def test_layernorm_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 6:
-        ttz = ttnn.layer_norm(
+        ttz = ttnn_layer_norm_in_place(
             in0_t_shard,
             epsilon=epsf,
             memory_config=out_mem_config,
@@ -217,7 +218,7 @@ def test_layernorm_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 7:
-        ttz = ttnn.layer_norm(
+        ttz = ttnn_layer_norm_in_place(
             in0_t_shard,
             epsilon=epsf,
             weight=gamma_t,
@@ -226,7 +227,7 @@ def test_layernorm_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 8:
-        ttz = ttnn.layer_norm(
+        ttz = ttnn_layer_norm_in_place(
             in0_t_shard,
             epsilon=epsf,
             weight=gamma_t,
@@ -236,7 +237,7 @@ def test_layernorm_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 9:
-        ttz = ttnn.rms_norm(
+        ttz = ttnn_rms_norm_in_place(
             in0_t_shard,
             epsilon=epsf,
             memory_config=out_mem_config,
@@ -244,7 +245,7 @@ def test_layernorm_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 10:
-        ttz = ttnn.rms_norm(
+        ttz = ttnn_rms_norm_in_place(
             in0_t_shard,
             epsilon=epsf,
             weight=gamma_t,
@@ -253,7 +254,7 @@ def test_layernorm_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 11:
-        ttz = ttnn.rms_norm(
+        ttz = ttnn_rms_norm_in_place(
             in0_t_shard,
             epsilon=epsf,
             weight=gamma_t,
@@ -273,9 +274,14 @@ def test_layernorm_sharded_mix_precision_rm(
         ref_fn = rms_norm
     ref_lnorm = ref_fn(pt_in, in0.shape[-1:], gamma.flatten(), beta.flatten(), epsf)
 
-    passing, output = comp_pcc(tt_got_back, ref_lnorm, 0.999)
-    logger.info(output)
-    assert passing
+    assert_numeric_metrics(
+        ref_lnorm,
+        tt_got_back,
+        pcc_threshold=0.999,
+        rtol=3.293,
+        atol=0.101,
+        frobenius_threshold=0.030,
+    )
 
 
 @pytest.mark.parametrize(
@@ -422,7 +428,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
     )
 
     if test_id == 0:
-        ttz = ttnn.layer_norm(
+        ttz = ttnn_layer_norm_in_place(
             in0_t_shard,
             residual_input_tensor=in1_t_shard,
             epsilon=epsf,
@@ -431,7 +437,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 1:
-        ttz = ttnn.layer_norm(
+        ttz = ttnn_layer_norm_in_place(
             in0_t_shard,
             residual_input_tensor=in1_t_shard,
             epsilon=epsf,
@@ -441,7 +447,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 2:
-        ttz = ttnn.layer_norm(
+        ttz = ttnn_layer_norm_in_place(
             in0_t_shard,
             residual_input_tensor=in1_t_shard,
             epsilon=epsf,
@@ -452,7 +458,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 3:
-        ttz = ttnn.rms_norm(
+        ttz = ttnn_rms_norm_in_place(
             in0_t_shard,
             residual_input_tensor=in1_t_shard,
             epsilon=epsf,
@@ -461,7 +467,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 4:
-        ttz = ttnn.rms_norm(
+        ttz = ttnn_rms_norm_in_place(
             in0_t_shard,
             residual_input_tensor=in1_t_shard,
             epsilon=epsf,
@@ -471,7 +477,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 5:
-        ttz = ttnn.rms_norm(
+        ttz = ttnn_rms_norm_in_place(
             in0_t_shard,
             residual_input_tensor=in1_t_shard,
             epsilon=epsf,
@@ -482,7 +488,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 6:
-        ttz = ttnn.layer_norm(
+        ttz = ttnn_layer_norm_in_place(
             in0_t_shard,
             epsilon=epsf,
             memory_config=out_mem_config,
@@ -490,7 +496,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 7:
-        ttz = ttnn.layer_norm(
+        ttz = ttnn_layer_norm_in_place(
             in0_t_shard,
             epsilon=epsf,
             weight=gamma_t,
@@ -499,7 +505,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 8:
-        ttz = ttnn.layer_norm(
+        ttz = ttnn_layer_norm_in_place(
             in0_t_shard,
             epsilon=epsf,
             weight=gamma_t,
@@ -509,7 +515,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 9:
-        ttz = ttnn.rms_norm(
+        ttz = ttnn_rms_norm_in_place(
             in0_t_shard,
             epsilon=epsf,
             memory_config=out_mem_config,
@@ -517,7 +523,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 10:
-        ttz = ttnn.rms_norm(
+        ttz = ttnn_rms_norm_in_place(
             in0_t_shard,
             epsilon=epsf,
             weight=gamma_t,
@@ -526,7 +532,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
     if test_id == 11:
-        ttz = ttnn.rms_norm(
+        ttz = ttnn_rms_norm_in_place(
             in0_t_shard,
             epsilon=epsf,
             weight=gamma_t,
@@ -546,6 +552,11 @@ def test_layernorm_1d_sharded_mix_precision_rm(
         ref_fn = rms_norm
     ref_lnorm = ref_fn(pt_in, in0.shape[-1:], gamma.flatten(), beta.flatten(), epsf)
 
-    passing, output = comp_pcc(tt_got_back, ref_lnorm, 0.999)
-    logger.info(output)
-    assert passing
+    assert_numeric_metrics(
+        ref_lnorm,
+        tt_got_back,
+        pcc_threshold=0.999,
+        rtol=3.158,
+        atol=0.087,
+        frobenius_threshold=0.016,
+    )

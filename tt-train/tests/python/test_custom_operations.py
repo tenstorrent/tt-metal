@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -962,6 +962,34 @@ class TestCustomOperationsWithDevice:
 
         # qs should have gradient (q depends on qs)
         assert qs.is_grad_initialized(), "qs should have gradient when q is used"
+
+    def test_mixed_outputs_raises_error(self):
+        """Test that forward() returning a mix of autograd and raw outputs raises RuntimeError.
+
+        When forward() produces some outputs via ttml autograd ops (which set graph
+        nodes automatically) and others via raw ttnn ops (no nodes), neither the
+        "graph already built" nor the "register custom backward" code path can
+        handle the result correctly.  Function.apply() should detect this and fail
+        with a clear message.
+        """
+
+        class MixedOutputOp(Function):
+            @staticmethod
+            def forward(ctx, input):
+                autograd_output = input + input
+                raw_output = ttnn.multiply(input.get_value(), 2.0)
+                return autograd_output, raw_output
+
+            @staticmethod
+            def backward(ctx, grad1, grad2):
+                return None
+
+        input_data = np.ones((1, 1, 32, 32), dtype=np.float32)
+        input_tensor = ttml.autograd.Tensor.from_numpy(input_data)
+        input_tensor.set_requires_grad(True)
+
+        with pytest.raises(RuntimeError, match="returned a mix of outputs with and without autograd graph nodes"):
+            MixedOutputOp.apply(input_tensor)
 
 
 class TestCustomOperationsNoDevice:

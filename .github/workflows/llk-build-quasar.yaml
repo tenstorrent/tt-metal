@@ -1,4 +1,4 @@
-name: "⚙️ Compile for Quasar"
+name: "LLK Compile for Quasar"
 
 on:
   workflow_call:
@@ -31,7 +31,7 @@ permissions:
   contents: read
 
 env:
-  LLK_PATH: tt_metal/third_party/tt_llk
+  LLK_PATH: tt_metal/tt-llk
 
 jobs:
   generate-matrix:
@@ -55,13 +55,12 @@ jobs:
     container:
       image: ${{ inputs.docker_image }}
 
-    name: "🦄 Compile for Quasar (group ${{ matrix.test_group }}/${{ inputs.test_splits }})"
+    name: "Compile for Quasar (group ${{ matrix.test_group }}/${{ inputs.test_splits }})"
     steps:
       # Step 1: Checkout the repository
       - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
 
       # Step 2: Install SFPI
       - name: Install SFPI
@@ -85,15 +84,15 @@ jobs:
           cd tests/python_tests/
 
           echo "Compiling Quasar..."
-          pytest -q --compile-producer -n 40 \
+          pytest -q --compile-producer -n 20 \
                 -m "${{ inputs.pytest_markers }}" \
                 --splits $TEST_SPLITS --group ${{ matrix.test_group }} \
-                --override-ini="addopts=-v" --tb=short --timeout=60 \
+                --override-ini=log_cli=false --tb=short --timeout=60 \
                 --junitxml=pytest-report-${CHIP_ARCH}-compile.xml .
 
       # Step 4: Upload JUnit report for compiling elfs
       - name: Upload JUnit report for compiling elfs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: always()
         with:
           name: >-
@@ -109,5 +108,6 @@ jobs:
           report_paths: ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-quasar-compile.xml
           check_name: Quasar Compile Tests
           detailed_summary: true
-          include_passed: true
+          job_summary: false
+          include_passed: false
           fail_on_failure: false
