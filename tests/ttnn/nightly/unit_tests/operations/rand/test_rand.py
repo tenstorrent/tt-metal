@@ -219,6 +219,102 @@ def test_rand_different_seed_values(device):
     device.disable_and_clear_program_cache()
 
 
+def test_rand_seed_interleaved_no_stale(device):
+    """A -> B -> A interleave on cache hits.
+
+    The same-seed/different-seed test above runs seeds in sequence; this one re-applies an EARLIER
+    seed after a later one. A cache hit must re-apply whichever seed THIS dispatch asked for, so
+    seed A's second call must reproduce seed A's output exactly -- not seed B's most-recently-baked
+    value. Catches a hit that re-applies the wrong (stale, last-seen) seed, in either direction.
+    """
+    device.enable_program_cache()
+    device.clear_program_cache()
+    shape, dtype = (256, 256), ttnn.float32
+
+    out_a1 = ttnn.to_torch(ttnn.rand(shape, device=device, dtype=dtype, seed=111)).float()
+    out_b = ttnn.to_torch(ttnn.rand(shape, device=device, dtype=dtype, seed=222)).float()
+    out_a2 = ttnn.to_torch(ttnn.rand(shape, device=device, dtype=dtype, seed=111)).float()
+
+    assert device.num_program_cache_entries() == 1, "interleaving seeds is still seed-only; must not grow the cache"
+    assert torch.equal(out_a1, out_a2), "re-applying seed 111 after 222 must reproduce 111's output (not stale 222)"
+    assert not torch.equal(out_a1, out_b), "different seeds must produce different output"
+
+    device.disable_and_clear_program_cache()
+
+
+def test_rand_sustained_varying_seed_no_freeze(device):
+    """A long warm-cache loop with a fresh seed each call.
+
+    Guards the freeze bug at scale: every call after the first is a cache hit, the entry count must
+    stay at 1 (seed never enters the key), and no two consecutive outputs may be identical (a frozen
+    runtime arg silently repeats the previous call's data).
+    """
+    device.enable_program_cache()
+    device.clear_program_cache()
+    shape, dtype = (256, 256), ttnn.float32
+
+    prev = None
+    for seed in range(1, 65):
+        out = ttnn.to_torch(ttnn.rand(shape, device=device, dtype=dtype, seed=seed)).float()
+        if prev is not None:
+            assert not torch.equal(prev, out), f"seed {seed}: output identical to the previous seed -- frozen/stale"
+        prev = out
+
+    assert (
+        device.num_program_cache_entries() == 1
+    ), f"varying seed across 64 calls must stay at 1 cache entry, got {device.num_program_cache_entries()}"
+
+    device.disable_and_clear_program_cache()
+
+
+def test_rand_multi_shape_cache_coexist(device):
+    """Distinct shapes get distinct, coexisting cache entries.
+
+    Re-calling an earlier shape must HIT its own entry (no new entry, no clobber by the later shape)
+    and return data of the correct shape -- proving the per-key program is selected, not overwritten.
+    """
+    device.enable_program_cache()
+    device.clear_program_cache()
+    dtype = ttnn.float32
+    s1, s2 = (256, 256), (512, 128)
+
+    ttnn.rand(s1, device=device, dtype=dtype, seed=7)
+    assert device.num_program_cache_entries() == 1
+    ttnn.rand(s2, device=device, dtype=dtype, seed=7)
+    assert device.num_program_cache_entries() == 2, "a new shape must add a cache entry"
+
+    t1 = ttnn.rand(s1, device=device, dtype=dtype, seed=7)
+    assert device.num_program_cache_entries() == 2, "re-calling shape 1 must hit its entry (no new entry)"
+    assert tuple(t1.shape) == s1, "shape-1 program returned the wrong shape (clobbered by shape 2?)"
+    t2 = ttnn.rand(s2, device=device, dtype=dtype, seed=7)
+    assert device.num_program_cache_entries() == 2
+    assert tuple(t2.shape) == s2
+
+    device.disable_and_clear_program_cache()
+
+
+def test_rand_from_to_revert_no_stale(device):
+    """low/high are runtime args re-applied per dispatch: range A -> B -> A on cache hits.
+
+    Switching the range and switching back must respect the CURRENT range each call (a hit that
+    reuses a stale baked-in range would put A's third call in B's interval). Entry count stays 1.
+    """
+    device.enable_program_cache()
+    device.clear_program_cache()
+    shape, dtype = (256, 256), ttnn.float32
+
+    a = ttnn.to_torch(ttnn.rand(shape, device=device, dtype=dtype, low=0.0, high=1.0, seed=5)).float()
+    b = ttnn.to_torch(ttnn.rand(shape, device=device, dtype=dtype, low=100.0, high=101.0, seed=5)).float()
+    a2 = ttnn.to_torch(ttnn.rand(shape, device=device, dtype=dtype, low=0.0, high=1.0, seed=5)).float()
+
+    assert device.num_program_cache_entries() == 1, "low/high are runtime-only; must not grow the cache"
+    assert a.min() >= 0.0 and a.max() <= 1.0, "first range [0,1] not respected"
+    assert b.min() >= 100.0 and b.max() <= 101.0, "second range [100,101] not respected (stale low/high?)"
+    assert a2.min() >= 0.0 and a2.max() <= 1.0, "range did not revert to [0,1] on the third call (stale low/high)"
+
+    device.disable_and_clear_program_cache()
+
+
 @pytest.mark.parametrize(
     "mesh_device",
     [pytest.param(2, id="1x2_grid"), pytest.param((2, 1), id="2x1_grid")],

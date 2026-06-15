@@ -469,7 +469,6 @@ set(TTNNCPP_API_HEADERS
     api/ttnn/graph/levelized_graph.hpp
     api/ttnn/mesh_device_operation_adapter.hpp
     api/ttnn/mesh_device_operation_utils.hpp
-    api/ttnn/metal2_artifacts.hpp
     api/ttnn/operation.hpp
     api/ttnn/operation_concepts.hpp
     api/ttnn/reports.hpp

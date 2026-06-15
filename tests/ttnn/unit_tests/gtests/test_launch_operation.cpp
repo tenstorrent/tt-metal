@@ -9,7 +9,10 @@
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/mesh_device_operation_adapter.hpp"
 #include "ttnn/mesh_device_operation_utils.hpp"
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include "ttnn/operation_concepts.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/examples/example/device/example_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
@@ -104,6 +107,97 @@ struct NewInfraWorkloadFactory {
 
 static_assert(ttnn::device_operation::MeshWorkloadFactoryConcept<NewInfraWorkloadFactory>);
 static_assert(ttnn::device_operation::ProgramFactoryConcept<NewInfraProgramFactory>);
+
+// --- MetalV2 spec-factory concept contracts (compile-time) ---
+
+// ProgramDescriptor factory (the prior framework), used here for mixed-variant checks.
+struct DescriptorFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(const OperationAttributes&, const Tensor&, Tensor&) {
+        return {};
+    }
+};
+
+// Spec-keyed factory: the three mandatory build methods + the default reflection-hash key.
+struct SpecKeyedFactory {
+    static tt::tt_metal::experimental::ProgramSpec create_program_spec(
+        const OperationAttributes&, const Tensor&, Tensor&) {
+        return {};
+    }
+    static tt::tt_metal::experimental::ProgramRunArgs create_invariant_run_args(
+        const OperationAttributes&, const Tensor&, Tensor&) {
+        return {};
+    }
+    static tt::tt_metal::experimental::ProgramRunArgs create_per_enqueue_args(
+        const OperationAttributes&, const Tensor&, Tensor&, const std::optional<ttnn::MeshCoordinate>&) {
+        return {};
+    }
+};
+
+// ImmutableInfo-keyed (Advanced) factory: the spec + invariant builders take the ImmutableInfo.
+struct ImmutableInfoFactory {
+    struct immutable_info_t {};
+    static immutable_info_t extract_immutable_info(const OperationAttributes&, const Tensor&) { return {}; }
+    static tt::tt_metal::experimental::ProgramSpec create_program_spec(const immutable_info_t&) { return {}; }
+    static tt::tt_metal::experimental::ProgramRunArgs create_invariant_run_args(const immutable_info_t&) { return {}; }
+    static tt::tt_metal::experimental::ProgramRunArgs create_per_enqueue_args(
+        const OperationAttributes&, const Tensor&, Tensor&, const std::optional<ttnn::MeshCoordinate>&) {
+        return {};
+    }
+};
+
+// All three build methods are mandatory: a factory missing any one is NOT a MetalV2 spec factory.
+struct MissingPerEnqueueFactory {
+    static tt::tt_metal::experimental::ProgramSpec create_program_spec(
+        const OperationAttributes&, const Tensor&, Tensor&) {
+        return {};
+    }
+    static tt::tt_metal::experimental::ProgramRunArgs create_invariant_run_args(
+        const OperationAttributes&, const Tensor&, Tensor&) {
+        return {};
+    }
+};
+struct MissingInvariantArgsFactory {
+    static tt::tt_metal::experimental::ProgramSpec create_program_spec(
+        const OperationAttributes&, const Tensor&, Tensor&) {
+        return {};
+    }
+    static tt::tt_metal::experimental::ProgramRunArgs create_per_enqueue_args(
+        const OperationAttributes&, const Tensor&, Tensor&, const std::optional<ttnn::MeshCoordinate>&) {
+        return {};
+    }
+};
+
+namespace concepts = ttnn::device_operation;
+
+// Each factory satisfies exactly one spec-factory concept, distinguished by the cache key; both carry all
+// three mandatory build methods.
+static_assert(concepts::ProgramSpecFactoryConcept<SpecKeyedFactory>);
+static_assert(!concepts::AdvancedProgramSpecFactoryConcept<SpecKeyedFactory>);
+static_assert(!concepts::HasImmutableInfoExtraction<SpecKeyedFactory>);
+static_assert(concepts::AdvancedProgramSpecFactoryConcept<ImmutableInfoFactory>);
+static_assert(!concepts::ProgramSpecFactoryConcept<ImmutableInfoFactory>);
+static_assert(concepts::HasImmutableInfoExtraction<ImmutableInfoFactory>);
+static_assert(concepts::MetalV2SpecFactoryConcept<SpecKeyedFactory>);
+static_assert(concepts::MetalV2SpecFactoryConcept<ImmutableInfoFactory>);
+
+// All three build methods are required — missing any one means it is not a MetalV2 spec factory.
+static_assert(!concepts::MetalV2SpecFactoryConcept<MissingPerEnqueueFactory>);
+static_assert(!concepts::MetalV2SpecFactoryConcept<MissingInvariantArgsFactory>);
+static_assert(!concepts::HasCreatePerEnqueueArgs<MissingPerEnqueueFactory>);
+static_assert(!concepts::HasCreateInvariantRunArgs<MissingInvariantArgsFactory>);
+
+// A spec factory is none of the prior factory shapes (and vice versa).
+static_assert(!concepts::ProgramFactoryConcept<SpecKeyedFactory>);
+static_assert(!concepts::ProgramDescriptorFactoryConcept<ImmutableInfoFactory>);
+static_assert(concepts::ProgramDescriptorFactoryConcept<DescriptorFactory>);
+static_assert(!concepts::MetalV2SpecFactoryConcept<DescriptorFactory>);
+
+// An op migrates to MetalV2 all-or-nothing: a program_factory_t is all MetalV2 spec factories, or all
+// prior-framework factories — never mixed.
+static_assert(concepts::AllFactoriesValid<std::variant<SpecKeyedFactory, ImmutableInfoFactory>>);     // all MetalV2
+static_assert(concepts::AllFactoriesValid<std::variant<DescriptorFactory>>);                          // all prior
+static_assert(!concepts::AllFactoriesValid<std::variant<DescriptorFactory, ImmutableInfoFactory>>);   // mixed: rejected
+static_assert(!concepts::AllFactoriesValid<std::variant<NewInfraProgramFactory, SpecKeyedFactory>>);  // mixed: rejected
 
 TEST(LaunchOperationTest, MeshDeviceOperationAdapterGetName) {
     using ::ttnn::operations::examples::ExampleDeviceOperation;
