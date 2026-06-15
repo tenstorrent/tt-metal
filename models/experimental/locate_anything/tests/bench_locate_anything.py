@@ -192,12 +192,18 @@ def test_locate_anything_baseline(
 
     # --- Vision: on-device MoonViT (default) or CPU golden (LA_VISION=golden, isolates LLM PCC) ---
     vision_mode = os.environ.get("LA_VISION", "device")
+    vision_t = 0.0
     if vision_mode == "device":
         logger.info("Running MoonViT vision encoder + projector on device (chip 2)...")
         vis = MoonViT(mesh_device, la_inputs.find_model_path(), golden["grid_hw"], dtype=ttnn.bfloat16)
-        vit_proj = vis.forward(golden["pixel_values"].float()).to(torch.float32)  # [N_img, hidden]
+        _pix = golden["pixel_values"].float()
+        vis.forward(_pix)  # warmup (compile + program cache)
+        ttnn.synchronize_device(mesh_device)
+        _vt = time.time()
+        vit_proj = vis.forward(_pix).to(torch.float32)  # timed warm; .to(torch) syncs
+        vision_t = time.time() - _vt
         vpass, vmsg = comp_pcc(golden["vit_proj"].to(torch.float32), vit_proj, pcc=0.99)
-        logger.info(f"Device vision vit_proj PCC vs golden: {vmsg}")
+        logger.info(f"Device vision vit_proj PCC vs golden: {vmsg} | vision warm {vision_t*1000:.1f}ms")
     else:
         vit_proj = golden["vit_proj"].to(torch.float32)  # CPU golden
 
@@ -231,7 +237,45 @@ def test_locate_anything_baseline(
     embeds = input_prefill_pt[0].unsqueeze(0).to(torch.float32)  # [1, prefill_seq_len, hidden]
     logger.info(f"prefill_seq_len={prefill_seq_len}, decode_start_pos={decode_start_pos}")
 
-    # ============================= PREFILL =============================
+    # ============================= WARMUP (compile prefill + decode) =============================
+    # The timed pass below must be warm so inference_speed reflects steady-state, not one-time
+    # compile. enable_trace captures a decode trace for fast replay (LA_TRACE=1, default on).
+    enable_trace = os.environ.get("LA_TRACE", "1") == "1"
+    logger.info(f"Warmup prefill+decode (enable_trace={enable_trace})...")
+    model.switch_mode(Mode.PREFILL)
+    _w_emb, _w_rot, _w_pt, _ = model.prepare_inputs_prefill_embeds(
+        embeds, start_pos=0, page_table=page_table, last_token_idx=last_token_idx
+    )
+    _w_logits = model.ttnn_prefill_forward(
+        _w_emb,
+        rot_mats_global=_w_rot,
+        rot_mats_local=None,
+        user_id=0,
+        page_table=_w_pt,
+        get_last_token=(last_token_idx // 32) * 32,
+        kv_cache=tt_kv_cache,
+    )
+    _w_last = model.process_output_prefill(_w_logits.cpu(), last_token_idx=last_token_idx % 32)
+    ttnn.deallocate(_w_logits)
+    ttnn.deallocate(_w_emb)
+    if _w_pt is not None:
+        ttnn.deallocate(_w_pt)
+    _w_tok = torch.tensor([[int(torch.argmax(_w_last[: model.vocab_size]).item())]], dtype=torch.int64)
+    _w_pos = torch.tensor([decode_start_pos], dtype=torch.int64)
+    for _ws in range(min(4, max_generated_tokens - 1)):
+        _wl, _ = generator.decode_forward(
+            _w_tok,
+            _w_pos,
+            page_table=page_table,
+            kv_cache=[tt_kv_cache],
+            enable_trace=enable_trace,
+            reset_batch=(_ws == 0),
+        )
+        _, _wn = sample_host(_wl, temperature=0, top_p=1.0, on_host=True)
+        _w_tok = torch.tensor([[int(_wn.reshape(-1)[0].item())]], dtype=torch.int64)
+        _w_pos = _w_pos + 1
+
+    # ============================= PREFILL (timed, warm) =============================
     logger.info("Running prefill...")
     model.switch_mode(Mode.PREFILL)
     t_prefill_start = time.time()
@@ -293,7 +337,7 @@ def test_locate_anything_baseline(
                 current_pos,
                 page_table=page_table,
                 kv_cache=[tt_kv_cache],
-                enable_trace=False,
+                enable_trace=enable_trace,
                 reset_batch=(step == 0),
             )
             num_decode_steps += 1
@@ -313,18 +357,24 @@ def test_locate_anything_baseline(
     logger.info(f"Box string: {generated_text}")
 
     # ============================= METRICS =============================
-    total_time = prefill_time + decode_time
+    # Warm end-to-end frames/sec for the fixed golden workload: vision + prefill + full decode.
+    total_time = vision_t + prefill_time + decode_time
     decode_tok_s = (num_decode_steps / decode_time) if decode_time > 0 else 0.0
     frames_per_sec = (1.0 / total_time) if total_time > 0 else 0.0
     peak_dram = _peak_dram_bytes(mesh_device)
 
-    logger.info(f"Prefill time: {prefill_time:.3f}s, decode time: {decode_time:.3f}s")
-    logger.info(f"Decode speed: {decode_tok_s:.2f} tok/s ({num_decode_steps} steps)")
+    logger.info(
+        f"WARM vision={vision_t*1000:.1f}ms prefill={prefill_time*1000:.1f}ms "
+        f"decode={decode_tok_s:.1f}tok/s ({num_decode_steps} steps) e2e={total_time*1000:.1f}ms"
+    )
 
     # Greppable metric lines (EXACT format).
     print(f"inference_speed={frames_per_sec}")
     print(f"accuracy={pcc_value * 100}")
     print(f"peak_dram={peak_dram}")
+    print(f"decode_tok_s={decode_tok_s}")
+    print(f"vision_ms={vision_t*1000}")
+    print(f"prefill_ms={prefill_time*1000}")
 
     # Accuracy gate is enforced by the autoresearch loop via the recorded PCC, not
     # by failing the run here -- we always want the metrics printed for the loop.
