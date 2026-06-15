@@ -15,6 +15,9 @@ The current version is verified to work with the following models:
 | [Mistral 7B Instruct v0.3](https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3)            | n150                        | ```mistralai/Mistral-7B-Instruct-v0.3```        |
 | [Mistral Small 3.1 24B Instruct](https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503) | T3K                   | ```mistralai/Mistral-Small-3.1-24B-Instruct-2503``` |
 | [Devstral 2 123B Instruct](https://huggingface.co/mistralai/Devstral-2-123B-Instruct-2512)[^devstral] | LoudBox (BH)          | ```mistralai/Devstral-2-123B-Instruct-2512```   |
+| [Voxtral Mini 3B](https://huggingface.co/mistralai/Voxtral-Mini-3B-2507)[^voxtral] | QuietBox (BH)          | ```mistralai/Voxtral-Mini-3B-2507```   |
+
+[^voxtral]: Voxtral-Mini-3B (`VoxtralForConditionalGeneration`: a Whisper-large-v3 audio encoder + audio→text projector + a Llama-3B text decoder) is brought up reusing the on-device tt Whisper encoder (`models/demos/audio/whisper`) + a config-driven `tt_transformers` text decoder, with audio embeddings scattered into the text embeddings at `audio_token_id=24` (`tt/multimodal/voxtral/`). Needs **`transformers>=5`** (Voxtral arch). Validated on **BH QuietBox-2 (P150x4)**: audio encoder PCC **0.9718**, projector **0.9999**, composed audio-features vs HF `get_audio_features` **0.9705**, e2e post-scatter embeddings **0.9705**, text decoder bit-identical generation to HF (decode logit PCC 0.95–0.997). Text-decode perf **111.8 tok/s/user, TTFT 17 ms** (batch-1).
 
 [^devstral]: Devstral-2-123B (`Ministral3ForCausalLM`, fp8 checkpoint) requires **`transformers>=5.10`** (ministral3 architecture + `FineGrainedFP8Config`), which is newer than this repo's pinned `transformers==4.53.0`; it loads only in an env upgraded to transformers 5.x. Validated on BH Loudbox 1×8: full-model logit PCC 0.974–0.999; decode 15.6 tok/s/user @ISL128 (TTFT 213 ms), degrading gracefully to 13.4 @ISL64k; chunked prefill validated to **64k context** (the practical ceiling on this mesh — native config is 256k, but 128k+ does not fit L1 on 1×8).
 | [Mixtral 8x7B Instruct v0.1](https://huggingface.co/mistralai/Mixtral-8x7B-Instruct-v0.1)        | LoudBox / QuietBox          | ```mistralai/Mixtral-8x7B-Instruct-v0.1```        |
@@ -213,6 +216,7 @@ Huggingface models specify their architecture in the `config.json` file. The fol
 - MistralForCausalLM
 - Mistral3ForConditionalGeneration
 - Ministral3ForCausalLM
+- VoxtralForConditionalGeneration
 - Phi3ForCausalLM
 
 At the time of writing this covers the majority of popular HuggingFace text-generation models. If you find another architecture that works or extend TT-Transformers to support one we would love to accept a PR!
