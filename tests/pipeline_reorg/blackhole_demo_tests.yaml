@@ -40,6 +40,27 @@
   team: models
   model-name: mistral-small-3.1-24b
 
+# ─── mistral-small-4-119b ───────────────────────────────────────────────────
+
+- name: mistral-small-4-119b text correctness + serving tests
+  cmd: |
+    set -e
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    export HF_MODEL=mistralai/Mistral-Small-4-119B-2603
+    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/mistralai--Mistral-Small-4-119B-2603
+    pytest --timeout 900 \
+      models/demos/mistral4/tests/test_m4_mla.py \
+      models/demos/mistral4/tests/test_m4_moe_sharded.py \
+      models/demos/mistral4/tests/test_m4_decoder_layer.py \
+      models/demos/mistral4/tests/test_m4_trace.py \
+      models/demos/mistral4/tests/test_m4_generate.py
+  skus:
+    bh_loudbox: # P150x8 — the model shards 128 experts across the 8 devices
+      timeout: 30
+  owner_id: UNKNOWN_MORITZ_THUENING # TODO(maintainer): set Moritz Thüning's Slack uid before PR
+  team: models
+  model-name: mistral-small-4-119b
+
 # ─── stable_diffusion_xl ────────────────────────────────────────────────────
 
 - name: stable_diffusion_xl demos

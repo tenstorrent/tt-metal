@@ -80,6 +80,7 @@ The initial release of the 3-tier model CI includes models owned by the models-t
 | Qwen2.5-VL-32B | WH LLMBox, BH QuietBox 2 |
 | Mamba-2.8B | WH N150 |
 | Phi-3-mini | WH N150 |
+| Mistral-Small-4-119B | BH Loudbox (P150x8) |
 
 
 # Pipelines
