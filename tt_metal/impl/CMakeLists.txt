@@ -113,7 +113,7 @@ target_link_libraries(
         capnp
         capnp-rpc
         protobuf::libprotobuf
-        ttexalens_elf
+        ttexalens::elf
         Taskflow::Taskflow
 )
 
