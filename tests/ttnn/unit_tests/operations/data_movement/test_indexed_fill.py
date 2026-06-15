@@ -7,6 +7,18 @@ import ttnn
 import torch
 from loguru import logger
 
+from tests.ttnn.utils_for_testing import assert_with_pcc
+
+
+def golden_indexed_fill(input_a, input_b, batch_id, dim):
+    # Reference for ttnn.indexed_fill: replace slice `batch_id[k]` of input_a along `dim`
+    # with slice k of input_b. Applied sequentially so that on duplicate indices the
+    # last-listed value wins, matching the kernel's full-scan (no early break) semantics.
+    out = input_a.clone()
+    for k, v in enumerate(batch_id.flatten().tolist()):
+        out.index_copy_(dim, torch.tensor([v]), input_b.index_select(dim, torch.tensor([k])))
+    return out
+
 
 @pytest.mark.parametrize(
     "input_a_shape, input_b_shape",
@@ -31,13 +43,18 @@ def test_indexed_fill_tile_layout(device, input_a_shape, input_b_shape):
     )
 
     # Both data inputs are in TILE layout.
-    input_tensor_a = ttnn.rand(input_a_shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor_b = ttnn.rand(input_b_shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    torch_a = torch.rand(input_a_shape, dtype=torch.bfloat16)
+    torch_b = torch.rand(input_b_shape, dtype=torch.bfloat16)
+    input_tensor_a = ttnn.from_torch(torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     # Perform indexed fill - output preserves TILE layout.
     output_tensor = ttnn.indexed_fill(batch_id_ttnn, input_tensor_a, input_tensor_b)
     logger.info("Indexed Fill (TILE) Output Tensor Shape:", output_tensor.shape)
     logger.info("Indexed Fill (TILE) Output Tensor Layout:", output_tensor.layout)
+
+    golden = golden_indexed_fill(torch_a, torch_b, batch_id, dim=0)
+    assert_with_pcc(golden, ttnn.to_torch(output_tensor), 0.9999)
 
 
 @pytest.mark.parametrize(
@@ -86,6 +103,9 @@ def test_indexed_fill_sharded(device, B, b, D):
     logger.info("Indexed Fill (sharded) Output Tensor Shape:", output_tensor.shape)
     logger.info("Indexed Fill (sharded) Output Memory Layout:", output_tensor.memory_config().memory_layout)
 
+    golden = golden_indexed_fill(torch_a, torch_b, batch_id, dim=0)
+    assert_with_pcc(golden, ttnn.to_torch(output_tensor), 0.9999)
+
 
 @pytest.mark.parametrize(
     "B, H, W, b, core_grid_y, core_grid_x",
@@ -132,6 +152,9 @@ def test_indexed_fill_block_sharded_tile(device, B, H, W, b, core_grid_y, core_g
         f"Memory Layout: {output_tensor.memory_config().memory_layout}"
     )
 
+    golden = golden_indexed_fill(torch_a, torch_b, batch_id, dim=0)
+    assert_with_pcc(golden, ttnn.to_torch(output_tensor), 0.9999)
+
 
 @pytest.mark.parametrize(
     "shape_a, b, dim",
@@ -168,8 +191,10 @@ def test_indexed_fill_dim(device, shape_a, b, dim, layout):
         device, ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
     )
 
-    input_tensor_a = ttnn.rand(shape_a, dtype=ttnn.bfloat16, layout=layout, device=device)
-    input_tensor_b = ttnn.rand(tuple(shape_b), dtype=ttnn.bfloat16, layout=layout, device=device)
+    torch_a = torch.rand(shape_a, dtype=torch.bfloat16)
+    torch_b = torch.rand(tuple(shape_b), dtype=torch.bfloat16)
+    input_tensor_a = ttnn.from_torch(torch_a, dtype=ttnn.bfloat16, layout=layout, device=device)
+    input_tensor_b = ttnn.from_torch(torch_b, dtype=ttnn.bfloat16, layout=layout, device=device)
 
     # Indexed fill along the requested dim.
     output_tensor = ttnn.indexed_fill(batch_id_ttnn, input_tensor_a, input_tensor_b, dim=dim)
@@ -177,6 +202,9 @@ def test_indexed_fill_dim(device, shape_a, b, dim, layout):
     # Output preserves input_a's shape and layout.
     assert tuple(output_tensor.shape) == shape_a
     assert output_tensor.layout == layout
+
+    golden = golden_indexed_fill(torch_a, torch_b, batch_id, dim=dim)
+    assert_with_pcc(golden, ttnn.to_torch(output_tensor), 0.9999)
 
     logger.info(
         f"Indexed Fill (dim={dim}, layout={layout}) Output Shape: {output_tensor.shape}, "
