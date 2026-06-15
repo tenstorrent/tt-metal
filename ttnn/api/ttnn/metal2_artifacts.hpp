@@ -19,6 +19,9 @@ namespace ttnn::device_operation {
 struct ProgramArtifacts {
     tt::tt_metal::experimental::ProgramSpec spec;
     tt::tt_metal::experimental::ProgramRunArgs run_params;
+
+    // Op-owned resources: device tensors the op allocates for itself
+    std::vector<tt::tt_metal::MeshTensor> op_owned_tensors;
 };
 
 }  // namespace ttnn::device_operation
