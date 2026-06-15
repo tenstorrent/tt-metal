@@ -502,8 +502,26 @@ def main():
         _t = time.perf_counter()
         migrate_side(0, past_k)
         migrate_side(1, past_v)
-        _KV_SINGLESHOT_MS = 1e3*(time.perf_counter()-_t)
+        _KV_SINGLESHOT_MS = 1e3 * (time.perf_counter() - _t)
         log(f"KV migration on-device (p2p+socket): {_KV_SINGLESHOT_MS:.2f}ms (single-shot)")
+        # WARM KV cost for the e2e sum: the single-shot above includes first-call
+        # dispatch + allocation (the recv bufs / sockets are built lazily on first
+        # use), which the warm-looped vision/prefill/denoise replays do NOT pay. To
+        # keep all 5 stages warm-consistent, re-time the migration into throwaway
+        # bufs now that sockets+bufs are built (same warm path PI05_E2E_TIMING
+        # measures at ~11ms vs ~55ms cold). Socket reuse here is the SAME pattern the
+        # TIMING block loops safely (fresh recv bufs per call).
+        _KV_WARM_MS = _KV_SINGLESHOT_MS
+        try:
+            _NW = 3
+            _tw = time.perf_counter()
+            for _ in range(_NW):
+                migrate_side(0, _recv_bufs())
+                migrate_side(1, _recv_bufs())
+            _KV_WARM_MS = 1e3 * (time.perf_counter() - _tw) / _NW
+            log(f"KV migration WARM (p2p+socket, {_NW}-rep mean): {_KV_WARM_MS:.2f}ms")
+        except Exception as _e:
+            log(f"KV warm re-time skipped ({repr(_e)[:60]}); using single-shot")
         # expert cross-attn concat needs bf8_b (matches per-step k_rope dtype)
         past_k = [ttnn.typecast(t, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in past_k]
         past_v = [ttnn.typecast(t, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in past_v]
@@ -730,13 +748,16 @@ def main():
             log("PERF hand-offs (single-shot, logged above): see VISION->PREFIX and KV migration lines")
             # authoritative e2e = looped replays + single-shot handoffs (sockets/overhead included)
             _vp_ms = float(os.environ.get("PI05_VP_MS", "5.0"))  # vision->prefix host bounce (warm, ~5ms)
-            _e2e = t_vis + _vp_ms + t_pre + _KV_SINGLESHOT_MS + t_den
-            log(f"E2E host-side per-inference = {_e2e:.2f} ms (vis {t_vis:.1f}+vp {_vp_ms:.1f}+prefill {t_pre:.1f}+kv {_KV_SINGLESHOT_MS:.1f}+den {t_den:.1f}; sockets/overhead INCLUDED)")
+            _e2e = t_vis + _vp_ms + t_pre + _KV_WARM_MS + t_den
+            log(
+                f"E2E host-side per-inference = {_e2e:.2f} ms (vis {t_vis:.1f}+vp {_vp_ms:.1f}+prefill {t_pre:.1f}+kv {_KV_WARM_MS:.1f}+den {t_den:.1f}; WARM, sockets/overhead INCLUDED)"
+            )
             print(f"METRIC e2e_ms={_e2e:.3f}")
+            print(f"METRIC kv_cold_ms={_KV_SINGLESHOT_MS:.3f}")
             print(f"METRIC vision_ms={t_vis:.3f}")
             print(f"METRIC prefill_ms={t_pre:.3f}")
             print(f"METRIC denoise_ms={t_den:.3f}")
-            print(f"METRIC kv_migration_ms={_KV_SINGLESHOT_MS:.3f}")
+            print(f"METRIC kv_migration_ms={_KV_WARM_MS:.3f}")
             log(
                 f"FULL E2E (replays + hand-offs): vision({t_vis:.1f}) + prefill({t_pre:.1f}) + denoise({t_den:.1f}) + hand-offs ~= per-inference latency [{N_STEPS} denoise steps]"
             )
