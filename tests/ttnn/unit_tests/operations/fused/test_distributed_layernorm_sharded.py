@@ -575,7 +575,7 @@ def test_simulated_distributed_layernorm(
 _NON_TILE_ALIGNED_PAD_VALUE = 1000.0
 
 
-def _run_simulated_distributed_norm_multi_core(device, is_rmsnorm, w, num_cores_w, eps):
+def _run_simulated_distributed_norm_multi_core(device, is_rmsnorm, w, num_cores_w, eps, num_cores_h=1):
     """Multi-core (non-1x1 grid) simulated distributed norm over a non-tile-aligned logical width w.
 
     Splitting the width across cores gives the post-all-gather global-stats multicast real participants,
@@ -583,18 +583,25 @@ def _run_simulated_distributed_norm_multi_core(device, is_rmsnorm, w, num_cores_
     shard to span whole tiles, so the per-core width cannot itself be non-tile-aligned; instead w is
     non-tile-aligned while each shard spans whole tiles, leaving only the final core partially valid. Its
     padding columns are poisoned so that a statistic which folds them in is observably wrong.
+
+    The width shards are laid out across a num_cores_w x num_cores_h core grid. With num_cores_h > 1 the
+    grid is 2D, which drives the cross-core reduction through its two-stage path (see
+    should_use_two_stage_reduce); num_cores_h == 1 keeps the single-stage reduction.
     """
     tile_width = 32
-    shard_wt = math.ceil(w / num_cores_w / tile_width)  # tiles per shard
+    num_cores = num_cores_w * num_cores_h
+    shard_wt = math.ceil(w / num_cores / tile_width)  # tiles per shard
     shard_w = shard_wt * tile_width
-    physical_w = shard_w * num_cores_w  # logical w padded out to whole shards
+    physical_w = shard_w * num_cores  # logical w padded out to whole shards
 
     torch.manual_seed(0)
     torch_input_tensor = torch.normal(0.0, 1.0, size=(1, 1, 32, w), dtype=torch.bfloat16)
     torch_weight = torch.normal(0.0, 1.0, size=(1, 1, 1, w), dtype=torch.bfloat16)
     torch_golden = compute_reference_output(torch_input_tensor, torch_weight, is_rmsnorm, eps)
 
-    core_range_set = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_w - 1, 0))})
+    core_range_set = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_w - 1, num_cores_h - 1))}
+    )
     input_sharded_config = ttnn.create_sharded_memory_config(
         shape=(32, shard_w),
         core_grid=core_range_set,
@@ -608,7 +615,7 @@ def _run_simulated_distributed_norm_multi_core(device, is_rmsnorm, w, num_cores_
         return ttnn.fill_implicit_tile_padding(tt, _NON_TILE_ALIGNED_PAD_VALUE)
 
     norm_prgm_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=[num_cores_w, 1],
+        compute_with_storage_grid_size=[num_cores_w, num_cores_h],
         subblock_w=shard_wt,
         block_h=1,
         block_w=shard_wt,
@@ -639,7 +646,7 @@ def _run_simulated_distributed_norm_multi_core(device, is_rmsnorm, w, num_cores_
         dtype=ttnn.bfloat16,
     )
 
-    out_memory_config = create_output_memory_config((num_cores_w, 1), torch_input_tensor.shape)
+    out_memory_config = create_output_memory_config((num_cores_w, num_cores_h), torch_input_tensor.shape)
     tt_output = post_all_gather(
         make_poisoned_input(),
         epsilon=eps,
@@ -663,6 +670,22 @@ def _run_simulated_distributed_norm_multi_core(device, is_rmsnorm, w, num_cores_
 @pytest.mark.parametrize("eps", [1e-6])
 def test_simulated_distributed_rms_norm_multi_core_non_tile_aligned_width(device, w, num_cores_w, eps):
     _run_simulated_distributed_norm_multi_core(device, is_rmsnorm=True, w=w, num_cores_w=num_cores_w, eps=eps)
+
+
+# A 2D (num_cores_w x num_cores_h, both > 1) width-shard grid drives the cross-core reduction through
+# its two-stage path (should_use_two_stage_reduce). This exercises the non-tile-aligned scaler
+# (winv = num_blocks / logical_K) and the per-shard padding masking in the two-stage regime, which the
+# 1xN grids above do not reach. RMSNorm only: LayerNorm rejects a non-tile-aligned width across cores.
+# w=120/240 keep the shard count dividing the tile-padded width evenly (physical width == padded width).
+@pytest.mark.parametrize("w", [120, 240])
+@pytest.mark.parametrize(("num_cores_w", "num_cores_h"), [(2, 2)])
+@pytest.mark.parametrize("eps", [1e-6])
+def test_simulated_distributed_rms_norm_two_stage_reduce_non_tile_aligned_width(
+    device, w, num_cores_w, num_cores_h, eps
+):
+    _run_simulated_distributed_norm_multi_core(
+        device, is_rmsnorm=True, w=w, num_cores_w=num_cores_w, eps=eps, num_cores_h=num_cores_h
+    )
 
 
 @pytest.mark.parametrize("w", [120, 240])
