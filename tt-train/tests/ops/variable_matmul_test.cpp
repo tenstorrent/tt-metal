@@ -325,3 +325,142 @@ TEST_F(VariableMatmulTest, EmptyExpertProbe_InputAndWeightK_TransposeA) {
     EXPECT_EQ(non_finite, 0U) << "empty-expert output has non-finite values";
     EXPECT_EQ(max_abs, 0.0F) << "empty-expert output non-zero; max_abs=" << max_abs;
 }
+
+// ---------------------------------------------------------------------------
+// Program-cache reuse. The op's headline contract: one cached program serves any
+// (M, K, offsets_start_index) within a transpose/role/grid variant — M and K are runtime
+// args, so changing them must hit the cache and re-drive the kernels via
+// override_runtime_arguments rather than recompile. The parity tests above each make a single
+// call, so they only exercise the build path (create); these enable the program cache and call
+// the same shapes/config with different offsets entries (different active K / M ranges),
+// asserting (a) every result is still bit-exact and (b) no new program is compiled on the
+// repeat calls. (b) is the override_runtime_arguments path, where the offsets-callback bug lived.
+//
+// Cache entries are sampled immediately around the variable_matmul call only; the reference
+// ops (slice/transpose/minimal_matmul) run outside that window so their own programs don't
+// perturb the count. The first call's absolute delta isn't asserted (the device may be shared
+// across tests and already hold the program); the cache-hit guarantee is checked on every
+// subsequent call.
+// ---------------------------------------------------------------------------
+
+TEST_F(VariableMatmulTest, CacheHit_InputAndWeightK_VaryingK) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    device->enable_program_cache();
+
+    const uint32_t K_parent = 512, M = 128, N = 256;
+    auto in0_km = create_random_device_tensor(K_parent, M, device, /*seed=*/51U);
+    auto in1 = create_random_device_tensor(K_parent, N, device, /*seed=*/52U);
+
+    // Expert K-ranges of different sizes (all tile-aligned): 64, 128, 64, 256.
+    const std::vector<uint32_t> offsets_host = {0U, 64U, 192U, 256U, 512U};
+    auto offsets = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device, ttnn::Layout::ROW_MAJOR);
+    const uint32_t num_experts = static_cast<uint32_t>(offsets_host.size()) - 1U;
+
+    auto cfg = kConfig;
+    for (uint32_t s = 0; s < num_experts; ++s) {
+        const uint32_t k_lo = offsets_host[s];
+        const uint32_t K_active = offsets_host[s + 1U] - offsets_host[s];
+
+        const auto entries_before = device->num_program_cache_entries();
+        auto result = ttml::metal::variable_matmul(
+            /*input_tensor=*/in0_km,
+            /*weight_tensor=*/in1,
+            /*config=*/cfg,
+            /*offsets_tensor=*/offsets,
+            /*offsets_role=*/ttml::metal::OffsetsRole::InputAndWeightK,
+            /*transpose_a=*/true,
+            /*transpose_b=*/false,
+            /*compute_kernel_config=*/std::nullopt,
+            /*output_tensor=*/std::nullopt,
+            /*offsets_start_index=*/s);
+        const auto entries_after = device->num_program_cache_entries();
+
+        if (s == 0U) {
+            // Guard against a vacuous test: the program cache must actually be populated, else
+            // the delta==0 checks below would pass trivially with the cache disabled.
+            EXPECT_GT(entries_after, 0U) << "program cache not populated after first call";
+        } else {
+            EXPECT_EQ(entries_after, entries_before)
+                << "variable_matmul compiled a new program on offsets_start_index=" << s
+                << " (expected a cache hit through override_runtime_arguments)";
+        }
+
+        auto in0_sliced_km = ttnn::slice(
+            in0_km,
+            ttsl::SmallVector<uint32_t>{0, 0, k_lo, 0},
+            ttsl::SmallVector<uint32_t>{1, 1, k_lo + K_active, M},
+            ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
+        auto in0_sliced_mk = ttnn::transpose(in0_sliced_km, -2, -1);
+        auto in1_sliced = ttnn::slice(
+            in1,
+            ttsl::SmallVector<uint32_t>{0, 0, k_lo, 0},
+            ttsl::SmallVector<uint32_t>{1, 1, k_lo + K_active, N},
+            ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
+        auto ref = minimal_matmul_hifi4(in0_sliced_mk, in1_sliced, cfg);
+
+        EXPECT_EQ(max_abs_error(result, ref), 0.0F)
+            << "variable(InputAndWeightK) cache-hit result wrong at offsets_start_index=" << s
+            << " (K_active=" << K_active << ")";
+    }
+}
+
+TEST_F(VariableMatmulTest, CacheHit_InputAndOutputRow_VaryingM) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    device->enable_program_cache();
+
+    const uint32_t M_parent = 320, K = 128, N = 64;
+    auto input = create_random_device_tensor(M_parent, K, device, /*seed=*/53U);
+    auto weight = create_random_device_tensor(K, N, device, /*seed=*/54U);
+    auto parent_out = create_random_device_tensor(M_parent, N, device, /*seed=*/55U);
+
+    // Expert M-ranges of different sizes (all tile-aligned), tiling [0, M_parent): 32, 64, 64, 160.
+    const std::vector<uint32_t> offsets_host = {0U, 32U, 96U, 160U, 320U};
+    auto offsets = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device, ttnn::Layout::ROW_MAJOR);
+    const uint32_t num_experts = static_cast<uint32_t>(offsets_host.size()) - 1U;
+
+    for (uint32_t s = 0; s < num_experts; ++s) {
+        const uint32_t m_lo = offsets_host[s];
+        const uint32_t m_hi = offsets_host[s + 1U];
+        const uint32_t actual_M = m_hi - m_lo;
+
+        const auto entries_before = device->num_program_cache_entries();
+        ttml::metal::variable_matmul(
+            /*input_tensor=*/input,
+            /*weight_tensor=*/weight,
+            /*config=*/kConfig,
+            /*offsets_tensor=*/offsets,
+            /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
+            /*transpose_a=*/false,
+            /*transpose_b=*/false,
+            /*compute_kernel_config=*/std::nullopt,
+            /*output_tensor=*/parent_out,
+            /*offsets_start_index=*/s,
+            /*expected_M_tiles=*/M_parent / 32U);
+        const auto entries_after = device->num_program_cache_entries();
+
+        if (s == 0U) {
+            // Guard against a vacuous test: the program cache must actually be populated, else
+            // the delta==0 checks below would pass trivially with the cache disabled.
+            EXPECT_GT(entries_after, 0U) << "program cache not populated after first call";
+        } else {
+            EXPECT_EQ(entries_after, entries_before)
+                << "variable_matmul compiled a new program on offsets_start_index=" << s
+                << " (expected a cache hit through override_runtime_arguments)";
+        }
+
+        auto input_slice = ttnn::slice(
+            input,
+            ttsl::SmallVector<uint32_t>{0U, 0U, m_lo, 0U},
+            ttsl::SmallVector<uint32_t>{1U, 1U, m_hi, K},
+            ttsl::SmallVector<uint32_t>{1U, 1U, 1U, 1U});
+        auto ref = minimal_matmul_hifi4(input_slice, weight, kConfig);
+        const auto ref_vec = ttml::core::to_vector<float>(ref);
+        const auto written_vec = ttml::core::to_vector<float>(parent_out);
+
+        EXPECT_EQ(subregion_max_abs_error(written_vec, ref_vec, m_lo, actual_M, N), 0.0F)
+            << "variable(InputAndOutputRow) cache-hit result wrong at offsets_start_index=" << s << " rows [" << m_lo
+            << "," << m_hi << ")";
+    }
+}
