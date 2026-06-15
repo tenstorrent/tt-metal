@@ -1015,7 +1015,7 @@ def run_decoder_layer_prefill_update_cache_tt(
     )
     mla_fidelity = _parse_math_fidelity(
         os.environ.get("GLM4_MOE_LITE_MLA_FIDELITY", ""),
-        default=ttnn.MathFidelity.HiFi4,
+        default=ttnn.MathFidelity.HiFi2,
     )
     mla_approx = os.environ.get("GLM4_MOE_LITE_MLA_APPROX", "0").strip() != "0"
     mla_fp32_acc_req = os.environ.get("GLM4_MOE_LITE_MLA_FP32_ACC", "").strip() == "1"

@@ -76,12 +76,13 @@ class _DecodeTuned:
 # Keyed (K, N) so only the exact measured shapes change; all others are untouched.
 _DECODE_MATMUL_TUNED: dict[tuple[int, int], _DecodeTuned] = {
     (2048, 768): _DecodeTuned(num_cores=8, in0_block_w=4, per_core_N=3, out_subblock_w=3),  # q_a: 28→13us (2.1x)
-    (768, 5120): _DecodeTuned(
-        num_cores=40, in0_block_w=4, per_core_N=4, out_subblock_w=4, in0_dram=True
-    ),  # q_b: 17→12us
+    (768, 5120): _DecodeTuned(num_cores=40, in0_block_w=4, per_core_N=4, out_subblock_w=4),  # q_b: stage in0 in L1
     (1280, 2048): _DecodeTuned(
         num_cores=32, in0_block_w=4, per_core_N=2, out_subblock_w=2
     ),  # w_o (head-parallel): 23→11us (2.2x)
+    # Head-parallel w_o per-shard (K=heads_per_dev*v_head_dim=384, N=hidden); removes the
+    # per_core_N=1 SLOW penalty on the auto 64-core config (4.27→3.72us, 1.15x).
+    (384, 2048): _DecodeTuned(num_cores=16, in0_block_w=4, per_core_N=4, out_subblock_w=4),
 }
 
 
@@ -103,9 +104,39 @@ _ROUTER_PREFILL_CKC = ttnn.WormholeComputeKernelConfig(
 # Fused in router matmul (moe_topk_tt); bias add stays a separate op after scores.
 ROUTER_FUSED_SIGMOID = ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)
 
+# Decode kv_b2 per-head matmul (b={H/tp} x 32 x 512 x 256): HiFi2 + tuned 1D prog cfg.
+# Sweep baseline (test_prefill_batched_matmul_sweep.py): nc=8 bw=4; decode uses nc=4 pcN=2
+# so out_subblock h*w >= 2 (avoids the auto-config HiFi4 / no-prog_cfg penalty).
+_KVB2_DECODE_CKC = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi2,
+    math_approx_mode=False,
+    fp32_dest_acc_en=False,
+    packer_l1_acc=True,
+)
+
 
 def prefill_matmul_tuned_enabled() -> bool:
     return os.environ.get("GLM4_MOE_LITE_PREFILL_MATMUL_TUNED", "").strip() == "1"
+
+
+def _prefill_1d_ws_max_mt() -> int:
+    """Max M-tiles safe for 1D WIDTH_SHARDED prefill matmul (per_core_M=mt) on L1."""
+    raw = os.environ.get("GLM4_MOE_LITE_PREFILL_1D_WS_MAX_MT", "").strip()
+    if raw:
+        return max(1, int(raw))
+    return 32  # 1024 tokens; empirically safe on Blackhole 1×4
+
+
+def _cap_subblock_hw(h: int, w: int, *, fp32_dest_acc_en: bool) -> tuple[int, int]:
+    max_hw = 16 if fp32_dest_acc_en else 8
+    while h * w > max_hw:
+        if w > 1:
+            w -= 1
+        elif h > 1:
+            h -= 1
+        else:
+            break
+    return h, w
 
 
 def prepare_sparse_moe_matmul_in0(
@@ -315,23 +346,23 @@ def ensure_min_subblock_area(
         if width_sharded_out and h != 1:
             for cand in (4, 3, 2):
                 if per_core_N >= cand and per_core_N % cand == 0:
-                    return 1, cand
+                    return _cap_subblock_hw(1, cand, fp32_dest_acc_en=fp32_dest_acc_en)
             return 1, 1
-        return h, w
+        return _cap_subblock_hw(h, w, fp32_dest_acc_en=fp32_dest_acc_en)
     if width_sharded_out:
         for cand in (4, 3, 2):
             if per_core_N >= cand and per_core_N % cand == 0:
-                return 1, cand
+                return _cap_subblock_hw(1, cand, fp32_dest_acc_en=fp32_dest_acc_en)
         return 1, 1
     if per_core_M >= 2:
         for cand in (4, 3, 2):
             if per_core_M % cand == 0:
-                return cand, 1
+                return _cap_subblock_hw(cand, 1, fp32_dest_acc_en=fp32_dest_acc_en)
     if per_core_N >= 2:
         for cand in (4, 3, 2):
             if per_core_N % cand == 0:
-                return 1, cand
-    return h, w
+                return _cap_subblock_hw(cand, 1, fp32_dest_acc_en=fp32_dest_acc_en)
+    return _cap_subblock_hw(h, w, fp32_dest_acc_en=fp32_dest_acc_en)
 
 
 def compute_1d_prog_cfg(
@@ -856,7 +887,49 @@ def prefill_linear_ws_out(
     m_total = 1
     for i in range(len(a.shape) - 1):
         m_total *= int(a.shape[i])
+    mt = max(1, (m_total + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE)
+    max_ws_mt = _prefill_1d_ws_max_mt()
     ckc = compute_kernel_config if compute_kernel_config is not None else _PREFILL_CKC
+
+    def _prefill_dram_linear_fallback() -> ttnn.Tensor:
+        a_l1, copied = _to_l1_if_needed(a)
+        downstream_mc = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+        out = ttnn.linear(a_l1, b, compute_kernel_config=ckc, memory_config=downstream_mc)
+        if copied:
+            ttnn.deallocate(a_l1, force=False)
+        return out
+
+    def _prefill_2d_m_split_fallback() -> ttnn.Tensor | None:
+        """2D multicast with M split across grid rows (avoids 1D per_core_M=mt L1 clash)."""
+        kt, nt = _weight_tile_shape(b)
+        grid = device.compute_with_storage_grid_size()
+        max_x, max_y = int(grid.x), int(grid.y)
+        for grid_y in (4, 2, 1):
+            if grid_y > max_y:
+                continue
+            per_core_M = max(1, (mt + grid_y - 1) // grid_y)
+            if per_core_M > max_ws_mt:
+                continue
+            for grid_x in range(min(8, max_x), 0, -1):
+                cores = grid_x * grid_y
+                if cores <= 0 or nt % cores != 0:
+                    continue
+                per_core_N = nt // cores
+                if per_core_N < 1:
+                    continue
+                return prefill_linear_2d_bs_out(
+                    a,
+                    b,
+                    device=device,
+                    grid_x=grid_x,
+                    grid_y=grid_y,
+                    in0_block_w=_auto_in0_block_w(kt),
+                    per_core_M=per_core_M,
+                    per_core_N=per_core_N,
+                    compute_kernel_config=ckc,
+                    memory_config=ttnn.L1_MEMORY_CONFIG if return_sharded else memory_config,
+                )
+        return None
 
     if prefill_matmul_tuned_enabled() and m_total > ttnn.TILE_SIZE:
         kt, nt = _weight_tile_shape(b)
@@ -893,8 +966,18 @@ def prefill_linear_ws_out(
                 memory_config=ttnn.L1_MEMORY_CONFIG if return_sharded else memory_config,
             )
             return out
-        # L1 shared expert down: 1D 8×4 ibw4 ws.
+        # L1 shared expert down: 1D 8×4 ibw4 ws (mt must fit L1 budget).
         if kt == 12 and nt == 16:
+            if mt > max_ws_mt:
+                out_2d = _prefill_2d_m_split_fallback()
+                if out_2d is not None:
+                    return out_2d
+                if return_sharded:
+                    raise RuntimeError(
+                        f"prefill_linear_ws_out shared_down: mt={mt} > max_ws_mt={max_ws_mt}; "
+                        "set GLM4_MOE_LITE_MAX_PREFILL_CHUNK_SIZE"
+                    )
+                return _prefill_dram_linear_fallback()
             prog_cfg, ws_mc = _tuned_shared_down_1d_prog_and_ws(m_total=m_total)
             a_l1, copied = _to_l1_if_needed(a)
             out_sharded = ttnn.linear(a_l1, b, program_config=prog_cfg, memory_config=ws_mc, compute_kernel_config=ckc)
@@ -913,12 +996,25 @@ def prefill_linear_ws_out(
     use_sharded_in0 = False
     sharded_in0_enabled = sharded_in0 or os.environ.get("GLM4_MOE_LITE_PREFILL_SHARDED_MATMUL_IN0", "0").strip() == "1"
     matched = None
-    if sharded_in0_enabled and _is_l1_width_sharded(a):
+    if sharded_in0_enabled and _is_l1_width_sharded(a) and mt <= max_ws_mt:
         matched = _prefill_1d_prog_and_ws_mc_matched_in0(b, m_total, a)
         use_sharded_in0 = matched is not None
+    else:
+        use_sharded_in0 = False
     if use_sharded_in0:
         prog_cfg, ws_mc = matched
         a_l1, _copied = a, False
+    elif mt > max_ws_mt:
+        out_2d = _prefill_2d_m_split_fallback()
+        if out_2d is not None:
+            return out_2d
+        if return_sharded:
+            raise RuntimeError(
+                f"prefill_linear_ws_out: M={m_total} (mt={mt}) exceeds L1 1D ws budget "
+                f"(max_ws_mt={max_ws_mt}) and no 2D split config matched; "
+                "enable chunked prefill via GLM4_MOE_LITE_MAX_PREFILL_CHUNK_SIZE"
+            )
+        return _prefill_dram_linear_fallback()
     else:
         prog_cfg, ws_mc = _prefill_1d_prog_and_ws_mc(device, b, m_total, ws_nc_hint=ws_nc_hint)
         a_l1, _copied = _to_l1_if_needed(a)
@@ -1008,6 +1104,49 @@ def prefill_per_head_linear(
     return out
 
 
+def _decode_kvb2_per_head_linear(
+    a: ttnn.Tensor,
+    b: ttnn.Tensor,
+    *,
+    device: Any,
+    memory_config: ttnn.MemoryConfig | None = None,
+) -> ttnn.Tensor:
+    """Decode kv_b2: [1,H,32,512] × [1,H,512,256], fuse_batch=False, HiFi2 + tuned prog cfg."""
+    mt = max(1, (int(a.shape[-2]) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE)
+    prog_cfg = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(4, 1),
+        in0_block_w=4,
+        out_subblock_h=1,
+        out_subblock_w=2,
+        per_core_M=mt,
+        per_core_N=2,
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+    a_l1, copied = _to_l1_if_needed(a)
+    out_l1 = ttnn.linear(
+        a_l1,
+        b,
+        program_config=prog_cfg,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        compute_kernel_config=_KVB2_DECODE_CKC,
+    )
+    if copied:
+        ttnn.deallocate(a_l1, force=False)
+    # Default: keep L1 interleaved for the kv_b2 → head-flatten → w_o chain (avoids a
+    # DRAM gather Copy before permute/reshape).  Caller may override via memory_config.
+    downstream_mc = memory_config if memory_config is not None else ttnn.L1_MEMORY_CONFIG
+    out_l1_mc = out_l1.memory_config()
+    if _is_l1_interleaved(downstream_mc) and _is_l1_interleaved(out_l1_mc):
+        return out_l1
+    if downstream_mc.buffer_type == out_l1_mc.buffer_type and downstream_mc.memory_layout == out_l1_mc.memory_layout:
+        return out_l1
+    out = ttnn.to_memory_config(out_l1, downstream_mc)
+    ttnn.deallocate(out_l1, force=False)
+    return out
+
+
 def _resolve_grid(num_cores: int, max_x: int, max_y: int) -> tuple[int, int] | None:
     """Largest (gx, gy) with gx*gy == num_cores that fits the physical grid."""
     for gx in range(min(max_x, num_cores), 0, -1):
@@ -1052,7 +1191,12 @@ def _tuned_decode_linear(
         memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         buffer_type=ttnn.BufferType.L1,
     )
-    act = ttnn.to_memory_config(a, ttnn.DRAM_MEMORY_CONFIG if tuned.in0_dram else ttnn.L1_MEMORY_CONFIG)
+    if tuned.in0_dram:
+        act = ttnn.to_memory_config(a, ttnn.DRAM_MEMORY_CONFIG)
+    elif _is_l1_interleaved(a.memory_config()):
+        act = a
+    else:
+        act = ttnn.to_memory_config(a, ttnn.L1_MEMORY_CONFIG)
     out_sharded = ttnn.linear(
         act,
         b,
@@ -1093,13 +1237,19 @@ def mlp_linear(
     b_batch = 1
     for i in range(len(b.shape) - 2):
         b_batch *= int(b.shape[i])
-    if b_batch > 1 and m_total > ttnn.TILE_SIZE:
+    if b_batch > 1:
+        k, n = int(b.shape[-2]), int(b.shape[-1])
+        mt = max(1, (int(a.shape[-2]) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE)
+        if k == 512 and n == 256 and mt == 1:
+            kvb2_mc = memory_config if memory_config is not None else ttnn.L1_MEMORY_CONFIG
+            return _decode_kvb2_per_head_linear(a, b, device=device, memory_config=kvb2_mc)
+        kvb_mc = memory_config if memory_config is not None else ttnn.L1_MEMORY_CONFIG
         return prefill_per_head_linear(
             a,
             b,
             device=device,
             compute_kernel_config=ckc,
-            memory_config=memory_config,
+            memory_config=kvb_mc,
         )
     if b_batch == 1:
         if m_total > ttnn.TILE_SIZE:
@@ -1125,6 +1275,10 @@ def mlp_down_linear(
     memory_config: ttnn.MemoryConfig | None = None,
 ) -> ttnn.Tensor:
     """Linear for MLP down projections with a fixed 32-core / out_subblock_w=2 program config."""
+    act = a
+    copied_act = False
+    if _is_l1_width_sharded(a):
+        act, copied_act = _to_l1_if_needed(a)
     kwargs: dict[str, object] = {}
     mc = memory_config if memory_config is not None else cfg.decode_act_mc
     if mc is not None:
@@ -1134,9 +1288,15 @@ def mlp_down_linear(
     for i in range(len(a.shape) - 1):
         m_total *= int(a.shape[i])
     if m_total > ttnn.TILE_SIZE:
-        return _prefill_linear_ws_out(a, b, device=device, cfg=cfg, memory_config=memory_config)
+        out = _prefill_linear_ws_out(act, b, device=device, cfg=cfg, memory_config=memory_config)
+        if copied_act:
+            ttnn.deallocate(act, force=False)
+        return out
     kwargs["program_config"] = compute_1d_mlp_down_prog_cfg(device, b, m_total)
-    return ttnn.linear(a, b, **kwargs)
+    out = ttnn.linear(act, b, **kwargs)
+    if copied_act:
+        ttnn.deallocate(act, force=False)
+    return out
 
 
 def tp_row_parallel_linear(
@@ -1327,8 +1487,9 @@ def dram_sharded_mlp(
     return result_dram
 
 
-# Gate/up decode tuning: per_core_N preferred 4 (fallback to this), WIDTH_SHARDED L1 output.
-_GATE_UP_PER_CORE_N = 2  # fallback per_core_N when N-tiles not divisible by the swept-optimal 4
+# Gate/up decode tuning: per_core_N=2, out_subblock_w=2, WIDTH_SHARDED L1 output.
+_GATE_UP_PER_CORE_N = 2
+_GATE_UP_OUT_SUBBLOCK_W = 2
 
 
 def mlp_gate_up_linear(
@@ -1338,6 +1499,7 @@ def mlp_gate_up_linear(
     device: Any,
     cfg: Glm4RuntimeConfig,
     memory_config: ttnn.MemoryConfig | None = None,
+    return_sharded: bool = False,
 ) -> ttnn.Tensor:
     """Gate/up projection linear, optimized for decode (M <= TILE_SIZE).
 
@@ -1424,6 +1586,8 @@ def mlp_gate_up_linear(
         memory_config=out_mc,
     )
 
+    if return_sharded:
+        return out_sharded
     downstream_mc = memory_config if memory_config is not None else (cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG)
     out = ttnn.to_memory_config(out_sharded, downstream_mc)
     ttnn.deallocate(out_sharded, force=False)

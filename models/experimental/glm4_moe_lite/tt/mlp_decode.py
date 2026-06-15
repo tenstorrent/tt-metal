@@ -78,7 +78,15 @@ def _run_standard_swiglu(
     """Standard (non-DRAM-sharded) SwiGLU: gate * silu -> up -> down."""
     # Tuned 48-core gate/up helper: WIDTH_SHARDED L1 output replaces cross-NOC DRAM writes; out_subblock_w=2 avoids SLOW path.
     if fuse_gate_up and getattr(w, "w_mlp_gate_up", None) is not None:
-        gate_up = mlp_gate_up_linear(x, w.w_mlp_gate_up, device=device, cfg=cfg)
+        # TP column-sharded gate/up: slice from WIDTH_SHARDED fused output before DRAM gather.
+        keep_sharded = cfg.tp_enabled
+        gate_up = mlp_gate_up_linear(
+            x,
+            w.w_mlp_gate_up,
+            device=device,
+            cfg=cfg,
+            return_sharded=keep_sharded,
+        )
         _batch = int(gate_up.shape[2])
         _inter_tp = int(gate_up.shape[3]) // 2
         gate = ttnn.slice(gate_up, [0, 0, 0, 0], [1, 1, _batch, _inter_tp])
@@ -112,7 +120,7 @@ def dense_mlp_forward(
         mlp_out = _run_dram_sharded_swiglu(x, w.w_mlp_gate, w.w_mlp_up, w.w_mlp_down, device=device, cfg=cfg)
         ttnn.deallocate(x, force=False)
     else:
-        mlp_out = _run_standard_swiglu(x, w, device=device, cfg=cfg, fuse_gate_up=False)
+        mlp_out = _run_standard_swiglu(x, w, device=device, cfg=cfg, fuse_gate_up=cfg.fuse_shared_gate_up)
         ttnn.deallocate(x, force=False)
 
     if cfg.tp_enabled:

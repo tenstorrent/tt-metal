@@ -32,7 +32,9 @@ BASE_PROMPT = "Summarize the following document. "
 MAX_NEW_TOKENS = 128
 MESH_ROWS = 4
 MESH_COLS = 8
-PREFILL_CHUNK_SIZE = 32768
+# Each prefill chunk must keep M-tiles ≤ ~32 for L1 WIDTH_SHARDED matmuls on Blackhole 1×4.
+# Tuned 2D paths (PREFILL_MATMUL_TUNED) are swept at M=128; larger chunks hit subblock/L1 limits.
+PREFILL_CHUNK_SIZE = 128
 SCRIPT_PATH = "models/experimental/glm4_moe_lite/scripts/debug_run_full_tt_greedy.py"
 
 
@@ -73,6 +75,7 @@ def run_one(
         "sampling",
     ]
     env = os.environ.copy()
+    env["GLM4_MOE_LITE_PREFILL_MATMUL_TUNED"] = "1"
     env["GLM4_MOE_LITE_SKIP_DEFENSIVE_CLONES"] = "1"
     env["GLM4_MOE_LITE_FUSE_QKV_A"] = "1"
     env["GLM4_MOE_LITE_FUSE_SHARED_GATE_UP"] = "1"
@@ -80,14 +83,18 @@ def run_one(
     env["GLM4_MOE_LITE_DECODE_L1_ACT"] = "1"
     env["GLM4_MOE_LITE_EP_L1"] = "1"
     env["GLM4_MOE_LITE_MAX_PREFILL_CHUNK_SIZE"] = str(PREFILL_CHUNK_SIZE)
-    # env["GLM4_MOE_LITE_FUSE_EXPERTS_GATE_UP"] = "1"
-    env["GLM4_MOE_LITE_BATCHED_PREFILL"] = "1"
-    # env["GLM4_MOE_LITE_TP"] = "1"
-    # env["GLM4_MOE_LITE_EXPERTS_TT_DTYPE"] = "bf4"
-    env["GLM4_MOE_LITE_CCL_NUM_LINKS"] = "4"
-    env["GLM4_MOE_LITE_CCL_TOPOLOGY"] = "ring"
+    env["GLM4_MOE_LITE_CCL_NUM_LINKS"] = "2"
+    env["GLM4_MOE_LITE_CCL_TOPOLOGY"] = "linear"
     env["GLM4_MOE_LITE_FUSE_MLP_MOE_REDUCE"] = "1"
     env["GLM4_MOE_LITE_SKIP_TYPECAST"] = "1"
+    env["GLM4_MOE_LITE_TP"] = "1"
+    env["GLM4_MOE_LITE_ATTN_DP"] = "1"
+    env["GLM4_MOE_LITE_HEAD_PARALLEL_KVB2"] = "1"
+    env["GLM4_MOE_LITE_FUSE_EXPERTS_GATE_UP"] = "1"
+    env["GLM4_MOE_LITE_SPARSE_MATMUL_PREFILL_TUNED"] = "1"
+    env["GLM4_MOE_LITE_MOE_SPARSE_DEBUG"] = "1"
+    env["GLM4_MOE_LITE_MOE_DISPATCH_IMPL"] = "all_to_all"
+    env["GLM4_MOE_LITE_SHARDED_DECODE_NORM"] = "1"
 
     result = {
         "isl": isl,
@@ -125,12 +132,24 @@ def run_one(
             combined = stderr + stdout
             if "OOM" in combined or "out of memory" in combined.lower() or "FATAL" in combined:
                 result["status"] = "OOM"
-                for line in combined.splitlines():
-                    ll = line.strip()
-                    if any(k in ll for k in ("OOM", "Out of Memory", "out of memory", "Allocat", "FATAL")):
-                        if len(ll) > 10:
-                            result["oom_detail"] = ll[:200]
-                            break
+            for line in combined.splitlines():
+                ll = line.strip()
+                if any(
+                    k in ll
+                    for k in (
+                        "OOM",
+                        "Out of Memory",
+                        "out of memory",
+                        "Allocat",
+                        "FATAL",
+                        "RuntimeError",
+                        "TT_THROW",
+                        "clash with L1",
+                    )
+                ):
+                    if len(ll) > 10:
+                        result["oom_detail"] = ll[:200]
+                        break
             return result
 
         # Parse: prefill_s=104.037 decode_tok_s=0.1225 tok_s=8.17
@@ -654,7 +673,8 @@ def main() -> int:
                     flush=True,
                 )
             else:
-                print(f"    status={r['status']}", flush=True)
+                detail = f" ({r['oom_detail']})" if r.get("oom_detail") else ""
+                print(f"    status={r['status']}{detail}", flush=True)
 
     print(f"Wrote {csv_path}", flush=True)
 

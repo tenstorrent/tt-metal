@@ -12,6 +12,7 @@ corresponding to the three phases of a decode attention step:
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Any
 
@@ -38,6 +39,36 @@ def _profile_add(profile: dict[str, float] | None, key: str, elapsed_s: float) -
 
 # FlashMLA → kv_b2 → w_o op-chain tuning constants (edit to retune without touching function bodies).
 _KVB2_INPUT_L1 = True
+
+
+def _flatten_v_heads_for_wo(
+    v: ttnn.Tensor,
+    *,
+    batch: int,
+    flat_dim: int,
+    use_concat_heads: bool,
+) -> ttnn.Tensor:
+    """Flatten [1,H,B,v_dim] → [1,1,B,H*v_dim] for w_o.
+
+    Decode defaults to permute+reshape (multi-core, ~7 μs on p300c).  nlp_concat_heads
+    is single-core (~17 μs) and slower here despite fewer op dispatches; opt in via
+    GLM4_MOE_LITE_NLP_CONCAT_HEADS_DECODE=1.
+    """
+    if os.environ.get("GLM4_MOE_LITE_NLP_CONCAT_HEADS_DECODE", "0").strip() == "1":
+        v_flat = ttnn.experimental.nlp_concat_heads(v, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(v, force=False)
+        return ttnn.reshape(v_flat, (1, 1, batch, flat_dim))
+    if use_concat_heads:
+        v = ttnn.transformer.concatenate_heads(v)
+        return ttnn.reshape(v, (1, 1, batch, flat_dim))
+    l1_mc = ttnn.L1_MEMORY_CONFIG if _KVB2_INPUT_L1 else None
+    if l1_mc is not None:
+        v = ttnn.permute(v, (0, 2, 1, 3), memory_config=l1_mc)
+        v = ttnn.reshape(v, (1, batch, 1, flat_dim))
+        return ttnn.permute(v, (0, 2, 1, 3), memory_config=l1_mc)
+    v = ttnn.permute(v, (0, 2, 1, 3))
+    v = ttnn.reshape(v, (1, batch, 1, flat_dim))
+    return ttnn.permute(v, (0, 2, 1, 3))
 
 
 def _safe_slice(
@@ -267,19 +298,6 @@ def q_projection(
         ttnn.deallocate(q, force=False)
         q = None
 
-    # kv_b1: project q_nope into KV latent space
-    # w_kv_b1 stays row-parallel under TP regardless of ATTN_DP.
-    use_tp_kv_b1 = cfg.tp_enabled
-    if use_tp_kv_b1:
-        qk_nope = int(hparams.qk_nope_head_dim)
-        qk_nope_per_shard = qk_nope // max(1, cfg.tp_size)
-        if qk_nope % max(1, cfg.tp_size) != 0 or qk_nope_per_shard % int(ttnn.TILE_SIZE) != 0:
-            use_tp_kv_b1 = False
-    if use_tp_kv_b1:
-        q_nope = tp_row_parallel_linear(q_nope, w.w_kv_b1, device=device, cfg=cfg)
-    else:
-        q_nope = mlp_linear(q_nope, w.w_kv_b1, device=device, cfg=cfg)
-
     if not cfg.skip_typecast and q_rope.dtype != ttnn.bfloat16:
         q_rope = ttnn.typecast(q_rope, dtype=ttnn.bfloat16)
     if use_decode_rope and rope_decode_fn is not None:
@@ -292,6 +310,19 @@ def q_projection(
             trans_matrix,
             is_decode_mode=False,
         )
+
+    # kv_b1: project q_nope into KV latent space (independent of q_rope rotary above).
+    # w_kv_b1 stays row-parallel under TP regardless of ATTN_DP.
+    use_tp_kv_b1 = cfg.tp_enabled
+    if use_tp_kv_b1:
+        qk_nope = int(hparams.qk_nope_head_dim)
+        qk_nope_per_shard = qk_nope // max(1, cfg.tp_size)
+        if qk_nope % max(1, cfg.tp_size) != 0 or qk_nope_per_shard % int(ttnn.TILE_SIZE) != 0:
+            use_tp_kv_b1 = False
+    if use_tp_kv_b1:
+        q_nope = tp_row_parallel_linear(q_nope, w.w_kv_b1, device=device, cfg=cfg)
+    else:
+        q_nope = mlp_linear(q_nope, w.w_kv_b1, device=device, cfg=cfg, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     if q is not None:
         ttnn.deallocate(q, force=False)
@@ -460,7 +491,11 @@ def flash_mla_and_output(
     # kv_b2 + output projection
     t0 = time.perf_counter() if profile is not None else 0.0
     if cfg.head_parallel_kvb2:
-        attn_latent = ttnn.mesh_partition(attn_latent, dim=1, cluster_axis=cfg.tp_axis)
+        part_mc = ttnn.L1_MEMORY_CONFIG if _KVB2_INPUT_L1 else None
+        if part_mc is not None:
+            attn_latent = ttnn.mesh_partition(attn_latent, dim=1, cluster_axis=cfg.tp_axis, memory_config=part_mc)
+        else:
+            attn_latent = ttnn.mesh_partition(attn_latent, dim=1, cluster_axis=cfg.tp_axis)
         v = mlp_linear(attn_latent, w.w_kv_b2, device=device, cfg=cfg)
         ttnn.deallocate(attn_latent, force=False)
         if cfg.skip_defensive_clones:
@@ -470,13 +505,7 @@ def flash_mla_and_output(
                 pass
         heads_per_dev = num_heads // cfg.tp_size
         flat_dim = heads_per_dev * int(hparams.v_head_dim)
-        if cfg.concat_heads:
-            v = ttnn.transformer.concatenate_heads(v)
-            v = ttnn.reshape(v, (1, 1, batch, flat_dim))
-        else:
-            v = ttnn.permute(v, (0, 2, 1, 3))
-            v = ttnn.reshape(v, (1, batch, 1, flat_dim))
-            v = ttnn.permute(v, (0, 2, 1, 3))
+        v = _flatten_v_heads_for_wo(v, batch=batch, flat_dim=flat_dim, use_concat_heads=cfg.concat_heads)
         attn_out_partial = mlp_linear(v, w.w_o, device=device, cfg=cfg)
         ttnn.deallocate(v, force=False)
         attn_out = ttnn.all_reduce(
@@ -498,13 +527,8 @@ def flash_mla_and_output(
                 ttnn.deallocate(attn_latent_padded, force=False)
             except Exception:
                 pass
-        if cfg.concat_heads:
-            v = ttnn.transformer.concatenate_heads(v)
-            v = ttnn.reshape(v, (1, 1, batch, int(num_heads * hparams.v_head_dim)))
-        else:
-            v = ttnn.permute(v, (0, 2, 1, 3))
-            v = ttnn.reshape(v, (1, batch, 1, int(num_heads * hparams.v_head_dim)))
-            v = ttnn.permute(v, (0, 2, 1, 3))
+        flat_dim = int(num_heads * hparams.v_head_dim)
+        v = _flatten_v_heads_for_wo(v, batch=batch, flat_dim=flat_dim, use_concat_heads=cfg.concat_heads)
         # Tuned 32-core w_o helper: WIDTH_SHARDED L1 output + act-in-L1 cuts the 83%-DRAM-util baseline penalty.
         attn_out = attn_wo_linear(v, w.w_o, device=device, cfg=cfg)
         ttnn.deallocate(v, force=False)
