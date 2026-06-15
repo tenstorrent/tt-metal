@@ -96,6 +96,7 @@ SendDirectAsyncMeshWorkloadFactory::create_at(
     auto max_alignment = std::max(
         target_device->allocator()->get_alignment(mesh_socket.get_config().socket_mem_config.socket_storage_type),
         input_tensor.buffer()->alignment());
+
     auto input_page_size = input_tensor.buffer()->aligned_page_size();
     auto socket_aligned_page_size = tt::align(input_page_size, max_alignment);
     auto total_num_pages = input_tensor.buffer()->num_pages();
@@ -103,12 +104,27 @@ SendDirectAsyncMeshWorkloadFactory::create_at(
     uint32_t pages_per_core = total_num_pages / num_cores;
     uint32_t remainder_pages = total_num_pages % num_cores;
 
-    auto fabric_max_payload_size = tt::round_down(
-        std::min(
-            tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
-            static_cast<size_t>(mesh_socket.get_config().socket_mem_config.fifo_size)),
-        max_alignment);
+    auto* input_buffer = input_tensor.buffer();
+    const bool is_interleaved = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED;
+    uint32_t num_banks = input_buffer->allocator()->get_num_banks(input_buffer->buffer_type());
+
+    auto fabric_max_payload_size = tt::round_down(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(), max_alignment);
     auto num_pages_per_packet = fabric_max_payload_size / socket_aligned_page_size;
+
+    // Bank-contiguous packing optimization: for an interleaved tensor, pages whose indices differ by
+    // num_banks live in the same bank at consecutive slots and are therefore contiguous in memory.
+    // When more than one page fits in a fabric packet we gather num_pages_per_packet such pages with
+    // a single noc_async_read and forward them in a single fabric packet.
+    //
+    // The reader processes a whole super-block of (num_banks * num_pages_per_packet) pages per CB
+    // entry: it issues one read per bank (each gathering num_pages_per_packet bank-contiguous pages)
+    // so the reads overlap across banks before a single barrier, preserving DRAM read parallelism.
+    // The writer then drains the entry as num_banks combined fabric packets.
+    //
+    // Restricted to DRAM so the super-block CB stays small (num_banks is the DRAM bank count, ~12);
+    // L1-interleaved buffers would have one bank per core and an impractically large CB.
+    const bool is_dram = input_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    uint32_t enable_bank_packing = (is_interleaved && is_dram && num_pages_per_packet > 1 && num_banks > 1) ? 1u : 0u;
 
     // Small pages (num_pages_per_packet > 0): pack multiple whole pages into one fabric packet.
     // Large pages (num_pages_per_packet == 0): split a single page across multiple fabric packets.
@@ -123,7 +139,11 @@ SendDirectAsyncMeshWorkloadFactory::create_at(
     uint32_t handshake_page_size = tt::align(static_cast<uint32_t>(64), max_alignment);
 
     uint32_t cb_num_pages = 2;
-    uint32_t cb_page_size = fabric_max_payload_size;
+    // For bank packing, each CB entry holds a full super-block: num_banks regions of
+    // num_pages_per_packet pages each (laid out at input_page_size stride, contiguous per bank).
+    uint32_t cb_page_size = enable_bank_packing
+                                ? static_cast<uint32_t>(num_banks * num_pages_per_packet * input_page_size)
+                                : fabric_max_payload_size;
 
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
@@ -174,14 +194,17 @@ SendDirectAsyncMeshWorkloadFactory::create_at(
         num_whole_packets_per_page,  // num_whole_packets_per_page
         partial_packet_size,         // partial_packet_size
         fabric_max_payload_size,     // fabric_max_payload_size
+        num_banks,                   // num_banks
+        enable_bank_packing,         // enable_bank_packing
     };
     reader_compile_args.insert(reader_compile_args.end(), compile_time_args.begin(), compile_time_args.end());
 
-    // Reuse the stock sender_reader: it streams input pages into the data CB regardless of how the
-    // writer drains them.
+    // Dedicated reader: streams input pages into the data CB, gathering bank-contiguous pages into a
+    // single CB entry when bank packing is enabled so the writer can drain each entry as one packet.
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/send_async/device/kernels/sender_reader.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/send_direct_async/device/kernels/"
+        "sender_direct_reader.cpp",
         sender_core_range_set,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_args));
 
@@ -197,6 +220,8 @@ SendDirectAsyncMeshWorkloadFactory::create_at(
         num_whole_packets_per_page,  // num_whole_packets_per_page
         partial_packet_size,         // partial_packet_size
         fabric_max_payload_size,     // whole_packet_size (fabric_max_payload_size)
+        num_banks,                   // num_banks
+        enable_bank_packing,         // enable_bank_packing
     };
     writer_compile_args.insert(writer_compile_args.end(), compile_time_args.begin(), compile_time_args.end());
 
