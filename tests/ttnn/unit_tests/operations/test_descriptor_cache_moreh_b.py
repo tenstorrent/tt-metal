@@ -53,7 +53,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.unit_tests.operations.test_utils import TILE_HEIGHT, TILE_WIDTH, to_torch
+from tests.ttnn.unit_tests.operations.test_utils import TILE_HEIGHT, TILE_WIDTH
 from models.common.utility_functions import comp_allclose, comp_allclose_and_pcc
 
 

@@ -19,9 +19,9 @@ TT_METAL_FORBID_DESCRIPTOR_REBUILD_ON_CACHE_HIT is set, an op that falls to the 
 on a cache HIT raises TT_FATAL instead of silently rebuilding. A TT_FATAL aborts the process, so a
 SLOW-PATH op makes the run exit non-zero.
 
-The guard is read ONCE via a function-local `static const bool ... = std::getenv(...) != nullptr`
-on the first slow-path hit, so the env var must be set BEFORE ttnn first dispatches. We therefore
-run each op in an ISOLATED SUBPROCESS that sets the env in its own os.environ before importing
+The guard is read ONCE from a namespace-scope `inline const bool ... = std::getenv(...) != nullptr`
+initialized at library LOAD time, so the env var must be set BEFORE ttnn is imported/loaded. We
+therefore run each op in an ISOLATED SUBPROCESS that sets the env in its own os.environ before importing
 ttnn, runs the op TWICE (1st = cache miss, 2nd = cache HIT where the guard fires), prints a success
 marker, and exits. The parent test asserts returncode == 0 AND the marker is in stdout (so a clean
 exit that skipped the op cannot masquerade as a pass).
@@ -47,8 +47,8 @@ _SUCCESS_MARKER = "DESCRIPTOR_NO_REBUILD_OK"
 # fires on a slow-path rebuild). The op-specific body is appended per test.
 _CHILD_HEADER = f"""
 import os
-# Must be set before ttnn first dispatches: the adapter reads it via getenv on the first
-# slow-path hit and caches the result in a function-local `static const bool`.
+# Must be set before ttnn is imported/loaded: the adapter reads it via getenv into a
+# namespace-scope `inline const bool` initialized at library load time.
 os.environ["TT_METAL_FORBID_DESCRIPTOR_REBUILD_ON_CACHE_HIT"] = "1"
 
 import torch
