@@ -63,6 +63,7 @@ from ..utils.test import line_params, ring_params
 
 WAN = "wan"
 LTX = "ltx"
+FLUX = "flux"
 
 # tp_axis = which MESH axis holds the TP cluster. Two strategies, both supported here:
 #   * tp_axis=1: carve a 1xTP LINE submesh (one row of the parent) — used for line/BH benches.
@@ -72,7 +73,7 @@ LTX = "ltx"
 #     to get a real wrap link for Ring topology — a 1x4 sub-row of the 8-wide axis is open.
 NORM_EPS = 1e-6
 GALAXY_LINKS = int(_os.getenv("WAN_GALAXY_LINKS", "4"))
-_ITERS = {WAN: 100, LTX: 50}  # bench iterations per model
+_ITERS = {WAN: 100, LTX: 50, FLUX: 50}  # bench iterations per model
 _PINGPONG = 2  # (pob, AG-sem) sets alternated across traced fused iters (skew absorber)
 
 # Wan2.2 14B: full feature dim 5120, 40 heads, head_dim 128, broadcast RoPE.
@@ -90,6 +91,12 @@ _WAN_RAW = [
 # LTX-2.3 AV: video dim 4096 (hd 128), audio dim 2048 (hd 64), 32 heads, per-head RoPE.
 _LTX_V, _LTX_A, _LTX_HV, _LTX_HA = 4096, 2048, 128, 64
 
+# FLUX: full dim 6144, 48 heads, head_dim 128, BROADCAST RoPE (rope_cos shape[1]==1),
+# both per_head_norm=False (full-row norm + TP all-gather) and True (per-head RMSNorm
+# over head_dim, no AG -> is_tp_1). Per-device rows given per (TP, SP).
+_FLUX_DIM, _FLUX_HD, _FLUX_HEADS = 6144, 128, 48
+_FLUX_ROWS = {8: (1024, 128, 4096, 16384), 4: (512, 64, 2048, 8192)}  # SP4/TP8, SP8/TP4
+
 
 @dataclass(frozen=True)
 class Cfg:
@@ -102,6 +109,7 @@ class Cfg:
     rope: bool
     full_heads: int  # model NUM_HEADS (per-head RoPE table + reference reshape)
     broadcast_rope: bool  # True => Wan (cos/sin shared across heads); False => LTX per-head
+    per_head_norm: bool = False  # FLUX: RMSNorm over head_dim per head (no AG, is_tp_1)
 
     @property
     def is_block(self) -> bool:
@@ -119,6 +127,8 @@ class Cfg:
     def pattern(self) -> str:
         if self.is_block:
             return "block+addcmul"
+        if self.per_head_norm:
+            return "perhead-norm+rope" if self.rope else "perhead-norm"
         return "qk+rope" if self.rope else "qk"
 
 
@@ -138,6 +148,21 @@ def _ltx_rows(kind: str, tp: int, stage: int = 0) -> int:
 def _make_cfgs(model: str, tp: int) -> list[Cfg]:
     if model == WAN:
         return [Cfg(cid, WAN, tp, seq, 5120, 128, rope, 40, True) for (cid, seq, rope) in _WAN_RAW]
+    if model == FLUX:
+        # 4 per-device row counts. Broadcast RoPE, head_dim 128.
+        # per_head_norm=True (FLUX.2 QK-norm) currently DEADLOCKS on a ring_size>1
+        # submesh: the per-head PRE does num_heads back-to-back row-reductions within
+        # one chunk and the compute pipeline wedges after ~3 (tracked in
+        # RMSNORM_FUSION_FINDINGS.md "Known issue: per_head_norm multidevice"). It
+        # works on a 1x1 mesh (device-op unit test). So only emit per_head_norm=False
+        # here until that LLK-level fix lands; set WAN_FLUX_PHN=1 to also emit the
+        # (currently-hanging) per_head_norm=True configs for fix work.
+        phns = (False, True) if _os.getenv("WAN_FLUX_PHN") == "1" else (False,)
+        return [
+            Cfg(f"flux_tp{tp}_N{n}_phn{int(phn)}", FLUX, tp, n, _FLUX_DIM, _FLUX_HD, True, _FLUX_HEADS, True, phn)
+            for n in _FLUX_ROWS[tp]
+            for phn in phns
+        ]
     v, a, hv, ha = _LTX_V, _LTX_A, _LTX_HV, _LTX_HA
     mk = lambda cid, rows, dim, hd, rope: Cfg(cid, LTX, tp, rows, dim, hd, rope, 32, False)  # noqa: E731
     return [
@@ -189,7 +214,9 @@ def _build(submesh: ttnn.MeshDevice, cfg: Cfg, tp_axis: int) -> dict:
         scale_p1 = (scale.float() + 1.0).to(torch.bfloat16)
         out["weight"] = bf16_tensor(scale_p1.reshape(1, cfg.dim), device=submesh, mesh_axis=tp_axis, shard_dim=-1)
         out["bias"] = bf16_tensor(shift.reshape(1, cfg.dim), device=submesh, mesh_axis=tp_axis, shard_dim=-1)
-        out["scale_b"] = bf16_tensor(scale_p1.reshape(1, 1, 1, cfg.dim), device=submesh, mesh_axis=tp_axis, shard_dim=-1)
+        out["scale_b"] = bf16_tensor(
+            scale_p1.reshape(1, 1, 1, cfg.dim), device=submesh, mesh_axis=tp_axis, shard_dim=-1
+        )
         out["shift_b"] = bf16_tensor(shift.reshape(1, 1, 1, cfg.dim), device=submesh, mesh_axis=tp_axis, shard_dim=-1)
         return out
 
@@ -220,7 +247,14 @@ def _torch_ref(cfg: Cfg) -> torch.Tensor:
     torch.manual_seed(0)
     x = torch.randn((1, 1, cfg.rows, cfg.dim), dtype=torch.bfloat16)
     xf = x.float().reshape(cfg.rows, cfg.dim)
-    y = xf * (xf.pow(2).mean(-1, keepdim=True) + NORM_EPS).rsqrt()
+    if cfg.per_head_norm:
+        # FLUX.2 per-head RMSNorm: reduce over head_dim per head (no cross-device AG),
+        # not the full row. Each head normalized independently -> embarrassingly parallel.
+        h, hd = cfg.full_heads, cfg.head_dim
+        xh = xf.reshape(cfg.rows, h, hd)
+        y = (xh * (xh.pow(2).mean(-1, keepdim=True) + NORM_EPS).rsqrt()).reshape(cfg.rows, cfg.dim)
+    else:
+        y = xf * (xf.pow(2).mean(-1, keepdim=True) + NORM_EPS).rsqrt()
 
     if cfg.is_block:
         scale = torch.randn(cfg.dim, dtype=torch.bfloat16)
@@ -289,7 +323,11 @@ def _fused_links(op_override):
     return op_override if op_override is not None else 2  # BH bench fused = 2-link MUX default
 
 
-def _call_op(inp, submesh, sem, cfg, topology, tp_axis, *, use_device_op, pob, num_links, weight, bias, rope):
+def _call_op(
+    inp, submesh, sem, cfg, topology, tp_axis, *, use_device_op, pob, num_links, weight, bias, rope, per_head_norm=None
+):
+    if per_head_norm is None:
+        per_head_norm = cfg.per_head_norm
     return ttnn.experimental.wan_fused_distributed_rmsnorm(
         inp["x"],
         tp_axis,
@@ -307,33 +345,65 @@ def _call_op(inp, submesh, sem, cfg, topology, tp_axis, *, use_device_op, pob, n
         persistent_output_buffer=pob if use_device_op else None,
         num_preferred_links=num_links,
         use_device_op=use_device_op,
+        per_head_norm=per_head_norm,
     )
 
 
 def _run_fused(inp, submesh, sem, cfg, topology, tp_axis, pob, op_override):
     bias = inp.get("bias") if cfg.is_block else None
     return _call_op(
-        inp, submesh, sem, cfg, topology, tp_axis,
-        use_device_op=True, pob=pob, num_links=_fused_links(op_override),
-        weight=inp["weight"], bias=bias, rope=cfg.rope,
+        inp,
+        submesh,
+        sem,
+        cfg,
+        topology,
+        tp_axis,
+        use_device_op=True,
+        pob=pob,
+        num_links=_fused_links(op_override),
+        weight=inp["weight"],
+        bias=bias,
+        rope=cfg.rope,
     )
 
 
 def _run_baseline(inp, submesh, sem, cfg, topology, tp_axis, op_override):
     # op_override = composite link count: None on BH (default 1), GALAXY_LINKS on galaxy.
-    if cfg.model == WAN:
+    if cfg.model in (WAN, FLUX):
         # Wan's composite C++ op fuses weight+RoPE in-op (the production baseline).
+        # FLUX rides the same branch; the composite can't do per_head_norm, so PHN
+        # rows benchmark against the full-row-norm composite of the SAME shape
+        # (not a perfect match, but a decent relative-cost comparison).
         return _call_op(
-            inp, submesh, sem, cfg, topology, tp_axis,
-            use_device_op=False, pob=None, num_links=op_override,
-            weight=inp["weight"], bias=None, rope=cfg.rope,
+            inp,
+            submesh,
+            sem,
+            cfg,
+            topology,
+            tp_axis,
+            use_device_op=False,
+            pob=None,
+            num_links=op_override,
+            weight=inp["weight"],
+            bias=None,
+            rope=cfg.rope,
+            per_head_norm=False,
         )
     # LTX: composite RMSNorm (+static weight for non-block) then the *unfused* trailing op.
     weight = None if cfg.is_block else inp["weight"]
     normed = _call_op(
-        inp, submesh, sem, cfg, topology, tp_axis,
-        use_device_op=False, pob=None, num_links=op_override,
-        weight=weight, bias=None, rope=False,
+        inp,
+        submesh,
+        sem,
+        cfg,
+        topology,
+        tp_axis,
+        use_device_op=False,
+        pob=None,
+        num_links=op_override,
+        weight=weight,
+        bias=None,
+        rope=False,
     )
     if cfg.is_block:  # unfused adaLN: shift + normed*(1+scale)
         return ttnn.addcmul(inp["shift_b"], normed, inp["scale_b"], value=1.0)
@@ -350,6 +420,7 @@ def _make_pob(inp, submesh, cfg, num_links, tp_axis):
         tp_axis,
         submesh,
         num_heads_per_device=cfg.heads,
+        per_head_norm=cfg.per_head_norm,
         num_links=num_links,
         weight=inp.get("weight"),
         transformation_mat=inp.get("trans"),
@@ -358,10 +429,18 @@ def _make_pob(inp, submesh, cfg, num_links, tp_axis):
     )
 
 
-def _resolve_submesh(mesh_device, tp, tp_axis):
+def _resolve_submesh(mesh_device, tp, tp_axis, full_mesh=False):
     if tp_axis == 0:
         # TP rides the full mesh's axis-0 (the closed 4-wide ring); axis 1 replicates.
-        assert tuple(mesh_device.shape)[0] == tp, f"tp_axis=0 needs mesh rows==tp, got {tuple(mesh_device.shape)} tp={tp}"
+        assert (
+            tuple(mesh_device.shape)[0] == tp
+        ), f"tp_axis=0 needs mesh rows==tp, got {tuple(mesh_device.shape)} tp={tp}"
+        return mesh_device
+    if full_mesh:
+        # TP rides the full mesh's axis-1 (the closed 8-wide ring); axis 0 replicates.
+        assert (
+            tuple(mesh_device.shape)[1] == tp
+        ), f"full_mesh tp_axis=1 needs mesh cols==tp, got {tuple(mesh_device.shape)} tp={tp}"
         return mesh_device
     return mesh_device if tuple(mesh_device.shape) == (1, tp) else mesh_device.create_submesh(ttnn.MeshShape(1, tp))
 
@@ -465,40 +544,62 @@ def _write_csv(rows: list[dict], filename: str) -> None:
     logger.info(f"Wrote CSV: {path}")
 
 
-# mesh, device_params, model, tp, topology, op_override(=galaxy links; None on BH), tp_axis
+# mesh, device_params, model, tp, topology, op_override(=galaxy links; None on BH), tp_axis, full_mesh
+# full_mesh=True keeps the whole 2D mesh with TP on axis 1 (the 8-wide closed ring) and
+# axis 0 replicated — used for the FLUX TP=8 ring config (tp_axis=1 would otherwise carve
+# a 1x8 LINE submesh).
 _DP_GAL = {**line_params, "trace_region_size": 131072}
 _DP_GAL_RING = {**ring_params, "trace_region_size": 131072}
 _BENCH_PARAMS = [
-    ((2, 4), {**line_params, "trace_region_size": 90112}, WAN, 4, ttnn.Topology.Linear, None, 1),
-    ((1, 8), {**ring_params, "trace_region_size": 90112}, WAN, 8, ttnn.Topology.Ring, None, 1),
-    ((4, 8), _DP_GAL, WAN, 4, ttnn.Topology.Linear, GALAXY_LINKS, 1),
-    ((4, 8), _DP_GAL, LTX, 2, ttnn.Topology.Linear, GALAXY_LINKS, 1),
-    ((4, 8), _DP_GAL, LTX, 4, ttnn.Topology.Linear, GALAXY_LINKS, 1),
+    ((2, 4), {**line_params, "trace_region_size": 90112}, WAN, 4, ttnn.Topology.Linear, None, 1, False),
+    ((1, 8), {**ring_params, "trace_region_size": 90112}, WAN, 8, ttnn.Topology.Ring, None, 1, False),
+    ((4, 8), _DP_GAL, WAN, 4, ttnn.Topology.Linear, GALAXY_LINKS, 1, False),
+    ((4, 8), _DP_GAL, LTX, 2, ttnn.Topology.Linear, GALAXY_LINKS, 1, False),
+    ((4, 8), _DP_GAL, LTX, 4, ttnn.Topology.Linear, GALAXY_LINKS, 1, False),
     # TP=4 RING on the full-mesh 4-axis (replicate axis 1) — the production galaxy config.
-    ((4, 8), _DP_GAL_RING, WAN, 4, ttnn.Topology.Ring, GALAXY_LINKS, 0),
-    ((4, 8), _DP_GAL_RING, LTX, 4, ttnn.Topology.Ring, GALAXY_LINKS, 0),
+    ((4, 8), _DP_GAL_RING, WAN, 4, ttnn.Topology.Ring, GALAXY_LINKS, 0, False),
+    ((4, 8), _DP_GAL_RING, LTX, 4, ttnn.Topology.Ring, GALAXY_LINKS, 0, False),
+    # FLUX: TP=4 ring on the 4-axis (replicate axis 1); TP=8 ring on the full-mesh 8-axis.
+    ((4, 8), _DP_GAL_RING, FLUX, 4, ttnn.Topology.Ring, GALAXY_LINKS, 0, False),
+    ((4, 8), _DP_GAL_RING, FLUX, 8, ttnn.Topology.Ring, GALAXY_LINKS, 1, True),
 ]
 _BENCH_IDS = [
-    "wan_tp4_line", "wan_tp8_ring", "wan_tp4_galaxy", "ltx_tp2_galaxy", "ltx_tp4_galaxy",
-    "wan_tp4_ring", "ltx_tp4_ring",
+    "wan_tp4_line",
+    "wan_tp8_ring",
+    "wan_tp4_galaxy",
+    "ltx_tp2_galaxy",
+    "ltx_tp4_galaxy",
+    "wan_tp4_ring",
+    "ltx_tp4_ring",
+    "flux_tp4_ring",
+    "flux_tp8_ring",
 ]
 
 
 @pytest.mark.parametrize(
-    ("mesh_device", "device_params", "model", "tp", "topology", "op_override", "tp_axis"),
+    ("mesh_device", "device_params", "model", "tp", "topology", "op_override", "tp_axis", "full_mesh"),
     [pytest.param(*p, id=i) for p, i in zip(_BENCH_PARAMS, _BENCH_IDS)],
     indirect=["mesh_device", "device_params"],
 )
-def test_bench(mesh_device, model, tp, topology, op_override, tp_axis):
+def test_bench(mesh_device, model, tp, topology, op_override, tp_axis, full_mesh):
     """Traced baseline vs fused timing for every config of one (model, topology)."""
-    submesh = _resolve_submesh(mesh_device, tp, tp_axis)
+    submesh = _resolve_submesh(mesh_device, tp, tp_axis, full_mesh)
     ccl = CCLManager(mesh_device=submesh, num_links=(op_override or 1), topology=topology)
     cfgs = _select(_make_cfgs(model, tp), "RMS_BENCH_ONLY")
     rows: list[dict] = []
     for cfg in cfgs:
-        logger.info(f"=== [{model}] {cfg.cid} rows={cfg.rows} feat={cfg.feat_local} heads={cfg.heads} hd={cfg.head_dim} ===")
-        row = {"cid": cfg.cid, "tp": cfg.tp, "rows": cfg.rows, "feat": cfg.feat_local,
-               "heads": cfg.heads, "hd": cfg.head_dim, "pattern": cfg.pattern}
+        logger.info(
+            f"=== [{model}] {cfg.cid} rows={cfg.rows} feat={cfg.feat_local} heads={cfg.heads} hd={cfg.head_dim} ==="
+        )
+        row = {
+            "cid": cfg.cid,
+            "tp": cfg.tp,
+            "rows": cfg.rows,
+            "feat": cfg.feat_local,
+            "heads": cfg.heads,
+            "hd": cfg.head_dim,
+            "pattern": cfg.pattern,
+        }
         try:  # a per-config crash (e.g. input alloc / device hiccup) must not lose the table
             row.update(_bench_cfg(submesh, ccl, cfg, topology, tp_axis, op_override))
         except Exception as e:  # noqa: BLE001
@@ -515,35 +616,49 @@ def test_bench(mesh_device, model, tp, topology, op_override, tp_axis):
 # ---------------------------------------------------------------------------
 
 _CORR_PARAMS = [
-    ((4, 8), _DP_GAL, WAN, 4, ttnn.Topology.Linear, GALAXY_LINKS, 1),
-    ((4, 8), _DP_GAL, LTX, 2, ttnn.Topology.Linear, GALAXY_LINKS, 1),
-    ((4, 8), _DP_GAL, LTX, 4, ttnn.Topology.Linear, GALAXY_LINKS, 1),
+    ((4, 8), _DP_GAL, WAN, 4, ttnn.Topology.Linear, GALAXY_LINKS, 1, False),
+    ((4, 8), _DP_GAL, LTX, 2, ttnn.Topology.Linear, GALAXY_LINKS, 1, False),
+    ((4, 8), _DP_GAL, LTX, 4, ttnn.Topology.Linear, GALAXY_LINKS, 1, False),
     # TP=2 (1x2 LINE submesh): per-device feat is 2x the TP=4 case (Wan 2560, LTX video 2048).
-    ((4, 8), _DP_GAL, WAN, 2, ttnn.Topology.Linear, GALAXY_LINKS, 1),
+    ((4, 8), _DP_GAL, WAN, 2, ttnn.Topology.Linear, GALAXY_LINKS, 1, False),
     # TP=4 RING on the full-mesh 4-axis (replicate axis 1).
-    ((4, 8), _DP_GAL_RING, WAN, 4, ttnn.Topology.Ring, GALAXY_LINKS, 0),
-    ((4, 8), _DP_GAL_RING, LTX, 4, ttnn.Topology.Ring, GALAXY_LINKS, 0),
+    ((4, 8), _DP_GAL_RING, WAN, 4, ttnn.Topology.Ring, GALAXY_LINKS, 0, False),
+    ((4, 8), _DP_GAL_RING, LTX, 4, ttnn.Topology.Ring, GALAXY_LINKS, 0, False),
+    # FLUX: TP=4 ring (4-axis) and TP=8 ring (full-mesh 8-axis); each runs PHN False+True.
+    ((4, 8), _DP_GAL_RING, FLUX, 4, ttnn.Topology.Ring, GALAXY_LINKS, 0, False),
+    ((4, 8), _DP_GAL_RING, FLUX, 8, ttnn.Topology.Ring, GALAXY_LINKS, 1, True),
 ]
-_CORR_IDS = ["wan_tp4", "ltx_tp2", "ltx_tp4", "wan_tp2", "wan_tp4_ring", "ltx_tp4_ring"]
+_CORR_IDS = [
+    "wan_tp4",
+    "ltx_tp2",
+    "ltx_tp4",
+    "wan_tp2",
+    "wan_tp4_ring",
+    "ltx_tp4_ring",
+    "flux_tp4_ring",
+    "flux_tp8_ring",
+]
 
 
 @pytest.mark.parametrize(
-    ("mesh_device", "device_params", "model", "tp", "topology", "op_override", "tp_axis"),
+    ("mesh_device", "device_params", "model", "tp", "topology", "op_override", "tp_axis", "full_mesh"),
     [pytest.param(*p, id=i) for p, i in zip(_CORR_PARAMS, _CORR_IDS)],
     indirect=["mesh_device", "device_params"],
 )
-def test_corr_det(mesh_device, model, tp, topology, op_override, tp_axis):
+def test_corr_det(mesh_device, model, tp, topology, op_override, tp_axis, full_mesh):
     """Fused vs fp32-PyTorch reference AND vs on-device composite baseline, plus a
     10x bit-exact determinism check. CORR_FRESH_POB=1 allocates a fresh stats buffer
     per run (surfaces uninitialized-DRAM reads); CORR_LOCALIZE=1 prints divergent tokens."""
-    submesh = _resolve_submesh(mesh_device, tp, tp_axis)
+    submesh = _resolve_submesh(mesh_device, tp, tp_axis, full_mesh)
     fresh_pob = _os.getenv("CORR_FRESH_POB") == "1"
     links = _fused_links(op_override)
     flagged = []
 
     for cfg in _select(_make_cfgs(model, tp), "CORR_ONLY"):
-        logger.info(f"=== [{model}] {cfg.cid} rows={cfg.rows} feat={cfg.feat_local} heads={cfg.heads} "
-                    f"hd={cfg.head_dim} rope={cfg.rope} ===")
+        logger.info(
+            f"=== [{model}] {cfg.cid} rows={cfg.rows} feat={cfg.feat_local} heads={cfg.heads} "
+            f"hd={cfg.head_dim} rope={cfg.rope} ==="
+        )
         try:  # isolate per-config so an OOM/hang on one shape characterizes it without losing the rest
             # Fresh CCL + AG semaphore per config: the fused op resets out_ready_sem at
             # end-of-op, so a config that throws mid-op can leave a shared semaphore in a
@@ -573,7 +688,9 @@ def test_corr_det(mesh_device, model, tp, topology, op_override, tp_axis):
                 rd = (worst_oi - out0).abs().amax(dim=-1)  # [N] per-token max-abs-diff
                 bad = (rd > 1e-3).nonzero().flatten().tolist()
                 span = f"[{min(bad)},{max(bad)}]" if bad else "[]"
-                logger.info(f"  LOCALIZE {cfg.cid}: {len(bad)}/{out0.shape[0]} tokens differ; first10={bad[:10]} span={span}")
+                logger.info(
+                    f"  LOCALIZE {cfg.cid}: {len(bad)}/{out0.shape[0]} tokens differ; first10={bad[:10]} span={span}"
+                )
 
             pcc_ft, pcc_ct, pcc_fc = _pcc(out0, ref), _pcc(comp, ref), _pcc(out0, comp)
             denom = ref.abs().mean().clamp_min(1e-6)
