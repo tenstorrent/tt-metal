@@ -595,6 +595,7 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DS
 
     last_slot_id = int(os.environ.get("PREFILL_STANDALONE_CHUNKED_SLOT", "0")) % NUM_USERS
     chunks_per_slot: dict[int, int] = {}  # per-slot chunk count (concurrent multi-slot migration)
+
     i = 0
     while not _shutdown:
         if expected_chunks is not None and i >= expected_chunks:
@@ -854,6 +855,13 @@ def main() -> None:
         # ttnn.InterProcessCounterChannel owns a named POSIX shm segment the scheduler
         # connects to via shm_layer_ack_name(service_id).
         ack_shm_name = f"/tt_prefill_layer_acks_{service_id}"
+        # A prior run that didn't tear down cleanly leaves this segment behind, so
+        # InterProcessCounterChannel's shm_open(O_CREAT|O_EXCL) fails with EEXIST.
+        # Unlink any stale segment first (POSIX shm lives at /dev/shm/<name minus '/'>).
+        _stale_ack_shm = f"/dev/shm/{ack_shm_name.lstrip('/')}"
+        if os.path.exists(_stale_ack_shm):
+            logger.warning(f"[migration] removing stale LayerAck shm {_stale_ack_shm} from a prior run")
+            os.remove(_stale_ack_shm)
         ack_channel = ttnn.InterProcessCounterChannel(ack_shm_name)
         pipeline.set_layer_ack_channel(ack_channel)
         logger.info(f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer")
