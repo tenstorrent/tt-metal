@@ -220,15 +220,45 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Pool2D::tensor_return_value_t
 }
 
 std::vector<tt::tt_metal::DynamicRuntimeArg> Pool2D::get_dynamic_runtime_args(
-    const operation_attributes_t& /*op_attr*/,
-    const tensor_args_t& /*tensor*/,
-    tensor_return_value_t& /*outputs*/,
+    const operation_attributes_t& op_attr,
+    const tensor_args_t& tensor,
+    tensor_return_value_t& outputs,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // CB-bound-stable: no runtime arg is address-derived or hash-excluded. Tensor addresses ride on
-    // sharded CBDescriptor.buffer bindings patched by the framework; the auxiliary reader_indices /
-    // scalar_config buffers feed compile-time args and stay alive (and at the same address) for the
-    // cached workload's lifetime. See the contract note on the declaration in pool_op.hpp.
-    return {};
+    using namespace tt::tt_metal;
+
+    // Re-apply the COMPLETE per-core reader/compute runtime-arg state on every cache hit, derived from the
+    // SAME helper create_workload_descriptor() uses (single source of truth). Tensor ADDRESSES are NOT in
+    // these args -- they ride on sharded CBDescriptor.buffer bindings the framework re-patches -- and the
+    // auxiliary reader_indices / scalar_config buffer addresses are baked into COMPILE-TIME args of buffers
+    // that stay alive (same address) for the cached workload's lifetime.
+    //
+    // Pool2D::compute_program_hash covers the full SlidingWindowConfig (batch / input_hw / window / stride /
+    // pad / dilation / ceil_mode / grid / num_cores_*) plus the input memory-config and return_indices, so
+    // the work-split -- and therefore every per-core arg value below -- is identical for all dispatches that
+    // share a program-cache entry; there is no shape variation within a cache entry as there is for unary /
+    // binary_ng (whose hash omits padded_shape). The set of cores is likewise fixed, so re-applying every
+    // current core's full args is already a complete overwrite of the cached program's per-core state.
+    //
+    // Kernel order matches the factory: reader0(0), reader1(1) -- split_reader is unconditionally true for
+    // pool -- and compute(2). Each core's args are emitted to all three kernels at every slot.
+    constexpr uint32_t kReader0KernelIdx = 0;
+    constexpr uint32_t kReader1KernelIdx = 1;
+    constexpr uint32_t kComputeKernelIdx = 2;
+
+    const PoolPerCoreRuntimeArgs per_core = compute_pool_per_core_runtime_args(op_attr, tensor, outputs);
+
+    std::vector<DynamicRuntimeArg> dynamic_args;
+    dynamic_args.reserve(per_core.cores.size() * 3 * 4);
+    for (uint32_t i = 0; i < per_core.cores.size(); ++i) {
+        const auto& core = per_core.cores[i];
+        const auto& args = per_core.args[i];
+        for (uint32_t a = 0; a < args.size(); ++a) {
+            dynamic_args.push_back({kReader0KernelIdx, core, a, args[a]});
+            dynamic_args.push_back({kReader1KernelIdx, core, a, args[a]});
+            dynamic_args.push_back({kComputeKernelIdx, core, a, args[a]});
+        }
+    }
+    return dynamic_args;
 }
 
 }  // namespace ttnn::operations::pool

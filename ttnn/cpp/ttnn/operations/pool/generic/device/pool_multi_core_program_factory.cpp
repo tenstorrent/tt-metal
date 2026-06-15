@@ -264,7 +264,7 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
     uint32_t reader_indices_size,
     std::vector<Tensor>& outputs,
     Pool2DType pool_type,
-    uint32_t in_n,
+    [[maybe_unused]] uint32_t in_n,  // work-split now derived in compute_pool_per_core_runtime_args; kept for call-site symmetry
     uint32_t in_c,
     uint32_t in_h,
     uint32_t in_w,
@@ -283,7 +283,7 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
     uint32_t ceil_pad_w,
     bool ceil_mode,
     bool return_indices,
-    std::vector<uint32_t> core_starting_indices,
+    const PoolPerCoreRuntimeArgs& per_core_args,
     bool count_include_pad,
     uint32_t dilation_h,
     uint32_t dilation_w,
@@ -300,14 +300,9 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
         "Pool2D::MultiCore::create_workload_descriptor must populate the reader-indices buffer before building "
         "programs");
 
-    const bool is_block_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
-    const bool is_width_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
-
     // distributing out_hw across the grid
     const auto all_cores = input.shard_spec().value().grid;
     const uint32_t ncores = all_cores.num_cores();
-    const uint32_t num_cores_x = input.memory_config().shard_spec()->grid.bounding_box().grid_size().x;
-    const uint32_t rectangular_x = is_block_sharded ? all_cores.ranges()[0].end_coord.x + 1 : num_cores_x;
     const uint32_t max_out_nhw_per_core = outputs[0].shard_spec()->shape[0];
     const uint32_t max_in_nhw_per_core = input.shard_spec()->shape[0];
     TT_FATAL(
@@ -932,45 +927,22 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
         .math_approx_mode = false,
     };
 
-    // set the starting indices for each core as runtime args
-    uint32_t total_out_nhw = in_n * out_h * out_w;
+    // Set the per-core reader/compute runtime args. These come from compute_pool_per_core_runtime_args()
+    // (the single source of truth shared with Pool2D::get_dynamic_runtime_args), so the values written on a
+    // cache miss here are byte-identical to those re-applied on a cache hit.
+    TT_FATAL(
+        per_core_args.cores.size() == ncores,
+        "Per-core runtime arg count {} should match number of cores {}",
+        per_core_args.cores.size(),
+        ncores);
     for (uint32_t core_i = 0; core_i < ncores; core_i++) {
-        const uint32_t core_x_i = core_i % rectangular_x;
-        const uint32_t core_y_i = core_i / rectangular_x;
-        const CoreCoord core(core_x_i, core_y_i);
-
-        uint32_t total_out_nhw_processed;
-        uint32_t core_nhw_index = 0;
-        if (is_block_sharded) {
-            total_out_nhw_processed = core_y_i * max_out_nhw_per_core;
-            core_nhw_index = core_y_i;
-        } else if (is_width_sharded) {
-            total_out_nhw_processed = 0;
-            core_nhw_index = 0;
-        } else {
-            total_out_nhw_processed = core_i * max_out_nhw_per_core;
-            core_nhw_index = core_i;
-        }
-        uint32_t remaining_out_nhw =
-            total_out_nhw_processed < total_out_nhw ? total_out_nhw - total_out_nhw_processed : 0;
-        uint32_t out_nhw_this_core = std::min(max_out_nhw_per_core, remaining_out_nhw);
-        KernelDescriptor::CoreRuntimeArgs args = {out_nhw_this_core, core_nhw_index};
-
-        if (return_indices) {
-            TT_FATAL(core_starting_indices.size() == ncores, "core starting indices size should match number of cores");
-            const uint32_t start_index = core_starting_indices[core_i];
-            const uint32_t start_mod_batch = start_index % (in_w_padded * in_h_padded);
-            const uint32_t start_row = start_mod_batch / in_w_padded;
-            const uint32_t start_col = start_mod_batch % in_w_padded;
-
-            args.push_back(start_row);
-            args.push_back(start_col);
-        }
+        const CoreCoord& core = per_core_args.cores[core_i];
+        const KernelDescriptor::CoreRuntimeArgs& args = per_core_args.args[core_i];
         reader0_desc.runtime_args.emplace_back(core, args);
         if (params.split_reader) {
             reader1_desc->runtime_args.emplace_back(core, args);
         }
-        compute_desc.runtime_args.emplace_back(core, std::move(args));
+        compute_desc.runtime_args.emplace_back(core, args);
     }
 
     // Push kernels in deterministic order: reader0 (BRISC), reader1 (NCRISC) when
@@ -1111,6 +1083,96 @@ PoolSetup compute_pool_setup(const Pool2D::operation_attributes_t& op_attr, cons
 }
 }  // namespace
 
+// Single source of truth for the pool program's per-core reader/compute RUNTIME args.
+// pool2d_multi_core_sharded_with_halo_v2_impl_new() (cache-miss build) and Pool2D::get_dynamic_runtime_args()
+// (cache-hit re-apply) both call this so the per-core arg values can never diverge. Every quantity below is
+// derived purely from (operation_attributes, input, output) and is covered by Pool2D::compute_program_hash
+// (the SlidingWindowConfig hash + input mem-config + return_indices), so the work-split is identical for every
+// dispatch that shares a program-cache entry — there is no shape variation within a cache entry. We still
+// expose the full per-core args here so get_dynamic_runtime_args can re-apply the COMPLETE per-core state.
+PoolPerCoreRuntimeArgs compute_pool_per_core_runtime_args(
+    const Pool2D::operation_attributes_t& op_attr,
+    const Pool2D::tensor_args_t& tensor_args,
+    const Pool2D::tensor_return_value_t& outputs) {
+    using namespace tt::tt_metal;
+
+    const auto& input = tensor_args.input_tensor_;
+    const PoolSetup setup = compute_pool_setup(op_attr, input);
+
+    const bool return_indices = op_attr.return_indices_;
+    const bool is_block_sharded = setup.is_block_sharded;
+    const bool is_width_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+
+    const auto all_cores = input.shard_spec().value().grid;
+    const uint32_t ncores = all_cores.num_cores();
+    const uint32_t num_cores_x = input.memory_config().shard_spec()->grid.bounding_box().grid_size().x;
+    const uint32_t rectangular_x = is_block_sharded ? all_cores.ranges()[0].end_coord.x + 1 : num_cores_x;
+    const uint32_t max_out_nhw_per_core = outputs[0].shard_spec()->shape[0];
+
+    // Only needed when return_indices: regenerate the same halo metadata used by create_workload_descriptor.
+    std::vector<uint32_t> core_starting_indices;
+    uint32_t in_w_padded = 0;
+    uint32_t in_h_padded = 0;
+    if (return_indices) {
+        const auto& sliding_window_config = op_attr.sliding_window_config_;
+        const std::vector<uint32_t> op_trace_metadata =
+            ttnn::operations::sliding_window::generate_op_trace_metadata(sliding_window_config);
+        const std::vector<sliding_window::ShardBoundary> shard_boundaries =
+            ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config);
+        const TensorMemoryLayout shard_scheme = input.memory_config().memory_layout();
+        core_starting_indices =
+            generate_core_starting_indices(op_trace_metadata, shard_boundaries, shard_scheme, num_cores_x, ncores);
+
+        const uint32_t pad_h = setup.pad_t + setup.pad_b;
+        const uint32_t pad_w = setup.pad_l + setup.pad_r;
+        in_h_padded = setup.in_h + pad_h + setup.ceil_pad_h;
+        in_w_padded = setup.in_w + pad_w + setup.ceil_pad_w;
+    }
+
+    const uint32_t total_out_nhw = setup.in_n * setup.out_h * setup.out_w;
+
+    PoolPerCoreRuntimeArgs result;
+    result.cores.reserve(ncores);
+    result.args.reserve(ncores);
+    for (uint32_t core_i = 0; core_i < ncores; core_i++) {
+        const uint32_t core_x_i = core_i % rectangular_x;
+        const uint32_t core_y_i = core_i / rectangular_x;
+        const CoreCoord core(core_x_i, core_y_i);
+
+        uint32_t total_out_nhw_processed;
+        uint32_t core_nhw_index = 0;
+        if (is_block_sharded) {
+            total_out_nhw_processed = core_y_i * max_out_nhw_per_core;
+            core_nhw_index = core_y_i;
+        } else if (is_width_sharded) {
+            total_out_nhw_processed = 0;
+            core_nhw_index = 0;
+        } else {
+            total_out_nhw_processed = core_i * max_out_nhw_per_core;
+            core_nhw_index = core_i;
+        }
+        const uint32_t remaining_out_nhw =
+            total_out_nhw_processed < total_out_nhw ? total_out_nhw - total_out_nhw_processed : 0;
+        const uint32_t out_nhw_this_core = std::min(max_out_nhw_per_core, remaining_out_nhw);
+        KernelDescriptor::CoreRuntimeArgs args = {out_nhw_this_core, core_nhw_index};
+
+        if (return_indices) {
+            TT_FATAL(core_starting_indices.size() == ncores, "core starting indices size should match number of cores");
+            const uint32_t start_index = core_starting_indices[core_i];
+            const uint32_t start_mod_batch = start_index % (in_w_padded * in_h_padded);
+            const uint32_t start_row = start_mod_batch / in_w_padded;
+            const uint32_t start_col = start_mod_batch % in_w_padded;
+            args.push_back(start_row);
+            args.push_back(start_col);
+        }
+
+        result.cores.push_back(core);
+        result.args.push_back(std::move(args));
+    }
+
+    return result;
+}
+
 tt::tt_metal::WorkloadDescriptor Pool2D::MultiCore::create_workload_descriptor(
     const operation_attributes_t& op_attr,
     const tensor_args_t& tensor_args,
@@ -1225,14 +1287,9 @@ tt::tt_metal::WorkloadDescriptor Pool2D::MultiCore::create_workload_descriptor(
     std::optional<int32_t> divisor_override = op_attr.divisor_override_;
     bool return_indices = op_attr.return_indices_;
 
-    std::vector<uint32_t> core_starting_indices;
-    if (return_indices) {
-        const uint32_t num_cores_x = input.memory_config().shard_spec()->grid.bounding_box().grid_size().x;
-        const uint32_t ncores = input.shard_spec().value().grid.num_cores();
-        const TensorMemoryLayout shard_scheme = input.memory_config().memory_layout();
-        core_starting_indices =
-            generate_core_starting_indices(op_trace_metadata, shard_boundaries, shard_scheme, num_cores_x, ncores);
-    }
+    // Per-core reader/compute runtime args (single source of truth shared with get_dynamic_runtime_args).
+    const PoolPerCoreRuntimeArgs per_core_args =
+        compute_pool_per_core_runtime_args(op_attr, tensor_args, output_tensors);
 
     tt::tt_metal::ProgramDescriptor desc = pool2d_multi_core_sharded_with_halo_v2_impl_new(
         tensor_args.input_tensor_,
@@ -1260,7 +1317,7 @@ tt::tt_metal::WorkloadDescriptor Pool2D::MultiCore::create_workload_descriptor(
         setup.ceil_pad_w,
         setup.ceil_mode,
         return_indices,
-        core_starting_indices,
+        per_core_args,
         count_include_pad,
         setup.dilation_h,
         setup.dilation_w,

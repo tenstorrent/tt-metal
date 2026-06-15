@@ -602,20 +602,25 @@ public:
                     // With neither, there is nothing safe to patch — a `.buffer=` CB mixed with
                     // OLD-style raw uint32 rt-args would leave those rt-args stale — so we rebuild,
                     // and (env-gated) TT_FATAL to catch the perf regression. (#46506)
-                    constexpr bool declares_dynamic_runtime_args = requires {
-                        DeviceOperation::get_dynamic_runtime_args(
-                            attrs, tensor_args, tensor_return_value, std::optional<ttnn::MeshCoordinate>{});
-                    };
-                    if (!sv.resolved_bindings.rt_args.empty() || declares_dynamic_runtime_args) {
+                    // Compute the op's dynamic runtime args (empty if it doesn't declare the hook). An op
+                    // returns its per-dispatch args when it can fast-path; it returns empty to request a
+                    // create_descriptor rebuild for configs it can't safely re-apply (shape-frozen CBs /
+                    // compile-time args, e.g. sharded eltwise).
+                    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+                    if constexpr (requires {
+                                      DeviceOperation::get_dynamic_runtime_args(
+                                          attrs, tensor_args, tensor_return_value, std::optional<ttnn::MeshCoordinate>{});
+                                  }) {
+                        const std::optional<ttnn::MeshCoordinate> coord(coordinate_range.start_coord());
+                        dynamic_args =
+                            DeviceOperation::get_dynamic_runtime_args(attrs, tensor_args, tensor_return_value, coord);
+                    }
+                    if (!sv.resolved_bindings.rt_args.empty() || !dynamic_args.empty()) {
                         auto collected =
                             collect_tensor_buffers(tensor_args, tensor_return_value, sv.workload_descriptor);
-                        // Patches Buffer* rt-arg bindings (if any) AND CB bindings from the current
-                        // dispatch's buffers.
+                        // Patches Buffer* rt-arg bindings (if any) AND CB bindings from the current dispatch.
                         tt::tt_metal::apply_resolved_bindings(program, sv.resolved_bindings, collected.buffers);
-                        // Re-apply any declared dynamic non-Buffer runtime args (compiles to a no-op
-                        // when get_dynamic_runtime_args() is not declared).
-                        apply_dynamic_runtime_args_if_declared(
-                            program, attrs, tensor_args, tensor_return_value, coordinate_range);
+                        tt::tt_metal::apply_dynamic_runtime_args(program, dynamic_args);
                     } else {
                         // SLOW PATH: no Buffer* rt-arg bindings and no get_dynamic_runtime_args opt-in,
                         // so there is nothing to patch in place and create_descriptor() must be re-run on

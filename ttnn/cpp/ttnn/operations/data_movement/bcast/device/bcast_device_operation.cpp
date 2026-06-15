@@ -247,15 +247,24 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> BcastDeviceOperation:
 }
 
 std::vector<tt::tt_metal::DynamicRuntimeArg> BcastDeviceOperation::get_dynamic_runtime_args(
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& /*tensor_args*/,
-    tensor_return_value_t& /*tensor_return_value*/,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // Every factory binds all per-dispatch tensor addresses as CB `.buffer` or Buffer* rt-args, and
-    // all remaining runtime args are shape/geometry-derived and covered by the program hash. Nothing
-    // needs re-applying. Declaring this opts the op into the descriptor fast-path (no
-    // create_descriptor() rebuild on a cache hit).
-    return {};
+    // The work-split per-core tile counts / start ids and the shard/geometry args (Ht, Wt, offsets,
+    // batch sizes, ...) are derived from the (padded) tensor SHAPE. The default program hash hashes
+    // each Tensor's TensorSpec, which only includes logical_shape (padded_shape is excluded), so two
+    // differently-padded calls share one cache entry. On a cache hit create_descriptor() is NOT re-run,
+    // so those args would stay frozen at the first shape's values and corrupt the result. Dispatch to
+    // the selected factory's get_dynamic_runtime_args(), which re-derives them from the SAME code path
+    // create_descriptor() uses (single source of truth) and re-applies the COMPLETE per-core state.
+    const program_factory_t factory = select_program_factory(operation_attributes, tensor_args);
+    return std::visit(
+        [&](const auto& f) -> std::vector<tt::tt_metal::DynamicRuntimeArg> {
+            using FactoryT = std::decay_t<decltype(f)>;
+            return FactoryT::get_dynamic_runtime_args(operation_attributes, tensor_args, tensor_return_value);
+        },
+        factory);
 }
 }  // namespace ttnn::prim
 
