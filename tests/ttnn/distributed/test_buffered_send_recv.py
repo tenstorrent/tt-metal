@@ -65,37 +65,42 @@ def _run_buffered_send_recv_case(
     socket_config = ttnn.SocketConfig(socket_connections, socket_mem_config)
     send_socket, recv_socket = ttnn.create_socket_pair(sender_mesh_device, receiver_mesh_device, socket_config)
 
-    torch_input = torch.randn(tensor_shape, dtype=torch.float32)
-    input_tensor = ttnn.from_torch(
-        torch_input,
-        device=sender_mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
-        memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
-        mesh_mapper=ttnn.ReplicateTensorToMesh(sender_mesh_device),
-    )
+    def _make_input(seed):
+        torch_input = torch.randn(tensor_shape, dtype=torch.float32, generator=torch.Generator().manual_seed(seed))
+        return torch_input, ttnn.from_torch(
+            torch_input,
+            device=sender_mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(sender_mesh_device),
+        )
+
+    num_iterations = 4
 
     # buffered_recv takes N output tensors (the ring of receive buffers).
+    torch_input, input_tensor = _make_input(0)
     output_tensors = [
         ttnn.allocate_tensor_on_device(input_tensor.spec, receiver_mesh_device) for _ in range(num_buffers)
     ]
-    ttnn.experimental.buffered_send(input_tensor, send_socket)
-    output_tensor = ttnn.experimental.buffered_recv(output_tensors, recv_socket)
-    ttnn.synchronize_device(sender_mesh_device)
-    ttnn.synchronize_device(receiver_mesh_device)
-    print("Synchronized devices")
-    for x in range(3):
+
+    for iteration in range(num_iterations):
+        # Give send a unique input on each iteration so we can confirm the right data arrives.
+        torch_input, input_tensor = _make_input(iteration)
         ttnn.experimental.buffered_send(input_tensor, send_socket)
-        ttnn.synchronize_device(sender_mesh_device)
-    for x in range(3):
         output_tensor = ttnn.experimental.buffered_recv(output_tensors, recv_socket)
+        ttnn.synchronize_device(sender_mesh_device)
         ttnn.synchronize_device(receiver_mesh_device)
-        print("Synchronized devices")
-    input_data = ttnn.to_torch(input_tensor, mesh_composer=ttnn.ConcatMeshToTensor(sender_mesh_device, dim=0))
-    # SKELETON: only the first receive buffer is wired up for now.
-    output_data = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(receiver_mesh_device, dim=0))
-    eq, msg = comp_equal(input_data, output_data)
-    assert eq, msg
+        print(f"Synchronized devices (iteration {iteration})")
+
+        input_data = ttnn.to_torch(input_tensor, mesh_composer=ttnn.ConcatMeshToTensor(sender_mesh_device, dim=0))
+        # SKELETON: only the first receive buffer is wired up for now.
+        output_data = ttnn.to_torch(
+            output_tensors[iteration % num_buffers], mesh_composer=ttnn.ConcatMeshToTensor(receiver_mesh_device, dim=0)
+        )
+        eq, msg = comp_equal(input_data, output_data)
+        print(f"iteration {iteration}: {msg}")
+        assert eq, f"iteration {iteration}: {msg}"
 
 
 @pytest.mark.timeout(120)
