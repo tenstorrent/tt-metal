@@ -1178,6 +1178,24 @@ void ProgramImpl::finalize_single_dfb_config(
             "(different Neos). Un-scoped Tensix-to-Tensix DFBs are not allowed.");
     }
 
+    // A Tensix producer must post EXPLICIT credits (the implicit-sync ISR poster dfb_tile_poster_irq_handler()
+    // is #ifndef COMPILE_FOR_TRISC, i.e. compiled out on Tensix; producer implicit txn IDs are only allocated
+    // when !producer_is_tensix_only, see below). For a STRIDED consumer the per-tile explicit posts hand off to
+    // an implicit DM drain fine (verified: the A1 Tensix->DM STRIDED pipeline). For a BLOCKED consumer they do
+    // NOT: the producer posts credits at block granularity but the implicit BLOCKED drain never observes the
+    // ISR/txn signal it waits on, so the DM consumer spin-waits forever. Reject this combination at config time
+    // rather than deadlocking on-device. Workaround: use explicit sync on the DM consumer (the explicit
+    // Tensix->DM BLOCKED tests pass), or a DM producer if the consumer must be implicit.
+    if (producer_is_tensix_only && config.cap == ::dfb::AccessPattern::BLOCKED) {
+        TT_FATAL(
+            !config.enable_consumer_implicit_sync,
+            "BLOCKED DFB {}: a Tensix (explicit-only) producer cannot feed an IMPLICIT-sync DM consumer — the "
+            "implicit-sync ISR path is DM-only (#ifndef COMPILE_FOR_TRISC), so the per-block explicit credit "
+            "posts never reach the implicit BLOCKED drain and the consumer deadlocks. Use explicit sync on the "
+            "DM consumer, or a DM producer.",
+            dfb->id);
+    }
+
     // TRISC pack/unpack store ring extent in uint16_t L1-aligned units; host must reject oversized rings.
     validate_ring_extent(*dfb);
 

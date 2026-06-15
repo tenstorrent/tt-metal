@@ -2365,12 +2365,40 @@ DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB2Bx1B_blk4, TENSIX, DM, 2, 1, 4, 16, false
 DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB4Bx1B_blk4, TENSIX, DM, 4, 1, 4, 32, false)
 DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB4Bx2B_blk4, TENSIX, DM, 4, 2, 4, 32, false)
 
-// --- IMPLICIT-sync symmetric Trisc→DM BLOCKED→BLOCKED ---
-// The Tensix producer posts EXPLICIT credits (the ISR/implicit path is DM-only, #ifndef COMPILE_FOR_TRISC),
-// so this is a Tensix explicit-post producer feeding a DM implicit-drain consumer. Same permutation golden
-// (sync-agnostic). Exercises the first-time block-post vs per-tile-drain pairing on the Trisc→DM path.
-DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB2Bx2B_blk4_impl, TENSIX, DM, 2, 2, 4, 16, true)
-DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB4Bx4B_blk4_impl, TENSIX, DM, 4, 4, 4, 32, true)
+// --- REJECTED CONFIG: Tensix BLOCKED producer + IMPLICIT DM consumer ---
+// A Tensix producer must post EXPLICIT credits (the implicit-sync ISR poster dfb_tile_poster_irq_handler()
+// is #ifndef COMPILE_FOR_TRISC — compiled out on Tensix). For a STRIDED DM consumer those explicit per-tile
+// posts hand off to an implicit drain fine (the A1 Tensix→DM STRIDED pipeline passes). For a BLOCKED DM
+// consumer they do NOT: the per-block explicit posts never reach the implicit BLOCKED drain's ISR/txn
+// signal, so the DM consumer spin-waits forever (verified: a device-side deadlock, ~20s CPU / >10min wall).
+// The host now rejects this combination at config time (finalize_single_dfb_config), turning a silent hang
+// into a fast, deterministic failure. These two were added unverified in 4a0757c0a11; they now assert the
+// rejection. Real-use workaround: explicit DM consumer (the non-_impl TensixDMTest1xDFB{2Bx2B,4Bx4B}_blk4
+// tests above cover Tensix→DM BLOCKED), or a DM producer if the consumer must be implicit.
+static void expect_tensix_blocked_implicit_consumer_rejected(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t num_threads, uint32_t num_entries) {
+    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "M2 path is Quasar-only";
+    }
+    M2SingleDFBParams params{
+        .producer_type = M2PorCType::TENSIX,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = num_threads,
+        .num_consumers = num_threads,
+        .pap = m2::DFBAccessPattern::BLOCKED,
+        .cap = m2::DFBAccessPattern::BLOCKED,
+        .implicit_sync = true,
+        .num_entries = num_entries,
+        .block_size = 4,
+    };
+    EXPECT_ANY_THROW(run_single_dfb_program_2_0(mesh_device, params));
+}
+TEST_F(MeshDeviceFixture, TensixDMTest1xDFB2Bx2B_blk4_impl_rejected_2_0) {
+    expect_tensix_blocked_implicit_consumer_rejected(this->devices_.at(0), /*num_threads=*/2, /*num_entries=*/16);
+}
+TEST_F(MeshDeviceFixture, TensixDMTest1xDFB4Bx4B_blk4_impl_rejected_2_0) {
+    expect_tensix_blocked_implicit_consumer_rejected(this->devices_.at(0), /*num_threads=*/4, /*num_entries=*/32);
+}
 
 // --- DM→Trisc BLOCKED→BLOCKED (DM BLOCKED producer → Tensix BLOCKED consumer) ---
 // The final matrix column. The DM producer block-bursts into the contiguous BLOCKED sub-rings; the Tensix
