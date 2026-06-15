@@ -48,6 +48,7 @@ from models.common.modules.lm_head.lm_head_1d import LMHead1D, LMHead1DConfig, _
 from models.common.modules.mlp.mlp_1d import MLP1D, MLP1DConfig, _dram_shard_core_grid_k_n
 from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1D, RMSNorm1DConfig, _create_sharded_norm_program_config
 from models.common.modules.rope.rope_1d import Rope1DConfig, RotarySetup1D, prepare_rot_idxs
+from models.common.modules.sampling.sampling_1d import Sampling1D
 from models.common.modules.tt_ccl import default_topology, get_tt_ccl
 from models.common.tensor_utils import TILE_SIZE, get_padded_hidden_dim
 
@@ -600,7 +601,6 @@ class Llama33_70BTransformer1D(LightweightModule):
         self.norm = norm
         self.lm_head = lm_head
         self.mesh_device = mesh_device
-        self.sampling = None
         self.model_args: Llama33_70BExecutorRuntimeConfig | None = None
 
         self.vocab_size = cfg.vocab_size
@@ -608,6 +608,32 @@ class Llama33_70BTransformer1D(LightweightModule):
         self.num_devices = mesh_device.get_num_devices()
         self.tt_ccl = get_tt_ccl(mesh_device) if self.num_devices > 1 else None
         self.activation_dtypes = [None] * cfg.num_hidden_layers
+
+        # EXPERIMENTAL (N150/N300 on-device-sampling evidence; see the on-device sampling handoff notes):
+        # the prior `num_devices >= 8` gate assumed sub-8-device sampling could not be trace-captured.
+        # test_sampling1d_trace_capture disproves that — argmax + top-k both capture/replay on 1x1 and
+        # 1x2 — so the gate is relaxed here to all 1D meshes. The model owns its sampler; callers pick
+        # behavior per request via sampling_params. Buffers are lazy (nothing materializes until the
+        # first on-device sampled decode), so this is harmless when sampling_params is None. 70B only
+        # runs on T3K (8 devices), where on-device sampling is the faster path (vocab shards 8-ways).
+        self.supports_on_device_sampling = self.num_devices >= 1
+        self.sampling = (
+            Sampling1D(
+                vocab_size=self.vocab_size,
+                mesh_device=mesh_device,
+                tt_ccl=self.tt_ccl,
+                max_batch_size=_nearest_32(cfg.max_batch_size),
+                # Clone TTTv1's decision: default_sampling_force_argmax.allow_force_argmax=False for
+                # all non-Galaxy meshes (only Llama-3.1-8B on TG flips it True). The perf recipe
+                # (temp=0, top_p=0.08, top_k=32) routes through the cheap top-k op path — per-device
+                # ttnn.topk -> all-gather of the [*,32] tuples -> ttnn.sampling — never the full-vocab
+                # argmax all-gather.
+                allow_force_argmax=False,
+                pad_to_power_of_2=True,
+            )
+            if self.supports_on_device_sampling
+            else None
+        )
 
     @classmethod
     def from_pretrained(
