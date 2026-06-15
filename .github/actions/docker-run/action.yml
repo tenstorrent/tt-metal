@@ -112,9 +112,13 @@ runs:
         fi
 
         if [ -n "$HEALTH_RESPONSE" ]; then
-          OVERALL_STATUS=$(python3 -c \
-            "import sys,json; print(json.loads(sys.stdin.read()).get('status','unknown'))" \
-            <<< "$HEALTH_RESPONSE" 2>/dev/null || echo "unknown")
+          if command -v jq > /dev/null 2>&1; then
+            OVERALL_STATUS=$(echo "$HEALTH_RESPONSE" | jq -r '.status // "unknown"' 2>/dev/null || echo "unknown")
+          else
+            OVERALL_STATUS=$(python3 -c \
+              "import sys,json; print(json.loads(sys.stdin.read()).get('status','unknown'))" \
+              <<< "$HEALTH_RESPONSE" 2>/dev/null || echo "unknown")
+          fi
           if [ "$OVERALL_STATUS" = "healthy" ]; then
             HARBOR_HEALTHY=true
             echo "Harbor is healthy"
