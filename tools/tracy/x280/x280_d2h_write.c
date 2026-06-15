@@ -44,6 +44,13 @@
 #define WINDOW_2M_SIZE (1UL << WINDOW_2M_SHIFT)
 #define WINDOW_2M_MASK (WINDOW_2M_SIZE - 1)
 
+// Blackhole PCIe transactions require bit 60 of the NoC local address to be set
+// so the PCIe tile treats it as a DIRECT (non-iATU) 64-bit host address rather
+// than an iATU-translated one (see noc_parameters.h NOC_XY_PCIE_ENCODING /
+// NOC_LOCAL_ADDR mask 0x1000000FFFFFFFFF). Without it, host writes/reads hit a
+// missing iATU entry and read back 0xffffffff. Bit 60 lands in window reg[1].
+#define PCIE_NONIATU_BIT (1ULL << 60)
+
 // D2H sender config-buffer word offsets. L1 alignment is 16 B on Blackhole, so
 // sender_socket_md (32 B) + bytes_acked[1] (16 B) + sender_downstream_encoding
 // (16 B) places the encoding at word 12. See tt_metal/hw/inc/hostdev/socket.h
@@ -132,7 +139,8 @@ int main(int argc, char** argv) {
     }
 
     // --- (2) write the data pattern to the host FIFO through the PCIe tile ---
-    program_window(1, host_data, px, py);
+    // bit 60 selects the PCIe tile's direct 64-bit host path (non-iATU).
+    program_window(1, host_data | PCIE_NONIATU_BIT, px, py);
     volatile uint8_t* win1 =
         mmap(0, WINDOW_2M_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, WINDOW_2M_BASE + 1 * WINDOW_2M_SIZE);
     if (win1 == MAP_FAILED) {

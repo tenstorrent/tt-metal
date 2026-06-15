@@ -249,16 +249,101 @@ int run_listen(
     return 0;
 }
 
+// ---- hold: create the socket + keep it alive, but DO NOT read ----
+// For the raw X280->host PCIe write-bandwidth test: the X280 blasts writes into
+// the pinned FIFO region (overwriting freely, no flow control), and we just need
+// the pinned memory to stay mapped. The host does not read, so it never competes
+// for the PCIe path -- the measured rate is purely the X280's write throughput.
+int run_hold(
+    const std::shared_ptr<MeshDevice>& mesh_device,
+    int device_id,
+    const MeshCoreCoord& sender_core,
+    uint32_t fifo_size,
+    uint32_t page_size,
+    uint32_t secs) {
+    auto socket = D2HSocket(mesh_device, sender_core, fifo_size);
+    socket.set_page_size(page_size);
+    IDevice* dev = mesh_device->get_devices().at(0);
+    const SocketTarget t = read_socket_target(dev, sender_core.core_coord, socket.get_config_buffer_address());
+    print_target(device_id, dev, sender_core.core_coord, socket.get_config_buffer_address(), fifo_size, page_size, t);
+    socket.export_descriptor("x280");
+    fmt::print("[hold] socket alive for {}s; host will NOT read (pure write-BW test)\n", secs);
+    std::fflush(stdout);
+    std::this_thread::sleep_for(std::chrono::seconds(secs));
+    fmt::print("[hold] done\n");
+    return 0;
+}
+
+// ---- serve: drain the FIFO continuously, report host read throughput ----
+// For the integrated poll+stream test: the X280 streams flow-controlled pages;
+// the host read()s them as fast as it can and counts bytes. Timing starts at the
+// first page so we report steady-state drain throughput.
+int run_serve(
+    const std::shared_ptr<MeshDevice>& mesh_device,
+    int device_id,
+    const MeshCoreCoord& sender_core,
+    uint32_t fifo_size,
+    uint32_t page_size,
+    uint32_t secs) {
+    auto socket = D2HSocket(mesh_device, sender_core, fifo_size);
+    socket.set_page_size(page_size);
+    IDevice* dev = mesh_device->get_devices().at(0);
+    const SocketTarget t = read_socket_target(dev, sender_core.core_coord, socket.get_config_buffer_address());
+    print_target(device_id, dev, sender_core.core_coord, socket.get_config_buffer_address(), fifo_size, page_size, t);
+    socket.export_descriptor("x280");
+    fmt::print("[serve] draining for {}s once data starts...\n", secs);
+    std::fflush(stdout);
+
+    const uint32_t page_words = page_size / sizeof(uint32_t);
+    std::vector<uint32_t> buf(page_words);
+    uint64_t pages = 0, bytes = 0;
+    bool started = false;
+    std::chrono::steady_clock::time_point t0;
+    auto wall0 = std::chrono::steady_clock::now();
+    while (true) {
+        if (socket.has_data()) {
+            if (!started) {
+                started = true;
+                t0 = std::chrono::steady_clock::now();
+            }
+            socket.read(buf.data(), 1);
+            pages++;
+            bytes += page_size;
+            if ((pages & 0x3fff) == 0) {  // periodic stop check w/o per-page clock reads
+                if (std::chrono::duration_cast<std::chrono::duration<double>>(std::chrono::steady_clock::now() - t0)
+                        .count() >= secs) {
+                    break;
+                }
+            }
+            continue;
+        }
+        auto nowt = std::chrono::steady_clock::now();
+        if (started && std::chrono::duration_cast<std::chrono::duration<double>>(nowt - t0).count() >= secs) {
+            break;
+        }
+        if (!started && std::chrono::duration_cast<std::chrono::duration<double>>(nowt - wall0).count() >= 60) {
+            fmt::print("[serve] no data within 60s; giving up\n");
+            return 2;
+        }
+        std::this_thread::sleep_for(std::chrono::microseconds(50));
+    }
+    double dt =
+        std::chrono::duration_cast<std::chrono::duration<double>>(std::chrono::steady_clock::now() - t0).count();
+    fmt::print(
+        "[serve] drained {} pages ({} B) in {:.3f}s -> {:.1f} MB/s ({:.0f} pages/s)\n",
+        pages,
+        bytes,
+        dt,
+        bytes / 1e6 / dt,
+        pages / dt);
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     const int device_id = argc > 1 ? std::atoi(argv[1]) : 3;
     const std::string mode = argc > 2 ? argv[2] : "selftest";
-
-    // Conservative, PCIe-aligned defaults.
-    const uint32_t fifo_size = 4096;
-    const uint32_t page_size = 1024;
-    const uint32_t data_size = 4096;  // 4 pages (selftest)
 
     auto mesh_device = MeshDevice::create_unit_mesh(device_id);
     const MeshCoreCoord sender_core{MeshCoordinate(0, 0), CoreCoord(0, 0)};
@@ -268,13 +353,23 @@ int main(int argc, char** argv) {
 
     int rc = 0;
     if (mode == "selftest") {
-        rc = run_selftest(mesh_device, device_id, sender_core, fifo_size, page_size, data_size);
+        rc = run_selftest(mesh_device, device_id, sender_core, /*fifo*/ 4096, /*page*/ 1024, /*data*/ 4096);
     } else if (mode == "listen") {
         const uint32_t pages_to_read = argc > 3 ? std::atoi(argv[3]) : 1;
         const uint32_t timeout_s = argc > 4 ? std::atoi(argv[4]) : 120;
-        rc = run_listen(mesh_device, device_id, sender_core, fifo_size, page_size, pages_to_read, timeout_s, "x280");
+        rc = run_listen(mesh_device, device_id, sender_core, 4096, 1024, pages_to_read, timeout_s, "x280");
+    } else if (mode == "hold" || mode == "serve") {
+        // hold/serve <fifo_size> <page_size> <secs>
+        const uint32_t fifo_size = argc > 3 ? (uint32_t)std::strtoul(argv[3], nullptr, 0) : (256u * 1024);
+        const uint32_t page_size = argc > 4 ? (uint32_t)std::strtoul(argv[4], nullptr, 0) : 4096;
+        const uint32_t secs = argc > 5 ? std::atoi(argv[5]) : 5;
+        if (mode == "hold") {
+            rc = run_hold(mesh_device, device_id, sender_core, fifo_size, page_size, secs);
+        } else {
+            rc = run_serve(mesh_device, device_id, sender_core, fifo_size, page_size, secs);
+        }
     } else {
-        fmt::print("unknown mode '{}' (use 'selftest' or 'listen')\n", mode);
+        fmt::print("unknown mode '{}' (use selftest|listen|hold|serve)\n", mode);
         rc = 64;
     }
     return rc;
