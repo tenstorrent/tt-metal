@@ -83,7 +83,7 @@ from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.elf import ElfVariable
 from ttexalens.umd_device import TimeoutDeviceRegisterError
-from typing import Any, Callable, Iterable, TypeVar
+from typing import Any, Callable, Iterable, TypeVar, cast
 from types import ModuleType
 
 
@@ -154,7 +154,7 @@ def triage_singleton(run_method: Callable[[ScriptArguments, Context], T], /) -> 
         ok, payload = cache[cache_key]
         if not ok:
             raise payload
-        return payload
+        return cast(T, payload)
 
     return cache_wrapper
 
@@ -279,8 +279,9 @@ class TriageScript:
             script_name = os.path.splitext(os.path.basename(script_path))[0]
             script_module = importlib.import_module(script_name)
 
-            # Check if script has a configuration
-            script_config: ScriptConfig = script_module.script_config
+            # Check if script has a configuration. The value comes from a dynamically imported
+            # user module, so it may be missing/None at runtime even though the declared type isn't.
+            script_config: Any = script_module.script_config
             if script_config is None:
                 # This script does not have a configuration, which means it is not tt-triage script, skipping...
                 raise ValueError(f"Script {script_path} does not have script_config.")
@@ -318,15 +319,15 @@ class TriageScript:
                 documentation=script_module.__doc__,
             )
 
-            if triage_script.config.depends is None:
+            # 'depends' comes from a user-authored module and may be None or contain non-str
+            # entries at runtime, so normalize defensively despite the declared list[str] type.
+            depends: Any = triage_script.config.depends
+            if depends is None:
                 # If script does not have dependencies, set it to empty list
                 triage_script.config.depends = []
             else:
-                triage_script.config.depends = [
-                    dep if isinstance(dep, str) and dep.endswith(".py") else f"{dep}.py"
-                    for dep in triage_script.config.depends
-                ]
-                triage_script.config.depends = [os.path.join(base_path, dep) for dep in triage_script.config.depends]
+                normalized = [dep if isinstance(dep, str) and dep.endswith(".py") else f"{dep}.py" for dep in depends]
+                triage_script.config.depends = [os.path.join(base_path, dep) for dep in normalized]
 
             return triage_script
         finally:
@@ -386,7 +387,7 @@ def resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScri
 
     # Min-heap for runnable scripts: (-priority, script name, script object)
     # Negative priority because heapq is a min-heap
-    heap = []
+    heap: list[tuple[int, str, TriageScript]] = []
 
     # Initialize heap with scripts with in-degree 0 (no unmet dependencies)
     for path, script in scripts.items():
@@ -409,7 +410,7 @@ def resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScri
 
     # If some scripts remain with non-zero in-degree, we have a cycle
     if len(result) != len(scripts):
-        remaining_scripts = set(scripts.keys()) - {s.config.name for s in result}
+        remaining_scripts = set(scripts.keys()) - {s.path for s in result}
         raise ValueError(
             f"Bad dependency detected in scripts: {', '.join(remaining_scripts)}\n"
             f"  Circular dependency, dependency on disabled or non-existing script is not allowed.\n"
@@ -420,7 +421,7 @@ def resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScri
 
 
 # Purposely uninitialized global console object to ensure proper initialization only once later
-console: Console = None  # type: ignore[assignment]
+console: Console | None = None
 progress_disabled: bool = False
 
 
@@ -481,17 +482,19 @@ def parse_arguments(
     argv: list[str] | None = None,
     only_triage_script_args=False,
 ) -> ScriptArguments:
-    from docopt import (
-        parse_defaults,
-        parse_pattern,
-        formal_usage,
+    # docopt's typeshed stub only exposes the public docopt() function, but these internal
+    # parser symbols exist at runtime. Ignore the stub gaps for both checkers.
+    from docopt import (  # type: ignore[attr-defined]
+        parse_defaults,  # pyright: ignore[reportAttributeAccessIssue]
+        parse_pattern,  # pyright: ignore[reportAttributeAccessIssue]
+        formal_usage,  # pyright: ignore[reportAttributeAccessIssue]
         printable_usage,
-        parse_argv,
-        Required,
-        TokenStream,
+        parse_argv,  # pyright: ignore[reportAttributeAccessIssue]
+        Required,  # pyright: ignore[reportAttributeAccessIssue]
+        TokenStream,  # pyright: ignore[reportAttributeAccessIssue]
         DocoptExit,
-        Option,
-        AnyOptions,
+        Option,  # pyright: ignore[reportAttributeAccessIssue]
+        AnyOptions,  # pyright: ignore[reportAttributeAccessIssue]
     )
     import sys
 
@@ -503,7 +506,7 @@ def parse_arguments(
         docs[script.name] = script.documentation
 
     combined_options = []
-    combined_pattern: Required = Required(*[Required(*[])])
+    combined_pattern = Required(*[Required(*[])])
 
     for script_name, doc in docs.items():
         try:
@@ -519,7 +522,7 @@ def parse_arguments(
 
     # Deduplicate options if some scripts define the same option
     seen_options: set[str | None] = set()
-    unique_options: list[Option] = []
+    unique_options = []
     for opt in combined_options:
         key = opt.long or opt.short
         if key not in seen_options:
@@ -627,9 +630,9 @@ def get_output_serializer() -> Any:
     """Return the active serializer, defaulting to a Rich-console one on first use."""
     global _output_serializer
     if _output_serializer is None:
-        from serializers import RichSerializer
+        from serializers import ConsoleSink, RichSerializer
 
-        _output_serializer = RichSerializer(console, utils, get_verbose_level)
+        _output_serializer = RichSerializer(ConsoleSink(console), utils, get_verbose_level)
     return _output_serializer
 
 
@@ -747,6 +750,7 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
         pip_cmd = "uv pip" if shutil.which("uv") is not None else "pip"
         install_cmd = f"{pip_cmd} install -r {_triage_requirements_path}"
         utils.WARN(f"Required debugger component is not installed. Please run: {install_cmd}")
+        assert console is not None, "Console must be initialized before the version check."
         console.print(f"Module 'tt-exalens' not found. Please install tt-exalens by running:")
         console.print(f"  [command]{install_cmd}[/]")
         exit(1)
@@ -760,6 +764,7 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
             utils.WARN(message)
             utils.WARN("Proceeding due to --skip-version-check")
         else:
+            assert console is not None, "Console must be initialized before the version check."
             console.print(message)
             console.print(f"Please install tt-exalens by running:")
             console.print(f"  [command]{install_cmd}[/]")
@@ -783,16 +788,17 @@ def _patch_risc_debug() -> None:
     from triage_session import get_triage_session
 
     def is_affected_by_cont_bug(device) -> bool:
-        return device.is_wormhole() or device.is_blackhole()
+        return bool(device.is_wormhole() or device.is_blackhole())
 
     original_hw_cont = BabyRiscDebugHardware.cont
     original_hw_continue_without_debug = BabyRiscDebugHardware.continue_without_debug
     original_hw_halt = BabyRiscDebugHardware.halt
 
-    BabyRiscDebugHardware.cont = (
+    # Intentional runtime monkey-patching of a third-party class to work around a HW bug.
+    BabyRiscDebugHardware.cont = (  # type: ignore[method-assign]
         lambda self: None if is_affected_by_cont_bug(self.risc_info.noc_block.device) else original_hw_cont(self)
     )
-    BabyRiscDebugHardware.continue_without_debug = (
+    BabyRiscDebugHardware.continue_without_debug = (  # type: ignore[method-assign]
         lambda self: None
         if is_affected_by_cont_bug(self.risc_info.noc_block.device)
         else original_hw_continue_without_debug(self)
@@ -807,7 +813,7 @@ def _patch_risc_debug() -> None:
             original_hw_halt(self)
             session.add_halted_core(location, risc_name)
 
-    BabyRiscDebugHardware.halt = patched_halt
+    BabyRiscDebugHardware.halt = patched_halt  # type: ignore[method-assign]
 
 
 def _init_ttexalens(args: ScriptArguments) -> Context:
@@ -834,7 +840,7 @@ def run_script(
     if script_path is None:
         # Check if previous call on callstack is a TriageScript
         stack = inspect.stack()
-        if stack is None or len(stack) < 2:
+        if len(stack) < 2:
             raise ValueError("No script path provided and no caller found in callstack.")
         script_path = stack[1].filename
         force_exit = True
@@ -876,11 +882,11 @@ def run_script(
             result = script.run(args=args, context=context, log_error=False)
             if script.config.data_provider and result is None:
                 raise TTTriageError(f"{script.name}: Data provider script did not return any data.")
-    script = scripts[script_path] if script_path in scripts else None
+    result_script = scripts[script_path] if script_path in scripts else None
     if return_result:
         return result
     init_output_serializer(args)
-    serialize_result(script, result)
+    serialize_result(result_script, result)
 
     if force_exit:
         get_output_serializer().close()

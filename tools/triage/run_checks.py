@@ -31,7 +31,7 @@ from collections import defaultdict
 from collections.abc import Callable
 from functools import cached_property
 from dataclasses import dataclass
-from typing import Literal, TypeAlias, get_args
+from typing import Literal, TypeAlias, TypeVar, cast, get_args
 
 from inspector_data import run as get_inspector_data, InspectorData
 from triage import (
@@ -81,8 +81,8 @@ class CheckResult:
     result: object = recurse_field()
 
     # Hack to make result the last field to preserve header order
-    def __post_init__(cls):
-        cls.__dataclass_fields__["result"] = cls.__dataclass_fields__.pop("result")
+    def __post_init__(self):
+        self.__dataclass_fields__["result"] = self.__dataclass_fields__.pop("result")
 
 
 @dataclass
@@ -93,6 +93,9 @@ class DeviceDescription:
 
 def device_description_serializer(device_desc: DeviceDescription) -> str:
     return hex(device_desc.device.unique_id) if device_desc.use_unique_id else str(device_desc.device.id)
+
+
+CheckResultT = TypeVar("CheckResultT", bound=CheckResult)
 
 
 @dataclass
@@ -147,9 +150,9 @@ def get_devices(
                     "System Mesh has no host-local devices."
                 )
         device_ids = [
-            metal_device_id_mapping.get_device_id(metal_device_id)
+            device_id
             for metal_device_id in metal_device_ids
-            if metal_device_id_mapping.get_device_id(metal_device_id) is not None
+            if (device_id := metal_device_id_mapping.get_device_id(metal_device_id)) is not None
         ]
     elif len(devices) == 1 and devices[0].lower() == "all":
         device_ids = [int(id) for id in context.devices.keys()]
@@ -276,8 +279,8 @@ class RunChecks:
         return self._location_to_block_type_map[location]
 
     def _collect_results(
-        self, result: list[CheckResult], check_result: object, result_type: type[CheckResult], **kwargs
-    ) -> list[CheckResult]:
+        self, result: list[CheckResultT], check_result: object, result_type: type[CheckResultT], **kwargs
+    ) -> list[CheckResultT]:
         """Helper to collect and wrap check results consistently."""
         if check_result is None:
             return result
@@ -286,12 +289,12 @@ class RunChecks:
                 if not isinstance(item, CheckResult):
                     result.append(result_type(result=item, **kwargs))
                 else:
-                    result.append(item)
+                    result.append(cast(CheckResultT, item))
         else:
             if not isinstance(check_result, CheckResult):
                 result.append(result_type(result=check_result, **kwargs))
             else:
-                result.append(check_result)
+                result.append(cast(CheckResultT, check_result))
         return result
 
     def run_per_device_check(
@@ -346,8 +349,13 @@ class RunChecks:
         self, check: Callable[[OnChipCoordinate], object], block_filter: list[str] | str | None = None
     ) -> list[PerBlockCheckResult] | None:
         """Run a check function on each block location, collecting results."""
-        block_types_to_check = (
-            BLOCK_TYPES if block_filter is None else [block_filter] if isinstance(block_filter, str) else block_filter
+        # block_filter strings are expected to be valid BlockType values.
+        block_types_to_check: list[BlockType] = (
+            BLOCK_TYPES
+            if block_filter is None
+            else cast("list[BlockType]", [block_filter])
+            if isinstance(block_filter, str)
+            else cast("list[BlockType]", block_filter)
         )
 
         def per_device_blocks_check(device: Device) -> list[PerBlockCheckResult] | None:
@@ -376,8 +384,9 @@ class RunChecks:
                 finally:
                     progress.remove_task(device_task)
 
-        # Reuse the device iteration from run_per_device_check
-        return self.run_per_device_check(per_device_blocks_check)
+        # Reuse the device iteration from run_per_device_check. The nested check wraps results as
+        # PerBlockCheckResult, so the collected list contains PerBlockCheckResult items.
+        return cast("list[PerBlockCheckResult] | None", self.run_per_device_check(per_device_blocks_check))
 
     def run_per_core_check(
         self,
@@ -388,13 +397,13 @@ class RunChecks:
     ) -> list[PerCoreCheckResult] | None:
         """Run a check function on each RISC core in each block location, collecting results."""
 
-        # Filtering cores to check
-        cores_to_check = (
+        # Filtering cores to check. core_filter strings are expected to be valid CoreType values.
+        cores_to_check: set[CoreType] = (
             CORE_TYPES
             if core_filter is None
-            else set([core_filter])
+            else cast("set[CoreType]", {core_filter})
             if isinstance(core_filter, str)
-            else set(core_filter)
+            else cast("set[CoreType]", set(core_filter))
         )
 
         def per_block_cores_check(location: OnChipCoordinate) -> list[PerCoreCheckResult] | None:
@@ -432,8 +441,9 @@ class RunChecks:
 
             return result if len(result) > 0 else None
 
-        # Reuse the block iteration from run_per_block_check
-        return self.run_per_block_check(per_block_cores_check, block_filter)
+        # Reuse the block iteration from run_per_block_check. The nested check wraps results as
+        # PerCoreCheckResult, so the collected list contains PerCoreCheckResult items.
+        return cast("list[PerCoreCheckResult] | None", self.run_per_block_check(per_block_cores_check, block_filter))
 
 
 @triage_singleton

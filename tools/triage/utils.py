@@ -142,6 +142,7 @@ def ERROR(s, **kwargs):
         try:
             from triage import console
 
+            assert console is not None
             console.print(f"[error]{s}[/]", **kwargs)
         except ImportError:
             print(f"ERROR: {s}", **kwargs)
@@ -152,6 +153,7 @@ def WARN(s, **kwargs):
         try:
             from triage import console
 
+            assert console is not None
             console.print(f"[warning]{s}[/]", **kwargs)
         except ImportError:
             print(f"WARNING: {s}", **kwargs)
@@ -162,6 +164,7 @@ def DEBUG(s, **kwargs):
         try:
             from triage import console
 
+            assert console is not None
             console.print(f"[debug]{s}[/]", **kwargs)
         except ImportError:
             print(f"DEBUG: {s}", **kwargs)
@@ -172,6 +175,7 @@ def INFO(s, **kwargs):
         try:
             from triage import console
 
+            assert console is not None
             console.print(f"[info]{s}[/]", **kwargs)
         except ImportError:
             print(f"INFO: {s}", **kwargs)
@@ -182,6 +186,7 @@ def VERBOSE(s, **kwargs):
         try:
             from triage import console
 
+            assert console is not None
             console.print(f"[verbose]{s}[/]", **kwargs)
         except ImportError:
             print(f"VERBOSE: {s}", **kwargs)
