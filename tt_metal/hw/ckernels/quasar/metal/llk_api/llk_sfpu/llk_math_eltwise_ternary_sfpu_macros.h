@@ -7,36 +7,26 @@
 #include <cstdint>
 
 #include "llk_assert.h"
+#include "llk_defs.h"
+#include "llk_math_eltwise_ternary_sfpu.h"
 #include "llk_math_eltwise_ternary_sfpu_init.h"
-#include "llk_math_eltwise_ternary_sfpu_params.h"
 
 /*
- * Keep macro preconditions outside the tt-llk params wrapper. DST_SYNC and
- * DST_ACCUM are explicit so tests and non-standard kernel preludes can supply
- * their own modes instead of relying on ambient defines.
+ * Quasar keeps the same macro surface as BH/WH. DST_SYNC and DST_ACCUM are
+ * unused until Quasar has an equivalent of get_dest_max_tiles<...>. Ternary
+ * macro calls are limited to VectorMode::RC for now.
  */
 
 namespace ckernel {
 
-template <DstSync DST_SYNC, bool DST_ACCUM>
+template <DstSync /*DST_SYNC*/, bool /*DST_ACCUM*/>
 inline __attribute__((always_inline)) void _sfpu_ternary_check_(
-    std::uint32_t dst_index_in0,
-    std::uint32_t dst_index_in1,
-    std::uint32_t dst_index_in2,
-    std::uint32_t dst_index_out,
-    [[maybe_unused]] VectorMode vector_mode) {
-    LLK_ASSERT(
-        (dst_index_in0 < get_dest_max_tiles<DST_SYNC, DST_ACCUM, DstTileShape::Tile32x32>()),
-        "dst_index_in0 exceeds max dest tiles");
-    LLK_ASSERT(
-        (dst_index_in1 < get_dest_max_tiles<DST_SYNC, DST_ACCUM, DstTileShape::Tile32x32>()),
-        "dst_index_in1 exceeds max dest tiles");
-    LLK_ASSERT(
-        (dst_index_in2 < get_dest_max_tiles<DST_SYNC, DST_ACCUM, DstTileShape::Tile32x32>()),
-        "dst_index_in2 exceeds max dest tiles");
-    LLK_ASSERT(
-        (dst_index_out < get_dest_max_tiles<DST_SYNC, DST_ACCUM, DstTileShape::Tile32x32>()),
-        "dst_index_out exceeds max dest tiles");
+    [[maybe_unused]] std::uint32_t dst_index_in0,
+    [[maybe_unused]] std::uint32_t dst_index_in1,
+    [[maybe_unused]] std::uint32_t dst_index_in2,
+    [[maybe_unused]] std::uint32_t dst_index_out,
+    VectorMode vector_mode) {
+    LLK_ASSERT(vector_mode == VectorMode::RC, "Quasar currently only supports vector mode RC");
 }
 
 }  // namespace ckernel
@@ -71,37 +61,39 @@ inline __attribute__((always_inline)) void _sfpu_ternary_check_(
 /*
  * Ternary SFPU init macros (4 total)
  *
- * These mirror the unary/binary SFPU_UNARY_INIT* macros and delegate to the
- * `ckernel::llk_math_eltwise_ternary_sfpu_init<SfpuType::OP>` wrapper, which
- * configures the address-modifier registers for ternary SFPU ops and then
- * invokes the optional per-op init callback.
+ * These mirror the unary/binary SFPU_UNARY_INIT* macros and delegate to
+ * `ckernel::llk_math_eltwise_ternary_sfpu_init<SfpuType::OP>` (defined in
+ * `llk_math_eltwise_ternary_sfpu_init.h`), which on Quasar is a thin
+ * inline wrapper around `::_llk_math_eltwise_ternary_sfpu_init_<sfpu_op>()`.
+ *
+ * SfpuType lives inside `::ckernel::` on Quasar (in llk_defs.h), so the
+ * fully-qualified path is `::ckernel::SfpuType::OP`.
  */
 
 /*
  * Bare init: no callback.
- *   SFPU_TERNARY_INIT(addcmul);
- * Note: SfpuType lives in the global namespace (see llk_sfpu_types.h), so the
- * fully-qualified path is `::SfpuType::OP`, not `::ckernel::SfpuType::OP`.
+ *   SFPU_TERNARY_INIT(where);
  */
-#define SFPU_TERNARY_INIT(OP) ::ckernel::llk_math_eltwise_ternary_sfpu_init<::SfpuType::OP>()
+#define SFPU_TERNARY_INIT(OP) ::ckernel::llk_math_eltwise_ternary_sfpu_init<::ckernel::SfpuType::OP>()
 
 /*
  * Init with a non-templated callback.
  *   SFPU_TERNARY_INIT_FN_NO_ARGS(some_op, sfpu::some_init);
  */
-#define SFPU_TERNARY_INIT_FN_NO_ARGS(OP, INIT_FN) ::ckernel::llk_math_eltwise_ternary_sfpu_init<::SfpuType::OP>(INIT_FN)
+#define SFPU_TERNARY_INIT_FN_NO_ARGS(OP, INIT_FN) \
+    ::ckernel::llk_math_eltwise_ternary_sfpu_init<::ckernel::SfpuType::OP>(INIT_FN)
 
 /*
  * Init with a templated callback.
  *   SFPU_TERNARY_INIT_FN(where, sfpu::_init_where_, (APPROXIMATE));
- *   SFPU_TERNARY_INIT_FN(snake_beta, sfpu::snake_beta_init, (APPROXIMATE));
  */
 #define SFPU_TERNARY_INIT_FN(OP, INIT_FN, TEMPLATES) \
-    ::ckernel::llk_math_eltwise_ternary_sfpu_init<::SfpuType::OP>(INIT_FN<_SFPU_TERN_EXPAND TEMPLATES>)
+    ::ckernel::llk_math_eltwise_ternary_sfpu_init<::ckernel::SfpuType::OP>(INIT_FN<_SFPU_TERN_EXPAND TEMPLATES>)
 
 /*
  * Init with a templated callback and extra runtime arguments.
  *   SFPU_TERNARY_INIT_FN_ARGS(some_op, sfpu::some_init, (APPROX), arg0, arg1);
  */
-#define SFPU_TERNARY_INIT_FN_ARGS(OP, INIT_FN, TEMPLATES, ...) \
-    ::ckernel::llk_math_eltwise_ternary_sfpu_init<::SfpuType::OP>(INIT_FN<_SFPU_TERN_EXPAND TEMPLATES>, ##__VA_ARGS__)
+#define SFPU_TERNARY_INIT_FN_ARGS(OP, INIT_FN, TEMPLATES, ...)              \
+    ::ckernel::llk_math_eltwise_ternary_sfpu_init<::ckernel::SfpuType::OP>( \
+        INIT_FN<_SFPU_TERN_EXPAND TEMPLATES>, ##__VA_ARGS__)
