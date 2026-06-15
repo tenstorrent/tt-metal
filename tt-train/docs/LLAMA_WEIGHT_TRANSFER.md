@@ -1,15 +1,24 @@
-# HuggingFace Llama state-dict format
+# Llama weight transfer (ttml ↔ tt-transformers)
 
-Reference for the HuggingFace `transformers` Llama state-dict format
-**and** the on-device dict format that
-[`LlamaCompositeKV.export_to_hf_dict()`](./utils/llama_overrides.py)
-produces for in-process weight transfer to
-[`tt_transformers.tt.model.Transformer.update_weights`](../../../../models/tt_transformers/tt/model.py).
+Reference for two related dict formats:
 
-The concrete listing in §2 was produced by
-[`dump_llama_keys.py`](./dump_llama_keys.py) against
-`meta-llama/Llama-3.2-1B-Instruct`. The structural rules apply to every
-Llama 3 / 3.1 / 3.2 / 3.3 decoder (only counts and dims change).
+1. The HuggingFace `transformers` Llama state-dict (the format on the
+   HF Hub).
+2. The on-device dict that
+   [`LlamaCompositeKV.export_to_hf_dict()`](../sources/examples/grpo/utils/llama_overrides.py)
+   produces for transfer to
+   [`tt_transformers.tt.model.Transformer.update_weights`](../../models/tt_transformers/tt/model.py).
+   This same dict is also the wire format consumed by the cross-rank
+   [`WeightBridge`](../sources/examples/grpo/utils/inference_bridge.py),
+   which ships it from a ttml rank to a tt-transformers rank over MPI.
+   It is what the GRPO BoolQ example
+   ([`tt-train/sources/examples/grpo/boolq/`](../sources/examples/grpo/boolq/))
+   uses to push the freshly-updated policy to the inference worker on
+   every training step.
+
+The structural rules apply to every Llama 3 / 3.1 / 3.2 / 3.3 decoder
+(only counts and dims change). The full key listing in §2.3 is for
+`meta-llama/Llama-3.2-1B-Instruct`.
 
 ---
 
@@ -75,7 +84,7 @@ Replace `{i}` with the block index `0 … L-1`.
 
 ### 2.3 Full key list for Llama-3.2-1B-Instruct (147 keys)
 
-Output of `dump_llama_keys.py`, verbatim:
+Verbatim listing for `meta-llama/Llama-3.2-1B-Instruct`:
 
 ```text
 model.embed_tokens.weight                        shape=(128256, 2048)
@@ -106,11 +115,12 @@ lm_head.weight                                   shape=(128256, 2048)
 
 ## 3. Transfer format: `ttml → tt-transformers`
 
-[`LlamaCompositeKV.export_to_hf_dict()`](./utils/llama_overrides.py)
+[`LlamaCompositeKV.export_to_hf_dict()`](../sources/examples/grpo/utils/llama_overrides.py)
 returns a `dict[str, ttnn.Tensor]` that is the **wire format** between
 ttml and tt-transformers'
-[`Transformer.update_weights(hf_state_dict, hf_rope=False)`](../../../../models/tt_transformers/tt/model.py).
-Everything in this section is the contract.
+[`Transformer.update_weights(hf_state_dict, hf_rope=False)`](../../models/tt_transformers/tt/model.py).
+Everything in this section is the contract — both the in-process call
+and the cross-rank bridge enforce it.
 
 ### 3.1 Universal tensor properties
 
@@ -122,7 +132,7 @@ Every value in the returned dict has the same per-tensor representation:
 | `dtype`         | `ttnn.bfloat16`                                | matches ttml's storage; consumer recasts if its destination differs    |
 | `layout`        | `ttnn.TILE_LAYOUT`                             | matches ttml's storage; `_inplace_copy` re-layouts only on mismatch    |
 | `memory_config` | `ttnn.DRAM_MEMORY_CONFIG` (interleaved)        | consumer re-shards if its destination is L1 or width-sharded           |
-| mesh placement  | replicated across the mesh                     | single-device / non-DDP only (see [§3.4](#34-subtleties))              |
+| mesh placement  | fully replicated across every mesh axis        | DDP supported (e.g. `[1, 2]`); TP / CP / sharded weights not — see [§3.4](#34-subtleties) |
 | rank / shape    | 4D, `(1, 1, *, *)`                             | HF Linear / embedding / gamma shape wrapped in two leading unit dims   |
 
 The 4D shape convention is the consumer's contract — every leaf
@@ -199,13 +209,30 @@ embedding `(V, H)` / gamma `(H,)` shapes from §2 exactly.
   K / V slices may be deallocated; the rest are owned by ttml and stay
   live as long as the ttml model lives.
 
-- **Single-device only.** All on-device parameter tensors are assumed
-  to be replicated (no DDP / TP shard mapper). The grpo single-device
-  config (`mesh_shape: [1, 1]`, `enable_ddp: False`) satisfies this.
-  For DDP / TP, callers would need to compose shards back to a
-  replicated view before exporting (not yet implemented).
+- **Replicated parameters only.** Every value in the dict must be
+  fully replicated across every mesh axis (`PlacementReplicate`
+  everywhere) — enforced at runtime by
+  `WeightBridge._validate_source_tensor` for the cross-rank path. This
+  is independent of the *sender's* mesh shape: a DDP-only `[1, N]`
+  mesh (e.g. `mesh_shape: [1, 2], enable_ddp: true` from
+  [`grpo_boolq_llama_2dev_ddp_gas_4.yaml`](../configs/training_configs/grpo_boolq_llama_2dev_ddp_gas_4.yaml))
+  produces replicated weights and is supported. TP / CP / sharded
+  weights are **not**: callers would need to compose shards back to a
+  replicated view on host before exporting (not yet implemented).
 
-### 3.5 Minimal usage
+  On the receiving side, `tt_transformers.Attention.update` currently
+  raises `NotImplementedError` when `num_devices_per_group > 1`, so the
+  receiver mesh has to keep per-tensor weights on a single device group
+  (typically a `[1, 1]` submesh on the tt-transformers side). The
+  asymmetric `[1, 2] → [1, 1]` cross-rank configuration used by the
+  GRPO BoolQ example satisfies both constraints simultaneously: the
+  bridge ships replicated weights over a single `(0,0) → (0,0)` socket
+  connection, and the receiver lands them on its lone chip.
+
+### 3.5 Usage
+
+In-process (ttml model and tt-transformers model on the same Python
+process and the same mesh):
 
 ```python
 hf_dict = ttml_model.export_to_hf_dict()
@@ -215,8 +242,21 @@ finally:
     del hf_dict  # frees the per-layer k_proj / v_proj slices
 ```
 
-End-to-end smoke test:
-[`tests/test_ttml_to_ttt_weight_transfer.py`](./tests/test_ttml_to_ttt_weight_transfer.py).
+Cross-rank, via the `WeightBridge` (one process per rank, separate
+meshes; the BoolQ GRPO example uses this path on every step):
+
+```python
+# ttml rank
+client = TttInferenceClient(peer_rank=TTT_RANK, device=ttml_mesh)
+client.transfer_weights(ttml_model.export_to_hf_dict())
+
+# ttt rank — inside TttInferenceServer.serve_forever, on_weights_received:
+ttt_model.update_weights(received_hf_dict, hf_rope=False)
+```
+
+End-to-end smoke tests:
+- In-process: [`test_ttml_to_ttt_weight_transfer.py`](../sources/examples/grpo/tests/test_ttml_to_ttt_weight_transfer.py).
+- Cross-rank: [`weight_transfer/test_bridge_transfer.py`](../sources/examples/grpo/tests/weight_transfer/test_bridge_transfer.py).
 
 ---
 
@@ -225,6 +265,8 @@ End-to-end smoke test:
 * HF reference implementation: `transformers.models.llama.modeling_llama`
   ([huggingface/transformers](https://github.com/huggingface/transformers/tree/main/src/transformers/models/llama)).
 * ttml model definition: `LlamaCompositeKV` in
-  [`utils/llama_overrides.py`](./utils/llama_overrides.py).
+  [`grpo/utils/llama_overrides.py`](../sources/examples/grpo/utils/llama_overrides.py).
 * tt-transformers dispatcher:
-  [`Transformer.update_weights`](../../../../models/tt_transformers/tt/model.py).
+  [`Transformer.update_weights`](../../models/tt_transformers/tt/model.py).
+* Cross-rank transport: `WeightBridge` in
+  [`grpo/utils/inference_bridge.py`](../sources/examples/grpo/utils/inference_bridge.py).
