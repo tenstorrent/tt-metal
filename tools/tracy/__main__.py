@@ -460,7 +460,7 @@ def main():
                 # DELETE relies on it to detect/advance the active trace. On the rare FS without
                 # symlink support this warns and skips; the trace is still reachable via ?trace=.
                 try:
-                    embed_path = point_embed_at_trace(tracy_dst.name)
+                    point_embed_at_trace(tracy_dst.name)
                     logger.info(f"embed.tracy -> traces/{tracy_dst.name}")
                 except Exception as e:
                     logger.warning(f"Could not update embed.tracy: {e}")

@@ -117,6 +117,8 @@ def point_embed_at_trace(trace_basename: str) -> Path:
         try:
             os.unlink(tmp_rel, dir_fd=wasm_dir_fd)
         except FileNotFoundError:
+            # No leftover temp symlink from a prior interrupted swap -- already in the
+            # desired state, so nothing to clean up.
             pass
         os.symlink("traces/" + trace_basename, tmp_rel, dir_fd=wasm_dir_fd)
         try:
@@ -125,6 +127,8 @@ def point_embed_at_trace(trace_basename: str) -> Path:
             try:
                 os.unlink(tmp_rel, dir_fd=wasm_dir_fd)
             except FileNotFoundError:
+                # The temp symlink was never created (or already removed); nothing to roll
+                # back. Fall through to re-raise the original rename failure.
                 pass
             raise
     finally:

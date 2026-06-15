@@ -98,6 +98,8 @@ def _kill_tcp_port(port: int) -> None:
             try:
                 os.kill(int(line.strip()), signal.SIGTERM)
             except (ValueError, ProcessLookupError, PermissionError):
+                # Best-effort cleanup: the PID may be unparsable, already gone, or owned by
+                # another user. None of these should fail the test, so ignore them.
                 pass
 
 
@@ -225,7 +227,9 @@ def _find_free_port_pair(start: int = 8100) -> int:
     for base in range(start, 8600, 2):
         if _port_free(base) and _port_free(base + 1):
             return base
-    pytest.skip("No free HTTP/WebSocket port pair available")
+    # No pair found: skip explicitly so the function never falls through to an implicit
+    # None return (pytest.skip raises Skipped, so this is unreachable as a return path).
+    raise pytest.skip.Exception("No free HTTP/WebSocket port pair available")
 
 
 def _run_in_serve_wasm_env(snippet: str, tt_metal_home: Path, timeout: float = 30.0) -> subprocess.CompletedProcess:
