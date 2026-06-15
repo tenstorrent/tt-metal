@@ -1025,6 +1025,25 @@ def test_unary_inverse_hyperbolic_edge_case_ttnn(
 
 
 @pytest.mark.parametrize(
+    "ttnn_function, values",
+    [
+        (ttnn.acosh, [1.0, 1.0009765625, 1.25, 2.0, 1.0e7, 1.0e10, float("inf")]),
+        (ttnn.asinh, [-1.0e10, -1.0e7, -1.0, -0.001, 0.0, 0.001, 1.0, 1.0e7, 1.0e10]),
+        (ttnn.atanh, [-1.0, -0.999, -0.5, -0.001, 0.0, 0.001, 0.5, 0.999, 1.0]),
+    ],
+)
+def test_unary_inverse_hyperbolic_fp32_special_regions_ttnn(device, ttnn_function, values):
+    in_data = torch.tensor(values, dtype=torch.float32).reshape(1, 1, 1, -1)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn_function(input_tensor)
+    golden_function = ttnn.get_golden_function(ttnn_function)
+    golden_tensor = golden_function(in_data, device=device)
+
+    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=2, allow_nonfinite=True)
+
+
+@pytest.mark.parametrize(
     "input_shapes",
     (
         (torch.Size([3, 128, 32])),

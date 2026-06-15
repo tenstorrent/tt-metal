@@ -62,7 +62,10 @@ ALWI void cos_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void acosh_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(acosh, ckernel::sfpu::init_inverse_hyperbolic, APPROX)); }
+ALWI void acosh_tile_init() {
+    MATH(SFPU_THREE_TEMPLATE_PARAM_INIT(
+        acosh, ckernel::sfpu::init_inverse_hyperbolic, APPROX, false /* fast_and_approx */, DST_ACCUM_MODE));
+}
 
 // clang-format off
 /**
@@ -79,7 +82,7 @@ ALWI void acosh_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(acosh, ckernel::sfpu::i
  */
 // clang-format on
 ALWI void acosh_tile(uint32_t idst) {
-    MATH(SFPU_TWO_PARAM_KERNEL(calculate_acosh, APPROX, 8 /*ITER*/, idst, VectorMode::RC));
+    MATH(SFPU_THREE_PARAM_KERNEL_FP32_FIRST(calculate_acosh, APPROX, DST_ACCUM_MODE, 8 /*ITER*/, idst, VectorMode::RC));
 }
 
 /**
@@ -109,7 +112,10 @@ ALWI void tan_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void asinh_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(asinh, ckernel::sfpu::init_inverse_hyperbolic, APPROX)); }
+ALWI void asinh_tile_init() {
+    MATH(SFPU_THREE_TEMPLATE_PARAM_INIT(
+        asinh, ckernel::sfpu::init_inverse_hyperbolic, APPROX, false /* fast_and_approx */, DST_ACCUM_MODE));
+}
 
 // clang-format off
 /**
@@ -126,13 +132,16 @@ ALWI void asinh_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(asinh, ckernel::sfpu::i
  */
 // clang-format on
 ALWI void asinh_tile(uint32_t idst) {
-    MATH(SFPU_TWO_PARAM_KERNEL(calculate_asinh, APPROX, 8 /*ITER*/, idst, VectorMode::RC));
+    MATH(SFPU_THREE_PARAM_KERNEL_FP32_FIRST(calculate_asinh, APPROX, DST_ACCUM_MODE, 8 /*ITER*/, idst, VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void atanh_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(atanh, ckernel::sfpu::init_atanh, APPROX)); }
+ALWI void atanh_tile_init() {
+    MATH(SFPU_THREE_TEMPLATE_PARAM_INIT(
+        atanh, ckernel::sfpu::init_atanh, APPROX, false /* fast_and_approx */, DST_ACCUM_MODE));
+}
 
 // clang-format off
 /**

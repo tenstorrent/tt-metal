@@ -122,11 +122,11 @@ _OP_DOMAIN_REGISTRY: Dict[
     ),
     # acosh: domain x >= 1
     MathOperation.Acosh: OperandSpecs(
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=1.0, high=10.0)
+        spec_A=StimuliSpec.uniform(intervals=[(1.0, 1.01), (1.01, 10.0), (1.0e7, 1.0e20)])
     ),
     # asinh: all reals
     MathOperation.Asinh: OperandSpecs(
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
+        spec_A=StimuliSpec.uniform(intervals=[(-1.0e20, -1.0e7), (-10.0, 10.0), (1.0e7, 1.0e20)])
     ),
     # atanh: domain |x| < 1; stay away from ±1 to avoid ±inf
     MathOperation.Atanh: OperandSpecs(
