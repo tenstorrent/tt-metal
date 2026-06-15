@@ -21,9 +21,9 @@
 //   cb_sin=2*Tr; worst 16
 //   cb_trans=1; worst 1
 //   rotated_in=dst_batch?max_chunk:Tr; worst 8
-//   cos_interm=Tr; worst 8
-//   sin_interm=Tr; worst 8
-//   total worst 105 tiles at Tr=8 (~210 KiB at 2 KiB/tile)
+//   sin_interm=dst_batch?max_chunk:Tr; worst 8
+//   cos_interm=dst_batch?max_chunk:Tr; worst 8 (fp32_dest_acc_en only; fused into DST otherwise)
+//   total worst 105 (fp32) / 97 tiles at Tr=8 (~210 / 194 KiB at 2 KiB/tile)
 
 namespace {
 
@@ -49,8 +49,8 @@ constexpr auto kSinCbIndex = tt::CBIndex::c_2;
 constexpr auto kTransCbIndex = tt::CBIndex::c_3;
 constexpr auto kNopeCbIndex = tt::CBIndex::c_4;
 constexpr auto kRotatedInIntermCbIndex = tt::CBIndex::c_24;
-constexpr auto kCosIntermCbIndex = tt::CBIndex::c_25;
-constexpr auto kSinIntermCbIndex = tt::CBIndex::c_26;
+constexpr auto kSinIntermCbIndex = tt::CBIndex::c_25;
+constexpr auto kCosIntermCbIndex = tt::CBIndex::c_26;
 constexpr auto kRopeOutCbIndex = tt::CBIndex::c_16;
 
 constexpr uint32_t kCbDoubleBuffer = 2U;
@@ -202,10 +202,13 @@ QRopeFwProgramFactory::cached_program_t QRopeFwProgramFactory::create(
         create_circular_buffer(program, all_cores, kNopeCbIndex, data_format, single_tile_size, nope_cb_num_tiles);
     [[maybe_unused]] auto cb_rotated_in = create_circular_buffer(
         program, all_cores, kRotatedInIntermCbIndex, data_format, single_tile_size, rotated_interm_cb_num_tiles);
-    [[maybe_unused]] auto cb_cos_interm =
-        create_circular_buffer(program, all_cores, kCosIntermCbIndex, data_format, single_tile_size, Tr);
-    [[maybe_unused]] auto cb_sin_interm =
-        create_circular_buffer(program, all_cores, kSinIntermCbIndex, data_format, single_tile_size, Tr);
+    [[maybe_unused]] auto cb_sin_interm = create_circular_buffer(
+        program, all_cores, kSinIntermCbIndex, data_format, single_tile_size, rotated_interm_cb_num_tiles);
+    // cos_interm only needed by the fp32_dest_acc_en combine path (dest-reuse ADD is not fp32-accurate).
+    if (fp32_dest_acc_en) {
+        [[maybe_unused]] auto cb_cos_interm = create_circular_buffer(
+            program, all_cores, kCosIntermCbIndex, data_format, single_tile_size, rotated_interm_cb_num_tiles);
+    }
     [[maybe_unused]] auto cb_rope_out =
         create_circular_buffer(program, all_cores, kRopeOutCbIndex, data_format, single_tile_size, rope_cb_num_tiles);
 
@@ -230,8 +233,8 @@ QRopeFwProgramFactory::cached_program_t QRopeFwProgramFactory::create(
         (std::uint32_t)kSinCbIndex,
         (std::uint32_t)kTransCbIndex,
         (std::uint32_t)kRotatedInIntermCbIndex,
-        (std::uint32_t)kCosIntermCbIndex,
         (std::uint32_t)kSinIntermCbIndex,
+        (std::uint32_t)kCosIntermCbIndex,
         (std::uint32_t)kRopeOutCbIndex,
         Tr,
         H,
