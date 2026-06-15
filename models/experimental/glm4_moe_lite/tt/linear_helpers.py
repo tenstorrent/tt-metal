@@ -536,9 +536,13 @@ def compute_1d_mlp_down_prog_cfg(
     m_tiles = max(1, (m_total + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE)
     k_tiles = (K + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
     n_tiles = (N + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
-    # Prefer per_core_N=4 (swept-optimal for N=2048 → 16 cores, 1.3x vs the 64-core
-    # baseline); fall back to the previous 32-core/per_core_N=2 when 4 doesn't divide.
-    if n_tiles % 4 == 0:
+    # Decode (m_tiles==1): per_core_N=2 → 2× the cores (32 for N=2048) which, combined with
+    # the larger decode K-block above, beats the 16-core/per_core_N=4 config on this weight-BW
+    # -bound matmul (sweep moe_down 2560x2048: 8x4 w16 11.5µs vs 16-core 15µs). Prefill keeps
+    # per_core_N=4 (fewer cores, bigger per-core tile work amortizes launch over the long M).
+    if m_tiles == 1 and n_tiles % 2 == 0:
+        per_core_N, out_subblock_w = 2, 2
+    elif n_tiles % 4 == 0:
         per_core_N, out_subblock_w = 4, 4
     elif n_tiles % _DOWN_MATMUL_NUM_CORES == 0 and (n_tiles // _DOWN_MATMUL_NUM_CORES) % _DOWN_OUT_SUBBLOCK_W == 0:
         per_core_N, out_subblock_w = n_tiles // _DOWN_MATMUL_NUM_CORES, _DOWN_OUT_SUBBLOCK_W
@@ -562,7 +566,12 @@ def compute_1d_mlp_down_prog_cfg(
         return compute_1d_prog_cfg(device, b_weight, m_total)
 
     in0_bw = 1
-    for candidate in (4, 3, 2):
+    # Decode (m_tiles==1): allow a much larger K-block. _auto-style caps at 4, leaving
+    # this weight-BW-bound down matmul K-loop-bound (sweep moe_down 2560x2048: bw=4 20µs
+    # → larger bw ~halves it). Prefill keeps the small cap (large per_core_M × big bw
+    # would overflow L1).
+    bw_candidates = (16, 8, 4, 3, 2) if m_tiles == 1 else (4, 3, 2)
+    for candidate in bw_candidates:
         if k_tiles % candidate == 0:
             in0_bw = candidate
             break
@@ -1036,11 +1045,15 @@ def prefill_per_head_linear(
     device: Any,
     compute_kernel_config: Any = None,
     memory_config: ttnn.MemoryConfig | None = None,
+    in0_block_w: int | None = None,
 ) -> ttnn.Tensor:
     """Per-head batched prefill linear for [1,H,M,K]×[1,H,K,N] (fuse_batch=False).
 
     Uses 1D mcast_in0 with nc=Nt (one N-tile/core, max N parallelism) and
     per_core_M=Mt.  Activation is staged in L1; output gathered to memory_config.
+
+    ``in0_block_w`` overrides the K-block (default ``_auto_in0_block_w(kt)``, which
+    caps at 4).  Decode kv_b1 passes the full Kt=6 — see the caller in ``mlp_linear``.
 
     Sweep results for GLM-4 MoE Lite (test_prefill_batched_matmul_sweep.py):
       kv_b1 Nt=16 → nc=16 (8×2), bw=2  72.90µs  6.90 TFLOPs (+1.29× vs auto ~94µs)
@@ -1071,9 +1084,10 @@ def prefill_per_head_linear(
         fp32_dest_acc_en=False,
     )
 
+    bw = in0_block_w if (in0_block_w is not None and kt % in0_block_w == 0) else _auto_in0_block_w(kt)
     prog_cfg = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
-        in0_block_w=_auto_in0_block_w(kt),
+        in0_block_w=bw,
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,
         per_core_M=mt,
@@ -1244,12 +1258,18 @@ def mlp_linear(
             kvb2_mc = memory_config if memory_config is not None else ttnn.L1_MEMORY_CONFIG
             return _decode_kvb2_per_head_linear(a, b, device=device, memory_config=kvb2_mc)
         kvb_mc = memory_config if memory_config is not None else ttnn.L1_MEMORY_CONFIG
+        # Decode kv_b1 [1,20,32,192]×[1,20,192,512]: use the full Kt=6 in0 block.
+        # _auto_in0_block_w caps at 4 → 3 for Kt=6; sweep (test_decode_batched_matmul_sweep.py)
+        # shows full-K block 24.3µs vs 34.4µs at bw=3 (1.41x). Decode only (mt==1); prefill
+        # kv_b1 (mt>1) keeps the auto block per its own sweep winner.
+        kvb1_bw = k // ttnn.TILE_SIZE if (k == 192 and n == 512 and mt == 1) else None
         return prefill_per_head_linear(
             a,
             b,
             device=device,
             compute_kernel_config=ckc,
             memory_config=kvb_mc,
+            in0_block_w=kvb1_bw,
         )
     if b_batch == 1:
         if m_total > ttnn.TILE_SIZE:
@@ -1634,7 +1654,9 @@ def attn_linear(
 _KVA_NUM_CORES = 21  # N=1344 → 42 N-tiles / per_core_N=2 = 21 cores
 _KVA_PER_CORE_N = 2  # N-tiles per core; must divide n_tiles (42 % 2 == 0)
 _KVA_PER_CORE_M = 1  # M=32 → 1 M-tile (decode batch fits in one tile row)
-_KVA_IN0_BLOCK_W = 4  # K=2048 → 64 k-tiles; 64 % 4 == 0 ✓
+_KVA_IN0_BLOCK_W = 8  # K=2048 → 64 k-tiles; larger K-block halves the K-loop on this
+# weight-BW-bound matmul (probe 2048x1344 @ 21 cores: bw=4 15.5µs → bw=8 10.7µs, 1.45x;
+# bw>8 no further gain at this grid). _auto_in0_block_w caps at 4 and misses this.
 _KVA_OUT_SUBBLOCK_H = 1
 _KVA_OUT_SUBBLOCK_W = 2  # avoids out_subblock_h * out_subblock_w == 1 penalty
 _KVA_MCAST_IN0 = True  # broadcast activation to all cores (weight-stationary)
