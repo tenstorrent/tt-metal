@@ -606,6 +606,7 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
+    curl -I -H "Authorization: Bearer ${{ env.HF_TOKEN }}"  https://huggingface.co/black-forest-labs/FLUX.1-schnell/resolve/main/model_index.json
     pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k checkpoint
   model: flux.1-schnell
   skus:
