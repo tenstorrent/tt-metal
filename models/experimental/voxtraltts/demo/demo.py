@@ -321,9 +321,42 @@ def load_prompt_items(path: str, default_voice: str) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
+def _hf_bump_ratio(w: np.ndarray, sample_rate: int) -> float:
+    """Energy ratio of the 5-7 kHz band to the 3-5 kHz band.
+
+    A normal speech roll-off gives a ratio < 1 (HF decays).  A value > ~1.15 means
+    the 5-7 kHz band carries *more* energy than the band below it — an aperiodic HF
+    "grain" bump that some Voxtral voices (e.g. casual_male) exhibit and others
+    (e.g. casual_female, ratio ~0.96) do not.
+    """
+    spec = np.abs(np.fft.rfft(w))
+    freqs = np.linspace(0.0, sample_rate / 2.0, len(spec))
+    e_35 = float(spec[(freqs >= 3000) & (freqs < 5000)].sum())
+    e_57 = float(spec[(freqs >= 5000) & (freqs < 7000)].sum())
+    return e_57 / max(e_35, 1e-9)
+
+
 def _save_wav(path: Path, waveform_f32: torch.Tensor, sample_rate: int) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     w = waveform_f32.detach().float().cpu().numpy().reshape(-1)
+
+    # Adaptive HF de-graining: only voices with an abnormal 5-7 kHz bump are filtered.
+    # The 300-3400 Hz speech band is preserved 100% by the low-pass, so intelligibility
+    # is unaffected; normal voices (ratio below the gate) are left bit-for-bit unchanged.
+    # Tunable via env: VOXTRAL_DEGRAIN_GATE (ratio threshold), VOXTRAL_DEGRAIN_HZ (cutoff),
+    # set VOXTRAL_DEGRAIN_HZ=0 to disable entirely.
+    cutoff_hz = float(os.environ.get("VOXTRAL_DEGRAIN_HZ", "6000"))
+    gate = float(os.environ.get("VOXTRAL_DEGRAIN_GATE", "1.15"))
+    if cutoff_hz > 0 and _hf_bump_ratio(w, sample_rate) > gate:
+        try:
+            from scipy.signal import butter, sosfiltfilt
+
+            sos = butter(6, cutoff_hz / (sample_rate / 2.0), "low", output="sos")
+            w = sosfiltfilt(sos, w).astype(np.float32)
+            logger.info(f"De-grained output (HF bump > {gate:.2f}) with {cutoff_hz:.0f} Hz low-pass")
+        except ImportError:
+            logger.warning("scipy unavailable; skipping HF de-graining")
+
     peak = float(np.abs(w).max())
     if peak > 0.95:
         w = w * (0.95 / peak)

@@ -59,6 +59,10 @@ class VoxtralTTSGenerateOutput:
     codes_b37t: torch.Tensor
     shifted_codes_t37: torch.Tensor
     hit_end_audio: bool
+    # Time-to-first-audio (seconds) — perf metric the demo logs. Optional: the device generation
+    # path doesn't measure it (stays None → demo reports it as N/A); the rebase brought in the
+    # demo's reader of this field without the corresponding output field, so define it here.
+    first_frame_s: float | None = None
     debug: VoxtralTTSDebugTrace | None = None
 
 
