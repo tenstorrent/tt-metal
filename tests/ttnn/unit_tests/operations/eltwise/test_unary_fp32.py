@@ -261,6 +261,8 @@ def test_acosh(device, h, w):
 def test_asinh(device, h, w):
     # Default [0, 1) input includes the small-x region where the log1p form fixes
     # the catastrophic cancellation of the old log(|x| + sqrt(x^2 + 1)) chain.
+    # |x| < 0.75 uses a direct degree-6 polynomial (<=1 ulp); |x| >= 0.75 uses the
+    # cancellation-free log1p(|x| + x^2 / (1 + sqrt(1+x^2))) form (<=1.5 ulp).
     run_unary_test(device, h, w, ttnn.asinh, ulp=2)
 
 
