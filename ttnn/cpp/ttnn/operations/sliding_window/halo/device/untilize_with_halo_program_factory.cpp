@@ -122,15 +122,16 @@ HaloGeometry compute_geometry(const HaloParams& attrs, const Tensor& input, cons
         is_in_tiled,
         UNTILIZE_BLOCK_SIZE);
 
-    auto to_device = [&](const auto& cfg) {
-        auto host = sliding_window::construct_on_host_config_tensor(cfg, attrs.parallel_config, g.config_tensors_in_dram);
-        return sliding_window::move_config_tensor_to_device(
-            host, attrs.parallel_config, g.is_block_sharded, device, g.config_tensors_in_dram);
+    // Build the four config tensors on HOST only; create_owned_tensors performs the single device upload.
+    // create_program_spec derives their device specs via config_device_spec (no upload), and
+    // create_invariant_run_args needs only number_of_blocks_per_core below — so nothing here materializes.
+    auto on_host = [&](const auto& cfg) {
+        return sliding_window::construct_on_host_config_tensor(cfg, attrs.parallel_config, g.config_tensors_in_dram);
     };
-    g.pad_config0 = to_device(kernel_config.pad_config0);
-    g.pad_config1 = to_device(kernel_config.pad_config1);
-    g.gather_config0 = to_device(kernel_config.gather_config0);
-    g.gather_config1 = to_device(kernel_config.gather_config1);
+    g.pad_config0 = on_host(kernel_config.pad_config0);
+    g.pad_config1 = on_host(kernel_config.pad_config1);
+    g.gather_config0 = on_host(kernel_config.gather_config0);
+    g.gather_config1 = on_host(kernel_config.gather_config1);
     g.number_of_blocks_per_core =
         sliding_window::remap_nhw_scalar_argument_across_full_grid(kernel_config.number_of_blocks_per_core, attrs.parallel_config);
 
@@ -200,6 +201,34 @@ m2::DataflowBufferSpec borrowed_dfb(
     return dfb;
 }
 
+// Device memory config a sliding-window config tensor WOULD get on upload — mirrors the memcfg in
+// sliding_window.cpp::move_config_tensor_to_device (which create_owned_tensors calls to do the actual upload).
+// This lets create_program_spec derive the device TensorSpec + page size WITHOUT materializing the tensor, so
+// the config tensors are uploaded exactly once (in create_owned_tensors) instead of once per factory method.
+MemoryConfig config_device_memcfg(
+    const Tensor& host, const ttnn::operations::sliding_window::ParallelConfig& p_config, bool is_block_sharded) {
+    std::array<uint32_t, 2> shard_shape{1, static_cast<uint32_t>(host.logical_shape()[-1])};
+    auto orientation = is_block_sharded ? (p_config.shard_orientation == ShardOrientation::COL_MAJOR
+                                               ? ShardOrientation::ROW_MAJOR
+                                               : ShardOrientation::COL_MAJOR)
+                                        : ShardOrientation::ROW_MAJOR;
+    ShardSpec shard_spec(p_config.grid, shard_shape, orientation);
+    return MemoryConfig{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, shard_spec};
+}
+
+// The device TensorSpec a host config tensor would have once uploaded (DRAM-interleaved or L1_SMALL sharded).
+TensorSpec config_device_spec(
+    const Tensor& host,
+    const ttnn::operations::sliding_window::ParallelConfig& p_config,
+    bool is_block_sharded,
+    bool in_dram) {
+    MemoryConfig memcfg = in_dram ? MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}
+                                  : config_device_memcfg(host, p_config, is_block_sharded);
+    // with_memory_config is exactly the transform to_device applies to the spec (data moves, layout
+    // preserved, memory_config swapped), so the declared spec matches the uploaded tensor's spec exactly.
+    return host.tensor_spec().with_memory_config(memcfg);
+}
+
 }  // namespace
 
 // create_owned_tensors — the four host-built sliding-window config tensors. The framework keeps them alive
@@ -208,11 +237,16 @@ m2::DataflowBufferSpec borrowed_dfb(
 m2::Table<m2::TensorParamName, Tensor> UntilizeWithHaloProgramFactory::create_owned_tensors(
     const HaloParams& attrs, const Tensor& input, Tensor& output) {
     const auto g = compute_geometry(attrs, input, output);
+    // The single device upload of the host-built config tensors (the only materialization).
+    auto upload = [&](const Tensor& host) {
+        return ttnn::operations::sliding_window::move_config_tensor_to_device(
+            host, attrs.parallel_config, g.is_block_sharded, input.device(), g.config_tensors_in_dram);
+    };
     m2::Table<m2::TensorParamName, Tensor> owned;
-    owned.emplace(m2::TensorParamName{TP_PAD_CFG0}, g.pad_config0);
-    owned.emplace(m2::TensorParamName{TP_PAD_CFG1}, g.pad_config1);
-    owned.emplace(m2::TensorParamName{TP_GATHER_CFG0}, g.gather_config0);
-    owned.emplace(m2::TensorParamName{TP_GATHER_CFG1}, g.gather_config1);
+    owned.emplace(m2::TensorParamName{TP_PAD_CFG0}, upload(g.pad_config0));
+    owned.emplace(m2::TensorParamName{TP_PAD_CFG1}, upload(g.pad_config1));
+    owned.emplace(m2::TensorParamName{TP_GATHER_CFG0}, upload(g.gather_config0));
+    owned.emplace(m2::TensorParamName{TP_GATHER_CFG1}, upload(g.gather_config1));
     return owned;
 }
 
@@ -224,9 +258,20 @@ m2::ProgramSpec UntilizeWithHaloProgramFactory::create_program_spec(
     const auto g = compute_geometry(attrs, input, output);
     const tt::DataFormat cfg_df = tt::DataFormat::RawUInt16;
 
+    // Device specs for the op-owned config tensors, derived from the host tensors WITHOUT uploading
+    // (create_owned_tensors performs the single upload). compute_page_size_bytes() equals the device buffer's
+    // page size, so the borrowed-DFB sizing and the empty-padding sentinel below are unchanged.
+    const auto spec_of = [&](const Tensor& host) {
+        return config_device_spec(host, attrs.parallel_config, g.is_block_sharded, g.config_tensors_in_dram);
+    };
+    const auto pad_cfg0_spec = spec_of(g.pad_config0);
+    const auto pad_cfg1_spec = spec_of(g.pad_config1);
+    const auto gather_cfg0_spec = spec_of(g.gather_config0);
+    const auto gather_cfg1_spec = spec_of(g.gather_config1);
+
     const bool enable_padding = g.config_tensors_in_dram ||
-                                g.pad_config0.buffer()->page_size() != EMPTY_PADDING_CONFIG_BUFFER_SIZE ||
-                                g.pad_config1.buffer()->page_size() != EMPTY_PADDING_CONFIG_BUFFER_SIZE;
+                                pad_cfg0_spec.compute_page_size_bytes() != EMPTY_PADDING_CONFIG_BUFFER_SIZE ||
+                                pad_cfg1_spec.compute_page_size_bytes() != EMPTY_PADDING_CONFIG_BUFFER_SIZE;
 
     m2::ProgramSpec spec;
     spec.name = "untilize_with_halo";
@@ -239,20 +284,16 @@ m2::ProgramSpec UntilizeWithHaloProgramFactory::create_program_spec(
         m2::TensorParameter{.unique_id = m2::TensorParamName{TP_INPUT}, .spec = input.tensor_spec()},
         m2::TensorParameter{.unique_id = m2::TensorParamName{TP_OUTPUT}, .spec = output.tensor_spec()},
         m2::TensorParameter{
-            .unique_id = m2::TensorParamName{TP_PAD_CFG0},
-            .spec = g.pad_config0.tensor_spec(),
-            .advanced_options = invariant_tp},
+            .unique_id = m2::TensorParamName{TP_PAD_CFG0}, .spec = pad_cfg0_spec, .advanced_options = invariant_tp},
         m2::TensorParameter{
-            .unique_id = m2::TensorParamName{TP_PAD_CFG1},
-            .spec = g.pad_config1.tensor_spec(),
-            .advanced_options = invariant_tp},
+            .unique_id = m2::TensorParamName{TP_PAD_CFG1}, .spec = pad_cfg1_spec, .advanced_options = invariant_tp},
         m2::TensorParameter{
             .unique_id = m2::TensorParamName{TP_GATHER_CFG0},
-            .spec = g.gather_config0.tensor_spec(),
+            .spec = gather_cfg0_spec,
             .advanced_options = invariant_tp},
         m2::TensorParameter{
             .unique_id = m2::TensorParamName{TP_GATHER_CFG1},
-            .spec = g.gather_config1.tensor_spec(),
+            .spec = gather_cfg1_spec,
             .advanced_options = invariant_tp},
     };
 
@@ -264,15 +305,17 @@ m2::ProgramSpec UntilizeWithHaloProgramFactory::create_program_spec(
     dfbs.push_back(scratch_dfb(DFB_PAD0, g.out_df, g.pad_cb_pagesize, 1));
     dfbs.push_back(scratch_dfb(DFB_PAD1, g.out_df, g.pad_cb_pagesize, 1));
     if (g.config_tensors_in_dram) {
-        dfbs.push_back(scratch_dfb(DFB_PAD_CFG0, cfg_df, g.pad_config0.buffer()->page_size(), 1));
-        dfbs.push_back(scratch_dfb(DFB_PAD_CFG1, cfg_df, g.pad_config1.buffer()->page_size(), 1));
-        dfbs.push_back(scratch_dfb(DFB_GATHER_CFG0, cfg_df, g.gather_config0.buffer()->page_size(), 1));
-        dfbs.push_back(scratch_dfb(DFB_GATHER_CFG1, cfg_df, g.gather_config1.buffer()->page_size(), 1));
+        dfbs.push_back(scratch_dfb(DFB_PAD_CFG0, cfg_df, pad_cfg0_spec.compute_page_size_bytes(), 1));
+        dfbs.push_back(scratch_dfb(DFB_PAD_CFG1, cfg_df, pad_cfg1_spec.compute_page_size_bytes(), 1));
+        dfbs.push_back(scratch_dfb(DFB_GATHER_CFG0, cfg_df, gather_cfg0_spec.compute_page_size_bytes(), 1));
+        dfbs.push_back(scratch_dfb(DFB_GATHER_CFG1, cfg_df, gather_cfg1_spec.compute_page_size_bytes(), 1));
     } else {
-        dfbs.push_back(borrowed_dfb(DFB_PAD_CFG0, TP_PAD_CFG0, cfg_df, g.pad_config0.buffer()->page_size(), 1));
-        dfbs.push_back(borrowed_dfb(DFB_PAD_CFG1, TP_PAD_CFG1, cfg_df, g.pad_config1.buffer()->page_size(), 1));
-        dfbs.push_back(borrowed_dfb(DFB_GATHER_CFG0, TP_GATHER_CFG0, cfg_df, g.gather_config0.buffer()->page_size(), 1));
-        dfbs.push_back(borrowed_dfb(DFB_GATHER_CFG1, TP_GATHER_CFG1, cfg_df, g.gather_config1.buffer()->page_size(), 1));
+        dfbs.push_back(borrowed_dfb(DFB_PAD_CFG0, TP_PAD_CFG0, cfg_df, pad_cfg0_spec.compute_page_size_bytes(), 1));
+        dfbs.push_back(borrowed_dfb(DFB_PAD_CFG1, TP_PAD_CFG1, cfg_df, pad_cfg1_spec.compute_page_size_bytes(), 1));
+        dfbs.push_back(
+            borrowed_dfb(DFB_GATHER_CFG0, TP_GATHER_CFG0, cfg_df, gather_cfg0_spec.compute_page_size_bytes(), 1));
+        dfbs.push_back(
+            borrowed_dfb(DFB_GATHER_CFG1, TP_GATHER_CFG1, cfg_df, gather_cfg1_spec.compute_page_size_bytes(), 1));
     }
     if (!g.skip_untilize) {
         dfbs.push_back(scratch_dfb(DFB_UNTILIZE_OUT0, g.out_df, g.out_tile_size, g.untilize_out_cb_num_pages));
@@ -334,9 +377,9 @@ m2::ProgramSpec UntilizeWithHaloProgramFactory::create_program_spec(
         if (g.config_tensors_in_dram) {
             copts.defines.emplace("CONFIG_TENSOR_IN_DRAM", "1");
             def("PADDING_CONFIG_PAGE_SIZE",
-                (is_reader1 ? g.pad_config1 : g.pad_config0).buffer()->page_size());
+                (is_reader1 ? pad_cfg1_spec : pad_cfg0_spec).compute_page_size_bytes());
             def("GATHER_CONFIG_PAGE_SIZE",
-                (is_reader1 ? g.gather_config1 : g.gather_config0).buffer()->page_size());
+                (is_reader1 ? gather_cfg1_spec : gather_cfg0_spec).compute_page_size_bytes());
         }
         return copts;
     };
