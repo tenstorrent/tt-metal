@@ -57,6 +57,7 @@ This configuration uses bfp4 MLP and bfp8 attention weights for all models excep
 | Mistral-7B        | N300        | 95        | 100       | 47.01         | 65.95     |
 | Mistral-7B        | T3K         | 95        | 100       | 67.82         | 53.93     |
 | Mistral-Small-3.1-24B | T3K      | 95        | 99        |               |           |
+| Mistral-Small-3.1-24B | P150x4   |           |           | 45.0          | 44        |
 | Devstral-2-123B   | P150x8      |           |           | 15.6          | 213       |
 | Phi-3-mini-128k-instruct | N150        | 89        | 99        | 45.0          | 73.32     |
 | Phi-3-mini-128k-instruct | N300        | 89        | 99        | 60.87         | 114.94    |

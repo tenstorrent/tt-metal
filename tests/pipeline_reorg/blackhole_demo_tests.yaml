@@ -40,6 +40,51 @@
   team: models
   model-name: mistral-small-3.1-24b
 
+- name: mistral-small-3.1-24b full-depth logit PCC (P150x4)
+  cmd: |
+    set -e
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    export HF_MODEL=mistralai/Mistral-Small-3.1-24B-Instruct-2503
+    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/mistralai--Mistral-Small-3.1-24B-Instruct-2503
+    export MESH_DEVICE=P150x4
+    pytest --timeout 2400 "models/tt_transformers/tests/test_model.py::test_model_inference" -k "full and accuracy"
+  skus:
+    bh_quietbox_2:
+      timeout: 25
+  owner_id: U09SQ3SP5HV # Moritz Thüning (@moritztng), maintainer of this config-driven P150x4 bring-up
+  team: models
+  model-name: mistral-small-3.1-24b
+
+- name: mistral-small-3.1-24b vision PCC (P150x4)
+  cmd: |
+    set -e
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    export HF_MODEL=mistralai/Mistral-Small-3.1-24B-Instruct-2503
+    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/mistralai--Mistral-Small-3.1-24B-Instruct-2503
+    export MESH_DEVICE=P150x4
+    pytest --timeout 1200 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_tower.py models/tt_transformers/tests/multimodal/mistral_24b/test_vision_model.py
+  skus:
+    bh_quietbox_2:
+      timeout: 15
+  owner_id: U09SQ3SP5HV # Moritz Thüning (@moritztng), maintainer of this config-driven P150x4 bring-up
+  team: models
+  model-name: mistral-small-3.1-24b
+
+- name: mistral-small-3.1-24b e2e vision demo (P150x4)
+  cmd: |
+    set -e
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    export HF_MODEL=mistralai/Mistral-Small-3.1-24B-Instruct-2503
+    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/mistralai--Mistral-Small-3.1-24B-Instruct-2503
+    export MESH_DEVICE=P150x4
+    pytest --timeout 1800 "models/tt_transformers/demo/simple_vision_demo.py::test_multimodal_demo_text" -k "batch1-trace and normal"
+  skus:
+    bh_quietbox_2:
+      timeout: 25
+  owner_id: U09SQ3SP5HV # Moritz Thüning (@moritztng), maintainer of this config-driven P150x4 bring-up
+  team: models
+  model-name: mistral-small-3.1-24b
+
 # ─── devstral-2-123b ────────────────────────────────────────────────────────
 
 - name: devstral-2-123b e2e demo
