@@ -262,10 +262,10 @@ class TTSampling(LightweightModule):
         if 1 in self.cluster_shape:
             return max(self.cluster_shape[0], self.cluster_shape[1])
 
-        assert self.sampling_all_gather_axis in (
-            0,
-            1,
-        ), f"sampling_all_gather_axis must be 0 or 1 for 2D meshes, got {self.sampling_all_gather_axis}"
+        if self.sampling_all_gather_axis not in (0, 1):
+            raise ValueError(
+                f"sampling_all_gather_axis must be 0 or 1 for 2D meshes, got {self.sampling_all_gather_axis}"
+            )
         return self.cluster_shape[self.sampling_all_gather_axis]
 
     def _create_indices_tensors(self):
