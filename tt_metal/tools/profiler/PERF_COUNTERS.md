@@ -137,8 +137,15 @@ ethernet hang is fabric/multi-chip init only.
   chunking the legacy path is a strictly worse band-aid.
 - **NoC BW % vs analytical for a CCL op** (Phase 3 full gate) and **the
   noc-trace fabric/ethernet hang** (Phase 3b) — need a multi-chip run.
-- **Tracy GUI zone tooltips** (Phase 4) — a vendored-fork protocol change
-  (`tt_metal/third_party/tracy/`). Open question: whether the serial GPU-zone
-  path can reach Tracy's `ZoneText`, or a new `QueueType` is required.
+- **Tracy GUI zone tooltips** (Phase 4) — a vendored-fork change
+  (`tt_metal/third_party/tracy/`). Verified: the `QueueType` enum has no
+  `GpuZoneText`/`GpuValue` (only Begin/End GPU variants), so a true hover-tooltip
+  needs a NEW QueueType + server-side deserialize/render — the heavy two-sided
+  change. Cheaper alternative: `TracyTTDevice.hpp::PushStartMarker` already
+  passes an arbitrary string (`run_id_string`/`marker_name`) as the zone's
+  srcloc name, and the marker already carries `meta_data` with the counters —
+  appending a compact counter summary to that name surfaces counters in the GUI
+  zone label with NO protocol/server change. Either path needs a Tracy rebuild
+  + GUI to validate.
 - **Readback-time** core restriction — deferred; correct per-op-grid selection
   needs op→grid association that only exists in post-process.
