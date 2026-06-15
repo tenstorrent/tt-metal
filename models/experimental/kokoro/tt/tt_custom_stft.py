@@ -21,8 +21,11 @@ float32 storage); the generic ``conv1d`` NLC helper does not handle the tiny
 Forward (``transform``)
     1. ``center=True`` pad of ``n_fft // 2`` on each side using **replicate** padding (``CustomSTFT``
        uses replicate, not the reflect padding of ``TorchSTFT``).
-    2. Two strided conv2d projections give ``X_real = cos(2πkn/N)·w``, ``X_imag = -sin(2πkn/N)·w``
-       → each ``[B, K, F]``.
+    2. One **fused** strided conv2d (kernels ``cos·w`` and ``-sin·w`` stacked along the output axis →
+       ``[2K, 1, n_fft, 1]``) gives ``X_real = cos(2πkn/N)·w`` and ``X_imag = -sin(2πkn/N)·w`` in a
+       single pass, then a channel slice splits them into ``X_real``, ``X_imag`` each ``[B, K, F]``.
+       The two branches share the same input, so fusing halves the conv work and all the DRAM
+       height-slice glue (PaddedSlice / Halo / Move / SliceWrite) vs running them separately.
     3. ``magnitude = sqrt(X_real² + X_imag² + 1e-14)``; ``phase = atan2(X_imag, X_real)`` with the
        ``(X_imag == 0) & (X_real < 0) -> π`` correction matching the reference / PyTorch atan2.
 
@@ -31,9 +34,12 @@ Inverse (``inverse``)
     half-scaling, no COLA normalisation — the trained Kokoro weights absorb the difference):
 
         real_part = magnitude · cos(phase);  imag_part = magnitude · sin(phase)
-        y = conv_transpose2d(real_part, w·cos(2πkn/N)/N)
-          - conv_transpose2d(imag_part, w·sin(2πkn/N)/N)      # note the minus
-        y = y[..., pad : -pad]                                # undo center pad
+        y = conv_transpose2d([real_part || imag_part], [w·cos/N || -w·sin/N])   # fused real - imag
+        y = y[..., pad : -pad]                                                  # undo center pad
+
+    The two synthesis branches are likewise fused into one conv_transpose2d with ``in_channels=2K``:
+    negating the imag synthesis kernel folds the ``real_rec - imag_rec`` subtract into the transpose,
+    saving the second transpose, the second NHWC pack, and the trailing subtract.
 
 Precision note (Blackhole)
 --------------------------
@@ -64,10 +70,8 @@ class TTCustomSTFTParams:
     input length — the same params serve any ``transform`` / ``inverse`` frame count.
     """
 
-    conv_fwd_real: ttnn.Tensor  # [K, 1, n_fft, 1] ROW_MAJOR — forward DFT real branch
-    conv_fwd_imag: ttnn.Tensor  # [K, 1, n_fft, 1] ROW_MAJOR — forward DFT imag branch
-    synth_real: ttnn.Tensor  # [K, 1, n_fft, 1] ROW_MAJOR — inverse real branch (w·cos/N)
-    synth_imag: ttnn.Tensor  # [K, 1, n_fft, 1] ROW_MAJOR — inverse imag branch (w·sin/N)
+    conv_fwd_realimag: ttnn.Tensor  # [2K, 1, n_fft, 1] ROW_MAJOR — fused forward DFT (real||imag)
+    synth_realimag: ttnn.Tensor  # [2K, 1, n_fft, 1] ROW_MAJOR — fused inverse (w·cos/N || -w·sin/N)
 
     filter_length: int  # n_fft
     hop_length: int
@@ -122,14 +126,20 @@ def preprocess_tt_custom_stft(
         raise ValueError(f"Only win_length == filter_length is supported (got {win_length} vs {filter_length})")
 
     # Forward kernels: cos·w and -sin·w (shared with the TorchSTFT conv builder — same forward DFT).
+    # Stack the real and imag branches into one [2K, 1, n_fft, 1] kernel so a single strided conv2d
+    # produces both projections — the two branches share input, so fusing halves the conv work and
+    # all the DRAM-height-slice glue (PaddedSlice / Halo / Move / SliceWrite).
     fwd_real, fwd_imag = _build_conv_stft_kernels(filter_length, win_length)  # each [K, 1, n_fft, 1]
+    fwd_realimag = np.concatenate([fwd_real, fwd_imag], axis=0)  # [2K, 1, n_fft, 1]
     bwd_real, bwd_imag = _build_custom_synth_kernels(filter_length, win_length)
+    # Fuse the two inverse branches: a single conv_transpose2d with in_channels=2K computes
+    # ``real_part·synth_real + imag_part·(-synth_imag) = real_rec - imag_rec`` in one op — negating
+    # the imag kernel folds the trailing subtract into the transpose (the ``y = real - imag`` minus).
+    synth_realimag = np.concatenate([bwd_real, -bwd_imag], axis=0)  # [2K, 1, n_fft, 1]
 
     return TTCustomSTFTParams(
-        conv_fwd_real=_upload_rm(fwd_real, dtype=weights_dtype),
-        conv_fwd_imag=_upload_rm(fwd_imag, dtype=weights_dtype),
-        synth_real=_upload_rm(bwd_real, dtype=weights_dtype),
-        synth_imag=_upload_rm(bwd_imag, dtype=weights_dtype),
+        conv_fwd_realimag=_upload_rm(fwd_realimag, dtype=weights_dtype),
+        synth_realimag=_upload_rm(synth_realimag, dtype=weights_dtype),
         filter_length=filter_length,
         hop_length=hop_length,
         win_length=win_length,
@@ -280,13 +290,10 @@ class TTCustomSTFT:
     ``forward(x)`` is the ``transform`` → ``inverse`` round trip.
     """
 
-    _EPS = 1e-14  # matches reference CustomSTFT.transform
-
     def __init__(self, device: ttnn.Device, params: TTCustomSTFTParams) -> None:
         self.device = device
         self.params = params
-        self._conv_real = _StridedStftConv(device, params.conv_fwd_real, params.hop_length)
-        self._conv_imag = _StridedStftConv(device, params.conv_fwd_imag, params.hop_length)
+        self._conv_realimag = _StridedStftConv(device, params.conv_fwd_realimag, params.hop_length)
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi3,
@@ -320,9 +327,15 @@ class TTCustomSTFT:
             x_padded = x_n1lc
             L_padded = L_in
 
-        X_real = self._conv_real(x_padded, B, L_padded)
-        X_imag = self._conv_imag(x_padded, B, L_padded)
+        # One fused strided conv2d → [B, 2K, F]; split back into the real (first K) and imag (last K)
+        # projections.  Fusing avoids running the conv (and its per-slice glue) twice.
+        X_combined = self._conv_realimag(x_padded, B, L_padded)
         ttnn.deallocate(x_padded)
+        K = p.K
+        F = int(X_combined.shape[2])
+        X_real = ttnn.slice(X_combined, [0, 0, 0], [B, K, F], [1, 1, 1], memory_config=mc)
+        X_imag = ttnn.slice(X_combined, [0, K, 0], [B, 2 * K, F], [1, 1, 1], memory_config=mc)
+        ttnn.deallocate(X_combined)
 
         return self._magnitude_phase(X_real, X_imag)
 
@@ -334,24 +347,20 @@ class TTCustomSTFT:
         if X_imag.dtype != ttnn.float32:
             X_imag = ttnn.typecast(X_imag, ttnn.float32, memory_config=mc)
 
-        mag_sq = ttnn.add(
-            ttnn.multiply(X_real, X_real, memory_config=mc),
-            ttnn.multiply(X_imag, X_imag, memory_config=mc),
-            memory_config=mc,
-        )
-        magnitude = ttnn.sqrt(ttnn.add(mag_sq, self._EPS, memory_config=mc), memory_config=mc)
+        # sqrt(r²+i²) in a single SFPU op (the reference's +1e-14 is below the BF16 floor and only
+        # guards a zero-gradient that never matters at inference — mag PCC is unaffected).
+        magnitude = ttnn.hypot(X_real, X_imag, memory_config=mc)
         phase = ttnn.atan2(X_imag, X_real, memory_config=mc)
-        ttnn.deallocate(mag_sq)
-        # (imag == 0) & (real < 0) -> π  (matches reference correction_mask)
+        # (imag == 0) & (real < 0) -> π  (matches reference correction_mask; needed for the
+        # structural-zero DC/Nyquist bins where ttnn.atan2 would otherwise disagree).  The π fill is
+        # passed as a scalar so no full_like tensor is materialised.
         corr_mask = ttnn.logical_and(
             ttnn.eq(X_imag, 0.0, memory_config=mc),
             ttnn.lt(X_real, 0.0, memory_config=mc),
             memory_config=mc,
         )
-        pi_fill = ttnn.full_like(phase, float(np.pi), memory_config=mc)
-        phase = ttnn.where(corr_mask, pi_fill, phase, memory_config=mc)
+        phase = ttnn.where(corr_mask, float(np.pi), phase, memory_config=mc)
         ttnn.deallocate(corr_mask)
-        ttnn.deallocate(pi_fill)
         ttnn.deallocate(X_real)
         ttnn.deallocate(X_imag)
         return magnitude, phase
@@ -372,6 +381,7 @@ class TTCustomSTFT:
         p = self.params
         mc = ttnn.DRAM_MEMORY_CONFIG
         B = int(x_nhwc.shape[0])
+        in_ch = int(x_nhwc.shape[-1])  # 2K for the fused real||imag input
 
         conv_cfg = ttnn.Conv2dConfig(weights_dtype=ttnn.float32)
         conv_cfg.config_tensors_in_dram = True
@@ -393,7 +403,7 @@ class TTCustomSTFT:
             input_tensor=x_nhwc,
             weight_tensor=synth_w,
             device=self.device,
-            in_channels=p.K,
+            in_channels=in_ch,
             out_channels=1,
             batch_size=B,
             input_height=n_frames,
@@ -413,9 +423,12 @@ class TTCustomSTFT:
         )
         ttnn.deallocate(x_nhwc)
         oh, ow = int(out_hw[0]), int(out_hw[1])
+        # Keep the conv_transpose output ROW_MAJOR — the only consumers are the center-trim slice and
+        # the final permute, both of which are cheap in RM.  Tilizing here would force the
+        # tile-unaligned trim (drop pad_len from each end of the time axis) to untilize/retilize.
         y = ttnn.reshape(y, (y.shape[0], oh * ow, y.shape[-1]), memory_config=mc)
-        if y.layout != ttnn.TILE_LAYOUT:
-            y = ttnn.to_layout(y, ttnn.TILE_LAYOUT, memory_config=mc)
+        if y.layout != ttnn.ROW_MAJOR_LAYOUT:
+            y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT, memory_config=mc)
         return y
 
     def inverse(self, magnitude: ttnn.Tensor, phase: ttnn.Tensor) -> ttnn.Tensor:
@@ -454,15 +467,14 @@ class TTCustomSTFT:
         ttnn.deallocate(cos_ph)
         ttnn.deallocate(sin_ph)
 
-        real_rec = self._conv_transpose_branch(self._to_nhwc_rm(real_bct), p.synth_real, F)
+        # Stack real||imag along the channel axis and run one conv_transpose2d with the fused
+        # ``synth_realimag`` (imag branch pre-negated) → ``real_rec - imag_rec`` directly, saving
+        # the second transpose, the second NHWC pack, and the trailing subtract.
+        combined_bct = ttnn.concat([real_bct, imag_bct], dim=1, memory_config=mc)  # [B, 2K, F]
         ttnn.deallocate(real_bct)
-        imag_rec = self._conv_transpose_branch(self._to_nhwc_rm(imag_bct), p.synth_imag, F)
         ttnn.deallocate(imag_bct)
-
-        # y = real_rec - imag_rec  (the real iFFT minus on the imaginary branch).
-        y_nlc = ttnn.subtract(real_rec, imag_rec, memory_config=mc)  # [B, L_full, 1]
-        ttnn.deallocate(real_rec)
-        ttnn.deallocate(imag_rec)
+        y_nlc = self._conv_transpose_branch(self._to_nhwc_rm(combined_bct), p.synth_realimag, F)
+        ttnn.deallocate(combined_bct)
 
         # center=True trim: drop pad_len from each end along the length axis.
         L_full = int(y_nlc.shape[1])
