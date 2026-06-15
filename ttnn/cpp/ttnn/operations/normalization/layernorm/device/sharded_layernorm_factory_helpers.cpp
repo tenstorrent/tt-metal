@@ -768,6 +768,10 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
         // block_w.
         // For example, w=96 results in 3 tiles, which when sharded on two cores results in two real
         // tiles on the first core, and one real tile + one padding tile on the second core.
+        // last_block_wt is always >= 1 (no unsigned underflow here, nor in the kernel's
+        // (last_block_wt - 1) * tile_width): validate_sharded_input requires the trailing width pad to
+        // be strictly less than one shard, i.e. (num_blocks - 1) * block_wt < logical_Kt, so the final
+        // width block always owns at least one logical tile.
         const uint32_t logical_Kt = (ctx.logical_K + tile_width - 1) / tile_width;
         const uint32_t last_block_wt = logical_Kt - (ctx.grid->num_blocks - 1) * ctx.block_wt;
 
