@@ -30,7 +30,7 @@ mypy==1.9.0
 protobuf==5.29.6
 
 # For TT-Transformers Qwen3 support
-transformers == 4.53.0
+transformers == 5.10.2
 huggingface-hub >= 0.30.0
 
 # For Tracy WASM profiler web GUI server
