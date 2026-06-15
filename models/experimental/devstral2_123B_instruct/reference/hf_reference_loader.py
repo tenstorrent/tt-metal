@@ -34,19 +34,25 @@ def apply_fp8_dequantize_compat_patch() -> None:
     if Fp8Dequantize._dequantize_one is not _ORIGINAL_DEQUANTIZE_ONE:
         return
 
-    def _dequantize_one_compat(self, quantized: torch.Tensor, scales: torch.Tensor) -> torch.Tensor:
+    def _dequantize_one_compat(
+        self,
+        quantized: torch.Tensor,
+        scales: torch.Tensor,
+        output_dtype: torch.dtype | None = None,
+    ) -> torch.Tensor:
         if scales.ndim == 0:
             fp4_dtype = getattr(torch, "float4_e2m1fn_x2", None)
             if quantized.dtype == torch.int8 or (fp4_dtype is not None and quantized.dtype == fp4_dtype):
                 quantized_fp32 = self._unpack_fp4(quantized)
             else:
                 quantized_fp32 = quantized.to(torch.float32)
-            out_dtype = (
-                scales.dtype if scales.dtype.is_floating_point and scales.element_size() >= 2 else torch.bfloat16
-            )
+            if output_dtype is None:
+                output_dtype = (
+                    scales.dtype if scales.dtype.is_floating_point and scales.element_size() >= 2 else torch.bfloat16
+                )
             scale = scales.to(torch.float32)
-            return (quantized_fp32 * scale).to(out_dtype)
-        return _ORIGINAL_DEQUANTIZE_ONE(self, quantized, scales)
+            return (quantized_fp32 * scale).to(output_dtype)
+        return _ORIGINAL_DEQUANTIZE_ONE(self, quantized, scales, output_dtype=output_dtype)
 
     Fp8Dequantize._dequantize_one = _dequantize_one_compat
 
