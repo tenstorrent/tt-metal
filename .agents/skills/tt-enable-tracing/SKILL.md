@@ -119,6 +119,8 @@ If `ArgMaxDeviceOperation`, full-vocab all-gather, generic `TopKDeviceOperation`
 
 For vLLM decode serving, mirror the production split: bind persistent token/current-position/RoPE/page-table/KV-cache tensors before capture, warm the same mode, capture a device-only decode, and replay with `ttnn.execute_trace(..., blocking=False)` only when the caller implements the async read/host-processing split. If the sampler consumes transformed logits, capture the model trace output in that sampler-ready form so replay returns the same device tensor identity. Prefer `models.common.sampling` internal trace for on-device sampling, and do not use host argmax or full-logits readback in a `sample_on_device_mode=all` path.
 
+Do not collect Tracy, `tt-perf-report`, or `TT_METAL_DEVICE_PROFILER` metrics from a live vLLM server or serving adapter to prove this tracing work. vLLM-stage tracing evidence is functional and serving-level: trace capture/replay succeeds, stale-input tests pass, on-device sampling is wired, async split behavior is correct, qualitative/sampling checks pass, and `run_vllm_server` benchmark JSON records TTFT/ITL/throughput. Use non-serving full-model or reduced profiles from earlier stages for low-level device context if needed.
+
 Keep async readback separate from scheduler overlap. A traced decode path can be safe to submit/read asynchronously while still unsafe for vLLM to build the next step before the previous sampled token has updated scheduler state. If the caller builds token IDs, current positions, or request lengths from host scheduler tables, the trace input refresh for step N+1 must wait for sampled token N to be applied, unless there is a separate test proving the next token/position path is entirely device-owned and cannot be overwritten by stale host state.
 
 ## What To Keep Outside Capture
@@ -205,5 +207,5 @@ Leave compact evidence that the traced path is real:
 - No host fallback in the captured path.
 - Warmed trace replay timing, with prefill and decode measured separately where applicable.
 - Host-work counters for the replay loop: trace replay count, token refresh count, current-position/RoPE refresh count, page-table refresh count, synchronizations/readbacks, and whether positions/tokens are advanced on device.
-- `tt-perf-report` or Tracy evidence for the traced region.
+- `tt-perf-report` or Tracy evidence for the traced region, except vLLM serving stages where profiler collection is intentionally skipped and replaced by serving benchmark plus trace-contract evidence.
 - Clear note of any remaining untraced boundary outside token-out decode. Token-out decode has no host sampling or full-logits readback.
