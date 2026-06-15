@@ -95,6 +95,69 @@ sfpi_inline sfpi::vFloat _calculate_log_body_no_init_(sfpi::vFloat base)
     return log_result;
 }
 
+template <bool is_fp32_dest_acc_en>
+sfpi_inline sfpi::vFloat _calculate_log1p_body_no_init_(sfpi::vFloat a)
+{
+    sfpi::vFloat u = a + sfpi::vConst1;
+    sfpi::vFloat r = std::numeric_limits<float>::quiet_NaN();
+
+    v_if (u >= 0.0f)
+    {
+        sfpi::vFloat three_quarters = 0.75f;
+        sfpi::vInt e = sfpi::reinterpret<sfpi::vInt>(three_quarters);
+        sfpi::vFloat e_float;
+
+        e = sfpi::reinterpret<sfpi::vInt>(u) - e;
+        e = sfpi::reinterpret<sfpi::vInt>(sfpi::setman(sfpi::reinterpret<sfpi::vFloat>(e), 0));
+
+        sfpi::vFloat m = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(a) - e);
+        sfpi::vFloat neg_four = -4.0f;
+        sfpi::vFloat s = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(neg_four) - e);
+        sfpi::vFloat neg_quarter = -0.25f;
+        sfpi::vFloat neg1 = sfpi::vConstNeg1;
+        sfpi::vFloat t = __builtin_rvtt_sfpmad(neg_quarter.get(), s.get(), neg1.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        sfpi::vMag abs_e = sfpi::abs(e);
+
+        if constexpr (is_fp32_dest_acc_en)
+        {
+            m = m + t;
+            r = -0x1.92cp-5f;
+            r = r * m + 0x1.b84p-4f;
+            r = r * m + -0x1.0c4p-3f;
+            r = r * m + 0x1.274p-3f;
+            r = r * m + -0x1.55p-3f;
+            r = r * m + 0x1.998p-3f;
+            e_float = sfpi::convert<sfpi::vFloat>(abs_e, sfpi::RoundMode::NearestEven);
+            r = r * m + -0x1.00001ap-2f;
+            s = m * m;
+            r = r * m + 0x1.555572p-2f;
+            r = r * m + -0.5f;
+        }
+        else
+        {
+            m = m + t;
+            e_float = sfpi::convert<sfpi::vFloat>(abs_e, sfpi::RoundMode::NearestEven);
+            r = neg_quarter * m + 0x1.744p-2f;
+            s = m * m;
+            r = r * m + -0x1.008p-1f;
+        }
+
+        e_float = sfpi::copysgn(e_float, sfpi::reinterpret<sfpi::vFloat>(e));
+        r = r * s + m;
+        sfpi::vFloat infinity = std::numeric_limits<float>::infinity();
+        r = e_float * (0.693147182f * 1.19209290e-7f) + r;
+
+        v_if (sfpi::reinterpret<sfpi::vInt>(u) >= sfpi::reinterpret<sfpi::vInt>(infinity))
+        {
+            r = u;
+        }
+        v_endif;
+    }
+    v_endif;
+
+    return r;
+}
+
 template <bool APPROXIMATION_MODE, bool HAS_BASE_SCALING, int ITERATIONS>
 inline void _calculate_log_(const int iterations, std::uint32_t log_base_scale_factor)
 {

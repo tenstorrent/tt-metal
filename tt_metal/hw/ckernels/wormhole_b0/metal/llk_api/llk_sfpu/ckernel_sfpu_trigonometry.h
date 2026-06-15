@@ -836,8 +836,7 @@ inline void calculate_acosh() {
             sfpi::vFloat tmp = xm1 * xp1;
             tmp = _calculate_sqrt_body_<APPROXIMATION_MODE>(tmp);
             tmp = tmp + xm1;
-            tmp = tmp + sfpi::vConst1;
-            res = _calculate_log_body_no_init_(tmp);
+            res = _calculate_log1p_body_no_init_<is_fp32_dest_acc_en>(tmp);
         }
         v_elseif(inp < LARGE_INPUT) {
             sfpi::vFloat tmp = inp * inp;
@@ -876,8 +875,7 @@ inline void calculate_asinh() {
             sfpi::vFloat correction = abs_inp * abs_inp;
             correction = correction * _sfpu_reciprocal_gt0_<is_fp32_dest_acc_en>(tmp);
             tmp = abs_inp + correction;
-            tmp = tmp + sfpi::vConst1;
-            res = _calculate_log_body_no_init_(tmp);
+            res = _calculate_log1p_body_no_init_<is_fp32_dest_acc_en>(tmp);
         }
         v_elseif(abs_inp < LARGE_INPUT) {
             sfpi::vFloat tmp = abs_inp * abs_inp + sfpi::vConst1;
@@ -914,7 +912,7 @@ inline void calculate_atanh() {
             sfpi::vFloat den = sfpi::vConst1 - abs_inp;
             sfpi::vFloat ratio = abs_inp + abs_inp;
             ratio = ratio * _sfpu_reciprocal_gt0_<is_fp32_dest_acc_en>(den);
-            res = 0.5f * _calculate_log_body_no_init_(sfpi::vConst1 + ratio);
+            res = 0.5f * _calculate_log1p_body_no_init_<is_fp32_dest_acc_en>(ratio);
             res = sfpi::copysgn(res, inp);
         }
         v_endif;
