@@ -50,7 +50,7 @@ Information relevant to programming Blackhole while it is being brought up.
   <tr>
     <td>Blackhole</td>
     <td>14x10</td>
-    <td>13x10</td>
+    <td>11x10</td>
     <td>1464 KB<br>Data cache added </td>
     <td>14</td>
     <td>2x RISC-V<br>512 KB L1</td>
@@ -64,7 +64,7 @@ Information relevant to programming Blackhole while it is being brought up.
   </tr>
 </tbody></table>
 
-> **Note:** As of firmware v19.5.0 (January 2026), all p150 cards (p150a, p150b) are unified to **120 Tensix cores** rather than the 140 shown above — existing cards are updated via firmware as well, so metal may report a smaller grid size. See the [tt-system-firmware v19.5.0 release notes](https://github.com/tenstorrent/tt-system-firmware/releases/tag/v19.5.0).
+> **Note:** "Total" is the full on-die Tensix grid (14x10 = 140). "Available for Compute" reflects firmware **v19.5.0** (January 2026), which unifies all p150 cards (p150a, p150b) to **120 enabled Tensix cores** (12x10) — existing cards are updated via firmware as well — leaving **11x10 = 110** for compute after the fast-dispatch column is reserved. Before v19.5.0 this was 13x10 = 130. See the [tt-system-firmware v19.5.0 release notes](https://github.com/tenstorrent/tt-system-firmware/releases/tag/v19.5.0).
 
 ### L1 Data Cache
 
