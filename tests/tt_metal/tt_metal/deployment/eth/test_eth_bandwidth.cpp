@@ -121,11 +121,13 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet01Bandwidth) {
 
             log_info(
                 tt::LogTest,
-                "sender device id: {} ({}), receiver device id: {} ({})",
+                "sender device id: {} ({}, {}), receiver device id: {} ({}, {})",
                 sender_device->id(),
                 pci_bdf_for_device_id(sender_device->id()),
+                get_ubb(sender_device),
                 receiver_device->id(),
-                pci_bdf_for_device_id(receiver_device->id()));
+                pci_bdf_for_device_id(receiver_device->id()),
+                get_ubb(receiver_device));
 
             for (const auto& sender_core : sender_device->get_active_ethernet_cores(true)) {
                 auto [device_id, receiver_core] = sender_device->get_connected_ethernet_core(sender_core);
@@ -133,7 +135,13 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet01Bandwidth) {
                     continue;
                 }
 
-                log_info(tt::LogTest, "  sender core: {}, receiver core: {}", sender_core, receiver_core);
+                log_info(
+                    tt::LogTest,
+                    "  sender core: {}, receiver core: {} ({})",
+                    sender_core,
+                    receiver_core,
+                    get_connector(sender_device, sender_core));
+
                 for (uint32_t erisc_idx = 0; erisc_idx < num_eriscs; erisc_idx++) {
                     const auto processor = static_cast<DataMovementProcessor>(erisc_idx);
 
