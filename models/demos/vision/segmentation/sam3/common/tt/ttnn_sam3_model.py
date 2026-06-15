@@ -187,6 +187,8 @@ class TtSam3ImagePipeline:
     """
 
     def __init__(self, sam3_model, device):
+        torch.set_num_threads(17)
+
         from sam3.model.vitdet import ViT
 
         from models.demos.vision.segmentation.sam3.common.tt.ttnn_sam3_encoder import (
