@@ -92,7 +92,10 @@ struct dfb_initializer_t {  // 36 bytes
     dfb_txn_id_descriptor_t consumer_txn_descriptor;
     uint8_t num_producers;
     uint8_t implicit_sync_configured; // 0: init state, 1: configured
-    uint8_t padding[2];
+    // BLOCKED block_size per side (0 if that side is not BLOCKED). Used device-side to make the implicit-sync
+    // commit advance the tile-counter per-BLOCK (not per-entry), so asymmetric BLOCKED keeps block-granularity.
+    uint8_t producer_block_size;
+    uint8_t consumer_block_size;
 } __attribute__((packed));
 
 struct dfb_initializer_per_risc_t {  // 62 bytes
