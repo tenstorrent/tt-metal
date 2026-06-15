@@ -23,16 +23,16 @@
 #include "api/debug/dprint.h"
 #include "experimental/kernel_args.h"  // provides get_arg, the args:: accessors, and TT_KERNEL
 
-template <uint32_t block_h, uint32_t block_w, uint32_t untilize>  // CTAs (compile-time)
+template <uint32_t Ht, uint32_t Wt, uint32_t untilize>  // CTAs (compile-time)
 TT_KERNEL void named_kernel_args_kernel(
-    uint32_t src_addr,    // RTA
-    uint32_t dst_addr,    // RTA
-    uint32_t num_tiles,   // RTA
-    uint32_t scaler,      // CRTA
-    uint32_t sem_addr) {  // CRTA
-    DPRINT("[named_kernel_args] CTA  block_h={} block_w={} untilize={}\n", block_h, block_w, untilize);
-    DPRINT("[named_kernel_args] RTA  src_addr={:x} dst_addr={:x} num_tiles={}\n", src_addr, dst_addr, num_tiles);
-    DPRINT("[named_kernel_args] CRTA scaler={:x} sem_addr={:x}\n", scaler, sem_addr);
+    uint32_t start_tile_id,  // RTA
+    uint32_t num_tiles,      // RTA
+    uint32_t start_row,      // RTA
+    uint32_t scaler) {       // CRTA
+    DPRINT("[named_kernel_args] CTA  Ht={} Wt={} untilize={}\n", Ht, Wt, untilize);
+    DPRINT(
+        "[named_kernel_args] RTA  start_tile_id={} num_tiles={} start_row={}\n", start_tile_id, num_tiles, start_row);
+    DPRINT("[named_kernel_args] CRTA scaler={}\n", scaler);
 }
 
 // No kernel_main() here — it is generated from this signature by genfiles (see

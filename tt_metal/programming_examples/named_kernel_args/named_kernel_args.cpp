@@ -7,7 +7,7 @@
 //
 // Built entirely on the EXISTING Metal 2.0 named-argument host API on main
 // (experimental::KernelSpec / MakeProgramFromSpec / SetProgramRunArgs). It registers the §2
-// worked-example schema — 3 named CTAs, 3 named RTAs, 2 named CRTAs — sets their values by
+// worked-example schema — 3 named CTAs, 3 named RTAs, 1 named CRTA — sets their values by
 // name, and runs the kernel, which DPRINTs every value. This is the fixture we incrementally
 // port toward the Phase 1 design (TT_KERNEL marker + function/template parameters + a
 // generated kernel_main() shim).
@@ -47,16 +47,16 @@ int main() {
     const experimental::KernelSpecName KERNEL{"named_kernel_args"};
     const experimental::NodeCoord node{0, 0};
 
-    // §2 worked-example schema: 3 CTAs, 3 RTAs, 2 CRTAs. uint32_t-only (Phase 1).
+    // §2 worked-example schema: 3 CTAs, 3 RTAs, 1 CRTA. uint32_t-only (Phase 1).
     experimental::KernelSpec kernel_spec{
         .unique_id = KERNEL,
         .source = OVERRIDE_KERNEL_PREFIX "named_kernel_args/kernels/dataflow/named_kernel_args_kernel.cpp",
         .num_threads = 1,
-        .compile_time_args = {{"block_h", 4}, {"block_w", 2}, {"untilize", 1}},  // 3 CTAs
+        .compile_time_args = {{"Ht", 4}, {"Wt", 2}, {"untilize", 1}},  // 3 CTAs
         .runtime_arg_schema =
             {
-                .runtime_arg_names = {"src_addr", "dst_addr", "num_tiles"},  // 3 RTAs
-                .common_runtime_arg_names = {"scaler", "sem_addr"},          // 2 CRTAs
+                .runtime_arg_names = {"start_tile_id", "num_tiles", "start_row"},  // 3 RTAs
+                .common_runtime_arg_names = {"scaler"},                            // 1 CRTA
             },
         .hw_config =
             experimental::DataMovementHardwareConfig{
@@ -78,8 +78,8 @@ int main() {
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = KERNEL,
-            .runtime_arg_values = {{node, {{"src_addr", 0x10000}, {"dst_addr", 0x20000}, {"num_tiles", 64}}}},
-            .common_runtime_arg_values = {{"scaler", 0x3f800000}, {"sem_addr", 0x30000}},
+            .runtime_arg_values = {{node, {{"start_tile_id", 64}, {"num_tiles", 8}, {"start_row", 3}}}},
+            .common_runtime_arg_values = {{"scaler", 2}},
         },
     };
     experimental::SetProgramRunArgs(program, params);

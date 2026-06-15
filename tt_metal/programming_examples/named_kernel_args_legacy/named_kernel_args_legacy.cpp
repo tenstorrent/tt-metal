@@ -4,7 +4,7 @@
 
 // LEGACY counterpart to programming_examples/named_kernel_args.
 //
-// Same schema (3 CTAs, 3 RTAs, 2 CRTAs) and identical DPRINT output, but built on the classic
+// Same schema (3 CTAs, 3 RTAs, 1 CRTA) and identical DPRINT output, but built on the classic
 // Metal 1.0 host API: CreateProgram / CreateKernel with positional compile_args, plus
 // SetRuntimeArgs / SetCommonRuntimeArgs taking positional uint32_t vectors. The device kernel
 // reads each arg by index. Compare with the TT_KERNEL example, where the host sets args by
@@ -51,13 +51,13 @@ int main() {
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
-            .compile_args = {4, 2, 1},  // block_h, block_w, untilize
+            .compile_args = {4, 2, 1},  // Ht, Wt, untilize
         });
 
-    // RTAs (per-core) and CRTAs (common), both positional — order must match the kernel's
+    // RTAs (per-core) and the CRTA (common), both positional — order must match the kernel's
     // get_arg_val / get_common_arg_val indices.
-    SetRuntimeArgs(program, kernel, core, {0x10000, 0x20000, 64});  // src_addr, dst_addr, num_tiles
-    SetCommonRuntimeArgs(program, kernel, {0x3f800000, 0x30000});   // scaler, sem_addr
+    SetRuntimeArgs(program, kernel, core, {64, 8, 3});  // start_tile_id, num_tiles, start_row
+    SetCommonRuntimeArgs(program, kernel, {2});         // scaler
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
