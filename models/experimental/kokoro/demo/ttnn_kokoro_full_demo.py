@@ -66,11 +66,6 @@ def main() -> int:
         help="Use PyTorch float32 SineGen phase fallback for higher numerical parity.",
     )
     parser.add_argument(
-        "--torch-sinegen",
-        action="store_true",
-        help="Deprecated alias: enables both --torch-stft-fallback and --torch-phase-fallback.",
-    )
-    parser.add_argument(
         "--disable-complex",
         action="store_true",
         help=(
@@ -117,10 +112,8 @@ def main() -> int:
         ).eval()
         params = preprocess_tt_kmodel(ref_model, device)
 
-        use_stft_fallback = bool(args.torch_stft_fallback or args.torch_sinegen)
-        use_phase_fallback = bool(args.torch_phase_fallback or args.torch_sinegen)
-        if args.torch_sinegen:
-            logger.warning("--torch-sinegen is deprecated; use --torch-stft-fallback and/or --torch-phase-fallback.")
+        use_stft_fallback = bool(args.torch_stft_fallback)
+        use_phase_fallback = bool(args.torch_phase_fallback)
 
         model = TTKModel(
             device,
