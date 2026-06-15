@@ -233,7 +233,31 @@ void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, co
                 using AdaptedMeshWorkloadFactory = mesh_device_operation_t::template DescriptorMeshWorkloadAdapter<T>;
                 fn.template operator()<AdaptedMeshWorkloadFactory>();
             },
-            [&]<ProgramSpecFactoryConcept T>(const T&) {
+            [&]<Metal2SpecFactoryConcept T>(const T&) {
+                // Both Metal 2.0 spec factory shapes (spec-keyed and ImmutableInfo-keyed, each with or
+                // without the per-enqueue split) route to the one ProgramSpec adapter, which branches on
+                // the factory's method surface.
+                //
+                // A Metal 2.0 op must NOT define a custom compute_program_hash. The cache key is the
+                // generated ProgramSpec (ProgramSpecFactoryConcept) or the factory's ImmutableInfo
+                // (AdvancedProgramSpecFactoryConcept) — never a hand-rolled hash, which can silently drop
+                // a mutable value (e.g. an RNG seed) from the key. To exclude a value from the key, climb
+                // to AdvancedProgramSpecFactoryConcept and give it an immutable_info_t that omits the
+                // value (see TTNN_OP_MIGRATION_RECIPE.md — "the boogeyman will eat you").
+                //
+                // Check the UNDERLYING device operation, not the mesh adapter wrapper: the adapter always
+                // synthesizes a compute_program_hash (it hashes every op), so only the user op's own
+                // definition signals an intentional custom hash.
+                using metal2_device_operation_t = typename mesh_device_operation_t::device_operation_t;
+                static_assert(
+                    !requires(
+                        const typename metal2_device_operation_t::operation_attributes_t& a,
+                        const typename metal2_device_operation_t::tensor_args_t& t) {
+                        metal2_device_operation_t::compute_program_hash(a, t);
+                    },
+                    "Metal 2.0 spec-factory ops must not define a custom compute_program_hash. Exclude a "
+                    "value from the cache key via AdvancedProgramSpecFactoryConcept's immutable_info_t "
+                    "instead of hand-rolling a hash.");
                 using AdaptedMeshWorkloadFactory =
                     mesh_device_operation_t::template ProgramSpecMeshWorkloadFactoryAdapter<T>;
                 fn.template operator()<AdaptedMeshWorkloadFactory>();

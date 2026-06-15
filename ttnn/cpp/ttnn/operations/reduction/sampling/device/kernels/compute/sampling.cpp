@@ -414,26 +414,30 @@ void mul_block_bcast_scalar_inplace() {
 }
 
 void kernel_main() {
-    constexpr uint32_t input_values_cb_index = get_compile_time_arg_val(0);
-    constexpr uint32_t index_cb_index = get_compile_time_arg_val(1);
-    constexpr uint32_t input_transposed_cb_index = get_compile_time_arg_val(2);
-    constexpr uint32_t index_transposed_cb_index = get_compile_time_arg_val(3);
-    constexpr uint32_t values_cb_index = get_compile_time_arg_val(4);
-    constexpr uint32_t output_ind_cb_index = get_compile_time_arg_val(5);
+    // Metal 2.0: CB ids come from the DFB binding tokens (dfb::), the template-argument scalars
+    // (Ht/Wt/logWt/tile_width) from named compile-time args (args::, still constexpr so they remain
+    // usable as template parameters), and the RNG seed from a named RUNTIME arg (args::seed) — the only
+    // per-enqueue value, so two dispatches differing only in seed reuse the same compiled Program.
+    constexpr uint32_t input_values_cb_index = dfb::input_values;
+    constexpr uint32_t index_cb_index = dfb::index;
+    constexpr uint32_t input_transposed_cb_index = dfb::input_transposed;
+    constexpr uint32_t index_transposed_cb_index = dfb::index_transposed;
+    constexpr uint32_t values_cb_index = dfb::values;
+    constexpr uint32_t output_ind_cb_index = dfb::output_ind;
 
-    constexpr uint32_t topk_mask_cb_index = get_compile_time_arg_val(6);
-    constexpr uint32_t scaler_max_cb_index = get_compile_time_arg_val(7);
-    constexpr uint32_t scaler_sum_cb_index = get_compile_time_arg_val(8);
-    constexpr uint32_t cb_cur_max = get_compile_time_arg_val(9);
-    constexpr uint32_t cb_cur_sum = get_compile_time_arg_val(10);
-    constexpr uint32_t Ht = get_compile_time_arg_val(11);
-    constexpr uint32_t Wt = get_compile_time_arg_val(12);
-    constexpr uint32_t logWt = get_compile_time_arg_val(13);
-    constexpr uint32_t rand_tile_index = get_compile_time_arg_val(14);
-    constexpr uint32_t seed = get_compile_time_arg_val(15);
-    constexpr uint32_t cb_local_vals = get_compile_time_arg_val(16);
-    constexpr uint32_t temp_cb_index = get_compile_time_arg_val(17);
-    constexpr uint32_t tile_width = get_compile_time_arg_val(18);
+    constexpr uint32_t topk_mask_cb_index = dfb::topk_mask;
+    constexpr uint32_t scaler_max_cb_index = dfb::scaler_max;
+    constexpr uint32_t scaler_sum_cb_index = dfb::scaler_sum;
+    constexpr uint32_t cb_cur_max = dfb::cur_max;
+    constexpr uint32_t cb_cur_sum = dfb::cur_sum;
+    constexpr uint32_t Ht = get_arg(args::Ht);
+    constexpr uint32_t Wt = get_arg(args::Wt);
+    constexpr uint32_t logWt = get_arg(args::logWt);
+    constexpr uint32_t rand_tile_index = dfb::rand_tile;
+    const uint32_t seed = get_arg(args::seed);
+    constexpr uint32_t cb_local_vals = dfb::local_vals;
+    constexpr uint32_t temp_cb_index = dfb::temp;
+    constexpr uint32_t tile_width = get_arg(args::tile_width);
     generate_rand_tile(rand_tile_index, seed);
 
     const uint32_t nearest32_K = 32;

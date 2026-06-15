@@ -72,23 +72,74 @@ template <typename T>
 concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } || WorkloadDescriptorConcept<T>) &&
                                           !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T>;
 
-// Metal 2.0 factory concept: factories that return ProgramArtifacts (a ProgramSpec +
-// ProgramRunArgs) from create_program_spec. The framework adapter stamps a Program
-// from the spec onto each mesh coordinate range on cache miss, and patches TensorArgs
-// via experimental::UpdateTensorArgs on cache hit.
+// ============================================================================
+//  Metal 2.0 ProgramSpec factory concepts
+// ============================================================================
 //
-// NOTE: Each TensorArgument.tensor in ProgramRunArgs MUST reference a MeshTensor reachable
-// from the factory's `tensor_args` / `tensor_return_value` parameters — the adapter
-// matches by pointer identity. Constructing or copying a MeshTensor and referencing the
-// copy will TT_FATAL at runtime.
+// A Metal 2.0 op factory produces a ProgramArtifacts: the immutable ProgramSpec (the "blueprint" —
+// kernels, DFBs, work-units, argument schemas) plus the ProgramRunArgs (the per-execution values).
+// There are exactly TWO concepts, distinguished by ONE thing — the cache key:
 //
-// NOTE: A separate MeshWorkloadSpecFactoryConcept is planned for ops whose programs vary
-// across the mesh (CCL-style); that one will require a multi-program artifact.
-// Alternatively, we could have only a single, common MeshWorkloadSpecFactoryConcept.
-// (Should follow whatever style ProgramDescriptor port ends up using.)
+//   - ProgramSpecFactoryConcept         — the cache key is the generated ProgramSpec.
+//   - AdvancedProgramSpecFactoryConcept — the cache key is a small hashable ImmutableInfo that the
+//                                         factory extracts up front (extract_immutable_info), which is
+//                                         also the SOLE input to create_program_artifacts. This lets the
+//                                         framework skip the spec rebuild on a cache hit, and structurally
+//                                         prevents a mutable value (e.g. an RNG seed) from leaking into
+//                                         the key or the spec — it isn't even visible to the builder.
+//
+// Within EITHER concept, the enqueue-invariant fast path is an OPTIONAL, INCREMENTAL refinement — NOT a
+// separate concept (Audrey's "Option 2 / Option 2++"; "Option 3 / Option 3++"):
+//
+//   - Degenerate (no create_per_enqueue_args): create_program_artifacts returns the spec + ALL run-args.
+//     Cache hit refreshes tensor bindings (UpdateTensorArgs). The least to write — migrate here first.
+//   - ++ (add create_per_enqueue_args): create_program_artifacts's run_args carry only the
+//     ENQUEUE-INVARIANT args (declared invariant in the spec via
+//     KernelAdvancedOptions::enqueue_invariant_runtime_args / _common_runtime_args,
+//     TensorParameterAdvancedOptions::enqueue_invariant); create_per_enqueue_args carries the rest.
+//     Cache miss merges the two (MergeProgramRunArgs) + SetProgramRunArgs; cache hit re-applies ONLY the
+//     per-enqueue set (UpdateProgramRunArgs). The metal runtime validates that every omitted arg was
+//     declared invariant — a per-enqueue value the factory forgets to refresh is a hard error, not a
+//     silently-stale wrong answer.
+//
+// You only need to move ENOUGH args into the invariant bundle to clear your performance target — moving
+// one more arg from create_per_enqueue_args into create_program_artifacts's run_args (and declaring it
+// invariant) is a one-line, behavior-preserving optimization. Pick the rung by MEASURING dispatch time
+// (see TTNN_OP_MIGRATION_RECIPE.md).
+//
+// NOTE: Each TensorArgument.tensor in ProgramRunArgs MUST reference a MeshTensor reachable from the
+// factory's tensor_args / tensor_return_value — the adapter matches by pointer identity.
+
+// --- method-surface building blocks ---
 template <typename T>
-concept ProgramSpecFactoryConcept = requires { &T::create_program_spec; } && !ProgramFactoryConcept<T> &&
-                                    !MeshWorkloadFactoryConcept<T> && !ProgramDescriptorFactoryConcept<T>;
+concept HasCreateProgramArtifacts = requires { &T::create_program_artifacts; };
+template <typename T>
+concept HasImmutableInfoExtraction = requires { &T::extract_immutable_info; };
+// The optional "++" refinement: present => the factory splits invariant (create_program_artifacts
+// run-args) from per-enqueue (create_per_enqueue_args), and the hit path re-applies only the latter.
+template <typename T>
+concept HasPerEnqueueArgs = requires { &T::create_per_enqueue_args; };
+// Shared exclusion: a Metal 2.0 spec factory is none of the legacy factory shapes.
+template <typename T>
+concept NotALegacyFactory =
+    !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T> && !ProgramDescriptorFactoryConcept<T>;
+
+// Spec-keyed factory (Option 2 / 2++). create_program_artifacts(attrs, tensor_args, tensor_return_value)
+// -> ProgramArtifacts. Optionally also create_per_enqueue_args for the enqueue-invariant fast path.
+template <typename T>
+concept ProgramSpecFactoryConcept =
+    HasCreateProgramArtifacts<T> && !HasImmutableInfoExtraction<T> && NotALegacyFactory<T>;
+
+// ImmutableInfo-keyed factory (Option 3 / 3++). extract_immutable_info -> ImmutableInfo (cache key);
+// create_program_artifacts(ImmutableInfo) -> ProgramArtifacts. Optionally create_per_enqueue_args too.
+// ("Advanced" = it does the extra immutable-info extraction step that buys the cheaper cache key.)
+template <typename T>
+concept AdvancedProgramSpecFactoryConcept =
+    HasCreateProgramArtifacts<T> && HasImmutableInfoExtraction<T> && NotALegacyFactory<T>;
+
+// Umbrella: either Metal 2.0 spec factory shape (exactly one is satisfied by construction).
+template <typename T>
+concept Metal2SpecFactoryConcept = ProgramSpecFactoryConcept<T> || AdvancedProgramSpecFactoryConcept<T>;
 
 // Detect operations that put create_descriptor directly on the operation struct
 // (no program_factory_t wrapper needed for single-descriptor operations).
@@ -127,7 +178,7 @@ concept HasSelectProgramFactory = requires(
 
 // Validate that all variant alternatives in a program_factory_t satisfy exactly one of
 // ProgramFactoryConcept, MeshWorkloadFactoryConcept, ProgramDescriptorFactoryConcept,
-// or ProgramSpecFactoryConcept.
+// or one of the Metal 2.0 spec factory shapes (Metal2SpecFactoryConcept — itself exactly one of four).
 namespace detail {
 template <typename Variant, std::size_t... Is>
 consteval bool all_factories_valid(std::index_sequence<Is...>) {
@@ -135,7 +186,7 @@ consteval bool all_factories_valid(std::index_sequence<Is...>) {
         ((ProgramFactoryConcept<std::variant_alternative_t<Is, Variant>> +
           MeshWorkloadFactoryConcept<std::variant_alternative_t<Is, Variant>> +
           ProgramDescriptorFactoryConcept<std::variant_alternative_t<Is, Variant>> +
-          ProgramSpecFactoryConcept<std::variant_alternative_t<Is, Variant>>) == 1) &&
+          Metal2SpecFactoryConcept<std::variant_alternative_t<Is, Variant>>) == 1) &&
         ...);
 }
 }  // namespace detail

@@ -36,37 +36,28 @@ FORCE_INLINE float bf16_to_f32(uint16_t bf16) {
 }
 
 void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t temp_addr = get_arg_val<uint32_t>(1);
-    uint32_t k_addr = get_arg_val<uint32_t>(2);
-    uint32_t p_addr = get_arg_val<uint32_t>(3);
-
-    uint32_t arg_id = 0;
-    constexpr auto dst_args = TensorAccessorArgs<0>();
-    constexpr auto temp_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
-    constexpr auto k_args = TensorAccessorArgs<temp_args.next_compile_time_args_offset()>();
-    constexpr auto p_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
-
-    constexpr uint32_t args_base = p_args.next_compile_time_args_offset();
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(args_base + 0);
-    constexpr uint32_t cb_id_mask = get_compile_time_arg_val(args_base + 1);
-    constexpr uint32_t scaler_max_cb_id = get_compile_time_arg_val(args_base + 2);
-    constexpr uint32_t scaler_sum_cb_id = get_compile_time_arg_val(args_base + 3);
-    constexpr uint32_t output_final_indices_rm_cb_index = get_compile_time_arg_val(args_base + 4);
-    constexpr uint32_t output_local_values_cb_index = get_compile_time_arg_val(args_base + 5);
-    constexpr uint32_t output_local_indices_cb_index = get_compile_time_arg_val(args_base + 6);
-    constexpr uint32_t final_indices_stick_size = get_compile_time_arg_val(args_base + 7);
-    // args_base + 8: out_stick_size (passed from factory, unused in kernel)
-    constexpr uint32_t rand_tile_index = get_compile_time_arg_val(args_base + 9);
-    constexpr uint32_t cb_id_k = get_compile_time_arg_val(args_base + 10);
-    constexpr uint32_t cb_id_p = get_compile_time_arg_val(args_base + 11);
-    constexpr uint32_t cb_id_temp = get_compile_time_arg_val(args_base + 12);
-    constexpr uint32_t core_id = get_compile_time_arg_val(args_base + 13);
-    constexpr uint32_t ids_per_batch = get_compile_time_arg_val(args_base + 14);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(args_base + 15);
-    // Local sort-index width must match the index CB format / fp32_dest_acc_en chosen by the host:
+    // Metal 2.0: the four tensor addresses come from TensorAccessor bindings (ta::), CB ids from DFB
+    // tokens (dfb::), structural scalars from named compile-time args (args::, constexpr — some feed
+    // chunk-size constexprs below), and core_id from a per-core RUNTIME arg (args::core_id) so the writer
+    // is ONE KernelSpec on all cores rather than one specialized binary per core.
+    constexpr uint32_t cb_id_out = dfb::output;
+    constexpr uint32_t cb_id_mask = dfb::topk_mask;
+    constexpr uint32_t scaler_max_cb_id = dfb::scaler_max;
+    constexpr uint32_t scaler_sum_cb_id = dfb::scaler_sum;
+    constexpr uint32_t output_final_indices_rm_cb_index = dfb::final_indices;
+    constexpr uint32_t output_local_values_cb_index = dfb::local_vals;
+    constexpr uint32_t output_local_indices_cb_index = dfb::output_ind;
+    constexpr uint32_t final_indices_stick_size = get_arg(args::final_indices_stick_size);
+    constexpr uint32_t rand_tile_index = dfb::rand_tile;
+    constexpr uint32_t cb_id_k = dfb::k;
+    constexpr uint32_t cb_id_p = dfb::p;
+    constexpr uint32_t cb_id_temp = dfb::temp;
+    const uint32_t core_id = get_arg(args::core_id);
+    constexpr uint32_t ids_per_batch = get_arg(args::ids_per_batch);
+    constexpr uint32_t num_cores = get_arg(args::num_cores);
+    // Local sort-index width must match the index DFB format / fp32_dest_acc_en chosen by the host:
     // 32-bit (Int32) on Quasar, 16-bit (UInt16) on WH/BH.
-    constexpr bool use_32bit_index = get_compile_time_arg_val(args_base + 16) == 1;
+    constexpr bool use_32bit_index = get_arg(args::use_32bit_index) == 1;
     constexpr uint32_t k_chunk_size = num_cores * sizeof(uint32_t);     // 4 bytes per uint32_t
     constexpr uint32_t p_chunk_size = num_cores * sizeof(uint16_t);     // 2 bytes per uint16_t
     constexpr uint32_t temp_chunk_size = num_cores * sizeof(uint16_t);  // 2 bytes per uint16_t
@@ -87,7 +78,7 @@ void kernel_main() {
     CircularBuffer cb_local_indices(output_local_indices_cb_index);
     CircularBuffer cb_out(cb_id_out);
 
-    const auto addrg_k = TensorAccessor(k_args, k_addr);
+    const auto addrg_k = TensorAccessor(ta::k);
     cb_k.reserve_back(1);
     uint32_t cb_id_k_ptr = cb_k.get_write_ptr();
     // Read the entire aligned chunk to avoid NOC alignment issues
@@ -98,7 +89,7 @@ void kernel_main() {
     // Index into the chunk to get this core's value
     uint32_t k = k_ptr[core_id];
 
-    const auto addrg_p = TensorAccessor(p_args, p_addr);
+    const auto addrg_p = TensorAccessor(ta::p);
     cb_p.reserve_back(1);
     uint32_t cb_id_p_ptr = cb_p.get_write_ptr();
     // Read the entire aligned chunk to avoid NOC alignment issues
@@ -109,7 +100,7 @@ void kernel_main() {
     // Index into the chunk to get this core's value
     uint32_t p = p_ptr[core_id];
 
-    const auto addrg_temp = TensorAccessor(temp_args, temp_addr);
+    const auto addrg_temp = TensorAccessor(ta::temp);
     // cb_temp.reserve_back(1);
     uint32_t cb_id_temp_ptr = cb_temp.get_write_ptr();
     // Read the entire aligned chunk to avoid NOC alignment issues
@@ -233,7 +224,7 @@ void kernel_main() {
     cb_local_indices.pop_front(1);
     cb_final_indices.pop_front(32);
 
-    const auto s_out = TensorAccessor(dst_args, dst_addr);
+    const auto s_out = TensorAccessor(ta::output);
     // Write individual core result - output buffer should handle alignment
     noc.async_write(
         use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_out),

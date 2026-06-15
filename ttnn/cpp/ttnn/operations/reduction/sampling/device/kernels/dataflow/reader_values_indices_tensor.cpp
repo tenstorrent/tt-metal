@@ -49,28 +49,26 @@ FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {
 }
 
 void kernel_main() {
-    uint32_t values_addr = get_arg_val<uint32_t>(0);
-    uint32_t indices_addr = get_arg_val<uint32_t>(1);
+    // Metal 2.0: tensor addresses come from the TensorAccessor bindings (ta::), CB ids from the DFB
+    // tokens (dfb::), and the shape/work-split scalars from named compile-time args (args::).
+    constexpr uint32_t input_values_cb_index = dfb::input_values;
+    constexpr uint32_t input_indices_cb_index = dfb::final_indices;
+    constexpr uint32_t cb_intermed_index = dfb::index;
 
-    constexpr uint32_t input_values_cb_index = get_compile_time_arg_val(0);
-    constexpr uint32_t input_indices_cb_index = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_intermed_index = get_compile_time_arg_val(2);
-
-    constexpr uint32_t Ht = get_compile_time_arg_val(3);
-    constexpr uint32_t Wt = get_compile_time_arg_val(4);
-    constexpr uint32_t input_indices_page_size = get_compile_time_arg_val(5);
-    constexpr uint32_t tile_height = get_compile_time_arg_val(6);
-    constexpr bool use_32bit_index = get_compile_time_arg_val(7) == 1;
-
-    constexpr auto s0_args = TensorAccessorArgs<8>();
-    constexpr auto s1_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
+    constexpr uint32_t Ht = get_arg(args::Ht);
+    constexpr uint32_t Wt = get_arg(args::Wt);
+    constexpr uint32_t input_indices_page_size = get_arg(args::final_indices_stick_size);
+    constexpr uint32_t tile_height = get_arg(args::tile_height);
+    // Index intermediate width: 32-bit (Int32) on Quasar, 16-bit (UInt16) on WH/BH — must match the
+    // index DFB format and the compute kernel's fp32_dest_acc_en chosen by the host factory.
+    constexpr bool use_32bit_index = get_arg(args::use_32bit_index) == 1;
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
 
-    const auto s0 = TensorAccessor(s0_args, values_addr);
+    const auto s0 = TensorAccessor(ta::input_values);
 
-    const auto s1 = TensorAccessor(s1_args, indices_addr);
+    const auto s1 = TensorAccessor(ta::input_indices);
 
     Noc noc;
     CircularBuffer input_values_cb(input_values_cb_index);
