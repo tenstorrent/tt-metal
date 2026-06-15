@@ -82,7 +82,7 @@ tt::tt_metal::ProgramDescriptor MoeProgramFactory::create_descriptor(
 
     uint32_t expert_mask_cb_index = tt::CBIndex::c_1;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = cb_in_units * expert_mask_tile_size,
+        .total_size = Wt * expert_mask_tile_size,
         .core_ranges = core_ranges,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(expert_mask_cb_index),
