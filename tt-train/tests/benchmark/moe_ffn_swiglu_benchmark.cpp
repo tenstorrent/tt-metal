@@ -154,8 +154,25 @@ CaseResult run_case(const Case& c, uint32_t num_warmup, uint32_t num_measure) {
     const double fwd_total_us = std::chrono::duration<double, std::micro>(t1_fwd - t0_fwd).count();
     const double fwd_avg_us = fwd_total_us / static_cast<double>(num_measure);
 
-    // Forward+backward: same pattern.
+    // Forward+backward: same pattern. Clear grads each step so backward measures a clean fwd+bwd:
+    // reset_graph() drops graph nodes but leaves the persistent weight/input grads in place, so
+    // without this every add_grad after the first step would also do an accumulation add (and grads
+    // would grow unbounded). Resetting to an empty tensor makes the next add_grad a plain set,
+    // matching an isolated training step (the clear is host-only, so it doesn't perturb timing).
+    auto clear_grads = [&]() {
+        grouped_fb->set_grad(ttnn::Tensor());
+        for (const auto& w : w_gate) {
+            w->set_grad(ttnn::Tensor());
+        }
+        for (const auto& w : w_up) {
+            w->set_grad(ttnn::Tensor());
+        }
+        for (const auto& w : w_down) {
+            w->set_grad(ttnn::Tensor());
+        }
+    };
     auto do_fwd_bwd = [&]() {
+        clear_grads();
         const auto out = ttml::ops::moe_ffn_swiglu_fw(grouped_fb, offsets_tensor, w_gate, w_up, w_down);
         out->set_grad(ttml::core::ones_like(out->get_value()));
         out->backward();
