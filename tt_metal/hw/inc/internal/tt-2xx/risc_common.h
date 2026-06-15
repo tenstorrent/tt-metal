@@ -412,7 +412,7 @@ inline __attribute__((always_inline)) uint32_t encode_j_immediate(int32_t offset
 
 inline __attribute__((always_inline)) void register_handler_for_interrupt(uint32_t interrupt_index, void(*handler)()) {
     uint64_t isr_address = reinterpret_cast<uint64_t>(handler);
-    uint32_t encoded_offset = encode_j_immediate(int32_t(isr_address) - int32_t(MEM_INTERRUPT_TABLE_BASE));
+    uint32_t encoded_offset = encode_j_immediate(int32_t(isr_address) - int32_t(MEM_INTERRUPT_TABLE_BASE + interrupt_index * sizeof(uint32_t)));
     uint32_t instruction = 0x0000006f | encoded_offset; // create a jump instruction to the handler
     *((uint32_t*)(MEM_INTERRUPT_TABLE_BASE) + interrupt_index) = instruction;
 }
