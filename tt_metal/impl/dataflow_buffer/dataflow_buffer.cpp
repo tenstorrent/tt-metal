@@ -210,6 +210,20 @@ static dfb_txn_id_descriptor_t compute_txn_descriptor(
 
     // threshold is the number of transactions that each txn ID needs to process before posting/acking
     // for reads the transaction needs to be committed to dst, for writes the transaction needs to be sent out
+    // The ISR descriptor fields (threshold / per_txn / per_txn_per_tc) are uint8_t, so the computed values
+    // must fit in 8 bits — validate in wide arithmetic before the casts below (a large ring would otherwise
+    // silently wrap and corrupt the implicit-sync spin condition).
+    const uint32_t wide_per_txn = num_entries / num_txn_ids;
+    const uint32_t wide_threshold = consumes_all ? (num_prods_or_cons * wide_per_txn) : wide_per_txn;
+    TT_FATAL(
+        wide_threshold <= 0xFFu && wide_per_txn <= 0xFFu,
+        "Implicit-sync DFB descriptor overflow: threshold {} / per_txn {} exceed uint8_t (num_entries {}, "
+        "num_txn_ids {}, num_prods_or_cons {}). Reduce num_entries or use explicit sync.",
+        wide_threshold,
+        wide_per_txn,
+        num_entries,
+        num_txn_ids,
+        num_prods_or_cons);
     uint8_t threshold;
     uint8_t per_txn;
     if (consumes_all) {
@@ -640,21 +654,38 @@ static std::pair<uint16_t, uint32_t> compute_capacity_and_stride(const DataflowB
             // holds. The thread-count ratio must be an integer (enforced downstream by
             // calculate_num_tile_counters).
             //
-            // Implicit sync + asymmetric BLOCKED: ONLY the CONSUMER side is the problem. An implicit
-            // consumer's drain (commit_implicit_write) round-robins the tile-counter PER ENTRY, not per
-            // block, which misroutes credits across the unequal side — VERIFIED to corrupt data on
-            // emu-quasar-1x3 (DM→DM 2Bx1B / 1Bx2B implicit fail an identity check). An implicit PRODUCER
-            // with an explicit consumer is FINE (verified: DM-producer→Tensix-consumer asymmetric implicit
-            // BLOCKED passes — the A1 pipeline). So require an explicit-sync CONSUMER when the counts differ,
-            // but allow an implicit producer.
+            // Implicit sync + asymmetric BLOCKED: the WIDER-FAN-OUT side (the one with more tile-counters,
+            // i.e. min(P,C) threads fanning to max(P,C)) must use explicit sync. commit_implicit_read/write
+            // advance the tile-counter PER ENTRY, not per block (dataflow_buffer.inl:354/:388), so when that
+            // side has num_tcs_to_rr>1 a block gets scattered across distinct sub-rings instead of staying in
+            // one — i.e. it does NOT honor BLOCKED block-granularity (NOT garbage: VERIFIED on emu-quasar-1x3
+            // the implicit fan-out produces a clean per-entry identity, just not the per-block result). The
+            // side with num_tcs_to_rr==1 (the wide side's counterpart) is a no-op round-robin, so implicit is
+            // fine there — VERIFIED: P>C implicit PRODUCER (num_producer_tcs=1) passes, the A1 pipeline.
+            // For BLOCKED the wider-fan-out side is the one with FEWER threads (C>P -> producer fans out;
+            // P>C -> consumer fans out). (This is FIXABLE — see the per-block-aware tc_idx advance proposal.)
             const uint32_t threads = std::max(config.num_producers, config.num_consumers);
             const uint32_t block = std::max<uint32_t>(config.consumer_block_size, 1u);
+            // Each thread's sub-ring must hold a whole number of blocks for BOTH sides' block_size (the
+            // producer and consumer may legitimately differ only when one side is non-BLOCKED, but when a
+            // side is BLOCKED its block_size must tile the sub-ring). STRIDED/ALL guard producer_block_size;
+            // do the same here so a BLOCKED producer can't silently truncate its last block.
+            const uint32_t pblock = std::max<uint32_t>(config.producer_block_size, 1u);
             TT_FATAL(
-                config.num_producers == config.num_consumers || !config.enable_consumer_implicit_sync,
-                "BLOCKED DFB {}: asymmetric thread counts ({} producers vs {} consumers) require an "
-                "explicit-sync CONSUMER; an implicit-sync consumer drain round-robins the tile-counter "
-                "per-entry (not per-block) and misroutes for asymmetric BLOCKED. (An implicit producer with "
-                "an explicit consumer is supported.)",
+                config.num_entries % (pblock * threads) == 0,
+                "BLOCKED DFB {} num_entries {} must be divisible by producer_block_size * threads = {} * {}",
+                dfb.id,
+                config.num_entries,
+                pblock,
+                threads);
+            TT_FATAL(
+                config.num_producers == config.num_consumers ||
+                    ((config.num_consumers <= config.num_producers || !config.enable_producer_implicit_sync) &&
+                     (config.num_producers <= config.num_consumers || !config.enable_consumer_implicit_sync)),
+                "BLOCKED DFB {}: asymmetric thread counts ({} producers vs {} consumers) require explicit sync "
+                "on the wider-fan-out side (C>P: the producer; P>C: the consumer); its implicit per-entry "
+                "tile-counter round-robin scatters blocks across sub-rings, losing block-granularity. (The "
+                "narrow side with one tile-counter may be implicit, e.g. a P>C implicit producer.)",
                 dfb.id,
                 config.num_producers,
                 config.num_consumers);
@@ -1220,6 +1251,22 @@ void ProgramImpl::finalize_single_dfb_config(
 
     uint8_t num_producer_tcs = calculate_num_tile_counters(config, true);
     uint8_t num_consumer_tcs = calculate_num_tile_counters(config, false);
+    // The per-risc tile-counter arrays (base_addr/limit/packed_tile_counter, and the device tc_slots[])
+    // are fixed at MAX_NUM_TILE_COUNTERS_TO_RR. num_*_tcs can reach a P:C ratio of up to 8 (or num_producers
+    // for DM-DM ALL) via the direct CreateDataflowBuffer API, which would overflow those arrays on host and
+    // read tc_slots[] out of bounds on device. Bound it explicitly.
+    TT_FATAL(
+        num_producer_tcs <= ::dfb::MAX_NUM_TILE_COUNTERS_TO_RR &&
+            num_consumer_tcs <= ::dfb::MAX_NUM_TILE_COUNTERS_TO_RR,
+        "DFB {}: tile-counter round-robin width exceeds MAX_NUM_TILE_COUNTERS_TO_RR ({}): num_producer_tcs={}, "
+        "num_consumer_tcs={} (from {} producers, {} consumers, cap={}). Reduce the producer/consumer ratio.",
+        dfb->id,
+        ::dfb::MAX_NUM_TILE_COUNTERS_TO_RR,
+        num_producer_tcs,
+        num_consumer_tcs,
+        config.num_producers,
+        config.num_consumers,
+        static_cast<int>(config.cap));
 
     std::vector<uint8_t> producer_risc_ids;
     std::vector<uint8_t> consumer_risc_ids;
