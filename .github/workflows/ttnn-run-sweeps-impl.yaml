@@ -121,6 +121,15 @@ jobs:
         with:
           name: sweeps-vectors
           path: /work/tests/sweep_framework/vectors_export
+      - name: Clear stale kernel cache
+        # A stale/corrupt persisted kernel ELF (e.g. cq_prefetch) left in
+        # ~/.cache/tt-metal-cache from a prior build makes tt_elffile.cpp throw on
+        # load (observed: T3K all_gather FABRIC_2D configs 0256fe6b/0694284f fail
+        # "TT_THROW @ tt_elffile.cpp:405" / hang every retry, yet pass 207/207 on a
+        # runner with a fresh cache). Clear it so kernels JIT-rebuild cleanly.
+        run: |
+          rm -rf "${HOME}/.cache/tt-metal-cache" /github/home/.cache/tt-metal-cache 2>/dev/null || true
+          echo "Cleared tt-metal kernel cache"
       - name: Split sweep vectors by required dispatch axis
         run: |
           # Two-pass dispatch-axis design: lead_models traces include configs
