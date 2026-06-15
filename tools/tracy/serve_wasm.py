@@ -205,6 +205,35 @@ def _resolve_wasm_http_port(explicit_port=None):
     return port
 
 
+def _list_traces_newest_first(traces_dir: Path) -> list[str]:
+    """Basenames of regular ``*.tracy`` files under ``traces_dir``, newest first.
+
+    Ordered by ``st_mtime`` (set by ``copyfile`` at capture time; this dir lives under
+    the gitignored ``build/`` tree and is not synced, so mtime is a stable recency key).
+    Sorting on mtime rather than the embedded ``_YYYY_MM_DD...`` suffix avoids being
+    skewed by the command-name prefix and also orders foreign ``.tracy`` files sensibly.
+    Ties broken by name (desc) for determinism.
+    """
+    root = _resolve_under_root(traces_dir, strict=False)
+    entries: list[tuple[float, str]] = []
+    try:
+        with os.scandir(root) as scan:
+            for entry in scan:
+                if not entry.name.endswith(".tracy"):
+                    continue
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                try:
+                    mtime = entry.stat(follow_symlinks=False).st_mtime
+                except OSError:
+                    continue
+                entries.append((mtime, entry.name))
+    except FileNotFoundError:
+        return []
+    entries.sort(key=lambda e: (e[0], e[1]), reverse=True)
+    return [name for _, name in entries]
+
+
 clients = set()
 
 
@@ -347,13 +376,8 @@ class CORSRequestHandler(SimpleHTTPRequestHandler):
                     else:
                         if abs_target == abs_deleted:
                             embed_path.unlink()
-                            # Find first available .tracy file (basename-only, under traces_root)
-                            files = []
-                            for f in os.listdir(traces_dir):
-                                sp = _safe_trace_file_path(traces_root, f)
-                                if sp is not None and sp.is_file():
-                                    files.append(f)
-                            files.sort(reverse=True)
+                            # Repoint embed.tracy at the newest remaining trace (by mtime).
+                            files = _list_traces_newest_first(traces_root)
                             if files:
                                 safe_pick = _safe_trace_file_path(traces_root, files[0])
                                 if safe_pick is not None:
@@ -392,9 +416,8 @@ class CORSRequestHandler(SimpleHTTPRequestHandler):
                 files = []
                 logger.debug(f"traces_dir: {traces_dir}")
                 if os.path.isdir(traces_dir):
-                    files = [f for f in os.listdir(traces_dir) if f.endswith(".tracy")]
-                    logger.debug(f"Found trace files: {files}")
-                    files.sort(reverse=True)
+                    files = _list_traces_newest_first(Path(traces_dir))
+                    logger.debug(f"Found trace files (newest first): {files}")
                 else:
                     logger.debug(f"traces_dir does not exist: {traces_dir}")
                 self.send_response(200)

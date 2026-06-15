@@ -47,7 +47,7 @@ import sys
 import time
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 import pytest
 
@@ -225,6 +225,52 @@ def _wait_http_ready_sock(port: int, timeout_s: float = 30.0) -> None:
     raise AssertionError(f"serve_wasm HTTP port {port} never became ready")
 
 
+def _make_wasm_serve_dir(tmp_path: Path) -> Path:
+    """Create a minimal serveable build_wasm tree under tmp_path and return it."""
+    wasm_dir = tmp_path / "build" / "profiler" / "build_wasm"
+    (wasm_dir / "traces").mkdir(parents=True, exist_ok=True)
+    # Minimal static asset so the HTTP root is serveable.
+    (wasm_dir / "index.html").write_text("<!doctype html><title>tracy-profiler</title>", encoding="utf-8")
+    return wasm_dir
+
+
+def _spawn_serve_wasm(wasm_dir: Path, tt_metal_home: Path, port: int) -> subprocess.Popen:
+    """Start serve_wasm.py over wasm_dir. PROFILER_WASM_DIR is derived from TT_METAL_HOME."""
+    env = os.environ.copy()
+    env["TT_METAL_HOME"] = str(tt_metal_home)
+    env["PYTHONUNBUFFERED"] = "1"
+    env["PYTHONPATH"] = str(TOOLS_DIR) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    return subprocess.Popen(
+        [sys.executable, str(SERVE_WASM), "--port", str(port), "--dir", str(wasm_dir)],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        start_new_session=True,
+    )
+
+
+def _terminate_serve_wasm(proc: subprocess.Popen) -> None:
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        proc.terminate()
+    try:
+        out, _ = proc.communicate(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        out, _ = proc.communicate()
+    if out and "Traceback" in out:
+        print(out)
+
+
+def _write_trace(traces_dir: Path, name: str, mtime: float) -> None:
+    """Drop a .tracy file with explicit mtime so recency order is deterministic."""
+    p = traces_dir / name
+    p.write_bytes(b"\x00trace\x00" * 8)
+    os.utime(p, (mtime, mtime))
+
+
 async def _await_reload(ws_uri: str, embed_path: Path, *, recv_timeout_s: float) -> str:
     import websockets
 
@@ -247,44 +293,79 @@ def test_ws_reload_broadcast_on_embed_change(tmp_path):
     if not SERVE_WASM.is_file():
         pytest.skip(f"serve_wasm.py not found: {SERVE_WASM}")
 
-    # PROFILER_WASM_DIR is derived from TT_METAL_HOME at import; point it at a temp
-    # tree so the test needs no real build artifacts.
-    wasm_dir = tmp_path / "build" / "profiler" / "build_wasm"
-    (wasm_dir / "traces").mkdir(parents=True, exist_ok=True)
+    wasm_dir = _make_wasm_serve_dir(tmp_path)
     embed_path = wasm_dir / "embed.tracy"
     embed_path.write_bytes(b"initial")
-    # Minimal static asset so the HTTP root is serveable.
-    (wasm_dir / "index.html").write_text("<!doctype html><title>tracy-profiler</title>", encoding="utf-8")
 
     port = _find_free_port_pair()
-    ws_port = port + 1
-
-    env = os.environ.copy()
-    env["TT_METAL_HOME"] = str(tmp_path)
-    env["PYTHONUNBUFFERED"] = "1"
-    env["PYTHONPATH"] = str(TOOLS_DIR) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
-
-    proc = subprocess.Popen(
-        [sys.executable, str(SERVE_WASM), "--port", str(port), "--dir", str(wasm_dir)],
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        start_new_session=True,
-    )
+    proc = _spawn_serve_wasm(wasm_dir, tmp_path, port)
     try:
         _wait_http_ready_sock(port)
-        msg = asyncio.run(_await_reload(f"ws://127.0.0.1:{ws_port}/", embed_path, recv_timeout_s=10.0))
+        msg = asyncio.run(_await_reload(f"ws://127.0.0.1:{port + 1}/", embed_path, recv_timeout_s=10.0))
         assert msg == "reload", f"expected 'reload' broadcast, got {msg!r}"
     finally:
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-        except (ProcessLookupError, PermissionError):
-            proc.terminate()
-        try:
-            out, _ = proc.communicate(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            out, _ = proc.communicate()
-        if out and "Traceback" in out:
-            print(out)
+        _terminate_serve_wasm(proc)
+
+
+@pytest.mark.timeout(120)
+def test_traces_listing_ordered_newest_first_by_mtime(tmp_path):
+    """GET /traces orders by mtime, not by filename (the cmd-name prefix must not win)."""
+    if not SERVE_WASM.is_file():
+        pytest.skip(f"serve_wasm.py not found: {SERVE_WASM}")
+
+    wasm_dir = _make_wasm_serve_dir(tmp_path)
+    traces_dir = wasm_dir / "traces"
+    # Names chosen so lexicographic-reverse order contradicts chronological order:
+    # alphabetically "zzz" > "mmm" > "aaa", but here "aaa" is newest.
+    _write_trace(traces_dir, "zzz_oldcmd_2026_01_01_00_00_00.tracy", mtime=1000.0)
+    _write_trace(traces_dir, "mmm_midcmd_2026_01_01_00_00_00.tracy", mtime=2000.0)
+    _write_trace(traces_dir, "aaa_newcmd_2026_01_01_00_00_00.tracy", mtime=3000.0)
+
+    port = _find_free_port_pair()
+    proc = _spawn_serve_wasm(wasm_dir, tmp_path, port)
+    try:
+        _wait_http_ready_sock(port)
+        _, _, body = _http_get(f"http://127.0.0.1:{port}/traces", timeout=30.0)
+        listing = json.loads(body.decode("utf-8"))
+    finally:
+        _terminate_serve_wasm(proc)
+
+    assert listing == [
+        "aaa_newcmd_2026_01_01_00_00_00.tracy",
+        "mmm_midcmd_2026_01_01_00_00_00.tracy",
+        "zzz_oldcmd_2026_01_01_00_00_00.tracy",
+    ], f"expected newest-first by mtime, got {listing}"
+
+
+@pytest.mark.timeout(120)
+def test_delete_repoints_embed_to_newest_remaining_by_mtime(tmp_path):
+    """Deleting the embedded trace repoints embed.tracy at the newest *remaining* one."""
+    if not SERVE_WASM.is_file():
+        pytest.skip(f"serve_wasm.py not found: {SERVE_WASM}")
+
+    wasm_dir = _make_wasm_serve_dir(tmp_path)
+    traces_dir = wasm_dir / "traces"
+    # Two survivors whose name order contradicts mtime order: "z_old" sorts last
+    # alphabetically-reversed-first, but "a_new" is the newest by mtime.
+    _write_trace(traces_dir, "z_old_2026_01_01_00_00_00.tracy", mtime=1000.0)
+    _write_trace(traces_dir, "a_new_2026_01_01_00_00_00.tracy", mtime=3000.0)
+    # The currently-embedded trace, which we will delete.
+    _write_trace(traces_dir, "current_2026_01_01_00_00_00.tracy", mtime=2000.0)
+    embed_path = wasm_dir / "embed.tracy"
+    embed_path.symlink_to("traces/current_2026_01_01_00_00_00.tracy")
+
+    port = _find_free_port_pair()
+    proc = _spawn_serve_wasm(wasm_dir, tmp_path, port)
+    try:
+        _wait_http_ready_sock(port)
+        req = Request(f"http://127.0.0.1:{port}/traces/current_2026_01_01_00_00_00.tracy", method="DELETE")
+        with urlopen(req, timeout=30.0) as resp:
+            assert resp.status == 200, resp.status
+            resp.read()
+    finally:
+        _terminate_serve_wasm(proc)
+
+    assert embed_path.is_symlink(), "embed.tracy should remain a symlink after repoint"
+    assert (
+        os.readlink(embed_path) == "traces/a_new_2026_01_01_00_00_00.tracy"
+    ), f"embed.tracy should repoint to the newest remaining trace, got {os.readlink(embed_path)!r}"
