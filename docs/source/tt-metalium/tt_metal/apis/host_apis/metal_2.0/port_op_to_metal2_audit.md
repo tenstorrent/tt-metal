@@ -89,13 +89,12 @@ For the op in scope, work through the audit in seven subjects, in order: **[Prer
 | UNSUPPORTED feature in use (incl. CTA varargs) | **GATE** | brief: cleared/blocked · team: detail → wait-for-feature |
 | TTNN factory analysis — op-owned tensors · genuine MeshWorkload need | **FYI-U** | team only |
 | TTNN factory analysis — pybind `create_descriptor` · other risky pybind · custom override-RTA | **FYI-P** | brief (Watch-for) + team |
-| Per-binding TensorAccessor handling — Case 1 re-express / Case 2 bridge | **PORT WORK** | brief (Construct) + team |
+| Per-binding TensorAccessor handling — Case 1 (`TensorAccessor`) / Case 2 (raw pointer → bridge) | **PORT WORK** | brief (Construct) + team |
 | Delete custom `compute_program_hash` (→ default) | **PORT WORK** | brief (Construct) + team |
 | Notable constructs — aliased CB / borrowed-mem DFB / dynamic TA (confusing); non-zero sem init (deprecated-but-fine) | **FYI-P** | brief (Watch-for) + team |
 | Fake CB (address-only; no producer + consumer) — port applies the workaround | **FYI-P** | brief (Watch-for) + team |
 | Cross-op / shared-kernel flags | **FYI-P** | brief (Watch-for) + team |
 | RTA varargs | **FYI-P** | brief (Watch-for) + team |
-| TensorAccessor convertibility (Case 2: convertible vs exotic) | **FYI-U** | team only |
 | Out-of-directory coupling & donor shape analysis | **FYI-U** | team only |
 | Tensor-parameter relaxation candidates (fallible) | **FYI-U** | team only |
 | Incidental code anomalies — dead RTAs, dead-but-hashed attributes, suspicious constants | **FYI-U** | team only |
@@ -161,12 +160,9 @@ If the op uses something *not listed* in Appendix A and you are uncertain of its
 
 Every tensor a kernel reads must reach Metal 2.0 through the typed binding channel (`TensorParameter` / `TensorBinding`). This subject inventories, **per binding**, how the legacy op accesses each tensor and classifies the port work into one of two cases. Both cases are **PORT WORK** — the porter acts on them during the port; neither gates. (This subject merges what earlier versions of the audit split across a "TensorAccessor usage" check and a separate "TensorAccessor bypass" check: they detect the same population — tensors not cleanly on `TensorAccessor` — so they are one subject now.)
 
-**Why this matters.** Two legacy shapes need port-time attention:
+**Why this matters.** The legacy hazard is a tensor base address that reaches the kernel through an RTA/CRTA. Under TTNN's fast-path-cache binding-injection model, the framework patches the typed-binding channel on cache hit but leaves RTAs untouched — so a buffer address routed through an RTA stays at whatever value the cache-populating call wrote, and on later cache hits with new tensor storage of the same shape the kernel reads the *original* buffer. No assertion fires; just wrong numerics, only on cache hits with non-identical storage. Pre–Metal 2.0 this was a style concern (*"yuck, raw pointers"*); the fast-path change made it silently wrong. The port replaces that RTA-smuggled address with a typed `TensorParameter` binding (which *does* refresh) — regardless of what the kernel then does with the base pointer (the two cases below), and including kernels that use no `TensorAccessor` at all (older addr-gen idioms, hand-rolled NoC walks).
 
-- A kernel that reads tensor memory *without* `TensorAccessor` at all (older addr-gen idioms, hand-rolled NoC walks).
-- A binding whose host code passes a `Buffer*` base address through a `uint32` RTA and does address arithmetic on it kernel-side, bypassing the binding mechanism. Under TTNN's fast-path-cache binding-injection model, the framework patches the typed-binding channel on cache hit but leaves RTAs untouched — so a buffer address routed through an RTA stays at whatever value the cache-populating call wrote, and on later cache hits with new tensor storage of the same shape the kernel reads the *original* buffer. No assertion fires; just wrong numerics, only on cache hits with non-identical storage. Pre–Metal 2.0 this was a style concern (*"yuck, raw pointers"*); the fast-path change made it silently wrong.
-
-Both shapes resolve **at port time** — neither waits for a framework feature.
+This resolves **at port time** — it waits for no framework feature, with one exception: a raw-pointer (Case 2) binding inside a **compute** kernel, which is blocked pending the compute-kernel `TensorBinding` fix (see the compute-kernel callout under *The two cases*).
 
 **Scope.** Audit only kernels that actually touch tensor memory. **Compute kernels that only consume from / produce to circular buffers are out of scope** — they read CB pointers, not tensor memory; the tensor read happens upstream in a dataflow kernel.
 
@@ -174,25 +170,23 @@ Both shapes resolve **at port time** — neither waits for a framework feature.
 
 **But "clean" requires a real producer *and* consumer.** A borrowed-memory CB is only a genuine DFB if something produces into it and something consumes it — a sharded reader's fake-push satisfying a waiting compute consumer is the canonical legit case. **Litmus: does the CB have a producer *and* a consumer?** (The same core may be both.) If nothing produces into the CB and it is merely read by base pointer — no FIFO anyone waits on — it is a **fake CB**, *not* a clean borrowed-memory DFB. A fake CB cannot be expressed as a Metal 2.0 DFB (the spec validator requires ≥1 producer and ≥1 consumer), so the port resolves it with the sanctioned **fake-CB workaround** (see the porting recipe). This does **not** gate — the workaround keeps the port unblocked — but **report it as a heads-up (FYI-P)** at the **(CB, endpoint)** edge (the same CB can be a real LLK operand on one binding and address-only on another). The recip-LUT shape (resident input, read by raw pointer, no producer) is the trap this catches. If a kernel involves sharded code paths or reads from a CB rather than via `TensorAccessor`, scan the Dynamic CircularBuffer rule for the same code path before finalizing.
 
-**The two cases.** For each `TensorParameter` the op declares (or would declare in the port), classify:
+**The two cases.** For each `TensorParameter` the op declares (or would declare in the port), classify by **what the kernel does with the tensor's base pointer**. In *both* cases the legacy host smuggles `buffer()->address()` in through an RTA/CRTA — the distinction is purely what the kernel does with that raw pointer on the device side, not whether one exists. A mechanical observation, not a judgment call:
 
-- **clean** — already uses `TensorAccessor` end-to-end (host-side `TensorAccessorArgs<N>()` plumbing, device-side `TensorAccessor(args, addr)`), or is a borrowed-memory DFB read (causal-link gate). Ready for the port; no work item.
-- **Case 1 — re-express** (the common case). The binding doesn't cleanly use `TensorAccessor` — either no `TensorAccessor` at all, or a buffer-address-as-RTA bypass — but the access pattern is page-by-page or otherwise iteratable. **Port work:** re-express the binding via `TensorParameter` / `TensorBinding`; the kernel builds `TensorAccessor(ta::name)`, and the legacy `TensorAccessorArgs` dance and buffer-address RTA both disappear. No user judgment required; the resolution path is clear.
-- **Case 2 — bridge** (the rare case). The access pattern genuinely cannot be expressed via `TensorAccessor` — exotic NoC walks, sub-page access, address arithmetic the iterators don't support. **Port work:** bind the tensor as a `TensorParameter` / `TensorBinding`, pull the base pointer kernel-side via the sanctioned `TensorAccessor::get_bank_base_address` bridge, and leave the existing address arithmetic in place. The binding still flows through the typed channel — the binding-injection infra sees it — only the base pointer is extracted. A buffer-address RTA is *not* an acceptable substitute for the bridge.
+- **clean** — a borrowed-memory DFB read (the causal-link gate above). The DFB *is* the tensor access; the port handles it via `DataflowBufferSpec::borrowed_from`. Neither Case 1 nor Case 2 — no work item here.
+- **Case 1 — via `TensorAccessor`** (the common case). The kernel feeds that base address into a `TensorAccessor` constructor (`TensorAccessor(args, addr)`) and does all its memory access *through* the accessor (`accessor.get_noc_addr(page)` and friends). **Port work:** express the binding as a `TensorParameter` / `TensorBinding`; the kernel builds `TensorAccessor(ta::name)` instead, and the legacy address-via-RTA plus its `TensorAccessorArgs` plumbing both disappear. Mechanical, low-risk.
+- **Case 2 — raw pointer.** The kernel uses that base address *directly* — explicit address arithmetic and hand-rolled NoC calls, never constructing a `TensorAccessor` from it. **Port work:** express the binding as a `TensorParameter` / `TensorBinding` too (the address never stays on an RTA), but the kernel pulls the base via the sanctioned `TensorAccessor::get_bank_base_address` bridge and **keeps its existing raw arithmetic unchanged**. We do **not** rewrite raw access into `TensorAccessor` iteration — that conversion is deliberately out of scope (too high-risk for a port). A buffer-address RTA is *not* an acceptable substitute for the bridge.
 
-  **User judgment required — do not self-classify into Case 2.** AI agents tend to misclassify Case 1 (kernel laziness or pre-`TensorAccessor` cruft) as Case 2. Assume Case 1 until the user confirms the pattern is genuinely exotic. When you believe a binding is Case 2, report it and surface this rationale to the user, **verbatim**:
-
-  > The use of `TensorAccessor` is an ergonomic choice on Gen1 architectures. It has meaningful performance implications on Gen2 architectures. Ideally, `TensorAccessor` should be updated to support the required iteration pattern; consider filing an issue requesting that support.
+  > ⚠ **Case 2 in a *compute* kernel is currently blocked.** `get_bank_base_address` lives on `TensorAccessor`, which a compute (TRISC) kernel cannot bind today — so a compute kernel needing a raw base address has no bridge. Such a binding **gates the port**: report it and stop, routing it to the compute-kernel `TensorBinding` fix. Do *not* fall back to smuggling the address through a CRTA/RTA — even from an op-owned tensor, where it would be strictly correct, that path is closed (see [recipe rule 5](port_op_to_metal2_recipe.md#kernel-side-whitelist)).
 
 **Detection — host side.** Any site where `buffer->address()` (or `->address()` / `(*buffer).address()` / `tensor.buffer()->address()`) flows into a runtime-args context. Common shapes:
 
 - **Descriptor form** (the in-scope case for `ProgramDescriptor`-API ops): `KernelDescriptor::runtime_args` or `runtime_common_args` initializers containing the address expression directly. E.g. `kd.runtime_args = {{core_coord, {input_buffer->address(), num_pages}}};`.
 - **Imperative form** (only in ProgramDescriptor-prereq RED ops, but record matches since the eventual port still needs them): `SetRuntimeArgs` / `SetCommonRuntimeArgs` argument lists containing the address expression.
 - **Helper-function form**: a function takes a `Buffer*` / `Buffer&` and injects its address into an arg vector (`args.push_back(...)`, in-place vector init, named accumulator). Read the helper body — it often hides the bypass.
-- **`Buffer*`-binding form** (descriptor API): the factory pushes a `Buffer*` (the pointer object itself, *not* `->address()`) into `KernelDescriptor::RTArgList` / `emplace_runtime_args`. The framework auto-registers these as `BufferBinding`s and **patches them on cache hits**, so this shape is *correct-on-cache-hit today* — it is **not** the silent-wrong hazard. (It's the framework's interim hack for plugging the stale-pointer hole in `ProgramDescriptor` ports; the Metal 2.0 typed binding supersedes it.) **Still enumerate it** — the kernel consumes a raw `uint32_t` base, so it is **Case 1** (re-express via `TensorParameter`) — but record it as routine port work, not a correctness hazard. Enumerating *all* pointer arguments is the point; just don't over-state the urgency of this one.
-- **CTA-baked-address form**: the factory bakes `buffer->address()` into a **compile-time** arg (not an RTA) that a kernel consumes as a `TensorAccessor` base address (often via an NTTP). Like the `Buffer*` form, this is **not** the silent-wrong hazard — a compile-time arg forces a recompile per address, so a stale base can't survive a cache hit — but it **is** a pointer argument to enumerate: classify it **Case 1** (re-express via `TensorParameter`; the CTA-baked address and the kernel-side NTTP base both disappear). Detect it by a `buffer->address()` / `.address()` expression flowing into the factory's *compile-time*-args list rather than its runtime-args list.
+- **`Buffer*`-binding form** (descriptor API): the factory pushes a `Buffer*` (the pointer object itself, *not* `->address()`) into `KernelDescriptor::RTArgList` / `emplace_runtime_args`. The framework auto-registers these as `BufferBinding`s and **patches them on cache hits**, so this shape is *correct-on-cache-hit today* — it is **not** the silent-wrong hazard. (It's the framework's interim hack for plugging the stale-pointer hole in `ProgramDescriptor` ports; the Metal 2.0 typed binding supersedes it.) **Still enumerate it** — the kernel consumes a raw `uint32_t` base, so it is **Case 2** (raw pointer → bind as `TensorParameter`, bridge via `get_bank_base_address`) — but record it as routine port work, not a correctness hazard (the framework patches it on cache hits today). Enumerating *all* pointer arguments is the point; just don't over-state the urgency of this one.
+- **CTA-baked-address form**: the factory bakes `buffer->address()` into a **compile-time** arg (not an RTA) that a kernel consumes as a `TensorAccessor` base address (often via an NTTP). Like the `Buffer*` form, this is **not** the silent-wrong hazard — a compile-time arg forces a recompile per address, so a stale base can't survive a cache hit — but it **is** a pointer argument to enumerate: classify it **Case 1** (via `TensorAccessor` — express it as a `TensorParameter`, and the CTA-baked address + kernel-side NTTP base both disappear). Detect it by a `buffer->address()` / `.address()` expression flowing into the factory's *compile-time*-args list rather than its runtime-args list.
 
-For each `TensorParameter`, cross-check: does the same buffer also appear in an RTA address argument? If yes, the binding is at least Case 1 (Case 2 only on confirmed-exotic).
+For each `TensorParameter`, cross-check: does the same buffer also appear in an RTA address argument? If yes, that buffer is consumed as a raw pointer → **Case 2** (bind as `TensorParameter`, bridge via `get_bank_base_address`).
 
 **Detection — kernel side.**
 
@@ -204,13 +198,11 @@ For each `TensorParameter`, cross-check: does the same buffer also appear in an 
 **False-positive guards — do NOT flag.**
 
 - `get_arg_val<uint32_t>` for shape / count / index / control values. Those uint32s aren't addresses.
-- `accessor.get_noc_addr(page_id)` outputs — that's the supported `TensorAccessor` pattern (clean).
+- `accessor.get_noc_addr(page_id)` outputs — that's the `TensorAccessor` path (Case 1), not a raw-pointer Case 2; don't flag it.
 - Host-side `set_globally_allocated_address(buffer)` — the borrowed-memory pattern, covered by the Dynamic CircularBuffer feature entry (clean via the causal-link gate).
 - Kernel reading from a borrowed-memory CB via `cb.get_read_ptr()` — clean; the causal-link gate applies.
 
 **Granularity — per binding, not per op.** An op may have multiple tensor bindings, some clean and some needing work. Report per binding — a single Case-1 or Case-2 binding fires this subject even when the op's primary I/O is via `TensorAccessor`. **Classification can also vary per factory within one bundled op** — the *same* `TensorParameter` may be clean (borrowed-memory DFB) in one factory and Case 1 in another (e.g. a sharded vs. an interleaved factory). When that happens, record the per-factory split via the report's Per-DeviceOperation attribution rather than forcing one flat verdict for the binding.
-
-**Team-only annotation (FYI-U).** For each Case-2 binding, annotate convertible-vs-exotic for the team record: whether the pattern is *genuinely* exotic (no `TensorAccessor` iteration exists for it) or merely awkward-but-convertible (a candidate for a future `TensorAccessor` enhancement / issue). This finer judgment never reaches the porter brief — the porter already has the resolution from the Case-1/Case-2 classification.
 
 **Op-level roll-up:** `✓ clean` (every binding clean) / `⚠ port work` (one or more Case-1 / Case-2 bindings), with the per-binding inventory in the report.
 
@@ -399,7 +391,7 @@ Opens with a **status summary that mirrors the cross-team readiness spreadsheet 
 
 ## Port-work summary  *(mirrors the brief)*
 
-- **Tensor bindings** (per binding): `<name>` Case 1 (re-express) / Case 2 (bridge via `get_bank_base_address`) / clean.
+- **Tensor bindings** (per binding): `<name>` Case 1 (`TensorAccessor`) / Case 2 (raw pointer → bridge; **blocked in a compute kernel**) / clean (borrowed-DFB).
 - **Custom hash:** delete custom `compute_program_hash` → default (sanctioned exception) | none.
 
 ## Heads-ups  *(mirrors the brief)*
@@ -412,7 +404,6 @@ Opens with a **status summary that mirrors the cross-team readiness spreadsheet 
 
 ## Team-only
 
-- **TensorAccessor convertibility** (per Case-2 binding): convertible / genuinely exotic.
 - **Out-of-directory coupling & donor shape:** the full by-shape inventory (op-level roll-up, summary table, per-call detail, borrowed kernel files).
 - **Relaxation candidates** (mined from the custom hash before deletion): **FALLIBLE — candidates to verify**, default strict.
 - **TTNN factory analysis:** the six-question answers — op-owned tensors, MeshWorkload need (genuine vs. op-owned-tensor artifact), pybind `create_descriptor`, other risky pybind, custom hash, custom `override_runtime_arguments` — with `file:line` evidence. Informs the port's TTNN ProgramFactory wiring; does not gate.
@@ -462,8 +453,8 @@ These facts feed the port's TTNN ProgramFactory wiring (→ `port_op_to_metal2_t
 
 **Tensor bindings** (per binding):
 
-- `<name>` — **Case 1** → re-express via `TensorParameter` / `TensorBinding` (kernel builds `TensorAccessor(ta::name)`).
-- `<name>` — **Case 2** → bridge: bind the tensor, pull the base via `get_bank_base_address`, raw walk unchanged.
+- `<name>` — **Case 1** (via `TensorAccessor`) → express as `TensorParameter` / `TensorBinding`; kernel uses `TensorAccessor(ta::name)`.
+- `<name>` — **Case 2** (raw pointer) → bind the tensor, pull the base via `get_bank_base_address`, raw walk unchanged. *(Compute kernel → blocked: fail the port pending the compute-kernel `TensorBinding` fix.)*
 
 **Custom hash:** <delete custom `compute_program_hash` → default (sanctioned exception) | none>
 
