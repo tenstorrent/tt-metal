@@ -13,11 +13,14 @@ from .attention import (
     build_causal_mask,
     build_hunyuan_mixed_mask,
 )
-from .ref_vae_decoder import (
+from .vae import (
     Decoder,
     decode_latent,
     load_decoder,
     tensor_to_preview_image,
+    Encoder,
+    encode_pixels,
+    load_encoder,
 )
 
 __all__ = [
@@ -35,4 +38,7 @@ __all__ = [
     "decode_latent",
     "load_decoder",
     "tensor_to_preview_image",
+    "Encoder",
+    "encode_pixels",
+    "load_encoder",
 ]
