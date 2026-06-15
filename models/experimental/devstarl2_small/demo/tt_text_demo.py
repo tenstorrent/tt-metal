@@ -22,10 +22,11 @@ from transformers.models.ministral3.configuration_ministral3 import Ministral3Co
 from transformers.models.mistral3.modeling_mistral3 import Mistral3Model
 
 import ttnn
-from models.common.sampling import SamplingGenerator, SamplingParams, format_sampling_params
+from models.common.sampling import SamplingParams, format_sampling_params
 from models.common.utility_functions import comp_pcc
 from models.experimental.devstarl2_small.devstral_utils import (
     DEFAULT_MODEL_ID,
+    DevstralSampling1DAdapter,
     apply_devstral_hf_trust_patches,
     resolve_rope_parameters,
     apply_fp8_dequantize_compat,
@@ -51,6 +52,7 @@ from models.experimental.devstarl2_small.devstral_utils import (
     tt_sampling_output_token_id,
     tt_update_decode_input_buffers,
     tt_warmup_decode_trace_path,
+    tt_warmup_prefill_lm_head_sampling,
 )
 from models.experimental.devstarl2_small.tt.pipeline.tt_ministral3_model import TtMinistral3Model
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -221,7 +223,7 @@ def main(argv: list[str] | None = None):
     ref_do_sample = bool(DEFAULT_GENERATE_KWARGS["do_sample"])
 
     parser = argparse.ArgumentParser(
-        description="Devstral-2 on TT: Ministral3 prefill + LMHead; on-device SamplingGenerator when supported, else CPU logits sampling."
+        description="Devstral-2 on TT: Ministral3 prefill + LMHead; on-device Sampling1D when supported, else CPU logits sampling."
     )
     parser.add_argument("--model-id", default=DEFAULT_MODEL_ID, help="HF repo id (also set HF_MODEL).")
     parser.add_argument(
@@ -291,7 +293,7 @@ def main(argv: list[str] | None = None):
     parser.add_argument(
         "--cpu-sampling",
         action="store_true",
-        help="Force PyTorch softmax/argmax on host from TT logits (disables on-device SamplingGenerator).",
+        help="Force PyTorch softmax/argmax on host from TT logits (disables on-device Sampling1D).",
     )
     parser.add_argument(
         "--messages-json",
@@ -475,15 +477,15 @@ def main(argv: list[str] | None = None):
                 "Vocab size / mesh splits exceed on-device sampling limit (64k per split); using CPU softmax on logits."
             )
 
-        sampling: SamplingGenerator | None = None
+        sampling: DevstralSampling1DAdapter | None = None
         sampling_empty_slots: list[int] | None = None
         if use_device_sampling:
-            sampling = SamplingGenerator(
+            sampling = DevstralSampling1DAdapter(
                 args=model_args,
                 mesh_device=mesh_device,
                 tt_ccl=shared_tt_ccl,
             )
-            sampling_empty_slots = list(range(sampling.tt_sampling.max_batch_size))
+            sampling_empty_slots = list(range(sampling.max_batch_size))
             seed_for_params = args.seed if args.seed is not None else None
             if not prefer_stochastic_sampling:
                 sampling_in = SamplingParams(temperature=0.0, top_k=32, top_p=1.0, seed=seed_for_params)
@@ -496,7 +498,6 @@ def main(argv: list[str] | None = None):
                 )
             formatted_sampling = format_sampling_params(sampling_in, len(sampling_empty_slots))
             sampling.reset_sampling_params(formatted_sampling)
-            sampling.seed_manager.reset_seed(formatted_sampling.seed, sampling_empty_slots)
 
         input_ids = input_ids.to(hf_inner.get_input_embeddings().weight.device)
         seq_len_lm = int(input_ids.shape[1])
@@ -610,7 +611,6 @@ def main(argv: list[str] | None = None):
                     tok_slot = last_token_index % 32
                     if sampling is not None:
                         assert tt_lm_head is not None
-                        sampling.seed_manager.get_new_values()
                         t0 = time.perf_counter()
                         logits_tt = tt_lm_head_logits_block(tt_out, last_token_index, model_args, tt_lm_head)
                         stats["lmhead_s"] += time.perf_counter() - t0
@@ -644,10 +644,51 @@ def main(argv: list[str] | None = None):
                     return out
 
                 decode_trace_ctx = None
+                decode_buffers = None
                 eos_set = set(eos_ids)
                 try:
-                    run_t0 = time.perf_counter()
+                    if use_paged:
+                        assert page_table_tt is not None and page_table_host is not None
+                        assert paged_attention_config is not None
+                        warm_merged_bf = hf_inner.get_input_embeddings()(input_ids).to(torch.bfloat16)
+                        warm_out, warm_sample_idx = _tt_prefill_paged_chunked(
+                            warm_merged_bf,
+                            pad_row,
+                            mesh_device,
+                            tt_model,
+                            seq_len_lm,
+                            chunk_size,
+                            paged_attention_config.block_size,
+                            page_table_host,
+                            page_table_tt,
+                        )
+                    else:
+                        warm_out = tt_forward_prefill_from_device_ids(
+                            ids_tt_gen, gen_sl, pad_token_id, mesh_device, tt_model, model_args
+                        )
+                        warm_sample_idx = gen_sl - 1
+                    tt_warmup_prefill_lm_head_sampling(
+                        warm_out,
+                        warm_sample_idx,
+                        model_args,
+                        None if args.lm_head_cpu else tt_lm_head,
+                        sampling=sampling,
+                    )
 
+                    if args.max_new_tokens > 1:
+                        decode_buffers = tt_alloc_decode_input_buffers(mesh_device)
+                        tt_update_decode_input_buffers(mesh_device, decode_buffers, 0, gen_sl)
+                        tt_warmup_decode_trace_path(
+                            mesh_device,
+                            tt_model,
+                            model_args,
+                            decode_buffers,
+                            tt_lm_head=None if args.lm_head_cpu else tt_lm_head,
+                            sampling=sampling,
+                            page_table=page_table_tt,
+                        )
+
+                    run_t0 = time.perf_counter()
                     t0 = time.perf_counter()
                     if use_paged:
                         assert page_table_tt is not None and page_table_host is not None
@@ -685,16 +726,9 @@ def main(argv: list[str] | None = None):
                         generated_token_ids.append(next_scalar)
                         gen_sl += 1
 
-                        decode_buffers = tt_alloc_decode_input_buffers(mesh_device)
+                        if decode_buffers is None:
+                            decode_buffers = tt_alloc_decode_input_buffers(mesh_device)
                         tt_update_decode_input_buffers(mesh_device, decode_buffers, int(next_scalar), gen_sl - 1)
-                        tt_warmup_decode_trace_path(
-                            mesh_device,
-                            tt_model,
-                            model_args,
-                            decode_buffers,
-                            tt_lm_head=None if args.lm_head_cpu else tt_lm_head,
-                            page_table=page_table_tt,
-                        )
                         t_capture = time.perf_counter()
                         decode_trace_ctx = tt_capture_decode_trace(
                             mesh_device,
@@ -713,9 +747,6 @@ def main(argv: list[str] | None = None):
                                 break
 
                             decode_pos = gen_sl - 1  # absolute position of the just-appended token
-                            if sampling is not None:
-                                sampling.seed_manager.get_new_values()
-
                             step_t0 = time.perf_counter()
                             t0 = time.perf_counter()
                             tt_update_decode_input_buffers(
@@ -787,7 +818,7 @@ def main(argv: list[str] | None = None):
                         f"  {'first-token sample':<22} {stats['first_sample_s'] * 1000:>10.2f} ms  {_pct(stats['first_sample_s']):>5.1f}%"
                     )
                     print(
-                        f"  {'trace capture (1x)':<22} {stats['trace_capture_s'] * 1000:>10.2f} ms  {_pct(stats['trace_capture_s']):>5.1f}%   (warmup + decode + sampling)"
+                        f"  {'trace capture (1x)':<22} {stats['trace_capture_s'] * 1000:>10.2f} ms  {_pct(stats['trace_capture_s']):>5.1f}%   (decode + sampling)"
                     )
                     print(
                         f"  {'traced decode submit':<22} {stats['decode_s'] * 1000:>10.2f} ms  {_pct(stats['decode_s']):>5.1f}%"
@@ -817,6 +848,10 @@ def main(argv: list[str] | None = None):
                 finally:
                     if decode_trace_ctx is not None:
                         tt_release_decode_trace(mesh_device, decode_trace_ctx)
+                    elif decode_buffers is not None:
+                        ttnn.deallocate(decode_buffers.token_ids)
+                        ttnn.deallocate(decode_buffers.pos_uint32)
+                        ttnn.deallocate(decode_buffers.pos_int32)
                     if page_table_tt is not None:
                         ttnn.deallocate(page_table_tt)
                     ttnn.deallocate(ids_tt_gen)

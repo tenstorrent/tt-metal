@@ -12,7 +12,7 @@ import torch.nn.functional as F
 from transformers.models.mistral3.modeling_mistral3 import Mistral3Model
 
 import ttnn
-from models.common.sampling import SamplingGenerator
+from models.common.modules.sampling.sampling_1d import Sampling1D
 from models.common.utility_functions import nearest_32
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.lm_head import LMHead
@@ -431,7 +431,7 @@ def tt_lm_head_logits_block(
     model_args: ModelArgs,
     tt_lm_head: LMHead,
 ) -> ttnn.Tensor:
-    """TT LM head on the 32-row block containing ``last_token_index``; returns sharded logits (``SamplingGenerator`` input)."""
+    """TT LM head on the 32-row block containing ``last_token_index``; returns sharded logits for Sampling1D."""
     get_last = (last_token_index // 32) * 32
     h_block = ttnn.slice(
         tt_hidden_prefill_out,
@@ -473,15 +473,145 @@ def tt_lm_head_logits_last_token(
 
 
 def devstral_supports_on_device_sampling(model_args: ModelArgs, mesh_device) -> bool:
-    """True if vocab shard ≤64k per split (mirrors model.py TTSampling initialization)."""
-    sampling_splits = model_args.num_devices if list(mesh_device.shape) != [1, 1] else 2
-    return model_args.vocab_size // sampling_splits <= 64 * 1024
+    """True when Sampling1D can keep Devstral token selection on device for this 1D mesh."""
+    mesh_shape = list(mesh_device.shape)
+    if min(mesh_shape) > 1:
+        return False
+    vocab_size = int(getattr(model_args, "padded_vocab_size", None) or model_args.vocab_size)
+    sampling_splits = 2 if mesh_shape == [1, 1] else max(mesh_shape)
+    return vocab_size % sampling_splits == 0 and vocab_size // sampling_splits <= 64 * 1024
+
+
+class DevstralSampling1DAdapter:
+    """Tiny trace/sample wrapper around TTTv2 Sampling1D for the Devstral demos."""
+
+    def __init__(self, *, args: ModelArgs, mesh_device, tt_ccl, cq_id: int = 0):
+        self.mesh_device = mesh_device
+        self.cq_id = cq_id
+        self.max_batch_size = 32
+        self.sampler = Sampling1D(
+            vocab_size=int(getattr(args, "padded_vocab_size", None) or args.vocab_size),
+            mesh_device=mesh_device,
+            tt_ccl=tt_ccl,
+            max_batch_size=self.max_batch_size,
+            max_top_k=getattr(args, "max_top_k", 32),
+            sub_core_grids=getattr(args, "sub_core_grids", None),
+            sub_core_grid_topk=getattr(args, "sub_core_grid_topk", None),
+            start_core=getattr(args, "start_core", ttnn.CoreCoord(0, 0)),
+            sampling_memory_config=getattr(args, "model_config", {}).get(
+                "DECODE_SAMPLING_INPUT_MEMCFG", ttnn.DRAM_MEMORY_CONFIG
+            ),
+            pad_to_power_of_2=getattr(args, "pad_logits_to_power_of_2", False),
+        )
+        self._kpt = None
+        self._trace_id = None
+        self._trace_input = None
+        self._trace_output = None
+        self._trace_out_tok = None
+
+    def reset_sampling_params(self, sampling_params):
+        self.reset_trace()
+        self._release_kpt()
+        mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
+        self._kpt = (
+            ttnn.from_torch(
+                torch.tensor(list(sampling_params.top_k)[: self.max_batch_size], dtype=torch.int32),
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=mapper,
+            ),
+            ttnn.from_torch(
+                torch.tensor(list(sampling_params.top_p)[: self.max_batch_size], dtype=torch.float32),
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=mapper,
+            ),
+            ttnn.from_torch(
+                torch.tensor(list(sampling_params.temperature)[: self.max_batch_size], dtype=torch.float32),
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=mapper,
+            ),
+        )
+
+    def _release_kpt(self):
+        if self._kpt is None:
+            return
+        for tensor in self._kpt:
+            ttnn.deallocate(tensor)
+        self._kpt = None
+
+    def _forward(self, logits, tt_out_tok=None):
+        if self._kpt is None:
+            raise RuntimeError("Call reset_sampling_params before sample().")
+        k, p, temp = self._kpt
+        return self.sampler.decode_forward(logits, k=k, p=p, temp=temp, tt_out_tok=tt_out_tok)
+
+    def capture_trace(self, logits, *, tt_out_tok=None, skip_precompile=False):
+        if not skip_precompile:
+            self._forward(logits, tt_out_tok=tt_out_tok)
+            ttnn.synchronize_device(self.mesh_device)
+        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
+        output = self._forward(logits, tt_out_tok=tt_out_tok)
+        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=self.cq_id)
+        ttnn.synchronize_device(self.mesh_device)
+        self._trace_id = trace_id
+        self._trace_input = logits
+        self._trace_output = output
+        self._trace_out_tok = tt_out_tok
+        return output
+
+    def sample(self, logits, *, enable_trace=True, tt_out_tok=None, skip_precompile=False):
+        if not enable_trace:
+            return self._forward(logits, tt_out_tok=tt_out_tok)
+        if self._trace_id is None:
+            return self.capture_trace(logits, tt_out_tok=tt_out_tok, skip_precompile=skip_precompile)
+        if logits is not self._trace_input or tt_out_tok is not self._trace_out_tok:
+            raise ValueError("Sampling1D trace input/output tensors changed; call reset_trace() before recapturing.")
+        ttnn.execute_trace(self.mesh_device, self._trace_id, cq_id=self.cq_id, blocking=False)
+        return self._trace_output
+
+    def reset_trace(self):
+        if self._trace_id is not None:
+            ttnn.release_trace(self.mesh_device, self._trace_id)
+        self._trace_id = None
+        self._trace_input = None
+        self._trace_output = None
+        self._trace_out_tok = None
 
 
 def tt_sampling_output_token_id(tt_tokens: ttnn.Tensor, batch_slot: int) -> int:
-    """Read global token id for one batch row from ``SamplingGenerator.sample`` output (mirrors ``Generator`` prefill path)."""
+    """Read global token id for one batch row from Sampling1D output."""
     flat = ttnn.to_torch(ttnn.get_device_tensors(tt_tokens)[0]).reshape(-1)
     return int(flat[batch_slot].item())
+
+
+def tt_warmup_prefill_lm_head_sampling(
+    tt_out: ttnn.Tensor,
+    last_token_index: int,
+    model_args: ModelArgs,
+    tt_lm_head: Optional[LMHead],
+    sampling: Optional[DevstralSampling1DAdapter] = None,
+) -> None:
+    """JIT prefill LM-head/sampling kernels from a prefill output, then release warmup tensors."""
+    try:
+        if tt_lm_head is None:
+            return
+        logits = tt_lm_head_logits_block(tt_out, last_token_index, model_args, tt_lm_head)
+        try:
+            if sampling is not None:
+                sample_result = sampling.sample(logits, enable_trace=False)
+                sample_tensors = sample_result if isinstance(sample_result, tuple) else (sample_result,)
+                for tensor in sample_tensors:
+                    if tensor is not None:
+                        ttnn.deallocate(tensor)
+        finally:
+            ttnn.deallocate(logits)
+    finally:
+        ttnn.deallocate(tt_out)
 
 
 @dataclass
@@ -502,7 +632,7 @@ class TtDecodeTraceContext:
     output_tokens: Optional[ttnn.Tensor] = None
     output_logits: Optional[ttnn.Tensor] = None
     output_hidden: Optional[ttnn.Tensor] = None
-    sampling: Optional[SamplingGenerator] = None
+    sampling: Optional[DevstralSampling1DAdapter] = None
 
 
 # Reused host staging for decode buffer updates (avoids per-step torch alloc).
@@ -584,16 +714,39 @@ def tt_warmup_decode_trace_path(
     buffers: TtDecodeInputBuffers,
     *,
     tt_lm_head: Optional[LMHead] = None,
+    sampling: Optional[DevstralSampling1DAdapter] = None,
+    sampling_output: Optional[ttnn.Tensor] = None,
     page_table: Optional[ttnn.Tensor] = None,
 ) -> None:
-    """Run the exact decode/LM-head path once outside trace capture to JIT compile kernels."""
+    """Run the exact decode/LM-head/sampling path once outside trace capture to JIT compile kernels."""
+    warm_sampling_output = sampling_output
+    owns_sampling_output = False
+    if sampling is not None and tt_lm_head is not None and warm_sampling_output is None:
+        warm_sampling_output = ttnn.from_torch(
+            torch.zeros((1, 1, 1, int(sampling.max_batch_size)), dtype=torch.int32),
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        owns_sampling_output = True
+
     warm_hidden = tt_lm.forward_decode_from_device_tensors(
         buffers.token_ids, buffers.pos_uint32, buffers.pos_int32, page_table=page_table
     )
     if tt_lm_head is not None:
         warm_logits = _tt_decode_lm_head_logits(warm_hidden, model_args, tt_lm_head)
+        if sampling is not None:
+            warm_sample = sampling.sample(warm_logits, enable_trace=False, tt_out_tok=warm_sampling_output)
+            if isinstance(warm_sample, tuple):
+                _, warm_log_probs = warm_sample
+                if warm_log_probs is not None:
+                    ttnn.deallocate(warm_log_probs)
         ttnn.deallocate(warm_logits)
     ttnn.deallocate(warm_hidden)
+    if owns_sampling_output:
+        ttnn.deallocate(warm_sampling_output)
     ttnn.synchronize_device(mesh_device)
 
 
@@ -604,7 +757,7 @@ def tt_capture_decode_trace(
     buffers: TtDecodeInputBuffers,
     *,
     tt_lm_head: Optional[LMHead] = None,
-    sampling: Optional[SamplingGenerator] = None,
+    sampling: Optional[DevstralSampling1DAdapter] = None,
     page_table: Optional[ttnn.Tensor] = None,
     prewarmed: bool = False,
 ) -> TtDecodeTraceContext:
@@ -615,7 +768,7 @@ def tt_capture_decode_trace(
     """
     tokens_out_prealloc = None
     if sampling is not None and tt_lm_head is not None:
-        sampling_batch = int(sampling.tt_sampling.max_batch_size)
+        sampling_batch = int(sampling.max_batch_size)
         tokens_out_prealloc = ttnn.from_torch(
             torch.zeros((1, 1, 1, sampling_batch), dtype=torch.int32),
             device=mesh_device,
@@ -632,6 +785,8 @@ def tt_capture_decode_trace(
             model_args,
             buffers,
             tt_lm_head=tt_lm_head,
+            sampling=sampling,
+            sampling_output=tokens_out_prealloc,
             page_table=page_table,
         )
 
@@ -649,7 +804,7 @@ def tt_capture_decode_trace(
     if sampling is None:
         return TtDecodeTraceContext(trace_id=trace_id, buffers=buffers, output_logits=logits)
 
-    sampling.capture_trace(logits, tt_out_tok=tokens_out_prealloc)
+    sampling.capture_trace(logits, tt_out_tok=tokens_out_prealloc, skip_precompile=True)
 
     return TtDecodeTraceContext(
         trace_id=trace_id,

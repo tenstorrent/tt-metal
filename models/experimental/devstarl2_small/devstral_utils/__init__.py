@@ -17,6 +17,7 @@ from models.experimental.devstarl2_small.devstral_utils.dram_sharded_matmul impo
 from models.experimental.devstarl2_small.devstral_utils.fp8_dequantize_compat import apply_fp8_dequantize_compat
 from models.experimental.devstarl2_small.devstral_utils.multimodal_demo_helpers import (
     DEFAULT_MODEL_ID,
+    DevstralSampling1DAdapter,
     TtDecodeInputBuffers,
     TtDecodeTraceContext,
     apply_devstral_hf_trust_patches,
@@ -55,6 +56,7 @@ from models.experimental.devstarl2_small.devstral_utils.multimodal_demo_helpers 
     tt_sequence_last_uint32_token_id,
     tt_update_decode_input_buffers,
     tt_warmup_decode_trace_path,
+    tt_warmup_prefill_lm_head_sampling,
 )
 from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import pixtral_vision_seq_chunk_len
 
@@ -68,6 +70,7 @@ __all__ = (
     "pad_n_for_dram_align",
     "pixtral_vision_seq_chunk_len",
     "DEFAULT_MODEL_ID",
+    "DevstralSampling1DAdapter",
     "TtDecodeInputBuffers",
     "TtDecodeTraceContext",
     "apply_devstral_hf_trust_patches",
@@ -107,6 +110,7 @@ __all__ = (
     "tt_sequence_last_uint32_token_id",
     "tt_update_decode_input_buffers",
     "tt_warmup_decode_trace_path",
+    "tt_warmup_prefill_lm_head_sampling",
     "width_sharded_l1_linear_reuse_multicast",
     "width_sharded_l1_memcfg",
 )

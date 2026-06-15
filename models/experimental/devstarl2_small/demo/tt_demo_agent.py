@@ -26,10 +26,11 @@ from transformers import AutoProcessor, MistralCommonBackend
 from transformers.models.ministral3.configuration_ministral3 import Ministral3Config
 from transformers.models.mistral3.modeling_mistral3 import Mistral3Model
 
-from models.common.sampling import SamplingGenerator, SamplingParams, format_sampling_params
+from models.common.sampling import SamplingParams, format_sampling_params
 from models.experimental.devstarl2_small.demo import tt_image_demo as _mlp
 from models.experimental.devstarl2_small.devstral_utils import (
     DEFAULT_MODEL_ID,
+    DevstralSampling1DAdapter,
     TtDecodeTraceContext,
     apply_devstral_hf_trust_patches,
     apply_fp8_dequantize_compat,
@@ -428,7 +429,7 @@ class TtAgentRuntime:
     hf_inner: Mistral3Model
     tt_lm_head: Optional[LMHead]
     lm_head_weight_cpu: Optional[torch.Tensor]
-    sampling: Optional[SamplingGenerator]
+    sampling: Optional[DevstralSampling1DAdapter]
     sampling_empty_slots: Optional[List[int]]
     shared_tt_ccl: TT_CCL
     pad_token_id: int
@@ -691,15 +692,15 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
         ):
             print("Warning: using CPU softmax / multinomial on TT logits (on-device sampling unsupported).")
 
-        sampling: Optional[SamplingGenerator] = None
+        sampling: Optional[DevstralSampling1DAdapter] = None
         sampling_empty_slots: Optional[List[int]] = None
         if use_device_sampling:
-            sampling = SamplingGenerator(
+            sampling = DevstralSampling1DAdapter(
                 args=model_args,
                 mesh_device=mesh_device,
                 tt_ccl=shared_tt_ccl,
             )
-            sampling_empty_slots = list(range(sampling.tt_sampling.max_batch_size))
+            sampling_empty_slots = list(range(sampling.max_batch_size))
             seed_for_params = config.seed
             if not config.do_sample:
                 sampling_in = SamplingParams(temperature=0.0, top_k=32, top_p=float(config.top_p), seed=seed_for_params)
@@ -712,7 +713,6 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
                 )
             formatted_sampling = format_sampling_params(sampling_in, len(sampling_empty_slots))
             sampling.reset_sampling_params(formatted_sampling)
-            sampling.seed_manager.reset_seed(formatted_sampling.seed, sampling_empty_slots)
 
         return TtAgentRuntime(
             mesh_device=mesh_device,
@@ -754,6 +754,7 @@ def _ensure_decode_trace(rt: TtAgentRuntime, seed_token_id: int, seed_decode_pos
         rt.model_args,
         decode_buffers,
         tt_lm_head=None if rt.cfg.lm_head_cpu else rt.tt_lm_head,
+        sampling=rt.sampling,
     )
     rt.decode_trace_ctx = tt_capture_decode_trace(
         rt.mesh_device,
@@ -771,7 +772,6 @@ def _sample_from_prefill_out_tt_agent(rt: TtAgentRuntime, tt_out: ttnn.Tensor, l
     """Sample a single token id from the prefill hidden-states block at ``last_token_index``."""
     if rt.sampling is not None:
         assert rt.tt_lm_head is not None
-        rt.sampling.seed_manager.get_new_values()
         logits_tt = tt_lm_head_logits_block(tt_out, last_token_index, rt.model_args, rt.tt_lm_head)
         sample_result = rt.sampling.sample(logits_tt, enable_trace=False)
         tt_next = sample_result[0] if isinstance(sample_result, tuple) else sample_result
@@ -888,8 +888,6 @@ def generate_assistant_text_tt(rt: TtAgentRuntime, messages: List[Dict[str, str]
                 ctx = _ensure_decode_trace(rt, seed_token_id=next_scalar, seed_decode_pos=gen_sl - 1)
                 for _step in range(1, config.max_new_tokens):
                     decode_pos = gen_sl - 1
-                    if rt.sampling is not None:
-                        rt.sampling.seed_manager.get_new_values()
                     tt_update_decode_input_buffers(rt.mesh_device, ctx.buffers, int(next_scalar), decode_pos)
                     tt_execute_decode_trace(rt.mesh_device, ctx)
                     next_scalar = _sample_next_from_decode_trace(rt)
@@ -942,8 +940,6 @@ def generate_assistant_text_tt(rt: TtAgentRuntime, messages: List[Dict[str, str]
     ctx = _ensure_decode_trace(rt, seed_token_id=next_scalar, seed_decode_pos=int(current_ids.shape[1]) - 1)
     for _step in range(1, config.max_new_tokens):
         decode_pos = int(current_ids.shape[1]) - 1
-        if rt.sampling is not None:
-            rt.sampling.seed_manager.get_new_values()
         tt_update_decode_input_buffers(rt.mesh_device, ctx.buffers, int(next_scalar), decode_pos)
         tt_execute_decode_trace(rt.mesh_device, ctx)
         next_scalar = _sample_next_from_decode_trace(rt)
