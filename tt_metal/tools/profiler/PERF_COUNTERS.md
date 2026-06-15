@@ -114,13 +114,31 @@ keep the kernel hash stable.
 - Re-run `process_ops_logs` on the existing `generated/profiler/.logs` to
   iterate on post-processing without re-running on device.
 
+## NoC bytes per op
+
+When noc traces are captured (`--collect-noc-traces`) the post-process emits a
+`NOC BYTES FROM COUNTERS` column: Σ num_bytes over the op's cores, straight from
+the profiler's own `noc_trace*.json` — independent of tt-npe (so it populates on
+hosts without tt-npe built). BW % = bytes / (DEVICE FW DURATION × peak) is
+applied by the analysis layer with the part peak (`tools/tracy/noc_bandwidth.py`).
+Verified: an 8192² bf16 eltwise add reports exactly 402,653,184 bytes
+(2 reads + 1 write). Single-chip `--collect-noc-traces` works; the documented
+ethernet hang is fabric/multi-chip init only.
+
 ## Open items (not yet implemented)
 
-- **NoC/DRAM/ETH BW % folded into the per-zone row** from the on-device
-  `noc_status_counter` (Phase 3a) — interim source until the noc-trace ethernet
-  hang (Phase 3b) is root-caused on device.
-- **Per-RISC C++ fast post-process** carrying counters (Phase 2a) and a
-  **streaming/bounded-memory** Python path (Phase 2b) for mesh-scale OOM.
-- **Tracy GUI zone tooltips** (Phase 4) — a vendored-fork protocol change.
+- **Counters on the C++ fast post-process path (Phase 2a) — this is also the
+  Phase 2b OOM fix.** Verified: `load_device_perf_report` (the cpp path) already
+  streams row-by-row and is bounded (~ops×devices). The 140 GB OOM is the
+  *legacy* `pd.read_csv` of the full per-core device log, and capturing counters
+  currently *forces* that legacy path (the CLI disables cpp post-process when
+  `--profiler-capture-perf-counters` is set). Teaching the cpp path to carry
+  per-core/per-RISC counters removes the OOM for the counter case outright;
+  chunking the legacy path is a strictly worse band-aid.
+- **NoC BW % vs analytical for a CCL op** (Phase 3 full gate) and **the
+  noc-trace fabric/ethernet hang** (Phase 3b) — need a multi-chip run.
+- **Tracy GUI zone tooltips** (Phase 4) — a vendored-fork protocol change
+  (`tt_metal/third_party/tracy/`). Open question: whether the serial GPU-zone
+  path can reach Tracy's `ZoneText`, or a new `QueueType` is required.
 - **Readback-time** core restriction — deferred; correct per-op-grid selection
   needs op→grid association that only exists in post-process.
