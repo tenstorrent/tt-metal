@@ -125,8 +125,8 @@ inline void reduce_row_advance_dest(const bool is_narrow_tile)
     TTI_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_BD);
 }
 
-template <MathFidelity math_fidelity, std::uint32_t clear_mode>
-inline void reduce_row_sum_mvmul_face(const std::uint32_t dst_base = 0)
+template <MathFidelity math_fidelity, std::uint32_t clear_mode, std::uint32_t dst_base = 0>
+inline void reduce_row_sum_mvmul_face()
 {
     if constexpr (math_fidelity == MathFidelity::HiFi4)
     {
@@ -202,23 +202,33 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
         {
             for (std::uint32_t col_num = 0; col_num < static_cast<std::uint32_t>(tensor_shape.num_faces_c_dim) - 1; col_num++)
             {
-                reduce_row_sum_mvmul_face<math_fidelity, p_setrwc::CLR_AB>(0);
+                reduce_row_sum_mvmul_face<math_fidelity, p_setrwc::CLR_AB, 0>();
                 TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_B);
             }
-            reduce_row_sum_mvmul_face<math_fidelity, p_setrwc::CLR_NONE>(0);
+            reduce_row_sum_mvmul_face<math_fidelity, p_setrwc::CLR_NONE, 0>();
 
             if (tensor_shape.num_faces_r_dim > 1)
             {
-                const std::uint32_t face_row_1_dst = is_narrow_tile ? 16 : 32;
-
                 TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_B);
 
-                for (std::uint32_t col_num = 0; col_num < static_cast<std::uint32_t>(tensor_shape.num_faces_c_dim) - 1; col_num++)
+                if (is_narrow_tile)
                 {
-                    reduce_row_sum_mvmul_face<math_fidelity, p_setrwc::CLR_AB>(face_row_1_dst);
-                    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_B);
+                    for (std::uint32_t col_num = 0; col_num < static_cast<std::uint32_t>(tensor_shape.num_faces_c_dim) - 1; col_num++)
+                    {
+                        reduce_row_sum_mvmul_face<math_fidelity, p_setrwc::CLR_AB, 16>();
+                        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_B);
+                    }
+                    reduce_row_sum_mvmul_face<math_fidelity, p_setrwc::CLR_NONE, 16>();
                 }
-                reduce_row_sum_mvmul_face<math_fidelity, p_setrwc::CLR_NONE>(face_row_1_dst);
+                else
+                {
+                    for (std::uint32_t col_num = 0; col_num < static_cast<std::uint32_t>(tensor_shape.num_faces_c_dim) - 1; col_num++)
+                    {
+                        reduce_row_sum_mvmul_face<math_fidelity, p_setrwc::CLR_AB, 32>();
+                        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_B);
+                    }
+                    reduce_row_sum_mvmul_face<math_fidelity, p_setrwc::CLR_NONE, 32>();
+                }
             }
         }
 
