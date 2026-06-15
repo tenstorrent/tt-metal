@@ -236,10 +236,17 @@ class SDXLRunner:
 
     def close_device(self):
         """Close device and cleanup"""
-        # Release traces BEFORE closing device to prevent segfault
-        if self.tt_sdxl:
-            self.logger.info("Releasing traces before device closure")
-            self.tt_sdxl.release_traces()
+        # Release traces BEFORE closing the device to prevent a segfault.
+        # main's TtSDXLPipeline has no public release_traces(); trace cleanup runs
+        # in __del__ -> __release_trace (ttnn.release_trace for the unet/vae tids).
+        # Drop our only reference and force collection so that runs now,
+        # deterministically, before close_mesh_device.
+        if self.tt_sdxl is not None:
+            self.logger.info("Releasing SDXL pipeline (trace cleanup) before device closure")
+            self.tt_sdxl = None
+            import gc
+
+            gc.collect()
 
         if self.ttnn_device:
             # Always use close_mesh_device since we always use open_mesh_device
