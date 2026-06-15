@@ -223,7 +223,11 @@ def _load_kv_post_transform(trace_dir: Path, layer: int, total_len: int) -> "tor
 
 
 def _kv_cache_pcc_check(
-    pipeline: TtDeepSeekPrefillPipeline, slot_id: int, n_chunks: int, pt_path_override: str | None = None
+    pipeline: TtDeepSeekPrefillPipeline,
+    slot_id: int,
+    n_chunks: int,
+    pt_path_override: str | None = None,
+    real_len: int | None = None,
 ) -> float:
     """Gather the device KV cache for `slot_id`, un-rotate the block-cyclic layout to natural order,
     and PCC-compare each layer against the golden DeepSeek-R1 `kv_post_transform` trace.
@@ -258,6 +262,11 @@ def _kv_cache_pcc_check(
     num_layers = cfg.num_layers
     seq_len_cache = cfg.max_seq_len
     total_len = n_chunks * chunk_size
+    # Compare only the REAL tokens. With a partial last chunk (prompt not a multiple of chunk_size),
+    # total_len = n_chunks*chunk_size overshoots the prompt by the padding; real_len (the last chunk's
+    # actual_end) bounds the compare to written, non-pad positions. Falls back to total_len for the
+    # exact-multiple case (real_len unset).
+    compare_len = real_len if real_len is not None else total_len
 
     pt_path = (pt_path_override or os.environ.get("DEEPSEEK_PREFILL_TRACE_PT", "")).strip()
     if pt_path:
@@ -301,19 +310,20 @@ def _kv_cache_pcc_check(
         batch_idx = slot_id * num_layers + i
         nat = torch.empty(seq_len_cache, kvpe_dim, dtype=torch.float32)
         nat[p] = cache_full[batch_idx, 0]  # un-rotate block-cyclic -> natural order
-        dev_cache = nat[:total_len]
+        dev_cache = nat[:compare_len]
 
         if kv_pt is not None:
             # ref_kvpe_list[i] = ref_cache.key_cache[i] from HF's DynamicCache after the HF model's MLA
             # forward. Per tests/test_prefill_transformer.py (canonical KVPE PCC, lines ~664-671),
             # this tensor is ALREADY in the device's rotary basis — pe is compared directly with no
             # re-interleave. Applying HF->Meta to it produces noise (see _ref_pe_for_comp below).
-            g_post = kv_pt[i][0, 0, :total_len].to(torch.float32)
+            g_post = kv_pt[i][0, 0, :compare_len].to(torch.float32)
         else:
             # The safetensors trace stores `kv_post_transform_layer_<i>` in HF half-split layout
             # (single-file DeepSeek or Kimi's row-sharded dir — _load_kv_post_transform auto-detects);
-            # nope (kv_lora) compares directly, the pe slice is re-interleaved to Meta below.
-            g_post = _load_kv_post_transform(trace_dir, i, total_len)
+            # nope (kv_lora) compares directly, the pe slice is re-interleaved to Meta below. Load only
+            # the populated [:compare_len] positions.
+            g_post = _load_kv_post_transform(trace_dir, i, compare_len)
         _, pcc_nope = comp_pcc(g_post[:, :kv_lora], dev_cache[:, :kv_lora])
         ref_pe = g_post[:, kv_lora:]
         if kv_pt is not None:
@@ -336,7 +346,7 @@ def _kv_cache_pcc_check(
     # stdout, not a log line: callers (tests / orchestrators) parse this.
     print(
         f"[standalone-chunked] kv_cache_pcc_complete slot={slot_id} n_chunks={n_chunks} "
-        f"total_len={total_len} min_pcc={min_pcc:.6f}"
+        f"total_len={total_len} compare_len={compare_len} min_pcc={min_pcc:.6f}"
     )
     if failures:
         msg = "; ".join(f"layer {layer} PCC {pcc:.6f} < {threshold}" for layer, pcc in failures)
@@ -349,7 +359,9 @@ def _kv_cache_pcc_check(
     return min_pcc
 
 
-def validate_migration_kv(pipeline: TtDeepSeekPrefillPipeline, src_slot: int, dst_slot: int, n_chunks: int):
+def validate_migration_kv(
+    pipeline: TtDeepSeekPrefillPipeline, src_slot: int, dst_slot: int, n_chunks: int, real_len: int | None = None
+):
     """Validate the KV cache BEFORE and AFTER a slot->slot migration.
 
     The migration (src_slot -> dst_slot) is driven by tt-llm-engine (the prefill
@@ -365,12 +377,12 @@ def validate_migration_kv(pipeline: TtDeepSeekPrefillPipeline, src_slot: int, ds
     a drop (or an empty / 0-PCC dst) flags a broken or absent migration. Emits
     `[kv-migrate-validate] BEFORE/AFTER` lines (orchestrators parse these).
     """
-    logger.info(f"[kv-migrate-validate] BEFORE migration: validating SRC slot {src_slot}")
-    src_pcc = _kv_cache_pcc_check(pipeline, src_slot, n_chunks)
+    logger.info(f"[kv-migrate-validate] BEFORE migration: validating SRC slot {src_slot} (real_len={real_len})")
+    src_pcc = _kv_cache_pcc_check(pipeline, src_slot, n_chunks, real_len=real_len)
     print(f"[kv-migrate-validate] BEFORE src_slot={src_slot} min_pcc={src_pcc:.6f}")
 
-    logger.info(f"[kv-migrate-validate] AFTER migration: validating DST slot {dst_slot}")
-    dst_pcc = _kv_cache_pcc_check(pipeline, dst_slot, n_chunks)
+    logger.info(f"[kv-migrate-validate] AFTER migration: validating DST slot {dst_slot} (real_len={real_len})")
+    dst_pcc = _kv_cache_pcc_check(pipeline, dst_slot, n_chunks, real_len=real_len)
     print(f"[kv-migrate-validate] AFTER dst_slot={dst_slot} min_pcc={dst_pcc:.6f}")
 
     logger.success(
@@ -625,6 +637,7 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DS
 
     last_slot_id = int(os.environ.get("PREFILL_STANDALONE_CHUNKED_SLOT", "0")) % NUM_USERS
     chunks_per_slot: dict[int, int] = {}  # per-slot chunk count (concurrent multi-slot migration)
+    real_end_per_slot: dict[int, int] = {}  # per-slot real prompt length (max actual_end; excludes padding)
 
     i = 0
     while not _shutdown:
@@ -648,6 +661,9 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DS
         actual_start = int(meta_host[1])
         actual_end = int(meta_host[2])
         actual_isl = actual_end - actual_start
+        # Real prompt length for this slot (excludes the padded tail of a partial last chunk): the
+        # last chunk's actual_end == the true token count. Bounds the KV-PCC compare below.
+        real_end_per_slot[slot_id] = max(real_end_per_slot.get(slot_id, 0), actual_end)
         # Chunked prefill: each push is one CHUNK_SIZE-wide chunk; actual_start is the absolute KV
         # position where this chunk begins (cumulative valid tokens before it) -> kv_actual_isl. The
         # real-token count (actual_isl) is informational — padding is handled by causality + the
@@ -723,11 +739,27 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DS
                 # Same prompt across slots: PCC each (src, dst) against the shared golden.
                 for src_slot, dst_slot in pairs:
                     n_src = chunks_per_slot.get(src_slot, i)  # per-slot chunk count (NOT the loop total)
-                    validate_migration_kv(pipeline, src_slot, dst_slot, n_src)
+                    rl_src = real_end_per_slot.get(src_slot)  # real ISL (excludes pad); dst copies the same range
+                    validate_migration_kv(pipeline, src_slot, dst_slot, n_src, real_len=rl_src)
             logger.success(f"[kv-migrate-validate] ALL {len(pairs)} migrated pair(s) PASSED")
         else:
-            logger.info(f"[request] running KV-cache PCC check (slot={last_slot_id}, n_chunks={i})")
-            _kv_cache_pcc_check(pipeline, last_slot_id, i)
+            # Validate EVERY populated slot, each over its own populated range: chunks_per_slot[s]
+            # chunks and real_len = that slot's actual_end (excludes padding). Multi-user prefill
+            # fills several slots with different-length prompts; each is PCC'd against the shared
+            # golden over only its real (non-pad) positions. _kv_cache_pcc_check raises on a
+            # sub-threshold slot (unless RECORD_ONLY), so any failure aborts here.
+            slots = sorted(chunks_per_slot)
+            logger.info(f"[request] running KV-cache PCC check for {len(slots)} slot(s): {slots}")
+            slot_pccs = {}
+            for s in slots:
+                real_len = real_end_per_slot.get(s)
+                n_chunks_s = chunks_per_slot[s]
+                logger.info(f"[request]  -> slot={s} n_chunks={n_chunks_s} real_len={real_len}")
+                slot_pccs[s] = _kv_cache_pcc_check(pipeline, s, n_chunks_s, real_len=real_len)
+            logger.success(
+                f"[request] all {len(slots)} slot(s) PASSED KV-cache PCC: "
+                + ", ".join(f"slot{s}={p:.6f}" for s, p in sorted(slot_pccs.items()))
+            )
 
 
 def _print_config() -> None:
