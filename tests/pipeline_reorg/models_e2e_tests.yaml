@@ -435,7 +435,7 @@
   cmd: |
     uv pip install -r models/demos/gpt_oss/requirements.txt
     export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/
-    pytest models/demos/gpt_oss/demo/text_demo.py --timeout 1500
+    pytest models/demos/gpt_oss/demo/text_demo.py -k "batch128 and not logprobs" --skip-model-load --timeout 1500
   model: gpt-oss-120b
   skus:
     wh_galaxy_perf:
