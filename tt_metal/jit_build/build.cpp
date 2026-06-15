@@ -793,6 +793,12 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
     auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0_build).count();
     static auto& tok_build = BuildCacheTelemetry::inst().register_metric("JitBuildState::build");
     tok_build.record(elapsed_ms);
+
+    // Surface per-kernel JIT compile time so a slow or stuck compile is visible, not silent.
+    // Only when something was actually compiled — cache hits are instant and would be noise.
+    if (compiled.any() && !kernel_name.empty()) {
+        log_info(tt::LogBuildKernels, "compiled {} in {:.0f} ms", kernel_name, elapsed_ms);
+    }
 }
 
 tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSettings* settings) const {
