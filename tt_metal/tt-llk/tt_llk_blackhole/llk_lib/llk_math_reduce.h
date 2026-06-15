@@ -125,58 +125,44 @@ inline void reduce_row_advance_dest(const bool is_narrow_tile)
     TTI_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_BD);
 }
 
-template <MathFidelity math_fidelity, std::uint32_t clear_mode, std::uint32_t dst>
-inline void reduce_row_sum_gapool_group()
+template <MathFidelity math_fidelity, std::uint32_t clear_mode>
+inline void reduce_row_sum_mvmul_face(const std::uint32_t dst_base = 0)
 {
     if constexpr (math_fidelity == MathFidelity::HiFi4)
     {
-        TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_3, p_gpool::INDEX_DIS, dst);
-        TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_3, p_gpool::INDEX_DIS, dst);
-        TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_3, p_gpool::INDEX_DIS, dst);
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base);
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base);
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base);
     }
     else if constexpr (math_fidelity == MathFidelity::HiFi3)
     {
-        TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_3, p_gpool::INDEX_DIS, dst);
-        TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_3, p_gpool::INDEX_DIS, dst);
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base);
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base);
     }
     else if constexpr (math_fidelity == MathFidelity::HiFi2)
     {
-        TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_3, p_gpool::INDEX_DIS, dst);
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base);
     }
-    TTI_GAPOOL(clear_mode, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, dst);
+    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, dst_base);
+
+    if constexpr (math_fidelity == MathFidelity::HiFi4)
+    {
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base + 8);
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base + 8);
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base + 8);
+    }
+    else if constexpr (math_fidelity == MathFidelity::HiFi3)
+    {
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base + 8);
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base + 8);
+    }
+    else if constexpr (math_fidelity == MathFidelity::HiFi2)
+    {
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, dst_base + 8);
+    }
+    TTI_MVMUL(clear_mode, 0, ADDR_MOD_0, dst_base + 8);
 }
 
-template <MathFidelity math_fidelity, std::uint32_t clear_mode>
-inline void reduce_row_sum_pool_face()
-{
-    reduce_row_sum_gapool_group<math_fidelity, p_setrwc::CLR_NONE, 0>();
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 4, 0, p_setrwc::SET_B);
-    reduce_row_sum_gapool_group<math_fidelity, p_setrwc::CLR_NONE, 4>();
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 8, 0, p_setrwc::SET_B);
-    reduce_row_sum_gapool_group<math_fidelity, p_setrwc::CLR_NONE, 8>();
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 12, 0, p_setrwc::SET_B);
-    reduce_row_sum_gapool_group<math_fidelity, clear_mode, 12>();
-}
-
-/**
- * @brief Perform a reduction on the math thread, pooling faces into the destination register.
- *
- * For REDUCE_ROW with SUM/AVG, operands are swapped at unpack (scaler→SrcA, data→SrcB) so GAPOOL produces
- * row sums directly in the correct column positions. For MAX, the original layout is used with a post-pool
- * transpose (GMPOOL only reads SrcA). REDUCE_COL pools down rows of faces;
- * REDUCE_SCALAR pools all faces then transposes the partial result into a single column for a final pool.
- *
- * @tparam type: Pooling op, values = <SUM/AVG/MAX>
- * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
- * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
- * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
- * @tparam is_int_fpu_en: Enable integer FPU datapath (casts int32 dest datums to int8 before moving to SrcB).
- * @tparam enforce_fp32_accumulation: Force FP32 accumulation through the transpose (requires is_fp32_dest_acc_en).
- * @param dst_index: Tile index into the destination register.
- * @param tensor_shape: Tensor shape describing tile dimensions.
- * @note Call @ref _llk_math_reduce_init_ with matching template args before this
- *       function, and @ref _llk_math_reduce_uninit_ after it to restore modified state.
- */
 template <
     PoolType type,
     ReduceDim dim,
@@ -214,23 +200,25 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
         }
         else
         {
-            reduce_row_sum_pool_face<math_fidelity, p_setrwc::CLR_AB>();
-            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_B);
-            reduce_row_sum_pool_face<math_fidelity, p_setrwc::CLR_NONE>();
+            for (std::uint32_t col_num = 0; col_num < static_cast<std::uint32_t>(tensor_shape.num_faces_c_dim) - 1; col_num++)
+            {
+                reduce_row_sum_mvmul_face<math_fidelity, p_setrwc::CLR_AB>(0);
+                TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_B);
+            }
+            reduce_row_sum_mvmul_face<math_fidelity, p_setrwc::CLR_NONE>(0);
 
             if (tensor_shape.num_faces_r_dim > 1)
             {
-                if (!is_narrow_tile)
-                {
-                    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-                    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-                }
-                TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-                TTI_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_BD);
+                const std::uint32_t face_row_1_dst = is_narrow_tile ? 16 : 32;
 
-                reduce_row_sum_pool_face<math_fidelity, p_setrwc::CLR_AB>();
-                TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_B);
-                reduce_row_sum_pool_face<math_fidelity, p_setrwc::CLR_NONE>();
+                TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_B);
+
+                for (std::uint32_t col_num = 0; col_num < static_cast<std::uint32_t>(tensor_shape.num_faces_c_dim) - 1; col_num++)
+                {
+                    reduce_row_sum_mvmul_face<math_fidelity, p_setrwc::CLR_AB>(face_row_1_dst);
+                    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_B);
+                }
+                reduce_row_sum_mvmul_face<math_fidelity, p_setrwc::CLR_NONE>(face_row_1_dst);
             }
         }
 
@@ -332,11 +320,23 @@ inline void reduce_configure_addrmod()
     if constexpr (high_fidelity)
     {
         addr_mod_t {
-			.srca = {.incr = 0},
-			.srcb = {.incr = 0},
-			.dest = {.incr = 0},
-			.fidelity = {.incr = fidelity_increment}
-		}.set(ADDR_MOD_3);
+            .srca = {.incr = 0},
+            .srcb = {.incr = 0},
+            .dest = {.incr = 0},
+            .fidelity = {.incr = fidelity_increment},
+        }
+            .set(ADDR_MOD_3);
+    }
+
+    if constexpr (type != PoolType::MAX)
+    {
+        addr_mod_t {
+            .srca = {.incr = 0},
+            .srcb = {.incr = 8},
+            .dest = {.incr = 0},
+            .fidelity = {.incr = 0, .clr = 1},
+        }
+            .set(ADDR_MOD_4);
     }
 }
 
