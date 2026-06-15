@@ -59,17 +59,6 @@ thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((use
 
 namespace ckernel {
 
-// Transition shim
-#if defined(__PTR_CONST)
-#define PTR_CONST const
-#else
-#define PTR_CONST
-#endif
-// volatile tt_reg_ptr uint* const reg_base = reinterpret_cast<volatile uint*>(0xFFB10000);
-// volatile tt_reg_ptr uint* const pc_buf_base = reinterpret_cast<volatile uint*>(PC_BUF_BASE);
-// volatile tt_reg_ptr uint* const regfile = reinterpret_cast<volatile uint*>(REGFILE_BASE);
-#undef PTR_CONST
-
 uint32_t cfg_state_id __attribute__((used)) = 0;    // Flip between 0 and 1 to keep state between kernel calls
 uint32_t dest_offset_id __attribute__((used)) = 0;  // Flip between 0 and 1 to keep dest pointer between kernel calls
 

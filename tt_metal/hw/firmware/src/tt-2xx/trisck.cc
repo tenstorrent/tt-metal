@@ -32,16 +32,6 @@ uint32_t op_info_offset = 0;
 thread_local uint32_t num_sw_threads __attribute__((used));
 thread_local uint32_t my_thread_id __attribute__((used));
 
-// namespace ckernel {
-// volatile tt_reg_ptr uint* regfile = reinterpret_cast<volatile uint*>(REGFILE_BASE);
-// volatile tt_reg_ptr uint* pc_buf_base = reinterpret_cast<volatile uint*>(PC_BUF_BASE);
-// volatile tt_reg_ptr uint* mailbox_base[4] = {
-//     reinterpret_cast<volatile uint tt_reg_ptr*>(TENSIX_MAILBOX0_BASE),
-//     reinterpret_cast<volatile uint tt_reg_ptr*>(TENSIX_MAILBOX1_BASE),
-//     reinterpret_cast<volatile uint tt_reg_ptr*>(TENSIX_MAILBOX2_BASE),
-//     reinterpret_cast<volatile uint tt_reg_ptr*>(TENSIX_MAILBOX3_BASE)};
-// }  // namespace ckernel
-
 extern "C" [[gnu::section(".start")]]
 uint32_t _start() {
     // Enable GPREL optimizations.
