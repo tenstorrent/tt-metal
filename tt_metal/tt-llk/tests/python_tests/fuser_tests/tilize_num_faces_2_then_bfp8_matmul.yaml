@@ -1,35 +1,8 @@
-# Regression test for tt-metal#47016 / tt-llk#1161 (Wormhole
-# _llk_unpack_tilize_uninit_ z-dim restore vs BFP-compressed matmul consumers).
-#
-# Background: #45179 changed _llk_unpack_tilize_uninit_ to restore the tile
-# descriptor z-dim to the operand's num_faces instead of the hardcoded 4. For a
-# num_faces=2 tilize operand this leaves z-dim=2 in SEC0 (SrcA). A subsequent
-# Bfp8_b (BFP-compressed) matmul does NOT reprogram the descriptor z-dim (its
-# init only sets the ADC X-end counters), so it inherits the stale z-dim. For
-# compressed operands z-dim sizes the per-tile exponent / RowStart arrays
-# (NumBlobs = BlobsPerXYPlane * ZDim * WDim), so a wrong z-dim corrupts the
-# exponent decode -> saturated logits. Plain/uncompressed matmul is immune
-# (face iteration comes from the MOP loop count), which is why no existing test
-# catches this.
-#
-# The three ops isolate the tilize-uninit z-dim as the single deciding variable,
-# mirroring the issue's device A/B table:
-#   1. warmup_out - Datacopy that reuses the matmul's own Bfp8_b 4-face operands
-#                   (mm_A/mm_B). The one-time _llk_unpack_hw_configure_ runs here
-#                   and sets SEC0 AND SEC1 z-dim = 4.
-#   2. tilize_out - tilize a num_faces=2 (16x32) Float16_b operand;
-#                   _llk_unpack_tilize_uninit_ rewrites ONLY SEC0 (SrcA) z-dim to
-#                   the restored value (2 on current/buggy LLK, 4 with the fix).
-#   3. mm_out     - Bfp8_b 4-face matmul on the same mm_A/mm_B. Matmul unpack
-#                   programs ADC X-end but not the descriptor z-dim, so SrcA
-#                   inherits op 2's stale z-dim while SrcB keeps op 1's z-dim=4.
-#                   SrcA's BFP exponent array is therefore the only corrupted field.
-#
-# Expected (single uninit z-dim token toggled in
-# tt_llk_wormhole_b0/llk_lib/llk_unpack_tilize.h):
-#   z = num_faces (current LLK / #45179): warmup_out PASS, tilize_out PASS,
-#                                         mm_out FAIL (PCC ~ -0.04)
-#   z = 4         (issue's proposal):     all three PASS (mm_out PCC ~ 0.9995)
+# Regression test for tt-metal#47016 / tt-llk#1161 (Wormhole).
+# Three ops in sequence: a Datacopy warmup that seeds the descriptor z-dim from
+# the matmul's Bfp8_b operands, a num_faces=2 tilize whose uninit rewrites SrcA's
+# z-dim, then a Bfp8_b 4-face matmul reusing the warmup operands. The matmul
+# inherits the stale tilize z-dim, corrupting its BFP exponent decode.
 supported_archs: ["wormhole"]
 
 operands:
