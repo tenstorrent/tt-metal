@@ -96,6 +96,14 @@ repos:
       language: system
       pass_filenames: false
       files: ^tests/tt_metal/tt_metal/perf_microbenchmark/routing/golden/.*bandwidth.*\.csv$
+- repo: local
+  hooks:
+    - id: triage-type-check
+      name: tt-triage type checks
+      entry: tools/triage/run_type_checks.sh
+      language: system
+      pass_filenames: false
+      files: ^tools/triage/
 
 # ---- LLK hooks (tt_metal/tt-llk/) ----
 # LLK lives at tt_metal/tt-llk/ and has its own formatting standards.
