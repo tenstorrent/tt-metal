@@ -15,7 +15,7 @@
 #   50000; pre-existing env wins). On hang the watchdog _Exit(1)'s the child;
 #   we classify that as HANG and dump the watchdog message.
 #
-# Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--sim-workers N] [--precompile] <test_path> [extra_pytest_args...]
+# Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--sim-workers N] [--precompile|--no-precompile] <test_path> [extra_pytest_args...]
 #
 # Options:
 #   --dev            Enables polling watcher (NoC sanitizer, waypoints, CB
@@ -28,12 +28,17 @@
 #                    Pass 1 to serialize (e.g. when DPRINT ordering matters or
 #                    you suspect cross-worker contention). Errors out if used
 #                    outside sim mode.
-#   --precompile     Before the real run, transparently warm the JIT cache on the real
+#   --precompile     Force-on: before the real run, transparently warm the JIT cache on the real
 #                    device and in parallel (no env vars, no second command), so kernels
 #                    compile up-front in parallel instead of inline & serial. ALWAYS falls
 #                    back to a normal cold run if anything goes wrong — it can only make a
 #                    run slower, never broken or wrong. Prints a one-line diagnostic. Hardware
 #                    only. Tune parallelism with --precompile-workers N (default: nproc).
+#   --no-precompile  Force-off: skip the warm pass even on a broad run.
+#                    AUTO-ROUTING (default, neither flag given): decided from argv alone (free, no
+#                    collect pre-pass). BROAD (a whole directory or a whole test_*.py file, with no
+#                    ::nodeid and no -k) -> warm pass pays -> ON. NARROW (::nodeid, -k filter, or a
+#                    --dev repro) -> few kernels -> left cold. Explicit flags win. Sim always off.
 #
 # Modes:
 #   default  - Dispatch timeout only. Lean, no debug overhead.
@@ -119,6 +124,7 @@ FAIL_FAST=true
 SIM_WORKERS=""
 SIM_WORKERS_GIVEN=false
 PRECOMPILE=false
+PRECOMPILE_EXPLICIT=false   # true once --precompile/--no-precompile is seen; disables auto-routing
 PRECOMPILE_WORKERS="${PRECOMPILE_WORKERS:-$(nproc 2>/dev/null || echo 8)}"
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -140,11 +146,18 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --precompile)
-            # Opt-in: transparently warm the JIT cache (real-device, parallel) before the
+            # Force-on: transparently warm the JIT cache (real-device, parallel) before the
             # real run, so kernels compile up-front in parallel instead of inline & serial.
             # Everything is internal — no env vars, no second command. Always falls back to a
             # normal cold run if anything goes wrong (see precompile_warm). Hardware only.
             PRECOMPILE=true
+            PRECOMPILE_EXPLICIT=true
+            shift
+            ;;
+        --no-precompile)
+            # Force-off: skip the warm pass even on a broad run (which auto-routing would warm).
+            PRECOMPILE=false
+            PRECOMPILE_EXPLICIT=true
             shift
             ;;
         --precompile-workers)
@@ -177,7 +190,7 @@ fi
 # --- Argument validation ---
 if [[ $# -eq 0 ]]; then
     echo "SAFE_PYTEST_ERROR: No test path provided" >&2
-    echo "Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--sim-workers N] [--precompile] <test_path> [extra_pytest_args...]" >&2
+    echo "Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--sim-workers N] [--precompile|--no-precompile] <test_path> [extra_pytest_args...]" >&2
     exit 3
 fi
 
@@ -186,6 +199,39 @@ TT_TIMING_TEST_PATH="$TEST_PATH"
 shift
 # Remaining args are extra pytest args — the precompile collect must use the SAME selection.
 EXTRA_ARGS=("$@")
+
+# --- Auto-route precompile by run BREADTH (unless --precompile/--no-precompile given) ---
+# Free, argv-only — no collect pre-pass. The warm pass only pays when there are many distinct
+# kernels to compile in parallel; on a narrow run its fixed overhead (a 2nd device open + a collect
+# body-run) exceeds the little serial-inline compile it would save. So:
+#   BROAD  = a whole directory or a whole test_*.py file, with NO ::nodeid and NO -k filter -> ON
+#   NARROW = a ::nodeid, a -k filter, or a --dev repro (single-case debugging)               -> OFF
+# Explicit --precompile/--no-precompile win and disable this. Sim is skipped at the warm call below.
+if [[ "$PRECOMPILE_EXPLICIT" == false && "$SIM_MODE" == false ]]; then
+    _narrow=false
+    [[ "$DEV_MODE" == true ]] && _narrow=true        # --dev = single-case repro; warm-up is overhead
+    [[ "$TEST_PATH" == *"::"* ]] && _narrow=true      # nodeid selection
+    if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
+        for _a in "${EXTRA_ARGS[@]}"; do
+            case "$_a" in
+                -k|-k*|*"::"*) _narrow=true ;;        # -k filter or nodeid in extra args
+            esac
+        done
+    fi
+    if [[ "$_narrow" == true ]]; then
+        PRECOMPILE=false
+        echo "SAFE_PYTEST: precompile off (narrow run: nodeid/-k/--dev; pass --precompile to force)"
+    elif [[ -d "$TEST_PATH" ]]; then
+        PRECOMPILE=true
+        echo "SAFE_PYTEST: precompile auto-enabled (broad run: whole directory; --no-precompile to disable)"
+    elif [[ "$TEST_PATH" == *.py && -f "$TEST_PATH" ]]; then
+        PRECOMPILE=true
+        echo "SAFE_PYTEST: precompile auto-enabled (broad run: whole test file; --no-precompile to disable)"
+    else
+        PRECOMPILE=false
+        echo "SAFE_PYTEST: precompile off (not a whole dir/file: ${TEST_PATH}; pass --precompile to force)"
+    fi
+fi
 
 # Precompile uses WHATEVER cache the user already has (TT_METAL_CACHE if set, else tt-metal's
 # default) — both the warm-collect and the real run inherit the same value (incl. ccache state), so
