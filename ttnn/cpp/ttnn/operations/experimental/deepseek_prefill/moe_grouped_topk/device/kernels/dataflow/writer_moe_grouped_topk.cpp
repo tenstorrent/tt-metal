@@ -540,7 +540,7 @@ void kernel_main() {
         noc.async_write(out_indices_cb, indices_accessor, indices_page_size, {}, {.page_id = height_tile});
         out_weights_cb.wait_front(1);
         noc.async_write(out_weights_cb, weights_accessor, weights_page_size, {}, {.page_id = height_tile});
-        noc_async_writes_flushed();
+        noc.async_writes_flushed();
         out_indices_cb.pop_front(1);
         out_weights_cb.pop_front(1);
     }
