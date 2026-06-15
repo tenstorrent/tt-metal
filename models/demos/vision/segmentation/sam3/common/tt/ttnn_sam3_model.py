@@ -219,6 +219,20 @@ class TtSam3ImagePipeline:
 
         sam3_model.requires_grad_(False)
 
+        neck = sam3_model.backbone.vision_backbone
+        self._orig_pos_enc_forward = neck.position_encoding.forward
+        pos_enc_module = neck.position_encoding
+
+        def _fast_pos_enc(x):
+            key = (x.shape[-2], x.shape[-1])
+            if key in pos_enc_module.cache:
+                return pos_enc_module.cache[key].unsqueeze(0).expand(x.shape[0], -1, -1, -1)
+            return self._orig_pos_enc_forward(x)
+
+        self._pos_enc_module = pos_enc_module
+        self._fast_pos_enc = _fast_pos_enc
+        neck.position_encoding.forward = _fast_pos_enc
+
     def _patched_vit_forward(self, x):
         return self._tt_vit_backbone(x, self.backbone_params, self.device)
 
@@ -236,6 +250,7 @@ class TtSam3ImagePipeline:
         """Restore original forwards (for cleanup / PCC comparison)."""
         self.vit_backbone.forward = self._orig_vit_forward
         self.sam3_model.backbone.forward_text = self._orig_forward_text
+        self._pos_enc_module.forward = self._orig_pos_enc_forward
 
     @torch.inference_mode()
     def forward(self, input_batch):
