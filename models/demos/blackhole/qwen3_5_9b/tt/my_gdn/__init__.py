@@ -53,17 +53,48 @@ class Qwen35GatedDeltaNet(LightweightModule):
         self.mesh_device = mesh_device
         self.recurrent_state = None
         self.cache_params = None
-
+        self.batch_size = args.max_batch_size
+        self.chunk_size = args.gdn_chunk_size
         self.norm = Qwen35RMSNormGated(weight=self.weights.w_norm, eps=self.layer_norm_epsilon)
 
+        self.last_recurrent_state = None
+        self.conv_state = None
+        self.zeroes_recurrent_state = None
+        self.reset_recurrent_state()
+        self.reset_conv_state()
+        self.initialize_params_gated_delta_rule()
+
+    def reset_conv_state(self):
+        self.conv_state = ttnn.zeros(
+            [self.batch_size, 1, self.conv_kernel_size, self.conv_dim],
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+        )
+
     def reset_recurrent_state(self):
-        pass
+        def _zeroes():
+            return ttnn.zeros(
+                [self.batch_size, self.num_v_heads, self.head_k_dim, self.head_v_dim],
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+            )
+
+        if not self.last_recurrent_state:
+            self.last_recurrent_state = _zeroes()
+            self.zeroes_recurrent_state = _zeroes()
+        else:
+            ttnn.copy(self.zeroes_recurrent_state, self.last_recurrent_state)
+
+        return self.last_recurrent_state
 
     def initialize_params_gated_delta_rule(self):
-        pass
+        self.eye = chunk_identity(self.chunk_size, self.mesh_device)
+        self.triangular_masks = chunk_triangular_masks(self.chunk_size, self.mesh_device)
 
     def chunk_gated_delta_rule(
-        self, query, key, value, g, beta, chunk_size=64, initial_state=None, use_qk_l2norm_in_kernel=False
+        self, query, key, value, g, beta, chunk_size, initial_state=None, use_qk_l2norm_in_kernel=False
     ):
         initial_dtype = query.dtype
         if use_qk_l2norm_in_kernel:
@@ -139,8 +170,8 @@ class Qwen35GatedDeltaNet(LightweightModule):
         # every ttnn.tril call below: this repo's production GDN documents ttnn.tril/triu as
         # WRONG on this build and builds masks via from_torch + multiply instead. We follow
         # that de-risked pattern (see chunk_triangular_masks).
-        eye = chunk_identity(chunk_size, self.mesh_device)
-        masks = chunk_triangular_masks(chunk_size, self.mesh_device)
+        eye = self.eye
+        masks = self.triangular_masks
         lower_incl = masks["lower_incl"]
         strict_lower = masks["strict_lower"]
 
@@ -190,12 +221,7 @@ class Qwen35GatedDeltaNet(LightweightModule):
 
         # Recurrent state carried ACROSS chunks (torch lines 287-291); prefill always
         # starts from zero. Rank-4 (no chunk dim): [B, H, k_head_dim, v_head_dim].
-        last_recurrent_state = ttnn.zeros(
-            [batch_size, num_heads, k_head_dim, v_head_dim],
-            dtype=ttnn.float32,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
-        )
+        last_recurrent_state = self.reset_recurrent_state()
 
         # core_attn_out accumulator (torch line 292): TT-NN has no per-chunk scatter
         # (core_attn_out[:, :, i] = ...), so collect each chunk's slice and concat on the
@@ -297,9 +323,13 @@ class Qwen35GatedDeltaNet(LightweightModule):
         a = ttnn.linear(hidden_states, weights.wa, dtype=ttnn.float32)
 
         # Prefill path does not use precomputed states
-        if self.cache_params is not None:
-            conv_state = mixed_qkv[..., :, -self.conv_dim :]
-            # conv_state = update conv state
+        breakpoint()
+        if self.conv_state is not None:
+            # in transformers, you might have to pad mixed_qkv if it is smaller than the conv kernel
+            # but, you can also reshape down if the seq_len > conv kernel
+            # in prefill, we will just slice down, but we might need to pad up...
+            conv_state = mixed_qkv[..., :, -self.conv_kernel_size :, :]
+            ttnn.copy(conv_state, self.conv_state)
         else:
             # causal_conv1d_silu's contract is a canonical [B, T, D]; drop the singleton
             # dim 1 that ttnn.linear leaves on. In tile layout this is a metadata-only
@@ -331,10 +361,13 @@ class Qwen35GatedDeltaNet(LightweightModule):
                 value,
                 g=g,
                 beta=beta,
+                chunk_size=self.chunk_size,
                 initial_state=None,
                 use_qk_l2norm_in_kernel=True,
             )
-        ## may need to update last_recurrent_state if we have previous states or cached params
+        ## update the recurrent state
+        ttnn.copy(last_recurrent_state, self.last_recurrent_state)
+
         core_attn_out = ttnn.reshape(core_attn_out, (-1, self.head_v_dim))
         z = ttnn.reshape(z, (-1, self.head_v_dim))
 
