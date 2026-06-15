@@ -15,6 +15,39 @@
 namespace compute_kernel_lib {
 
 /**
+ * SUPPORT MATRIX vs. PIN OPTIMIZATION — read this first.
+ *
+ * The helper's FULL, caller-agnostic support matrix is the NON-PIN path:
+ *   OutputCBLayout {SubblockMajor, TileRowMajor}
+ *     × packer_l1_acc {on, off}
+ *     × bias {fused, none}
+ *   across the LastBlockTarget pack destinations (Out / OutWithRelu / Interm;
+ *   OutWithUntilize is SubblockMajor-only — TileRowMajor untilizes via
+ *   Interm + reblock_and_untilize).
+ * Every cell is supported with no caveats and is what matmul, SDPA, CCL, conv2d and
+ * conv3d all use by default. This is the FIFO spill/reload path: the helper
+ * reserves/pushes/pops the pack target in one-block increments per K-block.
+ *
+ * pin_interm_to_captured_base (see the param doc on matmul_block below) is NOT part
+ * of that matrix — it is an OPT-IN performance optimization layered on top, which a
+ * caller selects only where it wins. It reserves the output block ONCE, packs each
+ * K-block to fixed offsets, and skips the per-K-block L1_ACC drain. Because that
+ * fixed-offset packing is intrinsically subblock-contiguous, pin composes ONLY with
+ * OutputCBLayout::SubblockMajor AND packer_l1_acc — enforced by a static_assert in
+ * the .inl. There is deliberately NO TileRowMajor + pin: no caller needs it and the
+ * mechanisms don't compose. (conv2d opts into pin for its deep-K packer_l1_acc
+ * BLOCK_SHARDED convs; every other path, including all of conv2d's TileRowMajor
+ * quadrants, runs non-pin.)
+ *
+ * TileRowMajor's analogous "accumulate K-blocks into a fixed region" capability DOES
+ * exist, but via a different, caller-owned contract: caller_owns_pack_target paired
+ * with TileRowMajor + packer_l1_acc + Interm (the helper skips all its own
+ * reserve/push/drain; the caller does one reserve before + one push after). The
+ * ring-aware all-gather-matmul (CCL) and SDPA absolute-offset paths use this — NOT
+ * conv2d.
+ */
+
+/**
  * Output-CB tile order selected at compile time.
  *
  * Describes the order tiles land in the OUTPUT CB after the helper finishes — NOT
