@@ -44,8 +44,9 @@ void calculate_binop_with_scalar(uint32_t param) {
             result = parameter - val;
         }
 
-        // bf16 dest stores truncate fp32->bf16 by default, but torch computes
-        // rsub result in bf16 with IEEE round-to-nearest-even
+        // This correction is added for logit(x) = log(x/(1-x)) since bf16 dest stores
+        // truncate fp32->bf16 by default, but torch computes rsub result in bf16 with IEEE
+        // round-to-nearest-even. The resulting small error is amplified by the log operation.
         if constexpr (BINOP_MODE == RSUB && !DST_ACCUM_MODE) {
             result = float32_to_bf16_rne(result);
         }
