@@ -217,6 +217,16 @@ class TtMistral4MoE(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
             )
+            # one-hot expert->device map [1,1,E,n_dev] (expert e on device e//per) for all_to_all
+            # sparse dispatch: row e, col d == 1 iff expert e lives on device d. Replicated, uint16, RM.
+            self.expert_map = ttnn.from_torch(
+                torch.eye(nd, dtype=torch.int32).repeat_interleave(self.per, dim=0).reshape(1, 1, self.E, nd),
+                device=mesh,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+                dtype=ttnn.uint16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         else:
             self.w_gup = [_lin(gup[e], mesh) for e in range(self.E)]
             self.w_down = [_lin(down[e], mesh) for e in range(self.E)]
@@ -281,6 +291,64 @@ class TtMistral4MoE(LightweightModule):
             experts = acc
         sh = ttnn.linear(ttnn.mul(ttnn.silu(ttnn.linear(x, self.w_sg)), ttnn.linear(x, self.w_su)), self.w_sd)
         return ttnn.add(experts, sh)
+
+    def _shared(self, x):
+        return ttnn.linear(ttnn.mul(ttnn.silu(ttnn.linear(x, self.w_sg)), ttnn.linear(x, self.w_su)), self.w_sd)
+
+    def _forward_sparse(self, x):
+        """Sparse expert-parallel MoE for batched decode (x [B,1,H], B>=n_dev): dispatch each token
+        to the devices holding its top-k experts (all_to_all_dispatch), compute only those, combine
+        back (all_to_all_combine). Streams/computes far fewer experts than the dense-local path at
+        low batch. Requires shard_experts. See deepseek_v3/tt/moe.py for the reference pipeline.
+
+        WIP (not wired into the default decode path; dense forward() remains the verified default):
+        all_to_all_dispatch/combine are proven on this 1x8 mesh (test_m4_a2a_probe), but consuming
+        their multi-device output here still needs the exact ttnn sharded-tensor reshape contract
+        (per-device vs global logical shape of the dispatch output). Tracked by test_m4_moe_sparse
+        (xfail). The remaining throughput lever — see MISTRAL4_DESIGN.md."""
+        B, H, I, nd = x.shape[0], self.hidden, self.interm, self.mesh.get_num_devices()
+        probs = ttnn.softmax(ttnn.linear(x, self.w_gate), dim=-1)  # [B,1,E]
+        tw, ti = ttnn.topk(probs, self.k, dim=-1)  # [B,1,k] weights + indices
+        tw = ttnn.div(tw, ttnn.sum(tw, dim=-1, keepdim=True))  # renormalize top-k weights
+        x4 = ttnn.to_layout(ttnn.reshape(x, (B, 1, 1, H)), ttnn.ROW_MAJOR_LAYOUT)
+        idx4 = ttnn.to_layout(ttnn.typecast(ttnn.reshape(ti, (B, 1, 1, self.k)), ttnn.uint16), ttnn.ROW_MAJOR_LAYOUT)
+        # preallocate the dispatch outputs [n_dev, B, 1, *] sharded on dim0 -> each device gets its
+        # [1,B,1,*] slice (the B tokens routed to its experts, empty rows otherwise).
+        mk = lambda last, dt: ttnn.from_torch(
+            torch.zeros(nd, B, 1, last),
+            device=self.mesh,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0),
+            dtype=dt,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        disp, meta = mk(H, ttnn.bfloat16), mk(self.k, ttnn.uint16)
+        ttnn.all_to_all_dispatch(
+            x4,
+            idx4,
+            self.expert_map,
+            cluster_axis=1,
+            num_links=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tensors=[disp, meta],
+        )
+        # activation for the batched-expert matmul: global [E,B,H] (per device [per,B,H]) — replicate
+        # this device's B dispatched tokens across its `per` local experts.
+        d = ttnn.repeat(ttnn.reshape(disp, (nd, 1, B, H)), ttnn.Shape([1, self.per, 1, 1]))  # [nd,per,B,H]
+        d = ttnn.to_layout(ttnn.reshape(d, (self.E, B, H)), ttnn.TILE_LAYOUT)  # [E,B,H] sharded dim0
+        gu = ttnn.matmul(d, self.gup_sh)  # [E,B,2I]
+        h = ttnn.mul(
+            ttnn.silu(ttnn.slice(gu, [0, 0, 0], [self.E, B, I])), ttnn.slice(gu, [0, 0, I], [self.E, B, 2 * I])
+        )
+        y = ttnn.matmul(h, self.down_sh)  # [E,B,H]
+        eo = ttnn.to_layout(ttnn.reshape(y, (nd, self.per, B, H)), ttnn.ROW_MAJOR_LAYOUT)  # per device [per,B,H]
+        comb = ttnn.all_to_all_combine(
+            eo, meta, self.expert_map, cluster_axis=1, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )  # [k,1,B,H] selected-expert outputs per token
+        comb = ttnn.reshape(ttnn.to_layout(comb, ttnn.TILE_LAYOUT), (self.k, B, H))
+        w = ttnn.reshape(ttnn.permute(tw, (2, 0, 1)), (self.k, B, 1))  # [B,1,k] -> [k,B,1]
+        experts = ttnn.reshape(ttnn.sum(ttnn.mul(comb, w), dim=0), (B, 1, H))
+        return ttnn.add(experts, self._shared(x))
 
 
 class TtMistral4DecoderLayer(LightweightModule):
