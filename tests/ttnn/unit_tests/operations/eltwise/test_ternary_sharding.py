@@ -2112,6 +2112,8 @@ def test_lerp_tts_no_bcast_with_sharding(
         out_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
     output_tensor = ttnn.lerp(input_tensor, end_tensor, weight, memory_config=out_mem_config)
+    if out_sharded:
+        assert output_tensor.memory_config().is_sharded()
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output, output_tensor)
@@ -2162,6 +2164,8 @@ def test_lerp_tts_scalar_bcast_with_height_sharding(device, input_sharded, out_s
         out_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
     output_tensor = ttnn.lerp(input_tensor, end_tensor, weight, memory_config=out_mem_config)
+    if out_sharded:
+        assert output_tensor.memory_config().is_sharded()
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output, output_tensor)
@@ -2225,6 +2229,8 @@ def test_lerp_tts_outer_bcast_with_height_sharding(device, input_sharded, end_sh
         out_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
     output_tensor = ttnn.lerp(input_tensor, end_tensor, weight, memory_config=out_mem_config)
+    if out_sharded:
+        assert output_tensor.memory_config().is_sharded()
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output, output_tensor)
@@ -2288,6 +2294,8 @@ def test_lerp_tts_outer_bcast_with_width_sharding(device, input_sharded, end_sha
         out_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
     output_tensor = ttnn.lerp(input_tensor, end_tensor, weight, memory_config=out_mem_config)
+    if out_sharded:
+        assert output_tensor.memory_config().is_sharded()
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output, output_tensor)
@@ -2348,6 +2356,8 @@ def test_lerp_tts_row_col_bcast_with_height_sharding(device, end_sharded, out_sh
         out_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
     output_tensor = ttnn.lerp(input_tensor, end_tensor, weight, memory_config=out_mem_config)
+    if out_sharded:
+        assert output_tensor.memory_config().is_sharded()
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output, output_tensor)
@@ -2398,6 +2408,8 @@ def test_lerp_tts_row_bcast_with_height_sharding(device, end_sharded, out_sharde
         out_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
     output_tensor = ttnn.lerp(input_tensor, end_tensor, weight, memory_config=out_mem_config)
+    if out_sharded:
+        assert output_tensor.memory_config().is_sharded()
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output, output_tensor)
@@ -2461,6 +2473,8 @@ def test_lerp_tts_col_bcast_with_height_sharding(device, input_sharded, end_shar
         out_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
     output_tensor = ttnn.lerp(input_tensor, end_tensor, weight, memory_config=out_mem_config)
+    if out_sharded:
+        assert output_tensor.memory_config().is_sharded()
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output, output_tensor)
@@ -2511,6 +2525,8 @@ def test_lerp_tts_scalar_bcast_with_width_sharding(device, input_sharded, out_sh
         out_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
     output_tensor = ttnn.lerp(input_tensor, end_tensor, weight, memory_config=out_mem_config)
+    if out_sharded:
+        assert output_tensor.memory_config().is_sharded()
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output, output_tensor)
