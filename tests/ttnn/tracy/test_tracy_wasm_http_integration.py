@@ -206,12 +206,20 @@ def _port_free(port: int) -> bool:
             return False
 
 
-def _find_free_port_pair() -> int:
-    """Return an http port P such that P and P+1 (the WebSocket port) are both free."""
-    for base in range(8100, 8600, 2):
+def _find_free_port_pair(start: int = 8100) -> int:
+    """Return an http port P >= start such that P and P+1 (the WebSocket port) are both free."""
+    for base in range(start, 8600, 2):
         if _port_free(base) and _port_free(base + 1):
             return base
     pytest.skip("No free HTTP/WebSocket port pair available")
+
+
+def _run_in_serve_wasm_env(snippet: str, tt_metal_home: Path, timeout: float = 30.0) -> subprocess.CompletedProcess:
+    """Run a Python snippet that imports tracy.serve_wasm, with TT_METAL_HOME pinned to a temp tree."""
+    env = os.environ.copy()
+    env["TT_METAL_HOME"] = str(tt_metal_home)
+    env["PYTHONPATH"] = str(TOOLS_DIR) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    return subprocess.run([sys.executable, "-c", snippet], env=env, capture_output=True, text=True, timeout=timeout)
 
 
 def _wait_http_ready_sock(port: int, timeout_s: float = 30.0) -> None:
@@ -371,41 +379,106 @@ def test_delete_repoints_embed_to_newest_remaining_by_mtime(tmp_path):
     ), f"embed.tracy should repoint to the newest remaining trace, got {os.readlink(embed_path)!r}"
 
 
-@pytest.mark.timeout(120)
-def test_set_embed_atomically_replaces_embed_tracy(tmp_path):
-    """/set-embed-tracy must swap embed.tracy in atomically (temp + rename), not truncate in place.
+def test_point_embed_at_trace_is_always_a_symlink(tmp_path):
+    """point_embed_at_trace makes embed.tracy a relative symlink into traces/, even over a regular file.
 
-    A direct O_TRUNC write exposes a truncated/partial embed.tracy to the watcher and to clients
-    fetching it mid-copy. With a pre-existing *regular-file* embed.tracy, an atomic rename swaps in
-    a new inode while an in-place truncate keeps the same inode -- so the inode change is a
-    deterministic signal that the replace was atomic.
+    embed.tracy must always be a symlink so the live-reload watcher follows it and DELETE can
+    detect/advance the active trace. This guards against reintroducing a regular-file copy (which
+    leaves the deleted trace as a stale default and orphans its bytes).
     """
     if not SERVE_WASM.is_file():
         pytest.skip(f"serve_wasm.py not found: {SERVE_WASM}")
 
     wasm_dir = _make_wasm_serve_dir(tmp_path)
-    traces_dir = wasm_dir / "traces"
-    src_name = "pick_me_2026_01_01_00_00_00.tracy"
-    src_bytes = b"NEWtrace" * 40000  # ~312 KB, several copy chunks
-    (traces_dir / src_name).write_bytes(src_bytes)
-
-    # Pre-existing embed.tracy as a *regular file* with different (old) content.
+    (wasm_dir / "traces" / "cap_2026_01_01_00_00_00.tracy").write_bytes(b"data")
     embed_path = wasm_dir / "embed.tracy"
-    embed_path.write_bytes(b"OLD" * 10)
-    old_inode = embed_path.stat().st_ino
+    # Pre-existing *regular file* to prove it gets replaced by a symlink.
+    embed_path.write_bytes(b"old-regular-file")
 
+    res = _run_in_serve_wasm_env(
+        "from tracy.serve_wasm import point_embed_at_trace\n" "point_embed_at_trace('cap_2026_01_01_00_00_00.tracy')\n",
+        tmp_path,
+    )
+    assert res.returncode == 0, res.stderr
+
+    assert embed_path.is_symlink(), "embed.tracy must be a symlink, not a regular-file copy"
+    assert os.readlink(embed_path) == "traces/cap_2026_01_01_00_00_00.tracy"
+    assert not (wasm_dir / "embed.tracy.partial").exists(), "temp symlink must not be left behind"
+
+
+# ---------------------------------------------------------------------------
+# Server lifecycle: a new capture must reuse a running server (let the live-reload
+# watcher push the refresh), not kill+restart it, and the stale-server cleanup must
+# be scoped to its own port so it can't reap a sibling GUI on another port.
+# ---------------------------------------------------------------------------
+
+
+def test_argv_http_port_parsing():
+    """_argv_http_port reads --port from a serve_wasm argv (used to port-scope the kill)."""
+    from tracy.serve_wasm import DEFAULT_HTTP_PORT, _argv_http_port
+
+    assert _argv_http_port(["python", "serve_wasm.py", "--port", "8123", "--dir", "/x"]) == 8123
+    assert _argv_http_port(["python", "serve_wasm.py", "--port=8200"]) == 8200
+    assert _argv_http_port(["python", "serve_wasm.py", "--dir", "/x"]) == DEFAULT_HTTP_PORT
+
+
+@pytest.mark.timeout(120)
+def test_launch_reuses_running_server_instead_of_restarting(tmp_path):
+    """launch_server_subprocess must reuse a server already serving the port (no kill/respawn)."""
+    if not SERVE_WASM.is_file():
+        pytest.skip(f"serve_wasm.py not found: {SERVE_WASM}")
+
+    wasm_dir = _make_wasm_serve_dir(tmp_path)
+    (wasm_dir / "embed.tracy").write_bytes(b"initial")
     port = _find_free_port_pair()
     proc = _spawn_serve_wasm(wasm_dir, tmp_path, port)
     try:
         _wait_http_ready_sock(port)
-        status, _, _ = _http_get(f"http://127.0.0.1:{port}/set-embed-tracy/{src_name}", timeout=30.0)
-        assert status == 200, status
+        snippet = (
+            "from tracy.serve_wasm import launch_server_subprocess\n"
+            f"r = launch_server_subprocess(port={port})\n"
+            "print('REUSED' if r is None else 'SPAWNED:%s' % r.pid)\n"
+        )
+        res = _run_in_serve_wasm_env(snippet, tmp_path)
+        assert res.returncode == 0, res.stderr
+        assert "REUSED" in res.stdout, f"expected reuse, got stdout={res.stdout!r} stderr={res.stderr!r}"
+        # The original server must still be alive -- not killed and restarted.
+        time.sleep(0.5)
+        assert proc.poll() is None, "running server was killed/restarted instead of reused"
     finally:
         _terminate_serve_wasm(proc)
 
-    assert embed_path.is_file() and not embed_path.is_symlink(), "embed.tracy should be a regular file"
-    assert embed_path.read_bytes() == src_bytes, "embed.tracy content must match the selected trace"
-    assert (
-        embed_path.stat().st_ino != old_inode
-    ), "embed.tracy kept its inode -> written in place (non-atomic); expected an atomic rename swap"
-    assert not (wasm_dir / "embed.tracy.partial").exists(), "temp file must not be left behind"
+
+@pytest.mark.timeout(120)
+def test_kill_previous_server_is_port_scoped(tmp_path):
+    """Stale-server cleanup must only reap the matching port, never a sibling on another port."""
+    if not SERVE_WASM.is_file():
+        pytest.skip(f"serve_wasm.py not found: {SERVE_WASM}")
+
+    wasm_dir = _make_wasm_serve_dir(tmp_path)
+    port = _find_free_port_pair()
+    other_port = _find_free_port_pair(start=port + 2)
+    assert other_port != port
+    proc = _spawn_serve_wasm(wasm_dir, tmp_path, port)
+    try:
+        _wait_http_ready_sock(port)
+
+        # Cleanup targeting a DIFFERENT port must leave our server untouched.
+        res = _run_in_serve_wasm_env(
+            f"from tracy.serve_wasm import _kill_previous_server_process as k; k({other_port})", tmp_path
+        )
+        assert res.returncode == 0, res.stderr
+        time.sleep(0.5)
+        assert proc.poll() is None, "server on another port must survive a port-scoped cleanup"
+
+        # Cleanup targeting OUR port must reap it.
+        res2 = _run_in_serve_wasm_env(
+            f"from tracy.serve_wasm import _kill_previous_server_process as k; k({port})", tmp_path
+        )
+        assert res2.returncode == 0, res2.stderr
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline and proc.poll() is None:
+            time.sleep(0.2)
+        assert proc.poll() is not None, "port-scoped cleanup must reap the matching-port server"
+    finally:
+        _terminate_serve_wasm(proc)

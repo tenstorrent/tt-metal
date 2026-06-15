@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 import functools
 import os
-import shutil
 import sys
 import subprocess
 from pathlib import Path
@@ -98,78 +97,39 @@ def _profiler_server_log_path() -> Path:
     return resolved
 
 
-def _copy_validated_trace_to_embed(trace_filename: str) -> None:
-    """Copy ``traces/<trace_filename>`` onto ``embed.tracy`` under ``PROFILER_WASM_DIR``.
+def point_embed_at_trace(trace_basename: str) -> Path:
+    """Atomically point ``embed.tracy`` at ``traces/<trace_basename>`` via a relative symlink.
 
-    Uses ``open(..., dir_fd=…)`` (POSIX ``openat``) with **relative** basenames under directory
-    file descriptors for traces / WASM roots. Path-based SAST tools often flag ``open(abs_path)``
-    when any predecessor value touched request input; relative opens under pinned directories avoid
-    passing a tainted absolute path string into ``open``.
-
-    The copy lands in a sibling temp file that is then ``rename``\\d onto ``embed.tracy``. The
-    rename is atomic, so the mtime watcher and any client fetching ``embed.tracy`` always see a
-    complete file (a direct ``O_TRUNC`` write exposes a truncated/partial trace mid-copy). Rename
-    also replaces an existing symlink without following it, so no separate unlink step is needed.
+    ``embed.tracy`` is *always* a symlink into ``traces/``: the live-reload watcher follows it to
+    pick up new captures, and DELETE relies on the symlink to detect/advance the active trace.
+    The swap is atomic -- create the symlink under a temp name, then ``rename`` it onto
+    ``embed.tracy`` -- so the watcher or a client fetching ``embed.tracy`` never observes it
+    briefly absent. Relative basenames under a directory fd (POSIX ``symlinkat``/``renameat``)
+    keep request-derived path strings out of absolute ``open``-style calls.
     """
-    traces_root = _resolve_under_root(Path(PROFILER_WASM_TRACES_DIR), strict=False)
+    if not trace_basename or os.sep in trace_basename or trace_basename in (".", ".."):
+        raise ValueError("invalid trace basename")
     wasm_root = _resolve_under_root(Path(PROFILER_WASM_DIR), strict=False)
-    validated = _safe_trace_file_path(traces_root, trace_filename)
-    if validated is None or not validated.is_file():
-        raise ValueError("invalid trace file")
-
-    trace_bn = validated.name
-    safe_bn: str | None = None
-    traces_base = os.path.abspath(str(traces_root))
-    with os.scandir(traces_base) as scan:
-        for entry in scan:
-            if entry.name != trace_bn:
-                continue
-            if entry.is_file(follow_symlinks=False):
-                safe_bn = entry.name
-                break
-    if safe_bn is None:
-        raise ValueError("invalid trace file")
-    if os.sep in safe_bn or safe_bn in (".", ".."):
-        raise RuntimeError("invalid traces directory entry")
-
-    wasm_base = os.path.abspath(str(wasm_root))
     embed_rel = PROFILER_WASM_TRACE_FILE_NAME
-
     tmp_rel = embed_rel + ".partial"
-    traces_dir_fd = os.open(traces_base, os.O_RDONLY | os.O_DIRECTORY)
+    wasm_dir_fd = os.open(os.path.abspath(str(wasm_root)), os.O_RDONLY | os.O_DIRECTORY)
     try:
-        wasm_dir_fd = os.open(wasm_base, os.O_RDONLY | os.O_DIRECTORY)
         try:
-            src_fd = os.open(safe_bn, os.O_RDONLY, dir_fd=traces_dir_fd)
+            os.unlink(tmp_rel, dir_fd=wasm_dir_fd)
+        except FileNotFoundError:
+            pass
+        os.symlink("traces/" + trace_basename, tmp_rel, dir_fd=wasm_dir_fd)
+        try:
+            os.rename(tmp_rel, embed_rel, src_dir_fd=wasm_dir_fd, dst_dir_fd=wasm_dir_fd)
+        except BaseException:
             try:
-                dst_fd = os.open(
-                    tmp_rel,
-                    os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
-                    0o644,
-                    dir_fd=wasm_dir_fd,
-                )
-                try:
-                    with os.fdopen(src_fd, "rb", closefd=False) as sf, os.fdopen(dst_fd, "wb", closefd=False) as df:
-                        shutil.copyfileobj(sf, df)
-                        df.flush()
-                        os.fsync(dst_fd)
-                    # Atomic publish: swap the completed temp file onto embed.tracy in one step.
-                    os.rename(tmp_rel, embed_rel, src_dir_fd=wasm_dir_fd, dst_dir_fd=wasm_dir_fd)
-                except BaseException:
-                    # Never leave a partial temp behind on failure.
-                    try:
-                        os.unlink(tmp_rel, dir_fd=wasm_dir_fd)
-                    except FileNotFoundError:
-                        pass
-                    raise
-                finally:
-                    os.close(dst_fd)
-            finally:
-                os.close(src_fd)
-        finally:
-            os.close(wasm_dir_fd)
+                os.unlink(tmp_rel, dir_fd=wasm_dir_fd)
+            except FileNotFoundError:
+                pass
+            raise
     finally:
-        os.close(traces_dir_fd)
+        os.close(wasm_dir_fd)
+    return wasm_root / embed_rel
 
 
 def _embed_trace_dest_path() -> Path:
@@ -246,8 +206,35 @@ def _list_traces_newest_first(traces_dir: Path) -> list[str]:
 clients = set()
 
 
-def _kill_previous_server_process():
-    """Stop other serve_wasm.py instances without spawning ps/shell (avoids command-injection noise)."""
+def _argv_http_port(argv: list[str]) -> int:
+    """HTTP port a serve_wasm.py argv would listen on (``--port N`` / ``--port=N``).
+
+    Falls back to ``DEFAULT_HTTP_PORT`` when the flag is absent, matching the argparse
+    default in ``__main__``. (Another process's ``TRACY_WASM_HTTP_PORT`` env can't be read
+    from ``/proc/<pid>/cmdline``, but every server we spawn passes ``--port`` explicitly.)
+    """
+    for i, arg in enumerate(argv):
+        if arg == "--port" and i + 1 < len(argv):
+            try:
+                return int(argv[i + 1])
+            except ValueError:
+                return -1
+        if arg.startswith("--port="):
+            try:
+                return int(arg.split("=", 1)[1])
+            except ValueError:
+                return -1
+    return DEFAULT_HTTP_PORT
+
+
+def _kill_previous_server_process(target_port: int):
+    """SIGKILL stale serve_wasm.py instances **for this HTTP port only**.
+
+    Scanning ``/proc`` (not ps/shell) avoids command-injection noise. The port filter is
+    essential: without it, launching a capture for one clone/port would reap a sibling GUI
+    server running on a different port. Only called once the port is known to be free, so a
+    match here is a wedged/non-listening leftover to clean up before respawning.
+    """
     script_real = os.path.realpath(__file__)
     my_pid = os.getpid()
     proc = Path("/proc")
@@ -276,6 +263,8 @@ def _kill_previous_server_process():
                 continue
             if not _cmdline_targets_this_script(argv, script_real):
                 continue
+            if _argv_http_port(argv) != target_port:
+                continue
             logger.info(f"Killing previous server process with PID {pid}")
             try:
                 os.kill(pid, signal.SIGKILL)
@@ -295,7 +284,14 @@ def launch_server_subprocess(directory=None, port=None, daemon=True):
         f"Tracy WASM web UI (open in browser): http://localhost:{http_port}/ "
         f"(WebSocket for live reload: ws://localhost:{ws_port}/)"
     )
-    _kill_previous_server_process()
+    # Reuse a server already on this port: its watcher pushes 'reload' on embed.tracy changes,
+    # so a restart would only drop WebSocket clients. Otherwise reap a wedged leftover on this port.
+    if is_server_running(http_port):
+        logger.info(
+            f"Tracy WASM server already serving port {http_port}; reusing it (live-reload refreshes the browser)."
+        )
+        return None
+    _kill_previous_server_process(http_port)
     log_path = _profiler_server_log_path()
     log_path.parent.mkdir(parents=True, exist_ok=True)
     cmd = [sys.executable, __file__, "--port", str(http_port)]
@@ -334,10 +330,12 @@ def launch_server_subprocess(directory=None, port=None, daemon=True):
 
 
 def is_server_running(port):
+    # Probe the same address the server binds (127.0.0.1) so this reflects *our*
+    # loopback server, not whatever may be bound on another interface.
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
-            s.bind(("0.0.0.0", port))
+            s.bind(("127.0.0.1", port))
             return False  # Port is free
         except OSError:
             return True  # Port is in use
@@ -481,26 +479,6 @@ class CORSRequestHandler(SimpleHTTPRequestHandler):
                     if not chunk:
                         break
                     self.wfile.write(chunk)
-            return
-        # New: /set-embed-tracy/<filename> copies the selected trace to embed.tracy for default loading
-        if self.path.startswith("/set-embed-tracy/"):
-            import urllib.parse
-
-            filename = self.path[len("/set-embed-tracy/") :]
-            filename = urllib.parse.unquote(filename)
-            try:
-                _copy_validated_trace_to_embed(filename)
-                self.send_response(200)
-                self.end_headers()
-                self.wfile.write(b"OK")
-            except ValueError:
-                self.send_response(400)
-                self.end_headers()
-                self.wfile.write(b"Invalid filename")
-            except Exception as e:
-                self.send_response(500)
-                self.end_headers()
-                self.wfile.write(str(e).encode("utf-8"))
             return
         # Default: serve as normal static file (from PROFILER_WASM_DIR)
         super().do_GET()

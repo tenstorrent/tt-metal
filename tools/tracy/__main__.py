@@ -7,7 +7,7 @@ from shutil import copyfile
 
 
 from tracy import *
-from tracy.serve_wasm import launch_server_subprocess
+from tracy.serve_wasm import launch_server_subprocess, point_embed_at_trace
 
 
 def main():
@@ -455,18 +455,13 @@ def main():
                     logger.info(f"Copied {tracy_src} to {tracy_dst}")
                 except Exception as e:
                     logger.warning(f"Could not copy {tracy_src} to {tracy_dst}: {e}")
-                # Also update embed.tracy symlink or copy for default loading (in PROFILER_WASM_DIR)
-                embed_path = PROFILER_WASM_DIR / PROFILER_WASM_TRACE_FILE_NAME
+                # Point embed.tracy (always a relative symlink into traces/) at the new capture so
+                # the GUI loads it by default. Symlink-only: the live-reload watcher follows it and
+                # DELETE relies on it to detect/advance the active trace. On the rare FS without
+                # symlink support this warns and skips; the trace is still reachable via ?trace=.
                 try:
-                    if embed_path.exists() or embed_path.is_symlink():
-                        embed_path.unlink()
-                    # Try to symlink, fallback to copy
-                    try:
-                        embed_path.symlink_to(("traces/" + tracy_dst.name.split("/")[-1]))
-                        logger.info(f"Symlinked {embed_path} -> traces/{tracy_dst.name.split('/')[-1]}")
-                    except Exception:
-                        copyfile(tracy_dst, embed_path)
-                        logger.info(f"Copied {tracy_dst} to {embed_path}")
+                    embed_path = point_embed_at_trace(tracy_dst.name)
+                    logger.info(f"embed.tracy -> traces/{tracy_dst.name}")
                 except Exception as e:
                     logger.warning(f"Could not update embed.tracy: {e}")
                 launch_server_subprocess(port=options.web_app_port)
