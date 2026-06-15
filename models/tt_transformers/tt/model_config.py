@@ -2761,9 +2761,9 @@ class ModelArgs:
         rope_scaling_params = text_config.get("rope_scaling", None)
         if rope_scaling_params is None and (rope_parameters.get("rope_type") or rope_parameters.get("type")):
             rope_scaling_params = rope_parameters  # transformers>=5 layout
-        self.original_max_context_len = text_config.get("original_max_position_embeddings", None) or rope_parameters.get(
+        self.original_max_context_len = text_config.get(
             "original_max_position_embeddings", None
-        )
+        ) or rope_parameters.get("original_max_position_embeddings", None)
         self.rope_scaling = (
             rope_scaling_model_factory(rope_scaling_params, original_max_context_len=self.original_max_context_len)
             if rope_scaling_params
@@ -2966,6 +2966,12 @@ class ModelArgs:
     def is_llama_vision(self):
         return self.CKPT_DIR is not None and ("llama" in self.CKPT_DIR.lower()) and ("vision" in self.CKPT_DIR.lower())
 
+    def is_voxtral(self):
+        """True for VoxtralForConditionalGeneration (model_type "voxtral"): a Whisper-style audio
+        encoder (audio_tower) + audio->text projector + a nested LlamaForCausalLM text decoder
+        (model.language_model). Audio multimodal — has audio_config, not vision_config."""
+        return getattr(self.hf_config, "model_type", None) == "voxtral"
+
     def is_vision(self):
         """Check if this is a vision-capable model (Llama vision or Mistral multimodal)"""
         return self.is_llama_vision() or (
@@ -3024,7 +3030,13 @@ class ModelArgs:
         return self.model_config
 
     def get_hf_model_cls(self):
+        if self.is_voxtral():
+            from transformers import VoxtralForConditionalGeneration
+
+            return VoxtralForConditionalGeneration
+
         from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
+
         try:
             from transformers import AutoModelForVision2Seq
         except ImportError:  # removed in transformers>=5
@@ -3131,6 +3143,14 @@ class ModelArgs:
                 self.cached_hf_model = model
             state_dict = model.state_dict()
             self.is_mixture_of_experts = any([".experts." in k for k in state_dict.keys()])
+
+        if self.is_voxtral():
+            # Voxtral text decoder lives under language_model.* (a full LlamaForCausalLM); drop the
+            # audio tower + projector and unwrap to the plain text-decoder key layout so the standard
+            # text load path (standardize_hf_keys -> convert_hf_to_meta) handles it.
+            state_dict = {
+                k[len("language_model.") :]: v for k, v in state_dict.items() if k.startswith("language_model.")
+            }
 
         if self.is_multimodal:
             state_dict = standardize_hf_keys_multimodal(state_dict)
@@ -3764,7 +3784,12 @@ class ModelArgs:
         if hasattr(model, "language_model"):
             model.model = model.language_model
             # We keep language_model because transformers don't let us change or delete it
-        model.model.layers = model.model.layers[: self.n_layers]
+        # Voxtral's language_model is a full *ForCausalLM (lm_head + nested .model.layers), not a base
+        # model — descend one level so the layer-truncation + reference accessors find .layers.
+        text_model = model.model
+        if not hasattr(text_model, "layers") and hasattr(text_model, "model") and hasattr(text_model.model, "layers"):
+            text_model = text_model.model
+        text_model.layers = text_model.layers[: self.n_layers]
         if wrap:
             wrapper = HfModelWrapper(model, self.head_dim, config=self.hf_config, use_hf_rope=self.use_hf_rope)
             return wrapper
@@ -3993,11 +4018,18 @@ class ModelArgs:
         return layer
 
     def reference_embedding(self, reference_model=None):
+        # Voxtral nests the text decoder one level deeper (model.model is a LlamaForCausalLM whose
+        # embeddings live at .model.embed_tokens). Descend when embed_tokens isn't directly present.
+        def _embed(tm):
+            if not hasattr(tm, "embed_tokens") and hasattr(tm, "model") and hasattr(tm.model, "embed_tokens"):
+                tm = tm.model
+            return tm.embed_tokens
+
         if reference_model is None:
             model = self.reference_transformer(wrap=False)
-            layer = model.model.embed_tokens
+            layer = _embed(model.model)
         else:
-            layer = reference_model.model.model.embed_tokens
+            layer = _embed(reference_model.model.model)
 
         layer._load_state_dict = layer.load_state_dict
         if self.use_hf_rope:
