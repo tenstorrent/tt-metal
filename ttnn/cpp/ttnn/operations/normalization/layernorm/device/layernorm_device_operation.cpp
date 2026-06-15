@@ -466,24 +466,22 @@ Tensor LayerNormDeviceOperation::create_output_tensors(
 }
 
 // The non-Welford sharded reduce normalizes a non-tile-aligned width by zeroing the padding columns
-// of the final width tile with a column mask. Build it here so the op is self-contained (callers
-// never supply it): an all-ones logical tensor tilized with the input's sharding has its tile
-// padding filled with 0, which is exactly the mask (1.0 valid / 0.0 padding). The mask data format
-// matches the compute intermediates (fp32 when fp32 dest accumulation is enabled) so it aligns in
-// the variance multiply. The mask is needed wherever the non-Welford reduce computes width statistics
-// over the input on a non-tile-aligned width: the non-distributed sharded full norm (layernorm or
-// RMSNorm, with or without a fused residual add) and the RMSNorm pre-all-gather stats stage, which
-// reduces the squared input. The post-all-gather stage normalizes from already-gathered stats, so it
-// never reduces the input and needs no mask.
+// of the final width tile with a column mask: an all-ones logical tensor tilized with the input's
+// sharding has its tile padding filled with 0, which is exactly the mask (1.0 valid / 0.0 padding).
+// The mask data format matches the compute intermediates (fp32 when fp32 dest accumulation is enabled)
+// so it aligns in the variance multiply. The mask is needed wherever the non-Welford reduce computes
+// width statistics over the input on a non-tile-aligned width: the non-distributed sharded full norm
+// (layernorm or RMSNorm, with or without a fused residual add) and the pre-all-gather stats stage,
+// which reduces the input (RMSNorm reduces the squared input; LayerNorm reduces both the input for
+// E[x] and its square for E[x^2]). The post-all-gather stage normalizes from already-gathered stats,
+// so it never reduces the input and needs no mask.
 static std::optional<Tensor> build_legacy_col_mask(
     const Tensor& input,
     const LayerNormProgramConfig& program_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    LayerNormType norm_type,
     DistributedLayerNormStage distributed_norm_stage) {
-    const bool stage_supports_col_mask =
-        distributed_norm_stage == DistributedLayerNormStage::NOT_DISTRIBUTED ||
-        (distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER && norm_type == LayerNormType::RMSNORM);
+    const bool stage_supports_col_mask = distributed_norm_stage == DistributedLayerNormStage::NOT_DISTRIBUTED ||
+                                         distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER;
     if (!input.is_sharded() || !stage_supports_col_mask) {
         return std::nullopt;
     }
@@ -543,8 +541,7 @@ Tensor layer_norm(
         .bias = bias,
         .stats = stats,
         .recip_tensor = recip_tensor,
-        .col_mask = build_legacy_col_mask(
-            input_tensor, program_config, compute_kernel_config, norm_type, distributed_norm_stage),
+        .col_mask = build_legacy_col_mask(input_tensor, program_config, compute_kernel_config, distributed_norm_stage),
     };
 
     return ttnn::device_operation::launch<LayerNormDeviceOperation>(operation_attributes, tensor_args);

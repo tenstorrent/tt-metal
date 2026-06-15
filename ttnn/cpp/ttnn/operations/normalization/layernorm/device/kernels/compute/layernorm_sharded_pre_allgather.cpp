@@ -67,7 +67,7 @@ void kernel_main() {
     constexpr uint32_t cb_ex_partial2_id = tt::CBIndex::c_11;   // E[x^2] partial reduce
     constexpr uint32_t cb_ex_external2_id = tt::CBIndex::c_13;  // E[x^2] partials received from other cores
     const uint32_t cb_reduction_out = (!use_two_stage_reduce or is_second_stage_reader) ? cb_out : cb_ex2;
-#if defined(RMSNORM) && defined(DO_COL_MASK)
+#ifdef DO_COL_MASK
     constexpr uint32_t cb_col_mask_packed = tt::CBIndex::c_19;  // host-built full-width column mask
 #endif
 
@@ -127,6 +127,45 @@ void kernel_main() {
 #else
     reconfig_data_format_srcb(cb_in_id, cb_scaler_id);
 #endif
+#ifdef DO_COL_MASK
+    // Non-tile-aligned width: the E[x] reduce must average over the logical width, so mask the final
+    // width tile's padding columns out of the input first. The masked copy goes to a scratch (cb_x2),
+    // not back into cb_in, because the X^2 pass below re-reads cb_in (which is also a buffer-backed
+    // input CB that must not be mutated). The X^2 pass masks its own result separately, on the squares
+    // (the DO_COL_MASK block after the X^2 loop), so both statistics end up reduced over the logical
+    // width only. cb_col_mask_packed is the host-built full-width mask (1.0 valid / 0.0 padding),
+    // buffer-backed (resident), read by tile index.
+    reconfig_data_format(cb_in_id, cb_col_mask_packed);
+    mul_tiles_init(cb_in_id, cb_col_mask_packed);
+    cb_x2.reserve_back(num_tiles_per_block);
+    index_h_offset = 0;
+    for (uint32_t i = 0; i < block_h; i++) {
+        for (uint32_t wt = 0; wt < block_w; wt++) {
+            tile_regs_acquire();
+            mul_tiles(cb_in_id, cb_col_mask_packed, wt + index_h_offset, wt, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, cb_x2_id);
+            tile_regs_release();
+        }
+        index_h_offset += block_w;
+    }
+    cb_x2.push_back(num_tiles_per_block);
+    cb_x2.wait_front(num_tiles_per_block);
+    // E[x] over the masked input.
+    compute_kernel_lib::reduce<
+        PoolType::AVG,
+        ReduceDim::REDUCE_ROW,
+        cb_x2_id,
+        cb_scaler_id,
+        cb_ex_partial2_id,
+        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
+        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
+        compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h),
+        compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
+    cb_x2.pop_front(num_tiles_per_block);
+    reconfig_data_format(cb_in_id, cb_in_id);
+#else
     // E[x],
     compute_kernel_lib::reduce<
         PoolType::AVG,
@@ -139,6 +178,7 @@ void kernel_main() {
         compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h),
         compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
     reconfig_data_format(cb_in_id, cb_in_id);
+#endif  // DO_COL_MASK
 #else
 #ifdef FUSE_PRE_ADD
     reconfig_data_format(cb_in0, cb_in_id, cb_in1, cb_in_id);
@@ -169,26 +209,26 @@ void kernel_main() {
     }
     cb_x2.push_back(num_tiles_per_block);
 
-#if defined(RMSNORM) && defined(DO_COL_MASK)
-    // RMSNorm's statistic is the mean of squares of the input, so squaring leaves the padding columns
-    // holding (pad_value)^2; zero them in place before the reduce so they do not enter the mean of
-    // squares. The host-built mask (cb_col_mask_packed) carries each block's own validity (full,
-    // partial, or all-padding tiles), tilized into the compute data format so it aligns with the
-    // compute-produced squared tiles in the FPU multiply. It is buffer-backed (resident), so it is read
-    // by tile index without a producer push / wait_front.
-    reconfig_data_format(cb_x2, cb_col_mask_packed);
-    mul_tiles_init(cb_x2, cb_col_mask_packed);
+#ifdef DO_COL_MASK
+    // The mean-of-squares reduce (RMSNorm's statistic, and LayerNorm's E[x^2]) squares the raw input,
+    // which leaves the padding columns holding (pad_value)^2; zero them in place before the reduce so
+    // they do not enter the mean of squares. The host-built mask (cb_col_mask_packed) carries each
+    // block's own validity (full, partial, or all-padding tiles), tilized into the compute data format
+    // so it aligns with the compute-produced squared tiles in the FPU multiply. It is buffer-backed
+    // (resident), so it is read by tile index without a producer push / wait_front.
+    reconfig_data_format(cb_x2_id, cb_col_mask_packed);
+    mul_tiles_init(cb_x2_id, cb_col_mask_packed);
     for (uint32_t t = 0; t < num_tiles_per_block; t++) {
         const uint32_t wt = t % block_w;
-        cb_x2_obj.wait_front(1);
+        cb_x2.wait_front(1);
         tile_regs_acquire();
-        mul_tiles(cb_x2, cb_col_mask_packed, 0, wt, 0);
+        mul_tiles(cb_x2_id, cb_col_mask_packed, 0, wt, 0);
         tile_regs_commit();
-        cb_x2_obj.pop_front(1);
-        cb_x2_obj.reserve_back(1);
+        cb_x2.pop_front(1);
+        cb_x2.reserve_back(1);
         tile_regs_wait();
-        pack_tile(0, cb_x2);
-        cb_x2_obj.push_back(1);
+        pack_tile(0, cb_x2_id);
+        cb_x2.push_back(1);
         tile_regs_release();
     }
 #endif

@@ -352,18 +352,18 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         "multiple cores ({}); use a single core for the width or a tile-aligned width.",
         logical_K,
         grid.num_blocks);
-    // Legacy (non-Welford) path: zero the padding columns so they do not enter the statistics (E[x]
-    // and variance for layernorm, the mean of squares for RMSNorm). Guard above guarantees num_blocks
-    // == 1 except for RMSNorm. CB 7 (writer two-tile mask) and CB 14 (E[x] scratch) feed only the
-    // LayerNorm E[x] masking; RMSNorm masks the squares with the host-built CB 19, so it needs neither.
-    // Masking applies where per-shard width statistics are reduced over the input: the non-distributed
-    // full norm (LayerNorm and RMSNorm) and the RMSNorm pre-all-gather stats kernel, which reduces the
-    // squared input over the width. The post-all-gather stage normalizes from already-gathered stats
-    // (no width reduction) and reuses CB 19 for cb_var, so it never masks. The pre-all-gather kernel
-    // does not compute E[x], so LayerNorm's E[x]-site masking has nowhere to apply there; LayerNorm
-    // masking therefore stays confined to the non-distributed stage.
-    const bool do_col_mask = col_mask_needed && !use_welford && !is_post_all_gather && (!is_pre_all_gather || rms_norm);
-    const bool do_legacy_layernorm_col_mask = do_col_mask && !rms_norm;
+    // Legacy (non-Welford) path: zero the padding columns of a non-tile-aligned final width tile so
+    // they do not enter the statistics (E[x] and variance for layernorm, the mean of squares for
+    // RMSNorm). The host op builds col_mask only for the stages that reduce the input over a
+    // non-tile-aligned width, so its presence here is the signal to mask; the guard above additionally
+    // restricts a width split across cores to num_blocks == 1 except for RMSNorm. CB 19 (the host-built
+    // full-width mask) drives the masking everywhere it is needed: the RMSNorm squares, the
+    // non-distributed LayerNorm variance, and the pre-all-gather LayerNorm input and its square. CB 7
+    // (writer two-tile mask) and CB 14 (E[x] scratch) additionally feed the non-distributed LayerNorm
+    // E[x] site only; the pre-all-gather LayerNorm masks its E[x] input with CB 19 instead, so the
+    // distributed stages need neither (CB 14 also aliases the fused-residual input there).
+    const bool do_col_mask = col_mask.has_value();
+    const bool do_legacy_layernorm_col_mask = do_col_mask && !rms_norm && !is_pre_all_gather && !is_post_all_gather;
     // Valid (logical) columns in the final width tile; the rest of that tile is padding.
     const uint32_t last_tile_valid_w = logical_K - (Kt - 1) * tile_width;
 
