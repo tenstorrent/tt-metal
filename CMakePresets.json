@@ -8,15 +8,30 @@
         "generator": "Ninja Multi-Config",
         "binaryDir": "${sourceDir}/.build/default",
         "cacheVariables": {
-          "TT_METAL_BUILD_TESTS": {"value": "TRUE"},
-          "TTNN_BUILD_TESTS": {"value": "TRUE"},
+          "TT_METAL_BUILD_TESTS": {"value": "FALSE"},
+          "TTNN_BUILD_TESTS": {"value": "FALSE"},
           "TT_UMD_BUILD_TESTS": {"value": "FALSE"},
           "BUILD_PROGRAMMING_EXAMPLES": {"value": "TRUE"},
-          "BUILD_TT_TRAIN": {"value": "TRUE"},
+          "BUILD_TT_TRAIN": {"value": "FALSE"},
           "ENABLE_CCACHE": {"value": "TRUE"},
           "TT_UNITY_BUILDS": {"value": "FALSE"}
         },
         "toolchainFile": "cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
+      },
+      {
+        "name": "slim",
+        "inherits": "default",
+        "displayName": "Slim Config",
+        "description": "Like Default.  But less.  And less is more.",
+        "cacheVariables": {
+          "TT_METAL_BUILD_TESTS": {"value": "FALSE"},
+          "TTNN_BUILD_TESTS": {"value": "FALSE"},
+          "TT_UMD_BUILD_TESTS": {"value": "FALSE"},
+          "BUILD_PROGRAMMING_EXAMPLES": {"value": "TRUE"},
+          "BUILD_TT_TRAIN": {"value": "FALSE"},
+          "ENABLE_CCACHE": {"value": "TRUE"},
+          "TT_UNITY_BUILDS": {"value": "FALSE"}
+        }
       },
       {
         "name": "clang-tidy",
@@ -88,6 +103,12 @@
       {
         "name": "dev",
         "configurePreset": "default",
+        "configuration": "RelWithDebInfo",
+        "targets": ["all"]
+      },
+      {
+        "name": "slim",
+        "configurePreset": "slim",
         "configuration": "RelWithDebInfo",
         "targets": ["all"]
       },
