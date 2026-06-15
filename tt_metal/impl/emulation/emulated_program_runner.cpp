@@ -1201,7 +1201,6 @@ static std::map<std::string, std::string> build_kernel_defines(
             tile_c_dim[i] = tt::constants::TILE_WIDTH;
         }
         for (auto& cb_impl : cb_impls) {
-            const auto& tiles = cb_impl->config().tiles();
             for (uint8_t idx : cb_impl->local_buffer_indices()) {
                 if (idx < EMULE_NUM_CBS) {
                     // Calculate tile size from the CB's data format.
