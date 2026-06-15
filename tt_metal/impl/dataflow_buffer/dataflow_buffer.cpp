@@ -1242,6 +1242,16 @@ void ProgramImpl::finalize_single_dfb_config(
     bool dm_dm_all = (config.cap == dfb::AccessPattern::ALL) &&
                          !producer_is_tensix_only && !consumer_is_tensix_only;
 
+    // DM-DM ALL uses the broadcast_tc credit path (producer posts the same count to every consumer TC); the
+    // implicit-sync ISR/txn path is broadcast-unaware (it round-robins one TC per entry), so an implicit
+    // DM-DM ALL would mis-account credits. This is currently only test-skipped; reject it at config so the
+    // direct CreateDataflowBuffer API can't reach it.
+    TT_FATAL(
+        !(dm_dm_all && (config.enable_producer_implicit_sync || config.enable_consumer_implicit_sync)),
+        "DFB {}: DM-DM ALL does not support implicit sync (the broadcast credit path is broadcast-unaware); "
+        "use explicit sync.",
+        dfb->id);
+
     // Remapper is needed only for ALL 1-to-many with Tensix
     // Adding a TC to a remapper config entry removes it from the default Tensix<->DM mirror group, even with
     // remapper enabled the default mirroring holds for STRIDED cases

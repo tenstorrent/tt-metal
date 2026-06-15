@@ -1384,8 +1384,11 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             if (prod_blocked || cons_blocked) {
                 // BLOCKED-producer -> ALL- or STRIDED-consumer ride the existing broadcast/round-robin
                 // credit paths (not the symmetric sub-ring pairing), so they are exempt from the
-                // BLOCKED->BLOCKED constraints below. The integer thread-count ratio they DO require is
-                // re-enforced device-side in calculate_num_tile_counters.
+                // BLOCKED->BLOCKED constraints below. Note the device contract differs per case:
+                // BLOCKED->STRIDED requires an integer producer/consumer thread-count ratio, which IS
+                // re-enforced device-side in calculate_num_tile_counters' STRIDED branch (TT_FATAL on a
+                // non-integer ratio). BLOCKED->ALL requires NO ratio (the ALL branch keys only on
+                // num_producers / num_consumers<=4, not their ratio), so do not rely on a ratio check for it.
                 const bool blocked_to_all = prod_blocked && cons.binding->access_pattern == DFBAccessPattern::ALL;
                 const bool blocked_to_strided =
                     prod_blocked && cons.binding->access_pattern == DFBAccessPattern::STRIDED;
