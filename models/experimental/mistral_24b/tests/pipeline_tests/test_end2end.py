@@ -437,7 +437,6 @@ def run_generation_exactly_like_test_end2end(
             sampling_params=DECODE_GREEDY_SAMPLING,
             read_from_device=False,
         )
-
         # Lightweight per-step read for EOS / repetition checks.
         token_id = read_first_token_id_from_device(decode_output)
         # Mirror device token in out_tok for any future reset_inputs=True path.
@@ -492,7 +491,7 @@ def validate_e2e_outputs(results, expected_min_tokens=1):
     return True
 
 
-@pytest.mark.skip(reason="Disabled: see #45992")
+# @pytest.mark.skip(reason="Disabled: see #45992")
 @torch.no_grad()
 @run_for_wormhole_b0_or_blackhole()
 @pytest.mark.timeout(1800)
