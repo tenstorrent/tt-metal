@@ -49,7 +49,10 @@ import ttnn
 from loguru import logger
 
 from models.common.utility_functions import run_for_blackhole
-from tests.ttnn.unit_tests.operations.prefetcher_common import round_up as _round_up
+from tests.ttnn.unit_tests.operations.prefetcher_common import (
+    round_up as _round_up,
+    make_recv_contig_weight as _make_recv_contig_weight,
+)
 
 
 pytestmark = run_for_blackhole("DRAM-core prefetcher requires Blackhole")
@@ -83,6 +86,11 @@ _DTYPE_BYTES_FROM_NAME = {"bfloat16": 2, "bfloat8_b": 1088 / 1024.0}
 # Same set of shapes as test_prefetcher_BH_bench.py::LLAMA_SHAPES. Kept duplicated rather
 # than imported to keep this file self-contained; if you add a row here add it there too.
 LLAMA_SHAPES = [
+    # Llama-3.1-8B @ 1 dev: K-row-major lands on M>1 (one K-row > ring_half);
+    # receiver-contiguous's advertised win is on these shapes.
+    pytest.param("8B_FF1_1d", dict(K=4096, N=14336, dtype="bfloat8_b", recv_per_bank=8), id="8B_FF1_1d"),
+    pytest.param("8B_QKV_1d", dict(K=4096, N=12288, dtype="bfloat8_b", recv_per_bank=8), id="8B_QKV_1d"),
+    pytest.param("8B_WO_1d", dict(K=4096, N=4096, dtype="bfloat8_b", recv_per_bank=8), id="8B_WO_1d"),
     # Llama-3.2-1B @ 1 dev
     pytest.param("1B_QKV", dict(K=2048, N=3072, dtype="bfloat8_b", recv_per_bank=8), id="1B_QKV"),
     pytest.param("1B_WO", dict(K=2048, N=2048, dtype="bfloat8_b", recv_per_bank=8), id="1B_WO"),
@@ -158,6 +166,19 @@ def _build_weight(device, num_dram_banks: int) -> ttnn.Tensor:
         ttnn.ShardSpec(dram_core_range_set, [_K, _N // num_dram_banks], ttnn.ShardOrientation.ROW_MAJOR),
     )
     return ttnn.as_tensor(pt_weight, device=device, dtype=_DTYPE, memory_config=mem_config, layout=ttnn.TILE_LAYOUT)
+
+
+def _build_weight_recv_contig(device, num_dram_banks: int) -> ttnn.Tensor:
+    """DRAM-sharded weight in receiver-contiguous layout: NdShardSpec with
+    `num_shards = ring_size` round-robin across `num_dram_banks` DRAM cores.
+    Each shard is (K, n_per_recv); bank b holds `_NUM_RECV_PER_BANK` slabs
+    stacked vertically. The manager auto-detects this from
+    BufferDistributionSpec::num_shards() and dispatches to the recv-contig
+    compute_tensor_geom path.
+    """
+    torch.manual_seed(0xBED)
+    pt_weight = torch.randn(1, 1, _K, _N)
+    return _make_recv_contig_weight(device, pt_weight, num_dram_banks, _RING_SIZE, _DTYPE)
 
 
 def _build_dummy_addrs(device) -> ttnn.Tensor:
@@ -256,6 +277,95 @@ def test_bw_dram_core_prefetcher(device, op_name, shape):
     bw_per_recv = bw_total / num_receivers
     logger.info(
         f"[dram_core_bw][{op_name}] trace_elapsed={elapsed * 1e3:.2f}ms "
+        f"bytes_per_recv={bytes_per_recv / 1e6:.1f}MB total_bytes={bytes_total / 1e9:.2f}GB "
+        f"aggregate_bw={bw_total:.2f} GB/s per_recv_bw={bw_per_recv:.3f} GB/s"
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872}],
+    indirect=True,
+)
+@pytest.mark.parametrize("op_name,shape", LLAMA_SHAPES)
+def test_bw_dram_core_prefetcher_recv_contig(device, op_name, shape):
+    """DRAM-core prefetcher in **receiver-contiguous** layout → discard receiver.
+
+    Identical methodology to test_bw_dram_core_prefetcher: prefetcher launched
+    out-of-band with num_layers = trace_repeats + 1, one warmup consumer drain,
+    then trace captures `trace_repeats` consumer ops and is replayed once.
+
+    The only differences from the K-row-major bench:
+    - Weight allocated via NdShardSpec(Shape([K, n_per_recv]), ROUND_ROBIN_1D)
+      with num_shards = ring_size > num_dram_banks. Bank b stacks
+      num_recv_per_bank slabs of (K, n_per_recv) vertically. Manager auto-
+      detects this and takes the recv-contig main loop in the DRISC kernel.
+    - GCB topology is the same column-of-receivers layout the K-row-major
+      bench uses (bank b -> col b, rows 0..R-1). Under BDS round-robin this
+      makes bank b's slot r feed the receiver assigned ring position
+      `b + r * num_banks` — a "strided" assignment. For a discard-receiver
+      BW bench this is fine; byte correctness is exercised by
+      test_validator_dram_sender_recv_contig.
+    """
+    _apply_shape(shape)
+
+    trace_repeats = _bench_trace_repeats()
+    num_prefetch_layers = trace_repeats + 1  # 1 warmup + trace_repeats inside the trace
+
+    num_dram_banks = device.dram_grid_size().x
+    num_receivers = num_dram_banks * _NUM_RECV_PER_BANK
+    page_size = _per_receiver_page_size_bytes()
+    pages_per_layer = num_receivers  # = ring_size
+
+    tt_weight = _build_weight_recv_contig(device, num_dram_banks)
+
+    bank_to_receivers = [
+        (
+            b,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(b, 0), ttnn.CoreCoord(b, _NUM_RECV_PER_BANK - 1))}),
+        )
+        for b in range(num_dram_banks)
+    ]
+    gcb_size = _gcb_size_bytes(page_size, pages_per_layer)
+    dual_senders = os.environ.get("BENCH_DUAL_SENDERS", "0") == "1"
+    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(
+        device, bank_to_receivers, gcb_size, dual_senders_per_bank=dual_senders
+    )
+
+    ttnn.experimental.start_dram_core_prefetcher(device, dual_senders_per_bank=dual_senders)
+    ttnn.experimental.queue_dram_core_prefetcher_request(
+        device, [(tt_weight, num_receivers)] * num_prefetch_layers, global_cb=gcb
+    )
+
+    # Warmup: drain 1 layer's worth of pages — primes the cached MeshWorkload.
+    ttnn.experimental.test_dram_prefetcher_consumer(
+        device, num_iters=pages_per_layer, page_size_bytes=page_size, global_cb=gcb
+    )
+    ttnn.synchronize_device(device)
+
+    bench_trace = ttnn.begin_trace_capture(device, cq_id=0)
+    for _ in range(trace_repeats):
+        ttnn.experimental.test_dram_prefetcher_consumer(
+            device, num_iters=pages_per_layer, page_size_bytes=page_size, global_cb=gcb
+        )
+    ttnn.end_trace_capture(device, bench_trace, cq_id=0)
+
+    t0 = time.perf_counter()
+    ttnn.execute_trace(device, bench_trace, cq_id=0, blocking=False)
+    ttnn.synchronize_device(device)
+    elapsed = time.perf_counter() - t0
+    ttnn.release_trace(device, bench_trace)
+    ttnn.experimental.stop_dram_core_prefetcher(device)
+
+    if os.environ.get("TT_METAL_WATCHER", "0") == "1":
+        time.sleep(3)
+
+    bytes_per_recv = trace_repeats * pages_per_layer * page_size
+    bytes_total = bytes_per_recv * num_receivers
+    bw_total = _gbps(bytes_total, elapsed)
+    bw_per_recv = bw_total / num_receivers
+    logger.info(
+        f"[dram_core_bw_rc][{op_name}] dual_senders={dual_senders} trace_elapsed={elapsed * 1e3:.2f}ms "
         f"bytes_per_recv={bytes_per_recv / 1e6:.1f}MB total_bytes={bytes_total / 1e9:.2f}GB "
         f"aggregate_bw={bw_total:.2f} GB/s per_recv_bw={bw_per_recv:.3f} GB/s"
     )

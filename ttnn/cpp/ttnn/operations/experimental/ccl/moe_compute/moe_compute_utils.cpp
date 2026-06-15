@@ -368,15 +368,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> add_shared_expert_weights(
     const ttnn::Tensor& shared_w1,
     const ttnn::Tensor& shared_w2) {
     auto output_w0 = ttnn::concat({routed_w0, shared_w0}, 1);
-    auto tile_w0 = ttnn::to_layout(output_w0, ttnn::Layout::TILE);
-    output_w0.deallocate(/*force=*/true);
     auto output_w1 = ttnn::concat({routed_w1, shared_w1}, 1);
-    auto tile_w1 = ttnn::to_layout(output_w1, ttnn::Layout::TILE);
-    output_w1.deallocate(/*force=*/true);
     auto output_w2 = ttnn::concat({routed_w2, shared_w2}, 1);
-    auto tile_w2 = ttnn::to_layout(output_w2, ttnn::Layout::TILE);
-    output_w2.deallocate(/*force=*/true);
-    return {tile_w0, tile_w1, tile_w2};
+    return {output_w0, output_w1, output_w2};
 }
 
 ttnn::Tensor prepare_w0_w1_tensor_for_moe_compute(
@@ -553,11 +547,11 @@ ttnn::Tensor prepare_w2_tensor_for_moe_compute(
         n_reordered_no_pad.deallocate(/*force=*/true);
         pad.deallocate(/*force=*/true);
         auto result = ttnn::to_layout(padded, ttnn::Layout::TILE);
-        padded.deallocate(/*force=*/true);
+        padded.deallocate(/*force=*/false);
         return result;
     }
     auto result = ttnn::to_layout(n_reordered_no_pad, ttnn::Layout::TILE);
-    n_reordered_no_pad.deallocate(/*force=*/true);
+    n_reordered_no_pad.deallocate(/*force=*/false);
     return result;
 }
 
@@ -691,7 +685,7 @@ ttnn::Tensor prepare_w2_tensor_with_bias(
         n_with_bias = padded;
     }
     auto result = ttnn::to_layout(n_with_bias, ttnn::Layout::TILE);
-    n_with_bias.deallocate(/*force=*/true);
+    n_with_bias.deallocate(/*force=*/false);
     return result;
 }
 

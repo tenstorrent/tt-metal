@@ -9,6 +9,7 @@
 #include <fmt/format.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/vector.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "all_gather_minimal_matmul_async.hpp"
@@ -225,7 +226,11 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             nb::arg("num_workers_per_link") = 1,
             nb::arg("num_buffers_per_channel") = 1,
             nb::arg("chunks") = 1,
-            nb::arg("dim") = -1});
+            nb::arg("dim") = -1,
+            nb::arg("fsdp_cluster_axis") = nb::none(),
+            nb::arg("fsdp_multi_device_global_semaphore") = std::vector<GlobalSemaphore>{},
+            nb::arg("persistent_weight_buffer") = nb::none(),
+            nb::arg("fsdp_topology") = nb::none()});
 }
 
 }  // namespace ttnn::operations::experimental::ccl

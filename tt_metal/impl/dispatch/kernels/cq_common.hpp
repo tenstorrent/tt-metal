@@ -90,6 +90,17 @@ constexpr FORCE_INLINE uintptr_t l1_uncached_addr(uintptr_t addr) {
 #endif
 }
 
+// Inverse of l1_uncached_addr: maps an uncached-alias address back to its cached form.
+// Identity on non-Quasar. Used to store the host-visible (cached-form) prefetch_q_rd_ptr value.
+constexpr FORCE_INLINE uintptr_t l1_cached_addr(uintptr_t addr) {
+#ifdef ARCH_QUASAR
+    ASSERT(addr >= MEM_L1_UNCACHED_BASE);
+    return addr - MEM_L1_UNCACHED_BASE;
+#else
+    return addr;
+#endif
+}
+
 template <typename T>
 FORCE_INLINE volatile T tt_l1_ptr* uncached_l1_ptr(uintptr_t addr) {
     return reinterpret_cast<volatile T tt_l1_ptr*>(l1_uncached_addr(addr));

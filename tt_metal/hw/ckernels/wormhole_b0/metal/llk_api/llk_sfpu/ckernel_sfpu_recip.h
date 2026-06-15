@@ -87,7 +87,7 @@ inline void _calculate_reciprocal_internal_(const int iterations) {
             out = sfpu_reciprocal_iter<2>(in);
         } else {
             out = sfpu_reciprocal_iter<1>(in);
-            out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::NearestEven);
+            out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = out;
         sfpi::dst_reg++;

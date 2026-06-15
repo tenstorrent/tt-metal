@@ -46,7 +46,7 @@ void calculate_recip_first_column() {
             out = ckernel::sfpu::sfpu_reciprocal_iter<2>(in);
         } else {
             out = ckernel::sfpu::sfpu_reciprocal_iter<1>(in);
-            out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::NearestEven);
+            out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = out;
         sfpi::dst_reg += 2;
