@@ -15,11 +15,11 @@
 # mix of diffusion / vision demos plus a few model e2e tests. The Llama / Qwen
 # LLM e2e, data-parallel, and device-perf entries have been migrated out.
 
-# All entries that read HF model checkpoints / tt_cache use the canonical HF_HOME convention
+# Entries that read HF model checkpoints use the canonical HF_HOME convention
 # (matches tests/pipeline_reorg/models_e2e_tests.yaml on the Wormhole side):
 #   HF_HOME=/localdev/blackhole_demos/huggingface_data
 #   HF_MODEL=<org>/<model>                                    # hub id, not a path
-#   TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/<org>--<model>
+#   TT_CACHE_PATH=<writable tt tensor cache path>
 # Exceptions: bh_p300 (LFC) entries keep file-path / HF_HUB_CACHE form because the LFC
 # server hosts checkpoints in a layout that does not match the canonical hub cache.
 
@@ -30,7 +30,7 @@
     set -e
     export HF_HOME=/localdev/blackhole_demos/huggingface_data
     export HF_MODEL=mistralai/Devstral-Small-2-24B-Instruct-2512
-    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/mistralai--Devstral-Small-2-24B-Instruct-2512
+    export TT_CACHE_PATH=/tmp/devstral_tt_cache/mistralai--Devstral-Small-2-24B-Instruct-2512
     uv pip install mistral-common
     uv pip install "git+https://github.com/huggingface/transformers"
     pytest -p models.experimental.devstarl2_small.demo.tt_image_demo models/experimental/devstarl2_small/demo/tt_image_demo.py --backend tt --image models/experimental/devstarl2_small/resource/sample.jpeg --vision-square-pixels 1540 --mesh-width 4 --max-new-tokens 100 &&
