@@ -9,7 +9,7 @@
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/mesh_device_operation_adapter.hpp"
 #include "ttnn/mesh_device_operation_utils.hpp"
-#include "ttnn/metal2_artifacts.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operation_concepts.hpp"
 #include "ttnn/operations/examples/example/device/example_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
