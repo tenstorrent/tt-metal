@@ -778,6 +778,90 @@ void print_detected_devices() {
     }
 }
 
+std::string get_connector(IDevice* sdev, CoreCoord score) {
+    const auto& cluster = MetalContext::instance().get_cluster();
+    const auto& soc_desc = cluster.get_soc_desc(sdev->id());
+    umd::ClusterDescriptor* cluster_desc = cluster.get_cluster_desc();
+
+    auto subb = tt_fabric::get_ubb_id(*cluster_desc, sdev->id());
+
+    EthernetChannel chan_id = soc_desc.logical_eth_core_to_chan_map.at(score);
+
+    switch (subb.asic_id) {
+        case 1:
+            if ((chan_id >= 0 && chan_id <= 3) || (chan_id >= 10 && chan_id <= 11)) {
+                return "QSFP";
+            }
+            if (chan_id >= 4 && chan_id <= 9) {
+                return "TRACE";
+            }
+
+        case 2:
+        case 3:
+            if ((chan_id >= 0 && chan_id <= 1) || (chan_id >= 10 && chan_id <= 11)) {
+                return "QSFP";
+            }
+            if (chan_id >= 2 && chan_id <= 9) {
+                return "TRACE";
+            }
+
+        case 4:
+            if ((chan_id >= 0 && chan_id <= 1) || (chan_id >= 10 && chan_id <= 11)) {
+                return "QSFP";
+            }
+            if ((chan_id >= 2 && chan_id <= 3) || (chan_id >= 7 && chan_id <= 9)) {
+                return "TRACE";
+            }
+            if (chan_id >= 4 && chan_id <= 6) {
+                return "ExaMAX";
+            }
+
+        case 5:
+            if ((chan_id >= 2 && chan_id <= 3) || (chan_id >= 10 && chan_id <= 11)) {
+                return "QSFP";
+            }
+            if ((chan_id >= 0 && chan_id <= 1) || (chan_id >= 4 && chan_id <= 6)) {
+                return "TRACE";
+            }
+            if (chan_id >= 7 && chan_id <= 9) {
+                return "ExaMAX";
+            }
+
+        case 6:
+        case 7:
+            if (chan_id >= 10 && chan_id <= 11) {
+                return "QSFP";
+            }
+            if (chan_id >= 0 && chan_id <= 6) {
+                return "TRACE";
+            }
+            if (chan_id >= 7 && chan_id <= 9) {
+                return "ExaMAX";
+            }
+
+        case 8:
+            if (chan_id >= 10 && chan_id <= 11) {
+                return "QSFP";
+            }
+            if (chan_id >= 0 && chan_id <= 3) {
+                return "TRACE";
+            }
+            if (chan_id >= 4 && chan_id <= 9) {
+                return "ExaMAX";
+            }
+
+        default: return "unknown";
+    }
+}
+
+std::string get_ubb(IDevice* device) {
+    const auto& cluster = MetalContext::instance().get_cluster();
+    umd::ClusterDescriptor* cluster_desc = cluster.get_cluster_desc();
+
+    auto ubb = tt::tt_fabric::get_ubb_id(*cluster_desc, device->id());
+    return fmt::format("ubb: {}, chip: {}", ubb.tray_id, ubb.asic_id);
+}
+
 }  // namespace tt::tt_metal
 
 #endif /* _ETH_COMMON_HPP */
