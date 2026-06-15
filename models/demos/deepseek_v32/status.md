@@ -112,12 +112,13 @@ Merged `pjosipovic/sparse_mla_prefill_ref` → `ttnn.transformer.sparse_sdpa` (B
 - ⚠️ 2x2 chunked still guarded to 1x4 (pre-existing 5.5 block-cyclic issue, unrelated to this op).
 
 ### CPU fallbacks (multichip) — running list
+All indexer fallbacks are gone (the indexer is fully on-device — backlog (19)); only the MLA KVPE host hop remains.
 | id | fallback | where | status / SP behavior |
 |---|---|---|---|
-| F-rope | non-interleaved RoPE on host (issue #4) | indexer pe slices | host; SP-agnostic (per-token) |
+| ~~F-rope~~ | ~~non-interleaved RoPE on host (issue #4)~~ | indexer pe slices | **RESOLVED by (19): `_device_rope_pe` → `ttnn.experimental.rotary_embedding_hf` on device (issue #4 resolved); no host RoPE** |
 | ~~F-sparse~~ | ~~sparse_mla gather+SDPA on host (backlog 8)~~ | `ops.sparse_mla` | **RESOLVED 2026-06-15 (Step 6): now `ttnn.transformer.sparse_sdpa` device op, no host SDPA** |
-| F-mla-prefix | MLA cache-slot prefix readback (backlog 9) | chunked `_dsa_forward` | host; reads slot — **5.3 gathers across SP** |
-| F-idx-key | indexer key SP-gather (new, 2x2) | `_indexer_topk` | **5.2**: host AG of index keys across SP for full-T scoring |
+| F-mla-prefix | MLA KVPE host readback (backlog 9) | `_dsa_forward` | **only remaining host hop.** Non-chunked: SP all-gather→`to_torch`→re-upload to the op (re-upload re-opened by Step 6). Chunked: cache readback + block-cyclic un-rotation (irreducible host step). |
+| ~~F-idx-key~~ | ~~indexer key SP-gather (2x2)~~ | `_indexer_topk` | **RESOLVED by (19): index key cache is the device tensor `_index_kbuf` (natural order, grown by `ttnn.concat`); no host AG** |
 
 ### ⏭️ Next
 Open work tracked in the Backlog section below.
@@ -126,7 +127,7 @@ Open work tracked in the Backlog section below.
 
 Legend: `[x]` done · `[~]` partial · `[ ]` open · ⏸️ postponed · 📌 resolved as decision (no code).
 
-### Recommended implementation order (open items, updated 2026-06-11)
+### Recommended implementation order (open items, updated 2026-06-15)
 
 Done: (4),(5),(6),(7),(9),(11),(18),(19). **(8) superseded by the device op** (Step 6, 2026-06-15) — the host fallback retirement reasoning below is obsolete: `ttnn.transformer.sparse_sdpa` landed and `ops.sparse_mla` wraps it. **(12)** as originally scoped (per-query gather + SDPA + online-softmax, single chip) is now **delivered by that op**; what remains of (12) is the SP-ring + full device-residency (no host KVPE gather/re-upload). Remaining open:
 
@@ -134,13 +135,11 @@ Done: (4),(5),(6),(7),(9),(11),(18),(19). **(8) superseded by the device op** (S
 
 | # | Item | Why here |
 |---|---|---|
-| 18 | determinism tests | cheap, no deps — guards every change |
-| 14 | v32 tests in CI | small after 18; locks regressions (long CPU-truths gated) |
+| 14 | v32 tests in CI | locks regressions (long CPU-truths gated); (18) determinism tests already in place |
 | 13 | upstream injection → v3, delete copies | independent hygiene; kills drift from copied files |
 | 16 | multi-layer / multi-user cache | functional scope expansion toward the full model |
-| 19 | indexer key cache → device | perf; gated on device non-interleaved RoPE (**issue #4**) |
 | 3 ⏸️ | 50k scale gate | hardware-time gated; pre-cache truth on a big box |
-| 12 | **fused ring_sparse_attention** | per-query gather+SDPA **DONE** via `sparse_sdpa` (Step 6); only the SP-ring + full device-residency (drop host KVPE gather) remain — C++ follow-up |
+| 12 | **SP-ring/residency tail of sparse attn** | per-query gather+SDPA **DONE** via `sparse_sdpa` (Step 6); only the SP-ring + full device-residency (drop host KVPE gather/re-upload) remain — C++ follow-up |
 | 15 | decode path | beyond current prefill-only scope; largest expansion |
 
 **The MLA-layer milestone is essentially complete** (1x4+2x2, single-shot+chunked, random+pretrained; sparse attention now a device op). What remains is hygiene (14/13), scope expansion (16/15), and perf (the SP-ring/residency tail of 12) — none blocking functional correctness.
@@ -183,7 +182,7 @@ Done: (4),(5),(6),(7),(9),(11),(18),(19). **(8) superseded by the device op** (S
 - [ ] **(15)** decode path
 - [ ] **(16)** multi-layer / multi-user cache
 - [ ] **(17)** replicated-vs-sharded mask dedup
-- [x] **(18)** determinism tests — `test_v32_mla_determinism` (seq4k, 1x4 + 2x2, 3 runs each, no CPU truth). **Bit-exact: exact=True, PCC=1.0** run-to-run on both meshes — the DSA path (CCL reductions, host fallback, topk) is fully deterministic. Asserts torch.equal + PCC≥0.9999.
+- [x] **(18)** determinism tests — `test_v32_mla_determinism` (seq4k, 1x4 + 2x2, 3 runs each, no CPU truth). **Bit-exact: exact=True, PCC=1.0** run-to-run on both meshes — the DSA path (CCL reductions, sparse_sdpa op, topk) is fully deterministic. Asserts torch.equal + PCC≥0.9999.
 
 ## References
 1. models/demos/deepseek_v32/reference_cpu - deepseek's reference implementation running on CPU w/o fused ops and sparse attention
