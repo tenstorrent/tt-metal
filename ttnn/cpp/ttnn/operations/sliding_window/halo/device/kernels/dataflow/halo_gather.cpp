@@ -255,24 +255,36 @@ static inline void run_halo_gather(
 }
 
 void kernel_main() {
-    constexpr uint32_t padding_config_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t gather_config_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t src_cb_id = get_compile_time_arg_val(2);
-    constexpr uint32_t in_cb_id = get_compile_time_arg_val(3);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(4);
-    constexpr uint32_t pad_cb_id = get_compile_time_arg_val(5);
-    constexpr uint32_t pad_val_u32 = get_compile_time_arg_val(6);
-    constexpr uint32_t in_nsticks = get_compile_time_arg_val(7);
-    constexpr uint32_t aligned_stick_nbytes = get_compile_time_arg_val(8);
-    constexpr bool is_block_sharded = get_compile_time_arg_val(9) == 1;
-    constexpr bool remote_read = get_compile_time_arg_val(10) == 1;
-    constexpr bool is_col_major = get_compile_time_arg_val(11) == 1;
-    constexpr bool is_width_sharded = get_compile_time_arg_val(12) == 1;
-    constexpr bool skip_untilize = get_compile_time_arg_val(13) == 1;
-    constexpr uint32_t block_size_height = get_compile_time_arg_val(14);
-    constexpr uint32_t block_size_width_tiles = get_compile_time_arg_val(15);
-    constexpr uint32_t block_start_offset = get_compile_time_arg_val(16);
-    constexpr uint32_t block_stride = get_compile_time_arg_val(17);
+    // MetalV2 bindings only — the halo-gather device logic below is unchanged. CB ids come from the DFB
+    // tokens, the compile-time geometry/selectors from host defines (they are template parameters of
+    // copy_padding<>/run_halo_gather<>), the DRAM config tensors from the ta:: accessors, and the per-core
+    // config page index from the named-arg namespace. The optional padding-config resource is bound (and
+    // referenced) only when ENABLE_PADDING is set, so its dfb token is never referenced unbound.
+    constexpr uint32_t gather_config_cb_id = dfb::gather_config;
+    // The pushing reader (block_start_offset==0) holds the producer binding for src, so it uses dfb::src.
+    // In row-major skip-untilize, src and in are the same borrowed buffer; the non-pushing reader has only
+    // the `in` consumer binding, so it aliases src to dfb::in (a second dfb::src binding would be rejected).
+    // The other reader in tiled mode never references src at all.
+#if (BLOCK_START_OFFSET == 0)
+    constexpr uint32_t src_cb_id = dfb::src;
+#elif (SKIP_UNTILIZE == 1)
+    constexpr uint32_t src_cb_id = dfb::in;
+#endif
+    constexpr uint32_t in_cb_id = dfb::in;
+    constexpr uint32_t out_cb_id = dfb::out;
+    constexpr uint32_t pad_cb_id = dfb::pad;
+    constexpr uint32_t pad_val_u32 = PAD_VAL;
+    constexpr uint32_t in_nsticks = IN_NSTICKS;
+    constexpr uint32_t aligned_stick_nbytes = ALIGNED_STICK_NBYTES;
+    constexpr bool is_block_sharded = IS_BLOCK_SHARDED == 1;
+    constexpr bool remote_read = REMOTE_READ == 1;
+    constexpr bool is_col_major = IS_COL_MAJOR == 1;
+    constexpr bool is_width_sharded = IS_WIDTH_SHARDED == 1;
+    constexpr bool skip_untilize = SKIP_UNTILIZE == 1;
+    constexpr uint32_t block_size_height = BLOCK_SIZE_HEIGHT;
+    constexpr uint32_t block_size_width_tiles = BLOCK_SIZE_WIDTH_TILES;
+    constexpr uint32_t block_start_offset = BLOCK_START_OFFSET;
+    constexpr uint32_t block_stride = BLOCK_STRIDE;
 
     static_assert(!remote_read, "Remote read is not supported in this kernel");
 
@@ -280,30 +292,32 @@ void kernel_main() {
     constexpr bool enable_blocking = !skip_untilize;
 
     Noc noc;
-    experimental::CB padding_config_cb(padding_config_cb_id);
     experimental::CB gather_config_cb(gather_config_cb_id);
+    // src is only touched by the pushing reader (block_start_offset == 0) and, in row-major mode, by the
+    // skip-untilize wait below. The other reader never references it, so it must not be declared there:
+    // an unbound dfb:: token would not compile. (These are #if, not `if constexpr`, because kernel_main is
+    // not a template — the discarded branch of `if constexpr` is still compiled and would need the binding.)
+#if (BLOCK_START_OFFSET == 0) || (SKIP_UNTILIZE == 1)
     experimental::CB src_cb(src_cb_id);
+#endif
     experimental::CB in_cb(in_cb_id);
     experimental::CB out_cb(out_cb_id);
     experimental::CB pad_cb(pad_cb_id);
+#ifdef ENABLE_PADDING
+    constexpr uint32_t padding_config_cb_id = dfb::padding_config;
+    experimental::CB padding_config_cb(padding_config_cb_id);
+#endif
 
 #ifdef CONFIG_TENSOR_IN_DRAM
-    constexpr uint32_t padding_config_dram_addr = get_compile_time_arg_val(18);
-    constexpr uint32_t padding_config_page_size = get_compile_time_arg_val(19);
-    constexpr uint32_t gather_config_dram_addr = get_compile_time_arg_val(20);
-    constexpr uint32_t gather_config_page_size = get_compile_time_arg_val(21);
-
-    constexpr auto padding_config_tensor_args = TensorAccessorArgs<22>();
-    constexpr auto gather_config_tensor_args =
-        TensorAccessorArgs<padding_config_tensor_args.next_compile_time_args_offset()>();
-
-    const auto padding_config_accessor = TensorAccessor(padding_config_tensor_args, padding_config_dram_addr);
-    const auto gather_config_accessor = TensorAccessor(gather_config_tensor_args, gather_config_dram_addr);
-
-    uint32_t config_read_index = get_arg_val<uint32_t>(0);
-
+    constexpr uint32_t gather_config_page_size = GATHER_CONFIG_PAGE_SIZE;
+    const auto gather_config_accessor = TensorAccessor(ta::gather_config_dram);
+    const uint32_t config_read_index = get_arg(args::config_read_index);
+#ifdef ENABLE_PADDING
+    constexpr uint32_t padding_config_page_size = PADDING_CONFIG_PAGE_SIZE;
+    const auto padding_config_accessor = TensorAccessor(ta::padding_config_dram);
     noc.async_read(
         padding_config_accessor, padding_config_cb, padding_config_page_size, {.page_id = config_read_index}, {});
+#endif
     noc.async_read(
         gather_config_accessor, gather_config_cb, gather_config_page_size, {.page_id = config_read_index}, {});
     noc.async_read_barrier();
@@ -313,12 +327,13 @@ void kernel_main() {
     const uint16_t my_noc_y = my_y[noc.get_noc_id()];
 
     // Only one of the cores should push the input
-    if constexpr (block_start_offset == 0) {
-        src_cb.reserve_back(in_nsticks);
-        src_cb.push_back(in_nsticks);
-    }
+#if (BLOCK_START_OFFSET == 0)
+    src_cb.reserve_back(in_nsticks);
+    src_cb.push_back(in_nsticks);
+#endif
 
-    if constexpr (padding_config_cb_id != 0) {
+#ifdef ENABLE_PADDING
+    {
         if constexpr (pad_val_u32 == 0) {
             // Use MEM_ZEROS_BASE if we are zero padded
             constexpr uint32_t padding_region_size = MEM_ZEROS_SIZE;
@@ -335,10 +350,11 @@ void kernel_main() {
                 noc, padding_config_cb, out_cb, pad_cb.get_read_ptr());
         }
     }
+#endif
 
-    if constexpr (skip_untilize) {
-        src_cb.wait_front(in_nsticks);
-    }
+#if (SKIP_UNTILIZE == 1)
+    src_cb.wait_front(in_nsticks);
+#endif
 
     const uint32_t config_data_l1_addr = gather_config_cb.get_read_ptr();
     const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);

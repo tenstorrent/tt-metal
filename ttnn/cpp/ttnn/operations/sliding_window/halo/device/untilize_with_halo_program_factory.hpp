@@ -4,25 +4,35 @@
 
 #pragma once
 
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
+#include <optional>
+
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/sliding_window/halo/device/halo_device_operation_types.hpp"
 
 namespace ttnn::prim {
 
+// MetalV2 base-case factory for untilize-with-halo. The four sliding-window config tensors
+// (pad_config0/1, gather_config0/1) are op-allocated internal tensors: create_owned_tensors builds them on
+// host and the framework keeps them alive for the cached program's lifetime, binding each to a
+// TensorParameter the reader streams from (an L1-borrowed CB, or a DRAM TensorAccessor). create_program_spec
+// is the immutable blueprint; create_invariant_run_args carries the per-core work scalars; the input/output
+// shard addresses ride create_per_enqueue_args.
 struct UntilizeWithHaloProgramFactory {
-    // create_workload_descriptor() allocates the four sliding-window halo
-    // config tensors (pad_config0/1, gather_config0/1) on device and parks
-    // them on the returned WorkloadDescriptor so their backing buffers
-    // outlive the cached programs.  The buffers are bound to the
-    // CBDescriptor entries that the reader kernels stream from.
-    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
-        const HaloParams& operation_attributes,
-        const Tensor& tensor_args,
-        Tensor& output_tensor,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords);
+    static tt::tt_metal::experimental::ProgramSpec create_program_spec(
+        const HaloParams& attrs, const Tensor& input, Tensor& output);
+    static tt::tt_metal::experimental::ProgramRunArgs create_invariant_run_args(
+        const HaloParams& attrs, const Tensor& input, Tensor& output);
+    static tt::tt_metal::experimental::ProgramRunArgs create_per_enqueue_args(
+        const HaloParams& attrs,
+        const Tensor& input,
+        Tensor& output,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
+    static tt::tt_metal::experimental::Table<tt::tt_metal::experimental::TensorParamName, Tensor>
+    create_owned_tensors(const HaloParams& attrs, const Tensor& input, Tensor& output);
 };
 
 }  // namespace ttnn::prim

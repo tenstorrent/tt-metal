@@ -630,9 +630,13 @@ public:
     // -----------------------------------------------------------------------
     template <MetalV2SpecFactoryConcept ProgramSpecFactory>
     struct ProgramSpecMeshWorkloadFactoryAdapter {
-        // No per-coordinate state is cached: a hit re-derives the per-enqueue args from
-        // create_per_enqueue_args, so there is nothing to stash between calls.
-        struct shared_variables_t {};
+        // Op-owned internal tensors (from create_owned_tensors), kept alive for the cached program's
+        // lifetime so their device buffers stay allocated; shared across coordinate ranges. Empty/null for
+        // ops that allocate no internal tensors (the common case). Nothing else is cached — a hit
+        // re-derives the per-enqueue args from create_per_enqueue_args.
+        struct shared_variables_t {
+            std::shared_ptr<std::vector<tt::tt_metal::Tensor>> owned_tensors;
+        };
         using cached_mesh_workload_t = AdaptedCachedMeshWorkload<shared_variables_t>;
 
         // MakeProgramFromSpec needs a MeshDevice; pull it from the first device tensor reachable from
@@ -665,34 +669,64 @@ public:
             // The Advanced concept builds the spec + invariant args from the extracted ImmutableInfo (so a
             // mutable value such as a seed is never visible to either builder); the spec-keyed concept takes
             // (attrs, tensor_args, tensor_return_value). Both are built once, here, on the cache miss.
+            // create_invariant_run_args is optional: a factory that omits it has no enqueue-invariant
+            // run-args, so we start from an empty set (the simplest factory is just spec + per-enqueue).
             constexpr bool kImmutable = HasImmutableInfoExtraction<ProgramSpecFactory>;
+            constexpr bool kHasInvariant = HasCreateInvariantRunArgs<ProgramSpecFactory>;
             auto [spec, invariant_run_args] = [&] {
                 if constexpr (kImmutable) {
                     auto info = ProgramSpecFactory::extract_immutable_info(attrs, tensor_args);
-                    return std::pair{
-                        ProgramSpecFactory::create_program_spec(info),
-                        ProgramSpecFactory::create_invariant_run_args(info)};
+                    auto program_spec = ProgramSpecFactory::create_program_spec(info);
+                    if constexpr (kHasInvariant) {
+                        return std::pair{std::move(program_spec), ProgramSpecFactory::create_invariant_run_args(info)};
+                    } else {
+                        return std::pair{std::move(program_spec), tt::tt_metal::experimental::ProgramRunArgs{}};
+                    }
                 } else {
-                    return std::pair{
-                        ProgramSpecFactory::create_program_spec(attrs, tensor_args, tensor_return_value),
-                        ProgramSpecFactory::create_invariant_run_args(attrs, tensor_args, tensor_return_value)};
+                    auto program_spec =
+                        ProgramSpecFactory::create_program_spec(attrs, tensor_args, tensor_return_value);
+                    if constexpr (kHasInvariant) {
+                        return std::pair{
+                            std::move(program_spec),
+                            ProgramSpecFactory::create_invariant_run_args(attrs, tensor_args, tensor_return_value)};
+                    } else {
+                        return std::pair{std::move(program_spec), tt::tt_metal::experimental::ProgramRunArgs{}};
+                    }
                 }
             }();
+
+            // Optional op-owned internal tensors (config / lookup tables the op allocates, not passed by the
+            // caller). Built once; kept alive for the cached program's lifetime and bound enqueue-invariant
+            // by name. Empty for the common case. The framework holds the Tensors (not just buffers) so
+            // ~Tensor can't force-deallocate them out from under the cached program.
+            auto owned_tensors = std::make_shared<std::vector<tt::tt_metal::Tensor>>();
+            tt::tt_metal::experimental::ProgramRunArgs owned_run_args;
+            if constexpr (HasCreateOwnedTensors<ProgramSpecFactory>) {
+                for (auto& [name, tensor] :
+                     ProgramSpecFactory::create_owned_tensors(attrs, tensor_args, tensor_return_value)) {
+                    owned_tensors->push_back(tensor);
+                    owned_run_args.tensor_args.emplace(
+                        name,
+                        tt::tt_metal::experimental::ProgramRunArgs::TensorArgument{
+                            std::cref(owned_tensors->back().mesh_tensor())});
+                }
+            }
 
             tt::tt_metal::distributed::MeshWorkload mesh_workload;
             std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-            // One Program per coordinate range. The per-enqueue args are built per coordinate (so a
-            // per-device value such as a seed offset can vary across the mesh) and merged with the
-            // enqueue-invariant set for the initial SetProgramRunArgs.
+            // One Program per coordinate range. Run-args = the enqueue-invariant set, merged with the
+            // op-owned tensor bindings (also invariant) and the per-coordinate per-enqueue set. The
+            // per-enqueue set is built per coordinate so a per-device value (e.g. a seed offset) can vary.
             for (const auto& range : tensor_coords.ranges()) {
                 const std::optional<ttnn::MeshCoordinate> coord(*range.begin());
-                std::array<tt::tt_metal::experimental::ProgramRunArgs, 1> per_enqueue{
+                std::array<tt::tt_metal::experimental::ProgramRunArgs, 2> appended{
+                    owned_run_args,
                     ProgramSpecFactory::create_per_enqueue_args(attrs, tensor_args, tensor_return_value, coord)};
-                auto run_params = tt::tt_metal::experimental::MergeProgramRunArgs(invariant_run_args, per_enqueue);
+                auto run_params = tt::tt_metal::experimental::MergeProgramRunArgs(invariant_run_args, appended);
                 auto program = tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
                 tt::tt_metal::experimental::SetProgramRunArgs(program, run_params);
-                shared_variables.emplace(range, shared_variables_t{});
+                shared_variables.emplace(range, shared_variables_t{.owned_tensors = owned_tensors});
                 mesh_workload.add_program(range, std::move(program));
             }
             return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
