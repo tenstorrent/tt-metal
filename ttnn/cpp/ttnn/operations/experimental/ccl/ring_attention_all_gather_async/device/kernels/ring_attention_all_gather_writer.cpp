@@ -70,6 +70,9 @@ void kernel_main() {
         input_batch_head_count[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         input_tile_id_start[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         input_tile_id_end[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        // input_batch_base: reader-only (phase-1 input offset). The writer always targets output
+        // slot 0, so it reads the arg here only for alignment.
+        (void)get_arg_val<uint32_t>(arg_idx++);
     }
 
     auto outputs_tuple = make_tensor_accessor_tuple(outputs_args, arg_idx);

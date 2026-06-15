@@ -35,6 +35,7 @@
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt_stl/reflection.hpp>
 #include "impl/host_api/temp_quasar_api.hpp"  // for QuasarComputeConfig
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
@@ -63,6 +64,76 @@ using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeMinimalWorkUnit;
 using test_helpers::MakeShardedTensorParameter;
 using test_helpers::ScopedSlowDispatchOverride;
+
+// ============================================================================
+// Reflection: ProgramSpec and its subcomponents are hashable via ttsl reflection
+// ============================================================================
+//
+// ttsl::hash (tt_stl/reflection.hpp) hashes a plain aggregate by reflecting over its fields
+// and recursing into each one. These checks pin that the whole ProgramSpec tree stays
+// hashable: if a future change adds a field ttsl::hash can't handle (or makes one of these
+// structs non-aggregate), the build breaks here rather than at some distant call site.
+//
+// This can't be a requires-expression. ttsl::hash::hash_object is an unconstrained template
+// whose "unsupported type" case is a static_assert in the function *body*, so the call is
+// always well-formed and unhashability only surfaces once the body is instantiated. hash_one
+// is never called; taking its address ODR-uses it, which forces that instantiation — and the
+// recursion through T's fields — at compile time.
+template <typename T>
+ttsl::hash::hash_t hash_one(const T& value) {
+    return ttsl::hash::hash_objects_with_default_seed(value);
+}
+template <typename T>
+inline constexpr bool hashable_v = (static_cast<void>(&hash_one<T>), true);
+
+// Top-level specs
+static_assert(hashable_v<ProgramSpec>, "ProgramSpec must be hashable via ttsl reflection");
+static_assert(hashable_v<WorkUnitSpec>, "WorkUnitSpec must be hashable via ttsl reflection");
+static_assert(hashable_v<KernelSpec>, "KernelSpec must be hashable via ttsl reflection");
+static_assert(hashable_v<DataflowBufferSpec>, "DataflowBufferSpec must be hashable via ttsl reflection");
+static_assert(hashable_v<RemoteDataflowBufferSpec>, "RemoteDataflowBufferSpec must be hashable via ttsl reflection");
+static_assert(hashable_v<SemaphoreSpec>, "SemaphoreSpec must be hashable via ttsl reflection");
+static_assert(hashable_v<TensorParameter>, "TensorParameter must be hashable via ttsl reflection");
+
+// KernelSpec subcomponents
+static_assert(hashable_v<KernelSpec::SourceCode>, "KernelSpec::SourceCode must be hashable via ttsl reflection");
+static_assert(
+    hashable_v<KernelSpec::CompilerOptions>, "KernelSpec::CompilerOptions must be hashable via ttsl reflection");
+static_assert(
+    hashable_v<KernelSpec::RuntimeArgSchema>, "KernelSpec::RuntimeArgSchema must be hashable via ttsl reflection");
+static_assert(hashable_v<DFBBinding>, "DFBBinding must be hashable via ttsl reflection");
+static_assert(hashable_v<SemaphoreBinding>, "SemaphoreBinding must be hashable via ttsl reflection");
+static_assert(hashable_v<TensorBinding>, "TensorBinding must be hashable via ttsl reflection");
+
+// Kernel hardware configs
+static_assert(
+    hashable_v<DataMovementHardwareConfig>, "DataMovementHardwareConfig must be hashable via ttsl reflection");
+static_assert(
+    hashable_v<DataMovementHardwareConfig::Gen1Config>,
+    "DataMovementHardwareConfig::Gen1Config must be hashable via ttsl reflection");
+static_assert(
+    hashable_v<DataMovementHardwareConfig::Gen2Config>,
+    "DataMovementHardwareConfig::Gen2Config must be hashable via ttsl reflection");
+static_assert(hashable_v<ComputeHardwareConfig>, "ComputeHardwareConfig must be hashable via ttsl reflection");
+
+// Per-spec advanced options
+static_assert(hashable_v<KernelAdvancedOptions>, "KernelAdvancedOptions must be hashable via ttsl reflection");
+static_assert(hashable_v<DFBAdvancedOptions>, "DFBAdvancedOptions must be hashable via ttsl reflection");
+static_assert(hashable_v<SemaphoreAdvancedOptions>, "SemaphoreAdvancedOptions must be hashable via ttsl reflection");
+static_assert(
+    hashable_v<TensorParameterAdvancedOptions>, "TensorParameterAdvancedOptions must be hashable via ttsl reflection");
+
+TEST(ProgramSpecReflectionTest, IsHashable) {
+    const ProgramSpec spec = MakeMinimalValidProgramSpec();
+
+    // Deterministic: hashing the same spec twice yields the same value.
+    EXPECT_EQ(ttsl::hash::hash_objects_with_default_seed(spec), ttsl::hash::hash_objects_with_default_seed(spec));
+
+    // Sensitive: changing a field changes the hash.
+    ProgramSpec modified = spec;
+    modified.name += "_v2";
+    EXPECT_NE(ttsl::hash::hash_objects_with_default_seed(spec), ttsl::hash::hash_objects_with_default_seed(modified));
+}
 
 // ============================================================================
 // Test Fixtures

@@ -371,9 +371,11 @@ void kernel_main() {
     const auto gathered_k_reader = TensorAccessor(gathered_k_args, gathered_k_addr);
 
     const uint32_t kv_batch_dim = indexed_kv_cache ? kv_cache_batch_idx + 1 : B;
+    // The fused all-gather wrote the active slot to gathered slot 0, so address it as batch-1.
+    const uint32_t gathered_kv_batch_dim = indexed_kv_cache ? 1 : B;
     const auto input_q_tile_logical = TensorTileShape(B, NH, q_local_padded_Nt, DHt);
     const auto input_k_tile_logical = TensorTileShape(kv_batch_dim, NHK, kv_local_padded_Nt, DHt);
-    const auto gathered_k_input_tile_logical = TensorTileShape(kv_batch_dim, NHK, padded_Nt, DHt);
+    const auto gathered_k_input_tile_logical = TensorTileShape(gathered_kv_batch_dim, NHK, padded_Nt, DHt);
     const auto joint_input_tile_logical = TensorTileShape(B, NH, Lt, DHt);
 
     const auto q_generator = PaddedAddrGenerator(q_reader, input_q_tile_logical);
@@ -382,7 +384,7 @@ void kernel_main() {
     const auto local_v_reader = TensorAccessor(v_args, v_addr);
     const auto input_v_tile_logical = TensorTileShape(kv_batch_dim, NHV, kv_local_padded_Nt, vDHt);
     const auto gathered_v_reader = TensorAccessor(gathered_v_args, gathered_v_addr);
-    const auto gathered_v_input_tile_logical = TensorTileShape(kv_batch_dim, NHV, padded_Nt, vDHt);
+    const auto gathered_v_input_tile_logical = TensorTileShape(gathered_kv_batch_dim, NHV, padded_Nt, vDHt);
     const auto local_v_generator = PaddedAddrGenerator(local_v_reader, input_v_tile_logical);
     const auto gathered_v_generator = PaddedAddrGenerator(gathered_v_reader, gathered_v_input_tile_logical);
     [[maybe_unused]] const auto v_generators =
@@ -524,14 +526,17 @@ void kernel_main() {
                 Slice k_slice;
                 uint32_t end_seq_tile;
                 const uint32_t nk = nq / q_heads_per_k;
+                // Local KV reads the indexed cache slot; gathered KV is at slot 0 of the scratch buffer.
                 const uint32_t kv_batch = indexed_kv_cache ? kv_cache_batch_idx : nb;
+                const uint32_t gathered_kv_batch = indexed_kv_cache ? 0 : nb;
                 if (ring_iter == 0) {
                     const uint32_t local_k_start_tile = k_chunk * Sk_chunk_t;
                     k_slice = Slice(kv_batch, nk, local_k_start_tile, local_k_start_tile + Sk_chunk_t, 0, DHt);
                     end_seq_tile = ring_iter_valid_kv_tiles;
                 } else {
                     const uint32_t gathered_start_tile = ring_id * kv_local_padded_Nt + k_chunk * Sk_chunk_t;
-                    k_slice = Slice(kv_batch, nk, gathered_start_tile, gathered_start_tile + Sk_chunk_t, 0, DHt);
+                    k_slice =
+                        Slice(gathered_kv_batch, nk, gathered_start_tile, gathered_start_tile + Sk_chunk_t, 0, DHt);
                     end_seq_tile = ring_id * kv_local_padded_Nt + ring_iter_valid_kv_tiles;
                 }
                 if constexpr (has_joint_k) {

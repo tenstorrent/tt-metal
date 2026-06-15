@@ -108,12 +108,12 @@
 - name: "(Galaxy) DeepSeek Prefill - Kimi MoE"
   cmd: |
     export MESH_DEVICE=TG
-    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_moe -k "mesh-8x4" -vvv --tb=short
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_moe -k "mesh-8x4 and (kimi-5k-pcc or kimi-25k-perf)" -vvv --tb=short
   test_type: kimi_moe
   test_group: module
   skus:
     bh_galaxy:
-      timeout: 45
+      timeout: 30
   owner_id: U08RL15T4N8
   team: models
 

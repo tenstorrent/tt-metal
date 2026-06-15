@@ -122,7 +122,7 @@ struct dp_typed_array_t {
 #define DEVICE_PRINT_DATA1(format, ...)
 #endif
 
-#if defined(KERNEL_BUILD)
+#if defined(KERNEL_BUILD) && !defined(ENV_LLK_INFRA)
 #define DEVICE_PRINT_IS_KERNEL 1
 #else
 #define DEVICE_PRINT_IS_KERNEL 0
@@ -931,6 +931,7 @@ struct device_print_type<TileSlice<128>> {
         }
     }
 };
+#endif  // defined(KERNEL_BUILD)
 
 // dp_typed_array_t: serialized as (len + 1) uint32_t elements: [(len << 16) | type, data[0..len-1]]
 template <uint16_t len>
@@ -945,7 +946,6 @@ struct device_print_type<dp_typed_array_t<len>> {
         }
     }
 };
-#endif
 
 // Enum types: serialized as their underlying type.
 template <typename T>
@@ -1337,7 +1337,7 @@ void release_lock();
 
 #if !defined(ARCH_WORMHOLE)
 volatile tt_l1_ptr std::atomic<uint32_t>& get_lock_atomic() {
-#if !defined(ARCH_QUASAR)
+#if !defined(ARCH_QUASAR) || defined(ENV_LLK_INFRA)
     return get_device_print_buffer()->aux.lock;
 #else
     // Atomics require the cached L1 alias.
@@ -1396,7 +1396,7 @@ void acquire_lock() {
     // After acquiring the lock, invalidate our L1 cache to ensure we see the most up-to-date data in the buffer
     invalidate_l1_cache();
 
-#if defined(KERNEL_BUILD)
+#if defined(KERNEL_BUILD) && !defined(ENV_LLK_INFRA)
     // Check if we should print kernel id
     volatile tt_l1_ptr DevicePrintBufferType* device_print_buffer = get_device_print_buffer();
     if (device_print_buffer->aux.wpos != DEBUG_PRINT_SERVER_DISABLED_MAGIC) {

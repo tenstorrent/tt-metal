@@ -228,14 +228,7 @@ class TestConfig:
         _PERF_COUNTERS_BUFFER_SIZE + 4
     )  # +4 for sync control word
 
-    # Device print buffer; must match dprint.h. Sits above loaders, under RUNTIME_ARGS_START.
-    # PROCESSOR_COUNT and DEVICE_PRINT_BUFFER_SIZE are set per-arch in setup_arch():
-    # device-side DevicePrintMemoryLayout (hostdev/device_print_common.h) sizes itself from
-    # TensixProcessorTypes::COUNT (5 on WH/BH, 24 on Quasar).
-    # Subject to change once debug print is removed; it can be turned into a flat buffer
-    # sized independently of thread count.
-    # 0x15000 fits the L1 gap between TRISC2_LOADER_INIT_MEM end and
-    # RUNTIME_ARGS_START (0x20000) on BH/WH/Quasar non-coverage layouts.
+    # Device print buffer. It sits above loaders, and under RUNTIME_ARGS_START.
     # Coverage builds extend TRISC sections past this address; device print
     # is disabled under coverage so the conflict doesn't matter.
     DEVICE_PRINT_BUFFER_BASE: ClassVar[int] = 0x15000
@@ -244,11 +237,9 @@ class TestConfig:
     # -DLLK_RUNTIME_ARGS_START so dprint.h can static_assert that the
     # device print buffer doesn't overlap RUNTIME_ARGS.
     DEVICE_PRINT_RUNTIME_ARGS_START: ClassVar[int] = 0x20000
-    DEVICE_PRINT_PER_THREAD_SIZE: ClassVar[int] = (
-        1024  # passed to the build as -DDPRINT_BUFFER_SIZE
-    )
     PROCESSOR_COUNT: ClassVar[int] = 0
-    DEVICE_PRINT_BUFFER_SIZE: ClassVar[int] = 0
+    DEVICE_PRINT_BUFFER_SIZE: ClassVar[int] = 0x4000  # WH/BH/Quasar TRISC
+    DEVICE_PRINT_BUFFER_SIZE2: ClassVar[int] = 0x2000  # Quasar DM
     DEVICE_PRINT_ENABLED: ClassVar[bool] = False
 
     # Single source of truth that maps component, risc_id and display name.
@@ -256,12 +247,38 @@ class TestConfig:
     # _risc_names_tensix and make_device_print_parser in device_print.py.
     # The kernel needs it to tell the host who it is when it prints, and
     # the host needs it to map it into a string and find the ELF on disk.
+    # Quasar overrides this in setup_arch.
     RISC_INFO: ClassVar[dict[str, tuple[int, str]]] = {
         "unpack": (2, "UNPACK"),
         "math": (3, "MATH"),
         "pack": (4, "PACK"),
-        "sfpu": (5, "SFPU"),  # Quasar only
     }
+
+    @staticmethod
+    def device_print_buffers() -> list[tuple[int, int, int]]:
+        """Per-buffer (base_address, size, processor_count) the host parser reads.
+
+        Mirrors DevicePrintMemoryLayout (see dprint_buffer.h) and the dprint server's
+        get_core_buffers(): WH/BH have a single buffer; Quasar has a TRISC/compute
+        buffer (16 processors) immediately followed by a DM buffer (8 processors).
+        processor_count drives the Aux header size, so it must match the device-side
+        DevicePrintBuffer template arguments.
+        """
+        base = TestConfig.DEVICE_PRINT_BUFFER_BASE
+        if TestConfig.ARCH == ChipArchitecture.QUASAR:
+            return [
+                (
+                    base,
+                    TestConfig.DEVICE_PRINT_BUFFER_SIZE,
+                    16,
+                ),  # TRISC, processor_offset 8
+                (
+                    base + TestConfig.DEVICE_PRINT_BUFFER_SIZE,
+                    TestConfig.DEVICE_PRINT_BUFFER_SIZE2,
+                    8,
+                ),  # DM, processor_offset 0
+            ]
+        return [(base, TestConfig.DEVICE_PRINT_BUFFER_SIZE, TestConfig.PROCESSOR_COUNT)]
 
     @staticmethod
     def setup_arch():
@@ -291,6 +308,12 @@ class TestConfig:
                 TestConfig.ARCH = ChipArchitecture.QUASAR
                 TestConfig.DATA_FORMAT_ENUM = QUASAR_DATA_FORMAT_ENUM_VALUES
                 TestConfig.KERNEL_COMPONENTS = ["unpack", "math", "pack", "sfpu"]
+                TestConfig.RISC_INFO = {
+                    "unpack": (8, "UNPACK"),
+                    "math": (9, "MATH"),
+                    "pack": (10, "PACK"),
+                    "sfpu": (11, "SFPU"),
+                }
                 TestConfig.PROCESSOR_COUNT = 24
                 TestConfig.TRISC_START_ADDRS = [
                     0x16DFF0,
@@ -311,12 +334,6 @@ class TestConfig:
                 raise ValueError(
                     "Must provide CHIP_ARCH environment variable (wormhole / blackhole / quasar)"
                 )
-
-        TestConfig.DEVICE_PRINT_BUFFER_SIZE = (
-            # Change after debug print is removed.
-            TestConfig.DEVICE_PRINT_PER_THREAD_SIZE
-            * TestConfig.PROCESSOR_COUNT
-        )
 
     @staticmethod
     def setup_paths(sources_path: Path):
@@ -440,7 +457,7 @@ class TestConfig:
             "-Wfloat-equal -Wpointer-arith -Wnull-dereference -Wredundant-decls "
             "-Wuninitialized -Wmaybe-uninitialized "
             f"{no_wh_ebreak_fixup}"
-            f"-DTENSIX_FIRMWARE -DENV_LLK_INFRA -DENABLE_LLK_ASSERT {TestConfig.ARCH_DEFINE} "
+            f"-DTENSIX_FIRMWARE -DENV_LLK_INFRA -DKERNEL_BUILD -DENABLE_LLK_ASSERT {TestConfig.ARCH_DEFINE} "
             f"{'-DSPEED_OF_LIGHT' if TestConfig.SPEED_OF_LIGHT else ''}"
         )
         TestConfig.INCLUDES = [
@@ -553,6 +570,7 @@ class TestConfig:
         l1_acc: L1Accumulation = L1Accumulation.No,
         skip_build_header: bool = False,
         compile_time_formats: bool = False,
+        requires_device_print: bool = False,
     ):
         self.coverage_build = (
             CoverageBuild.Yes if TestConfig.WITH_COVERAGE else CoverageBuild.No
@@ -584,6 +602,7 @@ class TestConfig:
         self.skip_build_header = skip_build_header
         self.compile_time_formats = compile_time_formats
         self.dest_acc = dest_acc
+        self.requires_device_print = requires_device_print
 
         TILE_SIZES = {
             DataFormat.Bfp8_b: 68,
@@ -614,6 +633,9 @@ class TestConfig:
                 chip_arch=TestConfig.CHIP_ARCH,
                 disable_format_inference=self.disable_format_inference,
                 unpacking_to_srcs=self.unpack_to_srcs,
+                # `formats` may be an InputOutputFormat (carries the hint) or a
+                # FormatConfig (doesn't); fall back to None for the latter.
+                register_format_hint=getattr(formats, "register_format_hint", None),
             )
             self.pack_size = TILE_SIZES.get(self.formats_config[0].output_format, 128)
             self.unpack_size_a = TILE_SIZES.get(
@@ -858,9 +880,6 @@ class TestConfig:
 
         if self.profiler_build == ProfilerBuild.Yes:
             OPTIONS_COMPILE += "-DLLK_PROFILER "
-
-        if TestConfig.DEVICE_PRINT_ENABLED:
-            OPTIONS_COMPILE += "-DDEBUG_PRINT_ENABLED "
 
         if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
             OPTIONS_COMPILE += "-DDISABLE_SFPLOADMACRO "
@@ -1189,7 +1208,7 @@ class TestConfig:
                 )
                 trisc_define = "ISOLATE_SFPU" if name == "sfpu" else name.upper()
                 device_print_flags = ""
-                if TestConfig.DEVICE_PRINT_ENABLED:
+                if TestConfig.DEVICE_PRINT_ENABLED or self.requires_device_print:
                     risc_id, _ = TestConfig.RISC_INFO[name]
                     # Quasar: kernel addresses the buffer through the uncached alias
                     # (see device_print.h:get_lock_atomic).
@@ -1197,9 +1216,11 @@ class TestConfig:
                         0x400000 if TestConfig.ARCH == ChipArchitecture.QUASAR else 0
                     )
                     device_print_flags = (
+                        "-DDEBUG_PRINT_ENABLED "
                         f"-DLLK_DEVICE_PRINT_BUFFER_BASE={kernel_buffer_base:#x} "
                         f"-DLLK_RUNTIME_ARGS_START={TestConfig.DEVICE_PRINT_RUNTIME_ARGS_START:#x} "
                         f"-DDEVICE_PRINT_BUFFER_SIZE={TestConfig.DEVICE_PRINT_BUFFER_SIZE} "
+                        f"-DDEVICE_PRINT_BUFFER_SIZE2={TestConfig.DEVICE_PRINT_BUFFER_SIZE2} "
                         f"-DPROCESSOR_INDEX={risc_id} "
                     )
                 compile_command = (
@@ -1290,7 +1311,7 @@ class TestConfig:
 
         # Zero the device print buffer header before each kernel run so the
         # first DEVICE_PRINT() observes wpos=rpos=0 and a free lock.
-        if TestConfig.DEVICE_PRINT_ENABLED:
+        if TestConfig.DEVICE_PRINT_ENABLED or self.requires_device_print:
             write_words_to_device(
                 TestConfig.TENSIX_LOCATION,
                 TestConfig.DEVICE_PRINT_BUFFER_BASE,
@@ -1500,7 +1521,7 @@ class TestConfig:
         dprint_parser = None
         dprint_lines: list[str] = []
         wrapped_poll_callback = poll_callback
-        if TestConfig.DEVICE_PRINT_ENABLED:
+        if TestConfig.DEVICE_PRINT_ENABLED or self.requires_device_print:
             from .device_print import make_device_print_parser
 
             dprint_parser = make_device_print_parser(self)

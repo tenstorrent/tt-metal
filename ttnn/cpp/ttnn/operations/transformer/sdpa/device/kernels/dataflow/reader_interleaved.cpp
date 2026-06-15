@@ -47,10 +47,13 @@ FORCE_INLINE void read_chunk_for_forwarding(
             fill_zeros_async(noc, cb_id, tile_bytes, tile_idx * tile_bytes);
         }
     }
-    // NOC reads and async_write_zeros use the same completion path on WH/BH but different
-    // paths on Quasar (NOC channels vs iDMA). Issue both — second is a no-op on WH/BH.
+    // On WH/BH, async_write_zeros is implemented via noc_async_read from MEM_ZEROS_BASE,
+    // so async_read_barrier() covers both real reads and zero-fills on the same path.
+    // On Quasar, iDMA zero uses a separate completion path (iDMA ack) that needs its own barrier.
     noc.async_read_barrier();
+#ifdef ARCH_QUASAR
     noc.write_zeros_l1_barrier();
+#endif
 }
 
 void kernel_main() {
@@ -181,7 +184,6 @@ void kernel_main() {
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
     constexpr uint32_t v_chunk_tiles = Sk_chunk_t * vDHt;
-    constexpr uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
 
     constexpr uint32_t cb_arg_offset = chunk_start_idx_args.next_compile_time_args_offset();
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
@@ -511,21 +513,23 @@ void kernel_main() {
                     }
                 }
 
-                // Mask read — safe after linked write pair is complete
+                // Mask read — safe after linked write pair is complete.
+                // Stream the chunk one Q-tile-row (Sk_chunk_t tiles) at a time and push each row as
+                // soon as it lands, so the compute kernel can start applying a q_subblock's rows
+                // without waiting for the whole Sq_chunk_t x Sk_chunk_t block (matches the per-subblock
+                // wait/pop in compute_streaming.hpp).
                 if constexpr (use_provided_mask) {
-                    cb_mask.reserve_back(mask_chunk_tiles);
-                    uint32_t mask_write_ptr = cb_mask.get_write_ptr();
-                    uint32_t barrier_count = 0;
-
                     uint32_t mask_row_start = mask_batch_offset + q_chunk * Sq_chunk_t * valid_Skt;
                     if constexpr (!broadcast_provided_mask_heads) {
                         mask_row_start += nq * valid_Sqt * valid_Skt;
                     }
 
-                    uint32_t tile_idx = 0;
                     for (uint32_t row = 0; row < Sq_chunk_t; ++row) {
                         const uint32_t global_q_tile = q_chunk * Sq_chunk_t + row;
                         const bool q_valid = !use_padded_mask || (global_q_tile < valid_Sqt);
+                        cb_mask.reserve_back(Sk_chunk_t);
+                        uint32_t mask_write_ptr = cb_mask.get_write_ptr();
+                        uint32_t barrier_count = 0;
                         for (uint32_t col = 0; col < Sk_chunk_t; ++col) {
                             const uint32_t global_k_tile = k_chunk * Sk_chunk_t + col;
                             const bool k_valid = !use_padded_mask || (global_k_tile < valid_Skt);
@@ -537,21 +541,21 @@ void kernel_main() {
                                     {.page_id = mask_row_start + global_k_tile},
                                     {});
                             } else {
-                                fill_neginf_tile<mask_tile_bytes>(cb_mask_in, tile_idx);
+                                // reserve_back reset the write ptr to this row, so index by col.
+                                fill_neginf_tile<mask_tile_bytes>(cb_mask_in, col);
                             }
                             mask_write_ptr += mask_tile_bytes;
-                            tile_idx++;
                             if (++barrier_count == barrier_threshold) {
                                 noc.async_read_barrier();
                                 barrier_count = 0;
                             }
                         }
+                        noc.async_read_barrier();
+                        cb_mask.push_back(Sk_chunk_t);
                         if (q_valid) {
                             mask_row_start += valid_Skt;
                         }
                     }
-                    noc.async_read_barrier();
-                    cb_mask.push_back(mask_chunk_tiles);
                 }
 
                 // Complete K forward: flush write and signal receiver(s)

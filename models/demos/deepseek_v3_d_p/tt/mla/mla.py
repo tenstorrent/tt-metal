@@ -13,10 +13,7 @@ from transformers.configuration_utils import PretrainedConfig
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG, MLA_SDPA_CONFIG
-from models.demos.deepseek_v3_d_p.tt.mla.utils import zero_cache_padding_zigzag
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
-
-DECODE_CHUNK_ALIGN = 128  # decode reads KV in chunks of this many tokens
 
 
 class ttMLA:
@@ -510,6 +507,7 @@ class ttMLA:
         tt_kvpe: ttnn.Tensor,
         kvpe_cache: ttnn.Tensor,
         kv_actual_isl: int,
+        actual_isl: Optional[int],
         cache_batch_idx: int,
         cache_layer_idx: int,
         cache_user_id: int,
@@ -526,7 +524,6 @@ class ttMLA:
         compact (kv_lora_rank-wide) attention output afterwards. Returns attn_out in v_head_dim space.
         """
         assert not self.is_balanced, "chunked prefill currently requires is_balanced=False"
-        assert on_layer_complete is None, "on_layer_complete not yet supported in chunked prefill"
 
         tile_size = ttnn.TILE_SIZE
         chunk_size_global = seq_len_local * self.sp_factor
@@ -548,6 +545,27 @@ class ttMLA:
             cluster_axis=self.sp_axis,
         )
 
+        # Migration-gated: update_padded_kv_cache wrote full 32-row tiles, so the tokens between the
+        # last real token (kv_actual_isl + actual_isl) and the next 128-boundary hold stale data. Zero
+        # that pad window so the decode side reads clean zeros, then fire the per-layer ack. The op
+        # handles the window spilling across a chip border (block-cyclic layout).
+        if on_layer_complete is not None:
+            assert actual_isl is not None, "actual_isl required when on_layer_complete is set"
+            ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+                kvpe_cache,
+                cache_user_id,
+                cache_layer_idx,
+                self.layer_num,
+                kv_actual_isl + actual_isl,
+                chunk_size_global,
+                self.sp_axis,
+            )
+            # on_layer_complete hands this layer's KV to the migration worker, which reads the cache
+            # over NoC out-of-band from the ttnn command queue. Flush the (async) zero op to device
+            # first, else the worker can copy pre-zero (stale pad) data.
+            ttnn.synchronize_device(self.mesh_device)
+            on_layer_complete(self.layer_idx)
+
         # K and V are the single latent kvpe cache (V = first kv_lora_rank columns, materialized
         # in-op). logical_n = prior valid length + this chunk; cache_batch_idx selects this
         # user/layer's slot; kv_actual_isl drives the on-device rotation/causality offset.
@@ -566,7 +584,6 @@ class ttMLA:
             cluster_axis=self.sp_axis,
             mesh_device=self.mesh_device,
             topology=self.ccl_topology,
-            subdevice_id=self.tt_ccl.worker_sub_device_id,
             ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
             use_column_major_ccl=True,
             is_balanced=self.is_balanced,
@@ -746,30 +763,7 @@ class ttMLA:
         if not is_chunked:
             # === single-shot prefill: fill the whole local slot, run on-device ring SDPA with a
             # materialized V (wkv_b2 applied before attention). Unchanged from the original path. ===
-
-            # Zero the padding region of THIS layer's slot before fill so migration
-            # streams clean zeros (not residual data from a prior request) for the
-            # decode side. Slice the cache to batch=cache_layer_idx so the page math
-            # in zero_cache_range hits this layer's slot, not layer 0.
-            # TEMP(layerack-test): disabled — kvpe_cache[cache_layer_idx] squeeze hits a
-            # latest-main ND-sharded view TT_FATAL. Re-enable with the zero_out rework.
-            if False and on_layer_complete is not None:
-                assert actual_isl is not None, "actual_isl required when on_layer_complete is set"
-                seq_len_local = kvpe_cache.shape[2]
-                seq_len_total = seq_len_local * self.sp_factor
-                zero_cache_padding_zigzag(
-                    kvpe_cache=kvpe_cache[cache_layer_idx],
-                    global_end_token=actual_isl,
-                    sp_factor=self.sp_factor,
-                    seq_len=seq_len_total,
-                    decode_chunk_align=DECODE_CHUNK_ALIGN,
-                    tp_factor=self.tp_factor,
-                )
-
             ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, tt_kvpe, cache_layer_idx)
-
-            if on_layer_complete is not None:
-                on_layer_complete(self.layer_idx)
 
             tt_v_embedding = ttnn.linear(
                 tt_kv_nope,
@@ -797,7 +791,6 @@ class ttMLA:
                 cluster_axis=self.sp_axis,
                 mesh_device=self.mesh_device,
                 topology=self.ccl_topology,
-                subdevice_id=self.tt_ccl.worker_sub_device_id,
                 ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
                 use_column_major_ccl=True,
                 is_causal=True,
@@ -813,6 +806,7 @@ class ttMLA:
                 tt_kvpe=tt_kvpe,
                 kvpe_cache=kvpe_cache,
                 kv_actual_isl=kv_actual_isl,
+                actual_isl=actual_isl,
                 cache_batch_idx=cache_batch_idx,
                 cache_layer_idx=cache_layer_idx,
                 cache_user_id=cache_user_id,
