@@ -809,9 +809,9 @@ void fabric_mux_connection_rt_args(
 //   arch:          Wormhole or Blackhole
 //   fabric_config: fabric config
 //   clock_rate_mhz: device AICLK, used to convert ns -> cycles
-//   data_bytes:    total bytes that must traverse the bottleneck link
+//   data_bytes:    total bytes traversing the link
 //   num_links:     number of parallel ethernet links
-//   num_hops:      number of fabric hops (for latency)
+//   num_hops:      number of device hops
 std::pair<int, int> estimate_fabric_transfer_cycles(
     tt::ARCH arch,
     tt::tt_fabric::FabricConfig fabric_config,

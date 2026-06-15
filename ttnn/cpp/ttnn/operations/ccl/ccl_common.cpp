@@ -1961,7 +1961,7 @@ void fabric_mux_connection_rt_args(
 namespace {  // anonymous namespace for internal helpers
 
 // Fabric bandwidth is based on raw hardware capability
-double lookup_fabric_bw(tt::ARCH arch) {
+double lookup_fabric_link_bw(tt::ARCH arch) {
     switch (arch) {
         // WH: 100 Gbps per link = 12.5 GB/s
         case tt::ARCH::WORMHOLE_B0: return 12.5;
@@ -1971,18 +1971,14 @@ double lookup_fabric_bw(tt::ARCH arch) {
     }
 }
 
-// One-way per-hop fabric latency (ns): marginal cost to forward the first packet across one more
-// hop -- the pipeline-fill latency of a collective (see estimate_fabric_transfer_cycles).
+// One-way per-hop fabric latency (ns): marginal cost to forward the first packet across one more hop.
 // Measured on hardware via a single-clock round trip (src -> chip N hops away -> src) that cancels
-// cross-chip clock skew; per_hop = slope(RTT vs hops)/2, 256 B payload (latency-bound), p50.
-// 1D fabric (16 B LowLatency header) is ~17-19% cheaper/hop than 2D (96 B Hybrid); BH ~30% cheaper
-// than WH (400 Gb/s eth + 2 ERISCs vs 100 Gb/s + 1). Values in ns (WH 1.0 GHz cyc==ns; BH 1.35 GHz).
-//   arch        2D fabric    1D fabric
-//   Wormhole    874          711      (for T3K; Galaxy near-hop ~734)
-//   Blackhole   619          515      (p150_x4)
-// Lowest measured per-hop on purpose -- a roofline must not be beatable: WH-2D keeps T3K's 874 over
-// Galaxy's 907, and we stay linear. 1D is mildly super-linear on long lines (~695*h + 4.7*h^2) but
-// that growth is below-roofline degradation, not the floor.
+// cross-chip clock skew; per_hop = slope(RTT vs hops)/2, 256B payload (latency-bound), p50.
+// Fabric_1D uses 16B LowLatency header and Fabric_2D uses 96B Hybrid header.
+//   arch        2D fabric                          1D fabric
+//   Wormhole    874ns (for T3K, 907ns for Galaxy)  711ns (for T3K; 734ns on Galaxy for small hops)
+//   Blackhole   619ns (for p150_x4)                515ns (for p150_x4)
+// Note: Fabric_1D latency seems to increase with distance (~695*h + 4.7*h^2), not modelled here ...
 double lookup_fabric_hop_latency_ns(tt::ARCH arch, tt::tt_fabric::FabricConfig fabric_config) {
     const bool is_2d = tt::tt_fabric::is_2d_fabric_config(fabric_config);
     switch (arch) {
@@ -2001,12 +1997,10 @@ std::pair<int, int> estimate_fabric_transfer_cycles(
     uint64_t data_bytes,
     uint32_t num_links,
     uint32_t num_hops) {
-    const double bw_per_link = lookup_fabric_bw(arch);
-    const double total_bw = bw_per_link * num_links;
+    const double total_bw = lookup_fabric_link_bw(arch) * num_links;
     const double bandwidth_ns = (total_bw > 0.0) ? static_cast<double>(data_bytes) / total_bw : 0.0;
 
-    const double hop_lat = lookup_fabric_hop_latency_ns(arch, fabric_config);
-    const double latency_ns = hop_lat * num_hops;
+    const double latency_ns = lookup_fabric_hop_latency_ns(arch, fabric_config) * num_hops;
 
     // Convert ns -> device clock cycles
     const double cycles_per_ns = static_cast<double>(clock_rate_mhz) / 1000.0;
