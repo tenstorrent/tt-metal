@@ -1258,9 +1258,10 @@ class TTNNDotsVisionMLP(TTNNModule):
         self._tp_down_pc = None
         self._tp_down_k = None
         if _tp4_prefill_vision_enabled(self.device):
-            # tp4_mlp_down_pc -> wh_tp4_mlp_down_pc (swept obh=11 ibw=3 sub1x8,
-            # ~525 us in-model). The earlier generic obh=1 search ran ~1449 us /
-            # 14% TFLOPs (the "SLOW" down matmul in the perf report).
+            # tp4_mlp_down_pc -> wh_tp4_mlp_down_pc (swept 2026-06-15: g8x8 obh=11
+            # ibw=11 sub1x6, ~351 us in the faithful L1-context bench, -24% vs the
+            # prior g6x8 ibw=3 ~464 us). The earlier generic obh=1 search ran
+            # ~1449 us / 14% TFLOPs (the "SLOW" down matmul in the perf report).
             from models.experimental.tt_symbiote.modules.vision_tp4 import tp4_mlp_down_pc
 
             num_tp = self._mlp_tp_num_devices()

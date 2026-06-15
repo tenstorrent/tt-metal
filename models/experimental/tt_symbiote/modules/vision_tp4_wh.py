@@ -302,23 +302,33 @@ def wh_tp4_merger_fc2_pc(device):
 def wh_tp4_o_proj_pc(device, *, seq_len: int = 11264, ctx_dim: int = 384):
     """o_proj ``11264×384×1536``, BFP8×BFP8→BFP8 L1, on WH 8×8.
 
-    Silicon sweep 2026-06-10 (in0 L1 BFP8 / out L1 BFP8, LoFi, in0 co-resident):
-    grid=(6,8) tm=False M=44 N=8 obh=11 ibw=6 sub=(1,8) ~219 µs — 4.1× the prior
-    generic-search fallback (~893 µs) and 1.9× the earlier BF16-out winner
-    (obh=4 sub=(4,2), ~419 µs). Spreading N=1536 over 6 columns at per_core_N=8
-    with out_block_h=11 (4 outer-M iters) beats the 8-column per_core_N=6 layout.
+    Device-profiler sweep 2026-06-15 (faithful concat_heads→o_proj L1-context bench,
+    ``matmul_tests/bench_o_proj_tp4_ctx_sweep.py`` + ``prof_o_proj_tp4.py``; ctx
+    L1-resident as in0, out L1 BFP8): grid=(8,8) tm=False M=44 N=6 obh=22 ibw=12
+    sub=(2,3) ~110 µs (true device time) vs the prior grid=(6,8) ibw=6 ~152 µs
+    (−28%). Two changes win: (1) 64 cores (per_core_N=6 over 8 columns) vs 48 cores
+    (per_core_N=8 / 6 columns); (2) ibw=12 streams all of K (12 tiles) in one block.
+
+    out_block_h is capped at 22 (NOT 44) by the *full block's* L1 high-water: in
+    the live traced vision block ~831 KB/core is already resident during o_proj, so
+    the interm CB (out_block_h × per_core_N × 2048 B) must stay small. obh=44 was
+    ~98 µs in isolation but its ~540 KB interm CB clashes with that resident set
+    (program.cpp:934, "static circular buffer region ends at 1043744"); obh=22
+    halves the interm CB and fits. transpose_mcast=True is ~2× worse. Theoretical
+    floor ≈57 µs (64 cores, LoFi BFP8); <90 µs is out of reach once the live-block
+    L1 budget forbids the obh=44 single-pass tiling.
     """
     grid = device.compute_with_storage_grid_size()
     if int(grid.x) >= 8 and int(grid.y) >= 8 and seq_len == 11264 and ctx_dim == 384:
         return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(6, 8),
-            in0_block_w=6,
-            out_subblock_h=1,
-            out_subblock_w=8,
-            out_block_h=11,
-            out_block_w=8,
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=12,
+            out_subblock_h=2,
+            out_subblock_w=3,
+            out_block_h=22,
+            out_block_w=6,
             per_core_M=44,
-            per_core_N=8,
+            per_core_N=6,
             transpose_mcast=False,
             fused_activation=None,
             fuse_batch=False,
@@ -338,23 +348,33 @@ def wh_tp4_o_proj_pc(device, *, seq_len: int = 11264, ctx_dim: int = 384):
 def wh_tp4_mlp_down_pc(device, *, seq_len: int = 11264, itp: int = 1056):
     """Down matmul ``11264×1056×1536``, BFP8×BFP8→BFP8 L1, on WH 8×8.
 
-    Silicon sweep 2026-06-10 (in0 L1 BFP8 / out L1 BFP8, LoFi, in0 co-resident):
-    grid=(6,8) tm=False M=44 N=8 obh=11 ibw=3 sub=(1,8) ~525 µs — 3.4× the generic
-    L1 search (~1771 µs). The search ties on dst_area=8 across out_block_h and
-    then prefers the *smallest* obh (=1 → 44 outer-M passes → 44× weight DRAM
-    re-streams); this matmul is weight-DRAM-bound, so obh=11 (4 passes) wins big.
+    Silicon sweep 2026-06-15 (faithful gate→up→silu→down L1-context bench,
+    ``matmul_tests/bench_mlp_down_tp4_ctx_sweep.py`` — gum L1-resident as the down
+    in0, out L1 BFP8, residual DRAM): grid=(8,8) tm=False M=44 N=6 obh=11 ibw=11
+    sub=(1,6) ~351 µs vs the prior grid=(6,8) ibw=3 winner ~464 µs (−24%). Two
+    changes win: (1) 64 cores (per_core_N=6 spreads N=48 over 8 columns) vs the
+    old 48 cores (per_core_N=8 / 6 columns); (2) in0_block_w=11 (K=33 tiles → 3
+    K-passes) vs ibw=3 (11 passes), cutting weight DRAM re-streams.
+
+    NB the isolated-bench winners (obh=22/44 with ibw=11/33) are ~10-15% faster on
+    a *fresh* device but **OOM in the live model** — their in0/in1 CBs clash with
+    the co-resident gum + L1 output. ibw=33 / obh>11 only fit when nothing else is
+    L1-resident, which never happens in the real MLP. See the bench docstring and
+    the dots-ocr L1-saturation notes. The theoretical floor for this op is ~140 µs
+    (64 cores, LoFi BFP8); reaching <200 µs would need a larger-reuse tiling that
+    the L1 budget forbids, or a lower-precision (BFP4) down input.
     """
     grid = device.compute_with_storage_grid_size()
     if int(grid.x) >= 8 and int(grid.y) >= 8 and seq_len == 11264 and itp == 1056:
         return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(6, 8),
-            in0_block_w=3,
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=11,
             out_subblock_h=1,
-            out_subblock_w=8,
+            out_subblock_w=6,
             out_block_h=11,
-            out_block_w=8,
+            out_block_w=6,
             per_core_M=44,
-            per_core_N=8,
+            per_core_N=6,
             transpose_mcast=False,
             fused_activation=None,
             fuse_batch=False,
