@@ -33,11 +33,30 @@ void kernel_main() {
 
     unary_op_init_common(cb_pre_in1, cb_out);  // caller-owned BIG init
 
+    // 2D: process num_tiles_per_cycle tiles per DEST window (Chunked + Block index)
+    // instead of one tile at a time. Host keeps num_tiles_per_cycle <= input CB depth, so the
+    // Chunked wait_front(block) can't hang; the chain also clamps block to chain_max_block_v
+    // (DEST/lane) as a DEST-overflow safety net.
     ckl::eltwise_chain(
-        num_tiles,
-        ckl::CopyTile<cb_pre_in1, ckl::Dst::D0, ckl::InputLifecycle::Streaming, ckl::CopyTileReconfig::None>{},
-        ckl::CopyTile<cb_pre_in2, ckl::Dst::D1, ckl::InputLifecycle::Streaming, ckl::CopyTileReconfig::None>{},
-        ckl::CopyTile<cb_pre_in3, ckl::Dst::D2, ckl::InputLifecycle::Streaming, ckl::CopyTileReconfig::None>{},
+        ckl::EltwiseShape::tiles(num_tiles, num_tiles_per_cycle),
+        ckl::CopyTile<
+            cb_pre_in1,
+            ckl::Dst::D0,
+            ckl::InputLifecycle::Chunked,
+            ckl::CopyTileReconfig::None,
+            ckl::OperandKind::Block>{},
+        ckl::CopyTile<
+            cb_pre_in2,
+            ckl::Dst::D1,
+            ckl::InputLifecycle::Chunked,
+            ckl::CopyTileReconfig::None,
+            ckl::OperandKind::Block>{},
+        ckl::CopyTile<
+            cb_pre_in3,
+            ckl::Dst::D2,
+            ckl::InputLifecycle::Chunked,
+            ckl::CopyTileReconfig::None,
+            ckl::OperandKind::Block>{},
         ckl::OptionalChainElement < kSel == 0,
         ckl::Where < TERNARY_DF,
         ckl::Dst::D0,
@@ -56,5 +75,5 @@ void kernel_main() {
         ckl::Dst::D1,
         ckl::Dst::D2,
         ckl::Dst::D0 >> {},
-        ckl::PackTile<cb_out, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
+        ckl::PackTile<cb_out, ckl::OutputLifecycle::Chunked, ckl::PackTileReconfig::None>{});
 }
