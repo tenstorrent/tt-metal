@@ -177,7 +177,7 @@ run_tracy_wasm_gui_http_integration() {
     # Shared CI runners: kill listeners after assertions (see test module docstring).
     export TRACY_WASM_HTTP_TEST_TEARDOWN=1
     TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode": false}' pytest \
-        tests/ttnn/tracy/test_tracy_wasm_http_integration.py::test_tracy_wasm_gui_http_after_tracy_capture \
+        tests/ttnn/tracy/test_tracy_wasm_http_integration.py \
         -v --tb=short
 }
 
