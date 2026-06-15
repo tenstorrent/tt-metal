@@ -343,7 +343,15 @@ class CCLManager:
         )
 
     def reset_global_semaphores(self):
-        """Reset all global semaphores to 0"""
+        """Reset all global semaphores to 0 AND the ping-pong indices that pair with them.
+
+        The ping-pong indices (rs/ag/np/sr/barrier + per-shape buffer indices) advance on
+        every collective and select which buffer/semaphore half the NEXT collective uses.
+        Resetting the semaphore VALUES without resetting these indices desyncs them — the
+        next collective then waits on the wrong (already-consumed) semaphore half and
+        deadlocks. This is the cross-request vision-encoder hang (TT_THROW fetch-queue
+        timeout) seen when a video request follows image/multi-image requests, so the
+        indices MUST be reset together with the semaphores."""
         for axis in [0, 1]:
             for sem in self.np_ping_pong_semaphores[axis]:
                 ttnn.reset_global_semaphore_value(sem, 0)
@@ -353,6 +361,14 @@ class CCLManager:
                 ttnn.reset_global_semaphore_value(sem, 0)
             for sem in self.ag_ping_pong_semaphores[axis]:
                 ttnn.reset_global_semaphore_value(sem, 0)
+        # Reset ping-pong indices so they pair with the just-reset semaphores.
+        self.rs_ping_pong_idx = [0, 0]
+        self.ag_ping_pong_idx = [0, 0]
+        self.np_ping_pong_idx = [0, 0]
+        self.sr_ping_pong_idx = [0, 0]
+        self.barrier_idx = [0, 0]
+        for _k in self._ping_pong_buffer_indices:
+            self._ping_pong_buffer_indices[_k] = 0
 
     def all_gather_persistent_buffer(
         self, tensor: ttnn.Tensor, /, *, dim: int, mesh_axis: int | None, use_hyperparams: bool = False
