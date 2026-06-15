@@ -14,27 +14,27 @@
 
 ## The Metal 2.0 factory concept
 
-A Metal 2.0 op factory satisfies **`ProgramSpecFactoryConcept`**: it implements a single method, `create_program_spec`, that returns a `ProgramArtifacts` (a `ProgramSpec` plus its `ProgramRunArgs`). The framework adapter stamps a `Program` from the spec onto each mesh coordinate range on cache miss, and refreshes tensor bindings on cache hit.
+A Metal 2.0 op factory satisfies **`MetalV2FactoryConcept`**: it implements a single method, `create_program_artifacts`, that returns a `ProgramArtifacts` (a `ProgramSpec`, its `ProgramRunArgs`, and any op-owned tensors the factory allocates). The framework adapter stamps a `Program` from the spec onto each mesh coordinate range on cache miss, and refreshes tensor bindings on cache hit.
 
-This is the only Metal 2.0 factory concept available today. It supports:
+This is the Metal 2.0 factory concept ops port to today. It supports:
 
 - **Single-program** — the factory produces one `ProgramSpec`, stamped identically across the mesh.
-- **No op-owned device resources** — every tensor the factory references must be reachable from `tensor_args` or `tensor_return_value`. The factory does not allocate its own scratch `MeshTensor`s or `GlobalSemaphore`s.
+- **Op-owned device tensors (optional)** — the factory *may* allocate its own scratch / workspace `MeshTensor`s and return them in `op_owned_tensors`; the framework parks them in the cache entry at a stable address for the cached `Program`'s lifetime. It may **not** allocate its own `GlobalSemaphore`s (the artifact carries only `MeshTensor`s). Every tensor a `TensorArgument` references must be reachable from `tensor_args` / `tensor_return_value` *or* be one of the `op_owned_tensors`.
 - **Strict tensor-arg matching** — every `TensorParameter` enforces an exact `TensorSpec` match when the framework binds a tensor to it.
 
 ```cpp
 struct MyProgramFactory {
-    static ttnn::device_operation::ProgramArtifacts create_program_spec(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const operation_attributes_t& attributes,
         const tensor_args_t&          tensor_args,
         tensor_return_value_t&        tensor_return_value);
 };
 ```
 
-`ProgramArtifacts` has two fields, `spec` and `run_params`:
+`ProgramArtifacts` has three fields — `spec`, `run_params`, and `op_owned_tensors` (default-empty):
 
 ```cpp
-ttnn::device_operation::ProgramArtifacts MyProgramFactory::create_program_spec(
+ttnn::device_operation::ProgramArtifacts MyProgramFactory::create_program_artifacts(
     const operation_attributes_t& attributes,
     const tensor_args_t&          tensor_args,
     tensor_return_value_t&        tensor_return_value) {
@@ -46,22 +46,23 @@ ttnn::device_operation::ProgramArtifacts MyProgramFactory::create_program_spec(
     return ttnn::device_operation::ProgramArtifacts{
         .spec       = std::move(spec),
         .run_params = std::move(run_args),
+        // .op_owned_tensors = std::move(scratch),  // only if the factory allocates its own tensors
     };
 }
 ```
 
 ### How the framework caches and dispatches it
 
-The op author writes only `create_program_spec`. The framework adapter does the rest:
+The op author writes only `create_program_artifacts`. The framework adapter does the rest:
 
-- **Cache miss**: the adapter calls `create_program_spec`, builds one `Program` per mesh coordinate range from the spec, applies the initial `ProgramRunArgs`, and resolves each `TensorArgument` against the tensors enumerated from `tensor_args` / `tensor_return_value` (matched by `MeshTensor` identity within the call).
-- **Cache hit**: the adapter enumerates fresh tensors, refreshes the cached tensor bindings in place, and applies them — no `Program` rebuild, no factory re-run.
+- **Cache miss**: the adapter calls `create_program_artifacts`, builds one `Program` per mesh coordinate range from the spec, applies the initial `ProgramRunArgs`, and resolves each `TensorArgument` against the tensors enumerated from `tensor_args` / `tensor_return_value` followed by the factory's `op_owned_tensors` (matched by `MeshTensor` identity within the call). The op-owned tensors are parked in the cache entry so their allocation outlives the miss and stays at a stable address across dispatches.
+- **Cache hit**: the adapter enumerates fresh tensors (io tensors plus the parked op-owned ones), refreshes the cached tensor bindings in place, and applies them — no `Program` rebuild, no factory re-run.
 
-The cache key is the generated `ProgramSpec`. Two dispatches whose factories produce equal specs share a cache entry; only the tensor bindings are refreshed between them. The porter doesn't write any of this — it falls out of returning a correct `ProgramArtifacts`.
+The cache key is the op itself — its type, attributes, and tensor args (the framework's automatic hash), combined with the target mesh coordinates; a custom `compute_program_hash`, if present, replaces that default. Two dispatches with matching op-args share a cache entry, and only the tensor bindings are refreshed between them. The porter doesn't write any of this — it falls out of returning a correct `ProgramArtifacts`.
 
 ### Extracting the tensor
 
-The factory receives device-resident `ttnn::Tensor`s through `tensor_args` and `tensor_return_value`. Declare each `TensorParameter` from the tensor's `tensor_spec()`, and reference the same tensor from the paired `TensorArgument` in `ProgramRunArgs::tensor_args`. The adapter matches a `TensorArgument` back to its input by `MeshTensor` identity — so a `TensorArgument` must reference a tensor reachable from the factory's parameters, never a copy. (Constructing or copying a tensor and referencing the copy fails at runtime.)
+The factory receives device-resident `ttnn::Tensor`s through `tensor_args` and `tensor_return_value`. Declare each `TensorParameter` from the tensor's `tensor_spec()`, and reference the same tensor from the paired `TensorArgument` in `ProgramRunArgs::tensor_args`. The adapter matches a `TensorArgument` back to its input by `MeshTensor` identity — so a `TensorArgument` must reference a tensor reachable from the factory's parameters (an io tensor, or one of the `op_owned_tensors`), never a copy. (Constructing or copying a tensor and referencing the copy fails at runtime.)
 
 ---
 
@@ -69,18 +70,17 @@ The factory receives device-resident `ttnn::Tensor`s through `tensor_args` and `
 
 The audit's job here is one question: **does the op fit the single concept above?**
 
-- **Single-program, no factory-allocated device resources** (the common case) → `ProgramSpecFactoryConcept`. Proceed.
+- **Single-program** (the common case — op-owned tensors are fine) → `MetalV2FactoryConcept`. Proceed.
 - **Anything else** → the port is **blocked on framework work**, not porter-resolvable. Record RED and stop.
 
 The "anything else" cases — and the reason they're blocked:
 
-- **Op-owned device resources.** The factory allocates `MeshTensor`s (scratch tensors, lookup tables, intermediates) or `GlobalSemaphore`s in its body, whose lifetime should track the cached entry rather than the caller's tensors. The framework adapter has an explicit `TODO` for these; today a `TensorArgument` that doesn't reference an input tensor `TT_FATAL`s.
+- **Op-owned `GlobalSemaphore`s.** The factory allocates its own `GlobalSemaphore`s in its body. Op-owned *tensors* are supported (the artifact carries them; see above), but the artifact has no slot for op-owned semaphores yet. An op needing only op-owned *tensors* is **not** blocked — it ports cleanly.
 - **Multi-program / per-coord variation.** The op's programs genuinely differ across mesh coordinates (CCL-style). The single-program adapter stamps one spec everywhere.
-- **Heavy immutable-extraction work** that the basic shape would re-run wastefully, or a need for **caching-strategy control** or **tensor-arg relaxations** as a cache-breadth lever.
 
-These were the subject of a richer factory-concept design (op-owned resources, a caching-strategy axis, multi-program workloads, an advanced split-method shape) that is **being reworked** after fast-path performance findings. None of it is on `main`. If you hit one of these cases, the op is parked until that framework work lands — record it in the audit so it feeds prioritization.
+Op-owned *tensors* are supported on this concept; the remaining gaps — op-owned `GlobalSemaphore`s and genuine multi-program workloads — are not porter-resolvable and are tracked separately. If you hit one, the op is parked until that framework work lands — record it in the audit so it feeds prioritization.
 
-> **Heads-up — a legacy `MeshWorkload` is not automatically a multi-program op.** Some legacy ops construct a `MeshWorkload` only because the legacy framework couldn't carry op-owned tensors on the single-program path. If every per-coord program is structurally identical (same kernels, same DFB shape, same bindings — only the tensor data differs) and the only thing pushing it multi-program was a resource workaround, the op is *morally* single-program but needs op-owned-resource support to port cleanly. That support isn't on `main` yet — so record it as blocked-on-framework, with the observation that it's a resource-workaround unwind rather than genuine per-coord variation.
+> **Heads-up — a legacy `MeshWorkload` is not automatically a multi-program op.** Some legacy ops construct a `MeshWorkload` only because the legacy framework couldn't carry op-owned tensors on the single-program path. If every per-coord program is structurally identical (same kernels, same DFB shape, same bindings — only the tensor data differs) and the only thing pushing it multi-program was a resource workaround, the op is *morally* single-program and **ports cleanly** — carry its workspace tensors in `op_owned_tensors` on the single-program concept and drop the `MeshWorkload`. Record it as a resource-workaround unwind rather than genuine per-coord variation.
 
 ### Tensor-arg matching — keep strict
 
@@ -110,7 +110,7 @@ When the port causes a legacy factory entry point to vanish (`create_program_des
 
 ### 3. Drop a factory parameter that exists only for a pybind hook
 
-Some legacy factories carry a non-standard parameter that production code never sets — it exists only so a pybind test/introspection hook can drive the factory (layernorm's `create_descriptor` took an extra `const std::optional<CoreRangeSet>& core_range_set` used only by its pybind hook). The fixed `create_program_spec` signature (`attributes`, `tensor_args`, `tensor_return_value`) cannot carry it. Drop the parameter, inline its production default in the factory body, and delete the pybind hook that passed it (same procedure and report-handling as exception 2). This is mechanically the pybind-removal case with an extra parameter to unwind; flag it the same way. Don't try to preserve the hook — its `ProgramDescriptor` return is exactly what the port eliminates.
+Some legacy factories carry a non-standard parameter that production code never sets — it exists only so a pybind test/introspection hook can drive the factory (layernorm's `create_descriptor` took an extra `const std::optional<CoreRangeSet>& core_range_set` used only by its pybind hook). The fixed `create_program_artifacts` signature (`attributes`, `tensor_args`, `tensor_return_value`) cannot carry it. Drop the parameter, inline its production default in the factory body, and delete the pybind hook that passed it (same procedure and report-handling as exception 2). This is mechanically the pybind-removal case with an extra parameter to unwind; flag it the same way. Don't try to preserve the hook — its `ProgramDescriptor` return is exactly what the port eliminates.
 
 ---
 
@@ -122,11 +122,11 @@ The auditor adds the following to `METAL2_PREPORT_AUDIT.md`. The decision is rec
 ## TTNN ProgramFactory
 
 ### Concept
-ProgramSpecFactoryConcept — or — BLOCKED (op-owned resources / multi-program / advanced shape; see below)
+MetalV2FactoryConcept — or — BLOCKED (op-owned GlobalSemaphores / genuine multi-program; see below)
 
 ### Fit
 - Single vs multi-program: [single — one ProgramSpec stamped across the mesh / multi — BLOCKED]
-- Op-owned device resources: [none / present — BLOCKED, list the resources]
+- Op-owned device resources: [none / op-owned tensors (supported) / op-owned GlobalSemaphores — BLOCKED, list them]
 - Tensor-arg matching: strict [default; deviation requires a paragraph and is not a port-time call]
 - Legacy-to-Metal-2.0 shape: [1:1 with legacy — or — legacy MeshWorkload was a resource workaround, see heads-up]
 
@@ -134,7 +134,7 @@ ProgramSpecFactoryConcept — or — BLOCKED (op-owned resources / multi-program
 [present at file:line → port deletes it / none — already default reflection-based hash]
 
 ### Stop signals
-[If BLOCKED: which framework capability is missing (op-owned resources / multi-program / advanced extraction), and confirm the overall audit result is RED. Otherwise: "None."]
+[If BLOCKED: which framework capability is missing (op-owned GlobalSemaphores / genuine multi-program), and confirm the overall audit result is RED. Otherwise: "None."]
 ```
 
 ## Port plan deliverable (porter-facing)
@@ -143,7 +143,7 @@ The porter inherits the audit's decision; the port plan's TTNN section is a brie
 
 ```markdown
 ## TTNN ProgramFactory
-- Concept (inherited from audit): ProgramSpecFactoryConcept
+- Concept (inherited from audit): MetalV2FactoryConcept
 - Custom compute_program_hash: [delete (was at file:line) / none]
 - Implementation notes: [optional — anything specific about how this op realizes the concept; most ports won't need this]
 ```
@@ -158,7 +158,7 @@ The porter adds the following to `METAL2_PORT_REPORT.md` at the end of the port.
 ## TTNN ProgramFactory
 
 ### Concept realized
-[Confirm ProgramSpecFactoryConcept, or — if something changed — explain why and confirm it was surfaced with the invoker before re-deciding.]
+[Confirm MetalV2FactoryConcept, or — if something changed — explain why and confirm it was surfaced with the invoker before re-deciding.]
 
 ### Device-op-class edits
 - Custom compute_program_hash deleted: [file:line, or "none"]
@@ -167,7 +167,7 @@ The porter adds the following to `METAL2_PORT_REPORT.md` at the end of the port.
 ### Open items
 [Anything noticed about the factory layer during the port:
 - Relaxation candidates (kernels that would tolerate relaxed tensor matching — not applied during port).
-- Reasons the op would benefit from a capability not yet on main (op-owned resources, multi-program, caching control).
+- Reasons the op would benefit from a capability not yet on this concept (op-owned GlobalSemaphores, multi-program, caching-strategy control).
 - Friction with the concept fit or the entry-point wiring.]
 ```
 
@@ -180,5 +180,5 @@ If the port stayed on the default concept with no device-op edits, these section
 - [Audit doc](port_op_to_metal2_audit.md) — the feasibility audit that invokes this document as its final step.
 - [Port recipe](port_op_to_metal2_recipe.md) — builds the `ProgramSpec` + `ProgramRunArgs` this document's factory entry point returns.
 - [Migration guide — Design Principles](metal2_migration_guide.md#design-principles) — the named-binding model the spec is built on.
-- [`ttnn/api/ttnn/operation_concepts.hpp`](https://github.com/tenstorrent/tt-metal/blob/main/ttnn/api/ttnn/operation_concepts.hpp) — `ProgramSpecFactoryConcept` definition in code.
-- [`ttnn/api/ttnn/metal2_artifacts.hpp`](https://github.com/tenstorrent/tt-metal/blob/main/ttnn/api/ttnn/metal2_artifacts.hpp) — `ProgramArtifacts` field layout.
+- [`ttnn/api/ttnn/operation_concepts.hpp`](https://github.com/tenstorrent/tt-metal/blob/main/ttnn/api/ttnn/operation_concepts.hpp) — `MetalV2FactoryConcept` definition in code.
+- [`ttnn/api/ttnn/metal_v2_artifacts.hpp`](https://github.com/tenstorrent/tt-metal/blob/main/ttnn/api/ttnn/metal_v2_artifacts.hpp) — `ProgramArtifacts` field layout.

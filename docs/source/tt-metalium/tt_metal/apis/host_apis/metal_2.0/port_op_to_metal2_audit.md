@@ -291,7 +291,7 @@ Metal 2.0 **supports** RTA varargs via the kernel-side vararg mechanism, so this
 
 ### TTNN factory concept analysis
 
-**This subject is analysis, not a decision.** It does **not** choose a Metal 2.0 factory concept and it does **not** gate the port — the concept is selected downstream from the facts gathered here. Your job is to answer six questions about the op's TTNN-side shape and record each with `file:line` evidence; the downstream concept-selection process (see [`port_op_to_metal2_ttnn_factory.md`](port_op_to_metal2_ttnn_factory.md)) consumes them. Run this subject **last**, after the other subjects have produced their findings — op-owned-tensor recognition draws on the [TensorAccessor-handling](#tensoraccessor-handling) per-binding inventory.
+**This subject is analysis, not a decision.** Ops port to a single Metal 2.0 factory concept (`MetalV2FactoryConcept`); this subject does **not** re-decide that and does **not** itself gate. Your job is to answer six questions about the op's TTNN-side shape and record each with `file:line` evidence; the downstream port (see [`port_op_to_metal2_ttnn_factory.md`](port_op_to_metal2_ttnn_factory.md)) consumes them to confirm the op fits that concept and to surface any residual blocker (genuine multi-program, op-owned `GlobalSemaphore`s). Run this subject **last**, after the other subjects have produced their findings — op-owned-tensor recognition draws on the [TensorAccessor-handling](#tensoraccessor-handling) per-binding inventory.
 
 **Scope reminder.** Throughout, *"does this op …"* means *"do **any** of this op's ProgramFactories …"* — inspect every ProgramFactory the op defines; a yes on any one is a yes for the op, and you attribute the finding to the factory (and DeviceOperation, when bundled) where it appears.
 
@@ -299,7 +299,7 @@ Answer each question Yes/No with the evidence that decided it:
 
 1. **Op-owned tensors?** Does any ProgramFactory allocate and manage device tensors of its own — intermediate / scratch tensors beyond the op's declared input and output tensors? *Recognition:* a factory (or the device-operation's tensor plumbing) that creates a device tensor it owns — e.g. `create_device_tensor` / `allocate_tensor_on_device` in the factory or device-op `.cpp`, or an intermediate `Tensor` constructed and threaded into the program that is not in `tensor_args` / `tensor_return_value`. Record each owned-tensor site.
 
-2. **MeshWorkload concept needed?** Does any ProgramFactory *genuinely* require multi-program / MeshWorkload structure (true cross-program or cross-device coordination)? *Recognition:* the factory provides `create_mesh_workload` / `create_workload_descriptor`, or the device-operation carries `cached_mesh_workload_t`. **False-positive trap — read this before answering Yes.** The TTNN descriptor infra *forces* single-program ops that have op-owned tensors (Q1) onto the MeshWorkload path as a plumbing artifact — that is **not** a genuine MeshWorkload need. Distinguish "needs MeshWorkload because the op is genuinely multi-program / cross-device-coordinated" (→ **Yes**) from "appears on the MeshWorkload path only because it has op-owned tensors" (→ **No**, and say so explicitly, naming Q1 as the cause). When you can't tell, mark it a question for the user rather than guessing Yes.
+2. **MeshWorkload concept needed?** Does any ProgramFactory *genuinely* require multi-program / MeshWorkload structure (true cross-program or cross-device coordination)? *Recognition:* the factory provides `create_mesh_workload` / `create_workload_descriptor`, or the device-operation carries `cached_mesh_workload_t`. **False-positive trap — read this before answering Yes.** A *legacy* op may sit on the MeshWorkload path only because the old framework couldn't carry op-owned tensors on the single-program path — a plumbing artifact, **not** a genuine MeshWorkload need. `MetalV2FactoryConcept` now carries op-owned tensors natively (`op_owned_tensors`), so such an op is morally single-program and **ports cleanly** — it is not blocked. Distinguish "needs MeshWorkload because the op is genuinely multi-program / cross-device-coordinated" (→ **Yes**) from "appears on the MeshWorkload path only because it has op-owned tensors" (→ **No**, and say so explicitly, naming Q1 as the cause). When you can't tell, mark it a question for the user rather than guessing Yes.
 
 3. **Pybind `create_descriptor`?** Does the op pybind the *innards of a ProgramFactory*? **Carve-out first:** every op pybinds the op *itself* — the user-facing function (`bind_function<"op_name">` / `mod.def("op_name", …)`), its program-config classes, its enums. **That normal surface is expected and is *not* a finding.** What this question targets is the surprise: a binding of the **ProgramFactory class** that reaches into `create_descriptor`. *Recognition:* an `nb::class_<…ProgramFactory>(…).def_static("create_descriptor", …)` (or `.def`) in the op's `*_nanobind.cpp`. The port deletes this (a sanctioned device-op-class edit — see `port_op_to_metal2_ttnn_factory.md`); record the binding site. *(Canonical example: layernorm's `bind_normalization_layernorm_program_factory` binds `create_descriptor` on both factory classes — note the extra `core_range_set` parameter that exists **only** to drive the pybind hook, the tell that this is factory-innards, not the normal op surface.)*
 
@@ -309,7 +309,7 @@ Answer each question Yes/No with the evidence that decided it:
 
 6. **Custom override-runtime-args?** Does any ProgramFactory define a custom `override_runtime_arguments` (the cached-program override hook)? Yes/No + `file:line`. *Recognition:* a `static void <Factory>::override_runtime_arguments(...)` declaration / definition.
 
-**Finding roles.** None of these gate. Q1 and Q2 are **FYI-U** (team-only — they feed the downstream concept selection). Q3, Q4, and Q6 are also **FYI-P** porter heads-ups, because each presages a device-op-class edit; Q5 (custom hash) is already carried as PORT WORK by the [Custom program hash](#custom-program-hash) subject, so here it's a presence cross-reference. Record all six in the team doc; surface Q3/Q4/Q6 in the porter brief.
+**Finding roles.** None of these gate. Q1 and Q2 are **FYI-U** (team-only — they inform the port's TTNN ProgramFactory wiring). Q3, Q4, and Q6 are also **FYI-P** porter heads-ups, because each presages a device-op-class edit; Q5 (custom hash) is already carried as PORT WORK by the [Custom program hash](#custom-program-hash) subject, so here it's a presence cross-reference. Record all six in the team doc; surface Q3/Q4/Q6 in the porter brief.
 
 **Output.** Record the six answers in `METAL2_PREPORT_AUDIT.md`: the Yes/No summary fills the *TTNN Readiness* rows of the [Status summary](#output-the-two-documents), the full evidence lands under **TTNN factory analysis** in the Team-only section, and the porter-relevant items (Q3, Q4, Q6) are mirrored into **Heads-ups** (and thus the brief).
 
@@ -361,7 +361,7 @@ Opens with a **status summary that mirrors the cross-team readiness spreadsheet 
 | *Feature Support* — overall | GREEN / RED |
 | *Feature Support* — Variadic-CTA | Ok / Unsupported |
 | *TTNN Readiness* — Op-owned tensors | No / Yes: `<factory + site>` |
-| *TTNN Readiness* — MeshWorkload needed | No / No (op-owned-tensor artifact only) / Yes (genuine): `<reason>` |
+| *TTNN Readiness* — MeshWorkload needed | No / No (op-owned tensors — carried natively, single-program) / Yes (genuine): `<reason>` |
 | *TTNN Readiness* — Pybind `create_descriptor` | No / Yes: `<nanobind site>` |
 | *TTNN Readiness* — Other risky pybind | None / `<description + site>` |
 | *TTNN Readiness* — Custom hash | No / Yes → delete (see Custom program hash) |
@@ -415,7 +415,7 @@ Opens with a **status summary that mirrors the cross-team readiness spreadsheet 
 - **TensorAccessor convertibility** (per Case-2 binding): convertible / genuinely exotic.
 - **Out-of-directory coupling & donor shape:** the full by-shape inventory (op-level roll-up, summary table, per-call detail, borrowed kernel files).
 - **Relaxation candidates** (mined from the custom hash before deletion): **FALLIBLE — candidates to verify**, default strict.
-- **TTNN factory analysis:** the six-question answers — op-owned tensors, MeshWorkload need (genuine vs. op-owned-tensor artifact), pybind `create_descriptor`, other risky pybind, custom hash, custom `override_runtime_arguments` — with `file:line` evidence. Feeds downstream concept selection; does not gate.
+- **TTNN factory analysis:** the six-question answers — op-owned tensors, MeshWorkload need (genuine vs. op-owned-tensor artifact), pybind `create_descriptor`, other risky pybind, custom hash, custom `override_runtime_arguments` — with `file:line` evidence. Informs the port's TTNN ProgramFactory wiring; does not gate.
 
 ## Misc anomalies  *(omit if none; team-only, non-gating)*
 
@@ -450,10 +450,10 @@ Ordered by the porter's workflow: plan → construct → watch-for. Issued when 
 
 ## TTNN factory analysis
 
-The factory concept is selected downstream from these facts (→ `port_op_to_metal2_ttnn_factory.md`); the port does not pick it here. Carry these forward:
+These facts feed the port's TTNN ProgramFactory wiring (→ `port_op_to_metal2_ttnn_factory.md`); the op ports to `MetalV2FactoryConcept`. Carry them forward:
 
 - **Op-owned tensors:** <none | `<factory + site>`>
-- **MeshWorkload:** <not needed | genuine multi-program need | op-owned-tensor artifact only (not a real need)>
+- **MeshWorkload:** <not needed | genuine multi-program need | op-owned tensors only (carried natively — not a real need)>
 - **Pybind `create_descriptor`:** <none | delete at `<nanobind site>`>
 - **Other risky pybind:** <none | `<description + site>`>
 - **Custom `override_runtime_arguments`:** <none | `<factory + site>`>
