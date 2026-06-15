@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 import torch
 from loguru import logger
-from transformers import MistralCommonBackend
+from transformers import AutoProcessor
 from transformers.masking_utils import create_causal_mask
 from transformers.models.ministral3.configuration_ministral3 import Ministral3Config
 from transformers.models.mistral3.modeling_mistral3 import Mistral3Model
@@ -336,12 +336,13 @@ def main(argv: list[str] | None = None):
     try:
         dtype_tt = ttnn.bfloat16
 
-        tokenizer = MistralCommonBackend.from_pretrained(
+        processor = AutoProcessor.from_pretrained(
             args.model_id,
             trust_remote_code=True,
             fix_mistral_regex=True,
             local_files_only=os.getenv("CI") == "true",
         )
+        tokenizer = getattr(processor, "tokenizer", processor)
         if args.messages_json is not None:
             bench_messages = _load_messages_json(args.messages_json, args.benchmark_scenario)
             raw_ids = tokenizer.apply_chat_template(
