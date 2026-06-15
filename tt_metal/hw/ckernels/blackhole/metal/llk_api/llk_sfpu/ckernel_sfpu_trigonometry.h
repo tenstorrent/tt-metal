@@ -837,6 +837,7 @@ sfpi_inline sfpi::vFloat _sfpu_sqrt_ge0_(sfpi::vFloat x) {
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_acosh() {
     constexpr float LOG1P_LARGE = 268435456.0f;  // 2^28
+    constexpr float LN2 = 0.6931471805599453f;
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat inp = sfpi::dst_reg[0];
@@ -845,8 +846,9 @@ inline void calculate_acosh() {
         v_elseif(inp > sfpi::vConst1) {
             sfpi::vFloat arg;
             v_if(inp >= LOG1P_LARGE) {
-                // Large region: acosh(x) ~= ln(2x) = log1p(2x - 1); no x^2 term.
-                arg = (inp + inp) - sfpi::vConst1;
+                // Large region: acosh(x) ~= ln(2x) = LN2 + log1p(x - 1). Forming
+                // x - 1 (not 2x - 1) avoids fp32 overflow near the top of the range.
+                arg = inp - sfpi::vConst1;
             }
             v_elseif(inp < 1.5f) {
                 // Small region: argument of log1p is (x-1) + sqrt((x-1)*(x+1)),
@@ -861,6 +863,9 @@ inline void calculate_acosh() {
             }
             v_endif;
             res = calculate_log1p_fp32<is_fp32_dest_acc_en>(arg);
+            // Large region carries the extra ln(2) from acosh(x) ~= LN2 + ln(x).
+            v_if(inp >= LOG1P_LARGE) { res = res + LN2; }
+            v_endif;
         }
         v_endif;
 
@@ -885,14 +890,16 @@ inline void calculate_acosh() {
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_asinh() {
     constexpr float LOG1P_LARGE = 268435456.0f;  // 2^28
+    constexpr float LN2 = 0.6931471805599453f;
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat inp = sfpi::dst_reg[0];
         sfpi::vFloat a = sfpi::abs(inp);
         sfpi::vFloat arg;
         v_if(a >= LOG1P_LARGE) {
-            // Large region: asinh(a) ~= ln(2a) = log1p(2a - 1); no x^2 term.
-            arg = (a + a) - sfpi::vConst1;
+            // Large region: asinh(a) ~= ln(2a) = LN2 + log1p(a - 1). Forming a - 1
+            // (not 2a - 1) avoids fp32 overflow near the top of the range.
+            arg = a - sfpi::vConst1;
         }
         v_elseif(a < 0.5f) {
             // x + sqrt(1+x^2) - 1 = x + x^2 / (1 + sqrt(1+x^2)); keeps the log1p
@@ -906,6 +913,9 @@ inline void calculate_asinh() {
         }
         v_endif;
         sfpi::vFloat res = calculate_log1p_fp32<is_fp32_dest_acc_en>(arg);
+        // Large region carries the extra ln(2) from asinh(a) ~= LN2 + ln(a).
+        v_if(a >= LOG1P_LARGE) { res = res + LN2; }
+        v_endif;
         res = sfpi::copysgn(res, inp);
 
         if constexpr (!is_fp32_dest_acc_en) {
@@ -929,19 +939,28 @@ inline void calculate_atanh() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat inp = sfpi::dst_reg[0];
-        sfpi::vFloat abs_inp = sfpi::abs(inp);
-        sfpi::vFloat res = std::numeric_limits<float>::quiet_NaN();
-        v_if(abs_inp == sfpi::vConst1) {
-            sfpi::vFloat inf = std::numeric_limits<float>::infinity();
-            res = sfpi::copysgn(inf, inp);
-        }
-        v_elseif(abs_inp < sfpi::vConst1) {
-            // arg = 2 * a / (1 - a); single log1p replaces the divide-then-log.
-            sfpi::vFloat den = sfpi::vConst1 - abs_inp;
-            sfpi::vFloat recip_den = _sfpu_reciprocal_gt0_<is_fp32_dest_acc_en>(den);
-            sfpi::vFloat arg = (abs_inp + abs_inp) * recip_den;
-            res = 0.5f * calculate_log1p_fp32<is_fp32_dest_acc_en>(arg);
-            res = sfpi::copysgn(res, inp);
+        sfpi::vFloat a = sfpi::abs(inp);
+
+        // Clamp |x| >= 1 lanes to 0 so the interior formula stays finite there;
+        // those lanes are overwritten by the boundary fix-up below.
+        v_if(a >= sfpi::vConst1) { a = sfpi::vConst0; }
+        v_endif;
+
+        // Build the log1p argument, then materialise it to DST before the log1p
+        // polynomial. Round-tripping through DST cuts the reciprocal->log1p
+        // expression so the SFPU register allocator does not exceed its reload
+        // budget (the fused form overflows it). The boundary lanes are restored
+        // from `inp` afterwards, so clobbering DST here is safe.
+        sfpi::vFloat den = sfpi::vConst1 - a;
+        sfpi::dst_reg[0] = (a + a) * _sfpu_reciprocal_gt0_<is_fp32_dest_acc_en>(den);
+
+        sfpi::vFloat res = calculate_log1p_fp32<is_fp32_dest_acc_en>(sfpi::dst_reg[0]);
+        res = sfpi::copysgn(0.5f * res, inp);
+
+        // Boundary fix-ups: |x| == 1 -> +/-inf, |x| > 1 -> NaN.
+        v_if(sfpi::abs(inp) > sfpi::vConst1) { res = std::numeric_limits<float>::quiet_NaN(); }
+        v_elseif(sfpi::abs(inp) == sfpi::vConst1) {
+            res = sfpi::copysgn(std::numeric_limits<float>::infinity(), inp);
         }
         v_endif;
 
