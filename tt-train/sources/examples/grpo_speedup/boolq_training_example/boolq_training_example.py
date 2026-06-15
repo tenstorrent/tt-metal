@@ -79,18 +79,10 @@ from typing import Any
 
 from loguru import logger
 
-# Silence Python-side log noise that would otherwise drown out the per-step
-# GRPOMonitor line. tt-metal C++ logs are silenced separately via
-# TT_LOGGER_LEVEL=Error in runner.sh.
 logger.remove()
 logger.add(sys.stderr, level="ERROR")
 logging.getLogger().setLevel(logging.ERROR)
 
-# Line-buffer stdout/stderr so any remaining print() (notably GRPOMonitor's
-# per-step line) flushes on each '\n' without needing flush=True at every
-# call. Under mpirun's --tag-output, stdout is a pipe and Python's default
-# would otherwise be block-buffered (4 KB), making real-time output appear
-# in long delayed bursts.
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
 
@@ -119,22 +111,11 @@ MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
 TTML_DEVICE_CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_2dev_ddp_gas_4.yaml"
 TTT_MESH_SHAPE = (1, 1)
 
-# Worker memory budget. 32 is comfortably below the [1, 1] N300 chip
-# capacity for a 1B Llama instruct at bf16/bfp8 with 2K context, and
-# divides cleanly into typical batch_size * num_generations products.
 TTT_MAX_BATCH_SIZE = 32
 TTT_MAX_SEQ_LEN = 2048
-
-# Push weights every step. GRPO updates the policy each gradient step,
-# so without this the worker would generate from stale weights.
 WEIGHT_SYNC_EVERY = 1
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
-
-
-# ---------------------------------------------------------------------------
-# Reward / monitor helpers (mirrors examples/grpo/boolq_training_example.py)
-# ---------------------------------------------------------------------------
 
 
 def _boolq_reward(completions, answer, **kwargs):
@@ -198,12 +179,6 @@ class GRPOMonitor:
         print("Training complete.")
 
 
-# ---------------------------------------------------------------------------
-# Device-opening helpers (inlined from tests/_completer_utils.py so this
-# script is self-contained -- avoids adding tests/ to sys.path).
-# ---------------------------------------------------------------------------
-
-
 def _load_device_config(device_config_rel: str = TTML_DEVICE_CONFIG_REL):
     from ttml.common.config import DeviceConfig, load_config
 
@@ -227,18 +202,12 @@ def _close_ttml_device() -> None:
     ttml.autograd.AutoContext.get_instance().close_device()
 
 
-# ---------------------------------------------------------------------------
-# TTML rank entrypoint
-# ---------------------------------------------------------------------------
-
-
 def _ttml_main() -> None:
     import ttml
     from datasets import load_dataset
     from transformers import AutoTokenizer
     from ttml.common.config import get_model_config
-    from ttml.trainers.grpo_trainer_logged import GRPOTrainer
-    from ttml.trainers import get_grpo_config
+    from ttml.trainers import GRPOTrainer, get_grpo_config
 
     from utils.inference_bridge import TttInferenceClient
     from utils.llama_grpo_completer import (
@@ -348,9 +317,6 @@ def _ttt_main() -> None:
     if not ttnn.distributed_context_is_initialized():
         ttnn.init_distributed_context()
 
-    # Open the [1, 1] submesh of the declared [1, 2] mesh -- matches the
-    # weight-transfer test exactly. The mgd.textproto entries for rank 1
-    # use a separate mesh_id, so the offset is (0, 0) within that mesh.
     mesh_device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(*TTT_MESH_SHAPE),
         offset=ttnn.MeshCoordinate(0, 0),
@@ -380,11 +346,6 @@ def _ttt_main() -> None:
             optimizations=bf16_attn_bfp8_mlp_optimizations,
             stop_token_ids=stop_token_ids,
             pad_token_id=pad_token_id,
-            # On-device sampling. top_k=0 -> "no top-k restriction" (clamped
-            # to the TT max of 32 inside format_sampling_params). seed=None
-            # -> SeedManager picks a random 64-bit seed per slot per
-            # generate() call, which is what GRPO wants for per-prompt
-            # replica diversity (num_generations > 1).
             temperature=grpo_temperature,
             top_k=0,
             top_p=1.0,
