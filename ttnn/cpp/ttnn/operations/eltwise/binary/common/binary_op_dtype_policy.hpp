@@ -48,8 +48,8 @@ inline constexpr std::array<DT, 0> unsupported{};
 }  // namespace dtype_sets
 
 // Dtypes allowed for tensor A. For symmetric ops both operands must match and use this set.
-// For asymmetric ops (QUANT, DEQUANT, REQUANT) tensor B has separate rules in
-// utils::is_dtype_combination_supported.
+// For asymmetric quant ops (QUANT: float A; REQUANT/DEQUANT: int32 A; all: float32 B)
+// see utils::is_dtype_combination_supported.
 std::span<const tt::tt_metal::DataType> supported_tensor_a_dtypes(BinaryOpType op);
 
 bool is_supported(BinaryOpType op, tt::tt_metal::DataType dtype);

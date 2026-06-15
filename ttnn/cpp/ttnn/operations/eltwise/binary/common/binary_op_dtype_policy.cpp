@@ -5,6 +5,7 @@
 #include "binary_op_dtype_policy.hpp"
 
 #include <algorithm>
+#include <tt_stl/assert.hpp>
 
 namespace ttnn::operations::binary::dtype_policy {
 
@@ -58,7 +59,7 @@ std::span<const DataType> supported_tensor_a_dtypes(BinaryOpType op) {
         case BinaryOpType::WHERE_TTS: return where;
         case BinaryOpType::ADDALPHA:
         case BinaryOpType::SUBALPHA: return unsupported;
-        default: __builtin_unreachable();
+        default: TT_THROW("Binary op type {} is missing from dtype policy", op);
     }
 }
 

@@ -52,7 +52,8 @@ bool is_dtype_combination_supported(BinaryOpType op, DataType dtype_a, DataType 
         case BinaryOpType::ISCLOSE:
             return (dtype_a == DataType::FLOAT32 && dtype_b == DataType::BFLOAT16) ||
                    (dtype_a == DataType::BFLOAT16 && dtype_b == DataType::FLOAT32);
-        // Quant ops: float/int32 input (A) × float32 scale (B). See quantization.cpp.
+        // Quant family (A × float32 scale B): QUANT takes floating-point A;
+        // REQUANT/DEQUANT take int32 A. See ckernel_sfpu_quant.h.
         case BinaryOpType::QUANT:
         case BinaryOpType::DEQUANT:
         case BinaryOpType::REQUANT: return dtype_policy::is_supported(op, dtype_a) && dtype_b == DataType::FLOAT32;
