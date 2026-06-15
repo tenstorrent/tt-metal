@@ -203,6 +203,15 @@ def migrate_denoise_weights_to_l1(stage_denoise, suffix_slices, denoise_head) ->
             _migrate_expert_block(block)
         chunk.cos_meta = _to_l1(chunk.cos_meta)
         chunk.sin_meta = _to_l1(chunk.sin_meta)
+        # The chunk's 3 blocks captured the pre-migration cos/sin tensors at
+        # construction (GemmaAttentionTTNN stores its own self.cos_meta ref).
+        # _to_l1 freed those DRAM sources, so repoint every block's attention
+        # at the migrated L1 tensors — otherwise the per-step RoPE slice in the
+        # no-override path (ttnn_gemma.py:700) reads a deallocated buffer and
+        # raises "Tensor is not allocated".
+        for block in chunk.blocks:
+            block.attention.cos_meta = chunk.cos_meta
+            block.attention.sin_meta = chunk.sin_meta
 
     for sl in suffix_slices:
         weights = sl.suffix.weights

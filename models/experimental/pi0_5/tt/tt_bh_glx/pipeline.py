@@ -569,9 +569,14 @@ class Pi0_5GLXPipeline:
 
         # 4) Refresh noise (warmup mutated x_t_fp32) and capture.
         self._refresh_noise_buffer()
-        self._trace_id = ttnn.begin_trace_capture(self.h.parent, cq_id=0)
+        # Root the trace on the (7,4) compute submesh, NOT the (8,4) parent: a
+        # trace's blocking finish defaults to the root mesh's full range, so a
+        # parent-rooted trace would wait on the idle row-7 chips (no commands →
+        # empty completion queue) and deadlock end_trace_capture. The compute
+        # submesh is exactly the 28 commanded chips.
+        self._trace_id = ttnn.begin_trace_capture(self.h.trace_root, cq_id=0)
         self._captured_actions = self._sample_actions_device(upstream)
-        ttnn.end_trace_capture(self.h.parent, self._trace_id, cq_id=0)
+        ttnn.end_trace_capture(self.h.trace_root, self._trace_id, cq_id=0)
 
     def sample_actions_traced(
         self,
@@ -586,7 +591,7 @@ class Pi0_5GLXPipeline:
             raise RuntimeError("capture_trace() must be called before sample_actions_traced()")
         self._ensure_persistent_input_buffers(images, lang_tokens)
         self._refresh_noise_buffer()
-        ttnn.execute_trace(self.h.parent, self._trace_id, cq_id=0, blocking=True)
+        ttnn.execute_trace(self.h.trace_root, self._trace_id, cq_id=0, blocking=True)
         ah = self.action_horizon
         return ttnn.to_torch(self._captured_actions)[:, :ah, :]
 

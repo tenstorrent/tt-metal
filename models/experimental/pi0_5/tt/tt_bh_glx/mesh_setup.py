@@ -21,7 +21,51 @@ from typing import Optional
 import ttnn
 
 from . import stages
-from .stages import MeshHandles
+from .stages import MeshHandles, TracedMeshHandles
+
+
+@contextmanager
+def open_galaxy_mesh_traced(l1_small_size: Optional[int] = None, trace_region_size: Optional[int] = 134_217_728):
+    """Open the (8,4) torus under FABRIC_1D and carve the 3 fully-traced stage
+    meshes (collinear layout — see stages.py). Yields TracedMeshHandles.
+
+    The parent is kept whole (8,4) so every torus ethernet link trains; the
+    stages occupy a collinear subset (rows 0–6) so cross-stage sockets +
+    in-trace point_to_point both work under one FABRIC_1D config.
+    """
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    open_kwargs = {"mesh_shape": ttnn.MeshShape(*stages.PARENT_MESH_SHAPE)}
+    if l1_small_size is not None:
+        open_kwargs["l1_small_size"] = l1_small_size
+    if trace_region_size is not None:
+        open_kwargs["trace_region_size"] = trace_region_size
+
+    parent = ttnn.open_mesh_device(**open_kwargs)
+    submeshes = []
+    try:
+        if parent.get_num_devices() != stages.PARENT_MESH_SHAPE[0] * stages.PARENT_MESH_SHAPE[1]:
+            raise RuntimeError(f"Parent mesh has {parent.get_num_devices()} devices, expected 32 for BH Galaxy")
+
+        def carve(shape, offset):
+            sm = parent.create_submesh(ttnn.MeshShape(*shape), ttnn.MeshCoordinate(*offset))
+            submeshes.append(sm)
+            return sm
+
+        vision_mesh = carve(stages.TRACED_VISION_SHAPE, stages.TRACED_VISION_OFFSET)
+        prefill_mesh = carve(stages.TRACED_PREFILL_SHAPE, stages.TRACED_PREFILL_OFFSET)
+        denoise_mesh = carve(stages.TRACED_DENOISE_SHAPE, stages.TRACED_DENOISE_OFFSET)
+
+        yield TracedMeshHandles(
+            parent=parent, vision_mesh=vision_mesh, prefill_mesh=prefill_mesh, denoise_mesh=denoise_mesh
+        )
+    finally:
+        for sm in reversed(submeshes):
+            try:
+                ttnn.close_mesh_device(sm)
+            except Exception:
+                pass
+        ttnn.close_mesh_device(parent)
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
 def _carve_per_chip(parent_mesh, submesh_shape, submesh_offset, num_chips):
@@ -92,39 +136,51 @@ def open_galaxy_mesh(
                 f"{stages.PARENT_MESH_SHAPE[0] * stages.PARENT_MESH_SHAPE[1]} for BH Galaxy"
             )
 
-        vision_submesh = parent.create_submesh(
+        # Compute submesh = the 28 used chips (rows 0..6). The physical parent
+        # stays (8,4) so fabric trains every torus link; all compute (and the
+        # trace root) lives on this (7,4) view. Stage + per-chip submeshes are
+        # carved from `compute`, not `parent`, so a trace rooted on `compute`
+        # finishes over exactly these 28 chips (no idle row-7 deadlock).
+        compute = parent.create_submesh(
+            ttnn.MeshShape(*stages.COMPUTE_SUBMESH_SHAPE),
+            ttnn.MeshCoordinate(*stages.COMPUTE_SUBMESH_OFFSET),
+        )
+        all_submeshes.append(compute)
+
+        vision_submesh = compute.create_submesh(
             ttnn.MeshShape(*stages.VISION_SUBMESH_SHAPE),
             ttnn.MeshCoordinate(*stages.VISION_SUBMESH_OFFSET),
         )
         all_submeshes.append(vision_submesh)
 
-        prefill_submesh = parent.create_submesh(
+        prefill_submesh = compute.create_submesh(
             ttnn.MeshShape(*stages.PREFILL_SUBMESH_SHAPE),
             ttnn.MeshCoordinate(*stages.PREFILL_SUBMESH_OFFSET),
         )
         all_submeshes.append(prefill_submesh)
 
-        denoise_submesh = parent.create_submesh(
+        denoise_submesh = compute.create_submesh(
             ttnn.MeshShape(*stages.DENOISE_SUBMESH_SHAPE),
             ttnn.MeshCoordinate(*stages.DENOISE_SUBMESH_OFFSET),
         )
         all_submeshes.append(denoise_submesh)
 
         vision_per_chip = _carve_per_chip(
-            parent, stages.VISION_SUBMESH_SHAPE, stages.VISION_SUBMESH_OFFSET, stages.VISION_NUM_CHIPS
+            compute, stages.VISION_SUBMESH_SHAPE, stages.VISION_SUBMESH_OFFSET, stages.VISION_NUM_CHIPS
         )
         all_submeshes.extend(vision_per_chip)
         prefill_per_chip = _carve_per_chip(
-            parent, stages.PREFILL_SUBMESH_SHAPE, stages.PREFILL_SUBMESH_OFFSET, stages.PREFILL_NUM_CHIPS
+            compute, stages.PREFILL_SUBMESH_SHAPE, stages.PREFILL_SUBMESH_OFFSET, stages.PREFILL_NUM_CHIPS
         )
         all_submeshes.extend(prefill_per_chip)
         denoise_per_chip = _carve_per_chip(
-            parent, stages.DENOISE_SUBMESH_SHAPE, stages.DENOISE_SUBMESH_OFFSET, stages.DENOISE_NUM_CHIPS
+            compute, stages.DENOISE_SUBMESH_SHAPE, stages.DENOISE_SUBMESH_OFFSET, stages.DENOISE_NUM_CHIPS
         )
         all_submeshes.extend(denoise_per_chip)
 
         yield MeshHandles(
             parent=parent,
+            trace_root=compute,
             vision_submesh=vision_submesh,
             prefill_submesh=prefill_submesh,
             denoise_submesh=denoise_submesh,
