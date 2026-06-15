@@ -27,12 +27,19 @@ namespace ttnn::graph {
 // Node identifiers in the graph
 using node_id = int;
 
+// What a capture blocks. Replaces the old (do_block, block_alloc) bool pair so the
+// only meaningful states are representable (the pair could also encode the nonsense
+// "allow dispatch but block alloc"):
+//   None        - block nothing (NORMAL capture: record only).
+//   All         - block dispatch AND allocation (NO_DISPATCH: buffers mocked at addr 0).
+//   DispatchOnly - block dispatch, allow real allocation (real-alloc collect: kernels
+//                  that bake/branch on buffer addresses build the same program as the
+//                  real run, while nothing executes).
+enum class CaptureBlock { None, All, DispatchOnly };
+
 class ProcessorHooks : public tt::tt_metal::IGraphHooks {
 private:
-    bool do_block = false;     // gates dispatch / write / read (program execution)
-    bool block_alloc = false;  // gates allocate / deallocate, separable from do_block so a
-                               // "real-alloc" collect can assign real addresses (block_alloc=false)
-                               // while still blocking dispatch (do_block=true).
+    CaptureBlock block_mode = CaptureBlock::None;
 
 public:
     ProcessorHooks() = default;
@@ -52,10 +59,9 @@ public:
 
     ~ProcessorHooks() override = default;
 
-    void set_block(bool block);        // sets BOTH do_block and block_alloc
-    void set_block_alloc(bool block);  // sets only block_alloc (for real-alloc collect)
+    void set_capture_block(CaptureBlock mode);
 
-    bool get_block() const;
+    bool get_block() const;  // true if dispatch is blocked (mode != None)
 };
 class GraphProcessor : public tt::tt_metal::IGraphProcessor {
 public:

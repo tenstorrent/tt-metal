@@ -691,7 +691,7 @@ void GraphProcessor::begin_capture(RunMode mode) {
     if (!tt::tt_metal::GraphTracker::instance().get_hook()) {
         hook = std::make_shared<ProcessorHooks>();
         tt::tt_metal::GraphTracker::instance().add_hook(hook);
-        hook->set_block(mode == RunMode::NO_DISPATCH);
+        hook->set_capture_block(mode == RunMode::NO_DISPATCH ? CaptureBlock::All : CaptureBlock::None);
     }
     current_op_id.push(0);
 }
@@ -881,30 +881,32 @@ nlohmann::json GraphProcessor::end_graph_capture_to_file(const std::filesystem::
     return graph_json;
 }
 
-bool ProcessorHooks::hook_allocate(const tt::tt_metal::Buffer* /*buffer*/) { return block_alloc; }
+// Allocation is blocked only by All (DispatchOnly deliberately lets real addresses through).
+bool ProcessorHooks::hook_allocate(const tt::tt_metal::Buffer* /*buffer*/) { return block_mode == CaptureBlock::All; }
 
-bool ProcessorHooks::hook_deallocate(tt::tt_metal::Buffer* /*buffer*/) { return block_alloc; }
+bool ProcessorHooks::hook_deallocate(tt::tt_metal::Buffer* /*buffer*/) { return block_mode == CaptureBlock::All; }
 
-bool ProcessorHooks::hook_write_to_device(const tt::tt_metal::Buffer* /*buffer*/) { return do_block; }
+// Dispatch / write / read / program are blocked by both All and DispatchOnly (i.e. anything but None).
+bool ProcessorHooks::hook_write_to_device(const tt::tt_metal::Buffer* /*buffer*/) {
+    return block_mode != CaptureBlock::None;
+}
 
 bool ProcessorHooks::hook_write_to_device(const tt::tt_metal::distributed::MeshBuffer* /*mesh_buffer*/) {
-    return do_block;
+    return block_mode != CaptureBlock::None;
 }
 
-bool ProcessorHooks::hook_read_from_device(tt::tt_metal::Buffer* /*buffer*/) { return do_block; }
+bool ProcessorHooks::hook_read_from_device(tt::tt_metal::Buffer* /*buffer*/) {
+    return block_mode != CaptureBlock::None;
+}
 
 bool ProcessorHooks::hook_read_from_device(const tt::tt_metal::distributed::MeshBuffer* /*mesh_buffer*/) {
-    return do_block;
+    return block_mode != CaptureBlock::None;
 }
 
-bool ProcessorHooks::hook_program(tt::tt_metal::Program*) { return do_block; }
+bool ProcessorHooks::hook_program(tt::tt_metal::Program*) { return block_mode != CaptureBlock::None; }
 
-void ProcessorHooks::set_block(bool block) {
-    do_block = block;
-    block_alloc = block;
-}
-void ProcessorHooks::set_block_alloc(bool block) { block_alloc = block; }
-bool ProcessorHooks::get_block() const { return do_block; }
+void ProcessorHooks::set_capture_block(CaptureBlock mode) { block_mode = mode; }
+bool ProcessorHooks::get_block() const { return block_mode != CaptureBlock::None; }
 
 ScopedGraphCapture::ScopedGraphCapture(GraphProcessor::RunMode mode) : is_active(true) {
     GraphProcessor::begin_graph_capture(mode);

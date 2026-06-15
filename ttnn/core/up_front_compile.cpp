@@ -107,7 +107,7 @@ void begin_collect(bool clear, bool real_alloc) {
         // real_alloc to an addr-0 collect.
         auto* ph = dynamic_cast<ttnn::graph::ProcessorHooks*>(tt::tt_metal::GraphTracker::instance().get_hook().get());
         TT_ASSERT(ph != nullptr, "up_front_compile: real_alloc requires the NO_DISPATCH ProcessorHooks to be active");
-        ph->set_block_alloc(false);
+        ph->set_capture_block(ttnn::graph::CaptureBlock::DispatchOnly);
     }
 }
 
