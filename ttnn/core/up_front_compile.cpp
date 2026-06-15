@@ -10,6 +10,7 @@
 #include <thread>
 
 #include <tt_stl/assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -162,8 +163,14 @@ CompileStats parallel_compile(tt::tt_metal::distributed::MeshDevice* device, int
                     // queue / program-cache state is touched, so distinct programs compile
                     // concurrently and safely. Buffer addresses are irrelevant to compile.
                     tt::tt_metal::detail::CompileProgram(dev, *progs[i]);
+                } catch (const std::exception& e) {
+                    // Non-fatal: a failed warm-up compile just leaves that program cold for the
+                    // real run. Log the reason so the failure isn't silent behind the error count.
+                    errors.fetch_add(1);
+                    log_warning(tt::LogAlways, "up_front_compile: program {} failed to compile: {}", i, e.what());
                 } catch (...) {
                     errors.fetch_add(1);
+                    log_warning(tt::LogAlways, "up_front_compile: program {} failed to compile (unknown exception)", i);
                 }
             }
         };
