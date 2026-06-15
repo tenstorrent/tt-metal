@@ -858,6 +858,8 @@ def _build_parity_models(
     (overriding the stash) or ``del``-s it before the next uniform
     call — none rely on the model carrying it between passes.
     """
+    _inject_missing_kv_shared_attention_weights(tt_state, hf_text_config, num_layers)
+
     tt_model = Gemma4Model(
         mesh_device=mesh_device,
         hf_config=model_args,
@@ -949,6 +951,48 @@ def _compute_num_layers_for_kv_shared(hf_text_config) -> int | None:
     # First shared layer index = full_n - kv_shared. Truncating to that
     # +1 keeps exactly one shared layer in the test config.
     return max(1, full_n - kv_shared + 1)
+
+
+def _inject_missing_kv_shared_attention_weights(state_dict, hf_text_config, num_layers, prefix="model."):
+    """Pad synthetic HF states whose kv-shared layers omit K/V weights.
+
+    HF checkpoints for Gemma4 variants with ``num_kv_shared_layers`` can omit
+    K/V projection tensors on shared layers because those layers reuse a source
+    layer's cache at runtime. The TT attention constructor still builds a fused
+    QKV tensor for every layer before runtime can discard K/V under
+    ``is_kv_shared=True``, so test-generated full-layer states need zero K/V
+    placeholders for any omitted entries.
+    """
+    hidden = int(hf_text_config.hidden_size)
+    for layer_idx in range(num_layers):
+        attn_prefix = f"{prefix}layers.{layer_idx}.self_attn"
+        layer_type = hf_text_config.layer_types[layer_idx]
+        is_sliding = layer_type == "sliding_attention"
+        if is_sliding:
+            num_kv_heads = int(hf_text_config.num_key_value_heads)
+            head_dim = int(hf_text_config.head_dim)
+        else:
+            num_kv_heads = int(
+                getattr(hf_text_config, "num_global_key_value_heads", None) or hf_text_config.num_key_value_heads
+            )
+            head_dim = int(getattr(hf_text_config, "global_head_dim", None) or hf_text_config.head_dim)
+        kv_size = num_kv_heads * head_dim
+
+        state_dict.setdefault(
+            f"{attn_prefix}.k_proj.weight",
+            torch.zeros((kv_size, hidden), dtype=torch.bfloat16),
+        )
+        use_kv_tying = bool(getattr(hf_text_config, "attention_k_eq_v", False)) and not is_sliding
+        if not use_kv_tying:
+            state_dict.setdefault(
+                f"{attn_prefix}.v_proj.weight",
+                torch.zeros((kv_size, hidden), dtype=torch.bfloat16),
+            )
+        state_dict.setdefault(
+            f"{attn_prefix}.k_norm.weight",
+            torch.ones((head_dim,), dtype=torch.bfloat16),
+        )
+    return state_dict
 
 
 @parametrize_mesh_with_fabric()
