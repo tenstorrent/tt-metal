@@ -401,8 +401,11 @@ def infer_data_formats(
     if chip_arch is None:
         chip_arch = get_chip_architecture()
 
-    # On Quasar the math and SFPU data formats can differ: route math through the Int16 path
-    # and carry the real format in sfpu_math to test SFPU support for it.
+    # On Quasar the math and SFPU data formats can differ. Quasar has only one 16-bit integer HW
+    # encoding, Int16 -- the unpacker, the SrcA/SrcB/dest register files, and the packer all lack a
+    # UInt16 encoding, so UInt16 is pass-through as Int16 across the whole unpack/math/pack datapath.
+    # The unsigned-16 semantics exist only as an SFPU access mode (sfpmem::UINT16), so we carry the
+    # real UInt16 intent in sfpu_math to still test SFPU support for it.
     sfpu_math_override = None
     if chip_arch == ChipArchitecture.QUASAR:
         if input_format == DataFormat.UInt16:
@@ -459,8 +462,9 @@ def infer_data_formats(
     if math == DataFormat.Fp8_e4m3:
         math = DataFormat.Float16
 
-    # SFPU-side math format: same as math unless the SFPU operates in a format with no native
-    # register/dest representation (UInt16 on Quasar, remapped to an Int16 data path above).
+    # SFPU-side math format: same as math unless the SFPU operates in a format with no Tensix HW
+    # encoding (UInt16 on Quasar), in which case the unpack/math/pack datapath was defaulted to Int16
+    # above and only sfpu_math retains the UInt16 intent (via the sfpmem::UINT16 SFPU access mode).
     sfpu_math = sfpu_math_override if sfpu_math_override is not None else math
 
     pack_in = infer_pack_in(
@@ -619,8 +623,9 @@ def data_formats(
             math_format = input_format
             pack_src_format = input_format
 
-        # Even with inference disabled, UInt16 must ride the Int16 data path on Quasar (no native
-        # UInt16 register/dest format); only sfpu_math keeps the uint16 intent. See infer_data_formats.
+        # Even with inference disabled, UInt16 must ride the Int16 data path on Quasar: there is no
+        # UInt16 HW encoding in the unpacker, the register files/dest, or the packer, so the whole
+        # datapath defaults to Int16 and only sfpu_math keeps the UInt16 intent. See infer_data_formats.
         sfpu_math_format = math_format
         resolved_arch = chip_arch if chip_arch is not None else get_chip_architecture()
         if (
