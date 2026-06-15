@@ -2029,6 +2029,86 @@ def test_ternary_resolve_mem_config_with_grid_size_two(device):
     assert_with_pcc(torch_output, output)
 
 
+@pytest.mark.parametrize("predicate_sharded", [True, False])
+@pytest.mark.parametrize("true_sharded", [True, False])
+@pytest.mark.parametrize("false_sharded", [True, False])
+@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+def test_where_ttt_outer_bcast_with_height_sharding(
+    device, predicate_sharded, true_sharded, false_sharded, out_sharded, shard_orientation
+):
+    # NOTE: TTT only enables native L1 sharding when all three inputs have identical shapes
+    # (see is_native_L1_sharding in ternary_op_utils.cpp). Because `true` outer-broadcasts on N,
+    # the shapes differ, so the op always drops the sharding request and runs the interleaved
+    # outer-bcast path (SRC_SHARDED_*=0) regardless of the *_sharded flags. This test verifies
+    # that fallback produces correct results (and a sharded output when requested) across cores.
+    torch.manual_seed(0)
+    predicate_shape = (2, 7, 2 * 32, 4 * 32)
+    true_shape = (1, 7, 2 * 32, 4 * 32)  # outer broadcast on N (2 -> 1); H/W identical
+    false_shape = (2, 7, 2 * 32, 4 * 32)
+    output_shape = (2, 7, 2 * 32, 4 * 32)
+
+    torch_predicate = torch.randint(0, 2, predicate_shape, dtype=torch.bfloat16)
+    torch_true = torch.rand(true_shape, dtype=torch.bfloat16)
+    torch_false = torch.rand(false_shape, dtype=torch.bfloat16)
+
+    if shard_orientation == ttnn.ShardOrientation.ROW_MAJOR:
+        pred_shard_shape = (2 * 32 * 2, 4 * 32)  # [128, 128]
+        true_shard_shape = (1 * 32 * 2, 4 * 32)  # [64, 128]
+    else:
+        pred_shard_shape = (4 * 32, 2 * 32 * 2)  # [128, 128] for COL_MAJOR
+        true_shard_shape = (4 * 32, 1 * 32 * 2)  # [128, 64] for COL_MAJOR
+
+    pred_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=pred_shard_shape,
+        core_grid=ttnn.CoreGrid(y=1, x=7),  # 7 cores: (0,0) to (0,6)
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=shard_orientation,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    true_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=true_shard_shape,
+        core_grid=ttnn.CoreGrid(y=1, x=7),  # 7 cores: (0,0) to (0,6)
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=shard_orientation,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    torch_output = torch.where(torch_predicate.bool(), torch_true, torch_false)
+
+    predicate_tensor = ttnn.from_torch(
+        torch_predicate, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    if predicate_sharded:
+        predicate_tensor = ttnn.to_memory_config(predicate_tensor, pred_sharded_mem_config)
+
+    true_tensor = ttnn.from_torch(
+        torch_true, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    if true_sharded:
+        true_tensor = ttnn.to_memory_config(true_tensor, true_sharded_mem_config)
+
+    false_tensor = ttnn.from_torch(
+        torch_false, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    if false_sharded:
+        false_tensor = ttnn.to_memory_config(false_tensor, pred_sharded_mem_config)
+
+    if out_sharded:
+        out_mem_config = pred_sharded_mem_config
+    else:
+        out_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+    output_tensor = ttnn.where(predicate_tensor, true_tensor, false_tensor, memory_config=out_mem_config)
+    if out_sharded:
+        assert output_tensor.memory_config().is_sharded()
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert torch_equal_nan(output_tensor, torch_output)
+    assert output_tensor.shape == output_shape
+
+
 @pytest.mark.parametrize(
     "shape, shard_strategy, shard_shape_row_major, shard_shape_col_major, core_grid",
     [
