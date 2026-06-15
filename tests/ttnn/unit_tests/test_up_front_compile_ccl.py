@@ -23,6 +23,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 OUTPUT_SHAPE = [1, 1, 32, 256]
 GATHER_DIM = 3
 NUM_LINKS = 1
+_WORKERS = 4  # parallel JIT compile workers
 
 
 def _shard_input(mesh_device, num_devices, full):
@@ -87,7 +88,7 @@ def test_all_gather_up_front_compile(mesh_device):
     # Parallel compile warms the cache, error-free. A CCL op's MeshWorkload holds multiple
     # programs (sender/receiver), so compile builds >= the unique workload count — unlike a
     # homogeneous op where one program covers the whole mesh.
-    num_programs, num_errors, _, wall = ttnn.graph.up_front_compile(mesh_device, 4)
+    num_programs, num_errors, _, wall = ttnn.graph.up_front_compile(mesh_device, _WORKERS)
     print(
         f"CCL parallel compile: {num_programs} programs in {wall:.2f}s (errors={num_errors}, unique workloads={n_unique})"
     )

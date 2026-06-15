@@ -22,6 +22,9 @@ import torch
 
 import ttnn
 
+# Worker count for the parallel JIT compile. Hoisted so the tests share one value.
+_WORKERS = 4
+
 
 def _chain(x):
     """A tiny multi-op graph -> a few distinct programs.
@@ -59,7 +62,7 @@ def test_up_front_compile(device):
     assert n_unique >= 1
 
     # Parallel compile -> warms the on-disk kernel cache. Must report zero errors.
-    num_programs, num_errors, workers, wall = ttnn.graph.up_front_compile(device, 4)
+    num_programs, num_errors, workers, wall = ttnn.graph.up_front_compile(device, _WORKERS)
     print(f"up_front: compiled {num_programs} programs in {wall:.2f}s (workers={workers}, errors={num_errors})")
     assert num_errors == 0, "parallel compile reported errors"
 
@@ -107,13 +110,13 @@ def test_up_front_collect_mechanics(device):
 
     # compile() JIT-builds exactly the deduped unique set, error-free, then resets the
     # collector. If compile silently skipped programs this parity check would catch it.
-    num_programs, num_errors, _, _ = ttnn.graph.up_front_compile(device, 4)
+    num_programs, num_errors, _, _ = ttnn.graph.up_front_compile(device, _WORKERS)
     assert num_errors == 0, "parallel compile reported errors"
     assert num_programs == unique, f"compiled {num_programs} programs, expected the {unique} unique collected"
     assert ttnn.graph.up_front_num_collected() == 0, "compile() should clear the collector"
 
     # Compiling an empty collector is a no-op, not an error.
-    n, e, _, _ = ttnn.graph.up_front_compile(device, 4)
+    n, e, _, _ = ttnn.graph.up_front_compile(device, _WORKERS)
     assert (n, e) == (0, 0), f"empty compile should be a no-op, got ({n}, {e})"
 
 

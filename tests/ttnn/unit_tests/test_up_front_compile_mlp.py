@@ -21,6 +21,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 IN_DIM = 256
 HIDDEN_DIM = 512
 SEQ = 128
+_WORKERS = 4  # parallel JIT compile workers
 
 
 def _build_mlp(device):
@@ -61,7 +62,7 @@ def test_mlp_up_front_compile(device):
     assert n_unique >= 1
 
     # Parallel compile warms the kernel cache and must build exactly the unique set, error-free.
-    num_programs, num_errors, _, _ = ttnn.graph.up_front_compile(device, 4)
+    num_programs, num_errors, _, _ = ttnn.graph.up_front_compile(device, _WORKERS)
     assert num_errors == 0, "parallel compile reported errors"
     assert num_programs == n_unique, f"compiled {num_programs} programs, expected the {n_unique} unique collected"
 

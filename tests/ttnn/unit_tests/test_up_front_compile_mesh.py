@@ -18,6 +18,8 @@ import torch
 
 import ttnn
 
+_WORKERS = 4  # parallel JIT compile workers
+
 
 def _chain(x):
     """exp(x) + x, times exp(x) — a few distinct elementwise programs."""
@@ -40,7 +42,7 @@ def _collect_and_compile(mesh_device, run_body):
         ttnn.graph.up_front_end_collect()
     n_unique = ttnn.graph.up_front_num_unique()
     assert ttnn.graph.up_front_num_collected() >= 1, "collect captured nothing on the mesh"
-    num_programs, num_errors, _, _ = ttnn.graph.up_front_compile(mesh_device, 4)
+    num_programs, num_errors, _, _ = ttnn.graph.up_front_compile(mesh_device, _WORKERS)
     assert num_errors == 0, "parallel compile reported errors"
     assert num_programs == n_unique, f"compiled {num_programs} programs, expected the {n_unique} unique collected"
 
