@@ -42,7 +42,18 @@ def windowed_mask(seq_len, cu_window_seqlens):
     ids=["s128_w2", "s128_w3", "s256_w3"],
 )
 @pytest.mark.parametrize("num_heads", [1, 8])
-def test_windowed_sdpa_smoke(device, num_heads, seq_len, cu_window_seqlens):
+@pytest.mark.parametrize(
+    "dtype, pcc_threshold",
+    [
+        (ttnn.bfloat16, 0.99),
+        # bfloat8_b mirrors the dtype Qwen2.5-VL actually feeds the op
+        # (vision_attention.py typecasts q/k/v to bf8 before the call); looser
+        # PCC accounts for the reduced input precision.
+        (ttnn.bfloat8_b, 0.98),
+    ],
+    ids=["bf16", "bf8"],
+)
+def test_windowed_sdpa_smoke(device, dtype, pcc_threshold, num_heads, seq_len, cu_window_seqlens):
     torch.manual_seed(42)
     b, dh, chunk = 1, 128, 32
     scale = dh**-0.5
@@ -64,9 +75,9 @@ def test_windowed_sdpa_smoke(device, num_heads, seq_len, cu_window_seqlens):
         packer_l1_acc=True,
     )
 
-    q_tt = ttnn.from_torch(q, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-    k_tt = ttnn.from_torch(k, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-    v_tt = ttnn.from_torch(v, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    q_tt = ttnn.from_torch(q, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+    k_tt = ttnn.from_torch(k, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+    v_tt = ttnn.from_torch(v, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
     cu_tt = ttnn.from_torch(
         torch.tensor(cu_window_seqlens, dtype=torch.int32),
         device=device,
@@ -90,7 +101,7 @@ def test_windowed_sdpa_smoke(device, num_heads, seq_len, cu_window_seqlens):
         q.to(torch.float32), k.to(torch.float32), v.to(torch.float32), attn_mask=mask, scale=scale
     )
 
-    passing, pcc = comp_pcc(gt, out, 0.99)
-    logger.info(f"windowed SDPA s={seq_len} heads={num_heads} windows={cu_window_seqlens} pcc={pcc}")
+    passing, pcc = comp_pcc(gt, out, pcc_threshold)
+    logger.info(f"windowed SDPA dtype={dtype} s={seq_len} heads={num_heads} windows={cu_window_seqlens} pcc={pcc}")
     assert passing, f"PCC below threshold: {pcc}"
     assert out.shape == gt.shape, f"shape mismatch: {out.shape} vs {gt.shape}"
