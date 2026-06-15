@@ -493,6 +493,15 @@ class TtMistral4DecoderLayer(LightweightModule):
         )
         return ttnn.add(h, self.moe(ttnn.rms_norm(h, epsilon=self.eps, weight=self.w_post)))
 
+    def forward_decode_mla(self, x, pos_t, cos, sin, cache, page_table):
+        h = ttnn.add(
+            x,
+            self.mla.forward_decode_mla(
+                ttnn.rms_norm(x, epsilon=self.eps, weight=self.w_in), pos_t, cos, sin, cache, page_table
+            ),
+        )
+        return ttnn.add(h, self.moe(ttnn.rms_norm(h, epsilon=self.eps, weight=self.w_post)))
+
     def forward_prefill(self, x, cos, sin, kv_cache):
         h = ttnn.add(
             x, self.mla.forward_prefill(ttnn.rms_norm(x, epsilon=self.eps, weight=self.w_in), cos, sin, kv_cache)
@@ -562,6 +571,17 @@ class TtMistral4TextModel(LightweightModule):
 
     def init_kv_caches(self, batch, max_seq):
         return [layer.mla.init_kv_cache(batch, max_seq) for layer in self.layers]
+
+    def init_compressed_caches(self, batch, max_seq):
+        """Per-layer compressed-latent paged caches [(cache, page_table), ...] for the A6 MLA decode."""
+        return [layer.mla.init_compressed_cache(batch, max_seq) for layer in self.layers]
+
+    def forward_decode_mla(self, hidden, pos_t, cos, sin, caches):
+        """Compressed-latent (A6) decode: 12.8x smaller KV than forward_decode. `caches` is the list
+        of (cache, page_table) from init_compressed_caches."""
+        for layer, (cache, pt) in zip(self.layers, caches):
+            hidden = layer.forward_decode_mla(hidden, pos_t, cos, sin, cache, pt)
+        return self._lm_head(ttnn.rms_norm(hidden, epsilon=self.eps, weight=self.w_norm))
 
     def forward_prefill(self, hidden, cos, sin, kv_caches):
         for layer, kv in zip(self.layers, kv_caches):
