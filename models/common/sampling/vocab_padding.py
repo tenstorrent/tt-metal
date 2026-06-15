@@ -26,6 +26,9 @@ def build_invalid_vocab_mask(
     if vocab_size == padded_vocab_size:
         return None
 
+    if not torch.empty((), dtype=dtype).is_floating_point():
+        raise TypeError(f"dtype must be a floating point torch dtype, got {dtype}")
+
     mask = torch.zeros(1, 1, max_batch_size, padded_vocab_size, dtype=dtype)
     mask[..., vocab_size:] = torch.finfo(dtype).min
     return mask
