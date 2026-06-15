@@ -65,14 +65,12 @@ void ProgramCollector::clear() {
     synthetic_key_ = 0;
 }
 
-std::vector<tt::tt_metal::Program*> ProgramCollector::program_pointers() {
+std::unordered_map<std::uint64_t, tt::tt_metal::distributed::MeshWorkload> ProgramCollector::take_workloads() {
     std::lock_guard<std::mutex> lk(mutex_);
-    std::vector<tt::tt_metal::Program*> out;
-    for (auto& [hash, workload] : programs_) {
-        for (auto& [range, program] : workload.get_programs()) {
-            out.push_back(&program);
-        }
-    }
+    auto out = std::move(programs_);
+    programs_.clear();  // a moved-from map is valid-but-unspecified; force it empty
+    total_collected_ = 0;
+    synthetic_key_ = 0;
     return out;
 }
 
@@ -122,7 +120,7 @@ void end_collect() {
     ttnn::graph::GraphProcessor::end_graph_capture();
 }
 
-CompileStats parallel_compile(tt::tt_metal::distributed::MeshDevice* device, int max_workers, bool clear) {
+CompileStats parallel_compile(tt::tt_metal::distributed::MeshDevice* device, int max_workers) {
     using clock = std::chrono::steady_clock;
 
     TT_FATAL(device != nullptr, "up_front_compile: device must not be null");
@@ -131,7 +129,18 @@ CompileStats parallel_compile(tt::tt_metal::distributed::MeshDevice* device, int
     tt::tt_metal::IDevice* dev = devices.front();
 
     auto& store = ProgramCollector::instance();
-    std::vector<tt::tt_metal::Program*> progs = store.program_pointers();
+    // Take ownership of the collected workloads up front so the worker threads
+    // compile from a snapshot whose lifetime we control. up_front_compile releases
+    // the GIL, so without this a concurrent up_front_clear() / begin_collect(clear=true)
+    // could destroy the MeshWorkloads — and the Program* borrowed into them — while
+    // workers are still compiling (use-after-free).
+    auto workloads = store.take_workloads();
+    std::vector<tt::tt_metal::Program*> progs;
+    for (auto& [hash, workload] : workloads) {
+        for (auto& [range, program] : workload.get_programs()) {
+            progs.push_back(&program);
+        }
+    }
 
     if (max_workers <= 0) {
         max_workers = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
@@ -171,9 +180,7 @@ CompileStats parallel_compile(tt::tt_metal::distributed::MeshDevice* device, int
     }
     stats.wall_seconds = std::chrono::duration_cast<std::chrono::duration<double>>(clock::now() - t0).count();
 
-    if (clear) {
-        store.clear();
-    }
+    // take_workloads() already emptied the store; the local snapshot drops here.
     return stats;
 }
 

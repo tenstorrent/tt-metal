@@ -80,8 +80,14 @@ public:
     // Toggle the per-thread active flag. Used by begin/end_collect.
     static void set_active(bool active);
 
-    // Borrowed pointers to every collected program (valid until clear()).
-    std::vector<tt::tt_metal::Program*> program_pointers();
+    // Move every collected workload out of the store under the collector mutex and
+    // reset the counters, returning the workloads by value. parallel_compile owns
+    // their lifetime for the duration of compilation, so a concurrent up_front_clear()
+    // / begin_collect(clear=true) — the GIL is released during up_front_compile —
+    // cannot destroy the MeshWorkloads (and the Program* borrowed into them) while
+    // worker threads are still compiling. Leaves the store empty; any collect() that
+    // races the compile lands in the fresh, emptied store for the next pass.
+    std::unordered_map<std::uint64_t, tt::tt_metal::distributed::MeshWorkload> take_workloads();
 
 private:
     ProgramCollector() = default;
@@ -125,7 +131,7 @@ void end_collect();
 // JIT-compile every distinct collected program in parallel, warming the on-disk
 // kernel cache. Compiles for devices.front() of the mesh — a homogeneous mesh
 // shares one build key, so one compile warms the whole mesh. max_workers<=0 uses
-// the hardware concurrency. If clear, the collected programs are released after.
-CompileStats parallel_compile(tt::tt_metal::distributed::MeshDevice* device, int max_workers = 0, bool clear = true);
+// the hardware concurrency. Consumes the collected set (the store is left empty).
+CompileStats parallel_compile(tt::tt_metal::distributed::MeshDevice* device, int max_workers = 0);
 
 }  // namespace ttnn::up_front_compile

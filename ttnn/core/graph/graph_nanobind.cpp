@@ -426,15 +426,14 @@ void py_graph_module(nb::module_& m) {
 
     m.def(
         "up_front_compile",
-        [](tt::tt_metal::distributed::MeshDevice* device, int max_workers, bool clear) {
-            auto s = ttnn::up_front_compile::parallel_compile(device, max_workers, clear);
+        [](tt::tt_metal::distributed::MeshDevice* device, int max_workers) {
+            auto s = ttnn::up_front_compile::parallel_compile(device, max_workers);
             return std::make_tuple(s.num_programs, s.num_errors, s.max_workers, s.wall_seconds);
         },
         nb::arg("device"),
         nb::arg("max_workers") = 0,
-        nb::arg("clear") = true,
         nb::call_guard<nb::gil_scoped_release>(),
-        R"doc(up_front_compile(device, max_workers=0, clear=True) -> (num_programs, num_errors, max_workers, wall_seconds)
+        R"doc(up_front_compile(device, max_workers=0) -> (num_programs, num_errors, max_workers, wall_seconds)
 
         JIT-compile every distinct collected program in parallel, warming the on-disk
         kernel cache (TT_METAL_CACHE). The subsequent real run / trace capture runs warm.

@@ -448,7 +448,7 @@ def pytest_sessionfinish(session, exitstatus):
             device.enable_program_cache()
         except Exception:
             pass
-        n_prog, n_err, used, wall = ttnn.graph.up_front_compile(device, _WORKERS, True)
+        n_prog, n_err, used, wall = ttnn.graph.up_front_compile(device, _WORKERS)
         print(
             f"UP_FRONT_COLLECT: compiled {n_prog} programs in {wall:.1f}s "
             f"(workers={used}, errors={n_err}) -> on-disk JIT cache warm",
