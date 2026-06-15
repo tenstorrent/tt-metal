@@ -11,7 +11,6 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
-
 void kernel_main() {
     // in0 mcast args
     const uint32_t in0_mcast_sender_noc_x = get_arg_val<uint32_t>(0);

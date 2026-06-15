@@ -555,6 +555,20 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
+- name: TT-DiT common unit tests, shared amongst all models.
+  cmd: |
+    pytest --timeout 10000 models/tt_dit/tests/unit/
+  model: dit-common
+  skus:
+    wh_n150:
+      timeout: 60
+      tier: 1
+    bh_quietbox_2:
+      timeout: 140
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
 # Phi-4-mini: disabled, asserting with 'assert freqs.shape[-1] == ext_factors.shape[-1]'
 # - name: Phi-4-mini unit tests
 #   cmd: |

@@ -70,7 +70,9 @@ ALWI void gelu_derivative_tile_init() {
  * When fast_and_approx=false (default): uses piecewise polynomial approximation
  * with Max ULP = 1 across all BF16 inputs.
  *
- * When fast_and_approx=true: uses the original formula-based implementation.
+ * When fast_and_approx=true: uses the same piecewise polynomial core but skips
+ * the Mills-ratio correction in the negative tail (x < -3), trading ~1% relative
+ * accuracy in that region for fewer operations.
  *
  * Return value: None
  *
@@ -82,7 +84,8 @@ ALWI void gelu_derivative_tile_init() {
 // clang-format on
 template <bool fast_and_approx = false>
 ALWI void gelu_derivative_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_gelu_derivative_polynomial, RC, fast_and_approx, idst));
+    MATH(SFPU_TWO_PARAM_KERNEL(
+        calculate_gelu_derivative_polynomial, fast_and_approx, DST_ACCUM_MODE, idst, VectorMode::RC));
 }
 
 #endif

@@ -131,6 +131,10 @@ skus:
     runs_on:
       - tt-ubuntu-2204-P150b-viommu-stable
 
+  bh_p150b_civ2_viommu_prio:
+    runs_on:
+      - tt-ubuntu-2204-P150b-viommu-prio-stable
+
   bh_p150b_civ2:
     runs_on:
       - tt-ubuntu-2204-P150b-stable

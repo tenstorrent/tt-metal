@@ -179,9 +179,7 @@ public:
                                             uint32_t num_runtime_field_crta_words)>) const override;
     const std::vector<TensorBindingHandle>& tensor_binding_handles() const { return tensor_binding_handles_; }
     const std::vector<std::string>& get_runtime_arg_names() const override { return runtime_arg_names_; }
-    const std::vector<std::string>& get_common_runtime_arg_names() const override {
-        return common_runtime_arg_names_;
-    }
+    const std::vector<std::string>& get_common_runtime_arg_names() const override { return common_runtime_arg_names_; }
     KernelCrtaLayout get_crta_layout() const override { return crta_layout_; }
     bool is_metal2_kernel() const override { return is_metal2_kernel_; }
     void process_include_paths(const std::function<void(const std::string& path)>&) const override;
@@ -225,6 +223,9 @@ public:
     virtual void read_binaries(IDevice* device, const std::string& binary_root) = 0;
 
     void register_kernel_elf_paths_with_watcher(IDevice& device, const std::string& binary_root) const;
+
+    // Returns the ELF file paths indexed by processor index. Processor indices not used by this kernel are left empty.
+    std::vector<std::string> elf_paths_by_processor_index(const IDevice& device, const std::string& binary_root) const;
 
     void set_precompiled_config(experimental::PrecompiledKernelConfig config);
     const std::optional<experimental::PrecompiledKernelConfig>& precompiled_config() const {
@@ -276,7 +277,7 @@ protected:
     RuntimeArgsData common_runtime_args_data_{};
     std::set<CoreCoord> core_with_runtime_args_;
     std::size_t max_runtime_args_per_core_{0};  // For validation
-    CoreCoord core_with_max_runtime_args_;   // For validation
+    CoreCoord core_with_max_runtime_args_;      // For validation
     std::map<std::string, std::string>
         defines_;  // preprocessor defines. this is to be able to generate generic instances.
     const bool watcher_assert_enabled_;
@@ -298,7 +299,7 @@ protected:
 
     virtual std::string config_hash() const = 0;
 
-    std::vector<std::string> file_paths(IDevice& device, const std::string& binary_root) const;
+    std::vector<std::string> file_paths(const IDevice& device, const std::string& binary_root) const;
 
 private:
     void register_kernel_with_watcher();
