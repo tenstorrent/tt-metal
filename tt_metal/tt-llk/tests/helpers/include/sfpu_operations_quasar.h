@@ -56,12 +56,6 @@ void init_unary_sfpu_operation_quasar()
 /**
  * @brief Apply a Quasar unary SFPU op in-place on one Dest tile.
  *
- * Selects the matching `_calculate_*_` entry point at compile time from the
- * kernel's `SFPU_UNARY_OPERATION` constant and forwards it to
- * `_llk_math_eltwise_unary_sfpu_params_`. `ITERATIONS` defaults to
- * `SFPU_ITERATIONS` (from `llk_defs.h`); abs/rsqrt are passed it explicitly so
- * they override their own per-op default of 8, matching the standalone tests.
- *
  * @tparam OPERATION The SFPU operation type (compile-time `SfpuType` constant).
  * @tparam ITERATIONS Number of SFPU loop iterations.
  * @param dst_index Destination tile index operated on (already offset by DST_INDEX).
