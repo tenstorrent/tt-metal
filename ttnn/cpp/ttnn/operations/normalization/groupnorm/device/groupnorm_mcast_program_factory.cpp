@@ -225,6 +225,13 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     bool tilize_in = a.layout() == Layout::ROW_MAJOR;
     bool untilize_out = output.layout() == Layout::ROW_MAJOR;
 
+    // On-core tilize/untilize of ROW_MAJOR interleaved input/output is currently implemented only
+    // on the no-mcast path (single mcast group per core).
+    TT_FATAL(
+        !tilize_in && !untilize_out,
+        "group_norm: ROW_MAJOR interleaved input/output is not supported on the multicast path yet. "
+        "Use TILE layout or use a core grid where batch >= num_virtual_rows, or shard the input.");
+
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 

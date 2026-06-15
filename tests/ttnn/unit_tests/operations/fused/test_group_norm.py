@@ -1538,3 +1538,73 @@ def test_group_norm_optional_weight_bias(
         atol=atol,
         frobenius_threshold=frobenius_threshold,
     )
+
+
+@pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("with_affine", [False, True], ids=["no_weight_bias", "weight_bias"])
+@pytest.mark.parametrize("mem_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
+def test_group_norm_row_major_interleaved_input(device, output_layout, with_affine, mem_config):
+    # A ROW_MAJOR interleaved (non-sharded) input must run correctly (issue #26594).
+    torch.manual_seed(0)
+
+    N, C, H, W, num_groups = 1, 480, 1, 64, 8
+    epsilon = 1e-5
+
+    torch_input = torch.rand((N, C, H, W), dtype=torch.bfloat16)
+    torch_weight = torch.rand((C,), dtype=torch.bfloat16) if with_affine else None
+    torch_bias = torch.rand((C,), dtype=torch.bfloat16) if with_affine else None
+
+    torch_output = torch.nn.functional.group_norm(
+        torch_input.float(),
+        num_groups,
+        weight=torch_weight.float() if torch_weight is not None else None,
+        bias=torch_bias.float() if torch_bias is not None else None,
+        eps=epsilon,
+    )
+    torch_output = torch_output.permute(0, 2, 3, 1).view(N, 1, H * W, C)
+
+    # ROW_MAJOR, interleaved input (DRAM or L1, deliberately not tilized)
+    tt_input = torch_input.permute(0, 2, 3, 1).view(N, 1, H * W, C)
+    input_tensor = ttnn.from_torch(
+        tt_input,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=mem_config,
+    )
+
+    grid_size = ttnn.CoreGrid(y=1, x=1)
+
+    gamma_t, beta_t = None, None
+    if with_affine:
+        gamma_t, beta_t = ttnn.dram_group_norm_params_from_torch(
+            [torch_weight.float(), torch_bias.float()],
+            C,
+            num_groups,
+            device,
+            core_grid=grid_size,
+            return_mask=False,
+        )
+
+    output_tensor = ttnn.group_norm(
+        input_tensor,
+        num_groups=num_groups,
+        epsilon=epsilon,
+        weight=gamma_t,
+        bias=beta_t,
+        memory_config=mem_config,
+        core_grid=grid_size,
+        inplace=False,
+        output_layout=output_layout,
+    )
+
+    output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor))
+
+    assert_numeric_metrics(
+        torch_output,
+        output_tensor,
+        pcc_threshold=0.9999,
+        rtol=0.065,
+        atol=0.065,
+        frobenius_threshold=0.016,
+    )
