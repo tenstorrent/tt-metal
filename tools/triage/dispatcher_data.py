@@ -28,7 +28,7 @@ from elfs_cache import run as get_elfs_cache, ElfsCache
 from triage import triage_singleton, ScriptConfig, run_script, log_check_location
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.elf import ElfVariable
-from ttexalens.memory_access import MemoryAccess
+from ttexalens.memory_access import create_l1_memory_access
 from ttexalens.context import Context
 from triage import TTTriageError, triage_field, hex_serializer
 from run_checks import run as get_run_checks
@@ -81,6 +81,9 @@ class DispatcherCoreData:
     # Inspector/control-plane-sourced block type for this core. Used by callers to reason about
     # active-vs-idle ETH without re-consulting the cluster descriptor.
     block_type: BlockType | None = None
+    # Whether kernel_config.enables turned this specific risc on. False => idle by design (no kernel
+    # launched on it). None => unknown (read failed / corrupt), so callers must not hide the core.
+    risc_enabled_by_kernel: bool | None = None
     # Hint surfaced when find_kernel fails — explains the most likely cause (program cache off,
     # or workload destroyed despite cache being on) so callers can append it to "PC not in range" style errors.
     kernel_lookup_warning: str | None = None
@@ -295,6 +298,18 @@ class DispatcherData:
             return self.kernels[watcher_kernel_id]
         raise TTTriageError(f"Kernel {watcher_kernel_id} not found in inspector data.")
 
+    @staticmethod
+    def _inspector_kernel_elf_path(kernel, proc_type: int) -> str | None:
+        """Per-processor ELF path resolved by Inspector at compile time, indexed by processor index.
+
+        Returns None when unavailable (older RPC/serialized data without the field, processor index out of
+        range, or an empty entry for a processor this kernel doesn't use), so callers can fall back.
+        """
+        elf_paths = getattr(kernel, "processorElfPaths", None)
+        if elf_paths is None or proc_type < 0 or proc_type >= len(elf_paths):
+            return None
+        return elf_paths[proc_type] or None
+
     def drisc_enabled(self) -> bool:
         return self._drisc_enabled_flag
 
@@ -302,6 +317,11 @@ class DispatcherData:
         if risc_name == "drisc":
             return self.drisc_enabled()
         return True
+
+    def is_idle_in_default_view(self, location: OnChipCoordinate, risc_name: str) -> bool:
+        """Risc hidden unless --all-cores: finished (Go=DONE) or never enabled by the program."""
+        d = self.get_cached_core_data(location, risc_name)
+        return d.go_message == "DONE" or d.risc_enabled_by_kernel is False
 
     def get_cached_core_data(self, location: OnChipCoordinate, risc_name: str) -> DispatcherCoreData:
         key = (location, risc_name)
@@ -328,7 +348,7 @@ class DispatcherData:
 
     def read_mailboxes(self, location: OnChipCoordinate) -> ElfVariable:
         block_type = self._get_block_type(location)
-        l1_mem_access = MemoryAccess.create_l1(location)
+        l1_mem_access = create_l1_memory_access(location)
         match block_type:
             case "tensix":
                 fw_elf = self._brisc_elf
@@ -476,6 +496,7 @@ class DispatcherData:
         dispatch_mode = None
         brisc_noc_id = None
         enables = None
+        risc_enabled_by_kernel = None
         subordinate_sync = None
         watcher_enabled = None
 
@@ -527,6 +548,8 @@ class DispatcherData:
             enables = ""
             for i, sym in enumerate(symbols):
                 enables += sym if (enables_val & (1 << i)) else sym.lower()
+            # bit i set => processor i enabled; proc_type is this risc's processor index.
+            risc_enabled_by_kernel = bool(enables_val & (1 << proc_type))
         except Exception:
             log_check_location(
                 location,
@@ -601,28 +624,34 @@ class DispatcherData:
         firmware_path = os.path.realpath(firmware_path)
 
         if kernel:
-            if is_active_eth:
-                if proc_name.lower() == "erisc":
-                    kernel_path = kernel.path + "/erisc/erisc.elf"
-                elif proc_name.lower() == "erisc0":
-                    kernel_path = kernel.path + "/active_erisc/active_erisc.elf" if self._is_2_erisc_mode else None
-                elif proc_name.lower() == "erisc1":
-                    kernel_path = (
-                        kernel.path + "/subordinate_active_erisc/subordinate_active_erisc.elf"
-                        if self._is_2_erisc_mode
-                        else kernel.path + "/active_erisc/active_erisc.elf"
-                    )
-            else:
-                if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
-                    kernel_path = kernel.path + "/idle_erisc/idle_erisc.elf"
-                elif proc_name.lower() == "erisc1":
-                    kernel_path = kernel.path + "/subordinate_idle_erisc/subordinate_idle_erisc.elf"
+            # Prefer the per-processor ELF path resolved by Inspector at compile time. It is indexed by
+            # processor index.
+            kernel_path = self._inspector_kernel_elf_path(kernel, proc_type)
+            if not kernel_path:
+                if is_active_eth:
+                    if proc_name.lower() == "erisc":
+                        kernel_path = kernel.path + "/erisc/erisc.elf"
+                    elif proc_name.lower() == "erisc0":
+                        kernel_path = kernel.path + "/active_erisc/active_erisc.elf" if self._is_2_erisc_mode else None
+                    elif proc_name.lower() == "erisc1":
+                        kernel_path = (
+                            kernel.path + "/subordinate_active_erisc/subordinate_active_erisc.elf"
+                            if self._is_2_erisc_mode
+                            else kernel.path + "/active_erisc/active_erisc.elf"
+                        )
                 else:
-                    kernel_path = kernel.path + f"/{proc_name.lower()}/{proc_name.lower()}.elf"
-            kernel_path = os.path.realpath(kernel_path)
+                    if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
+                        kernel_path = kernel.path + "/idle_erisc/idle_erisc.elf"
+                    elif proc_name.lower() == "erisc1":
+                        kernel_path = kernel.path + "/subordinate_idle_erisc/subordinate_idle_erisc.elf"
+                    else:
+                        kernel_path = kernel.path + f"/{proc_name.lower()}/{proc_name.lower()}.elf"
+            kernel_path = os.path.realpath(kernel_path) if kernel_path else None
             # For NCRISC we don't have XIP ELF file
             kernel_xip_path = (
-                kernel_path + ".xip.elf" if not (proc_name == "NCRISC" and location.device.is_wormhole()) else None
+                kernel_path + ".xip.elf"
+                if kernel_path and not (proc_name == "NCRISC" and location.device.is_wormhole())
+                else None
             )
             if proc_name == "NCRISC" and location.device.is_wormhole():
                 kernel_offset = 0xFFC00000
@@ -634,7 +663,9 @@ class DispatcherData:
                 # not at address 0 like Tensix kernels, so no base adjustment is needed.
                 kernel_offset = kernel_text_offset
             else:
-                kernel_offset = kernel_config_base + kernel_text_offset
+                # For most blocks, the kernel is loaded at an offset from the config base, so we add them together to get the actual load address.
+                # The & 0xFFFFFFFF is needed to wrap around to 32 bits, since the offset can be negative and Python ints are unbounded.
+                kernel_offset = (kernel_config_base + kernel_text_offset) & 0xFFFFFFFF
         else:
             kernel_path = None
             kernel_xip_path = None
@@ -667,6 +698,7 @@ class DispatcherData:
             subordinate_sync=subordinate_sync,
             watcher_enabled=watcher_enabled,
             block_type=block_type,
+            risc_enabled_by_kernel=risc_enabled_by_kernel,
             kernel_lookup_warning=kernel_lookup_warning,
         )
 

@@ -33,7 +33,7 @@ on:
         default: true
         description: "Set to false to allow write access to MLPerf mount"
       test-group:
-        description: "Select which test group to run (SP1/4 tests can be run between 7 and 11 AM UTC)"
+        description: "Select which test group to run (SP1/4 tests can be run between 12 and 4 PM UTC)"
         required: false
         default: "all"
         type: choice
@@ -41,13 +41,15 @@ on:
           - all
           - deepseek_prefill
           - deepseek_decode
+          - deepseek_unit_tests
           - wan22
+          - single_galaxy_deepseek
           - sp1_deepseek
           - sp4_deepseek
 
   schedule:
-    # Run daily at 6 AM UTCP_a
-    - cron: "0 6 * * 1-5"
+    # Run daily at 11 AM UTC
+    - cron: "0 11 * * 1-5"
 
 permissions:
   contents: write
@@ -56,12 +58,17 @@ permissions:
   id-token: write
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
@@ -70,7 +77,7 @@ jobs:
 
   deepseek-prefill-tests:
     name: "DeepSeek Prefill Tests"
-    needs: build-artifact
+    needs: [build-artifact]
     if: ${{ inputs.test-group == 'all' || inputs.test-group == 'deepseek_prefill' || github.event_name == 'schedule' }}
     secrets: inherit
     uses: ./.github/workflows/demo-sp-release-impl.yaml
@@ -78,14 +85,14 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      enabled-skus: bh_galaxy,wh_llmbox_perf,bh_loudbox,bh_llmbox
+      enabled-skus: bh_galaxy,wh_llmbox_perf,bh_quietbox_2
       model: deepseek_prefill
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       job-prefix: "[DeepSeek Prefill] "
 
   deepseek-decode-tests:
     name: "DeepSeek Decode Tests (B1 Decoder Block)"
-    needs: build-artifact
+    needs: [build-artifact]
     if: ${{ inputs.test-group == 'all' || inputs.test-group == 'deepseek_decode' || github.event_name == 'schedule' }}
     secrets: inherit
     uses: ./.github/workflows/demo-sp-release-impl.yaml
@@ -98,9 +105,24 @@ jobs:
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       job-prefix: "[DeepSeek Decode] "
 
+  deepseek-unit-tests:
+    name: "DeepSeek B1 Unit Tests"
+    needs: build-artifact
+    if: ${{ inputs.test-group == 'all' || inputs.test-group == 'deepseek_unit_tests' || github.event_name == 'schedule' }}
+    secrets: inherit
+    uses: ./.github/workflows/demo-sp-release-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      enabled-skus: bh_galaxy
+      model: deepseek_unit_tests
+      mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
+      job-prefix: "[DeepSeek Unit Tests] "
+
   wan22-tests:
     name: "Wan 2.2 Tests"
-    needs: build-artifact
+    needs: [build-artifact]
     if: ${{ inputs.test-group == 'all' || inputs.test-group == 'wan22' || github.event_name == 'schedule' }}
     secrets: inherit
     uses: ./.github/workflows/demo-sp-release-impl.yaml
@@ -113,22 +135,9 @@ jobs:
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       job-prefix: "[Wan2.2] "
 
-  # NOTE: focus on SP4 first
-  # deepseek-sp1-tests:
-  #   name: "SP1 DeepSeek Tests"
-  #   needs: build-artifact
-  #   if: ${{ inputs.test-group == 'all' || inputs.test-group == 'sp1_deepseek' || github.event_name == 'schedule' }}
-  #   secrets: inherit
-  #   uses: ./.github/workflows/demo-sp-multihost-impl.yaml
-  #   with:
-  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-  #     sp-config: sp1
-
   deepseek-sp4-tests:
     name: "SP4 DeepSeek Tests"
-    needs: build-artifact
+    needs: [build-artifact]
     if: ${{ inputs.test-group == 'all' || inputs.test-group == 'sp4_deepseek' || github.event_name == 'schedule' }}
     secrets: inherit
     uses: ./.github/workflows/demo-sp-multihost-impl.yaml
@@ -137,3 +146,28 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       sp-config: sp4
+
+  deepseek-sp1-tests:
+    name: "SP1 DeepSeek Tests"
+    needs: build-artifact
+    if: ${{ inputs.test-group == 'all' || inputs.test-group == 'sp1_deepseek' || github.event_name == 'schedule' }}
+    secrets: inherit
+    uses: ./.github/workflows/demo-sp-multihost-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      sp-config: sp1
+
+  # todo)) proven to work by itself but mess up SP1 allocationp; disabled until issue (https://github.com/tenstorrent/tt-metal/issues/44917) is resolved
+  # deepseek-single-galaxy-tests:
+  #   name: "Single Galaxy DeepSeek Tests"
+  #   needs: build-artifact
+  #   if: ${{ inputs.test-group == 'all' || inputs.test-group == 'single_galaxy_deepseek' || github.event_name == 'schedule' }}
+  #   secrets: inherit
+  #   uses: ./.github/workflows/demo-sp-multihost-impl.yaml
+  #   with:
+  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  #     sp-config: spsg

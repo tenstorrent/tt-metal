@@ -26,7 +26,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator_v2 import generate_stimuli_v2
+from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import BootMode, TestConfig
 from helpers.test_variant_parameters import (
     BROADCAST_TYPE,
@@ -40,6 +40,9 @@ from helpers.test_variant_parameters import (
 )
 from helpers.utils import passed_test
 
+TILE_ELEMS = 32 * 32
+FACE_ELEMS = 16 * 16
+
 
 @pytest.mark.quasar
 @parametrize(
@@ -48,6 +51,9 @@ from helpers.utils import passed_test
             DataFormat.Float16_b,
             DataFormat.Float16,
             DataFormat.MxFp4,
+            DataFormat.MxInt8,
+            DataFormat.MxInt4,
+            DataFormat.MxInt2,
         ],
     ),
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
@@ -84,7 +90,7 @@ def test_eltwise_binary_broadcast_quasar(
     boot_mode=BootMode.DEFAULT,
 ):
 
-    src_A, tile_cnt_A, src_B, _ = generate_stimuli_v2(
+    src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -162,5 +168,5 @@ def test_eltwise_binary_broadcast_quasar(
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format, print_errors=False
+        golden_tensor, res_tensor, formats.output_format
     ), "Assert against golden failed"

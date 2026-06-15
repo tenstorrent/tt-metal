@@ -39,13 +39,13 @@ if _SHOULD_RUN_SIMULATOR and _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so")
 import helpers.order_processing as order_processing
 import helpers.utils as utils_module
 import pytest
+import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.device import LLKAssertException, _send_arc_message
+from helpers.device import LLKAssertException
 from helpers.exalens_server import ExalensServer
 from helpers.format_config import InputOutputFormat
 from helpers.logger import configure_logger, logger
 from helpers.perf import PerfConfig, PerfReport, combine_perf_reports
-from helpers.target_config import TestTargetConfig, initialize_test_target_from_pytest
 from helpers.test_config import BuildMode, TestConfig, process_coverage_run_artefacts
 from ttexalens import check_context, tt_exalens_init
 from ttexalens.tt_exalens_lib import get_tensix_state
@@ -104,6 +104,29 @@ init_llk_home()
 @pytest.fixture()
 def regenerate_cpp(request):
     return not request.config.getoption("--skip-codegen")
+
+
+# Default seed for deterministic stimuli. Override via LLK_TEST_SEED to reproduce
+# a specific run or to sweep different random inputs.
+_LLK_TEST_SEED = os.environ.get("LLK_TEST_SEED")
+try:
+    _DEFAULT_TORCH_SEED = int(_LLK_TEST_SEED, 0) if _LLK_TEST_SEED is not None else 42
+except ValueError as e:
+    raise pytest.UsageError(
+        f"LLK_TEST_SEED must be an integer, got {_LLK_TEST_SEED!r}"
+    ) from e
+
+
+@pytest.fixture(autouse=True)
+def _seed_torch_rng():
+    """Lock torch's global RNG before every test to avoid flaky failures.
+
+    Stimuli that don't set an explicit StimuliSpec.seed fall back to torch's
+    global generator, so seeding here makes both generate_stimuli() and any
+    direct torch.rand/randn/randint/uniform_ calls reproducible.
+    """
+    torch.manual_seed(_DEFAULT_TORCH_SEED)
+    yield
 
 
 # Define the possible custom command line options
@@ -239,6 +262,15 @@ def pytest_configure(config):
 
     config.coverage_enabled = config.getoption("--coverage", default=False)
 
+    # Device print is enabled on debug or trace.
+    resolved_log_level = (
+        config.getoption("--logging-level", default=None)
+        or os.getenv("LOGURU_LEVEL", "INFO")
+    ).upper()
+    TestConfig.DEVICE_PRINT_ENABLED = (
+        resolved_log_level in ("DEBUG", "TRACE") and not config.coverage_enabled
+    )
+
     TestConfig.setup_build(
         Path(os.environ["LLK_HOME"]),
         config.getoption("--coverage", default=False),
@@ -259,6 +291,8 @@ def pytest_configure(config):
     # Create directories from all processes - lock in create_directories handles race
     TestConfig.create_build_directories()
 
+    TestConfig.TEST_TARGET.update_from_pytest_config(config)
+
     global _RECORD_TEST_ORDER, _UNIFIED_ORDER_FILE
 
     if _RECORD_TEST_ORDER := config.getoption("--record-test-order"):
@@ -273,9 +307,11 @@ def pytest_configure(config):
         _RECORD_TEST_ORDER = True
         utils_module._RECORD_TEST_ORDER = True
 
+    is_ttsim = _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so")
     if (
-        TestConfig.ARCH != ChipArchitecture.QUASAR
-        and not TestConfig.BUILD_MODE == BuildMode.PRODUCE
+        (is_ttsim or not TestConfig.TEST_TARGET.run_simulator)
+        and TestConfig.ARCH != ChipArchitecture.QUASAR
+        and TestConfig.BUILD_MODE != BuildMode.PRODUCE
     ):
         override_gprs_used_by_tensix_dump()
 
@@ -296,11 +332,8 @@ def pytest_configure(config):
         format="%(asctime)s - %(levelname)s - %(message)s",
     )
 
-    initialize_test_target_from_pytest(config)
-    test_target = TestTargetConfig()
-
     if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
-        if test_target.run_simulator:
+        if TestConfig.TEST_TARGET.run_simulator:
             if _SIMULATOR_PATH is None:
                 pytest.exit(
                     "ERROR: --run-simulator requires TT_METAL_SIMULATOR "
@@ -312,7 +345,7 @@ def pytest_configure(config):
                 # ttsim: already initialized at module import above; runs in-process, no server.
                 # --reset-simulator-per-test restarts the ExalensServer, which ttsim doesn't use,
                 # so it would be a silent no-op. Fail fast to avoid confusing false-green runs.
-                if test_target.reset_simulator_per_test:
+                if TestConfig.TEST_TARGET.reset_simulator_per_test:
                     pytest.exit(
                         "ERROR: --reset-simulator-per-test is not supported with ttsim. "
                         "Re-run without it.",
@@ -324,7 +357,7 @@ def pytest_configure(config):
                 global _exalens_server
                 _exalens_server = ExalensServer(
                     simulator_path=_SIMULATOR_PATH,
-                    port=test_target.simulator_port,
+                    port=TestConfig.TEST_TARGET.simulator_port,
                 )
         else:
             tt_exalens_init.init_ttexalens(use_4B_mode=False)
@@ -557,8 +590,7 @@ _reset_simulator_pending = False
 
 def pytest_runtest_teardown(item, nextitem):
     """Mark that a restart is needed before the next test."""
-    test_target = TestTargetConfig()
-    if not test_target.reset_simulator_per_test:
+    if not TestConfig.TEST_TARGET.reset_simulator_per_test:
         return
     if nextitem is None:
         return
@@ -577,12 +609,10 @@ def pytest_runtest_setup(item):
     if _exalens_server is None:
         return
 
-    test_target = TestTargetConfig()
-
     if not _exalens_server.running and not _exalens_server.ever_started:
         _exalens_server.start()
         tt_exalens_init.init_ttexalens_remote(
-            port=test_target.simulator_port, use_4B_mode=False
+            port=TestConfig.TEST_TARGET.simulator_port, use_4B_mode=False
         )
     elif not _exalens_server.running:
         logger.error("tt-exalens server is no longer running unexpectedly.")
@@ -592,17 +622,13 @@ def pytest_runtest_setup(item):
         tt_exalens_init.cleanup_global_context()
         _exalens_server.restart()
         tt_exalens_init.init_ttexalens_remote(
-            port=test_target.simulator_port, use_4B_mode=False
+            port=TestConfig.TEST_TARGET.simulator_port, use_4B_mode=False
         )
 
 
 def pytest_sessionstart(session):
     if hasattr(session.config, "workerinput"):
         return
-
-    test_target = TestTargetConfig()
-    if not test_target.run_simulator and TestConfig.BUILD_MODE != BuildMode.PRODUCE:
-        _send_arc_message("GO_BUSY", test_target.device_id)
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -640,10 +666,6 @@ def perf_report(request, worker_id):
 def pytest_sessionfinish(session):
     if hasattr(session.config, "workerinput"):
         return
-
-    test_target = TestTargetConfig()
-    if not test_target.run_simulator and TestConfig.BUILD_MODE != BuildMode.PRODUCE:
-        _send_arc_message("GO_IDLE", test_target.device_id)
 
     if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
         combine_perf_reports()

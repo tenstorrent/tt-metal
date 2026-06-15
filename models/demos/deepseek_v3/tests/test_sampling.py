@@ -3,11 +3,14 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 
 import ttnn
 from models.common.sampling import SamplingGenerator, SamplingParams, format_sampling_params
+from models.demos.deepseek_v3.tt.generator import DeepseekGenerator
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_fabric_config, make_deepseek_sampling_args
 
 
@@ -44,7 +47,7 @@ def _extract_all_tokens(tt_out_tok, mesh_device, batch_size_per_row):
 def _sample_device_tokens(mesh_device, ccl, args, torch_input, user_params):
     batch_size = USERS_PER_ROW * int(mesh_device.shape[0])
     tt_input = _make_lm_head_sharded_logits(torch_input, mesh_device)
-    sampling = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=ccl, enable_internal_trace=False)
+    sampling = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=ccl)
     params = format_sampling_params(user_params, max_batch_size=batch_size)
     sampling.reset_sampling_params(params)
     sampling.reset_prompt_tokens(torch.zeros((USERS_PER_ROW, 1), dtype=torch.int64))
@@ -56,6 +59,102 @@ def _sample_device_tokens(mesh_device, ccl, args, torch_input, user_params):
     ttnn.deallocate(tt_tokens)
     ttnn.deallocate(tt_input)
     return device_tokens
+
+
+class _FakeSeedManager:
+    def __init__(self, max_batch_size):
+        self.max_batch_size = max_batch_size
+        self.reset_calls = []
+        self.new_value_calls = []
+
+    def reset_seed(self, seeds, user_ids):
+        self.reset_calls.append((seeds, user_ids))
+
+    def get_new_values(self, user_slots):
+        self.new_value_calls.append(user_slots)
+
+
+class _FakeSamplingGenerator:
+    def __init__(self, *, padded_batch_size=32, sampling_dp=2):
+        self.tt_sampling = SimpleNamespace(max_batch_size=padded_batch_size, _sampling_dp=sampling_dp)
+        self.seed_manager = _FakeSeedManager(padded_batch_size * sampling_dp)
+        self.decode_state_calls = []
+
+    def apply_decode_state(self, sampling_param_chunks, **kwargs):
+        self.decode_state_calls.append((sampling_param_chunks, kwargs))
+
+
+def _fake_deepseek_generator(*, batch_size_per_row=8, sampling_dp=2):
+    class _FakeDeepseekGenerator:
+        _reset_sampling_state = DeepseekGenerator._reset_sampling_state
+        _sampling_device_slot = DeepseekGenerator._sampling_device_slot
+        _sampling_device_slots = DeepseekGenerator._sampling_device_slots
+        _sampling_device_seed_slots = DeepseekGenerator._sampling_device_seed_slots
+
+        def __init__(self):
+            self.batch_size_per_row = batch_size_per_row
+            self.sampling_generator = _FakeSamplingGenerator(padded_batch_size=32, sampling_dp=sampling_dp)
+
+    return _FakeDeepseekGenerator()
+
+
+def test_deepseek_reset_sampling_state_does_not_preformat_sampling_params():
+    batch_size = 64
+    batch_size_per_row = 32
+    generator = _fake_deepseek_generator(batch_size_per_row=batch_size_per_row, sampling_dp=2)
+    sampling_generator = generator.sampling_generator
+    sampling_params = SamplingParams(
+        temperature=[0.6] * batch_size,
+        top_k=[32] * batch_size,
+        top_p=[0.95] * batch_size,
+        seed=[1234] * batch_size,
+    )
+
+    DeepseekGenerator._reset_sampling_state(generator, sampling_params, batch_size, batch_size_per_row)
+
+    [(sampling_param_chunks, kwargs)] = sampling_generator.decode_state_calls
+    assert len(sampling_param_chunks) == 2
+    assert sampling_param_chunks[0].temperature[0] == 0.6
+    assert sampling_param_chunks[1].temperature[0] == 0.6
+    first_chunk_temperature = format_sampling_params(
+        sampling_param_chunks[0], max_batch_size=batch_size_per_row
+    ).temperature[0]
+    assert first_chunk_temperature == pytest.approx(1 / 0.6)
+    assert kwargs["reset_batch"] is True
+    assert kwargs["prompt_tokens"].shape == (batch_size_per_row, 1)
+    assert kwargs["output_tokens"].shape == (batch_size_per_row, 1)
+    [seed_reset] = sampling_generator.seed_manager.reset_calls
+    assert seed_reset == ([1234] * batch_size, list(range(batch_size)))
+
+
+def test_deepseek_sampling_user_slots_map_to_row_padded_device_slots():
+    generator = _fake_deepseek_generator(batch_size_per_row=8, sampling_dp=3)
+
+    assert DeepseekGenerator._sampling_device_slots(generator, [0, 7, 8, 15, 16, 23]) == [0, 7, 32, 39, 64, 71]
+
+
+def test_deepseek_sampling_seed_reset_uses_row_padded_device_slots():
+    batch_size = 32
+    generator = _fake_deepseek_generator(batch_size_per_row=8, sampling_dp=4)
+    sampling_params = SamplingParams(
+        temperature=[0.0] * batch_size,
+        top_k=[1] * batch_size,
+        top_p=[1.0] * batch_size,
+        seed=list(range(100, 100 + batch_size)),
+    )
+
+    DeepseekGenerator._reset_sampling_state(generator, sampling_params, batch_size, generator.batch_size_per_row)
+
+    [(seeds, user_ids)] = generator.sampling_generator.seed_manager.reset_calls
+    assert user_ids == list(range(128))
+    assert seeds[:8] == list(range(100, 108))
+    assert seeds[8:32] == [None] * 24
+    assert seeds[32:40] == list(range(108, 116))
+    assert seeds[40:64] == [None] * 24
+    assert seeds[64:72] == list(range(116, 124))
+    assert seeds[72:96] == [None] * 24
+    assert seeds[96:104] == list(range(124, 132))
+    assert seeds[104:] == [None] * 24
 
 
 @torch.no_grad()
@@ -70,7 +169,7 @@ def _sample_device_tokens(mesh_device, ccl, args, torch_input, user_params):
 @pytest.mark.parametrize("device_params", [{"fabric_config": get_fabric_config()}], indirect=True)
 def test_deepseek_device_sampling_argmax_path(mesh_device, ccl, hf_config, device_params, sampling_params):
     vocab_size = int(hf_config.vocab_size)
-    args = make_deepseek_sampling_args(mesh_device, vocab_size=vocab_size)
+    args = make_deepseek_sampling_args(mesh_device, vocab_size=vocab_size, pad_logits_to_power_of_2=True)
     batch_size = USERS_PER_ROW * int(mesh_device.shape[0])
     seed = int(sampling_params.get("seed", 0))
     torch.manual_seed(seed)
@@ -123,7 +222,7 @@ def test_deepseek_device_sampling_stochastic_behavior(mesh_device, ccl, hf_confi
     )
 
     tt_input = _make_lm_head_sharded_logits(torch_input, mesh_device)
-    sampling = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=ccl, enable_internal_trace=use_tracing)
+    sampling = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=ccl)
     params = format_sampling_params(user_params, max_batch_size=batch_size)
     sampling.reset_sampling_params(params)
     sampling.reset_prompt_tokens(torch.zeros((USERS_PER_ROW, 1), dtype=torch.int64))

@@ -71,7 +71,7 @@ struct PhysicalPortEndpoint {
     uint32_t rack = 0;
     uint32_t shelf_u = 0;
     TrayId tray_id{0};
-    PortType port_type = PortType::TRACE;
+    PortType port_type = PortType::UNKNOWN;
     PortId port_id{0};
 
     auto operator<=>(const PhysicalPortEndpoint& other) const = default;
@@ -83,6 +83,7 @@ std::ostream& operator<<(std::ostream& os, const PhysicalPortEndpoint& conn);
 
 using LogicalChannelConnection = std::pair<LogicalChannelEndpoint, LogicalChannelEndpoint>;
 using PhysicalChannelConnection = std::pair<PhysicalChannelEndpoint, PhysicalChannelEndpoint>;
+using PhysicalPortConnection = std::pair<PhysicalPortEndpoint, PhysicalPortEndpoint>;
 
 // Port connection types (graph-level connections between nodes)
 using PortEndpoint = std::tuple<HostId, TrayId, PortId>;  // host_id, tray_id, port_id
@@ -92,6 +93,7 @@ struct Node {
     std::string motherboard;
     std::map<TrayId, Board> boards;
     HostId host_id{0};
+    std::string node_descriptor_name;
 
     // Board-to-board connections within this node: PortType -> [(tray_id, port_id) <-> (tray_id, port_id)]
     using BoardEndpoint = std::pair<TrayId, PortId>;
@@ -162,6 +164,12 @@ public:
     template <typename DeploymentArg>
     friend CablingGenerator build_from_directory(const std::string& dir_path, const DeploymentArg& deployment_arg);
 
+    // Overload taking a parsed deployment; slices it per cabling file before each per-file ctor
+    // so positional (host_id-indexed) access stays consistent across files.
+    friend CablingGenerator build_from_directory(
+        const std::string& dir_path,
+        const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor);
+
     // Getters for all data
     const std::vector<Host>& get_deployment_hosts() const;
     const std::vector<LogicalChannelConnection>& get_chip_connections() const;
@@ -181,6 +189,18 @@ public:
     // Method to emit deployment descriptor (one host per node in host_id order; use for merged output)
     void emit_deployment_descriptor(const std::string& output_path) const;
 
+    // Given a set of dead physical channel endpoints (e.g. unretrainable channels reported by
+    // run_cluster_validation), return the set of cables (port-level connections) whose channel
+    // expansion contains at least one of those channels. Used to identify which cables to remove
+    // from a degraded cluster's cabling descriptor before regenerating its FSD.
+    std::set<PhysicalPortConnection> find_cables_containing_channels(
+        const std::set<PhysicalChannelEndpoint>& dead_channels) const;
+
+    // Mutating counterpart to find_cables_containing_channels: walks the resolved graph and
+    // removes every cable whose expansion intersects the dead set, applying the
+    // dead-channel == dead-cable policy.
+    std::set<PhysicalPortConnection> prune_dead_channels(const std::set<PhysicalChannelEndpoint>& dead_channels);
+
 private:
     // Track which node_descriptors were explicitly present in source files (not inferred)
     std::unordered_set<std::string> explicit_node_descriptors_;
@@ -190,6 +210,11 @@ private:
         std::optional<std::reference_wrapper<const deployment::proto::DeploymentDescriptor>> deployment_descriptor =
             std::nullopt);
 
+    // Single-file init shared by the (path, path) and (path, DeploymentDescriptor) ctors.
+    void initialize_from_single_file(
+        const std::string& cluster_descriptor_path,
+        const deployment::proto::DeploymentDescriptor& deployment_descriptor);
+
     // Merge another descriptor file into this CablingGenerator
     // Creates CablingGenerator internally and merges it
     // existing_sources: accumulated list of previously merged files (for error messages)
@@ -198,6 +223,21 @@ private:
     template <typename DeploymentArg>
     void merge(
         const std::string& new_file_path, const DeploymentArg& deployment_arg, const std::string& existing_sources);
+
+    // Ctor / merge overloads taking a parsed deployment; used by build_from_directory after
+    // slicing the full deployment per cabling file.
+    CablingGenerator(
+        const std::string& cluster_descriptor_path,
+        const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor);
+
+    void merge(
+        const std::string& new_file_path,
+        const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor,
+        const std::string& existing_sources);
+
+    // Post-construction merge logic shared by both merge() entry points.
+    void merge_other(
+        CablingGenerator& other, const std::string& new_file_path, const std::string& existing_sources);
 
     // Utility function for finding descriptor files in a directory
     static std::vector<std::string> find_descriptor_files(const std::string& directory_path);

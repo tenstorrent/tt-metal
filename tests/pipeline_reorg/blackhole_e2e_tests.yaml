@@ -10,6 +10,7 @@
 #       timeout: The maximum allowed runtime for this job in minutes on that SKU.
 #   owner_id: The Slack user ID to notify on failure.
 #   team: The team that owns the test.
+#   tags: (Optional) Labels used by workflow_dispatch test-selection groups.
 #   model-name: (Optional) Model identifier; rows are kept when workflow_dispatch
 #     `model` matches this value or when the row has no `model-name` (always-run).
 
@@ -33,10 +34,6 @@
     TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_at_least_2x2_mesh.yaml
     TT_FABRIC_PROFILE_RX_CH_FWD=1 TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_code_profiling.yaml
   skus:
-    bh_deskbox:
-      timeout: 15
-    bh_llmbox:
-      timeout: 15
     bh_loudbox:
       timeout: 15
     bh_p300:
@@ -50,10 +47,6 @@
   name: ccl nightly tests
   cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly
   skus:
-    bh_deskbox:
-      timeout: 60
-    bh_llmbox:
-      timeout: 60
     bh_loudbox:
       timeout: 60
     bh_p300:
@@ -65,12 +58,9 @@
 
 - id: bh-sdpa-nightly-integration
   name: sdpa nightly tests
+  tags: [sdpa]
   cmd: pytest tests/nightly/blackhole/sdpa/ -svv
   skus:
-    bh_deskbox:
-      timeout: 60
-    bh_llmbox:
-      timeout: 60
     bh_loudbox:
       timeout: 60
     bh_p300:
@@ -104,10 +94,6 @@
   cmd: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_at_least_2x2_mesh.yaml
   upload_fabric_data: true
   skus:
-    bh_deskbox:
-      timeout: 15
-    bh_llmbox:
-      timeout: 15
     bh_loudbox:
       timeout: 15
     bh_p300:
@@ -119,14 +105,12 @@
 
 - id: bh-ring-sdpa-perf
   name: ring sdpa perf tests
-  # Skip QB1 (bh_llmbox / 4xP150): perf differs slightly from QB2 (2xP300);
-  # running on one machine class lets us keep a tighter tolerance (PR #44069).
+  tags: [sdpa]
   cmd: |
     SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_perf_check -svv
+    SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_perf_check -svv
     SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py::test_exp_ring_joint_attention_perf_check -svv
   skus:
-    bh_deskbox:
-      timeout: 10
     bh_loudbox:
       timeout: 10
     bh_p300:
@@ -143,10 +127,6 @@
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric2DUDMModeFixture.*:*ChannelTrimming*"
     ./build/test/ttnn/unit_tests_ttnn_udm
   skus:
-    bh_deskbox:
-      timeout: 20
-    bh_llmbox:
-      timeout: 20
     bh_loudbox:
       timeout: 20
     bh_p300:
@@ -176,10 +156,6 @@
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
     TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
   skus:
-    bh_deskbox:
-      timeout: 15
-    bh_llmbox:
-      timeout: 15
     bh_loudbox:
       timeout: 15
     bh_p300:
@@ -196,10 +172,6 @@
     # Disabled due to issue https://github.com/tenstorrent/tt-metal/issues/41040
     # pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH.py
   skus:
-    bh_deskbox:
-      timeout: 15
-    bh_llmbox:
-      timeout: 15
     bh_loudbox:
       timeout: 15
     bh_p300:
@@ -223,10 +195,6 @@
   name: fabric stability nightly tests
   cmd: TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ./tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability_short_running.yaml
   skus:
-    bh_deskbox:
-      timeout: 15
-    bh_llmbox:
-      timeout: 15
     bh_loudbox:
       timeout: 15
     bh_p300:
@@ -242,34 +210,43 @@
   skus:
     bh_p150b_civ2:
       timeout: 45
-    bh_llmbox:
-      timeout: 45
   owner_id: U084DDYSWCW # Adrian Morrison
   team: ttnn
 
 # --- deepseek_prefill ---
 - id: bh-lb-deepseek-prefill
   name: bh_lb_DeepSeek_PREFILL
-  model-name: deepseek
+  model-name: deepseek_prefill
   cmd: |
     exit_code=0
-    pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc and not perf-host-64" --timeout 1800 || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py -k '4x2 and pcc_check' -vvv --tb=short || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_rope_prefill.py -k '4x2' -vvv --tb=short || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla -k "2x4 and random and scaled_sl and check_pcc and line" -vvv --tb=short || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py -k "balanced and not non_balanced" -vvv --tb=short --timeout=900 || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py -k "2x4 and layer0 and device" -vvv --tb=short || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_moe_grouped_topk.py -k "realistic" -vvv --tb=short || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc and not perf-host-64 and not fabric2d-" --timeout 1800 || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_ds_mla -k "2x4 and random and scaled_sl and check_pcc and line" -vvv --tb=short || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "maxedge and cpu and 2x4 and line and not multiuser" -vvv --tb=short || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "balanced and not non_balanced and fabric2d" -vvv --tb=short --timeout=900 || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py -k "2x4 and layer0 and device and not fabric2d-" -vvv --tb=short || exit_code=$?
     exit $exit_code
   skus:
     bh_loudbox:
-      timeout: 90
+      timeout: 75
   owner_id: U08E1JCMAJF # Marko Bezulj
+  team: models
+
+- id: bh-lb-deepseek-prefill-op-tests
+  name: bh_lb_DeepSeek_PREFILL_OP_TESTS
+  model-name: deepseek_prefill
+  cmd: |
+    exit_code=0
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "(not test_ring_joint_mla or (4x2 and pcc_check and not fabric2d)) and (not test_rope_prefill or 4x2) and (not update_padded_kv_cache or 2x4) and (not rotary_embedding_indexed or 2x4) and not small-dims-validate-pcc" || exit_code=$?
+    exit $exit_code
+  skus:
+    bh_loudbox:
+      timeout: 55
+  owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
 
 - id: bh-lb-deepseek-prefill-perf
   name: bh_lb_DeepSeek_PREFILL_PERF
-  model-name: deepseek
+  model-name: deepseek_prefill
   cmd: |
     exit_code=0
     pytest models/demos/deepseek_v3_d_p/tests/perf/test_dispatch_combine_perf.py -m models_device_performance_bare_metal -vvv --tb=short --timeout=900 || exit_code=$?
@@ -285,14 +262,51 @@
 
 - id: bh-qb-deepseek-prefill
   name: bh_qb_DeepSeek_PREFILL
-  model-name: deepseek
+  model-name: deepseek_prefill
   cmd: |
-    pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc and not perf-host-64" --timeout 1800
-    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py -k '2x2 and pcc_check' -vvv --tb=short
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc and not perf-host-64 and not fabric2d-" --timeout 1800
     pytest models/demos/deepseek_v3_d_p/tests/cache/ -vvv --tb=short
-    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_dispatch_combine_l1_small_semaphores.py -vvv --tb=short
   skus:
-    bh_llmbox:
-      timeout: 30
+    bh_quietbox_2:
+      timeout: 20
   owner_id: U08E1JCMAJF # Marko Bezulj
+  team: models
+
+- id: bh-p150-deepseek-prefill-op-tests
+  name: bh_p150_DeepSeek_PREFILL_OP_TESTS
+  model-name: deepseek_prefill
+  cmd: |
+    exit_code=0
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "(not test_ring_joint_mla or not fabric2d) and not small-dims-validate-pcc" || exit_code=$?
+    exit $exit_code
+  skus:
+    bh_p150b_civ2:
+      timeout: 8
+  owner_id: U094PKWHNJ0 # Petar Milojevic
+  team: models
+
+- id: bh-p300-deepseek-prefill-op-tests
+  name: bh_p300_DeepSeek_PREFILL_OP_TESTS
+  model-name: deepseek_prefill
+  cmd: |
+    exit_code=0
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "(not test_ring_joint_mla or not fabric2d) and not small-dims-validate-pcc" || exit_code=$?
+    exit $exit_code
+  skus:
+    bh_p300:
+      timeout: 10
+  owner_id: U094PKWHNJ0 # Petar Milojevic
+  team: models
+
+- id: bh-qb2-deepseek-prefill-op-tests
+  name: bh_qb2_DeepSeek_PREFILL_OP_TESTS
+  model-name: deepseek_prefill
+  cmd: |
+    exit_code=0
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "not test_ring_joint_mla or (2x2 and pcc_check and not fabric2d)" || exit_code=$?
+    exit $exit_code
+  skus:
+    bh_quietbox_2:
+      timeout: 20
+  owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models

@@ -27,7 +27,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator_v2 import generate_stimuli_v2
+from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import BootMode, TestConfig
 from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
@@ -117,6 +117,9 @@ UNPACK_FORMATS = input_output_formats(
         DataFormat.Float16,
         DataFormat.Float32,
         DataFormat.MxFp4,
+        DataFormat.MxInt8,
+        DataFormat.MxInt4,
+        DataFormat.MxInt2,
     ]
 )
 ALL_UNPACK_UNARY_OPERAND_COMBINATIONS = generate_unpack_unary_operand_combinations(
@@ -141,7 +144,7 @@ def test_unpack_unary_operand_quasar(
         input_dimensions,
     ) = formats_dest_acc_sync_transpose_unpack_sel_dims[0]
 
-    src_A, tile_cnt_A, src_B, _ = generate_stimuli_v2(
+    src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -172,6 +175,15 @@ def test_unpack_unary_operand_quasar(
             untilize=False,
             input_dimensions=input_dimensions,
         )
+        # TransposeGolden only rearranges; it doesn't round-trip through the
+        # output MX lattice the way DataCopyGolden does. For MxFp4 -> MxInt4
+        # the MxFp4 lattice has 1.5 but MxInt4 (with the realized block scale)
+        # may not, so HW rounds 1.5 -> 2.0 while golden keeps 1.5. Snap golden
+        # to the output lattice here to match.
+        if formats.output_format.is_mx_format():
+            golden_tensor = quantize_mx_tensor_chunked(
+                golden_tensor.to(torch.bfloat16), formats.output_format
+            )
     else:
         generate_golden = get_golden_generator(DataCopyGolden)
         golden_tensor = generate_golden(
@@ -233,5 +245,7 @@ def test_unpack_unary_operand_quasar(
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
     ), "Assert against golden failed"

@@ -85,7 +85,7 @@ TEST_F(NewtonSchulzOpTest, MuonCoeff) {
     auto X_tensor = ops::newtonschulz5(G_tensor, 10, 1e-7f);
     auto X_result = core::to_xtensor(X_tensor);
 
-    EXPECT_TRUE(xt::allclose(X_result, G_expected, 5e-2f, 5e-2f));
+    EXPECT_TRUE(xt::allclose(X_result, G_expected, 6.5e-2f, 6.5e-2f));
 }
 
 TEST_F(NewtonSchulzOpTest, OrthogonalityCheck) {

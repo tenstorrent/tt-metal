@@ -4,6 +4,8 @@
 
 #include <cstdint>
 
+#include "api/dataflow/circular_buffer.h"
+
 constexpr uint32_t rows_per_face = 16;
 constexpr uint32_t columns_per_face = 16;
 constexpr uint32_t rows_per_tile = 32;
@@ -93,17 +95,6 @@ FORCE_INLINE void generate_group_indices_tiles(
     cb_push_back(cb_group_index_template, 1);
 }
 
-void zero_buffer(uint32_t write_addr, int bytes) {
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    while (bytes > 0) {
-        uint32_t curr_bytes = std::min(bytes, MEM_ZEROS_SIZE);
-        noc_async_read(zeros_noc_addr, write_addr, curr_bytes);
-        write_addr += curr_bytes;
-        bytes -= curr_bytes;
-    }
-    noc_async_read_barrier();
-}
-
 FORCE_INLINE void generate_reduce_scalar(
     const uint32_t cb_reduce_ones_scalar, const uint32_t packed_scalar, const uint32_t n_activated_experts) {
     cb_reserve_back(cb_reduce_ones_scalar, 1);
@@ -117,16 +108,19 @@ FORCE_INLINE void generate_reduce_scalar(
             write_ptr[i + elements_per_face - columns_per_face + 1] = scalar;
         }
     }
+    Noc noc;
+    CircularBuffer reduce_cb(cb_reduce_ones_scalar);
     for (uint32_t i = n_activated_experts; i < rows_per_tile; i++) {
         write_ptr[i] = 0;
         if (i == rows_per_face) {
-            noc_async_read(
-                get_noc_addr(MEM_ZEROS_BASE), write_addr + score_tile::face_size_bytes, score_tile::face_line_bytes);
+            // Zero the second face's first line (offset face_size_bytes into the tile).
+            noc.async_write_zeros(
+                reduce_cb, score_tile::face_line_bytes, {.offset_bytes = score_tile::face_size_bytes});
         }
     }
     uint32_t face_3_write_addr = write_addr + 2 * score_tile::face_size_bytes;
     uint32_t face_4_write_addr = write_addr + 3 * score_tile::face_size_bytes;
-    noc_async_read_barrier();
+    noc.write_zeros_l1_barrier();
     noc_async_read(get_noc_addr(write_addr), face_3_write_addr, score_tile::face_line_bytes);
     noc_async_read(
         get_noc_addr(write_addr + score_tile::face_size_bytes), face_4_write_addr, score_tile::face_line_bytes);

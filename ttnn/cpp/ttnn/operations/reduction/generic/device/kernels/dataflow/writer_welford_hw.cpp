@@ -8,8 +8,12 @@
 // cb_partial (written by the compute kernel using
 // welford_finalize_to_row), combines them across W using the parallel
 // Welford merge formula, applies Bessel's correction, and writes the
-// combined scalar into a Float32 tile in cb_combined for the compute
-// kernel to apply sqrtf (if std) and re-pack in the output format.
+// combined scalar into cb_combined for the compute kernel to apply
+// sqrtf (if std) and re-pack in the output format. cb_combined is
+// normally fp32, but for variance output to bf16 the program
+// factory may declare it as bf16 to save SRAM with no precision loss
+// since data is packed to bf16 output anyways and there is no math before
+// the final pack. combined_is_bf16 compile-time arg selects the path.
 //
 // Phase 2 (per output): Waits for the compute kernel to pack the
 // output tile into cb_out (in the correct output data format), then
@@ -20,6 +24,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/numeric/bfloat16.h"
 #include "api/tensor/noc_traits.h"
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_combine.h"
@@ -35,15 +40,17 @@ void kernel_main() {
     constexpr uint32_t H = get_compile_time_arg_val(3);
     constexpr bool correction = get_compile_time_arg_val(4) != 0;
     constexpr uint32_t reduce_batch_size = get_compile_time_arg_val(5);
+    constexpr bool combined_is_bf16 = get_compile_time_arg_val(6) != 0;
 
     constexpr auto cb_partial = tt::CBIndex::c_21;
-    // cb_combined: Float32 tile written by this kernel, read back by compute
-    // for repacking into the output data format.
+    // cb_combined: combined scalar tile written by this kernel, read back by
+    // compute for repacking into the output data format. Format is Float32 by
+    // default; bf16 when combined_is_bf16 is true (variance-to-bf16 path).
     constexpr auto cb_combined = tt::CBIndex::c_22;
     // cb_out: output tile packed by compute in the correct data format.
     constexpr auto cb_out = tt::CBIndex::c_16;
 
-    constexpr auto dst_args = TensorAccessorArgs<6>();
+    constexpr auto dst_args = TensorAccessorArgs<7>();
 
     // welford_finalize_to_row stores 32 per-column values in tile row 0.
     // In tile format, row 0 spans Face 0 (columns 0-15) and Face 1 (columns 16-31).
@@ -104,11 +111,11 @@ void kernel_main() {
             final_var = final_var * static_cast<float>(N) / static_cast<float>(N - 1);
         }
 
-        // Write the combined scalar into a Float32 tile in cb_combined.
-        // The compute kernel will unpack this and re-pack into cb_out
-        // in the correct output data format (using the packer hardware).
+        // Write the combined scalar into a tile in cb_combined.  The compute
+        // kernel will unpack this and re-pack into cb_out in the correct
+        // output data format (using the packer hardware).
         //
-        // Only Face 0 row 0 (FACE_W floats) needs zeroing.  The scalar
+        // Only Face 0 row 0 (FACE_W elements) needs zeroing.  The scalar
         // lives at position [0,0]; the remaining FACE_W-1 elements in
         // the same row share a BFP exponent group, so they must be zero
         // to avoid corrupting the scalar's mantissa precision in
@@ -116,11 +123,21 @@ void kernel_main() {
         // and are never read (the output is a single scalar), so stale
         // L1 contents there are harmless.
         cb_combined_obj.reserve_back(1);
-        auto* combined_ptr = reinterpret_cast<float*>(cb_combined_obj.get_write_ptr());
-        for (uint32_t i = 0; i < FACE_W; ++i) {
-            combined_ptr[i] = 0.0f;
+        if constexpr (combined_is_bf16) {
+            auto* combined_ptr = reinterpret_cast<uint16_t*>(cb_combined_obj.get_write_ptr());
+            for (uint32_t i = 0; i < FACE_W; ++i) {
+                combined_ptr[i] = 0;
+            }
+            // fp32_to_bf16 applies round-to-nearest-even, matching the packer
+            // hardware so the output is bit-identical to a packer-produced bf16.
+            combined_ptr[0] = fp32_to_bf16(final_var);
+        } else {
+            auto* combined_ptr = reinterpret_cast<float*>(cb_combined_obj.get_write_ptr());
+            for (uint32_t i = 0; i < FACE_W; ++i) {
+                combined_ptr[i] = 0.0f;
+            }
+            combined_ptr[0] = final_var;
         }
-        combined_ptr[0] = final_var;
         cb_combined_obj.push_back(1);
 
         // --- Phase 2: NOC-write the output tile (packed by compute) to DRAM ---

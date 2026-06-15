@@ -22,7 +22,7 @@
 #include "ckernel_sfpu_gelu.h"
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
-inline void llk_math_eltwise_unary_sfpu_gelu(uint dst_index, int vector_mode = (int)VectorMode::RC) {
+inline void llk_math_eltwise_unary_sfpu_gelu(uint dst_index, VectorMode vector_mode = VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::calculate_gelu<APPROXIMATE, is_fp32_dest_acc_en, ITERATIONS>, dst_index, vector_mode);
 }
@@ -92,7 +92,7 @@ void kernel_main() {
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
 
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
-    constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
+    [[maybe_unused]] constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
     constexpr auto activation_type =
         ttnn::experimental::prim::detail::MoEActivationFunction(get_named_compile_time_arg_val("activation_function"));
 
@@ -101,15 +101,15 @@ void kernel_main() {
 
     // Run-time arguments
     uint32_t argidx = 0;
-    const auto dram_bank_id = get_arg_val<uint32_t>(argidx++);
-    const auto vchannel = get_arg_val<uint32_t>(argidx++);
-    const auto w0_w1_addr = get_arg_val<uint32_t>(argidx++);
-    const auto w2_addr = get_arg_val<uint32_t>(argidx++);
-    const auto out_addr = get_arg_val<uint32_t>(argidx++);
-    const auto ring_semaphore_id = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto dram_bank_id = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto vchannel = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto w0_w1_addr = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto w2_addr = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto out_addr = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto ring_semaphore_id = get_arg_val<uint32_t>(argidx++);
     const auto ring_core_id = get_arg_val<uint32_t>(argidx++);
-    const auto ring_neighbor_physical_x = get_arg_val<uint32_t>(argidx++);
-    const auto ring_neighbor_physical_y = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto ring_neighbor_physical_x = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto ring_neighbor_physical_y = get_arg_val<uint32_t>(argidx++);
 
     // CBs
     constexpr auto cb_s2c_in = tt::CBIndex::c_0;     // tilize_output_cb_id
@@ -136,11 +136,11 @@ void kernel_main() {
     constexpr uint32_t num_w0_w1_tiles_h = Ht;
     constexpr uint32_t num_w2_tiles_h = Nt;
 
-    const uint32_t num_w0_w1_tiles_w = shard_tiles_lut[ring_core_id];
+    [[maybe_unused]] const uint32_t num_w0_w1_tiles_w = shard_tiles_lut[ring_core_id];
     const uint32_t num_w2_tiles_w = w2_shard_tiles_lut[ring_core_id];
 
-    const uint32_t num_in2_tiles = num_w2_tiles_w;
-    const uint32_t num_mm2_tiles = num_w2_tiles_w;
+    [[maybe_unused]] const uint32_t num_in2_tiles = num_w2_tiles_w;
+    [[maybe_unused]] const uint32_t num_mm2_tiles = num_w2_tiles_w;
 
     //-------------------------------------------------------------------------
     // W0 and W1 reading constants
@@ -154,14 +154,14 @@ void kernel_main() {
     // W2 reading constants (base-constant aliases only; derived values come from Cfg)
     constexpr auto w2_tiles_per_iter_w = moe_ring::W2_TILES_PER_A2A_ITER_W;
     constexpr uint32_t w2_tiles_per_block = moe_ring::W2_TILES_PER_TXN * moe_ring::W2_TXNS_PER_BLOCK;  // 14 * 2 = 28
-    constexpr uint32_t w2_tiles_per_iter_h = moe_ring::W2_TILES_PER_A2A_ITER_H;
+    [[maybe_unused]] constexpr uint32_t w2_tiles_per_iter_h = moe_ring::W2_TILES_PER_A2A_ITER_H;
 
     //-------------------------------------------------------------------------
     // Ring setup
     //-------------------------------------------------------------------------
     constexpr uint32_t w2_blocks_per_a2a_iter = Cfg::w2_blocks_per_expert / Cfg::num_a2a_iters;
 
-    constexpr uint32_t num_a2a_steps_per_iter = num_cores;
+    [[maybe_unused]] constexpr uint32_t num_a2a_steps_per_iter = num_cores;
 
     constexpr uint32_t tiles_per_step = Cfg::in2_tiles_per_step;
 
@@ -331,6 +331,15 @@ void kernel_main() {
             //---------------------------------------------------------------------
 
             cb_reserve_back(cb_c2s_out, num_w0_w1_tiles_h);
+
+            // Init pack_untilize ONCE before the iter loop (hoisted, mirrors moe_gpt pattern).
+            // Cycling init/uninit per-iter triggers BH's MATH reconfig_remap workaround
+            // (pack_untilize.h:66-80, tt-metal#17132) which races with in-flight PACR/MOP
+            // execution and produces garbage output (NaN/Inf) on BH silicon.
+            pack_untilize_dest_init<
+                /*block_ct_dim=*/w2_tiles_per_iter_w,
+                /*full_ct_dim=*/Cfg::w2_tiles_per_expert_w>(cb_c2s_out);
+
             for (uint32_t iter = 0; iter < Cfg::num_a2a_iters; ++iter) {
                 uint32_t src_core = ring_core_id;
                 uint32_t dm1_tiles_remaining = shard_tiles_lut[ring_core_id];
@@ -393,21 +402,21 @@ void kernel_main() {
                 tile_regs_commit();
 
                 tile_regs_wait();
-                pack_untilize_dest_init<
-                    /*block_ct_dim=*/w2_tiles_per_iter_w,
-                    /*full_ct_dim=*/Cfg::w2_tiles_per_expert_w>(cb_c2s_out);
-
                 pack_untilize_dest</*block_ct_dim=*/w2_tiles_per_iter_w, /*full_ct_dim=*/Cfg::w2_tiles_per_expert_w>(
                     cb_c2s_out, /*block_rt_dim=*/1, /*block_c_index=*/iter);
-                pack_untilize_uninit(cb_c2s_out);
 
                 tile_regs_release();
             }
+
+            // Uninit pack_untilize ONCE after the iter loop (hoisted, mirrors moe_gpt pattern).
+            pack_untilize_uninit(cb_c2s_out);
 
             cb_push_back(cb_c2s_out, num_w0_w1_tiles_h);
 
             // Toggle the buffer to use
             use_second_half_buffer = !use_second_half_buffer;
+            // Restore packer data format for next chunk's activation pipeline (mirrors moe_gpt:342).
+            pack_reconfig_data_format(cb_s2c_in2);
 
         }  // end for (chunk)
     }  // end for (expert_id)

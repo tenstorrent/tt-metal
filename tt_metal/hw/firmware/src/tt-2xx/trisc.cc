@@ -15,7 +15,6 @@
 #include "internal/hw_thread.h"
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
-#include "api/debug/device_print.h"
 #include "internal/debug/stack_usage.h"
 #include "api/debug/ring_buffer.h"
 #if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
@@ -109,11 +108,18 @@ void init_sync_registers() {
     // }
 }
 
+inline void enable_cc_stack() {
+#if defined(UCK_CHLKC_MATH)
+    constexpr uint32_t SFPENCC_IMM12_BOTH = 3;
+    constexpr uint32_t SFPENCC_MOD1_EI_RI = 10;
+    TTI_SFPENCC(SFPENCC_IMM12_BOTH, SFPENCC_MOD1_EI_RI);  // Enable all the SFPU lanes
+#endif
+}
+
 extern "C" uint32_t _start1() {
     configure_csr();
     uint32_t hartid = internal_::get_hw_thread_idx();
-    DPRINT << "hartid: " << hartid << ENDL();
-    DEVICE_PRINT("hartid: {}\n", hartid);
+    DPRINT("hartid: {}\n", hartid);
     volatile tt_l1_ptr uint8_t* const trisc_run = &((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE))
                                                        ->subordinate_sync.map[hartid];  // first entry is for NCRISC
     WAYPOINT("I");
@@ -130,10 +136,10 @@ extern "C" uint32_t _start1() {
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
     *trisc_run = RUN_SYNC_MSG_DONE;
-
+    setup_isr_csrs();
+    enable_cc_stack();
     DeviceProfilerInit();
-    DPRINT << "TRISC-FW: initialized" << ENDL();
-    DEVICE_PRINT("TRISC-FW: initialized\n");
+    DPRINT("TRISC-FW: initialized\n");
     while (1) {
         WAYPOINT("W");
         while (*trisc_run != RUN_SYNC_MSG_GO) {
@@ -143,7 +149,6 @@ extern "C" uint32_t _start1() {
                     *trisc_run = RUN_SYNC_MSG_DONE;
                 }
             }
-            invalidate_l1_cache();
         }
         DeviceZoneScopedMainN("TRISC-FW");
         uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
@@ -205,11 +210,9 @@ extern "C" uint32_t _start1() {
         DEVICE_PRINT_KERNEL_FINISHED();
 
         // Signal completion
-        DPRINT << "SIGNALING COMPLETION " << HEX() << (uint32_t)*trisc_run << DEC() << ENDL();
-        DEVICE_PRINT("SIGNALING COMPLETION {:x}\n", (uint32_t)*trisc_run);
+        DPRINT("SIGNALING COMPLETION {:x}\n", (uint32_t)*trisc_run);
         tensix_sync();
         *trisc_run = RUN_SYNC_MSG_DONE;
-        DPRINT << "COMPLETION SIGNED OFF" << HEX() << (uint32_t)*trisc_run << DEC() << ENDL();
-        DEVICE_PRINT("COMPLETION SIGNED OFF {:x}\n", (uint32_t)*trisc_run);
+        DPRINT("COMPLETION SIGNED OFF {:x}\n", (uint32_t)*trisc_run);
     }
 }

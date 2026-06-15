@@ -49,7 +49,9 @@ void DummyMeshCommandQueue::read_shard_from_device(
 }
 
 void DummyMeshCommandQueue::submit_memcpy_request(
-    std::unordered_map<IDevice*, uint32_t>& /*num_txns_per_device*/, bool /*blocking*/) {
+    std::unordered_map<IDevice*, uint32_t>& /*num_txns_per_device*/,
+    bool /*blocking*/,
+    std::vector<MemoryPin> /*memory_pins*/) {
     // No-op for inactive rank
 }
 
@@ -81,6 +83,14 @@ MeshEvent DummyMeshCommandQueue::enqueue_record_event_to_host(
 
 void DummyMeshCommandQueue::enqueue_wait_for_event(const MeshEvent& /*sync_event*/) {
     // No-op for inactive rank
+}
+
+void DummyMeshCommandQueue::enqueue_write_dram_core_counter(
+    tt::stl::Span<const DeviceMemoryAddress> /*targets*/,
+    uint32_t /*value*/,
+    bool /*blocking*/,
+    tt::stl::Span<const SubDeviceId> /*sub_device_ids*/) {
+    // No-op for inactive rank: no local device to signal.
 }
 
 void DummyMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> /*sub_device_ids*/) {

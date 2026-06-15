@@ -11,8 +11,9 @@ and TtRoutedExpert (which processes the tokens after they arrive).
 
 For each token and each of its top-k experts, the dispatch kernel:
   1. Looks up which destination device hosts that expert via the expert_dispatch_table.
-  2. Reads the write position (global_dispatch_offset) for this source device and expert
-     from tt_expert_offsets (produced by TtMoERoutingSetup).
+  2. Reads the starting write position for this source device and expert from
+     tt_expert_offsets (global_dispatch_offsets, produced by TtMoERoutingSetup), then
+     advances a running per-expert counter from it as tokens are packed.
   3. Writes the token embedding into the destination device's local dispatch buffer at that
      position: locally via NOC if the expert is on the same device, or remotely via fabric
      if it is on a different device in the dispatch group.
@@ -66,6 +67,7 @@ class TtDispatchModule(LightweightModule):
         topology: ttnn.Topology = ttnn.Topology.Linear,
         fp8_output: bool = False,
         subdevice_id=None,
+        num_untilizers_per_sender: int = 2,
     ):
         """
         Initialize dispatch module with configuration parameters.
@@ -87,6 +89,7 @@ class TtDispatchModule(LightweightModule):
             num_links: Number of fabric links for remote token writes.
             topology: Fabric topology for remote token writes.
             fp8_output: Output dtype for the dispatched buffer.
+            num_untilizers_per_sender: Number of untilizer cores per sender (any N >= 1).
         """
         if fp8_output and "blackhole" not in ttnn.get_arch_name():
             raise ValueError("fp8_output requires Blackhole hardware")
@@ -104,6 +107,9 @@ class TtDispatchModule(LightweightModule):
         self.topology = topology
         self.fp8_output = fp8_output
         self.subdevice_id = subdevice_id
+        # num_untilizers_per_sender >= 1 is validated on the device op side
+        # (DispatchDeviceOperation::validate_on_program_cache_miss).
+        self.num_untilizers_per_sender = num_untilizers_per_sender
 
     @staticmethod
     def shard_expert_offsets(
@@ -227,7 +233,7 @@ class TtDispatchModule(LightweightModule):
                 Shape per device: (1, 1, max_dispatch_buffer_token_size, emb_dim)
                 Token at index i belongs to the expert whose region covers index i; regions are
                 TILE_HEIGHT-aligned and laid out by the expert region offsets from offset_cumsum.
-            metadata: Per-token metadata written alongside dispatched_buffer.
+            metadata: Per-token routing metadata written alongside dispatched_buffer.
                 Shape per device: (1, 1, max_dispatch_buffer_token_size, metadata_len=5),
                 int32, ROW_MAJOR.
                 Fields per token: [linearized_mesh_coord, token_idx, topk_idx, routed_expert, weight].
@@ -267,15 +273,8 @@ class TtDispatchModule(LightweightModule):
             topology=self.topology,
             use_fp8_dispatch=self.fp8_output,
             subdevice_id=self.subdevice_id,
+            num_untilizers_per_sender=self.num_untilizers_per_sender,
         )
-
-        if tt_dispatched_buffer.dtype == ttnn.uint8:
-            logger.warning(
-                """tt_dispatched_buffer dtype is uint8 but the actual content is fp8_e4m3fn. \
-                Workaround until fp8_e4m3fn is supported as a data type. \
-                Use custom kernels to typecast. See test_fp8_typecast.py
-                """
-            )
 
         tt_dispatched_buffer_shape = tt_dispatched_buffer.shape
         tt_dispatched_metadata_shape = tt_dispatch_metadata.shape

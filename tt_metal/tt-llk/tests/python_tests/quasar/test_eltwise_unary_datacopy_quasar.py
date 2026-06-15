@@ -25,7 +25,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator_v2 import generate_stimuli_v2
+from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
@@ -104,6 +104,9 @@ DATACOPY_FORMATS = input_output_formats(
         DataFormat.Float16_b,
         DataFormat.Float16,
         DataFormat.MxFp4,
+        DataFormat.MxInt8,
+        DataFormat.MxInt4,
+        DataFormat.MxInt2,
     ]
 )
 ALL_DATACOPY_COMBINATIONS = generate_eltwise_unary_datacopy_combinations(
@@ -114,7 +117,14 @@ ALL_DATACOPY_COMBINATIONS = generate_eltwise_unary_datacopy_combinations(
 @pytest.mark.quasar
 @parametrize(
     formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices=ALL_DATACOPY_COMBINATIONS,
-    implied_math_format=[ImpliedMathFormat.Yes, ImpliedMathFormat.No],
+    # don't generate the No variant for them. combo[0] is the InputOutputFormat (input/output pair).
+    implied_math_format=lambda formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices: (
+        [ImpliedMathFormat.Yes]
+        if formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices[
+            0
+        ].input_format.is_mx_format()
+        else [ImpliedMathFormat.Yes, ImpliedMathFormat.No]
+    ),
 )
 def test_eltwise_unary_datacopy_quasar(
     formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices,
@@ -129,14 +139,7 @@ def test_eltwise_unary_datacopy_quasar(
         dest_index,
     ) = formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices
 
-    # MX formats REQUIRE implied_math_format=Yes on Quasar (bypass format inference pipeline)
-    if (
-        formats.input_format.is_mx_format()
-        and implied_math_format == ImpliedMathFormat.No
-    ):
-        pytest.skip("MX formats require implied_math_format=Yes on Quasar")
-
-    src_A, tile_cnt_A, src_B, _ = generate_stimuli_v2(
+    src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -204,5 +207,7 @@ def test_eltwise_unary_datacopy_quasar(
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
     ), "Assert against golden failed"

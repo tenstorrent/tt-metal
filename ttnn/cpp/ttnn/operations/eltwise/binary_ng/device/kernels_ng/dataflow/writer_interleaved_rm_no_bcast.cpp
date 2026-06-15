@@ -7,6 +7,8 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "api/core_local_mem.h"
 
 void kernel_main() {
     uint32_t index = 0;
@@ -80,8 +82,12 @@ void kernel_main() {
                             uint32_t l1_read_addr = cb_out.get_read_ptr();
                             for (uint32_t row = 0; row < limit; ++row) {
                                 const uint32_t row_abs_idx = row_block_base_row + row;
-                                const uint64_t dst_noc_addr = get_noc_addr(row_abs_idx, dst) + current_chunk_offset;
-                                noc_async_write(l1_read_addr, dst_noc_addr, current_write_len);
+                                noc.async_write(
+                                    CoreLocalMem<uint32_t>(l1_read_addr),
+                                    dst,
+                                    current_write_len,
+                                    {},
+                                    {.page_id = row_abs_idx, .offset_bytes = current_chunk_offset});
                                 l1_read_addr += current_chunk_bytes;
                             }
 

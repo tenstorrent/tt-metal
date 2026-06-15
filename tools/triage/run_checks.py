@@ -5,10 +5,11 @@
 
 """
 Usage:
-    run_checks [--dev=<device_id>]... [--execute-sequential]
+    run_checks [--dev=<device_id>]... [--loc=<location>]... [--execute-sequential]
 
 Options:
-    --dev=<device_id>      Specify the device id. 'all' is also an option  [default: in_use]
+    --dev=<device_id>      Specify the device id. Repeatable. 'all' is also an option  [default: in_use]
+    --loc=<location>       Specify location/core. Repeatable. Logical coordinates only: R,C (tensix), eX,Y (eth), dX,Y / CHn (dram). Default: all locations
     --execute-sequential   Force fully sequential execution. By default checks run in parallel across MMIO devices: one worker thread per local MMIO device, with its remote devices on the same thread.
 
 Description:
@@ -54,7 +55,7 @@ from ttexalens.context import Context
 from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.umd_device import TimeoutDeviceRegisterError
-from ttexalens.hardware.risc_debug import RiscHaltError
+from ttexalens.exceptions import RiscHaltError
 import utils
 from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDeviceIdMapping
 
@@ -191,6 +192,7 @@ def _exalens_block_locations(device: Device, block_type: BlockType) -> list[OnCh
 
 def get_block_locations(
     devices: list[Device],
+    locations: list[str],
     inspector_data: InspectorData | None,
     metal_device_id_mapping: MetalDeviceIdMapping | None,
 ) -> dict[Device, dict[BlockType, list[OnChipCoordinate]]]:
@@ -221,6 +223,19 @@ def get_block_locations(
             continue
         for block_type in BLOCK_TYPES:
             block_locations[device][block_type] = _exalens_block_locations(device, block_type)
+
+    # Keep only the requested locations. Only logical coordinates are accepted — physical (noc0)
+    # layout shifts with harvesting, so a logical string maps to the same core on every device.
+    if locations:
+        for loc in locations:
+            if "-" in loc:
+                raise TTTriageError(f"--loc expects a logical coordinate (R,C / eX,Y / dX,Y / CHn), got '{loc}'")
+        for device in devices:
+            wanted = {OnChipCoordinate.create(loc, device) for loc in locations}
+            for block_type in BLOCK_TYPES:
+                block_locations[device][block_type] = [
+                    location for location in block_locations[device][block_type] if location in wanted
+                ]
 
     return block_locations
 
@@ -508,6 +523,7 @@ class RunChecks:
 @triage_singleton
 def run(args, context: Context):
     devices_to_check = args["--dev"]
+    locs_to_check = args["--loc"]
     execute_in_parallel = not bool(args["--execute-sequential"])
     try:
         inspector_data = get_inspector_data(args, context)
@@ -516,7 +532,7 @@ def run(args, context: Context):
         inspector_data = None
         metal_device_id_mapping = None
     devices = get_devices(devices_to_check, inspector_data, metal_device_id_mapping, context)
-    block_locations = get_block_locations(devices, inspector_data, metal_device_id_mapping)
+    block_locations = get_block_locations(devices, locs_to_check, inspector_data, metal_device_id_mapping)
     return RunChecks(devices, block_locations, metal_device_id_mapping, execute_in_parallel=execute_in_parallel)
 
 

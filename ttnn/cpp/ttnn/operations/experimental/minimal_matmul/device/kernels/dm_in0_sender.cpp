@@ -272,7 +272,7 @@ void kernel_main() {
                     read_in0_block_sync<M_block_tiles, K_block_tiles>(
                         in0_reader,
                         in0_shape,
-                        in0_start_address,
+                        cb_id_in0,
                         in0_tile_size,
 #ifdef READ_FROM_LOCAL_INPUT
                         in3_reader,
@@ -328,7 +328,7 @@ void kernel_main() {
 
                 uint32_t l1_write_addr_in2 = get_write_ptr(cb_id_in2);
                 for (uint32_t n_tile_id = n_tile; n_tile_id < n_tile_end; n_tile_id++) {
-                    noc_async_read_tile(n_tile_id, in2_reader, l1_write_addr_in2);
+                    noc_async_read_page(n_tile_id, in2_reader, l1_write_addr_in2);
                     l1_write_addr_in2 += in2_tile_size;
                 }
                 noc_async_read_barrier();

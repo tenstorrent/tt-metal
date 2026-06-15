@@ -391,6 +391,72 @@ void TernaryDeviceOperation::validate_on_program_cache_miss(
                 "Ternary operation requires output tensor to be in Tile layout when working with non-sharded tensor.");
         }
     }
+
+    // SNAKE_BETA-specific validation
+    if (args.ternary_op_type == TernaryOpType::SNAKE_BETA) {
+        const auto& a = tensor_args.input_tensor_a;
+        TT_FATAL(
+            tensor_args.input_tensor_b.has_value() && tensor_args.input_tensor_c.has_value(),
+            "snake_beta requires alpha and beta tensors");
+        const auto& alpha = tensor_args.input_tensor_b.value();
+        const auto& beta = tensor_args.input_tensor_c.value();
+
+        TT_FATAL(
+            args.ternary_variant == TernaryVariant::TTT,
+            "snake_beta v1 supports only TTT variant (tensor alpha and tensor beta)");
+
+        TT_FATAL(
+            a.dtype() == DataType::BFLOAT16 || a.dtype() == DataType::FLOAT32,
+            "snake_beta supports only BFLOAT16 or FLOAT32, got {}",
+            a.dtype());
+        TT_FATAL(
+            alpha.dtype() == a.dtype() && beta.dtype() == a.dtype(),
+            "snake_beta requires alpha.dtype == beta.dtype == input.dtype");
+
+        TT_FATAL(
+            a.layout() == Layout::TILE && alpha.layout() == Layout::TILE && beta.layout() == Layout::TILE,
+            "snake_beta requires tile layout for all inputs");
+
+        TT_FATAL(
+            a.logical_shape().rank() >= 2,
+            "snake_beta requires input rank >= 2, got rank {} (shape {})",
+            a.logical_shape().rank(),
+            a.logical_shape());
+
+        TT_FATAL(
+            alpha.logical_shape() == beta.logical_shape(),
+            "snake_beta requires alpha.shape == beta.shape, got {} vs {}",
+            alpha.logical_shape(),
+            beta.logical_shape());
+
+        const auto& a_shape = a.logical_shape();
+        const auto& ab_shape = alpha.logical_shape();
+        TT_FATAL(
+            a_shape[-1] == ab_shape[-1],
+            "snake_beta requires input.W == alpha.W, got {} vs {}",
+            a_shape[-1],
+            ab_shape[-1]);
+
+        // v1: alpha/beta must match input exactly, or have non-1 size only on the last dim.
+        const bool ab_matches_input = (ab_shape == a_shape);
+        if (!ab_matches_input) {
+            for (int i = 0; i + 1 < static_cast<int>(ab_shape.rank()); ++i) {
+                TT_FATAL(
+                    ab_shape[i] == 1,
+                    "snake_beta v1 requires alpha/beta to either match input shape exactly or have non-1 size only on "
+                    "the last dim (got dim {} = {})",
+                    i,
+                    ab_shape[i]);
+            }
+        }
+
+        using BT = TernaryBroadcastType;
+        TT_FATAL(
+            args.broadcast_type == BT::NONE || args.broadcast_type == BT::ROW_BCAST ||
+                args.broadcast_type == BT::OUTER_BCAST,
+            "snake_beta v1 supports only NONE/ROW_BCAST/OUTER_BCAST, got {}",
+            static_cast<int>(args.broadcast_type));
+    }
 }
 
 TensorSpec TernaryDeviceOperation::compute_output_specs(
@@ -482,6 +548,10 @@ Tensor TernaryDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor_a.device());
 }
 
+// Kept (not attribute_names): coarsens the input to its VOLUME (ternary is elementwise — program
+// depends on tile count, not shape). attribute_names can't express that — it only controls the attrs
+// struct, while the input shape is hashed from tensor_args. scalar_input_a/b are excluded here and
+// re-applied via get_dynamic_runtime_args.
 ttsl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_a = tensor_args.input_tensor_a;

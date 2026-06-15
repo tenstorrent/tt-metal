@@ -42,6 +42,7 @@ void kernel_main() {
     const auto logit_addr_gen = TensorAccessor(logit_accessor_args, logit_address);
     const auto target_addr_gen = TensorAccessor(target_accessor_args, target_address, target_page_size);
 
+    Noc noc;
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
         const uint32_t row = start_row + i;
         const uint32_t logit_row_start = row * Wt;
@@ -51,13 +52,14 @@ void kernel_main() {
         uint32_t l1_target_write_addr = get_write_ptr(cb_target_idx);
 
         auto [page, offset] = get_page_and_offset(row, tiled_H);
-        noc_async_read(get_noc_addr(page, target_addr_gen, offset), l1_target_write_addr, target_read_page_size);
+        noc_async_read(target_addr_gen.get_noc_addr(page, offset), l1_target_write_addr, target_read_page_size);
 
         // Zero-initialize so out-of-shard targets produce 0.0.
         cb_reserve_back(cb_output_idx, onetile);
         uint32_t l1_output_write_addr = get_write_ptr(cb_output_idx);
-        fill_zeros_async(l1_output_write_addr, get_tile_size(cb_output_idx));
+        fill_zeros_async(noc, cb_output_idx, get_tile_size(cb_output_idx));
         noc_async_read_barrier();
+        noc.write_zeros_l1_barrier();
 
         auto target_indexes_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t *>(get_read_ptr(cb_target_idx));
 

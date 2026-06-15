@@ -10,8 +10,7 @@
 #include "llk_math_eltwise_unary_sfpu.h"
 
 template <typename Callable, typename... Args>
-inline void _llk_math_eltwise_unary_sfpu_params_(
-    Callable&& sfpu_func, std::uint32_t dst_index, int vector_mode = static_cast<int>(VectorMode::RC), Args&&... args)
+inline void _llk_math_eltwise_unary_sfpu_params_(Callable&& sfpu_func, std::uint32_t dst_index, VectorMode vector_mode = VectorMode::RC, Args&&... args)
 {
     _llk_math_eltwise_sfpu_start_(dst_index);
 

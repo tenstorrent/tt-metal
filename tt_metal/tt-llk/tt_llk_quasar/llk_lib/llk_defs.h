@@ -10,7 +10,7 @@ namespace ckernel
 {
 
 // Currently unused but kept for backwards compatibility
-enum class VectorMode
+enum class VectorMode : std::uint8_t
 {
     None      = 0,
     R         = 1,
@@ -69,6 +69,13 @@ enum class Transpose : std::uint8_t
     IntraFace = 1,
     InterFace = 2,
     Both      = 3,
+};
+
+enum class TilizeUnpackerSel : std::uint8_t
+{
+    UnpA  = 0,
+    UnpB  = 1,
+    UnpAB = 2,
 };
 
 enum class SfpuType : std::uint32_t
