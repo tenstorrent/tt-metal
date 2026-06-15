@@ -62,6 +62,9 @@ def topk_indices(logits: ttnn.Tensor, k: int) -> ttnn.Tensor:
     return ttnn.experimental.topk_large_indices(logits, k=k)
 
 
+LATENT_DIM = 512  # kv_lora_rank — V is kvpe[..., :LATENT_DIM]; K is the full 576 width
+
+
 def sparse_mla(
     q: ttnn.Tensor,
     kvpe_host: torch.Tensor,
@@ -75,58 +78,67 @@ def sparse_mla(
     Absorbed MQA over the top-k selected latents only (FlashMLA sparse contract:
     no causal mask — indices already encode it).
 
-    Distribution (matches v3's q/out layout): q is **SP-sharded on sequence (dim2)
-    and TP-sharded on heads (dim1)**; kvpe is gathered full-T (replicated) by the
-    caller; indices are full-T (replicated). Output is re-sharded the same way as q
-    (heads on TP, sequence on SP).
+    Backed by the merged ``ttnn.transformer.sparse_sdpa`` C++ op (Blackhole, single
+    chip). The op is invoked SPMD on the SP×TP mesh: each chip runs the single-chip
+    kernel over its own q shard, so q's distribution is preserved end-to-end —
+    q **SP-sharded on sequence (dim2) and TP-sharded on heads (dim1)**, output the
+    same. The op requires per-chip H a multiple of 32 (prod: 128 heads / tp=4 = 32).
+
+    Masking is fully baked into ``indices`` via the ``0xFFFFFFFF`` sentinel
+    (``indexer_score`` -inf'd future columns → ``topk_indices`` emits the sentinel as
+    a contiguous tail). There is therefore NO position/causal math here; ``start_pos``
+    is accepted only for signature parity with the old host fallback and is ignored
+    (matches ``reference_cpu/sparse_sdpa_prefill.py``).
 
     Args:
-        q: [1, H/tp, S/sp, 576] absorbed queries (nope·wkv_b ++ rope)
-        kvpe_host: [T, 576] full latent prefix on host (caller already gathered it
-            full-T — single-shot via SP all-gather, chunked via kv_cache_to_host —
-            so there is NO device→host→device re-upload here; backlog 9)
-        indices: [1, 1, S_global, k] uint32 (global key positions), replicated
+        q: [1, H/tp, S/sp, 576] absorbed queries (nope·wkv_b ++ rope), TILE bf16
+        kvpe_host: [T, 576] full latent prefix on host (caller gathered it full-T).
+            Uploaded here as a replicated [1, 1, T, 576] device tensor; K = full 576,
+            V = the leading 512 cols. (The device→host→device round-trip could be
+            dropped by passing the already-replicated device tensor — backlog 9.)
+        indices: [1, 1, S_global, k] uint32 (global key positions), replicated;
+            0xFFFFFFFF = masked. Re-sharded onto SP (dim2) to match q when sp > 1.
         scale: softmax scale (with YaRN mscale)
-        start_pos: global position of the chunk's first query row
+        start_pos: IGNORED — causality is encoded in ``indices`` (kept for parity)
     Returns:
         out [1, H/tp, S/sp, 512] bf16 — heads TP-sharded, sequence SP-sharded
-    CPU FALLBACK (gather+SDPA on host). On-device path is feasible via ttnn.gather
-    (per-row index, TILE) → matmul/softmax/matmul — backlog 8.
     """
+    del start_pos  # causality is in `indices` (sentinel), not positions
     mesh = q.device()
-    shape = list(mesh.shape)
-    sp, tp = shape[sp_axis], shape[tp_axis]
-    assert sp_axis == 0 and tp_axis == 1, "sparse_mla host fallback assumes sp_axis=0 (outer), tp_axis=1"
+    sp = list(mesh.shape)[sp_axis]
+    assert sp_axis == 0 and tp_axis == 1, "sparse_mla assumes sp_axis=0 (outer), tp_axis=1"
 
-    kv = kvpe_host  # [T, 576]
-    idx_full = _to_host(indices).long()[0, 0]  # [S_global, k]
-    s_global = idx_full.shape[0]
-    local = s_global // sp
-
-    q_shards = ttnn.get_device_tensors(q)  # row-major: shard(sp_i, tp_j) at sp_i*tp + tp_j
-    h_local = q_shards[0].shape[1]
-    out_full = torch.zeros(1, h_local * tp, s_global, 512, dtype=torch.float32)
-    for sp_i in range(sp):
-        idx_i = idx_full[sp_i * local : (sp_i + 1) * local]  # [local, k]
-        q_pos = start_pos + sp_i * local + torch.arange(local)  # global query rows
-        # topk's -inf sentinel (0xFFFFFFFF) marks causally-masked keys; together with any
-        # future index it is dropped here (FlashMLA per-row contract). Clamp first so the
-        # gather stays in-bounds — masked rows contribute nothing after the softmax.
-        future = ((idx_i > q_pos.view(local, 1)) | (idx_i >= kv.shape[0])).unsqueeze(0)  # [1, local, k]
-        idx_i = idx_i.clamp(max=kv.shape[0] - 1)
-        sel = kv[idx_i]  # [local, k, 576]
-        for tp_j in range(tp):
-            q_t = ttnn.to_torch(q_shards[sp_i * tp + tp_j])[0].float()  # [H/tp, local, 576]
-            scores = (torch.einsum("hsd,skd->hsk", q_t, sel.float()) * scale).masked_fill(future, float("-inf"))
-            o = torch.einsum("hsk,skc->hsc", scores.softmax(-1), sel[..., :512].float())  # [H/tp, local, 512]
-            out_full[0, tp_j * h_local : (tp_j + 1) * h_local, sp_i * local : (sp_i + 1) * local] = o
-
-    dims = [None, None]
-    dims[tp_axis] = 1  # heads
-    dims[sp_axis] = 2  # sequence
-    return ttnn.from_torch(
-        out_full.to(torch.bfloat16),
+    # kvpe [T, 576] host → replicated [1, 1, T, 576] device tensor, bf16 ROW_MAJOR.
+    t, kv_dim = kvpe_host.shape
+    kv = ttnn.from_torch(
+        kvpe_host.to(torch.bfloat16).view(1, 1, t, kv_dim),
         device=mesh,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=dims),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
     )
+
+    # The op is ROW_MAJOR-only (unpadded); q comes in TILE.
+    q_rm = ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT)
+
+    # indices must align with q's per-chip sequence shard [1, 1, S/sp, k]. Replicated
+    # (sp == 1) already matches q's full S. For sp > 1, redistribute the replicated
+    # rows onto the SP axis (small host hop; the op needs the matching shard per chip).
+    idx = indices
+    if sp > 1:
+        dims = [None, None]
+        dims[sp_axis] = 2  # shard sequence across SP, replicate across TP
+        idx = ttnn.from_torch(
+            _to_host(indices),
+            device=mesh,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint32,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=tuple(dims)),
+        )
+
+    # k_chunk_size must be a multiple of 32 that divides TOPK (prod TOPK=2048 → 128).
+    topk = idx.shape[-1]
+    k_chunk = next((c for c in (128, 64, 32) if topk % c == 0), 32)
+
+    out = ttnn.transformer.sparse_sdpa(q_rm, kv, idx, v_dim=LATENT_DIM, scale=scale, k_chunk_size=k_chunk)
+    return ttnn.to_layout(out, ttnn.TILE_LAYOUT)  # back to TILE for the downstream wkv_b2 linear

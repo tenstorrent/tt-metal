@@ -73,6 +73,7 @@ def test_sparse_mla_shape(mesh_device, h, sq, skv, k):
         torch.randint(0, skv, (1, 1, sq, k), dtype=torch.int32),
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint32,  # sparse_sdpa requires uint32 indices (topk_indices emits uint32)
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
     out = ops.sparse_mla(q, kvpe_host, idx, scale=KVPE_DIM**-0.5)

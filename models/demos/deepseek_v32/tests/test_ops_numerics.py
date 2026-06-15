@@ -81,10 +81,13 @@ def test_topk_indices_match(mesh_device, skv, k):
 @pytest.mark.parametrize("start_pos", [0, 256], ids=["single_shot", "chunked"])
 def test_sparse_mla_numerics(mesh_device, start_pos):
     torch.manual_seed(1)
-    h, sq, skv, k = 8, 128, 512, 64
+    # h=128 → 32 heads/chip after the TP=4 split; sparse_sdpa needs H/tp a multiple of 32.
+    h, sq, skv, k = 128, 128, 512, 64
     q = torch.randn(1, h, sq, 576, dtype=torch.bfloat16)
     kvpe = torch.randn(1, 1, skv, 576, dtype=torch.bfloat16)
-    # Causal-valid indices: sparse_mla masks index > start_pos + row (op contract).
+    # All indices in-bounds and causal (<= start_pos + row), no sentinels — so the op
+    # (softmax over every gathered slot) equals the dense reference below. The op itself
+    # does no causal math; masking would arrive as the 0xFFFFFFFF sentinel from topk.
     idx = (torch.rand(1, 1, sq, k) * (start_pos + torch.arange(sq).view(sq, 1) + 1)).to(torch.int32)
     scale = 576**-0.5
 
@@ -111,4 +114,4 @@ def test_sparse_mla_numerics(mesh_device, start_pos):
     out_t = ttnn.to_torch(
         out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=mesh_device.shape)
     )[:1]
-    assert_with_pcc(ref, out_t[0].float(), 0.999)
+    assert_with_pcc(ref, out_t[0].float(), 0.99)  # bf16 online-softmax op (matches sparse_sdpa's own PCC bar)
