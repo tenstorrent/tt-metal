@@ -9,7 +9,7 @@
 // BRISC: Waits for output CBs
 // TRISC: Computes gate logic (sigmoid, bias add, sorting, normalization)
 
-// MODE SELECT (enable AT MOST ONE; orchestration in compute_kernel_api/generalized_moe_gate.h):
+// MODE SELECT (enable AT MOST ONE; orchestration in api/compute/experimental/generalized_moe_gate.h):
 //   GMG_UNGROUPED_TOP8 (default ON): true global top-8 over all 256 experts (ungrouped). The proven
 //     4-group merge runs twice (topA=top8(groups 0-3) at cols {0,2}, topB=top8(groups 4-7) at {4,6},
 //     with FPU copy4rows stashing the idle half in rows 8-15), then finalize fully bitonic-sorts the

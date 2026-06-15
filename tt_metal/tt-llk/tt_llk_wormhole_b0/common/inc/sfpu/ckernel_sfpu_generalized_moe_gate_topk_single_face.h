@@ -4,30 +4,35 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel.h"
 #include "ckernel_addrmod.h"
 #include "ckernel_instr_params.h"
 #include "ckernel_ops.h"
-#include "sfpu/ckernel_sfpu_load_config.h"
+#include "ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_recip.h"
 #include "lltt.h"
 #include "sfpi.h"
-#include "ckernel_sfpu_recip.h"
-#include "ckernel_sfpu_exp.h"
+#include "sfpu/ckernel_sfpu_load_config.h"
 
-namespace ckernel {
-namespace sfpu {
+namespace ckernel
+{
+namespace sfpu
+{
 
 // TODO: Initial evaluation of using replay buffers here did not show any performance improvement
 // Try re-evaluating with latest op sequence and record larger sequences
 
-constexpr uint32_t dst_tile_offset = 64;  // 1 tile x 64 rows per tile
-constexpr uint32_t scores_offset = 0;
-constexpr uint32_t indices_offset = scores_offset + dst_tile_offset;
-constexpr uint32_t bias_offset = indices_offset + dst_tile_offset;
-constexpr uint32_t interm_offset = bias_offset + dst_tile_offset;
+constexpr std::uint32_t dst_tile_offset = 64; // 1 tile x 64 rows per tile
+constexpr std::uint32_t scores_offset   = 0;
+constexpr std::uint32_t indices_offset  = scores_offset + dst_tile_offset;
+constexpr std::uint32_t bias_offset     = indices_offset + dst_tile_offset;
+constexpr std::uint32_t interm_offset   = bias_offset + dst_tile_offset;
 
-template <bool is_fp32_dest_acc_en, uint32_t offset = 0>
-inline void bitonic_topk_load16_concat_indices_single_face() {
+template <bool is_fp32_dest_acc_en, std::uint32_t offset = 0>
+inline void bitonic_topk_load16_concat_indices_single_face()
+{
     // Load 16 consecutive numbers
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, bias_offset + 0 + offset);
     TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, bias_offset + 4 + offset);
@@ -46,7 +51,8 @@ inline void bitonic_topk_load16_concat_indices_single_face() {
 }
 
 template <bool is_fp32_dest_acc_en>
-inline void bitonic_topk_load8_even_cols_concatted_indices_single_face() {
+inline void bitonic_topk_load8_even_cols_concatted_indices_single_face()
+{
     // Load 8 consecutive numbers
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, bias_offset + 0);
     TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, bias_offset + 4);
@@ -56,7 +62,8 @@ inline void bitonic_topk_load8_even_cols_concatted_indices_single_face() {
 }
 
 template <bool is_fp32_dest_acc_en>
-inline void bitonic_topk_store8_even_cols_split_indices_single_face() {
+inline void bitonic_topk_store8_even_cols_split_indices_single_face()
+{
     static_assert(!is_fp32_dest_acc_en, "is_fp32_dest_acc_en must be false");
     // Store 8 consecutive numbers
     TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, bias_offset + 0);
@@ -69,7 +76,8 @@ inline void bitonic_topk_store8_even_cols_split_indices_single_face() {
 }
 
 template <bool is_fp32_dest_acc_en>
-inline void bitonic_topk_store8_even_cols_concatted_indices_single_face() {
+inline void bitonic_topk_store8_even_cols_concatted_indices_single_face()
+{
     // Store 8 consecutive numbers
     TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, bias_offset + 0);
     TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_3, bias_offset + 4);
@@ -79,8 +87,10 @@ inline void bitonic_topk_store8_even_cols_concatted_indices_single_face() {
 }
 
 template <bool start_transpose, bool end_transpose>
-inline void bitonic_topk_ph0_st1_to_1_single_face() {
-    if constexpr (start_transpose) {
+inline void bitonic_topk_ph0_st1_to_1_single_face()
+{
+    if constexpr (start_transpose)
+    {
         TTI_SFPTRANSP(0, 0, 0, 0);
     }
 
@@ -88,14 +98,17 @@ inline void bitonic_topk_ph0_st1_to_1_single_face() {
     TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
     TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
 
-    if constexpr (end_transpose) {
+    if constexpr (end_transpose)
+    {
         TTI_SFPTRANSP(0, 0, 0, 0);
     }
 }
 
 template <bool start_transpose, bool end_transpose>
-inline void bitonic_topk_ph1_st2_to_1_single_face() {
-    if constexpr (start_transpose) {
+inline void bitonic_topk_ph1_st2_to_1_single_face()
+{
+    if constexpr (start_transpose)
+    {
         TTI_SFPTRANSP(0, 0, 0, 0);
     }
 
@@ -107,18 +120,23 @@ inline void bitonic_topk_ph1_st2_to_1_single_face() {
     TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ROWS_02_MAX);
     TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ROWS_02_MAX);
 
-    if constexpr (end_transpose) {
+    if constexpr (end_transpose)
+    {
         TTI_SFPTRANSP(0, 0, 0, 0);
     }
 }
 
 template <bool end_transpose, bool bitonic = true>
-inline void bitonic_topk_ph2_st3_to_1_single_face() {
+inline void bitonic_topk_ph2_st3_to_1_single_face()
+{
     // Step 3
     TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
-    if constexpr (bitonic) {
+    if constexpr (bitonic)
+    {
         TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
-    } else {
+    }
+    else
+    {
         TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
     }
 
@@ -134,15 +152,18 @@ inline void bitonic_topk_ph2_st3_to_1_single_face() {
     TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, swap_mode);
     TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, swap_mode);
 
-    if constexpr (end_transpose) {
+    if constexpr (end_transpose)
+    {
         TTI_SFPTRANSP(0, 0, 0, 0);
     }
 }
 
 template <bool dir, bool end_transpose>
-inline void bitonic_top8_ph3_st4_to_1() {
+inline void bitonic_top8_ph3_st4_to_1()
+{
     // TODO: Use replay buffer for these instructions
-    if constexpr (dir == (bool)SortDir::ArgMax) {
+    if constexpr (dir == (bool)SortDir::ArgMax)
+    {
         // Step 4
         TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
         TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
@@ -158,10 +179,13 @@ inline void bitonic_top8_ph3_st4_to_1() {
         // Step 1
         TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
         TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
-        if constexpr (end_transpose) {
+        if constexpr (end_transpose)
+        {
             TTI_SFPTRANSP(0, 0, 0, 0);
         }
-    } else {
+    }
+    else
+    {
         // Step 4
         TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG0, p_sfpswap::ALL_ROWS_MAX);
         TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
@@ -179,45 +203,48 @@ inline void bitonic_top8_ph3_st4_to_1() {
         TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, p_sfpswap::ALL_ROWS_MAX);
         TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
 
-        if constexpr (end_transpose) {
+        if constexpr (end_transpose)
+        {
             TTI_SFPTRANSP(0, 0, 0, 0);
         }
     }
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool idir>
-inline void bitonic_top8_ph0_to_ph3() {
+inline void bitonic_top8_ph0_to_ph3()
+{
     // Phase 0
     {
-        constexpr bool start_transpose = true;
-        constexpr bool end_transpose = false;
+        constexpr bool start_transpose   = true;
+        constexpr bool end_transpose     = false;
         constexpr int phase_replay_count = 2 + (int)start_transpose + (int)end_transpose;
         bitonic_topk_ph0_st1_to_1_single_face<start_transpose, end_transpose>();
     }
     // Phase 1
     {
-        constexpr bool start_transpose = false;
-        constexpr bool end_transpose = true;
+        constexpr bool start_transpose   = false;
+        constexpr bool end_transpose     = true;
         constexpr int phase_replay_count = 4 + (int)start_transpose + (int)end_transpose;
         // Odd Columns
         bitonic_topk_ph1_st2_to_1_single_face<start_transpose, end_transpose>();
     }
     // Phase 2
     {
-        constexpr bool end_transpose = true;
+        constexpr bool end_transpose     = true;
         constexpr int phase_replay_count = 7 + (int)end_transpose;
         // Even Columns
         bitonic_topk_ph2_st3_to_1_single_face<end_transpose>();
     }
     // Modified Phase 3 for top8
     {
-        constexpr bool end_transpose = true;
+        constexpr bool end_transpose     = true;
         constexpr int phase_replay_count = 8 + (int)end_transpose;
         bitonic_top8_ph3_st4_to_1<idir, end_transpose>();
     }
 }
 
-void reverse_sort_order() {
+void reverse_sort_order()
+{
     TTI_SFPTRANSP(0, 0, 0, 0);
     TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG3, p_sfpswap::UNCONDITIONALLY);
     TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpswap::UNCONDITIONALLY);
@@ -225,12 +252,13 @@ void reverse_sort_order() {
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-inline void _generalized_moe_gate_sum_top2() {
-    constexpr bool idir = false;  // Sort descending order
+inline void _generalized_moe_gate_sum_top2()
+{
+    constexpr bool idir                   = false; // Sort descending order
     constexpr int load_store_replay_count = 8;
-    constexpr int load_replay_offset = 0;
-    constexpr int store_replay_offset = load_replay_offset + load_store_replay_count;
-    constexpr int phase_replay_offset = store_replay_offset + load_store_replay_count;
+    constexpr int load_replay_offset      = 0;
+    constexpr int store_replay_offset     = load_replay_offset + load_store_replay_count;
+    constexpr int phase_replay_offset     = store_replay_offset + load_store_replay_count;
 
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     TTI_SFPCONFIG(0x4, 0xF, 1);
@@ -265,7 +293,8 @@ inline void _generalized_moe_gate_sum_top2() {
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-inline void _generalized_moe_gate_sort_top4_groups() {
+inline void _generalized_moe_gate_sort_top4_groups()
+{
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     // Sort top4
     // Load the top2 sums and concat indices
@@ -297,9 +326,10 @@ inline void _generalized_moe_gate_sort_top4_groups() {
 // the top-8 expert indices are in indices+0/+4 and the (un-normalized) scores in scores+0/+4.
 // Internally does "4 runs -> 2 -> 1" via two bitonic_top8_ph3_st4_to_1 stages; each stage's two
 // inputs are made bitonic by reverse_sort_order, exactly as the original top8 did.
-template <bool is_fp32_dest_acc_en, uint32_t base = 0>
-inline void _gmg_merge4_runs_raw() {
-    constexpr bool idir = false;  // Sort descending order
+template <bool is_fp32_dest_acc_en, std::uint32_t base = 0>
+inline void _gmg_merge4_runs_raw()
+{
+    constexpr bool idir = false; // Sort descending order
 
     // Combine and sort 4 groups of 8 values to 2 groups of 8 values
     // Even Columns sorted Top8 in LREG0 and LREG1. `base` selects which 4-run block to read
@@ -349,7 +379,8 @@ inline void _gmg_merge4_runs_raw() {
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-inline void _generalized_moe_gate_top8(uint32_t eps, uint32_t scale) {
+inline void _generalized_moe_gate_top8(std::uint32_t eps, std::uint32_t scale)
+{
     // Merge the 4 runs into the raw top-8 (idx -> indices+0/+4, score -> scores+0/+4).
     _gmg_merge4_runs_raw<is_fp32_dest_acc_en, 0>();
 
@@ -372,15 +403,15 @@ inline void _generalized_moe_gate_top8(uint32_t eps, uint32_t scale) {
     // Store the value in lreg0 and reload later since the following instructions overwrite it
     TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
     // Technically we only need to reprogram a single constant here, instead of all 3 used by reciprocal init
-    sfpu_reciprocal_init<APPROXIMATION_MODE>();
+    _init_sfpu_reciprocal_<APPROXIMATION_MODE>();
     TTI_SFPCONFIG(0, 0xF, 1);
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
-    sfpi::vFloat l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
-    sfpi::vFloat eps_value = Converter::as_float(eps);
-    l0 = l0 + eps_value;
-    l0 = sfpu_reciprocal<APPROXIMATION_MODE>(l0);
-    sfpi::vFloat scale_value = Converter::as_float(scale);
-    l0 = l0 * scale_value;
+    sfpi::vFloat l0                 = sfpi::l_reg[sfpi::LRegs::LReg0];
+    sfpi::vFloat eps_value          = Converter::as_float(eps);
+    l0                              = l0 + eps_value;
+    l0                              = _sfpu_reciprocal_<APPROXIMATION_MODE ? 0 : 2>(l0);
+    sfpi::vFloat scale_value        = Converter::as_float(scale);
+    l0                              = l0 * scale_value;
     sfpi::l_reg[sfpi::LRegs::LReg0] = l0;
     TTI_SFPNOP;
 
@@ -409,9 +440,10 @@ inline void _generalized_moe_gate_top8(uint32_t eps, uint32_t scale) {
 //    does not collide between the two merge4 calls (it shouldn't: they run serially)
 //  - that no transpose (step0/step1) is needed before consuming the sum_top2 layout
 // ============================================================================
-template <bool is_fp32_dest_acc_en, uint32_t read_base, uint32_t store_lo, uint32_t store_hi>
-inline void _gmg_merge4_top8() {
-    constexpr bool idir = false;  // descending
+template <bool is_fp32_dest_acc_en, std::uint32_t read_base, std::uint32_t store_lo, std::uint32_t store_hi>
+inline void _gmg_merge4_top8()
+{
+    constexpr bool idir = false; // descending
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
     // Odd columns (read_base+6, read_base+2), reversed to form a bitonic sequence.
@@ -460,8 +492,9 @@ inline void _gmg_merge4_top8() {
 // Copy a stored top-8 run (bias + concat idx|score) from offset pair {from_lo,from_hi} to
 // {to_lo,to_hi}, matching _gmg_merge4_top8's store convention (bias mode 0; idx LO16, score HI16).
 // Used to relocate a saved run (e.g. topA parked at safe rows 8-15) into the final merge slot.
-template <uint32_t from_lo, uint32_t from_hi, uint32_t to_lo, uint32_t to_hi>
-inline void _gmg_copy_topk_run() {
+template <std::uint32_t from_lo, std::uint32_t from_hi, std::uint32_t to_lo, std::uint32_t to_hi>
+inline void _gmg_copy_topk_run()
+{
     // Reset the Dst RWC counter (a preceding FPU MOP — e.g. copy4rows — leaves it advanced by +64/tile;
     // without this the SFPLOAD offsets below are biased by that leftover and read the wrong rows).
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -480,18 +513,17 @@ inline void _gmg_copy_topk_run() {
     TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + to_hi);
 }
 
-// Multi-block combine: place ONE field of a run from the interm region {src_lo,src_hi} into its home
-// region (scores/indices/bias) {dst_lo,dst_hi}. The field-tile was unpacked (copy_tile) into interm
+// Multi-block combine: place ONE field of a run from the intermediate region {src_lo,src_hi} into its home
+// region (scores/indices/bias) {dst_lo,dst_hi}. The field-tile was unpacked (copy_tile) into intermediate
 // from the L1 run stash; this SFPU copy is row-selective so it writes only {dst_lo,dst_hi}, leaving
 // the other block's run (sitting at the complementary rows) intact. mode/region match the store
 // convention of _gmg_copy_topk_run/_gmg_merge4_top8 (field 0=bias mode 0; 1=idx LO16; 2=score HI16).
-template <uint32_t field, uint32_t src_lo, uint32_t src_hi, uint32_t dst_lo, uint32_t dst_hi>
-inline void _gmg_place_field_from_interm() {
-    constexpr uint32_t mode = (field == 0)   ? 0
-                              : (field == 1) ? (uint32_t)InstrModLoadStore::LO16_ONLY
-                                             : (uint32_t)InstrModLoadStore::HI16_ONLY;
-    constexpr uint32_t region = (field == 0) ? bias_offset : (field == 1) ? indices_offset : scores_offset;
-    // Reset Dst RWC: the copy_tile (FPU) that filled interm leaves it advanced; without this the
+template <std::uint32_t field, std::uint32_t src_lo, std::uint32_t src_hi, std::uint32_t dst_lo, std::uint32_t dst_hi>
+inline void _gmg_place_field_from_interm()
+{
+    constexpr std::uint32_t mode = (field == 0) ? 0 : (field == 1) ? (std::uint32_t)InstrModLoadStore::LO16_ONLY : (std::uint32_t)InstrModLoadStore::HI16_ONLY;
+    constexpr std::uint32_t region = (field == 0) ? bias_offset : (field == 1) ? indices_offset : scores_offset;
+    // Reset Dst RWC: the copy_tile (FPU) that filled intermediate leaves it advanced; without this the
     // SFPLOAD/SFPSTORE offsets below are biased and hit the wrong rows.
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     TTI_SFPLOAD(p_sfpu::LREG0, mode, ADDR_MOD_3, interm_offset + src_lo);
@@ -510,10 +542,11 @@ inline void _gmg_place_field_from_interm() {
 // idx(LO16)|score(HI16), and FULL-sort -> global top-8 in LREG0/1 (bias) + LREG4/5 (concat idx|score).
 // Shared by the per-block merge (topA+topB) AND every level of the multi-block combine tree.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-inline void _gmg_merge16_core() {
-    constexpr bool idir = false;  // descending -> top-8
+inline void _gmg_merge16_core()
+{
+    constexpr bool idir = false; // descending -> top-8
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    TTI_SFPCONFIG(0x4, 0xF, 1);  // enable index tracking (idx|score in LREG4-7 follow the bias swaps)
+    TTI_SFPCONFIG(0x4, 0xF, 1); // enable index tracking (idx|score in LREG4-7 follow the bias swaps)
 
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, bias_offset + 0);
     TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, bias_offset + 2);
@@ -534,18 +567,15 @@ inline void _gmg_merge16_core() {
 // merge16 -> re-mergeable RUN at {store_lo, store_hi} (bias mode0; idx LO16; score HI16), the same
 // store convention as _gmg_merge4_top8. Used for a block's top-8 and combine-tree intermediates so a
 // later _gmg_merge16_* (reading {0,2}+{4,6}) can consume it. No normalize.
-template <
-    bool APPROXIMATION_MODE,
-    bool is_fp32_dest_acc_en,
-    uint32_t store_lo,
-    uint32_t store_hi,
-    uint32_t idx_offset = 0>
-inline void _gmg_merge16_to_run() {
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, std::uint32_t store_lo, std::uint32_t store_hi, std::uint32_t idx_offset = 0>
+inline void _gmg_merge16_to_run()
+{
     _gmg_merge16_core<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
     // Add the block's expert-id base offset (b*256) to the run's indices so they become GLOBAL ids.
     // idx lives in the LO16 of the LREG4/5 concat (score in HI16); idx+offset <= 511 never carries into
     // bit 16, so an int add to the whole concat shifts only the index, leaving the score untouched.
-    if constexpr (idx_offset != 0) {
+    if constexpr (idx_offset != 0)
+    {
         // Raw integer add of the 12-bit immediate to LREG4/5 (the idx|score concat). Must use TTI (not
         // sfpi l_reg[]): sfpi's SSA register model doesn't write back to the physical LREG that the
         // surrounding raw TTI_SFPSTOREs read, so an sfpi add here is a no-op. SFPIADD with ARG_IMM does
@@ -562,8 +592,9 @@ inline void _gmg_merge16_to_run() {
     TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + store_hi);
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, uint32_t topk = 8, bool output_softmax = false>
-inline void _generalized_moe_gate_finalize_ungrouped(uint32_t eps, uint32_t scale) {
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, std::uint32_t topk = 8, bool output_softmax = false>
+inline void _generalized_moe_gate_finalize_ungrouped(std::uint32_t eps, std::uint32_t scale)
+{
     // Final combine: merge the two runs at {0,2}+{4,6} -> global top-8 (sorted DESCENDING), then normalize.
     // (For 256 the two runs are topA/topB; for >256 they are the last two block/subtree runs of the tree.)
     _gmg_merge16_core<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
@@ -575,22 +606,26 @@ inline void _generalized_moe_gate_finalize_ungrouped(uint32_t eps, uint32_t scal
     // mask afterwards) contribute 0 to Σexp, not exp(0)=1. Scores are in [0,1] -> exp in [1,e] (no overflow),
     // and softmax is shift-invariant so no max-subtraction is needed. dst_reg[k] = TTI addr 2k (scores+0 ->
     // dst_reg[0], scores+4 -> dst_reg[2]); reset Dst RWC so the base lines up with the normalize's TTI loads.
-    if constexpr (output_softmax) {
+    if constexpr (output_softmax)
+    {
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-        sfpi::vFloat e0 = sfpi::dst_reg[(scores_offset + 0) / 2];
+        sfpi::vFloat e0                        = sfpi::dst_reg[(scores_offset + 0) / 2];
         sfpi::dst_reg[(scores_offset + 0) / 2] = _sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>(e0);
-        sfpi::vFloat e4 = sfpi::dst_reg[(scores_offset + 4) / 2];
+        sfpi::vFloat e4                        = sfpi::dst_reg[(scores_offset + 4) / 2];
         sfpi::dst_reg[(scores_offset + 4) / 2] = _sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>(e4);
     }
 
     // TOP-N (n = topk <= 8): the sorted-8 are at scores/indices {0,4} — offset 0 = ranks 0-3, offset 4 =
     // ranks 4-7 (descending). Zero the scores+idx of ranks >= topk BEFORE the normalize so the denominator
     // is the sum of the top-n and the dropped slots output 0. topk==8 -> no-op (full top-8).
-    if constexpr (topk <= 4) {
+    if constexpr (topk <= 4)
+    {
         // Drop the entire offset-4 half (ranks 4-7). (topk<4 would also need offset-0 lane masking.)
         TTI_SFPSTORE(p_sfpu::LCONST_0, 0, ADDR_MOD_3, scores_offset + 4);
         TTI_SFPSTORE(p_sfpu::LCONST_0, 0, ADDR_MOD_3, indices_offset + 4);
-    } else if constexpr (topk < 8) {
+    }
+    else if constexpr (topk < 8)
+    {
         // TOP-5/6/7: the 4 sorted ranks 4-7 are spread every 8 lanes across the 32-lane offset-4 row
         // (lanes 0,8,16,24), and vConstTileId = 2*lane, so rank (4+j) -> tileid 16*j: rank4@0, rank5@16,
         // rank6@32, rank7@48 (pinned by dump: drop_thr 4/8/16 all keep only rank4, so the stride is 16).
@@ -606,16 +641,22 @@ inline void _generalized_moe_gate_finalize_ungrouped(uint32_t eps, uint32_t scal
         // store all lanes back (kept lanes round-trip exactly). NOTE: the idx row must be read/written as
         // vFloat (the default mod-0 SrcB raw-bit passthrough), NOT vUInt -- a vUInt dst_reg store here
         // simply did not land. The mod-0 passthrough preserves the kept ids (e.g. 337/75) bit-for-bit.
-        constexpr int drop_thr = 16 * (static_cast<int>(topk) - 4);  // tileid >= drop_thr -> rank >= topk
-        constexpr int sc4_dreg = (scores_offset + 4) / 2;            // scores+4 (TTI addr 4)  -> dst_reg 2
-        constexpr int ix4_dreg = (indices_offset + 4) / 2;           // indices+4 (TTI addr 68) -> dst_reg 34
+        constexpr int drop_thr = 16 * (static_cast<int>(topk) - 4); // tileid >= drop_thr -> rank >= topk
+        constexpr int sc4_dreg = (scores_offset + 4) / 2;           // scores+4 (TTI addr 4)  -> dst_reg 2
+        constexpr int ix4_dreg = (indices_offset + 4) / 2;          // indices+4 (TTI addr 68) -> dst_reg 34
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
         sfpi::vFloat sc = sfpi::dst_reg[sc4_dreg];
-        v_if(sfpi::vConstTileId >= drop_thr) { sc = 0.0f; }
+        v_if (sfpi::vConstTileId >= drop_thr)
+        {
+            sc = 0.0f;
+        }
         v_endif;
         sfpi::dst_reg[sc4_dreg] = sc;
-        sfpi::vFloat ix = sfpi::dst_reg[ix4_dreg];
-        v_if(sfpi::vConstTileId >= drop_thr) { ix = 0.0f; }
+        sfpi::vFloat ix         = sfpi::dst_reg[ix4_dreg];
+        v_if (sfpi::vConstTileId >= drop_thr)
+        {
+            ix = 0.0f;
+        }
         v_endif;
         sfpi::dst_reg[ix4_dreg] = ix;
     }
@@ -633,15 +674,15 @@ inline void _generalized_moe_gate_finalize_ungrouped(uint32_t eps, uint32_t scal
     TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG0, 0);
     TTI_SFPNOP;
     TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
-    sfpu_reciprocal_init<APPROXIMATION_MODE>();
+    _init_sfpu_reciprocal_<APPROXIMATION_MODE>();
     TTI_SFPCONFIG(0, 0xF, 1);
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
-    sfpi::vFloat l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
-    sfpi::vFloat eps_value = Converter::as_float(eps);
-    l0 = l0 + eps_value;
-    l0 = sfpu_reciprocal<APPROXIMATION_MODE>(l0);
-    sfpi::vFloat scale_value = Converter::as_float(scale);
-    l0 = l0 * scale_value;
+    sfpi::vFloat l0                 = sfpi::l_reg[sfpi::LRegs::LReg0];
+    sfpi::vFloat eps_value          = Converter::as_float(eps);
+    l0                              = l0 + eps_value;
+    l0                              = _sfpu_reciprocal_<APPROXIMATION_MODE ? 0 : 2>(l0);
+    sfpi::vFloat scale_value        = Converter::as_float(scale);
+    l0                              = l0 * scale_value;
     sfpi::l_reg[sfpi::LRegs::LReg0] = l0;
     TTI_SFPNOP;
     TTI_SFPCONFIG(0, p_sfpu::LREG14, 0);
@@ -654,12 +695,13 @@ inline void _generalized_moe_gate_finalize_ungrouped(uint32_t eps, uint32_t scal
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-inline void _init_generalized_moe_gate_topk() {
+inline void _init_generalized_moe_gate_topk()
+{
     // Note: For BH there is no conflict with reg usage between the gate and reciprocal
     // For WH, since we use reg 14 to broadcast, this would overwrite the recip value, so we init within the top8 fn
     // instead of ahead of time
-    // sfpu_reciprocal_init<APPROXIMATION_MODE>();
+    // _init_sfpu_reciprocal_<APPROXIMATION_MODE>();
 }
 
-}  // namespace sfpu
-}  // namespace ckernel
+} // namespace sfpu
+} // namespace ckernel

@@ -25,7 +25,7 @@
 #include "api/compute/tilize.h"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "../kernel_includes/tt_metal/include/compute_kernel_api/generalized_moe_gate.h"
+#include "api/compute/experimental/generalized_moe_gate.h"
 #endif
 
 namespace deepseek_v3_ops {

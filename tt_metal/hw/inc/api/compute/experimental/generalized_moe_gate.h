@@ -8,15 +8,9 @@
 #include "api/compute/common.h"
 #include "api/compute/transpose_wh.h"
 #ifdef TRISC_MATH
-#ifdef ARCH_BLACKHOLE
-#include "../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h"
-#include "../../hw/ckernels/blackhole/metal/llk_api/llk_math_generalized_moe_gate_eltwise_binary_api.h"
-#include "../../hw/ckernels/blackhole/metal/llk_api/llk_math_generalized_moe_gate_transpose_dest_single_face_api.h"
-#else
-#include "../../hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h"
-#include "../../hw/ckernels/wormhole_b0/metal/llk_api/llk_math_generalized_moe_gate_eltwise_binary_api.h"
-#include "../../hw/ckernels/wormhole_b0/metal/llk_api/llk_math_generalized_moe_gate_transpose_dest_single_face_api.h"
-#endif
+#include "llk_math_generalized_moe_gate_topk_single_face.h"
+#include "experimental/llk_math_generalized_moe_gate_eltwise_binary_api.h"
+#include "experimental/llk_math_generalized_moe_gate_transpose_dest_single_face_api.h"
 #endif
 
 namespace ckernel {
