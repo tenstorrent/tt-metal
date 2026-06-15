@@ -361,6 +361,48 @@ class TtSam3ImagePipeline:
         self._fast_mp_forward = _fast_mp_forward
         mask_pred_module.forward = _fast_mp_forward
 
+        from sam3.model.box_ops import box_cxcywh_to_xyxy as _box_cxcywh_to_xyxy
+
+        decoder = sam3_model.transformer.decoder
+        _log2_8 = 3.0
+
+        def _fast_rpb_matrix(reference_boxes, feat_size):
+            H, W = feat_size
+            boxes_xyxy = _box_cxcywh_to_xyxy(reference_boxes).transpose(0, 1)
+            bs, num_queries, _ = boxes_xyxy.shape
+
+            if decoder.compilable_cord_cache is None:
+                decoder.compilable_cord_cache = decoder._get_coords(H, W, reference_boxes.device)
+                decoder.compilable_stored_size = (H, W)
+
+            if decoder.compilable_stored_size == (H, W):
+                coords_h, coords_w = decoder.compilable_cord_cache
+            else:
+                if feat_size not in decoder.coord_cache:
+                    decoder.coord_cache[feat_size] = decoder._get_coords(H, W, reference_boxes.device)
+                coords_h, coords_w = decoder.coord_cache[feat_size]
+
+            boxes_flat = boxes_xyxy.reshape(-1, 1, 4)
+            deltas_y = coords_h.view(1, -1, 1) - boxes_flat[:, :, 1:4:2]
+            deltas_y = deltas_y.view(bs, num_queries, -1, 2)
+            deltas_x = coords_w.view(1, -1, 1) - boxes_flat[:, :, 0:3:2]
+            deltas_x = deltas_x.view(bs, num_queries, -1, 2)
+
+            deltas_x = deltas_x * 8
+            deltas_x = torch.sign(deltas_x) * torch.log2(torch.abs(deltas_x) + 1.0) / _log2_8
+            deltas_y = deltas_y * 8
+            deltas_y = torch.sign(deltas_y) * torch.log2(torch.abs(deltas_y) + 1.0) / _log2_8
+
+            deltas_x = decoder.boxRPB_embed_x(x=deltas_x)
+            deltas_y = decoder.boxRPB_embed_y(x=deltas_y)
+
+            deltas_y = deltas_y.permute(0, 3, 1, 2).contiguous()
+            deltas_x = deltas_x.permute(0, 3, 1, 2).contiguous()
+            B = deltas_y.unsqueeze(-1) + deltas_x.unsqueeze(-2)
+            return B.flatten(-2, -1)
+
+        decoder._get_rpb_matrix = _fast_rpb_matrix
+
     def _patched_vit_forward(self, x):
         if self._encoder.forward is not self._patched_encoder_forward:
             self._encoder.forward = self._patched_encoder_forward
