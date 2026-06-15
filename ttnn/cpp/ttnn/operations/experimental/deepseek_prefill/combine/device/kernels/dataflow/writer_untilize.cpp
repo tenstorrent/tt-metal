@@ -25,6 +25,9 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/zero_init_common.hpp"
 
 // Sentinel used by compute to tell this kernel to exit its send loop.
@@ -104,14 +107,17 @@ void kernel_main() {
     //                                              used for cb_wait_front on the multicasted CB
     //  +14: SLOTS_PER_UNTILIZER                    - per-untilizer ring depth on the sender's receive_buf
     constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset());
+    CircularBuffer cb_untilize(cb_untilize_id);
     constexpr uint32_t cb_experts_tok_counter_id =
         get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 1);
+    CircularBuffer cb_experts_tok_counter(cb_experts_tok_counter_id);
     constexpr uint32_t experts_tok_counter_pages =
         get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 2);
     constexpr uint32_t aligned_experts_tok_counter_page_size =
         get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 3);
     constexpr uint32_t read_batch_size = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 4);
     constexpr uint32_t cb_metadata_batch_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 5);
+    CircularBuffer cb_metadata_batch(cb_metadata_batch_id);
     constexpr uint32_t num_experts_per_tok = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 6);
     constexpr uint32_t aligned_dispatched_metadata_page_size =
         get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 7);
@@ -159,6 +165,8 @@ void kernel_main() {
     uint32_t untilizer_global_pos = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t total_untilizers = get_arg_val<uint32_t>(rt_args_idx++);
 
+    Noc noc;
+
     uint64_t sender_data_ready_noc_addr =
         get_noc_addr(sender_noc_x, sender_noc_y, get_semaphore(data_ready_semaphore_id));
     uint32_t credits_sem_l1 = get_semaphore(credits_semaphore_id);
@@ -174,8 +182,8 @@ void kernel_main() {
     // for the next invocation.
     volatile tt_l1_ptr uint32_t* counter_ready_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(counter_ready_semaphore_id));
-    cb_wait_front(cb_experts_tok_counter_id, cb_counter_total_pages);
-    uint32_t counter_cb_base = get_read_ptr(cb_experts_tok_counter_id);
+    cb_experts_tok_counter.wait_front(cb_counter_total_pages);
+    uint32_t counter_cb_base = cb_experts_tok_counter.get_read_ptr();
     const volatile tt_l1_ptr uint32_t* trailer =
         reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(counter_cb_base + counter_data_total_size);
     uint32_t sender_receive_buf_l1_offset = trailer[0];
@@ -244,11 +252,11 @@ void kernel_main() {
             // the corresponding metadata pages.  cb_metadata_batch_id is pushed/popped in
             // fixed read_batch_size chunks (only the first batch_count entries are valid),
             // so its fifo pointers wrap cleanly even when batch_count < read_batch_size.
-            cb_wait_front(cb_untilize_id, read_batch_size);
-            cb_wait_front(cb_metadata_batch_id, read_batch_size);
+            cb_untilize.wait_front(read_batch_size);
+            cb_metadata_batch.wait_front(read_batch_size);
 
-            uint32_t untilize_read_ptr = get_read_ptr(cb_untilize_id);
-            uint32_t metadata_read_ptr = get_read_ptr(cb_metadata_batch_id);
+            uint32_t untilize_read_ptr = cb_untilize.get_read_ptr();
+            uint32_t metadata_read_ptr = cb_metadata_batch.get_read_ptr();
 
             for (uint32_t t = 0; t < batch_count; t++) {
                 const volatile tt_l1_ptr uint32_t* metadata = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(
@@ -261,7 +269,12 @@ void kernel_main() {
                     uint32_t dst_token_idx = metadata[1];
                     uint32_t dst_topk_indice = metadata[2];
                     uint32_t output_page_idx = dst_token_idx * num_experts_per_tok + dst_topk_indice;
-                    noc_async_write_page(output_page_idx, output_addr_gen, untilize_row_addr);
+                    noc.async_write(
+                        cb_untilize,
+                        output_addr_gen,
+                        aligned_output_page_size,
+                        {.offset_bytes = t * aligned_output_page_size},
+                        {.page_id = output_page_idx});
 
                 } else {
                     if (local_credits == 0) {
@@ -303,10 +316,10 @@ void kernel_main() {
             // Make sure any local writes that hit only the writes-flushed path complete before
             // we release the CBs (sender's per-row handshake already barriered the non-local
             // writes).
-            noc_async_write_barrier();
+            noc.async_write_barrier();
 
-            cb_pop_front(cb_metadata_batch_id, read_batch_size);
-            cb_pop_front(cb_untilize_id, read_batch_size);
+            cb_metadata_batch.pop_front(read_batch_size);
+            cb_untilize.pop_front(read_batch_size);
         }
         start_page_tiled += ((expert_tokens + tile_height - 1) / tile_height) * tiles_per_batch;
     }
@@ -325,5 +338,5 @@ void kernel_main() {
     noc_async_write_barrier();
     noc_semaphore_inc(sender_data_ready_noc_addr, 1);
     noc_async_atomic_barrier();
-    cb_pop_front(cb_experts_tok_counter_id, cb_counter_total_pages);
+    cb_experts_tok_counter.pop_front(cb_counter_total_pages);
 }
