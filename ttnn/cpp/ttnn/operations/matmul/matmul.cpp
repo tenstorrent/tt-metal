@@ -516,7 +516,7 @@ Tensor addmm(
     }
 
     if (beta != 0.0) {
-        auto add_tensor = beta != 1.0 ? multiply(input_tensor, beta) : input_tensor;
+        auto add_tensor = beta != 1.0 ? multiply(input_tensor, beta, out_tensor.dtype()) : input_tensor;
         // The matmul output dtype can differ from input_tensor's dtype when `dtype` overrides it.
         // binary_ng's in-place add requires both operands to share a dtype
         if (add_tensor.dtype() != out_tensor.dtype()) {

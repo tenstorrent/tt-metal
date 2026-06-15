@@ -287,13 +287,28 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
         attributes.binary_op_type);
 
     if (input_tensor_b.has_value()) {
+        const auto dtype_b = input_tensor_b->dtype();
+        if (ttnn::operations::binary::utils::is_quant_op(attributes.binary_op_type)) {
+            TT_FATAL(
+                dtype_b == DataType::FLOAT32,
+                "Scale tensor B must be float32 for binary operation {}, got {}",
+                attributes.binary_op_type,
+                dtype_b);
+        } else {
+            TT_FATAL(
+                ttnn::operations::binary::dtype_policy::is_supported(attributes.binary_op_type, dtype_b),
+                "Input tensor B dtype {} is not supported for binary operation {}",
+                dtype_b,
+                attributes.binary_op_type);
+        }
+
         TT_FATAL(
             ttnn::operations::binary::utils::is_dtype_combination_supported(
-                attributes.binary_op_type, input_tensor_a.dtype(), input_tensor_b->dtype()),
+                attributes.binary_op_type, input_tensor_a.dtype(), dtype_b),
             "Mixed dtype is not supported for binary operation {}, dtype A: {}, dtype B: {}",
             attributes.binary_op_type,
             input_tensor_a.dtype(),
-            input_tensor_b->dtype());
+            dtype_b);
     }
 
     BinaryNgDeviceOperation::validate_on_program_cache_hit(attributes, tensor_args);

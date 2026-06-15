@@ -422,7 +422,7 @@ class LogProbsCalculator:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             **self.common_args,
         )
-        # Div runs in float32 align with bf16 mask/logits for eq_/multiply.
+        # div runs in float32; typecast to bf16 so chip_ids aligns with mask/logits for eq_/multiply.
         chip_ids_tensor = ttnn.typecast(chip_ids_tensor, ttnn.bfloat16, **self.common_args)
 
         # Get local index for each user based on global_idx values in global_idx_tensor
