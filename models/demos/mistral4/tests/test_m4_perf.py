@@ -25,6 +25,7 @@ from models.demos.mistral4.tt.mistral4_text import TtMistral4TextModel
 
 N_LAYERS = int(os.environ.get("M4_PERF_LAYERS", "2"))
 ISLS = [int(s) for s in os.environ.get("M4_PERF_ISLS", "128,512,1024,2048,4096").split(",")]
+DECODE_BATCHES = [int(b) for b in os.environ.get("M4_PERF_BATCHES", "1,8,32").split(",")]
 DECODE_STEPS = 32
 
 
@@ -41,37 +42,35 @@ def test_m4_perf(mesh_device, reset_seeds):
     tt = TtMistral4TextModel(
         mesh_device, tsd, cfg, N_LAYERS, cfg.rms_norm_eps, shard_experts=True, expert_dtype=ttnn.bfloat8_b
     )
-    rope, hidden, B = cfg.qk_rope_head_dim, cfg.hidden_size, 1
+    rope, hidden = cfg.qk_rope_head_dim, cfg.hidden_size
     table = []
 
-    # ---- decode tok/s/user via the captured trace (ISL-independent step cost; measure once) ----
-    kv = tt.init_kv_caches(B, max_seq=max(ISLS) + DECODE_STEPS + 64)
-    td = TracedDecode(tt, mesh_device, B, hidden, rope, kv)
-    x1, c1, s1 = torch.randn(B, 1, hidden) * 0.1, torch.randn(B, 1, 1, rope), torch.randn(B, 1, 1, rope)
-    td.step(x1, c1, s1, [0] * B)  # warmup replay
-    ttnn.synchronize_device(mesh_device)
-    t0 = time.time()
-    for i in range(DECODE_STEPS):
-        td.step(x1, c1, s1, [i] * B)
-    ttnn.synchronize_device(mesh_device)
-    dev_dec = (time.time() - t0) / DECODE_STEPS
-    # E2E incl. host argmax read-back per step
-    t0 = time.time()
-    for i in range(DECODE_STEPS):
-        out = td.step(x1, c1, s1, [i] * B)
-        _ = ttnn.argmax(out, dim=-1)
-        ttnn.to_torch(_, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-    e2e_dec = (time.time() - t0) / DECODE_STEPS
-    logger.info(
-        f"DECODE: device {dev_dec*1e3:.2f}ms/tok ({1/dev_dec:.1f} tok/s/user), E2E {e2e_dec*1e3:.2f}ms ({1/e2e_dec:.1f} tok/s/user)"
-    )
+    # ---- decode throughput vs batch: per-step latency is ~flat across batch (the MoE streams each
+    # expert's weights ONCE and applies them to all B tokens), so aggregate tok/s scales with batch.
+    decode_rows = []
+    for B in DECODE_BATCHES:
+        kv = tt.init_kv_caches(B, max_seq=max(ISLS) + DECODE_STEPS + 64)
+        td = TracedDecode(tt, mesh_device, B, hidden, rope, kv)
+        x1, c1, s1 = torch.randn(B, 1, hidden) * 0.1, torch.randn(B, 1, 1, rope), torch.randn(B, 1, 1, rope)
+        td.step(x1, c1, s1, [0] * B)  # warmup replay
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.time()
+        for i in range(DECODE_STEPS):
+            td.step(x1, c1, s1, [i] * B)
+        ttnn.synchronize_device(mesh_device)
+        step = (time.time() - t0) / DECODE_STEPS
+        decode_rows.append((B, step, 1 / step, B / step))
+        logger.info(
+            f"DECODE B={B}: {step*1e3:.2f}ms/step, {1/step:.1f} tok/s/user, {B/step:.0f} tok/s aggregate ({N_LAYERS}L)"
+        )
+    dev_dec = decode_rows[0][1]
 
     # ---- prefill TTFT sweep (steady-state; warm up each shape once) ----
     for S in ISLS:
-        x = _repl(torch.randn(B, S, hidden) * 0.1, mesh_device)
-        cos = _repl(torch.randn(B, 1, S, rope), mesh_device)
-        sin = _repl(torch.randn(B, 1, S, rope), mesh_device)
-        kvp = tt.init_kv_caches(B, max_seq=S + 64)
+        x = _repl(torch.randn(1, S, hidden) * 0.1, mesh_device)
+        cos = _repl(torch.randn(1, 1, S, rope), mesh_device)
+        sin = _repl(torch.randn(1, 1, S, rope), mesh_device)
+        kvp = tt.init_kv_caches(1, max_seq=S + 64)
         tt.forward_prefill(x, cos, sin, kvp)  # warmup (compile)
         ttnn.synchronize_device(mesh_device)
         t0 = time.time()
@@ -82,7 +81,8 @@ def test_m4_perf(mesh_device, reset_seeds):
         logger.info(f"PREFILL S={S}: TTFT {ttft*1e3:.1f}ms, {S/ttft:.0f} tok/s (steady-state, {N_LAYERS}L)")
 
     logger.info(f"=== Mistral-Small-4 perf ({N_LAYERS}L, sharded bfp8) ===")
-    logger.info(f"decode: {1/dev_dec:.1f} tok/s/user device, {1/e2e_dec:.1f} E2E")
+    for B, step, tsu, agg in decode_rows:
+        logger.info(f"  decode B={B:>3}: {step*1e3:7.2f}ms/step  {tsu:6.1f} tok/s/user  {agg:6.0f} tok/s aggregate")
     for S, ttft, tps in table:
         logger.info(f"  ISL {S:>5}: TTFT {ttft*1e3:8.1f}ms  prefill {tps:7.0f} tok/s")
     assert table and dev_dec > 0
