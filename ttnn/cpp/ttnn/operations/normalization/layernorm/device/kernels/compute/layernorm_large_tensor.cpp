@@ -23,6 +23,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Square
 
 namespace kutil = norm::kernel_util;
 namespace numeric = kutil::compute::numeric;
@@ -136,47 +137,50 @@ void kernel_main() {
             binary_op_init_common(cb_in, cb_scaler, cb_ex);
 #endif
 #endif
-            cb_in_obj.wait_front(block.full_block_size());
-            tile_regs_acquire();
+            // (x - E[x])  [RMSNORM: copy x]  [+ b when FUSE_PRE_ADD]  -> ^2  -> cb_xmm2, fused
+            // in DEST over one padded block. Same chain as the normalize pass below, plus a Square
+            // before the pack and output routed to cb_xmm2. cb_in Bulk; cb_ex held col-bcast (1
+            // tile) -> CallerManaged + Scalar; cb_inb Bulk; cb_xmm2 Bulk. inits/reconfigs -> Input;
+            // pack_reconfig(cb_xmm2) -> Output. (cb_in's pop moves from post-sub to chain-end, as
+            // in the normalize-pass chain — Bulk drain.)
+            compute_kernel_lib::eltwise_chain(
+                compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()),
 #ifdef RMSNORM
-            reconfig_data_format_srca(cb_in);
-            copy_tile_init(cb_in);
-            for (auto i : block.local()) {
-                copy_tile(cb_in, i, i);
-            }
+                compute_kernel_lib::CopyTile<
+                    cb_in,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::CopyTileReconfig::Input,
+                    compute_kernel_lib::OperandKind::Block>{},
 #else
-            // x-E[x]
-            reconfig_data_format(cb_in, cb_ex);
-            sub_bcast_cols_init_short(cb_in, cb_ex);
-            for (auto i : block.local()) {
-                sub_tiles_bcast_cols(cb_in, cb_ex, i, 0, i);
-            }
+                compute_kernel_lib::BinaryFpu<
+                    cb_in,
+                    cb_ex,
+                    compute_kernel_lib::BinaryFpuOp::Sub,
+                    compute_kernel_lib::BroadcastDim::Col,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::OperandKind::Scalar>{},
 #endif
-            cb_in_obj.pop_front(block.full_block_size());
 #ifdef FUSE_PRE_ADD
-            cb_inb_obj.wait_front(block.full_block_size());
-            reconfig_data_format_srca(cb_in, cb_inb);
-            binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
-            for (auto i : block.local()) {
-                binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                    cb_inb, i, i);
-            }
-            cb_inb_obj.pop_front(block.full_block_size());
+                compute_kernel_lib::DestReuseBinary<
+                    cb_inb,
+                    compute_kernel_lib::BinaryFpuOp::Add,
+                    compute_kernel_lib::DestReuseType::DEST_TO_SRCB,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::DestReuseReconfig::Input,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OperandKind::Block>{},
 #endif
-            // (x-E[x])^2. Pack to CB
-            square_tile_init();
-            for (auto i : block.local()) {
-                square_tile(i);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            cb_xmm2_obj.reserve_back(block.full_block_size());
-            pack_reconfig_data_format(cb_xmm2);
-            for (auto i : block.local()) {
-                pack_tile(i, cb_xmm2);
-            }
-            tile_regs_release();
-            cb_xmm2_obj.push_back(block.full_block_size());
+                compute_kernel_lib::Square<compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::PackTile<
+                    cb_xmm2,
+                    compute_kernel_lib::OutputLifecycle::Bulk,
+                    compute_kernel_lib::PackTileReconfig::Output>{});
 
             tile_regs_acquire();
             if (!block.is_first()) {
