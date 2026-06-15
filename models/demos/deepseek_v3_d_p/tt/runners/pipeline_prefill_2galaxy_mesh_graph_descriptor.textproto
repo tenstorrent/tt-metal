@@ -1,0 +1,57 @@
+# Mesh graph descriptor for 2-rank pipeline-parallel prefill on 2 independent BH galaxies.
+#
+# Two SEPARATE 8x4 single-galaxy meshes (mesh_id 0 and 1), one host each, grouped with NO
+# connections — cross-rank activations go host->host (PREFILL_PP_DIR), so the galaxies need
+# no fabric between them. Each mesh keeps only its own intra-galaxy fabric for CCL.
+#
+# Per-mesh shape mirrors tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+# (8x4 = full galaxy = PREFILL_SP x PREFILL_TP). NOTE: the decode superpod descriptor
+# (blitz_decode_*_superpod) uses 4x2 / 8-chip meshes — that is decode's decomposition, NOT
+# this prefill 8x4 layout; do not copy from it.
+#
+# Pairs with pipeline_prefill_rank_binding_2rank.yaml (rank 0 -> mesh 0, rank 1 -> mesh 1).
+#
+# VERIFY against a known-good single-galaxy PREFILL run on this cluster:
+#   * dim_types [ LINE, RING ]: set per developer recollection ("pretty sure"), not confirmed
+#     against a descriptor — the dim0 (8) axis is open, dim1 (4) axis is an intra-galaxy torus.
+#     Confirm against the single-galaxy descriptor this cluster actually uses; wrong RING/LINE
+#     fails fabric init.
+#   * pinnings: anchor each mesh's logical chip 0 to its host's physical ASIC. tray_id/asic
+#     values copied from the single-galaxy template; confirm they match this pod, and that
+#     mesh 0 lands on the first --host (bh-glx-d03u02) and mesh 1 on the second (bh-glx-d03u08).
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 8, 4 ] dim_types: [ LINE, RING ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+mesh_descriptors {
+  name: "M1"
+  arch: BLACKHOLE
+  device_topology { dims: [ 8, 4 ] dim_types: [ LINE, RING ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+# Anchor each logical mesh to its host's physical galaxy (chip 0 -> tray 1, asic 1).
+pinnings {
+  logical_fabric_node_id { mesh_id: 0 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 1 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 1 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 1 }
+}
+
+# Group the two meshes with no connections -> independent meshes (host transport only).
+graph_descriptors {
+  name: "G0"
+  type: "POD"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

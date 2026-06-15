@@ -383,6 +383,10 @@ def main() -> None:
     runtime.compile()
     ttnn.distributed_context_barrier()
 
+    # The activation-handoff dir must exist before the first send (send_activation does not mkdir).
+    if _transport_mode() == "host":
+        os.makedirs(_act_dir(), exist_ok=True)
+
     logger.info(f"[pp rank {rank}] setup complete, entering standalone loop")
     run_standalone_loop(runtime, rank, num_ranks)
 
