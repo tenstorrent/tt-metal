@@ -4,22 +4,22 @@
 
 #pragma once
 
-#ifdef ENV_LLK_INFRA
-#include "hostdev/device_print_common.h"
-#include "core_config.h"
-using DevicePrintBufferType =
-    DevicePrintBuffer<DEVICE_PRINT_BUFFER_SIZE, static_cast<uint32_t>(TensixProcessorTypes::COUNT), 0>;
-#else
+#ifndef ENV_LLK_INFRA
 #include "hostdev/dev_msgs.h"
+#endif
+// device_print_mem.h defines the arch's DevicePrintMemoryLayout (single buffer on
+// WH/BH, a TRISC + DM split on Quasar). LLK infra reuses the same layout as Metal,
+// just anchored at a fixed L1 address instead of the mailbox, so the dual-buffer
+// behavior matches the dprint server.
 #include "device_print_mem.h"
 using DevicePrintBufferType = decltype(DevicePrintMemoryLayout::buffer);
-#endif
 
 inline volatile tt_l1_ptr DevicePrintBufferType* get_device_print_buffer() {
 #ifdef ENV_LLK_INFRA
-    // LLK has a different memory layout; this must match
-    // DEVICE_PRINT_BUFFER_BASE in tests/python_tests/helpers/test_config.py.
-    return reinterpret_cast<volatile tt_l1_ptr DevicePrintBufferType*>(LLK_DEVICE_PRINT_BUFFER_BASE);
+    // LLK places the layout at a fixed L1 base; must match DEVICE_PRINT_BUFFER_BASE in
+    // tests/python_tests/helpers/test_config.py. `buffer` is this core's own buffer
+    // (the TRISC buffer is first in the struct, so DM cores resolve to the second one).
+    return &reinterpret_cast<volatile tt_l1_ptr DevicePrintMemoryLayout*>(LLK_DEVICE_PRINT_BUFFER_BASE)->buffer;
 #else
     return GET_MAILBOX_ADDRESS_DEV(dprint_buf.buffer);
 #endif

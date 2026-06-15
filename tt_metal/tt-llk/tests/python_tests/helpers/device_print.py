@@ -6,9 +6,12 @@
 Protocol (must match tt_metal/hw/inc/api/debug/device_print.h
 and tt_metal/hw/inc/hostdev/device_print_common.h):
 
-    DEVICE_PRINT_BUFFER_BASE = TestConfig.DEVICE_PRINT_BUFFER_BASE (layout:
-    - struct Aux { uint32 wpos; uint32 rpos; uint8 risc_state[5]; uint32 lock; }
-    - uint8 data[DEVICE_PRINT_BUFFER_SIZE - sizeof(struct Aux)]
+    One or more buffers starting at TestConfig.DEVICE_PRINT_BUFFER_BASE (a single
+    buffer on WH/BH, a TRISC buffer followed by a DM buffer on Quasar; see
+    TestConfig.device_print_buffers()). Each buffer:
+    - struct Aux { uint32 wpos; uint32 rpos; uint8 risc_state[N]; uint32 lock; }
+      where N is that buffer's processor_count
+    - uint8 data[buffer_size - sizeof(struct Aux)]
 
     Each record:
     - [4-byte DevicePrintHeader]
@@ -700,27 +703,37 @@ def _render_tile_slice(args_blob: bytes, offset: int) -> str:
     return body + trailer
 
 
+@dataclass(slots=True)
+class _BufferRegion:
+    """One on-device print buffer: its base, Aux header size, and data ring size."""
+
+    base: int
+    aux_size: int
+    data_size: int
+
+
 class DevicePrintParser:
-    """Reads the on-device DEVICE_PRINT ring buffer and renders records as text.
+    """Reads the on-device DEVICE_PRINT ring buffer(s) and renders records as text.
 
     Construct with a {risc_id: elf_path} mapping (risc_id matches the value written
     into DevicePrintHeader.risc_id by the kernel, and PROCESSOR_INDEX passed by the
-    build to dprint.h). Call poll(location) during the run and final_drain(location)
-    after to pull and decode all pending records.
+    build to dprint.h) and the list of buffer regions to drain (one on WH/BH, two on
+    Quasar — TRISC then DM; see TestConfig.device_print_buffers()). Call poll(location)
+    during the run and final_drain(location) after to pull and decode all pending records.
     """
 
     def __init__(
         self,
         elf_paths: dict[int, str | Path],
-        buffer_base: int,
-        total_buffer_size: int,
-        processor_count: int,
+        buffers: list[tuple[int, int, int]],
         dest_make_float: bool = True,
     ):
-        self.buffer_base = buffer_base
-        self.total_buffer_size = total_buffer_size
-        self.aux_size = aux_size_for(processor_count)
-        self.data_size = total_buffer_size - self.aux_size
+        # buffers: list of (base_address, total_size, processor_count). processor_count
+        # sizes the Aux header, so it must match the device-side DevicePrintBuffer.
+        self._regions = [
+            _BufferRegion(base, aux_size_for(count), total_size - aux_size_for(count))
+            for base, total_size, count in buffers
+        ]
         self.elfs: dict[int, ElfStrings] = {}
         for risc_id, p in elf_paths.items():
             self.elfs[risc_id] = ElfStrings(str(p))
@@ -788,15 +801,22 @@ class DevicePrintParser:
     # so we bound the poll loop; 64 is reasonable.
     _MAX_STALL_RESETS_PER_POLL: int = 64
 
-    def _read_wpos_rpos(self, location: str) -> tuple[int, int]:
-        """Read the Aux struct and decode the (wpos, rpos) ring pointers."""
-        aux_raw = read_from_device(location, self.buffer_base, num_bytes=self.aux_size)
+    def _read_wpos_rpos(self, location: str, region: _BufferRegion) -> tuple[int, int]:
+        """Read a region's Aux struct and decode its (wpos, rpos) ring pointers."""
+        aux_raw = read_from_device(location, region.base, num_bytes=region.aux_size)
         wpos, rpos = struct.unpack_from("<II", aux_raw, 0)
         return wpos, rpos
 
     def poll(self, location: str = "0,0") -> list[str]:
-        """Incremental drain: read new data since last poll, advance device rpos.
-        Return immediately if there is no new data.
+        """Incremental drain across every buffer region; return immediately per region
+        with no new data. On Quasar this drains both the TRISC and DM buffers."""
+        out: list[str] = []
+        for region in self._regions:
+            out.extend(self._drain_region(location, region))
+        return out
+
+    def _drain_region(self, location: str, region: _BufferRegion) -> list[str]:
+        """Read new data since last poll for one region, advancing its device rpos.
         See dprint_server.cpp:read_core_data.
 
         Kernel is the sole writer of wpos, host is the sole writer of rpos.
@@ -805,7 +825,7 @@ class DevicePrintParser:
         """
         out: list[str] = []
 
-        wpos, rpos = self._read_wpos_rpos(location)
+        wpos, rpos = self._read_wpos_rpos(location, region)
 
         # Nothing to do: device has no new data.
         if wpos == rpos:
@@ -817,12 +837,12 @@ class DevicePrintParser:
 
             if rpos > wpos:
                 # Kernel wrapped wpos back to 0; drain the tail then fall through to head.
-                tail_size = self.data_size - rpos
+                tail_size = region.data_size - rpos
                 if tail_size > 0:
                     tail = bytes(
                         read_from_device(
                             location,
-                            self.buffer_base + self.aux_size + rpos,
+                            region.base + region.aux_size + rpos,
                             num_bytes=tail_size,
                         )
                     )
@@ -833,14 +853,14 @@ class DevicePrintParser:
                 chunk = bytes(
                     read_from_device(
                         location,
-                        self.buffer_base + self.aux_size + rpos,
+                        region.base + region.aux_size + rpos,
                         num_bytes=wpos - rpos,
                     )
                 )
                 out.extend(self._walk_records(chunk))
                 rpos = wpos
 
-            write_words_to_device(location, self.buffer_base + 4, [rpos])
+            write_words_to_device(location, region.base + 4, [rpos])
 
             if not stall:
                 return out
@@ -848,10 +868,10 @@ class DevicePrintParser:
             # Kernel was stalled when we entered this iteration. Re-read
             # and loop: either it has cleared the stall and produced more
             # data, or it hasn't yet observed our rpos write and we retry.
-            wpos, rpos = self._read_wpos_rpos(location)
+            wpos, rpos = self._read_wpos_rpos(location, region)
 
         raise RuntimeError(
-            f"DevicePrintParser.poll(): stall flag still set after "
+            f"DevicePrintParser._drain_region(): stall flag still set after "
             f"{self._MAX_STALL_RESETS_PER_POLL} iterations, kernel likely hung."
         )
 
@@ -957,9 +977,7 @@ def make_device_print_parser(configuration) -> DevicePrintParser:
     }
     return DevicePrintParser(
         elf_paths,
-        TestConfig.DEVICE_PRINT_BUFFER_BASE,
-        TestConfig.DEVICE_PRINT_BUFFER_SIZE,
-        TestConfig.PROCESSOR_COUNT,
+        TestConfig.device_print_buffers(),
         # Blackhole reads DEST via the 0xFFBD8000 aperture (standard-IEEE floats);
         # every other arch reads it directly (floats in _make_float order).
         dest_make_float=TestConfig.CHIP_ARCH != ChipArchitecture.BLACKHOLE,

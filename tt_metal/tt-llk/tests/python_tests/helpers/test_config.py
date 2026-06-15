@@ -238,7 +238,12 @@ class TestConfig:
     # device print buffer doesn't overlap RUNTIME_ARGS.
     DEVICE_PRINT_RUNTIME_ARGS_START: ClassVar[int] = 0x20000
     PROCESSOR_COUNT: ClassVar[int] = 0
+    # Per-buffer sizes. The layout mirrors DevicePrintMemoryLayout / the dprint
+    # server: WH/BH have one buffer (DEVICE_PRINT_BUFFER_SIZE), Quasar splits into a
+    # TRISC/compute buffer (DEVICE_PRINT_BUFFER_SIZE) followed by a DM buffer
+    # (DEVICE_PRINT_BUFFER_SIZE2). Both fit the 0x15000..0x20000 L1 gap (0xB000).
     DEVICE_PRINT_BUFFER_SIZE: ClassVar[int] = 0x4000
+    DEVICE_PRINT_BUFFER_SIZE2: ClassVar[int] = 0x2000
     DEVICE_PRINT_ENABLED: ClassVar[bool] = False
 
     # Single source of truth that maps component, risc_id and display name.
@@ -246,12 +251,48 @@ class TestConfig:
     # _risc_names_tensix and make_device_print_parser in device_print.py.
     # The kernel needs it to tell the host who it is when it prints, and
     # the host needs it to map it into a string and find the ELF on disk.
+    # risc_id must land in the buffer this core writes to (see device_print_buffers):
+    # on WH/BH the TENSIX compute threads are MATH0/1/2 = 2/3/4 (offset 0); Quasar
+    # overrides this in setup_arch() to engine E0's threads 8..11, which fall in the
+    # TRISC buffer (processor_offset 8). See QUASAR_RISC_INFO below.
     RISC_INFO: ClassVar[dict[str, tuple[int, str]]] = {
         "unpack": (2, "UNPACK"),
         "math": (3, "MATH"),
         "pack": (4, "PACK"),
-        "sfpu": (5, "SFPU"),  # Quasar only
     }
+    # Quasar compute threads are E0_MATH0..3 (TensixProcessorTypes 8..11).
+    QUASAR_RISC_INFO: ClassVar[dict[str, tuple[int, str]]] = {
+        "unpack": (8, "UNPACK"),
+        "math": (9, "MATH"),
+        "pack": (10, "PACK"),
+        "sfpu": (11, "SFPU"),
+    }
+
+    @staticmethod
+    def device_print_buffers() -> list[tuple[int, int, int]]:
+        """Per-buffer (base_address, size, processor_count) the host parser reads.
+
+        Mirrors DevicePrintMemoryLayout (see dprint_buffer.h) and the dprint server's
+        get_core_buffers(): WH/BH have a single buffer; Quasar has a TRISC/compute
+        buffer (16 processors) immediately followed by a DM buffer (8 processors).
+        processor_count drives the Aux header size, so it must match the device-side
+        DevicePrintBuffer template arguments.
+        """
+        base = TestConfig.DEVICE_PRINT_BUFFER_BASE
+        if TestConfig.ARCH == ChipArchitecture.QUASAR:
+            return [
+                (
+                    base,
+                    TestConfig.DEVICE_PRINT_BUFFER_SIZE,
+                    16,
+                ),  # TRISC, processor_offset 8
+                (
+                    base + TestConfig.DEVICE_PRINT_BUFFER_SIZE,
+                    TestConfig.DEVICE_PRINT_BUFFER_SIZE2,
+                    8,
+                ),  # DM, processor_offset 0
+            ]
+        return [(base, TestConfig.DEVICE_PRINT_BUFFER_SIZE, TestConfig.PROCESSOR_COUNT)]
 
     @staticmethod
     def setup_arch():
@@ -281,6 +322,7 @@ class TestConfig:
                 TestConfig.ARCH = ChipArchitecture.QUASAR
                 TestConfig.DATA_FORMAT_ENUM = QUASAR_DATA_FORMAT_ENUM_VALUES
                 TestConfig.KERNEL_COMPONENTS = ["unpack", "math", "pack", "sfpu"]
+                TestConfig.RISC_INFO = TestConfig.QUASAR_RISC_INFO
                 TestConfig.PROCESSOR_COUNT = 24
                 TestConfig.TRISC_START_ADDRS = [
                     0x16DFF0,
@@ -1187,6 +1229,7 @@ class TestConfig:
                         f"-DLLK_DEVICE_PRINT_BUFFER_BASE={kernel_buffer_base:#x} "
                         f"-DLLK_RUNTIME_ARGS_START={TestConfig.DEVICE_PRINT_RUNTIME_ARGS_START:#x} "
                         f"-DDEVICE_PRINT_BUFFER_SIZE={TestConfig.DEVICE_PRINT_BUFFER_SIZE} "
+                        f"-DDEVICE_PRINT_BUFFER_SIZE2={TestConfig.DEVICE_PRINT_BUFFER_SIZE2} "
                         f"-DPROCESSOR_INDEX={risc_id} "
                     )
                 compile_command = (
