@@ -61,16 +61,17 @@ PCCs are ~0.999. Passes the >0.98 full-depth gate.
 | Prefill throughput @ ISL 1024 / 4096 | 1564 / 1541 tok/s |
 | Largest ISL measured (single-shot prefill) | 4096 (no L1 clash) |
 | Largest ISL with **chunked prefill** | 16384 (verified; paged k/v + chunked SDPA, single-shot caps ~4K) |
-| Decode MoE: **sparse** vs dense (2-layer, B=32) | sparse 308 vs dense 276 tok/s agg (**+11.5%**); B=8 sparse 182 vs dense 192 (dense wins at low batch) |
+| Decode MoE **sparse** vs dense — **full-depth 36L, B=32** (traced) | sparse **60** vs dense **43** tok/s agg → **+39.2%** |
+| Decode MoE sparse vs dense — 2-layer (traced) | +13.9% @B=8 (404 vs 355), +16.9% @B=32 (541 vs 462 tok/s agg) |
 
 Decode cost is **flat across ISL** (the decode step is a captured trace independent of context).
 
 **MoE sparse dispatch** (`forward_decode(use_sparse=True)`): routes each token to only its top-4 experts
 (`mesh_partition` → all-to-all dispatch → local experts → combine → `all_gather`) vs computing all 16
-local experts dense. Matches dense logits (PCC 0.9958), is **trace-compatible** (capture/replay PCC 1.0), and gives a
-throughput win once MoE-compute-bound (**+11.5% at B=32**); at low batch the all-to-all overhead makes
-dense faster, so dense is the default and sparse is opt-in for high-batch serving (full-depth would
-amortize non-MoE cost further).
+local experts dense. Matches dense logits (PCC 0.9958) and is **trace-compatible** (capture/replay PCC
+1.0). Traced, it is faster than dense at every batch tested, and the win **grows with depth** as the
+per-layer MoE compute dominates: **+16.9% at 2 layers → +39.2% at the full 36 layers (B=32)**. Dense
+remains the default; sparse is opt-in for batched serving.
 
 **Chunked prefill** (`forward_prefill_chunked`, paged k/v + `chunked_scaled_dot_product_attention`)
 processes the prompt in chunk-token windows so L1 holds only one chunk's attention — lifting the
