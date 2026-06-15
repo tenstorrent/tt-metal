@@ -34,8 +34,8 @@ from helpers.test_variant_parameters import (
 
 _OPS_WITHOUT_DEST_ACC = {
     MathOperation.Abs,
-    MathOperation.Acosh,
-    MathOperation.Asinh,
+    # Acosh/Asinh now select their log1p polynomial precision from the dest-accum
+    # (is_fp32_dest_acc_en) flag, so both modes are exercised.
     MathOperation.Celu,
     MathOperation.Cos,
     MathOperation.Elu,

@@ -128,9 +128,12 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Asinh: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     ),
-    # atanh: domain |x| < 1; stay away from ±1 to avoid ±inf
+    # atanh: domain |x| < 1. The log1p reformulation is stable across the whole
+    # interior including the small-x region (catastrophic cancellation in the old
+    # form) and close to ±1, so sweep nearer the boundary; stay just inside ±1 to
+    # avoid the exact ±inf endpoints (covered separately by special-case tests).
     MathOperation.Atanh: OperandSpecs(
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-0.95, high=0.95)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-0.999, high=0.999)
     ),
     # celu: exercises both the exponential branch (x < 0) and linear (x >= 0)
     MathOperation.Celu: OperandSpecs(

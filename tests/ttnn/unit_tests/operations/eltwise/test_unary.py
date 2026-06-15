@@ -1101,6 +1101,58 @@ def test_unary_atanh_ttnn(input_shapes, torch_dtype, ttnn_dtype, low, high, devi
     assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
 
 
+def _run_inverse_hyperbolic_special_cases(device, ttnn_function, torch_function, values):
+    """Assert the device kernel matches the torch golden bit-pattern-wise on hand-picked
+    special-case inputs (boundary singularities, NaN/inf propagation, sign handling)."""
+    in_data = torch.tensor(values, dtype=torch.float32).reshape(1, 1, 1, -1)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn_function(input_tensor))
+    golden_tensor = torch_function(in_data)
+
+    for idx in range(in_data.numel()):
+        x = in_data.flatten()[idx].item()
+        got = output_tensor.flatten()[idx].item()
+        want = golden_tensor.flatten()[idx].item()
+        if torch.isnan(torch.tensor(want)):
+            assert torch.isnan(torch.tensor(got)), f"{ttnn_function.__name__}({x}): expected NaN, got {got}"
+        elif torch.isinf(torch.tensor(want)):
+            assert got == want, f"{ttnn_function.__name__}({x}): expected {want}, got {got}"
+        else:
+            assert torch.isclose(
+                torch.tensor(got), torch.tensor(want), atol=1e-5, rtol=1e-4
+            ), f"{ttnn_function.__name__}({x}): expected {want}, got {got}"
+
+
+def test_unary_atanh_special_cases_ttnn(device):
+    # x = 0 -> +0, x = +/-1 -> +/-inf, |x| > 1 -> NaN, NaN -> NaN, plus sign handling.
+    _run_inverse_hyperbolic_special_cases(
+        device,
+        ttnn.atanh,
+        torch.atanh,
+        [0.0, 1.0, -1.0, 1.5, -2.0, float("nan"), 0.5, -0.5, 1e-4, -1e-4],
+    )
+
+
+def test_unary_asinh_special_cases_ttnn(device):
+    # x = 0 -> +0, x = +/-inf -> +/-inf, NaN -> NaN, small-x and large-x regions, sign handling.
+    _run_inverse_hyperbolic_special_cases(
+        device,
+        ttnn.asinh,
+        torch.asinh,
+        [0.0, float("inf"), float("-inf"), float("nan"), 1e-4, -1e-4, 100.0, -100.0, 0.5, -0.5],
+    )
+
+
+def test_unary_acosh_special_cases_ttnn(device):
+    # x < 1 -> NaN, x = 1 -> +0, x = +inf -> +inf, NaN -> NaN, near-1 and large-x regions.
+    _run_inverse_hyperbolic_special_cases(
+        device,
+        ttnn.acosh,
+        torch.acosh,
+        [0.5, 1.0, float("inf"), float("nan"), 1.0001, 1.5, 100.0, 1e6],
+    )
+
+
 @pytest.mark.parametrize(
     "input_shapes",
     (

@@ -256,8 +256,17 @@ def test_acosh(device, h, w):
     run_unary_test(device, h, w, ttnn.acosh, ulp=1, allow_nonfinite=True)
 
 
-@pytest.mark.skip("The current version doesn’t work with float32, but this will be fixed in issue #231689.")
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_asinh(device, h, w):
+    # Default [0, 1) input includes the small-x region where the log1p form fixes
+    # the catastrophic cancellation of the old log(|x| + sqrt(x^2 + 1)) chain.
+    run_unary_test(device, h, w, ttnn.asinh, ulp=2)
+
+
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_atanh(device, h, w):
+    # The log1p reformulation makes the fp32 path stable on (-1, 1); the default
+    # [0, 1) input exercises the small-x stable region.
     run_unary_test(device, h, w, ttnn.atanh, ulp=2)
