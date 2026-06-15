@@ -5,69 +5,100 @@
 """
 End-to-end SAM3 image inference pipeline on ttnn.
 
-This module wires together all SAM3 components for image-level inference:
-  Image → ViT Backbone → FPN Neck → (Text Encoder) → Transformer Encoder → Decoder → Segmentation
+Injects ttnn-accelerated ViT backbone into the SAM3 model and runs the full
+forward pass (ViT → FPN neck → text encoder → geometry encoder → transformer
+encoder/decoder → segmentation head) end-to-end.
 
-For the initial implementation, many components run on CPU (PyTorch fallback).
-The ViT backbone uses ttnn for linear projections. Other components will be
-progressively moved to ttnn as support matures.
+Components on device:
+  - ViT backbone (32 blocks): ttnn linear, SDPA, layer_norm, RoPE
+Components on CPU (to be progressively ported):
+  - FPN neck convolutions
+  - Text encoder (CLIP, runs once per prompt)
+  - Geometry encoder
+  - Transformer encoder/decoder
+  - Segmentation head
 """
 
 import os
-import sys
-from typing import Dict, List, Optional
+import unittest.mock as mock
 
 import torch
-import ttnn
 
-# Ensure sam3 is importable
-_venv_path = os.environ.get("SAM3_VENV_PATH", os.path.join(os.path.expanduser("~"), ".tenstorrent-venv/lib/python3.12/site-packages"))
-if _venv_path not in sys.path:
-    sys.path.insert(0, _venv_path)
+BPE_PATH = os.environ.get(
+    "SAM3_BPE_PATH",
+    os.path.join(
+        os.environ.get("TT_METAL_HOME", os.path.dirname(os.path.abspath(__file__)).split("/models/")[0]),
+        "python_env/lib/python3.10/site-packages/open_clip/bpe_simple_vocab_16e6.txt.gz",
+    ),
+)
 
 
-def build_sam3_reference_model():
-    """Build the SAM3 PyTorch reference model on CPU.
-
-    Returns:
-        SAM3 model on CPU in eval mode.
-    """
-    import unittest.mock as mock
-
-    # Patch CUDA tensor allocations to CPU
+def _patch_cuda_to_cpu():
+    """Context-manager-style patches redirecting CUDA tensors to CPU."""
     orig = {
         n: getattr(torch, n)
         for n in [
-            "zeros", "ones", "arange", "empty", "full",
-            "randn", "rand", "tensor", "linspace", "logspace", "eye",
+            "zeros",
+            "ones",
+            "arange",
+            "empty",
+            "full",
+            "randn",
+            "rand",
+            "tensor",
+            "linspace",
+            "logspace",
+            "eye",
         ]
     }
 
     def _redirect(fn):
         def wrapper(*args, **kwargs):
-            if "device" in kwargs:
-                dev = kwargs["device"]
-                if dev is not None and "cuda" in str(dev):
-                    kwargs["device"] = "cpu"
+            if "device" in kwargs and kwargs["device"] is not None and "cuda" in str(kwargs["device"]):
+                kwargs["device"] = "cpu"
             return fn(*args, **kwargs)
+
         return wrapper
 
     patches = [mock.patch("torch.cuda.is_available", return_value=False)]
     for name, fn in orig.items():
         patches.append(mock.patch(f"torch.{name}", _redirect(fn)))
+    return patches
 
+
+def _patch_pin_memory():
+    """Make pin_memory a no-op when CUDA is unavailable."""
+    _orig = torch.Tensor.pin_memory
+
+    def _safe(self, device=None):
+        try:
+            return _orig(self, device=device)
+        except RuntimeError:
+            return self
+
+    torch.Tensor.pin_memory = _safe
+
+
+def build_sam3_model(use_pretrained=True):
+    """Build SAM3 model on CPU with pretrained weights.
+
+    Args:
+        use_pretrained: If True, download pretrained weights from HuggingFace.
+
+    Returns:
+        Sam3Image model on CPU in eval mode.
+    """
+    patches = _patch_cuda_to_cpu()
     for p in patches:
         p.start()
-
     try:
         from sam3.model_builder import build_sam3_image_model
 
-        bpe_path = os.environ.get("SAM3_BPE_PATH", os.path.join(os.environ.get("TT_METAL_HOME", os.path.expanduser("~/tt-metal")), "python_env/lib/python3.12/site-packages/open_clip/bpe_simple_vocab_16e6.txt.gz"))
         model = build_sam3_image_model(
-            bpe_path=bpe_path,
+            bpe_path=BPE_PATH,
             device="cpu",
             eval_mode=True,
-            load_from_HF=False,
+            load_from_HF=use_pretrained,
             checkpoint_path=None,
             enable_segmentation=True,
             enable_inst_interactivity=False,
@@ -75,180 +106,156 @@ def build_sam3_reference_model():
     finally:
         for p in patches:
             p.stop()
-
     return model
 
 
-class TtSam3ImagePipeline:
-    """End-to-end SAM3 image inference pipeline.
+def make_batched_datapoint(pixel_values, text_prompts=None):
+    """Construct a BatchedDatapoint for SAM3 model.forward().
 
-    Combines ttnn-accelerated ViT backbone with CPU-based remaining components.
+    Args:
+        pixel_values: (B, 3, 1008, 1008) preprocessed image tensor.
+        text_prompts: list of text strings (default: ["object", "visual"]).
+
+    Returns:
+        BatchedDatapoint ready for model.forward().
+    """
+    from sam3.model.data_misc import BatchedDatapoint, FindStage
+
+    if text_prompts is None:
+        text_prompts = ["object", "visual"]
+
+    find_stage = FindStage(
+        img_ids=torch.tensor([0], dtype=torch.long),
+        text_ids=torch.tensor([0], dtype=torch.long),
+        input_boxes=torch.zeros(0, 1, 4),
+        input_boxes_mask=torch.zeros(1, 0, dtype=torch.bool),
+        input_boxes_label=torch.zeros(0, 1, dtype=torch.long),
+        input_points=torch.empty(0),
+        input_points_mask=torch.empty(0),
+        object_ids=[],
+    )
+
+    return BatchedDatapoint(
+        img_batch=pixel_values,
+        find_text_batch=text_prompts,
+        find_inputs=[find_stage],
+        find_targets=[None],
+        find_metadatas=[None],
+    )
+
+
+def extract_predictions(sam3_output):
+    """Extract pred_masks and pred_logits from SAM3Output.
+
+    Args:
+        sam3_output: SAM3Output from model.forward().
+
+    Returns:
+        dict with 'pred_masks' and 'pred_logits' tensors, or None if not found.
+    """
+    try:
+        for item in sam3_output:
+            if isinstance(item, dict) and "pred_masks" in item:
+                return item
+            if isinstance(item, list):
+                for sub in item:
+                    if isinstance(sub, dict) and "pred_masks" in sub:
+                        return sub
+    except TypeError:
+        pass
+    for attr in dir(sam3_output):
+        if attr.startswith("_"):
+            continue
+        val = getattr(sam3_output, attr, None)
+        if not isinstance(val, list):
+            continue
+        for v in val:
+            if isinstance(v, list):
+                for sv in v:
+                    if isinstance(sv, dict) and "pred_masks" in sv:
+                        return sv
+            if isinstance(v, dict) and "pred_masks" in v:
+                return v
+    return None
+
+
+class TtSam3ImagePipeline:
+    """End-to-end SAM3 image inference pipeline with ttnn-accelerated ViT backbone.
+
+    Patches the ViT backbone inside the SAM3 model with a ttnn implementation,
+    then delegates to the original model.forward() for the complete pipeline.
     """
 
     def __init__(self, sam3_model, device):
-        """Initialize the pipeline.
-
-        Args:
-            sam3_model: PyTorch SAM3 model (from build_sam3_reference_model or checkpoint).
-            device: ttnn device handle.
-        """
-        from models.demos.vision.segmentation.sam3.common.tt.ttnn_sam3_vitdet import (
-            preprocess_vit_backbone_weights,
-            move_backbone_params_to_device,
-        )
         from sam3.model.vitdet import ViT
+
+        from models.demos.vision.segmentation.sam3.common.tt.ttnn_sam3_vitdet import (
+            move_backbone_params_to_device,
+            preprocess_vit_backbone_weights,
+            tt_vit_backbone,
+        )
 
         self.device = device
         self.sam3_model = sam3_model
 
-        # Extract and preprocess ViT backbone weights for ttnn
         vit_backbone = None
         for _, module in sam3_model.named_modules():
             if isinstance(module, ViT):
                 vit_backbone = module
                 break
+        assert vit_backbone is not None, "Could not find ViT backbone in SAM3 model"
 
-        if vit_backbone is None:
-            raise RuntimeError("Could not find ViT backbone in SAM3 model")
-
-        self.vit_backbone_ref = vit_backbone
+        self.vit_backbone = vit_backbone
         self.backbone_params = preprocess_vit_backbone_weights(vit_backbone)
         self.backbone_params = move_backbone_params_to_device(self.backbone_params, device)
+        self._tt_vit_backbone = tt_vit_backbone
 
-        # Keep other components as PyTorch modules (CPU)
-        self.neck = sam3_model.backbone.visual if hasattr(sam3_model.backbone, "visual") else None
-        self.text_encoder = sam3_model.backbone.text if hasattr(sam3_model.backbone, "text") else None
-        self.transformer = sam3_model.transformer
-        self.segmentation_head = sam3_model.segmentation_head
-        self.geometry_encoder = sam3_model.geometry_encoder
-        self.dot_prod_scoring = getattr(sam3_model, "dot_prod_scoring", None)
+        self._orig_vit_forward = vit_backbone.forward
+        vit_backbone.forward = self._patched_vit_forward
 
-    def run_vit_backbone(self, pixel_values: torch.Tensor) -> List[torch.Tensor]:
-        """Run the ViT backbone on ttnn device.
+    def _patched_vit_forward(self, x):
+        return self._tt_vit_backbone(x, self.backbone_params, self.device)
 
-        Args:
-            pixel_values: (B, 3, 1008, 1008) preprocessed image tensor.
-
-        Returns:
-            List of feature tensors [(B, 1024, 72, 72)] in NCHW format.
-        """
-        from models.demos.vision.segmentation.sam3.common.tt.ttnn_sam3_vitdet import tt_vit_backbone
-
-        return tt_vit_backbone(pixel_values, self.backbone_params, self.device)
-
-    def run_backbone_and_neck(self, pixel_values: torch.Tensor) -> Dict:
-        """Run ViT backbone + FPN neck.
-
-        Uses ttnn for ViT backbone, CPU for neck convolutions.
-
-        Args:
-            pixel_values: (B, 3, 1008, 1008) preprocessed image tensor.
-
-        Returns:
-            Dict with 'backbone_fpn' (list of feature maps) and 'vision_pos_enc'.
-        """
-        # Run ViT backbone on ttnn
-        vit_features = self.run_vit_backbone(pixel_values)
-        vit_feat = vit_features[-1]  # (B, 1024, 72, 72)
-
-        # Run FPN neck on CPU
-        from models.demos.vision.segmentation.sam3.common.tt.ttnn_sam3_neck import (
-            tt_fpn_neck,
-            preprocess_neck_weights,
-        )
-        from sam3.model.necks import Sam3DualViTDetNeck
-
-        neck_module = None
-        for _, module in self.sam3_model.named_modules():
-            if isinstance(module, Sam3DualViTDetNeck):
-                neck_module = module
-                break
-
-        if neck_module is None:
-            raise RuntimeError("Could not find neck in SAM3 model")
-
-        neck_params = preprocess_neck_weights(neck_module)
-        return tt_fpn_neck(vit_feat, neck_params, self.device)
-
-    def run_text_encoding(self, text_prompts: List[str]) -> Optional[torch.Tensor]:
-        """Run text encoder on CPU.
-
-        Args:
-            text_prompts: List of text strings.
-
-        Returns:
-            Text features tensor or None if no text encoder.
-        """
-        if self.text_encoder is None:
-            return None
-
-        with torch.no_grad():
-            text_features = self.text_encoder(text_prompts)
-        return text_features
+    def restore(self):
+        """Restore original ViT forward (for cleanup / PCC comparison)."""
+        self.vit_backbone.forward = self._orig_vit_forward
 
     @torch.no_grad()
-    def forward(
-        self,
-        pixel_values: torch.Tensor,
-        text_prompts: Optional[List[str]] = None,
-    ) -> Dict:
-        """Run full SAM3 image inference.
+    def forward(self, input_batch):
+        """Run the full SAM3 forward pass with ttnn ViT backbone.
+
+        Args:
+            input_batch: BatchedDatapoint from make_batched_datapoint().
+
+        Returns:
+            SAM3Output with pred_masks, pred_logits, etc.
+        """
+        return self.sam3_model(input_batch)
+
+    @torch.no_grad()
+    def forward_image(self, pixel_values, text_prompts=None):
+        """Convenience: preprocess + forward + extract predictions.
 
         Args:
             pixel_values: (B, 3, 1008, 1008) preprocessed image tensor.
-            text_prompts: Optional list of text prompts for open-vocabulary detection.
+            text_prompts: list of text strings.
 
         Returns:
-            Dict with:
-                'vit_features': ViT backbone output
-                'fpn_features': FPN multi-scale features
-                (additional outputs added as more components are integrated)
+            dict with 'pred_masks' (B, Q, H, W) and 'pred_logits' (B, Q, 1).
         """
-        results = {}
-
-        # Step 1: ViT backbone (ttnn)
-        vit_features = self.run_vit_backbone(pixel_values)
-        results["vit_features"] = vit_features
-
-        # Step 2: FPN neck (CPU)
-        backbone_output = self.run_backbone_and_neck(pixel_values)
-        results["fpn_features"] = backbone_output
-
-        # Step 3: Text encoding (CPU, optional)
-        if text_prompts is not None:
-            text_features = self.run_text_encoding(text_prompts)
-            results["text_features"] = text_features
-
-        # Steps 4-7: Transformer + Segmentation (CPU fallback)
-        # TODO: Integrate transformer encoder/decoder and segmentation head
-        # For now, return intermediate features for downstream processing
-
-        return results
+        input_batch = make_batched_datapoint(pixel_values, text_prompts)
+        output = self.forward(input_batch)
+        return extract_predictions(output)
 
 
 def preprocess_image(image: torch.Tensor, target_size: int = 1008) -> torch.Tensor:
-    """Preprocess image for SAM3 inference.
-
-    Args:
-        image: (B, C, H, W) or (C, H, W) tensor in [0, 255] or [0, 1] range.
-        target_size: Target image size (SAM3 uses 1008).
-
-    Returns:
-        Preprocessed tensor (B, 3, target_size, target_size) normalized to [-1, 1].
-    """
+    """Preprocess image tensor for SAM3: resize + normalize to [-1, 1]."""
     import torch.nn.functional as F
 
     if image.ndim == 3:
         image = image.unsqueeze(0)
-
     if image.max() > 1.0:
         image = image.float() / 255.0
-
     if image.shape[-2:] != (target_size, target_size):
-        image = F.interpolate(
-            image, size=(target_size, target_size), mode="bilinear", align_corners=False
-        )
-
-    # SAM3 normalization: mean=0.5, std=0.5
-    image = (image - 0.5) / 0.5
-    return image
+        image = F.interpolate(image, size=(target_size, target_size), mode="bilinear", align_corners=False)
+    return (image - 0.5) / 0.5
