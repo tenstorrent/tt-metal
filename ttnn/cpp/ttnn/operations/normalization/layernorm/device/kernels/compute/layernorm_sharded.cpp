@@ -120,6 +120,13 @@ void kernel_main() {
 
     binary_op_init_common(cb_in0, cb_in0, cb_x);
 
+#ifdef DO_COL_MASK
+    // The column mask (cb_col_mask_packed) is generated on-device by the writer (block_w tiles, one per
+    // width-tile position). Wait once for it here; the masking sites below read it by tile index and
+    // never pop it (it is reused across all rows and at the E[x], variance, and squares sites).
+    cb_wait_front(cb_col_mask_packed, block_w);
+#endif
+
     // set block_h to volatile to disable automatically unroll of the loops, avoid code overflow
     const uint32_t block_h = (block_w == 1) ? block_h_volatile : block_h_const;
     const uint32_t subblock_w = (block_w <= 2) ? subblock_w_volatile : subblock_w_const;

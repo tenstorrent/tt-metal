@@ -180,10 +180,6 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         recip_tensor = tensor_args.recip_tensor;
         reciprocal_CB_size_bytes = recip_tensor->buffer()->aligned_size_per_bank();
     }
-    // Column mask for the non-Welford non-tile-aligned path (built internally by the op), bound
-    // directly to a CB.
-    const std::optional<Tensor>& col_mask = tensor_args.col_mask;
-    uint32_t col_mask_CB_size_bytes = col_mask.has_value() ? col_mask->buffer()->aligned_size_per_bank() : 0;
 
     // Compute CB sizes using helper
     CBSizeParams cb_size_params{
@@ -354,15 +350,13 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         grid.num_blocks);
     // Legacy (non-Welford) path: zero the padding columns of a non-tile-aligned final width tile so
     // they do not enter the statistics (E[x] and variance for layernorm, the mean of squares for
-    // RMSNorm). The host op builds col_mask only for the stages that reduce the input over a
-    // non-tile-aligned width, so its presence here is the signal to mask; the guard above additionally
-    // restricts a width split across cores to num_blocks == 1 except for RMSNorm. CB 19 (the host-built
-    // full-width mask) drives the masking everywhere it is needed: the RMSNorm squares, the
-    // non-distributed LayerNorm variance, and the pre-all-gather LayerNorm input and its square. CB 7
-    // (writer two-tile mask) and CB 14 (E[x] scratch) additionally feed the non-distributed LayerNorm
-    // E[x] site only; the pre-all-gather LayerNorm masks its E[x] input with CB 19 instead, so the
-    // distributed stages need neither (CB 14 also aliases the fused-residual input there).
-    const bool do_col_mask = col_mask.has_value();
+    // RMSNorm), except the post-all-gather stage, which reduces gathered stats rather than the input.
+    // The guard above additionally restricts a width split across cores to num_blocks == 1 except for
+    // RMSNorm. The mask is CB 19 at every masking site, generated on-device in the writer
+    // (generate_mask_w<T>) keyed off each core's width position (so no host tensor is needed). CB 14
+    // (E[x] scratch) additionally feeds the non-distributed LayerNorm E[x] site so cb_in stays intact
+    // for the (x - E[x]) pass.
+    const bool do_col_mask = col_mask_needed && !use_welford && !is_post_all_gather;
     const bool do_legacy_layernorm_col_mask = do_col_mask && !rms_norm && !is_pre_all_gather && !is_post_all_gather;
 
     RuntimeArgsContext rt_ctx{
@@ -430,9 +424,13 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     kernel_config.welford_fp32_alias =
         use_welford && !rms_norm && in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en;
     if (do_col_mask) {
-        // The masking is entirely compute-side: it applies the host-built CB 19 mask. No writer
-        // define is needed (the writer no longer builds a mask).
+        // The writer generates the CB 19 mask on-device with generate_mask_w<T>; compute applies it at
+        // every masking site. Pass the logical width and compute data format (fp32 vs bf16) the writer
+        // needs to size and type the generated tiles.
         kernel_config.compute_defines.emplace_back("DO_COL_MASK", "1");
+        kernel_config.writer_defines.emplace_back("DO_COL_MASK", "1");
+        kernel_config.logical_K = logical_K;
+        kernel_config.mask_fp32 = (cb_data_format == tt::DataFormat::Float32);
     }
 
     add_kernel_descriptors(program_descriptor, core_ranges, workers, grid, std::move(kernel_config));
@@ -473,7 +471,6 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     cb_config.stats_cb_size = cb_sizes.stats_cb_size;
     cb_config.stats_reduced_cb_size = cb_sizes.stats_reduced_cb_size;
     cb_config.reciprocal_CB_size_bytes = reciprocal_CB_size_bytes;
-    cb_config.col_mask_CB_size_bytes = col_mask_CB_size_bytes;
     cb_config.in_data_format = in_data_format;
     cb_config.cb_data_format = cb_data_format;
     cb_config.out_data_format = out_data_format;
@@ -494,7 +491,6 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     cb_config.beta_buffer = beta.has_value() ? beta.value().buffer() : nullptr;
     cb_config.stats_buffer = stats.has_value() ? stats.value().buffer() : nullptr;
     cb_config.recip_buffer = recip_tensor.has_value() ? recip_tensor.value().buffer() : nullptr;
-    cb_config.col_mask_buffer = col_mask.has_value() ? col_mask.value().buffer() : nullptr;
     cb_config.output_buffer = output_buffer;
     cb_config.output_reshard_buffer = output_reshard_buffer;
     cb_config.has_b = b.has_value();
@@ -505,7 +501,9 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     cb_config.is_pre_all_gather = is_pre_all_gather;
     cb_config.is_post_all_gather = is_post_all_gather;
     cb_config.skip_write_back = skip_write_back;
+    // CB 19 is the writer-generated column mask; size it to block_wt tiles (one tile-row).
     cb_config.do_col_mask = do_col_mask;
+    cb_config.col_mask_gen_CB_size_bytes = block_wt * single_tile_size;
     cb_config.do_legacy_layernorm_col_mask = do_legacy_layernorm_col_mask;
     // Enable the welford-fp32 alias only when the SrcA-routed transpose_tile would
     // otherwise truncate Float32 input to TF32. Restricting to !rms_norm because

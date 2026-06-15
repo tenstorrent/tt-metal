@@ -465,59 +465,6 @@ Tensor LayerNormDeviceOperation::create_output_tensors(
         operation_attributes.program_config);
 }
 
-// The non-Welford sharded reduce normalizes a non-tile-aligned width by zeroing the padding columns
-// of the final width tile with a column mask: an all-ones logical tensor tilized with the input's
-// sharding has its tile padding filled with 0, which is exactly the mask (1.0 valid / 0.0 padding).
-// The mask data format matches the compute intermediates (fp32 when fp32 dest accumulation is enabled)
-// so it aligns in the variance multiply. The mask is needed wherever the non-Welford reduce computes
-// width statistics over the input on a non-tile-aligned width: the non-distributed sharded full norm
-// (layernorm or RMSNorm, with or without a fused residual add) and the pre-all-gather stats stage,
-// which reduces the input (RMSNorm reduces the squared input; LayerNorm reduces both the input for
-// E[x] and its square for E[x^2]). The post-all-gather stage normalizes from already-gathered stats,
-// so it never reduces the input and needs no mask.
-//
-// This builds a host tensor of the full input shape, so its sharded buffer holds block_ht x block_wt
-// tiles per core while the compute only reads the first tile-row (the mask is column-only, identical
-// across rows). An alternative that avoids both the host tensor and that per-row redundancy is to
-// generate the per-core mask on-device from the core's width position, as the moreh reduction kernels
-// do with the format-aware generate_mask_w<T> helper (ttnn/cpp/ttnn/kernel/dataflow/moreh_common.hpp);
-// the host-built mask is kept here for the simpler host/kernel path, the redundancy mattering only for
-// the rare non-tile-aligned-and-tall-shard case.
-static std::optional<Tensor> build_legacy_col_mask(
-    const Tensor& input,
-    const LayerNormProgramConfig& program_config,
-    const DeviceComputeKernelConfig& compute_kernel_config,
-    DistributedLayerNormStage distributed_norm_stage) {
-    const bool stage_supports_col_mask = distributed_norm_stage == DistributedLayerNormStage::NOT_DISTRIBUTED ||
-                                         distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER;
-    if (!input.is_sharded() || !stage_supports_col_mask) {
-        return std::nullopt;
-    }
-    bool use_welford = false;
-    std::visit(
-        [&](const auto& pc) {
-            using ProgramConfigType = std::decay_t<decltype(pc)>;
-            if constexpr (std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>) {
-                use_welford = pc.use_welford;
-            }
-        },
-        program_config);
-    if (use_welford) {
-        return std::nullopt;
-    }
-    const uint32_t tile_width = input.tensor_spec().tile().get_width();
-    const auto& logical_shape = input.logical_shape();
-    if (logical_shape[-1] % tile_width == 0) {
-        return std::nullopt;  // logical width is tile-aligned: the final width tile has no padding to mask
-    }
-    const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(input.device()->arch(), compute_kernel_config);
-    const DataType mask_dtype = fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16;
-    const TensorSpec mask_spec(logical_shape, TensorLayout(mask_dtype, Layout::TILE, input.memory_config()));
-    std::vector<float> ones(input.logical_volume(), 1.0f);
-    return Tensor::from_vector(ones, mask_spec, input.device());
-}
-
 Tensor layer_norm(
     const Tensor& input_tensor,
     float epsilon,
@@ -549,7 +496,6 @@ Tensor layer_norm(
         .bias = bias,
         .stats = stats,
         .recip_tensor = recip_tensor,
-        .col_mask = build_legacy_col_mask(input_tensor, program_config, compute_kernel_config, distributed_norm_stage),
     };
 
     return ttnn::device_operation::launch<LayerNormDeviceOperation>(operation_attributes, tensor_args);

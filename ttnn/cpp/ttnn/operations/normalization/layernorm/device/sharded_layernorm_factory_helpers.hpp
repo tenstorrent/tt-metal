@@ -311,6 +311,10 @@ struct KernelConfig {
     // Legacy (non-Welford) column masking for non-tile-aligned widths: zero the padding columns of
     // the final width tile so they do not enter E[x] or the variance.
     bool do_col_mask = false;
+    // Non-distributed stage generates the CB 19 mask on-device in the writer; these feed that
+    // generation: the logical (un-padded) width and whether the compute data format is fp32 (vs bf16).
+    uint32_t logical_K = 0;
+    bool mask_fp32 = false;
 };
 
 // Struct to hold CB configuration for building CB descriptors
@@ -334,7 +338,7 @@ struct CBConfig {
     uint32_t stats_cb_size = 0;
     uint32_t stats_reduced_cb_size = 0;
     uint32_t reciprocal_CB_size_bytes = 0;
-    uint32_t col_mask_CB_size_bytes = 0;
+    uint32_t col_mask_gen_CB_size_bytes = 0;  // writer-generated CB 19: block_wt tiles (one tile-row)
 
     // Data formats
     tt::DataFormat in_data_format = tt::DataFormat::Float16_b;
@@ -361,7 +365,6 @@ struct CBConfig {
     Buffer* beta_buffer = nullptr;
     Buffer* stats_buffer = nullptr;
     Buffer* recip_buffer = nullptr;
-    Buffer* col_mask_buffer = nullptr;        // legacy non-tile-aligned column mask
     Buffer* output_buffer = nullptr;          // CB 16 output buffer
     Buffer* output_reshard_buffer = nullptr;  // CB 17 resharded output buffer
 
@@ -374,10 +377,10 @@ struct CBConfig {
     bool is_pre_all_gather = false;
     bool is_post_all_gather = false;
     bool skip_write_back = false;
-    // Legacy column masking for non-tile-aligned widths (zero the final width tile's padding cols).
-    // Gates CB 19 (host-built mask) for both LayerNorm and RMSNorm.
+    // Column masking for non-tile-aligned widths (zero the final width tile's padding cols).
+    // Gates the writer-generated CB 19 mask (every masking stage).
     bool do_col_mask = false;
-    // Gates CB 7 (writer two-tile mask) and CB 14 (E[x] scratch) for LayerNorm only.
+    // Gates CB 14 (E[x] scratch) for the non-distributed LayerNorm only.
     bool do_legacy_layernorm_col_mask = false;
     // Controls the Welford-fp32 alias that allows UnpackToDestFp32 to be set on the
     // alias, while keeping the original CB descriptor with default value.
