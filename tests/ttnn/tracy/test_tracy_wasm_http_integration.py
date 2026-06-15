@@ -197,6 +197,20 @@ def test_index_html_ws_port_derived_from_http_port():
     ), "WebSocket port 8081 is hard-coded; derive it from location.port instead"
 
 
+def test_index_html_reload_returns_to_default_trace():
+    """On a new-capture reload, the page must drop ?trace= and show the default (newest) trace."""
+    if not INDEX_HTML_SRC.is_file():
+        pytest.skip(f"Tracy WASM index.html source not found: {INDEX_HTML_SRC}")
+    html = INDEX_HTML_SRC.read_text(encoding="utf-8")
+    assert "'reload'" in html, "expected a WebSocket 'reload' handler"
+    # The reload handler must navigate to the bare path (location.pathname) so a pinned
+    # ?trace= is cleared and embed.tracy loads; a plain location.reload() keeps the query.
+    assert "location.pathname" in html, (
+        "new-capture reload must return to location.pathname (drop ?trace=), "
+        "otherwise it re-loads the pinned trace instead of the newest capture"
+    )
+
+
 def _port_free(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         try:
