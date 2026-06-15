@@ -37,6 +37,22 @@ from models.experimental.pi0_5.tt.ttnn_common import (
 )
 
 
+def _mmdecode_denoise_enabled() -> bool:
+    """Whether the CLAUDE-optimized resident-weight matmul_decode denoise path is used.
+
+    DEFAULT ON. Set PI0_MMDECODE_DENOISE to 0/false/no/off to fall back to the native
+    denoise matmuls. Only takes effect at m_tiles==1 (M=32) and expert-only shapes.
+    """
+    import os
+
+    return os.environ.get("PI0_MMDECODE_DENOISE", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+
+
 # ============================================================================
 # RMSNorm (TTNN - Optimized)
 # ============================================================================
@@ -533,6 +549,29 @@ class GemmaAttentionTTNN:
         self.wqkv = weights["self_attn.wqkv"]
         self.o_proj = weights["self_attn.o_proj.weight"]
 
+        # matmul_decode (DEFAULT ON; disable with PI0_MMDECODE_DENOISE=0): route the M=32 denoise expert attention
+        # matmuls (fused QKV, o_proj) through resident-weight ttnn.matmul_decode.
+        # One width-sharded device call per projection at M=32. Measured (P150,
+        # tracy KERNEL): qkv 9.11us tuned-native -> 3.46us mmd (0.38x, PCC 0.99982);
+        # o_proj 9.32us tuned-native -> 6.01us mmd (0.64x, PCC 0.99963). Only fires
+        # for the expert (width<=1024) at m_tiles==1; VLM/prefill stays native.
+        # Default OFF -> byte-identical. See deep-work/pi05_denoise_integration.md.
+        self._mmdecode_denoise = _mmdecode_denoise_enabled() and config.width <= 1024
+        self.wqkv_mmd = self.o_proj_mmd = None
+        if self._mmdecode_denoise:
+            from models.experimental.pi0_5.tt.mmdecode.matmul_decode_linear import (
+                MatmulDecodeLinear,
+            )
+
+            # QKV output is consumed by nlp_create_qkv_heads as bf8_b in the native
+            # path; keep the mmd out_dtype bf8_b to stay drop-in. o_proj output is bf16.
+            self.wqkv_mmd = MatmulDecodeLinear(
+                device, self.wqkv, weight_dtype=ttnn.bfloat8_b, out_dtype=ttnn.bfloat8_b, role="denoise_qkv"
+            )
+            self.o_proj_mmd = MatmulDecodeLinear(
+                device, self.o_proj, weight_dtype=ttnn.bfloat8_b, out_dtype=ttnn.bfloat16, role="denoise_o"
+            )
+
         self.num_heads = config.num_heads
         self.num_kv_heads = config.num_kv_heads
         self.head_dim = config.head_dim
@@ -620,7 +659,10 @@ class GemmaAttentionTTNN:
             m_tiles, k_tiles_in, n_tiles_qkv, self.grid_size[0], self.grid_size[1], in0_block_w=8
         )
 
-        if wqkv_pcfg is not None:
+        if self._mmdecode_denoise and m_tiles == 1:
+            # CLAUDE-optimized resident-weight matmul_decode (M=32 denoise fused QKV).
+            xqkv = self.wqkv_mmd(hidden_states)
+        elif wqkv_pcfg is not None:
             xqkv = ttnn.linear(
                 hidden_states,
                 self.wqkv,
@@ -790,7 +832,10 @@ class GemmaAttentionTTNN:
             if _os_oproj.environ.get("PI0_VLM_MLP_BF8_OUT", "").lower() in ("1", "true", "yes", "on")
             else ttnn.bfloat16
         )
-        if oproj_pcfg is not None:
+        if self._mmdecode_denoise and m_tiles == 1:
+            # CLAUDE-optimized resident-weight matmul_decode (M=32 denoise o_proj).
+            output = self.o_proj_mmd(attn_concat)
+        elif oproj_pcfg is not None:
             output = ttnn.linear(
                 attn_concat,
                 self.o_proj,
@@ -869,6 +914,36 @@ class GemmaMLPTTNN:
         self.up_proj = to_ttnn(weights["mlp.up_proj.weight"])
         self.down_proj = to_ttnn(weights["mlp.down_proj.weight"])
         self.hidden_size = config.width
+
+        # matmul_decode (DEFAULT ON; disable with PI0_MMDECODE_DENOISE=0): route the M=32 denoise expert MLP matmuls
+        # (gate/up/down) through the CLAUDE-optimized resident-weight ttnn.matmul_decode
+        # via MatmulDecodeLinear. At M=32 each projection is ONE width-sharded device
+        # call (no M-split). Measured on this P150 (N_ITERS=20, tracy KERNEL col-20):
+        #   gate/up 12.51us tuned-native -> 4.89us mmd (0.39x, PCC 0.99983)
+        #   down    14.40us tuned-native -> 11.30us mmd (0.78x, PCC 0.99917)
+        # (tuned-native = build_matmul_pcfg 1D-width; on this P150 host the explicit
+        # pcfg FATALs not_on_dispatch_core, so the runnable native is the slower auto-
+        # config -- mmd beats both.) Only fires for the expert (mlp_dim<=4096) at
+        # m_tiles==1; VLM/prefill (m_tiles>=8) stays on the existing 2D-mcast path.
+        # Default OFF -> byte-identical. See deep-work/pi05_denoise_integration.md.
+        self._mmdecode_denoise = _mmdecode_denoise_enabled() and config.mlp_dim <= 4096
+        self.gate_mmd = self.up_mmd = self.down_mmd = None
+        if self._mmdecode_denoise:
+            from models.experimental.pi0_5.tt.mmdecode.matmul_decode_linear import (
+                MatmulDecodeLinear,
+            )
+
+            # Weights are resident ttnn [K, N] bf8_b; MatmulDecodeLinear consumes a
+            # [K, N] torch/ttnn weight (it pulls resident weights via _to_torch_KN).
+            self.gate_mmd = MatmulDecodeLinear(
+                device, self.gate_proj, weight_dtype=ttnn.bfloat8_b, out_dtype=ttnn.bfloat16, role="denoise_mlp_gate"
+            )
+            self.up_mmd = MatmulDecodeLinear(
+                device, self.up_proj, weight_dtype=ttnn.bfloat8_b, out_dtype=ttnn.bfloat16, role="denoise_mlp_up"
+            )
+            self.down_mmd = MatmulDecodeLinear(
+                device, self.down_proj, weight_dtype=ttnn.bfloat8_b, out_dtype=ttnn.bfloat16, role="denoise_mlp_down"
+            )
         self.intermediate_size = config.mlp_dim
 
         # PI0_DRAM_SHARDED_MLP_DOWN=1 — DRAM width-sharded weight variant for
@@ -1188,6 +1263,15 @@ class GemmaMLPTTNN:
                     dtype=ttnn.bfloat8_b if _mlp_bf8_out else ttnn.bfloat16,
                 )
                 ttnn.deallocate(x_chunk_bf8)
+            elif self._mmdecode_denoise and m_tiles == 1:
+                # CLAUDE-optimized resident-weight matmul_decode (M=32 denoise). One
+                # width-sharded device call per projection. GELU is applied separately
+                # (the wrapper does not fuse activation).
+                gate_raw = self.gate_mmd(x_chunk)
+                gate_activated = ttnn.gelu(gate_raw, memory_config=ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(gate_raw)
+                up = self.up_mmd(x_chunk)
+                ttnn.deallocate(x_chunk)
             else:
                 if gate_pcfg is not None:
                     gate_activated = ttnn.linear(x_chunk, self.gate_proj, program_config=gate_pcfg, **common_kwargs)
@@ -1287,6 +1371,10 @@ class GemmaMLPTTNN:
                         [0, 0, 0, 0],
                         [batch_size, 1, padded_chunk_size, hidden],
                     )
+            elif self._mmdecode_denoise and m_tiles == 1:
+                # CLAUDE-optimized resident-weight matmul_decode (M=32 denoise down-proj).
+                output_chunk = self.down_mmd(hidden_out)
+                ttnn.deallocate(hidden_out)
             elif down_pcfg is not None:
                 output_chunk = ttnn.linear(hidden_out, self.down_proj, program_config=down_pcfg, **common_kwargs)
                 ttnn.deallocate(hidden_out)
@@ -1487,7 +1575,6 @@ from typing import Dict, List, Optional, Tuple
 import ttnn
 
 from models.experimental.pi0_5.common.configs import GemmaConfig
-
 
 _sharded_norm_cache: Dict[tuple, tuple] = {}
 
