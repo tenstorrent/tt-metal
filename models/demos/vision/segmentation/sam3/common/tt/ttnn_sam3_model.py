@@ -336,11 +336,36 @@ class TtSam3ImagePipeline:
         self._fast_pd_forward = _fast_pd_forward
         pixel_decoder.forward = _fast_pd_forward
 
+        mask_pred_module = sam3_model.segmentation_head.mask_predictor
+        self._mask_predictor = mask_pred_module
+        self._orig_mp_forward = mask_pred_module.forward
+
+        me = mask_pred_module.mask_embed
+        mp_w = [l.weight.to(torch.bfloat16) for l in me.layers]
+        mp_b = [l.bias.to(torch.bfloat16) if l.bias is not None else None for l in me.layers]
+        n_me_layers = me.num_layers
+
+        def _fast_mp_forward(obj_queries, pixel_embed):
+            x = obj_queries.to(torch.bfloat16)
+            for i in range(n_me_layers):
+                x = torch.nn.functional.linear(x, mp_w[i], mp_b[i])
+                if i < n_me_layers - 1:
+                    x = torch.nn.functional.relu(x)
+            pe = pixel_embed if pixel_embed.dtype == torch.bfloat16 else pixel_embed.to(torch.bfloat16)
+            if pe.ndim == 3:
+                return torch.einsum("bqc,chw->bqhw", x, pe).float()
+            return torch.einsum("bqc,bchw->bqhw", x, pe).float()
+
+        self._fast_mp_forward = _fast_mp_forward
+        mask_pred_module.forward = _fast_mp_forward
+
     def _patched_vit_forward(self, x):
         if self._encoder.forward is not self._patched_encoder_forward:
             self._encoder.forward = self._patched_encoder_forward
         if self._pixel_decoder.forward is not self._fast_pd_forward:
             self._pixel_decoder.forward = self._fast_pd_forward
+        if self._mask_predictor.forward is not self._fast_mp_forward:
+            self._mask_predictor.forward = self._fast_mp_forward
         return self._tt_vit_backbone(x, self.backbone_params, self.device)
 
     def _cached_forward_text(self, captions, input_boxes=None, additional_text=None, device="cuda"):
@@ -360,6 +385,7 @@ class TtSam3ImagePipeline:
         self._pos_enc_module.forward = self._orig_pos_enc_forward
         self._encoder.forward = self._orig_encoder_forward
         self._pixel_decoder.forward = self._orig_pd_forward
+        self._mask_predictor.forward = self._orig_mp_forward
 
     @torch.inference_mode()
     def forward(self, input_batch):
