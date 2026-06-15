@@ -6,7 +6,7 @@ add_library(
     ALIAS ttnn_op_experimental_deepseek_prefill_offset_cumsum
 )
 
-target_precompile_headers(ttnn_op_experimental_deepseek_prefill_offset_cumsum REUSE_FROM TTNN::PCH)
+target_precompile_headers(ttnn_op_experimental_deepseek_prefill_offset_cumsum REUSE_FROM TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_deepseek_prefill_offset_cumsum)
 
 set_target_properties(

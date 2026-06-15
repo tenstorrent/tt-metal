@@ -147,7 +147,6 @@ inline void llk_pack_dest_init([[maybe_unused]] const std::uint32_t pack_output 
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     const std::uint32_t output_id = get_output_id(new_output);
-    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
 
@@ -155,7 +154,6 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
         pack_src_format[output_id],
         pack_dst_format[output_id],
         get_local_cb_interface(output_id).fifo_page_size,
-        face_r_dim,
         tile_c_dim,
         num_faces,
         false /* partial_face */);
@@ -184,7 +182,6 @@ llk_pack_reconfig_data_format_disaggregated(
         pack_src_format[output_id],
         pack_dst_format[output_id],
         get_local_cb_interface(output_id).fifo_page_size,
-        face_r_dim,
         tile_c_dim,
         num_faces,
         false /* partial_face */);
@@ -214,9 +211,11 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const 
 /**
  * Program the packer relu configuration register.
  *
- * @param config Packed relu configuration value.
+ * @param relu_config Relu mode/threshold configuration.
  */
-TT_ALWAYS_INLINE void llk_pack_relu_config(const std::uint32_t config) { _llk_pack_relu_config_(config); }
+TT_ALWAYS_INLINE void llk_pack_relu_config(const ckernel::ReluConfig& relu_config) {
+    _llk_pack_relu_config_(relu_config);
+}
 
 /**
  * Enable or disable packer L1 accumulation.

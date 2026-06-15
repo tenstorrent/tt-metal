@@ -67,6 +67,7 @@ on:
           - data_movement.slice.slice_forge
           - data_movement.slice.slice_pytorch2_rm
           - data_movement.slice.slice_pytorch2_tiled
+          - data_movement.sort.sort
           - data_movement.split.split_pytorch2
           - data_movement.squeeze.squeeze_pytorch2
           - data_movement.stack.stack_pytorch2
@@ -618,8 +619,6 @@ on:
           - P150b
           - n300-llmbox
           - topology-6u
-          - BH-LLMBox
-          - BH-DeskBox
           - BH-LoudBox
         default: "N150"
       log-level:
@@ -805,13 +804,6 @@ jobs:
       platform: ${{ needs.resolve-inputs.outputs.platform }}
       enable-lto: ${{ fromJSON(needs.resolve-inputs.outputs.enable-lto) }}
 
-  resolve-docker-pull-refs:
-    needs: [check-harbor, build-artifact]
-    uses: ./.github/workflows/resolve-docker-pull-refs.yaml
-    with:
-      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
-      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-
   generate-master-json-from-db:
     name: 🗄️ Generate Master JSON from Database
     needs: [resolve-inputs]
@@ -824,8 +816,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.10"
       - name: Install dependencies
@@ -859,13 +852,13 @@ jobs:
 
   ttnn-generate-sweeps:
     name: Generate Sweep Vectors ${{ needs.resolve-inputs.outputs.arch }} ${{ needs.resolve-inputs.outputs.runner-label }}
-    needs: [resolve-inputs, resolve-docker-pull-refs, build-artifact, generate-master-json-from-db]
+    needs: [resolve-inputs, build-artifact, generate-master-json-from-db]
     if: >-
       always() &&
       needs.build-artifact.result == 'success' &&
       (needs.generate-master-json-from-db.result == 'success' || needs.generate-master-json-from-db.result == 'skipped')
     container:
-      image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
@@ -885,12 +878,13 @@ jobs:
     timeout-minutes: 30
     runs-on: >-
       ${{
-        (needs.resolve-inputs.outputs.runner-label == 'topology-6u' || needs.resolve-inputs.outputs.runner-label == 'BH-LLMBox' || needs.resolve-inputs.outputs.runner-label == 'BH-DeskBox' || needs.resolve-inputs.outputs.runner-label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', needs.resolve-inputs.outputs.runner-label))
+        (needs.resolve-inputs.outputs.runner-label == 'topology-6u' || needs.resolve-inputs.outputs.runner-label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', needs.resolve-inputs.outputs.runner-label))
         || format('tt-ubuntu-2204-{0}-viommu-stable', needs.resolve-inputs.outputs.runner-label)
       }}
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -962,6 +956,7 @@ jobs:
           name: sweeps-vectors
           path: /tmp/vectors
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           clean: false
       - id: set-matrix
@@ -988,7 +983,7 @@ jobs:
 
   ttnn-run-single-sweep:
     name: Run single sweep
-    needs: [resolve-inputs, resolve-docker-pull-refs, build-artifact, ttnn-generate-sweeps]
+    needs: [resolve-inputs, build-artifact, ttnn-generate-sweeps]
     if: |
       needs.resolve-inputs.outputs.sweep-name != 'ALL SWEEPS (Nightly)' &&
       needs.resolve-inputs.outputs.sweep-name != 'ALL SWEEPS (Comprehensive)' &&
@@ -1002,7 +997,7 @@ jobs:
             arch: ${{ needs.resolve-inputs.outputs.arch }}
             runner_label: ${{ needs.resolve-inputs.outputs.runner-label }}
     container:
-      image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
@@ -1030,12 +1025,13 @@ jobs:
     timeout-minutes: 720
     runs-on: >-
       ${{
-        (matrix.test-group.runner_label == 'topology-6u' || matrix.test-group.runner_label == 'BH-LLMBox' || matrix.test-group.runner_label == 'BH-DeskBox' || matrix.test-group.runner_label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', matrix.test-group.runner_label))
+        (matrix.test-group.runner_label == 'topology-6u' || matrix.test-group.runner_label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', matrix.test-group.runner_label))
         || format('tt-ubuntu-2204-{0}-viommu-stable', matrix.test-group.runner_label)
       }}
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -1132,7 +1128,7 @@ jobs:
 
   ttnn-sweeps-n150:
     name: ttnn sweeps N150
-    needs: [resolve-inputs, resolve-docker-pull-refs, build-artifact, ttnn-compute-module-matrix]
+    needs: [resolve-inputs, build-artifact, ttnn-compute-module-matrix]
     if: |
       always() &&
       !cancelled() &&
@@ -1144,7 +1140,7 @@ jobs:
     with:
       matrix: ${{ needs.ttnn-compute-module-matrix.outputs.n150-matrix }}
       sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
-      dev-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
@@ -1155,7 +1151,7 @@ jobs:
 
   ttnn-sweeps-n300:
     name: ttnn sweeps N300
-    needs: [resolve-inputs, resolve-docker-pull-refs, build-artifact, ttnn-compute-module-matrix]
+    needs: [resolve-inputs, build-artifact, ttnn-compute-module-matrix]
     if: |
       always() &&
       !cancelled() &&
@@ -1167,7 +1163,7 @@ jobs:
     with:
       matrix: ${{ needs.ttnn-compute-module-matrix.outputs.n300-matrix }}
       sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
-      dev-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
@@ -1178,7 +1174,7 @@ jobs:
 
   ttnn-sweeps-p150b:
     name: ttnn sweeps P150b
-    needs: [resolve-inputs, resolve-docker-pull-refs, build-artifact, ttnn-compute-module-matrix]
+    needs: [resolve-inputs, build-artifact, ttnn-compute-module-matrix]
     if: |
       always() &&
       !cancelled() &&
@@ -1190,7 +1186,7 @@ jobs:
     with:
       matrix: ${{ needs.ttnn-compute-module-matrix.outputs.p150b-matrix }}
       sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
-      dev-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
@@ -1201,7 +1197,7 @@ jobs:
 
   ttnn-sweeps-t3k:
     name: ttnn sweeps T3K
-    needs: [resolve-inputs, resolve-docker-pull-refs, build-artifact, ttnn-compute-module-matrix]
+    needs: [resolve-inputs, build-artifact, ttnn-compute-module-matrix]
     if: |
       always() &&
       !cancelled() &&
@@ -1213,7 +1209,7 @@ jobs:
     with:
       matrix: ${{ needs.ttnn-compute-module-matrix.outputs.t3k-matrix }}
       sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
-      dev-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
@@ -1224,7 +1220,7 @@ jobs:
 
   ttnn-sweeps-galaxy:
     name: ttnn sweeps Galaxy
-    needs: [resolve-inputs, resolve-docker-pull-refs, build-artifact, ttnn-compute-module-matrix]
+    needs: [resolve-inputs, build-artifact, ttnn-compute-module-matrix]
     if: |
       always() &&
       !cancelled() &&
@@ -1236,7 +1232,7 @@ jobs:
     with:
       matrix: ${{ needs.ttnn-compute-module-matrix.outputs.galaxy-matrix }}
       sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
-      dev-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
@@ -1277,6 +1273,7 @@ jobs:
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -1360,6 +1357,7 @@ jobs:
     steps:
       - name: Checkout repository (actions only)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: |
             .github/actions

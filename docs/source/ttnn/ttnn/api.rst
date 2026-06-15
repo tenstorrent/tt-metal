@@ -366,6 +366,7 @@ Reduction
    ttnn.sampling
    ttnn.std
    ttnn.sum
+   ttnn.experimental.topk_large_indices
    ttnn.topk
    ttnn.var
 
@@ -477,6 +478,7 @@ Transformer
    ttnn.transformer.paged_scaled_dot_product_attention_decode
    ttnn.transformer.ring_distributed_scaled_dot_product_attention
    ttnn.transformer.ring_joint_scaled_dot_product_attention
+   ttnn.transformer.ring_mla
    ttnn.transformer.scaled_dot_product_attention
    ttnn.transformer.scaled_dot_product_attention_decode
    ttnn.transformer.split_query_key_value_and_split_heads
@@ -591,7 +593,6 @@ KV Cache
 
    ttnn.kv_cache.fill_cache_for_user_
    ttnn.kv_cache.update_cache_for_token_
-   ttnn.kv_cache.zero_cache_range
    ttnn.fill_cache
    ttnn.update_cache
 

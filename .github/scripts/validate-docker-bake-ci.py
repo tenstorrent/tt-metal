@@ -99,7 +99,16 @@ def main() -> int:
     evaluation_tools = get_tools_for_target("evaluation")
 
     sets: list[str] = []
-    for target in ("ci-build", "ci-test", "dev"):
+    venv_contexts_by_target = {
+        "ci-build-light": {},
+        "ci-build": {"ci-build-venv-layer": VENV_TAGS["ci-build-venv"]},
+        "ci-test-light": {},
+        "ci-test": {"ci-test-venv-layer": VENV_TAGS["ci-test-venv"]},
+        "dev-light": {},
+        "dev": {"ci-test-venv-layer": VENV_TAGS["ci-test-venv"]},
+    }
+
+    for target, venv_contexts in venv_contexts_by_target.items():
         for tool in main_tools:
             sets.extend(
                 [
@@ -107,12 +116,15 @@ def main() -> int:
                     f"{target}.contexts.{tool}-layer=docker-image://{harbor_prefixed(TOOL_TAGS[tool])}",
                 ]
             )
+        for context_name, tag in venv_contexts.items():
+            sets.extend(
+                [
+                    "--set",
+                    f"{target}.contexts.{context_name}=docker-image://{harbor_prefixed(tag)}",
+                ]
+            )
         sets.extend(
             [
-                "--set",
-                f"{target}.contexts.ci-build-venv-layer=docker-image://{harbor_prefixed(VENV_TAGS['ci-build-venv'])}",
-                "--set",
-                f"{target}.contexts.ci-test-venv-layer=docker-image://{harbor_prefixed(VENV_TAGS['ci-test-venv'])}",
                 "--set",
                 f"{target}.tags={REPO}/tt-metalium/{target}:test",
                 "--set",
@@ -171,8 +183,11 @@ def main() -> int:
 
     rendered = run_bake_print(
         *sets,
+        "ci-build-light",
         "ci-build",
+        "ci-test-light",
         "ci-test",
+        "dev-light",
         "dev",
         "basic-dev",
         "basic-ttnn-runtime",
@@ -182,8 +197,11 @@ def main() -> int:
     targets = rendered["target"]
 
     for name in (
+        "ci-build-light",
         "ci-build",
+        "ci-test-light",
         "ci-test",
+        "dev-light",
         "dev",
         "basic-dev",
         "basic-ttnn-runtime",
@@ -198,6 +216,16 @@ def main() -> int:
         for context in target.get("contexts", {}).values():
             if context.startswith("docker-image://") and HARBOR_PREFIX not in context:
                 raise AssertionError(f"{name} context did not use Harbor prefix: {context}")
+
+    for name, expected_venv_contexts in venv_contexts_by_target.items():
+        actual_venv_contexts = {
+            key for key in targets[name].get("contexts", {}) if key in {"ci-build-venv-layer", "ci-test-venv-layer"}
+        }
+        if actual_venv_contexts != set(expected_venv_contexts):
+            raise AssertionError(
+                f"{name} venv contexts mismatch: expected {sorted(expected_venv_contexts)}, "
+                f"got {sorted(actual_venv_contexts)}"
+            )
 
     if harbor_prefixed(f"{REPO}/image:tag") != f"{HARBOR_PREFIX}{REPO}/image:tag":
         raise AssertionError("Harbor prefix composition failed")

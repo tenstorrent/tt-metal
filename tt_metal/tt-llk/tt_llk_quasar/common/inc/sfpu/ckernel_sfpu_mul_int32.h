@@ -19,10 +19,10 @@ namespace sfpu
 // Uses SFPMUL24 (24-bit partial products) + shifts to produce a full 32-bit
 // result.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false>
-inline void _mul_int32_(const int iterations, const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
+inline void _mul_int32_(const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
 {
 #pragma GCC unroll 8
-    for (int d = 0; d < iterations; d++)
+    for (int d = 0; d < ITERATIONS; d++)
     {
         TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, dst_index_in0 + (d << 1));
         TT_SFPLOAD(p_sfpu::LREG2, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, dst_index_in1 + (d << 1));

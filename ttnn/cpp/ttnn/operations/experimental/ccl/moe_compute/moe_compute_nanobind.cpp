@@ -34,14 +34,28 @@ void bind_moe_compute(nb::module_& mod) {
 
         This operation performs the expert matmuls (gate/up projection via W0/W1, down
         projection via W2) and activation (SILU, SwiGLU, or GELU) in a fused compute kernel.
-        Tile distribution across the 12-core ring is derived at compile time from
-        ``hidden_size`` and ``intermediate_size`` using Euclidean-rhythm (Bresenham)
-        shard formulas — no model-specific configuration tables are needed.
+        Tile distribution across the matmul ring (12 cores on Wormhole; ``bh_ring_size``
+        cores — 8/12/16 — on Blackhole) is derived at compile time from ``hidden_size`` and
+        ``intermediate_size`` using Euclidean-rhythm (Bresenham) shard formulas — no
+        model-specific configuration tables are needed.
 
         Note: This is the **compute** portion of the MoE pipeline. The A2A dispatch
         (producing the sparse buffer consumed by this op) and the A2A combine (reducing
         expert outputs) are handled by separate collective operations; see the MoE
         module tests for the full flow.
+
+        **Hardware / device configuration**
+
+        - **Unharvested Wormhole chips.** The multi-device (6U/Galaxy) flow assumes the
+          full Wormhole compute grid: the WH worker layout hardcodes the drain tilize core
+          at logical ``(6, 9)`` and the combine cores at columns 5–6, so the ``y=9`` compute
+          row must be present. Harvested WH SKUs that drop that row are not supported on
+          this path (the single-card test path derives the drain core dynamically instead).
+        - **``DispatchCoreAxis.COL``.** The mesh device must be opened with
+          ``dispatch_core_axis=ttnn.DispatchCoreAxis.COL`` so dispatch cores occupy a column
+          edge and do not overlap the op's tilize/matmul/combine worker cores.
+
+        See https://github.com/tenstorrent/tt-metal/issues/41132 for details.
 
         **Weight tensor layout (CRITICAL)**
 
@@ -66,8 +80,11 @@ void bind_moe_compute(nb::module_& mod) {
 
         - ``output_height_shard_dim``: Number of token-parallel (height) cores used
           for the combine output. The width (data-parallel) core count is auto-derived
-          from ``hidden_size``. Use ``auto_output_width_shard_dim(hidden_size)`` from
-          ``moe_compute_utils`` to compute the recommended value.
+          from ``hidden_size`` and the matmul ring size (``bh_ring_size`` on BH, 12 on WH):
+          largest divisor d of ``hidden_tiles`` with d <= 4 and ``ring_n % d == 0``.
+          Use ``auto_output_width_shard_dim(hidden_size, matmul_ring_size=...)`` from
+          ``moe_compute_utils`` (with ``effective_matmul_ring_size``) so test tensors
+          match the device op.
 
         **Bias support (optional)**
 
@@ -96,7 +113,7 @@ void bind_moe_compute(nb::module_& mod) {
           ``prepare_w2_tensor_with_bias``
         - Shard maps: ``get_weight_core_shard_maps(mesh_device, hidden_size, intermediate_size)``
         - Memory configs: ``get_weight_mem_configs(...)``
-        - Output shard dim: ``auto_output_width_shard_dim(hidden_size)``
+        - Output shard dim: ``auto_output_width_shard_dim(hidden_size, matmul_ring_size=...)``
 
         These functions are kept in sync with the test suite and can be used as
         "executable documentation" for the layout contract; they are not a required

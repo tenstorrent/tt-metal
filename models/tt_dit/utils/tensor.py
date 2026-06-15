@@ -8,6 +8,7 @@ import math
 from typing import TYPE_CHECKING
 
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -804,3 +805,27 @@ def triu(
         _triu_cache[cache_key] = mask
 
     return ttnn.mul(x, mask, memory_config=memory_config, output_tensor=output_tensor)
+
+
+def print_tensor_mem_info(tt: ttnn.Tensor):
+    logger.info("storage_type:", tt.storage_type())
+    logger.info("global shape:", tt.shape)
+    logger.info("global padded:", tt.padded_shape)
+    logger.info("global layout:", tt.layout)
+    logger.info("global dtype:", tt.dtype)
+    logger.info("global memory_config:", tt.memory_config())
+
+    topo = tt.tensor_topology()
+    logger.info("distribution_shape:", list(topo.distribution_shape()))
+    logger.info("placements:", [str(p) for p in topo.placements()])  # Replicate vs Shard(dim)
+    logger.info("mesh_coords:", list(topo.mesh_coords()))
+
+    # Per-device shard view
+    shards = ttnn.get_device_tensors(tt)
+    for i, s in enumerate(shards):
+        logger.info(f"\nshard[{i}]")
+        logger.info("  shape:", s.shape)
+        logger.info("  padded_shape:", s.padded_shape)
+        logger.info("  layout:", s.layout)
+        logger.info("  dtype:", s.dtype)
+        logger.info("  memory_config:", s.memory_config())

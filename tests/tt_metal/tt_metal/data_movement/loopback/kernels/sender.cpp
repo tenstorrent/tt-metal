@@ -7,12 +7,12 @@
 
 // L1 to L1 send
 void kernel_main() {
-    constexpr uint32_t src_addr = get_compile_time_arg_val(0);
-    constexpr uint32_t dst_addr = get_compile_time_arg_val(1);
-    constexpr uint32_t num_of_transactions = get_compile_time_arg_val(2);
-    constexpr uint32_t transaction_num_pages = get_compile_time_arg_val(3);
-    constexpr uint32_t page_size_bytes = get_compile_time_arg_val(4);
-    constexpr uint32_t test_id = get_compile_time_arg_val(5);
+    constexpr uint32_t src_addr = get_named_compile_time_arg_val("src_addr");
+    constexpr uint32_t dst_addr = get_named_compile_time_arg_val("dst_addr");
+    constexpr uint32_t num_of_transactions = get_named_compile_time_arg_val("num_transactions");
+    constexpr uint32_t transaction_num_pages = get_named_compile_time_arg_val("tx_num_pages");
+    constexpr uint32_t page_size_bytes = get_named_compile_time_arg_val("page_size");
+    constexpr uint32_t test_id = get_named_compile_time_arg_val("test_id");
 
     uint32_t semaphore = get_semaphore(get_arg_val<uint32_t>(0));
     uint32_t dest_x = get_arg_val<uint32_t>(1);

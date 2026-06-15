@@ -2,8 +2,8 @@ name: "Code analysis"
 
 on:
   schedule:
-    # Run hourly to keep ccache/ctcache warm for code-analysis PR runs (Ubuntu 24.04)
-    - cron: "0 * * * *"
+    # Run every 6 hours to keep ccache/ctcache warm for code-analysis PR runs (Ubuntu 24.04)
+    - cron: "0 */6 * * *"
   workflow_call:
     inputs:
       platform:
@@ -41,6 +41,11 @@ on:
         type: boolean
         default: false
         description: "Force a full scan even if no C++ changes are detected"
+      post-pr-suggestions:
+        required: false
+        type: boolean
+        default: false
+        description: "Post inline clang-tidy fix suggestions on PR diffs"
   workflow_dispatch:
     inputs:
       architecture:
@@ -89,6 +94,7 @@ jobs:
     steps:
       - name: Check out repo
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -97,7 +103,7 @@ jobs:
         run: git config --global --add safe.directory ${{ github.workspace }}
 
       - id: find-changes
-        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
+        uses: ./.github/actions/find-changed-files
 
       - id: compute-outputs
         shell: bash
@@ -167,6 +173,7 @@ jobs:
       ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
       prereq-targets: ''
       scan-targets: ''
+      post-pr-suggestions: ${{ inputs.post-pr-suggestions }}
 
   # Incremental scan: parallel jobs for different targets
   clang-tidy-incremental-tt-metal:
@@ -184,6 +191,7 @@ jobs:
       ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
       prereq-targets: ''
       scan-targets: 'tt_metal'
+      post-pr-suggestions: ${{ inputs.post-pr-suggestions }}
 
   clang-tidy-incremental-ttnn:
     name: 🤖 Clang Tidy (TTNN)
@@ -200,6 +208,7 @@ jobs:
       ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
       prereq-targets: 'tt_metal'
       scan-targets: 'ttnn'
+      post-pr-suggestions: ${{ inputs.post-pr-suggestions }}
 
   clang-tidy-incremental-tt-train:
     name: 🤖 Clang Tidy (tt-train)
@@ -216,6 +225,7 @@ jobs:
       ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
       prereq-targets: 'tt_metal ttnn'
       scan-targets: 'tt-train'
+      post-pr-suggestions: ${{ inputs.post-pr-suggestions }}
 
   clang-tidy-incremental-catchall:
     name: 🤖 Clang Tidy (catchall)
@@ -232,3 +242,4 @@ jobs:
       ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
       prereq-targets: 'tt_metal ttnn'
       scan-targets: ''
+      post-pr-suggestions: ${{ inputs.post-pr-suggestions }}

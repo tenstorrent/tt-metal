@@ -91,11 +91,73 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
 
     const uint32_t M = a_logical[-2];
     const uint32_t K = a_logical[-1] * attributes.ring_size;
-    const uint32_t K_w = w_logical[-2];
+    // When FSDP fusion is active, the weight is sharded along K across `fsdp_ring_size`
+    // devices, so the per-device weight only holds K/fsdp_ring_size of the K dim.
+    const uint32_t K_w = w_logical[-2] * attributes.fsdp_ring_size;
     const uint32_t N = w_logical[-1];
 
     TT_FATAL(K == K_w, "all_gather_minimal_matmul_async inner dimensions must match, got K={} and K_w={}", K, K_w);
     TT_FATAL(M > 0 && K > 0 && N > 0, "all_gather_minimal_matmul_async dimensions must be positive");
+
+    // FSDP fusion validation
+    if (attributes.fsdp_cluster_axis.has_value()) {
+        TT_FATAL(
+            attributes.fsdp_ring_size > 1,
+            "fsdp_cluster_axis is set but fsdp_ring_size is {} (expected > 1)",
+            attributes.fsdp_ring_size);
+        TT_FATAL(
+            attributes.topology == ttnn::ccl::Topology::Linear,
+            "FSDP-fused all_gather_minimal_matmul_async requires TP topology Linear (got {})",
+            static_cast<uint32_t>(attributes.topology));
+        TT_FATAL(
+            attributes.fsdp_topology == ttnn::ccl::Topology::Linear,
+            "FSDP-fused all_gather_minimal_matmul_async requires FSDP topology Linear (got {})",
+            static_cast<uint32_t>(attributes.fsdp_topology));
+        TT_FATAL(
+            attributes.ring_size == attributes.fsdp_ring_size,
+            "FSDP-fused all_gather_minimal_matmul_async requires ring_size == fsdp_ring_size (got {} vs {})",
+            attributes.ring_size,
+            attributes.fsdp_ring_size);
+        TT_FATAL(
+            !attributes.cluster_axis.has_value() ||
+                attributes.cluster_axis.value() != attributes.fsdp_cluster_axis.value(),
+            "fsdp_cluster_axis ({}) must not equal cluster_axis ({})",
+            attributes.fsdp_cluster_axis.value(),
+            attributes.cluster_axis.value_or(0));
+        TT_FATAL(
+            attributes.fsdp_semaphore.size() >= 2,
+            "fsdp_semaphore must have at least 2 entries (ping-pong) when fsdp_cluster_axis is set, got {}",
+            attributes.fsdp_semaphore.size());
+        // Weight local K must be tile-aligned after FSDP sharding (use logical shape since
+        // padded_shape isn't computed until later in this function).
+        TT_FATAL(
+            w_logical[-2] % TILE_HEIGHT == 0,
+            "all_gather_minimal_matmul_async FSDP weight local K must be tile-aligned, got {}",
+            w_logical[-2]);
+        // persistent_weight_buffer must be provided
+        TT_FATAL(
+            tensor_args.persistent_weight_buffer.has_value(),
+            "persistent_weight_buffer must be provided when fsdp_cluster_axis is set");
+        const auto& pwb = tensor_args.persistent_weight_buffer.value();
+        TT_FATAL(
+            pwb.storage_type() == StorageType::DEVICE && pwb.buffer() != nullptr,
+            "persistent_weight_buffer must be on device and allocated");
+        TT_FATAL(pwb.layout() == Layout::TILE, "persistent_weight_buffer must be TILE layout");
+        const auto& pwb_logical = pwb.logical_shape();
+        TT_FATAL(pwb.dtype() == weight_tensor.dtype(), "persistent_weight_buffer dtype must match weight_tensor dtype");
+        TT_FATAL(
+            pwb_logical[-2] == K && pwb_logical[-1] == N,
+            "persistent_weight_buffer shape must be [..., K={}, N={}], got [..., {}, {}]",
+            K,
+            N,
+            pwb_logical[-2],
+            pwb_logical[-1]);
+    } else {
+        TT_FATAL(
+            attributes.fsdp_ring_size == 1,
+            "fsdp_ring_size must be 1 when fsdp_cluster_axis is not set, got {}",
+            attributes.fsdp_ring_size);
+    }
 
     // Validate chunks and dim parameters
     const int32_t chunks = attributes.chunks;
@@ -208,9 +270,20 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
         TT_FATAL(cfg.M_block_size > 0 && cfg.K_block_size > 0 && cfg.N_block_size > 0, "Block sizes must be > 0");
 
         const uint32_t K_tiles_per_device = a_padded[-1] / TILE_WIDTH;
+        // Ring topology uses a bidirectional half-block scheme that requires K_block_size to
+        // evenly divide K_tiles_per_device (no tail-block support). Linear topology uses a
+        // unidirectional full-block scheme that supports a tail block of K_tiles_per_device %
+        // K_block_size tiles (zero-padded in L1 to keep the K_block_size row stride).
+        if (attributes.topology != ttnn::ccl::Topology::Linear) {
+            TT_FATAL(
+                K_tiles_per_device % cfg.K_block_size == 0,
+                "K_block_size ({}) must evenly divide the number of K tiles per device ({}) for Ring topology",
+                cfg.K_block_size,
+                K_tiles_per_device);
+        }
         TT_FATAL(
-            K_tiles_per_device % cfg.K_block_size == 0,
-            "K_block_size ({}) must evenly divide the number of K tiles per device ({})",
+            cfg.K_block_size <= K_tiles_per_device,
+            "K_block_size ({}) must be <= K tiles per device ({})",
             cfg.K_block_size,
             K_tiles_per_device);
         TT_FATAL(cfg.subblock_h > 0 && cfg.subblock_w > 0, "Subblock sizes must be > 0");
@@ -251,6 +324,7 @@ AllGatherMinimalMatmulAsyncOp::spec_return_value_t AllGatherMinimalMatmulAsyncOp
     const auto& in1_input_tensor_shape = in1_input_tensor.logical_shape();
     const uint32_t N = in1_input_tensor_shape[-1];
     const int32_t chunks = attributes.chunks;
+    const bool fsdp_fused = attributes.fsdp_cluster_axis.has_value();
 
     ttnn::Shape intermediate_shape(in0_input_tensor_shape);
     intermediate_shape[-1] = intermediate_shape[-1] * attributes.ring_size;
@@ -259,11 +333,22 @@ AllGatherMinimalMatmulAsyncOp::spec_return_value_t AllGatherMinimalMatmulAsyncOp
     auto dtype = attributes.output_dtype.value_or(in0_input_tensor.dtype());
 
     // Create specs for output tensors
+    // Layout: [activation_gather_intermediate, (optional: weight_gather_intermediate), chunks...]
     std::vector<TensorSpec> output_specs;
-    output_specs.reserve(chunks + 1);
+    output_specs.reserve(chunks + 1 + (fsdp_fused ? 1 : 0));
 
     output_specs.push_back(
         TensorSpec(intermediate_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config)));
+
+    if (fsdp_fused) {
+        // Gathered weight intermediate: [K_full, N_local] = [K_local * fsdp_ring_size, N_local].
+        // Derive from in1_input_tensor_shape so we don't depend on persistent_weight_buffer being provided.
+        ttnn::Shape weight_intermediate_shape(in1_input_tensor_shape);
+        weight_intermediate_shape[-2] = weight_intermediate_shape[-2] * attributes.fsdp_ring_size;
+        output_specs.push_back(TensorSpec(
+            weight_intermediate_shape,
+            TensorLayout(in1_input_tensor.dtype(), PageConfig(Layout::TILE), in1_input_tensor.memory_config())));
+    }
 
     const uint32_t N_per_chunk = N / chunks;
     for (int32_t i = 0; i < chunks; ++i) {
@@ -281,16 +366,29 @@ AllGatherMinimalMatmulAsyncOp::tensor_return_value_t AllGatherMinimalMatmulAsync
     auto* device = tensor_args.input_tensor.device();
     const auto output_specs = compute_output_specs(attributes, tensor_args);
     output_tensors.reserve(output_specs.size());
+    const bool fsdp_fused = attributes.fsdp_cluster_axis.has_value();
 
+    // Slot 0: activation gather buffer (persistent_output_buffer or new alloc)
     if (tensor_args.persistent_output_buffer.has_value()) {
         output_tensors.emplace_back(tensor_args.persistent_output_buffer.value());
-        for (size_t i = 1; i < output_specs.size(); ++i) {
-            output_tensors.emplace_back(create_device_tensor(output_specs[i], device));
-        }
     } else {
-        for (const auto& output_spec : output_specs) {
-            output_tensors.emplace_back(create_device_tensor(output_spec, device));
+        output_tensors.emplace_back(create_device_tensor(output_specs[0], device));
+    }
+
+    // Slot 1 (if FSDP fused): gathered weight buffer (persistent_weight_buffer or new alloc)
+    size_t next_idx = 1;
+    if (fsdp_fused) {
+        if (tensor_args.persistent_weight_buffer.has_value()) {
+            output_tensors.emplace_back(tensor_args.persistent_weight_buffer.value());
+        } else {
+            output_tensors.emplace_back(create_device_tensor(output_specs[1], device));
         }
+        next_idx = 2;
+    }
+
+    // Remaining slots: chunk outputs
+    for (size_t i = next_idx; i < output_specs.size(); ++i) {
+        output_tensors.emplace_back(create_device_tensor(output_specs[i], device));
     }
 
     return output_tensors;
@@ -316,6 +414,9 @@ tt::tt_metal::operation::Hash AllGatherMinimalMatmulAsyncOp::compute_program_has
         attributes.config.value().N_block_size,
         attributes.config.value().subblock_h,
         attributes.config.value().subblock_w,
+        attributes.fsdp_cluster_axis,
+        attributes.fsdp_ring_size,
+        attributes.using_persistent_weight_buffer,
         tensor_args,
         program_factory.index());
 }
@@ -346,7 +447,11 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     uint32_t num_workers_per_link,
     uint32_t num_buffers_per_channel,
     int32_t chunks,
-    int32_t dim) {
+    int32_t dim,
+    std::optional<uint32_t> fsdp_cluster_axis,
+    const std::vector<GlobalSemaphore>& fsdp_multi_device_global_semaphore,
+    const std::optional<ttnn::Tensor>& persistent_weight_buffer,
+    std::optional<ttnn::ccl::Topology> fsdp_topology) {
     using OperationType = ttnn::experimental::prim::AllGatherMinimalMatmulAsyncOp;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -358,10 +463,16 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
         true /*packer_acc*/);
 
     uint32_t num_devices = ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
+    uint32_t fsdp_num_devices =
+        fsdp_cluster_axis.has_value() ? ttnn::ccl::get_topological_dimension(input_tensor, fsdp_cluster_axis) : 1;
 
     bool using_persistent_buffers = persistent_output_buffer.has_value();
+    bool using_persistent_weight_buffer = persistent_weight_buffer.has_value();
 
     tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
+    tt::tt_fabric::Topology fsdp_topology_ =
+        fsdp_cluster_axis.has_value() ? ::ttnn::ccl::get_usable_topology(input_tensor, fsdp_topology, fsdp_cluster_axis)
+                                      : fsdp_topology.value_or(ttnn::ccl::Topology::Ring);
 
     auto operation_attributes = OperationType::operation_attributes_t{
         config,
@@ -381,18 +492,27 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
         num_buffers_per_channel,
         scalar,
         chunks,
-        dim};
+        dim,
+        fsdp_cluster_axis,
+        fsdp_num_devices,
+        fsdp_multi_device_global_semaphore,
+        using_persistent_weight_buffer,
+        fsdp_topology_};
     auto tensor_args = OperationType::tensor_args_t{
         input_tensor,
         weight_tensor,
         bias_tensor,
         persistent_output_buffer,
         addcmul_input_tensor1,
-        addcmul_input_tensor2};
+        addcmul_input_tensor2,
+        persistent_weight_buffer};
 
     std::vector<Tensor> returned_tensors =
         ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
-    return std::vector<Tensor>(returned_tensors.begin() + 1, returned_tensors.end());
+    // Strip the activation-gather intermediate (slot 0) and, if present, the weight-gather
+    // intermediate (slot 1). What's returned are just the chunked matmul outputs.
+    size_t strip_count = 1 + (fsdp_cluster_axis.has_value() ? 1 : 0);
+    return std::vector<Tensor>(returned_tensors.begin() + strip_count, returned_tensors.end());
 }
 
 }  // namespace ttnn::prim
