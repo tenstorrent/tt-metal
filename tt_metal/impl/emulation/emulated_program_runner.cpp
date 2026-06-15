@@ -543,8 +543,11 @@ static std::string disk_cache_so_path(const std::string& cache_key) {
 //   1. `asm volatile("csrr %0, mhartid" : "=r"(V));` → `V = __processor_id;`
 //      (x86 assembler rejects RISC-V CSR instructions; the runner sets the
 //      __processor_id TLS before each kernel launch.)
-//   2. `asm volatile("fence" ::: "memory");` → `__sync_synchronize();`
-//      (Host memory barrier is the closest emulation-side equivalent.)
+//   2. `asm volatile("fence" ::: "memory");` or bare `asm volatile("fence");`
+//      → `__sync_synchronize();` (Host memory barrier is the closest
+//      emulation-side equivalent; the clobber list is optional — e.g. the
+//      embedding_backward compute kernel's ARCH_BLACKHOLE cache-flush fence
+//      omits it.)
 //   3. `reinterpret_cast<T*>(get_arg_val<uint32_t>(N))` →
 //      `reinterpret_cast<T*>((uintptr_t)__emule_local_l1_to_ptr(get_arg_val<uint32_t>(N)))`
 //      (Quasar kernels pass raw L1 firmware offsets as runtime args; x86 needs
@@ -564,7 +567,7 @@ static void preprocess_kernel_source_for_x86(const std::string& src_path, const 
         R"(asm\s+volatile\s*\(\s*"csrr\s+%0\s*,\s*mhartid"\s*:\s*"=r"\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*\)\s*;)");
     src = std::regex_replace(src, mhartid_re, "$1 = __processor_id;");
 
-    static const std::regex fence_re(R"(asm\s+volatile\s*\(\s*"fence"\s*:::\s*"memory"\s*\)\s*;)");
+    static const std::regex fence_re(R"(asm\s+volatile\s*\(\s*"fence"\s*(:::\s*"memory"\s*)?\)\s*;)");
     src = std::regex_replace(src, fence_re, "__sync_synchronize();");
 
     static const std::regex l1_arg_ptr_re(
@@ -1148,7 +1151,10 @@ static std::map<std::string, std::string> build_kernel_defines(
         for (auto& cb_impl : cb_impls) {
             for (uint8_t idx : cb_impl->local_buffer_indices()) {
                 if (idx < EMULE_NUM_CBS) {
-                    tile_sizes[idx] = cb_impl->page_size(idx);
+                    // Calculate tile size from the CB's data format.
+                    const auto& tile = cb_impl->tile(idx);
+                    tile_sizes[idx] = tile.has_value() ? tile->get_tile_size(cb_impl->data_format(idx))
+                                                       : Tile().get_tile_size(cb_impl->data_format(idx));
                     cb_formats[idx] = static_cast<uint8_t>(cb_impl->data_format(idx));
                 }
             }
