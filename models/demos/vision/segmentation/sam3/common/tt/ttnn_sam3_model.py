@@ -189,6 +189,12 @@ class TtSam3ImagePipeline:
     def __init__(self, sam3_model, device):
         from sam3.model.vitdet import ViT
 
+        from models.demos.vision.segmentation.sam3.common.tt.ttnn_sam3_encoder import (
+            _make_compute_config,
+            move_encoder_params_to_device,
+            preprocess_encoder_weights,
+            tt_encoder_forward,
+        )
         from models.demos.vision.segmentation.sam3.common.tt.ttnn_sam3_vitdet import (
             move_backbone_params_to_device,
             preprocess_vit_backbone_weights,
@@ -233,7 +239,108 @@ class TtSam3ImagePipeline:
         self._fast_pos_enc = _fast_pos_enc
         neck.position_encoding.forward = _fast_pos_enc
 
+        encoder = sam3_model.transformer.encoder
+        self._encoder = encoder
+        self._enc_compute_config = _make_compute_config(device)
+        enc_params = preprocess_encoder_weights(encoder)
+        self._enc_params = move_encoder_params_to_device(enc_params, device)
+        self._tt_encoder_forward = tt_encoder_forward
+
+        self._orig_encoder_forward = encoder.forward
+
+        def _patched_encoder_forward(
+            src,
+            prompt,
+            src_key_padding_mask=None,
+            src_pos=None,
+            prompt_key_padding_mask=None,
+            prompt_pos=None,
+            feat_sizes=None,
+            encoder_extra_kwargs=None,
+        ):
+            from sam3.model.encoder import pool_text_feat
+
+            bs = src[0].shape[1]
+            if feat_sizes is not None:
+                if src_key_padding_mask is None:
+                    src_key_padding_mask = [None] * len(src)
+                for i, (h, w) in enumerate(feat_sizes):
+                    src[i] = src[i].reshape(h, w, bs, -1).permute(2, 3, 0, 1)
+                    src_pos[i] = src_pos[i].reshape(h, w, bs, -1).permute(2, 3, 0, 1)
+                    if src_key_padding_mask[i] is not None:
+                        src_key_padding_mask[i] = src_key_padding_mask[i].reshape(h, w, bs).permute(2, 0, 1)
+
+            if encoder.add_pooled_text_to_img_feat:
+                pooled_text = pool_text_feat(prompt, prompt_key_padding_mask, encoder.pool_text_with_mask)
+                pooled_text = encoder.text_pooling_proj(pooled_text)[..., None, None]
+                src = [x.add_(pooled_text) for x in src]
+
+            (
+                src_flatten,
+                key_padding_masks_flatten,
+                lvl_pos_embed_flatten,
+                level_start_index,
+                valid_ratios,
+                spatial_shapes,
+            ) = encoder._prepare_multilevel_features(src, src_key_padding_mask, src_pos)
+
+            memory_batch_first = prompt.transpose(0, 1)
+            output = self._tt_encoder_forward(
+                src_flatten,
+                memory_batch_first,
+                lvl_pos_embed_flatten,
+                prompt_key_padding_mask,
+                self._enc_params,
+                self.device,
+                self._enc_compute_config,
+            )
+
+            return {
+                "memory": output.transpose(0, 1),
+                "padding_mask": (
+                    key_padding_masks_flatten.transpose(0, 1) if key_padding_masks_flatten is not None else None
+                ),
+                "pos_embed": lvl_pos_embed_flatten.transpose(0, 1),
+                "memory_text": prompt,
+                "level_start_index": level_start_index,
+                "spatial_shapes": spatial_shapes,
+                "valid_ratios": valid_ratios,
+            }
+
+        self._patched_encoder_forward = _patched_encoder_forward
+        encoder.forward = _patched_encoder_forward
+
+        pixel_decoder = sam3_model.segmentation_head.pixel_decoder
+        self._pixel_decoder = pixel_decoder
+        self._orig_pd_forward = pixel_decoder.forward
+
+        pd_cw = [c.weight.to(torch.bfloat16, memory_format=torch.channels_last) for c in pixel_decoder.conv_layers]
+        pd_cb = [c.bias.to(torch.bfloat16) if c.bias is not None else None for c in pixel_decoder.conv_layers]
+        pd_nw = [n.weight.to(torch.bfloat16) for n in pixel_decoder.norms]
+        pd_nb = [n.bias.to(torch.bfloat16) for n in pixel_decoder.norms]
+        pd_ng = [n.num_groups for n in pixel_decoder.norms]
+        pd_shared = pixel_decoder.shared_conv
+
+        def _fast_pd_forward(backbone_feats):
+            feats_b = [f.to(torch.bfloat16, memory_format=torch.channels_last) for f in backbone_feats]
+            prev = feats_b[-1]
+            for i, bb in enumerate(feats_b[:-1][::-1]):
+                prev = bb + torch.nn.functional.interpolate(
+                    prev, size=bb.shape[-2:], mode=pixel_decoder.interpolation_mode
+                )
+                ci = 0 if pd_shared else i
+                prev = torch.nn.functional.conv2d(prev, pd_cw[ci], pd_cb[ci], padding=1)
+                prev = torch.nn.functional.relu(torch.nn.functional.group_norm(prev, pd_ng[ci], pd_nw[ci], pd_nb[ci]))
+            return prev.float().contiguous()
+
+        self._fast_pd_forward = _fast_pd_forward
+        pixel_decoder.forward = _fast_pd_forward
+
     def _patched_vit_forward(self, x):
+        if self._encoder.forward is not self._patched_encoder_forward:
+            self._encoder.forward = self._patched_encoder_forward
+        if self._pixel_decoder.forward is not self._fast_pd_forward:
+            self._pixel_decoder.forward = self._fast_pd_forward
         return self._tt_vit_backbone(x, self.backbone_params, self.device)
 
     def _cached_forward_text(self, captions, input_boxes=None, additional_text=None, device="cuda"):
@@ -251,6 +358,8 @@ class TtSam3ImagePipeline:
         self.vit_backbone.forward = self._orig_vit_forward
         self.sam3_model.backbone.forward_text = self._orig_forward_text
         self._pos_enc_module.forward = self._orig_pos_enc_forward
+        self._encoder.forward = self._orig_encoder_forward
+        self._pixel_decoder.forward = self._orig_pd_forward
 
     @torch.inference_mode()
     def forward(self, input_batch):
