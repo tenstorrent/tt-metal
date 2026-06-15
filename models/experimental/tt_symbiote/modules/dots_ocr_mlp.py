@@ -20,7 +20,7 @@ from models.experimental.tt_symbiote.modules.linear import (
     _decode_down_proj_input_memory_config,
     _decode_gate_up_dram_sharded_program_config,
     _decode_gate_up_col_dram_sharded_program_config,
-    _decode_gate_up_input_memory_config,
+    _l1_width_sharded_mem_config,
     _dp_matmul_program_config,
     _dram_sharded_mem_config_2d,
     _tp_requires_ccl,
@@ -31,7 +31,24 @@ from models.experimental.tt_symbiote.modules.linear import (
     _ccl_worker_kwargs,
 )
 
-_GATE_UP_COL_DRAM_SHARDED_NUM_CORES = 64
+# Decode column-parallel fused gate_up (M=32, K=1536, N=2*intermediate/TP), DRAM-
+# width-sharded, weight-bandwidth-bound. The bandwidth-optimal compute-grid size
+# depends on the WEIGHT DTYPE -- a heavier (BFP8) weight needs more readers to hit
+# high DRAM utilization. Both grids divide k_tiles=48 so the per-core K-shard stays
+# tile-aligned (else _decode_gate_up_col_dram_sharded_program_config returns None and
+# the path silently falls back to a ~37 us generic mcast). Device-profiler sweep
+# 2026-06-15 (prof_gate_up_col_decode.py, 32x1536x4480):
+#   BFP4 weight: nc=12 ~21 us (one core/DRAM bank) < nc=16 23.5 < nc=8 25 < nc=24 30
+#   BFP8 weight: nc=16 ~32 us (81% util) < nc=24 32.5 < nc=12 37.6 (69%) < nc=8 39.8
+# 21 us is unreachable for BFP8 (7.3 MB weight / 288 GB/s peak => ~25 us floor); it
+# is the BFP4 number. So bf4 layers use 12c, bf8 layers use 16c -- each its optimum.
+_GATE_UP_COL_DRAM_SHARDED_GRID_BF4 = (6, 2)  # 12 cores
+_GATE_UP_COL_DRAM_SHARDED_GRID_BF8 = (8, 2)  # 16 cores
+
+
+def _gate_up_col_dram_grid(weight_dtype):
+    """Bandwidth-optimal compute grid for the decode gate_up, by weight dtype."""
+    return _GATE_UP_COL_DRAM_SHARDED_GRID_BF8 if weight_dtype == ttnn.bfloat8_b else _GATE_UP_COL_DRAM_SHARDED_GRID_BF4
 
 
 class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFusedGateUp):
@@ -523,6 +540,9 @@ class TTNNDotsOCRFusedGateUpColParallel(TTNNLinearLLamaIReplicatedWColSharded):
         self._gate_up_col_half = None
 
         weight_dtype = getattr(self, "_weight_dtype", ttnn.bfloat4_b)
+        # Compute grid sized to the weight dtype (heavier BFP8 weight -> more readers).
+        col_grid = _gate_up_col_dram_grid(weight_dtype)
+        col_num_cores = col_grid[0] * col_grid[1]
         # [2*intermediate, hidden] -> [hidden, 2*intermediate]; the mapper shards
         # the last (N) dim across the TP axis, so each chip holds [hidden, n_per_dev].
         weight_t = fused_weight_torch.T.contiguous()
@@ -531,7 +551,7 @@ class TTNNDotsOCRFusedGateUpColParallel(TTNNLinearLLamaIReplicatedWColSharded):
         n_per_dev = math.ceil(n_global / num_tp)
 
         program_config = _decode_gate_up_col_dram_sharded_program_config(
-            k_per_dev=k, n_per_dev=n_per_dev, num_cores=_GATE_UP_COL_DRAM_SHARDED_NUM_CORES
+            k_per_dev=k, n_per_dev=n_per_dev, num_cores=col_num_cores
         )
         if program_config is None:
             # k not tile-divisible across the compute grid; keep the interleaved path.
@@ -561,7 +581,10 @@ class TTNNDotsOCRFusedGateUpColParallel(TTNNLinearLLamaIReplicatedWColSharded):
                 memory_config=_dram_sharded_mem_config_2d(self.device, k=ttnn.TILE_SIZE, n=bias_n_per_dev),
             )
         self._gate_up_col_dram_pc = program_config
-        self._gate_up_col_dram_input_cfg = _decode_gate_up_input_memory_config(k)
+        # Input is K-width-sharded across the SAME grid as the matmul's num_cores
+        # (12 = 6x2), not the row-parallel 16-core (8x2) grid -- the DRAM-sharded
+        # kernel reads each core's K-shard, so the input shard grid must match.
+        self._gate_up_col_dram_input_cfg = _l1_width_sharded_mem_config(k=k, grid=col_grid)
         # Per-device logical width of each of gate_i / up_i (= intermediate/num_tp).
         # The DRAM-sharded matmul pads N up to num_cores*per_core_N tiles; the MLP
         # slices [0:half] and [half:2*half] to recover gate/up and drop the padding.
@@ -586,7 +609,12 @@ class TTNNDotsOCRFusedGateUpColParallel(TTNNLinearLLamaIReplicatedWColSharded):
         is_decode = int(input_shape[-2]) <= ttnn.TILE_SIZE
         if is_decode and program_config is not None:
             input_4d = ttnn.reshape(input_tensor, input_shape)
-            input_4d = ttnn.to_memory_config(input_4d, self._gate_up_col_dram_input_cfg)
+            # Downcast the activation to BFP8 *inside* the reshard that already runs
+            # (the dtype= arg), so there is no separate typecast op. The DRAM-sharded
+            # matmul is weight-bound, so a standalone typecast would be pure decode
+            # overhead; folding it into the existing to_memory_config is free. BFP8
+            # activation is accuracy-neutral here (output text stays byte-identical).
+            input_4d = ttnn.to_memory_config(input_4d, self._gate_up_col_dram_input_cfg, dtype=ttnn.bfloat8_b)
             tt_output = ttnn.linear(
                 input_4d,
                 self._gate_up_col_dram_weight,

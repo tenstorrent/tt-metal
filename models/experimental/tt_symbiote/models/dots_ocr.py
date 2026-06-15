@@ -46,6 +46,12 @@ from models.experimental.tt_symbiote.modules.normalization import TTNNDistribute
 from models.experimental.tt_symbiote.utils.device_management import timed_call
 
 
+# Mixed-precision decode gate_up: number of leading decoder layers whose fused
+# gate_up projection keeps the fast BFP4 weight. Layers at/after this index use
+# BFP8 (more precise, ~2x the DRAM-sharded weight read). See _build_symbiote_stack.
+DOTS_OCR_GATE_UP_BF4_LAYERS = int(os.environ.get("DOTS_OCR_GATE_UP_BF4_LAYERS", "7"))
+
+
 def _argmax_token_on_device(logits: ttnn.Tensor, use_multicore: bool = True) -> ttnn.Tensor:
     """Greedy token from logits.
 
@@ -926,6 +932,14 @@ class TTNNDotsOCRPipeline(TTNNModule):
                 layer = TTNNDotsOCRDecoderLayer.from_torch(hf_layer, tp_decode_scheme=tp_decode_scheme)
                 layer._unique_name = f"model.layers.{i}"
                 layer.override_children_module_names()
+                # Mixed-precision decode gate_up: the first DOTS_OCR_GATE_UP_BF4_LAYERS
+                # decoder layers keep the fast BFP4 fused gate_up weight; later layers use
+                # BFP8 for higher precision. gate_up only -- down/o_proj are untouched. Must
+                # run before move_weights so the weight loads at the chosen dtype.
+                fgu = getattr(getattr(layer, "mlp", None), "fused_gate_up_proj", None)
+                if fgu is not None and hasattr(fgu, "set_weight_dtype"):
+                    gate_up_dtype = ttnn.bfloat4_b if i < DOTS_OCR_GATE_UP_BF4_LAYERS else ttnn.bfloat8_b
+                    fgu.set_weight_dtype(gate_up_dtype)
                 decoder_layers.append(layer)
             stack = TTNNDotsOCRLayerStack(decoder_layers)
             stack._unique_name = "model.layer_stack"
