@@ -116,7 +116,7 @@ from utils.inference_bridge import TTML_RANK, TTT_RANK  # noqa: E402
 
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
-TTML_DEVICE_CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_2dev_ddp_gas_8.yaml"
+TTML_DEVICE_CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_2dev_ddp_gas_4.yaml"
 TTT_MESH_SHAPE = (1, 1)
 
 # Worker memory budget. 32 is comfortably below the [1, 1] N300 chip
@@ -237,7 +237,8 @@ def _ttml_main() -> None:
     from datasets import load_dataset
     from transformers import AutoTokenizer
     from ttml.common.config import get_model_config
-    from ttml.trainers import GRPOTrainer, get_grpo_config
+    from ttml.trainers.grpo_trainer_logged import GRPOTrainer
+    from ttml.trainers import get_grpo_config
 
     from utils.inference_bridge import TttInferenceClient
     from utils.llama_grpo_completer import (
