@@ -750,9 +750,12 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
         pip_cmd = "uv pip" if shutil.which("uv") is not None else "pip"
         install_cmd = f"{pip_cmd} install -r {_triage_requirements_path}"
         utils.WARN(f"Required debugger component is not installed. Please run: {install_cmd}")
-        assert console is not None, "Console must be initialized before the version check."
-        console.print(f"Module 'tt-exalens' not found. Please install tt-exalens by running:")
-        console.print(f"  [command]{install_cmd}[/]")
+        if console is not None:
+            console.print("Module 'tt-exalens' not found. Please install tt-exalens by running:")
+            console.print(f"  [command]{install_cmd}[/]")
+        else:
+            print("Module 'tt-exalens' not found. Please install tt-exalens by running:")
+            print(f"  {install_cmd}")
         exit(1)
 
     # Check if installed version satisfies the requirement
@@ -763,12 +766,17 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
         if skip_check:
             utils.WARN(message)
             utils.WARN("Proceeding due to --skip-version-check")
-        else:
-            assert console is not None, "Console must be initialized before the version check."
+        elif console is not None:
             console.print(message)
-            console.print(f"Please install tt-exalens by running:")
+            console.print("Please install tt-exalens by running:")
             console.print(f"  [command]{install_cmd}[/]")
-            console.print(f"Or disable this check by running with [command]--skip-version-check[/] argument.")
+            console.print("Or disable this check by running with [command]--skip-version-check[/] argument.")
+            exit(1)
+        else:
+            print(message)
+            print("Please install tt-exalens by running:")
+            print(f"  {install_cmd}")
+            print("Or disable this check by running with --skip-version-check argument.")
             exit(1)
 
 

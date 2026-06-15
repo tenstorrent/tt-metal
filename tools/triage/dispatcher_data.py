@@ -374,7 +374,8 @@ class DispatcherData:
         build_env = self._get_build_env_for_device(device_unique_id)
         proc_name = risc_name.upper()
         proc_type = enum_values["ProcessorTypes"][proc_name]
-        assert proc_type is not None, f"Processor type for '{proc_name}' not found in firmware ELF enums."
+        if proc_type is None:
+            raise TTTriageError(f"Processor type for '{proc_name}' not found in firmware ELF enums.")
         if mailboxes is None:
             mailboxes = self.read_mailboxes(location)
 

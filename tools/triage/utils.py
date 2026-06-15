@@ -141,10 +141,11 @@ def ERROR(s, **kwargs):
     if Verbosity.supports(Verbosity.ERROR):
         try:
             from triage import console
-
-            assert console is not None
-            console.print(f"[error]{s}[/]", **kwargs)
         except ImportError:
+            console = None
+        if console is not None:
+            console.print(f"[error]{s}[/]", **kwargs)
+        else:
             print(f"ERROR: {s}", **kwargs)
 
 
@@ -152,10 +153,11 @@ def WARN(s, **kwargs):
     if Verbosity.supports(Verbosity.WARN):
         try:
             from triage import console
-
-            assert console is not None
-            console.print(f"[warning]{s}[/]", **kwargs)
         except ImportError:
+            console = None
+        if console is not None:
+            console.print(f"[warning]{s}[/]", **kwargs)
+        else:
             print(f"WARNING: {s}", **kwargs)
 
 
@@ -163,10 +165,11 @@ def DEBUG(s, **kwargs):
     if Verbosity.supports(Verbosity.DEBUG):
         try:
             from triage import console
-
-            assert console is not None
-            console.print(f"[debug]{s}[/]", **kwargs)
         except ImportError:
+            console = None
+        if console is not None:
+            console.print(f"[debug]{s}[/]", **kwargs)
+        else:
             print(f"DEBUG: {s}", **kwargs)
 
 
@@ -174,10 +177,11 @@ def INFO(s, **kwargs):
     if Verbosity.supports(Verbosity.INFO):
         try:
             from triage import console
-
-            assert console is not None
-            console.print(f"[info]{s}[/]", **kwargs)
         except ImportError:
+            console = None
+        if console is not None:
+            console.print(f"[info]{s}[/]", **kwargs)
+        else:
             print(f"INFO: {s}", **kwargs)
 
 
@@ -185,8 +189,9 @@ def VERBOSE(s, **kwargs):
     if Verbosity.supports(Verbosity.VERBOSE):
         try:
             from triage import console
-
-            assert console is not None
-            console.print(f"[verbose]{s}[/]", **kwargs)
         except ImportError:
+            console = None
+        if console is not None:
+            console.print(f"[verbose]{s}[/]", **kwargs)
+        else:
             print(f"VERBOSE: {s}", **kwargs)
