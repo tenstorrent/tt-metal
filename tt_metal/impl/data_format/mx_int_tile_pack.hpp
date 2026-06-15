@@ -21,6 +21,23 @@
 
 namespace tt::tt_metal::mx {
 
+// Packer is the precise reference the device output is compared against, so
+// its rounding must be deterministic regardless of ambient FP state. This
+// helper computes ties-to-even purely from the value, with no mode dependence.
+inline float rint_ties_even(float x) {
+    const float floor_x = std::floor(x);
+    const float frac = x - floor_x;
+    if (frac < 0.5f) {
+        return floor_x;
+    }
+    if (frac > 0.5f) {
+        return floor_x + 1.0f;
+    }
+    // Exact tie: round to the even neighbour. floor_x is integral, so its
+    // parity decides; std::fmod is nonzero iff floor_x is odd.
+    return (std::fmod(floor_x, 2.0f) == 0.0f) ? floor_x : floor_x + 1.0f;
+}
+
 // Quantize a single (already block-scaled) value into an MxInt element: a signed
 // two's-complement integer of width `params.elem_width_bits`, returned masked
 // into the low bits. Mirrors the validated tt-llk golden
@@ -46,8 +63,7 @@ inline uint32_t convert_to_mxint_elem_bits(float scaled, const FormatParams& par
     } else if (is_inf) {
         int_val = (bits >> 31) ? -elem_max : elem_max;
     } else {
-        // Round half to even, matching numpy's np.rint in the reference packer.
-        float q = std::nearbyint(scaled * static_cast<float>(params.elem_int_scale));
+        float q = rint_ties_even(scaled * static_cast<float>(params.elem_int_scale));
         if (q > static_cast<float>(elem_max)) {
             int_val = elem_max;
         } else if (q < static_cast<float>(-elem_max)) {
