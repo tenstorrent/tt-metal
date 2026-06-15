@@ -64,6 +64,8 @@ Information relevant to programming Blackhole while it is being brought up.
   </tr>
 </tbody></table>
 
+> **Note:** As of firmware v19.5.0 (January 2026), all p150 cards (p150a, p150b) are unified to **120 Tensix cores** rather than the 140 shown above — existing cards are updated via firmware as well, so metal may report a smaller grid size. See the [tt-system-firmware v19.5.0 release notes](https://github.com/tenstorrent/tt-system-firmware/releases/tag/v19.5.0).
+
 ### L1 Data Cache
 
 Blackhole added a small (4 x 16B cachelines) write-through data cache in L1. Writing an address on one core and reading it from another only requires the reader to invalidate if the address was previously read.
