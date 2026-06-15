@@ -135,13 +135,19 @@ path. The repo currently pins an older transformers — bumping it is a document
 (coordinate with sibling model PRs that pin a different major version; they cannot share an env).
 
 ## Framework dependency (self-review note)
-All mistral4-specific code lives in `models/demos/mistral4/`. The model reuses generic framework
-additions in `models/tt_transformers/tt/` — `dequantize_fp8_state_dict` (load_checkpoints), the
-`FineGrainedFP8Config(dequantize=True)` path + Mistral3-VLM nesting (model_config), and a
-mistral-common tokenizer shim (common) — which are generic (any fp8 checkpoint / Mistral3 VLM
-benefits) and carry **no mistral4-specific branching** (verified: shared files mention mistral4 only
-in doc comments). These belong to the shared fp8/VLM framework work (the Devstral PR); mistral4
-depends on them and adds none of its own edits to shared infra.
+All mistral4-specific code lives in `models/demos/mistral4/`. To **reuse** the framework rather than
+fork it (the model uses tt_transformers' `MistralVisionTower` + `ModelArgs` + checkpoint loaders), the
+branch carries generic, backward-compatible additions in `models/tt_transformers/tt/`:
+- `load_checkpoints.py` — `dequantize_fp8_state_dict` (vanilla per-tensor/per-expert fp8 → bf16; any fp8 checkpoint benefits);
+- `model_config.py` — `_fp8_dequantize_config` + broadening the existing Mistral3 branch from a `Mistral-Small-3.1-24B` name-match to `model_type == "mistral3"` (still matches the 24B; now also Mistral-Small-4) so `ModelArgs` parses the nested Pixtral-VLM checkpoint;
+- `common.py` — `_as_token_ids` (normalizes mistral-common tokenizer output; called by model_config's encode path);
+- `attention.py` — generic Blackhole WO-prefill chunking by `prefill_len_cutoff` instead of a hardcoded 1024 (a generic L1-CB fix; **not used by mistral4's model-local MLA** — a co-resident generic improvement).
+
+These carry **no mistral4-name-specific branching** (the Mistral3 branch is keyed on `model_type`, generic).
+They are shared **framework** work (shared with the Devstral/Mistral3 effort), not mistral4-model code.
+**Merge structure:** land these via the shared framework PR (with the **D1c all-models Tier-1/2/3 regression
+run** that any tt_transformers change requires) and rebase mistral4's PR on top, so mistral4's own diff is
+model-dir-only; or, if co-merged, gate on that regression run. mistral4 adds none of its own edits to shared infra.
 
 ## Status snapshot (self-review vs review-ign-model)
 Done: A1 framework adherence, A2 device-side (no hot-loop host round-trip), A3 trace — **prefill AND
