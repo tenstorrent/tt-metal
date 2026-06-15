@@ -10,12 +10,16 @@
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "rand_device_operation.hpp"
-#include <tt-metalium/tensor_accessor_args.hpp>
+
+#include "ttnn/metal2_artifacts.hpp"
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 namespace ttnn::operations::rand {
 
 using namespace tt;
 using namespace tt::tt_metal;
+namespace m2 = tt::tt_metal::experimental;
 
 namespace {
 
@@ -27,8 +31,8 @@ auto get_random_seed() -> uint32_t { return distribution(rng); }
 constexpr const char* WRITER_KERNEL_PATH = "ttnn/cpp/ttnn/operations/rand/device/kernels/writer_uniform.cpp";
 constexpr const char* COMPUTE_KERNEL_PATH = "ttnn/cpp/ttnn/operations/rand/device/kernels/compute_uniform.cpp";
 
-// Work split + per-device seed offset, shared by create_descriptor (cache miss) and
-// get_dynamic_runtime_args (cache hit) so both derive the identical core list and seed offset.
+// Work split + per-device seed offset, shared so the miss-build and the hit-refresh
+// (create_program_spec re-run from the adapter) derive the identical core list and seed offset.
 struct RandWorkSplit {
     uint32_t num_cores = 0;
     CoreRangeSet all_cores;
@@ -77,7 +81,7 @@ RandWorkSplit compute_rand_work_split(
         device_seed_offset};
 }
 
-// Per-core seed; shared so the miss-build and the hit-patch produce identical values.
+// Per-core seed; shared so the miss-build and the hit-refresh produce identical values.
 uint32_t rand_seed_for_core(
     const RandDeviceOperation::operation_attributes_t& attrs, int i, uint32_t device_seed_offset) {
     return attrs.seed != 0 ? attrs.seed + i + device_seed_offset : get_random_seed();
@@ -85,150 +89,161 @@ uint32_t rand_seed_for_core(
 
 }  // namespace
 
-ProgramDescriptor RandDeviceOperation::create_descriptor(
+// Metal 2.0 program factory. Produces the immutable ProgramSpec plus its mutable
+// ProgramRunArgs. seed/from/to live in ProgramRunArgs (NOT the spec), so they are
+// re-applied on every dispatch (cache miss and cache hit) — the structural replacement
+// for the old custom-hash-excludes-seed + get_dynamic_runtime_args() patching dance.
+ttnn::device_operation::ProgramArtifacts RandDeviceOperation::RandProgramFactory::create_program_spec(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& /*tensor_args*/,
-    tensor_return_value_t& output,
-    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    auto
-        [num_cores,
-         all_cores,
-         core_group_1,
-         core_group_2,
-         units_per_core_group_1,
-         units_per_core_group_2,
-         cores,
-         device_seed_offset] = compute_rand_work_split(operation_attributes, output, mesh_dispatch_coordinate);
-    const auto num_cores_total = cores.size();
+    tensor_return_value_t& output) {
+    auto ws = compute_rand_work_split(operation_attributes, output, /*mesh_dispatch_coordinate=*/std::nullopt);
 
-    DataType output_dtype = output.dtype();
-    auto out_data_format = datatype_to_dataformat_converter(output_dtype);
+    const DataType output_dtype = output.dtype();
+    const auto out_data_format = datatype_to_dataformat_converter(output_dtype);
     const uint32_t dtype_tile_size = tile_size(out_data_format);
     const uint32_t intermed_tile_size = tile_size(tt::DataFormat::Float32);
 
-    constexpr uint32_t in_out_num_tiles = 1;
     constexpr uint32_t intermed_num_tiles = 2;
+    constexpr uint32_t in_out_num_tiles = 1;
 
-    constexpr uint32_t intermed_cb_id = CBIndex::c_24;
-    constexpr uint32_t dst_cb_id = CBIndex::c_0;
+    // ---- ProgramSpec (immutable) ----
+    m2::ProgramSpec spec;
+    spec.name = "rand";
 
-    ProgramDescriptor desc;
-
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = intermed_num_tiles * intermed_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = intermed_cb_id,
-            .data_format = tt::DataFormat::Float32,
-            .page_size = intermed_tile_size,
-        }}},
-    });
-
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = in_out_num_tiles * dtype_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = dst_cb_id,
-            .data_format = out_data_format,
-            .page_size = dtype_tile_size,
-        }}},
-    });
-
-    KernelDescriptor::CompileTimeArgs writer_ct_args;
-    writer_ct_args.reserve(8);
-    writer_ct_args.push_back(intermed_cb_id);
-    writer_ct_args.push_back(dst_cb_id);
-    TensorAccessorArgs(*output.buffer()).append_to(writer_ct_args);
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source = WRITER_KERNEL_PATH;
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = std::move(writer_ct_args);
-    writer_desc.config = WriterConfigDescriptor{};
-    switch (output_dtype) {
-        case DataType::BFLOAT16: writer_desc.defines.emplace_back("OUTPUT_DTYPE_BFLOAT16", "1"); break;
-        case DataType::FLOAT32: writer_desc.defines.emplace_back("OUTPUT_DTYPE_FLOAT32", "1"); break;
-        default:
-            // The writer kernel only implements float32 and bfloat16 output paths.
-            // Fail fast here so we never instantiate a program that can hang at runtime.
-            TT_THROW("RandDeviceOperation: unsupported output dtype for writer kernel");
-    }
-    writer_desc.runtime_args.reserve(num_cores_total);
-
-    KernelDescriptor compute_desc;
-    compute_desc.kernel_source = COMPUTE_KERNEL_PATH;
-    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = all_cores;
-    compute_desc.compile_time_args = {intermed_cb_id};
-    compute_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-        .fp32_dest_acc_en = true,  // if fp32_dest_acc_en set to false a precision error may occur which makes
-                                   // generated number out of range [from, to)
-        .dst_full_sync_en = false,
-        .math_approx_mode = true,
+    // "intermed" (legacy CB c_24): fp32 staging, produced by compute, consumed by writer.
+    // "dst" (legacy CB c_0): output-dtype L1 scratch the writer uses to pack bf16 before the
+    // NoC write; it has no FIFO peer (the writer is its only user), so it is bound as a
+    // self-loop (producer + consumer on the writer) to satisfy the producer/consumer invariant.
+    spec.dataflow_buffers = {
+        m2::DataflowBufferSpec{
+            .unique_id = m2::DFBSpecName{"intermed"},
+            .entry_size = intermed_tile_size,
+            .num_entries = intermed_num_tiles,
+            .data_format_metadata = tt::DataFormat::Float32,
+        },
+        m2::DataflowBufferSpec{
+            .unique_id = m2::DFBSpecName{"dst"},
+            .entry_size = dtype_tile_size,
+            .num_entries = in_out_num_tiles,
+            .data_format_metadata = out_data_format,
+        },
     };
-    compute_desc.runtime_args.reserve(num_cores_total);
 
+    m2::KernelSpec compute{
+        .unique_id = m2::KernelSpecName{"compute"},
+        .source = std::filesystem::path{COMPUTE_KERNEL_PATH},
+        .dfb_bindings =
+            {
+                m2::DFBBinding{
+                    .dfb_spec_name = m2::DFBSpecName{"intermed"},
+                    .accessor_name = "intermed",
+                    .endpoint_type = m2::DFBEndpointType::PRODUCER,
+                },
+            },
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names = {"seed", "start_id", "num_tiles"},
+                .common_runtime_arg_names = {"from", "to"},
+            },
+        .hw_config =
+            m2::ComputeHardwareConfig{
+                .math_fidelity = MathFidelity::HiFi4,
+                // if fp32_dest_acc_en is false a precision error may occur which makes the
+                // generated number fall out of range [from, to)
+                .fp32_dest_acc_en = true,
+                .dst_full_sync_en = false,
+                .math_approx_mode = true,
+            },
+    };
+
+    m2::KernelSpec writer{
+        .unique_id = m2::KernelSpecName{"writer"},
+        .source = std::filesystem::path{WRITER_KERNEL_PATH},
+        .dfb_bindings =
+            {
+                m2::DFBBinding{
+                    .dfb_spec_name = m2::DFBSpecName{"intermed"},
+                    .accessor_name = "intermed",
+                    .endpoint_type = m2::DFBEndpointType::CONSUMER,
+                },
+                m2::DFBBinding{
+                    .dfb_spec_name = m2::DFBSpecName{"dst"},
+                    .accessor_name = "dst",
+                    .endpoint_type = m2::DFBEndpointType::PRODUCER,
+                },
+                m2::DFBBinding{
+                    .dfb_spec_name = m2::DFBSpecName{"dst"},
+                    .accessor_name = "dst",
+                    .endpoint_type = m2::DFBEndpointType::CONSUMER,
+                },
+            },
+        .tensor_bindings =
+            {
+                m2::TensorBinding{
+                    .tensor_parameter_name = m2::TensorParamName{"output"},
+                    .accessor_name = "output",
+                },
+            },
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names = {"start_id", "num_tiles"},
+            },
+        .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementRoleHint::WRITER},
+    };
+    // The writer kernel only implements float32 and bfloat16 output paths. Gate the path via a
+    // compile-time define, and fail fast on anything else so we never build a hangable program.
+    switch (output_dtype) {
+        case DataType::BFLOAT16: writer.compiler_options.defines = {{"OUTPUT_DTYPE_BFLOAT16", "1"}}; break;
+        case DataType::FLOAT32: writer.compiler_options.defines = {{"OUTPUT_DTYPE_FLOAT32", "1"}}; break;
+        default: TT_THROW("RandDeviceOperation: unsupported output dtype for writer kernel");
+    }
+
+    spec.kernels = {compute, writer};
+    spec.tensor_parameters = {
+        m2::TensorParameter{.unique_id = m2::TensorParamName{"output"}, .spec = output.tensor_spec()},
+    };
+    spec.work_units = std::vector<m2::WorkUnitSpec>{
+        m2::WorkUnitSpec{
+            .name = "rand",
+            .kernels = {m2::KernelSpecName{"compute"}, m2::KernelSpecName{"writer"}},
+            .target_nodes = ws.all_cores,
+        },
+    };
+
+    // ---- ProgramRunArgs (mutable; seed/from/to refreshed every dispatch) ----
     const float eps = 1e-6f;
     const uint32_t from_bits = std::bit_cast<uint32_t>(operation_attributes.from);
     const uint32_t to_bits = std::bit_cast<uint32_t>(operation_attributes.to - eps);
 
+    m2::ProgramRunArgs run;
+    m2::KernelRunArgs compute_run{.kernel = m2::KernelSpecName{"compute"}};
+    compute_run.common_runtime_arg_values = {{"from", from_bits}, {"to", to_bits}};
+    m2::KernelRunArgs writer_run{.kernel = m2::KernelSpecName{"writer"}};
+
     uint32_t tile_offset = 0;
-    for (int i = 0; i < static_cast<int>(cores.size()); ++i) {
-        const auto& core = cores[i];
+    for (int i = 0; i < static_cast<int>(ws.cores.size()); ++i) {
+        const auto& core = ws.cores[i];
         uint32_t units_per_core;
-        if (core_group_1.contains(core)) {
-            units_per_core = units_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            units_per_core = units_per_core_group_2;
+        if (ws.core_group_1.contains(core)) {
+            units_per_core = ws.units_per_core_group_1;
+        } else if (ws.core_group_2.contains(core)) {
+            units_per_core = ws.units_per_core_group_2;
         } else {
             TT_THROW("Core not in specified core ranges");
         }
+        const uint32_t seed = rand_seed_for_core(operation_attributes, i, ws.device_seed_offset);
 
-        uint32_t seed = rand_seed_for_core(operation_attributes, i, device_seed_offset);
-
-        // seed/from/to are DYNAMIC (excluded from compute_program_hash): baked here for the
-        // cache-miss build, and re-applied on every cache hit via get_dynamic_runtime_args().
-        compute_desc.runtime_args.emplace_back(
-            core, KernelDescriptor::CoreRuntimeArgs{seed, from_bits, to_bits, tile_offset, units_per_core});
-
-        // Register the output address as a Buffer* binding so rand takes the fast cache-hit path
-        // (real program caching) with the address correctly re-patched each dispatch.
-        writer_desc.emplace_runtime_args(core, {output.buffer(), tile_offset, units_per_core});
+        compute_run.runtime_arg_values.push_back(
+            {core, {{"seed", seed}, {"start_id", tile_offset}, {"num_tiles", units_per_core}}});
+        writer_run.runtime_arg_values.push_back({core, {{"start_id", tile_offset}, {"num_tiles", units_per_core}}});
 
         tile_offset += units_per_core;
     }
+    run.kernel_run_args = {compute_run, writer_run};
+    run.tensor_args = {{m2::TensorParamName{"output"}, output.mesh_tensor()}};
 
-    desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc));
-
-    return desc;
-}
-
-std::vector<tt::tt_metal::DynamicRuntimeArg> RandDeviceOperation::get_dynamic_runtime_args(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& /*tensor_args*/,
-    tensor_return_value_t& output,
-    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    // compute is kernel 1; its runtime args are {seed, from_bits, to_bits, tile_offset, units_per_core}.
-    // seed/from/to are excluded from the hash and re-applied here; the rest are static.
-    constexpr uint32_t kComputeKernelIdx = 1;
-    auto ws = compute_rand_work_split(operation_attributes, output, mesh_dispatch_coordinate);
-
-    const float eps = 1e-6f;
-    const uint32_t from_bits = std::bit_cast<uint32_t>(operation_attributes.from);
-    const uint32_t to_bits = std::bit_cast<uint32_t>(operation_attributes.to - eps);
-
-    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
-    dynamic_args.reserve(ws.cores.size() * 3);
-    for (int i = 0; i < static_cast<int>(ws.cores.size()); ++i) {
-        const uint32_t seed = rand_seed_for_core(operation_attributes, i, ws.device_seed_offset);
-        dynamic_args.push_back({kComputeKernelIdx, ws.cores[i], 0, seed});
-        dynamic_args.push_back({kComputeKernelIdx, ws.cores[i], 1, from_bits});
-        dynamic_args.push_back({kComputeKernelIdx, ws.cores[i], 2, to_bits});
-    }
-    return dynamic_args;
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run)};
 }
 
 }  // namespace ttnn::operations::rand

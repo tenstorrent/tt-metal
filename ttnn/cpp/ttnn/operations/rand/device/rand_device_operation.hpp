@@ -6,12 +6,12 @@
 
 #include <optional>
 
+#include <variant>
 #include <vector>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/experimental/program_descriptor_patching.hpp>
+#include "ttnn/metal2_artifacts.hpp"
 
 namespace ttnn::operations::rand {
 
@@ -41,27 +41,27 @@ struct RandDeviceOperation {
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& output,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
+    // Metal 2.0 program factory: builds the immutable ProgramSpec and its mutable
+    // ProgramRunArgs. seed/from/to are excluded from the program hash (calls differing only
+    // in those values cache-hit instead of recompiling); they live in ProgramRunArgs and are
+    // re-applied on every dispatch by the framework adapter (cache miss and cache hit alike),
+    // so a cache hit still sees a fresh per-core seed. The test_rand_different_seed_values
+    // regression test enforces this.
+    struct RandProgramFactory {
+        static ttnn::device_operation::ProgramArtifacts create_program_spec(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output);
+    };
+    using program_factory_t = std::variant<RandProgramFactory>;
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&) {
+        return RandProgramFactory{};
+    }
 
     static void validate_inputs(const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    // seed/from/to are excluded from the program hash (so calls differing only in
-    // those values cache-hit instead of recompiling).  They are therefore DYNAMIC: this returns the
-    // current per-core (seed) and per-call (from/to) values so the framework re-applies them to the
-    // cached program on every dispatch.  Must mirror the seed/from/to runtime args built in
-    // create_descriptor() — the test_rand_different_seed_values regression test enforces this.
-    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& output,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::operations::rand

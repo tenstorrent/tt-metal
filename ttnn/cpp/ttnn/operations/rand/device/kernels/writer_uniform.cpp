@@ -4,20 +4,19 @@
 
 #include <tt-metalium/constants.hpp>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/kernel_args.h"
 
 using namespace tt;
 
 void kernel_main() {
-    constexpr uint32_t intermed_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t dst_cb_id = get_compile_time_arg_val(1);
-    constexpr auto dst_args = TensorAccessorArgs<2>();
+    constexpr uint32_t intermed_cb_id = dfb::intermed;
+    constexpr uint32_t dst_cb_id = dfb::dst;
 
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t start_id = get_arg_val<uint32_t>(1);
-    uint32_t num_tiles = get_arg_val<uint32_t>(2);
+    uint32_t start_id = get_arg(args::start_id);
+    uint32_t num_tiles = get_arg(args::num_tiles);
     uint32_t end_id = start_id + num_tiles;
 
-    const auto output_addrg = TensorAccessor(dst_args, dst_addr);
+    const auto output_addrg = TensorAccessor(ta::output);
 
     cb_reserve_back(dst_cb_id, 1);
     uint32_t dst_cb_write_ptr = get_write_ptr(dst_cb_id);

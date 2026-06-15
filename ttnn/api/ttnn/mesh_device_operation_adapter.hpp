@@ -711,13 +711,17 @@ public:
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
             // Metal 2.0's MakeProgramFromSpec needs a MeshDevice; pull from the
-            // first device tensor reachable from tensor_args. Op factories
-            // satisfying this concept are tensor-driven, so first_tensor is
-            // always populated for current callers.
+            // first device tensor reachable from tensor_args, falling back to the
+            // output (tensor_return_value) for input-less ops (e.g. rand), whose
+            // only device tensor is the output they allocate.
             auto first_tensor = ttsl::reflection::get_first_object_of_type<tt::tt_metal::Tensor>(tensor_args);
+            if (!first_tensor.has_value()) {
+                first_tensor = ttsl::reflection::get_first_object_of_type<tt::tt_metal::Tensor>(tensor_return_value);
+            }
             TT_FATAL(
                 first_tensor.has_value(),
-                "ProgramSpec factory adapter requires at least one Tensor in tensor_args to source the MeshDevice");
+                "ProgramSpec factory adapter requires at least one Tensor in tensor_args or tensor_return_value to "
+                "source the MeshDevice");
             auto* mesh_device = first_tensor.value().device();
             TT_FATAL(mesh_device != nullptr, "First tensor in tensor_args must be allocated on a MeshDevice");
 
@@ -747,18 +751,19 @@ public:
         // dispatcher's historical naming, not a reference to ProgramDescriptor.
         static void apply_descriptor(
             cached_mesh_workload_t& cached_workload,
-            const operation_attributes_t& /*attrs*/,
+            const operation_attributes_t& attrs,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
-            auto io_mesh_tensors = collect_mesh_tensors(tensor_args, tensor_return_value);
+            // Re-run the factory to obtain fresh ProgramRunArgs, and re-apply ALL of them
+            // (tensor args AND non-tensor runtime args) via SetProgramRunArgs. This is the
+            // Metal 2.0 analog of the descriptor adapter's get_dynamic_runtime_args path: it
+            // keeps per-dispatch-varying runtime args correct on a cache hit (e.g. an RNG seed
+            // the op deliberately excludes from the program hash), which a tensor-only
+            // UpdateTensorArgs refresh cannot do. The ProgramSpec the factory also returns is
+            // discarded here — no Program is rebuilt and no kernel is re-JITed.
+            auto artifacts = ProgramSpecFactory::create_program_spec(attrs, tensor_args, tensor_return_value);
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-                const auto& sv = cached_workload.shared_variables.at(coordinate_range);
-                tt::tt_metal::experimental::Table<TensorParamName, TensorArgument> fresh_tensor_args;
-                for (const auto& b : sv.bindings) {
-                    fresh_tensor_args.emplace(
-                        b.tensor_parameter_name, TensorArgument{io_mesh_tensors[b.io_tensor_idx]});
-                }
-                tt::tt_metal::experimental::UpdateTensorArgs(program, fresh_tensor_args);
+                tt::tt_metal::experimental::SetProgramRunArgs(program, artifacts.run_params);
             }
         }
     };
