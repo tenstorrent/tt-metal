@@ -142,6 +142,7 @@ void kernel_main() {
     // space_avail lives in our local L1; the sender increments it remotely once per slot it has
     // finished forwarding.  We poll it as a per-entry credit (wait for produced_count+1) before
     // overwriting a slot, so the sender's in-flight fabric send is never clobbered.
+    Semaphore<> space_avail_sem(space_avail_semaphore_id);
     volatile tt_l1_ptr uint32_t* space_avail_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(space_avail_semaphore_id));
 
@@ -270,7 +271,7 @@ void kernel_main() {
                         produced_count + 1,
                         (uint32_t)(*space_avail_sem_ptr),
                         route);
-                    noc_semaphore_wait_min(space_avail_sem_ptr, produced_count + 1);
+                    space_avail_sem.wait_min(produced_count + 1);
 
                     uint32_t slot = produced_count % writer_cb_size;
 
@@ -323,7 +324,7 @@ void kernel_main() {
 
         // Drain all local NOC writes issued during this batch before the scratch ring or
         // untilize CB get reused. Cross-device entries already barriered per-entry.
-        noc_async_writes_flushed();
+        noc.async_writes_flushed();
         local_count = 0;
 
         cb_plan.pop_front(1);
@@ -344,7 +345,7 @@ void kernel_main() {
         (uint32_t)core_id,
         produced_count + 1,
         (uint32_t)(*space_avail_sem_ptr));
-    noc_semaphore_wait_min(space_avail_sem_ptr, produced_count + 1);
+    space_avail_sem.wait_min(produced_count + 1);
     DPRINT_DISPATCH("[W c={}] sending SENTINEL (produced total={})\n", (uint32_t)core_id, produced_count);
 
     uint32_t sentinel_slot = produced_count % writer_cb_size;

@@ -93,9 +93,14 @@ void kernel_main() {
     constexpr auto mask_args_ct = TensorAccessorArgs<mask_accessor_offset>();
     const auto mask_accessor = TensorAccessor(mask_args_ct, mask_addr);
 
-    uint32_t in_base_addr = get_write_ptr(cb_id_in);
-    uint32_t out_addr = get_write_ptr(cb_id_out);
-    uint32_t mask_l1_addr = get_write_ptr(cb_mask);
+    CircularBuffer cb_in(cb_id_in);
+    CircularBuffer cb_out(cb_id_out);
+    CircularBuffer cb_mask_obj(cb_mask);
+    CircularBuffer cb_gather_tmp_obj(cb_gather_tmp);
+
+    uint32_t in_base_addr = cb_in.get_write_ptr();
+    uint32_t out_addr = cb_out.get_write_ptr();
+    uint32_t mask_l1_addr = cb_mask_obj.get_write_ptr();
 
     // Phase 1: Read this core's shard pages
     for (uint32_t h = 0; h < h_count; h++) {
@@ -163,7 +168,7 @@ void kernel_main() {
 
         Semaphore<> gather_sem(gather_sem_idx);
 
-        uint32_t tmp_addr = get_write_ptr(cb_gather_tmp);
+        uint32_t tmp_addr = cb_gather_tmp_obj.get_write_ptr();
         volatile tt_l1_ptr uint32_t* local_hist = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_addr);
 
         // Wait for ALL children to signal before reading any.

@@ -78,7 +78,7 @@ void kernel_main() {
         noc_semaphore_inc(sender_sem_noc_addrs[c], 1);
     }
 
-    noc_async_atomic_barrier();
+    noc.async_atomic_barrier();
 #endif
 
     // ===== Untilized-data send path (runs for both TILE_LAYOUT and ROW_MAJOR) =====
@@ -166,6 +166,8 @@ void kernel_main() {
     uint32_t total_untilizers = get_arg_val<uint32_t>(rt_args_idx++);
 
     Noc noc;
+    Semaphore<> credits_sem(credits_semaphore_id);
+    Semaphore<> counter_ready_sem(counter_ready_semaphore_id);
 
     uint64_t sender_data_ready_noc_addr =
         get_noc_addr(sender_noc_x, sender_noc_y, get_semaphore(data_ready_semaphore_id));
@@ -278,10 +280,10 @@ void kernel_main() {
 
                 } else {
                     if (local_credits == 0) {
-                        noc_semaphore_wait_min(credits_sem_ptr, 1);
+                        credits_sem.wait_min(1);
                         uint32_t n = *credits_sem_ptr;
                         noc_semaphore_inc(self_credits_noc_addr, (uint32_t)(-(int32_t)n));
-                        noc_async_atomic_barrier();
+                        noc.async_atomic_barrier();
                         local_credits += n;
                     }
                     // Write routing metadata (dst_chip, dst_token_idx, dst_topk_indice) to
@@ -327,16 +329,16 @@ void kernel_main() {
     // All batches processed — send job-done sentinel to sender so it knows this untilizer
     // core has finished completely.  Uses one ring slot (credit consumed, data_ready++).
 
-    noc_semaphore_wait_min(credits_sem_ptr, SLOTS_PER_UNTILIZER - local_credits);
+    credits_sem.wait_min(SLOTS_PER_UNTILIZER - local_credits);
     uint32_t n = *credits_sem_ptr;
     noc_semaphore_inc(self_credits_noc_addr, (uint32_t)(-(int32_t)n));
-    noc_semaphore_set(counter_ready_sem_ptr, 0);
-    noc_async_atomic_barrier();
+    counter_ready_sem.set(0);
+    noc.async_atomic_barrier();
 
     uint64_t done_meta_noc = our_metadata_slice_noc_addr + write_slot * aligned_dispatched_metadata_page_size;
     noc_inline_dw_write(done_meta_noc, ROUTE_INFO_SENTINEL);
-    noc_async_write_barrier();
+    noc.async_write_barrier();
     noc_semaphore_inc(sender_data_ready_noc_addr, 1);
-    noc_async_atomic_barrier();
+    noc.async_atomic_barrier();
     cb_experts_tok_counter.pop_front(cb_counter_total_pages);
 }
