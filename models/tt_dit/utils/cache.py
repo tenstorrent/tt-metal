@@ -90,6 +90,7 @@ def load_model(
     if tt_model.is_loaded():
         return
 
+    t0 = time.monotonic()
     cache_dir = model_cache_dir(
         model_name=model_name,
         subfolder=subfolder,
@@ -106,12 +107,14 @@ def load_model(
         logger.info(f"{subfolder}: no device cache (set TT_DIT_CACHE_DIR to cache converted weights).")
         _load_torch_with_logging(tt_model, get_torch_state_dict, subfolder)
         ttnn.distributed_context_barrier()
+        logger.info(f"{subfolder}: loaded in {time.monotonic() - t0:.0f}s")
         return
 
     if Path(cache_dir).is_dir():
-        logger.info(f"loading cache at '{cache_dir}'.")
+        logger.info(f"{subfolder}: loading cached device weights from '{cache_dir}'...")
         tt_model.load(cache_dir)
         ttnn.distributed_context_barrier()
+        logger.info(f"{subfolder}: loaded from cache in {time.monotonic() - t0:.0f}s")
         return
 
     if get_torch_state_dict is None:
@@ -125,8 +128,12 @@ def load_model(
     ttnn.distributed_context_barrier()
 
     if create_cache:
-        logger.info(f"Writing cache to '{cache_dir}'.")
+        ts = time.monotonic()
+        logger.info(f"{subfolder}: writing device cache to '{cache_dir}'...")
         tt_model.save(cache_dir)
+        logger.info(f"{subfolder}: cached to disk in {time.monotonic() - ts:.0f}s")
+
+    logger.info(f"{subfolder}: ready in {time.monotonic() - t0:.0f}s")
 
 
 def model_cache_dir(
