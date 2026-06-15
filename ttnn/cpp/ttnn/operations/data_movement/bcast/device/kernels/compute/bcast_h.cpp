@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "api/compute/bcast.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
 void kernel_main() {
@@ -15,11 +16,11 @@ void kernel_main() {
     constexpr auto cb_rhs = tt::CBIndex::c_1;
     constexpr auto cb_out = tt::CBIndex::c_16;
 
-    // Bcast-H: original `init_bcast<BCAST_LLKOP, BCAST_DIM>` preserved as the
-    // big init (hw_configure + pack_dest_init + sync_init + per-op MOP). Chain's
-    // BinaryFpu uses CHAIN_BCAST_OP / CHAIN_BCAST_DIM (helper-lib types emitted
-    // by bcast_op_utils alongside the LLK enum macros).
-    init_bcast<BCAST_LLKOP, BCAST_DIM>(cb_lhs, cb_rhs, cb_out);
+    // Standard hw-config big init only. The chain's BinaryFpu emits the bcast MOP
+    // (add/sub/mul_bcast_*_init_short, eltwise_chain.inl:209) each run, so
+    // init_bcast's per-op MOP was redundant; compute_kernel_hw_startup provides the
+    // hw_configure + pack init. Chain's BinaryFpu uses CHAIN_BCAST_OP / CHAIN_BCAST_DIM.
+    compute_kernel_hw_startup(cb_lhs, cb_rhs, cb_out);
 
     // Reader supplies cb_rhs wrapped at Wt boundary, so per-tile we stream
     // cb_lhs + cb_rhs and apply the bcast op. Flat 1D chain over total tiles
