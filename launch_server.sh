@@ -7,7 +7,7 @@
 # Exit on error
 set -e
 
-echo "=== Unified Image Generation Server Launcher ==="
+echo "=== Unified Media Generation Server Launcher ==="
 
 # ---------------------------------------------------------------------------
 # Parse --model flag (must be done before any environment setup)
@@ -23,8 +23,8 @@ for arg in "$@"; do
     fi
 done
 
-if [ "$MODEL" != "sdxl" ] && [ "$MODEL" != "sd35" ]; then
-    echo "Error: --model must be 'sdxl' or 'sd35' (got: '$MODEL')"
+if [ "$MODEL" != "sdxl" ] && [ "$MODEL" != "sd35" ] && [ "$MODEL" != "wan22" ]; then
+    echo "Error: --model must be 'sdxl', 'sd35', or 'wan22' (got: '$MODEL')"
     exit 1
 fi
 
@@ -164,6 +164,14 @@ print(','.join(ids[:8]))
     fi
     # No TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE for SD3.5
     # No TT_MM_THROTTLE_PERF for SD3.5
+
+elif [ "$MODEL" = "wan22" ]; then
+    # Wan2.2 T2V is board-aware: a single worker owns the full mesh and the
+    # worker process (setup_wan_worker_environment in worker.py) derives
+    # TT_VISIBLE_DEVICES, TT_MESH_GRAPH_DESC_PATH, and per-board env vars from
+    # --board via device_specs. No shell-level device pinning is needed here;
+    # --board is required and is passed through to server.py.
+    echo "Wan2.2: topology is board-derived (--board). No shell-level device pinning."
 fi
 
 # ---------------------------------------------------------------------------
@@ -199,6 +207,11 @@ for arg in "$@"; do
             export SD35_DEV_MODE=true
             echo ""
             echo "*** SD3.5 DEV MODE: Reduced steps, no trace capture ***"
+        elif [ "$MODEL" = "wan22" ]; then
+            # Wan2.2 dev mode (WAN_DEV_MODE) is set by server.py from --dev;
+            # it reduces steps/frames and disables trace. Nothing to set here.
+            echo ""
+            echo "*** Wan2.2 DEV MODE: Reduced steps/frames, no trace capture ***"
         fi
         break
     fi
@@ -245,14 +258,14 @@ done
 echo ""
 if [ "$DEV_MODE" = "true" ]; then
     echo "Starting ${MODEL} server in DEV MODE..."
-    if [ "$MODEL" = "sd35" ]; then
+    if [ "$MODEL" = "sd35" ] || [ "$MODEL" = "wan22" ]; then
         echo "This will take 2-5 minutes (no trace capture in dev mode)."
     else
         echo "This will take 5-8 minutes for initial warmup."
     fi
 else
     echo "Starting ${MODEL} server..."
-    if [ "$MODEL" = "sd35" ]; then
+    if [ "$MODEL" = "sd35" ] || [ "$MODEL" = "wan22" ]; then
         echo "This will take 15-25 minutes for first-run trace capture."
     else
         echo "This will take 5-10 minutes for initial warmup."
