@@ -34,7 +34,8 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 
 
 NUM_WARMUP_ITERS = 2
-NUM_MEASURED_ITERS = 10
+NUM_MEASURED_ITERS = 100
+NUM_BUFFERED_RECV_BUFFERS = 3
 
 BFLOAT16_BYTES = 2
 TILE_HEIGHT = 32
@@ -150,7 +151,10 @@ def _run_mesh_socket_bandwidth_case(
     """
     torch.manual_seed(0)
 
-    if transfer_mode == "direct":
+    if transfer_mode == "buffered":
+        send_op = ttnn.experimental.buffered_send
+        recv_op = ttnn.experimental.buffered_recv
+    elif transfer_mode == "direct":
         send_op = ttnn.experimental.send_direct_async
         recv_op = ttnn.experimental.recv_direct_async
     else:
@@ -177,22 +181,36 @@ def _run_mesh_socket_bandwidth_case(
         memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
         mesh_mapper=ttnn.ReplicateTensorToMesh(sender_mesh_device),
     )
-    output_tensor = ttnn.allocate_tensor_on_device(input_tensor.spec, receiver_mesh_device)
+    if transfer_mode == "buffered":
+        buffered_outputs = [
+            ttnn.allocate_tensor_on_device(input_tensor.spec, receiver_mesh_device)
+            for _ in range(NUM_BUFFERED_RECV_BUFFERS)
+        ]
+    else:
+        output_tensor = ttnn.allocate_tensor_on_device(input_tensor.spec, receiver_mesh_device)
 
     for _ in range(NUM_WARMUP_ITERS):
         send_op(input_tensor, send_socket)
-        recv_op(output_tensor, recv_socket)
+        if transfer_mode == "buffered":
+            recv_op(buffered_outputs, recv_socket)
+        else:
+            recv_op(output_tensor, recv_socket)
     ttnn.synchronize_device(sender_mesh_device)
     ttnn.synchronize_device(receiver_mesh_device)
 
     start = time.perf_counter()
     for _ in range(NUM_MEASURED_ITERS):
         send_op(input_tensor, send_socket)
-        recv_op(output_tensor, recv_socket)
+        if transfer_mode == "buffered":
+            recv_op(buffered_outputs, recv_socket)
+        else:
+            recv_op(output_tensor, recv_socket)
     ttnn.synchronize_device(sender_mesh_device)
     ttnn.synchronize_device(receiver_mesh_device)
     elapsed_s = time.perf_counter() - start
 
+    if transfer_mode == "buffered":
+        output_tensor = buffered_outputs[0]
     input_data = ttnn.to_torch(input_tensor, mesh_composer=ttnn.ConcatMeshToTensor(sender_mesh_device, dim=0))
     output_data = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(receiver_mesh_device, dim=0))
     eq, msg = comp_equal(input_data, output_data)
@@ -230,8 +248,10 @@ def _run_mesh_socket_bandwidth_case(
 
 
 @pytest.mark.timeout(180)
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
-@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "l1_small_size": 2048}], indirect=True
+)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize(
     "tensor_shape",
     [[968, 2048]],
@@ -244,12 +264,12 @@ def _run_mesh_socket_bandwidth_case(
 )
 @pytest.mark.parametrize(
     "num_connections",
-    [2],
+    [1, 2],
     ids=lambda v: f"conn{v}",
 )
 @pytest.mark.parametrize(
     "transfer_mode",
-    ["async", "direct"],
+    ["async", "direct", "buffered"],
     ids=lambda v: f"mode_{v}",
 )
 def test_mesh_socket_bandwidth(
