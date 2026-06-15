@@ -6,10 +6,10 @@ TTTv2 Llama-3.2-3B-Instruct demo — accuracy and performance measurement.
 
 Uses ``EagerLlama32_3BExecutor`` / ``TracedLlama32_3BExecutor`` directly (no vLLM adapter).
 
-**Mesh note:** Llama-3.2-3B-Instruct has 24 attention heads and 8 KV heads, so N150 (1)
-and N300 (2) are supported. T3K (8) requires 8 dividing 8 KV heads and 24 attention heads
-— that constraint is satisfied, but PERF.md does not publish this model for T3K, so it
-is not exercised here.
+**Mesh note:** Llama-3.2-3B-Instruct has 24 attention heads and 8 KV heads, so N150 (1),
+N300 (2) and T3K (8) are all supported (8 divides both 8 KV heads and 24 attention heads).
+PERF.md does not publish a T3K row for this model, but T3K is exercised here for the
+on-device-sampling crossover sweep (≥8-device meshes are where on-device top-k wins).
 
 **PERF.md workload:** prefill = 512 tokens, 200 decode iterations (performance),
 511 continuation tokens (accuracy / teacher-forcing). See ``generate_controlled_refpt.py``.
@@ -56,6 +56,7 @@ from models.common.models.llama32_3b.model import (
     Llama32_3BTransformer1D,
     TracedLlama32_3BExecutor,
 )
+from models.common.sampling.sampling_params import SamplingParams
 from models.common.tests.demos.cleanup_utils import cleanup_model_case
 from models.tt_transformers.tt.common import encode_prompt_hf
 
@@ -93,6 +94,7 @@ PERF_TOLERANCE = 0.05
 _MESH_DEVICE_TO_SHAPE: dict[str, tuple[int, int]] = {
     "N150": (1, 1),
     "N300": (1, 2),
+    "T3K": (1, 8),
 }
 
 
@@ -100,20 +102,26 @@ def _ttnn_mesh_device_param_from_env() -> dict:
     env = os.environ.get("MESH_DEVICE", "").strip()
     if not env:
         pytest.skip(
-            "MESH_DEVICE must be set (e.g. N150 or N300). See module docstring.",
+            "MESH_DEVICE must be set (e.g. N150, N300 or T3K). See module docstring.",
             allow_module_level=True,
         )
     shape = _MESH_DEVICE_TO_SHAPE.get(env)
     if shape is None:
         pytest.skip(
-            f"Unsupported MESH_DEVICE={env!r} for Llama-3.2-3B; use N150 or N300.",
+            f"Unsupported MESH_DEVICE={env!r} for Llama-3.2-3B; use N150, N300 or T3K.",
             allow_module_level=True,
         )
-    return {
+    param = {
         "mesh_shape": shape,
         "trace_region_size": 50_000_000,
         "num_command_queues": 1,
     }
+    # TTTv2 multi-device executor dispatch (and the on-device sampling all-gather) stalls without
+    # an explicit 1D fabric; the root conftest does not auto-enable it. Mirror the sibling
+    # models/common/models/llama32_3b/demo.py wiring: FABRIC_1D on any >1-device mesh.
+    if shape != (1, 1):
+        param["fabric_config"] = ttnn.FabricConfig.FABRIC_1D
+    return param
 
 
 pytestmark = [
@@ -465,6 +473,23 @@ def _run_perf_benchmark(
         # Pad/truncate to _PERF_PREFILL_LEN for PERF.md workload alignment.
         input_tokens, prompt_lens = pad_prompts_to_len(prompts, tokenizer, target_len=_PERF_PREFILL_LEN)
 
+        # On-device sampling toggle for N150/N300/T3K evidence-gathering (see sampling handoff docs):
+        #   host            -> sampling_params=None (host-argmax, the default shipped path)
+        #   on_device       -> greedy temp=0,k=1,p=0 => trace-captured FORCE-ARGMAX full-vocab path
+        #   on_device_topk  -> temp=0,k=32,p=0.08    => trace-captured TOP-K op path (gathers only
+        #                      the [*,32] tuples; PERF.md-parity recipe, faster than force-argmax)
+        sampling_mode = os.environ.get("SAMPLING_MODE", "host").lower()
+        _on_device_params = {
+            "on_device": SamplingParams(temperature=0.0, top_k=1, top_p=0.0),
+            "on_device_topk": SamplingParams(temperature=0.0, top_k=32, top_p=0.08),
+        }
+        sampling_params = (
+            _on_device_params[sampling_mode]
+            if sampling_mode in _on_device_params and getattr(model, "supports_on_device_sampling", False)
+            else None
+        )
+        logger.info(f"[{case_name}] SAMPLING_MODE={sampling_mode} -> sampling_params={sampling_params}")
+
         result = run_perf_benchmark(
             traced_executor,
             tokens=input_tokens,
@@ -473,6 +498,7 @@ def _run_perf_benchmark(
             num_decode_tokens=_PERF_NUM_DECODE_TOKENS,
             max_batch_size=max_batch_size,
             prompt_lens=prompt_lens,
+            sampling_params=sampling_params,
         )
 
         logger.info(
