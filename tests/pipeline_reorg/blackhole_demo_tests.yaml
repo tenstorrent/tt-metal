@@ -34,6 +34,8 @@
     uv pip install mistral-common
     uv pip install "git+https://github.com/huggingface/transformers"
     pytest -p models.experimental.devstarl2_small.demo.tt_image_demo models/experimental/devstarl2_small/demo/tt_image_demo.py --backend tt --image models/experimental/devstarl2_small/resource/sample.jpeg --vision-square-pixels 1540 --mesh-width 4 --max-new-tokens 100 &&
+    pytest -p models.experimental.devstarl2_small.demo.tt_text_demo models/experimental/devstarl2_small/demo/tt_text_demo.py --mesh-width 4 &&
+    pytest -p models.experimental.devstarl2_small.demo.tt_image_demo models/experimental/devstarl2_small/demo/tt_image_demo.py --backend tt --image models/experimental/devstarl2_small/resource/sample.jpeg --vision-square-pixels 1540 --mesh-width 4 --max-new-tokens 100 &&
     pytest -p models.experimental.devstarl2_small.demo.tt_text_demo models/experimental/devstarl2_small/demo/tt_text_demo.py --mesh-width 4
   skus:
     bh_quietbox_2:
