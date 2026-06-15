@@ -21,10 +21,7 @@ from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import (
     resolve_trace_dir,
     resolve_weight_cache_path,
 )
-from models.demos.deepseek_v3_d_p.tt.tt_deepseek_prefill_pipeline import (
-    TtDeepSeekPrefillPipeline,
-    TtPrefillPipelineConfig,
-)
+from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
 
 # Sync-op worker core. Single core suffices: the kernel only copies the
 # backing tensor's pages into a fresh output, no per-core parallelism needed.
@@ -78,7 +75,7 @@ def _handle_sigterm(signum, frame):
 os.environ.setdefault("PREFILL_TTNN_CACHE", VARIANT.ttnn_cache_default)
 
 
-def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
+def run_standalone_loop(pipeline: TtPrefillRuntime) -> None:
     """Standalone chunked prefill: read the input token IDs from this variant's golden trace and drive
     them through the pipeline in chunk_size chunks (advancing kv_actual per chunk), filling slot_id's
     KV cache. No H2D socket, no SHM, no external producer — single process, for local bring-up / perf.
@@ -166,7 +163,7 @@ def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
         kv_cache_pcc_check(pipeline, slot_id=slot_id, n_chunks=n_chunks, trace_dir=trace_dir)
 
 
-def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DStreamService) -> None:
+def run_request_loop(pipeline: TtPrefillRuntime, h2d_service: ttnn.H2DStreamService) -> None:
     """Request loop: token IDs + per-iter control metadata arrive over the H2D
     socket service, pushed by a separate producer process (prefill_h2d_producer.py
     today; the inference-server / prefill scheduler in production).
@@ -281,7 +278,7 @@ def main() -> None:
     hf_config.max_seq_len = MAX_SEQ_LEN
 
     cache_path = resolve_weight_cache_path(VARIANT, GLOBAL_MESH_SHAPE)
-    pipeline_config = TtPrefillPipelineConfig(
+    pipeline_config = TtPrefillRuntimeConfig(
         num_layers=NUM_LAYERS,
         max_seq_len=MAX_SEQ_LEN,
         mesh_shape=GLOBAL_MESH_SHAPE,
@@ -294,7 +291,7 @@ def main() -> None:
         model_cfg=MODEL_CFG,
     )
 
-    pipeline = TtDeepSeekPrefillPipeline(
+    pipeline = TtPrefillRuntime(
         mesh_device=mesh_device,
         hf_config=hf_config,
         state_dict={},
