@@ -32,6 +32,28 @@ from models.experimental.devstral2_123B_instruct.tt.weight_loading import DEVSTR
 # Fixed KV/RoPE budget for device tests so weight cache paths align (``seq_{max_seq_len}``).
 DEVSTRAL2_TEST_MAX_SEQ_LEN = 98304
 
+
+def devstral2_weight_cache_seq_len() -> int:
+    """On-disk tiled-weight cache key (``seq_{N}``); default 256K from demo/agent runs."""
+    return int(os.getenv("DEVSTRAL2_WEIGHT_CACHE_SEQ_LEN", "262144"))
+
+
+def resolve_devstral2_weight_cache_path(mesh_device, text_cfg: Ministral3Config, num_layers: int) -> str:
+    """Path to ``…/layers_{N}/seq_{devstral2_weight_cache_seq_len()}/`` for reusing tiled weights."""
+    from models.experimental.devstral2_123B_instruct.tt.model_args import Devstral2Args
+    from models.experimental.devstral2_123B_instruct.tt.weight_loading import resolve_weight_cache_path
+
+    cache_args = Devstral2Args.from_hf_config(
+        text_cfg,
+        mesh_shape=tuple(mesh_device.shape),
+        max_seq_len=devstral2_weight_cache_seq_len(),
+        max_batch_size=1,
+    )
+    path = resolve_weight_cache_path(None, cache_args, num_layers=num_layers)
+    assert path is not None
+    return path
+
+
 _FP8_DTYPES = tuple(
     dt for name in ("float8_e4m3fn", "float8_e5m2", "float8_e4m3fnuz") if (dt := getattr(torch, name, None)) is not None
 )
