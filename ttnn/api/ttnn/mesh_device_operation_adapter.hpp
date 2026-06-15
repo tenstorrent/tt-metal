@@ -607,9 +607,9 @@ public:
     };
 
     // -----------------------------------------------------------------------
-    // OpPortingStepMeshWorkloadFactoryAdapter
+    // MetalV2MeshWorkloadFactoryAdapter
     //
-    // Adapts an OpPortingStepMetalV2FactoryConcept factory (Metal 2.0,
+    // Adapts a MetalV2FactoryConcept factory (Metal 2.0,
     // single-program / SPMD-flavored) for mesh dispatch. The op author writes
     // ONLY create_program_artifacts, returning a single ProgramArtifacts (one
     // ProgramSpec + ProgramRunArgs + any op-owned tensors). The adapter stamps a
@@ -638,8 +638,8 @@ public:
     //
     // TODO: consider replacing with a general MeshWorkloadSpecFactoryAdapter?
     // -----------------------------------------------------------------------
-    template <OpPortingStepMetalV2FactoryConcept OpPortingStepFactory>
-    struct OpPortingStepMeshWorkloadFactoryAdapter {
+    template <MetalV2FactoryConcept MetalV2Factory>
+    struct MetalV2MeshWorkloadFactoryAdapter {
         using TensorParamName = tt::tt_metal::experimental::TensorParamName;
         using TensorArgument = tt::tt_metal::experimental::ProgramRunArgs::TensorArgument;
 
@@ -726,7 +726,7 @@ public:
             auto first_tensor = ttsl::reflection::get_first_object_of_type<tt::tt_metal::Tensor>(tensor_args);
             TT_FATAL(
                 first_tensor.has_value(),
-                "OpPortingStep factory adapter requires at least one Tensor in tensor_args to source the MeshDevice");
+                "MetalV2 factory adapter requires at least one Tensor in tensor_args to source the MeshDevice");
             auto* mesh_device = first_tensor.value().device();
             TT_FATAL(mesh_device != nullptr, "First tensor in tensor_args must be allocated on a MeshDevice");
 
@@ -734,7 +734,7 @@ public:
             // across all coordinate ranges. Bindings derive from the (single) set of
             // factory tensor_args and are identical for every stamped program; copy
             // per range into the cached shared state.
-            auto artifacts = OpPortingStepFactory::create_program_artifacts(attrs, tensor_args, tensor_return_value);
+            auto artifacts = MetalV2Factory::create_program_artifacts(attrs, tensor_args, tensor_return_value);
 
             // Enumerate io tensors (inputs + outputs), then append the factory's
             // op-owned tensors. resolve_bindings maps each TensorArgument to an

@@ -107,7 +107,7 @@ static_assert(ttnn::device_operation::MeshWorkloadFactoryConcept<NewInfraWorkloa
 static_assert(ttnn::device_operation::ProgramFactoryConcept<NewInfraProgramFactory>);
 
 // ---------------------------------------------------------------------------
-// OpPortingStepMetalV2FactoryConcept (Metal 2.0 op-porting stepping stone)
+// MetalV2FactoryConcept (Metal 2.0 op-porting stepping stone)
 //
 // No real op uses create_program_artifacts yet, so the adapter's templated
 // method bodies — including the op-owned tensor enumeration and parking added
@@ -122,7 +122,7 @@ static_assert(ttnn::device_operation::ProgramFactoryConcept<NewInfraProgramFacto
 // real op dispatched through the launch path, i.e. the first op port. Until then
 // this is compile-coverage only.
 // ---------------------------------------------------------------------------
-struct OpPortingStepFactory {
+struct MetalV2Factory {
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const OperationAttributes& /*attrs*/, const Tensor& /*tensor_args*/, Tensor& /*tensor_return_value*/) {
         return ttnn::device_operation::ProgramArtifacts{};
@@ -130,23 +130,23 @@ struct OpPortingStepFactory {
 };
 
 // Minimal device operation supplying just the typedefs the adapter inherits.
-struct OpPortingStepMinimalOp {
+struct MetalV2MinimalOp {
     using operation_attributes_t = OperationAttributes;
     using tensor_args_t = Tensor;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
 };
 
-static_assert(ttnn::device_operation::OpPortingStepMetalV2FactoryConcept<OpPortingStepFactory>);
-static_assert(!ttnn::device_operation::ProgramFactoryConcept<OpPortingStepFactory>);
-static_assert(!ttnn::device_operation::MeshWorkloadFactoryConcept<OpPortingStepFactory>);
-static_assert(!ttnn::device_operation::ProgramDescriptorFactoryConcept<OpPortingStepFactory>);
+static_assert(ttnn::device_operation::MetalV2FactoryConcept<MetalV2Factory>);
+static_assert(!ttnn::device_operation::ProgramFactoryConcept<MetalV2Factory>);
+static_assert(!ttnn::device_operation::MeshWorkloadFactoryConcept<MetalV2Factory>);
+static_assert(!ttnn::device_operation::ProgramDescriptorFactoryConcept<MetalV2Factory>);
 
 // Compile-coverage: taking the adapter methods' addresses ODR-uses them, forcing
 // the (otherwise un-instantiated) bodies to compile. Never dispatched.
-TEST(LaunchOperationTest, OpPortingStepAdapterCompiles) {
-    using Adapter = device_operation::MeshDeviceOperationAdapter<
-        OpPortingStepMinimalOp>::OpPortingStepMeshWorkloadFactoryAdapter<OpPortingStepFactory>;
+TEST(LaunchOperationTest, MetalV2AdapterCompiles) {
+    using Adapter = device_operation::MeshDeviceOperationAdapter<MetalV2MinimalOp>::MetalV2MeshWorkloadFactoryAdapter<
+        MetalV2Factory>;
     [[maybe_unused]] auto create = &Adapter::create_mesh_workload;
     [[maybe_unused]] auto apply = &Adapter::apply_descriptor;
     [[maybe_unused]] auto resolve = &Adapter::resolve_bindings;

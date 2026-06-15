@@ -88,8 +88,8 @@ concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } |
 // Metal 2.0. It is not designed for production use — the cache-hit fast path re-patches
 // op-owned tensors redundantly rather than skipping them.
 template <typename T>
-concept OpPortingStepMetalV2FactoryConcept = requires { &T::create_program_artifacts; } && !ProgramFactoryConcept<T> &&
-                                             !MeshWorkloadFactoryConcept<T> && !ProgramDescriptorFactoryConcept<T>;
+concept MetalV2FactoryConcept = requires { &T::create_program_artifacts; } && !ProgramFactoryConcept<T> &&
+                                !MeshWorkloadFactoryConcept<T> && !ProgramDescriptorFactoryConcept<T>;
 
 // Detect operations that put create_descriptor directly on the operation struct
 // (no program_factory_t wrapper needed for single-descriptor operations).
@@ -128,7 +128,7 @@ concept HasSelectProgramFactory = requires(
 
 // Validate that all variant alternatives in a program_factory_t satisfy exactly one of
 // ProgramFactoryConcept, MeshWorkloadFactoryConcept, ProgramDescriptorFactoryConcept,
-// or OpPortingStepMetalV2FactoryConcept.
+// or MetalV2FactoryConcept.
 namespace detail {
 template <typename Variant, std::size_t... Is>
 consteval bool all_factories_valid(std::index_sequence<Is...>) {
@@ -136,7 +136,7 @@ consteval bool all_factories_valid(std::index_sequence<Is...>) {
         ((ProgramFactoryConcept<std::variant_alternative_t<Is, Variant>> +
           MeshWorkloadFactoryConcept<std::variant_alternative_t<Is, Variant>> +
           ProgramDescriptorFactoryConcept<std::variant_alternative_t<Is, Variant>> +
-          OpPortingStepMetalV2FactoryConcept<std::variant_alternative_t<Is, Variant>>) == 1) &&
+          MetalV2FactoryConcept<std::variant_alternative_t<Is, Variant>>) == 1) &&
         ...);
 }
 }  // namespace detail
