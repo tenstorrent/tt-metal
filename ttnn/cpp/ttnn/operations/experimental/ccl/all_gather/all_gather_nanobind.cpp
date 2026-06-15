@@ -11,6 +11,7 @@
 #include <nanobind/stl/optional.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
+#include <tt-metalium/sub_device_types.hpp>
 #include "ttnn/operations/experimental/ccl/all_gather/all_gather.hpp"
 
 namespace ttnn::operations::experimental::ccl {
@@ -22,8 +23,11 @@ ttnn::Tensor all_gather_wrapper(
     int32_t dim,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::Tensor>& output_tensor,
-    std::optional<uint32_t> cluster_axis) {
-    return ttnn::experimental::all_gather(input_tensor, dim, memory_config, output_tensor, cluster_axis);
+    std::optional<uint32_t> cluster_axis,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return ttnn::experimental::all_gather(
+        input_tensor, dim, memory_config, output_tensor, cluster_axis, subdevice_id, sub_core_grids);
 }
 
 }  // namespace
@@ -40,6 +44,8 @@ void bind_all_gather(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the output tensor. Defaults to the input tensor's memory config.
             output_tensor (ttnn.Tensor, optional): Pre-allocated output tensor. Defaults to None (op allocates a new output tensor).
             cluster_axis (int, optional): Axis on the 2D mesh device grid to gather along. Each of the non-cluster_axis dimensions perform independent all-gathers along the devices on the cluster_axis. Irrelevant for 1D mesh grids.
+            subdevice_id (ttnn.SubDeviceId, optional): Subdevice id for worker cores. Defaults to the first subdevice on the mesh device.
+            sub_core_grids (CoreRangeSet, optional): Restricts worker core selection to this sub-grid. Defaults to all cores on the chosen subdevice.
 
         Returns:
             ttnn.Tensor: The gathered tensor, with output_shape = input_shape for all the unspecified dimensions, and output_shape[dim] = input_shape[dim] * num_devices, where num_devices is the number of devices along the `cluster_axis` if specified, else the total number of devices in the mesh.
@@ -69,7 +75,9 @@ void bind_all_gather(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("cluster_axis") = nb::none()));
+            nb::arg("cluster_axis") = nb::none(),
+            nb::arg("subdevice_id") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()));
 }
 
 }  // namespace ttnn::operations::experimental::ccl

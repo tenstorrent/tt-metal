@@ -178,7 +178,7 @@ ttsl::hash::hash_t AllGatherDeviceOperation::compute_program_hash(
     log_trace(tt::LogOp, "AllGatherDeviceOperation::compute_program_hash is called");
 
     auto* mesh_device = tensor_args.input_tensor.device();
-    auto sd_id = mesh_device->get_sub_device_ids().at(0);
+    auto sd_id = args.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
 
     return tt::tt_metal::operation::hash_operation<AllGatherDeviceOperation>(
@@ -193,6 +193,7 @@ ttsl::hash::hash_t AllGatherDeviceOperation::compute_program_hash(
         args.axis_num_links[1],
         tensor_args.persistent_output_tensor.has_value(),
         subdevice_core_range_set,
+        args.sub_core_grid,
         tensor_args);
 }
 
@@ -295,7 +296,9 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
     const std::optional<ttnn::Tensor>& persistent_output_tensor,
     int32_t dim,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<uint32_t> cluster_axis) {
+    std::optional<uint32_t> cluster_axis,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     // Query the machine and Fabric setup
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Input tensor should be on device for all_gather operation");
@@ -331,7 +334,9 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
             axis_topology,
             axis_num_devices,
             axis_num_links,
-            num_devices),
+            num_devices,
+            subdevice_id,
+            sub_core_grid),
         AllGatherInputs{.input_tensor = input_tensor, .persistent_output_tensor = persistent_output_tensor}};
 }
 
@@ -344,9 +349,11 @@ Tensor all_gather_experimental(
     const std::optional<ttnn::Tensor>& persistent_output_tensor,
     int32_t dim,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<uint32_t> cluster_axis) {
+    std::optional<uint32_t> cluster_axis,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     auto [params, inputs] = experimental::prim::all_gather_build_operation_args(
-        input_tensor, persistent_output_tensor, dim, memory_config, cluster_axis);
+        input_tensor, persistent_output_tensor, dim, memory_config, cluster_axis, subdevice_id, sub_core_grid);
     return ttnn::device_operation::launch<experimental::prim::AllGatherDeviceOperation>(params, inputs);
 }
 

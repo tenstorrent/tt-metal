@@ -7,10 +7,10 @@
 #include <tuple>
 #include <variant>
 
+#include <tt-metalium/sub_device_types.hpp>
+#include "ttnn/device_operation.hpp"
 #include "all_gather_device_operation_types.hpp"
 #include "all_gather_factory.hpp"
-
-#include "ttnn/device_operation.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -33,15 +33,6 @@ struct AllGatherDeviceOperation {
         const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors);
 };
 
-std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
-    const Tensor& input_tensor,
-    const std::optional<ttnn::Tensor>& persistent_output_tensor,
-    int32_t dim,
-    uint32_t num_links,
-    const std::optional<MemoryConfig>& memory_config,
-    tt::tt_fabric::Topology topology,
-    std::optional<uint32_t> cluster_axis);
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
@@ -51,6 +42,8 @@ Tensor all_gather_experimental(
     const std::optional<ttnn::Tensor>& persistent_output_tensor,
     int32_t dim,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<uint32_t> cluster_axis);
+    std::optional<uint32_t> cluster_axis,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
 
 }  // namespace ttnn::prim

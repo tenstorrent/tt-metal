@@ -16,7 +16,9 @@ ttnn::Tensor all_gather(
     int32_t dim,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::Tensor>& persistent_output_tensor,
-    std::optional<uint32_t> cluster_axis) {
+    std::optional<uint32_t> cluster_axis,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     // TODO fix this
     // if (composite_common::use_composite_all_gather(input_tensor, gather_dim, memory_config)) {
     if (false) {
@@ -35,7 +37,7 @@ ttnn::Tensor all_gather(
     }
 
     return ttnn::prim::all_gather_experimental(
-        input_tensor, persistent_output_tensor, dim, memory_config, cluster_axis);
+        input_tensor, persistent_output_tensor, dim, memory_config, cluster_axis, subdevice_id, sub_core_grid);
 }
 
 }  // namespace ttnn::experimental

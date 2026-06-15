@@ -13,6 +13,8 @@ namespace ttnn::experimental::prim {
 
 using namespace ::ttnn::ccl;
 
+// TODO finalize core placement.
+/*
 namespace {  // anonymous namespace for internal helpers
 
 CoreRangeSet get_cores_close_to_erisc(uint32_t num_workers, bool row_wise) {
@@ -34,6 +36,7 @@ CoreRangeSet get_cores_close_to_erisc(uint32_t num_workers, bool row_wise) {
 }
 
 }  // namespace
+*/
 
 AllGatherFactory::cached_mesh_workload_t AllGatherFactory::create_mesh_workload(
     const AllGatherParams& operation_attributes,
@@ -44,8 +47,11 @@ AllGatherFactory::cached_mesh_workload_t AllGatherFactory::create_mesh_workload(
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
     auto* mesh_device = tensor_args.input_tensor.device();
-    auto subdevice_id = mesh_device->get_sub_device_ids().at(0);
-    const auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
+    auto subdevice_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
+    if (operation_attributes.sub_core_grid.has_value()) {
+        available_cores = available_cores.intersection(operation_attributes.sub_core_grid.value());
+    }
     ttnn::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
 
     // Kernel needs to wait to receive all remote data before exiting, and in some cases needs to wait
@@ -151,8 +157,16 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
 
     // Get worker cores
     uint32_t num_workers_per_link = 1;
-    auto sender_worker_core_range = get_cores_close_to_erisc(min_num_links * num_workers_per_link, true);
-    auto sender_worker_cores = corerange_to_cores(sender_worker_core_range);
+    // TODO finalize core placement
+    /*auto sender_worker_core_range = get_cores_close_to_erisc(min_num_links * num_workers_per_link, true);
+    auto sender_worker_cores = corerange_to_cores(sender_worker_core_range);*/
+    auto [sender_worker_core_range, sender_worker_cores] = ttnn::ccl::choose_worker_cores(
+        min_num_links,
+        num_workers_per_link,
+        input_tensor.device(),
+        operation_attributes.subdevice_id,
+        /*core_grid_offset=*/CoreCoord{0, 0},
+        operation_attributes.sub_core_grid);
 
     const uint32_t packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
 
