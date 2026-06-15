@@ -129,6 +129,19 @@ def test_binary_mixed_bfloat_tile_allowed(device, op, dtype_a, dtype_b):
     op(tensor_a, tensor_b)
 
 
+# isclose: float32 ↔ bfloat16 is the only allowed mixed-dtype pair.
+@pytest.mark.parametrize(
+    "dtype_a, dtype_b",
+    [
+        pytest.param(ttnn.float32, ttnn.bfloat16, id="isclose_float32_bfloat16"),
+        pytest.param(ttnn.bfloat16, ttnn.float32, id="isclose_bfloat16_float32"),
+    ],
+)
+def test_isclose_mixed_float32_bfloat16_allowed(device, dtype_a, dtype_b):
+    tensor_a, tensor_b = _make_mixed_binary_tensors(device, dtype_a, dtype_b)
+    _ISCLOSE(tensor_a, tensor_b)
+
+
 # Mixed-dtype pairs where each dtype is individually supported for the op.
 @pytest.mark.parametrize(
     "op, dtype_a, dtype_b",
