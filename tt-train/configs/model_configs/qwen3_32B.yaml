@@ -1,0 +1,23 @@
+# Qwen3-32B architecture (documentation / parity with other model_configs).
+#
+# NOTE: the GRPO Qwen completer (utils/qwen_completer.py) builds its Qwen3Config
+# directly from the HuggingFace config via create_qwen3_config_from_hf(), so the
+# only field consumed from this file is `max_sequence_length` (the train+generate
+# window). The remaining fields mirror the HF Qwen/Qwen3-32B architecture.
+transformer_config:
+  model_type: "qwen3"
+  num_heads: 64
+  num_groups: 8
+  embedding_dim: 5120
+  head_dim: 128
+  intermediate_dim: 25600
+  num_blocks: 64
+  vocab_size: 151936
+  max_sequence_length: 2048
+  dropout_prob: 0.0
+  theta: 1000000.0
+  attention_bias: false
+  # The Qwen GRPO completer enables gradient checkpointing by default
+  # (memory_efficient runner) to fit the 32B forward+backward.
+  runner_type: memory_efficient
+  weight_tying: "disabled"
