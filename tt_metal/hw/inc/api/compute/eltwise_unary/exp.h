@@ -61,7 +61,7 @@ ALWI void exp_tile_init() {
  * |-------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst        | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | vector_mode | Specifies the vector mode for computation (default: VectorMode::RC)        | VectorMode | Subject to specific hardware/kernel limits            | False    |
- * | scale       | Scale factor to apply in approximate or non-approximate mode if scale_en is true (default: 0x3F80, 1.0f in FP16b) | uint16_t | Valid FP16b representation                            | False    |
+ * | scale       | Scale factor to apply in approximate or non-approximate mode if scale_en is true (default: 0x3F80, 1.0f in FP16b). On Quasar, scale_en must be false; the scale argument is ignored. | uint16_t | Valid FP16b representation                            | False    |
  */
 // clang-format on
 template <
