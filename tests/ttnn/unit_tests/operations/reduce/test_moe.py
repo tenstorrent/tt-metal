@@ -22,13 +22,10 @@ def run_moe_test(N, C, H, W, k, E, e, dtype, device):
     expert_mask = torch.zeros([N, C, 1, W], dtype=torch_dtype)
     expert_mask[:, :, :, E:] = float("-inf")
 
-    # TODO: make this addition a part of the moe op
-    input += expert_mask
-
     topE_mask = torch.zeros([N, C, 1, k], dtype=torch_dtype)
     topE_mask[:, :, :, e:] = float("-inf")
 
-    pyt_topk_values, pyt_topk_indices = torch.topk(input, k, dim=-1)
+    pyt_topk_values, pyt_topk_indices = torch.topk(input + expert_mask, k, dim=-1)
     torch_weights_1SB1 = torch.sum(
         (torch.softmax(pyt_topk_values + topE_mask, dim=-1) * (pyt_topk_indices == 0))[:, :, :, :e],
         dim=-1,
