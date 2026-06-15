@@ -16,9 +16,8 @@ namespace ttnn::experimental {
 // receive socket. Buffer availability is coordinated through an internally-allocated, zero-
 // initialized persistent L1_SMALL buffer (no caller-provided global semaphore is required).
 //
-// NOTE: This is currently a skeleton implementation; the full buffered receive logic is not yet
-// wired up.
-ttnn::Tensor buffered_recv(
+// The actual buffer written by each send is selected by device-side ring state.
+void buffered_recv(
     const std::vector<ttnn::Tensor>& output_tensors, const tt::tt_metal::distributed::MeshSocket& mesh_socket);
 
 }  // namespace ttnn::experimental

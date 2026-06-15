@@ -28,19 +28,19 @@ struct BufferedRecvMeshWorkloadFactory {
         const BufferedRecvParams& operation_attributes,
         const ttnn::MeshCoordinateRangeSet& tensor_coords,
         const std::vector<Tensor>& tensor_args,
-        Tensor& tensor_return_value);
+        std::vector<Tensor>& tensor_return_value);
 
     static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
         const BufferedRecvParams& operation_attributes,
         const ttnn::MeshCoordinate& mesh_coordinate,
         const std::vector<Tensor>& tensor_args,
-        Tensor& tensor_return_value);
+        std::vector<Tensor>& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_workload,
         const BufferedRecvParams& operation_attributes,
         const std::vector<Tensor>& tensor_args,
-        Tensor& tensor_return_value);
+        std::vector<Tensor>& tensor_return_value);
 };
 
 }  // namespace ttnn::experimental::prim

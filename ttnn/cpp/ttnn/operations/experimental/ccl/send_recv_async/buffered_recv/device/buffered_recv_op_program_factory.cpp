@@ -27,7 +27,7 @@ BufferedRecvMeshWorkloadFactory::cached_mesh_workload_t BufferedRecvMeshWorkload
     const BufferedRecvParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const std::vector<Tensor>& tensor_args,
-    Tensor& tensor_return_value) {
+    std::vector<Tensor>& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
     ttnn::MeshCoordinateRangeSet workload_coords =
@@ -46,11 +46,11 @@ BufferedRecvMeshWorkloadFactory::create_at(
     const BufferedRecvParams& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
     const std::vector<Tensor>& tensor_args,
-    Tensor& /*tensor_return_value*/) {
+    std::vector<Tensor>& /*tensor_return_value*/) {
     auto mesh_socket = operation_attributes.mesh_socket;
 
-    // SKELETON: only the first output buffer is wired up for now. The N-buffer ring and the
-    // global-semaphore-based coordination still need to be implemented.
+    // Use the first output tensor as the representative for device and page geometry; runtime args
+    // below carry every receive-buffer base address in the ring.
     const auto& output_tensor = tensor_args.at(0);
     auto* mesh_device = output_tensor.device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : output_tensor.device();
@@ -210,7 +210,7 @@ void BufferedRecvMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
     const BufferedRecvParams& operation_attributes,
     const std::vector<Tensor>& tensor_args,
-    [[maybe_unused]] Tensor& tensor_return_value) {
+    [[maybe_unused]] std::vector<Tensor>& tensor_return_value) {
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
 

@@ -23,17 +23,14 @@ void bind_buffered_recv(nb::module_& mod) {
         persistent L1_SMALL buffer (no caller-provided global semaphore is required).
 
         Note:
-            This is currently a skeleton implementation; the full buffered receive logic is not yet
-            wired up.
+            This op returns None. The actual buffer written by each send is selected by device-side
+            ring state.
 
         Args:
             output_tensors (List[ttnn.Tensor]): Tensors to receive the data into.
             mesh_socket (ttnn.MeshSocket): MeshSocket to receive the data from.
 
         Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md
-
-        Returns:
-            ttnn.Tensor: The output tensor that received the data.
 
         )doc",
         &ttnn::experimental::buffered_recv,

@@ -9,6 +9,7 @@
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/operations/experimental/ccl/send_recv_async/buffered_common/buffered_async_types.hpp"
 
 namespace ttnn::experimental::prim {
 void BufferedRecvDeviceOperation::validate_on_program_cache_miss(
@@ -17,6 +18,11 @@ void BufferedRecvDeviceOperation::validate_on_program_cache_miss(
     const auto& output_tensors = tensor_args;
 
     TT_FATAL(!output_tensors.empty(), "buffered_recv op requires at least one output tensor");
+    TT_FATAL(
+        output_tensors.size() <= MAX_OUTPUT_TENSORS,
+        "buffered_recv op supports at most {} output tensors, got {}",
+        MAX_OUTPUT_TENSORS,
+        output_tensors.size());
     for (const auto& output_tensor : output_tensors) {
         TT_FATAL(output_tensor.device() != nullptr, "buffered_recv op requires a device");
     }
@@ -51,15 +57,13 @@ void BufferedRecvDeviceOperation::validate_on_program_cache_miss(
 }
 
 BufferedRecvDeviceOperation::spec_return_value_t BufferedRecvDeviceOperation::compute_output_specs(
-    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
-    // SKELETON: only the first receive buffer is wired up for now.
-    return tensor_args.at(0).tensor_spec();
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
+    return {};
 }
 
 BufferedRecvDeviceOperation::tensor_return_value_t BufferedRecvDeviceOperation::create_output_tensors(
-    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
-    // SKELETON: only the first receive buffer is wired up for now.
-    return tensor_args.at(0);
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
+    return {};
 }
 
 ttsl::hash::hash_t BufferedRecvDeviceOperation::compute_program_hash(
@@ -72,14 +76,14 @@ ttsl::hash::hash_t BufferedRecvDeviceOperation::compute_program_hash(
 
 namespace ttnn::prim {
 
-Tensor buffered_recv(
+void buffered_recv(
     const std::vector<ttnn::Tensor>& output_tensors, const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
     using OperationType = ttnn::experimental::prim::BufferedRecvDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t(mesh_socket);
     const auto& tensor_args = output_tensors;
 
-    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+    ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

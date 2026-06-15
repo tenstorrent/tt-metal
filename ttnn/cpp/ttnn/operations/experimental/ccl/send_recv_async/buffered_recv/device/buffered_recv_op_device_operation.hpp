@@ -12,8 +12,8 @@ namespace ttnn::experimental::prim {
 struct BufferedRecvDeviceOperation {
     using operation_attributes_t = BufferedRecvParams;
     using tensor_args_t = std::vector<Tensor>;
-    using spec_return_value_t = TensorSpec;
-    using tensor_return_value_t = Tensor;
+    using spec_return_value_t = std::vector<TensorSpec>;
+    using tensor_return_value_t = std::vector<Tensor>;
     using program_factory_t = std::variant<BufferedRecvMeshWorkloadFactory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
@@ -29,7 +29,7 @@ struct BufferedRecvDeviceOperation {
 
 namespace ttnn::prim {
 
-Tensor buffered_recv(
+void buffered_recv(
     const std::vector<ttnn::Tensor>& output_tensors, const tt::tt_metal::distributed::MeshSocket& mesh_socket);
 
 }  // namespace ttnn::prim

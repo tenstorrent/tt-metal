@@ -13,8 +13,8 @@ into the receiver's output tensor and uses the socket only for the handshake/com
 
 ``buffered_recv`` differs from ``recv_direct_async`` in that it takes ``N`` output tensors (a ring of
 receive buffers); buffer availability is coordinated through an internally-allocated, zero-initialized
-persistent L1_SMALL buffer. The buffered receive logic is currently a skeleton, so these tests
-exercise the op wiring and validate correctness on the first buffer.
+persistent L1_SMALL buffer. These tests exercise the op wiring and validate correctness across the
+rotating receive-buffer ring.
 """
 
 import pytest
@@ -88,15 +88,15 @@ def _run_buffered_send_recv_case(
         # Give send a unique input on each iteration so we can confirm the right data arrives.
         torch_input, input_tensor = _make_input(iteration)
         ttnn.experimental.buffered_send(input_tensor, send_socket)
-        output_tensor = ttnn.experimental.buffered_recv(output_tensors, recv_socket)
+        ttnn.experimental.buffered_recv(output_tensors, recv_socket)
         ttnn.synchronize_device(sender_mesh_device)
         ttnn.synchronize_device(receiver_mesh_device)
         print(f"Synchronized devices (iteration {iteration})")
 
         input_data = ttnn.to_torch(input_tensor, mesh_composer=ttnn.ConcatMeshToTensor(sender_mesh_device, dim=0))
-        # SKELETON: only the first receive buffer is wired up for now.
         output_data = ttnn.to_torch(
-            output_tensors[iteration % num_buffers], mesh_composer=ttnn.ConcatMeshToTensor(receiver_mesh_device, dim=0)
+            output_tensors[iteration % num_buffers],
+            mesh_composer=ttnn.ConcatMeshToTensor(receiver_mesh_device, dim=0),
         )
         eq, msg = comp_equal(input_data, output_data)
         print(f"iteration {iteration}: {msg}")
@@ -140,7 +140,7 @@ def test_buffered_send_recv(
     """Send a per-chip tensor with ``buffered_send`` and receive it with ``buffered_recv``.
 
     A 2x2 mesh is split row-wise into two 1x2 submeshes; the top row is the sender and the bottom
-    row is the receiver. Correctness is verified against the first receive buffer.
+    row is the receiver. Correctness is verified against the rotating receive-buffer ring.
     """
     _run_buffered_send_recv_case(
         mesh_device,

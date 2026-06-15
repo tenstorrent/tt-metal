@@ -111,8 +111,8 @@ void kernel_main() {
         // STEP 2: wait for the receiver to write back the destination tensor info, including the ring of
         // receive-buffer base addresses.
         //
-        // SKELETON: the data is streamed into the first receive buffer only. The N-buffer ring and the
-        // global-semaphore-based coordination still need to be implemented.
+        // The data path uses the advertised receive-buffer ring and waits for a free slot before
+        // streaming into the selected buffer.
         //////////////////////////////////////////////////
         DPRINT("Waiting for destination tensor info from receiver in {}\n", handshake_base_addr);
         do {
@@ -124,22 +124,29 @@ void kernel_main() {
         DPRINT("Destination tensor info already received from receiver\n");
     }
 
-    // Copy the whole OutputTensorInfo struct out of the landing zone exactly once, then work from
-    // the local copy (the ring of receive-buffer base addresses lives in dest_info.base_addr).
+    // Work from the advertised ring state in the landing zone. The indices are monotonic counters;
+    // modulo is used only to select the output buffer address.
     volatile OutputTensorInfo* dest_info = reinterpret_cast<volatile tt_l1_ptr OutputTensorInfo*>(handshake_base_addr);
     DPRINT("num_output_buffers = {}\n", dest_info->num_tensors);
-    uint32_t output_base_addr = dest_info->base_addr[dest_info->write_index[0]];
 
-    DPRINT("Writing to output tensor index {}\n", dest_info->write_index[0]);
+    do {
+        invalidate_l1_cache();
+    } while ((dest_info->write_index[0] - dest_info->read_index[0]) >= dest_info->num_tensors);
 
-    dest_info->write_index[0] = (dest_info->write_index[0] + 1) % dest_info->num_tensors;
+    uint32_t write_index = dest_info->write_index[0];
+    uint32_t output_buffer_index = write_index % dest_info->num_tensors;
+    uint32_t output_base_addr = dest_info->base_addr[output_buffer_index];
+
+    DPRINT("Writing to output tensor index {}\n", output_buffer_index);
+
+    dest_info->write_index[0] = write_index + 1;
 
     DPRINT("Updated write index to {}\n", dest_info->write_index[0]);
 
     auto output_addr_gen_args = TensorAccessorArgs<output_args_cta_idx, output_args_crta_idx>();
     auto output_addr_gen = TensorAccessor(output_addr_gen_args, output_base_addr, output_page_size);
     //////////////////////////////////////////////////
-    // STEP 3: stream pages directly into the receiver's (first) output tensor
+    // STEP 3: stream pages directly into the selected receiver output tensor
     //////////////////////////////////////////////////
     uint32_t page_index = page_start_offset;
     if constexpr (num_pages_per_packet > 0) {
@@ -191,8 +198,7 @@ void kernel_main() {
             page_index++;
         }
     }
-    DPRINT("Streamed pages directly into the receiver's (first) output tensor\n");
-    dest_info->read_index[0] = dest_info->read_index[0] % dest_info->num_tensors;
+    DPRINT("Streamed pages directly into the selected receiver output tensor\n");
     DPRINT("On sender: Write Index = {}, Read Index = {}\n", dest_info->write_index[0], dest_info->read_index[0]);
 
     //////////////////////////////////////////////////

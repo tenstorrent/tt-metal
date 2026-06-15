@@ -11,9 +11,9 @@
 
 namespace ttnn::experimental {
 
-ttnn::Tensor buffered_recv(
+void buffered_recv(
     const std::vector<ttnn::Tensor>& output_tensors, const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
-    return ttnn::prim::buffered_recv(output_tensors, mesh_socket);
+    ttnn::prim::buffered_recv(output_tensors, mesh_socket);
 }
 
 }  // namespace ttnn::experimental

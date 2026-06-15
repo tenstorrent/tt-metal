@@ -62,8 +62,8 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(get_write_ptr(fabric_packet_header_cb_id));
     fabric_connection.open();
 
-    // SKELETON: the coordination buffer address is plumbed through for the upcoming N-buffer ring
-    // coordination but is not yet used while only the first receive buffer is wired up.
+    // The coordination buffer stores OutputTensorInfo, including the receive-buffer ring addresses
+    // and the monotonic read/write counters shared with the sender.
     DPRINT("coordination_buffer_addr = {}\n", coordination_buffer_addr);
     auto* output_tensor_info = reinterpret_cast<volatile tt_l1_ptr OutputTensorInfo*>(coordination_buffer_addr);
 
@@ -93,8 +93,8 @@ void kernel_main() {
         // the whole ring of receive-buffer base addresses. Bulk-write the struct first, then set the
         // valid flag last so the sender never observes a partially-written struct.
         //
-        // SKELETON: the sender streams into the first receive buffer only. The N-buffer ring and the
-        // global-semaphore-based coordination still need to be implemented.
+        // The sender uses the advertised base addresses with monotonic read/write counters to pick
+        // an available receive buffer.
         //////////////////////////////////////////////////
         uint32_t upstream_noc_x = receiver_socket.d2d.upstream_noc_x;
         uint32_t upstream_noc_y = receiver_socket.d2d.upstream_noc_y;
@@ -139,8 +139,7 @@ void kernel_main() {
     do {
         invalidate_l1_cache();
     } while (output_tensor_info->read_index[0] == output_tensor_info->write_index[0]);
-    output_tensor_info->read_index[0] = (output_tensor_info->read_index[0] + 1) % output_tensor_info->num_tensors;
-    output_tensor_info->write_index[0] = output_tensor_info->write_index[0] % output_tensor_info->num_tensors;
+    output_tensor_info->read_index[0] = output_tensor_info->read_index[0] + 1;
 
     uint32_t write_l1_addr = output_tensor_info->sender_config_l1_addr + offsetof(OutputTensorInfo, read_index);
     uint64_t write_noc_addr =
