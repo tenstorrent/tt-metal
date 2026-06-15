@@ -775,6 +775,85 @@ def _run_simulated_distributed_norm(device, is_rmsnorm, w, eps):
     )
 
 
+def _run_simulated_distributed_norm_pre_all_gather_stats(device, is_rmsnorm, w, eps):
+    """Single-device distributed pre-all-gather stats over a non-tile-aligned width.
+
+    Checks the per-shard statistics directly (E[x] and E[x^2]) rather than the full pre + post
+    pipeline, so it isolates the pre-all-gather reduction and avoids the unrelated single-core
+    post-all-gather hang (see _SIMULATED_DISTRIBUTED_POST_ALL_GATHER_HANG). The statistics must be
+    reduced over the logical width only; the implicit tile padding is poisoned so that any read of the
+    padded columns is observable. Both norms mask the final width tile's padding columns out of the
+    reduction: RMSNorm over its squared input, LayerNorm over both the input (E[x]) and its square
+    (E[x^2]), so the poison is excluded and the statistics match the torch reference.
+    """
+    torch.manual_seed(0)
+    h = 32
+    padded_w = math.ceil(w / 32) * 32
+    block_wt = padded_w // 32
+
+    torch_input_tensor = torch.normal(0.0, 1.0, size=(1, 1, h, w), dtype=torch.bfloat16)
+    # References reduce over the logical width only, so a correct kernel excludes the padding columns.
+    torch_ex = torch.mean(torch_input_tensor.to(torch.float32), dim=-1, keepdim=True)
+    torch_ex2 = torch.mean(torch_input_tensor.to(torch.float32) ** 2, dim=-1, keepdim=True)
+
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+        [h, padded_w],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sharded_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=shard_spec,
+    )
+    prgm_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=[1, 1],
+        subblock_w=1,
+        block_h=1,
+        block_w=block_wt,
+        inplace=False,
+    )
+
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_mem_config
+    )
+    tt_input_tensor = ttnn.fill_implicit_tile_padding(tt_input_tensor, _NON_TILE_ALIGNED_PAD_VALUE)
+
+    if is_rmsnorm:
+        tt_stats = ttnn.rms_norm_pre_all_gather(tt_input_tensor, program_config=prgm_cfg)
+    else:
+        tt_stats = ttnn.layer_norm_pre_all_gather(tt_input_tensor, program_config=prgm_cfg)
+    stats = ttnn.to_torch(tt_stats).to(torch.float32)
+
+    # Per-metric tolerances follow run_pre_allgather_layernorm (the tile-aligned pre-all-gather stats
+    # test) for this same op and statistic; alignment does not change the per-element arithmetic. The
+    # path is all-bf16 (fp32_dest_acc=False, HiFi4): the reduction scaler 1/N is bf16 and the result is
+    # packed to bf16, two round-to-nearest steps of <= 2^-8 each (~2^-7, ~0.8% relative floor), with
+    # fp16 DST accumulation over the row adding the rest.
+    #   - rtol 0.05: per-element relative error envelope above that floor.
+    #   - atol: absolute floor at each statistic's scale, 0.04 for the O(1) E[x^2] and 0.01 for the
+    #     near-zero E[x].
+    #   - frobenius 0.15: aggregate relative-norm safety net.
+    #   - pcc: 0.982 for the near-constant E[x^2] (its low row-to-row variance makes PCC noise-
+    #     sensitive, so the floor is loose) and 0.9997 for E[x].
+    # Padding contamination is not subtle: the poisoned columns enter the unmasked mean / mean of
+    # squares and dominate the reduction, landing orders of magnitude beyond these envelopes, so every
+    # metric fails comfortably for the unmasked LayerNorm path.
+    if is_rmsnorm:
+        # Stats layout: E[x^2] in the first column.
+        assert_numeric_metrics(
+            torch_ex2, stats[..., :1], pcc_threshold=0.982, rtol=0.05, atol=0.04, frobenius_threshold=0.15
+        )
+    else:
+        # Stats layout: one 32-wide tile per statistic, E[x] in column 0 and E[x^2] in column 32.
+        assert_numeric_metrics(
+            torch_ex, stats[..., :1], pcc_threshold=0.9997, rtol=0.05, atol=0.01, frobenius_threshold=0.15
+        )
+        assert_numeric_metrics(
+            torch_ex2, stats[..., 32:33], pcc_threshold=0.982, rtol=0.05, atol=0.04, frobenius_threshold=0.15
+        )
+
+
 # The single-core (1x1 grid) simulated distributed post-all-gather flow hangs waiting on the
 # cb_ex_global multicast. It reproduces for both tile-aligned and non-tile-aligned widths, so it is a
 # pre-existing distributed post-all-gather issue, independent of non-tile-aligned padding handling.
@@ -795,15 +874,25 @@ def test_simulated_distributed_norm_tile_aligned_width(device, is_rmsnorm, w, ep
     _run_simulated_distributed_norm(device, is_rmsnorm, w, eps)
 
 
-@pytest.mark.xfail(
-    reason=_SIMULATED_DISTRIBUTED_POST_ALL_GATHER_HANG
-    + " A non-tile-aligned width additionally needs the per-shard statistics to exclude the final "
-    "tile's padding columns, which is not yet wired on the distributed pre-all-gather path.",
-    run=False,
-)
 @pytest.mark.parametrize("is_rmsnorm", [True, False])
 # Widths that are not multiples of the tile width (32). Single core, so the whole logical row plus
-# its tile padding lives in one shard.
+# its tile padding lives in one shard. The statistics must be reduced over the logical width only.
+@pytest.mark.parametrize("w", [40, 72, 200])
+@pytest.mark.parametrize("eps", [1e-6])
+def test_simulated_distributed_norm_pre_all_gather_non_tile_aligned_width(device, is_rmsnorm, w, eps):
+    # Pre-all-gather-only stats check: the masking that excludes the padding columns is in the
+    # pre-all-gather reduction, and the single-core post-all-gather hangs
+    # (_SIMULATED_DISTRIBUTED_POST_ALL_GATHER_HANG), so assert the per-shard statistics directly to
+    # isolate the pre stage and avoid the hang. Both norms mask the padding: RMSNorm over its squared
+    # input, LayerNorm over both the input (E[x]) and its square (E[x^2]).
+    _run_simulated_distributed_norm_pre_all_gather_stats(device, is_rmsnorm, w, eps)
+
+
+@pytest.mark.xfail(reason=_SIMULATED_DISTRIBUTED_POST_ALL_GATHER_HANG, run=False)
+@pytest.mark.parametrize("is_rmsnorm", [True, False])
+# Non-tile-aligned widths through the full single-core pre + post pipeline. The pre-all-gather masking
+# is verified directly by test_simulated_distributed_norm_pre_all_gather_non_tile_aligned_width; this
+# covers the end-to-end path, which the single-core post-all-gather hang keeps from running today.
 @pytest.mark.parametrize("w", [40, 72, 200])
 @pytest.mark.parametrize("eps", [1e-6])
 def test_simulated_distributed_norm_non_tile_aligned_width(device, is_rmsnorm, w, eps):
