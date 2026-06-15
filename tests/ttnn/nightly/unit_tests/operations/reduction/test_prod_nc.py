@@ -8,6 +8,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose_and_pcc, skip_for_blackhole
+from tests.ttnn.nightly.unit_tests.operations.reduction.utility_functions import ttnn_prod
 
 TILE_HEIGHT = 32
 TILE_WIDTH = 32
@@ -73,7 +74,7 @@ def test_prod_dims(input_shape, dims, device):
     torch_output = torch.prod(torch_input, dims[0], True)
 
     cpu_layout = ttnn.ROW_MAJOR_LAYOUT
-    tt_output_cpu = ttnn.prod(tt_input, tt_output, dims=dims).cpu().to(cpu_layout).to_torch()
+    tt_output_cpu = ttnn_prod(tt_input, tt_output, dims=dims).cpu().to(cpu_layout).to_torch()
 
     rtol = atol = 0.1
     passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)

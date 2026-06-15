@@ -11,6 +11,9 @@ from loguru import logger
 
 import ttnn
 
+# Wormhole B0 worker-L1 override for ring MLA tests. On Blackhole we use the platform default.
+WH_WORKER_L1_SIZE = 1344544
+
 
 def print_buffers(device, name, buffer_type):
     buffers = ttnn._ttnn.reports.get_buffers(device)

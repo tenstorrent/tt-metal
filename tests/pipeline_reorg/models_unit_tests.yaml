@@ -227,11 +227,11 @@
   model: gemma-4-e2b
   skus:
     wh_n150:
-      timeout: 15
-      tier: 2
+      timeout: 10
+      tier: 3
     bh_p150:
-      timeout: 15
-      tier: 2
+      timeout: 10
+      tier: 3
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
@@ -249,16 +249,13 @@
     # wh_n300 disabled due to reduced N300 runner availability — re-enable when capacity returns.
     # wh_n300:
     #   timeout: 5
-    #   tier: 2
-    bh_p150:
-      timeout: 20
-      tier: 2
+    #   tier: 3
     bh_p300:
       timeout: 15
-      tier: 2
+      tier: 3
     bh_quietbox_2:
       timeout: 15
-      tier: 2
+      tier: 3
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
@@ -277,9 +274,6 @@
       timeout: 20
       tier: 2
     bh_quietbox_2:
-      timeout: 15
-      tier: 2
-    bh_loudbox:
       timeout: 15
       tier: 2
     # bh_galaxy: temporarily disabled — sliding-1x32 path hits an unrecoverable
@@ -308,9 +302,6 @@
       timeout: 15
       tier: 2
     bh_quietbox_2:
-      timeout: 15
-      tier: 2
-    bh_loudbox:
       timeout: 15
       tier: 2
     # bh_galaxy: temporarily disabled — same Blackhole Galaxy ethernet / fabric
@@ -433,7 +424,7 @@
       timeout: 25
       tier: 1
     wh_galaxy:
-      timeout: 30
+      timeout: 40
       tier: 1
     # Blackhole
     bh_quietbox_2:
@@ -449,9 +440,13 @@
   cmd: |
     export HF_HUB_OFFLINE=0 HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub HF_DATASETS_CACHE=/tmp/huggingface/datasets
     pytest --timeout 600 models/demos/audio/whisper/tests/test_whisper_modules.py
+    pytest --timeout 600 models/demos/audio/whisper/tests/test_whisper_streaming_detok.py
   model: whisper
   skus:
     wh_n150:
+      timeout: 10
+      tier: 1
+    bh_p150:
       timeout: 10
       tier: 1
     # wh_n300:
@@ -558,6 +553,20 @@
       timeout: 3
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: TT-DiT common unit tests, shared amongst all models.
+  cmd: |
+    pytest --timeout 10000 models/tt_dit/tests/unit/
+  model: dit-common
+  skus:
+    wh_n150:
+      timeout: 60
+      tier: 1
+    bh_quietbox_2:
+      timeout: 140
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
 # Phi-4-mini: disabled, asserting with 'assert freqs.shape[-1] == ext_factors.shape[-1]'

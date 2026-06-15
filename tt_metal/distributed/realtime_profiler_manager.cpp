@@ -137,6 +137,22 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
         return {};
     }
 
+    // ttsim: the simulator's D2H socket exists but its device kernels run many orders of
+    // magnitude slower than real silicon, so the 2 s WriteToDeviceL1/sync poll deadline
+    // in run_sync() always trips before the profiler core can respond. That burns ~30 s
+    // per chip during MeshDevice bring-up, and on WH (where the 64-bit-PCIe gate below
+    // does NOT fire) it deadlocks downstream waiters that depend on first_unthrottled
+    // finish_sync. Skip the profiler entirely on Simulator targets; performance traces
+    // are not interesting on the sim anyway.
+    if (cluster.get_target_device_type() == tt::TargetDevice::Simulator) {
+        log_debug(
+            tt::LogMetal,
+            "Real-time profiler disabled on device {}: target is Simulator; D2H sync polls "
+            "cannot meet real-time deadlines against ttsim's emulated PCIe.",
+            device_id);
+        return {};
+    }
+
     if (!device->is_mmio_capable()) {
         log_debug(
             tt::LogMetal,
@@ -812,13 +828,14 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                 // TODO: Uncomment this and apply a debug verbosity level when
                 // https://github.com/tenstorrent/tt-metal/issues/30615 is done.
                 // ZoneScopedN("InvokeCallbacks");
-                tt::ProgramRealtimeRecord record;
-                record.program_id = start_id;
-                record.start_timestamp = start_time;
-                record.end_timestamp = end_time;
-                record.frequency = dev_state.sync_frequency;
-                record.chip_id = dev_state.chip_id;
-                record.kernel_sources = tt::GetKernelSourcesVecForRuntimeId(start_id);
+                tt::ProgramRealtimeRecord record{
+                    .runtime_id = start_id,
+                    .chip_id = dev_state.chip_id,
+                    .start_timestamp = start_time,
+                    .end_timestamp = end_time,
+                    .frequency = dev_state.sync_frequency,
+                    .kernel_sources = tt::GetKernelSourcesForRuntimeId(static_cast<uint16_t>(start_id)),
+                };
                 tt::InvokeProgramRealtimeProfilerCallbacks(record);
             }
 
@@ -1176,13 +1193,14 @@ void RealtimeProfilerManager::trigger_sync_check() {
             uint32_t start_id = rp[2];
             uint64_t end_time = (static_cast<uint64_t>(rp[4]) << 32) | rp[5];
             if (start_id != 0) {
-                tt::ProgramRealtimeRecord record;
-                record.program_id = start_id;
-                record.start_timestamp = start_time;
-                record.end_timestamp = end_time;
-                record.frequency = dev_state.sync_frequency;
-                record.chip_id = dev_state.chip_id;
-                record.kernel_sources = tt::GetKernelSourcesVecForRuntimeId(start_id);
+                tt::ProgramRealtimeRecord record{
+                    .runtime_id = start_id,
+                    .chip_id = dev_state.chip_id,
+                    .start_timestamp = start_time,
+                    .end_timestamp = end_time,
+                    .frequency = dev_state.sync_frequency,
+                    .kernel_sources = tt::GetKernelSourcesForRuntimeId(static_cast<uint16_t>(start_id)),
+                };
                 std::lock_guard<std::mutex> cb_lock(parallel_finish_sync_callback_mu_);
                 tt::InvokeProgramRealtimeProfilerCallbacks(record);
             }
@@ -1244,13 +1262,14 @@ void RealtimeProfilerManager::trigger_sync_check() {
                 uint32_t start_id = rp[2];
                 uint64_t end_time = (static_cast<uint64_t>(rp[4]) << 32) | rp[5];
                 if (start_id != 0) {
-                    tt::ProgramRealtimeRecord record;
-                    record.program_id = start_id;
-                    record.start_timestamp = start_time;
-                    record.end_timestamp = end_time;
-                    record.frequency = dev_state.sync_frequency;
-                    record.chip_id = dev_state.chip_id;
-                    record.kernel_sources = tt::GetKernelSourcesVecForRuntimeId(start_id);
+                    tt::ProgramRealtimeRecord record{
+                        .runtime_id = start_id,
+                        .chip_id = dev_state.chip_id,
+                        .start_timestamp = start_time,
+                        .end_timestamp = end_time,
+                        .frequency = dev_state.sync_frequency,
+                        .kernel_sources = tt::GetKernelSourcesForRuntimeId(static_cast<uint16_t>(start_id)),
+                    };
                     std::lock_guard<std::mutex> cb_lock(parallel_finish_sync_callback_mu_);
                     tt::InvokeProgramRealtimeProfilerCallbacks(record);
                 }

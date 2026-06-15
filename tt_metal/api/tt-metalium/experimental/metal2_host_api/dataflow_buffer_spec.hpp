@@ -7,12 +7,15 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+#include <tt-metalium/face_geometry.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>  // tt::DataFormat
 
@@ -40,6 +43,7 @@
 //   It is legal to bind more than one KernelSpec producer (or consumer) to a
 //   DFB endpoint, provided that they have:
 //     - non-overlapping node coverage, AND
+//     - the same kernel kind (compute or data movement), AND
 //     - identical binding-site parameters (access_pattern, num_threads)
 //
 // INSTANCING: Like KernelSpec, a DataflowBufferSpec is a *per-node template*.
@@ -62,8 +66,8 @@
 
 namespace tt::tt_metal::experimental {
 
-// A name identifying a DataflowBufferSpec within a ProgramSpec.
-using DFBSpecName = std::string;
+// DFBSpecName is defined in advanced_options.hpp (included above) — the lowest
+// header that references it.
 
 //------------------------------------------------
 // DataflowBufferSpec
@@ -92,6 +96,16 @@ struct DataflowBufferSpec {
     // Optional; if unspecified, the default tile format (32x32) is assumed
     std::optional<tt::tt_metal::Tile> tile_format_metadata = std::nullopt;
 
+    // Optional override for this DFB's tile face layout.
+    //
+    // A tile is physically stored as a grid of fixed-size sub-blocks called "faces". The compute
+    // engine normally infers how many faces a tile has, and how many rows each face holds, from
+    // `tile_format_metadata`. Set this field only when an entry does not occupy a full tile, so it
+    // holds fewer faces and/or shorter faces than the default; the compute engine then reads exactly
+    // that much data instead of a whole tile. `FaceGeometry` carries those two values (rows-per-face
+    // and number of faces).
+    std::optional<FaceGeometry> unpack_face_geometry_metadata = std::nullopt;
+
     //////////////////////////////
     // Backing memory
     //////////////////////////////
@@ -109,8 +123,8 @@ struct DataflowBufferSpec {
     // The bound memory object must have L1-based storage and be large enough to hold the DFB's
     // total size (entry_size * num_entries).
     //
-    // (TODO: this should become std::variant<TensorParameterName, BufferParameterName>.)
-    std::optional<TensorParameterName> borrowed_from = std::nullopt;
+    // (TODO: this should become std::variant<TensorParamName, BufferParameterName>.)
+    std::optional<TensorParamName> borrowed_from = std::nullopt;
 
     //////////////////////////////
     // Advanced options (see advanced_options.hpp)
@@ -156,7 +170,10 @@ struct RemoteDataflowBufferSpec {
 
     // Producer-consumer node mapping: each entry pairs a producer node with the
     // consumer node it feeds.
-    using ProducerConsumerMap = std::vector<std::pair<NodeCoord, NodeCoord>>;
+    // (What about multi-casting? TBD.)
+    using ProducerNode = NodeCoord;
+    using ConsumerNode = NodeCoord;
+    using ProducerConsumerMap = Table<ProducerNode, ConsumerNode>;
     ProducerConsumerMap producer_consumer_map;
 };
 

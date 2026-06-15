@@ -60,13 +60,15 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
-    constexpr const char* DM_KERNEL_1 = "dm_kernel_1";
-    constexpr const char* DM_KERNEL_2 = "dm_kernel_2";
-    constexpr const char* DM_KERNEL_3 = "dm_kernel_3";
+    const experimental::KernelSpecName DM_KERNEL_1{"dm_kernel_1"};
+    const experimental::KernelSpecName DM_KERNEL_2{"dm_kernel_2"};
+    const experimental::KernelSpecName DM_KERNEL_3{"dm_kernel_3"};
 
     // Three kernels split 6 user DMs as 3 + 2 + 1 to mirror the original 4 + 3 + 1 split
     // (preserving the "shared kernel binary across multiple DMs" + "single-DM kernel" mix).
-    auto make_dm_kernel_spec = [](const char* unique_id, uint32_t kernel_id, uint32_t num_threads) {
+    auto make_dm_kernel_spec = [](const experimental::KernelSpecName& unique_id,
+                                  uint32_t kernel_id,
+                                  uint32_t num_threads) {
         return experimental::KernelSpec{
             .unique_id = unique_id,
             .source =
@@ -104,25 +106,25 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
     };
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    auto make_kernel_run_params = [&](const char* name) {
+    auto make_kernel_run_params = [&]() {
         return experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = name,
             .runtime_arg_values =
-                {{.node = node,
-                  .args =
-                      {{"signal_address", signal_address},
-                       {"dram_dst_address", dram_address},
-                       {"dram_dst_bank_id", dram_channel},
-                       {"l1_result_addr", l1_result_addr}}}},
+                {{node,
+                  {{"signal_address", signal_address},
+                   {"dram_dst_address", dram_address},
+                   {"dram_dst_bank_id", dram_channel},
+                   {"l1_result_addr", l1_result_addr}}}},
         };
     };
 
     experimental::ProgramRunArgs params;
-    params.kernel_run_args = {
-        make_kernel_run_params(DM_KERNEL_1),
-        make_kernel_run_params(DM_KERNEL_2),
-        make_kernel_run_params(DM_KERNEL_3),
-    };
+    auto kra1 = make_kernel_run_params();
+    kra1.kernel = DM_KERNEL_1;
+    auto kra2 = make_kernel_run_params();
+    kra2.kernel = DM_KERNEL_2;
+    auto kra3 = make_kernel_run_params();
+    kra3.kernel = DM_KERNEL_3;
+    params.kernel_run_args = {kra1, kra2, kra3};
     experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
@@ -301,7 +303,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
-    constexpr const char* COMPUTE_KERNEL = "compute_tls";
+    const experimental::KernelSpecName COMPUTE_KERNEL{"compute_tls"};
     const experimental::NodeCoord node{0, 0};
 
     experimental::KernelSpec compute_kernel_spec{
@@ -331,9 +333,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     experimental::ProgramRunArgs params;
-    params.kernel_run_args = {{
-        .kernel_spec_name = COMPUTE_KERNEL,
-        .runtime_arg_values = {{.node = node, .args = {{"l1_result_addr", l1_result_addr}}}},
+    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+        .kernel = COMPUTE_KERNEL,
+        .runtime_arg_values = {{node, {{"l1_result_addr", l1_result_addr}}}},
     }};
     experimental::SetProgramRunArgs(program, params);
 

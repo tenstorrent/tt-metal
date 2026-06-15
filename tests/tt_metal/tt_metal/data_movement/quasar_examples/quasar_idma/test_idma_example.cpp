@@ -32,7 +32,7 @@ static void run_kernel(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const std::string& kernel_path,
     experimental::KernelSpec::CompileTimeArgs compile_time_args) {
-    constexpr const char* DM_KERNEL = "idma";
+    const experimental::KernelSpecName DM_KERNEL{"idma"};
     const experimental::NodeCoord node{0, 0};
 
     experimental::KernelSpec dm_kernel_spec{
@@ -59,9 +59,7 @@ static void run_kernel(
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     experimental::ProgramRunArgs params;
-    params.kernel_run_args = {{
-        .kernel_spec_name = DM_KERNEL,
-    }};
+    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{.kernel = DM_KERNEL}};
     experimental::SetProgramRunArgs(program, params);
 
     distributed::MeshWorkload workload;

@@ -81,10 +81,9 @@ union subordinate_map_t {
             volatile uint8_t neo3_trisc1;
             volatile uint8_t neo3_trisc2;
             volatile uint8_t neo3_trisc3;
-            uint8_t pad[12];
         };
-    } __attribute__((packed));
-} __attribute__((packed));
+    };
+};
 
 constexpr uint8_t MaxProcessorsPerCoreType = 24;
 constexpr uint8_t MaxProcessorsForThreadingVariables =

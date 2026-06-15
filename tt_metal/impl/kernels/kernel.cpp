@@ -370,7 +370,7 @@ bool Kernel::binaries_exist_on_disk(const IDevice* device, const std::string& bi
     return true;
 }
 
-std::vector<std::string> Kernel::file_paths(IDevice& device, const std::string& binary_root) const {
+std::vector<std::string> Kernel::file_paths(const IDevice& device, const std::string& binary_root) const {
     std::vector<std::string> file_paths;
     file_paths.reserve(this->expected_num_binaries());
     const auto& hal = MetalContext::instance().hal();
@@ -390,6 +390,21 @@ std::vector<std::string> Kernel::file_paths(IDevice& device, const std::string& 
 
 void Kernel::set_precompiled_config(experimental::PrecompiledKernelConfig config) {
     precompiled_config_ = std::move(config);
+}
+
+std::vector<std::string> Kernel::elf_paths_by_processor_index(
+    const IDevice& device, const std::string& binary_root) const {
+    const auto paths = this->file_paths(device, binary_root);
+    std::vector<std::string> elf_paths;
+    for (int binary_index = 0; binary_index < this->expected_num_binaries(); ++binary_index) {
+        for (uint32_t processor_index : this->get_processor_indices_for_binary(binary_index)) {
+            if (processor_index >= elf_paths.size()) {
+                elf_paths.resize(processor_index + 1);
+            }
+            elf_paths[processor_index] = paths[binary_index];
+        }
+    }
+    return elf_paths;
 }
 
 std::vector<uint32_t> Kernel::get_processor_indices_for_binary(int binary_index) const {
@@ -1056,8 +1071,7 @@ void QuasarDataMovementKernel::generate_binaries(IDevice* device, JitBuildOption
         }
         jit_build_for_processors(targets, this);
     } else {
-        const int canonical_id =
-            static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_processors_[0]);
+        const int canonical_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_processors_[0]);
         const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
             device->build_id(), tensix_core_type, dm_class_idx, canonical_id);
         jit_build(build_state, this);
@@ -1073,9 +1087,10 @@ void QuasarDataMovementKernel::read_binaries(IDevice* device, const std::string&
     if (config_.is_legacy_kernel) {
         for (const auto processor : this->dm_processors_) {
             const int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(processor);
-            auto load_type =
-                MetalContext::instance().hal().get_jit_build_config(tensix_core_type, dm_class_idx, riscv_id)
-                    .memory_load;
+            auto load_type = MetalContext::instance()
+                                 .hal()
+                                 .get_jit_build_config(tensix_core_type, dm_class_idx, riscv_id)
+                                 .memory_load;
             const auto binary_path = BuildEnvManager::get_instance().get_kernel_binary_path(
                 device->build_id(), tensix_core_type, dm_class_idx, riscv_id, binary_root, this->kernel_full_name_);
             const ll_api::memory& binary_mem = llrt::get_risc_binary(binary_path, load_type);
@@ -1083,9 +1098,10 @@ void QuasarDataMovementKernel::read_binaries(IDevice* device, const std::string&
         }
     } else {
         const int canonical_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_processors_[0]);
-        auto load_type =
-            MetalContext::instance().hal().get_jit_build_config(tensix_core_type, dm_class_idx, canonical_id)
-                .memory_load;
+        auto load_type = MetalContext::instance()
+                             .hal()
+                             .get_jit_build_config(tensix_core_type, dm_class_idx, canonical_id)
+                             .memory_load;
         const auto binary_path = BuildEnvManager::get_instance().get_kernel_binary_path(
             device->build_id(), tensix_core_type, dm_class_idx, canonical_id, binary_root, this->kernel_full_name_);
         const ll_api::memory& binary_mem = llrt::get_risc_binary(binary_path, load_type);
@@ -1119,7 +1135,8 @@ bool QuasarDataMovementKernel::configure(
                 *binaries[i],
                 device_id,
                 worker_core,
-                base_address + offsets[static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_processors_[i])]);
+                base_address +
+                    offsets[static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_processors_[i])]);
         }
     } else {
         const uint32_t canonical_offset =

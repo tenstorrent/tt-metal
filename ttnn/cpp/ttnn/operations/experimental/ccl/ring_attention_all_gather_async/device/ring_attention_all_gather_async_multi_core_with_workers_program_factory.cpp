@@ -102,7 +102,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
     const CoreCoord core_grid_offset,
-    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy) {
+    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
+    std::optional<uint32_t> input_batch_slice_idx) {
     using tt::tt_metal::CBDescriptor;
     using tt::tt_metal::CBFormatDescriptor;
     using tt::tt_metal::KernelDescriptor;
@@ -137,6 +138,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     std::vector<Tensor> input_tensors = input_tensor;
     const std::vector<Tensor>& output_tensors = output_tensor;
     const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
+    auto [unicast_forward_args, unicast_backward_args] = ccl::get_forward_backward_line_unicast_configuration(
+        target_device_coord, forward_device_coord, backward_device_coord, mesh_device);
     auto [num_targets_forward, num_targets_backward, dynamic_alternate] =
         ttnn::ccl::get_forward_backward_configuration(ring_size, ring_index, topology);
     if (topology == ttnn::ccl::Topology::Ring && ring_index % 2 == 0) {
@@ -291,6 +294,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         tiles_to_write_per_packet,                // contig_pages_advanced
         num_inputs,                               // num_inputs
         1,                                        // direction
+        unicast_backward_args[0],                 // unicast route arg0 (dst_mesh_id or 0)
+        unicast_backward_args[1],                 // unicast route arg1 (dst_chip_id or distance_in_hops)
     };
     for (uint32_t i = 0; i < num_inputs; i++) {
         sender_writer_forward_kernel.compile_time_args.push_back(op_config.get_page_size());
@@ -357,6 +362,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         tiles_to_write_per_packet,                 // contig_pages_advanced
         num_inputs,                                // num_inputs
         0,                                         // direction
+        unicast_forward_args[0],                   // unicast route arg0 (dst_mesh_id or 0)
+        unicast_forward_args[1],                   // unicast route arg1 (dst_chip_id or distance_in_hops)
     };
     for (uint32_t i = 0; i < num_inputs; i++) {
         sender_writer_backward_kernel.compile_time_args.push_back(op_config.get_page_size());
@@ -412,9 +419,11 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             const auto input_tensor_num_pages = input_tensor[i].buffer()->num_pages();
             const auto input_tensor_shape = input_tensor[i].padded_shape();
             const auto output_tensor_shape = output_tensor[i].padded_shape();
-            const uint32_t batch_head_size = input_tensor_shape[0] * input_tensor_shape[1];
+            const uint32_t num_heads = input_tensor_shape[1];
+            // single_batch_head_num_pages is always pages-per-(batch,head); independent of slicing.
+            const uint32_t full_batch_head_size = input_tensor_shape[0] * num_heads;
 
-            uint32_t single_batch_head_num_pages = input_tensor_num_pages / batch_head_size;
+            uint32_t single_batch_head_num_pages = input_tensor_num_pages / full_batch_head_size;
             const uint32_t base_pages_per_worker = single_batch_head_num_pages / num_links;
             const uint32_t remainder = single_batch_head_num_pages % num_links;
             const uint32_t input_tile_id_start = (link * base_pages_per_worker) + std::min(link, remainder);
@@ -427,13 +436,30 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             TT_ASSERT(!(input_tensor_shape[3] % tt::constants::TILE_WIDTH));
             TT_ASSERT(!(output_tensor_shape[3] % tt::constants::TILE_WIDTH));
 
+            // Single-slot gather: read only slot `input_batch_slice_idx`'s `num_heads` blocks (from
+            // `input_batch_base`); the writer emits them to output slot 0. A batch-1 output suffices,
+            // but a full-batch output also works (only slot 0 written). std::nullopt => full batch.
+            uint32_t batch_head_size = full_batch_head_size;
+            uint32_t input_batch_base = 0;
+            if (input_batch_slice_idx.has_value()) {
+                TT_FATAL(
+                    *input_batch_slice_idx < input_tensor_shape[0],
+                    "input_batch_slice_idx={} out of range for input batch={}",
+                    *input_batch_slice_idx,
+                    input_tensor_shape[0]);
+                batch_head_size = num_heads;
+                input_batch_base = ring_attention_all_gather_async_detail::input_batch_base_pages(
+                    *input_batch_slice_idx, num_heads, input_tensor_Ht, input_tensor_Wt);
+            }
+
             tensor_descriptor_args.push_back(input_tensor_Wt);      // 0 == input_tensor_Wt
             tensor_descriptor_args.push_back(input_tensor_Ht);      // 1 == input_tensor_Ht
             tensor_descriptor_args.push_back(output_tensor_Wt);     // 2 == output_tensor_Wt
             tensor_descriptor_args.push_back(output_tensor_Ht);     // 3 == output_tensor_Ht
-            tensor_descriptor_args.push_back(batch_head_size);      // 4 == batch_head_size
+            tensor_descriptor_args.push_back(batch_head_size);      // 4 == batch_head_size (bh-loop count)
             tensor_descriptor_args.push_back(input_tile_id_start);  // 5 == input_tile_id_start
             tensor_descriptor_args.push_back(input_tile_id_end);    // 6 == input_tile_id_end
+            tensor_descriptor_args.push_back(input_batch_base);     // 7 == input_batch_base (phase-1 input page offset)
         }
 
         KernelDescriptor::RTArgList reader_forward_rt_args;

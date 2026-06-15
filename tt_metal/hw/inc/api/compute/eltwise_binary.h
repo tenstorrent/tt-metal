@@ -50,6 +50,7 @@ ALWI void binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint
 
     PACK((llk_pack_hw_configure(ocb)));
     PACK((llk_pack_init(ocb)));
+    PACK((llk_pack_dest_init()));
 #endif
 }
 
@@ -248,11 +249,11 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 ALWI void binary_dest_reuse_tiles_init(uint32_t icb0, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, call_line);
-    #ifndef ARCH_QUASAR
-        constexpr bool acc_to_dest = true;
-    #else
-        constexpr bool acc_to_dest = false;
-    #endif
+#ifndef ARCH_QUASAR
+    UNPACK(constexpr bool acc_to_dest = true);
+#else
+    UNPACK(constexpr bool acc_to_dest = false);
+#endif
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, acc_to_dest, binary_reuse_dest>(false, false, icb0)));
     MATH((llk_math_eltwise_binary_init<eltwise_binary_type, BroadcastType::NONE, MATH_FIDELITY, binary_reuse_dest>(
         icb0, icb0, false /* acc_to_dest */)));
@@ -286,11 +287,11 @@ template <
     EltwiseBinaryType eltwise_binary_type = EltwiseBinaryType::ELWADD,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 ALWI void binary_dest_reuse_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
-    #ifndef ARCH_QUASAR
-        constexpr bool acc_to_dest = true;
-    #else
-        constexpr bool acc_to_dest = false;
-    #endif
+#ifndef ARCH_QUASAR
+    UNPACK(constexpr bool acc_to_dest = true);
+#else
+    UNPACK(constexpr bool acc_to_dest = false);
+#endif
     UNPACK((llk_unpack_A<BroadcastType::NONE, acc_to_dest, binary_reuse_dest>(in_cb_id, in_tile_index)));
     MATH((llk_math_eltwise_binary<
           eltwise_binary_type,

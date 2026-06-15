@@ -57,3 +57,39 @@ def test_dropout_output_tensor(device):
     assert torch.allclose(
         tensor_torch, output_torch
     ), "output_tensor parameter not working: input tensor was not modified in place"
+
+
+@pytest.mark.parametrize("in_place", [False, True])
+def test_dropout_seed_distinguishes_cache_entries(device, in_place):
+    """Regression guard for dropout's seed static/dynamic contract, on both the distinct-output and
+    in-place (output_tensor==input) fast paths.
+
+    `seed` is excluded from compute_program_hash (so calls differing only in seed cache-hit) but
+    must be re-applied to the cached program on every dispatch. Pins both halves:
+      * different seed must NOT grow the cache  -> guards against re-adding seed to the hash.
+      * different seed must change the dropout mask -> guards against the frozen-seed bug on the
+        fast path (the in_place case is only reachable since resolve_bindings allows input==output).
+    """
+    t = torch.ones((1, 1, 32, 64))
+    tensor = ttnn.from_torch(t, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    def run(seed):
+        out_kwargs = {"output_tensor": tensor} if in_place else {}
+        out = ttnn.experimental.dropout(tensor, probability=0.5, scale=2.0, seed=seed, **out_kwargs)
+        return ttnn.to_torch(out).float().clone()
+
+    out_a = run(1234)
+    entries_a = device.num_program_cache_entries()
+    run(1234)
+    entries_b = device.num_program_cache_entries()
+    out_c = run(5678)
+    entries_c = device.num_program_cache_entries()
+
+    assert entries_b == entries_a, "same seed must reuse the cached program"
+    assert entries_c == entries_a, "a different seed must NOT add a cache entry -- seed is dynamic, not hashed"
+    assert not torch.equal(out_a, out_c), "a different seed must change the dropout mask (seed re-patched on fast path)"
+
+    device.disable_and_clear_program_cache()
