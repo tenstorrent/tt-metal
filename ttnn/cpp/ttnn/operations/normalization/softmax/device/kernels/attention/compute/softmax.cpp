@@ -25,7 +25,7 @@
 // Templated on the CBs so the eltwise_chain below can take them as compile-time NTTPs.
 // All call sites pass constexpr CBs.
 template <uint32_t cb_in, uint32_t cb_max_scaler, uint32_t cb_max, uint32_t cb_out>
-void calc_numeric_stable(uint32_t Wt) {
+void calc_numeric_stable(uint32_t Wt, uint32_t ndst) {
     auto cb_in_obj = CircularBuffer(cb_in);
     auto cb_max_obj = CircularBuffer(cb_max);
     auto cb_out_obj = CircularBuffer(cb_out);
@@ -38,14 +38,19 @@ void calc_numeric_stable(uint32_t Wt) {
         compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
         cb_in, cb_max_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
 
-    // x - max(x) then exp, fused into one chain. cb_in waited upfront by the reduce above
-    // (popped below) -> CallerManaged + Block; cb_max held (wait/pop kept outside) ->
-    // CallerManaged + Scalar; cb_out per-tile reserve+push -> Streaming.
-    // sub_bcast_cols_init_short -> BinaryDataFormatReconfig::Input; plain pack_tile
-    // (pack format already cb_out) -> PackTileReconfig::None.
+    // x - max(x) then exp, fused into one chain — DEST-batched ndst tiles per acquire,
+    // matching the original's `for (wt += ndst)` window. cb_in is fully resident (the
+    // reduce above WaitUpfrontNoPop-waited all Wt tiles; popped below) -> CallerManaged +
+    // Block, read by absolute index `wt_base + j`. cb_max held (wait/pop kept outside) ->
+    // CallerManaged + Scalar. cb_out per-chunk reserve+push -> Chunked (reserve ndst /
+    // push ndst per block, == original reserve_back(ndst)/push_back(ndst)).
+    // EltwiseShape::tiles(Wt, ndst): ndst is the RUNTIME block_size; the chain clamps it to
+    // the DEST/lane capacity automatically. sub_bcast_cols_init_short ->
+    // BinaryDataFormatReconfig::Input; plain pack_tile (pack format already cb_out) ->
+    // PackTileReconfig::None.
     cb_max_obj.wait_front(1);
     compute_kernel_lib::eltwise_chain(
-        compute_kernel_lib::EltwiseShape::tiles(Wt),
+        compute_kernel_lib::EltwiseShape::tiles(Wt, ndst),
         compute_kernel_lib::BinaryFpu<
             cb_in,
             cb_max,
@@ -63,7 +68,7 @@ void calc_numeric_stable(uint32_t Wt) {
             compute_kernel_lib::Dst::D0>{},
         compute_kernel_lib::PackTile<
             cb_out,
-            compute_kernel_lib::OutputLifecycle::Streaming,
+            compute_kernel_lib::OutputLifecycle::Chunked,
             compute_kernel_lib::PackTileReconfig::None>{});
     cb_in_obj.pop_front(Wt);
     cb_max_obj.pop_front(1);
@@ -74,7 +79,7 @@ void kernel_main() {
     const uint32_t NCHt = get_arg_val<uint32_t>(0);
     const uint32_t Ht = get_arg_val<uint32_t>(1);
     const uint32_t Wt = get_arg_val<uint32_t>(2);
-    [[maybe_unused]] const uint32_t ndst = get_arg_val<uint32_t>(3);
+    const uint32_t ndst = get_arg_val<uint32_t>(3);  // DEST-batch size (== host block_size)
     const uint32_t start_ht = get_arg_val<uint32_t>(4);
     const uint32_t mask_padded_data = get_arg_val<uint32_t>(5);
     binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_6);
@@ -141,12 +146,21 @@ void kernel_main() {
             compute_kernel_lib::BroadcastDim::Scalar,
             compute_kernel_lib::InputLifecycle::Streaming,
             compute_kernel_lib::InputLifecycle::CallerManaged>(Wt);
-        // fused mask add (+exp): cb_scale_mask consumed front-per-tile -> Streaming + Scalar;
-        // cb_fused_attn absolute-indexed + held (waited upfront, popped below) -> CallerManaged + Block
-        // (cumulative wait collapsed to one upfront wait_front(Wt) — its CB holds Wt tiles).
-        // cb_x per-tile reserve+push -> Streaming. reconfig_data_format + add init ->
-        // BinaryDataFormatReconfig::Input; plain pack_tile (cb_x/cb_scale_mask share format) ->
-        // PackTileReconfig::None. Exp dropped when NUMERIC_STABLE (done later in calc_numeric_stable).
+        // fused mask add (+exp) — DEST-batched ndst tiles per acquire, matching the original's
+        // `for (wt += ndst)` window. Both inputs are fully resident before this chain runs, so
+        // both walk by absolute index `wt_base + j`:
+        //   cb_scale_mask: Site-1 (fused scale) above pushed all Wt tiles into it (cb_scale_mask
+        //   holds Wt + block_size); the original waited/popped ndst per chunk reading relative
+        //   wt8 (front pinned at 0 because it isn't popped between chunks) == chain Bulk + Block
+        //   (wait Wt upfront, walk absolute, pop Wt at end).
+        //   cb_fused_attn: absolute-indexed `wt + wt8`, held across Ht (waited upfront, popped
+        //   below) -> CallerManaged + Block. Its cumulative wait collapses to one upfront
+        //   wait_front(Wt) — its CB (cb_fused_attn = Wt-resident) holds all Wt tiles.
+        // cb_x per-chunk reserve+push -> Chunked (cb_x = cb_exps/cb_x are Wt-resident).
+        // reconfig_data_format + add init -> BinaryDataFormatReconfig::Input; plain pack_tile
+        // (cb_x/cb_scale_mask share format) -> PackTileReconfig::None. Exp dropped when
+        // NUMERIC_STABLE (done later in calc_numeric_stable). tiles(Wt, ndst): ndst is the
+        // RUNTIME block_size, clamped to DEST capacity by the chain.
 #ifdef CAUSAL_MASK
         cb_fused_attn_obj.wait_front(Wt);
 #else
@@ -155,7 +169,7 @@ void kernel_main() {
         }
 #endif
         compute_kernel_lib::eltwise_chain(
-            compute_kernel_lib::EltwiseShape::tiles(Wt),
+            compute_kernel_lib::EltwiseShape::tiles(Wt, ndst),
             compute_kernel_lib::BinaryFpu<
                 cb_scale_mask,
                 cb_fused_attn,
@@ -165,11 +179,11 @@ void kernel_main() {
 #else
                 compute_kernel_lib::BroadcastDim::Row,
 #endif
-                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::Bulk,
                 compute_kernel_lib::InputLifecycle::CallerManaged,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::OperandKind::Block,
                 compute_kernel_lib::OperandKind::Block>{},
 #ifndef NUMERIC_STABLE
             compute_kernel_lib::Exp<
@@ -179,13 +193,13 @@ void kernel_main() {
 #endif
             compute_kernel_lib::PackTile<
                 cb_x,
-                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::OutputLifecycle::Chunked,
                 compute_kernel_lib::PackTileReconfig::None>{});
 
 // add numeric_stable
 // fuse exp with sub tiles
 #ifdef NUMERIC_STABLE
-        calc_numeric_stable<cb_x, cb_max_scaler, cb_max, cb_exps>(Wt);
+        calc_numeric_stable<cb_x, cb_max_scaler, cb_max, cb_exps>(Wt, ndst);
 #endif
 
 #ifdef CAUSAL_MASK
@@ -260,20 +274,23 @@ void kernel_main() {
 // add numeric_stable
 // fuse exp with sub tiles
 #ifdef NUMERIC_STABLE
-            calc_numeric_stable<cb_x, cb_max_scaler, cb_max, cb_exps>(Wt);
+            calc_numeric_stable<cb_x, cb_max_scaler, cb_max, cb_exps>(Wt, ndst);
 #endif
 
         } else {
 // add numeric_stable
 // fuse exp with sub tiles
 #ifdef NUMERIC_STABLE
-            calc_numeric_stable<cb_in0, cb_max_scaler, cb_max, cb_exps>(Wt);
+            calc_numeric_stable<cb_in0, cb_max_scaler, cb_max, cb_exps>(Wt, ndst);
 #else
-            // Migrated: streaming copy + exp + pack via eltwise_chain.
-            // Per-tile semantics (BlockSize=1) replaces original's per-ndst ACQ window —
-            // semantically equivalent because reads/writes are sequential and the chain
-            // re-acquires DEST per tile. ndst is a runtime arg so we can't use it as
-            // BlockSize template; perf trade-off accepted (more ACQ/REL pairs).
+            // Migrated: streaming copy + exp + pack via eltwise_chain. LEFT AT BlockSize=1
+            // (NOT DEST-batched) on purpose: the original consumed cb_in0 per-ndst with a
+            // cb_wait_front(ndst)/cb_pop_front(ndst) INSIDE the loop and read RELATIVE index
+            // wt8 — i.e. cb_in0 is a streamed reader, NOT row-resident. Here cb_in0 = in0_t =
+            // block_size*2 (the Wt-resident size only applies in the no-mask NUMERIC_STABLE
+            // path; this is the non-NS branch), so it cannot hold the whole Wt row. A Block
+            // walker would need an upfront wait_front(Wt) on a 2*block_size CB -> deadlock, so
+            // the input stays InputLifecycle::Streaming (which forces the chain's block to 1).
             // Reconfig: copy_tile + exp_tile are SFPU/copy ops; no explicit
             // reconfig_data_format outside this block, so CopyTileReconfig::Input matches
             // copy_tile_init's reconfig. PackTileReconfig::None — pack format set by
@@ -309,23 +326,33 @@ void kernel_main() {
 
         cb_recipsumexps_obj.wait_front(1);  // will reuse Wt times for bcast
 
-        // multiply by 1/sum(exp(x)) — bcast COL on the held cb_recipsumexps.
-        // Original cumulative-waited Wt tiles in cb_exps upfront + did 1 final
-        // pop_front(Wt). Chain InputLifecycle::Streaming + Scalar emits per-tile wait_front(1)
-        // + pop_front(1) — same net effect over Wt iters since reader pushed
-        // all Wt tiles upfront.
+        // multiply by 1/sum(exp(x)) — bcast COL on the held cb_recipsumexps — DEST-batched
+        // ndst tiles per acquire, matching the original's `for (wt += ndst)` window. The SUM
+        // reduce above (WaitUpfrontNoPop) already waited all Wt tiles of cb_exps, so they are
+        // fully resident (cb_exps = Wt-resident): cb_exps walks by absolute index `wt_base + j`
+        // -> CallerManaged + Block, with the single final cb_exps_obj.pop_front(Wt) kept
+        // OUTSIDE the chain (== the original's lone pop_front(Wt) after the mul loop).
+        // cb_recipsumexps held outside (wait/pop bracket the chain) -> CallerManaged + Scalar.
+        // cb_out0 (= block_size*2, NOT row-resident) gets per-chunk reserve+push -> Chunked
+        // (reserve ndst / push ndst per block, == original reserve_back(ndst)/push_back(ndst)).
         //
         // Reconfig: reconfig_data_format(cb_exps, cb_recipsumexps) +
         // mul_bcast_cols_init_short reconfig srca/srcb -> Input.
         // pack_reconfig_data_format(cb_out0) -> PackTileReconfig::Output.
-        // cb_recipsumexps held outside (wait/pop bracket the chain) -> InputLifecycle::CallerManaged.
+        // tiles(Wt, ndst): ndst is the RUNTIME block_size, clamped to DEST capacity.
         compute_kernel_lib::mul<
             cb_exps,
             cb_recipsumexps,
             cb_out0,
             compute_kernel_lib::BroadcastDim::Col,
-            compute_kernel_lib::InputLifecycle::Streaming,
-            compute_kernel_lib::InputLifecycle::CallerManaged>(Wt);
+            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::OutputLifecycle::Chunked,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::PackTileReconfig::Output,
+            compute_kernel_lib::OperandKind::Block,
+            compute_kernel_lib::OperandKind::Scalar>(compute_kernel_lib::EltwiseShape::tiles(Wt, ndst));
+        cb_exps_obj.pop_front(Wt);
         cb_recipsumexps_obj.pop_front(1);
     }  // NCHt loop
     // cb_pop_front(cb_max_scaler, 1); // we don't actually have to do this

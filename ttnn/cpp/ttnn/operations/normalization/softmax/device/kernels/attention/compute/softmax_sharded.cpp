@@ -34,13 +34,18 @@ ALWI void calc_numeric_stable() {
         reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
             cb_in, cb_max_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::row(block_w));
 
-    // x - max(x) then exp, fused. cb_in resident (popped at chain end) -> DeferredPop + Block;
-    // cb_max held (wait/pop kept outside) -> CallerManaged + Scalar; cb_out reserve+push block_w
-    // -> Bulk. sub_bcast_cols_init_short -> BinaryDataFormatReconfig::Input; plain pack_tile
-    // (format already cb_out) -> PackTileReconfig::None.
+    // x - max(x) then exp, fused — DEST-batched subblock_w tiles per acquire, matching the
+    // original's `for (j < num_subblocks_w) { for (w < subblock_w) }` window with absolute
+    // index `w + index_subblock_w_offset`. cb_in resident (popped at chain end) -> DeferredPop
+    // + Block, read by absolute index `wt_base + j`; cb_max held (wait/pop kept outside) ->
+    // CallerManaged + Scalar; cb_out reserve+push block_w upfront/walk -> Bulk (block-correct).
+    // EltwiseShape::tiles(block_w, subblock_w): subblock_w is the block_size; the chain clamps
+    // it to DEST capacity automatically. sub_bcast_cols_init_short ->
+    // BinaryDataFormatReconfig::Input; plain pack_tile (format already cb_out) ->
+    // PackTileReconfig::None.
     cb_max_obj.wait_front(1);
     compute_kernel_lib::eltwise_chain(
-        compute_kernel_lib::EltwiseShape::tiles(block_w),
+        compute_kernel_lib::EltwiseShape::tiles(block_w, subblock_w),
         compute_kernel_lib::BinaryFpu<
             cb_in,
             cb_max,
@@ -100,14 +105,17 @@ void kernel_main() {
 #endif
 
     constexpr int dst0 = 0;
-    int index_subblock_w_offset = 0;
 
     for (uint32_t i = 0; i < block_h; i++) {
 #if FUSED_SCALE_MASK
-        // fused scale: cb_in0 (resident sharded, popped at chain end) * cb_fused_scale (held
-        // scalar) -> cb_scale_mask. cb_in0 DeferredPop + Block; cb_fused_scale CallerManaged +
-        // Scalar (wait kept below); cb_scale_mask reserve+push block_w -> Bulk.
-        // reconfig + mul_tiles_bcast_scalar_init_short -> Input; pack_reconfig -> Output.
+        // fused scale — DEST-batched subblock_w tiles per acquire, matching the original's
+        // per-subblock window with absolute index `w + index_subblock_w_offset`. cb_in0
+        // (resident sharded, popped at chain end) * cb_fused_scale (held scalar) ->
+        // cb_scale_mask. cb_in0 DeferredPop + Block (absolute index `wt_base + j`);
+        // cb_fused_scale CallerManaged + Scalar (wait kept below); cb_scale_mask reserve+push
+        // block_w upfront/walk -> Bulk (block-correct). reconfig +
+        // mul_tiles_bcast_scalar_init_short -> Input; pack_reconfig -> Output.
+        // EltwiseShape::tiles(block_w, subblock_w): subblock_w is the block_size, DEST-clamped.
         cb_fused_scale_obj.wait_front(1);
         compute_kernel_lib::mul<
             cb_in0,
@@ -120,15 +128,18 @@ void kernel_main() {
             compute_kernel_lib::BinaryDataFormatReconfig::Input,
             compute_kernel_lib::PackTileReconfig::Output,
             compute_kernel_lib::OperandKind::Block,
-            compute_kernel_lib::OperandKind::Scalar>(block_w);
+            compute_kernel_lib::OperandKind::Scalar>(compute_kernel_lib::EltwiseShape::tiles(block_w, subblock_w));
 
-        // fused mask add (+exp): cb_scale_mask (Bulk: wait+pop block_w) + cb_fused_attn
+        // fused mask add (+exp) — DEST-batched subblock_w tiles per acquire, matching the
+        // original's per-subblock window with absolute index `w + index_subblock_w_offset`.
+        // cb_scale_mask (Bulk: wait+pop block_w, absolute index `wt_base + j`) + cb_fused_attn
         // (lifecycle per the CAUSAL_MASK / SHARDED_CAUSAL_MASK matrix — chain owns wait+pop,
         // exactly reproducing the original's #ifndef SHARDED_CAUSAL_MASK wait + #ifdef CAUSAL_MASK
-        // pop) -> cb_x (reserve+push block_w -> Bulk). add init -> Input; plain pack_tile -> None.
-        // Exp dropped when NUMERIC_STABLE (done in calc_numeric_stable below).
+        // pop) -> cb_x (reserve+push block_w upfront/walk -> Bulk). add init -> Input; plain
+        // pack_tile -> None. Exp dropped when NUMERIC_STABLE (done in calc_numeric_stable below).
+        // EltwiseShape::tiles(block_w, subblock_w): subblock_w is the block_size, DEST-clamped.
         compute_kernel_lib::eltwise_chain(
-            compute_kernel_lib::EltwiseShape::tiles(block_w),
+            compute_kernel_lib::EltwiseShape::tiles(block_w, subblock_w),
             compute_kernel_lib::BinaryFpu<
                 cb_scale_mask,
                 cb_fused_attn,
@@ -179,38 +190,33 @@ void kernel_main() {
 #ifdef NUMERIC_STABLE
         calc_numeric_stable<block_w, num_subblocks_w, subblock_w, cb_in0, cb_max_scaler, cb_max, cb_exps>();
 #else
-        // exp(x): migrated to per-subblock eltwise_chain. Each outer iter is a
-        // CopyTile + Exp + PackTile chain with subblock_w tiles read from cb_in0
-        // at offset index_subblock_w_offset.
-        //
-        // Reconfig audit: explicit reconfig_data_format(cb_in0, cb_in0) +
-        //   pack_reconfig_data_format(cb_exps) ONCE outside the outer loop —
-        //   chain emits per-call (fold-elided after first since prev == curr).
-        //   -> CopyTileReconfig::Input + PackTileReconfig::Output.
-        // Lifecycles: cb_in0 InputLifecycle::HeldBulk + Block +
-        // compute_kernel_lib::TileOffset::Set(index_subblock_w_offset)
-        //   per outer iter — chain emits cb_wait_front(base + subblock_w) per call,
-        //   matching the caller's pre-pushed sharded input. cb_exps OutputLifecycle::Bulk + Block.
-        // BlockSize=1 (subblock_w is runtime; per-tile semantics).
-        index_subblock_w_offset = 0;
-        for (uint32_t j = 0; j < num_subblocks_w; j++) {
-            compute_kernel_lib::eltwise_chain(
-                subblock_w,
-                compute_kernel_lib::CopyTile<
-                    cb_in0,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::InputLifecycle::HeldBulk,
-                    compute_kernel_lib::CopyTileReconfig::Input,
-                    compute_kernel_lib::OperandKind::Block,
-                    compute_kernel_lib::TileOffset::Set>{index_subblock_w_offset},
-                compute_kernel_lib::Exp<
-                    static_cast<compute_kernel_lib::Approx>(EXP_APPROX),
-                    compute_kernel_lib::Approx::Exact,
-                    compute_kernel_lib::Dst::D0>{},
-                compute_kernel_lib::PackTile<cb_exps, compute_kernel_lib::OutputLifecycle::Bulk>{});
-            index_subblock_w_offset += subblock_w;
-        }
-        cb_in0_obj.pop_front(block_w);
+        // exp(x): CopyTile + Exp + PackTile, DEST-batched subblock_w tiles per acquire over the
+        // whole block_w — matching the original's `for (j < num_subblocks_w) { for (w <
+        // subblock_w) copy_tile(cb_in0, w + index_subblock_w_offset, w) }` window with absolute
+        // index `w + index_subblock_w_offset`. cb_in0 is sharded-resident (block_w*block_h),
+        // read by absolute index `wt_base + j` and popped block_w at chain end -> DeferredPop +
+        // Block (the prior per-subblock loop with TileOffset::Set was BlockSize=1; this is the
+        // single batched form). cb_exps reserve+push block_w upfront/walk -> Bulk (block-correct).
+        // Reconfig: CopyTileReconfig::Input (== original reconfig_data_format(cb_in0, cb_in0) +
+        // copy_tile_to_dst_init_short) + PackTileReconfig::Output (== pack_reconfig_data_format(
+        // cb_exps)). EltwiseShape::tiles(block_w, subblock_w): subblock_w is the block_size,
+        // DEST-clamped.
+        compute_kernel_lib::eltwise_chain(
+            compute_kernel_lib::EltwiseShape::tiles(block_w, subblock_w),
+            compute_kernel_lib::CopyTile<
+                cb_in0,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::InputLifecycle::DeferredPop,
+                compute_kernel_lib::CopyTileReconfig::Input,
+                compute_kernel_lib::OperandKind::Block>{},
+            compute_kernel_lib::Exp<
+                static_cast<compute_kernel_lib::Approx>(EXP_APPROX),
+                compute_kernel_lib::Approx::Exact,
+                compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::PackTile<
+                cb_exps,
+                compute_kernel_lib::OutputLifecycle::Bulk,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 #endif
 #endif  // FUSED_SCALE_MASK
 
@@ -231,21 +237,31 @@ void kernel_main() {
                     recip_tile(0);
                 });
 
-        // exp(x) / (sum(exp(x))) — bcast COL on cb_recipsumexps (1 tile held).
-        // Original per-subblock DEST batching with sequential index becomes
-        // per-tile streaming via chain InputLifecycle::Streaming + Scalar on cb_exps.
+        // exp(x) / (sum(exp(x))) — bcast COL on cb_recipsumexps (1 tile held) — DEST-batched
+        // subblock_w tiles per acquire, matching the original's per-subblock window with
+        // absolute index `w + index_subblock_w_offset`. The SUM reduce above (NoWaitNoPop) ran
+        // after cb_wait_front(cb_exps, block_w), so cb_exps is fully resident (block_w): it
+        // walks by absolute index `wt_base + j` -> DeferredPop + Block, chain pops block_w at
+        // end (== the original's lone cb_exps_obj.pop_front(block_w) after the mul loop).
+        // cb_recipsumexps held outside (wait/pop bracket the chain) -> CallerManaged + Scalar.
+        // cb_out0 (block_w*block_h resident) reserve+push block_w upfront/walk -> Bulk.
         //
         // Reconfig: reconfig_data_format + mul_bcast_cols_init_short -> Input;
         // pack_reconfig_data_format(cb_out0) -> PackTileReconfig::Output.
-        // cb_recipsumexps InputLifecycle::CallerManaged (external wait/pop bracket).
+        // EltwiseShape::tiles(block_w, subblock_w): subblock_w is the block_size, DEST-clamped.
         cb_recipsumexps_obj.wait_front(1);
         compute_kernel_lib::mul<
             cb_exps,
             cb_recipsumexps,
             cb_out0,
             compute_kernel_lib::BroadcastDim::Col,
-            compute_kernel_lib::InputLifecycle::Streaming,
-            compute_kernel_lib::InputLifecycle::CallerManaged>(block_w);
+            compute_kernel_lib::InputLifecycle::DeferredPop,
+            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::OutputLifecycle::Bulk,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::PackTileReconfig::Output,
+            compute_kernel_lib::OperandKind::Block,
+            compute_kernel_lib::OperandKind::Scalar>(compute_kernel_lib::EltwiseShape::tiles(block_w, subblock_w));
         cb_recipsumexps_obj.pop_front(1);
     }
 }
