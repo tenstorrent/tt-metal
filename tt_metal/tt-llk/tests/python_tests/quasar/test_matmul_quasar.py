@@ -67,6 +67,7 @@ def matmul_dimensions_dest_sync(dest_acc_modes):
         for kt_dim in kt_dims
     ]
 
+
 # Generate format-aware combinations. MxFp4 is an input-only (L1) format here: the
 # unpacker produces MxFp4_2x_A/B in the src registers, so drop the cross-product
 # entries where MxFp4 would land as an output.
