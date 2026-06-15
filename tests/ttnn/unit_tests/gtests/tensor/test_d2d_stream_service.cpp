@@ -23,7 +23,9 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -682,6 +684,21 @@ void expect_metadata_everywhere(
     expect_metadata_on_receiver_workers(receiver, receiver_mesh, expected);
 }
 
+std::vector<uint32_t> make_metadata_triple(uint32_t base) { return {static_cast<uint32_t>(-1), 0u, base}; }
+
+std::vector<uint32_t> make_metadata_iota(uint32_t num_words) {
+    std::vector<uint32_t> words(num_words);
+    std::iota(words.begin(), words.end(), 0u);
+    return words;
+}
+
+uint32_t metadata_bytes_for_words(uint32_t num_words) { return num_words * static_cast<uint32_t>(sizeof(uint32_t)); }
+
+ttsl::Span<const std::byte> as_metadata_bytes(const std::vector<uint32_t>& metadata_words) {
+    return ttsl::Span<const std::byte>(
+        reinterpret_cast<const std::byte*>(metadata_words.data()), metadata_bytes_for_words(metadata_words.size()));
+}
+
 // STEP 3 driver: full end-to-end metadata. Real sender + receiver workers drive
 // one transfer; the designated sender worker's {-1,0,fill_base} blob must land on
 // the sender service core AND every receiver worker core.
@@ -973,31 +990,45 @@ std::unique_ptr<H2DStreamService> make_h2d_service(
     return std::make_unique<H2DStreamService>(sender_mesh, std::move(h2d_cfg));
 }
 
-// Push one token (uniform `value`) + its {-1,0,value} metadata through the H2D
-// service. A zero-length metadata span when disabled.
-void h2d_push_token(H2DStreamService& h2d_service, uint32_t num_u32, uint32_t base, uint32_t metadata_size_bytes) {
+// Push one token + uint32 metadata words through the H2D service.
+void h2d_push_token(
+    H2DStreamService& h2d_service,
+    ttsl::Span<const std::byte> token_bytes,
+    const std::vector<uint32_t>& metadata_words) {
+    h2d_service.forward_to_tensor(token_bytes, as_metadata_bytes(metadata_words));
+}
+
+// Uniform u32 iota token; optional {-1,0,base} metadata when metadata_size_bytes > 0.
+void h2d_push_token_u32(H2DStreamService& h2d_service, uint32_t num_u32, uint32_t base, uint32_t metadata_size_bytes) {
     const std::vector<uint32_t> token = make_iota_u32(num_u32, base);
-    const std::vector<uint32_t> meta_words = {static_cast<uint32_t>(-1), 0u, base};
-    const auto bytes =
+    const auto token_bytes =
         ttsl::Span<const std::byte>(reinterpret_cast<const std::byte*>(token.data()), token.size() * sizeof(uint32_t));
-    const auto meta =
-        ttsl::Span<const std::byte>(reinterpret_cast<const std::byte*>(meta_words.data()), metadata_size_bytes);
-    h2d_service.forward_to_tensor(bytes, meta);
+    if (metadata_size_bytes == 0) {
+        h2d_service.forward_to_tensor(token_bytes, {});
+        return;
+    }
+    const auto metadata_words = make_metadata_triple(base);
+    ASSERT_EQ(metadata_bytes_for_words(metadata_words.size()), metadata_size_bytes);
+    h2d_push_token(h2d_service, token_bytes, metadata_words);
 }
 
 // Part B driver: full Host -> H2D -> bridge -> D2D -> consumer -> Host chain. The
 // host streams num_iters tokens (value fill_base+i); the final value must appear
-// in the receiver output tensor, with metadata {-1,0,final} on the sender service
-// core and every receiver worker core when enabled.
+// in the receiver output tensor. When metadata is enabled, make_metadata(iter)
+// supplies the per-iteration uint32 word blob (defaults to {-1,0,fill_base+iter}).
 void verify_h2d_d2d_bridge(
     const std::shared_ptr<MeshDevice>& sender_mesh,
     const std::shared_ptr<MeshDevice>& receiver_mesh,
     const ttnn::Shape& global_shape,
     const CoreRange& worker_cores,
     uint32_t num_iters,
-    uint32_t metadata_size_bytes = 0) {
+    uint32_t metadata_size_bytes = 0,
+    std::function<std::vector<uint32_t>(uint32_t iter)> make_metadata = {}) {
     constexpr uint32_t kFillBase = 1u;
     const bool metadata_enabled = metadata_size_bytes > 0;
+    if (metadata_enabled && !make_metadata) {
+        make_metadata = [](uint32_t iter) { return make_metadata_triple(kFillBase + iter); };
+    }
 
     const auto global_spec = make_config(sender_mesh, global_shape).global_spec;
     auto h2d_service = make_h2d_service(sender_mesh, global_spec, worker_cores, metadata_size_bytes);
@@ -1022,7 +1053,16 @@ void verify_h2d_d2d_bridge(
 
     const uint32_t num_u32 = static_cast<uint32_t>(global_shape.volume());
     for (uint32_t i = 0; i < num_iters; ++i) {
-        h2d_push_token(*h2d_service, num_u32, kFillBase + i, metadata_size_bytes);
+        const std::vector<uint32_t> token = make_iota_u32(num_u32, kFillBase + i);
+        const auto token_bytes = ttsl::Span<const std::byte>(
+            reinterpret_cast<const std::byte*>(token.data()), token.size() * sizeof(uint32_t));
+        if (metadata_enabled) {
+            const auto metadata_words = make_metadata(i);
+            ASSERT_EQ(metadata_bytes_for_words(metadata_words.size()), metadata_size_bytes);
+            h2d_push_token(*h2d_service, token_bytes, metadata_words);
+        } else {
+            h2d_service->forward_to_tensor(token_bytes, {});
+        }
     }
     h2d_service->barrier();
     Finish(sender_mesh->mesh_command_queue());
@@ -1032,7 +1072,7 @@ void verify_h2d_d2d_bridge(
     expect_output_tensor_iota(output_tensor, receiver_mesh, final_value);
     if (metadata_enabled) {
         expect_metadata_everywhere(
-            sender.get(), receiver.get(), sender_mesh, receiver_mesh, {static_cast<uint32_t>(-1), 0u, final_value});
+            sender.get(), receiver.get(), sender_mesh, receiver_mesh, make_metadata(num_iters - 1));
     }
 }
 
@@ -1091,7 +1131,7 @@ void verify_three_stage_chain(
 
     const uint32_t num_u32 = static_cast<uint32_t>(global_shape.volume());
     for (uint32_t i = 0; i < num_iters; ++i) {
-        h2d_push_token(*h2d_service, num_u32, kFillBase + i, metadata_size_bytes);
+        h2d_push_token_u32(*h2d_service, num_u32, kFillBase + i, metadata_size_bytes);
     }
     h2d_service->barrier();
     Finish(stage0->mesh_command_queue());
@@ -1104,6 +1144,157 @@ void verify_three_stage_chain(
         // The D2D1 receiver service multicasts the blob into every stage2 receiver worker
         // core's L1; assert the final token's {-1,0,final} landed there.
         expect_metadata_on_receiver_workers(receiver1.get(), stage2, {static_cast<uint32_t>(-1), 0u, final_value});
+    }
+}
+
+// N-stage chain driver (N >= 3): the colinear generalization of verify_three_stage_chain.
+// Host -> H2D -> bridge -> D2D0 -> bridge -> D2D1 -> ... -> bridge -> D2D(N-2) -> consumer ->
+// Host across N colinear devices, all D2D pairs in OWN mode. Stages 1..N-2 are MIDDLE
+// devices: each hosts BOTH the inbound D2D receiver and the outbound D2D sender at once,
+// reusing the upstream-agnostic bridge kernel (upstream = the previous stage's D2D receiver
+// instead of an H2D service). The host streams num_iters tokens (value kFillBase+i); the final
+// value must reach the last stage's output tensor, with metadata {-1,0,final} multicast to the
+// last stage's receiver worker cores when enabled.
+void verify_chain(
+    const std::vector<std::shared_ptr<MeshDevice>>& stages,
+    const ttnn::Shape& global_shape,
+    const CoreRange& worker_cores,
+    uint32_t num_iters,
+    uint32_t metadata_size_bytes = 0) {
+    constexpr uint32_t kFillBase = 1u;
+    const bool metadata_enabled = metadata_size_bytes > 0;
+    const size_t n = stages.size();
+    TT_FATAL(n >= 3, "verify_chain needs at least 3 stages; got {}", n);
+
+    const auto global_spec = make_config(stages.front(), global_shape).global_spec;
+    auto h2d_service = make_h2d_service(stages.front(), global_spec, worker_cores, metadata_size_bytes);
+
+    // Build the N-1 D2D pairs (pair i streams stage[i] -> stage[i+1]), all OWN mode
+    // (make_config defaults share_fabric_links to false).
+    std::vector<std::unique_ptr<D2DStreamServiceSender>> senders;
+    std::vector<std::unique_ptr<D2DStreamServiceReceiver>> receivers;
+    senders.reserve(n - 1);
+    receivers.reserve(n - 1);
+    for (size_t i = 0; i + 1 < n; ++i) {
+        auto cfg = make_config(stages[i], global_shape);
+        cfg.sender_worker_cores = worker_cores;
+        cfg.receiver_worker_cores = worker_cores;
+        cfg.metadata_size_bytes = metadata_size_bytes;
+        auto [sender, receiver] = D2DStreamService::create_pair(stages[i], stages[i + 1], std::move(cfg));
+        senders.push_back(std::move(sender));
+        receivers.push_back(std::move(receiver));
+    }
+
+    auto* last_receiver = receivers.back().get();
+    auto output_tensor = tt::tt_metal::create_device_tensor(
+        last_receiver->get_backing_tensor().tensor_spec(),
+        stages.back().get(),
+        last_receiver->get_backing_tensor().tensor_topology());
+
+    // Enqueue downstream-first so every consumer/receiver is ready before its producer runs.
+    auto consumer_workload = make_receiver_consumer_workload(last_receiver, stages.back(), output_tensor, num_iters);
+    EnqueueMeshWorkload(stages.back()->mesh_command_queue(), consumer_workload, /*blocking=*/false);
+
+    // MIDDLE bridges: upstream = D2D(i-1) receiver (on stage[i]), downstream = D2D(i) sender (on stage[i]).
+    for (size_t i = n - 2; i >= 1; --i) {
+        auto middle_workload = make_bridge_workload(
+            *receivers[i - 1], senders[i].get(), stages[i], worker_cores, num_iters, metadata_size_bytes);
+        EnqueueMeshWorkload(stages[i]->mesh_command_queue(), middle_workload, /*blocking=*/false);
+    }
+
+    // Stage-0 bridge: upstream = H2D service, downstream = D2D0 sender (both on stage[0]).
+    auto stage0_workload = make_bridge_workload(
+        *h2d_service, senders.front().get(), stages.front(), worker_cores, num_iters, metadata_size_bytes);
+    EnqueueMeshWorkload(stages.front()->mesh_command_queue(), stage0_workload, /*blocking=*/false);
+
+    const uint32_t num_u32 = static_cast<uint32_t>(global_shape.volume());
+    for (uint32_t i = 0; i < num_iters; ++i) {
+        h2d_push_token_u32(*h2d_service, num_u32, kFillBase + i, metadata_size_bytes);
+    }
+    h2d_service->barrier();
+    for (const auto& stage : stages) {
+        Finish(stage->mesh_command_queue());
+    }
+
+    const uint32_t final_value = kFillBase + num_iters - 1;
+    expect_output_tensor_iota(output_tensor, stages.back(), final_value);
+    if (metadata_enabled) {
+        // The last D2D receiver service multicasts the blob into every last-stage receiver
+        // worker core's L1; assert the final token's {-1,0,final} landed there.
+        expect_metadata_on_receiver_workers(last_receiver, stages.back(), {static_cast<uint32_t>(-1), 0u, final_value});
+    }
+}
+
+// N-stage chain REUSE driver (build once, re-enqueue per round): the chain analogue of
+// verify_h2d_d2d_bridge_reuse. Builds the H2D front-end + N-1 D2D pairs + output tensor
+// ONCE (persistent service kernels launched once), then drives num_rounds independent
+// single-transfer rounds against that same chain, each with a distinct seed and its own
+// EnqueueMeshWorkload/Finish, host-verifying the readback every round. If a persistent
+// kernel had exited after round 0, later rounds would either deadlock (Finish never
+// returns) or read back round 0's seed -- both fail loudly.
+void verify_chain_reuse(
+    const std::vector<std::shared_ptr<MeshDevice>>& stages,
+    const ttnn::Shape& global_shape,
+    const CoreRange& worker_cores,
+    uint32_t num_rounds,
+    uint32_t metadata_size_bytes = 0) {
+    const bool metadata_enabled = metadata_size_bytes > 0;
+    const size_t n = stages.size();
+    TT_FATAL(n >= 3, "verify_chain_reuse needs at least 3 stages; got {}", n);
+
+    const auto global_spec = make_config(stages.front(), global_shape).global_spec;
+    auto h2d_service = make_h2d_service(stages.front(), global_spec, worker_cores, metadata_size_bytes);
+
+    std::vector<std::unique_ptr<D2DStreamServiceSender>> senders;
+    std::vector<std::unique_ptr<D2DStreamServiceReceiver>> receivers;
+    senders.reserve(n - 1);
+    receivers.reserve(n - 1);
+    for (size_t i = 0; i + 1 < n; ++i) {
+        auto cfg = make_config(stages[i], global_shape);
+        cfg.sender_worker_cores = worker_cores;
+        cfg.receiver_worker_cores = worker_cores;
+        cfg.metadata_size_bytes = metadata_size_bytes;
+        auto [sender, receiver] = D2DStreamService::create_pair(stages[i], stages[i + 1], std::move(cfg));
+        senders.push_back(std::move(sender));
+        receivers.push_back(std::move(receiver));
+    }
+
+    auto* last_receiver = receivers.back().get();
+    auto output_tensor = tt::tt_metal::create_device_tensor(
+        last_receiver->get_backing_tensor().tensor_spec(),
+        stages.back().get(),
+        last_receiver->get_backing_tensor().tensor_topology());
+
+    const uint32_t num_u32 = static_cast<uint32_t>(global_shape.volume());
+    for (uint32_t round = 0; round < num_rounds; ++round) {
+        // Distinct, non-trivial seed per round (mirrors verify_reuse).
+        const uint32_t seed = 0x1000u + round * 0x111u;
+
+        // Re-enqueue downstream-first, one transfer per round.
+        auto consumer_workload =
+            make_receiver_consumer_workload(last_receiver, stages.back(), output_tensor, /*num_iters=*/1);
+        EnqueueMeshWorkload(stages.back()->mesh_command_queue(), consumer_workload, /*blocking=*/false);
+
+        for (size_t i = n - 2; i >= 1; --i) {
+            auto middle_workload = make_bridge_workload(
+                *receivers[i - 1], senders[i].get(), stages[i], worker_cores, /*num_iters=*/1, metadata_size_bytes);
+            EnqueueMeshWorkload(stages[i]->mesh_command_queue(), middle_workload, /*blocking=*/false);
+        }
+
+        auto stage0_workload = make_bridge_workload(
+            *h2d_service, senders.front().get(), stages.front(), worker_cores, /*num_iters=*/1, metadata_size_bytes);
+        EnqueueMeshWorkload(stages.front()->mesh_command_queue(), stage0_workload, /*blocking=*/false);
+
+        h2d_push_token_u32(*h2d_service, num_u32, seed, metadata_size_bytes);
+        h2d_service->barrier();
+        for (const auto& stage : stages) {
+            Finish(stage->mesh_command_queue());
+        }
+
+        expect_output_tensor_iota(output_tensor, stages.back(), seed);
+        if (metadata_enabled) {
+            expect_metadata_on_receiver_workers(last_receiver, stages.back(), {static_cast<uint32_t>(-1), 0u, seed});
+        }
     }
 }
 
@@ -1142,7 +1333,7 @@ void verify_h2d_d2d_bridge_reuse(
         EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(), consumer_workload, /*blocking=*/false);
         EnqueueMeshWorkload(sender_mesh->mesh_command_queue(), bridge_workload, /*blocking=*/false);
 
-        h2d_push_token(*h2d_service, num_u32, seed, metadata_size_bytes);
+        h2d_push_token_u32(*h2d_service, num_u32, seed, metadata_size_bytes);
         h2d_service->barrier();
         Finish(sender_mesh->mesh_command_queue());
         Finish(receiver_mesh->mesh_command_queue());
@@ -1779,6 +1970,40 @@ TEST_F(D2DStreamServiceTest, H2DtoD2DBridgeShapeNarrowUneven) {
 }
 
 // ===========================================================================
+// Metadata size variants on the H2D -> D2D stream path (host-driven metadata).
+// All metadata blobs are uint32 word arrays: either {-1,0,base} or an iota.
+// ===========================================================================
+
+// Single metadata word (4 B): smallest word-sized payload distinct from the 3-word triple.
+TEST_F(D2DStreamServiceTest, H2DtoD2DBridgeMetadata1Word) {
+    D2D_SINGLECHIP_ALLCORES_GUARD();
+    constexpr uint32_t kMetadataBytes = sizeof(uint32_t);
+    verify_h2d_d2d_bridge(
+        sender_mesh,
+        receiver_mesh,
+        ttnn::Shape({1, 1, 32, 512}),
+        all_cores,
+        /*num_iters=*/4,
+        kMetadataBytes,
+        [](uint32_t iter) { return std::vector<uint32_t>{1u + iter}; });
+}
+
+// Full socket-page metadata: 1024 uint32 words (4096 B) iota [0..1023].
+TEST_F(D2DStreamServiceTest, H2DtoD2DBridgeMetadataFullPage) {
+    D2D_SINGLECHIP_ALLCORES_GUARD();
+    constexpr uint32_t kMetadataWords = 1024u;
+    constexpr uint32_t kMetadataBytes = kMetadataWords * static_cast<uint32_t>(sizeof(uint32_t));
+    verify_h2d_d2d_bridge(
+        sender_mesh,
+        receiver_mesh,
+        ttnn::Shape({1, 1, 32, 512}),
+        all_cores,
+        /*num_iters=*/2,
+        kMetadataBytes,
+        [](uint32_t /*iter*/) { return make_metadata_iota(kMetadataWords); });
+}
+
+// ===========================================================================
 // Multi-dtype tests: the full chain transferring several element types (no
 // metadata). Single-chip pair, full worker grid, 2 iterations (rotating data).
 // BFLOAT16 / FLOAT32 / UINT8 are ROW_MAJOR; BFLOAT8_B / BFLOAT4_B are block-float
@@ -1850,6 +2075,72 @@ TEST_F(D2DStreamServiceTest, DtypeBfloat4B) {
         /*modulus=*/64);
 }
 
+// Same dtype matrix on fixed uneven shape [1,1,711,5120] (711 pages mod num_workers).
+TEST_F(D2DStreamServiceTest, DtypeBfloat16ShapeUneven) {
+    D2D_SINGLECHIP_ALLCORES_GUARD();
+    verify_dtype_chain<bfloat16>(
+        sender_mesh,
+        receiver_mesh,
+        ttnn::Shape({1, 1, 711, 5120}),
+        DataType::BFLOAT16,
+        Layout::ROW_MAJOR,
+        all_cores,
+        /*num_iters=*/3,
+        /*modulus=*/256);
+}
+
+TEST_F(D2DStreamServiceTest, DtypeFloat32ShapeUneven) {
+    D2D_SINGLECHIP_ALLCORES_GUARD();
+    verify_dtype_chain<float>(
+        sender_mesh,
+        receiver_mesh,
+        ttnn::Shape({1, 1, 711, 5120}),
+        DataType::FLOAT32,
+        Layout::ROW_MAJOR,
+        all_cores,
+        /*num_iters=*/3,
+        /*modulus=*/4096);
+}
+
+TEST_F(D2DStreamServiceTest, DtypeUint8ShapeUneven) {
+    D2D_SINGLECHIP_ALLCORES_GUARD();
+    verify_dtype_chain<uint8_t>(
+        sender_mesh,
+        receiver_mesh,
+        ttnn::Shape({1, 1, 711, 5120}),
+        DataType::UINT8,
+        Layout::ROW_MAJOR,
+        all_cores,
+        /*num_iters=*/3,
+        /*modulus=*/128);
+}
+
+TEST_F(D2DStreamServiceTest, DtypeBfloat8BShapeUneven) {
+    D2D_SINGLECHIP_ALLCORES_GUARD();
+    verify_dtype_chain<float>(
+        sender_mesh,
+        receiver_mesh,
+        ttnn::Shape({1, 1, 711, 5120}),
+        DataType::BFLOAT8_B,
+        Layout::TILE,
+        all_cores,
+        /*num_iters=*/3,
+        /*modulus=*/256);
+}
+
+TEST_F(D2DStreamServiceTest, DtypeBfloat4BShapeUneven) {
+    D2D_SINGLECHIP_ALLCORES_GUARD();
+    verify_dtype_chain<float>(
+        sender_mesh,
+        receiver_mesh,
+        ttnn::Shape({1, 1, 711, 5120}),
+        DataType::BFLOAT4_B,
+        Layout::TILE,
+        all_cores,
+        /*num_iters=*/3,
+        /*modulus=*/64);
+}
+
 // ===========================================================================
 // 1->1->1 chain tests: Host -> H2D -> bridge -> D2D0 -> MIDDLE bridge -> D2D1 ->
 // consumer -> Host across three colinear devices, all D2D pairs in OWN mode. The
@@ -1884,11 +2175,21 @@ TEST_F(D2DStreamServiceTest, ThreeStageChainOwnSingleTransfer) {
     verify_three_stage_chain(stage0, stage1, stage2, ttnn::Shape({1, 1, 32, 64}), kWorkerCores, /*num_iters=*/1);
 }
 
-// Single core, several transfers: proves the persistent middle device keeps
-// consuming inbound and producing outbound across iterations without desync.
-TEST_F(D2DStreamServiceTest, ThreeStageChainOwnReuse) {
+// Single core, several iterations in one launch: proves the persistent middle device
+// keeps consuming inbound and producing outbound across iterations without desync.
+TEST_F(D2DStreamServiceTest, ThreeStageChainOwnIteration) {
     D2D_THREE_STAGE_GUARD();
     verify_three_stage_chain(stage0, stage1, stage2, ttnn::Shape({1, 1, 32, 64}), kWorkerCores, /*num_iters=*/4);
+}
+
+// Build the chain once, then drive several independent re-enqueued rounds with distinct
+// seeds: proves the persistent chain survives host round boundaries (not just iterations
+// within a single launch). Full worker grid, mirrors H2DtoD2DBridgeReuseAllCores.
+TEST_F(D2DStreamServiceTest, ThreeStageChainOwnReuse) {
+    D2D_THREE_STAGE_GUARD();
+    const auto grid = stage1->compute_with_storage_grid_size();
+    const CoreRange all_cores{CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}};
+    verify_chain_reuse({stage0, stage1, stage2}, fixed_per_core_shape(all_cores), all_cores, /*num_rounds=*/4);
 }
 
 // Full worker grid: exercises per-core page partitioning (worker_page_range) through
@@ -1898,6 +2199,7 @@ TEST_F(D2DStreamServiceTest, ThreeStageChainOwnAllCores) {
     const auto grid = stage1->compute_with_storage_grid_size();
     const CoreRange all_cores{CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}};
     verify_three_stage_chain(stage0, stage1, stage2, fixed_per_core_shape(all_cores), all_cores, /*num_iters=*/4);
+    verify_three_stage_chain(stage0, stage1, stage2, ttnn::Shape({1, 1, 711, 5120}), all_cores, /*num_iters=*/3);
 }
 
 // Full grid + inline metadata forwarded through BOTH hops. The middle bridge copies the
@@ -1912,6 +2214,102 @@ TEST_F(D2DStreamServiceTest, ThreeStageChainOwnMetadataAllCores) {
     constexpr uint32_t kMetadataBytes = static_cast<uint32_t>(3 * sizeof(uint32_t));
     verify_three_stage_chain(
         stage0, stage1, stage2, fixed_per_core_shape(all_cores), all_cores, /*num_iters=*/4, kMetadataBytes);
+}
+
+// ===========================================================================
+// N-stage chain tests: the colinear generalization of the 1->1->1 chain above.
+// Host -> H2D -> bridge -> D2D0 -> ... -> D2D(N-2) -> consumer -> Host across N
+// colinear devices, all D2D pairs in OWN mode. Each interior device runs an
+// inbound D2D receiver and an outbound D2D sender at once. Requires N COLINEAR
+// devices, so the 4-stage tests need a >= 4-colinear box (~Quietbox) and the
+// 8-stage tests a >= 8-colinear box (~Loudbox); they skip cleanly otherwise.
+// ===========================================================================
+#define D2D_N_STAGE_GUARD(n_stages)                                                                     \
+    if (!service_cores_supported()) {                                                                   \
+        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";              \
+    }                                                                                                   \
+    if (!h2d_host_pinning_supported()) {                                                                \
+        GTEST_SKIP() << "H2D front-end host-DMA pinning requires a DMA-translation IOMMU (not "         \
+                        "iommu=pt); see notes/d2d_galaxy_h2d_pinning_failure.md.";                      \
+    }                                                                                                   \
+    const auto shape = this->mesh_device_->shape();                                                     \
+    if (shape.dims() != 2 || (shape[1] < (n_stages) && shape[0] < (n_stages))) {                        \
+        GTEST_SKIP() << "Need a 2D mesh with >= " << (n_stages) << " colinear devices for an N-stage "  \
+                     << "chain; got " << shape;                                                         \
+    }                                                                                                   \
+    const bool kRowChain = shape[1] >= (n_stages);                                                      \
+    std::vector<std::shared_ptr<MeshDevice>> stages;                                                    \
+    for (uint32_t stage_idx = 0; stage_idx < (n_stages); ++stage_idx) {                                 \
+        stages.push_back(this->mesh_device_->create_submesh(                                            \
+            MeshShape(1, 1), kRowChain ? MeshCoordinate(0, stage_idx) : MeshCoordinate(stage_idx, 0))); \
+    }
+
+// "all_cores" CoreRange spanning the full compute grid of the (1x1) stages.
+CoreRange all_cores_for(const std::shared_ptr<MeshDevice>& stage) {
+    const auto grid = stage->compute_with_storage_grid_size();
+    return CoreRange{CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}};
+}
+
+// --- 4-stage (~Quietbox) -------------------------------------------------------
+
+// Small tensor, full worker grid, no metadata.
+TEST_F(D2DStreamServiceTest, FourStageChainOwnAllCores) {
+    D2D_N_STAGE_GUARD(4);
+    const auto all_cores = all_cores_for(stages.front());
+    verify_chain(stages, ttnn::Shape({1, 1, 32, 64}), all_cores, /*num_iters=*/4);
+}
+
+// Small tensor, full worker grid, metadata forwarded through every hop.
+TEST_F(D2DStreamServiceTest, FourStageChainOwnMetadataAllCores) {
+    D2D_N_STAGE_GUARD(4);
+    const auto all_cores = all_cores_for(stages.front());
+    constexpr uint32_t kMetadataBytes = static_cast<uint32_t>(3 * sizeof(uint32_t));
+    verify_chain(stages, ttnn::Shape({1, 1, 32, 64}), all_cores, /*num_iters=*/4, kMetadataBytes);
+}
+
+// Large tensor, full worker grid.
+TEST_F(D2DStreamServiceTest, FourStageChainOwnLargeAllCores) {
+    D2D_N_STAGE_GUARD(4);
+    const auto all_cores = all_cores_for(stages.front());
+    verify_chain(stages, ttnn::Shape({1, 1, 711, 5120}), all_cores, /*num_iters=*/3);
+}
+
+// Build the chain once, drive several independent re-enqueued rounds with distinct seeds.
+TEST_F(D2DStreamServiceTest, FourStageChainOwnReuse) {
+    D2D_N_STAGE_GUARD(4);
+    const auto all_cores = all_cores_for(stages.front());
+    verify_chain_reuse(stages, fixed_per_core_shape(all_cores), all_cores, /*num_rounds=*/4);
+}
+
+// --- 8-stage (~Loudbox) --------------------------------------------------------
+
+// Small tensor, full worker grid, no metadata.
+TEST_F(D2DStreamServiceTest, EightStageChainOwnAllCores) {
+    D2D_N_STAGE_GUARD(8);
+    const auto all_cores = all_cores_for(stages.front());
+    verify_chain(stages, ttnn::Shape({1, 1, 32, 64}), all_cores, /*num_iters=*/4);
+}
+
+// Small tensor, full worker grid, metadata forwarded through every hop.
+TEST_F(D2DStreamServiceTest, EightStageChainOwnMetadataAllCores) {
+    D2D_N_STAGE_GUARD(8);
+    const auto all_cores = all_cores_for(stages.front());
+    constexpr uint32_t kMetadataBytes = static_cast<uint32_t>(3 * sizeof(uint32_t));
+    verify_chain(stages, ttnn::Shape({1, 1, 32, 64}), all_cores, /*num_iters=*/4, kMetadataBytes);
+}
+
+// Large tensor, full worker grid.
+TEST_F(D2DStreamServiceTest, EightStageChainOwnLargeAllCores) {
+    D2D_N_STAGE_GUARD(8);
+    const auto all_cores = all_cores_for(stages.front());
+    verify_chain(stages, ttnn::Shape({1, 1, 711, 5120}), all_cores, /*num_iters=*/3);
+}
+
+// Build the chain once, drive several independent re-enqueued rounds with distinct seeds.
+TEST_F(D2DStreamServiceTest, EightStageChainOwnReuse) {
+    D2D_N_STAGE_GUARD(8);
+    const auto all_cores = all_cores_for(stages.front());
+    verify_chain_reuse(stages, fixed_per_core_shape(all_cores), all_cores, /*num_rounds=*/4);
 }
 
 }  // namespace
