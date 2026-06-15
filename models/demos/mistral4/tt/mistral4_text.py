@@ -301,11 +301,13 @@ class TtMistral4MoE(LightweightModule):
         back (all_to_all_combine). Streams/computes far fewer experts than the dense-local path at
         low batch. Requires shard_experts. See deepseek_v3/tt/moe.py for the reference pipeline.
 
-        WIP (not wired into the default decode path; dense forward() remains the verified default):
-        all_to_all_dispatch/combine are proven on this 1x8 mesh (test_m4_a2a_probe), but consuming
-        their multi-device output here still needs the exact ttnn sharded-tensor reshape contract
-        (per-device vs global logical shape of the dispatch output). Tracked by test_m4_moe_sparse
-        (xfail). The remaining throughput lever — see MISTRAL4_DESIGN.md."""
+        NOTE (not wired into the default decode path; dense forward() is the verified default):
+        all_to_all_dispatch needs a 2D mesh — tokens batch-sharded on a data-parallel axis AND
+        experts on a separate expert-parallel axis. This model's flat 1x8 mesh shards all 128 experts
+        across the 8 devices (expert-parallel, tokens replicated), leaving no free axis to batch-shard
+        tokens for dispatch (a topology mismatch, not a shape bug). Enabling this needs a 2x4 mesh
+        remap (2-way DP x 4-way EP) or a non-dispatch sparse gather. Retained as the authored pipeline;
+        tracked by test_m4_moe_sparse (xfail). See MISTRAL4_DESIGN.md (A10 DEFINITIVE FINDING)."""
         B, H, I, nd = x.shape[0], self.hidden, self.interm, self.mesh.get_num_devices()
         probs = ttnn.softmax(ttnn.linear(x, self.w_gate), dim=-1)  # [B,1,E]
         tw, ti = ttnn.topk(probs, self.k, dim=-1)  # [B,1,k] weights + indices

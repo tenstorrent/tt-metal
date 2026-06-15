@@ -126,8 +126,12 @@ Done: A1 framework adherence, A2 device-side (no hot-loop host round-trip), A3 d
 (prefill untraced = PARTIAL, acceptable), A5 on-device sampling, A7 sharded LM head, A9 (prefill to
 4K, no L1 clash), B1–B3 full-depth ungated logit PCC, C1 ISL-sweep harness, C-perf measured, D1
 rebased (current), D1a CI registration, D4 pinned deps, E docs.
-Remaining (large, scoped): **A10 MoE sparse dispatch** — the `all_to_all_dispatch`/`combine` path is
-a multi-user *batched* serving feature (it shards the batch across devices); it does not apply to the
-single-user batch=1 latency path measured here, so it is the throughput frontier (batched serving
-rework). **A6 paged compressed-latent KV + chunked prefill** for >4K contexts. A4 2CQ (low value for
-the tiny single-user decode inputs). These are documented, not hidden.
+Remaining (large, scoped): **A10 MoE sparse dispatch** — `all_to_all_dispatch` requires a **2D mesh**
+(tokens batch-sharded on a data-parallel axis AND experts on a separate expert-parallel axis, as in
+deepseek's dispatch×TP layout). This model's flat **1×8 mesh shards all 128 experts across the 8
+devices**, leaving no free axis to batch-shard tokens for dispatch — a topology mismatch, not a bug
+(`all_to_all_dispatch` itself is proven on this mesh, `test_m4_a2a_probe`). The dense expert-parallel
+MoE is the appropriate design on 1×8; enabling sparse dispatch needs a 2×4 mesh remap (2-way DP ×
+4-way EP) + the dispatch machinery, or a non-dispatch per-token expert gather. `_forward_sparse` is
+the authored pipeline (`test_m4_moe_sparse`, xfail). **A6 paged compressed-latent KV + chunked
+prefill** for >4K contexts. A4 2CQ (low value for the tiny decode inputs). All documented, not hidden.

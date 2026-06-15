@@ -24,12 +24,13 @@ BATCH = 8
 
 
 @pytest.mark.xfail(
-    reason="WIP: all_to_all_dispatch is proven on this mesh (test_m4_a2a_probe) and TtMistral4MoE."
-    "_forward_sparse implements the full dispatch->expert->combine pipeline, but consuming the "
-    "multi-device dispatch/combine output requires the exact ttnn sharded-tensor reshape contract "
-    "(the per-device vs global logical shape of the dispatch output) which is not yet matched. The "
-    "dense + multi-user-batched MoE is the verified default path; sparse dispatch is the remaining "
-    "throughput lever (helps low-batch weight-streaming + high-batch compute). See MISTRAL4_DESIGN.md.",
+    reason="all_to_all_dispatch needs a 2D mesh: tokens batch-sharded on a data-parallel axis AND "
+    "experts on a separate expert-parallel axis (deepseek uses dispatch-axis x TP-axis). This model's "
+    "flat 1x8 mesh shards the 128 experts across ALL 8 devices (expert-parallel) with tokens "
+    "replicated, so there is no free axis to batch-shard tokens for dispatch — a topology mismatch, "
+    "not a shape bug. _forward_sparse is the authored pipeline; enabling it needs a 2x4 mesh remap "
+    "(2-way DP x 4-way EP) or a non-dispatch sparse gather. The dense expert-parallel MoE is the "
+    "appropriate, verified default on 1x8. See MISTRAL4_DESIGN.md (A10 DEFINITIVE FINDING).",
     strict=False,
 )
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
