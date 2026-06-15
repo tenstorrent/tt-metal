@@ -11,8 +11,10 @@ N300 (2) and T3K (8) are all supported (8 divides both 8 KV heads and 24 attenti
 PERF.md does not publish a T3K row for this model, but T3K is exercised here for the
 on-device-sampling crossover sweep (≥8-device meshes are where on-device top-k wins).
 
-**PERF.md workload:** prefill = 512 tokens, 200 decode iterations (performance),
-511 continuation tokens (accuracy / teacher-forcing). See ``generate_controlled_refpt.py``.
+**Workload:** performance tests prefill each prompt at its natural length (TTTv1
+``preprocess_inputs_prefill`` semantics; these sample prompts are ~90-125 tokens -> 128
+prefill bucket) + 200 decode iterations. Accuracy / teacher-forcing uses 511 continuation
+tokens. See ``generate_controlled_refpt.py``.
 
 Usage::
 
@@ -85,8 +87,8 @@ EXPECTED_METRICS_BATCH32 = {
     "N300": {"tok_s_u": 45.8, "ttft_ms": 51},
 }
 
-# PERF.md workload: 512-token prefill, 200 decode steps (perf), 511 (accuracy).
-_PERF_PREFILL_LEN = 512
+# Perf workload: natural-length prefill (these sample prompts are ~90-125 tokens -> 128 bucket,
+# matching TTTv1), 200 decode steps. Accuracy uses the 511-token teacher-forcing refpt.
 _PERF_NUM_DECODE_TOKENS = 200
 
 PERF_TOLERANCE = 0.05
@@ -208,29 +210,35 @@ def load_input_prompts(batch_size: int) -> list[str]:
     return prompts[:batch_size]
 
 
-def pad_prompts_to_len(
+def tokenize_prompts(
     prompts: list[str],
     tokenizer,
     *,
-    target_len: int,
+    max_prefill_len: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Tokenize with chat template, pad/truncate to exactly ``target_len`` tokens.
+    """Tokenize prompts to their natural length — TTTv1 ``preprocess_inputs_prefill`` semantics.
 
-    Left-padding aligns to the PERF.md 512-token prefill budget so that TTFT and
-    tok/s/u measurements are comparable to TTTv1 ci-token-matching baselines.
+    Each prompt is encoded with the chat template at its real length. The returned ``[batch,
+    max_len]`` token tensor is right-padded to the batch-max for rectangularity, while the
+    returned per-user lengths are the *real* token counts — the executor reads only
+    ``tokens[user, :prompt_len]`` and then buckets each user to ``get_padded_prefill_len``
+    (128 / 1024 / next-pow2). This matches TTTv1 exactly: no fixed pad-to-N prefill budget.
+
+    ``max_prefill_len`` is an optional clip *cap* (like TTTv1's ``max_prefill_len``): prompts
+    longer than it are left-clipped to their most recent tokens. It is never a pad-up target.
     """
     pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
     encoded: list[list[int]] = []
     for p in prompts:
         ids = list(encode_prompt_hf(tokenizer, p))
-        if len(ids) < target_len:
-            ids = [pad_id] * (target_len - len(ids)) + ids
-        else:
-            ids = ids[-target_len:]
+        if max_prefill_len is not None and len(ids) > max_prefill_len:
+            ids = ids[-max_prefill_len:]
         encoded.append(ids)
-    t = torch.tensor(encoded, dtype=torch.long)
-    lens = torch.tensor([target_len] * len(prompts), dtype=torch.long)
-    return t, lens
+    lens = [len(ids) for ids in encoded]
+    max_len = max(lens)
+    padded = [ids + [pad_id] * (max_len - len(ids)) for ids in encoded]
+    t = torch.tensor(padded, dtype=torch.long)
+    return t, torch.tensor(lens, dtype=torch.long)
 
 
 def select_teacher_forcing_top5_slice(
@@ -349,7 +357,7 @@ def test_llama32_3b(test_config, mesh_device, optimizations):
         # DRAM pressure from a full 32-user KV cache allocation.
         # batch-32 uses max_seq_len=1024 to avoid DRAM OOM on N150 (3B weights +
         # 32×4096 BFP8 KV cache exhausts ~12 GB); 1024 comfortably covers the
-        # 512-token prefill + 200 decode workload.
+        # 128-bucket prefill + 200 decode workload.
         if test_config == "batch-32":
             max_bs, max_seq_len = 32, 1024
             expected = EXPECTED_METRICS_BATCH32.get(device_name, {})
@@ -362,10 +370,9 @@ def test_llama32_3b(test_config, mesh_device, optimizations):
         elif test_config == "batch-1":
             _run_perf_benchmark(model, mesh_device, expected, batch_size=1, case_name=f"{optimizations}/batch-1")
         elif test_config == "batch-32":
-            # PERF.md Short-Context Batch-32 row is a 128-token prefill (matches TTTv1's traced-prefill seq len).
-            _run_perf_benchmark(
-                model, mesh_device, expected, batch_size=32, case_name=f"{optimizations}/batch-32", prefill_len=128
-            )
+            # Natural-length prefill: these sample prompts bucket to 128 (PERF.md Short-Context
+            # Batch-32 row), matching TTTv1's traced-prefill seq len without a forced pad.
+            _run_perf_benchmark(model, mesh_device, expected, batch_size=32, case_name=f"{optimizations}/batch-32")
     finally:
         cleanup_model_case(model, mesh_device)
 
@@ -449,13 +456,13 @@ def _run_perf_benchmark(
     expected,
     batch_size: int,
     case_name: str,
-    prefill_len: int = _PERF_PREFILL_LEN,
+    max_prefill_len: int | None = None,
 ):
     """Timed prefill + decode (``TracedLlama32_3BExecutor``).
 
-    Prefill is ``prefill_len`` tokens, decode runs for 200 steps. PERF.md uses 512 for the
-    batch-1 row and 128 for the Short-Context Batch-32 row; the batch-32 caller passes 128 so
-    the workload (and the traced-prefill path, which TTTv1 enables at 128) matches TTTv1.
+    Prefill uses each prompt's natural token length (TTTv1 ``preprocess_inputs_prefill``
+    semantics — the executor buckets to ``get_padded_prefill_len``); decode runs for 200 steps.
+    ``max_prefill_len`` is an optional clip cap for over-long prompts, never a pad-up target.
     """
     hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.2-3B-Instruct")
     tokenizer = AutoTokenizer.from_pretrained(hf_model)
@@ -476,8 +483,9 @@ def _run_perf_benchmark(
         page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, max_num_blocks_per_user)
 
         prompts = load_input_prompts(batch_size)
-        # Pad/truncate to prefill_len for PERF.md workload alignment (512 batch-1 / 128 batch-32).
-        input_tokens, prompt_lens = pad_prompts_to_len(prompts, tokenizer, target_len=prefill_len)
+        # Natural-length tokenization (matches TTTv1): the executor buckets each user's real
+        # length to get_padded_prefill_len. These sample prompts are ~90-125 tokens -> 128 bucket.
+        input_tokens, prompt_lens = tokenize_prompts(prompts, tokenizer, max_prefill_len=max_prefill_len)
 
         # On-device sampling toggle for N150/N300/T3K evidence-gathering (see sampling handoff docs):
         #   host            -> sampling_params=None (host-argmax, the default shipped path)
