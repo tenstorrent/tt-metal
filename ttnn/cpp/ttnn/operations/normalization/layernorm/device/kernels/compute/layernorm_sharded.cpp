@@ -86,17 +86,18 @@ void kernel_main() {
     constexpr uint32_t cb_out_id = get_named_compile_time_arg_val("cb_out");
 #ifdef DO_COL_MASK
 #ifndef RMSNORM
-    // Column mask (2 tiles: all-ones, partial) and a scratch buffer holding masked tiles. Used to
-    // zero the padding columns of the final width tile before the E[x] reduction so a
-    // non-tile-aligned width normalizes over the logical element count, not the padded one.
-    constexpr uint32_t cb_col_mask = get_named_compile_time_arg_val("cb_col_mask");
+    // Scratch buffer holding the masked input tiles for the E[x] reduction, so a non-tile-aligned
+    // width normalizes over the logical element count, not the padded one. cb_in stays intact for the
+    // (x - E[x]) pass; the masking itself uses the host-built mask (cb_col_mask_packed) below.
     constexpr uint32_t cb_mask_scratch = get_named_compile_time_arg_val("cb_mask_scratch");
     CircularBuffer cb_mask_scratch_obj(cb_mask_scratch);
 #endif
-    // Host-built full-width column mask (tilized by the framework into the compute data format),
-    // bound directly to a CB. Used for the variance multiply, where compute-produced (x - E[x])
-    // tiles need a mask in the matching faced/FP32 layout — the writer's bf16 mask only aligns with
-    // the host-tilized input at the E[x] site. RMSNorm uses this mask for the mean-of-squares reduction.
+    // Host-built full-width column mask (1.0 valid / 0.0 padding), tilized by the framework into the
+    // compute data format and bound directly to a CB. Used at every masking site on the
+    // non-tile-aligned path: the E[x] input mask, the LayerNorm variance multiply on compute-produced
+    // (x - E[x]) tiles, and the RMSNorm mean-of-squares reduction. The framework tilization gives the
+    // correct faced/FP32 datum layout, so it aligns with both host-tilized input and compute-produced
+    // tiles in the FPU multiply.
     constexpr uint32_t cb_col_mask_packed = get_named_compile_time_arg_val("cb_col_mask_packed");
 #endif
 
@@ -182,18 +183,17 @@ void kernel_main() {
 #ifdef DO_COL_MASK
     // Zero the padding columns of the final width tile of the input into cb_mask_scratch so they do
     // not contribute to E[x]; the reduce below consumes the masked copy instead of cb_in. cb_in
-    // itself is left intact for the (x - E[x]) pass that follows. cb_col_mask is the writer-built
-    // two-tile bf16 mask, applied here to the input being normalized (the host-tilized input, or the
-    // compute-produced residual sum under FUSE_PRE_ADD).
-    cb_wait_front(cb_col_mask, 2);
-    mul_tiles_init(cb_in_id, cb_col_mask);
+    // itself is left intact for the (x - E[x]) pass that follows. cb_col_mask_packed is the host-built
+    // full-width mask (1.0 valid / 0.0 padding), tilized by the framework into the compute data format
+    // and buffer-backed (resident), read by tile index.
+    reconfig_data_format(cb_in_id, cb_col_mask_packed);
+    mul_tiles_init(cb_in_id, cb_col_mask_packed);
     cb_mask_scratch_obj.reserve_back(num_tiles_per_block);
     index_h_offset = 0;
     for (uint32_t i = 0; i < block_h; i++) {
         for (uint32_t wt = 0; wt < block_w; wt++) {
-            const uint32_t mask_idx = (wt == block_w - 1) ? 1 : 0;
             tile_regs_acquire();
-            mul_tiles(cb_in_id, cb_col_mask, wt + index_h_offset, mask_idx, 0);
+            mul_tiles(cb_in_id, cb_col_mask_packed, wt + index_h_offset, wt, 0);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(0, cb_mask_scratch);
@@ -203,7 +203,7 @@ void kernel_main() {
     }
     cb_mask_scratch_obj.push_back(num_tiles_per_block);
     cb_mask_scratch_obj.wait_front(num_tiles_per_block);
-    reconfig_data_format_srcb(cb_col_mask, cb_scaler_id);
+    reconfig_data_format_srcb(cb_col_mask_packed, cb_scaler_id);
     constexpr uint32_t cb_ex_reduce_input = cb_mask_scratch;
 #else
     constexpr uint32_t cb_ex_reduce_input = cb_in_id;
