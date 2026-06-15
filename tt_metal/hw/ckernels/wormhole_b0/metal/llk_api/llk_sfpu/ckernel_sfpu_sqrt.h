@@ -90,7 +90,7 @@ inline void _calculate_sqrt_internal_() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat tmp = _calculate_sqrt_body_<APPROXIMATION_MODE, RECIPROCAL, FAST_APPROX>(sfpi::dst_reg[0]);
         if constexpr (!fp32_dest_acc_en) {
-            tmp = sfpi::convert<sfpi::vFloat16b>(tmp, sfpi::RoundMode::NearestEven);
+            tmp = sfpi::convert<sfpi::vFloat16b>(tmp, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = tmp;
         sfpi::dst_reg++;
