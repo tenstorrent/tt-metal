@@ -188,4 +188,3 @@ jobs:
           job-name: ${{ matrix.test-group.name }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
-
