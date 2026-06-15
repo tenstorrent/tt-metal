@@ -4,10 +4,11 @@
 On device: DINOv2 ViT-L encoder (TtMoGeEncoder) + the full ConvStack decoder
 (neck + points/normal/mask heads via TtConvStack). On host: token prep,
 encoder output-projection+sum, UV-coordinate maps, scale_head MLP, the final
-bilinear resize to image resolution, and the output remap. Faithful to
-MoGeModel.forward.
+bilinear resize to image resolution, and the output remap.
 
-API:  TtMoGe(ref_moge_model, device)(image, num_tokens) -> dict(points, normal, mask, metric_scale)
+Both device regions (encoder transformer, conv decoder) are captured as metal
+traces on the first call and replayed afterwards, collapsing per-op dispatch
+overhead. Set trace=False for the eager path. API mirrors MoGeModel.forward.
 """
 import torch
 import torch.nn.functional as F
@@ -24,9 +25,10 @@ def _cl_to_nchw(t, H, W):
 
 
 class TtMoGe:
-    def __init__(self, ref_moge_model, device):
+    def __init__(self, ref_moge_model, device, trace=True):
         self.ref = ref_moge_model
         self.device = device
+        self.trace = trace
         self.encoder = TtMoGeEncoder(ref_moge_model, device)
         self.cc = ttnn.init_device_compute_kernel_config(
             device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=False, packer_l1_acc=True)
@@ -35,22 +37,27 @@ class TtMoGe:
         for h in ["points_head", "normal_head", "mask_head"]:
             if hasattr(ref_moge_model, h):
                 self.heads[h] = TtConvStack(getattr(ref_moge_model, h), device, self.cc)
-        self._uv_cache = {}   # (base_h, base_w) -> [None, uv1_cl, uv2_cl, uv3_cl, uv4_cl]
+        self._uv_cache = {}
+        # decoder trace state (encoder stays eager — rf-detr pattern: trace the
+        # dispatch-bound conv tail, keep the matmul backbone eager)
+        self._dec_tid = self._dec_in0 = self._dec_out = None
+        self._dec_hw = None
 
     def _uv_features(self, base_h, base_w, aspect_ratio, dtype):
-        """UV coordinate maps are fixed per (geometry) — cache the uploaded device
-        tensors for levels 1..4 (the expensive high-res uploads). Level 0's UV is
-        concatenated with the per-image encoder feature on host (cheap)."""
         key = (base_h, base_w)
         if key not in self._uv_cache:
             cached = [None, None, None, None, None]
             for level in range(1, 5):
                 uv = normalized_view_plane_uv(width=base_w * 2 ** level, height=base_h * 2 ** level,
                                               aspect_ratio=aspect_ratio, dtype=dtype, device="cpu")
-                uv = uv.permute(2, 0, 1).unsqueeze(0)
-                cached[level] = _to_cl(uv, self.device)
+                cached[level] = _to_cl(uv.permute(2, 0, 1).unsqueeze(0), self.device)
             self._uv_cache[key] = cached
         return self._uv_cache[key]
+
+    # ---- device regions (closures over cached/persistent inputs) ----
+    def _decoder_region(self, in_feats):
+        neck_out = self.neck(in_feats)
+        return [self.heads[n](neck_out)[-1] for n in self.heads]   # list of (tt, H, W)
 
     @torch.inference_mode()
     def __call__(self, image, num_tokens):
@@ -61,27 +68,46 @@ class TtMoGe:
         base_h = round((num_tokens / aspect_ratio) ** 0.5)
         base_w = round((num_tokens * aspect_ratio) ** 0.5)
 
-        # ---- encoder (device transformer) ----
-        x, cls_token = self.encoder(image, base_h, base_w)   # x: torch [B,1024,bh,bw]
+        # ===== encoder device region (eager) =====
+        tokens = self.encoder.to_tokens(image, base_h, base_w)
+        tt_x = ttnn.from_torch(tokens, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+        normed = [ttnn.to_torch(t).float() for t in self.encoder.device_region(tt_x)]
+        x, cls_token = self.encoder.project_sum(normed, base_h, base_w)
 
-        # ---- input features: level 0 = [encoder x ; UV] (host, cheap); levels 1..4 cached UV ----
+        # ===== decoder device region =====
         uv0 = normalized_view_plane_uv(width=base_w, height=base_h, aspect_ratio=aspect_ratio,
                                        dtype=dtype, device=x.device).permute(2, 0, 1).unsqueeze(0).expand(B, -1, -1, -1)
-        in_feats = [_to_cl(torch.cat([x, uv0], dim=1), self.device)]
-        in_feats += self._uv_features(base_h, base_w, aspect_ratio, dtype)[1:]
+        level0_nchw = torch.cat([x, uv0], dim=1)
+        uv_cached = self._uv_features(base_h, base_w, aspect_ratio, dtype)
 
-        # ---- neck + heads on device ----
-        neck_out = self.neck(in_feats)
-        head_out = {}
-        for name, head in self.heads.items():
-            t, H, W = head(neck_out)[-1]
-            head_out[name] = _cl_to_nchw(t, H, W)
-        points = head_out.get("points_head")
-        normal = head_out.get("normal_head")
-        mask = head_out.get("mask_head")
+        if not self.trace:
+            in_feats = [_to_cl(level0_nchw, self.device)] + uv_cached[1:]
+            outs = self._decoder_region(in_feats)
+            head_t = {n: _cl_to_nchw(t, H, W) for n, (t, H, W) in zip(self.heads, outs)}
+        else:
+            l0 = level0_nchw.permute(0, 2, 3, 1).reshape(1, 1, base_h * base_w, -1).contiguous()
+            host_l0 = ttnn.from_torch(l0, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            if self._dec_tid is None:
+                self._dec_in0 = ttnn.to_device(host_l0, self.device)
+                in_feats = [(self._dec_in0, base_h, base_w)] + uv_cached[1:]
+                _ = self._decoder_region(in_feats)                    # compile
+                self._dec_tid = ttnn.begin_trace_capture(self.device, cq_id=0)
+                out = self._decoder_region(in_feats)
+                ttnn.end_trace_capture(self.device, self._dec_tid, cq_id=0)
+                self._dec_out = [t for (t, _h, _w) in out]
+                self._dec_hw = [(h, w) for (_t, h, w) in out]
+            else:
+                ttnn.copy_host_to_device_tensor(host_l0, self._dec_in0)
+            ttnn.execute_trace(self.device, self._dec_tid, cq_id=0, blocking=False)
+            ttnn.synchronize_device(self.device)
+            head_t = {n: _cl_to_nchw(t, h, w) for n, t, (h, w) in zip(self.heads, self._dec_out, self._dec_hw)}
+
+        points = head_t.get("points_head")
+        normal = head_t.get("normal_head")
+        mask = head_t.get("mask_head")
         metric_scale = ref.scale_head(cls_token) if hasattr(ref, "scale_head") else None
 
-        # ---- resize + remap on host (faithful) ----
+        # ===== resize + remap on host (faithful) =====
         points, normal, mask = (
             F.interpolate(v, (img_h, img_w), mode="bilinear", align_corners=False, antialias=False)
             if v is not None else None for v in [points, normal, mask]

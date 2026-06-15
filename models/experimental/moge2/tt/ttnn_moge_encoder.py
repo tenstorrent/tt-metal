@@ -107,42 +107,41 @@ class TtMoGeEncoder:
         ttnn.deallocate(h)
         return x
 
-    def _run_device(self, tokens):
-        """tokens: torch [B, L, 1024] -> list of 4 normed torch tensors [B, L, 1024]."""
-        tt_x = ttnn.from_torch(tokens, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
-        captured = []
-        for i, p in enumerate(self.blocks):
-            tt_x = self._block(tt_x, p)
-            if i in self.intermediate_layers:
-                normed = ttnn.layer_norm(tt_x, weight=self.final_norm_w, bias=self.final_norm_b,
-                                         epsilon=EPS, compute_kernel_config=COMPUTE_CONFIG)
-                captured.append(ttnn.to_torch(normed).float())
-                ttnn.deallocate(normed)
-        ttnn.deallocate(tt_x)
-        return captured
-
     @torch.inference_mode()
-    def __call__(self, image, base_h, base_w):
-        # ---- host token prep (faithful to DINOv2Encoder.forward) ----
+    def to_tokens(self, image, base_h, base_w):
+        """Host token prep (faithful to DINOv2Encoder.forward) -> tokens torch [B, 1+H*W, 1024]."""
         onnx = getattr(self.enc, "onnx_compatible_mode", False)
         image_14 = F.interpolate(image, (base_h * 14, base_w * 14), mode="bilinear",
                                  align_corners=False, antialias=not onnx)
         image_14 = (image_14 - self.enc.image_mean) / self.enc.image_std
-        tokens = self.backbone.prepare_tokens_with_masks(image_14)   # [B, 1+H*W, 1024]
+        return self.backbone.prepare_tokens_with_masks(image_14)
 
-        # ---- device transformer ----
-        normed = self._run_device(tokens)   # 4x [B, L, 1024]
+    def device_region(self, tt_x):
+        """Pure-device transformer (traceable): tt tokens -> list of 4 normed tt tensors.
+        Does NOT deallocate the returned tensors (they are trace outputs)."""
+        captured = []
+        for i, p in enumerate(self.blocks):
+            tt_x = self._block(tt_x, p)
+            if i in self.intermediate_layers:
+                captured.append(ttnn.layer_norm(tt_x, weight=self.final_norm_w, bias=self.final_norm_b,
+                                                epsilon=EPS, compute_kernel_config=COMPUTE_CONFIG))
+        ttnn.deallocate(tt_x)
+        return captured
 
-        # ---- host output-projection + sum (faithful) ----
+    @torch.inference_mode()
+    def project_sum(self, normed_list, base_h, base_w):
+        """Host output-projection + sum (faithful) -> (x [B,1024,bh,bw], cls_token [B,1024])."""
         nreg = self.backbone.num_register_tokens
-        feats = []
-        for out in normed:
-            cls = out[:, 0]
-            patch = out[:, 1 + nreg:]
-            feats.append((patch, cls))
+        feats = [(out[:, 1 + nreg:], out[:, 0]) for out in normed_list]
         x = torch.stack([
             proj(feat.permute(0, 2, 1).unflatten(2, (base_h, base_w)).contiguous())
             for proj, (feat, _cls) in zip(self.enc.output_projections, feats)
         ], dim=1).sum(dim=1)
-        cls_token = feats[-1][1]
-        return x, cls_token
+        return x, feats[-1][1]
+
+    @torch.inference_mode()
+    def __call__(self, image, base_h, base_w):
+        tokens = self.to_tokens(image, base_h, base_w)
+        tt_x = ttnn.from_torch(tokens, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+        normed = [ttnn.to_torch(t).float() for t in self.device_region(tt_x)]
+        return self.project_sum(normed, base_h, base_w)

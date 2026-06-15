@@ -65,13 +65,14 @@ class _ConvT:
         self.device, self.cc, self.wdtype = device, compute_config, wdtype
 
     def __call__(self, x, H, W):
-        out = ttnn.conv_transpose2d(
+        out, [pw, pb] = ttnn.conv_transpose2d(
             input_tensor=x, weight_tensor=self.w, bias_tensor=self.b, device=self.device,
             in_channels=self.cin, out_channels=self.cout, kernel_size=self.k, stride=self.s,
             padding=(0, 0), output_padding=(0, 0), batch_size=1, input_height=H, input_width=W,
             conv_config=ttnn.Conv2dConfig(weights_dtype=self.wdtype),
-            compute_config=self.cc, groups=1, return_weights_and_bias=False, return_output_dim=False,
+            compute_config=self.cc, groups=1, return_weights_and_bias=True, return_output_dim=False,
         )
+        self.w, self.b = pw, pb  # cache prepared weights (no host write on later/traced calls)
         Ho, Wo = H * self.s[0], W * self.s[1]
         if out.is_sharded():
             out = ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG)
