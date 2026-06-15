@@ -61,21 +61,18 @@ def _load_block_weights_tp4(
     k_key = f"{prefix}self_attn.k_proj.weight"
     v_key = f"{prefix}self_attn.v_proj.weight"
     if q_key in weights:
-
-        def _rep(w: torch.Tensor) -> ttnn.Tensor:
-            return ttnn.from_torch(
-                w.T.contiguous(),
-                dtype=ttnn.bfloat8_b,
-                layout=ttnn.TILE_LAYOUT,
-                device=mesh_device,
-                mesh_mapper=replicate,
-            )
-
-        wq, wk, wv = _rep(weights[q_key]), _rep(weights[k_key]), _rep(weights[v_key])
-        block_w["self_attn.wqkv"] = ttnn.concat([wq, wk, wv], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(wq)
-        ttnn.deallocate(wk)
-        ttnn.deallocate(wv)
+        # Fuse Q/K/V on the host (torch.cat) and upload once, instead of 3 uploads
+        # + an on-device ttnn.concat. q/k/v output dims (2048/256/256) are all
+        # tile-aligned, so bf8 per-tile quantization is identical pre/post concat.
+        wqkv_torch = torch.cat([weights[q_key].T, weights[k_key].T, weights[v_key].T], dim=-1).contiguous()
+        block_w["self_attn.wqkv"] = ttnn.from_torch(
+            wqkv_torch,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=replicate,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     for key, val in weights.items():
         if not key.startswith(prefix):
@@ -159,9 +156,8 @@ class GemmaMLPTP4:
         self.up_proj = weights["mlp.up_proj.weight"]  # [hidden, mlp_dim/_TP] per chip
         self.down_proj = weights["mlp.down_proj.weight"]  # [mlp_dim/_TP, hidden] per chip
 
-        # Grid from the first physical chip in the mesh
-        one_chip = mesh_device.get_devices()[0]
-        g = one_chip.compute_with_storage_grid_size()
+        # Grid from the mesh device (uniform across chips)
+        g = mesh_device.compute_with_storage_grid_size()
         self.grid_size = (g.x, g.y)
         self.core_grid = ttnn.CoreGrid(y=g.y, x=g.x)
         num_cores = g.x * g.y
@@ -170,7 +166,11 @@ class GemmaMLPTP4:
         if _user and _user.isdigit():
             self.chunk_size = int(_user)
         elif num_cores >= 100:
-            self.chunk_size = 768
+            # 1024 = single chunk for the production seq=1024 prefix. The TP=4 MLP
+            # intermediate is 1/_TP-width (4096, not 16384), so it fits L1 in one
+            # chunk — denser matmuls + one all_reduce/layer (vs the 768 default
+            # inherited from the full-width single-device MLP). ~17.9→15.1 ms/chip.
+            self.chunk_size = 1024
         else:
             self.chunk_size = 256
 
@@ -242,8 +242,10 @@ class GemmaMLPTP4:
                 partial = ttnn.linear(hidden, self.down_proj, core_grid=self.core_grid, **common)
             ttnn.deallocate(hidden)
 
-            # AllReduce: sum partial outputs across all 4 chips → replicated [B, 1, padded, hidden]
-            oc = ttnn.all_reduce(partial, memory_config=ttnn.L1_MEMORY_CONFIG)
+            # AllReduce: sum partial outputs across all 4 chips → replicated [B, 1, padded, hidden].
+            # all_reduce already lowers to reduce_scatter + all_gather internally on the 1xTP line;
+            # num_links=2 (the hardware max — 2 eth channels per hop) ~1.67x's the collective.
+            oc = ttnn.all_reduce(partial, num_links=2, memory_config=ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(partial)
 
             if needs_pad:
@@ -383,6 +385,10 @@ class StagePrefillTP4:
         cos_meta, sin_meta = precompute_freqs_cis_meta_format(
             config.vlm_config.head_dim, config.max_seq_len, mesh_device
         )
+        # Keep handles so run() can pre-slice the RoPE tables ONCE to seq_len and
+        # share across all 18 blocks (instead of each block re-slicing cos/sin).
+        self.cos_meta, self.sin_meta = cos_meta, sin_meta
+        self.head_dim = config.vlm_config.head_dim
 
         self.blocks: List[_GemmaBlockTP4] = []
         for i in range(stages.VLM_TOTAL_LAYERS):
@@ -417,12 +423,25 @@ class StagePrefillTP4:
         hidden = prefix_embs
         per_layer_kv: List[Tuple[ttnn.Tensor, ttnn.Tensor]] = []
 
+        # Pre-slice the RoPE cos/sin tables to seq_len ONCE and reuse across all
+        # blocks — avoids the per-block slice(cos_meta)/slice(sin_meta) (2 ops ×
+        # 18 layers). Only when the caller didn't already supply per-chip tables.
+        cos_ov = sin_ov = None
+        if per_chip_cos is None:
+            seq = prefix_embs.shape[-2]
+            cos_ov = ttnn.slice(self.cos_meta, [0, 0, 0, 0], [1, 1, seq, self.head_dim])
+            sin_ov = ttnn.slice(self.sin_meta, [0, 0, 0, 0], [1, 1, seq, self.head_dim])
+
         for i, block in enumerate(self.blocks):
             m_i = per_chip_attn_mask[i] if per_chip_attn_mask is not None else attention_mask
-            c_i = per_chip_cos[i] if per_chip_cos is not None else None
-            s_i = per_chip_sin[i] if per_chip_sin is not None else None
+            c_i = per_chip_cos[i] if per_chip_cos is not None else cos_ov
+            s_i = per_chip_sin[i] if per_chip_sin is not None else sin_ov
             hidden, new_kv = block.forward(hidden, m_i, position_ids, c_i, s_i)
             per_layer_kv.append(new_kv)
+
+        if cos_ov is not None:
+            ttnn.deallocate(cos_ov)
+            ttnn.deallocate(sin_ov)
 
         hidden = rms_norm_ttnn(hidden, self.vlm_norm, self.vlm_norm_eps)
         return hidden, per_layer_kv

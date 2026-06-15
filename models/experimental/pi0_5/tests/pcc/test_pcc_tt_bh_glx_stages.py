@@ -185,10 +185,14 @@ def test_prefill_tp4_pcc():
     torch.manual_seed(SEED)
     prefix_embs = torch.randn(B, seq_len, cfg.vlm_config.width) * 0.5
 
-    # Torch reference (full 18-block chain + final RMS norm).
-    ref = TorchBackbone(cfg, weights)
-    with torch.no_grad():
-        ref_out, _ = ref.forward_vlm(prefix_embs, attention_mask=None, position_ids=None, use_cache=False)
+    # Torch reference (full 18-block chain + final RMS norm). Skipped under
+    # PI0_SKIP_TORCH_REF=1 — for profiling runs where PCC is already confirmed,
+    # the CPU reference just adds runtime and pollutes the host-side report.
+    ref_out = None
+    if not os.environ.get("PI0_SKIP_TORCH_REF"):
+        ref = TorchBackbone(cfg, weights)
+        with torch.no_grad():
+            ref_out, _ = ref.forward_vlm(prefix_embs, attention_mask=None, position_ids=None, use_cache=False)
 
     with open_prefill_tp4_mesh(l1_small_size=24576) as mesh:
         stage = StagePrefillTP4(cfg, weights, mesh)
@@ -204,9 +208,76 @@ def test_prefill_tp4_pcc():
         # Output is replicated on all 4 chips — take the first chip's copy.
         out = ttnn.to_torch(ttnn.get_device_tensors(out_ttnn)[0])
 
+    if ref_out is None:
+        print(f"\n✅ Prefill TP=4 stage ran (torch ref skipped)  (shape {tuple(out.shape)})")
+        return
     assert out.shape == ref_out.shape, f"shape mismatch: {tuple(out.shape)} vs {tuple(ref_out.shape)}"
     pcc = _compute_pcc(ref_out, out)
     print(f"\n✅ Prefill TP=4 stage PCC vs torch: {pcc:.6f}  (shape {tuple(out.shape)})")
+    assert pcc >= 0.99, f"PCC {pcc:.6f} < 0.99"
+
+
+@pytest.mark.skipif(
+    not (CHECKPOINT_DIR / "model.safetensors").exists(),
+    reason=f"checkpoint not found at {CHECKPOINT_DIR}",
+)
+def test_prefill_tp1_pcc():
+    """TP=1 single-device VLM prefill (PaliGemmaBackboneTTNN.forward_vlm — all 18
+    blocks on one chip) vs torch reference. Mirrors test_prefill_tp4_pcc (same
+    input, same torch reference) for an apples-to-apples TP=1-vs-TP=4 profile.
+    Device id from PI0_DEVICE_ID (default 0 → first TT_VISIBLE_DEVICES chip).
+    Target PCC ≥ 0.99."""
+    from models.experimental.pi0_5.common.checkpoint_meta import action_horizon_from_checkpoint
+    from models.experimental.pi0_5.common.configs import Pi0_5ModelConfig
+    from models.experimental.pi0_5.common.weight_loader import Pi0_5WeightLoader
+    from models.experimental.pi0_5.reference.torch_paligemma import Pi0_5PaliGemmaBackbone as TorchBackbone
+    from models.experimental.pi0_5.tt.ttnn_paligemma import Pi0_5PaliGemmaBackboneTTNN
+
+    cfg = Pi0_5ModelConfig(action_horizon=action_horizon_from_checkpoint(CHECKPOINT_DIR), num_denoising_steps=5)
+    loader = Pi0_5WeightLoader(str(CHECKPOINT_DIR))
+    weights = loader.categorized_weights
+
+    B = 1
+    seq_len = int(os.environ.get("PI0_VLM_CHUNK_SIZE", "1024"))
+    torch.manual_seed(SEED)
+    prefix_embs = torch.randn(B, seq_len, cfg.vlm_config.width) * 0.5
+
+    # Torch reference (full 18-block chain + final RMS norm) — identical to tp4.
+    # Skipped under PI0_SKIP_TORCH_REF=1 for profiling runs (PCC already confirmed).
+    ref_out = None
+    if not os.environ.get("PI0_SKIP_TORCH_REF"):
+        ref = TorchBackbone(cfg, weights)
+        with torch.no_grad():
+            ref_out, _ = ref.forward_vlm(prefix_embs, attention_mask=None, position_ids=None, use_cache=False)
+
+    device = ttnn.open_device(device_id=int(os.environ.get("PI0_DEVICE_ID", "0")), l1_small_size=24576)
+    try:
+        backbone = Pi0_5PaliGemmaBackboneTTNN(cfg, weights, device)
+        prefix_ttnn = ttnn.from_torch(
+            prefix_embs,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        # PI0_PERF_ITERS>1: run forward_vlm repeatedly so the ops CSV holds
+        # multiple identical op blocks (compile run + steady-state runs). Device
+        # perf is read from the LAST run — the compile pass has corrupt multi-core
+        # kernel durations (cf. models/tt_transformers split_compile_and_trace).
+        iters = int(os.environ.get("PI0_PERF_ITERS", "1"))
+        for _ in range(iters):
+            out_ttnn, _ = backbone.forward_vlm(prefix_ttnn, attention_mask=None, position_ids=None, use_cache=False)
+            ttnn.synchronize_device(device)
+        out = ttnn.to_torch(out_ttnn)
+    finally:
+        ttnn.close_device(device)
+
+    if ref_out is None:
+        print(f"\n✅ Prefill TP=1 stage ran ×{iters} (torch ref skipped)  (shape {tuple(out.shape)})")
+        return
+    assert out.shape == ref_out.shape, f"shape mismatch: {tuple(out.shape)} vs {tuple(ref_out.shape)}"
+    pcc = _compute_pcc(ref_out, out)
+    print(f"\n✅ Prefill TP=1 stage PCC vs torch: {pcc:.6f}  (shape {tuple(out.shape)})")
     assert pcc >= 0.99, f"PCC {pcc:.6f} < 0.99"
 
 
