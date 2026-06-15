@@ -220,6 +220,10 @@ extern "C" uint32_t _start1() {
         noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
         thread_sync_init();
 
+        // Initialize wait for trisc FW
+        for (uint32_t i = NUM_DM_CORES; i < MaxNumKernels; i++) {
+            mailboxes->fw_shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
+        }
         deassert_trisc();
         DPRINT("DM0-FW: deasserted TRISC\n");
         wait_subordinates();
@@ -287,9 +291,9 @@ extern "C" uint32_t _start1() {
                 // Copies from L1 to IRAM on chips where NCRISC has IRAM
                 uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
 
+                // Initialize wait for kernels
                 for (uint32_t i = 0; i < MaxNumKernels; i++) {
                     mailboxes->shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
-                    mailboxes->fw_shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
                 }
 
                 run_triscs(enables);
