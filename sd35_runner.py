@@ -15,10 +15,13 @@ class SD35Runner:
     Wrapper for StableDiffusion3Pipeline that handles device initialization,
     model loading, warmup, and inference execution.
 
-    Key architectural note: SD3.5 guidance_scale is a startup parameter baked in
-    at create_pipeline() time via pipeline.prepare(). There is no per-request
-    setter (unlike SDXL's set_guidance_scale()). A warning is logged if a
-    per-request guidance_scale is requested that differs from the configured value.
+    Key architectural note: CFG (classifier-free guidance) is enabled/disabled at
+    create_pipeline() time via ``cfg_enabled`` — that fixes the denoising tensor
+    structure and is what gets traced. The numeric ``guidance_scale``, however, is
+    applied per call inside the pipeline's CFG combiner (a scalar), so it can be
+    varied per request without recompiling or breaking captured traces, as long as
+    CFG was enabled at creation. We therefore enable CFG at creation and accept any
+    per-request guidance_scale.
     """
 
     def __init__(self, worker_id: int, config: SD35Config):
@@ -96,16 +99,15 @@ class SD35Runner:
         self.logger.info(f"  use_trace: {self.config.use_trace}")
         self.logger.info(f"  num_inference_steps: {self.config.num_inference_steps}")
 
+        # Parallelism (cfg/sp/tp split, num_links) is now derived internally from the
+        # mesh shape by StableDiffusion3PipelineConfig.default(); guidance_scale is no
+        # longer baked in at creation (it is applied per call). CFG is enabled here so
+        # that per-request guidance_scale > 1 is accepted.
         self.pipeline = StableDiffusion3Pipeline.create_pipeline(
             mesh_device=self.mesh_device,
-            batch_size=1,
-            image_w=self.config.image_width,
-            image_h=self.config.image_height,
-            guidance_scale=self.config.guidance_scale,
-            cfg_config=self.config.cfg_config,
-            sp_config=self.config.sp_config,
-            tp_config=self.config.tp_config,
-            num_links=self.config.num_links,
+            width=self.config.image_width,
+            height=self.config.image_height,
+            cfg_enabled=self.config.guidance_scale > 1,
             checkpoint_name=self.config.model_name,
         )
         self.logger.info("SD3.5 pipeline created")
@@ -113,11 +115,11 @@ class SD35Runner:
         # Warmup inference: compiles kernels and (if use_trace=True) captures traces.
         # For trace capture this can take 10-15 minutes on first run.
         self.logger.info("Running warmup inference (compiles kernels / captures trace)...")
-        self.pipeline.run_single_prompt(
-            prompt="A golden sunrise over mountain peaks",
-            negative_prompt="",
+        self.pipeline(
+            prompts=["A golden sunrise over mountain peaks"],
             num_inference_steps=self.config.num_inference_steps,
             seed=42,
+            guidance_scale=self.config.guidance_scale,
             traced=self.config.use_trace,
         )
         self.logger.info("Warmup complete")
@@ -135,9 +137,9 @@ class SD35Runner:
         SD3.5 processes one request at a time (batch_size=1 across 2x4 mesh).
         Only the first request in the list is used.
 
-        Per-request guidance_scale is supported for values > 1. Values <= 1 would
-        disable CFG and break the traced execution (tensor shapes differ), so they
-        are rejected with a warning and the config default is used instead.
+        Per-request guidance_scale is supported for any value because CFG is enabled
+        at pipeline creation (fixing the traced tensor structure) and guidance_scale
+        is applied per call as a scalar. When omitted, the config default is used.
 
         Args:
             requests: List of request dicts. Only requests[0] is used.
@@ -150,24 +152,22 @@ class SD35Runner:
         prompt = request["prompt"]
         negative_prompt = request.get("negative_prompt", "")
         num_inference_steps = request.get("num_inference_steps") or self.config.num_inference_steps
-        seed = request.get("seed")
+        seed = request.get("seed") or 0
 
         requested_guidance = request.get("guidance_scale")
-        if requested_guidance is not None and requested_guidance <= 1:
-            self.logger.warning(
-                f"Per-request guidance_scale={requested_guidance} must be > 1 for SD3.5 "
-                f"(CFG structure is fixed at pipeline creation). Using default={self.config.guidance_scale}."
-            )
-            requested_guidance = None
+        guidance_scale = requested_guidance if requested_guidance is not None else self.config.guidance_scale
 
-        self.logger.info(f"Running inference: prompt='{prompt[:80]}', steps={num_inference_steps}, seed={seed}")
+        self.logger.info(
+            f"Running inference: prompt='{prompt[:80]}', steps={num_inference_steps}, "
+            f"seed={seed}, guidance_scale={guidance_scale}"
+        )
 
-        images = self.pipeline.run_single_prompt(
-            prompt=prompt,
-            negative_prompt=negative_prompt or "",
+        images = self.pipeline(
+            prompts=[prompt],
+            negative_prompts=[negative_prompt or ""],
             num_inference_steps=num_inference_steps,
             seed=seed,
-            guidance_scale=requested_guidance,
+            guidance_scale=guidance_scale,
             traced=self.config.use_trace,
         )
 
