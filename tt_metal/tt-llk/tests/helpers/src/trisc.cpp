@@ -90,11 +90,11 @@ int main(void)
     {
         ZONE_SCOPED("KERNEL")
 
-        asm volatile("" ::: "memory");
+        ckernel::fence_compiler();
 
         run_kernel(temp_args);
 
-        asm volatile("" ::: "memory");
+        ckernel::fence_compiler();
 
         ckernel::tensix_sync();
     }

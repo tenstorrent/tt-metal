@@ -192,6 +192,12 @@ class TestConfig:
     # to tmpfs can be skipped (eg. object, elf and coverage data files etc.). This flag is used to skip such code to enable fast execution of infra tests.
     INFRA_TESTING: ClassVar[bool] = False
 
+    # CLI perf counter flags
+    ENABLE_PERF_COUNTERS: ClassVar[bool] = False
+    DUMP_RAW_COUNTERS: ClassVar[bool] = False
+    DUMP_RAW_METRICS: ClassVar[bool] = False
+    DUMP_CSV_COUNTERS: ClassVar[bool] = False
+
     # === Addresses ===
     RUNTIME_ADDRESS_NON_COVERAGE: ClassVar[int] = 0x20000
     RUNTIME_ADDRESS_COVERAGE: ClassVar[int] = 0x6E000
@@ -206,27 +212,51 @@ class TestConfig:
 
     # Performance counter L1 memory addresses
     # NOTE: These addresses must match the values in tests/helpers/include/counters.h
-    # Single shared buffer layout: 86 config words + 172 data words + 1 sync control word
-    PERF_COUNTERS_BASE_ADDR: ClassVar[int] = 0x16A000
-    _PERF_COUNTERS_CONFIG_WORDS: ClassVar[int] = 86
-    _PERF_COUNTERS_DATA_WORDS: ClassVar[int] = 172
-    _PERF_COUNTERS_BUFFER_SIZE: ClassVar[int] = (
-        _PERF_COUNTERS_CONFIG_WORDS + _PERF_COUNTERS_DATA_WORDS
-    ) * 4  # 1032 bytes (0x408)
+    # Shared config + per-zone data layout (must match counters.h).
+    # Shared config (200 words = 800 B) at base; per-zone data (5 bank-cycle
+    # words + 200 counter-count words + sync = 860 B) follows.
+    # 8 zones × 860 + 800 = 7680 B, fits below profiler region at 0x16AFF4.
+    PERF_COUNTERS_BASE_ADDR: ClassVar[int] = 0x169000
+    PERF_COUNTERS_MAX_ZONES: ClassVar[int] = 8  # Max zones (must match counters.h)
+    _PERF_COUNTERS_CONFIG_WORDS: ClassVar[int] = 200
+    _PERF_COUNTERS_DATA_WORDS: ClassVar[int] = 200  # per-zone counter-count slots
+    _PERF_COUNTERS_BANK_CYCLES_WORDS: ClassVar[int] = 5  # OUT_L per bank (5 banks)
 
-    # Shared buffer addresses (all threads use same buffer)
+    # Shared config region
     PERF_COUNTERS_CONFIG_ADDR: ClassVar[int] = PERF_COUNTERS_BASE_ADDR
-    PERF_COUNTERS_DATA_ADDR: ClassVar[int] = (
+    PERF_COUNTERS_ZONES_BASE: ClassVar[int] = (
         PERF_COUNTERS_BASE_ADDR + _PERF_COUNTERS_CONFIG_WORDS * 4
     )
+
+    # Per-zone data layout: [bank_cycles (5)][counter_counts (DATA_WORDS)][sync (1) + pad]
+    _PERF_COUNTERS_ZONE_DATA_BYTES: ClassVar[int] = (
+        _PERF_COUNTERS_BANK_CYCLES_WORDS + _PERF_COUNTERS_DATA_WORDS
+    ) * 4  # 820 B = 20 (cycles) + 800 (counts)
+
+    # Size of one full zone block (data + sync/pad)
+    PERF_COUNTERS_ZONE_SIZE: ClassVar[int] = _PERF_COUNTERS_ZONE_DATA_BYTES + 40
+
+    # Zone-0 flat addresses (kept for legacy callers; prefer zone_*_addr helpers below).
+    PERF_COUNTERS_DATA_ADDR: ClassVar[int] = PERF_COUNTERS_ZONES_BASE
     PERF_COUNTERS_SYNC_CTRL_ADDR: ClassVar[int] = (
-        PERF_COUNTERS_BASE_ADDR + _PERF_COUNTERS_BUFFER_SIZE
+        PERF_COUNTERS_ZONES_BASE + _PERF_COUNTERS_ZONE_DATA_BYTES
     )
 
-    # Total size for memory reservation
+    # Trailing metadata written by PerfCounterManager (must match counters.h):
+    # enabled_flag (4 B) + bank_mask (4 B) + valid_count[MAX_ZONES] (4 B each).
+    _PERF_COUNTERS_TRAILING_METADATA_BYTES: ClassVar[int] = (
+        4 + 4 + PERF_COUNTERS_MAX_ZONES * 4
+    )
+
+    # Total L1 reservation: shared config + per-zone blocks + trailing metadata.
     PERF_COUNTERS_SIZE: ClassVar[int] = (
-        _PERF_COUNTERS_BUFFER_SIZE + 4
-    )  # +4 for sync control word
+        _PERF_COUNTERS_CONFIG_WORDS * 4
+        + PERF_COUNTERS_MAX_ZONES * PERF_COUNTERS_ZONE_SIZE
+        + _PERF_COUNTERS_TRAILING_METADATA_BYTES
+    )
+
+    # Legacy alias — sums per-zone bytes for back-compat with old callers
+    _PERF_COUNTERS_BUFFER_SIZE: ClassVar[int] = _PERF_COUNTERS_ZONE_DATA_BYTES
 
     # Device print buffer. It sits above loaders, and under RUNTIME_ARGS_START.
     # Coverage builds extend TRISC sections past this address; device print
@@ -923,9 +953,17 @@ class TestConfig:
                 run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR)
 
             if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
+                # Only compile BRISC with counter support when counters are enabled,
+                # otherwise BRISC arms counter hardware which adds monitoring overhead.
+                perf_cnt_flag = (
+                    "-DPERF_COUNTERS_COMPILED "
+                    if TestConfig.ENABLE_PERF_COUNTERS
+                    else ""
+                )
                 compile_command = (  # brisc.elf : brisc.cpp
                     f"{TestConfig.GXX} {TestConfig.ARCH_NON_COMPUTE} {TestConfig.OPTIONS_ALL} {TestConfig.OPTIONS_LINK} {local_non_coverage} "
                     f'{"-DCOVERAGE " if TestConfig.WITH_COVERAGE else ""}'
+                    f"{perf_cnt_flag}"
                     f'-T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / "brisc.ld"} -T{TestConfig.LINKER_SCRIPTS / "sections.ld"} '
                     f'-o {shared_elf_dir / "brisc.elf"} {TestConfig.RISCV_SOURCES / "brisc.cpp"}'
                 )
@@ -1067,6 +1105,8 @@ class TestConfig:
             '#include "llk_defs.h"',
             f"{sfpu_types_include}",
             (
+                # perf.h provides PerfRunType (needed for the PERF_RUN_TYPE declaration below).
+                # Test sources that use MEASURE_PERF_COUNTERS get counters.h via params.h.
                 '#include "perf.h"'
                 if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR
                 else ""
@@ -1200,6 +1240,19 @@ class TestConfig:
 
                 if not self.compile_time_formats:
                     optional_kernel_flags += " -DRUNTIME_FORMATS"
+
+                # EXPERIMENT: enable -DPERF_COUNTERS_COMPILED on TRISC.
+                # Quasar is intentionally excluded: it adds a 4th compute thread
+                # (SFPU) and the entry/exit barrier in `counters.h` posts a fixed
+                # number of tokens for 3 threads, so enabling perf counters on
+                # Quasar would deadlock the SFPU thread (it would spinwait on a
+                # semaphore that never gets the extra post). A static_assert in
+                # `counters.h` enforces this at compile time as a safety net.
+                if (
+                    TestConfig.ENABLE_PERF_COUNTERS
+                    and TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR
+                ):
+                    optional_kernel_flags += " -DPERF_COUNTERS_COMPILED"
 
                 COVERAGES_DEPS = (
                     f"-Wl,--start-group {shared_obj_dir}/coverage.o -lgcov -Wl,--end-group "
