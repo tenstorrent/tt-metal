@@ -676,8 +676,14 @@ def test_qwen36_demo_generator_batch1(bh_glx_mesh):
             _head = max(1, _budget - _tail)
             body_ids = torch.cat([body_ids[:_head], body_ids[-_tail:]])
             prompt = tok.decode(body_ids, skip_special_tokens=True)
+        # QWEN36_ENABLE_THINKING=0 -> no <think> priming (ends at <|im_start|>assistant\n),
+        # to discriminate "thinking-mode breaks it" from "any chat marker breaks it".
+        _think = os.environ.get("QWEN36_ENABLE_THINKING", "1") == "1"
         prompt = tok.apply_chat_template(
-            [{"role": "user", "content": prompt}], tokenize=False, add_generation_prompt=True
+            [{"role": "user", "content": prompt}],
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=_think,
         )
         print(f"[gen-demo] chat template applied (tail): {prompt[-120:]!r}")
     ids = tok(prompt, return_tensors="pt").input_ids
