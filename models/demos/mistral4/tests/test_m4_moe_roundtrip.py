@@ -1,10 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""A10 step 1: standalone sparse-MoE round-trip on a (2,4) mesh with mistral4-style dims, vs a torch
-dense top-k reference. Validates the FULL dispatch -> real local experts (SwiGLU) -> combine -> weight+sum
-pipeline + the 2x4 expert/token layout, BEFORE refactoring the model. Experts shard 16/device across all 8
-(ShardTensorToMesh dim0, matching expert_mapping e->e//16); tokens dispatch over the 2x4 topology
-(cluster_axis=1, ShardTensor2dMesh). hidden=4096, experts=128, k=4, reduced interm for speed."""
+"""A10 step 1: standalone sparse-MoE round-trip on the native 1x8 mesh with mistral4-style dims, vs a
+torch dense top-k reference. Validates the FULL dispatch -> real local experts (SwiGLU) -> combine ->
+weight+sum pipeline BEFORE refactoring the model — PCC 0.9998. KEY: experts shard 16/device across all 8
+(ShardTensorToMesh dim0, expert_mapping e->e//16); TOKENS are SHARDED 1/device (NOT replicated — that was
+the original 1x8 _forward_sparse bug); all_to_all_dispatch/combine cluster_axis=1 spans all 8 on (1,8).
+(cluster_axis=None HANGS+degrades the device; a 2x4 mesh with cluster_axis=1 row-splits experts.)
+hidden=4096, experts=128, k=4, reduced interm for speed."""
 
 import pytest
 import torch
@@ -13,28 +15,18 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 
-MESH = (2, 4)
+MESH = (1, 8)  # cluster_axis=None hangs on this BH build; (1,8)+cluster_axis=1 spans all 8 for dispatch
 DEVICES = 8
 EXPERTS = 128
 K = 4
 HIDDEN = 4096
 INTERM = 1024  # reduced (real mistral4 interm is larger) — this validates the pipeline, not the weights
-BATCH = 8  # global tokens (must divide the dispatch axis)
+BATCH = 8  # global tokens (sharded 1/device across all 8 for dispatch)
+AXIS = 1  # (1,8) mesh: axis-1 spans all 8 devices, so dispatch reaches every expert (probe PASSED here).
+# all_to_all_combine REQUIRES input_shape[0] == experts/num_devices: experts sharded across ALL 8 (16/dev).
 PER = EXPERTS // DEVICES  # 16 local experts/device
-AXIS = 1
 
 
-@pytest.mark.xfail(
-    reason="A10 WIP: the full dispatch->real SwiGLU experts->combine->weight+sum pipeline RUNS end-to-end "
-    "on a (2,4) mesh (dispatch [1,8,1,H], combine [k,2,1,H]/dev) and reaches PCC ~0.77 vs torch dense "
-    "top-k. The residual error is a 2D device-PLACEMENT misalignment: ShardTensorToMesh(dim=0) linearizes "
-    "the 128 expert-weight chunks across the 8 devices of the 2x4 mesh in an order that does not match the "
-    "device indexing the dispatch expert_mapping (e->e//16) uses, so some experts compute with the wrong "
-    "weights. Next: lay out the expert weights with an explicit ShardTensor2dMesh whose (axis0,axis1) "
-    "device order matches the expert_mapping, or verify/relabel the mapping to the mesh's native device "
-    "linearization. Pipeline + contracts proven; this is the 2x4 placement detail. See MISTRAL4_DESIGN.md (A10).",
-    strict=False,
-)
 @pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30000000}], indirect=True
@@ -64,25 +56,25 @@ def test_m4_moe_roundtrip_2x4(mesh_device, reset_seeds):
     mesh_device.load_sub_device_manager(sdm)
     mesh_device.set_sub_device_stall_group([ttnn.SubDeviceId(0)])
 
-    shard2d = ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 0), mesh_shape=MESH)  # tokens: shard on axis-1 cols
-    repl2d = ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=MESH)
+    shard0 = ttnn.ShardTensorToMesh(mesh_device, dim=0)  # tokens: shard batch (1/device) across all 8
+    repl = ttnn.ReplicateTensorToMesh(mesh_device)
     tt_x = ttnn.from_torch(
         x.reshape(BATCH, 1, 1, HIDDEN),
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         dtype=ttnn.bfloat16,
-        mesh_mapper=shard2d,
+        mesh_mapper=shard0,
     )
     tt_idx = ttnn.from_torch(
         ti.reshape(BATCH, 1, 1, K),
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         dtype=ttnn.uint16,
-        mesh_mapper=shard2d,
+        mesh_mapper=shard0,
     )
     expert_map = torch.eye(DEVICES, dtype=torch.int32).repeat_interleave(PER, dim=0).reshape(1, 1, EXPERTS, DEVICES)
     tt_map = ttnn.from_torch(
-        expert_map, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint16, mesh_mapper=repl2d
+        expert_map, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint16, mesh_mapper=repl
     )
 
     disp, meta = ttnn.all_to_all_dispatch(
@@ -93,19 +85,13 @@ def test_m4_moe_roundtrip_2x4(mesh_device, reset_seeds):
     d = ttnn.repeat(disp, ttnn.Shape([PER, 1, 1, 1]))  # [E(/dev), batch, 1, hidden] sharded dim0
     bsz = d.shape[1]
     d = ttnn.to_layout(ttnn.reshape(d, (PER, bsz, HIDDEN)), ttnn.TILE_LAYOUT)
+    # experts (dim0) sharded 16/device across all 8 (op requires experts/num_devices); row-major device order
+    exp_map = ttnn.ShardTensorToMesh(mesh_device, dim=0)
     gup_sh = ttnn.from_torch(
-        gup_w,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        gup_w, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=exp_map
     )
     down_sh = ttnn.from_torch(
-        down_w,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        down_w, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=exp_map
     )
     gu = ttnn.matmul(d, gup_sh)  # [PER, bsz, 2I]
     h = ttnn.mul(
@@ -125,6 +111,25 @@ def test_m4_moe_roundtrip_2x4(mesh_device, reset_seeds):
     # comb_t [k, devices*batch_per_dev, 1, hidden] = [4, 16, 1, 4096]: 16 = 8 unique tokens (4 EP cols x
     # 2/col) x 2 DP-row replicas. Take DP row 0 (first BATCH entries, devices 0-3 -> tokens 0..7 in order).
     comb_bk = comb_t[:, :BATCH, 0, :]  # [K, BATCH, hidden]
+
+    # DIAGNOSTIC: for token 0, identify which torch expert each device combine-slice matches (un-weighted),
+    # to localize the residual (k-order vs token-order vs placement).
+    with torch.no_grad():
+        b0_exp_out = []  # token-0's 4 experts' raw outputs in ti order
+        for j in range(K):
+            e = ti[0, j].item()
+            gu0 = x[0] @ gup_w[e]
+            h0 = torch.nn.functional.silu(gu0[:INTERM]) * gu0[INTERM:]
+            b0_exp_out.append(h0 @ down_w[e])
+
+    def _cos(a, b):
+        return torch.nn.functional.cosine_similarity(a.flatten(), b.flatten(), dim=0).item()
+
+    for j in range(K):
+        dev_slice = comb_bk[j, 0]  # [hidden]
+        sims = [round(_cos(b0_exp_out[m], dev_slice), 3) for m in range(K)]
+        logger.info(f"A10 diag token0 comb-slice {j} (expert ti[0,{j}]={ti[0,j].item()}): cos vs ti-experts {sims}")
+
     out = (comb_bk * tw.t().reshape(K, BATCH, 1)).sum(0)  # [BATCH, hidden]
     passing, msg = comp_pcc(ref, out, 0.98)
     logger.info(f"A10 2x4 sparse-MoE round-trip vs torch dense top-{K} PCC: {msg}")
