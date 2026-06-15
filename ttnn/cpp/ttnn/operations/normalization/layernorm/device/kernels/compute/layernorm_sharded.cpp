@@ -183,7 +183,8 @@ void kernel_main() {
     // Zero the padding columns of the final width tile of the input into cb_mask_scratch so they do
     // not contribute to E[x]; the reduce below consumes the masked copy instead of cb_in. cb_in
     // itself is left intact for the (x - E[x]) pass that follows. cb_col_mask is the writer-built
-    // mask matching the host-tilized input layout at this site.
+    // two-tile bf16 mask, applied here to the input being normalized (the host-tilized input, or the
+    // compute-produced residual sum under FUSE_PRE_ADD).
     cb_wait_front(cb_col_mask, 2);
     mul_tiles_init(cb_in_id, cb_col_mask);
     cb_mask_scratch_obj.reserve_back(num_tiles_per_block);
