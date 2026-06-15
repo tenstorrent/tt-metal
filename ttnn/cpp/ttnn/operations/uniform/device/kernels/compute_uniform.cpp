@@ -21,9 +21,9 @@ void kernel_main() {
     f2u_from.u = get_arg_val<uint32_t>(1);
     f2u_to.u = get_arg_val<uint32_t>(2);
     f2u_scale.f = f2u_to.f - f2u_from.f;
-    const uint32_t start_id = get_arg_val<uint32_t>(3);
-    const uint32_t num_tiles = get_arg_val<uint32_t>(4);
-    (void)start_id;  // num_tiles is the work this core consumes — start_id is unused here.
+    // num_tiles is the work this core consumes; start_id (tile placement) is the writer's
+    // job, so it's not passed to compute.
+    const uint32_t num_tiles = get_arg_val<uint32_t>(3);
 
     init_sfpu(intermed_cb_id, intermed_cb_id);
 
