@@ -187,17 +187,21 @@ MODEL_TRACED_BATCH_POLICY = {
 }
 
 
-# ── Model-traced galaxy lane: explicit runner pool ───────────────────────────
-# The galaxy (wormhole-galaxy-sweeps) batches are distributed round-robin across
+# ── Galaxy lane: explicit runner pool ────────────────────────────────────────
+# Both galaxy test groups (wormhole-galaxy-sweeps for model_traced and
+# lead-models-galaxy for lead models) distribute their batches round-robin across
 # these specific galaxy-class machine labels instead of the shared topology-6u
 # label, so the galaxy sweep runs only on this vetted pool. Each batch is pinned
 # to one label (GitHub can't OR labels); batch i -> pool[i % len(pool)].
-GALAXY_MODEL_TRACED_RUNNER_POOL = (
+GALAXY_RUNNER_POOL = (
     "OM1-01A04-STGWH01",
     "OM1-01A04-STGWH02",
     "g04glx03",
     "g14glx04",
 )
+
+# Logical galaxy test groups whose batches route to GALAXY_RUNNER_POOL.
+GALAXY_POOL_TEST_GROUPS = ("wormhole-galaxy-sweeps", "lead-models-galaxy")
 
 
 # ── Model-traced sweep: mesh suffix → logical test group ─────────────────────

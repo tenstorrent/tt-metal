@@ -29,7 +29,8 @@ from pathlib import Path
 from constants import get_mesh_shape_string, parse_hardware_suffix, strip_grouping_suffix
 from matrix_runner_config import (
     DEFAULT_MODEL_TRACED_GROUPING_MODE,
-    GALAXY_MODEL_TRACED_RUNNER_POOL,
+    GALAXY_POOL_TEST_GROUPS,
+    GALAXY_RUNNER_POOL,
     GENERATION_MANIFEST_FILENAME,
     HW_GROUP_MATRIX_KEYS,
     LEAD_MODELS_BATCH_POLICY,
@@ -217,9 +218,9 @@ def _append_routed_group(
     runner_config = _get_runner(test_group_name)
     runner_batches = _batch_modules_for_test_group(base, batch_size, batch_policy)
     batches.extend(runner_batches)
-    # The model-traced galaxy lane runs only on an explicit pool of galaxy
-    # machine labels, distributed round-robin across batches.
-    runs_on_pool = GALAXY_MODEL_TRACED_RUNNER_POOL if test_group_name == "wormhole-galaxy-sweeps" else None
+    # The galaxy lanes (model_traced + lead_models) run only on an explicit pool
+    # of galaxy machine labels, distributed round-robin across batches.
+    runs_on_pool = GALAXY_RUNNER_POOL if test_group_name in GALAXY_POOL_TEST_GROUPS else None
     include_entries.extend(_build_entries(runner_config, runner_batches, label, suite_name, runs_on_pool))
     log_groups.append((label, modules))
 
