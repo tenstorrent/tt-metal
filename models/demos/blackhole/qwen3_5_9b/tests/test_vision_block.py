@@ -27,7 +27,7 @@ from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, stand
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_vision_block_inference(
     mesh_device,
     reset_seeds,
