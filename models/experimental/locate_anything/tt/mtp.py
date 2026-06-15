@@ -22,9 +22,17 @@ each forward only the K/V of the *real* tokens (cached + this step's uncached le
 tokens) is kept; the duplicate-last + mask window K/V is dropped. Accepted box tokens become
 the leading "uncached" real tokens of the next window forward.
 
-This module is SDPA-numerically identical to the torch-CPU MTP reference
-(``reference/mtp_cpu_loop.py``); see ``tests/test_mtp.py`` for the validation and the
-forward-pass / tok/s comparison against the AR bench.
+This module closely reproduces the torch-CPU MTP reference (``reference/mtp_cpu_loop.py``):
+the END-TO-END device-MTP vs torch-MTP logit PCC over every step/readout row is ~0.986
+(first-step ~0.996); see ``tests/test_mtp.py`` for the validation and the forward-pass /
+tok/s comparison against the AR bench.
+
+PRECISION NOTE: ``ttnn.transformer.scaled_dot_product_attention`` corrupts the block-
+bidirectional generation window when the Q/K sequence dims are not tile (32) multiples — with
+a sub-tile ``q_len`` it silently degenerates the bidirectional last block toward causal
+attention (SDPA output PCC ~0.94). ``_attn`` therefore tile-pads Q/K/V (and ``build_mask``
+pads the additive mask with -inf in the pad region) so the bidirectional window is computed
+correctly (per-layer attention PCC > 0.999), then slices the readout back to ``q_len``.
 
 IMPORTANT (verified on the reference): greedy MTP does NOT reproduce greedy AR boxes — MTP
 is an inherently approximate parallel decoder (see reference/mtp_cpu_loop.py). The device
@@ -100,23 +108,50 @@ class MTPDecoder:
         self.committed_v[layer_idx] = new_v
 
     # ---- mask + rope ---------------------------------------------------------
+    @staticmethod
+    def _tile_pad(n, tile=32):
+        return ((n + tile - 1) // tile) * tile
+
     def build_mask(self, cached_len, uncached_len):
-        """Additive bf16 [1,1,q_len,kv_len] mask for one MTP-window forward (see module doc)."""
+        """Additive bf16 [1,1,q_pad,kv_pad] mask for one MTP-window forward (see module doc).
+
+        ``ttnn.transformer.scaled_dot_product_attention`` corrupts the block-bidirectional
+        window when the Q/K sequence dims are not tile (32) multiples: with a sub-tile q_len
+        the op silently degenerates the bidirectional last block to causal-like attention
+        (verified: SDPA output PCC drops to ~0.94, recovers to >0.999 once q/k are tile-padded).
+        We therefore pad the logical [q_len,kv_len] mask out to 32-multiples with NEG_INF so
+        the padded Q rows / K columns are fully masked, and ``_attn`` pads Q/K/V to match.
+        """
         nf = self.n_future
         q_len = uncached_len + nf
         kv_len = cached_len + q_len
-        m = torch.full((1, 1, q_len, kv_len), NEG_INF, dtype=torch.float32)
         window_start_k = kv_len - nf
         blocked_k = window_start_k - 1
-        # causal rows for the leading uncached real tokens
+        rows = []
         for i in range(uncached_len):
-            gpos = cached_len + i
-            m[0, 0, i, : gpos + 1] = 0.0
-        # window rows: all real keys + bidirectional window, minus the blocked column
-        for r in range(uncached_len, q_len):
-            m[0, 0, r, :kv_len] = 0.0
-            if 0 <= blocked_k < kv_len:
-                m[0, 0, r, blocked_k] = NEG_INF
+            rows.append(("causal", cached_len + i))
+        for _ in range(uncached_len, q_len):
+            rows.append(("window", blocked_k))
+        return self._build_padded_mask(q_len, kv_len, rows)
+
+    def _build_padded_mask(self, q_len, kv_len, rows):
+        """Build an additive bf16 mask padded to 32-multiples in both seq dims.
+
+        ``rows`` is a list of (kind, arg) of length q_len:
+          ("causal", gpos)   -> attend keys [0:gpos+1]
+          ("window", blocked)-> attend all kv keys except column ``blocked``
+        The padded rows/cols (beyond q_len/kv_len) stay NEG_INF so SDPA ignores them.
+        """
+        q_pad = self._tile_pad(q_len)
+        kv_pad = self._tile_pad(kv_len)
+        m = torch.full((1, 1, q_pad, kv_pad), NEG_INF, dtype=torch.float32)
+        for r, (kind, arg) in enumerate(rows):
+            if kind == "causal":
+                m[0, 0, r, : arg + 1] = 0.0
+            else:  # window
+                m[0, 0, r, :kv_len] = 0.0
+                if 0 <= arg < kv_len:
+                    m[0, 0, r, arg] = NEG_INF
         return ttnn.from_torch(
             m,
             device=self.mesh_device,
@@ -203,22 +238,48 @@ class MTPDecoder:
             v_full = v
 
         q8 = ttnn.typecast(q, dtype=ttnn.bfloat16)
+        ttnn.deallocate(q)
+
+        # Pad Q/K/V seq dims to tile (32) multiples so SDPA computes the bidirectional window
+        # correctly (see build_mask). Padded Q rows / K cols are fully masked by attn_mask.
+        # ttnn.pad CONSUMES its input, so pad COPIES of k_full/v_full and keep k_full/v_full
+        # alive for the committed-KV update below.
+        q_len = q8.shape[2]
+        kv_len = k_full.shape[2]
+        q_pad = self._tile_pad(q_len)
+        kv_pad = self._tile_pad(kv_len)
+        if q_pad != q_len:
+            q8 = ttnn.pad(q8, padding=[(0, 0), (0, 0), (0, q_pad - q_len), (0, 0)], value=0.0)
+        if kv_pad != kv_len:
+            k_pad_src = ttnn.clone(k_full, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+            v_pad_src = ttnn.clone(v_full, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+            k_pad_t = ttnn.pad(k_pad_src, padding=[(0, 0), (0, 0), (0, kv_pad - kv_len), (0, 0)], value=0.0)
+            v_pad_t = ttnn.pad(v_pad_src, padding=[(0, 0), (0, 0), (0, kv_pad - kv_len), (0, 0)], value=0.0)
+        else:
+            k_pad_t = k_full
+            v_pad_t = v_full
+
         attn_out = ttnn.transformer.scaled_dot_product_attention(
             q8,
-            k_full,
-            v_full,
+            k_pad_t,
+            v_pad_t,
             attn_mask=attn_mask,
             is_causal=False,
             scale=attn.scale,
             compute_kernel_config=attn.sdpa_prefill_compute_kernel_cfg,
         )
+        if k_pad_t is not k_full:
+            ttnn.deallocate(k_pad_t)
+            ttnn.deallocate(v_pad_t)
+        # drop the padded Q rows: keep the real [0:q_len] window rows
+        if q_pad != q_len:
+            attn_out_sliced = ttnn.slice(attn_out, (0, 0, 0, 0), (1, attn.n_local_heads, q_len, attn.head_dim))
+            ttnn.deallocate(attn_out)
+            attn_out = attn_out_sliced
         ttnn.deallocate(q8)
-        ttnn.deallocate(q)
 
         # commit real-token K/V into fresh DRAM buffers; drop dup+mask window rows
         self._commit(layer_idx, k_full, v_full, commit_real_len)
-        # free intermediates (k_full/v_full are either fresh concat buffers or the
-        # window k/v; _commit cloned what it needs, so always safe to free now)
         ttnn.deallocate(k_full)
         ttnn.deallocate(v_full)
         if k_full is not k:

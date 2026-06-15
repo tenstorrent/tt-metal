@@ -72,8 +72,14 @@ def build_mtp_mask(cached_len, uncached_len, n_future, dtype=torch.bfloat16):
     return mask
 
 
-def mtp_loop(model, tokenizer, bundle, mode="hybrid", n_future=6, max_new_tokens=64, verbose=True):
-    """Pure-torch correct hybrid/fast MTP loop, bsz=1. Returns (text, stats)."""
+def mtp_loop(model, tokenizer, bundle, mode="hybrid", n_future=6, max_new_tokens=64, verbose=True, capture=None):
+    """Pure-torch correct hybrid/fast MTP loop, bsz=1. Returns (text, stats).
+
+    If ``capture`` is a list, every MTP-window forward appends a dict with the
+    exact window inputs and ALL q_len readout logits, so a device port can replay
+    byte-identical windows and compute an end-to-end logit PCC:
+      {"win_ids", "win_pos", "uncached_len", "cached_len", "logits" [q_len, vocab]}
+    """
     from generate_utils import sample_tokens, handle_pattern
 
     tids = model.token_ids
@@ -154,6 +160,16 @@ def mtp_loop(model, tokenizer, bundle, mode="hybrid", n_future=6, max_new_tokens
             logits6 = out.logits[:, -n_future:, :]
             if first_step_logits is None:
                 first_step_logits = logits6[0].detach().float().clone()  # [n_future, vocab]
+            if capture is not None:
+                capture.append(
+                    {
+                        "win_ids": win_ids[0].tolist(),
+                        "win_pos": win_pos[0].tolist(),
+                        "uncached_len": uncached_len,
+                        "cached_len": cached_len,
+                        "logits": out.logits[0].detach().float().clone(),  # [q_len, vocab]
+                    }
+                )
             _, _, x0, box_avg = sample_tokens(logits6, _gen_pad(), tids, keep_k=5, generation_mode=mode)
             nt = x0[0] if bool((box_avg[0] == 0).all()) else box_avg[0]
             op = handle_pattern(nt, tids, mode)

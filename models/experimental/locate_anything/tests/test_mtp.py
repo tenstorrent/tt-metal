@@ -157,8 +157,11 @@ def test_mtp_decode(mesh_device, reset_seeds):
     # --- torch-CPU MTP reference (the achievable correctness oracle) ---
     # Run the correct bsz=1 MTP loop on the SAME inputs to get the reference MTP box string
     # AND the first MTP step's 6 readout logits (for a per-step device-vs-torch PCC).
-    box_oracle_mtp, torch_first_logits = _torch_cpu_mtp_boxes(mp, bundle, mode="hybrid", n_future=n_future)
+    box_oracle_mtp, torch_first_logits, torch_capture = _torch_cpu_mtp_boxes(
+        mp, bundle, mode="hybrid", n_future=n_future
+    )
     logger.info(f"torch-CPU MTP (hybrid greedy): {box_oracle_mtp!r}")
+    logger.info(f"torch MTP captured {len(torch_capture)} window forwards for E2E PCC")
 
     # --- device MTP decode ---
     mtp = MTPDecoder(model, n_future=n_future)
@@ -231,6 +234,36 @@ def test_mtp_decode(mesh_device, reset_seeds):
                 cur_mode = "mtp"
     decode_time = time.time() - t0
 
+    # --- E2E device-MTP vs torch-MTP logit PCC (replay the exact torch windows) ---
+    # The free-running device loop above may diverge in token *decisions* from torch by the
+    # 2nd-3rd box, which would make a naive per-step comparison meaningless (different windows).
+    # To measure pure port FIDELITY we re-seed a fresh MTPDecoder from prefill and replay the
+    # IDENTICAL window inputs the torch loop took (same ids/positions/uncached_len, same
+    # committed-KV trajectory). We collect every step's full q_len readout logits on both sides
+    # and compute one concatenated PCC. This is the metric to drive to >=0.95 (target >0.99).
+    from models.common.utility_functions import comp_pcc
+
+    mtp_e2e = MTPDecoder(model, n_future=n_future)
+    mtp_e2e.reset_kv_from_prefill(dense_kv, real_seq_len)
+    dev_all_logits = []
+    torch_all_logits = []
+    per_step_pcc = []
+    for si, step in enumerate(torch_capture):
+        win_embeds = embed(step["win_ids"])
+        dev_logits = mtp_e2e.mtp_step(win_embeds, step["win_pos"], step["uncached_len"])  # [q_len, vocab]
+        d = dev_logits[:, : model.vocab_size].to(torch.float32)
+        t = step["logits"][:, : model.vocab_size].to(torch.float32)
+        dev_all_logits.append(d)
+        torch_all_logits.append(t)
+        # per-step PCC over the n_future readout rows (the rows that decode the box)
+        sp_pass, sp_msg = comp_pcc(t[-n_future:], d[-n_future:], pcc=0.0)
+        per_step_pcc.append(float(str(sp_msg).strip().split()[-1]))
+    dev_cat = torch.cat(dev_all_logits, dim=0)  # [sum_q_len, vocab]
+    torch_cat = torch.cat(torch_all_logits, dim=0)
+    e2e_pass, e2e_msg = comp_pcc(torch_cat, dev_cat, pcc=0.95)
+    e2e_pcc_val = float(str(e2e_msg).strip().split()[-1])
+    logger.info(f"per-step readout PCC (device vs torch): {[round(p, 4) for p in per_step_pcc]}")
+
     box_device_mtp = tokenizer.decode(gen_ids, skip_special_tokens=False)
     num_tokens = len(gen_ids)
     decode_tok_s = num_tokens / decode_time if decode_time > 0 else 0.0
@@ -254,8 +287,7 @@ def test_mtp_decode(mesh_device, reset_seeds):
     # multi-token forward numerically faithful" from "does the (inherently approximate,
     # degenerating-under-greedy) box decoder pick byte-identical coords". A high PCC proves
     # the device MTP window attention/rope/kv math reproduces the reference.
-    from models.common.utility_functions import comp_pcc
-
+    # (comp_pcc imported above for the E2E metric)
     # PCC bar: 0.95. The device MTP window forward reproduces the torch-CPU MTP forward to
     # ~0.96 PCC — slightly below the AR prefill bar (0.9928) because the MTP window SDPA reads
     # a custom additive mask over a long dense K/V slice with HiFi4 bf16 accumulation and a
@@ -274,6 +306,9 @@ def test_mtp_decode(mesh_device, reset_seeds):
     print(f"mtp_decode_tok_s={decode_tok_s}")
     print(f"mtp_boxes_per_sec={boxes_per_sec}")
     print(f"mtp_first_step_logit_pcc={pcc_val}")
+    print(f"mtp_e2e_logit_pcc={e2e_pcc_val}")
+    print(f"mtp_e2e_steps={len(torch_capture)}")
+    print(f"mtp_per_step_pcc={[round(p, 4) for p in per_step_pcc]}")
     print(f"mtp_eq_torch={box_device_mtp.strip() == box_oracle_mtp.strip()}")
     print(f"mtp_eq_ar={box_device_mtp.strip() == box_slow_ar.strip()}")
     print(f"mtp_first_unit_device={dev_first!r}")
@@ -281,33 +316,26 @@ def test_mtp_decode(mesh_device, reset_seeds):
     print(f"mtp_first_unit_ar={ar_first!r}")
 
     logger.info(f"first-step MTP logit PCC (device vs torch): {pcc_msg}")
+    logger.info(f"E2E MTP logit PCC (device vs torch, all steps/rows): {e2e_msg}")
 
-    # Gate on the per-step logit PCC: the device MTP forward must reproduce the torch-CPU
-    # MTP forward to >=0.95 PCC, proving the custom block-bidirectional masked attention +
-    # per-position RoPE + committed-KV math is numerically faithful on device.
-    assert pcc_pass, (
-        f"device MTP first-step logits PCC below 0.95 vs torch-CPU MTP: {pcc_msg}\n"
+    # PRIMARY GATE: the END-TO-END device-MTP vs torch-MTP logit PCC over every step and every
+    # readout row. This is the right fidelity target — it measures whether the on-device MTP
+    # window forward reproduces the torch-CPU MTP forward over the WHOLE decode (not just the
+    # first step), driving out per-step drift from RoPE/SDPA/KV-seeding precision.
+    assert e2e_pass, (
+        f"device MTP E2E logits PCC below 0.95 vs torch-CPU MTP: {e2e_msg}\n"
+        f"  per-step readout PCC: {[round(p, 4) for p in per_step_pcc]}\n"
         f"  device first unit: {dev_first!r}\n  torch  first unit: {torch_first!r}"
     )
 
 
 def mtp_step_ar(self, window_embeds, position_ids):
     """AR (causal) variant of an MTP forward: q_len real tokens, causal mask, all committed."""
-    import torch as _t
-
     q_len = window_embeds.shape[1]
     kv_len = self.cached_len + q_len
-    m = _t.full((1, 1, q_len, kv_len), float("-inf"), dtype=_t.float32)
-    for i in range(q_len):
-        gpos = self.cached_len + i
-        m[0, 0, i, : gpos + 1] = 0.0
-    attn_mask = ttnn.from_torch(
-        m,
-        device=self.mesh_device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-    )
+    # tile-padded causal mask (the same tile-pad SDPA fix as build_mask; _attn pads q/k/v to match)
+    rows = [("causal", self.cached_len + i) for i in range(q_len)]
+    attn_mask = self._build_padded_mask(q_len, kv_len, rows)
     rot_mats = self.window_rope(position_ids)
     commit_real_len = self.cached_len + q_len
     x = ttnn.from_torch(
@@ -372,5 +400,8 @@ def _torch_cpu_mtp_boxes(model_path, bundle, mode="hybrid", n_future=6):
     cfg.vision_config._attn_implementation = "sdpa"
     tok = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     model = AutoModel.from_pretrained(model_path, config=cfg, trust_remote_code=True, torch_dtype=torch.bfloat16).eval()
-    text, stats = loop_mod.mtp_loop(model, tok, bundle, mode=mode, n_future=n_future, max_new_tokens=64)
-    return text, stats.get("first_step_logits")
+    capture = []
+    text, stats = loop_mod.mtp_loop(
+        model, tok, bundle, mode=mode, n_future=n_future, max_new_tokens=64, capture=capture
+    )
+    return text, stats.get("first_step_logits"), capture
