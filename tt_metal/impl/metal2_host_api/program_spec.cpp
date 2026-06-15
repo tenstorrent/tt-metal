@@ -1134,14 +1134,19 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
 
         // (1) and (2): WU membership disjointness within each role + cross-role equality.
         // Compute per-role unions while also checking within-role pairwise disjointness.
-        auto compute_role_union = [&](const auto& records, std::string_view role) {
+        // allow_shared_wu permits multiple same-role KernelSpecs in one WorkUnitSpec. This is legal for
+        // CONSUMERS only: several same-kind data-movement kernels on the same node may each read one local
+        // DFB (a same-core broadcast — e.g. the sliding-window halo split reader, where two RISC data-movement
+        // kernels on a core both consume the borrowed src CB). PRODUCERS must still be pairwise-disjoint: two
+        // producers on one node would have ambiguous write-pointer ownership of the single CB instance.
+        auto compute_role_union = [&](const auto& records, std::string_view role, bool allow_shared_wu) {
             std::set<const WorkUnitSpec*> role_union;
             for (const auto& rec : records) {
                 const auto wu_set = kernel_work_unit_set(rec.kernel->unique_id);
                 for (const WorkUnitSpec* wu : wu_set) {
                     auto [it, inserted] = role_union.insert(wu);
                     TT_FATAL(
-                        inserted,
+                        inserted || allow_shared_wu,
                         "DFB '{}' has multiple {} KernelSpecs sharing WorkUnitSpec '{}' (kernel '{}' collides with a "
                         "prior {} binding). Same-role bindings must have pairwise-disjoint WorkUnitSpec membership.",
                         dfb.unique_id,
@@ -1153,8 +1158,8 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             }
             return role_union;
         };
-        const auto producer_wu_union = compute_role_union(endpoints.producers, "PRODUCER");
-        const auto consumer_wu_union = compute_role_union(endpoints.consumers, "CONSUMER");
+        const auto producer_wu_union = compute_role_union(endpoints.producers, "PRODUCER", /*allow_shared_wu=*/false);
+        const auto consumer_wu_union = compute_role_union(endpoints.consumers, "CONSUMER", /*allow_shared_wu=*/true);
         TT_FATAL(
             producer_wu_union == consumer_wu_union,
             "Local DFB '{}' producer and consumer KernelSpecs do not cover the same WorkUnitSpec(s). "
@@ -1188,12 +1193,25 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             for (const auto& c : endpoints.consumers) {
                 consumer_kernels.insert(c.kernel);
             }
+            // Every PRODUCER of a self-looped DFB must also be a consumer (i.e. genuinely self-loop), but the
+            // consumer set MAY include extra pure-consumer kernels: a same-core broadcast where one kernel
+            // produces+consumes the local CB and additional same-kind kernels on the node also read it (the
+            // halo split reader: reader0 self-loops src, reader1 also consumes it). A producer that is not
+            // also a consumer is still rejected — that would make per-instance tensix-scope semantics
+            // ambiguous.
+            bool producers_are_self_loopers = true;
+            for (const KernelSpec* pk : producer_kernels) {
+                if (consumer_kernels.find(pk) == consumer_kernels.end()) {
+                    producers_are_self_loopers = false;
+                    break;
+                }
+            }
             TT_FATAL(
-                producer_kernels == consumer_kernels,
-                "DFB '{}' is self-looped (some kernel appears as both producer and consumer), but "
-                "the set of producer KernelSpecs differs from the set of consumer KernelSpecs. "
-                "When a DFB is self-looped, every same-side binding must come from a self-loop "
-                "participant (i.e. a kernel that appears on both sides).",
+                producers_are_self_loopers,
+                "DFB '{}' is self-looped (some kernel appears as both producer and consumer), but a producer "
+                "KernelSpec is not also a consumer. When a DFB is self-looped, every producer must come from a "
+                "self-loop participant (a kernel that appears on both sides); extra pure-consumer kernels are "
+                "permitted (same-core broadcast).",
                 dfb.unique_id);
 
             // All self-loop participants must agree on the tensix-scope for this DFB —
@@ -2223,12 +2241,25 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     // and user-validated on Gen1 (see Step 2b in MakeProgramFromSpec). So any
     // representative producer/consumer gives the correct DFB config — we take the first.
     const KernelSpec* producer = dfb_endpoint_info.producers.front().kernel;
-    const KernelSpec* consumer = dfb_endpoint_info.consumers.front().kernel;
     const DFBBinding* producer_binding = dfb_endpoint_info.producers.front().binding;
     const DFBBinding* consumer_binding = dfb_endpoint_info.consumers.front().binding;
 
     uint16_t producer_risc_mask = kernel_to_risc_mask.at(producer);
-    uint16_t consumer_risc_mask = kernel_to_risc_mask.at(consumer);
+    // Consumers may form a same-core broadcast (multiple kernels on different RISCs reading one local CB),
+    // so the consumer-side processor mask is the UNION of every consumer kernel's mask, and the consumer
+    // count sums their threads. Producers are single-mask (validated). For the common single-consumer case
+    // this reduces to the first consumer's mask / num_threads.
+    uint16_t consumer_risc_mask = 0;
+    uint8_t consumer_thread_count = 0;
+    {
+        std::unordered_set<const KernelSpec*> seen_consumers;
+        for (const auto& c : dfb_endpoint_info.consumers) {
+            consumer_risc_mask |= kernel_to_risc_mask.at(c.kernel);
+            if (seen_consumers.insert(c.kernel).second) {
+                consumer_thread_count += static_cast<uint8_t>(c.kernel->num_threads);
+            }
+        }
+    }
 
     // Convert user-facing access pattern enum to hardware interface access pattern enum
     // (TODO: We should merge these enums; it's silly to have separate ones.)
@@ -2303,7 +2334,7 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .num_producers = static_cast<uint8_t>(producer->num_threads),
         .pap = producer_access_pattern,
         .consumer_risc_mask = consumer_risc_mask,
-        .num_consumers = static_cast<uint8_t>(consumer->num_threads),
+        .num_consumers = consumer_thread_count,
         .cap = consumer_access_pattern,
         .enable_producer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.producers),
         .enable_consumer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.consumers),
@@ -2562,8 +2593,12 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
     //   property is guaranteed by construction; the check is retained as a defensive assertion.
     for (const auto& dfb : spec.dataflow_buffers) {
         const auto& endpoints = collected.dfb_endpoints.at(dfb.unique_id);
-        auto check_uniform_mask = [&](const auto& records, std::string_view role) {
-            if (records.size() < 2) {
+        // allow_union: CONSUMERS may sit on different processors (a same-core broadcast — e.g. two RISC
+        // data-movement kernels on one core both reading a local CB). Their per-role processor mask is the
+        // UNION of the individual masks (computed in MakeDataflowBufferConfig). PRODUCERS must still share a
+        // single mask: two producers on different processors would have ambiguous write-pointer ownership.
+        auto check_uniform_mask = [&](const auto& records, std::string_view role, bool allow_union) {
+            if (records.size() < 2 || allow_union) {
                 return;
             }
             const uint16_t first_mask = kernel_to_risc_mask.at(records[0].kernel);
@@ -2601,8 +2636,8 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
                 }
             }
         };
-        check_uniform_mask(endpoints.producers, "PRODUCER");
-        check_uniform_mask(endpoints.consumers, "CONSUMER");
+        check_uniform_mask(endpoints.producers, "PRODUCER", /*allow_union=*/false);
+        check_uniform_mask(endpoints.consumers, "CONSUMER", /*allow_union=*/true);
     }
 
     // Step 2c: Resolve TensorParameters against the MeshDevice into static CTA payloads.
