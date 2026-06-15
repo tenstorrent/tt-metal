@@ -295,10 +295,6 @@ class TTCustomSTFT:
             packer_l1_acc=False,
         )
 
-    # ------------------------------------------------------------------
-    # forward STFT
-    # ------------------------------------------------------------------
-
     def transform(self, x_bL: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """``[B, L]`` waveform → ``(magnitude, phase)`` each ``[B, K, F]`` (all on device)."""
         p = self.params
@@ -360,10 +356,6 @@ class TTCustomSTFT:
         ttnn.deallocate(X_imag)
         return magnitude, phase
 
-    # ------------------------------------------------------------------
-    # inverse iSTFT
-    # ------------------------------------------------------------------
-
     def _to_nhwc_rm(self, x_bkf: ttnn.Tensor) -> ttnn.Tensor:
         """``[B, K, F]`` (TILE) → ``[B, 1, F, K]`` ROW_MAJOR for conv_transpose2d NHWC input."""
         mc = ttnn.DRAM_MEMORY_CONFIG
@@ -394,13 +386,7 @@ class TTCustomSTFT:
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
-        # Single-slice (no DRAM height slicing): the multi-slice conv_transpose corrupts the
-        # windowed overlap-add across slice boundaries (the iFFT kernel spans n_fft samples, far
-        # more than the per-slice row count, so each slice drops its neighbours' contributions).
-        # A single slice is exact and fits BH L1 across the practical Kokoro range — measured PCC
-        # 1.0 up to F≈60k (≈300k output samples).  Beyond ~F≈130k (max-phoneme silence padding)
-        # the single-slice program OOMs; that extreme regime uses the TorchSTFT/torch.istft path
-        # (``disable_complex=False``) instead.
+        # Multi-slice conv_transpose corrupts overlap-add across slice boundaries.
         slice_cfg = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=1)
 
         y, out_hw = ttnn.conv_transpose2d(
@@ -490,10 +476,6 @@ class TTCustomSTFT:
         y_out = ttnn.permute(y_trim, (0, 2, 1), memory_config=mc)
         ttnn.deallocate(y_trim)
         return y_out
-
-    # ------------------------------------------------------------------
-    # round trip
-    # ------------------------------------------------------------------
 
     def forward(self, x_bL: ttnn.Tensor) -> ttnn.Tensor:
         """STFT → iSTFT round trip (matches ``CustomSTFT.forward``)."""

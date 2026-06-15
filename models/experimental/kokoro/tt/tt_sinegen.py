@@ -230,21 +230,8 @@ def preprocess_tt_sinegen(
 class TTSineGen:
     """Kokoro :class:`SineGen` on TT (``flag_for_pulse=False``).
 
-    **Precision note** — ``use_torch_phase_fallback``
-    The lerp upsample step computes small cumsum values (< 0.05 cycles) and then multiplies by
-    ``2π × upsample_scale``.  On BH hardware all MAC ops round float32 inputs to BF16 before the
-    multiply unit; the absolute BF16 error on a 0.04-cycle value is ~3.3×10⁻⁵ cycles, which
-    after ×(2π × 300) = ×1885 becomes ~0.06–0.25 radians — comparable to ``sine_amp = 0.1``.
-    At Kokoro's scale (``upsample_scale=300``) this destroys phase PCC.
-
-    When ``use_torch_phase_fallback=True`` only the phase ACCUMULATION — downsample → cumsum →
-    lerp upsample (× 2π·upsample_scale) — runs in CPU float32, returning the fp32 ``phase_up``
-    argument.  ``sin``, ``× sine_amp``, ``uv``, noise scaling, and the ``sine_waves * uv + noise``
-    mix all stay on-device: ``ttnn.sin`` in fp32 reproduces ``torch.sin`` at PCC ≈ 1.0 even at the
-    ~10⁵-rad argument magnitudes here (a bf16 phase argument would collapse it to ~0.19), so only
-    the accumulation — which BF16 MAC rounding corrupts — needs CPU.  This is the minimal fallback
-    needed to restore PCC > 0.99 at Kokoro scale.  At small upsample scales (≤ 10) the BF16 error
-    is negligible and the fallback is not needed.
+    Set ``use_torch_phase_fallback=True`` to run the phase accumulation chain on CPU float32 when
+    BF16 MAC rounding at large ``upsample_scale`` would corrupt ``phase_up``.
     """
 
     def __init__(
@@ -278,14 +265,7 @@ class TTSineGen:
         f0_btd: ttnn.Tensor,
         rand_ini: "Optional[ttnn.Tensor]",
     ) -> ttnn.Tensor:
-        """CPU float32 phase accumulation: rad → downsample → cumsum×2π → lerp upsample.
-
-        Returns the final phase argument ``phase_up`` (= interpolated ``cumsum × 2π × upsample_scale``)
-        as an **fp32** device tensor.  Only this accumulation runs on CPU — it is where BH's
-        BF16 MAC rounding, amplified by ×(2π·upsample_scale), destroys phase PCC.  ``sin``,
-        ``× sine_amp``, ``uv``, noise, and the output mix all stay on device in :meth:`forward`;
-        fp32 is required here, as a bf16 phase argument collapses ``sin`` PCC to ~0.19.
-        """
+        """CPU float32 phase accumulation through lerp upsample; returns fp32 ``phase_up``."""
         import torch.nn.functional as F_torch
 
         p = self.params
@@ -325,24 +305,6 @@ class TTSineGen:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def _zero_btd(self, B: int) -> ttnn.Tensor:
-        return ttnn.zeros(
-            [B, self.params.time_len, self.params.dim],
-            dtype=self.params.activation_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-    def _zero_b1d(self, B: int) -> ttnn.Tensor:
-        return ttnn.zeros(
-            [B, 1, self.params.dim],
-            dtype=self.params.activation_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
     def forward(
         self,
         f0_btd: ttnn.Tensor,
@@ -375,11 +337,6 @@ class TTSineGen:
         ttnn.deallocate(uv_bool)
 
         if self.use_torch_phase_fallback:
-            # Only the phase ACCUMULATION (fn→rad→downsample→cumsum×2π→lerp upsample) falls back to
-            # CPU float32: BH rounds MAC operands fp32→bf16, and ×(2π·upsample_scale)=×1885 amplifies
-            # that into >1 rad of phase error, destroying PCC.  ``sin``/``×amp``/uv/noise all stay on
-            # device (common path below) — ``_torch_phase_fallback`` returns the fp32 ``phase_up``
-            # argument, recomputing fn/rad/rand_ini from ``f0_btd`` on CPU.
             phase_up = self._torch_phase_fallback(f0_btd, rand_ini)
         else:
             # ``fn = f0 * harmonics`` → [B, T, dim]
@@ -411,7 +368,6 @@ class TTSineGen:
                 if rand_pad is not rand_masked:
                     ttnn.deallocate(rand_masked)
 
-            # On-device fp32 phase chain: BF16 cumsum/lerp × 2π×upsample_scale loses phase at Kokoro scale.
             rad_fp32, owns_rad = _to_fp32_if_needed(rad, memory_config)
             if owns_rad:
                 ttnn.deallocate(rad)
@@ -494,10 +450,6 @@ class TTSineGen:
             if owns_tps:
                 ttnn.deallocate(two_pi_scale)
 
-        # Common to both paths: ``sines = sin(phase_up) * sine_amp`` on device.  ``phase_up`` is
-        # fp32 in both branches; ttnn.sin in fp32 matches torch.sin at PCC ≈ 1.0 even at the
-        # ~10⁵-rad argument magnitudes here (a bf16 phase argument collapses sin PCC to ~0.19), so
-        # the nonlinear sin/×amp are safe on-device once the phase accumulation itself is correct.
         sine_amp_fp32, owns_sa = _to_fp32_if_needed(p.sine_amp, memory_config)
         sines = ttnn.sin(phase_up, memory_config=memory_config)
         ttnn.deallocate(phase_up)
