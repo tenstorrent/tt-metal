@@ -35,13 +35,13 @@ def _pos(p, mesh):
 
 
 @pytest.mark.xfail(
-    reason="A6 compressed-latent incremental decode is NOT reliably reproducible: identical code gave "
-    "PCC 0.99974 (commit 523820c5) then 0.02 later, with a healthy board (expanded forward_decode "
-    "stays 0.99971). The op CONTRACT + absorption ARE proven reliably — op-only with a fully-populated "
-    "cache (test_m4_flash_mla_correctness) is 0.9999 and the absorption math (test_m4_mla_absorb_cpu) "
-    "is 1.0 — so the bug is in the incremental forward_decode_mla path (suspected uninitialized/stale "
-    "read of unwritten cache positions or a sharded buffer). Expanded-kv decode is the verified, "
-    "reproducible default. See MISTRAL4_DESIGN.md (A6).",
+    reason="A6 compressed-latent paged flash-MLA decode is COMPILE/RUN-NONDETERMINISTIC on this BH "
+    "setup: the same forward_decode_mla gives PCC ~0.9997 on some kernel compiles and ~0.02 on others "
+    "(observed repeatedly across cache-clears and compute_kernel_config changes). The math and op "
+    "contract are proven reliably (absorption CPU 1.0, op-only fully-populated-cache 0.9999), so this "
+    "is an op-execution reliability issue (suspected uninitialized read in "
+    "paged_flash_multi_latent_attention_decode or its sharded buffers, layout-dependent). Expanded-kv "
+    "decode (0.99971, fully reproducible) is the verified default. See MISTRAL4_DESIGN.md (A6).",
     strict=False,
 )
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
