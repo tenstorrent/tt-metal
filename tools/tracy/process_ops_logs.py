@@ -37,6 +37,7 @@ from tracy.common import (
     generate_reports_folder,
 )
 from tracy import device_post_proc_config
+from tracy.perf_counter_scope import sample_cores_per_op
 from tracy.perf_counter_analysis import (
     PERF_COUNTER_CSV_HEADERS,
     compute_device_only_metrics,
@@ -791,6 +792,14 @@ def _enrich_ops_from_device_logs(
         perf_counter_df = None
         if "events" in risc_data and "perf_counter_data" in risc_data["events"]:
             perf_counter_df = extract_perf_counters(risc_data["events"]["perf_counter_data"])
+
+            # Opt-in compute-core sampling: shrink the per-core row count by
+            # keeping a few cores per op-grid before aggregation. SPMD compute
+            # is uniform across cores, so the util numbers survive; NoC counters
+            # are aggregated separately and never sampled.
+            compute_core_sample = os.environ.get("TT_METAL_PROFILER_COMPUTE_CORE_SAMPLE")
+            if perf_counter_df is not None and not perf_counter_df.empty and compute_core_sample:
+                perf_counter_df = sample_cores_per_op(perf_counter_df, int(compute_core_sample))
 
             # Print statistics for captured counter data
             if perf_counter_df is not None and not perf_counter_df.empty:
