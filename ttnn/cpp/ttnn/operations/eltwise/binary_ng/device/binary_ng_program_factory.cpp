@@ -1442,12 +1442,14 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> BinaryNgDeviceOperation::get_dynami
                per_core.writer_addr_indices.end();
     };
 
-    // The set of WORK cores changes with shape (the work-split splits c's tiles over cores). On a cache hit
-    // a core that was a noop at build time can become a work core: its address slots were baked as plain 0
-    // (only build-time work cores got patchable Buffer* bindings), so the framework's binding patch leaves
-    // them at 0 and the kernel reads from a null address. We therefore re-apply the buffer ADDRESSES too
-    // (not just the shape-derived args) for every current work core, writing the live address — a superset
-    // of the Buffer* binding that is correct whether or not the core had a binding at build time.
+    // The set of WORK cores changes with shape (the work-split splits c's tiles over cores), so we re-apply
+    // EVERY core's args (not just current work cores) to fully overwrite the cached program's per-core state:
+    //   - a build-time noop core that is now a work core needs its real args + live address (its address
+    //     slots were baked as plain 0, since only build-time work cores got patchable Buffer* bindings ->
+    //     the framework's binding patch leaves them null);
+    //   - a build-time work core that is now a noop (cache entry built for a larger shape) needs its all-zero
+    //     noop args re-applied, else it processes stale tiles and corrupts the output.
+    // Writing the live address for every current work core is a superset of the Buffer* binding.
     const auto addr_of = [](tt::tt_metal::Buffer* buf) -> uint32_t {
         return buf != nullptr ? static_cast<uint32_t>(buf->address()) : 0u;
     };
@@ -1455,13 +1457,24 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> BinaryNgDeviceOperation::get_dynami
 
     std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
     for (uint32_t i = 0; i < per_core.cores.size(); ++i) {
-        if (!per_core.is_work_core[i]) {
-            continue;
-        }
         const auto& core = per_core.cores[i];
         const auto& r = per_core.reader_args[i];
         const auto& w = per_core.writer_args[i];
         const auto& cc = per_core.compute_args[i];
+
+        if (!per_core.is_work_core[i]) {
+            // Reset ex-work cores to their all-zero noop args (no address slot to special-case).
+            for (uint32_t ai = 0; ai < r.size(); ++ai) {
+                dynamic_args.push_back({kReaderKernelIdx, core, ai, r[ai]});
+            }
+            for (uint32_t ai = 0; ai < w.size(); ++ai) {
+                dynamic_args.push_back({kWriterKernelIdx, core, ai, w[ai]});
+            }
+            for (uint32_t ai = 0; ai < cc.size(); ++ai) {
+                dynamic_args.push_back({kComputeKernelIdx, core, ai, cc[ai]});
+            }
+            continue;
+        }
 
         // reader: re-apply every slot; address slots (in order: a, then b) get the live buffer address.
         uint32_t reader_addr_slot = 0;

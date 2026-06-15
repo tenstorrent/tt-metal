@@ -592,13 +592,14 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> UnaryDeviceOperation::get_dynamic_r
     // shape's values and corrupt the result. Re-derive them here from the SAME helper create_descriptor()
     // uses (single source of truth) and re-apply on every dispatch.
     //
-    // Kernel order matches create_descriptor(): reader(0), writer(1), compute(2). arg0 of reader/writer is
-    // the tensor address; we re-apply it here too (not just the shape-derived args). The work-split splits
-    // tiles over cores, so the set of work cores changes with shape: a core that was a noop at build time
-    // can become a work core whose arg0 was baked as plain 0 (only build-time work cores got Buffer*
-    // bindings), leaving it reading a null address. Writing the live address for every current work core is
-    // a superset of the Buffer* binding and is correct regardless of build-time binding state. Noop cores
-    // keep their all-zero args (they do no work) and are left untouched.
+    // Kernel order matches create_descriptor(): reader(0), writer(1), compute(2). The work-split splits
+    // tiles over cores, so the set of work cores changes with shape and we must re-apply EVERY core's args
+    // (not just the current work cores) to fully overwrite the cached program's per-core state:
+    //   - a build-time noop core that is now a work core needs its real args + live address (arg0 was baked
+    //     as plain 0, since only build-time work cores got Buffer* bindings -> would read a null address);
+    //   - a build-time work core that is now a noop (cache entry built for a larger shape) needs its
+    //     all-zero noop args re-applied, else it processes stale tiles and corrupts the output.
+    // Writing the live address for every current work core is a superset of the Buffer* binding.
     constexpr uint32_t kReaderKernelIdx = 0;
     constexpr uint32_t kWriterKernelIdx = 1;
     constexpr uint32_t kComputeKernelIdx = 2;
@@ -612,13 +613,27 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> UnaryDeviceOperation::get_dynamic_r
 
     std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
     for (uint32_t i = 0; i < per_core.cores.size(); ++i) {
-        if (!per_core.is_work_core[i]) {
-            continue;
-        }
         const auto& core = per_core.cores[i];
         const auto& r = per_core.reader_args[i];
         const auto& w = per_core.writer_args[i];
         const auto& c = per_core.compute_args[i];
+
+        if (!per_core.is_work_core[i]) {
+            // Reset ex-work cores to their all-zero noop args. If the cached program was built for a
+            // larger shape, these cores held real work args; without re-applying the zeros here they
+            // would process stale tiles and corrupt the output. No address slot to special-case (the
+            // noop args are all-zero), so emit every slot verbatim.
+            for (uint32_t a = 0; a < r.size(); ++a) {
+                dynamic_args.push_back({kReaderKernelIdx, core, a, r[a]});
+            }
+            for (uint32_t a = 0; a < w.size(); ++a) {
+                dynamic_args.push_back({kWriterKernelIdx, core, a, w[a]});
+            }
+            for (uint32_t a = 0; a < c.size(); ++a) {
+                dynamic_args.push_back({kComputeKernelIdx, core, a, c[a]});
+            }
+            continue;
+        }
 
         // reader / writer: arg0 is the tensor address (input / output); re-apply it plus all other slots.
         if (!r.empty()) {
