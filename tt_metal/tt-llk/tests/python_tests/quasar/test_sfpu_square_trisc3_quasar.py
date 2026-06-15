@@ -55,6 +55,8 @@ def generate_sfpu_square_combinations(formats_list):
     """
     combinations = []
     dest_sync_modes = (DestSync.Half, DestSync.Full)
+    implied_math_modes = (ImpliedMathFormat.No, ImpliedMathFormat.Yes)
+    input_dimension_options = ([32, 32], [64, 64], [32, 64])
     for fmt in formats_list:
         in_fmt = fmt.input_format
         dest_acc_modes = (
@@ -66,11 +68,8 @@ def generate_sfpu_square_combinations(formats_list):
             if is_invalid_quasar_sfpu_format_combination(fmt, dest_acc):
                 continue
             for dest_sync in dest_sync_modes:
-                for implied_math_format in [
-                    ImpliedMathFormat.No,
-                    ImpliedMathFormat.Yes,
-                ]:
-                    for input_dimensions in [[32, 32], [64, 64], [32, 64]]:
+                for implied_math_format in implied_math_modes:
+                    for input_dimensions in input_dimension_options:
                         combinations.append(
                             (
                                 fmt,

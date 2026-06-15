@@ -53,34 +53,22 @@ SFPU_UNARY_FORMATS = input_output_formats(
 # ---------------------------------------------------------------------------
 # Per-operation input preparation (folded verbatim from the standalone files)
 # ---------------------------------------------------------------------------
-def prepare_abs_inputs(
+def _log_uniform_signed_inputs(
     src_A: torch.Tensor,
     src_B: torch.Tensor,
     input_format: DataFormat,
-    output_format: DataFormat,
+    max_safe_value: float,
 ) -> torch.Tensor:
     """
-    Prepare input tensor for absolute value operation with safe value ranges.
+    Shared input builder for abs/square.
 
-    Generates a mix of positive and negative values across the representable
-    range. Abs does not change magnitude, so the only constraint is that values
-    fit in the input/output format.
+    Produces a log-uniform magnitude distribution across orders of magnitude
+    with random signs, clamped to ``max_safe_value`` and converted to
+    ``input_format``. ``src_A`` seeds the magnitudes and ``src_B`` the signs;
+    callers supply the op-specific ``max_safe_value`` ceiling.
     """
     input_torch_format = format_dict[input_format]
-    output_torch_format = format_dict[output_format]
     input_finfo = torch.finfo(input_torch_format)
-    output_finfo = torch.finfo(output_torch_format)
-
-    # For abs, output magnitude equals input magnitude, so we need values that
-    # fit in BOTH input and output formats
-    max_safe_value = min(input_finfo.max, output_finfo.max) * 0.9
-
-    # Special handling for bfloat16: limit to reasonable bounds to avoid
-    # precision issues at extreme values
-    if input_torch_format == torch.bfloat16:
-        max_safe_value = min(max_safe_value, 1e4)
-    else:
-        max_safe_value = min(max_safe_value, input_finfo.max * 0.9)
 
     min_magnitude = max(1e-6, input_finfo.tiny * 100)  # Avoid denormals
 
@@ -116,6 +104,35 @@ def prepare_abs_inputs(
     src_A_values = signs * magnitudes
     src_A_values = torch.clamp(src_A_values, -max_safe_value, max_safe_value)
     return src_A_values.to(input_torch_format)
+
+
+def prepare_abs_inputs(
+    src_A: torch.Tensor,
+    src_B: torch.Tensor,
+    input_format: DataFormat,
+    output_format: DataFormat,
+) -> torch.Tensor:
+    """
+    Prepare input tensor for absolute value operation with safe value ranges.
+
+    Abs preserves magnitude, so values only need to fit in BOTH the input and
+    output formats; the shared log-uniform builder handles the distribution.
+    """
+    input_torch_format = format_dict[input_format]
+    input_finfo = torch.finfo(input_torch_format)
+    output_finfo = torch.finfo(format_dict[output_format])
+
+    # For abs, output magnitude equals input magnitude, so values must fit in
+    # BOTH input and output formats.
+    max_safe_value = min(input_finfo.max, output_finfo.max) * 0.9
+    # Special handling for bfloat16: limit to reasonable bounds to avoid
+    # precision issues at extreme values.
+    if input_torch_format == torch.bfloat16:
+        max_safe_value = min(max_safe_value, 1e4)
+    else:
+        max_safe_value = min(max_safe_value, input_finfo.max * 0.9)
+
+    return _log_uniform_signed_inputs(src_A, src_B, input_format, max_safe_value)
 
 
 def prepare_square_inputs(
@@ -127,58 +144,24 @@ def prepare_square_inputs(
     """
     Prepare input tensor for square operation with safe value ranges.
 
-    Applies a log-uniform distribution and clamps values so that the input fits
-    the input format and x² fits the output format, across orders of magnitude.
+    For squaring, x² must fit in the OUTPUT format, so the magnitude ceiling is
+    derived from sqrt(output_max); the shared log-uniform builder handles the
+    distribution.
     """
     input_torch_format = format_dict[input_format]
-    output_torch_format = format_dict[output_format]
     input_finfo = torch.finfo(input_torch_format)
-    output_finfo = torch.finfo(output_torch_format)
+    output_finfo = torch.finfo(format_dict[output_format])
 
-    # For squaring, x² must fit in the OUTPUT format
+    # For squaring, x² must fit in the OUTPUT format.
     max_safe_value = math.sqrt(output_finfo.max) * 0.9
-
-    # Special handling for bfloat16: wide range but limited precision
+    # Special handling for bfloat16: wide range but limited precision.
     if input_torch_format == torch.bfloat16:
         max_safe_value = min(max_safe_value, 1e4)  # 10000² = 1e8 fits comfortably
     else:
-        # For Float16, ensure input itself fits in input format
+        # For Float16, ensure the input itself fits in the input format.
         max_safe_value = min(max_safe_value, math.sqrt(input_finfo.max) * 0.9)
 
-    min_magnitude = max(1e-6, input_finfo.tiny * 100)  # Avoid denormals
-
-    # Ensure src_A and src_B don't contain inf/nan before normalization
-    src_A_float = src_A.to(torch.float32)
-    src_B_float = src_B.to(torch.float32)
-
-    # Normalize src_A to [0, 1] range for log-uniform distribution
-    src_A_min = src_A_float.min()
-    src_A_max = src_A_float.max()
-    src_A_normalized = (
-        (src_A_float - src_A_min) / (src_A_max - src_A_min)
-        if src_A_max > src_A_min
-        else torch.zeros_like(src_A_float)
-    )
-
-    # Use log-uniform distribution for magnitudes to test across orders of magnitude
-    log_min = torch.log(torch.tensor(min_magnitude, dtype=torch.float32))
-    log_max = torch.log(torch.tensor(max_safe_value, dtype=torch.float32))
-    magnitudes = torch.exp(log_min + src_A_normalized * (log_max - log_min))
-
-    # Randomly assign signs to get both positive and negative values
-    src_B_min = src_B_float.min()
-    src_B_max = src_B_float.max()
-    src_B_normalized = (
-        (src_B_float - src_B_min) / (src_B_max - src_B_min)
-        if src_B_max > src_B_min
-        else torch.zeros_like(src_B_float)
-    )
-    signs = torch.where(src_B_normalized < 0.5, -1.0, 1.0)
-
-    # Apply signs and clamp to safe range BEFORE converting to input format
-    src_A_values = signs * magnitudes
-    src_A_values = torch.clamp(src_A_values, -max_safe_value, max_safe_value)
-    return src_A_values.to(input_torch_format)
+    return _log_uniform_signed_inputs(src_A, src_B, input_format, max_safe_value)
 
 
 def prepare_inputs_for_operation(
@@ -334,7 +317,8 @@ def prepare_unary_inputs(
 
 
 # ---------------------------------------------------------------------------
-# Per-operation sweep configuration (preserves the original standalone coverage)
+# Per-operation sweep configuration. Dims/dest-sync are uniform across ops
+# (rationalized during consolidation); per-op stimuli seeding/spec is preserved.
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class OpConfig:
@@ -370,8 +354,10 @@ OP_CONFIG_BY_MATHOP = {cfg.mathop: cfg for cfg in OP_CONFIGS}
 
 def generate_sfpu_unary_combinations(formats_list: List[FormatConfig]):
     """
-    Build the full unary-SFPU sweep across all ops, preserving each op's exact
-    original coverage.
+    Build the full unary-SFPU sweep across all ops: a uniform
+    formats × dest_acc × {Half, Full} dest-sync × {No, Yes} implied-math ×
+    {[32, 32], [64, 64]} matrix per op. (Consolidation dropped the redundant
+    [32, 64] dim and the per-op dest-sync quirks of the standalone tests.)
 
     Returns: list of (mathop, fmt, dest_acc, dest_sync, implied_math_format,
     input_dimensions) tuples.
@@ -396,13 +382,6 @@ def generate_sfpu_unary_combinations(formats_list: List[FormatConfig]):
                         ImpliedMathFormat.No,
                         ImpliedMathFormat.Yes,
                     ]:
-                        # MX formats require implied_math_format=Yes
-                        if (
-                            in_fmt.is_mx_format()
-                            and implied_math_format == ImpliedMathFormat.No
-                        ):
-                            continue
-
                         for input_dimensions in cfg.input_dims:
                             combinations.append(
                                 (
