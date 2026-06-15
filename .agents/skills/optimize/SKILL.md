@@ -165,7 +165,7 @@ Sometimes you will encounter a ttnn limitation or a bug. If, for example, you tr
 
 ## Performance Accounting
 
-Every optimized decode result must reconcile three numbers from the same run:
+Every optimized non-vLLM decode result must reconcile three numbers from the same run:
 
 1. Theoretical roofline: the bytes the measured path must move per token (weights at their stored dtypes plus KV-cache reads) divided by the aggregate DRAM bandwidth of the chips used.
 2. Device-time decode: per-token device time from your own signposted `tt-perf-report` window.
@@ -175,7 +175,7 @@ Report all three and use the gaps to drive implementation work: end-to-end = dev
 
 The roofline fraction achieved varies legitimately by architecture - modules built from many small ops sit lower - so the explanation, not a fixed percentage, is the requirement. Name the limitations precisely; they feed the ttnn improvement backlog.
 
-When optimizing a complete model or serving path, also write `doc/<stage>/perf_summary.json` with this shape:
+When optimizing a complete model or serving path, also write `doc/<stage>/perf_summary.json` with this shape. For vLLM serving stages, set device-time fields to `null` and name the reason, for example `vllm_serving_profiler_disabled_to_protect_hardware`.
 
 ```json
 {
@@ -202,7 +202,7 @@ If the layer-stack estimate is already slower than the target, return to decoder
 
 For models with an LM head and token sampling, treat the terminal path as part of optimized decode. A fast decoder layer stack is not enough if final norm, LM head, logits movement, sampling, or token feedback add avoidable per-token work.
 
-Before accepting full-model or serving decode performance:
+Before accepting full-model token-out decode performance:
 
 - Profile a reduced full-model token-out trace that includes final norm, LM head, logits movement, sampling, and token feedback. Measure these terms separately from the decoder-layer stack.
 - Treat the LM head as a real decode matmul, not as small postprocessing. It is a hidden-size by vocab-size projection and is usually DRAM-bound.
@@ -221,6 +221,8 @@ Before accepting full-model or serving decode performance:
 - The split-sampling greedy benchmark must be semantically greedy. Do not use a generic sampled `top_k=32` or top-p-capable path as the only comparison against force-argmax. If `top_k=1` or equivalent greedy split sampling fails because of sampler shape, layout, or tiling requirements, fix that contract or keep a minimal repro and leave the stage incomplete.
 - If `ArgMaxDeviceOperation`, full-vocab all-gather, generic `TopKDeviceOperation`, or sampling trace replay dominates token-out decode, fix the LM-head/sampling contract before retuning decoder dtypes or CCLs. Do not mark the optimization complete with this bottleneck still in the measured path.
 - Make vLLM reuse the same optimized terminal path. Do not add adapter-side host argmax, full-logits readback, or a separate fallback sampler for serving.
+
+For vLLM serving performance, do not profile the live server or serving adapter to split these terminal costs. Reuse the full-model or reduced non-serving terminal evidence above, then prove the serving adapter uses that path with same-harness benchmark JSON and contract checks.
 
 The same measured path must be used for before/after comparisons. A teacher-forcing or device-logit replay number is useful, but it does not prove a token-out generator or vLLM path is fast unless it includes the same sampling and token-feedback work. Record both when they differ.
 
