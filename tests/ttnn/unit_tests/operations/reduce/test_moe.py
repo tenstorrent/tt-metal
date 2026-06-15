@@ -64,7 +64,10 @@ def run_moe_test(N, C, H, W, k, E, e, dtype, device):
 )
 @pytest.mark.parametrize(
     "N, C, H, W, k, E, e",
-    ((1, 1, 32, 64, 32, 8, 2),),  # Mixtral8x7B
+    [
+        (1, 1, 32, 64, 32, 8, 2),  # Mixtral8x7B decode shape (Wt=2)
+        (1, 1, 32, 256, 32, 8, 2),  # wider expert dim (Wt=8) — exercises the upfront expert-mask load for Wt>4
+    ],
 )
 def test_moe(N, C, H, W, k, E, e, dtype, device):
     run_moe_test(N, C, H, W, k, E, e, dtype, device)
