@@ -64,6 +64,38 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     CoreCoord core_grid_offset,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config);
 
+// ProgramDescriptor variant of build_line_reduce_scatter_minimal_async_program_artifacts.
+// Pushes circular buffers, kernels, and semaphores onto `desc` rather than creating them on a
+// Program directly. Buffer-carrying runtime args are bound via KernelDescriptor::emplace_runtime_args
+// so the framework's fast cache-hit path patches buffer addresses without rebuilding the program.
+// The returned ReduceScatterProgramArtifacts' reader_kernel_id / writer_kernel_id are the descriptor
+// indices of the reader and writer kernels (cast to KernelHandle); callers that still rely on
+// override_runtime_arguments should use the legacy Program& variant. The legacy builder is
+// preserved unchanged.
+ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_artifacts_descriptor(
+    tt::tt_metal::ProgramDescriptor& desc,
+    const Tensor& input_tensor,
+    const Tensor& intermediate_tensor,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
+    Tensor& output_tensor,
+    uint32_t dim,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
+    ttnn::ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<ttnn::experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_direction_opt,
+    std::optional<uint32_t> num_buffers_per_channel,
+    CoreCoord core_grid_offset,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config);
+
 // Override runtime arguments helper for line topology
 void line_reduce_scatter_minimal_async_helper_override_runtime_arguments(
     tt::tt_metal::Program& program,

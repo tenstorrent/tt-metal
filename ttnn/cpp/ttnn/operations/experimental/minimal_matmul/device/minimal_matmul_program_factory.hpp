@@ -7,6 +7,7 @@
 #include "minimal_matmul_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::experimental::prim {
 
@@ -53,6 +54,43 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
 // a vector of output tensors.
 MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_common(
     tt::tt_metal::Program& program,
+    const Tensor& input_tensor,
+    const Tensor& weight_tensor,
+    const std::optional<const Tensor>& bias_tensor,
+    const std::optional<operations::unary::UnaryWithParam>& fused_activation,
+    const std::optional<const MinimalMatmulConfig>& config,
+    const std::vector<Tensor>& output_tensors,
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler>& fused_op_signaler,
+    uint32_t N_chunks,
+    std::optional<float> fused_ternary_scalar = std::nullopt,
+    const std::optional<const Tensor>& fused_ternary_input_a = std::nullopt,
+    const std::optional<const Tensor>& fused_ternary_input_b = std::nullopt,
+    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler> srs_fused_op_signaler = std::nullopt);
+
+// ProgramDescriptor variant of minimal_matmul_factory_helper_common.
+//
+// Emits all kernels / CBs / semaphores via
+// desc.{kernels,cbs,semaphores}.push_back instead of CreateKernel /
+// CreateCircularBuffer / CreateSemaphore.  Tensor base addresses are bound
+// through KernelDescriptor::emplace_runtime_args(Buffer*) so the framework
+// patches them every dispatch -- no override_runtime_arguments hook is needed
+// for tensor addrs.  GlobalSemaphore addresses (when present in the
+// StridedReduceScatterFusedOpSignaler) are encoded as plain uint32_t; a
+// different GlobalSemaphore triggers a recompile.
+//
+// Same feature set as the legacy helper: matmul fused-op signalers
+// (MinimalMatmulFusedOpSignaler for AG->MM and StridedReduceScatterFusedOpSignaler
+// for MM->RS), bias, fused unary activation, fused ternary (addcmul) inputs,
+// and N_chunks splitting.  Wire layout / kernel ABI is identical so worker
+// kernels are unchanged.
+//
+// Returns the shared_variables_t describing the kernel handles (indices into
+// desc.kernels) and per-core grid info; consumers (e.g. the descriptor variant
+// of minimal_matmul_strided_reduce_scatter_async) use these to wire up the
+// signalers and to reproduce override-style patching when needed.
+MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_common_descriptor(
+    tt::tt_metal::ProgramDescriptor& desc,
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
     const std::optional<const Tensor>& bias_tensor,

@@ -13,6 +13,9 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "tt-metalium/buffer_types.hpp"
+// NOTE: tt_metal/impl/buffers/semaphore.hpp is private to tt_metal and not reachable from ttnn.
+// We duplicate the Tensix per-core semaphore-register count locally below as kNumSemaphoresPerCore.
+#include <bitset>
 
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
@@ -33,6 +36,48 @@ using tt::tt_metal::ProgramDescriptor;
 namespace ttnn::prim {
 
 namespace reuse_mcast_optimized_helpers {
+
+// Tensix per-core semaphore-register count; mirrors the private NUM_SEMAPHORES constant in
+// tt_metal/impl/buffers/semaphore.hpp (that header isn't part of the public include surface
+// reachable from ttnn).
+constexpr uint32_t kNumSemaphoresPerCore = 16;
+
+// Allocate `count` contiguous free semaphore ids on the given CoreRangeSet against an
+// existing ProgramDescriptor.  Picks the first free id whose slot is unused on every
+// requested core, in a block so callers can reserve a stable [base, base+count) range
+// to hand to the matmul helper below.
+static uint32_t allocate_free_semaphore_id_block(
+    const tt::tt_metal::ProgramDescriptor& desc,
+    const tt::tt_metal::CoreRangeSet& cores,
+    uint32_t count,
+    tt::CoreType core_type = tt::CoreType::WORKER) {
+    std::bitset<kNumSemaphoresPerCore> used;
+    for (const auto& sem : desc.semaphores) {
+        if (sem.core_type != core_type) {
+            continue;
+        }
+        if (sem.core_ranges.intersects(cores)) {
+            used.set(sem.id);
+        }
+    }
+    for (uint32_t base = 0; base + count <= kNumSemaphoresPerCore; ++base) {
+        bool block_free = true;
+        for (uint32_t i = 0; i < count; ++i) {
+            if (used.test(base + i)) {
+                block_free = false;
+                break;
+            }
+        }
+        if (block_free) {
+            return base;
+        }
+    }
+    TT_THROW(
+        "No contiguous block of {} free semaphore ids available on the requested core range set "
+        "(NUM_SEMAPHORES={}).",
+        count,
+        kNumSemaphoresPerCore);
+}
 
 static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     tt::tt_metal::IDevice* device,
@@ -76,7 +121,8 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     bool row_broadcast_bias = true,
-    CoreCoord sub_device_start_core = {0, 0}) {
+    CoreCoord sub_device_start_core = {0, 0},
+    uint32_t base_semaphore_id = 0) {
     using namespace tt;
     using tt::tt_metal::TensorMemoryLayout;
 
@@ -320,11 +366,14 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
              (std::size_t)start_core_y + num_cores_with_work_r - 1}};
     }
 
-    // Mcast args — semaphore IDs assigned sequentially (0, 1, 2, 3)
-    uint32_t in0_mcast_sender_semaphore_id = 0;
-    uint32_t in0_mcast_receiver_semaphore_id = 1;
-    uint32_t in1_mcast_sender_semaphore_id = 2;
-    uint32_t in1_mcast_receiver_semaphore_id = 3;
+    // Mcast args — semaphore IDs are caller-allocated so this helper can be appended onto a
+    // fused-op ProgramDescriptor that already has semaphores on the same cores.  Standalone
+    // callers pass base_semaphore_id=0 (default), which preserves the legacy sequential
+    // 0/1/2/3 assignment.
+    uint32_t in0_mcast_sender_semaphore_id = base_semaphore_id;
+    uint32_t in0_mcast_receiver_semaphore_id = base_semaphore_id + 1;
+    uint32_t in1_mcast_sender_semaphore_id = base_semaphore_id + 2;
+    uint32_t in1_mcast_receiver_semaphore_id = base_semaphore_id + 3;
 
     bool in1_is_dram = in1_tensor.mesh_buffer().device_local_config().buffer_type == tt_metal::BufferType::DRAM;
 
@@ -3480,6 +3529,158 @@ matmul_multi_core_reuse_mcast_2d_optimized_helper(
     auto output_tensors = std::vector<ttnn::Tensor>{output_tensor};
     return matmul_multi_core_reuse_mcast_2d_optimized_(
         program, attributes, ttnn::prim::MatmulInputs{{a, b}, {bias}, {}}, output_tensors, fused_op_signaler);
+}
+
+void matmul_multi_core_reuse_mcast_2d_optimized_helper_descriptor(
+    tt::tt_metal::ProgramDescriptor& desc,
+    const Tensor& a,
+    const Tensor& b,
+    const std::optional<const Tensor>& bias,
+    Tensor& output_tensor,
+    bool broadcast_batch,
+    DeviceComputeKernelConfig compute_kernel_config,
+    const operations::matmul::MatmulProgramConfig& program_config,
+    bool untilize_out,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
+    using namespace tt;
+    using namespace operations::matmul::utilities;
+
+    // Resolve program config (auto-populate allowed_worker_cores from compute grid size if missing,
+    // matching the warning path used by the legacy helper and create_descriptor).
+    auto pc = std::get<operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>(program_config);
+    if (!pc.allowed_worker_cores.has_value()) {
+        log_warning(
+            tt::LogOp,
+            "matmul_multi_core_reuse_mcast_2d_optimized_helper_descriptor: program_config.allowed_worker_cores not "
+            "populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() "
+            "(e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program "
+            "config first. This will become a hard error in a future release.");
+        pc.allowed_worker_cores = CoreRangeSet(CoreRange(
+            CoreCoord(0, 0),
+            CoreCoord(pc.compute_with_storage_grid_size.x - 1, pc.compute_with_storage_grid_size.y - 1)));
+    }
+
+    bool transpose_a = false;
+    bool transpose_b = false;
+
+    const auto& a_shape_padded = get_matmul_tensor_padded_shape(a, transpose_a);
+    const auto& b_shape_padded = get_matmul_tensor_padded_shape(b, transpose_b);
+    const auto in0_tile = get_matmul_tile(a, transpose_a);
+    const auto in1_tile = get_matmul_tile(b, transpose_b);
+
+    // cannot use the output tensor tile directly as that might be changed by user override
+    const auto output_tile = tt::tt_metal::Tile({in0_tile.get_height(), in1_tile.get_width()});
+
+    // CB dataformats
+    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());
+    tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
+
+    const auto& a_shape_logical = get_matmul_tensor_logical_shape(a, transpose_a);
+    // When transpose_a is true, the K dimension maps to the row dimension of the raw tile,
+    // which is already zero-padded during tile layout conversion. pad_last_ktile operates on
+    // columns, so applying it would incorrectly zero valid data that becomes output rows
+    // after the compute kernel transposes the tile.
+    const auto in0_last_ktile_w = transpose_a ? 0 : a_shape_logical[-1] % in0_tile.get_width();
+    const auto in0_last_ktile_h = transpose_a ? a_shape_logical[-1] % in0_tile.get_width() : 0;
+    TT_FATAL(
+        in0_last_ktile_w == 0 || in0_last_ktile_h == 0,
+        "At most one of in0_last_ktile_w ({}) and in0_last_ktile_h ({}) can be non-zero",
+        in0_last_ktile_w,
+        in0_last_ktile_h);
+
+    tt::DataFormat bias_data_format = tt::DataFormat::Bfp8_b;  // bias; doesn't matter if bias=nullptr
+    ttsl::optional_reference<const tt::tt_metal::MeshTensor> bias_mesh_tensor;
+    if (bias.has_value()) {
+        const auto& c = bias.value();
+        bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
+        bias_mesh_tensor = c.mesh_tensor();
+    }
+
+    tt_metal::IDevice* device = a.device();
+
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+
+    auto fuse_batch = pc.fuse_batch;
+    const auto B = fuse_batch ? 1 : get_batch_size(a_shape_padded);
+    const auto Mt = get_M_dim(a_shape_padded, in0_tile, fuse_batch);
+    const auto Mt_per_batch = get_M_dim(a_shape_padded, in0_tile, false);
+    const auto Kt = get_K_dim(a_shape_padded, in0_tile);
+    const auto Nt = get_N_dim(b_shape_padded, in1_tile);
+
+    tt_metal::Buffer* out_buffer = output_tensor.buffer();
+    TT_FATAL(out_buffer != nullptr, "Output buffer should be allocated on device!");
+
+    // The 2d helper doesn't take a sub_device_id parameter through this entry point (matching the
+    // legacy helper's contract). Anchor at (0, 0); CCL fused ops can extend this signature later if
+    // sub-device anchoring becomes a requirement.
+    CoreCoord sub_device_start_core = {0, 0};
+
+    // Reserve a free 4-id block on the allowed worker cores so that the in0/in1 sender/receiver
+    // semaphores allocated inside the helper don't alias semaphores the caller may have placed on
+    // these same cores (e.g. CCL semaphores in a fused-op descriptor).
+    uint32_t mcast_2d_base_sem_id =
+        reuse_mcast_optimized_helpers::allocate_free_semaphore_id_block(desc, pc.allowed_worker_cores.value(), 4);
+
+    ProgramDescriptor produced = reuse_mcast_optimized_helpers::create_program_mcast_in0_in1_descriptor(
+        device,
+        math_fidelity,
+        fp32_dest_acc_en,
+        math_approx_mode,
+        packer_l1_acc,
+        dst_full_sync_en,
+        B,
+        Mt,
+        Mt_per_batch,
+        Nt,
+        Kt,
+        broadcast_batch,
+        transpose_a,
+        transpose_b,
+        ttnn::get_throttle_level(compute_kernel_config),
+        pc.in0_block_w,
+        in0_last_ktile_w,
+        in0_last_ktile_h,
+        pc.out_subblock_h,
+        pc.out_subblock_w,
+        pc.out_block_h,
+        pc.out_block_w,
+        pc.per_core_M,
+        pc.per_core_N,
+        pc.transpose_mcast,
+        pc.fused_activation,
+        a.mesh_tensor(),
+        b.mesh_tensor(),
+        bias_mesh_tensor,
+        output_tensor.mesh_tensor(),
+        in0_tile,
+        in1_tile,
+        bias.has_value() ? bias->tensor_spec().tile() : output_tile,
+        output_tile,
+        in0_data_format,
+        in1_data_format,
+        bias_data_format,
+        output_data_format,
+        untilize_out,
+        fused_op_signaler,
+        fused_matmul_bias_row_broadcastable(bias),
+        sub_device_start_core,
+        mcast_2d_base_sem_id);
+
+    // Append produced kernels / CBs / semaphores onto the caller's descriptor without going through
+    // merge_program_descriptors() — that helper TT_FATALs on overlapping kernel core ranges, but
+    // CCL+matmul fused ops legitimately share cores between the matmul kernels and the CCL kernels
+    // appended by the caller.
+    for (auto& cb : produced.cbs) {
+        desc.cbs.push_back(std::move(cb));
+    }
+    for (auto& sem : produced.semaphores) {
+        desc.semaphores.push_back(std::move(sem));
+    }
+    for (auto& kernel : produced.kernels) {
+        desc.kernels.push_back(std::move(kernel));
+    }
 }
 
 }  // namespace ttnn::prim

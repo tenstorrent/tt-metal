@@ -6,6 +6,7 @@
 
 #include "all_gather_async_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::experimental::prim {
 
@@ -53,6 +54,46 @@ using AllGatherProgramArtifacts = experimental::prim::AllGatherProgramArtifacts;
 // Builder function that creates kernels and returns artifacts
 AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifacts(
     tt::tt_metal::Program& program,
+    const Tensor& input_tensor,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
+    Tensor& output_tensor,
+    int32_t dim,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
+    ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_direction_opt,
+    std::optional<uint32_t> num_buffers_per_channel,
+    CoreCoord core_grid_offset,
+    bool reverse_order,
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
+
+// ProgramDescriptor variant of build_all_gather_async_minimal_default_program_artifacts.
+//
+// Appends KernelDescriptors / CBDescriptors / SemaphoreDescriptors to `desc`
+// instead of creating them directly on a Program.  Runtime args are emplaced
+// via KernelDescriptor::emplace_runtime_args with Buffer* entries for the
+// input/output tensors, so the framework's fast cache-hit path patches their
+// base addresses automatically.
+//
+// The fused-op signaler and fabric-mux helpers used here all have
+// ProgramDescriptor overloads (init_all_gather, fabric_mux_connection_rt_args,
+// get_fabric_mux_run_time_args templated on ProgramOrDescriptor,
+// append_fabric_connection_rt_args templated on ProgramOrDescriptor).
+//
+// The returned AllGatherProgramArtifacts uses descriptor-kernel-indices as
+// KernelHandle values (the index into desc.kernels at which each kernel was
+// appended).
+AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifacts_descriptor(
+    tt::tt_metal::ProgramDescriptor& desc,
     const Tensor& input_tensor,
     const MeshCoordinate& sender_device_coord,
     const std::optional<MeshCoordinate>& forward_coord,
