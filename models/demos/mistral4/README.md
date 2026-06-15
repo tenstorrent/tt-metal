@@ -99,3 +99,23 @@ pytest models/demos/mistral4/tests/test_m4_fp8_dequant.py
 `transformers >= 5.10` supports `mistral4`/`mistral3`/`pixtral` natively and provides the fp8 dequant
 path. The repo currently pins an older transformers — bumping it is a documented merge prerequisite
 (coordinate with sibling model PRs that pin a different major version; they cannot share an env).
+
+## Framework dependency (self-review note)
+All mistral4-specific code lives in `models/demos/mistral4/`. The model reuses generic framework
+additions in `models/tt_transformers/tt/` — `dequantize_fp8_state_dict` (load_checkpoints), the
+`FineGrainedFP8Config(dequantize=True)` path + Mistral3-VLM nesting (model_config), and a
+mistral-common tokenizer shim (common) — which are generic (any fp8 checkpoint / Mistral3 VLM
+benefits) and carry **no mistral4-specific branching** (verified: shared files mention mistral4 only
+in doc comments). These belong to the shared fp8/VLM framework work (the Devstral PR); mistral4
+depends on them and adds none of its own edits to shared infra.
+
+## Status snapshot (self-review vs review-ign-model)
+Done: A1 framework adherence, A2 device-side (no hot-loop host round-trip), A3 decode trace
+(prefill untraced = PARTIAL, acceptable), A5 on-device sampling, A7 sharded LM head, A9 (prefill to
+4K, no L1 clash), B1–B3 full-depth ungated logit PCC, C1 ISL-sweep harness, C-perf measured, D1
+rebased (current), D1a CI registration, D4 pinned deps, E docs.
+Remaining (large, scoped): **A10 MoE sparse dispatch** — the `all_to_all_dispatch`/`combine` path is
+a multi-user *batched* serving feature (it shards the batch across devices); it does not apply to the
+single-user batch=1 latency path measured here, so it is the throughput frontier (batched serving
+rework). **A6 paged compressed-latent KV + chunked prefill** for >4K contexts. A4 2CQ (low value for
+the tiny single-user decode inputs). These are documented, not hidden.
