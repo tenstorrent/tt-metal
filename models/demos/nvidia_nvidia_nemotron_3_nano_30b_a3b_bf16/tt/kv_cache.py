@@ -28,6 +28,7 @@ HEAD_DIM = 128
 NUM_SSM_HEADS = 64
 SSM_HEAD_DIM = 64
 SSM_STATE_SIZE = 128
+CONV_DIM = 6144  # 4096 + 2*8*128 — conv1d input channels
 
 # Layer-type indexing (PATTERN = "MEMEM*EMEMEM*EMEMEM*EMEMEM*EMEMEM*EMEMEMEM*EMEMEMEME")
 _PATTERN = "MEMEM*EMEMEM*EMEMEM*EMEMEM*EMEMEM*EMEMEMEM*EMEMEMEME"
@@ -55,19 +56,24 @@ class DecoderState:
 
     ssm_states: list = field(default_factory=list)
     ssm_state_outs: list = field(default_factory=list)
+    conv_states: list = field(default_factory=list)  # 23 × (h_tm3, h_tm2, h_tm1)
+    conv_state_outs: list = field(default_factory=list)  # 23 × (h_tm2, h_tm1, h_t) outputs
     kv_caches: list = field(default_factory=list)
     page_tables: list = field(default_factory=list)
     current_pos: ttnn.Tensor | None = None
 
     def advance(self):
-        """Copy new SSM states back to inputs for the next decode step.
+        """Copy new SSM and conv states back to inputs for the next decode step.
 
         Call this after every forward (traced or eager) before the next forward.
-        KV caches are already updated in-place during the forward; only SSM
-        states need an explicit copy because they are not updated in-place.
+        KV caches are already updated in-place during the forward; SSM and conv
+        states are not updated in-place and require an explicit copy.
         """
         for state_out, state_in in zip(self.ssm_state_outs, self.ssm_states):
             ttnn.assign(state_out, state_in)
+        for out_tuple, in_tuple in zip(self.conv_state_outs, self.conv_states):
+            for out_t, in_t in zip(out_tuple, in_tuple):
+                ttnn.assign(out_t, in_t)
 
 
 def _zeros_on_device(shape, mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
@@ -106,6 +112,14 @@ def allocate_decoder_state(
         _zeros_on_device([B, NUM_SSM_HEADS, SSM_HEAD_DIM, SSM_STATE_SIZE], mesh_device) for _ in range(N_M_LAYERS)
     ]
 
+    # Conv states: 3 previous hBC values per M-layer, each [B, 1, CONV_DIM]
+    # (h_tm3, h_tm2, h_tm1) — oldest first; zero-initialized.
+    def _zero_conv():
+        return tuple(_zeros_on_device([B, 1, CONV_DIM], mesh_device) for _ in range(3))
+
+    conv_states = [_zero_conv() for _ in range(N_M_LAYERS)]
+    conv_state_outs = [_zero_conv() for _ in range(N_M_LAYERS)]
+
     # Paged KV caches: [num_blocks, n_kv_heads, block_size, head_dim]
     kv_shape = [num_blocks, N_KV_HEADS, block_size, HEAD_DIM]
     kv_caches = [
@@ -141,6 +155,8 @@ def allocate_decoder_state(
     return DecoderState(
         ssm_states=ssm_states,
         ssm_state_outs=ssm_state_outs,
+        conv_states=conv_states,
+        conv_state_outs=conv_state_outs,
         kv_caches=kv_caches,
         page_tables=page_tables,
         current_pos=current_pos,

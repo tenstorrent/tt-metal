@@ -22,10 +22,11 @@ N_ROUTED_EXPERTS = 128
 NUM_EXPERTS_PER_TOK = 6
 ROUTED_SCALING_FACTOR = 2.5
 
-# Bias tensors need reshaping to [1, 1, 1, 128] before upload but the reshaped
-# tensor is a new Python object (new id()) on every call, defeating _upload's
-# cache.  Cache them separately keyed by (id(cpu_bias), id(mesh)).
-_BIAS_DEVICE_CACHE: dict = {}  # (id(cpu_bias), id(mesh)) → device_tensor
+# Cache dicts keyed by (id(cpu_tensor), id(mesh)) for tensors that need reshaping
+# before upload (new Python object on every call defeats _upload's id-based cache).
+_BIAS_DEVICE_CACHE: dict = {}  # bf16 bias [1,1,1,128]
+_GATE_W_F32_CACHE: dict = {}  # float32 gate weight [128,2688]
+_BIAS_F32_CACHE: dict = {}  # float32 bias [1,1,1,128]
 
 
 def _get_bias_tt(bias_cpu: torch.Tensor, mesh_device: MeshDevice) -> ttnn.Tensor:
@@ -35,6 +36,26 @@ def _get_bias_tt(bias_cpu: torch.Tensor, mesh_device: MeshDevice) -> ttnn.Tensor
     bias_4d = bias_cpu.bfloat16().reshape(1, 1, 1, -1).contiguous()
     bias_tt = _upload(bias_4d, mesh_device, shard_dim=None, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
     _BIAS_DEVICE_CACHE[key] = bias_tt
+    return bias_tt
+
+
+def _get_gate_w_f32(weight_cpu: torch.Tensor, mesh_device: MeshDevice) -> ttnn.Tensor:
+    key = (id(weight_cpu), id(mesh_device))
+    if key in _GATE_W_F32_CACHE:
+        return _GATE_W_F32_CACHE[key]
+    w_f32 = weight_cpu.float().contiguous()
+    gate_tt = _upload(w_f32, mesh_device, shard_dim=None, layout=ttnn.TILE_LAYOUT, dtype=ttnn.float32)
+    _GATE_W_F32_CACHE[key] = gate_tt
+    return gate_tt
+
+
+def _get_bias_f32(bias_cpu: torch.Tensor, mesh_device: MeshDevice) -> ttnn.Tensor:
+    key = (id(bias_cpu), id(mesh_device))
+    if key in _BIAS_F32_CACHE:
+        return _BIAS_F32_CACHE[key]
+    bias_4d = bias_cpu.float().reshape(1, 1, 1, -1).contiguous()
+    bias_tt = _upload(bias_4d, mesh_device, shard_dim=None, layout=ttnn.TILE_LAYOUT, dtype=ttnn.float32)
+    _BIAS_F32_CACHE[key] = bias_tt
     return bias_tt
 
 
@@ -106,19 +127,28 @@ def moe_gate_forward(
     """Returns dense routing-weights [1, 1, 1, 128] bfloat16 on device.
 
     Fully on-device, trace-compatible (no D2H or H2D inside the forward).
+    Gate projection runs in float32 to match cpu_gate=True routing accuracy.
     Non-active expert positions are zero; active positions hold the normalised,
     scaled routing weights.  Shape is suitable for sparse_matmul sparsity.
     """
-    # Pass `weight` directly (not weight.bfloat16()) so _upload sees the stable
-    # id(weight) from WeightCache.  _upload converts to bfloat16 internally.
-    w_tt = _upload(weight, mesh_device, shard_dim=None, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    # Gate projection in float32 — upcast BF16 hidden state, use float32 weight.
+    # This reproduces cpu_gate=True's routing accuracy without D2H.
+    # ttnn.topk only supports bfloat16, so cast back after the projection.
+    w_f32_tt = _get_gate_w_f32(weight, mesh_device)
+
+    h_f32 = ttnn.typecast(hidden_states, ttnn.float32)
+    logits_f32 = ttnn.linear(h_f32, w_f32_tt, transpose_b=True)
+    h_f32.deallocate(True)
+
+    # Cast to bfloat16 — topk requires bfloat16; sigmoid is monotonic so ranking
+    # is preserved by the cast as long as logit differences exceed BF16 resolution.
+    logits = ttnn.typecast(logits_f32, ttnn.bfloat16)
+    logits_f32.deallocate(True)
+
     bias_tt = _get_bias_tt(e_score_correction_bias, mesh_device)
 
-    # Gate logits: [tokens, hidden] × [hidden, experts] → [tokens, 128]
-    logits = ttnn.linear(hidden_states, w_tt, transpose_b=True)
-
-    # Work in 4D for topk/scatter op compatibility
-    logits_4d = ttnn.unsqueeze_to_4D(logits)  # [1, 1, tokens, 128]
+    logits_4d = ttnn.unsqueeze_to_4D(logits)  # [1, 1, tokens, 128] bf16
+    logits.deallocate(True)
 
     scores = ttnn.sigmoid(logits_4d)
     logits_4d.deallocate(True)

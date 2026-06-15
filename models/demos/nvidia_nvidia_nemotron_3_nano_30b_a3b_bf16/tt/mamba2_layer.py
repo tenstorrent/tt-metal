@@ -52,11 +52,16 @@ def mamba2_layer_forward(
     out_proj_weight: torch.Tensor,  # [2688, 4096] bf16 CPU
     norm_eps: float = NORM_EPS,
     ssm_state: ttnn.Tensor | None = None,  # [B, H, D, N] bf16 on device, None → zero-init
-) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-    """S=1 decode path. Returns (output [B,1,2688], state_new [B,H,D,N]) bf16 on device.
+    conv_state: tuple | None = None,  # (h_tm3, h_tm2, h_tm1) each [B,1,6144] bf16 on device
+) -> tuple:
+    """S=1 decode path.
+
+    Returns (output [B,1,2688], ssm_state_new [B,H,D,N], conv_state_new) bf16 on device.
+    conv_state_new is (h_tm2, h_tm1, hBC_current) if conv_state provided, else None.
 
     ssm_state=None uses zero initial state (first token / non-stateful mode).
-    Pass a pre-allocated device tensor for persistent multi-step generation.
+    conv_state=None uses zero-padded conv (only current token contributes via w[-1]).
+    For stateful generation pass both from DecoderState.
     """
     residual = hidden_states
     B = hidden_states.shape[0]
@@ -76,14 +81,36 @@ def mamba2_layer_forward(
         projected_tt, [0, 0, INTERMEDIATE_SIZE + CONV_DIM], [B, 1, INTERMEDIATE_SIZE + CONV_DIM + NUM_HEADS]
     )
 
-    # 4. Causal conv1d for S=1 with zero state:
-    #    out[c] = weight[c, 0, -1] * hBC[c] + bias[c]  (elementwise)
-    conv_w_last = conv1d_weight[:, 0, -1].contiguous().bfloat16()  # [6144] CPU
-    conv_w_tt = _rep_keyed(
-        ("conv_w", id(conv1d_weight)), conv_w_last.bfloat16().unsqueeze(0).unsqueeze(0).contiguous(), mesh_device
-    )
+    # 4. Causal conv1d S=1.
+    #    With full history: out[c] = sum_k(weight[c,0,k] * h[t-3+k][c]) + bias[c]
+    #    With zero-padded (conv_state=None): out[c] = weight[c,0,3] * hBC[c] + bias[c]
     conv_b_tt = _rep_keyed(id(conv1d_bias), conv1d_bias.bfloat16().unsqueeze(0).unsqueeze(0).contiguous(), mesh_device)
-    hBC_conv_tt = ttnn.add(ttnn.mul(hBC_tt, conv_w_tt), conv_b_tt)
+    if conv_state is not None:
+        h_tm3, h_tm2, h_tm1 = conv_state
+        conv_w = [
+            _rep_keyed(
+                ("conv_w", id(conv1d_weight), k),
+                conv1d_weight[:, 0, k].bfloat16().unsqueeze(0).unsqueeze(0).contiguous(),
+                mesh_device,
+            )
+            for k in range(4)
+        ]
+        hBC_conv_tt = ttnn.add(
+            ttnn.add(
+                ttnn.add(ttnn.mul(h_tm3, conv_w[0]), ttnn.mul(h_tm2, conv_w[1])),
+                ttnn.add(ttnn.mul(h_tm1, conv_w[2]), ttnn.mul(hBC_tt, conv_w[3])),
+            ),
+            conv_b_tt,
+        )
+        conv_state_new = (h_tm2, h_tm1, hBC_tt)
+    else:
+        conv_w_tt = _rep_keyed(
+            ("conv_w", id(conv1d_weight), 3),
+            conv1d_weight[:, 0, 3].bfloat16().unsqueeze(0).unsqueeze(0).contiguous(),
+            mesh_device,
+        )
+        hBC_conv_tt = ttnn.add(ttnn.mul(hBC_tt, conv_w_tt), conv_b_tt)
+        conv_state_new = None
 
     # 5. Silu activation
     hBC_silu_tt = ttnn.silu(hBC_conv_tt)  # [B, 1, 6144]
@@ -194,4 +221,4 @@ def mamba2_layer_forward(
     out_tt = ttnn.linear(scan_out_tt, op_tt, transpose_b=True)
 
     # 13. Residual
-    return ttnn.add(residual, out_tt), state_new_tt
+    return ttnn.add(residual, out_tt), state_new_tt, conv_state_new

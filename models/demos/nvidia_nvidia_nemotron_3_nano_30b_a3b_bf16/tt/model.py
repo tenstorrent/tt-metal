@@ -188,7 +188,8 @@ def _layer_stack_forward(
 
         if layer_type == "M":
             ssm_state = decoder_state.ssm_states[m_idx] if decoder_state else None
-            hidden_states, state_new = mamba2_layer_forward(
+            conv_state = decoder_state.conv_states[m_idx] if decoder_state else None
+            hidden_states, state_new, conv_state_new = mamba2_layer_forward(
                 mesh_device,
                 hidden_states,
                 norm_weight=wc[f"{p}.norm.weight"],
@@ -201,9 +202,11 @@ def _layer_stack_forward(
                 D=wc[f"{p}.mixer.D"],
                 out_proj_weight=wc[f"{p}.mixer.out_proj.weight"],
                 ssm_state=ssm_state,
+                conv_state=conv_state,
             )
             if decoder_state:
                 decoder_state.ssm_state_outs[m_idx] = state_new
+                decoder_state.conv_state_outs[m_idx] = conv_state_new
             m_idx += 1
         elif layer_type == "E":
             hidden_states = _moe_layer_forward(mesh_device, hidden_states, li, wc, cpu_gate=cpu_gate)
