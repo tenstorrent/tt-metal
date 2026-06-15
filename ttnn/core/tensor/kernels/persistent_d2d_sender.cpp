@@ -112,6 +112,28 @@ FORCE_INLINE void fabric_write_bytes(
     }
 }
 
+// Largest power of 2 <= n (n >= 1). Rounds the read-ring depth down to a power of 2 so
+// the ring slot index is a bitmask rather than a modulo.
+constexpr uint32_t floor_pow2(uint32_t n) {
+    uint32_t p = 1;
+    while ((p << 1) <= n) {
+        p <<= 1;
+    }
+    return p;
+}
+
+// Thin compile-time transaction-id ring. Depth is a power of 2 (asserted), so a page
+// index maps to its ring slot with a bitmask and to its trid with slot + Base. Page p
+// and page p + Depth share a slot/trid — exactly the "ship slot for page p, then
+// prefetch the page Depth ahead into it" reuse the streaming loop relies on.
+template <uint32_t Depth, uint32_t Base>
+struct TridRing {
+    static_assert(Depth > 0 && (Depth & (Depth - 1)) == 0, "TridRing Depth must be a power of 2");
+    static constexpr uint32_t depth = Depth;
+    static constexpr uint32_t slot(uint32_t page) { return page & (Depth - 1); }
+    static constexpr uint32_t trid(uint32_t page) { return Base + (page & (Depth - 1)); }
+};
+
 void kernel_main() {
     size_t rt_args_idx = 0;
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
@@ -157,6 +179,19 @@ void kernel_main() {
     auto output_tensor_accessor = TensorAccessor(input_tensor_accessor_args, receiver_tensor_addr);
     const uint32_t cb_l1_addr = get_write_ptr(scratch_cb_index);
 
+    // Read pipelining: stream pages through a transaction-id (trid) ring over the
+    // scratch CB so DRAM reads overlap the fabric writes (instead of read-all ->
+    // full barrier -> write-all per chunk). Ring depth = scratch capacity
+    // (pages_per_chunk pages), capped at kMaxReadsInFlight and rounded DOWN to a power
+    // of 2 so the slot index is a bitmask (see TridRing). trids used: [kTridBase,
+    // kTridBase + depth). depth <= pages_per_chunk <= total_pages, so priming `depth`
+    // reads never runs past the tensor.
+    constexpr uint32_t kTridBase = 1;
+    constexpr uint32_t kMaxReadsInFlight = 4;
+    constexpr uint32_t total_pages = num_socket_pages * pages_per_chunk;
+    constexpr uint32_t ring_cap = (pages_per_chunk < kMaxReadsInFlight) ? pages_per_chunk : kMaxReadsInFlight;
+    using ReadRing = TridRing<floor_pow2(ring_cap), kTridBase>;
+
     volatile tt_l1_ptr uint32_t* termination_semaphore =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
     volatile tt_l1_ptr uint32_t* data_ready_counter =
@@ -189,6 +224,9 @@ void kernel_main() {
             worker_mcast_noc_y_end,
             consumed_sem_addr);
     }
+
+    // Clear any stale NoC transaction-id barrier state before the streaming loop.
+    reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
 
     uint32_t last_data_ready = 0;
     // Monotonic count of transfers issued. It (and the receiver's bytes_acked) wraps
@@ -248,24 +286,39 @@ void kernel_main() {
             fabric_open = true;
         }
 
-        // 3. Write one full tensor's worth of data DIRECTLY to the receiver's DRAM
-        //    backing tensor (no receiver L1 FIFO copy). Stage each chunk
-        //    DRAM -> scratch CB, then fabric-write each staged page to its DRAM home
-        //    on the receiver (output_tensor_accessor.get_noc_addr(page)).
-        for (uint32_t chunk = 0; chunk < num_socket_pages; ++chunk) {
-            const uint32_t base_page = chunk * pages_per_chunk;
-            uint32_t dst = cb_l1_addr;
-            for (uint32_t i = 0; i < pages_per_chunk; ++i) {
-                noc_async_read(input_tensor_accessor.get_noc_addr(base_page + i), dst, tensor_page_size);
-                dst += tensor_page_size;
-            }
-            noc_async_read_barrier();
+        // 3. Stream one full tensor's worth of data DIRECTLY into the receiver's DRAM
+        //    backing tensor (no receiver L1 FIFO copy), pipelining the DRAM reads with
+        //    the fabric writes via a trid ring over the scratch CB: only the trid we
+        //    are about to ship is barriered, so up to `ring` reads stay in flight
+        //    behind the current write. Each fabric write flushes locally, freeing its
+        //    scratch slot, so we immediately prefetch the page `ring` ahead into it.
+        //    (trid-ring per dram_streaming_matmul.hpp; reads tagged via
+        //    noc_async_read_set_trid + plain noc_async_read, as in padded_slice.)
+        for (uint32_t i = 0; i < ReadRing::depth; ++i) {
+            noc_async_read_set_trid(ReadRing::trid(i));
+            noc_async_read(input_tensor_accessor.get_noc_addr(i), cb_l1_addr + i * tensor_page_size, tensor_page_size);
+        }
+        for (uint32_t p = 0; p < total_pages; ++p) {
+            const uint32_t slot = ReadRing::slot(p);
+            const uint32_t trid = ReadRing::trid(p);
+            const uint32_t src = cb_l1_addr + slot * tensor_page_size;
 
-            uint32_t src = cb_l1_addr;
-            for (uint32_t i = 0; i < pages_per_chunk; ++i) {
-                const uint64_t page_dst = output_tensor_accessor.get_noc_addr(base_page + i);
-                fabric_write_bytes(fabric_connection, page_dst, src, tensor_page_size, data_packet_header_addr);
-                src += tensor_page_size;
+            // Wait only for THIS page's read, then fabric-write it to its DRAM home.
+            noc_async_read_barrier_with_trid(trid);
+            fabric_write_bytes(
+                fabric_connection,
+                output_tensor_accessor.get_noc_addr(p),
+                src,
+                tensor_page_size,
+                data_packet_header_addr);
+
+            // The write flushed locally → the slot is free. Prefetch the page one ring
+            // ahead into it under the same trid to keep the read pipeline full (page
+            // p + depth shares this slot/trid).
+            const uint32_t next = p + ReadRing::depth;
+            if (next < total_pages) {
+                noc_async_read_set_trid(trid);
+                noc_async_read(input_tensor_accessor.get_noc_addr(next), src, tensor_page_size);
             }
         }
 
