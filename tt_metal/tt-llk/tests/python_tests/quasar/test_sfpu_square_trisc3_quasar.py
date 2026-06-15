@@ -50,13 +50,14 @@ from test_eltwise_unary_sfpu_quasar import (
 def generate_sfpu_square_combinations(formats_list):
     """
     Square-only sweep for the TRISC3 variant: (fmt, dest_acc, dest_sync,
-    implied_math_format, input_dimensions) tuples. Mirrors the coverage the
-    standalone square test used (dims [32,32]/[64,64]/[32,64], Half+Full sync).
+    implied_math_format, input_dimensions) tuples. Uniform dims [32,32]/[64,64]
+    x {Half,Full} sync (the redundant [32,64] dim is dropped, matching the
+    consolidated unary test).
     """
     combinations = []
     dest_sync_modes = (DestSync.Half, DestSync.Full)
     implied_math_modes = (ImpliedMathFormat.No, ImpliedMathFormat.Yes)
-    input_dimension_options = ([32, 32], [64, 64], [32, 64])
+    input_dimension_options = ([32, 32], [64, 64])
     for fmt in formats_list:
         in_fmt = fmt.input_format
         dest_acc_modes = (
