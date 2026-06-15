@@ -1,5 +1,5 @@
 # Column reduce with max pooling.
-#
+
 dest_acc: true
 
 operands:
