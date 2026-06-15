@@ -149,6 +149,13 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
         // In production cases, max_kernel_bin_buf_size will always be non-zero (programs have kernels). This check is
         // primarily for test workloads, where a program may not have an attached kernel.
         if (max_kernel_bin_buf_size) {
+            // We can't load while capturing a trace, it needs to already be in program cache.
+            const bool is_capturing_trace = mesh_cq.trace_id().has_value();
+            TT_FATAL(
+                !is_capturing_trace,
+                "Cannot load new binaries during trace capture."
+                "This program is not yet in program cache. Warm up before capturing a trace."
+                "See the operation's hash signature for arguments that must match.");
             // Allocate a MeshBuffer for kernel binaries on each device. This buffer is replicated along the MeshDevice
             // and matches the max kernel binary size across programs.
             DeviceLocalBufferConfig device_local_kernel_bin_buf_config = {

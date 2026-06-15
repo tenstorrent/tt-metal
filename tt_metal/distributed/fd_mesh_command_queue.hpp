@@ -112,9 +112,6 @@ private:
     std::optional<MeshTraceId> trace_id_;
     std::shared_ptr<MeshTraceDescriptor> trace_ctx_;
     std::vector<MeshTraceNode> trace_nodes_;
-    // Program-cache "misses allowed" flag saved at record_begin() and restored at
-    // record_end(). Misses are forbidden during capture (see record_begin()).
-    bool program_cache_misses_allowed_before_trace_ = true;
 
     CoreCoord dispatch_core_;
     const CoreType dispatch_core_type_;

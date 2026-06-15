@@ -9,7 +9,6 @@
 
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
-#include <program_cache.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -1121,14 +1120,6 @@ void FDMeshCommandQueue::record_begin(const MeshTraceId& trace_id, const std::sh
     trace_id_ = trace_id;
     trace_ctx_ = ctx;
 
-    // Forbid program-cache misses while capturing: a miss compiles a new program, which
-    // enqueues a host->device write that is illegal during trace capture (and would corrupt
-    // the trace). Surfacing it as a clear "cache miss forbidden" error at the offending op is
-    // far better than the generic write-during-capture assert. Save the prior value so it is
-    // restored in record_end().
-    program_cache_misses_allowed_before_trace_ = mesh_device_->get_program_cache().cache_misses_allowed();
-    mesh_device_->set_program_cache_misses_allowed(false);
-
     for (auto* device : mesh_device_->get_devices()) {
         device->sysmem_manager().set_bypass_mode(/*enable*/ true, /*clear*/ true);
     }
@@ -1461,12 +1452,6 @@ void FDMeshCommandQueue::record_end() {
 
     trace_id_ = std::nullopt;
     trace_ctx_ = nullptr;
-
-    // Restore the program-cache "misses allowed" flag saved in record_begin().
-    {
-        auto lock = lock_api_function_();
-        mesh_device_->set_program_cache_misses_allowed(program_cache_misses_allowed_before_trace_);
-    }
 
     trace_dispatch::load_host_dispatch_state(
         mesh_device_->num_sub_devices(),
