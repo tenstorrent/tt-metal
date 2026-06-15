@@ -62,8 +62,20 @@ PCCs are ~0.999. Passes the >0.98 full-depth gate.
 | Largest ISL measured (single-shot prefill) | 4096 (no L1 clash) |
 
 Decode cost is **flat across ISL** (the decode step is a captured trace independent of context).
-Decode throughput is currently bounded by the dense-local MoE (each device computes all 16 of its
-local experts per token); sparse dispatch (top-4 only) is the main decode lever — see status.
+
+**Multi-user batched decode** (traced, dense MoE) trades latency for throughput — the MoE streams
+each expert's weights once and applies them to all B tokens, so aggregate tok/s grows with batch
+(measured 2-layer; full-depth scales by depth):
+
+| Batch | tok/s/user | tok/s aggregate |
+|---|---|---|
+| 1 | 133.7 | 134 |
+| 8 | 46.2 | 370 |
+| 32 | 14.4 | 462 |
+
+Scaling is sub-linear because the dense MoE amortizes weight-streaming but its compute (16 experts ×
+B tokens/device) grows with batch. Sparse dispatch (top-4 only) is the remaining lever at both ends —
+see status.
 
 ## Current status / remaining work
 - **Done:** full-depth logit correctness; e2e VLM correctness; on-device sampling; decode trace
