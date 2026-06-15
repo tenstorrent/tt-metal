@@ -31,7 +31,7 @@ SFPI_VERSION=$(grep -E "^sfpi_version=" tt_metal/sfpi-version | cut -d"'" -f2)
 
 # Compute hashes for each tool (version + install script)
 for tool in ccache mold doxygen clangbuildanalyzer gdb cmake yq zstd; do
-    hash_var="${tool^^}_HASH"
+    hash_var="$(printf '%s_HASH' "$tool" | tr '[:lower:]' '[:upper:]')"
     declare "$hash_var=$(cat "dockerfile/scripts/install-${tool}.sh" | sha1sum | cut -d' ' -f1 | head -c 12)"
 done
 

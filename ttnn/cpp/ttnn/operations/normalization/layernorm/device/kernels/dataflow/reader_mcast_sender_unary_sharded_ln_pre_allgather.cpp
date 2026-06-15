@@ -177,6 +177,7 @@ void kernel_main() {
                              1));  // push back partials from all cores -> compute can start reducing now
                     }
                 }
+                cb_partial_obj.pop_front(num_tiles_per_partial_result * block_h);
             };
     global_reduce_sender(cb_ex_partial2, cb_ex_external2, cb_ex2);
     noc.async_write_barrier();

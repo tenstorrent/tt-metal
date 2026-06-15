@@ -80,20 +80,30 @@ runs:
         done
 
         # ── Phase 1: batch-query Harbor in parallel ───────────────────────────
-        # NOTE: on Harbor >= 2.5, manifest inspect against a proxy-cache project
-        # may itself trigger a manifest pull-through (no blobs). This is
-        # negligible vs blob transfer and still avoids redundant full docker pulls.
+        # Check Harbor's local cache path, not the GHCR proxy path, so newly
+        # built upstream images do not satisfy the probe before blobs are cached.
         echo "Batch-checking which ${TITLE} are already cached in Harbor..."
         TMPDIR_CHECK=$(mktemp -d)
         trap 'rm -rf "$TMPDIR_CHECK"' EXIT  # only EXIT trap in this shell
+
+        harbor_pull_ref() {
+          local image_ref="$1"
+          printf '%s%s' "$HARBOR_PREFIX" "$image_ref"
+        }
+
+        harbor_cache_ref() {
+          local image_ref="$1"
+          # Query Harbor's cached repository path without triggering a GHCR proxy lookup.
+          printf '%s%s' "$HARBOR_PREFIX" "${image_ref#ghcr.io/}"
+        }
 
         declare -A HARBOR_CHECK_PIDS=()
         declare -a HARBOR_CHECK_ORDER=()
         idx=0
         for ghcr_tag in "${UNIQUE_TAGS[@]}"; do
-          harbor_tag="${HARBOR_PREFIX}${ghcr_tag}"
+          harbor_cached_tag="$(harbor_cache_ref "$ghcr_tag")"
           (
-            if docker manifest inspect "$harbor_tag" > /dev/null 2>&1; then
+            if docker manifest inspect "$harbor_cached_tag" > /dev/null 2>&1; then
               echo "present"
             else
               echo "missing"
@@ -106,15 +116,16 @@ runs:
 
         # ── Phase 2: collect results and pull only missing images ─────────────
         for ghcr_tag in "${HARBOR_CHECK_ORDER[@]}"; do
-          harbor_tag="${HARBOR_PREFIX}${ghcr_tag}"
+          harbor_tag="$(harbor_pull_ref "$ghcr_tag")"
+          harbor_cached_tag="$(harbor_cache_ref "$ghcr_tag")"
           entry="${HARBOR_CHECK_PIDS[$ghcr_tag]}"
           file_idx="${entry%%:*}"
           pid="${entry##*:}"
           wait "$pid"
-          status=$(cat "${TMPDIR_CHECK}/${file_idx}")
+          status=$(<"${TMPDIR_CHECK}/${file_idx}")
 
           if [ "$status" = "present" ]; then
-            echo "  ✓ Already cached in Harbor: $harbor_tag (skipping pull)"
+            echo "  ✓ Already cached in Harbor: $harbor_cached_tag (skipping pull)"
           else
             echo "Pulling $harbor_tag (to warm Harbor cache)..."
             if docker pull "$harbor_tag"; then
