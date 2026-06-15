@@ -534,6 +534,21 @@ struct CopyTile : CopyTileTag {
         }
     }
 
+    /// Per-outer-row wait/pop for a streamed broadcast (InputLifecycle::OuterStream): one
+    /// operand tile per row, re-read at the front across the row's cols. No-op otherwise.
+    /// (is_legal_kind_lifecycle restricts OuterStream to OperandKind::Scalar, so the exec
+    /// index is the front (0) — no special index handling needed here.)
+    ALWI void wait_per_row() const {
+        if constexpr (Policy == InputLifecycle::OuterStream) {
+            DataflowBuffer(Cb).wait_front(1);
+        }
+    }
+    ALWI void pop_per_row() const {
+        if constexpr (Policy == InputLifecycle::OuterStream) {
+            DataflowBuffer(Cb).pop_front(1);
+        }
+    }
+
 };
 
 // =============================================================================
@@ -656,6 +671,20 @@ struct PackTile : PackTileTag {
         if constexpr (Policy == OutputLifecycle::Chunked ||
                       Policy == OutputLifecycle::BulkReservePerChunk) {
             DataflowBuffer(Cb).push_back(inner_count);
+        }
+    }
+
+    /// Per-outer-row reserve/push for OutputLifecycle::OuterStream: one output tile per row,
+    /// written at the front (walk == false for OuterStream → out_idx = base). The output-side
+    /// counterpart of InputLifecycle::OuterStream. No-op for every other policy.
+    ALWI void reserve_per_row() const {
+        if constexpr (Policy == OutputLifecycle::OuterStream) {
+            DataflowBuffer(Cb).reserve_back(1);
+        }
+    }
+    ALWI void push_per_row() const {
+        if constexpr (Policy == OutputLifecycle::OuterStream) {
+            DataflowBuffer(Cb).push_back(1);
         }
     }
 
@@ -873,6 +902,26 @@ struct BinaryFpu : BinaryFpuTag {
         }
     }
 
+    /// Per-outer-row wait/pop for streamed broadcasts (InputLifecycle::OuterStream) — per side,
+    /// same_dfb-deduped. One operand tile per row, re-read at the front across the row's cols.
+    /// OuterStream is restricted to OperandKind::Scalar, so exec reads the front (0) already.
+    ALWI void wait_per_row() const {
+        if constexpr (APolicy == InputLifecycle::OuterStream) {
+            DataflowBuffer(CbA).wait_front(1);
+        }
+        if constexpr (!same_dfb && BPolicy == InputLifecycle::OuterStream) {
+            DataflowBuffer(CbB).wait_front(1);
+        }
+    }
+    ALWI void pop_per_row() const {
+        if constexpr (APolicy == InputLifecycle::OuterStream) {
+            DataflowBuffer(CbA).pop_front(1);
+        }
+        if constexpr (!same_dfb && BPolicy == InputLifecycle::OuterStream) {
+            DataflowBuffer(CbB).pop_front(1);
+        }
+    }
+
 
     // 2D variants — per-side index + window. 3-arg form takes both chunk-local
     // (`i_local`) and absolute (`i_abs`) flat indices; each side picks via the
@@ -1042,6 +1091,18 @@ struct DestReuseBinary : DestReuseBinaryTag {
             DataflowBuffer(Cb).pop_front(inner_count);
         }
     }
+    /// Per-outer-row wait/pop for a streamed broadcast (InputLifecycle::OuterStream). OuterStream
+    /// is restricted to OperandKind::Scalar, so exec reads the front (0). No-op otherwise.
+    ALWI void wait_per_row() const {
+        if constexpr (Policy == InputLifecycle::OuterStream) {
+            DataflowBuffer(Cb).wait_front(1);
+        }
+    }
+    ALWI void pop_per_row() const {
+        if constexpr (Policy == InputLifecycle::OuterStream) {
+            DataflowBuffer(Cb).pop_front(1);
+        }
+    }
 };
 
 // =============================================================================
@@ -1161,6 +1222,10 @@ struct UnaryBcast : UnaryBcastTag {
             DataflowBuffer(Cb).pop_front(inner_count);
         }
     }
+    // UnaryBcast has no OperandKind (always reads tile 0), so it can't be a streamed
+    // outer-axis broadcast — the per-row hooks are inert.
+    ALWI void wait_per_row() const {}
+    ALWI void pop_per_row() const {}
 };
 
 // =============================================================================
@@ -1991,6 +2056,24 @@ template <class E>
 ALWI void elem_push_at_end(const E& e, uint32_t Ht, uint32_t Wt) {
     if constexpr (is_cb_writer_op_v<E>) e.push_at_end(Ht, Wt);
 }
+// Per-outer-row hooks (InputLifecycle::OuterStream readers / OutputLifecycle::OuterStream
+// writers): wait/reserve at row entry, pop/push at row exit. Inert for every other policy.
+template <class E>
+ALWI void elem_wait_per_row(const E& e) {
+    if constexpr (is_cb_reader_op_v<E>) e.wait_per_row();
+}
+template <class E>
+ALWI void elem_pop_per_row(const E& e) {
+    if constexpr (is_cb_reader_op_v<E>) e.pop_per_row();
+}
+template <class E>
+ALWI void elem_reserve_per_row(const E& e) {
+    if constexpr (is_cb_writer_op_v<E>) e.reserve_per_row();
+}
+template <class E>
+ALWI void elem_push_per_row(const E& e) {
+    if constexpr (is_cb_writer_op_v<E>) e.push_per_row();
+}
 
 }  // namespace detail
 
@@ -2055,6 +2138,11 @@ ALWI void eltwise_chain_impl(EltwiseShape shape, Es... elts) {
     // per-tile multiplication inside the element's exec.
     for (uint32_t ht = 0; ht < Ht; ++ht) {
         const uint32_t row_base = ht * Wt;
+        // Outer-axis streamed operands (InputLifecycle/OutputLifecycle::OuterStream): wait the
+        // input / reserve the output ONE tile at row entry; the inner loop re-reads it at the
+        // front; pop / push it at row exit. Inert for every other policy.
+        (detail::elem_wait_per_row(elts), ...);
+        (detail::elem_reserve_per_row(elts), ...);
         for (uint32_t wt_base = 0; wt_base < Wt; wt_base += block_size) {
             const uint32_t inner_count =
                 (wt_base + block_size <= Wt) ? block_size : (Wt - wt_base);
@@ -2069,6 +2157,8 @@ ALWI void eltwise_chain_impl(EltwiseShape shape, Es... elts) {
                 IdxSeq{}, i_flat, ht, wt_base, inner_count, chain_lane_w, Ht, Wt, elts...);
             tile_regs_release();
         }
+        (detail::elem_pop_per_row(elts), ...);
+        (detail::elem_push_per_row(elts), ...);
     }
 
     // End-of-chain upfront-policy lifecycle.
