@@ -169,6 +169,55 @@ class TtMistral4MLA(LightweightModule):
         attn = ttnn.reshape(ttnn.transpose(attn, 1, 2), (B, S, -1))
         return ttnn.linear(attn, self.w_o)
 
+    def init_paged_kv_cache(self, batch, max_seq, block_size=128):
+        """Paged expanded-k/v cache for CHUNKED prefill (criteria A6/C1/C6): k/v blocks
+        [max_blocks, n_heads, block_size, head_dim] + page_table [batch, blocks_per_user]. Lets prefill
+        run in `block_size`-token chunks (chunked_scaled_dot_product_attention) so the prompt never
+        materializes the full SxS attention in L1 — the structural cap of single-shot prefill (~4K)."""
+        nblk_user = (max_seq + block_size - 1) // block_size
+        max_blocks = batch * nblk_user
+        mk = lambda d: ttnn.from_torch(
+            torch.zeros(max_blocks, self.H, block_size, d, dtype=torch.bfloat16),
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        )
+        page_table = ttnn.from_torch(
+            torch.arange(max_blocks, dtype=torch.int32).reshape(batch, nblk_user),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        )
+        return [mk(self.qk), mk(self.vd)], page_table
+
+    def forward_prefill_chunked(self, x, cos, sin, paged_kv, page_table, chunk=128, block_size=128):
+        """Chunked prefill: process the prompt in `chunk`-token windows against a PAGED k/v cache so L1
+        holds only one chunk's attention at a time (unlocks ISL >> single-shot's ~4K cap). Same causal
+        math as forward_prefill. Requires S % chunk == 0 (prompt padded upstream). q/k/v head_dim==qk."""
+        B, S, hidden = x.shape[0], x.shape[1], x.shape[2]
+        kc, vc = paged_kv
+        outs = []
+        for cs in range(0, S, chunk):
+            ce = cs + chunk
+            xc = ttnn.slice(x, [0, cs, 0], [B, ce, hidden])
+            cosc = ttnn.slice(cos, [0, 0, cs, 0], [cos.shape[0], cos.shape[1], ce, cos.shape[3]])
+            sinc = ttnn.slice(sin, [0, 0, cs, 0], [sin.shape[0], sin.shape[1], ce, sin.shape[3]])
+            qc, kc_s, vc_s = self._qkv(xc, cosc, sinc)  # [B,H,chunk,*]
+            chunk_pt = ttnn.slice(page_table, [0, cs // block_size], [B, ce // block_size])
+            for b in range(B):
+                kf = kc_s if B == 1 else ttnn.slice(kc_s, [b, 0, 0, 0], [b + 1, self.H, chunk, self.qk])
+                vf = vc_s if B == 1 else ttnn.slice(vc_s, [b, 0, 0, 0], [b + 1, self.H, chunk, self.vd])
+                ttnn.experimental.paged_fill_cache(kc, kf, chunk_pt, batch_idx=b)
+                ttnn.experimental.paged_fill_cache(vc, vf, chunk_pt, batch_idx=b)
+            ac = ttnn.transformer.chunked_scaled_dot_product_attention(
+                qc, kc, vc, page_table, cs
+            )  # [B,H,chunk,vd] causal; default scale == 1/sqrt(qk)==self.scale (noconvert rejects non-py-float)
+            outs.append(ac)
+        attn = ttnn.concat(outs, dim=2) if len(outs) > 1 else outs[0]  # [B,H,S,vd]
+        attn = ttnn.reshape(ttnn.transpose(attn, 1, 2), (B, S, -1))
+        return ttnn.linear(attn, self.w_o)
+
     def forward_decode(self, x, pos_t, cos, sin, kv_cache):
         """Single-token decode: x [B,1,hidden], pos_t an int32 device tensor [B] of cur positions.
         Writes k/v to kv_cache at pos_t (tensor-indexed -> trace-compatible) and runs flash-decode
@@ -508,6 +557,15 @@ class TtMistral4DecoderLayer(LightweightModule):
         )
         return ttnn.add(h, self.moe(ttnn.rms_norm(h, epsilon=self.eps, weight=self.w_post)))
 
+    def forward_prefill_chunked(self, x, cos, sin, paged_kv, page_table, chunk=128, block_size=128):
+        h = ttnn.add(
+            x,
+            self.mla.forward_prefill_chunked(
+                ttnn.rms_norm(x, epsilon=self.eps, weight=self.w_in), cos, sin, paged_kv, page_table, chunk, block_size
+            ),
+        )
+        return ttnn.add(h, self.moe(ttnn.rms_norm(h, epsilon=self.eps, weight=self.w_post)))
+
 
 class TtMistral4TextModel(LightweightModule):
     """Stacked decoder layers + final norm + LM head. forward(embedded_hidden, cos, sin) -> logits.
@@ -586,6 +644,17 @@ class TtMistral4TextModel(LightweightModule):
     def forward_prefill(self, hidden, cos, sin, kv_caches):
         for layer, kv in zip(self.layers, kv_caches):
             hidden = layer.forward_prefill(hidden, cos, sin, kv)
+        return self._lm_head(ttnn.rms_norm(hidden, epsilon=self.eps, weight=self.w_norm))
+
+    def init_paged_kv_caches(self, batch, max_seq, block_size=128):
+        """Per-layer paged expanded-k/v caches [(paged_kv, page_table), ...] for chunked prefill."""
+        return [layer.mla.init_paged_kv_cache(batch, max_seq, block_size) for layer in self.layers]
+
+    def forward_prefill_chunked(self, hidden, cos, sin, caches, chunk=128, block_size=128):
+        """Chunked prefill over paged k/v (criteria A6/C1/C6): lifts the single-shot ~4K L1 cap so the
+        ISL sweep can reach 16K+. `caches` is the list of (paged_kv, page_table) from init_paged_kv_caches."""
+        for layer, (paged_kv, pt) in zip(self.layers, caches):
+            hidden = layer.forward_prefill_chunked(hidden, cos, sin, paged_kv, pt, chunk, block_size)
         return self._lm_head(ttnn.rms_norm(hidden, epsilon=self.eps, weight=self.w_norm))
 
     def forward_decode(self, hidden, pos_t, cos, sin, kv_caches):
