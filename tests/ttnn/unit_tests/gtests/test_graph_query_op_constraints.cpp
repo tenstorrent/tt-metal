@@ -27,7 +27,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
-#include "ttnn/operations/conv/conv2d/conv2d.hpp"
+// TODO(nuked-op conv2d): conv2d.hpp include removed with the nuked conv2d op.
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -835,86 +835,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .transpose_mcast = false,
                 .fused_activation = std::nullopt})));
 
-class Conv2dOpIfTest : public ttnn::TTNNFixtureWithSuiteDevice<Conv2dOpIfTest>,
-                       public ::testing::WithParamInterface<std::optional<ttnn::prim::Conv2dConfig>> {};
-
-TEST_P(Conv2dOpIfTest, Conv2d) {
-    const auto& conv2d_config = GetParam();
-
-    const auto input_spec = ttnn::TensorSpec(
-        ttnn::Shape{1, 1, 50176, 3},
-        tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::BFLOAT16,
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
-            ttnn::L1_MEMORY_CONFIG));
-    const auto weight_spec = ttnn::TensorSpec(
-        ttnn::Shape{1, 1, 1568, 64},
-        tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::BFLOAT16,
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
-            ttnn::DRAM_MEMORY_CONFIG));
-    const auto output_spec = ttnn::TensorSpec(
-        ttnn::Shape{1, 1, 12544, 64},
-        tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::BFLOAT16,
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
-            ttnn::DRAM_MEMORY_CONFIG));
-    const uint32_t in_channels = 3;
-    const uint32_t out_channels = 64;
-    const uint32_t batch_size = 1;
-    const uint32_t input_height = 224;
-    const uint32_t input_width = 224;
-    const std::array<uint32_t, 2> kernel_size{7, 7};
-    const std::array<uint32_t, 2> stride{2, 2};
-    const std::array<uint32_t, 2> padding{3, 3};
-    const std::array<uint32_t, 2> dilation{1, 1};
-    const uint32_t groups = 1;
-
-    // Run the test
-    {
-        tt::tt_metal::distributed::MeshDevice* device = device_;
-        auto query = ttnn::graph::query_op_constraints(
-            ttnn::conv2d,
-            device,
-            input_spec,
-            weight_spec,
-            device,
-            in_channels,
-            out_channels,
-            batch_size,
-            input_height,
-            input_width,
-            kernel_size,
-            stride,
-            padding,
-            dilation,
-            groups,
-            std::nullopt,
-            std::nullopt,
-            conv2d_config,
-            std::nullopt,
-            output_spec.tensor_layout().get_memory_config(),
-            std::nullopt,  // dram_slice_config
-            false,         // return_output_dim
-            false);        // return_weights_and_bias
-
-        EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
-        // Ensure some real usage is reported
-        EXPECT_GT(query.resource_usage.cb_peak_size_per_core, 10000);
-        const uint32_t l1_peak_threshold = (conv2d_config == std::nullopt) ? 150000 : 120000;
-        EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, l1_peak_threshold);
-        const uint32_t total_peak_threshold = (conv2d_config == std::nullopt) ? 250000 : 220000;
-        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, total_peak_threshold);
-        ASSERT_TRUE(query.output_tensor_specs.has_value());
-        EXPECT_EQ(query.output_tensor_specs.value().size(), 1);
-        EXPECT_EQ(query.output_tensor_specs.value().at(0), output_spec);
-    }
-}
-
-INSTANTIATE_TEST_SUITE_P(
-    Conv2dConfigVariations,
-    Conv2dOpIfTest,
-    ::testing::Values(std::nullopt, ttnn::prim::Conv2dConfig{.deallocate_activation = true}));
+// TODO(nuked-op conv2d): Conv2dOpIfTest removed with the nuked conv2d op.
 
 // ============================================================================
 // Transformer tests

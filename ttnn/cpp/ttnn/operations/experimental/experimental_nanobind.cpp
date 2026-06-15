@@ -6,16 +6,11 @@
 
 #include <nanobind/nanobind.h>
 
-#include "ttnn/operations/experimental/adaptive_pool/adaptive_pools_nanobind.hpp"
-#include "ttnn/operations/experimental/cnn/convert_to_chw/convert_to_chw_nanobind.hpp"
-#include "ttnn/operations/experimental/cnn/convert_to_hwc/convert_to_hwc_nanobind.hpp"
-#include "ttnn/operations/experimental/conv3d/conv3d_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc_fused/deepseek_moe_fast_reduce_nc_fused_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/integral_image/intimg_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/deepseek_grouped_gate/deepseek_grouped_gate_nanobind.hpp"
-#include "ttnn/operations/experimental/slice_write/slice_write_nanobind.hpp"
 #include "ttnn/operations/experimental/ssm/hc_sum_reduce/hc_sum_reduce_nanobind.hpp"
 #include "ttnn/operations/experimental/ssm/prefix_scan/prefix_scan_nanobind.hpp"
 #include "ttnn/operations/experimental/ssm/repeat_and_interleave_eltwise_mul/repeat_and_interleave_eltwise_mul_nanobind.hpp"
@@ -37,7 +32,6 @@
 #include "ttnn/operations/experimental/transformer/dit_layernorm_pre_all_gather/dit_layernorm_pre_all_gather_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/dit_layernorm_post_all_gather/dit_layernorm_post_all_gather_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/dit_minimal_matmul_addcmul_fused/dit_minimal_matmul_addcmul_fused_nanobind.hpp"
-#include "ttnn/operations/experimental/transformer/dit_rms_norm_unary_fused/dit_rms_norm_unary_fused_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding/rotary_embedding_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_hf/rotary_embedding_hf_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama_nanobind.hpp"
@@ -55,7 +49,6 @@
 #include "ttnn/operations/experimental/reshape/view_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.hpp"
 #include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_nanobind.hpp"
-#include "ttnn/operations/experimental/padded_slice/padded_slice_nanobind.hpp"
 #include "ttnn/operations/experimental/dram_core_prefetcher/dram_core_prefetcher_nanobind.hpp"
 #include "ttnn/operations/experimental/test/hang_device/hang_device_operation_nanobind.hpp"
 #include "ttnn/operations/experimental/test/prefetcher_consumer/dram_prefetcher_consumer_nanobind.hpp"
@@ -85,9 +78,6 @@
 namespace ttnn::operations::experimental {
 
 void py_module(nb::module_& mod) {
-    slice_write::bind_slice_write(mod);
-    padded_slice::bind_padded_slice(mod);
-
     transformer::detail::bind_concatenate_heads(mod);
     transformer::detail::bind_split_qkv(mod);
     transformer::detail::bind_nlp_create_qkv_heads(mod);
@@ -107,7 +97,6 @@ void py_module(nb::module_& mod) {
     transformer::bind_dit_layernorm_pre_all_gather(mod);
     transformer::bind_dit_layernorm_post_all_gather(mod);
     transformer::bind_dit_minimal_matmul_addcmul_fused(mod);
-    transformer::bind_dit_rms_norm_unary_fused(mod);
     transformer::bind_rotary_embedding(mod);
     transformer::bind_rotary_embedding_hf(mod);
     transformer::bind_rotary_embedding_llama(mod);
@@ -125,13 +114,6 @@ void py_module(nb::module_& mod) {
     ssm::detail::bind_prefix_scan(mod);
     ssm::detail::bind_repeat_and_interleave_eltwise_mul(mod);
     ssm::detail::bind_hc_sum_reduce(mod);
-
-    cnn::detail::bind_convert_to_chw(mod);
-    cnn::detail::bind_convert_to_hwc(mod);
-
-    ttnn::operations::experimental::conv3d::detail::bind_conv3d(mod);
-    adaptive_pool::bind_adaptive_avg_pool2d_operation(mod);
-    adaptive_pool::bind_adaptive_max_pool2d_operation(mod);
 
     copy::detail::bind_typecast(mod);
 

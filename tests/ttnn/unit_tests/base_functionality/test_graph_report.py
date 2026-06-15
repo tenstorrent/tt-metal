@@ -2078,7 +2078,7 @@ class TestReportVersion:
 class TestResNet50Patterns:
     """
     Tests for patterns observed in the ResNet50 reference database:
-    - Host weight tensors used as inputs to conv2d operations
+    - Host weight tensors used as inputs to matmul operations
     - Deallocate operations (no output tensors)
     - Multiple buffer types and layouts (DRAM, L1, L1_SMALL)
     - Large number of cumulative buffers per operation
@@ -2142,7 +2142,7 @@ class TestResNet50Patterns:
             "connections": [4],
             "duration_ns": 100,
         },
-        # Op 2: conv2d (host weight + device activation -> device output)
+        # Op 2: matmul (host weight + device activation -> device output)
         {
             "counter": 6,
             "node_type": "tensor",
@@ -2157,7 +2157,7 @@ class TestResNet50Patterns:
         {
             "counter": 7,
             "node_type": "function_start",
-            "params": {"name": "ttnn::conv2d", "inputs": "3"},
+            "params": {"name": "ttnn::matmul", "inputs": "3"},
             "connections": [],
             "input_tensors": [4, 6],
             "arguments": ["activation_tensor", "weight_tensor", "bias_tensor"],
@@ -2207,7 +2207,7 @@ class TestResNet50Patterns:
         {
             "counter": 11,
             "node_type": "function_end",
-            "params": {"name": "ttnn::conv2d"},
+            "params": {"name": "ttnn::matmul"},
             "connections": [10],
             "duration_ns": 5000,
         },
@@ -2307,7 +2307,7 @@ class TestResNet50Patterns:
 
         cursor.execute("SELECT tensor_id, device_id FROM tensors WHERE device_id IS NULL")
         host_tensors = cursor.fetchall()
-        # tensor_id 0 (input to to_device) + tensor_id 10 (conv2d weight)
+        # tensor_id 0 (input to to_device) + tensor_id 10 (matmul weight)
         assert (
             len(host_tensors) == 2
         ), f"Expected 2 host tensors (to_device input + conv weight), got {len(host_tensors)}"
@@ -2339,13 +2339,13 @@ class TestResNet50Patterns:
         assert output_count == 0, f"Deallocate should have 0 outputs, got {output_count}"
         conn.close()
 
-    def test_conv2d_has_host_and_device_inputs(self, tmp_path):
-        """Conv2d should accept both host weight tensors and device activation tensors as inputs."""
+    def test_op_has_host_and_device_inputs(self, tmp_path):
+        """An op with weights should accept both host weight tensors and device activation tensors as inputs."""
         conn, cursor = self._import_resnet(tmp_path)
 
-        cursor.execute("SELECT operation_id FROM operations WHERE name = 'ttnn::conv2d'")
+        cursor.execute("SELECT operation_id FROM operations WHERE name = 'ttnn::matmul'")
         conv_op = cursor.fetchone()
-        assert conv_op is not None, "Should have a conv2d operation"
+        assert conv_op is not None, "Should have a matmul operation"
 
         cursor.execute(
             """
@@ -2360,8 +2360,8 @@ class TestResNet50Patterns:
 
         device_inputs = [r for r in inputs if r[1] is not None]
         host_inputs = [r for r in inputs if r[1] is None]
-        assert len(device_inputs) >= 1, f"Conv2d should have at least 1 device input, got {len(device_inputs)}"
-        assert len(host_inputs) >= 1, f"Conv2d should have at least 1 host weight input, got {len(host_inputs)}"
+        assert len(device_inputs) >= 1, f"Op should have at least 1 device input, got {len(device_inputs)}"
+        assert len(host_inputs) >= 1, f"Op should have at least 1 host weight input, got {len(host_inputs)}"
         conn.close()
 
     def test_multiple_buffer_types(self, tmp_path):
@@ -2379,7 +2379,7 @@ class TestResNet50Patterns:
         """
         Buffer counts should grow with allocations and shrink with deallocations.
         Op 1 (to_device): 1 DRAM buffer allocated -> 1 total
-        Op 2 (conv2d): 2 more buffers (DRAM + L1) -> 3 total
+        Op 2 (matmul): 2 more buffers (DRAM + L1) -> 3 total
         Op 3 (add_): 1 more L1 buffer -> 4 total
         Op 4 (deallocate): 1 DRAM buffer deallocated before op -> 3 total
         """
@@ -2530,127 +2530,6 @@ class TestLinearModelE2E:
         assert st_count > 0, f"Expected at least one stack_trace row (from Python), got {st_count}"
 
         conn.close()
-
-
-@pytest.fixture
-def imagenet_label_dict():
-    import ast
-
-    path = Path("models/sample_data/imagenet_class_labels.txt")
-    assert path.exists(), f"ImageNet labels not found at {path}"
-    with open(path, "r") as f:
-        return ast.literal_eval(f.read())
-
-
-@pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
-@pytest.mark.timeout(600)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize(
-    "batch_size, input_loc",
-    ((16, "models/demos/vision/classification/resnet50/ttnn_resnet/demo/images/"),),
-)
-def test_resnet50_e2e_graph_capture(
-    mesh_device, batch_size, input_loc, imagenet_label_dict, model_location_generator, tmp_path
-):
-    """Run ResNet50 inference, capture graph, import to DB, and validate structural properties."""
-    import shutil
-
-    from models.demos.vision.classification.resnet50.ttnn_resnet.demo.demo import run_resnet_inference
-
-    report_path = tmp_path / "resnet50_report.json"
-
-    ttnn.graph.enable_python_stack_traces()
-    try:
-        with ttnn.manage_config("enable_fast_runtime_mode", False):
-            ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-            run_resnet_inference(batch_size, input_loc, imagenet_label_dict, mesh_device, model_location_generator)
-            ttnn.graph.end_graph_capture_to_file(report_path)
-    finally:
-        ttnn.graph.disable_python_stack_traces()
-
-    assert report_path.exists(), "Report JSON should be created"
-
-    output_dir = tmp_path / "output"
-    db_path = graph_report.import_report(report_path, output_dir)
-    assert db_path.exists(), "Imported DB should be created"
-
-    shutil.copy2(db_path, "/tmp/db.sqlite")
-
-    conn = sqlite3.connect(db_path)
-    c = conn.cursor()
-
-    c.execute("SELECT COUNT(*) FROM operations")
-    op_count = c.fetchone()[0]
-    assert op_count >= 300, f"Expected at least 300 operations, got {op_count}"
-
-    c.execute("SELECT name, COUNT(*) FROM operations GROUP BY name ORDER BY COUNT(*) DESC")
-    op_dist = dict(c.fetchall())
-    assert op_dist.get("ttnn.conv2d", 0) == 159, f"Expected 159 conv2d ops, got {op_dist.get('ttnn.conv2d', 0)}"
-    assert (
-        op_dist.get("ttnn.deallocate", 0) == 51
-    ), f"Expected 51 deallocate ops, got {op_dist.get('ttnn.deallocate', 0)}"
-    assert op_dist.get("ttnn.add_", 0) == 48, f"Expected 48 add_ ops, got {op_dist.get('ttnn.add_', 0)}"
-
-    c.execute("SELECT COUNT(*) FROM tensors WHERE device_id IS NULL")
-    host_count = c.fetchone()[0]
-    assert host_count > 0, "Expected host tensors (weights)"
-
-    c.execute("SELECT COUNT(*) FROM tensors WHERE device_id IS NOT NULL")
-    device_count = c.fetchone()[0]
-    assert device_count > 0, "Expected device tensors"
-
-    c.execute("SELECT COUNT(*) FROM input_tensors")
-    input_count = c.fetchone()[0]
-    assert input_count >= 600, f"Expected at least 600 input_tensor rows, got {input_count}"
-
-    c.execute("SELECT COUNT(*) FROM output_tensors")
-    output_count = c.fetchone()[0]
-    assert output_count >= 300, f"Expected at least 300 output_tensor rows, got {output_count}"
-
-    c.execute(
-        """
-        SELECT COUNT(*) FROM input_tensors it
-        LEFT JOIN tensors t ON it.tensor_id = t.tensor_id
-        WHERE t.tensor_id IS NULL
-    """
-    )
-    dangling = c.fetchone()[0]
-    assert dangling == 0, f"{dangling} dangling input_tensors references"
-
-    c.execute(
-        """
-        SELECT COUNT(*) FROM output_tensors ot
-        LEFT JOIN tensors t ON ot.tensor_id = t.tensor_id
-        WHERE t.tensor_id IS NULL
-    """
-    )
-    dangling = c.fetchone()[0]
-    assert dangling == 0, f"{dangling} dangling output_tensors references"
-
-    c.execute(
-        """
-        SELECT COUNT(*) FROM operations o
-        WHERE o.name = 'ttnn.deallocate'
-        AND EXISTS (SELECT 1 FROM input_tensors it WHERE it.operation_id = o.operation_id)
-        AND NOT EXISTS (SELECT 1 FROM output_tensors ot WHERE ot.operation_id = o.operation_id)
-    """
-    )
-    dealloc_correct = c.fetchone()[0]
-    assert dealloc_correct == 51, f"Expected 51 deallocate ops with input+no-output, got {dealloc_correct}"
-
-    c.execute("SELECT COUNT(*) FROM buffers")
-    buf_count = c.fetchone()[0]
-    assert buf_count > 0, "Expected non-zero buffers"
-
-    c.execute("SELECT COUNT(*) FROM captured_graph")
-    cg_count = c.fetchone()[0]
-    assert cg_count == op_count, f"Expected {op_count} captured_graph rows, got {cg_count}"
-
-    c.execute("SELECT COUNT(*) FROM stack_traces")
-    st_count = c.fetchone()[0]
-    assert st_count > 0, f"Expected at least one stack_trace row (from Python), got {st_count}"
-
-    conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -3258,7 +3137,7 @@ class TestFromTorchFiltering:
 
     def test_leading_from_torch_filtered(self, tmp_path):
         """from_torch before any compute op should be filtered out."""
-        graph = self._make_graph(["ttnn.from_torch", "ttnn.from_torch", "ttnn.conv2d"])
+        graph = self._make_graph(["ttnn.from_torch", "ttnn.from_torch", "ttnn.matmul"])
 
         report = _make_report(graph)
         conn, cursor = _import_to_db(report, tmp_path)
@@ -3266,19 +3145,19 @@ class TestFromTorchFiltering:
         cursor.execute("SELECT name FROM operations ORDER BY operation_id")
         ops = [r[0] for r in cursor.fetchall()]
         assert "ttnn.from_torch" not in ops, "Leading from_torch should be filtered"
-        assert "ttnn.conv2d" in ops
+        assert "ttnn.matmul" in ops
         conn.close()
 
     def test_from_torch_after_compute_kept(self, tmp_path):
         """from_torch after a compute op should be kept."""
-        graph = self._make_graph(["ttnn.conv2d", "ttnn.from_torch"])
+        graph = self._make_graph(["ttnn.matmul", "ttnn.from_torch"])
 
         report = _make_report(graph)
         conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute("SELECT name FROM operations ORDER BY operation_id")
         ops = [r[0] for r in cursor.fetchall()]
-        assert ops == ["ttnn.conv2d", "ttnn.from_torch"]
+        assert ops == ["ttnn.matmul", "ttnn.from_torch"]
         conn.close()
 
     def test_mixed_leading_block(self, tmp_path):
@@ -3288,7 +3167,7 @@ class TestFromTorchFiltering:
                 "ttnn.from_torch",
                 "Tensor::to_device",
                 "ttnn.from_torch",
-                "ttnn.conv2d",
+                "ttnn.matmul",
                 "ttnn.from_torch",
             ]
         )
@@ -3298,7 +3177,7 @@ class TestFromTorchFiltering:
 
         cursor.execute("SELECT name FROM operations ORDER BY operation_id")
         ops = [r[0] for r in cursor.fetchall()]
-        assert ops == ["ttnn.conv2d", "ttnn.from_torch"]
+        assert ops == ["ttnn.matmul", "ttnn.from_torch"]
         conn.close()
 
 

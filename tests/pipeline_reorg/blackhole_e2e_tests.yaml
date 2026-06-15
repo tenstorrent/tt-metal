@@ -60,22 +60,6 @@
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
 
-- id: bh-sdpa-nightly-integration
-  name: sdpa nightly tests
-  tags: [sdpa]
-  cmd: pytest tests/nightly/blackhole/sdpa/ -svv
-  skus:
-    bh_llmbox:
-      timeout: 60
-    bh_loudbox:
-      timeout: 60
-    bh_p300:
-      timeout: 60
-    bh_quietbox_2:
-      timeout: 60
-  owner_id: U07RD9YRFT9 # Slavko Krstic
-  team: ttnn
-
 - id: bh-grid-110-cores-panoptic-deeplab
   name: 110 cores panoptic-deeplab
   cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/tests/pcc/
@@ -110,25 +94,6 @@
       timeout: 15
   owner_id: U0883RN6CRE # William Ly
   team: scaleout
-
-- id: bh-ring-sdpa-perf
-  name: ring sdpa perf tests
-  tags: [sdpa]
-  # Skip QB1 (bh_llmbox / 4xP150): perf differs slightly from QB2 (2xP300);
-  # running on one machine class lets us keep a tighter tolerance (PR #44069).
-  cmd: |
-    SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_perf_check -svv
-    SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_perf_check -svv
-    SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py::test_exp_ring_joint_attention_perf_check -svv
-  skus:
-    bh_loudbox:
-      timeout: 10
-    bh_p300:
-      timeout: 10
-    bh_quietbox_2:
-      timeout: 10
-  owner_id: U07RD9YRFT9 # Slavko Krstic
-  team: ttnn
 
 # --- unit ---
 - id: bh-fabric-ttnn-udm-unit

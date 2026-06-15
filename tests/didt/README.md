@@ -10,12 +10,7 @@ This directory contains DIDT tests for validating the behavior, performance, and
 - **`test_ff1_matmul.py`**: Feed-forward layer matmul with/without GELU activation
 - **`test_lm_head_matmul.py`**: Language model head matmul operations
 - **`test_minimal_matmul.py`**: Basic matmul operations for baseline testing
-- **`test_mla_sdpa.py`**: Multi-Layer Attention SDPA with submesh support
 - **`test_mm_after_non_mm.py`**: Matmul operations following non-matmul workloads
-- **`test_resnet_conv.py`**: ResNet convolution operations
-- **`test_sdpa_op.py`**: Scaled Dot Product Attention operations
-- **`test_sdxl_conv.py`**: Stable Diffusion XL convolution tests (UNet and VAE)
-- **`test_sdxl_conv_1280x1280_upsample.py`**: SDXL upsample convolution tests
 - **`test_sdxl_matmul.py`**: SDXL-specific matmul operations
 - **`test_sharded_ff1.py`**: Legacy sharded FF1 tests
 
@@ -32,14 +27,6 @@ pytest tests/didt/test_ff1_matmul.py::test_ff1_matmul -k "without_gelu and all" 
 pytest tests/didt/test_ff1_matmul.py::test_ff1_matmul -k "with_gelu and all" --didt-workload-iterations 100
 pytest tests/didt/test_lm_head_matmul.py::test_lm_head_matmul -k "all" --didt-workload-iterations 100
 pytest tests/didt/test_minimal_matmul.py::test_minimal_matmul -k "all" --didt-workload-iterations 100
-
-# Convolution tests
-pytest tests/didt/test_resnet_conv.py::test_resnet_conv -k "all" --didt-workload-iterations 100
-pytest tests/didt/test_sdxl_conv.py::test_sdxl_conv -k "unet_resnet_1280x1280 and all" --didt-workload-iterations 100
-
-# Attention operations
-pytest tests/didt/test_sdpa_op.py::test_sdpa_op -k "bf16_HiFi2 and all" --didt-workload-iterations 100
-pytest tests/didt/test_mla_sdpa.py::test_mla_sdpa -k "all" --didt-workload-iterations 100
 
 # Power and performance analysis
 pytest tests/didt/test_binary_mul.py::test_binary_mul -k "without_gelu and all" --didt-workload-iterations 100
@@ -77,9 +64,6 @@ pytest tests/didt/test_ff1_matmul.py::test_specific_chip_ff1_matmul -k "8chips a
 # Target specific board (T3000)
 pytest tests/didt/test_ff1_matmul.py::test_specific_board_ff1_matmul -k "8chips and board_id_2"
 
-# Submesh testing
-pytest tests/didt/test_mla_sdpa.py::test_mesh_size_mla_sdpa -k "4x2 and 0-0"
-
 # Duty cycle testing (adjust compute/non-compute ratio)
 pytest tests/didt/test_duty_cycle.py -k "duty-3 and rep-1000x"  # 3 non-MM ops per MM op
 pytest tests/didt/test_duty_cycle.py -k "duty-6 and rep-10000x"  # Lower duty cycle
@@ -92,7 +76,7 @@ Data types: BFLOAT16, BFLOAT8_B, BFLOAT4_B (support varies by test).
 
 Default compute grid: runs on full device grid (optimized for Blackhole architecture).
 Supports single-chip (`1chips`) and Galaxy (`galaxy`) configurations.
-Some tests require a full 11×10 grid (Deepseek V3, MLA SDPA).
+Some tests require a full 11×10 grid (Deepseek V3).
 
 ```bash
 # Reduced grid size testing (maintains compute per core)

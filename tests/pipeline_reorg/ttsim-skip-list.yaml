@@ -7,21 +7,12 @@
 wormhole_b0:
   # Job-level timeouts -- can be cut down still
   - tests/ttnn/unit_tests/base_functionality/test_graph_report.py::test_resnet50_e2e_graph_capture
-  - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
-  - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
-  - tests/ttnn/unit_tests/operations/fused/test_layer_norm.py
-  - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
-  - tests/ttnn/unit_tests/operations/fused/test_softmax.py
   - tests/ttnn/unit_tests/operations/matmul/test_matmul.py
-  - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
-  - tests/ttnn/unit_tests/operations/pool/test_mpwi.py
   - tests/ttnn/unit_tests/operations/reduce/test_argmax.py
   - tests/ttnn/unit_tests/operations/reduce/test_cumprod.py
   - tests/ttnn/unit_tests/operations/reduce/test_cumsum.py
   - tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
-  - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
-  - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
 
   # Likely OOM killer related failures -- probably need to run these tests serially
   - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_oob
@@ -42,19 +33,11 @@ wormhole_b0:
 
 blackhole:
   # Job-level timeouts
-  - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
-  - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
-  - tests/ttnn/unit_tests/operations/conv/test_conv_transpose2d.py
-  - tests/ttnn/unit_tests/operations/conv/test_prepare_conv_weights.py
   - tests/ttnn/unit_tests/operations/matmul/test_matmul.py
-  - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
-  - tests/ttnn/unit_tests/operations/pool/test_mpwi.py
   - tests/ttnn/unit_tests/operations/reduce/test_argmax.py
   - tests/ttnn/unit_tests/operations/reduce/test_cumsum.py
   - tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
-  - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
-  - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
 
   # Likely OOM killer related failures -- probably need to run these tests serially
   - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_oob
@@ -82,10 +65,6 @@ blackhole:
   - tests/ttnn/unit_tests/base_functionality/test_to_and_from_device.py
   - tests/ttnn/unit_tests/base_functionality/test_to_layout.py
   - tests/ttnn/unit_tests/base_functionality/test_torch_conversion.py
-  - tests/ttnn/unit_tests/operations/conv/test_conv1d.py
-  - tests/ttnn/unit_tests/operations/conv/test_conv_transpose2d.py
-  - tests/ttnn/unit_tests/operations/conv/test_prepare_conv_weights.py
-  - tests/ttnn/unit_tests/operations/conv/data_movement/test_fold_op.py
   - tests/ttnn/unit_tests/operations/data_movement/test_convert_to_hwc.py
   - tests/ttnn/unit_tests/operations/data_movement/test_embedding.py
   - tests/ttnn/unit_tests/operations/data_movement/test_repeat.py
@@ -99,12 +78,7 @@ blackhole:
   - tests/ttnn/unit_tests/operations/fused/test_group_norm.py
   - tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py
   - tests/ttnn/unit_tests/operations/matmul/test_matmul.py
-  - tests/ttnn/unit_tests/operations/pool/test_adaptive_pool2d.py
-  - tests/ttnn/unit_tests/operations/pool/test_avgpool2d.py
-  - tests/ttnn/unit_tests/operations/pool/test_global_avg_pool2d.py
   - tests/ttnn/unit_tests/operations/reduce/test_reduction_min.py
-  - tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py
-  - tests/ttnn/unit_tests/operations/sdpa/test_bounded_sliding_kv_cache.py
   - tests/ttnn/unit_tests/operations/transformers/test_paged_cache_flexible_geometry.py
   - tests/ttnn/unit_tests/operations/transformers/test_paged_fused_update_cache.py
 
