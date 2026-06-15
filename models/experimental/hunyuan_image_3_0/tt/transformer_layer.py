@@ -80,24 +80,39 @@ class HunyuanTtDecoderLayer(LightweightModule):
             stream_experts=stream_experts,
         )
 
-    def forward(self, x, seq_len, image_infos=None, attention_mask=None):
+    def forward(self, x, seq_len, image_infos=None, attention_mask=None, cos_sin=None):
         """
         Args:
             x:              TTNN tensor [B, S, H] in TILE_LAYOUT.
             seq_len:        S — used to build the 2D RoPE cos/sin tables.
             image_infos:    per-batch image span info for 2D RoPE (None => text-only).
             attention_mask: optional additive mask [B,1,S,S]; None => causal SDPA.
+            cos_sin:        optional precomputed (cos_tt, sin_tt) RoPE tables. When
+                            provided (e.g. hoisted to the model level so 32 layers
+                            share one build), they are used as-is and NOT freed here
+                            — the caller owns them. When None, the tables are built
+                            and freed internally per call.
         Returns:
             [B, S, H] TTNN tensor.
         """
-        # 2D RoPE tables for this sequence.
-        cos_tt, sin_tt = self.self_attn.rope.prepare_cos_sin(seq_len, image_infos=image_infos)
+        # 2D RoPE tables for this sequence (shared if the caller passed them in).
+        owns_cos_sin = cos_sin is None
+        if owns_cos_sin:
+            cos_tt, sin_tt = self.self_attn.rope.prepare_cos_sin(seq_len, image_infos=image_infos)
+        else:
+            cos_tt, sin_tt = cos_sin
 
         # --- self-attention block ---
         residual = x
         h = self.input_layernorm(x)
         attn_out = self.self_attn(h, cos_tt, sin_tt, attention_mask=attention_mask)
         ttnn.deallocate(h)
+        # Attention emits [B, 1, S, H] (4-D, from nlp_create_qkv_heads); collapse
+        # the singleton head-group dim back to the [B, S, H] residual-stream rank
+        # so the layer's output rank matches its input — required when stacking
+        # layers (a 4-D hidden would break the next layer's QKV reshape).
+        if len(attn_out.shape) == 4:
+            attn_out = ttnn.reshape(attn_out, [residual.shape[0], residual.shape[1], residual.shape[2]])
         x = ttnn.add(residual, attn_out)
         ttnn.deallocate(residual)
         ttnn.deallocate(attn_out)
@@ -111,6 +126,7 @@ class HunyuanTtDecoderLayer(LightweightModule):
         ttnn.deallocate(residual)
         ttnn.deallocate(moe_out)
 
-        ttnn.deallocate(cos_tt)
-        ttnn.deallocate(sin_tt)
+        if owns_cos_sin:
+            ttnn.deallocate(cos_tt)
+            ttnn.deallocate(sin_tt)
         return out
