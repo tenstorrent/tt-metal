@@ -239,19 +239,24 @@ class TtMistral4MoE(LightweightModule):
         B, S, I, H = x.shape[0], x.shape[1], self.interm, self.hidden
         W = self._route(x, B, S)
         if self.shard:
+            # Flatten the (batch, seq) token grid to a single token axis T=B*S — experts are
+            # token-wise, so this makes the batched-expert matmul batch-agnostic (B users decode
+            # together) while staying identical for B=1.
+            T = B * S
+            xf = ttnn.reshape(x, (1, T, H))
             # extract each device's local experts' routing weights on-device (no host round-trip):
-            # W_full [B,S,E] @ select_d [E,per] -> W_local [B,S,per]. Keeps the MoE trace-capturable.
-            W_sh = ttnn.matmul(W, self.expert_select)
+            # W_full [1,T,E] @ select_d [E,per] -> W_local [1,T,per]. Keeps the MoE trace-capturable.
+            W_sh = ttnn.matmul(ttnn.reshape(W, (1, T, self.E)), self.expert_select)
             # BATCHED experts: the per local experts in 2 batched matmuls (not `per` sequential
             # linears) — the dominant decode/forward speedup. Stacked weights gup_sh [per,H,2I],
-            # down_sh [per,I,H]; broadcast x over the expert (batch) dim.
-            xb = ttnn.repeat(x, ttnn.Shape([self.per, 1, 1]))  # [per,S,H]
-            gu = ttnn.matmul(xb, self.gup_sh)  # [per,S,2I]
+            # down_sh [per,I,H]; broadcast tokens over the expert (batch) dim.
+            xb = ttnn.repeat(xf, ttnn.Shape([self.per, 1, 1]))  # [per,T,H]
+            gu = ttnn.matmul(xb, self.gup_sh)  # [per,T,2I]
             h = ttnn.mul(
-                ttnn.silu(ttnn.slice(gu, [0, 0, 0], [self.per, S, I])), ttnn.slice(gu, [0, 0, I], [self.per, S, 2 * I])
+                ttnn.silu(ttnn.slice(gu, [0, 0, 0], [self.per, T, I])), ttnn.slice(gu, [0, 0, I], [self.per, T, 2 * I])
             )
-            y = ttnn.matmul(h, self.down_sh)  # [per,S,H]
-            w = ttnn.permute(W_sh, (2, 1, 0))  # [B,S,per] -> [per,S,B]
+            y = ttnn.matmul(h, self.down_sh)  # [per,T,H]
+            w = ttnn.permute(W_sh, (2, 1, 0))  # [1,T,per] -> [per,T,1]
             acc = ttnn.reshape(ttnn.sum(ttnn.mul(y, w), dim=0), (B, S, H))  # weighted sum over local experts
             # trace-safe collective: async all-reduce over the 8 expert-sharded devices (cluster
             # axis 1 of the 1x8 mesh) sums each device's local-expert contribution.
