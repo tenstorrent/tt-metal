@@ -240,6 +240,9 @@ def main():
         # Bit positions match PROFILE_PERF_COUNTERS_* in perf_counters.hpp. l1_2/3/4 are BH-only.
         counter_group_bits = {
             "fpu": 0,
+            # SFPU_COUNTER is armed by the FPU group's register path; it has no
+            # bit of its own, so requesting "sfpu" selects the FPU group.
+            "sfpu": 0,
             "pack": 1,
             "unpack": 2,
             "l1_0": 3,
@@ -262,7 +265,7 @@ def main():
             else:
                 logger.warning(
                     f"Unknown counter group '{group}'. "
-                    f"Valid groups: fpu, pack, unpack, l1_0, l1_1, l1_2, l1_3, l1_4, instrn, all"
+                    f"Valid groups: fpu, sfpu, pack, unpack, l1_0, l1_1, l1_2, l1_3, l1_4, instrn, all"
                 )
 
         # L1 bank mutual exclusion (one mux, one active bank) is enforced in rtoptions.cpp.
