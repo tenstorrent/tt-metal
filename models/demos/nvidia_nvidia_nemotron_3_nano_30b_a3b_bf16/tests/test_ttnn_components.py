@@ -304,7 +304,9 @@ def test_moe_experts_pcc(mesh_device):
     routing_dense.scatter_(1, g["topk_indices"].long(), g["topk_weights"].bfloat16())
     rw_tt = _upload(routing_dense, mesh_device, shard_dim=None, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
 
-    # Stack expert weights into [1, 128, H, I] bfloat4_b on device
+    # Stack expert weights; column-parallel TP sharding (shard intermediate dim).
+    # up  [1,128,2688,1856] shard dim=3 → [1,128,2688,464]/device (bf16)
+    # down [1,128,1856,2688] shard dim=2 → [1,128,464,2688]/device (bf16)
     up_list, down_list = [], []
     for e in range(128):
         eu = get_weight(f"backbone.layers.{li}.mixer.experts.{e}.up_proj.weight")
@@ -313,8 +315,8 @@ def test_moe_experts_pcc(mesh_device):
         down_list.append(ed)
     up_cpu = _torch.stack(up_list).transpose(-1, -2).unsqueeze(0).bfloat16().contiguous()
     down_cpu = _torch.stack(down_list).transpose(-1, -2).unsqueeze(0).bfloat16().contiguous()
-    up_tt = _upload(up_cpu, mesh_device, shard_dim=None, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat4_b)
-    down_tt = _upload(down_cpu, mesh_device, shard_dim=None, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat4_b)
+    up_tt = _upload(up_cpu, mesh_device, shard_dim=3, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    down_tt = _upload(down_cpu, mesh_device, shard_dim=2, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
 
     out_tt = moe_experts_forward(mesh_device, hs_tt, rw_tt, up_tt, down_tt)
 
