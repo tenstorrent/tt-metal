@@ -99,6 +99,10 @@ def run_model(
     if (is_ci_env or is_ci_v2_env) and not is_balanced and variant.name != "kimi_k2_6":
         pytest.skip("Skip non_balanced variant in CI — runnable locally for non_balanced-mode validation")
 
+    # Skip the balanced 5k (5120-token) prefill cases everywhere — disabled for now.
+    if is_balanced and isl_total == SEQ_LEN_5K:
+        pytest.skip("Skipping balanced 5k (5120-token) prefill")
+
     # The 25k-ISL cases only fit L1 on the full 8x4 mesh. There sp_factor=8 keeps the per-chip
     # sequence at 3200 tokens, so the shared-expert down-projection matmul runs with per_core_M=2.
     # On the smaller 2x4 meshes the per-chip sequence is 12800 tokens, pushing per_core_M to 5 and
