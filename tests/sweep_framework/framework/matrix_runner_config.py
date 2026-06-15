@@ -187,6 +187,19 @@ MODEL_TRACED_BATCH_POLICY = {
 }
 
 
+# ── Model-traced galaxy lane: explicit runner pool ───────────────────────────
+# The galaxy (wormhole-galaxy-sweeps) batches are distributed round-robin across
+# these specific galaxy-class machine labels instead of the shared topology-6u
+# label, so the galaxy sweep runs only on this vetted pool. Each batch is pinned
+# to one label (GitHub can't OR labels); batch i -> pool[i % len(pool)].
+GALAXY_MODEL_TRACED_RUNNER_POOL = (
+    "OM1-01A04-STGWH01",
+    "OM1-01A04-STGWH02",
+    "g04glx03",
+    "g14glx04",
+)
+
+
 # ── Model-traced sweep: mesh suffix → logical test group ─────────────────────
 # These maps answer the CI ownership question:
 # "Which logical lane owns a mesh-grouped vector file?"

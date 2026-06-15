@@ -29,6 +29,7 @@ from pathlib import Path
 from constants import get_mesh_shape_string, parse_hardware_suffix, strip_grouping_suffix
 from matrix_runner_config import (
     DEFAULT_MODEL_TRACED_GROUPING_MODE,
+    GALAXY_MODEL_TRACED_RUNNER_POOL,
     GENERATION_MANIFEST_FILENAME,
     HW_GROUP_MATRIX_KEYS,
     LEAD_MODELS_BATCH_POLICY,
@@ -81,17 +82,26 @@ def _log_module_groups(header, modules, groups):
         print(f"  {label}: {len(entries)} vectors ({unique} unique modules)", file=sys.stderr)
 
 
-def _build_entries(runner_config, batches, batch_display_prefix, suite_name):
-    """Create matrix include entries for a set of batches using a runner config."""
-    return [
-        {
+def _build_entries(runner_config, batches, batch_display_prefix, suite_name, runs_on_pool=None):
+    """Create matrix include entries for a set of batches using a runner config.
+
+    When ``runs_on_pool`` is given, each batch's ``runs_on`` is overridden
+    round-robin across the pool (batch i -> pool[i % len(pool)]) so the batches
+    distribute across an explicit set of machine labels instead of all sharing
+    the runner_config's label.
+    """
+    entries = []
+    for i, batch in enumerate(batches):
+        entry = {
             **runner_config,
             "module_selector": batch,
             "batch_display": f"{batch_display_prefix}:{batch}" if batch_display_prefix else batch,
             "suite_name": suite_name,
         }
-        for batch in batches
-    ]
+        if runs_on_pool:
+            entry["runs_on"] = runs_on_pool[i % len(runs_on_pool)]
+        entries.append(entry)
+    return entries
 
 
 def _load_generation_manifest(vectors_path):
@@ -207,7 +217,10 @@ def _append_routed_group(
     runner_config = _get_runner(test_group_name)
     runner_batches = _batch_modules_for_test_group(base, batch_size, batch_policy)
     batches.extend(runner_batches)
-    include_entries.extend(_build_entries(runner_config, runner_batches, label, suite_name))
+    # The model-traced galaxy lane runs only on an explicit pool of galaxy
+    # machine labels, distributed round-robin across batches.
+    runs_on_pool = GALAXY_MODEL_TRACED_RUNNER_POOL if test_group_name == "wormhole-galaxy-sweeps" else None
+    include_entries.extend(_build_entries(runner_config, runner_batches, label, suite_name, runs_on_pool))
     log_groups.append((label, modules))
 
 
