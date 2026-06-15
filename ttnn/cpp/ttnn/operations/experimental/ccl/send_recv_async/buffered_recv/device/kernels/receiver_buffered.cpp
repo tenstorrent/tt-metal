@@ -7,7 +7,6 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
-#include "api/debug/dprint.h"  // required in all kernels using DPRINT
 #include "ttnn/operations/experimental/ccl/send_recv_async/buffered_common/buffered_async_types.hpp"
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -64,10 +63,7 @@ void kernel_main() {
 
     // The coordination buffer stores OutputTensorInfo, including the receive-buffer ring addresses
     // and the monotonic read/write counters shared with the sender.
-    DPRINT("coordination_buffer_addr = {}\n", coordination_buffer_addr);
     auto* output_tensor_info = reinterpret_cast<volatile tt_l1_ptr OutputTensorInfo*>(coordination_buffer_addr);
-
-    DPRINT("Output tensor info size = {}\n", sizeof(OutputTensorInfo));
 
     // Create Socket Interface
     SocketReceiverInterface receiver_socket = create_receiver_socket_interface(socket_config_addr);
@@ -75,18 +71,13 @@ void kernel_main() {
 
     invalidate_l1_cache();
     if (output_tensor_info->num_tensors == 0) {
-        DPRINT("Coordination buffer is zero-initialized\n");
-
-        DPRINT("Num output tensors: {}\n", num_output_tensors);
         //////////////////////////////////////////////////
         // STEP 1: receive the sender's advertised handshake-buffer address
         //////////////////////////////////////////////////
-        DPRINT("Waiting for handshake address from sender\n");
         socket_wait_for_pages(receiver_socket, 1);
         uint32_t sender_handshake_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_socket.read_ptr)[0];
         socket_pop_pages(receiver_socket, 1);
         fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
-        DPRINT("Received handshake address  {} from sender \n", sender_handshake_addr);
 
         //////////////////////////////////////////////////
         // STEP 2: write the destination tensor info back into the sender's handshake buffer, advertising
@@ -111,7 +102,6 @@ void kernel_main() {
         for (uint32_t i = 0; i < num_output_tensors; ++i) {
             output_tensor_info->base_addr[i] = output_base_addrs[i];
         }
-        DPRINT("output_tensor_info_addr = {}\n", coordination_buffer_addr);
         uint64_t struct_dst_noc_addr = get_noc_addr(upstream_noc_x, upstream_noc_y, sender_handshake_addr);
         fabric_set_unicast_route(socket_packet_header_addr, receiver_socket);
         socket_packet_header_addr->to_noc_unicast_write(
@@ -122,20 +112,11 @@ void kernel_main() {
         fabric_connection.send_payload_flush_blocking_from_address(
             (uint32_t)socket_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
 
-        DPRINT("Wrote destination tensor info to sender's handshake buffer at address {}\n", sender_handshake_addr);
         update_socket_config(receiver_socket);
     }
     //////////////////////////////////////////////////
     // STEP 3: wait for the completion token from the sender
     //////////////////////////////////////////////////
-    DPRINT(
-        "Write Index addr = {}, Read Index addr = {}\n",
-        (uint32_t)output_tensor_info->write_index,
-        (uint32_t)output_tensor_info->read_index);
-    DPRINT(
-        "On receiver: Write Index = {}, Read Index = {}\n",
-        output_tensor_info->write_index[0],
-        output_tensor_info->read_index[0]);
     do {
         invalidate_l1_cache();
     } while (output_tensor_info->read_index[0] == output_tensor_info->write_index[0]);
@@ -150,5 +131,4 @@ void kernel_main() {
     fabric_connection.send_payload_flush_blocking_from_address(
         (uint32_t)socket_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
     fabric_connection.close();
-    DPRINT("Closed fabric connection\n");
 }

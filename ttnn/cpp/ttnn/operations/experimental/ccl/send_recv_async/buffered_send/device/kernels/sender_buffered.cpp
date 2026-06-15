@@ -8,7 +8,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
 #include "api/tensor/tensor_accessor.h"
-#include "api/debug/dprint.h"  // required in all kernels using DPRINT
 #include "ttnn/operations/experimental/ccl/send_recv_async/buffered_common/buffered_async_types.hpp"
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -82,11 +81,9 @@ void kernel_main() {
     // observe a stale completion.
     auto* dest_info_ptr = reinterpret_cast<volatile tt_l1_ptr OutputTensorInfo*>(handshake_base_addr);
 
-    DPRINT("Output tensor info size = {}\n", sizeof(OutputTensorInfo));
     //////////////////////////////////////////////////
     // STEP 1: advertise the handshake-buffer address over the socket
     //////////////////////////////////////////////////
-    DPRINT("handshake_base_addr = {}, handshake_page_size = {}\n", handshake_base_addr, handshake_page_size);
     if (dest_info_ptr->num_tensors == 0) {
         socket_reserve_pages(sender_socket, 1);
         uint64_t advertise_dst_addr = get_noc_addr(
@@ -105,7 +102,6 @@ void kernel_main() {
         //     handshake_page_size);
         socket_push_pages(sender_socket, 1);
         fabric_socket_notify_receiver(sender_socket, fabric_connection, socket_packet_header_addr);
-        DPRINT("Sent handshake address to receiver\n");
 
         //////////////////////////////////////////////////
         // STEP 2: wait for the receiver to write back the destination tensor info, including the ring of
@@ -114,20 +110,15 @@ void kernel_main() {
         // The data path uses the advertised receive-buffer ring and waits for a free slot before
         // streaming into the selected buffer.
         //////////////////////////////////////////////////
-        DPRINT("Waiting for destination tensor info from receiver in {}\n", handshake_base_addr);
         do {
             invalidate_l1_cache();
         } while (dest_info_ptr->num_tensors == 0);
-        DPRINT("Received destination tensor info from receiver\n");
         update_socket_config(sender_socket);
-    } else {
-        DPRINT("Destination tensor info already received from receiver\n");
     }
 
     // Work from the advertised ring state in the landing zone. The indices are monotonic counters;
     // modulo is used only to select the output buffer address.
     volatile OutputTensorInfo* dest_info = reinterpret_cast<volatile tt_l1_ptr OutputTensorInfo*>(handshake_base_addr);
-    DPRINT("num_output_buffers = {}\n", dest_info->num_tensors);
 
     do {
         invalidate_l1_cache();
@@ -137,11 +128,7 @@ void kernel_main() {
     uint32_t output_buffer_index = write_index % dest_info->num_tensors;
     uint32_t output_base_addr = dest_info->base_addr[output_buffer_index];
 
-    DPRINT("Writing to output tensor index {}\n", output_buffer_index);
-
     dest_info->write_index[0] = write_index + 1;
-
-    DPRINT("Updated write index to {}\n", dest_info->write_index[0]);
 
     auto output_addr_gen_args = TensorAccessorArgs<output_args_cta_idx, output_args_crta_idx>();
     auto output_addr_gen = TensorAccessor(output_addr_gen_args, output_base_addr, output_page_size);
@@ -198,14 +185,11 @@ void kernel_main() {
             page_index++;
         }
     }
-    DPRINT("Streamed pages directly into the selected receiver output tensor\n");
-    DPRINT("On sender: Write Index = {}, Read Index = {}\n", dest_info->write_index[0], dest_info->read_index[0]);
 
     //////////////////////////////////////////////////
     // STEP 4: push a single completion page onto the socket
     //////////////////////////////////////////////////
     uint32_t write_l1_addr = dest_info->receiver_config_l1_addr + offsetof(OutputTensorInfo, write_index);
-    DPRINT("Incrementing addr {}\n", write_l1_addr);
     uint64_t write_noc_addr =
         get_noc_addr(downstream_enc.d2d.downstream_noc_x, downstream_enc.d2d.downstream_noc_y, write_l1_addr);
     fabric_set_unicast_route(socket_packet_header_addr, downstream_enc);
@@ -214,5 +198,4 @@ void kernel_main() {
     fabric_connection.send_payload_flush_blocking_from_address(
         (uint32_t)socket_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
     fabric_connection.close();
-    DPRINT("Closed fabric connection\n");
 }
