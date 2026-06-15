@@ -1250,6 +1250,18 @@ class MatmulGolden(FidelityMasking):
                 dest_acc,
             )
 
+        if data_format.is_integer():
+            return self._matmul_integer(
+                operand1,
+                operand2,
+                data_format,
+                input_A_dimensions,
+                input_B_dimensions,
+                tilize,
+                input_A_format,
+                input_B_format,
+            )
+
         return self._matmul_default(
             operand1,
             operand2,
@@ -1261,6 +1273,41 @@ class MatmulGolden(FidelityMasking):
             input_A_format,
             input_B_format,
         )
+
+    # Integer matmul is LoFi-only on Quasar.
+    def _matmul_integer(
+        self,
+        operand1,
+        operand2,
+        data_format,
+        input_A_dimensions,
+        input_B_dimensions,
+        tilize: bool,
+        input_A_format: DataFormat = None,
+        input_B_format: DataFormat = None,
+    ):
+        torch_format = format_dict[data_format]
+
+        M, K1, K2, N, _ = self._resolve_matmul_dimensions(
+            input_A_dimensions, input_B_dimensions
+        )
+
+        t1 = to_tensor(operand1, input_A_format).view(M, K1)
+        t2 = to_tensor(operand2, input_B_format).view(K2, N)
+
+        res = saturate_integer(
+            torch.matmul(t1.to(torch.int64), t2.to(torch.int64)).view(M * N),
+            data_format,
+            torch_format,
+        )
+
+        if tilize:
+            res = tilize_block(
+                res,
+                dimensions=(input_A_dimensions[0], input_B_dimensions[1]),
+                stimuli_format=data_format,
+            ).flatten()
+        return res
 
     def _matmul_default(
         self,
