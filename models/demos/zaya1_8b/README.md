@@ -21,6 +21,8 @@ Tenstorrent Blackhole **P150a**, token-exact against the HuggingFace reference.
 | Incremental decode + ttnn trace | [CSEJ-112](https://tenstorrent.atlassian.net/browse/CSEJ-112) | ✅ Done | `9ff2e7cfab5` |
 | Single-card decode perf (trace / L2-vec / bfp8) | [CSEJ-113](https://tenstorrent.atlassian.net/browse/CSEJ-113) | ✅ Done | `9ff2e7cfab5` |
 | Multi-card tensor parallel (tt_ccl) | [CSEJ-114](https://tenstorrent.atlassian.net/browse/CSEJ-114) | 🔄 In Progress | `9ff2e7cfab5` (foundation) |
+| Batch-on-M decode (multi-user, token-exact) | [CSEJ-114](https://tenstorrent.atlassian.net/browse/CSEJ-114) | ✅ Done | this commit |
+| 4-chip expert-parallel MoE primitive (token-exact) | [CSEJ-114](https://tenstorrent.atlassian.net/browse/CSEJ-114) | ✅ Done | this commit |
 
 > Update this table (and add a Jira comment) at each milestone commit so progress,
 > performance, and approach stay traceable from the ticket.
@@ -38,6 +40,30 @@ Profiled traced step (MAX=64): `execute_trace` 86.9 %, `lm_head`+argmax 10.9 %, 
 input-writes 2.2 %. **Decode is op/dispatch bound, not DRAM-bandwidth bound** — bfp8
 expert weights (half the bytes) give only ~3 %, so the lever is op-count reduction, not
 weight sharding. Larger context is cheap: MAX=256 is token-exact at ~111 ms/tok (+3 ms).
+
+## Multi-user / multi-chip throughput (see `BATCH_TP_PLAN.md`)
+
+Because decode is op/dispatch bound, the throughput lever is **batching** (amortize the
+fixed per-step dispatch across users), and multi-chip helps **capacity / throughput-ceiling**,
+not single-token latency. Plan order: batch-on-M → 4-chip EP → CCA op-fusion.
+
+- **Batch-on-M (1 chip, traced, token-exact per user):** MoE puts users on the matmul M
+  axis (`[16,B,2048]@…`, no change); CCA does per-user attention with per-user KV
+  (`[B,n_kv,MAX,128]`). ms/step scales **1.00 / 1.10 / 1.25 / 1.53×** for B=1/2/4/8 →
+  aggregate **6.1 → 32 tok/s** (≈5.3× at B=8). Tests: `run_batch_decode.py` (eager),
+  `run_trace_batch.py` (traced).
+- **4-chip expert-parallel MoE primitive (token-exact, PCC 0.999996):** shard the 16-expert
+  swiglu by FFN width across a `(1,4)` mesh (fc1 cols reordered to per-chip (gate,up) slices
+  + sharded; fc2 input-sharded; partial fc2 all-reduced). MoE block B=8 **2.31 ms (4-chip) vs
+  3.05 ms (single) = 1.32×**, and shards the 16 GB experts 4× (capacity for big batch).
+  SPMD-clean (gate replicated). Test: `run_ep_moe.py`.
+- **CCA op-fusion:** `nlp_create_qkv_heads_decode` / `nlp_concat_heads_decode` require a
+  B=32/sharded/fused-QKV layout that does not fit zaya's bespoke CCA → not adopted. The real
+  CCA-decode latency lever is a **custom fused CCA-decode kernel** (à la qwen36's DeltaNet),
+  scoped as a follow-on.
+
+8×P150a is a **2×4 grid** (not a torus); FABRIC_1D + tt_ccl `all_gather` validated 1..8 chips.
+Multi-chip runs via `run_zaya_multi.sh` (`TT_DEVICES=…`).
 
 ## Implementation approach
 

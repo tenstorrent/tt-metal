@@ -62,17 +62,18 @@ def rotate_half_torch(x):
 
 
 def to_heads(x, n_heads):
-    """[1,S,n_heads*128] -> [1,n_heads,S,128] (slice+unsqueeze+concat; keeps 128 as last dim)."""
-    S = x.shape[1]
+    """[B,S,n_heads*128] -> [B,n_heads,S,128] (slice+unsqueeze+concat; keeps 128 as last dim).
+    Batch-agnostic in dim0 (B=1 prefill or B=batch decode)."""
+    B, S = x.shape[0], x.shape[1]
     hd = C.head_dim
-    hs = [ttnn.unsqueeze(ttnn.slice(x, [0, 0, h * hd], [1, S, (h + 1) * hd]), 1) for h in range(n_heads)]
+    hs = [ttnn.unsqueeze(ttnn.slice(x, [0, 0, h * hd], [B, S, (h + 1) * hd]), 1) for h in range(n_heads)]
     return ttnn.concat(hs, dim=1)
 
 
 def from_heads(x, n_heads):
-    """[1,n_heads,S,128] -> [1,S,n_heads*128]."""
-    S = x.shape[2]
-    hs = [ttnn.squeeze(ttnn.slice(x, [0, h, 0, 0], [1, h + 1, S, C.head_dim]), 1) for h in range(n_heads)]
+    """[B,n_heads,S,128] -> [B,S,n_heads*128]."""
+    B, S = x.shape[0], x.shape[2]
+    hs = [ttnn.squeeze(ttnn.slice(x, [0, h, 0, 0], [B, h + 1, S, C.head_dim]), 1) for h in range(n_heads)]
     return ttnn.concat(hs, dim=-1)
 
 
@@ -224,14 +225,14 @@ class CCAAttention:
         return self._seqcache[S]
 
     def _apply_rope(self, x, n_heads, cos, sin):
-        """x [1,n_heads,S,128] -> partial rope on first 64 dims."""
+        """x [B,n_heads,S,128] -> partial rope on first 64 dims (cos/sin broadcast over B)."""
         rd = C.rotary_dim
-        S = x.shape[2]
-        x_rot = ttnn.slice(x, [0, 0, 0, 0], [1, n_heads, S, rd])
-        x_pass = ttnn.slice(x, [0, 0, 0, rd], [1, n_heads, S, C.head_dim])
+        B, S = x.shape[0], x.shape[2]
+        x_rot = ttnn.slice(x, [0, 0, 0, 0], [B, n_heads, S, rd])
+        x_pass = ttnn.slice(x, [0, 0, 0, rd], [B, n_heads, S, C.head_dim])
         half = rd // 2
-        x1 = ttnn.slice(x_rot, [0, 0, 0, 0], [1, n_heads, S, half])
-        x2 = ttnn.slice(x_rot, [0, 0, 0, half], [1, n_heads, S, rd])
+        x1 = ttnn.slice(x_rot, [0, 0, 0, 0], [B, n_heads, S, half])
+        x2 = ttnn.slice(x_rot, [0, 0, 0, half], [B, n_heads, S, rd])
         rot = ttnn.concat([ttnn.neg(x2), x1], dim=-1)                      # rotate_half
         out_rot = ttnn.add(ttnn.mul(x_rot, cos), ttnn.mul(rot, sin))
         return ttnn.concat([out_rot, x_pass], dim=-1)
@@ -272,12 +273,13 @@ class CCAAttention:
         return ttnn.linear(attn, self.o_proj, compute_kernel_config=self.ckc)          # [1,S,2048]
 
     def trace_decode(self, h1, ts, layer):
-        """Trace-friendly decode: all state read/written in-place on persistent buffers
-        in `ts` (TraceState); position carried via ts.onehot/inv/amask/cos/sin inputs.
-        h1 [1,1,2048] -> [1,1,2048]."""
-        q = ttnn.linear(h1, self.qkv.lq, compute_kernel_config=self.ckc)   # [1,1,1024]
-        k = ttnn.linear(h1, self.qkv.lk, compute_kernel_config=self.ckc)   # [1,1,256]
-        qk = ttnn.concat([q, k], dim=-1)                                   # [1,1,1280]
+        """Trace-friendly decode for B users (lockstep). State read/written in-place on
+        persistent buffers in `ts`; position via ts.onehot/inv/amask/cos/sin. conv-state /
+        prev_hs are [1,B,*] (B on slot1); KV is [B,n_kv,MAX,128] (B on dim0, per-user attn).
+        h1 [1,B,2048] -> [1,B,2048]. B=1 is the original single-user path."""
+        q = ttnn.linear(h1, self.qkv.lq, compute_kernel_config=self.ckc)   # [1,B,1024]
+        k = ttnn.linear(h1, self.qkv.lk, compute_kernel_config=self.ckc)   # [1,B,256]
+        qk = ttnn.concat([q, k], dim=-1)                                   # [1,B,1280]
         conv = ttnn.linear(qk, self.qkv.Cm, compute_kernel_config=self.ckc)
         conv = ttnn.add(conv, ttnn.linear(ts.p1[layer], self.qkv.Bm, compute_kernel_config=self.ckc))
         conv = ttnn.add(conv, ttnn.linear(ts.p2[layer], self.qkv.Am, compute_kernel_config=self.ckc))
@@ -287,41 +289,54 @@ class CCAAttention:
         qpre, kpre, value = self.qkv._assemble(conv, q, k, h1, ts.ph[layer])
         ttnn.copy(h1, ts.ph[layer])                                        # prev_hs <- current
         gq = C.cca_q_heads
-        qh = self._apply_rope(self.qkv._l2_h(to_heads(qpre, gq)), gq, ts.cos, ts.sin)     # [1,8,1,128]
+        Bn = qpre.shape[1]
+        # users -> batch dim for per-user attention: [1,B,X] -> [B,1,X] (skip for B=1)
+        if Bn > 1:
+            qpre = ttnn.permute(qpre, [1, 0, 2]); kpre = ttnn.permute(kpre, [1, 0, 2]); value = ttnn.permute(value, [1, 0, 2])
+        qh = self._apply_rope(self.qkv._l2_h(to_heads(qpre, gq)), gq, ts.cos, ts.sin)     # [B,8,1,128]
         kh = ttnn.mul(self.qkv._l2_h(to_heads(kpre, C.n_kv_heads)), self.qkv.temp_heads)
-        kh = self._apply_rope(kh, C.n_kv_heads, ts.cos, ts.sin)            # [1,2,1,128]
+        kh = self._apply_rope(kh, C.n_kv_heads, ts.cos, ts.sin)            # [B,2,1,128]
         vh = to_heads(value, C.n_kv_heads)
-        # masked-write into fixed-MAX KV (position via ts.onehot/ts.inv inputs)
-        krep = ttnn.repeat(kh, ttnn.Shape([1, 1, ts.MAX, 1]))             # [1,2,MAX,128]
+        # masked-write into fixed-MAX KV (pos via ts.onehot/ts.inv [1,n_kv,MAX,128], bcast over B)
+        krep = ttnn.repeat(kh, ttnn.Shape([1, 1, ts.MAX, 1]))             # [B,2,MAX,128]
         ttnn.copy(ttnn.add(ttnn.mul(ts.kc[layer], ts.inv), ttnn.mul(krep, ts.onehot)), ts.kc[layer])
         vrep = ttnn.repeat(vh, ttnn.Shape([1, 1, ts.MAX, 1]))
         ttnn.copy(ttnn.add(ttnn.mul(ts.vc[layer], ts.inv), ttnn.mul(vrep, ts.onehot)), ts.vc[layer])
         groups = gq // C.n_kv_heads
-        kk = ttnn.repeat_interleave(ts.kc[layer], groups, dim=1)           # [1,8,MAX,128]
+        kk = ttnn.repeat_interleave(ts.kc[layer], groups, dim=1)           # [B,8,MAX,128]
         vv = ttnn.repeat_interleave(ts.vc[layer], groups, dim=1)
-        scores = ttnn.matmul(qh, ttnn.transpose(kk, -2, -1), compute_kernel_config=self.ckc)  # [1,8,1,MAX]
+        scores = ttnn.matmul(qh, ttnn.transpose(kk, -2, -1), compute_kernel_config=self.ckc)  # [B,8,1,MAX]
         scores = ttnn.add(ttnn.multiply(ttnn.typecast(scores, ttnn.float32), self.inv_sqrt_hd), ts.amask)
         probs = ttnn.typecast(ttnn.softmax(scores, dim=-1), ttnn.bfloat16)
-        attn = ttnn.matmul(probs, vv, compute_kernel_config=self.ckc)      # [1,8,1,128]
-        return ttnn.linear(from_heads(attn, gq), self.o_proj, compute_kernel_config=self.ckc)
+        attn = ttnn.matmul(probs, vv, compute_kernel_config=self.ckc)      # [B,8,1,128]
+        out = ttnn.linear(from_heads(attn, gq), self.o_proj, compute_kernel_config=self.ckc)  # [B,1,2048]
+        return ttnn.permute(out, [1, 0, 2]) if Bn > 1 else out             # [1,B,2048]
 
     def decode_forward(self, h1, cache, layer):
-        """Decode one token at position cache.pos. h1 [1,1,2048]."""
+        """Decode one token for B users at position cache.pos (lockstep). h1 [1,B,2048]
+        (B on the M/"seq" slot; B=1 is the original single-user path). Per-user attention
+        with per-user KV cache [B,n_kv,pos,128] (B on dim0). Returns [1,B,2048]."""
         pos = cache.pos
-        cos, sin = self._seq_pos(pos)
-        qpre, kpre, value = self.qkv.decode_forward(h1, cache, layer)      # pre-L2 [1,1,1024],[1,1,256],value[1,1,256]
-        q = self._apply_rope(self.qkv._l2_h(to_heads(qpre, C.cca_q_heads)), C.cca_q_heads, cos, sin)  # [1,8,1,128]
+        cos, sin = self._seq_pos(pos)                                      # [1,1,1,rd], broadcast over B
+        qpre, kpre, value = self.qkv.decode_forward(h1, cache, layer)      # pre-L2 [1,B,1024],[1,B,256],[1,B,256]
+        gq = C.cca_q_heads
+        Bn = qpre.shape[1]
+        # move users to the batch dim for per-user attention: [1,B,X] -> [B,1,X] (skip for B=1)
+        if Bn > 1:
+            qpre = ttnn.permute(qpre, [1, 0, 2]); kpre = ttnn.permute(kpre, [1, 0, 2]); value = ttnn.permute(value, [1, 0, 2])
+        q = self._apply_rope(self.qkv._l2_h(to_heads(qpre, gq)), gq, cos, sin)              # [B,8,1,128]
         k = ttnn.mul(self.qkv._l2_h(to_heads(kpre, C.n_kv_heads)), self.qkv.temp_heads)
-        k = self._apply_rope(k, C.n_kv_heads, cos, sin)                    # [1,2,1,128]
+        k = self._apply_rope(k, C.n_kv_heads, cos, sin)                    # [B,2,1,128]
         v = to_heads(value, C.n_kv_heads)
-        cache.k[layer] = ttnn.concat([cache.k[layer], k], dim=2)           # append along seq -> [1,2,pos+1,128]
+        cache.k[layer] = ttnn.concat([cache.k[layer], k], dim=2)           # [B,2,pos+1,128]
         cache.v[layer] = ttnn.concat([cache.v[layer], v], dim=2)
-        groups = C.cca_q_heads // C.n_kv_heads
-        kk = ttnn.repeat_interleave(cache.k[layer], groups, dim=1)         # [1,8,pos+1,128]
+        groups = gq // C.n_kv_heads
+        kk = ttnn.repeat_interleave(cache.k[layer], groups, dim=1)         # [B,8,pos+1,128]
         vv = ttnn.repeat_interleave(cache.v[layer], groups, dim=1)
-        scores = ttnn.matmul(q, ttnn.transpose(kk, -2, -1), compute_kernel_config=self.ckc)  # [1,8,1,pos+1]
+        scores = ttnn.matmul(q, ttnn.transpose(kk, -2, -1), compute_kernel_config=self.ckc)  # [B,8,1,pos+1]
         scores = ttnn.multiply(ttnn.typecast(scores, ttnn.float32), self.inv_sqrt_hd)        # no mask: q attends all
         probs = ttnn.typecast(ttnn.softmax(scores, dim=-1), ttnn.bfloat16)
-        attn = ttnn.matmul(probs, vv, compute_kernel_config=self.ckc)                        # [1,8,1,128]
-        attn = from_heads(attn, C.cca_q_heads)                             # [1,1,1024]
-        return ttnn.linear(attn, self.o_proj, compute_kernel_config=self.ckc)          # [1,1,2048]
+        attn = ttnn.matmul(probs, vv, compute_kernel_config=self.ckc)                        # [B,8,1,128]
+        attn = from_heads(attn, gq)                                        # [B,1,1024]
+        out = ttnn.linear(attn, self.o_proj, compute_kernel_config=self.ckc)                 # [B,1,2048]
+        return ttnn.permute(out, [1, 0, 2]) if Bn > 1 else out             # [1,B,2048]

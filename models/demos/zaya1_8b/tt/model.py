@@ -157,3 +157,70 @@ class ZayaModel:
         for _ in range(n - 1):
             out.append(self.decode_step(out[-1], cache, sparse=sparse))
         return out
+
+    # ---- batched (batch-on-M) decode: serve B users per step on one chip ----
+    def _argmax_ids(self, logits):
+        """logits [1,B,vocab] -> list of B greedy ids (device argmax, per row)."""
+        am = ttnn.to_torch(ttnn.argmax(logits, dim=-1)).reshape(-1)
+        return [int(x) for x in am]
+
+    def decode_step_batched(self, token_ids, cache):
+        """One lockstep decode step for B users. token_ids: list[B]. Returns list[B] next ids."""
+        import torch
+        ids = torch.tensor([token_ids], dtype=torch.int32)              # [1,B]
+        hidden = self._backbone(ids, cache=cache, decode=True)          # [1,B,2048]
+        cache.pos += 1
+        return self._argmax_ids(self.lm_head(hidden))                  # [1,B,vocab] -> B ids
+
+    def _replicate_cache(self, cache, B):
+        """Expand a B=1-populated cache to B identical users (same prompt, lockstep)."""
+        for i in list(cache.k.keys()):
+            cache.k[i] = ttnn.repeat(cache.k[i], ttnn.Shape([B, 1, 1, 1]))   # [B,nkv,S,128]
+            cache.v[i] = ttnn.repeat(cache.v[i], ttnn.Shape([B, 1, 1, 1]))
+        for i in list(cache.conv_state.keys()):
+            a, b = cache.conv_state[i]
+            cache.conv_state[i] = (ttnn.repeat(a, ttnn.Shape([1, B, 1])),
+                                   ttnn.repeat(b, ttnn.Shape([1, B, 1])))     # [1,B,1280]
+            cache.prev_hs[i] = ttnn.repeat(cache.prev_hs[i], ttnn.Shape([1, B, 1]))  # [1,B,2048]
+
+    def _stack_caches(self, caches):
+        """Stack B independent single-user caches (same pos) into one batched cache."""
+        from .cache import ZayaCache
+        out = ZayaCache(); out.pos = caches[0].pos
+        for i in list(caches[0].k.keys()):
+            out.k[i] = ttnn.concat([c.k[i] for c in caches], dim=0)          # [B,nkv,S,128]
+            out.v[i] = ttnn.concat([c.v[i] for c in caches], dim=0)
+        for i in list(caches[0].conv_state.keys()):
+            out.conv_state[i] = (ttnn.concat([c.conv_state[i][0] for c in caches], dim=1),
+                                 ttnn.concat([c.conv_state[i][1] for c in caches], dim=1))  # [1,B,1280]
+            out.prev_hs[i] = ttnn.concat([c.prev_hs[i] for c in caches], dim=1)             # [1,B,2048]
+        return out
+
+    def generate_batched(self, input_ids, B, n):
+        """Same-prompt B users, lockstep. Returns list of per-step [B] id lists."""
+        from .cache import ZayaCache
+        cache = ZayaCache()
+        first = self.prefill(input_ids, cache)        # populate at B=1
+        self._replicate_cache(cache, B)
+        cur = [first] * B
+        out = [list(cur)]
+        for _ in range(n - 1):
+            cur = self.decode_step_batched(cur, cache)
+            out.append(list(cur))
+        return out
+
+    def generate_batched_multi(self, input_ids_list, n):
+        """B different prompts (same length), lockstep. Returns list of per-step [B] id lists."""
+        from .cache import ZayaCache
+        firsts, caches = [], []
+        for ids in input_ids_list:
+            c = ZayaCache()
+            firsts.append(self.prefill(ids, c))
+            caches.append(c)
+        cache = self._stack_caches(caches)
+        cur = list(firsts)
+        out = [list(cur)]
+        for _ in range(n - 1):
+            cur = self.decode_step_batched(cur, cache)
+            out.append(list(cur))
+        return out
