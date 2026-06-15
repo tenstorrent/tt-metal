@@ -38,7 +38,16 @@ bool is_typecast(tt::tt_metal::DataType input, tt::tt_metal::DataType output) {
 
 bool is_dtype_combination_supported(BinaryOpType op, DataType dtype_a, DataType dtype_b) {
     if (dtype_a == dtype_b) {
-        return dtype_policy::is_supported(op, dtype_a);
+        switch (op) {
+            case BinaryOpType::QUANT:
+                // Scale (B) must be float32; same-dtype only when both operands are float32.
+                return dtype_a == DataType::FLOAT32 && dtype_policy::is_supported(op, dtype_a);
+            case BinaryOpType::DEQUANT:
+            case BinaryOpType::REQUANT:
+                // A is int32, B must be float32 — same dtype is never valid.
+                return false;
+            default: return dtype_policy::is_supported(op, dtype_a);
+        }
     }
 
     if (dtype_policy::is_mixed_bfloat_tile_pair(dtype_a, dtype_b) &&

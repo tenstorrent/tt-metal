@@ -17,8 +17,8 @@ enum class DataType;
 namespace ttnn::operations::binary::utils {
 bool is_typecast(tt::tt_metal::DataType input, tt::tt_metal::DataType output);
 
-// Returns true when dtype_a and dtype_b form a supported mixed-dtype pair for op.
-// Same-dtype pairs defer to dtype_policy::is_supported (tensor A policy set).
+// Returns true when dtype_a and dtype_b form a supported operand pair for op.
+// Most ops require matching dtypes; quant ops additionally require float32 scale (B).
 bool is_dtype_combination_supported(BinaryOpType op, tt::tt_metal::DataType dtype_a, tt::tt_metal::DataType dtype_b);
 
 std::map<std::string, std::string> get_defines(
